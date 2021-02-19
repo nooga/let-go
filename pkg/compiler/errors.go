@@ -19,7 +19,7 @@ package compiler
 
 import (
 	"fmt"
-	"github.com/nooga/lego/pkg/errors"
+	"github.com/nooga/let-go/pkg/errors"
 )
 
 type ReaderError struct {

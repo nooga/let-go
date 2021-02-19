@@ -26,7 +26,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/nooga/lego/pkg/vm"
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 type LispReader struct {

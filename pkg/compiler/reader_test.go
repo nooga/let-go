@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nooga/lego/pkg/vm"
+	"github.com/nooga/let-go/pkg/vm"
 	"github.com/stretchr/testify/assert"
 )
 

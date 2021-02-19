@@ -17,7 +17,7 @@
 
 package compiler
 
-import "github.com/nooga/lego/pkg/vm"
+import "github.com/nooga/let-go/pkg/vm"
 
 type Context struct {
 	parent *Context

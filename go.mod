@@ -1,4 +1,4 @@
-module github.com/nooga/lego
+module github.com/nooga/let-go
 
 go 1.15
 
