@@ -166,7 +166,13 @@ func TestYikes(t *testing.T) {
 
 	c := NewCodeChunk()
 	c.consts = []Value{forty, two, plus}
-	c.Append(OPLDC, 1, OPLDC, 0, OPLDC, 2, OPINV, OPRET)
+	c.Append(OPLDC)
+	c.Append32(1)
+	c.Append(OPLDC)
+	c.Append32(0)
+	c.Append(OPLDC)
+	c.Append32(2)
+	c.Append(OPINV, OPRET)
 
 	var out Value
 

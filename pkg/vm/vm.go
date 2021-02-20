@@ -17,6 +17,8 @@
 
 package vm
 
+import "encoding/binary"
+
 // Opcodes
 const (
 	OPNOP uint8 = iota // do nothing
@@ -27,10 +29,7 @@ const (
 	OPINV // invoke function
 	OPRET // return from function
 
-	OPFIT // jump forward if truthy JIT (offset uint8)
-	OPBIT // jump backward if truthy JIT (offset uint8)
-	OPJUF // jump forward (offset uint8)
-	OPJUB // jump backward (offset uint8)
+	OPBRT // branch if truthy BRT (offset int32)
 )
 
 // CodeChunk holds bytecode and provides facilities for reading and writing it
@@ -53,8 +52,25 @@ func (c *CodeChunk) Append(insts ...uint8) {
 	c.length = len(c.code)
 }
 
-func (c *CodeChunk) Get(idx int) uint8 {
-	return c.code[idx]
+func (c *CodeChunk) Append32(val int) {
+	n := make([]uint8, 4)
+	binary.LittleEndian.PutUint32(n, uint32(val))
+	c.code = append(c.code, n...)
+	c.length = len(c.code)
+}
+
+func (c *CodeChunk) Get(idx int) (uint8, error) {
+	if idx >= c.length {
+		return 0, NewExecutionError("bytecode fetch out of bounds")
+	}
+	return c.code[idx], nil
+}
+
+func (c *CodeChunk) Get32(idx int) (int, error) {
+	if idx >= c.length || idx+4 > c.length {
+		return 0, NewExecutionError("bytecode wide fetch out of bounds")
+	}
+	return int(binary.LittleEndian.Uint32(c.code[idx:])), nil
 }
 
 const defaultStackSize = 32
@@ -139,30 +155,36 @@ func (f *Frame) Drop(n int) error {
 
 func (f *Frame) Run() (Value, error) {
 	for {
-		inst := f.code.Get(f.ip)
+		inst, _ := f.code.Get(f.ip)
 		switch inst {
 		case OPNOP:
 			f.ip++
 		case OPLDC:
-			idx := int(f.code.Get(f.ip + 1))
-			if idx >= f.constsc {
-				return NIL, NewExecutionError("const lookup out of bounds")
-			}
-			err := f.Push(f.consts[idx])
+			idx, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("const push failed").Wrap(err)
 			}
-			f.ip += 2
+			if idx >= f.constsc {
+				return NIL, NewExecutionError("const lookup out of bounds")
+			}
+			err = f.Push(f.consts[idx])
+			if err != nil {
+				return NIL, NewExecutionError("const push failed").Wrap(err)
+			}
+			f.ip += 5
 		case OPLDA:
-			idx := int(f.code.Get(f.ip + 1))
+			idx, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("const push failed").Wrap(err)
+			}
 			if idx >= f.argc {
 				return NIL, NewExecutionError("argument lookup out of bounds")
 			}
-			err := f.Push(f.args[idx])
+			err = f.Push(f.args[idx])
 			if err != nil {
 				return NIL, NewExecutionError("argument push failed").Wrap(err)
 			}
-			f.ip += 2
+			f.ip += 5
 		case OPRET:
 			v, err := f.Pop()
 			if err != nil {
@@ -193,28 +215,20 @@ func (f *Frame) Run() (Value, error) {
 				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
 			}
 			f.ip++
-		case OPFIT:
-			offset := int(f.code.Get(f.ip + 1))
+		case OPBRT:
+			offset, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("BRT offset").Wrap(err)
+			}
 			v, err := f.Pop()
 			if err != nil {
-				return NIL, NewExecutionError("FIT pop condition").Wrap(err)
+				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
 			}
 			if v == NIL || v == TRUE {
 				f.ip += 2
 				continue
 			}
 			f.ip += offset
-		case OPBIT:
-			offset := int(f.code.Get(f.ip + 1))
-			v, err := f.Pop()
-			if err != nil {
-				return NIL, NewExecutionError("BIT pop condition").Wrap(err)
-			}
-			if v == NIL || v == TRUE {
-				f.ip += 2
-				continue
-			}
-			f.ip -= offset
 
 		default:
 			return NIL, NewExecutionError("unknown instruction")
