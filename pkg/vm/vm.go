@@ -17,7 +17,10 @@
 
 package vm
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // Opcodes
 const (
@@ -32,18 +35,48 @@ const (
 	OPBRT // branch if truthy BRT (offset int32)
 )
 
+func OpcodeToString(op uint8) string {
+	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT"}
+	if int(op) < len(ops) {
+		return ops[op]
+	}
+	return "???"
+}
+
 // CodeChunk holds bytecode and provides facilities for reading and writing it
 type CodeChunk struct {
-	consts []Value
+	consts *[]Value
 	code   []uint8
 	length int
 }
 
-func NewCodeChunk() *CodeChunk {
+func NewCodeChunk(consts *[]Value) *CodeChunk {
 	return &CodeChunk{
-		consts: []Value{},
+		consts: consts,
 		code:   []uint8{},
 		length: 0,
+	}
+}
+
+func (c *CodeChunk) Debug() {
+	fmt.Println("consts:")
+	consts := *c.consts
+	for i := range consts {
+		fmt.Println("  [", i, "] =", consts[i])
+	}
+	fmt.Println("code:")
+	i := 0
+	for i < len(c.code) {
+		op, _ := c.Get(i)
+		switch op {
+		case OPLDC, OPLDA, OPBRT:
+			arg, _ := c.Get32(i + 1)
+			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
+			i += 5
+		default:
+			fmt.Println("  ", i, ":", OpcodeToString(op))
+			i++
+		}
 	}
 }
 
@@ -92,8 +125,8 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 		stack:   make([]Value, defaultStackSize),
 		args:    args,
 		argc:    len(args),
-		consts:  code.consts,
-		constsc: len(code.consts),
+		consts:  *code.consts,
+		constsc: len(*code.consts),
 		code:    code,
 		ip:      0,
 		sp:      0,

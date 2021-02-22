@@ -164,8 +164,7 @@ func TestYikes(t *testing.T) {
 	plus, err := NativeFnType.Box(func(a int, b int) int { return b + a })
 	assert.NoError(t, err)
 
-	c := NewCodeChunk()
-	c.consts = []Value{forty, two, plus}
+	c := NewCodeChunk(&[]Value{forty, two, plus})
 	c.Append(OPLDC)
 	c.Append32(1)
 	c.Append(OPLDC)
