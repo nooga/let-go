@@ -17,9 +17,67 @@
 
 package compiler
 
-import "github.com/nooga/let-go/pkg/vm"
+import (
+	"github.com/nooga/let-go/pkg/vm"
+	"strings"
+)
 
 type Context struct {
+	ns     *vm.Namespace
 	parent *Context
 	consts []vm.Value
+	chunk  *vm.CodeChunk
+}
+
+func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
+	r := NewLispReader(strings.NewReader(s), "<reader>")
+	o, err := r.Read()
+	if err != nil {
+		return nil, err
+	}
+
+	c.chunk = vm.NewCodeChunk(&c.consts)
+	c.compileForm(o)
+	c.Emit(vm.OPRET)
+	return c.chunk, nil
+}
+
+func (c *Context) Emit(op uint8) {
+	c.chunk.Append(op)
+}
+
+func (c *Context) EmitWithArg(op uint8, arg int) {
+	c.chunk.Append(op)
+	c.chunk.Append32(arg)
+}
+
+func (c *Context) Constant(v vm.Value) int {
+	for i := range c.consts {
+		if c.consts[i] == v {
+			return i
+		}
+	}
+	c.consts = append(c.consts, v)
+	return len(c.consts) - 1
+}
+
+func (c *Context) compileForm(o vm.Value) {
+	switch o.Type() {
+	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType:
+		n := c.Constant(o)
+		c.EmitWithArg(vm.OPLDC, n)
+	case vm.SymbolType:
+		n := c.Constant(c.ns.LookupOrAdd(o.(vm.Symbol)))
+		c.EmitWithArg(vm.OPLDC, n)
+	case vm.ListType:
+		fn := o.(*vm.List).First()
+		args := o.(*vm.List).Next().Unbox().([]vm.Value)
+
+		for i := len(args) - 1; i >= 0; i-- {
+			c.compileForm(args[i])
+		}
+
+		c.compileForm(fn)
+		c.Emit(vm.OPINV)
+	}
 }
