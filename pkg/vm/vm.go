@@ -33,10 +33,12 @@ const (
 	OPRET // return from function
 
 	OPBRT // branch if truthy BRT (offset int32)
+	OPBRF // branch if truthy BRT (offset int32)
+	OPJMP // jump by offset JMP (offset int32)
 )
 
 func OpcodeToString(op uint8) string {
-	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT"}
+	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP"}
 	if int(op) < len(ops) {
 		return ops[op]
 	}
@@ -69,7 +71,7 @@ func (c *CodeChunk) Debug() {
 	for i < len(c.code) {
 		op, _ := c.Get(i)
 		switch op {
-		case OPLDC, OPLDA, OPBRT:
+		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 5
@@ -78,6 +80,10 @@ func (c *CodeChunk) Debug() {
 			i++
 		}
 	}
+}
+
+func (c *CodeChunk) Length() int {
+	return c.length
 }
 
 func (c *CodeChunk) Append(insts ...uint8) {
@@ -104,6 +110,10 @@ func (c *CodeChunk) Get32(idx int) (int, error) {
 		return 0, NewExecutionError("bytecode wide fetch out of bounds")
 	}
 	return int(binary.LittleEndian.Uint32(c.code[idx:])), nil
+}
+
+func (c *CodeChunk) Update32(address int, value int) {
+	binary.LittleEndian.PutUint32(c.code[address:address+4], uint32(value))
 }
 
 const defaultStackSize = 32
@@ -257,9 +267,29 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
 			}
-			if v == NIL || v == TRUE {
+			if IsTruthy(v) {
 				f.ip += 2
 				continue
+			}
+			f.ip += offset
+		case OPBRF:
+			offset, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("BRT offset").Wrap(err)
+			}
+			v, err := f.Pop()
+			if err != nil {
+				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
+			}
+			if !IsTruthy(v) {
+				f.ip += 2
+				continue
+			}
+			f.ip += offset
+		case OPJMP:
+			offset, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("JMP offset").Wrap(err)
 			}
 			f.ip += offset
 
