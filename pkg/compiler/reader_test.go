@@ -41,6 +41,7 @@ func TestReaderBasic(t *testing.T) {
 		"(    )":               vm.EmptyList,
 		"\"hello\"":            vm.String("hello"),
 		"\"h\\\"el\\tl\\\\o\"": vm.String("h\"el\tl\\o"),
+		":foo":                 vm.Keyword("foo"),
 	}
 
 	for p, e := range cases {

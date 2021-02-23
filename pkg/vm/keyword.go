@@ -15,32 +15,38 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-package compiler
+package vm
 
-import (
-	"github.com/stretchr/testify/assert"
-	"testing"
-)
+import "fmt"
 
-func TestContext_Compile(t *testing.T) {
-	tests := map[string]interface{}{
-		"(+ (* 2 20) 2)":          42,
-		`(if true "big" "meh")`:   "big",
-		`(if false "big" "meh")`:  "meh",
-		`(if nil 1 2)`:            2,
-		`(if true 101)`:           101,
-		`(if false 101)`:          nil,
-		`(do 1 2 3)`:              3,
-		`(do (+ 1 2))`:            3,
-		`(do)`:                    nil,
-		`(do (def x 40) (+ x 2))`: 42,
-		`(do (def x true)
-			 (def y (if x :big :meh))
-             y)`: "big",
+type theKeywordType struct {
+	zero Keyword
+}
+
+func (lt *theKeywordType) Name() string { return "Keyword" }
+
+func (lt *theKeywordType) Box(bare interface{}) (Value, error) {
+	raw, ok := bare.(fmt.Stringer)
+	if !ok {
+		return BooleanType.zero, NewTypeError(bare, "can't be boxed as", lt)
 	}
-	for k, v := range tests {
-		out, err := Eval(k)
-		assert.NoError(t, err)
-		assert.Equal(t, v, out.Unbox())
-	}
+	return Keyword(raw.String()), nil
+}
+
+// KeywordType is the type of KeywordValues
+var KeywordType *theKeywordType
+
+func init() {
+	KeywordType = &theKeywordType{zero: "????BADKeyword????"}
+}
+
+// Keyword is boxed int
+type Keyword string
+
+// Type implements Value
+func (l Keyword) Type() ValueType { return KeywordType }
+
+// Unbox implements Unbox
+func (l Keyword) Unbox() interface{} {
+	return string(l)
 }

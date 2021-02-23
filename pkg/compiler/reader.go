@@ -139,6 +139,9 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 		return vm.NIL, NewReaderError(r, fmt.Sprintf("%v is not a symbol", t))
 	}
 	ss := string(s)
+	if ss[0] == ':' {
+		return vm.Keyword(ss[1:]), nil
+	}
 	if ss == "nil" {
 		return vm.NIL, nil
 	}
