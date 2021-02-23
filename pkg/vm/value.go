@@ -79,3 +79,7 @@ func BoxValue(v reflect.Value) (Value, error) {
 	}
 	return NIL, fmt.Errorf("UNREACHABLE")
 }
+
+func IsTruthy(v Value) bool {
+	return !(v == NIL || v == FALSE)
+}
