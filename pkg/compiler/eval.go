@@ -18,22 +18,37 @@
 package compiler
 
 import (
-	"github.com/stretchr/testify/assert"
-	"testing"
+	"github.com/nooga/let-go/pkg/vm"
 )
 
-func TestContext_Compile(t *testing.T) {
-	tests := map[string]interface{}{
-		"(+ (* 2 20) 2)":         42,
-		`(if true "big" "meh")`:  "big",
-		`(if false "big" "meh")`: "meh",
-		`(if nil 1 2)`:           2,
-		`(if true 101)`:          101,
-		`(if false 101)`:         nil,
+func Eval(src string) (vm.Value, error) {
+
+	// FIXME make a stdlib that will declare these
+	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return b + a })
+	if err != nil {
+		return vm.NIL, err
 	}
-	for k, v := range tests {
-		out, err := Eval(k)
-		assert.NoError(t, err)
-		assert.Equal(t, v, out.Unbox())
+
+	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return b * a })
+	if err != nil {
+		return vm.NIL, err
 	}
+
+	ns := vm.NewNamespace("user")
+	ns.Def("+", plus)
+	ns.Def("*", mul)
+	compiler := &Context{ns: ns, consts: []vm.Value{}}
+
+	chunk, err := compiler.Compile(src)
+	if err != nil {
+		return vm.NIL, err
+	}
+
+	frame := vm.NewFrame(chunk, nil)
+	out, err := frame.Run()
+
+	//chunk.Debug()
+	//fmt.Println("eval: ", src, "=>", out)
+
+	return out, err
 }
