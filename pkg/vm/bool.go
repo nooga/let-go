@@ -34,7 +34,7 @@ func (t *theBooleanType) Box(b interface{}) (Value, error) {
 type Boolean bool
 
 // Type implements Value
-func (n Boolean) Type() ValueType { return &theBooleanType{} }
+func (n Boolean) Type() ValueType { return BooleanType }
 
 // Unbox implements Value
 func (n Boolean) Unbox() interface{} { return bool(n) }
