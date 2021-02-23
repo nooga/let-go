@@ -28,7 +28,7 @@ func (t *theNilType) Box(_ interface{}) (Value, error) { return t.zero, nil }
 type Nil struct{}
 
 // Type implements Value
-func (n *Nil) Type() ValueType { return &theNilType{} }
+func (n *Nil) Type() ValueType { return NilType }
 
 // Unbox implements Value
 func (n *Nil) Unbox() interface{} { return nil }
@@ -40,6 +40,6 @@ var NilType *theNilType
 var NIL *Nil
 
 func init() {
-	NilType = &theNilType{zero: &Nil{}}
+	NilType = &theNilType{zero: nil}
 	NIL = NilType.zero
 }

@@ -199,6 +199,7 @@ func (f *Frame) Drop(n int) error {
 func (f *Frame) Run() (Value, error) {
 	for {
 		inst, _ := f.code.Get(f.ip)
+		//	fmt.Println("exec", f.ip, OpcodeToString(inst))
 		switch inst {
 		case OPNOP:
 			f.ip++
@@ -267,8 +268,8 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
 			}
-			if IsTruthy(v) {
-				f.ip += 2
+			if !IsTruthy(v) {
+				f.ip += 5
 				continue
 			}
 			f.ip += offset
@@ -281,8 +282,8 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
 			}
-			if !IsTruthy(v) {
-				f.ip += 2
+			if IsTruthy(v) {
+				f.ip += 5
 				continue
 			}
 			f.ip += offset

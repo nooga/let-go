@@ -46,7 +46,7 @@ var BooleanType *theBooleanType
 const TRUE Boolean = true
 
 // FALSE is Boolean
-const FALSE Boolean = true
+const FALSE Boolean = false
 
 func init() {
 	BooleanType = &theBooleanType{zero: FALSE}
