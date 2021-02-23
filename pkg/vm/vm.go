@@ -35,10 +35,12 @@ const (
 	OPBRT // branch if truthy BRT (offset int32)
 	OPBRF // branch if truthy BRT (offset int32)
 	OPJMP // jump by offset JMP (offset int32)
+	OPPOP // pop value from the stack and discard it
+	OPSTV // set var
 )
 
 func OpcodeToString(op uint8) string {
-	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP"}
+	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP", "POP", "STV"}
 	if int(op) < len(ops) {
 		return ops[op]
 	}
@@ -293,6 +295,33 @@ func (f *Frame) Run() (Value, error) {
 				return NIL, NewExecutionError("JMP offset").Wrap(err)
 			}
 			f.ip += offset
+
+		case OPPOP:
+			_, err := f.Pop()
+			if err != nil {
+				return NIL, NewExecutionError("POP failed").Wrap(err)
+			}
+			f.ip++
+
+		case OPSTV:
+			val, err := f.Pop()
+			if err != nil {
+				return NIL, NewExecutionError("STV pop value failed").Wrap(err)
+			}
+			varr, err := f.Pop()
+			if err != nil {
+				return NIL, NewExecutionError("STV pop var failed").Wrap(err)
+			}
+			varrd, ok := varr.(*Var)
+			if !ok {
+				return NIL, NewExecutionError("STV invalid Var").Wrap(err)
+			}
+			varrd.SetRoot(val)
+			err = f.Push(varr)
+			if err != nil {
+				return NIL, NewExecutionError("STV push var failed").Wrap(err)
+			}
+			f.ip++
 
 		default:
 			return NIL, NewExecutionError("unknown instruction")
