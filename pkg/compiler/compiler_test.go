@@ -24,12 +24,16 @@ import (
 
 func TestContext_Compile(t *testing.T) {
 	tests := map[string]interface{}{
-		"(+ (* 2 20) 2)":         42,
-		`(if true "big" "meh")`:  "big",
-		`(if false "big" "meh")`: "meh",
-		`(if nil 1 2)`:           2,
-		`(if true 101)`:          101,
-		`(if false 101)`:         nil,
+		"(+ (* 2 20) 2)":          42,
+		`(if true "big" "meh")`:   "big",
+		`(if false "big" "meh")`:  "meh",
+		`(if nil 1 2)`:            2,
+		`(if true 101)`:           101,
+		`(if false 101)`:          nil,
+		`(do 1 2 3)`:              3,
+		`(do (+ 1 2))`:            3,
+		`(do)`:                    nil,
+		`(do (def x 40) (+ x 2))`: 42,
 	}
 	for k, v := range tests {
 		out, err := Eval(k)

@@ -119,7 +119,9 @@ var specialForms map[vm.Symbol]formCompilerFunc
 
 func init() {
 	specialForms = map[vm.Symbol]formCompilerFunc{
-		"if": ifCompiler,
+		"if":  ifCompiler,
+		"do":  doCompiler,
+		"def": defCompiler,
 	}
 }
 
@@ -153,5 +155,47 @@ func ifCompiler(c *Context, form vm.Value) error {
 	}
 	finJumpEnd := c.CurrentAddress()
 	c.UpdatePlaceholderArg(finJumpStart, finJumpEnd-finJumpStart)
+	return nil
+}
+
+func doCompiler(c *Context, form vm.Value) error {
+	args := form.(*vm.List).Next().Unbox().([]vm.Value)
+	l := len(args)
+	if l == 0 {
+		c.EmitWithArg(vm.OPLDC, c.Constant(vm.NIL))
+		return nil
+	}
+	for i := range args {
+		err := c.compileForm(args[i])
+		if err != nil {
+			return NewCompileError("compiling do member").Wrap(err)
+		}
+		if i < l-1 {
+			c.Emit(vm.OPPOP)
+		}
+	}
+	return nil
+}
+
+func defCompiler(c *Context, form vm.Value) error {
+	args := form.(*vm.List).Next().Unbox().([]vm.Value)
+	l := len(args)
+	if l != 2 {
+		return NewCompileError(fmt.Sprintf("def: wrong number of forms (%d), need 2", l))
+	}
+	sym := args[0]
+	val := args[1]
+	if sym.Type() != vm.SymbolType {
+		return NewCompileError(fmt.Sprintf("def: first argument must be a symbol, got (%v)", sym))
+	}
+	varr := c.Constant(c.ns.LookupOrAdd(sym.(vm.Symbol)))
+	c.EmitWithArg(vm.OPLDC, varr)
+
+	err := c.compileForm(val)
+	if err != nil {
+		return NewCompileError("compiling def value").Wrap(err)
+	}
+	c.Emit(vm.OPSTV)
+
 	return nil
 }
