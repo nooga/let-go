@@ -18,6 +18,7 @@
 package compiler
 
 import (
+	"fmt"
 	"github.com/nooga/let-go/pkg/vm"
 	"strings"
 )
@@ -37,7 +38,10 @@ func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 	}
 
 	c.chunk = vm.NewCodeChunk(&c.consts)
-	c.compileForm(o)
+	err = c.compileForm(o)
+	if err != nil {
+		return nil, err
+	}
 	c.Emit(vm.OPRET)
 	return c.chunk, nil
 }
@@ -61,7 +65,7 @@ func (c *Context) Constant(v vm.Value) int {
 	return len(c.consts) - 1
 }
 
-func (c *Context) compileForm(o vm.Value) {
+func (c *Context) compileForm(o vm.Value) error {
 	switch o.Type() {
 	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType:
 		n := c.Constant(o)
@@ -71,13 +75,83 @@ func (c *Context) compileForm(o vm.Value) {
 		c.EmitWithArg(vm.OPLDC, n)
 	case vm.ListType:
 		fn := o.(*vm.List).First()
-		args := o.(*vm.List).Next().Unbox().([]vm.Value)
-
-		for i := len(args) - 1; i >= 0; i-- {
-			c.compileForm(args[i])
+		// check if we're looking at a special form
+		if fn.Type() == vm.SymbolType {
+			formCompiler, ok := specialForms[fn.(vm.Symbol)]
+			if ok {
+				return formCompiler(c, o)
+			}
 		}
-
-		c.compileForm(fn)
+		// treat as function invocation if this is not a special form
+		args := o.(*vm.List).Next().Unbox().([]vm.Value)
+		for i := len(args) - 1; i >= 0; i-- {
+			err := c.compileForm(args[i])
+			if err != nil {
+				return NewCompileError("compiling arguments").Wrap(err)
+			}
+		}
+		err := c.compileForm(fn)
+		if err != nil {
+			return NewCompileError("compiling function position").Wrap(err)
+		}
 		c.Emit(vm.OPINV)
 	}
+	return nil
+}
+
+func (c *Context) EmitWithArgPlaceholder(inst uint8) int {
+	placeholder := c.CurrentAddress()
+	c.EmitWithArg(inst, 0)
+	return placeholder
+}
+
+func (c *Context) CurrentAddress() int {
+	return c.chunk.Length()
+}
+
+func (c *Context) UpdatePlaceholderArg(placeholder int, arg int) {
+	c.chunk.Update32(placeholder+1, arg)
+}
+
+type formCompilerFunc func(*Context, vm.Value) error
+
+var specialForms map[vm.Symbol]formCompilerFunc
+
+func init() {
+	specialForms = map[vm.Symbol]formCompilerFunc{
+		"if": ifCompiler,
+	}
+}
+
+func ifCompiler(c *Context, form vm.Value) error {
+	args := form.(*vm.List).Next().Unbox().([]vm.Value)
+	l := len(args)
+	if l < 2 || l > 3 {
+		return NewCompileError(fmt.Sprintf("if: wrong number of forms (%d), need 2 or 3", l))
+	}
+	// compile condition
+	err := c.compileForm(args[0])
+	if err != nil {
+		return NewCompileError("compiling if condition").Wrap(err)
+	}
+	elseJumpStart := c.EmitWithArgPlaceholder(vm.OPBRF)
+	// compile then branch
+	err = c.compileForm(args[1])
+	if err != nil {
+		return NewCompileError("compiling if then branch").Wrap(err)
+	}
+	finJumpStart := c.EmitWithArgPlaceholder(vm.OPJMP)
+	elseJumpEnd := c.CurrentAddress()
+	c.UpdatePlaceholderArg(elseJumpStart, elseJumpEnd-elseJumpStart)
+	if l == 3 {
+		err = c.compileForm(args[2])
+		if err != nil {
+			return NewCompileError("compiling if else branch").Wrap(err)
+		}
+	} else {
+		c.EmitWithArg(vm.OPLDC, c.Constant(vm.NIL))
+	}
+	finJumpEnd := c.CurrentAddress()
+	c.UpdatePlaceholderArg(finJumpStart, finJumpEnd-finJumpStart)
+	return nil
 }

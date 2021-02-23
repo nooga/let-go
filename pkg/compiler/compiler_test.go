@@ -50,3 +50,31 @@ func TestContext_Compile(t *testing.T) {
 
 	assert.Equal(t, 42, out.Unbox())
 }
+
+func TestContext_Compile2(t *testing.T) {
+	p := `
+	(if true 1 2)
+`
+	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return b + a })
+	assert.NoError(t, err)
+
+	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return b * a })
+	assert.NoError(t, err)
+
+	ns := vm.NewNamespace("user")
+	ns.Def("+", plus)
+	ns.Def("*", mul)
+	compiler := &Context{ns: ns, consts: []vm.Value{}}
+
+	chunk, err := compiler.Compile(p)
+	assert.NoError(t, err)
+
+	frame := vm.NewFrame(chunk, nil)
+	out, err := frame.Run()
+	assert.NoError(t, err)
+
+	chunk.Debug()
+	fmt.Println("eval: ", p, "=>", out)
+
+	assert.Equal(t, 1, out.Unbox())
+}

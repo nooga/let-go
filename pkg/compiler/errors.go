@@ -54,3 +54,28 @@ func (r *ReaderError) Wrap(err error) errors.Error {
 func (r *ReaderError) GetCause() error {
 	return r.cause
 }
+
+type CompileError struct {
+	message string
+	cause   error
+}
+
+func NewCompileError(message string) *CompileError {
+	return &CompileError{
+		message: message,
+	}
+}
+
+func (r *CompileError) Error() string {
+	return errors.AddCause(r,
+		fmt.Sprintf("CompileError: %s", r.message))
+}
+
+func (r *CompileError) Wrap(err error) errors.Error {
+	r.cause = err
+	return r
+}
+
+func (r *CompileError) GetCause() error {
+	return r.cause
+}
