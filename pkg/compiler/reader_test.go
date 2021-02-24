@@ -39,6 +39,7 @@ func TestReaderBasic(t *testing.T) {
 		"foo":                  vm.Symbol("foo"),
 		"()":                   vm.EmptyList,
 		"(    )":               vm.EmptyList,
+		"(1 2)":                vm.EmptyList.Cons(vm.Int(2)).Cons(vm.Int(1)),
 		"\"hello\"":            vm.String("hello"),
 		"\"h\\\"el\\tl\\\\o\"": vm.String("h\"el\tl\\o"),
 		":foo":                 vm.Keyword("foo"),
@@ -46,6 +47,8 @@ func TestReaderBasic(t *testing.T) {
 		"\\newline":            vm.Char('\n'),
 		"\\u1234":              vm.Char('\u1234'),
 		"\\o300":               vm.Char(rune(0300)),
+		"[]":                   vm.ArrayVector{},
+		"[1 :foo true]":        vm.ArrayVector{vm.Int(1), vm.Keyword("foo")}.Cons(vm.TRUE),
 	}
 
 	for p, e := range cases {

@@ -325,6 +325,28 @@ func readList(r *LispReader, _ rune) (vm.Value, error) {
 	return vm.ListType.Box(ret)
 }
 
+func readVector(r *LispReader, _ rune) (vm.Value, error) {
+	ret := make([]vm.Value, 0)
+	for {
+		ch2, err := r.eatWhitespace()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		if ch2 == ']' {
+			break
+		}
+		if err = r.unread(); err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		form, err := r.Read()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		ret = append(ret, form)
+	}
+	return vm.ArrayVector(ret), nil
+}
+
 func unmatchedDelimReader(ru rune) readerFunc {
 	return func(r *LispReader, _ rune) (vm.Value, error) {
 		return nil, NewReaderError(r, fmt.Sprintf("unmatched delimiter %c", ru))
@@ -356,6 +378,8 @@ func init() {
 	macros = map[rune]readerFunc{
 		'(':  readList,
 		')':  unmatchedDelimReader(')'),
+		'[':  readVector,
+		']':  unmatchedDelimReader(']'),
 		'"':  readString,
 		'\\': readChar,
 	}
