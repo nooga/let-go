@@ -2,9 +2,9 @@ name: Go
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
 
 jobs:
 
@@ -18,8 +18,8 @@ jobs:
       with:
         go-version: 1.15
 
-#     - name: Build
-#       run: go build -v ./...
+    - name: Build
+      run: go build -v ./...
 
     - name: Test
       run: go test -v ./...
