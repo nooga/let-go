@@ -154,7 +154,7 @@ func TestListType(t *testing.T) {
 	assert.Equal(t, EmptyList, badList)
 }
 
-func TestYikes(t *testing.T) {
+func TestSimpleCall(t *testing.T) {
 
 	forty, err := IntType.Box(1)
 	assert.NoError(t, err)

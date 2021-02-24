@@ -42,6 +42,10 @@ func TestReaderBasic(t *testing.T) {
 		"\"hello\"":            vm.String("hello"),
 		"\"h\\\"el\\tl\\\\o\"": vm.String("h\"el\tl\\o"),
 		":foo":                 vm.Keyword("foo"),
+		"\\F":                  vm.Char('F'),
+		"\\newline":            vm.Char('\n'),
+		"\\u1234":              vm.Char('\u1234'),
+		"\\o300":               vm.Char(rune(0300)),
 	}
 
 	for p, e := range cases {

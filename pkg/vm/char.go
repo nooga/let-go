@@ -15,33 +15,38 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-package compiler
+package vm
 
-import (
-	"github.com/stretchr/testify/assert"
-	"testing"
-)
+import "unicode/utf8"
 
-func TestContext_Compile(t *testing.T) {
-	tests := map[string]interface{}{
-		"(+ (* 2 20) 2)":          42,
-		`(if true "big" "meh")`:   "big",
-		`(if false "big" "meh")`:  "meh",
-		`(if nil 1 2)`:            2,
-		`(if true 101)`:           101,
-		`(if false 101)`:          nil,
-		`(do 1 2 3)`:              3,
-		`(do (+ 1 2))`:            3,
-		`(do)`:                    nil,
-		`(do (def x 40) (+ x 2))`: 42,
-		`(do (def x true)
-			 (def y (if x :big :meh))
-		    y)`: "big",
-		`(if \P \N \P)`: 'N',
+type theCharType struct {
+	zero Char
+}
+
+func (lt *theCharType) Name() string { return "Char" }
+
+func (lt *theCharType) Box(bare interface{}) (Value, error) {
+	raw, ok := bare.(rune)
+	if !ok {
+		return CharType.zero, NewTypeError(bare, "can't be boxed as", lt)
 	}
-	for k, v := range tests {
-		out, err := Eval(k)
-		assert.NoError(t, err)
-		assert.Equal(t, v, out.Unbox())
-	}
+	return Char(raw), nil
+}
+
+// CharType is the type of CharValues
+var CharType *theCharType
+
+func init() {
+	CharType = &theCharType{zero: utf8.RuneError}
+}
+
+// Char is boxed rune
+type Char rune
+
+// Type implements Value
+func (l Char) Type() ValueType { return CharType }
+
+// Unbox implements Unbox
+func (l Char) Unbox() interface{} {
+	return rune(l)
 }

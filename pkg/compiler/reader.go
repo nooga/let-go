@@ -217,6 +217,65 @@ func readString(r *LispReader, _ rune) (vm.Value, error) {
 	}
 }
 
+func readChar(r *LispReader, _ rune) (vm.Value, error) {
+	ch, err := r.next()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+	}
+	tok, err := readToken(r, ch)
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+	}
+	toks := tok.Unbox().(string)
+	ru, s := utf8.DecodeRuneInString(toks)
+	switch {
+	case len(toks) == s:
+		return vm.Char(ru), nil
+	case toks == "space":
+		return vm.Char(' '), nil
+	case toks == "tab":
+		return vm.Char('\t'), nil
+	case toks == "backspace":
+		return vm.Char('\b'), nil
+	case toks == "newline":
+		return vm.Char('\n'), nil
+	case toks == "formfeed":
+		return vm.Char('\f'), nil
+	case toks == "return":
+		return vm.Char('\r'), nil
+	case toks[0] == 'u':
+		hex := toks[1:]
+		if len(hex) < 4 {
+			goto fail // LOL I'm using goto in 2021 because in Go it actually makes sense
+		}
+		var hexi int
+		n, err := fmt.Sscanf(hex, "%x", &hexi)
+		if n != 1 || (hexi >= 0xD800 && hexi <= 0xDFFF) {
+			goto fail
+		}
+		if err != nil {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid char constant \\%s", toks)).Wrap(err)
+		}
+		return vm.Char(rune(hexi)), nil
+	case toks[0] == 'o':
+		hex := toks[1:]
+		if len(hex) > 3 {
+			goto fail
+		}
+		var hexi int
+		n, err := fmt.Sscanf(hex, "%o", &hexi)
+		if n != 1 || hexi > 0377 {
+			goto fail
+		}
+		if err != nil {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid char constant \\%s", toks)).Wrap(err)
+		}
+		return vm.Char(rune(hexi)), nil
+	}
+fail:
+	return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid char constant \\%s", toks))
+}
+
 func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 	s := strings.Builder{}
 	s.WriteRune(ru)
@@ -273,7 +332,7 @@ func unmatchedDelimReader(ru rune) readerFunc {
 }
 
 func isWhitespace(r rune) bool {
-	return unicode.IsSpace(r)
+	return unicode.IsSpace(r) || r == ','
 }
 
 func isDigit(r rune) bool {
@@ -295,8 +354,9 @@ var macros map[rune]readerFunc
 
 func init() {
 	macros = map[rune]readerFunc{
-		'(': readList,
-		')': unmatchedDelimReader(')'),
-		'"': readString,
+		'(':  readList,
+		')':  unmatchedDelimReader(')'),
+		'"':  readString,
+		'\\': readChar,
 	}
 }

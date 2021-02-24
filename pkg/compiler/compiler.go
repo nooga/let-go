@@ -67,7 +67,7 @@ func (c *Context) Constant(v vm.Value) int {
 
 func (c *Context) compileForm(o vm.Value) error {
 	switch o.Type() {
-	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType:
+	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType:
 		n := c.Constant(o)
 		c.EmitWithArg(vm.OPLDC, n)
 	case vm.SymbolType:
