@@ -24,12 +24,17 @@ import (
 func Eval(src string) (vm.Value, error) {
 
 	// FIXME make a stdlib that will declare these
-	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return b + a })
+	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return a + b })
 	if err != nil {
 		return vm.NIL, err
 	}
 
-	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return b * a })
+	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return a * b })
+	if err != nil {
+		return vm.NIL, err
+	}
+
+	sub, err := vm.NativeFnType.Box(func(a int, b int) int { return a - b })
 	if err != nil {
 		return vm.NIL, err
 	}
@@ -37,6 +42,7 @@ func Eval(src string) (vm.Value, error) {
 	ns := vm.NewNamespace("user")
 	ns.Def("+", plus)
 	ns.Def("*", mul)
+	ns.Def("-", sub)
 	compiler := &Context{ns: ns, consts: []vm.Value{}}
 
 	chunk, err := compiler.Compile(src)

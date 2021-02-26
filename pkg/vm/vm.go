@@ -238,7 +238,11 @@ func (f *Frame) Run() (Value, error) {
 			}
 			return v, nil
 		case OPINV:
-			fraw, err := f.Nth(0)
+			arity, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("INV arg count").Wrap(err)
+			}
+			fraw, err := f.Nth(arity)
 			if err != nil {
 				return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
 			}
@@ -246,8 +250,7 @@ func (f *Frame) Run() (Value, error) {
 			if !ok {
 				return NIL, NewTypeError(fraw, "is not a function", nil)
 			}
-			arity := fn.Arity()
-			a, err := f.Mult(1, arity)
+			a, err := f.Mult(0, arity)
 			if err != nil {
 				return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 			}
@@ -260,7 +263,7 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
 			}
-			f.ip++
+			f.ip += 5
 		case OPBRT:
 			offset, err := f.code.Get32(f.ip + 1)
 			if err != nil {

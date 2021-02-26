@@ -25,6 +25,7 @@ import (
 func TestContext_Compile(t *testing.T) {
 	tests := map[string]interface{}{
 		"(+ (* 2 20) 2)":          42,
+		"(- 10 2)":                8,
 		`(if true "big" "meh")`:   "big",
 		`(if false "big" "meh")`:  "meh",
 		`(if nil 1 2)`:            2,

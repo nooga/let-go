@@ -97,19 +97,24 @@ func (c *Context) compileForm(o vm.Value) error {
 				return formCompiler(c, o)
 			}
 		}
+
 		// treat as function invocation if this is not a special form
-		args := o.(*vm.List).Next().Unbox().([]vm.Value)
-		for i := len(args) - 1; i >= 0; i-- {
-			err := c.compileForm(args[i])
-			if err != nil {
-				return NewCompileError("compiling arguments").Wrap(err)
-			}
-		}
 		err := c.compileForm(fn)
 		if err != nil {
 			return NewCompileError("compiling function position").Wrap(err)
 		}
-		c.Emit(vm.OPINV)
+
+		args := o.(*vm.List).Next()
+		argc := args.(vm.Collection).Count().Unbox().(int)
+		for args != vm.EmptyList {
+			err := c.compileForm(args.First())
+			if err != nil {
+				return NewCompileError("compiling arguments").Wrap(err)
+			}
+			args = args.Next()
+		}
+
+		c.EmitWithArg(vm.OPINV, argc)
 	}
 	return nil
 }
