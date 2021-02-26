@@ -28,26 +28,31 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 		return NIL, NewTypeError(fn, "can't be boxed into", t)
 	}
 
+	variadric := ty.IsVariadic()
+
 	v := reflect.ValueOf(fn)
 
+	proxy := func(args []Value) Value {
+		rawArgs := make([]reflect.Value, len(args))
+		for i := range args {
+			rawArgs[i] = reflect.ValueOf(args[i].Unbox())
+		}
+		res := v.Call(rawArgs)
+		if len(res) == 0 {
+			return NIL
+		}
+		wv, err := BoxValue(res[0])
+		if err != nil {
+			return NIL
+		}
+		return wv
+	}
+
 	f := &NativeFn{
-		arity: ty.NumIn(),
-		fn:    fn,
-		proxy: func(args []Value) Value {
-			rawArgs := make([]reflect.Value, len(args))
-			for i := range args {
-				rawArgs[i] = reflect.ValueOf(args[i].Unbox())
-			}
-			res := v.Call(rawArgs)
-			if len(res) == 0 {
-				return NIL
-			}
-			wv, err := BoxValue(res[0])
-			if err != nil {
-				return NIL
-			}
-			return wv
-		},
+		arity:       ty.NumIn(),
+		isVariadric: variadric,
+		fn:          fn,
+		proxy:       proxy,
 	}
 
 	return f, nil
@@ -60,9 +65,10 @@ func init() {
 }
 
 type NativeFn struct {
-	arity int
-	fn    interface{}
-	proxy func([]Value) Value
+	arity       int
+	isVariadric bool
+	fn          interface{}
+	proxy       func([]Value) Value
 }
 
 func (l *NativeFn) Type() ValueType { return NativeFnType }

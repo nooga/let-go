@@ -18,6 +18,7 @@
 package compiler
 
 import (
+	"fmt"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
@@ -39,10 +40,16 @@ func Eval(src string) (vm.Value, error) {
 		return vm.NIL, err
 	}
 
+	printlnf, err := vm.NativeFnType.Box(fmt.Println)
+	if err != nil {
+		return vm.NIL, err
+	}
+
 	ns := vm.NewNamespace("user")
 	ns.Def("+", plus)
 	ns.Def("*", mul)
 	ns.Def("-", sub)
+	ns.Def("println", printlnf)
 	compiler := &Context{ns: ns, consts: []vm.Value{}}
 
 	chunk, err := compiler.Compile(src)

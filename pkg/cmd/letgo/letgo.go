@@ -15,35 +15,32 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-package compiler
+package main
 
 import (
-	"github.com/stretchr/testify/assert"
-	"testing"
+	"bufio"
+	"fmt"
+	"github.com/nooga/let-go/pkg/compiler"
+	"log"
+	"os"
 )
 
-func TestContext_Compile(t *testing.T) {
-	tests := map[string]interface{}{
-		"(+ (* 2 20) 2)":          42,
-		"(- 10 2)":                8,
-		`(if true "big" "meh")`:   "big",
-		`(if false "big" "meh")`:  "meh",
-		`(if nil 1 2)`:            2,
-		`(if true 101)`:           101,
-		`(if false 101)`:          nil,
-		`(do 1 2 3)`:              3,
-		`(do (+ 1 2))`:            3,
-		`(do)`:                    nil,
-		`(do (def x 40) (+ x 2))`: 42,
-		`(do (def x true)
-			 (def y (if x :big :meh))
-		    y)`: "big",
-		`(if \P \N \P)`:             'N',
-		`(println "hello" "world")`: 12,
+func main() {
+	scanner := bufio.NewScanner(os.Stdin)
+	prompt := "> "
+	fmt.Print(prompt)
+	for scanner.Scan() {
+
+		in := scanner.Text()
+		val, err := compiler.Eval(in)
+		if err != nil {
+			fmt.Println(err)
+		}
+		fmt.Println(val.Unbox())
+		fmt.Print(prompt)
 	}
-	for k, v := range tests {
-		out, err := Eval(k)
-		assert.NoError(t, err)
-		assert.Equal(t, v, out.Unbox())
+
+	if err := scanner.Err(); err != nil {
+		log.Println(err)
 	}
 }
