@@ -30,6 +30,13 @@ type Context struct {
 	chunk  *vm.CodeChunk
 }
 
+func NewCompiler(ns *vm.Namespace) *Context {
+	return &Context{
+		ns:     ns,
+		consts: nil,
+	}
+}
+
 func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 	r := NewLispReader(strings.NewReader(s), "<reader>")
 	o, err := r.Read()

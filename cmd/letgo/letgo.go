@@ -21,21 +21,48 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/vm"
 	"log"
 	"os"
 )
 
+func makeNamespace() (*vm.Namespace, error) {
+	// FIXME make a stdlib that will declare these
+	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return a + b })
+	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return a * b })
+	sub, err := vm.NativeFnType.Box(func(a int, b int) int { return a - b })
+	printlnf, err := vm.NativeFnType.Box(fmt.Println)
+	if err != nil {
+		return nil, err
+	}
+
+	ns := vm.NewNamespace("user")
+	ns.Def("+", plus)
+	ns.Def("*", mul)
+	ns.Def("-", sub)
+	ns.Def("println", printlnf)
+	return ns, nil
+}
+
 func main() {
+	ns, err := makeNamespace()
+	if err != nil {
+		fmt.Println("init error:", err)
+		return
+	}
+	comp := compiler.NewCompiler(ns)
+
 	scanner := bufio.NewScanner(os.Stdin)
 	prompt := "> "
 	fmt.Print(prompt)
 	for scanner.Scan() {
-
 		in := scanner.Text()
-		val, err := compiler.Eval(in)
+		chunk, err := comp.Compile(in)
+		val, err := vm.NewFrame(chunk, nil).Run()
 		if err != nil {
 			fmt.Println(err)
 		}
+
 		fmt.Println(val.Unbox())
 		fmt.Print(prompt)
 	}
