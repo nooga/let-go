@@ -156,7 +156,7 @@ func TestListType(t *testing.T) {
 
 func TestSimpleCall(t *testing.T) {
 
-	forty, err := IntType.Box(1)
+	forty, err := IntType.Box(40)
 	assert.NoError(t, err)
 	two, err := IntType.Box(2)
 	assert.NoError(t, err)
@@ -165,13 +165,19 @@ func TestSimpleCall(t *testing.T) {
 	assert.NoError(t, err)
 
 	c := NewCodeChunk(&[]Value{forty, two, plus})
+
 	c.Append(OPLDC)
-	c.Append32(1)
+	c.Append32(2)
+
 	c.Append(OPLDC)
 	c.Append32(0)
 	c.Append(OPLDC)
+	c.Append32(1)
+
+	c.Append(OPINV)
 	c.Append32(2)
-	c.Append(OPINV, OPRET)
+
+	c.Append(OPRET)
 
 	var out Value
 
@@ -179,5 +185,5 @@ func TestSimpleCall(t *testing.T) {
 	out, err = frame.Run()
 	assert.NoError(t, err)
 
-	assert.Equal(t, 3, out.Unbox())
+	assert.Equal(t, 42, out.Unbox())
 }
