@@ -34,7 +34,7 @@ type Context struct {
 func NewCompiler(ns *vm.Namespace) *Context {
 	return &Context{
 		ns:     ns,
-		consts: nil,
+		consts: &[]vm.Value{},
 	}
 }
 
@@ -125,21 +125,23 @@ func (c *Context) compileForm(o vm.Value) error {
 		}
 		varn := c.Constant(c.ns.LookupOrAdd(o.(vm.Symbol)))
 		c.EmitWithArg(vm.OPLDC, varn)
-	//case vm.ArrayVectorType:
-	//	v := o.(vm.ArrayVector)
-	//	// FIXME detect const vectors and push them like this
-	//	if len(v) == 0 {
-	//		n := c.Constant(v)
-	//		c.EmitWithArg(vm.OPLDC, n)
-	//		return nil
-	//	}
-	//	for i := range v {
-	//		err := c.compileForm(v[i])
-	//		if err != nil {
-	//			return NewCompileError("compiling vector members").Wrap(err)
-	//		}
-	//	}
-	//  c.EmitWithArg(vm.OPVEC, len(v)) // FIXME this should not be a special instruction
+	case vm.ArrayVectorType:
+		v := o.(vm.ArrayVector)
+		// FIXME detect const vectors and push them like this
+		if len(v) == 0 {
+			n := c.Constant(v)
+			c.EmitWithArg(vm.OPLDC, n)
+			return nil
+		}
+		vector := c.Constant(c.ns.LookupOrAdd("vector"))
+		c.EmitWithArg(vm.OPLDC, vector)
+		for i := range v {
+			err := c.compileForm(v[i])
+			if err != nil {
+				return NewCompileError("compiling vector members").Wrap(err)
+			}
+		}
+		c.EmitWithArg(vm.OPINV, len(v))
 	case vm.ListType:
 		fn := o.(*vm.List).First()
 		// check if we're looking at a special form

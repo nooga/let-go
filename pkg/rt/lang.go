@@ -43,7 +43,7 @@ func installLangNS() {
 	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return a + b })
 	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return a * b })
 	sub, err := vm.NativeFnType.Box(func(a int, b int) int { return a - b })
-	vector, err := vm.NativeFnType.Box(vm.NewArrayVector)
+	vector, err := vm.NativeFnType.Wrap(vm.NewArrayVector)
 	printlnf, err := vm.NativeFnType.Box(fmt.Println)
 	if err != nil {
 		panic("lang NS init failed")

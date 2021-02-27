@@ -88,7 +88,7 @@ func (l ArrayVector) Empty() Collection {
 	return make(ArrayVector, 0)
 }
 
-func NewArrayVector(v ...Value) Value {
+func NewArrayVector(v []Value) Value {
 	return ArrayVector(v)
 }
 

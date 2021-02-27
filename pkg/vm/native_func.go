@@ -60,6 +60,17 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 
 	return f, nil
 }
+func (t *theNativeFnType) Wrap(fn func(args []Value) Value) (Value, error) {
+
+	f := &NativeFn{
+		arity:       -1,
+		isVariadric: false,
+		fn:          fn,
+		proxy:       fn,
+	}
+
+	return f, nil
+}
 
 var NativeFnType *theNativeFnType
 

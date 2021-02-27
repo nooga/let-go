@@ -18,6 +18,7 @@
 package compiler
 
 import (
+	"github.com/nooga/let-go/pkg/vm"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -41,6 +42,7 @@ func TestContext_Compile(t *testing.T) {
 		`(if \P \N \P)`:                         'N',
 		`(println "hello" "world")`:             12,
 		`(do (def sq (fn [x] (* x x))) (sq 9))`: 81,
+		`[1 2 (+ 1 2)]`:                         []vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)},
 	}
 	for k, v := range tests {
 		out, err := Eval(k)
