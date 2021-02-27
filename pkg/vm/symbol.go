@@ -50,3 +50,7 @@ func (l Symbol) Type() ValueType { return SymbolType }
 func (l Symbol) Unbox() interface{} {
 	return string(l)
 }
+
+func (l Symbol) String() string {
+	return fmt.Sprintf("%s", string(l))
+}

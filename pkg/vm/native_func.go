@@ -17,7 +17,10 @@
 
 package vm
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
 type theNativeFnType struct{}
 
@@ -84,4 +87,8 @@ func (l *NativeFn) Arity() int {
 
 func (l *NativeFn) Invoke(args []Value) Value {
 	return l.proxy(args)
+}
+
+func (l *NativeFn) String() string {
+	return fmt.Sprintf("<native-fn %p>", l)
 }

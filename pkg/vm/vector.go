@@ -17,6 +17,10 @@
 
 package vm
 
+import (
+	"strings"
+)
+
 type theArrayVectorType struct{}
 
 func (lt *theArrayVectorType) Name() string { return "ArrayVector" }
@@ -81,5 +85,23 @@ func (l ArrayVector) Count() Value {
 
 // Empty implements Collection
 func (l ArrayVector) Empty() Collection {
-	return ArrayVector{}
+	return make(ArrayVector, 0)
+}
+
+func NewArrayVector(v ...Value) Value {
+	return ArrayVector(v)
+}
+
+func (l ArrayVector) String() string {
+	b := &strings.Builder{}
+	b.WriteRune('[')
+	n := len(l)
+	for i := range l {
+		b.WriteString(l[i].String())
+		if i < n-1 {
+			b.WriteRune(' ')
+		}
+	}
+	b.WriteRune(']')
+	return b.String()
 }

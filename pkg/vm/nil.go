@@ -43,3 +43,7 @@ func init() {
 	NilType = &theNilType{zero: nil}
 	NIL = NilType.zero
 }
+
+func (n *Nil) String() string {
+	return "nil"
+}

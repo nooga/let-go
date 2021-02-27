@@ -26,10 +26,6 @@ type Var struct {
 	name  string
 }
 
-func (v *Var) String() string {
-	return fmt.Sprintf("#'%s/%s", v.ns, v.name)
-}
-
 func (v *Var) Invoke(values []Value) Value {
 	f, ok := v.root.(Fn)
 	if !ok {
@@ -69,4 +65,8 @@ func (v *Var) Type() ValueType {
 
 func (v *Var) Unbox() interface{} {
 	return v.Deref().Unbox()
+}
+
+func (v *Var) String() string {
+	return fmt.Sprintf("#'%s/%s", v.ns, v.name)
 }

@@ -17,7 +17,9 @@
 
 package vm
 
-import "unicode/utf8"
+import (
+	"unicode/utf8"
+)
 
 type theCharType struct {
 	zero Char
@@ -49,4 +51,8 @@ func (l Char) Type() ValueType { return CharType }
 // Unbox implements Unbox
 func (l Char) Unbox() interface{} {
 	return rune(l)
+}
+
+func (l Char) String() string {
+	return "\\" + string(l)
 }

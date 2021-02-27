@@ -50,3 +50,7 @@ func (l Keyword) Type() ValueType { return KeywordType }
 func (l Keyword) Unbox() interface{} {
 	return string(l)
 }
+
+func (l Keyword) String() string {
+	return fmt.Sprintf(":%s", string(l))
+}

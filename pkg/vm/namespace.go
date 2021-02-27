@@ -17,6 +17,8 @@
 
 package vm
 
+import "fmt"
+
 type Namespace struct {
 	name     string
 	registry map[Symbol]*Var
@@ -47,4 +49,8 @@ func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 
 func (n *Namespace) Name() string {
 	return n.name
+}
+
+func (n *Namespace) String() string {
+	return fmt.Sprintf("<ns %s>", n.Name())
 }

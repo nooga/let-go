@@ -46,7 +46,7 @@ func main() {
 			fmt.Println(err)
 		}
 
-		fmt.Println(val.Unbox())
+		fmt.Println(val.String())
 		fmt.Print(prompt)
 	}
 

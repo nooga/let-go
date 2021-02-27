@@ -17,6 +17,8 @@
 
 package vm
 
+import "strings"
+
 type theListType struct{}
 
 func (lt *theListType) Name() string { return "List" }
@@ -118,4 +120,19 @@ func (l *List) Count() Value {
 // Empty implements Collection
 func (l *List) Empty() Collection {
 	return EmptyList
+}
+
+func (l *List) String() string {
+	b := &strings.Builder{}
+	b.WriteRune('(')
+	li := l.Unbox().([]Value)
+	n := len(li)
+	for i := range li {
+		b.WriteString(li[i].String())
+		if i < n-1 {
+			b.WriteRune(' ')
+		}
+	}
+	b.WriteRune(')')
+	return b.String()
 }

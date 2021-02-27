@@ -17,7 +17,10 @@
 
 package vm
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
 type theFuncType struct{}
 
@@ -78,4 +81,8 @@ func (l *Func) Invoke(args []Value) Value {
 	// FIXME don't swallow the error, make invoke return an error
 	v, _ := f.Run()
 	return v
+}
+
+func (l *Func) String() string {
+	return fmt.Sprintf("<fn %p>", l)
 }

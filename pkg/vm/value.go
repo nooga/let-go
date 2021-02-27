@@ -18,6 +18,7 @@
 package vm
 
 import (
+	"fmt"
 	"reflect"
 )
 
@@ -29,6 +30,7 @@ type ValueType interface {
 
 // Value is implemented by all LETGO values
 type Value interface {
+	fmt.Stringer
 	Type() ValueType
 	Unbox() interface{}
 }

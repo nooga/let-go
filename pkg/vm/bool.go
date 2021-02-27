@@ -51,3 +51,10 @@ const FALSE Boolean = false
 func init() {
 	BooleanType = &theBooleanType{zero: FALSE}
 }
+
+func (n Boolean) String() string {
+	if n == TRUE {
+		return "true"
+	}
+	return "false"
+}

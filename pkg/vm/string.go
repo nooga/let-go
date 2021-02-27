@@ -17,6 +17,8 @@
 
 package vm
 
+import "fmt"
+
 type theStringType struct {
 	zero String
 }
@@ -47,4 +49,8 @@ func (l String) Type() ValueType { return StringType }
 // Unbox implements Unbox
 func (l String) Unbox() interface{} {
 	return string(l)
+}
+
+func (l String) String() string {
+	return fmt.Sprintf("%q", string(l))
 }
