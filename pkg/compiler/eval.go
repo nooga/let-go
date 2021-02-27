@@ -50,7 +50,7 @@ func Eval(src string) (vm.Value, error) {
 	ns.Def("*", mul)
 	ns.Def("-", sub)
 	ns.Def("println", printlnf)
-	compiler := &Context{ns: ns, consts: []vm.Value{}}
+	compiler := &Context{ns: ns, consts: &[]vm.Value{}}
 
 	chunk, err := compiler.Compile(src)
 	if err != nil {

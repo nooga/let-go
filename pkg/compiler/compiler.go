@@ -26,7 +26,7 @@ import (
 type Context struct {
 	ns         *vm.Namespace
 	parent     *Context
-	consts     []vm.Value
+	consts     *[]vm.Value
 	chunk      *vm.CodeChunk
 	formalArgs map[vm.Symbol]int
 }
@@ -45,7 +45,7 @@ func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 		return nil, err
 	}
 
-	c.chunk = vm.NewCodeChunk(&c.consts)
+	c.chunk = vm.NewCodeChunk(c.consts)
 	err = c.compileForm(o)
 	if err != nil {
 		return nil, err
@@ -64,13 +64,13 @@ func (c *Context) EmitWithArg(op uint8, arg int) {
 }
 
 func (c *Context) Constant(v vm.Value) int {
-	for i := range c.consts {
-		if c.consts[i] == v {
+	for i := range *c.consts {
+		if (*c.consts)[i] == v {
 			return i
 		}
 	}
-	c.consts = append(c.consts, v)
-	return len(c.consts) - 1
+	*c.consts = append(*c.consts, v)
+	return len(*c.consts) - 1
 }
 
 func (c *Context) Arg(v vm.Symbol) int {
@@ -81,28 +81,32 @@ func (c *Context) Arg(v vm.Symbol) int {
 	return n
 }
 
-func (c *Context) EnterFn(args []vm.Value) (*vm.CodeChunk, error) {
-	oldchunk := c.chunk
-	c.chunk = vm.NewCodeChunk(&c.consts)
+func (c *Context) EnterFn(args []vm.Value) (*Context, error) {
+	fchunk := vm.NewCodeChunk(c.consts)
 
-	c.formalArgs = make(map[vm.Symbol]int)
+	fc := &Context{
+		ns:         c.ns,
+		parent:     c,
+		consts:     c.consts,
+		chunk:      fchunk,
+		formalArgs: make(map[vm.Symbol]int),
+	}
+
 	for i := range args {
 		a := args[i]
 		s, ok := a.(vm.Symbol)
 		if !ok {
-			return oldchunk, NewCompileError("all fn formal arguments must be symbols")
+			return nil, NewCompileError("all fn formal arguments must be symbols")
 		}
-		c.formalArgs[s] = i
+		fc.formalArgs[s] = i
 	}
-	return oldchunk, nil
+	return fc, nil
 }
 
-func (c *Context) LeaveFn(chunk *vm.CodeChunk) {
-	fnchunk := c.chunk
-	c.chunk = chunk
-	c.formalArgs = nil
+func (c *Context) LeaveFn(ctx *Context) {
+	fnchunk := ctx.chunk
 
-	f := vm.MakeFunc(len(c.formalArgs), false, fnchunk)
+	f := vm.MakeFunc(len(ctx.formalArgs), false, fnchunk)
 
 	n := c.Constant(f)
 	c.EmitWithArg(vm.OPLDC, n)
@@ -199,8 +203,8 @@ func fnCompiler(c *Context, form vm.Value) error {
 
 	args := f.First().(vm.ArrayVector).Unbox().([]vm.Value)
 
-	chunk, err := c.EnterFn(args)
-	defer c.LeaveFn(chunk)
+	fc, err := c.EnterFn(args)
+	defer c.LeaveFn(fc)
 
 	if err != nil {
 		return NewCompileError("compiling fn args").Wrap(err)
@@ -209,20 +213,20 @@ func fnCompiler(c *Context, form vm.Value) error {
 	body := f.(*vm.List).Next().Unbox().([]vm.Value)
 	l := len(args)
 	if l == 0 {
-		c.EmitWithArg(vm.OPLDC, c.Constant(vm.NIL))
-		c.Emit(vm.OPRET)
+		fc.EmitWithArg(vm.OPLDC, fc.Constant(vm.NIL))
+		fc.Emit(vm.OPRET)
 		return nil
 	}
 	for i := range args {
-		err := c.compileForm(body[i])
+		err := fc.compileForm(body[i])
 		if err != nil {
 			return NewCompileError("compiling do member").Wrap(err)
 		}
 		if i < l-1 {
-			c.Emit(vm.OPPOP)
+			fc.Emit(vm.OPPOP)
 		}
 	}
-	c.Emit(vm.OPRET)
+	fc.Emit(vm.OPRET)
 
 	return nil
 }

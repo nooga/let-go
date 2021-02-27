@@ -37,7 +37,7 @@ func TestContext_Compile(t *testing.T) {
 		`(do (def x 40) (+ x 2))`: 42,
 		`(do (def x true)
 			 (def y (if x :big :meh))
-		    y)`: "big",
+		   y)`: "big",
 		`(if \P \N \P)`:                         'N',
 		`(println "hello" "world")`:             12,
 		`(do (def sq (fn [x] (* x x))) (sq 9))`: 81,
