@@ -15,27 +15,46 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-package compiler
+package rt
 
 import (
-	"github.com/nooga/let-go/pkg/rt"
+	"fmt"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-func Eval(src string) (vm.Value, error) {
-	ns := rt.NS("lang")
-	compiler := &Context{ns: ns, consts: &[]vm.Value{}}
+var nsRegistry map[string]*vm.Namespace
 
-	chunk, err := compiler.Compile(src)
+func init() {
+	nsRegistry = make(map[string]*vm.Namespace)
+
+	installLangNS()
+}
+
+func NS(name string) *vm.Namespace {
+	return nsRegistry[name]
+}
+
+func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
+	nsRegistry[namespace.Name()] = namespace
+	return namespace
+}
+
+func installLangNS() {
+	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return a + b })
+	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return a * b })
+	sub, err := vm.NativeFnType.Box(func(a int, b int) int { return a - b })
+	vector, err := vm.NativeFnType.Box(vm.NewArrayVector)
+	printlnf, err := vm.NativeFnType.Box(fmt.Println)
 	if err != nil {
-		return vm.NIL, err
+		panic("lang NS init failed")
 	}
 
-	frame := vm.NewFrame(chunk, nil)
-	out, err := frame.Run()
+	ns := vm.NewNamespace("lang")
+	ns.Def("+", plus)
+	ns.Def("*", mul)
+	ns.Def("-", sub)
+	ns.Def("vector", vector)
+	ns.Def("println", printlnf)
 
-	//chunk.Debug()
-	//fmt.Println("eval: ", src, "=>", out)
-
-	return out, err
+	RegisterNS(ns)
 }

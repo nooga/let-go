@@ -44,3 +44,7 @@ func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 	}
 	return val
 }
+
+func (n *Namespace) Name() string {
+	return n.name
+}
