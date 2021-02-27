@@ -18,7 +18,6 @@
 package vm
 
 import (
-	"fmt"
 	"reflect"
 )
 
@@ -57,14 +56,32 @@ type Fn interface {
 }
 
 func BoxValue(v reflect.Value) (Value, error) {
+	if v.CanInterface() {
+		rv, ok := v.Interface().(Value)
+		if ok {
+			return rv, nil
+		}
+	}
 	switch v.Type().Kind() {
 	case reflect.Int:
 		return IntType.Box(v.Interface())
 	case reflect.String:
 		return StringType.Box(v.Interface())
+	case reflect.Bool:
+		return BooleanType.Box(v.Interface())
 	case reflect.Func:
 		return NativeFnType.Box(v.Interface())
-	case reflect.Slice:
+	case reflect.Ptr:
+		if v.IsNil() {
+			return NIL, nil
+		}
+		// FIXME check if this is how we should handle pointers
+		return BoxValue(v.Elem())
+	case reflect.Slice, reflect.Array:
+		if v.IsNil() {
+			// FIXME not sure if maybe this has to be empty coll in let-go-land
+			return NIL, nil
+		}
 		in := make([]Value, v.Len())
 		for i := 0; i < v.Len(); i++ {
 			e := v.Index(i)
@@ -74,10 +91,15 @@ func BoxValue(v reflect.Value) (Value, error) {
 			}
 			in[i] = mv
 		}
+		return ArrayVector(in), nil
+	case reflect.Map, reflect.Chan:
+		if v.IsNil() {
+			return NIL, nil
+		}
+		return NIL, NewTypeError(v, "is not boxable", nil)
 	default:
 		return NIL, NewTypeError(v, "is not boxable", nil)
 	}
-	return NIL, fmt.Errorf("UNREACHABLE")
 }
 
 func IsTruthy(v Value) bool {
