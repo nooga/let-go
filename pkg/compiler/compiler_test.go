@@ -43,6 +43,7 @@ func TestContext_Compile(t *testing.T) {
 		`(println "hello" "world")`:             12,
 		`(do (def sq (fn [x] (* x x))) (sq 9))`: 81,
 		`[1 2 (+ 1 2)]`:                         []vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)},
+		`'foo`:                                  "foo",
 	}
 	for k, v := range tests {
 		out, err := Eval(k)

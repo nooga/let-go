@@ -193,11 +193,18 @@ var specialForms map[vm.Symbol]formCompilerFunc
 
 func init() {
 	specialForms = map[vm.Symbol]formCompilerFunc{
-		"if":  ifCompiler,
-		"do":  doCompiler,
-		"def": defCompiler,
-		"fn":  fnCompiler,
+		"if":    ifCompiler,
+		"do":    doCompiler,
+		"def":   defCompiler,
+		"fn":    fnCompiler,
+		"quote": quoteCompiler,
 	}
+}
+
+func quoteCompiler(c *Context, form vm.Value) error {
+	n := c.Constant(form.(vm.Seq).Next().First())
+	c.EmitWithArg(vm.OPLDC, n)
+	return nil
 }
 
 func fnCompiler(c *Context, form vm.Value) error {

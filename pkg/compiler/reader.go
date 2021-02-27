@@ -347,6 +347,19 @@ func readVector(r *LispReader, _ rune) (vm.Value, error) {
 	return vm.ArrayVector(ret), nil
 }
 
+func readQuote(r *LispReader, ru rune) (vm.Value, error) {
+	form, err := r.Read()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading quoted form").Wrap(err)
+	}
+	quote := vm.Symbol("quote")
+	ret, err := vm.ListType.Box([]vm.Value{quote, form})
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "boxing quoted form").Wrap(err)
+	}
+	return ret, nil
+}
+
 func unmatchedDelimReader(ru rune) readerFunc {
 	return func(r *LispReader, _ rune) (vm.Value, error) {
 		return nil, NewReaderError(r, fmt.Sprintf("unmatched delimiter %c", ru))
@@ -382,5 +395,6 @@ func init() {
 		']':  unmatchedDelimReader(']'),
 		'"':  readString,
 		'\\': readChar,
+		'\'': readQuote,
 	}
 }

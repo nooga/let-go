@@ -50,6 +50,7 @@ func TestReaderBasic(t *testing.T) {
 		"\\u03A9":              vm.Char('Ω'),
 		"[]":                   vm.ArrayVector{},
 		"[1 :foo true]":        vm.ArrayVector{vm.Int(1), vm.Keyword("foo")}.Cons(vm.TRUE),
+		"'foo":                 vm.EmptyList.Cons(vm.Symbol("foo")).Cons(vm.Symbol("quote")),
 	}
 
 	for p, e := range cases {
