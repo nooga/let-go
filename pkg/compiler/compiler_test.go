@@ -38,12 +38,44 @@ func TestContext_Compile(t *testing.T) {
 		`(do (def x true)
 			 (def y (if x :big :meh))
 		    y)`: "big",
-		`(if \P \N \P)`:             'N',
-		`(println "hello" "world")`: 12,
+		`(if \P \N \P)`:                         'N',
+		`(println "hello" "world")`:             12,
+		`(do (def sq (fn [x] (* x x))) (sq 9))`: 81,
 	}
 	for k, v := range tests {
 		out, err := Eval(k)
 		assert.NoError(t, err)
 		assert.Equal(t, v, out.Unbox())
 	}
+}
+
+func TestContext_CompileFn(t *testing.T) {
+	out, err := Eval("(fn [x] (+ x 1))")
+	assert.NoError(t, err)
+
+	var inc func(int) int
+	out.Unbox().(func(interface{}))(&inc)
+
+	assert.NotNil(t, inc)
+
+	x := 999
+	assert.Equal(t, x, inc(x)-1)
+}
+
+func TestContext_CompileFnPoly(t *testing.T) {
+	out, err := Eval("(fn [x] x)")
+	assert.NoError(t, err)
+
+	identity := out.Unbox().(func(interface{}))
+
+	var intIdentity func(int) int
+	identity(&intIdentity)
+
+	var strIdentity func(string) string
+	identity(&strIdentity)
+
+	x := 999
+	y := "foobar"
+	assert.Equal(t, x, intIdentity(x))
+	assert.Equal(t, y, strIdentity(y))
 }

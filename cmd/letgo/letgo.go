@@ -53,7 +53,7 @@ func main() {
 	comp := compiler.NewCompiler(ns)
 
 	scanner := bufio.NewScanner(os.Stdin)
-	prompt := "> "
+	prompt := "=> "
 	fmt.Print(prompt)
 	for scanner.Scan() {
 		in := scanner.Text()

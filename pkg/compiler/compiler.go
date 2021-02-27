@@ -24,10 +24,11 @@ import (
 )
 
 type Context struct {
-	ns     *vm.Namespace
-	parent *Context
-	consts []vm.Value
-	chunk  *vm.CodeChunk
+	ns         *vm.Namespace
+	parent     *Context
+	consts     []vm.Value
+	chunk      *vm.CodeChunk
+	formalArgs map[vm.Symbol]int
 }
 
 func NewCompiler(ns *vm.Namespace) *Context {
@@ -72,14 +73,54 @@ func (c *Context) Constant(v vm.Value) int {
 	return len(c.consts) - 1
 }
 
+func (c *Context) Arg(v vm.Symbol) int {
+	n, ok := c.formalArgs[v]
+	if !ok {
+		return -1
+	}
+	return n
+}
+
+func (c *Context) EnterFn(args []vm.Value) (*vm.CodeChunk, error) {
+	oldchunk := c.chunk
+	c.chunk = vm.NewCodeChunk(&c.consts)
+
+	c.formalArgs = make(map[vm.Symbol]int)
+	for i := range args {
+		a := args[i]
+		s, ok := a.(vm.Symbol)
+		if !ok {
+			return oldchunk, NewCompileError("all fn formal arguments must be symbols")
+		}
+		c.formalArgs[s] = i
+	}
+	return oldchunk, nil
+}
+
+func (c *Context) LeaveFn(chunk *vm.CodeChunk) {
+	fnchunk := c.chunk
+	c.chunk = chunk
+	c.formalArgs = nil
+
+	f := vm.MakeFunc(len(c.formalArgs), false, fnchunk)
+
+	n := c.Constant(f)
+	c.EmitWithArg(vm.OPLDC, n)
+}
+
 func (c *Context) compileForm(o vm.Value) error {
 	switch o.Type() {
 	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType:
 		n := c.Constant(o)
 		c.EmitWithArg(vm.OPLDC, n)
 	case vm.SymbolType:
-		n := c.Constant(c.ns.LookupOrAdd(o.(vm.Symbol)))
-		c.EmitWithArg(vm.OPLDC, n)
+		argn := c.Arg(o.(vm.Symbol))
+		if argn >= 0 {
+			c.EmitWithArg(vm.OPLDA, argn)
+			return nil
+		}
+		varn := c.Constant(c.ns.LookupOrAdd(o.(vm.Symbol)))
+		c.EmitWithArg(vm.OPLDC, varn)
 	//case vm.ArrayVectorType:
 	//	v := o.(vm.ArrayVector)
 	//	// FIXME detect const vectors and push them like this
@@ -149,7 +190,41 @@ func init() {
 		"if":  ifCompiler,
 		"do":  doCompiler,
 		"def": defCompiler,
+		"fn":  fnCompiler,
 	}
+}
+
+func fnCompiler(c *Context, form vm.Value) error {
+	f := form.(*vm.List).Next()
+
+	args := f.First().(vm.ArrayVector).Unbox().([]vm.Value)
+
+	chunk, err := c.EnterFn(args)
+	defer c.LeaveFn(chunk)
+
+	if err != nil {
+		return NewCompileError("compiling fn args").Wrap(err)
+	}
+
+	body := f.(*vm.List).Next().Unbox().([]vm.Value)
+	l := len(args)
+	if l == 0 {
+		c.EmitWithArg(vm.OPLDC, c.Constant(vm.NIL))
+		c.Emit(vm.OPRET)
+		return nil
+	}
+	for i := range args {
+		err := c.compileForm(body[i])
+		if err != nil {
+			return NewCompileError("compiling do member").Wrap(err)
+		}
+		if i < l-1 {
+			c.Emit(vm.OPPOP)
+		}
+	}
+	c.Emit(vm.OPRET)
+
+	return nil
 }
 
 func ifCompiler(c *Context, form vm.Value) error {
