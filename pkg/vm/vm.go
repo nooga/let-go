@@ -26,21 +26,24 @@ import (
 const (
 	OPNOP uint8 = iota // do nothing
 
-	OPLDC // load constant LDC (index uint8)
-	OPLDA // load argument LDA (index uint8)
+	OPLDC // load constant LDC (index int32)
+	OPLDA // load argument LDA (index int32)
 
 	OPINV // invoke function
 	OPRET // return from function
 
 	OPBRT // branch if truthy BRT (offset int32)
-	OPBRF // branch if truthy BRT (offset int32)
+	OPBRF // branch if falsy BRF (offset int32)
 	OPJMP // jump by offset JMP (offset int32)
+
 	OPPOP // pop value from the stack and discard it
+
 	OPSTV // set var
+	OPLDV // push var root
 )
 
 func OpcodeToString(op uint8) string {
-	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP", "POP", "STV"}
+	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP", "POP", "STV", "LDV"}
 	if int(op) < len(ops) {
 		return ops[op]
 	}
@@ -324,6 +327,18 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("STV push var failed").Wrap(err)
 			}
+			f.ip++
+		case OPLDV:
+			// note this avoids pop-push dance
+			idx := f.sp - 1
+			if idx < 0 {
+				return NIL, NewExecutionError("LDV stack underflow")
+			}
+			varr, ok := f.stack[idx].(*Var)
+			if !ok {
+				return NIL, NewExecutionError("LDV invalid var on stack")
+			}
+			f.stack[idx] = varr.Deref()
 			f.ip++
 
 		default:

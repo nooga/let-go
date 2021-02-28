@@ -46,6 +46,7 @@ func TestContext_Compile(t *testing.T) {
 		`(do (def sq (fn [x] (* x x))) (sq 9))`: 81,
 		`[1 2 (+ 1 2)]`:                         []vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)},
 		`'foo`:                                  "foo",
+		`(quote foo)`:                           "foo",
 	}
 	for k, v := range tests {
 		out, err := Eval(k)
@@ -101,4 +102,16 @@ func TestContext_CompileMultiple(t *testing.T) {
 
 	_, err = vm.NewFrame(chunk, nil).Run()
 	assert.NoError(t, err)
+}
+
+func TestContext_CompileVar(t *testing.T) {
+	v := vm.NewVar(rt.NS("lang"), "lang", "foo")
+
+	out, err := Eval("(var foo)")
+	assert.NoError(t, err)
+	assert.Equal(t, v, out)
+
+	out, err = Eval("#'foo")
+	assert.NoError(t, err)
+	assert.Equal(t, v, out)
 }

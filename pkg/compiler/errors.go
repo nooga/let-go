@@ -95,3 +95,14 @@ func (r *CompileError) Wrap(err error) errors.Error {
 func (r *CompileError) GetCause() error {
 	return r.cause
 }
+
+func isErrorEOF(err error) bool {
+	if err == io.EOF {
+		return true
+	}
+	rerr, ok := err.(*ReaderError)
+	if ok {
+		return rerr.IsEOF()
+	}
+	return false
+}

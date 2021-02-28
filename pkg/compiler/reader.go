@@ -360,6 +360,34 @@ func readQuote(r *LispReader, ru rune) (vm.Value, error) {
 	return ret, nil
 }
 
+func readVarQuote(r *LispReader, ru rune) (vm.Value, error) {
+	form, err := r.Read()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading quoted var").Wrap(err)
+	}
+	if form.Type() != vm.SymbolType {
+		return vm.NIL, NewReaderError(r, "invalid var quote")
+	}
+	quote := vm.Symbol("var")
+	ret, err := vm.ListType.Box([]vm.Value{quote, form})
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "boxing quoted var").Wrap(err)
+	}
+	return ret, nil
+}
+
+func readHashMacro(r *LispReader, _ rune) (vm.Value, error) {
+	ch, err := r.next()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading hash macro")
+	}
+	macro, ok := hashMacros[ch]
+	if !ok {
+		return vm.NIL, NewReaderError(r, "invalid hash macro")
+	}
+	return macro(r, ch)
+}
+
 func unmatchedDelimReader(ru rune) readerFunc {
 	return func(r *LispReader, _ rune) (vm.Value, error) {
 		return nil, NewReaderError(r, fmt.Sprintf("unmatched delimiter %c", ru))
@@ -386,6 +414,7 @@ func isMacro(r rune) bool {
 type readerFunc func(*LispReader, rune) (vm.Value, error)
 
 var macros map[rune]readerFunc
+var hashMacros map[rune]readerFunc
 
 func init() {
 	macros = map[rune]readerFunc{
@@ -396,16 +425,10 @@ func init() {
 		'"':  readString,
 		'\\': readChar,
 		'\'': readQuote,
+		'#':  readHashMacro,
 	}
-}
 
-func isErrorEOF(err error) bool {
-	if err == io.EOF {
-		return true
+	hashMacros = map[rune]readerFunc{
+		'\'': readVarQuote,
 	}
-	rerr, ok := err.(*ReaderError)
-	if ok {
-		return rerr.IsEOF()
-	}
-	return false
 }

@@ -47,6 +47,7 @@ func NewVar(nsref *Namespace, ns string, name string) *Var {
 		nsref: nsref,
 		ns:    ns,
 		name:  name,
+		root:  NIL,
 	}
 }
 

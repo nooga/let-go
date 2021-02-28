@@ -159,6 +159,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		}
 		varn := c.Constant(c.ns.LookupOrAdd(o.(vm.Symbol)))
 		c.EmitWithArg(vm.OPLDC, varn)
+		c.Emit(vm.OPLDV)
 	case vm.ArrayVectorType:
 		v := o.(vm.ArrayVector)
 		// FIXME detect const vectors and push them like this
@@ -232,6 +233,7 @@ func init() {
 		"def":   defCompiler,
 		"fn":    fnCompiler,
 		"quote": quoteCompiler,
+		"var":   varCompiler,
 	}
 }
 
@@ -346,5 +348,12 @@ func defCompiler(c *Context, form vm.Value) error {
 	}
 	c.Emit(vm.OPSTV)
 
+	return nil
+}
+
+func varCompiler(c *Context, form vm.Value) error {
+	sym := form.(*vm.List).Next().First().(vm.Symbol)
+	varr := c.Constant(c.ns.LookupOrAdd(sym))
+	c.EmitWithArg(vm.OPLDC, varr)
 	return nil
 }
