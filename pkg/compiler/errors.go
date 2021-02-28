@@ -20,6 +20,7 @@ package compiler
 import (
 	"fmt"
 	"github.com/nooga/let-go/pkg/errors"
+	"io"
 )
 
 type ReaderError struct {
@@ -41,9 +42,24 @@ func NewReaderError(r *LispReader, message string) *ReaderError {
 	}
 }
 
+func (r *ReaderError) IsEOF() bool {
+	if r.cause != nil {
+		c, ok := r.cause.(*ReaderError)
+		if ok {
+			return c.IsEOF()
+		}
+	}
+	return r.cause == io.EOF
+}
+
 func (r *ReaderError) Error() string {
 	return errors.AddCause(r,
-		fmt.Sprintf("Syntax error reading source at (%s:%d).\n%s", r.inputName, r.line, r.message))
+		fmt.Sprintf(
+			"Syntax error reading source at (%s:%d).\n%s",
+			r.inputName,
+			r.line+1,
+			r.message,
+		))
 }
 
 func (r *ReaderError) Wrap(err error) errors.Error {

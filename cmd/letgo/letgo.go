@@ -19,6 +19,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/rt"
@@ -27,20 +28,22 @@ import (
 	"os"
 )
 
-func main() {
-	ns := rt.NS("lang")
-	if ns == nil {
-		fmt.Println("namespace not found")
-		return
-	}
-	comp := compiler.NewCompiler(ns)
+func motd() {
+	message := ` █   ██▀ ▀█▀    ▄▀  ▄▀▄
+ █▄▄ █▄▄  █  ▀▀ ▀▄█ ▀▄▀
 
+`
+	fmt.Println(message)
+}
+
+func repl(ctx *compiler.Context) {
+	ctx.SetSource("repl")
 	scanner := bufio.NewScanner(os.Stdin)
-	prompt := ns.Name() + "=> "
+	prompt := ctx.CurrentNS().Name() + "=> "
 	fmt.Print(prompt)
 	for scanner.Scan() {
 		in := scanner.Text()
-		chunk, err := comp.Compile(in)
+		chunk, err := ctx.Compile(in)
 		val, err := vm.NewFrame(chunk, nil).Run()
 		if err != nil {
 			fmt.Println(err)
@@ -52,5 +55,65 @@ func main() {
 
 	if err := scanner.Err(); err != nil {
 		log.Println(err)
+	}
+}
+
+func runFile(ctx *compiler.Context, filename string) error {
+	ctx.SetSource(filename)
+	f, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	chunk, err := ctx.CompileMultiple(f)
+	errc := f.Close()
+	if err != nil {
+		return err
+	}
+	if errc != nil {
+		return errc
+	}
+	_, err = vm.NewFrame(chunk, nil).Run()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+var runREPL bool
+
+func init() {
+	flag.BoolVar(&runREPL, "repl", false, "attach REPL after running given files")
+}
+
+func initCompiler() *compiler.Context {
+	ns := rt.NS("lang")
+	if ns == nil {
+		fmt.Println("namespace not found")
+		return nil
+	}
+	return compiler.NewCompiler(ns)
+}
+
+func main() {
+	flag.Parse()
+	files := flag.Args()
+
+	context := initCompiler()
+
+	if len(files) >= 1 {
+		for i := range files {
+			err := runFile(context, files[i])
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+		}
+	} else {
+		runREPL = true
+	}
+
+	if runREPL {
+		motd()
+		repl(context)
 	}
 }

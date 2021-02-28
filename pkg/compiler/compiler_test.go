@@ -18,8 +18,10 @@
 package compiler
 
 import (
+	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 	"github.com/stretchr/testify/assert"
+	"strings"
 	"testing"
 )
 
@@ -81,4 +83,22 @@ func TestContext_CompileFnPoly(t *testing.T) {
 	y := "foobar"
 	assert.Equal(t, x, intIdentity(x))
 	assert.Equal(t, y, strIdentity(y))
+}
+
+func TestContext_CompileMultiple(t *testing.T) {
+	src := `(def parens 20)
+			(def fun 1)
+			(def double (fn [a] (* a 2)))
+			(def hey! (fn [a _ b] (+ a b)))
+			(println (hey! (double parens) 'equals (double fun)))`
+
+	ns := rt.NS("lang")
+	assert.NotNil(t, ns)
+	ctx := NewCompiler(ns)
+
+	chunk, err := ctx.CompileMultiple(strings.NewReader(src))
+	assert.NoError(t, err)
+
+	_, err = vm.NewFrame(chunk, nil).Run()
+	assert.NoError(t, err)
 }

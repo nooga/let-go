@@ -20,6 +20,7 @@ package compiler
 import (
 	"fmt"
 	"github.com/nooga/let-go/pkg/vm"
+	"io"
 	"strings"
 )
 
@@ -29,17 +30,28 @@ type Context struct {
 	consts     *[]vm.Value
 	chunk      *vm.CodeChunk
 	formalArgs map[vm.Symbol]int
+	source     string
 }
 
 func NewCompiler(ns *vm.Namespace) *Context {
 	return &Context{
 		ns:     ns,
 		consts: &[]vm.Value{},
+		source: "<default>",
 	}
 }
 
+func (c *Context) SetSource(source string) *Context {
+	c.source = source
+	return c
+}
+
+func (c *Context) CurrentNS() *vm.Namespace {
+	return c.ns
+}
+
 func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
-	r := NewLispReader(strings.NewReader(s), "<reader>")
+	r := NewLispReader(strings.NewReader(s), c.source)
 	o, err := r.Read()
 	if err != nil {
 		return nil, err
@@ -50,6 +62,28 @@ func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.Emit(vm.OPRET)
+	return c.chunk, nil
+}
+
+func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, error) {
+	r := NewLispReader(reader, c.source)
+	c.chunk = vm.NewCodeChunk(c.consts)
+
+	for {
+		o, err := r.Read()
+		if err != nil {
+			if isErrorEOF(err) {
+				break
+			}
+			return nil, err
+		}
+		err = c.compileForm(o)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	c.Emit(vm.OPRET)
 	return c.chunk, nil
 }
@@ -220,13 +254,13 @@ func fnCompiler(c *Context, form vm.Value) error {
 	}
 
 	body := f.(*vm.List).Next().Unbox().([]vm.Value)
-	l := len(args)
+	l := len(body)
 	if l == 0 {
 		fc.EmitWithArg(vm.OPLDC, fc.Constant(vm.NIL))
 		fc.Emit(vm.OPRET)
 		return nil
 	}
-	for i := range args {
+	for i := range body {
 		err := fc.compileForm(body[i])
 		if err != nil {
 			return NewCompileError("compiling do member").Wrap(err)

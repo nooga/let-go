@@ -398,3 +398,14 @@ func init() {
 		'\'': readQuote,
 	}
 }
+
+func isErrorEOF(err error) bool {
+	if err == io.EOF {
+		return true
+	}
+	rerr, ok := err.(*ReaderError)
+	if ok {
+		return rerr.IsEOF()
+	}
+	return false
+}
