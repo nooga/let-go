@@ -55,9 +55,10 @@ func (r *ReaderError) IsEOF() bool {
 func (r *ReaderError) Error() string {
 	return errors.AddCause(r,
 		fmt.Sprintf(
-			"Syntax error reading source at (%s:%d).\n%s",
+			"Syntax error reading source at (%s:%d:%d).\n%s",
 			r.inputName,
 			r.line+1,
+			r.column+1,
 			r.message,
 		))
 }

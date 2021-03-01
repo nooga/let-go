@@ -37,7 +37,7 @@ func motd() {
 }
 
 func repl(ctx *compiler.Context) {
-	ctx.SetSource("repl")
+	ctx.SetSource("REPL")
 	scanner := bufio.NewScanner(os.Stdin)
 	prompt := ctx.CurrentNS().Name() + "=> "
 	fmt.Print(prompt)

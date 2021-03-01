@@ -173,7 +173,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		for i := range v {
 			err := c.compileForm(v[i])
 			if err != nil {
-				return NewCompileError("compiling vector members").Wrap(err)
+				return NewCompileError("compiling vector elements").Wrap(err)
 			}
 		}
 		c.EmitWithArg(vm.OPINV, len(v))

@@ -88,7 +88,7 @@ func TestContext_CompileFnPoly(t *testing.T) {
 
 func TestContext_CompileMultiple(t *testing.T) {
 	src := `(def parens 20)
-			(def fun 1)
+			(def fun 1) 
 			(def double (fn [a] (* a 2)))
 			(def hey! (fn [a _ b] (+ a b)))
 			(println (hey! (double parens) 'equals (double fun)))`
