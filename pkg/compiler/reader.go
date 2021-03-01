@@ -100,6 +100,13 @@ func (r *LispReader) eatWhitespace() (rune, error) {
 	return ch, err
 }
 
+func appendNonVoid(vs []vm.Value, v vm.Value) []vm.Value {
+	if v.Type() == vm.VoidType {
+		return vs
+	}
+	return append(vs, v)
+}
+
 func (r *LispReader) Read() (vm.Value, error) {
 	for {
 		ch, err := r.eatWhitespace()
@@ -320,7 +327,7 @@ func readList(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		ret = append(ret, form)
+		ret = appendNonVoid(ret, form)
 	}
 	return vm.ListType.Box(ret)
 }
@@ -342,12 +349,12 @@ func readVector(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		ret = append(ret, form)
+		ret = appendNonVoid(ret, form)
 	}
 	return vm.ArrayVector(ret), nil
 }
 
-func readQuote(r *LispReader, ru rune) (vm.Value, error) {
+func readQuote(r *LispReader, _ rune) (vm.Value, error) {
 	form, err := r.Read()
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading quoted form").Wrap(err)
@@ -360,7 +367,7 @@ func readQuote(r *LispReader, ru rune) (vm.Value, error) {
 	return ret, nil
 }
 
-func readVarQuote(r *LispReader, ru rune) (vm.Value, error) {
+func readVarQuote(r *LispReader, _ rune) (vm.Value, error) {
 	form, err := r.Read()
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading quoted var").Wrap(err)
@@ -425,10 +432,23 @@ func init() {
 		'"':  readString,
 		'\\': readChar,
 		'\'': readQuote,
+		';':  readLineComment,
 		'#':  readHashMacro,
 	}
 
 	hashMacros = map[rune]readerFunc{
 		'\'': readVarQuote,
+	}
+}
+
+func readLineComment(r *LispReader, _ rune) (vm.Value, error) {
+	for {
+		ch, err := r.next()
+		if err == io.EOF || ch == '\n' || ch == '\r' {
+			return vm.VOID, nil
+		}
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error while reading line comment").Wrap(err)
+		}
 	}
 }
