@@ -185,6 +185,13 @@ func (c *Context) compileForm(o vm.Value) error {
 			if ok {
 				return formCompiler(c, o)
 			}
+
+			fvar := c.ns.Lookup(fn.(vm.Symbol)).(*vm.Var)
+			if fvar.IsMacro() {
+				argvec := o.(*vm.List).Next().(*vm.List).Unbox().([]vm.Value)
+				newform := fvar.Invoke(argvec)
+				return c.compileForm(newform)
+			}
 		}
 
 		// treat as function invocation if this is not a special form

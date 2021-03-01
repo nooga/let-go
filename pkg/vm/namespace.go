@@ -47,6 +47,14 @@ func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 	return val
 }
 
+func (n *Namespace) Lookup(symbol Symbol) Value {
+	val, ok := n.registry[symbol]
+	if !ok {
+		return NIL
+	}
+	return val
+}
+
 func (n *Namespace) Name() string {
 	return n.name
 }

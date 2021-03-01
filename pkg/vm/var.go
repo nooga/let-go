@@ -20,10 +20,11 @@ package vm
 import "fmt"
 
 type Var struct {
-	root  Value
-	nsref *Namespace
-	ns    string
-	name  string
+	root    Value
+	nsref   *Namespace
+	ns      string
+	name    string
+	isMacro bool
 }
 
 func (v *Var) Invoke(values []Value) Value {
@@ -44,10 +45,11 @@ func (v *Var) Arity() int {
 
 func NewVar(nsref *Namespace, ns string, name string) *Var {
 	return &Var{
-		nsref: nsref,
-		ns:    ns,
-		name:  name,
-		root:  NIL,
+		nsref:   nsref,
+		ns:      ns,
+		name:    name,
+		root:    NIL,
+		isMacro: false,
 	}
 }
 
@@ -70,4 +72,12 @@ func (v *Var) Unbox() interface{} {
 
 func (v *Var) String() string {
 	return fmt.Sprintf("#'%s/%s", v.ns, v.name)
+}
+
+func (v *Var) IsMacro() bool {
+	return v.isMacro
+}
+
+func (v *Var) SetMacro() {
+	v.isMacro = true
 }
