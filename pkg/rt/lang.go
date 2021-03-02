@@ -47,6 +47,7 @@ func installLangNS() {
 	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return a + b })
 	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return a * b })
 	sub, err := vm.NativeFnType.Box(func(a int, b int) int { return a - b })
+
 	equals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		for i := 0; i < len(vs)-1; i++ {
 			if vs[i] != vs[i+1] {
@@ -55,13 +56,44 @@ func installLangNS() {
 		}
 		return vm.TRUE
 	})
+
 	setMacro, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		m := vs[0].(*vm.Var)
 		m.SetMacro()
 		return m
 	})
+
 	vector, err := vm.NativeFnType.Wrap(vm.NewArrayVector)
 	list, err := vm.NativeFnType.Wrap(vm.NewList)
+
+	cons, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		elem := vs[0]
+		seq, ok := vs[1].(vm.Seq)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		return seq.Cons(elem)
+	})
+
+	first, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		seq, ok := vs[0].(vm.Seq)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		return seq.First()
+	})
+
+	rest, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		seq, ok := vs[0].(vm.Seq)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		return seq.Next()
+	})
+
 	printlnf, err := vm.NativeFnType.Box(fmt.Println)
 	if err != nil {
 		panic("lang NS init failed")
@@ -72,9 +104,15 @@ func installLangNS() {
 	ns.Def("*", mul)
 	ns.Def("-", sub)
 	ns.Def("=", equals)
+
 	ns.Def("set-macro!", setMacro)
+
 	ns.Def("vector", vector)
 	ns.Def("list", list)
+	ns.Def("cons", cons)
+	ns.Def("first", first)
+	ns.Def("rest", rest)
+
 	ns.Def("println", printlnf)
 
 	RegisterNS(ns)

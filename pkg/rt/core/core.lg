@@ -1,7 +1,10 @@
+; let-go core library
+
 (def defn (fn [name args body] (list 'def name (list 'fn args body))))
-(set-macro! (var defn))
+(set-macro! (var defn)) ; this is how we make macros before we can use defmacro
 
 (defn defmacro [name args body] (list 'do (list 'defn name args body) (list 'set-macro! (list 'var name))))
 (set-macro! (var defmacro))
 
 (defmacro comment [x] nil)
+
