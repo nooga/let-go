@@ -1,0 +1,7 @@
+(def defn (fn [name args body] (list 'def name (list 'fn args body))))
+(set-macro! (var defn))
+
+(defn defmacro [name args body] (list 'do (list 'defn name args body) (list 'set-macro! (list 'var name))))
+(set-macro! (var defmacro))
+
+(defmacro comment [x] nil)

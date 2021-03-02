@@ -97,7 +97,7 @@ func TestContext_CompileMultiple(t *testing.T) {
 	assert.NotNil(t, ns)
 	ctx := NewCompiler(ns)
 
-	chunk, err := ctx.CompileMultiple(strings.NewReader(src))
+	chunk, _, err := ctx.CompileMultiple(strings.NewReader(src))
 	assert.NoError(t, err)
 
 	_, err = vm.NewFrame(chunk, nil).Run()

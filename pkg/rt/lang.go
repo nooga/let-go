@@ -18,6 +18,7 @@
 package rt
 
 import (
+	_ "embed"
 	"fmt"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -39,6 +40,9 @@ func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
 	return namespace
 }
 
+//go:embed core/core.lg
+var CoreSrc string
+
 func installLangNS() {
 	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return a + b })
 	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return a * b })
@@ -57,6 +61,7 @@ func installLangNS() {
 		return m
 	})
 	vector, err := vm.NativeFnType.Wrap(vm.NewArrayVector)
+	list, err := vm.NativeFnType.Wrap(vm.NewList)
 	printlnf, err := vm.NativeFnType.Box(fmt.Println)
 	if err != nil {
 		panic("lang NS init failed")
@@ -67,8 +72,9 @@ func installLangNS() {
 	ns.Def("*", mul)
 	ns.Def("-", sub)
 	ns.Def("=", equals)
-	ns.Def("set-macro", setMacro)
+	ns.Def("set-macro!", setMacro)
 	ns.Def("vector", vector)
+	ns.Def("list", list)
 	ns.Def("println", printlnf)
 
 	RegisterNS(ns)

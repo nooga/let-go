@@ -33,10 +33,17 @@ type Context struct {
 	source     string
 }
 
+// FIXME this is unacceptable hax
+var globalConsts *[]vm.Value
+
+func init() {
+	globalConsts = &[]vm.Value{}
+}
+
 func NewCompiler(ns *vm.Namespace) *Context {
 	return &Context{
 		ns:     ns,
-		consts: &[]vm.Value{},
+		consts: globalConsts,
 		source: "<default>",
 	}
 }
@@ -66,26 +73,37 @@ func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 	return c.chunk, nil
 }
 
-func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, error) {
+func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, error) {
 	r := NewLispReader(reader, c.source)
-	c.chunk = vm.NewCodeChunk(c.consts)
-
+	chunk := vm.NewCodeChunk(c.consts)
+	var result vm.Value = vm.NIL
 	for {
 		o, err := r.Read()
 		if err != nil {
 			if isErrorEOF(err) {
 				break
 			}
-			return nil, err
+			return nil, result, err
 		}
+		formchunk := vm.NewCodeChunk(c.consts)
+		c.chunk = formchunk
 		err = c.compileForm(o)
 		if err != nil {
-			return nil, err
+			return nil, result, err
+		}
+		chunk.AppendChunk(formchunk)
+		formchunk.Append(vm.OPRET)
+		f := vm.NewFrame(formchunk, nil)
+		result, err = f.Run()
+		if err != nil {
+			return nil, result, err
 		}
 	}
 
+	c.chunk = chunk
+
 	c.Emit(vm.OPRET)
-	return c.chunk, nil
+	return c.chunk, result, nil
 }
 
 func (c *Context) Emit(op uint8) {
@@ -148,7 +166,7 @@ func (c *Context) LeaveFn(ctx *Context) {
 
 func (c *Context) compileForm(o vm.Value) error {
 	switch o.Type() {
-	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType:
+	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType:
 		n := c.Constant(o)
 		c.EmitWithArg(vm.OPLDC, n)
 	case vm.SymbolType:
@@ -186,8 +204,8 @@ func (c *Context) compileForm(o vm.Value) error {
 				return formCompiler(c, o)
 			}
 
-			fvar := c.ns.Lookup(fn.(vm.Symbol)).(*vm.Var)
-			if fvar.IsMacro() {
+			fvar, ok := c.ns.Lookup(fn.(vm.Symbol)).(*vm.Var)
+			if ok && fvar.IsMacro() {
 				argvec := o.(*vm.List).Next().(*vm.List).Unbox().([]vm.Value)
 				newform := fvar.Invoke(argvec)
 				return c.compileForm(newform)
@@ -233,7 +251,7 @@ type formCompilerFunc func(*Context, vm.Value) error
 
 var specialForms map[vm.Symbol]formCompilerFunc
 
-func init() {
+func compilerInit() {
 	specialForms = map[vm.Symbol]formCompilerFunc{
 		"if":    ifCompiler,
 		"do":    doCompiler,

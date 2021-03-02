@@ -64,7 +64,7 @@ func runFile(ctx *compiler.Context, filename string) error {
 	if err != nil {
 		return err
 	}
-	chunk, err := ctx.CompileMultiple(f)
+	chunk, _, err := ctx.CompileMultiple(f)
 	errc := f.Close()
 	if err != nil {
 		return err

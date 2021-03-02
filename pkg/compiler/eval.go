@@ -20,22 +20,30 @@ package compiler
 import (
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
+	"strings"
 )
 
 func Eval(src string) (vm.Value, error) {
 	ns := rt.NS("lang")
-	compiler := &Context{ns: ns, consts: &[]vm.Value{}}
+	compiler := NewCompiler(ns)
 
-	chunk, err := compiler.Compile(src)
+	_, out, err := compiler.CompileMultiple(strings.NewReader(src))
 	if err != nil {
 		return vm.NIL, err
 	}
 
-	frame := vm.NewFrame(chunk, nil)
-	out, err := frame.Run()
+	//frame := vm.NewFrame(chunk, nil)
+	//out, err := frame.Run()
 
 	//chunk.Debug()
 	//fmt.Println("eval: ", src, "=>", out)
 
-	return out, err
+	return out, nil
+}
+
+func evalInit() {
+	_, err := Eval(rt.CoreSrc)
+	if err != nil {
+		panic(err)
+	}
 }

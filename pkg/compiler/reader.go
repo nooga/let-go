@@ -423,7 +423,8 @@ type readerFunc func(*LispReader, rune) (vm.Value, error)
 var macros map[rune]readerFunc
 var hashMacros map[rune]readerFunc
 
-func init() {
+// readerInit must be called in compiler package init before everything else !
+func readerInit() {
 	macros = map[rune]readerFunc{
 		'(':  readList,
 		')':  unmatchedDelimReader(')'),

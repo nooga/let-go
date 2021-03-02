@@ -103,6 +103,11 @@ func (c *CodeChunk) Append32(val int) {
 	c.length = len(c.code)
 }
 
+func (c *CodeChunk) AppendChunk(o *CodeChunk) {
+	c.code = append(c.code, o.code...)
+	c.length += len(o.code)
+}
+
 func (c *CodeChunk) Get(idx int) (uint8, error) {
 	if idx >= c.length {
 		return 0, NewExecutionError("bytecode fetch out of bounds")

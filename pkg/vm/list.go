@@ -136,3 +136,11 @@ func (l *List) String() string {
 	b.WriteRune(')')
 	return b.String()
 }
+
+func NewList(vs []Value) Value {
+	li, err := ListType.Box(vs)
+	if err != nil {
+		return EmptyList
+	}
+	return li
+}
