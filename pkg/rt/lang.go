@@ -85,13 +85,29 @@ func installLangNS() {
 		return seq.First()
 	})
 
-	rest, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	second, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		seq, ok := vs[0].(vm.Seq)
 		if !ok {
 			// FIXME make this an error (we need to handle exceptions first)
 			return vm.NIL
 		}
-		return seq.Next()
+		return seq.Next().First()
+	})
+
+	next, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		seq, ok := vs[0].(vm.Seq)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+
+		n := seq.Next()
+
+		// FIXME move that to Seq.Next()
+		if n.(vm.Collection).Count().(vm.Int) == 0 {
+			return vm.NIL
+		}
+		return n
 	})
 
 	printlnf, err := vm.NativeFnType.Box(fmt.Println)
@@ -111,7 +127,8 @@ func installLangNS() {
 	ns.Def("list", list)
 	ns.Def("cons", cons)
 	ns.Def("first", first)
-	ns.Def("rest", rest)
+	ns.Def("second", second)
+	ns.Def("next", next)
 
 	ns.Def("println", printlnf)
 
