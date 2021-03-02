@@ -64,7 +64,7 @@ func runFile(ctx *compiler.Context, filename string) error {
 	if err != nil {
 		return err
 	}
-	chunk, _, err := ctx.CompileMultiple(f)
+	_, _, err = ctx.CompileMultiple(f)
 	errc := f.Close()
 	if err != nil {
 		return err
@@ -72,10 +72,10 @@ func runFile(ctx *compiler.Context, filename string) error {
 	if errc != nil {
 		return errc
 	}
-	_, err = vm.NewFrame(chunk, nil).Run()
-	if err != nil {
-		return err
-	}
+	//_, err = vm.NewFrame(chunk, nil).Run()
+	//if err != nil {
+	//	return err
+	//}
 	return nil
 }
 
