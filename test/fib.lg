@@ -1,7 +1,6 @@
-
-(def fib (fn [n]
-           (if (= n 0) 1
-             (if (= n 1) 1
-               (+ (fib (- n 1)) (fib (- n 2)))))))
+(defn fib [n]
+  (cond (= n 0) 1
+        (= n 1) 1
+        :else (+ (fib (- n 1)) (fib (- n 2)))))
 
 (println (fib 5))
