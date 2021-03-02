@@ -31,6 +31,7 @@ type Context struct {
 	chunk      *vm.CodeChunk
 	formalArgs map[vm.Symbol]int
 	source     string
+	variadric  bool
 }
 
 // FIXME this is unacceptable hax
@@ -150,6 +151,19 @@ func (c *Context) EnterFn(args []vm.Value) (*Context, error) {
 		if !ok {
 			return nil, NewCompileError("all fn formal arguments must be symbols")
 		}
+		if s == "&" {
+			if fc.variadric {
+				return nil, NewCompileError("only one rest argument allowed")
+			}
+			fc.variadric = true
+			continue
+		}
+		if fc.variadric {
+			if i < len(args)-1 {
+				return nil, NewCompileError("only one argument allowed after &")
+			}
+			i = i - 1
+		}
 		fc.formalArgs[s] = i
 	}
 	return fc, nil
@@ -158,7 +172,7 @@ func (c *Context) EnterFn(args []vm.Value) (*Context, error) {
 func (c *Context) LeaveFn(ctx *Context) {
 	fnchunk := ctx.chunk
 
-	f := vm.MakeFunc(len(ctx.formalArgs), false, fnchunk)
+	f := vm.MakeFunc(len(ctx.formalArgs), ctx.variadric, fnchunk)
 
 	n := c.Constant(f)
 	c.EmitWithArg(vm.OPLDC, n)
@@ -274,11 +288,10 @@ func fnCompiler(c *Context, form vm.Value) error {
 	args := f.First().(vm.ArrayVector).Unbox().([]vm.Value)
 
 	fc, err := c.EnterFn(args)
-	defer c.LeaveFn(fc)
-
 	if err != nil {
 		return NewCompileError("compiling fn args").Wrap(err)
 	}
+	defer c.LeaveFn(fc)
 
 	body := f.(*vm.List).Next().Unbox().([]vm.Value)
 	l := len(body)

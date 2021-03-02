@@ -76,7 +76,16 @@ func (l *Func) Arity() int {
 	return l.arity
 }
 
-func (l *Func) Invoke(args []Value) Value {
+func (l *Func) Invoke(pargs []Value) Value {
+	args := pargs
+	if l.isVariadric {
+		// pretty sure variadric should guarantee arity >= 1
+		sargs := args[0 : l.arity-1]
+		rest := args[l.arity-1:]
+		// FIXME don't swallow the error, make invoke return an error
+		restlist, _ := ListType.Box(rest)
+		args = append(sargs, restlist)
+	}
 	f := NewFrame(l.chunk, args)
 	// FIXME don't swallow the error, make invoke return an error
 	v, _ := f.Run()
