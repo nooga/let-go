@@ -165,7 +165,7 @@ func TestSimpleCall(t *testing.T) {
 	assert.NoError(t, err)
 
 	c := NewCodeChunk(&[]Value{forty, two, plus})
-
+	c.maxStack = 3
 	c.Append(OPLDC)
 	c.Append32(2)
 

@@ -37,13 +37,15 @@ const (
 	OPJMP // jump by offset JMP (offset int32)
 
 	OPPOP // pop value from the stack and discard it
+	OPPON // save top and pop n elements from the stack PON (n int32)
+	OPDPN // duplicate nth value from the stack OPN (n int32)
 
 	OPSTV // set var
 	OPLDV // push var root
 )
 
 func OpcodeToString(op uint8) string {
-	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP", "POP", "STV", "LDV"}
+	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP", "POP", "PON", "DPN", "STV", "LDV"}
 	if int(op) < len(ops) {
 		return ops[op]
 	}
@@ -52,9 +54,10 @@ func OpcodeToString(op uint8) string {
 
 // CodeChunk holds bytecode and provides facilities for reading and writing it
 type CodeChunk struct {
-	consts *[]Value
-	code   []uint8
-	length int
+	maxStack int
+	consts   *[]Value
+	code     []uint8
+	length   int
 }
 
 func NewCodeChunk(consts *[]Value) *CodeChunk {
@@ -76,7 +79,7 @@ func (c *CodeChunk) Debug() {
 	for i < len(c.code) {
 		op, _ := c.Get(i)
 		switch op {
-		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP:
+		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 5
@@ -104,6 +107,9 @@ func (c *CodeChunk) Append32(val int) {
 }
 
 func (c *CodeChunk) AppendChunk(o *CodeChunk) {
+	if o.maxStack > c.maxStack {
+		c.maxStack = o.maxStack
+	}
 	c.code = append(c.code, o.code...)
 	c.length += len(o.code)
 }
@@ -126,6 +132,10 @@ func (c *CodeChunk) Update32(address int, value int) {
 	binary.LittleEndian.PutUint32(c.code[address:address+4], uint32(value))
 }
 
+func (c *CodeChunk) SetMaxStack(max int) {
+	c.maxStack = max
+}
+
 const defaultStackSize = 32
 
 // Frame is a single interpreter context
@@ -142,7 +152,7 @@ type Frame struct {
 
 func NewFrame(code *CodeChunk, args []Value) *Frame {
 	return &Frame{
-		stack:   make([]Value, defaultStackSize),
+		stack:   make([]Value, code.maxStack),
 		args:    args,
 		argc:    len(args),
 		consts:  *code.consts,
@@ -314,6 +324,40 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip++
 
+		case OPPON:
+			v, err := f.Pop()
+			if err != nil {
+				return NIL, NewExecutionError("PON top value").Wrap(err)
+			}
+			num, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("PON get argument").Wrap(err)
+			}
+			err = f.Drop(num)
+			if err != nil {
+				return NIL, NewExecutionError("PON drop").Wrap(err)
+			}
+			err = f.Push(v)
+			if err != nil {
+				return NIL, NewExecutionError("PON push").Wrap(err)
+			}
+			f.ip += 5
+
+		case OPDPN:
+			num, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("DPN get argument").Wrap(err)
+			}
+			val, err := f.Nth(num)
+			if err != nil {
+				return NIL, NewExecutionError("DPN get nth").Wrap(err)
+			}
+			err = f.Push(val)
+			if err != nil {
+				return NIL, NewExecutionError("DPN push").Wrap(err)
+			}
+			f.ip += 5
+
 		case OPSTV:
 			val, err := f.Pop()
 			if err != nil {
@@ -333,6 +377,7 @@ func (f *Frame) Run() (Value, error) {
 				return NIL, NewExecutionError("STV push var failed").Wrap(err)
 			}
 			f.ip++
+
 		case OPLDV:
 			// note this avoids pop-push dance
 			idx := f.sp - 1

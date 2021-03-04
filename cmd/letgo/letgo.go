@@ -44,9 +44,15 @@ func repl(ctx *compiler.Context) {
 	for scanner.Scan() {
 		in := scanner.Text()
 		chunk, err := ctx.Compile(in)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
 		val, err := vm.NewFrame(chunk, nil).Run()
 		if err != nil {
 			fmt.Println(err)
+			continue
 		}
 
 		fmt.Println(val.String())
