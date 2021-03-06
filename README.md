@@ -54,6 +54,6 @@ See [tests](https://github.com/nooga/let-go/tree/main/test) for more examples.
 ---
 Follow me on twitter for nightly updates! 🌙
 
-<a href="https://twitter.com/intent/follow?screen_name=shields_io">
+<a href="https://twitter.com/intent/follow?screen_name=mgasperowicz">
 <img src="https://img.shields.io/twitter/follow/mgasperowicz?style=social&logo=twitter"
 alt="follow on Twitter"></a>
