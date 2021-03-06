@@ -51,6 +51,38 @@ Can compile and eval basic Clojure flavored lisp.
 
 See [tests](https://github.com/nooga/let-go/tree/main/test) for more examples. 
 
+## Running
+
+Sure, you can! Just keep in mind that we're not there yet and this is not Clojure yet and will probably blow up in your 
+face at this stage.
+
+Just remember to leave an issue when it does 😊
+
+The best way to take `let-go` for a spin right now is to clone this repo and run the REPL like this:
+
+```
+go run . 
+```
+
+To run an expression:
+
+```
+go run . -e '(+ 1 1)'
+```
+
+To run a file:
+
+```
+go run . test/hello.lg
+```
+
+Use the `-r` flag to run the REPL after the interpreter has finished with files and `-e`:
+
+```bash
+go run . -r test/simple.lg                # will run simple.lg first, then open up a REPL
+go run . -r -e '(* fun 2)' test/simple.lg # will run simple.lg first, then (* fun 2) and REPL 
+```
+
 ---
 Follow me on twitter for nightly updates! 🌙
 
