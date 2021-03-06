@@ -213,6 +213,29 @@ func readString(r *LispReader, _ rune) (vm.Value, error) {
 			case '\\', '"':
 				s.WriteRune(ch)
 				continue
+			case 'u':
+				hex := ""
+				for i := 0; i < 4; i++ {
+					ch, err := r.next()
+					if err != nil || !isHexDigit(ch) {
+						break
+					}
+					hex += string(ch)
+				}
+				if len(hex) < 4 {
+					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex)).Wrap(err)
+				}
+				var hexi int
+				n, err := fmt.Sscanf(hex, "%x", &hexi)
+				if n != 1 || (hexi >= 0xD800 && hexi <= 0xDFFF) {
+					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex)).Wrap(err)
+				}
+				if err != nil {
+					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex)).Wrap(err)
+				}
+				fmt.Println("oo", hexi)
+				s.WriteRune(rune(hexi))
+				continue
 			default:
 				return vm.NIL, NewReaderError(r, fmt.Sprintf("unknown escape sequence \\%c", ch)).Wrap(err)
 			}
@@ -222,6 +245,19 @@ func readString(r *LispReader, _ rune) (vm.Value, error) {
 		}
 		s.WriteRune(ch)
 	}
+}
+
+func isHexDigit(ch rune) bool {
+	if unicode.IsDigit(ch) {
+		return true
+	}
+	if ch >= 'a' && ch <= 'f' {
+		return true
+	}
+	if ch >= 'A' && ch <= 'F' {
+		return true
+	}
+	return false
 }
 
 func readChar(r *LispReader, _ rune) (vm.Value, error) {
