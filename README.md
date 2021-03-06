@@ -21,7 +21,8 @@ Here are some nebulous goals in no particular order:
 - Provide comfy two-way interop for arbitrary functions and types,
 - Serve primarily as an embedded extension language,
 - Standalone interpreter mode and AOT (let-go -> standalone binary) would be nice eventually, 
-- Strech goal: let-go bytecode -> Go translation. 
+- Strech goal: let-go bytecode -> Go translation.
+- Pure Go, zero dependencies.
 
 Here are the non goals:
 - Stellar performance,
@@ -30,6 +31,29 @@ Here are the non goals:
 
 ## Current status 
 
-It doesn't do much yet - just started laying down the basics. Come back in a couple of months to see cool demos.
+Can compile and eval basic Clojure flavored lisp.
 
-See [compiler tests](https://github.com/nooga/let-go/blob/master/pkg/compiler/compiler_test.go) if you're really interested. 
+#### Notable features
+- ✅ macros
+- ✅ vars
+- ✅ can compile and run Y Combinator
+
+#### The most impressive snippet so far
+
+```clojure
+(test "Y combinator"
+      (let [Y (fn [f] ((fn [x] (x x))
+                        (fn [x]
+                          (f (fn [y] ((x x) y))))))
+            fac-gen (fn [func] (fn [n] (if (zero? n) 1 (* n (func (dec n))))))]
+        (= 120 ((Y fac-gen) 5))))
+```
+
+See [tests](https://github.com/nooga/let-go/tree/main/test) for more examples. 
+
+---
+Follow me on twitter for nightly updates! 🌙
+
+<a href="https://twitter.com/intent/follow?screen_name=shields_io">
+<img src="https://img.shields.io/twitter/follow/mgasperowicz?style=social&logo=twitter"
+alt="follow on Twitter"></a>
