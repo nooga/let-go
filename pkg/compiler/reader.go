@@ -233,7 +233,6 @@ func readString(r *LispReader, _ rune) (vm.Value, error) {
 				if err != nil {
 					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex)).Wrap(err)
 				}
-				fmt.Println("oo", hexi)
 				s.WriteRune(rune(hexi))
 				continue
 			default:
