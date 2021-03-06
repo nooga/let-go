@@ -42,7 +42,7 @@ func TestContext_Compile(t *testing.T) {
 			 (def y (if x :big :meh))
 		   y)`: "big",
 		`(if \P \N \P)`:                         'N',
-		`(println "hello" "world")`:             12,
+		`(println "hello" "world")`:             nil,
 		`(do (def sq (fn [x] (* x x))) (sq 9))`: 81,
 		`[1 2 (+ 1 2)]`:                         []vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)},
 		`'foo`:                                  "foo",

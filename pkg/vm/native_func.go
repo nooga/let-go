@@ -60,8 +60,8 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 
 	return f, nil
 }
-func (t *theNativeFnType) Wrap(fn func(args []Value) Value) (Value, error) {
 
+func (t *theNativeFnType) Wrap(fn func(args []Value) Value) (Value, error) {
 	f := &NativeFn{
 		arity:       -1,
 		isVariadric: false,
@@ -70,6 +70,12 @@ func (t *theNativeFnType) Wrap(fn func(args []Value) Value) (Value, error) {
 	}
 
 	return f, nil
+}
+
+func (l *NativeFn) WithArity(arity int, variadric bool) *NativeFn {
+	l.arity = arity
+	l.isVariadric = variadric
+	return l
 }
 
 var NativeFnType *theNativeFnType

@@ -21,6 +21,7 @@ import (
 	_ "embed"
 	"fmt"
 	"github.com/nooga/let-go/pkg/vm"
+	"strings"
 )
 
 var nsRegistry map[string]*vm.Namespace
@@ -44,20 +45,94 @@ func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
 var CoreSrc string
 
 func installLangNS() {
-	plus, err := vm.NativeFnType.Box(func(a int, b int) int { return a + b })
-	mul, err := vm.NativeFnType.Box(func(a int, b int) int { return a * b })
-	sub, err := vm.NativeFnType.Box(func(a int, b int) int { return a - b })
+	plus, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		n := 0
+		for i := range vs {
+			n += vs[i].Unbox().(int)
+		}
+		return vm.Int(n)
+	})
+
+	mul, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		n := 1
+		for i := range vs {
+			n *= vs[i].Unbox().(int)
+		}
+		return vm.Int(n)
+	})
+
+	sub, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) < 1 {
+			// FIXME error out
+			return vm.NIL
+		}
+		n := vs[0].Unbox().(int)
+		if len(vs) == 1 {
+			// FIXME error out
+			return vm.Int(-n)
+		}
+		for i := 1; i < len(vs); i++ {
+			n -= vs[i].Unbox().(int)
+		}
+		return vm.Int(n)
+	})
+
+	div, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		n := 0
+		if len(vs) < 1 {
+			// FIXME error out
+			return vm.NIL
+		}
+		for i := range vs {
+			n /= vs[i].Unbox().(int)
+		}
+		return vm.Int(n)
+	})
 
 	equals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		for i := 0; i < len(vs)-1; i++ {
-			if vs[i] != vs[i+1] {
+		if len(vs) < 1 {
+			// FIXME error out
+			return vm.NIL
+		}
+		for i := range vs[1:] {
+			if vs[0] != vs[i] {
 				return vm.FALSE
 			}
 		}
 		return vm.TRUE
 	})
 
+	gt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME error out
+			return vm.NIL
+		}
+		ret, err := vm.BooleanType.Box(vs[0].Unbox().(int) > vs[1].Unbox().(int))
+		if err != nil {
+			// FIXME error out
+			return vm.NIL
+		}
+		return ret
+	})
+
+	lt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME error out
+			return vm.NIL
+		}
+		ret, err := vm.BooleanType.Box(vs[0].Unbox().(int) < vs[1].Unbox().(int))
+		if err != nil {
+			// FIXME error out
+			return vm.NIL
+		}
+		return ret
+	})
+
 	setMacro, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME error out
+			return vm.NIL
+		}
 		m := vs[0].(*vm.Var)
 		m.SetMacro()
 		return m
@@ -67,6 +142,10 @@ func installLangNS() {
 	list, err := vm.NativeFnType.Wrap(vm.NewList)
 
 	cons, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME error out
+			return vm.NIL
+		}
 		elem := vs[0]
 		seq, ok := vs[1].(vm.Seq)
 		if !ok {
@@ -77,6 +156,10 @@ func installLangNS() {
 	})
 
 	first, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME error out
+			return vm.NIL
+		}
 		seq, ok := vs[0].(vm.Seq)
 		if !ok {
 			// FIXME make this an error (we need to handle exceptions first)
@@ -86,6 +169,10 @@ func installLangNS() {
 	})
 
 	second, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME error out
+			return vm.NIL
+		}
 		seq, ok := vs[0].(vm.Seq)
 		if !ok {
 			// FIXME make this an error (we need to handle exceptions first)
@@ -95,6 +182,10 @@ func installLangNS() {
 	})
 
 	next, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME error out
+			return vm.NIL
+		}
 		seq, ok := vs[0].(vm.Seq)
 		if !ok {
 			// FIXME make this an error (we need to handle exceptions first)
@@ -110,7 +201,22 @@ func installLangNS() {
 		return n
 	})
 
-	printlnf, err := vm.NativeFnType.Box(fmt.Println)
+	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		b := &strings.Builder{}
+		for i := range vs {
+			if i > 0 {
+				b.WriteRune(' ')
+			}
+			if vs[i].Type() == vm.StringType {
+				b.WriteString(string(vs[i].(vm.String)))
+				continue
+			}
+			b.WriteString(vs[i].String())
+		}
+		fmt.Println(b)
+		return vm.NIL
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -119,7 +225,11 @@ func installLangNS() {
 	ns.Def("+", plus)
 	ns.Def("*", mul)
 	ns.Def("-", sub)
+	ns.Def("/", div)
+
 	ns.Def("=", equals)
+	ns.Def("gt", gt)
+	ns.Def("lt", lt)
 
 	ns.Def("set-macro!", setMacro)
 
