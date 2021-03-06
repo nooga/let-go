@@ -2,4 +2,6 @@
 (def fun 1)
 (def double (fn [a] (* a 2)))
 (def hey! (fn [a _ b] (+ a b)))
-(println (hey! (double parens) 'equals (double fun)))
+
+(test "simple"
+       (println (hey! (double parens) 'equals (double fun))))

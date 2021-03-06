@@ -32,3 +32,10 @@
   (when forms
         (list 'if (first forms) (second forms)
               (cons 'cond (next (next forms))))))
+
+; makeshift test helper
+(defmacro test [name & body]
+  (let [bod (cons 'do body)
+        pass (list 'println "  \u001b[32mPASS\u001b[0m" name)
+        fail (list 'println "  \u001b[31mFAIL\u001b[0m" name)]
+    (list 'if bod pass fail)))
