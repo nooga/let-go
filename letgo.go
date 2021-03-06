@@ -30,31 +30,38 @@ import (
 
 func motd() {
 	message := ` █   ██▀ ▀█▀    ▄▀  ▄▀▄
- █▄▄ █▄▄  █  ▀▀ ▀▄█ ▀▄▀
+ █▄▄ █▄▄  █  ▀▀ ▀▄█ ▀▄▀  and expect crashes :^)
+
 
 `
-	fmt.Println(message)
+	fmt.Print(message)
+}
+
+func runForm(ctx *compiler.Context, in string) (vm.Value, error) {
+	chunk, err := ctx.Compile(in)
+	if err != nil {
+		return nil, err
+	}
+
+	val, err := vm.NewFrame(chunk, nil).Run()
+	if err != nil {
+		return nil, err
+	}
+	return val, err
 }
 
 func repl(ctx *compiler.Context) {
-	ctx.SetSource("REPL")
 	scanner := bufio.NewScanner(os.Stdin)
 	prompt := ctx.CurrentNS().Name() + "=> "
 	fmt.Print(prompt)
 	for scanner.Scan() {
 		in := scanner.Text()
-		chunk, err := ctx.Compile(in)
+		ctx.SetSource("REPL")
+		val, err := runForm(ctx, in)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-
-		val, err := vm.NewFrame(chunk, nil).Run()
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-
 		fmt.Println(val.String())
 		fmt.Print(prompt)
 	}
@@ -86,9 +93,11 @@ func runFile(ctx *compiler.Context, filename string) error {
 }
 
 var runREPL bool
+var expr string
 
 func init() {
-	flag.BoolVar(&runREPL, "repl", false, "attach REPL after running given files")
+	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
+	flag.StringVar(&expr, "e", "", "eval given expression")
 }
 
 func initCompiler() *compiler.Context {
@@ -106,6 +115,7 @@ func main() {
 
 	context := initCompiler()
 
+	ranSomething := false
 	if len(files) >= 1 {
 		for i := range files {
 			err := runFile(context, files[i])
@@ -114,11 +124,21 @@ func main() {
 				continue
 			}
 		}
-	} else {
-		runREPL = true
+		ranSomething = true
 	}
 
-	if runREPL {
+	if expr != "" {
+		context.SetSource("EXPR")
+		val, err := runForm(context, expr)
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			fmt.Println(val)
+		}
+		ranSomething = true
+	}
+
+	if !ranSomething || runREPL {
 		motd()
 		repl(context)
 	}
