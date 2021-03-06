@@ -42,10 +42,13 @@ const (
 
 	OPSTV // set var
 	OPLDV // push var root
+
+	OPLDK // load closed over LDK (index int32)
+	OPPAK // push closed over value to a closure
 )
 
 func OpcodeToString(op uint8) string {
-	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP", "POP", "PON", "DPN", "STV", "LDV"}
+	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP", "POP", "PON", "DPN", "STV", "LDV", "LDK", "PAK"}
 	if int(op) < len(ops) {
 		return ops[op]
 	}
@@ -79,7 +82,7 @@ func (c *CodeChunk) Debug() {
 	for i < len(c.code) {
 		op, _ := c.Get(i)
 		switch op {
-		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV:
+		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV, OPLDK:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 5
@@ -140,14 +143,15 @@ const defaultStackSize = 32
 
 // Frame is a single interpreter context
 type Frame struct {
-	stack   []Value
-	args    []Value
-	argc    int
-	consts  []Value
-	constsc int
-	code    *CodeChunk
-	ip      int
-	sp      int
+	stack       []Value
+	args        []Value
+	closedOvers []Value
+	argc        int
+	consts      []Value
+	constsc     int
+	code        *CodeChunk
+	ip          int
+	sp          int
 }
 
 func NewFrame(code *CodeChunk, args []Value) *Frame {
@@ -223,6 +227,7 @@ func (f *Frame) Run() (Value, error) {
 		switch inst {
 		case OPNOP:
 			f.ip++
+
 		case OPLDC:
 			idx, err := f.code.Get32(f.ip + 1)
 			if err != nil {
@@ -236,10 +241,11 @@ func (f *Frame) Run() (Value, error) {
 				return NIL, NewExecutionError("const push failed").Wrap(err)
 			}
 			f.ip += 5
+
 		case OPLDA:
 			idx, err := f.code.Get32(f.ip + 1)
 			if err != nil {
-				return NIL, NewExecutionError("const push failed").Wrap(err)
+				return NIL, NewExecutionError("get argument index failed").Wrap(err)
 			}
 			if idx >= f.argc {
 				return NIL, NewExecutionError("argument lookup out of bounds")
@@ -249,12 +255,14 @@ func (f *Frame) Run() (Value, error) {
 				return NIL, NewExecutionError("argument push failed").Wrap(err)
 			}
 			f.ip += 5
+
 		case OPRET:
 			v, err := f.Pop()
 			if err != nil {
 				return NIL, NewExecutionError("return failed").Wrap(err)
 			}
 			return v, nil
+
 		case OPINV:
 			arity, err := f.code.Get32(f.ip + 1)
 			if err != nil {
@@ -282,6 +290,7 @@ func (f *Frame) Run() (Value, error) {
 				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
 			}
 			f.ip += 5
+
 		case OPBRT:
 			offset, err := f.code.Get32(f.ip + 1)
 			if err != nil {
@@ -296,6 +305,7 @@ func (f *Frame) Run() (Value, error) {
 				continue
 			}
 			f.ip += offset
+
 		case OPBRF:
 			offset, err := f.code.Get32(f.ip + 1)
 			if err != nil {
@@ -310,6 +320,7 @@ func (f *Frame) Run() (Value, error) {
 				continue
 			}
 			f.ip += offset
+
 		case OPJMP:
 			offset, err := f.code.Get32(f.ip + 1)
 			if err != nil {
@@ -389,6 +400,38 @@ func (f *Frame) Run() (Value, error) {
 				return NIL, NewExecutionError("LDV invalid var on stack")
 			}
 			f.stack[idx] = varr.Deref()
+			f.ip++
+
+		case OPLDK:
+			idx, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("get closed over index failed").Wrap(err)
+			}
+			// FIXME cache closedOvers count
+			if idx >= len(f.closedOvers) {
+				return NIL, NewExecutionError("closed over lookup out of bounds")
+			}
+			err = f.Push(f.closedOvers[idx])
+			if err != nil {
+				return NIL, NewExecutionError("closed over push failed").Wrap(err)
+			}
+			f.ip += 5
+
+		case OPPAK:
+			val, err := f.Pop()
+			if err != nil {
+				return NIL, NewExecutionError("popping closed over value failed").Wrap(err)
+			}
+			idx := f.sp - 1
+			if idx < 0 {
+				return NIL, NewExecutionError("PAK stack overflow").Wrap(err)
+			}
+			cls := f.stack[idx]
+			if cls.Type() != FuncType {
+				return NIL, NewExecutionError("PAK expected a Fn")
+			}
+			fun := cls.(*Func)
+			fun.closedOvers = append(fun.closedOvers, val)
 			f.ip++
 
 		default:

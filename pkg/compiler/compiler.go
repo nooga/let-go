@@ -25,16 +25,19 @@ import (
 )
 
 type Context struct {
-	ns         *vm.Namespace
-	parent     *Context
-	consts     *[]vm.Value
-	chunk      *vm.CodeChunk
-	formalArgs map[vm.Symbol]int
-	source     string
-	variadric  bool
-	locals     []map[vm.Symbol]int
-	sp         int
-	spMax      int
+	ns           *vm.Namespace
+	parent       *Context
+	consts       *[]vm.Value
+	chunk        *vm.CodeChunk
+	formalArgs   map[vm.Symbol]int
+	source       string
+	variadric    bool
+	locals       []map[vm.Symbol]int
+	sp           int
+	spMax        int
+	isClosure    bool
+	closedOversC int
+	closedOvers  map[vm.Symbol]*closureCell
 }
 
 // FIXME this is unacceptable hax
@@ -46,10 +49,11 @@ func init() {
 
 func NewCompiler(ns *vm.Namespace) *Context {
 	return &Context{
-		ns:     ns,
-		consts: globalConsts,
-		source: "<default>",
-		locals: []map[vm.Symbol]int{},
+		ns:          ns,
+		consts:      globalConsts,
+		source:      "<default>",
+		locals:      []map[vm.Symbol]int{},
+		closedOvers: map[vm.Symbol]*closureCell{},
 	}
 }
 
@@ -152,12 +156,13 @@ func (c *Context) EnterFn(args []vm.Value) (*Context, error) {
 	fchunk := vm.NewCodeChunk(c.consts)
 
 	fc := &Context{
-		ns:         c.ns,
-		parent:     c,
-		consts:     c.consts,
-		chunk:      fchunk,
-		formalArgs: make(map[vm.Symbol]int),
-		locals:     []map[vm.Symbol]int{},
+		ns:          c.ns,
+		parent:      c,
+		consts:      c.consts,
+		chunk:       fchunk,
+		formalArgs:  make(map[vm.Symbol]int),
+		locals:      []map[vm.Symbol]int{},
+		closedOvers: make(map[vm.Symbol]*closureCell),
 	}
 
 	for i := range args {
@@ -192,6 +197,54 @@ func (c *Context) LeaveFn(ctx *Context) {
 	n := c.Constant(f)
 	c.EmitWithArg(vm.OPLDC, n)
 	c.incSP(1)
+
+	// if we have a closure on our hands then add closed overs
+	if ctx.isClosure {
+		for _, clo := range ctx.closedOvers {
+			_ = clo.source().emit()
+			c.Emit(vm.OPPAK)
+		}
+	}
+}
+
+func (c *Context) symbolLookup(s vm.Symbol) cell {
+	if c.isClosure {
+		clo := c.closedOvers[s]
+		if clo != nil {
+			return clo
+		}
+	}
+	local := c.LookupLocal(s)
+	if local >= 0 {
+		// we have a local symbol in scope
+		return &localCell{
+			scope: c,
+			local: local,
+		}
+	}
+	arg := c.Arg(s)
+	if arg >= 0 {
+		return &argCell{
+			scope: c,
+			arg:   arg,
+		}
+	}
+	if c.parent == nil {
+		return nil
+	}
+	outer := c.parent.symbolLookup(s)
+	if outer != nil {
+		c.isClosure = true
+		newClosedOver := c.closedOversC
+		c.closedOversC++
+		c.closedOvers[s] = &closureCell{
+			src:     outer,
+			scope:   c,
+			closure: newClosedOver,
+		}
+		return c.closedOvers[s]
+	}
+	return nil
 }
 
 func (c *Context) compileForm(o vm.Value) error {
@@ -201,18 +254,11 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.EmitWithArg(vm.OPLDC, n)
 		c.incSP(1)
 	case vm.SymbolType:
-		locala := c.LookupLocal(o.(vm.Symbol))
-		if locala >= 0 {
-			c.EmitWithArg(vm.OPDPN, c.sp-1-locala)
-			c.incSP(1)
-			return nil
+		cel := c.symbolLookup(o.(vm.Symbol))
+		if cel != nil {
+			return cel.emit()
 		}
-		argn := c.Arg(o.(vm.Symbol))
-		if argn >= 0 {
-			c.EmitWithArg(vm.OPLDA, argn)
-			c.incSP(1)
-			return nil
-		}
+		// if symbol not found so far then we have a free variable on our hands
 		varn := c.Constant(c.ns.LookupOrAdd(o.(vm.Symbol)))
 		c.EmitWithArg(vm.OPLDC, varn)
 		c.Emit(vm.OPLDV)
@@ -314,7 +360,6 @@ func (c *Context) decSP(i int) {
 }
 
 func (c *Context) LookupLocal(symbol vm.Symbol) int {
-	// FIXME implement closures
 	if len(c.locals) < 1 {
 		return -1
 	}

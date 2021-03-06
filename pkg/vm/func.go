@@ -39,6 +39,7 @@ type Func struct {
 	arity       int
 	isVariadric bool
 	chunk       *CodeChunk
+	closedOvers []Value
 }
 
 func MakeFunc(arity int, variadric bool, c *CodeChunk) *Func {
@@ -87,6 +88,7 @@ func (l *Func) Invoke(pargs []Value) Value {
 		args = append(sargs, restlist)
 	}
 	f := NewFrame(l.chunk, args)
+	f.closedOvers = l.closedOvers
 	// FIXME don't swallow the error, make invoke return an error
 	v, _ := f.Run()
 	return v
