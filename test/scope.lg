@@ -19,9 +19,23 @@
       (let [x 1 y 2]
         (= 3 (+ x y))))
 
-
 (test "let recursive"
       (let [x 1
             y (+ x 1)
             y (+ 1 y)] ; shadow the old y
         (= 4 (+ x y))))
+
+(test "simple closure"
+      (let [f (fn [x] (fn [y] (+ x y)))] ; x comes from outer scope
+        (= 3 ((f 1) 2))))
+
+(test "nested closure"
+      (let [f (fn [x] (fn [y] (fn [z] (+ x (+ y z)))))] ; x and y come from outer scopes
+        (= 6 (((f 1) 2) 3))))
+
+(test "Y combinator"
+      (let [Y (fn [f] ((fn [x] (x x))
+                        (fn [x]
+                          (f (fn [y] ((x x) y))))))
+            fac-gen (fn [func] (fn [n] (if (zero? n) 1 (* n (func (dec n))))))]
+        (= 120 ((Y fac-gen) 5))))
