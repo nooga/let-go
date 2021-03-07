@@ -53,10 +53,8 @@ See [tests](https://github.com/nooga/let-go/tree/main/test) for more examples.
 
 ## Running
 
-Sure, you can! Just keep in mind that we're not there yet and this is not Clojure yet and will probably blow up in your 
-face at this stage.
-
-Just remember to leave an issue when it does 😊
+Sure, you can! Just keep in mind that we're not there yet and it will likely blow up in your 
+face. Just remember to leave an issue when it does 😊
 
 The best way to take `let-go` for a spin right now is to clone this repo and run the REPL like this:
 
