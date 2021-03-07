@@ -52,5 +52,5 @@ func (l Symbol) Unbox() interface{} {
 }
 
 func (l Symbol) String() string {
-	return fmt.Sprintf("%s", string(l))
+	return string(l)
 }

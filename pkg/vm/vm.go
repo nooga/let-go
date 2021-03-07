@@ -176,7 +176,6 @@ type Frame struct {
 	code        *CodeChunk
 	ip          int
 	sp          int
-	debug       bool
 }
 
 func NewFrame(code *CodeChunk, args []Value) *Frame {

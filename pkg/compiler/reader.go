@@ -72,20 +72,6 @@ func (r *LispReader) unread() error {
 	return err
 }
 
-func (r *LispReader) peek() (rune, error) {
-	for peekBytes := 4; peekBytes > 0; peekBytes-- {
-		b, err := r.r.Peek(peekBytes)
-		if err == nil {
-			ru, _ := utf8.DecodeRune(b)
-			if ru == utf8.RuneError {
-				return ru, NewReaderError(r, "peek failed - rune error")
-			}
-			return ru, nil
-		}
-	}
-	return -1, io.EOF
-}
-
 func (r *LispReader) eatWhitespace() (rune, error) {
 	ch, err := r.next()
 	if err != nil {
@@ -108,36 +94,37 @@ func appendNonVoid(vs []vm.Value, v vm.Value) []vm.Value {
 }
 
 func (r *LispReader) Read() (vm.Value, error) {
-	for {
-		ch, err := r.eatWhitespace()
+	ch, err := r.eatWhitespace()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+	}
+	if isDigit(ch) {
+		return readNumber(r, ch)
+	}
+	macro, ok := macros[ch]
+	if ok {
+		return macro(r, ch)
+	}
+	if ch == '+' || ch == '-' {
+		ch2, err := r.next()
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		if isDigit(ch) {
-			return readNumber(r, ch)
-		}
-		macro, ok := macros[ch]
-		if ok {
-			return macro(r, ch)
-		}
-		if ch == '+' || ch == '-' {
-			ch2, err := r.next()
-			if err != nil {
-				return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
-			}
-			if isDigit(ch2) {
-				if err = r.unread(); err != nil {
-					return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
-				}
-				return readNumber(r, ch)
-			}
+		if isDigit(ch2) {
 			if err = r.unread(); err != nil {
 				return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 			}
+			return readNumber(r, ch)
 		}
-		token, err := readToken(r, ch)
-		return interpretToken(r, token)
+		if err = r.unread(); err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
 	}
+	token, err := readToken(r, ch)
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+	}
+	return interpretToken(r, token)
 }
 
 func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {

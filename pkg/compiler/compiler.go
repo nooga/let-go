@@ -519,6 +519,7 @@ func loopCompiler(c *Context, form vm.Value) error {
 		}
 	}
 	c.popLocals()
+	c.popRecurPoint()
 	c.emitWithArg(vm.OPPON, bindn)
 	c.decSP(bindn)
 	c.tailPosition = tp

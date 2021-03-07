@@ -44,6 +44,7 @@ func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
 //go:embed core/core.lg
 var CoreSrc string
 
+//nolint
 func installLangNS() {
 	plus, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		n := 0
