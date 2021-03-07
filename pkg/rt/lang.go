@@ -90,11 +90,13 @@ func installLangNS() {
 	})
 
 	equals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		if len(vs) < 1 {
+		length := len(vs)
+		if length < 1 {
 			// FIXME error out
 			return vm.NIL
 		}
-		for i := range vs[1:] {
+
+		for i := 1; i < length; i++ {
 			if vs[0] != vs[i] {
 				return vm.FALSE
 			}
