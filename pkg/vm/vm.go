@@ -336,7 +336,9 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 			}
-			out := fn.Invoke(a)
+			args := make([]Value, len(a))
+			copy(args, a)
+			out := fn.Invoke(args)
 			err = f.drop(arity + 1)
 			if err != nil {
 				return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
