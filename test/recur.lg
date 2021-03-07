@@ -15,46 +15,18 @@
 ; OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ;
 
-(test "let simple"
-      (let [x 1 y 2]
-        (= 3 (+ x y))))
-
-(test "let recursive"
-      (let [x 1
-            y (+ x 1)
-            y (+ 1 y)] ; shadow the old y
-        (= 4 (+ x y))))
-
-(test "let nested"
-      (let [a 1 b 2]
-        (let [c 3 d 4]
-          (println a b c d)
-          (= (+ b d) (* 2 (+ a b))))))
-
-(test "let shadow"
-      (let [a 1 b 2]
-        (let [a 3 c 4]
-          (println a b)
-          (= 5 (+ a b)))))
+(test "loop/recur"
+      (= 220
+         (loop [val 200 cnt 20]
+           (if (pos? cnt)
+               (recur (inc val) (dec cnt))
+               val))))
 
 
-(test "loop simple"
-      (loop [a 1 b 2]
-        (println a b)
-        (= 3 (+ a b))))
-
-(test "simple closure"
-      (let [f (fn [x] (fn [y] (+ x y)))] ; x comes from outer scope
-        (= 3 ((f 1) 2))))
-
-(test "nested closure"
-      (let [f (fn [x] (fn [y] (fn [z] (+ x (+ y z)))))] ; x and y come from outer scopes
-        (= 6 (((f 1) 2) 3))))
-
-(test "Y combinator"
-      (let [Y (fn [f] ((fn [x] (x x))
-                        (fn [x]
-                          (f (fn [y] ((x x) y))))))
-            fac-gen (fn [func] (fn [n] (if (zero? n) 1 (* n (func (dec n))))))]
-        (= 120 ((Y fac-gen) 5))))
-
+(test "fn/recur"
+      (let [f (fn [x]
+                (println x)
+                (if (pos? x)
+                  (recur (dec x))
+                  x))]
+        (= (f 10) 0)))

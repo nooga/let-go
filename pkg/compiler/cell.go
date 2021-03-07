@@ -17,7 +17,9 @@
 
 package compiler
 
-import "github.com/nooga/let-go/pkg/vm"
+import (
+	"github.com/nooga/let-go/pkg/vm"
+)
 
 type cell interface {
 	source() cell
@@ -34,7 +36,7 @@ func (c *localCell) source() cell {
 }
 
 func (c *localCell) emit() error {
-	c.scope.EmitWithArg(vm.OPDPN, c.scope.sp-1-c.local)
+	c.scope.emitWithArg(vm.OPDPN, c.scope.sp-1-c.local)
 	c.scope.incSP(1)
 	return nil
 }
@@ -49,7 +51,7 @@ func (c *argCell) source() cell {
 }
 
 func (c *argCell) emit() error {
-	c.scope.EmitWithArg(vm.OPLDA, c.arg)
+	c.scope.emitWithArg(vm.OPLDA, c.arg)
 	c.scope.incSP(1)
 	return nil
 }
@@ -66,7 +68,7 @@ func (c *argCell) emit() error {
 //}
 //
 //func (c *varCell) emit() error {
-//	c.scope.EmitWithArg(vm.OPLDA, c.arg)
+//	c.scope.emitWithArg(vm.OPLDA, c.arg)
 //	c.scope.incSP(1)
 //	return nil
 //}
@@ -82,7 +84,7 @@ func (c *closureCell) source() cell {
 }
 
 func (c *closureCell) emit() error {
-	c.scope.EmitWithArg(vm.OPLDK, c.closure)
+	c.scope.emitWithArg(vm.OPLDK, c.closure)
 	c.scope.incSP(1)
 	return nil
 }

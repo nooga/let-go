@@ -35,9 +35,12 @@ type Context struct {
 	locals       []map[vm.Symbol]int
 	sp           int
 	spMax        int
+	isFunction   bool
 	isClosure    bool
 	closedOversC int
 	closedOvers  map[vm.Symbol]*closureCell
+	recurPoints  []*recurPoint
+	tailPosition bool
 }
 
 // FIXME this is unacceptable hax
@@ -79,7 +82,7 @@ func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Emit(vm.OPRET)
+	c.emit(vm.OPRET)
 	c.decSP(1)
 	return c.chunk, nil
 }
@@ -120,21 +123,21 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 
 	c.chunk = chunk
 
-	c.Emit(vm.OPRET)
+	c.emit(vm.OPRET)
 	c.decSP(1)
 	return c.chunk, result, nil
 }
 
-func (c *Context) Emit(op uint8) {
+func (c *Context) emit(op uint8) {
 	c.chunk.Append(op)
 }
 
-func (c *Context) EmitWithArg(op uint8, arg int) {
+func (c *Context) emitWithArg(op uint8, arg int) {
 	c.chunk.Append(op)
 	c.chunk.Append32(arg)
 }
 
-func (c *Context) Constant(v vm.Value) int {
+func (c *Context) constant(v vm.Value) int {
 	for i := range *c.consts {
 		if (*c.consts)[i] == v {
 			return i
@@ -144,7 +147,7 @@ func (c *Context) Constant(v vm.Value) int {
 	return len(*c.consts) - 1
 }
 
-func (c *Context) Arg(v vm.Symbol) int {
+func (c *Context) arg(v vm.Symbol) int {
 	n, ok := c.formalArgs[v]
 	if !ok {
 		return -1
@@ -152,17 +155,19 @@ func (c *Context) Arg(v vm.Symbol) int {
 	return n
 }
 
-func (c *Context) EnterFn(args []vm.Value) (*Context, error) {
+func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 	fchunk := vm.NewCodeChunk(c.consts)
 
 	fc := &Context{
-		ns:          c.ns,
-		parent:      c,
-		consts:      c.consts,
-		chunk:       fchunk,
-		formalArgs:  make(map[vm.Symbol]int),
-		locals:      []map[vm.Symbol]int{},
-		closedOvers: make(map[vm.Symbol]*closureCell),
+		ns:           c.ns,
+		parent:       c,
+		consts:       c.consts,
+		chunk:        fchunk,
+		formalArgs:   make(map[vm.Symbol]int),
+		locals:       []map[vm.Symbol]int{},
+		closedOvers:  make(map[vm.Symbol]*closureCell),
+		isFunction:   true,
+		tailPosition: true,
 	}
 
 	for i := range args {
@@ -189,20 +194,20 @@ func (c *Context) EnterFn(args []vm.Value) (*Context, error) {
 	return fc, nil
 }
 
-func (c *Context) LeaveFn(ctx *Context) {
+func (c *Context) leaveFn(ctx *Context) {
 	fnchunk := ctx.chunk
 	fnchunk.SetMaxStack(ctx.spMax)
 	f := vm.MakeFunc(len(ctx.formalArgs), ctx.variadric, fnchunk)
 
-	n := c.Constant(f)
-	c.EmitWithArg(vm.OPLDC, n)
+	n := c.constant(f)
+	c.emitWithArg(vm.OPLDC, n)
 	c.incSP(1)
 
 	// if we have a closure on our hands then add closed overs
 	if ctx.isClosure {
 		for _, clo := range ctx.closedOvers {
 			_ = clo.source().emit()
-			c.Emit(vm.OPPAK)
+			c.emit(vm.OPPAK)
 		}
 	}
 }
@@ -214,7 +219,7 @@ func (c *Context) symbolLookup(s vm.Symbol) cell {
 			return clo
 		}
 	}
-	local := c.LookupLocal(s)
+	local := c.lookupLocal(s)
 	if local >= 0 {
 		// we have a local symbol in scope
 		return &localCell{
@@ -222,7 +227,7 @@ func (c *Context) symbolLookup(s vm.Symbol) cell {
 			local: local,
 		}
 	}
-	arg := c.Arg(s)
+	arg := c.arg(s)
 	if arg >= 0 {
 		return &argCell{
 			scope: c,
@@ -250,8 +255,8 @@ func (c *Context) symbolLookup(s vm.Symbol) cell {
 func (c *Context) compileForm(o vm.Value) error {
 	switch o.Type() {
 	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType:
-		n := c.Constant(o)
-		c.EmitWithArg(vm.OPLDC, n)
+		n := c.constant(o)
+		c.emitWithArg(vm.OPLDC, n)
 		c.incSP(1)
 	case vm.SymbolType:
 		cel := c.symbolLookup(o.(vm.Symbol))
@@ -259,21 +264,23 @@ func (c *Context) compileForm(o vm.Value) error {
 			return cel.emit()
 		}
 		// if symbol not found so far then we have a free variable on our hands
-		varn := c.Constant(c.ns.LookupOrAdd(o.(vm.Symbol)))
-		c.EmitWithArg(vm.OPLDC, varn)
-		c.Emit(vm.OPLDV)
+		varn := c.constant(c.ns.LookupOrAdd(o.(vm.Symbol)))
+		c.emitWithArg(vm.OPLDC, varn)
+		c.emit(vm.OPLDV)
 		c.incSP(1)
 	case vm.ArrayVectorType:
+		tp := c.tailPosition
+		c.tailPosition = false
 		v := o.(vm.ArrayVector)
 		// FIXME detect const vectors and push them like this
 		if len(v) == 0 {
-			n := c.Constant(v)
-			c.EmitWithArg(vm.OPLDC, n)
+			n := c.constant(v)
+			c.emitWithArg(vm.OPLDC, n)
 			c.incSP(1)
 			return nil
 		}
-		vector := c.Constant(c.ns.LookupOrAdd("vector"))
-		c.EmitWithArg(vm.OPLDC, vector)
+		vector := c.constant(c.ns.LookupOrAdd("vector"))
+		c.emitWithArg(vm.OPLDC, vector)
 		c.incSP(1)
 		for i := range v {
 			err := c.compileForm(v[i])
@@ -281,8 +288,9 @@ func (c *Context) compileForm(o vm.Value) error {
 				return NewCompileError("compiling vector elements").Wrap(err)
 			}
 		}
-		c.EmitWithArg(vm.OPINV, len(v))
+		c.emitWithArg(vm.OPINV, len(v))
 		c.decSP(len(v) + 1)
+		c.tailPosition = tp
 	case vm.ListType:
 		fn := o.(*vm.List).First()
 		// check if we're looking at a special form
@@ -300,6 +308,9 @@ func (c *Context) compileForm(o vm.Value) error {
 			}
 		}
 
+		tp := c.tailPosition
+		c.tailPosition = false
+
 		// treat as function invocation if this is not a special form
 		err := c.compileForm(fn)
 		if err != nil {
@@ -316,23 +327,25 @@ func (c *Context) compileForm(o vm.Value) error {
 			args = args.Next()
 		}
 
-		c.EmitWithArg(vm.OPINV, argc)
+		c.emitWithArg(vm.OPINV, argc)
 		c.decSP(argc)
+
+		c.tailPosition = tp
 	}
 	return nil
 }
 
-func (c *Context) EmitWithArgPlaceholder(inst uint8) int {
-	placeholder := c.CurrentAddress()
-	c.EmitWithArg(inst, 0)
+func (c *Context) emitWithArgPlaceholder(inst uint8) int {
+	placeholder := c.currentAddress()
+	c.emitWithArg(inst, 0)
 	return placeholder
 }
 
-func (c *Context) CurrentAddress() int {
+func (c *Context) currentAddress() int {
 	return c.chunk.Length()
 }
 
-func (c *Context) UpdatePlaceholderArg(placeholder int, arg int) {
+func (c *Context) updatePlaceholderArg(placeholder int, arg int) {
 	c.chunk.Update32(placeholder+1, arg)
 }
 
@@ -359,7 +372,7 @@ func (c *Context) decSP(i int) {
 	c.sp -= i
 }
 
-func (c *Context) LookupLocal(symbol vm.Symbol) int {
+func (c *Context) lookupLocal(symbol vm.Symbol) int {
 	if len(c.locals) < 1 {
 		return -1
 	}
@@ -370,6 +383,31 @@ func (c *Context) LookupLocal(symbol vm.Symbol) int {
 		}
 	}
 	return -1
+}
+
+type recurPoint struct {
+	address int
+	argsc   int
+}
+
+func (c *Context) pushRecurPoint(argsc int) {
+	c.recurPoints = append(c.recurPoints, &recurPoint{
+		address: c.currentAddress(),
+		argsc:   argsc,
+	})
+}
+
+func (c *Context) popRecurPoint() {
+	if len(c.recurPoints) > 0 {
+		c.recurPoints = c.recurPoints[:len(c.recurPoints)-1]
+	}
+}
+
+func (c *Context) currentRecurPoint() *recurPoint {
+	if len(c.recurPoints) > 0 {
+		return c.recurPoints[len(c.recurPoints)-1]
+	}
+	return nil
 }
 
 type formCompilerFunc func(*Context, vm.Value) error
@@ -385,7 +423,106 @@ func compilerInit() {
 		"quote": quoteCompiler,
 		"var":   varCompiler,
 		"let":   letCompiler,
+		"loop":  loopCompiler,
+		"recur": recurCompiler,
 	}
+}
+
+func recurCompiler(c *Context, form vm.Value) error {
+	if !c.tailPosition {
+		return NewCompileError("recur is only allowed in tail position")
+	}
+	rp := c.currentRecurPoint()
+
+	tp := c.tailPosition
+	c.tailPosition = false
+
+	args := form.(*vm.List).Next()
+	argc := args.(vm.Collection).Count().Unbox().(int)
+
+	if rp != nil {
+		if argc != rp.argsc {
+			return NewCompileError("recur argument count must match loop bindings count")
+		}
+	} else {
+		if !c.isFunction {
+			return NewCompileError("recur is only allowed inside loops and functions")
+		}
+		if argc != len(c.formalArgs) {
+			return NewCompileError("recur argument count must match function argument count")
+		}
+	}
+
+	for args != vm.EmptyList {
+		err := c.compileForm(args.First())
+		if err != nil {
+			return NewCompileError("compiling recur arguments").Wrap(err)
+		}
+		args = args.Next()
+	}
+
+	if !c.isFunction {
+		c.emitWithArg(vm.OPREC, c.currentAddress()-rp.address)
+		c.chunk.Append32(argc)
+	} else {
+		c.emitWithArg(vm.OPREF, argc)
+	}
+	c.tailPosition = tp
+	c.decSP(argc - 1) // this is needed to keep the balance of if branches
+	return nil
+}
+
+func loopCompiler(c *Context, form vm.Value) error {
+	bindings := form.(*vm.List).Next()
+	binds, ok := bindings.First().(vm.ArrayVector)
+	if !ok {
+		return NewCompileError("let bindings should be a vector")
+	}
+	body := bindings.Next()
+	c.pushLocals()
+	tp := c.tailPosition
+	c.tailPosition = false
+	bindn := 0
+	for i := 0; i < len(binds); i += 2 {
+		name := binds[i]
+		if name.Type() != vm.SymbolType {
+			return NewCompileError("loop binding name must be a symbol")
+		}
+		if i+1 >= len(binds) {
+			return NewCompileError("loop bindings must have even number of forms")
+		}
+		value := binds[i+1]
+		err := c.compileForm(value)
+		if err != nil {
+			return NewCompileError("compiling let binding").Wrap(err)
+		}
+		c.addLocal(name.(vm.Symbol))
+		bindn++
+	}
+	c.pushRecurPoint(bindn)
+	if body == vm.EmptyList {
+		c.emitWithArg(vm.OPLDC, c.constant(vm.NIL))
+		c.incSP(1)
+	} else {
+		for b := body; b != vm.EmptyList; b = b.Next() {
+			if b.Next() == vm.EmptyList {
+				c.tailPosition = true
+			}
+			err := c.compileForm(b.First())
+			if err != nil {
+				return NewCompileError("compiling let body").Wrap(err)
+			}
+			if b.Next() != vm.EmptyList {
+				c.emit(vm.OPPOP)
+				c.decSP(1)
+			}
+		}
+	}
+	c.popLocals()
+	c.emitWithArg(vm.OPPON, bindn)
+	c.decSP(bindn)
+	c.tailPosition = tp
+	return nil
 }
 
 func letCompiler(c *Context, form vm.Value) error {
@@ -396,6 +533,8 @@ func letCompiler(c *Context, form vm.Value) error {
 	}
 	body := bindings.Next()
 	c.pushLocals()
+	tc := c.tailPosition
+	c.tailPosition = false
 	bindn := 0
 	for i := 0; i < len(binds); i += 2 {
 		name := binds[i]
@@ -414,29 +553,33 @@ func letCompiler(c *Context, form vm.Value) error {
 		bindn++
 	}
 	if body == vm.EmptyList {
-		c.EmitWithArg(vm.OPLDC, c.Constant(vm.NIL))
+		c.emitWithArg(vm.OPLDC, c.constant(vm.NIL))
 		c.incSP(1)
 	} else {
 		for b := body; b != vm.EmptyList; b = b.Next() {
+			if tc && b.Next() == vm.EmptyList {
+				c.tailPosition = true
+			}
 			err := c.compileForm(b.First())
 			if err != nil {
 				return NewCompileError("compiling let body").Wrap(err)
 			}
 			if b.Next() != vm.EmptyList {
-				c.Emit(vm.OPPOP)
+				c.emit(vm.OPPOP)
 				c.decSP(1)
 			}
 		}
 	}
 	c.popLocals()
-	c.EmitWithArg(vm.OPPON, bindn)
+	c.emitWithArg(vm.OPPON, bindn)
 	c.decSP(bindn)
+	c.tailPosition = tc
 	return nil
 }
 
 func quoteCompiler(c *Context, form vm.Value) error {
-	n := c.Constant(form.(vm.Seq).Next().First())
-	c.EmitWithArg(vm.OPLDC, n)
+	n := c.constant(form.(vm.Seq).Next().First())
+	c.emitWithArg(vm.OPLDC, n)
 	c.incSP(1)
 	return nil
 }
@@ -446,18 +589,18 @@ func fnCompiler(c *Context, form vm.Value) error {
 
 	args := f.First().(vm.ArrayVector).Unbox().([]vm.Value)
 
-	fc, err := c.EnterFn(args)
+	fc, err := c.enterFn(args)
 	if err != nil {
 		return NewCompileError("compiling fn args").Wrap(err)
 	}
-	defer c.LeaveFn(fc)
+	defer c.leaveFn(fc)
 
 	body := f.(*vm.List).Next().Unbox().([]vm.Value)
 	l := len(body)
 	if l == 0 {
-		fc.EmitWithArg(vm.OPLDC, fc.Constant(vm.NIL))
+		fc.emitWithArg(vm.OPLDC, fc.constant(vm.NIL))
 		fc.incSP(1)
-		fc.Emit(vm.OPRET)
+		fc.emit(vm.OPRET)
 		return nil
 	}
 	for i := range body {
@@ -466,71 +609,90 @@ func fnCompiler(c *Context, form vm.Value) error {
 			return NewCompileError("compiling do member").Wrap(err)
 		}
 		if i < l-1 {
-			fc.Emit(vm.OPPOP)
+			fc.emit(vm.OPPOP)
 			fc.decSP(1)
 		}
 	}
-	fc.Emit(vm.OPRET)
+	fc.emit(vm.OPRET)
 
 	return nil
 }
 
 func ifCompiler(c *Context, form vm.Value) error {
+	tc := c.tailPosition
+	c.tailPosition = tc
+
 	args := form.(*vm.List).Next().Unbox().([]vm.Value)
 	l := len(args)
 	if l < 2 || l > 3 {
 		return NewCompileError(fmt.Sprintf("if: wrong number of forms (%d), need 2 or 3", l))
 	}
+	c.tailPosition = true
 	// compile condition
 	err := c.compileForm(args[0])
 	if err != nil {
 		return NewCompileError("compiling if condition").Wrap(err)
 	}
-	elseJumpStart := c.EmitWithArgPlaceholder(vm.OPBRF)
+	elseJumpStart := c.emitWithArgPlaceholder(vm.OPBRF)
+	c.decSP(1)
+	c.tailPosition = tc
+
 	// compile then branch
 	err = c.compileForm(args[1])
+	c.decSP(1)
+
 	if err != nil {
 		return NewCompileError("compiling if then branch").Wrap(err)
 	}
-	finJumpStart := c.EmitWithArgPlaceholder(vm.OPJMP)
-	elseJumpEnd := c.CurrentAddress()
-	c.UpdatePlaceholderArg(elseJumpStart, elseJumpEnd-elseJumpStart)
+	finJumpStart := c.emitWithArgPlaceholder(vm.OPJMP)
+	elseJumpEnd := c.currentAddress()
+	c.updatePlaceholderArg(elseJumpStart, elseJumpEnd-elseJumpStart)
 	if l == 3 {
 		err = c.compileForm(args[2])
+
 		if err != nil {
 			return NewCompileError("compiling if else branch").Wrap(err)
 		}
 	} else {
-		c.EmitWithArg(vm.OPLDC, c.Constant(vm.NIL))
+		c.emitWithArg(vm.OPLDC, c.constant(vm.NIL))
 		c.incSP(1)
 	}
-	finJumpEnd := c.CurrentAddress()
-	c.UpdatePlaceholderArg(finJumpStart, finJumpEnd-finJumpStart)
+	finJumpEnd := c.currentAddress()
+	c.updatePlaceholderArg(finJumpStart, finJumpEnd-finJumpStart)
 	return nil
 }
 
 func doCompiler(c *Context, form vm.Value) error {
 	args := form.(*vm.List).Next().Unbox().([]vm.Value)
 	l := len(args)
+	tc := c.tailPosition
+	c.tailPosition = false
 	if l == 0 {
-		c.EmitWithArg(vm.OPLDC, c.Constant(vm.NIL))
+		c.emitWithArg(vm.OPLDC, c.constant(vm.NIL))
 		c.incSP(1)
+		c.tailPosition = tc
 		return nil
 	}
 	for i := range args {
+		if tc && i == l-1 {
+			c.tailPosition = true
+		}
 		err := c.compileForm(args[i])
 		if err != nil {
 			return NewCompileError("compiling do member").Wrap(err)
 		}
 		if i < l-1 {
-			c.Emit(vm.OPPOP)
+			c.emit(vm.OPPOP)
 			c.decSP(1)
 		}
 	}
+	c.tailPosition = tc
 	return nil
 }
 
 func defCompiler(c *Context, form vm.Value) error {
+	tc := c.tailPosition
+	c.tailPosition = false
 	args := form.(*vm.List).Next().Unbox().([]vm.Value)
 	l := len(args)
 	if l != 2 {
@@ -541,22 +703,23 @@ func defCompiler(c *Context, form vm.Value) error {
 	if sym.Type() != vm.SymbolType {
 		return NewCompileError(fmt.Sprintf("def: first argument must be a symbol, got (%v)", sym))
 	}
-	varr := c.Constant(c.ns.LookupOrAdd(sym.(vm.Symbol)))
-	c.EmitWithArg(vm.OPLDC, varr)
+	varr := c.constant(c.ns.LookupOrAdd(sym.(vm.Symbol)))
+	c.emitWithArg(vm.OPLDC, varr)
 	c.incSP(1)
 	err := c.compileForm(val)
 	if err != nil {
 		return NewCompileError("compiling def value").Wrap(err)
 	}
-	c.Emit(vm.OPSTV)
+	c.emit(vm.OPSTV)
 	c.decSP(1)
+	c.tailPosition = tc
 	return nil
 }
 
 func varCompiler(c *Context, form vm.Value) error {
 	sym := form.(*vm.List).Next().First().(vm.Symbol)
-	varr := c.Constant(c.ns.LookupOrAdd(sym))
-	c.EmitWithArg(vm.OPLDC, varr)
+	varr := c.constant(c.ns.LookupOrAdd(sym))
+	c.emitWithArg(vm.OPLDC, varr)
 	c.incSP(1)
 	return nil
 }

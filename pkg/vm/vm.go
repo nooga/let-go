@@ -45,10 +45,31 @@ const (
 
 	OPLDK // load closed over LDK (index int32)
 	OPPAK // push closed over value to a closure
+
+	OPREC // loop recurse REC (offset int32, argc int32)
+	OPREF // function recurse REF (argc int32)
 )
 
 func OpcodeToString(op uint8) string {
-	ops := []string{"NOP", "LDC", "LDA", "INV", "RET", "BRT", "BRF", "JMP", "POP", "PON", "DPN", "STV", "LDV", "LDK", "PAK"}
+	ops := []string{
+		"NOP",
+		"LDC",
+		"LDA",
+		"INV",
+		"RET",
+		"BRT",
+		"BRF",
+		"JMP",
+		"POP",
+		"PON",
+		"DPN",
+		"STV",
+		"LDV",
+		"LDK",
+		"PAK",
+		"REC",
+		"REF",
+	}
 	if int(op) < len(ops) {
 		return ops[op]
 	}
@@ -82,7 +103,12 @@ func (c *CodeChunk) Debug() {
 	for i < len(c.code) {
 		op, _ := c.Get(i)
 		switch op {
-		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV, OPLDK:
+		case OPREC:
+			arg, _ := c.Get32(i + 1)
+			arg2, _ := c.Get32(i + 5)
+			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2)
+			i += 9
+		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV, OPLDK, OPREF:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 5
@@ -139,8 +165,6 @@ func (c *CodeChunk) SetMaxStack(max int) {
 	c.maxStack = max
 }
 
-const defaultStackSize = 32
-
 // Frame is a single interpreter context
 type Frame struct {
 	stack       []Value
@@ -152,6 +176,7 @@ type Frame struct {
 	code        *CodeChunk
 	ip          int
 	sp          int
+	debug       bool
 }
 
 func NewFrame(code *CodeChunk, args []Value) *Frame {
@@ -167,8 +192,9 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 	}
 }
 
-func (f *Frame) Push(v Value) error {
-	if f.sp >= defaultStackSize-1 {
+func (f *Frame) push(v Value) error {
+	if f.sp >= f.code.maxStack {
+		f.stackDbg()
 		return NewExecutionError("stack overflow")
 	}
 	f.stack[f.sp] = v
@@ -176,8 +202,23 @@ func (f *Frame) Push(v Value) error {
 	return nil
 }
 
-func (f *Frame) Pop() (Value, error) {
+func (f *Frame) pushMult(v []Value) error {
+	l := len(v)
+	if f.sp >= f.code.maxStack-l {
+		f.stackDbg()
+		return NewExecutionError("stack overflow")
+	}
+
+	for i := 0; i < l; i++ {
+		f.stack[f.sp] = v[i]
+		f.sp++
+	}
+	return nil
+}
+
+func (f *Frame) pop() (Value, error) {
 	if f.sp == 0 {
+		f.stackDbg()
 		return NIL, NewExecutionError("stack underflow")
 	}
 	f.sp--
@@ -186,33 +227,38 @@ func (f *Frame) Pop() (Value, error) {
 	return v, nil
 }
 
-func (f *Frame) Nth(n int) (Value, error) {
+func (f *Frame) nth(n int) (Value, error) {
 	i := f.sp - 1 - n
 	if i < 0 {
-		return NIL, NewExecutionError("Nth: stack underflow")
+		f.stackDbg()
+		return NIL, NewExecutionError("nth: stack underflow")
 	}
 	return f.stack[i], nil
 }
 
-func (f *Frame) Mult(start int, count int) ([]Value, error) {
+func (f *Frame) mult(start int, count int) ([]Value, error) {
 	if count < 0 {
-		return nil, NewExecutionError("Mult: count 0 or negative")
+		f.stackDbg()
+		return nil, NewExecutionError("mult: count 0 or negative")
 	}
 	i := f.sp - start
 	if i-count < 0 {
-		return nil, NewExecutionError("Mult: stack underflow")
+		f.stackDbg()
+		return nil, NewExecutionError("mult: stack underflow")
 	}
 	return f.stack[i-count : i], nil
 }
 
-func (f *Frame) Drop(n int) error {
+func (f *Frame) drop(n int) error {
 	top := f.sp - 1
 	if top < 0 {
-		return NewExecutionError("Drop: stack underflow")
+		f.stackDbg()
+		return NewExecutionError("drop: stack underflow")
 	}
 	f.sp -= n
 	if f.sp < 0 {
-		return NewExecutionError("Drop: stack underflow")
+		f.stackDbg()
+		return NewExecutionError("drop: stack underflow")
 	}
 	// for i := top; i >= f.sp; i-- {
 	// 	f.stack[i] = nil
@@ -220,10 +266,21 @@ func (f *Frame) Drop(n int) error {
 	return nil
 }
 
+func (f *Frame) stackDbg() {
+	for i := 0; i < f.sp; i++ {
+		fmt.Print(f.stack[i], " ")
+	}
+	fmt.Println()
+}
+
 func (f *Frame) Run() (Value, error) {
+	//fmt.Println("run", f.code.maxStack, f)
 	for {
 		inst, _ := f.code.Get(f.ip)
+		//if f.debug {
 		//	fmt.Println("exec", f.ip, OpcodeToString(inst))
+		//	f.stackDbg()
+		//}
 		switch inst {
 		case OPNOP:
 			f.ip++
@@ -236,7 +293,7 @@ func (f *Frame) Run() (Value, error) {
 			if idx >= f.constsc {
 				return NIL, NewExecutionError("const lookup out of bounds")
 			}
-			err = f.Push(f.consts[idx])
+			err = f.push(f.consts[idx])
 			if err != nil {
 				return NIL, NewExecutionError("const push failed").Wrap(err)
 			}
@@ -250,14 +307,14 @@ func (f *Frame) Run() (Value, error) {
 			if idx >= f.argc {
 				return NIL, NewExecutionError("argument lookup out of bounds")
 			}
-			err = f.Push(f.args[idx])
+			err = f.push(f.args[idx])
 			if err != nil {
 				return NIL, NewExecutionError("argument push failed").Wrap(err)
 			}
 			f.ip += 5
 
 		case OPRET:
-			v, err := f.Pop()
+			v, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("return failed").Wrap(err)
 			}
@@ -268,7 +325,7 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("INV arg count").Wrap(err)
 			}
-			fraw, err := f.Nth(arity)
+			fraw, err := f.nth(arity)
 			if err != nil {
 				return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
 			}
@@ -276,16 +333,16 @@ func (f *Frame) Run() (Value, error) {
 			if !ok {
 				return NIL, NewTypeError(fraw, "is not a function", nil)
 			}
-			a, err := f.Mult(0, arity)
+			a, err := f.mult(0, arity)
 			if err != nil {
 				return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 			}
 			out := fn.Invoke(a)
-			err = f.Drop(arity + 1)
+			err = f.drop(arity + 1)
 			if err != nil {
 				return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
 			}
-			err = f.Push(out)
+			err = f.push(out)
 			if err != nil {
 				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
 			}
@@ -296,7 +353,7 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("BRT offset").Wrap(err)
 			}
-			v, err := f.Pop()
+			v, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
 			}
@@ -311,7 +368,7 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("BRT offset").Wrap(err)
 			}
-			v, err := f.Pop()
+			v, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
 			}
@@ -329,14 +386,14 @@ func (f *Frame) Run() (Value, error) {
 			f.ip += offset
 
 		case OPPOP:
-			_, err := f.Pop()
+			_, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("POP failed").Wrap(err)
 			}
 			f.ip++
 
 		case OPPON:
-			v, err := f.Pop()
+			v, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("PON top value").Wrap(err)
 			}
@@ -344,11 +401,11 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("PON get argument").Wrap(err)
 			}
-			err = f.Drop(num)
+			err = f.drop(num)
 			if err != nil {
 				return NIL, NewExecutionError("PON drop").Wrap(err)
 			}
-			err = f.Push(v)
+			err = f.push(v)
 			if err != nil {
 				return NIL, NewExecutionError("PON push").Wrap(err)
 			}
@@ -359,22 +416,22 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("DPN get argument").Wrap(err)
 			}
-			val, err := f.Nth(num)
+			val, err := f.nth(num)
 			if err != nil {
 				return NIL, NewExecutionError("DPN get nth").Wrap(err)
 			}
-			err = f.Push(val)
+			err = f.push(val)
 			if err != nil {
 				return NIL, NewExecutionError("DPN push").Wrap(err)
 			}
 			f.ip += 5
 
 		case OPSTV:
-			val, err := f.Pop()
+			val, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("STV pop value failed").Wrap(err)
 			}
-			varr, err := f.Pop()
+			varr, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("STV pop var failed").Wrap(err)
 			}
@@ -383,7 +440,7 @@ func (f *Frame) Run() (Value, error) {
 				return NIL, NewExecutionError("STV invalid Var").Wrap(err)
 			}
 			varrd.SetRoot(val)
-			err = f.Push(varr)
+			err = f.push(varr)
 			if err != nil {
 				return NIL, NewExecutionError("STV push var failed").Wrap(err)
 			}
@@ -411,14 +468,14 @@ func (f *Frame) Run() (Value, error) {
 			if idx >= len(f.closedOvers) {
 				return NIL, NewExecutionError("closed over lookup out of bounds")
 			}
-			err = f.Push(f.closedOvers[idx])
+			err = f.push(f.closedOvers[idx])
 			if err != nil {
 				return NIL, NewExecutionError("closed over push failed").Wrap(err)
 			}
 			f.ip += 5
 
 		case OPPAK:
-			val, err := f.Pop()
+			val, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("popping closed over value failed").Wrap(err)
 			}
@@ -433,6 +490,44 @@ func (f *Frame) Run() (Value, error) {
 			fun := cls.(*Func)
 			fun.closedOvers = append(fun.closedOvers, val)
 			f.ip++
+
+		case OPREF:
+			arity, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("REF arg count").Wrap(err)
+			}
+			a, err := f.mult(0, arity)
+			if err != nil {
+				return NIL, NewExecutionError("popping arguments failed").Wrap(err)
+			}
+			copy(f.args, a)
+			f.argc = arity
+			f.sp = 0
+			f.ip = 0
+
+		case OPREC:
+			offset, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("REC reading offset").Wrap(err)
+			}
+			argc, err := f.code.Get32(f.ip + 5)
+			if err != nil {
+				return NIL, NewExecutionError("REC reading argc").Wrap(err)
+			}
+			a, err := f.mult(0, argc)
+			if err != nil {
+				return NIL, NewExecutionError("REC popping arguments failed").Wrap(err)
+			}
+			err = f.drop(argc * 2)
+			if err != nil {
+				return NIL, NewExecutionError("REC popping old locals").Wrap(err)
+			}
+			err = f.pushMult(a)
+			if err != nil {
+				return NIL, NewExecutionError("REC pushing new locals").Wrap(err)
+			}
+
+			f.ip -= offset
 
 		default:
 			return NIL, NewExecutionError("unknown instruction")
