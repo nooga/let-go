@@ -205,6 +205,7 @@ func (c *Context) leaveFn(ctx *Context) {
 
 	// if we have a closure on our hands then add closed overs
 	if ctx.isClosure {
+		c.emit(vm.OPMKC)
 		for _, clo := range ctx.closedOvers {
 			_ = clo.source().emit()
 			c.emit(vm.OPPAK)

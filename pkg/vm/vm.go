@@ -43,6 +43,7 @@ const (
 	OPSTV // set var
 	OPLDV // push var root
 
+	OPMKC // make a closure out of fn
 	OPLDK // load closed over LDK (index int32)
 	OPPAK // push closed over value to a closure
 
@@ -65,6 +66,7 @@ func OpcodeToString(op uint8) string {
 		"DPN",
 		"STV",
 		"LDV",
+		"MKC",
 		"LDK",
 		"PAK",
 		"REC",
@@ -108,7 +110,7 @@ func (c *CodeChunk) Debug() {
 			arg2, _ := c.Get32(i + 5)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2)
 			i += 9
-		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV, OPLDK, OPREF:
+		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV, OPLDK, OPREF, OPMKC:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 5
@@ -460,6 +462,18 @@ func (f *Frame) Run() (Value, error) {
 			f.stack[idx] = varr.Deref()
 			f.ip++
 
+		case OPMKC:
+			idx := f.sp - 1
+			if idx < 0 {
+				return NIL, NewExecutionError("MKC stack underflow")
+			}
+			fn, ok := f.stack[idx].(*Func)
+			if !ok {
+				return NIL, NewExecutionError("MKC invalid func on stack")
+			}
+			f.stack[idx] = fn.MakeClosure()
+			f.ip++
+
 		case OPLDK:
 			idx, err := f.code.Get32(f.ip + 1)
 			if err != nil {
@@ -488,7 +502,10 @@ func (f *Frame) Run() (Value, error) {
 			if cls.Type() != FuncType {
 				return NIL, NewExecutionError("PAK expected a Fn")
 			}
-			fun := cls.(*Func)
+			fun, ok := cls.(*Closure)
+			if !ok {
+				return NIL, NewExecutionError("PAK invalid closure on stack")
+			}
 			fun.closedOvers = append(fun.closedOvers, val)
 			f.ip++
 

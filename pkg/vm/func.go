@@ -39,7 +39,6 @@ type Func struct {
 	arity       int
 	isVariadric bool
 	chunk       *CodeChunk
-	closedOvers []Value
 }
 
 func MakeFunc(arity int, variadric bool, c *CodeChunk) *Func {
@@ -88,7 +87,6 @@ func (l *Func) Invoke(pargs []Value) Value {
 		args = append(sargs, restlist)
 	}
 	f := NewFrame(l.chunk, args)
-	f.closedOvers = l.closedOvers
 	// FIXME don't swallow the error, make invoke return an error
 	v, _ := f.Run()
 	return v
@@ -96,4 +94,63 @@ func (l *Func) Invoke(pargs []Value) Value {
 
 func (l *Func) String() string {
 	return fmt.Sprintf("<fn %p>", l)
+}
+
+func (l *Func) MakeClosure() Fn {
+	return &Closure{
+		closedOvers: nil,
+		fn:          l,
+	}
+}
+
+type Closure struct {
+	closedOvers []Value
+	fn          *Func
+}
+
+func (l *Closure) Type() ValueType { return FuncType }
+
+// Unbox implements Unbox
+func (l *Closure) Unbox() interface{} {
+	proxy := func(in []reflect.Value) []reflect.Value {
+		args := make([]Value, len(in))
+		for i := range in {
+			a, _ := BoxValue(in[i]) // FIXME handle error
+			args[i] = a
+		}
+		f := NewFrame(l.fn.chunk, args)
+		f.closedOvers = l.closedOvers
+		out, _ := f.Run() // FIXME handle error
+		return []reflect.Value{reflect.ValueOf(out.Unbox())}
+	}
+	return func(fptr interface{}) {
+		fn := reflect.ValueOf(fptr).Elem()
+		v := reflect.MakeFunc(fn.Type(), proxy)
+		fn.Set(v)
+	}
+}
+
+func (l *Closure) Arity() int {
+	return l.fn.arity
+}
+
+func (l *Closure) Invoke(pargs []Value) Value {
+	args := pargs
+	if l.fn.isVariadric {
+		// pretty sure variadric should guarantee arity >= 1
+		sargs := args[0 : l.fn.arity-1]
+		rest := args[l.fn.arity-1:]
+		// FIXME don't swallow the error, make invoke return an error
+		restlist, _ := ListType.Box(rest)
+		args = append(sargs, restlist)
+	}
+	f := NewFrame(l.fn.chunk, args)
+	f.closedOvers = l.closedOvers
+	// FIXME don't swallow the error, make invoke return an error
+	v, _ := f.Run()
+	return v
+}
+
+func (l *Closure) String() string {
+	return l.fn.String()
 }
