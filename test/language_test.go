@@ -28,7 +28,7 @@ import (
 )
 
 func runFile(filename string) error {
-	ns := rt.NS("lang")
+	ns := rt.NS(rt.NameCoreNS)
 	if ns == nil {
 		fmt.Println("namespace not found")
 		return nil

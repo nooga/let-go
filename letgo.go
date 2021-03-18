@@ -60,9 +60,10 @@ func repl(ctx *compiler.Context) {
 		val, err := runForm(ctx, in)
 		if err != nil {
 			fmt.Println(err)
-			continue
+		} else {
+			fmt.Println(val.String())
 		}
-		fmt.Println(val.String())
+		prompt = ctx.CurrentNS().Name() + "=> "
 		fmt.Print(prompt)
 	}
 
@@ -101,7 +102,7 @@ func init() {
 }
 
 func initCompiler() *compiler.Context {
-	ns := rt.NS("lang")
+	ns := rt.NS("user")
 	if ns == nil {
 		fmt.Println("namespace not found")
 		return nil

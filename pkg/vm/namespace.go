@@ -17,17 +17,46 @@
 
 package vm
 
-import "fmt"
+import (
+	"fmt"
+)
+
+type theNamespaceType struct{}
+
+func (t *theNamespaceType) Name() string { return "Namespace" }
+func (t *theNamespaceType) Box(fn interface{}) (Value, error) {
+	return NIL, NewTypeError(fn, "can't be boxed as", t)
+}
+
+var NamespaceType *theNamespaceType
+
+func init() {
+	NamespaceType = &theNamespaceType{}
+}
+
+type Refer struct {
+	ns  *Namespace
+	all bool
+}
 
 type Namespace struct {
 	name     string
 	registry map[Symbol]*Var
+	refers   map[Symbol]*Refer
+}
+
+func (n *Namespace) Type() ValueType { return NamespaceType }
+
+// Unbox implements Unbox
+func (n *Namespace) Unbox() interface{} {
+	return nil
 }
 
 func NewNamespace(name string) *Namespace {
 	return &Namespace{
 		name:     name,
 		registry: map[Symbol]*Var{},
+		refers:   map[Symbol]*Refer{},
 	}
 }
 
@@ -48,11 +77,38 @@ func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 }
 
 func (n *Namespace) Lookup(symbol Symbol) Value {
-	val, ok := n.registry[symbol]
-	if !ok {
+	sns, sym := symbol.Namespaced()
+	if sns == NIL {
+		v := n.registry[sym.(Symbol)]
+		if v == nil {
+			for _, ref := range n.refers {
+				v = ref.ns.registry[sym.(Symbol)]
+				if v != nil {
+					return v
+				}
+			}
+		}
+		if v == nil {
+			return NIL
+		}
+		return v
+	}
+	refer := n.refers[sns.(Symbol)]
+	if refer == nil {
 		return NIL
 	}
-	return val
+	return refer.ns.registry[sym.(Symbol)]
+}
+
+func (n *Namespace) Refer(ns *Namespace, alias string, all bool) {
+	nom := ns.Name()
+	if alias != "" {
+		nom = alias
+	}
+	n.refers[Symbol(nom)] = &Refer{
+		all: all,
+		ns:  ns,
+	}
 }
 
 func (n *Namespace) Name() string {

@@ -24,7 +24,7 @@ import (
 )
 
 func Eval(src string) (vm.Value, error) {
-	ns := rt.NS("lang")
+	ns := rt.NS(rt.NameCoreNS)
 	compiler := NewCompiler(ns)
 
 	_, out, err := compiler.CompileMultiple(strings.NewReader(src))

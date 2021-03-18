@@ -17,7 +17,10 @@
 
 package vm
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type theSymbolType struct {
 	zero Symbol
@@ -53,4 +56,12 @@ func (l Symbol) Unbox() interface{} {
 
 func (l Symbol) String() string {
 	return string(l)
+}
+
+func (l Symbol) Namespaced() (Value, Value) {
+	x := strings.Split(string(l), "/")
+	if len(x) == 2 {
+		return Symbol(x[0]), Symbol(x[1])
+	}
+	return NIL, Symbol(x[0])
 }

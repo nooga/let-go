@@ -33,6 +33,12 @@
         (list 'if (first forms) (second forms)
               (cons 'cond (next (next forms))))))
 
+
+(defmacro ns [n & nss]
+  (let [cns (list 'in-ns (list 'quote n))
+        imports (cons 'use nss)] ; FIXME this is totally broken
+  (list 'do cns imports)))
+
 ; makeshift test helper
 (defmacro test [name & body]
   (let [bod (cons 'do body)

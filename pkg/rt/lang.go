@@ -33,7 +33,7 @@ func init() {
 }
 
 func NS(name string) *vm.Namespace {
-	return nsRegistry[name]
+	return LookupOrRegisterNS(name)
 }
 
 func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
@@ -41,8 +41,23 @@ func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
 	return namespace
 }
 
+func LookupOrRegisterNS(name string) *vm.Namespace {
+	e := nsRegistry[name]
+	if e != nil {
+		return e
+	}
+	nsRegistry[name] = vm.NewNamespace(name)
+	nsRegistry[name].Refer(CoreNS, "", true)
+	return nsRegistry[name]
+}
+
 //go:embed core/core.lg
 var CoreSrc string
+
+const NameCoreNS = "core"
+
+var CoreNS *vm.Namespace
+var CurrentNS *vm.Var
 
 //nolint
 func installLangNS() {
@@ -220,11 +235,47 @@ func installLangNS() {
 		return vm.NIL
 	})
 
+	inNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME handle error
+			return vm.NIL
+		}
+		sym := vs[0]
+		if sym.Type() != vm.SymbolType {
+			// FIXME handle error
+			return vm.NIL
+		}
+		nns := LookupOrRegisterNS(string(sym.(vm.Symbol)))
+		CurrentNS.SetRoot(nns)
+		return nns
+	})
+
+	use, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) < 1 {
+			// FIXME handle error
+			return vm.NIL
+		}
+		cns := CurrentNS.Deref().(*vm.Namespace)
+		for i := range vs {
+			s, ok := vs[i].(vm.Symbol)
+			if !ok {
+				return vm.NIL
+			}
+			cns.Refer(NS(string(s)), "", true)
+		}
+		return vm.NIL
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
 
-	ns := vm.NewNamespace("lang")
+	ns := vm.NewNamespace(NameCoreNS)
+
+	// vars
+	CurrentNS = ns.Def("*ns*", ns)
+
+	// primitive fns
 	ns.Def("+", plus)
 	ns.Def("*", mul)
 	ns.Def("-", sub)
@@ -235,6 +286,8 @@ func installLangNS() {
 	ns.Def("lt", lt)
 
 	ns.Def("set-macro!", setMacro)
+	ns.Def("in-ns", inNs)
+	ns.Def("use", use)
 
 	ns.Def("vector", vector)
 	ns.Def("list", list)
@@ -244,6 +297,8 @@ func installLangNS() {
 	ns.Def("next", next)
 
 	ns.Def("println", printlnf)
+
+	CoreNS = ns
 
 	RegisterNS(ns)
 }

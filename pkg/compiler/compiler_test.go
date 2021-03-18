@@ -93,7 +93,7 @@ func TestContext_CompileMultiple(t *testing.T) {
 			(def hey! (fn [a _ b] (+ a b)))
 			(println (hey! (double parens) 'equals (double fun)))`
 
-	ns := rt.NS("lang")
+	ns := rt.NS(rt.NameCoreNS)
 	assert.NotNil(t, ns)
 	ctx := NewCompiler(ns)
 
@@ -105,7 +105,7 @@ func TestContext_CompileMultiple(t *testing.T) {
 }
 
 func TestContext_CompileVar(t *testing.T) {
-	v := vm.NewVar(rt.NS("lang"), "lang", "foo")
+	v := vm.NewVar(rt.NS(rt.NameCoreNS), rt.NameCoreNS, "foo")
 
 	out, err := Eval("(var foo)")
 	assert.NoError(t, err)

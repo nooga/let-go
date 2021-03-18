@@ -19,13 +19,13 @@ package compiler
 
 import (
 	"fmt"
+	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 	"io"
 	"strings"
 )
 
 type Context struct {
-	ns           *vm.Namespace
 	parent       *Context
 	consts       *[]vm.Value
 	chunk        *vm.CodeChunk
@@ -51,8 +51,8 @@ func init() {
 }
 
 func NewCompiler(ns *vm.Namespace) *Context {
+	rt.CurrentNS.SetRoot(ns)
 	return &Context{
-		ns:          ns,
 		consts:      globalConsts,
 		source:      "<default>",
 		locals:      []map[vm.Symbol]int{},
@@ -66,7 +66,7 @@ func (c *Context) SetSource(source string) *Context {
 }
 
 func (c *Context) CurrentNS() *vm.Namespace {
-	return c.ns
+	return rt.CurrentNS.Deref().(*vm.Namespace)
 }
 
 func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
@@ -159,7 +159,6 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 	fchunk := vm.NewCodeChunk(c.consts)
 
 	fc := &Context{
-		ns:           c.ns,
 		parent:       c,
 		consts:       c.consts,
 		chunk:        fchunk,
@@ -264,8 +263,12 @@ func (c *Context) compileForm(o vm.Value) error {
 		if cel != nil {
 			return cel.emit()
 		}
-		// if symbol not found so far then we have a free variable on our hands
-		varn := c.constant(c.ns.LookupOrAdd(o.(vm.Symbol)))
+		// when symbol not found so far we have a free variable on our hands
+		v := c.CurrentNS().Lookup(o.(vm.Symbol))
+		if v == vm.NIL {
+			return NewCompileError("Can't resolve " + string(o.(vm.Symbol)) + " in this context")
+		}
+		varn := c.constant(v)
 		c.emitWithArg(vm.OPLDC, varn)
 		c.emit(vm.OPLDV)
 		c.incSP(1)
@@ -280,7 +283,7 @@ func (c *Context) compileForm(o vm.Value) error {
 			c.incSP(1)
 			return nil
 		}
-		vector := c.constant(c.ns.LookupOrAdd("vector"))
+		vector := c.constant(rt.CoreNS.Lookup("vector"))
 		c.emitWithArg(vm.OPLDC, vector)
 		c.incSP(1)
 		for i := range v {
@@ -301,10 +304,10 @@ func (c *Context) compileForm(o vm.Value) error {
 				return formCompiler(c, o)
 			}
 
-			fvar, ok := c.ns.Lookup(fn.(vm.Symbol)).(*vm.Var)
-			if ok && fvar.IsMacro() {
+			fvar := c.CurrentNS().Lookup(fn.(vm.Symbol))
+			if fvar != vm.NIL && fvar.(*vm.Var).IsMacro() {
 				argvec := o.(*vm.List).Next().(*vm.List).Unbox().([]vm.Value)
-				newform := fvar.Invoke(argvec)
+				newform := fvar.(*vm.Var).Invoke(argvec)
 				return c.compileForm(newform)
 			}
 		}
@@ -462,7 +465,7 @@ func recurCompiler(c *Context, form vm.Value) error {
 		args = args.Next()
 	}
 
-	if !c.isFunction {
+	if !c.isFunction && rp != nil {
 		c.emitWithArg(vm.OPREC, c.currentAddress()-rp.address)
 		c.chunk.Append32(argc)
 	} else {
@@ -705,7 +708,7 @@ func defCompiler(c *Context, form vm.Value) error {
 	if sym.Type() != vm.SymbolType {
 		return NewCompileError(fmt.Sprintf("def: first argument must be a symbol, got (%v)", sym))
 	}
-	varr := c.constant(c.ns.LookupOrAdd(sym.(vm.Symbol)))
+	varr := c.constant(c.CurrentNS().LookupOrAdd(sym.(vm.Symbol)))
 	c.emitWithArg(vm.OPLDC, varr)
 	c.incSP(1)
 	err := c.compileForm(val)
@@ -720,7 +723,7 @@ func defCompiler(c *Context, form vm.Value) error {
 
 func varCompiler(c *Context, form vm.Value) error {
 	sym := form.(*vm.List).Next().First().(vm.Symbol)
-	varr := c.constant(c.ns.LookupOrAdd(sym))
+	varr := c.constant(c.CurrentNS().LookupOrAdd(sym))
 	c.emitWithArg(vm.OPLDC, varr)
 	c.incSP(1)
 	return nil
