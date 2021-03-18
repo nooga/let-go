@@ -33,11 +33,6 @@ Here are the non goals:
 
 Can compile and eval basic Clojure flavored lisp.
 
-#### Notable features
-- ✅ macros
-- ✅ vars
-- ✅ can compile and run Y Combinator
-
 #### The most impressive snippet so far
 
 ```clojure
