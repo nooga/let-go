@@ -295,6 +295,33 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.emitWithArg(vm.OPINV, len(v))
 		c.decSP(len(v) + 1)
 		c.tailPosition = tp
+	case vm.MapType:
+		tp := c.tailPosition
+		c.tailPosition = false
+		v := o.(vm.Map)
+		// FIXME detect const maps and push them like this
+		if len(v) == 0 {
+			n := c.constant(v)
+			c.emitWithArg(vm.OPLDC, n)
+			c.incSP(1)
+			return nil
+		}
+		hashMap := c.constant(rt.CoreNS.Lookup("hash-map"))
+		c.emitWithArg(vm.OPLDC, hashMap)
+		c.incSP(1)
+		for k, val := range v {
+			err := c.compileForm(k)
+			if err != nil {
+				return NewCompileError("compiling map key").Wrap(err)
+			}
+			err = c.compileForm(val)
+			if err != nil {
+				return NewCompileError("compiling map value").Wrap(err)
+			}
+		}
+		c.emitWithArg(vm.OPINV, len(v)*2)
+		c.decSP(len(v)*2 + 1)
+		c.tailPosition = tp
 	case vm.ListType:
 		fn := o.(*vm.List).First()
 		// check if we're looking at a special form

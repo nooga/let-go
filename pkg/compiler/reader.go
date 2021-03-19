@@ -376,6 +376,31 @@ func readVector(r *LispReader, _ rune) (vm.Value, error) {
 	return vm.ArrayVector(ret), nil
 }
 
+func readMap(r *LispReader, _ rune) (vm.Value, error) {
+	ret := make([]vm.Value, 0)
+	for {
+		ch2, err := r.eatWhitespace()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		if ch2 == '}' {
+			break
+		}
+		if err = r.unread(); err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		form, err := r.Read()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		ret = appendNonVoid(ret, form)
+	}
+	if len(ret)%2 != 0 {
+		return vm.NIL, NewReaderError(r, "map literal must contain even number of forms")
+	}
+	return vm.NewMap(ret), nil
+}
+
 func readQuote(r *LispReader, _ rune) (vm.Value, error) {
 	form, err := r.Read()
 	if err != nil {
@@ -452,6 +477,8 @@ func readerInit() {
 		')':  unmatchedDelimReader(')'),
 		'[':  readVector,
 		']':  unmatchedDelimReader(']'),
+		'{':  readMap,
+		'}':  unmatchedDelimReader('}'),
 		'"':  readString,
 		'\\': readChar,
 		'\'': readQuote,

@@ -158,6 +158,34 @@ func installLangNS() {
 
 	vector, err := vm.NativeFnType.Wrap(vm.NewArrayVector)
 	list, err := vm.NativeFnType.Wrap(vm.NewList)
+	hashMap, err := vm.NativeFnType.Wrap(vm.NewMap)
+
+	assoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 3 {
+			// FIXME error out
+			return vm.NIL
+		}
+		seq, ok := vs[0].(vm.Associative)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		return seq.Assoc(vs[1], vs[2])
+	})
+
+	dissoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME error out
+			return vm.NIL
+		}
+		seq, ok := vs[0].(vm.Associative)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		key := vs[1]
+		return seq.Dissoc(key)
+	})
 
 	cons, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		if len(vs) != 2 {
@@ -290,7 +318,11 @@ func installLangNS() {
 	ns.Def("use", use)
 
 	ns.Def("vector", vector)
+	ns.Def("hash-map", hashMap)
 	ns.Def("list", list)
+
+	ns.Def("assoc", assoc)
+	ns.Def("dissoc", dissoc)
 	ns.Def("cons", cons)
 	ns.Def("first", first)
 	ns.Def("second", second)

@@ -47,6 +47,8 @@ func TestContext_Compile(t *testing.T) {
 		`[1 2 (+ 1 2)]`:                         []vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)},
 		`'foo`:                                  "foo",
 		`(quote foo)`:                           "foo",
+		`{}`:                                    map[vm.Value]vm.Value{},
+		`{:a 1}`:                                map[vm.Value]vm.Value{vm.Keyword("a"): vm.Int(1)},
 	}
 	for k, v := range tests {
 		out, err := Eval(k)

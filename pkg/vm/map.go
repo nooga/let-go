@@ -17,91 +17,129 @@
 
 package vm
 
-import (
-	"strings"
-)
+import "strings"
 
-type theArrayVectorType struct{}
+type theMapType struct{}
 
-func (lt *theArrayVectorType) Name() string { return "ArrayVector" }
+func (lt *theMapType) Name() string { return "Map" }
 
-func (lt *theArrayVectorType) Box(bare interface{}) (Value, error) {
-	arr, ok := bare.([]Value)
+func (lt *theMapType) Box(bare interface{}) (Value, error) {
+	casted, ok := bare.(map[Value]Value)
 	if !ok {
 		return NIL, NewTypeError(bare, "can't be boxed as", lt)
 	}
 
-	return ArrayVector(arr), nil
+	return Map(casted), nil
 }
 
 // ArrayVectorType is the type of ArrayVectors
-var ArrayVectorType *theArrayVectorType
+var MapType *theMapType
 
 func init() {
-	ArrayVectorType = &theArrayVectorType{}
+	MapType = &theMapType{}
 }
 
-// ArrayVector is boxed singly linked list that can hold other Values.
-type ArrayVector []Value
+// Map is boxed singly linked list that can hold other Values.
+type Map map[Value]Value
 
 // Type implements Value
-func (l ArrayVector) Type() ValueType { return ArrayVectorType }
+func (l Map) Type() ValueType { return MapType }
 
 // Unbox implements Value
-func (l ArrayVector) Unbox() interface{} {
-	return []Value(l)
+func (l Map) Unbox() interface{} {
+	return map[Value]Value(l)
 }
 
 // First implements Seq
-func (l ArrayVector) First() Value {
+func (l Map) First() Value {
 	if len(l) == 0 {
 		return NIL
 	}
-	return l[0]
+	for k, v := range l {
+		return ArrayVector{k, v}
+	}
+	return NIL // unreachable
+}
+
+func toList(l Map) *List {
+	var lst []Value
+	for k, v := range l {
+		lst = append(lst, ArrayVector{k, v})
+	}
+	ret, _ := ListType.Box(lst)
+	return ret.(*List)
 }
 
 // More implements Seq
-func (l ArrayVector) More() Seq {
+func (l Map) More() Seq {
 	if len(l) == 1 {
-		return ArrayVector{}
+		return EmptyList
 	}
-	return l[1:]
+	ret := toList(l)
+	return ret.More()
 }
 
 // Next implements Seq
-func (l ArrayVector) Next() Seq {
+func (l Map) Next() Seq {
 	return l.More()
 }
 
 // Cons implements Seq
-func (l ArrayVector) Cons(val Value) Seq {
-	return append(l, val)
+func (l Map) Cons(val Value) Seq {
+	return toList(l).Cons(val)
 }
 
 // Count implements Collection
-func (l ArrayVector) Count() Value {
+func (l Map) Count() Value {
 	return Int(len(l))
 }
 
 // Empty implements Collection
-func (l ArrayVector) Empty() Collection {
-	return make(ArrayVector, 0)
+func (l Map) Empty() Collection {
+	return make(Map)
 }
 
-func NewArrayVector(v []Value) Value {
-	return ArrayVector(v)
+func (l Map) Assoc(k Value, v Value) Associative {
+	l[k] = v
+	return l
 }
 
-func (l ArrayVector) String() string {
+func (l Map) Dissoc(k Value) Associative {
+	// lol, unsure why this assign to nil is needed but it crashes without :D
+	l[k] = nil
+	delete(l, k)
+	return l
+}
+
+func NewMap(v []Value) Value {
+	if len(v) == 0 {
+		return make(Map)
+	}
+	if len(v)%2 != 0 {
+		// FIXME this is an error
+		return NIL
+	}
+	newmap := make(Map)
+	for i := 0; i < len(v); i += 2 {
+		newmap[v[i]] = v[i+1]
+	}
+	return Map(newmap)
+}
+
+func (l Map) String() string {
 	b := &strings.Builder{}
-	b.WriteRune('[')
+	b.WriteRune('{')
+	i := 0
 	n := len(l)
-	for i := range l {
-		b.WriteString(l[i].String())
+	for k, v := range l {
+		b.WriteString(k.String())
+		b.WriteRune(' ')
+		b.WriteString(v.String())
 		if i < n-1 {
 			b.WriteRune(' ')
 		}
+		i++
 	}
-	b.WriteRune(']')
+	b.WriteRune('}')
 	return b.String()
 }

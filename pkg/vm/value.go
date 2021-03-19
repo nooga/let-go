@@ -57,6 +57,12 @@ type Fn interface {
 	Arity() int
 }
 
+type Associative interface {
+	Value
+	Assoc(Value, Value) Associative
+	Dissoc(Value) Associative
+}
+
 func BoxValue(v reflect.Value) (Value, error) {
 	if v.CanInterface() {
 		rv, ok := v.Interface().(Value)
