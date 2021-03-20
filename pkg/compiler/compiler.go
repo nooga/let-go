@@ -75,7 +75,7 @@ func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	c.spMax = 0
 	c.chunk = vm.NewCodeChunk(c.consts)
 	err = c.compileForm(o)
 	c.chunk.SetMaxStack(c.spMax)
@@ -105,6 +105,7 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 		}
 		formchunk := vm.NewCodeChunk(c.consts)
 		c.chunk = formchunk
+		c.spMax = 0
 		err = c.compileForm(o)
 		c.chunk.SetMaxStack(c.spMax)
 		if err != nil {
@@ -254,7 +255,7 @@ func (c *Context) symbolLookup(s vm.Symbol) cell {
 
 func (c *Context) compileForm(o vm.Value) error {
 	switch o.Type() {
-	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType:
+	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType:
 		n := c.constant(o)
 		c.emitWithArg(vm.OPLDC, n)
 		c.incSP(1)
