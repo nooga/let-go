@@ -20,6 +20,7 @@ package compiler
 import (
 	"bufio"
 	"fmt"
+	"github.com/nooga/let-go/pkg/rt"
 	"io"
 	"strconv"
 	"strings"
@@ -134,7 +135,20 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 	}
 	ss := string(s)
 	if ss[0] == ':' {
-		return vm.Keyword(ss[1:]), nil
+		nom := ss[1:]
+		if nom[0] == ':' {
+			// we've got a namespaced keyword
+			onom := nom[1:]
+			if strings.ContainsAny(onom, ":/") {
+				return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
+			}
+			// FIXME figure out if we want this here or rather  in the compiler
+			nom = rt.CurrentNS.Deref().(*vm.Namespace).Name() + "/" + onom
+		}
+		if strings.ContainsAny(nom, ":") {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
+		}
+		return vm.Keyword(nom), nil
 	}
 	if ss == "nil" {
 		return vm.NIL, nil
