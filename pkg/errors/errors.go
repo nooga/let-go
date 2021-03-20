@@ -25,6 +25,20 @@ type Error interface {
 	GetCause() error
 }
 
+func IsCausedBy(me error, e error) bool {
+	if me == nil {
+		return false
+	}
+	if me == e {
+		return true
+	}
+	mec, ok := me.(Error)
+	if !ok {
+		return false
+	}
+	return IsCausedBy(mec.GetCause(), e)
+}
+
 func AddCause(e Error, s string) string {
 	cause := e.GetCause()
 	if cause == nil {

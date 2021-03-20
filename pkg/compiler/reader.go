@@ -20,6 +20,7 @@ package compiler
 import (
 	"bufio"
 	"fmt"
+	"github.com/nooga/let-go/pkg/errors"
 	"github.com/nooga/let-go/pkg/rt"
 	"io"
 	"strconv"
@@ -35,6 +36,7 @@ type LispReader struct {
 	pos       int
 	line      int
 	column    int
+	lastCol   int
 	lastRune  rune
 	r         *bufio.Reader
 }
@@ -48,9 +50,11 @@ func NewLispReader(r io.Reader, inputName string) *LispReader {
 
 func (r *LispReader) next() (rune, error) {
 	c, _, err := r.r.ReadRune()
-	if err != nil {
+	if err == nil {
 		if c == '\n' {
 			r.line++
+			r.lastCol = r.column
+			r.column = 0
 		} else {
 			r.column++
 		}
@@ -62,10 +66,11 @@ func (r *LispReader) next() (rune, error) {
 
 func (r *LispReader) unread() error {
 	err := r.r.UnreadRune()
-	if err != nil {
+	if err == nil {
 		r.pos--
 		if r.lastRune == '\n' {
 			r.line--
+			r.column = r.lastCol
 		} else {
 			r.column--
 		}
@@ -519,7 +524,7 @@ func readLineComment(r *LispReader, _ rune) (vm.Value, error) {
 }
 func readFormComment(r *LispReader, _ rune) (vm.Value, error) {
 	_, err := r.Read()
-	if err == io.EOF {
+	if errors.IsCausedBy(err, io.EOF) {
 		return vm.NIL, err
 	}
 	return vm.VOID, nil
