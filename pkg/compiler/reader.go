@@ -502,6 +502,7 @@ func readerInit() {
 
 	hashMacros = map[rune]readerFunc{
 		'\'': readVarQuote,
+		'_':  readFormComment,
 	}
 }
 
@@ -515,4 +516,11 @@ func readLineComment(r *LispReader, _ rune) (vm.Value, error) {
 			return vm.NIL, NewReaderError(r, "unexpected error while reading line comment").Wrap(err)
 		}
 	}
+}
+func readFormComment(r *LispReader, _ rune) (vm.Value, error) {
+	_, err := r.Read()
+	if err == io.EOF {
+		return vm.NIL, err
+	}
+	return vm.VOID, nil
 }
