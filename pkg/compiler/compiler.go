@@ -75,7 +75,7 @@ func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.spMax = 0
+	c.resetSP()
 	c.chunk = vm.NewCodeChunk(c.consts)
 	err = c.compileForm(o)
 	c.chunk.SetMaxStack(c.spMax)
@@ -105,7 +105,7 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 		}
 		formchunk := vm.NewCodeChunk(c.consts)
 		c.chunk = formchunk
-		c.spMax = 0
+		c.resetSP()
 		err = c.compileForm(o)
 		c.chunk.SetMaxStack(c.spMax)
 		if err != nil {
@@ -402,6 +402,11 @@ func (c *Context) incSP(i int) {
 
 func (c *Context) decSP(i int) {
 	c.sp -= i
+}
+
+func (c *Context) resetSP() {
+	c.sp = 0
+	c.spMax = 0
 }
 
 func (c *Context) lookupLocal(symbol vm.Symbol) int {

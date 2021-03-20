@@ -100,15 +100,25 @@ func (l Map) Empty() Collection {
 }
 
 func (l Map) Assoc(k Value, v Value) Associative {
-	l[k] = v
-	return l
+	// FIXME implement persistent maps :P
+	newmap := make(Map)
+	for ok, ov := range l {
+		newmap[ok] = ov
+	}
+	newmap[k] = v
+	return newmap
 }
 
 func (l Map) Dissoc(k Value) Associative {
-	// lol, unsure why this assign to nil is needed but it crashes without :D
-	l[k] = nil
-	delete(l, k)
-	return l
+	// FIXME implement persistent maps :P
+	newmap := make(Map)
+	for ok, ov := range l {
+		if ok == k {
+			continue
+		}
+		newmap[ok] = ov
+	}
+	return newmap
 }
 
 func NewMap(v []Value) Value {

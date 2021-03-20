@@ -95,11 +95,11 @@ func NewCodeChunk(consts *[]Value) *CodeChunk {
 }
 
 func (c *CodeChunk) Debug() {
-	fmt.Println("consts:")
+	//fmt.Println("consts:")
 	consts := *c.consts
-	for i := range consts {
-		fmt.Println("  [", i, "] =", consts[i])
-	}
+	//for i := range consts {
+	//	fmt.Println("  [", i, "] =", consts[i])
+	//}
 	fmt.Println("code:")
 	i := 0
 	for i < len(c.code) {
@@ -110,9 +110,13 @@ func (c *CodeChunk) Debug() {
 			arg2, _ := c.Get32(i + 5)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2)
 			i += 9
-		case OPLDC, OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV, OPLDK, OPREF, OPMKC:
+		case OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV, OPLDK, OPREF, OPMKC:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
+			i += 5
+		case OPLDC:
+			arg, _ := c.Get32(i + 1)
+			fmt.Println("  ", i, ":", OpcodeToString(op), arg, "<-", consts[arg])
 			i += 5
 		default:
 			fmt.Println("  ", i, ":", OpcodeToString(op))
@@ -268,6 +272,7 @@ func (f *Frame) drop(n int) error {
 }
 
 func (f *Frame) stackDbg() {
+	fmt.Printf("VM stack [%d/%d]: ", f.sp, f.code.maxStack)
 	for i := 0; i < f.sp; i++ {
 		fmt.Print(f.stack[i], " ")
 	}
@@ -275,7 +280,8 @@ func (f *Frame) stackDbg() {
 }
 
 func (f *Frame) Run() (Value, error) {
-	//fmt.Println("run", f.code.maxStack, f)
+	//fmt.Print("run")
+	//f.code.Debug()
 	for {
 		inst, _ := f.code.Get(f.ip)
 		//if f.debug {
