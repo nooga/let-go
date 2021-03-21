@@ -49,6 +49,8 @@
                    (list 'println "  \u001b[31mFAIL\u001b[0m" name))]
     (list 'if bod pass fail)))
 
+(defn identity [x] x)
+
 (def > gt)
 (def < lt)
 
@@ -61,3 +63,17 @@
 
 (defn inc [x] (+ x 1))
 (defn dec [x] (- x 1))
+
+;; bleh
+(defn list? [x] (= (type x) (type '())))
+
+(defmacro -> [initial & forms]
+  (if (zero? (count forms))
+    initial
+    (reduce (fn [x a]
+              (if (list? x)
+                (let [f (first x) r (next x)]
+                  (cons f (cons a r)))
+                (list x a)))
+            initial
+            forms)))
