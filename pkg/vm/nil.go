@@ -31,6 +31,14 @@ func (t *theNilType) Box(_ interface{}) (Value, error) { return t.zero, nil }
 // Nil is a Value whose only value is Nil
 type Nil struct{}
 
+func (n *Nil) Count() Value {
+	return Int(0)
+}
+
+func (n *Nil) Empty() Collection {
+	return n
+}
+
 // Type implements Value
 func (n *Nil) Type() ValueType { return NilType }
 

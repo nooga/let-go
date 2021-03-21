@@ -294,7 +294,7 @@ func (c *Context) compileForm(o vm.Value) error {
 			}
 		}
 		c.emitWithArg(vm.OPINV, len(v))
-		c.decSP(len(v) + 1)
+		c.decSP(len(v))
 		c.tailPosition = tp
 	case vm.MapType:
 		tp := c.tailPosition

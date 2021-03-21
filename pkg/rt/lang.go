@@ -301,6 +301,19 @@ func installLangNS() {
 		return as.ValueAtOr(key, vs[2])
 	})
 
+	count, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME error out
+			return vm.NIL
+		}
+		seq, ok := vs[0].(vm.Collection)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		return seq.Count()
+	})
+
 	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		b := &strings.Builder{}
 		for i := range vs {
@@ -399,6 +412,7 @@ func installLangNS() {
 	ns.Def("second", second)
 	ns.Def("next", next)
 	ns.Def("get", get)
+	ns.Def("count", count)
 
 	ns.Def("println", printlnf)
 	ns.Def("type", typef)

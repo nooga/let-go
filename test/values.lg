@@ -24,5 +24,7 @@
              (= (:a m) 1)
              (= (:c (assoc m :c 'foo)) 'foo)
              (= (:c m) 3)
-             ;(= (count m) 3)
+             (= (count m) 3)
+             (= (dec (count m)) (count (dissoc m :a)))
+             (= (count m) (count (dissoc m :nonexist)))
         )))

@@ -30,3 +30,13 @@
            (= true (not nil))
            (= false (not 3))
            ))
+
+(test "count"
+      (and (zero? (count nil))
+           (zero? (count '()))
+           (zero? (count []))
+           (zero? (count {}))
+           (= 2 (count [2 3]))
+           (= 2 (count '(2 3)))
+           (= 2 (count {:a 1 :b 2}))
+           ))
