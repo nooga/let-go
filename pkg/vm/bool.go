@@ -17,9 +17,15 @@
 
 package vm
 
+import "reflect"
+
 type theBooleanType struct {
 	zero Boolean
 }
+
+func (t *theBooleanType) String() string     { return t.Name() }
+func (t *theBooleanType) Type() ValueType    { return TypeType }
+func (t *theBooleanType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (t *theBooleanType) Name() string { return "let-go.lang.Boolean" }
 func (t *theBooleanType) Box(b interface{}) (Value, error) {

@@ -17,9 +17,15 @@
 
 package vm
 
+import "reflect"
+
 type theVoidType struct {
 	zero *Void
 }
+
+func (t *theVoidType) String() string     { return t.Name() }
+func (t *theVoidType) Type() ValueType    { return TypeType }
+func (t *theVoidType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (t *theVoidType) Name() string                     { return "VOID" }
 func (t *theVoidType) Box(_ interface{}) (Value, error) { return t.zero, nil }

@@ -21,6 +21,10 @@ type theNilType struct {
 	zero *Nil
 }
 
+func (t *theNilType) String() string     { return t.Name() }
+func (t *theNilType) Type() ValueType    { return NilType }
+func (t *theNilType) Unbox() interface{} { return nil }
+
 func (t *theNilType) Name() string                     { return "nil" }
 func (t *theNilType) Box(_ interface{}) (Value, error) { return t.zero, nil }
 

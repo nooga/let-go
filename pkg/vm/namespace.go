@@ -19,9 +19,14 @@ package vm
 
 import (
 	"fmt"
+	"reflect"
 )
 
 type theNamespaceType struct{}
+
+func (t *theNamespaceType) String() string     { return t.Name() }
+func (t *theNamespaceType) Type() ValueType    { return TypeType }
+func (t *theNamespaceType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (t *theNamespaceType) Name() string { return "let-go.lang.Namespace" }
 func (t *theNamespaceType) Box(fn interface{}) (Value, error) {

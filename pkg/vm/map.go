@@ -17,16 +17,23 @@
 
 package vm
 
-import "strings"
+import (
+	"reflect"
+	"strings"
+)
 
 type theMapType struct{}
 
-func (lt *theMapType) Name() string { return "let-go.lang.Map" }
+func (t *theMapType) String() string     { return t.Name() }
+func (t *theMapType) Type() ValueType    { return TypeType }
+func (t *theMapType) Unbox() interface{} { return reflect.TypeOf(t) }
 
-func (lt *theMapType) Box(bare interface{}) (Value, error) {
+func (t *theMapType) Name() string { return "let-go.lang.Map" }
+
+func (t *theMapType) Box(bare interface{}) (Value, error) {
 	casted, ok := bare.(map[Value]Value)
 	if !ok {
-		return NIL, NewTypeError(bare, "can't be boxed as", lt)
+		return NIL, NewTypeError(bare, "can't be boxed as", t)
 	}
 
 	return Map(casted), nil

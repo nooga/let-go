@@ -17,11 +17,18 @@
 
 package vm
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
 
 type theStringType struct {
 	zero String
 }
+
+func (t *theStringType) String() string     { return t.Name() }
+func (t *theStringType) Type() ValueType    { return TypeType }
+func (t *theStringType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (t *theStringType) Name() string { return "let-go.lang.String" }
 

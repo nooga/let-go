@@ -17,9 +17,16 @@
 
 package vm
 
-import "strings"
+import (
+	"reflect"
+	"strings"
+)
 
 type theListType struct{}
+
+func (t *theListType) String() string     { return t.Name() }
+func (t *theListType) Type() ValueType    { return TypeType }
+func (t *theListType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (lt *theListType) Name() string { return "let-go.lang.PersistentList" }
 

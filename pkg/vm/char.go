@@ -18,12 +18,17 @@
 package vm
 
 import (
+	"reflect"
 	"unicode/utf8"
 )
 
 type theCharType struct {
 	zero Char
 }
+
+func (t *theCharType) String() string     { return t.Name() }
+func (t *theCharType) Type() ValueType    { return TypeType }
+func (t *theCharType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (lt *theCharType) Name() string { return "let-go.lang.Character" }
 

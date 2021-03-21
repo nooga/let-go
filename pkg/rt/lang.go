@@ -289,13 +289,13 @@ func installLangNS() {
 			// FIXME return error
 			return vm.NIL
 		}
-		key := vs[0]
-		as, ok := vs[1].(vm.Lookup)
+		key := vs[1]
+		as, ok := vs[0].(vm.Lookup)
 		if !ok {
 			// FIXME return error
 			return vm.NIL
 		}
-		if vl == 1 {
+		if vl == 2 {
 			return as.ValueAt(key)
 		}
 		return as.ValueAtOr(key, vs[2])
@@ -315,6 +315,18 @@ func installLangNS() {
 		}
 		fmt.Println(b)
 		return vm.NIL
+	})
+
+	typef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			//FIXME this is an error
+			return vm.NIL
+		}
+		t := vs[0].Type()
+		if t == vm.NilType {
+			return vm.NIL
+		}
+		return t
 	})
 
 	inNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
@@ -389,6 +401,7 @@ func installLangNS() {
 	ns.Def("get", get)
 
 	ns.Def("println", printlnf)
+	ns.Def("type", typef)
 
 	CoreNS = ns
 

@@ -24,6 +24,7 @@ import (
 
 // ValueType represents a type of a Value
 type ValueType interface {
+	Value
 	Name() string
 	Box(interface{}) (Value, error)
 }
@@ -67,6 +68,24 @@ type Lookup interface {
 	Value
 	ValueAt(Value) Value
 	ValueAtOr(Value, Value) Value
+}
+
+type theTypeType struct{}
+
+var TypeType *theTypeType
+
+func init() {
+	TypeType = &theTypeType{}
+}
+
+func (t *theTypeType) String() string     { return t.Name() }
+func (t *theTypeType) Type() ValueType    { return t }
+func (t *theTypeType) Unbox() interface{} { return reflect.TypeOf(t) }
+
+func (t *theTypeType) Name() string { return "let-go.lang.Type" }
+func (t *theTypeType) Box(b interface{}) (Value, error) {
+	//FIXME this is probably not accurate
+	return NIL, NewTypeError(b, "can't be boxed as", t)
 }
 
 func BoxValue(v reflect.Value) (Value, error) {

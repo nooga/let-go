@@ -24,6 +24,10 @@ import (
 
 type theFuncType struct{}
 
+func (t *theFuncType) String() string     { return t.Name() }
+func (t *theFuncType) Type() ValueType    { return TypeType }
+func (t *theFuncType) Unbox() interface{} { return reflect.TypeOf(t) }
+
 func (t *theFuncType) Name() string { return "let-go.lang.Fn" }
 func (t *theFuncType) Box(fn interface{}) (Value, error) {
 	return NIL, NewTypeError(fn, "can't be boxed as", t)

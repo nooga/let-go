@@ -19,12 +19,17 @@ package vm
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 )
 
 type theSymbolType struct {
 	zero Symbol
 }
+
+func (t *theSymbolType) String() string     { return t.Name() }
+func (t *theSymbolType) Type() ValueType    { return TypeType }
+func (t *theSymbolType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (lt *theSymbolType) Name() string { return "let-go.lang.Symbol" }
 

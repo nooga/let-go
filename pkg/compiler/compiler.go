@@ -321,7 +321,7 @@ func (c *Context) compileForm(o vm.Value) error {
 			}
 		}
 		c.emitWithArg(vm.OPINV, len(v)*2)
-		c.decSP(len(v)*2 + 1)
+		c.decSP(len(v) * 2)
 		c.tailPosition = tp
 	case vm.ListType:
 		fn := o.(*vm.List).First()
@@ -354,7 +354,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		for args != vm.EmptyList {
 			err := c.compileForm(args.First())
 			if err != nil {
-				return NewCompileError("compiling arguments").Wrap(err)
+				return NewCompileError("compiling arguments " + args.First().String()).Wrap(err)
 			}
 			args = args.Next()
 		}

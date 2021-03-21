@@ -17,18 +17,25 @@
 
 package vm
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
 
 type theKeywordType struct {
 	zero Keyword
 }
 
-func (lt *theKeywordType) Name() string { return "let-go.lang.Keyword" }
+func (t *theKeywordType) String() string     { return t.Name() }
+func (t *theKeywordType) Type() ValueType    { return TypeType }
+func (t *theKeywordType) Unbox() interface{} { return reflect.TypeOf(t) }
 
-func (lt *theKeywordType) Box(bare interface{}) (Value, error) {
+func (t *theKeywordType) Name() string { return "let-go.lang.Keyword" }
+
+func (t *theKeywordType) Box(bare interface{}) (Value, error) {
 	raw, ok := bare.(fmt.Stringer)
 	if !ok {
-		return BooleanType.zero, NewTypeError(bare, "can't be boxed as", lt)
+		return BooleanType.zero, NewTypeError(bare, "can't be boxed as", t)
 	}
 	return Keyword(raw.String()), nil
 }

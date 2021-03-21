@@ -18,10 +18,15 @@
 package vm
 
 import (
+	"reflect"
 	"strings"
 )
 
 type theArrayVectorType struct{}
+
+func (t *theArrayVectorType) String() string     { return t.Name() }
+func (t *theArrayVectorType) Type() ValueType    { return TypeType }
+func (t *theArrayVectorType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (lt *theArrayVectorType) Name() string { return "let-go.lang.ArrayVector" }
 

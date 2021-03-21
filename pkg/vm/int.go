@@ -17,18 +17,25 @@
 
 package vm
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
 
 type theIntType struct {
 	zero Int
 }
 
-func (lt *theIntType) Name() string { return "let-go.lang.Int" }
+func (t *theIntType) String() string     { return t.Name() }
+func (t *theIntType) Type() ValueType    { return TypeType }
+func (t *theIntType) Unbox() interface{} { return reflect.TypeOf(t) }
 
-func (lt *theIntType) Box(bare interface{}) (Value, error) {
+func (t *theIntType) Name() string { return "let-go.lang.Int" }
+
+func (t *theIntType) Box(bare interface{}) (Value, error) {
 	raw, ok := bare.(int)
 	if !ok {
-		return IntType.zero, NewTypeError(bare, "can't be boxed as", lt)
+		return IntType.zero, NewTypeError(bare, "can't be boxed as", t)
 	}
 	return Int(raw), nil
 }
