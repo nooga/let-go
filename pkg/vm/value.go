@@ -63,6 +63,12 @@ type Associative interface {
 	Dissoc(Value) Associative
 }
 
+type Lookup interface {
+	Value
+	ValueAt(Value) Value
+	ValueAtOr(Value, Value) Value
+}
+
 func BoxValue(v reflect.Value) (Value, error) {
 	if v.CanInterface() {
 		rv, ok := v.Interface().(Value)

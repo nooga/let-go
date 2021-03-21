@@ -54,3 +54,24 @@ func (l Keyword) Unbox() interface{} {
 func (l Keyword) String() string {
 	return fmt.Sprintf(":%s", string(l))
 }
+
+func (l Keyword) Arity() int {
+	return -1
+}
+
+func (l Keyword) Invoke(pargs []Value) Value {
+	vl := len(pargs)
+	if vl < 1 || vl > 2 {
+		// FIXME return error
+		return NIL
+	}
+	as, ok := pargs[0].(Lookup)
+	if !ok {
+		// FIXME return error
+		return NIL
+	}
+	if vl == 1 {
+		return as.ValueAt(l)
+	}
+	return as.ValueAtOr(l, pargs[1])
+}

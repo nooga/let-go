@@ -121,6 +121,18 @@ func (l Map) Dissoc(k Value) Associative {
 	return newmap
 }
 
+func (l Map) ValueAt(key Value) Value {
+	return l.ValueAtOr(key, NIL)
+}
+
+func (l Map) ValueAtOr(key Value, dflt Value) Value {
+	ret, ok := l[key]
+	if !ok {
+		return dflt
+	}
+	return ret
+}
+
 func NewMap(v []Value) Value {
 	if len(v) == 0 {
 		return make(Map)
@@ -133,7 +145,7 @@ func NewMap(v []Value) Value {
 	for i := 0; i < len(v); i += 2 {
 		newmap[v[i]] = v[i+1]
 	}
-	return Map(newmap)
+	return newmap
 }
 
 func (l Map) String() string {

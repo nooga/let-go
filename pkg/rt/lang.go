@@ -247,6 +247,24 @@ func installLangNS() {
 		return n
 	})
 
+	get, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		vl := len(vs)
+		if vl < 2 || vl > 3 {
+			// FIXME return error
+			return vm.NIL
+		}
+		key := vs[0]
+		as, ok := vs[1].(vm.Lookup)
+		if !ok {
+			// FIXME return error
+			return vm.NIL
+		}
+		if vl == 1 {
+			return as.ValueAt(key)
+		}
+		return as.ValueAtOr(key, vs[2])
+	})
+
 	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		b := &strings.Builder{}
 		for i := range vs {
@@ -327,6 +345,7 @@ func installLangNS() {
 	ns.Def("first", first)
 	ns.Def("second", second)
 	ns.Def("next", next)
+	ns.Def("get", get)
 
 	ns.Def("println", printlnf)
 
