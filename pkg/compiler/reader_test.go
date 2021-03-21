@@ -49,7 +49,7 @@ func TestReaderBasic(t *testing.T) {
 		"\\o300":               vm.Char(rune(0300)),
 		"\\u03A9":              vm.Char('Ω'),
 		"[]":                   vm.ArrayVector{},
-		"[1 :foo true]":        vm.ArrayVector{vm.Int(1), vm.Keyword("foo")}.Cons(vm.TRUE),
+		"[1 :foo true]":        vm.ArrayVector{vm.Int(1), vm.Keyword("foo"), vm.TRUE},
 		"'foo":                 vm.EmptyList.Cons(vm.Symbol("foo")).Cons(vm.Symbol("quote")),
 	}
 
