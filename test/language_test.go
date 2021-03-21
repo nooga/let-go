@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/rt"
+	"github.com/nooga/let-go/pkg/vm"
 	"github.com/stretchr/testify/assert"
 	"os"
 	"path/filepath"
@@ -57,13 +58,18 @@ func TestRunner(t *testing.T) {
 	assert.NoError(t, err)
 	err = file.Close()
 	assert.NoError(t, err)
+	outcomeVar := rt.CoreNS.Lookup("*test-flag*").(*vm.Var)
 	for f := range names {
 		fn := "./" + names[f]
 		if filepath.Ext(fn) != ".lg" {
 			continue
 		}
-		fmt.Println("Running tests in", fn)
-		err := runFile(fn)
-		assert.NoError(t, err)
+		t.Run(names[f], func(t *testing.T) {
+			outcomeVar.SetRoot(vm.TRUE)
+			err := runFile(fn)
+			assert.NoError(t, err)
+			outcome := bool(outcomeVar.Deref().(vm.Boolean))
+			assert.True(t, outcome, "some tests failed")
+		})
 	}
 }
