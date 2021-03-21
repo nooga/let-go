@@ -50,6 +50,18 @@ func init() {
 // String is boxed int
 type String string
 
+func (l String) RawCount() int {
+	return len(l)
+}
+
+func (l String) Count() Value {
+	return Int(len(l))
+}
+
+func (l String) Empty() Collection {
+	return String("")
+}
+
 // Type implements Value
 func (l String) Type() ValueType { return StringType }
 

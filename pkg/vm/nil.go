@@ -35,6 +35,10 @@ func (n *Nil) Count() Value {
 	return Int(0)
 }
 
+func (n *Nil) RawCount() int {
+	return 0
+}
+
 func (n *Nil) Empty() Collection {
 	return n
 }

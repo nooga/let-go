@@ -67,10 +67,11 @@ func (l ArrayVector) First() Value {
 
 // More implements Seq
 func (l ArrayVector) More() Seq {
-	if len(l) == 1 {
-		return ArrayVector{}
+	if len(l) <= 1 {
+		return EmptyList
 	}
-	return l[1:]
+	newl, _ := ListType.Box([]Value(l[1:]))
+	return newl.(*List)
 }
 
 // Next implements Seq
@@ -80,12 +81,17 @@ func (l ArrayVector) Next() Seq {
 
 // Cons implements Seq
 func (l ArrayVector) Cons(val Value) Seq {
-	return append(l, val)
+	newl, _ := ListType.Box(l[1:])
+	return newl.(*List).Cons(val)
 }
 
 // Count implements Collection
 func (l ArrayVector) Count() Value {
 	return Int(len(l))
+}
+
+func (l ArrayVector) RawCount() int {
+	return len(l)
 }
 
 // Empty implements Collection

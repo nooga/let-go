@@ -48,6 +48,7 @@ type Seq interface {
 // Collection is implemented by all collections
 type Collection interface {
 	Value
+	RawCount() int
 	Count() Value
 	Empty() Collection
 }

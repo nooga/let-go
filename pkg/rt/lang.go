@@ -314,6 +314,75 @@ func installLangNS() {
 		return seq.Count()
 	})
 
+	// FIXME write real ones later because this is naiiiiive
+	mapf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME error out
+			return vm.NIL
+		}
+		mfn, ok := vs[0].(vm.Fn)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		seq, ok := vs[1].(vm.Seq)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		length := 0
+		col, ok := vs[1].(vm.Collection)
+		if ok {
+			length = col.RawCount()
+		}
+		if length > 0 {
+			newseq := make([]vm.Value, length)
+			i := 0
+			for seq != vm.EmptyList {
+				newseq[i] = mfn.Invoke([]vm.Value{seq.First()})
+				seq = seq.Next()
+				i++
+			}
+			ret, _ := vm.ListType.Box(newseq)
+			return ret
+		}
+		return vm.EmptyList
+	})
+
+	reduce, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) < 2 || len(vs) > 3 {
+			// FIXME error out
+			return vm.NIL
+		}
+		mfn, ok := vs[0].(vm.Fn)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		sidx := 1
+		if len(vs) == 3 {
+			sidx = 2
+		}
+		seq, ok := vs[sidx].(vm.Seq)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		var acc vm.Value
+		if len(vs) == 3 {
+			acc = vs[1]
+		} else {
+			acc = seq.First()
+			seq = seq.Next()
+		}
+		for seq != vm.EmptyList {
+			acc = mfn.Invoke([]vm.Value{seq.First(), acc})
+			seq = seq.Next()
+		}
+
+		return acc
+	})
+
 	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		b := &strings.Builder{}
 		for i := range vs {
@@ -414,7 +483,11 @@ func installLangNS() {
 	ns.Def("get", get)
 	ns.Def("count", count)
 
+	ns.Def("map", mapf)
+	ns.Def("reduce", reduce)
+
 	ns.Def("println", printlnf)
+
 	ns.Def("type", typef)
 
 	CoreNS = ns

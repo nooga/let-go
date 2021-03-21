@@ -101,6 +101,10 @@ func (l Map) Count() Value {
 	return Int(len(l))
 }
 
+func (l Map) RawCount() int {
+	return len(l)
+}
+
 // Empty implements Collection
 func (l Map) Empty() Collection {
 	return make(Map)

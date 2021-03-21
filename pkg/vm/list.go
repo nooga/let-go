@@ -120,8 +120,11 @@ func (l *List) Cons(val Value) Seq {
 
 // Count implements Collection
 func (l *List) Count() Value {
-	ret, _ := IntType.Box(l.count)
-	return ret
+	return Int(l.count)
+}
+
+func (l *List) RawCount() int {
+	return l.count
 }
 
 // Empty implements Collection
