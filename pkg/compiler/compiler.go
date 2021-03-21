@@ -456,6 +456,7 @@ func compilerInit() {
 		"if":    ifCompiler,
 		"do":    doCompiler,
 		"def":   defCompiler,
+		"set!":  setBangCompiler,
 		"fn":    fnCompiler,
 		"quote": quoteCompiler,
 		"var":   varCompiler,
@@ -747,6 +748,33 @@ func defCompiler(c *Context, form vm.Value) error {
 	err := c.compileForm(val)
 	if err != nil {
 		return NewCompileError("compiling def value").Wrap(err)
+	}
+	c.emit(vm.OPSTV)
+	c.decSP(1)
+	c.tailPosition = tc
+	return nil
+}
+
+// FIXME this is just def with a different name basically
+func setBangCompiler(c *Context, form vm.Value) error {
+	tc := c.tailPosition
+	c.tailPosition = false
+	args := form.(*vm.List).Next().Unbox().([]vm.Value)
+	l := len(args)
+	if l != 2 {
+		return NewCompileError(fmt.Sprintf("set!: wrong number of forms (%d), need 2", l))
+	}
+	sym := args[0]
+	val := args[1]
+	if sym.Type() != vm.SymbolType {
+		return NewCompileError(fmt.Sprintf("set!: first argument must be a symbol, got (%v)", sym))
+	}
+	varr := c.constant(c.CurrentNS().Lookup(sym.(vm.Symbol)))
+	c.emitWithArg(vm.OPLDC, varr)
+	c.incSP(1)
+	err := c.compileForm(val)
+	if err != nil {
+		return NewCompileError("compiling set! value").Wrap(err)
 	}
 	c.emit(vm.OPSTV)
 	c.decSP(1)
