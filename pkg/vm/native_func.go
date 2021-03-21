@@ -24,7 +24,7 @@ import (
 
 type theNativeFnType struct{}
 
-func (t *theNativeFnType) Name() string { return "NativeFn" }
+func (t *theNativeFnType) Name() string { return "let-go.lang.NativeFn" }
 func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 	ty := reflect.TypeOf(fn)
 	if ty.Kind() != reflect.Func {

@@ -23,7 +23,7 @@ type theKeywordType struct {
 	zero Keyword
 }
 
-func (lt *theKeywordType) Name() string { return "Keyword" }
+func (lt *theKeywordType) Name() string { return "let-go.lang.Keyword" }
 
 func (lt *theKeywordType) Box(bare interface{}) (Value, error) {
 	raw, ok := bare.(fmt.Stringer)

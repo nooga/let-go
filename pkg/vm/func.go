@@ -24,7 +24,7 @@ import (
 
 type theFuncType struct{}
 
-func (t *theFuncType) Name() string { return "Func" }
+func (t *theFuncType) Name() string { return "let-go.lang.Fn" }
 func (t *theFuncType) Box(fn interface{}) (Value, error) {
 	return NIL, NewTypeError(fn, "can't be boxed as", t)
 }

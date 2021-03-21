@@ -21,7 +21,7 @@ type theBooleanType struct {
 	zero Boolean
 }
 
-func (t *theBooleanType) Name() string { return "Boolean" }
+func (t *theBooleanType) Name() string { return "let-go.lang.Boolean" }
 func (t *theBooleanType) Box(b interface{}) (Value, error) {
 	rb, ok := b.(bool)
 	if !ok {

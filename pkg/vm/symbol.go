@@ -26,7 +26,7 @@ type theSymbolType struct {
 	zero Symbol
 }
 
-func (lt *theSymbolType) Name() string { return "Symbol" }
+func (lt *theSymbolType) Name() string { return "let-go.lang.Symbol" }
 
 func (lt *theSymbolType) Box(bare interface{}) (Value, error) {
 	raw, ok := bare.(fmt.Stringer)

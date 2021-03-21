@@ -39,7 +39,7 @@ func TestIntType(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, bv.Type(), IntType)
 		assert.True(t, bv.Type() == IntType)
-		assert.Equal(t, "Int", bv.Type().Name())
+		assert.Equal(t, "let-go.lang.Int", bv.Type().Name())
 		assert.Equal(t, v, bv.Unbox())
 		assert.Equal(t, v, bv.Unbox().(int))
 	}
@@ -91,9 +91,11 @@ func TestListType(t *testing.T) {
 	l3 := l.Cons(b).(*List)
 	assert.Equal(t, 1, l3.Count().Unbox())
 
-	assert.Equal(t, "List", l.Type().Name())
-	assert.Equal(t, "List", l2.Type().Name())
-	assert.Equal(t, "List", l3.Type().Name())
+	ltype := "let-go.lang.PersistentList"
+	assert.Equal(t, ltype, l.Type().Name())
+	assert.Equal(t, ltype, l2.Type().Name())
+	assert.Equal(t, ltype, l3.Type().Name())
+	assert.Same(t, l.Type(), l2.Type())
 
 	assert.NotEqual(t, l2, l3)
 

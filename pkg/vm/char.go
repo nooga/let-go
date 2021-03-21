@@ -25,7 +25,7 @@ type theCharType struct {
 	zero Char
 }
 
-func (lt *theCharType) Name() string { return "Char" }
+func (lt *theCharType) Name() string { return "let-go.lang.Character" }
 
 func (lt *theCharType) Box(bare interface{}) (Value, error) {
 	raw, ok := bare.(rune)

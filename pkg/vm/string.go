@@ -23,7 +23,7 @@ type theStringType struct {
 	zero String
 }
 
-func (t *theStringType) Name() string { return "String" }
+func (t *theStringType) Name() string { return "let-go.lang.String" }
 
 func (t *theStringType) Box(bare interface{}) (Value, error) {
 	raw, ok := bare.(string)

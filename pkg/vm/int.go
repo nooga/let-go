@@ -23,7 +23,7 @@ type theIntType struct {
 	zero Int
 }
 
-func (lt *theIntType) Name() string { return "Int" }
+func (lt *theIntType) Name() string { return "let-go.lang.Int" }
 
 func (lt *theIntType) Box(bare interface{}) (Value, error) {
 	raw, ok := bare.(int)

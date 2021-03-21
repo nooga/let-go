@@ -23,7 +23,7 @@ import (
 
 type theNamespaceType struct{}
 
-func (t *theNamespaceType) Name() string { return "Namespace" }
+func (t *theNamespaceType) Name() string { return "let-go.lang.Namespace" }
 func (t *theNamespaceType) Box(fn interface{}) (Value, error) {
 	return NIL, NewTypeError(fn, "can't be boxed as", t)
 }

@@ -21,7 +21,7 @@ import "strings"
 
 type theListType struct{}
 
-func (lt *theListType) Name() string { return "List" }
+func (lt *theListType) Name() string { return "let-go.lang.PersistentList" }
 
 func (lt *theListType) Box(bare interface{}) (Value, error) {
 	arr, ok := bare.([]Value)

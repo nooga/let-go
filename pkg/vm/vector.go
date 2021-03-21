@@ -23,7 +23,7 @@ import (
 
 type theArrayVectorType struct{}
 
-func (lt *theArrayVectorType) Name() string { return "ArrayVector" }
+func (lt *theArrayVectorType) Name() string { return "let-go.lang.ArrayVector" }
 
 func (lt *theArrayVectorType) Box(bare interface{}) (Value, error) {
 	arr, ok := bare.([]Value)

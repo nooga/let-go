@@ -21,7 +21,7 @@ import "strings"
 
 type theMapType struct{}
 
-func (lt *theMapType) Name() string { return "Map" }
+func (lt *theMapType) Name() string { return "let-go.lang.Map" }
 
 func (lt *theMapType) Box(bare interface{}) (Value, error) {
 	casted, ok := bare.(map[Value]Value)
