@@ -146,6 +146,42 @@ func installLangNS() {
 		return ret
 	})
 
+	and, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		var ret vm.Value = vm.TRUE
+		if len(vs) == 1 {
+			return vs[0]
+		}
+		for i := range vs {
+			if !vm.IsTruthy(vs[i]) {
+				return vs[i]
+			}
+			ret = vs[i]
+		}
+		return ret
+	})
+
+	or, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		var ret vm.Value = vm.NIL
+		if len(vs) == 1 {
+			return vs[0]
+		}
+		for i := range vs {
+			if vm.IsTruthy(vs[i]) {
+				return vs[i]
+			}
+			ret = vs[i]
+		}
+		return ret
+	})
+
+	not, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME this is an error
+			return vm.NIL
+		}
+		return vm.Boolean(!vm.IsTruthy(vs[0]))
+	})
+
 	setMacro, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		if len(vs) != 1 {
 			// FIXME error out
@@ -321,6 +357,7 @@ func installLangNS() {
 	// vars
 	CurrentNS = ns.Def("*ns*", ns)
 
+	// FIXME implement the primitives in let-go later on and clean up this mess
 	// primitive fns
 	ns.Def("+", plus)
 	ns.Def("*", mul)
@@ -330,6 +367,10 @@ func installLangNS() {
 	ns.Def("=", equals)
 	ns.Def("gt", gt)
 	ns.Def("lt", lt)
+
+	ns.Def("and", and)
+	ns.Def("or", or)
+	ns.Def("not", not)
 
 	ns.Def("set-macro!", setMacro)
 	ns.Def("in-ns", inNs)
