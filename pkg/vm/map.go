@@ -165,3 +165,19 @@ func (l Map) String() string {
 	b.WriteRune('}')
 	return b.String()
 }
+
+func (l Map) Arity() int {
+	return -1
+}
+
+func (l Map) Invoke(pargs []Value) Value {
+	vl := len(pargs)
+	if vl < 1 || vl > 2 {
+		// FIXME return error
+		return NIL
+	}
+	if vl == 1 {
+		return l.ValueAt(pargs[0])
+	}
+	return l.ValueAtOr(pargs[0], pargs[1])
+}
