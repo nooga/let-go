@@ -31,11 +31,25 @@
 (defmacro if-not [condition & forms]
   (list 'if condition (first (next forms)) (first forms)))
 
+(defn concat-list [a b]
+  (if a (cons (first a) (concat-list (next a) b)) b))
+
 (defmacro cond [& forms]
   (when forms
         (list 'if (first forms) (second forms)
               (cons 'cond (next (next forms))))))
 
+(defmacro condp [comparator arg & forms]
+  (let [l (count forms)]
+    (= l 0) nil ;; this is an error
+    (= l 1) (first forms)
+    :else (list 'if
+                (list comparator arg (first forms))
+                (second forms)
+                (cons 'condp (cons comparator (cons arg (next (next forms))))))))
+
+(defmacro case [arg & forms]
+  (concat-list (list 'condp '= arg) forms))
 
 (defmacro ns [n & nss]
   (let [cns (list 'in-ns (list 'quote n))
@@ -70,8 +84,14 @@
 ;; bleh
 (defn list? [x] (= (type x) (type '())))
 
-(defn concat-list [a b]
-  (if a (cons (first a) (concat-list (next a) b)) b))
+(defmacro time [& body]
+  (let [then (gensym "time")
+        val (gensym)
+        now  (list 'core/now)
+        report (list 'println "Elapsed:" (list '.Sub now then))]
+    (list 'let (vector then now val (cons 'do body))
+          report
+          val)))
 
 (defmacro -> [initial & forms]
   (if (zero? (count forms))

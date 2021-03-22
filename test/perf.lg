@@ -1,0 +1,54 @@
+;
+; Copyright (c) 2021 Marcin Gasperowicz <xnooga@gmail.com>
+;
+; Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+; documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+; rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+; persons to whom the Software is furnished to do so, subject to the following conditions:
+;
+; The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+; Software.
+;
+; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+; WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+; COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+; OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+;
+
+(ns test.perf)
+
+;; https://clojuredocs.org/clojure.core/case#example-604516ade4b0b1e3652d746d
+(let [x 30]
+  ;; "good"
+  (time (cond
+         (= x 10) :ten
+         (= x 20) :twenty
+         (= x 30) :forty ;; sic
+         :else :dunno))     ;;=> "Elapsed time: 0.0666 msecs"
+
+  ;; "better"
+  (time (condp = x
+               10 :ten
+               20 :twenty
+               30 :forty
+               :dunno))           ;;=> "Elapsed time: 0.4197 msecs"
+
+  ;; best in performance if else statement is executed (not shown)
+  ;; best in readability
+  (time (case x
+              10 :ten
+              20 :twenty
+              30 :forty
+              :dunno))           ;;=> "Elapsed time: 0.0032 msecs"
+
+  ;; best in performance if known branches are executed
+  ;; worst in readability
+  (time (if (= x 10)
+          :ten
+          (if (= x 20)
+            :twenty
+            (if (= x 30)
+              :forty
+              :dunno)))))   ;;=> "Elapsed time: 0.0021 msecs"
+
+;;=> :forty

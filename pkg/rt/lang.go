@@ -60,6 +60,13 @@ const NameCoreNS = "core"
 var CoreNS *vm.Namespace
 var CurrentNS *vm.Var
 
+var gensymID = 0
+
+func nextID() int {
+	gensymID++
+	return gensymID
+}
+
 //nolint
 func installLangNS() {
 	plus, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
@@ -191,6 +198,19 @@ func installLangNS() {
 		m := vs[0].(*vm.Var)
 		m.SetMacro()
 		return m
+	})
+
+	gensym, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		prefix := "G__"
+		if len(vs) == 1 {
+			arg, ok := vs[0].(vm.String)
+			if !ok {
+				// FIXME :P
+				return vm.NIL
+			}
+			prefix = string(arg)
+		}
+		return vm.Symbol(fmt.Sprintf("%s%d", prefix, nextID()))
 	})
 
 	vector, err := vm.NativeFnType.Wrap(vm.NewArrayVector)
@@ -493,6 +513,7 @@ func installLangNS() {
 	ns.Def("not", not)
 
 	ns.Def("set-macro!", setMacro)
+	ns.Def("gensym", gensym)
 	ns.Def("in-ns", inNs)
 	ns.Def("use", use)
 
