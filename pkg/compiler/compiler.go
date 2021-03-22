@@ -327,12 +327,24 @@ func (c *Context) compileForm(o vm.Value) error {
 		fn := o.(*vm.List).First()
 		// check if we're looking at a special form
 		if fn.Type() == vm.SymbolType {
-			formCompiler, ok := specialForms[fn.(vm.Symbol)]
+			fnsym := fn.(vm.Symbol)
+			formCompiler, ok := specialForms[fnsym]
 			if ok {
 				return formCompiler(c, o)
 			}
 
-			fvar := c.CurrentNS().Lookup(fn.(vm.Symbol))
+			if fnsym[0] == '.' && len(fnsym) > 1 {
+				newform := o.(*vm.List).Next()
+				if newform.(vm.Collection).RawCount() < 1 {
+					return NewCompileError("Malformed member expression, expecting (.member target ...)")
+				}
+				instance := newform.First()
+				member := vm.EmptyList.Cons(fnsym[1:]).Cons(vm.Symbol("quote"))
+				newform = newform.Next().Cons(member).Cons(instance).Cons(vm.Symbol("."))
+				return c.compileForm(newform)
+			}
+
+			fvar := c.CurrentNS().Lookup(fnsym)
 			if fvar != vm.NIL && fvar.(*vm.Var).IsMacro() {
 				argvec := o.(*vm.List).Next().(*vm.List).Unbox().([]vm.Value)
 				newform := fvar.(*vm.Var).Invoke(argvec)

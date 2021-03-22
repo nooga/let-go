@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/nooga/let-go/pkg/vm"
 	"strings"
+	"time"
 )
 
 var nsRegistry map[string]*vm.Namespace
@@ -442,6 +443,31 @@ func installLangNS() {
 		return vm.NIL
 	})
 
+	now, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		return vm.NewBoxed(time.Now())
+	})
+
+	methodInvoke, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) < 2 {
+			// FIXME handle error
+			fmt.Println("not enough args")
+			return vm.NIL
+		}
+		rec, ok := vs[0].(vm.Receiver)
+		if !ok {
+			// FIXME handle error
+			fmt.Println("expected Receiver")
+			return vm.NIL
+		}
+		name, ok := vs[1].(vm.Symbol)
+		if !ok {
+			// FIXME handle error
+			fmt.Println("expected Symbol")
+			return vm.NIL
+		}
+		return rec.InvokeMethod(name, vs[2:])
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -489,6 +515,12 @@ func installLangNS() {
 	ns.Def("println", printlnf)
 
 	ns.Def("type", typef)
+
+	// FIXME move this later outside the core
+	ns.Def("now", now)
+
+	// FIXME move this to VM later
+	ns.Def(".", methodInvoke)
 
 	CoreNS = ns
 

@@ -71,6 +71,11 @@ type Lookup interface {
 	ValueAtOr(Value, Value) Value
 }
 
+type Receiver interface {
+	Value
+	InvokeMethod(Symbol, []Value) Value
+}
+
 type theTypeType struct{}
 
 var TypeType *theTypeType
@@ -126,12 +131,34 @@ func BoxValue(v reflect.Value) (Value, error) {
 			in[i] = mv
 		}
 		return ArrayVector(in), nil
-	case reflect.Map, reflect.Chan:
+	case reflect.Map:
+		if v.IsNil() {
+			// FIXME not sure if maybe this has to be empty coll in let-go-land
+			return NIL, nil
+		}
+		in := make(map[Value]Value)
+		iter := v.MapRange()
+		for iter.Next() {
+			k, err := BoxValue(iter.Key())
+			if err != nil {
+				return NIL, err //FIXME wrap
+			}
+			v, err := BoxValue(iter.Value())
+			if err != nil {
+				return NIL, err //FIXME wrap
+			}
+			in[k] = v
+		}
+		return MapType.Box(in)
+	case reflect.Chan:
 		if v.IsNil() {
 			return NIL, nil
 		}
 		return NIL, NewTypeError(v, "is not boxable", nil)
 	default:
+		if v.CanInterface() {
+			return NewBoxed(v.Interface()), nil
+		}
 		return NIL, NewTypeError(v, "is not boxable", nil)
 	}
 }
