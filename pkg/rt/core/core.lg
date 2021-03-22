@@ -28,6 +28,9 @@
 (defmacro when [condition & forms]
   (list 'if condition (cons 'do forms) nil))
 
+(defmacro if-not [condition & forms]
+  (list 'if condition (first (next forms)) (first forms)))
+
 (defmacro cond [& forms]
   (when forms
         (list 'if (first forms) (second forms)
@@ -67,13 +70,25 @@
 ;; bleh
 (defn list? [x] (= (type x) (type '())))
 
+(defn concat-list [a b]
+  (if a (cons (first a) (concat-list (next a) b)) b))
+
 (defmacro -> [initial & forms]
   (if (zero? (count forms))
     initial
     (reduce (fn [x a]
               (if (list? x)
-                (let [f (first x) r (next x)]
-                  (cons f (cons a r)))
+                (cons (first x) (cons a (next x)))
+                (list x a)))
+            initial
+            forms)))
+
+(defmacro ->> [initial & forms]
+  (if (zero? (count forms))
+    initial
+    (reduce (fn [x a]
+              (if (list? x)
+                (concat-list x (list a))
                 (list x a)))
             initial
             forms)))
