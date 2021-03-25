@@ -85,10 +85,10 @@
 (defn list? [x] (= (type x) (type '())))
 
 (defmacro time [& body]
-  (let [then (gensym "time")
+  (let [then (gensym "time__")
         val (gensym)
         now  (list 'core/now)
-        report (list 'println "Elapsed:" (list '.Sub now then))]
+        report (list 'core/println "Elapsed:" (list '.Sub now then))]
     (list 'let (vector then now val (cons 'do body))
           report
           val)))

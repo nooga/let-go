@@ -29,11 +29,7 @@ import (
 )
 
 func motd() {
-	message := ` █   ██▀ ▀█▀    ▄▀  ▄▀▄
- █▄▄ █▄▄  █  ▀▀ ▀▄█ ▀▄▀  and expect crashes :^)
-
-
-`
+	message := "\u001B[1m\u001b[37;1mLET-GO\u001B[0m \u001B[36mvery-⍺ much-λ\u001b[0m    \u001b[90m(Ctrl-C to quit)\u001b[0m\n\n"
 	fmt.Print(message)
 }
 

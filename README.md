@@ -20,7 +20,7 @@ Here are some nebulous goals in no particular order:
 - Implement as much of Clojure as possible - including persistent data types and true concurrency,
 - Provide comfy two-way interop for arbitrary functions and types,
 - Serve primarily as an embedded extension language,
-- Standalone interpreter mode and AOT (let-go -> standalone binary) would be nice eventually, 
+- AOT (let-go -> standalone binary) would be nice eventually, 
 - Strech goal: let-go bytecode -> Go translation.
 - Pure Go, zero dependencies.
 
@@ -45,6 +45,10 @@ Can compile and eval basic Clojure flavored lisp.
 ```
 
 See [tests](https://github.com/nooga/let-go/tree/main/test) for more examples. 
+
+## Prerequisites and installation
+
+Building or running let-go from source requires Go 1.16. There are no binary releases yet.
 
 ## Running
 
@@ -75,6 +79,15 @@ Use the `-r` flag to run the REPL after the interpreter has finished with files 
 go run . -r test/simple.lg                # will run simple.lg first, then open up a REPL
 go run . -r -e '(* fun 2)' test/simple.lg # will run simple.lg first, then (* fun 2) and REPL 
 ```
+
+## Building the interpreter -`lg`
+
+To build the standalone interpreter:
+```bash
+make
+```
+
+This will produce the `lg` executable.
 
 ---
 Follow me on twitter for nightly updates! 🌙
