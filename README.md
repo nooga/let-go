@@ -5,6 +5,7 @@
 
 
 ![Tests](https://github.com/nooga/let-go/actions/workflows/go.yml/badge.svg)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fnooga%2Flet-go.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fnooga%2Flet-go?ref=badge_shield)
 
 # let-go
 
@@ -95,3 +96,7 @@ Follow me on twitter for nightly updates! 🌙
 <a href="https://twitter.com/intent/follow?screen_name=mgasperowicz">
 <img src="https://img.shields.io/twitter/follow/mgasperowicz?style=social&logo=twitter"
 alt="follow on Twitter"></a>
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fnooga%2Flet-go.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fnooga%2Flet-go?ref=badge_large)
