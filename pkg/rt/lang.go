@@ -423,7 +423,7 @@ func installLangNS() {
 			seq = seq.Next()
 		}
 		for seq != vm.EmptyList {
-			acc = mfn.Invoke([]vm.Value{seq.First(), acc})
+			acc = mfn.Invoke([]vm.Value{acc, seq.First()})
 			seq = seq.Next()
 		}
 

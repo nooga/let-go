@@ -96,7 +96,7 @@
 (defmacro -> [initial & forms]
   (if (zero? (count forms))
     initial
-    (reduce (fn [x a]
+    (reduce (fn [a x]
               (if (list? x)
                 (cons (first x) (cons a (next x)))
                 (list x a)))
@@ -106,7 +106,7 @@
 (defmacro ->> [initial & forms]
   (if (zero? (count forms))
     initial
-    (reduce (fn [x a]
+    (reduce (fn [a x]
               (if (list? x)
                 (concat-list x (list a))
                 (list x a)))
