@@ -154,6 +154,15 @@ func installLangNS() {
 		return ret
 	})
 
+	mod, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME error out
+			return vm.NIL
+		}
+		ret := vs[0].Unbox().(int) % vs[1].Unbox().(int)
+		return vm.Int(ret)
+	})
+
 	and, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		var ret vm.Value = vm.TRUE
 		if len(vs) == 1 {
@@ -507,6 +516,7 @@ func installLangNS() {
 	ns.Def("=", equals)
 	ns.Def("gt", gt)
 	ns.Def("lt", lt)
+	ns.Def("mod", mod)
 
 	ns.Def("and", and)
 	ns.Def("or", or)
