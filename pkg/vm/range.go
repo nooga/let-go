@@ -18,7 +18,6 @@
 package vm
 
 import (
-	"fmt"
 	"reflect"
 )
 
@@ -63,9 +62,7 @@ func (l *Range) First() Value {
 
 // More implements Seq
 func (l *Range) More() Seq {
-
 	nexts := l.start + l.step
-	fmt.Println("x", l, nexts)
 	if nexts < l.end {
 		return &Range{nexts, l.end, l.step}
 	}
@@ -75,7 +72,6 @@ func (l *Range) More() Seq {
 // Next implements Seq
 func (l *Range) Next() Seq {
 	nexts := l.start + l.step
-	fmt.Println("y", l, nexts)
 	if nexts < l.end {
 		return &Range{nexts, l.end, l.step}
 	}
