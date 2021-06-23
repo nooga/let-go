@@ -226,6 +226,23 @@ func installLangNS() {
 	list, err := vm.NativeFnType.Wrap(vm.NewList)
 	hashMap, err := vm.NativeFnType.Wrap(vm.NewMap)
 
+	rangef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) == 0 {
+			return vm.EmptyList
+		}
+		if len(vs) == 1 {
+			return vm.NewRange(0, vs[0].(vm.Int), 1)
+		}
+		if len(vs) == 2 {
+			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), 1)
+		}
+		if len(vs) == 3 {
+			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), vs[2].(vm.Int))
+		}
+		// FIXME :P
+		return vm.NIL
+	})
+
 	assoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		if len(vs) != 3 {
 			// FIXME error out
@@ -530,6 +547,7 @@ func installLangNS() {
 	ns.Def("vector", vector)
 	ns.Def("hash-map", hashMap)
 	ns.Def("list", list)
+	ns.Def("range", rangef)
 
 	ns.Def("assoc", assoc)
 	ns.Def("dissoc", dissoc)
