@@ -27,8 +27,16 @@
 
 (test "fn/recur"
       (let [f (fn [x]
-                (println x)
                 (if (pos? x)
                   (recur (dec x))
                   x))]
         (= (f 10) 0)))
+
+(test "fn/loop/recur"
+      (let [f (fn [n]
+                (* 2
+                  (loop [x 0]
+                    (if (< x n)
+                      (recur (inc x))
+                      x))))]
+        (= (f 10) 20)))

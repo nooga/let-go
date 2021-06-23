@@ -511,10 +511,10 @@ func recurCompiler(c *Context, form vm.Value) error {
 		args = args.Next()
 	}
 
-	if !c.isFunction && rp != nil {
+	if rp != nil {
 		c.emitWithArg(vm.OPREC, c.currentAddress()-rp.address)
 		c.chunk.Append32(argc)
-	} else {
+	} else if c.isFunction {
 		c.emitWithArg(vm.OPREF, argc)
 	}
 	c.tailPosition = tp
