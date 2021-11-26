@@ -31,13 +31,17 @@
 (defmacro if-not [condition & forms]
   (list 'if condition (first (next forms)) (first forms)))
 
+(defn empty? [xs] (= 0 (count xs)))
+
 (defn concat-list [a b]
-  (if a (cons (first a) (concat-list (next a) b)) b))
+  (if (empty? a)
+    b
+    (cons (first a) (concat-list (next a) b))))
 
 (defmacro cond [& forms]
   (when forms
-        (list 'if (first forms) (second forms)
-              (cons 'cond (next (next forms))))))
+    (list 'if (first forms) (second forms)
+          (cons 'cond (next (next forms))))))
 
 (defmacro condp [comparator arg & forms]
   (let [l (count forms)]
@@ -54,7 +58,7 @@
 (defmacro ns [n & nss]
   (let [cns (list 'in-ns (list 'quote n))
         imports (cons 'use nss)] ; FIXME this is not clojure syntax at all
-  (list 'do cns imports)))
+    (list 'do cns imports)))
 
 ; makeshift test helper
 (def *test-flag* true)
@@ -70,6 +74,9 @@
 
 (def > gt)
 (def < lt)
+
+(def >= (fn [a b] (or (= a b) (> a b))))
+(def <= (fn [a b] (or (= a b) (< a b))))
 
 (defn zero? [x] (= 0 x))
 (defn pos? [x] (gt x 0))
@@ -112,3 +119,9 @@
                 (list x a)))
             initial
             forms)))
+
+(defn mapcat [f xs]
+  (reduce (fn [a x] (concat-list a x)) '() (map f xs)))
+
+(defn filter [f xs]
+  (reduce (fn [a x] (if (f x) (cons x a) a)) '() xs))
