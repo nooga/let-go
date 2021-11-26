@@ -36,7 +36,7 @@ func (c *localCell) source() cell {
 }
 
 func (c *localCell) emit() error {
-	c.scope.emitWithArg(vm.OPDPN, c.scope.sp-1-c.local)
+	c.scope.emitWithArg(vm.OP_DUP_NTH, c.scope.sp-1-c.local)
 	c.scope.incSP(1)
 	return nil
 }
@@ -51,7 +51,7 @@ func (c *argCell) source() cell {
 }
 
 func (c *argCell) emit() error {
-	c.scope.emitWithArg(vm.OPLDA, c.arg)
+	c.scope.emitWithArg(vm.OP_LOAD_ARG, c.arg)
 	c.scope.incSP(1)
 	return nil
 }
@@ -68,7 +68,7 @@ func (c *argCell) emit() error {
 //}
 //
 //func (c *varCell) emit() error {
-//	c.scope.emitWithArg(vm.OPLDA, c.arg)
+//	c.scope.emitWithArg(vm.OP_LOAD_ARG, c.arg)
 //	c.scope.incSP(1)
 //	return nil
 //}
@@ -84,7 +84,7 @@ func (c *closureCell) source() cell {
 }
 
 func (c *closureCell) emit() error {
-	c.scope.emitWithArg(vm.OPLDK, c.closure)
+	c.scope.emitWithArg(vm.OP_LOAD_CLOSEDOVER, c.closure)
 	c.scope.incSP(1)
 	return nil
 }

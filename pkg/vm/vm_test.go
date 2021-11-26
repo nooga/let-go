@@ -168,18 +168,18 @@ func TestSimpleCall(t *testing.T) {
 
 	c := NewCodeChunk(&[]Value{forty, two, plus})
 	c.maxStack = 4
-	c.Append(OPLDC)
+	c.Append(OP_LOAD_CONST)
 	c.Append32(2)
 
-	c.Append(OPLDC)
+	c.Append(OP_LOAD_CONST)
 	c.Append32(0)
-	c.Append(OPLDC)
+	c.Append(OP_LOAD_CONST)
 	c.Append32(1)
 
-	c.Append(OPINV)
+	c.Append(OP_INVOKE)
 	c.Append32(2)
 
-	c.Append(OPRET)
+	c.Append(OP_RETURN)
 
 	var out Value
 

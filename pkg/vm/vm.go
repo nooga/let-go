@@ -24,53 +24,53 @@ import (
 
 // Opcodes
 const (
-	OPNOP uint8 = iota // do nothing
+	OP_NOOP uint8 = iota // do nothing
 
-	OPLDC // load constant LDC (index int32)
-	OPLDA // load argument LDA (index int32)
+	OP_LOAD_CONST // load constant LDC (index int32)
+	OP_LOAD_ARG   // load argument LDA (index int32)
 
-	OPINV // invoke function
-	OPRET // return from function
+	OP_INVOKE // invoke function
+	OP_RETURN // return from function
 
-	OPBRT // branch if truthy BRT (offset int32)
-	OPBRF // branch if falsy BRF (offset int32)
-	OPJMP // jump by offset JMP (offset int32)
+	OP_BRANCH_TRUE  // branch if truthy BRT (offset int32)
+	OP_BRANCH_FALSE // branch if falsy BRF (offset int32)
+	OP_JUMP         // jump by offset JMP (offset int32)
 
-	OPPOP // pop value from the stack and discard it
-	OPPON // save top and pop n elements from the stack PON (n int32)
-	OPDPN // duplicate nth value from the stack OPN (n int32)
+	OP_POP     // pop value from the stack and discard it
+	OP_POP_N   // save top and pop n elements from the stack PON (n int32)
+	OP_DUP_NTH // duplicate nth value from the stack OPN (n int32)
 
-	OPSTV // set var
-	OPLDV // push var root
+	OP_SET_VAR  // set var
+	OP_LOAD_VAR // push var root
 
-	OPMKC // make a closure out of fn
-	OPLDK // load closed over LDK (index int32)
-	OPPAK // push closed over value to a closure
+	OP_MAKE_CLOSURE    // make a closure out of fn
+	OP_LOAD_CLOSEDOVER // load closed over LDK (index int32)
+	OP_PUSH_CLOSEDOVER // push closed over value to a closure
 
-	OPREC // loop recurse REC (offset int32, argc int32)
-	OPREF // function recurse REF (argc int32)
+	OP_RECUR    // loop recurse REC (offset int32, argc int32)
+	OP_RECUR_FN // function recurse REF (argc int32)
 )
 
 func OpcodeToString(op uint8) string {
 	ops := []string{
-		"NOP",
-		"LDC",
-		"LDA",
-		"INV",
-		"RET",
-		"BRT",
-		"BRF",
-		"JMP",
+		"NOOP",
+		"LOAD_CONST",
+		"LOAD_ARG",
+		"INVOKE",
+		"RETURN",
+		"BRANCH_T",
+		"BRANCH_F",
+		"JUMP",
 		"POP",
-		"PON",
-		"DPN",
-		"STV",
-		"LDV",
-		"MKC",
-		"LDK",
-		"PAK",
-		"REC",
-		"REF",
+		"POP_N",
+		"DUP_NTH",
+		"SET_VAR",
+		"LOAD_VAR",
+		"MAKE_CLOSURE",
+		"LOAD_CLOSEDOVER",
+		"PUSH_CLOSEDOVER",
+		"RECUR",
+		"RECUR_FN",
 	}
 	if int(op) < len(ops) {
 		return ops[op]
@@ -105,16 +105,16 @@ func (c *CodeChunk) Debug() {
 	for i < len(c.code) {
 		op, _ := c.Get(i)
 		switch op {
-		case OPREC:
+		case OP_RECUR:
 			arg, _ := c.Get32(i + 1)
 			arg2, _ := c.Get32(i + 5)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2)
 			i += 9
-		case OPLDA, OPBRT, OPBRF, OPJMP, OPPON, OPDPN, OPINV, OPLDK, OPREF, OPMKC:
+		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_CLOSURE:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 5
-		case OPLDC:
+		case OP_LOAD_CONST:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, "<-", consts[arg])
 			i += 5
@@ -289,10 +289,10 @@ func (f *Frame) Run() (Value, error) {
 		//	f.stackDbg()
 		//}
 		switch inst {
-		case OPNOP:
+		case OP_NOOP:
 			f.ip++
 
-		case OPLDC:
+		case OP_LOAD_CONST:
 			idx, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("const push failed").Wrap(err)
@@ -306,7 +306,7 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip += 5
 
-		case OPLDA:
+		case OP_LOAD_ARG:
 			idx, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("get argument index failed").Wrap(err)
@@ -320,14 +320,14 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip += 5
 
-		case OPRET:
+		case OP_RETURN:
 			v, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("return failed").Wrap(err)
 			}
 			return v, nil
 
-		case OPINV:
+		case OP_INVOKE:
 			arity, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("INV arg count").Wrap(err)
@@ -357,7 +357,7 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip += 5
 
-		case OPBRT:
+		case OP_BRANCH_TRUE:
 			offset, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("BRT offset").Wrap(err)
@@ -372,7 +372,7 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip += offset
 
-		case OPBRF:
+		case OP_BRANCH_FALSE:
 			offset, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("BRT offset").Wrap(err)
@@ -387,21 +387,21 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip += offset
 
-		case OPJMP:
+		case OP_JUMP:
 			offset, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("JMP offset").Wrap(err)
 			}
 			f.ip += offset
 
-		case OPPOP:
+		case OP_POP:
 			_, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("POP failed").Wrap(err)
 			}
 			f.ip++
 
-		case OPPON:
+		case OP_POP_N:
 			v, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("PON top value").Wrap(err)
@@ -420,7 +420,7 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip += 5
 
-		case OPDPN:
+		case OP_DUP_NTH:
 			num, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("DPN get argument").Wrap(err)
@@ -435,7 +435,7 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip += 5
 
-		case OPSTV:
+		case OP_SET_VAR:
 			val, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("STV pop value failed").Wrap(err)
@@ -455,7 +455,7 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip++
 
-		case OPLDV:
+		case OP_LOAD_VAR:
 			// note this avoids pop-push dance
 			idx := f.sp - 1
 			if idx < 0 {
@@ -468,7 +468,7 @@ func (f *Frame) Run() (Value, error) {
 			f.stack[idx] = varr.Deref()
 			f.ip++
 
-		case OPMKC:
+		case OP_MAKE_CLOSURE:
 			idx := f.sp - 1
 			if idx < 0 {
 				return NIL, NewExecutionError("MKC stack underflow")
@@ -480,7 +480,7 @@ func (f *Frame) Run() (Value, error) {
 			f.stack[idx] = fn.MakeClosure()
 			f.ip++
 
-		case OPLDK:
+		case OP_LOAD_CLOSEDOVER:
 			idx, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("get closed over index failed").Wrap(err)
@@ -495,7 +495,7 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.ip += 5
 
-		case OPPAK:
+		case OP_PUSH_CLOSEDOVER:
 			val, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("popping closed over value failed").Wrap(err)
@@ -515,7 +515,7 @@ func (f *Frame) Run() (Value, error) {
 			fun.closedOvers = append(fun.closedOvers, val)
 			f.ip++
 
-		case OPREF:
+		case OP_RECUR_FN:
 			arity, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("REF arg count").Wrap(err)
@@ -529,7 +529,7 @@ func (f *Frame) Run() (Value, error) {
 			f.sp = 0
 			f.ip = 0
 
-		case OPREC:
+		case OP_RECUR:
 			offset, err := f.code.Get32(f.ip + 1)
 			if err != nil {
 				return NIL, NewExecutionError("REC reading offset").Wrap(err)
