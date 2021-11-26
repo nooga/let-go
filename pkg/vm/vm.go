@@ -271,10 +271,20 @@ func (f *Frame) drop(n int) error {
 	return nil
 }
 
+func trunc(s string, n int) string {
+	if len(s) < n {
+		return s
+	}
+	return s[0:n] + " ..."
+}
+
 func (f *Frame) stackDbg() {
-	fmt.Printf("VM stack [%d/%d]: ", f.sp, f.code.maxStack)
+	fmt.Println("IP = ", f.ip)
+	f.code.Debug()
+	fmt.Printf("VM stack [%d/%d]:\n", f.sp, f.code.maxStack)
 	for i := 0; i < f.sp; i++ {
-		fmt.Print(f.stack[i], " ")
+		fmt.Println("   ", trunc(f.stack[i].String(), 32))
+
 	}
 	fmt.Println()
 }
