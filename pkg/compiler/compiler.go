@@ -437,12 +437,14 @@ func (c *Context) lookupLocal(symbol vm.Symbol) int {
 
 type recurPoint struct {
 	address int
+	locals  int
 	argsc   int
 }
 
 func (c *Context) pushRecurPoint(argsc int) {
 	c.recurPoints = append(c.recurPoints, &recurPoint{
 		address: c.currentAddress(),
+		locals:  len(c.locals),
 		argsc:   argsc,
 	})
 }
@@ -513,7 +515,16 @@ func recurCompiler(c *Context, form vm.Value) error {
 	}
 
 	if rp != nil {
-		c.emitWithArg(vm.OPREC, c.currentAddress()-rp.address)
+		passedScopes := len(c.locals) - rp.locals
+		if passedScopes > 0 {
+			passedLocals := 0
+			for i := 0; i < passedScopes; i++ {
+				passedLocals += len(c.locals[len(c.locals)-i-1])
+			}
+			c.decSP(passedLocals)
+			c.emitWithArg(vm.OP_POP_N, passedLocals)
+		}
+		c.emitWithArg(vm.OP_RECUR, c.currentAddress()-rp.address)
 		c.chunk.Append32(argc)
 	} else if c.isFunction {
 		c.emitWithArg(vm.OP_RECUR_FN, argc)
