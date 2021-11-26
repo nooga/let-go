@@ -21,11 +21,12 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"log"
+	"os"
+
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
-	"log"
-	"os"
 )
 
 func motd() {
@@ -139,4 +140,5 @@ func main() {
 		motd()
 		repl(context)
 	}
+
 }

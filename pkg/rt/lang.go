@@ -20,9 +20,10 @@ package rt
 import (
 	_ "embed"
 	"fmt"
-	"github.com/nooga/let-go/pkg/vm"
 	"strings"
 	"time"
+
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 var nsRegistry map[string]*vm.Namespace
@@ -31,6 +32,10 @@ func init() {
 	nsRegistry = make(map[string]*vm.Namespace)
 
 	installLangNS()
+}
+
+func AllNSes() map[string]*vm.Namespace {
+	return nsRegistry
 }
 
 func NS(name string) *vm.Namespace {

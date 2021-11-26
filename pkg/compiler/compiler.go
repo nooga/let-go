@@ -19,10 +19,11 @@ package compiler
 
 import (
 	"fmt"
-	"github.com/nooga/let-go/pkg/rt"
-	"github.com/nooga/let-go/pkg/vm"
 	"io"
 	"strings"
+
+	"github.com/nooga/let-go/pkg/rt"
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 type Context struct {
