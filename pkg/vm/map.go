@@ -137,6 +137,9 @@ func (l Map) ValueAt(key Value) Value {
 }
 
 func (l Map) ValueAtOr(key Value, dflt Value) Value {
+	if key == NIL {
+		return dflt
+	}
 	ret, ok := l[key]
 	if !ok {
 		return dflt

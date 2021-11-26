@@ -114,6 +114,26 @@ func (l *Range) String() string {
 	return l.Seq().String()
 }
 
+func (l *Range) ValueAt(key Value) Value {
+	return l.ValueAtOr(key, NIL)
+}
+
+func (l *Range) ValueAtOr(key Value, dflt Value) Value {
+	// FIXME: assumes positive step
+	if key == NIL {
+		return dflt
+	}
+	numkey, ok := key.(Int)
+	if !ok {
+		return dflt
+	}
+	nth := l.start + int(numkey)*l.step
+	if nth <= l.end && nth >= l.start {
+		return Int(nth)
+	}
+	return dflt
+}
+
 func NewRange(start, end, step Int) Value {
 	// FIXME: Add support for negative step
 	if end > start && step > 0 {

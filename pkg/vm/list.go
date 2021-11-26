@@ -132,6 +132,25 @@ func (l *List) Empty() Collection {
 	return EmptyList
 }
 
+func (l *List) ValueAt(key Value) Value {
+	return l.ValueAtOr(key, NIL)
+}
+
+func (l *List) ValueAtOr(key Value, dflt Value) Value {
+	if key == NIL {
+		return dflt
+	}
+	numkey, ok := key.(Int)
+	if !ok || numkey < 0 {
+		return dflt
+	}
+	li := l
+	for i := 0; i < int(numkey); i++ {
+		li = li.next
+	}
+	return li.first
+}
+
 func (l *List) String() string {
 	b := &strings.Builder{}
 	b.WriteRune('(')

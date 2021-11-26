@@ -103,6 +103,21 @@ func NewArrayVector(v []Value) Value {
 	return ArrayVector(v)
 }
 
+func (l ArrayVector) ValueAt(key Value) Value {
+	return l.ValueAtOr(key, NIL)
+}
+
+func (l ArrayVector) ValueAtOr(key Value, dflt Value) Value {
+	if key == NIL {
+		return dflt
+	}
+	numkey, ok := key.(Int)
+	if !ok || numkey < 0 || int(numkey) >= len(l) {
+		return dflt
+	}
+	return l[int(numkey)]
+}
+
 func (l ArrayVector) String() string {
 	b := &strings.Builder{}
 	b.WriteRune('[')
