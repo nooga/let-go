@@ -32,13 +32,14 @@ import (
 )
 
 type LispReader struct {
-	inputName string
-	pos       int
-	line      int
-	column    int
-	lastCol   int
-	lastRune  rune
-	r         *bufio.Reader
+	inputName  string
+	pos        int
+	line       int
+	column     int
+	lastCol    int
+	lastRune   rune
+	maxPercent int
+	r          *bufio.Reader
 }
 
 func NewLispReader(r io.Reader, inputName string) *LispReader {
@@ -163,6 +164,12 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 	}
 	if ss == "false" {
 		return vm.FALSE, nil
+	}
+	if ss[0] == '%' {
+		n, err := strconv.Atoi(ss[1:])
+		if err == nil && n >= 0 && n > r.maxPercent {
+			r.maxPercent = n
+		}
 	}
 	return t, nil
 }
@@ -449,6 +456,46 @@ func readVarQuote(r *LispReader, _ rune) (vm.Value, error) {
 	return ret, nil
 }
 
+func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
+	var ret []vm.Value
+	r.maxPercent = 0
+	for {
+		ch2, err := r.eatWhitespace()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		if ch2 == ')' {
+			break
+		}
+		if err = r.unread(); err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		form, err := r.Read()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		ret = appendNonVoid(ret, form)
+	}
+	var percents []vm.Value
+	for i := 1; i <= r.maxPercent; i++ {
+		percents = append(percents, vm.Symbol(fmt.Sprintf("%%%d", i)))
+	}
+	r.maxPercent = 0
+	body, err := vm.ListType.Box(ret)
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+	}
+	fn, err := vm.ListType.Box([]vm.Value{
+		vm.Symbol("fn"),
+		vm.NewArrayVector(percents),
+		body,
+	})
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+	}
+	return fn, nil
+}
+
 func readHashMacro(r *LispReader, _ rune) (vm.Value, error) {
 	ch, err := r.next()
 	if err != nil {
@@ -508,6 +555,7 @@ func readerInit() {
 	hashMacros = map[rune]readerFunc{
 		'\'': readVarQuote,
 		'_':  readFormComment,
+		'(':  readShortFn,
 	}
 }
 

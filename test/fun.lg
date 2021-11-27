@@ -16,6 +16,11 @@
 ;
 (ns test.fun)
 
+(test "fn"
+      (let [f1 (fn [x y] (+ x y x))
+            f2 #(+ %1 %2 %1)]
+        (= (f1 1 2) (f2 1 2))))
+
 (defn curry' [args body]
   (let [fa (first args)
         r  (next args)]
