@@ -40,8 +40,9 @@ const (
 	OP_POP_N   // save top and pop n elements from the stack PON (n int32)
 	OP_DUP_NTH // duplicate nth value from the stack OPN (n int32)
 
-	OP_SET_VAR  // set var
-	OP_LOAD_VAR // push var root
+	OP_SET_VAR        // set var
+	OP_LOAD_VAR       // push var root
+	OP_LOAD_CONST_VAR // push derefed const
 
 	OP_MAKE_CLOSURE    // make a closure out of fn
 	OP_LOAD_CLOSEDOVER // load closed over LDK (index int32)
@@ -66,6 +67,7 @@ func OpcodeToString(op uint8) string {
 		"DUP_NTH",
 		"SET_VAR",
 		"LOAD_VAR",
+		"LOAD_CONST_VAR",
 		"MAKE_CLOSURE",
 		"LOAD_CLOSEDOVER",
 		"PUSH_CLOSEDOVER",
@@ -477,6 +479,20 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.stack[idx] = varr.Deref()
 			f.ip++
+
+		case OP_LOAD_CONST_VAR:
+			idx, err := f.code.Get32(f.ip + 1)
+			if err != nil {
+				return NIL, NewExecutionError("const push failed").Wrap(err)
+			}
+			if idx >= f.constsc {
+				return NIL, NewExecutionError("const lookup out of bounds")
+			}
+			err = f.push(f.consts[idx].(*Var).Deref())
+			if err != nil {
+				return NIL, NewExecutionError("const push failed").Wrap(err)
+			}
+			f.ip += 5
 
 		case OP_MAKE_CLOSURE:
 			idx := f.sp - 1
