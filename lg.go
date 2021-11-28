@@ -39,8 +39,12 @@ func runForm(ctx *compiler.Context, in string) (vm.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	val, err := vm.NewFrame(chunk, nil).Run()
+	var val vm.Value
+	if debug {
+		val, err = vm.NewDebugFrame(chunk, nil).Run()
+	} else {
+		val, err = vm.NewFrame(chunk, nil).Run()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -92,26 +96,32 @@ func runFile(ctx *compiler.Context, filename string) error {
 
 var runREPL bool
 var expr string
+var debug bool
 
 func init() {
 	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
 	flag.StringVar(&expr, "e", "", "eval given expression")
+	flag.BoolVar(&debug, "d", false, "enable VM debug mode")
 }
 
-func initCompiler() *compiler.Context {
+func initCompiler(debug bool) *compiler.Context {
 	ns := rt.NS("user")
 	if ns == nil {
 		fmt.Println("namespace not found")
 		return nil
 	}
-	return compiler.NewCompiler(ns)
+	if debug {
+		return compiler.NewDebugCompiler(ns)
+	} else {
+		return compiler.NewCompiler(ns)
+	}
 }
 
 func main() {
 	flag.Parse()
 	files := flag.Args()
 
-	context := initCompiler()
+	context := initCompiler(debug)
 
 	ranSomething := false
 	if len(files) >= 1 {

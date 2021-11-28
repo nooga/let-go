@@ -42,6 +42,7 @@ type Context struct {
 	closedOvers  map[vm.Symbol]*closureCell
 	recurPoints  []*recurPoint
 	tailPosition bool
+	debug        bool
 }
 
 // FIXME this is unacceptable hax
@@ -58,7 +59,14 @@ func NewCompiler(ns *vm.Namespace) *Context {
 		source:      "<default>",
 		locals:      []map[vm.Symbol]int{},
 		closedOvers: map[vm.Symbol]*closureCell{},
+		debug:       false,
 	}
+}
+
+func NewDebugCompiler(ns *vm.Namespace) *Context {
+	c := NewCompiler(ns)
+	c.debug = true
+	return c
 }
 
 func (c *Context) SetSource(source string) *Context {
@@ -115,7 +123,12 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 		chunk.AppendChunk(formchunk)
 
 		formchunk.Append(vm.OP_RETURN)
-		f := vm.NewFrame(formchunk, nil)
+		var f *vm.Frame
+		if c.debug {
+			f = vm.NewDebugFrame(formchunk, nil)
+		} else {
+			f = vm.NewFrame(formchunk, nil)
+		}
 		result, err = f.Run()
 		if err != nil {
 			return nil, result, err

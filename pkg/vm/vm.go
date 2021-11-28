@@ -184,6 +184,7 @@ type Frame struct {
 	code        *CodeChunk
 	ip          int
 	sp          int
+	debug       bool
 }
 
 func NewFrame(code *CodeChunk, args []Value) *Frame {
@@ -196,7 +197,14 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 		code:    code,
 		ip:      0,
 		sp:      0,
+		debug:   false,
 	}
+}
+
+func NewDebugFrame(code *CodeChunk, args []Value) *Frame {
+	f := NewFrame(code, args)
+	f.debug = true
+	return f
 }
 
 func (f *Frame) push(v Value) error {
@@ -281,19 +289,21 @@ func trunc(s string, n int) string {
 }
 
 func (f *Frame) stackDbg() {
-	fmt.Println("IP = ", f.ip)
-	f.code.Debug()
-	fmt.Printf("VM stack [%d/%d]:\n", f.sp, f.code.maxStack)
+	//fmt.Println("IP = ", f.ip)
+	//f.code.Debug()
+	fmt.Printf("VM stack [%d/%d]:", f.sp, f.code.maxStack)
 	for i := 0; i < f.sp; i++ {
-		fmt.Println("   ", trunc(f.stack[i].String(), 32))
+		fmt.Print("   ", trunc(f.stack[i].String(), 32))
 
 	}
 	fmt.Println()
 }
 
 func (f *Frame) Run() (Value, error) {
-	//fmt.Print("run")
-	//f.code.Debug()
+	if f.debug {
+		fmt.Print("run")
+		f.code.Debug()
+	}
 	for {
 		inst, _ := f.code.Get(f.ip)
 		//if f.debug {
@@ -582,6 +592,9 @@ func (f *Frame) Run() (Value, error) {
 		default:
 			return NIL, NewExecutionError("unknown instruction")
 		}
-
+		if f.debug {
+			fmt.Println("exec", f.ip, OpcodeToString(inst))
+			f.stackDbg()
+		}
 	}
 }
