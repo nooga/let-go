@@ -110,13 +110,14 @@ func (c *CodeChunk) Debug() {
 		case OP_RECUR:
 			arg, _ := c.Get32(i + 1)
 			arg2, _ := c.Get32(i + 5)
-			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2)
-			i += 9
+			arg3, _ := c.Get32(i + 9)
+			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2, arg3)
+			i += 13
 		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_CLOSURE:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 5
-		case OP_LOAD_CONST:
+		case OP_LOAD_CONST, OP_LOAD_CONST_VAR:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, "<-", consts[arg])
 			i += 5
@@ -306,10 +307,6 @@ func (f *Frame) Run() (Value, error) {
 	}
 	for {
 		inst, _ := f.code.Get(f.ip)
-		//if f.debug {
-		//	fmt.Println("exec", f.ip, OpcodeToString(inst))
-		//	f.stackDbg()
-		//}
 		switch inst {
 		case OP_NOOP:
 			f.ip++
@@ -574,11 +571,15 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("REC reading argc").Wrap(err)
 			}
+			ignore, err := f.code.Get32(f.ip + 9)
+			if err != nil {
+				return NIL, NewExecutionError("REC reading argc").Wrap(err)
+			}
 			a, err := f.mult(0, argc)
 			if err != nil {
 				return NIL, NewExecutionError("REC popping arguments failed").Wrap(err)
 			}
-			err = f.drop(argc * 2)
+			err = f.drop(argc*2 + ignore)
 			if err != nil {
 				return NIL, NewExecutionError("REC popping old locals").Wrap(err)
 			}

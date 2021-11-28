@@ -528,16 +528,17 @@ func recurCompiler(c *Context, form vm.Value) error {
 
 	if rp != nil {
 		passedScopes := len(c.locals) - rp.locals
+		ignore := 0
 		if passedScopes > 0 {
 			passedLocals := 0
 			for i := 0; i < passedScopes; i++ {
 				passedLocals += len(c.locals[len(c.locals)-i-1])
 			}
-			c.decSP(passedLocals)
-			c.emitWithArg(vm.OP_POP_N, passedLocals)
+			ignore += passedLocals
 		}
 		c.emitWithArg(vm.OP_RECUR, c.currentAddress()-rp.address)
 		c.chunk.Append32(argc)
+		c.chunk.Append32(ignore)
 	} else if c.isFunction {
 		c.emitWithArg(vm.OP_RECUR_FN, argc)
 	}

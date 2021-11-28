@@ -19,10 +19,21 @@
 
 (test "loop/recur"
       (= 220
-         (loop [val 200 cnt 20]
+         (loop [val 200
+                cnt 20]
            (if (pos? cnt)
+             (recur (inc val) (dec cnt))
+             val))))
+
+(test "loop/let/recur"
+      (= 220
+         (loop [val 200
+                cnt 20]
+           (let [meh 1
+                 muh 2]
+             (if (pos? cnt)
                (recur (inc val) (dec cnt))
-               val))))
+               val)))))
 
 
 (test "fn/recur"
@@ -32,11 +43,31 @@
                   x))]
         (= (f 10) 0)))
 
+(test "fn/let/recur"
+      (let [f (fn [x]
+                (let [meh 1
+                      muh 2]
+                  (if (pos? x)
+                    (recur (dec x))
+                    x)))]
+        (= (f 10) 0)))
+
 (test "fn/loop/recur"
       (let [f (fn [n]
                 (* 2
-                  (loop [x 0]
-                    (if (< x n)
-                      (recur (inc x))
-                      x))))]
+                   (loop [x 0]
+                     (if (< x n)
+                       (recur (inc x))
+                       x))))]
+        (= (f 10) 20)))
+
+(test "fn/loop/let/recur"
+      (let [f (fn [n]
+                (* 2
+                   (loop [x 0]
+                     (let [meh 1
+                           muh 2]
+                       (if (< x n)
+                         (recur (inc x))
+                         x)))))]
         (= (f 10) 20)))
