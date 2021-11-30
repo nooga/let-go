@@ -143,11 +143,11 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 	return c.chunk, result, nil
 }
 
-func (c *Context) emit(op uint8) {
+func (c *Context) emit(op int32) {
 	c.chunk.Append(op)
 }
 
-func (c *Context) emitWithArg(op uint8, arg int) {
+func (c *Context) emitWithArg(op int32, arg int) {
 	c.chunk.Append(op)
 	c.chunk.Append32(arg)
 }
@@ -392,7 +392,7 @@ func (c *Context) compileForm(o vm.Value) error {
 	return nil
 }
 
-func (c *Context) emitWithArgPlaceholder(inst uint8) int {
+func (c *Context) emitWithArgPlaceholder(inst int32) int {
 	placeholder := c.currentAddress()
 	c.emitWithArg(inst, 0)
 	return placeholder
@@ -403,7 +403,7 @@ func (c *Context) currentAddress() int {
 }
 
 func (c *Context) updatePlaceholderArg(placeholder int, arg int) {
-	c.chunk.Update32(placeholder+1, arg)
+	c.chunk.Update32(placeholder+1, int32(arg))
 }
 
 func (c *Context) pushLocals() {
@@ -551,7 +551,7 @@ func loopCompiler(c *Context, form vm.Value) error {
 	bindings := form.(*vm.List).Next()
 	binds, ok := bindings.First().(vm.ArrayVector)
 	if !ok {
-		return NewCompileError("let bindings should be a vector")
+		return NewCompileError("loop bindings should be a vector")
 	}
 	body := bindings.Next()
 	c.pushLocals()
@@ -615,7 +615,7 @@ func letCompiler(c *Context, form vm.Value) error {
 	for i := 0; i < len(binds); i += 2 {
 		name := binds[i]
 		if name.Type() != vm.SymbolType {
-			return NewCompileError("let binding name must be a symbol")
+			return NewCompileError("let binding name must be a symbol: " + name.String())
 		}
 		if i+1 >= len(binds) {
 			return NewCompileError("let bindings must have even number of forms")

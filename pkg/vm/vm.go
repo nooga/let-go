@@ -18,13 +18,12 @@
 package vm
 
 import (
-	"encoding/binary"
 	"fmt"
 )
 
 // Opcodes
 const (
-	OP_NOOP uint8 = iota // do nothing
+	OP_NOOP int32 = iota // do nothing
 
 	OP_LOAD_CONST // load constant LDC (index int32)
 	OP_LOAD_ARG   // load argument LDA (index int32)
@@ -52,7 +51,7 @@ const (
 	OP_RECUR_FN // function recurse REF (argc int32)
 )
 
-func OpcodeToString(op uint8) string {
+func OpcodeToString(op int32) string {
 	ops := []string{
 		"NOOP",
 		"LOAD_CONST",
@@ -84,14 +83,14 @@ func OpcodeToString(op uint8) string {
 type CodeChunk struct {
 	maxStack int
 	consts   *[]Value
-	code     []uint8
+	code     []int32
 	length   int
 }
 
 func NewCodeChunk(consts *[]Value) *CodeChunk {
 	return &CodeChunk{
 		consts: consts,
-		code:   []uint8{},
+		code:   []int32{},
 		length: 0,
 	}
 }
@@ -109,18 +108,18 @@ func (c *CodeChunk) Debug() {
 		switch op {
 		case OP_RECUR:
 			arg, _ := c.Get32(i + 1)
-			arg2, _ := c.Get32(i + 5)
-			arg3, _ := c.Get32(i + 9)
+			arg2, _ := c.Get32(i + 2)
+			arg3, _ := c.Get32(i + 3)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2, arg3)
-			i += 13
+			i += 4
 		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_CLOSURE:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
-			i += 5
+			i += 2
 		case OP_LOAD_CONST, OP_LOAD_CONST_VAR:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, "<-", consts[arg])
-			i += 5
+			i += 2
 		default:
 			fmt.Println("  ", i, ":", OpcodeToString(op))
 			i++
@@ -132,16 +131,13 @@ func (c *CodeChunk) Length() int {
 	return c.length
 }
 
-func (c *CodeChunk) Append(insts ...uint8) {
+func (c *CodeChunk) Append(insts ...int32) {
 	c.code = append(c.code, insts...)
 	c.length = len(c.code)
 }
 
 func (c *CodeChunk) Append32(val int) {
-	n := make([]uint8, 4)
-	binary.LittleEndian.PutUint32(n, uint32(val))
-	c.code = append(c.code, n...)
-	c.length = len(c.code)
+	c.Append(int32(val))
 }
 
 func (c *CodeChunk) AppendChunk(o *CodeChunk) {
@@ -152,7 +148,7 @@ func (c *CodeChunk) AppendChunk(o *CodeChunk) {
 	c.length += len(o.code)
 }
 
-func (c *CodeChunk) Get(idx int) (uint8, error) {
+func (c *CodeChunk) Get(idx int) (int32, error) {
 	if idx >= c.length {
 		return 0, NewExecutionError("bytecode fetch out of bounds")
 	}
@@ -160,14 +156,12 @@ func (c *CodeChunk) Get(idx int) (uint8, error) {
 }
 
 func (c *CodeChunk) Get32(idx int) (int, error) {
-	if idx >= c.length || idx+4 > c.length {
-		return 0, NewExecutionError("bytecode wide fetch out of bounds")
-	}
-	return int(binary.LittleEndian.Uint32(c.code[idx:])), nil
+	n, err := c.Get(idx)
+	return int(n), err
 }
 
-func (c *CodeChunk) Update32(address int, value int) {
-	binary.LittleEndian.PutUint32(c.code[address:address+4], uint32(value))
+func (c *CodeChunk) Update32(address int, value int32) {
+	c.code[address] = value
 }
 
 func (c *CodeChunk) SetMaxStack(max int) {
@@ -302,42 +296,36 @@ func (f *Frame) stackDbg() {
 
 func (f *Frame) Run() (Value, error) {
 	if f.debug {
-		fmt.Print("run")
+		fmt.Print("run", f.args, "\n")
 		f.code.Debug()
 	}
 	for {
-		inst, _ := f.code.Get(f.ip)
+		inst := f.code.code[f.ip]
 		switch inst {
 		case OP_NOOP:
 			f.ip++
 
 		case OP_LOAD_CONST:
-			idx, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("const push failed").Wrap(err)
-			}
-			if idx >= f.constsc {
+			idx := f.code.code[f.ip+1]
+			if int(idx) >= f.constsc {
 				return NIL, NewExecutionError("const lookup out of bounds")
 			}
-			err = f.push(f.consts[idx])
+			err := f.push(f.consts[idx])
 			if err != nil {
 				return NIL, NewExecutionError("const push failed").Wrap(err)
 			}
-			f.ip += 5
+			f.ip += 2
 
 		case OP_LOAD_ARG:
-			idx, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("get argument index failed").Wrap(err)
-			}
-			if idx >= f.argc {
+			idx := f.code.code[f.ip+1]
+			if int(idx) >= f.argc {
 				return NIL, NewExecutionError("argument lookup out of bounds")
 			}
-			err = f.push(f.args[idx])
+			err := f.push(f.args[idx])
 			if err != nil {
 				return NIL, NewExecutionError("argument push failed").Wrap(err)
 			}
-			f.ip += 5
+			f.ip += 2
 
 		case OP_RETURN:
 			v, err := f.pop()
@@ -347,71 +335,70 @@ func (f *Frame) Run() (Value, error) {
 			return v, nil
 
 		case OP_INVOKE:
-			arity, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("INV arg count").Wrap(err)
+			arity := f.code.code[f.ip+1]
+			var out Value
+			if arity > 0 {
+				fraw, err := f.nth(int(arity))
+				if err != nil {
+					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
+				}
+				fn, ok := fraw.(Fn)
+				if !ok {
+					return NIL, NewTypeError(fraw, "is not a function", nil)
+				}
+				a, err := f.mult(0, int(arity))
+				if err != nil {
+					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
+				}
+				out = fn.Invoke(a)
+				err = f.drop(int(arity) + 1)
+				if err != nil {
+					return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
+				}
+			} else {
+				fraw, err := f.pop()
+				if err != nil {
+					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
+				}
+				fn, ok := fraw.(Fn)
+				if !ok {
+					return NIL, NewTypeError(fraw, "is not a function", nil)
+				}
+				out = fn.Invoke(nil)
 			}
-			fraw, err := f.nth(arity)
-			if err != nil {
-				return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
-			}
-			fn, ok := fraw.(Fn)
-			if !ok {
-				return NIL, NewTypeError(fraw, "is not a function", nil)
-			}
-			a, err := f.mult(0, arity)
-			if err != nil {
-				return NIL, NewExecutionError("popping arguments failed").Wrap(err)
-			}
-			args := make([]Value, len(a))
-			copy(args, a)
-			out := fn.Invoke(args)
-			err = f.drop(arity + 1)
-			if err != nil {
-				return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
-			}
-			err = f.push(out)
+			err := f.push(out)
 			if err != nil {
 				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
 			}
-			f.ip += 5
+			f.ip += 2
 
 		case OP_BRANCH_TRUE:
-			offset, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("BRT offset").Wrap(err)
-			}
+			offset := f.code.code[f.ip+1]
 			v, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
 			}
 			if !IsTruthy(v) {
-				f.ip += 5
+				f.ip += 2
 				continue
 			}
-			f.ip += offset
+			f.ip += int(offset)
 
 		case OP_BRANCH_FALSE:
-			offset, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("BRT offset").Wrap(err)
-			}
+			offset := f.code.code[f.ip+1]
 			v, err := f.pop()
 			if err != nil {
 				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
 			}
 			if IsTruthy(v) {
-				f.ip += 5
+				f.ip += 2
 				continue
 			}
-			f.ip += offset
+			f.ip += int(offset)
 
 		case OP_JUMP:
-			offset, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("JMP offset").Wrap(err)
-			}
-			f.ip += offset
+			offset := f.code.code[f.ip+1]
+			f.ip += int(offset)
 
 		case OP_POP:
 			_, err := f.pop()
@@ -425,11 +412,8 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("PON top value").Wrap(err)
 			}
-			num, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("PON get argument").Wrap(err)
-			}
-			err = f.drop(num)
+			num := f.code.code[f.ip+1]
+			err = f.drop(int(num))
 			if err != nil {
 				return NIL, NewExecutionError("PON drop").Wrap(err)
 			}
@@ -437,14 +421,11 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("PON push").Wrap(err)
 			}
-			f.ip += 5
+			f.ip += 2
 
 		case OP_DUP_NTH:
-			num, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("DPN get argument").Wrap(err)
-			}
-			val, err := f.nth(num)
+			num := f.code.code[f.ip+1]
+			val, err := f.nth(int(num))
 			if err != nil {
 				return NIL, NewExecutionError("DPN get nth").Wrap(err)
 			}
@@ -452,7 +433,7 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("DPN push").Wrap(err)
 			}
-			f.ip += 5
+			f.ip += 2
 
 		case OP_SET_VAR:
 			val, err := f.pop()
@@ -488,18 +469,15 @@ func (f *Frame) Run() (Value, error) {
 			f.ip++
 
 		case OP_LOAD_CONST_VAR:
-			idx, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("const push failed").Wrap(err)
-			}
-			if idx >= f.constsc {
+			idx := f.code.code[f.ip+1]
+			if int(idx) >= f.constsc {
 				return NIL, NewExecutionError("const lookup out of bounds")
 			}
-			err = f.push(f.consts[idx].(*Var).Deref())
+			err := f.push(f.consts[idx].(*Var).Deref())
 			if err != nil {
 				return NIL, NewExecutionError("const push failed").Wrap(err)
 			}
-			f.ip += 5
+			f.ip += 2
 
 		case OP_MAKE_CLOSURE:
 			idx := f.sp - 1
@@ -514,19 +492,16 @@ func (f *Frame) Run() (Value, error) {
 			f.ip++
 
 		case OP_LOAD_CLOSEDOVER:
-			idx, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("get closed over index failed").Wrap(err)
-			}
+			idx := f.code.code[f.ip+1]
 			// FIXME cache closedOvers count
-			if idx >= len(f.closedOvers) {
+			if int(idx) >= len(f.closedOvers) {
 				return NIL, NewExecutionError("closed over lookup out of bounds")
 			}
-			err = f.push(f.closedOvers[idx])
+			err := f.push(f.closedOvers[idx])
 			if err != nil {
 				return NIL, NewExecutionError("closed over push failed").Wrap(err)
 			}
-			f.ip += 5
+			f.ip += 2
 
 		case OP_PUSH_CLOSEDOVER:
 			val, err := f.pop()
@@ -549,37 +524,25 @@ func (f *Frame) Run() (Value, error) {
 			f.ip++
 
 		case OP_RECUR_FN:
-			arity, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("REF arg count").Wrap(err)
-			}
-			a, err := f.mult(0, arity)
+			arity := f.code.code[f.ip+1]
+			a, err := f.mult(0, int(arity))
 			if err != nil {
 				return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 			}
 			copy(f.args, a)
-			f.argc = arity
+			f.argc = int(arity)
 			f.sp = 0
 			f.ip = 0
 
 		case OP_RECUR:
-			offset, err := f.code.Get32(f.ip + 1)
-			if err != nil {
-				return NIL, NewExecutionError("REC reading offset").Wrap(err)
-			}
-			argc, err := f.code.Get32(f.ip + 5)
-			if err != nil {
-				return NIL, NewExecutionError("REC reading argc").Wrap(err)
-			}
-			ignore, err := f.code.Get32(f.ip + 9)
-			if err != nil {
-				return NIL, NewExecutionError("REC reading argc").Wrap(err)
-			}
-			a, err := f.mult(0, argc)
+			offset := f.code.code[f.ip+1]
+			argc := f.code.code[f.ip+2]
+			ignore := f.code.code[f.ip+3]
+			a, err := f.mult(0, int(argc))
 			if err != nil {
 				return NIL, NewExecutionError("REC popping arguments failed").Wrap(err)
 			}
-			err = f.drop(argc*2 + ignore)
+			err = f.drop(int(argc)*2 + int(ignore))
 			if err != nil {
 				return NIL, NewExecutionError("REC popping old locals").Wrap(err)
 			}
@@ -588,7 +551,7 @@ func (f *Frame) Run() (Value, error) {
 				return NIL, NewExecutionError("REC pushing new locals").Wrap(err)
 			}
 
-			f.ip -= offset
+			f.ip -= int(offset)
 
 		default:
 			return NIL, NewExecutionError("unknown instruction")

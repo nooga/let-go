@@ -100,7 +100,9 @@ func (l ArrayVector) Empty() Collection {
 }
 
 func NewArrayVector(v []Value) Value {
-	return ArrayVector(v)
+	vk := make([]Value, len(v))
+	copy(vk, v)
+	return ArrayVector(vk)
 }
 
 func (l ArrayVector) ValueAt(key Value) Value {
