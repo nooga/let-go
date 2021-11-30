@@ -77,11 +77,14 @@ func init() {
 }
 
 type NativeFn struct {
+	name        string
 	arity       int
 	isVariadric bool
 	fn          interface{}
 	proxy       func([]Value) Value
 }
+
+func (l *NativeFn) SetName(n string) { l.name = n }
 
 func (l *NativeFn) Type() ValueType { return NativeFnType }
 
@@ -99,5 +102,8 @@ func (l *NativeFn) Invoke(args []Value) Value {
 }
 
 func (l *NativeFn) String() string {
+	if len(l.name) > 0 {
+		return fmt.Sprintf("<native-fn %s %p>", l.name, l)
+	}
 	return fmt.Sprintf("<native-fn %p>", l)
 }

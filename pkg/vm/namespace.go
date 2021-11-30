@@ -57,6 +57,12 @@ func (n *Namespace) Def(name string, val Value) *Var {
 	s := Symbol(name)
 	va := NewVar(n, n.name, name)
 	va.SetRoot(val)
+	if val.Type() == NativeFnType {
+		val.(*NativeFn).SetName(name)
+	}
+	if val.Type() == FuncType {
+		val.(*Func).SetName(name)
+	}
 	n.registry[s] = va
 	return va
 }

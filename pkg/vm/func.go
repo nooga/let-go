@@ -28,6 +28,7 @@ func init() {
 }
 
 type Func struct {
+	name        string
 	arity       int
 	isVariadric bool
 	chunk       *CodeChunk
@@ -39,6 +40,10 @@ func MakeFunc(arity int, variadric bool, c *CodeChunk) *Func {
 		isVariadric: variadric,
 		chunk:       c,
 	}
+}
+
+func (l *Func) SetName(n string) {
+	l.name = n
 }
 
 func (l *Func) Type() ValueType { return FuncType }
@@ -85,6 +90,9 @@ func (l *Func) Invoke(pargs []Value) Value {
 }
 
 func (l *Func) String() string {
+	if len(l.name) > 0 {
+		return fmt.Sprintf("<fn %s %p>", l.name, l)
+	}
 	return fmt.Sprintf("<fn %p>", l)
 }
 

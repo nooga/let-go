@@ -31,6 +31,7 @@ type Context struct {
 	recurPoints  []*recurPoint
 	tailPosition bool
 	debug        bool
+	defName      string
 }
 
 // FIXME this is unacceptable hax
@@ -200,7 +201,7 @@ func (c *Context) leaveFn(ctx *Context) {
 	fnchunk := ctx.chunk
 	fnchunk.SetMaxStack(ctx.spMax)
 	f := vm.MakeFunc(len(ctx.formalArgs), ctx.variadric, fnchunk)
-
+	f.SetName(c.defName)
 	n := c.constant(f)
 	c.emitWithArg(vm.OP_LOAD_CONST, n)
 	c.incSP(1)
@@ -767,6 +768,7 @@ func defCompiler(c *Context, form vm.Value) error {
 	if sym.Type() != vm.SymbolType {
 		return NewCompileError(fmt.Sprintf("def: first argument must be a symbol, got (%v)", sym))
 	}
+	c.defName = sym.String()
 	varr := c.constant(c.CurrentNS().LookupOrAdd(sym.(vm.Symbol)))
 	c.emitWithArg(vm.OP_LOAD_CONST, varr)
 	c.incSP(1)
@@ -777,6 +779,7 @@ func defCompiler(c *Context, form vm.Value) error {
 	c.emit(vm.OP_SET_VAR)
 	c.decSP(1)
 	c.tailPosition = tc
+	c.defName = ""
 	return nil
 }
 
