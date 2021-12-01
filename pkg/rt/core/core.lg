@@ -82,6 +82,8 @@
 (defn neg? [x] (lt x 0))
 
 (defn nil? [x] (= nil x))
+(defn true? [x] (= x true))
+(defn false? [x] (= x false))
 
 (defmacro not= [& xs] (list 'not (cons '= xs)))
 
@@ -131,3 +133,15 @@
 (defn take [n coll]
   (when (and coll (> n 0))
         (cons (first coll) (take (dec n) (next coll)))))
+
+(defn drop [n xs]
+  (if (> n 0)
+    (recur (dec n) (next xs))
+    xs))
+
+; FIXME this needs multi arity
+(defn partition [n step xs]
+  (loop [c xs w []]
+    (if (>= (count c) n)
+      (recur (drop step c) (conj w (take n c)))
+      w)))
