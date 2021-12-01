@@ -6,9 +6,14 @@
 ; let-go core library
 
 (def defn (fn [name args & body] (list 'def name (cons 'fn (cons args body)))))
-(set-macro! (var defn)) ; this is how we make macros before we can use defmacro
 
-(defn defmacro [name args & body] (list 'do (cons 'defn (cons name (cons args body))) (list 'set-macro! (list 'var name))))
+(set-macro! (var defn))
+
+; this is how we make macros before we can use defmacro
+
+(defn defmacro [name args & body]
+  (list 'do (cons 'defn (cons name (cons args body))) (list 'set-macro! (list 'var name))))
+
 (set-macro! (var defmacro))
 
 (defmacro comment [x] nil)
@@ -37,30 +42,33 @@
 
 (defmacro cond [& forms]
   (when (>= (count forms) 2)
-    (list 'if (first forms) (second forms)
-          (cons 'cond (next (next forms))))))
+        (list 'if (first forms) (second forms)
+              (cons 'cond (next (next forms))))))
 
 (defmacro condp [comparator arg & forms]
   (let [l (count forms)]
-    (= l 0) nil ;; this is an error
-    (= l 1) (first forms)
-    :else (list 'if
-                (list comparator arg (first forms))
-                (second forms)
-                (cons 'condp (cons comparator (cons arg (next (next forms))))))))
+    (cond (= l 0) nil
+          ;; this is an error
+          (= l 1) (first forms)
+          :else   (list 'if
+                        (list comparator arg (first forms))
+                        (second forms)
+                        (cons 'condp (cons comparator (cons arg (next (next forms)))))))))
 
 (defmacro case [arg & forms]
   (concat-list (list 'condp '= arg) forms))
 
 (defmacro ns [n & nss]
-  (let [cns (list 'in-ns (list 'quote n))
-        imports (cons 'use nss)] ; FIXME this is not clojure syntax at all
+  (let [cns     (list 'in-ns (list 'quote n))
+        imports (cons 'use nss)]
+    ; FIXME this is not clojure syntax at all
     (list 'do cns imports)))
 
 ; makeshift test helper
 (def *test-flag* true)
+
 (defmacro test [name & body]
-  (let [bod (cons 'do body)
+  (let [bod  (cons 'do body)
         pass (list 'println "  \u001b[32mPASS\u001b[0m" name)
         fail (list 'do
                    (list 'set! 'core/*test-flag* false)
@@ -74,6 +82,7 @@
 (defn neg? [x] (lt x 0))
 
 (defn nil? [x] (= nil x))
+
 (defmacro not= [& xs] (list 'not (cons '= xs)))
 
 (defn inc [x] (+ x 1))
@@ -83,9 +92,9 @@
 (defn list? [x] (= (type x) (type '())))
 
 (defmacro time [& body]
-  (let [then (gensym "time__")
-        val (gensym)
-        now  (list 'core/now)
+  (let [then   (gensym "time__")
+        val    (gensym)
+        now    (list 'core/now)
         report (list 'core/println "Elapsed:" (list '.Sub now then))]
     (list 'let (vector then now val (cons 'do body))
           report
@@ -94,22 +103,24 @@
 (defmacro -> [initial & forms]
   (if (zero? (count forms))
     initial
-    (reduce (fn [a x]
-              (if (list? x)
-                (cons (first x) (cons a (next x)))
-                (list x a)))
-            initial
-            forms)))
+    (reduce
+      (fn [a x]
+        (if (list? x)
+          (cons (first x) (cons a (next x)))
+          (list x a)))
+      initial
+      forms)))
 
 (defmacro ->> [initial & forms]
   (if (zero? (count forms))
     initial
-    (reduce (fn [a x]
-              (if (list? x)
-                (concat-list x (list a))
-                (list x a)))
-            initial
-            forms)))
+    (reduce
+      (fn [a x]
+        (if (list? x)
+          (concat-list x (list a))
+          (list x a)))
+      initial
+      forms)))
 
 (defn mapcat [f xs]
   (reduce (fn [a x] (concat-list a x)) '() (map f xs)))
