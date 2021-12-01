@@ -19,6 +19,10 @@ func (t *theNilType) Box(_ interface{}) (Value, error) { return t.zero, nil }
 // Nil is a Value whose only value is Nil
 type Nil struct{}
 
+func (n *Nil) Conj(value Value) Collection {
+	return EmptyList.Conj(value)
+}
+
 func (n *Nil) Count() Value {
 	return Int(0)
 }
@@ -28,6 +32,22 @@ func (n *Nil) RawCount() int {
 }
 
 func (n *Nil) Empty() Collection {
+	return n
+}
+
+func (n *Nil) Cons(value Value) Seq {
+	return EmptyList.Cons(value)
+}
+
+func (n *Nil) First() Value {
+	return n
+}
+
+func (n *Nil) More() Seq {
+	return n
+}
+
+func (n *Nil) Next() Seq {
 	return n
 }
 

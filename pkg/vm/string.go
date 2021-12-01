@@ -38,6 +38,10 @@ func init() {
 // String is boxed int
 type String string
 
+func (l String) Conj(value Value) Collection {
+	return String(string(l) + value.String())
+}
+
 func (l String) RawCount() int {
 	return len(l)
 }

@@ -277,6 +277,20 @@ func installLangNS() {
 		return seq.Cons(elem)
 	})
 
+	conj, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME error out
+			return vm.NIL
+		}
+		elem := vs[1]
+		seq, ok := vs[0].(vm.Collection)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		return seq.Conj(elem)
+	})
+
 	first, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		if len(vs) != 1 {
 			// FIXME error out
@@ -451,6 +465,24 @@ func installLangNS() {
 		return t
 	})
 
+	apply, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			return vm.NIL
+		}
+		f, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL
+		}
+		switch vs[1].Type() {
+		case vm.ArrayVectorType:
+			return f.Invoke(vs[1].(vm.ArrayVector))
+		case vm.ListType:
+			args := vs[1].Unbox().([]vm.Value)
+			return f.Invoke(args)
+		}
+		return vm.NIL
+	})
+
 	inNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		if len(vs) != 1 {
 			// FIXME handle error
@@ -545,6 +577,7 @@ func installLangNS() {
 	ns.Def("assoc", assoc)
 	ns.Def("dissoc", dissoc)
 	ns.Def("cons", cons)
+	ns.Def("conj", conj)
 	ns.Def("first", first)
 	ns.Def("second", second)
 	ns.Def("next", next)
@@ -557,6 +590,8 @@ func installLangNS() {
 	ns.Def("println", printlnf)
 
 	ns.Def("type", typef)
+
+	ns.Def("apply", apply)
 
 	// FIXME move this later outside the core
 	ns.Def("now", now)

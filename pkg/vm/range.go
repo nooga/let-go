@@ -98,6 +98,10 @@ func (l *Range) Empty() Collection {
 	return EmptyList
 }
 
+func (l *Range) Conj(val Value) Collection {
+	return l.Cons(val).(Collection)
+}
+
 func (l *Range) String() string {
 	return l.Seq().String()
 }

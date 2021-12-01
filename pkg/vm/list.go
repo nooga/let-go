@@ -52,6 +52,10 @@ type List struct {
 	count int
 }
 
+func (l *List) Conj(value Value) Collection {
+	return l.Cons(value).(*List)
+}
+
 // Type implements Value
 func (l *List) Type() ValueType { return ListType }
 

@@ -37,6 +37,13 @@ func init() {
 // ArrayVector is boxed singly linked list that can hold other Values.
 type ArrayVector []Value
 
+func (l ArrayVector) Conj(val Value) Collection {
+	ret := make([]Value, len(l)+1)
+	copy(ret, l)
+	ret[len(ret)-1] = val
+	return ArrayVector(ret)
+}
+
 // Type implements Value
 func (l ArrayVector) Type() ValueType { return ArrayVectorType }
 
@@ -69,8 +76,12 @@ func (l ArrayVector) Next() Seq {
 
 // Cons implements Seq
 func (l ArrayVector) Cons(val Value) Seq {
-	newl, _ := ListType.Box(l[1:])
-	return newl.(*List).Cons(val)
+	ret := EmptyList
+	n := len(l) - 1
+	for i := range l {
+		ret = ret.Cons(l[n-i]).(*List)
+	}
+	return ret.Cons(val)
 }
 
 // Count implements Collection

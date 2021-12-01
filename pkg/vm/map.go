@@ -37,6 +37,25 @@ func init() {
 // Map is boxed singly linked list that can hold other Values.
 type Map map[Value]Value
 
+func (l Map) Conj(value Value) Collection {
+	// FIXME this needs MapEntry
+	if value.Type() != ArrayVectorType {
+		// FIXME this is error
+		return l
+	}
+	v := value.(ArrayVector)
+	if len(v) != 2 {
+		// FIXME this is error
+		return l
+	}
+	ret := make(Map, len(l)+1)
+	for k := range l {
+		ret[k] = l[k]
+	}
+	ret[v[0]] = v[1]
+	return ret
+}
+
 // Type implements Value
 func (l Map) Type() ValueType { return MapType }
 

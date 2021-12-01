@@ -39,6 +39,7 @@ type Collection interface {
 	RawCount() int
 	Count() Value
 	Empty() Collection
+	Conj(Value) Collection
 }
 
 type Fn interface {
