@@ -16,6 +16,9 @@
 (defmacro when [condition & forms]
   (list 'if condition (cons 'do forms) nil))
 
+(defmacro when-not [condition & forms]
+  (list 'if condition nil (cons 'do forms)))
+
 (defmacro if-not [condition & forms]
   (list 'if condition (first (next forms)) (first forms)))
 
@@ -26,8 +29,14 @@
     b
     (cons (first a) (concat-list (next a) b))))
 
+(def > gt)
+(def < lt)
+
+(def >= (fn [a b] (or (= a b) (> a b))))
+(def <= (fn [a b] (or (= a b) (< a b))))
+
 (defmacro cond [& forms]
-  (when forms
+  (when (>= (count forms) 2)
     (list 'if (first forms) (second forms)
           (cons 'cond (next (next forms))))))
 
@@ -59,12 +68,6 @@
     (list 'if bod pass fail)))
 
 (defn identity [x] x)
-
-(def > gt)
-(def < lt)
-
-(def >= (fn [a b] (or (= a b) (> a b))))
-(def <= (fn [a b] (or (= a b) (< a b))))
 
 (defn zero? [x] (= 0 x))
 (defn pos? [x] (gt x 0))
@@ -113,3 +116,7 @@
 
 (defn filter [f xs]
   (reduce (fn [a x] (if (f x) (cons x a) a)) '() xs))
+
+(defn take [n coll]
+  (when (and coll (> n 0))
+        (cons (first coll) (take (dec n) (next coll)))))
