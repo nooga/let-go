@@ -8,6 +8,7 @@ package rt
 import (
 	_ "embed"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -370,7 +371,7 @@ func installLangNS() {
 
 	// FIXME write real ones later because this is naiiiiive
 	mapf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		if len(vs) != 2 {
+		if len(vs) < 2 {
 			// FIXME error out
 			return vm.NIL
 		}
@@ -384,23 +385,56 @@ func installLangNS() {
 			// FIXME make this an error (we need to handle exceptions first)
 			return vm.NIL
 		}
-		length := 0
-		col, ok := vs[1].(vm.Collection)
-		if ok {
-			length = col.RawCount()
-		}
-		if length > 0 {
-			newseq := make([]vm.Value, length)
-			i := 0
-			for seq != vm.EmptyList {
-				newseq[i] = mfn.Invoke([]vm.Value{seq.First()})
-				seq = seq.Next()
-				i++
+		// if we have a single coll
+		if len(vs) == 2 {
+			length := 0
+			col, ok := vs[1].(vm.Collection)
+			if ok {
+				length = col.RawCount()
 			}
-			ret, _ := vm.ListType.Box(newseq)
-			return ret
+			if length > 0 {
+				newseq := make([]vm.Value, length)
+				i := 0
+				for seq != vm.EmptyList {
+					newseq[i] = mfn.Invoke([]vm.Value{seq.First()})
+					seq = seq.Next()
+					i++
+				}
+				ret, _ := vm.ListType.Box(newseq)
+				return ret
+			}
+			return vm.EmptyList
 		}
-		return vm.EmptyList
+		// if we have more colls
+		colls := vs[1:]
+		seqs := make([]vm.Seq, len(colls))
+		minlen := math.MaxInt
+		for i := range colls {
+			collx, ok := colls[i].(vm.Collection)
+			if !ok {
+				// FIXME error
+				return vm.NIL
+			}
+			c := collx.RawCount()
+			if c < minlen {
+				minlen = c
+			}
+			seqs[i] = colls[i].(vm.Seq)
+		}
+		if minlen == 0 {
+			return vm.EmptyList
+		}
+		newseq := make([]vm.Value, minlen)
+		for i := 0; i < minlen; i++ {
+			fargs := make([]vm.Value, len(seqs))
+			for j := range seqs {
+				fargs[j] = seqs[j].First()
+				seqs[j] = seqs[j].Next()
+			}
+			newseq[i] = mfn.Invoke(fargs)
+		}
+		ret, _ := vm.ListType.Box(newseq)
+		return ret
 	})
 
 	reduce, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
