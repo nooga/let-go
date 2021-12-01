@@ -280,12 +280,12 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.tailPosition = false
 		v := o.(vm.ArrayVector)
 		// FIXME detect const vectors and push them like this
-		if len(v) == 0 {
-			n := c.constant(v)
-			c.emitWithArg(vm.OP_LOAD_CONST, n)
-			c.incSP(1)
-			return nil
-		}
+		//if len(v) == 0 {
+		//	n := c.constant(v)
+		//	c.emitWithArg(vm.OP_LOAD_CONST, n)
+		//	c.incSP(1)
+		//	return nil
+		//}
 		vector := c.constant(rt.CoreNS.Lookup("vector"))
 		c.emitWithArg(vm.OP_LOAD_CONST, vector)
 		c.incSP(1)
