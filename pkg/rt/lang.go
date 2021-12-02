@@ -248,7 +248,7 @@ func installLangNS() {
 			return vm.NIL
 		}
 		ret := coll
-		for i := 1; i < len(vs)-1; i += 2 {
+		for i := 1; i < len(vs); i += 2 {
 			ret = ret.Assoc(vs[i], vs[i+1])
 		}
 		return ret
@@ -265,8 +265,8 @@ func installLangNS() {
 			return vm.NIL
 		}
 		ret := coll
-		for i := 1; i < len(vs)-1; i++ {
-			ret = coll.Dissoc(vs[i])
+		for i := 1; i < len(vs); i++ {
+			ret = ret.Dissoc(vs[i])
 		}
 		return ret
 	})

@@ -12,9 +12,13 @@
              (= (:a m) 1)
              (= (:c (assoc m :c 'foo)) 'foo)
              (= (:c m) 3)
+             (= (:a (update m :a + 1)) 2)
+             (= (:a (update m :a inc)) 2)
              (= (count m) 3)
              (= (dec (count m)) (count (dissoc m :a)))
-             (= (count m) (count (dissoc m :nonexist))))))
+             (= (count m) (count (dissoc m :nonexist)))
+             (= (count (dissoc m :b :a)) 1)
+             (= (count (assoc m :x 1 :y 2 :z 3)) 6))))
 
 (test "range"
       (and (= (count (range 10)) 10)
