@@ -238,30 +238,65 @@ func installLangNS() {
 	})
 
 	assoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		if len(vs) != 3 {
+		if len(vs) < 3 || len(vs)%2 == 0 {
 			// FIXME error out
 			return vm.NIL
 		}
-		seq, ok := vs[0].(vm.Associative)
+		coll, ok := vs[0].(vm.Associative)
 		if !ok {
 			// FIXME make this an error (we need to handle exceptions first)
 			return vm.NIL
 		}
-		return seq.Assoc(vs[1], vs[2])
+		ret := coll
+		for i := 1; i < len(vs)-1; i += 2 {
+			ret = ret.Assoc(vs[i], vs[i+1])
+		}
+		return ret
 	})
 
 	dissoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		if len(vs) != 2 {
+		if len(vs) < 2 {
 			// FIXME error out
 			return vm.NIL
 		}
-		seq, ok := vs[0].(vm.Associative)
+		coll, ok := vs[0].(vm.Associative)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		ret := coll
+		for i := 1; i < len(vs)-1; i++ {
+			ret = coll.Dissoc(vs[i])
+		}
+		return ret
+	})
+
+	update, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) < 3 {
+			// FIXME error out
+			return vm.NIL
+		}
+		colla, ok := vs[0].(vm.Associative)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		collg, ok := vs[0].(vm.Lookup)
 		if !ok {
 			// FIXME make this an error (we need to handle exceptions first)
 			return vm.NIL
 		}
 		key := vs[1]
-		return seq.Dissoc(key)
+		fn := vs[2].(vm.Fn)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		args := []vm.Value{collg.ValueAt(key)}
+		if len(vs) > 3 {
+			args = append(args, vs[3:]...)
+		}
+		return colla.Assoc(key, fn.Invoke(args))
 	})
 
 	cons, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
@@ -610,6 +645,7 @@ func installLangNS() {
 
 	ns.Def("assoc", assoc)
 	ns.Def("dissoc", dissoc)
+	ns.Def("update", update)
 	ns.Def("cons", cons)
 	ns.Def("conj", conj)
 	ns.Def("first", first)
