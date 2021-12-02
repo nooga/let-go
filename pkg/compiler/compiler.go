@@ -303,12 +303,12 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.tailPosition = false
 		v := o.(vm.Map)
 		// FIXME detect const maps and push them like this
-		if len(v) == 0 {
-			n := c.constant(v)
-			c.emitWithArg(vm.OP_LOAD_CONST, n)
-			c.incSP(1)
-			return nil
-		}
+		//if len(v) == 0 {
+		//	n := c.constant(v)
+		//	c.emitWithArg(vm.OP_LOAD_CONST, n)
+		//	c.incSP(1)
+		//	return nil
+		//}
 		hashMap := c.constant(rt.CoreNS.Lookup("hash-map"))
 		c.emitWithArg(vm.OP_LOAD_CONST, hashMap)
 		c.incSP(1)
