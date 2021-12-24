@@ -145,3 +145,13 @@
     (if (>= (count c) n)
       (recur (drop step c) (conj w (take n c)))
       w)))
+
+(defmacro dotimes
+  [bindings & body]
+  (let [i (first bindings)
+        n (second bindings)]
+    `(let [n# ~n]
+      (loop [~i 0]
+        (when (< ~i n#)
+              ~@body
+              (recur (inc ~i)))))))

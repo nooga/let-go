@@ -428,6 +428,202 @@ func readQuote(r *LispReader, _ rune) (vm.Value, error) {
 	return ret, nil
 }
 
+func readDeref(r *LispReader, _ rune) (vm.Value, error) {
+	form, err := r.Read()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading deref form").Wrap(err)
+	}
+	deref := vm.Symbol("deref")
+	ret, err := vm.ListType.Box([]vm.Value{deref, form})
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "boxing deref form").Wrap(err)
+	}
+	return ret, nil
+}
+
+type gensymEnv struct {
+	syms map[vm.Symbol]vm.Symbol
+	cnt  int
+}
+
+func (g *gensymEnv) Get(s vm.Symbol) vm.Value {
+	y, ok := g.syms[s]
+	if !ok {
+		return vm.NIL
+	}
+	return y
+}
+
+func (g *gensymEnv) Set(s vm.Symbol) vm.Symbol {
+	y := vm.Symbol(fmt.Sprintf("%s__G__%d", s[0:len(s)-2], g.cnt))
+	g.syms[s] = y
+	g.cnt += 1
+	return y
+}
+
+func readSyntaxQuote(r *LispReader, _ rune) (vm.Value, error) {
+	form, err := r.Read()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading quoted form").Wrap(err)
+	}
+	return syntaxQuote(r, form, &gensymEnv{
+		syms: map[vm.Symbol]vm.Symbol{},
+		cnt:  0,
+	})
+}
+
+func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error) {
+	switch {
+	case form.Type() == vm.SymbolType:
+		sform := form.(vm.Symbol)
+		if _, ok := specialForms[sform]; ok {
+			ret, err := vm.ListType.Box([]vm.Value{vm.Symbol("quote"), form})
+			if err != nil {
+				return vm.NIL, NewReaderError(r, "boxing syntax-quoted special form").Wrap(err)
+			}
+			return ret, nil
+		}
+		ns, _ := sform.Namespaced()
+		if ns == vm.NIL && sform[len(sform)-1] == '#' {
+			gsym := env.Get(sform)
+			if gsym == vm.NIL {
+				gsym = env.Set(sform)
+			}
+			ret, err := vm.ListType.Box([]vm.Value{vm.Symbol("quote"), gsym})
+			if err != nil {
+				return vm.NIL, NewReaderError(r, "boxing syntax-quoted gensym form").Wrap(err)
+			}
+			return ret, nil
+		}
+		// FIXME: the following is wrong, it should resolve symbol in NS
+		ret, err := vm.ListType.Box([]vm.Value{vm.Symbol("quote"), form})
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "boxing syntax-quoted special form").Wrap(err)
+		}
+		return ret, nil
+	case isUnquote(form):
+		vl := form.(*vm.List)
+		return vl.Next().First(), nil
+	case isUnquoteSplicing(form):
+		return vm.NIL, NewReaderError(r, "unquote-splicing used outside of a list")
+	case form.Type() == vm.ArrayVectorType:
+		uq, err := expandUnquotes(r, form, env)
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "expanding unquotes for vector")
+		}
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat"), uq})
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "boxing unquoted vector form")
+		}
+		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("vector"), vv})
+	case form.Type() == vm.MapType:
+		lform := flattenMap(form.(vm.Map))
+		uq, err := expandUnquotes(r, lform, env)
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "expanding unquotes for vector")
+		}
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat"), uq})
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "boxing unquoted vector form")
+		}
+		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("hash-map"), vv})
+	case form.Type() == vm.ListType:
+		uq, err := expandUnquotes(r, form, env)
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "expanding unquotes for list")
+		}
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat"), uq})
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "boxing unquoted list form")
+		}
+		return vv, nil
+	default:
+		ret, err := vm.ListType.Box([]vm.Value{vm.Symbol("quote"), form})
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "boxing syntax-quoted form").Wrap(err)
+		}
+		return ret, nil
+	}
+}
+
+// FIXME this is fast but will shatter when we go to persistent Maps
+func flattenMap(m vm.Map) vm.Value {
+	ret := vm.ArrayVector{}
+	for k := range m {
+		ret = append(ret, k, m[k])
+	}
+	return ret
+}
+
+func expandUnquotes(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error) {
+	ret := vm.ArrayVector{}
+	fseq := form.(vm.Seq) // this has to succeed
+	for {
+		v := fseq.First()
+		switch {
+		case isUnquote(v):
+			ret = append(ret, vm.ArrayVector{v.(vm.Seq).Next().First()})
+		case isUnquoteSplicing(v):
+			ret = append(ret, v.(vm.Seq).Next().First())
+		default:
+			vq, err := syntaxQuote(r, v, env)
+			if err != nil {
+				return vm.NIL, err
+			}
+			ret = append(ret, vm.ArrayVector{vq})
+		}
+		fseq = fseq.Next()
+		if fseq == vm.EmptyList {
+			break
+		}
+	}
+	return ret, nil
+}
+
+func isUnquote(v vm.Value) bool {
+	if v.Type() != vm.ListType {
+		return false
+	}
+	vl := v.(*vm.List)
+	if vl.RawCount() != 2 {
+		return false
+	}
+	return vl.First() == vm.Symbol("unquote")
+}
+
+func isUnquoteSplicing(v vm.Value) bool {
+	if v.Type() != vm.ListType {
+		return false
+	}
+	vl := v.(*vm.List)
+	if vl.RawCount() != 2 {
+		return false
+	}
+	return vl.First() == vm.Symbol("unquote-splicing")
+}
+
+func readUnquote(r *LispReader, _ rune) (vm.Value, error) {
+	ch, err := r.next()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading unquote prefix").Wrap(err)
+	}
+	sym := vm.Symbol("unquote")
+	if ch == '@' {
+		sym = "unquote-splicing"
+	} else {
+		err = r.unread()
+	}
+	form, err := r.Read()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading unquoted form").Wrap(err)
+	}
+	ret, err := vm.ListType.Box([]vm.Value{sym, form})
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "boxing unquoted form").Wrap(err)
+	}
+	return ret, nil
+}
+
 func readVarQuote(r *LispReader, _ rune) (vm.Value, error) {
 	form, err := r.Read()
 	if err != nil {
@@ -536,6 +732,9 @@ func readerInit() {
 		'"':  readString,
 		'\\': readChar,
 		'\'': readQuote,
+		'@':  readDeref,
+		'`':  readSyntaxQuote,
+		'~':  readUnquote,
 		';':  readLineComment,
 		'#':  readHashMacro,
 	}

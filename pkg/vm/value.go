@@ -65,6 +65,10 @@ type Receiver interface {
 	InvokeMethod(Symbol, []Value) Value
 }
 
+type Reference interface {
+	Deref() Value
+}
+
 type theTypeType struct{}
 
 var TypeType *theTypeType

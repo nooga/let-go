@@ -608,6 +608,41 @@ func installLangNS() {
 		return rec.InvokeMethod(name, vs[2:])
 	})
 
+	deref, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME err
+			return vm.NIL
+		}
+		ref, ok := vs[0].(vm.Reference)
+		if !ok {
+			return vm.NIL
+		}
+		return ref.Deref()
+	})
+
+	concat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		ret := []vm.Value{}
+		for i := range vs {
+			vseq, ok := vs[i].(vm.Seq)
+			if !ok {
+				return vm.NIL
+			}
+			for {
+				e := vseq.First()
+				ret = append(ret, e)
+				vseq = vseq.Next()
+				if vseq == vm.EmptyList {
+					break
+				}
+			}
+		}
+		r, err := vm.ListType.Box(ret)
+		if err != nil {
+			return vm.NIL
+		}
+		return r
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -656,12 +691,14 @@ func installLangNS() {
 
 	ns.Def("map", mapf)
 	ns.Def("reduce", reduce)
+	ns.Def("concat", concat)
 
 	ns.Def("println", printlnf)
 
 	ns.Def("type", typef)
 
 	ns.Def("apply", apply)
+	ns.Def("deref", deref)
 
 	// FIXME move this later outside the core
 	ns.Def("now", now)
