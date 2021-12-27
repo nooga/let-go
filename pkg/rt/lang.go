@@ -621,7 +621,7 @@ func installLangNS() {
 	})
 
 	concat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		ret := []vm.Value{}
+		var ret []vm.Value
 		for i := range vs {
 			vseq, ok := vs[i].(vm.Seq)
 			if !ok {

@@ -612,6 +612,9 @@ func readUnquote(r *LispReader, _ rune) (vm.Value, error) {
 		sym = "unquote-splicing"
 	} else {
 		err = r.unread()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unreading unquoted form").Wrap(err)
+		}
 	}
 	form, err := r.Read()
 	if err != nil {
