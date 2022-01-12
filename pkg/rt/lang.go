@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -643,6 +644,42 @@ func installLangNS() {
 		return r
 	})
 
+	slurp, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME err
+			return vm.NIL
+		}
+		filename, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL
+		}
+		data, err := os.ReadFile(string(filename))
+		if err != nil {
+			return vm.NIL
+		}
+		return vm.String(data)
+	})
+
+	spit, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME err
+			return vm.NIL
+		}
+		filename, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL
+		}
+		contents, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL
+		}
+		err := os.WriteFile(string(filename), []byte(contents), 0644)
+		if err != nil {
+			return vm.NIL
+		}
+		return vm.NIL
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -702,6 +739,9 @@ func installLangNS() {
 
 	// FIXME move this later outside the core
 	ns.Def("now", now)
+
+	ns.Def("slurp", slurp)
+	ns.Def("spit", spit)
 
 	// FIXME move this to VM later
 	ns.Def(".", methodInvoke)
