@@ -16,13 +16,13 @@ Now, I know about [candid82/joker](https://github.com/candid82/joker) and I 💛
 drawbacks and design choices that I'd like to avoid.
 
 Here are some nebulous goals in no particular order:
-- Quality entertainment,
-- Implement as much of Clojure as possible - including persistent data types and true concurrency,
-- Provide comfy two-way interop for arbitrary functions and types,
-- Serve primarily as an embedded extension language,
-- AOT (let-go -> standalone binary) would be nice eventually, 
-- Strech goal: let-go bytecode -> Go translation.
-- Pure Go, zero dependencies.
+[ ] Quality entertainment,
+[ ] Implement as much of Clojure as possible - including persistent data types and true concurrency,
+[ ] Provide comfy two-way interop for arbitrary functions and types,
+[ ] Serve primarily as an embedded extension language,
+[ ] AOT (let-go -> standalone binary) would be nice eventually, 
+[ ] Strech goal: let-go bytecode -> Go translation.
+[ ] ~~Pure Go, zero dependencies.~~ 
 
 Here are the non goals:
 - Stellar performance,
@@ -36,19 +36,22 @@ Can compile and eval basic Clojure flavored lisp.
 #### The most impressive snippet so far
 
 ```clojure
-(test "Y combinator"
-      (let [Y (fn [f] ((fn [x] (x x))
-                        (fn [x]
-                          (f (fn [y] ((x x) y))))))
-            fac-gen (fn [func] (fn [n] (if (zero? n) 1 (* n (func (dec n))))))]
-        (= 120 ((Y fac-gen) 5))))
+(ns server
+  'http)
+
+(http/handle "/" (fn [res req]
+                   (println (now) (:Method req) (:URL req))
+                   (.WriteHeader res 200)
+                   (.Write res "hello from let-go :^)")))
+
+(http/serve ":7070" nil)
 ```
 
-See [tests](https://github.com/nooga/let-go/tree/main/test) for more examples. 
+See [tests](https://github.com/nooga/let-go/tree/main/test) and [examples](https://github.com/nooga/let-go/tree/main/examples) for more examples. 
 
 ## Prerequisites and installation
 
-Building or running let-go from source requires Go 1.16. There are no binary releases yet.
+Building or running let-go from source requires Go 1.17. There are no binary releases yet.
 
 ## Running
 
