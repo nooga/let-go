@@ -30,7 +30,16 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 	proxy := func(args []Value) Value {
 		rawArgs := make([]reflect.Value, len(args))
 		for i := range args {
-			rawArgs[i] = reflect.ValueOf(args[i].Unbox())
+			if args[i] != NIL {
+				rawArgs[i] = reflect.ValueOf(args[i].Unbox())
+				// FIXME handle variadric
+				if rawArgs[i].CanConvert(ty.In(i)) {
+					rawArgs[i] = rawArgs[i].Convert(ty.In(i))
+				}
+			} else {
+				//FIXME handle variadric
+				rawArgs[i] = reflect.Zero(ty.In(i))
+			}
 		}
 		res := v.Call(rawArgs)
 		if len(res) == 0 {

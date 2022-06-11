@@ -1,0 +1,9 @@
+(ns server
+  'http)
+
+(http/handle "/" (fn [res req]
+                   (println (now) (:Method req) (:URL req))
+                   (.WriteHeader res 200)
+                   (.Write res "hello from let-go :^)")))
+
+(http/serve ":7070" nil)

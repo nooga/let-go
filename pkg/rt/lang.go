@@ -22,6 +22,7 @@ func init() {
 	nsRegistry = make(map[string]*vm.Namespace)
 
 	installLangNS()
+	installHttpNS()
 }
 
 func AllNSes() map[string]*vm.Namespace {
