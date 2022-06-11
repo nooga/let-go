@@ -65,6 +65,12 @@ type Receiver interface {
 	InvokeMethod(Symbol, []Value) Value
 }
 
+type Named interface {
+	Value
+	Name() Value
+	Namespace() Value
+}
+
 type Reference interface {
 	Deref() Value
 }
@@ -88,6 +94,9 @@ func (t *theTypeType) Box(b interface{}) (Value, error) {
 }
 
 func BoxValue(v reflect.Value) (Value, error) {
+	if !v.IsValid() {
+		return NIL, NewTypeError(v, "can't be boxed", nil)
+	}
 	if v.CanInterface() {
 		rv, ok := v.Interface().(Value)
 		if ok {

@@ -680,6 +680,34 @@ func installLangNS() {
 		return vm.NIL
 	})
 
+	name, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME err
+			return vm.NIL
+		}
+		s, ok := vs[0].(vm.String)
+		if ok {
+			return s
+		}
+		named, ok := vs[0].(vm.Named)
+		if !ok {
+			return vm.NIL
+		}
+		return named.Name()
+	})
+
+	namespace, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME err
+			return vm.NIL
+		}
+		named, ok := vs[0].(vm.Named)
+		if !ok {
+			return vm.NIL
+		}
+		return named.Namespace()
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -709,6 +737,8 @@ func installLangNS() {
 	ns.Def("gensym", gensym)
 	ns.Def("in-ns", inNs)
 	ns.Def("use", use)
+	ns.Def("name", name)
+	ns.Def("namespace", namespace)
 
 	ns.Def("vector", vector)
 	ns.Def("hash-map", hashMap)

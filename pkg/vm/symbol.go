@@ -58,3 +58,20 @@ func (l Symbol) Namespaced() (Value, Value) {
 	}
 	return NIL, Symbol(x[0])
 }
+
+// FIXME make it work the other way round
+func (l Symbol) Name() Value {
+	_, n := l.Namespaced()
+	if n == NIL {
+		return NIL
+	}
+	return String(n.(Symbol))
+}
+
+func (l Symbol) Namespace() Value {
+	n, _ := l.Namespaced()
+	if n == NIL {
+		return NIL
+	}
+	return String(n.(Symbol))
+}

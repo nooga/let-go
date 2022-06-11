@@ -57,6 +57,22 @@ func (n *Boxed) InvokeMethod(methodName Symbol, args []Value) Value {
 	return method.Invoke(append([]Value{n}, args...))
 }
 
+func (n *Boxed) ValueAt(key Value) Value {
+	return n.ValueAtOr(key, NIL)
+}
+
+func (n *Boxed) ValueAtOr(key Value, dflt Value) Value {
+	name, ok := key.Unbox().(string)
+	if !ok {
+		return dflt
+	}
+	v, err := BoxValue(reflect.ValueOf(n.value).FieldByName(name))
+	if err != nil {
+		return dflt
+	}
+	return v
+}
+
 // BoxedType is the type of NilValues
 var BoxedTypes map[string]*aBoxedType
 
