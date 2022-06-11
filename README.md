@@ -16,13 +16,13 @@ Now, I know about [candid82/joker](https://github.com/candid82/joker) and I 💛
 drawbacks and design choices that I'd like to avoid.
 
 Here are some nebulous goals in no particular order:
-[ ] Quality entertainment,
-[ ] Implement as much of Clojure as possible - including persistent data types and true concurrency,
-[ ] Provide comfy two-way interop for arbitrary functions and types,
-[ ] Serve primarily as an embedded extension language,
-[ ] AOT (let-go -> standalone binary) would be nice eventually, 
-[ ] Strech goal: let-go bytecode -> Go translation.
-[ ] ~~Pure Go, zero dependencies.~~ 
+- [x] Quality entertainment,
+- [ ] Implement as much of Clojure as possible - including persistent data types and true concurrency,
+- [ ] Provide comfy two-way interop for arbitrary functions and types,
+- [ ] Serve primarily as an embedded extension language,
+- [ ] AOT (let-go -> standalone binary) would be nice eventually, 
+- [ ] Strech goal: let-go bytecode -> Go translation.
+- [ ] ~~Pure Go, zero dependencies.~~ 
 
 Here are the non goals:
 - Stellar performance,
