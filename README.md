@@ -10,7 +10,7 @@
 
 Greetings loafers! *(λ-gophers haha, get it?)*
 
-This is supposed to be a compiler and bytecode VM for a language resembling Clojure as close as possible.
+This is supposed to be a bytecode compiler and VM for a language resembling Clojure as close as possible.
 
 Now, I know about [candid82/joker](https://github.com/candid82/joker) and I 💛 it. Though, it has some 
 drawbacks and design choices that I'd like to avoid.
@@ -22,7 +22,7 @@ Here are some nebulous goals in no particular order:
 - [ ] Serve primarily as an embedded extension language,
 - [ ] AOT (let-go -> standalone binary) would be nice eventually, 
 - [ ] Strech goal: let-go bytecode -> Go translation.
-- [ ] ~~Pure Go, zero dependencies.~~ 
+- [ ] ~~Pure Go, zero dependencies.~~ We use a lightweight line editor for the REPL now - [alimpfard/line](https://github.com/alimpfard/line)
 
 Here are the non goals:
 - Stellar performance,

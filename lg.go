@@ -75,8 +75,7 @@ func repl(ctx *compiler.Context) {
 	editor.SetRefreshHandler(func(editor line.Editor) {
 		lin := editor.Line()
 		reader := compiler.NewLispReader(strings.NewReader(lin), "syntax")
-		reader.Read()
-		//fmt.Fprintln(os.Stderr, reader.Tokens)
+		reader.Read() //nolint:errcheck // We really don't care, just need partial parse
 		editor.StripStyles()
 		for _, t := range reader.Tokens {
 			if t.End == -1 {
