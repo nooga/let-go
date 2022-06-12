@@ -8,16 +8,36 @@ package compiler
 import (
 	"bufio"
 	"fmt"
-	"github.com/nooga/let-go/pkg/errors"
-	"github.com/nooga/let-go/pkg/rt"
 	"io"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/nooga/let-go/pkg/errors"
+	"github.com/nooga/let-go/pkg/rt"
+
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+type TokenKind int
+
+const (
+	TokenString TokenKind = iota
+	TokenNumber
+	TokenKeyword
+	TokenSymbol
+	TokenChar
+	TokenSpecial
+	TokenComment
+	TokenPunctuation
+)
+
+type Token struct {
+	Start int
+	End   int
+	Kind  TokenKind
+}
 
 type LispReader struct {
 	inputName  string
@@ -28,13 +48,35 @@ type LispReader struct {
 	lastRune   rune
 	maxPercent int
 	r          *bufio.Reader
+	Tokens     []Token
 }
 
 func NewLispReader(r io.Reader, inputName string) *LispReader {
 	return &LispReader{
 		inputName: inputName,
 		r:         bufio.NewReader(r),
+		Tokens:    []Token{},
 	}
+}
+
+func (r *LispReader) openToken() {
+	r.Tokens = append(r.Tokens, Token{Start: r.pos - 1, End: -1})
+}
+
+func (r *LispReader) discardToken() {
+	r.Tokens = r.Tokens[:len(r.Tokens)-1]
+}
+
+func (r *LispReader) closeToken(kind TokenKind) {
+	if r.Tokens[len(r.Tokens)-1].End == -1 {
+		r.Tokens[len(r.Tokens)-1].End = r.pos
+		r.Tokens[len(r.Tokens)-1].Kind = kind
+	}
+}
+
+func (r *LispReader) addToken(kind TokenKind) {
+	r.openToken()
+	r.closeToken(kind)
 }
 
 func (r *LispReader) next() (rune, error) {
@@ -93,11 +135,13 @@ func (r *LispReader) Read() (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 	}
+	r.openToken()
 	if isDigit(ch) {
 		return readNumber(r, ch)
 	}
 	macro, ok := macros[ch]
 	if ok {
+		r.closeToken(TokenPunctuation)
 		return macro(r, ch)
 	}
 	if ch == '+' || ch == '-' {
@@ -130,6 +174,9 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 	ss := string(s)
 	if ss[0] == ':' {
 		nom := ss[1:]
+		if nom == "" {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
+		}
 		if nom[0] == ':' {
 			// we've got a namespaced keyword
 			onom := nom[1:]
@@ -142,15 +189,19 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 		if strings.ContainsAny(nom, ":") {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
 		}
+		r.closeToken(TokenKeyword)
 		return vm.Keyword(nom), nil
 	}
 	if ss == "nil" {
+		r.closeToken(TokenSpecial)
 		return vm.NIL, nil
 	}
 	if ss == "true" {
+		r.closeToken(TokenSpecial)
 		return vm.TRUE, nil
 	}
 	if ss == "false" {
+		r.closeToken(TokenSpecial)
 		return vm.FALSE, nil
 	}
 	if ss[0] == '%' {
@@ -158,6 +209,11 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 		if err == nil && n >= 0 && n > r.maxPercent {
 			r.maxPercent = n
 		}
+	}
+	if _, ok := specialForms[t.(vm.Symbol)]; ok {
+		r.closeToken(TokenSpecial)
+	} else {
+		r.closeToken(TokenSymbol)
 	}
 	return t, nil
 }
@@ -184,6 +240,8 @@ func readToken(r *LispReader, ru rune) (vm.Value, error) {
 }
 
 func readString(r *LispReader, _ rune) (vm.Value, error) {
+	r.discardToken()
+	r.openToken()
 	s := strings.Builder{}
 	for {
 		ch, err := r.next()
@@ -241,6 +299,7 @@ func readString(r *LispReader, _ rune) (vm.Value, error) {
 			}
 		}
 		if ch == '"' {
+			r.closeToken(TokenString)
 			return vm.String(s.String()), nil
 		}
 		s.WriteRune(ch)
@@ -343,6 +402,7 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 	}
+	r.closeToken(TokenNumber)
 	return vm.Int(i), nil
 }
 
@@ -354,6 +414,7 @@ func readList(r *LispReader, _ rune) (vm.Value, error) {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
 		if ch2 == ')' {
+			r.addToken(TokenPunctuation)
 			break
 		}
 		if err = r.unread(); err != nil {
@@ -376,6 +437,7 @@ func readVector(r *LispReader, _ rune) (vm.Value, error) {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
 		if ch2 == ']' {
+			r.addToken(TokenPunctuation)
 			break
 		}
 		if err = r.unread(); err != nil {
@@ -398,6 +460,7 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
 		if ch2 == '}' {
+			r.addToken(TokenPunctuation)
 			break
 		}
 		if err = r.unread(); err != nil {

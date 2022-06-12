@@ -29,6 +29,18 @@ func AllNSes() map[string]*vm.Namespace {
 	return nsRegistry
 }
 
+func FuzzyNamespacedSymbolLookup(currentNS *vm.Namespace, s vm.Symbol) []vm.Symbol {
+	sns := s.Namespace()
+	var ns *vm.Namespace
+	if sns != vm.NIL {
+		ns = nsRegistry[string(sns.(vm.String))]
+	} else {
+		ns = currentNS
+	}
+	name := s.Name()
+	return vm.FuzzySymbolLookup(ns, vm.Symbol(name.(vm.String)))
+}
+
 func NS(name string) *vm.Namespace {
 	return LookupOrRegisterNS(name)
 }

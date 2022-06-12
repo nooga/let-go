@@ -8,6 +8,7 @@ package vm
 import (
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 type theNamespaceType struct{}
@@ -116,4 +117,17 @@ func (n *Namespace) Name() string {
 
 func (n *Namespace) String() string {
 	return fmt.Sprintf("<ns %s>", n.Name())
+}
+
+func FuzzySymbolLookup(ns *Namespace, s Symbol) []Symbol {
+	ret := []Symbol{}
+	for _, r := range ns.refers {
+		ret = append(ret, FuzzySymbolLookup(r.ns, s)...)
+	}
+	for k := range ns.registry {
+		if strings.HasPrefix(string(k), string(s)) {
+			ret = append(ret, k)
+		}
+	}
+	return ret
 }
