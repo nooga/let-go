@@ -1,0 +1,42 @@
+(ns gol)
+
+(def N 10)
+(def initial [0 0 0 0 0 0 0 0 0 0
+              0 0 1 0 0 0 0 0 0 0
+              0 0 0 1 0 0 0 0 0 0
+              0 1 1 1 0 0 0 0 0 0
+              0 0 0 0 0 0 0 0 0 0
+              0 0 0 0 0 0 0 0 0 0
+              0 0 0 0 0 0 0 0 0 0
+              0 0 0 0 0 0 0 0 0 0
+              0 0 0 0 0 0 0 0 0 0
+              0 0 0 0 0 0 0 0 0 0])
+
+(defn show [state]
+  (loop [l (partition N N state)]
+    (when-let [line (first l)]
+      (apply println (map {0 "." 1 "#"} line))
+      (recur (next l)))))
+
+(defn window [state i]
+  (apply + (map #(get state %1 0)
+              [(- i N 1)  (- i N) (- i N -1)
+               (dec i)            (inc i)
+               (+ i N -1) (+ i N) (+ i N 1)])))
+
+(defn step [state]
+  (mapv (fn [x i]
+         (let [n (window state i)]
+           (cond
+             (and (= x 1) (< n 2)) 0
+             (and (= x 1) (> n 3)) 0 
+             (and (= x 0) (= n 3)) 1
+             :else x))) 
+       state 
+       (range (* N N))))
+
+(loop [state initial i 20]
+  (when (> i 0)
+    (println "---") 
+    (show state)
+    (recur (step state) (dec i))))
