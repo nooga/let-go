@@ -48,33 +48,60 @@ type LispReader struct {
 	lastRune   rune
 	maxPercent int
 	r          *bufio.Reader
+
 	Tokens     []Token
+	tokenizing bool
 }
 
 func NewLispReader(r io.Reader, inputName string) *LispReader {
 	return &LispReader{
 		inputName: inputName,
 		r:         bufio.NewReader(r),
-		Tokens:    []Token{},
+	}
+}
+
+func NewLispReaderTokenizing(r io.Reader, inputName string) *LispReader {
+	return &LispReader{
+		inputName:  inputName,
+		r:          bufio.NewReader(r),
+		Tokens:     []Token{},
+		tokenizing: true,
 	}
 }
 
 func (r *LispReader) openToken() {
+	if !r.tokenizing {
+		return
+	}
+	if len(r.Tokens) > 0 && r.Tokens[len(r.Tokens)-1].End == -1 {
+		r.Tokens[len(r.Tokens)-1].Start = r.pos - 1
+		return
+	}
 	r.Tokens = append(r.Tokens, Token{Start: r.pos - 1, End: -1})
 }
 
 func (r *LispReader) discardToken() {
+	if !r.tokenizing {
+		return
+	}
 	r.Tokens = r.Tokens[:len(r.Tokens)-1]
 }
 
 func (r *LispReader) closeToken(kind TokenKind) {
-	if r.Tokens[len(r.Tokens)-1].End == -1 {
-		r.Tokens[len(r.Tokens)-1].End = r.pos
-		r.Tokens[len(r.Tokens)-1].Kind = kind
+	if !r.tokenizing {
+		return
 	}
+	if r.Tokens[len(r.Tokens)-1].End != -1 {
+		return
+	}
+	r.Tokens[len(r.Tokens)-1].End = r.pos
+	r.Tokens[len(r.Tokens)-1].Kind = kind
 }
 
 func (r *LispReader) addToken(kind TokenKind) {
+	if !r.tokenizing {
+		return
+	}
 	r.openToken()
 	r.closeToken(kind)
 }
