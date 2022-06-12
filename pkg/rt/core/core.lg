@@ -155,3 +155,6 @@
         (when (< ~i n#)
               ~@body
               (recur (inc ~i)))))))
+
+(defmacro when-let [bind & forms]
+  `(let ~bind (if ~(second bind) (do ~@forms) nil)))

@@ -234,6 +234,24 @@ func installLangNS() {
 	list, err := vm.NativeFnType.Wrap(vm.NewList)
 	hashMap, err := vm.NativeFnType.Wrap(vm.NewMap)
 
+	vec, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			return vm.NIL
+		}
+		if v, ok := vs[0].(vm.ArrayVector); ok {
+			return v
+		}
+		if seq, ok := vs[0].(vm.Seq); ok {
+			ret := []vm.Value{}
+			for seq != vm.EmptyList {
+				ret = append(ret, seq.First())
+				seq = seq.Next()
+			}
+			return vm.NewArrayVector(ret)
+		}
+		return vm.NIL
+	})
+
 	rangef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		if len(vs) == 0 {
 			return vm.EmptyList
@@ -484,6 +502,10 @@ func installLangNS() {
 		}
 		ret, _ := vm.ListType.Box(newseq)
 		return ret
+	})
+
+	mapv, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		return vec.(vm.Fn).Invoke([]vm.Value{mapf.(vm.Fn).Invoke(vs)})
 	})
 
 	reduce, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
@@ -754,6 +776,7 @@ func installLangNS() {
 	ns.Def("namespace", namespace)
 
 	ns.Def("vector", vector)
+	ns.Def("vec", vec)
 	ns.Def("hash-map", hashMap)
 	ns.Def("list", list)
 	ns.Def("range", rangef)
@@ -770,6 +793,7 @@ func installLangNS() {
 	ns.Def("count", count)
 
 	ns.Def("map", mapf)
+	ns.Def("mapv", mapv)
 	ns.Def("reduce", reduce)
 	ns.Def("concat", concat)
 

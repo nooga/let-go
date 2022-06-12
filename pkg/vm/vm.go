@@ -84,11 +84,7 @@ func NewCodeChunk(consts *[]Value) *CodeChunk {
 }
 
 func (c *CodeChunk) Debug() {
-	//fmt.Println("consts:")
 	consts := *c.consts
-	//for i := range consts {
-	//	fmt.Println("  [", i, "] =", consts[i])
-	//}
 	fmt.Println("code:")
 	i := 0
 	for i < len(c.code) {
