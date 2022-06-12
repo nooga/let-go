@@ -1,2 +1,2 @@
 lg: lg.go pkg/**/*
-	go build -o lg .
+	go build -ldflags="-s -w" -o lg .
