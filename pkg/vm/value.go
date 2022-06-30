@@ -33,6 +33,11 @@ type Seq interface {
 	Next() Seq
 }
 
+type Sequable interface {
+	Value
+	Seq() Seq
+}
+
 // Collection is implemented by all collections
 type Collection interface {
 	Value

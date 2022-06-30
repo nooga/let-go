@@ -110,6 +110,10 @@ func (l *List) Cons(val Value) Seq {
 	}
 }
 
+func (l *List) Seq() Seq {
+	return l
+}
+
 // Count implements Collection
 func (l *List) Count() Value {
 	return Int(l.count)

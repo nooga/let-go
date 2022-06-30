@@ -84,6 +84,10 @@ func (l ArrayVector) Cons(val Value) Seq {
 	return ret.Cons(val)
 }
 
+func (l ArrayVector) Seq() Seq {
+	return l
+}
+
 // Count implements Collection
 func (l ArrayVector) Count() Value {
 	return Int(len(l))

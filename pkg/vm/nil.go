@@ -51,6 +51,10 @@ func (n *Nil) Next() Seq {
 	return n
 }
 
+func (n *Nil) Seq() Seq {
+	return n
+}
+
 // Type implements Value
 func (n *Nil) Type() ValueType { return NilType }
 

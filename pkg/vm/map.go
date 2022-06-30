@@ -84,6 +84,10 @@ func toList(l Map) *List {
 	return ret.(*List)
 }
 
+func (l Map) Seq() Seq {
+	return toList(l)
+}
+
 // More implements Seq
 func (l Map) More() Seq {
 	if len(l) == 1 {
