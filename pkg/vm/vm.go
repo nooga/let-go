@@ -267,13 +267,6 @@ func (f *Frame) drop(n int) error {
 	return nil
 }
 
-func trunc(s string, n int) string {
-	if len(s) < n {
-		return s
-	}
-	return s[0:n] + " ..."
-}
-
 func (f *Frame) stackDbg() {
 	//fmt.Println("IP = ", f.ip)
 	//f.code.Debug()
