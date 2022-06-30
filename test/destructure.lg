@@ -1,0 +1,60 @@
+(ns test.destructure)
+
+(test "vector destructuring"
+      (let [[x y] [1 2]]
+        (and (= x 1) (= y 2))))
+
+(test "vector destructuring with rest"
+      (let [[x y & r] [1 2 3 4]]
+        (and (= x 1) 
+             (= y 2)
+             (= (count r) 2)
+             (= (first r) 3)
+             (= (second r) 4))))
+
+(test "vector destructuring with :as"
+      (let [[x y :as all] [1 2 3 4]]
+            (and (= x 1)
+                 (= y 2)
+                 (= (count all) 4))))
+
+(test "vector destructuring with rest and :as"
+      (let [[x y & r :as all] [1 2 3 4]]
+            (and (= x 1)
+                 (= y 2)
+                 (= (count r) 2)
+                 (= (first r) 3)
+                 (= (second r) 4)
+                 (= (count all) 4))))
+
+(test "nested vector destructuring"
+      (let [[[a b] y] [[1 2] [3 4]]]
+            (and (= a 1) 
+                 (= b 2)
+                 (= (count y) 2)
+                 (= (first y) 3)
+                 (= (second y) 4))))
+
+(test "map destructuring"
+      (let [{a :a b :b} {:a 1 :b 2}]
+        (and (= a 1)
+             (= b 2))))
+
+(test "map :keys destructuring"
+      (let [{:keys [a b]} {:a 1 :b 2}]
+        (and (= a 1)
+             (= b 2))))
+
+(test "map destructuring with :as"
+      (let [{a :a b :b :as c} {:a 1 :b 2}]
+        (and (= a 1)
+             (= b 2)
+             (= (:a c) 1)
+             (= (:b c) 2))))
+
+(test "map :keys destructuring with :as"
+      (let [{:keys [a b] :as c} {:a 1 :b 2}]
+        (and (= a 1)
+             (= b 2)
+             (= (:a c) 1)
+             (= (:b c) 2))))

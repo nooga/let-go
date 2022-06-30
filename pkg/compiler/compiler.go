@@ -477,8 +477,8 @@ func compilerInit() {
 		"fn":    fnCompiler,
 		"quote": quoteCompiler,
 		"var":   varCompiler,
-		"let":   letCompiler,
-		"loop":  loopCompiler,
+		"let*":  letCompiler,
+		"loop*": loopCompiler,
 		"recur": recurCompiler,
 		"trace": traceCompiler,
 	}

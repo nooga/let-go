@@ -18,6 +18,14 @@
 
 (defmacro comment [x] nil)
 
+; define let as aliast to let* for now
+(defmacro let [& body]
+  (cons 'let* body))
+
+; same for loop
+(defmacro loop [& body]
+  (cons 'loop* body))
+
 (defmacro when [condition & forms]
   (list 'if condition (cons 'do forms) nil))
 
@@ -42,8 +50,8 @@
 
 (defmacro cond [& forms]
   (when (>= (count forms) 2)
-        (list 'if (first forms) (second forms)
-              (cons 'cond (next (next forms))))))
+    (list 'if (first forms) (second forms)
+          (cons 'cond (next (next forms))))))
 
 (defmacro condp [comparator arg & forms]
   (let [l (count forms)]
@@ -92,6 +100,8 @@
 
 ;; bleh
 (defn list? [x] (= (type x) (type '())))
+(defn vector? [x] (= (type x) (type [])))
+(defn map? [x] (= (type x) (type {})))
 
 (defmacro time [& body]
   (let [then   (gensym "time__")
@@ -106,23 +116,23 @@
   (if (zero? (count forms))
     initial
     (reduce
-      (fn [a x]
-        (if (list? x)
-          (cons (first x) (cons a (next x)))
-          (list x a)))
-      initial
-      forms)))
+     (fn [a x]
+       (if (list? x)
+         (cons (first x) (cons a (next x)))
+         (list x a)))
+     initial
+     forms)))
 
 (defmacro ->> [initial & forms]
   (if (zero? (count forms))
     initial
     (reduce
-      (fn [a x]
-        (if (list? x)
-          (concat-list x (list a))
-          (list x a)))
-      initial
-      forms)))
+     (fn [a x]
+       (if (list? x)
+         (concat-list x (list a))
+         (list x a)))
+     initial
+     forms)))
 
 (defn mapcat [f xs]
   (reduce (fn [a x] (concat-list a x)) '() (map f xs)))
@@ -132,7 +142,7 @@
 
 (defn take [n coll]
   (when (and coll (> n 0))
-        (cons (first coll) (take (dec n) (next coll)))))
+    (cons (first coll) (take (dec n) (next coll)))))
 
 (defn drop [n xs]
   (if (> n 0)
@@ -151,10 +161,62 @@
   (let [i (first bindings)
         n (second bindings)]
     `(let [n# ~n]
-      (loop [~i 0]
-        (when (< ~i n#)
-              ~@body
-              (recur (inc ~i)))))))
+       (loop [~i 0]
+         (when (< ~i n#)
+           ~@body
+           (recur (inc ~i)))))))
+
+(def destructure nil)
+
+(defn destructure-vector [n v]
+  (loop [e v i 0 o []]
+    (if (empty? e)
+      (destructure o)
+      (let [x (first e)]
+        (cond
+          (= x '&) (recur (drop 2 e) i (conj o (second e) (list 'drop i n)))
+          (= x :as) (recur (drop 2 e) i (conj o (second e) n))
+          :else (recur (next e) (inc i) (conj o x (list 'get n i))))))))
+
+(defn destructure-map [n m]
+  (let [gs (reduce (fn [a x] (conj a (first x) (list 'get n (second x))))
+                   []
+                   (map identity (dissoc m :keys :as))) ; ugly hax to get away with reducing empty map, fix reduce 
+        rs (if (:as m)
+             (conj gs (:as m) n)
+             gs)]
+    (destructure (if (:keys m)
+                   (reduce (fn [a x] (conj a x (list 'get n (keyword x)))) rs (:keys m))
+                   rs))))
+
+(defn destructure [binds]
+  (loop [b binds o []]
+    (if (empty? b)
+      o
+      (let [n (first b) f (second b)]
+        (cond
+          (vector? n) (let [nn (gensym "vec__")
+                            vd (destructure-vector nn n)
+                            no (conj o nn f)]
+                        (recur (drop 2 b) (reduce conj no vd)))
+          (map? n) (let [nn (gensym "map__")
+                         md (destructure-map nn n)
+                         no (conj o nn f)]
+                     (recur (drop 2 b) (reduce conj no md)))
+          :else (recur (drop 2 b) (conj o n f)))))))
+
+; redefine let to use destructure
+(defmacro let [bindings & body]
+  `(let* ~(destructure bindings) ~@body))
+
+#_(defmacro loop [bindings & body]
+  (trace
+   (let [bs (destructure bindings)]
+     (if (> (count bs) (count bindings))
+       `(loop* ~bindings (let* ~bs ~@body))
+       `(loop* ~bindings ~@body)))))
 
 (defmacro when-let [bind & forms]
   `(let ~bind (if ~(second bind) (do ~@forms) nil)))
+
+
