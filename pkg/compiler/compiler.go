@@ -212,6 +212,7 @@ func (c *Context) leaveFn(ctx *Context) {
 		for _, clo := range ctx.closedOvers {
 			_ = clo.source().emit()
 			c.emit(vm.OP_PUSH_CLOSEDOVER)
+			c.decSP(1)
 		}
 	}
 }
