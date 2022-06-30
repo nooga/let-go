@@ -269,6 +269,23 @@ func installLangNS() {
 		return vm.NIL
 	})
 
+	keyword, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			return vm.NIL
+		}
+		if k, ok := vs[0].(vm.Keyword); ok {
+			return k
+		}
+		if k, ok := vs[0].(vm.Symbol); ok {
+			return vm.Keyword(k)
+		}
+		if k, ok := vs[0].(vm.String); ok {
+			return vm.Keyword(k)
+		}
+		// TODO handle namespaces
+		return vm.NIL
+	})
+
 	assoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		if len(vs) < 3 || len(vs)%2 == 0 {
 			// FIXME error out
@@ -780,6 +797,7 @@ func installLangNS() {
 	ns.Def("hash-map", hashMap)
 	ns.Def("list", list)
 	ns.Def("range", rangef)
+	ns.Def("keyword", keyword)
 
 	ns.Def("assoc", assoc)
 	ns.Def("dissoc", dissoc)
