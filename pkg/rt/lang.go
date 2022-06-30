@@ -363,17 +363,22 @@ func installLangNS() {
 	})
 
 	conj, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		if len(vs) != 2 {
+		if len(vs) < 1 {
 			// FIXME error out
 			return vm.NIL
 		}
-		elem := vs[1]
+		if len(vs) == 1 {
+			return vs[0]
+		}
 		seq, ok := vs[0].(vm.Collection)
 		if !ok {
 			// FIXME make this an error (we need to handle exceptions first)
 			return vm.NIL
 		}
-		return seq.Conj(elem)
+		for i := 1; i < len(vs); i++ {
+			seq = seq.Conj(vs[i])
+		}
+		return seq
 	})
 
 	first, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
@@ -464,11 +469,12 @@ func installLangNS() {
 			// FIXME make this an error (we need to handle exceptions first)
 			return vm.NIL
 		}
-		seq, ok := vs[1].(vm.Seq)
+		sequable, ok := vs[1].(vm.Sequable)
 		if !ok {
 			// FIXME make this an error (we need to handle exceptions first)
 			return vm.NIL
 		}
+		seq := sequable.Seq()
 		// if we have a single coll
 		if len(vs) == 2 {
 			length := 0
