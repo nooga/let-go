@@ -37,9 +37,14 @@ const (
 
 	OP_RECUR    // loop recurse REC (offset int32, argc int32)
 	OP_RECUR_FN // function recurse REF (argc int32)
+
+	OP_TRACE_ENABLE  // enable tracing
+	OP_TRACE_DISABLE // disable tracing
 )
 
 func OpcodeToString(op int32) string {
+	inst := op & 0xff
+	sp := (op >> 16) & 0xffff
 	ops := []string{
 		"NOOP",
 		"LOAD_CONST",
@@ -60,9 +65,11 @@ func OpcodeToString(op int32) string {
 		"PUSH_CLOSEDOVER",
 		"RECUR",
 		"RECUR_FN",
+		"TRACE_ENABLE",
+		"TRACE_DISABLE",
 	}
-	if int(op) < len(ops) {
-		return ops[op]
+	if int(inst) < len(ops) {
+		return fmt.Sprintf("{%d}%s", sp, ops[inst])
 	}
 	return "???"
 }
@@ -89,14 +96,14 @@ func (c *CodeChunk) Debug() {
 	i := 0
 	for i < len(c.code) {
 		op, _ := c.Get(i)
-		switch op {
+		switch op & 0xff {
 		case OP_RECUR:
 			arg, _ := c.Get32(i + 1)
 			arg2, _ := c.Get32(i + 2)
 			arg3, _ := c.Get32(i + 3)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2, arg3)
 			i += 4
-		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_CLOSURE:
+		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 2
@@ -270,9 +277,9 @@ func trunc(s string, n int) string {
 func (f *Frame) stackDbg() {
 	//fmt.Println("IP = ", f.ip)
 	//f.code.Debug()
-	fmt.Printf("VM stack [%d/%d]:", f.sp, f.code.maxStack)
+	fmt.Printf(";   stack [%d/%d]:\n", f.sp, f.code.maxStack)
 	for i := 0; i < f.sp; i++ {
-		fmt.Print("   ", trunc(f.stack[i].String(), 32))
+		fmt.Printf(";   %4d: %s\n", i, f.stack[i].String())
 
 	}
 	fmt.Println()
@@ -285,9 +292,23 @@ func (f *Frame) Run() (Value, error) {
 	}
 	for {
 		inst := f.code.code[f.ip]
-		switch inst {
+		if f.debug {
+			f.stackDbg()
+			fmt.Println("#", f.ip, OpcodeToString(inst))
+		}
+		switch inst & 0xff {
 		case OP_NOOP:
 			f.ip++
+
+		case OP_TRACE_ENABLE:
+			fmt.Print("# tracing frame, args: ", f.args, "\n")
+			f.code.Debug()
+			f.debug = true
+			f.ip += 1
+
+		case OP_TRACE_DISABLE:
+			f.debug = false
+			f.ip += 1
 
 		case OP_LOAD_CONST:
 			idx := f.code.code[f.ip+1]
@@ -539,10 +560,6 @@ func (f *Frame) Run() (Value, error) {
 
 		default:
 			return NIL, NewExecutionError("unknown instruction")
-		}
-		if f.debug {
-			fmt.Println("exec", f.ip, OpcodeToString(inst))
-			f.stackDbg()
 		}
 	}
 }

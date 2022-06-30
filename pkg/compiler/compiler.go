@@ -133,11 +133,11 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 }
 
 func (c *Context) emit(op int32) {
-	c.chunk.Append(op)
+	c.chunk.Append(op | int32(c.sp<<16))
 }
 
 func (c *Context) emitWithArg(op int32, arg int) {
-	c.chunk.Append(op)
+	c.chunk.Append(op | int32(c.sp<<16))
 	c.chunk.Append32(arg)
 }
 
@@ -480,7 +480,22 @@ func compilerInit() {
 		"let":   letCompiler,
 		"loop":  loopCompiler,
 		"recur": recurCompiler,
+		"trace": traceCompiler,
 	}
+}
+
+func traceCompiler(c *Context, form vm.Value) error {
+	args := form.(*vm.List).Next()
+	c.emit(vm.OP_TRACE_ENABLE)
+	for args != vm.EmptyList {
+		err := c.compileForm(args.First())
+		if err != nil {
+			return NewCompileError("compiling trace arguments").Wrap(err)
+		}
+		args = args.Next()
+	}
+	c.emit(vm.OP_TRACE_DISABLE)
+	return nil
 }
 
 func recurCompiler(c *Context, form vm.Value) error {
