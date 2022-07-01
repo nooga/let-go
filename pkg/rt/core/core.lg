@@ -103,6 +103,13 @@
 (defn vector? [x] (= (type x) (type [])))
 (defn map? [x] (= (type x) (type {})))
 
+(defn empty? [x] (zero? (count x)))
+
+(defn concat-vec [a b]
+  (if (empty? b)
+    a
+    (reduce conj a b)))
+
 (defmacro time [& body]
   (let [then   (gensym "time__")
         val    (gensym)
@@ -171,7 +178,7 @@
 (defn destructure-vector [n v]
   (loop [e v i 0 o []]
     (if (empty? e)
-      (destructure o)
+      (apply concat-vec (destructure o))
       (let [x (first e)]
         (cond
           (= x '&) (recur (drop 2 e) i (conj o (second e) (list 'drop i n)))
@@ -185,36 +192,41 @@
         rs (if (:as m)
              (conj gs (:as m) n)
              gs)]
-    (destructure (if (:keys m)
-                   (reduce (fn [a x] (conj a x (list 'get n (keyword x)))) rs (:keys m))
-                   rs))))
+    (apply concat-vec
+           (destructure (if (:keys m)
+                          (reduce (fn [a x] (conj a x (list 'get n (keyword x)))) rs (:keys m))
+                          rs)))))
 
 (defn destructure [binds]
-  (loop [b binds o []]
+  (loop [b binds o [] ob []]
     (if (empty? b)
-      o
+      [ob o]
       (let [n (first b) f (second b)]
         (cond
           (vector? n) (let [nn (gensym "vec__")
                             vd (destructure-vector nn n)
-                            no (conj o nn f)]
-                        (recur (drop 2 b) (reduce conj no vd)))
+                            no (conj ob nn f)]
+                        (recur (drop 2 b) (concat-vec o vd) no))
           (map? n) (let [nn (gensym "map__")
                          md (destructure-map nn n)
-                         no (conj o nn f)]
-                     (recur (drop 2 b) (reduce conj no md)))
-          :else (recur (drop 2 b) (conj o n f)))))))
+                         no (conj ob nn f)]
+                     (recur (drop 2 b) (concat-vec o md) no))
+          :else (recur (drop 2 b) o (conj ob n f)))))))
 
 ; redefine let to use destructure
 (defmacro let [bindings & body]
-  `(let* ~(destructure bindings) ~@body))
+  (let [bs (destructure bindings)
+        obs (first bs)
+        nbs (second bs)]
+    (if (> (count nbs) 0)
+      `(let* ~(concat-vec obs nbs) ~@body)
+      `(let* ~bindings ~@body))))
 
-#_(defmacro loop [bindings & body]
-  (trace
-   (let [bs (destructure bindings)]
-     (if (> (count bs) (count bindings))
-       `(loop* ~bindings (let* ~bs ~@body))
-       `(loop* ~bindings ~@body)))))
+(defmacro loop [bindings & body]
+  (let [[bs nbs] (destructure bindings)]
+    (if (> (count nbs) 0)
+      `(loop* ~bs (let* ~nbs ~@body))
+      `(loop* ~bindings ~@body))))
 
 (defmacro when-let [bind & forms]
   `(let ~bind (if ~(second bind) (do ~@forms) nil)))

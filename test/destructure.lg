@@ -58,3 +58,13 @@
              (= b 2)
              (= (:a c) 1)
              (= (:b c) 2))))
+
+(test "loop destructuring"
+      (let [xs (loop [[x y & r] '(1 2 3 4) o []]
+                 (if x
+                   (recur r (conj o [x y]))
+                   o))]
+        (and (-> xs first first (= 1))
+             (-> xs first second (= 2))
+             (-> xs second first (= 3))
+             (-> xs second second (= 4)))))
