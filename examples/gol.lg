@@ -13,10 +13,10 @@
               0 0 0 0 0 0 0 0 0 0])
 
 (defn show [state]
-  (loop [l (partition N N state)]
-    (when-let [line (first l)]
-      (apply println (map {0 "." 1 "#"} line))
-      (recur (next l)))))
+  (loop [[l & r] (partition N N state)]
+    (when l
+      (apply println (map {0 "." 1 "#"} l))
+      (recur r))))
 
 (defn window [state i]
   (apply + (map #(get state %1 0)
@@ -36,7 +36,7 @@
        (range (* N N))))
 
 (loop [state initial i 20]
-  (when (> i 0)
-    (println "---") 
+  (when (> i 0) 
     (show state)
+    (println "---")
     (recur (step state) (dec i))))

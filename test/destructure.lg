@@ -68,3 +68,7 @@
              (-> xs first second (= 2))
              (-> xs second first (= 3))
              (-> xs second second (= 4)))))
+
+(test "fn destructuring"
+      (let [f (fn [{a :x b :y}] (+ a b 6))]
+        (= 13 (f {:x 3 :y 4}))))

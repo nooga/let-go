@@ -474,7 +474,7 @@ func compilerInit() {
 		"do":    doCompiler,
 		"def":   defCompiler,
 		"set!":  setBangCompiler,
-		"fn":    fnCompiler,
+		"fn*":   fnCompiler,
 		"quote": quoteCompiler,
 		"var":   varCompiler,
 		"let*":  letCompiler,
@@ -687,7 +687,7 @@ func fnCompiler(c *Context, form vm.Value) error {
 	for i := range body {
 		err := fc.compileForm(body[i])
 		if err != nil {
-			return NewCompileError("compiling do member").Wrap(err)
+			return NewCompileError("compiling fn body").Wrap(err)
 		}
 		if i < l-1 {
 			fc.emit(vm.OP_POP)
