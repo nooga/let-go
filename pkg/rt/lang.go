@@ -565,6 +565,31 @@ func installLangNS() {
 		return acc
 	})
 
+	some, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME error out
+			return vm.NIL
+		}
+		f, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL
+		}
+		seq, ok := vs[1].(vm.Seq)
+		if !ok {
+			// FIXME make this an error (we need to handle exceptions first)
+			return vm.NIL
+		}
+		for seq != vm.EmptyList {
+			v := f.Invoke([]vm.Value{seq.First()})
+			if v != vm.NIL {
+				return v
+			}
+			seq = seq.Next()
+		}
+
+		return vm.NIL
+	})
+
 	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
 		b := &strings.Builder{}
 		for i := range vs {
@@ -820,6 +845,7 @@ func installLangNS() {
 	ns.Def("mapv", mapv)
 	ns.Def("reduce", reduce)
 	ns.Def("concat", concat)
+	ns.Def("some", some)
 
 	ns.Def("println", printlnf)
 

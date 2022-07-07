@@ -89,11 +89,14 @@
 (defn pos? [x] (gt x 0))
 (defn neg? [x] (lt x 0))
 
+(defmacro not= [& xs] (list 'not (cons '= xs)))
+
+(defn complement [f] (fn [x] (not (f x))))
+
 (defn nil? [x] (= nil x))
+(defn some? [x] (not= nil x))
 (defn true? [x] (= x true))
 (defn false? [x] (= x false))
-
-(defmacro not= [& xs] (list 'not (cons '= xs)))
 
 (defn inc [x] (+ x 1))
 (defn dec [x] (- x 1))
@@ -102,6 +105,8 @@
 (defn list? [x] (= (type x) (type '())))
 (defn vector? [x] (= (type x) (type [])))
 (defn map? [x] (= (type x) (type {})))
+(defn symbol? [x] (= (type x) (type 'x)))
+(defn keyword? [x] (= (type x) (type :x)))
 
 (defn empty? [x] (zero? (count x)))
 
