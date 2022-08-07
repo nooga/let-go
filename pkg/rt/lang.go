@@ -791,6 +791,33 @@ func installLangNS() {
 		return named.Namespace()
 	})
 
+	atom, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME err
+			return vm.NIL
+		}
+		return vm.NewAtom(vs[0])
+	})
+
+	// (swap! a fn)
+	swap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) < 2 {
+			// FIXME err
+			return vm.NIL
+		}
+		at, ok := vs[0].(*vm.Atom)
+		if !ok {
+			// FIXME err
+			return vm.NIL
+		}
+		fn, ok := vs[1].(vm.Fn)
+		if !ok {
+			// FIXME err
+			return vm.NIL
+		}
+		return at.Swap(fn, vs[2:])
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -853,6 +880,9 @@ func installLangNS() {
 
 	ns.Def("apply", apply)
 	ns.Def("deref", deref)
+
+	ns.Def("atom", atom)
+	ns.Def("swap!", swap)
 
 	// FIXME move this later outside the core
 	ns.Def("now", now)
