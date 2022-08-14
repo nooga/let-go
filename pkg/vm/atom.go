@@ -31,13 +31,20 @@ var AtomType *theAtomType = &theAtomType{}
 
 type Atom struct {
 	root Value
-	mu   sync.Mutex
+	mu   sync.RWMutex
 }
 
 func NewAtom(root Value) *Atom {
 	return &Atom{
 		root: root,
 	}
+}
+
+func (v *Atom) Reset(new Value) Value {
+	v.mu.Lock()
+	v.root = new
+	v.mu.Unlock()
+	return new
 }
 
 func (v *Atom) Swap(fn Fn, args []Value) Value {
@@ -49,9 +56,9 @@ func (v *Atom) Swap(fn Fn, args []Value) Value {
 }
 
 func (v *Atom) Deref() Value {
-	v.mu.Lock()
+	v.mu.RLock()
 	val := v.root
-	v.mu.Unlock()
+	v.mu.RUnlock()
 	return val
 }
 

@@ -25,8 +25,13 @@
            (= (count (range 5 10 3)) 2)
            (= (first (range 8 100)) 8)))
 
-(test "atoms"
+(test "atom/swap"
       (let [foo (atom 5)]
         (swap! foo inc)
         (swap! foo * 10)
         (= 60 @foo)))
+
+(test "atom/reset"
+      (let [foo (atom 5)]
+        (reset! foo 10)
+        (= 10 @foo)))
