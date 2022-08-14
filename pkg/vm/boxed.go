@@ -74,11 +74,7 @@ func (n *Boxed) ValueAtOr(key Value, dflt Value) Value {
 }
 
 // BoxedType is the type of NilValues
-var BoxedTypes map[string]*aBoxedType
-
-func init() {
-	BoxedTypes = map[string]*aBoxedType{}
-}
+var BoxedTypes map[string]*aBoxedType = map[string]*aBoxedType{}
 
 func valueType(value interface{}) *aBoxedType {
 	reflected := reflect.TypeOf(value)

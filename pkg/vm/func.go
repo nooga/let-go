@@ -21,11 +21,7 @@ func (t *theFuncType) Box(fn interface{}) (Value, error) {
 	return NIL, NewTypeError(fn, "can't be boxed as", t)
 }
 
-var FuncType *theFuncType
-
-func init() {
-	FuncType = &theFuncType{}
-}
+var FuncType *theFuncType = &theFuncType{}
 
 type Func struct {
 	name        string

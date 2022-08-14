@@ -29,11 +29,7 @@ func (lt *theCharType) Box(bare interface{}) (Value, error) {
 }
 
 // CharType is the type of CharValues
-var CharType *theCharType
-
-func init() {
-	CharType = &theCharType{zero: utf8.RuneError}
-}
+var CharType *theCharType = &theCharType{zero: utf8.RuneError}
 
 // Char is boxed rune
 type Char rune

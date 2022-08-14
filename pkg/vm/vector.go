@@ -28,11 +28,7 @@ func (lt *theArrayVectorType) Box(bare interface{}) (Value, error) {
 }
 
 // ArrayVectorType is the type of ArrayVectors
-var ArrayVectorType *theArrayVectorType
-
-func init() {
-	ArrayVectorType = &theArrayVectorType{}
-}
+var ArrayVectorType *theArrayVectorType = &theArrayVectorType{}
 
 // ArrayVector is boxed singly linked list that can hold other Values.
 type ArrayVector []Value

@@ -35,15 +35,10 @@ func (lt *theListType) Box(bare interface{}) (Value, error) {
 }
 
 // ListType is the type of Lists
-var ListType *theListType
+var ListType *theListType = &theListType{}
 
 // EmptyList is an empty List
-var EmptyList *List
-
-func init() {
-	ListType = &theListType{}
-	EmptyList = &List{count: 0}
-}
+var EmptyList *List = &List{count: 0}
 
 // List is boxed singly linked list that can hold other Values.
 type List struct {

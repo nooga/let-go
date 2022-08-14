@@ -28,11 +28,7 @@ func (t *theMapType) Box(bare interface{}) (Value, error) {
 }
 
 // ArrayVectorType is the type of ArrayVectors
-var MapType *theMapType
-
-func init() {
-	MapType = &theMapType{}
-}
+var MapType *theMapType = &theMapType{}
 
 // Map is boxed singly linked list that can hold other Values.
 type Map map[Value]Value

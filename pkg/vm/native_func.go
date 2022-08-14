@@ -79,11 +79,7 @@ func (l *NativeFn) WithArity(arity int, variadric bool) *NativeFn {
 	return l
 }
 
-var NativeFnType *theNativeFnType
-
-func init() {
-	NativeFnType = &theNativeFnType{}
-}
+var NativeFnType *theNativeFnType = &theNativeFnType{}
 
 type NativeFn struct {
 	name        string

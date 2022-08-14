@@ -82,11 +82,7 @@ type Reference interface {
 
 type theTypeType struct{}
 
-var TypeType *theTypeType
-
-func init() {
-	TypeType = &theTypeType{}
-}
+var TypeType *theTypeType = &theTypeType{}
 
 func (t *theTypeType) String() string     { return t.Name() }
 func (t *theTypeType) Type() ValueType    { return t }

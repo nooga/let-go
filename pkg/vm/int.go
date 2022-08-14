@@ -29,11 +29,7 @@ func (t *theIntType) Box(bare interface{}) (Value, error) {
 }
 
 // IntType is the type of IntValues
-var IntType *theIntType
-
-func init() {
-	IntType = &theIntType{zero: 0}
-}
+var IntType *theIntType = &theIntType{zero: 0}
 
 // Int is boxed int
 type Int int

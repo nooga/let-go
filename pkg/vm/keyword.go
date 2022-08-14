@@ -30,11 +30,7 @@ func (t *theKeywordType) Box(bare interface{}) (Value, error) {
 }
 
 // KeywordType is the type of KeywordValues
-var KeywordType *theKeywordType
-
-func init() {
-	KeywordType = &theKeywordType{zero: "????BADKeyword????"}
-}
+var KeywordType *theKeywordType = &theKeywordType{zero: "????BADKeyword????"}
 
 // Keyword is boxed int
 type Keyword string

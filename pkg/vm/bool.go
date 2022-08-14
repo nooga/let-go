@@ -34,17 +34,13 @@ func (n Boolean) Type() ValueType { return BooleanType }
 func (n Boolean) Unbox() interface{} { return bool(n) }
 
 // BooleanType is the type of Boolean
-var BooleanType *theBooleanType
+var BooleanType *theBooleanType = &theBooleanType{zero: FALSE}
 
 // TRUE is Boolean
 const TRUE Boolean = true
 
 // FALSE is Boolean
 const FALSE Boolean = false
-
-func init() {
-	BooleanType = &theBooleanType{zero: FALSE}
-}
 
 func (n Boolean) String() string {
 	if n == TRUE {

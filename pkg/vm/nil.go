@@ -62,15 +62,10 @@ func (n *Nil) Type() ValueType { return NilType }
 func (n *Nil) Unbox() interface{} { return nil }
 
 // NilType is the type of NilValues
-var NilType *theNilType
+var NilType *theNilType = &theNilType{zero: nil}
 
 // NIL is the only value of NilType (and only instance of NilValue)
-var NIL *Nil
-
-func init() {
-	NilType = &theNilType{zero: nil}
-	NIL = NilType.zero
-}
+var NIL *Nil = NilType.zero
 
 func (n *Nil) String() string {
 	return "nil"

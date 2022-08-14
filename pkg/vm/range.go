@@ -22,11 +22,7 @@ func (t *theRangeType) Box(bare interface{}) (Value, error) {
 }
 
 // RangeType is the type of Lists
-var RangeType *theRangeType
-
-func init() {
-	RangeType = &theRangeType{}
-}
+var RangeType *theRangeType = &theRangeType{}
 
 // Range is boxed singly linked list that can hold other Values.
 type Range struct {

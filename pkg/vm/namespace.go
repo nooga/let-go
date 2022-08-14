@@ -22,11 +22,7 @@ func (t *theNamespaceType) Box(fn interface{}) (Value, error) {
 	return NIL, NewTypeError(fn, "can't be boxed as", t)
 }
 
-var NamespaceType *theNamespaceType
-
-func init() {
-	NamespaceType = &theNamespaceType{}
-}
+var NamespaceType *theNamespaceType = &theNamespaceType{}
 
 type Refer struct {
 	ns  *Namespace

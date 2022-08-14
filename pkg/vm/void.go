@@ -28,15 +28,10 @@ func (n *Void) Type() ValueType { return VoidType }
 func (n *Void) Unbox() interface{} { return nil }
 
 // VoidType is the type of VoidValues
-var VoidType *theVoidType
+var VoidType *theVoidType = &theVoidType{zero: &Void{}}
 
 // NIL is the only value of VoidType (and only instance of VoidValue)
-var VOID *Void
-
-func init() {
-	VoidType = &theVoidType{zero: &Void{}}
-	VOID = VoidType.zero
-}
+var VOID *Void = VoidType.zero
 
 func (n *Void) String() string {
 	return ""

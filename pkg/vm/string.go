@@ -29,11 +29,7 @@ func (t *theStringType) Box(bare interface{}) (Value, error) {
 }
 
 // StringType is the type of StringValues
-var StringType *theStringType
-
-func init() {
-	StringType = &theStringType{zero: ""}
-}
+var StringType *theStringType = &theStringType{zero: ""}
 
 // String is boxed int
 type String string
