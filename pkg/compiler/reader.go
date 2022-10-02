@@ -646,7 +646,11 @@ func flattenMap(m vm.Map) vm.Value {
 }
 
 func expandUnquotes(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error) {
+	fcnt := form.(vm.Collection)
 	ret := vm.ArrayVector{}
+	if fcnt.RawCount() == 0 {
+		return ret, nil
+	}
 	fseq := form.(vm.Seq) // this has to succeed
 	for {
 		v := fseq.First()

@@ -256,4 +256,6 @@
 (defmacro when-let [bind & forms]
   `(let ~bind (if ~(second bind) (do ~@forms) nil)))
 
+(defmacro while [test & body]
+  `(loop* [] (when ~test ~@body (recur))))
 
