@@ -254,26 +254,22 @@ func (f *Frame) drop(n int) error {
 	top := f.sp - 1
 	if top < 0 {
 		f.stackDbg()
+		f.code.Debug()
 		return NewExecutionError("drop: stack underflow")
 	}
 	f.sp -= n
 	if f.sp < 0 {
 		f.stackDbg()
+		f.code.Debug()
 		return NewExecutionError("drop: stack underflow")
 	}
-	// for i := top; i >= f.sp; i-- {
-	// 	f.stack[i] = nil
-	// }
 	return nil
 }
 
 func (f *Frame) stackDbg() {
-	//fmt.Println("IP = ", f.ip)
-	//f.code.Debug()
 	fmt.Printf(";   stack [%d/%d]:\n", f.sp, f.code.maxStack)
 	for i := 0; i < f.sp; i++ {
 		fmt.Printf(";   %4d: %s\n", i, f.stack[i].String())
-
 	}
 	fmt.Println()
 }

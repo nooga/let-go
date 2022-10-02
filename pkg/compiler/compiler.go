@@ -600,8 +600,10 @@ func loopCompiler(c *Context, form vm.Value) error {
 	}
 	c.popLocals()
 	c.popRecurPoint()
-	c.emitWithArg(vm.OP_POP_N, bindn)
-	c.decSP(bindn)
+	if bindn > 0 {
+		c.emitWithArg(vm.OP_POP_N, bindn)
+		c.decSP(bindn)
+	}
 	c.tailPosition = tp
 	return nil
 }
@@ -652,8 +654,10 @@ func letCompiler(c *Context, form vm.Value) error {
 		}
 	}
 	c.popLocals()
-	c.emitWithArg(vm.OP_POP_N, bindn)
-	c.decSP(bindn)
+	if bindn > 0 {
+		c.emitWithArg(vm.OP_POP_N, bindn)
+		c.decSP(bindn)
+	}
 	c.tailPosition = tc
 	return nil
 }
