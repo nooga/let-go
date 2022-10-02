@@ -832,6 +832,63 @@ func installLangNS() {
 		return at.Reset(vs[1])
 	})
 
+	gof, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME err
+			return vm.NIL
+		}
+		at, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL
+		}
+		ret := make(vm.Chan)
+		go func() {
+			ret <- at.Invoke(nil)
+			close(ret)
+		}()
+		return ret
+	})
+
+	chanf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 0 {
+			// FIXME err
+			return vm.NIL
+		}
+		return make(vm.Chan)
+	})
+
+	chanput, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 2 {
+			// FIXME err
+			return vm.NIL
+		}
+		ch, ok := vs[0].(vm.Chan)
+		if !ok {
+			return vm.NIL
+		}
+		if vs[1] == vm.NIL {
+			return vm.NIL
+		}
+		ch <- vs[1]
+		return vm.TRUE
+	})
+
+	changet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+		if len(vs) != 1 {
+			// FIXME err
+			return vm.NIL
+		}
+		ch, ok := vs[0].(vm.Chan)
+		if !ok {
+			return vm.NIL
+		}
+		v, ok := <-ch
+		if !ok {
+			return vm.NIL // this is not an error
+		}
+		return v
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -907,6 +964,12 @@ func installLangNS() {
 
 	// FIXME move this to VM later
 	ns.Def(".", methodInvoke)
+
+	// FIXME move to async
+	ns.Def("go*", gof)
+	ns.Def("chan", chanf)
+	ns.Def(">!", chanput)
+	ns.Def("<!", changet)
 
 	CoreNS = ns
 

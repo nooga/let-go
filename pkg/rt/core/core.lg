@@ -259,3 +259,7 @@
 (defmacro while [test & body]
   `(loop* [] (when ~test ~@body (recur))))
 
+(defmacro go [& forms]
+  `(go* (fn [] ~@forms)))
+
+
