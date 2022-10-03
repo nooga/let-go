@@ -157,7 +157,7 @@ func BoxValue(v reflect.Value) (Value, error) {
 		if v.IsNil() {
 			return NIL, nil
 		}
-		return NIL, NewTypeError(v, "is not boxable", nil)
+		return ChanType.Box(v.Interface())
 	default:
 		if v.CanInterface() {
 			return NewBoxed(v.Interface()), nil

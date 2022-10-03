@@ -1,0 +1,10 @@
+(ns test.async)
+
+(test "go block concurrency"
+      (let [x (atom 0)
+            m 100
+            a (go (dotimes [n m] (swap! x inc))) 
+            b (go (dotimes [n (* 2 m)] (swap! x dec)))] 
+        (<! b)
+        (<! a)
+        (= @x (- m))))

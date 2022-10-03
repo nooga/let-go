@@ -19,10 +19,22 @@ func (t *theChanType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (t *theChanType) Name() string { return "let-go.lang.Chan" }
 func (t *theChanType) Box(b interface{}) (Value, error) {
-	rb, ok := b.(chan Value)
-	if !ok {
-		return nil, NewTypeError(b, "can't be boxed as", t)
+	chv := reflect.ValueOf(b)
+	if chv.Type().Kind() != reflect.Chan {
+		return NIL, NewTypeError(b, "is not a channel", t)
 	}
+	rb := make(Chan)
+	go func() {
+		for {
+			v, ok := chv.Recv()
+			if !ok {
+				break
+			}
+			bv, _ := BoxValue(v)
+			rb <- bv
+		}
+		close(rb)
+	}()
 	return Chan(rb), nil
 }
 
