@@ -18,7 +18,7 @@ type Var struct {
 func (v *Var) Invoke(values []Value) (Value, error) {
 	f, ok := v.root.(Fn)
 	if !ok {
-		return NIL, fmt.Errorf("%v root does not implement Fn") // FIXME this should be an error
+		return NIL, fmt.Errorf("%v root does not implement Fn", v.root) // FIXME this should be an error
 	}
 	return f.Invoke(values)
 }
