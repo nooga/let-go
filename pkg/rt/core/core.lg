@@ -69,10 +69,11 @@
   (concat-list (list 'condp '= arg) forms))
 
 (defmacro ns [n & nss]
-  (let [cns     (list 'in-ns (list 'quote n))
-        imports (cons 'use nss)]
+  (let [cns     (list 'in-ns (list 'quote n))]
     ; FIXME this is not clojure syntax at all
-    (list 'do cns imports)))
+    (if (empty? nss)
+      cns
+      (list 'do cns (cons 'use nss)))))
 
 ; makeshift test helper
 (def *test-flag* true)

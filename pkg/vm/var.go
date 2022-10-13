@@ -15,10 +15,10 @@ type Var struct {
 	isMacro bool
 }
 
-func (v *Var) Invoke(values []Value) Value {
+func (v *Var) Invoke(values []Value) (Value, error) {
 	f, ok := v.root.(Fn)
 	if !ok {
-		return NIL // FIXME this should be an error
+		return NIL, fmt.Errorf("%v root does not implement Fn") // FIXME this should be an error
 	}
 	return f.Invoke(values)
 }

@@ -350,7 +350,10 @@ func (c *Context) compileForm(o vm.Value) error {
 			fvar := c.CurrentNS().Lookup(fnsym)
 			if fvar != vm.NIL && fvar.(*vm.Var).IsMacro() {
 				argvec := o.(*vm.List).Next().(*vm.List).Unbox().([]vm.Value)
-				newform := fvar.(*vm.Var).Invoke(argvec)
+				newform, err := fvar.(*vm.Var).Invoke(argvec)
+				if err != nil {
+					return NewCompileError("Executing macro failed").Wrap(err)
+				}
 				return c.compileForm(newform)
 			}
 		}

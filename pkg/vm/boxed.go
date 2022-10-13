@@ -42,17 +42,13 @@ func (n *Boxed) String() string {
 	return fmt.Sprintf("<%s %v>", n.typ.Name(), n.value)
 }
 
-func (n *Boxed) InvokeMethod(methodName Symbol, args []Value) Value {
+func (n *Boxed) InvokeMethod(methodName Symbol, args []Value) (Value, error) {
 	if n.typ.methods == nil {
-		// FIXME error :P
-		fmt.Println("methods nil")
-		return NIL
+		return NIL, fmt.Errorf("%v doesn't have any methods", n.typ)
 	}
 	method, ok := n.typ.methods[methodName]
 	if !ok {
-		// FIXME error :P
-		fmt.Println("method", methodName, "not found")
-		return NIL
+		return NIL, fmt.Errorf("method %s not found in %v", methodName, n.typ)
 	}
 	return method.Invoke(append([]Value{n}, args...))
 }

@@ -51,21 +51,20 @@ func (l Keyword) Arity() int {
 	return -1
 }
 
-func (l Keyword) Invoke(pargs []Value) Value {
+func (l Keyword) Invoke(pargs []Value) (Value, error) {
 	vl := len(pargs)
 	if vl < 1 || vl > 2 {
-		// FIXME return error
-		return NIL
+		return NIL, fmt.Errorf("wrong number of arguments %d", vl)
 	}
 	as, ok := pargs[0].(Lookup)
 	if !ok {
 		// FIXME return error
-		return NIL
+		return NIL, fmt.Errorf("Keyword expected Lookup")
 	}
 	if vl == 1 {
-		return as.ValueAt(l)
+		return as.ValueAt(l), nil
 	}
-	return as.ValueAtOr(l, pargs[1])
+	return as.ValueAtOr(l, pargs[1]), nil
 }
 
 func (l Keyword) Namespaced() (Value, Value) {

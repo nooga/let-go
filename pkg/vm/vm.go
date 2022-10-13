@@ -344,7 +344,11 @@ func (f *Frame) Run() (Value, error) {
 				if err != nil {
 					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 				}
-				out = fn.Invoke(a)
+				out, err = fn.Invoke(a)
+				if err != nil {
+					// FIXME this is an exception, we should handle it
+					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fn.String())).Wrap(err)
+				}
 				err = f.drop(int(arity) + 1)
 				if err != nil {
 					return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
@@ -358,7 +362,11 @@ func (f *Frame) Run() (Value, error) {
 				if !ok {
 					return NIL, NewTypeError(fraw, "is not a function", nil)
 				}
-				out = fn.Invoke(nil)
+				out, err = fn.Invoke(nil)
+				if err != nil {
+					// FIXME this is an exception, we should handle it
+					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fn.String())).Wrap(err)
+				}
 			}
 			err := f.push(out)
 			if err != nil {

@@ -77,169 +77,157 @@ func nextID() int {
 
 //nolint
 func installLangNS() {
-	plus, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	plus, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		n := 0
 		for i := range vs {
 			n += vs[i].Unbox().(int)
 		}
-		return vm.Int(n)
+		return vm.Int(n), nil
 	})
 
-	mul, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	mul, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		n := 1
 		for i := range vs {
 			n *= vs[i].Unbox().(int)
 		}
-		return vm.Int(n)
+		return vm.Int(n), nil
 	})
 
-	sub, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	sub, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		n := vs[0].Unbox().(int)
 		if len(vs) == 1 {
-			// FIXME error out
-			return vm.Int(-n)
+			return vm.Int(-n), nil
 		}
 		for i := 1; i < len(vs); i++ {
 			n -= vs[i].Unbox().(int)
 		}
-		return vm.Int(n)
+		return vm.Int(n), nil
 	})
 
-	div, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	div, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		n := 0
 		if len(vs) < 1 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		for i := range vs {
 			n /= vs[i].Unbox().(int)
 		}
-		return vm.Int(n)
+		return vm.Int(n), nil
 	})
 
-	equals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	equals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		length := len(vs)
 		if length < 1 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 
 		for i := 1; i < length; i++ {
 			if vs[0] != vs[i] {
-				return vm.FALSE
+				return vm.FALSE, nil
 			}
 		}
-		return vm.TRUE
+		return vm.TRUE, nil
 	})
 
-	gt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	gt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		ret, err := vm.BooleanType.Box(vs[0].Unbox().(int) > vs[1].Unbox().(int))
 		if err != nil {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		return ret
+		return ret, nil
 	})
 
-	lt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	lt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		ret, err := vm.BooleanType.Box(vs[0].Unbox().(int) < vs[1].Unbox().(int))
 		if err != nil {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		return ret
+		return ret, nil
 	})
 
-	mod, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	mod, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		ret := vs[0].Unbox().(int) % vs[1].Unbox().(int)
-		return vm.Int(ret)
+		return vm.Int(ret), nil
 	})
 
-	and, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	and, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		var ret vm.Value = vm.TRUE
 		if len(vs) == 1 {
-			return vs[0]
+			return vs[0], nil
 		}
 		for i := range vs {
 			if !vm.IsTruthy(vs[i]) {
-				return vs[i]
+				return vs[i], nil
 			}
 			ret = vs[i]
 		}
-		return ret
+		return ret, nil
 	})
 
-	or, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	or, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		var ret vm.Value = vm.NIL
 		if len(vs) == 1 {
-			return vs[0]
+			return vs[0], nil
 		}
 		for i := range vs {
 			if vm.IsTruthy(vs[i]) {
-				return vs[i]
+				return vs[i], nil
 			}
 			ret = vs[i]
 		}
-		return ret
+		return ret, nil
 	})
 
-	not, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	not, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME this is an error
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		return vm.Boolean(!vm.IsTruthy(vs[0]))
+		return vm.Boolean(!vm.IsTruthy(vs[0])), nil
 	})
 
-	setMacro, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	setMacro, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		m := vs[0].(*vm.Var)
 		m.SetMacro()
-		return m
+		return m, nil
 	})
 
-	gensym, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	gensym, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		prefix := "G__"
 		if len(vs) == 1 {
 			arg, ok := vs[0].(vm.String)
 			if !ok {
-				// FIXME :P
-				return vm.NIL
+				return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 			}
 			prefix = string(arg)
 		}
-		return vm.Symbol(fmt.Sprintf("%s%d", prefix, nextID()))
+		return vm.Symbol(fmt.Sprintf("%s%d", prefix, nextID())), nil
 	})
 
-	vector, err := vm.NativeFnType.Wrap(vm.NewArrayVector)
-	list, err := vm.NativeFnType.Wrap(vm.NewList)
-	hashMap, err := vm.NativeFnType.Wrap(vm.NewMap)
+	vector, err := vm.NativeFnType.WrapNoErr(vm.NewArrayVector)
+	list, err := vm.NativeFnType.WrapNoErr(vm.NewList)
+	hashMap, err := vm.NativeFnType.WrapNoErr(vm.NewMap)
 
-	vec, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	vec, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		if v, ok := vs[0].(vm.ArrayVector); ok {
-			return v
+			return v, nil
 		}
 		if seq, ok := vs[0].(vm.Seq); ok {
 			ret := []vm.Value{}
@@ -247,232 +235,210 @@ func installLangNS() {
 				ret = append(ret, seq.First())
 				seq = seq.Next()
 			}
-			return vm.NewArrayVector(ret)
+			return vm.NewArrayVector(ret), nil
 		}
-		return vm.NIL
+		return vm.NIL, nil // FIXME is this an error?
 	})
 
-	rangef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	rangef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
-			return vm.EmptyList
+			return vm.EmptyList, nil
 		}
 		if len(vs) == 1 {
-			return vm.NewRange(0, vs[0].(vm.Int), 1)
+			return vm.NewRange(0, vs[0].(vm.Int), 1), nil
 		}
 		if len(vs) == 2 {
-			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), 1)
+			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), 1), nil
 		}
 		if len(vs) == 3 {
-			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), vs[2].(vm.Int))
+			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), vs[2].(vm.Int)), nil
 		}
-		// FIXME :P
-		return vm.NIL
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	})
 
-	keyword, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	keyword, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		if k, ok := vs[0].(vm.Keyword); ok {
-			return k
+			return k, nil
 		}
 		if k, ok := vs[0].(vm.Symbol); ok {
-			return vm.Keyword(k)
+			return vm.Keyword(k), nil
 		}
 		if k, ok := vs[0].(vm.String); ok {
-			return vm.Keyword(k)
+			return vm.Keyword(k), nil
 		}
 		// TODO handle namespaces
-		return vm.NIL
+		return vm.NIL, nil // TODO is this an error?
 	})
 
-	assoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	assoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 3 || len(vs)%2 == 0 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		coll, ok := vs[0].(vm.Associative)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("assoc expected Associative")
 		}
 		ret := coll
 		for i := 1; i < len(vs); i += 2 {
 			ret = ret.Assoc(vs[i], vs[i+1])
 		}
-		return ret
+		return ret, nil
 	})
 
-	dissoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	dissoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		coll, ok := vs[0].(vm.Associative)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("dissoc expected Associative")
 		}
 		ret := coll
 		for i := 1; i < len(vs); i++ {
 			ret = ret.Dissoc(vs[i])
 		}
-		return ret
+		return ret, nil
 	})
 
-	update, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	update, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 3 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		colla, ok := vs[0].(vm.Associative)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("update expected Associative")
 		}
 		collg, ok := vs[0].(vm.Lookup)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("update expected Lookup")
 		}
 		key := vs[1]
 		fn := vs[2].(vm.Fn)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("update expected Fn")
 		}
 		args := []vm.Value{collg.ValueAt(key)}
 		if len(vs) > 3 {
 			args = append(args, vs[3:]...)
 		}
-		return colla.Assoc(key, fn.Invoke(args))
+		v, err := fn.Invoke(args)
+		if err != nil {
+			return vm.NIL, err // FIXME wrap this?
+		}
+		return colla.Assoc(key, v), nil
 	})
 
-	cons, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	cons, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		elem := vs[0]
 		seq, ok := vs[1].(vm.Seq)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("cons expected Seq")
 		}
-		return seq.Cons(elem)
+		return seq.Cons(elem), nil
 	})
 
-	conj, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	conj, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		if len(vs) == 1 {
-			return vs[0]
+			return vs[0], nil
 		}
 		seq, ok := vs[0].(vm.Collection)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("conj expected Collection")
 		}
 		for i := 1; i < len(vs); i++ {
 			seq = seq.Conj(vs[i])
 		}
-		return seq
+		return seq, nil
 	})
 
-	first, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	first, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		seq, ok := vs[0].(vm.Seq)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("first expected Seq")
 		}
-		return seq.First()
+		return seq.First(), nil
 	})
 
-	second, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	second, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		seq, ok := vs[0].(vm.Seq)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("second expected Seq")
 		}
-		return seq.Next().First()
+		return seq.Next().First(), nil
 	})
 
-	next, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	next, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		seq, ok := vs[0].(vm.Seq)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("next expected Seq")
 		}
 
 		n := seq.Next()
 
 		// FIXME move that to Seq.Next()
 		if n.(vm.Collection).Count().(vm.Int) == 0 {
-			return vm.NIL
+			return vm.NIL, nil
 		}
-		return n
+		return n, nil
 	})
 
-	get, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	get, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		vl := len(vs)
 		if vl < 2 || vl > 3 {
-			// FIXME return error
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		key := vs[1]
 		as, ok := vs[0].(vm.Lookup)
 		if !ok {
-			// FIXME return error
-			return vm.NIL
+			return vm.NIL, nil // this is not an error
 		}
 		if vl == 2 {
-			return as.ValueAt(key)
+			return as.ValueAt(key), nil
 		}
-		return as.ValueAtOr(key, vs[2])
+		return as.ValueAtOr(key, vs[2]), nil
 	})
 
-	count, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	count, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		seq, ok := vs[0].(vm.Collection)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("count expected Collection")
 		}
-		return seq.Count()
+		return seq.Count(), nil
 	})
 
 	// FIXME write real ones later because this is naiiiiive
-	mapf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	mapf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		mfn, ok := vs[0].(vm.Fn)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("map expected Fn")
 		}
 		sequable, ok := vs[1].(vm.Sequable)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("map expected Sequable")
 		}
 		seq := sequable.Seq()
 		// if we have a single coll
@@ -486,14 +452,17 @@ func installLangNS() {
 				newseq := make([]vm.Value, length)
 				i := 0
 				for seq != vm.EmptyList {
-					newseq[i] = mfn.Invoke([]vm.Value{seq.First()})
+					newseq[i], err = mfn.Invoke([]vm.Value{seq.First()})
+					if err != nil {
+						return vm.NIL, err // FIXME wrap this?
+					}
 					seq = seq.Next()
 					i++
 				}
 				ret, _ := vm.ListType.Box(newseq)
-				return ret
+				return ret, nil
 			}
-			return vm.EmptyList
+			return vm.EmptyList, nil
 		}
 		// if we have more colls
 		colls := vs[1:]
@@ -502,8 +471,7 @@ func installLangNS() {
 		for i := range colls {
 			collx, ok := colls[i].(vm.Collection)
 			if !ok {
-				// FIXME error
-				return vm.NIL
+				return vm.NIL, fmt.Errorf("map expected Collection")
 			}
 			c := collx.RawCount()
 			if c < minlen {
@@ -512,7 +480,7 @@ func installLangNS() {
 			seqs[i] = colls[i].(vm.Seq)
 		}
 		if minlen == 0 {
-			return vm.EmptyList
+			return vm.EmptyList, nil
 		}
 		newseq := make([]vm.Value, minlen)
 		for i := 0; i < minlen; i++ {
@@ -521,25 +489,29 @@ func installLangNS() {
 				fargs[j] = seqs[j].First()
 				seqs[j] = seqs[j].Next()
 			}
-			newseq[i] = mfn.Invoke(fargs)
+			newseq[i], err = mfn.Invoke(fargs)
+			if err != nil {
+				return vm.NIL, err // TODO wrap this somehow
+			}
 		}
-		ret, _ := vm.ListType.Box(newseq)
-		return ret
+		return vm.ListType.Box(newseq)
 	})
 
-	mapv, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		return vec.(vm.Fn).Invoke([]vm.Value{mapf.(vm.Fn).Invoke(vs)})
+	mapv, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		v, err := mapf.(vm.Fn).Invoke(vs)
+		if err != nil {
+			return vm.NIL, err // TODO wrap this
+		}
+		return vec.(vm.Fn).Invoke([]vm.Value{v})
 	})
 
-	reduce, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	reduce, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
-			// FIXME error out
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		mfn, ok := vs[0].(vm.Fn)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("reduce expected Fn")
 		}
 		sidx := 1
 		if len(vs) == 3 {
@@ -547,8 +519,7 @@ func installLangNS() {
 		}
 		seq, ok := vs[sidx].(vm.Seq)
 		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("reduce expected Seq")
 		}
 		var acc vm.Value
 		if len(vs) == 3 {
@@ -558,39 +529,43 @@ func installLangNS() {
 			seq = seq.Next()
 		}
 		for seq != vm.EmptyList {
-			acc = mfn.Invoke([]vm.Value{acc, seq.First()})
-			seq = seq.Next()
-		}
-
-		return acc
-	})
-
-	some, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		if len(vs) != 2 {
-			// FIXME error out
-			return vm.NIL
-		}
-		f, ok := vs[0].(vm.Fn)
-		if !ok {
-			return vm.NIL
-		}
-		seq, ok := vs[1].(vm.Seq)
-		if !ok {
-			// FIXME make this an error (we need to handle exceptions first)
-			return vm.NIL
-		}
-		for seq != vm.EmptyList {
-			v := f.Invoke([]vm.Value{seq.First()})
-			if v != vm.NIL {
-				return v
+			acc, err = mfn.Invoke([]vm.Value{acc, seq.First()})
+			if err != nil {
+				return vm.NIL, err // FIXME wrap this somehow
 			}
 			seq = seq.Next()
 		}
 
-		return vm.NIL
+		return acc, nil
 	})
 
-	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	some, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		f, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("some expected Fn")
+		}
+		seq, ok := vs[1].(vm.Seq)
+		if !ok {
+			return vm.NIL, fmt.Errorf("some expected Seq")
+		}
+		for seq != vm.EmptyList {
+			v, err := f.Invoke([]vm.Value{seq.First()})
+			if err != nil {
+				return vm.NIL, err
+			}
+			if v != vm.NIL {
+				return v, nil
+			}
+			seq = seq.Next()
+		}
+
+		return vm.NIL, nil
+	})
+
+	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
 		for i := range vs {
 			if i > 0 {
@@ -603,28 +578,27 @@ func installLangNS() {
 			b.WriteString(vs[i].String())
 		}
 		fmt.Println(b)
-		return vm.NIL
+		return vm.NIL, nil
 	})
 
-	typef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	typef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			//FIXME this is an error
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		t := vs[0].Type()
 		if t == vm.NilType {
-			return vm.NIL
+			return vm.NIL, nil
 		}
-		return t
+		return t, nil
 	})
 
-	apply, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	apply, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		f, ok := vs[0].(vm.Fn)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("apply expected Fn")
 		}
 		switch vs[1].Type() {
 		case vm.ArrayVectorType:
@@ -633,83 +607,73 @@ func installLangNS() {
 			args := vs[1].Unbox().([]vm.Value)
 			return f.Invoke(args)
 		}
-		return vm.NIL
+		return vm.NIL, nil // FIXME is this an error?
 	})
 
-	inNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	inNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME handle error
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		sym := vs[0]
 		if sym.Type() != vm.SymbolType {
-			// FIXME handle error
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("in-ns expected Symbol")
 		}
 		nns := LookupOrRegisterNS(string(sym.(vm.Symbol)))
 		CurrentNS.SetRoot(nns)
-		return nns
+		return nns, nil
 	})
 
-	use, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	use, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
-			// FIXME handle error
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		cns := CurrentNS.Deref().(*vm.Namespace)
 		for i := range vs {
 			s, ok := vs[i].(vm.Symbol)
 			if !ok {
-				return vm.NIL
+				return vm.NIL, fmt.Errorf("use expected Symbol")
 			}
 			cns.Refer(NS(string(s)), "", true)
 		}
-		return vm.NIL
+		return vm.NIL, nil
 	})
 
-	now, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
-		return vm.NewBoxed(time.Now())
+	now, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.NewBoxed(time.Now()), nil
 	})
 
-	methodInvoke, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	methodInvoke, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
-			// FIXME handle error
-			fmt.Println("not enough args")
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		rec, ok := vs[0].(vm.Receiver)
 		if !ok {
-			// FIXME handle error
-			fmt.Println("expected Receiver")
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("method-invoke expected Receiver")
 		}
 		name, ok := vs[1].(vm.Symbol)
 		if !ok {
-			// FIXME handle error
-			fmt.Println("expected Symbol")
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("method-invoke expected Symbol")
 		}
 		return rec.InvokeMethod(name, vs[2:])
 	})
 
-	deref, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	deref, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		ref, ok := vs[0].(vm.Reference)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("deref expected Reference")
 		}
-		return ref.Deref()
+		return ref.Deref(), nil
 	})
 
-	concat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	concat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		var ret []vm.Value
 		for i := range vs {
 			vseq, ok := vs[i].(vm.Seq)
 			if !ok {
-				return vm.NIL
+				return vm.NIL, fmt.Errorf("concat expected Seq")
 			}
 			for {
 				e := vseq.First()
@@ -722,171 +686,161 @@ func installLangNS() {
 		}
 		r, err := vm.ListType.Box(ret)
 		if err != nil {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("concat failed: %w", err)
 		}
-		return r
+		return r, nil
 	})
 
-	slurp, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	slurp, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		filename, ok := vs[0].(vm.String)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("slurp expected String")
 		}
 		data, err := os.ReadFile(string(filename))
 		if err != nil {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("slurp failed: %w", err)
 		}
-		return vm.String(data)
+		return vm.String(data), nil
 	})
 
-	spit, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	spit, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		filename, ok := vs[0].(vm.String)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("spit expected String")
 		}
 		contents, ok := vs[1].(vm.String)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("spit expected String")
 		}
 		err := os.WriteFile(string(filename), []byte(contents), 0644)
 		if err != nil {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("spit failed: %w", err)
 		}
-		return vm.NIL
+		return vm.NIL, nil
 	})
 
-	name, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	name, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		s, ok := vs[0].(vm.String)
 		if ok {
-			return s
+			return s, nil
 		}
 		named, ok := vs[0].(vm.Named)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("name expected Named")
 		}
-		return named.Name()
+		return named.Name(), nil
 	})
 
-	namespace, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	namespace, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		named, ok := vs[0].(vm.Named)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("namespace expected Named")
 		}
-		return named.Namespace()
+		return named.Namespace(), nil
 	})
 
-	atom, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	atom, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		return vm.NewAtom(vs[0])
+		return vm.NewAtom(vs[0]), nil
 	})
 
 	// (swap! a fn)
-	swap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	swap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		at, ok := vs[0].(*vm.Atom)
 		if !ok {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("swap expected Atom")
 		}
 		fn, ok := vs[1].(vm.Fn)
 		if !ok {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("swap expected Fn")
 		}
 		return at.Swap(fn, vs[2:])
 	})
 
 	// (reset! a fn)
-	reset, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	reset, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		at, ok := vs[0].(*vm.Atom)
 		if !ok {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("reset expected Atom")
 		}
-		return at.Reset(vs[1])
+		return at.Reset(vs[1]), nil
 	})
 
-	gof, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	gof, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		at, ok := vs[0].(vm.Fn)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("go expected Fn")
 		}
 		ret := make(vm.Chan)
 		go func() {
-			ret <- at.Invoke(nil)
+			v, err := at.Invoke(nil)
+			if err != nil {
+				fmt.Println(err) // FIXME handle this properly
+			}
+			ret <- v
 			close(ret)
 		}()
-		return ret
+		return ret, nil
 	})
 
-	chanf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	chanf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 0 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		return make(vm.Chan)
+		return make(vm.Chan), nil
 	})
 
-	chanput, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	chanput, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		ch, ok := vs[0].(vm.Chan)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf(">! expected Chan")
 		}
 		if vs[1] == vm.NIL {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf(">! can't put nil on chan")
 		}
 		ch <- vs[1]
-		return vm.TRUE
+		return vm.TRUE, nil
 	})
 
-	changet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	changet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			// FIXME err
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		ch, ok := vs[0].(vm.Chan)
 		if !ok {
-			return vm.NIL
+			return vm.NIL, fmt.Errorf("<! expected Chan")
 		}
 		v, ok := <-ch
 		if !ok {
-			return vm.NIL // this is not an error
+			return vm.NIL, nil // this is not an error
 		}
-		return v
+		return v, nil
 	})
 
 	if err != nil {

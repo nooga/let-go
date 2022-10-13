@@ -69,20 +69,22 @@ func (l *Func) Arity() int {
 	return l.arity
 }
 
-func (l *Func) Invoke(pargs []Value) Value {
+func (l *Func) Invoke(pargs []Value) (Value, error) {
 	args := pargs
 	if l.isVariadric {
 		// pretty sure variadric should guarantee arity >= 1
 		sargs := args[0 : l.arity-1]
 		rest := args[l.arity-1:]
 		// FIXME don't swallow the error, make invoke return an error
-		restlist, _ := ListType.Box(rest)
+		restlist, err := ListType.Box(rest)
+		if err != nil {
+			return NIL, err
+		}
 		args = append(sargs, restlist)
 	}
 	f := NewFrame(l.chunk, args)
 	// FIXME don't swallow the error, make invoke return an error
-	v, _ := f.Run()
-	return v
+	return f.Run()
 }
 
 func (l *Func) String() string {
@@ -130,21 +132,23 @@ func (l *Closure) Arity() int {
 	return l.fn.arity
 }
 
-func (l *Closure) Invoke(pargs []Value) Value {
+func (l *Closure) Invoke(pargs []Value) (Value, error) {
 	args := pargs
 	if l.fn.isVariadric {
 		// pretty sure variadric should guarantee arity >= 1
 		sargs := args[0 : l.fn.arity-1]
 		rest := args[l.fn.arity-1:]
 		// FIXME don't swallow the error, make invoke return an error
-		restlist, _ := ListType.Box(rest)
+		restlist, err := ListType.Box(rest)
+		if err != nil {
+			return NIL, err
+		}
 		args = append(sargs, restlist)
 	}
 	f := NewFrame(l.fn.chunk, args)
 	f.closedOvers = l.closedOvers
 	// FIXME don't swallow the error, make invoke return an error
-	v, _ := f.Run()
-	return v
+	return f.Run()
 }
 
 func (l *Closure) String() string {

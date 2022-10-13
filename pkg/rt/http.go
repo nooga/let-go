@@ -8,14 +8,15 @@ import (
 
 //nolint
 func installHttpNS() {
-	handle, err := vm.NativeFnType.Wrap(func(vs []vm.Value) vm.Value {
+	// FIXME, this should box the function directly
+	handle, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fnm := vs[1].Unbox().(func(interface{}))
 		var fn func(w http.ResponseWriter, r *http.Request) interface{}
 		fnm(&fn)
 		http.HandleFunc(vs[0].Unbox().(string), func(w http.ResponseWriter, r *http.Request) {
 			fn(w, r)
 		})
-		return vm.NIL
+		return vm.NIL, nil
 	})
 
 	if err != nil {

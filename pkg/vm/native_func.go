@@ -27,7 +27,7 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 
 	v := reflect.ValueOf(fn)
 
-	proxy := func(args []Value) Value {
+	proxy := func(args []Value) (Value, error) {
 		rawArgs := make([]reflect.Value, len(args))
 		for i := range args {
 			if args[i] != NIL {
@@ -42,14 +42,27 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 			}
 		}
 		res := v.Call(rawArgs)
-		if len(res) == 0 {
-			return NIL
+		lr := len(res)
+		if lr == 0 {
+			return NIL, nil
 		}
+		if lr == 1 {
+			wv, err := BoxValue(res[0])
+			if err != nil {
+				return NIL, err
+			}
+			return wv, nil
+		}
+		// assume lr == 2 && res[1] is error
 		wv, err := BoxValue(res[0])
 		if err != nil {
-			return NIL
+			return NIL, err
 		}
-		return wv
+		errorInterface := reflect.TypeOf((*error)(nil)).Elem()
+		if res[1].Type() == errorInterface && res[1].Interface() != nil {
+			return wv, res[1].Interface().(error)
+		}
+		return wv, nil
 	}
 
 	f := &NativeFn{
@@ -62,7 +75,14 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 	return f, nil
 }
 
-func (t *theNativeFnType) Wrap(fn func(args []Value) Value) (Value, error) {
+func (t *theNativeFnType) WrapNoErr(fn func([]Value) Value) (Value, error) {
+	// FIXME this is ugly and unnecessary wrap in closure
+	return t.Wrap(func(args []Value) (Value, error) {
+		return fn(args), nil
+	})
+}
+
+func (t *theNativeFnType) Wrap(fn func([]Value) (Value, error)) (Value, error) {
 	f := &NativeFn{
 		arity:       -1,
 		isVariadric: false,
@@ -86,7 +106,7 @@ type NativeFn struct {
 	arity       int
 	isVariadric bool
 	fn          interface{}
-	proxy       func([]Value) Value
+	proxy       func([]Value) (Value, error)
 }
 
 func (l *NativeFn) SetName(n string) { l.name = n }
@@ -102,7 +122,7 @@ func (l *NativeFn) Arity() int {
 	return l.arity
 }
 
-func (l *NativeFn) Invoke(args []Value) Value {
+func (l *NativeFn) Invoke(args []Value) (Value, error) {
 	return l.proxy(args)
 }
 

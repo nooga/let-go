@@ -6,6 +6,7 @@
 package vm
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -191,14 +192,14 @@ func (l Map) Arity() int {
 	return -1
 }
 
-func (l Map) Invoke(pargs []Value) Value {
+func (l Map) Invoke(pargs []Value) (Value, error) {
 	vl := len(pargs)
 	if vl < 1 || vl > 2 {
 		// FIXME return error
-		return NIL
+		return NIL, fmt.Errorf("wrong number of arguments %d", vl)
 	}
 	if vl == 1 {
-		return l.ValueAt(pargs[0])
+		return l.ValueAt(pargs[0]), nil
 	}
-	return l.ValueAtOr(pargs[0], pargs[1])
+	return l.ValueAtOr(pargs[0], pargs[1]), nil
 }

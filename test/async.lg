@@ -2,9 +2,14 @@
 
 (test "go block concurrency"
       (let [x (atom 0)
-            m 100
-            a (go (dotimes [n m] (swap! x inc))) 
-            b (go (dotimes [n (* 2 m)] (swap! x dec)))] 
+            m 1
+            a (go (println "a") 
+                  (dotimes [u m] (println "inc") (swap! x inc))
+                  (println "A"))
+            b (go (println "b") 
+                  (dotimes [v (* 2 m)] (println "dec") (swap! x dec))
+                  (println "B"))]
         (<! b)
-        (<! a)
+        (<! a) 
+        (println @x)
         (= @x (- m))))

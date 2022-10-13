@@ -47,12 +47,12 @@ func (v *Atom) Reset(new Value) Value {
 	return new
 }
 
-func (v *Atom) Swap(fn Fn, args []Value) Value {
+func (v *Atom) Swap(fn Fn, args []Value) (Value, error) {
 	v.mu.Lock()
-	ret := fn.Invoke(append([]Value{v.root}, args...))
+	ret, err := fn.Invoke(append([]Value{v.root}, args...))
 	v.root = ret
 	v.mu.Unlock()
-	return ret
+	return ret, err
 }
 
 func (v *Atom) Deref() Value {

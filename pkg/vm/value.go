@@ -49,7 +49,7 @@ type Collection interface {
 
 type Fn interface {
 	Value
-	Invoke([]Value) Value
+	Invoke([]Value) (Value, error)
 	Arity() int
 }
 
@@ -67,7 +67,7 @@ type Lookup interface {
 
 type Receiver interface {
 	Value
-	InvokeMethod(Symbol, []Value) Value
+	InvokeMethod(Symbol, []Value) (Value, error)
 }
 
 type Named interface {

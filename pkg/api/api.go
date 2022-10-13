@@ -26,6 +26,7 @@ func (l *LetGo) Def(name string, value interface{}) error {
 		return err
 	}
 	l.c.CurrentNS().Def(name, val)
+	
 	return nil
 }
 
