@@ -581,6 +581,18 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
+	str, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		b := &strings.Builder{}
+		for i := range vs {
+			if vs[i].Type() == vm.StringType {
+				b.WriteString(string(vs[i].(vm.String)))
+				continue
+			}
+			b.WriteString(vs[i].String())
+		}
+		return vm.String(b.String()), nil
+	})
+
 	typef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -924,6 +936,8 @@ func installLangNS() {
 	ns.Def("chan", chanf)
 	ns.Def(">!", chanput)
 	ns.Def("<!", changet)
+
+	ns.Def("str", str)
 
 	CoreNS = ns
 
