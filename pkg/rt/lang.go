@@ -574,6 +574,9 @@ func installLangNS() {
 			if vs[i].Type() == vm.StringType {
 				b.WriteString(string(vs[i].(vm.String)))
 				continue
+			} else if vs[i].Type() == vm.CharType {
+				b.WriteRune(rune(vs[i].(vm.Char)))
+				continue
 			}
 			b.WriteString(vs[i].String())
 		}
@@ -586,6 +589,9 @@ func installLangNS() {
 		for i := range vs {
 			if vs[i].Type() == vm.StringType {
 				b.WriteString(string(vs[i].(vm.String)))
+				continue
+			} else if vs[i].Type() == vm.CharType {
+				b.WriteRune(rune(vs[i].(vm.Char)))
 				continue
 			}
 			b.WriteString(vs[i].String())
