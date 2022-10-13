@@ -48,7 +48,10 @@ func (l Symbol) String() string {
 }
 
 func (l Symbol) Namespaced() (Value, Value) {
-	x := strings.Split(string(l), "/")
+	if string(l) == "/" {
+		return NIL, l
+	}
+	x := strings.SplitN(string(l), "/", 2)
 	if len(x) == 2 {
 		return Symbol(x[0]), Symbol(x[1])
 	}

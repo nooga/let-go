@@ -108,12 +108,12 @@ func installLangNS() {
 	})
 
 	div, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		n := 0
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		for i := range vs {
-			n /= vs[i].Unbox().(int)
+		n := vs[0].Unbox().(int)
+		for _, e := range vs[1:] {
+			n /= e.Unbox().(int)
 		}
 		return vm.Int(n), nil
 	})
