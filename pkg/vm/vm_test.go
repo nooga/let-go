@@ -154,7 +154,12 @@ func TestSimpleCall(t *testing.T) {
 	plus, err := NativeFnType.Box(func(a int, b int) int { return b + a })
 	assert.NoError(t, err)
 
-	c := NewCodeChunk(&[]Value{forty, two, plus})
+	consts := NewConsts()
+	consts.Intern(forty)
+	consts.Intern(two)
+	consts.Intern(plus)
+
+	c := NewCodeChunk(consts)
 	c.maxStack = 4
 	c.Append(OP_LOAD_CONST)
 	c.Append32(2)

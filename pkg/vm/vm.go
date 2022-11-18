@@ -77,12 +77,12 @@ func OpcodeToString(op int32) string {
 // CodeChunk holds bytecode and provides facilities for reading and writing it
 type CodeChunk struct {
 	maxStack int
-	consts   *[]Value
+	consts   *Consts
 	code     []int32
 	length   int
 }
 
-func NewCodeChunk(consts *[]Value) *CodeChunk {
+func NewCodeChunk(consts *Consts) *CodeChunk {
 	return &CodeChunk{
 		consts: consts,
 		code:   []int32{},
@@ -91,7 +91,7 @@ func NewCodeChunk(consts *[]Value) *CodeChunk {
 }
 
 func (c *CodeChunk) Debug() {
-	consts := *c.consts
+	consts := c.consts
 	fmt.Println("code:")
 	i := 0
 	for i < len(c.code) {
@@ -109,7 +109,7 @@ func (c *CodeChunk) Debug() {
 			i += 2
 		case OP_LOAD_CONST, OP_LOAD_CONST_VAR:
 			arg, _ := c.Get32(i + 1)
-			fmt.Println("  ", i, ":", OpcodeToString(op), arg, "<-", consts[arg])
+			fmt.Println("  ", i, ":", OpcodeToString(op), arg, "<-", consts.get(arg))
 			i += 2
 		default:
 			fmt.Println("  ", i, ":", OpcodeToString(op))
@@ -165,7 +165,7 @@ type Frame struct {
 	args        []Value
 	closedOvers []Value
 	argc        int
-	consts      []Value
+	consts      *Consts
 	constsc     int
 	code        *CodeChunk
 	ip          int
@@ -178,8 +178,8 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 		stack:   make([]Value, code.maxStack),
 		args:    args,
 		argc:    len(args),
-		consts:  *code.consts,
-		constsc: len(*code.consts),
+		consts:  code.consts,
+		constsc: code.consts.count(),
 		code:    code,
 		ip:      0,
 		sp:      0,
@@ -304,7 +304,7 @@ func (f *Frame) Run() (Value, error) {
 			if int(idx) >= f.constsc {
 				return NIL, NewExecutionError("const lookup out of bounds")
 			}
-			err := f.push(f.consts[idx])
+			err := f.push(f.consts.get(int(idx)))
 			if err != nil {
 				return NIL, NewExecutionError("const push failed").Wrap(err)
 			}
@@ -475,7 +475,7 @@ func (f *Frame) Run() (Value, error) {
 			if int(idx) >= f.constsc {
 				return NIL, NewExecutionError("const lookup out of bounds")
 			}
-			err := f.push(f.consts[idx].(*Var).Deref())
+			err := f.push(f.consts.get(int(idx)).(*Var).Deref())
 			if err != nil {
 				return NIL, NewExecutionError("const push failed").Wrap(err)
 			}

@@ -16,7 +16,7 @@ import (
 
 type Context struct {
 	parent       *Context
-	consts       *[]vm.Value
+	consts       *vm.Consts
 	chunk        *vm.CodeChunk
 	formalArgs   map[vm.Symbol]int
 	source       string
@@ -35,10 +35,10 @@ type Context struct {
 }
 
 // FIXME this is unacceptable hax
-var globalConsts *[]vm.Value
+var globalConsts *vm.Consts
 
 func init() {
-	globalConsts = &[]vm.Value{}
+	globalConsts = vm.NewConsts()
 }
 
 func NewCompiler(ns *vm.Namespace) *Context {
@@ -142,13 +142,13 @@ func (c *Context) emitWithArg(op int32, arg int) {
 }
 
 func (c *Context) constant(v vm.Value) int {
-	for i := range *c.consts {
-		if (*c.consts)[i] == v {
-			return i
-		}
-	}
-	*c.consts = append(*c.consts, v)
-	return len(*c.consts) - 1
+	// for i := range *c.consts {
+	// 	if (*c.consts)[i] == v {
+	// 		return i
+	// 	}
+	// }
+	// *c.consts = append(*c.consts, v)
+	return c.consts.Intern(v)
 }
 
 func (c *Context) arg(v vm.Symbol) int {
