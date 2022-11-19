@@ -167,15 +167,16 @@ func init() {
 }
 
 func initCompiler(debug bool) *compiler.Context {
+	consts := vm.NewConsts()
 	ns := rt.NS("user")
 	if ns == nil {
 		fmt.Println("namespace not found")
 		return nil
 	}
 	if debug {
-		return compiler.NewDebugCompiler(ns)
+		return compiler.NewDebugCompiler(consts, ns)
 	} else {
-		return compiler.NewCompiler(ns)
+		return compiler.NewCompiler(consts, ns)
 	}
 }
 

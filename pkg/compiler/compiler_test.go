@@ -6,11 +6,12 @@
 package compiler
 
 import (
+	"strings"
+	"testing"
+
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 	"github.com/stretchr/testify/assert"
-	"strings"
-	"testing"
 )
 
 func TestContext_Compile(t *testing.T) {
@@ -83,9 +84,10 @@ func TestContext_CompileMultiple(t *testing.T) {
 			(def hey! (fn [a _ b] (+ a b)))
 			(println (hey! (double parens) 'equals (double fun)))`
 
+	cp := vm.NewConsts()
 	ns := rt.NS(rt.NameCoreNS)
 	assert.NotNil(t, ns)
-	ctx := NewCompiler(ns)
+	ctx := NewCompiler(cp, ns)
 
 	chunk, _, err := ctx.CompileMultiple(strings.NewReader(src))
 	assert.NoError(t, err)

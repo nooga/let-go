@@ -34,17 +34,10 @@ type Context struct {
 	defName      string
 }
 
-// FIXME this is unacceptable hax
-var globalConsts *vm.Consts
-
-func init() {
-	globalConsts = vm.NewConsts()
-}
-
-func NewCompiler(ns *vm.Namespace) *Context {
+func NewCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
 	rt.CurrentNS.SetRoot(ns)
 	return &Context{
-		consts:      globalConsts,
+		consts:      consts,
 		source:      "<default>",
 		locals:      []map[vm.Symbol]int{},
 		closedOvers: map[vm.Symbol]*closureCell{},
@@ -52,8 +45,8 @@ func NewCompiler(ns *vm.Namespace) *Context {
 	}
 }
 
-func NewDebugCompiler(ns *vm.Namespace) *Context {
-	c := NewCompiler(ns)
+func NewDebugCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
+	c := NewCompiler(consts, ns)
 	c.debug = true
 	return c
 }

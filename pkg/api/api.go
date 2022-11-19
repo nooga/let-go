@@ -9,13 +9,16 @@ import (
 )
 
 type LetGo struct {
-	c *compiler.Context
+	cp *vm.Consts
+	c  *compiler.Context
 }
 
 func NewLetGo(ns string) (*LetGo, error) {
+	cp := vm.NewConsts()
 	nso := rt.NS(ns)
 	ret := &LetGo{
-		c: compiler.NewCompiler(nso),
+		cp: cp,
+		c:  compiler.NewCompiler(cp, nso),
 	}
 	return ret, nil
 }
@@ -26,7 +29,7 @@ func (l *LetGo) Def(name string, value interface{}) error {
 		return err
 	}
 	l.c.CurrentNS().Def(name, val)
-	
+
 	return nil
 }
 

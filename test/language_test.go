@@ -17,13 +17,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var consts *vm.Consts
+
 func runFile(filename string) error {
 	ns := rt.NS(rt.NameCoreNS)
 	if ns == nil {
 		fmt.Println("namespace not found")
 		return nil
 	}
-	ctx := compiler.NewCompiler(ns)
+	ctx := compiler.NewCompiler(consts, ns)
 	ctx.SetSource(filename)
 	f, err := os.Open(filename)
 	if err != nil {
@@ -41,6 +43,7 @@ func runFile(filename string) error {
 }
 
 func TestRunner(t *testing.T) {
+	consts = vm.NewConsts()
 	file, err := os.Open("./")
 	assert.NoError(t, err)
 	names, err := file.Readdirnames(0)
