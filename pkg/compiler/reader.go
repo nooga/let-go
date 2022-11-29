@@ -232,9 +232,18 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 		return vm.FALSE, nil
 	}
 	if ss[0] == '%' {
-		n, err := strconv.Atoi(ss[1:])
+		var n int
+		var err error
+		if ss == "%" {
+			n = 1
+		} else {
+			n, err = strconv.Atoi(ss[1:])
+		}
 		if err == nil && n >= 0 && n > r.maxPercent {
 			r.maxPercent = n
+		}
+		if ss == "%" {
+			return vm.Symbol("%1"), nil
 		}
 	}
 	if _, ok := specialForms[t.(vm.Symbol)]; ok {
