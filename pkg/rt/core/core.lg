@@ -179,7 +179,10 @@
            ~@body
            (recur (inc ~i)))))))
 
-(def destructure* nil)
+(defmacro declare [& names]
+  `(do ~@(map #(list 'def % nil) names)))
+
+(declare destructure*)
 
 (defn destructure-vector [n v]
   (loop [e v i 0 o []]
