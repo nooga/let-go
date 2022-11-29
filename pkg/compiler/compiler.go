@@ -15,23 +15,24 @@ import (
 )
 
 type Context struct {
-	parent       *Context
-	consts       *vm.Consts
-	chunk        *vm.CodeChunk
-	formalArgs   map[vm.Symbol]int
-	source       string
-	variadric    bool
-	locals       []map[vm.Symbol]int
-	sp           int
-	spMax        int
-	isFunction   bool
-	isClosure    bool
-	closedOversC int
-	closedOvers  map[vm.Symbol]*closureCell
-	recurPoints  []*recurPoint
-	tailPosition bool
-	debug        bool
-	defName      string
+	parent         *Context
+	consts         *vm.Consts
+	chunk          *vm.CodeChunk
+	formalArgs     map[vm.Symbol]int
+	source         string
+	variadric      bool
+	locals         []map[vm.Symbol]int
+	sp             int
+	spMax          int
+	isFunction     bool
+	isClosure      bool
+	closedOversC   int
+	closedOvers    map[vm.Symbol]*closureCell
+	closedOversSeq []vm.Symbol
+	recurPoints    []*recurPoint
+	tailPosition   bool
+	debug          bool
+	defName        string
 }
 
 func NewCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
@@ -156,14 +157,15 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 	fchunk := vm.NewCodeChunk(c.consts)
 
 	fc := &Context{
-		parent:       c,
-		consts:       c.consts,
-		chunk:        fchunk,
-		formalArgs:   make(map[vm.Symbol]int),
-		locals:       []map[vm.Symbol]int{},
-		closedOvers:  make(map[vm.Symbol]*closureCell),
-		isFunction:   true,
-		tailPosition: true,
+		parent:         c,
+		consts:         c.consts,
+		chunk:          fchunk,
+		formalArgs:     make(map[vm.Symbol]int),
+		locals:         []map[vm.Symbol]int{},
+		closedOvers:    make(map[vm.Symbol]*closureCell),
+		closedOversSeq: []vm.Symbol{},
+		isFunction:     true,
+		tailPosition:   true,
 	}
 
 	for i := range args {
@@ -202,7 +204,8 @@ func (c *Context) leaveFn(ctx *Context) {
 	// if we have a closure on our hands then add closed overs
 	if ctx.isClosure {
 		c.emit(vm.OP_MAKE_CLOSURE)
-		for _, clo := range ctx.closedOvers {
+		for _, s := range ctx.closedOversSeq {
+			clo := ctx.closedOvers[s]
 			_ = clo.source().emit()
 			c.emit(vm.OP_PUSH_CLOSEDOVER)
 			c.decSP(1)
@@ -240,6 +243,7 @@ func (c *Context) symbolLookup(s vm.Symbol) cell {
 		c.isClosure = true
 		newClosedOver := c.closedOversC
 		c.closedOversC++
+		c.closedOversSeq = append(c.closedOversSeq, s)
 		c.closedOvers[s] = &closureCell{
 			src:     outer,
 			scope:   c,
