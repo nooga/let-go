@@ -11,8 +11,6 @@
 (def defn (fn [name args & body] (list 'def name (cons 'fn (cons args body)))))
 (set-macro! (var defn))
 
-; this is how we make macros before we can use defmacro
-
 (defn defmacro [name args & body]
   (list 'do (cons 'defn (cons name (cons args body))) (list 'set-macro! (list 'var name))))
 
