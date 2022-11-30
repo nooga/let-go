@@ -289,4 +289,15 @@
 (defmacro go [& forms]
   `(go* (fn* [] ~@forms)))
 
-
+(defn comp
+  ([] identity)
+  ([f] f)
+  ([f g]
+   (fn
+     ([] (f (g)))
+     ([x] (f (g x)))
+     ([x y] (f (g x y)))
+     ([x y z] (f (g x y z)))
+     ([x y z & args] (f (apply g x y z args)))))
+  ([f g & fs]
+   (reduce comp (list f g fs))))
