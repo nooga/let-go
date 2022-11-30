@@ -247,13 +247,38 @@
       `(loop* ~bs (let* ~nbs ~@body))
       `(loop* ~bindings ~@body))))
 
-(defmacro fn [bindings & body]
+;; (defmacro fn [bindings & body]
+;;   (if (some (complement symbol?) bindings)
+;;     (let [padded (reduce (fn [a x] (conj a x nil)) [] bindings)
+;;           [bs nbs] (destructure padded)
+;;           clean (vec (filter some? bs))]
+;;       `(fn* ~clean (let* ~nbs ~@body)))
+;;     `(fn* ~bindings ~@body)))
+
+(defn fn-expand [bindings body]
   (if (some (complement symbol?) bindings)
     (let [padded (reduce (fn [a x] (conj a x nil)) [] bindings)
           [bs nbs] (destructure padded)
           clean (vec (filter some? bs))]
-      `(fn* ~clean (let* ~nbs ~@body)))
-    `(fn* ~bindings ~@body)))
+      `(~clean (let* ~nbs ~@body)))
+    `(~bindings ~@body)))
+
+(defn spy [s x] (println s x) x)
+
+(defmacro fn [& forms]
+  (cond 
+    (vector? (first forms)) 
+    (cons 'fn* (fn-expand (first forms) (next forms)))
+    
+    (list? (first forms))
+    `(fn* ~@(map #(fn-expand (first %) (next %)) forms))
+    
+    :else
+    nil ;; throw here
+    ))
+
+(defmacro defn [name & forms]
+  `(def ~name (fn ~@forms)))
 
 (defmacro when-let [bind & forms]
   `(let ~bind (if ~(second bind) (do ~@forms) nil)))

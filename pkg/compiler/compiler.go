@@ -669,18 +669,14 @@ func quoteCompiler(c *Context, form vm.Value) error {
 	return nil
 }
 
-func fnCompiler(c *Context, form vm.Value) error {
-	f := form.(*vm.List).Next()
-
-	args := f.First().(vm.ArrayVector).Unbox().([]vm.Value)
-
+func fnFormCompiler(c *Context, args vm.ArrayVector, bodyf *vm.List) error {
 	fc, err := c.enterFn(args)
 	if err != nil {
 		return NewCompileError("compiling fn args").Wrap(err)
 	}
 	defer c.leaveFn(fc)
 
-	body := f.(*vm.List).Next().Unbox().([]vm.Value)
+	body := bodyf.Unbox().([]vm.Value)
 	l := len(body)
 	if l == 0 {
 		fc.emitWithArg(vm.OP_LOAD_CONST, fc.constant(vm.NIL))
@@ -699,6 +695,34 @@ func fnCompiler(c *Context, form vm.Value) error {
 		}
 	}
 	fc.emit(vm.OP_RETURN)
+	return nil
+}
+
+func fnCompiler(c *Context, form vm.Value) error {
+	f := form.(*vm.List).Next()
+
+	if args, ok := f.First().(vm.ArrayVector); ok {
+		// we have (fn* [args] body)
+		body := f.Next().(*vm.List)
+		return fnFormCompiler(c, args, body)
+	} else if _, ok := f.First().(vm.Seq); ok {
+		// we have (fn* ([] ...))
+		i := 0
+		for b := f; b != vm.EmptyList; b = b.Next() {
+			e := b.First().(*vm.List)
+			args := e.First().(vm.ArrayVector)
+			body := e.Next().(*vm.List)
+			err := fnFormCompiler(c, args, body)
+			if err != nil {
+				return err
+			}
+			i++
+		}
+		c.emitWithArg(vm.OP_MAKE_MULTI_ARITY, i)
+		c.decSP(i - 1)
+	} else {
+		return NewCompileError("unexpected fn form")
+	}
 
 	return nil
 }

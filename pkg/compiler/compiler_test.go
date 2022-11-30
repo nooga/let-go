@@ -107,3 +107,24 @@ func TestContext_CompileVar(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, v, out)
 }
+
+func TestContext_CompileMultiArityFn(t *testing.T) {
+	src := `(def f (fn* ([a] (+ a 1)) 
+						([a b] (+ a b)) 
+						([a b & r] (+ a b (second r)))))
+			(and (= 2 (f 1))
+			     (= 3 (f 1 2))
+				 (= 6 (f 1 2 4 3)))`
+
+	cp := vm.NewConsts()
+	ns := rt.NS(rt.NameCoreNS)
+	assert.NotNil(t, ns)
+	ctx := NewCompiler(cp, ns)
+
+	chunk, _, err := ctx.CompileMultiple(strings.NewReader(src))
+	assert.NoError(t, err)
+
+	val, err := vm.NewFrame(chunk, nil).Run()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.TRUE, val)
+}

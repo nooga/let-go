@@ -40,6 +40,8 @@ const (
 
 	OP_TRACE_ENABLE  // enable tracing
 	OP_TRACE_DISABLE // disable tracing
+
+	OP_MAKE_MULTI_ARITY // make multi-arity function (n int32)
 )
 
 func OpcodeToString(op int32) string {
@@ -67,9 +69,10 @@ func OpcodeToString(op int32) string {
 		"RECUR_FN",
 		"TRACE_ENABLE",
 		"TRACE_DISABLE",
+		"MAKE_MULTI_ARITY",
 	}
 	if int(inst) < len(ops) {
-		return fmt.Sprintf("{%d}%s", sp, ops[inst])
+		return fmt.Sprintf("%d/%-16s", sp, ops[inst])
 	}
 	return "???"
 }
@@ -103,7 +106,7 @@ func (c *CodeChunk) Debug() {
 			arg3, _ := c.Get32(i + 3)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2, arg3)
 			i += 4
-		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN:
+		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 2
@@ -554,6 +557,27 @@ func (f *Frame) Run() (Value, error) {
 			}
 
 			f.ip -= int(offset)
+
+		case OP_MAKE_MULTI_ARITY:
+			nfns := f.code.code[f.ip+1]
+			n := int(nfns)
+			fns, err := f.mult(0, n)
+			if err != nil {
+				return NIL, NewExecutionError("MAKE_MULTI_ARITY popping arguments failed").Wrap(err)
+			}
+			f.sp -= n
+
+			fn, err := makeMultiArity(fns)
+			if err != nil {
+				return NIL, NewExecutionError("MAKE_MULTI_ARITY failed").Wrap(err)
+			}
+
+			err = f.push(fn)
+			if err != nil {
+				return NIL, NewExecutionError("MAKE_MULTI_ARITY push failed").Wrap(err)
+			}
+
+			f.ip += 2
 
 		default:
 			return NIL, NewExecutionError("unknown instruction")

@@ -75,7 +75,6 @@ func (l *Func) Invoke(pargs []Value) (Value, error) {
 		// pretty sure variadric should guarantee arity >= 1
 		sargs := args[0 : l.arity-1]
 		rest := args[l.arity-1:]
-		// FIXME don't swallow the error, make invoke return an error
 		restlist, err := ListType.Box(rest)
 		if err != nil {
 			return NIL, err
@@ -83,7 +82,6 @@ func (l *Func) Invoke(pargs []Value) (Value, error) {
 		args = append(sargs, restlist)
 	}
 	f := NewFrame(l.chunk, args)
-	// FIXME don't swallow the error, make invoke return an error
 	return f.Run()
 }
 
@@ -153,4 +151,73 @@ func (l *Closure) Invoke(pargs []Value) (Value, error) {
 
 func (l *Closure) String() string {
 	return l.fn.String()
+}
+
+type MultiArityFn struct {
+	fns   map[int]Fn
+	rest  Fn
+	arity int
+}
+
+func (l *MultiArityFn) Type() ValueType { return FuncType }
+
+// Unbox implements Unbox
+func (l *MultiArityFn) Unbox() interface{} {
+	proxy := func(in []reflect.Value) []reflect.Value {
+		args := make([]Value, len(in))
+		for i := range in {
+			a, _ := BoxValue(in[i]) // FIXME handle error
+			args[i] = a
+		}
+		out, _ := l.Invoke(args)
+		return []reflect.Value{reflect.ValueOf(out.Unbox())}
+	}
+	return func(fptr interface{}) {
+		fn := reflect.ValueOf(fptr).Elem()
+		v := reflect.MakeFunc(fn.Type(), proxy)
+		fn.Set(v)
+	}
+}
+
+func (l *MultiArityFn) Arity() int {
+	return l.arity
+}
+
+func (l *MultiArityFn) Invoke(pargs []Value) (Value, error) {
+	le := len(pargs)
+	if f, ok := l.fns[le]; ok {
+		return f.Invoke(pargs)
+	}
+	if l.rest != nil && le >= l.rest.Arity() {
+		return l.rest.Invoke(pargs)
+	}
+	return NIL, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", l, le))
+}
+
+func (l *MultiArityFn) String() string {
+	return fmt.Sprintf("<mfn %p>", l)
+}
+
+func makeMultiArity(fns []Value) (*MultiArityFn, error) {
+	ma := &MultiArityFn{
+		arity: 0,
+		fns:   map[int]Fn{},
+	}
+	for i := range fns {
+		e := fns[i]
+		f, ok := e.(Fn)
+		if !ok {
+			return nil, NewExecutionError("making multi-arity function failed")
+		}
+		a := f.Arity()
+		if a > ma.arity {
+			ma.arity = a
+		}
+		if rest, ok := f.(*Func); ok && rest.isVariadric {
+			ma.rest = rest
+		} else {
+			ma.fns[a] = f
+		}
+	}
+	return ma, nil
 }
