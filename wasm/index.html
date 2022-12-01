@@ -4,14 +4,21 @@
     <script src="wasm_exec.js"></script>
     <script src="https://code.jquery.com/jquery-3.2.1.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery.terminal/2.34.0/js/jquery.terminal.min.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap" rel="stylesheet"> 
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap"
+      rel="stylesheet"
+    />
     <link
       href="https://cdnjs.cloudflare.com/ajax/libs/jquery.terminal/2.34.0/css/jquery.terminal.min.css"
       rel="stylesheet"
     />
     <style>
+      :root {
+        color-scheme: light dark;
+      }
+
       body {
         padding: 0;
         margin: 0;
@@ -19,9 +26,34 @@
       }
 
       .terminal {
-        --color: rgba(255, 254, 227, 0.99);
+        --color: rgb(255, 254, 227);
         --background: rgb(21, 15, 0);
-        --font: 'JetBrains Mono', 'Courier New', Courier, monospace;
+        --font: "JetBrains Mono", "Courier New", Courier, monospace;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .terminal {
+          --color: rgb(255, 254, 227);
+          --background: rgb(21, 15, 0);
+        }
+        body {
+          background-color: rgb(21, 15, 0);
+        }
+      }
+
+      @media (prefers-color-scheme: light) {
+        .terminal {
+          --color: rgb(21, 15, 0);
+          --background: rgb(255, 254, 227);
+        }
+        body {
+          background-color: rgb(255, 254, 227);
+        }
+      }
+
+      img {
+        width: 7em;
+        height: 7em;
       }
     </style>
   </head>
@@ -67,8 +99,6 @@
               {
                 greetings: "LET-GO WASM",
                 name: "let_go",
-                height: 600,
-                width: 1200,
                 prompt: "user> ",
               }
             );
@@ -78,6 +108,9 @@
           console.log("ouch", error);
         });
     </script>
+    <a href="https://github.com/nooga/let-go">
+      <img src="logo.svg" />
+    </a>
     <div id="term"></div>
   </body>
 </html>
