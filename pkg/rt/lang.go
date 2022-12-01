@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,7 +77,7 @@ func nextID() int {
 	return gensymID
 }
 
-//nolint
+// nolint
 func installLangNS() {
 	plus, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		n := 0
@@ -861,6 +863,118 @@ func installLangNS() {
 		return v, nil
 	})
 
+	lines, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("lines expected String")
+		}
+		ss := strings.Split(string(s), "\n")
+		av := make([]vm.Value, len(ss))
+		for i := range ss {
+			av[i] = vm.String(ss[i])
+		}
+		return vm.ArrayVector(av), nil
+	})
+
+	parseInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("parse-int expected String")
+		}
+		i, err := strconv.Atoi(string(s))
+		return vm.Int(i), err
+	})
+
+	max, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		fst, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("max expected Int")
+		}
+		max := vm.Int(fst)
+		for i := 1; i < len(vs); i++ {
+			if n, ok := vs[i].(vm.Int); ok {
+				if n > max {
+					max = n
+				}
+			} else {
+				return vm.NIL, fmt.Errorf("max expected Int")
+			}
+		}
+		return max, err
+	})
+
+	min, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		fst, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("min expected Int")
+		}
+		min := vm.Int(fst)
+		for i := 1; i < len(vs); i++ {
+			if n, ok := vs[i].(vm.Int); ok {
+				if n < min {
+					min = n
+				}
+			} else {
+				return vm.NIL, fmt.Errorf("min expected Int")
+			}
+		}
+		return min, err
+	})
+
+	sort, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 || len(vs) > 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		var comp vm.Fn
+		var coll vm.Collection
+		var ok bool
+		if len(vs) == 2 {
+			comp, ok = vs[0].(vm.Fn)
+			if !ok {
+				return vm.NIL, fmt.Errorf("sort expected a comparator function")
+			}
+			coll, ok = vs[1].(vm.Collection)
+			if !ok {
+				return vm.NIL, fmt.Errorf("sort expected a Collection")
+			}
+		} else {
+			comp = lt.(vm.Fn)
+			coll, ok = vs[0].(vm.Collection)
+			if !ok {
+				return vm.NIL, fmt.Errorf("sort expected a Collection")
+			}
+		}
+		temp := make([]vm.Value, coll.RawCount())
+		seq := coll.(vm.Sequable).Seq()
+		for i := range temp {
+			temp[i] = seq.First()
+			seq = seq.Next()
+		}
+		var err error
+		sort.SliceStable(temp, func(i, j int) bool {
+			var b vm.Value
+			b, err = comp.Invoke([]vm.Value{temp[i], temp[j]})
+			return vm.IsTruthy(b)
+		})
+		if err != nil {
+			return vm.NIL, fmt.Errorf("sort expected a Collection")
+		}
+
+		return vm.ListType.Box(temp)
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -933,6 +1047,13 @@ func installLangNS() {
 
 	ns.Def("slurp", slurp)
 	ns.Def("spit", spit)
+	ns.Def("lines", lines)
+
+	ns.Def("parse-int", parseInt)
+	ns.Def("max", max)
+	ns.Def("min", min)
+
+	ns.Def("sort", sort)
 
 	// FIXME move this to VM later
 	ns.Def(".", methodInvoke)
