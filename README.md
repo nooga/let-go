@@ -10,55 +10,47 @@
 
 Greetings loafers! *(λ-gophers haha, get it?)*
 
-This is supposed to be a bytecode compiler and VM for a language resembling Clojure as close as possible.
-
-Now, I know about [candid82/joker](https://github.com/candid82/joker) and I 💛 it. Though, it has some 
-drawbacks and design choices that I'd like to avoid.
+This is a bytecode compiler and VM for a language closely resembling Clojure, a Clojure dialect, if you will. 
 
 Here are some nebulous goals in no particular order:
 - [x] Quality entertainment,
 - [ ] Implement as much of Clojure as possible - including persistent data types and true concurrency,
-- [ ] Provide comfy two-way interop for arbitrary functions and types,
+- [x] Provide comfy two-way interop for arbitrary functions and types,
 - [ ] Serve primarily as an embedded extension language,
 - [ ] AOT (let-go -> standalone binary) would be nice eventually, 
 - [ ] Strech goal: let-go bytecode -> Go translation.
 - [ ] ~~Pure Go, zero dependencies.~~ We use a lightweight line editor for the REPL now - [alimpfard/line](https://github.com/alimpfard/line)
 
 Here are the non goals:
-- Stellar performance,
+- Stellar performance (btw. it seems to be faster than Joker),
 - Being a drop-in replacement for [clojure/clojure](https://github.com/clojure/clojure) at any point,
 - Being a linter/formatter/tooling for Clojure in general.
 
 ## Current status 
 
-Can compile and eval basic Clojure flavored lisp.
+It can eval basic Clojure-like lisp. It's semi-good for solving Advent of Code problems but not for anything more serious yet. 
 
-#### The most impressive snippet so far
+Everything more or less half-baked and most features are happy path only ;)
 
-```clojure
-(ns server
-  'http)
+## Examples
 
-(http/handle "/" (fn [res req]
-                   (println (now) (:Method req) (:URL req))
-                   (.WriteHeader res 200)
-                   (.Write res "hello from let-go :^)")))
+See [tests](https://github.com/nooga/let-go/tree/main/test) and [examples](https://github.com/nooga/let-go/tree/main/examples) for some code samples. 
 
-(http/serve ":7070" nil)
-```
+## Try online
 
-See [tests](https://github.com/nooga/let-go/tree/main/test) and [examples](https://github.com/nooga/let-go/tree/main/examples) for more examples. 
+Check out [this bare-bones online REPL](https://nooga.github.io/let-go/).
 
 ## Prerequisites and installation
 
-Building or running let-go from source requires Go 1.17. There are no binary releases yet.
+Building or running let-go from source requires Go 1.19. 
 
-## Running
+```
+go install github.com/nooga/let-go@latest
+```
 
-Sure, you can! Just keep in mind that we're not there yet and it will likely blow up in your 
-face. Just remember to leave an issue when it does 😊
+## Building
 
-The best way to take `let-go` for a spin right now is to clone this repo and run the REPL like this:
+The best way to play with `let-go` right now is to clone this repo and run the REPL like this:
 
 ```
 go run . 
@@ -85,12 +77,10 @@ go run . -r -e '(* fun 2)' test/simple.lg # will run simple.lg first, then (* fu
 
 ## Building the interpreter -`lg`
 
-To build the standalone interpreter:
+To build and start the standalone interpreter:
 ```bash
 make
 ```
-
-This will produce the `lg` executable.
 
 ---
 Follow me on twitter for nightly updates! 🌙
