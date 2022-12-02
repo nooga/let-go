@@ -417,3 +417,44 @@
     (nil? coll) true
     (pred (first coll)) (recur pred (next coll))
     :else false))
+
+(defn get-in
+  ([m ks]
+   (reduce get m ks))
+  ([m ks not-found]
+   (loop [sentinel (gensym)
+          m m
+          ks ks]
+     (if ks
+       (let [m (get m (first ks) sentinel)]
+         (if (= sentinel m)
+           not-found
+           (recur sentinel m (next ks))))
+       m))))
+
+(defn assoc-in
+  [m [k & ks] v]
+  (if ks
+    (assoc m k (assoc-in (get m k) ks v))
+    (assoc m k v)))
+
+(defn update-in
+  ([m ks f & args]
+   (let [up (fn up [m ks f args]
+              (let [[k & ks] ks]
+                (if ks
+                  (assoc m k (up (get m k) ks f args))
+                  (assoc m k (apply f (get m k) args)))))]
+     (up m ks f args))))
+
+(defn update
+  ([m k f]
+   (assoc m k (f (get m k))))
+  ([m k f x]
+   (assoc m k (f (get m k) x)))
+  ([m k f x y]
+   (assoc m k (f (get m k) x y)))
+  ([m k f x y z]
+   (assoc m k (f (get m k) x y z)))
+  ([m k f x y z & more]
+   (assoc m k (apply f (get m k) x y z more))))
