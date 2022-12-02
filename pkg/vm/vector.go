@@ -119,6 +119,23 @@ func (l ArrayVector) ValueAtOr(key Value, dflt Value) Value {
 	return l[int(numkey)]
 }
 
+func (l ArrayVector) Assoc(k Value, v Value) Associative {
+	var new ArrayVector = NewArrayVector(l).(ArrayVector)
+	ik, ok := k.(Int)
+	if !ok {
+		return NIL
+	}
+	if ik < 0 || int(ik) >= len(new) {
+		return NIL
+	}
+	new[ik] = v
+	return new
+}
+
+func (l ArrayVector) Dissoc(k Value) Associative {
+	return NIL
+}
+
 func (l ArrayVector) String() string {
 	b := &strings.Builder{}
 	b.WriteRune('[')

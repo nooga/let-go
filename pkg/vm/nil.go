@@ -55,6 +55,16 @@ func (n *Nil) Seq() Seq {
 	return n
 }
 
+func (l *Nil) Assoc(k Value, v Value) Associative {
+	newmap := make(Map)
+	newmap[k] = v
+	return newmap
+}
+
+func (l *Nil) Dissoc(k Value) Associative {
+	return NIL
+}
+
 // Type implements Value
 func (n *Nil) Type() ValueType { return NilType }
 
