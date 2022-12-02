@@ -86,8 +86,9 @@
       // Load the wasm file
       loadWasm("letgo.wasm")
         .then((wasm) => {
+          const oldlog = console.log;
           jQuery(function ($, undefined) {
-            $("#term").terminal(
+            const term = $("#term").terminal(
               function (command) {
                 if (command !== "") {
                   var result = Eval(command);
@@ -102,6 +103,7 @@
                 prompt: "user> ",
               }
             );
+            console.log = (...args) => { term.echo(...args); } 
           });
         })
         .catch((error) => {
