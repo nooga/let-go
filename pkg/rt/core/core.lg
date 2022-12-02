@@ -278,9 +278,6 @@
 (defmacro defn [name & forms]
   `(def ~name (fn ~@forms)))
 
-(defmacro when-let [bind & forms]
-  `(let ~bind (if ~(second bind) (do ~@forms) nil)))
-
 (defmacro while [test & body]
   `(loop* [] (when ~test ~@body (recur))))
 
@@ -346,5 +343,77 @@
        ([x y z] (reduce #(conj %1 (%2 x y z)) [] fs))
        ([x y z & args] (reduce #(conj %1 (apply %2 x y z args)) [] fs))))))
 
+(defn partial
+  ([f] f)
+  ([f arg1]
+   (fn
+     ([] (f arg1))
+     ([x] (f arg1 x))
+     ([x y] (f arg1 x y))
+     ([x y z] (f arg1 x y z))
+     ([x y z & args] (apply f arg1 x y z args))))
+  ([f arg1 arg2]
+   (fn
+     ([] (f arg1 arg2))
+     ([x] (f arg1 arg2 x))
+     ([x y] (f arg1 arg2 x y))
+     ([x y z] (f arg1 arg2 x y z))
+     ([x y z & args] (apply f arg1 arg2 x y z args))))
+  ([f arg1 arg2 arg3]
+   (fn
+     ([] (f arg1 arg2 arg3))
+     ([x] (f arg1 arg2 arg3 x))
+     ([x y] (f arg1 arg2 arg3 x y))
+     ([x y z] (f arg1 arg2 arg3 x y z))
+     ([x y z & args] (apply f arg1 arg2 arg3 x y z args))))
+  ([f arg1 arg2 arg3 & more]
+   (fn [& args] (apply f arg1 arg2 arg3 (concat more args)))))
+
 (defn reverse [coll]
   (reduce conj () coll))
+
+(defmacro if-let
+  ([bindings then]
+   `(if-let ~bindings ~then nil))
+  ([bindings then else]
+   (let [form (get bindings 0) tst (get bindings 1)]
+     `(let [temp# ~tst]
+        (if temp#
+          (let [~form temp#]
+            ~then)
+          ~else)))))
+
+(defmacro when-let
+  [bindings & body]
+  (let [form (get bindings 0) tst (get bindings 1)]
+    `(let [temp# ~tst]
+       (when temp#
+         (let [~form temp#]
+           ~@body)))))
+
+(defmacro if-some
+  ([bindings then]
+   `(if-some ~bindings ~then nil))
+  ([bindings then else]
+   (let [form (get bindings 0) tst (get bindings 1)]
+     `(let [temp# ~tst]
+        (if (nil? temp#)
+          ~else
+          (let [~form temp#]
+            ~then))))))
+
+(defmacro when-some
+  [bindings & body]
+  (let [form (get bindings 0) tst (get bindings 1)]
+    `(let [temp# ~tst]
+       (if (nil? temp#)
+         nil
+         (let [~form temp#]
+           ~@body)))))
+
+(defn every?
+  [pred coll]
+  (cond
+    (nil? coll) true
+    (pred (first coll)) (recur pred (next coll))
+    :else false))
