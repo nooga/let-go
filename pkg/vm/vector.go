@@ -6,6 +6,7 @@
 package vm
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -134,6 +135,18 @@ func (l ArrayVector) Assoc(k Value, v Value) Associative {
 
 func (l ArrayVector) Dissoc(k Value) Associative {
 	return NIL
+}
+
+func (l ArrayVector) Arity() int {
+	return 1
+}
+
+func (l ArrayVector) Invoke(pargs []Value) (Value, error) {
+	vl := len(pargs)
+	if vl != 1 {
+		return NIL, fmt.Errorf("wrong number of arguments %d", vl)
+	}
+	return l.ValueAt(pargs[0]), nil
 }
 
 func (l ArrayVector) String() string {

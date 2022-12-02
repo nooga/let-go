@@ -376,7 +376,7 @@
   ([bindings then]
    `(if-let ~bindings ~then nil))
   ([bindings then else]
-   (let [form (get bindings 0) tst (get bindings 1)]
+   (let [form (bindings 0) tst (bindings 1)]
      `(let [temp# ~tst]
         (if temp#
           (let [~form temp#]
@@ -385,7 +385,7 @@
 
 (defmacro when-let
   [bindings & body]
-  (let [form (get bindings 0) tst (get bindings 1)]
+  (let [form (bindings 0) tst (bindings 1)]
     `(let [temp# ~tst]
        (when temp#
          (let [~form temp#]
@@ -395,7 +395,7 @@
   ([bindings then]
    `(if-some ~bindings ~then nil))
   ([bindings then else]
-   (let [form (get bindings 0) tst (get bindings 1)]
+   (let [form (bindings 0) tst (bindings 1)]
      `(let [temp# ~tst]
         (if (nil? temp#)
           ~else
@@ -404,7 +404,7 @@
 
 (defmacro when-some
   [bindings & body]
-  (let [form (get bindings 0) tst (get bindings 1)]
+  (let [form (bindings 0) tst (bindings 1)]
     `(let [temp# ~tst]
        (if (nil? temp#)
          nil
