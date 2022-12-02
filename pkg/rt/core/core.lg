@@ -151,7 +151,13 @@
   (reduce (fn [a x] (concat-list a x)) '() (map f xs)))
 
 (defn filter [f xs]
-  (reduce (fn [a x] (if (f x) (cons x a) a)) '() xs))
+  (if xs 
+    (let [x (first xs)
+          r (next xs)]
+      (if (f x) 
+        (cons x (filter f r)) 
+        (filter f r)))
+    (list)))
 
 (defn take [n coll]
   (when (and coll (> n 0))

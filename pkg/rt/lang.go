@@ -228,6 +228,10 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
+		if vs[0] == vm.NIL || vs[0] == vm.EmptyList {
+			return vm.ArrayVector{}, nil
+		}
+
 		if v, ok := vs[0].(vm.ArrayVector); ok {
 			return v, nil
 		}
