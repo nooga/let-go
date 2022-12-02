@@ -345,3 +345,6 @@
        ([x y] (reduce #(conj %1 (%2 x y)) [] fs))
        ([x y z] (reduce #(conj %1 (%2 x y z)) [] fs))
        ([x y z & args] (reduce #(conj %1 (apply %2 x y z args)) [] fs))))))
+
+(defn reverse [coll]
+  (reduce conj () coll))
