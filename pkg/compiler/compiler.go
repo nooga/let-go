@@ -324,6 +324,11 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.decSP(len(v) * 2)
 		c.tailPosition = tp
 	case vm.ListType:
+		if o == vm.EmptyList {
+			c.emitWithArg(vm.OP_LOAD_CONST, c.constant(vm.EmptyList))
+			c.incSP(1)
+			return nil
+		}
 		fn := o.(*vm.List).First()
 		// check if we're looking at a special form
 		if fn.Type() == vm.SymbolType {
