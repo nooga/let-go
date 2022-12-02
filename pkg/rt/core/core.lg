@@ -247,13 +247,7 @@
       `(loop* ~bs (let* ~nbs ~@body))
       `(loop* ~bindings ~@body))))
 
-;; (defmacro fn [bindings & body]
-;;   (if (some (complement symbol?) bindings)
-;;     (let [padded (reduce (fn [a x] (conj a x nil)) [] bindings)
-;;           [bs nbs] (destructure padded)
-;;           clean (vec (filter some? bs))]
-;;       `(fn* ~clean (let* ~nbs ~@body)))
-;;     `(fn* ~bindings ~@body)))
+(defn spy [s x] (println s x) x)
 
 (defn fn-expand [bindings body]
   (if (some (complement symbol?) bindings)
@@ -262,8 +256,6 @@
           clean (vec (filter some? bs))]
       `(~clean (let* ~nbs ~@body)))
     `(~bindings ~@body)))
-
-(defn spy [s x] (println s x) x)
 
 (defmacro fn [& forms]
   (cond 

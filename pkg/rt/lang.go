@@ -558,13 +558,13 @@ func installLangNS() {
 			if err != nil {
 				return vm.NIL, err
 			}
-			if v != vm.NIL {
+			if vm.IsTruthy(v) {
 				return v, nil
 			}
 			seq = seq.Next()
 		}
 
-		return vm.NIL, nil
+		return vm.FALSE, nil
 	})
 
 	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -975,6 +975,31 @@ func installLangNS() {
 		return vm.ListType.Box(temp)
 	})
 
+	split, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 || len(vs) > 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("split expected String")
+		}
+		delim := ""
+		if len(vs) == 2 {
+			delimv := vs[1].(vm.String)
+			if !ok {
+				return vm.NIL, fmt.Errorf("split expected String")
+			}
+			delim = string(delimv)
+		}
+		frags := strings.Split(string(s), delim)
+		var ret vm.Seq = vm.EmptyList
+		l := len(frags)
+		for i := range frags {
+			ret = ret.Cons(vm.String(frags[l-i-1]))
+		}
+		return ret, nil
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -1065,6 +1090,7 @@ func installLangNS() {
 	ns.Def("<!", changet)
 
 	ns.Def("str", str)
+	ns.Def("split", split)
 
 	CoreNS = ns
 
