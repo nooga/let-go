@@ -213,7 +213,7 @@ func installLangNS() {
 		if len(vs) == 1 {
 			arg, ok := vs[0].(vm.String)
 			if !ok {
-				return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+				return vm.NIL, fmt.Errorf("gensym expected String", len(vs))
 			}
 			prefix = string(arg)
 		}
@@ -223,7 +223,7 @@ func installLangNS() {
 	vector, err := vm.NativeFnType.WrapNoErr(vm.NewArrayVector)
 	list, err := vm.NativeFnType.WrapNoErr(vm.NewList)
 	hashMap, err := vm.NativeFnType.WrapNoErr(vm.NewMap)
-	set, err := vm.NativeFnType.WrapNoErr(vm.NewSet)
+	hashSet, err := vm.NativeFnType.WrapNoErr(vm.NewSet)
 
 	vec, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -1101,7 +1101,7 @@ func installLangNS() {
 	ns.Def("list", list)
 	ns.Def("range", rangef)
 	ns.Def("keyword", keyword)
-	ns.Def("set", set)
+	ns.Def("hash-set", hashSet)
 
 	ns.Def("seq", seq)
 

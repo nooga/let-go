@@ -515,7 +515,7 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 }
 
 func readSet(r *LispReader, _ rune) (vm.Value, error) {
-	ret := make([]vm.Value, 0)
+	ret := vm.EmptyList
 	for {
 		ch2, err := r.eatWhitespace()
 		if err != nil {
@@ -532,13 +532,11 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		ret = appendNonVoid(ret, form)
+		if form.Type() != vm.VoidType {
+			ret = ret.Conj(form).(*vm.List)
+		}
 	}
-	a, err := vm.ListType.Box(ret)
-	if err != nil {
-		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
-	}
-	return a.(*vm.List).Cons(vm.Symbol("set")), nil
+	return ret.Cons(vm.Symbol("hash-set")), nil
 }
 
 func readQuote(r *LispReader, _ rune) (vm.Value, error) {

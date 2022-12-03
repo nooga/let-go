@@ -115,6 +115,9 @@
 
 (defn empty? [x] (zero? (count x)))
 
+(defn set [coll]
+  (reduce conj #{} coll))
+
 (defn concat-vec [a b]
   (if (empty? b)
     a
