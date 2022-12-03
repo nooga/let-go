@@ -90,7 +90,31 @@ func (l String) Cons(val Value) Seq {
 }
 
 func (l String) Seq() Seq {
-	return l
+	if len(l) <= 1 {
+		return NIL
+	}
+	ret := EmptyList
+	s := []rune(l)
+	for i := len(s) - 1; i >= 0; i-- {
+		ret = ret.Conj(Char(s[i])).(*List)
+	}
+	return ret
+}
+
+func (l String) ValueAt(key Value) Value {
+	return l.ValueAtOr(key, NIL)
+}
+
+func (l String) ValueAtOr(key Value, dflt Value) Value {
+	if key == NIL {
+		return dflt
+	}
+	r := []rune(l)
+	numkey, ok := key.(Int)
+	if !ok || numkey < 0 || int(numkey) >= len(r) {
+		return dflt
+	}
+	return Char(r[numkey])
 }
 
 func (l String) String() string {
