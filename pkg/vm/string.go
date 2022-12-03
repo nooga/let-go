@@ -58,6 +58,41 @@ func (l String) Unbox() interface{} {
 	return string(l)
 }
 
+// First implements Seq
+func (l String) First() Value {
+	for _, r := range l {
+		return Char(r)
+	}
+	return NIL
+}
+
+// More implements Seq
+func (l String) More() Seq {
+	return l.Next()
+}
+
+// Next implements Seq
+func (l String) Next() Seq {
+	if len(l) <= 1 {
+		return NIL
+	}
+	ret := EmptyList
+	s := []rune(l)
+	for i := len(s) - 1; i >= 1; i-- {
+		ret = ret.Conj(Char(s[i])).(*List)
+	}
+	return ret
+}
+
+// Cons implements Seq
+func (l String) Cons(val Value) Seq {
+	return NIL
+}
+
+func (l String) Seq() Seq {
+	return l
+}
+
 func (l String) String() string {
 	return fmt.Sprintf("%q", string(l))
 }
