@@ -48,6 +48,10 @@
 (def >= (fn [a b] (or (= a b) (> a b))))
 (def <= (fn [a b] (or (= a b) (< a b))))
 
+;; this is wrong :^)
+(def rest next)
+(def parse-long parse-int)
+
 (defmacro cond [& forms]
   (when (>= (count forms) 2)
     (list 'if (first forms) (second forms)
@@ -147,6 +151,9 @@
      initial
      forms)))
 
+
+(defn spy [s x] (println s x) x)
+
 (defn mapcat [f xs]
   (reduce (fn [a x] (concat-list a x)) '() (map f xs)))
 
@@ -168,12 +175,16 @@
     (recur (dec n) (next xs))
     xs))
 
-; FIXME this needs multi arity
-(defn partition [n step xs]
-  (loop [c xs w []]
-    (if (>= (count c) n)
-      (recur (drop step c) (conj w (take n c)))
-      w)))
+(defn split-at [n coll]
+  [(take n coll) (drop n coll)])
+
+(defn partition 
+  ([n xs] (partition n n xs))
+  ([n step xs]
+   (loop [c xs w []]
+     (if (>= (count c) n)
+       (recur (drop step c) (conj w (take n c)))
+       w))))
 
 (defmacro dotimes
   [bindings & body]
@@ -253,7 +264,6 @@
       `(loop* ~bs (let* ~nbs ~@body))
       `(loop* ~bindings ~@body))))
 
-(defn spy [s x] (println s x) x)
 
 (defn fn-expand [bindings body]
   (if (some (complement symbol?) bindings)
@@ -458,3 +468,47 @@
    (assoc m k (f (get m k) x y z)))
   ([m k f x y z & more]
    (assoc m k (apply f (get m k) x y z more))))
+
+(defn fnil
+  ([f x]
+   (fn
+     ([a] (f (if (nil? a) x a)))
+     ([a b] (f (if (nil? a) x a) b))
+     ([a b c] (f (if (nil? a) x a) b c))
+     ([a b c & ds] (apply f (if (nil? a) x a) b c ds))))
+  ([f x y]
+   (fn
+     ([a b] (f (if (nil? a) x a) (if (nil? b) y b)))
+     ([a b c] (f (if (nil? a) x a) (if (nil? b) y b) c))
+     ([a b c & ds] (apply f (if (nil? a) x a) (if (nil? b) y b) c ds))))
+  ([f x y z]
+   (fn
+     ([a b] (f (if (nil? a) x a) (if (nil? b) y b)))
+     ([a b c] (f (if (nil? a) x a) (if (nil? b) y b) (if (nil? c) z c)))
+     ([a b c & ds] (apply f (if (nil? a) x a) (if (nil? b) y b) (if (nil? c) z c) ds)))))
+
+;; set difference
+(defn difference
+  ([s1] s1)
+  ([s1 s2]
+   (if (< (count s1) (count s2))
+     (reduce (fn [result item]
+               (if (contains? s2 item)
+                 (disj result item)
+                 result))
+             s1 s1)
+     (reduce disj s1 s2)))
+  ([s1 s2 & sets]
+   (reduce difference s1 (conj sets s2))))
+
+;; set intersection
+(defn intersection
+  ([s1] s1)
+  ([s1 s2]
+   (if (< (count s2) (count s1))
+     (recur s2 s1)
+     (reduce (fn [result item]
+               (if (contains? s2 item)
+                 result
+                 (disj result item)))
+             s1 (seq s1)))))
