@@ -223,6 +223,7 @@ func installLangNS() {
 	vector, err := vm.NativeFnType.WrapNoErr(vm.NewArrayVector)
 	list, err := vm.NativeFnType.WrapNoErr(vm.NewList)
 	hashMap, err := vm.NativeFnType.WrapNoErr(vm.NewMap)
+	set, err := vm.NativeFnType.WrapNoErr(vm.NewSet)
 
 	vec, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -366,6 +367,39 @@ func installLangNS() {
 		return seq, nil
 	})
 
+	disj, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 1 {
+			return vs[0], nil
+		}
+		s, ok := vs[0].(vm.Set)
+		if !ok {
+			return vm.NIL, fmt.Errorf("conj expected Set")
+		}
+
+		for _, v := range vs[1:] {
+			s = s.Disj(v)
+		}
+		return s, nil
+	})
+
+	contains, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 1 {
+			return vs[0], nil
+		}
+		s, ok := vs[0].(vm.Keyed)
+		if !ok {
+			return vm.NIL, fmt.Errorf("contains? expected Set")
+		}
+
+		return s.Contains(vs[1]), nil
+	})
+
 	first, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -403,6 +437,18 @@ func installLangNS() {
 		if n.(vm.Collection).Count().(vm.Int) == 0 {
 			return vm.NIL, nil
 		}
+		return n, nil
+	})
+
+	seq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		seq, ok := vs[0].(vm.Sequable)
+		if !ok {
+			return vm.NIL, fmt.Errorf("seq expected Seqauble")
+		}
+		n := seq.Seq()
 		return n, nil
 	})
 
@@ -1004,6 +1050,19 @@ func installLangNS() {
 		return ret, nil
 	})
 
+	intf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if i, ok := vs[0].(vm.Int); ok {
+			return i, nil
+		}
+		if i, ok := vs[0].(vm.Char); ok {
+			return vm.Int(int(i)), nil
+		}
+		return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -1042,17 +1101,22 @@ func installLangNS() {
 	ns.Def("list", list)
 	ns.Def("range", rangef)
 	ns.Def("keyword", keyword)
+	ns.Def("set", set)
+
+	ns.Def("seq", seq)
 
 	ns.Def("assoc", assoc)
 	ns.Def("dissoc", dissoc)
 	ns.Def("update", update)
 	ns.Def("cons", cons)
 	ns.Def("conj", conj)
+	ns.Def("disj", disj)
 	ns.Def("first", first)
 	ns.Def("second", second)
 	ns.Def("next", next)
 	ns.Def("get", get)
 	ns.Def("count", count)
+	ns.Def("contains?", contains)
 
 	ns.Def("map", mapf)
 	ns.Def("mapv", mapv)
@@ -1092,6 +1156,8 @@ func installLangNS() {
 	ns.Def("chan", chanf)
 	ns.Def(">!", chanput)
 	ns.Def("<!", changet)
+
+	ns.Def("int", intf)
 
 	ns.Def("str", str)
 	ns.Def("split", split)

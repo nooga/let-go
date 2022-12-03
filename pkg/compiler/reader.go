@@ -514,6 +514,33 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 	return vm.NewMap(ret), nil
 }
 
+func readSet(r *LispReader, _ rune) (vm.Value, error) {
+	ret := make([]vm.Value, 0)
+	for {
+		ch2, err := r.eatWhitespace()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		if ch2 == '}' {
+			r.addToken(TokenPunctuation)
+			break
+		}
+		if err = r.unread(); err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		form, err := r.Read()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+		}
+		ret = appendNonVoid(ret, form)
+	}
+	a, err := vm.ListType.Box(ret)
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+	}
+	return a.(*vm.List).Cons(vm.Symbol("set")), nil
+}
+
 func readQuote(r *LispReader, _ rune) (vm.Value, error) {
 	form, err := r.Read()
 	if err != nil {
@@ -849,6 +876,7 @@ func readerInit() {
 		'\'': readVarQuote,
 		'_':  readFormComment,
 		'(':  readShortFn,
+		'{':  readSet,
 	}
 }
 
