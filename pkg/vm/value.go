@@ -65,6 +65,11 @@ type Lookup interface {
 	ValueAtOr(Value, Value) Value
 }
 
+type Keyed interface {
+	Value
+	Contains(Value) Boolean
+}
+
 type Receiver interface {
 	Value
 	InvokeMethod(Symbol, []Value) (Value, error)

@@ -155,6 +155,13 @@ func (l Map) ValueAtOr(key Value, dflt Value) Value {
 	return ret
 }
 
+func (l Map) Contains(value Value) Boolean {
+	if _, ok := l[value]; ok {
+		return TRUE
+	}
+	return FALSE
+}
+
 func NewMap(v []Value) Value {
 	if len(v) == 0 {
 		return make(Map)

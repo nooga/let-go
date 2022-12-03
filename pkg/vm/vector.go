@@ -120,6 +120,14 @@ func (l ArrayVector) ValueAtOr(key Value, dflt Value) Value {
 	return l[int(numkey)]
 }
 
+func (l ArrayVector) Contains(value Value) Boolean {
+	numkey, ok := value.(Int)
+	if !ok || numkey < 0 || int(numkey) >= len(l) {
+		return FALSE
+	}
+	return TRUE
+}
+
 func (l ArrayVector) Assoc(k Value, v Value) Associative {
 	var new ArrayVector = NewArrayVector(l).(ArrayVector)
 	ik, ok := k.(Int)
