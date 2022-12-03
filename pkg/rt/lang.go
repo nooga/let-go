@@ -213,7 +213,7 @@ func installLangNS() {
 		if len(vs) == 1 {
 			arg, ok := vs[0].(vm.String)
 			if !ok {
-				return vm.NIL, fmt.Errorf("gensym expected String", len(vs))
+				return vm.NIL, fmt.Errorf("gensym expected String")
 			}
 			prefix = string(arg)
 		}
