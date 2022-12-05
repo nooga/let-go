@@ -51,6 +51,7 @@ type LispReader struct {
 
 	Tokens     []Token
 	tokenizing bool
+	splicing   bool
 }
 
 func NewLispReader(r io.Reader, inputName string) *LispReader {
@@ -150,8 +151,19 @@ func (r *LispReader) eatWhitespace() (rune, error) {
 	return ch, err
 }
 
-func appendNonVoid(vs []vm.Value, v vm.Value) []vm.Value {
+func appendNonVoid(r *LispReader, vs []vm.Value, v vm.Value) []vm.Value {
 	if v.Type() == vm.VoidType {
+		return vs
+	}
+	if r.splicing {
+		seq, ok := v.(vm.Seq)
+		if !ok {
+			return vs //FIXME this should scream
+		}
+		for seq != vm.EmptyList {
+			vs = append(vs, seq.First())
+			seq = seq.Next()
+		}
 		return vs
 	}
 	return append(vs, v)
@@ -468,7 +480,7 @@ func readList(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		ret = appendNonVoid(ret, form)
+		ret = appendNonVoid(r, ret, form)
 	}
 	return vm.ListType.Box(ret)
 }
@@ -491,7 +503,7 @@ func readVector(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		ret = appendNonVoid(ret, form)
+		ret = appendNonVoid(r, ret, form)
 	}
 	return vm.ArrayVector(ret), nil
 }
@@ -514,7 +526,7 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		ret = appendNonVoid(ret, form)
+		ret = appendNonVoid(r, ret, form)
 	}
 	if len(ret)%2 != 0 {
 		return vm.NIL, NewReaderError(r, "map literal must contain even number of forms")
@@ -797,7 +809,7 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		ret = appendNonVoid(ret, form)
+		ret = appendNonVoid(r, ret, form)
 	}
 	var percents []vm.Value
 	for i := 1; i <= r.maxPercent; i++ {
@@ -817,6 +829,40 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 	}
 	return fn, nil
+}
+
+const lgConditionalTag = vm.Keyword("lg")
+const defaultConditionalTag = vm.Keyword("default")
+
+func readConditional(r *LispReader, s rune) (vm.Value, error) {
+	n, err := r.next()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading reader conditional")
+	}
+	splicing := false
+	if n == '@' {
+		splicing = true
+		n, err = r.next()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "reading splicing reader conditional")
+		}
+	}
+	flist, err := readList(r, n)
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading reader conditional, list expected")
+	}
+	list := flist.(*vm.List)
+	var form vm.Value = vm.VOID
+	for list != vm.EmptyList {
+		e := list.First()
+		if e == lgConditionalTag || e == defaultConditionalTag {
+			form = list.Next().First()
+			break
+		}
+		list = list.Next().(*vm.List)
+	}
+	r.splicing = splicing
+	return form, nil
 }
 
 func readHashMacro(r *LispReader, _ rune) (vm.Value, error) {
@@ -884,6 +930,7 @@ func readerInit() {
 		'(':  readShortFn,
 		'{':  readSet,
 		'"':  readRegex,
+		'?':  readConditional,
 	}
 }
 
