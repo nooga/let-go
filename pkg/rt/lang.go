@@ -1063,6 +1063,16 @@ func installLangNS() {
 		return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 	})
 
+	regex, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if s, ok := vs[0].(vm.String); ok {
+			return vm.NewRegex(string(s))
+		}
+		return vm.NIL, fmt.Errorf("regex expected String")
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -1161,6 +1171,7 @@ func installLangNS() {
 
 	ns.Def("str", str)
 	ns.Def("split", split)
+	ns.Def("regex", regex)
 
 	CoreNS = ns
 
