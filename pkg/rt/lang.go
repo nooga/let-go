@@ -1050,6 +1050,28 @@ func installLangNS() {
 		return ret, nil
 	})
 
+	strReplace, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("str-replace expected String")
+		}
+		r, ok := vs[2].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("str-replace expected String")
+		}
+		switch vs[1].(type) {
+		case vm.String:
+			return vm.String(strings.ReplaceAll(string(s), string(vs[1].(vm.String)), string(r))), nil
+		case *vm.Regex:
+			return vm.String(vs[1].(*vm.Regex).ReplaceAll(string(s), string(r))), nil
+		default:
+			return vm.NIL, fmt.Errorf("str-replace expected String or Regex")
+		}
+	})
+
 	intf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -1138,7 +1160,7 @@ func installLangNS() {
 
 	ns.Def("type", typef)
 
-	ns.Def("apply", apply)
+	ns.Def("apply*", apply)
 	ns.Def("deref", deref)
 
 	ns.Def("atom", atom)
@@ -1171,6 +1193,7 @@ func installLangNS() {
 
 	ns.Def("str", str)
 	ns.Def("split", split)
+	ns.Def("str-replace", strReplace)
 	ns.Def("regex", regex)
 
 	CoreNS = ns

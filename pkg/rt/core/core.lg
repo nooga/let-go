@@ -11,6 +11,8 @@
 (def defn (fn [name args & body] (list 'def name (cons 'fn (cons args body)))))
 (set-macro! (var defn))
 
+(def apply apply*)
+
 (defn defmacro [name args & body]
   (list 'do (cons 'defn (cons name (cons args body))) (list 'set-macro! (list 'var name))))
 
@@ -324,6 +326,31 @@
   ([a b c args] (cons a (cons b (cons c args))))
   ([a b c d & more]
    (cons a (cons b (cons c (cons d (spread more)))))))
+
+(defn apply
+  ([f args]
+   (apply* f (seq args)))
+  ([f x args]
+   (apply* f (list* x args)))
+  ([f x y args]
+   (apply* f (list* x y args)))
+  ([f x y z args]
+   (apply* f (list* x y z args)))
+  ([f a b c d & args]
+   (apply* f (cons a (cons b (cons c (cons d (spread args))))))))
+
+(defn comp
+  ([] identity)
+  ([f] f)
+  ([f g]
+   (fn
+     ([] (f (g)))
+     ([x] (f (g x)))
+     ([x y] (f (g x y)))
+     ([x y z] (f (g x y z)))
+     ([x y z & args] (f (apply g x y z args)))))
+  ([f g & fs]
+   (reduce comp (list f g fs))))
 
 (defn juxt
   ([f]
