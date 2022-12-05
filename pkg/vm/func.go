@@ -157,6 +157,7 @@ type MultiArityFn struct {
 	fns   map[int]Fn
 	rest  Fn
 	arity int
+	name  string
 }
 
 func (l *MultiArityFn) Type() ValueType { return FuncType }
@@ -195,19 +196,23 @@ func (l *MultiArityFn) Invoke(pargs []Value) (Value, error) {
 }
 
 func (l *MultiArityFn) String() string {
-	return fmt.Sprintf("<mfn %p>", l)
+	return fmt.Sprintf("<mfn %s %p>", l.name, l)
 }
 
 func makeMultiArity(fns []Value) (*MultiArityFn, error) {
 	ma := &MultiArityFn{
 		arity: 0,
 		fns:   map[int]Fn{},
+		name:  "",
 	}
 	for i := range fns {
 		e := fns[i]
 		f, ok := e.(Fn)
 		if !ok {
 			return nil, NewExecutionError("making multi-arity function failed")
+		}
+		if ff, ok := f.(*Func); ok {
+			ma.name = ff.name
 		}
 		a := f.Arity()
 		if a > ma.arity {
