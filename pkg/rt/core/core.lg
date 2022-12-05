@@ -163,11 +163,11 @@
   (reduce (fn [a x] (concat-list a x)) '() (map f xs)))
 
 (defn filter [f xs]
-  (if xs 
+  (if xs
     (let [x (first xs)
           r (next xs)]
-      (if (f x) 
-        (cons x (filter f r)) 
+      (if (f x)
+        (cons x (filter f r))
         (filter f r)))
     (list)))
 
@@ -183,7 +183,7 @@
 (defn split-at [n coll]
   [(take n coll) (drop n coll)])
 
-(defn partition 
+(defn partition
   ([n xs] (partition n n xs))
   ([n step xs]
    (loop [c xs w []]
@@ -279,13 +279,13 @@
     `(~bindings ~@body)))
 
 (defmacro fn [& forms]
-  (cond 
-    (vector? (first forms)) 
+  (cond
+    (vector? (first forms))
     (cons 'fn* (fn-expand (first forms) (next forms)))
-    
+
     (list? (first forms))
     `(fn* ~@(map #(fn-expand (first %) (next %)) forms))
-    
+
     :else
     nil ;; throw here
     ))
@@ -298,19 +298,6 @@
 
 (defmacro go [& forms]
   `(go* (fn* [] ~@forms)))
-
-(defn comp
-  ([] identity)
-  ([f] f)
-  ([f g]
-   (fn
-     ([] (f (g)))
-     ([x] (f (g x)))
-     ([x y] (f (g x y)))
-     ([x y z] (f (g x y z)))
-     ([x y z & args] (f (apply g x y z args)))))
-  ([f g & fs]
-   (reduce comp (list f g fs))))
 
 (defn spread
   [arglist]
@@ -542,3 +529,27 @@
                  result
                  (disj result item)))
              s1 (seq s1)))))
+
+(defn take-while [pred coll]
+  (when-let [s (seq coll)]
+    (when (pred (first s))
+      (cons (first s) (take-while pred (rest s))))))
+
+(defn drop-while [pred coll]
+  (let [step (fn [pred coll]
+               (let [s (seq coll)]
+                 (if (and s (pred (first s)))
+                   (recur pred (rest s))
+                   s)))]
+    (step pred coll)))
+
+(defn split-with [pred coll]
+  [(take-while pred coll) (drop-while pred coll)])
+
+(defn butlast [s]
+  (loop [ret [] s s]
+    (if (next s)
+      (recur (conj ret (first s)) (next s))
+      (seq ret))))
+
+(defn into [c r] (reduce conj c r))
