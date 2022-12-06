@@ -749,7 +749,7 @@ func installLangNS() {
 				e := vseq.First()
 				ret = append(ret, e)
 				vseq = vseq.Next()
-				if vseq == vm.EmptyList {
+				if vseq == vm.EmptyList || vseq == vm.NIL {
 					break
 				}
 			}
