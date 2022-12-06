@@ -821,7 +821,7 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 	}
 	fn, err := vm.ListType.Box([]vm.Value{
-		vm.Symbol("fn"),
+		vm.Symbol("fn*"),
 		vm.NewArrayVector(percents),
 		body,
 	})
@@ -859,7 +859,7 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 			form = list.Next().First()
 			break
 		}
-		list = list.Next().(*vm.List)
+		list = list.Next().Next().(*vm.List)
 	}
 	r.splicing = splicing
 	return form, nil
