@@ -357,9 +357,9 @@ func readString(r *LispReader, _ rune) (vm.Value, error) {
 func readRegex(r *LispReader, ru rune) (vm.Value, error) {
 	s, err := readString(r, ru)
 	if err != nil {
-		return vm.NIL, NewReaderError(r, "reading regex failed").Wrap(err)
+		return vm.NIL, NewReaderError(r, "reading regexp pattern failed").Wrap(err)
 	}
-	return vm.ListType.Box([]vm.Value{vm.Symbol("regex"), s})
+	return vm.ListType.Box([]vm.Value{vm.Symbol("re-pattern"), s})
 }
 
 func isHexDigit(ch rune) bool {

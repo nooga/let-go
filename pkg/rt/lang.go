@@ -1195,7 +1195,7 @@ func installLangNS() {
 	ns.Def("str", str)
 	ns.Def("split", split)
 	ns.Def("str-replace", strReplace)
-	ns.Def("regex", regex)
+	ns.Def("re-pattern", regex)
 
 	CoreNS = ns
 
