@@ -337,7 +337,7 @@
      ([x y z] (f (g x y z)))
      ([x y z & args] (f (apply g x y z args)))))
   ([f g & fs]
-   (reduce comp (list f g fs))))
+   (reduce comp (list* f g fs))))
 
 (defn juxt
   ([f]
