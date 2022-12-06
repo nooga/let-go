@@ -25,6 +25,7 @@ func init() {
 
 	installLangNS()
 	installHttpNS()
+	installOsNS()
 }
 
 func AllNSes() map[string]*vm.Namespace {
