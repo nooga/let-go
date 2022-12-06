@@ -721,7 +721,7 @@ func expandUnquotes(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, err
 			ret = append(ret, vm.ArrayVector{vq})
 		}
 		fseq = fseq.Next()
-		if fseq == vm.EmptyList {
+		if fseq == vm.EmptyList || fseq == vm.NIL {
 			break
 		}
 	}
