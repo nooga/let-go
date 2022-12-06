@@ -24,19 +24,18 @@ func motd() {
 }
 
 func runForm(ctx *compiler.Context, in string) (vm.Value, error) {
-	chunk, err := ctx.Compile(in)
+	_, val, err := ctx.CompileMultiple(strings.NewReader(in))
 	if err != nil {
 		return nil, err
 	}
-	var val vm.Value
-	if debug {
-		val, err = vm.NewDebugFrame(chunk, nil).Run()
-	} else {
-		val, err = vm.NewFrame(chunk, nil).Run()
-	}
-	if err != nil {
-		return nil, err
-	}
+	// if debug {
+	// 	val, err = vm.NewDebugFrame(chunk, nil).Run()
+	// } else {
+	// 	val, err = vm.NewFrame(chunk, nil).Run()
+	// }
+	// if err != nil {
+	// 	return nil, err
+	// }
 	return val, err
 }
 
