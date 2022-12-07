@@ -95,6 +95,8 @@
 (defn zero? [x] (= 0 x))
 (defn pos? [x] (gt x 0))
 (defn neg? [x] (lt x 0))
+(defn even? [x] (= 0 (mod x 2)))
+(defn odd? [x] (not (even? x)))
 
 (defmacro not= [& xs] (list 'not (cons '= xs)))
 
@@ -553,3 +555,134 @@
       (seq ret))))
 
 (defn into [c r] (reduce conj c r))
+
+(defn keep [f coll]
+  (when-let [s (seq coll)]
+    (let [x (f (first s))]
+      (if (nil? x)
+        (keep f (rest s))
+        (cons x (keep f (rest s)))))))
+
+(defn keepi [f idx coll]
+  (when-let [s (seq coll)]
+    (let [x (f idx (first s))]
+      (if (nil? x)
+        (keepi f (inc idx) (rest s))
+        (cons x (keepi f (inc idx) (rest s)))))))
+
+(defn mapi [f idx coll]
+      (when-let [s (seq coll)]
+        (cons (f idx (first s)) (mapi f (inc idx) (rest s)))))
+
+(defn map-indexed [f coll]
+  (mapi f 0 coll))
+
+(defn keep-indexed [f coll]
+  (keepi f 0 coll))
+
+(defn find [m key] 
+  (when-let [v (m key)] [key v]))
+
+(defn select-keys
+  [map keyseq]
+  (loop [ret {} keys (seq keyseq)]
+    (println ret keys)
+    (if keys
+      (let [entry (find map (first keys))]
+        (println "d" entry)
+        (recur
+         (if entry
+           (conj ret entry)
+           ret)
+         (next keys)))
+      ret)))
+
+(defn keys [m]
+  (map first m))
+
+(defn vals [m]
+  (map second m))
+
+(defn every?
+  [pred coll]
+  (cond
+    (nil? (seq coll)) true
+    (pred (first coll)) (recur pred (next coll))
+    :else false))
+
+(def not-every? (comp not every?))
+
+(def not-any? (comp not some))
+
+(defn remove [pred coll]
+  (filter (complement pred) coll))
+
+(defn drop-last
+  ([coll] (drop-last 1 coll))
+  ([n coll] (map (fn [x _] x) coll (drop n coll))))
+
+(defn take-last
+  [n coll]
+  (loop [s (seq coll), lead (seq (drop n coll))]
+    (if lead
+      (recur (next s) (next lead))
+      s)))
+
+(defn zipmap
+  [keys vals]
+  (loop [map {}
+         ks (seq keys)
+         vs (seq vals)]
+    (if (and ks vs)
+      (recur (assoc map (first ks) (first vs))
+             (next ks)
+             (next vs))
+      map)))
+
+(defn group-by
+  [f coll]
+  (reduce
+   (fn [ret x]
+     (let [k (f x)]
+       (assoc ret k (conj (get ret k []) x))))
+   {} coll))
+
+(defn partition-by [f coll]
+  (when-let [s (seq coll)]
+    (let [fst (first s)
+          fv (f fst)
+          run (cons fst (take-while #(= fv (f %)) (next s)))]
+      (cons run (partition-by f (drop (count run) s))))))
+
+(defn frequencies
+  [coll]
+  (reduce (fn [counts x]
+            (assoc counts x (inc (get counts x 0))))
+          {} coll))
+
+(defn reductions
+  ([f coll]
+   (if-let [s (seq coll)]
+     (reductions f (first s) (rest s))
+     (list (f))))
+  ([f init coll]
+   (cons init
+         (when-let [s (seq coll)]
+           (reductions f (f init (first s)) (rest s))))))
+
+(defn take-nth [n coll]
+  (when-let [s (seq coll)]
+    (cons (first s) (take-nth n (drop n s)))))
+
+(defn interleave
+  ([] ())
+  ([c1] c1)
+  ([c1 c2]
+   (let [s1 (seq c1) s2 (seq c2)]
+     (when (and s1 s2)
+       (cons (first s1) (cons (first s2)
+                              (interleave (rest s1) (rest s2)))))))
+  ([c1 c2 & colls]
+   (let [ss (map seq (conj colls c2 c1))]
+     (when (every? identity ss)
+       (concat (map first ss) (apply interleave (map rest ss)))))))
