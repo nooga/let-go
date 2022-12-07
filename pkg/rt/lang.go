@@ -1096,6 +1096,43 @@ func installLangNS() {
 		return vm.NIL, fmt.Errorf("regex expected String")
 	})
 
+	peek, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch vs[0].(type) {
+		case *vm.ArrayVector:
+			v := vs[0].(vm.ArrayVector)
+			return v[len(v)-1], nil
+		case vm.Seq:
+			return vs[0].(vm.Seq).First(), nil
+		default:
+			return vm.NIL, fmt.Errorf("peek expected Seq or Vec")
+		}
+	})
+
+	pop, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch vs[0].(type) {
+		case vm.ArrayVector:
+			v := vs[0].(vm.ArrayVector)
+			if v.RawCount() < 1 {
+				return vm.NIL, fmt.Errorf("can't pop empty vector")
+			}
+			return vm.ArrayVector(v[0 : len(v)-1]), nil
+		case vm.Seq:
+			r := vs[0].(vm.Seq).Next()
+			if r == vm.NIL {
+				return vm.NIL, fmt.Errorf("can't pop empty seq")
+			}
+			return r, nil
+		default:
+			return vm.NIL, fmt.Errorf("peek expected Seq or Vec")
+		}
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -1196,6 +1233,9 @@ func installLangNS() {
 	ns.Def("split", split)
 	ns.Def("str-replace", strReplace)
 	ns.Def("re-pattern", regex)
+
+	ns.Def("peek", peek)
+	ns.Def("pop", pop)
 
 	CoreNS = ns
 
