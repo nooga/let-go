@@ -686,3 +686,27 @@
    (let [ss (map seq (conj colls c2 c1))]
      (when (every? identity ss)
        (concat (map first ss) (apply interleave (map rest ss)))))))
+
+(defn distinct-step [xs seen]
+  ((fn [[f :as xs] seen]
+     (when-let [s (seq xs)]
+       (if (contains? seen f)
+         (recur (rest s) seen)
+         (cons f (distinct-step (rest s) (conj seen f))))))
+   xs seen))
+
+(defn distinct [coll]
+  (distinct-step coll #{}))
+
+(defn distinct?
+  ([x] true)
+  ([x y] (not (= x y)))
+  ([x y & more]
+   (if (not= x y)
+     (loop [s #{x y} [x & etc :as xs] more]
+       (if xs
+         (if (contains? s x)
+           false
+           (recur (conj s x) etc))
+         true))
+     false)))
