@@ -533,9 +533,10 @@
              s1 (seq s1)))))
 
 (defn take-while [pred coll]
-  (when-let [s (seq coll)]
-    (when (pred (first s))
-      (cons (first s) (take-while pred (rest s))))))
+  (if (empty? coll)
+    coll
+    (when (pred (first coll))
+      (cons (first coll) (take-while pred (rest coll))))))
 
 (defn drop-while [pred coll]
   (let [step (fn [pred coll]
