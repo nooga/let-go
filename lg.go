@@ -14,6 +14,7 @@ import (
 
 	"github.com/alimpfard/line"
 	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/nrepl"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -132,6 +133,19 @@ func runFile(ctx *compiler.Context, filename string) error {
 	return nil
 }
 
+var nreplServer *nrepl.NreplServer
+
+func nreplServe(ctx *compiler.Context, port int) error {
+	nreplServer = nrepl.NewNreplServer(ctx)
+	err := nreplServer.Start(port)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+var nreplPort int
+var runNREPL bool
 var runREPL bool
 var expr string
 var debug bool
@@ -140,6 +154,9 @@ func init() {
 	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
 	flag.StringVar(&expr, "e", "", "eval given expression")
 	flag.BoolVar(&debug, "d", false, "enable VM debug mode")
+	flag.BoolVar(&runNREPL, "n", false, "enable nREPL server")
+	flag.IntVar(&nreplPort, "p", 2137, "set nREPL port, default is 2137")
+
 	completionTerminators = map[byte]bool{
 		'(':  true,
 		')':  true,
@@ -210,6 +227,13 @@ func main() {
 
 	if !ranSomething || runREPL {
 		motd()
+		if runNREPL {
+			err := nreplServe(context, nreplPort)
+			if err != nil {
+				fmt.Println("failed to run nREPL server on port", nreplPort, err)
+			}
+			fmt.Printf("nREPL server running at tcp://127.0.0.1:%d\n", nreplPort)
+		}
 		repl(context)
 	}
 
