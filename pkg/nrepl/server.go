@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashicorp/go-uuid"
 	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/vm"
 	"github.com/zeebo/bencode"
 )
 
@@ -61,31 +62,41 @@ func (s *session) handle() error {
 	switch op {
 	case "eval":
 		code := m["code"].(string)
-		_, v, err := s.ctx.CompileMultiple(strings.NewReader(code))
+		var v vm.Value
+		_, v, err = s.ctx.CompileMultiple(strings.NewReader(code))
 		if err != nil {
 			fmt.Printf("Error evaluating: %s, %#v\n", code, err)
-			s.respond(m, map[string]interface{}{
+			err = s.respond(m, map[string]interface{}{
 				"err":    fmt.Sprintf("%s", err),
 				"status": []string{"eval-error"},
 			})
+			if err != nil {
+				break
+			}
 		}
 		fmt.Println("eval", code, v)
-		s.respond(m, map[string]interface{}{
+		err = s.respond(m, map[string]interface{}{
 			"value":  v.String(),
 			"ns":     s.ctx.CurrentNS().Name(),
 			"status": []string{"done"},
 		})
 	case "describe":
-		s.respond(m, s.describe)
+		err = s.respond(m, s.describe)
+	}
+	if err != nil {
+		fmt.Printf("Error responding: %#v\n", err)
+		return err
 	}
 	if m["session"] == nil {
-		s.send(map[string]interface{}{
+		err = s.send(map[string]interface{}{
 			"new-session": s.sessionID,
 			"status":      []string{"done"},
 		})
-		s.send(s.describe)
+		if err == nil {
+			err = s.send(s.describe)
+		}
 	}
-	return nil
+	return err
 }
 
 func (s *session) respond(m map[string]interface{}, o map[string]interface{}) error {
