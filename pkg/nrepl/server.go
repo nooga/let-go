@@ -2,6 +2,7 @@ package nrepl
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -190,9 +191,12 @@ func (n *NreplServer) Start(port int) error {
 						err = s.handle()
 						if err != nil {
 							fmt.Println("handle failed", err)
+							if err == io.EOF {
+								break
+							}
 						}
 					}
-					//conn.Close()
+					conn.Close()
 				}(conn)
 			}
 		}
