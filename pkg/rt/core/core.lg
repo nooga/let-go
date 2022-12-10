@@ -711,3 +711,15 @@
            (recur (conj s x) etc))
          true))
      false)))
+
+(defn nth 
+  ([coll n] (nth coll n nil))
+  ([coll n nf] 
+   (loop [c coll i n]
+     (if (> i 0) (recur (next c) (dec i)) (first c)))))
+
+(defmacro doseq [bind & body]
+  `(loop [[~(first bind) & r#] ~(second bind)]
+     (when ~(first bind)
+       ~@body
+       (recur r#))))
