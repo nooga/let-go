@@ -38,11 +38,16 @@ type Sequable interface {
 	Seq() Seq
 }
 
-// Collection is implemented by all collections
-type Collection interface {
+type Counted interface {
 	Value
 	RawCount() int
 	Count() Value
+}
+
+// Collection is implemented by all collections
+type Collection interface {
+	Value
+	Counted
 	Empty() Collection
 	Conj(Value) Collection
 }

@@ -165,6 +165,17 @@ func installLangNS() {
 		return vm.Int(ret), nil
 	})
 
+	abs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		ret := vs[0].Unbox().(int)
+		if ret < 0 {
+			ret = -ret
+		}
+		return vm.Int(ret), nil
+	})
+
 	and, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		var ret vm.Value = vm.TRUE
 		if len(vs) == 1 {
@@ -434,8 +445,7 @@ func installLangNS() {
 
 		n := seq.Next()
 
-		// FIXME move that to Seq.Next()
-		if n.(vm.Collection).Count().(vm.Int) == 0 {
+		if n == vm.EmptyList {
 			return vm.NIL, nil
 		}
 		return n, nil
@@ -473,9 +483,9 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		seq, ok := vs[0].(vm.Collection)
+		seq, ok := vs[0].(vm.Counted)
 		if !ok {
-			return vm.NIL, fmt.Errorf("count expected Collection")
+			return vm.NIL, fmt.Errorf("count expected Counted")
 		}
 		return seq.Count(), nil
 	})
@@ -1133,6 +1143,31 @@ func installLangNS() {
 		}
 	})
 
+	iterate, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		f, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("iterate expected a function")
+		}
+		return vm.NewIterate(f, vs[1]), nil
+	})
+
+	repeat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 || len(vs) > 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 1 {
+			return vm.NewRepeat(vs[0], -1), nil
+		}
+		n, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("repeat expected an Int")
+		}
+		return vm.NewRepeat(vs[1], int(n)), nil
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -1153,6 +1188,7 @@ func installLangNS() {
 	ns.Def("gt", gt)
 	ns.Def("lt", lt)
 	ns.Def("mod", mod)
+	ns.Def("abs", abs)
 
 	ns.Def("and", and)
 	ns.Def("or", or)
@@ -1236,6 +1272,9 @@ func installLangNS() {
 
 	ns.Def("peek", peek)
 	ns.Def("pop", pop)
+
+	ns.Def("iterate", iterate)
+	ns.Def("repeat", repeat)
 
 	CoreNS = ns
 
