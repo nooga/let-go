@@ -6,7 +6,7 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-//nolint
+// nolint
 func installHttpNS() {
 	// FIXME, this should box the function directly
 	handle, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {

@@ -136,12 +136,6 @@ func (c *Context) emitWithArg(op int32, arg int) {
 }
 
 func (c *Context) constant(v vm.Value) int {
-	// for i := range *c.consts {
-	// 	if (*c.consts)[i] == v {
-	// 		return i
-	// 	}
-	// }
-	// *c.consts = append(*c.consts, v)
 	return c.consts.Intern(v)
 }
 
