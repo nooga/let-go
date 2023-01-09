@@ -15,12 +15,11 @@
 
 (defn defmacro [name args & body]
   (list 'do (cons 'defn (cons name (cons args body))) (list 'set-macro! (list 'var name))))
-
 (set-macro! (var defmacro))
 
 (defmacro comment [x] nil)
 
-; define let as aliast to let* for now
+; define let as alias to let* for now
 (defmacro let [& body]
   (cons 'let* body))
 
@@ -116,6 +115,8 @@
 (defn map? [x] (= (type x) (type {})))
 (defn symbol? [x] (= (type x) (type 'x)))
 (defn keyword? [x] (= (type x) (type :x)))
+(defn string? [x] (= (type x) (type "")))
+(defn number? [x] (= (type x) (type 0)))
 
 (defn empty? [x] (zero? (count x)))
 
@@ -555,6 +556,11 @@
       (recur (conj ret (first s)) (next s))
       (seq ret))))
 
+(defn last [s]
+  (if (next s)
+    (recur (next s))
+    (first s)))
+
 (defn into [c r] (reduce conj c r))
 
 (defn keep [f coll]
@@ -572,8 +578,8 @@
         (cons x (keepi f (inc idx) (rest s)))))))
 
 (defn mapi [f idx coll]
-      (when-let [s (seq coll)]
-        (cons (f idx (first s)) (mapi f (inc idx) (rest s)))))
+  (when-let [s (seq coll)]
+    (cons (f idx (first s)) (mapi f (inc idx) (rest s)))))
 
 (defn map-indexed [f coll]
   (mapi f 0 coll))
@@ -581,7 +587,7 @@
 (defn keep-indexed [f coll]
   (keepi f 0 coll))
 
-(defn find [m key] 
+(defn find [m key]
   (when-let [v (m key)] [key v]))
 
 (defn select-keys
@@ -712,9 +718,9 @@
          true))
      false)))
 
-(defn nth 
+(defn nth
   ([coll n] (nth coll n nil))
-  ([coll n nf] 
+  ([coll n nf]
    (loop [c coll i n]
      (if (> i 0) (recur (next c) (dec i)) (first c)))))
 
