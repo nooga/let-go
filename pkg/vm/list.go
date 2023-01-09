@@ -138,6 +138,12 @@ func (l *List) ValueAtOr(key Value, dflt Value) Value {
 	li := l
 	for i := 0; i < int(numkey); i++ {
 		li = li.next
+		if li == nil {
+			return dflt
+		}
+	}
+	if li.first == nil {
+		return NIL
 	}
 	return li.first
 }
