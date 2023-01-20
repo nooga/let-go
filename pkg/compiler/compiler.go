@@ -265,7 +265,7 @@ func (c *Context) compileForm(o vm.Value) error {
 			return NewCompileError("Can't resolve " + string(o.(vm.Symbol)) + " in this context")
 		}
 		varn := c.constant(v)
-		c.emitWithArg(vm.OP_LOAD_CONST_VAR, varn)
+		c.emitWithArg(vm.OP_LOAD_VAR, varn)
 		c.incSP(1)
 	case vm.ArrayVectorType:
 		tp := c.tailPosition

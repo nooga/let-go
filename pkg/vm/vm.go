@@ -27,9 +27,8 @@ const (
 	OP_POP_N   // save top and pop n elements from the stack POP_N (n int32)
 	OP_DUP_NTH // duplicate nth value from the stack OPN (n int32)
 
-	OP_SET_VAR        // set var
-	OP_LOAD_VAR       // push var root
-	OP_LOAD_CONST_VAR // push derefed const
+	OP_SET_VAR  // set var
+	OP_LOAD_VAR // push var root
 
 	OP_MAKE_CLOSURE    // make a closure out of fn
 	OP_LOAD_CLOSEDOVER // load closed over LDK (index int32)
@@ -61,7 +60,6 @@ func OpcodeToString(op int32) string {
 		"DUP_NTH",
 		"SET_VAR",
 		"LOAD_VAR",
-		"LOAD_CONST_VAR",
 		"MAKE_CLOSURE",
 		"LOAD_CLOSEDOVER",
 		"PUSH_CLOSEDOVER",
@@ -110,7 +108,7 @@ func (c *CodeChunk) Debug() {
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 2
-		case OP_LOAD_CONST, OP_LOAD_CONST_VAR:
+		case OP_LOAD_CONST, OP_LOAD_VAR:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, "<-", consts.get(arg))
 			i += 2
@@ -461,18 +459,6 @@ func (f *Frame) Run() (Value, error) {
 			f.ip++
 
 		case OP_LOAD_VAR:
-			idx := f.sp - 1
-			if idx < 0 {
-				return NIL, NewExecutionError("LOAD_VAR stack underflow")
-			}
-			varr, ok := f.stack[idx].(*Var)
-			if !ok {
-				return NIL, NewExecutionError("LOAD_VAR invalid var on stack")
-			}
-			f.stack[idx] = varr.Deref()
-			f.ip++
-
-		case OP_LOAD_CONST_VAR:
 			idx := f.code.code[f.ip+1]
 			if int(idx) >= f.constsc {
 				return NIL, NewExecutionError("const lookup out of bounds")
