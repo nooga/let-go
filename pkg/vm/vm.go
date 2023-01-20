@@ -19,12 +19,12 @@ const (
 	OP_INVOKE // invoke function
 	OP_RETURN // return from function
 
-	OP_BRANCH_TRUE  // branch if truthy BRT (offset int32)
+	OP_BRANCH_TRUE  // branch if truthy BRANCH_TRUE (offset int32)
 	OP_BRANCH_FALSE // branch if falsy BRF (offset int32)
 	OP_JUMP         // jump by offset JMP (offset int32)
 
 	OP_POP     // pop value from the stack and discard it
-	OP_POP_N   // save top and pop n elements from the stack PON (n int32)
+	OP_POP_N   // save top and pop n elements from the stack POP_N (n int32)
 	OP_DUP_NTH // duplicate nth value from the stack OPN (n int32)
 
 	OP_SET_VAR        // set var
@@ -35,7 +35,7 @@ const (
 	OP_LOAD_CLOSEDOVER // load closed over LDK (index int32)
 	OP_PUSH_CLOSEDOVER // push closed over value to a closure
 
-	OP_RECUR    // loop recurse REC (offset int32, argc int32)
+	OP_RECUR    // loop recurse RECUR (offset int32, argc int32)
 	OP_RECUR_FN // function recurse REF (argc int32)
 
 	OP_TRACE_ENABLE  // enable tracing
@@ -381,7 +381,7 @@ func (f *Frame) Run() (Value, error) {
 			offset := f.code.code[f.ip+1]
 			v, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
+				return NIL, NewExecutionError("BRANCH_TRUE pop condition").Wrap(err)
 			}
 			if !IsTruthy(v) {
 				f.ip += 2
@@ -393,7 +393,7 @@ func (f *Frame) Run() (Value, error) {
 			offset := f.code.code[f.ip+1]
 			v, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("BRT pop condition").Wrap(err)
+				return NIL, NewExecutionError("BRANCH_FALSE pop condition").Wrap(err)
 			}
 			if IsTruthy(v) {
 				f.ip += 2
@@ -415,16 +415,16 @@ func (f *Frame) Run() (Value, error) {
 		case OP_POP_N:
 			v, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("PON top value").Wrap(err)
+				return NIL, NewExecutionError("POP_N top value").Wrap(err)
 			}
 			num := f.code.code[f.ip+1]
 			err = f.drop(int(num))
 			if err != nil {
-				return NIL, NewExecutionError("PON drop").Wrap(err)
+				return NIL, NewExecutionError("POP_N drop").Wrap(err)
 			}
 			err = f.push(v)
 			if err != nil {
-				return NIL, NewExecutionError("PON push").Wrap(err)
+				return NIL, NewExecutionError("POP_N push").Wrap(err)
 			}
 			f.ip += 2
 
@@ -432,43 +432,42 @@ func (f *Frame) Run() (Value, error) {
 			num := f.code.code[f.ip+1]
 			val, err := f.nth(int(num))
 			if err != nil {
-				return NIL, NewExecutionError("DPN get nth").Wrap(err)
+				return NIL, NewExecutionError("DUP_NTH get nth").Wrap(err)
 			}
 			err = f.push(val)
 			if err != nil {
-				return NIL, NewExecutionError("DPN push").Wrap(err)
+				return NIL, NewExecutionError("DUP_NTH push").Wrap(err)
 			}
 			f.ip += 2
 
 		case OP_SET_VAR:
 			val, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("STV pop value failed").Wrap(err)
+				return NIL, NewExecutionError("SET_VAR pop value failed").Wrap(err)
 			}
 			varr, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("STV pop var failed").Wrap(err)
+				return NIL, NewExecutionError("SET_VAR pop var failed").Wrap(err)
 			}
 			varrd, ok := varr.(*Var)
 			if !ok {
-				return NIL, NewExecutionError("STV invalid Var").Wrap(err)
+				return NIL, NewExecutionError("SET_VAR invalid Var").Wrap(err)
 			}
 			varrd.SetRoot(val)
 			err = f.push(varr)
 			if err != nil {
-				return NIL, NewExecutionError("STV push var failed").Wrap(err)
+				return NIL, NewExecutionError("SET_VAR push var failed").Wrap(err)
 			}
 			f.ip++
 
 		case OP_LOAD_VAR:
-			// note this avoids pop-push dance
 			idx := f.sp - 1
 			if idx < 0 {
-				return NIL, NewExecutionError("LDV stack underflow")
+				return NIL, NewExecutionError("LOAD_VAR stack underflow")
 			}
 			varr, ok := f.stack[idx].(*Var)
 			if !ok {
-				return NIL, NewExecutionError("LDV invalid var on stack")
+				return NIL, NewExecutionError("LOAD_VAR invalid var on stack")
 			}
 			f.stack[idx] = varr.Deref()
 			f.ip++
@@ -487,11 +486,11 @@ func (f *Frame) Run() (Value, error) {
 		case OP_MAKE_CLOSURE:
 			idx := f.sp - 1
 			if idx < 0 {
-				return NIL, NewExecutionError("MKC stack underflow")
+				return NIL, NewExecutionError("MAKE_CLOSURE stack underflow")
 			}
 			fn, ok := f.stack[idx].(*Func)
 			if !ok {
-				return NIL, NewExecutionError("MKC invalid func on stack")
+				return NIL, NewExecutionError("MAKE_CLOSURE invalid func on stack")
 			}
 			f.stack[idx] = fn.MakeClosure()
 			f.ip++
@@ -515,15 +514,15 @@ func (f *Frame) Run() (Value, error) {
 			}
 			idx := f.sp - 1
 			if idx < 0 {
-				return NIL, NewExecutionError("PAK stack overflow").Wrap(err)
+				return NIL, NewExecutionError("PUSH_CLOSEDOVER stack overflow").Wrap(err)
 			}
 			cls := f.stack[idx]
 			if cls.Type() != FuncType {
-				return NIL, NewExecutionError("PAK expected a Fn")
+				return NIL, NewExecutionError("PUSH_CLOSEDOVER expected a Fn")
 			}
 			fun, ok := cls.(*Closure)
 			if !ok {
-				return NIL, NewExecutionError("PAK invalid closure on stack")
+				return NIL, NewExecutionError("PUSH_CLOSEDOVER invalid closure on stack")
 			}
 			fun.closedOvers = append(fun.closedOvers, val)
 			f.ip++
@@ -545,15 +544,15 @@ func (f *Frame) Run() (Value, error) {
 			ignore := f.code.code[f.ip+3]
 			a, err := f.mult(0, int(argc))
 			if err != nil {
-				return NIL, NewExecutionError("REC popping arguments failed").Wrap(err)
+				return NIL, NewExecutionError("RECUR popping arguments failed").Wrap(err)
 			}
 			err = f.drop(int(argc)*2 + int(ignore))
 			if err != nil {
-				return NIL, NewExecutionError("REC popping old locals").Wrap(err)
+				return NIL, NewExecutionError("RECUR popping old locals").Wrap(err)
 			}
 			err = f.pushMult(a)
 			if err != nil {
-				return NIL, NewExecutionError("REC pushing new locals").Wrap(err)
+				return NIL, NewExecutionError("RECUR pushing new locals").Wrap(err)
 			}
 
 			f.ip -= int(offset)
