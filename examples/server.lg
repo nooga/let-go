@@ -1,9 +1,30 @@
+;
+; Copyright (c) 2022 Marcin Gasperowicz <xnooga@gmail.com>
+; SPDX-License-Identifier: MIT
+;
+
 (ns server
   'http)
 
-(http/handle "/" (fn [res req]
-                   (println (now) (:Method req) (:URL req))
-                   (.WriteHeader res 200)
+;; This is a small HTTP server example demonstrating Go interop.
+;; Roughly equivalent code in Go:
+
+;; package main
+;;
+;; import ("io"
+;;         "log"
+;;         "net/http")
+;;
+;; func main () {
+;;     h1 := func(w http.ResponseWriter, _ *http.Request) {io.WriteString (w, "Hello from Go :^(\n")}
+;;     http.HandleFunc("/", h1)
+;;     log.Fatal(http.ListenAndServe(":7070", nil))
+;; }
+
+; passing a handler written in let-go to Go's `http.HandleFunc`
+(http/handle "/" (fn [res req]                              ; we get Go objects via args
+                   (println (now) (:Method req) (:URL req)) ; this is reading Go struct fields from `rec`
+                   (.WriteHeader res 200)                   ; this is calling a Go method on `res` 
                    (.Write res "hello from let-go :^)")))
 
 (println "go to http://localhost:7070")
