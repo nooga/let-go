@@ -804,16 +804,36 @@ func defCompiler(c *Context, form vm.Value) error {
 	args := form.(*vm.List).Next().Unbox().([]vm.Value)
 	l := len(args)
 	if l != 2 {
+		fmt.Println(args)
 		return NewCompileError(fmt.Sprintf("def: wrong number of forms (%d), need 2", l))
 	}
+	var meta vm.Value = vm.NIL
 	sym := args[0]
 	val := args[1]
+	if sym.Type() == vm.ListType {
+		ss := sym.(vm.Seq)
+		if ss.First() != vm.Symbol("with-meta") {
+			return NewCompileError(fmt.Sprintf("def: first argument must be a symbol, got (%v)", sym))
+		}
+		ss = ss.Next()
+		sym = ss.First()
+		meta = ss.Next().First()
+	}
 	if sym.Type() != vm.SymbolType {
 		return NewCompileError(fmt.Sprintf("def: first argument must be a symbol, got (%v)", sym))
 	}
 	c.defName = sym.String()
-	varr := c.constant(c.CurrentNS().LookupOrAdd(sym.(vm.Symbol)))
-	c.emitWithArg(vm.OP_LOAD_CONST, varr)
+	varr := c.CurrentNS().LookupOrAdd(sym.(vm.Symbol))
+	if meta != vm.NIL {
+		m := meta.(vm.Map)
+		if m[vm.Keyword("dynamic")] == vm.TRUE {
+			varr.(*vm.Var).SetDynamic()
+		}
+		if m[vm.Keyword("private")] == vm.TRUE {
+			varr.(*vm.Var).SetPrivate()
+		}
+	}
+	c.emitWithArg(vm.OP_LOAD_CONST, c.constant(varr))
 	c.incSP(1)
 	err := c.compileForm(val)
 	if err != nil {

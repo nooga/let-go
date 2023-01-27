@@ -865,6 +865,58 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 	return form, nil
 }
 
+func readMeta(r *LispReader, _ rune) (vm.Value, error) {
+	ch, err := r.next()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading meta")
+	}
+	m := vm.Map{}
+	for {
+		switch ch {
+		case '{':
+			m2, err := readMap(r, ch)
+			if err != nil {
+				return vm.NIL, NewReaderError(r, "reading meta map")
+			}
+			for k, v := range m2.(vm.Map) {
+				m[k] = v
+			}
+		case ':':
+			k, err := readToken(r, ':')
+			if err != nil {
+				return vm.NIL, NewReaderError(r, "reading meta keyword")
+			}
+			k, err = interpretToken(r, k)
+			if err != nil {
+				return vm.NIL, NewReaderError(r, "reading meta keyword")
+			}
+			m[k] = vm.TRUE
+		default:
+			return vm.NIL, NewReaderError(r, "unsupported meta form")
+		}
+		ch, err = r.eatWhitespace()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "reading meta")
+		}
+		if ch != '^' {
+			break
+		}
+		ch, err = r.next()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "reading meta")
+		}
+	}
+	err = r.unread()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading meta")
+	}
+	form, err := r.Read()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading meta")
+	}
+	return vm.NewList([]vm.Value{vm.Symbol("with-meta"), form, m}), nil
+}
+
 func readHashMacro(r *LispReader, _ rune) (vm.Value, error) {
 	ch, err := r.next()
 	if err != nil {
@@ -922,6 +974,7 @@ func readerInit() {
 		'~':  readUnquote,
 		';':  readLineComment,
 		'#':  readHashMacro,
+		'^':  readMeta,
 	}
 
 	hashMacros = map[rune]readerFunc{

@@ -29,10 +29,10 @@ func (lt *theSymbolType) Box(bare interface{}) (Value, error) {
 	return Symbol(raw.String()), nil
 }
 
-// SymbolType is the type of SymbolValues
+// SymbolType is the type of Symbol values
 var SymbolType *theSymbolType = &theSymbolType{zero: "????BADSYMBOL????"}
 
-// Symbol is boxed int
+// Symbol is a string
 type Symbol string
 
 // Type implements Value

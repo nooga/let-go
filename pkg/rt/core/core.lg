@@ -11,6 +11,9 @@
 (def defn (fn [name args & body] (list 'def name (cons 'fn (cons args body)))))
 (set-macro! (var defn))
 
+; we don't support arbitrary meta so make this identity for now
+(defn with-meta [x _] x)
+
 (def apply apply*)
 
 (defn defmacro [name args & body]
@@ -209,7 +212,7 @@
 
 (declare destructure*)
 
-(defn destructure-vector [n v]
+(defn ^:private destructure-vector [n v]
   (loop [e v i 0 o []]
     (if (empty? e)
       (destructure* o)
@@ -219,7 +222,7 @@
           (= x :as) (recur (drop 2 e) i (conj o (second e) n))
           :else (recur (next e) (inc i) (conj o x (list 'get n i))))))))
 
-(defn destructure-map [n m]
+(defn ^:private destructure-map [n m]
   (let [gs (reduce (fn [a x] (conj a (first x) (list 'get n (second x))))
                    []
                    (map identity (dissoc m :keys :as))) ; ugly hax to get away with reducing empty map, fix reduce 
@@ -230,7 +233,7 @@
                     (reduce (fn [a x] (conj a x (list 'get n (keyword x)))) rs (:keys m))
                     rs))))
 
-(defn destructure [binds]
+(defn ^:private destructure [binds]
   (loop [b binds o [] ob []]
     (if (empty? b)
       [ob o]
@@ -246,7 +249,7 @@
                      (recur (drop 2 b) (concat-vec o md) no))
           :else (recur (drop 2 b) o (conj ob n f)))))))
 
-(defn destructure* [binds]
+(defn ^:private destructure* [binds]
   (loop [b binds o []]
     (if (empty? b)
       o
@@ -273,7 +276,7 @@
       `(loop* ~bindings ~@body))))
 
 
-(defn fn-expand [bindings body]
+(defn ^:private fn-expand [bindings body]
   (if (some (complement symbol?) bindings)
     (let [padded (reduce (fn [a x] (conj a x nil)) [] bindings)
           [bs nbs] (destructure padded)
@@ -295,6 +298,12 @@
 
 (defmacro defn [name & forms]
   `(def ~name (fn ~@forms)))
+
+(defmacro def- [name form]
+  `(def ^:private ~name ~form))
+
+(defmacro defn- [name & forms]
+  `(def ^:private ~name (fn ~@forms)))
 
 (defmacro while [test & body]
   `(loop* [] (when ~test ~@body (recur))))
@@ -570,14 +579,14 @@
         (keep f (rest s))
         (cons x (keep f (rest s)))))))
 
-(defn keepi [f idx coll]
+(defn- keepi [f idx coll]
   (when-let [s (seq coll)]
     (let [x (f idx (first s))]
       (if (nil? x)
         (keepi f (inc idx) (rest s))
         (cons x (keepi f (inc idx) (rest s)))))))
 
-(defn mapi [f idx coll]
+(defn- mapi [f idx coll]
   (when-let [s (seq coll)]
     (cons (f idx (first s)) (mapi f (inc idx) (rest s)))))
 
@@ -694,7 +703,7 @@
      (when (every? identity ss)
        (concat (map first ss) (apply interleave (map rest ss)))))))
 
-(defn distinct-step [xs seen]
+(defn- distinct-step [xs seen]
   ((fn [[f :as xs] seen]
      (when-let [s (seq xs)]
        (if (contains? seen f)

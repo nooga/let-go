@@ -42,7 +42,7 @@ func FuzzyNamespacedSymbolLookup(currentNS *vm.Namespace, s vm.Symbol) []vm.Symb
 		ns = currentNS
 	}
 	name := s.Name()
-	return vm.FuzzySymbolLookup(ns, vm.Symbol(name.(vm.String)))
+	return vm.FuzzySymbolLookup(ns, vm.Symbol(name.(vm.String)), true)
 }
 
 func NS(name string) *vm.Namespace {

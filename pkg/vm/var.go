@@ -8,11 +8,13 @@ package vm
 import "fmt"
 
 type Var struct {
-	root    Value
-	nsref   *Namespace
-	ns      string
-	name    string
-	isMacro bool
+	root      Value
+	nsref     *Namespace
+	ns        string
+	name      string
+	isMacro   bool
+	isDynamic bool
+	isPrivate bool
 }
 
 func (v *Var) Invoke(values []Value) (Value, error) {
@@ -33,11 +35,13 @@ func (v *Var) Arity() int {
 
 func NewVar(nsref *Namespace, ns string, name string) *Var {
 	return &Var{
-		nsref:   nsref,
-		ns:      ns,
-		name:    name,
-		root:    NIL,
-		isMacro: false,
+		nsref:     nsref,
+		ns:        ns,
+		name:      name,
+		root:      NIL,
+		isMacro:   false,
+		isDynamic: false,
+		isPrivate: false,
 	}
 }
 
@@ -66,6 +70,22 @@ func (v *Var) IsMacro() bool {
 	return v.isMacro
 }
 
+func (v *Var) IsDynamic() bool {
+	return v.isMacro
+}
+
+func (v *Var) IsPrivate() bool {
+	return v.isMacro
+}
+
 func (v *Var) SetMacro() {
 	v.isMacro = true
+}
+
+func (v *Var) SetDynamic() {
+	v.isDynamic = true
+}
+
+func (v *Var) SetPrivate() {
+	v.isPrivate = true
 }

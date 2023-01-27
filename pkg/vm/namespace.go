@@ -80,6 +80,9 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 			for _, ref := range n.refers {
 				v = ref.ns.registry[sym.(Symbol)]
 				if v != nil {
+					if v.isPrivate {
+						return NIL
+					}
 					return v
 				}
 			}
@@ -93,7 +96,11 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 	if refer == nil {
 		return NIL
 	}
-	return refer.ns.registry[sym.(Symbol)]
+	v := refer.ns.registry[sym.(Symbol)]
+	if v == nil || v.isPrivate {
+		return NIL
+	}
+	return v
 }
 
 func (n *Namespace) Refer(ns *Namespace, alias string, all bool) {
@@ -115,13 +122,16 @@ func (n *Namespace) String() string {
 	return fmt.Sprintf("<ns %s>", n.Name())
 }
 
-func FuzzySymbolLookup(ns *Namespace, s Symbol) []Symbol {
+func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
 	ret := []Symbol{}
 	for _, r := range ns.refers {
-		ret = append(ret, FuzzySymbolLookup(r.ns, s)...)
+		ret = append(ret, FuzzySymbolLookup(r.ns, s, false)...)
 	}
 	for k := range ns.registry {
 		if strings.HasPrefix(string(k), string(s)) {
+			if ns.registry[k].isPrivate && !lookupPrivate {
+				continue
+			}
 			ret = append(ret, k)
 		}
 	}
