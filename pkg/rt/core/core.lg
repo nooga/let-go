@@ -4,6 +4,7 @@
 ;
 
 ; let-go core library
+#?(:clj (ns core))
 
 (def fn (fn* [& body] (cons 'fn* body)))
 (set-macro! (var fn))
@@ -20,7 +21,7 @@
   (list 'do (cons 'defn (cons name (cons args body))) (list 'set-macro! (list 'var name))))
 (set-macro! (var defmacro))
 
-(defmacro comment [x] nil)
+(defmacro comment [& _] nil)
 
 ; define let as alias to let* for now
 (defmacro let [& body]
@@ -82,7 +83,7 @@
       (list 'do cns (cons 'use nss)))))
 
 ; makeshift test helper
-(def *test-flag* true)
+(def ^:dynamic *test-flag* true)
 
 (defmacro test [name & body]
   (let [bod  (cons 'do body)
@@ -311,7 +312,7 @@
 (defmacro go [& forms]
   `(go* (fn* [] ~@forms)))
 
-(defn spread
+(defn- spread
   [arglist]
   (cond
     (nil? arglist) nil
@@ -715,7 +716,7 @@
   (distinct-step coll #{}))
 
 (defn distinct?
-  ([x] true)
+  ([_] true)
   ([x y] (not (= x y)))
   ([x y & more]
    (if (not= x y)
@@ -730,8 +731,10 @@
 (defn nth
   ([coll n] (nth coll n nil))
   ([coll n nf]
-   (loop [c coll i n]
-     (if (> i 0) (recur (next c) (dec i)) (first c)))))
+   (if (or (< n 0) (>= n (count coll)))
+     nf
+     (loop [c coll i n]
+       (if (> i 0) (recur (next c) (dec i)) (first c))))))
 
 (defmacro doseq [bind & body]
   `(loop [[~(first bind) & r#] ~(second bind)]

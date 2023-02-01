@@ -41,6 +41,7 @@ const (
 	OP_TRACE_DISABLE // disable tracing
 
 	OP_MAKE_MULTI_ARITY // make multi-arity function (n int32)
+	OP_TAIL_CALL        // like OP_INVOKE but re-uses the frame
 )
 
 func OpcodeToString(op int32) string {
@@ -367,6 +368,89 @@ func (f *Frame) Run() (Value, error) {
 				if err != nil {
 					// FIXME this is an exception, we should handle it
 					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fn.String())).Wrap(err)
+				}
+			}
+			err := f.push(out)
+			if err != nil {
+				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
+			}
+			f.ip += 2
+
+		case OP_TAIL_CALL:
+			arity := f.code.code[f.ip+1]
+			var out Value
+			if arity > 0 {
+				fraw, err := f.nth(int(arity))
+				if err != nil {
+					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
+				}
+				fn, ok := fraw.(Fn)
+				if !ok {
+					return NIL, NewTypeError(fraw, "is not a function", nil)
+				}
+				a, err := f.mult(0, int(arity))
+				if err != nil {
+					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
+				}
+				if ff, ok := fn.(*Func); !ok {
+					out, err = fn.Invoke(a)
+					if err != nil {
+						// FIXME this is an exception, we should handle it
+						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fn.String())).Wrap(err)
+					}
+					err = f.drop(int(arity) + 1)
+					if err != nil {
+						return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
+					}
+				} else {
+					f.code = ff.chunk
+					f.consts = f.code.consts
+					f.constsc = f.code.consts.count()
+					f.ip = 0
+					f.sp = 0
+					if len(f.stack) < f.code.maxStack {
+						f.stack = make([]Value, f.code.maxStack)
+						f.args = a
+						f.argc = len(a)
+					} else {
+						la := len(a)
+						if la <= f.argc {
+							copy(f.args, a)
+						} else {
+							f.args = make([]Value, la)
+							copy(f.args, a)
+						}
+						f.argc = len(a)
+					}
+					continue
+				}
+			} else {
+				fraw, err := f.pop()
+				if err != nil {
+					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
+				}
+				fn, ok := fraw.(Fn)
+				if !ok {
+					return NIL, NewTypeError(fraw, "is not a function", nil)
+				}
+				if ff, ok := fn.(*Func); !ok {
+					out, err = fn.Invoke(nil)
+					if err != nil {
+						// FIXME this is an exception, we should handle it
+						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fn.String())).Wrap(err)
+					}
+				} else {
+					f.code = ff.chunk
+					f.consts = f.code.consts
+					f.constsc = f.code.consts.count()
+					f.ip = 0
+					f.sp = 0
+					if len(f.stack) < f.code.maxStack {
+						f.stack = make([]Value, f.code.maxStack)
+					}
+					f.argc = 0
+					f.args = nil
+					continue
 				}
 			}
 			err := f.push(out)

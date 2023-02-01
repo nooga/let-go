@@ -346,9 +346,9 @@ func (c *Context) compileForm(o vm.Value) error {
 			fvar := c.CurrentNS().Lookup(fnsym)
 			if fvar != vm.NIL && fvar.(*vm.Var).IsMacro() {
 				argvec := o.(*vm.List).Next().(*vm.List).Unbox().([]vm.Value)
-				newform, err := fvar.(*vm.Var).Invoke(argvec)
+				newform, err := fvar.(*vm.Var).Deref().(vm.Fn).Invoke(argvec)
 				if err != nil {
-					return NewCompileError("Executing macro failed").Wrap(err)
+					return NewCompileError(fmt.Sprintf("Executing macro %s (%s) failed", fvar, fvar.(*vm.Var).Deref())).Wrap(err)
 				}
 				return c.compileForm(newform)
 			}
@@ -373,7 +373,11 @@ func (c *Context) compileForm(o vm.Value) error {
 			args = args.Next()
 		}
 
-		c.emitWithArg(vm.OP_INVOKE, argc)
+		if tp && c.currentRecurPoint() == nil {
+			c.emitWithArg(vm.OP_TAIL_CALL, argc)
+		} else {
+			c.emitWithArg(vm.OP_INVOKE, argc)
+		}
 		c.decSP(argc)
 
 		c.tailPosition = tp
@@ -573,7 +577,7 @@ func loopCompiler(c *Context, form vm.Value) error {
 		value := binds[i+1]
 		err := c.compileForm(value)
 		if err != nil {
-			return NewCompileError("compiling let binding").Wrap(err)
+			return NewCompileError("compiling loop binding").Wrap(err)
 		}
 		c.addLocal(name.(vm.Symbol))
 		bindn++
@@ -589,7 +593,7 @@ func loopCompiler(c *Context, form vm.Value) error {
 			}
 			err := c.compileForm(b.First())
 			if err != nil {
-				return NewCompileError("compiling let body").Wrap(err)
+				return NewCompileError("compiling loop body").Wrap(err)
 			}
 			if b.Next() != vm.EmptyList {
 				c.emit(vm.OP_POP)
@@ -728,14 +732,14 @@ func fnCompiler(c *Context, form vm.Value) error {
 
 func ifCompiler(c *Context, form vm.Value) error {
 	tc := c.tailPosition
-	c.tailPosition = tc
+	//c.tailPosition = tc
 
 	args := form.(*vm.List).Next().Unbox().([]vm.Value)
 	l := len(args)
 	if l < 2 || l > 3 {
 		return NewCompileError(fmt.Sprintf("if: wrong number of forms (%d), need 2 or 3", l))
 	}
-	c.tailPosition = true
+	c.tailPosition = false
 	// compile condition
 	err := c.compileForm(args[0])
 	if err != nil {
@@ -804,7 +808,6 @@ func defCompiler(c *Context, form vm.Value) error {
 	args := form.(*vm.List).Next().Unbox().([]vm.Value)
 	l := len(args)
 	if l != 2 {
-		fmt.Println(args)
 		return NewCompileError(fmt.Sprintf("def: wrong number of forms (%d), need 2", l))
 	}
 	var meta vm.Value = vm.NIL
