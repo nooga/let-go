@@ -76,6 +76,8 @@ func fromValue(v vm.Value) (interface{}, error) {
 		return r, nil
 	case vm.KeywordType:
 		return string(v.(vm.Keyword)), nil
+	case vm.NilType:
+		return nil, nil
 	default:
 		s, ok := v.(vm.Seq)
 		if !ok {
