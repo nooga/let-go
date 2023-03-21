@@ -17,11 +17,9 @@
 
 (test "primes"
       (= 430
-         (count (time (loop [i 0 primes (list)]
-             (if (< i N)
-               (if (is-prime? i)
-                 (recur (inc i) (cons i primes))
-                 (recur (inc i) primes))
-               primes))))))
-
-
+         (count (loop [i 0 primes (list)]
+                  (if (< i N)
+                    (if (is-prime? i)
+                      (recur (inc i) (cons i primes))
+                      (recur (inc i) primes))
+                    primes)))))
