@@ -1,0 +1,11 @@
+(ns goroutines)
+
+(def n 200000)
+
+(let [begin (now)
+      state (atom 0)]
+  (dotimes [_ n]
+           (go
+             (swap! state inc)))
+  (while (< @state n))
+  (println "Spawned" @state "go blocks and finished in" (.Sub (now) begin)))
