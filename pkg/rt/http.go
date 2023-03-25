@@ -46,7 +46,10 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	bytes, err := io.ReadAll(request.Body)
 	if err != nil {
 		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf("%s", err)))
+		_, err := resp.Write([]byte(fmt.Sprintf("%s", err)))
+		if err != nil {
+			fmt.Println("HTTP Error while writing error 500", err)
+		}
 		return
 	}
 	req[vm.Keyword("body")] = vm.String(bytes)
@@ -65,14 +68,20 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	res, err := h.fn.Invoke([]vm.Value{req})
 	if err != nil {
 		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf("%s", err)))
+		_, err := resp.Write([]byte(fmt.Sprintf("%s", err)))
+		if err != nil {
+			fmt.Println("HTTP Error while writing error 500", err)
+		}
 		return
 	}
 
 	ress, ok := res.(vm.Map)
 	if !ok {
 		resp.WriteHeader(500)
-		resp.Write([]byte("handler returned malformed response"))
+		_, err := resp.Write([]byte("handler returned malformed response"))
+		if err != nil {
+			fmt.Println("HTTP Error while writing error 500", err)
+		}
 		return
 	}
 	head := resp.Header()
@@ -91,7 +100,10 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		body = vm.String("")
 	}
 	resp.WriteHeader(int(status.(vm.Int)))
-	resp.Write([]byte(body.(vm.String)))
+	_, err = resp.Write([]byte(body.(vm.String)))
+	if err != nil {
+		fmt.Println("HTTP Error while writing error 500", err)
+	}
 }
 
 // nolint
