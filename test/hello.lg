@@ -3,7 +3,11 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.hello)
+(ns test.hello
+  'test)
 
-(test "hello world"
-      (nil? (println "hello world")))
+(deftest basic
+  (testing "hello world"
+    (is (println "hello world") nil)))
+
+(run-tests basic)

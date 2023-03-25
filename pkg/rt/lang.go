@@ -464,6 +464,33 @@ func installLangNS() {
 		return n, nil
 	})
 
+	isSeq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		_, ok := vs[0].(vm.Seq)
+		return vm.Boolean(ok), nil
+	})
+
+	isColl, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		_, ok := vs[0].(vm.Collection)
+		return vm.Boolean(ok), nil
+	})
+
+	empty, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		coll, ok := vs[0].(vm.Collection)
+		if !ok {
+			return vm.NIL, fmt.Errorf("empty expected Collection")
+		}
+		return coll.Empty(), nil
+	})
+
 	get, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		vl := len(vs)
 		if vl < 2 || vl > 3 {
@@ -1211,6 +1238,10 @@ func installLangNS() {
 	ns.Def("hash-set", hashSet)
 
 	ns.Def("seq", seq)
+	ns.Def("seq?", isSeq)
+	ns.Def("coll?", isColl)
+
+	ns.Def("empty", empty)
 
 	ns.Def("assoc", assoc)
 	ns.Def("dissoc", dissoc)

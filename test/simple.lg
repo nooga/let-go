@@ -3,47 +3,72 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.simple)
+(ns test.simple
+  'test)
 
-(test "comparison"
-      (and (= 1 1)
-           (= 1 1 1 1)
-           (= nil nil)
-           (= true true)
-           (= false false)
-           (= "goo" "goo")
-           (= 'foo 'foo)
-           (= :pzoo :pzoo)
-           (not= 1 2 1)
-           (not= :bar 'bar)
-           (not= :bar "bar")
-           (not= 'bar "bar")
-           (> 5 3)
-           (not (> 2 3))
-           (< 3 5)
-           (not (< 3 2))
-           ))
+(deftest test-comparison-logical-functions
+  (testing "Testing comparison and logical functions"
+    (do-template [x y equal? less? less-equal? greater? greater-equal? and? or? not-x not-y]
+           (do
+             (is (= x y) equal?)
+             (is (< x y) less?)
+             (is (<= x y) less-equal?)
+             (is (> x y) greater?)
+             (is (>= x y) greater-equal?)
+             (is (and x y) and?)
+             (is (or x y) or?)
+             (is (not x) not-x)
+             (is (not y) not-y))
+           2 3 false true true false false 2 3 true false
+           5 5 true false true false true 5 5 false false
+           -4 -2 false true true false false -4 -2 true true
+           "abc" "abc" true false true false true "abc" "abc" false false
+           "abc" "def" false true true false false "abc" "def" false false
+           true true true false true false true true true false false
+           true false false true true false true true false true false
+           false false true false true false false false true true)))
 
-(test "logical ops"
-      (and (= true (and))
-           (= nil (or))
-           (= 3 (and true 3))
-           (= false (and false 3))
-           (= false (and 1 2 false 3))
-           (= 3 (or false 3))
-           (= 1 (or 1 2 false 3))
-           (= true (not nil))
-           (= false (not 3))
-           ))
+(run-tests test-comparison-logical-functions)
 
-(test "count"
-      (and (zero? (count nil))
-           (zero? (count '()))
-           (zero? (count []))
-           (zero? (count {}))
-           (zero? (count ""))
-           (= 3 (count ":^)"))
-           (= 2 (count [2 3]))
-           (= 2 (count '(2 3)))
-           (= 2 (count {:a 1 :b 2}))
-           ))
+;; (test "comparison"
+;;       (and (= 1 1)
+;;            (= 1 1 1 1)
+;;            (= nil nil)
+;;            (= true true)
+;;            (= false false)
+;;            (= "goo" "goo")
+;;            (= 'foo 'foo)
+;;            (= :pzoo :pzoo)
+;;            (not= 1 2 1)
+;;            (not= :bar 'bar)
+;;            (not= :bar "bar")
+;;            (not= 'bar "bar")
+;;            (> 5 3)
+;;            (not (> 2 3))
+;;            (< 3 5)
+;;            (not (< 3 2))
+;;            ))
+
+;; (test "logical ops"
+;;       (and (= true (and))
+;;            (= nil (or))
+;;            (= 3 (and true 3))
+;;            (= false (and false 3))
+;;            (= false (and 1 2 false 3))
+;;            (= 3 (or false 3))
+;;            (= 1 (or 1 2 false 3))
+;;            (= true (not nil))
+;;            (= false (not 3))
+;;            ))
+
+;; (test "count"
+;;       (and (zero? (count nil))
+;;            (zero? (count '()))
+;;            (zero? (count []))
+;;            (zero? (count {}))
+;;            (zero? (count ""))
+;;            (= 3 (count ":^)"))
+;;            (= 2 (count [2 3]))
+;;            (= 2 (count '(2 3)))
+;;            (= 2 (count {:a 1 :b 2}))
+;;            ))

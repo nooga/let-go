@@ -1,0 +1,52 @@
+(ns test)
+
+(def ^:dynamic *test-result* true)
+
+(defmacro deftest [name & body]
+  `(def ~name (fn [] ~@body)))
+
+(defmacro is [expr expected]
+  `(if (= ~expr ~expected)
+     (println "PASS" '~expr "=>" ~expected)
+     (do
+       (set! *test-result* false)
+       (println "FAIL" '~expr "\n     Expected:" ~expected "\n     Actual:" ~expr))))
+
+(defn run-tests [& tests]
+  (set! *test-result* true)
+  (println "Running tests...")
+  (doseq [t tests]
+    (t))
+  (println "Finished running tests."))
+
+(defmacro testing [description & body]
+  `(do (println "Testing:" ~description) ~@body))
+
+(defn walk
+  [inner outer form]
+  (cond
+    (list? form) (outer (apply list (map inner form)))
+    (seq? form) (outer (map inner form))
+    (coll? form) (outer (into (empty form) (map inner form)))
+    :else (outer form)))
+
+(defn postwalk
+  [f form]
+  (walk (partial postwalk f) f form))
+
+(defn postwalk-replace
+  [smap form]
+  (postwalk (fn [x] (if (contains? smap x) (smap x) x)) form))
+
+(defn apply-template
+  [argv expr values]
+  (postwalk-replace (zipmap argv values) expr))
+
+(defmacro do-template
+  [argv expr & values]
+  (let [c (count argv)]
+    `(do ~@(map (fn [a] (apply-template argv expr a))
+                (partition c values)))))
+
+(defmacro are [argv expr & args]
+  `(do-template ~argv (is ~expr) ~@args))

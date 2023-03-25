@@ -32,4 +32,8 @@ func evalInit() {
 	if err != nil {
 		panic(err)
 	}
+	_, err = Eval(rt.TestSrc)
+	if err != nil {
+		panic(err)
+	}
 }
