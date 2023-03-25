@@ -50,14 +50,15 @@ func TestRunner(t *testing.T) {
 	assert.NoError(t, err)
 	err = file.Close()
 	assert.NoError(t, err)
-	outcomeVar := rt.CoreNS.Lookup("*test-flag*").(*vm.Var)
+
+	outcomeVar := rt.NS("test").Lookup("*test-result*").(*vm.Var)
 	for f := range names {
 		fn := "./" + names[f]
 		if filepath.Ext(fn) != ".lg" {
 			continue
 		}
 		t.Run(names[f], func(t *testing.T) {
-			outcomeVar.SetRoot(vm.TRUE)
+			//outcomeVar.SetRoot(vm.TRUE)
 			err := runFile(fn)
 			assert.NoError(t, err)
 			outcome := bool(outcomeVar.Deref().(vm.Boolean))
