@@ -80,3 +80,17 @@ func TestChannels(t *testing.T) {
 		assert.Equal(t, i+1, j.Unbox())
 	}
 }
+
+func BenchmarkUse(b *testing.B) {
+	c, err := api.NewLetGo("useBenchmark")
+	if err != nil {
+		b.Fatal(err)
+	}
+	c.SetLoadPath([]string{"../../", "."})
+	for n := 0; n < b.N; n++ {
+		_, err = c.Run("(use 'tns)")
+	}
+	if err != nil {
+		b.Fatal(err)
+	}
+}

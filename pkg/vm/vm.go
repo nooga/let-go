@@ -69,6 +69,7 @@ func OpcodeToString(op int32) string {
 		"TRACE_ENABLE",
 		"TRACE_DISABLE",
 		"MAKE_MULTI_ARITY",
+		"TAIL_CALL",
 	}
 	if int(inst) < len(ops) {
 		return fmt.Sprintf("%d/%-16s", sp, ops[inst])
@@ -105,7 +106,7 @@ func (c *CodeChunk) Debug() {
 			arg3, _ := c.Get32(i + 3)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2, arg3)
 			i += 4
-		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY:
+		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY, OP_TAIL_CALL:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 2

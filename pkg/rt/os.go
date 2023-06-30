@@ -6,7 +6,9 @@
 package rt
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -14,9 +16,11 @@ import (
 // nolint
 func installOsNS() {
 	getenv, err := vm.NativeFnType.Box(os.Getenv)
-
+	execf, err := vm.NativeFnType.Box(exec.Command)
+	tempDir, err := vm.NativeFnType.Box(os.TempDir)
+	args, err := vm.ToLetGo(os.Args)
 	if err != nil {
-		panic("http NS init failed")
+		panic(fmt.Sprintf("os NS init failed: %e", err))
 	}
 
 	ns := vm.NewNamespace("os")
@@ -25,5 +29,8 @@ func installOsNS() {
 	CurrentNS = ns.Def("*ns*", ns)
 
 	ns.Def("getenv", getenv)
+	ns.Def("exec", execf)
+	ns.Def("temp-dir", tempDir)
+	ns.Def("args", args)
 	RegisterNS(ns)
 }

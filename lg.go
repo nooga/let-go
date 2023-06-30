@@ -15,6 +15,7 @@ import (
 	"github.com/alimpfard/line"
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/nrepl"
+	"github.com/nooga/let-go/pkg/resolver"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -201,6 +202,8 @@ func main() {
 	files := flag.Args()
 
 	context := initCompiler(debug)
+	nsResolver := resolver.NewNSResolver(context, []string{"."})
+	rt.SetNSLoader(nsResolver)
 
 	ranSomething := false
 	if len(files) >= 1 {
