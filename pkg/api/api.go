@@ -4,23 +4,32 @@ import (
 	"reflect"
 
 	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/resolver"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
 type LetGo struct {
-	cp *vm.Consts
-	c  *compiler.Context
+	cp     *vm.Consts
+	c      *compiler.Context
+	loader *resolver.NSResolver
 }
 
 func NewLetGo(ns string) (*LetGo, error) {
 	cp := vm.NewConsts()
 	nso := rt.NS(ns)
+	c := compiler.NewCompiler(cp, nso)
 	ret := &LetGo{
-		cp: cp,
-		c:  compiler.NewCompiler(cp, nso),
+		cp:     cp,
+		c:      c,
+		loader: resolver.NewNSResolver(c, []string{"."}),
 	}
+	rt.SetNSLoader(ret.loader)
 	return ret, nil
+}
+
+func (l *LetGo) SetLoadPath(path []string) {
+	l.loader.SetPath(path)
 }
 
 func (l *LetGo) Def(name string, value interface{}) error {

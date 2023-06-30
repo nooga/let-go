@@ -61,6 +61,10 @@ func (c *Context) CurrentNS() *vm.Namespace {
 	return rt.CurrentNS.Deref().(*vm.Namespace)
 }
 
+func (c *Context) SetCurrentNS(ns *vm.Namespace) {
+	rt.CurrentNS.SetRoot(ns)
+}
+
 func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 	r := NewLispReader(strings.NewReader(s), c.source)
 	o, err := r.Read()

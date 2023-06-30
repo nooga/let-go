@@ -20,6 +20,16 @@ import (
 
 var nsRegistry map[string]*vm.Namespace
 
+type NSLoader interface {
+	Load(string) *vm.Namespace
+}
+
+var nsLoader NSLoader
+
+func SetNSLoader(loader NSLoader) {
+	nsLoader = loader
+}
+
 func init() {
 	nsRegistry = make(map[string]*vm.Namespace)
 
@@ -58,6 +68,13 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 	e := nsRegistry[name]
 	if e != nil {
 		return e
+	}
+	if nsLoader != nil {
+		n := nsLoader.Load(name)
+		if n != nil {
+			nsRegistry[name] = n
+			return n
+		}
 	}
 	nsRegistry[name] = vm.NewNamespace(name)
 	nsRegistry[name].Refer(CoreNS, "", true)

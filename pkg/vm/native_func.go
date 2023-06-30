@@ -24,24 +24,29 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 	}
 
 	variadric := ty.IsVariadic()
-
+	declArgs := ty.NumIn()
 	v := reflect.ValueOf(fn)
 
 	proxy := func(args []Value) (Value, error) {
 		rawArgs := make([]reflect.Value, len(args))
+
 		for i := range args {
+			j := i
+			if variadric && i >= declArgs-1 {
+				j = declArgs - 1
+			}
+			in := ty.In(j)
 			if args[i] != NIL {
 				rawArgs[i] = reflect.ValueOf(args[i].Unbox())
-				// FIXME handle variadric
-				if rawArgs[i].CanConvert(ty.In(i)) {
-					rawArgs[i] = rawArgs[i].Convert(ty.In(i))
+				if rawArgs[i].CanConvert(in) {
+					rawArgs[i] = rawArgs[i].Convert(in)
 				}
 			} else {
-				//FIXME handle variadric
-				rawArgs[i] = reflect.Zero(ty.In(i))
+				rawArgs[i] = reflect.Zero(in)
 			}
 		}
 		res := v.Call(rawArgs)
+		// FIXME we know return value count upfront, so we can avoid this
 		lr := len(res)
 		if lr == 0 {
 			return NIL, nil
@@ -66,7 +71,7 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 	}
 
 	f := &NativeFn{
-		arity:       ty.NumIn(),
+		arity:       declArgs,
 		isVariadric: variadric,
 		fn:          fn,
 		proxy:       proxy,
@@ -123,11 +128,11 @@ func (l *NativeFn) Arity() int {
 }
 
 func (l *NativeFn) Invoke(args []Value) (Value, error) {
-	defer func() {
-		if err := recover(); err != nil {
-			fmt.Println("panic occurred:", err)
-		}
-	}()
+	// defer func() {
+	// 	if err := recover(); err != nil {
+	// 		fmt.Println("panic occurred:", err)
+	// 	}
+	// }()
 	ret, err := l.proxy(args)
 	return ret, err
 }

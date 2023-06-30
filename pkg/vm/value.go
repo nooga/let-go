@@ -104,6 +104,10 @@ func (t *theTypeType) Box(b interface{}) (Value, error) {
 	return NIL, NewTypeError(b, "can't be boxed as", t)
 }
 
+func ToLetGo(v interface{}) (Value, error) {
+	return BoxValue(reflect.ValueOf(v))
+}
+
 func BoxValue(v reflect.Value) (Value, error) {
 	if !v.IsValid() {
 		return NIL, NewTypeError(v, "can't be boxed", nil)
@@ -128,11 +132,20 @@ func BoxValue(v reflect.Value) (Value, error) {
 			return NIL, nil
 		}
 		// FIXME check if this is how we should handle pointers
-		return BoxValue(v.Elem())
+		//return BoxValue(v.Elem())
+		if v.CanInterface() {
+			return NewBoxed(v.Interface()), nil
+		}
+		return NIL, NewTypeError(v, "is not boxable", nil)
 	case reflect.Slice, reflect.Array:
 		if v.IsNil() {
 			// FIXME not sure if maybe this has to be empty coll in let-go-land
 			return NIL, nil
+		}
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			// special case: convert []byte to string
+			// TODO: come up with a let-go representation of byte arrays
+			return String(v.Bytes()), nil
 		}
 		in := make([]Value, v.Len())
 		for i := 0; i < v.Len(); i++ {
