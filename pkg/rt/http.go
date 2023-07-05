@@ -8,6 +8,7 @@ package rt
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"strings"
 
