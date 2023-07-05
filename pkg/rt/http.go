@@ -106,6 +106,35 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	}
 }
 
+func request(args []vm.Value) (vm.Value, error) {
+	method := args[0].(vm.Map)[vm.Keyword("method")].(vm.Keyword)
+	url := args[1].(vm.String)
+
+	var resp *http.Response
+	var err error
+
+	switch method {
+	case vm.Keyword("get"):
+		resp, err = http.Get(string(url))
+	case vm.Keyword("post"):
+		resp, err = http.Post(string(url), "", nil)
+	default:
+		return vm.NIL, vm.NewExecutionError("unsupported method: " + string(method))
+	}
+
+	if err != nil {
+		return vm.NIL, err
+	}
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return vm.NIL, err
+	}
+
+	return vm.String(body), nil
+}
+
 // nolint
 func installHttpNS() {
 	// FIXME, this should box the function directly
@@ -148,6 +177,11 @@ func installHttpNS() {
 		panic("http NS init failed")
 	}
 
+	requestFn, err := vm.NativeFnType.Wrap(request)
+	if err != nil {
+		panic("http NS init failed")
+	}
+
 	ns := vm.NewNamespace("http")
 
 	// vars
@@ -156,5 +190,7 @@ func installHttpNS() {
 	ns.Def("handle", handle)
 	ns.Def("serve", serve)
 	ns.Def("serve2", serve2)
+	ns.Def("request", requestFn)
 	RegisterNS(ns)
 }
+
