@@ -128,5 +128,4 @@ func TestReaderBasicError(t *testing.T) {
 	_, err := r.readToken()
 	assert.Error(t, err)
 }
-</user_code>
 
