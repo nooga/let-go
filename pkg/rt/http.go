@@ -8,7 +8,6 @@ package rt
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"strings"
 
@@ -43,7 +42,6 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	}
 	req[vm.Keyword("uri")] = vm.String(url.RequestURI())
 	req[vm.Keyword("query-string")] = vm.String(url.RawQuery)
-	defer request.Body.Close()
 	bytes, err := io.ReadAll(request.Body)
 	if err != nil {
 		resp.WriteHeader(500)
@@ -126,9 +124,7 @@ func request(args []vm.Value) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, err
 	}
-
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return vm.NIL, err
 	}
