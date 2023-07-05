@@ -68,3 +68,57 @@ func TestSimpleCall(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, out, o)
 }
+
+func TestReadToken(t *testing.T) {
+	r := NewLispReader(strings.NewReader("(foo bar)"), "<reader>")
+	token, err := r.readToken()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.Symbol("foo"), token)
+
+	token, err = r.readToken()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.Symbol("bar"), token)
+}
+
+func TestReadNumber(t *testing.T) {
+	r := NewLispReader(strings.NewReader("(123 456)"), "<reader>")
+	number, err := r.readNumber()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.Int(123), number)
+
+	number, err = r.readNumber()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.Int(456), number)
+}
+
+func TestReadString(t *testing.T) {
+	r := NewLispReader(strings.NewReader("(\"hello\" \"world\")"), "<reader>")
+	str, err := r.readString()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.String("hello"), str)
+
+	str, err = r.readString()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.String("world"), str)
+}
+
+func TestReadChar(t *testing.T) {
+	r := NewLispReader(strings.NewReader("(\\a \\b)"), "<reader>")
+	ch, err := r.readChar()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.Char('a'), ch)
+
+	ch, err = r.readChar()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.Char('b'), ch)
+}
+
+func TestReadError(t *testing.T) {
+	r := NewLispReader(strings.NewReader("(foo \\x)"), "<reader>")
+	_, err := r.readToken()
+	assert.NoError(t, err)
+
+	_, err = r.readChar()
+	assert.Error(t, err)
+}
+
