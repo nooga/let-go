@@ -1,7 +1,7 @@
 run: build
 	./lg
-
-build: lg.go pkg/**/*
+build: lg.go pkg/compiler/**/* pkg/**/*
+	go build -ldflags="-s -w" -o lg .
 	go build -ldflags="-s -w" -o lg .
 
 test: pkg/**/*
@@ -15,3 +15,4 @@ lint: install-golangci-lint
 
 install-golangci-lint:
 	which golangci-lint || GO111MODULE=off go get -u github.com/golangci/golangci-lint/cmd/golangci-lint
+
