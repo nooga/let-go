@@ -122,3 +122,11 @@ func TestReadError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// Fix the deleted closing bracket
+func TestReaderBasicError(t *testing.T) {
+	r := NewLispReader(strings.NewReader("(foo"), "<reader>")
+	_, err := r.readToken()
+	assert.Error(t, err)
+}
+</user_code>
+
