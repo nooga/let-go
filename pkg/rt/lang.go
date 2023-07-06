@@ -81,6 +81,16 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 	return nsRegistry[name]
 }
 
+func LookupOrRegisterNSNoLoad(name string) *vm.Namespace {
+	e := nsRegistry[name]
+	if e != nil {
+		return e
+	}
+	nsRegistry[name] = vm.NewNamespace(name)
+	nsRegistry[name].Refer(CoreNS, "", true)
+	return nsRegistry[name]
+}
+
 //go:embed core/core.lg
 var CoreSrc string
 
@@ -168,7 +178,18 @@ func installLangNS() {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		ret, err := vm.BooleanType.Box(vs[0].Unbox().(int) < vs[1].Unbox().(int))
+
+		a, ok := vs[0].Unbox().(int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("can't cast %s to number", vs[0].Type().Name())
+		}
+
+		b, ok := vs[1].Unbox().(int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("can't cast %s to number", vs[1].Type().Name())
+		}
+
+		ret, err := vm.BooleanType.Box(a < b)
 		if err != nil {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -744,7 +765,7 @@ func installLangNS() {
 		if sym.Type() != vm.SymbolType {
 			return vm.NIL, fmt.Errorf("in-ns expected Symbol")
 		}
-		nns := LookupOrRegisterNS(string(sym.(vm.Symbol)))
+		nns := LookupOrRegisterNSNoLoad(string(sym.(vm.Symbol)))
 		CurrentNS.SetRoot(nns)
 		return nns, nil
 	})
