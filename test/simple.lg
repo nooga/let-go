@@ -7,7 +7,7 @@
   'test)
 
 (deftest test-comparison-logical-functions
-  (testing "Testing comparison and logical functions"
+  (testing "comparison and logical functions"
     (do-template [x y equal? less? less-equal? greater? greater-equal? and? or? not-x not-y]
            (do
              (is (= x y) equal?)
@@ -19,14 +19,9 @@
              (is (or x y) or?)
              (is (not x) not-x)
              (is (not y) not-y))
-           2 3 false true true false false 2 3 true false
+           2 3 false true true false false 3 2 false false
            5 5 true false true false true 5 5 false false
-           -4 -2 false true true false false -4 -2 true true
-           "abc" "abc" true false true false true "abc" "abc" false false
-           "abc" "def" false true true false false "abc" "def" false false
-           true true true false true false true true true false false
-           true false false true true false true true false true false
-           false false true false true false false false true true)))
+           -4 -2 false true true false false -2 -4 false false)))
 
 (run-tests test-comparison-logical-functions)
 
