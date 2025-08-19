@@ -22,6 +22,7 @@ This roadmap consolidates our existing plans for VM performance, Clojure-like co
 ### Phase 0 — Baseline semantics, numeric fast paths, and benchmarks
 
 Scope:
+
 - Introduce interfaces to align with Clojure and enable later features:
   - `Equivable`, `Hashable`, `Indexed`, `Stack`, `IMapEntry`, `Reducible`, `Reduced` in `pkg/vm/value.go`.
 - Update builtins to coerce via `seq` and support `nil` like Clojure (`first`, `next`, `more`, `rest`, `seq`, `count`, `peek`, `pop`, `conj`, `contains?`, `get`).
@@ -35,6 +36,7 @@ Scope:
 Dependencies: none.
 
 Acceptance:
+
 - Tests for seq coercion and `(count nil)` pass across core types.
 - Benchmarks added: arithmetic loops, seq ops baselines; perf budgets recorded.
 - Numeric primitives show fewer allocations and improved ns/op over baseline.
@@ -44,6 +46,7 @@ References: `docs/clojurelike-refactor-plan.md` (Phase 0), `docs/value-represent
 ### Phase 1 — VM calling convention and memory retention fixes
 
 Scope (see `docs/vm-performance-optimization.md`):
+
 - Copy argument slices before entering bytecode callees, including tail-call growth branch.
 - Extend TCO to closures (`*Closure`) in `OP_TAIL_CALL`.
 - Add frame/stack pooling with `sync.Pool` and reset lifecycle.
@@ -53,6 +56,7 @@ Scope (see `docs/vm-performance-optimization.md`):
 Dependencies: Phase 0 (interface changes might be referenced by reducers later, but VM changes are largely independent).
 
 Acceptance:
+
 - Tail-recursive functions (including closures) do not grow stack; allocations reduced vs baseline.
 - Call-heavy microbenchmarks improve (>30% fewer allocs, measurable ns/op reduction).
 - No retention via arg slices in pprof heap; frame/stack pools show reuse.
@@ -60,6 +64,7 @@ Acceptance:
 ### Phase 2 — PersistentVector (BPTR) + transients; switch reader for vectors
 
 Scope (see `docs/clojurelike-refactor-plan.md`):
+
 - Reimplement `PersistentVector` as canonical 32-ary BPTR with `Nth`, `AssocN`, `Conj`, `Pop`, `Peek`, `Seq`.
 - Implement `TransientVector` with edit token; `conj!`, `assoc!`, `pop!`.
 - Reader: vector literals produce `PersistentVector`. Keep `ArrayVector` for interop and builders.
@@ -68,6 +73,7 @@ Scope (see `docs/clojurelike-refactor-plan.md`):
 Dependencies: Phase 0 (interfaces, semantics). Phase 1 optional but beneficial for end-to-end perf.
 
 Acceptance:
+
 - Boundary tests (31/32/33, multiples of 32) pass; seq traversal correct.
 - `into [] xs` fast path leverages transients with clear wins over baseline.
 - Benchmarks show competitive performance for random access and append vs previous vector.
@@ -75,6 +81,7 @@ Acceptance:
 ### Phase 3 — PersistentHashMap/Set, structural equality and hashing
 
 Scope:
+
 - Implement `Equiv`/`Hash` for all scalar and collection types.
 - Implement `PersistentHashMap` (HAMT) + `TransientHashMap`; `PersistentHashSet` backed by map + transient variant.
 - Reader: map/set literals return persistent versions; constructors `hash-map`, `hash-set` updated.
@@ -83,6 +90,7 @@ Scope:
 Dependencies: Phase 0 (interfaces), and vector for deterministic image encoding in Phase 5.
 
 Acceptance:
+
 - Equality/hash tests pass across heterogeneous types and different insertion orders.
 - Map/set correctness: assoc/dissoc, collision handling, membership, `find`.
 - Deterministic seq order for serialization achieved (stable encoding independent of Go map order).
@@ -90,6 +98,7 @@ Acceptance:
 ### Phase 4 — Transducers and reduction fast paths
 
 Scope:
+
 - Add transducer APIs: `transduce`, `eduction`, `sequence`, `completing` in `pkg/rt/lang.go` and `pkg/rt/core/core.lg`.
 - Implement `Reducible` for vectors and ranges; add `Reduced` early-termination.
 - Add `ChunkedSeq` for vectors/ranges to reduce per-element overhead.
@@ -98,12 +107,14 @@ Scope:
 Dependencies: Phase 2 (vectors) and optionally Phase 3 (for equality-dependent ops).
 
 Acceptance:
+
 - Pipelines like `(into [] (comp (map inc) (filter odd?)) xs)` allocate O(1) and run faster than seq-based pipelines.
 - Benchmarks show 2–3x improvement on common reduce/transduce patterns vs baseline.
 
 ### Phase 5 — Runtime images and precompiled stdlib
 
 Scope (see `docs/runtime-image-and-stdlib-cache.md`):
+
 - Define image schema and versioning; implement value, const-pool, code, namespace, and var serialization.
 - Implement host/native extern resolution via `HostRegistry`.
 - Build `stdlib.img` during build; boot attempts image before compilation; fallback on mismatch.
@@ -113,12 +124,14 @@ Scope (see `docs/runtime-image-and-stdlib-cache.md`):
 Dependencies: Phase 2 and 3 (persistent collections) for determinism; Phase 1 (VM code chunk stability).
 
 Acceptance:
+
 - Cold start with stdlib image < 50 ms; fallback path regenerates image when invalidated.
 - Round-trip tests for values/code/vars; extern resolution verified; security validations in place.
 
 ### Phase 6 — Tooling, interop, and developer experience
 
 Scope:
+
 - Solidify `pkg/nrepl` server ergonomics and error reporting.
 - Audit all `pkg/rt/lang.go` registrations to ensure fast-native wrappers; document interop patterns and when to use `Box`.
 - Improve error messages for transients misuse and `seq` coercions.
@@ -127,11 +140,28 @@ Scope:
 Dependencies: after Phase 5 for best UX.
 
 Acceptance:
+
 - Smooth REPL and editor integration; quick startup in WASM demo; clear interop docs.
 
-### Phase 7 — Advanced performance polish
+### Phase 7 — Go AOT backend (optional, high-impact)
+
+Scope (see `docs/go-aot-backend.md`):
+
+- Add a second backend that compiles let-go code to Go while keeping the runtime and `Var` interop intact.
+- Start with the embedding tier (bytecode/consts as Go data registering into `Var`s), then progress to native lowering of hot functions to Go.
+- Ensure dynamic `eval` continues to target the same `Var`s so compiled and interpreted code mix.
+
+Dependencies: Phases 0–4 for semantics and performance parity; Phase 5 optional (images become less critical when embedding tier exists).
+
+Acceptance:
+
+- Mixed execution: compiled code calls interpreted functions and vice versa via shared `Var`s.
+- Measurable speedups on call-heavy code vs interpreter; semantics preserved under var redefinition (unless annotated `^:const`).
+
+### Phase 8 — Advanced performance polish
 
 Scope:
+
 - Finish `ChunkedSeq` across collections; add reducer fast paths for maps/sets as needed.
 - Optimize iteration utilities (`range`, `repeat`, `iterate`) with tight loops and `Reducible`.
 - Consider specialized opcodes for common sequence ops if warranted by profiles.
@@ -140,19 +170,38 @@ Scope:
 Dependencies: prior phases complete; driven by profiling.
 
 Acceptance:
+
 - Profiles of real programs show minimal interpreter overhead dominating, with near-zero allocations for common loops.
+
+### Phase 9 — Register-based VM (optional, experimental)
+
+Scope (see `docs/register-vm.md`):
+
+- Introduce a register-based bytecode and interpreter alongside the current stack VM.
+- Compiler emits register bytecode with baked-in register indices; interpreter uses a pre-sized register file per function.
+- Dual-mode operation so existing code continues to run; per-namespace/function flag to select backend.
+
+Dependencies: Phases 0–4 for semantics; Phase 1 (VM optimizations) as baseline; Phase 5 (image schema) to extend with code-kind flag.
+
+Acceptance:
+
+- Clear microbenchmark improvements (> 20% on call-heavy code) vs optimized stack VM.
+- Compatibility: mixed stack/reg code interoperates; runtime images support both kinds.
 
 ## Cross-cutting: benchmarks, CI, and risk management
 
 Benchmarks to maintain:
+
 - Micro: call overhead (arity 0–3 vs generic), TCO recursion, vector ops (conj/assoc/pop/seq), HAMT map ops, numeric arithmetic, transducer pipelines.
 - End-to-end: `into []` with composed transforms, HTTP JSON handling via natives, REPL cold/warm start.
 
 CI gates:
+
 - Record baseline ns/op and allocs/op; alert on >10% regressions in hot benchmarks.
 - Add `go test -bench` jobs and simple perf dashboards; run pprof sampling periodically.
 
 Risks and mitigations:
+
 - Opcode proliferation complexity → keep generic slow path; add exhaustive tests for arity-specialized ops.
 - Persistent data structure correctness → comprehensive boundary tests and randomized property tests.
 - Image format lock-in → versioned schema and strict validation; maintain migration path.
@@ -160,17 +209,20 @@ Risks and mitigations:
 ## Immediate workboard (next actions)
 
 - Phase 0
+
   - Add interfaces in `pkg/vm/value.go` and adapters in builtins (`pkg/rt/lang.go`).
   - Implement `MapEntry`; update map `conj` semantics.
   - Numeric fast paths and `Int.String()` change.
   - Add initial benchmarks: arithmetic loops; seq coercion scenarios.
 
 - Phase 1
+
   - Implement arg copy in `OP_INVOKE`/`OP_TAIL_CALL` and tail-call growth.
   - Add closure TCO; frame/stack pools; small-arity opcodes and compiler emission.
   - Benchmarks: call overhead, recursion, memory profiles.
 
 - Phase 2–4
+
   - PersistentVector + transients and reader switch; then HAMT map/set + transients and reader switch; then transducers and chunked seqs.
 
 - Phase 5
@@ -193,7 +245,7 @@ Risks and mitigations:
 - `map`/`filter`/`reduce` pipeline on `PersistentVector 1e6`:
   - Allocations: O(1) with transducers; ns/op improved by 2–3x vs baseline seq pipeline.
 - Call-heavy microbenchmark (100M nullary calls):
-  - >25% ns/op reduction; >50% allocs/op reduction vs baseline.
+  - > 25% ns/op reduction; >50% allocs/op reduction vs baseline.
 - Vector ops (conj/assoc/pop/peek at boundaries):
   - Parity with Clojure algorithms; stable across edge cases.
 
@@ -203,5 +255,3 @@ Risks and mitigations:
 - `docs/clojurelike-refactor-plan.md`
 - `docs/value-representation-and-numeric-performance.md`
 - `docs/runtime-image-and-stdlib-cache.md`
-
-
