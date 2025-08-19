@@ -4,7 +4,7 @@
 ;
 
 ; let-go core library
-#?(:clj (ns core))
+(ns core)
 
 (def fn (fn* [& body] (cons 'fn* body)))
 (set-macro! (var fn))
@@ -75,12 +75,30 @@
 (defmacro case [arg & forms]
   (concat-list (list 'condp '= arg) forms))
 
-(defmacro ns [n & nss]
-  (let [cns     (list 'in-ns (list 'quote n))]
-    ; FIXME this is not clojure syntax at all
-    (if (empty? nss)
-      cns
-      (list 'do cns (cons 'use nss)))))
+(defmacro ns [n & body]
+  (let [cns     (list 'in-ns (list 'quote n))
+        process-require (fn [form]
+                         (when (and (seq? form) (= :require (first form)))
+                           (map (fn [req]
+                                 (cond
+                                   (symbol? req)
+                                   (list 'use (list 'quote req))
+                                   
+                                   (and (seq? req) (symbol? (first req)))
+                                   (let [ns-name (first req)
+                                         opts (apply hash-map (rest req))
+                                         as (:as opts)
+                                         refer (:refer opts)]
+                                     (if as
+                                       (list 'core/refer (list 'quote ns-name) (str as) true)
+                                       (list 'use (list 'quote ns-name))))
+                                   
+                                   :else nil))
+                               (rest form))))
+        requires (mapcat process-require body)]
+    `(do
+       ~cns
+       ~@requires)))
 
 ; makeshift test helper
 (def ^:dynamic *test-flag* true)

@@ -1,0 +1,10 @@
+(ns day1)
+
+(def input (->> "input/1.txt" slurp lines (map #(split % "   "))))
+(def a (map (comp parse-long first) input))
+(def b (map (comp parse-long second) input))
+
+(println "1:" (reduce + (map #(abs (- %1 %2)) (sort a) (sort b))))
+
+(println "2:" (let [f (frequencies b)]
+                (reduce + (map #(* % (or (f %) 0)) a))))

@@ -1,0 +1,17 @@
+(def input (->> "input/2.txt" slurp lines (map (fn [l] (map parse-long (split l " "))))))
+
+(defn signum [x]
+  (cond
+    (< x 0) -1
+    (> x 0) 1
+    :else 0))
+
+(defn safe? [pd ls]
+  (let [d (map - (next ls) ls)
+        s (signum (first d))
+        l (map #(and (= (signum %) s) (>= (abs %) 1) (<= (abs %) 3)) d)]
+    (println l)
+    (<= (count (filter not l)) pd)))
+
+(println "1:" (->> input (filter (partial safe? 0)) count))
+(println "2:" (->> input (filter (partial safe? 1)) count))

@@ -1162,6 +1162,16 @@ func installLangNS() {
 		return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 	})
 
+	char, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments")
+		}
+		if i, ok := vs[0].(vm.Int); ok {
+			return vm.Char(rune(i)), nil
+		}
+		return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
+	})
+
 	regex, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -1232,6 +1242,31 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("repeat expected an Int")
 		}
 		return vm.NewRepeat(vs[1], int(n)), nil
+	})
+
+	refer, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 || len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		cns := CurrentNS.Deref().(*vm.Namespace)
+		s, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("refer expected Symbol")
+		}
+		alias := ""
+		if len(vs) > 1 {
+			if str, ok := vs[1].(vm.String); ok {
+				alias = string(str)
+			}
+		}
+		all := true
+		if len(vs) > 2 {
+			if b, ok := vs[2].(vm.Boolean); ok {
+				all = bool(b)
+			}
+		}
+		cns.Refer(NS(string(s)), alias, all)
+		return vm.NIL, nil
 	})
 
 	if err != nil {
@@ -1334,6 +1369,7 @@ func installLangNS() {
 	ns.Def("<!", changet)
 
 	ns.Def("int", intf)
+	ns.Def("char", char)
 
 	ns.Def("str", str)
 	ns.Def("split", split)
@@ -1345,6 +1381,8 @@ func installLangNS() {
 
 	ns.Def("iterate", iterate)
 	ns.Def("repeat", repeat)
+
+	ns.Def("refer", refer)
 
 	CoreNS = ns
 

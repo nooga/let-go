@@ -1,0 +1,7 @@
+(apply println
+       (map (comp first
+                  (partial drop-while empty?)
+                  (juxt #(str (if (zero? (mod % 3)) "Fizz" "")
+                              (if (zero? (mod % 5)) "Buzz" ""))
+                        str))
+            (range 1 100)))
