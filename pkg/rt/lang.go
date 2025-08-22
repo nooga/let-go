@@ -331,6 +331,35 @@ func installLangNS() {
 		return vm.NIL, nil // TODO is this an error?
 	})
 
+	// symbol(name) or symbol(ns, name)
+	symbolf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 || len(vs) > 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		toStr := func(v vm.Value) (string, bool) {
+			switch s := v.(type) {
+			case vm.String:
+				return string(s), true
+			case vm.Symbol:
+				return string(s), true
+			default:
+				return "", false
+			}
+		}
+		if len(vs) == 1 {
+			if s, ok := toStr(vs[0]); ok {
+				return vm.Symbol(s), nil
+			}
+			return vm.NIL, fmt.Errorf("symbol expected String or Symbol")
+		}
+		nsStr, ok1 := toStr(vs[0])
+		nameStr, ok2 := toStr(vs[1])
+		if !ok1 || !ok2 {
+			return vm.NIL, fmt.Errorf("symbol expected String or Symbol")
+		}
+		return vm.Symbol(nsStr + "/" + nameStr), nil
+	})
+
 	assoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 3 || len(vs)%2 == 0 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -785,6 +814,54 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
+	aliasf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		al, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("alias expected Symbol")
+		}
+		nsSym, ok := vs[1].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("alias expected Symbol")
+		}
+		cns := CurrentNS.Deref().(*vm.Namespace)
+		target := NS(string(nsSym))
+		// fmt.Printf("[aliasf] in ns=%s set alias %q -> %s\n", cns.Name(), string(al), target.Name())
+		cns.Alias(al, target)
+		return vm.NIL, nil
+	})
+
+	referList, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		nsSym, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("refer-list expected ns Symbol")
+		}
+		arr, ok := vs[1].(vm.ArrayVector)
+		if !ok {
+			return vm.NIL, fmt.Errorf("refer-list expected vector of Symbols")
+		}
+		syms := make([]vm.Symbol, 0, len(arr))
+		for i := range arr {
+			if s, ok := arr[i].(vm.Symbol); ok {
+				syms = append(syms, s)
+			}
+		}
+		cns := CurrentNS.Deref().(*vm.Namespace)
+		target := NS(string(nsSym))
+		// Convert []vm.Symbol to []vm.Symbol type alias in vm
+		vmSyms := make([]vm.Symbol, len(syms))
+		copy(vmSyms, syms)
+		cns.ReferList(target, vmSyms)
+		return vm.NIL, nil
+	})
+
+	// removed resolve-var helper (prefer compile-time resolution)
+
 	now, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NewBoxed(time.Now()), nil
 	})
@@ -838,6 +915,7 @@ func installLangNS() {
 		return r, nil
 	})
 
+	// slurp (reintroduced)
 	slurp, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -1278,6 +1356,26 @@ func installLangNS() {
 	// vars
 	CurrentNS = ns.Def("*ns*", ns)
 
+	// Bootstrap no-op ns macro so source files can declare namespaces before core macro is loaded.
+	// Expands (ns name ...) to (in-ns 'name), ignoring options.
+	nsMacro, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, nil
+		}
+		nameSym, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.NIL, nil
+		}
+		quoteSym := vm.Symbol("quote")
+		inNsSym := vm.Symbol("in-ns")
+		quoted := vm.EmptyList.Cons(nameSym).Cons(quoteSym)
+		form := vm.EmptyList.Cons(quoted).Cons(inNsSym)
+		return form, nil
+	})
+	// Mark as macro
+	_ = ns.Def("ns", nsMacro)
+	(ns.Lookup("ns").(*vm.Var)).SetMacro()
+
 	// FIXME implement the primitives in let-go later on and clean up this mess
 	// primitive fns
 	ns.Def("+", plus)
@@ -1299,6 +1397,7 @@ func installLangNS() {
 	ns.Def("gensym", gensym)
 	ns.Def("in-ns", inNs)
 	ns.Def("use", use)
+	ns.Def("alias", aliasf)
 	ns.Def("name", name)
 	ns.Def("namespace", namespace)
 
@@ -1308,10 +1407,13 @@ func installLangNS() {
 	ns.Def("list", list)
 	ns.Def("range", rangef)
 	ns.Def("keyword", keyword)
+	ns.Def("symbol", symbolf)
 	ns.Def("hash-set", hashSet)
 
 	ns.Def("seq", seq)
 	ns.Def("seq?", isSeq)
+
+	// basic predicates needed during early core bootstrap
 	ns.Def("coll?", isColl)
 
 	ns.Def("empty", empty)
@@ -1375,14 +1477,15 @@ func installLangNS() {
 	ns.Def("split", split)
 	ns.Def("str-replace", strReplace)
 	ns.Def("re-pattern", regex)
+	// namespace utilities
+	ns.Def("refer-list", referList)
+	ns.Def("refer", refer)
 
 	ns.Def("peek", peek)
 	ns.Def("pop", pop)
 
 	ns.Def("iterate", iterate)
 	ns.Def("repeat", repeat)
-
-	ns.Def("refer", refer)
 
 	CoreNS = ns
 

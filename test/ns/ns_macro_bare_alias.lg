@@ -1,0 +1,11 @@
+
+(ns tmp.bare_alias (:require core [core :as c] [test :refer :all]))
+
+(deftest ns-bare-and-alias
+  (testing "ns with bare symbol and alias together"
+    (is (not (nil? (var c/+))) true)
+    (is (not (nil? (var +))) true)))
+
+(run-tests ns-bare-and-alias)
+
+

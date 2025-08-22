@@ -75,30 +75,7 @@
 (defmacro case [arg & forms]
   (concat-list (list 'condp '= arg) forms))
 
-(defmacro ns [n & body]
-  (let [cns     (list 'in-ns (list 'quote n))
-        process-require (fn [form]
-                         (when (and (seq? form) (= :require (first form)))
-                           (map (fn [req]
-                                 (cond
-                                   (symbol? req)
-                                   (list 'use (list 'quote req))
-                                   
-                                   (and (seq? req) (symbol? (first req)))
-                                   (let [ns-name (first req)
-                                         opts (apply hash-map (rest req))
-                                         as (:as opts)
-                                         refer (:refer opts)]
-                                     (if as
-                                       (list 'core/refer (list 'quote ns-name) (str as) true)
-                                       (list 'use (list 'quote ns-name))))
-                                   
-                                   :else nil))
-                               (rest form))))
-        requires (mapcat process-require body)]
-    `(do
-       ~cns
-       ~@requires)))
+; moved below to ensure dependencies are available during compilation
 
 ; makeshift test helper
 (def ^:dynamic *test-flag* true)
@@ -186,6 +163,53 @@
 
 (defn mapcat [f xs]
   (reduce (fn [a x] (concat-list a x)) '() (map f xs)))
+
+(defmacro ns [n & body]
+  (let [emit-one (fn [forms req]
+                   (cond
+                     (symbol? req)
+                     (conj forms (list 'use (list 'quote req)))
+
+                     (and (seq? req) (symbol? (first req)))
+                     (let [lib    (first req)
+                           opts   (apply hash-map (rest req))
+                           as     (:as opts)
+                           refer  (:refer opts)
+                           rename (:rename opts)
+                           forms  (if as (conj forms (list 'core/alias (list 'quote as) (list 'quote lib))) forms)
+                           forms  (if (= refer :all)
+                                    (conj forms (list 'core/refer (list 'quote lib) "" true))
+                                    forms)
+                           forms  (if (and refer (not= refer :all))
+                                    (conj forms (list 'core/refer-list (list 'quote lib)
+                                                      (vec (map (fn [s] (list 'quote s)) refer))))
+                                    forms)
+                           forms  (if rename
+                                    (reduce (fn [f p]
+                                              (let [from (first p) to (second p)]
+                                                (conj f (list 'def to (list 'var (symbol (str lib "/" from)))))))
+                                            forms
+                                            rename)
+                                    forms)]
+                       forms)
+
+                     :else forms))
+        reqs     (mapcat (fn [form]
+                           (if (and (seq? form) (= :require (first form)))
+                             (rest form)
+                             '()))
+                         body)
+        req-forms (reduce emit-one [] reqs)
+        legacy    (reduce (fn [acc form]
+                            (if (and (seq? form) (= 'quote (first form)) (symbol? (second form)))
+                              (conj acc (list 'use form))
+                              acc))
+                          []
+                          body)]
+    `(do
+       (in-ns '~n)
+       ~@req-forms
+       ~@legacy)))
 
 (defn filter [f xs]
   (if xs

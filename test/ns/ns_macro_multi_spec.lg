@@ -1,0 +1,11 @@
+
+(ns tmp.multispec (:require [core :as c] [core :refer :all] [test :refer :all]))
+
+(deftest ns-multiple-libspecs-single
+  (testing "ns with multiple libspecs in a single require"
+    (is (not (nil? (var c/+))) true)
+    (is (not (nil? (var +))) true)))
+
+(run-tests ns-multiple-libspecs-single)
+
+
