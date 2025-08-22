@@ -1,0 +1,11 @@
+
+(ns tmp.rename (:require [core :rename {+ plus - minus}] [test :refer :all]))
+
+(deftest ns-rename-map
+  (testing "ns with :rename map"
+    (is (not (nil? (var plus))) true)
+    (is (not (nil? (var minus))) true)))
+
+(run-tests ns-rename-map)
+
+

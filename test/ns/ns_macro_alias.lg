@@ -1,0 +1,11 @@
+
+(ns tmp.alias (:require [core :as c] [test :refer :all]))
+
+(deftest ns-require-alias
+  (testing "ns require with alias"
+    (is (not (nil? (var c/+))) true)
+    (is (= 3 (c/+ 1 2)) true)))
+
+(run-tests ns-require-alias)
+
+

@@ -206,6 +206,14 @@ Risks and mitigations:
 - Persistent data structure correctness → comprehensive boundary tests and randomized property tests.
 - Image format lock-in → versioned schema and strict validation; maintain migration path.
 
+## Testing and conformance
+
+See `docs/testing-and-conformance.md` for the testing strategy and CI gating. In early phases, prioritize:
+
+- A `clojure.test`-compatible layer and `lg test` CLI.
+- Seed conformance suite for seq semantics, `(count nil)`, `conj` semantics, equality/hash, and collection boundaries.
+- Property tests for vectors and maps; reader fuzzing smoke tests.
+
 ## Immediate workboard (next actions)
 
 - Phase 0

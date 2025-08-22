@@ -1,0 +1,11 @@
+
+(ns tmp.referlist (:require [core :refer [+ -]] [test :refer :all]))
+
+(deftest ns-refer-list
+  (testing "ns with :refer specific symbols"
+    (is (not (nil? (var +))) true)
+    (is (not (nil? (var -))) true)))
+
+(run-tests ns-refer-list)
+
+

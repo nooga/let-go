@@ -259,14 +259,40 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.emitWithArg(vm.OP_LOAD_CONST, n)
 		c.incSP(1)
 	case vm.SymbolType:
-		cel := c.symbolLookup(o.(vm.Symbol))
+		symVal := o.(vm.Symbol)
+		// If qualified like ns/sym
+		if sns, inner := symVal.Namespaced(); sns != vm.NIL {
+			// Resolve core/* via global core ns so (ns ...) expansion works before refers
+			if string(sns.(vm.Symbol)) == rt.NameCoreNS {
+				target := rt.NS(rt.NameCoreNS)
+				v := target.Lookup(inner.(vm.Symbol))
+				if v == vm.NIL {
+					return NewCompileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
+				}
+				varn := c.constant(v)
+				c.emitWithArg(vm.OP_LOAD_VAR, varn)
+				c.incSP(1)
+				return nil
+			}
+			// Non-core qualified: honor aliases and refers in current ns
+			v := c.CurrentNS().Lookup(symVal)
+			if v == vm.NIL {
+				return NewCompileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
+			}
+			varn := c.constant(v)
+			c.emitWithArg(vm.OP_LOAD_VAR, varn)
+			c.incSP(1)
+			return nil
+		}
+
+		cel := c.symbolLookup(symVal)
 		if cel != nil {
 			return cel.emit()
 		}
 		// when symbol not found so far we have a free variable on our hands
-		v := c.CurrentNS().Lookup(o.(vm.Symbol))
+		v := c.CurrentNS().Lookup(symVal)
 		if v == vm.NIL {
-			return NewCompileError("Can't resolve " + string(o.(vm.Symbol)) + " in this context")
+			return NewCompileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
 		}
 		varn := c.constant(v)
 		c.emitWithArg(vm.OP_LOAD_VAR, varn)
@@ -790,6 +816,108 @@ func doCompiler(c *Context, form vm.Value) error {
 		return nil
 	}
 	for i := range args {
+		// Detect top-level (in-ns 'foo) and update compiler namespace early
+		if i == 0 && args[i].Type() == vm.ListType {
+			lst := args[i].(*vm.List)
+			if lst.First().Type() == vm.SymbolType && vm.Symbol(lst.First().(vm.Symbol)) == vm.Symbol("in-ns") {
+				alist := lst.Next()
+				if alist != vm.EmptyList {
+					q := alist.First()
+					if q.Type() == vm.ListType {
+						qq := q.(vm.Seq)
+						if qq.First() == vm.Symbol("quote") {
+							namev := qq.Next().First()
+							if namev.Type() == vm.SymbolType {
+								if ns := rt.NS(string(namev.(vm.Symbol))); ns != nil {
+									c.SetCurrentNS(ns)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		// Simulate ns helpers at compile-time so later forms in the same do can resolve
+		if args[i].Type() == vm.ListType {
+			lst := args[i].(*vm.List)
+			if lst.First().Type() == vm.SymbolType {
+				fname := vm.Symbol(lst.First().(vm.Symbol))
+				// core/alias
+				if fname == vm.Symbol("core/alias") {
+					asArgs := lst.Next()
+					if asArgs != vm.EmptyList {
+						qa := asArgs.First()
+						asArgs = asArgs.Next()
+						qb := asArgs.First()
+						if qa.Type() == vm.ListType && qb.Type() == vm.ListType {
+							qqa := qa.(vm.Seq)
+							qqb := qb.(vm.Seq)
+							if qqa.First() == vm.Symbol("quote") && qqb.First() == vm.Symbol("quote") {
+								alias := qqa.Next().First().(vm.Symbol)
+								nsname := qqb.Next().First().(vm.Symbol)
+								if target := rt.NS(string(nsname)); target != nil {
+									c.CurrentNS().Alias(alias, target)
+								}
+							}
+						}
+					}
+				}
+				// core/refer (ns, alias, all)
+				if fname == vm.Symbol("core/refer") {
+					rArgs := lst.Next()
+					if rArgs != vm.EmptyList {
+						nsQ := rArgs.First()
+						rArgs = rArgs.Next()
+						aliasStr := ""
+						all := true
+						if rArgs != vm.EmptyList {
+							if s, ok := rArgs.First().(vm.String); ok {
+								aliasStr = string(s)
+							}
+							rArgs = rArgs.Next()
+						}
+						if rArgs != vm.EmptyList {
+							if b, ok := rArgs.First().(vm.Boolean); ok {
+								all = bool(b)
+							}
+						}
+						if nsQ.Type() == vm.ListType {
+							qq := nsQ.(vm.Seq)
+							if qq.First() == vm.Symbol("quote") {
+								nsname := qq.Next().First().(vm.Symbol)
+								if target := rt.NS(string(nsname)); target != nil {
+									c.CurrentNS().Refer(target, aliasStr, all)
+								}
+							}
+						}
+					}
+				}
+				// core/import-var (from-ns, from, to)
+				if fname == vm.Symbol("core/import-var") {
+					ivArgs := lst.Next()
+					if ivArgs != vm.EmptyList {
+						qn := ivArgs.First()
+						ivArgs = ivArgs.Next()
+						qfrom := ivArgs.First()
+						ivArgs = ivArgs.Next()
+						qto := ivArgs.First()
+						if qn.Type() == vm.ListType && qfrom.Type() == vm.ListType && qto.Type() == vm.ListType {
+							qnn := qn.(vm.Seq)
+							qff := qfrom.(vm.Seq)
+							qtt := qto.(vm.Seq)
+							if qnn.First() == vm.Symbol("quote") && qff.First() == vm.Symbol("quote") && qtt.First() == vm.Symbol("quote") {
+								fromNs := rt.NS(string(qnn.Next().First().(vm.Symbol)))
+								from := qff.Next().First().(vm.Symbol)
+								to := qtt.Next().First().(vm.Symbol)
+								if fromNs != nil {
+									c.CurrentNS().ImportVar(fromNs, from, to)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 		if tc && i == l-1 {
 			c.tailPosition = true
 		}
@@ -882,7 +1010,12 @@ func setBangCompiler(c *Context, form vm.Value) error {
 
 func varCompiler(c *Context, form vm.Value) error {
 	sym := form.(*vm.List).Next().First().(vm.Symbol)
-	varr := c.constant(c.CurrentNS().LookupOrAdd(sym))
+	// Try compile-time resolution only
+	v := c.CurrentNS().Lookup(sym)
+	if v == vm.NIL {
+		return NewCompileError(fmt.Sprintf("Can't resolve %s in this context", sym))
+	}
+	varr := c.constant(v)
 	c.emitWithArg(vm.OP_LOAD_CONST, varr)
 	c.incSP(1)
 	return nil
