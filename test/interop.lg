@@ -3,9 +3,11 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.interop)
+(ns test.interop
+  (:require [test :refer :all] [core :refer :all]))
 
-(test "time.Time example"
-      (let [x (now)
-            y (now)]
-        (.After y x)))
+(deftest time-example
+  (testing "time.Time example"
+    (let [x (now)
+          y (now)]
+      (is (.After y x) true))))

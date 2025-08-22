@@ -3,7 +3,8 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.primes)
+(ns test.primes
+  (:require [test :refer :all]))
 
 (defn is-prime? [n]
   (if (< n 2)
@@ -15,11 +16,12 @@
 
 (def N 3000)
 
-(test "primes"
-      (= 430
-         (count (loop [i 0 primes (list)]
-                  (if (< i N)
-                    (if (is-prime? i)
-                      (recur (inc i) (cons i primes))
-                      (recur (inc i) primes))
-                    primes)))))
+(deftest primes-count
+  (testing "primes"
+    (is (= 430
+           (count (loop [i 0 primes (list)]
+                    (if (< i N)
+                      (if (is-prime? i)
+                        (recur (inc i) (cons i primes))
+                        (recur (inc i) primes))
+                      primes)))) true)))

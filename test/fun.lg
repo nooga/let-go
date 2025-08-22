@@ -3,12 +3,14 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.fun)
+(ns test.fun
+  (:require [test :refer :all]))
 
-(test "fn"
-      (let [f1 (fn [x y] (+ x y x))
-            f2 #(+ %1 %2 %1)]
-        (= (f1 1 2) (f2 1 2))))
+(deftest fn-equivalence
+  (testing "fn"
+    (let [f1 (fn [x y] (+ x y x))
+          f2 #(+ %1 %2 %1)]
+      (is (= (f1 1 2) (f2 1 2)) true))))
 
 (defn curry' [args body]
   (let [fa (first args)
@@ -28,5 +30,7 @@
 
 (def I ((S K) K))
 
-(test "SKI" (and (= (I 5) 5)
-                 (= (I 6) 6)))
+(deftest ski
+  (testing "SKI"
+    (is (and (= (I 5) 5)
+             (= (I 6) 6)) true)))

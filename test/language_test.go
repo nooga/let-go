@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/compiler"
@@ -55,8 +56,8 @@ func TestRunner(t *testing.T) {
 	err = file.Close()
 	assert.NoError(t, err)
 
-	outcomeVar := rt.NS("test").Lookup("*test-result*").(*vm.Var)
-	// walk recursively to include subdirectories
+	// compile all .lg files first so tests are defined and registered
+	// Run per file to retain Go subtest reporting and accurate counters
 	err = filepath.Walk("./", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -69,11 +70,20 @@ func TestRunner(t *testing.T) {
 		}
 		name := info.Name()
 		t.Run(name, func(t *testing.T) {
-			//outcomeVar.SetRoot(vm.TRUE)
-			err := runFile(path)
-			assert.NoError(t, err)
+			// reset registry for per-file isolation
+			_, _, cerr := compiler.NewCompiler(consts, rt.NS("test")).CompileMultiple(strings.NewReader("(clear-registered-tests!)"))
+			assert.NoError(t, cerr)
+
+			// compile the file to define tests
+			cerr = runFile(path)
+			assert.NoError(t, cerr)
+
+			// run only this file's tests
+			outcomeVar := rt.NS("test").Lookup("*test-result*").(*vm.Var)
+			_, _, cerr = compiler.NewCompiler(consts, rt.NS("test")).CompileMultiple(strings.NewReader("(run-tests)"))
+			assert.NoError(t, cerr)
 			outcome := bool(outcomeVar.Deref().(vm.Boolean))
-			assert.True(t, outcome, "some tests failed")
+			assert.True(t, outcome, "some tests failed in "+name)
 		})
 		return nil
 	})

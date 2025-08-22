@@ -3,64 +3,71 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.recur)
+(ns test.recur
+  (:require [test :refer :all]))
 
-(test "loop/recur"
-      (= 220
-         (loop [val 200
-                cnt 20]
-           (if (pos? cnt)
-             (recur (inc val) (dec cnt))
-             val))))
-
-(test "loop/let/recur"
-      (= 220
-         (loop [val 200
-                cnt 20]
-           (let [meh 1
-                 muh 2]
+(deftest loop-recur
+  (testing "loop/recur"
+    (is (= 220
+           (loop [val 200
+                  cnt 20]
              (if (pos? cnt)
                (recur (inc val) (dec cnt))
-               val)))))
+               val))) true)))
 
+(deftest loop-let-recur
+  (testing "loop/let/recur"
+    (is (= 220
+           (loop [val 200
+                  cnt 20]
+             (let [meh 1
+                   muh 2]
+               (if (pos? cnt)
+                 (recur (inc val) (dec cnt))
+                 val)))) true)))
 
-(test "fn/recur"
-      (let [f (fn [x]
+(deftest fn-recur
+  (testing "fn/recur"
+    (let [f (fn [x]
+              (if (pos? x)
+                (recur (dec x))
+                x))]
+      (is (= (f 10) 0) true))))
+
+(deftest fn-let-recur
+  (testing "fn/let/recur"
+    (let [f (fn [x]
+              (let [meh 1
+                    muh 2]
                 (if (pos? x)
                   (recur (dec x))
-                  x))]
-        (= (f 10) 0)))
+                  x)))]
+      (is (= (f 10) 0) true))))
 
-(test "fn/let/recur"
-      (let [f (fn [x]
-                (let [meh 1
-                      muh 2]
-                  (if (pos? x)
-                    (recur (dec x))
-                    x)))]
-        (= (f 10) 0)))
+(deftest fn-loop-recur
+  (testing "fn/loop/recur"
+    (let [f (fn [n]
+              (* 2
+                 (loop [x 0]
+                   (if (< x n)
+                     (recur (inc x))
+                     x))))]
+      (is (= (f 10) 20) true))))
 
-(test "fn/loop/recur"
-      (let [f (fn [n]
-                (* 2
-                   (loop [x 0]
+(deftest fn-loop-let-recur
+  (testing "fn/loop/let/recur"
+    (let [f (fn [n]
+              (* 2
+                 (loop [x 0]
+                   (let [meh 1
+                         muh 2]
                      (if (< x n)
                        (recur (inc x))
-                       x))))]
-        (= (f 10) 20)))
+                       x)))))]
+      (is (= (f 10) 20) true))))
 
-(test "fn/loop/let/recur"
-      (let [f (fn [n]
-                (* 2
-                   (loop [x 0]
-                     (let [meh 1
-                           muh 2]
-                       (if (< x n)
-                         (recur (inc x))
-                         x)))))]
-        (= (f 10) 20)))
-
-(test "dotimes"
-      (do 
-        (dotimes [kek 100] (println kek))
-        true))
+(deftest dotimes-test
+  (testing "dotimes"
+    (do
+      (dotimes [kek 100] (println kek))
+      (is true true))))

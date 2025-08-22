@@ -1,26 +1,84 @@
 (ns test)
 
 (def ^:dynamic *test-result* true)
+(def ^:dynamic *testing-contexts* [])
+(def ^:dynamic *testing-vars* [])
+
+(def ^:dynamic *report-counters* {:test 0 :pass 0 :fail 0 :error 0})
+(def ^:dynamic *registered-tests* {})
+
+(defn clear-registered-tests! []
+  (set! *registered-tests* {}))
+
+(defn register-test! [v]
+  (let [n *ns*
+        xs (get *registered-tests* n [])]
+    (set! *registered-tests* (assoc *registered-tests* n (conj xs v)))))
 
 (defmacro deftest [name & body]
-  `(def ~name (fn [] ~@body)))
+  `(do
+     (def ~name (fn []
+                  (set! *testing-vars* (conj *testing-vars* '~name))
+                  (let [ret# (do ~@body)]
+                    (set! *testing-vars* (pop *testing-vars*))
+                    ret#)))
+     (register-test! (var ~name))))
 
-(defmacro is [expr expected]
-  `(if (= ~expr ~expected)
-     (println "PASS" '~expr "=>" ~expected)
-     (do
-       (set! *test-result* false)
-       (println "FAIL" '~expr "\n     Expected:" ~expected "\n     Actual:" ~expr))))
+(defmacro is
+  ([form]
+   `(if ~form
+      (do
+        (set! *report-counters* (update *report-counters* :pass inc))
+        (println "PASS" '~form)
+        true)
+      (do
+        (set! *report-counters* (update *report-counters* :fail inc))
+        (set! *test-result* false)
+        (println "FAIL" '~form)
+        false)))
+  ([expr expected]
+   `(let [ok# (= ~expr ~expected)]
+      (if ok#
+        (do
+          (set! *report-counters* (update *report-counters* :pass inc))
+          (println "PASS" '~expr "=>" ~expected)
+          true)
+        (do
+          (set! *report-counters* (update *report-counters* :fail inc))
+          (set! *test-result* false)
+          (println "FAIL" '~expr "\n     Expected:" ~expected "\n     Actual:" ~expr)
+          false)))))
 
-(defn run-tests [& tests]
+(defn run-tests [& nss]
+  (set! *report-counters* {:test 0 :pass 0 :fail 0 :error 0})
   (set! *test-result* true)
   (println "Running tests...")
-  (doseq [t tests]
-    (t))
-  (println "Finished running tests."))
+  (if (seq nss)
+    (doseq [s nss]
+      (let [old-ns *ns*]
+        (in-ns s)
+        (doseq [t (get *registered-tests* *ns* [])]
+          (set! *report-counters* (update *report-counters* :test inc))
+          (t))
+        (in-ns (symbol (name old-ns)))))
+    (doseq [bs (vals *registered-tests*)]
+      (doseq [t bs]
+        (set! *report-counters* (update *report-counters* :test inc))
+        (t))))
+  (let [c *report-counters*]
+    (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
+    (set! *test-result* (and (= 0 (:fail c)) (= 0 (:error c))))))
+
+(defn testing-contexts-str []
+  (str (apply str (interpose " > " *testing-contexts*))))
 
 (defmacro testing [description & body]
-  `(do (println "Testing:" ~description) ~@body))
+  `(do
+     (set! *testing-contexts* (conj *testing-contexts* ~description))
+     (println "Testing:" (testing-contexts-str))
+     (let [ret# (do ~@body)]
+       (set! *testing-contexts* (pop *testing-contexts*))
+       ret#)))
 
 (defn walk
   [inner outer form]

@@ -3,13 +3,15 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.async)
+(ns test.async
+  (:require [test :refer :all]))
 
-(test "go block concurrency"
-      (let [x (atom 0)
-            m 1
-            a (go (dotimes [_ m] (swap! x inc)))
-            b (go (dotimes [_ (* 2 m)] (swap! x dec)))]
-        (<! b)
-        (<! a) 
-        (= @x (- m))))
+(deftest go-block-concurrency
+  (testing "go block concurrency"
+    (let [x (atom 0)
+          m 1
+          a (go (dotimes [_ m] (swap! x inc)))
+          b (go (dotimes [_ (* 2 m)] (swap! x dec)))]
+      (<! b)
+      (<! a)
+      (is (= @x (- m)) true))))

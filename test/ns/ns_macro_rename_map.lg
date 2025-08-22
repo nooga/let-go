@@ -3,9 +3,9 @@
 
 (deftest ns-rename-map
   (testing "ns with :rename map"
-    (is (not (nil? (var plus))) true)
-    (is (not (nil? (var minus))) true)))
+    (is (= 3 (plus 1 2)) true)
+    (is (= 1 (minus 3 2)) true)))
 
-(run-tests ns-rename-map)
+; (run-tests ns-rename-map)
 
 
