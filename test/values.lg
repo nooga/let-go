@@ -3,36 +3,41 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.values)
+(ns test.values
+  (:require [test :refer :all]))
 
-(test "maps"
-      (let [m {:a 1 :b 2 :c 3}]
-        (and (= (:a m) (m :a) (get m :a))
-             (= (:b m) 2)
-             (nil? (:a (dissoc m :a)))
-             (= (:a m) 1)
-             (= (:c (assoc m :c 'foo)) 'foo)
-             (= (:c m) 3)
-             (= (:a (update m :a + 1)) 2)
-             (= (:a (update m :a inc)) 2)
-             (= (count m) 3)
-             (= (dec (count m)) (count (dissoc m :a)))
-             (= (count m) (count (dissoc m :nonexist)))
-             (= (count (dissoc m :b :a)) 1)
-             (= (count (assoc m :x 1 :y 2 :z 3)) 6))))
+(deftest maps-test
+  (testing "maps"
+    (let [m {:a 1 :b 2 :c 3}]
+      (is (and (= (:a m) (m :a) (get m :a))
+               (= (:b m) 2)
+               (nil? (:a (dissoc m :a)))
+               (= (:a m) 1)
+               (= (:c (assoc m :c 'foo)) 'foo)
+               (= (:c m) 3)
+               (= (:a (update m :a + 1)) 2)
+               (= (:a (update m :a inc)) 2)
+               (= (count m) 3)
+               (= (dec (count m)) (count (dissoc m :a)))
+               (= (count m) (count (dissoc m :nonexist)))
+               (= (count (dissoc m :b :a)) 1)
+               (= (count (assoc m :x 1 :y 2 :z 3)) 6)) true))))
 
-(test "range"
-      (and (= (count (range 10)) 10)
-           (= (count (range 5 10 3)) 2)
-           (= (first (range 8 100)) 8)))
+(deftest range-test
+  (testing "range"
+    (is (and (= (count (range 10)) 10)
+             (= (count (range 5 10 3)) 2)
+             (= (first (range 8 100)) 8)) true)))
 
-(test "atom/swap"
-      (let [foo (atom 5)]
-        (swap! foo inc)
-        (swap! foo * 10)
-        (= 60 @foo)))
+(deftest atom-swap-test
+  (testing "atom/swap"
+    (let [foo (atom 5)]
+      (swap! foo inc)
+      (swap! foo * 10)
+      (is (= 60 @foo) true))))
 
-(test "atom/reset"
-      (let [foo (atom 5)]
-        (reset! foo 10)
-        (= 10 @foo)))
+(deftest atom-reset-test
+  (testing "atom/reset"
+    (let [foo (atom 5)]
+      (reset! foo 10)
+      (is (= 10 @foo) true))))

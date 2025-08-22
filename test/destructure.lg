@@ -3,77 +3,89 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.destructure)
+(ns test.destructure
+  (:require [test :refer :all]))
 
-(test "vector destructuring"
-      (let [[x y] [1 2]]
-        (and (= x 1) (= y 2))))
+(deftest vector-destructuring
+  (testing "vector destructuring"
+    (let [[x y] [1 2]]
+      (is (and (= x 1) (= y 2)) true))))
 
-(test "vector destructuring with rest"
-      (let [[x y & r] [1 2 3 4]]
-        (and (= x 1) 
-             (= y 2)
-             (= (count r) 2)
-             (= (first r) 3)
-             (= (second r) 4))))
+(deftest vector-destructuring-with-rest
+  (testing "vector destructuring with rest"
+    (let [[x y & r] [1 2 3 4]]
+      (is (and (= x 1)
+               (= y 2)
+               (= (count r) 2)
+               (= (first r) 3)
+               (= (second r) 4)) true))))
 
-(test "vector destructuring with :as"
-      (let [[x y :as all] [1 2 3 4]]
-            (and (= x 1)
-                 (= y 2)
-                 (= (count all) 4))))
+(deftest vector-destructuring-with-as
+  (testing "vector destructuring with :as"
+    (let [[x y :as all] [1 2 3 4]]
+      (is (and (= x 1)
+               (= y 2)
+               (= (count all) 4)) true))))
 
-(test "vector destructuring with rest and :as"
-      (let [[x y & r :as all] [1 2 3 4]]
-            (and (= x 1)
-                 (= y 2)
-                 (= (count r) 2)
-                 (= (first r) 3)
-                 (= (second r) 4)
-                 (= (count all) 4))))
+(deftest vector-destructuring-with-rest-and-as
+  (testing "vector destructuring with rest and :as"
+    (let [[x y & r :as all] [1 2 3 4]]
+      (is (and (= x 1)
+               (= y 2)
+               (= (count r) 2)
+               (= (first r) 3)
+               (= (second r) 4)
+               (= (count all) 4)) true))))
 
-(test "nested vector destructuring"
-      (let [[[a b] y] [[1 2] [3 4]]]
-            (and (= a 1) 
-                 (= b 2)
-                 (= (count y) 2)
-                 (= (first y) 3)
-                 (= (second y) 4))))
+(deftest nested-vector-destructuring
+  (testing "nested vector destructuring"
+    (let [[[a b] y] [[1 2] [3 4]]]
+      (is (and (= a 1)
+               (= b 2)
+               (= (count y) 2)
+               (= (first y) 3)
+               (= (second y) 4)) true))))
 
-(test "map destructuring"
-      (let [{a :a b :b} {:a 1 :b 2}]
-        (and (= a 1)
-             (= b 2))))
+(deftest map-destructuring
+  (testing "map destructuring"
+    (let [{a :a b :b} {:a 1 :b 2}]
+      (is (and (= a 1)
+               (= b 2)) true))))
 
-(test "map :keys destructuring"
-      (let [{:keys [a b]} {:a 1 :b 2}]
-        (and (= a 1)
-             (= b 2))))
+(deftest map-keys-destructuring
+  (testing "map :keys destructuring"
+    (let [{:keys [a b]} {:a 1 :b 2}]
+      (is (and (= a 1)
+               (= b 2)) true))))
 
-(test "map destructuring with :as"
-      (let [{a :a b :b :as c} {:a 1 :b 2}]
-        (and (= a 1)
-             (= b 2)
-             (= (:a c) 1)
-             (= (:b c) 2))))
+(deftest map-destructuring-with-as
+  (testing "map destructuring with :as"
+    (let [{a :a b :b :as c} {:a 1 :b 2}]
+      (is (and (= a 1)
+               (= b 2)
+               (= (:a c) 1)
+               (= (:b c) 2)) true))))
 
-(test "map :keys destructuring with :as"
-      (let [{:keys [a b] :as c} {:a 1 :b 2}]
-        (and (= a 1)
-             (= b 2)
-             (= (:a c) 1)
-             (= (:b c) 2))))
+(deftest map-keys-destructuring-with-as
+  (testing "map :keys destructuring with :as"
+    (let [{:keys [a b] :as c} {:a 1 :b 2}]
+      (is (and (= a 1)
+               (= b 2)
+               (= (:a c) 1)
+               (= (:b c) 2)) true))))
 
-(test "loop destructuring"
-      (let [xs (loop [[x y & r] '(1 2 3 4) o []]
-                 (if x
-                   (recur r (conj o [x y]))
-                   o))]
-        (and (-> xs first first (= 1))
-             (-> xs first second (= 2))
-             (-> xs second first (= 3))
-             (-> xs second second (= 4)))))
+(deftest loop-destructuring
+  (testing "loop destructuring"
+    (let [xs (loop [[x y & r] '(1 2 3 4) o []]
+               (if x
+                 (recur r (conj o [x y]))
+                 o))]
+      (is (and (-> xs first first (= 1))
+               (-> xs first second (= 2))
+               (-> xs second first (= 3))
+               (-> xs second second (= 4))) true))))
 
-(test "fn destructuring"
-      (let [f (fn [{a :x b :y}] (+ a b 6))]
-        (= 13 (f {:x 3 :y 4}))))
+(deftest fn-destructuring
+  (testing "fn destructuring"
+    (let [f (fn [{a :x b :y}] (+ a b 6))]
+      (is (= 13 (f {:x 3 :y 4})) true))))

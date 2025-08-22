@@ -3,12 +3,14 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.fib)
+(ns test.fib
+  (:require [test :refer :all]))
 
 (defn fib [n]
   (cond (= n 0) 1
         (= n 1) 1
         :else (+ (fib (- n 1)) (fib (- n 2)))))
 
-(test "fibonacci"
-      (= 8 (fib 5)))
+(deftest fibonacci
+  (testing "fibonacci"
+    (is (= 8 (fib 5)) true)))

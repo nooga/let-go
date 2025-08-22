@@ -3,48 +3,56 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.scope)
+(ns test.scope
+  (:require [test :refer :all]))
 
-(test "let simple"
-      (let [x 1 y 2]
-        (= 3 (+ x y))))
+(deftest let-simple
+  (testing "let simple"
+    (let [x 1 y 2]
+      (is (= 3 (+ x y)) true))))
 
-(test "let recursive"
-      (let [x 1
-            y (+ x 1)
-            y (+ 1 y)] ; shadow the old y
-        (= 4 (+ x y))))
+(deftest let-recursive
+  (testing "let recursive"
+    (let [x 1
+          y (+ x 1)
+          y (+ 1 y)]
+      (is (= 4 (+ x y)) true))))
 
-(test "let nested"
-      (let [a 1 b 2]
-        (let [c 3 d 4]
-          (println a b c d)
-          (= (+ b d) (* 2 (+ a b))))))
+(deftest let-nested
+  (testing "let nested"
+    (let [a 1 b 2]
+      (let [c 3 d 4]
+        (println a b c d)
+        (is (= (+ b d) (* 2 (+ a b))) true)))))
 
-(test "let shadow"
-      (let [a 1 b 2]
-        (let [a 3 c 4]
-          (println a b)
-          (= 5 (+ a b)))))
-
-
-(test "loop simple"
-      (loop [a 1 b 2]
+(deftest let-shadow
+  (testing "let shadow"
+    (let [a 1 b 2]
+      (let [a 3 c 4]
         (println a b)
-        (= 3 (+ a b))))
+        (is (= 5 (+ a b)) true)))))
 
-(test "simple closure"
-      (let [f (fn [x] (fn [y] (+ x y)))] ; x comes from outer scope
-        (= 3 ((f 1) 2))))
+(deftest loop-simple
+  (testing "loop simple"
+    (loop [a 1 b 2]
+      (println a b)
+      (is (= 3 (+ a b)) true))))
 
-(test "nested closure"
-      (let [f (fn [x] (fn [y] (fn [z] (+ x (+ y z)))))] ; x and y come from outer scopes
-        (= 6 (((f 1) 2) 3))))
+(deftest simple-closure
+  (testing "simple closure"
+    (let [f (fn [x] (fn [y] (+ x y)))]
+      (is (= 3 ((f 1) 2)) true))))
 
-(test "Y combinator"
-      (let [Y (fn [f] ((fn [x] (x x))
-                        (fn [x]
-                          (f (fn [y] ((x x) y))))))
-            fac-gen (fn [func] (fn [n] (if (zero? n) 1 (* n (func (dec n))))))]
-        (= 120 ((Y fac-gen) 5))))
+(deftest nested-closure
+  (testing "nested closure"
+    (let [f (fn [x] (fn [y] (fn [z] (+ x (+ y z)))))]
+      (is (= 6 (((f 1) 2) 3)) true))))
+
+(deftest y-combinator
+  (testing "Y combinator"
+    (let [Y (fn [f] ((fn [x] (x x))
+                     (fn [x]
+                       (f (fn [y] ((x x) y))))))
+          fac-gen (fn [func] (fn [n] (if (zero? n) 1 (* n (func (dec n))))))]
+      (is (= 120 ((Y fac-gen) 5)) true))))
 

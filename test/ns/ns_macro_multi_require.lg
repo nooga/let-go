@@ -1,11 +1,13 @@
+(ns test.ns.ns-macro-multi-require
+  (:require [core :as c])
+  (:require [core :refer :all])
+  (:require [test :refer :all]))
 
-(ns tmp.multiclauses (:require [core :as c]) (:require [core :refer :all]) (:require [test :refer :all]))
+(test "ns-multiple-require-clauses"
+      (testing "ns with multiple :require clauses"
+        (is (not (nil? (var c/+))) true)
+        (is (not (nil? (var +))) true)))
 
-(deftest ns-multiple-require-clauses
-  (testing "ns with multiple :require clauses"
-    (is (not (nil? (var c/+))) true)
-    (is (not (nil? (var +))) true)))
-
-(run-tests ns-multiple-require-clauses)
+; (run-tests ns-multiple-require-clauses)
 
 

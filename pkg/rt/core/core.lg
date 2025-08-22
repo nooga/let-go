@@ -77,7 +77,7 @@
 
 ; moved below to ensure dependencies are available during compilation
 
-; makeshift test helper
+; makeshift legacy test helper (kept only for backwards-compat in non-migrated code)
 (def ^:dynamic *test-flag* true)
 
 (defmacro test [name & body]
@@ -732,6 +732,14 @@
 (defn take-nth [n coll]
   (when-let [s (seq coll)]
     (cons (first s) (take-nth n (drop n s)))))
+
+(defn interpose
+  [sep coll]
+  (when-let [s (seq coll)]
+    (let [n (next s)]
+      (if n
+        (cons (first s) (cons sep (interpose sep n)))
+        (list (first s))))))
 
 (defn interleave
   ([] ())

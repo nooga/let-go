@@ -3,11 +3,12 @@
 ; SPDX-License-Identifier: MIT
 ;
 
-(ns test.types)
+(ns test.types
+  (:require [test :refer :all]))
 
-(test "type basics"
-      (and (nil? (type nil))
-           (= (type 3) (type 4))
-           (not= (type 3) (type "foo"))
-           (= (type (type 3)) (type (type (type 99))))
-           ))
+(deftest type-basics
+  (testing "type basics"
+    (is (and (nil? (type nil))
+             (= (type 3) (type 4))
+             (not= (type 3) (type "foo"))
+             (= (type (type 3)) (type (type (type 99))))) true)))
