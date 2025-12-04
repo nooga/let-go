@@ -171,7 +171,7 @@ func (s *PersistentVectorSeq) findNextNode(index int) *vnode {
 
 // Cons implements Seq
 func (s *PersistentVectorSeq) Cons(val Value) Seq {
-	return EmptyList.Cons(val)
+	return NewCons(val, s)
 }
 
 // Modify PersistentVector's Seq method:

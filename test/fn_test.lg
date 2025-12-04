@@ -1,0 +1,79 @@
+;; Clojure function and higher-order function tests
+(ns test.fn-test
+  (:require [test :refer :all]))
+
+(deftest fn-basics
+  (testing "anonymous functions"
+    (is (= 2 ((fn [x] (+ x 1)) 1)))
+    (is (= 3 (#(+ %1 %2) 1 2)))
+    (is (= 6 (#(+ %1 %2 %3) 1 2 3))))
+  
+  (testing "multi-arity"
+    (let [f (fn 
+              ([x] x)
+              ([x y] (+ x y))
+              ([x y z] (+ x y z)))]
+      (is (= 1 (f 1)))
+      (is (= 3 (f 1 2)))
+      (is (= 6 (f 1 2 3)))))
+  
+  (testing "variadic"
+    (let [f (fn [x & rest] (cons x rest))]
+      (is (= '(1) (f 1)))
+      (is (= '(1 2 3) (f 1 2 3))))))
+
+(deftest apply-test
+  (testing "apply basics"
+    (is (= 6 (apply + [1 2 3])))
+    (is (= 10 (apply + 1 2 [3 4])))
+    (is (= [] (apply vector [])))
+    (is (= [1 2 3] (apply vector [1 2 3])))))
+
+(deftest partial-test
+  (testing "partial application"
+    (let [add5 (partial + 5)]
+      (is (= 8 (add5 3)))
+      (is (= 15 (add5 10))))
+    (let [greet (partial str "Hello, ")]
+      (is (= "Hello, World" (greet "World"))))))
+
+(deftest comp-test
+  (testing "function composition"
+    (is (= 4 ((comp inc inc inc) 1)))
+    (is (= 6 ((comp #(* 2 %) inc) 2)))  ; (inc 2) = 3, (* 2 3) = 6
+    (is (= 5 ((comp) 5)))))  ; identity
+
+(deftest juxt-test
+  (testing "juxtaposition"
+    (is (= [1 2] ((juxt first second) [1 2 3])))
+    (is (= [3 1] ((juxt count first) [1 2 3])))
+    (is (= [2 0] ((juxt inc dec) 1)))))
+
+(deftest identity-constantly
+  (testing "identity"
+    (is (= 5 (identity 5)))
+    (is (= [1 2] (identity [1 2]))))
+  
+  (testing "complement"
+    (is ((complement even?) 3))
+    (is (not ((complement even?) 2)))))
+
+(deftest some-every
+  (testing "some"
+    (is (some even? [1 2 3]))  ; returns first truthy result (true from even?)
+    (is (not (some even? [1 3 5]))))
+  
+  (testing "every?"
+    (is (every? even? [2 4 6]))
+    (is (not (every? even? [2 3 4]))))
+  
+  (testing "not-every? and not-any?"
+    (is (not-every? even? [1 2 3]))
+    (is (not-any? even? [1 3 5]))))
+
+(deftest fnil-test
+  (testing "fnil"
+    (let [safe-inc (fnil inc 0)]
+      (is (= 1 (safe-inc nil)))
+      (is (= 6 (safe-inc 5))))))
+

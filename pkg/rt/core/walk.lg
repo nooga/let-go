@@ -1,0 +1,27 @@
+(ns walk)
+
+(defn walk
+  [inner outer form]
+  (cond
+    (list? form) (outer (apply list (map inner form)))
+    (seq? form) (outer (map inner form))
+    (coll? form) (outer (into (empty form) (map inner form)))
+    :else (outer form)))
+
+(defn postwalk
+  [f form]
+  (walk (partial postwalk f) f form))
+
+(defn prewalk
+  [f form]
+  (walk (partial prewalk f) identity (f form)))
+
+(defn postwalk-replace
+  [smap form]
+  (postwalk (fn [x] (if (contains? smap x) (smap x) x)) form))
+
+(defn prewalk-replace
+  [smap form]
+  (prewalk (fn [x] (if (contains? smap x) (smap x) x)) form))
+
+

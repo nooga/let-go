@@ -34,10 +34,20 @@ var ArrayVectorType *theArrayVectorType = &theArrayVectorType{}
 // ArrayVector is boxed singly linked list that can hold other Values.
 type ArrayVector []Value
 
+const arrayVectorPromotionThreshold = 32
+
 func (l ArrayVector) Conj(val Value) Collection {
-	ret := make([]Value, len(l)+1)
+	newLen := len(l) + 1
+	// Promote to PersistentVector when exceeding threshold
+	if newLen > arrayVectorPromotionThreshold {
+		values := make([]Value, newLen)
+		copy(values, l)
+		values[newLen-1] = val
+		return NewPersistentVector(values).(Collection)
+	}
+	ret := make([]Value, newLen)
 	copy(ret, l)
-	ret[len(ret)-1] = val
+	ret[newLen-1] = val
 	return ArrayVector(ret)
 }
 
@@ -62,27 +72,91 @@ func (l ArrayVector) More() Seq {
 	if len(l) <= 1 {
 		return EmptyList
 	}
-	newl, _ := ListType.Box([]Value(l[1:]))
-	return newl.(*List)
+	return &ArrayVectorSeq{vec: l, i: 1}
 }
 
 // Next implements Seq
 func (l ArrayVector) Next() Seq {
-	return l.More()
+	if len(l) <= 1 {
+		return EmptyList
+	}
+	return &ArrayVectorSeq{vec: l, i: 1}
 }
 
 // Cons implements Seq
 func (l ArrayVector) Cons(val Value) Seq {
-	ret := EmptyList
-	n := len(l) - 1
-	for i := range l {
-		ret = ret.Cons(l[n-i]).(*List)
-	}
-	return ret.Cons(val)
+	return NewCons(val, l.Seq())
 }
 
 func (l ArrayVector) Seq() Seq {
-	return l
+	if len(l) == 0 {
+		return EmptyList
+	}
+	return &ArrayVectorSeq{vec: l, i: 0}
+}
+
+// ArrayVectorSeq is a lightweight seq view over an ArrayVector
+type ArrayVectorSeq struct {
+	vec ArrayVector
+	i   int
+}
+
+func (s *ArrayVectorSeq) String() string {
+	return "(" + s.vec[s.i:].String()[1:] // reuse vector's string but change brackets
+}
+
+func (s *ArrayVectorSeq) Type() ValueType {
+	return ListType // seqs print as lists
+}
+
+func (s *ArrayVectorSeq) Unbox() interface{} {
+	return []Value(s.vec[s.i:])
+}
+
+func (s *ArrayVectorSeq) First() Value {
+	if s.i >= len(s.vec) {
+		return NIL
+	}
+	return s.vec[s.i]
+}
+
+func (s *ArrayVectorSeq) More() Seq {
+	if s.i+1 >= len(s.vec) {
+		return EmptyList
+	}
+	return &ArrayVectorSeq{vec: s.vec, i: s.i + 1}
+}
+
+func (s *ArrayVectorSeq) Next() Seq {
+	if s.i+1 >= len(s.vec) {
+		return EmptyList
+	}
+	return &ArrayVectorSeq{vec: s.vec, i: s.i + 1}
+}
+
+func (s *ArrayVectorSeq) Cons(val Value) Seq {
+	return NewCons(val, s)
+}
+
+func (s *ArrayVectorSeq) Count() Value {
+	return Int(len(s.vec) - s.i)
+}
+
+func (s *ArrayVectorSeq) RawCount() int {
+	return len(s.vec) - s.i
+}
+
+func (s *ArrayVectorSeq) Empty() Collection {
+	return EmptyList
+}
+
+func (s *ArrayVectorSeq) Conj(val Value) Collection {
+	// Conj on a seq creates a new seq with val at front
+	return s.Cons(val).(*List)
+}
+
+func (s *ArrayVectorSeq) Seq() Seq {
+	return s
 }
 
 // Count implements Collection

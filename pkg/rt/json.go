@@ -155,9 +155,6 @@ func installJSONNS() {
 
 	ns := vm.NewNamespace("json")
 
-	// vars
-	CurrentNS = ns.Def("*ns*", ns)
-
 	ns.Def("read-json", readJson)
 	ns.Def("write-json", writeJson)
 	RegisterNS(ns)

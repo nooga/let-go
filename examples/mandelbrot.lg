@@ -1,0 +1,96 @@
+;
+; Copyright (c) 2024 Marcin Gasperowicz <xnooga@gmail.com>
+; SPDX-License-Identifier: MIT
+;
+
+(ns mandelbrot)
+
+;; ╔═══════════════════════════════════════════════════════════════════════════╗
+;; ║              ASCII MANDELBROT SET GENERATOR                               ║
+;; ║                                                                           ║
+;; ║  Demonstrates: lazy sequences, higher-order functions, fixed-point math   ║
+;; ╚═══════════════════════════════════════════════════════════════════════════╝
+;;
+;; Usage: let-go examples/mandelbrot.lg
+
+;; Configuration
+(def width 70)
+(def height 22)
+(def max-iter 50)
+(def scale 1000)  ; Fixed-point scale (simulates decimals with integers)
+
+;; Character palette - from inside set (space) to fast escape
+(def chars " .,-:;i+hHM$*#@ ")
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Complex number operations (fixed-point arithmetic)
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(defn c+ [[a b] [c d]]
+  [(+ a c) (+ b d)])
+
+(defn c* [[a b] [c d]]
+  [(/ (- (* a c) (* b d)) scale)
+   (/ (+ (* a d) (* b c)) scale)])
+
+(defn c-mag-sq [[a b]]
+  (/ (+ (* a a) (* b b)) scale))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Mandelbrot computation
+;; ═══════════════════════════════════════════════════════════════════════════
+
+;; Count iterations until escape (or max-iter)
+(defn mandelbrot-escape [c]
+  (loop [z [0 0] n 0]
+    (cond
+      (>= n max-iter) max-iter
+      (> (c-mag-sq z) (* 4 scale)) n
+      :else (recur (c+ (c* z z) c) (inc n)))))
+
+;; Map screen (x,y) to complex plane: x∈[-2.5,1], y∈[-1,1]
+(defn screen->complex [x y]
+  [(+ -2500 (/ (* x 3500) width))
+   (+ -1000 (/ (* y 2000) height))])
+
+;; Map iteration count to display character
+(defn escape->char [n]
+  (nth chars (mod n (count chars))))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Rendering with lazy sequences
+;; ═══════════════════════════════════════════════════════════════════════════
+
+;; Generate one row as a string
+(defn render-row [y]
+  (apply str
+         (map (fn [x] (escape->char (mandelbrot-escape (screen->complex x y))))
+              (range width))))
+
+;; Generate all rows lazily
+(defn lazy-rows [y]
+  (lazy-seq
+   (when (< y height)
+     (cons (render-row y) (lazy-rows (inc y))))))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Main
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(println)
+(println "  ╔════════════════════════════════════════════════════════════════════════╗")
+(println "  ║                    ✨ THE MANDELBROT SET ✨                             ║")
+(println "  ╠════════════════════════════════════════════════════════════════════════╣")
+
+(let [start (now)]
+  ;; Print each row (loop works better with lazy seqs than doseq)
+  (loop [rows (lazy-rows 0)]
+    (when (seq rows)
+      (println (str "  ║ " (first rows) " ║"))
+      (recur (next rows))))
+  (println "  ╠════════════════════════════════════════════════════════════════════════╣")
+  (println (str "  ║  " width "×" height " pixels, " max-iter " iterations — rendered in " (.Sub (now) start)))
+  (println "  ║  Each row computed lazily on demand using lazy-seq!                   ║")
+  (println "  ╚════════════════════════════════════════════════════════════════════════╝")
+  (println))
+

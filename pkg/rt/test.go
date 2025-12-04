@@ -16,10 +16,6 @@ var TestSrc string
 
 // nolint
 func installTestNS() {
-	ns := vm.NewNamespace("test")
-
-	// vars
-	CurrentNS = ns.Def("*ns*", ns)
-
-	RegisterNS(ns)
+	// no-op; test namespace is embedded and loaded by resolver on demand
+	_ = vm.NIL
 }

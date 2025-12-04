@@ -1,0 +1,114 @@
+;; Clojure collection semantics tests
+(ns test.coll-test
+  (:require [test :refer :all]))
+
+(deftest vector-ops
+  (testing "vector creation"
+    (is (= [] (vector)))
+    (is (= [1 2 3] (vector 1 2 3)))
+    (is (= [1 2 3] (vec '(1 2 3)))))
+  
+  (testing "vector access"
+    (is (= 2 (get [1 2 3] 1)))
+    (is (= 2 ([1 2 3] 1)))  ; vector as function
+    (is (nil? (get [1 2 3] 10)))
+    (is (= :default (get [1 2 3] 10 :default))))
+  
+  (testing "vector modification"
+    (is (= [1 2 3 4] (conj [1 2 3] 4)))
+    (is (= [1 :x 3] (assoc [1 2 3] 1 :x)))
+    (is (= [1 2] (pop [1 2 3])))
+    (is (= 3 (peek [1 2 3])))))
+
+(deftest map-ops
+  (testing "map creation"
+    (is (= {} (hash-map)))
+    (is (= {:a 1 :b 2} (hash-map :a 1 :b 2))))
+  
+  (testing "map access"
+    (is (= 1 (get {:a 1 :b 2} :a)))
+    (is (= 1 ({:a 1 :b 2} :a)))  ; map as function
+    (is (= 1 (:a {:a 1 :b 2})))  ; keyword as function
+    (is (nil? (get {:a 1} :b)))
+    (is (= :default (get {:a 1} :b :default))))
+  
+  (testing "map modification"
+    (is (= {:a 1 :b 2} (assoc {:a 1} :b 2)))
+    (is (= {:a 1 :b 2 :c 3} (assoc {:a 1} :b 2 :c 3)))
+    (is (= {:b 2} (dissoc {:a 1 :b 2} :a)))
+    (is (= {} (dissoc {:a 1 :b 2} :a :b)))
+    (is (= {:a 2} (update {:a 1} :a inc)))
+    (is (= {:a 3} (update {:a 1} :a + 2)))))
+
+(deftest nested-access
+  (testing "get-in"
+    (is (= 1 (get-in {:a {:b {:c 1}}} [:a :b :c])))
+    (is (nil? (get-in {:a 1} [:a :b])))
+    (is (= :default (get-in {:a 1} [:a :b] :default))))
+  
+  (testing "assoc-in"
+    (is (= {:a {:b 1}} (assoc-in {} [:a :b] 1)))
+    (is (= {:a {:b 2}} (assoc-in {:a {:b 1}} [:a :b] 2))))
+  
+  (testing "update-in"
+    (is (= {:a {:b 2}} (update-in {:a {:b 1}} [:a :b] inc)))))
+
+(deftest set-ops
+  (testing "set creation"
+    (is (= #{} (hash-set)))
+    (is (= #{1 2 3} (hash-set 1 2 3)))
+    (is (= #{1 2 3} (set [1 2 2 3 3 3]))))
+  
+  (testing "set operations"
+    (is (= #{1 2 3} (conj #{1 2} 3)))
+    (is (= #{1 3} (disj #{1 2 3} 2)))
+    (is (contains? #{1 2 3} 2))
+    (is (not (contains? #{1 2 3} 4))))
+  
+  (testing "set as function"
+    (is (= 2 (#{1 2 3} 2)))
+    (is (nil? (#{1 2 3} 4)))))
+
+(deftest set-algebra
+  (testing "difference"
+    (is (= #{1 2} (difference #{1 2 3} #{3 4})))
+    (is (= #{1} (difference #{1 2 3} #{2} #{3}))))
+  
+  (testing "intersection"
+    (is (= #{2 3} (intersection #{1 2 3} #{2 3 4})))))
+
+(deftest count-empty
+  (testing "count"
+    (is (= 0 (count nil)))
+    (is (= 0 (count [])))
+    (is (= 0 (count '())))
+    (is (= 0 (count {})))
+    (is (= 0 (count #{})))
+    (is (= 3 (count [1 2 3])))
+    (is (= 3 (count "abc"))))
+  
+  (testing "empty?"
+    (is (empty? nil))
+    (is (empty? []))
+    (is (empty? '()))
+    (is (empty? {}))
+    (is (empty? #{}))
+    (is (not (empty? [1])))))
+
+(deftest into-test
+  (testing "into"
+    (is (= [1 2 3 4] (into [1 2] [3 4])))
+    (is (= {:a 1 :b 2} (into {:a 1} {:b 2})))
+    (is (= #{1 2 3} (into #{1} [2 3])))))
+
+(deftest keys-vals
+  (testing "keys and vals"
+    (let [m {:a 1 :b 2}]
+      (is (= #{:a :b} (set (keys m))))
+      (is (= #{1 2} (set (vals m)))))))
+
+(deftest zipmap-test
+  (testing "zipmap"
+    (is (= {:a 1 :b 2} (zipmap [:a :b] [1 2])))
+    (is (= {:a 1} (zipmap [:a :b] [1])))))  ; stops at shorter
+

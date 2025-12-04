@@ -1,0 +1,83 @@
+;; Clojure conditional and flow control tests
+(ns test.conditionals-test
+  (:require [test :refer :all]))
+
+(deftest if-test
+  (testing "if basics"
+    (is (= :yes (if true :yes :no)))
+    (is (= :no (if false :yes :no)))
+    (is (= :no (if nil :yes :no)))
+    (is (= :yes (if 0 :yes :no)))      ; 0 is truthy
+    (is (= :yes (if "" :yes :no)))     ; empty string is truthy
+    (is (= :yes (if [] :yes :no)))))   ; empty vector is truthy
+
+(deftest when-test
+  (testing "when"
+    (is (= :yes (when true :yes)))
+    (is (nil? (when false :yes)))
+    (is (= 3 (when true 1 2 3))))  ; implicit do
+  
+  (testing "when-not"
+    (is (nil? (when-not true :yes)))
+    (is (= :yes (when-not false :yes)))))
+
+(deftest cond-test
+  (testing "cond"
+    (is (= :a (cond true :a)))
+    (is (= :b (cond false :a true :b)))
+    (is (= :default (cond false :a false :b :else :default)))
+    (is (nil? (cond false :a)))))
+
+(deftest condp-test
+  (testing "condp"
+    (is (= :one (condp = 1 1 :one 2 :two :default)))
+    (is (= :default (condp = 3 1 :one 2 :two :default)))))
+
+(deftest case-test
+  (testing "case"
+    (is (= :one (case 1 1 :one 2 :two)))
+    (is (= :default (case 3 1 :one 2 :two :default)))))
+
+(deftest if-let-test
+  (testing "if-let"
+    (is (= 2 (if-let [x 1] (inc x) :none)))
+    (is (= :none (if-let [x nil] (inc x) :none)))
+    (is (= :none (if-let [x false] :found :none)))))
+
+(deftest when-let-test
+  (testing "when-let"
+    (is (= 2 (when-let [x 1] (inc x))))
+    (is (nil? (when-let [x nil] (inc x))))))
+
+(deftest if-some-test
+  (testing "if-some (nil-check, not falsy-check)"
+    (is (= :found (if-some [x false] :found :not-found)))  ; false is not nil
+    (is (= :not-found (if-some [x nil] :found :not-found)))))
+
+(deftest when-some-test
+  (testing "when-some"
+    (is (= false (when-some [x false] x)))  ; returns false (the value)
+    (is (nil? (when-some [x nil] x)))))
+
+(deftest if-not-test
+  (testing "if-not"
+    (is (= :yes (if-not false :yes :no)))
+    (is (= :no (if-not true :yes :no)))))
+
+(deftest and-or-not
+  (testing "and"
+    (is (= true (and)))
+    (is (= 3 (and 1 2 3)))
+    (is (= false (and 1 false 3)))
+    (is (= nil (and 1 nil 3))))
+  
+  (testing "or"
+    (is (= 1 (or 1 2 3)))
+    (is (= 2 (or nil false 2))))
+  
+  (testing "not"
+    (is (= true (not false)))
+    (is (= true (not nil)))
+    (is (= false (not true)))
+    (is (= false (not 1)))))
+

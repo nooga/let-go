@@ -57,6 +57,12 @@
 (def rest next)
 (def parse-long parse-int)
 
+;; lazy-seq macro - wraps body in a thunk that produces a seq when realized
+;; Expands to: (lazy-seq* (fn [] body...))
+(defmacro lazy-seq [& body]
+  (let [thunk (cons 'fn (cons [] body))]
+    (list 'lazy-seq* thunk)))
+
 (defmacro cond [& forms]
   (when (>= (count forms) 2)
     (list 'if (first forms) (second forms)
@@ -212,13 +218,13 @@
        ~@legacy)))
 
 (defn filter [f xs]
-  (if xs
+  (if (seq xs)
     (let [x (first xs)
           r (next xs)]
       (if (f x)
         (cons x (filter f r))
         (filter f r)))
-    (list)))
+    nil))
 
 (defn take [n coll]
   (when (and coll (> n 0))
@@ -371,7 +377,8 @@
 
 (defn apply
   ([f args]
-   (apply* f (seq args)))
+   (let [s (seq args)]
+     (if s (apply* f s) (f))))
   ([f x args]
    (apply* f (list* x args)))
   ([f x y args]
@@ -521,13 +528,10 @@
     (assoc m k v)))
 
 (defn update-in
+  ([m ks f]
+   (assoc-in m ks (f (get-in m ks))))
   ([m ks f & args]
-   (let [up (fn up [m ks f args]
-              (let [[k & ks] ks]
-                (if ks
-                  (assoc m k (up (get m k) ks f args))
-                  (assoc m k (apply f (get m k) args)))))]
-     (up m ks f args))))
+   (assoc-in m ks (apply f (get-in m ks) args))))
 
 (defn update
   ([m k f]
@@ -795,24 +799,30 @@
 (defmacro cond->
   [expr & clauses]
   (let [g (gensym)
-        steps (map (fn [[test step]] `(if ~test (-> ~g ~step) ~g))
-                   (partition 2 clauses))]
-    `(let [~g ~expr
-           ~@(interleave (repeat g) (butlast steps))]
-       ~(if (empty? steps)
-          g
-          (last steps)))))
+        steps (vec (map (fn [[test step]] `(if ~test (-> ~g ~step) ~g))
+                        (partition 2 clauses)))]
+    (if (empty? steps)
+      expr
+      (if (> (count steps) 1)
+        `(let [~g ~expr
+               ~@(interleave (repeat g) (butlast steps))]
+           ~(last steps))
+        `(let [~g ~expr]
+           ~(last steps))))))
 
 (defmacro cond->>
   [expr & clauses]
   (let [g (gensym)
-        steps (map (fn [[test step]] `(if ~test (->> ~g ~step) ~g))
-                   (partition 2 clauses))]
-    `(let [~g ~expr
-           ~@(interleave (repeat g) (butlast steps))]
-       ~(if (empty? steps)
-          g
-          (last steps)))))
+        steps (vec (map (fn [[test step]] `(if ~test (->> ~g ~step) ~g))
+                        (partition 2 clauses)))]
+    (if (empty? steps)
+      expr
+      (if (> (count steps) 1)
+        `(let [~g ~expr
+               ~@(interleave (repeat g) (butlast steps))]
+           ~(last steps))
+        `(let [~g ~expr]
+           ~(last steps))))))
 
 (defmacro as->
   [expr name & forms]
@@ -825,21 +835,37 @@
 (defmacro some->
   [expr & forms]
   (let [g (gensym)
-        steps (map (fn [step] `(if (nil? ~g) nil (-> ~g ~step)))
-                   forms)]
-    `(let [~g ~expr
-           ~@(interleave (repeat g) (butlast steps))]
-       ~(if (empty? steps)
-          g
-          (last steps)))))
+        steps (vec (map (fn [step] `(if (nil? ~g) nil (-> ~g ~step)))
+                        forms))]
+    (if (empty? steps)
+      expr
+      (if (> (count steps) 1)
+        `(let [~g ~expr
+               ~@(interleave (repeat g) (butlast steps))]
+           ~(last steps))
+        `(let [~g ~expr]
+           ~(last steps))))))
 
 (defmacro some->>
   [expr & forms]
   (let [g (gensym)
-        steps (map (fn [step] `(if (nil? ~g) nil (->> ~g ~step)))
-                   forms)]
-    `(let [~g ~expr
-           ~@(interleave (repeat g) (butlast steps))]
-       ~(if (empty? steps)
-          g
-          (last steps)))))
+        steps (vec (map (fn [step] `(if (nil? ~g) nil (->> ~g ~step)))
+                        forms))]
+    (if (empty? steps)
+      expr
+      (if (> (count steps) 1)
+        `(let [~g ~expr
+               ~@(interleave (repeat g) (butlast steps))]
+           ~(last steps))
+        `(let [~g ~expr]
+           ~(last steps))))))
+;; Lazy version of filter for infinite sequences
+(defn lazy-filter [f xs]
+  (lazy-seq
+    (when (seq xs)
+      (let [x (first xs)
+            r (next xs)]
+        (if (f x)
+          (cons x (lazy-filter f r))
+          (lazy-filter f r))))))
+

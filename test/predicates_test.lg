@@ -1,0 +1,101 @@
+;; Clojure predicate tests
+(ns test.predicates-test
+  (:require [test :refer :all]))
+
+(deftest nil-predicates
+  (testing "nil?"
+    (is (nil? nil))
+    (is (not (nil? false)))
+    (is (not (nil? 0)))
+    (is (not (nil? ""))))
+  
+  (testing "some?"
+    (is (some? false))
+    (is (some? 0))
+    (is (some? ""))
+    (is (not (some? nil)))))
+
+(deftest boolean-predicates
+  (testing "true? false?"
+    (is (true? true))
+    (is (not (true? 1)))
+    (is (not (true? :true)))
+    (is (false? false))
+    (is (not (false? nil)))))
+
+(deftest numeric-predicates
+  (testing "zero? pos? neg?"
+    (is (zero? 0))
+    (is (not (zero? 1)))
+    (is (pos? 1))
+    (is (not (pos? 0)))
+    (is (not (pos? -1)))
+    (is (neg? -1))
+    (is (not (neg? 0))))
+  
+  (testing "even? odd?"
+    (is (even? 0))
+    (is (even? 2))
+    (is (not (even? 1)))
+    (is (odd? 1))
+    (is (odd? 3))
+    (is (not (odd? 2)))))
+
+(deftest type-predicates
+  (testing "type checks"
+    (is (list? '(1 2 3)))
+    (is (not (list? [1 2 3])))
+    (is (vector? [1 2 3]))
+    (is (not (vector? '(1 2 3))))
+    (is (map? {:a 1}))
+    (is (not (map? [])))
+    (is (symbol? 'foo))
+    (is (keyword? :foo))
+    (is (string? "foo"))
+    (is (number? 42))))
+
+(deftest collection-predicates
+  (testing "empty?"
+    (is (empty? []))
+    (is (empty? '()))
+    (is (empty? {}))
+    (is (empty? nil))
+    (is (not (empty? [1]))))
+  
+  (testing "coll?"
+    (is (coll? []))
+    (is (coll? '()))
+    (is (coll? {}))
+    (is (coll? #{})))
+  
+  (testing "seq?"
+    (is (seq? '(1 2)))))  ; vectors are not seqs
+
+(deftest equality-predicates
+  (testing "= and not="
+    (is (= 1 1))
+    (is (= 1 1 1 1))
+    (is (not= 1 2))
+    (is (= [1 2] [1 2]))
+    (is (= {:a 1} {:a 1}))
+    (is (= '(1 2) '(1 2)))))
+
+(deftest comparison-predicates
+  (testing "< > <= >="
+    (is (< 1 2))
+    (is (not (< 2 1)))
+    (is (> 2 1))
+    (is (<= 1 1))
+    (is (<= 1 2))
+    (is (>= 2 2))
+    (is (>= 3 2))))
+
+(deftest contains-test
+  (testing "contains?"
+    (is (contains? {:a 1} :a))
+    (is (not (contains? {:a 1} :b)))
+    (is (contains? [1 2 3] 0))    ; checks INDEX not value
+    (is (contains? [1 2 3] 2))
+    (is (not (contains? [1 2 3] 3)))  ; index 3 doesn't exist
+    (is (contains? #{:a :b} :a))))
+

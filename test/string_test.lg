@@ -1,0 +1,54 @@
+;; Clojure string operations tests
+(ns test.string-test
+  (:require [test :refer :all]))
+
+(deftest str-test
+  (testing "str concatenation"
+    (is (= "" (str)))
+    (is (= "hello" (str "hello")))
+    (is (= "hello world" (str "hello" " " "world")))
+    (is (= "123" (str 1 2 3)))
+    (is (= "truenilfalse" (str true nil false)))))
+
+(deftest string-seq
+  (testing "string as seq"
+    (is (= \h (first "hello")))
+    (is (= 5 (count "hello")))
+    (is (= '(\h \e \l \l \o) (seq "hello")))))
+
+(deftest split-test
+  (testing "split"
+    (is (= '("a" "b" "c") (split "a,b,c" ",")))
+    (is (= '("a" "b" "c") (split "a b c" " ")))))
+
+(deftest str-replace-test
+  (testing "str-replace"
+    (is (= "hello world" (str-replace "hello foo" "foo" "world")))
+    (is (= "aaa" (str-replace "aba" "b" "a")))))
+
+(deftest lines-test
+  (testing "lines"
+    (is (= ["a" "b" "c"] (lines "a\nb\nc")))))
+
+(deftest name-namespace-test
+  (testing "name"
+    (is (= "foo" (name 'foo)))
+    (is (= "bar" (name :bar)))
+    (is (= "baz" (name "baz"))))
+  
+  (testing "namespace"
+    (is (nil? (namespace 'foo)))
+    (is (= "clj" (namespace 'clj/foo)))
+    (is (nil? (namespace :bar)))
+    (is (= "ns" (namespace :ns/bar)))))
+
+(deftest keyword-symbol-test
+  (testing "keyword"
+    (is (= :foo (keyword "foo")))
+    (is (= :foo (keyword 'foo)))
+    (is (= :foo (keyword :foo))))
+  
+  (testing "symbol"
+    (is (= 'foo (symbol "foo")))
+    (is (= 'ns/foo (symbol "ns" "foo")))))
+
