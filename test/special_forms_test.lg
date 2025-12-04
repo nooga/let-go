@@ -1,0 +1,83 @@
+;; Clojure special forms and quoting tests
+(ns test.special-forms-test
+  (:require [test :refer :all]))
+
+(deftest let-test
+  (testing "let binding"
+    (is (= 3 (let [x 1 y 2] (+ x y))))
+    (is (= 3 (let [x 1 x (+ x 1) x (+ x 1)] x)))  ; shadowing
+    (is (= [1 2] (let [[a b] [1 2]] [a b])))))    ; destructuring
+
+(deftest do-test
+  (testing "do returns last"
+    (is (= 3 (do 1 2 3)))
+    (is (nil? (do)))))
+
+(deftest def-test
+  (testing "def creates var"
+    (def test-var 42)
+    (is (= 42 test-var))
+    (def test-var 43)  ; redef
+    (is (= 43 test-var))))
+
+(deftest quote-test
+  (testing "quote"
+    (is (= 'foo 'foo))
+    (is (= '(1 2 3) '(1 2 3)))
+    (is (symbol? 'foo))
+    (is (list? '(1 2 3)))))
+
+(deftest syntax-quote-test
+  (testing "syntax quote and unquote"
+    (let [x 1]
+      (is (= '(1 2 3) `(~x 2 3)))
+      (is (= '(1 2 3) `(1 ~@[2 3]))))))  ; unquote-splicing
+
+(deftest loop-recur-test
+  (testing "loop/recur"
+    (is (= 10 (loop [sum 0 n 4]
+                (if (zero? n)
+                  sum
+                  (recur (+ sum n) (dec n))))))
+    ; factorial
+    (is (= 120 (loop [n 5 acc 1]
+                 (if (<= n 1)
+                   acc
+                   (recur (dec n) (* acc n))))))))
+
+(deftest fn-recur-test
+  (testing "recur in fn"
+    (let [countdown (fn [n]
+                      (if (zero? n)
+                        :done
+                        (recur (dec n))))]
+      (is (= :done (countdown 5))))))
+
+(deftest var-test
+  (testing "var special form"
+    (def my-var 1)
+    (is (= 1 (deref (var my-var))))
+    (is (= 1 @(var my-var)))
+    (is (= 1 @#'my-var))))
+
+(deftest dotimes-test
+  (testing "dotimes"
+    (let [a (atom 0)]
+      (dotimes [i 5]
+        (swap! a inc))
+      (is (= 5 @a)))))
+
+(deftest doseq-test
+  (testing "doseq"
+    (let [a (atom [])]
+      (doseq [x [1 2 3]]
+        (swap! a conj x))
+      (is (= [1 2 3] @a)))))
+
+(deftest while-test
+  (testing "while"
+    (let [a (atom 0)]
+      (while (< @a 5)
+        (swap! a inc))
+      (is (= 5 @a)))))
+

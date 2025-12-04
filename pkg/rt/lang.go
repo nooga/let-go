@@ -37,6 +37,7 @@ func init() {
 	installHttpNS()
 	installOsNS()
 	installJSONNS()
+	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 
 func AllNSes() map[string]*vm.Namespace {
@@ -106,6 +107,76 @@ func nextID() int {
 	return gensymID
 }
 
+// valueEquals performs deep equality comparison for Clojure semantics
+func valueEquals(a, b vm.Value) bool {
+	// Handle nil
+	if a == vm.NIL && b == vm.NIL {
+		return true
+	}
+	if a == vm.NIL || b == vm.NIL {
+		return false
+	}
+
+	// Same type check
+	if a.Type() != b.Type() {
+		return false
+	}
+
+	// Handle collections specially
+	switch av := a.(type) {
+	case vm.ArrayVector:
+		bv := b.(vm.ArrayVector)
+		if len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if !valueEquals(av[i], bv[i]) {
+				return false
+			}
+		}
+		return true
+	case *vm.List:
+		bl := b.(*vm.List)
+		if av.RawCount() != bl.RawCount() {
+			return false
+		}
+		as, bs := vm.Seq(av), vm.Seq(bl)
+		for as != vm.EmptyList && bs != vm.EmptyList {
+			if !valueEquals(as.First(), bs.First()) {
+				return false
+			}
+			as, bs = as.Next(), bs.Next()
+		}
+		return true
+	case vm.Map:
+		bm := b.(vm.Map)
+		if len(av) != len(bm) {
+			return false
+		}
+		for k, v := range av {
+			bv, ok := bm[k]
+			if !ok || !valueEquals(v, bv) {
+				return false
+			}
+		}
+		return true
+	case vm.Set:
+		bs := b.(vm.Set)
+		if len(av) != len(bs) {
+			return false
+		}
+		for k := range av {
+			if _, ok := bs[k]; !ok {
+				return false
+			}
+		}
+		return true
+	default:
+		// For primitives, use Go equality
+		return a == b
+	}
+}
+
 // nolint
 func installLangNS() {
 	plus, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -156,7 +227,7 @@ func installLangNS() {
 		}
 
 		for i := 1; i < length; i++ {
-			if vs[0] != vs[i] {
+			if !valueEquals(vs[0], vs[i]) {
 				return vm.FALSE, nil
 			}
 		}
@@ -289,7 +360,7 @@ func installLangNS() {
 		}
 		if seq, ok := vs[0].(vm.Seq); ok {
 			ret := []vm.Value{}
-			for seq != vm.EmptyList {
+			for seq != nil && seq != vm.EmptyList && seq != vm.NIL {
 				ret = append(ret, seq.First())
 				seq = seq.Next()
 			}
@@ -523,11 +594,24 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
+		}
+		// Check for empty collection before calling Seq (Clojure semantics: seq of empty returns nil)
+		if coll, ok := vs[0].(vm.Collection); ok {
+			if coll.RawCount() == 0 {
+				return vm.NIL, nil
+			}
+		}
 		seq, ok := vs[0].(vm.Sequable)
 		if !ok {
 			return vm.NIL, fmt.Errorf("seq expected Seqauble")
 		}
 		n := seq.Seq()
+		// Return nil for empty sequences (Clojure semantics)
+		if n == vm.EmptyList {
+			return vm.NIL, nil
+		}
 		return n, nil
 	})
 
@@ -566,7 +650,11 @@ func installLangNS() {
 		key := vs[1]
 		as, ok := vs[0].(vm.Lookup)
 		if !ok {
-			return vm.NIL, nil // this is not an error
+			// Not a collection - return default value if provided, otherwise nil
+			if vl == 3 {
+				return vs[2], nil
+			}
+			return vm.NIL, nil
 		}
 		if vl == 2 {
 			return as.ValueAt(key), nil
@@ -627,15 +715,20 @@ func installLangNS() {
 		seqs := make([]vm.Seq, len(colls))
 		minlen := math.MaxInt
 		for i := range colls {
-			collx, ok := colls[i].(vm.Collection)
+			seqable, ok := colls[i].(vm.Sequable)
 			if !ok {
-				return vm.NIL, fmt.Errorf("map expected Collection")
+				return vm.NIL, fmt.Errorf("map expected Sequable collection")
 			}
-			c := collx.RawCount()
-			if c < minlen {
-				minlen = c
+			seq := seqable.Seq()
+			if seq == nil || seq == vm.EmptyList {
+				minlen = 0
+			} else if coll, ok := colls[i].(vm.Collection); ok {
+				c := coll.RawCount()
+				if c < minlen {
+					minlen = c
+				}
 			}
-			seqs[i] = colls[i].(vm.Seq)
+			seqs[i] = seq
 		}
 		if minlen == 0 {
 			return vm.EmptyList, nil
@@ -675,6 +768,22 @@ func installLangNS() {
 		if len(vs) == 3 {
 			sidx = 2
 		}
+		// Handle nil and empty collections
+		if vs[sidx] == vm.NIL {
+			if len(vs) == 3 {
+				return vs[1], nil
+			}
+			return mfn.Invoke(nil)
+		}
+		// Check for empty collection first
+		if coll, ok := vs[sidx].(vm.Collection); ok {
+			if coll.RawCount() == 0 {
+				if len(vs) == 3 {
+					return vs[1], nil
+				}
+				return mfn.Invoke(nil)
+			}
+		}
 		seq, ok := vs[sidx].(vm.Seq)
 		if !ok {
 			return vm.NIL, fmt.Errorf("reduce expected Seq")
@@ -686,7 +795,7 @@ func installLangNS() {
 			acc = seq.First()
 			seq = seq.Next()
 		}
-		for seq != vm.EmptyList {
+		for seq != vm.EmptyList && seq != vm.NIL {
 			acc, err = mfn.Invoke([]vm.Value{acc, seq.First()})
 			if err != nil {
 				return vm.NIL, err // FIXME wrap this somehow
@@ -1264,12 +1373,14 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		switch vs[0].(type) {
-		case *vm.ArrayVector:
-			v := vs[0].(vm.ArrayVector)
+		switch v := vs[0].(type) {
+		case vm.ArrayVector:
+			if len(v) == 0 {
+				return vm.NIL, nil
+			}
 			return v[len(v)-1], nil
 		case vm.Seq:
-			return vs[0].(vm.Seq).First(), nil
+			return v.First(), nil
 		default:
 			return vm.NIL, fmt.Errorf("peek expected Seq or Vec")
 		}
@@ -1345,6 +1456,18 @@ func installLangNS() {
 		}
 		cns.Refer(NS(string(s)), alias, all)
 		return vm.NIL, nil
+	})
+
+	// lazy-seq* creates a LazySeq from a thunk function
+	lazySeq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("lazy-seq* expected 1 argument, got %d", len(vs))
+		}
+		fn, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("lazy-seq* expected a function")
+		}
+		return vm.NewLazySeq(fn), nil
 	})
 
 	if err != nil {
@@ -1486,6 +1609,7 @@ func installLangNS() {
 
 	ns.Def("iterate", iterate)
 	ns.Def("repeat", repeat)
+	ns.Def("lazy-seq*", lazySeq)
 
 	CoreNS = ns
 

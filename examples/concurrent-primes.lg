@@ -1,0 +1,64 @@
+;
+; Copyright (c) 2024 Marcin Gasperowicz <xnooga@gmail.com>
+; SPDX-License-Identifier: MIT
+;
+
+(ns concurrent-primes)
+
+;; Concurrent Prime Checker
+;; Demonstrates: go blocks, atoms, concurrency
+;;
+;; Usage: let-go concurrent-primes.lg
+
+(println "🚀 Concurrent Prime Checker")
+(println "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+(println)
+
+;; Check if n is prime
+(defn prime? [n]
+  (cond
+    (< n 2) false
+    (= n 2) true
+    (even? n) false
+    :else (loop [i 3]
+            (cond
+              (> (* i i) n) true
+              (zero? (mod n i)) false
+              :else (recur (+ i 2))))))
+
+;; State  
+(def prime-count (atom 0))
+(def completed (atom 0))
+(def sample-primes (atom []))  ;; Store just a few samples
+
+;; Test range
+(def start-num 1000000)
+(def count-to-check 500)
+
+(println (str "Checking " count-to-check " numbers starting from " start-num))
+(println "Spawning one goroutine per number...")
+(println)
+
+(let [begin (now)]
+  ;; Spawn a go block for each number
+  (doseq [n (range start-num (+ start-num count-to-check))]
+    (go
+      (when (prime? n)
+        (swap! prime-count inc)
+        ;; Only store first 20 primes
+        (when (< (count @sample-primes) 20)
+          (swap! sample-primes conj n)))
+      (swap! completed inc)))
+
+  ;; Wait for all to complete
+  (while (< @completed count-to-check))
+
+  (println (str "✓ Found " @prime-count " primes in " (.Sub (now) begin)))
+  (println)
+  (println "Sample primes found:")
+  (println @sample-primes))
+
+(println)
+(println "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+(println "✨ Each number checked in its own goroutine!")
+

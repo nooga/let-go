@@ -10,15 +10,15 @@
   (testing "comparison and logical functions"
     (do-template [x y equal? less? less-equal? greater? greater-equal? and? or? not-x not-y]
                  (do
-                   (is (= x y) equal?)
-                   (is (< x y) less?)
-                   (is (<= x y) less-equal?)
-                   (is (> x y) greater?)
-                   (is (>= x y) greater-equal?)
-                   (is (and x y) and?)
-                   (is (or x y) or?)
-                   (is (not x) not-x)
-                   (is (not y) not-y))
+                   (is (= equal? (= x y)))
+                   (is (= less? (< x y)))
+                   (is (= less-equal? (<= x y)))
+                   (is (= greater? (> x y)))
+                   (is (= greater-equal? (>= x y)))
+                   (is (= and? (and x y)))
+                   (is (= or? (or x y)))
+                   (is (= not-x (not x)))
+                   (is (= not-y (not y))))
                  2 3 false true true false false 3 2 false false
                  5 5 true false true false true 5 5 false false
                  -4 -2 false true true false false -2 -4 false false)))

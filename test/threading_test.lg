@@ -1,0 +1,45 @@
+;; Clojure threading macro tests
+(ns test.threading-test
+  (:require [test :refer :all]))
+
+(deftest thread-first
+  (testing "-> thread first"
+    (is (= 3 (-> 1 inc inc)))
+    (is (= 2 (-> 5 (- 3))))      ; (- 5 3) = 2
+    (is (= [2 3] (-> [1 2 3] rest vec)))
+    (is (= {:a 1 :b 2} (-> {} (assoc :a 1) (assoc :b 2))))))
+
+(deftest thread-last
+  (testing "->> thread last"
+    (is (= 9 (->> [1 2 3] (map inc) (reduce +))))  ; [2 3 4] -> 9
+    (is (= -4 (->> 5 (- 1))))    ; (- 1 5) = -4
+    (is (= '(2 4 6) (->> [1 2 3] (map #(* 2 %)))))))
+
+(deftest thread-as
+  (testing "as-> thread with binding"
+    (is (= 3 (as-> 1 x (inc x) (inc x))))
+    (is (= 5 (as-> 0 n (inc n) (+ n 3) (inc n))))))
+
+(deftest thread-some
+  (testing "some-> short-circuit on nil"
+    (is (= 2 (some-> 1 inc)))
+    (is (nil? (some-> nil inc)))
+    (is (nil? (some-> {:a 1} :b inc)))
+    (is (= 2 (some-> {:a 1} :a inc)))))
+
+(deftest thread-some-last
+  (testing "some->> short-circuit on nil"
+    (is (= 2 (some->> 1 (+ 1))))
+    (is (nil? (some->> nil (+ 1))))))
+
+(deftest cond-thread
+  (testing "cond-> conditional threading"
+    (is (= 2 (cond-> 1 true inc)))
+    (is (= 1 (cond-> 1 false inc)))
+    (is (= 3 (cond-> 1 true inc true inc false dec)))))
+
+(deftest cond-thread-last  
+  (testing "cond->> conditional threading"
+    (is (= '(2 3 4) (cond->> [1 2 3] true (map inc))))
+    (is (= [1 2 3] (cond->> [1 2 3] false (map inc))))))
+

@@ -28,12 +28,11 @@ func Eval(src string) (vm.Value, error) {
 
 func evalInit() {
 	consts = vm.NewConsts()
+	// core is loaded eagerly – its macros are needed everywhere
 	_, err := Eval(rt.CoreSrc)
 	if err != nil {
-		panic(err)
+		// Provide helpful debugging info for core.lg compilation failures
+		panic("core.lg compilation failed: " + err.Error())
 	}
-	_, err = Eval(rt.TestSrc)
-	if err != nil {
-		panic(err)
-	}
+	// test, walk, etc. are demand-loaded via resolver when required
 }

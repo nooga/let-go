@@ -72,37 +72,94 @@ func (l Map) First() Value {
 	return NIL // unreachable
 }
 
-func toList(l Map) *List {
-	var lst []Value
+func (l Map) toEntries() []Value {
+	entries := make([]Value, 0, len(l))
 	for k, v := range l {
-		lst = append(lst, ArrayVector{k, v})
+		entries = append(entries, ArrayVector{k, v})
 	}
-	ret, _ := ListType.Box(lst)
-	return ret.(*List)
+	return entries
 }
 
 func (l Map) Seq() Seq {
-	return toList(l)
+	if len(l) == 0 {
+		return EmptyList
+	}
+	return &MapSeq{entries: l.toEntries(), i: 0}
 }
 
 // More implements Seq
 func (l Map) More() Seq {
-	if len(l) == 1 {
+	if len(l) <= 1 {
 		return EmptyList
 	}
-	ret := toList(l)
-	return ret.More()
+	return &MapSeq{entries: l.toEntries(), i: 1}
 }
 
 // Next implements Seq
 func (l Map) Next() Seq {
-	return l.More()
+	if len(l) <= 1 {
+		return EmptyList
+	}
+	return &MapSeq{entries: l.toEntries(), i: 1}
 }
 
 // Cons implements Seq
 func (l Map) Cons(val Value) Seq {
-	return toList(l).Cons(val)
+	return NewCons(val, l.Seq())
 }
+
+// MapSeq is a lightweight seq view over a Map's entries
+type MapSeq struct {
+	entries []Value // cached [k v] pairs
+	i       int
+}
+
+func (s *MapSeq) String() string {
+	b := &strings.Builder{}
+	b.WriteRune('(')
+	for i := s.i; i < len(s.entries); i++ {
+		if i > s.i {
+			b.WriteRune(' ')
+		}
+		b.WriteString(s.entries[i].String())
+	}
+	b.WriteRune(')')
+	return b.String()
+}
+
+func (s *MapSeq) Type() ValueType    { return ListType }
+func (s *MapSeq) Unbox() interface{} { return s.entries[s.i:] }
+
+func (s *MapSeq) First() Value {
+	if s.i >= len(s.entries) {
+		return NIL
+	}
+	return s.entries[s.i]
+}
+
+func (s *MapSeq) More() Seq {
+	if s.i+1 >= len(s.entries) {
+		return EmptyList
+	}
+	return &MapSeq{entries: s.entries, i: s.i + 1}
+}
+
+func (s *MapSeq) Next() Seq {
+	if s.i+1 >= len(s.entries) {
+		return EmptyList
+	}
+	return &MapSeq{entries: s.entries, i: s.i + 1}
+}
+
+func (s *MapSeq) Cons(val Value) Seq {
+	return NewCons(val, s)
+}
+
+func (s *MapSeq) Count() Value    { return Int(len(s.entries) - s.i) }
+func (s *MapSeq) RawCount() int   { return len(s.entries) - s.i }
+func (s *MapSeq) Empty() Collection { return EmptyList }
+func (s *MapSeq) Conj(val Value) Collection { return s.Cons(val).(*List) }
+func (s *MapSeq) Seq() Seq { return s }
 
 // Count implements Collection
 func (l Map) Count() Value {

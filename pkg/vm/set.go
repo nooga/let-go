@@ -83,34 +83,86 @@ func (l Set) First() Value {
 	return NIL
 }
 
-func (l Set) toList() *List {
-	lst := l.keys()
-	ret, _ := ListType.Box(lst)
-	return ret.(*List)
-}
-
 func (l Set) Seq() Seq {
-	return l.toList()
+	if len(l) == 0 {
+		return EmptyList
+	}
+	return &SetSeq{keys: l.keys(), i: 0}
 }
 
 // More implements Seq
 func (l Set) More() Seq {
-	if len(l) == 1 {
+	if len(l) <= 1 {
 		return EmptyList
 	}
-	ret := l.toList()
-	return ret.More()
+	return &SetSeq{keys: l.keys(), i: 1}
 }
 
 // Next implements Seq
 func (l Set) Next() Seq {
-	return l.More()
+	if len(l) <= 1 {
+		return EmptyList
+	}
+	return &SetSeq{keys: l.keys(), i: 1}
 }
 
 // Cons implements Seq
 func (l Set) Cons(val Value) Seq {
-	return l.toList().Cons(val)
+	return NewCons(val, l.Seq())
 }
+
+// SetSeq is a lightweight seq view over a Set's keys
+type SetSeq struct {
+	keys []Value
+	i    int
+}
+
+func (s *SetSeq) String() string {
+	b := &strings.Builder{}
+	b.WriteRune('(')
+	for i := s.i; i < len(s.keys); i++ {
+		if i > s.i {
+			b.WriteRune(' ')
+		}
+		b.WriteString(s.keys[i].String())
+	}
+	b.WriteRune(')')
+	return b.String()
+}
+
+func (s *SetSeq) Type() ValueType    { return ListType }
+func (s *SetSeq) Unbox() interface{} { return s.keys[s.i:] }
+
+func (s *SetSeq) First() Value {
+	if s.i >= len(s.keys) {
+		return NIL
+	}
+	return s.keys[s.i]
+}
+
+func (s *SetSeq) More() Seq {
+	if s.i+1 >= len(s.keys) {
+		return EmptyList
+	}
+	return &SetSeq{keys: s.keys, i: s.i + 1}
+}
+
+func (s *SetSeq) Next() Seq {
+	if s.i+1 >= len(s.keys) {
+		return EmptyList
+	}
+	return &SetSeq{keys: s.keys, i: s.i + 1}
+}
+
+func (s *SetSeq) Cons(val Value) Seq {
+	return NewCons(val, s)
+}
+
+func (s *SetSeq) Count() Value      { return Int(len(s.keys) - s.i) }
+func (s *SetSeq) RawCount() int     { return len(s.keys) - s.i }
+func (s *SetSeq) Empty() Collection { return EmptyList }
+func (s *SetSeq) Conj(val Value) Collection { return s.Cons(val).(*List) }
+func (s *SetSeq) Seq() Seq { return s }
 
 // Count implements Collection
 func (l Set) Count() Value {

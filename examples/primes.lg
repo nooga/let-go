@@ -1,0 +1,76 @@
+;
+; Copyright (c) 2024 Marcin Gasperowicz <xnooga@gmail.com>
+; SPDX-License-Identifier: MIT
+;
+
+(ns primes-demo)
+
+;; ╔═══════════════════════════════════════════════════════════════════════════╗
+;; ║                    LAZY PRIME NUMBER GENERATOR                            ║
+;; ║                                                                           ║
+;; ║  Demonstrates: lazy-seq, iterate, lazy-filter, infinite sequences         ║
+;; ╚═══════════════════════════════════════════════════════════════════════════╝
+;;
+;; Usage: let-go examples/primes.lg
+
+;; Check if n is prime (trial division)
+(defn prime? [n]
+  (cond
+    (< n 2) false
+    (= n 2) true
+    (even? n) false
+    :else (loop [i 3]
+            (cond
+              (> (* i i) n) true
+              (zero? (mod n i)) false
+              :else (recur (+ i 2))))))
+
+;; All natural numbers from 2 onwards (infinite, lazy via iterate)
+(def naturals (iterate inc 2))
+
+;; Filter to keep only primes (lazy!)
+(def primes (lazy-filter prime? naturals))
+
+;; Prime factorization using our lazy primes
+(defn prime-factors [n]
+  (loop [n n ps primes factors []]
+    (let [p (first ps)]
+      (cond
+        (= n 1) factors
+        (zero? (mod n p)) (recur (/ n p) ps (conj factors p))
+        (> (* p p) n) (conj factors n)
+        :else (recur n (next ps) factors)))))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Demo
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(println)
+(println "  ╔═══════════════════════════════════════════════════════════════╗")
+(println "  ║               🔢 LAZY PRIME NUMBERS 🔢                        ║")
+(println "  ╚═══════════════════════════════════════════════════════════════╝")
+(println)
+
+(println "  First 25 primes (computed lazily):")
+(println (str "  " (vec (take 25 primes))))
+(println)
+
+(println "  Computing prime #100...")
+(let [start (now)
+      p100 (first (drop 99 primes))]
+  (println (str "  → Prime #100 is: " p100))
+  (println (str "  → Computed in: " (.Sub (now) start))))
+(println)
+
+(println "  Prime factorization examples:")
+(loop [nums [12 100 997 2024 12345]]
+  (when (seq nums)
+    (let [n (first nums)]
+      (println (str "    " n " = " (prime-factors n))))
+    (recur (next nums))))
+(println)
+
+(println "  ═══════════════════════════════════════════════════════════════")
+(println "  ✨ All computed lazily - nothing evaluated until needed!")
+(println)
+

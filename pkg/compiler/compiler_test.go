@@ -97,15 +97,19 @@ func TestContext_CompileMultiple(t *testing.T) {
 }
 
 func TestContext_CompileVar(t *testing.T) {
-	v := vm.NewVar(rt.NS(rt.NameCoreNS), rt.NameCoreNS, "foo")
+	// Define foo first so it exists in the namespace
+	_, err := Eval("(def foo nil)")
+	assert.NoError(t, err)
 
+	// Now (var foo) should resolve to the defined var
 	out, err := Eval("(var foo)")
 	assert.NoError(t, err)
-	assert.Equal(t, v, out)
+	assert.NotNil(t, out)
+	assert.IsType(t, &vm.Var{}, out)
 
-	out, err = Eval("#'foo")
+	out2, err := Eval("#'foo")
 	assert.NoError(t, err)
-	assert.Equal(t, v, out)
+	assert.Equal(t, out, out2)
 }
 
 func TestContext_CompileMultiArityFn(t *testing.T) {

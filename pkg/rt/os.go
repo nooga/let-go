@@ -39,9 +39,6 @@ func installOsNS() {
 
 	ns := vm.NewNamespace("os")
 
-	// vars
-	CurrentNS = ns.Def("*ns*", ns)
-
 	ns.Def("getenv", getenv)
 	ns.Def("exec", execf)
 	ns.Def("with-stdin", withStdin)

@@ -3,9 +3,10 @@ package resolver
 import (
 	"os"
 	"path"
-	"strings"
+	stdstrings "strings"
 
 	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
@@ -48,8 +49,12 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 	if r.cloading[name] {
 		return nil
 	}
-	blocks := strings.Split(name, ".")
+	blocks := stdstrings.Split(name, ".")
 	p := path.Join(blocks...) + ".lg"
+	// Try embedded namespaces first
+	if embedded := r.loadEmbedded(name); embedded != nil {
+		return embedded
+	}
 	for _, dir := range r.path {
 		cp := path.Join(dir, p)
 		if _, err := os.Stat(cp); err == nil {
@@ -60,4 +65,34 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 		}
 	}
 	return nil
+}
+
+// loadEmbedded loads bundled namespaces from embedded sources
+func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
+	var src string
+	switch name {
+	case "walk":
+		src = rt.WalkSrc
+	case "core":
+		src = rt.CoreSrc
+	case "test":
+		src = rt.TestSrc
+	default:
+		return nil
+	}
+	if src == "" {
+		return nil
+	}
+	r.cloading[name] = true
+	defer delete(r.cloading, name)
+	ons := r.ctx.CurrentNS()
+	r.ctx.SetSource("<embedded:" + name + ">")
+	_, _, err := r.ctx.CompileMultiple(stdstrings.NewReader(src))
+	if err != nil {
+		r.ctx.SetCurrentNS(ons)
+		return nil
+	}
+	nns := r.ctx.CurrentNS()
+	r.ctx.SetCurrentNS(ons)
+	return nns
 }

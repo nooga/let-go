@@ -700,19 +700,22 @@ func flattenMap(m vm.Map) vm.Value {
 }
 
 func expandUnquotes(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error) {
-	fcnt := form.(vm.Collection)
-	ret := vm.ArrayVector{}
-	if fcnt.RawCount() == 0 {
-		return ret, nil
+	seqable, ok := form.(vm.Sequable)
+	if !ok {
+		return vm.NIL, NewReaderError(r, "expandUnquotes expected Sequable")
 	}
-	fseq := form.(vm.Seq) // this has to succeed
-	for {
+	fseq := seqable.Seq()
+	if fseq == nil || fseq == vm.EmptyList {
+		return vm.ArrayVector{}, nil
+	}
+	ret := vm.ArrayVector{}
+	for fseq != nil && fseq != vm.EmptyList {
 		v := fseq.First()
 		switch {
 		case isUnquote(v):
-			ret = append(ret, vm.ArrayVector{v.(vm.Seq).Next().First()})
+			ret = append(ret, vm.ArrayVector{v.(vm.Sequable).Seq().Next().First()})
 		case isUnquoteSplicing(v):
-			ret = append(ret, v.(vm.Seq).Next().First())
+			ret = append(ret, v.(vm.Sequable).Seq().Next().First())
 		default:
 			vq, err := syntaxQuote(r, v, env)
 			if err != nil {
@@ -721,9 +724,6 @@ func expandUnquotes(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, err
 			ret = append(ret, vm.ArrayVector{vq})
 		}
 		fseq = fseq.Next()
-		if fseq == vm.EmptyList || fseq == vm.NIL {
-			break
-		}
 	}
 	return ret, nil
 }

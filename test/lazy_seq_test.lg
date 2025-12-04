@@ -1,0 +1,70 @@
+(ns test.lazyseq
+  (:require [test :refer :all]))
+
+;; Helper to count realizations
+(def ^:dynamic *realize-count* (atom 0))
+
+(defn reset-count! []
+  (reset! *realize-count* 0))
+
+(defn inc-count! []
+  (swap! *realize-count* inc))
+
+;; Test lazy-seq basic functionality
+(deftest lazy-seq-basics
+  (testing "lazy-seq creates a lazy sequence"
+    (reset-count!)
+    (let [s (lazy-seq 
+              (inc-count!)
+              (cons 1 nil))]
+      ;; Before accessing, count should be 0
+      (is (= 0 @*realize-count*) "lazy-seq should not realize before access")
+      ;; Access first
+      (is (= 1 (first s)))
+      ;; Now count should be 1
+      (is (= 1 @*realize-count*) "lazy-seq should realize on first access")))
+  
+  (testing "lazy-seq caches result"
+    (reset-count!)
+    (let [s (lazy-seq 
+              (inc-count!)
+              (cons 42 nil))]
+      (is (= 42 (first s)))
+      (is (= 42 (first s)))
+      (is (= 42 (first s)))
+      (is (= 1 @*realize-count*) "lazy-seq should cache and only realize once")))
+  
+  (testing "lazy-seq nil body returns nil"
+    (let [s (lazy-seq nil)]
+      (is (nil? (first s)))))
+      
+  (testing "cons onto lazy-seq"
+    (let [inner (lazy-seq (cons 2 (cons 3 nil)))
+          outer (cons 1 inner)]
+      (is (= 1 (first outer)))
+      (is (= 2 (first (next outer)))))))
+
+;; Helper for taking n elements  
+(defn take-n [n s]
+  (loop [s s n n result []]
+    (if (or (zero? n) (nil? s))
+      result
+      (recur (next s) (dec n) (conj result (first s))))))
+
+(deftest infinite-seq-test
+  (testing "infinite integers via iterate"
+    ;; Use iterate which is already lazy
+    (let [ints (iterate inc 0)]
+      (is (= 0 (first ints)))
+      (is (= 1 (first (next ints))))
+      (is (= 2 (first (next (next ints))))))
+    (is (= [0 1 2 3 4] (take-n 5 (iterate inc 0))))))
+
+(deftest lazy-fib-test
+  (testing "lazy Fibonacci via lazy-seq"
+    ;; Build fib sequence using atom to hold the generator
+    (let [fib-gen (atom nil)
+          _ (reset! fib-gen (fn [a b] (lazy-seq (cons a (@fib-gen b (+ a b))))))
+          fibs (@fib-gen 0 1)]
+      (is (= [0 1 1 2 3 5 8 13 21 34] (take-n 10 fibs))))))
+

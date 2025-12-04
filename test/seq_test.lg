@@ -1,0 +1,114 @@
+;; Clojure sequence semantics tests
+(ns test.seq-test
+  (:require [test :refer :all]))
+
+(deftest seq-basics
+  (testing "seq returns nil for empty collections"
+    (is (nil? (seq [])))
+    (is (nil? (seq '())))
+    (is (nil? (seq {})))
+    (is (nil? (seq #{})))
+    (is (nil? (seq "")))
+    (is (nil? (seq nil))))
+  
+  (testing "seq returns seq for non-empty"
+    (is (seq [1]))
+    (is (seq '(1)))
+    (is (seq {:a 1}))))
+
+(deftest first-rest-next
+  (testing "first"
+    (is (= 1 (first [1 2 3])))
+    (is (= 1 (first '(1 2 3))))
+    (is (nil? (first [])))
+    (is (nil? (first nil))))
+  
+  (testing "rest vs next"
+    (is (= '(2 3) (rest [1 2 3])))
+    ;; rest returns empty seq, next returns nil
+    (is (nil? (next [1])))
+    (is (nil? (next []))))
+  
+  (testing "second"
+    (is (= 2 (second [1 2 3])))
+    (is (nil? (second [1])))
+    (is (nil? (second [])))))
+
+(deftest cons-conj
+  (testing "cons prepends"
+    (is (= '(0 1 2) (cons 0 [1 2])))
+    (is (= '(0 1 2) (cons 0 '(1 2))))
+    (is (= '(0) (cons 0 nil))))
+  
+  (testing "conj adds appropriately"
+    (is (= [1 2 3] (conj [1 2] 3)))      ; vectors add at end
+    (is (= '(3 1 2) (conj '(1 2) 3)))    ; lists add at front
+    (is (= #{1 2 3} (conj #{1 2} 3)))))
+
+(deftest map-filter-reduce
+  (testing "map"
+    (is (= '(2 4 6) (map #(* 2 %) [1 2 3])))
+    (is (= '() (map inc [])))
+    (is (= '(5 7 9) (map + [1 2 3] [4 5 6]))))
+  
+  (testing "filter"
+    (is (= '(2 4) (filter even? [1 2 3 4 5])))
+    (is (= '() (filter even? [1 3 5])))
+    (is (= '(1 2 3) (filter identity [1 nil 2 false 3]))))
+  
+  (testing "reduce"
+    (is (= 10 (reduce + [1 2 3 4])))
+    (is (= 10 (reduce + 0 [1 2 3 4])))
+    (is (= 0 (reduce + 0 [])))
+    (is (= 0 (reduce + [])))  ; (reduce + []) should return (+) = 0... or error?
+    ))
+
+(deftest take-drop
+  (testing "take"
+    (is (= '(1 2 3) (take 3 [1 2 3 4 5])))
+    (is (= '(1 2) (take 5 [1 2])))  ; take more than available
+    (is (nil? (take 0 [1 2 3])))    ; returns nil for empty result
+    (is (nil? (take 3 nil))))
+  
+  (testing "drop"
+    (is (= '(4 5) (drop 3 [1 2 3 4 5])))
+    (is (nil? (drop 10 [1 2])))))
+
+(deftest concat-test
+  (testing "concat"
+    (is (= '(1 2 3 4) (concat [1 2] [3 4])))
+    (is (= '(1 2 3 4 5 6) (concat [1 2] [3 4] [5 6])))))
+
+(deftest partition-test
+  (testing "partition"
+    (is (= 2 (count (partition 2 [1 2 3 4]))))
+    (is (= 2 (count (partition 2 [1 2 3 4 5]))))))
+
+(deftest reverse-test
+  (testing "reverse"
+    (is (= '(3 2 1) (reverse [1 2 3])))
+    (is (= '() (reverse [])))
+    (is (= '(1) (reverse [1])))))
+
+(deftest distinct-test
+  (testing "distinct"
+    (is (= 3 (count (distinct [1 2 1 3 2]))))))
+
+(deftest interpose-interleave
+  (testing "interpose"
+    (is (= '(1 :x 2 :x 3) (interpose :x [1 2 3])))
+    (is (= '(1) (interpose :x [1])))
+    (is (nil? (interpose :x []))))
+  
+  (testing "interleave"
+    (is (= '(1 :a 2 :b) (interleave [1 2] [:a :b])))
+    (is (= '(1 :a) (interleave [1 2 3] [:a])))))  ; stops at shortest
+
+(deftest frequencies-test
+  (testing "frequencies"
+    (is (= {:a 2 :b 1} (frequencies [:a :b :a])))))
+
+(deftest group-by-test
+  (testing "group-by"
+    (is (= {true [2 4] false [1 3 5]} (group-by even? [1 2 3 4 5])))))
+

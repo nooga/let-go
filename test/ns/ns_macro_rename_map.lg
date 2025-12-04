@@ -1,11 +1,10 @@
-
-(ns tmp.rename (:require [core :rename {+ plus - minus}] [test :refer :all]))
+(ns tmp.rename 
+  (:require [core :rename {+ plus - minus}])
+  (:require [test :refer :all]))
 
 (deftest ns-rename-map
   (testing "ns with :rename map"
-    (is (= 3 (plus 1 2)) true)
-    (is (= 1 (minus 3 2)) true)))
-
-; (run-tests ns-rename-map)
+    (is (= 3 (plus 1 2)))
+    (is (= 1 (minus 3 2)))))
 
 

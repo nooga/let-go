@@ -150,9 +150,6 @@ func installHttpNS() {
 
 	ns := vm.NewNamespace("http")
 
-	// vars
-	CurrentNS = ns.Def("*ns*", ns)
-
 	ns.Def("handle", handle)
 	ns.Def("serve", serve)
 	ns.Def("serve2", serve2)
