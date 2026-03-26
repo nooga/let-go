@@ -53,8 +53,6 @@
 (def >= (fn [a b] (or (= a b) (> a b))))
 (def <= (fn [a b] (or (= a b) (< a b))))
 
-;; this is wrong :^)
-(def rest next)
 (def parse-long parse-int)
 
 ;; lazy-seq macro - wraps body in a thunk that produces a seq when realized
@@ -168,7 +166,7 @@
 (defn spy [s x] (println s x) x)
 
 (defn mapcat [f xs]
-  (reduce (fn [a x] (concat-list a x)) '() (map f xs)))
+  (apply concat (map f xs)))
 
 (defmacro ns [n & body]
   (let [emit-one (fn [forms req]
@@ -218,17 +216,19 @@
        ~@legacy)))
 
 (defn filter [f xs]
-  (if (seq xs)
-    (let [x (first xs)
-          r (next xs)]
-      (if (f x)
-        (cons x (filter f r))
-        (filter f r)))
-    nil))
+  (lazy-seq
+    (let [s (seq xs)]
+      (when s
+        (let [x (first s)
+              r (next s)]
+          (if (f x)
+            (cons x (filter f r))
+            (filter f r)))))))
 
 (defn take [n coll]
-  (when (and coll (> n 0))
-    (cons (first coll) (take (dec n) (next coll)))))
+  (lazy-seq
+    (when (and (pos? n) (seq coll))
+      (cons (first coll) (take (dec n) (next coll))))))
 
 (defn drop [n xs]
   (if (> n 0)
@@ -243,7 +243,7 @@
   ([n step xs]
    (loop [c xs w []]
      (if (>= (count c) n)
-       (recur (drop step c) (conj w (take n c)))
+       (recur (drop step c) (conj w (vec (take n c))))
        w))))
 
 (defmacro dotimes
@@ -590,10 +590,10 @@
              s1 (seq s1)))))
 
 (defn take-while [pred coll]
-  (if (empty? coll)
-    coll
-    (when (pred (first coll))
-      (cons (first coll) (take-while pred (rest coll))))))
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (when (pred (first s))
+        (cons (first s) (take-while pred (rest s)))))))
 
 (defn drop-while [pred coll]
   (let [step (fn [pred coll]
@@ -620,22 +620,25 @@
 (defn into [c r] (reduce conj c r))
 
 (defn keep [f coll]
-  (when-let [s (seq coll)]
-    (let [x (f (first s))]
-      (if (nil? x)
-        (keep f (rest s))
-        (cons x (keep f (rest s)))))))
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (let [x (f (first s))]
+        (if (nil? x)
+          (keep f (rest s))
+          (cons x (keep f (rest s))))))))
 
 (defn- keepi [f idx coll]
-  (when-let [s (seq coll)]
-    (let [x (f idx (first s))]
-      (if (nil? x)
-        (keepi f (inc idx) (rest s))
-        (cons x (keepi f (inc idx) (rest s)))))))
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (let [x (f idx (first s))]
+        (if (nil? x)
+          (keepi f (inc idx) (rest s))
+          (cons x (keepi f (inc idx) (rest s))))))))
 
 (defn- mapi [f idx coll]
-  (when-let [s (seq coll)]
-    (cons (f idx (first s)) (mapi f (inc idx) (rest s)))))
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (cons (f idx (first s)) (mapi f (inc idx) (rest s))))))
 
 (defn map-indexed [f coll]
   (mapi f 0 coll))
@@ -711,11 +714,12 @@
    {} coll))
 
 (defn partition-by [f coll]
-  (when-let [s (seq coll)]
-    (let [fst (first s)
-          fv (f fst)
-          run (cons fst (take-while #(= fv (f %)) (next s)))]
-      (cons run (partition-by f (drop (count run) s))))))
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (let [fst (first s)
+            fv (f fst)
+            run (cons fst (take-while #(= fv (f %)) (next s)))]
+        (cons run (partition-by f (drop (count run) s)))))))
 
 (defn frequencies
   [coll]
@@ -725,46 +729,53 @@
 
 (defn reductions
   ([f coll]
-   (if-let [s (seq coll)]
-     (reductions f (first s) (rest s))
-     (list (f))))
+   (lazy-seq
+     (if-let [s (seq coll)]
+       (reductions f (first s) (rest s))
+       (list (f)))))
   ([f init coll]
-   (cons init
-         (when-let [s (seq coll)]
-           (reductions f (f init (first s)) (rest s))))))
+   (lazy-seq
+     (cons init
+           (when-let [s (seq coll)]
+             (reductions f (f init (first s)) (rest s)))))))
 
 (defn take-nth [n coll]
-  (when-let [s (seq coll)]
-    (cons (first s) (take-nth n (drop n s)))))
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (cons (first s) (take-nth n (drop n s))))))
 
 (defn interpose
   [sep coll]
-  (when-let [s (seq coll)]
-    (let [n (next s)]
-      (if n
-        (cons (first s) (cons sep (interpose sep n)))
-        (list (first s))))))
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (let [n (next s)]
+        (if n
+          (cons (first s) (cons sep (interpose sep n)))
+          (list (first s)))))))
 
 (defn interleave
   ([] ())
   ([c1] c1)
   ([c1 c2]
-   (let [s1 (seq c1) s2 (seq c2)]
-     (when (and s1 s2)
-       (cons (first s1) (cons (first s2)
-                              (interleave (rest s1) (rest s2)))))))
+   (lazy-seq
+     (let [s1 (seq c1) s2 (seq c2)]
+       (when (and s1 s2)
+         (cons (first s1) (cons (first s2)
+                                (interleave (rest s1) (rest s2))))))))
   ([c1 c2 & colls]
-   (let [ss (map seq (conj colls c2 c1))]
-     (when (every? identity ss)
-       (concat (map first ss) (apply interleave (map rest ss)))))))
+   (lazy-seq
+     (let [ss (map seq (conj colls c2 c1))]
+       (when (every? identity ss)
+         (concat (map first ss) (apply interleave (map rest ss))))))))
 
 (defn- distinct-step [xs seen]
-  ((fn [[f :as xs] seen]
-     (when-let [s (seq xs)]
-       (if (contains? seen f)
-         (recur (rest s) seen)
-         (cons f (distinct-step (rest s) (conj seen f))))))
-   xs seen))
+  (lazy-seq
+    ((fn [[f :as xs] seen]
+       (when-let [s (seq xs)]
+         (if (contains? seen f)
+           (recur (rest s) seen)
+           (cons f (distinct-step (rest s) (conj seen f))))))
+     xs seen)))
 
 (defn distinct [coll]
   (distinct-step coll #{}))
@@ -859,13 +870,8 @@
            ~(last steps))
         `(let [~g ~expr]
            ~(last steps))))))
-;; Lazy version of filter for infinite sequences
-(defn lazy-filter [f xs]
-  (lazy-seq
-    (when (seq xs)
-      (let [x (first xs)
-            r (next xs)]
-        (if (f x)
-          (cons x (lazy-filter f r))
-          (lazy-filter f r))))))
+(def lazy-filter filter)
+(def lazy-map map)
+(def lazy-take take)
+(def lazy-take-while take-while)
 

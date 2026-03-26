@@ -98,7 +98,7 @@ func (l Map) More() Seq {
 // Next implements Seq
 func (l Map) Next() Seq {
 	if len(l) <= 1 {
-		return EmptyList
+		return nil
 	}
 	return &MapSeq{entries: l.toEntries(), i: 1}
 }
@@ -146,7 +146,7 @@ func (s *MapSeq) More() Seq {
 
 func (s *MapSeq) Next() Seq {
 	if s.i+1 >= len(s.entries) {
-		return EmptyList
+		return nil
 	}
 	return &MapSeq{entries: s.entries, i: s.i + 1}
 }

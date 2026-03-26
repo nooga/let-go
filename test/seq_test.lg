@@ -53,7 +53,7 @@
   
   (testing "filter"
     (is (= '(2 4) (filter even? [1 2 3 4 5])))
-    (is (= '() (filter even? [1 3 5])))
+    (is (nil? (seq (filter even? [1 3 5]))))
     (is (= '(1 2 3) (filter identity [1 nil 2 false 3]))))
   
   (testing "reduce"
@@ -67,8 +67,8 @@
   (testing "take"
     (is (= '(1 2 3) (take 3 [1 2 3 4 5])))
     (is (= '(1 2) (take 5 [1 2])))  ; take more than available
-    (is (nil? (take 0 [1 2 3])))    ; returns nil for empty result
-    (is (nil? (take 3 nil))))
+    (is (nil? (seq (take 0 [1 2 3]))))    ; returns empty lazy seq
+    (is (nil? (seq (take 3 nil)))))
   
   (testing "drop"
     (is (= '(4 5) (drop 3 [1 2 3 4 5])))
@@ -98,7 +98,7 @@
   (testing "interpose"
     (is (= '(1 :x 2 :x 3) (interpose :x [1 2 3])))
     (is (= '(1) (interpose :x [1])))
-    (is (nil? (interpose :x []))))
+    (is (nil? (seq (interpose :x [])))))
   
   (testing "interleave"
     (is (= '(1 :a 2 :b) (interleave [1 2] [:a :b])))

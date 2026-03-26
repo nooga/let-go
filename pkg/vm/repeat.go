@@ -37,13 +37,17 @@ func (n *Repeat) First() Value {
 }
 
 func (n *Repeat) More() Seq {
-	return n.Next()
+	r := n.Next()
+	if r == nil {
+		return EmptyList
+	}
+	return r
 }
 
 func (n *Repeat) Next() Seq {
 	i := n.i
 	if i == 0 {
-		return NIL
+		return nil
 	}
 	if i > 0 {
 		i--

@@ -33,13 +33,17 @@ func (n *Iterate) First() Value {
 }
 
 func (n *Iterate) More() Seq {
-	return n.Next()
+	r := n.Next()
+	if r == nil {
+		return EmptyList
+	}
+	return r
 }
 
 func (n *Iterate) Next() Seq {
 	nv, err := n.f.Invoke([]Value{n.state})
 	if err != nil {
-		return NIL
+		return nil
 	}
 	return &Iterate{
 		state: nv,

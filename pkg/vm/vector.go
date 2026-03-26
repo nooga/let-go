@@ -78,7 +78,7 @@ func (l ArrayVector) More() Seq {
 // Next implements Seq
 func (l ArrayVector) Next() Seq {
 	if len(l) <= 1 {
-		return EmptyList
+		return nil
 	}
 	return &ArrayVectorSeq{vec: l, i: 1}
 }
@@ -129,7 +129,7 @@ func (s *ArrayVectorSeq) More() Seq {
 
 func (s *ArrayVectorSeq) Next() Seq {
 	if s.i+1 >= len(s.vec) {
-		return EmptyList
+		return nil
 	}
 	return &ArrayVectorSeq{vec: s.vec, i: s.i + 1}
 }
@@ -157,6 +157,27 @@ func (s *ArrayVectorSeq) Conj(val Value) Collection {
 
 func (s *ArrayVectorSeq) Seq() Seq {
 	return s
+}
+
+// ValueAt implements Lookup for ArrayVectorSeq so that `get` works on seq views.
+func (s *ArrayVectorSeq) ValueAt(key Value) Value {
+	return s.ValueAtOr(key, NIL)
+}
+
+// ValueAtOr implements Lookup for ArrayVectorSeq.
+func (s *ArrayVectorSeq) ValueAtOr(key Value, dflt Value) Value {
+	if key == NIL {
+		return dflt
+	}
+	idx, ok := key.(Int)
+	if !ok || idx < 0 {
+		return dflt
+	}
+	absIdx := s.i + int(idx)
+	if absIdx >= len(s.vec) {
+		return dflt
+	}
+	return s.vec[absIdx]
 }
 
 // Count implements Collection

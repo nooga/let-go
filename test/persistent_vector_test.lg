@@ -1,0 +1,95 @@
+;; Tests for persistent vector behavior and promotion
+(ns test.persistent-vector-test
+  (:require [test :refer :all]))
+
+(deftest persistent-vector-ops
+  (testing "small vectors stay as ArrayVector"
+    (let [v (vec (range 10))]
+      (is (= 10 (count v)))
+      (is (= 0 (first v)))
+      (is (= 9 (last v)))))
+
+  (testing "large vectors via conj promote to PersistentVector"
+    (let [v (reduce conj [] (range 100))]
+      (is (= 100 (count v)))
+      (is (= 0 (v 0)))
+      (is (= 50 (v 50)))
+      (is (= 99 (v 99)))))
+
+  (testing "random access on large vector"
+    (let [v (vec (range 1000))]
+      (is (= 0 (v 0)))
+      (is (= 127 (v 127)))
+      (is (= 128 (v 128)))
+      (is (= 500 (v 500)))
+      (is (= 999 (v 999)))))
+
+  (testing "get with default on large vector"
+    (let [v (vec (range 100))]
+      (is (= 42 (get v 42)))
+      (is (nil? (get v 1000)))
+      (is (= :nope (get v 1000 :nope)))))
+
+  (testing "conj does not mutate original"
+    (let [v1 (vec (range 50))
+          v2 (conj v1 999)]
+      (is (= 50 (count v1)))
+      (is (= 51 (count v2)))
+      (is (= 999 (last v2)))
+      (is (= 49 (last v1)))))
+
+  (testing "assoc does not mutate original"
+    (let [v1 (vec (range 50))
+          v2 (assoc v1 25 :replaced)]
+      (is (= 25 (v1 25)))
+      (is (= :replaced (v2 25)))
+      (is (= 50 (count v1)))
+      (is (= 50 (count v2)))))
+
+  (testing "two vectors built the same way are equal"
+    (let [v1 (vec (range 50))
+          v2 (vec (range 50))]
+      (is (= v1 v2))))
+
+  (testing "vectors with different contents are not equal"
+    (let [v1 (vec (range 50))
+          v2 (vec (range 51))]
+      (is (not= v1 v2))))
+
+  (testing "small and large vector equality"
+    (is (= [1 2 3] (vec '(1 2 3)))))
+
+  (testing "equality after assoc roundtrip"
+    (let [v1 (vec (range 50))
+          v2 (assoc v1 0 :x)
+          v3 (assoc v2 0 0)]
+      (is (not= v1 v2))
+      (is (= v1 v3))))
+
+  (testing "seq over large vector"
+    (let [v (vec (range 100))
+          s (seq v)]
+      (is (= 0 (first s)))
+      (is (= 1 (first (next s))))
+      (is (= 2 (first (next (next s)))))))
+
+  (testing "reduce over large vector"
+    (let [v (vec (range 100))]
+      (is (= 4950 (reduce + 0 v)))))
+
+  (testing "map over large vector"
+    (let [v (vec (range 50))
+          doubled (map #(* 2 %) v)]
+      (is (= 0 (first doubled)))
+      (is (= 98 (last doubled)))))
+
+  (testing "multiple versions coexist via structural sharing"
+    (let [base (vec (range 100))
+          v1 (assoc base 0 :a)
+          v2 (assoc base 0 :b)
+          v3 (assoc base 0 :c)]
+      (is (= 0 (base 0)))
+      (is (= :a (v1 0)))
+      (is (= :b (v2 0)))
+      (is (= :c (v3 0)))
+      (is (= (base 50) (v1 50) (v2 50) (v3 50))))))

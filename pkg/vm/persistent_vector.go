@@ -109,7 +109,7 @@ func (s *PersistentVectorSeq) More() Seq {
 // Next implements Seq
 func (s *PersistentVectorSeq) Next() Seq {
 	if s.i+1 >= s.vec.count {
-		return NIL
+		return nil
 	}
 	return s.nextSeq()
 }
@@ -172,6 +172,27 @@ func (s *PersistentVectorSeq) findNextNode(index int) *vnode {
 // Cons implements Seq
 func (s *PersistentVectorSeq) Cons(val Value) Seq {
 	return NewCons(val, s)
+}
+
+// ValueAt implements Lookup for PersistentVectorSeq so that `get` works on seq views.
+func (s *PersistentVectorSeq) ValueAt(key Value) Value {
+	return s.ValueAtOr(key, NIL)
+}
+
+// ValueAtOr implements Lookup for PersistentVectorSeq.
+func (s *PersistentVectorSeq) ValueAtOr(key Value, dflt Value) Value {
+	if key == NIL {
+		return dflt
+	}
+	idx, ok := key.(Int)
+	if !ok || idx < 0 {
+		return dflt
+	}
+	absIdx := s.i + int(idx)
+	if absIdx >= s.vec.count {
+		return dflt
+	}
+	return s.vec.ValueAtOr(Int(absIdx), dflt)
 }
 
 // Modify PersistentVector's Seq method:

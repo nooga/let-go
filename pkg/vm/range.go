@@ -59,7 +59,7 @@ func (l *Range) Next() Seq {
 	if nexts < l.end {
 		return &Range{nexts, l.end, l.step}
 	}
-	return EmptyList
+	return nil
 }
 
 func (l *Range) Seq() Seq {
