@@ -454,12 +454,19 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 		s.WriteRune(ch)
 	}
 	sn := s.String()
+	// Try int first
 	i, err := strconv.Atoi(sn)
-	if err != nil {
-		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
+	if err == nil {
+		r.closeToken(TokenNumber)
+		return vm.MakeInt(i), nil
 	}
-	r.closeToken(TokenNumber)
-	return vm.Int(i), nil
+	// Try float
+	f, ferr := strconv.ParseFloat(sn, 64)
+	if ferr == nil {
+		r.closeToken(TokenNumber)
+		return vm.Float(f), nil
+	}
+	return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid number: %s", sn))
 }
 
 func readList(r *LispReader, _ rune) (vm.Value, error) {

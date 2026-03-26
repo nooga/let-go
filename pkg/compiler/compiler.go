@@ -254,7 +254,7 @@ func (c *Context) symbolLookup(s vm.Symbol) cell {
 
 func (c *Context) compileForm(o vm.Value) error {
 	switch o.Type() {
-	case vm.IntType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType:
+	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType:
 		n := c.constant(o)
 		c.emitWithArg(vm.OP_LOAD_CONST, n)
 		c.incSP(1)
