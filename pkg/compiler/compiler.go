@@ -353,7 +353,22 @@ func (c *Context) compileForm(o vm.Value) error {
 			c.incSP(1)
 			return nil
 		}
-		fn := o.(*vm.List).First()
+		lst, isList := o.(*vm.List)
+		if !isList {
+			if seq, ok := o.(vm.Seq); ok {
+				var vals []vm.Value
+				for s := seq; s != nil; s = s.Next() {
+					vals = append(vals, s.First())
+				}
+				realized, _ := vm.ListType.Box(vals)
+				return c.compileForm(realized)
+			}
+			n := c.constant(o)
+			c.emitWithArg(vm.OP_LOAD_CONST, n)
+			c.incSP(1)
+			return nil
+		}
+		fn := lst.First()
 		// check if we're looking at a special form
 		if fn.Type() == vm.SymbolType {
 			fnsym := fn.(vm.Symbol)
@@ -363,19 +378,37 @@ func (c *Context) compileForm(o vm.Value) error {
 			}
 
 			if fnsym[0] == '.' && len(fnsym) > 1 {
-				newform := o.(*vm.List).Next()
-				if newform.(vm.Collection).RawCount() < 1 {
+				newform := lst.Next()
+				if newform == nil {
+					return NewCompileError("Malformed member expression, expecting (.member target ...)")
+				}
+				if coll, ok := newform.(vm.Collection); ok && coll.RawCount() < 1 {
 					return NewCompileError("Malformed member expression, expecting (.member target ...)")
 				}
 				instance := newform.First()
 				member := vm.EmptyList.Cons(fnsym[1:]).Cons(vm.Symbol("quote"))
-				newform = newform.Next().Cons(member).Cons(instance).Cons(vm.Symbol("."))
+				nxt := newform.Next()
+				if nxt == nil {
+					newform = vm.EmptyList.Cons(member).Cons(instance).Cons(vm.Symbol("."))
+				} else {
+					newform = nxt.Cons(member).Cons(instance).Cons(vm.Symbol("."))
+				}
 				return c.compileForm(newform)
 			}
 
 			fvar := c.CurrentNS().Lookup(fnsym)
 			if fvar != vm.NIL && fvar.(*vm.Var).IsMacro() {
-				argvec := o.(*vm.List).Next().(*vm.List).Unbox().([]vm.Value)
+				nxt := lst.Next()
+				var argvec []vm.Value
+				if nxt != nil {
+					if nl, ok := nxt.(*vm.List); ok {
+						argvec = nl.Unbox().([]vm.Value)
+					} else {
+						for s := nxt; s != nil; s = s.Next() {
+							argvec = append(argvec, s.First())
+						}
+					}
+				}
 				newform, err := fvar.(*vm.Var).Deref().(vm.Fn).Invoke(argvec)
 				if err != nil {
 					return NewCompileError(fmt.Sprintf("Executing macro %s (%s) failed", fvar, fvar.(*vm.Var).Deref())).Wrap(err)
@@ -393,9 +426,18 @@ func (c *Context) compileForm(o vm.Value) error {
 			return NewCompileError("compiling function position").Wrap(err)
 		}
 
-		args := o.(*vm.List).Next()
-		argc := args.(vm.Collection).Count().Unbox().(int)
-		for args != vm.EmptyList {
+		args := lst.Next()
+		argc := 0
+		if args != nil {
+			if coll, ok := args.(vm.Collection); ok {
+				argc = coll.Count().Unbox().(int)
+			} else {
+				for s := args; s != nil; s = s.Next() {
+					argc++
+				}
+			}
+		}
+		for args != nil {
 			err := c.compileForm(args.First())
 			if err != nil {
 				return NewCompileError("compiling arguments " + args.First().String()).Wrap(err)
@@ -520,7 +562,7 @@ func compilerInit() {
 func traceCompiler(c *Context, form vm.Value) error {
 	args := form.(*vm.List).Next()
 	c.emit(vm.OP_TRACE_ENABLE)
-	for args != vm.EmptyList {
+	for args != nil {
 		err := c.compileForm(args.First())
 		if err != nil {
 			return NewCompileError("compiling trace arguments").Wrap(err)
@@ -541,7 +583,16 @@ func recurCompiler(c *Context, form vm.Value) error {
 	c.tailPosition = false
 
 	args := form.(*vm.List).Next()
-	argc := args.(vm.Collection).Count().Unbox().(int)
+	argc := 0
+	if args != nil {
+		if coll, ok := args.(vm.Collection); ok {
+			argc = coll.Count().Unbox().(int)
+		} else {
+			for s := args; s != nil; s = s.Next() {
+				argc++
+			}
+		}
+	}
 
 	if rp != nil {
 		if argc != rp.argsc {
@@ -556,7 +607,7 @@ func recurCompiler(c *Context, form vm.Value) error {
 		}
 	}
 
-	for args != vm.EmptyList {
+	for args != nil {
 		err := c.compileForm(args.First())
 		if err != nil {
 			return NewCompileError("compiling recur arguments").Wrap(err)
@@ -587,6 +638,9 @@ func recurCompiler(c *Context, form vm.Value) error {
 
 func loopCompiler(c *Context, form vm.Value) error {
 	bindings := form.(*vm.List).Next()
+	if bindings == nil {
+		return NewCompileError("loop requires bindings")
+	}
 	binds, ok := bindings.First().(vm.ArrayVector)
 	if !ok {
 		return NewCompileError("loop bindings should be a vector")
@@ -613,19 +667,19 @@ func loopCompiler(c *Context, form vm.Value) error {
 		bindn++
 	}
 	c.pushRecurPoint(bindn)
-	if body == vm.EmptyList {
+	if body == nil || body == vm.EmptyList {
 		c.emitWithArg(vm.OP_LOAD_CONST, c.constant(vm.NIL))
 		c.incSP(1)
 	} else {
-		for b := body; b != vm.EmptyList; b = b.Next() {
-			if b.Next() == vm.EmptyList {
+		for b := body; b != nil; b = b.Next() {
+			if b.Next() == nil {
 				c.tailPosition = true
 			}
 			err := c.compileForm(b.First())
 			if err != nil {
 				return NewCompileError("compiling loop body").Wrap(err)
 			}
-			if b.Next() != vm.EmptyList {
+			if b.Next() != nil {
 				c.emit(vm.OP_POP)
 				c.decSP(1)
 			}
@@ -643,9 +697,12 @@ func loopCompiler(c *Context, form vm.Value) error {
 
 func letCompiler(c *Context, form vm.Value) error {
 	bindings := form.(*vm.List).Next()
+	if bindings == nil {
+		return NewCompileError("let requires bindings")
+	}
 	binds, ok := bindings.First().(vm.ArrayVector)
 	if !ok {
-		return NewCompileError("let bindings should be a vector")
+		return NewCompileError(fmt.Sprintf("let bindings should be a vector, got %T: %v", bindings.First(), bindings.First()))
 	}
 	body := bindings.Next()
 	c.pushLocals()
@@ -668,19 +725,19 @@ func letCompiler(c *Context, form vm.Value) error {
 		c.addLocal(name.(vm.Symbol))
 		bindn++
 	}
-	if body == vm.EmptyList {
+	if body == nil || body == vm.EmptyList {
 		c.emitWithArg(vm.OP_LOAD_CONST, c.constant(vm.NIL))
 		c.incSP(1)
 	} else {
-		for b := body; b != vm.EmptyList; b = b.Next() {
-			if tc && b.Next() == vm.EmptyList {
+		for b := body; b != nil; b = b.Next() {
+			if tc && b.Next() == nil {
 				c.tailPosition = true
 			}
 			err := c.compileForm(b.First())
 			if err != nil {
 				return NewCompileError("compiling let body").Wrap(err)
 			}
-			if b.Next() != vm.EmptyList {
+			if b.Next() != nil {
 				c.emit(vm.OP_POP)
 				c.decSP(1)
 			}
@@ -696,20 +753,31 @@ func letCompiler(c *Context, form vm.Value) error {
 }
 
 func quoteCompiler(c *Context, form vm.Value) error {
-	n := c.constant(form.(vm.Seq).Next().First())
+	nxt := form.(vm.Seq).Next()
+	if nxt == nil {
+		n := c.constant(vm.NIL)
+		c.emitWithArg(vm.OP_LOAD_CONST, n)
+		c.incSP(1)
+		return nil
+	}
+	n := c.constant(nxt.First())
 	c.emitWithArg(vm.OP_LOAD_CONST, n)
 	c.incSP(1)
 	return nil
 }
 
-func fnFormCompiler(c *Context, args vm.ArrayVector, bodyf *vm.List) error {
+func fnFormCompiler(c *Context, args vm.ArrayVector, bodyf vm.Seq) error {
 	fc, err := c.enterFn(args)
 	if err != nil {
 		return NewCompileError("compiling fn args").Wrap(err)
 	}
 	defer c.leaveFn(fc)
 
-	body := bodyf.Unbox().([]vm.Value)
+	// Realize body to slice
+	var body []vm.Value
+	for s := bodyf; s != nil; s = s.Next() {
+		body = append(body, s.First())
+	}
 	l := len(body)
 	if l == 0 {
 		fc.emitWithArg(vm.OP_LOAD_CONST, fc.constant(vm.NIL))
@@ -717,7 +785,12 @@ func fnFormCompiler(c *Context, args vm.ArrayVector, bodyf *vm.List) error {
 		fc.emit(vm.OP_RETURN)
 		return nil
 	}
+	// Only the last form is in tail position
+	fc.tailPosition = false
 	for i := range body {
+		if i == l-1 {
+			fc.tailPosition = true
+		}
 		err := fc.compileForm(body[i])
 		if err != nil {
 			return NewCompileError("compiling fn body").Wrap(err)
@@ -733,19 +806,28 @@ func fnFormCompiler(c *Context, args vm.ArrayVector, bodyf *vm.List) error {
 
 func fnCompiler(c *Context, form vm.Value) error {
 	f := form.(*vm.List).Next()
+	if f == nil {
+		return NewCompileError("unexpected fn form")
+	}
 
 	if args, ok := f.First().(vm.ArrayVector); ok {
 		// we have (fn* [args] body)
-		body := f.Next().(*vm.List)
+		body := f.Next()
+		if body == nil {
+			body = vm.EmptyList
+		}
 		return fnFormCompiler(c, args, body)
 	} else if _, ok := f.First().(vm.Seq); ok {
 		// we have (fn* ([] ...))
 		i := 0
-		for b := f; b != vm.EmptyList; b = b.Next() {
-			e := b.First().(*vm.List)
+		for b := f; b != nil; b = b.Next() {
+			e := b.First().(vm.Seq)
 			args := e.First().(vm.ArrayVector)
-			body := e.Next().(*vm.List)
-			err := fnFormCompiler(c, args, body)
+			ebody := e.Next()
+			if ebody == nil {
+				ebody = vm.EmptyList
+			}
+			err := fnFormCompiler(c, args, ebody)
 			if err != nil {
 				return err
 			}
@@ -764,7 +846,17 @@ func ifCompiler(c *Context, form vm.Value) error {
 	tc := c.tailPosition
 	//c.tailPosition = tc
 
-	args := form.(*vm.List).Next().Unbox().([]vm.Value)
+	nxt := form.(*vm.List).Next()
+	var args []vm.Value
+	if nxt != nil {
+		if nl, ok := nxt.(*vm.List); ok {
+			args = nl.Unbox().([]vm.Value)
+		} else {
+			for s := nxt; s != nil; s = s.Next() {
+				args = append(args, s.First())
+			}
+		}
+	}
 	l := len(args)
 	if l < 2 || l > 3 {
 		return NewCompileError(fmt.Sprintf("if: wrong number of forms (%d), need 2 or 3", l))
@@ -805,7 +897,17 @@ func ifCompiler(c *Context, form vm.Value) error {
 }
 
 func doCompiler(c *Context, form vm.Value) error {
-	args := form.(*vm.List).Next().Unbox().([]vm.Value)
+	nxt := form.(*vm.List).Next()
+	var args []vm.Value
+	if nxt != nil {
+		if nl, ok := nxt.(*vm.List); ok {
+			args = nl.Unbox().([]vm.Value)
+		} else {
+			for s := nxt; s != nil; s = s.Next() {
+				args = append(args, s.First())
+			}
+		}
+	}
 	l := len(args)
 	tc := c.tailPosition
 	c.tailPosition = false
@@ -821,15 +923,18 @@ func doCompiler(c *Context, form vm.Value) error {
 			lst := args[i].(*vm.List)
 			if lst.First().Type() == vm.SymbolType && vm.Symbol(lst.First().(vm.Symbol)) == vm.Symbol("in-ns") {
 				alist := lst.Next()
-				if alist != vm.EmptyList {
+				if alist != nil {
 					q := alist.First()
 					if q.Type() == vm.ListType {
 						qq := q.(vm.Seq)
 						if qq.First() == vm.Symbol("quote") {
-							namev := qq.Next().First()
-							if namev.Type() == vm.SymbolType {
-								if ns := rt.NS(string(namev.(vm.Symbol))); ns != nil {
-									c.SetCurrentNS(ns)
+							qqN := qq.Next()
+							if qqN != nil {
+								namev := qqN.First()
+								if namev.Type() == vm.SymbolType {
+									if ns := rt.NS(string(namev.(vm.Symbol))); ns != nil {
+										c.SetCurrentNS(ns)
+									}
 								}
 							}
 						}
@@ -845,18 +950,24 @@ func doCompiler(c *Context, form vm.Value) error {
 				// core/alias
 				if fname == vm.Symbol("core/alias") {
 					asArgs := lst.Next()
-					if asArgs != vm.EmptyList {
+					if asArgs != nil {
 						qa := asArgs.First()
 						asArgs = asArgs.Next()
-						qb := asArgs.First()
-						if qa.Type() == vm.ListType && qb.Type() == vm.ListType {
-							qqa := qa.(vm.Seq)
-							qqb := qb.(vm.Seq)
-							if qqa.First() == vm.Symbol("quote") && qqb.First() == vm.Symbol("quote") {
-								alias := qqa.Next().First().(vm.Symbol)
-								nsname := qqb.Next().First().(vm.Symbol)
-								if target := rt.NS(string(nsname)); target != nil {
-									c.CurrentNS().Alias(alias, target)
+						if asArgs != nil {
+							qb := asArgs.First()
+							if qa.Type() == vm.ListType && qb.Type() == vm.ListType {
+								qqa := qa.(vm.Seq)
+								qqb := qb.(vm.Seq)
+								if qqa.First() == vm.Symbol("quote") && qqb.First() == vm.Symbol("quote") {
+									qqaN := qqa.Next()
+									qqbN := qqb.Next()
+									if qqaN != nil && qqbN != nil {
+										alias := qqaN.First().(vm.Symbol)
+										nsname := qqbN.First().(vm.Symbol)
+										if target := rt.NS(string(nsname)); target != nil {
+											c.CurrentNS().Alias(alias, target)
+										}
+									}
 								}
 							}
 						}
@@ -865,18 +976,18 @@ func doCompiler(c *Context, form vm.Value) error {
 				// core/refer (ns, alias, all)
 				if fname == vm.Symbol("core/refer") {
 					rArgs := lst.Next()
-					if rArgs != vm.EmptyList {
+					if rArgs != nil {
 						nsQ := rArgs.First()
 						rArgs = rArgs.Next()
 						aliasStr := ""
 						all := true
-						if rArgs != vm.EmptyList {
+						if rArgs != nil {
 							if s, ok := rArgs.First().(vm.String); ok {
 								aliasStr = string(s)
 							}
 							rArgs = rArgs.Next()
 						}
-						if rArgs != vm.EmptyList {
+						if rArgs != nil {
 							if b, ok := rArgs.First().(vm.Boolean); ok {
 								all = bool(b)
 							}
@@ -884,9 +995,12 @@ func doCompiler(c *Context, form vm.Value) error {
 						if nsQ.Type() == vm.ListType {
 							qq := nsQ.(vm.Seq)
 							if qq.First() == vm.Symbol("quote") {
-								nsname := qq.Next().First().(vm.Symbol)
-								if target := rt.NS(string(nsname)); target != nil {
-									c.CurrentNS().Refer(target, aliasStr, all)
+								qqN := qq.Next()
+								if qqN != nil {
+									nsname := qqN.First().(vm.Symbol)
+									if target := rt.NS(string(nsname)); target != nil {
+										c.CurrentNS().Refer(target, aliasStr, all)
+									}
 								}
 							}
 						}
@@ -895,22 +1009,29 @@ func doCompiler(c *Context, form vm.Value) error {
 				// core/import-var (from-ns, from, to)
 				if fname == vm.Symbol("core/import-var") {
 					ivArgs := lst.Next()
-					if ivArgs != vm.EmptyList {
+					if ivArgs != nil {
 						qn := ivArgs.First()
 						ivArgs = ivArgs.Next()
-						qfrom := ivArgs.First()
-						ivArgs = ivArgs.Next()
-						qto := ivArgs.First()
-						if qn.Type() == vm.ListType && qfrom.Type() == vm.ListType && qto.Type() == vm.ListType {
-							qnn := qn.(vm.Seq)
-							qff := qfrom.(vm.Seq)
-							qtt := qto.(vm.Seq)
-							if qnn.First() == vm.Symbol("quote") && qff.First() == vm.Symbol("quote") && qtt.First() == vm.Symbol("quote") {
-								fromNs := rt.NS(string(qnn.Next().First().(vm.Symbol)))
-								from := qff.Next().First().(vm.Symbol)
-								to := qtt.Next().First().(vm.Symbol)
-								if fromNs != nil {
-									c.CurrentNS().ImportVar(fromNs, from, to)
+						if ivArgs != nil {
+							qfrom := ivArgs.First()
+							ivArgs = ivArgs.Next()
+							if ivArgs != nil {
+								qto := ivArgs.First()
+								if qn.Type() == vm.ListType && qfrom.Type() == vm.ListType && qto.Type() == vm.ListType {
+									qnn := qn.(vm.Seq)
+									qff := qfrom.(vm.Seq)
+									qtt := qto.(vm.Seq)
+									qnnN := qnn.Next()
+									qffN := qff.Next()
+									qttN := qtt.Next()
+									if qnnN != nil && qffN != nil && qttN != nil && qnn.First() == vm.Symbol("quote") && qff.First() == vm.Symbol("quote") && qtt.First() == vm.Symbol("quote") {
+										fromNs := rt.NS(string(qnnN.First().(vm.Symbol)))
+										from := qffN.First().(vm.Symbol)
+										to := qttN.First().(vm.Symbol)
+										if fromNs != nil {
+											c.CurrentNS().ImportVar(fromNs, from, to)
+										}
+									}
 								}
 							}
 						}
@@ -937,7 +1058,17 @@ func doCompiler(c *Context, form vm.Value) error {
 func defCompiler(c *Context, form vm.Value) error {
 	tc := c.tailPosition
 	c.tailPosition = false
-	args := form.(*vm.List).Next().Unbox().([]vm.Value)
+	nxt := form.(*vm.List).Next()
+	var args []vm.Value
+	if nxt != nil {
+		if nl, ok := nxt.(*vm.List); ok {
+			args = nl.Unbox().([]vm.Value)
+		} else {
+			for s := nxt; s != nil; s = s.Next() {
+				args = append(args, s.First())
+			}
+		}
+	}
 	l := len(args)
 	if l != 2 {
 		return NewCompileError(fmt.Sprintf("def: wrong number of forms (%d), need 2", l))
@@ -985,7 +1116,17 @@ func defCompiler(c *Context, form vm.Value) error {
 func setBangCompiler(c *Context, form vm.Value) error {
 	tc := c.tailPosition
 	c.tailPosition = false
-	args := form.(*vm.List).Next().Unbox().([]vm.Value)
+	nxt := form.(*vm.List).Next()
+	var args []vm.Value
+	if nxt != nil {
+		if nl, ok := nxt.(*vm.List); ok {
+			args = nl.Unbox().([]vm.Value)
+		} else {
+			for s := nxt; s != nil; s = s.Next() {
+				args = append(args, s.First())
+			}
+		}
+	}
 	l := len(args)
 	if l != 2 {
 		return NewCompileError(fmt.Sprintf("set!: wrong number of forms (%d), need 2", l))

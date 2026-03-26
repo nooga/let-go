@@ -101,7 +101,7 @@ func (l Set) More() Seq {
 // Next implements Seq
 func (l Set) Next() Seq {
 	if len(l) <= 1 {
-		return EmptyList
+		return nil
 	}
 	return &SetSeq{keys: l.keys(), i: 1}
 }
@@ -149,7 +149,7 @@ func (s *SetSeq) More() Seq {
 
 func (s *SetSeq) Next() Seq {
 	if s.i+1 >= len(s.keys) {
-		return EmptyList
+		return nil
 	}
 	return &SetSeq{keys: s.keys, i: s.i + 1}
 }

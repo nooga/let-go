@@ -68,13 +68,17 @@ func (l String) First() Value {
 
 // More implements Seq
 func (l String) More() Seq {
-	return l.Next()
+	r := l.Next()
+	if r == nil {
+		return EmptyList
+	}
+	return r
 }
 
 // Next implements Seq
 func (l String) Next() Seq {
 	if len(l) <= 1 {
-		return NIL
+		return nil
 	}
 	ret := EmptyList
 	s := []rune(l)

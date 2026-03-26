@@ -44,11 +44,11 @@ func (n *Nil) First() Value {
 }
 
 func (n *Nil) More() Seq {
-	return n
+	return EmptyList
 }
 
 func (n *Nil) Next() Seq {
-	return n
+	return nil
 }
 
 func (n *Nil) Seq() Seq {

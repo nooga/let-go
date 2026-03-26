@@ -20,28 +20,61 @@ func NewLazySeq(fn Fn) *LazySeq {
 	return &LazySeq{fn: fn}
 }
 
-// seq realizes the lazy seq if not already done
-func (l *LazySeq) seq() Seq {
+// sval realizes the thunk and returns the raw value without converting to seq.
+// Used for unwrapping nested LazySeqs without locking issues.
+func (l *LazySeq) sval() Value {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	// If we have the thunk, call it
 	if l.fn != nil {
 		sv, err := l.fn.Invoke(nil)
 		if err != nil {
-			return nil // TODO: handle error better
+			return nil
 		}
 		l.sv = sv
 		l.fn = nil
 	}
+	if l.sv != nil {
+		return l.sv
+	}
+	// Already fully resolved to l.s
+	if l.s != nil {
+		return l.s
+	}
+	return nil
+}
+
+// seq realizes the lazy seq if not already done
+func (l *LazySeq) seq() Seq {
+	l.sval() // ensure thunk is called
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.s != nil {
+		return l.s
+	}
 
 	// If we have an intermediate value, convert to seq
 	if l.sv != nil {
-		if l.sv == NIL {
+		// Unwrap nested LazySeqs (like Clojure does)
+		sv := l.sv
+		for {
+			inner, ok := sv.(*LazySeq)
+			if !ok {
+				break
+			}
+			iv := inner.sval()
+			if iv == nil {
+				sv = nil
+				break
+			}
+			sv = iv
+		}
+		if sv == nil || sv == NIL {
 			l.s = nil
-		} else if seq, ok := l.sv.(Seq); ok {
+		} else if seq, ok := sv.(Seq); ok {
 			l.s = seq
-		} else if seqable, ok := l.sv.(Sequable); ok {
+		} else if seqable, ok := sv.(Sequable); ok {
 			l.s = seqable.Seq()
 		}
 		l.sv = nil
@@ -113,5 +146,25 @@ func (l *LazySeq) Empty() Collection { return EmptyList }
 
 func (l *LazySeq) Conj(val Value) Collection {
 	return NewCons(val, l)
+}
+
+func (l *LazySeq) ValueAt(key Value) Value {
+	return l.ValueAtOr(key, NIL)
+}
+
+func (l *LazySeq) ValueAtOr(key Value, notFound Value) Value {
+	idx, ok := key.(Int)
+	if !ok {
+		return notFound
+	}
+	i := int(idx)
+	s := l.seq()
+	for j := 0; s != nil && s != EmptyList; j++ {
+		if j == i {
+			return s.First()
+		}
+		s = s.Next()
+	}
+	return notFound
 }
 

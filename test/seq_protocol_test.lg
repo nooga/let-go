@@ -1,0 +1,90 @@
+;; Tests for seq protocol uniformity across all collection types
+(ns test.seq-protocol-test
+  (:require [test :refer :all]))
+
+(deftest seq-protocol
+  (testing "next returns nil at end for list"
+    (is (nil? (next '(1))))
+    (is (nil? (next ()))))
+
+  (testing "next returns nil at end for vector"
+    (is (nil? (next [1])))
+    (is (nil? (next []))))
+
+  (testing "next returns nil at end for large vector (PersistentVector)"
+    (let [v (vec (range 100))]
+      (is (= 1 (first (next v))))
+      (let [s (reduce (fn [s _] (next s)) (seq v) (range 99))]
+        (is (nil? (next s))))))
+
+  (testing "next returns nil at end for map"
+    (is (nil? (next {1 2})))
+    (is (nil? (next {}))))
+
+  (testing "next returns nil at end for set"
+    (is (nil? (next #{1})))
+    (is (nil? (next #{}))))
+
+  (testing "next returns nil at end for range"
+    (is (nil? (next (range 1 2)))))
+
+  (testing "next returns nil at end for lazy-seq"
+    (is (nil? (next (lazy-seq (cons 1 nil))))))
+
+  (testing "rest returns empty at end for list"
+    (is (= 0 (count (rest '(1))))))
+
+  (testing "rest returns empty at end for vector"
+    (is (= 0 (count (rest [1])))))
+
+  (testing "rest returns empty at end for map"
+    (is (= 0 (count (rest {1 2})))))
+
+  (testing "rest returns empty at end for set"
+    (is (= 0 (count (rest #{1})))))
+
+  (testing "first/next/seq on PersistentVector"
+    (let [v (vec (range 100))]
+      (is (= 0 (first v)))
+      (is (= 1 (first (next v))))
+      (is (= 0 (first (seq v))))))
+
+  (testing "reduce on PersistentVector"
+    (let [v (vec (range 100))]
+      (is (= 4950 (reduce + 0 v)))))
+
+  (testing "reduce on range"
+    (is (= 45 (reduce + 0 (range 10)))))
+
+  (testing "map over PersistentVector"
+    (let [v (vec (range 50))
+          doubled (map #(* 2 %) v)]
+      (is (= 0 (first doubled)))
+      (is (= 98 (last doubled)))))
+
+  (testing "cons onto PersistentVector"
+    (let [v (vec (range 5))
+          c (cons 99 v)]
+      (is (= 99 (first c)))
+      (is (= 0 (second c)))))
+
+  (testing "concat list and vector"
+    (let [result (concat '(1 2) [3 4])]
+      (is (= 1 (first result)))
+      (is (= 4 (last result)))))
+
+  (testing "concat with PersistentVector"
+    (let [v (vec (range 50))
+          result (concat '(0) v)]
+      (is (= 0 (first result)))))
+
+  (testing "vec of range"
+    (let [v (vec (range 5))]
+      (is (= 5 (count v)))
+      (is (= 0 (first v)))
+      (is (= 4 (last v)))))
+
+  (testing "vec of PersistentVector identity"
+    (let [v (vec [1 2 3])]
+      (is (= 3 (count v)))
+      (is (= 1 (first v))))))

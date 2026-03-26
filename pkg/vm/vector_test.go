@@ -250,8 +250,8 @@ func TestPersistentVectorSeq(t *testing.T) {
 		}
 
 		// Test beyond end
-		if next := seq.Next(); next != NIL {
-			t.Errorf("Next beyond end: expected NIL, got %v", next)
+		if next := seq.Next(); next != nil {
+			t.Errorf("Next beyond end: expected nil, got %v", next)
 		}
 
 		if more := seq.More(); more != EmptyList {
@@ -284,8 +284,8 @@ func TestPersistentVectorSeq(t *testing.T) {
 
 		// Check end of sequence
 		seq = seq.Next()
-		if seq != NIL {
-			t.Errorf("Expected NIL at end of sequence, got %v", seq)
+		if seq != nil {
+			t.Errorf("Expected nil at end of sequence, got %v", seq)
 		}
 	})
 

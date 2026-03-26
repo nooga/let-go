@@ -136,18 +136,19 @@ func valueEquals(a, b vm.Value) bool {
 		}
 		return true
 	case *vm.List:
-		bl := b.(*vm.List)
-		if av.RawCount() != bl.RawCount() {
+		// b could be any Seq-like type (List, Cons, ArrayVectorSeq, etc.)
+		bs, ok := b.(vm.Seq)
+		if !ok {
 			return false
 		}
-		as, bs := vm.Seq(av), vm.Seq(bl)
-		for as != vm.EmptyList && bs != vm.EmptyList {
+		as := vm.Seq(av)
+		for as != nil && bs != nil {
 			if !valueEquals(as.First(), bs.First()) {
 				return false
 			}
 			as, bs = as.Next(), bs.Next()
 		}
-		return true
+		return as == nil && bs == nil
 	case vm.Map:
 		bm := b.(vm.Map)
 		if len(av) != len(bm) {
@@ -175,6 +176,80 @@ func valueEquals(a, b vm.Value) bool {
 		// For primitives, use Go equality
 		return a == b
 	}
+}
+
+func seqOf(v vm.Value) (vm.Seq, error) {
+	if v == vm.NIL {
+		return nil, nil
+	}
+	if v == vm.EmptyList {
+		return nil, nil
+	}
+	// For concrete collections (not LazySeq), prefer Sequable.Seq() which
+	// produces a stable seq view (e.g. MapSeq with cached entries).
+	// Skip LazySeq to avoid forcing realization prematurely
+	// (e.g. cons must not realize its tail).
+	if _, isLazy := v.(*vm.LazySeq); !isLazy {
+		if sq, ok := v.(vm.Sequable); ok {
+			s := sq.Seq()
+			if s == nil || s == vm.EmptyList {
+				return nil, nil
+			}
+			return s, nil
+		}
+	}
+	if s, ok := v.(vm.Seq); ok {
+		return s, nil
+	}
+	return nil, fmt.Errorf("don't know how to create ISeq from %s", v.Type())
+}
+
+func mapLazy1(f vm.Fn, s vm.Seq) vm.Seq {
+	if s == nil {
+		return nil
+	}
+	captured := s
+	thunk, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
+		v, err := f.Invoke([]vm.Value{captured.First()})
+		if err != nil {
+			return vm.NIL, err
+		}
+		rest := captured.Next()
+		tail := mapLazy1(f, rest)
+		if tail == nil {
+			return vm.EmptyList.Cons(v), nil
+		}
+		return vm.NewCons(v, tail), nil
+	})
+	return vm.NewLazySeq(thunk.(vm.Fn))
+}
+
+func mapLazyN(f vm.Fn, seqs []vm.Seq) vm.Seq {
+	for _, s := range seqs {
+		if s == nil {
+			return nil
+		}
+	}
+	captured := make([]vm.Seq, len(seqs))
+	copy(captured, seqs)
+	thunk, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
+		fargs := make([]vm.Value, len(captured))
+		nexts := make([]vm.Seq, len(captured))
+		for i, s := range captured {
+			fargs[i] = s.First()
+			nexts[i] = s.Next()
+		}
+		v, err := f.Invoke(fargs)
+		if err != nil {
+			return vm.NIL, err
+		}
+		tail := mapLazyN(f, nexts)
+		if tail == nil {
+			return vm.EmptyList.Cons(v), nil
+		}
+		return vm.NewCons(v, tail), nil
+	})
+	return vm.NewLazySeq(thunk.(vm.Fn))
 }
 
 // nolint
@@ -358,15 +433,19 @@ func installLangNS() {
 		if v, ok := vs[0].(vm.ArrayVector); ok {
 			return v, nil
 		}
-		if seq, ok := vs[0].(vm.Seq); ok {
-			ret := []vm.Value{}
-			for seq != nil && seq != vm.EmptyList && seq != vm.NIL {
-				ret = append(ret, seq.First())
-				seq = seq.Next()
-			}
-			return vm.NewArrayVector(ret), nil
+		seq, err := seqOf(vs[0])
+		if err != nil {
+			return vm.NIL, err
 		}
-		return vm.NIL, nil // FIXME is this an error?
+		if seq == nil {
+			return vm.ArrayVector{}, nil
+		}
+		ret := []vm.Value{}
+		for seq != nil {
+			ret = append(ret, seq.First())
+			seq = seq.Next()
+		}
+		return vm.NewArrayVector(ret), nil
 	})
 
 	rangef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -494,9 +573,15 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		elem := vs[0]
-		seq, ok := vs[1].(vm.Seq)
-		if !ok {
+		if vs[1] == vm.NIL {
+			return vm.EmptyList.Cons(elem), nil
+		}
+		seq, err := seqOf(vs[1])
+		if err != nil {
 			return vm.NIL, fmt.Errorf("cons expected Seq")
+		}
+		if seq == nil {
+			return vm.EmptyList.Cons(elem), nil
 		}
 		return seq.Cons(elem), nil
 	})
@@ -555,39 +640,79 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		seq, ok := vs[0].(vm.Seq)
-		if !ok {
-			return vm.NIL, fmt.Errorf("first expected Seq")
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
 		}
-		return seq.First(), nil
+		if seq, ok := vs[0].(vm.Seq); ok {
+			return seq.First(), nil
+		}
+		if sq, ok := vs[0].(vm.Sequable); ok {
+			s := sq.Seq()
+			if s == nil || s == vm.EmptyList {
+				return vm.NIL, nil
+			}
+			return s.First(), nil
+		}
+		return vm.NIL, fmt.Errorf("first expected Seq")
 	})
 
 	second, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		seq, ok := vs[0].(vm.Seq)
-		if !ok {
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
+		}
+		seq, err := seqOf(vs[0])
+		if err != nil {
 			return vm.NIL, fmt.Errorf("second expected Seq")
 		}
-		return seq.Next().First(), nil
+		if seq == nil {
+			return vm.NIL, nil
+		}
+		n := seq.Next()
+		if n == nil {
+			return vm.NIL, nil
+		}
+		return n.First(), nil
 	})
 
 	next, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		seq, ok := vs[0].(vm.Seq)
-		if !ok {
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
+		}
+		seq, err := seqOf(vs[0])
+		if err != nil {
 			return vm.NIL, fmt.Errorf("next expected Seq")
 		}
-
+		if seq == nil {
+			return vm.NIL, nil
+		}
 		n := seq.Next()
-
-		if n == vm.EmptyList {
+		if n == nil {
 			return vm.NIL, nil
 		}
 		return n, nil
+	})
+
+	rest, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if vs[0] == vm.NIL {
+			return vm.EmptyList, nil
+		}
+		s, err := seqOf(vs[0])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("rest expected Seq")
+		}
+		if s == nil {
+			return vm.EmptyList, nil
+		}
+		return s.More(), nil
 	})
 
 	seq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -603,13 +728,13 @@ func installLangNS() {
 				return vm.NIL, nil
 			}
 		}
-		seq, ok := vs[0].(vm.Sequable)
+		sqbl, ok := vs[0].(vm.Sequable)
 		if !ok {
 			return vm.NIL, fmt.Errorf("seq expected Seqauble")
 		}
-		n := seq.Seq()
+		n := sqbl.Seq()
 		// Return nil for empty sequences (Clojure semantics)
-		if n == vm.EmptyList {
+		if n == nil || n == vm.EmptyList {
 			return vm.NIL, nil
 		}
 		return n, nil
@@ -673,7 +798,7 @@ func installLangNS() {
 		return seq.Count(), nil
 	})
 
-	// FIXME write real ones later because this is naiiiiive
+	// map builtin: eager for small counted collections, lazy otherwise
 	mapf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -682,70 +807,88 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("map expected Fn")
 		}
-		sequable, ok := vs[1].(vm.Sequable)
-		if !ok {
-			return vm.NIL, fmt.Errorf("map expected Sequable")
-		}
-		seq := sequable.Seq()
-		// if we have a single coll
+		// single collection path
 		if len(vs) == 2 {
+			s, err := seqOf(vs[1])
+			if err != nil {
+				return vm.NIL, fmt.Errorf("map expected Sequable")
+			}
+			if s == nil || s == vm.EmptyList {
+				return vm.EmptyList, nil
+			}
+			// Check for empty collection that implements Seq but has no elements
+			if coll, ok := vs[1].(vm.Collection); ok && coll.RawCount() == 0 {
+				return vm.EmptyList, nil
+			}
+			// eager path for small counted collections
 			length := 0
-			col, ok := vs[1].(vm.Collection)
-			if ok {
+			if col, ok := vs[1].(vm.Collection); ok {
 				length = col.RawCount()
 			}
-			if length > 0 {
+			if length > 0 && length <= 32 {
 				newseq := make([]vm.Value, length)
 				i := 0
-				for seq != vm.EmptyList {
-					newseq[i], err = mfn.Invoke([]vm.Value{seq.First()})
+				for s != nil {
+					newseq[i], err = mfn.Invoke([]vm.Value{s.First()})
 					if err != nil {
-						return vm.NIL, err // FIXME wrap this?
+						return vm.NIL, err
 					}
-					seq = seq.Next()
+					s = s.Next()
 					i++
 				}
-				ret, _ := vm.ListType.Box(newseq)
+				ret, _ := vm.ListType.Box(newseq[:i])
 				return ret, nil
 			}
-			return vm.EmptyList, nil
+			// lazy path
+			return mapLazy1(mfn, s), nil
 		}
-		// if we have more colls
+		// multi-collection path
 		colls := vs[1:]
 		seqs := make([]vm.Seq, len(colls))
-		minlen := math.MaxInt
 		for i := range colls {
-			seqable, ok := colls[i].(vm.Sequable)
-			if !ok {
+			if coll, ok := colls[i].(vm.Collection); ok && coll.RawCount() == 0 {
+				return vm.EmptyList, nil
+			}
+			s, err := seqOf(colls[i])
+			if err != nil {
 				return vm.NIL, fmt.Errorf("map expected Sequable collection")
 			}
-			seq := seqable.Seq()
-			if seq == nil || seq == vm.EmptyList {
-				minlen = 0
-			} else if coll, ok := colls[i].(vm.Collection); ok {
+			if s == nil || s == vm.EmptyList {
+				return vm.EmptyList, nil
+			}
+			seqs[i] = s
+		}
+		// Check if all collections are small and counted
+		minlen := math.MaxInt
+		allCounted := true
+		for i := range colls {
+			if coll, ok := colls[i].(vm.Collection); ok {
 				c := coll.RawCount()
 				if c < minlen {
 					minlen = c
 				}
-			}
-			seqs[i] = seq
-		}
-		if minlen == 0 {
-			return vm.EmptyList, nil
-		}
-		newseq := make([]vm.Value, minlen)
-		for i := 0; i < minlen; i++ {
-			fargs := make([]vm.Value, len(seqs))
-			for j := range seqs {
-				fargs[j] = seqs[j].First()
-				seqs[j] = seqs[j].Next()
-			}
-			newseq[i], err = mfn.Invoke(fargs)
-			if err != nil {
-				return vm.NIL, err // TODO wrap this somehow
+			} else {
+				allCounted = false
+				break
 			}
 		}
-		return vm.ListType.Box(newseq)
+		if allCounted && minlen > 0 && minlen <= 32 {
+			newseq := make([]vm.Value, minlen)
+			for i := 0; i < minlen; i++ {
+				fargs := make([]vm.Value, len(seqs))
+				for j := range seqs {
+					fargs[j] = seqs[j].First()
+					seqs[j] = seqs[j].Next()
+				}
+				newseq[i], err = mfn.Invoke(fargs)
+				if err != nil {
+					return vm.NIL, err
+				}
+			}
+			return vm.ListType.Box(newseq)
+		}
+		// lazy path for multi-collection
+		return mapLazyN(mfn, seqs), nil
 	})
 
 	mapv, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -784,9 +927,15 @@ func installLangNS() {
 				return mfn.Invoke(nil)
 			}
 		}
-		seq, ok := vs[sidx].(vm.Seq)
-		if !ok {
+		seq, err := seqOf(vs[sidx])
+		if err != nil {
 			return vm.NIL, fmt.Errorf("reduce expected Seq")
+		}
+		if seq == nil {
+			if len(vs) == 3 {
+				return vs[1], nil
+			}
+			return mfn.Invoke(nil)
 		}
 		var acc vm.Value
 		if len(vs) == 3 {
@@ -795,10 +944,10 @@ func installLangNS() {
 			acc = seq.First()
 			seq = seq.Next()
 		}
-		for seq != vm.EmptyList && seq != vm.NIL {
+		for seq != nil {
 			acc, err = mfn.Invoke([]vm.Value{acc, seq.First()})
 			if err != nil {
-				return vm.NIL, err // FIXME wrap this somehow
+				return vm.NIL, err
 			}
 			seq = seq.Next()
 		}
@@ -814,11 +963,11 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("some expected Fn")
 		}
-		seq, ok := vs[1].(vm.Seq)
-		if !ok {
+		seq, err := seqOf(vs[1])
+		if err != nil {
 			return vm.NIL, fmt.Errorf("some expected Seq")
 		}
-		for seq != vm.EmptyList {
+		for seq != nil {
 			v, err := f.Invoke([]vm.Value{seq.First()})
 			if err != nil {
 				return vm.NIL, err
@@ -885,14 +1034,25 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("apply expected Fn")
 		}
-		switch vs[1].Type() {
-		case vm.ArrayVectorType:
-			return f.Invoke(vs[1].(vm.ArrayVector))
-		case vm.ListType:
-			args := vs[1].Unbox().([]vm.Value)
-			return f.Invoke(args)
+		if vs[1] == vm.NIL {
+			return f.Invoke(nil)
 		}
-		return vm.NIL, nil // FIXME is this an error?
+		if av, ok := vs[1].(vm.ArrayVector); ok {
+			return f.Invoke(av)
+		}
+		seq, err := seqOf(vs[1])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("apply expected Seq")
+		}
+		if seq == nil {
+			return f.Invoke(nil)
+		}
+		var args []vm.Value
+		for seq != nil {
+			args = append(args, seq.First())
+			seq = seq.Next()
+		}
+		return f.Invoke(args)
 	})
 
 	inNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -1004,17 +1164,16 @@ func installLangNS() {
 	concat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		var ret []vm.Value
 		for i := range vs {
-			vseq, ok := vs[i].(vm.Seq)
-			if !ok {
+			if vs[i] == vm.NIL {
+				continue
+			}
+			vseq, err := seqOf(vs[i])
+			if err != nil {
 				return vm.NIL, fmt.Errorf("concat expected Seq")
 			}
-			for {
-				e := vseq.First()
-				ret = append(ret, e)
+			for vseq != nil {
+				ret = append(ret, vseq.First())
 				vseq = vseq.Next()
-				if vseq == vm.EmptyList || vseq == vm.NIL {
-					break
-				}
 			}
 		}
 		r, err := vm.ListType.Box(ret)
@@ -1379,9 +1538,21 @@ func installLangNS() {
 				return vm.NIL, nil
 			}
 			return v[len(v)-1], nil
+		case vm.PersistentVector:
+			if v.RawCount() == 0 {
+				return vm.NIL, nil
+			}
+			return v.ValueAt(vm.Int(v.RawCount() - 1)), nil
 		case vm.Seq:
 			return v.First(), nil
 		default:
+			if sq, ok := vs[0].(vm.Sequable); ok {
+				s := sq.Seq()
+				if s == nil || s == vm.EmptyList {
+					return vm.NIL, nil
+				}
+				return s.First(), nil
+			}
 			return vm.NIL, fmt.Errorf("peek expected Seq or Vec")
 		}
 	})
@@ -1391,6 +1562,14 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		switch vs[0].(type) {
+		case vm.PersistentVector:
+			v := vs[0].(vm.PersistentVector)
+			if v.RawCount() < 1 {
+				return vm.NIL, fmt.Errorf("can't pop empty vector")
+			}
+			// Rebuild without last element
+			vals := v.Unbox().([]vm.Value)
+			return vm.NewPersistentVector(vals[:len(vals)-1]), nil
 		case vm.ArrayVector:
 			v := vs[0].(vm.ArrayVector)
 			if v.RawCount() < 1 {
@@ -1399,12 +1578,12 @@ func installLangNS() {
 			return vm.ArrayVector(v[0 : len(v)-1]), nil
 		case vm.Seq:
 			r := vs[0].(vm.Seq).Next()
-			if r == vm.NIL {
+			if r == nil {
 				return vm.NIL, fmt.Errorf("can't pop empty seq")
 			}
 			return r, nil
 		default:
-			return vm.NIL, fmt.Errorf("peek expected Seq or Vec")
+			return vm.NIL, fmt.Errorf("pop expected Seq or Vec")
 		}
 	})
 
@@ -1550,6 +1729,7 @@ func installLangNS() {
 	ns.Def("first", first)
 	ns.Def("second", second)
 	ns.Def("next", next)
+	ns.Def("rest", rest)
 	ns.Def("get", get)
 	ns.Def("count", count)
 	ns.Def("contains?", contains)

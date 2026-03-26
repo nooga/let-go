@@ -45,6 +45,17 @@ func (c *Cons) More() Seq {
 }
 
 func (c *Cons) Next() Seq {
+	if c.more == nil || c.more == EmptyList {
+		return nil
+	}
+	// If the tail is a LazySeq, realize it to check emptiness
+	if ls, ok := c.more.(*LazySeq); ok {
+		s := ls.Seq()
+		if s == nil || s == EmptyList {
+			return nil
+		}
+		return s
+	}
 	return c.more
 }
 

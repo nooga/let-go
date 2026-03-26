@@ -157,7 +157,7 @@ func BenchmarkVectorSeq(b *testing.B) {
 				b.StartTimer()
 
 				// Iterate through the entire sequence
-				for seq != NIL && seq != EmptyList {
+				for seq != nil {
 					seq.First()
 					seq = seq.Next()
 				}
@@ -171,7 +171,7 @@ func BenchmarkVectorSeq(b *testing.B) {
 				b.StartTimer()
 
 				// Iterate through the entire sequence
-				for seq != NIL && seq != EmptyList {
+				for seq != nil {
 					seq.First()
 					seq = seq.Next()
 				}

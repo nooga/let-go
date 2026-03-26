@@ -101,9 +101,7 @@ func TestListType(t *testing.T) {
 	assert.Equal(t, l4.More(), l4.Next())
 
 	assert.Equal(t, NIL, l.First())
-	assert.Equal(t, l, l.Next())
-	assert.Equal(t, l, l.More())
-	assert.Equal(t, EmptyList, l.Next())
+	assert.Nil(t, l.Next())
 	assert.Equal(t, EmptyList, l.More())
 
 	assert.Equal(t, l2, l4.Next())

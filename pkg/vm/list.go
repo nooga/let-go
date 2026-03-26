@@ -82,16 +82,16 @@ func (l *List) First() Value {
 
 // More implements Seq
 func (l *List) More() Seq {
-	if l.count == 0 {
-		return l
+	if l.count <= 1 {
+		return EmptyList
 	}
 	return l.next
 }
 
 // Next implements Seq
 func (l *List) Next() Seq {
-	if l.count == 0 {
-		return l
+	if l.count <= 1 {
+		return nil
 	}
 	return l.next
 }
