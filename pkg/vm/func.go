@@ -82,7 +82,9 @@ func (l *Func) Invoke(pargs []Value) (Value, error) {
 		args = append(sargs, restlist)
 	}
 	f := NewFrame(l.chunk, args)
-	return f.Run()
+	result, err := f.Run()
+	ReleaseFrame(f)
+	return result, err
 }
 
 func (l *Func) String() string {
@@ -136,7 +138,6 @@ func (l *Closure) Invoke(pargs []Value) (Value, error) {
 		// pretty sure variadric should guarantee arity >= 1
 		sargs := args[0 : l.fn.arity-1]
 		rest := args[l.fn.arity-1:]
-		// FIXME don't swallow the error, make invoke return an error
 		restlist, err := ListType.Box(rest)
 		if err != nil {
 			return NIL, err
@@ -145,8 +146,9 @@ func (l *Closure) Invoke(pargs []Value) (Value, error) {
 	}
 	f := NewFrame(l.fn.chunk, args)
 	f.closedOvers = l.closedOvers
-	// FIXME don't swallow the error, make invoke return an error
-	return f.Run()
+	result, err := f.Run()
+	ReleaseFrame(f)
+	return result, err
 }
 
 func (l *Closure) String() string {

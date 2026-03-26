@@ -117,6 +117,7 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 			f = vm.NewFrame(formchunk, nil)
 		}
 		result, err = f.Run()
+		vm.ReleaseFrame(f)
 		if err != nil {
 			return nil, result, err
 		}
