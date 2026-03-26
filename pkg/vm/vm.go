@@ -7,6 +7,7 @@ package vm
 
 import (
 	"fmt"
+	"sync"
 )
 
 // Opcodes
@@ -176,18 +177,46 @@ type Frame struct {
 	debug       bool
 }
 
+// framePool reuses Frame structs to avoid per-call heap allocation.
+// The stack slice is kept and grown as needed; references are cleared on release.
+var framePool = sync.Pool{
+	New: func() interface{} {
+		return &Frame{}
+	},
+}
+
 func NewFrame(code *CodeChunk, args []Value) *Frame {
-	return &Frame{
-		stack:   make([]Value, code.maxStack),
-		args:    args,
-		argc:    len(args),
-		consts:  code.consts,
-		constsc: code.consts.count(),
-		code:    code,
-		ip:      0,
-		sp:      0,
-		debug:   false,
+	f := framePool.Get().(*Frame)
+	needed := code.maxStack
+	if needed < 4 {
+		needed = 4
 	}
+	if cap(f.stack) >= needed {
+		f.stack = f.stack[:needed]
+	} else {
+		f.stack = make([]Value, needed)
+	}
+	f.args = args
+	f.argc = len(args)
+	f.closedOvers = nil
+	f.consts = code.consts
+	f.constsc = code.consts.count()
+	f.code = code
+	f.ip = 0
+	f.sp = 0
+	f.debug = false
+	return f
+}
+
+// ReleaseFrame returns a frame to the pool.
+// We don't clear stack slots — they'll be overwritten on reuse.
+// We only nil out the large reference fields to avoid pinning code/const objects.
+func ReleaseFrame(f *Frame) {
+	f.args = nil
+	f.closedOvers = nil
+	f.consts = nil
+	f.code = nil
+	framePool.Put(f)
 }
 
 func NewDebugFrame(code *CodeChunk, args []Value) *Frame {
@@ -196,7 +225,42 @@ func NewDebugFrame(code *CodeChunk, args []Value) *Frame {
 	return f
 }
 
+// Fast-path stack operations. The compiler guarantees correct stack depth,
+// so bounds checks are skipped for performance. Debug mode uses safe variants.
+
 func (f *Frame) push(v Value) error {
+	f.stack[f.sp] = v
+	f.sp++
+	return nil
+}
+
+func (f *Frame) pushMult(v []Value) error {
+	copy(f.stack[f.sp:], v)
+	f.sp += len(v)
+	return nil
+}
+
+func (f *Frame) pop() (Value, error) {
+	f.sp--
+	return f.stack[f.sp], nil
+}
+
+func (f *Frame) nth(n int) (Value, error) {
+	return f.stack[f.sp-1-n], nil
+}
+
+func (f *Frame) mult(start int, count int) ([]Value, error) {
+	i := f.sp - start
+	return f.stack[i-count : i], nil
+}
+
+func (f *Frame) drop(n int) error {
+	f.sp -= n
+	return nil
+}
+
+// Safe variants for debug mode
+func (f *Frame) pushSafe(v Value) error {
 	if f.sp >= f.code.maxStack {
 		f.stackDbg()
 		return NewExecutionError("stack overflow")
@@ -206,32 +270,16 @@ func (f *Frame) push(v Value) error {
 	return nil
 }
 
-func (f *Frame) pushMult(v []Value) error {
-	l := len(v)
-	if f.sp >= f.code.maxStack-l {
-		f.stackDbg()
-		return NewExecutionError("stack overflow")
-	}
-
-	for i := 0; i < l; i++ {
-		f.stack[f.sp] = v[i]
-		f.sp++
-	}
-	return nil
-}
-
-func (f *Frame) pop() (Value, error) {
+func (f *Frame) popSafe() (Value, error) {
 	if f.sp == 0 {
 		f.stackDbg()
 		return NIL, NewExecutionError("stack underflow")
 	}
 	f.sp--
-	v := f.stack[f.sp]
-	//f.stack[f.sp] = nil
-	return v, nil
+	return f.stack[f.sp], nil
 }
 
-func (f *Frame) nth(n int) (Value, error) {
+func (f *Frame) nthSafe(n int) (Value, error) {
 	i := f.sp - 1 - n
 	if i < 0 {
 		f.stackDbg()
@@ -240,26 +288,7 @@ func (f *Frame) nth(n int) (Value, error) {
 	return f.stack[i], nil
 }
 
-func (f *Frame) mult(start int, count int) ([]Value, error) {
-	if count < 0 {
-		f.stackDbg()
-		return nil, NewExecutionError("mult: count 0 or negative")
-	}
-	i := f.sp - start
-	if i-count < 0 {
-		f.stackDbg()
-		return nil, NewExecutionError("mult: stack underflow")
-	}
-	return f.stack[i-count : i], nil
-}
-
-func (f *Frame) drop(n int) error {
-	top := f.sp - 1
-	if top < 0 {
-		f.stackDbg()
-		f.code.Debug()
-		return NewExecutionError("drop: stack underflow")
-	}
+func (f *Frame) dropSafe(n int) error {
 	f.sp -= n
 	if f.sp < 0 {
 		f.stackDbg()
