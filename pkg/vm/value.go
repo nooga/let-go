@@ -24,6 +24,12 @@ type Value interface {
 	Unbox() interface{}
 }
 
+// IMeta is implemented by values that support metadata.
+type IMeta interface {
+	Meta() Value           // returns the metadata map, or NIL
+	WithMeta(Value) Value  // returns a copy of this value with the given metadata
+}
+
 // Seq is implemented by all sequence-like values
 type Seq interface {
 	Value

@@ -45,8 +45,26 @@ type List struct {
 	first    Value
 	next     *List
 	count    int
+	meta     Value
 	_hash    uint32
 	_hasHash bool
+}
+
+// Meta implements IMeta.
+func (l *List) Meta() Value {
+	if l.meta == nil {
+		return NIL
+	}
+	return l.meta
+}
+
+// WithMeta implements IMeta.
+func (l *List) WithMeta(m Value) Value {
+	cp := *l
+	cp.meta = m
+	cp._hash = 0
+	cp._hasHash = false
+	return &cp
 }
 
 // Hash implements Hashable. Cached after first computation.

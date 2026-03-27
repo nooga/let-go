@@ -61,6 +61,16 @@ func (l ArrayVector) Hash() uint32 {
 	return mixFinish(h)
 }
 
+// Meta implements IMeta. ArrayVector doesn't store meta, always returns NIL.
+func (l ArrayVector) Meta() Value { return NIL }
+
+// WithMeta implements IMeta. Promotes to PersistentVector to carry meta.
+func (l ArrayVector) WithMeta(m Value) Value {
+	pv := NewPersistentVector([]Value(l)).(PersistentVector)
+	pv.meta = m
+	return pv
+}
+
 func (l ArrayVector) Type() ValueType { return ArrayVectorType }
 
 // Unbox implements Value

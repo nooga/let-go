@@ -9,6 +9,7 @@ import "fmt"
 
 type Var struct {
 	root      Value
+	bindings  []Value // dynamic binding stack (nil when unused — zero cost)
 	nsref     *Namespace
 	ns        string
 	name      string
@@ -51,7 +52,22 @@ func (v *Var) SetRoot(val Value) *Var {
 }
 
 func (v *Var) Deref() Value {
+	if len(v.bindings) > 0 {
+		return v.bindings[len(v.bindings)-1]
+	}
 	return v.root
+}
+
+// PushBinding pushes a dynamic binding value.
+func (v *Var) PushBinding(val Value) {
+	v.bindings = append(v.bindings, val)
+}
+
+// PopBinding removes the most recent dynamic binding.
+func (v *Var) PopBinding() {
+	if len(v.bindings) > 0 {
+		v.bindings = v.bindings[:len(v.bindings)-1]
+	}
 }
 
 func (v *Var) Type() ValueType {
@@ -71,11 +87,11 @@ func (v *Var) IsMacro() bool {
 }
 
 func (v *Var) IsDynamic() bool {
-	return v.isMacro
+	return v.isDynamic
 }
 
 func (v *Var) IsPrivate() bool {
-	return v.isMacro
+	return v.isPrivate
 }
 
 func (v *Var) SetMacro() {

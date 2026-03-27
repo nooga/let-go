@@ -50,11 +50,26 @@ type PersistentVector struct {
 	root    *vnode
 	tail    []Value // Last node is stored separately for efficiency
 	tailOff int
+	meta    Value
 }
 
 // Hash implements Hashable. Computed from elements.
 func (v PersistentVector) Hash() uint32 {
 	return hashOrdered(v.Seq())
+}
+
+// Meta implements IMeta.
+func (v PersistentVector) Meta() Value {
+	if v.meta == nil {
+		return NIL
+	}
+	return v.meta
+}
+
+// WithMeta implements IMeta.
+func (v PersistentVector) WithMeta(m Value) Value {
+	v.meta = m
+	return v
 }
 
 // Type implements Value

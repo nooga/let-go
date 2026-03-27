@@ -66,6 +66,14 @@ func (l Set) Hash() uint32 {
 	return mixFinish(h)
 }
 
+// Meta implements IMeta. Set doesn't store meta, always returns NIL.
+func (l Set) Meta() Value { return NIL }
+
+// WithMeta implements IMeta. Returns a SetWithMeta wrapper.
+func (l Set) WithMeta(m Value) Value {
+	return &SetWithMeta{Set: l, meta: m}
+}
+
 // Type implements Value
 func (l Set) Type() ValueType { return SetType }
 
@@ -227,3 +235,12 @@ func (l Set) Invoke(pargs []Value) (Value, error) {
 	}
 	return NIL, nil
 }
+
+// SetWithMeta wraps a Set to carry metadata.
+type SetWithMeta struct {
+	Set
+	meta Value
+}
+
+func (s *SetWithMeta) Meta() Value          { return s.meta }
+func (s *SetWithMeta) WithMeta(m Value) Value { return &SetWithMeta{Set: s.Set, meta: m} }
