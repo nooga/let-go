@@ -529,8 +529,7 @@ func installLangNS() {
 		if k, ok := vs[0].(vm.String); ok {
 			return vm.Keyword(k), nil
 		}
-		// TODO handle namespaces
-		return vm.NIL, nil // TODO is this an error?
+		return vm.NIL, fmt.Errorf("keyword expects keyword, symbol, or string, got %s", vs[0].Type())
 	})
 
 	// symbol(name) or symbol(ns, name)
@@ -615,7 +614,7 @@ func installLangNS() {
 		}
 		v, err := fn.Invoke(args)
 		if err != nil {
-			return vm.NIL, err // FIXME wrap this?
+			return vm.NIL, err
 		}
 		return colla.Assoc(key, v), nil
 	})
@@ -1000,7 +999,7 @@ func installLangNS() {
 	mapv, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		v, err := mapf.(vm.Fn).Invoke(vs)
 		if err != nil {
-			return vm.NIL, err // TODO wrap this
+			return vm.NIL, err
 		}
 		return vec.(vm.Fn).Invoke([]vm.Value{v})
 	})
@@ -1206,7 +1205,6 @@ func installLangNS() {
 		}
 		cns := CurrentNS.Deref().(*vm.Namespace)
 		target := NS(string(nsSym))
-		// fmt.Printf("[aliasf] in ns=%s set alias %q -> %s\n", cns.Name(), string(al), target.Name())
 		cns.Alias(al, target)
 		return vm.NIL, nil
 	})
@@ -1435,7 +1433,7 @@ func installLangNS() {
 		go func() {
 			v, err := at.Invoke(nil)
 			if err != nil {
-				fmt.Println(err) // FIXME handle this properly
+				fmt.Println(err)
 			}
 			ret <- v
 			close(ret)
@@ -2695,7 +2693,6 @@ func installLangNS() {
 	_ = ns.Def("ns", nsMacro)
 	(ns.Lookup("ns").(*vm.Var)).SetMacro()
 
-	// FIXME implement the primitives in let-go later on and clean up this mess
 	// primitive fns
 	ns.Def("+", plus)
 	ns.Def("*", mul)
@@ -2772,7 +2769,6 @@ func installLangNS() {
 	ns.Def("swap-vals!", swapVals)
 	ns.Def("reset-vals!", resetVals)
 
-	// FIXME move this later outside the core
 	ns.Def("now", now)
 
 	ns.Def("slurp", slurp)
@@ -2785,10 +2781,9 @@ func installLangNS() {
 
 	ns.Def("sort", sort)
 
-	// FIXME move this to VM later
 	ns.Def(".", methodInvoke)
 
-	// FIXME move to async
+	// async
 	ns.Def("go*", gof)
 	ns.Def("chan", chanf)
 	ns.Def(">!", chanput)

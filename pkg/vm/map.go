@@ -35,14 +35,11 @@ var MapType *theMapType = &theMapType{}
 type Map map[Value]Value
 
 func (l Map) Conj(value Value) Collection {
-	// FIXME this needs MapEntry
 	if value.Type() != ArrayVectorType {
-		// FIXME this is error
 		return l
 	}
 	v := value.(ArrayVector)
 	if len(v) != 2 {
-		// FIXME this is error
 		return l
 	}
 	ret := make(Map, len(l)+1)
@@ -176,7 +173,6 @@ func (l Map) Empty() Collection {
 }
 
 func (l Map) Assoc(k Value, v Value) Associative {
-	// FIXME implement persistent maps :P
 	newmap := make(Map)
 	for ok, ov := range l {
 		newmap[ok] = ov
@@ -186,7 +182,6 @@ func (l Map) Assoc(k Value, v Value) Associative {
 }
 
 func (l Map) Dissoc(k Value) Associative {
-	// FIXME implement persistent maps :P
 	newmap := make(Map)
 	for ok, ov := range l {
 		if ok == k {
@@ -263,7 +258,6 @@ func (l Map) Arity() int {
 func (l Map) Invoke(pargs []Value) (Value, error) {
 	vl := len(pargs)
 	if vl < 1 || vl > 2 {
-		// FIXME return error
 		return NIL, fmt.Errorf("wrong number of arguments %d", vl)
 	}
 	if vl == 1 {

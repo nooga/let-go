@@ -46,7 +46,6 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 			}
 		}
 		res := v.Call(rawArgs)
-		// FIXME we know return value count upfront, so we can avoid this
 		lr := len(res)
 		if lr == 0 {
 			return NIL, nil
@@ -81,7 +80,6 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 }
 
 func (t *theNativeFnType) WrapNoErr(fn func([]Value) Value) (Value, error) {
-	// FIXME this is ugly and unnecessary wrap in closure
 	return t.Wrap(func(args []Value) (Value, error) {
 		return fn(args), nil
 	})

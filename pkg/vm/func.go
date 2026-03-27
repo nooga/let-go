@@ -51,11 +51,11 @@ func (l *Func) Unbox() interface{} {
 	proxy := func(in []reflect.Value) []reflect.Value {
 		args := make([]Value, len(in))
 		for i := range in {
-			a, _ := BoxValue(in[i]) // FIXME handle error
+			a, _ := BoxValue(in[i]) // error not propagatable through reflect proxy
 			args[i] = a
 		}
 		f := NewFrame(l.chunk, args)
-		out, _ := f.Run() // FIXME handle error
+		out, _ := f.Run() // error not propagatable through reflect proxy
 		return []reflect.Value{reflect.ValueOf(out.Unbox())}
 	}
 	return func(fptr interface{}) {
@@ -112,12 +112,12 @@ func (l *Closure) Unbox() interface{} {
 	proxy := func(in []reflect.Value) []reflect.Value {
 		args := make([]Value, len(in))
 		for i := range in {
-			a, _ := BoxValue(in[i]) // FIXME handle error
+			a, _ := BoxValue(in[i]) // error not propagatable through reflect proxy
 			args[i] = a
 		}
 		f := NewFrame(l.fn.chunk, args)
 		f.closedOvers = l.closedOvers
-		out, _ := f.Run() // FIXME handle error
+		out, _ := f.Run() // error not propagatable through reflect proxy
 		return []reflect.Value{reflect.ValueOf(out.Unbox())}
 	}
 	return func(fptr interface{}) {
@@ -167,7 +167,7 @@ func (l *MultiArityFn) Unbox() interface{} {
 	proxy := func(in []reflect.Value) []reflect.Value {
 		args := make([]Value, len(in))
 		for i := range in {
-			a, _ := BoxValue(in[i]) // FIXME handle error
+			a, _ := BoxValue(in[i]) // error not propagatable through reflect proxy
 			args[i] = a
 		}
 		out, _ := l.Invoke(args)

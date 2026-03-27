@@ -343,7 +343,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		tp := c.tailPosition
 		c.tailPosition = false
 		v := o.(vm.ArrayVector)
-		// FIXME detect const vectors and push them like this
+		// Optimization: const vectors could be pushed as constants
 		//if len(v) == 0 {
 		//	n := c.constant(v)
 		//	c.emitWithArg(vm.OP_LOAD_CONST, n)
@@ -1356,7 +1356,6 @@ func defCompiler(c *Context, form vm.Value) error {
 	return nil
 }
 
-// FIXME this is just def with a different name basically
 func setBangCompiler(c *Context, form vm.Value) error {
 	tc := c.tailPosition
 	c.tailPosition = false

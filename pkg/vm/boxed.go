@@ -89,14 +89,12 @@ func valueType(value interface{}) *aBoxedType {
 			m := reflected.Method(i)
 			me, err := NativeFnType.Box(m.Func.Interface())
 			if err != nil {
-				// FIXME notice this somehow
-				fmt.Println(reflected.Name(), "boxing method failed", err)
+								fmt.Println(reflected.Name(), "boxing method failed", err)
 				continue
 			}
 			mef, ok := me.(*NativeFn)
 			if !ok {
-				// FIXME notice this somehow
-				fmt.Println(reflected.Name(), "boxed method is not a native fn")
+								fmt.Println(reflected.Name(), "boxed method is not a native fn")
 				continue
 			}
 			t.methods[Symbol(m.Name)] = mef
