@@ -59,6 +59,10 @@ func (c *Context) SetSource(source string) *Context {
 	return c
 }
 
+func (c *Context) Consts() *vm.Consts {
+	return c.consts
+}
+
 func (c *Context) CurrentNS() *vm.Namespace {
 	return rt.CurrentNS.Deref().(*vm.Namespace)
 }

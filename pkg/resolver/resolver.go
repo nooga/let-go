@@ -31,13 +31,13 @@ func (r *NSResolver) loadFile(path string) *vm.Namespace {
 	}
 	defer f.Close()
 	ons := r.ctx.CurrentNS()
-	r.ctx.SetSource(path)
-	_, _, err = r.ctx.CompileMultiple(f)
+	freshCtx := compiler.NewCompiler(r.ctx.Consts(), ons)
+	freshCtx.SetSource(path)
+	_, _, err = freshCtx.CompileMultiple(f)
 	if err != nil {
 		return nil
 	}
-	nns := r.ctx.CurrentNS()
-	r.ctx.SetCurrentNS(ons)
+	nns := freshCtx.CurrentNS()
 	return nns
 }
 
@@ -77,6 +77,10 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 		src = rt.CoreSrc
 	case "test":
 		src = rt.TestSrc
+	case "string":
+		src = rt.StringSrc
+	case "set":
+		src = rt.SetSrc
 	default:
 		return nil
 	}
@@ -85,14 +89,15 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 	}
 	r.cloading[name] = true
 	defer delete(r.cloading, name)
+	// Use a fresh compiler context to avoid corrupting the caller's state
+	// when loading is triggered during compile-time macro expansion.
 	ons := r.ctx.CurrentNS()
-	r.ctx.SetSource("<embedded:" + name + ">")
-	_, _, err := r.ctx.CompileMultiple(stdstrings.NewReader(src))
+	freshCtx := compiler.NewCompiler(r.ctx.Consts(), ons)
+	freshCtx.SetSource("<embedded:" + name + ">")
+	_, _, err := freshCtx.CompileMultiple(stdstrings.NewReader(src))
 	if err != nil {
-		r.ctx.SetCurrentNS(ons)
 		return nil
 	}
-	nns := r.ctx.CurrentNS()
-	r.ctx.SetCurrentNS(ons)
+	nns := freshCtx.CurrentNS()
 	return nns
 }

@@ -1,0 +1,34 @@
+;; string namespace — string utility functions
+;; Native builtins (trim, upper-case, etc.) are defined in core via Go.
+;; This namespace re-exports them under the string/ prefix.
+(ns string)
+
+(defn join
+  ([coll] (apply str coll))
+  ([sep coll] (apply str (interpose sep coll))))
+
+(defn replace [s match replacement]
+  (str-replace s match replacement))
+
+(defn blank? [s]
+  (or (nil? s) (= "" s) (= "" (trim s))))
+
+(defn reverse [s]
+  (apply str (core/reverse (vec s))))
+
+(defn capitalize [s]
+  (if (or (nil? s) (= "" s))
+    s
+    (str (upper-case (subs s 0 1)) (lower-case (subs s 1)))))
+
+;; Re-export core builtins for string/ qualified access
+(def trim core/trim)
+(def triml core/triml)
+(def trimr core/trimr)
+(def upper-case core/upper-case)
+(def lower-case core/lower-case)
+(def starts-with? core/starts-with?)
+(def ends-with? core/ends-with?)
+(def includes? core/includes?)
+(def split core/split)
+(def subs core/subs)
