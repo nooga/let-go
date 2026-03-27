@@ -371,12 +371,32 @@ func readString(r *LispReader, _ rune) (vm.Value, error) {
 	}
 }
 
-func readRegex(r *LispReader, ru rune) (vm.Value, error) {
-	s, err := readString(r, ru)
-	if err != nil {
-		return vm.NIL, NewReaderError(r, "reading regexp pattern failed").Wrap(err)
+func readRegex(r *LispReader, _ rune) (vm.Value, error) {
+	// Read regex pattern literally — backslashes are regex escapes, not string escapes
+	r.discardToken()
+	r.openToken()
+	s := strings.Builder{}
+	for {
+		ch, err := r.next()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "unterminated regex").Wrap(err)
+		}
+		if ch == '\\' {
+			// Pass through backslash + next char literally
+			ch2, err := r.next()
+			if err != nil {
+				return vm.NIL, NewReaderError(r, "unterminated regex escape").Wrap(err)
+			}
+			s.WriteRune('\\')
+			s.WriteRune(ch2)
+			continue
+		}
+		if ch == '"' {
+			r.closeToken(TokenString)
+			return vm.ListType.Box([]vm.Value{vm.Symbol("re-pattern"), vm.String(s.String())})
+		}
+		s.WriteRune(ch)
 	}
-	return vm.ListType.Box([]vm.Value{vm.Symbol("re-pattern"), s})
 }
 
 func isHexDigit(ch rune) bool {

@@ -630,6 +630,17 @@
 
 (defn into [c r] (reduce conj c r))
 
+(defn merge
+  ([] {})
+  ([m] m)
+  ([m & maps]
+   (reduce (fn [a b] (reduce (fn [m e] (assoc m (first e) (second e))) a (seq b)))
+           m maps)))
+
+(defn repeatedly
+  ([f] (lazy-seq (cons (f) (repeatedly f))))
+  ([n f] (take n (repeatedly f))))
+
 (defn keep [f coll]
   (lazy-seq
     (when-let [s (seq coll)]
@@ -663,10 +674,8 @@
 (defn select-keys
   [map keyseq]
   (loop [ret {} keys (seq keyseq)]
-    (println ret keys)
     (if keys
       (let [entry (find map (first keys))]
-        (println "d" entry)
         (recur
          (if entry
            (conj ret entry)

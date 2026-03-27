@@ -52,6 +52,14 @@ func (l *Regex) ReplaceAll(s string, replacement string) string {
 	return l.re.ReplaceAllString(s, replacement)
 }
 
+func (l *Regex) FindStringSubmatch(s string) []string {
+	return l.re.FindStringSubmatch(s)
+}
+
+func (l *Regex) FindAllString(s string, n int) []string {
+	return l.re.FindAllString(s, n)
+}
+
 func NewRegex(s string) (Value, error) {
 	re, err := regexp.Compile(s)
 	if err != nil {

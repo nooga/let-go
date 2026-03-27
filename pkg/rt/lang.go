@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"sort"
 	"strconv"
@@ -382,25 +383,35 @@ func installLangNS() {
 	})
 
 	gt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
+		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		r, err := vm.NumGt(vs[0], vs[1])
-		if err != nil {
-			return vm.NIL, err
+		for i := 0; i < len(vs)-1; i++ {
+			r, err := vm.NumGt(vs[i], vs[i+1])
+			if err != nil {
+				return vm.NIL, err
+			}
+			if !r {
+				return vm.FALSE, nil
+			}
 		}
-		return vm.Boolean(r), nil
+		return vm.TRUE, nil
 	})
 
 	lt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
+		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		r, err := vm.NumLt(vs[0], vs[1])
-		if err != nil {
-			return vm.NIL, err
+		for i := 0; i < len(vs)-1; i++ {
+			r, err := vm.NumLt(vs[i], vs[i+1])
+			if err != nil {
+				return vm.NIL, err
+			}
+			if !r {
+				return vm.FALSE, nil
+			}
 		}
-		return vm.Boolean(r), nil
+		return vm.TRUE, nil
 	})
 
 	mod, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -1740,6 +1751,189 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
+	// rand: returns a random float between 0 (inclusive) and 1 (exclusive)
+	// or between 0 and n
+	randf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) == 0 {
+			return vm.Float(rand.Float64()), nil
+		}
+		if len(vs) == 1 {
+			if n, ok := vs[0].(vm.Int); ok {
+				return vm.Float(rand.Float64() * float64(n)), nil
+			}
+			if n, ok := vs[0].(vm.Float); ok {
+				return vm.Float(rand.Float64() * float64(n)), nil
+			}
+			return vm.NIL, fmt.Errorf("rand expected number")
+		}
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	})
+
+	// rand-int: returns a random integer between 0 (inclusive) and n (exclusive)
+	randInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		n, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("rand-int expected Int")
+		}
+		if int(n) <= 0 {
+			return vm.MakeInt(0), nil
+		}
+		return vm.MakeInt(rand.Intn(int(n))), nil
+	})
+
+	// rand-nth: returns a random element from a collection
+	randNth, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		coll, ok := vs[0].(vm.Collection)
+		if !ok {
+			return vm.NIL, fmt.Errorf("rand-nth expected Collection")
+		}
+		n := coll.RawCount()
+		if n == 0 {
+			return vm.NIL, fmt.Errorf("rand-nth called on empty collection")
+		}
+		idx := rand.Intn(n)
+		if l, ok := vs[0].(vm.Lookup); ok {
+			return l.ValueAt(vm.Int(idx)), nil
+		}
+		// Fallback: iterate
+		s, _ := seqOf(vs[0])
+		for i := 0; i < idx; i++ {
+			s = s.Next()
+		}
+		return s.First(), nil
+	})
+
+	// shuffle: returns a random permutation of a collection as a vector
+	shuffle, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		// Collect into slice
+		s, err := seqOf(vs[0])
+		if err != nil {
+			return vm.NIL, err
+		}
+		var vals []vm.Value
+		for s != nil {
+			vals = append(vals, s.First())
+			s = s.Next()
+		}
+		// Fisher-Yates shuffle
+		rand.Shuffle(len(vals), func(i, j int) {
+			vals[i], vals[j] = vals[j], vals[i]
+		})
+		return vm.NewArrayVector(vals), nil
+	})
+
+	// pr-str: print readably to string (with quotes on strings)
+	prStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		b := &strings.Builder{}
+		for i := range vs {
+			if i > 0 {
+				b.WriteRune(' ')
+			}
+			b.WriteString(vs[i].String())
+		}
+		return vm.String(b.String()), nil
+	})
+
+	// prn: print readably + newline
+	prn, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		b := &strings.Builder{}
+		for i := range vs {
+			if i > 0 {
+				b.WriteRune(' ')
+			}
+			b.WriteString(vs[i].String())
+		}
+		fmt.Println(b)
+		return vm.NIL, nil
+	})
+
+	// re-find: find first match of regex in string
+	reFind, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		re, ok := vs[0].(*vm.Regex)
+		if !ok {
+			return vm.NIL, fmt.Errorf("re-find expected Regex")
+		}
+		s, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("re-find expected String")
+		}
+		matches := re.FindStringSubmatch(string(s))
+		if matches == nil {
+			return vm.NIL, nil
+		}
+		if len(matches) == 1 {
+			return vm.String(matches[0]), nil
+		}
+		result := make(vm.ArrayVector, len(matches))
+		for i, m := range matches {
+			result[i] = vm.String(m)
+		}
+		return result, nil
+	})
+
+	// re-matches: match entire string against regex
+	reMatches, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		re, ok := vs[0].(*vm.Regex)
+		if !ok {
+			return vm.NIL, fmt.Errorf("re-matches expected Regex")
+		}
+		s, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("re-matches expected String")
+		}
+		matches := re.FindStringSubmatch(string(s))
+		if matches == nil || matches[0] != string(s) {
+			return vm.NIL, nil
+		}
+		if len(matches) == 1 {
+			return vm.String(matches[0]), nil
+		}
+		result := make(vm.ArrayVector, len(matches))
+		for i, m := range matches {
+			result[i] = vm.String(m)
+		}
+		return result, nil
+	})
+
+	// re-seq: return lazy seq of all matches
+	reSeq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		re, ok := vs[0].(*vm.Regex)
+		if !ok {
+			return vm.NIL, fmt.Errorf("re-seq expected Regex")
+		}
+		s, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("re-seq expected String")
+		}
+		all := re.FindAllString(string(s), -1)
+		if all == nil {
+			return vm.EmptyList, nil
+		}
+		vals := make([]vm.Value, len(all))
+		for i, m := range all {
+			vals[i] = vm.String(m)
+		}
+		return vm.ListType.Box(vals)
+	})
+
 	// require loads a namespace by name (like Clojure's require function for REPL use)
 	requiref, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		for _, v := range vs {
@@ -2079,6 +2273,15 @@ func installLangNS() {
 	// namespace utilities
 	ns.Def("refer-list", referList)
 	ns.Def("refer", refer)
+	ns.Def("rand", randf)
+	ns.Def("rand-int", randInt)
+	ns.Def("rand-nth", randNth)
+	ns.Def("shuffle", shuffle)
+	ns.Def("pr-str", prStr)
+	ns.Def("prn", prn)
+	ns.Def("re-find", reFind)
+	ns.Def("re-matches", reMatches)
+	ns.Def("re-seq", reSeq)
 	ns.Def("require", requiref)
 	ns.Def("find-ns", findNs)
 	ns.Def("all-ns", allNs)
