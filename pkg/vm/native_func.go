@@ -127,14 +127,9 @@ func (l *NativeFn) Arity() int {
 	return l.arity
 }
 
-func (l *NativeFn) Invoke(args []Value) (Value, error) {
-	// defer func() {
-	// 	if err := recover(); err != nil {
-	// 		fmt.Println("panic occurred:", err)
-	// 	}
-	// }()
-	ret, err := l.proxy(args)
-	return ret, err
+func (l *NativeFn) Invoke(args []Value) (ret Value, err error) {
+	defer recoverThrownPanic(&err)
+	return l.proxy(args)
 }
 
 func (l *NativeFn) String() string {
