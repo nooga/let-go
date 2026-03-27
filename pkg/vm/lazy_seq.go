@@ -63,21 +63,8 @@ func (l *LazySeq) seq() Seq {
 	}
 
 	if l.sv != nil {
-		// Unwrap nested LazySeqs (needed for compile-time macro expansion)
 		sv := l.sv
 		l.sv = nil
-		for {
-			inner, ok := sv.(*LazySeq)
-			if !ok {
-				break
-			}
-			iv := inner.sval()
-			if iv == nil {
-				sv = nil
-				break
-			}
-			sv = iv
-		}
 		if sv == nil || sv == NIL {
 			l.s = nil
 		} else if seq, ok := sv.(Seq); ok {
@@ -102,7 +89,7 @@ func (l *LazySeq) Type() ValueType    { return ListType }
 func (l *LazySeq) Unbox() interface{} { return l.seq() }
 
 func (l *LazySeq) First() Value {
-	s := l.seq()
+	s := l.Resolve()
 	if s == nil {
 		return NIL
 	}
@@ -110,7 +97,7 @@ func (l *LazySeq) First() Value {
 }
 
 func (l *LazySeq) More() Seq {
-	s := l.seq()
+	s := l.Resolve()
 	if s == nil {
 		return EmptyList
 	}
@@ -118,11 +105,25 @@ func (l *LazySeq) More() Seq {
 }
 
 func (l *LazySeq) Next() Seq {
-	s := l.seq()
+	s := l.Resolve()
 	if s == nil {
 		return nil
 	}
 	return s.Next()
+}
+
+// Resolve returns the fully realized non-LazySeq inner seq.
+// Iteratively unwraps nested LazySeqs without accumulating Go stack.
+func (l *LazySeq) Resolve() Seq {
+	s := l.seq()
+	for s != nil {
+		inner, ok := s.(*LazySeq)
+		if !ok {
+			return s
+		}
+		s = inner.seq()
+	}
+	return nil
 }
 
 func (l *LazySeq) Cons(val Value) Seq {
@@ -130,7 +131,7 @@ func (l *LazySeq) Cons(val Value) Seq {
 }
 
 func (l *LazySeq) Seq() Seq {
-	return l.seq()
+	return l.Resolve()
 }
 
 func (l *LazySeq) Count() Value {

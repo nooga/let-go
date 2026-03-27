@@ -68,25 +68,8 @@ The test runner (`test/language_test.go`) picks up all `*.lg` files in `test/` a
 
 ## Known Limitations
 
-### Recursive lazy seq stack overflow
-Lazy sequences built with `(cons val (lazy-seq ...))` patterns overflow the Go stack when deeply chained. This affects `repeatedly`, `iterate` + `take` + `vec`, and deep `filter`/`map` chains on infinite sequences.
-
-**Root cause:** `Cons.Next()` realizes `LazySeq` tails on the Go call stack. Each level adds ~500 bytes. Go's 1GB stack limit means ~2M levels max, but in practice the overhead per level (thunk invocation via `Func.Invoke → Frame.Run`) is much higher.
-
-**What works:**
-- `(first (iterate inc 0))`, `(first (next (iterate inc 0)))` — manual traversal
-- `(vec (take 5 (range 1000)))` — `range` is not lazy-seq based
-- `(vec (filter even? (range 100)))` — finite range sources
-- `(take 5 (for [x (range 1000)] (* x x)))` — for with finite range
-
-**What overflows:**
-- `(vec (take 5 (filter even? (iterate inc 0))))` — lazy chain on infinite iterate
-- `(vec (repeatedly 100 f))` — repeatedly uses recursive lazy-seq
-- `(count (repeatedly 5 f))` — forces full realization via RawCount
-
-**Workaround:** Use `range` instead of `iterate` for finite sequences. Use `loop`/`recur` for accumulation instead of `vec` on lazy seqs.
-
-**Proper fix:** Implement trampoline-style `LazySeq` that doesn't accumulate Go stack frames during realization. This requires restructuring `Cons.Next()` to not eagerly realize LazySeq tails.
+### Lazy seq implementation
+Lazy sequences use a trampoline-style `Resolve()` method that iteratively unwraps nested LazySeqs without accumulating Go stack frames. `Cons.Next()` calls `LazySeq.Resolve()` to detect empty tails. `LazySeq.seq()` stores inner seqs (including other LazySeqs) without recursive unwrapping — the `Resolve()` loop handles nesting.
 
 ## Common Gotchas
 
