@@ -61,6 +61,7 @@ func (te *TypeError) GetCause() error {
 
 type ExecutionError struct {
 	message string
+	source  *SourceInfo
 	cause   error
 }
 
@@ -70,6 +71,11 @@ func NewExecutionError(m string) *ExecutionError {
 
 func (ve *ExecutionError) Error() string {
 	return errors.AddCause(ve, fmt.Sprintf("ExecutionError: %s", ve.message))
+}
+
+func (ve *ExecutionError) WithSource(info *SourceInfo) *ExecutionError {
+	ve.source = info
+	return ve
 }
 
 func (ve *ExecutionError) Wrap(e error) errors.Error {

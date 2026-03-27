@@ -7,8 +7,10 @@ package compiler
 
 import (
 	"fmt"
-	"github.com/nooga/let-go/pkg/errors"
 	"io"
+
+	"github.com/nooga/let-go/pkg/errors"
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 type ReaderError struct {
@@ -62,6 +64,7 @@ func (r *ReaderError) GetCause() error {
 
 type CompileError struct {
 	message string
+	source  *vm.SourceInfo
 	cause   error
 }
 
@@ -71,9 +74,42 @@ func NewCompileError(message string) *CompileError {
 	}
 }
 
+func NewCompileErrorWithSource(message string, info *vm.SourceInfo) *CompileError {
+	return &CompileError{
+		message: message,
+		source:  info,
+	}
+}
+
 func (r *CompileError) Error() string {
 	return errors.AddCause(r,
 		fmt.Sprintf("CompileError: %s", r.message))
+}
+
+func (r *CompileError) Source() *vm.SourceInfo {
+	return r.source
+}
+
+// InnermostSource walks the error chain and returns the deepest source info found.
+func (r *CompileError) InnermostSource() *vm.SourceInfo {
+	if r.source != nil {
+		return r.source
+	}
+	if c, ok := r.cause.(*CompileError); ok {
+		return c.InnermostSource()
+	}
+	return nil
+}
+
+// InnermostMessage walks the error chain and returns the deepest error message.
+func (r *CompileError) InnermostMessage() string {
+	if r.cause == nil {
+		return r.message
+	}
+	if c, ok := r.cause.(*CompileError); ok {
+		return c.InnermostMessage()
+	}
+	return r.cause.Error()
 }
 
 func (r *CompileError) Wrap(err error) errors.Error {

@@ -105,7 +105,7 @@ func repl(ctx *compiler.Context) {
 		ctx.SetSource("REPL")
 		val, err := runForm(ctx, in)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Print(vm.FormatError(err))
 		} else {
 			fmt.Println(val.String())
 		}
@@ -210,7 +210,7 @@ func main() {
 		for i := range files {
 			err := runFile(context, files[i])
 			if err != nil {
-				fmt.Println(err)
+				fmt.Print(vm.FormatError(err))
 				continue
 			}
 		}
@@ -221,7 +221,7 @@ func main() {
 		context.SetSource("EXPR")
 		val, err := runForm(context, expr)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Print(vm.FormatError(err))
 		} else {
 			fmt.Println(val)
 		}
