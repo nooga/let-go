@@ -470,6 +470,11 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 }
 
 func readList(r *LispReader, _ rune) (vm.Value, error) {
+	startLine := r.line
+	startCol := r.column - 1 // -1 because '(' was already consumed
+	if startCol < 0 {
+		startCol = 0
+	}
 	var ret []vm.Value
 	for {
 		ch2, err := r.eatWhitespace()
@@ -489,10 +494,22 @@ func readList(r *LispReader, _ rune) (vm.Value, error) {
 		}
 		ret = appendNonVoid(r, ret, form)
 	}
-	return vm.ListType.Box(ret)
+	result, err := vm.ListType.Box(ret)
+	if err != nil {
+		return vm.NIL, err
+	}
+	vm.FormSource.Set(result.(vm.Value), vm.SourceInfo{
+		File: r.inputName, Line: startLine, Column: startCol,
+	})
+	return result, nil
 }
 
 func readVector(r *LispReader, _ rune) (vm.Value, error) {
+	startLine := r.line
+	startCol := r.column - 1
+	if startCol < 0 {
+		startCol = 0
+	}
 	ret := make([]vm.Value, 0)
 	for {
 		ch2, err := r.eatWhitespace()
@@ -512,10 +529,19 @@ func readVector(r *LispReader, _ rune) (vm.Value, error) {
 		}
 		ret = appendNonVoid(r, ret, form)
 	}
-	return vm.ArrayVector(ret), nil
+	result := vm.ArrayVector(ret)
+	vm.FormSource.Set(result, vm.SourceInfo{
+		File: r.inputName, Line: startLine, Column: startCol,
+	})
+	return result, nil
 }
 
 func readMap(r *LispReader, _ rune) (vm.Value, error) {
+	startLine := r.line
+	startCol := r.column - 1
+	if startCol < 0 {
+		startCol = 0
+	}
 	ret := make([]vm.Value, 0)
 	for {
 		ch2, err := r.eatWhitespace()
@@ -538,10 +564,19 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 	if len(ret)%2 != 0 {
 		return vm.NIL, NewReaderError(r, "map literal must contain even number of forms")
 	}
-	return vm.NewMap(ret), nil
+	result := vm.NewMap(ret)
+	vm.FormSource.Set(result, vm.SourceInfo{
+		File: r.inputName, Line: startLine, Column: startCol,
+	})
+	return result, nil
 }
 
 func readSet(r *LispReader, _ rune) (vm.Value, error) {
+	startLine := r.line
+	startCol := r.column - 2 // -2 because '#' and '{' were consumed
+	if startCol < 0 {
+		startCol = 0
+	}
 	ret := vm.EmptyList
 	for {
 		ch2, err := r.eatWhitespace()
@@ -563,7 +598,11 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 			ret = ret.Conj(form).(*vm.List)
 		}
 	}
-	return ret.Cons(vm.Symbol("hash-set")), nil
+	result := ret.Cons(vm.Symbol("hash-set"))
+	vm.FormSource.Set(result, vm.SourceInfo{
+		File: r.inputName, Line: startLine, Column: startCol,
+	})
+	return result, nil
 }
 
 func readQuote(r *LispReader, _ rune) (vm.Value, error) {
@@ -803,6 +842,11 @@ func readVarQuote(r *LispReader, _ rune) (vm.Value, error) {
 }
 
 func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
+	startLine := r.line
+	startCol := r.column - 2 // -2 because '#' and '(' were consumed
+	if startCol < 0 {
+		startCol = 0
+	}
 	var ret []vm.Value
 	r.maxPercent = 0
 	for {
@@ -839,6 +883,9 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 	}
+	vm.FormSource.Set(fn.(vm.Value), vm.SourceInfo{
+		File: r.inputName, Line: startLine, Column: startCol,
+	})
 	return fn, nil
 }
 

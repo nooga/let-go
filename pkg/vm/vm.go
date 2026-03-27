@@ -80,10 +80,11 @@ func OpcodeToString(op int32) string {
 
 // CodeChunk holds bytecode and provides facilities for reading and writing it
 type CodeChunk struct {
-	maxStack int
-	consts   *Consts
-	code     []int32
-	length   int
+	maxStack  int
+	consts    *Consts
+	code      []int32
+	length    int
+	sourceMap *SourceMap
 }
 
 func NewCodeChunk(consts *Consts) *CodeChunk {
@@ -139,8 +140,34 @@ func (c *CodeChunk) AppendChunk(o *CodeChunk) {
 	if o.maxStack > c.maxStack {
 		c.maxStack = o.maxStack
 	}
+	// Merge source maps with IP offset
+	if o.sourceMap != nil {
+		if c.sourceMap == nil {
+			c.sourceMap = NewSourceMap()
+		}
+		base := c.length
+		for _, e := range o.sourceMap.entries {
+			c.sourceMap.Add(base+e.startIP, e.info)
+		}
+	}
 	c.code = append(c.code, o.code...)
 	c.length += len(o.code)
+}
+
+// AddSourceInfo records the source location for the current bytecode offset.
+func (c *CodeChunk) AddSourceInfo(info SourceInfo) {
+	if c.sourceMap == nil {
+		c.sourceMap = NewSourceMap()
+	}
+	c.sourceMap.Add(c.length, info)
+}
+
+// LookupSource finds the source location for a given instruction pointer.
+func (c *CodeChunk) LookupSource(ip int) *SourceInfo {
+	if c.sourceMap == nil {
+		return nil
+	}
+	return c.sourceMap.Lookup(ip)
 }
 
 func (c *CodeChunk) Get(idx int) (int32, error) {
@@ -378,8 +405,8 @@ func (f *Frame) Run() (Value, error) {
 				}
 				out, err = fn.Invoke(a)
 				if err != nil {
-					// FIXME this is an exception, we should handle it
-					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fn.String())).Wrap(err)
+					srcInfo := f.code.LookupSource(f.ip)
+					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 				}
 				err = f.drop(int(arity) + 1)
 				if err != nil {
@@ -396,8 +423,8 @@ func (f *Frame) Run() (Value, error) {
 				}
 				out, err = fn.Invoke(nil)
 				if err != nil {
-					// FIXME this is an exception, we should handle it
-					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fn.String())).Wrap(err)
+					srcInfo := f.code.LookupSource(f.ip)
+					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 				}
 			}
 			err := f.push(out)
@@ -425,8 +452,8 @@ func (f *Frame) Run() (Value, error) {
 				if ff, ok := fn.(*Func); !ok {
 					out, err = fn.Invoke(a)
 					if err != nil {
-						// FIXME this is an exception, we should handle it
-						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fn.String())).Wrap(err)
+						srcInfo := f.code.LookupSource(f.ip)
+						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 					}
 					err = f.drop(int(arity) + 1)
 					if err != nil {
@@ -466,8 +493,8 @@ func (f *Frame) Run() (Value, error) {
 				if ff, ok := fn.(*Func); !ok {
 					out, err = fn.Invoke(nil)
 					if err != nil {
-						// FIXME this is an exception, we should handle it
-						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fn.String())).Wrap(err)
+						srcInfo := f.code.LookupSource(f.ip)
+						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 					}
 				} else {
 					f.code = ff.chunk
@@ -681,5 +708,30 @@ func (f *Frame) Run() (Value, error) {
 		default:
 			return NIL, NewExecutionError("unknown instruction")
 		}
+	}
+}
+
+// fnName returns a human-readable name for a function value.
+func fnName(fn Fn) string {
+	switch f := fn.(type) {
+	case *Func:
+		if f.name != "" {
+			return f.name
+		}
+		return "anonymous fn"
+	case *Closure:
+		return fnName(f.fn)
+	case *MultiArityFn:
+		if f.name != "" {
+			return f.name
+		}
+		return "anonymous fn"
+	case *NativeFn:
+		if f.name != "" {
+			return f.name
+		}
+		return "native fn"
+	default:
+		return "fn"
 	}
 }

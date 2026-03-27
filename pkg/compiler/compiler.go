@@ -33,6 +33,8 @@ type Context struct {
 	tailPosition   bool
 	debug          bool
 	defName        string
+	currentForm    vm.Value // tracks the form being compiled for error source info
+	currentList    vm.Value // tracks the enclosing list form for error source info
 }
 
 func NewCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
@@ -66,6 +68,7 @@ func (c *Context) SetCurrentNS(ns *vm.Namespace) {
 }
 
 func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
+	vm.SourceRegistry.Register(c.source, s)
 	r := NewLispReader(strings.NewReader(s), c.source)
 	o, err := r.Read()
 	if err != nil {
@@ -84,7 +87,14 @@ func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 }
 
 func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, error) {
-	r := NewLispReader(reader, c.source)
+	// Buffer source for error display
+	srcBytes, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, vm.NIL, err
+	}
+	src := string(srcBytes)
+	vm.SourceRegistry.Register(c.source, src)
+	r := NewLispReader(strings.NewReader(src), c.source)
 	chunk := vm.NewCodeChunk(c.consts)
 	var result vm.Value = vm.NIL
 	compiledForms := 0
@@ -253,7 +263,34 @@ func (c *Context) symbolLookup(s vm.Symbol) cell {
 	return nil
 }
 
+// compileError creates a CompileError with source info from the given form.
+func compileErrorAt(msg string, form vm.Value) *CompileError {
+	info := vm.FormSource.Get(form)
+	return NewCompileErrorWithSource(msg, info)
+}
+
+// compileError creates a CompileError with source info from the current form context.
+func (c *Context) compileError(msg string) *CompileError {
+	// Try the current form, then walk up the form stack via parent list
+	if info := vm.FormSource.Get(c.currentForm); info != nil {
+		return NewCompileErrorWithSource(msg, info)
+	}
+	if info := vm.FormSource.Get(c.currentList); info != nil {
+		return NewCompileErrorWithSource(msg, info)
+	}
+	return NewCompileError(msg)
+}
+
 func (c *Context) compileForm(o vm.Value) error {
+	// Track current form for error reporting
+	prevForm := c.currentForm
+	c.currentForm = o
+	defer func() { c.currentForm = prevForm }()
+
+	// Emit source location for this form
+	if info := vm.FormSource.Get(o); info != nil {
+		c.chunk.AddSourceInfo(*info)
+	}
 	switch o.Type() {
 	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType:
 		n := c.constant(o)
@@ -268,7 +305,7 @@ func (c *Context) compileForm(o vm.Value) error {
 				target := rt.NS(rt.NameCoreNS)
 				v := target.Lookup(inner.(vm.Symbol))
 				if v == vm.NIL {
-					return NewCompileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
+					return c.compileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
 				}
 				varn := c.constant(v)
 				c.emitWithArg(vm.OP_LOAD_VAR, varn)
@@ -278,7 +315,7 @@ func (c *Context) compileForm(o vm.Value) error {
 			// Non-core qualified: honor aliases and refers in current ns
 			v := c.CurrentNS().Lookup(symVal)
 			if v == vm.NIL {
-				return NewCompileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
+				return c.compileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
 			}
 			varn := c.constant(v)
 			c.emitWithArg(vm.OP_LOAD_VAR, varn)
@@ -293,7 +330,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		// when symbol not found so far we have a free variable on our hands
 		v := c.CurrentNS().Lookup(symVal)
 		if v == vm.NIL {
-			return NewCompileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
+			return c.compileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
 		}
 		varn := c.constant(v)
 		c.emitWithArg(vm.OP_LOAD_VAR, varn)
@@ -352,6 +389,9 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.decSP(count * 2)
 		c.tailPosition = tp
 	case vm.ListType:
+		prevList := c.currentList
+		c.currentList = o
+		defer func() { c.currentList = prevList }()
 		if o == vm.EmptyList {
 			c.emitWithArg(vm.OP_LOAD_CONST, c.constant(vm.EmptyList))
 			c.incSP(1)
@@ -1166,7 +1206,7 @@ func varCompiler(c *Context, form vm.Value) error {
 	// Try compile-time resolution only
 	v := c.CurrentNS().Lookup(sym)
 	if v == vm.NIL {
-		return NewCompileError(fmt.Sprintf("Can't resolve %s in this context", sym))
+		return c.compileError(fmt.Sprintf("Can't resolve %s in this context", sym))
 	}
 	varr := c.constant(v)
 	c.emitWithArg(vm.OP_LOAD_CONST, varr)
