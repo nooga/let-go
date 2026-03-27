@@ -141,7 +141,9 @@
 (defn concat-vec [a b]
   (if (empty? b)
     a
-    (reduce conj a b)))
+    (if (vector? a)
+      (persistent! (reduce conj! (transient a) b))
+      (reduce conj a b))))
 
 (defmacro time [& body]
   (let [then   (gensym "time__")
@@ -659,14 +661,20 @@
     (recur (next s))
     (first s)))
 
-(defn into [c r] (reduce conj c r))
+(defn into
+  [c r]
+  (if (or (map? c) (vector? c))
+    (persistent! (reduce conj! (transient c) r))
+    (reduce conj c r)))
 
 (defn merge
   ([] {})
   ([m] m)
   ([m & maps]
-   (reduce (fn [a b] (reduce (fn [m e] (assoc m (first e) (second e))) a (seq b)))
-           m maps)))
+   (persistent!
+    (reduce (fn [a b]
+              (reduce (fn [m e] (assoc! m (first e) (second e))) a (seq b)))
+            (transient (or m {})) maps))))
 
 (defn repeatedly
   ([f] (lazy-seq (cons (f) (repeatedly f))))
@@ -758,11 +766,12 @@
 
 (defn group-by
   [f coll]
-  (reduce
-   (fn [ret x]
-     (let [k (f x)]
-       (assoc ret k (conj (get ret k []) x))))
-   {} coll))
+  (persistent!
+   (reduce
+    (fn [ret x]
+      (let [k (f x)]
+        (assoc! ret k (conj (get ret k []) x))))
+    (transient {}) coll)))
 
 (defn partition-by [f coll]
   (lazy-seq
@@ -774,9 +783,10 @@
 
 (defn frequencies
   [coll]
-  (reduce (fn [counts x]
-            (assoc counts x (inc (get counts x 0))))
-          {} coll))
+  (persistent!
+   (reduce (fn [counts x]
+             (assoc! counts x (inc (get counts x 0))))
+           (transient {}) coll)))
 
 (defn reductions
   ([f coll]
