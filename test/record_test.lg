@@ -1,0 +1,93 @@
+;; Tests for defrecord
+(ns test.record-test
+  (:require [test :refer :all]))
+
+(defrecord Point [x y])
+(defrecord Person [name age])
+
+(deftest record-creation
+  (testing "positional constructor"
+    (let [p (->Point 3 4)]
+      (is (= 3 (:x p)))
+      (is (= 4 (:y p)))))
+
+  (testing "map constructor"
+    (let [p (map->Point {:x 10 :y 20})]
+      (is (= 10 (:x p)))
+      (is (= 20 (:y p))))))
+
+(deftest record-type
+  (testing "type returns the record type"
+    (is (= Point (type (->Point 1 2)))))
+
+  (testing "record?"
+    (is (record? (->Point 1 2)))
+    (is (not (record? {:x 1 :y 2})))))
+
+(deftest record-equality
+  (testing "equal records"
+    (is (= (->Point 3 4) (->Point 3 4))))
+
+  (testing "unequal records"
+    (is (not= (->Point 3 4) (->Point 3 5))))
+
+  (testing "different record types not equal"
+    (is (not= (->Point 3 4) (->Person 3 4)))))
+
+(deftest record-map-operations
+  (testing "assoc preserves record type"
+    (let [p (assoc (->Point 1 2) :x 10)]
+      (is (= 10 (:x p)))
+      (is (= 2 (:y p)))
+      (is (= Point (type p)))))
+
+  (testing "assoc with extra key"
+    (let [p (assoc (->Point 1 2) :z 3)]
+      (is (= 3 (:z p)))
+      (is (= Point (type p)))))
+
+  (testing "get with default"
+    (let [p (->Point 1 2)]
+      (is (= 1 (get p :x)))
+      (is (= :nope (get p :z :nope)))))
+
+  (testing "count"
+    (is (= 2 (count (->Point 1 2)))))
+
+  (testing "contains?"
+    (is (contains? (->Point 1 2) :x))
+    (is (not (contains? (->Point 1 2) :z)))))
+
+(deftest record-as-function
+  (testing "record as lookup function"
+    (let [p (->Point 3 4)]
+      (is (= 3 (p :x)))
+      (is (= 4 (p :y))))))
+
+(defprotocol IDescribable
+  (describe [this]))
+
+(extend-type Point
+  IDescribable
+  (describe [p] (format "(%d, %d)" (:x p) (:y p))))
+
+(extend-type Person
+  IDescribable
+  (describe [p] (format "%s age %d" (:name p) (:age p))))
+
+(deftest record-protocol-dispatch
+  (testing "protocol dispatches on record type"
+    (is (= "(3, 4)" (describe (->Point 3 4))))
+    (is (= "Alice age 30" (describe (->Person "Alice" 30))))))
+
+(deftest record-with-meta
+  (testing "metadata on records"
+    (let [p (with-meta (->Point 1 2) {:tag :special})]
+      (is (= {:tag :special} (meta p)))
+      (is (= 1 (:x p)))
+      (is (= Point (type p))))))
+
+(deftest record-seq
+  (testing "seq over record fields"
+    (let [entries (seq (->Point 3 4))]
+      (is (= 2 (count entries))))))

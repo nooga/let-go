@@ -1028,6 +1028,30 @@
   ([coll] (apply str coll))
   ([sep coll] (apply str (interpose sep coll))))
 
+;; --- Records ---
+
+;; (defrecord TypeName [field1 field2 ...])
+;; Creates:
+;;   TypeName       — the RecordType (for protocol dispatch)
+;;   ->TypeName     — positional constructor
+;;   map->TypeName  — map constructor
+(defmacro defrecord [name fields & protocol-impls]
+  (let [field-keywords (map keyword fields)
+        type-def (cons 'make-record-type (cons (str name) field-keywords))
+        ;; Positional constructor: (->Point x y) → (make-record Point {:x x :y y})
+        pos-ctor-name (symbol (str "->" name))
+        pos-ctor-body (list 'make-record name
+                            (cons 'hash-map
+                                  (mapcat (fn [f] [(keyword f) f]) fields)))
+        pos-ctor (list 'def pos-ctor-name (cons 'fn (cons (vec fields) (list pos-ctor-body))))
+        ;; Map constructor: (map->Point {:x 1 :y 2}) → (make-record Point m)
+        map-ctor-name (symbol (str "map->" name))
+        map-ctor (list 'def map-ctor-name (list 'fn ['m] (list 'make-record name 'm)))]
+    (list 'do
+          (list 'def name type-def)
+          pos-ctor
+          map-ctor)))
+
 ;; --- Protocols ---
 
 ;; (defprotocol Name
