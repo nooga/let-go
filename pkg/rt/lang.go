@@ -194,6 +194,23 @@ func valueEquals(a, b vm.Value) bool {
 			}
 		}
 		return true
+	case *vm.PersistentSet:
+		bs, ok := b.(*vm.PersistentSet)
+		if !ok {
+			return false
+		}
+		if av.RawCount() != bs.RawCount() {
+			return false
+		}
+		// Check every element of av is in bs
+		seq := av.Seq()
+		for seq != nil && seq != vm.EmptyList {
+			if bs.Contains(seq.First()) == vm.FALSE {
+				return false
+			}
+			seq = seq.Next()
+		}
+		return true
 	default:
 		// For primitives, use Go equality
 		return a == b
@@ -644,15 +661,21 @@ func installLangNS() {
 		if len(vs) == 1 {
 			return vs[0], nil
 		}
-		s, ok := vs[0].(vm.Set)
-		if !ok {
-			return vm.NIL, fmt.Errorf("conj expected Set")
+		switch s := vs[0].(type) {
+		case *vm.PersistentSet:
+			result := s
+			for _, v := range vs[1:] {
+				result = result.Disj(v)
+			}
+			return result, nil
+		case vm.Set:
+			for _, v := range vs[1:] {
+				s = s.Disj(v)
+			}
+			return s, nil
+		default:
+			return vm.NIL, fmt.Errorf("disj expected Set")
 		}
-
-		for _, v := range vs[1:] {
-			s = s.Disj(v)
-		}
-		return s, nil
 	})
 
 	contains, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {

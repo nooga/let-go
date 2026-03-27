@@ -197,13 +197,9 @@ func (l Set) Empty() Collection {
 
 func NewSet(v []Value) Value {
 	if len(v) == 0 {
-		return make(Set)
+		return EmptyPersistentSet
 	}
-	newmap := make(Set)
-	for _, k := range v {
-		newmap[k] = struct{}{}
-	}
-	return newmap
+	return NewPersistentSet(v)
 }
 
 func (l Set) String() string {
