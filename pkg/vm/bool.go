@@ -27,6 +27,14 @@ func (t *theBooleanType) Box(b interface{}) (Value, error) {
 // Boolean is either TRUE or FALSE
 type Boolean bool
 
+// Hash implements Hashable.
+func (n Boolean) Hash() uint32 {
+	if bool(n) {
+		return 1
+	}
+	return 0
+}
+
 // Type implements Value
 func (n Boolean) Type() ValueType { return BooleanType }
 

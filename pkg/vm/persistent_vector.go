@@ -52,6 +52,11 @@ type PersistentVector struct {
 	tailOff int
 }
 
+// Hash implements Hashable. Computed from elements.
+func (v PersistentVector) Hash() uint32 {
+	return hashOrdered(v.Seq())
+}
+
 // Type implements Value
 func (v PersistentVector) Type() ValueType { return PersistentVectorType }
 

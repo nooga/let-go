@@ -356,8 +356,10 @@ func (n *hmapCollisionNode) findIndex(key Value) int {
 
 // PersistentMap is an immutable hash-array mapped trie (HAMT).
 type PersistentMap struct {
-	count int
-	root  hmapNode
+	count    int
+	root     hmapNode
+	_hash    uint32
+	_hasHash bool
 }
 
 // EmptyPersistentMap is the canonical empty persistent map.
@@ -379,6 +381,26 @@ func NewPersistentMap(kvs []Value) *PersistentMap {
 }
 
 // --- Value interface ---
+
+// Hash implements Hashable. Cached after first computation.
+// Uses unordered hashing (order-independent) since maps are unordered.
+func (m *PersistentMap) Hash() uint32 {
+	if m._hasHash {
+		return m._hash
+	}
+	// Hash each key-value pair and combine order-independently
+	var h uint32
+	s := m.Seq()
+	for s != nil && s != EmptyList {
+		entry := s.First().(ArrayVector)
+		// Combine key and value hashes into a pair hash, then XOR+add into total
+		h += hashValue(entry[0]) ^ hashValue(entry[1])
+		s = s.Next()
+	}
+	m._hash = mixFinish(h)
+	m._hasHash = true
+	return m._hash
+}
 
 func (m *PersistentMap) Type() ValueType    { return MapType }
 func (m *PersistentMap) Unbox() interface{} { return m }

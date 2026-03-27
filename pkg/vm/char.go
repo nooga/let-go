@@ -34,6 +34,9 @@ var CharType *theCharType = &theCharType{zero: utf8.RuneError}
 // Char is boxed rune
 type Char rune
 
+// Hash implements Hashable.
+func (l Char) Hash() uint32 { return hashUint64(uint64(l)) }
+
 // Type implements Value
 func (l Char) Type() ValueType { return CharType }
 

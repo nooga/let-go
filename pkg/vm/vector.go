@@ -52,6 +52,15 @@ func (l ArrayVector) Conj(val Value) Collection {
 }
 
 // Type implements Value
+// Hash implements Hashable. Computed from elements.
+func (l ArrayVector) Hash() uint32 {
+	h := uint32(1)
+	for _, v := range l {
+		h = 31*h + hashValue(v)
+	}
+	return mixFinish(h)
+}
+
 func (l ArrayVector) Type() ValueType { return ArrayVectorType }
 
 // Unbox implements Value

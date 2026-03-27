@@ -42,9 +42,21 @@ var EmptyList *List = &List{count: 0}
 
 // List is boxed singly linked list that can hold other Values.
 type List struct {
-	first Value
-	next  *List
-	count int
+	first    Value
+	next     *List
+	count    int
+	_hash    uint32
+	_hasHash bool
+}
+
+// Hash implements Hashable. Cached after first computation.
+func (l *List) Hash() uint32 {
+	if l._hasHash {
+		return l._hash
+	}
+	l._hash = hashOrdered(l)
+	l._hasHash = true
+	return l._hash
 }
 
 func (l *List) Conj(value Value) Collection {

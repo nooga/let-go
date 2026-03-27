@@ -57,6 +57,15 @@ func (l Set) Contains(value Value) Boolean {
 	return FALSE
 }
 
+// Hash implements Hashable. Unordered hash over elements.
+func (l Set) Hash() uint32 {
+	var h uint32
+	for k := range l {
+		h += hashValue(k)
+	}
+	return mixFinish(h)
+}
+
 // Type implements Value
 func (l Set) Type() ValueType { return SetType }
 
