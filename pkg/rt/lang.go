@@ -1751,6 +1751,54 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
+	// subs: substring
+	subs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 || len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("subs expected String")
+		}
+		start, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("subs expected Int start")
+		}
+		str := string(s)
+		si := int(start)
+		if si < 0 || si > len(str) {
+			return vm.NIL, fmt.Errorf("string index out of range")
+		}
+		if len(vs) == 3 {
+			end, ok := vs[2].(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("subs expected Int end")
+			}
+			ei := int(end)
+			if ei < si || ei > len(str) {
+				return vm.NIL, fmt.Errorf("string index out of range")
+			}
+			return vm.String(str[si:ei]), nil
+		}
+		return vm.String(str[si:]), nil
+	})
+
+	// format: sprintf-style string formatting
+	formatf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		fmtStr, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("format expected String")
+		}
+		args := make([]interface{}, len(vs)-1)
+		for i := 1; i < len(vs); i++ {
+			args[i-1] = vs[i].Unbox()
+		}
+		return vm.String(fmt.Sprintf(string(fmtStr), args...)), nil
+	})
+
 	// rand: returns a random float between 0 (inclusive) and 1 (exclusive)
 	// or between 0 and n
 	randf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -2273,6 +2321,8 @@ func installLangNS() {
 	// namespace utilities
 	ns.Def("refer-list", referList)
 	ns.Def("refer", refer)
+	ns.Def("subs", subs)
+	ns.Def("format", formatf)
 	ns.Def("rand", randf)
 	ns.Def("rand-int", randInt)
 	ns.Def("rand-nth", randNth)

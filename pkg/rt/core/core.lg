@@ -937,3 +937,65 @@
 (def lazy-take take)
 (def lazy-take-while take-while)
 
+;; --- additional utility functions ---
+
+(defn not-empty [coll]
+  (when (seq coll) coll))
+
+;; flatten is defined below after sequential? is available
+
+(defn min-key
+  ([k x] x)
+  ([k x y] (if (< (k x) (k y)) x y))
+  ([k x y & more]
+   (reduce #(min-key k %1 %2) (min-key k x y) more)))
+
+(defn max-key
+  ([k x] x)
+  ([k x y] (if (> (k x) (k y)) x y))
+  ([k x y & more]
+   (reduce #(max-key k %1 %2) (max-key k x y) more)))
+
+(defn counted? [coll]
+  (or (vector? coll) (map? coll) (list? coll) (string? coll)))
+
+(defn associative? [coll]
+  (or (vector? coll) (map? coll)))
+
+(defn sequential? [coll]
+  (or (vector? coll) (list? coll) (seq? coll)))
+
+(defn flatten [coll]
+  (when-let [s (seq coll)]
+    (let [x (first s)]
+      (if (sequential? x)
+        (concat (flatten x) (flatten (rest s)))
+        (cons x (flatten (rest s)))))))
+
+(defn seqable? [coll]
+  (or (nil? coll) (coll? coll) (string? coll) (seq? coll)))
+
+(defn contains-val? [coll val]
+  (some #(= val %) (vals coll)))
+
+(defn mapv [f & colls]
+  (vec (apply map f colls)))
+
+(defn filterv [pred coll]
+  (vec (filter pred coll)))
+
+(defn range?
+  [x] (= (type x) (type (range 1))))
+
+(defn bounded-count [n coll]
+  (if (counted? coll)
+    (count coll)
+    (loop [i 0 s (seq coll)]
+      (if (or (>= i n) (nil? s))
+        i
+        (recur (inc i) (next s))))))
+
+(defn str-join
+  ([coll] (apply str coll))
+  ([sep coll] (apply str (interpose sep coll))))
+
