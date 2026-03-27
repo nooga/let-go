@@ -7,11 +7,20 @@ import (
 	"unicode"
 )
 
+// fieldConverter converts a reflect.Value (a single struct field) to a VM Value
+// without going through the generic BoxValue dispatch.
+type fieldConverter func(reflect.Value) Value
+
+// fieldDeconverter writes a VM Value back into a reflect.Value (struct field).
+type fieldDeconverter func(reflect.Value, Value) error
+
 // StructMapping holds the bidirectional mapping between a Go struct type and a RecordType.
 type StructMapping struct {
-	RecType  *RecordType
-	GoType   reflect.Type
-	fieldMap []int // recordFieldIdx → struct field index
+	RecType    *RecordType
+	GoType     reflect.Type
+	fieldMap   []int              // recordFieldIdx → struct field index
+	converters []fieldConverter   // recordFieldIdx → fast Go→Value converter
+	deconvs    []fieldDeconverter // recordFieldIdx → fast Value→Go converter
 }
 
 var structMappings = map[reflect.Type]*StructMapping{}
@@ -56,45 +65,137 @@ func RegisterStructType(goType reflect.Type, name string) *StructMapping {
 		fieldIndices = append(fieldIndices, i)
 	}
 
+	// Build per-field converters based on the Go type's Kind at registration time.
+	converters := make([]fieldConverter, len(fieldIndices))
+	deconvs := make([]fieldDeconverter, len(fieldIndices))
+	for i, idx := range fieldIndices {
+		f := goType.Field(idx)
+		converters[i] = makeFieldConverter(f.Type)
+		deconvs[i] = makeFieldDeconverter(f.Type)
+	}
+
 	rt := NewRecordType(name, keywords)
 	m := &StructMapping{
-		RecType:  rt,
-		GoType:   goType,
-		fieldMap: fieldIndices,
+		RecType:    rt,
+		GoType:     goType,
+		fieldMap:   fieldIndices,
+		converters: converters,
+		deconvs:    deconvs,
 	}
 	structMappings[goType] = m
 	structMappingsByRecord[rt] = m
 	return m
 }
 
+// makeFieldConverter returns a fast converter for a specific Go type.
+// Falls back to BoxValue for types without a fast path.
+func makeFieldConverter(t reflect.Type) fieldConverter {
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return func(v reflect.Value) Value { return MakeInt(int(v.Int())) }
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return func(v reflect.Value) Value { return MakeInt(int(v.Uint())) }
+	case reflect.Float32, reflect.Float64:
+		return func(v reflect.Value) Value { return Float(v.Float()) }
+	case reflect.Bool:
+		return func(v reflect.Value) Value { return Boolean(v.Bool()) }
+	case reflect.String:
+		return func(v reflect.Value) Value { return String(v.String()) }
+	default:
+		// Fallback: use the generic path
+		return func(v reflect.Value) Value {
+			val, err := BoxValue(v)
+			if err != nil {
+				return NIL
+			}
+			return val
+		}
+	}
+}
+
+// makeFieldDeconverter returns a fast deconverter for a specific Go type.
+func makeFieldDeconverter(t reflect.Type) fieldDeconverter {
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return func(target reflect.Value, val Value) error {
+			if v, ok := val.(Int); ok {
+				target.SetInt(int64(v))
+				return nil
+			}
+			if v, ok := val.(Float); ok {
+				target.SetInt(int64(v))
+				return nil
+			}
+			return fmt.Errorf("expected Int, got %s", val.Type().Name())
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return func(target reflect.Value, val Value) error {
+			if v, ok := val.(Int); ok {
+				target.SetUint(uint64(v))
+				return nil
+			}
+			return fmt.Errorf("expected Int, got %s", val.Type().Name())
+		}
+	case reflect.Float32, reflect.Float64:
+		return func(target reflect.Value, val Value) error {
+			if v, ok := val.(Float); ok {
+				target.SetFloat(float64(v))
+				return nil
+			}
+			if v, ok := val.(Int); ok {
+				target.SetFloat(float64(v))
+				return nil
+			}
+			return fmt.Errorf("expected Float, got %s", val.Type().Name())
+		}
+	case reflect.Bool:
+		return func(target reflect.Value, val Value) error {
+			if v, ok := val.(Boolean); ok {
+				target.SetBool(bool(v))
+				return nil
+			}
+			return fmt.Errorf("expected Boolean, got %s", val.Type().Name())
+		}
+	case reflect.String:
+		return func(target reflect.Value, val Value) error {
+			if v, ok := val.(String); ok {
+				target.SetString(string(v))
+				return nil
+			}
+			if v, ok := val.(Keyword); ok {
+				target.SetString(string(v))
+				return nil
+			}
+			return fmt.Errorf("expected String, got %s", val.Type().Name())
+		}
+	default:
+		// Fallback to the generic unboxInto
+		return func(target reflect.Value, val Value) error {
+			return unboxInto(target, val)
+		}
+	}
+}
+
 // StructToRecord converts a Go struct value to a Record.
 // The original value is stored for fast roundtrip back to Go.
+// Uses cached per-field converters to avoid BoxValue dispatch overhead.
 func (m *StructMapping) StructToRecord(v interface{}) *Record {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Ptr {
 		rv = rv.Elem()
 	}
 
-	r := &Record{
-		rtype:  m.RecType,
-		fields: make([]Value, len(m.RecType.fields)),
-		extra:  EmptyPersistentMap,
-	}
-
+	fields := make([]Value, len(m.RecType.fields))
 	for i, structIdx := range m.fieldMap {
-		fv := rv.Field(structIdx)
-		val, err := BoxValue(fv)
-		if err != nil {
-			r.fields[i] = NIL
-			continue
-		}
-		r.fields[i] = val
+		fields[i] = m.converters[i](rv.Field(structIdx))
 	}
 
-	// Store original for fast roundtrip
-	r.origin = v
-
-	return r
+	return &Record{
+		rtype:  m.RecType,
+		fields: fields,
+		extra:  EmptyPersistentMap,
+		origin: v,
+	}
 }
 
 // RecordToStruct populates a Go struct from a Record's fields.
@@ -116,7 +217,7 @@ func (m *StructMapping) RecordToStruct(r *Record, target interface{}) error {
 		}
 	}
 
-	// Slow path: read fields from the Record
+	// Slow path: read fields from the Record using cached deconverters
 	tv := reflect.ValueOf(target)
 	if tv.Kind() != reflect.Ptr {
 		return fmt.Errorf("target must be a pointer")
@@ -128,8 +229,7 @@ func (m *StructMapping) RecordToStruct(r *Record, target interface{}) error {
 		if val == nil || val == NIL {
 			continue
 		}
-		sf := tv.Field(structIdx)
-		if err := unboxInto(sf, val); err != nil {
+		if err := m.deconvs[i](tv.Field(structIdx), val); err != nil {
 			return fmt.Errorf("field %s: %w", m.RecType.fields[i], err)
 		}
 	}
