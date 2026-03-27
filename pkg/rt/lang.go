@@ -866,6 +866,44 @@ func installLangNS() {
 		return as.ValueAtOr(key, vs[2]), nil
 	})
 
+	// nth: indexed access that works on any sequential type.
+	// Fast path for vectors (O(1)), linear walk for seqs (O(n)).
+	nthf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		vl := len(vs)
+		if vl < 2 || vl > 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		idx, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("nth index must be an integer")
+		}
+		n := int(idx)
+		var notFound vm.Value = vm.NIL
+		if vl == 3 {
+			notFound = vs[2]
+		}
+		if vs[0] == vm.NIL {
+			return notFound, nil
+		}
+		// Fast path: Lookup types (ArrayVector, PersistentVector, String)
+		if l, ok := vs[0].(vm.Lookup); ok {
+			v := l.ValueAtOr(vm.Int(n), notFound)
+			return v, nil
+		}
+		// Seq path: linear walk
+		s, err := seqOf(vs[0])
+		if err != nil {
+			return notFound, nil
+		}
+		for i := 0; s != nil; i++ {
+			if i == n {
+				return s.First(), nil
+			}
+			s = s.Next()
+		}
+		return notFound, nil
+	})
+
 	count, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -2264,6 +2302,7 @@ func installLangNS() {
 	ns.Def("next", next)
 	ns.Def("rest", rest)
 	ns.Def("get", get)
+	ns.Def("nth", nthf)
 	ns.Def("count", count)
 	ns.Def("contains?", contains)
 

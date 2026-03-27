@@ -272,6 +272,8 @@
 
 (declare destructure*)
 
+;; nth is now a native Go builtin for performance (used by destructuring)
+
 (defn ^:private destructure-vector [n v]
   (loop [e v i 0 o []]
     (if (empty? e)
@@ -280,7 +282,7 @@
         (cond
           (= x '&) (recur (drop 2 e) i (conj o (second e) (list 'drop i n)))
           (= x :as) (recur (drop 2 e) i (conj o (second e) n))
-          :else (recur (next e) (inc i) (conj o x (list 'get n i))))))))
+          :else (recur (next e) (inc i) (conj o x (list 'nth n i))))))))
 
 (defn ^:private destructure-map [n m]
   (let [gs (reduce (fn [a x] (conj a (first x) (list 'get n (second x))))
@@ -813,19 +815,17 @@
          true))
      false)))
 
-(defn nth
-  ([coll n] (nth coll n nil))
-  ([coll n nf]
-   (if (or (< n 0) (>= n (count coll)))
-     nf
-     (loop [c coll i n]
-       (if (> i 0) (recur (next c) (dec i)) (first c))))))
+;; nth is a native Go builtin
 
 (defmacro doseq [bind & body]
-  `(loop [[~(first bind) & r#] ~(second bind)]
-     (when ~(first bind)
-       ~@body
-       (recur r#))))
+  (let [sym (first bind)
+        coll (second bind)]
+    `(let [s# (seq ~coll)]
+       (loop [s__# s#]
+         (when s__#
+           (let [~sym (first s__#)]
+             ~@body
+             (recur (next s__#))))))))
 
 ;; for — lazy list comprehension
 ;; (for [x xs, y ys, :let [z expr], :when pred, :while pred] body)

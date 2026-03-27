@@ -1,0 +1,38 @@
+;; Data processing pipeline — realistic Clojure-style program
+
+(let [people [{:name "Alice"   :age 30 :dept :eng}
+              {:name "Bob"     :age 25 :dept :sales}
+              {:name "Charlie" :age 35 :dept :eng}
+              {:name "Diana"   :age 28 :dept :sales}
+              {:name "Eve"     :age 32 :dept :eng}]
+
+      ;; Group by department
+      by-dept (group-by :dept people)
+
+      ;; Average age per department
+      avg-age (fn [people]
+                (let [ages (map :age people)]
+                  (/ (reduce + 0 ages) (count ages))))
+
+      ;; Find oldest per department
+      oldest (fn [people]
+               (reduce (fn [a b] (if (> (:age a) (:age b)) a b)) people))]
+
+  (println "=== Departments ===")
+  (doseq [dept (keys by-dept)]
+    (let [members (get by-dept dept)]
+      (println (format "  %s: %d people, avg age %.1f, oldest: %s"
+                       (name dept)
+                       (count members)
+                       (avg-age members)
+                       (:name (oldest members))))))
+
+  (println "\n=== Engineers over 30 ===")
+  (doseq [p (filter #(and (= :eng (:dept %)) (> (:age %) 30)) people)]
+    (println (format "  %s (age %d)" (:name p) (:age p))))
+
+  (println "\n=== Comprehension ===")
+  (println (for [d [:eng :sales]
+                 p (get by-dept d)
+                 :when (> (:age p) 28)]
+             (format "%s/%s" (name d) (:name p)))))
