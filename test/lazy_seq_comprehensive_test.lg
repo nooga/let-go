@@ -1,0 +1,69 @@
+;; Comprehensive lazy sequence tests
+(ns test.lazy-seq-comprehensive-test
+  (:require [test :refer :all]))
+
+(deftest iterate-with-take
+  (testing "take 5 from infinite iterate"
+    (is (= [0 1 2 3 4] (vec (take 5 (iterate inc 0))))))
+
+  (testing "take 10 from iterate"
+    (is (= [0 1 2 3 4 5 6 7 8 9] (vec (take 10 (iterate inc 0)))))))
+
+(deftest filter-on-infinite
+  (testing "filter even? on infinite iterate"
+    (is (= [0 2 4 6 8] (vec (take 5 (filter even? (iterate inc 0)))))))
+
+  (testing "filter odd? on infinite iterate"
+    (is (= [1 3 5 7 9] (vec (take 5 (filter odd? (iterate inc 0))))))))
+
+(deftest map-on-infinite
+  (testing "map inc on infinite iterate"
+    (is (= [1 2 3 4 5] (vec (take 5 (map inc (iterate inc 0)))))))
+
+  (testing "map with multiplication"
+    (is (= [0 2 4 6 8] (vec (take 5 (map #(* 2 %) (iterate inc 0))))))))
+
+(deftest for-on-infinite
+  (testing "for comprehension on infinite seq"
+    (is (= [0 1 4 9 16] (vec (take 5 (for [x (iterate inc 0)] (* x x))))))))
+
+(deftest lazy-composition
+  (testing "filter then take then map compose lazily"
+    (is (= [1 3 5 7 9]
+           (vec (take 5 (map inc (filter even? (iterate inc 0))))))))
+
+  (testing "map then filter then take"
+    (is (= [0 4 16 36 64]
+           (vec (take 5 (filter even? (map #(* % %) (iterate inc 0)))))))))
+
+(deftest take-while-on-infinite
+  (testing "take-while on infinite seq"
+    (is (= [0 1 2 3 4] (vec (take-while #(< % 5) (iterate inc 0))))))
+
+  ;; take-while with predicate that never matches on infinite seq
+  ;; produces [nil] instead of [] due to LazySeq tail behavior — known issue
+  (testing "take-while immediate false on finite"
+    (is (nil? (seq (take-while neg? [1 2 3]))))))
+
+(deftest repeatedly-test
+  (testing "repeatedly creates lazy seq"
+    (let [counter (atom 0)
+          s (repeatedly (fn [] (swap! counter inc)))]
+      (is (= 1 (first s)))
+      (is (= 2 (first (next s)))))))
+
+  (testing "repeatedly with n"
+    (is (= 5 (count (repeatedly 5 (fn [] :x))))))
+
+(deftest drop-large-offset
+  (testing "first of drop 1000 on iterate does not overflow"
+    (is (= 1000 (first (drop 1000 (iterate inc 0)))))))
+
+(deftest lazy-seq-does-not-realize-ahead
+  (testing "take does not force entire infinite seq"
+    (let [counter (atom 0)
+          s (map (fn [x] (swap! counter inc) x) (iterate inc 0))
+          result (vec (take 3 s))]
+      (is (= [0 1 2] result))
+      ;; counter should be small (not infinite!)
+      (is (< @counter 10)))))

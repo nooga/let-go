@@ -1,0 +1,89 @@
+;; Numeric tower tests: Float type, cross-type arithmetic, comparisons
+(ns test.numeric-tower-test
+  (:require [test :refer :all]))
+
+(deftest float-literals
+  (testing "float literal parsing"
+    (is (= 3.14 3.14))
+    (is (= -0.5 -0.5))
+    (is (float? 3.14))
+    (is (float? -0.5))
+    (is (float? 1e10))
+    (is (not (float? 42)))))
+
+(deftest cross-type-arithmetic
+  (testing "int + float promotes to float"
+    (is (= 3.5 (+ 1 2.5)))
+    (is (float? (+ 1 2.5)))
+    (is (= 4.5 (* 3 1.5)))
+    (is (float? (* 3 1.5))))
+
+  (testing "float + int promotes to float"
+    (is (= 3.5 (+ 2.5 1)))
+    (is (float? (+ 2.5 1))))
+
+  (testing "float + float stays float"
+    (is (= 3.0 (+ 1.5 1.5)))
+    (is (float? (+ 1.5 1.5))))
+
+  (testing "int + int stays int"
+    (is (= 3 (+ 1 2)))
+    (is (int? (+ 1 2)))))
+
+(deftest division-behavior
+  (testing "exact int division returns int"
+    (is (= 5 (/ 10 2)))
+    (is (int? (/ 10 2))))
+
+  (testing "non-exact int division returns float"
+    (is (float? (/ 10 3))))
+
+  (testing "division involving float returns float"
+    (is (float? (/ 10.0 3)))
+    (is (float? (/ 10 3.0)))))
+
+(deftest cross-type-comparison
+  (testing "comparing int and float"
+    (is (> 3.14 3))
+    (is (< 3 3.14))
+    (is (= 1 1.0))
+    (is (= 1.0 1))
+    (is (not (= 1 1.5)))))
+
+(deftest coercion-functions
+  (testing "float coercion"
+    (is (= 42.0 (float 42)))
+    (is (float? (float 42))))
+
+  (testing "int coercion truncates"
+    (is (= 3 (int 3.7)))
+    (is (int? (int 3.7)))
+    (is (= 3 (int 3.2)))))
+
+(deftest numeric-predicates
+  (testing "number? recognizes both int and float"
+    (is (number? 42))
+    (is (number? 3.14))
+    (is (not (number? "42")))
+    (is (not (number? :foo))))
+
+  (testing "float? predicate"
+    (is (float? 3.14))
+    (is (not (float? 42)))
+    (is (not (float? "3.14"))))
+
+  (testing "int? predicate"
+    (is (int? 42))
+    (is (not (int? 3.14)))
+    (is (not (int? "42")))))
+
+(deftest multi-arity-comparisons
+  (testing "< with multiple args"
+    (is (< 1 2 3))
+    (is (< 1 2 3 4 5))
+    (is (not (< 1 3 2))))
+
+  (testing "> with multiple args"
+    (is (> 3 2 1))
+    (is (> 5 4 3 2 1))
+    (is (not (> 3 1 2)))))

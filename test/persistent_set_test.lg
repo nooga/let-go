@@ -1,0 +1,58 @@
+;; PersistentSet tests
+(ns test.persistent-set-test
+  (:require [test :refer :all]))
+
+(deftest set-conj-disj
+  (testing "conj adds element"
+    (is (= #{1 2 3} (conj #{1 2} 3))))
+
+  (testing "disj removes element"
+    (is (= #{1 3} (disj #{1 2 3} 2)))
+    (is (= #{1 2 3} (disj #{1 2 3} 4)))))
+
+(deftest set-contains
+  (testing "contains? on set"
+    (is (contains? #{1 2 3} 2))
+    (is (not (contains? #{1 2 3} 4)))))
+
+(deftest set-count
+  (testing "count on set"
+    (is (= 0 (count #{})))
+    (is (= 3 (count #{1 2 3})))))
+
+(deftest set-as-function
+  (testing "set as function for lookup"
+    (is (= 2 (#{1 2 3} 2)))
+    (is (nil? (#{1 2 3} 4)))))
+
+(deftest set-equality
+  (testing "sets with same elements in different order are equal"
+    (is (= #{1 2 3} #{3 2 1}))
+    (is (= #{:a :b :c} #{:c :a :b}))))
+
+(deftest set-seq
+  (testing "seq on set returns elements"
+    (let [s (seq #{1 2 3})]
+      (is (= 3 (count s)))
+      (is (= #{1 2 3} (set s))))))
+
+(deftest set-from-vector
+  (testing "set from vector deduplicates"
+    (is (= #{1 2 3} (set [1 2 2 3 3 3])))
+    (is (= 3 (count (set [1 2 2 3 3 3]))))))
+
+(deftest set-with-meta
+  (testing "with-meta on set"
+    (let [s (with-meta #{1 2 3} {:tag :myset})]
+      (is (= {:tag :myset} (meta s)))
+      (is (= #{1 2 3} s)))))
+
+(deftest set-difference
+  (testing "difference removes elements"
+    (is (= #{1 2} (difference #{1 2 3} #{3 4})))
+    (is (= #{1} (difference #{1 2 3} #{2} #{3})))))
+
+(deftest set-intersection
+  (testing "intersection keeps common elements"
+    (is (= #{2 3} (intersection #{1 2 3} #{2 3 4})))
+    (is (= #{} (intersection #{1 2} #{3 4})))))

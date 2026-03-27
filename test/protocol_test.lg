@@ -1,0 +1,115 @@
+;; Protocol and multimethod tests
+(ns test.protocol-test
+  (:require [test :refer :all]))
+
+;; --- Protocols ---
+
+(defprotocol IGreet
+  (greet [this]))
+
+(defprotocol IAdd
+  (add-to [this n]))
+
+;; extend-type on built-in types
+(extend-type (type "")
+  IGreet
+  (greet [s] (str "Hello, " s "!"))
+  IAdd
+  (add-to [s n] (str s n)))
+
+(extend-type (type 0)
+  IGreet
+  (greet [n] (str "Number " n))
+  IAdd
+  (add-to [n x] (+ n x)))
+
+(extend-type nil
+  IGreet
+  (greet [_] "Hello, nobody!")
+  IAdd
+  (add-to [_ n] n))
+
+(deftest protocol-dispatch
+  (testing "protocol dispatches on string"
+    (is (= "Hello, world!" (greet "world"))))
+
+  (testing "protocol dispatches on int"
+    (is (= "Number 42" (greet 42))))
+
+  (testing "protocol dispatches on nil"
+    (is (= "Hello, nobody!" (greet nil)))))
+
+(deftest protocol-multiple-methods
+  (testing "multiple methods on same type"
+    (is (= "abc3" (add-to "abc" 3)))
+    (is (= 45 (add-to 42 3)))
+    (is (= 5 (add-to nil 5)))))
+
+;; --- extend-protocol ---
+
+(defprotocol IStringify
+  (stringify [x]))
+
+(extend-protocol IStringify
+  (type 0)
+  (stringify [n] (str "int:" n))
+  (type "")
+  (stringify [s] (str "str:" s))
+  nil
+  (stringify [_] "nil"))
+
+(deftest extend-protocol-test
+  (testing "extend-protocol on multiple types"
+    (is (= "int:42" (stringify 42)))
+    (is (= "str:hello" (stringify "hello")))
+    (is (= "nil" (stringify nil)))))
+
+;; --- satisfies? ---
+
+(deftest satisfies-test
+  (testing "satisfies? returns true for implemented protocol"
+    (is (satisfies? IGreet "hello"))
+    (is (satisfies? IGreet 42))
+    (is (satisfies? IGreet nil)))
+
+  (testing "satisfies? returns false for unimplemented protocol"
+    (is (not (satisfies? IStringify [1 2 3])))))
+
+;; --- Multimethods ---
+
+(defmulti classify-num (fn [x] (cond (pos? x) :pos (neg? x) :neg :else :zero)))
+(defmethod classify-num :pos [x] (str x " is positive"))
+(defmethod classify-num :neg [x] (str x " is negative"))
+(defmethod classify-num :zero [x] "zero")
+
+(deftest multimethod-keyword-dispatch
+  (testing "multimethod with keyword dispatch"
+    (is (= "5 is positive" (classify-num 5)))
+    (is (= "-3 is negative" (classify-num -3)))
+    (is (= "zero" (classify-num 0)))))
+
+;; type dispatch
+(defmulti describe-type type)
+(defmethod describe-type (type 0) [x] "integer")
+(defmethod describe-type (type "") [x] "string")
+(defmethod describe-type (type :x) [x] "keyword")
+(defmethod describe-type :default [x] "unknown")
+
+(deftest multimethod-type-dispatch
+  (testing "multimethod with type dispatch"
+    (is (= "integer" (describe-type 42)))
+    (is (= "string" (describe-type "hi")))
+    (is (= "keyword" (describe-type :foo)))
+    (is (= "unknown" (describe-type [1 2])))))
+
+;; multi-arg dispatch with vector
+(defmulti encounter (fn [a b] [(:type a) (:type b)]))
+(defmethod encounter [:bunny :bunny] [a b] "love")
+(defmethod encounter [:lion :bunny] [a b] "lunch")
+(defmethod encounter :default [a b] "ignore")
+
+(deftest multimethod-vector-dispatch
+  (testing "multimethod with vector dispatch values"
+    (is (= "love" (encounter {:type :bunny} {:type :bunny})))
+    (is (= "lunch" (encounter {:type :lion} {:type :bunny})))
+    (is (= "ignore" (encounter {:type :rock} {:type :bunny})))))

@@ -1,0 +1,84 @@
+;; Comprehensive destructuring edge case tests
+(ns test.destructure-comprehensive-test
+  (:require [test :refer :all]))
+
+(deftest vector-destructure-on-list
+  (testing "vector destructuring works on lists"
+    (let [[a b c] '(10 20 30)]
+      (is (= 10 a))
+      (is (= 20 b))
+      (is (= 30 c)))))
+
+(deftest vector-destructure-on-lazy-seq
+  (testing "vector destructuring works on lazy seqs"
+    (let [[a b c] (take 3 (iterate inc 0))]
+      (is (= 0 a))
+      (is (= 1 b))
+      (is (= 2 c)))))
+
+(deftest map-destructure-or-defaults
+  (testing ":or provides defaults for missing keys"
+    (let [{:keys [a b c] :or {b 99 c 100}} {:a 1}]
+      (is (= 1 a))
+      (is (= 99 b))
+      (is (= 100 c)))))
+
+(deftest map-destructure-strs
+  (testing ":strs destructuring with string keys"
+    (let [{:strs [name age]} {"name" "Alice" "age" 30}]
+      (is (= "Alice" name))
+      (is (= 30 age)))))
+
+(deftest map-destructure-combined
+  (testing ":keys + :or + :as combined"
+    (let [{:keys [x y] :or {y 0} :as all} {:x 1}]
+      (is (= 1 x))
+      (is (= 0 y))
+      (is (= {:x 1} all)))))
+
+(deftest fn-arg-destructuring
+  (testing "fn with map destructuring in args"
+    (let [f (fn [{:keys [a b]}] (+ a b))]
+      (is (= 3 (f {:a 1 :b 2})))))
+
+  (testing "fn with vector destructuring in args"
+    (let [f (fn [[x y]] (+ x y))]
+      (is (= 3 (f [1 2]))))))
+
+(deftest doseq-destructuring
+  (testing "doseq with vector destructuring"
+    (let [result (atom [])]
+      (doseq [[k v] [[:a 1] [:b 2] [:c 3]]]
+        (swap! result conj [k v]))
+      (is (= [[:a 1] [:b 2] [:c 3]] @result)))))
+
+(deftest loop-recur-destructuring
+  (testing "loop/recur with vector destructuring"
+    (let [result (loop [[x & xs] [1 2 3 4] acc 0]
+                   (if x
+                     (recur xs (+ acc x))
+                     acc))]
+      (is (= 10 result)))))
+
+(deftest nested-destructuring
+  (testing "vector in map destructuring"
+    (let [{[a b] :coords} {:coords [10 20]}]
+      (is (= 10 a))
+      (is (= 20 b))))
+
+  (testing "map in vector destructuring"
+    (let [[x {:keys [name]}] [42 {:name "test"}]]
+      (is (= 42 x))
+      (is (= "test" name)))))
+
+(deftest for-destructuring
+  (testing "for with vector destructuring"
+    (is (= '(1 2 3)
+           (for [[k v] [[:a 1] [:b 2] [:c 3]]] v)))))
+
+(deftest rest-in-destructuring
+  (testing "& rest captures remaining elements"
+    (let [[a b & rest] [1 2 3 4 5]]
+      (is (= 1 a))
+      (is (= 2 b))
+      (is (= '(3 4 5) rest)))))

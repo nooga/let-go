@@ -1,0 +1,76 @@
+;; Exception handling tests: try/catch, throw, ex-info
+(ns test.try-catch-test
+  (:require [test :refer :all]))
+
+(deftest basic-try-catch
+  (testing "catch recovers from error"
+    (is (= :recovered (try (/ 1 0) (catch e :recovered)))))
+
+  (testing "happy path returns body value"
+    (is (= 3 (try (+ 1 2) (catch e :error))))))
+
+(deftest throw-and-catch
+  (testing "throw with simple value"
+    (is (= :bad (try (throw :bad) (catch e e)))))
+
+  (testing "throw with string"
+    (is (= "oops" (try (throw "oops") (catch e e))))))
+
+(deftest ex-info-basics
+  (testing "ex-info creates exception with message and data"
+    (let [ex (ex-info "boom" {:code 42})]
+      (is (= "boom" (ex-message ex)))
+      (is (= {:code 42} (ex-data ex)))
+      (is (nil? (ex-cause ex)))))
+
+  (testing "ex-info with cause"
+    (let [cause (ex-info "root" {:level 0})
+          ex (ex-info "wrapper" {:level 1} cause)]
+      (is (= "wrapper" (ex-message ex)))
+      (is (= {:level 1} (ex-data ex)))
+      (is (= "root" (ex-message (ex-cause ex)))))))
+
+(deftest throw-ex-info
+  (testing "throw and catch ex-info"
+    (let [result (try
+                   (throw (ex-info "test error" {:key :val}))
+                   (catch e e))]
+      (is (= "test error" (ex-message result)))
+      (is (= {:key :val} (ex-data result))))))
+
+(deftest nested-try-catch
+  (testing "nested try/catch with rethrow"
+    (is (= :outer
+           (try
+             (try
+               (throw :inner-error)
+               (catch e (throw :outer-error)))
+             (catch e :outer))))))
+
+(deftest catch-type-errors
+  (testing "catch type error from bad arithmetic"
+    (let [result (try (+ 1 "x") (catch e :type-error))]
+      (is (= :type-error result)))))
+
+(deftest propagation-through-map
+  (testing "error propagates through map"
+    (is (= :caught
+           (try
+             (vec (map (fn [x] (if (= x 3) (throw :bad) x)) [1 2 3]))
+             (catch e :caught))))))
+
+(deftest propagation-through-reduce
+  (testing "error propagates through reduce"
+    (is (= :caught
+           (try
+             (reduce (fn [acc x]
+                       (if (= x 3) (throw :bad) (+ acc x)))
+                     0 [1 2 3])
+             (catch e :caught))))))
+
+(deftest propagation-through-filter
+  (testing "error propagates through filter (lazy)"
+    (is (= :caught
+           (try
+             (vec (filter (fn [x] (if (= x 3) (throw :bad) (even? x))) [1 2 3 4]))
+             (catch e :caught))))))

@@ -1,0 +1,120 @@
+;; Tests for builtins that don't have dedicated tests
+(ns test.builtins-test
+  (:require [test :refer :all]))
+
+(deftest subs-test
+  (testing "subs substring"
+    (is (= "llo" (subs "hello" 2)))
+    (is (= "ell" (subs "hello" 1 4)))
+    (is (= "" (subs "hello" 5)))
+    (is (= "hello" (subs "hello" 0)))))
+
+(deftest format-test
+  (testing "format sprintf-style"
+    (is (= "hello world" (format "%s %s" "hello" "world")))
+    (is (= "num: 42" (format "num: %d" 42)))
+    (is (= "pi: 3.14" (format "pi: %.2f" 3.14)))))
+
+(deftest re-find-test
+  (testing "re-find finds first match"
+    (is (= "123" (re-find #"\d+" "abc123def")))
+    (is (nil? (re-find #"\d+" "abcdef")))))
+
+(deftest re-matches-test
+  (testing "re-matches requires full string match"
+    (is (= "123" (re-matches #"\d+" "123")))
+    (is (nil? (re-matches #"\d+" "abc123")))))
+
+(deftest re-seq-test
+  (testing "re-seq finds all matches"
+    (is (= '("1" "2" "3") (re-seq #"\d" "a1b2c3")))
+    (is (= '("abc" "def") (re-seq #"[a-z]+" "abc123def456")))))
+
+(deftest merge-test
+  (testing "merge maps"
+    (is (= {:a 1 :b 2 :c 3} (merge {:a 1} {:b 2} {:c 3})))
+    (is (= {:a 2} (merge {:a 1} {:a 2})))
+    (is (= {} (merge)))))
+
+(deftest flatten-test
+  (testing "flatten nested collections"
+    (is (= '(1 2 3 4 5 6) (flatten [[1 2] [3 [4 5]] [6]])))
+    (is (= '(1 2 3) (flatten [1 2 3])))))
+
+(deftest not-empty-test
+  (testing "not-empty returns nil for empty, coll for non-empty"
+    (is (nil? (not-empty [])))
+    (is (nil? (not-empty '())))
+    (is (nil? (not-empty {})))
+    (is (some? (not-empty [1])))))
+
+(deftest min-key-max-key-test
+  (testing "min-key finds minimum by key fn"
+    (is (= {:x 1} (min-key :x {:x 1} {:x 2} {:x 3}))))
+
+  (testing "max-key finds maximum by key fn"
+    (is (= {:x 3} (max-key :x {:x 1} {:x 2} {:x 3})))))
+
+(deftest repeatedly-test
+  (testing "repeatedly with count"
+    (is (= 3 (count (repeatedly 3 (fn [] :x)))))
+    (is (= '(:x :x :x) (repeatedly 3 (fn [] :x))))))
+
+(deftest mapv-test
+  (testing "mapv returns vector"
+    (is (= [2 3 4] (mapv inc [1 2 3])))
+    (is (vector? (mapv inc [1 2 3])))))
+
+(deftest filterv-test
+  (testing "filterv returns vector"
+    (is (= [2 4] (filterv even? [1 2 3 4])))
+    (is (vector? (filterv even? [1 2 3 4])))))
+
+(deftest str-join-test
+  (testing "str-join concatenates with separator"
+    (is (= "a,b,c" (str-join "," ["a" "b" "c"])))
+    (is (= "abc" (str-join ["a" "b" "c"])))))
+
+(deftest rand-int-test
+  (testing "rand-int returns int in range"
+    (let [n (rand-int 100)]
+      (is (int? n))
+      (is (>= n 0))
+      (is (< n 100)))))
+
+(deftest shuffle-test
+  (testing "shuffle returns same elements"
+    (let [v [1 2 3 4 5]
+          s (shuffle v)]
+      (is (= (count v) (count s)))
+      (is (= (set v) (set s))))))
+
+(deftest pr-str-test
+  (testing "pr-str returns readable representation"
+    (is (string? (pr-str 42)))
+    (is (string? (pr-str "hello")))
+    (is (string? (pr-str [1 2 3])))))
+
+(deftest nth-test
+  (testing "nth on vector"
+    (is (= 2 (nth [1 2 3] 1))))
+
+  (testing "nth on list"
+    (is (= 2 (nth '(1 2 3) 1))))
+
+  (testing "nth on lazy seq"
+    (is (= 5 (nth (iterate inc 0) 5))))
+
+  (testing "nth on string"
+    (is (= \e (nth "hello" 1)))))
+
+(deftest and-or-short-circuit
+  (testing "and short-circuits on false"
+    (is (false? (and true false true)))
+    (is (= 3 (and 1 2 3)))
+    (is (nil? (and 1 nil 3))))
+
+  (testing "or short-circuits on true"
+    (is (= 1 (or 1 2 3)))
+    (is (= 2 (or nil false 2)))
+    (is (nil? (or nil false nil)))))
