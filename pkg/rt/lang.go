@@ -1891,6 +1891,129 @@ func installLangNS() {
 		return vm.NewArrayVector(vals), nil
 	})
 
+	// defprotocol*: create a protocol (called by defprotocol macro)
+	defProtocol, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		name, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("defprotocol* expected String name")
+		}
+		methods := make([]vm.Symbol, len(vs)-1)
+		for i := 1; i < len(vs); i++ {
+			s, ok := vs[i].(vm.Symbol)
+			if !ok {
+				return vm.NIL, fmt.Errorf("defprotocol* expected Symbol method names")
+			}
+			methods[i-1] = s
+		}
+		return vm.NewProtocol(string(name), methods), nil
+	})
+
+	// extend-type*: extend a protocol for a type (called by extend-type macro)
+	extendType, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		protocol, ok := vs[0].(*vm.Protocol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("extend-type* expected Protocol")
+		}
+		implMap, ok := vs[2].(*vm.PersistentMap)
+		if !ok {
+			return vm.NIL, fmt.Errorf("extend-type* expected map of implementations")
+		}
+		// vs[1] is the type to extend — either a ValueType or nil
+		if vs[1] == vm.NIL {
+			protocol.ExtendNil(implMap)
+		} else {
+			vt, ok := vs[1].(vm.ValueType)
+			if !ok {
+				return vm.NIL, fmt.Errorf("extend-type* expected a type, got %s", vs[1].Type().Name())
+			}
+			protocol.Extend(vt, implMap)
+		}
+		return vm.NIL, nil
+	})
+
+	// make-protocol-fn: create a ProtocolFn for dispatch
+	makeProtocolFn, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		protocol, ok := vs[0].(*vm.Protocol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-protocol-fn expected Protocol")
+		}
+		methodName, ok := vs[1].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-protocol-fn expected Symbol")
+		}
+		return vm.NewProtocolFn(protocol, methodName), nil
+	})
+
+	// satisfies?: check if a value's type implements a protocol
+	satisfies, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		protocol, ok := vs[0].(*vm.Protocol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("satisfies? expected Protocol")
+		}
+		return vm.Boolean(protocol.Satisfies(vs[1])), nil
+	})
+
+	// defmulti*: create a multimethod (called by defmulti macro)
+	defMulti, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 || len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		name, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("defmulti* expected String name")
+		}
+		dispatchFn, ok := vs[1].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("defmulti* expected Fn")
+		}
+		var defaultVal vm.Value = vm.Keyword("default")
+		if len(vs) == 3 {
+			defaultVal = vs[2]
+		}
+		return vm.NewMultiFn(string(name), dispatchFn, defaultVal), nil
+	})
+
+	// defmethod*: add a method to a multimethod (called by defmethod macro)
+	defMethod, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		mf, ok := vs[0].(*vm.MultiFn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("defmethod* expected MultiFn")
+		}
+		dispatchVal := vs[1]
+		method, ok := vs[2].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("defmethod* expected Fn")
+		}
+		return mf.AddMethod(dispatchVal, method), nil
+	})
+
+	// methods: return the method map of a multimethod
+	methods, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		mf, ok := vs[0].(*vm.MultiFn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("methods expected MultiFn")
+		}
+		return mf.Methods(), nil
+	})
+
 	// pr-str: print readably to string (with quotes on strings)
 	prStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
@@ -2341,6 +2464,13 @@ func installLangNS() {
 	ns.Def("rand-int", randInt)
 	ns.Def("rand-nth", randNth)
 	ns.Def("shuffle", shuffle)
+	ns.Def("defprotocol*", defProtocol)
+	ns.Def("make-protocol-fn", makeProtocolFn)
+	ns.Def("extend-type*", extendType)
+	ns.Def("satisfies?", satisfies)
+	ns.Def("defmulti*", defMulti)
+	ns.Def("defmethod*", defMethod)
+	ns.Def("methods", methods)
 	ns.Def("pr-str", prStr)
 	ns.Def("prn", prn)
 	ns.Def("re-find", reFind)

@@ -1028,3 +1028,123 @@
   ([coll] (apply str coll))
   ([sep coll] (apply str (interpose sep coll))))
 
+;; --- Protocols ---
+
+;; (defprotocol Name
+;;   (method1 [this])
+;;   (method2 [this arg]))
+;; Defines a protocol and creates vars for each method.
+(defmacro defprotocol [name & sigs]
+  (let [method-names (map first sigs)
+        ;; Quote method names so they don't get resolved as vars
+        quoted-names (map (fn [m] (list 'quote m)) method-names)
+        proto-def    (list 'def name
+                           (cons 'defprotocol* (cons (str name) quoted-names)))
+        ;; For each method, create a protocol-dispatching fn var
+        method-defs  (map (fn [sig]
+                            (let [mname (first sig)]
+                              (list 'def mname
+                                    (list 'make-protocol-fn name (list 'quote mname)))))
+                          sigs)]
+    (cons 'do (cons proto-def method-defs))))
+
+;; Helper: create a ProtocolFn (native, can't be created from let-go directly)
+;; This is defined as a native function below
+
+;; (extend-type Type
+;;   Protocol1
+;;   (method1 [this] body1)
+;;   (method2 [this arg] body2)
+;;   Protocol2
+;;   (method3 [this] body3))
+(defmacro extend-type [type-expr & specs]
+  (let [;; Parse specs into (protocol, {method-keyword → fn}) pairs
+        parse (fn [specs]
+                (loop [s specs
+                       proto nil
+                       result []]
+                  (if (empty? s)
+                    result
+                    (let [item (first s)]
+                      (if (symbol? item)
+                        ;; It's a protocol name
+                        (recur (next s) item result)
+                        ;; It's a method impl (name [args] body...)
+                        (let [mname   (first item)
+                              fn-tail (next item)
+                              entry   [proto mname (cons 'fn fn-tail)]]
+                          (recur (next s) proto (conj result entry))))))))]
+    (let [entries (parse specs)
+          ;; Group by protocol
+          by-proto (group-by first entries)
+          ;; For each protocol, build the extend call
+          extends (map (fn [[proto-sym methods]]
+                         (let [impl-pairs (mapcat (fn [[_ mname fn-form]]
+                                                    [(keyword mname) fn-form])
+                                                  methods)]
+                           (list 'extend-type* proto-sym type-expr
+                                 (apply hash-map impl-pairs))))
+                       by-proto)]
+      (cons 'do extends))))
+
+;; (extend-protocol Protocol
+;;   type-expr1
+;;   (method [this] body1)
+;;   type-expr2
+;;   (method [this] body2))
+;; Type expressions and method impls are separated by checking if the protocol
+;; has a method with the same name as the first element.
+(defmacro extend-protocol [protocol & specs]
+  (let [sentinel ::no-type
+        groups (loop [s specs
+                      current-type sentinel
+                      current-methods []
+                      result []]
+                 (if (empty? s)
+                   (if (not= current-type sentinel)
+                     (conj result [current-type current-methods])
+                     result)
+                   (let [item (first s)
+                         is-method (if (nil? item)
+                                    false
+                                    (if (seq? item)
+                                      (if (> (count item) 1)
+                                        (if (symbol? (first item))
+                                          (vector? (second item))
+                                          false)
+                                        false)
+                                      false))]
+                     (if is-method
+                       (recur (next s) current-type
+                              (conj current-methods item)
+                              result)
+                       (if (not= current-type sentinel)
+                         (recur (next s) item [] (conj result [current-type current-methods]))
+                         (recur (next s) item [] result))))))
+        extends (map (fn [group]
+                       (let [type-expr (nth group 0)
+                             methods   (nth group 1)
+                             impl-pairs (mapcat (fn [m]
+                                                  [(keyword (first m)) (cons 'fn (next m))])
+                                                methods)]
+                         (list 'extend-type* protocol type-expr
+                               (apply hash-map impl-pairs))))
+                     groups)]
+    (cons 'do extends)))
+
+;; --- Multimethods ---
+
+;; (defmulti name dispatch-fn)
+;; (defmulti name dispatch-fn :default default-val)
+(defmacro defmulti
+  ([name dispatch-fn]
+   `(def ~name (defmulti* ~(str name) ~dispatch-fn)))
+  ([name dispatch-fn default-key default-val]
+   (if (= default-key :default)
+     `(def ~name (defmulti* ~(str name) ~dispatch-fn ~default-val))
+     `(def ~name (defmulti* ~(str name) ~dispatch-fn)))))
+
+;; (defmethod name dispatch-val [args] body)
+(defmacro defmethod [name dispatch-val & fn-tail]
+  (list 'set! name (list 'defmethod* name dispatch-val (cons 'fn fn-tail))))
+

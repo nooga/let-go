@@ -1,0 +1,81 @@
+;; Protocols and multimethods example
+
+;; --- Protocol: type-based polymorphism ---
+
+(defprotocol IArea
+  (area [shape]))
+
+(defprotocol IDescribe
+  (describe [shape]))
+
+;; Extend to map-based "shapes" — dispatch on the map's type
+(extend-type (type {})
+  IArea
+  (area [s]
+    (case (:shape s)
+      :circle (* 3.14159 (:r s) (:r s))
+      :rect   (* (:w s) (:h s))
+      :tri    (/ (* (:base s) (:height s)) 2)
+      0))
+  IDescribe
+  (describe [s]
+    (case (:shape s)
+      :circle (format "circle r=%.1f" (:r s))
+      :rect   (format "rect %dx%d" (:w s) (:h s))
+      :tri    (format "triangle base=%d h=%d" (:base s) (:height s))
+      "unknown")))
+
+;; Extend to nil
+(extend-type nil
+  IArea
+  (area [_] 0)
+  IDescribe
+  (describe [_] "nothing"))
+
+(let [shapes [{:shape :circle :r 5.0}
+              {:shape :rect :w 3 :h 4}
+              {:shape :tri :base 6 :height 4}
+              nil]]
+  (println "=== Shapes ===")
+  (doseq [s shapes]
+    (println (format "  %-30s area = %.2f" (describe s) (area s)))))
+
+;; --- Multimethod: arbitrary dispatch ---
+
+(println "\n=== Encounters ===")
+
+(defmulti encounter (fn [a b] [(:type a) (:type b)]))
+(defmethod encounter [:bunny :bunny] [a b]
+  (format "%s and %s make more bunnies" (:name a) (:name b)))
+(defmethod encounter [:lion :bunny] [a b]
+  (format "%s eats %s" (:name a) (:name b)))
+(defmethod encounter :default [a b]
+  (format "%s and %s ignore each other" (:name a) (:name b)))
+
+(let [bunny1 {:type :bunny :name "Flopsy"}
+      bunny2 {:type :bunny :name "Mopsy"}
+      lion   {:type :lion :name "Simba"}
+      rock   {:type :rock :name "Boulder"}]
+  (println (encounter bunny1 bunny2))
+  (println (encounter lion bunny1))
+  (println (encounter rock bunny2)))
+
+;; --- Protocol on built-in types ---
+
+(println "\n=== Stringify protocol ===")
+
+(defprotocol IStringify
+  (stringify [x]))
+
+(extend-protocol IStringify
+  (type 0)
+  (stringify [n] (str "«" n "»"))
+  (type "")
+  (stringify [s] (str "'" s "'"))
+  (type true)
+  (stringify [b] (if b "YES" "NO"))
+  nil
+  (stringify [_] "∅"))
+
+(doseq [x [42 "hello" true nil]]
+  (println (format "  %s -> %s" (pr-str x) (stringify x))))
