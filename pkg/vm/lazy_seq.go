@@ -10,10 +10,11 @@ import "sync"
 // LazySeq delays computation of a sequence until first/next is called.
 // This is the foundation for lazy operations like map, filter, etc.
 type LazySeq struct {
-	fn Fn       // thunk that produces the seq when called
-	s  Seq      // cached realized seq
-	sv Value    // intermediate value from fn
-	mu sync.Mutex
+	fn  Fn       // thunk that produces the seq when called
+	s   Seq      // cached realized seq
+	sv  Value    // intermediate value from fn
+	err error    // error from thunk realization (propagated on access)
+	mu  sync.Mutex
 }
 
 func NewLazySeq(fn Fn) *LazySeq {
@@ -28,7 +29,9 @@ func (l *LazySeq) sval() Value {
 	if l.fn != nil {
 		sv, err := l.fn.Invoke(nil)
 		if err != nil {
-			return nil
+			l.err = err
+			l.fn = nil
+			panic(&thrownPanic{err: err})
 		}
 		l.sv = sv
 		l.fn = nil
@@ -45,10 +48,15 @@ func (l *LazySeq) sval() Value {
 
 // seq realizes the lazy seq if not already done
 func (l *LazySeq) seq() Seq {
-	l.sval() // ensure thunk is called
+	l.sval() // ensure thunk is called (may panic with thrownPanic)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	// Re-raise stored error on repeated access
+	if l.err != nil {
+		panic(&thrownPanic{err: l.err})
+	}
 
 	if l.s != nil {
 		return l.s

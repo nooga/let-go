@@ -1486,12 +1486,18 @@ func installLangNS() {
 		}
 		var err error
 		sort.SliceStable(temp, func(i, j int) bool {
+			if err != nil {
+				return false // abort: previous comparison failed
+			}
 			var b vm.Value
 			b, err = comp.Invoke([]vm.Value{temp[i], temp[j]})
+			if err != nil {
+				return false
+			}
 			return vm.IsTruthy(b)
 		})
 		if err != nil {
-			return vm.NIL, fmt.Errorf("sort expected a Collection")
+			return vm.NIL, err
 		}
 
 		return vm.ListType.Box(temp)
@@ -1787,6 +1793,73 @@ func installLangNS() {
 		return m.Meta(), nil
 	})
 
+	// throw
+	throwf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		return vm.NIL, vm.NewThrownError(vs[0])
+	})
+
+	// ex-info
+	exInfo, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 || len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		msg, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("ex-info expected String message")
+		}
+		data, ok := vs[1].(*vm.PersistentMap)
+		if !ok {
+			return vm.NIL, fmt.Errorf("ex-info expected Map data")
+		}
+		var cause error
+		if len(vs) == 3 {
+			if ei, ok := vs[2].(*vm.ExInfo); ok {
+				cause = ei
+			}
+		}
+		return vm.NewExInfo(string(msg), data, cause), nil
+	})
+
+	// ex-message
+	exMessage, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments")
+		}
+		if ei, ok := vs[0].(*vm.ExInfo); ok {
+			return vm.String(ei.Message()), nil
+		}
+		return vm.NIL, nil
+	})
+
+	// ex-data
+	exData, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments")
+		}
+		if ei, ok := vs[0].(*vm.ExInfo); ok {
+			return ei.Data(), nil
+		}
+		return vm.NIL, nil
+	})
+
+	// ex-cause
+	exCause, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments")
+		}
+		if ei, ok := vs[0].(*vm.ExInfo); ok {
+			if c := ei.Cause(); c != nil {
+				if cev, ok := c.(*vm.ExInfo); ok {
+					return cev, nil
+				}
+			}
+		}
+		return vm.NIL, nil
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -1938,6 +2011,12 @@ func installLangNS() {
 	ns.Def("meta", metaf)
 	ns.Def("push-binding!", pushBinding)
 	ns.Def("pop-binding!", popBinding)
+
+	ns.Def("throw", throwf)
+	ns.Def("ex-info", exInfo)
+	ns.Def("ex-message", exMessage)
+	ns.Def("ex-data", exData)
+	ns.Def("ex-cause", exCause)
 
 	CoreNS = ns
 

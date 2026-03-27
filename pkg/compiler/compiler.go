@@ -126,7 +126,7 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 		} else {
 			f = vm.NewFrame(formchunk, nil)
 		}
-		result, err = f.Run()
+		result, err = f.RunProtected()
 		vm.ReleaseFrame(f)
 		if err != nil {
 			return nil, result, err
@@ -600,6 +600,7 @@ func compilerInit() {
 		"loop*": loopCompiler,
 		"recur": recurCompiler,
 		"trace": traceCompiler,
+		"try":   tryCompiler,
 	}
 }
 
@@ -614,6 +615,173 @@ func traceCompiler(c *Context, form vm.Value) error {
 		args = args.Next()
 	}
 	c.emit(vm.OP_TRACE_DISABLE)
+	return nil
+}
+
+func tryCompiler(c *Context, form vm.Value) error {
+	// Parse: (try body... (catch sym catch-body...) (finally finally-body...))
+	nxt := form.(*vm.List).Next()
+	if nxt == nil {
+		return NewCompileError("try requires a body")
+	}
+
+	// Collect all args into a slice, handling both List and Cons/LazySeq
+	var allForms []vm.Value
+	for s := nxt; s != nil; s = s.Next() {
+		allForms = append(allForms, s.First())
+	}
+
+	// Separate body, catch, and finally forms
+	var bodyForms []vm.Value
+	var catchSym vm.Symbol
+	var catchForms []vm.Value
+	var finallyForms []vm.Value
+	hasCatch := false
+
+	for _, f := range allForms {
+		if seq, ok := f.(vm.Seq); ok {
+			first := seq.First()
+			if first != nil && first.Type() == vm.SymbolType {
+				sym := first.(vm.Symbol)
+				if sym == "catch" {
+					hasCatch = true
+					rest := seq.Next()
+					if rest == nil {
+						return NewCompileError("catch requires a binding symbol")
+					}
+					bindSym, ok := rest.First().(vm.Symbol)
+					if !ok {
+						return NewCompileError("catch requires a binding symbol")
+					}
+					catchSym = bindSym
+					for cb := rest.Next(); cb != nil; cb = cb.Next() {
+						catchForms = append(catchForms, cb.First())
+					}
+					continue
+				}
+				if sym == "finally" {
+					for fb := seq.Next(); fb != nil; fb = fb.Next() {
+						finallyForms = append(finallyForms, fb.First())
+					}
+					continue
+				}
+			}
+		}
+		bodyForms = append(bodyForms, f)
+	}
+
+	if !hasCatch && len(finallyForms) == 0 {
+		// No catch or finally — just compile body as do
+		for i, bf := range bodyForms {
+			err := c.compileForm(bf)
+			if err != nil {
+				return err
+			}
+			if i < len(bodyForms)-1 {
+				c.emit(vm.OP_POP)
+				c.decSP(1)
+			}
+		}
+		return nil
+	}
+
+	// Emit: OP_TRY_PUSH catchOffset finallyOffset
+	tryPushAddr := c.currentAddress()
+	c.emit(vm.OP_TRY_PUSH)
+	c.chunk.Append32(0) // placeholder for catchOffset
+	c.chunk.Append32(0) // placeholder for finallyOffset
+
+	// Compile body
+	tc := c.tailPosition
+	c.tailPosition = false
+	if len(bodyForms) == 0 {
+		c.emitWithArg(vm.OP_LOAD_CONST, c.constant(vm.NIL))
+		c.incSP(1)
+	} else {
+		for i, bf := range bodyForms {
+			err := c.compileForm(bf)
+			if err != nil {
+				return err
+			}
+			if i < len(bodyForms)-1 {
+				c.emit(vm.OP_POP)
+				c.decSP(1)
+			}
+		}
+	}
+
+	// Normal completion: pop handler, jump over catch
+	c.emit(vm.OP_TRY_POP)
+	jumpOverCatchAddr := c.currentAddress()
+	c.emitWithArg(vm.OP_JUMP, 0) // placeholder
+
+	// Catch block starts here
+	catchAddr := c.currentAddress()
+
+	// At this point, the VM has pushed the thrown value on the stack
+	// and restored SP to savedSP before pushing, so sp == savedSP+1.
+	// We need to account for that in our SP tracking.
+	// The body left SP at savedSP+1 (body result), but the VM restored to savedSP
+	// and pushed the thrown value, so the net SP is the same.
+
+	if hasCatch {
+		// Bind the thrown value as a local
+		c.pushLocals()
+		c.addLocal(catchSym)
+
+		if len(catchForms) == 0 {
+			// No catch body — push nil as catch result
+			c.emitWithArg(vm.OP_LOAD_CONST, c.constant(vm.NIL))
+			c.incSP(1)
+		} else {
+			for i, cf := range catchForms {
+				err := c.compileForm(cf)
+				if err != nil {
+					return err
+				}
+				if i < len(catchForms)-1 {
+					c.emit(vm.OP_POP)
+					c.decSP(1)
+				}
+			}
+		}
+
+		// Pop catch binding, keep catch result
+		c.emitWithArg(vm.OP_POP_N, 1)
+		c.decSP(1)
+		c.popLocals()
+	}
+	// else: no catch, the thrown value is already on stack as the result
+
+	// Patch jump-over-catch
+	afterCatch := c.currentAddress()
+	c.chunk.Update32(jumpOverCatchAddr+1, int32(afterCatch-jumpOverCatchAddr))
+
+	// Patch TRY_PUSH catchOffset (relative to TRY_PUSH instruction)
+	c.chunk.Update32(tryPushAddr+1, int32(catchAddr-tryPushAddr))
+
+	// Finally block (if present)
+	if len(finallyForms) > 0 {
+		finallyAddr := c.currentAddress()
+		// Patch TRY_PUSH finallyOffset
+		c.chunk.Update32(tryPushAddr+2, int32(finallyAddr-tryPushAddr))
+
+		for i, ff := range finallyForms {
+			err := c.compileForm(ff)
+			if err != nil {
+				return err
+			}
+			if i < len(finallyForms)-1 {
+				c.emit(vm.OP_POP)
+				c.decSP(1)
+			}
+		}
+		// Discard finally result, keep try/catch result
+		c.emit(vm.OP_POP)
+		c.decSP(1)
+	}
+
+	c.tailPosition = tc
 	return nil
 }
 

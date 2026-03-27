@@ -43,6 +43,10 @@ const (
 
 	OP_MAKE_MULTI_ARITY // make multi-arity function (n int32)
 	OP_TAIL_CALL        // like OP_INVOKE but re-uses the frame
+
+	OP_TRY_PUSH // push exception handler (catchOffset int32, finallyOffset int32)
+	OP_TRY_POP  // pop exception handler (normal completion)
+	OP_THROW    // throw top-of-stack value
 )
 
 func OpcodeToString(op int32) string {
@@ -71,6 +75,9 @@ func OpcodeToString(op int32) string {
 		"TRACE_DISABLE",
 		"MAKE_MULTI_ARITY",
 		"TAIL_CALL",
+		"TRY_PUSH",
+		"TRY_POP",
+		"THROW",
 	}
 	if int(inst) < len(ops) {
 		return fmt.Sprintf("%d/%-16s", sp, ops[inst])
@@ -102,6 +109,11 @@ func (c *CodeChunk) Debug() {
 	for i < len(c.code) {
 		op, _ := c.Get(i)
 		switch op & 0xff {
+		case OP_TRY_PUSH:
+			arg, _ := c.Get32(i + 1)
+			arg2, _ := c.Get32(i + 2)
+			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2)
+			i += 3
 		case OP_RECUR:
 			arg, _ := c.Get32(i + 1)
 			arg2, _ := c.Get32(i + 2)
@@ -190,6 +202,12 @@ func (c *CodeChunk) SetMaxStack(max int) {
 	c.maxStack = max
 }
 
+type exHandler struct {
+	catchIP   int // absolute IP of catch block
+	finallyIP int // absolute IP of finally block (-1 if none)
+	savedSP   int // stack depth to restore
+}
+
 // Frame is a single interpreter context
 type Frame struct {
 	stack       []Value
@@ -202,6 +220,7 @@ type Frame struct {
 	ip          int
 	sp          int
 	debug       bool
+	handlers    []exHandler // exception handler stack (nil when unused)
 }
 
 // framePool reuses Frame structs to avoid per-call heap allocation.
@@ -232,6 +251,9 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 	f.ip = 0
 	f.sp = 0
 	f.debug = false
+	if f.handlers != nil {
+		f.handlers = f.handlers[:0]
+	}
 	return f
 }
 
@@ -243,6 +265,7 @@ func ReleaseFrame(f *Frame) {
 	f.closedOvers = nil
 	f.consts = nil
 	f.code = nil
+	f.handlers = nil
 	framePool.Put(f)
 }
 
@@ -333,6 +356,13 @@ func (f *Frame) stackDbg() {
 	fmt.Println()
 }
 
+// RunProtected runs the frame with panic recovery for thrownPanic.
+// Use at top-level entry points (REPL, file eval). Internal calls use Run() directly.
+func (f *Frame) RunProtected() (result Value, err error) {
+	defer recoverThrownPanic(&err)
+	return f.Run()
+}
+
 func (f *Frame) Run() (Value, error) {
 	if f.debug {
 		fmt.Print("run", f.args, "\n")
@@ -405,6 +435,14 @@ func (f *Frame) Run() (Value, error) {
 				}
 				out, err = fn.Invoke(a)
 				if err != nil {
+					if len(f.handlers) > 0 {
+						h := f.handlers[len(f.handlers)-1]
+						f.handlers = f.handlers[:len(f.handlers)-1]
+						f.sp = h.savedSP
+						f.push(errorToValue(err))
+						f.ip = h.catchIP
+						continue
+					}
 					srcInfo := f.code.LookupSource(f.ip)
 					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 				}
@@ -423,6 +461,14 @@ func (f *Frame) Run() (Value, error) {
 				}
 				out, err = fn.Invoke(nil)
 				if err != nil {
+					if len(f.handlers) > 0 {
+						h := f.handlers[len(f.handlers)-1]
+						f.handlers = f.handlers[:len(f.handlers)-1]
+						f.sp = h.savedSP
+						f.push(errorToValue(err))
+						f.ip = h.catchIP
+						continue
+					}
 					srcInfo := f.code.LookupSource(f.ip)
 					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 				}
@@ -452,6 +498,14 @@ func (f *Frame) Run() (Value, error) {
 				if ff, ok := fn.(*Func); !ok {
 					out, err = fn.Invoke(a)
 					if err != nil {
+						if len(f.handlers) > 0 {
+							h := f.handlers[len(f.handlers)-1]
+							f.handlers = f.handlers[:len(f.handlers)-1]
+							f.sp = h.savedSP
+							f.push(errorToValue(err))
+							f.ip = h.catchIP
+							continue
+						}
 						srcInfo := f.code.LookupSource(f.ip)
 						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 					}
@@ -493,6 +547,14 @@ func (f *Frame) Run() (Value, error) {
 				if ff, ok := fn.(*Func); !ok {
 					out, err = fn.Invoke(nil)
 					if err != nil {
+						if len(f.handlers) > 0 {
+							h := f.handlers[len(f.handlers)-1]
+							f.handlers = f.handlers[:len(f.handlers)-1]
+							f.sp = h.savedSP
+							f.push(errorToValue(err))
+							f.ip = h.catchIP
+							continue
+						}
 						srcInfo := f.code.LookupSource(f.ip)
 						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 					}
@@ -704,6 +766,40 @@ func (f *Frame) Run() (Value, error) {
 			}
 
 			f.ip += 2
+
+		case OP_TRY_PUSH:
+			catchOffset := f.code.code[f.ip+1]
+			finallyOffset := f.code.code[f.ip+2]
+			catchIP := f.ip + int(catchOffset)
+			finallyIP := -1
+			if finallyOffset != 0 {
+				finallyIP = f.ip + int(finallyOffset)
+			}
+			f.handlers = append(f.handlers, exHandler{
+				catchIP:   catchIP,
+				finallyIP: finallyIP,
+				savedSP:   f.sp,
+			})
+			f.ip += 3
+
+		case OP_TRY_POP:
+			if len(f.handlers) > 0 {
+				f.handlers = f.handlers[:len(f.handlers)-1]
+			}
+			f.ip++
+
+		case OP_THROW:
+			v, _ := f.pop()
+			thrown := NewThrownError(v)
+			if len(f.handlers) > 0 {
+				h := f.handlers[len(f.handlers)-1]
+				f.handlers = f.handlers[:len(f.handlers)-1]
+				f.sp = h.savedSP
+				f.push(v)
+				f.ip = h.catchIP
+				continue
+			}
+			return NIL, thrown
 
 		default:
 			return NIL, NewExecutionError("unknown instruction")

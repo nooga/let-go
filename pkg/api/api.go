@@ -48,7 +48,7 @@ func (l *LetGo) Run(expr string) (vm.Value, error) {
 		return vm.NIL, err
 	}
 	frame := vm.NewFrame(c, nil)
-	result, err := frame.Run()
+	result, err := frame.RunProtected()
 	vm.ReleaseFrame(frame)
 	return result, err
 }
