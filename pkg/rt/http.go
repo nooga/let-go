@@ -30,18 +30,17 @@ func methodToLG(scheme string) vm.Keyword {
 }
 
 func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
-	req := vm.Map{}
-
-	req[vm.Keyword("request-method")] = methodToLG(request.Method)
+	req := vm.EmptyPersistentMap
+	req = req.Assoc(vm.Keyword("request-method"), methodToLG(request.Method)).(*vm.PersistentMap)
 	url := request.URL
 
 	if request.TLS == nil {
-		req[vm.Keyword("scheme")] = vm.Keyword("http")
+		req = req.Assoc(vm.Keyword("scheme"), vm.Keyword("http")).(*vm.PersistentMap)
 	} else {
-		req[vm.Keyword("scheme")] = vm.Keyword("https")
+		req = req.Assoc(vm.Keyword("scheme"), vm.Keyword("https")).(*vm.PersistentMap)
 	}
-	req[vm.Keyword("uri")] = vm.String(url.RequestURI())
-	req[vm.Keyword("query-string")] = vm.String(url.RawQuery)
+	req = req.Assoc(vm.Keyword("uri"), vm.String(url.RequestURI())).(*vm.PersistentMap)
+	req = req.Assoc(vm.Keyword("query-string"), vm.String(url.RawQuery)).(*vm.PersistentMap)
 	defer request.Body.Close()
 	bytes, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -52,17 +51,17 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		}
 		return
 	}
-	req[vm.Keyword("body")] = vm.String(bytes)
-	req[vm.Keyword("remote-addr")] = vm.String(request.RemoteAddr)
-	req[vm.Keyword("server-addr")] = vm.String(request.Host)
-	req[vm.Keyword("server-port")] = vm.String(url.Port())
+	req = req.Assoc(vm.Keyword("body"), vm.String(bytes)).(*vm.PersistentMap)
+	req = req.Assoc(vm.Keyword("remote-addr"), vm.String(request.RemoteAddr)).(*vm.PersistentMap)
+	req = req.Assoc(vm.Keyword("server-addr"), vm.String(request.Host)).(*vm.PersistentMap)
+	req = req.Assoc(vm.Keyword("server-port"), vm.String(url.Port())).(*vm.PersistentMap)
 
 	if len(request.Header) > 0 {
-		hs := vm.Map{}
+		hs := vm.EmptyPersistentMap
 		for k, v := range request.Header {
-			hs[vm.String(strings.ToLower(k))] = vm.String(strings.Join(v, ","))
+			hs = hs.Assoc(vm.String(strings.ToLower(k)), vm.String(strings.Join(v, ","))).(*vm.PersistentMap)
 		}
-		req[vm.Keyword("headers")] = hs
+		req = req.Assoc(vm.Keyword("headers"), hs).(*vm.PersistentMap)
 	}
 
 	res, err := h.fn.Invoke([]vm.Value{req})
@@ -75,7 +74,7 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ress, ok := res.(vm.Map)
+	ress, ok := res.(vm.Lookup)
 	if !ok {
 		resp.WriteHeader(500)
 		_, err := resp.Write([]byte("handler returned malformed response"))
@@ -85,18 +84,21 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 	head := resp.Header()
-	headers, ok := ress[vm.Keyword("headers")]
-	if ok {
-		for k, v := range headers.(vm.Map) {
-			head.Add(k.Unbox().(string), v.Unbox().(string))
+	headers := ress.ValueAt(vm.Keyword("headers"))
+	if headers != vm.NIL {
+		if sq, ok := headers.(vm.Sequable); ok {
+			for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+				entry := s.First().(vm.ArrayVector)
+				head.Add(entry[0].Unbox().(string), entry[1].Unbox().(string))
+			}
 		}
 	}
-	status, ok := ress[vm.Keyword("status")]
-	if !ok {
+	status := ress.ValueAt(vm.Keyword("status"))
+	if status == vm.NIL {
 		status = vm.Int(200)
 	}
-	body, ok := ress[vm.Keyword("body")]
-	if !ok {
+	body := ress.ValueAt(vm.Keyword("body"))
+	if body == vm.NIL {
 		body = vm.String("")
 	}
 	resp.WriteHeader(int(status.(vm.Int)))

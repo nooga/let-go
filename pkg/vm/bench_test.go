@@ -272,24 +272,41 @@ func BenchmarkConj(b *testing.B) {
 func BenchmarkMapAssoc(b *testing.B) {
 	sizes := []int{10, 100, 1000}
 	for _, size := range sizes {
-		// Build initial map
-		m := make(Map, size)
+		// Build PersistentMap (HAMT)
+		pm := EmptyPersistentMap
 		for i := 0; i < size; i++ {
-			m[Int(i)] = Int(i * 10)
+			pm = pm.Assoc(Int(i), Int(i*10)).(*PersistentMap)
 		}
-		b.Run("Assoc/"+itoa(size), func(b *testing.B) {
+
+		b.Run("HAMT-Assoc/"+itoa(size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				m.Assoc(Int(0), Int(999))
+				pm.Assoc(Int(0), Int(999))
 			}
 		})
-		b.Run("Dissoc/"+itoa(size), func(b *testing.B) {
+		b.Run("HAMT-Dissoc/"+itoa(size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				m.Dissoc(Int(0))
+				pm.Dissoc(Int(0))
 			}
 		})
-		b.Run("Lookup/"+itoa(size), func(b *testing.B) {
+		b.Run("HAMT-Lookup/"+itoa(size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				m.ValueAt(Int(size / 2))
+				pm.ValueAt(Int(size / 2))
+			}
+		})
+
+		// Build old Map (copy-on-write) for comparison
+		om := make(Map, size)
+		for i := 0; i < size; i++ {
+			om[Int(i)] = Int(i * 10)
+		}
+		b.Run("GoMap-Assoc/"+itoa(size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				om.Assoc(Int(0), Int(999))
+			}
+		})
+		b.Run("GoMap-Lookup/"+itoa(size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				om.ValueAt(Int(size / 2))
 			}
 		})
 	}

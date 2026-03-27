@@ -56,9 +56,7 @@ func (n *Nil) Seq() Seq {
 }
 
 func (l *Nil) Assoc(k Value, v Value) Associative {
-	newmap := make(Map)
-	newmap[k] = v
-	return newmap
+	return EmptyPersistentMap.Assoc(k, v)
 }
 
 func (l *Nil) Dissoc(k Value) Associative {

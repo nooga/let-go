@@ -162,20 +162,20 @@ func BoxValue(v reflect.Value) (Value, error) {
 			// FIXME not sure if maybe this has to be empty coll in let-go-land
 			return NIL, nil
 		}
-		in := make(map[Value]Value)
+		result := EmptyPersistentMap
 		iter := v.MapRange()
 		for iter.Next() {
 			k, err := BoxValue(iter.Key())
 			if err != nil {
 				return NIL, err //FIXME wrap
 			}
-			v, err := BoxValue(iter.Value())
+			val, err := BoxValue(iter.Value())
 			if err != nil {
 				return NIL, err //FIXME wrap
 			}
-			in[k] = v
+			result = result.Assoc(k, val).(*PersistentMap)
 		}
-		return MapType.Box(in)
+		return result, nil
 	case reflect.Chan:
 		if v.IsNil() {
 			return NIL, nil

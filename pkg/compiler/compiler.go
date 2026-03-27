@@ -324,29 +324,32 @@ func (c *Context) compileForm(o vm.Value) error {
 	case vm.MapType:
 		tp := c.tailPosition
 		c.tailPosition = false
-		v := o.(vm.Map)
-		// FIXME detect const maps and push them like this
-		//if len(v) == 0 {
-		//	n := c.constant(v)
-		//	c.emitWithArg(vm.OP_LOAD_CONST, n)
-		//	c.incSP(1)
-		//	return nil
-		//}
+
 		hashMap := c.constant(rt.CoreNS.Lookup("hash-map"))
 		c.emitWithArg(vm.OP_LOAD_CONST, hashMap)
 		c.incSP(1)
-		for k, val := range v {
-			err := c.compileForm(k)
-			if err != nil {
-				return NewCompileError("compiling map key").Wrap(err)
+
+		// Get entries via Seq for both Map and PersistentMap
+		var count int
+		if sq, ok := o.(vm.Sequable); ok {
+			s := sq.Seq()
+			var entries []vm.Value
+			for s != nil && s != vm.EmptyList {
+				entry := s.First().(vm.ArrayVector)
+				entries = append(entries, entry[0], entry[1])
+				s = s.Next()
 			}
-			err = c.compileForm(val)
-			if err != nil {
-				return NewCompileError("compiling map value").Wrap(err)
+			count = len(entries) / 2
+			for _, e := range entries {
+				err := c.compileForm(e)
+				if err != nil {
+					return NewCompileError("compiling map entry").Wrap(err)
+				}
 			}
 		}
-		c.emitWithArg(vm.OP_INVOKE, len(v)*2)
-		c.decSP(len(v) * 2)
+
+		c.emitWithArg(vm.OP_INVOKE, count*2)
+		c.decSP(count * 2)
 		c.tailPosition = tp
 	case vm.ListType:
 		if o == vm.EmptyList {
@@ -1092,12 +1095,20 @@ func defCompiler(c *Context, form vm.Value) error {
 	c.defName = sym.String()
 	varr := c.CurrentNS().LookupOrAdd(sym.(vm.Symbol))
 	if meta != vm.NIL {
-		m := meta.(vm.Map)
-		if m[vm.Keyword("dynamic")] == vm.TRUE {
-			varr.(*vm.Var).SetDynamic()
-		}
-		if m[vm.Keyword("private")] == vm.TRUE {
-			varr.(*vm.Var).SetPrivate()
+		if m, ok := meta.(*vm.PersistentMap); ok {
+			if vm.IsTruthy(m.ValueAt(vm.Keyword("dynamic"))) {
+				varr.(*vm.Var).SetDynamic()
+			}
+			if vm.IsTruthy(m.ValueAt(vm.Keyword("private"))) {
+				varr.(*vm.Var).SetPrivate()
+			}
+		} else if m, ok := meta.(vm.Map); ok {
+			if m[vm.Keyword("dynamic")] == vm.TRUE {
+				varr.(*vm.Var).SetDynamic()
+			}
+			if m[vm.Keyword("private")] == vm.TRUE {
+				varr.(*vm.Var).SetPrivate()
+			}
 		}
 	}
 	c.emitWithArg(vm.OP_LOAD_CONST, c.constant(varr))

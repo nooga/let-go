@@ -59,6 +59,43 @@ func (l ArrayVector) Unbox() interface{} {
 	return []Value(l)
 }
 
+// Equals implements value equality for ArrayVector
+func (l ArrayVector) Equals(other Value) bool {
+	switch o := other.(type) {
+	case ArrayVector:
+		if len(l) != len(o) {
+			return false
+		}
+		for i, v := range l {
+			if eq, ok := v.(interface{ Equals(Value) bool }); ok {
+				if !eq.Equals(o[i]) {
+					return false
+				}
+			} else if v != o[i] {
+				return false
+			}
+		}
+		return true
+	case PersistentVector:
+		if len(l) != o.count {
+			return false
+		}
+		for i, v := range l {
+			ov := o.ValueAt(Int(i))
+			if eq, ok := v.(interface{ Equals(Value) bool }); ok {
+				if !eq.Equals(ov) {
+					return false
+				}
+			} else if v != ov {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // First implements Seq
 func (l ArrayVector) First() Value {
 	if len(l) == 0 {

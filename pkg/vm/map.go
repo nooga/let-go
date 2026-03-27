@@ -221,17 +221,21 @@ func (l Map) Contains(value Value) Boolean {
 
 func NewMap(v []Value) Value {
 	if len(v) == 0 {
-		return make(Map)
+		return EmptyPersistentMap
 	}
 	if len(v)%2 != 0 {
-		// FIXME this is an error
 		return NIL
 	}
-	newmap := make(Map)
-	for i := 0; i < len(v); i += 2 {
-		newmap[v[i]] = v[i+1]
+	return NewPersistentMap(v)
+}
+
+// MapFromGoMap converts a Go map[Value]Value to a *PersistentMap.
+func MapFromGoMap(m map[Value]Value) *PersistentMap {
+	result := EmptyPersistentMap
+	for k, v := range m {
+		result = result.Assoc(k, v).(*PersistentMap)
 	}
-	return newmap
+	return result
 }
 
 func (l Map) String() string {

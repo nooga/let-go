@@ -117,10 +117,17 @@ func valueEquals(a, b vm.Value) bool {
 		return false
 	}
 
-	// Allow cross-type numeric comparison
+	// Allow cross-type comparison for numbers and vectors
 	if a.Type() != b.Type() {
 		if vm.IsNumber(a) && vm.IsNumber(b) {
 			return vm.NumEq(a, b)
+		}
+		// Cross-type vector equality (ArrayVector vs PersistentVector)
+		if eq, ok := a.(interface{ Equals(vm.Value) bool }); ok {
+			return eq.Equals(b)
+		}
+		if eq, ok := b.(interface{ Equals(vm.Value) bool }); ok {
+			return eq.Equals(a)
 		}
 		return false
 	}
@@ -128,7 +135,14 @@ func valueEquals(a, b vm.Value) bool {
 	// Handle collections specially
 	switch av := a.(type) {
 	case vm.ArrayVector:
-		bv := b.(vm.ArrayVector)
+		bv, ok := b.(vm.ArrayVector)
+		if !ok {
+			// Could be PersistentVector — use Equals
+			if eq, ok2 := a.(interface{ Equals(vm.Value) bool }); ok2 {
+				return eq.Equals(b)
+			}
+			return false
+		}
 		if len(av) != len(bv) {
 			return false
 		}
@@ -164,6 +178,11 @@ func valueEquals(a, b vm.Value) bool {
 			}
 		}
 		return true
+	case *vm.PersistentMap:
+		if bm, ok := b.(*vm.PersistentMap); ok {
+			return av.Equals(bm)
+		}
+		return false
 	case vm.Set:
 		bs := b.(vm.Set)
 		if len(av) != len(bs) {
