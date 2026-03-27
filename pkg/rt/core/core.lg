@@ -12,9 +12,6 @@
 (def defn (fn [name args & body] (list 'def name (cons 'fn (cons args body)))))
 (set-macro! (var defn))
 
-; we don't support arbitrary meta so make this identity for now
-(defn with-meta [x _] x)
-
 (def apply apply*)
 
 (defn defmacro [name args & body]
@@ -245,6 +242,20 @@
      (if (>= (count c) n)
        (recur (drop step c) (conj w (vec (take n c))))
        w))))
+
+;; binding macro — pushes dynamic bindings, runs body, pops on exit.
+;; (binding [*x* 1 *y* 2] body...)
+(defmacro binding [bindings & body]
+  (let [pairs (partition 2 bindings)
+        pushes (map (fn [p] (list 'push-binding! (list 'var (first p)) (second p))) pairs)
+        pops   (map (fn [p] (list 'pop-binding! (list 'var (first p)))) pairs)]
+    (concat-list
+      (list 'do)
+      (concat-list
+        (vec pushes)
+        (cons (list 'let ['binding__result (cons 'do body)]
+                    (cons 'do (concat-list (vec pops) (list 'binding__result))))
+              nil)))))
 
 (defmacro dotimes
   [bindings & body]

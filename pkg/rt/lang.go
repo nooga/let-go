@@ -1712,6 +1712,58 @@ func installLangNS() {
 		return vm.NewLazySeq(fn), nil
 	})
 
+	pushBinding, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		v, ok := vs[0].(*vm.Var)
+		if !ok {
+			return vm.NIL, fmt.Errorf("push-binding expected Var")
+		}
+		v.PushBinding(vs[1])
+		return vm.NIL, nil
+	})
+
+	popBinding, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		v, ok := vs[0].(*vm.Var)
+		if !ok {
+			return vm.NIL, fmt.Errorf("pop-binding expected Var")
+		}
+		v.PopBinding()
+		return vm.NIL, nil
+	})
+
+	withMeta, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
+		}
+		m, ok := vs[0].(vm.IMeta)
+		if !ok {
+			return vm.NIL, fmt.Errorf("with-meta not supported on %s", vs[0].Type().Name())
+		}
+		return m.WithMeta(vs[1]), nil
+	})
+
+	metaf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
+		}
+		m, ok := vs[0].(vm.IMeta)
+		if !ok {
+			return vm.NIL, nil
+		}
+		return m.Meta(), nil
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -1858,6 +1910,11 @@ func installLangNS() {
 	ns.Def("iterate", iterate)
 	ns.Def("repeat", repeat)
 	ns.Def("lazy-seq*", lazySeq)
+
+	ns.Def("with-meta", withMeta)
+	ns.Def("meta", metaf)
+	ns.Def("push-binding!", pushBinding)
+	ns.Def("pop-binding!", popBinding)
 
 	CoreNS = ns
 

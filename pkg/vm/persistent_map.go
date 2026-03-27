@@ -358,8 +358,26 @@ func (n *hmapCollisionNode) findIndex(key Value) int {
 type PersistentMap struct {
 	count    int
 	root     hmapNode
+	meta     Value
 	_hash    uint32
 	_hasHash bool
+}
+
+// Meta implements IMeta.
+func (m *PersistentMap) Meta() Value {
+	if m.meta == nil {
+		return NIL
+	}
+	return m.meta
+}
+
+// WithMeta implements IMeta.
+func (m *PersistentMap) WithMeta(meta Value) Value {
+	cp := *m
+	cp.meta = meta
+	cp._hash = 0
+	cp._hasHash = false
+	return &cp
 }
 
 // EmptyPersistentMap is the canonical empty persistent map.
