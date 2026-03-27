@@ -668,7 +668,7 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 		}
 		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("vector"), vv})
 	case form.Type() == vm.MapType:
-		lform := flattenMap(form.(vm.Map))
+		lform := flattenMap(form)
 		uq, err := expandUnquotes(r, lform, env)
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "expanding unquotes for vector")
@@ -697,11 +697,15 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 	}
 }
 
-// FIXME this is fast but will shatter when we go to persistent Maps
-func flattenMap(m vm.Map) vm.Value {
+func flattenMap(form vm.Value) vm.Value {
+	sq, ok := form.(vm.Sequable)
+	if !ok {
+		return vm.ArrayVector{}
+	}
 	ret := vm.ArrayVector{}
-	for k := range m {
-		ret = append(ret, k, m[k])
+	for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+		entry := s.First().(vm.ArrayVector)
+		ret = append(ret, entry[0], entry[1])
 	}
 	return ret
 }
@@ -877,7 +881,7 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
-	m := vm.Map{}
+	var m vm.Value = vm.EmptyPersistentMap
 	for {
 		switch ch {
 		case '{':
@@ -885,8 +889,11 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 			if err != nil {
 				return vm.NIL, NewReaderError(r, "reading meta map")
 			}
-			for k, v := range m2.(vm.Map) {
-				m[k] = v
+			if sq, ok := m2.(vm.Sequable); ok {
+				for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+					entry := s.First().(vm.ArrayVector)
+					m = m.(*vm.PersistentMap).Assoc(entry[0], entry[1]).(*vm.PersistentMap)
+				}
 			}
 		case ':':
 			k, err := readToken(r, ':')
@@ -897,7 +904,7 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 			if err != nil {
 				return vm.NIL, NewReaderError(r, "reading meta keyword")
 			}
-			m[k] = vm.TRUE
+			m = m.(*vm.PersistentMap).Assoc(k, vm.TRUE).(*vm.PersistentMap)
 		default:
 			return vm.NIL, NewReaderError(r, "unsupported meta form")
 		}

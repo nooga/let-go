@@ -78,6 +78,45 @@ func (v PersistentVector) Unbox() interface{} {
 	return ret
 }
 
+// Equals implements value equality for PersistentVector
+func (v PersistentVector) Equals(other Value) bool {
+	switch o := other.(type) {
+	case PersistentVector:
+		if v.count != o.count {
+			return false
+		}
+		for i := 0; i < v.count; i++ {
+			vv := v.ValueAt(Int(i))
+			ov := o.ValueAt(Int(i))
+			if eq, ok := vv.(interface{ Equals(Value) bool }); ok {
+				if !eq.Equals(ov) {
+					return false
+				}
+			} else if vv != ov {
+				return false
+			}
+		}
+		return true
+	case ArrayVector:
+		if v.count != len(o) {
+			return false
+		}
+		for i := 0; i < v.count; i++ {
+			vv := v.ValueAt(Int(i))
+			if eq, ok := vv.(interface{ Equals(Value) bool }); ok {
+				if !eq.Equals(o[i]) {
+					return false
+				}
+			} else if vv != o[i] {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // PersistentVectorSeq represents a sequence view of a PersistentVector
 type PersistentVectorSeq struct {
 	vec     *PersistentVector
@@ -281,18 +320,26 @@ func (v PersistentVector) Conj(val Value) Collection {
 
 	// Need to push tail into tree and create new tail
 	newTail := []Value{val}
-	newRoot := v.root
 	newShift := v.shift
 
-	// Check if we need to grow the tree height
-	if (v.count-v.tailOff)>>v.shift > (1 << v.shift) {
-		newRoot = newNode()
+	// Check if we need to grow the tree height.
+	// Tree overflow: tailOff indexes need more bits than the current shift allows.
+	if (v.tailOff >> shift) > (1 << v.shift) {
+		newRoot := newNode()
 		newRoot.array = append(newRoot.array, v.root)
+		newRoot.array = append(newRoot.array, newPath(v.shift, v.tail))
 		newShift += shift
+		return PersistentVector{
+			count:   v.count + 1,
+			shift:   newShift,
+			root:    newRoot,
+			tail:    newTail,
+			tailOff: v.count,
+		}
 	}
 
-	// Push current tail into tree
-	newRoot = v.pushTail(newRoot, newShift, v.count-1, v.tail)
+	// Push current tail into tree as a new leaf node
+	newRoot := pushTail(v.shift, v.root, v.tailOff, v.tail)
 
 	return PersistentVector{
 		count:   v.count + 1,
@@ -303,30 +350,49 @@ func (v PersistentVector) Conj(val Value) Collection {
 	}
 }
 
-func (v PersistentVector) pushTail(node *vnode, level uint, index int, tail []Value) *vnode {
-	anewNode := &vnode{array: make([]interface{}, len(node.array))}
-	copy(anewNode.array, node.array)
+// pushTail inserts a tail chunk into the trie at the position indicated by tailOff.
+func pushTail(level uint, parent *vnode, tailOff int, tail []Value) *vnode {
+	subidx := ((tailOff - 1) >> level) & nodeMask
+
+	// Copy parent
+	ret := &vnode{array: make([]interface{}, len(parent.array))}
+	copy(ret.array, parent.array)
 
 	if level == shift {
-		// At leaf level, store Values individually
+		// At the lowest internal level — append a new leaf node
+		leafNode := newNode()
 		for _, val := range tail {
-			anewNode.array = append(anewNode.array, val)
+			leafNode.array = append(leafNode.array, val)
 		}
-	} else {
-		subidx := (index >> level) & nodeMask
-		// Create new path if needed
-		if len(node.array) <= int(subidx) {
-			child := newNode()
-			anewNode.array = append(anewNode.array, child)
-			anewNode.array[len(anewNode.array)-1] = v.pushTail(child, level-shift, index, tail)
-		} else {
-			// Update existing path
-			child := node.array[subidx].(*vnode)
-			anewNode.array[subidx] = v.pushTail(child, level-shift, index, tail)
-		}
+		ret.array = append(ret.array, leafNode)
+		return ret
 	}
 
-	return anewNode
+	// Recurse deeper
+	if subidx < len(parent.array) {
+		// Subtree exists — recurse into it
+		child := parent.array[subidx].(*vnode)
+		ret.array[subidx] = pushTail(level-shift, child, tailOff, tail)
+	} else {
+		// No subtree at this position — create a new path
+		ret.array = append(ret.array, newPath(level-shift, tail))
+	}
+
+	return ret
+}
+
+// newPath creates a chain of single-child nodes from level down to a leaf containing tail.
+func newPath(level uint, tail []Value) *vnode {
+	if level == 0 {
+		leafNode := newNode()
+		for _, val := range tail {
+			leafNode.array = append(leafNode.array, val)
+		}
+		return leafNode
+	}
+	ret := newNode()
+	ret.array = append(ret.array, newPath(level-shift, tail))
+	return ret
 }
 
 // ValueAt implements Associative

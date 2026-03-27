@@ -39,10 +39,10 @@ func TestReaderBasic(t *testing.T) {
 		"[]":                         vm.ArrayVector{},
 		"[1 :foo true]":              vm.ArrayVector{vm.Int(1), vm.Keyword("foo"), vm.TRUE},
 		"'foo":                       vm.EmptyList.Cons(vm.Symbol("foo")).Cons(vm.Symbol("quote")),
-		"^:foo zoo":                  vm.EmptyList.Cons(vm.Map{vm.Keyword("foo"): vm.TRUE}).Cons(vm.Symbol("zoo")).Cons(vm.Symbol("with-meta")),
-		"^:foo ^:bar zoo":            vm.EmptyList.Cons(vm.Map{vm.Keyword("foo"): vm.TRUE, vm.Keyword("bar"): vm.TRUE}).Cons(vm.Symbol("zoo")).Cons(vm.Symbol("with-meta")),
-		"^{:foo 1 :baz 2} ^:bar zoo": vm.EmptyList.Cons(vm.Map{vm.Keyword("foo"): vm.Int(1), vm.Keyword("baz"): vm.Int(2), vm.Keyword("bar"): vm.TRUE}).Cons(vm.Symbol("zoo")).Cons(vm.Symbol("with-meta")),
-		"^:bar ^{:foo 1 :baz 2} zoo": vm.EmptyList.Cons(vm.Map{vm.Keyword("foo"): vm.Int(1), vm.Keyword("baz"): vm.Int(2), vm.Keyword("bar"): vm.TRUE}).Cons(vm.Symbol("zoo")).Cons(vm.Symbol("with-meta")),
+		"^:foo zoo":                  vm.EmptyList.Cons(vm.NewPersistentMap([]vm.Value{vm.Keyword("foo"), vm.TRUE})).Cons(vm.Symbol("zoo")).Cons(vm.Symbol("with-meta")),
+		"^:foo ^:bar zoo":            vm.EmptyList.Cons(vm.NewPersistentMap([]vm.Value{vm.Keyword("foo"), vm.TRUE, vm.Keyword("bar"), vm.TRUE})).Cons(vm.Symbol("zoo")).Cons(vm.Symbol("with-meta")),
+		"^{:foo 1 :baz 2} ^:bar zoo": vm.EmptyList.Cons(vm.NewPersistentMap([]vm.Value{vm.Keyword("foo"), vm.Int(1), vm.Keyword("baz"), vm.Int(2), vm.Keyword("bar"), vm.TRUE})).Cons(vm.Symbol("zoo")).Cons(vm.Symbol("with-meta")),
+		"^:bar ^{:foo 1 :baz 2} zoo": vm.EmptyList.Cons(vm.NewPersistentMap([]vm.Value{vm.Keyword("bar"), vm.TRUE, vm.Keyword("foo"), vm.Int(1), vm.Keyword("baz"), vm.Int(2)})).Cons(vm.Symbol("zoo")).Cons(vm.Symbol("with-meta")),
 	}
 
 	for p, e := range cases {

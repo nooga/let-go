@@ -33,16 +33,16 @@ func toValue(keywordize bool, i interface{}) (vm.Value, error) {
 		}
 		return vm.NewArrayVector(r), nil
 	case map[string]interface{}:
-		newmap := make(vm.Map)
+		newmap := vm.EmptyPersistentMap
 		for k, v := range i {
 			ve, e := toValue(keywordize, v)
 			if e != nil {
 				return vm.NIL, e
 			}
 			if keywordize {
-				newmap[vm.Keyword(k)] = ve
+				newmap = newmap.Assoc(vm.Keyword(k), ve).(*vm.PersistentMap)
 			} else {
-				newmap[vm.String(k)] = ve
+				newmap = newmap.Assoc(vm.String(k), ve).(*vm.PersistentMap)
 			}
 
 		}
@@ -62,16 +62,21 @@ func fromValue(v vm.Value) (interface{}, error) {
 		return bool(v.(vm.Boolean)), nil
 	case vm.MapType:
 		r := map[string]interface{}{}
-		for k, ov := range v.(vm.Map) {
-			vv, e := fromValue(ov)
-			if e != nil {
-				return vm.NIL, vm.NewExecutionError("invalid VM value")
+		if sq, ok := v.(vm.Sequable); ok {
+			for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+				entry := s.First().(vm.ArrayVector)
+				k := entry[0]
+				ov := entry[1]
+				vv, e := fromValue(ov)
+				if e != nil {
+					return vm.NIL, vm.NewExecutionError("invalid VM value")
+				}
+				nk := k.String()
+				if k.Type() == vm.KeywordType {
+					nk = nk[1:]
+				}
+				r[nk] = vv
 			}
-			nk := k.String()
-			if k.Type() == vm.KeywordType {
-				nk = nk[1:]
-			}
-			r[nk] = vv
 		}
 		return r, nil
 	case vm.KeywordType:
@@ -97,7 +102,7 @@ func fromValue(v vm.Value) (interface{}, error) {
 }
 
 func optionsHaveKeywordize(opts vm.Value) (bool, error) {
-	o, ok := opts.(vm.Map)
+	o, ok := opts.(vm.Lookup)
 	if !ok {
 		return false, fmt.Errorf("read-json options are not Map")
 	}
