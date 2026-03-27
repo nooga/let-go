@@ -33,6 +33,9 @@ func (n *Repeat) Cons(value Value) Seq {
 }
 
 func (n *Repeat) First() Value {
+	if n.i == 0 {
+		return NIL
+	}
 	return n.val
 }
 
@@ -45,10 +48,10 @@ func (n *Repeat) More() Seq {
 }
 
 func (n *Repeat) Next() Seq {
-	i := n.i
-	if i == 0 {
+	if n.i == 0 || n.i == 1 {
 		return nil
 	}
+	i := n.i
 	if i > 0 {
 		i--
 	}

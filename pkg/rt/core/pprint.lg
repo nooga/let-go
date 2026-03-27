@@ -1,0 +1,46 @@
+;; pprint — pretty printing for data structures
+(ns pprint)
+
+(declare pprint-str)
+
+(defn- indent-str [n]
+  (apply str (repeat n " ")))
+
+(defn- pprint-seq [s open close indent]
+  (let [items (vec s)]
+    (if (<= (count (pr-str s)) 40)
+      (str open (str-join " " (map pr-str items)) close)
+      (let [inner-indent (+ indent 1)
+            formatted (map #(pprint-str % inner-indent) items)]
+        (str open (first formatted)
+             (apply str (map #(str "\n" (indent-str inner-indent) %)
+                             (rest formatted)))
+             close)))))
+
+(defn- pprint-map [m indent]
+  (let [entries (seq m)]
+    (if (<= (count (pr-str m)) 40)
+      (pr-str m)
+      (let [inner-indent (+ indent 1)
+            format-entry (fn [e]
+                           (let [k (first e) v (second e)]
+                             (str (pr-str k) " " (pprint-str v (+ inner-indent (count (pr-str k)) 1)))))]
+        (str "{" (format-entry (first entries))
+             (apply str (map #(str "\n" (indent-str inner-indent) (format-entry %))
+                             (rest entries)))
+             "}")))))
+
+(defn pprint-str
+  ([form] (pprint-str form 0))
+  ([form indent]
+   (cond
+     (map? form)    (pprint-map form indent)
+     (vector? form) (pprint-seq form "[" "]" indent)
+     (set? form)    (pprint-seq (seq form) "#{" "}" indent)
+     (list? form)   (pprint-seq form "(" ")" indent)
+     (seq? form)    (pprint-seq form "(" ")" indent)
+     :else          (pr-str form))))
+
+(defn pprint
+  ([form] (println (pprint-str form)))
+  ([form writer] (println (pprint-str form))))
