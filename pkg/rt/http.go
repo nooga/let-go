@@ -14,6 +14,17 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+// rawString extracts a raw Go string from a Value without quoting.
+func rawString(v vm.Value) string {
+	if s, ok := v.(vm.String); ok {
+		return string(s)
+	}
+	if kw, ok := v.(vm.Keyword); ok {
+		return string(kw)
+	}
+	return v.String()
+}
+
 type Handler struct {
 	fn vm.Fn
 }
@@ -40,6 +51,7 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		req = req.Assoc(vm.Keyword("scheme"), vm.Keyword("https")).(*vm.PersistentMap)
 	}
 	req = req.Assoc(vm.Keyword("uri"), vm.String(url.RequestURI())).(*vm.PersistentMap)
+	req = req.Assoc(vm.Keyword("path"), vm.String(url.Path)).(*vm.PersistentMap)
 	req = req.Assoc(vm.Keyword("query-string"), vm.String(url.RawQuery)).(*vm.PersistentMap)
 	defer request.Body.Close()
 	bytes, err := io.ReadAll(request.Body)
@@ -62,6 +74,9 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 			hs = hs.Assoc(vm.String(strings.ToLower(k)), vm.String(strings.Join(v, ","))).(*vm.PersistentMap)
 		}
 		req = req.Assoc(vm.Keyword("headers"), hs).(*vm.PersistentMap)
+		if ct := request.Header.Get("Content-Type"); ct != "" {
+			req = req.Assoc(vm.Keyword("content-type"), vm.String(ct)).(*vm.PersistentMap)
+		}
 	}
 
 	res, err := h.fn.Invoke([]vm.Value{req})
@@ -87,9 +102,21 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	headers := ress.ValueAt(vm.Keyword("headers"))
 	if headers != vm.NIL {
 		if sq, ok := headers.(vm.Sequable); ok {
-			for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
-				entry := s.First().(vm.ArrayVector)
-				head.Add(entry[0].Unbox().(string), entry[1].Unbox().(string))
+			for s := sq.Seq(); s != nil; s = s.Next() {
+				entry := s.First()
+				// Use Sequable to get key/value from any vector type
+				eSeq, ok := entry.(vm.Sequable)
+				if !ok {
+					continue
+				}
+				es := eSeq.Seq()
+				k := es.First()
+				v := es.Next().First()
+				ks := k.String()
+				if k.Type() == vm.KeywordType {
+					ks = ks[1:]
+				}
+				head.Add(ks, v.String())
 			}
 		}
 	}
@@ -102,7 +129,13 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		body = vm.String("")
 	}
 	resp.WriteHeader(int(status.(vm.Int)))
-	_, err = resp.Write([]byte(body.(vm.String)))
+	var bodyBytes []byte
+	if s, ok := body.(vm.String); ok {
+		bodyBytes = []byte(s)
+	} else {
+		bodyBytes = []byte(body.String())
+	}
+	_, err = resp.Write(bodyBytes)
 	if err != nil {
 		fmt.Println("HTTP Error while writing error 500", err)
 	}
@@ -149,10 +182,181 @@ func installHttpNS() {
 		panic("http NS init failed")
 	}
 
+	// HTTP client: build response map from http.Response
+	buildResponseMap := func(resp *http.Response) (vm.Value, error) {
+		defer resp.Body.Close()
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return vm.NIL, err
+		}
+		result := vm.EmptyPersistentMap
+		result = result.Assoc(vm.Keyword("status"), vm.Int(resp.StatusCode)).(*vm.PersistentMap)
+		result = result.Assoc(vm.Keyword("body"), vm.String(bodyBytes)).(*vm.PersistentMap)
+		hs := vm.EmptyPersistentMap
+		for k, v := range resp.Header {
+			hs = hs.Assoc(vm.String(strings.ToLower(k)), vm.String(strings.Join(v, ","))).(*vm.PersistentMap)
+		}
+		result = result.Assoc(vm.Keyword("headers"), hs).(*vm.PersistentMap)
+		return result, nil
+	}
+
+	// http/get — (http/get url) or (http/get url opts)
+	httpGet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 || len(vs) > 2 {
+			return vm.NIL, fmt.Errorf("http/get expects 1-2 args")
+		}
+		url, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("http/get expected URL as String")
+		}
+		req, err := http.NewRequest("GET", string(url), nil)
+		if err != nil {
+			return vm.NIL, err
+		}
+		if len(vs) == 2 {
+			if opts, ok := vs[1].(vm.Lookup); ok {
+				hdrs := opts.ValueAt(vm.Keyword("headers"))
+				if hdrs != vm.NIL {
+					if sq, ok := hdrs.(vm.Sequable); ok {
+						for s := sq.Seq(); s != nil; s = s.Next() {
+							entry := s.First()
+							eSeq, ok := entry.(vm.Sequable)
+							if !ok {
+								continue
+							}
+							es := eSeq.Seq()
+							k := es.First()
+							v := es.Next().First()
+							req.Header.Set(rawString(k), rawString(v))
+						}
+					}
+				}
+			}
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return buildResponseMap(resp)
+	})
+
+	// http/post — (http/post url body) or (http/post url body opts)
+	httpPost, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 || len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("http/post expects 2-3 args")
+		}
+		url, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("http/post expected URL as String")
+		}
+		var bodyStr string
+		if s, ok := vs[1].(vm.String); ok {
+			bodyStr = string(s)
+		} else {
+			bodyStr = vs[1].String()
+		}
+		req, err := http.NewRequest("POST", string(url), strings.NewReader(bodyStr))
+		if err != nil {
+			return vm.NIL, err
+		}
+		if len(vs) == 3 {
+			if opts, ok := vs[2].(vm.Lookup); ok {
+				ct := opts.ValueAt(vm.Keyword("content-type"))
+				if ct != vm.NIL {
+					req.Header.Set("Content-Type", rawString(ct))
+				}
+				hdrs := opts.ValueAt(vm.Keyword("headers"))
+				if hdrs != vm.NIL {
+					if sq, ok := hdrs.(vm.Sequable); ok {
+						for s := sq.Seq(); s != nil; s = s.Next() {
+							entry := s.First()
+							eSeq, ok := entry.(vm.Sequable)
+							if !ok {
+								continue
+							}
+							es := eSeq.Seq()
+							k := es.First()
+							v := es.Next().First()
+							req.Header.Set(rawString(k), rawString(v))
+						}
+					}
+				}
+			}
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return buildResponseMap(resp)
+	})
+
+	// http/request — (http/request {:method :get :url "..." :headers {...} :body "..."})
+	httpRequest, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("http/request expects 1 arg (options map)")
+		}
+		opts, ok := vs[0].(vm.Lookup)
+		if !ok {
+			return vm.NIL, fmt.Errorf("http/request expected a map")
+		}
+		method := "GET"
+		if m := opts.ValueAt(vm.Keyword("method")); m != vm.NIL {
+			ms := m.String()
+			if ms[0] == ':' {
+				ms = ms[1:]
+			}
+			method = strings.ToUpper(ms)
+		}
+		urlVal := opts.ValueAt(vm.Keyword("url"))
+		if urlVal == vm.NIL {
+			return vm.NIL, fmt.Errorf("http/request requires :url")
+		}
+		var bodyReader io.Reader
+		if b := opts.ValueAt(vm.Keyword("body")); b != vm.NIL {
+			if s, ok := b.(vm.String); ok {
+				bodyReader = strings.NewReader(string(s))
+			} else {
+				bodyReader = strings.NewReader(b.String())
+			}
+		}
+		req, err := http.NewRequest(method, string(urlVal.(vm.String)), bodyReader)
+		if err != nil {
+			return vm.NIL, err
+		}
+		hdrs := opts.ValueAt(vm.Keyword("headers"))
+		if hdrs != vm.NIL {
+			if sq, ok := hdrs.(vm.Sequable); ok {
+				for s := sq.Seq(); s != nil; s = s.Next() {
+					entry := s.First()
+					eSeq, ok := entry.(vm.Sequable)
+					if !ok {
+						continue
+					}
+					es := eSeq.Seq()
+					k := es.First()
+					v := es.Next().First()
+					req.Header.Set(rawString(k), rawString(v))
+				}
+			}
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return buildResponseMap(resp)
+	})
+
+	if err != nil {
+		panic("http NS init failed")
+	}
+
 	ns := vm.NewNamespace("http")
 
 	ns.Def("handle", handle)
 	ns.Def("serve", serve)
 	ns.Def("serve2", serve2)
+	ns.Def("get", httpGet)
+	ns.Def("post", httpPost)
+	ns.Def("request", httpRequest)
 	RegisterNS(ns)
 }

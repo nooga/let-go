@@ -2862,6 +2862,9 @@ func installLangNS() {
 	ns.Def("ex-data", exData)
 	ns.Def("ex-cause", exCause)
 
+	// IO builtins (open, close!, read-line, write!, etc.)
+	installIOBuiltins(ns)
+
 	CoreNS = ns
 
 	RegisterNS(ns)

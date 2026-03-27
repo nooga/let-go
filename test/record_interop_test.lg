@@ -1,0 +1,16 @@
+(ns test.record-interop-test
+  (:require [test :refer :all]))
+
+(defrecord Animal [species name])
+
+(deftest record-method-access
+  (testing ".field access on records"
+    (let [a (->Animal "cat" "Whiskers")]
+      (is (= "cat" (.species a)))
+      (is (= "Whiskers" (.name a))))))
+
+(deftest record-method-with-extra
+  (testing ".field access on extra keys"
+    (let [a (assoc (->Animal "dog" "Rex") :age 5)]
+      (is (= "dog" (.species a)))
+      (is (= 5 (.age a))))))

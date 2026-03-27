@@ -6,6 +6,7 @@
 package rt
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -33,6 +34,126 @@ func installOsNS() {
 		}()
 		return v[0], nil
 	})
+
+	// os/exit — (os/exit code)
+	exitf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/exit expects 1 arg")
+		}
+		code, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/exit expected Int")
+		}
+		os.Exit(int(code))
+		return vm.NIL, nil
+	})
+
+	// os/cwd — (os/cwd)
+	cwd, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		d, err := os.Getwd()
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(d), nil
+	})
+
+	// os/setenv — (os/setenv key val)
+	setenv, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("os/setenv expects 2 args")
+		}
+		k, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/setenv expected String key")
+		}
+		v, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/setenv expected String value")
+		}
+		return vm.NIL, os.Setenv(string(k), string(v))
+	})
+
+	// os/ls — (os/ls path)
+	ls, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/ls expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/ls expected String path")
+		}
+		entries, err := os.ReadDir(string(path))
+		if err != nil {
+			return vm.NIL, err
+		}
+		result := make([]vm.Value, len(entries))
+		for i, e := range entries {
+			result[i] = vm.String(e.Name())
+		}
+		return vm.NewArrayVector(result), nil
+	})
+
+	// os/stat — (os/stat path)
+	stat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/stat expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/stat expected String path")
+		}
+		info, err := os.Stat(string(path))
+		if err != nil {
+			if os.IsNotExist(err) {
+				return vm.NIL, nil
+			}
+			return vm.NIL, err
+		}
+		m := vm.EmptyPersistentMap
+		m = m.Assoc(vm.Keyword("name"), vm.String(info.Name())).(*vm.PersistentMap)
+		m = m.Assoc(vm.Keyword("size"), vm.Int(info.Size())).(*vm.PersistentMap)
+		m = m.Assoc(vm.Keyword("dir?"), vm.Boolean(info.IsDir())).(*vm.PersistentMap)
+		m = m.Assoc(vm.Keyword("mod-time"), vm.String(info.ModTime().String())).(*vm.PersistentMap)
+		return m, nil
+	})
+
+	// os/sh — (os/sh cmd & args) → {:exit 0 :out "..." :err "..."}
+	sh, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("os/sh expects at least 1 arg")
+		}
+		cmdName, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/sh expected String command")
+		}
+		args := make([]string, len(vs)-1)
+		for i := 1; i < len(vs); i++ {
+			if s, ok := vs[i].(vm.String); ok {
+				args[i-1] = string(s)
+			} else {
+				args[i-1] = vs[i].String()
+			}
+		}
+		cmd := exec.Command(string(cmdName), args...)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		exitCode := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				return vm.NIL, err
+			}
+		}
+		m := vm.EmptyPersistentMap
+		m = m.Assoc(vm.Keyword("exit"), vm.Int(exitCode)).(*vm.PersistentMap)
+		m = m.Assoc(vm.Keyword("out"), vm.String(stdout.String())).(*vm.PersistentMap)
+		m = m.Assoc(vm.Keyword("err"), vm.String(stderr.String())).(*vm.PersistentMap)
+		return m, nil
+	})
+
 	if err != nil {
 		panic(fmt.Sprintf("os NS init failed: %e", err))
 	}
@@ -44,5 +165,11 @@ func installOsNS() {
 	ns.Def("with-stdin", withStdin)
 	ns.Def("temp-dir", tempDir)
 	ns.Def("args", args)
+	ns.Def("exit", exitf)
+	ns.Def("cwd", cwd)
+	ns.Def("setenv", setenv)
+	ns.Def("ls", ls)
+	ns.Def("stat", stat)
+	ns.Def("sh", sh)
 	RegisterNS(ns)
 }

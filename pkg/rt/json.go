@@ -19,7 +19,10 @@ func toValue(keywordize bool, i interface{}) (vm.Value, error) {
 	case bool:
 		return vm.Boolean(i), nil
 	case float64:
-		return vm.Int(i), nil
+		if i == float64(int64(i)) {
+			return vm.Int(int64(i)), nil
+		}
+		return vm.Float(i), nil
 	case nil:
 		return vm.NIL, nil
 	case []interface{}:
@@ -52,52 +55,81 @@ func toValue(keywordize bool, i interface{}) (vm.Value, error) {
 	}
 }
 
+func fromMapValue(v vm.Value) (interface{}, error) {
+	r := map[string]interface{}{}
+	if sq, ok := v.(vm.Sequable); ok {
+		for s := sq.Seq(); s != nil; s = s.Next() {
+			entry := s.First()
+			// Get key and value from the entry using Seq interface
+			eSeq, ok := entry.(vm.Sequable)
+			if !ok {
+				return vm.NIL, vm.NewExecutionError("invalid map entry")
+			}
+			es := eSeq.Seq()
+			k := es.First()
+			ov := es.Next().First()
+			vv, e := fromValue(ov)
+			if e != nil {
+				return vm.NIL, vm.NewExecutionError("invalid VM value")
+			}
+			nk := k.String()
+			if k.Type() == vm.KeywordType {
+				nk = nk[1:]
+			}
+			r[nk] = vv
+		}
+	}
+	return r, nil
+}
+
+func fromSeqValue(s vm.Seq) (interface{}, error) {
+	r := []interface{}{}
+	for s != nil {
+		uv, e := fromValue(s.First())
+		if e != nil {
+			return vm.NIL, e
+		}
+		r = append(r, uv)
+		s = s.Next()
+	}
+	return r, nil
+}
+
 func fromValue(v vm.Value) (interface{}, error) {
 	switch v.Type() {
 	case vm.StringType:
 		return string(v.(vm.String)), nil
 	case vm.IntType:
 		return int(v.(vm.Int)), nil
+	case vm.FloatType:
+		return float64(v.(vm.Float)), nil
 	case vm.BooleanType:
 		return bool(v.(vm.Boolean)), nil
-	case vm.MapType:
-		r := map[string]interface{}{}
-		if sq, ok := v.(vm.Sequable); ok {
-			for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
-				entry := s.First().(vm.ArrayVector)
-				k := entry[0]
-				ov := entry[1]
-				vv, e := fromValue(ov)
-				if e != nil {
-					return vm.NIL, vm.NewExecutionError("invalid VM value")
-				}
-				nk := k.String()
-				if k.Type() == vm.KeywordType {
-					nk = nk[1:]
-				}
-				r[nk] = vv
-			}
-		}
-		return r, nil
+	case vm.MapType, vm.PersistentMapType:
+		return fromMapValue(v)
 	case vm.KeywordType:
-		return string(v.(vm.Keyword)), nil
+		kw := string(v.(vm.Keyword))
+		return kw, nil
 	case vm.NilType:
 		return nil, nil
+	case vm.ArrayVectorType, vm.PersistentVectorType:
+		if sq, ok := v.(vm.Sequable); ok {
+			return fromSeqValue(sq.Seq())
+		}
+		return v.String(), nil
 	default:
+		// Records and other map-like types
+		if _, ok := v.(*vm.Record); ok {
+			return fromMapValue(v)
+		}
 		s, ok := v.(vm.Seq)
 		if !ok {
+			if sq, ok := v.(vm.Sequable); ok {
+				return fromSeqValue(sq.Seq())
+			}
 			return v.String(), nil
 		}
-		r := []interface{}{}
-		for s != vm.EmptyList {
-			uv, e := fromValue(s.First())
-			if e != nil {
-				return vm.NIL, e
-			}
-			r = append(r, uv)
-			s = s.Next()
-		}
-		return r, nil
+		return fromSeqValue(s)
 	}
 }
 
