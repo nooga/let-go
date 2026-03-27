@@ -1,0 +1,51 @@
+;; Tests for string namespace
+(ns test.string-ns-test
+  (:require [test :refer :all]
+            [string :as str]))
+
+(deftest string-join
+  (testing "join with separator"
+    (is (= "a, b, c" (str/join ", " ["a" "b" "c"]))))
+  (testing "join without separator"
+    (is (= "abc" (str/join ["a" "b" "c"])))))
+
+(deftest string-case
+  (testing "upper-case"
+    (is (= "HELLO" (str/upper-case "hello"))))
+  (testing "lower-case"
+    (is (= "hello" (str/lower-case "HELLO"))))
+  (testing "capitalize"
+    (is (= "Hello world" (str/capitalize "hello world")))))
+
+(deftest string-trim
+  (testing "trim"
+    (is (= "hi" (str/trim "  hi  "))))
+  (testing "triml"
+    (is (= "hi  " (str/triml "  hi  "))))
+  (testing "trimr"
+    (is (= "  hi" (str/trimr "  hi  ")))))
+
+(deftest string-predicates
+  (testing "blank?"
+    (is (str/blank? ""))
+    (is (str/blank? "  "))
+    (is (str/blank? nil))
+    (is (not (str/blank? "x"))))
+  (testing "starts-with?"
+    (is (str/starts-with? "hello" "hel"))
+    (is (not (str/starts-with? "hello" "xyz"))))
+  (testing "ends-with?"
+    (is (str/ends-with? "hello" "llo"))
+    (is (not (str/ends-with? "hello" "xyz"))))
+  (testing "includes?"
+    (is (str/includes? "hello world" "world"))
+    (is (not (str/includes? "hello" "xyz")))))
+
+(deftest string-transform
+  (testing "replace"
+    (is (= "foo baz" (str/replace "foo bar" "bar" "baz"))))
+  (testing "reverse"
+    (is (= "edcba" (str/reverse "abcde"))))
+  (testing "subs"
+    (is (= "llo" (str/subs "hello" 2)))
+    (is (= "ell" (str/subs "hello" 1 4)))))

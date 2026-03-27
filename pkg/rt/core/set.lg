@@ -1,0 +1,61 @@
+;; clojure.set equivalent — set utility functions
+(ns set)
+
+(defn union
+  ([] #{})
+  ([s1] s1)
+  ([s1 s2]
+   (reduce conj s1 s2))
+  ([s1 s2 & sets]
+   (reduce union (union s1 s2) sets)))
+
+(defn difference
+  ([s1] s1)
+  ([s1 s2]
+   (if (< (count s1) (count s2))
+     (reduce (fn [result item]
+               (if (contains? s2 item)
+                 (disj result item)
+                 result))
+             s1 s1)
+     (reduce disj s1 s2)))
+  ([s1 s2 & sets]
+   (reduce difference s1 (conj sets s2))))
+
+(defn intersection
+  ([s1] s1)
+  ([s1 s2]
+   (if (< (count s2) (count s1))
+     (recur s2 s1)
+     (reduce (fn [result item]
+               (if (contains? s2 item)
+                 result
+                 (disj result item)))
+             s1 (seq s1)))))
+
+(defn subset? [s1 s2]
+  (and (<= (count s1) (count s2))
+       (every? #(contains? s2 %) s1)))
+
+(defn superset? [s1 s2]
+  (subset? s2 s1))
+
+(defn select [pred s]
+  (reduce (fn [result item]
+            (if (pred item)
+              result
+              (disj result item)))
+          s s))
+
+(defn project [rel ks]
+  (set (map #(select-keys % ks) rel)))
+
+(defn rename-keys [m kmap]
+  (reduce (fn [m [old new]]
+            (if (contains? m old)
+              (assoc (dissoc m old) new (get m old))
+              m))
+          m kmap))
+
+(defn map-invert [m]
+  (reduce (fn [acc [k v]] (assoc acc v k)) {} m))

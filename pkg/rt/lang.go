@@ -1812,6 +1812,107 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
+	// String utility builtins (for string namespace)
+	trimf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("trim expected String")
+		}
+		return vm.String(strings.TrimSpace(string(s))), nil
+	})
+
+	trimlf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("triml expected String")
+		}
+		return vm.String(strings.TrimLeft(string(s), " \t\n\r")), nil
+	})
+
+	trimrf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("trimr expected String")
+		}
+		return vm.String(strings.TrimRight(string(s), " \t\n\r")), nil
+	})
+
+	upperCase, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("upper-case expected String")
+		}
+		return vm.String(strings.ToUpper(string(s))), nil
+	})
+
+	lowerCase, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("lower-case expected String")
+		}
+		return vm.String(strings.ToLower(string(s))), nil
+	})
+
+	startsWith, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("starts-with? expected String")
+		}
+		p, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("starts-with? expected String prefix")
+		}
+		return vm.Boolean(strings.HasPrefix(string(s), string(p))), nil
+	})
+
+	endsWith, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("ends-with? expected String")
+		}
+		p, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("ends-with? expected String suffix")
+		}
+		return vm.Boolean(strings.HasSuffix(string(s), string(p))), nil
+	})
+
+	includesStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("includes? expected String")
+		}
+		p, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("includes? expected String substr")
+		}
+		return vm.Boolean(strings.Contains(string(s), string(p))), nil
+	})
+
 	// subs: substring
 	subs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
@@ -2701,6 +2802,14 @@ func installLangNS() {
 	// namespace utilities
 	ns.Def("refer-list", referList)
 	ns.Def("refer", refer)
+	ns.Def("trim", trimf)
+	ns.Def("triml", trimlf)
+	ns.Def("trimr", trimrf)
+	ns.Def("upper-case", upperCase)
+	ns.Def("lower-case", lowerCase)
+	ns.Def("starts-with?", startsWith)
+	ns.Def("ends-with?", endsWith)
+	ns.Def("includes?", includesStr)
 	ns.Def("subs", subs)
 	ns.Def("format", formatf)
 	ns.Def("rand", randf)

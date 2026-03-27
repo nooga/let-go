@@ -1,0 +1,39 @@
+;; Tests for set namespace
+(ns test.set-ns-test
+  (:require [test :refer :all]
+            [set :as s]))
+
+(deftest set-union
+  (testing "union of two sets"
+    (is (= #{1 2 3 4} (s/union #{1 2} #{3 4}))))
+  (testing "union of empty"
+    (is (= #{1 2} (s/union #{1 2} #{})))))
+
+(deftest set-difference
+  (testing "difference"
+    (is (= #{1 3} (s/difference #{1 2 3} #{2}))))
+  (testing "difference with multiple"
+    (is (= #{1} (s/difference #{1 2 3} #{2} #{3})))))
+
+(deftest set-intersection
+  (testing "intersection"
+    (is (= #{2 3} (s/intersection #{1 2 3} #{2 3 4})))))
+
+(deftest set-predicates
+  (testing "subset?"
+    (is (s/subset? #{1 2} #{1 2 3}))
+    (is (not (s/subset? #{1 4} #{1 2 3}))))
+  (testing "superset?"
+    (is (s/superset? #{1 2 3} #{1 2}))
+    (is (not (s/superset? #{1 2} #{1 2 3})))))
+
+(deftest set-utilities
+  (testing "rename-keys"
+    (let [m (s/rename-keys {:a 1 :b 2} {:a :x})]
+      (is (= 1 (:x m)))
+      (is (= 2 (:b m)))
+      (is (nil? (:a m)))))
+  (testing "map-invert"
+    (let [m (s/map-invert {:a 1 :b 2})]
+      (is (= :a (get m 1)))
+      (is (= :b (get m 2))))))
