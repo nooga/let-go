@@ -542,14 +542,16 @@ func (m *PersistentMap) Empty() Collection {
 }
 
 func (m *PersistentMap) Conj(value Value) Collection {
-	if value.Type() != ArrayVectorType {
-		return m
+	if av, ok := value.(ArrayVector); ok && len(av) == 2 {
+		return m.Assoc(av[0], av[1]).(*PersistentMap)
 	}
-	v := value.(ArrayVector)
-	if len(v) != 2 {
-		return m
+	// Handle PersistentVector or any 2-element collection with Lookup
+	if l, ok := value.(Lookup); ok {
+		if c, ok := value.(Counted); ok && c.RawCount() == 2 {
+			return m.Assoc(l.ValueAt(Int(0)), l.ValueAt(Int(1))).(*PersistentMap)
+		}
 	}
-	return m.Assoc(v[0], v[1]).(*PersistentMap)
+	return m
 }
 
 // --- Associative interface ---

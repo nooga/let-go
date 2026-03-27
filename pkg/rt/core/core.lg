@@ -1034,6 +1034,11 @@
         i
         (recur (inc i) (next s))))))
 
+(defn sort-by
+  ([keyfn coll] (sort-by keyfn lt coll))
+  ([keyfn comp coll]
+   (sort (fn [a b] (comp (keyfn a) (keyfn b))) coll)))
+
 (defn str-join
   ([coll] (apply str coll))
   ([sep coll] (apply str (interpose sep coll))))

@@ -84,6 +84,12 @@ func (t *TransientMap) Conj(value Value) (*TransientMap, error) {
 	if av, ok := value.(ArrayVector); ok && len(av) == 2 {
 		return t.Assoc(av[0], av[1])
 	}
+	// Handle PersistentVector or any 2-element vector/seq
+	if l, ok := value.(Lookup); ok {
+		if c, ok := value.(Counted); ok && c.RawCount() == 2 {
+			return t.Assoc(l.ValueAt(Int(0)), l.ValueAt(Int(1)))
+		}
+	}
 	return nil, fmt.Errorf("conj! on transient map expects [key val] pair")
 }
 
