@@ -1377,6 +1377,41 @@ func installLangNS() {
 		return at.Reset(vs[1]), nil
 	})
 
+	// swap-vals!: like swap! but returns [old new]
+	swapVals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		at, ok := vs[0].(*vm.Atom)
+		if !ok {
+			return vm.NIL, fmt.Errorf("swap-vals! expected Atom")
+		}
+		fn, ok := vs[1].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("swap-vals! expected Fn")
+		}
+		old := at.Deref()
+		newVal, err := at.Swap(fn, vs[2:])
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.ArrayVector{old, newVal}, nil
+	})
+
+	// reset-vals!: like reset! but returns [old new]
+	resetVals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		at, ok := vs[0].(*vm.Atom)
+		if !ok {
+			return vm.NIL, fmt.Errorf("reset-vals! expected Atom")
+		}
+		old := at.Deref()
+		at.Reset(vs[1])
+		return vm.ArrayVector{old, vs[1]}, nil
+	})
+
 	gof, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -2427,6 +2462,8 @@ func installLangNS() {
 	ns.Def("atom", atom)
 	ns.Def("reset!", reset)
 	ns.Def("swap!", swap)
+	ns.Def("swap-vals!", swapVals)
+	ns.Def("reset-vals!", resetVals)
 
 	// FIXME move this later outside the core
 	ns.Def("now", now)

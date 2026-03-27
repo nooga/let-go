@@ -1,0 +1,67 @@
+;; Comprehensive async/concurrency tests
+(ns test.async-comprehensive
+  (:require [test :refer :all]))
+
+(deftest go-block-return-value
+  (testing "go block returns value via channel"
+    (let [c (go (+ 1 2))]
+      (is (= 3 (<! c))))))
+
+(deftest channel-send-receive
+  (testing "basic channel send and receive"
+    (let [c (chan)]
+      (go (>! c 42))
+      (is (= 42 (<! c))))))
+
+(deftest channel-multiple-values
+  (testing "send and receive multiple values"
+    (let [c (chan)]
+      (go (>! c 1) (>! c 2) (>! c 3))
+      (is (= 1 (<! c)))
+      (is (= 2 (<! c)))
+      (is (= 3 (<! c))))))
+
+(deftest concurrent-atom-increment
+  (testing "10 goroutines each incrementing 100 times"
+    (let [a (atom 0)
+          n 100
+          done (atom 0)]
+      (dotimes [_ 10]
+        (go (dotimes [_ n] (swap! a inc))
+            (swap! done inc)))
+      ;; Spin-wait for completion
+      (while (< @done 10) nil)
+      (is (= 1000 @a)))))
+
+(deftest concurrent-atom-contention
+  (testing "concurrent inc and dec balance out"
+    (let [a (atom 0)
+          n 100
+          done (atom 0)]
+      (dotimes [_ 5]
+        (go (dotimes [_ n] (swap! a inc))
+            (swap! done inc)))
+      (dotimes [_ 5]
+        (go (dotimes [_ n] (swap! a dec))
+            (swap! done inc)))
+      (while (< @done 10) nil)
+      (is (= 0 @a)))))
+
+(deftest go-block-with-closures
+  (testing "go block captures closure variables"
+    (let [results (atom [])
+          done (atom 0)]
+      (dotimes [i 5]
+        (go (swap! results conj (* i i))
+            (swap! done inc)))
+      (while (< @done 5) nil)
+      (is (= 5 (count @results)))
+      ;; All squares 0-4 should be present (order may vary)
+      (is (= #{0 1 4 9 16} (set @results))))))
+
+(deftest swap-vals-concurrent
+  (testing "swap-vals! returns old and new under concurrency"
+    (let [a (atom 0)
+          result (swap-vals! a inc)]
+      (is (= [0 1] result))
+      (is (= 1 @a)))))
