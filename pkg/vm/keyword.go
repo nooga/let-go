@@ -35,6 +35,9 @@ var KeywordType *theKeywordType = &theKeywordType{zero: "????BADKeyword????"}
 // Keyword is boxed int
 type Keyword string
 
+// Hash implements Hashable for fast map lookups.
+func (l Keyword) Hash() uint32 { return hashString(string(l)) ^ 0x9e3779b9 }
+
 // Type implements Value
 func (l Keyword) Type() ValueType { return KeywordType }
 

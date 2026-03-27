@@ -8,6 +8,7 @@ package vm
 import (
 	"reflect"
 	"strconv"
+	"unsafe"
 )
 
 type theFloatType struct {
@@ -33,6 +34,12 @@ var FloatType *theFloatType = &theFloatType{zero: 0}
 
 // Float is boxed float64
 type Float float64
+
+// Hash implements Hashable.
+func (l Float) Hash() uint32 {
+	f := float64(l)
+	return hashUint64(*(*uint64)(unsafe.Pointer(&f)))
+}
 
 // Type implements Value
 func (l Float) Type() ValueType { return FloatType }

@@ -50,6 +50,9 @@ func (l String) Empty() Collection {
 	return String("")
 }
 
+// Hash implements Hashable for fast map lookups.
+func (l String) Hash() uint32 { return hashString(string(l)) }
+
 // Type implements Value
 func (l String) Type() ValueType { return StringType }
 

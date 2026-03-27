@@ -34,6 +34,9 @@ var IntType *theIntType = &theIntType{zero: 0}
 // Int is boxed int
 type Int int
 
+// Hash implements Hashable.
+func (l Int) Hash() uint32 { return hashUint64(uint64(l)) }
+
 // Type implements Value
 func (l Int) Type() ValueType { return IntType }
 
