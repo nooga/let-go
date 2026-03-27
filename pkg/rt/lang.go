@@ -428,33 +428,7 @@ func installLangNS() {
 		return vm.NumAbs(vs[0])
 	})
 
-	and, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		var ret vm.Value = vm.TRUE
-		if len(vs) == 1 {
-			return vs[0], nil
-		}
-		for i := range vs {
-			if !vm.IsTruthy(vs[i]) {
-				return vs[i], nil
-			}
-			ret = vs[i]
-		}
-		return ret, nil
-	})
-
-	or, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		var ret vm.Value = vm.NIL
-		if len(vs) == 1 {
-			return vs[0], nil
-		}
-		for i := range vs {
-			if vm.IsTruthy(vs[i]) {
-				return vs[i], nil
-			}
-			ret = vs[i]
-		}
-		return ret, nil
-	})
+	// and/or are now short-circuiting macros defined in core.lg
 
 	not, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -2262,8 +2236,9 @@ func installLangNS() {
 	ns.Def("mod", mod)
 	ns.Def("abs", abs)
 
-	ns.Def("and", and)
-	ns.Def("or", or)
+	// and/or are now macros in core.lg (short-circuiting)
+	// ns.Def("and", and)
+	// ns.Def("or", or)
 	ns.Def("not", not)
 
 	ns.Def("set-macro!", setMacro)
