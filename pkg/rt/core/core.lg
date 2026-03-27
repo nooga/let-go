@@ -37,6 +37,21 @@
 (defmacro if-not [condition & forms]
   (list 'if condition (first (next forms)) (first forms)))
 
+;; Short-circuiting and/or (must be macros, not functions)
+(defmacro and
+  ([] true)
+  ([x] x)
+  ([x & more]
+   (list 'let ['and__x x]
+         (list 'if 'and__x (cons 'and more) 'and__x))))
+
+(defmacro or
+  ([] nil)
+  ([x] x)
+  ([x & more]
+   (list 'let ['or__x x]
+         (list 'if 'or__x 'or__x (cons 'or more)))))
+
 (defn empty? [xs] (= 0 (count xs)))
 
 (defn concat-list [a b]
@@ -285,15 +300,29 @@
           :else (recur (next e) (inc i) (conj o x (list 'nth n i))))))))
 
 (defn ^:private destructure-map [n m]
-  (let [gs (reduce (fn [a x] (conj a (first x) (list 'get n (second x))))
+  (let [defaults (:or m)
+        ;; Helper: generate (get n key) or (get n key default) based on :or
+        get-with-default (fn [sym key]
+                           (if defaults
+                             (if (contains? defaults sym)
+                               (list 'get n key (get defaults sym))
+                               (list 'get n key))
+                             (list 'get n key)))
+        ;; Explicit key-value bindings {a :x b :y}
+        gs (reduce (fn [a x] (conj a (first x) (get-with-default (first x) (second x))))
                    []
-                   (map identity (dissoc m :keys :as))) ; ugly hax to get away with reducing empty map, fix reduce 
-        rs (if (:as m)
-             (conj gs (:as m) n)
-             gs)]
-    (destructure* (if (:keys m)
-                    (reduce (fn [a x] (conj a x (list 'get n (keyword x)))) rs (:keys m))
-                    rs))))
+                   (map identity (dissoc m :keys :strs :as :or)))
+        ;; :as binding
+        rs (if (:as m) (conj gs (:as m) n) gs)
+        ;; :keys binding — keyword keys
+        rs (if (:keys m)
+             (reduce (fn [a x] (conj a x (get-with-default x (keyword x)))) rs (:keys m))
+             rs)
+        ;; :strs binding — string keys
+        rs (if (:strs m)
+             (reduce (fn [a x] (conj a x (get-with-default x (str x)))) rs (:strs m))
+             rs)]
+    (destructure* rs)))
 
 (defn ^:private destructure [binds]
   (loop [b binds o [] ob []]
@@ -818,12 +847,12 @@
 ;; nth is a native Go builtin
 
 (defmacro doseq [bind & body]
-  (let [sym (first bind)
+  (let [binding (first bind)
         coll (second bind)]
     `(let [s# (seq ~coll)]
        (loop [s__# s#]
          (when s__#
-           (let [~sym (first s__#)]
+           (let [~binding (first s__#)]
              ~@body
              (recur (next s__#))))))))
 
