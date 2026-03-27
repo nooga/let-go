@@ -10,6 +10,7 @@ import (
 	"math/bits"
 	"reflect"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -71,6 +72,7 @@ func hmapIndex(bitmap uint32, bit uint32) int {
 type hmapBitmapNode struct {
 	bitmap uint32
 	array  []interface{} // pairs: [key-or-nil, val-or-child, ...]
+	edit   *atomic.Bool  // non-nil for transient-owned nodes
 	// If array[2*i] == nil, then array[2*i+1] is an hmapNode child.
 	// If array[2*i] != nil, then array[2*i] is key and array[2*i+1] is value.
 }
@@ -214,6 +216,96 @@ func (n *hmapBitmapNode) cloneAndSet2(i int, a interface{}, j int, b interface{}
 	newArray[i] = a
 	newArray[j] = b
 	return &hmapBitmapNode{bitmap: n.bitmap, array: newArray}
+}
+
+// editAndSet mutates in place if this node is owned by the given edit token,
+// otherwise clones and sets.
+func (n *hmapBitmapNode) editAndSet(edit *atomic.Bool, i int, val interface{}) *hmapBitmapNode {
+	if n.edit == edit {
+		n.array[i] = val
+		return n
+	}
+	return n.cloneAndSet(i, val)
+}
+
+func (n *hmapBitmapNode) editAndSet2(edit *atomic.Bool, i int, a interface{}, j int, b interface{}) *hmapBitmapNode {
+	if n.edit == edit {
+		n.array[i] = a
+		n.array[j] = b
+		return n
+	}
+	return n.cloneAndSet2(i, a, j, b)
+}
+
+// ensureEditable returns n if already owned by edit, otherwise a mutable clone.
+func (n *hmapBitmapNode) ensureEditable(edit *atomic.Bool) *hmapBitmapNode {
+	if n.edit == edit {
+		return n
+	}
+	nEntries := bits.OnesCount32(n.bitmap)
+	// Allocate with room to grow (avoid frequent realloc during transient batch ops)
+	newLen := 2 * (nEntries + 1)
+	if newLen < len(n.array) {
+		newLen = len(n.array)
+	}
+	newArray := make([]interface{}, newLen)
+	copy(newArray, n.array)
+	return &hmapBitmapNode{bitmap: n.bitmap, array: newArray[:len(n.array)], edit: edit}
+}
+
+// assocTransient is like assoc but mutates in place when the node is owned.
+func (n *hmapBitmapNode) assocTransient(edit *atomic.Bool, shift uint, hash uint32, key Value, val Value, addedLeaf *bool) *hmapBitmapNode {
+	bit := hmapBitpos(hash, shift)
+	idx := hmapIndex(n.bitmap, bit)
+
+	if n.bitmap&bit != 0 {
+		keyOrNil := n.array[2*idx]
+		valOrNode := n.array[2*idx+1]
+
+		if keyOrNil == nil {
+			child := valOrNode.(hmapNode)
+			var newChild hmapNode
+			if bn, ok := child.(*hmapBitmapNode); ok {
+				newChild = bn.assocTransient(edit, shift+hmapShift, hash, key, val, addedLeaf)
+			} else {
+				newChild = child.assoc(shift+hmapShift, hash, key, val, addedLeaf)
+			}
+			if newChild == child {
+				return n
+			}
+			return n.editAndSet(edit, 2*idx+1, newChild)
+		}
+
+		existingKey := keyOrNil.(Value)
+		if valueEquiv(key, existingKey) {
+			existingVal := valOrNode.(Value)
+			if valueEquiv(existingVal, val) {
+				return n
+			}
+			return n.editAndSet(edit, 2*idx+1, val)
+		}
+
+		*addedLeaf = true
+		existingHash := hashValue(existingKey)
+		editable := n.ensureEditable(edit)
+		editable.array[2*idx] = nil
+		editable.array[2*idx+1] = createNode(shift+hmapShift, existingHash, existingKey, valOrNode.(Value), hash, key, val)
+		return editable
+	}
+
+	// New entry — expand
+	*addedLeaf = true
+	nEntries := bits.OnesCount32(n.bitmap)
+	editable := n.ensureEditable(edit)
+	// Need to grow the array
+	newArray := make([]interface{}, 2*(nEntries+1))
+	copy(newArray, editable.array[:2*idx])
+	newArray[2*idx] = key
+	newArray[2*idx+1] = val
+	copy(newArray[2*(idx+1):], editable.array[2*idx:2*nEntries])
+	editable.array = newArray
+	editable.bitmap = n.bitmap | bit
+	return editable
 }
 
 func (n *hmapBitmapNode) removePair(idx int) *hmapBitmapNode {

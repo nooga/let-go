@@ -1,0 +1,75 @@
+;; Tests for transients
+(ns test.transient-test
+  (:require [test :refer :all]))
+
+(deftest transient-map-basic
+  (testing "transient map assoc! and persistent!"
+    (let [t (transient {})
+          t (assoc! t :a 1)
+          t (assoc! t :b 2)
+          m (persistent! t)]
+      (is (= {:a 1 :b 2} m))
+      (is (= 2 (count m))))))
+
+(deftest transient-map-conj
+  (testing "conj! on transient map"
+    (let [t (transient {})
+          t (conj! t [:a 1])
+          t (conj! t [:b 2])
+          m (persistent! t)]
+      (is (= 1 (:a m)))
+      (is (= 2 (:b m))))))
+
+(deftest transient-vector-basic
+  (testing "transient vector conj! and persistent!"
+    (let [t (transient [])
+          t (conj! t 1)
+          t (conj! t 2)
+          t (conj! t 3)
+          v (persistent! t)]
+      (is (= [1 2 3] v)))))
+
+(deftest transient-error-after-persistent
+  (testing "error when using transient after persistent!"
+    (try
+      (let [t (transient {})]
+        (persistent! t)
+        (assoc! t :x 1)
+        (is false))  ;; should not reach here
+      (catch e
+        (is (= "transient used after persistent! call" (ex-message e)))))))
+
+(deftest into-uses-transients
+  (testing "into map from seq of pairs"
+    (let [m (into {} (map (fn [x] [x (* x x)]) (range 5)))]
+      (is (= 5 (count m)))
+      (is (= 0 (get m 0)))
+      (is (= 16 (get m 4)))))
+
+  (testing "into vector from range"
+    (let [v (into [] (range 5))]
+      (is (= [0 1 2 3 4] v))))
+
+  (testing "into existing map"
+    (let [m (into {:a 1} {:b 2 :c 3})]
+      (is (= 1 (:a m)))
+      (is (= 2 (:b m)))
+      (is (= 3 (:c m))))))
+
+(deftest transient-map-dissoc
+  (testing "dissoc! on transient map"
+    (let [t (transient {:a 1 :b 2 :c 3})
+          t (dissoc! t :b)
+          m (persistent! t)]
+      (is (= 2 (count m)))
+      (is (= 1 (:a m)))
+      (is (nil? (:b m)))
+      (is (= 3 (:c m))))))
+
+(deftest transient-map-overwrite
+  (testing "assoc! overwrites existing key"
+    (let [t (transient {:a 1})
+          t (assoc! t :a 42)
+          m (persistent! t)]
+      (is (= 42 (:a m)))
+      (is (= 1 (count m))))))

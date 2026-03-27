@@ -1981,6 +1981,116 @@ func installLangNS() {
 		return vm.NewArrayVector(vals), nil
 	})
 
+	// transient: create a transient (mutable) version of a persistent collection
+	transientf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case *vm.PersistentMap:
+			return vm.NewTransientMap(v), nil
+		case vm.ArrayVector:
+			return vm.NewTransientVector([]vm.Value(v)), nil
+		case vm.PersistentVector:
+			vals := v.Unbox().([]vm.Value)
+			return vm.NewTransientVector(vals), nil
+		default:
+			return vm.NIL, fmt.Errorf("transient not supported on %s", vs[0].Type().Name())
+		}
+	})
+
+	// persistent!: freeze a transient back to a persistent collection
+	persistentf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case *vm.TransientMap:
+			return v.Persistent(), nil
+		case *vm.TransientVector:
+			return v.Persistent(), nil
+		default:
+			return vm.NIL, fmt.Errorf("persistent! not supported on %s", vs[0].Type().Name())
+		}
+	})
+
+	// conj!: mutating conj on a transient
+	conjBang, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch t := vs[0].(type) {
+		case *vm.TransientMap:
+			var err error
+			for i := 1; i < len(vs); i++ {
+				t, err = t.Conj(vs[i])
+				if err != nil {
+					return vm.NIL, err
+				}
+			}
+			return t, nil
+		case *vm.TransientVector:
+			var err error
+			for i := 1; i < len(vs); i++ {
+				t, err = t.Conj(vs[i])
+				if err != nil {
+					return vm.NIL, err
+				}
+			}
+			return t, nil
+		default:
+			return vm.NIL, fmt.Errorf("conj! not supported on %s", vs[0].Type().Name())
+		}
+	})
+
+	// assoc!: mutating assoc on a transient
+	assocBang, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 3 || len(vs)%2 == 0 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch t := vs[0].(type) {
+		case *vm.TransientMap:
+			var err error
+			for i := 1; i < len(vs); i += 2 {
+				t, err = t.Assoc(vs[i], vs[i+1])
+				if err != nil {
+					return vm.NIL, err
+				}
+			}
+			return t, nil
+		case *vm.TransientVector:
+			var err error
+			for i := 1; i < len(vs); i += 2 {
+				t, err = t.Assoc(vs[i], vs[i+1])
+				if err != nil {
+					return vm.NIL, err
+				}
+			}
+			return t, nil
+		default:
+			return vm.NIL, fmt.Errorf("assoc! not supported on %s", vs[0].Type().Name())
+		}
+	})
+
+	// dissoc!: mutating dissoc on a transient map
+	dissocBang, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		t, ok := vs[0].(*vm.TransientMap)
+		if !ok {
+			return vm.NIL, fmt.Errorf("dissoc! expected TransientMap")
+		}
+		var err error
+		for i := 1; i < len(vs); i++ {
+			t, err = t.Dissoc(vs[i])
+			if err != nil {
+				return vm.NIL, err
+			}
+		}
+		return t, nil
+	})
+
 	// make-record-type: create a RecordType with name and field keywords
 	makeRecordType, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
@@ -2601,6 +2711,11 @@ func installLangNS() {
 	ns.Def("rand-int", randInt)
 	ns.Def("rand-nth", randNth)
 	ns.Def("shuffle", shuffle)
+	ns.Def("transient", transientf)
+	ns.Def("persistent!", persistentf)
+	ns.Def("conj!", conjBang)
+	ns.Def("assoc!", assocBang)
+	ns.Def("dissoc!", dissocBang)
 	ns.Def("make-record-type", makeRecordType)
 	ns.Def("make-record", makeRecord)
 	ns.Def("record?", isRecord)
