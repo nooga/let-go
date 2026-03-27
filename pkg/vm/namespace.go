@@ -62,6 +62,8 @@ func NewNamespace(name string) *Namespace {
 	}
 }
 
+func (n *Namespace) RegistrySize() int { return len(n.registry) }
+
 func (n *Namespace) Def(name string, val Value) *Var {
 	s := Symbol(name)
 	va := NewVar(n, n.name, name)
@@ -114,7 +116,6 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 		// fmt.Printf("[ns.Lookup %s] alias hit alias=%q -> target=%s, sym=%q\n", n.name, string(sns.(Symbol)), target.name, string(sym.(Symbol)))
 		v := target.registry[sym.(Symbol)]
 		if v == nil || v.isPrivate {
-			// fmt.Printf("[ns.Lookup %s] alias target missing/private sym=%q -> NIL\n", n.name, string(sym.(Symbol)))
 			return NIL
 		}
 		// fmt.Printf("[ns.Lookup %s] alias resolved sym=%q -> %s/%s\n", n.name, string(sym.(Symbol)), v.ns, v.name)

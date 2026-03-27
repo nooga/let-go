@@ -34,10 +34,11 @@ func (r *NSResolver) loadFile(path string) *vm.Namespace {
 	freshCtx := compiler.NewCompiler(r.ctx.Consts(), ons)
 	freshCtx.SetSource(path)
 	_, _, err = freshCtx.CompileMultiple(f)
+	nns := freshCtx.CurrentNS()
+	r.ctx.SetCurrentNS(ons)
 	if err != nil {
 		return nil
 	}
-	nns := freshCtx.CurrentNS()
 	return nns
 }
 
@@ -81,6 +82,12 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 		src = rt.StringSrc
 	case "set":
 		src = rt.SetSrc
+	case "pprint":
+		src = rt.PprintSrc
+	case "edn":
+		src = rt.EdnSrc
+	case "io":
+		src = rt.IoSrc
 	default:
 		return nil
 	}
@@ -89,15 +96,16 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 	}
 	r.cloading[name] = true
 	defer delete(r.cloading, name)
-	// Use a fresh compiler context to avoid corrupting the caller's state
-	// when loading is triggered during compile-time macro expansion.
+	// Save and restore CurrentNS — loading changes the global CurrentNS var
 	ons := r.ctx.CurrentNS()
 	freshCtx := compiler.NewCompiler(r.ctx.Consts(), ons)
 	freshCtx.SetSource("<embedded:" + name + ">")
 	_, _, err := freshCtx.CompileMultiple(stdstrings.NewReader(src))
+	nns := freshCtx.CurrentNS()
+	// Restore the caller's namespace
+	r.ctx.SetCurrentNS(ons)
 	if err != nil {
 		return nil
 	}
-	nns := freshCtx.CurrentNS()
 	return nns
 }

@@ -1,0 +1,14 @@
+;; io — file I/O utilities
+(ns io)
+
+(defn read-lines
+  [path]
+  (lines (slurp path)))
+
+(defn write-lines
+  [path lines]
+  (spit path (str-join "\n" lines)))
+
+(defn slurp-lines
+  [path]
+  (vec (read-lines path)))

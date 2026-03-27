@@ -1253,6 +1253,26 @@ func doCompiler(c *Context, form vm.Value) error {
 						}
 					}
 				}
+				// (use 'ns) — load namespace and refer all at compile time
+				if fname == vm.Symbol("use") {
+					uArgs := lst.Next()
+					for uArgs != nil {
+						qa := uArgs.First()
+						if qa.Type() == vm.ListType {
+							qq := qa.(vm.Seq)
+							if qq.First() == vm.Symbol("quote") {
+								qqN := qq.Next()
+								if qqN != nil {
+									nsname := qqN.First().(vm.Symbol)
+									if target := rt.NS(string(nsname)); target != nil {
+										c.CurrentNS().Refer(target, "", true)
+									}
+								}
+							}
+						}
+						uArgs = uArgs.Next()
+					}
+				}
 			}
 		}
 		if tc && i == l-1 {

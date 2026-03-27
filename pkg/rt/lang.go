@@ -83,6 +83,10 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 			return n
 		}
 	}
+	// Check if loading side-effected the registry (in-ns during load creates the ns)
+	if e := nsRegistry[name]; e != nil {
+		return e
+	}
 	nsRegistry[name] = vm.NewNamespace(name)
 	nsRegistry[name].Refer(CoreNS, "", true)
 	return nsRegistry[name]
@@ -1783,6 +1787,9 @@ func installLangNS() {
 		n, ok := vs[0].(vm.Int)
 		if !ok {
 			return vm.NIL, fmt.Errorf("repeat expected an Int")
+		}
+		if int(n) <= 0 {
+			return vm.EmptyList, nil
 		}
 		return vm.NewRepeat(vs[1], int(n)), nil
 	})
