@@ -110,7 +110,6 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 
 // nolint
 func installHttpNS() {
-	// FIXME, this should box the function directly
 	handle, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fnm := vs[1].Unbox().(func(interface{}))
 		var fn func(w http.ResponseWriter, r *http.Request) interface{}

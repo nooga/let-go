@@ -29,7 +29,7 @@ func (v *Var) Invoke(values []Value) (Value, error) {
 func (v *Var) Arity() int {
 	f, ok := v.root.(Fn)
 	if !ok {
-		return 0 // FIXME this should be an error
+		return 0
 	}
 	return f.Arity()
 }

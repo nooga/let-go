@@ -158,7 +158,7 @@ func appendNonVoid(r *LispReader, vs []vm.Value, v vm.Value) []vm.Value {
 	if r.splicing {
 		seq, ok := v.(vm.Seq)
 		if !ok {
-			return vs //FIXME this should scream
+			return vs
 		}
 		for seq != vm.EmptyList {
 			vs = append(vs, seq.First())
@@ -722,7 +722,6 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 			}
 			return ret, nil
 		}
-		// FIXME: the following is wrong, it should resolve symbol in NS
 		ret, err := vm.ListType.Box([]vm.Value{vm.Symbol("quote"), form})
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "boxing syntax-quoted special form").Wrap(err)

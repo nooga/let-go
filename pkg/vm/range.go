@@ -24,11 +24,19 @@ func (t *theRangeType) Box(bare interface{}) (Value, error) {
 // RangeType is the type of Lists
 var RangeType *theRangeType = &theRangeType{}
 
-// Range is boxed singly linked list that can hold other Values.
+// Range is a lazy integer sequence with start, end, and step.
 type Range struct {
 	start int
 	end   int
 	step  int
+}
+
+// inBounds reports whether val is within [start, end) respecting step direction.
+func (l *Range) inBounds(val int) bool {
+	if l.step > 0 {
+		return val < l.end
+	}
+	return val > l.end
 }
 
 // Type implements Value
@@ -47,7 +55,7 @@ func (l *Range) First() Value {
 // More implements Seq
 func (l *Range) More() Seq {
 	nexts := l.start + l.step
-	if nexts < l.end {
+	if l.inBounds(nexts) {
 		return &Range{nexts, l.end, l.step}
 	}
 	return EmptyList
@@ -56,7 +64,7 @@ func (l *Range) More() Seq {
 // Next implements Seq
 func (l *Range) Next() Seq {
 	nexts := l.start + l.step
-	if nexts < l.end {
+	if l.inBounds(nexts) {
 		return &Range{nexts, l.end, l.step}
 	}
 	return nil
@@ -64,10 +72,14 @@ func (l *Range) Next() Seq {
 
 func (l *Range) Seq() Seq {
 	var r Seq = EmptyList
-	n := l.end - l.start - 1
-	top := l.start + (n/l.step)*l.step
-	for i := top; i >= l.start; i -= l.step {
-		r = r.Cons(Int(i))
+	if l.step > 0 {
+		for i := l.start + (l.RawCount()-1)*l.step; l.inBounds(i) && i >= l.start; i -= l.step {
+			r = r.Cons(Int(i))
+		}
+	} else {
+		for i := l.start + (l.RawCount()-1)*l.step; l.inBounds(i) && i <= l.start; i -= l.step {
+			r = r.Cons(Int(i))
+		}
 	}
 	return r
 }
@@ -83,10 +95,19 @@ func (l *Range) Count() Value {
 }
 
 func (l *Range) RawCount() int {
-	if l.step == 1 {
-		return l.end - l.start
+	diff := l.end - l.start
+	if l.step == 1 || l.step == -1 {
+		if diff < 0 {
+			return -diff
+		}
+		return diff
 	}
-	return (l.end - l.start + 1) / l.step
+	// Integer ceiling division: (diff + step - sign(step)) / step
+	if l.step > 0 {
+		return (diff + l.step - 1) / l.step
+	}
+	// step < 0, diff < 0
+	return (diff + l.step + 1) / l.step
 }
 
 // Empty implements Collection
@@ -107,7 +128,6 @@ func (l *Range) ValueAt(key Value) Value {
 }
 
 func (l *Range) ValueAtOr(key Value, dflt Value) Value {
-	// FIXME: assumes positive step
 	if key == NIL {
 		return dflt
 	}
@@ -115,19 +135,23 @@ func (l *Range) ValueAtOr(key Value, dflt Value) Value {
 	if !ok {
 		return dflt
 	}
-	nth := l.start + int(numkey)*l.step
-	if nth <= l.end && nth >= l.start {
-		return Int(nth)
+	idx := int(numkey)
+	if idx < 0 || idx >= l.RawCount() {
+		return dflt
 	}
-	return dflt
+	return Int(l.start + idx*l.step)
 }
 
 func NewRange(start, end, step Int) Value {
-	// FIXME: Add support for negative step
-	if end > start && step > 0 {
-		return &Range{
-			int(start), int(end), int(step),
-		}
+	s, e, st := int(start), int(end), int(step)
+	if st == 0 {
+		return EmptyList
+	}
+	if st > 0 && e > s {
+		return &Range{s, e, st}
+	}
+	if st < 0 && e < s {
+		return &Range{s, e, st}
 	}
 	return EmptyList
 }

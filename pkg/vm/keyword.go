@@ -61,7 +61,6 @@ func (l Keyword) Invoke(pargs []Value) (Value, error) {
 	}
 	as, ok := pargs[0].(Lookup)
 	if !ok {
-		// FIXME return error
 		return NIL, fmt.Errorf("Keyword expected Lookup")
 	}
 	if vl == 1 {
@@ -78,7 +77,6 @@ func (l Keyword) Namespaced() (Value, Value) {
 	return NIL, Symbol(x[0])
 }
 
-// FIXME make it work the other way round
 func (l Keyword) Name() Value {
 	_, n := l.Namespaced()
 	if n == NIL {

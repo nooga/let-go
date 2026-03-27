@@ -88,7 +88,6 @@ func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 
 func (n *Namespace) Lookup(symbol Symbol) Value {
 	sns, sym := symbol.Namespaced()
-	// fmt.Printf("[ns.Lookup %s] symbol=%q sns=%v sym=%q\n", n.name, string(symbol), sns, string(sym.(Symbol)))
 	if sns == NIL {
 		v := n.registry[sym.(Symbol)]
 		if v == nil {
@@ -96,33 +95,26 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 				v = ref.ns.registry[sym.(Symbol)]
 				if v != nil {
 					if v.isPrivate {
-						// fmt.Printf("[ns.Lookup %s] found private via refers ns=%s sym=%q -> NIL\n", n.name, ref.ns.name, string(sym.(Symbol)))
 						return NIL
 					}
-					// fmt.Printf("[ns.Lookup %s] found via refers ns=%s sym=%q -> %s/%s\n", n.name, ref.ns.name, string(sym.(Symbol)), v.ns, v.name)
 					return v
 				}
 			}
 		}
 		if v == nil {
-			// fmt.Printf("[ns.Lookup %s] not found unqualified sym=%q -> NIL\n", n.name, string(sym.(Symbol)))
 			return NIL
 		}
-		// fmt.Printf("[ns.Lookup %s] found unqualified sym=%q -> %s/%s\n", n.name, string(sym.(Symbol)), v.ns, v.name)
 		return v
 	}
 	// Alias-qualified resolution via aliases
 	if target, ok := n.aliases[sns.(Symbol)]; ok {
-		// fmt.Printf("[ns.Lookup %s] alias hit alias=%q -> target=%s, sym=%q\n", n.name, string(sns.(Symbol)), target.name, string(sym.(Symbol)))
 		v := target.registry[sym.(Symbol)]
 		if v == nil || v.isPrivate {
 			return NIL
 		}
-		// fmt.Printf("[ns.Lookup %s] alias resolved sym=%q -> %s/%s\n", n.name, string(sym.(Symbol)), v.ns, v.name)
 		return v
 	}
 	// Fallback: direct namespace lookup from global registry
-	// This enables foo/x to work for any loaded namespace
 	if nsLookup != nil {
 		if target := nsLookup(string(sns.(Symbol))); target != nil {
 			v := target.registry[sym.(Symbol)]
@@ -133,26 +125,20 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 	}
 	// Fallback via refers
 	if refer, ok := n.refers[sns.(Symbol)]; ok {
-		// fmt.Printf("[ns.Lookup %s] refers hit name=%q -> target=%s, sym=%q\n", n.name, string(sns.(Symbol)), refer.ns.name, string(sym.(Symbol)))
 		v := refer.ns.registry[sym.(Symbol)]
 		if v == nil || v.isPrivate {
-			// fmt.Printf("[ns.Lookup %s] refers target missing/private sym=%q -> NIL\n", n.name, string(sym.(Symbol)))
 			return NIL
 		}
 		if !refer.all {
 			if refer.only == nil {
-				// fmt.Printf("[ns.Lookup %s] refers restricted but no allowlist for sym=%q -> NIL\n", n.name, string(sym.(Symbol)))
 				return NIL
 			}
 			if _, ok := refer.only[sym.(Symbol)]; !ok {
-				// fmt.Printf("[ns.Lookup %s] refers restricted, sym=%q not allowed -> NIL\n", n.name, string(sym.(Symbol)))
 				return NIL
 			}
 		}
-		// fmt.Printf("[ns.Lookup %s] refers resolved sym=%q -> %s/%s\n", n.name, string(sym.(Symbol)), v.ns, v.name)
 		return v
 	}
-	// fmt.Printf("[ns.Lookup %s] no match for qualified sym=%q/%q -> NIL\n", n.name, string(sns.(Symbol)), string(sym.(Symbol)))
 	return NIL
 }
 
@@ -184,7 +170,6 @@ func (n *Namespace) ReferList(ns *Namespace, symbols []Symbol) {
 // Alias creates a symbol alias to another namespace in this namespace.
 func (n *Namespace) Alias(alias Symbol, target *Namespace) {
 	n.aliases[alias] = target
-	// fmt.Printf("[ns.Alias %s] alias=%q -> target=%s\n", n.name, string(alias), target.name)
 }
 
 // ImportVar links a var from another namespace into this namespace under the given alias.

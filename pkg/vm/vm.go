@@ -686,7 +686,6 @@ func (f *Frame) Run() (Value, error) {
 
 		case OP_LOAD_CLOSEDOVER:
 			idx := f.code.code[f.ip+1]
-			// FIXME cache closedOvers count
 			if int(idx) >= len(f.closedOvers) {
 				return NIL, NewExecutionError("closed over lookup out of bounds")
 			}

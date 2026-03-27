@@ -20,7 +20,6 @@ func (t *theSetType) Unbox() interface{} { return reflect.TypeOf(t) }
 func (t *theSetType) Name() string { return "let-go.lang.Set" }
 
 func (t *theSetType) Box(bare interface{}) (Value, error) {
-	// FIXME make this work
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 

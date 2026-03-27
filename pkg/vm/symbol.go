@@ -61,7 +61,6 @@ func (l Symbol) Namespaced() (Value, Value) {
 	return NIL, Symbol(x[0])
 }
 
-// FIXME make it work the other way round
 func (l Symbol) Name() Value {
 	_, n := l.Namespaced()
 	if n == NIL {

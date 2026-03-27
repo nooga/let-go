@@ -106,7 +106,6 @@ func (t *theTypeType) Unbox() interface{} { return reflect.TypeOf(t) }
 
 func (t *theTypeType) Name() string { return "let-go.lang.Type" }
 func (t *theTypeType) Box(b interface{}) (Value, error) {
-	//FIXME this is probably not accurate
 	return NIL, NewTypeError(b, "can't be boxed as", t)
 }
 
@@ -137,20 +136,16 @@ func BoxValue(v reflect.Value) (Value, error) {
 		if v.IsNil() {
 			return NIL, nil
 		}
-		// FIXME check if this is how we should handle pointers
-		//return BoxValue(v.Elem())
+		// Wrap non-nil, non-Value pointers as opaque boxed values
 		if v.CanInterface() {
 			return NewBoxed(v.Interface()), nil
 		}
 		return NIL, NewTypeError(v, "is not boxable", nil)
 	case reflect.Slice, reflect.Array:
 		if v.IsNil() {
-			// FIXME not sure if maybe this has to be empty coll in let-go-land
 			return NIL, nil
 		}
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			// special case: convert []byte to string
-			// TODO: come up with a let-go representation of byte arrays
 			return String(v.Bytes()), nil
 		}
 		in := make([]Value, v.Len())
@@ -165,7 +160,6 @@ func BoxValue(v reflect.Value) (Value, error) {
 		return ArrayVector(in), nil
 	case reflect.Map:
 		if v.IsNil() {
-			// FIXME not sure if maybe this has to be empty coll in let-go-land
 			return NIL, nil
 		}
 		result := EmptyPersistentMap
@@ -173,12 +167,10 @@ func BoxValue(v reflect.Value) (Value, error) {
 		for iter.Next() {
 			k, err := BoxValue(iter.Key())
 			if err != nil {
-				return NIL, err //FIXME wrap
-			}
+				return NIL, err 			}
 			val, err := BoxValue(iter.Value())
 			if err != nil {
-				return NIL, err //FIXME wrap
-			}
+				return NIL, err 			}
 			result = result.Assoc(k, val).(*PersistentMap)
 		}
 		return result, nil
