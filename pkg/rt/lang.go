@@ -1933,6 +1933,51 @@ func installLangNS() {
 		return vm.NewArrayVector(vals), nil
 	})
 
+	// make-record-type: create a RecordType with name and field keywords
+	makeRecordType, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		name, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-record-type expected String name")
+		}
+		fields := make([]vm.Keyword, len(vs)-1)
+		for i := 1; i < len(vs); i++ {
+			kw, ok := vs[i].(vm.Keyword)
+			if !ok {
+				return vm.NIL, fmt.Errorf("make-record-type expected Keyword fields")
+			}
+			fields[i-1] = kw
+		}
+		return vm.NewRecordType(string(name), fields), nil
+	})
+
+	// make-record: create a Record from a RecordType and a map
+	makeRecord, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		rt, ok := vs[0].(*vm.RecordType)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-record expected RecordType")
+		}
+		m, ok := vs[1].(*vm.PersistentMap)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-record expected Map")
+		}
+		return vm.NewRecord(rt, m), nil
+	})
+
+	// record?: check if a value is a Record
+	isRecord, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		_, ok := vs[0].(*vm.Record)
+		return vm.Boolean(ok), nil
+	})
+
 	// defprotocol*: create a protocol (called by defprotocol macro)
 	defProtocol, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
@@ -2508,6 +2553,9 @@ func installLangNS() {
 	ns.Def("rand-int", randInt)
 	ns.Def("rand-nth", randNth)
 	ns.Def("shuffle", shuffle)
+	ns.Def("make-record-type", makeRecordType)
+	ns.Def("make-record", makeRecord)
+	ns.Def("record?", isRecord)
 	ns.Def("defprotocol*", defProtocol)
 	ns.Def("make-protocol-fn", makeProtocolFn)
 	ns.Def("extend-type*", extendType)
