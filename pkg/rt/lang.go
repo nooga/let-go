@@ -218,7 +218,10 @@ func valueEquals(a, b vm.Value) bool {
 		}
 		return true
 	default:
-		// For primitives, use Go equality
+		// Try Equals interface for types that implement it (PersistentVector, etc.)
+		if eq, ok := a.(interface{ Equals(vm.Value) bool }); ok {
+			return eq.Equals(b)
+		}
 		return a == b
 	}
 }
@@ -907,14 +910,16 @@ func installLangNS() {
 			if s == nil || s == vm.EmptyList {
 				return vm.EmptyList, nil
 			}
-			// Check for empty collection that implements Seq but has no elements
-			if coll, ok := vs[1].(vm.Collection); ok && coll.RawCount() == 0 {
-				return vm.EmptyList, nil
-			}
-			// eager path for small counted collections
+			// Eager fast path: small counted collections (≤32 elements)
+			// Skip RawCount for LazySeq/Cons — could be infinite
 			length := 0
-			if col, ok := vs[1].(vm.Collection); ok {
-				length = col.RawCount()
+			switch vs[1].(type) {
+			case *vm.LazySeq, *vm.Cons:
+				// Don't count — use lazy path
+			default:
+				if col, ok := vs[1].(vm.Counted); ok {
+					length = col.RawCount()
+				}
 			}
 			if length > 0 && length <= 32 {
 				newseq := make([]vm.Value, length)
@@ -937,9 +942,6 @@ func installLangNS() {
 		colls := vs[1:]
 		seqs := make([]vm.Seq, len(colls))
 		for i := range colls {
-			if coll, ok := colls[i].(vm.Collection); ok && coll.RawCount() == 0 {
-				return vm.EmptyList, nil
-			}
 			s, err := seqOf(colls[i])
 			if err != nil {
 				return vm.NIL, fmt.Errorf("map expected Sequable collection")
@@ -949,11 +951,16 @@ func installLangNS() {
 			}
 			seqs[i] = s
 		}
-		// Check if all collections are small and counted
+		// Check if all collections are small and counted (skip LazySeq/Cons)
 		minlen := math.MaxInt
 		allCounted := true
 		for i := range colls {
-			if coll, ok := colls[i].(vm.Collection); ok {
+			switch colls[i].(type) {
+			case *vm.LazySeq, *vm.Cons:
+				allCounted = false
+				continue
+			}
+			if coll, ok := colls[i].(vm.Counted); ok {
 				c := coll.RawCount()
 				if c < minlen {
 					minlen = c

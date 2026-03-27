@@ -1,0 +1,40 @@
+;; Metadata tests: with-meta, meta
+(ns test.metadata-test
+  (:require [test :refer :all]))
+
+(deftest meta-on-vector
+  (testing "with-meta and meta on vector"
+    (let [v (with-meta [1 2 3] {:tag :vec})]
+      (is (= {:tag :vec} (meta v)))
+      (is (= [1 2 3] v)))))
+
+(deftest meta-on-map
+  (testing "with-meta and meta on map"
+    (let [m (with-meta {:a 1} {:source "test"})]
+      (is (= {:source "test"} (meta m)))
+      (is (= {:a 1} m)))))
+
+(deftest meta-on-list
+  (testing "with-meta and meta on list"
+    (let [l (with-meta '(1 2 3) {:type :list})]
+      (is (= {:type :list} (meta l)))
+      (is (= '(1 2 3) l)))))
+
+(deftest meta-on-set
+  (testing "with-meta and meta on set"
+    (let [s (with-meta #{1 2 3} {:label :myset})]
+      (is (= {:label :myset} (meta s)))
+      (is (= #{1 2 3} s)))))
+
+(deftest meta-returns-nil-when-absent
+  (testing "meta returns nil when no metadata"
+    (is (nil? (meta [1 2 3])))
+    (is (nil? (meta {:a 1})))
+    (is (nil? (meta '(1 2 3))))
+    (is (nil? (meta nil)))))
+
+(deftest equality-ignores-metadata
+  (testing "equal values with different metadata are still equal"
+    (is (= [1 2] (with-meta [1 2] {:x 1})))
+    (is (= (with-meta [1 2] {:a 1}) (with-meta [1 2] {:b 2})))
+    (is (= {:a 1} (with-meta {:a 1} {:source "test"})))))

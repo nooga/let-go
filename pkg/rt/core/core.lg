@@ -131,7 +131,7 @@
 (defn symbol? [x] (= (type x) (type 'x)))
 (defn keyword? [x] (= (type x) (type :x)))
 (defn string? [x] (= (type x) (type "")))
-(defn number? [x] (= (type x) (type 0)))
+;; number? is a native builtin that handles Int and Float
 
 (defn empty? [x] (zero? (count x)))
 

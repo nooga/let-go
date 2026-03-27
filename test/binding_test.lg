@@ -1,0 +1,44 @@
+;; Dynamic binding tests
+(ns test.binding-test
+  (:require [test :refer :all]))
+
+(def ^:dynamic *x* 10)
+(def ^:dynamic *y* 20)
+
+(deftest basic-binding
+  (testing "binding changes dynamic var"
+    (is (= 10 *x*))
+    (binding [*x* 42]
+      (is (= 42 *x*)))
+    (is (= 10 *x*))))
+
+(deftest nested-binding
+  (testing "nested bindings restore correctly"
+    (is (= 10 *x*))
+    (binding [*x* 1]
+      (is (= 1 *x*))
+      (binding [*x* 2]
+        (is (= 2 *x*)))
+      (is (= 1 *x*)))
+    (is (= 10 *x*))))
+
+(deftest multiple-bindings
+  (testing "binding multiple vars"
+    (binding [*x* 100 *y* 200]
+      (is (= 100 *x*))
+      (is (= 200 *y*)))
+    (is (= 10 *x*))
+    (is (= 20 *y*))))
+
+(deftest functions-see-dynamic-bindings
+  (testing "called functions see binding"
+    (let [read-x (fn [] *x*)]
+      (is (= 10 (read-x)))
+      (binding [*x* 99]
+        (is (= 99 (read-x))))
+      (is (= 10 (read-x))))))
+
+(deftest binding-returns-body-value
+  (testing "binding returns value of body"
+    (is (= 42 (binding [*x* 1] 42)))
+    (is (= :result (binding [*x* 1 *y* 2] :result)))))

@@ -1,0 +1,29 @@
+;; Namespace feature tests
+(ns test.namespace-test
+  (:require [test :refer :all]))
+
+(deftest qualified-access
+  (testing "cross-namespace qualified access"
+    (is (= 3 (core/+ 1 2)))
+    (is (some? (var core/+)))))
+
+(deftest auto-resolve-keyword
+  (testing "::keyword auto-resolves to current namespace"
+    (is (keyword? ::foo))
+    (is (some? (namespace ::foo)))))
+
+(deftest ns-require-as
+  (testing "ns with :require :as works"
+    ;; core is already required, test alias access
+    (is (= 3 (core/+ 1 2)))))
+
+(deftest ns-require-refer-all
+  (testing "ns with :refer :all brings in all vars"
+    ;; test :refer :all is already used for the test ns
+    (is (some? (var is)))
+    (is (some? (var testing)))
+    (is (some? (var deftest)))))
+
+(deftest ns-name-function
+  (testing "current namespace name"
+    (is (some? *ns*))))
