@@ -29,37 +29,62 @@ func (t *theAtomType) Box(b interface{}) (Value, error) {
 
 var AtomType *theAtomType = &theAtomType{}
 
+// Atom is a thread-safe mutable reference.
+// Swap uses optimistic concurrency with a generation counter — no value comparison needed.
+// The function may be called multiple times under contention.
 type Atom struct {
-	root Value
-	mu   sync.RWMutex
+	val Value
+	gen uint64 // generation counter — incremented on every mutation
+	mu  sync.Mutex
 }
 
 func NewAtom(root Value) *Atom {
-	return &Atom{
-		root: root,
+	return &Atom{val: root}
+}
+
+func (a *Atom) Reset(newVal Value) Value {
+	a.mu.Lock()
+	a.val = newVal
+	a.gen++
+	a.mu.Unlock()
+	return newVal
+}
+
+// Swap applies fn to the current value and atomically sets the result.
+// The fn is called outside the lock; if the value changed during computation,
+// fn is retried with the new value (like Clojure's swap!).
+func (a *Atom) Swap(fn Fn, args []Value) (Value, error) {
+	for {
+		// Snapshot current value and generation
+		a.mu.Lock()
+		oldVal := a.val
+		oldGen := a.gen
+		a.mu.Unlock()
+
+		// Compute new value without holding the lock
+		newVal, err := fn.Invoke(append([]Value{oldVal}, args...))
+		if err != nil {
+			return NIL, err
+		}
+
+		// Try to set — only if generation hasn't changed
+		a.mu.Lock()
+		if a.gen == oldGen {
+			a.val = newVal
+			a.gen++
+			a.mu.Unlock()
+			return newVal, nil
+		}
+		a.mu.Unlock()
+		// Generation changed — another goroutine mutated, retry
 	}
 }
 
-func (v *Atom) Reset(new Value) Value {
-	v.mu.Lock()
-	v.root = new
-	v.mu.Unlock()
-	return new
-}
-
-func (v *Atom) Swap(fn Fn, args []Value) (Value, error) {
-	v.mu.Lock()
-	ret, err := fn.Invoke(append([]Value{v.root}, args...))
-	v.root = ret
-	v.mu.Unlock()
-	return ret, err
-}
-
-func (v *Atom) Deref() Value {
-	v.mu.RLock()
-	val := v.root
-	v.mu.RUnlock()
-	return val
+func (a *Atom) Deref() Value {
+	a.mu.Lock()
+	v := a.val
+	a.mu.Unlock()
+	return v
 }
 
 func (v *Atom) Type() ValueType {
