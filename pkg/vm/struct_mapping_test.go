@@ -6,6 +6,36 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func BenchmarkStructToRecord(b *testing.B) {
+	m := RegisterStruct[TestPerson]("bench/Person")
+	p := TestPerson{FirstName: "Alice", LastName: "Smith", Age: 30}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.StructToRecord(p)
+	}
+}
+
+func BenchmarkRecordToStructFastPath(b *testing.B) {
+	m := RegisterStruct[TestPerson]("bench/Person")
+	r := m.StructToRecord(TestPerson{FirstName: "Alice", LastName: "Smith", Age: 30})
+	var target TestPerson
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.RecordToStruct(r, &target)
+	}
+}
+
+func BenchmarkRecordToStructSlowPath(b *testing.B) {
+	m := RegisterStruct[TestPerson]("bench/Person")
+	r := m.StructToRecord(TestPerson{FirstName: "Alice", LastName: "Smith", Age: 30})
+	mutated := r.Assoc(Keyword("age"), Int(31)).(*Record)
+	var target TestPerson
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.RecordToStruct(mutated, &target)
+	}
+}
+
 func TestCamelToKebab(t *testing.T) {
 	tests := []struct {
 		input    string
