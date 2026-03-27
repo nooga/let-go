@@ -24,6 +24,15 @@ func (t *theNamespaceType) Box(fn interface{}) (Value, error) {
 
 var NamespaceType *theNamespaceType = &theNamespaceType{}
 
+// nsLookup is set by the rt package to enable qualified symbol resolution
+// across all loaded namespaces (e.g., foo/x looks up ns "foo" globally).
+var nsLookup func(name string) *Namespace
+
+// SetNSLookup sets the global namespace lookup function.
+func SetNSLookup(fn func(string) *Namespace) {
+	nsLookup = fn
+}
+
 type Refer struct {
 	ns   *Namespace
 	all  bool
@@ -111,6 +120,16 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 		// fmt.Printf("[ns.Lookup %s] alias resolved sym=%q -> %s/%s\n", n.name, string(sym.(Symbol)), v.ns, v.name)
 		return v
 	}
+	// Fallback: direct namespace lookup from global registry
+	// This enables foo/x to work for any loaded namespace
+	if nsLookup != nil {
+		if target := nsLookup(string(sns.(Symbol))); target != nil {
+			v := target.registry[sym.(Symbol)]
+			if v != nil && !v.isPrivate {
+				return v
+			}
+		}
+	}
 	// Fallback via refers
 	if refer, ok := n.refers[sns.(Symbol)]; ok {
 		// fmt.Printf("[ns.Lookup %s] refers hit name=%q -> target=%s, sym=%q\n", n.name, string(sns.(Symbol)), refer.ns.name, string(sym.(Symbol)))
@@ -176,6 +195,11 @@ func (n *Namespace) ImportVar(from *Namespace, name Symbol, alias Symbol) bool {
 	}
 	n.registry[alias] = v
 	return true
+}
+
+// ResolveAlias returns the namespace for the given alias, or nil.
+func (n *Namespace) ResolveAlias(alias Symbol) *Namespace {
+	return n.aliases[alias]
 }
 
 func (n *Namespace) Name() string {

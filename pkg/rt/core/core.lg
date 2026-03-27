@@ -818,6 +818,48 @@
        ~@body
        (recur r#))))
 
+;; for — lazy list comprehension
+;; (for [x xs, y ys, :let [z expr], :when pred, :while pred] body)
+;; Supports: multiple bindings (nested iteration), :let, :when, :while
+(defn- for-emit [steps body]
+  (if (empty? steps)
+    (list 'list body)
+    (let [step (first steps)
+          rest-steps (next steps)
+          inner (for-emit (or rest-steps []) body)]
+      (case (first step)
+        :let   (list 'let (second step) inner)
+        :when  (list 'when (second step) inner)
+        :while inner
+        :bind  (let [sym   (step 1)
+                     coll  (step 2)
+                     itersym (gensym "for__iter")
+                     atomsym (gensym "for__a")]
+                 ;; Use atom for self-reference since named fn doesn't work
+                 (list 'let [atomsym (list 'atom nil)
+                             '_      (list 'reset! atomsym
+                                           (list 'fn ['for__s]
+                                                 (list 'lazy-seq
+                                                       (list 'when-let ['for__xs (list 'seq 'for__s)]
+                                                             (list 'let [sym (list 'first 'for__xs)]
+                                                                   (list 'concat-list
+                                                                         inner
+                                                                         (list (list 'deref atomsym) (list 'rest 'for__xs))))))))
+                             itersym (list 'deref atomsym)]
+                       (list itersym coll)))))))
+
+(defmacro for [bindings body]
+  ;; Parse binding vector into steps
+  (let [steps (loop [b bindings acc []]
+                (if (empty? b)
+                  acc
+                  (cond
+                    (= (first b) :let)   (recur (drop 2 b) (conj acc [:let (second b)]))
+                    (= (first b) :when)  (recur (drop 2 b) (conj acc [:when (second b)]))
+                    (= (first b) :while) (recur (drop 2 b) (conj acc [:while (second b)]))
+                    :else                (recur (drop 2 b) (conj acc [:bind (first b) (second b)])))))]
+    (for-emit steps body)))
+
 (defmacro cond->
   [expr & clauses]
   (let [g (gensym)

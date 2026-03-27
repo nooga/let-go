@@ -33,6 +33,11 @@ func SetNSLoader(loader NSLoader) {
 func init() {
 	nsRegistry = make(map[string]*vm.Namespace)
 
+	// Register global namespace lookup so qualified symbols (foo/x) work
+	vm.SetNSLookup(func(name string) *vm.Namespace {
+		return nsRegistry[name]
+	})
+
 	installLangNS()
 	installHttpNS()
 	installOsNS()
@@ -780,9 +785,15 @@ func installLangNS() {
 			return vm.NIL, nil
 		}
 		// Check for empty collection before calling Seq (Clojure semantics: seq of empty returns nil)
-		if coll, ok := vs[0].(vm.Collection); ok {
-			if coll.RawCount() == 0 {
-				return vm.NIL, nil
+		// Skip for types that may be infinite or expensive to count (Cons, LazySeq)
+		switch vs[0].(type) {
+		case *vm.Cons, *vm.LazySeq:
+			// Don't count — could be infinite
+		default:
+			if coll, ok := vs[0].(vm.Collection); ok {
+				if coll.RawCount() == 0 {
+					return vm.NIL, nil
+				}
 			}
 		}
 		sqbl, ok := vs[0].(vm.Sequable)
@@ -1729,6 +1740,75 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
+	// require loads a namespace by name (like Clojure's require function for REPL use)
+	requiref, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		for _, v := range vs {
+			s, ok := v.(vm.Symbol)
+			if !ok {
+				return vm.NIL, fmt.Errorf("require expected Symbol, got %s", v.Type().Name())
+			}
+			NS(string(s)) // triggers autoloading
+		}
+		return vm.NIL, nil
+	})
+
+	// find-ns returns the namespace with the given name, or nil
+	findNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("find-ns expected Symbol")
+		}
+		ns := nsRegistry[string(s)]
+		if ns == nil {
+			return vm.NIL, nil
+		}
+		return ns, nil
+	})
+
+	// all-ns returns a list of all loaded namespaces
+	allNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		var nss []vm.Value
+		for _, ns := range nsRegistry {
+			nss = append(nss, ns)
+		}
+		return vm.NewList(nss), nil
+	})
+
+	// the-ns returns the namespace for a symbol, throwing if not found
+	theNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.Symbol)
+		if !ok {
+			// If already a namespace, return it
+			if ns, ok := vs[0].(*vm.Namespace); ok {
+				return ns, nil
+			}
+			return vm.NIL, fmt.Errorf("the-ns expected Symbol or Namespace")
+		}
+		ns := nsRegistry[string(s)]
+		if ns == nil {
+			return vm.NIL, fmt.Errorf("no namespace: %s found", s)
+		}
+		return ns, nil
+	})
+
+	// ns-name returns the name of a namespace as a symbol
+	nsName, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		ns, ok := vs[0].(*vm.Namespace)
+		if !ok {
+			return vm.NIL, fmt.Errorf("ns-name expected Namespace")
+		}
+		return vm.Symbol(ns.Name()), nil
+	})
+
 	// lazy-seq* creates a LazySeq from a thunk function
 	lazySeq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -1999,6 +2079,11 @@ func installLangNS() {
 	// namespace utilities
 	ns.Def("refer-list", referList)
 	ns.Def("refer", refer)
+	ns.Def("require", requiref)
+	ns.Def("find-ns", findNs)
+	ns.Def("all-ns", allNs)
+	ns.Def("the-ns", theNs)
+	ns.Def("ns-name", nsName)
 
 	ns.Def("peek", peek)
 	ns.Def("pop", pop)
