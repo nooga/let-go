@@ -235,8 +235,8 @@ func seqOf(v vm.Value) (vm.Seq, error) {
 	}
 	// For concrete collections (not LazySeq), prefer Sequable.Seq() which
 	// produces a stable seq view (e.g. MapSeq with cached entries).
-	// Skip LazySeq to avoid forcing realization prematurely
-	// (e.g. cons must not realize its tail).
+	// For LazySeq, return it directly — callers that iterate must
+	// handle empty lazy seqs by checking First()/Next() properly.
 	if _, isLazy := v.(*vm.LazySeq); !isLazy {
 		if sq, ok := v.(vm.Sequable); ok {
 			s := sq.Seq()
@@ -481,7 +481,11 @@ func installLangNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		if seq == nil {
+		// Realize lazy seqs to check emptiness
+		if ls, ok := seq.(*vm.LazySeq); ok {
+			seq = ls.Seq()
+		}
+		if seq == nil || seq == vm.EmptyList {
 			return vm.ArrayVector{}, nil
 		}
 		ret := []vm.Value{}
@@ -624,7 +628,11 @@ func installLangNS() {
 		if err != nil {
 			return vm.NIL, fmt.Errorf("cons expected Seq")
 		}
-		if seq == nil {
+		// Realize lazy seq tail to check emptiness
+		if ls, ok := seq.(*vm.LazySeq); ok {
+			seq = ls.Seq()
+		}
+		if seq == nil || seq == vm.EmptyList {
 			return vm.EmptyList.Cons(elem), nil
 		}
 		return seq.Cons(elem), nil
@@ -1101,6 +1109,9 @@ func installLangNS() {
 	str, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
 		for i := range vs {
+			if vs[i] == vm.NIL {
+				continue
+			}
 			if vs[i].Type() == vm.StringType {
 				b.WriteString(string(vs[i].(vm.String)))
 				continue
@@ -1846,9 +1857,46 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("format expected String")
 		}
+		fmts := string(fmtStr)
 		args := make([]interface{}, len(vs)-1)
-		for i := 1; i < len(vs); i++ {
-			args[i-1] = vs[i].Unbox()
+		// Scan format string to determine which args need float promotion
+		vi := 0
+		for fi := 0; fi < len(fmts) && vi < len(args); fi++ {
+			if fmts[fi] != '%' {
+				continue
+			}
+			fi++ // skip %
+			if fi >= len(fmts) {
+				break
+			}
+			if fmts[fi] == '%' {
+				continue // %% literal
+			}
+			// Skip flags, width, precision
+			for fi < len(fmts) && (fmts[fi] == '-' || fmts[fi] == '+' || fmts[fi] == ' ' || fmts[fi] == '0' || fmts[fi] == '#' || (fmts[fi] >= '0' && fmts[fi] <= '9') || fmts[fi] == '.') {
+				fi++
+			}
+			if fi >= len(fmts) {
+				break
+			}
+			verb := fmts[fi]
+			switch v := vs[vi+1].(type) {
+			case vm.Int:
+				if verb == 'f' || verb == 'e' || verb == 'g' || verb == 'E' || verb == 'G' {
+					args[vi] = float64(v)
+				} else {
+					args[vi] = int(v)
+				}
+			case vm.Float:
+				args[vi] = float64(v)
+			case vm.String:
+				args[vi] = string(v)
+			case vm.Boolean:
+				args[vi] = bool(v)
+			default:
+				args[vi] = vs[vi+1].Unbox()
+			}
+			vi++
 		}
 		return vm.String(fmt.Sprintf(string(fmtStr), args...)), nil
 	})

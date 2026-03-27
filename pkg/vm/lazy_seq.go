@@ -62,10 +62,10 @@ func (l *LazySeq) seq() Seq {
 		return l.s
 	}
 
-	// If we have an intermediate value, convert to seq
 	if l.sv != nil {
-		// Unwrap nested LazySeqs (like Clojure does)
+		// Unwrap nested LazySeqs (needed for compile-time macro expansion)
 		sv := l.sv
+		l.sv = nil
 		for {
 			inner, ok := sv.(*LazySeq)
 			if !ok {
@@ -85,7 +85,6 @@ func (l *LazySeq) seq() Seq {
 		} else if seqable, ok := sv.(Sequable); ok {
 			l.s = seqable.Seq()
 		}
-		l.sv = nil
 	}
 
 	return l.s
