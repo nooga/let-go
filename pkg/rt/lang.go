@@ -628,11 +628,7 @@ func installLangNS() {
 		if err != nil {
 			return vm.NIL, fmt.Errorf("cons expected Seq")
 		}
-		// Realize lazy seq tail to check emptiness
-		if ls, ok := seq.(*vm.LazySeq); ok {
-			seq = ls.Seq()
-		}
-		if seq == nil || seq == vm.EmptyList {
+		if seq == nil {
 			return vm.EmptyList.Cons(elem), nil
 		}
 		return seq.Cons(elem), nil

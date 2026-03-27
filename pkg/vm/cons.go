@@ -50,10 +50,11 @@ func (c *Cons) Next() Seq {
 	if c.more == nil || c.more == EmptyList {
 		return nil
 	}
-	// If the tail is a LazySeq, realize it to check emptiness
+	// If tail is a LazySeq, resolve it iteratively (not recursively)
+	// to detect empty tails without accumulating Go stack
 	if ls, ok := c.more.(*LazySeq); ok {
-		s := ls.Seq()
-		if s == nil || s == EmptyList {
+		s := ls.Resolve()
+		if s == nil {
 			return nil
 		}
 		return s
