@@ -45,6 +45,7 @@ type Record struct {
 	fields []Value        // fixed fields, indexed by RecordType.fieldIdx
 	extra  *PersistentMap // overflow for assoc'd keys not in the record definition
 	meta   Value
+	origin interface{}    // original Go struct for fast roundtrip (nil if mutated)
 }
 
 func NewRecord(rtype *RecordType, data *PersistentMap) *Record {
@@ -79,7 +80,15 @@ func NewRecord(rtype *RecordType, data *PersistentMap) *Record {
 // --- Value interface ---
 
 func (r *Record) Type() ValueType    { return r.rtype }
-func (r *Record) Unbox() interface{} { return r }
+func (r *Record) Unbox() interface{} {
+	if r.origin != nil {
+		return r.origin
+	}
+	return r
+}
+
+// Origin returns the original Go struct if this Record was created from one, or nil.
+func (r *Record) Origin() interface{} { return r.origin }
 
 func (r *Record) String() string {
 	b := &strings.Builder{}
@@ -169,7 +178,7 @@ func (r *Record) Meta() Value {
 }
 
 func (r *Record) WithMeta(m Value) Value {
-	return &Record{rtype: r.rtype, fields: r.fields, extra: r.extra, meta: m}
+	return &Record{rtype: r.rtype, fields: r.fields, extra: r.extra, meta: m, origin: r.origin}
 }
 
 // --- Lookup (get, keyword access) ---

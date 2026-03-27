@@ -128,13 +128,31 @@ func BoxValue(v reflect.Value) (Value, error) {
 		return IntType.Box(v.Interface())
 	case reflect.String:
 		return StringType.Box(v.Interface())
+	case reflect.Float32, reflect.Float64:
+		return Float(v.Float()), nil
 	case reflect.Bool:
 		return BooleanType.Box(v.Interface())
 	case reflect.Func:
 		return NativeFnType.Box(v.Interface())
+	case reflect.Struct:
+		if v.CanInterface() {
+			if m := LookupStructMapping(v.Type()); m != nil {
+				return m.StructToRecord(v.Interface()), nil
+			}
+		}
+		if v.CanInterface() {
+			return NewBoxed(v.Interface()), nil
+		}
+		return NIL, NewTypeError(v, "is not boxable", nil)
 	case reflect.Ptr:
 		if v.IsNil() {
 			return NIL, nil
+		}
+		// Check if pointed-to struct has a registered mapping
+		if v.Elem().Kind() == reflect.Struct && v.CanInterface() {
+			if m := LookupStructMapping(v.Elem().Type()); m != nil {
+				return m.StructToRecord(v.Interface()), nil
+			}
 		}
 		// Wrap non-nil, non-Value pointers as opaque boxed values
 		if v.CanInterface() {
