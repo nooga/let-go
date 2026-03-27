@@ -109,12 +109,12 @@ func installOsNS() {
 			}
 			return vm.NIL, err
 		}
-		m := vm.EmptyPersistentMap
-		m = m.Assoc(vm.Keyword("name"), vm.String(info.Name())).(*vm.PersistentMap)
-		m = m.Assoc(vm.Keyword("size"), vm.Int(info.Size())).(*vm.PersistentMap)
-		m = m.Assoc(vm.Keyword("dir?"), vm.Boolean(info.IsDir())).(*vm.PersistentMap)
-		m = m.Assoc(vm.Keyword("mod-time"), vm.String(info.ModTime().String())).(*vm.PersistentMap)
-		return m, nil
+		return fileStatMapping.StructToRecord(FileStat{
+			Name:    info.Name(),
+			Size:    info.Size(),
+			IsDir:   info.IsDir(),
+			ModTime: info.ModTime().String(),
+		}), nil
 	})
 
 	// os/sh — (os/sh cmd & args) → {:exit 0 :out "..." :err "..."}
@@ -147,11 +147,11 @@ func installOsNS() {
 				return vm.NIL, err
 			}
 		}
-		m := vm.EmptyPersistentMap
-		m = m.Assoc(vm.Keyword("exit"), vm.Int(exitCode)).(*vm.PersistentMap)
-		m = m.Assoc(vm.Keyword("out"), vm.String(stdout.String())).(*vm.PersistentMap)
-		m = m.Assoc(vm.Keyword("err"), vm.String(stderr.String())).(*vm.PersistentMap)
-		return m, nil
+		return shellResultMapping.StructToRecord(ShellResult{
+			Exit: exitCode,
+			Out:  stdout.String(),
+			Err:  stderr.String(),
+		}), nil
 	})
 
 	if err != nil {
