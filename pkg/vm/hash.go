@@ -127,6 +127,10 @@ func isComparable(v Value) bool {
 	case Int, Float, String, Keyword, Symbol, Boolean, Char, *Nil, *Var, *Namespace:
 		return true
 	default:
+		// Type objects (singletons) are pointer-comparable
+		if _, ok := v.(ValueType); ok {
+			return true
+		}
 		return false
 	}
 }
