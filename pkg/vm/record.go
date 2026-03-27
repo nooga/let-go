@@ -301,6 +301,17 @@ func (r *Record) Invoke(args []Value) (Value, error) {
 	return r.ValueAtOr(args[0], args[1]), nil
 }
 
+// --- Receiver (interop .field access) ---
+
+func (r *Record) InvokeMethod(name Symbol, args []Value) (Value, error) {
+	kw := Keyword(name)
+	v := r.ValueAt(kw)
+	if v != NIL {
+		return v, nil
+	}
+	return NIL, fmt.Errorf("no method %s on record %s", name, r.rtype.typeName)
+}
+
 // --- RecordType accessor ---
 
 func (r *Record) RecordType() *RecordType {

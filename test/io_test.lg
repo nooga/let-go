@@ -1,0 +1,68 @@
+(ns test.io-test
+  (:require [test :refer :all]))
+
+(deftest file-io-basic
+  (testing "write and read a file"
+    (let [path "/tmp/let-go-io-test.txt"
+          fout (open path :write)]
+      (write! fout "hello\nworld\n")
+      (close! fout)
+      (let [fin (open path :read)
+            line1 (read-line fin)
+            line2 (read-line fin)]
+        (is (= "hello" line1))
+        (is (= "world" line2))
+        (close! fin))
+      (delete-file path))))
+
+(deftest file-io-append
+  (testing "append mode"
+    (let [path "/tmp/let-go-io-append-test.txt"]
+      (let [f (open path :write)]
+        (write! f "line1\n")
+        (close! f))
+      (let [f (open path :append)]
+        (write! f "line2\n")
+        (close! f))
+      (let [f (open path :read)
+            l1 (read-line f)
+            l2 (read-line f)]
+        (is (= "line1" l1))
+        (is (= "line2" l2))
+        (close! f))
+      (delete-file path))))
+
+(deftest file-exists-test
+  (testing "file-exists? for existing file"
+    (spit "/tmp/let-go-exists-test.txt" "x")
+    (is (file-exists? "/tmp/let-go-exists-test.txt"))
+    (delete-file "/tmp/let-go-exists-test.txt"))
+  (testing "file-exists? for non-existing file"
+    (is (not (file-exists? "/tmp/nonexistent-xyz-123.txt")))))
+
+(deftest mkdir-test
+  (testing "mkdir creates directories"
+    (let [path "/tmp/let-go-mkdir-test/sub/dir"]
+      (mkdir path)
+      (is (file-exists? path))
+      (delete-file "/tmp/let-go-mkdir-test/sub/dir")
+      (delete-file "/tmp/let-go-mkdir-test/sub")
+      (delete-file "/tmp/let-go-mkdir-test"))))
+
+(deftest read-bytes-test
+  (testing "read-bytes reads n bytes"
+    (let [path "/tmp/let-go-bytes-test.txt"]
+      (spit path "abcdef")
+      (let [f (open path :read)
+            b (read-bytes f 3)]
+        (is (= "abc" b))
+        (close! f))
+      (delete-file path))))
+
+(deftest stdin-stdout-exist
+  (testing "*in* is defined"
+    (is (not (nil? *in*))))
+  (testing "*out* is defined"
+    (is (not (nil? *out*))))
+  (testing "*err* is defined"
+    (is (not (nil? *err*)))))

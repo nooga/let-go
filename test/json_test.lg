@@ -1,0 +1,67 @@
+(ns test.json-test
+  (:require [test :refer :all]
+            [json :refer :all]))
+
+(deftest json-read-numbers
+  (testing "integers stay as ints"
+    (is (= 42 (read-json "42")))
+    (is (int? (read-json "42"))))
+
+  (testing "floats are preserved"
+    (is (= 1.5 (read-json "1.5")))
+    (is (float? (read-json "1.5"))))
+
+  (testing "whole floats become ints"
+    (is (= 3 (read-json "3.0")))
+    (is (int? (read-json "3.0")))))
+
+(deftest json-read-structures
+  (testing "arrays"
+    (is (= [1 2 3] (read-json "[1,2,3]"))))
+
+  (testing "objects with keywords"
+    (let [m (read-json "{\"a\":1,\"b\":2}" {:keywords? true})]
+      (is (= 1 (:a m)))
+      (is (= 2 (:b m)))))
+
+  (testing "nested structures"
+    (let [m (read-json "{\"x\":[1,2.5],\"y\":null}" {:keywords? true})]
+      (is (= [1 2.5] (:x m)))
+      (is (nil? (:y m))))))
+
+(deftest json-write-basic
+  (testing "string"
+    (is (= "\"hello\"" (write-json "hello"))))
+
+  (testing "int"
+    (is (= "42" (write-json 42))))
+
+  (testing "float"
+    (is (= "1.5" (write-json 1.5))))
+
+  (testing "boolean"
+    (is (= "true" (write-json true))))
+
+  (testing "nil"
+    (is (= "null" (write-json nil)))))
+
+(deftest json-write-collections
+  (testing "vector"
+    (is (= "[1,2,3]" (write-json [1 2 3]))))
+
+  (testing "persistent map"
+    (let [s (write-json {:a 1})]
+      (is (= "{\"a\":1}" s))))
+
+  (testing "nested"
+    (let [s (write-json {:items [1 2.5 "x"]})]
+      (is (includes? s "\"items\""))
+      (is (includes? s "2.5")))))
+
+(deftest json-roundtrip
+  (testing "roundtrip preserves floats"
+    (let [original {:price 9.99 :qty 3}
+          json-str (write-json original)
+          parsed (read-json json-str {:keywords? true})]
+      (is (= 9.99 (:price parsed)))
+      (is (= 3 (:qty parsed))))))

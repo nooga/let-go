@@ -1,0 +1,42 @@
+(ns test.os-test
+  (:require [test :refer :all]
+            [os :refer :all]))
+
+(deftest os-cwd-test
+  (testing "cwd returns a string"
+    (let [d (cwd)]
+      (is (not (nil? d)))
+      (is (includes? d "let-go")))))
+
+(deftest os-ls-test
+  (testing "ls returns vector of filenames"
+    (let [entries (ls "/tmp")]
+      (is (> (count entries) 0)))))
+
+(deftest os-stat-test
+  (testing "stat existing file"
+    (spit "/tmp/let-go-stat-test.txt" "hello")
+    (let [s (stat "/tmp/let-go-stat-test.txt")]
+      (is (not (nil? s)))
+      (is (= "let-go-stat-test.txt" (:name s)))
+      (is (> (:size s) 0))
+      (is (= false (:dir? s))))
+    (delete-file "/tmp/let-go-stat-test.txt"))
+
+  (testing "stat non-existing file"
+    (is (nil? (stat "/tmp/nonexistent-xyz-stat.txt")))))
+
+(deftest os-getenv-test
+  (testing "getenv returns value"
+    (is (not (nil? (getenv "HOME"))))))
+
+(deftest os-setenv-test
+  (testing "setenv and getenv roundtrip"
+    (setenv "LET_GO_TEST_VAR" "hello123")
+    (is (= "hello123" (getenv "LET_GO_TEST_VAR")))))
+
+(deftest os-sh-test
+  (testing "sh runs command and captures output"
+    (let [result (sh "echo" "hello")]
+      (is (= 0 (:exit result)))
+      (is (starts-with? (:out result) "hello")))))
