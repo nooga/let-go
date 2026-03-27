@@ -101,6 +101,27 @@ func makeFieldConverter(t reflect.Type) fieldConverter {
 		return func(v reflect.Value) Value { return Boolean(v.Bool()) }
 	case reflect.String:
 		return func(v reflect.Value) Value { return String(v.String()) }
+	case reflect.Interface:
+		// If the field is already a Value (e.g. vm.Value), return it directly.
+		valueInterface := reflect.TypeOf((*Value)(nil)).Elem()
+		if t.Implements(valueInterface) || t == valueInterface {
+			return func(v reflect.Value) Value {
+				if v.IsNil() {
+					return NIL
+				}
+				return v.Interface().(Value)
+			}
+		}
+		return func(v reflect.Value) Value {
+			if v.IsNil() {
+				return NIL
+			}
+			val, err := BoxValue(v.Elem())
+			if err != nil {
+				return NIL
+			}
+			return val
+		}
 	default:
 		// Fallback: use the generic path
 		return func(v reflect.Value) Value {
@@ -167,6 +188,17 @@ func makeFieldDeconverter(t reflect.Type) fieldDeconverter {
 				return nil
 			}
 			return fmt.Errorf("expected String, got %s", val.Type().Name())
+		}
+	case reflect.Interface:
+		valueInterface := reflect.TypeOf((*Value)(nil)).Elem()
+		if t.Implements(valueInterface) || t == valueInterface {
+			return func(target reflect.Value, val Value) error {
+				target.Set(reflect.ValueOf(val))
+				return nil
+			}
+		}
+		return func(target reflect.Value, val Value) error {
+			return unboxInto(target, val)
 		}
 	default:
 		// Fallback to the generic unboxInto

@@ -41,20 +41,15 @@ func methodToLG(scheme string) vm.Keyword {
 }
 
 func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
-	req := vm.EmptyPersistentMap
-	req = req.Assoc(vm.Keyword("request-method"), methodToLG(request.Method)).(*vm.PersistentMap)
 	url := request.URL
 
-	if request.TLS == nil {
-		req = req.Assoc(vm.Keyword("scheme"), vm.Keyword("http")).(*vm.PersistentMap)
-	} else {
-		req = req.Assoc(vm.Keyword("scheme"), vm.Keyword("https")).(*vm.PersistentMap)
+	scheme := "http"
+	if request.TLS != nil {
+		scheme = "https"
 	}
-	req = req.Assoc(vm.Keyword("uri"), vm.String(url.RequestURI())).(*vm.PersistentMap)
-	req = req.Assoc(vm.Keyword("path"), vm.String(url.Path)).(*vm.PersistentMap)
-	req = req.Assoc(vm.Keyword("query-string"), vm.String(url.RawQuery)).(*vm.PersistentMap)
+
 	defer request.Body.Close()
-	bytes, err := io.ReadAll(request.Body)
+	bodyBytes, err := io.ReadAll(request.Body)
 	if err != nil {
 		resp.WriteHeader(500)
 		_, err := resp.Write([]byte(fmt.Sprintf("%s", err)))
@@ -63,21 +58,31 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		}
 		return
 	}
-	req = req.Assoc(vm.Keyword("body"), vm.String(bytes)).(*vm.PersistentMap)
-	req = req.Assoc(vm.Keyword("remote-addr"), vm.String(request.RemoteAddr)).(*vm.PersistentMap)
-	req = req.Assoc(vm.Keyword("server-addr"), vm.String(request.Host)).(*vm.PersistentMap)
-	req = req.Assoc(vm.Keyword("server-port"), vm.String(url.Port())).(*vm.PersistentMap)
 
+	var headers vm.Value = vm.NIL
+	var contentType string
 	if len(request.Header) > 0 {
 		hs := vm.EmptyPersistentMap
 		for k, v := range request.Header {
 			hs = hs.Assoc(vm.String(strings.ToLower(k)), vm.String(strings.Join(v, ","))).(*vm.PersistentMap)
 		}
-		req = req.Assoc(vm.Keyword("headers"), hs).(*vm.PersistentMap)
-		if ct := request.Header.Get("Content-Type"); ct != "" {
-			req = req.Assoc(vm.Keyword("content-type"), vm.String(ct)).(*vm.PersistentMap)
-		}
+		headers = hs
+		contentType = request.Header.Get("Content-Type")
 	}
+
+	req := httpRequestMapping.StructToRecord(HTTPRequest{
+		RequestMethod: string(methodToLG(request.Method)),
+		Scheme:        scheme,
+		URI:           url.RequestURI(),
+		Path:          url.Path,
+		QueryString:   url.RawQuery,
+		Body:          string(bodyBytes),
+		RemoteAddr:    request.RemoteAddr,
+		ServerAddr:    request.Host,
+		ServerPort:    url.Port(),
+		ContentType:   contentType,
+		Headers:       headers,
+	})
 
 	res, err := h.fn.Invoke([]vm.Value{req})
 	if err != nil {
@@ -99,9 +104,9 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 	head := resp.Header()
-	headers := ress.ValueAt(vm.Keyword("headers"))
-	if headers != vm.NIL {
-		if sq, ok := headers.(vm.Sequable); ok {
+	respHeaders := ress.ValueAt(vm.Keyword("headers"))
+	if respHeaders != vm.NIL {
+		if sq, ok := respHeaders.(vm.Sequable); ok {
 			for s := sq.Seq(); s != nil; s = s.Next() {
 				entry := s.First()
 				// Use Sequable to get key/value from any vector type
@@ -129,13 +134,13 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		body = vm.String("")
 	}
 	resp.WriteHeader(int(status.(vm.Int)))
-	var bodyBytes []byte
+	var respBody []byte
 	if s, ok := body.(vm.String); ok {
-		bodyBytes = []byte(s)
+		respBody = []byte(s)
 	} else {
-		bodyBytes = []byte(body.String())
+		respBody = []byte(body.String())
 	}
-	_, err = resp.Write(bodyBytes)
+	_, err = resp.Write(respBody)
 	if err != nil {
 		fmt.Println("HTTP Error while writing error 500", err)
 	}
@@ -182,22 +187,22 @@ func installHttpNS() {
 		panic("http NS init failed")
 	}
 
-	// HTTP client: build response map from http.Response
+	// HTTP client: build response record from http.Response
 	buildResponseMap := func(resp *http.Response) (vm.Value, error) {
 		defer resp.Body.Close()
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return vm.NIL, err
 		}
-		result := vm.EmptyPersistentMap
-		result = result.Assoc(vm.Keyword("status"), vm.Int(resp.StatusCode)).(*vm.PersistentMap)
-		result = result.Assoc(vm.Keyword("body"), vm.String(bodyBytes)).(*vm.PersistentMap)
 		hs := vm.EmptyPersistentMap
 		for k, v := range resp.Header {
 			hs = hs.Assoc(vm.String(strings.ToLower(k)), vm.String(strings.Join(v, ","))).(*vm.PersistentMap)
 		}
-		result = result.Assoc(vm.Keyword("headers"), hs).(*vm.PersistentMap)
-		return result, nil
+		return httpResponseMapping.StructToRecord(HTTPResponse{
+			Status:  resp.StatusCode,
+			Body:    string(bodyBytes),
+			Headers: hs,
+		}), nil
 	}
 
 	// http/get — (http/get url) or (http/get url opts)
