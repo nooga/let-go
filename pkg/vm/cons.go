@@ -22,9 +22,11 @@ func (c *Cons) String() string {
 	b := &strings.Builder{}
 	b.WriteRune('(')
 	b.WriteString(c.first.String())
-	for s := c.more; s != nil && s != EmptyList; s = s.Next() {
+	s := c.Next()
+	for s != nil {
 		b.WriteRune(' ')
 		b.WriteString(s.First().String())
+		s = s.Next()
 	}
 	b.WriteRune(')')
 	return b.String()

@@ -217,13 +217,30 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
 		}
 		if nom[0] == ':' {
-			// we've got a namespaced keyword
+			// Auto-resolved keyword (::foo or ::alias/foo)
 			onom := nom[1:]
-			if strings.ContainsAny(onom, ":/") {
-				return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
+			if strings.Contains(onom, "/") {
+				// ::alias/name — resolve alias to full namespace name
+				parts := strings.SplitN(onom, "/", 2)
+				alias := parts[0]
+				name := parts[1]
+				if alias == "" || name == "" || strings.ContainsAny(name, ":/") {
+					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
+				}
+				// Look up alias in current namespace
+				cns := rt.CurrentNS.Deref().(*vm.Namespace)
+				resolved := cns.ResolveAlias(vm.Symbol(alias))
+				if resolved == nil {
+					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s, namespace alias %s not found", ss, alias))
+				}
+				nom = resolved.Name() + "/" + name
+			} else {
+				// ::foo — resolve to current namespace
+				if strings.ContainsAny(onom, ":") {
+					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
+				}
+				nom = rt.CurrentNS.Deref().(*vm.Namespace).Name() + "/" + onom
 			}
-			// FIXME figure out if we want this here or rather  in the compiler
-			nom = rt.CurrentNS.Deref().(*vm.Namespace).Name() + "/" + onom
 		}
 		if strings.ContainsAny(nom, ":") {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
