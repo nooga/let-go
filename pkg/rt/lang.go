@@ -1057,13 +1057,18 @@ func installLangNS() {
 			}
 			return mfn.Invoke(nil)
 		}
-		// Check for empty collection first
-		if coll, ok := vs[sidx].(vm.Collection); ok {
-			if coll.RawCount() == 0 {
-				if len(vs) == 3 {
-					return vs[1], nil
+		// Check for empty collection first (skip for lazy/cons — RawCount forces realization)
+		switch vs[sidx].(type) {
+		case *vm.LazySeq, *vm.Cons:
+			// don't call RawCount — could be infinite
+		default:
+			if coll, ok := vs[sidx].(vm.Collection); ok {
+				if coll.RawCount() == 0 {
+					if len(vs) == 3 {
+						return vs[1], nil
+					}
+					return mfn.Invoke(nil)
 				}
-				return mfn.Invoke(nil)
 			}
 		}
 		seq, err := seqOf(vs[sidx])
@@ -2803,6 +2808,139 @@ func installLangNS() {
 		return vm.Boolean(vm.IsReduced(vs[0])), nil
 	})
 
+	// compare — generic comparison: -1, 0, 1
+	comparef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("compare expects 2 args")
+		}
+		a, b := vs[0], vs[1]
+		// nil sorts before everything
+		if a == vm.NIL && b == vm.NIL {
+			return vm.MakeInt(0), nil
+		}
+		if a == vm.NIL {
+			return vm.MakeInt(-1), nil
+		}
+		if b == vm.NIL {
+			return vm.MakeInt(1), nil
+		}
+		// Numbers
+		switch av := a.(type) {
+		case vm.Int:
+			switch bv := b.(type) {
+			case vm.Int:
+				if int(av) < int(bv) {
+					return vm.MakeInt(-1), nil
+				}
+				if int(av) > int(bv) {
+					return vm.MakeInt(1), nil
+				}
+				return vm.MakeInt(0), nil
+			case vm.Float:
+				fa, fb := float64(av), float64(bv)
+				if fa < fb {
+					return vm.MakeInt(-1), nil
+				}
+				if fa > fb {
+					return vm.MakeInt(1), nil
+				}
+				return vm.MakeInt(0), nil
+			}
+		case vm.Float:
+			var fb float64
+			switch bv := b.(type) {
+			case vm.Float:
+				fb = float64(bv)
+			case vm.Int:
+				fb = float64(int(bv))
+			default:
+				return vm.NIL, fmt.Errorf("compare: cannot compare %s and %s", a.Type().Name(), b.Type().Name())
+			}
+			fa := float64(av)
+			if fa < fb {
+				return vm.MakeInt(-1), nil
+			}
+			if fa > fb {
+				return vm.MakeInt(1), nil
+			}
+			return vm.MakeInt(0), nil
+		}
+		// Strings
+		if sa, ok := a.(vm.String); ok {
+			if sb, ok := b.(vm.String); ok {
+				as, bs := string(sa), string(sb)
+				if as < bs {
+					return vm.MakeInt(-1), nil
+				}
+				if as > bs {
+					return vm.MakeInt(1), nil
+				}
+				return vm.MakeInt(0), nil
+			}
+		}
+		// Keywords
+		if ka, ok := a.(vm.Keyword); ok {
+			if kb, ok := b.(vm.Keyword); ok {
+				as, bs := string(ka), string(kb)
+				if as < bs {
+					return vm.MakeInt(-1), nil
+				}
+				if as > bs {
+					return vm.MakeInt(1), nil
+				}
+				return vm.MakeInt(0), nil
+			}
+		}
+		// Booleans (false < true)
+		if ba, ok := a.(vm.Boolean); ok {
+			if bb, ok := b.(vm.Boolean); ok {
+				if ba == bb {
+					return vm.MakeInt(0), nil
+				}
+				if !bool(ba) {
+					return vm.MakeInt(-1), nil
+				}
+				return vm.MakeInt(1), nil
+			}
+		}
+		return vm.NIL, fmt.Errorf("compare: cannot compare %s and %s", a.Type().Name(), b.Type().Name())
+	})
+
+	// print — like println but no newline, space-separated
+	printf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		for i, v := range vs {
+			if i > 0 {
+				fmt.Print(" ")
+			}
+			if s, ok := v.(vm.String); ok {
+				fmt.Print(string(s))
+			} else {
+				fmt.Print(v.String())
+			}
+		}
+		return vm.NIL, nil
+	})
+
+	// pr — print readably (like prn without newline)
+	prf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		for i, v := range vs {
+			if i > 0 {
+				fmt.Print(" ")
+			}
+			fmt.Print(v.String())
+		}
+		return vm.NIL, nil
+	})
+
+	// fn? — test if value is callable
+	isFn, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		_, ok := vs[0].(vm.Fn)
+		return vm.Boolean(ok), nil
+	})
+
 	// unreduced — unwrap Reduced, or return value as-is
 	unreduced, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -3032,6 +3170,10 @@ func installLangNS() {
 	ns.Def("volatile!", volatilef)
 	ns.Def("vreset!", vreset)
 	ns.Def("vswap!", vswap)
+	ns.Def("compare", comparef)
+	ns.Def("fn?", isFn)
+	ns.Def("print", printf)
+	ns.Def("pr", prf)
 	ns.Def("reduced", reducedf)
 	ns.Def("reduced?", isReducedf)
 	ns.Def("unreduced", unreduced)

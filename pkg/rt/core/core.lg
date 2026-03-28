@@ -1380,6 +1380,123 @@
                      groups)]
     (cons 'do extends)))
 
+;; --- Tier 1 missing Clojure core functions ---
+
+(defn constantly
+  [x]
+  (fn [& _] x))
+
+(defn memoize
+  [f]
+  (let [mem (atom {})]
+    (fn [& args]
+      (let [k (vec args)]
+        (if (contains? (deref mem) k)
+          (get (deref mem) k)
+          (let [ret (apply f args)]
+            (swap! mem assoc k ret)
+            ret))))))
+
+(defn trampoline
+  ([f]
+   (let [ret (f)]
+     (if (fn? ret)
+       (recur ret)
+       ret)))
+  ([f & args]
+   (trampoline #(apply f args))))
+
+(defn- cycle-seq [s orig]
+  (lazy-seq
+    (if (seq s)
+      (cons (first s) (cycle-seq (next s) orig))
+      (cycle-seq (seq orig) orig))))
+
+(defn cycle
+  [coll]
+  (when (seq coll)
+    (cycle-seq (seq coll) coll)))
+
+(defn dorun
+  ([coll]
+   (when-let [s (seq coll)]
+     (recur (next s))))
+  ([n coll]
+   (when (and (pos? n) (seq coll))
+     (recur (dec n) (next coll)))))
+
+(defn doall
+  ([coll]
+   (dorun coll)
+   coll)
+  ([n coll]
+   (dorun n coll)
+   coll))
+
+(defn not-every?
+  [pred coll]
+  (not (every? pred coll)))
+
+(defn not-any?
+  [pred coll]
+  (not (some pred coll)))
+
+(defn merge-with
+  [f & maps]
+  (when (some identity maps)
+    (let [merge-entry (fn [m e]
+                        (let [k (first e) v (second e)]
+                          (if (contains? m k)
+                            (assoc m k (f (get m k) v))
+                            (assoc m k v))))
+          merge2 (fn [m1 m2]
+                   (reduce merge-entry (or m1 {}) (seq m2)))]
+      (reduce merge2 maps))))
+
+(defmacro doto
+  [x & forms]
+  (let [gx (gensym "doto__")]
+    `(let [~gx ~x]
+       ~@(map (fn [f]
+                (if (seq? f)
+                  (list* (first f) gx (rest f))
+                  (list f gx)))
+              forms)
+       ~gx)))
+
+(defmacro with-open
+  [bindings & body]
+  (if (= (count bindings) 0)
+    `(do ~@body)
+    (let [name (first bindings)
+          init (second bindings)
+          rest-bindings (vec (drop 2 bindings))]
+      `(let [~name ~init]
+         (try
+           (with-open ~rest-bindings ~@body)
+           (finally
+             (close! ~name)))))))
+
+(defn replace
+  [smap coll]
+  (if (vector? coll)
+    (mapv #(if (contains? smap %) (get smap %) %) coll)
+    (map #(if (contains? smap %) (get smap %) %) coll)))
+
+(defn nthrest
+  [coll n]
+  (loop [s coll i n]
+    (if (and (pos? i) (seq s))
+      (recur (rest s) (dec i))
+      s)))
+
+(defn nthnext
+  [coll n]
+  (loop [s coll i n]
+    (if (and (pos? i) (seq s))
+      (recur (next s) (dec i))
+      (seq s))))
+
 ;; --- Multimethods ---
 
 ;; (defmulti name dispatch-fn)
