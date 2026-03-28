@@ -216,6 +216,25 @@ go run .                           # run from source
 go build -ldflags="-s -w" -o lg .  # ~9MB stripped binary
 ```
 
+## nREPL
+
+let-go includes an nREPL server compatible with CIDER (Emacs), Calva (VS Code), and Conjure (Neovim).
+
+```bash
+lg -n                              # start nREPL on default port (2137)
+lg -n -p 7888                      # start nREPL on port 7888
+```
+
+The server writes `.nrepl-port` in the current directory so editors auto-discover it.
+
+**Supported ops:** `clone`, `close`, `eval`, `load-file`, `describe`, `completions`, `complete`, `info`, `lookup`, `ls-sessions`, `interrupt`
+
+**Emacs (CIDER):** `M-x cider-connect-clj`, host `localhost`, port from `.nrepl-port`
+
+**VS Code (Calva):** "Calva: Connect to a Running REPL Server", pick "Generic" project type
+
+**Neovim (Conjure):** Should auto-connect when `.nrepl-port` exists
+
 ## Embedding in Go
 
 ```go
