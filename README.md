@@ -179,22 +179,41 @@ See:
 
 Check out [this bare-bones online REPL](https://nooga.github.io/let-go/). It runs a WASM build of let-go in your browser!
 
-## Prerequisites and installation
+## Installation
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap nooga/let-go https://github.com/nooga/let-go
+brew install let-go
+```
+
+### Download binary
+
+Grab a prebuilt binary from [Releases](https://github.com/nooga/let-go/releases) — available for Linux, macOS, and Windows on amd64/arm64.
+
+### From source
 
 Requires Go 1.22+.
 
-```
+```bash
 go install github.com/nooga/let-go@latest
 ```
 
-## Running from source
+### Usage
 
 ```bash
-go run .                           # REPL
-go run . -e '(+ 1 1)'             # eval expression
-go run . myfile.lg                 # run file
-go run . -r myfile.lg              # run file, then REPL
-go build -ldflags="-s -w" -o letgo . # ~9MB stripped binary
+lg                                 # REPL
+lg -e '(+ 1 1)'                   # eval expression
+lg myfile.lg                       # run file
+lg -r myfile.lg                    # run file, then REPL
+```
+
+### Building from source
+
+```bash
+go run .                           # run from source
+go build -ldflags="-s -w" -o lg .  # ~9MB stripped binary
 ```
 
 ## Embedding in Go

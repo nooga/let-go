@@ -20,9 +20,18 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+func versionString() string {
+	if commit != "none" && len(commit) > 7 {
+		return fmt.Sprintf("%s (%s)", version, commit[:7])
+	}
+	return version
+}
+
 func motd() {
-	message := "\u001B[1m\u001b[37;1mLET-GO\u001B[0m \u001B[36mdev\u001b[0m    \u001b[90m(Ctrl-C to quit)\u001b[0m\n"
-	fmt.Print(message)
+	banner := "" +
+		" \u001b[1m λ\u001b[0m   \u001b[1mlet-go\u001b[0m %s\n" +
+		" \u001b[1;36mGO\u001b[0m   \u001b[90mCtrl-C to quit\u001b[0m\n"
+	fmt.Printf(banner, versionString())
 }
 
 func runForm(ctx *compiler.Context, in string) (vm.Value, error) {
@@ -145,11 +154,18 @@ func nreplServe(ctx *compiler.Context, port int) error {
 	return nil
 }
 
+// Set by goreleaser via ldflags
+var (
+	version = "dev"
+	commit  = "none"
+)
+
 var nreplPort int
 var runNREPL bool
 var runREPL bool
 var expr string
 var debug bool
+var showVersion bool
 
 func init() {
 	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
@@ -157,6 +173,8 @@ func init() {
 	flag.BoolVar(&debug, "d", false, "enable VM debug mode")
 	flag.BoolVar(&runNREPL, "n", false, "enable nREPL server")
 	flag.IntVar(&nreplPort, "p", 2137, "set nREPL port, default is 2137")
+	flag.BoolVar(&showVersion, "v", false, "print version and exit")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 
 	completionTerminators = map[byte]bool{
 		'(':  true,
@@ -199,6 +217,12 @@ func initCompiler(debug bool) *compiler.Context {
 
 func main() {
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("lg %s\n", versionString())
+		os.Exit(0)
+	}
+
 	files := flag.Args()
 
 	context := initCompiler(debug)
