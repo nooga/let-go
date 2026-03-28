@@ -5,10 +5,12 @@ build:
 	cp "$(GOROOT)/lib/wasm/wasm_exec.js" . 2>/dev/null || cp "$(GOROOT)/misc/wasm/wasm_exec.js" .
 	cp ../meta/logo.svg .
 
-run: build
-	npm install
-	node index.js
+pages: build
+	mkdir -p static
+	cp index.html letgo.wasm wasm_exec.js logo.svg static
 
-pages: build 
-	mkdir static
-	cp index.html index.js letgo.wasm wasm_exec.js logo.svg static
+clean:
+	rm -f letgo.wasm wasm_exec.js logo.svg
+	rm -rf static
+
+.PHONY: build pages clean

@@ -1,5 +1,4 @@
 //go:build js && wasm
-// +build js,wasm
 
 package main
 
@@ -12,7 +11,7 @@ import (
 
 var lg *api.LetGo
 
-func Eval(this js.Value, args []js.Value) interface{} {
+func Eval(this js.Value, args []js.Value) any {
 	x := args[0].String()
 	v, err := lg.Run(x)
 	if err != nil {

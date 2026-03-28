@@ -1,9 +1,10 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <title>let-go REPL</title>
     <script src="wasm_exec.js"></script>
-    <script src="https://code.jquery.com/jquery-3.2.1.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery.terminal/2.34.0/js/jquery.terminal.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery.terminal/2.42.0/js/jquery.terminal.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -11,7 +12,7 @@
       rel="stylesheet"
     />
     <link
-      href="https://cdnjs.cloudflare.com/ajax/libs/jquery.terminal/2.34.0/css/jquery.terminal.min.css"
+      href="https://cdnjs.cloudflare.com/ajax/libs/jquery.terminal/2.42.0/css/jquery.terminal.min.css"
       rel="stylesheet"
     />
     <style>
@@ -59,35 +60,18 @@
   </head>
   <body>
     <script>
-      // This is a polyfill for FireFox and Safari
-      if (!WebAssembly.instantiateStreaming) {
-        WebAssembly.instantiateStreaming = async (resp, importObject) => {
-          const source = await (await resp).arrayBuffer();
-          return await WebAssembly.instantiate(source, importObject);
-        };
-      }
-
-      // Promise to load the wasm file
       function loadWasm(path) {
         const go = new Go();
-
-        return new Promise((resolve, reject) => {
-          WebAssembly.instantiateStreaming(fetch(path), go.importObject)
-            .then((result) => {
-              go.run(result.instance);
-              resolve(result.instance);
-            })
-            .catch((error) => {
-              reject(error);
-            });
-        });
+        return WebAssembly.instantiateStreaming(fetch(path), go.importObject)
+          .then((result) => {
+            go.run(result.instance);
+            return result.instance;
+          });
       }
 
-      // Load the wasm file
       loadWasm("letgo.wasm")
         .then((wasm) => {
-          const oldlog = console.log;
-          jQuery(function ($, undefined) {
+          jQuery(function ($) {
             const term = $("#term").terminal(
               function (command) {
                 if (command !== "") {
@@ -98,16 +82,16 @@
                 }
               },
               {
-                greetings: "LET-GO WASM",
+                greetings: " λ   let-go (wasm)\n GO   type (+ 1 1) to start",
                 name: "let_go",
                 prompt: "user> ",
               }
             );
-            console.log = (...args) => { term.echo(...args); } 
+            console.log = (...args) => { term.echo(...args); }
           });
         })
         .catch((error) => {
-          console.log("ouch", error);
+          console.log("failed to load wasm:", error);
         });
     </script>
     <a href="https://github.com/nooga/let-go">
