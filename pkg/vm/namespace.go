@@ -71,8 +71,8 @@ func (n *Namespace) Def(name string, val Value) *Var {
 	if val.Type() == NativeFnType {
 		val.(*NativeFn).SetName(name)
 	}
-	if val.Type() == FuncType {
-		val.(*Func).SetName(name)
+	if f, ok := val.(*Func); ok {
+		f.SetName(name)
 	}
 	n.registry[s] = va
 	return va

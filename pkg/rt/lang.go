@@ -39,10 +39,12 @@ func init() {
 		return nsRegistry[name]
 	})
 
+	initTypeMappings()
 	installLangNS()
 	installHttpNS()
 	installOsNS()
 	installJSONNS()
+	installIoNS()
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 

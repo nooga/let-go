@@ -25,6 +25,23 @@ func rawString(v vm.Value) string {
 	return v.String()
 }
 
+// extractURL gets a URL string from a String value or a URL record.
+func extractURL(v vm.Value) (string, error) {
+	if s, ok := v.(vm.String); ok {
+		return string(s), nil
+	}
+	if r, ok := v.(*vm.Record); ok {
+		raw := r.ValueAt(vm.Keyword("raw"))
+		if raw != vm.NIL {
+			if s, ok := raw.(vm.String); ok {
+				return string(s), nil
+			}
+		}
+		return "", fmt.Errorf("URL record missing :raw field")
+	}
+	return "", fmt.Errorf("expected String or URL, got %s", v.Type().Name())
+}
+
 type Handler struct {
 	fn vm.Fn
 }
@@ -130,17 +147,15 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		status = vm.Int(200)
 	}
 	body := ress.ValueAt(vm.Keyword("body"))
-	if body == vm.NIL {
-		body = vm.String("")
-	}
 	resp.WriteHeader(int(status.(vm.Int)))
-	var respBody []byte
-	if s, ok := body.(vm.String); ok {
-		respBody = []byte(s)
-	} else {
-		respBody = []byte(body.String())
+	respBody, bodyErr := coerceResponseBody(body)
+	if bodyErr != nil {
+		fmt.Println("HTTP Error coercing body:", bodyErr)
+		return
 	}
-	_, err = resp.Write(respBody)
+	if respBody != nil {
+		_, err = resp.Write(respBody)
+	}
 	if err != nil {
 		fmt.Println("HTTP Error while writing error 500", err)
 	}
@@ -188,21 +203,40 @@ func installHttpNS() {
 	}
 
 	// HTTP client: build response record from http.Response
-	buildResponseMap := func(resp *http.Response) (vm.Value, error) {
-		defer resp.Body.Close()
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return vm.NIL, err
-		}
+	// Default: body is a string. With :as :stream in opts, body is an io/reader.
+	buildResponseMap := func(resp *http.Response, asStream bool) (vm.Value, error) {
 		hs := vm.EmptyPersistentMap
 		for k, v := range resp.Header {
 			hs = hs.Assoc(vm.String(strings.ToLower(k)), vm.String(strings.Join(v, ","))).(*vm.PersistentMap)
 		}
+		var body vm.Value
+		if asStream {
+			body = vm.NewBoxed(newLGReader(resp.Body, resp.Body))
+		} else {
+			defer resp.Body.Close()
+			bodyBytes, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return vm.NIL, err
+			}
+			body = vm.String(bodyBytes)
+		}
 		return httpResponseMapping.StructToRecord(HTTPResponse{
 			Status:  resp.StatusCode,
-			Body:    string(bodyBytes),
+			Body:    body,
 			Headers: hs,
 		}), nil
+	}
+
+	// Check if opts map has :as :stream
+	isStreamOpt := func(opts vm.Value) bool {
+		if opts == nil || opts == vm.NIL {
+			return false
+		}
+		if l, ok := opts.(vm.Lookup); ok {
+			v := l.ValueAt(vm.Keyword("as"))
+			return v == vm.Keyword("stream")
+		}
+		return false
 	}
 
 	// http/get — (http/get url) or (http/get url opts)
@@ -210,11 +244,11 @@ func installHttpNS() {
 		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("http/get expects 1-2 args")
 		}
-		url, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("http/get expected URL as String")
+		urlStr, err := extractURL(vs[0])
+		if err != nil {
+			return vm.NIL, err
 		}
-		req, err := http.NewRequest("GET", string(url), nil)
+		req, err := http.NewRequest("GET", urlStr, nil)
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -238,11 +272,15 @@ func installHttpNS() {
 				}
 			}
 		}
+		var opts vm.Value
+		if len(vs) == 2 {
+			opts = vs[1]
+		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return vm.NIL, err
 		}
-		return buildResponseMap(resp)
+		return buildResponseMap(resp, isStreamOpt(opts))
 	})
 
 	// http/post — (http/post url body) or (http/post url body opts)
@@ -250,9 +288,9 @@ func installHttpNS() {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("http/post expects 2-3 args")
 		}
-		url, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("http/post expected URL as String")
+		urlStr, err := extractURL(vs[0])
+		if err != nil {
+			return vm.NIL, err
 		}
 		var bodyStr string
 		if s, ok := vs[1].(vm.String); ok {
@@ -260,7 +298,7 @@ func installHttpNS() {
 		} else {
 			bodyStr = vs[1].String()
 		}
-		req, err := http.NewRequest("POST", string(url), strings.NewReader(bodyStr))
+		req, err := http.NewRequest("POST", urlStr, strings.NewReader(bodyStr))
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -288,11 +326,15 @@ func installHttpNS() {
 				}
 			}
 		}
+		var postOpts vm.Value
+		if len(vs) == 3 {
+			postOpts = vs[2]
+		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return vm.NIL, err
 		}
-		return buildResponseMap(resp)
+		return buildResponseMap(resp, isStreamOpt(postOpts))
 	})
 
 	// http/request — (http/request {:method :get :url "..." :headers {...} :body "..."})
@@ -316,6 +358,10 @@ func installHttpNS() {
 		if urlVal == vm.NIL {
 			return vm.NIL, fmt.Errorf("http/request requires :url")
 		}
+		reqURL, err := extractURL(urlVal)
+		if err != nil {
+			return vm.NIL, err
+		}
 		var bodyReader io.Reader
 		if b := opts.ValueAt(vm.Keyword("body")); b != vm.NIL {
 			if s, ok := b.(vm.String); ok {
@@ -324,7 +370,7 @@ func installHttpNS() {
 				bodyReader = strings.NewReader(b.String())
 			}
 		}
-		req, err := http.NewRequest(method, string(urlVal.(vm.String)), bodyReader)
+		req, err := http.NewRequest(method, reqURL, bodyReader)
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -348,7 +394,7 @@ func installHttpNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		return buildResponseMap(resp)
+		return buildResponseMap(resp, isStreamOpt(vs[0]))
 	})
 
 	if err != nil {

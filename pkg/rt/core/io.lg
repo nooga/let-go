@@ -1,14 +1,7 @@
-;; io — file I/O utilities
+;; io — additional I/O utilities (see also native io namespace)
 (ns io)
 
-(defn read-lines
-  [path]
-  (lines (slurp path)))
-
-(defn write-lines
-  [path lines]
-  (spit path (str-join "\n" lines)))
-
+;; slurp-lines — convenience: slurp a file and split into vector of lines
 (defn slurp-lines
   [path]
   (vec (read-lines path)))

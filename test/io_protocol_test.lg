@@ -1,0 +1,64 @@
+(ns test.io-protocol-test
+  (:require [test :refer :all]
+            [io :refer :all]))
+
+;; Test that IReadable protocol works for String (built-in extension)
+(deftest readable-protocol-string
+  (testing "make-reader on string path"
+    (spit "/tmp/let-go-proto-read.txt" "proto test")
+    (let [r (make-reader "/tmp/let-go-proto-read.txt")
+          content (io/slurp r)]
+      (is (= "proto test" content)))
+    (delete-file "/tmp/let-go-proto-read.txt")))
+
+;; Test that IWritable protocol works for String
+(deftest writable-protocol-string
+  (testing "make-writer on string path"
+    (let [w (make-writer "/tmp/let-go-proto-write.txt")]
+      (io/write-str w "wrote via protocol")
+      (io/close w))
+    (is (= "wrote via protocol" (slurp "/tmp/let-go-proto-write.txt")))
+    (delete-file "/tmp/let-go-proto-write.txt")))
+
+;; Test extending IReadable to a custom record type
+(defrecord StringSource [content])
+
+(extend-type StringSource
+  IReadable
+  (make-reader [src]
+    (io/string-reader (:content src))))
+
+(deftest custom-readable
+  (testing "extend IReadable to record"
+    (let [src (->StringSource "custom content")
+          r (reader src)
+          lines (line-seq r)]
+      (is (= "custom content" (first lines))))))
+
+;; Test that io/reader uses protocol for custom types
+(deftest reader-dispatches-protocol
+  (testing "io/reader uses IReadable protocol"
+    (let [src (->StringSource "hello from protocol")
+          ls (line-seq (reader src))]
+      (is (= "hello from protocol" (first ls))))))
+
+;; Test that line-seq works through protocol
+(deftest line-seq-via-protocol
+  (testing "line-seq on custom readable"
+    (let [src (->StringSource "line1\nline2\nline3")]
+      (is (= 3 (count (line-seq (reader src))))))))
+
+;; Test buffer as reader and writer
+(deftest buffer-protocol
+  (testing "buffer works as both reader and writer target"
+    (let [b (buffer "source data")
+          r (reader b)]
+      (is (= "source data" (first (line-seq r)))))))
+
+;; Test response body coercion (io/buffer as body)
+(deftest body-from-buffer
+  (testing "buffer-str extracts buffer content"
+    (let [b (buffer)]
+      (write-str b "hello ")
+      (write-str b "world")
+      (is (= "hello world" (buffer-str b))))))

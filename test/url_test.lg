@@ -1,0 +1,59 @@
+(ns test.url-test
+  (:require [test :refer :all]
+            [io :refer :all]))
+
+(deftest url-parse-basic
+  (testing "parse HTTP URL"
+    (let [u (url "https://example.com:8080/path?q=1&r=2#frag")]
+      (is (= "https" (:scheme u)))
+      (is (= "example.com" (:host u)))
+      (is (= "8080" (:port u)))
+      (is (= "/path" (:path u)))
+      (is (= "q=1&r=2" (:query u)))
+      (is (= "frag" (:fragment u)))
+      (is (= "https://example.com:8080/path?q=1&r=2#frag" (:raw u))))))
+
+(deftest url-parse-simple
+  (testing "parse simple URL"
+    (let [u (url "http://localhost/api")]
+      (is (= "http" (:scheme u)))
+      (is (= "localhost" (:host u)))
+      (is (= "/api" (:path u)))
+      (is (= "" (:port u)))
+      (is (= "" (:query u))))))
+
+(deftest url-predicate
+  (testing "url? returns true for URL records"
+    (is (url? (url "http://example.com"))))
+  (testing "url? returns false for other values"
+    (is (not (url? "http://example.com")))
+    (is (not (url? 42)))
+    (is (not (url? nil)))))
+
+(deftest url-str-roundtrip
+  (testing "url-str reconstructs URL"
+    (let [raw "https://example.com/path?q=1"
+          u (url raw)
+          s (url-str u)]
+      (is (= raw s)))))
+
+(deftest url-is-record
+  (testing "URL is a map-like value"
+    (let [u (url "http://example.com/test")]
+      (is (= 8 (count u)))
+      (is (contains? u :scheme))
+      (is (contains? u :host)))))
+
+(deftest url-assoc
+  (testing "assoc on URL record"
+    (let [u (url "http://example.com/old")
+          u2 (assoc u :path "/new")]
+      (is (= "/old" (:path u)))
+      (is (= "/new" (:path u2)))
+      (is (= "http" (:scheme u2))))))
+
+(deftest url-interop
+  (testing ".field access on URL"
+    (let [u (url "https://example.com:443/api")]
+      (is (= "https" (.scheme u)))
+      (is (= "443" (.port u))))))
