@@ -1,11 +1,14 @@
-(ns factorial)
+;
+; Copyright (c) 2026 Marcin Gasperowicz <xnooga@gmail.com>
+; SPDX-License-Identifier: MIT
+;
 
-(defn fact-h [n acc]
-  (if (zero? n)
-    acc
-    (fact-h (dec n) (* acc n))))
+;; Factorial with BigInt support
+;; Usage: lg examples/factorial.lg
 
-(defn fac [n]
-  (fact-h n 1))
+(defn factorial [n]
+  (loop [i 1N acc 1N]
+    (if (> i n) acc (recur (+ i 1) (* acc i)))))
 
-(println (fac 20))
+(doseq [n [10 20 50 100]]
+  (println (str n "! = " (factorial n))))
