@@ -14,7 +14,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=DM+Sans:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
     <style>
@@ -26,16 +26,14 @@
         --dim: #5a584f;
         --accent: #5ec4b6;
         --border: #1e1e1e;
-        --surface: #111111;
         --mono: 'IBM Plex Mono', monospace;
-        --sans: 'DM Sans', sans-serif;
       }
 
       html, body {
         height: 100%;
         background: var(--bg);
         color: var(--fg);
-        font-family: var(--sans);
+        font-family: var(--mono);
       }
 
       body {
@@ -53,49 +51,36 @@
         padding: 0 1.5rem;
       }
 
-      /* --- Header --- */
       #header {
         padding: 2.5rem 0 1.5rem;
         display: flex;
         align-items: center;
         gap: 1.2rem;
-        border-bottom: 1px solid var(--border);
       }
 
       #header .logo {
-        width: 3rem;
-        height: 3rem;
+        width: 5em;
+        height: 5em;
         flex-shrink: 0;
         opacity: 0.9;
       }
 
       #header .title {
-        font-family: var(--mono);
         font-weight: 600;
         font-size: 1.1rem;
         letter-spacing: -0.02em;
-      }
-
-      #header .title .lambda {
-        color: var(--fg);
-      }
-
-      #header .title .go {
-        color: var(--accent);
       }
 
       #header .subtitle {
         font-size: 0.8rem;
         color: var(--dim);
         margin-top: 0.15rem;
-        letter-spacing: 0.01em;
       }
 
       #header .links {
         margin-left: auto;
         display: flex;
         gap: 1rem;
-        font-family: var(--mono);
         font-size: 0.75rem;
       }
 
@@ -109,13 +94,11 @@
         color: var(--accent);
       }
 
-      /* --- Loading --- */
       #loading {
         flex: 1;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-family: var(--mono);
         font-size: 0.85rem;
         color: var(--dim);
       }
@@ -129,7 +112,6 @@
         50% { opacity: 1; }
       }
 
-      /* --- Terminal --- */
       #term-wrap {
         flex: 1;
         display: flex;
@@ -150,12 +132,6 @@
         color: var(--fg);
       }
 
-      /* ANSI color overrides for our error format */
-      .terminal .terminal-output span[style*="color: red"],
-      .terminal .terminal-output .terminal-error {
-        color: #e05252 !important;
-      }
-
       .cmd .cmd-prompt {
         color: var(--accent) !important;
       }
@@ -165,30 +141,16 @@
         color: var(--bg) !important;
       }
 
-      /* Scrollbar */
       .terminal ::-webkit-scrollbar { width: 4px; }
       .terminal ::-webkit-scrollbar-track { background: transparent; }
       .terminal ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-      /* --- Footer --- */
-      #footer {
-        padding: 1rem 0;
-        border-top: 1px solid var(--border);
-        font-family: var(--mono);
-        font-size: 0.7rem;
-        color: var(--dim);
-        text-align: center;
-        letter-spacing: 0.02em;
-      }
-
-      /* --- Responsive --- */
       @media (max-width: 600px) {
         #header { flex-wrap: wrap; padding: 1.5rem 0 1rem; }
         #header .links { width: 100%; margin-left: 0; margin-top: 0.5rem; }
         #page { padding: 0 1rem; }
       }
 
-      /* Fade in */
       #term-wrap { opacity: 0; transition: opacity 0.3s ease; }
       #term-wrap.visible { opacity: 1; }
     </style>
@@ -200,9 +162,7 @@
           <img src="logo.svg" class="logo" alt="let-go" />
         </a>
         <div>
-          <div class="title">
-            <span class="lambda">λ</span> let-<span class="go">go</span>
-          </div>
+          <div class="title">λ let-go</div>
           <div class="subtitle">Clojure dialect &middot; bytecode VM &middot; written in Go</div>
         </div>
         <div class="links">
@@ -217,10 +177,6 @@
 
       <div id="term-wrap" style="display:none">
         <div id="term"></div>
-      </div>
-
-      <div id="footer">
-        running entirely in your browser via WebAssembly
       </div>
     </div>
 
@@ -257,8 +213,9 @@
                 prompt: "user> ",
                 ansi: true,
                 onInit: function() {
-                  this.echo(" [[;#e8e6df;]λ]]   let-go [[;#5a584f;](wasm)]]");
-                  this.echo(" [[;#5ec4b6;]GO]]   type [[;#5ec4b6;](+ 1 1)]] to start\n");
+                  this.echo(" \u03bb   let-go (wasm)");
+                  this.echo("[[;#5ec4b6;] GO]]  [[;#5a584f;]type (+ 1 1) to start]]");
+                  this.echo("");
                 }
               }
             );
