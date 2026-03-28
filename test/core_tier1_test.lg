@@ -1,0 +1,178 @@
+(ns test.core-tier1-test
+  (:require [test :refer :all]))
+
+;; --- constantly ---
+
+(deftest constantly-test
+  (testing "constantly returns same value"
+    (let [f (constantly 42)]
+      (is (= 42 (f)))
+      (is (= 42 (f :a :b :c)))))
+  (testing "constantly with nil"
+    (is (nil? ((constantly nil) 1 2 3)))))
+
+;; --- memoize ---
+
+(deftest memoize-test
+  (testing "memoize caches results"
+    (let [calls (atom 0)
+          f (memoize (fn [x]
+                       (swap! calls inc)
+                       (* x x)))]
+      (is (= 9 (f 3)))
+      (is (= 9 (f 3)))
+      (is (= 1 (deref calls)))
+      (is (= 16 (f 4)))
+      (is (= 2 (deref calls)))))
+  (testing "memoize with multiple args"
+    (let [f (memoize +)]
+      (is (= 5 (f 2 3)))
+      (is (= 5 (f 2 3))))))
+
+;; --- trampoline ---
+
+(deftest trampoline-test
+  (testing "trampoline with non-fn return"
+    (is (= 42 (trampoline (fn [] 42)))))
+  (testing "trampoline bounces"
+    (letfn [(my-even? [n]
+              (if (zero? n) true #(my-odd? (dec n))))
+            (my-odd? [n]
+              (if (zero? n) false #(my-even? (dec n))))]
+      (is (trampoline my-even? 10))
+      (is (not (trampoline my-even? 11))))))
+
+;; --- cycle ---
+
+(deftest cycle-test
+  (testing "cycle repeats collection"
+    (is (= [1 2 3 1 2 3 1] (vec (take 7 (cycle [1 2 3]))))))
+  (testing "cycle with single element"
+    (is (= [42 42 42] (vec (take 3 (cycle [42])))))))
+
+;; --- doall / dorun ---
+
+(deftest doall-test
+  (testing "doall forces lazy seq and returns it"
+    (let [a (atom [])
+          s (doall (map (fn [x] (swap! a conj x) x) [1 2 3]))]
+      (is (= [1 2 3] (deref a)))
+      (is (= [1 2 3] (vec s))))))
+
+(deftest dorun-test
+  (testing "dorun forces lazy seq, returns nil"
+    (let [a (atom 0)]
+      (dorun (map (fn [x] (swap! a + x)) [1 2 3]))
+      (is (= 6 (deref a))))))
+
+;; --- not-every? / not-any? ---
+
+(deftest not-every-test
+  (testing "not-every? true when some fail"
+    (is (not-every? even? [2 4 5 6]))
+    (is (not (not-every? even? [2 4 6])))))
+
+(deftest not-any-test
+  (testing "not-any? true when none match"
+    (is (not-any? even? [1 3 5]))
+    (is (not (not-any? even? [1 2 3])))))
+
+;; --- merge-with ---
+
+(deftest merge-with-test
+  (testing "merge-with combines with fn"
+    (is (= {:a 3 :b 2}
+           (merge-with + {:a 1 :b 2} {:a 2}))))
+  (testing "merge-with multiple maps"
+    (is (= {:a 6}
+           (merge-with + {:a 1} {:a 2} {:a 3}))))
+  (testing "merge-with non-overlapping"
+    (is (= {:a 1 :b 2}
+           (merge-with + {:a 1} {:b 2})))))
+
+;; --- doto ---
+
+(deftest doto-test
+  (testing "doto threads through side effects and returns obj"
+    (let [a (atom [])]
+      (is (= [1 2 3]
+             (deref (doto a
+                      (swap! conj 1)
+                      (swap! conj 2)
+                      (swap! conj 3))))))))
+
+;; --- with-open ---
+
+(deftest with-open-test
+  (testing "with-open auto-closes"
+    (spit "/tmp/let-go-with-open.txt" "hello")
+    (let [content (with-open [f (open "/tmp/let-go-with-open.txt" :read)]
+                    (read-line f))]
+      (is (= "hello" content)))
+    (delete-file "/tmp/let-go-with-open.txt")))
+
+;; --- compare ---
+
+(deftest compare-test
+  (testing "compare numbers"
+    (is (= 0 (compare 1 1)))
+    (is (= -1 (compare 1 2)))
+    (is (= 1 (compare 2 1))))
+  (testing "compare strings"
+    (is (= 0 (compare "a" "a")))
+    (is (= -1 (compare "a" "b")))
+    (is (= 1 (compare "b" "a"))))
+  (testing "compare nil"
+    (is (= 0 (compare nil nil)))
+    (is (= -1 (compare nil 1)))
+    (is (= 1 (compare 1 nil))))
+  (testing "compare keywords"
+    (is (= 0 (compare :a :a)))
+    (is (= -1 (compare :a :b))))
+  (testing "compare mixed numeric"
+    (is (= 0 (compare 1 1.0)))
+    (is (= -1 (compare 1 1.5)))))
+
+;; --- fn? ---
+
+(deftest fn-pred-test
+  (testing "fn? on functions"
+    (is (fn? inc))
+    (is (fn? (fn [x] x)))
+    (is (fn? +)))
+  (testing "fn? on non-functions"
+    (is (not (fn? 42)))
+    (is (not (fn? "hello")))
+    (is (not (fn? nil)))))
+
+;; --- print / pr ---
+
+(deftest print-returns-nil
+  (testing "print returns nil"
+    (is (nil? (print)))))
+
+;; --- replace ---
+
+;; replace test skipped — name conflicts with string/replace in test ns
+
+;; --- nthrest / nthnext ---
+
+(deftest nthrest-test
+  (testing "nthrest drops n elements"
+    (is (= '(3 4 5) (nthrest [1 2 3 4 5] 2)))
+    (is (= '() (nthrest [1 2] 5)))))
+
+(deftest nthnext-test
+  (testing "nthnext drops n elements, returns nil at end"
+    (is (= '(3 4 5) (nthnext [1 2 3 4 5] 2)))
+    (is (nil? (nthnext [1 2] 5)))))
+
+;; --- cycle + take ---
+
+(deftest cycle-with-take
+  (testing "take from cycle (lazy)"
+    (is (= [1 2 1 2 1]
+           (vec (take 5 (cycle [1 2]))))))
+  (testing "take from cycle (transducer)"
+    (is (= [1 2 1 2 1]
+           (into [] (take 5) (cycle [1 2]))))))
