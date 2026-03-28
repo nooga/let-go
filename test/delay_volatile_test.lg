@@ -1,0 +1,118 @@
+(ns test.delay-volatile-test
+  (:require [test :refer :all]))
+
+;; --- delay / force ---
+
+(deftest delay-basic
+  (testing "delay is not realized until forced"
+    (let [d (delay (+ 1 2))]
+      (is (delay? d))
+      (is (not (realized? d)))
+      (is (= 3 (force d)))
+      (is (realized? d)))))
+
+(deftest delay-memoizes
+  (testing "delay body runs only once"
+    (let [counter (atom 0)
+          d (delay (swap! counter inc) 42)]
+      (is (= 42 (force d)))
+      (is (= 1 (deref counter)))
+      (is (= 42 (force d)))
+      (is (= 1 (deref counter))))))
+
+(deftest delay-deref
+  (testing "deref works on delay"
+    (let [d (delay :hello)]
+      (is (= :hello (deref d))))))
+
+(deftest force-non-delay
+  (testing "force on non-delay returns value"
+    (is (= 42 (force 42)))
+    (is (= "hello" (force "hello")))
+    (is (nil? (force nil)))))
+
+(deftest delay-predicate
+  (testing "delay? on non-delay"
+    (is (not (delay? 42)))
+    (is (not (delay? nil)))
+    (is (not (delay? (atom 1))))))
+
+;; --- volatile ---
+
+(deftest volatile-basic
+  (testing "volatile! creates mutable box"
+    (let [v (volatile! 0)]
+      (is (= 0 (deref v)))
+      (vreset! v 42)
+      (is (= 42 (deref v))))))
+
+(deftest vswap-basic
+  (testing "vswap! applies fn"
+    (let [v (volatile! 0)]
+      (vswap! v inc)
+      (is (= 1 (deref v)))
+      (vswap! v + 10)
+      (is (= 11 (deref v))))))
+
+(deftest volatile-accumulator
+  (testing "volatile as loop accumulator"
+    (let [v (volatile! 0)]
+      (dotimes [_ 100]
+        (vswap! v inc))
+      (is (= 100 (deref v))))))
+
+;; --- finally ---
+
+(deftest finally-normal-path
+  (testing "finally runs on normal completion"
+    (let [a (atom 0)]
+      (try (reset! a 1) (finally (reset! a 10)))
+      (is (= 10 (deref a))))))
+
+(deftest finally-error-path
+  (testing "finally runs after catch"
+    (let [a (atom 0)]
+      (try
+        (throw :boom)
+        (catch e (reset! a 1))
+        (finally (reset! a 10)))
+      (is (= 10 (deref a))))))
+
+(deftest finally-preserves-value
+  (testing "finally doesn't change return value"
+    (is (= 42 (try 42 (finally 99))))
+    (is (= :caught (try (throw :x) (catch e :caught) (finally :ignored))))))
+
+;; --- multi-arity comparisons ---
+
+(deftest chained-less-than
+  (testing "(< a b c) chains"
+    (is (< 1 2 3))
+    (is (< 1 2 3 4 5))
+    (is (not (< 1 3 2)))))
+
+(deftest chained-greater-than
+  (testing "(> a b c) chains"
+    (is (> 3 2 1))
+    (is (> 5 4 3 2 1))
+    (is (not (> 3 1 2)))))
+
+(deftest chained-less-equal
+  (testing "(<= a b c) chains"
+    (is (<= 1 2 3))
+    (is (<= 1 1 2 3))
+    (is (<= 1 1 1))
+    (is (not (<= 1 3 2)))))
+
+(deftest chained-greater-equal
+  (testing "(>= a b c) chains"
+    (is (>= 3 2 1))
+    (is (>= 3 3 2 1))
+    (is (>= 3 3 3))
+    (is (not (>= 3 1 2)))))
+
+(deftest comparison-with-floats
+  (testing "chained comparisons with mixed types"
+    (is (< 1 2.5 3))
+    (is (>= 3.0 3 2.5))
+    (is (<= 1 1.0 2))))

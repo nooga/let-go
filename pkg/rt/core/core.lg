@@ -62,8 +62,8 @@
 (def > gt)
 (def < lt)
 
-(def >= (fn [a b] (or (= a b) (> a b))))
-(def <= (fn [a b] (or (= a b) (< a b))))
+(def >= ge)
+(def <= le)
 
 (def parse-long parse-int)
 
@@ -72,6 +72,11 @@
 (defmacro lazy-seq [& body]
   (let [thunk (cons 'fn (cons [] body))]
     (list 'lazy-seq* thunk)))
+
+;; delay macro - wraps body in a memoized thunk
+;; Expands to: (delay* (fn [] body...))
+(defmacro delay [& body]
+  (list 'delay* (cons 'fn (cons [] body))))
 
 (defmacro cond [& forms]
   (when (>= (count forms) 2)
@@ -180,8 +185,27 @@
 
 (defn spy [s x] (println s x) x)
 
-(defn mapcat [f xs]
-  (apply concat (map f xs)))
+;; map — with 1 arg returns a transducer, otherwise delegates to Go-native map*
+(defn map
+  ([f]
+   (fn [rf]
+     (fn
+       ([] (rf))
+       ([result] (rf result))
+       ([result input] (rf result (f input))))))
+  ([f coll] (map* f coll))
+  ([f c1 c2] (map* f c1 c2))
+  ([f c1 c2 & colls] (apply map* f c1 c2 colls)))
+
+(defn mapcat
+  ([f]
+   (fn [rf]
+     (fn
+       ([] (rf))
+       ([result] (rf result))
+       ([result input]
+        (reduce rf result (f input))))))
+  ([f xs] (apply concat (map f xs))))
 
 (defmacro ns [n & body]
   (let [emit-one (fn [forms req]
@@ -232,25 +256,61 @@
        ~@req-forms
        ~@legacy)))
 
-(defn filter [f xs]
-  (lazy-seq
-    (let [s (seq xs)]
-      (when s
-        (let [x (first s)
-              r (next s)]
-          (if (f x)
-            (cons x (filter f r))
-            (filter f r)))))))
+(defn filter
+  ([pred]
+   (fn [rf]
+     (fn
+       ([] (rf))
+       ([result] (rf result))
+       ([result input]
+        (if (pred input)
+          (rf result input)
+          result)))))
+  ([f xs]
+   (lazy-seq
+     (let [s (seq xs)]
+       (when s
+         (let [x (first s)
+               r (next s)]
+           (if (f x)
+             (cons x (filter f r))
+             (filter f r))))))))
 
-(defn take [n coll]
-  (lazy-seq
-    (when (and (pos? n) (seq coll))
-      (cons (first coll) (take (dec n) (next coll))))))
+(defn take
+  ([n]
+   (fn [rf]
+     (let [nv (volatile! n)]
+       (fn
+         ([] (rf))
+         ([result] (rf result))
+         ([result input]
+          (let [nn (vswap! nv dec)]
+            (if (pos? nn)
+              (rf result input)
+              (if (zero? nn)
+                (ensure-reduced (rf result input))
+                result))))))))
+  ([n coll]
+   (lazy-seq
+     (when (and (pos? n) (seq coll))
+       (cons (first coll) (take (dec n) (next coll)))))))
 
-(defn drop [n xs]
-  (if (> n 0)
+(defn drop
+  ([n]
+   (fn [rf]
+     (let [nv (volatile! n)]
+       (fn
+         ([] (rf))
+         ([result] (rf result))
+         ([result input]
+          (let [nn (vswap! nv dec)]
+            (if (neg? nn)
+              (rf result input)
+              result)))))))
+  ([n xs]
+   (if (> n 0)
     (recur (dec n) (next xs))
-    xs))
+    xs)))
 
 (defn split-at [n coll]
   [(take n coll) (drop n coll)])
@@ -527,6 +587,28 @@
          (let [~form temp#]
            ~@body)))))
 
+;; letfn — mutually recursive local functions
+;; (letfn [(f [x] ...) (g [x] ...)] body)
+;; Uses atoms with gensym'd names for forward references, then wraps
+;; user-visible names as forwarding functions.
+(defmacro letfn [fnspecs & body]
+  (let [names (map first fnspecs)
+        atom-syms (map (fn [_] (gensym "letfn__")) names)
+        atom-binds (vec (mapcat (fn [sym] [sym (list 'atom nil)]) atom-syms))
+        wrapper-binds (vec (mapcat (fn [pair]
+                                     (let [n (first pair) a (second pair)]
+                                       [n (list 'fn ['& 'args__]
+                                             (list 'apply (list 'deref a) 'args__))]))
+                                   (map vector names atom-syms)))
+        resets (map (fn [pair]
+                      (let [spec (first pair) a (second pair)]
+                        (list 'reset! a (cons 'fn (rest spec)))))
+                    (map vector fnspecs atom-syms))]
+    `(let ~atom-binds
+       (let ~wrapper-binds
+         ~@resets
+         ~@body))))
+
 (defmacro if-some
   ([bindings then]
    `(if-some ~bindings ~then nil))
@@ -636,19 +718,41 @@
                  (disj result item)))
              s1 (seq s1)))))
 
-(defn take-while [pred coll]
-  (lazy-seq
-    (when-let [s (seq coll)]
-      (when (pred (first s))
-        (cons (first s) (take-while pred (rest s)))))))
+(defn take-while
+  ([pred]
+   (fn [rf]
+     (fn
+       ([] (rf))
+       ([result] (rf result))
+       ([result input]
+        (if (pred input)
+          (rf result input)
+          (reduced result))))))
+  ([pred coll]
+   (lazy-seq
+     (when-let [s (seq coll)]
+       (when (pred (first s))
+         (cons (first s) (take-while pred (rest s))))))))
 
-(defn drop-while [pred coll]
-  (let [step (fn [pred coll]
-               (let [s (seq coll)]
-                 (if (and s (pred (first s)))
-                   (recur pred (rest s))
-                   s)))]
-    (step pred coll)))
+(defn drop-while
+  ([pred]
+   (fn [rf]
+     (let [dv (volatile! true)]
+       (fn
+         ([] (rf))
+         ([result] (rf result))
+         ([result input]
+          (if (and (deref dv) (pred input))
+            result
+            (do (vreset! dv false)
+                (rf result input))))))))
+  ([pred coll]
+   (let [step (fn [pred coll]
+                (let [s (seq coll)]
+                  (if (and s (pred (first s)))
+                    (recur pred (rest s))
+                    s)))]
+     (step pred coll))))
 
 (defn split-with [pred coll]
   [(take-while pred coll) (drop-while pred coll)])
@@ -664,11 +768,44 @@
     (recur (next s))
     (first s)))
 
+(defn completing
+  ([f] (completing f identity))
+  ([f cf]
+   (fn
+     ([] (f))
+     ([result] (cf result))
+     ([result input] (f result input)))))
+
+(defn transduce
+  ([xform f coll]
+   (transduce xform f (f) coll))
+  ([xform f init coll]
+   (let [xf (xform f)]
+     (xf (reduce xf init coll)))))
+
+(defn cat
+  [rf]
+  (let [rrf (completing rf)]
+    (fn
+      ([] (rf))
+      ([result] (rf result))
+      ([result input]
+       (reduce rrf result input)))))
+
 (defn into
-  [c r]
-  (if (or (map? c) (vector? c))
-    (persistent! (reduce conj! (transient c) r))
-    (reduce conj c r)))
+  ([c r]
+   (if (or (map? c) (vector? c))
+     (persistent! (reduce conj! (transient c) r))
+     (reduce conj c r)))
+  ([c xform from]
+   (if (or (map? c) (vector? c))
+     (persistent! (transduce xform (completing conj!) (transient c) from))
+     (transduce xform (completing conj) c from))))
+
+(defn sequence
+  ([coll] (seq coll))
+  ([xform coll]
+   (seq (transduce xform conj [] coll))))
 
 (defn merge
   ([] {})
@@ -683,13 +820,22 @@
   ([f] (lazy-seq (cons (f) (repeatedly f))))
   ([n f] (take n (repeatedly f))))
 
-(defn keep [f coll]
-  (lazy-seq
-    (when-let [s (seq coll)]
-      (let [x (f (first s))]
-        (if (nil? x)
-          (keep f (rest s))
-          (cons x (keep f (rest s))))))))
+(defn keep
+  ([f]
+   (fn [rf]
+     (fn
+       ([] (rf))
+       ([result] (rf result))
+       ([result input]
+        (let [v (f input)]
+          (if (nil? v) result (rf result v)))))))
+  ([f coll]
+   (lazy-seq
+     (when-let [s (seq coll)]
+       (let [x (f (first s))]
+         (if (nil? x)
+           (keep f (rest s))
+           (cons x (keep f (rest s)))))))))
 
 (defn- keepi [f idx coll]
   (lazy-seq
@@ -776,13 +922,35 @@
         (assoc! ret k (conj (get ret k []) x))))
     (transient {}) coll)))
 
-(defn partition-by [f coll]
-  (lazy-seq
-    (when-let [s (seq coll)]
-      (let [fst (first s)
-            fv (f fst)
-            run (cons fst (take-while #(= fv (f %)) (next s)))]
-        (cons run (partition-by f (drop (count run) s)))))))
+(defn partition-by
+  ([f]
+   (fn [rf]
+     (let [a  (volatile! [])
+           pv (volatile! ::none)]
+       (fn
+         ([] (rf))
+         ([result]
+          (let [buf (deref a)]
+            (if (zero? (count buf))
+              (rf result)
+              (let [v (rf result buf)]
+                (rf (unreduced v))))))
+         ([result input]
+          (let [val (f input)
+                prev (deref pv)]
+            (vreset! pv val)
+            (if (or (= prev ::none) (= val prev))
+              (do (vswap! a conj input) result)
+              (let [v (rf result (deref a))]
+                (vreset! a [input])
+                v))))))))
+  ([f coll]
+   (lazy-seq
+     (when-let [s (seq coll)]
+       (let [fst (first s)
+             fv (f fst)
+             run (cons fst (take-while #(= fv (f %)) (next s)))]
+         (cons run (partition-by f (drop (count run) s))))))))
 
 (defn frequencies
   [coll]
@@ -809,13 +977,25 @@
       (cons (first s) (take-nth n (drop n s))))))
 
 (defn interpose
-  [sep coll]
-  (lazy-seq
-    (when-let [s (seq coll)]
-      (let [n (next s)]
-        (if n
-          (cons (first s) (cons sep (interpose sep n)))
-          (list (first s)))))))
+  ([sep]
+   (fn [rf]
+     (let [started (volatile! false)]
+       (fn
+         ([] (rf))
+         ([result] (rf result))
+         ([result input]
+          (if (deref started)
+            (let [sepr (rf result sep)]
+              (if (reduced? sepr) sepr (rf sepr input)))
+            (do (vreset! started true)
+                (rf result input))))))))
+  ([sep coll]
+   (lazy-seq
+     (when-let [s (seq coll)]
+       (let [n (next s)]
+         (if n
+           (cons (first s) (cons sep (interpose sep n)))
+           (list (first s))))))))
 
 (defn interleave
   ([] ())
@@ -841,8 +1021,34 @@
            (cons f (distinct-step (rest s) (conj seen f))))))
      xs seen)))
 
-(defn distinct [coll]
-  (distinct-step coll #{}))
+(defn dedupe
+  ([]
+   (fn [rf]
+     (let [pv (volatile! ::none)]
+       (fn
+         ([] (rf))
+         ([result] (rf result))
+         ([result input]
+          (let [prev (deref pv)]
+            (vreset! pv input)
+            (if (= prev input) result (rf result input))))))))
+  ([coll]
+   (sequence (dedupe) coll)))
+
+(defn distinct
+  ([]
+   (fn [rf]
+     (let [seen (volatile! #{})]
+       (fn
+         ([] (rf))
+         ([result] (rf result))
+         ([result input]
+          (if (contains? (deref seen) input)
+            result
+            (do (vswap! seen conj input)
+                (rf result input))))))))
+  ([coll]
+   (distinct-step coll #{})))
 
 (defn distinct?
   ([_] true)

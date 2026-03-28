@@ -226,6 +226,46 @@ func NumLt(a, b Value) (bool, error) {
 	return false, fmt.Errorf("cannot compare %s and %s", a.Type().Name(), b.Type().Name())
 }
 
+func NumGe(a, b Value) (bool, error) {
+	switch av := a.(type) {
+	case Int:
+		switch bv := b.(type) {
+		case Int:
+			return int(av) >= int(bv), nil
+		case Float:
+			return float64(av) >= float64(bv), nil
+		}
+	case Float:
+		switch bv := b.(type) {
+		case Int:
+			return float64(av) >= float64(int(bv)), nil
+		case Float:
+			return float64(av) >= float64(bv), nil
+		}
+	}
+	return false, fmt.Errorf("cannot compare %s and %s", a.Type().Name(), b.Type().Name())
+}
+
+func NumLe(a, b Value) (bool, error) {
+	switch av := a.(type) {
+	case Int:
+		switch bv := b.(type) {
+		case Int:
+			return int(av) <= int(bv), nil
+		case Float:
+			return float64(av) <= float64(bv), nil
+		}
+	case Float:
+		switch bv := b.(type) {
+		case Int:
+			return float64(av) <= float64(int(bv)), nil
+		case Float:
+			return float64(av) <= float64(bv), nil
+		}
+	}
+	return false, fmt.Errorf("cannot compare %s and %s", a.Type().Name(), b.Type().Name())
+}
+
 // NumEq tests numeric equality (cross-type: 1 == 1.0 is true).
 func NumEq(a, b Value) bool {
 	switch av := a.(type) {
