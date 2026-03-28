@@ -231,7 +231,7 @@ The server writes `.nrepl-port` in the current directory so editors auto-discove
 
 **Emacs (CIDER):** `M-x cider-connect-clj`, host `localhost`, port from `.nrepl-port`
 
-**VS Code (Calva):** "Calva: Connect to a Running REPL Server", pick "Generic" project type
+**VS Code (Calva):** Open a let-go project — the included `.vscode/settings.json` registers a custom connect sequence. Use "Calva: Start a Project REPL and Connect (Jack-In)" and pick "let-go", or "Calva: Connect to a Running REPL Server" if the nREPL is already running.
 
 **Neovim (Conjure):** Should auto-connect when `.nrepl-port` exists
 
