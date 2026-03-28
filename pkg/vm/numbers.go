@@ -360,7 +360,6 @@ func NumAbs(a Value) (Value, error) {
 
 // --- Comparison helpers ---
 
-func cmpBigInt(a, b *big.Int) int { return a.Cmp(b) }
 
 // NumGt returns true if a > b.
 func NumGt(a, b Value) (bool, error) {

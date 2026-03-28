@@ -1,0 +1,40 @@
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - typecheck
+  disable:
+    - errcheck  # too noisy for a language runtime with many fire-and-forget calls
+
+linters-settings:
+  govet:
+    enable-all: false
+  staticcheck:
+    checks:
+      - all
+      - -SA1019  # deprecated usage (we use some old stdlib APIs intentionally)
+
+issues:
+  exclude-dirs:
+    - wasm
+  exclude-files:
+    - ".*_test\\.go"
+  exclude-rules:
+    # Allow unused utility functions in VM and compiler — kept for debugging/future use
+    - path: pkg/vm/
+      linters: [unused]
+      text: "func.*is unused"
+    - path: pkg/compiler/
+      linters: [unused]
+      text: "func.*is unused"
+    # Allow type assertions to same type in reader (clarity over brevity)
+    - path: pkg/compiler/reader.go
+      linters: [gosimple]
+      text: "S1040"
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+run:
+  timeout: 5m
