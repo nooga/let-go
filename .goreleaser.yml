@@ -36,19 +36,7 @@ changelog:
       - '^test:'
       - '^chore:'
 
-brews:
-  - directory: HomebrewFormula
-    repository:
-      owner: nooga
-      name: let-go
-      pull_request:
-        enabled: true
-        base:
-          branch: main
-    homepage: https://github.com/nooga/let-go
-    description: A Clojure dialect implemented as a bytecode VM in Go
-    license: MIT
-    install: |
-      bin.install "lg"
-    test: |
-      system bin/"lg", "-e", "(+ 1 1)"
+# brews:
+#   Disabled for now — branch protection blocks direct push,
+#   and PR mode needs a PAT. Formula is maintained manually
+#   in HomebrewFormula/let-go.rb
