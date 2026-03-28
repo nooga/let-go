@@ -162,7 +162,6 @@ Full benchmark details: [benchmark/results.md](benchmark/results.md)
 - **Refs / STM** — atoms + channels cover practical concurrency needs
 - **Agents** — use `go` blocks and channels instead
 - **Chunked sequences** — lazy seqs are unchunked (simpler, slightly different perf characteristics)
-- **Namespaced keywords** (`:foo/bar`)
 - **Reader tagged literals** (`#inst`, `#uuid`)
 - **`deftype`** — use `defrecord` instead
 - **`reify`** — protocols can only be extended to named types
@@ -175,7 +174,6 @@ Full benchmark details: [benchmark/results.md](benchmark/results.md)
 - **`go` blocks are real goroutines** — no IOC (inversion of control) state machine like Clojure's core.async; this means they're cheaper but `go` blocks can call blocking ops directly
 - **No BigDecimal** — numeric tower is `int64` + `float64` + `BigInt` (no arbitrary-precision decimals)
 - **Regex is Go flavor** — `re2` syntax, not Java regex
-- **`finally` always runs** but there's no `finally`-only (without `catch`) guaranteed execution on uncaught exceptions that cross native function boundaries
 - **`letfn` uses atoms** internally for forward references — slight overhead vs Clojure's direct binding
 
 ## Examples
