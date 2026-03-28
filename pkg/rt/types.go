@@ -37,20 +37,36 @@ type HTTPRequest struct {
 // HTTPResponse is the struct behind HTTP client response maps.
 type HTTPResponse struct {
 	Status  int      `letgo:"status"`
-	Body    string   `letgo:"body"`
+	Body    vm.Value `letgo:"body"`
 	Headers vm.Value `letgo:"headers"`
 }
 
+// LGURL represents a parsed URL as a record.
+type LGURL struct {
+	Scheme   string `letgo:"scheme"`
+	Host     string `letgo:"host"`
+	Port     string `letgo:"port"`
+	Path     string `letgo:"path"`
+	Query    string `letgo:"query"`
+	Fragment string `letgo:"fragment"`
+	UserInfo string `letgo:"user-info"`
+	Raw      string `letgo:"raw"`
+}
+
 var (
-	fileStatMapping    *vm.StructMapping
-	shellResultMapping *vm.StructMapping
-	httpRequestMapping *vm.StructMapping
+	fileStatMapping     *vm.StructMapping
+	shellResultMapping  *vm.StructMapping
+	httpRequestMapping  *vm.StructMapping
 	httpResponseMapping *vm.StructMapping
+	urlMapping          *vm.StructMapping
 )
 
-func init() {
+// initTypeMappings registers all struct mappings. Called from lang.go init()
+// before any namespace installers run, ensuring mappings are available.
+func initTypeMappings() {
 	fileStatMapping = vm.RegisterStruct[FileStat]("os/FileStat")
 	shellResultMapping = vm.RegisterStruct[ShellResult]("os/ShellResult")
 	httpRequestMapping = vm.RegisterStruct[HTTPRequest]("http/Request")
 	httpResponseMapping = vm.RegisterStruct[HTTPResponse]("http/Response")
+	urlMapping = vm.RegisterStruct[LGURL]("io/URL")
 }

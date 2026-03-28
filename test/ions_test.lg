@@ -1,0 +1,134 @@
+(ns test.ions-test
+  (:require [test :refer :all]
+            [io :refer :all]))
+
+;; --- Reader/Writer coercion ---
+
+(deftest reader-from-file
+  (testing "reader from file path"
+    (spit "/tmp/let-go-io-reader-test.txt" "hello\nworld\n")
+    (let [r (reader "/tmp/let-go-io-reader-test.txt")]
+      (is (not (nil? r)))
+      (close r))
+    (delete-file "/tmp/let-go-io-reader-test.txt")))
+
+(deftest string-reader-test
+  (testing "string-reader reads string contents"
+    (let [r (string-reader "abc\ndef\n")
+          ls (line-seq r)]
+      (is (= "abc" (first ls)))
+      (is (= "def" (second ls))))))
+
+;; --- line-seq ---
+
+(deftest line-seq-basic
+  (testing "line-seq from file"
+    (spit "/tmp/let-go-lineseq-test.txt" "one\ntwo\nthree\n")
+    (let [r (reader "/tmp/let-go-lineseq-test.txt")
+          ls (line-seq r)]
+      (is (= "one" (first ls)))
+      (is (= "two" (second ls)))
+      (is (= "three" (first (next (next ls)))))
+      (close r))
+    (delete-file "/tmp/let-go-lineseq-test.txt")))
+
+(deftest line-seq-lazy
+  (testing "line-seq is lazy"
+    (spit "/tmp/let-go-lazy-test.txt" "a\nb\nc\nd\ne\n")
+    (let [r (reader "/tmp/let-go-lazy-test.txt")
+          ls (line-seq r)
+          first-two (take 2 ls)]
+      (is (= "a" (first first-two)))
+      (is (= "b" (second first-two)))
+      (close r))
+    (delete-file "/tmp/let-go-lazy-test.txt")))
+
+(deftest line-seq-count
+  (testing "line-seq works with count"
+    (spit "/tmp/let-go-lscount.txt" "x\ny\nz\n")
+    (let [r (reader "/tmp/let-go-lscount.txt")
+          ls (line-seq r)]
+      (is (= 3 (count ls)))
+      (close r))
+    (delete-file "/tmp/let-go-lscount.txt")))
+
+;; --- Byte buffers ---
+
+(deftest buffer-basic
+  (testing "empty buffer"
+    (let [b (buffer)]
+      (is (= 0 (buffer-len b)))))
+
+  (testing "buffer from string"
+    (let [b (buffer "hello")]
+      (is (= 5 (buffer-len b)))
+      (is (= "hello" (buffer-str b))))))
+
+;; --- copy ---
+
+(deftest copy-test
+  (testing "copy from reader to buffer"
+    (let [r (string-reader "hello world")
+          b (buffer)
+          n (copy r b)]
+      (is (= 11 n))
+      (is (= "hello world" (buffer-str b))))))
+
+;; --- Encoding ---
+
+(deftest base64-roundtrip
+  (testing "base64 encode/decode"
+    (let [encoded (encode :base64 "hello world")
+          decoded (decode :base64 encoded)]
+      (is (= "aGVsbG8gd29ybGQ=" encoded))
+      (is (= "hello world" decoded)))))
+
+(deftest hex-roundtrip
+  (testing "hex encode/decode"
+    (let [encoded (encode :hex "AB")
+          decoded (decode :hex encoded)]
+      (is (= "4142" encoded))
+      (is (= "AB" decoded)))))
+
+(deftest url-roundtrip
+  (testing "url encode/decode"
+    (let [encoded (encode :url "hello world&foo=bar")
+          decoded (decode :url encoded)]
+      (is (= "hello+world%26foo%3Dbar" encoded))
+      (is (= "hello world&foo=bar" decoded)))))
+
+;; --- slurp/spit via io ---
+
+(deftest io-slurp-spit
+  (testing "io/spit and io/slurp"
+    (spit "/tmp/let-go-io-ss.txt" "test data")
+    (is (= "test data" (slurp "/tmp/let-go-io-ss.txt")))
+    (delete-file "/tmp/let-go-io-ss.txt")))
+
+;; --- read-lines / write-lines ---
+
+(deftest read-lines-test
+  (testing "read-lines returns vector"
+    (spit "/tmp/let-go-rl-test.txt" "aaa\nbbb\nccc")
+    (let [lines (read-lines "/tmp/let-go-rl-test.txt")]
+      (is (vector? lines))
+      (is (= 3 (count lines)))
+      (is (= "aaa" (first lines)))
+      (is (= "ccc" (last lines))))
+    (delete-file "/tmp/let-go-rl-test.txt")))
+
+(deftest write-lines-test
+  (testing "write-lines writes lines"
+    (write-lines "/tmp/let-go-wl-test.txt" ["one" "two" "three"])
+    (let [content (slurp "/tmp/let-go-wl-test.txt")]
+      (is (= "one\ntwo\nthree" content)))
+    (delete-file "/tmp/let-go-wl-test.txt")))
+
+;; --- write-str ---
+
+(deftest write-str-test
+  (testing "write-str to buffer"
+    (let [b (buffer)]
+      (write-str b "hello ")
+      (write-str b "world")
+      (is (= "hello world" (buffer-str b))))))
