@@ -2,7 +2,7 @@ GOROOT := $(shell go env GOROOT)
 
 build:
 	GOOS=js GOARCH=wasm go build -o letgo.wasm .
-	cp "$(GOROOT)/misc/wasm/wasm_exec.js" .
+	cp "$(GOROOT)/lib/wasm/wasm_exec.js" . 2>/dev/null || cp "$(GOROOT)/misc/wasm/wasm_exec.js" .
 	cp ../meta/logo.svg .
 
 run: build
