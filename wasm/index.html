@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -18,7 +18,11 @@
       rel="stylesheet"
     />
     <style>
-      * { box-sizing: border-box; margin: 0; padding: 0; }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
 
       :root {
         --bg: #0c0c0c;
@@ -26,10 +30,11 @@
         --dim: #5a584f;
         --accent: #5ec4b6;
         --border: #1e1e1e;
-        --mono: 'IBM Plex Mono', monospace;
+        --mono: "IBM Plex Mono", monospace;
       }
 
-      html, body {
+      html,
+      body {
         height: 100%;
         background: var(--bg);
         color: var(--fg);
@@ -108,8 +113,13 @@
       }
 
       @keyframes pulse {
-        0%, 100% { opacity: 0.3; }
-        50% { opacity: 1; }
+        0%,
+        100% {
+          opacity: 0.3;
+        }
+        50% {
+          opacity: 1;
+        }
       }
 
       #term-wrap {
@@ -141,18 +151,39 @@
         color: var(--bg) !important;
       }
 
-      .terminal ::-webkit-scrollbar { width: 4px; }
-      .terminal ::-webkit-scrollbar-track { background: transparent; }
-      .terminal ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-      @media (max-width: 600px) {
-        #header { flex-wrap: wrap; padding: 1.5rem 0 1rem; }
-        #header .links { width: 100%; margin-left: 0; margin-top: 0.5rem; }
-        #page { padding: 0 1rem; }
+      .terminal ::-webkit-scrollbar {
+        width: 4px;
+      }
+      .terminal ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .terminal ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 2px;
       }
 
-      #term-wrap { opacity: 0; transition: opacity 0.3s ease; }
-      #term-wrap.visible { opacity: 1; }
+      @media (max-width: 600px) {
+        #header {
+          flex-wrap: wrap;
+          padding: 1.5rem 0 1rem;
+        }
+        #header .links {
+          width: 100%;
+          margin-left: 0;
+          margin-top: 0.5rem;
+        }
+        #page {
+          padding: 0 1rem;
+        }
+      }
+
+      #term-wrap {
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+      #term-wrap.visible {
+        opacity: 1;
+      }
     </style>
   </head>
   <body>
@@ -162,8 +193,10 @@
           <img src="logo.svg" class="logo" alt="let-go" />
         </a>
         <div>
-          <div class="title">λ let-go</div>
-          <div class="subtitle">Clojure dialect &middot; bytecode VM &middot; written in Go</div>
+          <div class="title">let-go</div>
+          <div class="subtitle">
+            Clojure dialect &middot; bytecode VM &middot; written in Go
+          </div>
         </div>
         <div class="links">
           <a href="https://github.com/nooga/let-go">source</a>
@@ -175,7 +208,7 @@
         <span>loading wasm<span class="dot">&nbsp;...</span></span>
       </div>
 
-      <div id="term-wrap" style="display:none">
+      <div id="term-wrap" style="display: none">
         <div id="term"></div>
       </div>
     </div>
@@ -183,11 +216,13 @@
     <script>
       function loadWasm(path) {
         const go = new Go();
-        return WebAssembly.instantiateStreaming(fetch(path), go.importObject)
-          .then((result) => {
-            go.run(result.instance);
-            return result.instance;
-          });
+        return WebAssembly.instantiateStreaming(
+          fetch(path),
+          go.importObject,
+        ).then((result) => {
+          go.run(result.instance);
+          return result.instance;
+        });
       }
 
       loadWasm("letgo.wasm")
@@ -212,19 +247,24 @@
                 name: "let_go",
                 prompt: "user> ",
                 ansi: true,
-                onInit: function() {
-                  this.echo(" \u03bb   let-go (wasm)", {raw: false});
-                  this.echo(' <span style="color:#5ec4b6">GO</span>&nbsp;&nbsp; <span style="color:#5a584f">type (+ 1 1) to start</span>', {raw: true});
+                onInit: function () {
+                  this.echo(" \u03bb   let-go (wasm)", { raw: false });
+                  this.echo(
+                    ' <span style="color:#5ec4b6">GO</span>&nbsp;&nbsp; <span style="color:#5a584f">type (+ 1 1) to start</span>',
+                    { raw: true },
+                  );
                   this.echo("");
-                }
-              }
+                },
+              },
             );
-            console.log = (...args) => { term.echo(...args); }
+            console.log = (...args) => {
+              term.echo(...args);
+            };
           });
         })
         .catch((error) => {
           document.getElementById("loading").innerHTML =
-            '<span style="color:#e05252">failed to load: ' + error + '</span>';
+            '<span style="color:#e05252">failed to load: ' + error + "</span>";
         });
     </script>
   </body>
