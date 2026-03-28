@@ -1,0 +1,34 @@
+(ns test.letfn-test
+  (:require [test :refer :all]))
+
+(deftest letfn-mutual-recursion
+  (testing "mutually recursive even?/odd?"
+    (letfn [(my-even? [n] (if (zero? n) true (my-odd? (dec n))))
+            (my-odd?  [n] (if (zero? n) false (my-even? (dec n))))]
+      (is (my-even? 10))
+      (is (not (my-even? 11)))
+      (is (my-odd? 7))
+      (is (not (my-odd? 8))))))
+
+(deftest letfn-self-recursion
+  (testing "single recursive fn via letfn"
+    (letfn [(factorial [n]
+              (if (<= n 1) 1 (* n (factorial (dec n)))))]
+      (is (= 120 (factorial 5)))
+      (is (= 1 (factorial 0))))))
+
+(deftest letfn-three-way
+  (testing "three mutually recursive fns"
+    (letfn [(a [n] (if (zero? n) :a (b (dec n))))
+            (b [n] (if (zero? n) :b (c (dec n))))
+            (c [n] (if (zero? n) :c (a (dec n))))]
+      (is (= :a (a 0)))
+      (is (= :b (a 1)))
+      (is (= :c (a 2)))
+      (is (= :a (a 3))))))
+
+(deftest letfn-scope
+  (testing "letfn fns not visible outside"
+    (let [result (letfn [(f [x] (* x 2))]
+                   (f 21))]
+      (is (= 42 result)))))

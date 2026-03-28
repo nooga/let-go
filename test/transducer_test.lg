@@ -1,0 +1,154 @@
+(ns test.transducer-test
+  (:require [test :refer :all]))
+
+;; --- reduced ---
+
+(deftest reduced-basics
+  (testing "reduced wraps and unwraps"
+    (is (reduced? (reduced 42)))
+    (is (not (reduced? 42)))
+    (is (= 42 (unreduced (reduced 42))))
+    (is (= 42 (unreduced 42)))
+    (is (= 42 (deref (reduced 42))))))
+
+(deftest reduce-with-reduced
+  (testing "reduce stops on reduced"
+    (is (= 6 (reduce (fn [acc x]
+                        (if (= x 4) (reduced acc) (+ acc x)))
+                      0 [1 2 3 4 5])))))
+
+;; --- map transducer ---
+
+(deftest map-transducer
+  (testing "map with 1 arg returns transducer"
+    (is (= [2 4 6] (into [] (map inc) [1 3 5])))
+    (is (= [1 4 9] (into [] (map #(* % %)) [1 2 3])))))
+
+;; --- filter transducer ---
+
+(deftest filter-transducer
+  (testing "filter with 1 arg returns transducer"
+    (is (= [2 4] (into [] (filter even?) [1 2 3 4 5])))))
+
+;; --- take transducer ---
+
+(deftest take-transducer
+  (testing "take with 1 arg returns transducer"
+    (is (= [1 2 3] (into [] (take 3) [1 2 3 4 5])))))
+
+;; --- drop transducer ---
+
+(deftest drop-transducer
+  (testing "drop with 1 arg returns transducer"
+    (is (= [4 5] (into [] (drop 3) [1 2 3 4 5])))))
+
+;; --- take-while transducer ---
+
+(deftest take-while-transducer
+  (testing "take-while with 1 arg returns transducer"
+    (is (= [1 2 3] (into [] (take-while #(< % 4)) [1 2 3 4 5])))))
+
+;; --- drop-while transducer ---
+
+(deftest drop-while-transducer
+  (testing "drop-while with 1 arg returns transducer"
+    (is (= [4 5] (into [] (drop-while #(< % 4)) [1 2 3 4 5])))))
+
+;; --- keep transducer ---
+
+(deftest keep-transducer
+  (testing "keep with 1 arg returns transducer"
+    (is (= [2 4] (into [] (keep #(when (even? %) %)) [1 2 3 4 5])))))
+
+;; --- comp transducers ---
+
+(deftest comp-transducers
+  (testing "transducers compose with comp"
+    (is (= [4 16] (into [] (comp (filter even?) (map #(* % %))) [1 2 3 4 5])))))
+
+;; --- transduce ---
+
+(deftest transduce-basic
+  (testing "transduce with xform"
+    (is (= 20 (transduce (map inc) + [1 2 3 4 5])))
+    (is (= 6 (transduce (filter even?) + [1 2 3 4])))))
+
+(deftest transduce-with-init
+  (testing "transduce with explicit init"
+    (is (= 120 (transduce (map inc) + 100 [1 2 3 4 5])))))
+
+;; --- into with xform ---
+
+(deftest into-with-xform
+  (testing "into with transducer"
+    (is (= [2 4 6] (into [] (map inc) [1 3 5])))))
+
+;; --- cat ---
+
+(deftest cat-transducer
+  (testing "cat flattens one level"
+    (is (= [1 2 3 4] (into [] cat [[1 2] [3 4]])))))
+
+;; --- mapcat transducer ---
+
+(deftest mapcat-transducer
+  (testing "mapcat transducer"
+    (is (= [1 1 2 2 3 3] (into [] (mapcat #(list % %)) [1 2 3])))))
+
+;; --- distinct transducer ---
+
+(deftest distinct-transducer
+  (testing "distinct transducer removes duplicates"
+    (is (= [1 2 3] (into [] (distinct) [1 2 1 3 2 3])))))
+
+;; --- dedupe transducer ---
+
+(deftest dedupe-transducer
+  (testing "dedupe removes consecutive duplicates"
+    (is (= [1 2 3 1] (into [] (dedupe) [1 1 2 2 2 3 1 1])))))
+
+;; --- interpose transducer ---
+
+(deftest interpose-transducer
+  (testing "interpose transducer"
+    (is (= [1 :sep 2 :sep 3] (into [] (interpose :sep) [1 2 3])))))
+
+;; --- partition-by transducer ---
+
+(deftest partition-by-transducer
+  (testing "partition-by transducer"
+    (is (= [[1 1] [2] [1 1]]
+           (into [] (partition-by identity) [1 1 2 1 1])))))
+
+;; --- complex compositions ---
+
+(deftest complex-pipeline
+  (testing "multi-stage transducer pipeline"
+    (is (= [0 4 16]
+           (into []
+                 (comp (filter even?)
+                       (map #(* % %))
+                       (take 3))
+                 (range 20))))))
+
+;; --- sequence ---
+
+(deftest sequence-with-xform
+  (testing "sequence applies transducer"
+    (is (= '(2 4 6) (sequence (map inc) [1 3 5])))))
+
+;; --- existing seq fns still work ---
+
+(deftest map-still-works
+  (testing "map with 2 args still produces lazy seq"
+    (is (= [2 3 4] (vec (map inc [1 2 3])))))
+  (testing "map with 3 args works"
+    (is (= [5 7 9] (vec (map + [1 2 3] [4 5 6]))))))
+
+(deftest filter-still-works
+  (testing "filter with 2 args still produces lazy seq"
+    (is (= [2 4] (vec (filter even? [1 2 3 4 5]))))))
+
+(deftest take-still-works
+  (testing "take with 2 args still produces lazy seq"
+    (is (= [1 2 3] (vec (take 3 [1 2 3 4 5]))))))

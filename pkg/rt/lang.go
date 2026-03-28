@@ -423,6 +423,38 @@ func installLangNS() {
 		return vm.TRUE, nil
 	})
 
+	ge, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		for i := 0; i < len(vs)-1; i++ {
+			r, err := vm.NumGe(vs[i], vs[i+1])
+			if err != nil {
+				return vm.NIL, err
+			}
+			if !r {
+				return vm.FALSE, nil
+			}
+		}
+		return vm.TRUE, nil
+	})
+
+	le, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		for i := 0; i < len(vs)-1; i++ {
+			r, err := vm.NumLe(vs[i], vs[i+1])
+			if err != nil {
+				return vm.NIL, err
+			}
+			if !r {
+				return vm.FALSE, nil
+			}
+		}
+		return vm.TRUE, nil
+	})
+
 	mod, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -1055,6 +1087,9 @@ func installLangNS() {
 			acc, err = mfn.Invoke([]vm.Value{acc, seq.First()})
 			if err != nil {
 				return vm.NIL, err
+			}
+			if r, ok := acc.(*vm.Reduced); ok {
+				return r.Deref(), nil
 			}
 			seq = seq.Next()
 		}
@@ -2666,6 +2701,130 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
+	// delay — (delay body) is a macro in core.lg, but we need delay* as the constructor
+	delayStar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("delay* expects 1 arg (thunk fn)")
+		}
+		fn, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("delay* expected Fn")
+		}
+		return vm.NewDelay(fn), nil
+	})
+
+	// force — deref a delay (or return value if not a delay)
+	force, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("force expects 1 arg")
+		}
+		if d, ok := vs[0].(*vm.Delay); ok {
+			return d.Force()
+		}
+		return vs[0], nil
+	})
+
+	// delay? — test if value is a Delay
+	isDelay, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		_, ok := vs[0].(*vm.Delay)
+		return vm.Boolean(ok), nil
+	})
+
+	// realized? — test if a Delay or LazySeq has been realized
+	isRealized, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		if d, ok := vs[0].(*vm.Delay); ok {
+			return vm.Boolean(d.IsRealized()), nil
+		}
+		return vm.FALSE, nil
+	})
+
+	// volatile! — create a volatile mutable box
+	volatilef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("volatile! expects 1 arg")
+		}
+		return vm.NewVolatile(vs[0]), nil
+	})
+
+	// vreset! — set volatile value
+	vreset, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("vreset! expects 2 args")
+		}
+		v, ok := vs[0].(*vm.Volatile)
+		if !ok {
+			return vm.NIL, fmt.Errorf("vreset! expected Volatile")
+		}
+		return v.Reset(vs[1]), nil
+	})
+
+	// vswap! — apply fn to volatile value: (vswap! vol f args...)
+	vswap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.NIL, fmt.Errorf("vswap! expects at least 2 args")
+		}
+		v, ok := vs[0].(*vm.Volatile)
+		if !ok {
+			return vm.NIL, fmt.Errorf("vswap! expected Volatile")
+		}
+		fn, ok := vs[1].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("vswap! expected Fn")
+		}
+		args := make([]vm.Value, 1+len(vs)-2)
+		args[0] = v.Deref()
+		copy(args[1:], vs[2:])
+		result, err := fn.Invoke(args)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return v.Reset(result), nil
+	})
+
+	// reduced — wrap a value to signal early termination
+	reducedf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("reduced expects 1 arg")
+		}
+		return vm.NewReduced(vs[0]), nil
+	})
+
+	// reduced? — test if value is Reduced
+	isReducedf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		return vm.Boolean(vm.IsReduced(vs[0])), nil
+	})
+
+	// unreduced — unwrap Reduced, or return value as-is
+	unreduced, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("unreduced expects 1 arg")
+		}
+		if r, ok := vs[0].(*vm.Reduced); ok {
+			return r.Deref(), nil
+		}
+		return vs[0], nil
+	})
+
+	// ensure-reduced — if already Reduced, return as-is; otherwise wrap
+	ensureReduced, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("ensure-reduced expects 1 arg")
+		}
+		if _, ok := vs[0].(*vm.Reduced); ok {
+			return vs[0], nil
+		}
+		return vm.NewReduced(vs[0]), nil
+	})
+
 	if err != nil {
 		panic("lang NS init failed")
 	}
@@ -2704,6 +2863,8 @@ func installLangNS() {
 	ns.Def("=", equals)
 	ns.Def("gt", gt)
 	ns.Def("lt", lt)
+	ns.Def("ge", ge)
+	ns.Def("le", le)
 	ns.Def("mod", mod)
 	ns.Def("abs", abs)
 
@@ -2752,7 +2913,7 @@ func installLangNS() {
 	ns.Def("count", count)
 	ns.Def("contains?", contains)
 
-	ns.Def("map", mapf)
+	ns.Def("map*", mapf)
 	ns.Def("mapv", mapv)
 	ns.Def("reduce", reduce)
 	ns.Def("concat", concat)
@@ -2863,6 +3024,18 @@ func installLangNS() {
 	ns.Def("ex-message", exMessage)
 	ns.Def("ex-data", exData)
 	ns.Def("ex-cause", exCause)
+
+	ns.Def("delay*", delayStar)
+	ns.Def("force", force)
+	ns.Def("delay?", isDelay)
+	ns.Def("realized?", isRealized)
+	ns.Def("volatile!", volatilef)
+	ns.Def("vreset!", vreset)
+	ns.Def("vswap!", vswap)
+	ns.Def("reduced", reducedf)
+	ns.Def("reduced?", isReducedf)
+	ns.Def("unreduced", unreduced)
+	ns.Def("ensure-reduced", ensureReduced)
 
 	// IO builtins (open, close!, read-line, write!, etc.)
 	installIOBuiltins(ns)
