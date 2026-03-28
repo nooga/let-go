@@ -93,11 +93,17 @@ func installIOBuiltins(ns *vm.Namespace) {
 		return vm.NewBoxed(h), nil
 	})
 
-	// close! — (close! handle)
+	// close! — (close! handle-or-chan) — works on IO handles and channels
 	closef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("close! expects 1 arg")
 		}
+		// Channel?
+		if ch, ok := vs[0].(vm.Chan); ok {
+			close(ch)
+			return vm.NIL, nil
+		}
+		// IO handle
 		h, err := getIOHandle(vs[0])
 		if err != nil {
 			return vm.NIL, err

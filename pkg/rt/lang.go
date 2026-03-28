@@ -45,6 +45,7 @@ func init() {
 	installOsNS()
 	installJSONNS()
 	installIoNS()
+	installAsyncNS()
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 

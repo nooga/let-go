@@ -88,6 +88,8 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 		src = rt.EdnSrc
 	case "io":
 		src = rt.IoSrc
+	case "async":
+		src = rt.AsyncSrc
 	default:
 		return nil
 	}
