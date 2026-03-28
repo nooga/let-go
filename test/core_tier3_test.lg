@@ -1,0 +1,80 @@
+(ns test.core-tier3-test
+  (:require [test :refer :all]))
+
+;; --- Bitwise ops ---
+
+(deftest bit-and-test
+  (testing "bit-and"
+    (is (= 0 (bit-and 1 2)))
+    (is (= 1 (bit-and 3 1)))
+    (is (= 12 (bit-and 14 12)))))
+
+(deftest bit-or-test
+  (testing "bit-or"
+    (is (= 3 (bit-or 1 2)))
+    (is (= 7 (bit-or 5 3)))))
+
+(deftest bit-xor-test
+  (testing "bit-xor"
+    (is (= 3 (bit-xor 1 2)))
+    (is (= 6 (bit-xor 5 3)))))
+
+(deftest bit-not-test
+  (testing "bit-not"
+    (is (= -1 (bit-not 0)))
+    (is (= -2 (bit-not 1)))))
+
+(deftest bit-shift-test
+  (testing "bit-shift-left"
+    (is (= 4 (bit-shift-left 1 2)))
+    (is (= 16 (bit-shift-left 1 4))))
+  (testing "bit-shift-right"
+    (is (= 2 (bit-shift-right 8 2)))
+    (is (= 1 (bit-shift-right 4 2)))))
+
+(deftest unsigned-bit-shift-right-test
+  (testing "unsigned-bit-shift-right"
+    (is (= 2 (unsigned-bit-shift-right 8 2)))))
+
+(deftest bit-test-test
+  (testing "bit-test"
+    (is (bit-test 5 0))       ;; 101 bit 0 = 1
+    (is (not (bit-test 5 1))) ;; 101 bit 1 = 0
+    (is (bit-test 5 2))))     ;; 101 bit 2 = 1
+
+(deftest bit-set-clear-test
+  (testing "bit-set"
+    (is (= 5 (bit-set 4 0)))  ;; 100 | 001 = 101
+    (is (= 7 (bit-set 5 1)))) ;; 101 | 010 = 111
+  (testing "bit-clear"
+    (is (= 4 (bit-clear 5 0)))  ;; 101 & ~001 = 100
+    (is (= 1 (bit-clear 5 2))))) ;; 101 & ~100 = 001
+
+;; --- Bitwise flag patterns ---
+
+(deftest bitwise-flags
+  (testing "flag manipulation"
+    (let [read    1
+          write   2
+          execute 4
+          perms (bit-or read write)]
+      (is (bit-test perms 0))     ;; read set
+      (is (bit-test perms 1))     ;; write set
+      (is (not (bit-test perms 2))) ;; execute not set
+      (is (= 7 (bit-or perms execute))))))
+
+;; --- re-groups ---
+
+(deftest re-groups-test
+  (testing "re-groups finds all groups"
+    (let [result (re-groups (re-pattern "(\\w+)@(\\w+)") "foo@bar baz@qux")]
+      (is (= 2 (count result)))
+      (is (= ["foo@bar" "foo" "bar"] (first result)))
+      (is (= ["baz@qux" "baz" "qux"] (second result)))))
+  (testing "re-groups with no match"
+    (is (nil? (re-groups (re-pattern "\\d+") "abc"))))
+  (testing "re-groups no capture groups"
+    (let [result (re-groups (re-pattern "\\d+") "123 456")]
+      (is (= 2 (count result)))
+      (is (= ["123"] (first result)))
+      (is (= ["456"] (second result))))))

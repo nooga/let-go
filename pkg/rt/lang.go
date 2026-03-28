@@ -2738,13 +2738,16 @@ func installLangNS() {
 		return vm.Boolean(ok), nil
 	})
 
-	// realized? — test if a Delay or LazySeq has been realized
+	// realized? — test if a Delay, Promise, or Future has been realized
 	isRealized, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
 		if d, ok := vs[0].(*vm.Delay); ok {
 			return vm.Boolean(d.IsRealized()), nil
+		}
+		if p, ok := vs[0].(*vm.Promise); ok {
+			return vm.Boolean(p.IsRealized()), nil
 		}
 		return vm.FALSE, nil
 	})
@@ -2930,6 +2933,316 @@ func installLangNS() {
 			fmt.Print(v.String())
 		}
 		return vm.NIL, nil
+	})
+
+	// --- Bitwise ops ---
+
+	bitAnd, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-and expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-and expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-and expected Int")
+		}
+		return vm.MakeInt(int(a) & int(b)), nil
+	})
+
+	bitOr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-or expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-or expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-or expected Int")
+		}
+		return vm.MakeInt(int(a) | int(b)), nil
+	})
+
+	bitXor, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-xor expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-xor expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-xor expected Int")
+		}
+		return vm.MakeInt(int(a) ^ int(b)), nil
+	})
+
+	bitNot, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("bit-not expects 1 arg")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-not expected Int")
+		}
+		return vm.MakeInt(^int(a)), nil
+	})
+
+	bitShiftLeft, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-shift-left expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-shift-left expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-shift-left expected Int")
+		}
+		return vm.MakeInt(int(a) << uint(b)), nil
+	})
+
+	bitShiftRight, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-shift-right expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-shift-right expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-shift-right expected Int")
+		}
+		return vm.MakeInt(int(a) >> uint(b)), nil
+	})
+
+	unsignedBitShiftRight, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
+		}
+		return vm.MakeInt(int(uint(a) >> uint(b))), nil
+	})
+
+	bitTest, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-test expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-test expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-test expected Int")
+		}
+		return vm.Boolean(int(a)&(1<<uint(b)) != 0), nil
+	})
+
+	bitSet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-set expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-set expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-set expected Int")
+		}
+		return vm.MakeInt(int(a) | (1 << uint(b))), nil
+	})
+
+	bitClear, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-clear expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-clear expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-clear expected Int")
+		}
+		return vm.MakeInt(int(a) &^ (1 << uint(b))), nil
+	})
+
+	// re-groups — find all submatch groups: (re-groups regex str) → vector of [match group1 group2 ...]
+	reGroups, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("re-groups expects 2 args")
+		}
+		re, ok := vs[0].(*vm.Regex)
+		if !ok {
+			return vm.NIL, fmt.Errorf("re-groups expected Regex")
+		}
+		s, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("re-groups expected String")
+		}
+		all := re.FindAllStringSubmatch(string(s), -1)
+		if all == nil {
+			return vm.NIL, nil
+		}
+		result := make([]vm.Value, len(all))
+		for i, match := range all {
+			group := make(vm.ArrayVector, len(match))
+			for j, m := range match {
+				group[j] = vm.String(m)
+			}
+			result[i] = group
+		}
+		return vm.NewArrayVector(result), nil
+	})
+
+	// promise — create a promise
+	promisef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.NewPromise(), nil
+	})
+
+	// deliver — deliver a value to a promise
+	deliver, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("deliver expects 2 args")
+		}
+		p, ok := vs[0].(*vm.Promise)
+		if !ok {
+			return vm.NIL, fmt.Errorf("deliver expected Promise")
+		}
+		return p.Deliver(vs[1]), nil
+	})
+
+	// future — run body in a goroutine, return a promise that delivers the result
+	// (future* thunk) — internal, macro wraps body
+	futureStar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("future* expects 1 arg (thunk fn)")
+		}
+		fn, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("future* expected Fn")
+		}
+		p := vm.NewPromise()
+		go func() {
+			v, err := fn.Invoke(nil)
+			if err != nil {
+				p.Deliver(vm.NIL)
+			} else {
+				p.Deliver(v)
+			}
+		}()
+		return p, nil
+	})
+
+	// add-watch — (add-watch atom key fn)
+	addWatch, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("add-watch expects 3 args")
+		}
+		a, ok := vs[0].(*vm.Atom)
+		if !ok {
+			return vm.NIL, fmt.Errorf("add-watch expected Atom")
+		}
+		fn, ok := vs[2].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("add-watch expected Fn")
+		}
+		a.AddWatch(vs[1], fn)
+		return vs[0], nil
+	})
+
+	// remove-watch — (remove-watch atom key)
+	removeWatch, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("remove-watch expects 2 args")
+		}
+		a, ok := vs[0].(*vm.Atom)
+		if !ok {
+			return vm.NIL, fmt.Errorf("remove-watch expected Atom")
+		}
+		a.RemoveWatch(vs[1])
+		return vs[0], nil
+	})
+
+	// alter-meta! — (alter-meta! ref f & args)
+	alterMeta, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.NIL, fmt.Errorf("alter-meta! expects at least 2 args")
+		}
+		a, ok := vs[0].(*vm.Atom)
+		if !ok {
+			return vm.NIL, fmt.Errorf("alter-meta! expected Atom")
+		}
+		fn, ok := vs[1].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("alter-meta! expected Fn")
+		}
+		return a.AlterMeta(fn, vs[2:])
+	})
+
+	// subvec — (subvec v start) or (subvec v start end)
+	subvecf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 || len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("subvec expects 2-3 args")
+		}
+		start, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("subvec expected Int start")
+		}
+		s := int(start)
+
+		switch v := vs[0].(type) {
+		case vm.ArrayVector:
+			end := len(v)
+			if len(vs) == 3 {
+				e, ok := vs[2].(vm.Int)
+				if !ok {
+					return vm.NIL, fmt.Errorf("subvec expected Int end")
+				}
+				end = int(e)
+			}
+			if s < 0 || end > len(v) || s > end {
+				return vm.NIL, fmt.Errorf("subvec: index out of bounds")
+			}
+			result := make([]vm.Value, end-s)
+			copy(result, v[s:end])
+			return vm.NewArrayVector(result), nil
+		case vm.PersistentVector:
+			end := v.Count().(vm.Int)
+			if len(vs) == 3 {
+				e, ok := vs[2].(vm.Int)
+				if !ok {
+					return vm.NIL, fmt.Errorf("subvec expected Int end")
+				}
+				end = e
+			}
+			if s < 0 || int(end) > int(v.Count().(vm.Int)) || s > int(end) {
+				return vm.NIL, fmt.Errorf("subvec: index out of bounds")
+			}
+			result := make([]vm.Value, int(end)-s)
+			for i := s; i < int(end); i++ {
+				result[i-s] = v.ValueAt(vm.Int(i))
+			}
+			return vm.NewArrayVector(result), nil
+		default:
+			return vm.NIL, fmt.Errorf("subvec expected vector")
+		}
 	})
 
 	// fn? — test if value is callable
@@ -3172,6 +3485,24 @@ func installLangNS() {
 	ns.Def("vswap!", vswap)
 	ns.Def("compare", comparef)
 	ns.Def("fn?", isFn)
+	ns.Def("bit-and", bitAnd)
+	ns.Def("bit-or", bitOr)
+	ns.Def("bit-xor", bitXor)
+	ns.Def("bit-not", bitNot)
+	ns.Def("bit-shift-left", bitShiftLeft)
+	ns.Def("bit-shift-right", bitShiftRight)
+	ns.Def("unsigned-bit-shift-right", unsignedBitShiftRight)
+	ns.Def("bit-test", bitTest)
+	ns.Def("bit-set", bitSet)
+	ns.Def("bit-clear", bitClear)
+	ns.Def("re-groups", reGroups)
+	ns.Def("promise", promisef)
+	ns.Def("deliver", deliver)
+	ns.Def("future*", futureStar)
+	ns.Def("add-watch", addWatch)
+	ns.Def("remove-watch", removeWatch)
+	ns.Def("alter-meta!", alterMeta)
+	ns.Def("subvec", subvecf)
 	ns.Def("print", printf)
 	ns.Def("pr", prf)
 	ns.Def("reduced", reducedf)

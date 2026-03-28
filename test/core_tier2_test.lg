@@ -1,0 +1,120 @@
+(ns test.core-tier2-test
+  (:require [test :refer :all]))
+
+;; --- promise / deliver ---
+
+(deftest promise-basic
+  (testing "promise deliver and deref"
+    (let [p (promise)]
+      (deliver p 42)
+      (is (= 42 (deref p)))))
+  (testing "promise realized?"
+    (let [p (promise)]
+      (is (not (realized? p)))
+      (deliver p :done)
+      (is (realized? p)))))
+
+(deftest promise-multiple-deliver
+  (testing "second deliver returns nil"
+    (let [p (promise)]
+      (is (= 1 (deliver p 1)))
+      (is (nil? (deliver p 2)))
+      (is (= 1 (deref p))))))
+
+;; --- future ---
+
+(deftest future-basic
+  (testing "future runs body and returns result"
+    (let [f (future (+ 1 2))]
+      (is (= 3 (deref f)))))
+  (testing "future with delay"
+    (let [a (atom 0)
+          f (future (swap! a inc) (deref a))]
+      (is (= 1 (deref f))))))
+
+;; --- add-watch / remove-watch ---
+
+(deftest watch-basic
+  (testing "watch is called on reset!"
+    (let [log (atom [])
+          a (atom 0)]
+      (add-watch a :logger (fn [key ref old new]
+                             (swap! log conj [old new])))
+      (reset! a 1)
+      (reset! a 2)
+      (is (= [[0 1] [1 2]] (deref log))))))
+
+(deftest watch-on-swap
+  (testing "watch is called on swap!"
+    (let [log (atom [])
+          a (atom 10)]
+      (add-watch a :w (fn [k r o n] (swap! log conj n)))
+      (swap! a + 5)
+      (swap! a + 3)
+      (is (= [15 18] (deref log))))))
+
+(deftest remove-watch-test
+  (testing "removed watch is not called"
+    (let [log (atom 0)
+          a (atom 0)]
+      (add-watch a :w (fn [k r o n] (swap! log inc)))
+      (reset! a 1)
+      (remove-watch a :w)
+      (reset! a 2)
+      (is (= 1 (deref log))))))
+
+;; --- alter-meta! ---
+
+(deftest alter-meta-test
+  (testing "alter-meta! on atom"
+    (let [a (atom 42)]
+      (alter-meta! a assoc :tag :special)
+      (is (= {:tag :special} (meta a))))))
+
+;; --- vary-meta ---
+
+(deftest vary-meta-test
+  (testing "vary-meta returns new value with modified metadata"
+    (let [v (with-meta [1 2 3] {:tag :old})
+          v2 (vary-meta v assoc :tag :new)]
+      (is (= {:tag :new} (meta v2)))
+      (is (= {:tag :old} (meta v)))
+      (is (= [1 2 3] v2)))))
+
+;; --- subvec ---
+
+(deftest subvec-test
+  (testing "subvec with start"
+    (is (= [3 4 5] (subvec [1 2 3 4 5] 2))))
+  (testing "subvec with start and end"
+    (is (= [2 3] (subvec [1 2 3 4 5] 1 3))))
+  (testing "subvec empty"
+    (is (= [] (subvec [1 2 3] 2 2)))))
+
+;; --- tree-seq ---
+
+(deftest tree-seq-test
+  (testing "tree-seq on nested vectors"
+    (let [t [1 [2 [3]] [4]]
+          nodes (tree-seq vector? seq t)]
+      ;; root, then children depth-first
+      (is (= [1 [2 [3]] [4]] (first nodes)))
+      (is (= 1 (second nodes)))))
+  (testing "tree-seq on map (directory-like)"
+    (let [t {:a {:b 1 :c {:d 2}} :e 3}
+          leaves (filter #(not (map? %))
+                         (tree-seq map? vals t))]
+      (is (> (count (vec leaves)) 0)))))
+
+;; --- pmap ---
+
+(deftest pmap-basic
+  (testing "pmap produces same results as map"
+    (is (= [2 3 4]
+           (vec (pmap inc [1 2 3])))))
+  (testing "pmap with heavier computation"
+    (is (= [1 4 9 16 25]
+           (vec (pmap #(* % %) [1 2 3 4 5]))))))
+
+;; --- bitwise ops placeholder ---
+;; (skipped for now)

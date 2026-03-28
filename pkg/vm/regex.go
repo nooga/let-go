@@ -60,6 +60,10 @@ func (l *Regex) FindAllString(s string, n int) []string {
 	return l.re.FindAllString(s, n)
 }
 
+func (l *Regex) FindAllStringSubmatch(s string, n int) [][]string {
+	return l.re.FindAllStringSubmatch(s, n)
+}
+
 func NewRegex(s string) (Value, error) {
 	re, err := regexp.Compile(s)
 	if err != nil {

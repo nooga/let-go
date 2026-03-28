@@ -1497,6 +1497,42 @@
       (recur (next s) (dec i))
       (seq s))))
 
+;; --- Tier 2 functions ---
+
+;; future macro — runs body in a goroutine, returns a promise
+(defmacro future [& body]
+  (list 'future* (cons 'fn (cons [] body))))
+
+
+;; tree-seq — lazy depth-first walk of a tree
+(defn- tree-walk [branch? children node]
+  (lazy-seq
+    (cons node
+      (when (branch? node)
+        (mapcat #(tree-walk branch? children %) (children node))))))
+
+(defn tree-seq [branch? children root]
+  (tree-walk branch? children root))
+
+;; vary-meta — returns value with (apply f (meta obj) args) as new metadata
+(defn vary-meta [obj f & args]
+  (with-meta obj (apply f (meta obj) args)))
+
+;; pmap — parallel map using futures
+(defn pmap
+  ([f coll]
+   (let [n (+ 2 (count (take 32 coll))) ;; parallelism window
+         rets (map #(future (f %)) coll)]
+     (map deref rets)))
+  ([f coll & colls]
+   (let [step (fn step [cs]
+                (lazy-seq
+                  (let [ss (doall (map seq cs))]
+                    (when (every? identity ss)
+                      (cons (map first ss)
+                            (step (map rest ss)))))))]
+     (pmap #(apply f %) (step (cons coll colls))))))
+
 ;; --- Multimethods ---
 
 ;; (defmulti name dispatch-fn)
