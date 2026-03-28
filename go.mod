@@ -1,6 +1,6 @@
 module github.com/nooga/let-go
 
-go 1.22
+go 1.26
 
 require (
 	github.com/alimpfard/line v0.0.0-20230131232016-03b4e7dee324
