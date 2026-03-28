@@ -224,6 +224,11 @@ func valueEquals(a, b vm.Value) bool {
 			seq = seq.Next()
 		}
 		return true
+	case *vm.BigInt:
+		if bv, ok := b.(*vm.BigInt); ok {
+			return av.Equals(bv)
+		}
+		return false
 	default:
 		// Try Equals interface for types that implement it (PersistentVector, etc.)
 		if eq, ok := a.(interface{ Equals(vm.Value) bool }); ok {
@@ -2707,6 +2712,113 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
+	// transformer-seq* — (transformer-seq* xform coll) → lazy seq
+	// Lazily pulls elements from coll through the transducer xform.
+	// Uses a buffer-based approach: each source element may produce 0, 1, or many outputs.
+	transformerSeq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("transformer-seq* expects 2 args")
+		}
+		xformFn, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("transformer-seq* expected xform Fn")
+		}
+
+		src, err := seqOf(vs[1])
+		if err != nil {
+			return vm.NIL, err
+		}
+		if src == nil {
+			return vm.EmptyList, nil
+		}
+
+		// Shared mutable state
+		type tstate struct {
+			src      vm.Seq
+			buf      []vm.Value // output items waiting to be yielded
+			xf       vm.Fn      // the xform'd reducing fn
+			done     bool       // completion called
+			stopped  bool       // early termination via reduced
+		}
+
+		// The base reducing fn just appends to the buffer.
+		// We pass a pointer to the state's buf so the rf can append.
+		st := &tstate{src: src}
+
+		bufRf, _ := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
+			switch len(args) {
+			case 0:
+				return vm.NIL, nil // init
+			case 1:
+				return args[0], nil // completion — identity
+			case 2:
+				// step: accumulate the output item
+				st.buf = append(st.buf, args[1])
+				return args[0], nil // return accumulator unchanged
+			}
+			return vm.NIL, nil
+		})
+
+		xfResult, err := xformFn.Invoke([]vm.Value{bufRf})
+		if err != nil {
+			return vm.NIL, err
+		}
+		xf, ok := xfResult.(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("xform did not return a function")
+		}
+		st.xf = xf
+
+		// Pull from source through xform until buf has items or source is exhausted
+		fillBuf := func() {
+			for len(st.buf) == 0 && st.src != nil && !st.stopped {
+				item := st.src.First()
+				st.src = st.src.Next()
+
+				result, err := st.xf.Invoke([]vm.Value{vm.NIL, item})
+				if err != nil {
+					st.stopped = true
+					return
+				}
+
+				if vm.IsReduced(result) {
+					st.stopped = true
+					st.src = nil
+				}
+			}
+
+			// Source exhausted or stopped — call completion to flush
+			if (st.src == nil || st.stopped) && !st.done {
+				st.done = true
+				st.xf.Invoke([]vm.Value{vm.NIL}) // completion arity
+			}
+		}
+
+		// Build lazy seq that drains the buffer
+		var buildSeq func() *vm.LazySeq
+		buildSeq = func() *vm.LazySeq {
+			thunk, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
+				// Drain buffer first
+				if len(st.buf) > 0 {
+					item := st.buf[0]
+					st.buf = st.buf[1:]
+					return vm.NewCons(item, buildSeq()), nil
+				}
+				// Buffer empty — pull more from source
+				fillBuf()
+				if len(st.buf) == 0 {
+					return nil, nil // done
+				}
+				item := st.buf[0]
+				st.buf = st.buf[1:]
+				return vm.NewCons(item, buildSeq()), nil
+			})
+			return vm.NewLazySeq(thunk.(vm.Fn))
+		}
+
+		return buildSeq(), nil
+	})
+
 	// delay — (delay body) is a macro in core.lg, but we need delay* as the constructor
 	delayStar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -2828,43 +2940,20 @@ func installLangNS() {
 		if b == vm.NIL {
 			return vm.MakeInt(1), nil
 		}
-		// Numbers
-		switch av := a.(type) {
-		case vm.Int:
-			switch bv := b.(type) {
-			case vm.Int:
-				if int(av) < int(bv) {
-					return vm.MakeInt(-1), nil
-				}
-				if int(av) > int(bv) {
-					return vm.MakeInt(1), nil
-				}
-				return vm.MakeInt(0), nil
-			case vm.Float:
-				fa, fb := float64(av), float64(bv)
-				if fa < fb {
-					return vm.MakeInt(-1), nil
-				}
-				if fa > fb {
-					return vm.MakeInt(1), nil
-				}
-				return vm.MakeInt(0), nil
+		// Numbers (including BigInt)
+		if vm.IsNumber(a) && vm.IsNumber(b) {
+			lt, err := vm.NumLt(a, b)
+			if err != nil {
+				return vm.NIL, err
 			}
-		case vm.Float:
-			var fb float64
-			switch bv := b.(type) {
-			case vm.Float:
-				fb = float64(bv)
-			case vm.Int:
-				fb = float64(int(bv))
-			default:
-				return vm.NIL, fmt.Errorf("compare: cannot compare %s and %s", a.Type().Name(), b.Type().Name())
-			}
-			fa := float64(av)
-			if fa < fb {
+			if lt {
 				return vm.MakeInt(-1), nil
 			}
-			if fa > fb {
+			gt, err := vm.NumGt(a, b)
+			if err != nil {
+				return vm.NIL, err
+			}
+			if gt {
 				return vm.MakeInt(1), nil
 			}
 			return vm.MakeInt(0), nil
@@ -3368,7 +3457,7 @@ func installLangNS() {
 	ns.Def("map*", mapf)
 	ns.Def("mapv", mapv)
 	ns.Def("reduce", reduce)
-	ns.Def("concat", concat)
+	ns.Def("concat*", concat)
 	ns.Def("some", some)
 
 	ns.Def("println", printlnf)
@@ -3484,6 +3573,39 @@ func installLangNS() {
 	ns.Def("volatile!", volatilef)
 	ns.Def("vreset!", vreset)
 	ns.Def("vswap!", vswap)
+	// bigint — coerce to BigInt
+	bigintf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("bigint expects 1 arg")
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.NewBigIntFromInt64(int64(v)), nil
+		case vm.Float:
+			return vm.NewBigIntFromInt64(int64(v)), nil
+		case *vm.BigInt:
+			return v, nil
+		case vm.String:
+			bi, ok := vm.NewBigIntFromString(string(v))
+			if !ok {
+				return vm.NIL, fmt.Errorf("cannot parse bigint: %s", v)
+			}
+			return bi, nil
+		}
+		return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0].Type().Name())
+	})
+
+	// bigint? — test if value is BigInt
+	isBigInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		return vm.Boolean(vm.IsBigInt(vs[0])), nil
+	})
+
+	ns.Def("bigint", bigintf)
+	ns.Def("bigint?", isBigInt)
+	ns.Def("transformer-seq*", transformerSeq)
 	ns.Def("compare", comparef)
 	ns.Def("fn?", isFn)
 	ns.Def("bit-and", bitAnd)

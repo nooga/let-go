@@ -1,0 +1,71 @@
+(ns test.bigint-test
+  (:require [test :refer :all]))
+
+(deftest bigint-literal
+  (testing "N suffix creates BigInt"
+    (is (bigint? 123N))
+    (is (not (bigint? 123))))
+  (testing "large literals auto-promote"
+    (is (bigint? 99999999999999999999999))))
+
+(deftest bigint-arithmetic
+  (testing "BigInt + BigInt"
+    (is (= 200N (+ 100N 100N))))
+  (testing "BigInt + Int promotes"
+    (is (= 101N (+ 100N 1)))
+    (is (= 101N (+ 1 100N))))
+  (testing "BigInt * BigInt"
+    (is (= 10000N (* 100N 100N))))
+  (testing "BigInt - BigInt"
+    (is (= 0 (- 100N 100N))))
+  (testing "BigInt / BigInt exact"
+    (is (= 5N (/ 100N 20N))))
+  (testing "BigInt mod"
+    (is (= 1 (mod 101N 10)))))
+
+(deftest bigint-comparison
+  (testing "BigInt equality with Int"
+    (is (= 100N 100))
+    (is (= 100 100N)))
+  (testing "BigInt < >"
+    (is (< 99N 100N))
+    (is (> 100N 99N))
+    (is (<= 100N 100N))
+    (is (>= 100N 100N))))
+
+(deftest bigint-stays-bigint
+  (testing "BigInt arithmetic stays BigInt"
+    (is (bigint? (- 100N 100N)))
+    (is (= 0 (- 100N 100N)))))
+
+(deftest bigint-coercion
+  (testing "bigint coerces Int"
+    (is (bigint? (bigint 42)))
+    (is (= 42N (bigint 42))))
+  (testing "bigint coerces String"
+    (is (= 123N (bigint "123"))))
+  (testing "bigint coerces Float"
+    (is (= 3N (bigint 3.7)))))
+
+(deftest bigint-large-computation
+  (testing "factorial of 50"
+    (let [fact (fn [n]
+                 (loop [i 1N acc 1N]
+                   (if (> i n)
+                     acc
+                     (recur (+ i 1) (* acc i)))))]
+      (is (bigint? (fact 50)))
+      (is (> (fact 50) 0)))))
+
+(deftest bigint-in-collections
+  (testing "BigInt as map key"
+    (is (= :found (get {100N :found} 100N)))
+    (is (= :found (get {100N :found} 100))))
+  (testing "BigInt in vector"
+    (is (= [1N 2N 3N] [1N 2N 3N]))))
+
+(deftest bigint-compare
+  (testing "compare works with BigInt"
+    (is (= 0 (compare 100N 100)))
+    (is (= -1 (compare 99N 100N)))
+    (is (= 1 (compare 100N 99)))))

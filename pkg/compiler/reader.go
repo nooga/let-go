@@ -491,11 +491,26 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 		s.WriteRune(ch)
 	}
 	sn := s.String()
+	// Check for explicit BigInt suffix: 123N
+	if len(sn) > 1 && (sn[len(sn)-1] == 'N' || sn[len(sn)-1] == 'n') {
+		numStr := sn[:len(sn)-1]
+		if bi, ok := vm.NewBigIntFromString(numStr); ok {
+			r.closeToken(TokenNumber)
+			return bi, nil
+		}
+	}
 	// Try int first
 	i, err := strconv.Atoi(sn)
 	if err == nil {
 		r.closeToken(TokenNumber)
 		return vm.MakeInt(i), nil
+	}
+	// If Atoi failed due to range, try BigInt
+	if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+		if bi, ok := vm.NewBigIntFromString(sn); ok {
+			r.closeToken(TokenNumber)
+			return bi, nil
+		}
 	}
 	// Try float
 	f, ferr := strconv.ParseFloat(sn, 64)
@@ -737,7 +752,7 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "expanding unquotes for vector")
 		}
-		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat"), uq})
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat*"), uq})
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "boxing unquoted vector form")
 		}
@@ -748,7 +763,7 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "expanding unquotes for vector")
 		}
-		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat"), uq})
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat*"), uq})
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "boxing unquoted vector form")
 		}
@@ -758,7 +773,7 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "expanding unquotes for list")
 		}
-		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat"), uq})
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat*"), uq})
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "boxing unquoted list form")
 		}

@@ -197,6 +197,24 @@
   ([f c1 c2] (map* f c1 c2))
   ([f c1 c2 & colls] (apply map* f c1 c2 colls)))
 
+;; concat — lazy concatenation of sequences
+;; concat* (Go native) is eager and used by quasiquote expansion at compile time.
+;; This version is lazy for runtime use.
+(defn lazy-cat-seqs [seqs]
+  (lazy-seq
+    (let [s (seq seqs)]
+      (when s
+        (let [cur (seq (first s))]
+          (if cur
+            (cons (first cur) (lazy-cat-seqs (cons (rest cur) (rest s))))
+            (lazy-cat-seqs (rest s))))))))
+
+(defn concat
+  ([] ())
+  ([x] (lazy-seq (seq x)))
+  ([x y] (lazy-cat-seqs (list x y)))
+  ([x y & zs] (lazy-cat-seqs (cons x (cons y zs)))))
+
 (defn mapcat
   ([f]
    (fn [rf]
@@ -808,7 +826,7 @@
 (defn sequence
   ([coll] (seq coll))
   ([xform coll]
-   (seq (transduce xform conj [] coll))))
+   (transformer-seq* xform coll)))
 
 (defn merge
   ([] {})
