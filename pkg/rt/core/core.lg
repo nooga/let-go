@@ -467,6 +467,9 @@
 (defmacro go [& forms]
   `(go* (fn* [] ~@forms)))
 
+(defmacro go-loop [bindings & body]
+  `(go* (fn* [] (loop ~bindings ~@body))))
+
 (defn- spread
   [arglist]
   (cond

@@ -1,0 +1,192 @@
+(ns test.async-ns-test
+  (:require [test :refer :all]
+            [async :refer :all]))
+
+(deftest async-chan-basic
+  (testing "create and use channel"
+    (let [c (chan)]
+      (go (>! c 42))
+      (is (= 42 (<! c))))))
+
+(deftest async-buffered-chan
+  (testing "buffered channel"
+    (let [c (async/chan 2)]
+      (>! c 1)
+      (>! c 2)
+      (is (= 1 (<! c)))
+      (is (= 2 (<! c))))))
+
+(deftest async-close
+  (testing "close! a channel"
+    (let [c (chan)]
+      (go (>! c :done) (close! c))
+      (is (= :done (<! c))))))
+
+(deftest async-go-returns-channel
+  (testing "go block returns channel with result"
+    (let [c (go (+ 1 2 3))]
+      (is (= 6 (<! c))))))
+
+(deftest async-pipe-test
+  (testing "pipe connects channels"
+    (let [src (chan)
+          dst (chan)]
+      (pipe src dst)
+      (go (>! src :a) (>! src :b) (close! src))
+      (is (= :a (<! dst)))
+      (is (= :b (<! dst))))))
+
+(deftest async-to-chan-test
+  (testing "to-chan! puts collection onto channel"
+    (let [c (to-chan! [1 2 3])]
+      (is (= 1 (<! c)))
+      (is (= 2 (<! c)))
+      (is (= 3 (<! c))))))
+
+(deftest async-timeout-test
+  (testing "timeout creates a channel"
+    (let [t (timeout 10)]
+      (is (not (nil? t))))))
+
+(deftest async-blocking-aliases
+  (testing "<!! and >!! work as aliases"
+    (let [c (async/chan 1)]
+      (>!! c :val)
+      (is (= :val (<!! c))))))
+
+(deftest async-merge-test
+  (testing "merge combines channels"
+    (let [c1 (to-chan! [1 2])
+          c2 (to-chan! [3 4])
+          m (async/merge [c1 c2])
+          result (<! (async/into [] m))]
+      (is (= 4 (count result))))))
+
+(deftest async-reduce-test
+  (testing "async/reduce over channel"
+    (let [c (to-chan! [1 2 3 4 5])
+          result (<! (async/reduce + 0 c))]
+      (is (= 15 result)))))
+
+(deftest async-into-test
+  (testing "async/into collects from channel"
+    (let [c (to-chan! [1 2 3])
+          result (<! (async/into [] c))]
+      (is (= [1 2 3] result)))))
+
+(deftest alts-take-test
+  (testing "alts! takes from first ready channel"
+    (let [c1 (async/chan 1)
+          c2 (async/chan 1)]
+      (>! c1 :first)
+      (let [[val port] (alts! [c1 c2])]
+        (is (= :first val))
+        (is (= c1 port))))))
+
+(deftest alts-multiple-ready
+  (testing "alts! with multiple ready channels"
+    (let [c1 (async/chan 1)
+          c2 (async/chan 1)]
+      (>! c1 :a)
+      (>! c2 :b)
+      (let [[val _] (alts! [c1 c2])]
+        ;; one of them was picked
+        (is (or (= :a val) (= :b val)))))))
+
+(deftest alts-with-timeout
+  (testing "alts! with timeout"
+    (let [c (async/chan)
+          t (timeout 10)
+          [val port] (alts! [c t])]
+      ;; timeout fires, c has nothing
+      (is (= t port))
+      (is (nil? val)))))
+
+(deftest alts-put-test
+  (testing "alts! with put operation"
+    (let [c (async/chan 1)
+          [val port] (alts! [[c :hello]])]
+      (is (= true val))
+      (is (= c port))
+      (is (= :hello (<! c))))))
+
+(deftest offer-poll-test
+  (testing "offer! and poll!"
+    (let [c (async/chan 1)]
+      (is (= true (async/offer! c :val)))
+      (is (= :val (async/poll! c)))
+      (is (nil? (async/poll! c))))))
+
+(deftest offer-full-channel
+  (testing "offer! returns false when full"
+    (let [c (async/chan)] ;; unbuffered
+      (is (= false (async/offer! c :val))))))
+
+(deftest mult-tap-test
+  (testing "mult broadcasts to taps"
+    (let [src (async/chan 10)
+          m (async/mult src)
+          t1 (async/chan 10)
+          t2 (async/chan 10)]
+      (async/tap m t1)
+      (async/tap m t2)
+      (>! src :hello)
+      (>! src :world)
+      (close! src)
+      ;; Both taps get the values
+      (is (= :hello (<! t1)))
+      (is (= :hello (<! t2)))
+      (is (= :world (<! t1)))
+      (is (= :world (<! t2))))))
+
+(deftest pub-sub-test
+  (testing "pub/sub routes by topic"
+    (let [src (async/chan 10)
+          p (async/pub src :type)
+          animals (async/chan 10)
+          plants (async/chan 10)]
+      (async/sub p :animal animals)
+      (async/sub p :plant plants)
+      (>! src {:type :animal :name "cat"})
+      (>! src {:type :plant :name "oak"})
+      (>! src {:type :animal :name "dog"})
+      (let [a1 (<! animals)
+            p1 (<! plants)
+            a2 (<! animals)]
+        (is (= "cat" (:name a1)))
+        (is (= "oak" (:name p1)))
+        (is (= "dog" (:name a2)))))))
+
+(deftest split-test
+  (testing "split routes by predicate"
+    (let [src (to-chan! [2 1])
+          [evens odds] (async/split even? src)]
+      ;; 2 is even → goes to evens first
+      (is (= 2 (<! evens)))
+      (is (= 1 (<! odds))))))
+
+(deftest async-map-test
+  (testing "async/map applies fn to multiple channels"
+    (let [c1 (to-chan! [1 2 3])
+          c2 (to-chan! [10 20 30])
+          out (async/map + [c1 c2])]
+      (is (= 11 (<! out)))
+      (is (= 22 (<! out)))
+      (is (= 33 (<! out))))))
+
+(deftest async-take-test
+  (testing "async/take takes n from channel"
+    (let [src (to-chan! [1 2 3 4 5])
+          out (async/take 3 src)
+          result (<! (async/into [] out))]
+      (is (= [1 2 3] result)))))
+
+(deftest go-loop-test
+  (testing "go-loop macro"
+    (let [c (async/chan 10)]
+      (<! (go-loop [i 0]
+            (when (< i 5)
+              (>! c i)
+              (recur (inc i)))))
+      (close! c)
+      (is (= [0 1 2 3 4] (<! (async/into [] c)))))))
