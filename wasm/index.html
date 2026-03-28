@@ -1,98 +1,229 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>let-go REPL</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>let-go — Clojure dialect in Go</title>
     <script src="wasm_exec.js"></script>
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery.terminal/2.42.0/js/jquery.terminal.min.js"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap"
-      rel="stylesheet"
-    />
     <link
       href="https://cdnjs.cloudflare.com/ajax/libs/jquery.terminal/2.42.0/css/jquery.terminal.min.css"
       rel="stylesheet"
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=DM+Sans:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
       :root {
-        color-scheme: light dark;
+        --bg: #0c0c0c;
+        --fg: #e8e6df;
+        --dim: #5a584f;
+        --accent: #5ec4b6;
+        --border: #1e1e1e;
+        --surface: #111111;
+        --mono: 'IBM Plex Mono', monospace;
+        --sans: 'DM Sans', sans-serif;
+      }
+
+      html, body {
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--sans);
       }
 
       body {
-        padding: 0;
-        margin: 0;
-        background-color: rgb(21, 15, 0);
-        font-family: "JetBrains Mono", "Courier New", Courier, monospace;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      #page {
+        width: 100%;
+        max-width: 760px;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 0 1.5rem;
+      }
+
+      /* --- Header --- */
+      #header {
+        padding: 2.5rem 0 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 1.2rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      #header .logo {
+        width: 3rem;
+        height: 3rem;
+        flex-shrink: 0;
+        opacity: 0.9;
+      }
+
+      #header .title {
+        font-family: var(--mono);
+        font-weight: 600;
+        font-size: 1.1rem;
+        letter-spacing: -0.02em;
+      }
+
+      #header .title .lambda {
+        color: var(--fg);
+      }
+
+      #header .title .go {
+        color: var(--accent);
+      }
+
+      #header .subtitle {
+        font-size: 0.8rem;
+        color: var(--dim);
+        margin-top: 0.15rem;
+        letter-spacing: 0.01em;
+      }
+
+      #header .links {
+        margin-left: auto;
+        display: flex;
+        gap: 1rem;
+        font-family: var(--mono);
+        font-size: 0.75rem;
+      }
+
+      #header .links a {
+        color: var(--dim);
+        text-decoration: none;
+        transition: color 0.15s;
+      }
+
+      #header .links a:hover {
+        color: var(--accent);
+      }
+
+      /* --- Loading --- */
+      #loading {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        color: var(--dim);
+      }
+
+      #loading .dot {
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 0.3; }
+        50% { opacity: 1; }
+      }
+
+      /* --- Terminal --- */
+      #term-wrap {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 1rem 0 2rem;
+        min-height: 0;
       }
 
       .terminal {
-        --color: rgb(255, 254, 227);
-        --background: rgb(21, 15, 0);
-        --font: "JetBrains Mono", "Courier New", Courier, monospace;
+        --color: var(--fg) !important;
+        --background: transparent !important;
+        --font: var(--mono) !important;
+        --size: 0.85rem !important;
+        flex: 1;
       }
 
-      @media (prefers-color-scheme: dark) {
-        .terminal {
-          --color: rgb(255, 254, 227);
-          --background: rgb(21, 15, 0);
-        }
-        body {
-          background-color: rgb(21, 15, 0);
-          color: rgb(255, 254, 227);
-        }
-        a { color: rgb(100, 200, 255); }
+      .terminal .terminal-output .format {
+        color: var(--fg);
       }
 
-      @media (prefers-color-scheme: light) {
-        .terminal {
-          --color: rgb(21, 15, 0);
-          --background: rgb(255, 254, 227);
-        }
-        body {
-          background-color: rgb(255, 254, 227);
-          color: rgb(21, 15, 0);
-        }
-        a { color: rgb(0, 100, 180); }
+      /* ANSI color overrides for our error format */
+      .terminal .terminal-output span[style*="color: red"],
+      .terminal .terminal-output .terminal-error {
+        color: #e05252 !important;
       }
 
-      #banner {
-        padding: 1em 1.5em;
-        font-size: 0.85em;
-        line-height: 1.5;
-        display: flex;
-        align-items: center;
-        gap: 1.5em;
+      .cmd .cmd-prompt {
+        color: var(--accent) !important;
       }
 
-      #banner img {
-        width: 5em;
-        height: 5em;
-        flex-shrink: 0;
+      .cmd .cmd-cursor-line .cmd-cursor {
+        background-color: var(--accent) !important;
+        color: var(--bg) !important;
       }
 
-      #banner p {
-        margin: 0.3em 0;
+      /* Scrollbar */
+      .terminal ::-webkit-scrollbar { width: 4px; }
+      .terminal ::-webkit-scrollbar-track { background: transparent; }
+      .terminal ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+      /* --- Footer --- */
+      #footer {
+        padding: 1rem 0;
+        border-top: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        color: var(--dim);
+        text-align: center;
+        letter-spacing: 0.02em;
       }
+
+      /* --- Responsive --- */
+      @media (max-width: 600px) {
+        #header { flex-wrap: wrap; padding: 1.5rem 0 1rem; }
+        #header .links { width: 100%; margin-left: 0; margin-top: 0.5rem; }
+        #page { padding: 0 1rem; }
+      }
+
+      /* Fade in */
+      #term-wrap { opacity: 0; transition: opacity 0.3s ease; }
+      #term-wrap.visible { opacity: 1; }
     </style>
   </head>
   <body>
-    <div id="banner">
-      <a href="https://github.com/nooga/let-go">
-        <img src="logo.svg" alt="let-go" />
-      </a>
-      <div>
-        <p>
-          <strong>let-go</strong> is a Clojure dialect that compiles to bytecode and runs on a VM written in Go.
-          This is the WASM build running entirely in your browser.
-        </p>
-        <p>
-          <a href="https://github.com/nooga/let-go">github.com/nooga/let-go</a>
-        </p>
+    <div id="page">
+      <div id="header">
+        <a href="https://github.com/nooga/let-go">
+          <img src="logo.svg" class="logo" alt="let-go" />
+        </a>
+        <div>
+          <div class="title">
+            <span class="lambda">λ</span> let-<span class="go">go</span>
+          </div>
+          <div class="subtitle">Clojure dialect &middot; bytecode VM &middot; written in Go</div>
+        </div>
+        <div class="links">
+          <a href="https://github.com/nooga/let-go">source</a>
+          <a href="https://github.com/nooga/let-go/releases">install</a>
+        </div>
+      </div>
+
+      <div id="loading">
+        <span>loading wasm<span class="dot">&nbsp;...</span></span>
+      </div>
+
+      <div id="term-wrap" style="display:none">
+        <div id="term"></div>
+      </div>
+
+      <div id="footer">
+        running entirely in your browser via WebAssembly
       </div>
     </div>
-    <div id="term"></div>
+
     <script>
       function loadWasm(path) {
         const go = new Go();
@@ -105,6 +236,11 @@
 
       loadWasm("letgo.wasm")
         .then((wasm) => {
+          document.getElementById("loading").style.display = "none";
+          const wrap = document.getElementById("term-wrap");
+          wrap.style.display = "flex";
+          requestAnimationFrame(() => wrap.classList.add("visible"));
+
           jQuery(function ($) {
             const term = $("#term").terminal(
               function (command) {
@@ -116,16 +252,22 @@
                 }
               },
               {
-                greetings: " λ   let-go (wasm)\n GO   try (+ 1 1)",
+                greetings: false,
                 name: "let_go",
                 prompt: "user> ",
+                ansi: true,
+                onInit: function() {
+                  this.echo(" [[;#e8e6df;]λ]]   let-go [[;#5a584f;](wasm)]]");
+                  this.echo(" [[;#5ec4b6;]GO]]   type [[;#5ec4b6;](+ 1 1)]] to start\n");
+                }
               }
             );
             console.log = (...args) => { term.echo(...args); }
           });
         })
         .catch((error) => {
-          document.getElementById("term").innerText = "Failed to load WASM: " + error;
+          document.getElementById("loading").innerHTML =
+            '<span style="color:#e05252">failed to load: ' + error + '</span>';
         });
     </script>
   </body>
