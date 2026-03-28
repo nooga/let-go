@@ -33,20 +33,80 @@ var AtomType *theAtomType = &theAtomType{}
 // Swap uses optimistic concurrency with a generation counter — no value comparison needed.
 // The function may be called multiple times under contention.
 type Atom struct {
-	val Value
-	gen uint64 // generation counter — incremented on every mutation
-	mu  sync.Mutex
+	val      Value
+	gen      uint64 // generation counter — incremented on every mutation
+	mu       sync.Mutex
+	meta     Value
+	watches  map[Value]Fn // key → watch fn
 }
 
 func NewAtom(root Value) *Atom {
 	return &Atom{val: root}
 }
 
+func (a *Atom) notifyWatches(oldVal, newVal Value) {
+	if len(a.watches) == 0 {
+		return
+	}
+	for key, fn := range a.watches {
+		fn.Invoke([]Value{key, a, oldVal, newVal})
+	}
+}
+
+func (a *Atom) AddWatch(key Value, fn Fn) {
+	a.mu.Lock()
+	if a.watches == nil {
+		a.watches = make(map[Value]Fn)
+	}
+	a.watches[key] = fn
+	a.mu.Unlock()
+}
+
+func (a *Atom) RemoveWatch(key Value) {
+	a.mu.Lock()
+	delete(a.watches, key)
+	a.mu.Unlock()
+}
+
+func (a *Atom) Meta() Value {
+	if a.meta == nil {
+		return NIL
+	}
+	return a.meta
+}
+
+func (a *Atom) WithMeta(m Value) Value {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return &Atom{val: a.val, gen: a.gen, meta: m, watches: a.watches}
+}
+
+func (a *Atom) AlterMeta(fn Fn, args []Value) (Value, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	m := a.meta
+	if m == nil {
+		m = NIL
+	}
+	allArgs := append([]Value{m}, args...)
+	newMeta, err := fn.Invoke(allArgs)
+	if err != nil {
+		return NIL, err
+	}
+	a.meta = newMeta
+	return newMeta, nil
+}
+
 func (a *Atom) Reset(newVal Value) Value {
 	a.mu.Lock()
+	oldVal := a.val
 	a.val = newVal
 	a.gen++
+	watches := a.watches
 	a.mu.Unlock()
+	if len(watches) > 0 {
+		a.notifyWatches(oldVal, newVal)
+	}
 	return newVal
 }
 
@@ -72,7 +132,11 @@ func (a *Atom) Swap(fn Fn, args []Value) (Value, error) {
 		if a.gen == oldGen {
 			a.val = newVal
 			a.gen++
+			watches := a.watches
 			a.mu.Unlock()
+			if len(watches) > 0 {
+				a.notifyWatches(oldVal, newVal)
+			}
 			return newVal, nil
 		}
 		a.mu.Unlock()
