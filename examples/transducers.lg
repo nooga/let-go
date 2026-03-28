@@ -1,0 +1,63 @@
+;
+; Copyright (c) 2026 Marcin Gasperowicz <xnooga@gmail.com>
+; SPDX-License-Identifier: MIT
+;
+
+;; Transducer pipelines
+;; Usage: lg examples/transducers.lg
+
+(println "=== Transducer Pipelines ===\n")
+
+;; 1. Basic: filter + map without intermediate collections
+(println "Squares of even numbers (first 10):")
+(println
+  (into []
+    (comp (filter even?)
+          (map #(* % %))
+          (take 10))
+    (range 100)))
+
+;; 2. Word frequency counter
+(let [text "the quick brown fox jumps over the lazy dog the fox the dog"
+      words (split text " ")
+      freqs (frequencies words)]
+  (println "\nWord frequencies:")
+  (doseq [[word cnt] (sort-by second freqs)]
+    (println (str "  " word ": " cnt))))
+
+;; 3. Partition + transform pipeline
+(println "\nGrouped and summed by 5s:")
+(println
+  (into []
+    (comp (partition-by #(quot % 5))
+          (map #(reduce + 0 %)))
+    (range 20)))
+
+;; 4. Dedupe + interpose
+(println "\nDeduped and joined:")
+(println
+  (apply str
+    (into []
+      (comp (dedupe)
+            (map str)
+            (interpose ", "))
+      [1 1 2 2 2 3 3 1 1 4 4])))
+
+;; 5. Transduce for aggregation
+(println "\nSum of first 100 squares of odd numbers:")
+(println
+  (transduce
+    (comp (filter odd?)
+          (map #(* % %))
+          (take 100))
+    + 0
+    (range 1000)))
+
+;; 6. Lazy sequence through transducer
+(println "\nFirst 8 squares of numbers > 10:")
+(println
+  (vec (take 8
+    (sequence
+      (comp (filter #(> % 10))
+            (map #(* % %)))
+      (range 100)))))

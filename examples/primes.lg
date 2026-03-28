@@ -8,7 +8,7 @@
 ;; ╔═══════════════════════════════════════════════════════════════════════════╗
 ;; ║                    LAZY PRIME NUMBER GENERATOR                            ║
 ;; ║                                                                           ║
-;; ║  Demonstrates: lazy-seq, iterate, lazy-filter, infinite sequences         ║
+;; ║  Demonstrates: lazy-seq, iterate, filter, infinite sequences         ║
 ;; ╚═══════════════════════════════════════════════════════════════════════════╝
 ;;
 ;; Usage: let-go examples/primes.lg
@@ -29,7 +29,7 @@
 (def naturals (iterate inc 2))
 
 ;; Filter to keep only primes (lazy!)
-(def primes (lazy-filter prime? naturals))
+(def primes (filter prime? naturals))
 
 ;; Prime factorization using our lazy primes
 (defn prime-factors [n]

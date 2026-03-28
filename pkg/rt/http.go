@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 Marcin Gasperowicz <xnooga@gmail.com>
+ * Copyright (c) 2022-2026 Marcin Gasperowicz <xnooga@gmail.com>
  * SPDX-License-Identifier: MIT
  */
 
@@ -163,39 +163,25 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 
 // nolint
 func installHttpNS() {
-	handle, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fnm := vs[1].Unbox().(func(interface{}))
-		var fn func(w http.ResponseWriter, r *http.Request) interface{}
-		fnm(&fn)
-		http.HandleFunc(vs[0].Unbox().(string), func(w http.ResponseWriter, r *http.Request) {
-			fn(w, r)
-		})
-		return vm.NIL, nil
-	})
-
-	if err != nil {
-		panic("http NS init failed")
-	}
-
-	serve, err := vm.NativeFnType.Box(http.ListenAndServe)
-	if err != nil {
-		panic("http NS init failed")
-	}
-
-	serve2, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// http/serve — (http/serve handler addr)
+	// Ring-style: handler is a fn that takes a request map, returns a response map.
+	serve, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
-			return vm.NIL, vm.NewExecutionError("serve expects 2 args")
-		}
-		addr, ok := vs[1].(vm.String)
-		if !ok {
-			return vm.NIL, vm.NewExecutionError("serve expected listen address as String")
+			return vm.NIL, vm.NewExecutionError("serve expects 2 args (handler, addr)")
 		}
 		handlerFunc, ok := vs[0].(vm.Fn)
 		if !ok {
 			return vm.NIL, vm.NewExecutionError("serve expected handler function as Fn")
 		}
+		addr, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, vm.NewExecutionError("serve expected listen address as String")
+		}
 		handler := &Handler{fn: handlerFunc}
-		http.ListenAndServe(string(addr), handler)
+		err := http.ListenAndServe(string(addr), handler)
+		if err != nil {
+			return vm.NIL, err
+		}
 		return vm.NIL, nil
 	})
 	if err != nil {
@@ -403,9 +389,7 @@ func installHttpNS() {
 
 	ns := vm.NewNamespace("http")
 
-	ns.Def("handle", handle)
 	ns.Def("serve", serve)
-	ns.Def("serve2", serve2)
 	ns.Def("get", httpGet)
 	ns.Def("post", httpPost)
 	ns.Def("request", httpRequest)

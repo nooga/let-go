@@ -1,0 +1,77 @@
+;
+; Copyright (c) 2026 Marcin Gasperowicz <xnooga@gmail.com>
+; SPDX-License-Identifier: MIT
+;
+
+;; core.async — channels, pub/sub, fan-out
+;; Usage: lg examples/async.lg
+
+(ns async-demo
+  (:require [async :refer :all]))
+
+(println "=== Channel Pipeline ===\n")
+
+;; Producer -> transformer -> consumer pipeline
+(let [numbers (async/chan 10)
+      squared (async/chan 10)]
+
+  ;; Producer: emit 1..10, then close
+  (go
+    (dotimes [i 10]
+      (>! numbers (inc i)))
+    (close! numbers))
+
+  ;; Transformer: square each number, then close
+  (go
+    (loop []
+      (let [n (<! numbers)]
+        (when n
+          (>! squared (* n n))
+          (recur))))
+    (close! squared))
+
+  ;; Consumer: collect results
+  (println "Squares:" (<! (async/into [] squared))))
+
+;; Pub/Sub example
+(println "\n=== Pub/Sub ===\n")
+
+(let [events (async/chan 10)
+      p (pub events :type)
+      errors (async/chan 10)
+      info (async/chan 10)]
+
+  (sub p :error errors)
+  (sub p :info info)
+
+  ;; Publish some events
+  (>! events {:type :info  :msg "system started"})
+  (>! events {:type :error :msg "disk full"})
+  (>! events {:type :info  :msg "request served"})
+  (>! events {:type :error :msg "timeout"})
+  (close! events)
+
+  (println "Errors:")
+  (println " " (:msg (<! errors)))
+  (println " " (:msg (<! errors)))
+  (println "Info:")
+  (println " " (:msg (<! info)))
+  (println " " (:msg (<! info))))
+
+;; Fan-out with mult
+(println "\n=== Fan-out (mult/tap) ===\n")
+
+(let [src (async/chan 10)
+      m (mult src)
+      t1 (async/chan 10)
+      t2 (async/chan 10)]
+
+  (tap m t1)
+  (tap m t2)
+
+  (>! src :hello)
+  (>! src :world)
+  (close! src)
+
+  (println "Tap 1:" (<! t1) (<! t1))
+  (println "Tap 2:" (<! t2) (<! t2)))
