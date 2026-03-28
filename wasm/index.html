@@ -24,6 +24,7 @@
         padding: 0;
         margin: 0;
         background-color: rgb(21, 15, 0);
+        font-family: "JetBrains Mono", "Courier New", Courier, monospace;
       }
 
       .terminal {
@@ -39,7 +40,9 @@
         }
         body {
           background-color: rgb(21, 15, 0);
+          color: rgb(255, 254, 227);
         }
+        a { color: rgb(100, 200, 255); }
       }
 
       @media (prefers-color-scheme: light) {
@@ -49,16 +52,47 @@
         }
         body {
           background-color: rgb(255, 254, 227);
+          color: rgb(21, 15, 0);
         }
+        a { color: rgb(0, 100, 180); }
       }
 
-      img {
-        width: 7em;
-        height: 7em;
+      #banner {
+        padding: 1em 1.5em;
+        font-size: 0.85em;
+        line-height: 1.5;
+        display: flex;
+        align-items: center;
+        gap: 1.5em;
+      }
+
+      #banner img {
+        width: 5em;
+        height: 5em;
+        flex-shrink: 0;
+      }
+
+      #banner p {
+        margin: 0.3em 0;
       }
     </style>
   </head>
   <body>
+    <div id="banner">
+      <a href="https://github.com/nooga/let-go">
+        <img src="logo.svg" alt="let-go" />
+      </a>
+      <div>
+        <p>
+          <strong>let-go</strong> is a Clojure dialect that compiles to bytecode and runs on a VM written in Go.
+          This is the WASM build running entirely in your browser.
+        </p>
+        <p>
+          <a href="https://github.com/nooga/let-go">github.com/nooga/let-go</a>
+        </p>
+      </div>
+    </div>
+    <div id="term"></div>
     <script>
       function loadWasm(path) {
         const go = new Go();
@@ -82,7 +116,7 @@
                 }
               },
               {
-                greetings: " λ   let-go (wasm)\n GO   type (+ 1 1) to start",
+                greetings: " λ   let-go (wasm)\n GO   try (+ 1 1)",
                 name: "let_go",
                 prompt: "user> ",
               }
@@ -91,12 +125,8 @@
           });
         })
         .catch((error) => {
-          console.log("failed to load wasm:", error);
+          document.getElementById("term").innerText = "Failed to load WASM: " + error;
         });
     </script>
-    <a href="https://github.com/nooga/let-go">
-      <img src="logo.svg" />
-    </a>
-    <div id="term"></div>
   </body>
 </html>

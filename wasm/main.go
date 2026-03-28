@@ -3,10 +3,10 @@
 package main
 
 import (
-	"fmt"
 	"syscall/js"
 
 	"github.com/nooga/let-go/pkg/api"
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 var lg *api.LetGo
@@ -15,7 +15,7 @@ func Eval(this js.Value, args []js.Value) any {
 	x := args[0].String()
 	v, err := lg.Run(x)
 	if err != nil {
-		return fmt.Sprintf("%s", err)
+		return vm.FormatError(err)
 	}
 	return v.String()
 }
