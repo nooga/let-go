@@ -10,12 +10,12 @@
 Greetings loafers! _(λ-gophers haha, get it?)_
 
 This is a bytecode compiler and VM for a language closely resembling Clojure, a Clojure dialect, if you will.
-Ships as a single ~9MB binary with ~9ms startup time.
+Ships as a single ~9MB binary with ~6ms startup time.
 
 ### Why let-go?
 
 - **Standalone executables** — compile your program into a single binary with `lg -b myapp main.lg`. No runtime needed, just distribute and run.
-- **Fast startup** — 9ms cold start. Pre-compiled bytecode (LGB format) makes boot near-instant even with a large standard library.
+- **Fast startup** — 6ms cold start. Pre-compiled bytecode (LGB format) makes boot near-instant even with a large standard library.
 - **Small footprint** — 9MB binary, 13MB idle memory. 7x smaller than Babashka, 33x smaller than JDK.
 - **Batteries included** — core.async channels, HTTP server/client, JSON, Transit, IO, Babashka pods, nREPL server.
 - **Go interop** — embed let-go in Go apps, map Go structs to records, call Go functions from let-go and vice versa.
@@ -28,11 +28,11 @@ Here are some nebulous goals in no particular order:
 - [x] Implement as much of Clojure as possible — including persistent data types, true concurrency, transducers, core.async, and BigInts,
 - [x] Provide comfy two-way interop for arbitrary functions and types,
 - [x] AOT compilation — compile let-go programs to bytecode or standalone binaries,
+- [x] Boot the entire runtime in a single `requestAnimationFrame` and still have 10ms to spare at 60fps,
 - [ ] Stretch goal: let-go bytecode -> Go translation.
 
 Here are the non goals:
 
-- Stellar performance (cough cough, it seems to be way faster than [Joker](https://github.com/candid82/joker)),
 - Being a drop-in replacement for [clojure/clojure](https://github.com/clojure/clojure) at any point,
 - Being a linter/formatter/tooling for Clojure in general.
 
@@ -176,16 +176,16 @@ Run `benchmark/run.sh` to reproduce (requires `hyperfine`, `bb`, `clj`, `joker`)
 | --------------- | -------------- | -------------- | ------------------------ | ------------- |
 | **Platform**    | Go bytecode VM | GraalVM native | Go tree-walk interpreter | JVM (HotSpot) |
 | **Binary size** | **9.4M**       | 68M            | 26M                      | 304M (JDK)    |
-| **Startup**     | **9ms**        | 21ms           | 12ms                     | 346ms         |
-| **Idle memory** | **13MB**       | 27MB           | 21MB                     | 92MB          |
+| **Startup**     | **6ms**        | 20ms           | 12ms                     | 353ms         |
+| **Idle memory** | **13MB**       | 27MB           | 21MB                     | 98MB          |
 
 **Performance highlights** (Apple M1 Pro):
 
 - **Smallest footprint** — 7x smaller than Babashka, 33x smaller than the JDK
-- **Fastest startup** — 9ms with pre-compiled bytecode, 2.3x faster than Babashka, 38x faster than JVM
-- **Wins on short-lived tasks** — map/filter and transducer pipelines: **7ms** vs bb's 21ms (3x faster)
-- **Competitive on compute** — fib(35) within 4% of Babashka (2.0s vs 1.9s), loop-recur 13% faster
-- **Lowest memory** — 14MB for fib(35) vs bb's 77MB (5.6x less), 20MB for reduce 1M vs bb's 59MB (2.9x less)
+- **Fastest startup** — 6ms with pre-compiled bytecode (fits in a `requestAnimationFrame`), 3x faster than Babashka, 2x faster than Joker, 57x faster than JVM
+- **Wins on short-lived tasks** — map/filter and transducer pipelines: **6-7ms** vs bb's 20ms (3x faster)
+- **Competitive on compute** — fib(35) within 8% of Babashka (2.1s vs 1.9s), loop-recur 8% faster
+- **Lowest memory** — 14MB for fib(35) vs bb's 77MB (5.7x less), 20MB for reduce 1M vs bb's 59MB (3x less)
 - **10x faster than Joker** on all compute benchmarks — bytecode VM vs tree-walk interpreter
 
 Full results with methodology: [benchmark/results.md](benchmark/results.md)
