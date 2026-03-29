@@ -6,13 +6,16 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
 	"github.com/alimpfard/line"
+	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/nrepl"
 	"github.com/nooga/let-go/pkg/resolver"
@@ -136,11 +139,49 @@ func runFile(ctx *compiler.Context, filename string) error {
 	if errc != nil {
 		return errc
 	}
-	//_, err = vm.NewFrame(chunk, nil).Run()
-	//if err != nil {
-	//	return err
-	//}
 	return nil
+}
+
+func runLGB(filename string) error {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return err
+	}
+	resolve := func(nsName, name string) *vm.Var {
+		n := rt.DefNSBare(nsName)
+		v := n.LookupLocal(vm.Symbol(name))
+		if v == nil {
+			return n.Def(name, vm.NIL)
+		}
+		return v
+	}
+	unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(data), resolve)
+	if err != nil {
+		return fmt.Errorf("decoding %s: %w", filename, err)
+	}
+	f := vm.NewFrame(unit.MainChunk, nil)
+	_, err = f.RunProtected()
+	vm.ReleaseFrame(f)
+	return err
+}
+
+func compileLG(ctx *compiler.Context, src string, dst string) error {
+	ctx.SetSource(src)
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	chunk, _, err := ctx.CompileMultiple(f)
+	f.Close()
+	if err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	return bytecode.EncodeCompilation(out, ctx.Consts(), chunk)
 }
 
 var nreplServer *nrepl.NreplServer
@@ -166,6 +207,7 @@ var runREPL bool
 var expr string
 var debug bool
 var showVersion bool
+var compileOutput string
 
 func init() {
 	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
@@ -175,6 +217,7 @@ func init() {
 	flag.IntVar(&nreplPort, "p", 2137, "set nREPL port, default is 2137")
 	flag.BoolVar(&showVersion, "v", false, "print version and exit")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
+	flag.StringVar(&compileOutput, "c", "", "compile .lg file to .lgb bytecode (specify output path)")
 
 	completionTerminators = map[byte]bool{
 		'(':  true,
@@ -232,13 +275,31 @@ func main() {
 	nsResolver := resolver.NewNSResolver(context, []string{"."})
 	rt.SetNSLoader(nsResolver)
 
+	// Compile mode: compile .lg → .lgb
+	if compileOutput != "" {
+		if len(files) != 1 {
+			fmt.Fprintln(os.Stderr, "error: -c requires exactly one input file")
+			os.Exit(1)
+		}
+		if err := compileLG(context, files[0], compileOutput); err != nil {
+			fmt.Fprint(os.Stderr, vm.FormatError(err))
+			os.Exit(1)
+		}
+		return
+	}
+
 	ranSomething := false
 	if len(files) >= 1 {
 		for i := range files {
-			err := runFile(context, files[i])
-			if err != nil {
-				fmt.Print(vm.FormatError(err))
-				continue
+			if filepath.Ext(files[i]) == ".lgb" {
+				// Run precompiled bytecode directly
+				if err := runLGB(files[i]); err != nil {
+					fmt.Print(vm.FormatError(err))
+				}
+			} else {
+				if err := runFile(context, files[i]); err != nil {
+					fmt.Print(vm.FormatError(err))
+				}
 			}
 		}
 		ranSomething = true
