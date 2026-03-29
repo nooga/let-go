@@ -10,7 +10,16 @@
 Greetings loafers! _(λ-gophers haha, get it?)_
 
 This is a bytecode compiler and VM for a language closely resembling Clojure, a Clojure dialect, if you will.
-Ships as a single ~9MB binary with ~12ms startup time.
+Ships as a single ~9MB binary with ~9ms startup time.
+
+### Why let-go?
+
+- **Standalone executables** — compile your program into a single binary with `lg -b myapp main.lg`. No runtime needed, just distribute and run.
+- **Fast startup** — 9ms cold start. Pre-compiled bytecode (LGB format) makes boot near-instant even with a large standard library.
+- **Small footprint** — 9MB binary, 13MB idle memory. 7x smaller than Babashka, 33x smaller than JDK.
+- **Batteries included** — core.async channels, HTTP server/client, JSON, Transit, IO, Babashka pods, nREPL server.
+- **Go interop** — embed let-go in Go apps, map Go structs to records, call Go functions from let-go and vice versa.
+- **Broad Clojure compatibility** — macros, destructuring, protocols, records, multimethods, transducers, lazy seqs, persistent data structures, BigInts.
 
 Here are some nebulous goals in no particular order:
 
@@ -18,7 +27,7 @@ Here are some nebulous goals in no particular order:
 - [ ] Making it legal to write Clojure at your Go dayjob,
 - [x] Implement as much of Clojure as possible — including persistent data types, true concurrency, transducers, core.async, and BigInts,
 - [x] Provide comfy two-way interop for arbitrary functions and types,
-- [ ] AOT (let-go -> standalone binary) would be nice eventually,
+- [x] AOT compilation — compile let-go programs to bytecode or standalone binaries,
 - [ ] Stretch goal: let-go bytecode -> Go translation.
 
 Here are the non goals:
@@ -166,18 +175,18 @@ Run `benchmark/run.sh` to reproduce (requires `hyperfine`, `bb`, `clj`, `joker`)
 |                 | let-go         | babashka       | joker                    | clojure JVM   |
 | --------------- | -------------- | -------------- | ------------------------ | ------------- |
 | **Platform**    | Go bytecode VM | GraalVM native | Go tree-walk interpreter | JVM (HotSpot) |
-| **Binary size** | **9.2M**       | 68M            | 26M                      | 304M (JDK)    |
-| **Startup**     | **12ms**       | 21ms           | 11ms                     | 346ms         |
-| **Idle memory** | **16MB**       | 27MB           | 21MB                     | 93MB          |
+| **Binary size** | **9.4M**       | 68M            | 26M                      | 304M (JDK)    |
+| **Startup**     | **9ms**        | 21ms           | 12ms                     | 346ms         |
+| **Idle memory** | **13MB**       | 27MB           | 21MB                     | 92MB          |
 
 **Performance highlights** (Apple M1 Pro):
 
-- **Smallest footprint** - 7x smaller than Babashka, 33x smaller than the JDK
-- **Fastest startup** - 12ms, neck and neck with Joker, 1.8x faster than Babashka, 30x faster than JVM
-- **Wins on short-lived tasks** - map/filter and transducer pipelines: **13ms** vs bb's 21ms (startup dominates)
-- **Competitive on compute** - fib(35) within 4% of Babashka (2.0s vs 1.9s), loop-recur neck and neck
-- **Lowest memory** - 17MB for fib(35) vs bb's 77MB (4.5x less), 21MB for reduce 1M vs bb's 59MB (2.8x less)
-- **10x faster than Joker** on all compute benchmarks - bytecode VM vs tree-walk interpreter
+- **Smallest footprint** — 7x smaller than Babashka, 33x smaller than the JDK
+- **Fastest startup** — 9ms with pre-compiled bytecode, 2.3x faster than Babashka, 38x faster than JVM
+- **Wins on short-lived tasks** — map/filter and transducer pipelines: **7ms** vs bb's 21ms (3x faster)
+- **Competitive on compute** — fib(35) within 4% of Babashka (2.0s vs 1.9s), loop-recur 13% faster
+- **Lowest memory** — 14MB for fib(35) vs bb's 77MB (5.6x less), 20MB for reduce 1M vs bb's 59MB (2.9x less)
+- **10x faster than Joker** on all compute benchmarks — bytecode VM vs tree-walk interpreter
 
 Full results with methodology: [benchmark/results.md](benchmark/results.md)
 
@@ -244,6 +253,26 @@ lg -e '(+ 1 1)'                   # eval expression
 lg myfile.lg                       # run file
 lg -r myfile.lg                    # run file, then REPL
 ```
+
+### Compilation and distribution
+
+let-go can compile programs to bytecode (`.lgb` files) and package them as standalone executables.
+
+**Compile to bytecode** — skips the reader/parser/compiler at load time:
+
+```bash
+lg -c app.lgb app.lg               # compile to bytecode
+lg app.lgb                          # run bytecode directly
+```
+
+**Create a standalone binary** — bundles the compiled bytecode into a self-contained executable:
+
+```bash
+lg -b myapp app.lg                  # compile + bundle into executable
+./myapp                             # runs anywhere, no lg needed
+```
+
+The standalone binary is a copy of `lg` with your program's bytecode appended. It needs no external files or runtime — just copy it to another machine and run it.
 
 ### Building from source
 

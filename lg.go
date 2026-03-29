@@ -7,8 +7,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,9 @@ import (
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+// Footer appended to standalone binaries: [lgb data][8-byte size][4-byte magic]
+var bundleMagic = [4]byte{'L', 'G', 'B', 'X'}
 
 func versionString() string {
 	if commit != "none" && len(commit) > 7 {
@@ -165,6 +170,135 @@ func runLGB(filename string) error {
 	return err
 }
 
+// checkBundledLGB checks if the current executable has an appended LGB payload.
+// Returns the LGB data or nil if no payload is found.
+func checkBundledLGB() []byte {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	f, err := os.Open(exe)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	// Read the 12-byte footer: [8-byte size][4-byte magic]
+	_, err = f.Seek(-12, io.SeekEnd)
+	if err != nil {
+		return nil
+	}
+	var footer [12]byte
+	if _, err := io.ReadFull(f, footer[:]); err != nil {
+		return nil
+	}
+	if footer[8] != bundleMagic[0] || footer[9] != bundleMagic[1] ||
+		footer[10] != bundleMagic[2] || footer[11] != bundleMagic[3] {
+		return nil
+	}
+	lgbSize := binary.LittleEndian.Uint64(footer[:8])
+
+	// Seek to start of LGB data
+	_, err = f.Seek(-12-int64(lgbSize), io.SeekEnd)
+	if err != nil {
+		return nil
+	}
+	data := make([]byte, lgbSize)
+	if _, err := io.ReadFull(f, data); err != nil {
+		return nil
+	}
+	return data
+}
+
+// bundleBinary creates a standalone executable by copying the lg binary
+// and appending the compiled LGB + footer.
+func bundleBinary(ctx *compiler.Context, src string, dst string) error {
+	// Compile
+	ctx.SetSource(src)
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	chunk, _, err := ctx.CompileMultiple(f)
+	f.Close()
+	if err != nil {
+		return err
+	}
+
+	// Serialize LGB to memory
+	var lgbBuf bytes.Buffer
+	if err := bytecode.EncodeCompilation(&lgbBuf, ctx.Consts(), chunk); err != nil {
+		return err
+	}
+
+	// Copy our own binary
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("finding executable: %w", err)
+	}
+	srcBin, err := os.Open(exe)
+	if err != nil {
+		return err
+	}
+	defer srcBin.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	// Copy the base binary (strip any existing bundle first)
+	binSize, err := getBaseBinarySize(srcBin)
+	if err != nil {
+		return err
+	}
+	srcBin.Seek(0, io.SeekStart)
+	if _, err := io.CopyN(out, srcBin, binSize); err != nil {
+		return err
+	}
+
+	// Append LGB data
+	lgbData := lgbBuf.Bytes()
+	if _, err := out.Write(lgbData); err != nil {
+		return err
+	}
+
+	// Append footer: [8-byte size][4-byte magic]
+	var footer [12]byte
+	binary.LittleEndian.PutUint64(footer[:8], uint64(len(lgbData)))
+	copy(footer[8:], bundleMagic[:])
+	if _, err := out.Write(footer[:]); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// getBaseBinarySize returns the size of the lg binary without any appended bundle.
+func getBaseBinarySize(f *os.File) (int64, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	total := fi.Size()
+	if total < 12 {
+		return total, nil
+	}
+	// Check for existing bundle footer
+	f.Seek(-12, io.SeekEnd)
+	var footer [12]byte
+	if _, err := io.ReadFull(f, footer[:]); err != nil {
+		return total, nil
+	}
+	if footer[8] == bundleMagic[0] && footer[9] == bundleMagic[1] &&
+		footer[10] == bundleMagic[2] && footer[11] == bundleMagic[3] {
+		lgbSize := binary.LittleEndian.Uint64(footer[:8])
+		return total - int64(lgbSize) - 12, nil
+	}
+	return total, nil
+}
+
 func compileLG(ctx *compiler.Context, src string, dst string) error {
 	ctx.SetSource(src)
 	f, err := os.Open(src)
@@ -208,6 +342,7 @@ var expr string
 var debug bool
 var showVersion bool
 var compileOutput string
+var bundleOutput string
 
 func init() {
 	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
@@ -218,6 +353,7 @@ func init() {
 	flag.BoolVar(&showVersion, "v", false, "print version and exit")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.StringVar(&compileOutput, "c", "", "compile .lg file to .lgb bytecode (specify output path)")
+	flag.StringVar(&bundleOutput, "b", "", "bundle .lg file into a standalone executable (specify output path)")
 
 	completionTerminators = map[byte]bool{
 		'(':  true,
@@ -259,6 +395,38 @@ func initCompiler(debug bool) *compiler.Context {
 }
 
 func main() {
+	// Check for appended LGB payload before anything else.
+	// If found, we're a standalone binary — run it directly.
+	if lgbData := checkBundledLGB(); lgbData != nil {
+		// Set up resolver so embedded namespaces (string, set, etc.) can load
+		ctx := initCompiler(false)
+		nsResolver := resolver.NewNSResolver(ctx, []string{"."})
+		rt.SetNSLoader(nsResolver)
+		defer rt.ShutdownAllPods()
+
+		resolve := func(nsName, name string) *vm.Var {
+			n := rt.DefNSBare(nsName)
+			v := n.LookupLocal(vm.Symbol(name))
+			if v == nil {
+				return n.Def(name, vm.NIL)
+			}
+			return v
+		}
+		unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(lgbData), resolve)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		f := vm.NewFrame(unit.MainChunk, nil)
+		_, err = f.RunProtected()
+		vm.ReleaseFrame(f)
+		if err != nil {
+			fmt.Fprint(os.Stderr, vm.FormatError(err))
+			os.Exit(1)
+		}
+		return
+	}
+
 	flag.Parse()
 
 	if showVersion {
@@ -282,6 +450,19 @@ func main() {
 			os.Exit(1)
 		}
 		if err := compileLG(context, files[0], compileOutput); err != nil {
+			fmt.Fprint(os.Stderr, vm.FormatError(err))
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Bundle mode: compile .lg → standalone executable
+	if bundleOutput != "" {
+		if len(files) != 1 {
+			fmt.Fprintln(os.Stderr, "error: -b requires exactly one input file")
+			os.Exit(1)
+		}
+		if err := bundleBinary(context, files[0], bundleOutput); err != nil {
 			fmt.Fprint(os.Stderr, vm.FormatError(err))
 			os.Exit(1)
 		}
