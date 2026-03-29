@@ -82,7 +82,7 @@ Here are the non goals:
 
 ### HTTP (`http` namespace)
 
-- Ring-style HTTP server (`http/serve2`)
+- Ring-style HTTP server (`http/serve`)
 - HTTP client: `http/get`, `http/post`, `http/request`
 - Streaming responses with `:as :stream`
 - URL records accepted in all client functions
@@ -92,10 +92,46 @@ Here are the non goals:
 - `json/read-json`, `json/write-json`
 - Proper float preservation, PersistentMap/Vector support, record serialization
 
+### Transit (`transit` namespace)
+
+- `transit/read`, `transit/write` - transit+json codec
+- Full rolling cache support for compact encoding
+- Keywords, symbols, maps, vectors, sets, lists, big integers
+
 ### OS (`os` namespace)
 
-- `os/sh` — run shell commands, capture stdout/stderr/exit code
+- `os/sh` - run shell commands, capture stdout/stderr/exit code
 - `os/stat`, `os/ls`, `os/cwd`, `os/getenv`, `os/setenv`, `os/exit`
+
+### Babashka pods
+
+let-go supports [Babashka pods](https://github.com/babashka/pods) - standalone programs that expose namespaces over a binary protocol. This gives let-go access to the entire pod ecosystem: databases, AWS, Docker, file watching, and more.
+
+```clojure
+;; Load a pod (uses babashka's shared cache)
+(pods/load-pod 'org.babashka/go-sqlite3 "0.3.13")
+
+;; Use it like any other namespace
+(pod.babashka.go-sqlite3/execute! "app.db"
+  ["create table users (id integer primary key, name text)"])
+(pod.babashka.go-sqlite3/execute! "app.db"
+  ["insert into users values (1, ?)" "Alice"])
+(pod.babashka.go-sqlite3/query "app.db"
+  ["select * from users"])
+;; => [{:id 1 :name "Alice"}]
+```
+
+- `pods/load-pod` - load by name (PATH) or from babashka cache (symbol + version)
+- Supports JSON, EDN, and transit+json payload formats
+- Client-side code evaluation (pod-defined macros and wrappers)
+- Async streaming via `pods/invoke` with `:handlers` for callbacks
+- Shares `~/.babashka/pods/` cache - install pods with `bb`, use them from `lg`
+
+See the [pod registry](https://github.com/babashka/pod-registry) for available pods. Install pods with babashka:
+
+```bash
+bb -e '(pods/load-pod (quote org.babashka/go-sqlite3) "0.3.13")'
+```
 
 ### Go interop
 
@@ -118,7 +154,7 @@ Comprehensive `clojure.core` coverage including:
 `bit-and`, `bit-or`, `bit-xor`, `bit-not`, `bit-shift-left`, `bit-shift-right`,
 `re-find`, `re-matches`, `re-seq`, `re-groups`, and many more.
 
-Additional namespaces: `string`, `set`, `walk`, `edn`, `pprint`, `test`.
+Additional namespaces: `string`, `set`, `walk`, `edn`, `pprint`, `test`, `transit`, `pods`.
 
 ## Benchmarks
 
