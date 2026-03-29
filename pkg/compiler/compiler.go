@@ -468,12 +468,6 @@ func (c *Context) compileForm(o vm.Value) error {
 		tp := c.tailPosition
 		c.tailPosition = false
 
-		// treat as function invocation if this is not a special form
-		err := c.compileForm(fn)
-		if err != nil {
-			return NewCompileError("compiling function position").Wrap(err)
-		}
-
 		args := lst.Next()
 		argc := 0
 		if args != nil {
@@ -485,12 +479,38 @@ func (c *Context) compileForm(o vm.Value) error {
 				}
 			}
 		}
-		for args != nil {
-			err := c.compileForm(args.First())
-			if err != nil {
-				return NewCompileError("compiling arguments " + args.First().String()).Wrap(err)
+
+		// Try to emit a specialized opcode for known core builtins
+		if fn.Type() == vm.SymbolType {
+			if fastOp := c.tryFastOpcode(fn.(vm.Symbol), argc); fastOp != 0 {
+				// Compile arguments only (no function position on stack)
+				for a := lst.Next(); a != nil; a = a.Next() {
+					err := c.compileForm(a.First())
+					if err != nil {
+						return NewCompileError("compiling arguments " + a.First().String()).Wrap(err)
+					}
+				}
+				c.emit(fastOp)
+				if argc == 2 {
+					c.decSP(1) // binary: 2 args -> 1 result
+				}
+				// unary (inc/dec): 1 arg -> 1 result, no SP change
+				c.tailPosition = tp
+				return nil
 			}
-			args = args.Next()
+		}
+
+		// treat as function invocation if this is not a special form
+		err := c.compileForm(fn)
+		if err != nil {
+			return NewCompileError("compiling function position").Wrap(err)
+		}
+
+		for a := lst.Next(); a != nil; a = a.Next() {
+			err := c.compileForm(a.First())
+			if err != nil {
+				return NewCompileError("compiling arguments " + a.First().String()).Wrap(err)
+			}
 		}
 
 		if tp && c.currentRecurPoint() == nil {
@@ -503,6 +523,54 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.tailPosition = tp
 	}
 	return nil
+}
+
+// tryFastOpcode returns a specialized opcode for known core builtins,
+// or 0 if no fast path is available. Only emits for binary (arity 2)
+// and unary (arity 1) cases with known symbols.
+func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
+	// Only optimize unqualified symbols that resolve to core vars
+	if sym.Namespace() != vm.NIL {
+		return 0
+	}
+	// Check that the symbol resolves to a core var (not a local binding)
+	if c.symbolLookup(sym) != nil {
+		return 0 // local binding shadows the core var
+	}
+	v := c.CurrentNS().Lookup(sym)
+	if v == vm.NIL {
+		return 0
+	}
+
+	switch argc {
+	case 2:
+		switch sym {
+		case "+":
+			return vm.OP_ADD
+		case "-":
+			return vm.OP_SUB
+		case "*":
+			return vm.OP_MUL
+		case "<":
+			return vm.OP_LT
+		case "<=":
+			return vm.OP_LTE
+		case ">":
+			return vm.OP_GT
+		case ">=":
+			return vm.OP_GTE
+		case "=":
+			return vm.OP_EQ
+		}
+	case 1:
+		switch sym {
+		case "inc":
+			return vm.OP_INC
+		case "dec":
+			return vm.OP_DEC
+		}
+	}
+	return 0
 }
 
 func (c *Context) emitWithArgPlaceholder(inst int32) int {

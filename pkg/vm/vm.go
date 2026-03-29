@@ -47,6 +47,19 @@ const (
 	OP_TRY_PUSH // push exception handler (catchOffset int32, finallyOffset int32)
 	OP_TRY_POP  // pop exception handler (normal completion)
 	OP_THROW    // throw top-of-stack value
+
+	// Specialized arithmetic/comparison opcodes (binary, stack: [a b] -> [result])
+	// These inline the common int64 fast path and fall back to generic NumXxx for other types.
+	OP_ADD // + (2 args)
+	OP_SUB // - (2 args)
+	OP_MUL // * (2 args)
+	OP_LT  // < (2 args)
+	OP_LTE // <= (2 args)
+	OP_GT  // > (2 args)
+	OP_GTE // >= (2 args)
+	OP_EQ  // = (2 args)
+	OP_INC // inc (1 arg)
+	OP_DEC // dec (1 arg)
 )
 
 func OpcodeToString(op int32) string {
@@ -78,6 +91,16 @@ func OpcodeToString(op int32) string {
 		"TRY_PUSH",
 		"TRY_POP",
 		"THROW",
+		"ADD",
+		"SUB",
+		"MUL",
+		"LT",
+		"LTE",
+		"GT",
+		"GTE",
+		"EQ",
+		"INC",
+		"DEC",
 	}
 	if int(inst) < len(ops) {
 		return fmt.Sprintf("%d/%-16s", sp, ops[inst])
@@ -354,6 +377,20 @@ func (f *Frame) stackDbg() {
 		fmt.Printf(";   %4d: %s\n", i, f.stack[i].String())
 	}
 	fmt.Println()
+}
+
+// handleError checks if there's an active try/catch handler and dispatches to it.
+// Returns true if the error was handled (caller should continue the dispatch loop).
+func (f *Frame) handleError(err error) bool {
+	if len(f.handlers) > 0 {
+		h := f.handlers[len(f.handlers)-1]
+		f.handlers = f.handlers[:len(f.handlers)-1]
+		f.sp = h.savedSP
+		f.push(errorToValue(err))
+		f.ip = h.catchIP
+		return true
+	}
+	return false
 }
 
 // RunProtected runs the frame with panic recovery for thrownPanic.
@@ -799,6 +836,217 @@ func (f *Frame) Run() (Value, error) {
 				continue
 			}
 			return NIL, thrown
+
+		// --- Specialized fast-path opcodes ---
+		// These avoid NativeFn.Invoke, interface boxing, and recoverThrownPanic.
+		// The compiler emits these for known binary calls to core arithmetic/comparison.
+
+		case OP_ADD:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = Int(int64(ai) + int64(bi))
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			r, err := NumAdd(a, b)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = r
+			f.sp--
+			f.ip++
+
+		case OP_SUB:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = Int(int64(ai) - int64(bi))
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			r, err := NumSub(a, b)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = r
+			f.sp--
+			f.ip++
+
+		case OP_MUL:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = Int(int64(ai) * int64(bi))
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			r, err := NumMul(a, b)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = r
+			f.sp--
+			f.ip++
+
+		case OP_LT:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = Boolean(int64(ai) < int64(bi))
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			r, err := NumLt(a, b)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = Boolean(r)
+			f.sp--
+			f.ip++
+
+		case OP_LTE:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = Boolean(int64(ai) <= int64(bi))
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			r, err := NumLe(a, b)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = Boolean(r)
+			f.sp--
+			f.ip++
+
+		case OP_GT:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = Boolean(int64(ai) > int64(bi))
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			r, err := NumGt(a, b)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = Boolean(r)
+			f.sp--
+			f.ip++
+
+		case OP_GTE:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = Boolean(int64(ai) >= int64(bi))
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			r, err := NumGe(a, b)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = Boolean(r)
+			f.sp--
+			f.ip++
+
+		case OP_EQ:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			// Int fast path (most common in arithmetic code)
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = Boolean(ai == bi)
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			// Keyword fast path
+			if ak, ok := a.(Keyword); ok {
+				if bk, ok := b.(Keyword); ok {
+					f.stack[f.sp-2] = Boolean(ak == bk)
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			f.stack[f.sp-2] = Boolean(ValueEquals(a, b))
+			f.sp--
+			f.ip++
+
+		case OP_INC:
+			a := f.stack[f.sp-1]
+			if ai, ok := a.(Int); ok {
+				f.stack[f.sp-1] = Int(int64(ai) + 1)
+				f.ip++
+				continue
+			}
+			r, err := NumAdd(a, Int(1))
+			if err != nil {
+				return NIL, err
+			}
+			f.stack[f.sp-1] = r
+			f.ip++
+
+		case OP_DEC:
+			a := f.stack[f.sp-1]
+			if ai, ok := a.(Int); ok {
+				f.stack[f.sp-1] = Int(int64(ai) - 1)
+				f.ip++
+				continue
+			}
+			r, err := NumSub(a, Int(1))
+			if err != nil {
+				return NIL, err
+			}
+			f.stack[f.sp-1] = r
+			f.ip++
 
 		default:
 			return NIL, NewExecutionError("unknown instruction")

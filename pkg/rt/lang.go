@@ -39,6 +39,11 @@ func init() {
 		return nsRegistry[name]
 	})
 
+	// Wire up ValueEquals for OP_EQ fast path in the VM
+	vm.SetValueEquals(func(a, b vm.Value) bool {
+		return valueEquals(a, b)
+	})
+
 	initTypeMappings()
 	installLangNS()
 	installHttpNS()
