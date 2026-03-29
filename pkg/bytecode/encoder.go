@@ -28,7 +28,7 @@ func Encode(w io.Writer, m *Module) error {
 	if err := enc.writeChunks(); err != nil {
 		return err
 	}
-	if err := enc.writeConsts(m.Consts); err != nil {
+	if err := enc.writeConsts(m); err != nil {
 		return err
 	}
 	if err := enc.writeNSTable(m.NSTable); err != nil {
@@ -54,11 +54,14 @@ func EncodeModule(w io.Writer, consts *vm.Consts, chunks []*vm.CodeChunk) error 
 // EncodeCompilation serializes a compilation result (main chunk + const pool).
 // The main chunk is always chunk index 0. All CodeChunks referenced by Funcs
 // in the const pool are collected automatically.
+// If consts is a child pool, only the child's entries are serialized with the
+// base offset stored so the decoder can reconstruct the layering.
 func EncodeCompilation(w io.Writer, consts *vm.Consts, mainChunk *vm.CodeChunk) error {
 	b := NewModuleBuilder()
+	b.constsBase = consts.Base()
 	// Main chunk must be index 0
 	b.AddChunk(mainChunk)
-	// Collect all func chunks from the const pool (AddConst interns their chunks)
+	// Collect all func chunks from the const pool (Values() returns only this layer)
 	vals := consts.Values()
 	for _, v := range vals {
 		b.AddConst(v)
@@ -92,6 +95,7 @@ type ModuleBuilder struct {
 	chunkIndex map[*vm.CodeChunk]int
 	chunks     []*ChunkData
 	consts     []vm.Value
+	constsBase int
 	nsTable    map[string]int
 }
 
@@ -221,14 +225,19 @@ func (b *ModuleBuilder) SetNSEntry(name string, chunk *vm.CodeChunk) {
 
 // Build creates the Module.
 func (b *ModuleBuilder) Build() *Module {
-	return &Module{
-		Version: FormatVersion,
-		Flags:   0,
-		Strings: b.strings,
-		Chunks:  b.chunks,
-		Consts:  b.consts,
-		NSTable: b.nsTable,
+	m := &Module{
+		Version:    FormatVersion,
+		Flags:      0,
+		Strings:    b.strings,
+		Chunks:     b.chunks,
+		Consts:     b.consts,
+		ConstsBase: b.constsBase,
+		NSTable:    b.nsTable,
 	}
+	if b.constsBase > 0 {
+		m.Flags |= FlagConstsBase
+	}
+	return m
 }
 
 // ChunkIndex returns the index for a given CodeChunk pointer.
@@ -330,11 +339,17 @@ func (e *encoder) writeChunks() error {
 	return nil
 }
 
-func (e *encoder) writeConsts(consts []vm.Value) error {
-	if err := e.w.WriteVarint(uint64(len(consts))); err != nil {
+func (e *encoder) writeConsts(m *Module) error {
+	if err := e.w.WriteVarint(uint64(len(m.Consts))); err != nil {
 		return err
 	}
-	for _, v := range consts {
+	// If Flags bit 0 is set, write the consts base offset
+	if m.Flags&FlagConstsBase != 0 {
+		if err := e.w.WriteVarint(uint64(m.ConstsBase)); err != nil {
+			return err
+		}
+	}
+	for _, v := range m.Consts {
 		if err := e.writeValue(v); err != nil {
 			return err
 		}

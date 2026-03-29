@@ -29,15 +29,23 @@ func Decode(r io.Reader) (*Module, error) {
 // The main chunk is chunk index 0. All decoded consts are populated into a
 // shared Consts pool that all chunks reference.
 func DecodeToExecUnit(r io.Reader, resolve VarResolver) (*ExecUnit, error) {
+	return DecodeToExecUnitWithParent(r, resolve, nil)
+}
+
+// DecodeToExecUnitWithParent decodes an LGB module with an optional parent const pool.
+// If parent is non-nil and the module has a ConstsBase, the decoded consts are layered
+// on top of the parent pool — indices < base resolve from the parent.
+func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Consts) (*ExecUnit, error) {
 	d := &decoder{
 		r:       NewReader(r),
 		resolve: resolve,
 	}
 
-	_, _, err := d.readHeader()
+	_, flags, err := d.readHeader()
 	if err != nil {
 		return nil, err
 	}
+	d.flags = flags
 	strings, err := d.readStringTable()
 	if err != nil {
 		return nil, err
@@ -49,8 +57,15 @@ func DecodeToExecUnit(r io.Reader, resolve VarResolver) (*ExecUnit, error) {
 		return nil, err
 	}
 
-	// Build live CodeChunks with a shared const pool
-	sharedConsts := vm.NewConsts()
+	// Build the const pool — layered if parent provided
+	var sharedConsts *vm.Consts
+	if parent != nil {
+		sharedConsts = vm.NewChildConsts(parent)
+	} else {
+		sharedConsts = vm.NewConsts()
+	}
+
+	// Build live CodeChunks first — readConsts needs d.chunks for Func resolution
 	d.chunks = make([]*vm.CodeChunk, len(chunkDatas))
 	for i, cd := range chunkDatas {
 		chunk := vm.NewCodeChunk(sharedConsts)
@@ -70,7 +85,7 @@ func DecodeToExecUnit(r io.Reader, resolve VarResolver) (*ExecUnit, error) {
 		d.chunks[i] = chunk
 	}
 
-	// Decode consts and append them into the shared pool
+	// Now decode consts (Func entries reference d.chunks)
 	consts, err := d.readConsts()
 	if err != nil {
 		return nil, err
@@ -126,10 +141,12 @@ func DecodeWithResolver(r io.Reader, resolve VarResolver) (*Module, error) {
 }
 
 type decoder struct {
-	r       *Reader
-	resolve VarResolver
-	strings []string
-	chunks  []*vm.CodeChunk
+	r          *Reader
+	resolve    VarResolver
+	flags      uint16
+	constsBase int
+	strings    []string
+	chunks     []*vm.CodeChunk
 }
 
 func (d *decoder) readModule() (*Module, error) {
@@ -137,6 +154,7 @@ func (d *decoder) readModule() (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
+	d.flags = flags
 	strings, err := d.readStringTable()
 	if err != nil {
 		return nil, err
@@ -180,12 +198,13 @@ func (d *decoder) readModule() (*Module, error) {
 	}
 
 	return &Module{
-		Version: version,
-		Flags:   flags,
-		Strings: strings,
-		Chunks:  chunkDatas,
-		Consts:  consts,
-		NSTable: nsTable,
+		Version:    version,
+		Flags:      flags,
+		Strings:    strings,
+		Chunks:     chunkDatas,
+		Consts:     consts,
+		ConstsBase: d.constsBase,
+		NSTable:    nsTable,
 	}, nil
 }
 
@@ -313,6 +332,14 @@ func (d *decoder) readConsts() ([]vm.Value, error) {
 	count, err := d.r.ReadVarint()
 	if err != nil {
 		return nil, fmt.Errorf("reading const count: %w", err)
+	}
+	// Read base offset if flag is set
+	if d.flags&FlagConstsBase != 0 {
+		base, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, fmt.Errorf("reading consts base: %w", err)
+		}
+		d.constsBase = int(base)
 	}
 	consts := make([]vm.Value, count)
 	for i := range consts {

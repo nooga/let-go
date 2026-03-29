@@ -16,6 +16,12 @@ import (
 
 var consts *vm.Consts
 
+// CoreConsts returns the global const pool populated during core boot.
+// Used as parent for layered child pools during user code compilation.
+func CoreConsts() *vm.Consts {
+	return consts
+}
+
 // precompiledNS holds decoded namespace chunks from the bundle.
 var precompiledNS map[string]*vm.CodeChunk
 

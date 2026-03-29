@@ -213,7 +213,6 @@ func checkBundledLGB() []byte {
 // bundleBinary creates a standalone executable by copying the lg binary
 // and appending the compiled LGB + footer.
 func bundleBinary(ctx *compiler.Context, src string, dst string) error {
-	// Compile
 	ctx.SetSource(src)
 	f, err := os.Open(src)
 	if err != nil {

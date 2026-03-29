@@ -6,6 +6,11 @@ var Magic = [4]byte{'L', 'G', 'B', 0x01}
 // FormatVersion is the current serialization format version.
 const FormatVersion uint16 = 1
 
+// Module flags.
+const (
+	FlagConstsBase uint16 = 1 << 0 // ConstsBase field is present in consts section
+)
+
 // Type tags for const pool entries.
 const (
 	TagNil       byte = 0x00

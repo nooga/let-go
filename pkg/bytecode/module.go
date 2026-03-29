@@ -9,6 +9,9 @@ type Module struct {
 	Strings []string
 	Chunks  []*ChunkData
 	Consts  []vm.Value
+	// ConstsBase is the starting global index for the consts in this module.
+	// For layered pools, indices 0..ConstsBase-1 are in a parent pool.
+	ConstsBase int
 	// NSTable maps namespace names to their main chunk indices (for bundles).
 	NSTable map[string]int
 }
