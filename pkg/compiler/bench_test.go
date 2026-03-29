@@ -1,9 +1,11 @@
 package compiler
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
+	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -47,6 +49,48 @@ func benchExec(b *testing.B, src string) {
 	for i := 0; i < b.N; i++ {
 		f := vm.NewFrame(chunk, nil)
 		f.Run()
+	}
+}
+
+// ============================================================================
+// Init — core.lg loading: source compilation vs precompiled bytecode
+// ============================================================================
+
+func BenchmarkInitFromSource(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		c := vm.NewConsts()
+		ctx := NewCompiler(c, rt.NS(rt.NameCoreNS))
+		ctx.SetSource("<core>")
+		_, _, err := ctx.CompileMultiple(strings.NewReader(rt.CoreSrc))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkInitFromLGB(b *testing.B) {
+	if len(rt.CoreCompiledLGB) == 0 {
+		b.Skip("no precompiled core_compiled.lgb")
+	}
+	resolve := func(ns, name string) *vm.Var {
+		n := rt.NS(ns)
+		v := n.Lookup(vm.Symbol(name))
+		if v == vm.NIL {
+			return n.Def(name, vm.NIL)
+		}
+		return v.(*vm.Var)
+	}
+	for i := 0; i < b.N; i++ {
+		unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(rt.CoreCompiledLGB), resolve)
+		if err != nil {
+			b.Fatal(err)
+		}
+		f := vm.NewFrame(unit.MainChunk, nil)
+		_, err = f.RunProtected()
+		vm.ReleaseFrame(f)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

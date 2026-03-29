@@ -12,9 +12,79 @@ import (
 // VarResolver resolves a var reference by namespace and name.
 type VarResolver func(ns, name string) *vm.Var
 
+// ExecUnit is a decoded compilation unit ready for execution.
+type ExecUnit struct {
+	Consts    *vm.Consts
+	MainChunk *vm.CodeChunk
+}
+
 // Decode reads a binary module from r.
 func Decode(r io.Reader) (*Module, error) {
 	return DecodeWithResolver(r, nil)
+}
+
+// DecodeToExecUnit decodes an LGB module and returns a ready-to-execute unit.
+// The main chunk is chunk index 0. All decoded consts are populated into a
+// shared Consts pool that all chunks reference.
+func DecodeToExecUnit(r io.Reader, resolve VarResolver) (*ExecUnit, error) {
+	d := &decoder{
+		r:       NewReader(r),
+		resolve: resolve,
+	}
+
+	_, _, err := d.readHeader()
+	if err != nil {
+		return nil, err
+	}
+	strings, err := d.readStringTable()
+	if err != nil {
+		return nil, err
+	}
+	d.strings = strings
+
+	chunkDatas, err := d.readChunks()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build live CodeChunks with a shared const pool
+	sharedConsts := vm.NewConsts()
+	d.chunks = make([]*vm.CodeChunk, len(chunkDatas))
+	for i, cd := range chunkDatas {
+		chunk := vm.NewCodeChunk(sharedConsts)
+		chunk.Append(cd.Code...)
+		chunk.SetMaxStack(cd.MaxStack)
+		if len(cd.SourceMap) > 0 {
+			for _, e := range cd.SourceMap {
+				chunk.AddSourceInfo(vm.SourceInfo{
+					File:      e.File,
+					Line:      e.Line,
+					Column:    e.Column,
+					EndLine:   e.EndLine,
+					EndColumn: e.EndColumn,
+				})
+			}
+		}
+		d.chunks[i] = chunk
+	}
+
+	// Decode consts and append them into the shared pool
+	consts, err := d.readConsts()
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range consts {
+		sharedConsts.Append(v)
+	}
+
+	if len(d.chunks) == 0 {
+		return nil, fmt.Errorf("no chunks in module")
+	}
+
+	return &ExecUnit{
+		Consts:    sharedConsts,
+		MainChunk: d.chunks[0],
+	}, nil
 }
 
 // DecodeWithResolver reads a binary module, resolving var references with the given function.

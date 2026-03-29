@@ -48,6 +48,22 @@ func EncodeModule(w io.Writer, consts *vm.Consts, chunks []*vm.CodeChunk) error 
 	return Encode(w, m)
 }
 
+// EncodeCompilation serializes a compilation result (main chunk + const pool).
+// The main chunk is always chunk index 0. All CodeChunks referenced by Funcs
+// in the const pool are collected automatically.
+func EncodeCompilation(w io.Writer, consts *vm.Consts, mainChunk *vm.CodeChunk) error {
+	b := NewModuleBuilder()
+	// Main chunk must be index 0
+	b.AddChunk(mainChunk)
+	// Collect all func chunks from the const pool (AddConst interns their chunks)
+	vals := consts.Values()
+	for _, v := range vals {
+		b.AddConst(v)
+	}
+	m := b.Build()
+	return Encode(w, m)
+}
+
 // ModuleBuilder collects strings, chunks, and consts for serialization.
 type ModuleBuilder struct {
 	strIndex   map[string]int

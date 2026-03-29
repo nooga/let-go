@@ -1,6 +1,9 @@
 run: build
 	./lg
 
+generate:
+	go run ./cmd/lgbgen
+
 build: lg.go pkg/**/*
 	go build -ldflags="-s -w" -o lg .
 

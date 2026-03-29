@@ -6,8 +6,10 @@
 package compiler
 
 import (
+	"bytes"
 	"strings"
 
+	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -34,12 +36,49 @@ func ReadString(s string) (vm.Value, error) {
 
 func evalInit() {
 	consts = vm.NewConsts()
-	// core is loaded eagerly – its macros are needed everywhere
+
+	// Try loading pre-compiled core bytecode
+	if len(rt.CoreCompiledLGB) > 0 {
+		if err := loadPrecompiledCore(); err == nil {
+			postCoreInit()
+			return
+		}
+		// Fall through to source compilation on error
+	}
+
+	// Original path: compile from source
 	_, err := Eval(rt.CoreSrc)
 	if err != nil {
-		// Provide helpful debugging info for core.lg compilation failures
 		panic("core.lg compilation failed: " + err.Error())
 	}
+	postCoreInit()
+}
+
+func loadPrecompiledCore() error {
+	resolve := func(ns, name string) *vm.Var {
+		n := rt.NS(ns)
+		v := n.Lookup(vm.Symbol(name))
+		if v == vm.NIL {
+			return n.Def(name, vm.NIL)
+		}
+		return v.(*vm.Var)
+	}
+	unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(rt.CoreCompiledLGB), resolve)
+	if err != nil {
+		return err
+	}
+
+	// Use the decoded const pool as the global pool
+	consts = unit.Consts
+
+	// Execute the main chunk to replay all def/defn/defmacro definitions
+	f := vm.NewFrame(unit.MainChunk, nil)
+	_, err = f.RunProtected()
+	vm.ReleaseFrame(f)
+	return err
+}
+
+func postCoreInit() {
 	// Register read-string (needs the reader which lives in the compiler package)
 	readStringFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {

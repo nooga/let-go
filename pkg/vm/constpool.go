@@ -34,3 +34,12 @@ func (c *Consts) count() int {
 func (c *Consts) Values() []Value {
 	return c.consts
 }
+
+// Append adds a value to the const pool at the next index without deduplication.
+// Used when loading pre-compiled bytecode where indices must match the original.
+func (c *Consts) Append(v Value) int {
+	i := len(c.consts)
+	c.consts = append(c.consts, v)
+	c.index[v] = i
+	return i
+}
