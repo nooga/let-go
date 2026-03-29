@@ -1,0 +1,70 @@
+(ns test.transit-test
+  (:require [test :refer :all]))
+
+(deftest transit-write
+  (testing "primitives"
+    (is (= "null" (transit/write nil)))
+    (is (= "true" (transit/write true)))
+    (is (= "42" (transit/write 42)))
+    (is (= "3.14" (transit/write 3.14)))
+    (is (= "\"hello\"" (transit/write "hello"))))
+
+  (testing "keywords and symbols"
+    (is (= "\"~:foo\"" (transit/write :foo)))
+    (is (= "\"~$bar\"" (transit/write (quote bar)))))
+
+  (testing "vectors"
+    (is (= "[1,2,3]" (transit/write [1 2 3])))
+    (is (= "[\"~:a\",\"~:b\"]" (transit/write [:a :b]))))
+
+  (testing "maps"
+    (let [s (transit/write {:a 1})]
+      (is (= "[\"^ \",\"~:a\",1]" s))))
+
+  (testing "lists"
+    (let [s (transit/write (list 1 2 3))]
+      (is (= "[\"~#list\",[1,2,3]]" s))))
+
+  (testing "sets"
+    (let [s (transit/write #{:x})]
+      (is (= "[\"~#set\",[\"~:x\"]]" s)))))
+
+(deftest transit-read
+  (testing "primitives"
+    (is (= nil (transit/read "null")))
+    (is (= true (transit/read "true")))
+    (is (= 42 (transit/read "42")))
+    (is (= 3.14 (transit/read "3.14")))
+    (is (= "hello" (transit/read "\"hello\""))))
+
+  (testing "keywords and symbols"
+    (is (= :foo (transit/read "\"~:foo\"")))
+    (is (= (quote bar) (transit/read "\"~$bar\""))))
+
+  (testing "vectors"
+    (is (= [1 2 3] (transit/read "[1,2,3]")))
+    (is (= [:a :b] (transit/read "[\"~:a\",\"~:b\"]"))))
+
+  (testing "maps"
+    (is (= {:a 1} (transit/read "[\"^ \",\"~:a\",1]"))))
+
+  (testing "cache references"
+    ;; Second occurrence of :age should use cache ref
+    (let [m (transit/read "[\"^ \",\"~:name\",\"Alice\",\"~:age\",30]")]
+      (is (= "Alice" (:name m)))
+      (is (= 30 (:age m))))))
+
+(deftest transit-roundtrip
+  (testing "nested structures"
+    (let [data {:users [{:name "Alice" :age 30}
+                        {:name "Bob" :age 25}]
+                :count 2}
+          encoded (transit/write data)
+          decoded (transit/read encoded)]
+      (is (= 2 (:count decoded)))
+      (is (= "Alice" (:name (first (:users decoded)))))))
+
+  (testing "keywords survive roundtrip"
+    (let [v [:a :b :c :a :b :c]
+          rt (transit/read (transit/write v))]
+      (is (= v rt)))))

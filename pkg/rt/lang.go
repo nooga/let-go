@@ -46,6 +46,8 @@ func init() {
 	installJSONNS()
 	installIoNS()
 	installAsyncNS()
+	installTransitNS()
+	installPodsNS()
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 
@@ -2513,13 +2515,47 @@ func installLangNS() {
 	})
 
 	// require loads a namespace by name (like Clojure's require function for REPL use)
+	// Supports: (require 'foo), (require '[foo :as f]), (require '[foo :refer [a b]])
 	requiref, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		cns := CurrentNS.Deref().(*vm.Namespace)
 		for _, v := range vs {
-			s, ok := v.(vm.Symbol)
-			if !ok {
-				return vm.NIL, fmt.Errorf("require expected Symbol, got %s", v.Type().Name())
+			switch arg := v.(type) {
+			case vm.Symbol:
+				NS(string(arg)) // triggers autoloading
+			case *vm.ArrayVector:
+				// Vector form: [ns-name :as alias] or [ns-name :refer [syms...]]
+				if arg.RawCount() < 1 {
+					return vm.NIL, fmt.Errorf("require: empty vector")
+				}
+				nsName, ok := arg.ValueAt(vm.Int(0)).(vm.Symbol)
+				if !ok {
+					return vm.NIL, fmt.Errorf("require: first element must be a symbol")
+				}
+				target := NS(string(nsName))
+				// Parse options
+				for i := 1; i < arg.RawCount()-1; i += 2 {
+					opt := arg.ValueAt(vm.Int(int64(i)))
+					val := arg.ValueAt(vm.Int(int64(i + 1)))
+					switch opt {
+					case vm.Keyword("as"):
+						if alias, ok := val.(vm.Symbol); ok {
+							cns.Alias(alias, target)
+						}
+					case vm.Keyword("refer"):
+						if val == vm.Keyword("all") {
+							cns.Refer(target, "", true)
+						} else if vec, ok := val.(*vm.ArrayVector); ok {
+							syms := make([]vm.Symbol, vec.RawCount())
+							for j := 0; j < vec.RawCount(); j++ {
+								syms[j] = vec.ValueAt(vm.Int(int64(j))).(vm.Symbol)
+							}
+							cns.ReferList(target, syms)
+						}
+					}
+				}
+			default:
+				return vm.NIL, fmt.Errorf("require expected Symbol or Vector, got %s", v.Type().Name())
 			}
-			NS(string(s)) // triggers autoloading
 		}
 		return vm.NIL, nil
 	})
@@ -3492,6 +3528,8 @@ func installLangNS() {
 	ns.Def("chan", chanf)
 	ns.Def(">!", chanput)
 	ns.Def("<!", changet)
+	ns.Def(">!!", chanput)
+	ns.Def("<!!", changet)
 
 	ns.Def("int", intf)
 	ns.Def("float", floatf)

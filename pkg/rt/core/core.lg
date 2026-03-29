@@ -397,9 +397,12 @@
                    (map identity (dissoc m :keys :strs :as :or)))
         ;; :as binding
         rs (if (:as m) (conj gs (:as m) n) gs)
-        ;; :keys binding — keyword keys
+        ;; :keys binding — keyword keys (supports both symbols and keywords in the vector)
         rs (if (:keys m)
-             (reduce (fn [a x] (conj a x (get-with-default x (keyword x)))) rs (:keys m))
+             (reduce (fn [a x]
+                       (let [sym (if (keyword? x) (symbol (name x)) x)]
+                         (conj a sym (get-with-default sym (keyword sym)))))
+                     rs (:keys m))
              rs)
         ;; :strs binding — string keys
         rs (if (:strs m)

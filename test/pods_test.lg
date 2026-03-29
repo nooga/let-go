@@ -1,0 +1,32 @@
+(ns test.pods-test
+  (:require [test :refer :all]))
+
+;; Pod tests require babashka pods to be installed.
+;; Install with: bb -e '(pods/load-pod (quote org.babashka/go-sqlite3) "0.3.13")'
+
+;; Load pod at top level so namespaces are available at compile time
+(pods/load-pod 'org.babashka/go-sqlite3 "0.3.13")
+
+(def db "/tmp/letgo-pod-test-suite.db")
+
+(deftest pod-sqlite3
+  (testing "create table"
+    (os/sh "rm" "-f" db)
+    (let [r (pod.babashka.go-sqlite3/execute! db ["create table users (id integer primary key, name text, age integer)"])]
+      (is (map? r))))
+
+  (testing "insert and query"
+    (pod.babashka.go-sqlite3/execute! db ["insert into users values (1, ?, ?)" "Alice" 30])
+    (pod.babashka.go-sqlite3/execute! db ["insert into users values (2, ?, ?)" "Bob" 25])
+    (pod.babashka.go-sqlite3/execute! db ["insert into users values (3, ?, ?)" "Charlie" 35])
+    (let [results (pod.babashka.go-sqlite3/query db ["select * from users order by id"])]
+      (is (= 3 (count results)))
+      (is (= "Alice" (:name (first results))))
+      (is (= 25 (:age (second results))))
+      (is (= "Charlie" (:name (nth results 2))))))
+
+  (testing "parameterized query"
+    (let [results (pod.babashka.go-sqlite3/query db ["select * from users where age > ?" 26])]
+      (is (= 2 (count results)))))
+
+  (os/sh "rm" "-f" db))

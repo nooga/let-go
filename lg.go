@@ -225,6 +225,9 @@ func main() {
 
 	files := flag.Args()
 
+	// Ensure all pods are shut down on exit
+	defer rt.ShutdownAllPods()
+
 	context := initCompiler(debug)
 	nsResolver := resolver.NewNSResolver(context, []string{"."})
 	rt.SetNSLoader(nsResolver)

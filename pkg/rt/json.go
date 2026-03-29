@@ -58,7 +58,7 @@ func toValue(keywordize bool, i interface{}) (vm.Value, error) {
 func fromMapValue(v vm.Value) (interface{}, error) {
 	r := map[string]interface{}{}
 	if sq, ok := v.(vm.Sequable); ok {
-		for s := sq.Seq(); s != nil; s = s.Next() {
+		for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
 			entry := s.First()
 			// Get key and value from the entry using Seq interface
 			eSeq, ok := entry.(vm.Sequable)

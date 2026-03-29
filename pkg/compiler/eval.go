@@ -53,5 +53,17 @@ func evalInit() {
 	})
 	rt.NS(rt.NameCoreNS).Def("read-string", readStringFn)
 
+	// Wire up EDN reader for pod support
+	rt.SetReadEDN(func(s string) (vm.Value, error) {
+		return ReadString(s)
+	})
+
+	// Wire up namespace-aware eval for pod client-side code
+	rt.SetEvalInNS(func(code string, ns *vm.Namespace) (vm.Value, error) {
+		c := NewCompiler(consts, ns)
+		_, out, err := c.CompileMultiple(strings.NewReader(code))
+		return out, err
+	})
+
 	// test, walk, etc. are demand-loaded via resolver when required
 }
