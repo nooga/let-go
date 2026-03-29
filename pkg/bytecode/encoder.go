@@ -31,6 +31,9 @@ func Encode(w io.Writer, m *Module) error {
 	if err := enc.writeConsts(m.Consts); err != nil {
 		return err
 	}
+	if err := enc.writeNSTable(m.NSTable); err != nil {
+		return err
+	}
 	return enc.w.Flush()
 }
 
@@ -64,6 +67,24 @@ func EncodeCompilation(w io.Writer, consts *vm.Consts, mainChunk *vm.CodeChunk) 
 	return Encode(w, m)
 }
 
+// EncodeBundle serializes a multi-namespace compilation bundle.
+// nsChunks maps namespace names to their main CodeChunks.
+// The "core" entry (chunk index 0) is treated as the entry point.
+func EncodeBundle(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk) error {
+	b := NewModuleBuilder()
+	// Register all namespace main chunks
+	for name, chunk := range nsChunks {
+		b.SetNSEntry(name, chunk)
+	}
+	// Collect all func chunks from the const pool
+	vals := consts.Values()
+	for _, v := range vals {
+		b.AddConst(v)
+	}
+	m := b.Build()
+	return Encode(w, m)
+}
+
 // ModuleBuilder collects strings, chunks, and consts for serialization.
 type ModuleBuilder struct {
 	strIndex   map[string]int
@@ -71,6 +92,7 @@ type ModuleBuilder struct {
 	chunkIndex map[*vm.CodeChunk]int
 	chunks     []*ChunkData
 	consts     []vm.Value
+	nsTable    map[string]int
 }
 
 // NewModuleBuilder creates a new builder.
@@ -187,6 +209,16 @@ func (b *ModuleBuilder) internStringsForValue(v vm.Value) {
 	}
 }
 
+// SetNSEntry records a namespace name → main chunk mapping for bundle modules.
+func (b *ModuleBuilder) SetNSEntry(name string, chunk *vm.CodeChunk) {
+	if b.nsTable == nil {
+		b.nsTable = make(map[string]int)
+	}
+	b.internString(name)
+	idx := b.AddChunk(chunk)
+	b.nsTable[name] = idx
+}
+
 // Build creates the Module.
 func (b *ModuleBuilder) Build() *Module {
 	return &Module{
@@ -195,6 +227,7 @@ func (b *ModuleBuilder) Build() *Module {
 		Strings: b.strings,
 		Chunks:  b.chunks,
 		Consts:  b.consts,
+		NSTable: b.nsTable,
 	}
 }
 
@@ -556,6 +589,21 @@ func (e *encoder) writeSetConsts(set *vm.PersistentSet) error {
 			return err
 		}
 		s = s.Next()
+	}
+	return nil
+}
+
+func (e *encoder) writeNSTable(nsTable map[string]int) error {
+	if err := e.w.WriteVarint(uint64(len(nsTable))); err != nil {
+		return err
+	}
+	for name, chunkIdx := range nsTable {
+		if err := e.writeStringRef(name); err != nil {
+			return err
+		}
+		if err := e.w.WriteVarint(uint64(chunkIdx)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

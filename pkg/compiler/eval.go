@@ -16,6 +16,17 @@ import (
 
 var consts *vm.Consts
 
+// precompiledNS holds decoded namespace chunks from the bundle.
+var precompiledNS map[string]*vm.CodeChunk
+
+// PrecompiledNSChunk returns the precompiled main chunk for a namespace, or nil.
+func PrecompiledNSChunk(name string) *vm.CodeChunk {
+	if precompiledNS == nil {
+		return nil
+	}
+	return precompiledNS[name]
+}
+
 func Eval(src string) (vm.Value, error) {
 	ns := rt.NS(rt.NameCoreNS)
 	compiler := NewCompiler(consts, ns)
@@ -37,9 +48,9 @@ func ReadString(s string) (vm.Value, error) {
 func evalInit() {
 	consts = vm.NewConsts()
 
-	// Try loading pre-compiled core bytecode
+	// Try loading pre-compiled bundle
 	if len(rt.CoreCompiledLGB) > 0 {
-		if err := loadPrecompiledCore(); err == nil {
+		if err := loadPrecompiledBundle(); err == nil {
 			postCoreInit()
 			return
 		}
@@ -54,14 +65,20 @@ func evalInit() {
 	postCoreInit()
 }
 
-func loadPrecompiledCore() error {
-	resolve := func(ns, name string) *vm.Var {
-		n := rt.NS(ns)
-		v := n.Lookup(vm.Symbol(name))
-		if v == vm.NIL {
+func loadPrecompiledBundle() error {
+	resolve := func(nsName, name string) *vm.Var {
+		// Use DefNSBare to create minimal namespaces without triggering
+		// the loader. This ensures vars have a home namespace but the
+		// actual loading (executing precompiled chunks) happens on demand.
+		n := rt.DefNSBare(nsName)
+		// Use LookupLocal to check only the namespace's own registry,
+		// not refers. This matches how the compiler creates vars via
+		// LookupOrAdd (which also skips refers).
+		v := n.LookupLocal(vm.Symbol(name))
+		if v == nil {
 			return n.Def(name, vm.NIL)
 		}
-		return v.(*vm.Var)
+		return v
 	}
 	unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(rt.CoreCompiledLGB), resolve)
 	if err != nil {
@@ -71,11 +88,27 @@ func loadPrecompiledCore() error {
 	// Use the decoded const pool as the global pool
 	consts = unit.Consts
 
-	// Execute the main chunk to replay all def/defn/defmacro definitions
+	// Execute core's main chunk to replay all def/defn/defmacro definitions
 	f := vm.NewFrame(unit.MainChunk, nil)
 	_, err = f.RunProtected()
 	vm.ReleaseFrame(f)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Store remaining namespace chunks for on-demand loading by the resolver.
+	// Mark non-core namespaces as needing load so LookupOrRegisterNS triggers
+	// the loader even though the namespace already exists in the registry.
+	if unit.NSChunks != nil {
+		precompiledNS = unit.NSChunks
+		for name := range precompiledNS {
+			if name != "core" {
+				rt.MarkNSNeedsLoad(name)
+			}
+		}
+	}
+
+	return nil
 }
 
 func postCoreInit() {
@@ -90,7 +123,9 @@ func postCoreInit() {
 		}
 		return ReadString(string(s))
 	})
-	rt.NS(rt.NameCoreNS).Def("read-string", readStringFn)
+	coreNS := rt.NS(rt.NameCoreNS)
+	rsVar := coreNS.LookupOrAdd(vm.Symbol("read-string"))
+	rsVar.(*vm.Var).SetRoot(readStringFn)
 
 	// Wire up EDN reader for pod support
 	rt.SetReadEDN(func(s string) (vm.Value, error) {

@@ -81,12 +81,44 @@ func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
 	return namespace
 }
 
+// nsNeedsLoad tracks namespaces that were pre-registered during bytecode
+// decoding but still need their precompiled chunks executed.
+var nsNeedsLoad = map[string]bool{}
+
+// MarkNSNeedsLoad flags a namespace as needing on-demand loading even though
+// it already exists in the registry (created during bytecode decoding).
+func MarkNSNeedsLoad(name string) {
+	nsNeedsLoad[name] = true
+}
+
+// LookupNS returns a namespace if it exists, nil otherwise. Does not create.
+func LookupNS(name string) *vm.Namespace {
+	return nsRegistry[name]
+}
+
+// DefNSBare creates and registers a minimal namespace (with CoreNS refer)
+// without triggering the loader. Used during bytecode decoding to create
+// var homes for not-yet-loaded namespaces.
+func DefNSBare(name string) *vm.Namespace {
+	if e := nsRegistry[name]; e != nil {
+		return e
+	}
+	ns := vm.NewNamespace(name)
+	if CoreNS != nil {
+		ns.Refer(CoreNS, "", true)
+	}
+	nsRegistry[name] = ns
+	return ns
+}
+
 func LookupOrRegisterNS(name string) *vm.Namespace {
 	e := nsRegistry[name]
-	if e != nil {
+	if e != nil && !nsNeedsLoad[name] {
 		return e
 	}
 	if nsLoader != nil {
+		// Clear the flag before loading to prevent re-entrancy loops
+		delete(nsNeedsLoad, name)
 		n := nsLoader.Load(name)
 		if n != nil {
 			nsRegistry[name] = n
@@ -95,6 +127,7 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 	}
 	// Check if loading side-effected the registry (in-ns during load creates the ns)
 	if e := nsRegistry[name]; e != nil {
+		delete(nsNeedsLoad, name)
 		return e
 	}
 	nsRegistry[name] = vm.NewNamespace(name)

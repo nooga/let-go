@@ -78,6 +78,11 @@ func (n *Namespace) Def(name string, val Value) *Var {
 	return va
 }
 
+// LookupLocal checks only the namespace's own registry, not refers or aliases.
+func (n *Namespace) LookupLocal(symbol Symbol) *Var {
+	return n.registry[symbol]
+}
+
 func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 	val, ok := n.registry[symbol]
 	if !ok {

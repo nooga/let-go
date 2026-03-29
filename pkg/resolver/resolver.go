@@ -70,6 +70,11 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 
 // loadEmbedded loads bundled namespaces from embedded sources
 func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
+	// Try precompiled bytecode first
+	if chunk := compiler.PrecompiledNSChunk(name); chunk != nil {
+		return r.execPrecompiled(name, chunk)
+	}
+
 	var src string
 	switch name {
 	case "walk":
@@ -109,5 +114,25 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 	if err != nil {
 		return nil
 	}
+	return nns
+}
+
+// execPrecompiled executes a precompiled namespace chunk.
+func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) *vm.Namespace {
+	r.cloading[name] = true
+	defer delete(r.cloading, name)
+
+	ons := r.ctx.CurrentNS()
+	f := vm.NewFrame(chunk, nil)
+	result, err := f.RunProtected()
+	vm.ReleaseFrame(f)
+	if err != nil {
+		r.ctx.SetCurrentNS(ons)
+		return nil
+	}
+	_ = result
+	// The ns form in the chunk sets rt.CurrentNS to the new namespace
+	nns := r.ctx.CurrentNS()
+	r.ctx.SetCurrentNS(ons)
 	return nns
 }

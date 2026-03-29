@@ -16,6 +16,8 @@ type VarResolver func(ns, name string) *vm.Var
 type ExecUnit struct {
 	Consts    *vm.Consts
 	MainChunk *vm.CodeChunk
+	// NSChunks maps namespace names to their main chunks (for bundles).
+	NSChunks map[string]*vm.CodeChunk
 }
 
 // Decode reads a binary module from r.
@@ -77,14 +79,37 @@ func DecodeToExecUnit(r io.Reader, resolve VarResolver) (*ExecUnit, error) {
 		sharedConsts.Append(v)
 	}
 
+	// Read NS table
+	nsTable, err := d.readNSTable()
+	if err != nil {
+		return nil, err
+	}
+
 	if len(d.chunks) == 0 {
 		return nil, fmt.Errorf("no chunks in module")
 	}
 
-	return &ExecUnit{
+	unit := &ExecUnit{
 		Consts:    sharedConsts,
 		MainChunk: d.chunks[0],
-	}, nil
+	}
+
+	// If NS table is present, resolve chunk indices to live CodeChunks
+	if len(nsTable) > 0 {
+		unit.NSChunks = make(map[string]*vm.CodeChunk, len(nsTable))
+		for name, idx := range nsTable {
+			if idx >= len(d.chunks) {
+				return nil, fmt.Errorf("NS table chunk index %d out of range for %q", idx, name)
+			}
+			unit.NSChunks[name] = d.chunks[idx]
+		}
+		// MainChunk is core's chunk if present
+		if coreChunk, ok := unit.NSChunks["core"]; ok {
+			unit.MainChunk = coreChunk
+		}
+	}
+
+	return unit, nil
 }
 
 // DecodeWithResolver reads a binary module, resolving var references with the given function.
@@ -149,12 +174,18 @@ func (d *decoder) readModule() (*Module, error) {
 		return nil, err
 	}
 
+	nsTable, err := d.readNSTable()
+	if err != nil {
+		return nil, err
+	}
+
 	return &Module{
 		Version: version,
 		Flags:   flags,
 		Strings: strings,
 		Chunks:  chunkDatas,
 		Consts:  consts,
+		NSTable: nsTable,
 	}, nil
 }
 
@@ -292,6 +323,30 @@ func (d *decoder) readConsts() ([]vm.Value, error) {
 		consts[i] = v
 	}
 	return consts, nil
+}
+
+func (d *decoder) readNSTable() (map[string]int, error) {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		// EOF is OK — old format modules don't have NS tables
+		return nil, nil
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	table := make(map[string]int, count)
+	for i := 0; i < int(count); i++ {
+		name, err := d.readStringRef()
+		if err != nil {
+			return nil, fmt.Errorf("reading NS table name[%d]: %w", i, err)
+		}
+		chunkIdx, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, fmt.Errorf("reading NS table chunk index[%d]: %w", i, err)
+		}
+		table[name] = int(chunkIdx)
+	}
+	return table, nil
 }
 
 func (d *decoder) readValue() (vm.Value, error) {

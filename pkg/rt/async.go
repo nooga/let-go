@@ -712,6 +712,7 @@ func installAsyncNS() {
 	})
 
 	ns := vm.NewNamespace("async")
+	ns.Refer(CoreNS, "", true)
 
 	// Re-export core primitives (extract root value from Var)
 	ns.Def("go*", coreNS.Lookup("go*").(*vm.Var).Deref())

@@ -690,6 +690,7 @@ func installIoNS() {
 	})
 
 	ns := vm.NewNamespace("io")
+	ns.Refer(CoreNS, "", true)
 
 	// Protocols
 	ns.Def("IReadable", ReadableProto)

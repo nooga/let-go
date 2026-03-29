@@ -1,4 +1,4 @@
-// lgbgen compiles core.lg into a pre-compiled .lgb bytecode file.
+// lgbgen compiles core.lg and all embedded namespaces into a pre-compiled .lgb bundle.
 // Usage: go run ./cmd/lgbgen [output-path]
 // Default output: pkg/rt/core_compiled.lgb (when run from repo root)
 package main
@@ -14,6 +14,23 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+// embeddedNS lists all embedded namespaces in compilation order.
+// Dependencies must come before dependents (test depends on walk).
+var embeddedNS = []struct {
+	name string
+	src  *string
+}{
+	{"core", &rt.CoreSrc},
+	{"walk", &rt.WalkSrc},
+	{"string", &rt.StringSrc},
+	{"set", &rt.SetSrc},
+	{"pprint", &rt.PprintSrc},
+	{"edn", &rt.EdnSrc},
+	{"io", &rt.IoSrc},
+	{"async", &rt.AsyncSrc},
+	{"test", &rt.TestSrc}, // depends on walk — must come after
+}
+
 func main() {
 	outPath := "pkg/rt/core_compiled.lgb"
 	if len(os.Args) > 1 {
@@ -22,14 +39,25 @@ func main() {
 
 	// rt.init() has already run — native builtins are registered in CoreNS.
 	consts := vm.NewConsts()
-	ns := rt.NS(rt.NameCoreNS)
-	c := compiler.NewCompiler(consts, ns)
-	c.SetSource("<core>")
+	nsChunks := make(map[string]*vm.CodeChunk)
 
-	chunk, _, err := c.CompileMultiple(strings.NewReader(rt.CoreSrc))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "compilation failed: %v\n", err)
-		os.Exit(1)
+	for _, ns := range embeddedNS {
+		src := *ns.src
+		if src == "" {
+			continue
+		}
+		// Use CoreNS as starting namespace — the (ns ...) form will switch to the target
+		coreNS := rt.NS(rt.NameCoreNS)
+		c := compiler.NewCompiler(consts, coreNS)
+		c.SetSource("<embedded:" + ns.name + ">")
+
+		chunk, _, err := c.CompileMultiple(strings.NewReader(src))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s compilation failed: %v\n", ns.name, err)
+			os.Exit(1)
+		}
+		nsChunks[ns.name] = chunk
+		fmt.Printf("  compiled %-10s (%d bytes bytecode)\n", ns.name, len(chunk.Code())*4)
 	}
 
 	f, err := os.Create(outPath)
@@ -39,11 +67,12 @@ func main() {
 	}
 	defer f.Close()
 
-	if err := bytecode.EncodeCompilation(f, consts, chunk); err != nil {
+	if err := bytecode.EncodeBundle(f, consts, nsChunks); err != nil {
 		fmt.Fprintf(os.Stderr, "encode failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	fi, _ := f.Stat()
-	fmt.Printf("wrote %s (%d bytes, %d consts)\n", outPath, fi.Size(), len(consts.Values()))
+	fmt.Printf("wrote %s (%d bytes, %d consts, %d namespaces)\n",
+		outPath, fi.Size(), len(consts.Values()), len(nsChunks))
 }

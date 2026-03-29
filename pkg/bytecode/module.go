@@ -9,6 +9,8 @@ type Module struct {
 	Strings []string
 	Chunks  []*ChunkData
 	Consts  []vm.Value
+	// NSTable maps namespace names to their main chunk indices (for bundles).
+	NSTable map[string]int
 }
 
 // ChunkData holds the data for a single code chunk.
