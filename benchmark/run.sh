@@ -231,15 +231,19 @@ for r in d['results']:
     if name == 'clojure': name = 'clojure JVM'
     entries.append((name, r['mean'], r['stddev']))
 
+# Use let-go as baseline (ratio 1.0)
+lg_mean = next(e[1] for e in entries if e[0] == 'let-go')
 best = min(e[1] for e in entries)
 print('| Runtime | Time |')
 print('|---|---|')
 for name, mean, stddev in entries:
     s = fmt(mean, stddev)
+    ratio = mean / lg_mean
+    tag = f' ({ratio:.1f}x)' if name != 'let-go' else ' (1.0x)'
     if mean == best:
-        print(f'| **{name}** | **{s}** |')
+        print(f'| **{name}** | **{s}**{tag} |')
     else:
-        print(f'| {name} | {s} |')
+        print(f'| {name} | {s}{tag} |')
 " >> "$RESULTS_FILE"
 
 # Memory table
@@ -257,14 +261,21 @@ has_joker = '$HAS_JOKER_COL' != ''
 
 def bold_min_row(label, vals):
     # vals is list of (value_str, numeric_or_none)
+    # First entry is always let-go (baseline)
     nums = [v[1] for v in vals if v[1] is not None]
     best = min(nums) if nums else None
+    lg_val = vals[0][1] if vals[0][1] is not None else 1
     cells = []
-    for s, n in vals:
-        if n is not None and best is not None and n == best:
-            cells.append(f'**{s}**')
+    for i, (s, n) in enumerate(vals):
+        if n is not None and lg_val:
+            ratio = n / lg_val
+            tag = f' ({ratio:.1f}x)' if i > 0 else ' (1.0x)'
         else:
-            cells.append(s)
+            tag = ''
+        if n is not None and best is not None and n == best:
+            cells.append(f'**{s}**{tag}')
+        else:
+            cells.append(f'{s}{tag}')
     return f'| {label} | ' + ' | '.join(cells) + ' |'
 
 def parse_mb(s):
@@ -343,7 +354,7 @@ def fmt(mean, stddev):
     return f'{mean:.3f}s ± {stddev:.3f}s'
 
 # Collect results with raw mean for comparison
-results = {}  # key → (formatted, raw_mean)
+results = {}  # key -> (formatted, raw_mean)
 for r in d['results']:
     cmd = r['command'].strip()
     if cmd == 'let-go': results['letgo'] = (fmt(r['mean'], r['stddev']), r['mean'])
@@ -351,22 +362,25 @@ for r in d['results']:
     elif cmd == 'joker': results['joker'] = (fmt(r['mean'], r['stddev']), r['mean'])
     elif cmd == 'clojure': results['clj'] = (fmt(r['mean'], r['stddev']), r['mean'])
 
-# Find winner (lowest mean)
+# Find winner (lowest mean) and let-go baseline
 best = min(v[1] for v in results.values())
+lg_mean = results.get('letgo', (None, 1.0))[1]
 
 def cell(key):
     if key not in results:
-        return '—'
+        return chr(0x2014)  # em dash
     s, mean = results[key]
+    ratio = mean / lg_mean if lg_mean else 0
+    tag = f' ({ratio:.1f}x)' if key != 'letgo' else ' (1.0x)'
     if mean == best:
-        return f'**{s}**'
-    return s
+        return f'**{s}**{tag}'
+    return f'{s}{tag}'
 
 has_joker_col = '$JOKER' != ''
-row = f'| $name | {cell(\"letgo\")} | {cell(\"bb\")} |'
+row = '| $name | ' + cell('letgo') + ' | ' + cell('bb') + ' |'
 if has_joker_col:
-    row += f' {cell(\"joker\")} |'
-row += f' {cell(\"clj\")} |'
+    row += ' ' + cell('joker') + ' |'
+row += ' ' + cell('clj') + ' |'
 print(row)
 "
 done

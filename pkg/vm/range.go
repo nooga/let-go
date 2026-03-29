@@ -44,7 +44,7 @@ func (l *Range) Type() ValueType { return RangeType }
 
 // Unbox implements Value
 func (l *Range) Unbox() interface{} {
-	return l.Seq().Unbox()
+	return nil
 }
 
 // First implements Seq
@@ -71,17 +71,10 @@ func (l *Range) Next() Seq {
 }
 
 func (l *Range) Seq() Seq {
-	var r Seq = EmptyList
-	if l.step > 0 {
-		for i := l.start + (l.RawCount()-1)*l.step; l.inBounds(i) && i >= l.start; i -= l.step {
-			r = r.Cons(Int(i))
-		}
-	} else {
-		for i := l.start + (l.RawCount()-1)*l.step; l.inBounds(i) && i <= l.start; i -= l.step {
-			r = r.Cons(Int(i))
-		}
+	if l.RawCount() == 0 {
+		return nil
 	}
-	return r
+	return l
 }
 
 // Cons implements Seq
@@ -120,7 +113,14 @@ func (l *Range) Conj(val Value) Collection {
 }
 
 func (l *Range) String() string {
-	return l.Seq().String()
+	out := "("
+	for s := Seq(l); s != nil; s = s.Next() {
+		if out != "(" {
+			out += " "
+		}
+		out += s.First().String()
+	}
+	return out + ")"
 }
 
 func (l *Range) ValueAt(key Value) Value {
@@ -140,6 +140,39 @@ func (l *Range) ValueAtOr(key Value, dflt Value) Value {
 		return dflt
 	}
 	return Int(l.start + idx*l.step)
+}
+
+// InfiniteRange is a lazy infinite integer sequence.
+type InfiniteRange struct {
+	start int
+	step  int
+}
+
+func NewInfiniteRange(start, step int) *InfiniteRange {
+	return &InfiniteRange{start: start, step: step}
+}
+
+func (r *InfiniteRange) Type() ValueType    { return RangeType }
+func (r *InfiniteRange) Unbox() interface{} { return nil }
+func (r *InfiniteRange) First() Value       { return Int(r.start) }
+
+func (r *InfiniteRange) Next() Seq {
+	return &InfiniteRange{start: r.start + r.step, step: r.step}
+}
+
+func (r *InfiniteRange) More() Seq {
+	return r.Next()
+}
+
+func (r *InfiniteRange) Seq() Seq { return r }
+
+func (r *InfiniteRange) Cons(val Value) Seq {
+	return NewCons(val, r)
+}
+
+func (r *InfiniteRange) String() string {
+	// Don't realize - just show a hint
+	return "(range ...)"
 }
 
 func NewRange(start, end, step Int) Value {

@@ -1,0 +1,36 @@
+(ns test.range-test
+  (:require [test :refer :all]))
+
+(deftest finite-range
+  (testing "basic range"
+    (is (= [0 1 2 3 4] (vec (range 5))))
+    (is (= [2 3 4] (vec (range 2 5))))
+    (is (= [0 2 4 6 8] (vec (range 0 10 2))))
+    (is (= [] (vec (range 0)))))
+
+  (testing "range is lazy (no eager materialization)"
+    ;; This would OOM or hang if range eagerly materialized
+    (is (= 999999 (nth (range 1000000) 999999)))
+    (is (= 10 (count (take 10 (range 1000000))))))
+
+  (testing "range as seq"
+    (is (= 0 (first (range 5))))
+    (is (= [1 2 3 4] (vec (rest (range 5)))))
+    (is (= 4950 (reduce + 0 (range 100))))))
+
+(deftest infinite-range
+  (testing "take from infinite range"
+    (is (= [0 1 2 3 4] (vec (take 5 (range)))))
+    (is (= [0 1 2 3 4 5 6 7 8 9] (vec (take 10 (range))))))
+
+  (testing "drop + take from infinite range"
+    (is (= [100 101 102 103 104] (vec (take 5 (drop 100 (range)))))))
+
+  (testing "filter on infinite range"
+    (is (= [0 2 4 6 8] (vec (take 5 (filter even? (range)))))))
+
+  (testing "reduce with take on infinite range"
+    (is (= 499500 (reduce + 0 (take 1000 (range))))))
+
+  (testing "map on infinite range"
+    (is (= [0 1 4 9 16] (vec (take 5 (map (fn [x] (* x x)) (range))))))))

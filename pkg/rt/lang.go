@@ -549,7 +549,8 @@ func installLangNS() {
 
 	rangef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
-			return vm.EmptyList, nil
+			// Infinite range: (range) -> lazy seq 0, 1, 2, ...
+			return vm.NewInfiniteRange(0, 1), nil
 		}
 		if len(vs) == 1 {
 			return vm.NewRange(0, vs[0].(vm.Int), 1), nil

@@ -166,18 +166,18 @@ Run `benchmark/run.sh` to reproduce (requires `hyperfine`, `bb`, `clj`, `joker`)
 |                 | let-go         | babashka       | joker                    | clojure JVM   |
 | --------------- | -------------- | -------------- | ------------------------ | ------------- |
 | **Platform**    | Go bytecode VM | GraalVM native | Go tree-walk interpreter | JVM (HotSpot) |
-| **Binary size** | **9.1M**       | 68M            | 26M                      | 304M (JDK)    |
-| **Startup**     | **12ms**       | 23ms           | 12ms                     | 352ms         |
+| **Binary size** | **9.2M**       | 68M            | 26M                      | 304M (JDK)    |
+| **Startup**     | **12ms**       | 21ms           | 11ms                     | 346ms         |
 | **Idle memory** | **16MB**       | 27MB           | 21MB                     | 93MB          |
 
 **Performance highlights** (Apple M1 Pro):
 
-- **Smallest footprint** — 7x smaller than Babashka, 33x smaller than the JDK
-- **Fastest startup** — 12ms, neck and neck with Joker, 2x faster than Babashka, 29x faster than JVM
-- **Wins on short-lived tasks** — map/filter and transducer pipelines: **13ms** vs bb's 23ms (startup dominates)
-- **Competitive on data structures** — persistent maps within ~5% of Babashka
-- **~2x slower on compute** vs Babashka (GraalVM AOT), ~5-7x vs JVM (JIT) — expected for a bytecode interpreter
-- **7-23x faster than Joker** on all compute benchmarks — bytecode VM vs tree-walk interpreter
+- **Smallest footprint** - 7x smaller than Babashka, 33x smaller than the JDK
+- **Fastest startup** - 12ms, neck and neck with Joker, 1.8x faster than Babashka, 30x faster than JVM
+- **Wins on short-lived tasks** - map/filter and transducer pipelines: **13ms** vs bb's 21ms (startup dominates)
+- **Competitive on compute** - fib(35) within 4% of Babashka (2.0s vs 1.9s), loop-recur neck and neck
+- **Lowest memory** - 17MB for fib(35) vs bb's 77MB (4.5x less), 21MB for reduce 1M vs bb's 59MB (2.8x less)
+- **10x faster than Joker** on all compute benchmarks - bytecode VM vs tree-walk interpreter
 
 Full results with methodology: [benchmark/results.md](benchmark/results.md)
 
