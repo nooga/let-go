@@ -64,6 +64,9 @@ func (l *Regex) FindAllStringSubmatch(s string, n int) [][]string {
 	return l.re.FindAllStringSubmatch(s, n)
 }
 
+// Pattern returns the regex pattern string.
+func (l *Regex) Pattern() string { return l.re.String() }
+
 func NewRegex(s string) (Value, error) {
 	re, err := regexp.Compile(s)
 	if err != nil {

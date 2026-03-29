@@ -46,6 +46,24 @@ func (sm *SourceMap) Add(ip int, info SourceInfo) {
 	sm.entries = append(sm.entries, sourceMapEntry{startIP: ip, info: info})
 }
 
+// SourceMapEntry is the exported version of sourceMapEntry.
+type SourceMapEntry struct {
+	StartIP int
+	Info    SourceInfo
+}
+
+// Entries returns the source map entries.
+func (sm *SourceMap) Entries() []SourceMapEntry {
+	if sm == nil {
+		return nil
+	}
+	out := make([]SourceMapEntry, len(sm.entries))
+	for i, e := range sm.entries {
+		out[i] = SourceMapEntry{StartIP: e.startIP, Info: e.info}
+	}
+	return out
+}
+
 // Lookup finds the SourceInfo for a given instruction pointer.
 // Uses the last entry whose startIP <= ip.
 func (sm *SourceMap) Lookup(ip int) *SourceInfo {

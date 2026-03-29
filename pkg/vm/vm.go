@@ -225,6 +225,18 @@ func (c *CodeChunk) SetMaxStack(max int) {
 	c.maxStack = max
 }
 
+// Code returns the bytecode slice.
+func (c *CodeChunk) Code() []int32 { return c.code }
+
+// MaxStack returns the max stack depth.
+func (c *CodeChunk) MaxStack() int { return c.maxStack }
+
+// GetSourceMap returns the source map, may be nil.
+func (c *CodeChunk) GetSourceMap() *SourceMap { return c.sourceMap }
+
+// Consts returns the const pool reference.
+func (c *CodeChunk) Consts() *Consts { return c.consts }
+
 type exHandler struct {
 	catchIP   int // absolute IP of catch block
 	finallyIP int // absolute IP of finally block (-1 if none)

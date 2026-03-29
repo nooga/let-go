@@ -94,6 +94,12 @@ func (v *Var) IsPrivate() bool {
 	return v.isPrivate
 }
 
+// NS returns the namespace name.
+func (v *Var) NS() string { return v.ns }
+
+// VarName returns the var name.
+func (v *Var) VarName() string { return v.name }
+
 func (v *Var) SetMacro() {
 	v.isMacro = true
 }

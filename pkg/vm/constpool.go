@@ -29,3 +29,8 @@ func (c *Consts) get(i int) Value {
 func (c *Consts) count() int {
 	return len(c.consts)
 }
+
+// Values returns the const pool entries.
+func (c *Consts) Values() []Value {
+	return c.consts
+}

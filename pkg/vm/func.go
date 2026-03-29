@@ -93,6 +93,15 @@ func (l *Func) String() string {
 	return fmt.Sprintf("<fn %p>", l)
 }
 
+// Chunk returns the code chunk.
+func (l *Func) Chunk() *CodeChunk { return l.chunk }
+
+// FuncName returns the function name.
+func (l *Func) FuncName() string { return l.name }
+
+// IsVariadic returns whether the function is variadic.
+func (l *Func) IsVariadic() bool { return l.isVariadric }
+
 func (l *Func) MakeClosure() Fn {
 	return &Closure{
 		closedOvers: nil,

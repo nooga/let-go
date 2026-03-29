@@ -321,6 +321,15 @@ func (r *Record) InvokeMethod(name Symbol, args []Value) (Value, error) {
 	return NIL, fmt.Errorf("no method %s on record %s", name, r.rtype.typeName)
 }
 
+// FixedFields returns the fixed field values.
+func (r *Record) FixedFields() []Value { return r.fields }
+
+// Extra returns the overflow map.
+func (r *Record) Extra() *PersistentMap { return r.extra }
+
+// TypeName returns the record type name.
+func (rt *RecordType) TypeName() string { return rt.typeName }
+
 // --- RecordType accessor ---
 
 func (r *Record) RecordType() *RecordType {
