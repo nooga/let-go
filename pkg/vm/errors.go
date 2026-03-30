@@ -132,13 +132,16 @@ type thrownPanic struct {
 }
 
 // recoverThrownPanic catches a thrownPanic and converts it back to an error return.
+// It also catches arbitrary Go panics and converts them to ExecutionErrors so that
+// they produce let-go errors instead of crashing with Go stack traces.
 // Call as: defer recoverThrownPanic(&err) at the top of Invoke methods.
 func recoverThrownPanic(errp *error) {
 	if r := recover(); r != nil {
 		if tp, ok := r.(*thrownPanic); ok {
 			*errp = tp.err
 		} else {
-			panic(r) // re-panic for non-thrown panics
+			// Convert arbitrary Go panics to let-go errors
+			*errp = fmt.Errorf("%v", r)
 		}
 	}
 }

@@ -562,49 +562,50 @@ func NewPersistentVector(values []Value) Value {
 		}
 	}
 
-	// Build tree levels bottom-up
-	root := newNode()
-	currentLevel := []*vnode{root}
-	nodesInLevel := (treeSize + nodeCap - 1) / nodeCap
-
-	// Fill leaf level
-	for i := 0; i < treeSize; i += nodeCap {
-		node := newNode()
-		end := i + nodeCap
-		if end > treeSize {
-			end = treeSize
+	// Build leaf nodes
+	leafCount := treeSize / nodeCap
+	leaves := make([]*vnode, leafCount)
+	for i := 0; i < leafCount; i++ {
+		node := &vnode{array: make([]interface{}, nodeCap)}
+		base := i * nodeCap
+		for j := 0; j < nodeCap; j++ {
+			node.array[j] = values[base+j]
 		}
-		for j := i; j < end; j++ {
-			node.array = append(node.array, values[j])
-		}
-		root.array = append(root.array, node)
+		leaves[i] = node
 	}
 
-	// Calculate required height
-	shift := uint(5)
-	for nodesInLevel > nodeCap {
-		newLevel := newNode()
-		for i := 0; i < len(currentLevel); i += nodeCap {
-			node := newNode()
-			end := i + nodeCap
+	// Build tree bottom-up: group nodes into parents until we have a single root
+	currentLevel := leaves
+	treeShift := uint(shift)
+	for len(currentLevel) > nodeCap {
+		parentCount := (len(currentLevel) + nodeCap - 1) / nodeCap
+		parents := make([]*vnode, parentCount)
+		for i := 0; i < parentCount; i++ {
+			start := i * nodeCap
+			end := start + nodeCap
 			if end > len(currentLevel) {
 				end = len(currentLevel)
 			}
-			node.array = make([]interface{}, end-i)
-			for j := i; j < end; j++ {
-				node.array[j-i] = currentLevel[j]
+			node := &vnode{array: make([]interface{}, end-start)}
+			for j := start; j < end; j++ {
+				node.array[j-start] = currentLevel[j]
 			}
-			newLevel.array = append(newLevel.array, node)
+			parents[i] = node
 		}
-		currentLevel = []*vnode{newLevel}
-		nodesInLevel = (nodesInLevel + nodeCap - 1) / nodeCap
-		shift += 5
+		currentLevel = parents
+		treeShift += shift
+	}
+
+	// Final root node wrapping the top-level nodes
+	root := &vnode{array: make([]interface{}, len(currentLevel))}
+	for i, n := range currentLevel {
+		root.array[i] = n
 	}
 
 	return PersistentVector{
 		count:   len(values),
-		shift:   shift,
-		root:    currentLevel[0],
+		shift:   treeShift,
+		root:    root,
 		tail:    tail,
 		tailOff: treeSize,
 	}

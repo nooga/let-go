@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"fmt"
 	"os"
 	"path"
 	stdstrings "strings"
@@ -37,6 +38,7 @@ func (r *NSResolver) loadFile(path string) *vm.Namespace {
 	nns := freshCtx.CurrentNS()
 	r.ctx.SetCurrentNS(ons)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to load %s: %s\n", path, err)
 		return nil
 	}
 	return nns
@@ -117,6 +119,7 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 	_, _, err := freshCtx.CompileMultiple(stdstrings.NewReader(src))
 	nns := freshCtx.CurrentNS()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to load embedded namespace %s: %s\n", name, err)
 		r.ctx.SetCurrentNS(ons)
 		return nil
 	}
@@ -135,6 +138,7 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) *vm.Names
 	result, err := f.RunProtected()
 	vm.ReleaseFrame(f)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to load precompiled namespace %s: %s\n", name, err)
 		r.ctx.SetCurrentNS(ons)
 		return nil
 	}

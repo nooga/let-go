@@ -348,3 +348,43 @@ func TestPersistentVectorSeq(t *testing.T) {
 		}
 	})
 }
+
+func TestPersistentVectorLargeAssoc(t *testing.T) {
+	// Regression test: NewPersistentVector previously built a malformed trie
+	// for >1024 elements, causing Assoc to panic with index out of range.
+	for _, size := range []int{100, 1024, 2000, 10000} {
+		values := make([]Value, size)
+		for i := range values {
+			values[i] = Int(i)
+		}
+		vec := NewPersistentVector(values).(Associative)
+
+		// Verify all elements are accessible
+		pv := vec.(PersistentVector)
+		for _, idx := range []int{0, size / 2, size - 1} {
+			got := pv.ValueAt(Int(idx))
+			if got != Int(idx) {
+				t.Errorf("size=%d: ValueAt(%d) = %v, want %v", size, idx, got, Int(idx))
+			}
+		}
+
+		// Verify Assoc doesn't panic
+		updated := vec.Assoc(Int(0), Int(-1)).(PersistentVector)
+		if updated.ValueAt(Int(0)) != Int(-1) {
+			t.Errorf("size=%d: Assoc(0, -1) didn't update, got %v", size, updated.ValueAt(Int(0)))
+		}
+		updated = vec.Assoc(Int(size/2), Int(-2)).(PersistentVector)
+		if updated.ValueAt(Int(size/2)) != Int(-2) {
+			t.Errorf("size=%d: Assoc(%d, -2) didn't update, got %v", size, size/2, updated.ValueAt(Int(size/2)))
+		}
+		updated = vec.Assoc(Int(size-1), Int(-3)).(PersistentVector)
+		if updated.ValueAt(Int(size-1)) != Int(-3) {
+			t.Errorf("size=%d: Assoc(%d, -3) didn't update, got %v", size, size-1, updated.ValueAt(Int(size-1)))
+		}
+
+		// Verify original is unchanged (persistence)
+		if pv.ValueAt(Int(0)) != Int(0) {
+			t.Errorf("size=%d: original vector was mutated", size)
+		}
+	}
+}

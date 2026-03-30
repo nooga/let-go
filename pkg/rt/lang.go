@@ -1420,6 +1420,9 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
+		if vs[0] == vm.NIL {
+			return vm.NIL, fmt.Errorf("name called on nil")
+		}
 		s, ok := vs[0].(vm.String)
 		if ok {
 			return s, nil

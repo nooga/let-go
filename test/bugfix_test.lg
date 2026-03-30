@@ -1,0 +1,45 @@
+(ns test.bugfix-test
+  (:require [test :refer :all]))
+
+;; Bug #2: name on nil should return an error, not panic
+(deftest name-on-nil
+  (testing "name on nil throws error instead of Go panic"
+    (is (= :caught (try (name nil) (catch e :caught))))))
+
+;; Bug #2: sort-by with nil values should error, not Go panic
+(deftest sort-by-nil-values
+  (testing "sort-by with nil values throws error instead of Go panic"
+    (is (= :caught (try (sort-by :a [{:a 1} {:a nil}]) (catch e :caught))))))
+
+;; Bug #4: keyword arguments in defn
+(deftest keyword-arguments
+  (testing "defn with keyword args via & map destructuring"
+    (let [foo (fn [& {:keys [a b] :or {a 1 b 2}}] [a b])]
+      (is (= [10 20] (foo :a 10 :b 20)))
+      (is (= [1 2] (foo)))
+      (is (= [10 2] (foo :a 10)))))
+
+  (testing "defn with keyword args and positional args"
+    (let [bar (fn [x & {:keys [y] :or {y 0}}] [x y])]
+      (is (= [42 10] (bar 42 :y 10)))
+      (is (= [42 0] (bar 42))))))
+
+;; Bug #5: doseq with multiple bindings
+(deftest doseq-multiple-bindings
+  (testing "doseq with two bindings (cartesian product)"
+    (let [result (atom [])]
+      (doseq [x [1 2] y [:a :b]]
+        (swap! result conj [x y]))
+      (is (= [[1 :a] [1 :b] [2 :a] [2 :b]] @result))))
+
+  (testing "doseq with three bindings"
+    (let [result (atom [])]
+      (doseq [x [1 2] y [:a] z ["x" "y"]]
+        (swap! result conj [x y z]))
+      (is (= [[1 :a "x"] [1 :a "y"] [2 :a "x"] [2 :a "y"]] @result))))
+
+  (testing "doseq with single binding still works"
+    (let [result (atom [])]
+      (doseq [x [1 2 3]]
+        (swap! result conj x))
+      (is (= [1 2 3] @result)))))

@@ -408,7 +408,18 @@ func (f *Frame) handleError(err error) bool {
 // RunProtected runs the frame with panic recovery for thrownPanic.
 // Use at top-level entry points (REPL, file eval). Internal calls use Run() directly.
 func (f *Frame) RunProtected() (result Value, err error) {
-	defer recoverThrownPanic(&err)
+	defer func() {
+		if r := recover(); r != nil {
+			if tp, ok := r.(*thrownPanic); ok {
+				err = tp.err
+			} else {
+				// Convert Go panic to let-go error with source info
+				srcInfo := f.code.LookupSource(f.ip)
+				msg := fmt.Sprintf("%v", r)
+				err = NewExecutionError(msg).WithSource(srcInfo)
+			}
+		}
+	}()
 	return f.Run()
 }
 

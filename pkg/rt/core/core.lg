@@ -491,12 +491,31 @@
 
 
 (defn ^:private fn-expand [bindings body]
-  (if (some (complement symbol?) bindings)
-    (let [padded (reduce (fn [a x] (conj a x nil)) [] bindings)
-          [bs nbs] (destructure padded)
-          clean (vec (filter some? bs))]
-      `(~clean (let* ~nbs ~@body)))
-    `(~bindings ~@body)))
+  (let [amp-idx (loop [i 0 bs (seq bindings)]
+                  (if bs
+                    (if (= (first bs) '&) i (recur (inc i) (next bs)))
+                    -1))
+        ;; When & is followed by a map, we need special handling:
+        ;; collect rest args as a list, then convert to a map for destructuring
+        has-kw-args (and (>= amp-idx 0)
+                         (< (inc amp-idx) (count bindings))
+                         (map? (nth bindings (inc amp-idx))))]
+    (if has-kw-args
+      (let [pre (vec (take amp-idx bindings))
+            mdestr (nth bindings (inc amp-idx))
+            rest-sym (gensym "rest__")
+            map-sym (gensym "map__")
+            new-bindings (conj pre '& rest-sym)
+            ;; Build: (let [map-sym (apply hash-map rest-sym) mdestr map-sym] body...)
+            let-binds (vector map-sym (list 'apply 'hash-map rest-sym) mdestr map-sym)
+            let-form (list* 'let let-binds body)]
+        (fn-expand new-bindings (list let-form)))
+      (if (some (complement symbol?) bindings)
+        (let [padded (reduce (fn [a x] (conj a x nil)) [] bindings)
+              [bs nbs] (destructure padded)
+              clean (vec (filter some? bs))]
+          `(~clean (let* ~nbs ~@body)))
+        `(~bindings ~@body)))))
 
 (defmacro fn [& forms]
   (let [forms (if (string? (first forms)) (next forms) forms)]
@@ -1137,14 +1156,30 @@
 ;; nth is a native Go builtin
 
 (defmacro doseq [bind & body]
-  (let [binding (first bind)
-        coll (second bind)]
-    `(let [s# (seq ~coll)]
-       (loop [s__# s#]
-         (when s__#
-           (let [~binding (first s__#)]
-             ~@body
-             (recur (next s__#))))))))
+  (if (<= (count bind) 2)
+    ;; Single binding — base case
+    (let [binding (first bind)
+          coll (second bind)
+          seq-sym (gensym "doseq_seq__")
+          loop-sym (gensym "doseq_loop__")]
+      `(let [~seq-sym (seq ~coll)]
+         (loop [~loop-sym ~seq-sym]
+           (when ~loop-sym
+             (let [~binding (first ~loop-sym)]
+               ~@body
+               (recur (next ~loop-sym)))))))
+    ;; Multiple bindings — nest: outer binding wraps inner doseq
+    (let [binding (first bind)
+          coll (second bind)
+          rest-binds (vec (drop 2 bind))
+          seq-sym (gensym "doseq_seq__")
+          loop-sym (gensym "doseq_loop__")]
+      `(let [~seq-sym (seq ~coll)]
+         (loop [~loop-sym ~seq-sym]
+           (when ~loop-sym
+             (let [~binding (first ~loop-sym)]
+               (doseq ~rest-binds ~@body)
+               (recur (next ~loop-sym)))))))))
 
 ;; for — lazy list comprehension
 ;; (for [x xs, y ys, :let [z expr], :when pred, :while pred] body)
