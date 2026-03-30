@@ -66,6 +66,29 @@ The test runner (`test/language_test.go`) picks up all `*.lg` files in `test/` a
 - `thrownPanic` for errors crossing native function boundaries (lazy seq realization)
 - Error reporting: `FormSource` maps forms to source locations, `SourceMap` on CodeChunk
 
+## Releasing
+
+1. **Regenerate precompiled core** if `pkg/rt/core/core.lg` changed:
+   ```bash
+   go generate ./pkg/rt/
+   ```
+2. **Run tests**: `go test ./... -count=1`
+3. **Commit and push** all changes to `main`
+4. **Tag and push**:
+   ```bash
+   git tag v1.X.Y && git push origin v1.X.Y
+   ```
+   CI (goreleaser via GitHub Actions) builds binaries and creates the GitHub release automatically.
+5. **Update Homebrew formula** once the release is published:
+   ```bash
+   gh release download v1.X.Y --pattern "checksums.txt" --output -
+   ```
+   Update `HomebrewFormula/let-go.rb` with the new version and SHA256 hashes, then commit and push.
+6. **Install via Homebrew**:
+   ```bash
+   brew update && brew upgrade let-go
+   ```
+
 ## Known Limitations
 
 ### Lazy seq implementation
