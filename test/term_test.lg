@@ -1,0 +1,37 @@
+(ns test.term-test
+  (:require [test :refer :all]
+            [term]))
+
+(deftest term-namespace-exists
+  (testing "term namespace is available"
+    (is (not (nil? term/size)))
+    (is (not (nil? term/clear)))
+    (is (not (nil? term/move-cursor)))
+    (is (not (nil? term/write)))
+    (is (not (nil? term/write-at)))
+    (is (not (nil? term/read-key)))
+    (is (not (nil? term/raw-mode!)))
+    (is (not (nil? term/restore-mode!)))
+    (is (not (nil? term/hide-cursor)))
+    (is (not (nil? term/show-cursor)))
+    (is (not (nil? term/set-fg)))
+    (is (not (nil? term/set-bg)))
+    (is (not (nil? term/reset-style)))
+    (is (not (nil? term/bold)))
+    (is (not (nil? term/underline)))
+    (is (not (nil? term/inverse)))
+    (is (not (nil? term/alternate-screen)))
+    (is (not (nil? term/main-screen)))
+    (is (not (nil? term/flush)))
+    (is (not (nil? term/clear-line)))
+    (is (not (nil? term/char-width)))))
+
+(deftest term-char-width
+  (testing "char-width returns 1 for ASCII"
+    (is (= 1 (term/char-width "a")))
+    (is (= 1 (term/char-width "Z")))
+    (is (= 1 (term/char-width "@")))))
+
+;; NOTE: term/size, term/raw-mode!, term/read-key etc. require a real TTY
+;; and cannot be tested in the test runner (stdout is piped).
+;; Use test/term_interactive.lg for manual testing.

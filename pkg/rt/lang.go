@@ -54,6 +54,7 @@ func init() {
 	installTransitNS()
 	installPodsNS()
 	installMathNS()
+	installTermNS()
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 

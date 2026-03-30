@@ -1,0 +1,55 @@
+(ns examples.term-demo
+  (:require [term]
+            [os]))
+
+(defn cleanup []
+  (term/show-cursor)
+  (term/main-screen)
+  (term/reset-style)
+  (term/restore-mode!))
+
+(defn draw-box [x y w h]
+  (term/write-at x y (str "┌" (apply str (repeat (- w 2) "─")) "┐"))
+  (dotimes [i (- h 2)]
+    (term/write-at x (+ y i 1) (str "│" (apply str (repeat (- w 2) " ")) "│")))
+  (term/write-at x (+ y h -1) (str "└" (apply str (repeat (- w 2) "─")) "┘")))
+
+(defn main []
+  (let [sz (term/size)]
+    (when (nil? sz)
+      (println "Not a terminal, exiting.")
+      (os/exit 1))
+    (let [[cols rows] sz]
+      (term/raw-mode!)
+      (term/alternate-screen)
+      (term/hide-cursor)
+      (term/clear)
+
+      ;; draw a box
+      (term/set-fg 2)
+      (draw-box 2 2 30 10)
+
+      ;; title
+      (term/set-fg 3)
+      (term/bold)
+      (term/write-at 4 3 "let-go term demo")
+      (term/reset-style)
+
+      ;; info
+      (term/write-at 4 5 (str "Terminal: " cols "x" rows))
+      (term/write-at 4 7 "Press keys to see codes.")
+      (term/write-at 4 8 "Press 'q' to quit.")
+
+      ;; key echo loop
+      (term/write-at 4 10 "")
+      (loop []
+        (let [k (term/read-key)]
+          (when k
+            (if (= k "q")
+              (cleanup)
+              (do
+                (term/write-at 4 10 (str "Key: " (pr-str k) "    "))
+                (term/flush)
+                (recur)))))))))
+
+(main)
