@@ -363,7 +363,7 @@ func (n *NreplServer) handleInfo(conn net.Conn, msg map[string]interface{}) {
 			}
 		}
 		v := ns.Lookup(vm.Symbol(sym))
-		if v != nil {
+		if v != vm.NIL {
 			info := map[string]interface{}{
 				"name": sym,
 				"ns":   nsName,
