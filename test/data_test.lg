@@ -1,0 +1,103 @@
+;; Tests for the data namespace (diff)
+(ns test.data-test
+  (:require [test :refer :all]
+            [data :as d]))
+
+;; --- Equal values ---
+
+(deftest diff-equal-test
+  (testing "equal values"
+    (is (= [nil nil 1] (d/diff 1 1)))
+    (is (= [nil nil "hello"] (d/diff "hello" "hello")))
+    (is (= [nil nil :foo] (d/diff :foo :foo)))
+    (is (= [nil nil nil] (d/diff nil nil)))))
+
+;; --- Atoms ---
+
+(deftest diff-atoms-test
+  (testing "different atoms"
+    (is (= [1 2 nil] (d/diff 1 2)))
+    (is (= ["a" "b" nil] (d/diff "a" "b")))
+    (is (= [:a :b nil] (d/diff :a :b)))))
+
+;; --- Nil ---
+
+(deftest diff-nil-test
+  (testing "nil vs value"
+    (is (= [nil 1 nil] (d/diff nil 1)))
+    (is (= [1 nil nil] (d/diff 1 nil)))))
+
+;; --- Maps ---
+
+(deftest diff-maps-equal-test
+  (testing "equal maps"
+    (is (= [nil nil {:a 1 :b 2}] (d/diff {:a 1 :b 2} {:a 1 :b 2})))))
+
+(deftest diff-maps-only-a-test
+  (testing "keys only in first map"
+    (is (= [{:a 1} nil nil] (d/diff {:a 1} {})))))
+
+(deftest diff-maps-only-b-test
+  (testing "keys only in second map"
+    (is (= [nil {:b 2} nil] (d/diff {} {:b 2})))))
+
+(deftest diff-maps-mixed-test
+  (testing "maps with different keys and values"
+    (let [[a b both] (d/diff {:a 1 :b 2} {:a 1 :b 3 :c 4})]
+      (is (= {:b 2} a))
+      (is (= {:b 3 :c 4} b))
+      (is (= {:a 1} both)))))
+
+(deftest diff-maps-nested-test
+  (testing "nested map diff"
+    (let [[a b both] (d/diff {:a {:x 1 :y 2}} {:a {:x 1 :y 3}})]
+      (is (= {:a {:y 2}} a))
+      (is (= {:a {:y 3}} b))
+      (is (= {:a {:x 1}} both)))))
+
+;; --- Sets ---
+
+(deftest diff-sets-test
+  (testing "set diff"
+    (let [[a b both] (d/diff #{1 2 3} #{2 3 4})]
+      (is (= #{1} a))
+      (is (= #{4} b))
+      (is (= #{2 3} both)))))
+
+(deftest diff-sets-equal-test
+  (testing "equal sets"
+    (is (= [nil nil #{1 2}] (d/diff #{1 2} #{1 2})))))
+
+(deftest diff-sets-disjoint-test
+  (testing "disjoint sets"
+    (let [[a b both] (d/diff #{1 2} #{3 4})]
+      (is (= #{1 2} a))
+      (is (= #{3 4} b))
+      (is (nil? both)))))
+
+;; --- Vectors / sequential ---
+
+(deftest diff-vectors-equal-test
+  (testing "equal vectors"
+    (is (= [nil nil [1 2 3]] (d/diff [1 2 3] [1 2 3])))))
+
+(deftest diff-vectors-different-test
+  (testing "vectors with different elements"
+    (let [[a b both] (d/diff [1 2 3] [1 9 3])]
+      (is (= [nil 2 nil] a))
+      (is (= [nil 9 nil] b))
+      (is (= [1 nil 3] both)))))
+
+(deftest diff-vectors-different-lengths-test
+  (testing "vectors of different lengths"
+    (let [[a b both] (d/diff [1 2] [1 2 3])]
+      (is (= nil a))
+      (is (= [nil nil 3] b))
+      (is (= [1 2 nil] both)))))
+
+;; --- Mixed types ---
+
+(deftest diff-mixed-types-test
+  (testing "different types treated as atoms"
+    (is (= [1 "1" nil] (d/diff 1 "1")))
+    (is (= [[1] {:a 1} nil] (d/diff [1] {:a 1})))))

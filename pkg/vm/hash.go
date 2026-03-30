@@ -15,6 +15,9 @@ type Hashable interface {
 	Hash() uint32
 }
 
+// HashValue computes a 32-bit hash for any Value type (exported for builtins).
+func HashValue(v Value) uint32 { return hashValue(v) }
+
 // hashValue computes a 32-bit hash for any Value type.
 // Checks for Hashable first (cached hash), then falls back to computing.
 func hashValue(v Value) uint32 {

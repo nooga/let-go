@@ -1,0 +1,279 @@
+;; Tests for quick-win additions: predicates, numeric fns, string fns, etc.
+(ns test.quick-wins-test
+  (:require [test :refer :all]
+            [string :as s]))
+
+;; --- quot and rem ---
+
+(deftest quot-test
+  (testing "quot truncates toward zero"
+    (is (= 3 (quot 10 3)))
+    (is (= -3 (quot -10 3)))
+    (is (= -3 (quot 10 -3)))
+    (is (= 3 (quot -10 -3)))
+    (is (= 0 (quot 1 2)))))
+
+(deftest rem-test
+  (testing "rem sign follows dividend"
+    (is (= 1 (rem 10 3)))
+    (is (= -1 (rem -10 3)))
+    (is (= 1 (rem 10 -3)))
+    (is (= -1 (rem -10 -3)))
+    (is (= 0 (rem 10 5)))))
+
+(deftest mod-test
+  (testing "mod sign follows divisor (floored)"
+    (is (= 1 (mod 10 3)))
+    (is (= 2 (mod -10 3)))
+    (is (= -2 (mod 10 -3)))
+    (is (= -1 (mod -10 -3)))
+    (is (= 0 (mod 10 5)))))
+
+;; --- numeric predicates ---
+
+(deftest pos-int-test
+  (testing "pos-int?"
+    (is (pos-int? 1))
+    (is (pos-int? 42))
+    (is (not (pos-int? 0)))
+    (is (not (pos-int? -1)))
+    (is (not (pos-int? 1.5)))))
+
+(deftest neg-int-test
+  (testing "neg-int?"
+    (is (neg-int? -1))
+    (is (neg-int? -42))
+    (is (not (neg-int? 0)))
+    (is (not (neg-int? 1)))
+    (is (not (neg-int? -1.5)))))
+
+(deftest nat-int-test
+  (testing "nat-int?"
+    (is (nat-int? 0))
+    (is (nat-int? 1))
+    (is (nat-int? 42))
+    (is (not (nat-int? -1)))
+    (is (not (nat-int? 1.5)))))
+
+(deftest integer-test
+  (testing "integer? is alias for int?"
+    (is (integer? 42))
+    (is (not (integer? 3.14)))
+    (is (not (integer? "42")))))
+
+(deftest rational-test
+  (testing "rational?"
+    (is (rational? 42))
+    (is (rational? (bigint 999)))
+    (is (not (rational? 3.14)))
+    (is (not (rational? "42")))))
+
+(deftest decimal-test
+  (testing "decimal? always false (no BigDecimal)"
+    (is (not (decimal? 42)))
+    (is (not (decimal? 3.14)))))
+
+(deftest ratio-test
+  (testing "ratio? always false (no Ratio)"
+    (is (not (ratio? 42)))
+    (is (not (ratio? 3.14)))))
+
+;; --- type predicates ---
+
+(deftest boolean-test
+  (testing "boolean?"
+    (is (boolean? true))
+    (is (boolean? false))
+    (is (not (boolean? nil)))
+    (is (not (boolean? 1)))
+    (is (not (boolean? "true")))))
+
+(deftest char-test
+  (testing "char?"
+    (is (char? \a))
+    (is (char? \space))
+    (is (not (char? "a")))
+    (is (not (char? 65)))))
+
+(deftest var-test
+  (testing "var?"
+    (is (var? (var +)))
+    (is (not (var? 42)))
+    (is (not (var? "x")))))
+
+;; --- type coercion aliases ---
+
+(deftest long-test
+  (testing "long is alias for int"
+    (is (= 42 (long 42)))
+    (is (= 3 (long 3.7)))))
+
+(deftest byte-test
+  (testing "byte coerces with signed range check (-128 to 127)"
+    (is (= 0 (byte 0)))
+    (is (= 127 (byte 127)))
+    (is (= -128 (byte -128)))
+    (is (= 65 (byte 65.9)))))
+
+(deftest unchecked-byte-test
+  (testing "unchecked-byte wraps on overflow"
+    (is (= -128 (unchecked-byte 128)))
+    (is (= -1 (unchecked-byte 255)))
+    (is (= 0 (unchecked-byte 256)))
+    (is (= 127 (unchecked-byte 127)))))
+
+(deftest short-test
+  (testing "short coerces with range check"
+    (is (= 0 (short 0)))
+    (is (= 32767 (short 32767)))
+    (is (= -32768 (short -32768)))))
+
+(deftest unchecked-short-test
+  (testing "unchecked-short wraps on overflow"
+    (is (= -32768 (unchecked-short 32768)))
+    (is (= 0 (unchecked-short 65536)))
+    (is (= 32767 (unchecked-short 32767)))))
+
+;; --- ident predicates ---
+
+(deftest ident-test
+  (testing "ident?"
+    (is (ident? :foo))
+    (is (ident? 'foo))
+    (is (not (ident? "foo")))
+    (is (not (ident? 42)))))
+
+(deftest simple-ident-test
+  (testing "simple-ident?"
+    (is (simple-ident? :foo))
+    (is (simple-ident? 'foo))
+    (is (not (simple-ident? :ns/foo)))
+    (is (not (simple-ident? 'ns/foo)))))
+
+(deftest qualified-ident-test
+  (testing "qualified-ident?"
+    (is (qualified-ident? :ns/foo))
+    (is (qualified-ident? 'ns/foo))
+    (is (not (qualified-ident? :foo)))
+    (is (not (qualified-ident? 'foo)))))
+
+(deftest simple-keyword-test
+  (testing "simple-keyword?"
+    (is (simple-keyword? :foo))
+    (is (not (simple-keyword? :ns/foo)))
+    (is (not (simple-keyword? 'foo)))))
+
+(deftest qualified-keyword-test
+  (testing "qualified-keyword?"
+    (is (qualified-keyword? :ns/foo))
+    (is (not (qualified-keyword? :foo)))
+    (is (not (qualified-keyword? 'ns/foo)))))
+
+(deftest simple-symbol-test
+  (testing "simple-symbol?"
+    (is (simple-symbol? 'foo))
+    (is (not (simple-symbol? 'ns/foo)))
+    (is (not (simple-symbol? :foo)))))
+
+(deftest qualified-symbol-test
+  (testing "qualified-symbol?"
+    (is (qualified-symbol? 'ns/foo))
+    (is (not (qualified-symbol? 'foo)))
+    (is (not (qualified-symbol? :ns/foo)))))
+
+;; --- NaN? and infinite? ---
+
+(deftest nan-test
+  (testing "NaN?"
+    (is (NaN? (/ 0.0 0.0)))
+    (is (not (NaN? 1.0)))
+    (is (not (NaN? 42)))))
+
+(deftest infinite-test
+  (testing "infinite?"
+    (is (infinite? (/ 1.0 0.0)))
+    (is (infinite? (/ -1.0 0.0)))
+    (is (not (infinite? 1.0)))
+    (is (not (infinite? 42)))))
+
+;; --- hash ---
+
+(deftest hash-test
+  (testing "hash returns consistent int"
+    (is (int? (hash 42)))
+    (is (= (hash :foo) (hash :foo)))
+    (is (= (hash "hello") (hash "hello")))
+    (is (= (hash [1 2 3]) (hash [1 2 3])))))
+
+;; --- parse-double, parse-boolean ---
+
+(deftest parse-double-test
+  (testing "parse-double"
+    (is (= 3.14 (parse-double "3.14")))
+    (is (= 42.0 (parse-double "42")))
+    (is (= -1.5 (parse-double "-1.5")))))
+
+(deftest parse-boolean-test
+  (testing "parse-boolean"
+    (is (= true (parse-boolean "true")))
+    (is (= false (parse-boolean "false")))
+    (is (nil? (parse-boolean "yes")))))
+
+;; --- run! ---
+
+(deftest run-bang-test
+  (testing "run! executes side effects, returns nil"
+    (let [a (atom [])]
+      (run! #(swap! a conj %) [1 2 3])
+      (is (= [1 2 3] @a)))
+    (is (nil? (run! identity [1 2 3])))))
+
+;; --- random-sample ---
+
+(deftest random-sample-test
+  (testing "random-sample with prob 1.0 returns all"
+    (is (= [1 2 3 4 5] (vec (random-sample 1.1 [1 2 3 4 5])))))
+  (testing "random-sample with prob 0.0 returns none"
+    (is (= [] (vec (random-sample 0.0 [1 2 3 4 5]))))))
+
+;; --- string functions ---
+
+(deftest string-index-of-test
+  (testing "string/index-of"
+    (is (= 0 (s/index-of "hello" "h")))
+    (is (= 2 (s/index-of "hello" "l")))
+    (is (nil? (s/index-of "hello" "z")))
+    (is (= 3 (s/index-of "hello" "l" 3)))))
+
+(deftest string-last-index-of-test
+  (testing "string/last-index-of"
+    (is (= 3 (s/last-index-of "hello" "l")))
+    (is (= 0 (s/last-index-of "hello" "h")))
+    (is (nil? (s/last-index-of "hello" "z")))
+    (is (= 2 (s/last-index-of "hello" "l" 2)))))
+
+(deftest string-blank-test
+  (testing "string/blank?"
+    (is (s/blank? nil))
+    (is (s/blank? ""))
+    (is (s/blank? "   "))
+    (is (not (s/blank? "a")))))
+
+(deftest string-capitalize-test
+  (testing "string/capitalize"
+    (is (= "Hello" (s/capitalize "hello")))
+    (is (= "Hello" (s/capitalize "HELLO")))
+    (is (= "" (s/capitalize "")))))
+
+(deftest string-reverse-test
+  (testing "string/reverse"
+    (is (= "olleh" (s/reverse "hello")))
+    (is (= "" (s/reverse "")))))
+
+(deftest string-escape-test
+  (testing "string/escape"
+    (is (= "h&lt;llo" (s/escape "h<llo" {\< "&lt;"})))))
+
+(deftest string-re-quote-replacement-test
+  (testing "string/re-quote-replacement is identity (Go regex)"
+    (is (= "$1" (s/re-quote-replacement "$1")))))

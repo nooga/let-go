@@ -21,6 +21,20 @@
     s
     (str (upper-case (subs s 0 1)) (lower-case (subs s 1)))))
 
+(defn index-of
+  ([s value] (core/index-of s value))
+  ([s value from-index] (core/index-of s value from-index)))
+
+(defn last-index-of
+  ([s value] (core/last-index-of s value))
+  ([s value from-index] (core/last-index-of s value from-index)))
+
+(defn escape [s cmap]
+  (apply str (map (fn [c] (or (get cmap c) c)) s)))
+
+(defn re-quote-replacement [replacement]
+  replacement)
+
 ;; Re-export core builtins for string/ qualified access
 (def trim core/trim)
 (def triml core/triml)

@@ -53,6 +53,7 @@ func init() {
 	installAsyncNS()
 	installTransitNS()
 	installPodsNS()
+	installMathNS()
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 
@@ -3709,6 +3710,526 @@ func installLangNS() {
 	ns.Def("reduced?", isReducedf)
 	ns.Def("unreduced", unreduced)
 	ns.Def("ensure-reduced", ensureReduced)
+
+	// quot — integer division (truncated toward zero)
+	quotf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		return vm.NumQuot(vs[0], vs[1])
+	})
+	ns.Def("quot", quotf)
+
+	// rem — remainder of truncated division (sign follows dividend)
+	remf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		return vm.NumRem(vs[0], vs[1])
+	})
+	ns.Def("rem", remf)
+
+	// hash — returns the hash code of a value
+	hashf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		return vm.MakeInt(int(vm.HashValue(vs[0]))), nil
+	})
+	ns.Def("hash", hashf)
+
+	// parse-double — parse string to float
+	parseDouble, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("parse-double expected String")
+		}
+		f, err := strconv.ParseFloat(string(s), 64)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("cannot parse double: %s", s)
+		}
+		return vm.Float(f), nil
+	})
+	ns.Def("parse-double", parseDouble)
+
+	// parse-boolean — parse "true"/"false" to boolean
+	parseBool, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("parse-boolean expected String")
+		}
+		switch string(s) {
+		case "true":
+			return vm.TRUE, nil
+		case "false":
+			return vm.FALSE, nil
+		}
+		return vm.NIL, nil
+	})
+	ns.Def("parse-boolean", parseBool)
+
+	// NaN? — test if value is NaN
+	isNaN, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		if f, ok := vs[0].(vm.Float); ok {
+			return vm.Boolean(math.IsNaN(float64(f))), nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("NaN?", isNaN)
+
+	// infinite? — test if value is +/-Inf
+	isInfinite, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		if f, ok := vs[0].(vm.Float); ok {
+			return vm.Boolean(math.IsInf(float64(f), 0)), nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("infinite?", isInfinite)
+
+	// boolean? — test if value is boolean
+	isBool, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		_, ok := vs[0].(vm.Boolean)
+		return vm.Boolean(ok), nil
+	})
+	ns.Def("boolean?", isBool)
+
+	// char? — test if value is char
+	isChar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		_, ok := vs[0].(vm.Char)
+		return vm.Boolean(ok), nil
+	})
+	ns.Def("char?", isChar)
+
+	// var? — test if value is a var
+	isVar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		_, ok := vs[0].(*vm.Var)
+		return vm.Boolean(ok), nil
+	})
+	ns.Def("var?", isVar)
+
+	// string/index-of — find first index of substring/char
+	indexOf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 || len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("index-of expected String as first arg")
+		}
+		var needle string
+		switch v := vs[1].(type) {
+		case vm.String:
+			needle = string(v)
+		case vm.Char:
+			needle = string(rune(v))
+		default:
+			return vm.NIL, fmt.Errorf("index-of expected String or Char as second arg")
+		}
+		str := string(s)
+		if len(vs) == 3 {
+			from, ok := vs[2].(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("index-of expected Int as third arg")
+			}
+			idx := strings.Index(str[int(from):], needle)
+			if idx == -1 {
+				return vm.NIL, nil
+			}
+			return vm.MakeInt(idx + int(from)), nil
+		}
+		idx := strings.Index(str, needle)
+		if idx == -1 {
+			return vm.NIL, nil
+		}
+		return vm.MakeInt(idx), nil
+	})
+	ns.Def("index-of", indexOf)
+
+	// string/last-index-of — find last index of substring/char
+	lastIndexOf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 || len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("last-index-of expected String as first arg")
+		}
+		var needle string
+		switch v := vs[1].(type) {
+		case vm.String:
+			needle = string(v)
+		case vm.Char:
+			needle = string(rune(v))
+		default:
+			return vm.NIL, fmt.Errorf("last-index-of expected String or Char as second arg")
+		}
+		str := string(s)
+		if len(vs) == 3 {
+			from, ok := vs[2].(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("last-index-of expected Int as third arg")
+			}
+			idx := strings.LastIndex(str[:int(from)+1], needle)
+			if idx == -1 {
+				return vm.NIL, nil
+			}
+			return vm.MakeInt(idx), nil
+		}
+		idx := strings.LastIndex(str, needle)
+		if idx == -1 {
+			return vm.NIL, nil
+		}
+		return vm.MakeInt(idx), nil
+	})
+	ns.Def("last-index-of", lastIndexOf)
+
+	// --- Array operations ---
+
+	// Helper: build a typed array from size or seq
+	buildArray := func(kind vm.ArrayKind, vs []vm.Value) (vm.Value, error) {
+		if len(vs) == 0 || len(vs) > 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		// (x-array n) or (x-array n init)
+		if n, ok := vs[0].(vm.Int); ok {
+			size := int(n)
+			if size < 0 {
+				return vm.NIL, fmt.Errorf("negative array size: %d", size)
+			}
+			var arr *vm.TypedArray
+			switch kind {
+			case vm.ArrayByte:
+				arr = vm.NewByteArray(size)
+			case vm.ArrayInt:
+				arr = vm.NewIntArray(size)
+			case vm.ArrayFloat:
+				arr = vm.NewFloatArray(size)
+			case vm.ArrayObject:
+				arr = vm.NewObjectArray(size)
+			}
+			if len(vs) == 2 {
+				for i := 0; i < size; i++ {
+					if err := arr.Set(i, vs[1]); err != nil {
+						return vm.NIL, err
+					}
+				}
+			}
+			return arr, nil
+		}
+		// (x-array coll)
+		s, serr := seqOf(vs[0])
+		if serr != nil {
+			return vm.NIL, serr
+		}
+		if s == nil {
+			return vm.NIL, fmt.Errorf("cannot create array from %s", vs[0].Type().Name())
+		}
+		var vals []vm.Value
+		for ; s != nil; s = s.Next() {
+			vals = append(vals, s.First())
+		}
+		var arr *vm.TypedArray
+		switch kind {
+		case vm.ArrayByte:
+			data := make([]byte, len(vals))
+			for i, v := range vals {
+				n, ok := v.(vm.Int)
+				if !ok {
+					return vm.NIL, fmt.Errorf("byte-array element must be Int, got %s", v.Type().Name())
+				}
+				data[i] = byte(n)
+			}
+			arr = vm.NewByteArrayFrom(data)
+		case vm.ArrayInt:
+			data := make([]int64, len(vals))
+			for i, v := range vals {
+				switch n := v.(type) {
+				case vm.Int:
+					data[i] = int64(n)
+				default:
+					return vm.NIL, fmt.Errorf("int-array element must be Int, got %s", v.Type().Name())
+				}
+			}
+			arr = vm.NewIntArrayFrom(data)
+		case vm.ArrayFloat:
+			data := make([]float64, len(vals))
+			for i, v := range vals {
+				f, ok := vm.ToFloat(v)
+				if !ok {
+					return vm.NIL, fmt.Errorf("double-array element must be numeric, got %s", v.Type().Name())
+				}
+				data[i] = f
+			}
+			arr = vm.NewFloatArrayFrom(data)
+		case vm.ArrayObject:
+			arr = vm.NewObjectArrayFrom(vals)
+		}
+		return arr, nil
+	}
+
+	byteArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return buildArray(vm.ArrayByte, vs)
+	})
+	ns.Def("byte-array", byteArrayf)
+
+	intArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return buildArray(vm.ArrayInt, vs)
+	})
+	ns.Def("int-array", intArrayf)
+	ns.Def("long-array", intArrayf)
+
+	doubleArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return buildArray(vm.ArrayFloat, vs)
+	})
+	ns.Def("double-array", doubleArrayf)
+	ns.Def("float-array", doubleArrayf)
+
+	objectArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return buildArray(vm.ArrayObject, vs)
+	})
+	ns.Def("object-array", objectArrayf)
+
+	// make-array — (make-array type size)
+	makeArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("make-array expects 2 args (type, size)")
+		}
+		size, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-array size must be Int")
+		}
+		n := int(size)
+		if n < 0 {
+			return vm.NIL, fmt.Errorf("negative array size: %d", n)
+		}
+		switch t := vs[0].(type) {
+		case vm.Keyword:
+			switch string(t) {
+			case "byte":
+				return vm.NewByteArray(n), nil
+			case "int", "long":
+				return vm.NewIntArray(n), nil
+			case "double", "float":
+				return vm.NewFloatArray(n), nil
+			case "object":
+				return vm.NewObjectArray(n), nil
+			}
+			return vm.NIL, fmt.Errorf("unknown array type: %s", t)
+		default:
+			// Default to object-array
+			return vm.NewObjectArray(n), nil
+		}
+	})
+	ns.Def("make-array", makeArrayf)
+
+	// aget — (aget arr idx) or (aget arr idx idx2 ...)
+	agetf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		arr, ok := vs[0].(*vm.TypedArray)
+		if !ok {
+			return vm.NIL, fmt.Errorf("aget expects array, got %s", vs[0].Type().Name())
+		}
+		idx, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("aget index must be Int")
+		}
+		i := int(idx)
+		if i < 0 || i >= arr.Len() {
+			return vm.NIL, fmt.Errorf("array index %d out of bounds for length %d", i, arr.Len())
+		}
+		val := arr.Get(i)
+		// Support nested access: (aget arr i j k ...)
+		for _, extra := range vs[2:] {
+			inner, ok := val.(*vm.TypedArray)
+			if !ok {
+				return vm.NIL, fmt.Errorf("aget nested: expected array, got %s", val.Type().Name())
+			}
+			idx, ok := extra.(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("aget index must be Int")
+			}
+			j := int(idx)
+			if j < 0 || j >= inner.Len() {
+				return vm.NIL, fmt.Errorf("array index %d out of bounds for length %d", j, inner.Len())
+			}
+			val = inner.Get(j)
+		}
+		return val, nil
+	})
+	ns.Def("aget", agetf)
+
+	// aset — (aset arr idx val)
+	asetf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		arr, ok := vs[0].(*vm.TypedArray)
+		if !ok {
+			return vm.NIL, fmt.Errorf("aset expects array, got %s", vs[0].Type().Name())
+		}
+		idx, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("aset index must be Int")
+		}
+		i := int(idx)
+		if i < 0 || i >= arr.Len() {
+			return vm.NIL, fmt.Errorf("array index %d out of bounds for length %d", i, arr.Len())
+		}
+		if err := arr.Set(i, vs[2]); err != nil {
+			return vm.NIL, err
+		}
+		return vs[2], nil
+	})
+	ns.Def("aset", asetf)
+
+	// alength — (alength arr)
+	alengthf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		arr, ok := vs[0].(*vm.TypedArray)
+		if !ok {
+			return vm.NIL, fmt.Errorf("alength expects array, got %s", vs[0].Type().Name())
+		}
+		return vm.MakeInt(arr.Len()), nil
+	})
+	ns.Def("alength", alengthf)
+
+	// aclone — (aclone arr)
+	aclonef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		arr, ok := vs[0].(*vm.TypedArray)
+		if !ok {
+			return vm.NIL, fmt.Errorf("aclone expects array, got %s", vs[0].Type().Name())
+		}
+		return arr.Clone(), nil
+	})
+	ns.Def("aclone", aclonef)
+
+	// to-array — (to-array coll) creates object-array from seq
+	toArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, serr := seqOf(vs[0])
+		if serr != nil {
+			return vm.NIL, serr
+		}
+		if s == nil {
+			return vm.NewObjectArray(0), nil
+		}
+		var vals []vm.Value
+		for ; s != nil; s = s.Next() {
+			vals = append(vals, s.First())
+		}
+		return vm.NewObjectArrayFrom(vals), nil
+	})
+	ns.Def("to-array", toArrayf)
+
+	// into-array — (into-array seq) or (into-array type seq)
+	intoArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) == 1 {
+			return toArrayf.(*vm.NativeFn).Invoke(vs)
+		}
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		kw, ok := vs[0].(vm.Keyword)
+		if !ok {
+			// If not a keyword, just make object-array from second arg
+			return buildArray(vm.ArrayObject, vs[1:])
+		}
+		switch string(kw) {
+		case "byte":
+			return buildArray(vm.ArrayByte, vs[1:])
+		case "int", "long":
+			return buildArray(vm.ArrayInt, vs[1:])
+		case "double", "float":
+			return buildArray(vm.ArrayFloat, vs[1:])
+		case "object":
+			return buildArray(vm.ArrayObject, vs[1:])
+		}
+		return vm.NIL, fmt.Errorf("unknown array type: %s", kw)
+	})
+	ns.Def("into-array", intoArrayf)
+
+	// bytes — coerce string to byte-array
+	bytesf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.String:
+			data := []byte(string(v))
+			return vm.NewByteArrayFrom(data), nil
+		case *vm.TypedArray:
+			if v.Kind() == vm.ArrayByte {
+				return v, nil
+			}
+		}
+		return vm.NIL, fmt.Errorf("bytes expects String or byte-array, got %s", vs[0].Type().Name())
+	})
+	ns.Def("bytes", bytesf)
+
+	// ints — coerce seq to int-array
+	intsf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if a, ok := vs[0].(*vm.TypedArray); ok && a.Kind() == vm.ArrayInt {
+			return a, nil
+		}
+		return buildArray(vm.ArrayInt, vs)
+	})
+	ns.Def("ints", intsf)
+	ns.Def("longs", intsf)
+
+	// doubles — coerce seq to double-array
+	doublesf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if a, ok := vs[0].(*vm.TypedArray); ok && a.Kind() == vm.ArrayFloat {
+			return a, nil
+		}
+		return buildArray(vm.ArrayFloat, vs)
+	})
+	ns.Def("doubles", doublesf)
+
+	// array? — type predicate
+	isArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		_, ok := vs[0].(*vm.TypedArray)
+		return vm.Boolean(ok), nil
+	})
+	ns.Def("array?", isArrayf)
 
 	// IO builtins (open, close!, read-line, write!, etc.)
 	installIOBuiltins(ns)

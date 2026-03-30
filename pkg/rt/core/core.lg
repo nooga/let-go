@@ -129,6 +129,43 @@
 (defn inc [x] (+ x 1))
 (defn dec [x] (- x 1))
 
+;; numeric type predicates
+(defn pos-int? [x] (and (int? x) (pos? x)))
+(defn neg-int? [x] (and (int? x) (neg? x)))
+(defn nat-int? [x] (and (int? x) (not (neg? x))))
+(def integer? int?)
+(defn decimal? [_] false)
+(defn rational? [x] (or (int? x) (bigint? x)))
+(defn ratio? [_] false)
+
+;; type coercion aliases
+(def long int)
+(defn byte [x]
+  (let [n (int x)]
+    (if (and (>= n -128) (<= n 127)) n
+      (throw (ex-info (str "Value out of range for byte: " n) {})))))
+(defn unchecked-byte [x]
+  (let [n (int x)
+        b (mod (+ (mod n 256) 256) 256)]
+    (if (> b 127) (- b 256) b)))
+(defn short [x]
+  (let [n (int x)]
+    (if (and (>= n -32768) (<= n 32767)) n
+      (throw (ex-info (str "Value out of range for short: " n) {})))))
+(defn unchecked-short [x]
+  (let [n (int x)
+        s (mod (+ (mod n 65536) 65536) 65536)]
+    (if (> s 32767) (- s 65536) s)))
+
+;; ident predicates
+(defn ident? [x] (or (keyword? x) (symbol? x)))
+(defn simple-ident? [x] (and (ident? x) (nil? (namespace x))))
+(defn qualified-ident? [x] (and (ident? x) (some? (namespace x))))
+(defn simple-keyword? [x] (and (keyword? x) (nil? (namespace x))))
+(defn qualified-keyword? [x] (and (keyword? x) (some? (namespace x))))
+(defn simple-symbol? [x] (and (symbol? x) (nil? (namespace x))))
+(defn qualified-symbol? [x] (and (symbol? x) (some? (namespace x))))
+
 ;; bleh
 (defn list? [x] (= (type x) (type '())))
 (defn vector? [x] (= (type x) (type [])))
@@ -462,25 +499,28 @@
     `(~bindings ~@body)))
 
 (defmacro fn [& forms]
-  (cond
-    (vector? (first forms))
-    (cons 'fn* (fn-expand (first forms) (next forms)))
+  (let [forms (if (string? (first forms)) (next forms) forms)]
+    (cond
+      (vector? (first forms))
+      (cons 'fn* (fn-expand (first forms) (next forms)))
 
-    (list? (first forms))
-    `(fn* ~@(map #(fn-expand (first %) (next %)) forms))
+      (list? (first forms))
+      `(fn* ~@(map #(fn-expand (first %) (next %)) forms))
 
-    :else
-    nil ;; throw here
-    ))
+      :else
+      nil ;; throw here
+      )))
 
 (defmacro defn [name & forms]
-  `(def ~name (fn ~@forms)))
+  (let [forms (if (string? (first forms)) (next forms) forms)]
+    `(def ~name (fn ~@forms))))
 
 (defmacro def- [name form]
   `(def ^:private ~name ~form))
 
 (defmacro defn- [name & forms]
-  `(def ^:private ~name (fn ~@forms)))
+  (let [forms (if (string? (first forms)) (next forms) forms)]
+    `(def ^:private ~name (fn ~@forms))))
 
 (defmacro while [test & body]
   `(loop* [] (when ~test ~@body (recur))))
@@ -843,6 +883,13 @@
 (defn repeatedly
   ([f] (lazy-seq (cons (f) (repeatedly f))))
   ([n f] (take n (repeatedly f))))
+
+(defn run! [proc coll]
+  (reduce #(do (proc %2) nil) nil coll)
+  nil)
+
+(defn random-sample [prob coll]
+  (filter (fn [_] (< (rand) prob)) coll))
 
 (defn keep
   ([f]
@@ -1572,4 +1619,24 @@
 ;; (defmethod name dispatch-val [args] body)
 (defmacro defmethod [name dispatch-val & fn-tail]
   (list 'set! name (list 'defmethod* name dispatch-val (cons 'fn fn-tail))))
+
+;; --- Array macros ---
+
+;; (amap a idx ret expr) — map over array, returning new array of same type
+(defmacro amap [a idx ret expr]
+  `(let [a# ~a
+         ~ret (aclone a#)]
+     (loop [~idx 0]
+       (if (< ~idx (alength a#))
+         (do (aset ~ret ~idx ~expr)
+             (recur (inc ~idx)))
+         ~ret))))
+
+;; (areduce a idx ret init expr) — reduce over array
+(defmacro areduce [a idx ret init expr]
+  `(let [a# ~a]
+     (loop [~idx 0 ~ret ~init]
+       (if (< ~idx (alength a#))
+         (recur (inc ~idx) ~expr)
+         ~ret))))
 

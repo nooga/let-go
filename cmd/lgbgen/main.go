@@ -29,6 +29,8 @@ var embeddedNS = []struct {
 	{"io", &rt.IoSrc},
 	{"async", &rt.AsyncSrc},
 	{"test", &rt.TestSrc}, // depends on walk — must come after
+	// zip and data are loaded from source on demand (precompiled ns chunks
+	// only replay nil stubs for defn, not the actual function bodies)
 }
 
 func main() {

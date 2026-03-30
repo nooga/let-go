@@ -1,0 +1,268 @@
+;; Tests for typed mutable arrays
+(ns test.array-test
+  (:require [test :refer :all]))
+
+;; --- Constructors ---
+
+(deftest byte-array-size-test
+  (testing "byte-array from size"
+    (let [a (byte-array 5)]
+      (is (= 5 (alength a)))
+      (is (= 0 (aget a 0)))
+      (is (array? a)))))
+
+(deftest byte-array-init-test
+  (testing "byte-array from size + init"
+    (let [a (byte-array 3 42)]
+      (is (= 42 (aget a 0)))
+      (is (= 42 (aget a 1)))
+      (is (= 42 (aget a 2))))))
+
+(deftest byte-array-coll-test
+  (testing "byte-array from collection"
+    (let [a (byte-array [1 2 3 4 5])]
+      (is (= 5 (alength a)))
+      (is (= 1 (aget a 0)))
+      (is (= 5 (aget a 4))))))
+
+(deftest int-array-size-test
+  (testing "int-array from size"
+    (let [a (int-array 3)]
+      (is (= 3 (alength a)))
+      (is (= 0 (aget a 0))))))
+
+(deftest int-array-coll-test
+  (testing "int-array from collection"
+    (let [a (int-array [10 20 30])]
+      (is (= 3 (alength a)))
+      (is (= 10 (aget a 0)))
+      (is (= 30 (aget a 2))))))
+
+(deftest long-array-alias-test
+  (testing "long-array is alias for int-array"
+    (let [a (long-array [1 2 3])]
+      (is (= 3 (alength a)))
+      (is (array? a)))))
+
+(deftest double-array-size-test
+  (testing "double-array from size"
+    (let [a (double-array 4)]
+      (is (= 4 (alength a)))
+      (is (= 0.0 (aget a 0))))))
+
+(deftest double-array-coll-test
+  (testing "double-array from collection"
+    (let [a (double-array [1.1 2.2 3.3])]
+      (is (= 3 (alength a)))
+      (is (= 1.1 (aget a 0)))
+      (is (= 3.3 (aget a 2))))))
+
+(deftest float-array-alias-test
+  (testing "float-array is alias for double-array"
+    (let [a (float-array [1.0 2.0])]
+      (is (= 2 (alength a)))
+      (is (array? a)))))
+
+(deftest object-array-size-test
+  (testing "object-array from size (filled with nil)"
+    (let [a (object-array 3)]
+      (is (= 3 (alength a)))
+      (is (nil? (aget a 0))))))
+
+(deftest object-array-coll-test
+  (testing "object-array from collection"
+    (let [a (object-array [:a "b" 3])]
+      (is (= 3 (alength a)))
+      (is (= :a (aget a 0)))
+      (is (= "b" (aget a 1)))
+      (is (= 3 (aget a 2))))))
+
+(deftest make-array-test
+  (testing "make-array with keyword type"
+    (is (= 5 (alength (make-array :byte 5))))
+    (is (= 3 (alength (make-array :int 3))))
+    (is (= 4 (alength (make-array :double 4))))
+    (is (= 2 (alength (make-array :object 2))))))
+
+;; --- aget / aset ---
+
+(deftest aset-test
+  (testing "aset mutates in place"
+    (let [a (int-array 3)]
+      (aset a 0 10)
+      (aset a 1 20)
+      (aset a 2 30)
+      (is (= 10 (aget a 0)))
+      (is (= 20 (aget a 1)))
+      (is (= 30 (aget a 2))))))
+
+(deftest aset-returns-val-test
+  (testing "aset returns the value set"
+    (let [a (int-array 1)]
+      (is (= 42 (aset a 0 42))))))
+
+(deftest aset-byte-truncates-test
+  (testing "aset on byte-array truncates to byte"
+    (let [a (byte-array 1)]
+      (aset a 0 256)
+      (is (= 0 (aget a 0)))
+      (aset a 0 255)
+      (is (= 255 (aget a 0))))))
+
+(deftest aset-double-coerces-test
+  (testing "aset on double-array coerces int to float"
+    (let [a (double-array 1)]
+      (aset a 0 42)
+      (is (= 42.0 (aget a 0))))))
+
+;; --- alength / aclone ---
+
+(deftest aclone-test
+  (testing "aclone creates independent copy"
+    (let [a (int-array [1 2 3])
+          b (aclone a)]
+      (aset b 0 99)
+      (is (= 1 (aget a 0)))
+      (is (= 99 (aget b 0)))
+      (is (= (alength a) (alength b))))))
+
+;; --- array? ---
+
+(deftest array-predicate-test
+  (testing "array? type check"
+    (is (array? (byte-array 0)))
+    (is (array? (int-array 0)))
+    (is (array? (double-array 0)))
+    (is (array? (object-array 0)))
+    (is (not (array? [1 2 3])))
+    (is (not (array? "hello")))
+    (is (not (array? 42)))))
+
+;; --- Seq compatibility ---
+
+(deftest array-seq-test
+  (testing "arrays are seqable"
+    (is (= '(1 2 3) (seq (int-array [1 2 3]))))
+    (is (= 1 (first (int-array [1 2 3]))))
+    (is (= '(2 3) (rest (int-array [1 2 3]))))))
+
+(deftest array-map-test
+  (testing "map over array"
+    (is (= '(2 3 4) (map inc (int-array [1 2 3]))))))
+
+(deftest array-reduce-test
+  (testing "reduce over array"
+    (is (= 6 (reduce + 0 (int-array [1 2 3]))))))
+
+(deftest array-count-test
+  (testing "count works on arrays"
+    (is (= 5 (count (int-array 5))))
+    (is (= 0 (count (byte-array 0))))))
+
+(deftest array-nth-test
+  (testing "nth works on arrays"
+    (let [a (int-array [10 20 30])]
+      (is (= 10 (nth a 0)))
+      (is (= 20 (nth a 1)))
+      (is (= 30 (nth a 2))))))
+
+(deftest array-as-fn-test
+  (testing "array as function of its index"
+    (let [a (int-array [10 20 30])]
+      (is (= 10 (a 0)))
+      (is (= 20 (a 1)))
+      (is (= 30 (a 2))))))
+
+;; --- to-array / into-array ---
+
+(deftest to-array-test
+  (testing "to-array creates object-array from seq"
+    (let [a (to-array [1 2 3])]
+      (is (array? a))
+      (is (= 3 (alength a)))
+      (is (= 1 (aget a 0))))))
+
+(deftest into-array-test
+  (testing "into-array with type"
+    (let [a (into-array :int [1 2 3])]
+      (is (array? a))
+      (is (= 3 (alength a)))
+      (is (= 1 (aget a 0))))))
+
+;; --- bytes / ints / doubles coercion ---
+
+(deftest bytes-from-string-test
+  (testing "bytes converts string to byte-array"
+    (let [a (bytes "ABC")]
+      (is (array? a))
+      (is (= 3 (alength a)))
+      (is (= 65 (aget a 0)))
+      (is (= 66 (aget a 1)))
+      (is (= 67 (aget a 2))))))
+
+(deftest ints-coercion-test
+  (testing "ints coerces seq to int-array"
+    (let [a (ints [1 2 3])]
+      (is (array? a))
+      (is (= 3 (alength a)))
+      (is (= 2 (aget a 1))))))
+
+(deftest doubles-coercion-test
+  (testing "doubles coerces seq to double-array"
+    (let [a (doubles [1.0 2.0 3.0])]
+      (is (array? a))
+      (is (= 3 (alength a)))
+      (is (= 2.0 (aget a 1))))))
+
+(deftest ints-identity-test
+  (testing "ints on int-array returns same array"
+    (let [a (int-array [1 2 3])
+          b (ints a)]
+      (is (= (aget a 0) (aget b 0)))
+      ;; mutating b should be visible in a (same array)
+      (aset b 0 99)
+      (is (= 99 (aget a 0))))))
+
+;; --- amap / areduce macros ---
+
+(deftest amap-test
+  (testing "amap maps over array returning new array"
+    (let [a (int-array [1 2 3])
+          b (amap a idx ret (+ (aget a idx) 10))]
+      (is (array? b))
+      (is (= 11 (aget b 0)))
+      (is (= 12 (aget b 1)))
+      (is (= 13 (aget b 2)))
+      ;; original unchanged
+      (is (= 1 (aget a 0))))))
+
+(deftest areduce-test
+  (testing "areduce reduces over array"
+    (let [a (int-array [1 2 3 4 5])]
+      (is (= 15 (areduce a idx ret 0 (+ ret (aget a idx))))))))
+
+;; --- Mutation semantics ---
+
+(deftest mutation-visible-test
+  (testing "mutations to array are visible through all references"
+    (let [a (int-array [1 2 3])
+          b a]
+      (aset b 1 99)
+      (is (= 99 (aget a 1))))))
+
+;; --- String representation ---
+
+(deftest array-string-test
+  (testing "arrays print distinctly"
+    (is (= "#int-array[1 2 3]" (str (int-array [1 2 3]))))
+    (is (= "#byte-array[65 66]" (str (byte-array [65 66]))))
+    (is (= "#double-array[1.5 2.5]" (str (double-array [1.5 2.5]))))
+    (is (= "#object-array[:a 1]" (str (object-array [:a 1]))))))
+
+;; --- Empty arrays ---
+
+(deftest empty-array-test
+  (testing "empty arrays work correctly"
+    (is (= 0 (alength (int-array 0))))
+    (is (= 0 (count (byte-array 0))))
+    (is (nil? (seq (double-array 0))))))

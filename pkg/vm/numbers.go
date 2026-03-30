@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 )
 
@@ -152,9 +153,7 @@ func NumDiv(a, b Value) (Value, error) {
 			}
 			return Float(float64(av) / float64(bv)), nil
 		case Float:
-			if float64(bv) == 0 {
-				return NIL, fmt.Errorf("divide by zero")
-			}
+			// Int/Float: IEEE 754 semantics (allows Inf)
 			return Float(float64(av) / float64(bv)), nil
 		case *BigInt:
 			if bv.val.Sign() == 0 {
@@ -174,18 +173,15 @@ func NumDiv(a, b Value) (Value, error) {
 	case Float:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
-				return NIL, fmt.Errorf("divide by zero")
-			}
+			// Float/Int: IEEE 754 semantics (allows Inf for /0)
 			return Float(float64(av) / float64(bv)), nil
 		case Float:
-			if float64(bv) == 0 {
-				return NIL, fmt.Errorf("divide by zero")
-			}
+			// Float/Float: IEEE 754 semantics (allows NaN, Inf)
 			return Float(float64(av) / float64(bv)), nil
 		case *BigInt:
 			if bv.val.Sign() == 0 {
-				return NIL, fmt.Errorf("divide by zero")
+				// Float/BigInt(0): IEEE 754
+				return Float(float64(av) / 0.0), nil
 			}
 			af := new(big.Float).SetFloat64(float64(av))
 			bf := new(big.Float).SetInt(bv.val)
@@ -288,8 +284,9 @@ func NumQuot(a, b Value) (Value, error) {
 	return NIL, fmt.Errorf("cannot quot %s and %s", a.Type().Name(), b.Type().Name())
 }
 
-// NumMod computes modulus.
-func NumMod(a, b Value) (Value, error) {
+// NumRem computes the remainder of truncated division (like Java's %).
+// Sign follows the dividend: (rem -10 3) => -1
+func NumRem(a, b Value) (Value, error) {
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -298,12 +295,101 @@ func NumMod(a, b Value) (Value, error) {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			return MakeInt(int(av) % int(bv)), nil
+		case Float:
+			if float64(bv) == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			return Float(math.Remainder(float64(av), float64(bv))), nil
+		case *BigInt:
+			if bv.val.Sign() == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			r := new(big.Int).Rem(big.NewInt(int64(av)), bv.val)
+			return NewBigInt(r), nil
+		}
+	case Float:
+		switch bv := b.(type) {
+		case Int:
+			if int(bv) == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			return Float(math.Remainder(float64(av), float64(bv))), nil
+		case Float:
+			if float64(bv) == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			return Float(math.Remainder(float64(av), float64(bv))), nil
+		}
+	case *BigInt:
+		switch bv := b.(type) {
+		case Int:
+			if int(bv) == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			r := new(big.Int).Rem(av.val, big.NewInt(int64(bv)))
+			return NewBigInt(r), nil
+		case *BigInt:
+			if bv.val.Sign() == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			r := new(big.Int).Rem(av.val, bv.val)
+			return NewBigInt(r), nil
+		}
+	}
+	return NIL, fmt.Errorf("cannot rem %s and %s", a.Type().Name(), b.Type().Name())
+}
+
+// NumMod computes the floored modulus (like Clojure's mod).
+// Sign follows the divisor: (mod -10 3) => 2
+func NumMod(a, b Value) (Value, error) {
+	switch av := a.(type) {
+	case Int:
+		switch bv := b.(type) {
+		case Int:
+			if int(bv) == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			r := int(av) % int(bv)
+			if r != 0 && (r > 0) != (int(bv) > 0) {
+				r += int(bv)
+			}
+			return MakeInt(r), nil
+		case Float:
+			if float64(bv) == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			r := math.Mod(float64(av), float64(bv))
+			if r != 0 && (r > 0) != (float64(bv) > 0) {
+				r += float64(bv)
+			}
+			return Float(r), nil
 		case *BigInt:
 			if bv.val.Sign() == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			r := new(big.Int).Mod(big.NewInt(int64(av)), bv.val)
 			return NewBigInt(r), nil
+		}
+	case Float:
+		switch bv := b.(type) {
+		case Int:
+			if int(bv) == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			r := math.Mod(float64(av), float64(bv))
+			if r != 0 && (r > 0) != (float64(bv) > 0) {
+				r += float64(bv)
+			}
+			return Float(r), nil
+		case Float:
+			if float64(bv) == 0 {
+				return NIL, fmt.Errorf("divide by zero")
+			}
+			r := math.Mod(float64(av), float64(bv))
+			if r != 0 && (r > 0) != (float64(bv) > 0) {
+				r += float64(bv)
+			}
+			return Float(r), nil
 		}
 	case *BigInt:
 		switch bv := b.(type) {

@@ -1,0 +1,89 @@
+;; data namespace — generic data comparison
+;; Port of clojure.data
+(ns data (:require [set]))
+
+(declare diff)
+
+(defn- atom-diff [a b]
+  (if (= a b) [nil nil a] [a b nil]))
+
+(defn- vectorize [m n]
+  (vec (concat m (repeat (- n (count m)) nil))))
+
+(defn- diff-sequential [a b]
+  (let [a (vec a)
+        b (vec b)
+        len (max (count a) (count b))
+        a (vectorize a len)
+        b (vectorize b len)]
+    (reduce (fn [[only-a only-b both] i]
+              (let [[da db db2] (diff (nth a i) (nth b i))]
+                [(if (nil? da) only-a (assoc only-a i da))
+                 (if (nil? db) only-b (assoc only-b i db))
+                 (if (nil? db2) both (assoc both i db2))]))
+            [(vec (repeat len nil))
+             (vec (repeat len nil))
+             (vec (repeat len nil))]
+            (range len))))
+
+(defn- nnil [v]
+  (when (some some? v) v))
+
+(defn- diff-map [a b]
+  (reduce (fn [[only-a only-b both] k]
+            (let [va (get a k)
+                  vb (get b k)
+                  in-a (contains? a k)
+                  in-b (contains? b k)]
+              (cond
+                (and in-a in-b)
+                (let [[da db db2] (diff va vb)]
+                  [(if (nil? da) only-a (assoc only-a k da))
+                   (if (nil? db) only-b (assoc only-b k db))
+                   (if (nil? db2) both (assoc both k db2))])
+
+                in-a
+                [(assoc only-a k va) only-b both]
+
+                :else
+                [only-a (assoc only-b k vb) both])))
+          [{} {} {}]
+          (distinct (concat (keys a) (keys b)))))
+
+(defn- diff-set [a b]
+  (let [only-a (apply disj a b)
+        only-b (apply disj b a)
+        both (set/intersection a b)]
+    [(not-empty only-a)
+     (not-empty only-b)
+     (not-empty both)]))
+
+(defn- empty-or-nil [m]
+  (if (and (or (map? m) (vector? m) (set? m)) (empty? m)) nil m))
+
+(defn diff [a b]
+  (if (= a b)
+    [nil nil a]
+    (cond
+      (and (nil? a) (nil? b))
+      [nil nil nil]
+
+      (nil? a)
+      [nil b nil]
+
+      (nil? b)
+      [a nil nil]
+
+      (and (map? a) (map? b))
+      (let [[oa ob both] (diff-map a b)]
+        [(empty-or-nil oa) (empty-or-nil ob) (empty-or-nil both)])
+
+      (and (set? a) (set? b))
+      (diff-set a b)
+
+      (and (sequential? a) (sequential? b) (not (string? a)) (not (string? b)))
+      (let [[oa ob both] (diff-sequential a b)]
+        [(nnil oa) (nnil ob) (nnil both)])
+
+      :else
+      (atom-diff a b))))

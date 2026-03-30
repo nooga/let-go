@@ -163,8 +163,19 @@ func BoxValue(v reflect.Value) (Value, error) {
 		if v.IsNil() {
 			return NIL, nil
 		}
-		if v.Type().Elem().Kind() == reflect.Uint8 {
+		switch v.Type().Elem().Kind() {
+		case reflect.Uint8:
 			return String(v.Bytes()), nil
+		case reflect.Int64:
+			src := v.Interface().([]int64)
+			dst := make([]int64, len(src))
+			copy(dst, src)
+			return NewIntArrayFrom(dst), nil
+		case reflect.Float64:
+			src := v.Interface().([]float64)
+			dst := make([]float64, len(src))
+			copy(dst, src)
+			return NewFloatArrayFrom(dst), nil
 		}
 		in := make([]Value, v.Len())
 		for i := 0; i < v.Len(); i++ {

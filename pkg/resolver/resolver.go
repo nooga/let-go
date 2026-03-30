@@ -95,7 +95,11 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 		src = rt.IoSrc
 	case "async":
 		src = rt.AsyncSrc
-	default:
+	case "zip":
+		src = rt.ZipSrc
+	case "data":
+		src = rt.DataSrc
+default:
 		return nil
 	}
 	if src == "" {
@@ -109,11 +113,12 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 	freshCtx.SetSource("<embedded:" + name + ">")
 	_, _, err := freshCtx.CompileMultiple(stdstrings.NewReader(src))
 	nns := freshCtx.CurrentNS()
-	// Restore the caller's namespace
-	r.ctx.SetCurrentNS(ons)
 	if err != nil {
+		r.ctx.SetCurrentNS(ons)
 		return nil
 	}
+	// Restore the caller's namespace
+	r.ctx.SetCurrentNS(ons)
 	return nns
 }
 
@@ -131,7 +136,6 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) *vm.Names
 		return nil
 	}
 	_ = result
-	// The ns form in the chunk sets rt.CurrentNS to the new namespace
 	nns := r.ctx.CurrentNS()
 	r.ctx.SetCurrentNS(ons)
 	return nns

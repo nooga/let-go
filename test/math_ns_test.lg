@@ -1,0 +1,294 @@
+;; Tests for the math namespace (clojure.math compatible)
+(ns test.math-ns-test
+  (:require [test :refer :all]
+            [math :as m]))
+
+;; Helper: approximate equality for floating point
+(defn approx=
+  ([a b] (approx= a b 1e-10))
+  ([a b epsilon] (< (abs (- a b)) epsilon)))
+
+;; --- Constants ---
+
+(deftest constants-test
+  (testing "E and PI"
+    (is (approx= 2.718281828459045 m/E))
+    (is (approx= 3.141592653589793 m/PI))))
+
+;; --- Trigonometric ---
+
+(deftest sin-test
+  (testing "sin"
+    (is (approx= 0.0 (m/sin 0)))
+    (is (approx= 1.0 (m/sin (/ m/PI 2))))
+    (is (approx= 0.0 (m/sin m/PI) 1e-15))))
+
+(deftest cos-test
+  (testing "cos"
+    (is (approx= 1.0 (m/cos 0)))
+    (is (approx= -1.0 (m/cos m/PI)))
+    (is (approx= 0.0 (m/cos (/ m/PI 2)) 1e-15))))
+
+(deftest tan-test
+  (testing "tan"
+    (is (approx= 0.0 (m/tan 0)))
+    (is (approx= 1.0 (m/tan (/ m/PI 4)) 1e-15))))
+
+(deftest asin-test
+  (testing "asin"
+    (is (approx= 0.0 (m/asin 0)))
+    (is (approx= (/ m/PI 2) (m/asin 1)))
+    (is (NaN? (m/asin 2)))))
+
+(deftest acos-test
+  (testing "acos"
+    (is (approx= m/PI (m/acos -1)))
+    (is (approx= 0.0 (m/acos 1)))
+    (is (NaN? (m/acos 2)))))
+
+(deftest atan-test
+  (testing "atan"
+    (is (approx= 0.0 (m/atan 0)))
+    (is (approx= (/ m/PI 4) (m/atan 1)))))
+
+(deftest atan2-test
+  (testing "atan2"
+    (is (approx= 0.0 (m/atan2 0 1)))
+    (is (approx= (/ m/PI 2) (m/atan2 1 0)))
+    (is (approx= m/PI (m/atan2 0 -1)))))
+
+;; --- Hyperbolic ---
+
+(deftest sinh-test
+  (testing "sinh"
+    (is (approx= 0.0 (m/sinh 0)))
+    (is (> (m/sinh 1) 1.0))))
+
+(deftest cosh-test
+  (testing "cosh"
+    (is (approx= 1.0 (m/cosh 0)))
+    (is (> (m/cosh 1) 1.0))))
+
+(deftest tanh-test
+  (testing "tanh"
+    (is (approx= 0.0 (m/tanh 0)))
+    (is (< (m/tanh 1) 1.0))
+    (is (> (m/tanh 1) 0.0))))
+
+;; --- Exponential & Logarithmic ---
+
+(deftest exp-test
+  (testing "exp"
+    (is (approx= 1.0 (m/exp 0)))
+    (is (approx= m/E (m/exp 1)))))
+
+(deftest log-test
+  (testing "log (natural)"
+    (is (approx= 0.0 (m/log 1)))
+    (is (approx= 1.0 (m/log m/E)))
+    (is (NaN? (m/log -1)))))
+
+(deftest log10-test
+  (testing "log10"
+    (is (approx= 0.0 (m/log10 1)))
+    (is (approx= 1.0 (m/log10 10)))
+    (is (approx= 2.0 (m/log10 100)))))
+
+(deftest expm1-test
+  (testing "expm1 (e^x - 1, accurate near zero)"
+    (is (approx= 0.0 (m/expm1 0)))
+    (is (approx= (- m/E 1) (m/expm1 1)))))
+
+(deftest log1p-test
+  (testing "log1p (ln(1+x), accurate near zero)"
+    (is (approx= 0.0 (m/log1p 0)))
+    (is (approx= 1.0 (m/log1p (- m/E 1))))))
+
+(deftest pow-test
+  (testing "pow"
+    (is (approx= 1.0 (m/pow 5 0)))
+    (is (approx= 8.0 (m/pow 2 3)))
+    (is (approx= 0.5 (m/pow 2 -1)))))
+
+;; --- Rounding ---
+
+(deftest ceil-test
+  (testing "ceil returns double"
+    (is (= 3.0 (m/ceil 2.1)))
+    (is (= -2.0 (m/ceil -2.9)))
+    (is (= 1.0 (m/ceil 1.0)))))
+
+(deftest floor-test
+  (testing "floor returns double"
+    (is (= 2.0 (m/floor 2.9)))
+    (is (= -3.0 (m/floor -2.1)))
+    (is (= 1.0 (m/floor 1.0)))))
+
+(deftest rint-test
+  (testing "rint rounds to nearest even"
+    (is (= 2.0 (m/rint 2.5)))
+    (is (= 4.0 (m/rint 3.5)))
+    (is (= 2.0 (m/rint 1.5)))))
+
+(deftest round-test
+  (testing "round returns long"
+    (is (= 3 (m/round 2.5)))
+    (is (= 4 (m/round 3.5)))
+    (is (= -3 (m/round -2.5)))
+    (is (int? (m/round 2.5)))))
+
+;; --- Roots ---
+
+(deftest sqrt-test
+  (testing "sqrt"
+    (is (approx= 3.0 (m/sqrt 9)))
+    (is (approx= 0.0 (m/sqrt 0)))
+    (is (NaN? (m/sqrt -1)))))
+
+(deftest cbrt-test
+  (testing "cbrt"
+    (is (approx= 3.0 (m/cbrt 27)))
+    (is (approx= -2.0 (m/cbrt -8)))))
+
+;; --- Exact arithmetic ---
+
+(deftest add-exact-test
+  (testing "add-exact"
+    (is (= 3 (m/add-exact 1 2)))
+    (is (= 0 (m/add-exact -1 1)))))
+
+(deftest subtract-exact-test
+  (testing "subtract-exact"
+    (is (= -1 (m/subtract-exact 1 2)))
+    (is (= 0 (m/subtract-exact 5 5)))))
+
+(deftest multiply-exact-test
+  (testing "multiply-exact"
+    (is (= 6 (m/multiply-exact 2 3)))
+    (is (= 0 (m/multiply-exact 0 999)))))
+
+(deftest increment-exact-test
+  (testing "increment-exact"
+    (is (= 1 (m/increment-exact 0)))
+    (is (= 43 (m/increment-exact 42)))))
+
+(deftest decrement-exact-test
+  (testing "decrement-exact"
+    (is (= -1 (m/decrement-exact 0)))
+    (is (= 41 (m/decrement-exact 42)))))
+
+(deftest negate-exact-test
+  (testing "negate-exact"
+    (is (= -42 (m/negate-exact 42)))
+    (is (= 42 (m/negate-exact -42)))
+    (is (= 0 (m/negate-exact 0)))))
+
+;; --- floor-div, floor-mod ---
+
+(deftest floor-div-test
+  (testing "floor-div rounds toward negative infinity"
+    (is (= 3 (m/floor-div 7 2)))
+    (is (= -4 (m/floor-div -7 2)))
+    (is (= -4 (m/floor-div 7 -2)))
+    (is (= 3 (m/floor-div -7 -2)))))
+
+(deftest floor-mod-test
+  (testing "floor-mod sign follows divisor"
+    (is (= 1 (m/floor-mod 7 2)))
+    (is (= 1 (m/floor-mod -7 2)))
+    (is (= -1 (m/floor-mod 7 -2)))
+    (is (= -1 (m/floor-mod -7 -2)))))
+
+;; --- Floating-point utilities ---
+
+(deftest copy-sign-test
+  (testing "copy-sign"
+    (is (= 1.0 (m/copy-sign -1.0 1.0)))
+    (is (= -1.0 (m/copy-sign 1.0 -1.0)))))
+
+(deftest hypot-test
+  (testing "hypot — sqrt(x^2 + y^2) without overflow"
+    (is (approx= 5.0 (m/hypot 3 4)))
+    (is (approx= 13.0 (m/hypot 5 12)))))
+
+(deftest signum-test
+  (testing "signum"
+    (is (= 1.0 (m/signum 42.0)))
+    (is (= -1.0 (m/signum -0.5)))
+    (is (= 0.0 (m/signum 0.0)))
+    (is (NaN? (m/signum (/ 0.0 0.0))))))
+
+(deftest ieee-remainder-test
+  (testing "IEEE-remainder"
+    (is (approx= -1.0 (m/IEEE-remainder 5 3)))
+    (is (approx= 1.0 (m/IEEE-remainder 5 2)))))
+
+;; --- Angle conversion ---
+
+(deftest to-radians-test
+  (testing "to-radians"
+    (is (approx= m/PI (m/to-radians 180)))
+    (is (approx= (/ m/PI 2) (m/to-radians 90)))
+    (is (approx= 0.0 (m/to-radians 0)))))
+
+(deftest to-degrees-test
+  (testing "to-degrees"
+    (is (approx= 180.0 (m/to-degrees m/PI)))
+    (is (approx= 90.0 (m/to-degrees (/ m/PI 2))))
+    (is (approx= 0.0 (m/to-degrees 0)))))
+
+;; --- Other ---
+
+(deftest random-test
+  (testing "random returns double in [0, 1)"
+    (let [r (m/random)]
+      (is (>= r 0.0))
+      (is (< r 1.0))
+      (is (float? r)))))
+
+(deftest abs-test
+  (testing "abs preserves type"
+    (is (= 5 (m/abs -5)))
+    (is (= 5 (m/abs 5)))
+    (is (= 3.14 (m/abs -3.14)))
+    (is (int? (m/abs -5)))
+    (is (float? (m/abs -3.14)))))
+
+(deftest scalb-test
+  (testing "scalb — d * 2^scaleFactor"
+    (is (approx= 8.0 (m/scalb 1.0 3)))
+    (is (approx= 0.5 (m/scalb 1.0 -1)))))
+
+(deftest next-up-test
+  (testing "next-up"
+    (is (> (m/next-up 1.0) 1.0))
+    (is (float? (m/next-up 1.0)))))
+
+(deftest next-down-test
+  (testing "next-down"
+    (is (< (m/next-down 1.0) 1.0))
+    (is (float? (m/next-down 1.0)))))
+
+(deftest next-after-test
+  (testing "next-after"
+    (is (> (m/next-after 1.0 2.0) 1.0))
+    (is (< (m/next-after 1.0 0.0) 1.0))))
+
+(deftest get-exponent-test
+  (testing "get-exponent"
+    (is (= 0 (m/get-exponent 1.0)))
+    (is (= 1 (m/get-exponent 2.0)))
+    (is (= 3 (m/get-exponent 8.0)))))
+
+(deftest ulp-test
+  (testing "ulp"
+    (is (> (m/ulp 1.0) 0))
+    (is (float? (m/ulp 1.0)))))
+
+;; --- Integer coercion from doubles ---
+
+(deftest trig-with-ints-test
+  (testing "trig functions accept integers"
+    (is (approx= 0.0 (m/sin 0)))
+    (is (approx= 1.0 (m/cos 0)))
+    (is (approx= 0.0 (m/tan 0)))))
