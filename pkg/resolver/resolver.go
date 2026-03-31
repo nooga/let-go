@@ -18,6 +18,8 @@ type NSResolver struct {
 	// LoadedChunks captures the compiled bytecode for each user-loaded namespace.
 	// Used by the compiler to serialize all namespaces into a bundle.
 	LoadedChunks map[string]*vm.CodeChunk
+	// LoadOrder preserves the order in which namespaces were loaded (dependency order).
+	LoadOrder []string
 }
 
 func NewNSResolver(ctx *compiler.Context, path []string) *NSResolver {
@@ -46,7 +48,9 @@ func (r *NSResolver) loadFile(path string) *vm.Namespace {
 		return nil
 	}
 	if chunk != nil && nns != nil {
-		r.LoadedChunks[nns.Name()] = chunk
+		name := nns.Name()
+		r.LoadedChunks[name] = chunk
+		r.LoadOrder = append(r.LoadOrder, name)
 	}
 	return nns
 }

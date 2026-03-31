@@ -165,12 +165,12 @@ func runLGB(filename string) error {
 		return fmt.Errorf("decoding %s: %w", filename, err)
 	}
 
-	// For bundles with multiple namespaces, execute each NS chunk first.
-	// The main chunk is also in NSChunks under its own name, so we execute
-	// all non-main chunks to populate their defs before running main.
-	if unit.NSChunks != nil && len(unit.NSChunks) > 0 {
-		for name, chunk := range unit.NSChunks {
-			if chunk == unit.MainChunk {
+	// For bundles with multiple namespaces, execute each NS chunk in
+	// dependency order (NSOrder). Skip the main chunk — it runs last.
+	if len(unit.NSOrder) > 0 {
+		for _, name := range unit.NSOrder {
+			chunk := unit.NSChunks[name]
+			if chunk == nil || chunk == unit.MainChunk {
 				continue
 			}
 			f := vm.NewFrame(chunk, nil)
@@ -251,7 +251,8 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 			nsChunks[k] = v
 		}
 		nsChunks[mainNS] = chunk
-		if err := bytecode.EncodeBundle(&lgbBuf, ctx.Consts(), nsChunks); err != nil {
+		nsOrder := append(nsRes.LoadOrder, mainNS)
+		if err := bytecode.EncodeBundleOrdered(&lgbBuf, ctx.Consts(), nsChunks, nsOrder); err != nil {
 			return err
 		}
 	} else {
@@ -347,14 +348,15 @@ func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ds
 
 	// If namespaces were loaded during compilation, use bundle format
 	if len(nsRes.LoadedChunks) > 0 {
-		// Include the main chunk under its namespace name
+		// Include the main chunk under its namespace name, last in order
 		mainNS := ctx.CurrentNS().Name()
 		nsChunks := make(map[string]*vm.CodeChunk, len(nsRes.LoadedChunks)+1)
 		for k, v := range nsRes.LoadedChunks {
 			nsChunks[k] = v
 		}
 		nsChunks[mainNS] = chunk
-		return bytecode.EncodeBundle(out, ctx.Consts(), nsChunks)
+		nsOrder := append(nsRes.LoadOrder, mainNS)
+		return bytecode.EncodeBundleOrdered(out, ctx.Consts(), nsChunks, nsOrder)
 	}
 	return bytecode.EncodeCompilation(out, ctx.Consts(), chunk)
 }

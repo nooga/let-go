@@ -88,6 +88,25 @@ func EncodeBundle(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm.CodeCh
 	return Encode(w, m)
 }
 
+// EncodeBundleOrdered serializes a multi-namespace bundle with explicit ordering.
+// nsOrder determines the chunk index assignment (lower index = earlier dependency).
+func EncodeBundleOrdered(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string) error {
+	b := NewModuleBuilder()
+	// Register namespace chunks in dependency order
+	for _, name := range nsOrder {
+		if chunk, ok := nsChunks[name]; ok {
+			b.SetNSEntry(name, chunk)
+		}
+	}
+	// Collect all func chunks from the const pool
+	vals := consts.Values()
+	for _, v := range vals {
+		b.AddConst(v)
+	}
+	m := b.Build()
+	return Encode(w, m)
+}
+
 // ModuleBuilder collects strings, chunks, and consts for serialization.
 type ModuleBuilder struct {
 	strIndex   map[string]int

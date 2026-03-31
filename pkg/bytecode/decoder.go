@@ -5,6 +5,7 @@ import (
 	"io"
 	"math/big"
 	"regexp"
+	"sort"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -18,6 +19,8 @@ type ExecUnit struct {
 	MainChunk *vm.CodeChunk
 	// NSChunks maps namespace names to their main chunks (for bundles).
 	NSChunks map[string]*vm.CodeChunk
+	// NSOrder lists namespace names in chunk index order (load/dependency order).
+	NSOrder []string
 }
 
 // Decode reads a binary module from r.
@@ -112,15 +115,31 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 	// If NS table is present, resolve chunk indices to live CodeChunks
 	if len(nsTable) > 0 {
 		unit.NSChunks = make(map[string]*vm.CodeChunk, len(nsTable))
+		// Build ordered list sorted by chunk index (preserves dependency order)
+		type nsEntry struct {
+			name string
+			idx  int
+		}
+		entries := make([]nsEntry, 0, len(nsTable))
 		for name, idx := range nsTable {
 			if idx >= len(d.chunks) {
 				return nil, fmt.Errorf("NS table chunk index %d out of range for %q", idx, name)
 			}
 			unit.NSChunks[name] = d.chunks[idx]
+			entries = append(entries, nsEntry{name, idx})
 		}
-		// MainChunk is core's chunk if present
+		sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
+		unit.NSOrder = make([]string, len(entries))
+		for i, e := range entries {
+			unit.NSOrder[i] = e.name
+		}
+		// MainChunk: for core bundles use the "core" entry;
+		// for user bundles use the last entry (highest chunk index = entry point).
 		if coreChunk, ok := unit.NSChunks["core"]; ok {
 			unit.MainChunk = coreChunk
+		} else if len(entries) > 0 {
+			last := entries[len(entries)-1]
+			unit.MainChunk = d.chunks[last.idx]
 		}
 	}
 
