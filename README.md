@@ -274,6 +274,16 @@ lg -b myapp app.lg                  # compile + bundle into executable
 
 The standalone binary is a copy of `lg` with your program's bytecode appended. It needs no external files or runtime — just copy it to another machine and run it.
 
+**Detecting AOT compilation** — the `*compiling-aot*` var is `true` during `-c` and `-b` compilation, `false` at runtime. Use it to prevent side effects (like starting a server or game loop) from running at compile time:
+
+```clojure
+(defn -main []
+  (start-server))
+
+(when-not *compiling-aot*
+  (-main))
+```
+
 ### Building from source
 
 ```bash

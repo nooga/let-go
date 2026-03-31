@@ -460,6 +460,20 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		// Execute namespace chunks in dependency order before main
+		for _, name := range unit.NSOrder {
+			chunk := unit.NSChunks[name]
+			if chunk == nil || chunk == unit.MainChunk {
+				continue
+			}
+			f := vm.NewFrame(chunk, nil)
+			_, err := f.RunProtected()
+			vm.ReleaseFrame(f)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: loading namespace %s: %v\n", name, err)
+				os.Exit(1)
+			}
+		}
 		f := vm.NewFrame(unit.MainChunk, nil)
 		_, err = f.RunProtected()
 		vm.ReleaseFrame(f)
@@ -487,6 +501,10 @@ func main() {
 	rt.SetNSLoader(nsResolver)
 
 	// Compile mode: compile .lg → .lgb
+	if compileOutput != "" || bundleOutput != "" {
+		// Set *compiling-aot* so user code can detect AOT compilation
+		rt.CoreNS.Lookup("*compiling-aot*").(*vm.Var).SetRoot(vm.TRUE)
+	}
 	if compileOutput != "" {
 		if len(files) != 1 {
 			fmt.Fprintln(os.Stderr, "error: -c requires exactly one input file")

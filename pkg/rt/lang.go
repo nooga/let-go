@@ -3454,6 +3454,7 @@ func installLangNS() {
 
 	// vars
 	CurrentNS = ns.Def("*ns*", ns)
+	ns.Def("*compiling-aot*", vm.FALSE)
 
 	// Bootstrap no-op ns macro so source files can declare namespaces before core macro is loaded.
 	// Expands (ns name ...) to (in-ns 'name), ignoring options.
