@@ -15,13 +15,17 @@ type NSResolver struct {
 	ctx      *compiler.Context
 	path     []string
 	cloading map[string]bool
+	// LoadedChunks captures the compiled bytecode for each user-loaded namespace.
+	// Used by the compiler to serialize all namespaces into a bundle.
+	LoadedChunks map[string]*vm.CodeChunk
 }
 
 func NewNSResolver(ctx *compiler.Context, path []string) *NSResolver {
 	return &NSResolver{
-		ctx:      ctx,
-		path:     path,
-		cloading: make(map[string]bool),
+		ctx:          ctx,
+		path:         path,
+		cloading:     make(map[string]bool),
+		LoadedChunks: make(map[string]*vm.CodeChunk),
 	}
 }
 
@@ -34,12 +38,15 @@ func (r *NSResolver) loadFile(path string) *vm.Namespace {
 	ons := r.ctx.CurrentNS()
 	freshCtx := compiler.NewCompiler(r.ctx.Consts(), ons)
 	freshCtx.SetSource(path)
-	_, _, err = freshCtx.CompileMultiple(f)
+	chunk, _, err := freshCtx.CompileMultiple(f)
 	nns := freshCtx.CurrentNS()
 	r.ctx.SetCurrentNS(ons)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to load %s: %s\n", path, err)
 		return nil
+	}
+	if chunk != nil && nns != nil {
+		r.LoadedChunks[nns.Name()] = chunk
 	}
 	return nns
 }

@@ -164,6 +164,24 @@ func runLGB(filename string) error {
 	if err != nil {
 		return fmt.Errorf("decoding %s: %w", filename, err)
 	}
+
+	// For bundles with multiple namespaces, execute each NS chunk first.
+	// The main chunk is also in NSChunks under its own name, so we execute
+	// all non-main chunks to populate their defs before running main.
+	if unit.NSChunks != nil && len(unit.NSChunks) > 0 {
+		for name, chunk := range unit.NSChunks {
+			if chunk == unit.MainChunk {
+				continue
+			}
+			f := vm.NewFrame(chunk, nil)
+			_, err := f.RunProtected()
+			vm.ReleaseFrame(f)
+			if err != nil {
+				return fmt.Errorf("loading namespace %s: %w", name, err)
+			}
+		}
+	}
+
 	f := vm.NewFrame(unit.MainChunk, nil)
 	_, err = f.RunProtected()
 	vm.ReleaseFrame(f)
@@ -212,7 +230,7 @@ func checkBundledLGB() []byte {
 
 // bundleBinary creates a standalone executable by copying the lg binary
 // and appending the compiled LGB + footer.
-func bundleBinary(ctx *compiler.Context, src string, dst string) error {
+func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string) error {
 	ctx.SetSource(src)
 	f, err := os.Open(src)
 	if err != nil {
@@ -226,8 +244,20 @@ func bundleBinary(ctx *compiler.Context, src string, dst string) error {
 
 	// Serialize LGB to memory
 	var lgbBuf bytes.Buffer
-	if err := bytecode.EncodeCompilation(&lgbBuf, ctx.Consts(), chunk); err != nil {
-		return err
+	if len(nsRes.LoadedChunks) > 0 {
+		mainNS := ctx.CurrentNS().Name()
+		nsChunks := make(map[string]*vm.CodeChunk, len(nsRes.LoadedChunks)+1)
+		for k, v := range nsRes.LoadedChunks {
+			nsChunks[k] = v
+		}
+		nsChunks[mainNS] = chunk
+		if err := bytecode.EncodeBundle(&lgbBuf, ctx.Consts(), nsChunks); err != nil {
+			return err
+		}
+	} else {
+		if err := bytecode.EncodeCompilation(&lgbBuf, ctx.Consts(), chunk); err != nil {
+			return err
+		}
 	}
 
 	// Copy our own binary
@@ -298,7 +328,7 @@ func getBaseBinarySize(f *os.File) (int64, error) {
 	return total, nil
 }
 
-func compileLG(ctx *compiler.Context, src string, dst string) error {
+func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string) error {
 	ctx.SetSource(src)
 	f, err := os.Open(src)
 	if err != nil {
@@ -314,6 +344,18 @@ func compileLG(ctx *compiler.Context, src string, dst string) error {
 		return err
 	}
 	defer out.Close()
+
+	// If namespaces were loaded during compilation, use bundle format
+	if len(nsRes.LoadedChunks) > 0 {
+		// Include the main chunk under its namespace name
+		mainNS := ctx.CurrentNS().Name()
+		nsChunks := make(map[string]*vm.CodeChunk, len(nsRes.LoadedChunks)+1)
+		for k, v := range nsRes.LoadedChunks {
+			nsChunks[k] = v
+		}
+		nsChunks[mainNS] = chunk
+		return bytecode.EncodeBundle(out, ctx.Consts(), nsChunks)
+	}
 	return bytecode.EncodeCompilation(out, ctx.Consts(), chunk)
 }
 
@@ -448,7 +490,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error: -c requires exactly one input file")
 			os.Exit(1)
 		}
-		if err := compileLG(context, files[0], compileOutput); err != nil {
+		if err := compileLG(context, nsResolver, files[0], compileOutput); err != nil {
 			fmt.Fprint(os.Stderr, vm.FormatError(err))
 			os.Exit(1)
 		}
@@ -461,7 +503,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error: -b requires exactly one input file")
 			os.Exit(1)
 		}
-		if err := bundleBinary(context, files[0], bundleOutput); err != nil {
+		if err := bundleBinary(context, nsResolver, files[0], bundleOutput); err != nil {
 			fmt.Fprint(os.Stderr, vm.FormatError(err))
 			os.Exit(1)
 		}
