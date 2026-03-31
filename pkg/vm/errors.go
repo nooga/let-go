@@ -106,7 +106,8 @@ func (e *ThrownError) Error() string {
 
 // errorToValue extracts the catchable Value from an error.
 // For ThrownError, returns the thrown Value.
-// For any other error, wraps the error message as an ExInfo.
+// For any other error, wraps the error message as an ExInfo with a :trace key
+// containing the let-go call stack.
 func errorToValue(err error) Value {
 	// Walk the chain to find a ThrownError
 	current := err
@@ -120,9 +121,37 @@ func errorToValue(err error) Value {
 			break
 		}
 	}
-	// Not a ThrownError — extract the root cause message
+	// Not a ThrownError — build a stack trace from the ExecutionError chain
 	msg := innermostMessage(err)
-	return NewExInfo(msg, EmptyPersistentMap, nil)
+	data := EmptyPersistentMap
+
+	// Collect call stack frames
+	var traceEntries []Value
+	current = err
+	for current != nil {
+		if ee, ok := current.(*ExecutionError); ok {
+			fnName := ""
+			if len(ee.message) > 8 && ee.message[:8] == "calling " {
+				fnName = ee.message[8:]
+			}
+			if fnName != "" {
+				loc := "<unknown>"
+				if ee.source != nil {
+					loc = ee.source.String()
+				}
+				traceEntries = append(traceEntries, String(fnName+" ("+loc+")"))
+			}
+			current = ee.cause
+		} else {
+			current = nil
+		}
+	}
+	if len(traceEntries) > 0 {
+		traceList, _ := ListType.Box(traceEntries)
+		data = data.Assoc(Keyword("trace"), traceList).(*PersistentMap)
+	}
+
+	return NewExInfo(msg, data, nil)
 }
 
 // thrownPanic is used to propagate errors through native Go code (map, filter, sort).

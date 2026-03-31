@@ -495,16 +495,17 @@ func (f *Frame) Run() (Value, error) {
 				}
 				out, err = fn.Invoke(a)
 				if err != nil {
+					srcInfo := f.code.LookupSource(f.ip)
+					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 					if len(f.handlers) > 0 {
 						h := f.handlers[len(f.handlers)-1]
 						f.handlers = f.handlers[:len(f.handlers)-1]
 						f.sp = h.savedSP
-						f.push(errorToValue(err))
+						f.push(errorToValue(wrapped))
 						f.ip = h.catchIP
 						continue
 					}
-					srcInfo := f.code.LookupSource(f.ip)
-					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
+					return NIL, wrapped
 				}
 				err = f.drop(int(arity) + 1)
 				if err != nil {
@@ -521,16 +522,17 @@ func (f *Frame) Run() (Value, error) {
 				}
 				out, err = fn.Invoke(nil)
 				if err != nil {
+					srcInfo := f.code.LookupSource(f.ip)
+					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 					if len(f.handlers) > 0 {
 						h := f.handlers[len(f.handlers)-1]
 						f.handlers = f.handlers[:len(f.handlers)-1]
 						f.sp = h.savedSP
-						f.push(errorToValue(err))
+						f.push(errorToValue(wrapped))
 						f.ip = h.catchIP
 						continue
 					}
-					srcInfo := f.code.LookupSource(f.ip)
-					return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
+					return NIL, wrapped
 				}
 			}
 			err := f.push(out)
@@ -558,16 +560,17 @@ func (f *Frame) Run() (Value, error) {
 				if ff, ok := fn.(*Func); !ok {
 					out, err = fn.Invoke(a)
 					if err != nil {
+						srcInfo := f.code.LookupSource(f.ip)
+						wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 						if len(f.handlers) > 0 {
 							h := f.handlers[len(f.handlers)-1]
 							f.handlers = f.handlers[:len(f.handlers)-1]
 							f.sp = h.savedSP
-							f.push(errorToValue(err))
+							f.push(errorToValue(wrapped))
 							f.ip = h.catchIP
 							continue
 						}
-						srcInfo := f.code.LookupSource(f.ip)
-						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
+						return NIL, wrapped
 					}
 					err = f.drop(int(arity) + 1)
 					if err != nil {
@@ -607,16 +610,17 @@ func (f *Frame) Run() (Value, error) {
 				if ff, ok := fn.(*Func); !ok {
 					out, err = fn.Invoke(nil)
 					if err != nil {
+						srcInfo := f.code.LookupSource(f.ip)
+						wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 						if len(f.handlers) > 0 {
 							h := f.handlers[len(f.handlers)-1]
 							f.handlers = f.handlers[:len(f.handlers)-1]
 							f.sp = h.savedSP
-							f.push(errorToValue(err))
+							f.push(errorToValue(wrapped))
 							f.ip = h.catchIP
 							continue
 						}
-						srcInfo := f.code.LookupSource(f.ip)
-						return NIL, NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
+						return NIL, wrapped
 					}
 				} else {
 					f.code = ff.chunk
