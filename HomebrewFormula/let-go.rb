@@ -5,27 +5,27 @@ class LetGo < Formula
   desc "A Clojure dialect implemented as a bytecode VM in Go"
   homepage "https://github.com/nooga/let-go"
   license "MIT"
-  version "1.3.6"
+  version "1.3.7"
 
   on_macos do
     on_intel do
-      url "https://github.com/nooga/let-go/releases/download/v1.3.6/let-go_1.3.6_darwin_amd64.tar.gz"
-      sha256 "a03b53a9a4744adb56898716ab5d90020850264e1a2779c083a43291fe2c18bf"
+      url "https://github.com/nooga/let-go/releases/download/v1.3.7/let-go_1.3.7_darwin_amd64.tar.gz"
+      sha256 "2b3f756e1914c8a326a4d5568e64ad3b137b34a510f41370537d69f97af06653"
     end
     on_arm do
-      url "https://github.com/nooga/let-go/releases/download/v1.3.6/let-go_1.3.6_darwin_arm64.tar.gz"
-      sha256 "d852114011286b890fcc4229b4fe69ac2eed37256815496be96b12302ad38221"
+      url "https://github.com/nooga/let-go/releases/download/v1.3.7/let-go_1.3.7_darwin_arm64.tar.gz"
+      sha256 "15c251f265a911198e908e6a7821b289d4a8b8753932842a427a9c1dc6f8ce60"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/nooga/let-go/releases/download/v1.3.6/let-go_1.3.6_linux_amd64.tar.gz"
-      sha256 "1d1325186bf27c6f4fcaa56c287efb13648db668277ec8b2f891926171739225"
+      url "https://github.com/nooga/let-go/releases/download/v1.3.7/let-go_1.3.7_linux_amd64.tar.gz"
+      sha256 "2c475145af01f1a87c3b4a3709af982a0fa83f6381657229f67c4c2ad0ff6eca"
     end
     on_arm do
-      url "https://github.com/nooga/let-go/releases/download/v1.3.6/let-go_1.3.6_linux_arm64.tar.gz"
-      sha256 "8bdaf8e368781be953fb593d5aa78118526e304f1ea2936b8a020963436e461f"
+      url "https://github.com/nooga/let-go/releases/download/v1.3.7/let-go_1.3.7_linux_arm64.tar.gz"
+      sha256 "8b7cfcbef58bcb4d9713f7295aeb540897153f5826855399bbc5f94ce51faa45"
     end
   end
 
