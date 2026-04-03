@@ -384,7 +384,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	}
 
 	// 4. Write go.mod
-	goMod, err := generateWasmGoMod()
+	goMod, err := generateWasmGoMod(tmpDir)
 	if err != nil {
 		return err
 	}
@@ -455,16 +455,33 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	return nil
 }
 
-func generateWasmGoMod() (string, error) {
+func generateWasmGoMod(tmpDir string) (string, error) {
 	v := version
 	if v != "dev" && v != "" && v[0] >= '0' && v[0] <= '9' {
 		return fmt.Sprintf("module lg-wasm-app\n\ngo 1.26\n\nrequire github.com/nooga/let-go v%s\n", v), nil
 	}
+	// Dev build — try local source first
 	srcDir, err := findLetGoModuleDir()
+	if err == nil {
+		return fmt.Sprintf("module lg-wasm-app\n\ngo 1.26\n\nrequire github.com/nooga/let-go v0.0.0\n\nreplace github.com/nooga/let-go => %s\n", srcDir), nil
+	}
+	// No local source — resolve latest version from module proxy
+	goMod := "module lg-wasm-app\n\ngo 1.26\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
+		return "", err
+	}
+	get := exec.Command("go", "get", "github.com/nooga/let-go@latest")
+	get.Dir = tmpDir
+	get.Stderr = os.Stderr
+	if err := get.Run(); err != nil {
+		return "", fmt.Errorf("resolving let-go module: %w (set LETGO_SRC for local source)", err)
+	}
+	// go get wrote the go.mod with the resolved version — read it back
+	data, err := os.ReadFile(filepath.Join(tmpDir, "go.mod"))
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("module lg-wasm-app\n\ngo 1.26\n\nrequire github.com/nooga/let-go v0.0.0\n\nreplace github.com/nooga/let-go => %s\n", srcDir), nil
+	return string(data), nil
 }
 
 func findLetGoModuleDir() (string, error) {
