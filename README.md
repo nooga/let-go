@@ -31,6 +31,7 @@ Here are some nebulous goals in no particular order:
 - [x] AOT compilation — compile let-go programs to bytecode or standalone binaries,
 - [x] Boot the entire runtime in a single `requestAnimationFrame` and still have 10ms to spare at 60fps,
 - [x] Compile let-go programs to self-contained WASM web apps with terminal emulation,
+- [ ] nREPL server in WASM — connect Emacs/Calva to a let-go VM running in the browser via WebSocket,
 - [ ] Stretch goal: let-go bytecode -> Go translation.
 
 Here are the non goals:
