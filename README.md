@@ -15,6 +15,7 @@ Ships as a single ~9MB binary with ~6ms startup time.
 ### Why let-go?
 
 - **Standalone executables** — compile your program into a single binary with `lg -b myapp main.lg`. No runtime needed, just distribute and run.
+- **WASM web apps** — compile your program to a self-contained HTML page with `lg -w outdir main.lg`. Full terminal emulation via xterm.js, runs in any browser. Deploy to GitHub Pages or open locally.
 - **Fast startup** — 6ms cold start. Pre-compiled bytecode (LGB format) makes boot near-instant even with a large standard library.
 - **Small footprint** — 9MB binary, 13MB idle memory. 7x smaller than Babashka, 33x smaller than JDK.
 - **Batteries included** — core.async channels, HTTP server/client, JSON, Transit, IO, Babashka pods, nREPL server.
@@ -29,6 +30,7 @@ Here are some nebulous goals in no particular order:
 - [x] Provide comfy two-way interop for arbitrary functions and types,
 - [x] AOT compilation — compile let-go programs to bytecode or standalone binaries,
 - [x] Boot the entire runtime in a single `requestAnimationFrame` and still have 10ms to spare at 60fps,
+- [x] Compile let-go programs to self-contained WASM web apps with terminal emulation,
 - [ ] Stretch goal: let-go bytecode -> Go translation.
 
 Here are the non goals:
@@ -252,6 +254,7 @@ lg                                 # REPL
 lg -e '(+ 1 1)'                   # eval expression
 lg myfile.lg                       # run file
 lg -r myfile.lg                    # run file, then REPL
+lg -w outdir myfile.lg             # compile to WASM web app
 ```
 
 ### Compilation and distribution
@@ -274,7 +277,22 @@ lg -b myapp app.lg                  # compile + bundle into executable
 
 The standalone binary is a copy of `lg` with your program's bytecode appended. It needs no external files or runtime — just copy it to another machine and run it.
 
-**Detecting AOT compilation** — the `*compiling-aot*` var is `true` during `-c` and `-b` compilation, `false` at runtime. Use it to prevent side effects (like starting a server or game loop) from running at compile time:
+**Build a WASM web app** — compiles your program into a single HTML page that runs in the browser:
+
+```bash
+lg -w site app.lg                   # compile to web app
+open site/index.html                # open in browser
+```
+
+The output directory contains:
+- `index.html` — self-contained (~6MB, inlined WASM + wasm_exec.js, gzip-compressed)
+- `coi-serviceworker.js` — enables cross-origin isolation for interactive apps (needed on GitHub Pages)
+
+Programs using the `term` namespace get full terminal emulation via xterm.js — ANSI colors, cursor positioning, raw keyboard input all work. The Go WASM runtime runs in a Web Worker with SharedArrayBuffer for blocking `term/read-key`.
+
+For GitHub Pages deployment, just point Pages at the output directory. The service worker handles the required COOP/COEP headers automatically.
+
+**Detecting AOT compilation** — the `*compiling-aot*` var is `true` during `-c`, `-b`, and `-w` compilation, `false` at runtime. Use it to prevent side effects (like starting a server or game loop) from running at compile time:
 
 ```clojure
 (defn -main []
@@ -282,6 +300,13 @@ The standalone binary is a copy of `lg` with your program's bytecode appended. I
 
 (when-not *compiling-aot*
   (-main))
+```
+
+**Detecting WASM at runtime** — the `*in-wasm*` var is `true` when running inside a WASM web app, `false` in native mode. Use it to disable file I/O, adjust animation timing, or enable browser-specific behavior:
+
+```clojure
+(when-not *in-wasm*
+  (spit "debug.log" "only in native mode"))
 ```
 
 ### Building from source
