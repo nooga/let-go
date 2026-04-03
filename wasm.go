@@ -258,8 +258,14 @@ function startWorkerMode() {
 // --- Main-thread mode (output only, no input) ---
 async function startMainThreadMode() {
   showTerminal();
-  term.write('\x1b[33mNote: interactive input unavailable (no cross-origin isolation).\x1b[0m\r\n');
-  term.write('\x1b[33mServe with COOP/COEP headers or add coi-serviceworker.js for full support.\x1b[0m\r\n\r\n');
+  if (location.protocol === 'file:') {
+    term.write('\x1b[33mInteractive input requires a local server. Run:\x1b[0m\r\n');
+    term.write('\x1b[33m  python3 -m http.server\x1b[0m\r\n');
+    term.write('\x1b[33mthen open http://localhost:8000\x1b[0m\r\n\r\n');
+  } else {
+    term.write('\x1b[33mInteractive input unavailable (no cross-origin isolation).\x1b[0m\r\n');
+    term.write('\x1b[33mDeploy coi-serviceworker.js alongside this file.\x1b[0m\r\n\r\n');
+  }
 
   const decoder = new TextDecoder('utf-8');
   const enosys = () => { const e = new Error("not implemented"); e.code = "ENOSYS"; return e; };
