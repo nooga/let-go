@@ -1,4 +1,4 @@
-//go:build !js
+//go:build js && wasm
 
 /*
  * Copyright (c) 2021-2026 Marcin Gasperowicz <xnooga@gmail.com>
@@ -9,74 +9,95 @@ package rt
 
 import (
 	"fmt"
-	"os"
+	"syscall/js"
 	"unicode/utf8"
 
 	"github.com/nooga/let-go/pkg/vm"
-	"golang.org/x/term"
 )
 
-var termOldState *term.State
+// SharedArrayBuffer layout (Int32Array indices):
+//   [0] key ready flag (Atomics.wait/notify target)
+//   [1] key byte count
+//   [6] terminal cols
+//   [7] terminal rows
+// Uint8Array view at byte offset 8, length 16: raw key bytes
 
-// nolint
 func installTermNS() {
+	// Set *in-wasm* so user code can detect WASM environment
+	CoreNS.Lookup("*in-wasm*").(*vm.Var).SetRoot(vm.TRUE)
+
 	ns := vm.NewNamespace("term")
 	ns.Refer(CoreNS, "", true)
 
-	// raw-mode! — enter raw terminal mode, returns true
+	// raw-mode! — no-op in WASM (xterm.js is always raw)
 	rawMode, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if termOldState != nil {
-			return vm.TRUE, nil // already in raw mode
-		}
-		old, err := term.MakeRaw(int(os.Stdin.Fd()))
-		if err != nil {
-			return vm.NIL, nil // not a TTY
-		}
-		termOldState = old
 		return vm.TRUE, nil
 	})
 	ns.Def("raw-mode!", rawMode)
 
-	// restore-mode! — restore terminal to original state
+	// restore-mode! — no-op in WASM
 	restoreMode, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if termOldState == nil {
-			return vm.NIL, nil
-		}
-		err := term.Restore(int(os.Stdin.Fd()), termOldState)
-		termOldState = nil
-		if err != nil {
-			return vm.NIL, fmt.Errorf("restore-mode!: %w", err)
-		}
 		return vm.TRUE, nil
 	})
 	ns.Def("restore-mode!", restoreMode)
 
-	// read-key — read a single keypress, returns a string
-	// Returns single chars, or escape sequences like "\x1b[A" for arrow keys
+	// read-key — blocks via Atomics.wait on SharedArrayBuffer
 	readKey, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		buf := make([]byte, 16)
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			return vm.NIL, nil // EOF or error
+		atomics := js.Global().Get("Atomics")
+		keyInt32 := js.Global().Get("_lgKeyInt32")
+		keyUint8 := js.Global().Get("_lgKeyUint8")
+
+		if keyInt32.IsUndefined() || keyUint8.IsUndefined() {
+			return vm.NIL, fmt.Errorf("read-key: terminal input not available (no SharedArrayBuffer)")
 		}
-		if n == 0 {
+
+		// Flush output before blocking
+		js.Global().Call("_lgFlush")
+
+		// Block until a key is ready
+		atomics.Call("wait", keyInt32, 0, 0)
+
+		// Read key length and bytes
+		keyLen := atomics.Call("load", keyInt32, 1).Int()
+		if keyLen <= 0 || keyLen > 16 {
+			atomics.Call("store", keyInt32, 0, 0)
 			return vm.NIL, nil
 		}
-		return vm.String(buf[:n]), nil
+
+		keyBytes := make([]byte, keyLen)
+		for i := 0; i < keyLen; i++ {
+			keyBytes[i] = byte(keyUint8.Index(i).Int())
+		}
+
+		// Reset flag for next key
+		atomics.Call("store", keyInt32, 0, 0)
+
+		return vm.String(keyBytes), nil
 	})
 	ns.Def("read-key", readKey)
 
-	// size — returns [cols rows] or nil if not a TTY
+	// size — read from SharedArrayBuffer
 	sizeFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		w, h, err := term.GetSize(int(os.Stdout.Fd()))
-		if err != nil {
-			return vm.NIL, nil // not a TTY
+		keyInt32 := js.Global().Get("_lgKeyInt32")
+		if keyInt32.IsUndefined() {
+			return vm.NewPersistentVector([]vm.Value{vm.MakeInt(80), vm.MakeInt(24)}), nil
+		}
+		atomics := js.Global().Get("Atomics")
+		w := atomics.Call("load", keyInt32, 6).Int()
+		h := atomics.Call("load", keyInt32, 7).Int()
+		if w == 0 {
+			w = 80
+		}
+		if h == 0 {
+			h = 24
 		}
 		return vm.NewPersistentVector([]vm.Value{vm.MakeInt(w), vm.MakeInt(h)}), nil
 	})
 	ns.Def("size", sizeFn)
 
-	// move-cursor — (move-cursor col row) — 1-based ANSI positioning
+	// --- Output functions — identical to native, just emit ANSI via fmt.Print ---
+	// xterm.js handles all ANSI escape sequences natively.
+
 	moveCursor, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("move-cursor expects 2 args (col row)")
@@ -91,35 +112,30 @@ func installTermNS() {
 	})
 	ns.Def("move-cursor", moveCursor)
 
-	// clear — clear screen
 	clearFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[2J")
 		return vm.NIL, nil
 	})
 	ns.Def("clear", clearFn)
 
-	// clear-line — clear current line
 	clearLine, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[2K")
 		return vm.NIL, nil
 	})
 	ns.Def("clear-line", clearLine)
 
-	// hide-cursor — hide terminal cursor
 	hideCursor, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[?25l")
 		return vm.NIL, nil
 	})
 	ns.Def("hide-cursor", hideCursor)
 
-	// show-cursor — show terminal cursor
 	showCursor, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[?25h")
 		return vm.NIL, nil
 	})
 	ns.Def("show-cursor", showCursor)
 
-	// set-fg — (set-fg r g b) or (set-fg color-code)
 	setFg, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		switch len(vs) {
 		case 1:
@@ -143,7 +159,6 @@ func installTermNS() {
 	})
 	ns.Def("set-fg", setFg)
 
-	// set-bg — (set-bg r g b) or (set-bg color-code)
 	setBg, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		switch len(vs) {
 		case 1:
@@ -167,35 +182,30 @@ func installTermNS() {
 	})
 	ns.Def("set-bg", setBg)
 
-	// reset-style — reset all ANSI attributes
 	resetStyle, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[0m")
 		return vm.NIL, nil
 	})
 	ns.Def("reset-style", resetStyle)
 
-	// bold — enable bold
 	bold, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[1m")
 		return vm.NIL, nil
 	})
 	ns.Def("bold", bold)
 
-	// underline — enable underline
 	underline, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[4m")
 		return vm.NIL, nil
 	})
 	ns.Def("underline", underline)
 
-	// inverse — enable inverse/reverse video
 	inverse, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[7m")
 		return vm.NIL, nil
 	})
 	ns.Def("inverse", inverse)
 
-	// write — (write str) — write string at current cursor position, no newline
 	writeFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("write expects 1 arg")
@@ -211,7 +221,6 @@ func installTermNS() {
 	})
 	ns.Def("write", writeFn)
 
-	// write-at — (write-at col row str) — write string at position
 	writeAt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
 			return vm.NIL, fmt.Errorf("write-at expects 3 args (col row str)")
@@ -232,7 +241,6 @@ func installTermNS() {
 	})
 	ns.Def("write-at", writeAt)
 
-	// char-width — (char-width str) — returns display width of first char (1 or 2 for CJK)
 	charWidth, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("char-width expects 1 arg")
@@ -249,23 +257,24 @@ func installTermNS() {
 	})
 	ns.Def("char-width", charWidth)
 
-	// alternate-screen — switch to alternate screen buffer
 	altScreen, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[?1049h")
 		return vm.NIL, nil
 	})
 	ns.Def("alternate-screen", altScreen)
 
-	// main-screen — switch back to main screen buffer
 	mainScreen, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		fmt.Print("\033[?1049l")
 		return vm.NIL, nil
 	})
 	ns.Def("main-screen", mainScreen)
 
-	// flush — flush stdout
+	// flush — flush buffered output to xterm.js via postMessage
 	flushFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		os.Stdout.Sync()
+		flush := js.Global().Get("_lgFlush")
+		if !flush.IsUndefined() {
+			flush.Invoke()
+		}
 		return vm.NIL, nil
 	})
 	ns.Def("flush", flushFn)

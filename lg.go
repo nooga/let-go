@@ -386,6 +386,7 @@ var debug bool
 var showVersion bool
 var compileOutput string
 var bundleOutput string
+var wasmOutput string
 
 func init() {
 	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
@@ -397,6 +398,7 @@ func init() {
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.StringVar(&compileOutput, "c", "", "compile .lg file to .lgb bytecode (specify output path)")
 	flag.StringVar(&bundleOutput, "b", "", "bundle .lg file into a standalone executable (specify output path)")
+	flag.StringVar(&wasmOutput, "w", "", "build .lg file into a WASM web app (specify output directory)")
 
 	completionTerminators = map[byte]bool{
 		'(':  true,
@@ -501,7 +503,7 @@ func main() {
 	rt.SetNSLoader(nsResolver)
 
 	// Compile mode: compile .lg → .lgb
-	if compileOutput != "" || bundleOutput != "" {
+	if compileOutput != "" || bundleOutput != "" || wasmOutput != "" {
 		// Set *compiling-aot* so user code can detect AOT compilation
 		rt.CoreNS.Lookup("*compiling-aot*").(*vm.Var).SetRoot(vm.TRUE)
 	}
@@ -525,6 +527,19 @@ func main() {
 		}
 		if err := bundleBinary(context, nsResolver, files[0], bundleOutput); err != nil {
 			fmt.Fprint(os.Stderr, vm.FormatError(err))
+			os.Exit(1)
+		}
+		return
+	}
+
+	// WASM mode: compile .lg → web app directory
+	if wasmOutput != "" {
+		if len(files) != 1 {
+			fmt.Fprintln(os.Stderr, "error: -w requires exactly one input file")
+			os.Exit(1)
+		}
+		if err := buildWasm(context, nsResolver, files[0], wasmOutput); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		return
