@@ -514,24 +514,41 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 			return vm.Float(float64(i)), nil
 		}
 	}
-	// Hex literal: 0xff
-	if len(sn) > 2 && sn[0] == '0' && (sn[1] == 'x' || sn[1] == 'X') {
-		if i, err := strconv.ParseInt(sn[2:], 16, 64); err == nil {
+	// Handle optional negative sign for special number formats
+	numStr := sn
+	neg := false
+	if len(numStr) > 0 && numStr[0] == '-' {
+		neg = true
+		numStr = numStr[1:]
+	}
+	// Hex literal: 0xff or -0xff
+	if len(numStr) > 2 && numStr[0] == '0' && (numStr[1] == 'x' || numStr[1] == 'X') {
+		if i, err := strconv.ParseUint(numStr[2:], 16, 64); err == nil {
+			n := int64(i)
+			if neg {
+				n = -n
+			}
 			r.closeToken(TokenNumber)
-			return vm.MakeInt(int(i)), nil
+			return vm.MakeInt(int(n)), nil
 		}
 	}
 	// Octal literal: 0377
-	if len(sn) > 1 && sn[0] == '0' && sn[1] >= '0' && sn[1] <= '7' {
-		if i, err := strconv.ParseInt(sn[1:], 8, 64); err == nil {
+	if len(numStr) > 1 && numStr[0] == '0' && numStr[1] >= '0' && numStr[1] <= '7' {
+		if i, err := strconv.ParseInt(numStr[1:], 8, 64); err == nil {
+			if neg {
+				i = -i
+			}
 			r.closeToken(TokenNumber)
 			return vm.MakeInt(int(i)), nil
 		}
 	}
 	// Radix literal: 2r1010, 16rFF
-	if idx := strings.IndexByte(sn, 'r'); idx > 0 {
-		if radix, err := strconv.Atoi(sn[:idx]); err == nil && radix >= 2 && radix <= 36 {
-			if i, err := strconv.ParseInt(sn[idx+1:], radix, 64); err == nil {
+	if idx := strings.IndexByte(numStr, 'r'); idx > 0 {
+		if radix, err := strconv.Atoi(numStr[:idx]); err == nil && radix >= 2 && radix <= 36 {
+			if i, err := strconv.ParseInt(numStr[idx+1:], radix, 64); err == nil {
+				if neg {
+					i = -i
+				}
 				r.closeToken(TokenNumber)
 				return vm.MakeInt(int(i)), nil
 			}
@@ -1003,35 +1020,132 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 			return vm.NIL, NewReaderError(r, "reading splicing reader conditional")
 		}
 	}
-	flist, err := readList(r, n)
-	if err != nil {
+	if n != '(' {
 		return vm.NIL, NewReaderError(r, "reading reader conditional, list expected")
 	}
-	list := flist.(*vm.List)
+
+	// Parse key-value pairs manually so we can skip unreadable branches.
 	var form vm.Value = vm.VOID
-	for list != nil && list != vm.EmptyList {
-		e := list.First()
-		rest := list.Next()
-		if rest == nil || rest == vm.EmptyList {
-			break // odd number of elements — no value for this key
+	found := false
+	for {
+		ch, err := r.eatWhitespace()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "reading reader conditional")
 		}
-		if e == lgConditionalTag || e == defaultConditionalTag {
-			form = rest.First()
+		if ch == ')' {
 			break
 		}
-		// Skip value and advance to next key
-		rest2 := rest.Next()
-		if rest2 == nil {
-			break
+		// Read the platform key (must be a keyword)
+		if err = r.unread(); err != nil {
+			return vm.NIL, NewReaderError(r, "reading reader conditional")
 		}
-		var ok bool
-		list, ok = rest2.(*vm.List)
-		if !ok {
-			break
+		key, err := r.Read()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "reading reader conditional key")
+		}
+		isMatch := !found && (key == lgConditionalTag || key == defaultConditionalTag)
+		if isMatch {
+			// Read the value form normally
+			val, err := r.Read()
+			if err != nil {
+				return vm.NIL, NewReaderError(r, "reading reader conditional value")
+			}
+			form = val
+			found = true
+		} else {
+			// Skip the value form — it may contain dialect-specific syntax
+			// we can't parse. Count balanced parens/brackets/braces.
+			skipReaderForm(r)
 		}
 	}
 	r.splicing = splicing
 	return form, nil
+}
+
+// skipReaderForm consumes a single form from the reader, handling balanced
+// delimiters. Used to skip unmatched reader conditional branches that may
+// contain syntax our reader doesn't support.
+func skipReaderForm(r *LispReader) {
+	ch, err := r.eatWhitespace()
+	if err != nil {
+		return
+	}
+	switch ch {
+	case '(', '[', '{':
+		close := map[rune]rune{'(': ')', '[': ']', '{': '}'}[ch]
+		depth := 1
+		inString := false
+		for depth > 0 {
+			c, err := r.next()
+			if err != nil {
+				return
+			}
+			if inString {
+				if c == '\\' {
+					r.next() // skip escaped char
+				} else if c == '"' {
+					inString = false
+				}
+				continue
+			}
+			switch c {
+			case '"':
+				inString = true
+			case '(', '[', '{':
+				depth++
+			case close:
+				depth--
+			case ')', ']', '}':
+				// closing a different delimiter type — still decrement if matching any open
+				depth--
+			}
+		}
+	case '"':
+		// Skip string
+		for {
+			c, err := r.next()
+			if err != nil || c == '"' {
+				return
+			}
+			if c == '\\' {
+				r.next()
+			}
+		}
+	case '#':
+		// Hash dispatch — skip the next form too
+		c, err := r.next()
+		if err != nil {
+			return
+		}
+		if c == '(' || c == '{' {
+			r.unread()
+			skipReaderForm(r)
+		} else {
+			// #something — skip to whitespace/delimiter
+			for {
+				c, err := r.next()
+				if err != nil {
+					return
+				}
+				if isWhitespace(c) || isTerminatingMacro(c) {
+					r.unread()
+					return
+				}
+			}
+		}
+	default:
+		// Atom (symbol, number, keyword, etc.) — skip to whitespace/delimiter
+		for {
+			c, err := r.next()
+			if err != nil {
+				return
+			}
+			if isWhitespace(c) || isTerminatingMacro(c) {
+				r.unread()
+				return
+			}
+		}
+	}
 }
 
 func readMeta(r *LispReader, _ rune) (vm.Value, error) {

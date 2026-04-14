@@ -40,7 +40,7 @@ var knownFailing = map[string]bool{
 	"min":              true, // min with BigDecimal
 	"min_key":          true, // min-key edge cases
 	"mod":              true, // mod edge cases
-	"nan_qmark":        true, // nan? edge cases
+
 	"not_empty":        true, // not-empty on list containing nil
 	"nth":              true, // nth out-of-bounds doesn't throw
 	"nthrest":          true, // nthrest edge cases
