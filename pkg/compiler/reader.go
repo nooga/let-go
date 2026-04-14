@@ -154,14 +154,16 @@ func (r *LispReader) eatWhitespace() (rune, error) {
 
 func appendNonVoid(r *LispReader, vs []vm.Value, v vm.Value) []vm.Value {
 	if v.Type() == vm.VoidType {
+		r.splicing = false
 		return vs
 	}
 	if r.splicing {
+		r.splicing = false
 		seq, ok := v.(vm.Seq)
 		if !ok {
 			return vs
 		}
-		for seq != vm.EmptyList {
+		for seq != nil && seq != vm.EmptyList {
 			vs = append(vs, seq.First())
 			seq = seq.Next()
 		}
@@ -963,13 +965,26 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 	}
 	list := flist.(*vm.List)
 	var form vm.Value = vm.VOID
-	for list != vm.EmptyList {
+	for list != nil && list != vm.EmptyList {
 		e := list.First()
+		rest := list.Next()
+		if rest == nil || rest == vm.EmptyList {
+			break // odd number of elements — no value for this key
+		}
 		if e == lgConditionalTag || e == defaultConditionalTag {
-			form = list.Next().First()
+			form = rest.First()
 			break
 		}
-		list = list.Next().Next().(*vm.List)
+		// Skip value and advance to next key
+		rest2 := rest.Next()
+		if rest2 == nil {
+			break
+		}
+		var ok bool
+		list, ok = rest2.(*vm.List)
+		if !ok {
+			break
+		}
 	}
 	r.splicing = splicing
 	return form, nil

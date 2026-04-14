@@ -21,6 +21,29 @@ import (
 
 var nsRegistry map[string]*vm.Namespace
 
+// nsAliases maps alternative namespace names to canonical names.
+// e.g. "clojure.core" → "core", "clojure.test" → "test", "clojure.string" → "string"
+// Both names resolve to the same *Namespace object.
+var nsAliases = map[string]string{
+	"clojure.core":   "core",
+	"clojure.test":   "test",
+	"clojure.string": "string",
+	"clojure.set":    "set",
+	"clojure.walk":   "walk",
+	"clojure.edn":    "edn",
+	"clojure.zip":    "zip",
+	"clojure.data":   "data",
+	"clojure.pprint": "pprint",
+}
+
+// resolveNSAlias returns the canonical name for a namespace.
+func resolveNSAlias(name string) string {
+	if canonical, ok := nsAliases[name]; ok {
+		return canonical
+	}
+	return name
+}
+
 type NSLoader interface {
 	Load(string) *vm.Namespace
 }
@@ -36,7 +59,7 @@ func init() {
 
 	// Register global namespace lookup so qualified symbols (foo/x) work
 	vm.SetNSLookup(func(name string) *vm.Namespace {
-		return nsRegistry[name]
+		return nsRegistry[resolveNSAlias(name)]
 	})
 
 	// Wire up ValueEquals for OP_EQ fast path in the VM
@@ -76,11 +99,11 @@ func FuzzyNamespacedSymbolLookup(currentNS *vm.Namespace, s vm.Symbol) []vm.Symb
 }
 
 func NS(name string) *vm.Namespace {
-	return LookupOrRegisterNS(name)
+	return LookupOrRegisterNS(resolveNSAlias(name))
 }
 
 func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
-	nsRegistry[namespace.Name()] = namespace
+	nsRegistry[resolveNSAlias(namespace.Name())] = namespace
 	return namespace
 }
 
@@ -96,13 +119,14 @@ func MarkNSNeedsLoad(name string) {
 
 // LookupNS returns a namespace if it exists, nil otherwise. Does not create.
 func LookupNS(name string) *vm.Namespace {
-	return nsRegistry[name]
+	return nsRegistry[resolveNSAlias(name)]
 }
 
 // DefNSBare creates and registers a minimal namespace (with CoreNS refer)
 // without triggering the loader. Used during bytecode decoding to create
 // var homes for not-yet-loaded namespaces.
 func DefNSBare(name string) *vm.Namespace {
+	name = resolveNSAlias(name)
 	if e := nsRegistry[name]; e != nil {
 		return e
 	}
@@ -180,10 +204,28 @@ func valueEquals(a, b vm.Value) bool {
 		}
 		// Cross-type vector equality (ArrayVector vs PersistentVector)
 		if eq, ok := a.(interface{ Equals(vm.Value) bool }); ok {
-			return eq.Equals(b)
+			if eq.Equals(b) {
+				return true
+			}
 		}
 		if eq, ok := b.(interface{ Equals(vm.Value) bool }); ok {
-			return eq.Equals(a)
+			if eq.Equals(a) {
+				return true
+			}
+		}
+		// Cross-type sequential equality: compare any two seq-like
+		// values element-by-element (lists, vectors, cons, lazy seqs,
+		// ranges — but not maps or sets).
+		if isSequentialType(a) && isSequentialType(b) {
+			as := toSeq(a)
+			bs := toSeq(b)
+			for as != nil && bs != nil {
+				if !valueEquals(as.First(), bs.First()) {
+					return false
+				}
+				as, bs = as.Next(), bs.Next()
+			}
+			return as == nil && bs == nil
 		}
 		return false
 	}
@@ -279,6 +321,31 @@ func valueEquals(a, b vm.Value) bool {
 		}
 		return a == b
 	}
+}
+
+// isSequentialType returns true for types that participate in cross-type
+// sequential equality (lists, vectors, cons, lazy seqs, ranges — not maps/sets).
+func isSequentialType(v vm.Value) bool {
+	switch v.(type) {
+	case vm.ArrayVector, *vm.PersistentVector, *vm.List, *vm.Cons, *vm.LazySeq:
+		return true
+	case *vm.PersistentMap, vm.Map, *vm.PersistentSet, vm.Set:
+		return false
+	}
+	// Range and other Seq implementations
+	_, isSeq := v.(vm.Seq)
+	return isSeq
+}
+
+// toSeq converts a sequential value to a Seq for element-by-element comparison.
+func toSeq(v vm.Value) vm.Seq {
+	if s, ok := v.(vm.Seq); ok {
+		return s
+	}
+	if sq, ok := v.(vm.Sequable); ok {
+		return sq.Seq()
+	}
+	return nil
 }
 
 func seqOf(v vm.Value) (vm.Seq, error) {
@@ -550,7 +617,12 @@ func installLangNS() {
 
 	vector, err := vm.NativeFnType.WrapNoErr(vm.NewArrayVector)
 	list, err := vm.NativeFnType.WrapNoErr(vm.NewList)
-	hashMap, err := vm.NativeFnType.WrapNoErr(vm.NewMap)
+	hashMap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs)%2 != 0 {
+			return vm.NIL, fmt.Errorf("hash-map requires an even number of arguments, got %d", len(vs))
+		}
+		return vm.NewMap(vs), nil
+	})
 	hashSet, err := vm.NativeFnType.WrapNoErr(vm.NewSet)
 
 	vec, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -946,17 +1018,23 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("nth index must be an integer")
 		}
 		n := int(idx)
+		hasDefault := vl == 3
 		var notFound vm.Value = vm.NIL
-		if vl == 3 {
+		if hasDefault {
 			notFound = vs[2]
 		}
 		if vs[0] == vm.NIL {
-			return notFound, nil
+			if hasDefault {
+				return notFound, nil
+			}
+			return vm.NIL, nil
 		}
 		// Fast path: Lookup types (ArrayVector, PersistentVector, String)
 		if l, ok := vs[0].(vm.Lookup); ok {
-			v := l.ValueAtOr(vm.Int(n), notFound)
-			return v, nil
+			if hasDefault {
+				return l.ValueAtOr(vm.Int(n), notFound), nil
+			}
+			return l.ValueAt(vm.Int(n)), nil
 		}
 		// Seq path: linear walk
 		s, err := seqOf(vs[0])
@@ -1175,7 +1253,7 @@ func installLangNS() {
 			seq = seq.Next()
 		}
 
-		return vm.FALSE, nil
+		return vm.NIL, nil
 	})
 
 	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -1804,6 +1882,9 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
+		}
 		switch v := vs[0].(type) {
 		case vm.ArrayVector:
 			if len(v) == 0 {
@@ -1815,17 +1896,13 @@ func installLangNS() {
 				return vm.NIL, nil
 			}
 			return v.ValueAt(vm.Int(v.RawCount() - 1)), nil
-		case vm.Seq:
+		case *vm.List:
+			if v == vm.EmptyList {
+				return vm.NIL, nil
+			}
 			return v.First(), nil
 		default:
-			if sq, ok := vs[0].(vm.Sequable); ok {
-				s := sq.Seq()
-				if s == nil || s == vm.EmptyList {
-					return vm.NIL, nil
-				}
-				return s.First(), nil
-			}
-			return vm.NIL, fmt.Errorf("peek expected Seq or Vec")
+			return vm.NIL, fmt.Errorf("peek not supported on %s", vs[0].Type())
 		}
 	})
 
@@ -2013,7 +2090,7 @@ func installLangNS() {
 		return vm.Boolean(strings.Contains(string(s), string(p))), nil
 	})
 
-	// subs: substring
+	// subs: substring (character-indexed, not byte-indexed)
 	subs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -2026,9 +2103,9 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("subs expected Int start")
 		}
-		str := string(s)
+		runes := []rune(string(s))
 		si := int(start)
-		if si < 0 || si > len(str) {
+		if si < 0 || si > len(runes) {
 			return vm.NIL, fmt.Errorf("string index out of range")
 		}
 		if len(vs) == 3 {
@@ -2037,12 +2114,12 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("subs expected Int end")
 			}
 			ei := int(end)
-			if ei < si || ei > len(str) {
+			if ei < si || ei > len(runes) {
 				return vm.NIL, fmt.Errorf("string index out of range")
 			}
-			return vm.String(str[si:ei]), nil
+			return vm.String(string(runes[si:ei])), nil
 		}
-		return vm.String(str[si:]), nil
+		return vm.String(string(runes[si:])), nil
 	})
 
 	// format: sprintf-style string formatting
@@ -2160,6 +2237,12 @@ func installLangNS() {
 	shuffle, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if vs[0] == vm.NIL {
+			return vm.NIL, fmt.Errorf("shuffle not supported on nil")
+		}
+		if _, ok := vs[0].(vm.String); ok {
+			return vm.NIL, fmt.Errorf("shuffle not supported on string")
 		}
 		// Collect into slice
 		s, err := seqOf(vs[0])
@@ -3421,8 +3504,14 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
-		_, ok := vs[0].(vm.Fn)
-		return vm.Boolean(ok), nil
+		// fn? returns true only for actual functions, not all IFn implementors
+		// (keywords, maps, sets, vectors are invokable but are not fn?)
+		switch vs[0].(type) {
+		case *vm.NativeFn, *vm.Func, *vm.Closure, *vm.MultiArityFn, *vm.MultiFn:
+			return vm.TRUE, nil
+		default:
+			return vm.FALSE, nil
+		}
 	})
 
 	// unreduced — unwrap Reduced, or return value as-is

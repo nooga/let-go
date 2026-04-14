@@ -127,6 +127,30 @@ func (s *PersistentSet) Contains(value Value) Boolean {
 	return FALSE
 }
 
+// --- Lookup (for get) ---
+
+func (s *PersistentSet) ValueAt(key Value) Value {
+	if s.impl.root == nil {
+		return NIL
+	}
+	_, found := s.impl.root.find(0, hashValue(key), key)
+	if found {
+		return key
+	}
+	return NIL
+}
+
+func (s *PersistentSet) ValueAtOr(key Value, dflt Value) Value {
+	if s.impl.root == nil {
+		return dflt
+	}
+	_, found := s.impl.root.find(0, hashValue(key), key)
+	if found {
+		return key
+	}
+	return dflt
+}
+
 // --- Sequable ---
 
 func (s *PersistentSet) Seq() Seq {

@@ -9,7 +9,8 @@
 
 ;; thrown?: portable exception assertion.
 ;; Used as (is (p/thrown? expr)) — must return truthy on exception.
+;; Note: let-go catch syntax is (catch bindSym body...) not (catch Class bindSym body...)
 (defmacro thrown? [& body]
   `(try
      (do ~@body false)
-     (catch Exception _# true)))
+     (catch _# true)))
