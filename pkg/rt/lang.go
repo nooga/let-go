@@ -54,6 +54,10 @@ func SetNSLoader(loader NSLoader) {
 	nsLoader = loader
 }
 
+func GetNSLoader() NSLoader {
+	return nsLoader
+}
+
 func init() {
 	nsRegistry = make(map[string]*vm.Namespace)
 

@@ -1032,6 +1032,19 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "reading reader conditional")
 		}
+		// Skip line comments
+		for ch == ';' {
+			for ch != '\n' && ch != '\r' {
+				ch, err = r.next()
+				if err != nil {
+					return vm.NIL, NewReaderError(r, "reading reader conditional")
+				}
+			}
+			ch, err = r.eatWhitespace()
+			if err != nil {
+				return vm.NIL, NewReaderError(r, "reading reader conditional")
+			}
+		}
 		if ch == ')' {
 			break
 		}
@@ -1069,6 +1082,19 @@ func skipReaderForm(r *LispReader) {
 	ch, err := r.eatWhitespace()
 	if err != nil {
 		return
+	}
+	// Skip line comments
+	for ch == ';' {
+		for ch != '\n' && ch != '\r' {
+			ch, err = r.next()
+			if err != nil {
+				return
+			}
+		}
+		ch, err = r.eatWhitespace()
+		if err != nil {
+			return
+		}
 	}
 	switch ch {
 	case '(', '[', '{':
