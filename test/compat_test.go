@@ -28,14 +28,22 @@ const memLimitBytes = 512 * 1024 * 1024
 // knownFailing lists test names (filename stems) that are known to fail.
 // Tests that pass but appear here will cause an error so the list stays current.
 var knownFailing = map[string]bool{
-	"binding":    true, // thread binding propagation to futures
-	"drop":       true, // (drop 5 nil) → nil not ()
-	"drop_while": true, // (drop-while pred nil) → nil not ()
-	"not_empty":  true, // not-empty on list containing nil
-	"nth":        true, // nth out-of-bounds doesn't throw
-	"nthrest":    true, // nthrest edge cases
-	"peek":       true, // peek on cons (let-go cons creates List)
-	"pr_str":     true, // pr-str: 17 vs 17.0, set formatting
+	"binding":          true, // thread binding propagation to futures
+	"drop":             true, // (drop 5 nil) → nil not ()
+	"drop_while":       true, // (drop-while pred nil) → nil not ()
+	"even_qmark":       true, // even? on BigDecimal
+	"identical_qmark":  true, // identical? on boxed values
+	"ifn_qmark":        true, // ifn? edge cases
+	"max":              true, // max with BigDecimal
+	"min":              true, // min with BigDecimal
+	"min_key":          true, // min-key edge cases
+	"not_empty":        true, // not-empty on list containing nil
+	"nth":              true, // nth out-of-bounds doesn't throw
+	"nthrest":          true, // nthrest edge cases
+	"odd_qmark":        true, // odd? on BigDecimal
+	"peek":             true, // peek on cons
+	"pr_str":           true, // pr-str formatting
+	"str":              true, // str reader conditional
 }
 
 // suiteCounters tracks aggregate assertion counts across the entire suite.

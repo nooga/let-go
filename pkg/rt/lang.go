@@ -745,8 +745,11 @@ func installLangNS() {
 	})
 
 	dissoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		if len(vs) == 0 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments 0")
+		}
+		if len(vs) == 1 {
+			return vs[0], nil
 		}
 		coll, ok := vs[0].(vm.Associative)
 		if !ok {
@@ -806,8 +809,8 @@ func installLangNS() {
 	})
 
 	conj, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		if len(vs) == 0 {
+			return vm.ArrayVector{}, nil
 		}
 		if len(vs) == 1 {
 			return vs[0], nil
@@ -3529,6 +3532,31 @@ func installLangNS() {
 		}
 	})
 
+	// ifn? — true if value implements Fn (invokable: functions, keywords, maps, sets, vectors)
+	isIFn, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		_, ok := vs[0].(vm.Fn)
+		return vm.Boolean(ok), nil
+	})
+
+	// identical? — reference/value identity
+	identical, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		return vm.Boolean(vs[0] == vs[1]), nil
+	})
+
+	// any? — returns true for everything (every value satisfies any?)
+	anyp, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		return vm.TRUE, nil
+	})
+
 	// unreduced — unwrap Reduced, or return value as-is
 	unreduced, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -3797,6 +3825,9 @@ func installLangNS() {
 	ns.Def("transformer-seq*", transformerSeq)
 	ns.Def("compare", comparef)
 	ns.Def("fn?", isFn)
+	ns.Def("ifn?", isIFn)
+	ns.Def("identical?", identical)
+	ns.Def("any?", anyp)
 	ns.Def("bit-and", bitAnd)
 	ns.Def("bit-or", bitOr)
 	ns.Def("bit-xor", bitXor)

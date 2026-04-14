@@ -502,6 +502,50 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 			return bi, nil
 		}
 	}
+	// Check for BigDecimal suffix: 123.456M → Float approximation
+	if len(sn) > 1 && (sn[len(sn)-1] == 'M' || sn[len(sn)-1] == 'm') {
+		numStr := sn[:len(sn)-1]
+		if f, err := strconv.ParseFloat(numStr, 64); err == nil {
+			r.closeToken(TokenNumber)
+			return vm.Float(f), nil
+		}
+		if i, err := strconv.Atoi(numStr); err == nil {
+			r.closeToken(TokenNumber)
+			return vm.Float(float64(i)), nil
+		}
+	}
+	// Hex literal: 0xff
+	if len(sn) > 2 && sn[0] == '0' && (sn[1] == 'x' || sn[1] == 'X') {
+		if i, err := strconv.ParseInt(sn[2:], 16, 64); err == nil {
+			r.closeToken(TokenNumber)
+			return vm.MakeInt(int(i)), nil
+		}
+	}
+	// Octal literal: 0377
+	if len(sn) > 1 && sn[0] == '0' && sn[1] >= '0' && sn[1] <= '7' {
+		if i, err := strconv.ParseInt(sn[1:], 8, 64); err == nil {
+			r.closeToken(TokenNumber)
+			return vm.MakeInt(int(i)), nil
+		}
+	}
+	// Radix literal: 2r1010, 16rFF
+	if idx := strings.IndexByte(sn, 'r'); idx > 0 {
+		if radix, err := strconv.Atoi(sn[:idx]); err == nil && radix >= 2 && radix <= 36 {
+			if i, err := strconv.ParseInt(sn[idx+1:], radix, 64); err == nil {
+				r.closeToken(TokenNumber)
+				return vm.MakeInt(int(i)), nil
+			}
+		}
+	}
+	// Ratio literal: 1/2, 22/7
+	if idx := strings.IndexByte(sn, '/'); idx > 0 {
+		num, nerr := strconv.ParseFloat(sn[:idx], 64)
+		den, derr := strconv.ParseFloat(sn[idx+1:], 64)
+		if nerr == nil && derr == nil && den != 0 {
+			r.closeToken(TokenNumber)
+			return vm.Float(num / den), nil
+		}
+	}
 	// Try int first
 	i, err := strconv.Atoi(sn)
 	if err == nil {
