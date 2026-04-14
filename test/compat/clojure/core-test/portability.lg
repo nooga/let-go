@@ -1,0 +1,15 @@
+(ns clojure.core-test.portability
+  (:require [test :refer :all]))
+
+;; when-var-exists: In let-go we don't have compile-time resolve,
+;; so we just always emit the body. Tests for missing vars will fail
+;; at compile time and the Go runner treats those as SKIPs.
+(defmacro when-var-exists [var-sym & body]
+  `(do ~@body))
+
+;; thrown?: portable exception assertion.
+;; Used as (is (p/thrown? expr)) — must return truthy on exception.
+(defmacro thrown? [& body]
+  `(try
+     (do ~@body false)
+     (catch Exception _# true)))

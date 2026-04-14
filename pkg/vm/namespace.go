@@ -83,6 +83,16 @@ func (n *Namespace) LookupLocal(symbol Symbol) *Var {
 	return n.registry[symbol]
 }
 
+// CopyVarsFrom copies all public vars from src into this namespace's registry.
+// Useful for creating namespace aliases (e.g. clojure.test → test).
+func (n *Namespace) CopyVarsFrom(src *Namespace) {
+	for k, v := range src.registry {
+		if !v.isPrivate {
+			n.registry[k] = v
+		}
+	}
+}
+
 func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 	val, ok := n.registry[symbol]
 	if !ok {

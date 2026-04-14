@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -1029,6 +1030,28 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 	return vm.NewList([]vm.Value{vm.Symbol("with-meta"), form, m}), nil
 }
 
+func readSymbolicValue(r *LispReader, _ rune) (vm.Value, error) {
+	ch, err := r.next()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading symbolic value")
+	}
+	token, err := readToken(r, ch)
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading symbolic value")
+	}
+	s := string(token.(vm.Symbol))
+	switch s {
+	case "Inf":
+		return vm.Float(math.Inf(1)), nil
+	case "-Inf":
+		return vm.Float(math.Inf(-1)), nil
+	case "NaN":
+		return vm.Float(math.NaN()), nil
+	default:
+		return vm.NIL, NewReaderError(r, fmt.Sprintf("unknown symbolic value: ##%s", s))
+	}
+}
+
 func readHashMacro(r *LispReader, _ rune) (vm.Value, error) {
 	ch, err := r.next()
 	if err != nil {
@@ -1096,6 +1119,7 @@ func readerInit() {
 		'{':  readSet,
 		'"':  readRegex,
 		'?':  readConditional,
+		'#':  readSymbolicValue,
 	}
 }
 
