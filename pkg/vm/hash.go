@@ -121,6 +121,15 @@ func valueEquiv(a, b Value) bool {
 	if eq, ok := a.(interface{ Equals(Value) bool }); ok {
 		return eq.Equals(b)
 	}
+	// Fallback to full value equality for sequential types only
+	// (avoids infinite recursion: valueEquals→map compare→valueEquiv→valueEquals)
+	if ValueEquals != nil {
+		_, aSeq := a.(Seq)
+		_, bSeq := b.(Seq)
+		if aSeq && bSeq {
+			return ValueEquals(a, b)
+		}
+	}
 	return false
 }
 

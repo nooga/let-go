@@ -319,6 +319,18 @@ func valueEquals(a, b vm.Value) bool {
 		if eq, ok := a.(interface{ Equals(vm.Value) bool }); ok {
 			return eq.Equals(b)
 		}
+		// Same-type seq comparison (Range, Cons, LazySeq, etc.)
+		if isSequentialType(a) && isSequentialType(b) {
+			as := toSeq(a)
+			bs := toSeq(b)
+			for as != nil && bs != nil {
+				if !valueEquals(as.First(), bs.First()) {
+					return false
+				}
+				as, bs = as.Next(), bs.Next()
+			}
+			return as == nil && bs == nil
+		}
 		return a == b
 	}
 }
@@ -2241,8 +2253,11 @@ func installLangNS() {
 		if vs[0] == vm.NIL {
 			return vm.NIL, fmt.Errorf("shuffle not supported on nil")
 		}
-		if _, ok := vs[0].(vm.String); ok {
+		switch vs[0].(type) {
+		case vm.String:
 			return vm.NIL, fmt.Errorf("shuffle not supported on string")
+		case *vm.PersistentMap, vm.Map:
+			return vm.NIL, fmt.Errorf("shuffle not supported on map")
 		}
 		// Collect into slice
 		s, err := seqOf(vs[0])

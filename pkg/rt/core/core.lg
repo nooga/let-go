@@ -725,7 +725,7 @@
   ([m ks not-found]
    (loop [sentinel (gensym)
           m m
-          ks ks]
+          ks (seq ks)]
      (if ks
        (let [m (get m (first ks) sentinel)]
          (if (= sentinel m)
@@ -1322,6 +1322,8 @@
 (defn sequential? [coll]
   (and (some? coll)
        (not (string? coll))
+       (not (set? coll))
+       (not (map? coll))
        (or (vector? coll) (list? coll) (seq? coll))))
 
 (defn flatten [coll]
@@ -1599,7 +1601,7 @@
   (loop [s coll i n]
     (if (and (pos? i) (seq s))
       (recur (rest s) (dec i))
-      s)))
+      (or s ()))))
 
 (defn nthnext
   [coll n]
