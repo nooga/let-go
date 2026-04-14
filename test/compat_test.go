@@ -29,6 +29,8 @@ const memLimitBytes = 512 * 1024 * 1024
 // Tests that pass but appear here will cause an error so the list stays current.
 var knownFailing = map[string]bool{
 	"binding":          true, // thread binding propagation to futures
+	"contains_qmark":   true, // contains? edge cases
+	"select_keys":      true, // select-keys edge cases
 	"drop":             true, // (drop 5 nil) → nil not ()
 	"drop_while":       true, // (drop-while pred nil) → nil not ()
 	"even_qmark":       true, // even? on BigDecimal

@@ -64,18 +64,35 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 		return nil
 	}
 	blocks := stdstrings.Split(name, ".")
-	p := path.Join(blocks...) + ".lg"
 	// Try embedded namespaces first
 	if embedded := r.loadEmbedded(name); embedded != nil {
 		return embedded
 	}
+	// Build candidate paths: try .lg and .cljc extensions,
+	// and hyphen vs underscore variants for each path segment.
+	hyphenPath := path.Join(blocks...)
+	underscorePath := path.Join(blocks...)
+	for i, b := range blocks {
+		blocks[i] = stdstrings.ReplaceAll(b, "-", "_")
+	}
+	underscorePath = path.Join(blocks...)
+
+	candidates := []string{
+		hyphenPath + ".lg",
+		underscorePath + ".lg",
+		hyphenPath + ".cljc",
+		underscorePath + ".cljc",
+	}
+
 	for _, dir := range r.path {
-		cp := path.Join(dir, p)
-		if _, err := os.Stat(cp); err == nil {
-			r.cloading[name] = true
-			lns := r.loadFile(cp)
-			delete(r.cloading, name)
-			return lns
+		for _, candidate := range candidates {
+			cp := path.Join(dir, candidate)
+			if _, err := os.Stat(cp); err == nil {
+				r.cloading[name] = true
+				lns := r.loadFile(cp)
+				delete(r.cloading, name)
+				return lns
+			}
 		}
 	}
 	return nil

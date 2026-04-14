@@ -919,7 +919,9 @@
   ([m & maps]
    (persistent!
     (reduce (fn [a b]
-              (reduce (fn [m e] (assoc! m (first e) (second e))) a (seq b)))
+              (if b
+                (reduce (fn [m e] (assoc! m (first e) (second e))) a (seq b))
+                a))
             (transient (or m {})) maps))))
 
 (defn repeatedly

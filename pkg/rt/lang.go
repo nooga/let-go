@@ -335,6 +335,50 @@ func valueEquals(a, b vm.Value) bool {
 	}
 }
 
+// seqCompareElements compares two values for ordering, used by compare on seqs.
+func seqCompareElements(a, b vm.Value) int {
+	if a == vm.NIL && b == vm.NIL {
+		return 0
+	}
+	if a == vm.NIL {
+		return -1
+	}
+	if b == vm.NIL {
+		return 1
+	}
+	if vm.IsNumber(a) && vm.IsNumber(b) {
+		lt, _ := vm.NumLt(a, b)
+		if lt {
+			return -1
+		}
+		gt, _ := vm.NumGt(a, b)
+		if gt {
+			return 1
+		}
+		return 0
+	}
+	if sa, ok := a.(vm.String); ok {
+		if sb, ok := b.(vm.String); ok {
+			as, bs := string(sa), string(sb)
+			if as < bs {
+				return -1
+			}
+			if as > bs {
+				return 1
+			}
+			return 0
+		}
+	}
+	// Fallback: equal if valueEquals, otherwise arbitrary but stable
+	if valueEquals(a, b) {
+		return 0
+	}
+	if fmt.Sprintf("%v", a) < fmt.Sprintf("%v", b) {
+		return -1
+	}
+	return 1
+}
+
 // isSequentialType returns true for types that participate in cross-type
 // sequential equality (lists, vectors, cons, lazy seqs, ranges — not maps/sets).
 func isSequentialType(v vm.Value) bool {
@@ -766,6 +810,10 @@ func installLangNS() {
 		if len(vs) < 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
+		// Treat nil as empty map
+		if vs[0] == vm.NIL {
+			vs[0] = vm.EmptyPersistentMap
+		}
 		colla, ok := vs[0].(vm.Associative)
 		if !ok {
 			return vm.NIL, fmt.Errorf("update expected Associative")
@@ -859,15 +907,27 @@ func installLangNS() {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		if len(vs) == 1 {
-			return vs[0], nil
+		if vs[0] == vm.NIL {
+			return vm.FALSE, nil
 		}
-		s, ok := vs[0].(vm.Keyed)
-		if !ok {
-			return vm.NIL, fmt.Errorf("contains? expected Set")
+		// Keyed types: maps and sets
+		if s, ok := vs[0].(vm.Keyed); ok {
+			return s.Contains(vs[1]), nil
 		}
-
-		return s.Contains(vs[1]), nil
+		// Vectors: contains? checks if index exists
+		if idx, ok := vs[1].(vm.Int); ok {
+			i := int(idx)
+			if c, ok := vs[0].(vm.Counted); ok {
+				return vm.Boolean(i >= 0 && i < c.RawCount()), nil
+			}
+		}
+		// Strings: contains? checks if index exists
+		if s, ok := vs[0].(vm.String); ok {
+			if idx, ok := vs[1].(vm.Int); ok {
+				return vm.Boolean(int(idx) >= 0 && int(idx) < len([]rune(string(s)))), nil
+			}
+		}
+		return vm.FALSE, nil
 	})
 
 	first, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -3208,6 +3268,24 @@ func installLangNS() {
 				}
 				return vm.MakeInt(1), nil
 			}
+		}
+		// Vectors: lexicographic comparison
+		if isSequentialType(a) && isSequentialType(b) {
+			as, bs := toSeq(a), toSeq(b)
+			for as != nil && bs != nil {
+				cmp := seqCompareElements(as.First(), bs.First())
+				if cmp != 0 {
+					return vm.MakeInt(cmp), nil
+				}
+				as, bs = as.Next(), bs.Next()
+			}
+			if as == nil && bs == nil {
+				return vm.MakeInt(0), nil
+			}
+			if as == nil {
+				return vm.MakeInt(-1), nil
+			}
+			return vm.MakeInt(1), nil
 		}
 		return vm.NIL, fmt.Errorf("compare: cannot compare %s and %s", a.Type().Name(), b.Type().Name())
 	})
