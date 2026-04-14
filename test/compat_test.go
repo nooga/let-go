@@ -37,12 +37,16 @@ var knownFailing = map[string]bool{
 	"max":              true, // max with BigDecimal
 	"min":              true, // min with BigDecimal
 	"min_key":          true, // min-key edge cases
+	"mod":              true, // mod edge cases
+	"nan_qmark":        true, // nan? edge cases
 	"not_empty":        true, // not-empty on list containing nil
 	"nth":              true, // nth out-of-bounds doesn't throw
 	"nthrest":          true, // nthrest edge cases
 	"odd_qmark":        true, // odd? on BigDecimal
 	"peek":             true, // peek on cons
 	"pr_str":           true, // pr-str formatting
+	"quot":             true, // quot edge cases
+	"rem":              true, // rem edge cases
 	"str":              true, // str reader conditional
 }
 

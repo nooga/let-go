@@ -14,3 +14,15 @@
   `(try
      (do ~@body false)
      (catch _# true)))
+
+;; Portability constants used by many test files
+(def max-int 9007199254740991)       ;; 2^53-1 (JS safe integer max, good enough)
+(def min-int -9007199254740991)
+(def max-double 1.7976931348623157E308)
+(def min-double 4.9E-324)
+(def all-ones-int -1)
+
+;; big-int? — let-go doesn't have BigInteger, so always false for regular ints
+(defn big-int? [n]
+  (and (integer? n) (not (int? n))))
+

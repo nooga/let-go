@@ -890,6 +890,29 @@
   ([xform coll]
    (transformer-seq* xform coll)))
 
+;; array-map: in let-go, same as hash-map (we don't have a separate ArrayMap type)
+(defn array-map [& kvs]
+  (apply hash-map kvs))
+
+;; rseq: reverse a vector into a seq
+(defn rseq [v]
+  (when (and v (pos? (count v)))
+    (let [n (count v)]
+      (loop [i (dec n) acc ()]
+        (if (neg? i)
+          acc
+          (recur (dec i) (cons (nth v i) acc)))))))
+
+;; some-fn: complement of every-pred — returns first truthy result
+(defn some-fn
+  ([p] (fn [& args] (some p args)))
+  ([p1 p2] (fn [& args] (or (some p1 args) (some p2 args))))
+  ([p1 p2 p3] (fn [& args] (or (some p1 args) (some p2 args) (some p3 args))))
+  ([p1 p2 p3 & ps]
+   (fn [& args]
+     (or (some p1 args) (some p2 args) (some p3 args)
+         (some (fn [p] (some p args)) ps)))))
+
 (defn merge
   ([] {})
   ([m] m)

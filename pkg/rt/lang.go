@@ -815,9 +815,15 @@ func installLangNS() {
 		if len(vs) == 1 {
 			return vs[0], nil
 		}
-		seq, ok := vs[0].(vm.Collection)
-		if !ok {
-			return vm.NIL, fmt.Errorf("conj expected Collection")
+		var seq vm.Collection
+		if vs[0] == vm.NIL {
+			seq = vm.EmptyList
+		} else {
+			var ok bool
+			seq, ok = vs[0].(vm.Collection)
+			if !ok {
+				return vm.NIL, fmt.Errorf("conj expected Collection")
+			}
 		}
 		for i := 1; i < len(vs); i++ {
 			seq = seq.Conj(vs[i])
@@ -1068,6 +1074,12 @@ func installLangNS() {
 	count, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if vs[0] == vm.NIL {
+			return vm.MakeInt(0), nil
+		}
+		if s, ok := vs[0].(vm.String); ok {
+			return vm.MakeInt(len([]rune(string(s)))), nil
 		}
 		seq, ok := vs[0].(vm.Counted)
 		if !ok {
@@ -1745,7 +1757,7 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("sort expected a Collection")
 			}
 		} else {
-			comp = lt.(vm.Fn)
+			comp = nil // use default compare
 			coll, ok = vs[0].(vm.Collection)
 			if !ok {
 				return vm.NIL, fmt.Errorf("sort expected a Collection")
@@ -1760,14 +1772,33 @@ func installLangNS() {
 		var err error
 		sort.SliceStable(temp, func(i, j int) bool {
 			if err != nil {
-				return false // abort: previous comparison failed
+				return false
 			}
-			var b vm.Value
-			b, err = comp.Invoke([]vm.Value{temp[i], temp[j]})
+			if comp != nil {
+				var b vm.Value
+				b, err = comp.Invoke([]vm.Value{temp[i], temp[j]})
+				if err != nil {
+					return false
+				}
+				return vm.IsTruthy(b)
+			}
+			// Default: nil-safe compare
+			a, b := temp[i], temp[j]
+			if a == vm.NIL && b == vm.NIL {
+				return false
+			}
+			if a == vm.NIL {
+				return true // nil sorts first
+			}
+			if b == vm.NIL {
+				return false
+			}
+			var r vm.Value
+			r, err = lt.(vm.Fn).Invoke([]vm.Value{a, b})
 			if err != nil {
 				return false
 			}
-			return vm.IsTruthy(b)
+			return vm.IsTruthy(r)
 		})
 		if err != nil {
 			return vm.NIL, err
@@ -3532,6 +3563,27 @@ func installLangNS() {
 		}
 	})
 
+	// double? — alias for float?
+	isDouble, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		_, ok := vs[0].(vm.Float)
+		return vm.Boolean(ok), nil
+	})
+
+	// instance? — type check (simplified: checks if type name matches)
+	instancep, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		// We accept type objects (e.g. IntType) and check if the value's type matches
+		if t, ok := vs[0].(vm.ValueType); ok {
+			return vm.Boolean(vs[1].Type() == t), nil
+		}
+		return vm.FALSE, nil
+	})
+
 	// ifn? — true if value implements Fn (invokable: functions, keywords, maps, sets, vectors)
 	isIFn, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -3826,6 +3878,8 @@ func installLangNS() {
 	ns.Def("compare", comparef)
 	ns.Def("fn?", isFn)
 	ns.Def("ifn?", isIFn)
+	ns.Def("double?", isDouble)
+	ns.Def("instance?", instancep)
 	ns.Def("identical?", identical)
 	ns.Def("any?", anyp)
 	ns.Def("bit-and", bitAnd)
