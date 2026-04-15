@@ -151,9 +151,8 @@
 (defn neg-int? [x] (and (int? x) (neg? x)))
 (defn nat-int? [x] (and (int? x) (not (neg? x))))
 (defn integer? [x] (or (int? x) (bigint? x)))
-(defn decimal? [_] false)
-(defn rational? [x] (or (int? x) (bigint? x)))
-(defn ratio? [_] false)
+;; decimal? and ratio? are native builtins
+(defn rational? [x] (or (int? x) (bigint? x) (ratio? x)))
 
 ;; type coercion aliases
 (def long int)

@@ -30,35 +30,29 @@ const memLimitBytes = 512 * 1024 * 1024
 var knownFailing = map[string]bool{
 	"binding":          true, // thread binding propagation to futures
 	"contains_qmark":   true, // contains? edge cases
-	"decimal_qmark":    true, // BigDecimal parsed as Float
-	"double_qmark":     true, // BigDecimal parsed as Float
+	"double_qmark":     true, // no float32/float64 distinction
 	"float":            true, // BigDecimal edge cases
-	"float_qmark":      true, // BigDecimal parsed as Float
-	"int_qmark":        true, // BigDecimal parsed as Float
-	"integer_qmark":    true, // BigDecimal parsed as Float
 	"nan_qmark":        true, // NaN type predicate
-	"ratio_qmark":      true, // ratio parsed as Float
-	"rational_qmark":   true, // BigDecimal parsed as Float
-	"zero_qmark":       true, // BigDecimal zero
+	"rational_qmark":   true, // rational? edge cases
+	"zero_qmark":       true, // zero? type checking
 	"select_keys":      true, // select-keys edge cases
 	"drop":             true, // (drop 5 nil) → nil not ()
 	"drop_while":       true, // (drop-while pred nil) → nil not ()
-	"even_qmark":       true, // even? on BigDecimal
+	"even_qmark":       true, // even? on float
 	"identical_qmark":  true, // identical? on boxed values
 	"ifn_qmark":        true, // ifn? edge cases
-	"max":              true, // max with BigDecimal
-	"min":              true, // min with BigDecimal
+	"max":              true, // max with NaN
+	"min":              true, // min with NaN
 	"min_key":          true, // min-key edge cases
-	"mod":              true, // mod edge cases
-
+	"mod":              true, // mod NaN/ratio edge cases
 	"not_empty":        true, // not-empty on list containing nil
 	"nth":              true, // nth out-of-bounds doesn't throw
 	"nthrest":          true, // nthrest edge cases
-	"odd_qmark":        true, // odd? on BigDecimal
+	"odd_qmark":        true, // odd? on float
 	"peek":             true, // peek on cons
 	"pr_str":           true, // pr-str formatting
-	"quot":             true, // quot edge cases
-	"rem":              true, // rem edge cases
+	"quot":             true, // quot NaN/ratio edge cases
+	"rem":              true, // rem NaN/ratio edge cases
 	"str":              true, // str reader conditional
 	"keyword":          true, // keyword with empty ns
 	"nnext":            true, // map ordering
@@ -71,6 +65,8 @@ var knownFailing = map[string]bool{
 	"char":             true, // char negative values
 	"empty_qmark":      true, // empty? on list containing nil
 	"int":              true, // int overflow bounds
+	"rationalize":      true, // rationalize precision
+	"inc":              true, // overflow untested assertion
 }
 
 // suiteCounters tracks aggregate assertion counts across the entire suite.

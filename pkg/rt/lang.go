@@ -4201,6 +4201,87 @@ func installLangNS() {
 
 	ns.Def("bigint", bigintf)
 	ns.Def("bigint?", isBigInt)
+
+	// ratio? — test if value is Ratio
+	isRatio, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.FALSE, nil }
+		return vm.Boolean(vm.IsRatio(vs[0])), nil
+	})
+	ns.Def("ratio?", isRatio)
+
+	// decimal? — test if value is BigDecimal
+	isDecimal, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.FALSE, nil }
+		return vm.Boolean(vm.IsBigDecimal(vs[0])), nil
+	})
+	ns.Def("decimal?", isDecimal)
+
+	// numerator — return numerator of a Ratio
+	numeratorf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.NIL, fmt.Errorf("wrong number of arguments") }
+		if r, ok := vs[0].(*vm.Ratio); ok {
+			num := r.Val().Num()
+			return vm.MaybeDowngrade(new(big.Int).Set(num)), nil
+		}
+		return vm.NIL, fmt.Errorf("numerator expects a Ratio")
+	})
+	ns.Def("numerator", numeratorf)
+
+	// denominator — return denominator of a Ratio
+	denominatorf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.NIL, fmt.Errorf("wrong number of arguments") }
+		if r, ok := vs[0].(*vm.Ratio); ok {
+			den := r.Val().Denom()
+			return vm.MaybeDowngrade(new(big.Int).Set(den)), nil
+		}
+		return vm.NIL, fmt.Errorf("denominator expects a Ratio")
+	})
+	ns.Def("denominator", denominatorf)
+
+	// bigdec — coerce to BigDecimal
+	bigdecf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.NIL, fmt.Errorf("wrong number of arguments") }
+		switch v := vs[0].(type) {
+		case *vm.BigDecimal:
+			return v, nil
+		case vm.Int:
+			return vm.NewBigDecimalFromInt64(int64(v)), nil
+		case vm.Float:
+			return vm.NewBigDecimalFromFloat64(float64(v)), nil
+		case *vm.BigInt:
+			f, _ := new(big.Float).SetPrec(vm.BigDecimalPrecConst).SetInt(v.Val()).Float64()
+			return vm.NewBigDecimalFromFloat64(f), nil
+		case vm.String:
+			bd, ok := vm.NewBigDecimalFromString(string(v))
+			if !ok { return vm.NIL, fmt.Errorf("cannot parse bigdec: %s", v) }
+			return bd, nil
+		}
+		return vm.NIL, fmt.Errorf("cannot coerce %s to bigdec", vs[0].Type().Name())
+	})
+	ns.Def("bigdec", bigdecf)
+
+	// rationalize — convert to Ratio
+	rationalizef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.NIL, fmt.Errorf("wrong number of arguments") }
+		switch v := vs[0].(type) {
+		case *vm.Ratio:
+			return v, nil
+		case vm.Int:
+			return vm.NewRatioFromInts(int64(v), 1), nil
+		case *vm.BigInt:
+			return vm.NewRatio(new(big.Rat).SetInt(v.Val())), nil
+		case vm.Float:
+			r := new(big.Rat).SetFloat64(float64(v))
+			return vm.MaybeSimplifyRatio(r), nil
+		case *vm.BigDecimal:
+			f, _ := v.Val().Float64()
+			r := new(big.Rat).SetFloat64(f)
+			return vm.MaybeSimplifyRatio(r), nil
+		}
+		return vm.NIL, fmt.Errorf("cannot rationalize %s", vs[0].Type().Name())
+	})
+	ns.Def("rationalize", rationalizef)
+
 	ns.Def("transformer-seq*", transformerSeq)
 	ns.Def("compare", comparef)
 	ns.Def("fn?", isFn)

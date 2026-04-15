@@ -185,6 +185,10 @@ func constHash(v Value) uint32 {
 		return hashUint64(uint64(uintptr(unsafe.Pointer(x))))
 	case *BigInt:
 		return hashUint64(uint64(uintptr(unsafe.Pointer(x))))
+	case *Ratio:
+		return hashUint64(uint64(uintptr(unsafe.Pointer(x))))
+	case *BigDecimal:
+		return hashUint64(uint64(uintptr(unsafe.Pointer(x))))
 	case *Record:
 		return hashUint64(uint64(uintptr(unsafe.Pointer(x))))
 	case *RecordType:
@@ -203,7 +207,7 @@ func constHash(v Value) uint32 {
 // structural comparison (never merging across types like Int/Float/BigInt).
 func constEqual(a, b Value) bool {
 	switch a.(type) {
-	case *Func, *Var, *BigInt, *Record, *RecordType, *Regex, *Atom:
+	case *Func, *Var, *BigInt, *Ratio, *BigDecimal, *Record, *RecordType, *Regex, *Atom:
 		return a == b
 	default:
 		// Only consider equal if same concrete type

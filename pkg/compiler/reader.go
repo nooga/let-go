@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"unicode"
@@ -502,16 +503,12 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 			return bi, nil
 		}
 	}
-	// Check for BigDecimal suffix: 123.456M → Float approximation
+	// Check for BigDecimal suffix: 123.456M → BigDecimal
 	if len(sn) > 1 && (sn[len(sn)-1] == 'M' || sn[len(sn)-1] == 'm') {
 		numStr := sn[:len(sn)-1]
-		if f, err := strconv.ParseFloat(numStr, 64); err == nil {
+		if bd, ok := vm.NewBigDecimalFromString(numStr); ok {
 			r.closeToken(TokenNumber)
-			return vm.Float(f), nil
-		}
-		if i, err := strconv.Atoi(numStr); err == nil {
-			r.closeToken(TokenNumber)
-			return vm.Float(float64(i)), nil
+			return bd, nil
 		}
 	}
 	// Handle optional negative sign for special number formats
@@ -556,11 +553,14 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 	}
 	// Ratio literal: 1/2, 22/7
 	if idx := strings.IndexByte(sn, '/'); idx > 0 {
-		num, nerr := strconv.ParseFloat(sn[:idx], 64)
-		den, derr := strconv.ParseFloat(sn[idx+1:], 64)
+		numStr := sn[:idx]
+		denStr := sn[idx+1:]
+		num, nerr := strconv.ParseInt(numStr, 10, 64)
+		den, derr := strconv.ParseInt(denStr, 10, 64)
 		if nerr == nil && derr == nil && den != 0 {
 			r.closeToken(TokenNumber)
-			return vm.Float(num / den), nil
+			rat := new(big.Rat).SetFrac64(num, den)
+			return vm.MaybeSimplifyRatio(rat), nil
 		}
 	}
 	// Try int first
