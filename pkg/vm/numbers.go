@@ -367,7 +367,11 @@ func NumMod(a, b Value) (Value, error) {
 			if bv.val.Sign() == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
-			r := new(big.Int).Mod(big.NewInt(int64(av)), bv.val)
+			ai := big.NewInt(int64(av))
+			r := new(big.Int).Rem(ai, bv.val)
+			if r.Sign() != 0 && (r.Sign() > 0) != (bv.val.Sign() > 0) {
+				r.Add(r, bv.val)
+			}
 			return NewBigInt(r), nil
 		}
 	case Float:
@@ -397,13 +401,20 @@ func NumMod(a, b Value) (Value, error) {
 			if int(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
-			r := new(big.Int).Mod(av.val, big.NewInt(int64(bv)))
+			bi := big.NewInt(int64(bv))
+			r := new(big.Int).Rem(av.val, bi)
+			if r.Sign() != 0 && (r.Sign() > 0) != (bi.Sign() > 0) {
+				r.Add(r, bi)
+			}
 			return NewBigInt(r), nil
 		case *BigInt:
 			if bv.val.Sign() == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
-			r := new(big.Int).Mod(av.val, bv.val)
+			r := new(big.Int).Rem(av.val, bv.val)
+			if r.Sign() != 0 && (r.Sign() > 0) != (bv.val.Sign() > 0) {
+				r.Add(r, bv.val)
+			}
 			return NewBigInt(r), nil
 		}
 	}

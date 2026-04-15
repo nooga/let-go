@@ -150,7 +150,7 @@
 (defn pos-int? [x] (and (int? x) (pos? x)))
 (defn neg-int? [x] (and (int? x) (neg? x)))
 (defn nat-int? [x] (and (int? x) (not (neg? x))))
-(def integer? int?)
+(defn integer? [x] (or (int? x) (bigint? x)))
 (defn decimal? [_] false)
 (defn rational? [x] (or (int? x) (bigint? x)))
 (defn ratio? [_] false)
