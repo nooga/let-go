@@ -577,6 +577,16 @@ func (f *Frame) Run() (Value, error) {
 						return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
 					}
 				} else {
+					// Package variadic args for direct frame reuse
+					if ff.isVariadric {
+						sargs := a[0 : ff.arity-1]
+						rest := a[ff.arity-1:]
+						restlist, boxErr := ListType.Box(rest)
+						if boxErr != nil {
+							return NIL, boxErr
+						}
+						a = append(sargs, restlist)
+					}
 					f.code = ff.chunk
 					f.consts = f.code.consts
 					f.constsc = f.code.consts.count()
