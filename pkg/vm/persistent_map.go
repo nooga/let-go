@@ -542,6 +542,17 @@ func (m *PersistentMap) Empty() Collection {
 }
 
 func (m *PersistentMap) Conj(value Value) Collection {
+	// Map + Map: merge entries
+	if om, ok := value.(*PersistentMap); ok {
+		result := m
+		entries := om.entries()
+		for _, e := range entries {
+			if av, ok := e.(ArrayVector); ok && len(av) == 2 {
+				result = result.Assoc(av[0], av[1]).(*PersistentMap)
+			}
+		}
+		return result
+	}
 	if av, ok := value.(ArrayVector); ok && len(av) == 2 {
 		return m.Assoc(av[0], av[1]).(*PersistentMap)
 	}

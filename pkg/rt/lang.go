@@ -10,6 +10,7 @@ import (
 	_ "embed"
 	"fmt"
 	"math"
+	"math/big"
 	"math/rand"
 	"os"
 	"sort"
@@ -1805,7 +1806,10 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("parse-int expected String")
 		}
 		i, err := strconv.Atoi(string(s))
-		return vm.MakeInt(i), err
+		if err != nil {
+			return vm.NIL, nil // Clojure returns nil for unparseable
+		}
+		return vm.MakeInt(i), nil
 	})
 
 	max, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -1840,6 +1844,98 @@ func installLangNS() {
 			}
 		}
 		return m, nil
+	})
+
+	// compareValues returns -1, 0, or 1 for general value comparison
+	compareValues := func(a, b vm.Value) (int, error) {
+		if a == vm.NIL && b == vm.NIL {
+			return 0, nil
+		}
+		if a == vm.NIL {
+			return -1, nil
+		}
+		if b == vm.NIL {
+			return 1, nil
+		}
+		switch va := a.(type) {
+		case vm.Int, vm.Float:
+			if r, err := vm.NumLt(a, b); err == nil {
+				if r {
+					return -1, nil
+				}
+				if r2, _ := vm.NumGt(a, b); r2 {
+					return 1, nil
+				}
+				return 0, nil
+			}
+		case vm.String:
+			if vb, ok := b.(vm.String); ok {
+				switch {
+				case string(va) < string(vb):
+					return -1, nil
+				case string(va) > string(vb):
+					return 1, nil
+				default:
+					return 0, nil
+				}
+			}
+		case vm.Keyword:
+			if vb, ok := b.(vm.Keyword); ok {
+				switch {
+				case string(va) < string(vb):
+					return -1, nil
+				case string(va) > string(vb):
+					return 1, nil
+				default:
+					return 0, nil
+				}
+			}
+		case vm.Symbol:
+			if vb, ok := b.(vm.Symbol); ok {
+				switch {
+				case string(va) < string(vb):
+					return -1, nil
+				case string(va) > string(vb):
+					return 1, nil
+				default:
+					return 0, nil
+				}
+			}
+		case vm.Boolean:
+			if vb, ok := b.(vm.Boolean); ok {
+				switch {
+				case !bool(va) && bool(vb):
+					return -1, nil
+				case bool(va) && !bool(vb):
+					return 1, nil
+				default:
+					return 0, nil
+				}
+			}
+		case vm.Char:
+			if vb, ok := b.(vm.Char); ok {
+				switch {
+				case rune(va) < rune(vb):
+					return -1, nil
+				case rune(va) > rune(vb):
+					return 1, nil
+				default:
+					return 0, nil
+				}
+			}
+		}
+		return 0, fmt.Errorf("cannot compare %s and %s", a.Type(), b.Type())
+	}
+
+	comparef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		c, err := compareValues(vs[0], vs[1])
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.MakeInt(c), nil
 	})
 
 	sort, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -1884,23 +1980,13 @@ func installLangNS() {
 				}
 				return vm.IsTruthy(b)
 			}
-			// Default: nil-safe compare
-			a, b := temp[i], temp[j]
-			if a == vm.NIL && b == vm.NIL {
-				return false
-			}
-			if a == vm.NIL {
-				return true // nil sorts first
-			}
-			if b == vm.NIL {
-				return false
-			}
-			var r vm.Value
-			r, err = lt.(vm.Fn).Invoke([]vm.Value{a, b})
+			// Default: general compare
+			var c int
+			c, err = compareValues(temp[i], temp[j])
 			if err != nil {
 				return false
 			}
-			return vm.IsTruthy(r)
+			return c < 0
 		})
 		if err != nil {
 			return vm.NIL, err
@@ -1960,16 +2046,18 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		if i, ok := vs[0].(vm.Int); ok {
-			return i, nil
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return v, nil
+		case vm.Float:
+			return vm.MakeInt(int(v)), nil
+		case vm.Char:
+			return vm.Int(int(v)), nil
+		case *vm.BigInt:
+			return vm.MakeInt(int(v.Unbox().(*big.Int).Int64())), nil
+		default:
+			return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 		}
-		if f, ok := vs[0].(vm.Float); ok {
-			return vm.MakeInt(int(f)), nil
-		}
-		if i, ok := vs[0].(vm.Char); ok {
-			return vm.Int(int(i)), nil
-		}
-		return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 	})
 
 	floatf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -2010,10 +2098,22 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments")
 		}
-		if i, ok := vs[0].(vm.Int); ok {
-			return vm.Char(rune(i)), nil
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.Char(rune(v)), nil
+		case vm.Char:
+			return v, nil
+		case vm.String:
+			runes := []rune(string(v))
+			if len(runes) == 1 {
+				return vm.Char(runes[0]), nil
+			}
+			return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
+		case *vm.BigInt:
+			return vm.Char(rune(v.Unbox().(*big.Int).Int64())), nil
+		default:
+			return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
 		}
-		return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
 	})
 
 	regex, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -3308,7 +3408,7 @@ func installLangNS() {
 	})
 
 	// compare — generic comparison: -1, 0, 1
-	comparef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	comparef, err = vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("compare expects 2 args")
 		}
@@ -3965,9 +4065,11 @@ func installLangNS() {
 	ns.Def("lines", lines)
 
 	ns.Def("parse-int", parseInt)
+	ns.Def("parse-long", parseInt)
 	ns.Def("max", max)
 	ns.Def("min", min)
 
+	ns.Def("compare", comparef)
 	ns.Def("sort", sort)
 
 	ns.Def(".", methodInvoke)
@@ -3981,6 +4083,9 @@ func installLangNS() {
 	ns.Def("<!!", changet)
 
 	ns.Def("int", intf)
+	ns.Def("long", intf)
+	ns.Def("byte", intf)
+	ns.Def("short", intf)
 	ns.Def("float", floatf)
 	ns.Def("double", floatf)
 	ns.Def("number?", isNumber)
@@ -4169,7 +4274,7 @@ func installLangNS() {
 		}
 		f, err := strconv.ParseFloat(string(s), 64)
 		if err != nil {
-			return vm.NIL, fmt.Errorf("cannot parse double: %s", s)
+			return vm.NIL, nil // Clojure returns nil for unparseable
 		}
 		return vm.Float(f), nil
 	})

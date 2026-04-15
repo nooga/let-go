@@ -52,7 +52,7 @@
    (list 'let ['or__x x]
          (list 'if 'or__x 'or__x (cons 'or more)))))
 
-(defn empty? [xs] (= 0 (count xs)))
+(defn empty? [xs] (not (seq xs)))
 
 (defn concat-list [a b]
   (if (empty? a)
@@ -196,7 +196,7 @@
 (defn counted? [x] (or (vector? x) (map? x) (set? x) (list? x) (nil? x)))
 ;; number? is a native builtin that handles Int and Float
 
-(defn empty? [x] (zero? (count x)))
+(defn empty? [x] (not (seq x)))
 
 (defn set [coll]
   (reduce conj #{} coll))
