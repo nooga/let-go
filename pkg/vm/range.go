@@ -79,7 +79,7 @@ func (l *Range) Seq() Seq {
 
 // Cons implements Seq
 func (l *Range) Cons(val Value) Seq {
-	return l.Seq().Cons(val)
+	return NewCons(val, l)
 }
 
 // Count implements Collection

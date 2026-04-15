@@ -125,9 +125,15 @@
 (defn some? [x] (not= nil x))
 (defn true? [x] (= x true))
 (defn false? [x] (= x false))
+(defn boolean [x] (if (or (nil? x) (false? x)) false true))
 
 (defn inc [x] (+ x 1))
 (defn dec [x] (- x 1))
+
+(defn ffirst [x] (first (first x)))
+(defn fnext [x] (first (next x)))
+(defn nfirst [x] (next (first x)))
+(defn nnext [x] (next (next x)))
 
 ;; numeric type predicates
 (defn pos-int? [x] (and (int? x) (pos? x)))
@@ -174,6 +180,9 @@
 (defn keyword? [x] (= (type x) (type :x)))
 (defn string? [x] (= (type x) (type "")))
 (defn set? [x] (= (type x) (type #{})))
+(defn sorted? [_] false)
+(defn reversible? [_] false)
+(defn counted? [x] (or (vector? x) (map? x) (set? x) (list? x) (nil? x)))
 ;; number? is a native builtin that handles Int and Float
 
 (defn empty? [x] (zero? (count x)))
@@ -670,6 +679,14 @@
          (let [~form temp#]
            ~@body)))))
 
+(defmacro when-first
+  [bindings & body]
+  (let [x (bindings 0) coll (bindings 1)
+        s (gensym "s__")]
+    `(when-let [~s (seq ~coll)]
+       (let [~x (first ~s)]
+         ~@body))))
+
 ;; letfn — mutually recursive local functions
 ;; (letfn [(f [x] ...) (g [x] ...)] body)
 ;; Uses atoms with gensym'd names for forward references, then wraps
@@ -914,15 +931,14 @@
          (some (fn [p] (some p args)) ps)))))
 
 (defn merge
-  ([] {})
+  ([] nil)
   ([m] m)
   ([m & maps]
-   (persistent!
-    (reduce (fn [a b]
-              (if b
-                (reduce (fn [m e] (assoc! m (first e) (second e))) a (seq b))
-                a))
-            (transient (or m {})) maps))))
+   (reduce (fn [a b]
+             (if b
+               (reduce conj (or a {}) (seq b))
+               a))
+           m maps)))
 
 (defn repeatedly
   ([f] (lazy-seq (cons (f) (repeatedly f))))
@@ -986,6 +1002,9 @@
            ret)
          (next keys)))
       ret)))
+
+(defn key [e] (first e))
+(defn val [e] (second e))
 
 (defn keys [m]
   (when (seq m)
@@ -1324,6 +1343,18 @@
 (defn not-empty [coll]
   (when (seq coll) coll))
 
+(def ^:dynamic *assert* true)
+
+(defmacro assert
+  ([x]
+   `(when *assert*
+      (when-not ~x
+        (throw (str "Assert failed: " '~x)))))
+  ([x message]
+   `(when *assert*
+      (when-not ~x
+        (throw (str "Assert failed: " ~message "\n" '~x))))))
+
 ;; flatten is defined below after sequential? is available
 
 (defn min-key
@@ -1350,6 +1381,16 @@
        (not (set? coll))
        (not (map? coll))
        (or (vector? coll) (list? coll) (seq? coll))))
+
+(defn coll? [x]
+  (or (list? x) (vector? x) (map? x) (set? x)))
+
+(def ^:private special-symbols
+  #{'def 'if 'do 'fn* 'let* 'letfn* 'quote 'var 'loop* 'recur 'try 'catch 'finally 'throw
+    'new '. 'set! 'deftype* 'reify* 'import* '& 'case*})
+
+(defn special-symbol? [s]
+  (contains? special-symbols s))
 
 (defn flatten [coll]
   (when-let [s (seq coll)]

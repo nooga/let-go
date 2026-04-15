@@ -34,7 +34,7 @@
   (testing "merge maps"
     (is (= {:a 1 :b 2 :c 3} (merge {:a 1} {:b 2} {:c 3})))
     (is (= {:a 2} (merge {:a 1} {:a 2})))
-    (is (= {} (merge)))))
+    (is (nil? (merge)))))
 
 (deftest flatten-test
   (testing "flatten nested collections"

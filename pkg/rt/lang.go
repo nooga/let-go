@@ -568,8 +568,11 @@ func installLangNS() {
 	})
 
 	gt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
+		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 1 {
+			return vm.TRUE, nil
 		}
 		for i := 0; i < len(vs)-1; i++ {
 			r, err := vm.NumGt(vs[i], vs[i+1])
@@ -584,8 +587,11 @@ func installLangNS() {
 	})
 
 	lt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
+		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 1 {
+			return vm.TRUE, nil
 		}
 		for i := 0; i < len(vs)-1; i++ {
 			r, err := vm.NumLt(vs[i], vs[i+1])
@@ -600,8 +606,11 @@ func installLangNS() {
 	})
 
 	ge, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
+		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 1 {
+			return vm.TRUE, nil
 		}
 		for i := 0; i < len(vs)-1; i++ {
 			r, err := vm.NumGe(vs[i], vs[i+1])
@@ -616,8 +625,11 @@ func installLangNS() {
 	})
 
 	le, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
+		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 1 {
+			return vm.TRUE, nil
 		}
 		for i := 0; i < len(vs)-1; i++ {
 			r, err := vm.NumLe(vs[i], vs[i+1])
@@ -733,8 +745,33 @@ func installLangNS() {
 	})
 
 	keyword, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
+		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 2 {
+			// (keyword ns name) — both must be strings (or nil ns)
+			var nsStr, nameStr string
+			if vs[0] != vm.NIL {
+				switch n := vs[0].(type) {
+				case vm.String:
+					nsStr = string(n)
+				default:
+					return vm.NIL, fmt.Errorf("keyword namespace must be a string, got %s", vs[0].Type())
+				}
+			}
+			switch n := vs[1].(type) {
+			case vm.String:
+				nameStr = string(n)
+			default:
+				return vm.NIL, fmt.Errorf("keyword name must be a string, got %s", vs[1].Type())
+			}
+			if nsStr == "" {
+				return vm.Keyword(nameStr), nil
+			}
+			return vm.Keyword(nsStr + "/" + nameStr), nil
+		}
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
 		}
 		if k, ok := vs[0].(vm.Keyword); ok {
 			return k, nil
@@ -2409,8 +2446,11 @@ func installLangNS() {
 
 	// conj!: mutating conj on a transient
 	conjBang, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
+		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 1 {
+			return vs[0], nil
 		}
 		switch t := vs[0].(type) {
 		case *vm.TransientMap:
@@ -3468,6 +3508,36 @@ func installLangNS() {
 		return vm.MakeInt(int(a) &^ (1 << uint(b))), nil
 	})
 
+	bitAndNot, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-and-not expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-and-not expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-and-not expected Int")
+		}
+		return vm.MakeInt(int(a) &^ int(b)), nil
+	})
+
+	bitFlip, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("bit-flip expects 2 args")
+		}
+		a, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-flip expected Int")
+		}
+		b, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bit-flip expected Int")
+		}
+		return vm.MakeInt(int(a) ^ (1 << uint(b))), nil
+	})
+
 	// re-groups — find all submatch groups: (re-groups regex str) → vector of [match group1 group2 ...]
 	reGroups, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
@@ -3974,6 +4044,8 @@ func installLangNS() {
 	ns.Def("bit-test", bitTest)
 	ns.Def("bit-set", bitSet)
 	ns.Def("bit-clear", bitClear)
+	ns.Def("bit-and-not", bitAndNot)
+	ns.Def("bit-flip", bitFlip)
 	ns.Def("re-groups", reGroups)
 	ns.Def("promise", promisef)
 	ns.Def("deliver", deliver)
