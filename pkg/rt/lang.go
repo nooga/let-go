@@ -6,6 +6,7 @@
 package rt
 
 import (
+	crand "crypto/rand"
 	_ "embed"
 	"fmt"
 	"math"
@@ -2355,6 +2356,19 @@ func installLangNS() {
 		return vm.MakeInt(rand.Intn(int(n))), nil
 	})
 
+	// random-uuid: generate a random UUID v4
+	randomUUID, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		var buf [16]byte
+		_, err := crand.Read(buf[:])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("random-uuid: %w", err)
+		}
+		buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
+		buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10
+		return vm.String(fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+			buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])), nil
+	})
+
 	// rand-nth: returns a random element from a collection
 	randNth, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -2715,6 +2729,58 @@ func installLangNS() {
 		}
 		fmt.Println(b)
 		return vm.NIL, nil
+	})
+
+	// prn-str: print readably + newline to string
+	prnStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		b := &strings.Builder{}
+		for i := range vs {
+			if i > 0 {
+				b.WriteRune(' ')
+			}
+			b.WriteString(vs[i].String())
+		}
+		b.WriteRune('\n')
+		return vm.String(b.String()), nil
+	})
+
+	// print-str: print human-readably to string (no quotes on strings)
+	printStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		b := &strings.Builder{}
+		for i := range vs {
+			if i > 0 {
+				b.WriteRune(' ')
+			}
+			if vs[i].Type() == vm.StringType {
+				b.WriteString(string(vs[i].(vm.String)))
+				continue
+			} else if vs[i].Type() == vm.CharType {
+				b.WriteRune(rune(vs[i].(vm.Char)))
+				continue
+			}
+			b.WriteString(vs[i].String())
+		}
+		return vm.String(b.String()), nil
+	})
+
+	// println-str: print human-readably + newline to string
+	printlnStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		b := &strings.Builder{}
+		for i := range vs {
+			if i > 0 {
+				b.WriteRune(' ')
+			}
+			if vs[i].Type() == vm.StringType {
+				b.WriteString(string(vs[i].(vm.String)))
+				continue
+			} else if vs[i].Type() == vm.CharType {
+				b.WriteRune(rune(vs[i].(vm.Char)))
+				continue
+			}
+			b.WriteString(vs[i].String())
+		}
+		b.WriteRune('\n')
+		return vm.String(b.String()), nil
 	})
 
 	// re-find: find first match of regex in string
@@ -3940,6 +4006,7 @@ func installLangNS() {
 	ns.Def("subs", subs)
 	ns.Def("format", formatf)
 	ns.Def("rand", randf)
+	ns.Def("random-uuid", randomUUID)
 	ns.Def("rand-int", randInt)
 	ns.Def("rand-nth", randNth)
 	ns.Def("shuffle", shuffle)
@@ -3960,6 +4027,9 @@ func installLangNS() {
 	ns.Def("methods", methods)
 	ns.Def("pr-str", prStr)
 	ns.Def("prn", prn)
+	ns.Def("prn-str", prnStr)
+	ns.Def("print-str", printStr)
+	ns.Def("println-str", printlnStr)
 	ns.Def("re-find", reFind)
 	ns.Def("re-matches", reMatches)
 	ns.Def("re-seq", reSeq)

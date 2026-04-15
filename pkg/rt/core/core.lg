@@ -130,6 +130,17 @@
 (defn inc [x] (+ x 1))
 (defn dec [x] (- x 1))
 
+;; Auto-promoting variants (no overflow in let-go, so just aliases)
+(def inc' inc)
+(def dec' dec)
+(defn +' [& args] (apply + args))
+(defn -' [& args] (apply - args))
+(defn *' [& args] (apply * args))
+
+(defn num [x]
+  (if (number? x) x
+    (throw (str "Expected a number, got " (type x)))))
+
 (defn ffirst [x] (first (first x)))
 (defn fnext [x] (first (next x)))
 (defn nfirst [x] (next (first x)))
@@ -920,15 +931,15 @@
           acc
           (recur (dec i) (cons (nth v i) acc)))))))
 
-;; some-fn: complement of every-pred — returns first truthy result
+;; some-fn: complement of every-pred — returns first truthy result or false
 (defn some-fn
-  ([p] (fn [& args] (some p args)))
-  ([p1 p2] (fn [& args] (or (some p1 args) (some p2 args))))
-  ([p1 p2 p3] (fn [& args] (or (some p1 args) (some p2 args) (some p3 args))))
+  ([p] (fn [& args] (or (some p args) false)))
+  ([p1 p2] (fn [& args] (or (some p1 args) (some p2 args) false)))
+  ([p1 p2 p3] (fn [& args] (or (some p1 args) (some p2 args) (some p3 args) false)))
   ([p1 p2 p3 & ps]
    (fn [& args]
      (or (some p1 args) (some p2 args) (some p3 args)
-         (some (fn [p] (some p args)) ps)))))
+         (some (fn [p] (some p args)) ps) false))))
 
 (defn merge
   ([] nil)
