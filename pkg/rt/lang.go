@@ -803,6 +803,9 @@ func installLangNS() {
 			}
 		}
 		if len(vs) == 1 {
+			if vs[0] == vm.NIL {
+				return vm.NIL, nil
+			}
 			if s, ok := toStr(vs[0]); ok {
 				return vm.Symbol(s), nil
 			}
@@ -1858,7 +1861,7 @@ func installLangNS() {
 			return 1, nil
 		}
 		switch va := a.(type) {
-		case vm.Int, vm.Float:
+		case vm.Int, vm.Float, *vm.BigInt, *vm.Ratio, *vm.BigDecimal:
 			if r, err := vm.NumLt(a, b); err == nil {
 				if r {
 					return -1, nil
@@ -2202,10 +2205,11 @@ func installLangNS() {
 		if len(vs) == 1 {
 			return vm.NewRepeat(vs[0], -1), nil
 		}
-		n, ok := vs[0].(vm.Int)
+		ni, ok := vm.ToInt(vs[0])
 		if !ok {
 			return vm.NIL, fmt.Errorf("repeat expected an Int")
 		}
+		n := vm.Int(ni)
 		if int(n) <= 0 {
 			return vm.EmptyList, nil
 		}
@@ -3822,21 +3826,20 @@ func installLangNS() {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("subvec expects 2-3 args")
 		}
-		start, ok := vs[1].(vm.Int)
+		s, ok := vm.ToInt(vs[1])
 		if !ok {
 			return vm.NIL, fmt.Errorf("subvec expected Int start")
 		}
-		s := int(start)
 
 		switch v := vs[0].(type) {
 		case vm.ArrayVector:
 			end := len(v)
 			if len(vs) == 3 {
-				e, ok := vs[2].(vm.Int)
+				e, ok := vm.ToInt(vs[2])
 				if !ok {
 					return vm.NIL, fmt.Errorf("subvec expected Int end")
 				}
-				end = int(e)
+				end = e
 			}
 			if s < 0 || end > len(v) || s > end {
 				return vm.NIL, fmt.Errorf("subvec: index out of bounds")
@@ -4250,6 +4253,9 @@ func installLangNS() {
 			return vm.NewBigDecimalFromFloat64(float64(v)), nil
 		case *vm.BigInt:
 			f, _ := new(big.Float).SetPrec(vm.BigDecimalPrecConst).SetInt(v.Val()).Float64()
+			return vm.NewBigDecimalFromFloat64(f), nil
+		case *vm.Ratio:
+			f, _ := v.Val().Float64()
 			return vm.NewBigDecimalFromFloat64(f), nil
 		case vm.String:
 			bd, ok := vm.NewBigDecimalFromString(string(v))

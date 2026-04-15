@@ -30,10 +30,8 @@ func NumAdd(a, b Value) (Value, error) {
 		case Float:
 			return Float(float64(av) + float64(bv)), nil
 		case *BigInt:
-			bf := new(big.Float).SetInt(bv.val)
-			af := new(big.Float).SetFloat64(float64(av))
-			r, _ := new(big.Float).Add(af, bf).Float64()
-			return Float(r), nil
+			bf, _ := bv.val.Float64()
+			return Float(float64(av) + float64(bf)), nil
 		}
 	case *BigInt:
 		switch bv := b.(type) {
@@ -41,10 +39,8 @@ func NumAdd(a, b Value) (Value, error) {
 			r := new(big.Int).Add(av.val, big.NewInt(int64(bv)))
 			return NewBigInt(r), nil
 		case Float:
-			af := new(big.Float).SetInt(av.val)
-			bf := new(big.Float).SetFloat64(float64(bv))
-			r, _ := new(big.Float).Add(af, bf).Float64()
-			return Float(r), nil
+			af, _ := av.val.Float64()
+			return Float(float64(af) + float64(bv)), nil
 		case *BigInt:
 			r := new(big.Int).Add(av.val, bv.val)
 			return NewBigInt(r), nil
@@ -76,10 +72,8 @@ func NumSub(a, b Value) (Value, error) {
 		case Float:
 			return Float(float64(av) - float64(bv)), nil
 		case *BigInt:
-			af := new(big.Float).SetFloat64(float64(av))
-			bf := new(big.Float).SetInt(bv.val)
-			r, _ := new(big.Float).Sub(af, bf).Float64()
-			return Float(r), nil
+			bf, _ := bv.val.Float64()
+			return Float(float64(av) - bf), nil
 		}
 	case *BigInt:
 		switch bv := b.(type) {
@@ -87,10 +81,8 @@ func NumSub(a, b Value) (Value, error) {
 			r := new(big.Int).Sub(av.val, big.NewInt(int64(bv)))
 			return NewBigInt(r), nil
 		case Float:
-			af := new(big.Float).SetInt(av.val)
-			bf := new(big.Float).SetFloat64(float64(bv))
-			r, _ := new(big.Float).Sub(af, bf).Float64()
-			return Float(r), nil
+			af, _ := av.val.Float64()
+			return Float(af - float64(bv)), nil
 		case *BigInt:
 			r := new(big.Int).Sub(av.val, bv.val)
 			return NewBigInt(r), nil
@@ -122,10 +114,8 @@ func NumMul(a, b Value) (Value, error) {
 		case Float:
 			return Float(float64(av) * float64(bv)), nil
 		case *BigInt:
-			af := new(big.Float).SetFloat64(float64(av))
-			bf := new(big.Float).SetInt(bv.val)
-			r, _ := new(big.Float).Mul(af, bf).Float64()
-			return Float(r), nil
+			bf, _ := bv.val.Float64()
+			return Float(float64(av) * bf), nil
 		}
 	case *BigInt:
 		switch bv := b.(type) {
@@ -133,10 +123,8 @@ func NumMul(a, b Value) (Value, error) {
 			r := new(big.Int).Mul(av.val, big.NewInt(int64(bv)))
 			return NewBigInt(r), nil
 		case Float:
-			af := new(big.Float).SetInt(av.val)
-			bf := new(big.Float).SetFloat64(float64(bv))
-			r, _ := new(big.Float).Mul(af, bf).Float64()
-			return Float(r), nil
+			af, _ := av.val.Float64()
+			return Float(af * float64(bv)), nil
 		case *BigInt:
 			r := new(big.Int).Mul(av.val, bv.val)
 			return NewBigInt(r), nil
@@ -178,14 +166,8 @@ func NumDiv(a, b Value) (Value, error) {
 			// Float/Float: IEEE 754 semantics (allows NaN, Inf)
 			return Float(float64(av) / float64(bv)), nil
 		case *BigInt:
-			if bv.val.Sign() == 0 {
-				// Float/BigInt(0): IEEE 754
-				return Float(float64(av) / 0.0), nil
-			}
-			af := new(big.Float).SetFloat64(float64(av))
-			bf := new(big.Float).SetInt(bv.val)
-			r, _ := new(big.Float).Quo(af, bf).Float64()
-			return Float(r), nil
+			bf, _ := bv.val.Float64()
+			return Float(float64(av) / bf), nil
 		}
 	case *BigInt:
 		switch bv := b.(type) {
@@ -199,9 +181,8 @@ func NumDiv(a, b Value) (Value, error) {
 			if float64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
-			af := new(big.Float).SetInt(av.val)
-			bf := new(big.Float).SetFloat64(float64(bv))
-			r, _ := new(big.Float).Quo(af, bf).Float64()
+			af, _ := av.val.Float64()
+			r := af / float64(bv)
 			return Float(r), nil
 		case *BigInt:
 			if bv.val.Sign() == 0 {
@@ -460,6 +441,10 @@ func NumNeg(a Value) (Value, error) {
 		return Float(-float64(av)), nil
 	case *BigInt:
 		return MaybeDowngrade(new(big.Int).Neg(av.val)), nil
+	case *Ratio:
+		return NewRatio(new(big.Rat).Neg(av.val)), nil
+	case *BigDecimal:
+		return NewBigDecimal(new(big.Float).SetPrec(bigDecimalPrec).Neg(av.val)), nil
 	}
 	return NIL, fmt.Errorf("cannot negate %s", a.Type().Name())
 }
@@ -481,6 +466,10 @@ func NumAbs(a Value) (Value, error) {
 		return Float(v), nil
 	case *BigInt:
 		return MaybeDowngrade(new(big.Int).Abs(av.val)), nil
+	case *Ratio:
+		return NewRatio(new(big.Rat).Abs(av.val)), nil
+	case *BigDecimal:
+		return NewBigDecimal(new(big.Float).SetPrec(bigDecimalPrec).Abs(av.val)), nil
 	}
 	return NIL, fmt.Errorf("cannot abs %s", a.Type().Name())
 }
