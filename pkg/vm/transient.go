@@ -179,6 +179,18 @@ func (t *TransientVector) Assoc(key Value, val Value) (*TransientVector, error) 
 	return t, nil
 }
 
+// Pop removes the last element from the transient vector.
+func (t *TransientVector) Pop() (*TransientVector, error) {
+	if err := t.ensureEditable(); err != nil {
+		return nil, err
+	}
+	if len(t.array) == 0 {
+		return nil, fmt.Errorf("can't pop empty transient vector")
+	}
+	t.array = t.array[:len(t.array)-1]
+	return t, nil
+}
+
 // Persistent freezes the transient and returns an immutable vector.
 func (t *TransientVector) Persistent() Value {
 	t.edit.Store(false)

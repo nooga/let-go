@@ -58,8 +58,15 @@
         default-fixture (fn [t] (t))
         join-fixtures (fn [fs] (reduce compose-fixtures default-fixture fs))
         runner (fn [tv]
-                 (let [test-fn (deref tv)]
-                   ((join-fixtures *each-fixtures*) (fn [] (test-fn)))))]
+                 (set! *testing-contexts* [])
+                 (try
+                   (let [test-fn (deref tv)]
+                     ((join-fixtures *each-fixtures*) (fn [] (test-fn))))
+                   (catch e
+                     (set! *testing-contexts* [])
+                     (set! *report-counters* (update *report-counters* :error inc))
+                     (set! *test-result* false)
+                     (println "ERROR in test:" e))))]
     (if (seq nss)
       (doseq [s nss]
         (let [old-ns *ns*]

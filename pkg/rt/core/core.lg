@@ -94,7 +94,34 @@
                         (cons 'condp (cons comparator (cons arg (next (next forms)))))))))
 
 (defmacro case [arg & forms]
-  (concat-list (list 'condp '= arg) forms))
+  ;; case treats test values as compile-time constants (not evaluated).
+  ;; (case x val1 result1 val2 result2 ... default?)
+  ;; A list in test position means "match any of these": (case x (a b) :yes)
+  (let [g (gensym "case__")
+        fv (vec forms)
+        n (count fv)
+        has-default (odd? n)
+        default-val (if has-default (nth fv (dec n)) (list 'throw (str "No matching clause: ")))
+        pair-count (if has-default (dec n) n)]
+    `(let [~g ~arg]
+       (cond
+         ~@(loop [i 0 acc []]
+             (if (>= i pair-count)
+               acc
+               (let [test-val (nth fv i)
+                     result (nth fv (inc i))]
+                 (if (and (list? test-val) (not (empty? test-val)))
+                   ;; List of alternatives: (a b c)
+                   (recur (+ i 2)
+                          (conj acc
+                                (cons 'or (map (fn [v] (list '= g (list 'quote v))) test-val))
+                                result))
+                   ;; Single value — quote it
+                   (recur (+ i 2)
+                          (conj acc
+                                (list '= g (list 'quote test-val))
+                                result))))))
+         :else ~default-val))))
 
 ; moved below to ensure dependencies are available during compilation
 
@@ -185,13 +212,12 @@
 ;; bleh
 (defn list? [x] (= (type x) (type '())))
 (defn vector? [x] (= (type x) (type [])))
-(defn map? [x] (= (type x) (type {})))
+;; map? and set? are native builtins (handle sorted variants)
 (defn symbol? [x] (= (type x) (type 'x)))
 (defn keyword? [x] (= (type x) (type :x)))
 (defn string? [x] (= (type x) (type "")))
-(defn set? [x] (= (type x) (type #{})))
-(defn sorted? [_] false)
-(defn reversible? [_] false)
+;; set? is a native builtin (handles sorted variants)
+;; sorted? and reversible? are native builtins
 (defn counted? [x] (or (vector? x) (map? x) (set? x) (list? x) (nil? x)))
 ;; number? is a native builtin that handles Int and Float
 
@@ -902,13 +928,16 @@
       ([result input]
        (reduce rrf result input)))))
 
+(defn- transientable? [c]
+  (and (or (map? c) (vector? c)) (not (sorted? c))))
+
 (defn into
   ([c r]
-   (if (or (map? c) (vector? c))
+   (if (transientable? c)
      (persistent! (reduce conj! (transient c) r))
      (reduce conj c r)))
   ([c xform from]
-   (if (or (map? c) (vector? c))
+   (if (transientable? c)
      (persistent! (transduce xform (completing conj!) (transient c) from))
      (transduce xform (completing conj) c from))))
 
@@ -921,14 +950,7 @@
 (defn array-map [& kvs]
   (apply hash-map kvs))
 
-;; rseq: reverse a vector into a seq
-(defn rseq [v]
-  (when (and v (pos? (count v)))
-    (let [n (count v)]
-      (loop [i (dec n) acc ()]
-        (if (neg? i)
-          acc
-          (recur (dec i) (cons (nth v i) acc)))))))
+;; rseq is a native builtin (supports vectors, sorted-map, sorted-set)
 
 ;; some-fn: complement of every-pred — returns first truthy result or false
 (defn some-fn
@@ -1213,30 +1235,36 @@
 ;; nth is a native Go builtin
 
 (defmacro doseq [bind & body]
-  (if (<= (count bind) 2)
-    ;; Single binding — base case
-    (let [binding (first bind)
-          coll (second bind)
-          seq-sym (gensym "doseq_seq__")
-          loop-sym (gensym "doseq_loop__")]
-      `(let [~seq-sym (seq ~coll)]
-         (loop [~loop-sym ~seq-sym]
-           (when ~loop-sym
-             (let [~binding (first ~loop-sym)]
-               ~@body
-               (recur (next ~loop-sym)))))))
-    ;; Multiple bindings — nest: outer binding wraps inner doseq
-    (let [binding (first bind)
-          coll (second bind)
-          rest-binds (vec (drop 2 bind))
-          seq-sym (gensym "doseq_seq__")
-          loop-sym (gensym "doseq_loop__")]
-      `(let [~seq-sym (seq ~coll)]
-         (loop [~loop-sym ~seq-sym]
-           (when ~loop-sym
-             (let [~binding (first ~loop-sym)]
-               (doseq ~rest-binds ~@body)
-               (recur (next ~loop-sym)))))))))
+  ;; Parse binding vector into steps (same as for)
+  (let [steps (loop [b bind acc []]
+                (if (empty? b)
+                  acc
+                  (cond
+                    (= (first b) :let)   (recur (drop 2 b) (conj acc [:let (second b)]))
+                    (= (first b) :when)  (recur (drop 2 b) (conj acc [:when (second b)]))
+                    (= (first b) :while) (recur (drop 2 b) (conj acc [:while (second b)]))
+                    :else                (recur (drop 2 b) (conj acc [:bind (first b) (second b)])))))]
+    (letfn [(emit [ss]
+              (if (empty? ss)
+                (cons 'do body)
+                (let [step (first ss)
+                      rest-ss (next ss)
+                      inner (emit (or rest-ss []))]
+                  (case (first step)
+                    :let   (list 'let (second step) inner)
+                    :when  (list 'when (second step) inner)
+                    :while inner ;; :while not fully supported yet
+                    :bind  (let [sym  (step 1)
+                                 coll (step 2)
+                                 seq-s (gensym "doseq_seq__")
+                                 loop-s (gensym "doseq_loop__")]
+                             `(let [~seq-s (seq ~coll)]
+                                (loop [~loop-s ~seq-s]
+                                  (when ~loop-s
+                                    (let [~sym (first ~loop-s)]
+                                      ~inner
+                                      (recur (next ~loop-s)))))))))))]
+      (emit steps))))
 
 ;; for — lazy list comprehension
 ;; (for [x xs, y ys, :let [z expr], :when pred, :while pred] body)
@@ -1674,17 +1702,20 @@
 
 (defn nthrest
   [coll n]
-  (loop [s coll i n]
-    (if (and (pos? i) (seq s))
-      (recur (rest s) (dec i))
-      (or s ()))))
+  (if (pos? n)
+    (loop [s (rest coll) i (dec n)]
+      (if (and (pos? i) (seq s))
+        (recur (rest s) (dec i))
+        s))
+    coll))
 
 (defn nthnext
   [coll n]
-  (loop [s coll i n]
-    (if (and (pos? i) (seq s))
-      (recur (next s) (dec i))
-      (seq s))))
+  (let [n (if (nil? n) 0 n)]
+    (loop [s coll i n]
+      (if (and (pos? i) (seq s))
+        (recur (next s) (dec i))
+        (seq s)))))
 
 ;; --- Tier 2 functions ---
 
@@ -1757,4 +1788,8 @@
        (if (< ~idx (alength a#))
          (recur (inc ~idx) ~expr)
          ~ret))))
+
+;; with-out-str — capture printed output as a string
+(defmacro with-out-str [& body]
+  `(with-out-str* (fn [] ~@body)))
 

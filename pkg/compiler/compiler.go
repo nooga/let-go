@@ -1374,12 +1374,15 @@ func defCompiler(c *Context, form vm.Value) error {
 		}
 	}
 	l := len(args)
-	if l != 2 {
-		return NewCompileError(fmt.Sprintf("def: wrong number of forms (%d), need 2", l))
+	if l < 1 || l > 2 {
+		return NewCompileError(fmt.Sprintf("def: wrong number of forms (%d), need 1 or 2", l))
 	}
 	var meta vm.Value = vm.NIL
 	sym := args[0]
-	val := args[1]
+	var val vm.Value = vm.NIL
+	if l == 2 {
+		val = args[1]
+	}
 	if sym.Type() == vm.ListType {
 		ss := sym.(vm.Seq)
 		if ss.First() != vm.Symbol("with-meta") {

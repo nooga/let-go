@@ -193,6 +193,188 @@ func nextID() int {
 	return gensymID
 }
 
+// mapLike is any map type with Lookup + Counted + Sequable
+type mapLike interface {
+	vm.Lookup
+	vm.Counted
+	vm.Sequable
+}
+
+// setLike is any set type with Contains + Counted + Sequable
+type setLike interface {
+	vm.Keyed
+	vm.Counted
+	vm.Sequable
+}
+
+// sentinel is a unique Value used to detect missing keys.
+var sentinel vm.Value = vm.Symbol("__sentinel__")
+
+func mapEquals(a, b mapLike) bool {
+	if a.RawCount() != b.RawCount() {
+		return false
+	}
+	seq := a.Seq()
+	for seq != nil && seq != vm.EmptyList {
+		entry := seq.First()
+		if av, ok := entry.(vm.ArrayVector); ok && len(av) == 2 {
+			bv := b.ValueAtOr(av[0], sentinel)
+			if bv == sentinel {
+				return false
+			}
+			if !valueEquals(av[1], bv) {
+				return false
+			}
+		}
+		seq = seq.Next()
+	}
+	return true
+}
+
+func setEquals(a, b setLike) bool {
+	if a.RawCount() != b.RawCount() {
+		return false
+	}
+	seq := a.Seq()
+	for seq != nil && seq != vm.EmptyList {
+		if b.Contains(seq.First()) == vm.FALSE {
+			return false
+		}
+		seq = seq.Next()
+	}
+	return true
+}
+
+func isMapType(v vm.Value) bool {
+	switch v.(type) {
+	case vm.Map, *vm.PersistentMap, *vm.SortedMap:
+		return true
+	}
+	return false
+}
+
+func isSetType(v vm.Value) bool {
+	switch v.(type) {
+	case vm.Set, *vm.PersistentSet, *vm.SortedSet:
+		return true
+	}
+	return false
+}
+
+// crossMapEquals compares two map-like values of potentially different types.
+func crossMapEquals(a, b vm.Value) bool {
+	// Get count and lookup for both sides
+	ac, al := mapCountAndLookup(a)
+	bc, bl := mapCountAndLookup(b)
+	if ac != bc || al == nil || bl == nil {
+		return false
+	}
+	// Iterate a's entries and check b
+	iterateMap(a, func(k, v vm.Value) bool {
+		bv := bl.ValueAtOr(k, sentinel)
+		if bv == sentinel || !valueEquals(v, bv) {
+			ac = -1 // signal mismatch
+			return false
+		}
+		return true
+	})
+	return ac >= 0
+}
+
+func mapCountAndLookup(v vm.Value) (int, vm.Lookup) {
+	switch m := v.(type) {
+	case vm.Map:
+		return len(m), m
+	case *vm.PersistentMap:
+		return m.RawCount(), m
+	case *vm.SortedMap:
+		return m.RawCount(), m
+	}
+	return -1, nil
+}
+
+func iterateMap(v vm.Value, f func(k, v vm.Value) bool) {
+	switch m := v.(type) {
+	case vm.Map:
+		for k, val := range m {
+			if !f(k, val) {
+				return
+			}
+		}
+	case vm.Sequable:
+		seq := m.Seq()
+		for seq != nil && seq != vm.EmptyList {
+			entry := seq.First()
+			if av, ok := entry.(vm.ArrayVector); ok && len(av) == 2 {
+				if !f(av[0], av[1]) {
+					return
+				}
+			}
+			seq = seq.Next()
+		}
+	}
+}
+
+// crossSetEquals compares two set-like values of potentially different types.
+func crossSetEquals(a, b vm.Value) bool {
+	ac := setCount(a)
+	bc := setCount(b)
+	if ac != bc {
+		return false
+	}
+	bk := asKeyed(b)
+	if bk == nil {
+		return false
+	}
+	match := true
+	iterateSet(a, func(v vm.Value) bool {
+		if bk.Contains(v) == vm.FALSE {
+			match = false
+			return false
+		}
+		return true
+	})
+	return match
+}
+
+func setCount(v vm.Value) int {
+	switch s := v.(type) {
+	case vm.Set:
+		return len(s)
+	case *vm.PersistentSet:
+		return s.RawCount()
+	case *vm.SortedSet:
+		return s.RawCount()
+	}
+	return -1
+}
+
+func asKeyed(v vm.Value) vm.Keyed {
+	if k, ok := v.(vm.Keyed); ok {
+		return k
+	}
+	return nil
+}
+
+func iterateSet(v vm.Value, f func(vm.Value) bool) {
+	switch s := v.(type) {
+	case vm.Set:
+		for k := range s {
+			if !f(k) {
+				return
+			}
+		}
+	case vm.Sequable:
+		seq := s.Seq()
+		for seq != nil && seq != vm.EmptyList {
+			if !f(seq.First()) {
+				return
+			}
+			seq = seq.Next()
+		}
+	}
+}
+
 // valueEquals performs deep equality comparison for Clojure semantics
 func valueEquals(a, b vm.Value) bool {
 	// Handle nil
@@ -233,6 +415,14 @@ func valueEquals(a, b vm.Value) bool {
 			}
 			return as == nil && bs == nil
 		}
+		// Cross-type map equality (SortedMap vs Map vs PersistentMap)
+		if isMapType(a) && isMapType(b) {
+			return crossMapEquals(a, b)
+		}
+		// Cross-type set equality (SortedSet vs Set vs PersistentSet)
+		if isSetType(a) && isSetType(b) {
+			return crossSetEquals(a, b)
+		}
 		return false
 	}
 
@@ -271,20 +461,58 @@ func valueEquals(a, b vm.Value) bool {
 		}
 		return as == nil && bs == nil
 	case vm.Map:
-		bm := b.(vm.Map)
-		if len(av) != len(bm) {
-			return false
-		}
-		for k, v := range av {
-			bv, ok := bm[k]
-			if !ok || !valueEquals(v, bv) {
+		if bm, ok := b.(vm.Map); ok {
+			if len(av) != len(bm) {
 				return false
 			}
+			for k, v := range av {
+				bv, ok := bm[k]
+				if !ok || !valueEquals(v, bv) {
+					return false
+				}
+			}
+			return true
 		}
-		return true
+		// Cross-type: vm.Map vs SortedMap/PersistentMap
+		if bm, ok := b.(mapLike); ok {
+			if len(av) != bm.RawCount() {
+				return false
+			}
+			for k, v := range av {
+				bv := bm.ValueAtOr(k, sentinel)
+				if bv == sentinel || !valueEquals(v, bv) {
+					return false
+				}
+			}
+			return true
+		}
+		return false
 	case *vm.PersistentMap:
 		if bm, ok := b.(*vm.PersistentMap); ok {
 			return av.Equals(bm)
+		}
+		if bm, ok := b.(*vm.SortedMap); ok {
+			return mapEquals(av, bm)
+		}
+		return false
+	case *vm.SortedMap:
+		if bm, ok := b.(*vm.SortedMap); ok {
+			return mapEquals(av, bm)
+		}
+		if bm, ok := b.(*vm.PersistentMap); ok {
+			return mapEquals(av, bm)
+		}
+		if bm, ok := b.(vm.Map); ok {
+			if av.RawCount() != len(bm) {
+				return false
+			}
+			for k, v := range bm {
+				sv := av.ValueAtOr(k, sentinel)
+				if sv == sentinel || !valueEquals(v, sv) {
+					return false
+				}
+			}
+			return true
 		}
 		return false
 	case vm.Set:
@@ -299,22 +527,21 @@ func valueEquals(a, b vm.Value) bool {
 		}
 		return true
 	case *vm.PersistentSet:
-		bs, ok := b.(*vm.PersistentSet)
-		if !ok {
-			return false
+		if bs, ok := b.(*vm.PersistentSet); ok {
+			return setEquals(av, bs)
 		}
-		if av.RawCount() != bs.RawCount() {
-			return false
+		if bs, ok := b.(*vm.SortedSet); ok {
+			return setEquals(av, bs)
 		}
-		// Check every element of av is in bs
-		seq := av.Seq()
-		for seq != nil && seq != vm.EmptyList {
-			if bs.Contains(seq.First()) == vm.FALSE {
-				return false
-			}
-			seq = seq.Next()
+		return false
+	case *vm.SortedSet:
+		if bs, ok := b.(*vm.SortedSet); ok {
+			return setEquals(av, bs)
 		}
-		return true
+		if bs, ok := b.(*vm.PersistentSet); ok {
+			return setEquals(av, bs)
+		}
+		return false
 	case *vm.BigInt:
 		if bv, ok := b.(*vm.BigInt); ok {
 			return av.Equals(bv)
@@ -391,7 +618,7 @@ func isSequentialType(v vm.Value) bool {
 	switch v.(type) {
 	case vm.ArrayVector, *vm.PersistentVector, *vm.List, *vm.Cons, *vm.LazySeq:
 		return true
-	case *vm.PersistentMap, vm.Map, *vm.PersistentSet, vm.Set:
+	case *vm.PersistentMap, vm.Map, *vm.PersistentSet, vm.Set, *vm.SortedMap, *vm.SortedSet:
 		return false
 	}
 	// Range and other Seq implementations
@@ -699,6 +926,73 @@ func installLangNS() {
 	})
 	hashSet, err := vm.NativeFnType.WrapNoErr(vm.NewSet)
 
+	sortedMap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs)%2 != 0 {
+			return vm.NIL, fmt.Errorf("sorted-map requires even number of arguments, got %d", len(vs))
+		}
+		return vm.NewSortedMap(nil, vs), nil
+	})
+
+	sortedSet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.NewSortedSet(nil, vs), nil
+	})
+
+	sortedMapBy, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("sorted-map-by requires a comparator")
+		}
+		comp, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("sorted-map-by first arg must be a function")
+		}
+		kvs := vs[1:]
+		if len(kvs)%2 != 0 {
+			return vm.NIL, fmt.Errorf("sorted-map-by requires even number of key-value arguments")
+		}
+		cmp := func(a, b vm.Value) (int, error) {
+			r, err := comp.Invoke([]vm.Value{a, b})
+			if err != nil {
+				return 0, err
+			}
+			n, _ := vm.ToInt(r)
+			switch {
+			case n < 0:
+				return -1, nil
+			case n > 0:
+				return 1, nil
+			default:
+				return 0, nil
+			}
+		}
+		return vm.NewSortedMap(cmp, kvs), nil
+	})
+
+	sortedSetBy, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("sorted-set-by requires a comparator")
+		}
+		comp, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("sorted-set-by first arg must be a function")
+		}
+		cmp := func(a, b vm.Value) (int, error) {
+			r, err := comp.Invoke([]vm.Value{a, b})
+			if err != nil {
+				return 0, err
+			}
+			n, _ := vm.ToInt(r)
+			switch {
+			case n < 0:
+				return -1, nil
+			case n > 0:
+				return 1, nil
+			default:
+				return 0, nil
+			}
+		}
+		return vm.NewSortedSet(cmp, vs[1:]), nil
+	})
+
 	vec, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -767,7 +1061,7 @@ func installLangNS() {
 			default:
 				return vm.NIL, fmt.Errorf("keyword name must be a string, got %s", vs[1].Type())
 			}
-			if nsStr == "" {
+			if nsStr == "" && vs[0] == vm.NIL {
 				return vm.Keyword(nameStr), nil
 			}
 			return vm.Keyword(nsStr + "/" + nameStr), nil
@@ -939,6 +1233,12 @@ func installLangNS() {
 				result = result.Disj(v)
 			}
 			return result, nil
+		case *vm.SortedSet:
+			result := s
+			for _, v := range vs[1:] {
+				result = result.Disj(v)
+			}
+			return result, nil
 		case vm.Set:
 			for _, v := range vs[1:] {
 				s = s.Disj(v)
@@ -967,11 +1267,12 @@ func installLangNS() {
 				return vm.Boolean(i >= 0 && i < c.RawCount()), nil
 			}
 		}
-		// Strings: contains? checks if index exists
+		// Strings: contains? checks if index exists (must be integer key)
 		if s, ok := vs[0].(vm.String); ok {
 			if idx, ok := vs[1].(vm.Int); ok {
 				return vm.Boolean(int(idx) >= 0 && int(idx) < len([]rune(string(s)))), nil
 			}
+			return vm.NIL, fmt.Errorf("contains? on a string requires an integer key, got %s", vs[1].Type().Name())
 		}
 		return vm.FALSE, nil
 	})
@@ -1849,86 +2150,8 @@ func installLangNS() {
 		return m, nil
 	})
 
-	// compareValues returns -1, 0, or 1 for general value comparison
-	compareValues := func(a, b vm.Value) (int, error) {
-		if a == vm.NIL && b == vm.NIL {
-			return 0, nil
-		}
-		if a == vm.NIL {
-			return -1, nil
-		}
-		if b == vm.NIL {
-			return 1, nil
-		}
-		switch va := a.(type) {
-		case vm.Int, vm.Float, *vm.BigInt, *vm.Ratio, *vm.BigDecimal:
-			if r, err := vm.NumLt(a, b); err == nil {
-				if r {
-					return -1, nil
-				}
-				if r2, _ := vm.NumGt(a, b); r2 {
-					return 1, nil
-				}
-				return 0, nil
-			}
-		case vm.String:
-			if vb, ok := b.(vm.String); ok {
-				switch {
-				case string(va) < string(vb):
-					return -1, nil
-				case string(va) > string(vb):
-					return 1, nil
-				default:
-					return 0, nil
-				}
-			}
-		case vm.Keyword:
-			if vb, ok := b.(vm.Keyword); ok {
-				switch {
-				case string(va) < string(vb):
-					return -1, nil
-				case string(va) > string(vb):
-					return 1, nil
-				default:
-					return 0, nil
-				}
-			}
-		case vm.Symbol:
-			if vb, ok := b.(vm.Symbol); ok {
-				switch {
-				case string(va) < string(vb):
-					return -1, nil
-				case string(va) > string(vb):
-					return 1, nil
-				default:
-					return 0, nil
-				}
-			}
-		case vm.Boolean:
-			if vb, ok := b.(vm.Boolean); ok {
-				switch {
-				case !bool(va) && bool(vb):
-					return -1, nil
-				case bool(va) && !bool(vb):
-					return 1, nil
-				default:
-					return 0, nil
-				}
-			}
-		case vm.Char:
-			if vb, ok := b.(vm.Char); ok {
-				switch {
-				case rune(va) < rune(vb):
-					return -1, nil
-				case rune(va) > rune(vb):
-					return 1, nil
-				default:
-					return 0, nil
-				}
-			}
-		}
-		return 0, fmt.Errorf("cannot compare %s and %s", a.Type(), b.Type())
-	}
+	// compareValues delegates to the vm package's DefaultCompare
+	compareValues := vm.DefaultCompare
 
 	comparef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
@@ -2469,8 +2692,9 @@ func installLangNS() {
 		}
 		buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
 		buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10
-		return vm.String(fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-			buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])), nil
+		s := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+			buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
+		return vm.NewUUID(s), nil
 	})
 
 	// rand-nth: returns a random element from a collection
@@ -2509,7 +2733,7 @@ func installLangNS() {
 		switch vs[0].(type) {
 		case vm.String:
 			return vm.NIL, fmt.Errorf("shuffle not supported on string")
-		case *vm.PersistentMap, vm.Map:
+		case *vm.PersistentMap, vm.Map, *vm.SortedMap:
 			return vm.NIL, fmt.Errorf("shuffle not supported on map")
 		}
 		// Collect into slice
@@ -3483,6 +3707,31 @@ func installLangNS() {
 				return vm.MakeInt(1), nil
 			}
 		}
+		// Characters
+		if ca, ok := a.(vm.Char); ok {
+			if cb, ok := b.(vm.Char); ok {
+				if rune(ca) < rune(cb) {
+					return vm.MakeInt(-1), nil
+				}
+				if rune(ca) > rune(cb) {
+					return vm.MakeInt(1), nil
+				}
+				return vm.MakeInt(0), nil
+			}
+		}
+		// Symbols
+		if sa, ok := a.(vm.Symbol); ok {
+			if sb, ok := b.(vm.Symbol); ok {
+				as, bs := string(sa), string(sb)
+				if as < bs {
+					return vm.MakeInt(-1), nil
+				}
+				if as > bs {
+					return vm.MakeInt(1), nil
+				}
+				return vm.MakeInt(0), nil
+			}
+		}
 		// Vectors: lexicographic comparison
 		if isSequentialType(a) && isSequentialType(b) {
 			as, bs := toSeq(a), toSeq(b)
@@ -3848,19 +4097,19 @@ func installLangNS() {
 			copy(result, v[s:end])
 			return vm.NewArrayVector(result), nil
 		case vm.PersistentVector:
-			end := v.Count().(vm.Int)
+			end := int(v.Count().(vm.Int))
 			if len(vs) == 3 {
-				e, ok := vs[2].(vm.Int)
+				e, ok := vm.ToInt(vs[2])
 				if !ok {
 					return vm.NIL, fmt.Errorf("subvec expected Int end")
 				}
 				end = e
 			}
-			if s < 0 || int(end) > int(v.Count().(vm.Int)) || s > int(end) {
+			if s < 0 || end > int(v.Count().(vm.Int)) || s > end {
 				return vm.NIL, fmt.Errorf("subvec: index out of bounds")
 			}
-			result := make([]vm.Value, int(end)-s)
-			for i := s; i < int(end); i++ {
+			result := make([]vm.Value, end-s)
+			for i := s; i < end; i++ {
 				result[i-s] = v.ValueAt(vm.Int(i))
 			}
 			return vm.NewArrayVector(result), nil
@@ -4018,6 +4267,10 @@ func installLangNS() {
 	ns.Def("keyword", keyword)
 	ns.Def("symbol", symbolf)
 	ns.Def("hash-set", hashSet)
+	ns.Def("sorted-map", sortedMap)
+	ns.Def("sorted-set", sortedSet)
+	ns.Def("sorted-map-by", sortedMapBy)
+	ns.Def("sorted-set-by", sortedSetBy)
 
 	ns.Def("seq", seq)
 	ns.Def("seq?", isSeq)
@@ -4218,6 +4471,83 @@ func installLangNS() {
 		return vm.Boolean(vm.IsBigDecimal(vs[0])), nil
 	})
 	ns.Def("decimal?", isDecimal)
+
+	// sorted? — test if value is a sorted collection
+	isSorted, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.FALSE, nil }
+		switch vs[0].(type) {
+		case *vm.SortedMap, *vm.SortedSet:
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("sorted?", isSorted)
+
+	// map? — test if value is a map (hash or sorted)
+	isMap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.FALSE, nil }
+		switch vs[0].(type) {
+		case *vm.PersistentMap, *vm.SortedMap:
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("map?", isMap)
+
+	// set? — test if value is a set (hash or sorted)
+	isSet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.FALSE, nil }
+		switch vs[0].(type) {
+		case *vm.PersistentSet, *vm.SortedSet:
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("set?", isSet)
+
+	// reversible? — test if value supports rseq
+	isReversible, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.FALSE, nil }
+		switch vs[0].(type) {
+		case vm.ArrayVector, vm.PersistentVector, *vm.SortedMap, *vm.SortedSet:
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("reversible?", isReversible)
+
+	// rseq — reverse seq for sorted collections and vectors
+	rseqf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 { return vm.NIL, fmt.Errorf("wrong number of arguments") }
+		switch v := vs[0].(type) {
+		case *vm.SortedMap:
+			s := v.RSeq()
+			if s == vm.EmptyList { return vm.NIL, nil }
+			return s, nil
+		case *vm.SortedSet:
+			s := v.RSeq()
+			if s == vm.EmptyList { return vm.NIL, nil }
+			return s, nil
+		case vm.ArrayVector:
+			n := len(v)
+			if n == 0 { return vm.NIL, nil }
+			var s vm.Seq = vm.EmptyList
+			for i := 0; i < n; i++ {
+				s = vm.NewCons(v[i], s)
+			}
+			return s, nil
+		case vm.PersistentVector:
+			n := v.RawCount()
+			if n == 0 { return vm.NIL, nil }
+			var s vm.Seq = vm.EmptyList
+			for i := 0; i < n; i++ {
+				s = vm.NewCons(v.ValueAt(vm.MakeInt(i)), s)
+			}
+			return s, nil
+		}
+		return vm.NIL, fmt.Errorf("rseq not supported on: %s", vs[0].Type())
+	})
+	ns.Def("rseq", rseqf)
 
 	// numerator — return numerator of a Ratio
 	numeratorf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -4842,6 +5172,239 @@ func installLangNS() {
 		return vm.Boolean(ok), nil
 	})
 	ns.Def("array?", isArrayf)
+
+	// alter-var-root — atomically alter a var's root binding
+	alterVarRoot, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("alter-var-root expects 2 args")
+		}
+		v, ok := vs[0].(*vm.Var)
+		if !ok {
+			return vm.NIL, fmt.Errorf("alter-var-root expects a Var")
+		}
+		fn, ok := vs[1].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("alter-var-root expects a function")
+		}
+		old := v.Deref()
+		result, err := fn.Invoke([]vm.Value{old})
+		if err != nil {
+			return vm.NIL, err
+		}
+		v.SetRoot(result)
+		return result, nil
+	})
+	ns.Def("alter-var-root", alterVarRoot)
+
+	// var-get — get the value of a Var
+	varGet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("var-get expects 1 arg")
+		}
+		v, ok := vs[0].(*vm.Var)
+		if !ok {
+			return vm.NIL, fmt.Errorf("var-get expects a Var")
+		}
+		return v.Deref(), nil
+	})
+	ns.Def("var-get", varGet)
+
+	// macroexpand — expand a macro form once
+	macroexpandf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("macroexpand expects 1 arg")
+		}
+		form := vs[0]
+		lst, ok := form.(*vm.List)
+		if !ok {
+			return form, nil
+		}
+		if lst == vm.EmptyList || lst.First() == nil {
+			return form, nil
+		}
+		sym, ok := lst.First().(vm.Symbol)
+		if !ok {
+			return form, nil
+		}
+		// Resolve the symbol to a var
+		symStr := string(sym)
+		var resolved *vm.Var
+		if strings.Contains(symStr, "/") {
+			parts := strings.SplitN(symStr, "/", 2)
+			rns := nsRegistry[resolveNSAlias(parts[0])]
+			if rns != nil {
+				if v := rns.Lookup(vm.Symbol(parts[1])); v != nil {
+					resolved, _ = v.(*vm.Var)
+				}
+			}
+		} else {
+			if CoreNS != nil {
+				if v := CoreNS.Lookup(vm.Symbol(symStr)); v != nil {
+					resolved, _ = v.(*vm.Var)
+				}
+			}
+		}
+		if resolved == nil || !resolved.IsMacro() {
+			return form, nil
+		}
+		// Call the macro with the form's args
+		args := make([]vm.Value, 0)
+		for s := lst.Next(); s != nil; s = s.Next() {
+			args = append(args, s.First())
+		}
+		macroFn, ok := resolved.Deref().(vm.Fn)
+		if !ok {
+			return form, nil
+		}
+		return macroFn.Invoke(args)
+	})
+	ns.Def("macroexpand", macroexpandf)
+
+	// macroexpand-1 — same as macroexpand for now
+	ns.Def("macroexpand-1", macroexpandf)
+
+	// sleep — sleep for n milliseconds
+	sleepf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("sleep expects 1 arg")
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			time.Sleep(time.Duration(int64(v)) * time.Millisecond)
+		case vm.Float:
+			time.Sleep(time.Duration(int64(v)) * time.Millisecond)
+		default:
+			return vm.NIL, fmt.Errorf("sleep expects a number")
+		}
+		return vm.NIL, nil
+	})
+	ns.Def("sleep", sleepf)
+
+	// intern — intern a var in a namespace
+	internf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 || len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("intern expects 2 or 3 args")
+		}
+		var targetNS *vm.Namespace
+		switch n := vs[0].(type) {
+		case vm.Symbol:
+			targetNS = nsRegistry[resolveNSAlias(string(n))]
+		case *vm.Namespace:
+			targetNS = n
+		default:
+			return vm.NIL, fmt.Errorf("intern expects a namespace or symbol")
+		}
+		if targetNS == nil {
+			return vm.NIL, fmt.Errorf("namespace not found")
+		}
+		sym, ok := vs[1].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("intern expects a symbol name")
+		}
+		var val vm.Value = vm.NIL
+		if len(vs) == 3 {
+			val = vs[2]
+		}
+		v := targetNS.Def(string(sym), val)
+		return v, nil
+	})
+	ns.Def("intern", internf)
+
+	// create-ns — create or return existing namespace
+	createNsf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("create-ns expects 1 arg")
+		}
+		sym, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("create-ns expects a symbol")
+		}
+		return NS(string(sym)), nil
+	})
+	ns.Def("create-ns", createNsf)
+
+	// pop! — pop from a transient vector
+	popBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("pop! expects 1 arg")
+		}
+		tv, ok := vs[0].(*vm.TransientVector)
+		if !ok {
+			return vm.NIL, fmt.Errorf("pop! expects a transient vector")
+		}
+		return tv.Pop()
+	})
+	ns.Def("pop!", popBang)
+
+	// with-out-str — capture stdout as string (macro helper)
+	withOutStrf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("with-out-str* expects 1 arg (a thunk)")
+		}
+		fn, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("with-out-str* expects a function")
+		}
+		// Capture stdout
+		old := os.Stdout
+		r, w, err := os.Pipe()
+		if err != nil {
+			return vm.NIL, err
+		}
+		os.Stdout = w
+		_, callErr := fn.Invoke(nil)
+		w.Close()
+		os.Stdout = old
+		buf := make([]byte, 64*1024)
+		n, _ := r.Read(buf)
+		r.Close()
+		if callErr != nil {
+			return vm.NIL, callErr
+		}
+		return vm.String(buf[:n]), nil
+	})
+	ns.Def("with-out-str*", withOutStrf)
+
+	// uuid? — type predicate for UUID
+	isUUID, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		_, ok := vs[0].(*vm.UUID)
+		return vm.Boolean(ok), nil
+	})
+	ns.Def("uuid?", isUUID)
+
+	// parse-uuid — parse a string into a UUID
+	parseUUID, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("parse-uuid expects 1 arg")
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("parse-uuid expects a string, got %s", vs[0].Type().Name())
+		}
+		u := vm.ParseUUID(string(s))
+		if u == nil {
+			return vm.NIL, nil
+		}
+		return u, nil
+	})
+	ns.Def("parse-uuid", parseUUID)
+
+	// == — numeric equality (same as = for our purposes)
+	numericEq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.TRUE, nil
+		}
+		for i := 1; i < len(vs); i++ {
+			if !valueEquals(vs[0], vs[i]) {
+				return vm.FALSE, nil
+			}
+		}
+		return vm.TRUE, nil
+	})
+	ns.Def("==", numericEq)
 
 	// IO builtins (open, close!, read-line, write!, etc.)
 	installIOBuiltins(ns)

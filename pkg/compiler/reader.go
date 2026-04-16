@@ -675,7 +675,13 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
+		prevLen := len(ret)
 		ret = appendNonVoid(r, ret, form)
+		// If a reader conditional returned VOID and the previous form was a
+		// map key (odd position), drop the orphaned key so the map stays even.
+		if len(ret) == prevLen && len(ret)%2 != 0 {
+			ret = ret[:len(ret)-1]
+		}
 	}
 	if len(ret)%2 != 0 {
 		return vm.NIL, NewReaderError(r, "map literal must contain even number of forms")
@@ -1257,10 +1263,50 @@ func readHashMacro(r *LispReader, _ rune) (vm.Value, error) {
 		return vm.NIL, NewReaderError(r, "reading hash macro")
 	}
 	macro, ok := hashMacros[ch]
-	if !ok {
-		return vm.NIL, NewReaderError(r, "invalid hash macro")
+	if ok {
+		return macro(r, ch)
 	}
-	return macro(r, ch)
+	// Tagged literal: #tag value (e.g. #uuid "...")
+	if isLetter(ch) {
+		return readTaggedLiteral(r, ch)
+	}
+	return vm.NIL, NewReaderError(r, "invalid hash macro")
+}
+
+func isLetter(ch rune) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+}
+
+func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
+	// Read the tag name
+	if err := r.unread(); err != nil {
+		return vm.NIL, NewReaderError(r, "reading tagged literal")
+	}
+	tag, err := readToken(r, firstCh)
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading tagged literal tag")
+	}
+	tagStr := tag.String()
+	// Read the value
+	val, err := r.Read()
+	if err != nil {
+		return vm.NIL, NewReaderError(r, "reading tagged literal value")
+	}
+	switch tagStr {
+	case "uuid":
+		s, ok := val.(vm.String)
+		if !ok {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("#uuid requires a string, got %s", val.Type().Name()))
+		}
+		u := vm.ParseUUID(string(s))
+		if u == nil {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid UUID string: %s", s))
+		}
+		return u, nil
+	default:
+		// Unknown tags: just return the value (best-effort)
+		return val, nil
+	}
 }
 
 func unmatchedDelimReader(ru rune) readerFunc {

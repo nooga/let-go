@@ -695,6 +695,17 @@ func ToInt(v Value) (int, bool) {
 			return int(n.val.Int64()), true
 		}
 		return 0, false
+	case Boolean:
+		if bool(n) {
+			return 1, true
+		}
+		return 0, true
+	case *BigDecimal:
+		f, _ := n.Val().Float64()
+		return int(f), true
+	case *Ratio:
+		f, _ := n.Val().Float64()
+		return int(f), true
 	}
 	return 0, false
 }

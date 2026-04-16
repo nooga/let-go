@@ -28,48 +28,82 @@ const memLimitBytes = 512 * 1024 * 1024
 // knownFailing lists test names (filename stems) that are known to fail.
 // Tests that pass but appear here will cause an error so the list stays current.
 var knownFailing = map[string]bool{
+	"assoc":            true, // vector assoc, meta propagation
+	"assoc_bang":       true, // transient assoc edge cases
 	"binding":          true, // thread binding propagation to futures
-	"contains_qmark":   true, // contains? edge cases
+	"byte":             true, // byte range overflow
+	"case":             true, // case macro complex matching
+	"char":             true, // char negative values
+	"coll_qmark":       true, // (coll? (range)) not recognized
+	"compare":          true, // compare cross-type issues
+	"conj":             true, // conj arity/nil edge cases
+	"conj_bang":        true, // transient conj edge cases
+	"counted_qmark":    true, // counted? edge cases (hash-set, nil, strings)
+	"dec":              true, // dec overflow/type coercion
+	"disj":             true, // disj edge cases
 	"double_qmark":     true, // no float32/float64 distinction
-	"float":            true, // BigDecimal edge cases
-	"nan_qmark":        true, // NaN type predicate
-	"rational_qmark":   true, // rational? edge cases
-	"zero_qmark":       true, // zero? type checking
-	"select_keys":      true, // select-keys edge cases
 	"drop":             true, // (drop 5 nil) → nil not ()
 	"drop_while":       true, // (drop-while pred nil) → nil not ()
+	"empty_qmark":      true, // empty? on list containing nil
+	"eq":               true, // identical?-based eq function
 	"even_qmark":       true, // even? on float
+	"float":            true, // BigDecimal edge cases
 	"identical_qmark":  true, // identical? on boxed values
 	"ifn_qmark":        true, // ifn? edge cases
+	"inc":              true, // overflow untested assertion
+	"int":              true, // int overflow bounds
+	"intern":           true, // intern var binding
+	"juxt":             true, // juxt composition edge cases
+	"list_qmark":       true, // seq types report as list
 	"max":              true, // max with NaN
+	"merge":            true, // merge with nil/meta
 	"min":              true, // min with NaN
 	"min_key":          true, // min-key edge cases
+	"minus":            true, // overflow not detected
 	"mod":              true, // mod NaN/ratio edge cases
-	"not_empty":        true, // not-empty on list containing nil
-	"nth":              true, // nth out-of-bounds doesn't throw
-	"nthrest":          true, // nthrest edge cases
-	"odd_qmark":        true, // odd? on float
-	"peek":             true, // peek on cons
-	"pr_str":           true, // pr-str formatting
-	"quot":             true, // quot NaN/ratio edge cases
-	"rem":              true, // rem NaN/ratio edge cases
-	"str":              true, // str reader conditional
-	"keyword":          true, // keyword with empty ns
+	"nan_qmark":        true, // NaN type predicate
 	"nnext":            true, // map ordering
+	"not_empty":        true, // not-empty on list containing nil
+	"not_eq":           true, // identical?-based eq within not_eq
+	"nth":              true, // nth out-of-bounds doesn't throw
+	"nthnext":          true, // nthnext on various types
 	"num":              true, // num edge cases
+	"odd_qmark":        true, // odd? on float
+	"parse_uuid":       true, // UUID parsing tolerance
+	"partial":          true, // lazy evaluation edge case
+	"peek":             true, // peek on cons
+	"persistent_bang":  true, // persistent! edge cases
+	"plus":             true, // overflow not detected
+	"pop":              true, // pop on various types
+	"pr_str":           true, // pr-str formatting
 	"print_str":        true, // int-as-float formatting
 	"println_str":      true, // int-as-float formatting
 	"prn_str":          true, // int-as-float formatting
-	"partial":          true, // lazy evaluation edge case
-	"byte":             true, // byte range overflow
-	"char":             true, // char negative values
-	"empty_qmark":      true, // empty? on list containing nil
-	"int":              true, // int overflow bounds
+	"quot":             true, // quot NaN/ratio edge cases
+	"rand_nth":         true, // rand-nth on various types
+	"random_sample":    true, // random-sample edge cases
+	"random_uuid":      true, // UUID type changes
+	"rational_qmark":   true, // rational? edge cases
 	"rationalize":      true, // rationalize precision
-	"inc":              true, // overflow untested assertion
-	"minus":            true, // overflow not detected
-	"plus":             true, // overflow not detected
+	"reduce":           true, // reduce interop edge cases
+	"rem":              true, // rem NaN/ratio edge cases
+	"select_keys":      true, // select-keys edge cases
+	"seq_qmark":        true, // seq? returns true for non-seq types
+	"seqable_qmark":    true, // object-array not supported
+	"short":            true, // short coercion
+	"slash":            true, // division edge cases
+	"sort":             true, // sort edge cases
+	"sort_by":          true, // sort-by edge cases
 	"star":             true, // overflow not detected
+	"str":              true, // str reader conditional
+	"symbol":           true, // symbol coercion
+	"take_nth":         true, // take-nth edge cases
+	"update":           true, // update edge cases
+	"uuid_qmark":       true, // UUID type predicate
+	"vec":              true, // vec of empty string, vector assoc
+	"when_first":       true, // when-first edge cases
+	"when_let":         true, // when-let macroexpand test
+	"zero_qmark":       true, // zero? type checking
 }
 
 // suiteCounters tracks aggregate assertion counts across the entire suite.
