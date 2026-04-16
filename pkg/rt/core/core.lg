@@ -980,8 +980,11 @@
   (reduce #(do (proc %2) nil) nil coll)
   nil)
 
-(defn random-sample [prob coll]
-  (filter (fn [_] (< (rand) prob)) coll))
+(defn random-sample
+  ([prob]
+   (filter (fn [_] (< (rand) prob))))
+  ([prob coll]
+   (filter (fn [_] (< (rand) prob)) coll)))
 
 (defn keep
   ([f]
@@ -1025,6 +1028,8 @@
 
 (defn select-keys
   [map keyseq]
+  (when (and (some? map) (not (map? map)) (not (set? map)) (not (vector? map)))
+    (throw (str "select-keys not supported on " (type map))))
   (loop [ret {} keys (seq keyseq)]
     (if keys
       (let [entry (find map (first keys))]
@@ -1140,10 +1145,22 @@
            (when-let [s (seq coll)]
              (reductions f (f init (first s)) (rest s)))))))
 
-(defn take-nth [n coll]
-  (lazy-seq
-    (when-let [s (seq coll)]
-      (cons (first s) (take-nth n (drop n s))))))
+(defn take-nth
+  ([n]
+   (fn [rf]
+     (let [iv (volatile! -1)]
+       (fn
+         ([] (rf))
+         ([result] (rf result))
+         ([result input]
+          (vswap! iv inc)
+          (if (zero? (mod @iv n))
+            (rf result input)
+            result))))))
+  ([n coll]
+   (lazy-seq
+     (when-let [s (seq coll)]
+       (cons (first s) (take-nth n (drop n s)))))))
 
 (defn interpose
   ([sep]

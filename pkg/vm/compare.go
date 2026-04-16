@@ -10,6 +10,24 @@ import "fmt"
 // Comparator is a function that compares two Values, returning -1, 0, or 1.
 type Comparator func(a, b Value) (int, error)
 
+func isSeqComparable(v Value) bool {
+	switch v.(type) {
+	case ArrayVector, PersistentVector, *List, *Cons:
+		return true
+	}
+	return false
+}
+
+func seqFrom(v Value) Seq {
+	if s, ok := v.(Sequable); ok {
+		return s.Seq()
+	}
+	if s, ok := v.(Seq); ok {
+		return s
+	}
+	return nil
+}
+
 // DefaultCompare is the default comparator used by sorted collections.
 // It handles nil, numbers, strings, keywords, symbols, booleans, and chars.
 func DefaultCompare(a, b Value) (int, error) {
@@ -89,6 +107,29 @@ func DefaultCompare(a, b Value) (int, error) {
 				return 0, nil
 			}
 		}
+	}
+	// Vectors/sequential: lexicographic comparison
+	if isSeqComparable(a) && isSeqComparable(b) {
+		as := seqFrom(a)
+		bs := seqFrom(b)
+		for as != nil && bs != nil {
+			c, err := DefaultCompare(as.First(), bs.First())
+			if err != nil {
+				return 0, err
+			}
+			if c != 0 {
+				return c, nil
+			}
+			as = as.Next()
+			bs = bs.Next()
+		}
+		if as == nil && bs == nil {
+			return 0, nil
+		}
+		if as == nil {
+			return -1, nil
+		}
+		return 1, nil
 	}
 	return 0, fmt.Errorf("cannot compare %s and %s", a.Type(), b.Type())
 }

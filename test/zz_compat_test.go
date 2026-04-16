@@ -74,7 +74,6 @@ var knownFailing = map[string]bool{
 	"peek":             true, // peek on cons
 	"persistent_bang":  true, // persistent! edge cases
 	"plus":             true, // overflow not detected
-	"pop":              true, // pop on various types
 	"pr_str":           true, // pr-str formatting
 	"print_str":        true, // int-as-float formatting
 	"println_str":      true, // int-as-float formatting
@@ -87,7 +86,6 @@ var knownFailing = map[string]bool{
 	"rationalize":      true, // rationalize precision
 	"reduce":           true, // reduce interop edge cases
 	"rem":              true, // rem NaN/ratio edge cases
-	"select_keys":      true, // select-keys edge cases
 	"seq_qmark":        true, // seq? returns true for non-seq types
 	"seqable_qmark":    true, // object-array not supported
 	"short":            true, // short coercion

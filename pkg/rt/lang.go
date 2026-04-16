@@ -1092,6 +1092,8 @@ func installLangNS() {
 				return string(s), true
 			case vm.Symbol:
 				return string(s), true
+			case vm.Keyword:
+				return string(s), true
 			default:
 				return "", false
 			}
@@ -1222,6 +1224,9 @@ func installLangNS() {
 	disj, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
 		}
 		if len(vs) == 1 {
 			return vs[0], nil
@@ -1603,6 +1608,10 @@ func installLangNS() {
 	reduce, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		// 3-arg form with nil coll: return init regardless of fn
+		if len(vs) == 3 && vs[2] == vm.NIL {
+			return vs[1], nil
 		}
 		mfn, ok := vs[0].(vm.Fn)
 		if !ok {
@@ -2281,6 +2290,17 @@ func installLangNS() {
 			return vm.Int(int(v)), nil
 		case *vm.BigInt:
 			return vm.MakeInt(int(v.Unbox().(*big.Int).Int64())), nil
+		case *vm.BigDecimal:
+			f, _ := v.Val().Float64()
+			return vm.MakeInt(int(f)), nil
+		case *vm.Ratio:
+			f, _ := v.Val().Float64()
+			return vm.MakeInt(int(f)), nil
+		case vm.Boolean:
+			if bool(v) {
+				return vm.MakeInt(1), nil
+			}
+			return vm.MakeInt(0), nil
 		default:
 			return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 		}
@@ -2383,6 +2403,9 @@ func installLangNS() {
 	pop, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if vs[0] == vm.NIL {
+			return vm.NIL, nil
 		}
 		switch vs[0].(type) {
 		case vm.PersistentVector:
@@ -2788,8 +2811,8 @@ func installLangNS() {
 
 	// conj!: mutating conj on a transient
 	conjBang, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		if len(vs) == 0 {
+			return vm.NewTransientVector(nil), nil
 		}
 		if len(vs) == 1 {
 			return vs[0], nil
