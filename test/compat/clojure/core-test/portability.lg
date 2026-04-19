@@ -48,6 +48,30 @@
 (def bound-fn* identity)
 (defmacro bound-fn [& body] `(fn ~@body))
 (defmacro with-precision [_ & body] `(do ~@body))
+;; dosync — we don't have STM. Single-threaded evaluation of the body
+;; behaves atomically with respect to other let-go code.
+(defmacro dosync [& body] `(do ~@body))
+;; ref operations — treat refs as atoms, no coordination
+(def ref-set (fn [r v] (reset! r v)))
+(def alter (fn [r f & args] (apply swap! r f args)))
+(def commute alter)
+(def ensure deref)
+;; tap> / add-tap / remove-tap — debug tap queue. No-op.
+(def tap> (fn [_] true))
+(def add-tap (fn [_] nil))
+(def remove-tap (fn [_] nil))
+;; Java class-name aliases used in hierarchy tests
+(def String (type ""))
+(def clojure.lang.PersistentHashSet (type #{}))
+;; Rounding enum sentinels for with-precision (which is a no-op anyway)
+(def UP :up)
+(def DOWN :down)
+(def HALF_UP :half-up)
+(def HALF_DOWN :half-down)
+(def HALF_EVEN :half-even)
+(def CEILING :ceiling)
+(def FLOOR :floor)
+(def UNNECESSARY :unnecessary)
 ;; Hierarchy: minimal stubs. Most hierarchy tests also need derive+ancestors
 ;; to produce real results; these just keep the compiler happy.
 (def make-hierarchy (fn [] {:parents {} :ancestors {} :descendants {}}))
