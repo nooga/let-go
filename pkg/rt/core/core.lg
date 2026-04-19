@@ -141,8 +141,14 @@
 (defn zero? [x] (= 0 x))
 (defn pos? [x] (gt x 0))
 (defn neg? [x] (lt x 0))
-(defn even? [x] (= 0 (mod x 2)))
-(defn odd? [x] (not (even? x)))
+(defn even? [x]
+  (when (and (float? x) (or (= x ##Inf) (= x ##-Inf) (not (= x x))))
+    (throw (str "even? requires an integer, got " x)))
+  (= 0 (mod x 2)))
+(defn odd? [x]
+  (when (and (float? x) (or (= x ##Inf) (= x ##-Inf) (not (= x x))))
+    (throw (str "odd? requires an integer, got " x)))
+  (not (even? x)))
 
 (defmacro not= [& xs] (list 'not (cons '= xs)))
 
@@ -1438,7 +1444,7 @@
        (or (vector? coll) (list? coll) (seq? coll))))
 
 (defn coll? [x]
-  (or (list? x) (vector? x) (map? x) (set? x)))
+  (or (list? x) (vector? x) (map? x) (set? x) (seq? x)))
 
 (def ^:private special-symbols
   #{'def 'if 'do 'fn* 'let* 'letfn* 'quote 'var 'loop* 'recur 'try 'catch 'finally 'throw
@@ -1478,7 +1484,7 @@
         (recur (inc i) (next s))))))
 
 (defn sort-by
-  ([keyfn coll] (sort-by keyfn lt coll))
+  ([keyfn coll] (sort (fn [a b] (compare (keyfn a) (keyfn b))) coll))
   ([keyfn comp coll]
    (sort (fn [a b] (comp (keyfn a) (keyfn b))) coll)))
 
@@ -1493,6 +1499,25 @@
 ;;   TypeName       — the RecordType (for protocol dispatch)
 ;;   ->TypeName     — positional constructor
 ;;   map->TypeName  — map constructor
+;; (deftype TypeName [field1 field2 ...] & protocol-impls)
+;; Creates:
+;;   TypeName    — the DType (for protocol dispatch and instance?)
+;;   ->TypeName  — positional constructor
+;; Unlike defrecord, deftype instances don't support keyword lookup, assoc,
+;; seq, or count. Fields are accessed via (.field-name instance).
+;; Inline protocol implementations are expanded to extend-type calls.
+(defmacro deftype [name fields & protocol-impls]
+  (let [quoted-fields (map (fn [f] (list 'quote f)) fields)
+        type-def      (cons 'make-deftype (cons (str name) quoted-fields))
+        pos-ctor-name (symbol (str "->" name))
+        pos-ctor-body (cons 'make-deftype-instance (cons name fields))
+        pos-ctor      (list 'def pos-ctor-name
+                            (list 'fn (vec fields) pos-ctor-body))
+        forms         (list 'do (list 'def name type-def) pos-ctor)]
+    (if (seq protocol-impls)
+      (concat forms (list (cons 'extend-type (cons name protocol-impls))))
+      forms)))
+
 (defmacro defrecord [name fields & protocol-impls]
   (let [field-keywords (map keyword fields)
         type-def (cons 'make-record-type (cons (str name) field-keywords))
@@ -1728,11 +1753,10 @@
 
 (defn nthnext
   [coll n]
-  (let [n (if (nil? n) 0 n)]
-    (loop [s coll i n]
-      (if (and (pos? i) (seq s))
-        (recur (next s) (dec i))
-        (seq s)))))
+  (loop [s coll i n]
+    (if (and (pos? i) (seq s))
+      (recur (next s) (dec i))
+      (seq s))))
 
 ;; --- Tier 2 functions ---
 

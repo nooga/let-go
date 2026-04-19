@@ -26,3 +26,40 @@
 (defn big-int? [n]
   (and (integer? n) (not (int? n))))
 
+;; Java class name aliases used by upstream tests
+(def clojure.lang.BigInt (type 1N))
+(def clojure.lang.Ratio (type 1/2))
+(def clojure.lang.BigDecimal (type 1M))
+
+;; MapEntry/create constructs a [k v] pair — our PersistentMap already uses vectors
+;; for entries so a plain vector satisfies (instance? ...) via vector equality checks.
+(ns clojure.lang.MapEntry)
+(defn create [k v] [k v])
+
+;; Best-effort stubs for Clojure APIs that let-go doesn't implement. These
+;; let more test files compile; tests that exercise real behavior will fail
+;; at runtime but that's tracked via knownFailing.
+(in-ns 'core)
+(defn ^:private _compat-unsupported [op] (fn [& _] (throw (str op " not supported in let-go"))))
+(def ref atom)                                  ; refs → atoms (no STM)
+(def get-validator (fn [_] nil))
+(def future-cancel (fn [_] false))
+(def disj! disj)                                ; no transients for sets
+(def bound-fn* identity)
+(defmacro bound-fn [& body] `(fn ~@body))
+(defmacro with-precision [_ & body] `(do ~@body))
+;; Hierarchy: minimal stubs. Most hierarchy tests also need derive+ancestors
+;; to produce real results; these just keep the compiler happy.
+(def make-hierarchy (fn [] {:parents {} :ancestors {} :descendants {}}))
+(def derive (fn [& _] (make-hierarchy)))
+(def underive (fn [& _] (make-hierarchy)))
+(def descendants (fn [& _] #{}))
+(def ancestors (fn [& _] #{}))
+(def parents (fn [& _] nil))
+(def isa? (fn [& args] (apply = (if (= (count args) 3) (rest args) args))))
+(def clojure.lang.IPending (type nil))          ; sentinel — no real IPending type
+;; Object shim: we don't have Java classes, but (instance? Object x) is used —
+;; define as a ValueType placeholder that matches nothing.
+(def Object (type nil))
+(in-ns 'clojure.core-test.portability)
+

@@ -1000,7 +1000,10 @@ func installLangNS() {
 		if vs[0] == vm.NIL || vs[0] == vm.EmptyList {
 			return vm.ArrayVector{}, nil
 		}
-
+		// Empty string → empty vector
+		if s, ok := vs[0].(vm.String); ok && len(string(s)) == 0 {
+			return vm.ArrayVector{}, nil
+		}
 		if v, ok := vs[0].(vm.ArrayVector); ok {
 			return v, nil
 		}
@@ -2346,6 +2349,9 @@ func installLangNS() {
 		}
 		switch v := vs[0].(type) {
 		case vm.Int:
+			if int(v) < 0 || int(v) > 0x10FFFF {
+				return vm.NIL, fmt.Errorf("value out of range for char: %d", v)
+			}
 			return vm.Char(rune(v)), nil
 		case vm.Char:
 			return v, nil
@@ -2356,7 +2362,11 @@ func installLangNS() {
 			}
 			return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
 		case *vm.BigInt:
-			return vm.Char(rune(v.Unbox().(*big.Int).Int64())), nil
+			n := v.Unbox().(*big.Int).Int64()
+			if n < 0 || n > 0x10FFFF {
+				return vm.NIL, fmt.Errorf("value out of range for char: %d", n)
+			}
+			return vm.Char(rune(n)), nil
 		default:
 			return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
 		}
@@ -2932,6 +2942,41 @@ func installLangNS() {
 		}
 		_, ok := vs[0].(*vm.Record)
 		return vm.Boolean(ok), nil
+	})
+
+	// make-deftype: create a DType (deftype class) with a name and field symbols.
+	makeDType, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		name, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-deftype expected String name")
+		}
+		fields := make([]vm.Symbol, len(vs)-1)
+		for i := 1; i < len(vs); i++ {
+			sym, ok := vs[i].(vm.Symbol)
+			if !ok {
+				return vm.NIL, fmt.Errorf("make-deftype expected Symbol fields")
+			}
+			fields[i-1] = sym
+		}
+		return vm.NewDType(string(name), fields), nil
+	})
+
+	// make-deftype-instance: construct an instance of a DType from positional field values.
+	makeDTypeInstance, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		dt, ok := vs[0].(*vm.DType)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-deftype-instance expected DType, got %s", vs[0].Type().Name())
+		}
+		// Copy to avoid aliasing the VM's args slice (which may be reused).
+		fields := make([]vm.Value, len(vs)-1)
+		copy(fields, vs[1:])
+		return vm.NewDTypeInstance(dt, fields), nil
 	})
 
 	// defprotocol*: create a protocol (called by defprotocol macro)
@@ -4182,8 +4227,12 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
-		_, ok := vs[0].(vm.Fn)
-		return vm.Boolean(ok), nil
+		switch vs[0].(type) {
+		case vm.Fn, vm.Keyword, vm.Symbol, *vm.PersistentMap, *vm.PersistentSet,
+			vm.ArrayVector, vm.PersistentVector, *vm.SortedMap, *vm.SortedSet:
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
 	})
 
 	// identical? — reference/value identity
@@ -4402,6 +4451,8 @@ func installLangNS() {
 	ns.Def("make-record-type", makeRecordType)
 	ns.Def("make-record", makeRecord)
 	ns.Def("record?", isRecord)
+	ns.Def("make-deftype", makeDType)
+	ns.Def("make-deftype-instance", makeDTypeInstance)
 	ns.Def("defprotocol*", defProtocol)
 	ns.Def("make-protocol-fn", makeProtocolFn)
 	ns.Def("extend-type*", extendType)
@@ -4744,10 +4795,14 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
-		if f, ok := vs[0].(vm.Float); ok {
-			return vm.Boolean(math.IsNaN(float64(f))), nil
+		switch v := vs[0].(type) {
+		case vm.Float:
+			return vm.Boolean(math.IsNaN(float64(v))), nil
+		case vm.Int, *vm.BigInt, *vm.Ratio, *vm.BigDecimal:
+			return vm.FALSE, nil
+		default:
+			return vm.NIL, fmt.Errorf("NaN? requires a number, got %s", vs[0].Type().Name())
 		}
-		return vm.FALSE, nil
 	})
 	ns.Def("NaN?", isNaN)
 

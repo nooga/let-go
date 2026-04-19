@@ -425,6 +425,17 @@ func (c *Context) compileForm(o vm.Value) error {
 				return formCompiler(c, o)
 			}
 
+			// (Name. args...) — record/type constructor shorthand.
+			// Rewrites to (->Name args...) which defrecord defines.
+			if len(fnsym) > 1 && fnsym[len(fnsym)-1] == '.' {
+				ctor := vm.Symbol("->" + string(fnsym[:len(fnsym)-1]))
+				args := lst.Next()
+				if args == nil {
+					return c.compileForm(vm.EmptyList.Cons(ctor))
+				}
+				return c.compileForm(args.Cons(ctor))
+			}
+
 			if fnsym[0] == '.' && len(fnsym) > 1 {
 				newform := lst.Next()
 				if newform == nil {

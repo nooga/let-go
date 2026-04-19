@@ -6,10 +6,10 @@
   (testing "name on nil throws error instead of Go panic"
     (is (= :caught (try (name nil) (catch e :caught))))))
 
-;; Bug #2: sort-by with nil values should error, not Go panic
+;; Bug #2: sort-by with nil values — nil sorts before other values (like Clojure)
 (deftest sort-by-nil-values
-  (testing "sort-by with nil values throws error instead of Go panic"
-    (is (= :caught (try (sort-by :a [{:a 1} {:a nil}]) (catch e :caught))))))
+  (testing "sort-by with nil values sorts nil first"
+    (is (= [{:a nil} {:a 1}] (sort-by :a [{:a 1} {:a nil}])))))
 
 ;; Bug #4: keyword arguments in defn
 (deftest keyword-arguments
