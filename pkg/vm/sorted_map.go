@@ -49,7 +49,7 @@ func newRBNode(key, val Value) *rbNode {
 }
 
 func isRed(n *rbNode) bool {
-	return n != nil && n.color == rbRed
+	return n != nil && n.color
 }
 
 func (n *rbNode) rotateLeft() *rbNode {

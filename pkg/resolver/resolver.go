@@ -71,11 +71,10 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 	// Build candidate paths: try .lg and .cljc extensions,
 	// and hyphen vs underscore variants for each path segment.
 	hyphenPath := path.Join(blocks...)
-	underscorePath := path.Join(blocks...)
 	for i, b := range blocks {
 		blocks[i] = stdstrings.ReplaceAll(b, "-", "_")
 	}
-	underscorePath = path.Join(blocks...)
+	underscorePath := path.Join(blocks...)
 
 	candidates := []string{
 		hyphenPath + ".lg",

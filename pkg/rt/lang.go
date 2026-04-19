@@ -5311,13 +5311,13 @@ func installLangNS() {
 			parts := strings.SplitN(symStr, "/", 2)
 			rns := nsRegistry[resolveNSAlias(parts[0])]
 			if rns != nil {
-				if v := rns.Lookup(vm.Symbol(parts[1])); v != nil {
+				if v := rns.Lookup(vm.Symbol(parts[1])); v != vm.NIL {
 					resolved, _ = v.(*vm.Var)
 				}
 			}
 		} else {
 			if CoreNS != nil {
-				if v := CoreNS.Lookup(vm.Symbol(symStr)); v != nil {
+				if v := CoreNS.Lookup(vm.Symbol(symStr)); v != vm.NIL {
 					resolved, _ = v.(*vm.Var)
 				}
 			}
