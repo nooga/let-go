@@ -42,6 +42,21 @@
 (in-ns 'core)
 (defn ^:private _compat-unsupported [op] (fn [& _] (throw (str op " not supported in let-go"))))
 (def ref atom)                                  ; refs → atoms (no STM)
+;; agents: stubbed as atoms with synchronous `send`. No real concurrency,
+;; no error queue. Behavior diverges from Clojure but tests at least load.
+(def agent atom)
+(def send (fn [a f & args] (apply swap! a f args) a))
+(def send-off send)
+(def await (fn [& _] nil))
+(def await-for (fn [_ & _] true))
+(def agent-error (fn [_] nil))
+(def restart-agent (fn [a v & _] (reset! a v) a))
+(def set-error-handler! (fn [_ _] nil))
+(def set-error-mode! (fn [_ _] nil))
+(def error-handler (fn [_] nil))
+(def error-mode (fn [_] :continue))
+(def shutdown-agents (fn [] nil))
+(def release-pending-sends (fn [] 0))
 (def get-validator (fn [_] nil))
 (def future-cancel (fn [_] false))
 (def disj! disj)                                ; no transients for sets
@@ -60,6 +75,11 @@
 ;; Java class-name aliases used in hierarchy tests
 (def String (type ""))
 (def clojure.lang.PersistentHashSet (type #{}))
+(def clojure.lang.Associative :clojure-lang-Associative-stub)
+(def clojure.lang.Counted :clojure-lang-Counted-stub)
+(def clojure.lang.Indexed :clojure-lang-Indexed-stub)
+(def clojure.lang.Seqable :clojure-lang-Seqable-stub)
+(def clojure.lang.IPersistentCollection :clojure-lang-IPersistentCollection-stub)
 ;; Rounding enum sentinels for with-precision (which is a no-op anyway)
 (def UP :up)
 (def DOWN :down)

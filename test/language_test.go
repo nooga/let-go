@@ -63,6 +63,11 @@ func TestRunner(t *testing.T) {
 			return err
 		}
 		if info.IsDir() {
+			// Skip directories that contain non-test .lg files (e.g.
+			// compat/ holds the corpus runner, which is invoked manually).
+			if info.Name() == "compat" || info.Name() == "clojure-test-suite" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if filepath.Ext(path) != ".lg" {

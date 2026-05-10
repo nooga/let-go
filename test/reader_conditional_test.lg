@@ -1,0 +1,27 @@
+(ns test.reader-conditional-test
+  (:require [test :refer :all]))
+
+(deftest lg-branch-selected
+  (testing ":lg branch wins"
+    (is (= :lg-val #?(:lg :lg-val :cljs :cljs-val))))
+
+  (testing ":default chosen when :lg absent"
+    (is (= :default-val #?(:cljs :cljs-val :default :default-val))))
+
+  (testing "no match: surrounding context drops the void"
+    (is (= [1 2] [1 #?(:cljs :only-cljs) 2]))))
+
+(deftest splicing-conditional
+  (testing "#?@ splices :lg branch into surrounding form"
+    (is (= [1 2 3 4]
+           [1 #?@(:lg [2 3] :cljs [99 99]) 4]))))
+
+(deftest clj-not-matched-by-default
+  (testing ":clj does NOT match by default; :default wins"
+    (is (= :default-wins #?(:clj :clj-loses :default :default-wins)))))
+
+(deftest clj-matched-when-opted-in
+  (testing "after set-read-clj!, :clj matches"
+    (set-read-clj! true)
+    (is (= :clj-val (load-string "#?(:clj :clj-val :default :other)")))
+    (set-read-clj! false)))

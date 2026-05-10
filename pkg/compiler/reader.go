@@ -346,24 +346,31 @@ func readString(r *LispReader, _ rune) (vm.Value, error) {
 				s.WriteRune(ch)
 				continue
 			case 'u':
-				hex := ""
-				for i := 0; i < 4; i++ {
-					ch, err := r.next()
-					if err != nil || !isHexDigit(ch) {
-						break
-					}
-					hex += string(ch)
-				}
-				if len(hex) < 4 {
-					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex)).Wrap(err)
-				}
-				var hexi int
-				n, err := fmt.Sscanf(hex, "%x", &hexi)
-				if n != 1 || (hexi >= 0xD800 && hexi <= 0xDFFF) {
-					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex)).Wrap(err)
-				}
+				hexi, err := readHexEscape(r)
 				if err != nil {
-					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex)).Wrap(err)
+					return vm.NIL, err
+				}
+				// Java/Clojure source represents non-BMP chars as a UTF-16
+				// surrogate pair. Combine high+low surrogate into one rune.
+				if hexi >= 0xD800 && hexi <= 0xDBFF {
+					ch2, err := r.next()
+					if err != nil || ch2 != '\\' {
+						return vm.NIL, NewReaderError(r, fmt.Sprintf("unpaired high surrogate \\u%04X", hexi))
+					}
+					ch3, err := r.next()
+					if err != nil || ch3 != 'u' {
+						return vm.NIL, NewReaderError(r, fmt.Sprintf("unpaired high surrogate \\u%04X", hexi))
+					}
+					low, err := readHexEscape(r)
+					if err != nil {
+						return vm.NIL, err
+					}
+					if low < 0xDC00 || low > 0xDFFF {
+						return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid low surrogate \\u%04X", low))
+					}
+					hexi = 0x10000 + ((hexi - 0xD800) << 10) + (low - 0xDC00)
+				} else if hexi >= 0xDC00 && hexi <= 0xDFFF {
+					return vm.NIL, NewReaderError(r, fmt.Sprintf("unpaired low surrogate \\u%04X", hexi))
 				}
 				s.WriteRune(rune(hexi))
 				continue
@@ -405,6 +412,26 @@ func readRegex(r *LispReader, _ rune) (vm.Value, error) {
 		}
 		s.WriteRune(ch)
 	}
+}
+
+// readHexEscape reads the four hex digits following a `\u` in a string,
+// returning the integer code point. Caller is responsible for surrogate
+// handling.
+func readHexEscape(r *LispReader) (int, error) {
+	hex := ""
+	for i := 0; i < 4; i++ {
+		ch, err := r.next()
+		if err != nil || !isHexDigit(ch) {
+			return 0, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex))
+		}
+		hex += string(ch)
+	}
+	var hexi int
+	n, err := fmt.Sscanf(hex, "%x", &hexi)
+	if n != 1 || err != nil {
+		return 0, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex))
+	}
+	return hexi, nil
 }
 
 func isHexDigit(ch rune) bool {
@@ -1018,7 +1045,20 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 }
 
 const lgConditionalTag = vm.Keyword("lg")
+const cljConditionalTag = vm.Keyword("clj")
 const defaultConditionalTag = vm.Keyword("default")
+
+// matchCljConditional controls whether reader conditionals match the :clj
+// branch in addition to :lg and :default. This is opt-in because the
+// :clj branch in many libraries reaches JVM-only code (Long/MAX_VALUE,
+// java.util.UUID, etc.) that fails to compile here. The compat runner
+// (which targets Clojure-the-language) flips this on; the conformance
+// test suite does not. Set via SetMatchCljConditional or the
+// LETGO_READ_CLJ env var at startup.
+var matchCljConditional = false
+
+// SetMatchCljConditional toggles whether reader conditionals match :clj.
+func SetMatchCljConditional(v bool) { matchCljConditional = v }
 
 func readConditional(r *LispReader, s rune) (vm.Value, error) {
 	n, err := r.next()
@@ -1069,7 +1109,9 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "reading reader conditional key")
 		}
-		isMatch := !found && (key == lgConditionalTag || key == defaultConditionalTag)
+		isMatch := !found && (key == lgConditionalTag ||
+			(matchCljConditional && key == cljConditionalTag) ||
+			key == defaultConditionalTag)
 		if isMatch {
 			// Read the value form normally
 			val, err := r.Read()
@@ -1193,32 +1235,35 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
 	var m vm.Value = vm.EmptyPersistentMap
+	tagKey := vm.Keyword("tag")
 	for {
-		switch ch {
-		case '{':
-			m2, err := readMap(r, ch)
-			if err != nil {
-				return vm.NIL, NewReaderError(r, "reading meta map")
-			}
-			if sq, ok := m2.(vm.Sequable); ok {
-				for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
-					k, v, ok := vm.MapEntryKV(s.First())
-					if !ok {
-						continue
-					}
-					m = m.(*vm.PersistentMap).Assoc(k, v).(*vm.PersistentMap)
+		// Unread the lookahead so r.Read() can dispatch normally.
+		if err := r.unread(); err != nil {
+			return vm.NIL, NewReaderError(r, "reading meta")
+		}
+		mForm, err := r.Read()
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "reading meta")
+		}
+		switch v := mForm.(type) {
+		case *vm.PersistentMap:
+			for s := v.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+				k, val, ok := vm.MapEntryKV(s.First())
+				if !ok {
+					continue
 				}
+				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
 			}
-		case ':':
-			k, err := readToken(r, ':')
-			if err != nil {
-				return vm.NIL, NewReaderError(r, "reading meta keyword")
+		case vm.Map:
+			for k, val := range v {
+				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
 			}
-			k, err = interpretToken(r, k)
-			if err != nil {
-				return vm.NIL, NewReaderError(r, "reading meta keyword")
-			}
-			m = m.(*vm.PersistentMap).Assoc(k, vm.TRUE).(*vm.PersistentMap)
+		case vm.Keyword:
+			m = m.(*vm.PersistentMap).Assoc(v, vm.TRUE).(*vm.PersistentMap)
+		case vm.Symbol:
+			m = m.(*vm.PersistentMap).Assoc(tagKey, v).(*vm.PersistentMap)
+		case vm.String:
+			m = m.(*vm.PersistentMap).Assoc(tagKey, v).(*vm.PersistentMap)
 		default:
 			return vm.NIL, NewReaderError(r, "unsupported meta form")
 		}

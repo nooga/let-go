@@ -28,6 +28,10 @@ const memLimitBytes = 512 * 1024 * 1024
 // knownFailing lists test names (filename stems) that are known to fail.
 // Tests that pass but appear here will cause an error so the list stays current.
 var knownFailing = map[string]bool{
+	"add_watch":       true, // agent stub is synchronous; some assertions need real agent behavior
+	"remove_watch":    true, // ditto
+	"ancestors":       true, // hierarchy stub returns empty
+	"parents":         true, // hierarchy stub returns nil
 	"atom":            true, // atom validator/meta edge cases
 	"bigint":          true, // BigInt promotion at Long range boundary
 	"binding":         true, // thread binding propagation to futures

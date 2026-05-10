@@ -315,7 +315,15 @@
   ([f c1 c2 & colls] (lazy-cat-seqs (apply map f c1 c2 colls))))
 
 (defmacro ns [n & body]
-  (let [emit-one (fn [forms req]
+  ;; Strip metadata wrappers from the namespace symbol: `(ns ^{...} foo.bar)`
+  ;; is read as `(ns (with-meta foo.bar {...}) ...)`. We don't yet attach the
+  ;; meta to the namespace, but we must at least unwrap so `in-ns` sees a sym.
+  (let [n (if (and (seq? n) (= 'with-meta (first n))) (second n) n)
+        ;; A docstring as the first body form is also valid (Clojure compat).
+        body (if (string? (first body)) (next body) body)
+        ;; An attr-map as the next body form is valid too — drop for now.
+        body (if (map? (first body)) (next body) body)
+        emit-one (fn [forms req]
                    (cond
                      (symbol? req)
                      (conj forms (list 'use (list 'quote req)))
@@ -1427,6 +1435,29 @@
 
 (def ^:dynamic *assert* true)
 
+;; --- print/read tuning dynamic vars (stubs; not yet honored by writers) ---
+
+(def ^:dynamic *print-level* nil)
+(def ^:dynamic *print-length* nil)
+(def ^:dynamic *print-meta* false)
+(def ^:dynamic *print-readably* true)
+(def ^:dynamic *print-dup* false)
+(def ^:dynamic *flush-on-newline* true)
+
+;; --- macro implicit context (stubs) ---
+;; Clojure's compiler binds &env (lexical-env map) and &form (the current
+;; form being expanded) inside macro bodies. let-go's macro invoker doesn't
+;; thread these in yet, so we bind them globally to nil so macros that
+;; reference them at least resolve. Behavior for code that branches on
+;; their value will differ from Clojure — but the file loads.
+(def &env nil)
+(def &form nil)
+
+;; tagged-literal? — let-go has no TaggedLiteral type yet, so no value
+;; is ever a tagged literal. Returning false unconditionally matches
+;; how Clojure treats anything that didn't go through (tagged-literal …).
+(defn tagged-literal? [_] false)
+
 (defmacro assert
   ([x]
    `(when *assert*
@@ -1573,8 +1604,16 @@
                             (let [mname (first sig)]
                               (list 'def mname
                                     (list 'make-protocol-fn name (list 'quote mname)))))
-                          sigs)]
-    (cons 'do (cons proto-def method-defs))))
+                          sigs)
+        ;; Also bind a class-name alias <munged-ns>.<name> so Clojure code
+        ;; that references the protocol's generated Java class name (e.g.
+        ;; in (instance? clojure.core_test.ancestors.TestAncestorsProtocol x))
+        ;; resolves. Mirrors Clojure's protocol-class generation, except we
+        ;; just alias the same Protocol value.
+        munged-ns    (str-replace (str (ns-name *ns*)) "-" "_")
+        class-alias  (symbol (str munged-ns "." (str name)))
+        alias-def    (list 'def class-alias name)]
+    (cons 'do (cons proto-def (concat method-defs (list alias-def))))))
 
 ;; Helper: create a ProtocolFn (native, can't be created from let-go directly)
 ;; This is defined as a native function below

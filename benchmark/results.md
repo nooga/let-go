@@ -21,40 +21,45 @@ features (transducers). Binary sizes for gloat are averaged across all benchmark
 
 **Runtimes:**
 
-| | let-go | babashka | joker | go-joker | fennel | clojure JVM |
-|---|---|---|---|---|---|---|
-| **Version** | — | babashka v1.12.217 | joker v1.7.1 | go-joker v1.7.1 | Fennel 1.6.1 on PUC Lua 5.5 | Clojure CLI version 1.12.4.1618 |
-| **Platform** | Go bytecode VM | GraalVM native | Go tree-walk interpreter | Go IR + WASM/wazero JIT | Lua VM + cljlib | JVM (HotSpot) |
-| **Binary/runtime size** | **10M** | 68M | 26M | 31M | 324K | 304M |
+| | let-go | babashka | joker | go-joker | gloat | fennel | clojure JVM |
+|---|---|---|---|---|---|---|---|
+| **Version** | — | babashka v1.12.217 | joker v1.7.1 | go-joker v42.8.2 | gloat version 0.1.36 | Fennel 1.6.1 on PUC Lua 5.5 | Clojure CLI version 1.12.4.1618 |
+| **Platform** | Go bytecode VM | GraalVM native | Go tree-walk interpreter | Go IR + WASM/wazero JIT | Go AOT (Clojure→Go) | Lua VM + cljlib | JVM (HotSpot) |
+| **Binary/runtime size** | **10M** | 68M | 26M | 32M | 26M | 324K | 304M |
 
 ### Startup Time
 
+let-go, babashka, and fennel are measured with 10 warmup + 100 timed runs and a
+5% trimmed mean (top/bottom 5% dropped) to reject scheduling outliers. Other
+runtimes use the default 3 warmup + 10 runs.
+
 | Runtime | Time |
 |---|---|
-| **let-go** | **7.8ms ± 0.7ms** (1.0x) |
-| babashka | 21.7ms ± 2.0ms (2.8x) |
-| joker | 11.8ms ± 0.4ms (1.5x) |
-| go-joker | 12.5ms ± 0.7ms (1.6x) |
-| fennel | 58.4ms ± 12.1ms (7.5x) |
-| clojure JVM | 0.388s ± 0.012s (49.6x) |
+| **let-go** | **6.7ms ± 0.3ms** (1.00x) |
+| babashka | 18.3ms ± 0.8ms (2.74x) |
+| joker | 11.8ms ± 1.1ms (1.77x) |
+| go-joker | 13.1ms ± 0.9ms (1.96x) |
+| gloat | 14.3ms ± 0.9ms (2.14x) |
+| fennel | 40.2ms ± 4.0ms (6.02x) |
+| clojure JVM | 0.307s ± 0.010s (45.96x) |
 
 ### Peak Memory Usage (RSS)
 
-| Workload | let-go | babashka | joker | go-joker | fennel | clojure JVM |
-|---|---|---|---|---|---|---|
-| startup (nil) | 13.5MB (1.0x) | 26.8MB (2.0x) | 21.3MB (1.6x) | 22.7MB (1.7x) | **3.2MB** (0.2x) | 92.2MB (6.8x) |
-| fib(35) | 14.2MB (1.0x) | 77.2MB (5.4x) | 33.2MB (2.3x) | —MB | **13.1MB** (0.9x) | 112.2MB (7.9x) |
-| reduce 1M | **20.0MB** (1.0x) | 59.0MB (3.0x) | 33.1MB (1.7x) | 33.8MB (1.7x) | 851.1MB (42.6x) | 116.5MB (5.8x) |
+| Workload | let-go | babashka | joker | go-joker | gloat | fennel | clojure JVM |
+|---|---|---|---|---|---|---|---|
+| startup (nil) | 13.5MB (1.0x) | 26.7MB (2.0x) | 21.4MB (1.6x) | 23.3MB (1.7x) | 22.7MB (1.7x) | **3.1MB** (0.2x) | 92.3MB (6.8x) |
+| fib(35) | 14.5MB (1.0x) | 77.1MB (5.3x) | 33.0MB (2.3x) | —MB | 32.8MB (2.3x) | **12.8MB** (0.9x) | 111.4MB (7.7x) |
+| reduce 1M | **20.1MB** (1.0x) | 59.0MB (2.9x) | 33.6MB (1.7x) | 23.3MB (1.2x) | 25.7MB (1.3x) | 871.1MB (43.3x) | 118.0MB (5.9x) |
 
 ### Performance
 
-| Benchmark | let-go | babashka | joker | go-joker | fennel | clojure JVM |
-|---|---|---|---|---|---|---|
-| fib | 2.218s ± 0.163s (1.0x) | 2.020s ± 0.036s (0.9x) | 21.577s ± 0.321s (9.7x) | — | 2.058s ± 0.056s (0.9x) | **0.656s ± 0.025s** (0.3x) |
-| loop-recur | 63.1ms ± 3.8ms (1.0x) | 68.4ms ± 1.8ms (1.1x) | 0.774s ± 0.029s (12.3x) | **14.3ms ± 1.3ms** (0.2x) | 0.193s ± 0.004s (3.1x) | 0.546s ± 0.011s (8.6x) |
-| map-filter | **9.1ms ± 1.1ms** (1.0x) | 21.5ms ± 0.9ms (2.4x) | 14.2ms ± 0.6ms (1.6x) | 15.3ms ± 1.1ms (1.7x) | 1.169s ± 0.042s (129.0x) | 0.487s ± 0.075s (53.7x) |
-| persistent-map | **21.8ms ± 1.0ms** (1.0x) | 26.5ms ± 2.8ms (1.2x) | 53.3ms ± 1.2ms (2.4x) | 52.4ms ± 1.7ms (2.4x) | 3.980s ± 0.132s (182.3x) | 0.563s ± 0.006s (25.8x) |
-| reduce | 79.8ms ± 2.5ms (1.0x) | **38.1ms ± 1.0ms** (0.5x) | 2.667s ± 0.049s (33.4x) | 2.790s ± 0.211s (35.0x) | 8.552s ± 0.148s (107.1x) | 0.350s ± 0.009s (4.4x) |
-| tak | 2.067s ± 0.023s (1.0x) | 1.932s ± 0.023s (0.9x) | — | — | 10.686s ± 0.206s (5.2x) | **0.562s ± 0.020s** (0.3x) |
-| transducers | **6.9ms ± 0.5ms** (1.0x) | 19.2ms ± 0.9ms (2.8x) | — | — | 1.041s ± 0.021s (151.5x) | 0.352s ± 0.005s (51.2x) |
+| Benchmark | let-go | babashka | joker | go-joker | gloat | fennel | clojure JVM |
+|---|---|---|---|---|---|---|---|
+| fib | 1.994s ± 0.016s (1.0x) | 1.911s ± 0.018s (1.0x) | 19.445s ± 0.227s (9.8x) | — | 26.756s ± 0.595s (13.4x) | 1.922s ± 0.030s (1.0x) | **0.517s ± 0.009s** (0.3x) |
+| loop-recur | 58.4ms ± 2.9ms (1.0x) | 61.6ms ± 1.3ms (1.1x) | 0.681s ± 0.005s (11.7x) | **11.9ms ± 0.5ms** (0.2x) | 1.011s ± 0.014s (17.3x) | 0.164s ± 0.003s (2.8x) | 0.426s ± 0.004s (7.3x) |
+| map-filter | **6.2ms ± 0.2ms** (1.0x) | 20.0ms ± 0.6ms (3.2x) | 13.4ms ± 0.9ms (2.2x) | 10.9ms ± 0.5ms (1.8x) | 62.2ms ± 3.2ms (10.1x) | 1.010s ± 0.029s (163.6x) | 0.348s ± 0.059s (56.3x) |
+| persistent-map | **18.0ms ± 0.6ms** (1.0x) | 18.3ms ± 0.4ms (1.0x) | 49.1ms ± 1.2ms (2.7x) | 19.7ms ± 1.3ms (1.1x) | 33.9ms ± 0.9ms (1.9x) | 3.506s ± 0.028s (194.8x) | 0.455s ± 0.013s (25.3x) |
+| reduce | 72.3ms ± 1.8ms (1.0x) | 34.6ms ± 1.5ms (0.5x) | 2.423s ± 0.032s (33.5x) | **10.9ms ± 0.4ms** (0.2x) | 0.368s ± 0.012s (5.1x) | 7.593s ± 0.155s (105.0x) | 0.336s ± 0.009s (4.7x) |
+| tak | 2.054s ± 0.031s (1.0x) | 1.932s ± 0.039s (0.9x) | — | — | 21.606s ± 0.142s (10.5x) | 10.459s ± 0.103s (5.1x) | **0.531s ± 0.011s** (0.3x) |
+| transducers | **5.8ms ± 0.2ms** (1.0x) | 16.1ms ± 0.6ms (2.8x) | — | — | 14.3ms ± 0.3ms (2.4x) | 0.978s ± 0.021s (167.5x) | 0.326s ± 0.005s (55.8x) |
 

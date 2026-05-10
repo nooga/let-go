@@ -1,0 +1,23 @@
+(ns test.catch-class-test
+  (:require [test :refer :all]))
+
+(deftest catch-bare-binding
+  (testing "let-go's bare (catch e body) still works"
+    (is (= :ok (try (throw "boom") (catch e :ok))))))
+
+(deftest catch-with-class-symbol
+  (testing "Clojure-style (catch Class e body) is accepted as catch-all"
+    (is (= :ok (try (throw "boom") (catch Throwable e :ok))))
+    (is (= :ok (try (throw "boom") (catch Exception e :ok))))
+    (is (= :ok (try (throw "boom") (catch java.lang.RuntimeException e :ok)))))
+
+  (testing "binding symbol is still bound to the thrown value"
+    (is (= "boom" (try (throw "boom") (catch Throwable e (str e)))))))
+
+(deftest catch-with-finally
+  (testing "finally still runs"
+    (let [a (atom 0)]
+      (try
+        (try (throw "x") (catch Throwable e (swap! a inc)) (finally (swap! a inc)))
+        (catch e nil))
+      (is (= 2 @a)))))

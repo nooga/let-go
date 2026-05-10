@@ -1,0 +1,197 @@
+;; Compatibility test runner: loads real-world .clj/.cljc/.cljs files
+;; through let-go to measure language coverage.
+;;
+;; Adapted from https://github.com/leifericf/mino/blob/main/tests/compat/run.clj
+;;
+;; Usage:
+;;   let-go test/compat/run.lg                ;; run all repos
+;;   REPOS=medley,hiccup let-go test/compat/run.lg
+;;
+;; Each repo must be cloned under $CACHE_DIR (default ~/.cache/let-go-compat),
+;; e.g.:
+;;   git clone https://github.com/weavejester/medley.git \
+;;     ~/.cache/let-go-compat/medley
+
+(require 'string)
+
+;; Match :clj in reader conditionals: this runner pretends to be Clojure.
+(set-read-clj! true)
+
+(def cache-dir
+  (str (os/getenv "HOME") "/.cache/let-go-compat"))
+
+(def repos
+  {"medley"   {:url "https://github.com/weavejester/medley.git"   :src "src"}
+   "hiccup"   {:url "https://github.com/weavejester/hiccup.git"   :src "src"}
+   "fipp"     {:url "https://github.com/brandonbloom/fipp.git"    :src "src"}
+   "data.json"   {:url "https://github.com/clojure/data.json.git" :src "src"}
+   "data.csv"    {:url "https://github.com/clojure/data.csv.git"  :src "src"}
+   "tools.macro" {:url "https://github.com/clojure/tools.macro.git" :src "src"}
+   "macrovich" {:url "https://github.com/cgrand/macrovich.git"     :src "src"}
+   "uri"      {:url "https://github.com/lambdaisland/uri.git"     :src "src"}})
+
+(defn source-file? [path]
+  (or (string/ends-with? path ".clj")
+      (string/ends-with? path ".cljc")))
+
+(defn dir? [path]
+  (let [s (os/stat path)]
+    (and s (:dir? s))))
+
+(defn file-seq
+  "Recursively list all files under root."
+  [root]
+  (if (not (dir? root))
+    [root]
+    (let [entries (try (os/ls root) (catch _ []))]
+      (reduce (fn [acc e]
+                (let [p (str root "/" e)]
+                  (if (dir? p)
+                    (into acc (file-seq p))
+                    (conj acc p))))
+              []
+              entries))))
+
+(defn one-line
+  "Collapse a multiline error to a single representative line.
+   For 'Syntax error reading source at ...' messages, the next line
+   carries the real reason — keep that instead."
+  [s]
+  (let [s (str s)
+        parts (string/split s "\n")
+        head (first parts)]
+    (if (and (string/starts-with? head "Syntax error reading source at")
+             (> (count parts) 1))
+      (str "Syntax error: " (second parts))
+      head)))
+
+(defn root-cause
+  "Pull the deepest message out of nested 'caused by' chains and collapse to one line."
+  [err]
+  (if (nil? err) ""
+    (let [s (str err)
+          parts (string/split s "caused by ")]
+      (one-line (last parts)))))
+
+(defn try-load-file [path]
+  (try
+    (let [code (slurp path)]
+      (load-string (str "(do " code "\n nil)"))
+      :pass)
+    (catch e
+      (cond
+        (string? e) e
+        :else (or (try (ex-message e) (catch _ nil))
+                  (str e))))))
+
+(defn test-repo [repo-name cfg]
+  (let [src-dir (str cache-dir "/" repo-name "/" (:src cfg))
+        exists? (dir? src-dir)]
+    (if (not exists?)
+      (do (println (str "  [skip] " repo-name
+                        " (not cloned — run: git clone "
+                        (:url cfg) " " cache-dir "/" repo-name ")"))
+          [])
+      (let [files (filter source-file? (file-seq src-dir))
+            files (sort files)]
+        (mapv (fn [f]
+                (let [relpath (subs f (+ (count src-dir) 1))
+                      result (try-load-file f)]
+                  {:file relpath
+                   :status (if (= result :pass) :pass :fail)
+                   :error (when (not= result :pass) result)}))
+              files)))))
+
+(defn classify [err]
+  (let [rc (root-cause err)]
+    (cond
+      (or (string/includes? rc "is not available")
+          (string/includes? rc "clojure/java/")
+          (string/includes? rc "clojure.lang.")
+          (string/includes? rc "java.lang.")
+          (string/includes? rc "java.util.")
+          (string/includes? rc "java.io.")
+          (string/includes? rc "java.net.")
+          (string/includes? rc "java.time.")
+          (string/includes? rc "DateTimeFormatter")
+          (string/includes? rc "Integer/")
+          (string/includes? rc "Long/")
+          (string/includes? rc "Double/")
+          (string/includes? rc "Math/")
+          (string/includes? rc "String/")
+          (string/includes? rc "cljs/")
+          (string/includes? rc "goog/")
+          (string/includes? rc "System/")
+          (string/includes? rc "interop"))
+      :platform
+
+      (or (string/includes? rc "taoensso/")
+          (string/includes? rc "schema/")
+          (string/includes? rc "riddley/")
+          (string/includes? rc "cheshire/")
+          (string/includes? rc "manifold/")
+          (string/includes? rc "promesa/")
+          (string/includes? rc "borkdude/")
+          (string/includes? rc "potemkin/"))
+      :missing-dep
+
+      :else :fixable)))
+
+(defn run []
+  (let [env-repos (os/getenv "REPOS")
+        env-repos (when (and env-repos (not= env-repos "")) env-repos)
+        v (os/getenv "VERBOSE")
+        verbose? (and v (not= v ""))
+        repo-filter (when env-repos (set (string/split env-repos ",")))
+        repos-to-run (if repo-filter
+                       (select-keys repos (vec repo-filter))
+                       repos)
+        all-results (atom [])
+        pass-count (atom 0)
+        fail-count (atom 0)]
+
+    (doseq [[repo-name cfg] (sort-by first (seq repos-to-run))]
+      (println (str "\n=== " repo-name " ==="))
+      (try
+        (let [results (test-repo repo-name cfg)]
+          (doseq [r results]
+            (swap! all-results conj r)
+            (if (= (:status r) :pass)
+              (do (swap! pass-count inc)
+                  (when verbose? (println (str "  PASS " (:file r)))))
+              (do (swap! fail-count inc)
+                  (println (str "  FAIL " (:file r)))
+                  (when (:error r)
+                    (println (str "       " (root-cause (:error r)))))))))
+        (catch e
+          (println (str "  [crash] " repo-name ": "
+                        (or (try (ex-message e) (catch _ nil)) (str e)))))))
+
+    (let [failures (filter #(= (:status %) :fail) @all-results)
+          grouped (group-by #(classify (:error %)) failures)
+          n-platform (count (get grouped :platform []))
+          n-dep      (count (get grouped :missing-dep []))
+          n-fixable  (count (get grouped :fixable []))
+          total      (+ @pass-count @fail-count)
+          effective  (- total n-platform n-dep)
+          pct        (if (> total 0) (int (* 100 (/ @pass-count total))) 0)
+          eff-pct    (if (> effective 0) (int (* 100 (/ @pass-count effective))) 0)]
+
+      (println "\n=== SUMMARY ===")
+      (println (str "Total: " total " | Pass: " @pass-count " | Fail: " (count failures)))
+      (println (str "  Platform-incompatible: " n-platform))
+      (println (str "  Missing third-party:   " n-dep))
+      (println (str "  Fixable/other:         " n-fixable))
+      (println (str "Raw pass rate: " pct "%"))
+      (println (str "Effective pass rate (excl. platform+deps): " eff-pct
+                    "% (" @pass-count "/" effective ")"))
+
+      (let [fixable-errs (map (comp root-cause :error) (get grouped :fixable []))
+            reasons (take 20 (sort-by (fn [pair] (- (second pair)))
+                                      (frequencies fixable-errs)))]
+        (when (seq reasons)
+          (println "\n=== TOP FIXABLE FAILURE REASONS ===")
+          (doseq [pair reasons]
+            (println (str "  " (second pair) "  " (first pair)))))))))
+
+(run)

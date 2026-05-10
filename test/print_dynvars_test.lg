@@ -1,0 +1,27 @@
+(ns test.print-dynvars-test
+  (:require [test :refer :all]))
+
+(deftest print-tuning-vars
+  (testing "*print-level* defaults to nil and is dynamic"
+    (is (nil? *print-level*))
+    (is (= 3 (binding [*print-level* 3] *print-level*))))
+
+  (testing "*print-length* defaults to nil"
+    (is (nil? *print-length*)))
+
+  (testing "*print-readably* defaults to true"
+    (is (true? *print-readably*)))
+
+  (testing "*print-meta* defaults to false"
+    (is (false? *print-meta*)))
+
+  (testing "*flush-on-newline* defaults to true"
+    (is (true? *flush-on-newline*))))
+
+(deftest tagged-literal-predicate
+  (testing "tagged-literal? returns false for ordinary values"
+    (is (false? (tagged-literal? 1)))
+    (is (false? (tagged-literal? :kw)))
+    (is (false? (tagged-literal? "str")))
+    (is (false? (tagged-literal? nil)))
+    (is (false? (tagged-literal? [1 2 3])))))

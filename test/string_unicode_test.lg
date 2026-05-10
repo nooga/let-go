@@ -1,0 +1,17 @@
+(ns test.string-unicode-test
+  (:require [test :refer :all]))
+
+(deftest basic-unicode-escapes
+  (testing "BMP characters via \\u"
+    (is (= "é" "é"))
+    (is (= "中" "中"))
+    (is (= "A" "A"))))
+
+(deftest surrogate-pair
+  (testing "non-BMP chars as UTF-16 surrogate pair"
+    ;; U+1F600 GRINNING FACE = high D83D + low DE00
+    (is (= "😀" "😀"))
+    (is (= 1 (count "😀")))) ;; let-go counts runes, not UTF-8 bytes
+
+  (testing "two emojis in a row"
+    (is (= "😀😁" "😀😁"))))

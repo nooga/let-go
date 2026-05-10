@@ -1,0 +1,15 @@
+(ns test.macro-env-test
+  (:require [test :refer :all]))
+
+(deftest env-form-stubs
+  (testing "&env and &form resolve as nil at macro-body compile time"
+    (is (nil? &env))
+    (is (nil? &form))))
+
+(defmacro env-aware [& body]
+  (when (nil? &env)
+    `(do ~@body)))
+
+(deftest macro-can-reference-env
+  (testing "a macro body can reference &env without raising"
+    (is (= :ok (env-aware :ok)))))
