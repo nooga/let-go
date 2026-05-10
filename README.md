@@ -270,6 +270,24 @@ go run .                           # run from source
 go build -ldflags="-s -w" -o lg .  # ~9MB stripped binary
 ```
 
+## Source paths
+
+By default `lg` looks for namespaces under the current directory. To add
+extra directories use `-source-paths` flag or the `LG_SOURCE_PATHS` environment variable. 
+Both accept a list separated `:` on Unix, `;` on Windows. The flag wins over
+the env var. The current directory is always prepended so project code
+takes precedence.
+
+```bash
+lg -source-paths /path/to/libA:/path/to/libB script.lg
+LG_SOURCE_PATHS=/path/to/libA:/path/to/libB lg script.lg
+```
+
+The same paths apply to script execution, `-c` (bytecode compile), `-b`
+(standalone bundle), and `-w` (WASM). Bundled binaries (`-b` output) honor
+`LG_SOURCE_PATHS` at runtime; the `-source-paths` flag is a
+bundle-build-time input.
+
 ## nREPL
 
 let-go includes an nREPL server compatible with CIDER (Emacs), Calva (VS Code), and Conjure (Neovim).

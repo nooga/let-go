@@ -336,6 +336,7 @@ var compileOutput string
 var bundleOutput string
 var bundleBase string
 var wasmOutput string
+var sourcePaths string
 
 func init() {
 	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
@@ -349,6 +350,21 @@ func init() {
 	flag.StringVar(&bundleOutput, "b", "", "bundle .lg file into a standalone executable (specify output path)")
 	flag.StringVar(&bundleBase, "bundle-base", "", "path to target-platform lg binary for cross-OS bundling (defaults to current executable)")
 	flag.StringVar(&wasmOutput, "w", "", "build .lg file into a WASM web app (specify output directory)")
+	flag.StringVar(&sourcePaths, "source-paths", "",
+		"additional namespace search paths separated by the OS path-list separator "+
+			"(':' on Unix, ';' on Windows). Falls back to LG_SOURCE_PATHS if unset.")
+}
+
+// buildSearchPaths resolves the resolver's path list from the -source-paths
+// flag (preferred) or the LG_SOURCE_PATHS env var (fallback).
+func buildSearchPaths() []string {
+	explicitSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "source-paths" {
+			explicitSet = true
+		}
+	})
+	return resolver.PathsFromInputs(sourcePaths, os.Getenv("LG_SOURCE_PATHS"), explicitSet)
 }
 
 func initCompiler(debug bool) *compiler.Context {
@@ -375,7 +391,7 @@ func main() {
 	if lgbData := checkBundledLGB(); lgbData != nil {
 		// Set up resolver so embedded namespaces (string, set, etc.) can load
 		ctx := initCompiler(false)
-		nsResolver := resolver.NewNSResolver(ctx, []string{"."})
+		nsResolver := resolver.NewNSResolver(ctx, buildSearchPaths())
 		rt.SetNSLoader(nsResolver)
 		defer rt.ShutdownAllPods()
 
@@ -429,7 +445,7 @@ func main() {
 	defer rt.ShutdownAllPods()
 
 	context := initCompiler(debug)
-	nsResolver := resolver.NewNSResolver(context, []string{"."})
+	nsResolver := resolver.NewNSResolver(context, buildSearchPaths())
 	rt.SetNSLoader(nsResolver)
 
 	// Compile mode: compile .lg → .lgb

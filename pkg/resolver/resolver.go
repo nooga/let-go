@@ -22,6 +22,36 @@ type NSResolver struct {
 	LoadOrder []string
 }
 
+// ParseSearchPaths splits a path-list string on os.PathListSeparator,
+// dropping empty entries. Returns nil for empty input.
+func ParseSearchPaths(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := stdstrings.Split(raw, string(os.PathListSeparator))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// PathsFromInputs returns the namespace search path from explicit and
+// fallback inputs. When explicitSet is true the explicit value wins
+// even if empty. Otherwise the fallback is used.
+func PathsFromInputs(explicit, fallback string, explicitSet bool) []string {
+	raw := fallback
+	if explicitSet {
+		raw = explicit
+	}
+	return append([]string{"."}, ParseSearchPaths(raw)...)
+}
+
 func NewNSResolver(ctx *compiler.Context, path []string) *NSResolver {
 	return &NSResolver{
 		ctx:          ctx,
