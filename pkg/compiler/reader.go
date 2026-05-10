@@ -1230,7 +1230,7 @@ func skipReaderForm(r *LispReader) {
 }
 
 func readMeta(r *LispReader, _ rune) (vm.Value, error) {
-	ch, err := r.next()
+	_, err := r.next()
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
@@ -1267,14 +1267,14 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 		default:
 			return vm.NIL, NewReaderError(r, "unsupported meta form")
 		}
-		ch, err = r.eatWhitespace()
+		ch, err := r.eatWhitespace()
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "reading meta")
 		}
 		if ch != '^' {
 			break
 		}
-		ch, err = r.next()
+		_, err = r.next()
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "reading meta")
 		}
