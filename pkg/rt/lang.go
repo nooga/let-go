@@ -3401,7 +3401,7 @@ func installLangNS() {
 			switch arg := v.(type) {
 			case vm.Symbol:
 				NS(string(arg)) // triggers autoloading
-			case *vm.ArrayVector:
+			case vm.ArrayVector:
 				// Vector form: [ns-name :as alias] or [ns-name :refer [syms...]]
 				if arg.RawCount() < 1 {
 					return vm.NIL, fmt.Errorf("require: empty vector")
@@ -3423,7 +3423,7 @@ func installLangNS() {
 					case vm.Keyword("refer"):
 						if val == vm.Keyword("all") {
 							cns.Refer(target, "", true)
-						} else if vec, ok := val.(*vm.ArrayVector); ok {
+						} else if vec, ok := val.(vm.ArrayVector); ok {
 							syms := make([]vm.Symbol, vec.RawCount())
 							for j := 0; j < vec.RawCount(); j++ {
 								syms[j] = vec.ValueAt(vm.Int(int64(j))).(vm.Symbol)

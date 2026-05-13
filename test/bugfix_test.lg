@@ -43,3 +43,14 @@
       (doseq [x [1 2 3]]
         (swap! result conj x))
       (is (= [1 2 3] @result)))))
+
+;; Bug #13: vector form of (require ...) failed at runtime
+(deftest require-vector-form
+  (testing "symbol form still loads namespace"
+    (is (= nil (require (quote clojure.string)))))
+
+  (testing "vector form with :as does not throw"
+    (is (= nil (require (quote [clojure.string :as bug13-str])))))
+
+  (testing "vector form with :refer does not throw"
+    (is (= nil (require (quote [clojure.string :refer [trim]]))))))
