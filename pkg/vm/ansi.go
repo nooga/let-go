@@ -11,8 +11,8 @@ package vm
 // support (plan9 / rio) these are stubbed out to empty strings — see
 // ansi_plan9.go.
 const (
-	ansiBold     = "[1m"
-	ansiBoldRed  = "[1;31m"
-	ansiBoldBlue = "[1;34m"
-	ansiReset    = "[0m"
+	ansiBold     = "\x1b[1m"
+	ansiBoldRed  = "\x1b[1;31m"
+	ansiBoldBlue = "\x1b[1;34m"
+	ansiReset    = "\x1b[0m"
 )
