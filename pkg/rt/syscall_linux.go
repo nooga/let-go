@@ -1014,8 +1014,9 @@ func installSyscallNS() {
 	RegisterNS(ns)
 }
 
-// charsToString converts a null-terminated int8 array (from Utsname) to a string.
-func charsToString(ca []int8) string {
+// charsToString converts a null-terminated char array (from Utsname) to a string.
+// Utsname fields are []int8 on some Linux arches (amd64) and []uint8 on others (arm).
+func charsToString[T int8 | uint8](ca []T) string {
 	buf := make([]byte, 0, len(ca))
 	for _, c := range ca {
 		if c == 0 {
