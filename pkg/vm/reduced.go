@@ -11,9 +11,9 @@ func NewReduced(v Value) *Reduced {
 	return &Reduced{value: v}
 }
 
-func (r *Reduced) Deref() Value        { return r.value }
-func (r *Reduced) Type() ValueType     { return ReducedType }
-func (r *Reduced) Unbox() interface{}  { return r.value }
+func (r *Reduced) Deref() Value       { return r.value }
+func (r *Reduced) Type() ValueType    { return ReducedType }
+func (r *Reduced) Unbox() interface{} { return r.value }
 func (r *Reduced) String() string {
 	return fmt.Sprintf("#reduced<%s>", r.value.String())
 }

@@ -7,14 +7,16 @@ package vm
 
 import (
 	"fmt"
-	"github.com/nooga/let-go/pkg/errors"
 	"reflect"
+
+	"github.com/nooga/let-go/pkg/errors"
 )
 
 // TypeError is a LETGO type error which mostly happens when there is a type mismatch between
 // either LETGO values or LETGO values and Go values.
 // These errors print as:
-//		TypeError: (encountered type name) ... message ... (expected type name)
+//
+//	TypeError: (encountered type name) ... message ... (expected type name)
 type TypeError struct {
 	message  string
 	value    interface{}

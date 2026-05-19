@@ -83,7 +83,6 @@ func (n *Namespace) LookupLocal(symbol Symbol) *Var {
 	return n.registry[symbol]
 }
 
-
 func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 	val, ok := n.registry[symbol]
 	if !ok {

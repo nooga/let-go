@@ -99,4 +99,3 @@ func (c *Cons) Conj(val Value) Collection {
 func (c *Cons) Hash() uint32 {
 	return hashOrdered(c)
 }
-

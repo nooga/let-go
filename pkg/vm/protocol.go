@@ -10,9 +10,9 @@ import "fmt"
 // Protocol defines a named set of methods with type-based dispatch.
 type Protocol struct {
 	name    string
-	methods []Symbol           // method names
+	methods []Symbol                     // method names
 	impls   map[ValueType]*PersistentMap // type → {method-name → fn}
-	nilImpl *PersistentMap     // implementation for nil
+	nilImpl *PersistentMap               // implementation for nil
 }
 
 func NewProtocol(name string, methods []Symbol) *Protocol {
@@ -97,8 +97,10 @@ func NewProtocolFn(protocol *Protocol, methodName Symbol) *ProtocolFn {
 
 func (f *ProtocolFn) Type() ValueType    { return FuncType }
 func (f *ProtocolFn) Unbox() interface{} { return f }
-func (f *ProtocolFn) String() string     { return fmt.Sprintf("<protocol-fn %s/%s>", f.protocol.name, f.name) }
-func (f *ProtocolFn) Arity() int         { return -1 }
+func (f *ProtocolFn) String() string {
+	return fmt.Sprintf("<protocol-fn %s/%s>", f.protocol.name, f.name)
+}
+func (f *ProtocolFn) Arity() int { return -1 }
 
 func (f *ProtocolFn) Invoke(args []Value) (Value, error) {
 	if len(args) == 0 {

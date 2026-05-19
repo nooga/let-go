@@ -212,8 +212,8 @@ func (a *TypedArray) Clone() *TypedArray {
 
 // --- Counted interface ---
 
-func (a *TypedArray) Count() Value    { return Int(a.Len()) }
-func (a *TypedArray) RawCount() int   { return a.Len() }
+func (a *TypedArray) Count() Value      { return Int(a.Len()) }
+func (a *TypedArray) RawCount() int     { return a.Len() }
 func (a *TypedArray) Empty() Collection { return NewObjectArray(0) }
 func (a *TypedArray) Conj(v Value) Collection {
 	// Conj on an array creates a new object-array with element appended
@@ -277,9 +277,9 @@ type TypedArraySeq struct {
 	i   int
 }
 
-func (s *TypedArraySeq) Type() ValueType    { return ListType }
-func (s *TypedArraySeq) Unbox() interface{} { return s }
-func (s *TypedArraySeq) Meta() Value        { return NIL }
+func (s *TypedArraySeq) Type() ValueType        { return ListType }
+func (s *TypedArraySeq) Unbox() interface{}     { return s }
+func (s *TypedArraySeq) Meta() Value            { return NIL }
 func (s *TypedArraySeq) WithMeta(_ Value) Value { return s }
 
 func (s *TypedArraySeq) First() Value {
@@ -309,8 +309,8 @@ func (s *TypedArraySeq) Cons(val Value) Seq {
 
 func (s *TypedArraySeq) Seq() Seq { return s }
 
-func (s *TypedArraySeq) Count() Value  { return Int(s.arr.Len() - s.i) }
-func (s *TypedArraySeq) RawCount() int { return s.arr.Len() - s.i }
+func (s *TypedArraySeq) Count() Value      { return Int(s.arr.Len() - s.i) }
+func (s *TypedArraySeq) RawCount() int     { return s.arr.Len() - s.i }
 func (s *TypedArraySeq) Empty() Collection { return EmptyList }
 func (s *TypedArraySeq) Conj(val Value) Collection {
 	return s.Cons(val).(*List)

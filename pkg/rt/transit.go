@@ -20,14 +20,14 @@ import (
 // --- Rolling cache (shared by encoder and decoder) ---
 
 const (
-	cacheDigits      = 44
-	cacheBase        = 48 // '0'
-	cacheSize        = cacheDigits * cacheDigits
-	minCacheableLen  = 4
-	cacheMarker = "^"
-	mapMarker   = "^ "
-	kwPrefix    = "~:"
-	symPrefix   = "~$"
+	cacheDigits     = 44
+	cacheBase       = 48 // '0'
+	cacheSize       = cacheDigits * cacheDigits
+	minCacheableLen = 4
+	cacheMarker     = "^"
+	mapMarker       = "^ "
+	kwPrefix        = "~:"
+	symPrefix       = "~$"
 )
 
 type transitCache struct {
