@@ -1678,7 +1678,10 @@
 ;;   (method2 [this arg]))
 ;; Defines a protocol and creates vars for each method.
 (defmacro defprotocol [name & sigs]
-  (let [method-names (map first sigs)
+  (let [;; Optional leading docstring. Currently discarded — see defmulti
+        ;; comment; let-go doesn't yet thread :doc meta through def-forms.
+        sigs         (if (string? (first sigs)) (next sigs) sigs)
+        method-names (map first sigs)
         ;; Quote method names so they don't get resolved as vars
         quoted-names (map (fn [m] (list 'quote m)) method-names)
         proto-def    (list 'def name
@@ -2016,15 +2019,25 @@
 
 ;; --- Multimethods ---
 
-;; (defmulti name dispatch-fn)
-;; (defmulti name dispatch-fn :default default-val)
-(defmacro defmulti
-  ([name dispatch-fn]
-   `(def ~name (defmulti* ~(str name) ~dispatch-fn)))
-  ([name dispatch-fn default-key default-val]
-   (if (= default-key :default)
-     `(def ~name (defmulti* ~(str name) ~dispatch-fn ~default-val))
-     `(def ~name (defmulti* ~(str name) ~dispatch-fn)))))
+;; (defmulti name docstring? attr-map? dispatch-fn & options)
+;;   where options ∈ {:default <val> :hierarchy <val>}
+;;
+;; Docstring/attr-map are accepted but currently discarded — let-go does
+;; not yet thread :doc/etc. meta through any def-form (defn drops them
+;; too). :hierarchy is accepted for source compatibility but not wired
+;; into dispatch (defmulti* only honors :default).
+(defmacro defmulti [name & args]
+  (let [args (if (string? (first args)) (next args) args)
+        args (if (map? (first args)) (next args) args)
+        dispatch-fn (first args)
+        opts-list (next args)
+        _ (when (odd? (count opts-list))
+            (throw (str "defmulti " name
+                        ": options must be key-value pairs. "
+                        "Example: (defmulti name dispatch-fn :default dispatch-value)")))
+        options (apply hash-map opts-list)
+        default-val (get options :default :default)]
+    `(def ~name (defmulti* ~(str name) ~dispatch-fn ~default-val))))
 
 ;; (defmethod name dispatch-val [args] body)
 (defmacro defmethod [name dispatch-val & fn-tail]
