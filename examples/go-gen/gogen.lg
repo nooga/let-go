@@ -1,0 +1,455 @@
+;; gogen — Way 3 prototype, refactored to use go/ast directly.
+;;
+;; Architecture:
+;;   user code: (gquote (func ...))
+;;     ↓ macro expansion (compile time, Clojure)
+;;   constructor calls: (gogen/func-decl "Add" [...] [...] [...])
+;;     ↓ evaluation (runtime, native)
+;;   boxed *go/ast.Node values
+;;     ↓ gogen/render
+;;   gofmt-canonical source text
+;;
+;; The Go-side native fns (cIdent, cBinary, cFuncDecl, etc., in
+;; pkg/rt/gogen.go) build real *ast.Node values and box them as
+;; goASTValue. There is no intermediate Clojure-map representation.
+;; This eliminates a whole class of "shadow type system" bugs and
+;; gives us free access to whatever go/ast can express.
+
+(ns gogen
+  (:require [string :as str]))
+
+;; --- compile-time walker --------------------------------------------
+;;
+;; Each walker takes a literal Clojure form (as it appeared in the
+;; user's source) and returns a Clojure form that, when evaluated,
+;; produces a boxed *ast.Node. The walker recognizes `(unquote x)`
+;; and `(unquote-splicing xs)` as escapes.
+
+(declare walk-expr-form walk-stmt-form walk-type-form walk-decl-form)
+
+;; Note: we use strings rather than bare symbols here because let-go's
+;; reader can choke on some Go operators (notably &^, |, and bare ^).
+;; The walker compares against (str head), so strings are fine.
+(def ^:private binops
+  ["+" "-" "*" "/" "%" "<" "<=" ">" ">=" "==" "!=" "&&" "||" "&" "|" "^" "<<" ">>" "&^"])
+
+;; Compound assignment ops: `target OP= value`. Single-LHS only — the
+;; multi-LHS form (a, b := …) is `:=` plus a vector LHS and is handled
+;; by the dedicated multi-assign path.
+(def ^:private compound-assign-ops
+  ["+=" "-=" "*=" "/=" "%=" "&=" "|=" "^=" "<<=" ">>=" "&^="])
+
+(defn- binop? [sym]
+  (and (symbol? sym) (some #(= (str sym) %) binops)))
+
+(defn- compound-assign-op? [head]
+  (and (or (symbol? head) (keyword? head))
+       (some #(= (str head) %) compound-assign-ops)))
+
+(defn- unquote-form? [x]
+  (and (list? x) (= (first x) 'unquote)))
+
+(defn- unquote-splicing-form? [x]
+  (and (list? x) (= (first x) 'unquote-splicing)))
+
+;; Compile-time helper: walk a vector of forms, treating ~@ as a
+;; runtime splice. Returns a form that builds a flat sequence at
+;; runtime: (concat (list <walked>) <spliced> (list <walked>) ...).
+(defn- walk-children [forms walker-fn]
+  (let [pieces (map (fn [f]
+                      (if (unquote-splicing-form? f)
+                        (second f)
+                        (list 'list (walker-fn f))))
+                    forms)]
+    (cons 'concat pieces)))
+
+;; --- types -----------------------------------------------------------
+;;
+;; Type forms become calls to gogen/type with a *string* spec. The
+;; Go-side parses the spec via go/parser.ParseExpr, so any valid Go
+;; type expression (including generics, channels, struct{}s) works.
+
+(defn type-spec-string [form]
+  ;; Recursively convert a type form to its Go source string.
+  (cond
+    (keyword? form) (name form)
+    (symbol? form)  (str form)
+    (string? form)  form
+    (list? form)
+    (let [head (first form)
+          args (rest form)]
+      (case (str head)
+        "slice"   (str "[]" (type-spec-string (first args)))
+        "array"   (str "[" (first args) "]" (type-spec-string (second args)))
+        "map"     (str "map[" (type-spec-string (first args)) "]"
+                       (type-spec-string (second args)))
+        "pointer" (str "*" (type-spec-string (first args)))
+        "chan"    (str "chan " (type-spec-string (first args)))
+        "func"    ;; (func [params] [results]) — rare, but useful
+        (str "func(" (str/join ", " (map type-spec-string (first args))) ") "
+             (type-spec-string (second args)))
+        (throw (str "type-spec-string: unknown type constructor " head))))
+    :else (throw (str "type-spec-string: " (pr-str form)))))
+
+(defn walk-type-form [form]
+  (if (unquote-form? form)
+    ;; Runtime-supplied type: assume the user passes a string or symbol,
+    ;; let gogen/type validate.
+    (list 'gogen/type (list 'str (second form)))
+    (list 'gogen/type (type-spec-string form))))
+
+;; --- expressions ----------------------------------------------------
+
+(defn walk-expr-form [form]
+  (cond
+    (unquote-form? form)
+    ;; Runtime expression: coerce via the polymorphic `->expr` helper
+    ;; (defined below). This allows splicing numbers, strings, symbols,
+    ;; or already-built expression nodes.
+    (list 'gogen/->expr (second form))
+
+    (integer? form) (list 'gogen/int-lit form)
+    (float? form)   (list 'gogen/float-lit form)
+    (string? form)  (list 'gogen/string-lit form)
+    (boolean? form) (list 'gogen/ident (if form "true" "false"))
+    (nil? form)     (list 'gogen/ident "nil")
+    (symbol? form)  (list 'gogen/ident (str form))
+
+    (list? form)
+    (let [head (first form)
+          args (rest form)]
+      (cond
+        (binop? head)
+        ;; Left-associative reduce. Note: 2-arg only is correct (Go
+        ;; binops are binary); 3+ args left-fold.
+        (reduce (fn [acc x]
+                  (list 'gogen/binary (str head) acc (walk-expr-form x)))
+                (walk-expr-form (first args))
+                (rest args))
+
+        (= head 'index)
+        (list 'gogen/index (walk-expr-form (first args)) (walk-expr-form (second args)))
+
+        (= head 'field)
+        ;; (field recv name)  — name can be ~unquoted
+        (list 'gogen/field-sel
+              (walk-expr-form (first args))
+              (if (unquote-form? (second args))
+                (list 'str (second (second args)))
+                (str (second args))))
+
+        (= head 'addr)  (list 'gogen/unary "&" (walk-expr-form (first args)))
+        (= head 'deref) (list 'gogen/unary "*" (walk-expr-form (first args)))
+        (= head 'not)   (list 'gogen/unary "!" (walk-expr-form (first args)))
+        (= head 'neg)   (list 'gogen/unary "-" (walk-expr-form (first args)))
+        (= head 'bnot)  (list 'gogen/unary "^" (walk-expr-form (first args)))
+
+        (= head 'cast)
+        (list 'gogen/cast (walk-type-form (first args)) (walk-expr-form (second args)))
+
+        (= head 'type-assert)
+        ;; (type-assert x T) → Go x.(T)
+        (list 'gogen/type-assert
+              (walk-expr-form (first args))
+              (walk-type-form (second args)))
+
+        (= head 'call)
+        (list 'gogen/call (walk-expr-form (first args))
+              (walk-children (rest args) walk-expr-form))
+
+        ;; Default: treat as function call by name.
+        :else
+        (list 'gogen/call (walk-expr-form head)
+              (walk-children args walk-expr-form))))
+
+    :else (throw (str "walk-expr-form: don't know how to walk " (pr-str form)))))
+
+;; --- statements -----------------------------------------------------
+
+;; Statement heads that get explicit case-dispatch in walk-stmt-form.
+;; Compound-assignment ops (+=, -=, etc.) are NOT listed here; they're
+;; recognized via compound-assign-op? in the default branch.
+(def ^:private stmt-heads
+  '[var assign := return if for while break continue do-expr])
+
+(defn- stmt-head? [head]
+  (and (or (symbol? head) (keyword? head))
+       (or (some #(= (str head) (str %)) stmt-heads)
+           (compound-assign-op? head))))
+
+(defn walk-stmt-form [form]
+  (cond
+    (unquote-form? form) (second form)  ; trust runtime to produce a stmt node
+
+    (list? form)
+    (let [head (first form)
+          args (rest form)]
+      (case (str head)
+        "var"
+        (list 'gogen/var-decl
+              (str (first args))
+              (walk-type-form (second args))
+              (if (> (count args) 2) (walk-expr-form (nth args 2)) nil))
+
+        ;; Single-LHS assignment ops. Both LHS and RHS are walked as exprs.
+        ;; Multi-LHS form: when LHS is a vector, route to multi-assign with
+        ;; both sides as expr lists. This enables `:=` short-var-decl with
+        ;; tuples: (:= [r ok] [(call foo)]).
+        "assign" (if (vector? (first args))
+                   (list 'gogen/multi-assign "="
+                         (cons 'list (map walk-expr-form (first args)))
+                         (cons 'list (map walk-expr-form (second args))))
+                   (list 'gogen/assign "=" (walk-expr-form (first args)) (walk-expr-form (second args))))
+        ":="     (if (vector? (first args))
+                   (list 'gogen/multi-assign ":="
+                         (cons 'list (map walk-expr-form (first args)))
+                         (cons 'list (map walk-expr-form (second args))))
+                   (list 'gogen/assign ":=" (walk-expr-form (first args)) (walk-expr-form (second args))))
+        ;; Compound-assignment ops (+=, -=, *=, /=, %=, &=, |=, ^=,
+        ;; <<=, >>=, &^=) are all the same shape and handled together
+        ;; in the case default below.
+
+        "return"
+        (list 'gogen/return-stmt (walk-children args walk-expr-form))
+
+        "if"
+        ;; Two shapes:
+        ;;   (if cond [then-stmts] [else-stmts]?)             -- no init
+        ;;   (if [init] cond [then-stmts] [else-stmts]?)      -- with init
+        ;; The init form is recognized by the first arg being a vector
+        ;; whose first element is a statement-head symbol (var/assign/:=/etc).
+        (let [first-arg (first args)
+              has-init? (and (vector? first-arg)
+                             (= (count first-arg) 1)
+                             (list? (nth first-arg 0))
+                             (stmt-head? (first (nth first-arg 0))))]
+          (if has-init?
+            (list 'gogen/if-stmt
+                  (walk-stmt-form (nth first-arg 0))
+                  (walk-expr-form (second args))
+                  (walk-children (nth args 2) walk-stmt-form)
+                  (if (> (count args) 3)
+                    (walk-children (nth args 3) walk-stmt-form)
+                    nil))
+            (list 'gogen/if-stmt
+                  nil
+                  (walk-expr-form first-arg)
+                  (walk-children (second args) walk-stmt-form)
+                  (if (> (count args) 2)
+                    (walk-children (nth args 2) walk-stmt-form)
+                    nil))))
+
+        "for"
+        ;; Two forms:
+        ;;   (for cond body...)            ; while loop
+        ;;   (for [init cond post] body...) ; three-clause
+        (let [first-arg (first args)]
+          (if (vector? first-arg)
+            (let [[init cond-form post] first-arg
+                  body (rest args)]
+              (list 'gogen/for-stmt
+                    (if init (walk-stmt-form init) nil)
+                    (if cond-form (walk-expr-form cond-form) nil)
+                    (if post (walk-stmt-form post) nil)
+                    (walk-children body walk-stmt-form)))
+            ;; while form
+            (list 'gogen/for-stmt
+                  nil
+                  (walk-expr-form first-arg)
+                  nil
+                  (walk-children (rest args) walk-stmt-form))))
+
+        ;; Default: compound-assign-op? Otherwise expression-as-statement.
+        (if (compound-assign-op? head)
+          (list 'gogen/assign (str head)
+                (walk-expr-form (first args))
+                (walk-expr-form (second args)))
+          (list 'gogen/expr-stmt (walk-expr-form form)))))
+
+    :else (list 'gogen/expr-stmt (walk-expr-form form))))
+
+;; --- params and decls -----------------------------------------------
+
+(defn walk-param-form [form]
+  ;; (name type) — both positions may be ~unquoted.
+  (let [name-form (first form)
+        type-form (second form)
+        name-emit (if (unquote-form? name-form)
+                    (list 'str (second name-form))
+                    (str name-form))
+        type-emit (if (unquote-form? type-form)
+                    (list 'gogen/type (list 'str (second type-form)))
+                    (walk-type-form type-form))]
+    (list 'gogen/param name-emit type-emit)))
+
+(defn walk-result-form [form]
+  ;; Return type form: either a bare type, or (named type), or just type-form.
+  ;; For now, treat anything as a single type → an anonymous result.
+  (list 'gogen/result
+        (if (and (list? form) (= (count form) 1))
+          (walk-type-form (first form))
+          (walk-type-form form))))
+
+(defn walk-decl-form [form]
+  (cond
+    (list? form)
+    (let [head (first form)
+          args (rest form)]
+      (case (str head)
+        "func"
+        ;; (func Name [(p t) ...] ret-type-or-types body...)
+        ;; ret can be:
+        ;;   - a single type form (single return)
+        ;;   - nil/[] (void)
+        ;;   - a vector [t1 t2] (multi return — anonymous)
+        (let [name-form (first args)
+              name-emit (if (unquote-form? name-form)
+                          (list 'str (second name-form))
+                          (str name-form))
+              params (second args)
+              ret    (nth args 2)
+              body   (drop 3 args)
+              params-form (cons 'concat
+                                (map (fn [p]
+                                       (if (unquote-splicing-form? p)
+                                         (second p)
+                                         (list 'list (walk-param-form p))))
+                                     params))
+              results-form (cond
+                             (nil? ret) nil
+                             (and (vector? ret) (empty? ret)) nil
+                             (vector? ret)
+                             (cons 'concat
+                                   (map (fn [r] (list 'list (walk-result-form r))) ret))
+                             :else
+                             (list 'list (walk-result-form ret)))]
+          (list 'gogen/func-decl
+                name-emit
+                params-form
+                (or results-form nil)
+                (walk-children body walk-stmt-form)))
+
+        (throw (str "walk-decl-form: unknown decl head " head))))
+    :else (throw (str "walk-decl-form: " (pr-str form)))))
+
+;; --- file-level forms ------------------------------------------------
+
+(defn walk-file-form [form]
+  ;; (file pkg-name [imports] decl1 decl2 ...)
+  ;; imports are strings or [path alias] pairs.
+  (let [pkg-form (first form)
+        pkg-emit (if (unquote-form? pkg-form)
+                   (list 'str (second pkg-form))
+                   (str pkg-form))
+        imports (second form)
+        decls (drop 2 form)
+        import-emits (cons 'concat
+                           (map (fn [imp]
+                                  (cond
+                                    (unquote-splicing-form? imp) (second imp)
+                                    (vector? imp)
+                                    (list 'list (list 'gogen/import-spec
+                                                      (str (first imp))
+                                                      (str (second imp))))
+                                    :else
+                                    (list 'list (list 'gogen/import-spec (str imp)))))
+                                imports))
+        decl-emits (walk-children decls walk-decl-form)]
+    (list 'gogen/file pkg-emit import-emits decl-emits)))
+
+;; --- the macro ------------------------------------------------------
+;;
+;; `gquote` dispatches on the head of the form to pick a walker. This
+;; lets nested splices work without the user having to choose between
+;; gquote-decl / gquote-stmt / gquote-expr.
+
+(def ^:private decl-heads '[func])
+(def ^:private file-heads '[file])
+
+(defn- head-in? [heads form]
+  ;; Compare via (str head) so we treat the symbol `:=` and the
+  ;; keyword `:=` the same (let-go reads `:=` as a keyword).
+  (and (list? form)
+       (let [h (first form)]
+         (and (or (symbol? h) (keyword? h))
+              (some #(= (str h) (str %)) heads)))))
+
+(defn- form-head-is-stmt? [form]
+  (and (list? form) (stmt-head? (first form))))
+
+(defmacro gquote [form]
+  (cond
+    (head-in? file-heads form) (walk-file-form (rest form))
+    (head-in? decl-heads form) (walk-decl-form form)
+    (form-head-is-stmt? form)  (walk-stmt-form form)
+    :else                      (walk-expr-form form)))
+
+;; --- runtime helpers ------------------------------------------------
+
+;; --- determinism helpers --------------------------------------------
+;;
+;; Codegen output must be byte-stable: same spec → same source. The
+;; primary nondeterminism hazard is iterating an unordered collection
+;; in spec data (hash-map / set), since Go's map iteration order is
+;; randomized. check-spec walks a value and throws on any unordered
+;; collection found, so callers can opt into a fail-fast contract:
+;;
+;;   (def spec [[:add "+" ...] [:sub "-" ...]])  ;; vector — ok
+;;   (g/check-spec spec)                         ;; passes
+;;
+;;   (def bad {:a 1 :b 2})                       ;; hash-map
+;;   (g/check-spec bad)                          ;; throws
+;;
+;; Sorted maps and sorted sets pass — their iteration order is stable.
+;; See DETERMINISM.md §Source 2.
+
+(defn- unordered-collection? [v]
+  ;; A map or set that is NOT a sorted variant. core/sorted? returns
+  ;; true for SortedMap and SortedSet, false for PersistentMap and
+  ;; PersistentSet.
+  (and (or (map? v) (set? v))
+       (not (sorted? v))))
+
+(defn check-spec
+  "Walk v recursively and throw if any hash-map or set is encountered.
+   Vectors, lists, sorted-maps, sorted-sets, and scalars pass through.
+
+   Returns v on success, so it composes inline:
+       (def spec (g/check-spec [[:add ...] [:sub ...]]))"
+  [v]
+  (cond
+    (unordered-collection? v)
+    (throw (str "check-spec: found unordered collection ("
+                (if (set? v) "set" "hash-map")
+                ") — iteration order is randomized, which would make "
+                "generated code nondeterministic. Use a vector, list, "
+                "or sorted-map/sorted-set instead."))
+
+    ;; Sequences: walk children. For sorted-maps walk values (keys
+    ;; are already ordered). For sequentials walk every element.
+    (sequential? v)  (do (doseq [x v] (check-spec x)) v)
+    (sorted? v)
+    (do (doseq [x (if (map? v) (vals v) (seq v))]
+          (check-spec x))
+        v)
+
+    :else v))
+
+(defn ->expr
+  "Coerce a runtime value into a Go expression AST node.
+   Pass-through for already-built AST values; literals get auto-wrapped."
+  [v]
+  (cond
+    ;; Already an AST value — pass through. We can't introspect the
+    ;; boxed type from Clojure, so we rely on the constructor functions
+    ;; to error if the wrong kind of node is passed downstream.
+    ;; Use core/type because `type` here resolves to gogen/type (the
+    ;; AST constructor).
+    (= (str (core/type v)) "let-go.lang.GoAST") v
+    (integer? v) (gogen/int-lit v)
+    (float? v)   (gogen/float-lit v)
+    (string? v)  (gogen/string-lit v)
+    (boolean? v) (gogen/ident (if v "true" "false"))
+    (nil? v)     (gogen/ident "nil")
+    (symbol? v)  (gogen/ident (str v))
+    :else (throw (str "->expr: don't know how to coerce " (pr-str v)))))

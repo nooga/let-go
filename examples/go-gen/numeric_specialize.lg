@@ -1,0 +1,196 @@
+;; Type-specialized numeric handlers via Clojure multimethods.
+;;
+;; This example demonstrates "interpretation B" of the typed-dispatch
+;; idea: use Clojure multimethods to organize per-type-tuple emission,
+;; then emit a single Go function that dispatches at runtime to the
+;; right specialized body.
+;;
+;; The generated function has the shape:
+;;
+;;   func opAdd(a, b vm.Value) (vm.Value, error) {
+;;       if ai, ok := a.(vm.Int); ok {
+;;           if bi, ok := b.(vm.Int); ok {
+;;               /* body for [:int :int] */
+;;           }
+;;           if bf, ok := b.(vm.Float); ok {
+;;               /* body for [:int :float] */
+;;           }
+;;       }
+;;       if af, ok := a.(vm.Float); ok {
+;;           if bf, ok := b.(vm.Float); ok {
+;;               /* body for [:float :float] */
+;;           }
+;;       }
+;;       return NumAdd(a, b)  // generic fallback
+;;   }
+;;
+;; The Clojure side picks which [op type-pair] combinations exist;
+;; the orchestrator emits the nested dispatch tree.
+;;
+;; Run with: lg -source-paths examples/go-gen examples/go-gen/numeric_specialize.lg
+
+(require '[gogen :as g])
+
+;; --- type-name conventions ------------------------------------------
+;;
+;; A "type key" is a Clojure keyword like :int, :float. The
+;; type-info map says how each one renders in Go and what local-var
+;; prefix to use.
+
+(def type-info
+  ;; Vector-of-pairs to keep iteration deterministic (sorted-map also
+  ;; works but vectors compose more naturally with destructure).
+  ;;
+  ;; Go types are bare (Int not vm.Int) because we generate code that
+  ;; would live in `package vm`. Adjust per-target if you generate into
+  ;; a different package.
+  [[:int   {:go-type "Int"   :var-prefix "i"}]
+   [:float {:go-type "Float" :var-prefix "f"}]])
+
+(defn ^:private info-for [type-key]
+  (or (some (fn [[k v]] (when (= k type-key) v)) type-info)
+      (throw (str "no type-info for " type-key))))
+
+;; --- multimethod for body emission ----------------------------------
+;;
+;; defmethod takes a vector [op-key a-type-key b-type-key]; the body
+;; receives the typed local symbols [a-local b-local] (already-bound
+;; in the dispatch tree) and emits a sequence of statement AST nodes.
+
+(defmulti gen-body
+  "Emit the body of a specialized handler given (op a-type b-type) and
+   already-bound typed locals."
+  (fn [op a-type b-type _a-local _b-local] [op a-type b-type]))
+
+;; Int + Int — checked overflow path, returns (Int, nil) or fallback.
+(defmethod gen-body [:add :int :int] [_ _ _ a-local b-local]
+  [(g/gquote
+     (:= [r ok] [(call checkedAddInt ~a-local ~b-local)]))
+   (g/gquote
+     (if ok [(return r nil)]))])
+
+(defmethod gen-body [:sub :int :int] [_ _ _ a-local b-local]
+  [(g/gquote
+     (:= [r ok] [(call checkedSubInt ~a-local ~b-local)]))
+   (g/gquote
+     (if ok [(return r nil)]))])
+
+(defmethod gen-body [:mul :int :int] [_ _ _ a-local b-local]
+  [(g/gquote
+     (:= [r ok] [(call checkedMulInt ~a-local ~b-local)]))
+   (g/gquote
+     (if ok [(return r nil)]))])
+
+;; Float + Float — direct arithmetic, no overflow possible.
+(defmethod gen-body [:add :float :float] [_ _ _ a-local b-local]
+  [(g/gquote (return (+ ~a-local ~b-local) nil))])
+
+(defmethod gen-body [:sub :float :float] [_ _ _ a-local b-local]
+  [(g/gquote (return (- ~a-local ~b-local) nil))])
+
+(defmethod gen-body [:mul :float :float] [_ _ _ a-local b-local]
+  [(g/gquote (return (* ~a-local ~b-local) nil))])
+
+;; Int + Float — promote Int to float64, do float arithmetic, wrap as
+;; Float. Matches numbers.go's NumAdd shape (line 84): the result type
+;; is Float, never Int, regardless of the int operand's magnitude.
+(defmethod gen-body [:add :int :float] [_ _ _ a-local b-local]
+  [(g/gquote
+     (return (cast Float (+ (cast float64 ~a-local) (cast float64 ~b-local))) nil))])
+
+(defmethod gen-body [:sub :int :float] [_ _ _ a-local b-local]
+  [(g/gquote
+     (return (cast Float (- (cast float64 ~a-local) (cast float64 ~b-local))) nil))])
+
+(defmethod gen-body [:mul :int :float] [_ _ _ a-local b-local]
+  [(g/gquote
+     (return (cast Float (* (cast float64 ~a-local) (cast float64 ~b-local))) nil))])
+
+;; Float + Int — same shape, mirrored operands.
+(defmethod gen-body [:add :float :int] [_ _ _ a-local b-local]
+  [(g/gquote
+     (return (cast Float (+ (cast float64 ~a-local) (cast float64 ~b-local))) nil))])
+
+(defmethod gen-body [:sub :float :int] [_ _ _ a-local b-local]
+  [(g/gquote
+     (return (cast Float (- (cast float64 ~a-local) (cast float64 ~b-local))) nil))])
+
+(defmethod gen-body [:mul :float :int] [_ _ _ a-local b-local]
+  [(g/gquote
+     (return (cast Float (* (cast float64 ~a-local) (cast float64 ~b-local))) nil))])
+
+;; --- orchestrator ---------------------------------------------------
+;;
+;; emit-dispatch takes a spec and walks the cartesian product of types
+;; that have registered methods, producing the nested if-tree.
+
+(defn ^:private gensym-typed [info]
+  ;; Use the type-prefix + a counter to make readable locals.
+  (symbol (str (:var-prefix info) (gensym ""))))
+
+(defn ^:private inner-if [a-local b-info b-bound-local body-stmts]
+  ;; if b-bound-local, ok := b.(B); ok { body-stmts }
+  ;; ~@body-stmts splices the runtime-built sequence into the then-vector.
+  (g/gquote
+    (if [(:= [~b-bound-local ok]
+             [(type-assert b ~(symbol (:go-type b-info)))])]
+        ok
+        [~@body-stmts])))
+
+(defn ^:private outer-if [a-info a-bound-local inner-stmts]
+  ;; if a-bound-local, ok := a.(A); ok { inner-stmts }
+  (g/gquote
+    (if [(:= [~a-bound-local ok]
+             [(type-assert a ~(symbol (:go-type a-info)))])]
+        ok
+        [~@inner-stmts])))
+
+(defn emit-handler [op-name op-key fallback-fn-name]
+  ;; Group methods by their first dispatch type.
+  ;; For each first-type, group again by second-type.
+  ;; Build the nested if-tree.
+  (let [methods (->> type-info
+                     (mapcat (fn [[a-key _]]
+                               (map (fn [[b-key _]] [a-key b-key]) type-info)))
+                     (filter (fn [[a b]]
+                               (try
+                                 (do (gen-body op-key a b 'dummy 'dummy) true)
+                                 (catch _ false)))))
+        by-a (reduce (fn [acc [a b]]
+                       (update acc a (fnil conj []) b))
+                     {}
+                     methods)
+        ;; deterministic iteration via type-info order
+        ordered-a-keys (filter #(contains? by-a %) (map first type-info))
+        outer-stmts (mapv
+                      (fn [a-key]
+                        (let [a-info (info-for a-key)
+                              a-local (gensym-typed a-info)
+                              b-keys (get by-a a-key)
+                              inner-stmts
+                              (mapv
+                                (fn [b-key]
+                                  (let [b-info (info-for b-key)
+                                        b-local (gensym-typed b-info)
+                                        body (gen-body op-key a-key b-key a-local b-local)]
+                                    (inner-if a-local b-info b-local body)))
+                                b-keys)]
+                          (outer-if a-info a-local inner-stmts)))
+                      ordered-a-keys)
+        fallback (g/gquote
+                   (return (call ~(symbol fallback-fn-name) a b)))]
+    (g/gquote
+      (func ~(symbol op-name) [(a Value) (b Value)] [Value error]
+        ~@outer-stmts
+        ~fallback))))
+
+;; --- emit ------------------------------------------------------------
+
+(def ops
+  '[[opAdd :add NumAdd]
+    [opSub :sub NumSub]
+    [opMul :mul NumMul]])
+
+(doseq [[name op-key fallback] ops]
+  (println (g/render (emit-handler name op-key fallback)))
+  (println))

@@ -1,0 +1,124 @@
+;; Tests for the gogen macro layer (gquote + walkers).
+;;
+;; Covers what the Go-side gogen_test.go can't: macro dispatch (decl
+;; vs stmt vs expr based on head), splicing (~ and ~@), determinism
+;; of macro expansion, and the check-spec contract.
+;;
+;; The Go-side already tests every AST constructor in isolation. Here
+;; we test that the *macro layer* on top of those constructors does
+;; the right thing.
+
+(ns test.gogen-test
+  (:require [test :refer :all]
+            [gogen :as g]))
+
+;; --- expression dispatch --------------------------------------------
+
+(deftest gquote-expr-literal
+  (testing "integer literal renders directly"
+    (is (= "42" (g/render (g/gquote 42))))))
+
+(deftest gquote-expr-binop
+  (testing "binary expression renders with operator"
+    (is (= "x + y" (g/render (g/gquote (+ x y)))))))
+
+(deftest gquote-expr-nested-binop
+  (testing "nested binary expressions get parens via go/format"
+    (is (= "x + y*z" (g/render (g/gquote (+ x (* y z))))))))
+
+(deftest gquote-expr-call
+  (testing "bare-symbol call becomes function call"
+    (is (= "foo(a, b)" (g/render (g/gquote (foo a b)))))))
+
+(deftest gquote-expr-field
+  (testing "(field recv name) becomes selector"
+    (is (= "obj.Name" (g/render (g/gquote (field obj Name)))))))
+
+(deftest gquote-expr-index
+  (testing "(index arr i) becomes arr[i]"
+    (is (= "arr[0]" (g/render (g/gquote (index arr 0)))))))
+
+;; --- statement dispatch ---------------------------------------------
+
+(deftest gquote-stmt-return
+  (testing "(return x) renders as return statement"
+    (is (= "return x" (g/render (g/gquote (return x)))))))
+
+(deftest gquote-stmt-assign
+  (testing "(= x y) renders as assignment"
+    (is (= "x = y" (g/render (g/gquote (assign x y)))))))
+
+(deftest gquote-stmt-compound-assign
+  (testing "compound assignment ops render correctly"
+    (is (= "sum += 5" (g/render (g/gquote (+= sum 5)))))
+    (is (= "x *= 2"  (g/render (g/gquote (*= x 2)))))))
+
+(deftest gquote-stmt-var-decl
+  (testing "(var name type init) renders as var declaration"
+    (is (= "var x int = 0"
+           (g/render (g/gquote (var x int 0)))))))
+
+(deftest gquote-stmt-if
+  (testing "if statement with single then-branch"
+    (is (= "if ok {\n\treturn 1\n}"
+           (g/render (g/gquote (if ok [(return 1)])))))))
+
+;; --- splicing -------------------------------------------------------
+
+(deftest gquote-splice-expr
+  (testing "~expr splices a Clojure expression as an AST value"
+    (let [n 7]
+      (is (= "7 + 1"
+             (g/render (g/gquote (+ ~n 1))))))))
+
+(deftest gquote-splice-stmts
+  (testing "~@stmts splices a sequence of statements"
+    (let [body (for [i (range 3)]
+                 (g/gquote (+= sum ~i)))]
+      (is (= "func F() {\n\tsum += 0\n\tsum += 1\n\tsum += 2\n}"
+             (g/render (g/gquote
+                         (func F [] nil
+                           ~@body))))))))
+
+;; --- check-spec -----------------------------------------------------
+
+(deftest check-spec-vector-passes
+  (testing "vector of vectors is deterministic, passes through"
+    (is (= [[:a 1] [:b 2]]
+           (g/check-spec [[:a 1] [:b 2]])))))
+
+(defn- threw? [thunk]
+  ;; let-go has no thrown? — use try/catch directly.
+  (try (thunk) false
+       (catch _e true)))
+
+(deftest check-spec-rejects-hash-map
+  (testing "hash-map iteration is random, must be rejected"
+    (is (threw? (fn [] (g/check-spec {:a 1 :b 2}))))))
+
+(deftest check-spec-rejects-nested-hash-map
+  (testing "nested hash-map inside a vector is also caught"
+    (is (threw? (fn [] (g/check-spec [[:a 1] {:b 2}]))))))
+
+(deftest check-spec-rejects-set
+  (testing "set iteration is random, must be rejected"
+    (is (threw? (fn [] (g/check-spec (set [:a :b :c])))))))
+
+(deftest check-spec-sorted-map-passes
+  (testing "sorted-map iteration is deterministic, allowed"
+    (is (some? (g/check-spec (sorted-map :a 1 :b 2))))))
+
+;; --- determinism ----------------------------------------------------
+
+(deftest gquote-expansion-deterministic
+  (testing "rendering the same gquote 100 times yields identical output"
+    (let [first-output (g/render
+                         (g/gquote
+                           (func F [(a int) (b int)] int
+                             (return (+ a b)))))]
+      (dotimes [_ 100]
+        (let [out (g/render
+                    (g/gquote
+                      (func F [(a int) (b int)] int
+                        (return (+ a b)))))]
+          (is (= first-output out)))))))
