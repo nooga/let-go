@@ -80,10 +80,16 @@ func (l *LazySeq) seq() Seq {
 		l.sv = nil
 		if sv == nil || sv == NIL {
 			l.s = nil
+		} else if seqable, ok := sv.(Sequable); ok {
+			// Prefer Sequable.Seq() over a direct Seq cast: Sequable
+			// canonicalizes empty collections (empty ArrayVector,
+			// PersistentSet, etc.) to EmptyList/nil, so `(lazy-seq [])`
+			// and `(lazy-seq #{})` equate to `()`. Without this, an
+			// empty collection that also satisfies Seq would be cached
+			// as l.s directly and equality vs () would fail.
+			l.s = seqable.Seq()
 		} else if seq, ok := sv.(Seq); ok {
 			l.s = seq
-		} else if seqable, ok := sv.(Sequable); ok {
-			l.s = seqable.Seq()
 		} else {
 			// Realized to a non-seq, non-Sequable value. Match JVM Clojure's
 			// behavior: throw rather than silently coercing to nil.

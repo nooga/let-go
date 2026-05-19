@@ -54,13 +54,8 @@
       (lazy-seq nil) ()
       (lazy-seq [nil]) '(nil)
       (lazy-seq ()) ()
-      ;; TODO(next PR): `(lazy-seq [])` and `(lazy-seq #{})` currently
-      ;; preserve their realized value as-a-Seq (ArrayVector, PersistentSet)
-      ;; instead of canonicalizing to EmptyList via .Seq(). Tracked separately
-      ;; from the map/mapcat laziness fix; will re-add when (*LazySeq).seq()
-      ;; prefers Sequable normalization over direct Seq cast.
-      ;; (lazy-seq []) ()
-      ;; (lazy-seq #{}) ()
+      (lazy-seq []) ()
+      (lazy-seq #{}) ()
       (lazy-seq {}) ()
       (lazy-seq [3]) [3]
       (lazy-seq (list 1 2)) '(1 2)
