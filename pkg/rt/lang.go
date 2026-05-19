@@ -724,17 +724,35 @@ func seqOf(v vm.Value) (vm.Seq, error) {
 	return nil, fmt.Errorf("don't know how to create ISeq from %s", v.Type())
 }
 
+// forceSeq fully resolves a LazySeq chain to a concrete seq (or nil if empty).
+// Non-LazySeq inputs pass through unchanged.
+func forceSeq(s vm.Seq) vm.Seq {
+	if s == nil {
+		return nil
+	}
+	if ls, ok := s.(*vm.LazySeq); ok {
+		return ls.Resolve()
+	}
+	return s
+}
+
 func mapLazy1(f vm.Fn, s vm.Seq) vm.Seq {
 	if s == nil {
 		return nil
 	}
 	captured := s
 	thunk, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
-		v, err := f.Invoke([]vm.Value{captured.First()})
+		// Force the captured seq before reading First(): a LazySeq that
+		// resolves to empty must produce EmptyList, not f(nil).
+		head := forceSeq(captured)
+		if head == nil {
+			return vm.EmptyList, nil
+		}
+		v, err := f.Invoke([]vm.Value{head.First()})
 		if err != nil {
 			return vm.NIL, err
 		}
-		rest := captured.Next()
+		rest := head.Next()
 		tail := mapLazy1(f, rest)
 		if tail == nil {
 			return vm.EmptyList.Cons(v), nil
@@ -753,9 +771,19 @@ func mapLazyN(f vm.Fn, seqs []vm.Seq) vm.Seq {
 	captured := make([]vm.Seq, len(seqs))
 	copy(captured, seqs)
 	thunk, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
-		fargs := make([]vm.Value, len(captured))
-		nexts := make([]vm.Seq, len(captured))
+		// Force every captured seq before reading First(); if any is empty,
+		// the whole multi-coll map ends.
+		heads := make([]vm.Seq, len(captured))
 		for i, s := range captured {
+			h := forceSeq(s)
+			if h == nil {
+				return vm.EmptyList, nil
+			}
+			heads[i] = h
+		}
+		fargs := make([]vm.Value, len(heads))
+		nexts := make([]vm.Seq, len(heads))
+		for i, s := range heads {
 			fargs[i] = s.First()
 			nexts[i] = s.Next()
 		}
@@ -1911,7 +1939,10 @@ func installLangNS() {
 		return seq.Count(), nil
 	})
 
-	// map builtin: eager for small counted collections, lazy otherwise
+	// map builtin: always lazy. Clojure semantics require laziness on all
+	// inputs — small counted collections must still defer realization so
+	// consumers (rose trees, short-circuit take, side-effecting f) work.
+	// Use mapv for eager realization to a vector.
 	mapf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -1929,32 +1960,6 @@ func installLangNS() {
 			if s == nil || s == vm.EmptyList {
 				return vm.EmptyList, nil
 			}
-			// Eager fast path: small counted collections (≤32 elements)
-			// Skip RawCount for LazySeq/Cons — could be infinite
-			length := 0
-			switch vs[1].(type) {
-			case *vm.LazySeq, *vm.Cons:
-				// Don't count — use lazy path
-			default:
-				if col, ok := vs[1].(vm.Counted); ok {
-					length = col.RawCount()
-				}
-			}
-			if length > 0 && length <= 32 {
-				newseq := make([]vm.Value, length)
-				i := 0
-				for s != nil {
-					newseq[i], err = mfn.Invoke([]vm.Value{s.First()})
-					if err != nil {
-						return vm.NIL, err
-					}
-					s = s.Next()
-					i++
-				}
-				ret, _ := vm.ListType.Box(newseq[:i])
-				return ret, nil
-			}
-			// lazy path
 			return mapLazy1(mfn, s), nil
 		}
 		// multi-collection path
@@ -1970,41 +1975,6 @@ func installLangNS() {
 			}
 			seqs[i] = s
 		}
-		// Check if all collections are small and counted (skip LazySeq/Cons)
-		minlen := math.MaxInt
-		allCounted := true
-		for i := range colls {
-			switch colls[i].(type) {
-			case *vm.LazySeq, *vm.Cons:
-				allCounted = false
-				continue
-			}
-			if coll, ok := colls[i].(vm.Counted); ok {
-				c := coll.RawCount()
-				if c < minlen {
-					minlen = c
-				}
-			} else {
-				allCounted = false
-				break
-			}
-		}
-		if allCounted && minlen > 0 && minlen <= 32 {
-			newseq := make([]vm.Value, minlen)
-			for i := 0; i < minlen; i++ {
-				fargs := make([]vm.Value, len(seqs))
-				for j := range seqs {
-					fargs[j] = seqs[j].First()
-					seqs[j] = seqs[j].Next()
-				}
-				newseq[i], err = mfn.Invoke(fargs)
-				if err != nil {
-					return vm.NIL, err
-				}
-			}
-			return vm.ListType.Box(newseq)
-		}
-		// lazy path for multi-collection
 		return mapLazyN(mfn, seqs), nil
 	})
 

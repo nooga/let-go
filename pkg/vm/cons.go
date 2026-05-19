@@ -94,3 +94,9 @@ func (c *Cons) Conj(val Value) Collection {
 	return NewCons(val, c)
 }
 
+// Hash implements Hashable using Clojure's ordered-collection Murmur3 mix.
+// Must match *List.Hash so a Cons of the same elements equates in sets/maps.
+func (c *Cons) Hash() uint32 {
+	return hashOrdered(c)
+}
+

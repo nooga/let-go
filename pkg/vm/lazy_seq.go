@@ -158,6 +158,19 @@ func (l *LazySeq) RawCount() int {
 
 func (l *LazySeq) Empty() Collection { return EmptyList }
 
+// Hash implements Hashable. Resolves the lazy chain and hashes as an ordered
+// collection, matching *List/*Cons so the three sequence representations
+// equate in sets/maps. An empty resolution (Go nil from a (lazy-seq nil))
+// must hash the same as EmptyList — Resolve() returns nil but EmptyList.Hash
+// iterates once over its sentinel element, so we substitute EmptyList here.
+func (l *LazySeq) Hash() uint32 {
+	s := l.Resolve()
+	if s == nil {
+		s = EmptyList
+	}
+	return hashOrdered(s)
+}
+
 func (l *LazySeq) Conj(val Value) Collection {
 	return NewCons(val, l)
 }

@@ -1,0 +1,115 @@
+(ns test.lazymap
+  (:require [test :refer :all]))
+
+;; Tests for map/mapcat laziness regressions discovered while building
+;; a QuickCheck-style property library in let-go. Two distinct bugs:
+;;
+;;   A. map* has an eager fast path for counted collections of ≤32
+;;      elements. This converts `(map f [1 2 3])` into a fully realized
+;;      PersistentList, breaking any consumer that relies on shrink
+;;      laziness (rose trees) or short-circuit semantics.
+;;
+;;   B. mapLazy1/mapLazyN don't force their input LazySeq before
+;;      wrapping First() in a thunk. An empty `(lazy-seq nil)` becomes
+;;      a non-empty LazySeq whose realization calls f(nil).
+
+;; ============================================================================
+;; A. Laziness — f must not run until the consumer pulls values
+;; ============================================================================
+
+(deftest map-is-lazy-for-small-vector
+  (testing "map over a 3-element vector does not realize before first"
+    (let [realized (atom 0)
+          s (map (fn [x] (swap! realized inc) (* x 2)) [1 2 3])]
+      (is (= 0 @realized)
+          "map should be lazy: nothing realized before access")
+      (is (= 2 (first s)))
+      (is (= 1 @realized)
+          "first should realize exactly one element"))))
+
+(deftest map-is-lazy-for-small-range
+  (testing "map over (range 5) realizes lazily"
+    (let [realized (atom 0)
+          s (map (fn [x] (swap! realized inc) x) (range 5))]
+      (is (= 0 @realized) "no realization before pull")
+      (first s)
+      (is (= 1 @realized) "one realization after one pull"))))
+
+(deftest map-short-circuits-via-take
+  (testing "take 2 of map over 10-vec only realizes 2"
+    (let [realized (atom 0)
+          s (take 2 (map (fn [x] (swap! realized inc) x)
+                         [0 1 2 3 4 5 6 7 8 9]))]
+      (doall s)
+      (is (= 2 @realized)
+          "take 2 must short-circuit; eager fast path realizes all 10"))))
+
+(deftest map-multi-coll-is-lazy
+  (testing "two-arg map is lazy on small counted inputs"
+    (let [realized (atom 0)
+          s (map (fn [a b] (swap! realized inc) (+ a b))
+                 [1 2 3] [10 20 30])]
+      (is (= 0 @realized))
+      (first s)
+      (is (= 1 @realized)))))
+
+(deftest map-three-colls-is-lazy
+  (testing "map over 3 colls is lazy and uses mapLazyN"
+    (let [realized (atom 0)
+          s (map (fn [a b c] (swap! realized inc) (+ a b c))
+                 [1 2 3] [10 20 30] [100 200 300])]
+      (is (= 0 @realized))
+      (is (= 111 (first s)))
+      (is (= 1 @realized)))))
+
+;; ============================================================================
+;; B. Empty LazySeq input — must not call f on nil
+;; ============================================================================
+
+(deftest map-of-empty-lazy-seq-is-empty
+  (testing "(map f (lazy-seq nil)) yields an empty seq, not f(nil)"
+    (let [r (map inc (lazy-seq nil))]
+      (is (nil? (seq r))
+          "seq of (map f empty-lazy) must be nil")
+      (is (= () (doall r))
+          "realized value must be empty list, not a singleton of f(nil)"))))
+
+(deftest map-of-lazy-seq-resolving-to-empty
+  (testing "(map f (lazy-seq (when false 'x))) yields empty"
+    (let [r (map (fn [x] (throw (ex-info "should not be called" {:x x})))
+                 (lazy-seq (when false :x)))]
+      (is (nil? (seq r))))))
+
+(deftest map-of-lazy-singleton
+  (testing "lazy-seq of one element maps correctly"
+    (let [r (map inc (lazy-seq (cons 1 nil)))]
+      (is (= '(2) (doall r))))))
+
+(deftest map-of-doubly-wrapped-lazy-seq
+  (testing "map over (lazy-seq (lazy-seq xs)) resolves through both layers"
+    (let [r (map inc (lazy-seq (lazy-seq '(1 2 3))))]
+      (is (= '(2 3 4) (doall r))))))
+
+;; ============================================================================
+;; mapcat — same eagerness/empty-input concerns flow through map
+;; ============================================================================
+
+(deftest mapcat-is-lazy-for-small-input
+  (testing "mapcat over small vector is lazy"
+    (let [realized (atom 0)
+          s (mapcat (fn [x] (swap! realized inc) [x x]) [1 2 3])]
+      (is (= 0 @realized) "no realization before pull")
+      (first s)
+      (is (<= @realized 1)
+          "first only forces enough inner colls to yield one element"))))
+
+(deftest mapcat-empty-children-doesnt-explode
+  (testing "mapcat with all-empty children produces empty seq"
+    (let [r (mapcat (fn [_] []) [1 2 3 4 5])]
+      (is (nil? (seq r))))))
+
+(deftest mapcat-of-empty-lazy-seq
+  (testing "mapcat over empty lazy-seq yields empty, no f(nil)"
+    (let [r (mapcat (fn [x] (throw (ex-info "should not be called" {:x x})))
+                   (lazy-seq nil))]
+      (is (nil? (seq r))))))
