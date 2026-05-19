@@ -5,6 +5,8 @@ linters:
     - unused
     - ineffassign
     - typecheck
+    - gofmt       # safety net — pre-commit hook auto-formats, this catches anything that slipped through
+    - goimports
   disable:
     - errcheck  # too noisy for a language runtime with many fire-and-forget calls
 
