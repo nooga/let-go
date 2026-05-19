@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -243,4 +244,23 @@ func TestStructWithFloat(t *testing.T) {
 	result, err := ToStruct[TestWithFloat](r)
 	assert.NoError(t, err)
 	assert.Equal(t, original, result)
+}
+
+type TestWithSlice struct {
+	Items []string
+}
+
+// Regression: unboxSliceInto must stop on EmptyList, not iterate it once.
+// Without the fix, an empty list yields a 1-element slice containing the
+// converted NIL value, breaking conversion to []string (and friends).
+//
+// Trigger: any let-go form that returns EmptyList (a *List with count=0)
+// in a struct field. `(map identity [])` is one such case — `map`
+// short-circuits empty inputs to EmptyList.
+func TestUnboxSliceInto_EmptyList(t *testing.T) {
+	// Direct test of the helper using EmptyList as input.
+	target := reflect.New(reflect.TypeOf([]string{})).Elem()
+	err := unboxSliceInto(target, EmptyList)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, target.Len(), "EmptyList must produce empty slice, not 1-element nil-filled slice")
 }

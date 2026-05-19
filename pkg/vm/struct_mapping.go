@@ -350,7 +350,7 @@ func unboxInto(target reflect.Value, val Value) error {
 func unboxSliceInto(target reflect.Value, s Seq) error {
 	elemType := target.Type().Elem()
 	var result []reflect.Value
-	for s != nil {
+	for !SeqIsEmpty(s) {
 		elem := reflect.New(elemType).Elem()
 		if err := unboxInto(elem, s.First()); err != nil {
 			return err

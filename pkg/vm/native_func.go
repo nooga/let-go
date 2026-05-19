@@ -37,7 +37,7 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 			}
 			in := ty.In(j)
 			if args[i] != NIL {
-				rawArgs[i] = reflect.ValueOf(args[i].Unbox())
+				rawArgs[i] = boxArgForReflect(args[i], in)
 				if rawArgs[i].CanConvert(in) {
 					rawArgs[i] = rawArgs[i].Convert(in)
 				}
@@ -77,6 +77,24 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 	}
 
 	return f, nil
+}
+
+// boxArgForReflect prepares a let-go Value for reflect.Call into a Go fn.
+//
+// When the Go parameter is a slice/array kind, we want per-element
+// conversion (so e.g. []vm.Int can flow into []int). The struct_mapping
+// machinery already does this via unboxSliceInto, so we delegate to it.
+// For non-slice targets and for boxed Go values, plain Unbox is correct.
+func boxArgForReflect(v Value, target reflect.Type) reflect.Value {
+	if target.Kind() == reflect.Slice || target.Kind() == reflect.Array {
+		if sq, ok := v.(Sequable); ok {
+			out := reflect.New(target).Elem()
+			if err := unboxSliceInto(out, sq.Seq()); err == nil {
+				return out
+			}
+		}
+	}
+	return reflect.ValueOf(v.Unbox())
 }
 
 func (t *theNativeFnType) WrapNoErr(fn func([]Value) Value) (Value, error) {
