@@ -111,8 +111,21 @@ const wasmHTMLTemplate = `<!doctype html>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script>
-// --- Cross-origin isolation via Service Worker ---
-if (!crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigator) {
+// --- Cross-origin isolation: prefer server headers, fall back to SW ---
+// When the dev/host server sends the COI headers itself (dev/serve.json
+// does this), crossOriginIsolated is already true and we don't need the
+// SW. Any leftover SW from a prior visit (e.g. earlier GitHub Pages load)
+// would intercept future fetches with stale content — unregister it now
+// so the headers path stays clean.
+if (crossOriginIsolated && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(()=>{});
+}
+// No isolation? Register the SW shim — but only once per tab. Without a
+// loop guard, a SW that fails to provide isolation (Safari rejects
+// credentialless, or activation races a tab close) reloads forever.
+if (!crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigator
+    && !sessionStorage.getItem('_lgCoiTried')) {
+  sessionStorage.setItem('_lgCoiTried', '1');
   navigator.serviceWorker.register('coi-serviceworker.js').then(() => location.reload()).catch(()=>{});
 }
 
