@@ -158,6 +158,8 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 		src = rt.ZipSrc
 	case "data":
 		src = rt.DataSrc
+	case "check":
+		src = rt.CheckSrc
 	case "term":
 		// term is a pure Go namespace, already registered in init()
 		return rt.NS("term")

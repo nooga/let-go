@@ -1,0 +1,325 @@
+(ns test.check-test
+  (:require [test :refer [deftest is testing]]
+            [string :as str]
+            [check :as c]))
+
+;; ============================================================================
+;; RNG
+;; ============================================================================
+
+(deftest rng-produces-integers
+  (testing "rng-next returns an integer in [0, 2^31)"
+    (let [r (c/rng 42)
+          [n _] (c/rng-next r)]
+      (is (integer? n))
+      (is (>= n 0)))))
+
+(deftest rng-is-deterministic
+  (testing "Same seed gives same sequence"
+    (let [r1 (c/rng 42)
+          r2 (c/rng 42)
+          [n1 _] (c/rng-next r1)
+          [n2 _] (c/rng-next r2)]
+      (is (= n1 n2))
+      (is (integer? n1)))))
+
+(deftest rng-different-seeds-differ
+  (testing "Different seeds give different first values"
+    (let [[n1 _] (c/rng-next (c/rng 1))
+          [n2 _] (c/rng-next (c/rng 2))]
+      (is (not= n1 n2)))))
+
+(deftest rng-advances
+  (testing "Consecutive calls produce different values"
+    (let [r0 (c/rng 42)
+          [n1 r1] (c/rng-next r0)
+          [n2 _]  (c/rng-next r1)]
+      (is (not= n1 n2)))))
+
+(deftest rng-split-produces-independent-streams
+  (testing "rng-split returns two RNGs that produce different sequences"
+    (let [r (c/rng 42)
+          [rl rr] (c/rng-split r)
+          [nl _] (c/rng-next rl)
+          [nr _] (c/rng-next rr)]
+      (is (not= nl nr))))
+  (testing "split is deterministic"
+    (let [[a1 a2] (c/rng-split (c/rng 42))
+          [b1 b2] (c/rng-split (c/rng 42))
+          [na _] (c/rng-next a1)
+          [nb _] (c/rng-next b1)]
+      (is (= na nb)))))
+
+;; ============================================================================
+;; Rose tree
+;; ============================================================================
+
+(deftest pure-makes-leaf
+  (testing "pure produces a rose with the value and no shrinks"
+    (let [r (c/pure 42)]
+      (is (= 42 (c/rose-value r)))
+      (is (empty? (c/rose-shrinks r))))))
+
+(deftest rose-map-transforms-value-and-shrinks
+  (testing "rose-map applies f to value and recursively to shrinks"
+    (let [r {:value 3 :shrinks [(c/pure 2) (c/pure 1) (c/pure 0)]}
+          m (c/rose-map inc r)]
+      (is (= 4 (c/rose-value m)))
+      (is (= [3 2 1] (map c/rose-value (c/rose-shrinks m)))))))
+
+(deftest rose-filter-keeps-passing-and-prunes-failing
+  (testing "values failing the predicate are dropped; shrinks recurse"
+    (let [r {:value 5 :shrinks [(c/pure 4) (c/pure 3) (c/pure 2) (c/pure 1)]}
+          f (c/rose-filter odd? r)]
+      (is (= 5 (c/rose-value f)))
+      (is (= [3 1] (map c/rose-value (c/rose-shrinks f))))))
+  (testing "filter on a value that fails returns nil"
+    (is (nil? (c/rose-filter odd? (c/pure 4))))))
+
+(deftest shrink-int-yields-zero-and-halves
+  (testing "shrink-int 0 → []"
+    (is (empty? (c/shrink-int 0))))
+  (testing "shrink-int 8 starts at 0 and halves toward target"
+    (is (= [0 4 6 7] (vec (c/shrink-int 8)))))
+  (testing "shrink-int handles negatives: include positive twin and halve"
+    (is (some #(= 0 %) (c/shrink-int -8)))
+    (is (some #(= 8 %) (c/shrink-int -8)))))
+
+(deftest int-rose-shrinks-toward-zero
+  (testing "an int rose tree has 0 as one of its shrinks"
+    (let [r (c/int-rose 10)]
+      (is (= 10 (c/rose-value r)))
+      (is (some #(= 0 (c/rose-value %)) (c/rose-shrinks r))))))
+
+;; ============================================================================
+;; Generators — (fn [rng size]) -> rose-tree
+;; ============================================================================
+
+(deftest return-yields-constant-value
+  (testing "return wraps a plain value as a generator"
+    (let [g (c/return :foo)
+          r (g (c/rng 1) 100)]
+      (is (= :foo (c/rose-value r)))
+      (is (empty? (c/rose-shrinks r))))))
+
+(deftest return-is-deterministic-across-seeds
+  (testing "return ignores rng — always yields the same value"
+    (let [g (c/return 42)]
+      (is (= 42 (c/rose-value (g (c/rng 1) 100))))
+      (is (= 42 (c/rose-value (g (c/rng 9999) 0)))))))
+
+(deftest gen-let-binds-and-evaluates-body
+  (testing "gen-let flattens nested binds: (gen-let [x g1, y g2] body)"
+    (let [g (c/gen-let [a (c/gen-int 0 10)
+                        b (c/gen-int 100 200)]
+              (+ a b))
+          v (c/rose-value (g (c/rng 1) 100))]
+      (is (and (>= v 100) (<= v 210))))))
+
+(deftest gen-let-supports-using-earlier-bindings
+  (testing "later generators can depend on earlier bound values"
+    (let [g (c/gen-let [n (c/gen-int 1 5)
+                        v (c/gen-int 100 (+ 100 n))]
+              [n v])
+          [n v] (c/rose-value (g (c/rng 1) 100))]
+      (is (and (>= n 1) (<= n 5)))
+      (is (and (>= v 100) (<= v (+ 100 n)))))))
+
+(deftest sample-returns-default-count-of-values
+  (testing "(sample gen) returns ~10 sample values"
+    (let [vs (c/sample (c/gen-int 0 100))]
+      (is (= 10 (count vs)))
+      (is (every? #(and (>= % 0) (<= % 100)) vs)))))
+
+(deftest sample-supports-custom-count
+  (testing "(sample gen n) returns n values"
+    (let [vs (c/sample (c/gen-int 0 100) 3)]
+      (is (= 3 (count vs))))))
+
+;; ============================================================================
+;; Counterexample formatting
+;; ============================================================================
+
+(deftest format-value-shortens-arrays
+  (testing "array contents are shortened in the printed output"
+    (let [ba (byte-array (range 200))
+          s (c/format-value ba)]
+      (is (< (count s) 100))
+      (is (str/includes? s "<array")))))
+
+(deftest format-value-handles-nested-maps
+  (testing "deep maps containing arrays still get redacted"
+    (let [m {:data (byte-array (range 200))
+             :nested {:inner {:pos [1 2]}}
+             :turn 0}
+          s (c/format-value m)]
+      (is (str/includes? s ":nested"))
+      (is (str/includes? s ":turn"))
+      ;; full array contents should be redacted out
+      (is (not (str/includes? s "199"))))))
+
+(deftest format-value-passes-small-values-through
+  (testing "small values are unchanged"
+    (is (= "42" (c/format-value 42)))
+    (is (= ":foo" (c/format-value :foo)))
+    (is (= "[1 2 3]" (c/format-value [1 2 3])))))
+
+;; ============================================================================
+;; Generators
+;; ============================================================================
+
+(deftest gen-int-bounded-produces-value-in-range
+  (testing "gen-int with range lo..hi produces a value in [lo, hi]"
+    (let [g (c/gen-int 5 10)
+          r (g (c/rng 42) 100)
+          v (c/rose-value r)]
+      (is (and (>= v 5) (<= v 10))))))
+
+(deftest gen-int-bounded-is-deterministic
+  (testing "same seed -> same value"
+    (let [g (c/gen-int 0 1000)
+          r1 (g (c/rng 7) 100)
+          r2 (g (c/rng 7) 100)]
+      (is (= (c/rose-value r1) (c/rose-value r2))))))
+
+(deftest gen-int-shrinks-toward-lo
+  (testing "the rose tree from gen-int shrinks toward the lower bound"
+    (let [g (c/gen-int 0 100)
+          r (g (c/rng 42) 100)
+          shrunk (map c/rose-value (c/rose-shrinks r))]
+      (is (some #(= 0 %) shrunk)))))
+
+(deftest gen-bool-produces-bool
+  (testing "gen-bool returns true or false"
+    (let [g (c/gen-bool)
+          v (c/rose-value (g (c/rng 1) 100))]
+      (is (or (= true v) (= false v))))))
+
+(deftest gen-elements-picks-from-coll
+  (testing "gen-elements returns a member of the collection"
+    (let [g (c/gen-elements [:a :b :c])
+          v (c/rose-value (g (c/rng 1) 100))]
+      (is (contains? #{:a :b :c} v)))))
+
+(deftest gen-elements-shrinks-toward-first
+  (testing "shrinks contain the first element"
+    (let [g (c/gen-elements [:a :b :c :d])
+          values (map #(c/rose-value (g (c/rng %) 100)) (range 20))
+          non-first-seed (first (filter (fn [s]
+                                          (let [r (g (c/rng s) 100)]
+                                            (not= :a (c/rose-value r))))
+                                        (range 20)))
+          r (when non-first-seed (g (c/rng non-first-seed) 100))]
+      (when r
+        (is (some #(= :a (c/rose-value %)) (c/rose-shrinks r)))))))
+
+(deftest fmap-transforms-value
+  (testing "fmap applies f over the generator's value"
+    (let [g (c/fmap inc (c/gen-int 0 10))
+          v (c/rose-value (g (c/rng 1) 100))]
+      (is (and (>= v 1) (<= v 11))))))
+
+(deftest fmap-preserves-shrinking
+  (testing "fmap'd rose still shrinks (via rose-map)"
+    (let [g (c/fmap #(* 10 %) (c/gen-int 0 50))
+          r (g (c/rng 3) 100)
+          shrunk-vals (set (map c/rose-value (c/rose-shrinks r)))]
+      (is (contains? shrunk-vals 0)))))
+
+(deftest bind-threads-rng
+  (testing "bind composes generators using the inner rng"
+    (let [g (c/bind (c/gen-int 1 5)
+              (fn [n] (c/gen-int 100 (+ 100 n))))
+          v (c/rose-value (g (c/rng 1) 100))]
+      (is (and (>= v 100) (<= v 105))))))
+
+(deftest gen-vector-length-bounded
+  (testing "gen-vector produces a vector of bounded length"
+    (let [g (c/gen-vector (c/gen-int 0 9) 3)
+          v (c/rose-value (g (c/rng 1) 100))]
+      (is (vector? v))
+      (is (= 3 (count v)))
+      (is (every? #(and (>= % 0) (<= % 9)) v)))))
+
+(deftest gen-vector-shrinks
+  (testing "variable-length gen-vector shrinks by dropping elements"
+    (let [g (c/gen-vector (c/gen-int 0 9) 0 5)
+          r (g (c/rng 1) 100)
+          n (count (c/rose-value r))
+          shrunk-lens (set (map (comp count c/rose-value) (c/rose-shrinks r)))]
+      (when (> n 0)
+        (is (some #(< % n) shrunk-lens)))))
+  (testing "variable-length gen-vector eventually shrinks toward []"
+    (let [g (c/gen-vector (c/gen-int 0 9) 0 3)
+          r (g (c/rng 1) 100)
+          direct (set (map c/rose-value (c/rose-shrinks r)))]
+      (is (contains? direct [])))))
+
+(deftest gen-tuple-combines-generators
+  (testing "gen-tuple produces a vector of generator values"
+    (let [g (c/gen-tuple (c/gen-int 0 9) (c/gen-bool))
+          v (c/rose-value (g (c/rng 1) 100))]
+      (is (= 2 (count v)))
+      (let [[n b] v]
+        (is (and (>= n 0) (<= n 9)))
+        (is (or (true? b) (false? b)))))))
+
+(deftest gen-frequency-respects-weights
+  (testing "frequency picks roughly in proportion (high-weight dominates)"
+    (let [g (c/gen-frequency [[9 (c/gen-elements [:hi])]
+                              [1 (c/gen-elements [:lo])]])
+          samples (map #(c/rose-value (g (c/rng %) 100)) (range 200))
+          hi-count (count (filter #(= :hi %) samples))]
+      (is (> hi-count 150)))))
+
+;; ============================================================================
+;; Runner — check, for-all, defprop
+;; ============================================================================
+
+(deftest check-passes-tautology
+  (testing "(check (for-all [n (gen-int 0 100)] true)) → :pass"
+    (let [p (c/for-all [n (c/gen-int 0 100)] true)
+          r (c/check p {:num-tests 20 :seed 1})]
+      (is (= :pass (:result r)))
+      (is (= 20 (:num-tests r))))))
+
+(deftest check-fails-contradiction
+  (testing "(check (for-all [n (gen-int 0 100)] false)) → :fail"
+    (let [p (c/for-all [n (c/gen-int 0 100)] false)
+          r (c/check p {:num-tests 5 :seed 1})]
+      (is (= :fail (:result r))))))
+
+(deftest check-includes-seed-in-result
+  (testing "check always reports the seed used"
+    (let [p (c/for-all [n (c/gen-int 0 100)] true)
+          r (c/check p {:num-tests 5 :seed 12345})]
+      (is (= 12345 (:seed r))))))
+
+(deftest check-reports-counterexample
+  (testing "failure result contains the failing value"
+    (let [p (c/for-all [n (c/gen-int 0 100)] (< n 5))
+          r (c/check p {:num-tests 200 :seed 1})]
+      (is (= :fail (:result r)))
+      (is (vector? (:counterexample r)))
+      (is (= 1 (count (:counterexample r))))
+      (let [[n] (:counterexample r)]
+        (is (>= n 5))))))
+
+(deftest check-shrinks-to-minimum
+  (testing "failure shrinks to the smallest failing input"
+    (let [p (c/for-all [n (c/gen-int 0 100)] (< n 5))
+          r (c/check p {:num-tests 200 :seed 1})
+          [shrunk-n] (:counterexample (:shrunk r))]
+      (is (= 5 shrunk-n)))))
+
+(deftest check-catches-exceptions
+  (testing "if the property body throws, result is :fail with :error set"
+    (let [p (c/for-all [n (c/gen-int 0 10)] (throw "boom"))
+          r (c/check p {:num-tests 3 :seed 1})]
+      (is (= :fail (:result r)))
+      (is (some? (:error r))))))
+
+;; Smoke test of the defprop macro AND a tiny example.
+(c/defprop trivial-int-prop
+  [n (c/gen-int 0 1000)]
+  (>= n 0))

@@ -1,0 +1,497 @@
+(ns check
+  "QuickCheck-style property testing with shrinking.
+
+   A generator is a function (fn [rng size]) -> rose-tree. A property pairs
+   one or more generators with a predicate. `check` runs the property
+   `:num-tests` times against random inputs; on failure it walks the rose
+   tree greedily to produce a minimal counterexample.
+
+   Quick start:
+
+     (require '[check :as c])
+
+     (c/defprop addition-commutes
+       [a (c/gen-int -100 100)
+        b (c/gen-int -100 100)]
+       (= (+ a b) (+ b a)))
+
+     ;; Or run inline:
+     (c/check (c/for-all [n (c/gen-int 0 1000)]
+                (>= n 0)))"
+  (:require [test]))
+
+;; ============================================================================
+;; RNG — splittable linear congruential generator
+;; State is a 2-vec [state gamma] so we can split into independent streams.
+;; ============================================================================
+
+;; LCG constants from Numerical Recipes
+(def ^:private rng-mul 1664525)
+(def ^:private rng-add 1013904223)
+(def ^:private rng-mod 4294967296)   ;; 2^32
+
+(defn rng
+  "Create an RNG state from a seed integer."
+  [seed]
+  ;; gamma is the increment; odd gammas keep the LCG period full
+  [(mod (or seed 0) rng-mod) (bit-or 1 rng-add)])
+
+(defn rng-next
+  "Returns [n rng'] — n is a non-negative integer < 2^31, rng' is the next state."
+  [r]
+  (let [[s g] r
+        s' (mod (+ (* s rng-mul) g) rng-mod)
+        ;; take the high bits — LCG low bits have short periods
+        n (mod (quot s' 2) 2147483648)]   ;; < 2^31
+    [n [s' g]]))
+
+(defn rng-split
+  "Split an RNG into two independent generators with distinct gammas."
+  [r]
+  ;; Advance once to derive a fresh state, then build a sibling with a
+  ;; different (odd) gamma. The two children diverge from the next step.
+  (let [[n r'] (rng-next r)
+        [s g] r'
+        sibling-gamma (bit-or 1 (+ g n 2654435769))]   ;; golden-ratio mix
+    [r' [s sibling-gamma]]))
+
+;; ============================================================================
+;; Rose tree — {:value v :shrinks (lazy-seq of rose trees)}
+;; ============================================================================
+
+(defn pure
+  "A rose tree leaf — value with no shrinks."
+  [v]
+  {:value v :shrinks []})
+
+(defn rose-value [r] (:value r))
+(defn rose-shrinks [r] (or (:shrinks r) []))
+
+(defn rose-map
+  "Apply f to the value and recursively to all shrinks."
+  [f r]
+  {:value (f (:value r))
+   :shrinks (map (fn [child] (rose-map f child)) (rose-shrinks r))})
+
+(defn rose-filter
+  "Drop branches whose value fails pred. Returns nil if the root fails."
+  [pred r]
+  (when (pred (:value r))
+    {:value (:value r)
+     :shrinks (->> (rose-shrinks r)
+                   (map (fn [c] (rose-filter pred c)))
+                   (filter some?))}))
+
+;; --- Integer shrinking ---
+;; Shrink strategy: try 0 first, then the midpoint between target and value,
+;; halving until we converge on target. For negatives, also try the absolute
+;; value (negation is often itself a useful shrink).
+
+(defn- shrink-int-pos
+  "Generate shrinks for a positive integer toward 0."
+  [n]
+  (when (> n 0)
+    (lazy-seq
+      (cons 0
+            (let [half (quot n 2)]
+              (when (> half 0)
+                (map #(- n %)
+                     (take-while #(> % 0)
+                                 (iterate #(quot % 2) half)))))))))
+
+(defn shrink-int
+  "Return a lazy seq of shrinks for n, biased toward 0 / sign-flip."
+  [n]
+  (cond
+    (zero? n) []
+    (pos? n) (shrink-int-pos n)
+    :else (cons (- n) (shrink-int-pos (- n)))))   ;; negative: try abs first
+
+(defn int-rose
+  "Build a rose tree of n with shrinks toward 0."
+  [n]
+  {:value n
+   :shrinks (map int-rose (shrink-int n))})
+
+;; ============================================================================
+;; Generators
+;; ============================================================================
+
+;; A generator is (fn [rng size]) -> rose-tree
+
+(defn- rand-in
+  "Uniform integer in [lo, hi] given an RNG. Returns [n rng']."
+  [r lo hi]
+  (let [[n r'] (rng-next r)
+        span (inc (- hi lo))]
+    [(+ lo (mod n span)) r']))
+
+(defn- int-shrink-tree
+  "Rose tree for n shrinking toward target, with values clamped to [lo hi]."
+  [n target lo hi]
+  (let [offset (- n target)
+        candidates (vec (filter (fn [v] (and (>= v lo) (<= v hi) (not= v n)))
+                                (map (fn [d] (+ target d))
+                                     (vec (shrink-int offset)))))]
+    {:value n
+     :shrinks (map (fn [v] (int-shrink-tree v target lo hi)) candidates)}))
+
+(defn return
+  "Lift a constant value into a generator. Yields v with no shrinks,
+   ignoring the rng."
+  [v]
+  (fn [_r _s] (pure v)))
+
+(defn gen-int
+  "Integer in [lo, hi], shrinks toward lo (or toward 0 if 0 is in range)."
+  [lo hi]
+  (fn [r _size]
+    (let [[n _] (rand-in r lo hi)
+          target (cond
+                   (and (<= lo 0) (>= hi 0)) 0
+                   (> lo 0) lo
+                   :else hi)]
+      (int-shrink-tree n target lo hi))))
+
+(defn gen-bool
+  "Generator of booleans. Shrinks true toward false."
+  []
+  (fn [r _size]
+    (let [[n _] (rng-next r)
+          v (= 1 (mod n 2))]
+      {:value v
+       :shrinks (if v [(pure false)] [])})))
+
+(defn gen-elements
+  "Uniform pick from coll. Shrinks toward (first coll)."
+  [coll]
+  (let [v (vec coll)
+        n (count v)
+        first-el (first v)]
+    (fn [r _size]
+      (let [[idx _] (rand-in r 0 (dec n))
+            picked (nth v idx)]
+        {:value picked
+         :shrinks (if (= picked first-el)
+                    []
+                    ;; shrink toward earlier indices, prepending first-el
+                    (->> (range 0 idx)
+                         (map #(nth v %))
+                         (map pure)
+                         (cons (pure first-el))
+                         distinct
+                         vec))}))))
+
+(defn fmap
+  "Map f over a generator's value, preserving the shrink tree."
+  [f g]
+  (fn [r s]
+    (rose-map f (g r s))))
+
+(defn bind
+  "Monadic bind. (bind g (fn [v] g')) runs g, then runs (f v).
+   Shrinks the outer first; for each outer shrink, runs f again with a split rng."
+  [g f]
+  (fn [r s]
+    (let [[rg rf] (rng-split r)
+          outer (g rg s)
+          outer-v (rose-value outer)
+          inner ((f outer-v) rf s)
+          outer-shrunk-roses
+            (map (fn [outer-child]
+                   (let [[r-child _] (rng-split rf)]
+                     ((bind (fn [_r _s] outer-child) f) r-child s)))
+                 (rose-shrinks outer))
+          inner-shrunk-roses (rose-shrinks inner)]
+      {:value (rose-value inner)
+       :shrinks (concat outer-shrunk-roses inner-shrunk-roses)})))
+
+;; --- Collection generators ---
+
+(declare roses->vector-rose)
+
+(defn- vector-rose-shrinks
+  "Lazy seq of vector-roses obtained by replacing one element with a shrunk
+   version."
+  [roses]
+  (let [n (count roses)
+        per-index (map (fn [idx]
+                         (let [r (nth roses idx)]
+                           (map (fn [sr]
+                                  (roses->vector-rose
+                                    (assoc roses idx sr)))
+                                (rose-shrinks r))))
+                       (range n))]
+    (apply concat per-index)))
+
+(defn- roses->vector-rose
+  "Given a vector of element rose trees, build a vector-rose whose shrinks
+   include all single-element shrinks (recursively shrinkable)."
+  [roses]
+  {:value (mapv rose-value roses)
+   :shrinks (vector-rose-shrinks roses)})
+
+(defn- gen-vector-of-len
+  "Build a vector of exactly n elements from generator g."
+  [g n]
+  (fn [r s]
+    (if (<= n 0)
+      (pure [])
+      (loop [i 0
+             r r
+             acc-roses []]
+        (if (= i n)
+          (roses->vector-rose acc-roses)
+          (let [[rl rr] (rng-split r)
+                rose (g rl s)]
+            (recur (inc i) rr (conj acc-roses rose))))))))
+
+(defn- gen-vector-variable
+  "Vector with length between lo and hi inclusive."
+  [g lo hi]
+  (fn [r s]
+    (let [[r-len r-elems] (rng-split r)
+          [n _] (rand-in r-len lo hi)
+          base ((gen-vector-of-len g n) r-elems s)
+          base-val (rose-value base)
+          shorter-lens (distinct
+                         (filter #(and (>= % lo) (< % n))
+                                 [lo (quot n 2) (dec n)]))
+          length-shrinks
+            (map (fn [m]
+                   (let [[r-sub _] (rng-split r-elems)]
+                     ((gen-vector-of-len g m) r-sub s)))
+                 shorter-lens)
+          elem-shrinks (rose-shrinks base)]
+      {:value base-val
+       :shrinks (concat length-shrinks elem-shrinks)})))
+
+(defn gen-vector
+  "Generate a vector. Arities:
+     (gen-vector g)         — length 0..size
+     (gen-vector g n)       — exactly n
+     (gen-vector g lo hi)   — between lo and hi (inclusive)"
+  ([g]
+   (fn [r s] ((gen-vector-variable g 0 (max 0 s)) r s)))
+  ([g n]
+   (gen-vector-of-len g n))
+  ([g lo hi]
+   (gen-vector-variable g lo hi)))
+
+(defn gen-tuple
+  "Fixed-length tuple of values from each generator."
+  [& gs]
+  (let [gs (vec gs)
+        n (count gs)]
+    (fn [r s]
+      (loop [i 0
+             r r
+             acc-roses []]
+        (if (= i n)
+          (roses->vector-rose acc-roses)
+          (let [[rl rr] (rng-split r)
+                rose ((nth gs i) rl s)]
+            (recur (inc i) rr (conj acc-roses rose))))))))
+
+(defn gen-frequency
+  "Pick a generator weighted by its associated integer.
+   weight-gens: [[w gen] ...]"
+  [weight-gens]
+  (let [pairs (vec weight-gens)
+        total (reduce + (map first pairs))]
+    (fn [r s]
+      (let [[r-pick r-gen] (rng-split r)
+            [pick _] (rand-in r-pick 0 (dec total))]
+        (loop [acc 0
+               i 0]
+          (let [[w g] (nth pairs i)
+                acc' (+ acc w)]
+            (if (or (< pick acc') (= i (dec (count pairs))))
+              (g r-gen s)
+              (recur acc' (inc i)))))))))
+
+;; ============================================================================
+;; Property runner
+;; ============================================================================
+;;
+;; A property is a map:
+;;   {:gens [gen1 gen2 ...]   — one generator per binding
+;;    :run  (fn [v1 v2 ...]   — returns true (pass), false (fail),
+;;                              or throws (also fail)}
+
+(defn- prop-fails?
+  "Run prop on a vector of args. Returns true if it fails (false return or
+   throws). Catches all exceptions."
+  [prop args]
+  (try
+    (let [result (apply (:run prop) args)]
+      (not result))
+    (catch e
+      true)))
+
+(defn- prop-error
+  "Run prop and return any exception it throws, else nil."
+  [prop args]
+  (try
+    (apply (:run prop) args)
+    nil
+    (catch e e)))
+
+(defn- shrink-failure
+  "Greedy shrink: walk rose tree, replacing the node with its first failing
+   child until none of the children fail. Returns {:value v :depth d}."
+  [rose prop max-shrinks]
+  (loop [node rose
+         depth 0
+         budget max-shrinks]
+    (if (<= budget 0)
+      {:value (rose-value node) :depth depth}
+      (let [children (rose-shrinks node)
+            failing-child (some (fn [c]
+                                  (when (prop-fails? prop (rose-value c)) c))
+                                children)]
+        (if failing-child
+          (recur failing-child (inc depth) (dec budget))
+          {:value (rose-value node) :depth depth})))))
+
+(defn check
+  "Run a property. Options:
+     :num-tests   (default 100)
+     :max-size    (default 50)
+     :seed        (default a random integer)
+     :max-shrinks (default 1000)
+
+   Returns:
+     {:result :pass | :fail
+      :num-tests N
+      :seed S
+      :counterexample [...]              ; on fail
+      :shrunk {:counterexample [...] :depth D}  ; on fail
+      :error e}                          ; if the body threw"
+  ([prop] (check prop {}))
+  ([prop opts]
+   (let [num-tests (or (:num-tests opts) 100)
+         max-size  (or (:max-size opts) 50)
+         seed      (or (:seed opts)
+                       (mod (or (try (System/currentTimeMillis)
+                                     (catch e 0))
+                                0)
+                            2147483647))
+         max-shrinks (or (:max-shrinks opts) 1000)
+         g (apply gen-tuple (:gens prop))]
+     (loop [i 0
+            r (rng seed)]
+       (if (>= i num-tests)
+         {:result :pass :num-tests num-tests :seed seed}
+         (let [[r-this r-next] (rng-split r)
+               size (min max-size i)
+               rose (g r-this size)
+               args (rose-value rose)]
+           (if (prop-fails? prop args)
+             (let [shrunk (shrink-failure rose prop max-shrinks)
+                   err (prop-error prop args)]
+               {:result :fail
+                :num-tests (inc i)
+                :seed seed
+                :counterexample args
+                :shrunk {:counterexample (:value shrunk)
+                         :depth (:depth shrunk)}
+                :error err})
+             (recur (inc i) r-next))))))))
+
+;; --- Counterexample formatting ---
+;; Failing properties often contain large opaque values. Recursively walk the
+;; counterexample, redacting arrays of more than a few elements into
+;; `<array N>` markers so the rest stays readable.
+
+(def ^:private redact-array-threshold 8)
+
+(defn- array-like? [v]
+  (= "let-go.lang.Array" (str (type v))))
+
+(defn- redact [v]
+  (cond
+    (array-like? v)
+    (if (> (count v) redact-array-threshold)
+      (str "<array " (count v) ">")
+      v)
+
+    (map? v)
+    (reduce (fn [m kv] (assoc m (first kv) (redact (second kv)))) {} v)
+
+    (vector? v)
+    (mapv redact v)
+
+    (set? v)
+    (set (map redact v))
+
+    (sequential? v)
+    (map redact v)
+
+    :else v))
+
+(defn format-value
+  "Render a value as a string suitable for printing as a property
+   counterexample. Large opaque values are redacted to keep the output
+   readable; the structure of maps/vectors/sets is preserved."
+  [v]
+  (pr-str (redact v)))
+
+(defn sample
+  "Generate sample values from a generator for REPL exploration.
+   Uses an arbitrary seed and ramps size from 0 upward.
+     (sample gen)        ;; 10 samples
+     (sample gen n)      ;; n samples"
+  ([g] (sample g 10))
+  ([g n]
+   (let [seed (mod (or (try (System/currentTimeMillis) (catch e 1)) 1)
+                   2147483647)]
+     (loop [i 0
+            r (rng seed)
+            acc []]
+       (if (>= i n)
+         acc
+         (let [[r-this r-next] (rng-split r)
+               size (min 50 i)
+               rose (g r-this size)]
+           (recur (inc i) r-next (conj acc (rose-value rose)))))))))
+
+(defmacro gen-let
+  "Flatten nested binds. `(gen-let [a g1, b g2, ...] body)` expands to
+   `(bind g1 (fn [a] (bind g2 (fn [b] ... (return body)))))`.
+
+   Later generators can reference earlier bound names:
+     (gen-let [n (gen-int 1 5)
+               v (gen-int 0 n)]
+       [n v])"
+  [bindings & body]
+  (let [pairs (partition 2 bindings)]
+    (reduce (fn [acc [name gen]]
+              `(bind ~gen (fn [~name] ~acc)))
+            `(return (do ~@body))
+            (reverse pairs))))
+
+(defmacro for-all
+  "Bind [v1 g1 v2 g2 ...] then evaluate body. Returns a property value."
+  [bindings & body]
+  (let [pairs (partition 2 bindings)
+        names (map first pairs)
+        gens  (map second pairs)]
+    `{:gens [~@gens]
+      :run (fn [~@names] (do ~@body))}))
+
+(defmacro defprop
+  "Define a property as a deftest. Runs check and asserts :result is :pass.
+   On failure, prints seed and counterexample so users can reproduce."
+  [test-name bindings & body]
+  `(test/deftest ~test-name
+     (let [result# (check (for-all ~bindings ~@body))]
+       (when (= :fail (:result result#))
+         (println "  FAIL property" '~test-name)
+         (println "    seed:    " (:seed result#))
+         (println "    original:" (format-value (:counterexample result#)))
+         (println "    shrunk:  " (format-value (:counterexample (:shrunk result#))))
+         (when (:error result#)
+           (println "    threw:   " (:error result#)))
+         (println "    reproduce with seed:" (:seed result#)))
+       (test/is (= :pass (:result result#))))))
