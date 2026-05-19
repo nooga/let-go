@@ -19,6 +19,7 @@ type Context struct {
 	consts         *vm.Consts
 	chunk          *vm.CodeChunk
 	formalArgs     map[vm.Symbol]int
+	argCount       int // total fixed-arity parameter slots, including `_`s
 	source         string
 	variadric      bool
 	locals         []map[vm.Symbol]int
@@ -208,6 +209,17 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 			}
 			i = i - 1
 		}
+		// Clojure allows `_` to appear multiple times in a parameter list
+		// as the conventional "ignored" placeholder. Multiple `_`s would
+		// collide in formalArgs (a Symbol-keyed map), so we simply don't
+		// register `_` for name lookup — but the slot still exists and
+		// the corresponding argument is still evaluated and passed (Clojure
+		// is strict; the caller's side effects must happen). argCount tracks
+		// the total slot count, including `_`s, for arity checks.
+		fc.argCount++
+		if s == "_" {
+			continue
+		}
 		fc.formalArgs[s] = i
 	}
 	return fc, nil
@@ -216,7 +228,7 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 func (c *Context) leaveFn(ctx *Context) {
 	fnchunk := ctx.chunk
 	fnchunk.SetMaxStack(ctx.spMax)
-	f := vm.MakeFunc(len(ctx.formalArgs), ctx.variadric, fnchunk)
+	f := vm.MakeFunc(ctx.argCount, ctx.variadric, fnchunk)
 	f.SetName(c.defName)
 	n := c.constant(f)
 	c.emitWithArg(vm.OP_LOAD_CONST, n)
@@ -960,7 +972,7 @@ func recurCompiler(c *Context, form vm.Value) error {
 		if !c.isFunction {
 			return NewCompileError("recur is only allowed inside loops and functions")
 		}
-		if argc != len(c.formalArgs) {
+		if argc != c.argCount {
 			return NewCompileError("recur argument count must match function argument count")
 		}
 	}
