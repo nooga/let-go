@@ -886,9 +886,9 @@ func TestUnknownTag(t *testing.T) {
 	w.WriteBytes(Magic[:])
 	w.WriteUint16(FormatVersion)
 	w.WriteUint16(0)
-	w.WriteVarint(0) // 0 strings
-	w.WriteVarint(0) // 0 chunks
-	w.WriteVarint(1) // 1 const
+	w.WriteVarint(0)  // 0 strings
+	w.WriteVarint(0)  // 0 chunks
+	w.WriteVarint(1)  // 1 const
 	w.WriteByte(0xFF) // unknown tag
 	w.Flush()
 
@@ -931,6 +931,66 @@ func TestChunkIndexOutOfRange(t *testing.T) {
 	_, err := Decode(&buf)
 	if err == nil {
 		t.Error("expected error for chunk index out of range")
+	}
+}
+
+// --- Determinism ---
+
+// makeBundleChunks builds N tiny NS chunks for determinism testing.
+// Names are picked so Go's randomized map iteration would surface
+// quickly across runs.
+func makeBundleChunks(consts *vm.Consts) map[string]*vm.CodeChunk {
+	names := []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"}
+	out := make(map[string]*vm.CodeChunk, len(names))
+	for i, n := range names {
+		ch := vm.NewCodeChunk(consts)
+		ch.Append(vm.OP_LOAD_CONST, int32(i), vm.OP_RETURN)
+		ch.SetMaxStack(1)
+		out[n] = ch
+	}
+	return out
+}
+
+// TestEncodeBundleOrderedIsDeterministic ensures EncodeBundleOrdered
+// produces byte-identical output across invocations with the same order.
+func TestEncodeBundleOrderedIsDeterministic(t *testing.T) {
+	order := []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"}
+	var first []byte
+	for i := 0; i < 8; i++ {
+		consts := vm.NewConsts()
+		chunks := makeBundleChunks(consts)
+		var buf bytes.Buffer
+		if err := EncodeBundleOrdered(&buf, consts, chunks, order); err != nil {
+			t.Fatalf("encode %d: %v", i, err)
+		}
+		if i == 0 {
+			first = buf.Bytes()
+			continue
+		}
+		if !bytes.Equal(first, buf.Bytes()) {
+			t.Fatalf("EncodeBundleOrdered run %d differs from run 0", i)
+		}
+	}
+}
+
+// TestEncodeBundleIsDeterministic ensures the map-input EncodeBundle also
+// produces byte-identical output across runs (it sorts NS names internally).
+func TestEncodeBundleIsDeterministic(t *testing.T) {
+	var first []byte
+	for i := 0; i < 8; i++ {
+		consts := vm.NewConsts()
+		chunks := makeBundleChunks(consts)
+		var buf bytes.Buffer
+		if err := EncodeBundle(&buf, consts, chunks); err != nil {
+			t.Fatalf("encode %d: %v", i, err)
+		}
+		if i == 0 {
+			first = buf.Bytes()
+			continue
+		}
+		if !bytes.Equal(first, buf.Bytes()) {
+			t.Fatalf("EncodeBundle run %d differs from run 0", i)
+		}
 	}
 }
 

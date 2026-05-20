@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"sort"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -71,21 +72,16 @@ func EncodeCompilation(w io.Writer, consts *vm.Consts, mainChunk *vm.CodeChunk) 
 }
 
 // EncodeBundle serializes a multi-namespace compilation bundle.
-// nsChunks maps namespace names to their main CodeChunks.
-// The "core" entry (chunk index 0) is treated as the entry point.
+// Namespaces are registered in sorted name order so output is deterministic
+// across runs; callers that need a specific load order should use
+// EncodeBundleOrdered instead.
 func EncodeBundle(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk) error {
-	b := NewModuleBuilder()
-	// Register all namespace main chunks
-	for name, chunk := range nsChunks {
-		b.SetNSEntry(name, chunk)
+	names := make([]string, 0, len(nsChunks))
+	for name := range nsChunks {
+		names = append(names, name)
 	}
-	// Collect all func chunks from the const pool
-	vals := consts.Values()
-	for _, v := range vals {
-		b.AddConst(v)
-	}
-	m := b.Build()
-	return Encode(w, m)
+	sort.Strings(names)
+	return EncodeBundleOrdered(w, consts, nsChunks, names)
 }
 
 // EncodeBundleOrdered serializes a multi-namespace bundle with explicit ordering.
@@ -652,11 +648,16 @@ func (e *encoder) writeNSTable(nsTable map[string]int) error {
 	if err := e.w.WriteVarint(uint64(len(nsTable))); err != nil {
 		return err
 	}
-	for name, chunkIdx := range nsTable {
+	names := make([]string, 0, len(nsTable))
+	for name := range nsTable {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		if err := e.writeStringRef(name); err != nil {
 			return err
 		}
-		if err := e.w.WriteVarint(uint64(chunkIdx)); err != nil {
+		if err := e.w.WriteVarint(uint64(nsTable[name])); err != nil {
 			return err
 		}
 	}

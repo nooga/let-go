@@ -42,6 +42,7 @@ func main() {
 	// rt.init() has already run — native builtins are registered in CoreNS.
 	consts := vm.NewConsts()
 	nsChunks := make(map[string]*vm.CodeChunk)
+	nsOrder := make([]string, 0, len(embeddedNS))
 
 	for _, ns := range embeddedNS {
 		src := *ns.src
@@ -59,6 +60,7 @@ func main() {
 			os.Exit(1)
 		}
 		nsChunks[ns.name] = chunk
+		nsOrder = append(nsOrder, ns.name)
 		fmt.Printf("  compiled %-10s (%d bytes bytecode)\n", ns.name, len(chunk.Code())*4)
 	}
 
@@ -69,7 +71,7 @@ func main() {
 	}
 	defer f.Close()
 
-	if err := bytecode.EncodeBundle(f, consts, nsChunks); err != nil {
+	if err := bytecode.EncodeBundleOrdered(f, consts, nsChunks, nsOrder); err != nil {
 		fmt.Fprintf(os.Stderr, "encode failed: %v\n", err)
 		os.Exit(1)
 	}
