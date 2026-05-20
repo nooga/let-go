@@ -46,3 +46,32 @@
     (is (= [1 2 :c] (w/postwalk-replace {:a 1 :b 2} [:a :b :c]))))
   (testing "prewalk-replace substitutes inside lists"
     (is (= (list 1 [1 1]) (w/prewalk-replace {:a 1} (list :a [:a :a]))))))
+
+(deftest keywordize-keys-test
+  (testing "string keys become keywords"
+    (is (= {:a 1 :b 2} (w/keywordize-keys {"a" 1 "b" 2}))))
+  (testing "non-string keys are left alone"
+    (is (= {1 "one" :b 2} (w/keywordize-keys {1 "one" :b 2}))))
+  (testing "recurses into nested maps"
+    (is (= {:a 1 :b {:c {:d 2}}} (w/keywordize-keys {"a" 1 "b" {"c" {"d" 2}}}))))
+  (testing "recurses into collections of maps"
+    (is (= {:items [{:k 1} {:k 2}]} (w/keywordize-keys {"items" [{"k" 1} {"k" 2}]}))))
+  (testing "vector-of-pairs values are not mistaken for entries"
+    (is (= {:data [["x" 1] ["y" 2]]} (w/keywordize-keys {"data" [["x" 1] ["y" 2]]}))))
+  (testing "empty + nil"
+    (is (= {} (w/keywordize-keys {})))
+    (is (nil? (w/keywordize-keys nil)))))
+
+(deftest stringify-keys-test
+  (testing "keyword keys become strings"
+    (is (= {"a" 1 "b" 2} (w/stringify-keys {:a 1 :b 2}))))
+  (testing "non-keyword keys are left alone"
+    (is (= {"a" 1 1 :one} (w/stringify-keys {:a 1 1 :one}))))
+  (testing "recurses into nested maps"
+    (is (= {"a" 1 "b" {"c" 2}} (w/stringify-keys {:a 1 :b {:c 2}}))))
+  (testing "round-trip with keywordize-keys"
+    (let [m {"a" 1 "b" {"c" 2}}]
+      (is (= m (w/stringify-keys (w/keywordize-keys m))))))
+  (testing "empty + nil"
+    (is (= {} (w/stringify-keys {})))
+    (is (nil? (w/stringify-keys nil)))))
