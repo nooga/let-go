@@ -27,6 +27,11 @@
 ;; Re-export let-go's native BigInt predicate under the suite-local helper name.
 (def big-int? clojure.core/big-int?)
 
+;; Re-export let-go's native lazy-seq? predicate. Upstream's lazy_seq.cljc
+;; and repeatedly.cljc tests assert that a (lazy-seq ...) form returns
+;; something distinguishable from a fully-realized seq.
+(def lazy-seq? clojure.core/lazy-seq?)
+
 ;; Most JVM/Clojure compatibility names used by the suite now live in core:
 ;; java.lang.* aliases, clojure.lang.* aliases, Long/Double constants,
 ;; definterface/new, with-precision, refs, and synchronous agent placeholders.

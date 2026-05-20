@@ -1,0 +1,41 @@
+;; Tests for the lazy-seq? predicate — distinguishes thunk-backed lazy
+;; seqs from already-realized or differently-typed seqs.
+
+(ns test.lazy-seq-pred-test
+  (:require [test :refer :all]))
+
+(deftest lazy-seq?-predicate
+  (testing "lazy-seq form returns something lazy-seq? recognizes"
+    (is (lazy-seq? (lazy-seq (cons 1 nil)))))
+  (testing "non-lazy seqs are not lazy-seq?"
+    (is (not (lazy-seq? '(1 2 3))))
+    (is (not (lazy-seq? [1 2 3])))
+    (is (not (lazy-seq? #{1 2 3})))
+    (is (not (lazy-seq? {:a 1})))
+    (is (not (lazy-seq? nil))))
+  (testing "repeatedly returns a lazy-seq"
+    (is (lazy-seq? (repeatedly (fn [] 1))))))
+
+(defn- throws? [thunk]
+  (try (thunk) false (catch _ true)))
+
+(deftest lazy-seq-of-non-seq-throws
+  (testing "lazy-seq realized to a non-seq throws on first, matching JVM"
+    (is (throws? #(first (lazy-seq 1))))
+    (is (throws? #(first (lazy-seq :a))))
+    (is (throws? #(first (lazy-seq 3.14))))
+    (is (throws? #(first (lazy-seq true))))
+    (is (throws? #(first (lazy-seq (fn [] 1))))))
+  (testing "lazy-seq realized to nil or empty stays empty (does not throw)"
+    (is (nil? (first (lazy-seq nil))))
+    (is (nil? (first (lazy-seq []))))))
+
+(deftest broken-lazy-seq-state
+  (testing "second access to a broken lazy-seq re-throws the same error"
+    (let [ls (lazy-seq 1)]
+      (is (throws? #(first ls)))
+      (is (throws? #(first ls)))))
+  (testing "a broken lazy-seq is realized? = true (the thunk did run)"
+    (let [ls (lazy-seq 1)]
+      (try (first ls) (catch _ nil))
+      (is (realized? ls)))))

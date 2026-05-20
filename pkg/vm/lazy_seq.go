@@ -5,7 +5,10 @@
 
 package vm
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // LazySeq delays computation of a sequence until first/next is called.
 // This is the foundation for lazy operations like map, filter, etc.
@@ -32,6 +35,10 @@ func (l *LazySeq) IsRealized() bool {
 func (l *LazySeq) sval() Value {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// Re-raise stored error on repeated access, mirroring seq().
+	if l.err != nil {
+		panic(&thrownPanic{err: l.err})
+	}
 	if l.fn != nil {
 		sv, err := l.fn.Invoke(nil)
 		if err != nil {
@@ -77,6 +84,12 @@ func (l *LazySeq) seq() Seq {
 			l.s = seq
 		} else if seqable, ok := sv.(Sequable); ok {
 			l.s = seqable.Seq()
+		} else {
+			// Realized to a non-seq, non-Sequable value. Match JVM Clojure's
+			// behavior: throw rather than silently coercing to nil.
+			err := fmt.Errorf("don't know how to create ISeq from %s", sv.Type())
+			l.err = err
+			panic(&thrownPanic{err: err})
 		}
 	}
 

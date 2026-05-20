@@ -5171,6 +5171,20 @@ func installLangNS() {
 	})
 	ns.Def("map-entry?", isMapEntry)
 
+	// lazy-seq? — test if value is a thunk-backed lazy seq. LazySeq.Type()
+	// reports ListType for print/seq compatibility, so user-side type
+	// checks can't reach the underlying Go type; this predicate does.
+	isLazySeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		if _, ok := vs[0].(*vm.LazySeq); ok {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("lazy-seq?", isLazySeq)
+
 	// reversible? — test if value supports rseq
 	isReversible, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
