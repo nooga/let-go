@@ -1,0 +1,11 @@
+!yamlscript/v0
+
+defn classify(n):
+  cond:
+    (pos? n): "positive"
+    (neg? n): "negative"
+    :else:    "zero"
+
+defn main():
+  doseq [n (range -2 3)]:
+    say: str(n " is " (classify n))
