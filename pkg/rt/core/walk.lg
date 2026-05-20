@@ -4,6 +4,9 @@
   [inner outer form]
   (cond
     (list? form) (outer (apply list (map inner form)))
+    (map-entry? form) (outer (clojure.lang.MapEntry/create
+                               (inner (key form))
+                               (inner (val form))))
     (seq? form) (outer (map inner form))
     (coll? form) (outer (into (empty form) (map inner form)))
     :else (outer form)))

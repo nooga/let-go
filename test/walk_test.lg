@@ -1,0 +1,48 @@
+;; Tests for clojure.walk — covers the map-entry? branch in `walk` so
+;; postwalk / prewalk / *-replace work on maps and nested maps.
+
+(ns test.walk-test
+  (:require [test :refer :all]
+            [clojure.walk :as w]))
+
+(deftest map-entry?-predicate
+  (testing "map-entry? distinguishes real entries from same-shape vectors"
+    (is (map-entry? (first {:a 1})))
+    (is (not (map-entry? [:a 1])))
+    (is (not (map-entry? nil)))
+    (is (not (map-entry? [1 2 3])))
+    (is (not (map-entry? '())))))
+
+(deftest walk-on-maps
+  (testing "postwalk identity on maps"
+    (is (= {} (w/postwalk identity {})))
+    (is (= {"a" 1} (w/postwalk identity {"a" 1})))
+    (is (= {:a 1 :b 2} (w/postwalk identity {:a 1 :b 2}))))
+  (testing "prewalk identity on maps"
+    (is (= {} (w/prewalk identity {})))
+    (is (= {"a" 1 "b" {"c" 2}} (w/prewalk identity {"a" 1 "b" {"c" 2}}))))
+  (testing "postwalk on nested maps preserves shape"
+    (is (= {"a" {"b" {"c" 1}}} (w/postwalk identity {"a" {"b" {"c" 1}}}))))
+  (testing "postwalk preserves sorted-map type"
+    (let [sm (sorted-map :b 2 :a 1)
+          result (w/postwalk identity sm)]
+      (is (= sm result))))
+  (testing "postwalk on collection of maps"
+    (is (= [{"x" 1} {"y" 2}] (w/postwalk identity [{"x" 1} {"y" 2}])))))
+
+(deftest walk-on-non-maps-unchanged
+  (testing "vectors are not mistaken for map entries"
+    (is (= [[1 2] [3 4]] (w/postwalk identity [[1 2] [3 4]]))))
+  (testing "lists pass through"
+    (is (= '(1 2 3) (w/postwalk identity '(1 2 3)))))
+  (testing "scalars pass through"
+    (is (= 42 (w/postwalk identity 42)))
+    (is (= "hi" (w/postwalk identity "hi")))
+    (is (nil? (w/postwalk identity nil)))))
+
+(deftest postwalk-replace-on-maps
+  (testing "postwalk-replace substitutes inside maps"
+    (is (= {:a 1 :b 2} (w/postwalk-replace {:x 1 :y 2} {:a :x :b :y})))
+    (is (= [1 2 :c] (w/postwalk-replace {:a 1 :b 2} [:a :b :c]))))
+  (testing "prewalk-replace substitutes inside lists"
+    (is (= (list 1 [1 1]) (w/prewalk-replace {:a 1} (list :a [:a :a]))))))

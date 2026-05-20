@@ -5159,6 +5159,18 @@ func installLangNS() {
 	})
 	ns.Def("set?", isSet)
 
+	// map-entry? — test if value is a key/value pair from a map
+	isMapEntry, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		if _, ok := vs[0].(vm.MapEntry); ok {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("map-entry?", isMapEntry)
+
 	// reversible? — test if value supports rseq
 	isReversible, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
