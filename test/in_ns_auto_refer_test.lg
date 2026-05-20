@@ -1,0 +1,28 @@
+;; Tests that (in-ns 'foo) leaves clojure.core symbols (defn, def,
+;; require, etc.) available — matching JVM Clojure semantics where
+;; every namespace auto-refers clojure.core.
+;;
+;; Regression test for: extending a Go-installed namespace (json, os,
+;; http, etc.) was previously impossible because installXxxNS skipped
+;; the core refer. Fixed by having RegisterNS auto-refer CoreNS.
+
+;; Set up: extend json (a Go-installed ns) and a brand-new ns BEFORE
+;; the test ns is reopened. This exercises the auto-refer at in-ns
+;; time without trying to mix in-ns and (is ...) in the same form.
+
+(in-ns 'json)
+(defn ^:no-doc test-load [s] (read-json s))
+
+(in-ns 'test.in-ns-fresh-target)
+(defn ^:no-doc hello [] :ok)
+
+(in-ns 'test.in-ns-auto-refer-test)
+(clojure.core/require '[test :refer :all])
+
+(deftest in-ns-go-installed
+  (testing "in-ns into a Go-installed namespace allows core macros"
+    (is (= {"a" 1} (json/test-load "{\"a\":1}")))))
+
+(deftest in-ns-brand-new-ns
+  (testing "in-ns into a brand-new ns allows core macros"
+    (is (= :ok (test.in-ns-fresh-target/hello)))))

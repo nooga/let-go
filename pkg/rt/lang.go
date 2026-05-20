@@ -126,6 +126,13 @@ func NS(name string) *vm.Namespace {
 }
 
 func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
+	// Auto-refer CoreNS so user code can use clojure.core symbols (defn, def,
+	// require, etc.) after switching into this namespace via (in-ns 'foo) —
+	// matching JVM Clojure semantics. Skip when registering CoreNS itself, and
+	// when CoreNS isn't installed yet (very early init).
+	if CoreNS != nil && namespace != CoreNS {
+		namespace.Refer(CoreNS, "", true)
+	}
 	nsRegistry[resolveNSAlias(namespace.Name())] = namespace
 	return namespace
 }
