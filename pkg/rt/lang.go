@@ -103,6 +103,8 @@ func init() {
 	installUnixNS()
 	installSystemNS()
 	installGogenNS()
+	installDisasmNS()
+	installProfileNS()
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 

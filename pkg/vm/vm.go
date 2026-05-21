@@ -258,16 +258,51 @@ type Frame struct {
 	handlers    []exHandler // exception handler stack (nil when unused)
 }
 
-// framePool reuses Frame structs to avoid per-call heap allocation.
-// The stack slice is kept and grown as needed; references are cleared on release.
-var framePool = sync.Pool{
-	New: func() interface{} {
+// Frame reuse via a mutex-guarded LIFO.
+//
+// We previously used sync.Pool, but profiling fib(30) showed ~25% of
+// CPU went to pool overhead (sync.(*Pool).Get/Put/pin) because the
+// per-P bookkeeping (runtime.procPin etc.) is expensive relative to
+// our tiny per-call work. A plain mutex-guarded stack is faster per
+// Get/Put for the common single-goroutine case, and still safe under
+// multi-goroutine workloads (per the async/go macro).
+//
+// The stack is capped at framePoolCap entries — beyond that, frames
+// returned to the pool are dropped and left for GC. This bounds the
+// memory let-go keeps live and matches sync.Pool's eventual-GC behavior.
+
+const framePoolCap = 256
+
+var (
+	framePoolMu    sync.Mutex
+	framePoolStack []*Frame // LIFO; pop from end
+)
+
+func acquireFrame() *Frame {
+	framePoolMu.Lock()
+	n := len(framePoolStack)
+	if n == 0 {
+		framePoolMu.Unlock()
 		return &Frame{}
-	},
+	}
+	f := framePoolStack[n-1]
+	framePoolStack[n-1] = nil // help GC see we no longer hold this slot
+	framePoolStack = framePoolStack[:n-1]
+	framePoolMu.Unlock()
+	return f
+}
+
+func releaseFrame(f *Frame) {
+	framePoolMu.Lock()
+	if len(framePoolStack) < framePoolCap {
+		framePoolStack = append(framePoolStack, f)
+	}
+	// else: drop on the floor; GC will reclaim
+	framePoolMu.Unlock()
 }
 
 func NewFrame(code *CodeChunk, args []Value) *Frame {
-	f := framePool.Get().(*Frame)
+	f := acquireFrame()
 	needed := code.maxStack
 	if needed < 4 {
 		needed = 4
@@ -301,7 +336,7 @@ func ReleaseFrame(f *Frame) {
 	f.consts = nil
 	f.code = nil
 	f.handlers = nil
-	framePool.Put(f)
+	releaseFrame(f)
 }
 
 func NewDebugFrame(code *CodeChunk, args []Value) *Frame {
@@ -428,11 +463,21 @@ func (f *Frame) Run() (Value, error) {
 		fmt.Print("run", f.args, "\n")
 		f.code.Debug()
 	}
+	// Profiler state: previous opcode byte (0 at frame entry). Only
+	// touched when ProfilingEnabled — the load is a single atomic
+	// branch per opcode, well-predicted in the disabled case.
+	var prevOp uint8
+	profileOn := ProfilingEnabled.Load()
 	for {
 		inst := f.code.code[f.ip]
 		if f.debug {
 			f.stackDbg()
 			fmt.Println("#", f.ip, OpcodeToString(inst))
+		}
+		if profileOn {
+			currOp := uint8(inst & 0xff)
+			RecordOpcode(prevOp, currOp)
+			prevOp = currOp
 		}
 		switch inst & 0xff {
 		case OP_NOOP:
@@ -557,7 +602,7 @@ func (f *Frame) Run() (Value, error) {
 				if err != nil {
 					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 				}
-				if ff, ok := fn.(*Func); !ok {
+				if _, ok := fn.(*Func); !ok {
 					out, err = fn.Invoke(a)
 					if err != nil {
 						srcInfo := f.code.LookupSource(f.ip)
@@ -572,11 +617,12 @@ func (f *Frame) Run() (Value, error) {
 						}
 						return NIL, wrapped
 					}
-					err = f.drop(int(arity) + 1)
-					if err != nil {
-						return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
-					}
+					// TAIL_CALL is terminal: builtin's result is this
+					// frame's result. (The compiler still emits RETURN
+					// after TAIL_CALL but it's now dead code.)
+					return out, nil
 				} else {
+					ff := fn.(*Func)
 					// Package variadic args for direct frame reuse
 					if ff.isVariadric {
 						sargs := a[0 : ff.arity-1]
@@ -617,7 +663,7 @@ func (f *Frame) Run() (Value, error) {
 				if !ok {
 					return NIL, NewTypeError(fraw, "is not a function", nil)
 				}
-				if ff, ok := fn.(*Func); !ok {
+				if _, ok := fn.(*Func); !ok {
 					out, err = fn.Invoke(nil)
 					if err != nil {
 						srcInfo := f.code.LookupSource(f.ip)
@@ -632,7 +678,11 @@ func (f *Frame) Run() (Value, error) {
 						}
 						return NIL, wrapped
 					}
+					// TAIL_CALL is terminal: builtin's result is this
+					// frame's result.
+					return out, nil
 				} else {
+					ff := fn.(*Func)
 					f.code = ff.chunk
 					f.consts = f.code.consts
 					f.constsc = f.code.consts.count()
@@ -646,11 +696,6 @@ func (f *Frame) Run() (Value, error) {
 					continue
 				}
 			}
-			err := f.push(out)
-			if err != nil {
-				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
-			}
-			f.ip += 2
 
 		case OP_BRANCH_TRUE:
 			offset := f.code.code[f.ip+1]

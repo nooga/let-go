@@ -92,11 +92,34 @@
     :else (throw (str "type-spec-string: " (pr-str form)))))
 
 (defn walk-type-form [form]
-  (if (unquote-form? form)
+  (cond
+    (unquote-form? form)
     ;; Runtime-supplied type: assume the user passes a string or symbol,
     ;; let gogen/type validate.
     (list 'gogen/type (list 'str (second form)))
-    (list 'gogen/type (type-spec-string form))))
+
+    ;; (type "raw-go-source-string") — escape hatch for type expressions
+    ;; that don't have a nice constructor (e.g. `[...]T`, generics).
+    (and (list? form) (= (str (first form)) "type"))
+    (list 'gogen/type (second form))
+
+    ;; (struct [name go-type comment]+) — struct type expression. Each
+    ;; field is a vector [name type comment]; comment may be missing or
+    ;; "". `~@` splices runtime field sequences.
+    (and (list? form) (= (str (first form)) "struct"))
+    (let [fields (rest form)
+          field-emits (cons 'concat
+                            (map (fn [f]
+                                   (if (unquote-splicing-form? f)
+                                     (second f)
+                                     (list 'list (list 'gogen/field-decl
+                                                       (str (nth f 0))
+                                                       (walk-type-form (nth f 1))
+                                                       (if (>= (count f) 3) (nth f 2) "")))))
+                                 fields))]
+      (list 'gogen/struct-type field-emits))
+
+    :else (list 'gogen/type (type-spec-string form))))
 
 ;; --- expressions ----------------------------------------------------
 
@@ -156,6 +179,43 @@
         (= head 'call)
         (list 'gogen/call (walk-expr-form (first args))
               (walk-children (rest args) walk-expr-form))
+
+        (= head 'kv)
+        ;; (kv KEY VALUE) — KEY is a name (becomes ident) or any expr.
+        ;; For string-naming convenience, allow ~unquote and symbols.
+        (let [k (first args)
+              v (second args)
+              key-emit (cond
+                         (unquote-form? k) (list 'gogen/->expr (second k))
+                         (symbol? k) (list 'gogen/ident (str k))
+                         :else (walk-expr-form k))]
+          (list 'gogen/kv-expr key-emit (walk-expr-form v)))
+
+        (= head 'composite)
+        ;; (composite type-form-or-nil element...) — single-line literal.
+        ;; Use this for inner/nested composites (row values, etc.).
+        (let [type-form (first args)
+              elements  (rest args)
+              type-emit (cond
+                          (nil? type-form) nil
+                          (= type-form 'nil) nil
+                          :else (walk-type-form type-form))]
+          (list 'gogen/composite-lit
+                type-emit
+                (walk-children elements walk-expr-form)))
+
+        (= head 'composite-multi)
+        ;; (composite-multi type-form-or-nil element...) — multi-line.
+        ;; Use this for file-level array/slice/map tables.
+        (let [type-form (first args)
+              elements  (rest args)
+              type-emit (cond
+                          (nil? type-form) nil
+                          (= type-form 'nil) nil
+                          :else (walk-type-form type-form))]
+          (list 'gogen/composite-lit-multi
+                type-emit
+                (walk-children elements walk-expr-form)))
 
         ;; Default: treat as function call by name.
         :else
@@ -290,12 +350,44 @@
           (walk-type-form (first form))
           (walk-type-form form))))
 
+;; Helpers for assembling the params/results portions of a func or
+;; method decl. Used by both `func` and `method` decl-form heads.
+(defn- walk-params-form [params]
+  (cons 'concat
+        (map (fn [p]
+               (if (unquote-splicing-form? p)
+                 (second p)
+                 (list 'list (walk-param-form p))))
+             params)))
+
+(defn- walk-results-form [ret]
+  (cond
+    (nil? ret) nil
+    (and (vector? ret) (empty? ret)) nil
+    (vector? ret)
+    (cons 'concat
+          (map (fn [r] (list 'list (walk-result-form r))) ret))
+    :else
+    (list 'list (walk-result-form ret))))
+
 (defn walk-decl-form [form]
   (cond
     (list? form)
     (let [head (first form)
           args (rest form)]
       (case (str head)
+        "doc"
+        ;; (doc "comment text" inner-decl-form)
+        ;; Attaches a leading Doc comment to the inner decl. The
+        ;; comment may be a literal string or an ~unquoted runtime
+        ;; string.
+        (let [text-form (first args)
+              inner     (second args)
+              text-emit (if (unquote-form? text-form)
+                          (list 'str (second text-form))
+                          text-form)]
+          (list 'gogen/with-doc (walk-decl-form inner) text-emit))
+
         "func"
         ;; (func Name [(p t) ...] ret-type-or-types body...)
         ;; ret can be:
@@ -308,26 +400,82 @@
                           (str name-form))
               params (second args)
               ret    (nth args 2)
-              body   (drop 3 args)
-              params-form (cons 'concat
-                                (map (fn [p]
-                                       (if (unquote-splicing-form? p)
-                                         (second p)
-                                         (list 'list (walk-param-form p))))
-                                     params))
-              results-form (cond
-                             (nil? ret) nil
-                             (and (vector? ret) (empty? ret)) nil
-                             (vector? ret)
-                             (cons 'concat
-                                   (map (fn [r] (list 'list (walk-result-form r))) ret))
-                             :else
-                             (list 'list (walk-result-form ret)))]
+              body   (drop 3 args)]
           (list 'gogen/func-decl
                 name-emit
-                params-form
-                (or results-form nil)
+                (walk-params-form params)
+                (or (walk-results-form ret) nil)
                 (walk-children body walk-stmt-form)))
+
+        "method"
+        ;; (method [(recv-name recv-type)] Name [(p t) ...] ret-type body...)
+        ;; The receiver is a vector of one param-shape entry. The rest
+        ;; mirrors `func`.
+        (let [recv (first args)
+              name-form (second args)
+              name-emit (if (unquote-form? name-form)
+                          (list 'str (second name-form))
+                          (str name-form))
+              params (nth args 2)
+              ret    (nth args 3)
+              body   (drop 4 args)]
+          (list 'gogen/method-decl
+                (walk-params-form recv)
+                name-emit
+                (walk-params-form params)
+                (or (walk-results-form ret) nil)
+                (walk-children body walk-stmt-form)))
+
+        "type-decl"
+        ;; (type-decl Name type-form)
+        (let [name-form (first args)
+              type-form (second args)
+              name-emit (if (unquote-form? name-form)
+                          (list 'str (second name-form))
+                          (str name-form))]
+          (list 'gogen/type-decl name-emit (walk-type-form type-form)))
+
+        "const-block"
+        ;; (const-block [name type-form-or-_ value-or-_ trailing-comment-or-""]...)
+        ;; `_` means "inherit from above" (Go const block semantics).
+        ;;
+        ;; Rows may be literal vectors (handled at compile time) or
+        ;; `~@(some-expr)` splices that produce a sequence of vectors
+        ;; at runtime. The splice case routes through const-row at
+        ;; runtime, which accepts either a vector spec or an
+        ;; already-built *ast.ValueSpec.
+        (let [rows args
+              row-emits (cons 'concat
+                              (map (fn [r]
+                                     (if (unquote-splicing-form? r)
+                                       (list 'map 'gogen/const-row (second r))
+                                       (let [name-form (nth r 0)
+                                             type-form (nth r 1)
+                                             value     (nth r 2)
+                                             comment   (if (>= (count r) 4) (nth r 3) "")
+                                             type-emit (if (= '_ type-form) nil (walk-type-form type-form))
+                                             value-emit (if (= '_ value) nil (walk-expr-form value))]
+                                         (list 'list (list 'gogen/const-spec
+                                                           (str name-form)
+                                                           type-emit
+                                                           value-emit
+                                                           comment)))))
+                                   rows))]
+          (list 'gogen/const-block row-emits))
+
+        "var-decl"
+        ;; (var-decl Name type-form-or-nil init-form-or-nil)
+        ;; File-level var declaration. Pass nil for type when the
+        ;; initializer carries its own type (e.g. composite-lit-multi).
+        (let [name-form (first args)
+              type-form (second args)
+              init-form (nth args 2)
+              name-emit (if (unquote-form? name-form)
+                          (list 'str (second name-form))
+                          (str name-form))
+              type-emit (if (nil? type-form) nil (walk-type-form type-form))
+              init-emit (if (nil? init-form) nil (walk-expr-form init-form))]
+          (list 'gogen/top-var-decl name-emit type-emit init-emit))
 
         (throw (str "walk-decl-form: unknown decl head " head))))
     :else (throw (str "walk-decl-form: " (pr-str form)))))
@@ -363,7 +511,7 @@
 ;; lets nested splices work without the user having to choose between
 ;; gquote-decl / gquote-stmt / gquote-expr.
 
-(def ^:private decl-heads '[func])
+(def ^:private decl-heads '[func method type-decl const-block var-decl doc])
 (def ^:private file-heads '[file])
 
 (defn- head-in? [heads form]
@@ -453,3 +601,47 @@
     (nil? v)     (gogen/ident "nil")
     (symbol? v)  (gogen/ident (str v))
     :else (throw (str "->expr: don't know how to coerce " (pr-str v)))))
+
+(defn- ->type-or-nil
+  "Coerce a runtime value into a Go type AST node, or nil if v is
+   the `_` placeholder (used by const-block rows to mean 'inherit from
+   above')."
+  [v]
+  (cond
+    (= v '_)          nil
+    (nil? v)          nil
+    ;; Already an AST value — assume it's a type expr.
+    (= (str (core/type v)) "let-go.lang.GoAST") v
+    (string? v)  (gogen/type v)
+    (symbol? v)  (gogen/type (str v))
+    :else (throw (str "->type-or-nil: don't know how to coerce " (pr-str v)))))
+
+(defn- ->value-or-nil
+  "Coerce a runtime value into a Go expression AST node, or nil if v
+   is the `_` placeholder (used by const-block rows to mean 'inherit
+   from above')."
+  [v]
+  (cond
+    (= v '_) nil
+    (nil? v) nil
+    :else    (->expr v)))
+
+(defn const-row
+  "Runtime helper for `(const-block ~@rows)` where each row is a vector
+   `[name type value comment]`. Builds and returns a *ast.ValueSpec.
+   `_` in the type or value slot means 'inherit from above'."
+  [r]
+  (cond
+    ;; Already a built spec — pass through.
+    (= (str (core/type r)) "let-go.lang.GoAST") r
+    ;; Vector form
+    (or (vector? r) (list? r) (seq? r))
+    (let [name    (nth r 0)
+          type-v  (nth r 1)
+          value   (nth r 2)
+          comment (if (>= (count r) 4) (nth r 3) "")]
+      (gogen/const-spec (str name)
+                        (->type-or-nil type-v)
+                        (->value-or-nil value)
+                        comment))
+    :else (throw (str "const-row: don't know how to process " (pr-str r)))))

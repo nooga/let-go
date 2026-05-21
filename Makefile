@@ -1,4 +1,4 @@
-###s
+###
 # Auto install `go` into ./.cache/local/ if not available.
 # Also if `make ... GO-VERSION=1.x.y` is used.
 
@@ -18,6 +18,17 @@ LG := lg
 GOLANGCI-LINT := github.com/golangci/golangci-lint/cmd/golangci-lint
 REPORT-SCRIPT := scripts/clojure_compat_report.sh
 
+# Resource caps for test invocations. GOMEMLIMIT bounds the Go heap
+# (soft cap — runtime aggressively GCs to stay under). GO-TEST-TIMEOUT
+# matches CI's per-package timeout so runaway tests die locally too.
+# Override on the command line: make test GOMEMLIMIT=4GiB.
+GOMEMLIMIT ?= 2GiB
+GO-TEST-TIMEOUT ?= 60s
+
+# Standard flags + env for `go test`. Use as: $(GO-TEST-ENV) go test $(GO-TEST-FLAGS) ./...
+GO-TEST-ENV := GOMEMLIMIT=$(GOMEMLIMIT)
+GO-TEST-FLAGS := -timeout $(GO-TEST-TIMEOUT)
+
 
 # Start repl by default:
 default:: run
@@ -27,15 +38,20 @@ run: $(LG)
 
 build: $(LG)
 
-generate: $(GO)
+generate: $(GO) generate-ir-ops
 	go run -tags bootstrap ./cmd/lgbgen
+
+# Regenerate pkg/ir/op_generated.go from examples/go-gen/ir_ops.lg.
+# Requires ./lg to exist (built by `make build`).
+generate-ir-ops: build
+	./scripts/generate-ir-ops.sh
 
 $(LG): $(GO) lg.go pkg/**/*
 	which go
 	go build -ldflags="-s -w" -o $@ .
 
 test: pkg/**/* $(GO)
-	go test -count=1 -v ./test
+	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -count=1 -v ./test
 
 clojure-compat-report: $(GO)
 	@$(REPORT-SCRIPT)

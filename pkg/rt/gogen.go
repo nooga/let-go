@@ -28,6 +28,7 @@ import (
 	"go/token"
 	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -242,6 +243,15 @@ func wrap4(name string, fn func(vm.Value, vm.Value, vm.Value, vm.Value) (vm.Valu
 	})
 }
 
+func wrap5(name string, fn func(vm.Value, vm.Value, vm.Value, vm.Value, vm.Value) (vm.Value, error)) (vm.Value, error) {
+	return vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 5 {
+			return vm.NIL, fmt.Errorf("gogen/%s: expected 5 args, got %d", name, len(vs))
+		}
+		return fn(vs[0], vs[1], vs[2], vs[3], vs[4])
+	})
+}
+
 // --- ast constructors (each returns a boxed go/ast node) -------------
 
 // ident: (gogen/ident "name") -> *ast.Ident
@@ -258,6 +268,11 @@ func cIdent(v vm.Value) (vm.Value, error) {
 
 // type-expr: (gogen/type "spec") -> parsed type expression
 // Uses go/parser so the full Go type grammar is supported.
+//
+// We strip all positions from the parsed expression so its positions
+// (which start at 1, relative to the parser's own internal scratch
+// FileSet) don't interfere with hand-allocated positions when this
+// type is spliced into other nodes.
 func cType(v vm.Value) (vm.Value, error) {
 	s, err := asString(v)
 	if err != nil {
@@ -267,6 +282,7 @@ func cType(v vm.Value) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, fmt.Errorf("gogen: parsing type %q: %w", s, err)
 	}
+	stripPositions(expr)
 	return box(expr), nil
 }
 
@@ -878,6 +894,464 @@ func cCompositeLit(typeV, elementsV vm.Value) (vm.Value, error) {
 	return box(&ast.CompositeLit{Type: typ, Elts: elts}), nil
 }
 
+// composite-lit-multi: (gogen/composite-lit-multi type-or-nil [elements])
+// -> *ast.CompositeLit, with Lbrace/Rbrace minted from the synthetic
+// FileSet and each element placed on a distinct line.
+//
+// This is the variant to use for file-level array/slice/map literals
+// that should render multi-line. gogen/composite-lit (the basic
+// variant) leaves Lbrace/Rbrace at NoPos, which can collapse to a
+// single line — fine for nested literals, wrong for top-level tables.
+//
+// Position scheme: Lbrace one line before the first element; each
+// element on a fresh line; Rbrace one line past the last element.
+// Keeping Lbrace close to the first element prevents the printer
+// from inserting blank lines after the `{`.
+func cCompositeLitMulti(typeV, elementsV vm.Value) (vm.Value, error) {
+	var typ ast.Expr
+	if typeV != vm.NIL {
+		t, err := unboxExpr(typeV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/composite-lit-multi: type: %w", err)
+		}
+		typ = t
+	}
+	var elts []ast.Expr
+	var minPos, maxPos token.Pos
+	if elementsV != vm.NIL {
+		evals, err := seqToValues(elementsV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/composite-lit-multi: elements: %w", err)
+		}
+		elts = make([]ast.Expr, 0, len(evals))
+		for i, ev := range evals {
+			e, err := unboxExpr(ev)
+			if err != nil {
+				return vm.NIL, fmt.Errorf("gogen/composite-lit-multi: element %d: %w", i, err)
+			}
+			// Place each element on a distinct line so the printer
+			// breaks them apart. Rewrite the lead-token position of
+			// the element when it has no position yet.
+			linePos := allocPos()
+			switch x := e.(type) {
+			case *ast.KeyValueExpr:
+				if id, ok := x.Key.(*ast.Ident); ok && id.NamePos == token.NoPos {
+					id.NamePos = linePos
+				}
+			case *ast.Ident:
+				if x.NamePos == token.NoPos {
+					x.NamePos = linePos
+				}
+			}
+			if minPos == 0 || linePos < minPos {
+				minPos = linePos
+			}
+			if linePos > maxPos {
+				maxPos = linePos
+			}
+			elts = append(elts, e)
+		}
+	}
+	lbrace := token.Pos(1)
+	if minPos > 1 {
+		lbrace = minPos - 1
+	}
+	rbrace := maxPos + 1
+	if rbrace == 0 {
+		rbrace = allocPos()
+	}
+	return box(&ast.CompositeLit{
+		Type:   typ,
+		Lbrace: lbrace,
+		Elts:   elts,
+		Rbrace: rbrace,
+	}), nil
+}
+
+// --- top-level decl constructors (type/const/var/method) -------------
+
+// type-decl: (gogen/type-decl "Name" type-expr) -> *ast.GenDecl
+// Top-level type declaration, e.g. `type Op uint16` or
+// `type opInfo struct { ... }`. The Type slot can be any type
+// expression (identifier, struct, interface, channel, etc.).
+func cTypeDecl(nameV, typeV vm.Value) (vm.Value, error) {
+	name, err := asString(nameV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if !validIdent(name) {
+		return vm.NIL, fmt.Errorf("gogen/type-decl: %q is not a valid identifier", name)
+	}
+	t, err := unboxExpr(typeV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/type-decl: type: %w", err)
+	}
+	return box(&ast.GenDecl{
+		Tok: token.TYPE,
+		Specs: []ast.Spec{&ast.TypeSpec{
+			Name: ast.NewIdent(name),
+			Type: t,
+		}},
+	}), nil
+}
+
+// field-decl: (gogen/field-decl "name" type-expr "trailing comment") -> *ast.Field
+// A struct field. Comment, if non-empty, is attached as a trailing
+// `// comment` line comment via positioned *ast.CommentGroup.
+func cFieldDecl(nameV, typeV, commentV vm.Value) (vm.Value, error) {
+	name, err := asString(nameV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if !validIdent(name) {
+		return vm.NIL, fmt.Errorf("gogen/field-decl: %q is not a valid identifier", name)
+	}
+	t, err := unboxExpr(typeV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/field-decl: type: %w", err)
+	}
+	comment, err := asString(commentV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/field-decl: comment: %w", err)
+	}
+	// Allocate a fresh line for this field so adjacent fields land on
+	// separate lines in the rendered output.
+	pos := allocPos()
+	f := &ast.Field{
+		Names: []*ast.Ident{{Name: name, NamePos: pos}},
+		Type:  t,
+	}
+	if comment != "" {
+		f.Comment = &ast.CommentGroup{List: []*ast.Comment{
+			{Slash: pos, Text: "// " + comment},
+		}}
+	}
+	return box(f), nil
+}
+
+// struct-type: (gogen/struct-type [fields]) -> *ast.StructType
+// A struct type expression, suitable as the type slot in a type-decl
+// or as a nested type.
+//
+// Position scheme: Struct/Opening go one line BEFORE the first field;
+// Closing goes ONE LINE AFTER the last field. This makes the printer
+// emit each field on its own line without leading or trailing blank
+// lines inside the braces.
+func cStructType(fieldsV vm.Value) (vm.Value, error) {
+	fields, err := fieldSlice(fieldsV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/struct-type: fields: %w", err)
+	}
+	// Find min/max position among fields to bracket Opening/Closing.
+	var minPos, maxPos token.Pos
+	for _, f := range fields {
+		for _, n := range f.Names {
+			if minPos == 0 || n.NamePos < minPos {
+				minPos = n.NamePos
+			}
+			if n.NamePos > maxPos {
+				maxPos = n.NamePos
+			}
+		}
+	}
+	openPos := token.Pos(1)
+	if minPos > 1 {
+		openPos = minPos - 1
+	}
+	closePos := maxPos + 1
+	if closePos == 0 {
+		closePos = allocPos()
+	}
+	return box(&ast.StructType{
+		Struct: openPos,
+		Fields: &ast.FieldList{
+			Opening: openPos,
+			List:    fields,
+			Closing: closePos,
+		},
+	}), nil
+}
+
+// const-spec: (gogen/const-spec "name" type-or-nil value-or-nil "trailing comment")
+// -> *ast.ValueSpec
+// One row inside a const block. Type and value may both be nil for
+// rows that inherit from the previous row (Go semantics).
+func cConstSpec(nameV, typeV, valueV, commentV vm.Value) (vm.Value, error) {
+	name, err := asString(nameV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if !validIdent(name) {
+		return vm.NIL, fmt.Errorf("gogen/const-spec: %q is not a valid identifier", name)
+	}
+	var t ast.Expr
+	if typeV != vm.NIL {
+		te, err := unboxExpr(typeV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/const-spec: type: %w", err)
+		}
+		t = te
+	}
+	var values []ast.Expr
+	if valueV != vm.NIL {
+		ve, err := unboxExpr(valueV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/const-spec: value: %w", err)
+		}
+		values = []ast.Expr{ve}
+	}
+	comment, err := asString(commentV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/const-spec: comment: %w", err)
+	}
+	pos := allocPos()
+	spec := &ast.ValueSpec{
+		Names:  []*ast.Ident{{Name: name, NamePos: pos}},
+		Type:   t,
+		Values: values,
+	}
+	if comment != "" {
+		spec.Comment = &ast.CommentGroup{List: []*ast.Comment{
+			{Slash: pos, Text: "// " + comment},
+		}}
+	}
+	return box(spec), nil
+}
+
+// const-block: (gogen/const-block [specs]) -> *ast.GenDecl
+// A parenthesized const declaration. Lparen/Rparen are set to non-zero
+// positions so the printer renders as a parenthesized block rather than
+// collapsing onto a single line.
+//
+// Position scheme: TokPos/Lparen one line BEFORE the first spec;
+// Rparen one line past the last spec. This avoids leading and trailing
+// blank lines inside the block.
+func cConstBlock(specsV vm.Value) (vm.Value, error) {
+	vs, err := seqToValues(specsV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/const-block: specs: %w", err)
+	}
+	specs := make([]ast.Spec, 0, len(vs))
+	var minPos, maxPos token.Pos
+	for i, v := range vs {
+		n, err := unboxNode(v)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/const-block: spec %d: %w", i, err)
+		}
+		s, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return vm.NIL, fmt.Errorf("gogen/const-block: spec %d: expected *ast.ValueSpec, got %T", i, n)
+		}
+		for _, name := range s.Names {
+			if minPos == 0 || name.NamePos < minPos {
+				minPos = name.NamePos
+			}
+			if name.NamePos > maxPos {
+				maxPos = name.NamePos
+			}
+		}
+		specs = append(specs, s)
+	}
+	lparen := token.Pos(1)
+	if minPos > 1 {
+		lparen = minPos - 1
+	}
+	rparen := maxPos + 1
+	if rparen == 0 {
+		rparen = allocPos()
+	}
+	return box(&ast.GenDecl{
+		Tok:    token.CONST,
+		TokPos: lparen,
+		Lparen: lparen, // non-zero -> parenthesized form
+		Specs:  specs,
+		Rparen: rparen,
+	}), nil
+}
+
+// top-var-decl: (gogen/top-var-decl "name" type-expr init-expr-or-nil)
+// -> *ast.GenDecl (decl-level var declaration)
+//
+// Distinct from gogen/var-decl (which builds a *statement-level* DeclStmt
+// for use inside function bodies). top-var-decl produces a decl that can
+// live at file scope.
+func cTopVarDecl(nameV, typeV, initV vm.Value) (vm.Value, error) {
+	name, err := asString(nameV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if !validIdent(name) {
+		return vm.NIL, fmt.Errorf("gogen/top-var-decl: %q is not a valid identifier", name)
+	}
+	var t ast.Expr
+	if typeV != vm.NIL {
+		te, err := unboxExpr(typeV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/top-var-decl: type: %w", err)
+		}
+		t = te
+	}
+	var values []ast.Expr
+	if initV != vm.NIL {
+		ve, err := unboxExpr(initV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/top-var-decl: init: %w", err)
+		}
+		values = []ast.Expr{ve}
+	}
+	return box(&ast.GenDecl{
+		Tok: token.VAR,
+		Specs: []ast.Spec{&ast.ValueSpec{
+			Names:  []*ast.Ident{ast.NewIdent(name)},
+			Type:   t,
+			Values: values,
+		}},
+	}), nil
+}
+
+// with-doc: (gogen/with-doc decl-or-spec "comment text") -> same node with
+// a leading Doc comment attached. Accepts either a *ast.GenDecl,
+// *ast.FuncDecl, *ast.TypeSpec, *ast.ValueSpec, or *ast.Field.
+//
+// Multi-line comments are split on newlines; each line becomes a
+// separate "// line" comment in the group.
+//
+// Positioning is delicate: the Doc comment's Slash positions must be
+// BEFORE the decl's first token (the printer uses this to decide
+// "comment above decl" vs "comment trailing previous decl"). We mint a
+// fresh block of positions and re-anchor the decl's leading position
+// just past them.
+func cWithDoc(declV, commentV vm.Value) (vm.Value, error) {
+	if declV == vm.NIL {
+		return vm.NIL, nil
+	}
+	comment, err := asString(commentV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/with-doc: comment: %w", err)
+	}
+	if comment == "" {
+		return declV, nil
+	}
+	n, err := unboxNode(declV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	lines := strings.Split(comment, "\n")
+	startPos := allocPos()
+	for i := 1; i < len(lines); i++ {
+		_ = allocPos() // reserve one fresh line per additional comment line
+	}
+	declPos := allocPos() // line immediately after the comment block
+	cmts := make([]*ast.Comment, 0, len(lines))
+	for i, ln := range lines {
+		cmts = append(cmts, &ast.Comment{
+			Slash: startPos + token.Pos(i),
+			Text:  "// " + ln,
+		})
+	}
+	group := &ast.CommentGroup{List: cmts}
+	switch x := n.(type) {
+	case *ast.GenDecl:
+		x.Doc = group
+		x.TokPos = declPos
+		// Keep Lparen consistent with TokPos when it was already set.
+		if x.Lparen != token.NoPos {
+			x.Lparen = declPos
+		}
+	case *ast.FuncDecl:
+		x.Doc = group
+		// FuncDecl.Pos() looks at Type.Func first (the `func` keyword
+		// position). Set that to land after the comment block so the
+		// printer places the doc directly above. Also push Recv and
+		// Name positions forward if they predate declPos.
+		if x.Type != nil {
+			x.Type.Func = declPos
+		}
+		if x.Recv != nil {
+			x.Recv.Opening = declPos
+			for _, f := range x.Recv.List {
+				for _, nm := range f.Names {
+					if nm.NamePos < declPos {
+						nm.NamePos = declPos
+					}
+				}
+			}
+		}
+		if x.Name != nil && x.Name.NamePos < declPos {
+			x.Name.NamePos = declPos
+		}
+	case *ast.TypeSpec:
+		x.Doc = group
+		if x.Name != nil && x.Name.NamePos < declPos {
+			x.Name.NamePos = declPos
+		}
+	case *ast.ValueSpec:
+		x.Doc = group
+		for _, nm := range x.Names {
+			if nm.NamePos < declPos {
+				nm.NamePos = declPos
+			}
+		}
+	case *ast.Field:
+		x.Doc = group
+		for _, nm := range x.Names {
+			if nm.NamePos < declPos {
+				nm.NamePos = declPos
+			}
+		}
+	default:
+		return vm.NIL, fmt.Errorf("gogen/with-doc: don't know how to attach doc to %T", n)
+	}
+	return declV, nil
+}
+
+// method-decl: (gogen/method-decl [recv-fields] "Name" [params] [results] [body])
+// -> *ast.FuncDecl with Recv set.
+//
+// Same shape as func-decl but adds a receiver. The receiver is a list
+// of one field (typically one named binding to a named type), e.g.
+// `(op Op)`.
+func cMethodDecl(recvV, nameV, paramsV, resultsV, bodyV vm.Value) (vm.Value, error) {
+	recv, err := fieldSlice(recvV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/method-decl: recv: %w", err)
+	}
+	if len(recv) == 0 {
+		return vm.NIL, fmt.Errorf("gogen/method-decl: receiver list must contain at least one field")
+	}
+	name, err := asString(nameV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if !validIdent(name) {
+		return vm.NIL, fmt.Errorf("gogen/method-decl: %q is not a valid identifier", name)
+	}
+	params, err := fieldSlice(paramsV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/method-decl: params: %w", err)
+	}
+	results, err := fieldSlice(resultsV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/method-decl: results: %w", err)
+	}
+	body, err := stmtSlice(bodyV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/method-decl: body: %w", err)
+	}
+	funcType := &ast.FuncType{
+		Params: &ast.FieldList{List: params},
+	}
+	if len(results) > 0 {
+		funcType.Results = &ast.FieldList{List: results}
+	}
+	return box(&ast.FuncDecl{
+		Recv: &ast.FieldList{List: recv},
+		Name: ast.NewIdent(name),
+		Type: funcType,
+		Body: &ast.BlockStmt{List: body},
+	}), nil
+}
+
 // import-spec: (gogen/import-spec "path") or (gogen/import-spec "path" "alias")
 func cImportSpec(args ...vm.Value) (vm.Value, error) {
 	if len(args) != 1 && len(args) != 2 {
@@ -956,6 +1430,98 @@ func cFile(pkgV, importsV, declsV vm.Value) (vm.Value, error) {
 
 var goFset = token.NewFileSet()
 
+// Synthetic file used to mint token positions on demand. Many printer
+// behaviors (multi-line const blocks, trailing line comments, multi-line
+// composite literals) depend on adjacent nodes having distinct line
+// positions, even if the actual offsets don't refer to real source.
+//
+// We pre-allocate a generous range of line offsets so allocPos() can
+// hand out fresh positions on different lines without ever needing to
+// re-AddLine. Each call to allocPos consumes one line.
+var (
+	goSynthFile = goFset.AddFile("gogen.synthetic.go", -1, 1<<28)
+	goPosNext   = 1 // next byte offset to hand out (1-based)
+)
+
+// init pre-fills the synthetic file with line starts so token.Pos values
+// returned by allocPos all map to distinct lines.
+func init() {
+	for i := 1; i < 1<<20; i++ {
+		goSynthFile.AddLine(i)
+	}
+}
+
+// allocPos returns a fresh token.Pos on a new synthetic line. Used by
+// constructors that need to position adjacent nodes (e.g. const specs in
+// a block, fields in a struct, elements of a composite literal) on
+// distinct lines so go/format.Node emits them on separate output lines.
+func allocPos() token.Pos {
+	p := token.Pos(goPosNext)
+	goPosNext++
+	return p
+}
+
+// stripPositions zeroes out every *Pos field reachable from an AST
+// node. We do this on parser output before splicing it into hand-built
+// nodes, so the parser's positions (which start at 1 and have no
+// relationship to our synthetic FileSet) don't interfere with comment
+// placement and line-break decisions.
+func stripPositions(n ast.Node) {
+	if n == nil {
+		return
+	}
+	ast.Inspect(n, func(x ast.Node) bool {
+		switch v := x.(type) {
+		case *ast.Ident:
+			v.NamePos = token.NoPos
+		case *ast.BasicLit:
+			v.ValuePos = token.NoPos
+		case *ast.CompositeLit:
+			v.Lbrace = token.NoPos
+			v.Rbrace = token.NoPos
+		case *ast.ArrayType:
+			v.Lbrack = token.NoPos
+		case *ast.StructType:
+			v.Struct = token.NoPos
+			if v.Fields != nil {
+				v.Fields.Opening = token.NoPos
+				v.Fields.Closing = token.NoPos
+			}
+		case *ast.InterfaceType:
+			v.Interface = token.NoPos
+			if v.Methods != nil {
+				v.Methods.Opening = token.NoPos
+				v.Methods.Closing = token.NoPos
+			}
+		case *ast.MapType:
+			v.Map = token.NoPos
+		case *ast.ChanType:
+			v.Begin = token.NoPos
+			v.Arrow = token.NoPos
+		case *ast.FuncType:
+			v.Func = token.NoPos
+			if v.Params != nil {
+				v.Params.Opening = token.NoPos
+				v.Params.Closing = token.NoPos
+			}
+			if v.Results != nil {
+				v.Results.Opening = token.NoPos
+				v.Results.Closing = token.NoPos
+			}
+		case *ast.StarExpr:
+			v.Star = token.NoPos
+		case *ast.Ellipsis:
+			v.Ellipsis = token.NoPos
+		case *ast.ParenExpr:
+			v.Lparen = token.NoPos
+			v.Rparen = token.NoPos
+		case *ast.SelectorExpr:
+			// nothing — Sel and X positions handled by descent
+		}
+		return true
+	})
+}
+
 func cRender(v vm.Value) (result vm.Value, retErr error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1019,7 +1585,12 @@ func installGogenNS() {
 		mk(wrap2Named("type-assert", cTypeAssert)),
 		mk(wrap2Named("kv-expr", cKVExpr)),
 		mk(wrap2Named("composite-lit", cCompositeLit)),
+		mk(wrap2Named("composite-lit-multi", cCompositeLitMulti)),
 		mk(wrap2Named("case-clause", cCaseClause)),
+		mk(wrap2Named("type-decl", cTypeDecl)),
+		mk(wrap1Named("struct-type", cStructType)),
+		mk(wrap1Named("const-block", cConstBlock)),
+		mk(wrap2Named("with-doc", cWithDoc)),
 
 		mk(wrap3Named("binary", cBinary)),
 		mk(wrap3Named("assign", cAssign)),
@@ -1028,10 +1599,15 @@ func installGogenNS() {
 		mk(wrap3Named("file", cFile)),
 		mk(wrap3Named("func-lit", cFuncLit)),
 		mk(wrap3Named("switch-stmt", cSwitchStmt)),
+		mk(wrap3Named("field-decl", cFieldDecl)),
+		mk(wrap3Named("top-var-decl", cTopVarDecl)),
 
 		mk(wrap4Named("if-stmt", cIfStmt)),
 		mk(wrap4Named("for-stmt", cForStmt)),
 		mk(wrap4Named("func-decl", cFuncDecl)),
+		mk(wrap4Named("const-spec", cConstSpec)),
+
+		mk(wrap5Named("method-decl", cMethodDecl)),
 
 		mk("import-spec", makeVariadic("import-spec", cImportSpec), nil),
 	}
@@ -1058,6 +1634,10 @@ func wrap3Named(name string, fn func(vm.Value, vm.Value, vm.Value) (vm.Value, er
 }
 func wrap4Named(name string, fn func(vm.Value, vm.Value, vm.Value, vm.Value) (vm.Value, error)) (string, vm.Value, error) {
 	v, err := wrap4(name, fn)
+	return name, v, err
+}
+func wrap5Named(name string, fn func(vm.Value, vm.Value, vm.Value, vm.Value, vm.Value) (vm.Value, error)) (string, vm.Value, error) {
+	v, err := wrap5(name, fn)
 	return name, v, err
 }
 
