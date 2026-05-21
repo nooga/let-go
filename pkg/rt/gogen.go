@@ -717,6 +717,167 @@ func fieldSlice(v vm.Value) ([]*ast.Field, error) {
 	return out, nil
 }
 
+// func-lit: (gogen/func-lit [params] [results-or-nil] [body-stmts]) -> *ast.FuncLit
+// A function literal — an anonymous function used as an expression
+// (the value, not the declaration). Returns an expression, so it can
+// be passed as a call argument, assigned, etc.
+//
+// Example uses:
+//
+//	cb := func(x int) int { return x * 2 }
+//	vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { ... })
+func cFuncLit(paramsV, resultsV, bodyV vm.Value) (vm.Value, error) {
+	params, err := fieldSlice(paramsV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/func-lit: params: %w", err)
+	}
+	results, err := fieldSlice(resultsV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/func-lit: results: %w", err)
+	}
+	body, err := stmtSlice(bodyV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/func-lit: body: %w", err)
+	}
+	funcType := &ast.FuncType{
+		Params: &ast.FieldList{List: params},
+	}
+	if len(results) > 0 {
+		funcType.Results = &ast.FieldList{List: results}
+	}
+	return box(&ast.FuncLit{
+		Type: funcType,
+		Body: &ast.BlockStmt{List: body},
+	}), nil
+}
+
+// case-clause: (gogen/case-clause [values] [body-stmts]) -> *ast.CaseClause
+// A single arm of a switch statement. Empty values means the default arm.
+// Multiple values produce the `case a, b, c:` form.
+func cCaseClause(valuesV, bodyV vm.Value) (vm.Value, error) {
+	var vals []ast.Expr
+	if valuesV != vm.NIL {
+		vs, err := seqToValues(valuesV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/case-clause: values: %w", err)
+		}
+		vals = make([]ast.Expr, 0, len(vs))
+		for i, v := range vs {
+			e, err := unboxExpr(v)
+			if err != nil {
+				return vm.NIL, fmt.Errorf("gogen/case-clause: value %d: %w", i, err)
+			}
+			vals = append(vals, e)
+		}
+	}
+	body, err := stmtSlice(bodyV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/case-clause: body: %w", err)
+	}
+	// Note: go/ast represents the default clause as a CaseClause with
+	// List==nil (not an empty slice). Normalize empty-slice → nil so the
+	// renderer emits `default:` instead of `case :`.
+	if len(vals) == 0 {
+		vals = nil
+	}
+	return box(&ast.CaseClause{List: vals, Body: body}), nil
+}
+
+// switch-stmt: (gogen/switch-stmt init-or-nil tag-or-nil [case-clauses]) -> *ast.SwitchStmt
+// A Go `switch` statement. Pass nil for `tag` to get the tagless form
+// (`switch { case cond1: ... case cond2: ... }`). Each clause must be
+// a *ast.CaseClause (produced by cCaseClause).
+func cSwitchStmt(initV, tagV, clausesV vm.Value) (vm.Value, error) {
+	var init ast.Stmt
+	if initV != vm.NIL {
+		s, err := unboxStmt(initV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/switch-stmt: init: %w", err)
+		}
+		init = s
+	}
+	var tag ast.Expr
+	if tagV != vm.NIL {
+		e, err := unboxExpr(tagV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/switch-stmt: tag: %w", err)
+		}
+		tag = e
+	}
+	clauseVals, err := seqToValues(clausesV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/switch-stmt: clauses: %w", err)
+	}
+	body := make([]ast.Stmt, 0, len(clauseVals))
+	for i, cv := range clauseVals {
+		n, err := unboxNode(cv)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/switch-stmt: clause %d: %w", i, err)
+		}
+		cc, ok := n.(*ast.CaseClause)
+		if !ok {
+			return vm.NIL, fmt.Errorf("gogen/switch-stmt: clause %d: expected *ast.CaseClause, got %T", i, n)
+		}
+		body = append(body, cc)
+	}
+	return box(&ast.SwitchStmt{
+		Init: init,
+		Tag:  tag,
+		Body: &ast.BlockStmt{List: body},
+	}), nil
+}
+
+// kv-expr: (gogen/kv-expr key value) -> *ast.KeyValueExpr
+// A key/value pair, used inside composite literals (map and struct).
+func cKVExpr(keyV, valueV vm.Value) (vm.Value, error) {
+	k, err := unboxExpr(keyV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/kv-expr: key: %w", err)
+	}
+	v, err := unboxExpr(valueV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/kv-expr: value: %w", err)
+	}
+	return box(&ast.KeyValueExpr{Key: k, Value: v}), nil
+}
+
+// composite-lit: (gogen/composite-lit type-or-nil [elements]) -> *ast.CompositeLit
+// Composite literal, e.g. `[]int{1,2,3}`, `Point{X:1,Y:2}`, `map[string]int{"a":1}`.
+//
+// type-or-nil is the explicit type (a type expression). It can be nil
+// in contexts where Go infers the element type (e.g. nested literals).
+//
+// elements is a sequence of expression nodes. For map/struct-style
+// literals, each element should be a *ast.KeyValueExpr (built via
+// cKVExpr). For slice/array-style literals, elements are bare exprs.
+// The two styles can be mixed only as Go permits (struct field omission etc.).
+func cCompositeLit(typeV, elementsV vm.Value) (vm.Value, error) {
+	var typ ast.Expr
+	if typeV != vm.NIL {
+		t, err := unboxExpr(typeV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/composite-lit: type: %w", err)
+		}
+		typ = t
+	}
+	var elts []ast.Expr
+	if elementsV != vm.NIL {
+		evals, err := seqToValues(elementsV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/composite-lit: elements: %w", err)
+		}
+		elts = make([]ast.Expr, 0, len(evals))
+		for i, ev := range evals {
+			e, err := unboxExpr(ev)
+			if err != nil {
+				return vm.NIL, fmt.Errorf("gogen/composite-lit: element %d: %w", i, err)
+			}
+			elts = append(elts, e)
+		}
+	}
+	return box(&ast.CompositeLit{Type: typ, Elts: elts}), nil
+}
+
 // import-spec: (gogen/import-spec "path") or (gogen/import-spec "path" "alias")
 func cImportSpec(args ...vm.Value) (vm.Value, error) {
 	if len(args) != 1 && len(args) != 2 {
@@ -853,12 +1014,17 @@ func installGogenNS() {
 		mk(wrap2Named("param", cParam)),
 		mk(wrap1Named("result", cResult)),
 		mk(wrap2Named("type-assert", cTypeAssert)),
+		mk(wrap2Named("kv-expr", cKVExpr)),
+		mk(wrap2Named("composite-lit", cCompositeLit)),
+		mk(wrap2Named("case-clause", cCaseClause)),
 
 		mk(wrap3Named("binary", cBinary)),
 		mk(wrap3Named("assign", cAssign)),
 		mk(wrap3Named("multi-assign", cMultiAssign)),
 		mk(wrap3Named("var-decl", cVarDecl)),
 		mk(wrap3Named("file", cFile)),
+		mk(wrap3Named("func-lit", cFuncLit)),
+		mk(wrap3Named("switch-stmt", cSwitchStmt)),
 
 		mk(wrap4Named("if-stmt", cIfStmt)),
 		mk(wrap4Named("for-stmt", cForStmt)),
