@@ -45,6 +45,11 @@ func NewNreplServer(ctx *compiler.Context) *NreplServer {
 	}
 }
 
+// Port returns the TCP port the server is listening on.
+func (n *NreplServer) Port() int {
+	return n.port
+}
+
 func (n *NreplServer) newSession() *session {
 	id, err := uuid.GenerateUUID()
 	if err != nil {
@@ -83,6 +88,7 @@ func (n *NreplServer) Start(port int) error {
 	if err != nil {
 		return err
 	}
+	port = l.Addr().(*net.TCPAddr).Port
 	n.listener = l
 	n.port = port
 	n.stop = make(chan struct{})

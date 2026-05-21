@@ -525,8 +525,9 @@ func main() {
 			err := nreplServe(context, nreplPort)
 			if err != nil {
 				fmt.Println("failed to run nREPL server on port", nreplPort, err)
+			} else {
+				fmt.Printf("nREPL server running at tcp://127.0.0.1:%d\n", nreplServer.Port())
 			}
-			fmt.Printf("nREPL server running at tcp://127.0.0.1:%d\n", nreplPort)
 		}
 		repl(context)
 	}
