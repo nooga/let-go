@@ -1113,6 +1113,117 @@ func installLangNS() {
 		return acc, nil
 	})
 
+	// unchecked-* family — silent wrap on int64 overflow.
+	//
+	// Mirrors Clojure's clojure.core/unchecked-add, unchecked-subtract,
+	// unchecked-multiply, unchecked-negate, unchecked-divide-int. Each is
+	// strict-arity (2-ary for binary ops, 1-ary for unary) to match Clojure's
+	// inliner signatures.
+	//
+	// Required for porting hash functions, splittable RNGs, and any other
+	// code that needs modular int64 / u64 semantics. Pair with the existing
+	// unsigned-bit-shift-right to build xxh3-64, splitmix64, SipHash, etc.
+	//
+	// Float and BigInt inputs are coerced to int64 (matching Clojure's
+	// long-arithmetic semantics). Use `+`/`-`/`*` for checked arithmetic,
+	// or `+'`/`-'`/`*'` for BigInt-promoting arithmetic.
+
+	uncheckedAdd, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[0].Type().Name())
+		}
+		b, ok := vm.ToInt(vs[1])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[1].Type().Name())
+		}
+		return vm.MakeInt(int(int64(a) + int64(b))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedSubtract, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[0].Type().Name())
+		}
+		b, ok := vm.ToInt(vs[1])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[1].Type().Name())
+		}
+		return vm.MakeInt(int(int64(a) - int64(b))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedMultiply, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[0].Type().Name())
+		}
+		b, ok := vm.ToInt(vs[1])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[1].Type().Name())
+		}
+		return vm.MakeInt(int(int64(a) * int64(b))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedNegate, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-negate expected integer, got %s", vs[0].Type().Name())
+		}
+		// Note: -Long/MIN_VALUE wraps to Long/MIN_VALUE in 2's-complement int64.
+		// This matches Clojure's unchecked-negate behavior.
+		return vm.MakeInt(int(-int64(a))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedDivideInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[0].Type().Name())
+		}
+		b, ok := vm.ToInt(vs[1])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[1].Type().Name())
+		}
+		if b == 0 {
+			return vm.NIL, fmt.Errorf("divide by zero")
+		}
+		// Note: Long/MIN_VALUE / -1 overflows in 2's-complement and throws.
+		// This matches Clojure's unchecked-divide-int (and JVM IDIV) behavior.
+		if int64(a) == math.MinInt64 && int64(b) == -1 {
+			return vm.NIL, fmt.Errorf("integer overflow")
+		}
+		return vm.MakeInt(int(int64(a) / int64(b))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
 	equals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		length := len(vs)
 		if length < 1 {
@@ -4865,6 +4976,11 @@ func installLangNS() {
 	ns.Def("+'", plusP)
 	ns.Def("*'", mulP)
 	ns.Def("-'", subP)
+	ns.Def("unchecked-add", uncheckedAdd)
+	ns.Def("unchecked-subtract", uncheckedSubtract)
+	ns.Def("unchecked-multiply", uncheckedMultiply)
+	ns.Def("unchecked-negate", uncheckedNegate)
+	ns.Def("unchecked-divide-int", uncheckedDivideInt)
 
 	ns.Def("=", equals)
 	ns.Def("not=", notEq)

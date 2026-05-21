@@ -1,0 +1,142 @@
+(ns test.unchecked-arith-test
+  "Tests for the unchecked-* family of modular int64 arithmetic primitives.
+
+   These mirror Clojure's clojure.core/unchecked-add / unchecked-subtract /
+   unchecked-multiply / unchecked-negate / unchecked-inc / unchecked-dec /
+   unchecked-divide-int. Each is strict-arity (2-ary for binary ops, 1-ary
+   for unary) to match Clojure's inliner signatures.
+
+   The arithmetic ops (add, subtract, multiply, negate, inc, dec) wrap
+   silently on int64 overflow. The division op honors the same two error
+   conditions as Clojure / JVM IDIV: divide-by-zero and Long/MIN_VALUE / -1
+   overflow."
+  (:require [test :refer :all]))
+
+;; --- unchecked-add ---
+
+(deftest unchecked-add-basic
+  (testing "unchecked-add returns modular sum on non-overflow inputs"
+    (is (= 3 (unchecked-add 1 2)))
+    (is (= 0 (unchecked-add 0 0)))
+    (is (= -1 (unchecked-add -1 0)))))
+
+(deftest unchecked-add-wraps-on-overflow
+  (testing "max-long + 1 wraps to min-long"
+    (is (= -9223372036854775808 (unchecked-add 9223372036854775807 1))))
+  (testing "min-long + min-long wraps to 0 (mod 2^64 = 2^64 = 0)"
+    (is (= 0 (unchecked-add -9223372036854775808 -9223372036854775808))))
+  (testing "min-long + -1 wraps to max-long"
+    (is (= 9223372036854775807 (unchecked-add -9223372036854775808 -1)))))
+
+(deftest unchecked-add-is-strict-2-ary
+  (testing "unchecked-add requires exactly 2 args"
+    (is (= :caught (try (unchecked-add 1) (catch e :caught))))
+    (is (= :caught (try (unchecked-add 1 2 3) (catch e :caught))))))
+
+;; --- unchecked-subtract ---
+
+(deftest unchecked-subtract-basic
+  (testing "unchecked-subtract returns modular difference"
+    (is (= -1 (unchecked-subtract 1 2)))
+    (is (= 0 (unchecked-subtract 5 5)))))
+
+(deftest unchecked-subtract-wraps-on-overflow
+  (testing "min-long - 1 wraps to max-long"
+    (is (= 9223372036854775807 (unchecked-subtract -9223372036854775808 1))))
+  (testing "max-long - -1 wraps to min-long"
+    (is (= -9223372036854775808 (unchecked-subtract 9223372036854775807 -1)))))
+
+(deftest unchecked-subtract-is-strict-2-ary
+  (testing "unchecked-subtract requires exactly 2 args"
+    (is (= :caught (try (unchecked-subtract 1) (catch e :caught))))
+    (is (= :caught (try (unchecked-subtract 1 2 3) (catch e :caught))))))
+
+;; --- unchecked-multiply ---
+
+(deftest unchecked-multiply-basic
+  (testing "unchecked-multiply returns modular product"
+    (is (= 6 (unchecked-multiply 2 3)))
+    (is (= 0 (unchecked-multiply 0 999)))
+    (is (= 12 (unchecked-multiply -3 -4)))))
+
+(deftest unchecked-multiply-wraps-on-overflow
+  (testing "max-long * 2 wraps; result is -2 in 2's complement"
+    (is (= -2 (unchecked-multiply 9223372036854775807 2)))))
+
+(deftest unchecked-multiply-is-strict-2-ary
+  (testing "unchecked-multiply requires exactly 2 args"
+    (is (= :caught (try (unchecked-multiply 1) (catch e :caught))))
+    (is (= :caught (try (unchecked-multiply 1 2 3) (catch e :caught))))))
+
+;; --- unchecked-negate ---
+
+(deftest unchecked-negate-basic
+  (testing "unchecked-negate of typical values"
+    (is (= -42 (unchecked-negate 42)))
+    (is (= 42 (unchecked-negate -42)))
+    (is (= 0 (unchecked-negate 0)))))
+
+(deftest unchecked-negate-min-long-wraps-to-self
+  (testing "-Long/MIN_VALUE wraps to Long/MIN_VALUE (2's-complement overflow)"
+    (is (= -9223372036854775808 (unchecked-negate -9223372036854775808)))))
+
+(deftest unchecked-negate-is-strict-1-ary
+  (testing "unchecked-negate requires exactly 1 arg"
+    (is (= :caught (try (unchecked-negate) (catch e :caught))))
+    (is (= :caught (try (unchecked-negate 1 2) (catch e :caught))))))
+
+;; --- unchecked-inc (defined in core.lg via unchecked-add) ---
+
+(deftest unchecked-inc-basic
+  (testing "unchecked-inc"
+    (is (= 1 (unchecked-inc 0)))
+    (is (= 43 (unchecked-inc 42)))))
+
+(deftest unchecked-inc-wraps-at-max-long
+  (testing "unchecked-inc of max-long wraps to min-long"
+    (is (= -9223372036854775808 (unchecked-inc 9223372036854775807)))))
+
+;; --- unchecked-dec (defined in core.lg via unchecked-subtract) ---
+
+(deftest unchecked-dec-basic
+  (testing "unchecked-dec"
+    (is (= -1 (unchecked-dec 0)))
+    (is (= 41 (unchecked-dec 42)))))
+
+(deftest unchecked-dec-wraps-at-min-long
+  (testing "unchecked-dec of min-long wraps to max-long"
+    (is (= 9223372036854775807 (unchecked-dec -9223372036854775808)))))
+
+;; --- unchecked-divide-int ---
+
+(deftest unchecked-divide-int-basic
+  (testing "unchecked-divide-int truncates toward zero"
+    (is (= 3 (unchecked-divide-int 7 2)))
+    (is (= -3 (unchecked-divide-int -7 2)))
+    (is (= -3 (unchecked-divide-int 7 -2)))
+    (is (= 3 (unchecked-divide-int -7 -2)))))
+
+(deftest unchecked-divide-int-throws-on-divide-by-zero
+  (testing "/0 throws (matches Clojure / JVM IDIV)"
+    (is (= :caught (try (unchecked-divide-int 7 0) (catch e :caught))))))
+
+(deftest unchecked-divide-int-throws-on-min-long-div-neg-1
+  (testing "Long/MIN_VALUE / -1 overflows and throws (matches Clojure / JVM IDIV)"
+    (is (= :caught (try (unchecked-divide-int -9223372036854775808 -1) (catch e :caught))))))
+
+(deftest unchecked-divide-int-is-strict-2-ary
+  (testing "unchecked-divide-int requires exactly 2 args"
+    (is (= :caught (try (unchecked-divide-int 1) (catch e :caught))))
+    (is (= :caught (try (unchecked-divide-int 1 2 3) (catch e :caught))))))
+
+;; --- Coherence between primitives and their core.lg wrappers ---
+
+(deftest unchecked-inc-equivalent-to-add-1
+  (testing "unchecked-inc is identical to (unchecked-add x 1)"
+    (is (= (unchecked-inc 42) (unchecked-add 42 1)))
+    (is (= (unchecked-inc 9223372036854775807) (unchecked-add 9223372036854775807 1)))))
+
+(deftest unchecked-dec-equivalent-to-subtract-1
+  (testing "unchecked-dec is identical to (unchecked-subtract x 1)"
+    (is (= (unchecked-dec 42) (unchecked-subtract 42 1)))
+    (is (= (unchecked-dec -9223372036854775808) (unchecked-subtract -9223372036854775808 1)))))

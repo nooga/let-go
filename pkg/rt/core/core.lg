@@ -172,6 +172,12 @@
 (defn inc' [x] (+' x 1))
 (defn dec' [x] (-' x 1))
 
+;; Unchecked variants: native unchecked-add / unchecked-subtract / etc. are
+;; registered in pkg/rt/lang.go. unchecked-inc / unchecked-dec compose on
+;; top of those, mirroring Clojure's `(defn unchecked-inc [x] (unchecked-add x 1))`.
+(defn unchecked-inc [x] (unchecked-add x 1))
+(defn unchecked-dec [x] (unchecked-subtract x 1))
+
 (defn num [x]
   (if (nil? x) nil
     (if (number? x) x
