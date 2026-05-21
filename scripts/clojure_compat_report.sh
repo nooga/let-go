@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG="${TMPDIR:-/tmp}/let-go-clojure-compat-report.$$.$RANDOM.log"
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+LOG=${TMPDIR:-/tmp}/let-go-clojure-compat-report.$$.$RANDOM.log
 
-cd "$ROOT" || exit 1
+cd "$ROOT"
 
-go test ./test/ -count=1 -run TestClojureTestSuite -v >"$LOG" 2>&1
+go test ./test/ -count=1 -run TestClojureTestSuite -v 2>&1 | tee "$LOG"
 STATUS=$?
 
 awk -v status="$STATUS" -v logfile="$LOG" '
