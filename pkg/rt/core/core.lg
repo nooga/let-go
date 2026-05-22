@@ -201,19 +201,10 @@
   (if (and (>= x -128) (<= x 127))
     (int x)
     (throw (ex-info (str "Value out of range for byte: " x) {}))))
-(defn unchecked-byte [x]
-  (let [n (int x)
-        b (mod (+ (mod n 256) 256) 256)]
-    (if (> b 127) (- b 256) b)))
 (defn short [x]
   (if (and (>= x -32768) (<= x 32767))
     (int x)
     (throw (ex-info (str "Value out of range for short: " x) {}))))
-(defn unchecked-short [x]
-  (let [n (int x)
-        s (mod (+ (mod n 65536) 65536) 65536)]
-    (if (> s 32767) (- s 65536) s)))
-
 ;; ident predicates
 (defn ident? [x] (or (keyword? x) (symbol? x)))
 (defn simple-ident? [x] (and (ident? x) (nil? (namespace x))))

@@ -1224,6 +1224,161 @@ func installLangNS() {
 		panic(err)
 	}
 
+	uncheckedLong, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return v, nil
+		case *vm.BigInt:
+			// Low-64 of two's-complement representation, matching Clojure JVM.
+			// big.Int doesn't expose two's-complement directly; mask with 2^64,
+			// then reinterpret the low-64 bits as signed int64.
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.MakeInt(int(int64(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.MakeInt(int(int64(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-long expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.MakeInt(int(int32(int64(v)))), nil
+		case *vm.BigInt:
+			// Low-32 of two's-complement representation, matching Clojure JVM.
+			// Mask with 2^64, take low-32 bits as int32, then sign-extend.
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.MakeInt(int(int32(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.MakeInt(int(int32(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-int expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedShort, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.MakeInt(int(int16(int64(v)))), nil
+		case *vm.BigInt:
+			// Low-16 of two's-complement representation, matching Clojure JVM.
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.MakeInt(int(int16(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.MakeInt(int(int16(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-short expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedByte, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.MakeInt(int(int8(int64(v)))), nil
+		case *vm.BigInt:
+			// Low-8 of two's-complement representation, matching Clojure JVM.
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.MakeInt(int(int8(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.MakeInt(int(int8(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-byte expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedChar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.Char(rune(uint16(int64(v)))), nil
+		case *vm.BigInt:
+			// Low-16 of two's-complement representation, then uint16 → Char (rune).
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.Char(rune(uint16(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.Char(rune(uint16(int64(float64(v))))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-char expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedDouble, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.Float(float64(int64(v))), nil
+		case *vm.BigInt:
+			// Convert BigInt to float64 via big.Float (handles overflow → ±Inf).
+			f, _ := new(big.Float).SetInt(v.Val()).Float64()
+			return vm.Float(f), nil
+		case vm.Float:
+			return v, nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-double expected numeric, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedFloat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			// Cast through float32 to introduce float32-precision loss + overflow → ±Inf.
+			return vm.Float(float64(float32(int64(v)))), nil
+		case *vm.BigInt:
+			f, _ := new(big.Float).SetInt(v.Val()).Float64()
+			return vm.Float(float64(float32(f))), nil
+		case vm.Float:
+			return vm.Float(float64(float32(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-float expected numeric, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
 	equals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		length := len(vs)
 		if length < 1 {
@@ -4993,6 +5148,13 @@ func installLangNS() {
 	ns.Def("unchecked-multiply", uncheckedMultiply)
 	ns.Def("unchecked-negate", uncheckedNegate)
 	ns.Def("unchecked-divide-int", uncheckedDivideInt)
+	ns.Def("unchecked-long", uncheckedLong)
+	ns.Def("unchecked-int", uncheckedInt)
+	ns.Def("unchecked-short", uncheckedShort)
+	ns.Def("unchecked-byte", uncheckedByte)
+	ns.Def("unchecked-char", uncheckedChar)
+	ns.Def("unchecked-double", uncheckedDouble)
+	ns.Def("unchecked-float", uncheckedFloat)
 
 	ns.Def("=", equals)
 	ns.Def("not=", notEq)
