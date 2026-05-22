@@ -549,15 +549,20 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 		neg = true
 		numStr = numStr[1:]
 	}
-	// Hex literal: 0xff or -0xff
+	// Hex literal: 0xff or -0xff. Matches Clojure JVM behavior:
+	//   - literals fitting in int64 produce Int (including -0x8000000000000000
+	//     which fits as the negated value),
+	//   - literals exceeding Long/MAX_VALUE positive promote to BigInt.
+	// MaybeDowngrade handles the size dispatch for us.
 	if len(numStr) > 2 && numStr[0] == '0' && (numStr[1] == 'x' || numStr[1] == 'X') {
-		if i, err := strconv.ParseUint(numStr[2:], 16, 64); err == nil {
-			n := int64(i)
+		hex := numStr[2:]
+		bi, ok := new(big.Int).SetString(hex, 16)
+		if ok {
 			if neg {
-				n = -n
+				bi.Neg(bi)
 			}
 			r.closeToken(TokenNumber)
-			return vm.MakeInt(int(n)), nil
+			return vm.MaybeDowngrade(bi), nil
 		}
 	}
 	// Octal literal: 0377
