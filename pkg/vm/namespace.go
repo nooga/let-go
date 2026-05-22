@@ -88,19 +88,52 @@ func NewNamespace(name string) *Namespace {
 
 func (n *Namespace) RegistrySize() int { return len(n.registry) }
 
+// isShadowingCoreRefer reports whether name `s` is currently visible
+// unqualified in namespace `n` via a refer of clojure.core.
+//
+// Refer entries are keyed by namespace name (e.g. "clojure.core"), not
+// by symbol — so we look up that single entry, then check whether `s`
+// is in scope via :refer :all or :refer :only.
+func isShadowingCoreRefer(n *Namespace, s Symbol) bool {
+	for _, ref := range n.refers {
+		if ref == nil || ref.ns != coreNamespacePtr {
+			continue
+		}
+		if ref.all {
+			return true
+		}
+		if ref.only != nil && ref.only[s] {
+			return true
+		}
+	}
+	return false
+}
+
 func (n *Namespace) Def(name string, val Value) *Var {
 	s := Symbol(name)
 	// Warn-on-core-shadow: emit Clojure-parity warning when a non-core
-	// namespace defines a name already exported by clojure.core, unless
-	// explicitly excluded via (:refer-clojure :exclude).
+	// namespace defines a name that is currently REFERRED in from
+	// clojure.core (i.e. previously visible in this ns unqualified),
+	// unless explicitly excluded via (:refer-clojure :exclude).
+	//
+	// Clojure JVM only warns on shadow-of-refer, not on raw name overlap:
+	//   (ns foo (:refer-clojure :only [defn]))
+	//   (defn reset! [x] x)  ;; no warning — reset! was never refered in
+	//
+	// Stdlib Go-side ns.Def calls (e.g. profile/reset!) build namespaces
+	// that don't auto-refer clojure.core, so they correctly stay silent.
+	// User code that uses the default (ns ...) form gets clojure.core
+	// auto-refered :all, so it does warn on shadow.
 	if coreNamespacePtr != nil && n != coreNamespacePtr && !n.excludes[s] {
-		if existing, ok := coreNamespacePtr.registry[s]; ok && existing != nil && !existing.isPrivate {
-			// Only warn the first time we shadow in this ns; subsequent
-			// re-defs of our own var don't re-warn.
-			if _, alreadyDefined := n.registry[s]; !alreadyDefined {
-				fmt.Fprintf(os.Stderr,
-					"WARNING: %s already refers to: #'clojure.core/%s in namespace: %s, being replaced by: #'%s/%s\n",
-					name, name, n.name, n.name, name)
+		if isShadowingCoreRefer(n, s) {
+			if existing, ok := coreNamespacePtr.registry[s]; ok && existing != nil && !existing.isPrivate {
+				// Only warn the first time we shadow in this ns; subsequent
+				// re-defs of our own var don't re-warn.
+				if _, alreadyDefined := n.registry[s]; !alreadyDefined {
+					fmt.Fprintf(os.Stderr,
+						"WARNING: %s already refers to: #'clojure.core/%s in namespace: %s, being replaced by: #'%s/%s\n",
+						name, name, n.name, n.name, name)
+				}
 			}
 		}
 	}
