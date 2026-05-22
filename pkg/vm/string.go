@@ -77,6 +77,24 @@ func (l String) InvokeMethod(name Symbol, args []Value) (Value, error) {
 			return NIL, fmt.Errorf("String.replace expected String replacement")
 		}
 		return String(strings.ReplaceAll(string(l), string(old), string(repl))), nil
+	case "getBytes":
+		if len(args) == 0 {
+			// No-arg form: let-go String is Go's UTF-8 string, so the
+			// default encoding is UTF-8 by construction.
+			return NewByteArrayFrom([]byte(string(l))), nil
+		}
+		if len(args) == 1 {
+			enc, ok := args[0].(String)
+			if !ok {
+				return NIL, fmt.Errorf("String.getBytes encoding must be String, got %s", args[0].Type().Name())
+			}
+			e := strings.ToUpper(string(enc))
+			if e != "UTF-8" && e != "UTF8" {
+				return NIL, fmt.Errorf("String.getBytes: only UTF-8 supported, got %q", string(enc))
+			}
+			return NewByteArrayFrom([]byte(string(l))), nil
+		}
+		return NIL, fmt.Errorf("String.getBytes expected 0 or 1 argument, got %d", len(args))
 	default:
 		return NIL, fmt.Errorf("method %s not found on String", name)
 	}

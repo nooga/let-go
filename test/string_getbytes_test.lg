@@ -1,0 +1,99 @@
+(ns test.string-getbytes-test
+  "Tests for String.getBytes interop. let-go strings are Go's UTF-8 strings,
+   so (.getBytes s) and (.getBytes s \"UTF-8\") both return the same UTF-8
+   bytes as a typed byte-array.
+
+   Difference from JVM: let-go's byte-array Get returns unsigned 0..255 via
+   aget (matching the underlying []byte cast). The JVM returns signed bytes
+   (-128..127) and idiomatically masks with 0xFF. Cross-platform code can
+   mask anyway for safety; pure let-go code can skip the mask.
+
+   Ground truth captured from Clojure 1.12.5 REPL on 2026-05-22:
+     (.getBytes \"héllo\" \"UTF-8\")  // alength=6, masked bytes=[104 195 169 108 108 111]"
+  (:require [test :refer :all]))
+
+;; --- Default encoding (UTF-8) ---
+
+(deftest getBytes-ascii-no-args
+  (testing ".getBytes with no args returns UTF-8 bytes for ASCII"
+    (let [b (.getBytes "hello")]
+      (is (= 5 (alength b)))
+      (is (= 104 (aget b 0)))
+      (is (= 101 (aget b 1)))
+      (is (= 108 (aget b 2)))
+      (is (= 108 (aget b 3)))
+      (is (= 111 (aget b 4))))))
+
+(deftest getBytes-utf8-explicit
+  (testing ".getBytes with explicit \"UTF-8\" works"
+    (let [b (.getBytes "hello" "UTF-8")]
+      (is (= 5 (alength b)))
+      (is (= 104 (aget b 0))))))
+
+(deftest getBytes-default-eq-utf8
+  (testing "no-args .getBytes equals \"UTF-8\" .getBytes"
+    (let [a (.getBytes "héllo")
+          b (.getBytes "héllo" "UTF-8")]
+      (is (= (alength a) (alength b)))
+      (dotimes [i (alength a)]
+        (is (= (aget a i) (aget b i)))))))
+
+;; --- Multi-byte (UTF-8 spans) ---
+
+(deftest getBytes-multibyte
+  (testing ".getBytes on a multi-byte UTF-8 string"
+    ;; "héllo" = [h é(2-byte) l l o], é = U+00E9 = 0xC3 0xA9 in UTF-8
+    (let [b (.getBytes "héllo" "UTF-8")]
+      (is (= 6 (alength b)))
+      (is (= 104 (aget b 0)))
+      (is (= 195 (aget b 1)))
+      (is (= 169 (aget b 2)))
+      (is (= 108 (aget b 3)))
+      (is (= 108 (aget b 4)))
+      (is (= 111 (aget b 5))))))
+
+(deftest getBytes-3-byte-utf8
+  (testing ".getBytes on a 3-byte UTF-8 codepoint"
+    ;; "€" = U+20AC = 0xE2 0x82 0xAC in UTF-8
+    (let [b (.getBytes "€" "UTF-8")]
+      (is (= 3 (alength b)))
+      (is (= 226 (aget b 0)))
+      (is (= 130 (aget b 1)))
+      (is (= 172 (aget b 2))))))
+
+(deftest getBytes-4-byte-utf8
+  (testing ".getBytes on a 4-byte UTF-8 codepoint"
+    ;; "🍎" = U+1F34E = 0xF0 0x9F 0x8D 0x8E in UTF-8
+    (let [b (.getBytes "🍎" "UTF-8")]
+      (is (= 4 (alength b)))
+      (is (= 240 (aget b 0)))
+      (is (= 159 (aget b 1)))
+      (is (= 141 (aget b 2)))
+      (is (= 142 (aget b 3))))))
+
+;; --- Empty / edge cases ---
+
+(deftest getBytes-empty
+  (testing ".getBytes of empty string is zero-length byte-array"
+    (let [b (.getBytes "" "UTF-8")]
+      (is (= 0 (alength b))))))
+
+;; --- Type ---
+
+(deftest getBytes-returns-byte-array
+  (testing ".getBytes returns a byte-array (TypedArray of kind ArrayByte)"
+    (is (= (type (.getBytes "x" "UTF-8"))
+           (type (byte-array 0))))))
+
+;; --- Encoding validation ---
+
+(deftest getBytes-unsupported-encoding-errors
+  (testing ".getBytes with non-UTF-8 encoding errors"
+    (is (= :err (try (.getBytes "x" "ISO-8859-1") :ok (catch e :err))))
+    (is (= :err (try (.getBytes "x" "ASCII") :ok (catch e :err))))))
+
+;; --- Arity validation ---
+
+(deftest getBytes-rejects-extra-args
+  (testing ".getBytes with 2+ encoding args errors"
+    (is (= :err (try (.getBytes "x" "UTF-8" "extra") :ok (catch e :err))))))
