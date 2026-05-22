@@ -15,27 +15,35 @@ import (
 )
 
 type Context struct {
-	parent         *Context
-	consts         *vm.Consts
-	chunk          *vm.CodeChunk
-	formalArgs     map[vm.Symbol]int
-	argCount       int // total fixed-arity parameter slots, including `_`s
-	source         string
-	variadric      bool
-	locals         []map[vm.Symbol]int
-	sp             int
-	spMax          int
-	isFunction     bool
-	isClosure      bool
-	closedOversC   int
-	closedOvers    map[vm.Symbol]*closureCell
-	closedOversSeq []vm.Symbol
-	recurPoints    []*recurPoint
-	tailPosition   bool
-	debug          bool
-	defName        string
-	currentForm    vm.Value // tracks the form being compiled for error source info
-	currentList    vm.Value // tracks the enclosing list form for error source info
+	parent     *Context
+	consts     *vm.Consts
+	chunk      *vm.CodeChunk
+	formalArgs map[vm.Symbol]int
+	argCount   int // total fixed-arity parameter slots, including `_`s
+	source     string
+	variadric  bool
+	locals     []map[vm.Symbol]int
+	// localSlotCounts mirrors locals: each entry is the raw count of stack
+	// slots in that scope. We track this separately because shadowed bindings
+	// (e.g. `(let [[a w] ... [b w] ...])`) overwrite the symbol→slot map
+	// entry while the older stack slot is still live; len(locals[i]) under-
+	// counts in that case, but the stack footprint is bindn (matching
+	// let/loop's OP_POP_N). recurCompiler reads from here to compute its
+	// `ignore` operand correctly.
+	localSlotCounts []int
+	sp              int
+	spMax           int
+	isFunction      bool
+	isClosure       bool
+	closedOversC    int
+	closedOvers     map[vm.Symbol]*closureCell
+	closedOversSeq  []vm.Symbol
+	recurPoints     []*recurPoint
+	tailPosition    bool
+	debug           bool
+	defName         string
+	currentForm     vm.Value // tracks the form being compiled for error source info
+	currentList     vm.Value // tracks the enclosing list form for error source info
 }
 
 func NewCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
@@ -656,14 +664,20 @@ func (c *Context) updatePlaceholderArg(placeholder int, arg int) {
 
 func (c *Context) pushLocals() {
 	c.locals = append(c.locals, map[vm.Symbol]int{})
+	c.localSlotCounts = append(c.localSlotCounts, 0)
 }
 
 func (c *Context) popLocals() {
 	c.locals = c.locals[0 : len(c.locals)-1]
+	c.localSlotCounts = c.localSlotCounts[0 : len(c.localSlotCounts)-1]
 }
 
 func (c *Context) addLocal(name vm.Symbol) {
 	c.locals[len(c.locals)-1][name] = c.sp - 1
+	// Count every binding, even shadowed ones: the older slot is still on the
+	// stack and counts toward this scope's footprint. recurCompiler relies on
+	// this to compute `ignore` correctly when crossing a shadowing scope.
+	c.localSlotCounts[len(c.localSlotCounts)-1]++
 }
 
 func (c *Context) incSP(i int) {
@@ -991,7 +1005,10 @@ func recurCompiler(c *Context, form vm.Value) error {
 		if passedScopes > 0 {
 			passedLocals := 0
 			for i := 0; i < passedScopes; i++ {
-				passedLocals += len(c.locals[len(c.locals)-i-1])
+				// Use the per-scope slot count rather than len(map): a scope
+				// with shadowed names has more live stack slots than distinct
+				// symbols, and OP_RECUR must drop all of them.
+				passedLocals += c.localSlotCounts[len(c.localSlotCounts)-i-1]
 			}
 			ignore += passedLocals
 		}

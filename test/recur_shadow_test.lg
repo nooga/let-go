@@ -1,0 +1,63 @@
+;
+; Regression tests for recur with shadowed names in chained let bindings.
+;
+; Bug 2026-05-22: recurCompiler used len(scope_map) for the 'ignore' operand,
+; undercounting when bindings shadowed names — sp grew by 1 per iteration
+; until it overflowed maxStack and panicked.
+;
+; Root cause: pkg/compiler/compiler.go:992-996. Fix: track per-scope slot
+; count alongside the symbol map.
+;
+
+(ns test.recur-shadow-test
+  (:require [test :refer :all]))
+
+(deftest loop-with-chained-destructure-shadowing
+  (testing "loop + chained destructure + name shadowing + recur completes"
+    (is (= :done
+           (loop [w 1 n 2]
+             (if (<= n 0)
+               :done
+               (let [[a w] [w (inc w)]
+                     [b w] [w (inc w)]]
+                 (recur w (dec n)))))))))
+
+(deftest loop-shadow-many-iterations
+  (testing "verifies the bug scales — many iterations must not blow the stack"
+    (is (= :done
+           (loop [w 1 n 100]
+             (if (<= n 0)
+               :done
+               (let [[a w] [w (inc w)]
+                     [b w] [w (inc w)]]
+                 (recur w (dec n)))))))))
+
+(deftest let-shadow-without-loop-still-works
+  (testing "control: let with shadowing outside loop must still work"
+    (is (= [1 2 3]
+           (let [w 1
+                 [a w] [w (inc w)]
+                 [b w] [w (inc w)]]
+             [a b w])))))
+
+(deftest loop-without-shadow-still-works
+  (testing "control: loop without shadowing must still work"
+    (is (= :done
+           (loop [w 1 n 2]
+             (if (<= n 0)
+               :done
+               (let [a w
+                     new-w (inc w)]
+                 (recur new-w (dec n)))))))))
+
+(deftest loop-with-shadow-in-catch
+  (testing "recur past a try with a catch that uses a shadowed name"
+    (is (= :ok
+           (loop [w 1 n 2]
+             (if (<= n 0) :ok
+               (let [r (try
+                         (let [[a w] [w (inc w)]
+                               [b w] [w (inc w)]]
+                           w)
+                         (catch e :caught))]
+                 (recur r (dec n)))))))))
