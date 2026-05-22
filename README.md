@@ -171,6 +171,9 @@ Prebuilt binaries for Linux, macOS, and Plan 9 in
 go install github.com/nooga/let-go@latest
 ```
 
+This installs the command as `let-go`. Homebrew and release archives install
+the same CLI as `lg`.
+
 ### Usage
 
 ```bash
