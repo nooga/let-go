@@ -298,6 +298,27 @@ embedding examples (defs, structs, channels, function calls).
 go test ./... -count=1 -timeout 30s
 ```
 
+## Contributing
+
+### Git merge driver for `core_compiled.lgb` (one-time setup)
+
+`pkg/rt/core_compiled.lgb` is a binary bundle regenerated from the embedded
+`.lg` sources. Git cannot meaningfully merge this binary on rebase, so we ship
+a custom merge driver that regenerates from sources after the `.lg` files have
+been merged as text.
+
+After cloning the repo (or pulling for the first time after this driver was
+added), register it locally:
+
+```bash
+git config merge.lgb.name "Regenerate core_compiled.lgb from sources"
+git config merge.lgb.driver "scripts/git-merge-lgb.sh %O %A %B %L %P"
+```
+
+This is a one-time per-clone step. After registration, rebases that touch any
+embedded `.lg` source will regenerate the `.lgb` automatically — no more
+binary merge conflicts when stacking PRs that edit `core.lg` and friends.
+
 ---
 
 Ever wanted a 20MB pure-Go JS runtime that typechecks and runs TypeScript?
