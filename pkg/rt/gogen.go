@@ -983,6 +983,9 @@ func cRender(v vm.Value) (result vm.Value, retErr error) {
 func installGogenNS() {
 	ns := DefNSBare("gogen")
 
+	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
+	ns.Exclude("type")
+
 	type entry struct {
 		name string
 		fn   vm.Value

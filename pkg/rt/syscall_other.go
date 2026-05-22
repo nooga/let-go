@@ -165,6 +165,9 @@ func installSyscallNS() {
 
 	ns := vm.NewNamespace("syscall")
 
+	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
+	ns.Exclude("mkdir")
+
 	// Linux-only stubs
 	ns.Def("clone", unsupported("clone"))
 	ns.Def("unshare", unsupported("unshare"))

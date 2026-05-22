@@ -389,6 +389,9 @@ func installHttpNS() {
 
 	ns := vm.NewNamespace("http")
 
+	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
+	ns.Exclude("get")
+
 	ns.Def("serve", serve)
 	ns.Def("get", httpGet)
 	ns.Def("post", httpPost)

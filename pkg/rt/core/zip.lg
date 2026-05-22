@@ -1,6 +1,7 @@
 ;; zip namespace — functional zippers for tree navigation and editing
 ;; Port of clojure.zip
-(ns zip)
+(ns zip
+  (:refer-clojure :exclude [next remove replace]))
 
 (defn zipper [branch? children make-node root]
   (with-meta [root nil]

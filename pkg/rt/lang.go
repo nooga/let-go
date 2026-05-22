@@ -2279,6 +2279,18 @@ func installLangNS() {
 		return nns, nil
 	})
 
+	excludeInCurrentNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		cns := CurrentNS.Deref().(*vm.Namespace)
+		for _, v := range vs {
+			sym, ok := v.(vm.Symbol)
+			if !ok {
+				return vm.NIL, fmt.Errorf("exclude-in-current-ns expected Symbol, got %s", v.Type().Name())
+			}
+			cns.Exclude(string(sym))
+		}
+		return vm.NIL, nil
+	})
+
 	use, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -5000,6 +5012,7 @@ func installLangNS() {
 	ns.Def("set-macro!", setMacro)
 	ns.Def("gensym", gensym)
 	ns.Def("in-ns", inNs)
+	ns.Def("exclude-in-current-ns", excludeInCurrentNs)
 	ns.Def("use", use)
 	ns.Def("alias", aliasf)
 	ns.Def("name", name)
@@ -6295,6 +6308,7 @@ func installLangNS() {
 	installIOBuiltins(ns)
 
 	CoreNS = ns
+	vm.SetCoreNamespace(ns)
 
 	RegisterNS(ns)
 	installClojureCompatAliases(ns)

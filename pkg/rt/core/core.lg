@@ -333,6 +333,22 @@
         body (if (string? (first body)) (next body) body)
         ;; An attr-map as the next body form is valid too — drop for now.
         body (if (map? (first body)) (next body) body)
+        ;; Extract (:refer-clojure :exclude [sym ...]) — emit exclusions before
+        ;; any defs in the body so warn-on-shadow respects them.
+        refer-clojure-form (reduce (fn [acc form]
+                                     (if (and (sequential? form)
+                                              (= :refer-clojure (first form)))
+                                       form
+                                       acc))
+                                   nil
+                                   body)
+        excludes (when refer-clojure-form
+                   (let [opts (apply hash-map (rest refer-clojure-form))]
+                     (:exclude opts)))
+        exclude-forms (if (and excludes (sequential? excludes))
+                        [(cons 'exclude-in-current-ns
+                               (map (fn [s] (list 'quote s)) excludes))]
+                        [])
         emit-one (fn [forms req]
                    (cond
                      (symbol? req)
@@ -378,6 +394,7 @@
                           body)]
     `(do
        (in-ns '~n)
+       ~@exclude-forms
        ~@req-forms
        ~@legacy)))
 

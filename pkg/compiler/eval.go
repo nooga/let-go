@@ -82,7 +82,9 @@ func loadPrecompiledBundle() error {
 		// LookupOrAdd (which also skips refers).
 		v := n.LookupLocal(vm.Symbol(name))
 		if v == nil {
-			return n.Def(name, vm.NIL)
+			// Use DefStub to avoid spurious warn-on-shadow warnings during
+			// bundle decoding (the chunk will properly Def the value later).
+			return n.DefStub(name)
 		}
 		return v
 	}

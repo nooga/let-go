@@ -1,7 +1,10 @@
 ;; string namespace — string utility functions
 ;; Native builtins (trim, upper-case, etc.) are defined in core via Go.
 ;; This namespace re-exports them under the string/ prefix.
-(ns string)
+(ns string
+  (:refer-clojure :exclude [replace reverse upper-case subs lower-case
+                            index-of last-index-of trim triml trimr
+                            starts-with? ends-with? includes? split]))
 
 (defn join
   ([coll] (apply str coll))

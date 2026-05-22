@@ -714,6 +714,14 @@ func installAsyncNS() {
 	ns := vm.NewNamespace("async")
 	ns.Refer(CoreNS, "", true)
 
+	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
+	for _, n := range []string{
+		"go*", ">!", "<!", "chan", "close!", "split", "reduce",
+		">!!", "<!!", "map", "take", "merge", "into",
+	} {
+		ns.Exclude(n)
+	}
+
 	// Re-export core primitives (extract root value from Var)
 	ns.Def("go*", coreNS.Lookup("go*").(*vm.Var).Deref())
 	ns.Def(">!", coreNS.Lookup(">!").(*vm.Var).Deref())

@@ -51,7 +51,7 @@ func main() {
 		n := rt.DefNSBare(nsName)
 		v := n.LookupLocal(vm.Symbol(name))
 		if v == nil {
-			return n.Def(name, vm.NIL)
+			return n.DefStub(name)
 		}
 		return v
 	}
