@@ -1315,7 +1315,16 @@ func doCompiler(c *Context, form vm.Value) error {
 		return nil
 	}
 	for i := range args {
-		// Detect top-level (in-ns 'foo) and update compiler namespace early
+		// Detect top-level (in-ns 'foo) and update compiler namespace early.
+		// Use LookupOrRegisterNSNoLoad rather than rt.NS so we don't trigger
+		// the resolver to load 'foo from disk: if the file we're currently
+		// compiling declares (ns foo ...), and a candidate path for ns 'foo
+		// matches our file, rt.NS would re-load and re-execute that file
+		// inside our compile — the body runs twice.
+		//
+		// The (in-ns) runtime fn itself uses LookupOrRegisterNSNoLoad for
+		// the same reason. This fix aligns the compile-time early
+		// detection with the runtime semantics.
 		if i == 0 && args[i].Type() == vm.ListType {
 			lst := args[i].(vm.Seq)
 			if lst.First().Type() == vm.SymbolType && vm.Symbol(lst.First().(vm.Symbol)) == vm.Symbol("in-ns") {
@@ -1329,7 +1338,7 @@ func doCompiler(c *Context, form vm.Value) error {
 							if qqN != nil {
 								namev := qqN.First()
 								if namev.Type() == vm.SymbolType {
-									if ns := rt.NS(string(namev.(vm.Symbol))); ns != nil {
+									if ns := rt.LookupOrRegisterNSNoLoad(string(namev.(vm.Symbol))); ns != nil {
 										c.SetCurrentNS(ns)
 									}
 								}
