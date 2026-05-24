@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -542,6 +543,30 @@ func TestNestedMapRoundtrip(t *testing.T) {
 	}
 }
 
+func TestLargeMapRoundtrip(t *testing.T) {
+	m := vm.EmptyPersistentMap
+	for i := range 100 {
+		key := string(rune('a'+i/26)) + string(rune('a'+i%26))
+		m = m.Assoc(vm.Keyword(key), vm.Int(i)).(*vm.PersistentMap)
+	}
+
+	got := roundtripValue(t, m)
+	gotMap, ok := got.(*vm.PersistentMap)
+	if !ok {
+		t.Fatalf("expected *PersistentMap, got %T", got)
+	}
+	if gotMap.RawCount() != 100 {
+		t.Errorf("count: got %d, want 100", gotMap.RawCount())
+	}
+	for i := range 100 {
+		key := string(rune('a'+i/26)) + string(rune('a'+i%26))
+		kw := vm.Keyword(key)
+		if gotMap.ValueAt(kw) != vm.Int(i) {
+			t.Errorf("key %v: got %v, want %d", kw, gotMap.ValueAt(kw), i)
+		}
+	}
+}
+
 func TestSetRoundtrip(t *testing.T) {
 	s := vm.NewPersistentSet([]vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)})
 	got := roundtripValue(t, s)
@@ -554,6 +579,47 @@ func TestSetRoundtrip(t *testing.T) {
 	}
 	if gotSet.Contains(vm.Int(1)) != vm.TRUE {
 		t.Error("set should contain 1")
+	}
+}
+
+func TestLargeVectorRoundtrip(t *testing.T) {
+	vec := make(vm.ArrayVector, 100)
+	for i := range 100 {
+		vec[i] = vm.Int(i)
+	}
+	got := roundtripValue(t, vec)
+	gotVec, ok := got.(vm.ArrayVector)
+	if !ok {
+		t.Fatalf("expected ArrayVector, got %T", got)
+	}
+	if len(gotVec) != 100 {
+		t.Errorf("length: got %d, want 100", len(gotVec))
+	}
+	for i := range 100 {
+		if gotVec[i] != vm.Int(i) {
+			t.Errorf("vec[%d]: got %v, want %d", i, gotVec[i], i)
+		}
+	}
+}
+
+func TestLargeSetRoundtrip(t *testing.T) {
+	items := make([]vm.Value, 100)
+	for i := range 100 {
+		items[i] = vm.Int(i)
+	}
+	s := vm.NewPersistentSet(items)
+	got := roundtripValue(t, s)
+	gotSet, ok := got.(*vm.PersistentSet)
+	if !ok {
+		t.Fatalf("expected *PersistentSet, got %T", got)
+	}
+	if gotSet.RawCount() != 100 {
+		t.Errorf("count: got %d, want 100", gotSet.RawCount())
+	}
+	for i := range 100 {
+		if gotSet.Contains(vm.Int(i)) != vm.TRUE {
+			t.Errorf("set should contain %d", i)
+		}
 	}
 }
 
@@ -755,6 +821,58 @@ func TestFullModuleRoundtrip(t *testing.T) {
 	}
 }
 
+func TestV2Roundtrip(t *testing.T) {
+	// Explicit v2 marker: verify the encoder writes version 2 and the decoder
+	// correctly reads it back on a module containing common scalar types.
+	consts := vm.NewConsts()
+	chunk := vm.NewCodeChunk(consts)
+	chunk.Append(vm.OP_LOAD_CONST, 0, vm.OP_RETURN)
+	chunk.SetMaxStack(2)
+
+	b := NewModuleBuilder()
+	b.AddChunk(chunk)
+
+	allConsts := []vm.Value{
+		vm.NIL, vm.TRUE, vm.FALSE,
+		vm.Int(0), vm.Int(42), vm.Int(-1),
+		vm.Float(3.14), vm.Float(0.0),
+		vm.String("hello"), vm.String("world"),
+		vm.Keyword("foo"), vm.Keyword("bar"),
+		vm.Symbol("baz"), vm.Symbol("quux"),
+		vm.Char('x'), vm.Char('λ'),
+		vm.VOID,
+		vm.EmptyList,
+	}
+	for _, v := range allConsts {
+		b.AddConst(v)
+	}
+	m := b.Build()
+	if m.Version != 2 {
+		t.Fatalf("expected version 2, got %d", m.Version)
+	}
+
+	var buf bytes.Buffer
+	if err := Encode(&buf, m); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	decoded, err := Decode(&buf)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if decoded.Version != 2 {
+		t.Fatalf("decoded version: got %d, want 2", decoded.Version)
+	}
+	if len(decoded.Consts) != len(allConsts) {
+		t.Fatalf("const count: got %d, want %d", len(decoded.Consts), len(allConsts))
+	}
+	for i, want := range allConsts {
+		got := decoded.Consts[i]
+		if got != want {
+			t.Errorf("const[%d]: got %v, want %v", i, got, want)
+		}
+	}
+}
+
 func TestStringDedup(t *testing.T) {
 	b := NewModuleBuilder()
 	b.AddConst(vm.Keyword("foo"))
@@ -931,6 +1049,99 @@ func TestChunkIndexOutOfRange(t *testing.T) {
 	_, err := Decode(&buf)
 	if err == nil {
 		t.Error("expected error for chunk index out of range")
+	}
+}
+
+func TestUnknownTagError(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	w.WriteBytes(Magic[:])
+	w.WriteUint16(2)  // version 2
+	w.WriteUint16(0)  // flags
+	w.WriteVarint(0)  // 0 strings
+	w.WriteVarint(0)  // 0 chunks
+	w.WriteVarint(1)  // 1 const
+	w.WriteByte(0xFF) // unknown tag ID 0x3F with version 3 (0b11_111111)
+	w.Flush()
+
+	_, err := Decode(&buf)
+	if err == nil {
+		t.Fatal("expected error for unknown tag")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "unknown tag") {
+		t.Fatalf("error message should mention 'unknown tag', got: %s", msg)
+	}
+}
+
+func TestV1DecodeStillWorks(t *testing.T) {
+	// Hand-craft a minimal v1 module and ensure the frozen v1 path decodes it.
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	w.WriteBytes(Magic[:])
+	w.WriteUint16(1) // version 1
+	w.WriteUint16(0) // flags
+	w.WriteVarint(1) // 1 string
+	w.WriteVarint(5) // length "hello"
+	w.WriteBytes([]byte("hello"))
+	w.WriteVarint(0)       // 0 chunks
+	w.WriteVarint(1)       // 1 const
+	w.WriteByte(TagString) // TagString in v1 is 0x05, same byte as v2
+	w.WriteVarint(0)       // string ref 0
+	w.Flush()
+
+	decoded, err := Decode(&buf)
+	if err != nil {
+		t.Fatalf("v1 decode failed: %v", err)
+	}
+	if decoded.Version != 1 {
+		t.Fatalf("version: got %d, want 1", decoded.Version)
+	}
+	if len(decoded.Consts) != 1 {
+		t.Fatalf("expected 1 const, got %d", len(decoded.Consts))
+	}
+	if decoded.Consts[0] != vm.String("hello") {
+		t.Errorf("const: got %v, want hello", decoded.Consts[0])
+	}
+}
+
+func TestUnsupportedCapabilityMask(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	w.WriteBytes(Magic[:])
+	w.WriteUint16(2)
+	w.WriteUint16(FlagCapabilities)
+	w.WriteUint32(0x00000001) // bit 0 set (CapVarintOps, not supported yet)
+	w.Flush()
+
+	_, err := Decode(&buf)
+	if err == nil {
+		t.Fatal("expected error for unsupported capability mask")
+	}
+	if !strings.Contains(err.Error(), "unsupported capability mask") {
+		t.Fatalf("expected 'unsupported capability mask' in error, got: %v", err)
+	}
+}
+
+func TestSupportedCapabilityMask(t *testing.T) {
+	// capability mask 0x00000000 should be accepted even when FlagCapabilities is set
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	w.WriteBytes(Magic[:])
+	w.WriteUint16(2)
+	w.WriteUint16(FlagCapabilities)
+	w.WriteUint32(0) // no capabilities required
+	w.WriteVarint(0) // 0 strings
+	w.WriteVarint(0) // 0 chunks
+	w.WriteVarint(0) // 0 consts
+	w.Flush()
+
+	decoded, err := Decode(&buf)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if decoded.Version != 2 {
+		t.Fatalf("version: got %d, want 2", decoded.Version)
 	}
 }
 

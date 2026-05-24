@@ -284,7 +284,15 @@ func (e *encoder) writeHeader(m *Module) error {
 	if err := e.w.WriteUint16(m.Version); err != nil {
 		return err
 	}
-	return e.w.WriteUint16(m.Flags)
+	if err := e.w.WriteUint16(m.Flags); err != nil {
+		return err
+	}
+	if m.Flags&FlagCapabilities != 0 {
+		if err := e.w.WriteUint32(m.Capabilities); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *encoder) writeStringTable() error {
