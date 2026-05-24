@@ -19,10 +19,12 @@ func NewLetGo(ns string) (*LetGo, error) {
 	cp := vm.NewConsts()
 	nso := rt.NS(ns)
 	c := compiler.NewCompiler(cp, nso)
+	loader := resolver.NewNSResolver(c, []string{"."})
+	loader.DiscoverDepsEdn(".")
 	ret := &LetGo{
 		cp:     cp,
 		c:      c,
-		loader: resolver.NewNSResolver(c, []string{"."}),
+		loader: loader,
 	}
 	rt.SetNSLoader(ret.loader)
 	return ret, nil

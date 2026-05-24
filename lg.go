@@ -353,7 +353,8 @@ func init() {
 }
 
 // buildSearchPaths resolves the resolver's path list from the -source-paths
-// flag (preferred) or the LG_SOURCE_PATHS env var (fallback).
+// flag (preferred), the LG_SOURCE_PATHS env var, or deps.edn in the
+// current directory (fallback). Always includes "." as the first entry.
 func buildSearchPaths() []string {
 	explicitSet := false
 	flag.Visit(func(f *flag.Flag) {
@@ -361,7 +362,13 @@ func buildSearchPaths() []string {
 			explicitSet = true
 		}
 	})
-	return resolver.PathsFromInputs(sourcePaths, os.Getenv("LG_SOURCE_PATHS"), explicitSet)
+	if explicitSet || os.Getenv("LG_SOURCE_PATHS") != "" {
+		return resolver.PathsFromInputs(sourcePaths, os.Getenv("LG_SOURCE_PATHS"), explicitSet)
+	}
+	if depsPaths := resolver.PathsFromDepsEdn("."); depsPaths != nil {
+		return append([]string{"."}, depsPaths...)
+	}
+	return []string{"."}
 }
 
 func initCompiler(debug bool) *compiler.Context {

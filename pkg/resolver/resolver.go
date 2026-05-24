@@ -52,12 +52,57 @@ func PathsFromInputs(explicit, fallback string, explicitSet bool) []string {
 	return append([]string{"."}, ParseSearchPaths(raw)...)
 }
 
+// PathsFromDepsEdn reads deps.edn in dir and returns the :paths entries.
+// Returns nil if the file doesn't exist, can't be parsed, or has no :paths.
+func PathsFromDepsEdn(dir string) []string {
+	depsPath := path.Join(dir, "deps.edn")
+	data, err := os.ReadFile(depsPath)
+	if err != nil {
+		return nil
+	}
+	val, err := compiler.ReadString(string(data))
+	if err != nil {
+		return nil
+	}
+	m, ok := val.(*vm.PersistentMap)
+	if !ok {
+		return nil
+	}
+	if !m.Contains(vm.Keyword("paths")) {
+		return nil
+	}
+	pathsVal := m.ValueAt(vm.Keyword("paths"))
+	vec, ok := pathsVal.(vm.ArrayVector)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(vec))
+	for _, item := range vec {
+		if s, ok := item.(vm.String); ok && s != "" {
+			out = append(out, string(s))
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func NewNSResolver(ctx *compiler.Context, path []string) *NSResolver {
 	return &NSResolver{
 		ctx:          ctx,
 		path:         path,
 		cloading:     make(map[string]bool),
 		LoadedChunks: make(map[string]*vm.CodeChunk),
+	}
+}
+
+// DiscoverDepsEdn reads deps.edn in dir and, if present, appends its
+// :paths entries to the resolver's search path. Called by runtime entry
+// points after NewNSResolver when the caller wants deps.edn support.
+func (r *NSResolver) DiscoverDepsEdn(dir string) {
+	if depsPaths := PathsFromDepsEdn(dir); depsPaths != nil {
+		r.path = append(r.path, depsPaths...)
 	}
 }
 
@@ -205,4 +250,29 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) *vm.Names
 	nns := r.ctx.CurrentNS()
 	r.ctx.SetCurrentNS(ons)
 	return nns
+}
+
+func init() {
+	// Register the resolver namespace so Lisp code can call
+	// resolver/deps-paths to read deps.edn :paths entries.
+	ns := vm.NewNamespace("resolver")
+
+	depsPathsFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("resolver/deps-paths expects 1 arg")
+		}
+		dir, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("resolver/deps-paths expected String dir")
+		}
+		paths := PathsFromDepsEdn(string(dir))
+		result := make([]vm.Value, len(paths))
+		for i, p := range paths {
+			result[i] = vm.String(p)
+		}
+		return vm.NewArrayVector(result), nil
+	})
+	ns.Def("deps-paths", depsPathsFn)
+
+	rt.RegisterNS(ns)
 }
