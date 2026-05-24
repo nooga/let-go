@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path"
 	stdstrings "strings"
@@ -20,6 +21,35 @@ type NSResolver struct {
 	LoadedChunks map[string]*vm.CodeChunk
 	// LoadOrder preserves the order in which namespaces were loaded (dependency order).
 	LoadOrder []string
+}
+
+var embeddedSources = map[string]*string{
+	"walk":                &rt.WalkSrc,
+	"core":                &rt.CoreSrc,
+	"test":                &rt.TestSrc,
+	"string":              &rt.StringSrc,
+	"set":                 &rt.SetSrc,
+	"pprint":              &rt.PprintSrc,
+	"edn":                 &rt.EdnSrc,
+	"io":                  &rt.IoSrc,
+	"async":               &rt.AsyncSrc,
+	"zip":                 &rt.ZipSrc,
+	"data":                &rt.DataSrc,
+	"ir.data":             &rt.IRDataSrc,
+	"ir.zipper":           &rt.IRZipperSrc,
+	"ir.passes":           &rt.IRPassesSrc,
+	"ir.dominance":        &rt.IRDominanceSrc,
+	"ir.lower":            &rt.IRLowerSrc,
+	"ir.passes.dce":       &rt.IRPassDCESrc,
+	"ir.passes.constfold": &rt.IRPassConstFoldSrc,
+	"ir.passes.cse":       &rt.IRPassCSESrc,
+	"ir.passes.typeinfer": &rt.IRPassTypeInferSrc,
+	"ir.passes.licm":      &rt.IRPassLICMSrc,
+	"ir.build":            &rt.IRBuildSrc,
+	"ir.validate":         &rt.IRValidateSrc,
+	"ir.passes.pipeline":  &rt.IRPassPipelineSrc,
+	"ir.dump":             &rt.IRDumpSrc,
+	"check":               &rt.CheckSrc,
 }
 
 // ParseSearchPaths splits a path-list string on os.PathListSeparator,
@@ -112,17 +142,21 @@ func (r *NSResolver) loadFile(path string) *vm.Namespace {
 		return nil
 	}
 	defer f.Close()
+	return r.loadSource(path, f, true)
+}
+
+func (r *NSResolver) loadSource(sourceName string, reader io.Reader, recordChunk bool) *vm.Namespace {
 	ons := r.ctx.CurrentNS()
 	freshCtx := compiler.NewCompiler(r.ctx.Consts(), ons)
-	freshCtx.SetSource(path)
-	chunk, _, err := freshCtx.CompileMultiple(f)
+	freshCtx.SetSource(sourceName)
+	chunk, _, err := freshCtx.CompileMultiple(reader)
 	nns := freshCtx.CurrentNS()
 	r.ctx.SetCurrentNS(ons)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to load %s: %s\n", path, err)
+		fmt.Fprintf(os.Stderr, "error: failed to load %s: %s\n", sourceName, err)
 		return nil
 	}
-	if chunk != nil && nns != nil {
+	if recordChunk && chunk != nil && nns != nil {
 		name := nns.Name()
 		r.LoadedChunks[name] = chunk
 		r.LoadOrder = append(r.LoadOrder, name)
@@ -179,59 +213,21 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 		return r.execPrecompiled(name, chunk)
 	}
 
-	var src string
-	switch name {
-	case "walk":
-		src = rt.WalkSrc
-	case "core":
-		src = rt.CoreSrc
-	case "test":
-		src = rt.TestSrc
-	case "string":
-		src = rt.StringSrc
-	case "set":
-		src = rt.SetSrc
-	case "pprint":
-		src = rt.PprintSrc
-	case "edn":
-		src = rt.EdnSrc
-	case "io":
-		src = rt.IoSrc
-	case "async":
-		src = rt.AsyncSrc
-	case "zip":
-		src = rt.ZipSrc
-	case "data":
-		src = rt.DataSrc
-	case "ir.data":
-		src = rt.IRDataSrc
-	case "check":
-		src = rt.CheckSrc
-	case "term":
+	if name == "term" {
 		// term is a pure Go namespace, already registered in init()
 		return rt.NS("term")
-	default:
+	}
+	srcPtr := embeddedSources[name]
+	if srcPtr == nil {
 		return nil
 	}
+	src := *srcPtr
 	if src == "" {
 		return nil
 	}
 	r.cloading[name] = true
 	defer delete(r.cloading, name)
-	// Save and restore CurrentNS — loading changes the global CurrentNS var
-	ons := r.ctx.CurrentNS()
-	freshCtx := compiler.NewCompiler(r.ctx.Consts(), ons)
-	freshCtx.SetSource("<embedded:" + name + ">")
-	_, _, err := freshCtx.CompileMultiple(stdstrings.NewReader(src))
-	nns := freshCtx.CurrentNS()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to load embedded namespace %s: %s\n", name, err)
-		r.ctx.SetCurrentNS(ons)
-		return nil
-	}
-	// Restore the caller's namespace
-	r.ctx.SetCurrentNS(ons)
-	return nns
+	return r.loadSource("<embedded:"+name+">", stdstrings.NewReader(src), false)
 }
 
 // execPrecompiled executes a precompiled namespace chunk.
