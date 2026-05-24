@@ -756,7 +756,7 @@
                      (if variadic?
                        (- (count args) 2)   ; & and the rest-sym don't count
                        (count args)))]
-    (if (and *ir-compile* single?)
+    (if *ir-compile*
       ;; `resolve` defers ir.passes.pipeline lookup to RUNTIME — core.lg
       ;; compiles before ir.passes.pipeline exists, so a direct symbol
       ;; reference would fail at bundle-gen time.
@@ -764,9 +764,13 @@
             cf-var     (resolve 'ir.passes.pipeline/compile-form)
             _          (when (nil? cf-var)
                          (throw "*ir-compile* is true but ir.passes.pipeline isn't loaded; (require 'ir.passes.pipeline) first"))
-            chunk      (cf-var whole-form (deref #'*ns*))
-            fn-val     (chunk->fn arity variadic? chunk)]
-        (list 'def name fn-val))
+            result     (cf-var whole-form (deref #'*ns*))]
+        (if single?
+          ;; Single-arity: result is a lowered chunk
+          (let [fn-val (chunk->fn arity variadic? result)]
+            (list 'def name fn-val))
+          ;; Multi-arity: result is the raw *MultiArityFn value
+          (list 'def name result)))
       `(def ~name (fn ~@forms)))))
 
 (defmacro while [test & body]

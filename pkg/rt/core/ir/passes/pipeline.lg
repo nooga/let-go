@@ -20,6 +20,7 @@
             [ir.passes.cse :refer [cse]]
             [ir.passes.dce :refer [dce]]
             [ir.passes.licm :refer [licm]]
+            [ir.passes.typeinfer :refer [typeinfer]]
             [ir.validate :refer [validate-fn!]]
             [ir.lower :as lower]))
 
@@ -34,6 +35,7 @@
   (licm f)                (validate-fn! f "licm")
   (constfold f)           (validate-fn! f "constfold-3")
   (dce f)                 (validate-fn! f "dce")
+  (typeinfer f)
   f)
 
 ;; --- end-to-end: form → IR → optimized IR → bytecode -----------------
@@ -42,7 +44,7 @@
 ;; so user-level macros (cond, when, and, or, ->) get expanded while
 ;; build-known shapes reach build-form as the special forms they are.
 (def ^:private build-known-heads
-  #{'let* 'if 'do 'quote 'loop 'recur
+  #{'let* 'if 'do 'quote 'loop 'loop* 'recur
     '+ '- '* '< '<= '> '>= '=})
 
 (defn- expand-fully
@@ -74,15 +76,35 @@
 (defn- compile-form* [form]
   "Drives (defn NAME [args] body...) through expand → build → optimize → lower.
    Body forms are macroexpanded; defn and the args vector are passed through
-   intact so build-fn's structural reader still works."
-  (let [name-sym   (nth form 1)
-        args-vec   (nth form 2)
-        body-forms (map expand-all (drop 3 form))
-        expanded   (apply list 'defn name-sym args-vec body-forms)]
-    (-> expanded
-        ir.build/build-fn
-        optimize-fn
-        lower/lower)))
+   intact so build-fn's structural reader still works.
+   Returns a lowered chunk for single-arity, or the raw *MultiArityFn value
+   for multi-arity (so callers can bind it directly)."
+  (let [name-sym    (nth form 1)
+        maybe-doc   (nth form 2)
+        has-doc?    (string? maybe-doc)
+        first-form  (if has-doc? (nth form 3) maybe-doc)]
+    (if (vector? first-form)
+      ;; Single arity: standard path
+      (let [args-vec   first-form
+            body-forms (map expand-all (drop (if has-doc? 4 3) form))
+            expanded   (apply list 'defn name-sym args-vec body-forms)]
+        (-> expanded
+            ir.build/build-fn
+            optimize-fn
+            lower/lower))
+      ;; Multi-arity: build each arity separately, combine
+      (let [arities   (drop (if has-doc? 3 2) form)
+            fn-vals   (mapv (fn [arity-form]
+                              (let [args-vec   (first arity-form)
+                                    body-forms (map expand-all (rest arity-form))
+                                    expanded   (apply list 'defn name-sym args-vec body-forms)
+                                    chunk      (-> expanded
+                                                    ir.build/build-fn
+                                                    optimize-fn
+                                                    lower/lower)]
+                                (chunk->fn (count args-vec) false chunk)))
+                            arities)]
+        (make-multi-arity (apply list fn-vals))))))
 
 (defn compile-form [form & caller-ns]
   (if (seq caller-ns)

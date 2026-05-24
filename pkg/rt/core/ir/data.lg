@@ -18,6 +18,7 @@
 ;;     {:name      String
 ;;      :arity     Int
 ;;      :variadic? Bool
+;;      :arg-types [Type] | nil
 ;;      :entry     BlockID (Int)
 ;;      :consts    boxed *vm.Consts
 ;;      :insts     vector of Inst maps, indexed by InstId
@@ -27,7 +28,7 @@
 ;;
 ;;   Inst (plain map):
 ;;     {:op kw :refs [InstId] :aux v :block BlockID
-;;      :source-infos [boxed vm.SourceInfo] :type kw}
+;;      :source-infos [boxed vm.SourceInfo] :type Type}
 ;;
 ;;   Block (plain map):
 ;;     {:id BlockID :params [InstId] :insts [InstId]
@@ -59,10 +60,11 @@
   (atom {:name      name
          :arity     arity
          :variadic? variadic?
+         :arg-types nil
          :entry     0
          :consts    (ir/new-consts)
          :insts     []
-         :blocks    [{:id 0 :params [] :insts [] :preds [] :term 0}]
+         :blocks    [{:id 0 :params [] :insts [] :preds [] :term nil}]
          :uses-cache nil
          :uses-dirty? true}))
 
@@ -77,6 +79,7 @@
 (defn fn-name      [f] (:name @f))
 (defn fn-arity     [f] (:arity @f))
 (defn fn-variadic? [f] (:variadic? @f))
+(defn fn-arg-types [f] (:arg-types @f))
 (defn fn-entry     [f] (:entry @f))
 (defn fn-consts    [f] (:consts @f))
 (defn entry-block  [f] (:entry @f))
@@ -127,7 +130,7 @@
   "Allocate a new empty Block; return its ID."
   (let [bid (count (:blocks @f))]
     (swap! f update :blocks conj
-           {:id bid :params [] :insts [] :preds [] :term 0})
+           {:id bid :params [] :insts [] :preds [] :term nil})
     bid))
 
 (defn add-inst [f block op-kw refs aux]
@@ -292,7 +295,7 @@
 
 (let [target 'ir
       syms   '[new-fn new-branch-target new-cond-target
-               fn-name fn-arity fn-variadic? fn-entry fn-consts entry-block
+               fn-name fn-arity fn-variadic? fn-arg-types fn-entry fn-consts entry-block
                inst-count blocks
                op refs aux block-of type-of source-infos
                block-params block-preds block-insts block-term
@@ -307,4 +310,3 @@
                uses invalidate-uses!]]
   (doseq [sym syms]
     (intern target sym (deref (resolve (symbol "ir.data" (str sym)))))))
-

@@ -47,25 +47,30 @@
         (recur (inc i))))))
 
 (defn- check-blocks-terminated! [f label]
+  (println "VALIDATE-DEBUG: running check-blocks-terminated!")
   (let [blocks (:blocks @f)
         insts  (:insts @f)]
     (loop [i 0]
       (when (< i (count blocks))
         (let [blk     (nth blocks i)
+              preds   (:preds blk)
               term-id (:term blk)]
-          (when (nil? term-id)
-            (throw (str "validate after " label
-                        ": block #" i " has no :term field")))
-          (when (or (< term-id 0) (>= term-id (count insts)))
-            (throw (str "validate after " label
-                        ": block #" i " :term=" term-id
-                        " out of insts range [0," (count insts) ")")))
-          (let [term-inst (nth insts term-id)
-                term-op   (nth term-inst 0)]
-            (when-not (ir/op-terminator? term-op)
+          ;; Skip unreachable blocks (no preds, not entry) — they may be
+          ;; unused join blocks from nested ifs where both branches terminate.
+          (when (or (= i 0) (seq preds))
+            (when (nil? term-id)
+              (throw (str "VALIDATE-BANANA after " label
+                          ": block #" i " has no :term field")))
+            (when (or (< term-id 0) (>= term-id (count insts)))
               (throw (str "validate after " label
-                          ": block #" i " :term Inst #" term-id
-                          " has non-terminator op " term-op)))))
+                          ": block #" i " :term=" term-id
+                          " out of insts range [0," (count insts) ")")))
+            (let [term-inst (nth insts term-id)
+                  term-op   (nth term-inst 0)]
+              (when-not (ir/op-terminator? term-op)
+                (throw (str "validate after " label
+                            ": block #" i " :term Inst #" term-id
+                            " has non-terminator op " term-op))))))
         (recur (inc i))))))
 
 (defn- check-no-cross-block-refs! [f label]

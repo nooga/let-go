@@ -218,7 +218,7 @@ func (l *MultiArityFn) String() string {
 	return fmt.Sprintf("<mfn %s %p>", l.name, l)
 }
 
-func makeMultiArity(fns []Value) (*MultiArityFn, error) {
+func MakeMultiArity(fns []Value) (*MultiArityFn, error) {
 	ma := &MultiArityFn{
 		arity: 0,
 		fns:   map[int]Fn{},

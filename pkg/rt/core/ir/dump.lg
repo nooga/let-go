@@ -28,17 +28,55 @@
    name field in pkg/ir/op_generated.go."
   (str/join "" (map str/capitalize (str/split (name op-kw) #"-"))))
 
-(defn type-display [t]
-  "Map an ir/type-of keyword to its dump-format string. :unknown → ?."
+(def ^:private type-order
+  {:true 0
+   :false 1
+   :bool 2
+   :int 3
+   :float 4
+   :number 5
+   :string 6
+   :nil 7
+   :unknown 8
+   :any 9
+   :bottom 10})
+
+(defn- scalar-type-display [t]
   (case t
-    :unknown "?"
+    :unknown "unknown"
+    :bottom  "bottom"
+    :true    "true"
+    :false   "false"
     :int     "int"
     :float   "float"
+    :number  "number"
     :bool    "bool"
     :nil     "nil"
     :string  "string"
     :any     "any"
     "??"))
+
+(defn type-display [t]
+  "Render an IR type for diagnostics. Unions print in a stable pretty form."
+  (cond
+    (keyword? t)
+      (scalar-type-display t)
+    (and (vector? t) (= :union (first t)))
+      (str "union{"
+           (str/join ","
+                     (map type-display
+                          (sort-by (fn [member]
+                                     (get type-order member 100))
+                                   (rest t))))
+           "}")
+    (and (vector? t) (= :const (first t)))
+      (let [tag (nth t 1)
+            v   (nth t 2)]
+        (case tag
+          :int   (str "int(" v ")")
+          :float (str "float(" v ")")
+          "??"))
+    :else "??"))
 
 (defn- format-args [args]
   (str/join ", " (map (fn [a] (str "v" a)) args)))

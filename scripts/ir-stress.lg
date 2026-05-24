@@ -6,7 +6,7 @@
 ;;
 ;; Skips cleanly if xsofy isn't checked out at the expected path.
 ;;
-;; Usage:  go run . scripts/ir-stress.lg
+;; Usage:  LG_SOURCE_PATHS=/path/to/xsofy go run . scripts/ir-stress.lg
 (require 'ir.data)
 (require 'ir.passes.pipeline)
 
@@ -20,6 +20,28 @@
     (let [src (slurp path)]
       (read-string (str "(do " src ")")))
     (catch e nil)))
+
+(defn ns-name-from [ns-form-]
+  "Extract the namespace symbol from an (ns name ...) form."
+  (when (and ns-form- (seq? ns-form-) (> (count ns-form-) 1))
+    (nth ns-form- 1)))
+
+(defn require-deps! [ns-form-]
+  "Given an (ns name (:require ...)) form, require each dependency
+   with aliases set up."
+  (when ns-form-
+    (doseq [clause (drop 2 ns-form-)]
+      (when (and (seq? clause) (= (first clause) :require))
+        (doseq [spec (rest clause)]
+          (try
+            (cond
+              (symbol? spec)
+                (require spec)
+              (vector? spec)
+                ;; Pass the full vector so :as aliases are registered
+                (require spec)
+              :else nil)
+            (catch e nil)))))))
 
 (defn defn-forms [src-form]
   (when (and src-form (seq? src-form))
@@ -43,12 +65,23 @@
         defns  (vec (defn-forms parsed))]
     (if (nil? parsed)
       {:file path :read-error true}
-      (let [results (mapv (fn [d] [(nth d 1) (try-ir d)]) defns)
-            ok     (count (filter (fn [[_ r]] (= :ok r)) results))
-            errs   (filter (fn [[_ r]] (not= :ok r)) results)
-            classes (frequencies (map (fn [[_ r]] r) errs))]
-        {:file path :total (count defns) :ok ok :err (count errs)
-         :classes (take 5 (reverse (sort-by val classes)))}))))
+      (let [ns-form- (first (filter (fn [f] (and (seq? f) (= (first f) 'ns)))
+                                    (rest parsed)))
+            ns-sym   (ns-name-from ns-form-)]
+        ;; Switch to the file's namespace so aliases resolve correctly
+        (when ns-sym
+          (try
+            (eval (list 'in-ns (list 'quote ns-sym)))
+            (catch e nil)))
+        ;; Load dependencies (but not the file itself — that can fail
+        ;; due to unsupported forms in the Go compiler).
+        (require-deps! ns-form-)
+        (let [results (mapv (fn [d] [(nth d 1) (try-ir d)]) defns)
+              ok     (count (filter (fn [[_ r]] (= :ok r)) results))
+              errs   (filter (fn [[_ r]] (not= :ok r)) results)
+              classes (frequencies (map (fn [[_ r]] r) errs))]
+          {:file path :total (count defns) :ok ok :err (count errs)
+           :classes (take 5 (reverse (sort-by val classes)))})))))
 
 (defn run []
   (println "=== IR-pipeline coverage stress test ===")
@@ -62,7 +95,7 @@
         (println (str (:file r) ": " (:ok r) "/" (:total r) " ok"))))
     (println (str "\nTOTAL: " oks "/" total " ok"))
     (println "\nTop error classes:")
-    (doseq [[msg n] (take 8 (reverse (sort-by val agg)))]
+    (doseq [[msg n] (take 5 (reverse (sort-by val agg)))]
       (println (str "  " n "  " msg)))))
 
 (run)

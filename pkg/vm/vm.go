@@ -873,7 +873,7 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.sp -= n
 
-			fn, err := makeMultiArity(fns)
+			fn, err := MakeMultiArity(fns)
 			if err != nil {
 				return NIL, NewExecutionError("MAKE_MULTI_ARITY failed").Wrap(err)
 			}

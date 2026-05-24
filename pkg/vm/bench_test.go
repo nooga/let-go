@@ -146,7 +146,7 @@ func BenchmarkMultiArity(b *testing.B) {
 	fn2Chunk.SetMaxStack(4)
 	fn2 := MakeFunc(2, false, fn2Chunk)
 
-	ma, _ := makeMultiArity([]Value{fn1, fn2})
+	ma, _ := MakeMultiArity([]Value{fn1, fn2})
 
 	b.Run("1Arg", func(b *testing.B) {
 		args := []Value{Int(42)}

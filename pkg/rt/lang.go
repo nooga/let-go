@@ -24,6 +24,9 @@ import (
 
 var nsRegistry map[string]*vm.Namespace
 
+// nsMu protects concurrent access to nsRegistry and nsNeedsLoad
+var nsMu sync.RWMutex
+
 var (
 	tapsMu sync.Mutex
 	taps   []vm.Fn
@@ -78,9 +81,12 @@ func GetNSLoader() NSLoader {
 func init() {
 	nsRegistry = make(map[string]*vm.Namespace)
 
-	// Register global namespace lookup so qualified symbols (foo/x) work
+	// Register global namespace lookup so qualified symbols (foo/x) work.
+	// This callback is called on every qualified symbol resolution that misses
+	// the cache. It must be cheap and must not trigger the loader—that only
+	// happens in LookupOrRegisterNS.
 	vm.SetNSLookup(func(name string) *vm.Namespace {
-		return LookupOrRegisterNS(resolveNSAlias(name))
+		return lookupNSCached(resolveNSAlias(name))
 	})
 
 	// Wire up ValueEquals for OP_EQ fast path in the VM
@@ -109,14 +115,22 @@ func init() {
 }
 
 func AllNSes() map[string]*vm.Namespace {
-	return nsRegistry
+	nsMu.RLock()
+	defer nsMu.RUnlock()
+	result := make(map[string]*vm.Namespace)
+	for k, v := range nsRegistry {
+		result[k] = v
+	}
+	return result
 }
 
 func FuzzyNamespacedSymbolLookup(currentNS *vm.Namespace, s vm.Symbol) []vm.Symbol {
 	sns := s.Namespace()
 	var ns *vm.Namespace
 	if sns != vm.NIL {
+		nsMu.RLock()
 		ns = nsRegistry[string(sns.(vm.String))]
+		nsMu.RUnlock()
 	} else {
 		ns = currentNS
 	}
@@ -130,10 +144,23 @@ func NS(name string) *vm.Namespace {
 
 // RequireNS loads/materializes a namespace and reports an error when a loader
 // is configured but the namespace could not be loaded.
+// RequireNS loads/materializes a namespace and reports an error if a loader
+// is configured but the namespace could not be loaded. Returns nil namespace
+// on error (no half-initialized placeholder is leaked).
 func RequireNS(name string) (*vm.Namespace, error) {
 	canonical := resolveNSAlias(name)
 	ns := LookupOrRegisterNS(canonical)
-	if nsLoader != nil && nsNeedsLoad[canonical] {
+
+	nsMu.RLock()
+	needsLoad := nsNeedsLoad[canonical]
+	nsMu.RUnlock()
+
+	if nsLoader != nil && needsLoad {
+		// Loader is configured but namespace still needs loading (load failed).
+		// Back out the placeholder registration so retry is clean.
+		nsMu.Lock()
+		delete(nsRegistry, canonical)
+		nsMu.Unlock()
 		return nil, fmt.Errorf("unable to load namespace %s", name)
 	}
 	return ns, nil
@@ -147,7 +174,11 @@ func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
 	if CoreNS != nil && namespace != CoreNS {
 		namespace.Refer(CoreNS, "", true)
 	}
+
+	nsMu.Lock()
 	nsRegistry[resolveNSAlias(namespace.Name())] = namespace
+	nsMu.Unlock()
+
 	return namespace
 }
 
@@ -158,11 +189,23 @@ var nsNeedsLoad = map[string]bool{}
 // MarkNSNeedsLoad flags a namespace as needing on-demand loading even though
 // it already exists in the registry (created during bytecode decoding).
 func MarkNSNeedsLoad(name string) {
+	nsMu.Lock()
+	defer nsMu.Unlock()
 	nsNeedsLoad[name] = true
 }
 
 // LookupNS returns a namespace if it exists, nil otherwise. Does not create.
+// lookupNSCached returns a namespace from the registry without invoking the loader.
+// Used by the VM's qualified symbol resolver to avoid triggering loads on every miss.
+func lookupNSCached(name string) *vm.Namespace {
+	nsMu.RLock()
+	defer nsMu.RUnlock()
+	return nsRegistry[name]
+}
+
 func LookupNS(name string) *vm.Namespace {
+	nsMu.RLock()
+	defer nsMu.RUnlock()
 	return nsRegistry[resolveNSAlias(name)]
 }
 
@@ -171,57 +214,106 @@ func LookupNS(name string) *vm.Namespace {
 // var homes for not-yet-loaded namespaces.
 func DefNSBare(name string) *vm.Namespace {
 	name = resolveNSAlias(name)
+	nsMu.RLock()
 	if e := nsRegistry[name]; e != nil {
+		nsMu.RUnlock()
 		return e
 	}
+	nsMu.RUnlock()
+
 	ns := vm.NewNamespace(name)
 	if CoreNS != nil {
 		ns.Refer(CoreNS, "", true)
 	}
+
+	nsMu.Lock()
 	nsRegistry[name] = ns
+	nsMu.Unlock()
+
 	return ns
 }
-
 func LookupOrRegisterNS(name string) *vm.Namespace {
+	nsMu.RLock()
 	e := nsRegistry[name]
 	needsLoad := nsNeedsLoad[name]
+	nsMu.RUnlock()
+
+	// If namespace exists and doesn't need loading, return it
 	if e != nil && !needsLoad {
 		return e
 	}
-	if nsLoader != nil {
-		n := nsLoader.Load(name)
-		if n != nil {
-			nsRegistry[name] = n
-			delete(nsNeedsLoad, name)
-			return n
+
+	// Try to load if: (a) namespace exists but needs loading, or (b) loader is configured
+	if nsLoader != nil && (needsLoad || e == nil) {
+		// Mark that we're attempting load to prevent re-entrancy
+		nsMu.Lock()
+		wasMarked := nsNeedsLoad[name]
+		delete(nsNeedsLoad, name)
+		nsMu.Unlock()
+
+		loadedNS := nsLoader.Load(name)
+		if loadedNS != nil {
+			nsMu.Lock()
+			nsRegistry[name] = loadedNS
+			nsMu.Unlock()
+			return loadedNS
+		}
+
+		// Loader returned nil. Check if in-ns side-effected the registry.
+		nsMu.RLock()
+		if e := nsRegistry[name]; e != nil {
+			nsMu.RUnlock()
+			return e
+		}
+		nsMu.RUnlock()
+
+		// Loader failed. Mark for retry if this namespace needed loading.
+		if wasMarked || e == nil {
+			nsMu.Lock()
+			nsNeedsLoad[name] = true
+			nsMu.Unlock()
 		}
 	}
-	// Check if loading side-effected the registry (in-ns during load creates the ns).
-	// If loader is configured and failed, keep NeedsLoad true so later lookups retry.
+
+	// No loader, or loader didn't produce a namespace. Create/return placeholder.
+	nsMu.RLock()
 	if e := nsRegistry[name]; e != nil {
-		if nsLoader != nil {
-			nsNeedsLoad[name] = true
-		} else {
-			delete(nsNeedsLoad, name)
-		}
+		nsMu.RUnlock()
 		return e
 	}
-	nsRegistry[name] = vm.NewNamespace(name)
-	nsRegistry[name].Refer(CoreNS, "", true)
-	if nsLoader != nil {
-		nsNeedsLoad[name] = true
+	nsMu.RUnlock()
+
+	ns := vm.NewNamespace(name)
+	if CoreNS != nil {
+		ns.Refer(CoreNS, "", true)
 	}
-	return nsRegistry[name]
+
+	nsMu.Lock()
+	nsRegistry[name] = ns
+	nsMu.Unlock()
+
+	return ns
 }
 
 func LookupOrRegisterNSNoLoad(name string) *vm.Namespace {
+	nsMu.RLock()
 	e := nsRegistry[name]
+	nsMu.RUnlock()
+
 	if e != nil {
 		return e
 	}
-	nsRegistry[name] = vm.NewNamespace(name)
-	nsRegistry[name].Refer(CoreNS, "", true)
-	return nsRegistry[name]
+
+	ns := vm.NewNamespace(name)
+	if CoreNS != nil {
+		ns.Refer(CoreNS, "", true)
+	}
+
+	nsMu.Lock()
+	nsRegistry[name] = ns
+	nsMu.Unlock()
+
+	return ns
 }
 
 //go:embed core/core.lg
@@ -4165,7 +4257,9 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("find-ns expected Symbol")
 		}
+		nsMu.RLock()
 		ns := nsRegistry[string(s)]
+		nsMu.RUnlock()
 		if ns == nil {
 			return vm.NIL, nil
 		}
@@ -4192,10 +4286,12 @@ func installLangNS() {
 
 	// all-ns returns a list of all loaded namespaces
 	allNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		nsMu.RLock()
 		var nss []vm.Value
 		for _, ns := range nsRegistry {
 			nss = append(nss, ns)
 		}
+		nsMu.RUnlock()
 		return vm.NewList(nss), nil
 	})
 
@@ -4212,7 +4308,9 @@ func installLangNS() {
 			}
 			return vm.NIL, fmt.Errorf("the-ns expected Symbol or Namespace")
 		}
+		nsMu.RLock()
 		ns := nsRegistry[string(s)]
+		nsMu.RUnlock()
 		if ns == nil {
 			return vm.NIL, fmt.Errorf("no namespace: %s found", s)
 		}
@@ -6312,12 +6410,14 @@ func installLangNS() {
 		var resolved *vm.Var
 		if strings.Contains(symStr, "/") {
 			parts := strings.SplitN(symStr, "/", 2)
+			nsMu.RLock()
 			rns := nsRegistry[resolveNSAlias(parts[0])]
 			if rns != nil {
 				if v := rns.Lookup(vm.Symbol(parts[1])); v != vm.NIL {
 					resolved, _ = v.(*vm.Var)
 				}
 			}
+			nsMu.RUnlock()
 		} else {
 			if CoreNS != nil {
 				if v := CoreNS.Lookup(vm.Symbol(symStr)); v != vm.NIL {
@@ -6374,6 +6474,25 @@ func installLangNS() {
 		return vm.MakeFunc(int(arityV), variadic, chunk), nil
 	})
 	ns.Def("chunk->fn", chunkToFnFn)
+
+	// make-multi-arity — combine a list of *Func/*Closure values into a
+	// *MultiArityFn. Used by the IR pipeline to assemble multi-arity
+	// functions at compile time.
+	makeMultiArityFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("make-multi-arity expects 1 arg (list of functions)")
+		}
+		list, ok := vs[0].(*vm.List)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-multi-arity expects a list, got %s", vs[0].Type().Name())
+		}
+		var fns []vm.Value
+		for e := vm.Seq(list); e != nil; e = e.Next() {
+			fns = append(fns, e.First())
+		}
+		return vm.MakeMultiArity(fns)
+	})
+	ns.Def("make-multi-arity", makeMultiArityFn)
 
 	// sleep — sleep for n milliseconds
 	sleepf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
