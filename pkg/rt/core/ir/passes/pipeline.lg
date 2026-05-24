@@ -42,7 +42,7 @@
 ;; so user-level macros (cond, when, and, or, ->) get expanded while
 ;; build-known shapes reach build-form as the special forms they are.
 (def ^:private build-known-heads
-  #{'let 'if 'do 'quote 'loop 'recur
+  #{'let* 'if 'do 'quote 'loop 'recur
     '+ '- '* '< '<= '> '>= '=})
 
 (defn- expand-fully
@@ -71,7 +71,7 @@
               (expand-all expanded)))))
     :else form))
 
-(defn compile-form [form]
+(defn- compile-form* [form]
   "Drives (defn NAME [args] body...) through expand → build → optimize → lower.
    Body forms are macroexpanded; defn and the args vector are passed through
    intact so build-fn's structural reader still works."
@@ -83,3 +83,9 @@
         ir.build/build-fn
         optimize-fn
         lower/lower)))
+
+(defn compile-form [form & caller-ns]
+  (if (seq caller-ns)
+    (binding [*ns* (first caller-ns)]
+      (compile-form* form))
+    (compile-form* form)))

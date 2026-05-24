@@ -181,6 +181,35 @@ var pipelineCorpus = []struct {
 		src:  `(defn map-of [k v] {:k k :v v})`,
 		args: []vm.Value{vm.Int(1), vm.Int(2)},
 	},
+	// Vector destructuring in let - xsofy/util.lg distance/manhattan shape.
+	{
+		name: "let-vector-destructure",
+		src: `(defn let-vector-destructure [p1 p2]
+		         (let [[x1 y1] p1
+		               [x2 y2] p2]
+		           (+ x1 y1 x2 y2)))`,
+		args: []vm.Value{
+			vm.ArrayVector{vm.Int(1), vm.Int(2)},
+			vm.ArrayVector{vm.Int(3), vm.Int(4)},
+		},
+	},
+	// Map :keys destructuring in let - xsofy/ai.lg world shape.
+	{
+		name: "let-map-keys-destructure",
+		src: `(defn let-map-keys-destructure [world]
+		         (let [{:keys [terrain width height]} world]
+		           (+ terrain width height)))`,
+		args: []vm.Value{vm.EmptyPersistentMap.
+			Assoc(vm.Keyword("terrain"), vm.Int(1)).(*vm.PersistentMap).
+			Assoc(vm.Keyword("width"), vm.Int(2)).(*vm.PersistentMap).
+			Assoc(vm.Keyword("height"), vm.Int(3)).(*vm.PersistentMap)},
+	},
+	// Direct namespace-qualified symbol without an alias in the caller ns.
+	{
+		name: "direct-ns-math-sqrt",
+		src:  `(defn direct-ns-math-sqrt [x] (math/sqrt x))`,
+		args: []vm.Value{vm.Float(9)},
+	},
 }
 
 // BenchmarkCompileAndRun compares the two paths on the corpus.
@@ -319,4 +348,32 @@ func TestPipelineRoundTrip_ProducesExecutableChunks(t *testing.T) {
 		})
 	}
 	_ = ir.Op(0) // keep import alive even if unused above
+}
+
+func TestIRCompileDefnUsesCallerNamespaceAliases(t *testing.T) {
+	ensureLoader()
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	_, _, err := c.CompileMultiple(strings.NewReader(`
+		(require 'ir.passes.pipeline)
+		(ns ir-band2.alias-test
+		  (:require [math :as m]))
+		(set! *ir-compile* true)
+		(defn alias-sqrt [x] (m/sqrt x))
+	`))
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	v := rt.NS("ir-band2.alias-test").Lookup(vm.Symbol("alias-sqrt")).(*vm.Var).Deref()
+	f := vm.NewFrame(v.(*vm.Func).Chunk(), []vm.Value{vm.Float(9)})
+	out, err := f.Run()
+	vm.ReleaseFrame(f)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if out.String() != "3" && out.String() != "3.0" {
+		t.Fatalf("alias-sqrt result: got %s, want 3", out)
+	}
 }
