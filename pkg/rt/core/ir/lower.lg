@@ -20,6 +20,8 @@
 
 (ns ir.lower)
 
+(declare lower)
+
 ;; --- state helpers ---------------------------------------------------
 
 (defn- new-lowerer [f]
@@ -251,7 +253,14 @@
             aux (ir/aux nid f)]
         (case op
           :const
-            (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
+            (let [aux (if (and (map? aux) (= (:kind aux) :fn-template))
+                        (let [inner (:fn aux)
+                              arity (:arity aux)
+                              variadic? (:variadic? aux)
+                              chunk (lower inner)]
+                          (chunk->fn arity variadic? chunk))
+                        aux)
+                  idx (ir/chunk-intern-const (chunk-of l) aux)]
               (emit-with-arg! l nid :const idx)
               (bump-stack-sp! l 1)
               (bump-max-stack! l))
@@ -284,7 +293,14 @@
       :block-arg nil  ; placed on stack by predecessors; no opcode
 
       :const
-        (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
+        (let [aux (if (and (map? aux) (= (:kind aux) :fn-template))
+                    (let [inner (:fn aux)
+                          arity (:arity aux)
+                          variadic? (:variadic? aux)
+                          chunk (lower inner)]
+                      (chunk->fn arity variadic? chunk))
+                    aux)
+              idx (ir/chunk-intern-const (chunk-of l) aux)]
           (emit-with-arg! l nid :const idx)
           (bump-stack-sp! l 1)
           (bump-max-stack! l))

@@ -40,6 +40,7 @@ var embeddedNS = []struct {
 	{"ir.passes", &rt.IRPassesSrc},
 	{"ir.dominance", &rt.IRDominanceSrc},
 	{"ir.lower", &rt.IRLowerSrc},
+	{"ir.lower-go", &rt.IRLowerGoSrc},
 	{"ir.passes.dce", &rt.IRPassDCESrc},
 	{"ir.passes.constfold", &rt.IRPassConstFoldSrc},
 	{"ir.passes.cse", &rt.IRPassCSESrc},

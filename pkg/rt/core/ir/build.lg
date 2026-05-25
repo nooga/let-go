@@ -656,11 +656,15 @@
         (ir/add-terminator! inner final-blk :return
                             (if (nil? last-val) [] [last-val])
                             nil)))
-    ;; Lower inner function to bytecode chunk, wrap in *Func
-    (let [chunk  (lower/lower inner)
-          fn-val (chunk->fn (count args-vec) false chunk)]
+    ;; Preserve the nested function as IR until the selected backend
+    ;; lowers it. Bytecode lowering compiles this template on demand;
+    ;; Go lowering can consume the preserved inner IR directly.
+    (let [fn-template {:kind :fn-template
+                       :fn inner
+                       :arity (count args-vec)
+                       :variadic? false}]
       ;; In outer context: emit const, make-closure, push captures
-      (let [const-id (ir/add-inst (ctx-fn ctx) (ctx-block ctx) :const [] fn-val)
+      (let [const-id (ir/add-inst (ctx-fn ctx) (ctx-block ctx) :const [] fn-template)
             closure-id (if (seq captures)
                          (ir/add-inst (ctx-fn ctx) (ctx-block ctx)
                                       :make-closure [const-id] nil)

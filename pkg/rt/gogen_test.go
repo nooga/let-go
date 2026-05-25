@@ -90,6 +90,14 @@ func TestStringLit(t *testing.T) {
 	}
 }
 
+func TestCharLit(t *testing.T) {
+	node := must(t)(cCharLit(vm.Char('a')))
+	got := render(t, node)
+	if got != `'a'` {
+		t.Errorf("got %q, want %q", got, `'a'`)
+	}
+}
+
 func TestIdent(t *testing.T) {
 	node := must(t)(cIdent(vm.String("myVar")))
 	if got := render(t, node); got != "myVar" {
@@ -283,6 +291,25 @@ func TestIfStmtWithInit(t *testing.T) {
 	node := must(t)(cIfStmt(init, x, then, vm.NIL))
 	got := render(t, node)
 	want := "if x := foo(); x {\n\treturn 1\n}"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestGotoStmt(t *testing.T) {
+	node := must(t)(cGotoStmt(vm.String("done")))
+	if got := render(t, node); got != "goto done" {
+		t.Errorf("got %q, want %q", got, "goto done")
+	}
+}
+
+func TestLabelStmt(t *testing.T) {
+	stmt := must(t)(cReturn(vm.NewArrayVector([]vm.Value{
+		must(t)(cIntLit(vm.Int(1))),
+	})))
+	node := must(t)(cLabelStmt(vm.String("done"), stmt))
+	got := render(t, node)
+	want := "done:\n\treturn 1"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

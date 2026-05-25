@@ -1,0 +1,552 @@
+;; IR → Go AST lowering.
+;;
+;; Current scope:
+;;   - single optimized function
+;;   - strict mode: unsupported ops/shapes throw
+;;   - bridge mode: unsupported functions fall back at whole-function granularity
+;;   - supported ops: const, load-arg, block-arg, add/sub/mul, lt/lte/gt/gte/eq,
+;;     return, branch, branch-if
+;;   - control flow lowers from block-parameter SSA to mutable locals plus labels/gotos
+
+(ns ir.lower-go
+  (:require ir.data))
+
+(def ^:private binary-op
+  {:add "+"
+   :sub "-"
+   :mul "*"
+   :lt  "<"
+   :lte "<="
+   :gt  ">"
+   :gte ">="
+   :eq  "=="})
+
+(declare function-needs-error?)
+(declare function-needs-rt?)
+(declare function-needs-vm?)
+(declare return-ref-ids)
+
+(defn- unsupported [mode msg]
+  (if (= mode :bridge)
+    {:status :fallback
+     :decl nil
+     :reason msg}
+    (throw (str "ir.lower-go: " msg))))
+
+(defn- go-type-spec [t]
+  (cond
+    (or (= t :int) (= t [:const :int 0]))        "int"
+    (or (= t :float) (= t [:const :float 0.0]))  "float64"
+    (or (= t :bool) (= t :true) (= t :false))    "bool"
+    (= t :string)                                "string"
+    (or (= t :unknown) (= t :any) (= t :nil))    "vm.Value"
+    (and (vector? t) (= (first t) :union))       "vm.Value"
+    :else nil))
+
+(defn- infer-go-type [t]
+  (let [spec (go-type-spec t)]
+    (when spec
+      (gogen/type spec))))
+
+(defn- const-expr [aux t]
+  (cond
+    (nil? aux)        (gogen/ident "nil")
+    (= aux true)      (gogen/ident "true")
+    (= aux false)     (gogen/ident "false")
+    (string? aux)     (gogen/string-lit aux)
+    (keyword? aux)    nil
+    (or (= t :float) (= t [:const :float 0.0])) (gogen/float-lit aux)
+    (integer? aux)    (gogen/int-lit aux)
+    (float? aux)      (gogen/float-lit aux)
+    :else nil))
+
+(declare boxed-value-expr)
+
+(defn- vm-sel [name]
+  (gogen/field-sel (gogen/ident "vm") name))
+
+(defn- vm-call [name args]
+  (gogen/call (vm-sel name) args))
+
+(defn- boxed-vector-expr [xs]
+  (let [elems (mapv boxed-value-expr xs)]
+    (when (every? identity elems)
+      (vm-call "NewArrayVector"
+               [(gogen/composite-lit (gogen/type "[]vm.Value") elems)]))))
+
+(defn- boxed-list-expr [xs]
+  (if (zero? (count xs))
+    (vm-sel "EmptyList")
+    (let [elems (mapv boxed-value-expr (seq xs))]
+      (when (every? identity elems)
+        (vm-call "NewList"
+                 [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
+
+(defn- boxed-map-expr [m]
+  (if (zero? (count m))
+    (vm-sel "EmptyPersistentMap")
+    (let [entries (seq m)
+          elems   (loop [remaining entries out []]
+                    (if (nil? remaining)
+                      out
+                      (let [entry (first remaining)
+                            kexpr (boxed-value-expr (first entry))
+                            vexpr (boxed-value-expr (second entry))]
+                        (if (or (nil? kexpr) (nil? vexpr))
+                          nil
+                          (recur (next remaining) (conj out kexpr vexpr))))))]
+      (when elems
+        (vm-call "NewPersistentMap"
+                 [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
+
+(defn- boxed-value-expr [v]
+  (cond
+    (nil? v)        (vm-sel "NIL")
+    (= v true)      (vm-sel "TRUE")
+    (= v false)     (vm-sel "FALSE")
+    (integer? v)    (vm-call "Int" [(gogen/int-lit v)])
+    (float? v)      (vm-call "Float" [(gogen/float-lit v)])
+    (string? v)     (vm-call "String" [(gogen/string-lit v)])
+    (char? v)       (vm-call "Char" [(gogen/char-lit v)])
+    (keyword? v)    (vm-call "Keyword" [(gogen/string-lit (subs (str v) 1))])
+    (symbol? v)     (vm-call "Symbol" [(gogen/string-lit (str v))])
+    (list? v)       (boxed-list-expr v)
+    (vector? v)     (boxed-vector-expr v)
+    (map? v)        (boxed-map-expr v)
+    :else nil))
+
+(defn- value-name [nid]
+  (str "v" nid))
+
+(defn- go-name [s]
+  (apply str (map (fn [ch] (if (= ch \-) \_ ch)) s)))
+
+(defn- import-entry [path alias]
+  {:path path :alias alias})
+
+(defn- label-name [bid]
+  (str "b" bid))
+
+(defn- value-ident [nid]
+  (gogen/ident (value-name nid)))
+
+(defn- fn-template? [aux]
+  (and (map? aux) (= (:kind aux) :fn-template)))
+
+(defn- local-carrying-op? [op]
+  (or (= op :block-arg)
+      (= op :call)
+      (contains? binary-op op)))
+
+(defn- used? [f nid]
+  (let [uses (ir/uses f)]
+    (and (< nid (count uses))
+         (pos? (count (nth uses nid))))))
+
+(declare value-expr)
+(declare lower-fn-lit)
+
+(defn- closure-info [f nid]
+  (let [op   (ir/op nid f)
+        aux  (ir/aux nid f)
+        refs (ir/refs nid f)]
+    (cond
+      (and (= op :const) (fn-template? aux))
+        {:template aux :captures []}
+
+      (= op :make-closure)
+        (when (= 1 (count refs))
+          (closure-info f (nth refs 0)))
+
+      (= op :push-closed)
+        (when (= 2 (count refs))
+          (let [base (closure-info f (nth refs 0))]
+            (when base
+              (assoc base :captures (conj (:captures base) (nth refs 1))))))
+
+      :else nil)))
+
+(defn- nested-template-fns [f]
+  (loop [blocks (ir/blocks f) out []]
+    (if (empty? blocks)
+      out
+      (let [insts (ir/block-insts (first blocks) f)
+            found (reduce (fn [acc nid]
+                            (let [aux (ir/aux nid f)]
+                              (if (fn-template? aux)
+                                (conj acc (:fn aux))
+                                acc)))
+                          []
+                          insts)]
+        (recur (rest blocks) (into out found))))))
+
+(defn- closure-expr [f closed-exprs nid]
+  (let [info (closure-info f nid)]
+    (when info
+      (let [capture-exprs (mapv (fn [rid] (value-expr f closed-exprs rid)) (:captures info))]
+        (when (every? identity capture-exprs)
+          (let [inner  (:fn (:template info))
+                inner* (lower-fn-lit inner capture-exprs)]
+            (when inner*
+              (gogen/call
+                (gogen/field-sel (gogen/ident "rt") "BoxNativeFn")
+                [inner*]))))))))
+
+(defn- value-expr [f closed-exprs nid]
+  (let [op  (ir/op nid f)
+        aux (ir/aux nid f)
+        t   (ir/type-of nid f)]
+    (or (closure-expr f closed-exprs nid)
+        (cond
+          (= op :load-closed)
+            (when (and closed-exprs
+                       (>= aux 0)
+                       (< aux (count closed-exprs)))
+              (nth closed-exprs aux))
+
+          (= op :load-arg)
+            (gogen/ident (str "arg" aux))
+
+          (= op :load-var)
+            (let [sym (symbol aux)
+                  sns (namespace sym)
+                  sn  (name sym)]
+              (gogen/call
+                (gogen/field-sel (gogen/ident "rt") "LookupVar")
+                [(gogen/string-lit (if (nil? sns) "core" sns))
+                 (gogen/string-lit sn)]))
+
+          (= op :const)
+            (if (= "vm.Value" (go-type-spec t))
+              (boxed-value-expr aux)
+              (const-expr aux t))
+
+          (local-carrying-op? op)
+            (when (and (used? f nid) (infer-go-type t))
+              (value-ident nid))
+
+          :else nil))))
+
+(defn- inst-rhs [f closed-exprs nid]
+  (let [op   (ir/op nid f)
+        refs (ir/refs nid f)]
+    (cond
+      (contains? binary-op op)
+        (let [lhs (value-expr f closed-exprs (nth refs 0))
+              rhs (value-expr f closed-exprs (nth refs 1))]
+          (when (and lhs rhs)
+            (gogen/binary (get binary-op op) lhs rhs)))
+
+      :else nil)))
+
+(defn- collect-local-ids [f]
+  (let [block-ids (ir/blocks f)]
+    (loop [bs block-ids out []]
+      (if (empty? bs)
+        out
+        (let [bid    (first bs)
+              params (filter (fn [nid] (and (used? f nid)
+                                            (infer-go-type (ir/type-of nid f))))
+                             (ir/block-params bid f))
+              insts  (filter (fn [nid]
+                               (let [op (ir/op nid f)]
+                                 (and (local-carrying-op? op)
+                                      (not= op :block-arg)
+                                      (used? f nid)
+                                      (infer-go-type (ir/type-of nid f)))))
+                             (ir/block-insts bid f))]
+          (recur (rest bs) (into out (concat params insts))))))))
+
+(defn- local-decls [f]
+  (let [ids (distinct (collect-local-ids f))]
+    (loop [remaining ids out []]
+      (if (empty? remaining)
+        out
+        (let [nid     (first remaining)
+              go-type (infer-go-type (ir/type-of nid f))]
+          (if (nil? go-type)
+            nil
+            (recur (rest remaining)
+                   (conj out (gogen/var-decl (value-name nid) go-type nil)))))))))
+
+(defn- emit-assignments-for-target [f closed-exprs bt]
+  (let [params (ir/block-params (ir/branch-target-target bt) f)
+        args   (ir/branch-target-args bt)]
+    (loop [i 0 out []]
+      (if (>= i (count params))
+        out
+        (let [pid (nth params i)]
+          (if (not (used? f pid))
+            (recur (inc i) out)
+            (let [lhs (value-ident pid)
+                  rhs (value-expr f closed-exprs (nth args i))]
+              (if (nil? rhs)
+                nil
+                (recur (inc i)
+                       (conj out (gogen/assign "=" lhs rhs)))))))))))
+
+(defn- transfer-stmts [f closed-exprs bt]
+  (let [assigns (emit-assignments-for-target f closed-exprs bt)]
+    (when assigns
+      (conj assigns (gogen/goto-stmt (label-name (ir/branch-target-target bt)))))))
+
+(defn- lower-terminator [f closed-exprs bid]
+  (let [term (ir/block-term bid f)
+        op   (ir/op term f)
+        refs (ir/refs term f)
+        aux  (ir/aux term f)
+        needs-error? (function-needs-error? f)]
+    (cond
+      (= op :return)
+        (when (= 1 (count refs))
+          (let [expr (value-expr f closed-exprs (nth refs 0))]
+            (when expr
+              [(gogen/return-stmt
+                 (if needs-error?
+                   [expr (gogen/ident "nil")]
+                   [expr]))])))
+
+      (= op :branch)
+        (transfer-stmts f closed-exprs aux)
+
+      (= op :branch-if)
+        (when (= 1 (count refs))
+          (let [cond-expr  (value-expr f closed-exprs (nth refs 0))
+                true-stmts  (transfer-stmts f closed-exprs (ir/cond-target-true aux))
+                false-stmts (transfer-stmts f closed-exprs (ir/cond-target-false aux))]
+            (when (and cond-expr true-stmts false-stmts)
+              [(gogen/if-stmt nil cond-expr true-stmts false-stmts)])))
+
+      :else nil)))
+
+(declare function-needs-error?)
+
+(defn- call-assign-stmts [f closed-exprs nid]
+  (let [refs       (ir/refs nid f)
+        callee     (value-expr f closed-exprs (first refs))
+        arg-exprs  (mapv (fn [rid] (value-expr f closed-exprs rid)) (rest refs))
+        args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)
+        invoke-expr (gogen/call
+                      (gogen/field-sel (gogen/ident "rt") "InvokeValue")
+                      [callee args-slice])
+        err-id     (gogen/ident "callErr")]
+    (when (and callee (every? identity arg-exprs))
+      (let [assign (if (used? f nid)
+                     (gogen/multi-assign "="
+                                         [(value-ident nid) err-id]
+                                         [invoke-expr])
+                     (gogen/multi-assign "="
+                                         [(gogen/ident "_") err-id]
+                                         [invoke-expr]))
+            err-check (gogen/if-stmt nil
+                                     (gogen/binary "!=" err-id (gogen/ident "nil"))
+                                     [(gogen/return-stmt [(gogen/ident "nil") err-id])]
+                                     nil)]
+        [assign err-check]))))
+
+(defn- lower-inst-stmts [f closed-exprs nid]
+  (let [op  (ir/op nid f)
+        aux (ir/aux nid f)]
+    (cond
+      (= op :load-arg)  []
+      (= op :load-var)  []
+      (= op :load-closed) []
+      (and (= op :const) (fn-template? aux))
+        []
+      (= op :const)     []
+      (= op :make-closure) []
+      (= op :push-closed)  []
+      (= op :block-arg) []
+      (contains? binary-op op)
+        (if (used? f nid)
+          (let [rhs (inst-rhs f closed-exprs nid)]
+            (when rhs
+              [(gogen/assign "=" (value-ident nid) rhs)]))
+          [])
+      (= op :call)
+        (call-assign-stmts f closed-exprs nid)
+      :else nil)))
+
+(defn- lower-block-stmts [f closed-exprs bid]
+  (let [label-stmts (if (= bid (ir/entry-block f))
+                      []
+                      [(gogen/label-stmt (label-name bid) nil)])
+        insts (ir/block-insts bid f)
+        inst-stmts (loop [remaining insts out []]
+                     (if (empty? remaining)
+                       out
+                       (let [stmts (lower-inst-stmts f closed-exprs (first remaining))]
+                         (if (nil? stmts)
+                           (let [op (ir/op (first remaining) f)]
+                             (if (or (= op :load-arg)
+                                     (= op :load-var)
+                                     (= op :load-closed)
+                                     (= op :const)
+                                     (= op :block-arg)
+                                     (not (used? f (first remaining))))
+                               (recur (rest remaining) out)
+                               nil))
+                           (recur (rest remaining) (into out stmts))))))
+        term-stmts (lower-terminator f closed-exprs bid)]
+    (when (and inst-stmts term-stmts)
+      (vec (concat label-stmts inst-stmts term-stmts)))))
+
+(defn- function-needs-error? [f]
+  (loop [blocks (ir/blocks f)]
+    (cond
+      (empty? blocks) false
+      (some (fn [nid] (= :call (ir/op nid f))) (ir/block-insts (first blocks) f)) true
+      :else (recur (rest blocks)))))
+
+(defn- function-needs-rt? [f]
+  (let [local? (loop [blocks (ir/blocks f)]
+                 (cond
+                   (empty? blocks) false
+                   (some (fn [nid]
+                           (let [op  (ir/op nid f)
+                                 aux (ir/aux nid f)]
+                             (or (= op :call)
+                                 (= op :load-var)
+                                 (fn-template? aux))))
+                         (ir/block-insts (first blocks) f))
+                     true
+                   :else (recur (rest blocks))))]
+    (or local?
+        (some function-needs-rt? (nested-template-fns f)))))
+
+(defn- function-needs-vm? [f]
+  (let [arg-types (or (ir/fn-arg-types f) [])
+        ret-ids   (or (return-ref-ids f) [])]
+    (or (function-needs-rt? f)
+        (some (fn [t] (= "vm.Value" (go-type-spec t))) arg-types)
+        (some (fn [nid] (= "vm.Value" (go-type-spec (ir/type-of nid f)))) ret-ids)
+        (some function-needs-vm? (nested-template-fns f)))))
+
+(defn- lower-body
+  ([f] (lower-body f nil))
+  ([f closed-exprs]
+   (let [needs-error? (function-needs-error? f)
+         decls0 (local-decls f)
+         decls  (if needs-error?
+                  (conj decls0 (gogen/var-decl "callErr" (gogen/type "error") nil))
+                  decls0)]
+     (when decls
+       (loop [blocks (ir/blocks f)
+              out    decls]
+         (if (empty? blocks)
+           out
+           (let [stmts (lower-block-stmts f closed-exprs (first blocks))]
+             (if (nil? stmts)
+               nil
+               (recur (rest blocks) (into out stmts))))))))))
+
+(defn- params-for [f]
+  (let [arity     (ir/fn-arity f)
+        arg-types (or (ir/fn-arg-types f) [])]
+    (loop [i 0 out []]
+      (if (>= i arity)
+        out
+        (let [go-type (infer-go-type (if (< i (count arg-types)) (nth arg-types i) :unknown))]
+          (if (nil? go-type)
+            nil
+            (recur (inc i) (conj out (gogen/param (str "arg" i) go-type)))))))))
+
+(defn- return-ref-ids [f]
+  (loop [blocks (ir/blocks f) out []]
+    (if (empty? blocks)
+      out
+      (let [term (ir/block-term (first blocks) f)
+            op   (ir/op term f)
+            refs (ir/refs term f)]
+        (cond
+          (= op :return)
+            (if (= 1 (count refs))
+              (recur (rest blocks) (conj out (nth refs 0)))
+              nil)
+          :else
+            (recur (rest blocks) out))))))
+
+(defn- result-node [f]
+  (let [ret-ids (return-ref-ids f)]
+    (when (and ret-ids (pos? (count ret-ids)))
+      (let [specs (map (fn [nid] (go-type-spec (ir/type-of nid f))) ret-ids)]
+        (when (and (every? identity specs)
+                   (= 1 (count (distinct specs))))
+          (let [results [(gogen/result (gogen/type (first specs)))]]
+            (if (function-needs-error? f)
+              (conj results (gogen/result (gogen/type "error")))
+              results)))))))
+
+(defn- lower-fn-lit [f closed-exprs]
+  (let [params  (params-for f)
+        results (result-node f)
+        body    (lower-body f closed-exprs)]
+    (cond
+      (nil? params)  (throw "nested closure has unsupported parameter types")
+      (nil? results) (throw "nested closure has unsupported result type")
+      (nil? body)    (throw "nested closure has unsupported body shape")
+      :else
+        (gogen/func-lit params results body))))
+
+(defn- lower-fn* [f mode]
+  (when (ir/fn-variadic? f)
+    (unsupported mode "variadic functions not supported"))
+  (let [params  (params-for f)
+        results (result-node f)
+        body    (lower-body f)
+        needs-rt? (function-needs-rt? f)
+        needs-vm? (function-needs-vm? f)
+        imports (vec
+                  (concat
+                    (if needs-rt?
+                      [(import-entry "github.com/nooga/let-go/pkg/rt" "rt")]
+                      [])
+                    (if needs-vm?
+                      [(import-entry "github.com/nooga/let-go/pkg/vm" "vm")]
+                      [])))]
+    (cond
+      (nil? params)  (unsupported mode "unsupported parameter types")
+      (nil? results) (unsupported mode "unsupported result type")
+      (nil? body)    (unsupported mode "unsupported function body shape")
+      :else
+        {:status :lowered
+         :imports imports
+         :decl   (gogen/func-decl (go-name (ir/fn-name f)) params results body)})))
+
+(defn- import-spec-node [entry]
+  (let [path  (:path entry)
+        alias (:alias entry)]
+    (if alias
+      (gogen/import-spec path alias)
+      (gogen/import-spec path))))
+
+(defn- distinct-imports [entries]
+  (loop [remaining entries seen #{} out []]
+    (if (empty? remaining)
+      out
+      (let [entry (first remaining)
+            key   [(:path entry) (:alias entry)]]
+        (if (contains? seen key)
+          (recur (rest remaining) seen out)
+          (recur (rest remaining) (conj seen key) (conj out entry)))))))
+
+(defn file [pkg lowered-results]
+  (let [results (vec lowered-results)
+        imports (distinct-imports
+                  (mapcat (fn [result]
+                            (let [entries (:imports result)]
+                              (if entries entries [])))
+                          results))
+        decls   (mapv (fn [result] (:decl result)) results)
+        import-nodes (mapv import-spec-node imports)]
+    (gogen/file pkg import-nodes decls)))
+
+(defn lower [f mode]
+  (if (nil? f)
+    (throw "ir.lower-go: nil function")
+    (try
+      (lower-fn* f mode)
+      (catch e
+        (if (= mode :bridge)
+          {:status :fallback :decl nil :reason (str e)}
+          (throw e))))))
