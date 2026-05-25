@@ -263,6 +263,46 @@ func TestLowerGoStrictKeywordClosureLowersToVmKeyword(t *testing.T) {
 	}
 }
 
+func TestLowerGoStrictMultiArityClosureLowersToNativeMultiArity(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn make-multi [] (fn* ([] :zero) ([x] x)))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "rt.MakeNativeMultiArity") {
+		t.Fatalf("expected multi-arity closure to lower via rt.MakeNativeMultiArity\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "func() vm.Value") || !strings.Contains(rendered, "func(arg0 vm.Value) vm.Value") {
+		t.Fatalf("expected both arity branches to lower as Go closures\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestLowerGoStrictCapturedMultiArityClosureUsesOuterGoLocals(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn make-multi [x] (fn* ([] x) ([y] y)))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "rt.MakeNativeMultiArity") {
+		t.Fatalf("expected captured multi-arity closure to lower via rt.MakeNativeMultiArity\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "return arg0") {
+		t.Fatalf("expected zero-arity branch to capture the outer Go local\n--- go ---\n%s", rendered)
+	}
+}
+
 func TestLowerGoStrictLiteralMapLowersToVmPersistentMap(t *testing.T) {
 	ensureLoader()
 

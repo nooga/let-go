@@ -19,8 +19,7 @@
 ;; its bottom intern block overrides the Go bridge primitives with
 ;; the Lisp data layer's atom-backed implementations.
 (ns ir.build
-  (:require ir.data
-            [ir.lower :as lower]))
+  (:require ir.data))
 
 ;; --- builder context -----------------------------------------------------
 
@@ -159,14 +158,27 @@
         (cond
           (= head 'quote) #{}
           (= head 'fn*)
-            (let [has-name? (symbol? (nth form 1))
-                  name-sym  (if has-name? (nth form 1) nil)
-                  args-vec  (nth form (if has-name? 2 1))
-                  body      (drop (if has-name? 3 2) form)
-                  arg-set   (if name-sym
-                              (conj (into #{} args-vec) name-sym)
-                              (into #{} args-vec))]
-              (into #{} (mapcat #(free-vars % arg-set) body)))
+            (let [maybe-name (nth form 1)
+                  has-name?  (symbol? maybe-name)
+                  raw-rest   (drop 1 form)
+                  name-sym   (if has-name? maybe-name nil)
+                  rest-forms (if has-name? (drop 1 raw-rest) raw-rest)
+                  multi?     (and (seq rest-forms) (list? (first rest-forms)))]
+              (if-not multi?
+                (let [args-vec (first rest-forms)
+                      body     (rest rest-forms)
+                      arg-set  (if name-sym
+                                 (conj (into #{} args-vec) name-sym)
+                                 (into #{} args-vec))]
+                  (into #{} (mapcat #(free-vars % arg-set) body)))
+                (into #{} (mapcat (fn [arity-form]
+                                    (let [args-vec (first arity-form)
+                                          body     (rest arity-form)
+                                          arg-set  (if name-sym
+                                                     (conj (into #{} args-vec) name-sym)
+                                                     (into #{} args-vec))]
+                                      (mapcat #(free-vars % arg-set) body)))
+                                  rest-forms))))
           (or (= head 'let) (= head 'let*))
             (let [bindings (nth form 1)
                   pairs    (partition 2 bindings)
@@ -626,27 +638,20 @@
     (ir/add-pred! f header cur)
     TERMINATED))
 
-(defn- build-single-fn* [name-sym args-vec body-forms ctx]
-  "Build a single-arity fn* and return the InstId of its value in ctx."
-  (let [arg-set   (into #{} args-vec)
-        frees     (free-vars (cons 'do body-forms) arg-set)
-        captures  (vec (filter #(lookup-local ctx %) frees))
-        inner     (ir/new-fn (str name-sym) (count args-vec) false)
+(defn- build-inner-fn-template [name-sym args-vec body-forms capture-syms]
+  (let [inner     (ir/new-fn (str name-sym) (count args-vec) false)
         entry     (ir/entry-block inner)
         inner-ctx (new-context inner)]
-    ;; Bind args as LoadArg in inner function
     (loop [i 0]
       (when (< i (count args-vec))
         (bind-local! inner-ctx (nth args-vec i)
                      (ir/add-inst inner entry :load-arg [] i))
         (recur (inc i))))
-    ;; Bind captures as LoadClosed in inner function entry block.
     (loop [i 0]
-      (when (< i (count captures))
-        (bind-local! inner-ctx (nth captures i)
+      (when (< i (count capture-syms))
+        (bind-local! inner-ctx (nth capture-syms i)
                      (ir/add-inst inner entry :load-closed [] i))
         (recur (inc i))))
-    ;; Build body in inner context
     (let [last-val (loop [fs body-forms last-id nil]
                      (if (seq fs)
                        (recur (rest fs) (build-form (first fs) inner-ctx))
@@ -656,33 +661,40 @@
         (ir/add-terminator! inner final-blk :return
                             (if (nil? last-val) [] [last-val])
                             nil)))
-    ;; Preserve the nested function as IR until the selected backend
-    ;; lowers it. Bytecode lowering compiles this template on demand;
-    ;; Go lowering can consume the preserved inner IR directly.
-    (let [fn-template {:kind :fn-template
-                       :fn inner
-                       :arity (count args-vec)
-                       :variadic? false}]
-      ;; In outer context: emit const, make-closure, push captures
-      (let [const-id (ir/add-inst (ctx-fn ctx) (ctx-block ctx) :const [] fn-template)
-            closure-id (if (seq captures)
-                         (ir/add-inst (ctx-fn ctx) (ctx-block ctx)
-                                      :make-closure [const-id] nil)
-                         const-id)]
-        (loop [cls closure-id
-               caps captures]
-          (if (seq caps)
-            (let [cap-sym (first caps)
-                  cap-val (build-symbol cap-sym ctx)
-                  push-id (ir/add-inst (ctx-fn ctx) (ctx-block ctx)
-                                       :push-closed [cls cap-val] nil)]
-              (recur push-id (rest caps)))
-            cls))))))
+    {:kind :fn-template
+     :fn inner
+     :arity (count args-vec)
+     :variadic? false}))
+
+(defn- emit-template-closure [template capture-syms ctx]
+  (let [const-id   (ir/add-inst (ctx-fn ctx) (ctx-block ctx) :const [] template)
+        closure-id (if (seq capture-syms)
+                     (ir/add-inst (ctx-fn ctx) (ctx-block ctx)
+                                  :make-closure [const-id] nil)
+                     const-id)]
+    (loop [cls closure-id
+           caps capture-syms]
+      (if (seq caps)
+        (let [cap-sym (first caps)
+              cap-val (build-symbol cap-sym ctx)
+              push-id (ir/add-inst (ctx-fn ctx) (ctx-block ctx)
+                                   :push-closed [cls cap-val] nil)]
+          (recur push-id (rest caps)))
+        cls))))
+
+(defn- build-single-fn* [name-sym args-vec body-forms ctx]
+  "Build a single-arity fn* and return the InstId of its value in ctx."
+  (let [arg-set   (into #{} args-vec)
+        frees     (free-vars (cons 'do body-forms) arg-set)
+        captures  (vec (sort-by str (filter #(lookup-local ctx %) frees)))
+        template  (build-inner-fn-template name-sym args-vec body-forms captures)]
+    (emit-template-closure template captures ctx)))
 
 (defn build-fn* [form ctx]
   "Compile (fn* ...) to IR in the outer function context.
    Handles single-arity, named single-arity, and multi-arity forms.
-   Multi-arity with captures is not yet supported (throws)."
+   Preserves nested function structure so the selected backend can
+   lower fn* bodies natively instead of collapsing them here."
   (let [;; Detect multi-arity: (fn* ([args] body...) ([args2] body2...))
         ;;                  or (fn* name ([args] body...) ([args2] body2...))
         maybe-name (nth form 1)
@@ -696,46 +708,26 @@
       (let [args-vec   (first rest-forms)
             body-forms (rest rest-forms)]
         (build-single-fn* name-sym args-vec body-forms ctx))
-      ;; Multi-arity path: build each arity standalone at compile time.
-      (let [arities rest-forms
-            all-caps (atom #{})]
-        ;; First pass: detect captures (not yet supported in multi-arity)
-        (doseq [arity-form arities]
-          (let [args-vec   (first arity-form)
-                body-forms (rest arity-form)
-                arg-set    (into #{} args-vec)
-                frees      (free-vars (cons 'do body-forms) arg-set)]
-            (swap! all-caps into (filter #(lookup-local ctx %) frees))))
-        (when (seq @all-caps)
-          (throw "ir/build: multi-arity fn* with captures is not yet supported"))
-        ;; No captures: build each arity as a standalone inner function at
-        ;; compile time, wrap, combine into a multi-arity value, and emit a
-        ;; single :const in the outer context.
-        (let [real-fns (mapv (fn [arity-form]
-                               (let [args-vec   (first arity-form)
-                                     body-forms (rest arity-form)
-                                     inner      (ir/new-fn (str name-sym) (count args-vec) false)
-                                     entry      (ir/entry-block inner)
-                                     inner-ctx2 (new-context inner)]
-                                 (loop [i 0]
-                                   (when (< i (count args-vec))
-                                     (bind-local! inner-ctx2 (nth args-vec i)
-                                                  (ir/add-inst inner entry :load-arg [] i))
-                                     (recur (inc i))))
-                                 (let [last-val (loop [fs body-forms last-id nil]
-                                                  (if (seq fs)
-                                                    (recur (rest fs) (build-form (first fs) inner-ctx2))
-                                                    last-id))
-                                       final-blk (ctx-block inner-ctx2)]
-                                   (when-not (terminated? last-val)
-                                     (ir/add-terminator! inner final-blk :return
-                                                         (if (nil? last-val) [] [last-val])
-                                                         nil)))
-                                 (let [chunk (lower/lower inner)]
-                                   (chunk->fn (count args-vec) false chunk))))
-                             arities)
-              multi-val (make-multi-arity (apply list real-fns))]
-          (ir/add-inst (ctx-fn ctx) (ctx-block ctx) :const [] multi-val))))))
+      ;; Multi-arity path: preserve each arity as a nested template with
+      ;; a shared capture layout for all branches.
+      (let [arities   rest-forms
+            all-caps  (reduce (fn [caps arity-form]
+                                (let [args-vec   (first arity-form)
+                                      body-forms (rest arity-form)
+                                      arg-set    (into #{} args-vec)
+                                      frees      (free-vars (cons 'do body-forms) arg-set)]
+                                  (into caps (filter #(lookup-local ctx %) frees))))
+                              #{}
+                              arities)
+            captures  (vec (sort-by str all-caps))
+            templates (mapv (fn [arity-form]
+                              (let [args-vec   (first arity-form)
+                                    body-forms (rest arity-form)]
+                                (build-inner-fn-template name-sym args-vec body-forms captures)))
+                            arities)
+            template  {:kind :multi-fn-template
+                       :fns templates}]
+        (emit-template-closure template captures ctx)))))
 
 ;; --- entry point ---------------------------------------------------------
 

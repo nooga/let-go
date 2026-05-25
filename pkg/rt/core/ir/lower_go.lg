@@ -133,6 +133,18 @@
 (defn- fn-template? [aux]
   (and (map? aux) (= (:kind aux) :fn-template)))
 
+(defn- multi-fn-template? [aux]
+  (and (map? aux) (= (:kind aux) :multi-fn-template)))
+
+(defn- any-fn-template? [aux]
+  (or (fn-template? aux) (multi-fn-template? aux)))
+
+(defn- template-fns [aux]
+  (cond
+    (fn-template? aux)       [(:fn aux)]
+    (multi-fn-template? aux) (mapv :fn (:fns aux))
+    :else                    []))
+
 (defn- local-carrying-op? [op]
   (or (= op :block-arg)
       (= op :call)
@@ -151,7 +163,7 @@
         aux  (ir/aux nid f)
         refs (ir/refs nid f)]
     (cond
-      (and (= op :const) (fn-template? aux))
+      (and (= op :const) (any-fn-template? aux))
         {:template aux :captures []}
 
       (= op :make-closure)
@@ -173,24 +185,44 @@
       (let [insts (ir/block-insts (first blocks) f)
             found (reduce (fn [acc nid]
                             (let [aux (ir/aux nid f)]
-                              (if (fn-template? aux)
-                                (conj acc (:fn aux))
+                              (if (any-fn-template? aux)
+                                (into acc (template-fns aux))
                                 acc)))
                           []
                           insts)]
         (recur (rest blocks) (into out found))))))
+
+(defn- lower-template-closure-expr [template capture-exprs]
+  (cond
+    (fn-template? template)
+      (let [inner* (lower-fn-lit (:fn template) capture-exprs)]
+        (when inner*
+          (gogen/call
+            (gogen/field-sel (gogen/ident "rt") "BoxNativeFn")
+            [inner*])))
+
+    (multi-fn-template? template)
+      (let [inners (mapv (fn [entry]
+                           (lower-fn-lit (:fn entry) capture-exprs))
+                         (:fns template))]
+        (when (every? identity inners)
+          (let [boxed (mapv (fn [inner*]
+                              (gogen/call
+                                (gogen/field-sel (gogen/ident "rt") "BoxNativeFn")
+                                [inner*]))
+                            inners)]
+            (gogen/call
+              (gogen/field-sel (gogen/ident "rt") "MakeNativeMultiArity")
+              [(gogen/composite-lit (gogen/type "[]vm.Value") boxed)]))))
+
+    :else nil))
 
 (defn- closure-expr [f closed-exprs nid]
   (let [info (closure-info f nid)]
     (when info
       (let [capture-exprs (mapv (fn [rid] (value-expr f closed-exprs rid)) (:captures info))]
         (when (every? identity capture-exprs)
-          (let [inner  (:fn (:template info))
-                inner* (lower-fn-lit inner capture-exprs)]
-            (when inner*
-              (gogen/call
-                (gogen/field-sel (gogen/ident "rt") "BoxNativeFn")
-                [inner*]))))))))
+          (lower-template-closure-expr (:template info) capture-exprs))))))
 
 (defn- value-expr [f closed-exprs nid]
   (let [op  (ir/op nid f)
@@ -351,7 +383,7 @@
       (= op :load-arg)  []
       (= op :load-var)  []
       (= op :load-closed) []
-      (and (= op :const) (fn-template? aux))
+      (and (= op :const) (any-fn-template? aux))
         []
       (= op :const)     []
       (= op :make-closure) []
@@ -407,7 +439,7 @@
                                  aux (ir/aux nid f)]
                              (or (= op :call)
                                  (= op :load-var)
-                                 (fn-template? aux))))
+                                 (any-fn-template? aux))))
                          (ir/block-insts (first blocks) f))
                      true
                    :else (recur (rest blocks))))]
@@ -482,6 +514,7 @@
         results (result-node f)
         body    (lower-body f closed-exprs)]
     (cond
+      (ir/fn-variadic? f) (throw "nested variadic closure not supported")
       (nil? params)  (throw "nested closure has unsupported parameter types")
       (nil? results) (throw "nested closure has unsupported result type")
       (nil? body)    (throw "nested closure has unsupported body shape")

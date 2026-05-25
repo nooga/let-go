@@ -51,3 +51,13 @@ func BoxNativeFn(fn any) vm.Value {
 	}
 	return v
 }
+
+// MakeNativeMultiArity combines native-lowered function branches into a
+// runtime multi-arity callable.
+func MakeNativeMultiArity(fns []vm.Value) vm.Value {
+	v, err := vm.MakeMultiArity(fns)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}

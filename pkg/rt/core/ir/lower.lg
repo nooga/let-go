@@ -22,6 +22,21 @@
 
 (declare lower)
 
+(defn- template-value [aux]
+  (cond
+    (and (map? aux) (= (:kind aux) :fn-template))
+      (let [inner (:fn aux)
+            arity (:arity aux)
+            variadic? (:variadic? aux)
+            chunk (lower inner)]
+        (chunk->fn arity variadic? chunk))
+
+    (and (map? aux) (= (:kind aux) :multi-fn-template))
+      (let [fn-vals (mapv template-value (:fns aux))]
+        (make-multi-arity (apply list fn-vals)))
+
+    :else aux))
+
 ;; --- state helpers ---------------------------------------------------
 
 (defn- new-lowerer [f]
@@ -253,14 +268,7 @@
             aux (ir/aux nid f)]
         (case op
           :const
-            (let [aux (if (and (map? aux) (= (:kind aux) :fn-template))
-                        (let [inner (:fn aux)
-                              arity (:arity aux)
-                              variadic? (:variadic? aux)
-                              chunk (lower inner)]
-                          (chunk->fn arity variadic? chunk))
-                        aux)
-                  idx (ir/chunk-intern-const (chunk-of l) aux)]
+            (let [idx (ir/chunk-intern-const (chunk-of l) (template-value aux))]
               (emit-with-arg! l nid :const idx)
               (bump-stack-sp! l 1)
               (bump-max-stack! l))
@@ -293,14 +301,7 @@
       :block-arg nil  ; placed on stack by predecessors; no opcode
 
       :const
-        (let [aux (if (and (map? aux) (= (:kind aux) :fn-template))
-                    (let [inner (:fn aux)
-                          arity (:arity aux)
-                          variadic? (:variadic? aux)
-                          chunk (lower inner)]
-                      (chunk->fn arity variadic? chunk))
-                    aux)
-              idx (ir/chunk-intern-const (chunk-of l) aux)]
+        (let [idx (ir/chunk-intern-const (chunk-of l) (template-value aux))]
           (emit-with-arg! l nid :const idx)
           (bump-stack-sp! l 1)
           (bump-max-stack! l))
