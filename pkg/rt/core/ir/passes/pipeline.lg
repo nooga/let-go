@@ -22,7 +22,8 @@
             [ir.passes.licm :refer [licm]]
             [ir.passes.typeinfer :refer [typeinfer]]
             [ir.validate :refer [validate-fn!]]
-            [ir.lower :as lower]))
+            [ir.lower :as lower]
+            [ir.lower-go :as lower-go]))
 
 (defn optimize-fn [f]
   (validate-fn! f "build")
@@ -73,41 +74,115 @@
               (expand-all expanded)))))
     :else form))
 
+(def ^:dynamic *target* :bytecode)
+;; When set to :go, compile-form* routes through ir.lower-go instead of ir.lower.
+;; Set this before calling compile-form to generate Go-lowered output.
+
+(defn- unwrap-name [raw-name]
+  "Strip (with-meta sym {...}) wrapper from ^:private etc. metadata annotations.
+   Returns the bare symbol."
+  (if (and (seq? raw-name) (= 'with-meta (first raw-name)))
+    (second raw-name)
+    raw-name))
+
 (defn- compile-form* [form]
   "Drives (defn NAME [args] body...) through expand → build → optimize → lower.
    Body forms are macroexpanded; defn and the args vector are passed through
    intact so build-fn's structural reader still works.
-   Returns a lowered chunk for single-arity, or the raw *MultiArityFn value
-   for multi-arity (so callers can bind it directly)."
-  (let [name-sym    (nth form 1)
+   When *target* is :bytecode: returns a lowered chunk for single-arity, or the
+   raw *MultiArityFn value for multi-arity.
+   When *target* is :go: returns a lowered result map {:status :lowered :decl ...}
+   for single-arity, or a :multi-fn-template map for multi-arity."
+  (let [name-sym    (unwrap-name (nth form 1))
         maybe-doc   (nth form 2)
         has-doc?    (string? maybe-doc)
-        first-form  (if has-doc? (nth form 3) maybe-doc)]
+        first-form  (if has-doc? (nth form 3) maybe-doc)
+        go-target?  (= *target* :go)]
     (if (vector? first-form)
-      ;; Single arity: standard path
+      ;; Single arity
       (let [args-vec   first-form
             body-forms (map expand-all (drop (if has-doc? 4 3) form))
-            expanded   (apply list 'defn name-sym args-vec body-forms)]
-        (-> expanded
-            ir.build/build-fn
-            optimize-fn
-            lower/lower))
+            expanded   (apply list 'defn name-sym args-vec body-forms)
+            ir-fn      (-> expanded ir.build/build-fn optimize-fn)]
+        (if go-target?
+          (lower-go/lower ir-fn :bridge)
+          (lower/lower ir-fn)))
       ;; Multi-arity: build each arity separately, combine
-      (let [arities   (drop (if has-doc? 3 2) form)
-            fn-vals   (mapv (fn [arity-form]
-                              (let [args-vec   (first arity-form)
-                                    body-forms (map expand-all (rest arity-form))
-                                    expanded   (apply list 'defn name-sym args-vec body-forms)
-                                    chunk      (-> expanded
-                                                    ir.build/build-fn
-                                                    optimize-fn
-                                                    lower/lower)]
-                                (chunk->fn (count args-vec) false chunk)))
-                            arities)]
-        (make-multi-arity (apply list fn-vals))))))
+      (let [arities   (drop (if has-doc? 3 2) form)]
+        (if go-target?
+          (let [fn-templates (mapv (fn [arity-form]
+                                    (let [args-vec   (first arity-form)
+                                          body-forms (map expand-all (rest arity-form))
+                                          expanded   (apply list 'defn name-sym args-vec body-forms)
+                                          ir-fn      (-> expanded ir.build/build-fn optimize-fn)
+                                          result     (lower-go/lower ir-fn :bridge)]
+                                      (if (= :lowered (:status result))
+                                        {:fn (:decl result)}
+                                        result)))
+                                  arities)]
+            {:kind :multi-fn-template :fns fn-templates})
+          (let [fn-vals   (mapv (fn [arity-form]
+                                  (let [args-vec   (first arity-form)
+                                        body-forms (map expand-all (rest arity-form))
+                                        expanded   (apply list 'defn name-sym args-vec body-forms)
+                                        chunk      (-> expanded
+                                                       ir.build/build-fn
+                                                       optimize-fn
+                                                       lower/lower)]
+                                    (chunk->fn (count args-vec) false chunk)))
+                                arities)]
+            (make-multi-arity (apply list fn-vals))))))))
 
 (defn compile-form [form & caller-ns]
   (if (seq caller-ns)
     (binding [*ns* (first caller-ns)]
       (compile-form* form))
     (compile-form* form)))
+
+;; --- Go bootstrap generation -------------------------------------------
+
+(defn- go-name-for [name-sym]
+  "Convert a Lisp fn name to a valid Go identifier.
+   Hyphens become underscores, other special chars are replaced."
+  (let [s (str name-sym)]
+    ;; Replace hyphens with underscores
+    (apply str (map (fn [c] (if (= c \-) \_ c)) s))))
+
+(defn lower-ns-to-go [pkg-name ns-name defn-forms]
+  "Process defn forms through the Go-lowering pipeline and return rendered
+   Go source for a package. pkg-name is the Go package name string,
+   ns-name is the namespace symbol (for *ns* binding), and defn-forms is
+   a vector of raw (defn ...) list forms."
+  (binding [*ns* (the-ns ns-name)]
+    (let [results (loop [remaining defn-forms out []]
+                    (if (empty? remaining)
+                      out
+                      (let [form (first remaining)
+                            result (try
+                                     (binding [*target* :go]
+                                       (compile-form* form))
+                                     (catch e
+                                       (println (str "WARNING: lowering failed for "
+                                                     (pr-str (try (second form) (catch _ form)))
+                                                     ": " e))
+                                       nil))]
+                        (cond
+                          (nil? result)
+                            (recur (rest remaining) out)
+                          (= :lowered (:status result))
+                            (recur (rest remaining) (conj out result))
+                          (= :multi-fn-template (:kind result))
+                            ;; Flatten multi-arity templates into individual decls.
+                            (let [flat (reduce (fn [acc entry]
+                                                 (if-let [d (:fn entry)]
+                                                   (conj acc {:status :lowered :decl d :imports []})
+                                                   acc))
+                                               []
+                                               (:fns result))]
+                              (recur (rest remaining) (into out flat)))
+                          :else
+                            (recur (rest remaining) out)))))
+          ;; Filter out results with nil decls (failures that slipped through).
+          valid-results (filterv (fn [r] (some? (:decl r))) results)
+          file-ast (lower-go/file pkg-name valid-results)]
+      (gogen/render file-ast))))

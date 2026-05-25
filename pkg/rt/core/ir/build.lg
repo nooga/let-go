@@ -615,28 +615,32 @@
       result)))
 
 (defn build-recur [form ctx]
-  "recur emits Branch back to the current loop header with new loop-var
-   args plus the captures (which loop-invariantly pass-through via the
-   header's own cap-param-ids)."
+  "recur emits Branch back to the current loop header, or :tail-call for
+   function-level recursion."
   (let [headers (get @ctx :loop-headers)
-        _      (when (or (nil? headers) (empty? headers)) (throw "recur outside of loop"))
-        header (peek headers)
-        f      (ctx-fn ctx)
-        cur    (ctx-block ctx)
-        ;; Symbols stashed by build-loop. Look each up against the
-        ;; current lexical scope so we find the *enclosing block's*
-        ;; binding (e.g., an if-else's BlockArg after build-if rebound
-        ;; the symbol), not the loop header's stale param.
-        cap-syms-stack (get @ctx :loop-capture-syms-stack)
-        cap-syms (or (peek cap-syms-stack) [])
-        cap-vals (mapv (fn [sym] (lookup-local ctx sym)) cap-syms)
-        ;; Build new loop-var values.
-        loop-arg-ids (mapv (fn [a] (build-form a ctx)) (rest form))
-        all-args (vec (concat loop-arg-ids cap-vals))
-        bt       (ir/new-branch-target header all-args)]
-    (ir/add-terminator! f cur :branch [] bt)
-    (ir/add-pred! f header cur)
-    TERMINATED))
+        f       (ctx-fn ctx)
+        cur     (ctx-block ctx)]
+    (if (and headers (seq headers))
+      ;; Inside loop*: branch back to loop header.
+      (let [header (peek headers)
+            cap-syms-stack (get @ctx :loop-capture-syms-stack)
+            cap-syms (or (peek cap-syms-stack) [])
+            cap-vals (mapv (fn [sym] (lookup-local ctx sym)) cap-syms)
+            loop-arg-ids (mapv (fn [a] (build-form a ctx)) (rest form))
+            all-args (vec (concat loop-arg-ids cap-vals))
+            bt       (ir/new-branch-target header all-args)]
+        (ir/add-terminator! f cur :branch [] bt)
+        (ir/add-pred! f header cur)
+        TERMINATED)
+      ;; Function-level recur: emit :tail-call.
+      (let [arg-syms (get @ctx :fn-arg-syms)]
+        (if arg-syms
+          (let [arg-ids (mapv (fn [a] (build-form a ctx)) (rest form))]
+            ;; :tail-call refs are just the new arg values (self-recursive,
+            ;; no fn ref needed).
+            (ir/add-terminator! f cur :tail-call arg-ids (count arg-ids))
+            TERMINATED)
+          (throw "recur outside of loop or function"))))))
 
 ;; --- destructuring helpers ------------------------------------------------
 ;; Port of core.lg's destructure* / destructure-vector / destructure-map.
@@ -717,30 +721,49 @@
           :else       (recur (drop 2 b) (conj out n v)))))))
 
 (defn- expand-fn-args [args-vec body-forms]
-  "If args-vec has destructuring patterns (non-symbol elements), return
-   [flat-args new-body] where new-body is a let* form wrapping the body
-   with destructuring accessor bindings. If no destructuring, returns nil."
-  (when (some (fn [x] (not (symbol? x))) args-vec)
-    (let [result (loop [remaining args-vec flat-args [] let-binds []]
-                   (if (empty? remaining)
-                     {:flat-args flat-args :let-binds let-binds}
-                     (let [x (first remaining)]
-                       (if (symbol? x)
-                         (recur (rest remaining) (conj flat-args x) let-binds)
-                         (let [gs (gensym "p__")
-                               binds (cond
-                                       (vector? x) (expand-vector-pattern gs x)
-                                       (map? x)    (expand-map-pattern gs x)
-                                       :else (throw (str "unsupported arg pattern: " (pr-str x))))]
-                           (recur (rest remaining)
-                                  (conj flat-args gs)
-                                  (into let-binds binds)))))))]
-      [(:flat-args result) (list (apply list 'let* (vec (:let-binds result)) body-forms))])))
+  "Detect & rest and destructuring patterns in args-vec.
+   Returns nil if nothing to expand, or {:flat-args [...] :body (...) :variadic? bool}."
+  (let [amp-pos   (loop [i 0 remaining args-vec]
+                    (if (empty? remaining)
+                      -1
+                      (if (= (first remaining) '&)
+                        i
+                        (recur (inc i) (rest remaining)))))
+        variadic? (not= amp-pos -1)
+        fixed-args (if variadic? (take amp-pos args-vec) args-vec)
+        rest-sym   (when variadic? (nth args-vec (inc amp-pos) nil))
+        has-destructure? (some (fn [x] (not (symbol? x))) fixed-args)]
+    (when (or variadic? has-destructure?)
+      (let [result (loop [remaining fixed-args flat-args [] let-binds []]
+                     (if (empty? remaining)
+                       {:flat-args flat-args :let-binds let-binds}
+                       (let [x (first remaining)]
+                         (if (symbol? x)
+                           (recur (rest remaining) (conj flat-args x) let-binds)
+                           (let [gs (gensym "p__")
+                                 binds (cond
+                                         (vector? x) (expand-vector-pattern gs x)
+                                         (map? x)    (expand-map-pattern gs x)
+                                         :else (throw (str "unsupported arg pattern: " (pr-str x))))]
+                             (recur (rest remaining)
+                                    (conj flat-args gs)
+                                    (into let-binds binds)))))))
+            final-flat-args (if variadic?
+                             (conj (:flat-args result) rest-sym)
+                             (:flat-args result))
+            body (if (seq (:let-binds result))
+                   (list (apply list 'let* (vec (:let-binds result)) body-forms))
+                   body-forms)]
+        {:flat-args final-flat-args
+         :body body
+         :variadic? variadic?}))))
 
-(defn- build-inner-fn-template [name-sym args-vec body-forms capture-syms]
-  (let [inner     (ir/new-fn (str name-sym) (count args-vec) false)
+(defn- build-inner-fn-template [name-sym args-vec body-forms capture-syms variadic?]
+  (let [inner     (ir/new-fn (str name-sym) (count args-vec) variadic?)
         entry     (ir/entry-block inner)
         inner-ctx (new-context inner)]
+    ;; Stash arg symbols so build-recur can emit :tail-call at function level.
+    (reset! inner-ctx (assoc @inner-ctx :fn-arg-syms (vec args-vec)))
     (loop [i 0]
       (when (< i (count args-vec))
         (bind-local! inner-ctx (nth args-vec i)
@@ -763,7 +786,7 @@
     {:kind :fn-template
      :fn inner
      :arity (count args-vec)
-     :variadic? false}))
+     :variadic? variadic?}))
 
 (defn- emit-template-closure [template capture-syms ctx]
   (let [const-id   (ir/add-inst (ctx-fn ctx) (ctx-block ctx) :const [] template)
@@ -784,11 +807,13 @@
 (defn- build-single-fn* [name-sym args-vec body-forms ctx]
   "Build a single-arity fn* and return the InstId of its value in ctx."
   (let [expanded   (expand-fn-args args-vec body-forms)
-        [flat-args flat-body] (or expanded [args-vec body-forms])
+        flat-args  (if expanded (:flat-args expanded) args-vec)
+        flat-body  (if expanded (:body expanded) body-forms)
+        variadic?  (if expanded (:variadic? expanded) false)
         arg-set    (into #{} flat-args)
         frees      (free-vars (cons 'do flat-body) arg-set)
         captures   (vec (sort-by str (filter #(lookup-local ctx %) frees)))
-        template   (build-inner-fn-template name-sym flat-args flat-body captures)]
+        template   (build-inner-fn-template name-sym flat-args flat-body captures variadic?)]
     (emit-template-closure template captures ctx)))
 
 (defn build-fn* [form ctx]
@@ -817,17 +842,19 @@
                                    (let [args-vec   (first arity-form)
                                          body-forms (rest arity-form)
                                          e          (expand-fn-args args-vec body-forms)]
-                                     (or e [args-vec body-forms])))
+                                     (if e
+                                       e
+                                       {:flat-args args-vec :body body-forms :variadic? false})))
                                  arities)
-            all-caps  (reduce (fn [caps [flat-args flat-body]]
+            all-caps  (reduce (fn [caps {:keys [flat-args body]}]
                                 (let [arg-set (into #{} flat-args)
-                                      frees   (free-vars (cons 'do flat-body) arg-set)]
+                                      frees   (free-vars (cons 'do body) arg-set)]
                                   (into caps (filter #(lookup-local ctx %) frees))))
                               #{}
                               expanded-forms)
             captures  (vec (sort-by str all-caps))
-            templates (mapv (fn [[flat-args flat-body]]
-                              (build-inner-fn-template name-sym flat-args flat-body captures))
+            templates (mapv (fn [{:keys [flat-args body variadic?]}]
+                              (build-inner-fn-template name-sym flat-args body captures variadic?))
                             expanded-forms)
             template  {:kind :multi-fn-template
                        :fns templates}]
@@ -848,11 +875,15 @@
     (if-not multi?
       ;; Single-arity path. Expand destructured args before building.
       (let [expanded   (expand-fn-args args-vec body-forms)
-            [flat-args flat-body] (or expanded [args-vec body-forms])
+            flat-args  (if expanded (:flat-args expanded) args-vec)
+            flat-body  (if expanded (:body expanded) body-forms)
+            variadic?  (if expanded (:variadic? expanded) false)
             arity      (count flat-args)
-            f          (ir/new-fn (str name-sym) arity false)
+            f          (ir/new-fn (str name-sym) arity variadic?)
             entry-blk  (ir/entry-block f)
             ctx        (new-context f)]
+        ;; Stash arg symbols so build-recur can emit :tail-call at function level.
+        (reset! ctx (assoc @ctx :fn-arg-syms (vec flat-args)))
         (loop [i 0]
           (when (< i arity)
             (let [arg-id (ir/add-inst f entry-blk :load-arg [] i)]
@@ -875,20 +906,24 @@
             entry-blk  (ir/entry-block f)
             ctx        (new-context f)
             arities    (cons args-vec body-forms)
-            all-caps   (reduce (fn [caps arity-form]
-                                 (let [arg-vec  (first arity-form)
-                                       bforms   (rest arity-form)
-                                       arg-set  (into #{} arg-vec)
-                                       frees    (free-vars (cons 'do bforms) arg-set)]
+            expanded-forms (mapv (fn [arity-form]
+                                   (let [arg-vec   (first arity-form)
+                                         body-forms (rest arity-form)
+                                         e          (expand-fn-args arg-vec body-forms)]
+                                     (if e
+                                       e
+                                       {:flat-args arg-vec :body body-forms :variadic? false})))
+                                 arities)
+            all-caps   (reduce (fn [caps {:keys [flat-args body]}]
+                                 (let [arg-set (into #{} flat-args)
+                                       frees   (free-vars (cons 'do body) arg-set)]
                                    (into caps (filter #(lookup-local ctx %) frees))))
                                #{}
-                               arities)
+                               expanded-forms)
             captures   (vec (sort-by str all-caps))
-            templates  (mapv (fn [arity-form]
-                               (let [arg-vec (first arity-form)
-                                     bforms  (rest arity-form)]
-                                 (build-inner-fn-template name-sym arg-vec bforms captures)))
-                             arities)
+            templates  (mapv (fn [{:keys [flat-args body variadic?]}]
+                               (build-inner-fn-template name-sym flat-args body captures variadic?))
+                             expanded-forms)
             template   {:kind :multi-fn-template :fns templates}
             closure-id (emit-template-closure template captures ctx)
             final-blk  (ctx-block ctx)]

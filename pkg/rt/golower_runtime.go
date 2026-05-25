@@ -61,3 +61,11 @@ func MakeNativeMultiArity(fns []vm.Value) vm.Value {
 	}
 	return v
 }
+
+// BoxRestArgs boxes a variadic rest-args slice into a vm.Value list.
+// Used by the Go lowering when lowering :load-arg for the rest arg of
+// a variadic function (where the Go param is ...vm.Value).
+func BoxRestArgs(args []vm.Value) vm.Value {
+	v, _ := vm.ListType.Box(args)
+	return v
+}

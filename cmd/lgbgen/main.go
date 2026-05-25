@@ -1,13 +1,23 @@
 //go:build bootstrap
 
-// lgbgen compiles core.lg and all embedded namespaces into a pre-compiled .lgb bundle.
-// Usage: go run -tags bootstrap ./cmd/lgbgen [output-path]
-// Default output: pkg/rt/core_compiled.lgb (when run from repo root)
+// lgbgen compiles core.lg and all embedded namespaces into a pre-compiled .lgb bundle,
+// or with --target=go, generates Go source files from the Go-lowering pipeline.
+//
+// Usage:
+//
+//	go run -tags bootstrap ./cmd/lgbgen [output-path]              # .lgb bundle (default)
+//	go run -tags bootstrap ./cmd/lgbgen --target=go <out-dir>       # Go source bootstrap
+//
+// Default .lgb output: pkg/rt/core_compiled.lgb (when run from repo root)
+// Default Go output dir: pkg/rt/core_go_lowered
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/bytecode"
@@ -55,21 +65,29 @@ var embeddedNS = []struct {
 }
 
 func main() {
+	// Parse mode: --target=go <out-dir> or default bytecode mode
+	targetGo := false
 	outPath := "pkg/rt/core_compiled.lgb"
-	if len(os.Args) > 1 {
-		outPath = os.Args[1]
+	goOutDir := "pkg/rt/core_go_lowered"
+
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--target=go":
+			targetGo = true
+			if i+1 < len(args) {
+				goOutDir = args[i+1]
+				i++
+			}
+		default:
+			outPath = args[i]
+		}
 	}
 
 	// rt.init() has already run — native builtins are registered in CoreNS.
 	consts := vm.NewConsts()
-	nsChunks := make(map[string]*vm.CodeChunk)
-	nsOrder := make([]string, 0, len(embeddedNS))
 
-	// Phase F: ir.data is not in the embeddedNS list (its precompiled
-	// stubs would intern nil into the `ir` namespace, breaking
-	// subsequent compilation). Instead, evaluate ir.data's source
-	// up-front so its intern block populates `ir/op`, `ir/refs`, etc.
-	// before any IR-using namespace below compiles.
+	// Phase 0: bootstrap ir.data (same for both modes).
 	{
 		coreNS := rt.NS(rt.NameCoreNS)
 		c := compiler.NewCompiler(consts, coreNS)
@@ -80,12 +98,15 @@ func main() {
 		}
 	}
 
+	// Phase 1: compile all namespaces from source (bytecode, sets up VM state).
+	nsChunks := make(map[string]*vm.CodeChunk)
+	nsOrder := make([]string, 0, len(embeddedNS))
+
 	for _, ns := range embeddedNS {
 		src := *ns.src
 		if src == "" {
 			continue
 		}
-		// Use CoreNS as starting namespace — the (ns ...) form will switch to the target
 		coreNS := rt.NS(rt.NameCoreNS)
 		c := compiler.NewCompiler(consts, coreNS)
 		c.SetSource("<embedded:" + ns.name + ">")
@@ -97,9 +118,19 @@ func main() {
 		}
 		nsChunks[ns.name] = chunk
 		nsOrder = append(nsOrder, ns.name)
-		fmt.Printf("  compiled %-10s (%d bytes bytecode)\n", ns.name, len(chunk.Code())*4)
+		if targetGo {
+			fmt.Printf("  compiled %-20s (%d bytecode + lowering to Go)\n", ns.name, len(chunk.Code())*4)
+		} else {
+			fmt.Printf("  compiled %-10s (%d bytes bytecode)\n", ns.name, len(chunk.Code())*4)
+		}
 	}
 
+	if targetGo {
+		runGoTarget(goOutDir)
+		return
+	}
+
+	// Bytecode mode: write .lgb bundle.
 	f, err := os.Create(outPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create %s: %v\n", outPath, err)
@@ -115,4 +146,137 @@ func main() {
 	fi, _ := f.Stat()
 	fmt.Printf("wrote %s (%d bytes, %d consts, %d namespaces)\n",
 		outPath, fi.Size(), len(consts.Values()), len(nsChunks))
+}
+
+// nsToGoPkgName converts a let-go namespace name to a valid Go package name.
+// Dots become underscores (ir.zipper → ir_zipper), hyphens become underscores.
+func nsToGoPkgName(nsName string) string {
+	s := strings.ReplaceAll(nsName, ".", "_")
+	s = strings.ReplaceAll(s, "-", "_")
+	return s
+}
+
+// runGoTarget re-pipelines each namespace's defn forms through the Go
+// lowering pipeline and writes .go source files to outDir.
+func runGoTarget(outDir string) {
+	var failed []string
+	pipelineVar := rt.LookupVar("ir.passes.pipeline", "lower-ns-to-go")
+	if pipelineVar == nil {
+		fmt.Fprintf(os.Stderr, "fatal: ir.passes.pipeline/lower-ns-to-go not found\n")
+		os.Exit(1)
+	}
+
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "create output dir %s: %v\n", outDir, err)
+		os.Exit(1)
+	}
+
+	for _, ns := range embeddedNS {
+		src := *ns.src
+		if src == "" {
+			continue
+		}
+
+		// Read forms from source and pick out defn forms only.
+		// defmacro forms are skipped for now — their bodies are macro
+		// template construction code that doesn't lower cleanly.
+		r := compiler.NewLispReader(strings.NewReader(src), "<embedded:"+ns.name+">")
+		var defnForms []vm.Value
+		for {
+			form, err := r.Read()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				fmt.Fprintf(os.Stderr, "%s: read error: %v\n", ns.name, err)
+				os.Exit(1)
+			}
+			if isDefnOnly(form) {
+				defnForms = append(defnForms, form)
+			}
+		}
+
+		if len(defnForms) == 0 {
+			fmt.Printf("  skip %-20s (no defn forms)\n", ns.name)
+			continue
+		}
+
+		// Each namespace maps to its own Go package in a subdirectory.
+		pkgName := nsToGoPkgName(ns.name)
+		pkgDir := filepath.Join(outDir, pkgName)
+		if err := os.MkdirAll(pkgDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "create pkg dir %s: %v\n", pkgDir, err)
+			os.Exit(1)
+		}
+
+		// Batch all forms into one namespace file.
+		formsVec := vm.NewPersistentVector(defnForms)
+		args := []vm.Value{
+			vm.String(pkgName),
+			vm.Symbol(ns.name),
+			formsVec,
+		}
+		result, err := pipelineVar.Invoke(args)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: Go lowering failed: %v\n", ns.name, err)
+			failed = append(failed, ns.name)
+			continue
+		}
+		goSrc, ok := result.(vm.String)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "%s: expected string result, got %T\n", ns.name, result)
+			failed = append(failed, ns.name)
+			continue
+		}
+		filename := filepath.Join(pkgDir, pkgName+".go")
+		if err := os.WriteFile(filename, []byte(goSrc), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: write %s: %v\n", ns.name, filename, err)
+			os.Exit(1)
+		}
+		fmt.Printf("  wrote %s (%d bytes, %d defns)\n", filename, len(goSrc), len(defnForms))
+	}
+	if len(failed) > 0 {
+		fmt.Fprintf(os.Stderr, "lgbgen: %d namespace(s) failed: %v\n", len(failed), failed)
+		os.Exit(1)
+	}
+}
+
+// isDefnLike returns true if form is a list beginning with defn or defmacro.
+func isDefnLike(form vm.Value) bool {
+	return isDefnOnly(form) || isDefmacroForm(form)
+}
+
+func isDefmacroForm(form vm.Value) bool {
+	list, ok := form.(vm.Sequable)
+	if !ok {
+		return false
+	}
+	seq := list.Seq()
+	if seq == nil {
+		return false
+	}
+	head := seq.First()
+	sym, ok := head.(vm.Symbol)
+	if !ok {
+		return false
+	}
+	return string(sym) == "defmacro"
+}
+
+// isDefnOnly returns true if form is a list beginning with defn (not defmacro).
+func isDefnOnly(form vm.Value) bool {
+	list, ok := form.(vm.Sequable)
+	if !ok {
+		return false
+	}
+	seq := list.Seq()
+	if seq == nil {
+		return false
+	}
+	head := seq.First()
+	sym, ok := head.(vm.Symbol)
+	if !ok {
+		return false
+	}
+	return string(sym) == "defn"
 }

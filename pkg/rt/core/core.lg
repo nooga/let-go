@@ -754,7 +754,7 @@
         variadic?  (when single? (boolean (some (fn [a] (= a '&)) args)))
         arity      (when single?
                      (if variadic?
-                       (- (count args) 2)   ; & and the rest-sym don't count
+                       (- (count args) 1)   ; only & doesn't count; rest-sym occupies a frame slot
                        (count args)))]
     (if *ir-compile*
       ;; `resolve` defers ir.passes.pipeline lookup to RUNTIME — core.lg

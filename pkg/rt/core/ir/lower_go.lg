@@ -5,7 +5,7 @@
 ;;   - strict mode: unsupported ops/shapes throw
 ;;   - bridge mode: unsupported functions fall back at whole-function granularity
 ;;   - supported ops: const, load-arg, block-arg, add/sub/mul, lt/lte/gt/gte/eq,
-;;     return, branch, branch-if
+;;     return, branch, branch-if, tail-call
 ;;   - control flow lowers from block-parameter SSA to mutable locals plus labels/gotos
 
 (ns ir.lower-go
@@ -24,6 +24,7 @@
 (declare function-needs-error?)
 (declare function-needs-rt?)
 (declare function-needs-vm?)
+(declare function-needs-tail-call?)
 (declare return-ref-ids)
 
 (defn- unsupported [mode msg]
@@ -237,7 +238,13 @@
               (nth closed-exprs aux))
 
           (= op :load-arg)
-            (gogen/ident (str "arg" aux))
+            (if (and (ir/fn-variadic? f) (= aux (dec (ir/fn-arity f))))
+              (let [rest-var (if (function-needs-tail-call? f) "args0" "args")]
+                (gogen/call
+                  (gogen/field-sel (gogen/ident "rt") "BoxRestArgs")
+                  [(gogen/ident rest-var)]))
+              (let [prefix (if (function-needs-tail-call? f) "a" "arg")]
+                (gogen/ident (str prefix aux))))
 
           (= op :load-var)
             (let [sym (symbol aux)
@@ -349,6 +356,23 @@
             (when (and cond-expr true-stmts false-stmts)
               [(gogen/if-stmt nil cond-expr true-stmts false-stmts)])))
 
+      (= op :tail-call)
+        (let [tail-args refs
+              fixed-arity (if (ir/fn-variadic? f) (dec (ir/fn-arity f)) (ir/fn-arity f))
+              assigns (loop [i 0 remaining tail-args out []]
+                        (if (empty? remaining)
+                          out
+                          (let [val-expr (value-expr f closed-exprs (first remaining))
+                                lhs (if (and (ir/fn-variadic? f) (= i fixed-arity))
+                                      (gogen/ident "args0")
+                                      (gogen/ident (str "a" i)))]
+                            (if (nil? val-expr)
+                              nil
+                              (recur (inc i) (rest remaining)
+                                     (conj out (gogen/assign "=" lhs val-expr)))))))]
+          (when assigns
+            (conj assigns (gogen/goto-stmt "func_entry"))))
+
       :else nil)))
 
 (declare function-needs-error?)
@@ -443,28 +467,68 @@
                          (ir/block-insts (first blocks) f))
                      true
                    :else (recur (rest blocks))))]
-    (or local?
+    (or (ir/fn-variadic? f)
+        local?
         (some function-needs-rt? (nested-template-fns f)))))
 
 (defn- function-needs-vm? [f]
   (let [arg-types (or (ir/fn-arg-types f) [])
         ret-ids   (or (return-ref-ids f) [])]
-    (or (function-needs-rt? f)
+    (or (ir/fn-variadic? f)
+        (function-needs-rt? f)
         (some (fn [t] (= "vm.Value" (go-type-spec t))) arg-types)
         (some (fn [nid] (= "vm.Value" (go-type-spec (ir/type-of nid f)))) ret-ids)
         (some function-needs-vm? (nested-template-fns f)))))
+
+(defn- function-needs-tail-call? [f]
+  (loop [blocks (ir/blocks f)]
+    (cond
+      (empty? blocks) false
+      (= :tail-call (ir/op (ir/block-term (first blocks) f) f)) true
+      :else (recur (rest blocks)))))
+
+(defn- arg-local-decls [f]
+  "For tail-call fns, declare mutable locals (a0, a1, ...) that shadow the
+   immutable Go params, plus init assignments (a0 = arg0, ...).
+   Returns [var-decls assign-stmts]."
+  (let [arity       (ir/fn-arity f)
+        variadic?   (ir/fn-variadic? f)
+        fixed-arity (if variadic? (dec arity) arity)]
+    (loop [i 0 decls [] assigns []]
+      (if (>= i fixed-arity)
+        (let [final-decls decls
+              final-assigns assigns]
+          (if variadic?
+            [(conj final-decls (gogen/var-decl "args0" (gogen/type "[]vm.Value") nil))
+             (conj final-assigns
+                   (gogen/assign "=" (gogen/ident "args0") (gogen/ident "args")))]
+            [final-decls final-assigns]))
+        (let [sym (str "a" i)
+              arg-sym (str "arg" i)]
+          (recur (inc i)
+                 (conj decls (gogen/var-decl sym (gogen/type "vm.Value") nil))
+                 (conj assigns
+                       (gogen/assign "=" (gogen/ident sym) (gogen/ident arg-sym)))))))))
 
 (defn- lower-body
   ([f] (lower-body f nil))
   ([f closed-exprs]
    (let [needs-error? (function-needs-error? f)
+         needs-tail-call? (function-needs-tail-call? f)
          decls0 (local-decls f)
-         decls  (if needs-error?
+         decls1 (if needs-error?
                   (conj decls0 (gogen/var-decl "callErr" (gogen/type "error") nil))
-                  decls0)]
+                  decls0)
+         [arg-decls arg-inits] (if needs-tail-call?
+                                 (arg-local-decls f)
+                                 [[] []])
+         decls  (into decls1 arg-decls)
+         entry-label [(gogen/label-stmt "func_entry" nil)]]
      (when decls
        (loop [blocks (ir/blocks f)
-              out    decls]
+              out    (if needs-tail-call?
+                      (vec (concat decls arg-inits entry-label))
+                      decls)]
          (if (empty? blocks)
            out
            (let [stmts (lower-block-stmts f closed-exprs (first blocks))]
@@ -473,11 +537,15 @@
                (recur (rest blocks) (into out stmts))))))))))
 
 (defn- params-for [f]
-  (let [arity     (ir/fn-arity f)
-        arg-types (or (ir/fn-arg-types f) [])]
+  (let [arity       (ir/fn-arity f)
+        variadic?   (ir/fn-variadic? f)
+        fixed-arity (if variadic? (dec arity) arity)
+        arg-types   (or (ir/fn-arg-types f) [])]
     (loop [i 0 out []]
-      (if (>= i arity)
-        out
+      (if (>= i fixed-arity)
+        (if variadic?
+          (conj out (gogen/variadic-param "args" (gogen/type "vm.Value")))
+          out)
         (let [go-type (infer-go-type (if (< i (count arg-types)) (nth arg-types i) :unknown))]
           (if (nil? go-type)
             nil
@@ -514,7 +582,6 @@
         results (result-node f)
         body    (lower-body f closed-exprs)]
     (cond
-      (ir/fn-variadic? f) (throw "nested variadic closure not supported")
       (nil? params)  (throw "nested closure has unsupported parameter types")
       (nil? results) (throw "nested closure has unsupported result type")
       (nil? body)    (throw "nested closure has unsupported body shape")
@@ -522,8 +589,6 @@
         (gogen/func-lit params results body))))
 
 (defn- lower-fn* [f mode]
-  (when (ir/fn-variadic? f)
-    (unsupported mode "variadic functions not supported"))
   (let [params  (params-for f)
         results (result-node f)
         body    (lower-body f)

@@ -705,6 +705,26 @@ func cParam(nameV, typeV vm.Value) (vm.Value, error) {
 	}), nil
 }
 
+// variadic-param: (gogen/variadic-param "name" type-expr)
+// Like param but wraps the type in *ast.Ellipsis for Go variadic params (e.g. args ...int).
+func cVariadicParam(nameV, typeV vm.Value) (vm.Value, error) {
+	name, err := asString(nameV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if !validIdent(name) {
+		return vm.NIL, fmt.Errorf("gogen/variadic-param: %q is not a valid identifier", name)
+	}
+	t, err := unboxExpr(typeV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return box(&ast.Field{
+		Names: []*ast.Ident{ast.NewIdent(name)},
+		Type:  &ast.Ellipsis{Elt: t},
+	}), nil
+}
+
 // result: (gogen/result type-expr)
 // Anonymous result for multi-return signatures.
 func cResult(typeV vm.Value) (vm.Value, error) {
@@ -1623,6 +1643,7 @@ func installGogenNS() {
 		mk(wrap2Named("call", cCall)),
 		mk(wrap2Named("cast", cCast)),
 		mk(wrap2Named("param", cParam)),
+		mk(wrap2Named("variadic-param", cVariadicParam)),
 		mk(wrap1Named("result", cResult)),
 		mk(wrap2Named("type-assert", cTypeAssert)),
 		mk(wrap2Named("kv-expr", cKVExpr)),
