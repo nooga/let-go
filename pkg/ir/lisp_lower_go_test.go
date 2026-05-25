@@ -407,6 +407,29 @@ func TestLowerGoStrictLoopLowersToCFG(t *testing.T) {
 	}
 }
 
+func TestLowerGoStrictMultiArityDefnLowersToNativeMultiArity(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn foo ([x] x) ([x y] (+ x y)))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v (reason: %v)", got, result.ValueAt(vm.Keyword("reason")))
+	}
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "rt.MakeNativeMultiArity") {
+		t.Fatalf("expected multi-arity defn to lower via rt.MakeNativeMultiArity\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "func(arg0 vm.Value) vm.Value") {
+		t.Fatalf("expected single-arg branch to lower as Go closure\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "func(arg0 vm.Value, arg1 vm.Value) vm.Value") {
+		t.Fatalf("expected two-arg branch to lower as Go closure\n--- go ---\n%s", rendered)
+	}
+}
+
 func TestLowerGoBridgeFallsBackOnUnsupportedQuotedUUIDConst(t *testing.T) {
 	ensureLoader()
 
@@ -419,5 +442,59 @@ func TestLowerGoBridgeFallsBackOnUnsupportedQuotedUUIDConst(t *testing.T) {
 	}
 	if result.ValueAt(vm.Keyword("decl")) != vm.NIL {
 		t.Fatalf("expected bridge fallback to omit :decl")
+	}
+}
+
+func TestLowerGoStrictVecDestructureDefn(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn vec-dest [x [a b]] (+ x a b))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v (reason: %v)", got, result.ValueAt(vm.Keyword("reason")))
+	}
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "func vec_") {
+		t.Fatalf("expected func decl\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "+") {
+		t.Fatalf("expected arithmetic in lowered body\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestLowerGoStrictMapKeysDestructureDefn(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn map-dest [{:keys [a b]}] (+ a b))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v (reason: %v)", got, result.ValueAt(vm.Keyword("reason")))
+	}
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "+") {
+		t.Fatalf("expected arithmetic in lowered body\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestLowerGoStrictNestedDestructureDefn(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn nested-dest [[a {:keys [b]}]] (+ a b))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v (reason: %v)", got, result.ValueAt(vm.Keyword("reason")))
+	}
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "+") {
+		t.Fatalf("expected arithmetic in lowered body\n--- go ---\n%s", rendered)
 	}
 }

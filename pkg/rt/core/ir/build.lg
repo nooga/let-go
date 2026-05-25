@@ -638,6 +638,105 @@
     (ir/add-pred! f header cur)
     TERMINATED))
 
+;; --- destructuring helpers ------------------------------------------------
+;; Port of core.lg's destructure* / destructure-vector / destructure-map.
+;; Operates on S-expressions so the resulting let*/nth/get forms are
+;; built by the normal IR builder path.
+
+(declare expand-binding expand-map-pattern)
+
+(defn- expand-vector-pattern [sym pat]
+  (loop [i 0 remaining pat out []]
+    (if (empty? remaining)
+      (expand-binding out)
+      (let [x (first remaining)]
+        (cond
+          (= x '&)
+            (let [rest-pat (second remaining)
+                  rem*     (drop 2 remaining)
+                  rest-expr (list 'drop i sym)
+                  out*     (if (symbol? rest-pat)
+                             (conj out rest-pat rest-expr)
+                             (let [gs (gensym "rest__")]
+                               (into (conj out gs rest-expr) (expand-binding [gs rest-pat]))))]
+              (if (and (seq rem*) (= (first rem*) :as))
+                (recur i (drop 2 rem*) (conj out* (second rem*) sym))
+                (recur i rem* out*)))
+          (= x :as)
+            (recur i (drop 2 remaining) (conj out (second remaining) sym))
+          (symbol? x)
+            (recur (inc i) (rest remaining) (conj out x (list 'nth sym i nil)))
+          (or (vector? x) (map? x))
+            (let [gs     (gensym "v__")
+                  nested (cond
+                           (vector? x) (expand-vector-pattern gs x)
+                           (map? x)    (expand-map-pattern gs x))
+                  out*   (conj out gs (list 'nth sym i nil))]
+              (recur (inc i) (rest remaining) (into out* nested)))
+          :else
+            (throw (str "unsupported destructuring pattern: " (pr-str x))))))))
+
+(defn- expand-map-pattern [sym pat]
+  (let [defaults (:or pat)
+        as-sym   (:as pat)
+        keys*    (:keys pat)
+        strs*    (:strs pat)
+        get-expr (fn [kn default]
+                   (if default
+                     (list 'get sym (keyword kn) default)
+                     (list 'get sym (keyword kn))))
+        binds    (loop [ks (or keys* []) out []]
+                   (if (empty? ks)
+                     out
+                     (let [k  (first ks)
+                           kn (if (keyword? k) (symbol (name k)) k)]
+                       (recur (rest ks)
+                              (conj out kn (get-expr kn (get defaults kn)))))))
+        binds    (if strs*
+                   (reduce (fn [out s]
+                             (let [kn (if (keyword? s) (symbol (name s)) s)]
+                               (conj out kn (get-expr kn (get defaults kn)))))
+                           binds strs*)
+                   binds)
+        binds    (if as-sym (conj binds as-sym sym) binds)]
+    (expand-binding binds)))
+
+(defn- expand-binding [bindings]
+  (loop [b bindings out []]
+    (if (empty? b)
+      out
+      (let [n (first b) v (second b)]
+        (cond
+          (vector? n) (let [gs (gensym "vec__")]
+                        (recur (drop 2 b)
+                               (-> out (conj gs v) (into (expand-vector-pattern gs n)))))
+          (map? n)    (let [gs (gensym "map__")]
+                        (recur (drop 2 b)
+                               (-> out (conj gs v) (into (expand-map-pattern gs n)))))
+          (nil? n)    (recur (drop 2 b) out)
+          :else       (recur (drop 2 b) (conj out n v)))))))
+
+(defn- expand-fn-args [args-vec body-forms]
+  "If args-vec has destructuring patterns (non-symbol elements), return
+   [flat-args new-body] where new-body is a let* form wrapping the body
+   with destructuring accessor bindings. If no destructuring, returns nil."
+  (when (some (fn [x] (not (symbol? x))) args-vec)
+    (let [result (loop [remaining args-vec flat-args [] let-binds []]
+                   (if (empty? remaining)
+                     {:flat-args flat-args :let-binds let-binds}
+                     (let [x (first remaining)]
+                       (if (symbol? x)
+                         (recur (rest remaining) (conj flat-args x) let-binds)
+                         (let [gs (gensym "p__")
+                               binds (cond
+                                       (vector? x) (expand-vector-pattern gs x)
+                                       (map? x)    (expand-map-pattern gs x)
+                                       :else (throw (str "unsupported arg pattern: " (pr-str x))))]
+                           (recur (rest remaining)
+                                  (conj flat-args gs)
+                                  (into let-binds binds)))))))]
+      [(:flat-args result) (list (apply list 'let* (vec (:let-binds result)) body-forms))])))
+
 (defn- build-inner-fn-template [name-sym args-vec body-forms capture-syms]
   (let [inner     (ir/new-fn (str name-sym) (count args-vec) false)
         entry     (ir/entry-block inner)
@@ -684,10 +783,12 @@
 
 (defn- build-single-fn* [name-sym args-vec body-forms ctx]
   "Build a single-arity fn* and return the InstId of its value in ctx."
-  (let [arg-set   (into #{} args-vec)
-        frees     (free-vars (cons 'do body-forms) arg-set)
-        captures  (vec (sort-by str (filter #(lookup-local ctx %) frees)))
-        template  (build-inner-fn-template name-sym args-vec body-forms captures)]
+  (let [expanded   (expand-fn-args args-vec body-forms)
+        [flat-args flat-body] (or expanded [args-vec body-forms])
+        arg-set    (into #{} flat-args)
+        frees      (free-vars (cons 'do flat-body) arg-set)
+        captures   (vec (sort-by str (filter #(lookup-local ctx %) frees)))
+        template   (build-inner-fn-template name-sym flat-args flat-body captures)]
     (emit-template-closure template captures ctx)))
 
 (defn build-fn* [form ctx]
@@ -709,22 +810,25 @@
             body-forms (rest rest-forms)]
         (build-single-fn* name-sym args-vec body-forms ctx))
       ;; Multi-arity path: preserve each arity as a nested template with
-      ;; a shared capture layout for all branches.
+      ;; a shared capture layout for all branches. Expand destructured
+      ;; args before computing captures so free-vars sees only symbols.
       (let [arities   rest-forms
-            all-caps  (reduce (fn [caps arity-form]
-                                (let [args-vec   (first arity-form)
-                                      body-forms (rest arity-form)
-                                      arg-set    (into #{} args-vec)
-                                      frees      (free-vars (cons 'do body-forms) arg-set)]
+            expanded-forms (mapv (fn [arity-form]
+                                   (let [args-vec   (first arity-form)
+                                         body-forms (rest arity-form)
+                                         e          (expand-fn-args args-vec body-forms)]
+                                     (or e [args-vec body-forms])))
+                                 arities)
+            all-caps  (reduce (fn [caps [flat-args flat-body]]
+                                (let [arg-set (into #{} flat-args)
+                                      frees   (free-vars (cons 'do flat-body) arg-set)]
                                   (into caps (filter #(lookup-local ctx %) frees))))
                               #{}
-                              arities)
+                              expanded-forms)
             captures  (vec (sort-by str all-caps))
-            templates (mapv (fn [arity-form]
-                              (let [args-vec   (first arity-form)
-                                    body-forms (rest arity-form)]
-                                (build-inner-fn-template name-sym args-vec body-forms captures)))
-                            arities)
+            templates (mapv (fn [[flat-args flat-body]]
+                              (build-inner-fn-template name-sym flat-args flat-body captures))
+                            expanded-forms)
             template  {:kind :multi-fn-template
                        :fns templates}]
         (emit-template-closure template captures ctx)))))
@@ -732,35 +836,61 @@
 ;; --- entry point ---------------------------------------------------------
 
 (defn build-fn [defn-form]
-  "Build an IR Function from a (defn name [args] body...) form.
-   Handles optional docstring. Returns a boxed *ir.Function.
-   Body's last form's value is Returned."
+  "Build an IR Function from a (defn name [args] body...) or
+   multi-arity (defn name ([args] body...) ([args2] body2...)) form.
+   Handles optional docstring. Returns a boxed *ir.Function."
   (let [name-sym   (nth defn-form 1)
         maybe-doc  (nth defn-form 2)
         has-doc?   (string? maybe-doc)
         args-vec   (if has-doc? (nth defn-form 3) maybe-doc)
         body-forms (drop (if has-doc? 4 3) defn-form)
-        arity      (count args-vec)
-        f          (ir/new-fn (str name-sym) arity false)
-        entry-blk  (ir/entry-block f)
-        ctx        (new-context f)]
-    ;; Bind each f arg to a LoadArg Inst.
-    (loop [i 0]
-      (when (< i arity)
-        (let [arg-id (ir/add-inst f entry-blk :load-arg [] i)]
-          (bind-local! ctx (nth args-vec i) arg-id)
-          (recur (inc i)))))
-    ;; Build the body — capture the last result.
-    (let [last-val  (loop [fs body-forms last-id nil]
-                      (if (seq fs)
-                        (recur (rest fs) (build-form (first fs) ctx))
-                        last-id))
-          final-blk (ctx-block ctx)]
-      ;; Terminator: Return last value, unless the body already
-      ;; terminated the current block (e.g. its tail is a recur, or
-      ;; an if where both branches recur).
-      (when-not (terminated? last-val)
-        (ir/add-terminator! f final-blk :return
-                            (if (nil? last-val) [] [last-val])
-                            nil)))
-    f))
+        multi?     (list? args-vec)]
+    (if-not multi?
+      ;; Single-arity path. Expand destructured args before building.
+      (let [expanded   (expand-fn-args args-vec body-forms)
+            [flat-args flat-body] (or expanded [args-vec body-forms])
+            arity      (count flat-args)
+            f          (ir/new-fn (str name-sym) arity false)
+            entry-blk  (ir/entry-block f)
+            ctx        (new-context f)]
+        (loop [i 0]
+          (when (< i arity)
+            (let [arg-id (ir/add-inst f entry-blk :load-arg [] i)]
+              (bind-local! ctx (nth flat-args i) arg-id)
+              (recur (inc i)))))
+        (let [last-val  (loop [fs flat-body last-id nil]
+                          (if (seq fs)
+                            (recur (rest fs) (build-form (first fs) ctx))
+                            last-id))
+              final-blk (ctx-block ctx)]
+          (when-not (terminated? last-val)
+            (ir/add-terminator! f final-blk :return
+                                (if (nil? last-val) [] [last-val])
+                                nil)))
+        f)
+      ;; Multi-arity path: preserve each arity as a nested template
+      ;; with a shared capture layout. The outer function (arity 0)
+      ;; returns the multi-arity closure value.
+      (let [f          (ir/new-fn (str name-sym) 0 false)
+            entry-blk  (ir/entry-block f)
+            ctx        (new-context f)
+            arities    (cons args-vec body-forms)
+            all-caps   (reduce (fn [caps arity-form]
+                                 (let [arg-vec  (first arity-form)
+                                       bforms   (rest arity-form)
+                                       arg-set  (into #{} arg-vec)
+                                       frees    (free-vars (cons 'do bforms) arg-set)]
+                                   (into caps (filter #(lookup-local ctx %) frees))))
+                               #{}
+                               arities)
+            captures   (vec (sort-by str all-caps))
+            templates  (mapv (fn [arity-form]
+                               (let [arg-vec (first arity-form)
+                                     bforms  (rest arity-form)]
+                                 (build-inner-fn-template name-sym arg-vec bforms captures)))
+                             arities)
+            template   {:kind :multi-fn-template :fns templates}
+            closure-id (emit-template-closure template captures ctx)
+            final-blk  (ctx-block ctx)]
+        (ir/add-terminator! f final-blk :return [closure-id] nil)
+        f))))

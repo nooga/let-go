@@ -51,8 +51,8 @@ func opcodeStride(op int32) int {
 // sp prefix that vm.OpcodeToString includes.
 func opcodeMnemonic(op int32) string {
 	s := vm.OpcodeToString(op)
-	if i := strings.Index(s, "/"); i >= 0 {
-		return strings.TrimSpace(s[i+1:])
+	if _, after, ok := strings.Cut(s, "/"); ok {
+		return strings.TrimSpace(after)
 	}
 	return s
 }

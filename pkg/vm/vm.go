@@ -303,10 +303,7 @@ func releaseFrame(f *Frame) {
 
 func NewFrame(code *CodeChunk, args []Value) *Frame {
 	f := acquireFrame()
-	needed := code.maxStack
-	if needed < 4 {
-		needed = 4
-	}
+	needed := max(code.maxStack, 4)
 	if cap(f.stack) >= needed {
 		f.stack = f.stack[:needed]
 	} else {

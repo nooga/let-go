@@ -58,7 +58,7 @@ type PairSample struct {
 // Only entries with non-zero counts are returned.
 func ProfileSnapshot() []ProfileSample {
 	var out []ProfileSample
-	for op := 0; op < 256; op++ {
+	for op := range 256 {
 		c := opcodeCounts[op].Load()
 		if c == 0 {
 			continue
@@ -84,8 +84,8 @@ func ProfileSnapshot() []ProfileSample {
 // Only entries with non-zero counts are returned.
 func PairSnapshot() []PairSample {
 	var out []PairSample
-	for p := 0; p < 256; p++ {
-		for c := 0; c < 256; c++ {
+	for p := range 256 {
+		for c := range 256 {
 			n := pairCounts[p][c].Load()
 			if n == 0 {
 				continue
@@ -112,9 +112,9 @@ func PairSnapshot() []PairSample {
 
 // ResetProfile zeroes all counters.
 func ResetProfile() {
-	for op := 0; op < 256; op++ {
+	for op := range 256 {
 		opcodeCounts[op].Store(0)
-		for c := 0; c < 256; c++ {
+		for c := range 256 {
 			pairCounts[op][c].Store(0)
 		}
 	}
