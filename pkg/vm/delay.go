@@ -53,8 +53,8 @@ func (d *Delay) Deref() Value {
 	return v
 }
 
-func (d *Delay) Type() ValueType    { return DelayType }
-func (d *Delay) Unbox() interface{} { return d }
+func (d *Delay) Type() ValueType { return DelayType }
+func (d *Delay) Unbox() any      { return d }
 func (d *Delay) String() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -67,11 +67,11 @@ func (d *Delay) String() string {
 // DelayType
 type theDelayType struct{}
 
-func (t *theDelayType) String() string     { return t.Name() }
-func (t *theDelayType) Type() ValueType    { return TypeType }
-func (t *theDelayType) Unbox() interface{} { return nil }
-func (t *theDelayType) Name() string       { return "let-go.lang.Delay" }
-func (t *theDelayType) Box(bare interface{}) (Value, error) {
+func (t *theDelayType) String() string  { return t.Name() }
+func (t *theDelayType) Type() ValueType { return TypeType }
+func (t *theDelayType) Unbox() any      { return nil }
+func (t *theDelayType) Name() string    { return "let-go.lang.Delay" }
+func (t *theDelayType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 

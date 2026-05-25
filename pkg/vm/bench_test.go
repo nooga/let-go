@@ -18,7 +18,7 @@ func BenchmarkFrameDispatch(b *testing.B) {
 	// 100 iterations of load+pop, then one final load+return
 	chunk := NewCodeChunk(consts)
 	iterations := 100
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		chunk.Append(OP_LOAD_CONST | (int32(i%8) << 16))
 		chunk.Append32(idx)
 		chunk.Append(OP_POP)
@@ -246,7 +246,7 @@ func BenchmarkConj(b *testing.B) {
 	b.Run("List", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			var c Collection = EmptyList
-			for j := 0; j < 100; j++ {
+			for j := range 100 {
 				c = c.Conj(Int(j))
 			}
 		}
@@ -254,7 +254,7 @@ func BenchmarkConj(b *testing.B) {
 	b.Run("ArrayVector", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			var c Collection = ArrayVector{}
-			for j := 0; j < 100; j++ {
+			for j := range 100 {
 				c = c.Conj(Int(j))
 			}
 		}
@@ -262,7 +262,7 @@ func BenchmarkConj(b *testing.B) {
 	b.Run("Map", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			var c Collection = make(Map)
-			for j := 0; j < 100; j++ {
+			for j := range 100 {
 				c = c.Conj(ArrayVector{Int(j), Int(j * 10)})
 			}
 		}
@@ -274,7 +274,7 @@ func BenchmarkMapAssoc(b *testing.B) {
 	for _, size := range sizes {
 		// Build PersistentMap (HAMT)
 		pm := EmptyPersistentMap
-		for i := 0; i < size; i++ {
+		for i := range size {
 			pm = pm.Assoc(Int(i), Int(i*10)).(*PersistentMap)
 		}
 
@@ -296,7 +296,7 @@ func BenchmarkMapAssoc(b *testing.B) {
 
 		// Build old Map (copy-on-write) for comparison
 		om := make(Map, size)
-		for i := 0; i < size; i++ {
+		for i := range size {
 			om[Int(i)] = Int(i * 10)
 		}
 		b.Run("GoMap-Assoc/"+itoa(size), func(b *testing.B) {

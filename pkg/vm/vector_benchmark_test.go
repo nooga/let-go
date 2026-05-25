@@ -76,7 +76,7 @@ func BenchmarkVectorConj(b *testing.B) {
 				b.StartTimer()
 
 				// Add elements one by one
-				for j := 0; j < size; j++ {
+				for j := range size {
 					vec = vec.Conj(Int(j))
 				}
 			}
@@ -89,7 +89,7 @@ func BenchmarkVectorConj(b *testing.B) {
 				b.StartTimer()
 
 				// Add elements one by one
-				for j := 0; j < size; j++ {
+				for j := range size {
 					vec = vec.Conj(Int(j))
 				}
 			}
@@ -187,7 +187,7 @@ func BenchmarkLargeVectorAppend(b *testing.B) {
 	b.Run("ArrayVector", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			vec := NewArrayVector([]Value{}).(Collection)
-			for j := 0; j < size; j++ {
+			for j := range size {
 				vec = vec.Conj(Int(j))
 			}
 		}
@@ -196,7 +196,7 @@ func BenchmarkLargeVectorAppend(b *testing.B) {
 	b.Run("PersistentVector", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			vec := NewPersistentVector([]Value{}).(Collection)
-			for j := 0; j < size; j++ {
+			for j := range size {
 				vec = vec.Conj(Int(j))
 			}
 		}
@@ -224,7 +224,7 @@ func BenchmarkVectorVersioning(b *testing.B) {
 			versions[0] = original.(Lookup)
 
 			// Create multiple versions through updates
-			for j := 0; j < numUpdates; j++ {
+			for j := range numUpdates {
 				// Create a copy
 				originalValues := original.Unbox().([]Value)
 				copyValues := make([]Value, len(originalValues))
@@ -252,7 +252,7 @@ func BenchmarkVectorVersioning(b *testing.B) {
 
 			// Create multiple versions through updates
 			current := original
-			for j := 0; j < numUpdates; j++ {
+			for j := range numUpdates {
 				// The beauty of persistent vectors - no need to copy
 				nextVersion := current.Assoc(Int(j%initialSize), Int(-j))
 				versions[j+1] = nextVersion.(Lookup)

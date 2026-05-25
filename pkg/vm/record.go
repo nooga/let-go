@@ -26,13 +26,13 @@ func NewRecordType(name string, fields []Keyword) *RecordType {
 	return &RecordType{typeName: name, fields: fields, fieldIdx: idx}
 }
 
-func (t *RecordType) String() string     { return t.Name() }
-func (t *RecordType) Type() ValueType    { return TypeType }
-func (t *RecordType) Unbox() interface{} { return t }
-func (t *RecordType) Name() string       { return t.typeName }
-func (t *RecordType) Fields() []Keyword  { return t.fields }
+func (t *RecordType) String() string    { return t.Name() }
+func (t *RecordType) Type() ValueType   { return TypeType }
+func (t *RecordType) Unbox() any        { return t }
+func (t *RecordType) Name() string      { return t.typeName }
+func (t *RecordType) Fields() []Keyword { return t.fields }
 
-func (t *RecordType) Box(bare interface{}) (Value, error) {
+func (t *RecordType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 
@@ -45,7 +45,7 @@ type Record struct {
 	fields []Value        // fixed fields, indexed by RecordType.fieldIdx
 	extra  *PersistentMap // overflow for assoc'd keys not in the record definition
 	meta   Value
-	origin interface{} // original Go struct for fast roundtrip (nil if mutated)
+	origin any // original Go struct for fast roundtrip (nil if mutated)
 }
 
 func NewRecord(rtype *RecordType, data *PersistentMap) *Record {
@@ -84,7 +84,7 @@ func NewRecord(rtype *RecordType, data *PersistentMap) *Record {
 // --- Value interface ---
 
 func (r *Record) Type() ValueType { return r.rtype }
-func (r *Record) Unbox() interface{} {
+func (r *Record) Unbox() any {
 	if r.origin != nil {
 		return r.origin
 	}
@@ -92,7 +92,7 @@ func (r *Record) Unbox() interface{} {
 }
 
 // Origin returns the original Go struct if this Record was created from one, or nil.
-func (r *Record) Origin() interface{} { return r.origin }
+func (r *Record) Origin() any { return r.origin }
 
 func (r *Record) String() string {
 	b := &strings.Builder{}
@@ -227,13 +227,20 @@ func (r *Record) Assoc(key Value, val Value) Associative {
 }
 
 func (r *Record) Dissoc(key Value) Associative {
-	// Can't remove a fixed field — set to nil
 	if kw, ok := key.(Keyword); ok {
-		if idx, ok := r.rtype.fieldIdx[kw]; ok {
-			newFields := make([]Value, len(r.fields))
-			copy(newFields, r.fields)
-			newFields[idx] = nil
-			return &Record{rtype: r.rtype, fields: newFields, extra: r.extra}
+		if _, ok := r.rtype.fieldIdx[kw]; ok {
+			m := r.extra
+			for i, field := range r.rtype.fields {
+				if field == kw {
+					continue
+				}
+				v := r.fields[i]
+				if v == nil {
+					v = NIL
+				}
+				m = m.Assoc(field, v).(*PersistentMap)
+			}
+			return m
 		}
 	}
 	return &Record{rtype: r.rtype, fields: r.fields, extra: r.extra.Dissoc(key).(*PersistentMap)}
@@ -336,7 +343,7 @@ func (r *Record) FixedFields() []Value { return r.fields }
 func (r *Record) Extra() *PersistentMap { return r.extra }
 
 // TypeName returns the record type name.
-func (rt *RecordType) TypeName() string { return rt.typeName }
+func (t *RecordType) TypeName() string { return t.typeName }
 
 // --- RecordType accessor ---
 

@@ -9,12 +9,12 @@ type theNilType struct {
 	zero *Nil
 }
 
-func (t *theNilType) String() string     { return t.Name() }
-func (t *theNilType) Type() ValueType    { return NilType }
-func (t *theNilType) Unbox() interface{} { return nil }
+func (t *theNilType) String() string  { return t.Name() }
+func (t *theNilType) Type() ValueType { return NilType }
+func (t *theNilType) Unbox() any      { return nil }
 
-func (t *theNilType) Name() string                     { return "nil" }
-func (t *theNilType) Box(_ interface{}) (Value, error) { return t.zero, nil }
+func (t *theNilType) Name() string             { return "nil" }
+func (t *theNilType) Box(_ any) (Value, error) { return t.zero, nil }
 
 // Nil is a Value whose only value is Nil
 type Nil struct{}
@@ -55,11 +55,11 @@ func (n *Nil) Seq() Seq {
 	return n
 }
 
-func (l *Nil) Assoc(k Value, v Value) Associative {
+func (n *Nil) Assoc(k Value, v Value) Associative {
 	return EmptyPersistentMap.Assoc(k, v)
 }
 
-func (l *Nil) Dissoc(k Value) Associative {
+func (n *Nil) Dissoc(k Value) Associative {
 	return NIL
 }
 
@@ -67,7 +67,7 @@ func (l *Nil) Dissoc(k Value) Associative {
 func (n *Nil) Type() ValueType { return NilType }
 
 // Unbox implements Value
-func (n *Nil) Unbox() interface{} { return nil }
+func (n *Nil) Unbox() any { return nil }
 
 // NilType is the type of NilValues
 var NilType *theNilType = &theNilType{zero: nil}

@@ -6,9 +6,13 @@ import "github.com/nooga/let-go/pkg/vm"
 type Module struct {
 	Version uint16
 	Flags   uint16
-	Strings []string
-	Chunks  []*ChunkData
-	Consts  []vm.Value
+	// Capabilities is an optional feature mask. If FlagCapabilities is set in Flags,
+	// a uint32 capability mask follows the header. Bits indicate optional features
+	// the decoder must support. Currently no capability bits are defined (all reserved).
+	Capabilities uint32
+	Strings      []string
+	Chunks       []*ChunkData
+	Consts       []vm.Value
 	// ConstsBase is the starting global index for the consts in this module.
 	// For layered pools, indices 0..ConstsBase-1 are in a parent pool.
 	ConstsBase int

@@ -12,7 +12,7 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-func toValue(keywordize bool, i interface{}) (vm.Value, error) {
+func toValue(keywordize bool, i any) (vm.Value, error) {
 	switch i := i.(type) {
 	case string:
 		return vm.String(i), nil
@@ -25,9 +25,9 @@ func toValue(keywordize bool, i interface{}) (vm.Value, error) {
 		return vm.Float(i), nil
 	case nil:
 		return vm.NIL, nil
-	case []interface{}:
+	case []any:
 		r := make([]vm.Value, len(i))
-		for j := 0; j < len(i); j++ {
+		for j := range i {
 			v, e := toValue(keywordize, i[j])
 			if e != nil {
 				return vm.NIL, e
@@ -35,7 +35,7 @@ func toValue(keywordize bool, i interface{}) (vm.Value, error) {
 			r[j] = v
 		}
 		return vm.NewArrayVector(r), nil
-	case map[string]interface{}:
+	case map[string]any:
 		newmap := vm.EmptyPersistentMap
 		for k, v := range i {
 			ve, e := toValue(keywordize, v)
@@ -55,8 +55,8 @@ func toValue(keywordize bool, i interface{}) (vm.Value, error) {
 	}
 }
 
-func fromMapValue(v vm.Value) (interface{}, error) {
-	r := map[string]interface{}{}
+func fromMapValue(v vm.Value) (any, error) {
+	r := map[string]any{}
 	if sq, ok := v.(vm.Sequable); ok {
 		for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
 			entry := s.First()
@@ -82,8 +82,8 @@ func fromMapValue(v vm.Value) (interface{}, error) {
 	return r, nil
 }
 
-func fromSeqValue(s vm.Seq) (interface{}, error) {
-	r := []interface{}{}
+func fromSeqValue(s vm.Seq) (any, error) {
+	r := []any{}
 	for s != nil && s != vm.EmptyList {
 		uv, e := fromValue(s.First())
 		if e != nil {
@@ -95,7 +95,7 @@ func fromSeqValue(s vm.Seq) (interface{}, error) {
 	return r, nil
 }
 
-func fromValue(v vm.Value) (interface{}, error) {
+func fromValue(v vm.Value) (any, error) {
 	switch v.Type() {
 	case vm.StringType:
 		return string(v.(vm.String)), nil
@@ -162,7 +162,7 @@ func installJSONNS() {
 			}
 		}
 
-		var v interface{}
+		var v any
 		err = json.Unmarshal([]byte(s), &v)
 		if err != nil {
 			return vm.NIL, err

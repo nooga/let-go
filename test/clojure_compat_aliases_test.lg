@@ -1,0 +1,64 @@
+(ns test.clojure-compat-aliases-test
+  (:require [test :refer :all]))
+
+(definterface CompatInterface
+  (compat-method [this x]))
+
+(defrecord CompatRecord [x])
+
+(defrecord CompatImpl [] CompatInterface
+  (compat-method [this x] x))
+
+(deftest clojure-class-aliases-test
+  (testing "JVM-style class vars point at let-go runtime types"
+    (is (= java.lang.Long (type 1)))
+    (is (= java.lang.Double (type 1.0)))
+    (is (= java.lang.Boolean (type true)))
+    (is (= java.math.BigDecimal (type 1.0M)))
+    (is (= java.util.UUID (type (parse-uuid "00000000-0000-0000-0000-000000000000"))))
+    (is (= clojure.lang.BigInt (type 1N)))
+    (is (= clojure.lang.Ratio (type 1/2)))
+    (is (= clojure.lang.Atom (type (atom nil))))
+    (is (= clojure.lang.IPending (type (promise))))
+    (is (= clojure.lang.PersistentHashSet (type #{})))))
+
+(deftest clojure-static-constant-aliases-test
+  (testing "JVM-style static constant namespaces are available"
+    (is (= 9223372036854775807 Long/MAX_VALUE))
+    (is (= -9223372036854775808 Long/MIN_VALUE))
+    (is (= java.lang.Long Long/TYPE))
+    (is (= java.lang.Double Double/TYPE))
+    (is (= java.lang.Integer Integer/TYPE))
+    (is (= java.lang.Boolean Boolean/TYPE))))
+
+(deftest clojure-interface-hierarchy-test
+  (testing "collection type parents expose Clojure interface tags"
+    (is (contains? (parents (type {})) clojure.lang.Associative))
+    (is (contains? (parents (type [])) clojure.lang.Indexed))
+    (is (contains? (parents (type #{})) clojure.lang.Counted))
+    (is (contains? (parents (type "")) clojure.lang.Seqable))
+    (is (contains? (ancestors CompatRecord) clojure.lang.Associative))
+    (is (contains? (ancestors (type [])) clojure.lang.IReduce))))
+
+(deftest clojure-compat-constructors-and-interfaces-test
+  (testing "definterface lowers to a protocol"
+    (is (= 42 (compat-method (->CompatImpl) 42))))
+  (testing "minimal new bridge covers Object and Boolean"
+    (is (nil? (new Object)))
+    (is (= false (new Boolean)))))
+
+(deftest clojure-compat-ref-agent-placeholders-test
+  (testing "ref compatibility is atom-backed"
+    (let [r (ref 0)]
+      (is (= 1 (dosync (alter r inc))))
+      (is (= 2 (dosync (commute r inc))))
+      (is (= 2 (ensure r)))
+      (is (= 3 (ref-set r 3)))))
+  (testing "agent compatibility is synchronous and atom-backed"
+    (let [a (agent 0)]
+      (is (= a (send a inc)))
+      (is (= 1 @a))
+      (is (= a (send-off a + 2)))
+      (is (= 3 @a))
+      (is (nil? (agent-error a)))
+      (is (= true (await-for 1 a))))))

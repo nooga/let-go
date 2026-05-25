@@ -68,6 +68,13 @@
       (is (= 99 (first c)))
       (is (= 0 (second c)))))
 
+  (testing "cons returns a seq, not a persistent list"
+    (let [c (cons 1 '())]
+      (is (seq? c))
+      (is (not (list? c)))
+      (is (= '(1) c))
+      (is (= :caught (try (peek c) (catch e :caught))))))
+
   (testing "concat list and vector"
     (let [result (concat '(1 2) [3 4])]
       (is (= 1 (first result)))

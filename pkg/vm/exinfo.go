@@ -14,8 +14,8 @@ func NewExInfo(message string, data *PersistentMap, cause error) *ExInfo {
 	return &ExInfo{message: message, data: data, cause: cause}
 }
 
-func (e *ExInfo) Type() ValueType    { return ExInfoType }
-func (e *ExInfo) Unbox() interface{} { return e }
+func (e *ExInfo) Type() ValueType { return ExInfoType }
+func (e *ExInfo) Unbox() any      { return e }
 func (e *ExInfo) String() string {
 	return fmt.Sprintf("#error {:message %q, :data %s}", e.message, e.data.String())
 }
@@ -26,11 +26,11 @@ func (e *ExInfo) Cause() error         { return e.cause }
 
 type theExInfoType struct{}
 
-func (t *theExInfoType) String() string     { return t.Name() }
-func (t *theExInfoType) Type() ValueType    { return TypeType }
-func (t *theExInfoType) Unbox() interface{} { return nil }
-func (t *theExInfoType) Name() string       { return "let-go.lang.ExceptionInfo" }
-func (t *theExInfoType) Box(bare interface{}) (Value, error) {
+func (t *theExInfoType) String() string  { return t.Name() }
+func (t *theExInfoType) Type() ValueType { return TypeType }
+func (t *theExInfoType) Unbox() any      { return nil }
+func (t *theExInfoType) Name() string    { return "let-go.lang.ExceptionInfo" }
+func (t *theExInfoType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 

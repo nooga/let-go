@@ -15,12 +15,12 @@ import (
 
 type theSortedMapType struct{}
 
-func (t *theSortedMapType) String() string     { return t.Name() }
-func (t *theSortedMapType) Type() ValueType    { return TypeType }
-func (t *theSortedMapType) Unbox() interface{} { return reflect.TypeOf(t) }
-func (t *theSortedMapType) Name() string       { return "let-go.lang.PersistentTreeMap" }
+func (t *theSortedMapType) String() string  { return t.Name() }
+func (t *theSortedMapType) Type() ValueType { return TypeType }
+func (t *theSortedMapType) Unbox() any      { return reflect.TypeFor[*theSortedMapType]() }
+func (t *theSortedMapType) Name() string    { return "let-go.lang.PersistentTreeMap" }
 
-func (t *theSortedMapType) Box(bare interface{}) (Value, error) {
+func (t *theSortedMapType) Box(bare any) (Value, error) {
 	if m, ok := bare.(*SortedMap); ok {
 		return m, nil
 	}
@@ -335,8 +335,8 @@ func (m *SortedMap) assocImpl(key, val Value) *SortedMap {
 
 // --- Value ---
 
-func (m *SortedMap) Type() ValueType    { return SortedMapType }
-func (m *SortedMap) Unbox() interface{} { return m.entries() }
+func (m *SortedMap) Type() ValueType { return SortedMapType }
+func (m *SortedMap) Unbox() any      { return m.entries() }
 
 func (m *SortedMap) String() string {
 	b := &strings.Builder{}
@@ -547,8 +547,8 @@ type SortedMapSeq struct {
 	i       int
 }
 
-func (s *SortedMapSeq) Type() ValueType    { return ListType }
-func (s *SortedMapSeq) Unbox() interface{} { return s.entries[s.i:] }
+func (s *SortedMapSeq) Type() ValueType { return ListType }
+func (s *SortedMapSeq) Unbox() any      { return s.entries[s.i:] }
 
 func (s *SortedMapSeq) String() string {
 	b := &strings.Builder{}

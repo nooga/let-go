@@ -1,0 +1,52 @@
+;
+; Copyright (c) 2026 Marcin Gasperowicz <xnooga@gmail.com>
+; SPDX-License-Identifier: MIT
+;
+
+;; ys-runtime.lg — minimal shim namespace that lets the output of
+;; `ys --compile` run on let-go. yamlscript-compiled Clojure refers to
+;; symbols from the YS stdlib (say, sum, %, ARGS, ...) which are not
+;; part of let-go. This namespace provides enough of them to run
+;; small YS programs unmodified.
+;;
+;; Coverage: pure-Clojure subset of YS. No babashka.fs / process /
+;; http-client, no java-time, no ordered maps. Suitable for scripts
+;; that stay inside YS's data + simple-logic surface.
+
+(ns ys-runtime
+  (:require [clojure.string :as str]))
+
+;; --- runtime vars YS expects to be present ---------------------------
+
+(def ARGS [])
+(def ARGV [])
+(def ENV {})
+
+;; --- IO ---------------------------------------------------------------
+
+(defn say [& xs] (apply println xs))
+(defn warn [& xs] (binding [*out* *err*] (apply println xs)))
+(defn pp  [x]    (println x))
+
+;; --- arithmetic helpers YS exposes -----------------------------------
+
+(defn add [& xs] (apply + xs))
+(defn sub [& xs] (apply - xs))
+(defn mul [& xs] (apply * xs))
+(defn div [& xs] (apply / xs))
+(defn sum [xs]   (reduce + xs))
+
+;; --- string helpers ---------------------------------------------------
+
+(defn join
+  ([xs]     (apply str xs))
+  ([sep xs] (str/join sep xs)))
+
+(defn text [xs] (str/join "\n" xs))
+
+;; --- YAML data-mode constructor --------------------------------------
+
+;; YS data-mode YAML files compile to `(% k v k v ...)`. In real YS
+;; `%` is `flatland.ordered.map/ordered-map`; we fall back to
+;; `hash-map`, which preserves the data but not insertion order.
+(defn % [& kvs] (apply hash-map kvs))

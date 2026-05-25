@@ -1,0 +1,89 @@
+(ns test.readme-limitations-test
+  (:require [test :refer :all]))
+
+(defn unsupported? [source]
+  (try
+    (load-string source)
+    false
+    (catch e true)))
+
+(deftest refs-are-atom-backed-compatibility-aliases
+  (testing "refs / STM forms are present but not coordinated STM"
+    (let [r (ref 0)]
+      (is (= 1 (dosync (alter r inc))))
+      (is (= 2 (dosync (commute r inc))))
+      (is (= 2 (ensure r))))))
+
+(deftest agents-are-synchronous-compatibility-aliases
+  (testing "agent APIs are present but atom-backed and synchronous"
+    (let [a (agent 0)]
+      (send a inc)
+      (is (= 1 @a))
+      (send-off a + 2)
+      (is (= 3 @a))
+      (is (nil? (agent-error a))))))
+
+(deftest chunked-seq-apis-not-implemented
+  (testing "chunked sequence APIs are not exposed"
+    (is (unsupported? "(chunked-seq? (map inc [1 2 3]))"))
+    (is (unsupported? "(chunk-first (seq [1 2 3]))"))
+    (is (unsupported? "(chunk-rest (seq [1 2 3]))"))
+    (is (unsupported? "(chunk-next (seq [1 2 3]))"))))
+
+(deftest custom-tagged-literal-readers-not-implemented
+  (testing "built-in tags work, but custom reader hooks do not"
+    (is (uuid? (read-string "#uuid \"550e8400-e29b-41d4-a716-446655440000\"")))
+    (is (inst? (read-string "#inst \"2024-01-01T00:00:00Z\"")))
+    (is (unsupported? "*data-readers*"))
+    (is (unsupported? "*default-data-reader-fn*")))
+  (testing "unknown tags do not create tagged literals or call custom readers"
+    (is (= {:x 1} (read-string "#test/unknown {:x 1}")))
+    (is (not (tagged-literal? (read-string "#test/unknown {:x 1}"))))))
+
+(defprotocol ReadmeLimitationProtocol
+  (readme-value [this]))
+
+(deftest java-style-deftype-and-reify-methods-not-implemented
+  (testing "field-backed deftype works"
+    (is (= 42 (load-string "(do (deftype ReadmeLimitationBox [x]) (.x (->ReadmeLimitationBox 42)))"))))
+  (testing "protocol reify works"
+    (let [r (reify ReadmeLimitationProtocol
+              (readme-value [this] 42))]
+      (is (satisfies? ReadmeLimitationProtocol r))
+      (is (= 42 (readme-value r)))))
+  (testing "Java-style host method bodies and host interfaces do not"
+    (is (unsupported? "(deftype ReadmeLimitationToString [x] Object (toString [this] \"x\"))"))
+    (is (unsupported? "(deftype ReadmeLimitationRunnable [] java.lang.Runnable (run [this] nil))"))
+    (is (unsupported? "(reify Object (toString [this] \"x\"))"))))
+
+(deftest spec-not-implemented
+  (testing "clojure.spec APIs are not available"
+    (is (unsupported? "(do (require '[clojure.spec.alpha :as s]) (s/def ::x int?))"))
+    (is (unsupported? "(do (require '[clojure.spec.alpha :as s]) (s/valid? int? 1))"))))
+
+(deftest base-arithmetic-overflow-is-checked
+  (testing "base integer arithmetic throws on overflow"
+    (let [max-int 9223372036854775807
+          min-int -9223372036854775808]
+      (is (try (+ max-int 1) false (catch e true)))
+      (is (try (+ min-int -1) false (catch e true)))
+      (is (try (- min-int 1) false (catch e true)))
+      (is (try (- max-int -1) false (catch e true)))
+      (is (try (* min-int -1) false (catch e true)))
+      (is (try (* -1 min-int) false (catch e true)))
+      (is (try (inc max-int) false (catch e true)))
+      (is (try (dec min-int) false (catch e true)))))
+  (testing "apostrophe variants promote to BigInt"
+    (is (= 9223372036854775808N (+' 9223372036854775807 1)))
+    (is (= -9223372036854775809N (-' -9223372036854775808 1)))
+    (is (= 18446744073709551614N (*' 9223372036854775807 2)))
+    (is (= 9223372036854775808N (inc' 9223372036854775807)))
+    (is (= -9223372036854775809N (dec' -9223372036854775808)))))
+
+(deftest subseq-and-rsubseq-not-implemented
+  (testing "sorted collections and rseq work"
+    (is (= [[:a 1] [:b 2]] (seq (sorted-map :a 1 :b 2))))
+    (is (= '(:c :b :a) (rseq (sorted-set :a :b :c)))))
+  (testing "range query APIs are not part of core"
+    (is (unsupported? "(subseq (sorted-map :a 1 :b 2) >= :a)"))
+    (is (unsupported? "(rsubseq (sorted-map :a 1 :b 2) <= :b)"))))

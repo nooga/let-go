@@ -48,7 +48,10 @@ func TestRunner(t *testing.T) {
 	consts = vm.NewConsts()
 	// Set up a loader so rt.NS can autoload namespaces from files during tests.
 	loaderCtx := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
-	rt.SetNSLoader(resolver.NewNSResolver(loaderCtx, []string{"."}))
+	// Search paths for `require`: current dir for in-tree test helpers
+	// (test/test.lg etc.), plus examples/go-gen so tests can exercise
+	// example libraries like gogen.
+	rt.SetNSLoader(resolver.NewNSResolver(loaderCtx, []string{".", "../examples/go-gen"}))
 
 	file, err := os.Open("./")
 	assert.NoError(t, err)

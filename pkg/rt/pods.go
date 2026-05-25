@@ -23,7 +23,7 @@ import (
 
 // podMsg is a decoded bencode message from a pod.
 type podMsg struct {
-	raw map[string]interface{}
+	raw map[string]any
 }
 
 // Pod represents a running babashka pod subprocess.
@@ -38,7 +38,7 @@ type Pod struct {
 	decoder    *bencode.Decoder
 	writeMu    sync.Mutex // protects stdin writes
 	namespaces []podNamespace
-	ops        map[string]interface{}
+	ops        map[string]any
 	idCounter  atomic.Int64
 	shutdown   bool
 
@@ -101,7 +101,7 @@ func (p *Pod) nextID() string {
 	return fmt.Sprintf("lg-%d", p.idCounter.Add(1))
 }
 
-func (p *Pod) send(msg map[string]interface{}) error {
+func (p *Pod) send(msg map[string]any) error {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	bs, err := bencode.EncodeBytes(msg)
@@ -113,8 +113,8 @@ func (p *Pod) send(msg map[string]interface{}) error {
 }
 
 // recvRaw reads a single message (only used during describe before router starts).
-func (p *Pod) recvRaw() (map[string]interface{}, error) {
-	var msg map[string]interface{}
+func (p *Pod) recvRaw() (map[string]any, error) {
+	var msg map[string]any
 	if err := p.decoder.Decode(&msg); err != nil {
 		return nil, fmt.Errorf("pod %s: bencode decode: %w", p.name, err)
 	}
@@ -128,7 +128,7 @@ func (p *Pod) startRouter() {
 	p.routerUp = true
 	go func() {
 		for {
-			var msg map[string]interface{}
+			var msg map[string]any
 			if err := p.decoder.Decode(&msg); err != nil {
 				// Pod closed or errored - close all pending channels
 				p.pendingMu.Lock()
@@ -197,7 +197,7 @@ func (p *Pod) registerStreaming(id string) chan podMsg {
 }
 
 func (p *Pod) describe() error {
-	if err := p.send(map[string]interface{}{"op": "describe"}); err != nil {
+	if err := p.send(map[string]any{"op": "describe"}); err != nil {
 		return err
 	}
 	msg, err := p.recvRaw()
@@ -211,13 +211,13 @@ func (p *Pod) describe() error {
 		p.format = "json"
 	}
 
-	if ops, ok := msg["ops"].(map[string]interface{}); ok {
+	if ops, ok := msg["ops"].(map[string]any); ok {
 		p.ops = ops
 	}
 
-	if nsList, ok := msg["namespaces"].([]interface{}); ok {
+	if nsList, ok := msg["namespaces"].([]any); ok {
 		for _, nsRaw := range nsList {
-			nsMap, ok := nsRaw.(map[string]interface{})
+			nsMap, ok := nsRaw.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -225,9 +225,9 @@ func (p *Pod) describe() error {
 			if d, _ := nsMap["defer"].(string); d == "true" {
 				pns.defer_ = true
 			}
-			if varsList, ok := nsMap["vars"].([]interface{}); ok {
+			if varsList, ok := nsMap["vars"].([]any); ok {
 				for _, varRaw := range varsList {
-					varMap, ok := varRaw.(map[string]interface{})
+					varMap, ok := varRaw.(map[string]any)
 					if !ok {
 						continue
 					}
@@ -263,7 +263,7 @@ func (p *Pod) Invoke(varName string, args []vm.Value) (vm.Value, error) {
 	id := p.nextID()
 	ch := p.registerPending(id)
 
-	if err := p.send(map[string]interface{}{
+	if err := p.send(map[string]any{
 		"op":   "invoke",
 		"id":   id,
 		"var":  varName,
@@ -311,7 +311,7 @@ func (p *Pod) InvokeAsync(varName string, args []vm.Value) (vm.Chan, error) {
 	// Register as streaming (don't auto-close on done)
 	routerCh := p.registerStreaming(id)
 
-	if err := p.send(map[string]interface{}{
+	if err := p.send(map[string]any{
 		"op":   "invoke",
 		"id":   id,
 		"var":  varName,
@@ -355,7 +355,7 @@ func (p *Pod) Shutdown() {
 	p.shutdown = true
 	if p.ops != nil {
 		if _, ok := p.ops["shutdown"]; ok {
-			_ = p.send(map[string]interface{}{"op": "shutdown"})
+			_ = p.send(map[string]any{"op": "shutdown"})
 			p.stdin.Close()
 			p.cmd.Wait() //nolint:errcheck
 			return
@@ -536,7 +536,7 @@ func startPod(binary string) (*Pod, error) {
 
 // --- Helpers ---
 
-func isDone(msg map[string]interface{}) bool {
+func isDone(msg map[string]any) bool {
 	statusRaw, ok := msg["status"]
 	if !ok {
 		return false
@@ -544,7 +544,7 @@ func isDone(msg map[string]interface{}) bool {
 	switch s := statusRaw.(type) {
 	case string:
 		return s == "done" || s == `["done"]`
-	case []interface{}:
+	case []any:
 		for _, v := range s {
 			if str, ok := v.(string); ok && str == "done" {
 				return true
@@ -554,7 +554,7 @@ func isDone(msg map[string]interface{}) bool {
 	return false
 }
 
-func bencStr(m map[string]interface{}, key string) string {
+func bencStr(m map[string]any, key string) string {
 	v, ok := m[key]
 	if !ok {
 		return ""

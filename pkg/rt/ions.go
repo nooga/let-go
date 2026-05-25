@@ -692,6 +692,10 @@ func installIoNS() {
 	ns := vm.NewNamespace("io")
 	ns.Refer(CoreNS, "", true)
 
+	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
+	ns.Exclude("slurp")
+	ns.Exclude("spit")
+
 	// Protocols
 	ns.Def("IReadable", ReadableProto)
 	ns.Def("IWritable", WritableProto)

@@ -15,7 +15,7 @@ import (
 )
 
 func TestContext_Compile(t *testing.T) {
-	tests := map[string]interface{}{
+	tests := map[string]any{
 		"(+ (* 2 20) 2)":          42,
 		"(- 10 2)":                8,
 		`(if true "big" "meh")`:   "big",
@@ -37,7 +37,7 @@ func TestContext_Compile(t *testing.T) {
 		`'foo`:                                  "foo",
 		`(quote foo)`:                           "foo",
 		`{}`:                                    vm.EmptyPersistentMap,
-		`{:a 1}`:                                vm.NewPersistentMap([]vm.Value{vm.Keyword("a"), vm.Int(1)}),
+		`{:a 1}`:                                vm.NewArrayMap([]vm.Value{vm.Keyword("a"), vm.Int(1)}),
 	}
 	for k, v := range tests {
 		out, err := Eval(k)
@@ -51,7 +51,7 @@ func TestContext_CompileFn(t *testing.T) {
 	assert.NoError(t, err)
 
 	var inc func(int) int
-	out.Unbox().(func(interface{}))(&inc)
+	out.Unbox().(func(any))(&inc)
 
 	assert.NotNil(t, inc)
 
@@ -63,7 +63,7 @@ func TestContext_CompileFnPoly(t *testing.T) {
 	out, err := Eval("(fn [x] x)")
 	assert.NoError(t, err)
 
-	identity := out.Unbox().(func(interface{}))
+	identity := out.Unbox().(func(any))
 
 	var intIdentity func(int) int
 	identity(&intIdentity)

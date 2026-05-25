@@ -15,13 +15,13 @@ type theKeywordType struct {
 	zero Keyword
 }
 
-func (t *theKeywordType) String() string     { return t.Name() }
-func (t *theKeywordType) Type() ValueType    { return TypeType }
-func (t *theKeywordType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theKeywordType) String() string  { return t.Name() }
+func (t *theKeywordType) Type() ValueType { return TypeType }
+func (t *theKeywordType) Unbox() any      { return reflect.TypeFor[*theKeywordType]() }
 
 func (t *theKeywordType) Name() string { return "let-go.lang.Keyword" }
 
-func (t *theKeywordType) Box(bare interface{}) (Value, error) {
+func (t *theKeywordType) Box(bare any) (Value, error) {
 	raw, ok := bare.(fmt.Stringer)
 	if !ok {
 		return BooleanType.zero, NewTypeError(bare, "can't be boxed as", t)
@@ -36,13 +36,13 @@ var KeywordType *theKeywordType = &theKeywordType{zero: "????BADKeyword????"}
 type Keyword string
 
 // Hash implements Hashable for fast map lookups.
-func (l Keyword) Hash() uint32 { return hashString(string(l)) ^ 0x9e3779b9 }
+func (l Keyword) Hash() uint32 { return hashUnencodedChars(string(l)) + 0x9e3779b9 }
 
 // Type implements Value
 func (l Keyword) Type() ValueType { return KeywordType }
 
 // Unbox implements Unbox
-func (l Keyword) Unbox() interface{} {
+func (l Keyword) Unbox() any {
 	return string(l)
 }
 

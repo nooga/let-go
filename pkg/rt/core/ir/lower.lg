@@ -1,0 +1,614 @@
+;; IR → bytecode lowering — Lisp port of pkg/ir/lower.go.
+;;
+;; Phase C of docs/superpowers/specs/2026-05-22-retire-pkg-ir.md.
+;; Goal: byte-identical output to Go ir.Lower; structure mirrors
+;; the Go file function-for-function so a parity test can drive
+;; iteration to convergence.
+;;
+;; Lowering strategy (see pkg/ir/lower.go header for full notes):
+;;   - Body-emit every node in source order; record a stable stack
+;;     slot at each def site.
+;;   - Multi-use values land at their slot; later uses DUP_NTH from
+;;     there. Single-use values consumed in place when at top.
+;;   - Cheap loads (Const/LoadArg/LoadVar/LoadClosed) defer to use-
+;;     site re-emit when single-use AND not the consumer's first ref
+;;     (matches source compiler's natural layout).
+;;   - Branch terminators recognize args-already-at-target-positions
+;;     and args-already-at-stack-top fast paths.
+;;
+;; State is a Lisp atom holding a map; mutations via swap!.
+
+(ns ir.lower)
+
+;; --- state helpers ---------------------------------------------------
+
+(defn- new-lowerer [f]
+  "Construct the lowerer state. uses is the def→use index, computed
+   eagerly so seeding use-count and the cross-block check share work."
+  (let [uses    (ir/uses f)
+        n-blocks (count (ir/blocks f))
+        ;; Seed use-count from the index: count[nid] = len(uses[nid]).
+        ;; Stored only for nodes with ≥1 use, mirroring Go's map.
+        use-count (loop [i 0 acc {}]
+                    (if (>= i (count uses))
+                      acc
+                      (let [us (nth uses i)]
+                        (recur (inc i)
+                               (if (pos? (count us))
+                                 (assoc acc i (count us))
+                                 acc)))))]
+    (atom {:f         f
+           :chunk     (ir/new-chunk (ir/fn-consts f))
+           :block-ips (vec (repeat n-blocks 0))
+           :patches   []
+           :stack-sp  0
+           :use-count use-count
+           :value-stack-pos {}
+           :uses      uses
+           ;; Per-block runtime "junk-below": values still on the runtime
+           ;; stack beneath this block's params at block entry. Populated
+           ;; by predecessor terminators (BRANCH_F leaves predecessor sp
+           ;; minus 1 below the target's params; OP_RECUR/clean BRANCH
+           ;; leave 0). Used to compute true runtime SP for max-stack.
+           :block-junk (vec (repeat n-blocks 0))
+           :current-block 0})))
+
+;; Field accessors that read the atom — keep call sites tidy.
+(defn- f-of [l]           (:f @l))
+(defn- chunk-of [l]       (:chunk @l))
+(defn- block-ip [l bid]   (nth (:block-ips @l) bid))
+(defn- stack-sp [l]       (:stack-sp @l))
+(defn- use-count-of [l nid] (or (get (:use-count @l) nid) 0))
+(defn- value-pos-of [l nid] (get (:value-stack-pos @l) nid))
+
+(defn- set-block-ip! [l bid ip]
+  (swap! l update :block-ips (fn [v] (assoc v bid ip))))
+
+(defn- set-stack-sp! [l sp]
+  (swap! l assoc :stack-sp sp))
+
+(defn- bump-stack-sp! [l delta]
+  (swap! l update :stack-sp + delta))
+
+(defn- set-value-pos! [l nid pos]
+  (swap! l update :value-stack-pos assoc nid pos))
+
+(defn- decrement-use! [l nid]
+  "Decrement the use-count for nid; safe to call when nid isn't in
+   the map (treats it as 0, no-op)."
+  (let [cur (use-count-of l nid)]
+    (when (pos? cur)
+      (swap! l update :use-count assoc nid (dec cur)))))
+
+(defn- block-junk-of [l bid]
+  (get (:block-junk @l) bid 0))
+
+(defn- record-block-junk! [l bid junk]
+  "Record (or raise) junk-below for block bid. Multiple predecessors may
+   set this; take the max."
+  (let [cur (block-junk-of l bid)]
+    (when (> junk cur)
+      (swap! l update :block-junk assoc bid junk))))
+
+(defn- bump-max-stack! [l]
+  "If current runtime SP (= lower-sp + current block's junk-below)
+   exceeds the chunk's recorded peak, raise the peak."
+  (let [c (chunk-of l)
+        rt-sp (+ (stack-sp l) (block-junk-of l (:current-block @l)))]
+    (when (> rt-sp (ir/chunk-max-stack c))
+      (ir/chunk-set-max-stack! c rt-sp))))
+
+(defn- add-patch! [l patch]
+  (swap! l update :patches conj patch))
+
+;; --- emission ---------------------------------------------------------
+;;
+;; Each emit fires recordSourceInfo first (when called with an inst-id);
+;; the source map associates the spans with the IP about to be written.
+
+(defn- record-source-info! [l inst-id]
+  (when inst-id
+    (let [c (chunk-of l)]
+      (doseq [si (ir/source-infos inst-id (f-of l))]
+        (ir/chunk-add-source-info! c si)))))
+
+(defn- emit! [l inst-id op-kw]
+  (when inst-id (record-source-info! l inst-id))
+  (ir/chunk-emit (chunk-of l) op-kw (stack-sp l)))
+
+(defn- emit-with-arg! [l inst-id op-kw arg]
+  (when inst-id (record-source-info! l inst-id))
+  (ir/chunk-emit-with-arg (chunk-of l) op-kw (stack-sp l) arg))
+
+(defn- emit-placeholder! [l inst-id op-kw]
+  "Emit op + 0-placeholder. Returns the IP of the arg slot for later
+   patching."
+  (when inst-id (record-source-info! l inst-id))
+  (ir/chunk-emit-placeholder (chunk-of l) op-kw (stack-sp l)))
+
+;; --- cross-block use check -------------------------------------------
+
+(defn- is-terminator-branch-arg-use? [term-id target-id f]
+  "True iff term-id's Aux references target-id as one of its branch
+   args (the legitimate SSA cross-block channel)."
+  (let [op  (ir/op term-id f)
+        aux (ir/aux term-id f)]
+    (cond
+      (= op :branch)
+        (some (fn [a] (= a target-id)) (ir/branch-target-args aux))
+      (= op :branch-if)
+        (let [t (ir/cond-target-true aux)
+              e (ir/cond-target-false aux)]
+          (or (some (fn [a] (= a target-id)) (ir/branch-target-args t))
+              (some (fn [a] (= a target-id)) (ir/branch-target-args e))))
+      :else false)))
+
+(defn- check-cross-block! [f uses]
+  "Walk uses; reject any cross-block direct-Refs use (only branch-arg
+   uses may cross). Throws on violation, matching Go's error message."
+  (loop [i 0]
+    (when (< i (count uses))
+      (let [us (nth uses i)]
+        (when (pos? (count us))
+          (let [def-block (ir/block-of i f)]
+            (doseq [user-id us]
+              (let [user-block (ir/block-of user-id f)]
+                (when (and (not= user-block def-block)
+                           (not (is-terminator-branch-arg-use? user-id i f)))
+                  (throw (str "ir/lower: cross-block use of value %"
+                              i " via direct Refs (defined in block "
+                              def-block ", used in block " user-block
+                              ") — only branch-target args may cross blocks; "
+                              "see follow-up issue D"))))))))
+      (recur (inc i)))))
+
+;; --- heuristics ------------------------------------------------------
+
+(defn- args-at-top? [l args]
+  "True if args[0..N-1] occupy stack positions sp-N..sp-1 in order."
+  (let [n (count args)]
+    (cond
+      (zero? n) true
+      :else
+        (let [base (- (stack-sp l) n)]
+          (if (neg? base)
+            false
+            (loop [i 0]
+              (cond
+                (>= i n)  true
+                (let [pos (value-pos-of l (nth args i))]
+                  (or (nil? pos) (not= pos (+ base i))))  false
+                :else  (recur (inc i)))))))))
+
+(defn- contains-after? [refs i target]
+  "True if refs[i+1..] contains target. O(n) but refs are short."
+  (loop [j (inc i)]
+    (cond
+      (>= j (count refs)) false
+      (= (nth refs j) target) true
+      :else (recur (inc j)))))
+
+(defn- refs-at-top-last-use? [l refs]
+  "True if refs are already on top in order AND each is at its last
+   remaining use AND there are no duplicates (same value used twice
+   in the same op)."
+  (cond
+    (zero? (count refs)) true
+    (not (args-at-top? l refs)) false
+    :else
+      (loop [i 0]
+        (cond
+          (>= i (count refs)) true
+          (not= 1 (use-count-of l (nth refs i))) false
+          (contains-after? refs i (nth refs i)) false
+          :else (recur (inc i))))))
+
+(defn- should-body-emit-cheap? [l nid]
+  "Decide whether a cheap-load Inst should be body-emitted at its
+   def site (vs. deferred to materialize at use site).
+     - Multi-use cheap nodes: NO (re-emit at use site is cheaper than
+       body-emit + DUP_NTH per use).
+     - Single-use cheap node where it IS the first ref of its user: YES
+       (body-walk natural order leaves it at consumer's expected slot;
+       refsAtTopLastUse fires, zero cost).
+     - Otherwise: NO."
+  (let [uc (use-count-of l nid)]
+    (cond
+      (zero? uc) false
+      (> uc 1) false
+      :else
+        (let [uses (:uses @l)
+              us   (when (< nid (count uses)) (nth uses nid))]
+          (cond
+            (or (nil? us) (not= 1 (count us))) false
+            :else
+              (let [user-id (first us)
+                    user-refs (ir/refs user-id (f-of l))]
+                (cond
+                  (zero? (count user-refs)) true  ; used only as branch-arg
+                  :else (= (first user-refs) nid))))))))
+
+;; --- materialize -----------------------------------------------------
+
+(defn- materialize! [l nid]
+  "Ensure nid's value is on top of the stack. Two paths:
+     1. Already on top AND last use → no emission.
+     2. Tracked on stack → emit DUP_NTH from the tracked slot.
+     3. Untracked (cheap-skip fallback) → re-emit the cheap load inline."
+  (let [f (f-of l)
+        pos (value-pos-of l nid)]
+    (if pos
+      (if (and (= pos (dec (stack-sp l)))
+               (= 1 (use-count-of l nid)))
+        nil  ; already on top, last use, consumer pops in place
+        (let [nth-arg (- (dec (stack-sp l)) pos)]
+          (ir/chunk-emit-dup-nth (chunk-of l) (stack-sp l) nth-arg)
+          (bump-stack-sp! l 1)
+          (bump-max-stack! l)))
+      ;; Cheap re-emit fallback — body emission was skipped for this
+      ;; node. Mirrors lower.go's switch in materialize.
+      (let [op  (ir/op nid f)
+            aux (ir/aux nid f)]
+        (case op
+          :const
+            (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
+              (emit-with-arg! l nid :const idx)
+              (bump-stack-sp! l 1)
+              (bump-max-stack! l))
+          :load-arg
+            (do (emit-with-arg! l nid :load-arg (int aux))
+                (bump-stack-sp! l 1)
+                (bump-max-stack! l))
+          :load-var
+            (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
+              (emit-with-arg! l nid :load-var idx)
+              (bump-stack-sp! l 1)
+              (bump-max-stack! l))
+          :load-closed
+            (do (emit-with-arg! l nid :load-closed (int aux))
+                (bump-stack-sp! l 1)
+                (bump-max-stack! l))
+          (throw (str "ir/lower: value %" nid
+                      " not on stack for materialize (op=" op ")")))))))
+
+;; --- per-op emission -------------------------------------------------
+
+(defn- lower-node! [l nid]
+  "Emit the bytecode for a single Inst (its operands are already on
+   the stack). Updates stack-sp per op's stack-effect; tracks the
+   def's position when stack-out=1."
+  (let [f   (f-of l)
+        op  (ir/op nid f)
+        aux (ir/aux nid f)]
+    (case op
+      :block-arg nil  ; placed on stack by predecessors; no opcode
+
+      :const
+        (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
+          (emit-with-arg! l nid :const idx)
+          (bump-stack-sp! l 1)
+          (bump-max-stack! l))
+
+      :load-arg
+        (do (emit-with-arg! l nid :load-arg (int aux))
+            (bump-stack-sp! l 1)
+            (bump-max-stack! l))
+
+      :load-var
+        (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
+          (emit-with-arg! l nid :load-var idx)
+          (bump-stack-sp! l 1)
+          (bump-max-stack! l))
+
+      (:add :sub :mul :lt :lte :gt :gte :eq)
+        (do (emit! l nid op)
+            (bump-stack-sp! l -1))  ; 2→1
+
+      (:inc :dec)
+        (emit! l nid op)  ; 1→1, no SP change
+
+      :call
+        (do (emit-with-arg! l nid :call (int aux))
+            (bump-stack-sp! l (- (int aux))))  ; pops fn+args, pushes result
+
+      :tail-call
+        (emit-with-arg! l nid :tail-call (int aux))
+        ;; TAIL_CALL is a true terminator; no SP tracking needed past this.
+
+      :return
+        (emit! l nid :return)
+
+      :branch
+        ;; Per OLD pkg/ir/lower.go OpBranch: lower-block! has already
+        ;; materialized the branch-target args (skip / args-at-top fast
+        ;; paths or explicit DUP_NTH). At this point the top `argc` stack
+        ;; slots are the args in order. We just emit OP_JUMP (forward,
+        ;; clean stack shape) or OP_RECUR (back-edge / forward with junk
+        ;; below the args).
+        (let [bt     aux
+              args   (ir/branch-target-args bt)
+              target (ir/branch-target-target bt)
+              argc   (count args)
+              target-params (count (ir/block-params target f))
+              cur-sp     (stack-sp l)
+              drop-count (- cur-sp target-params)
+              cur-junk   (block-junk-of l (:current-block @l))]
+          (cond
+            ;; Drop-count > 0: stack has live values below the args at top
+            ;; that must be discarded. Use OP_RECUR (save argc from top,
+            ;; drop `2*argc + ignore` slots = curSP, push argc back). Works
+            ;; for both back-edges (loop recur) and forward joins with
+            ;; symmetric block-arg pass-through (build-if). `ignore` may
+            ;; be negative when drop-count < argc (i.e., args at top overlap
+            ;; the "old" slots they replace).
+            ;; Target runtime SP after this op = target-params (RECUR
+            ;; rebuilds the stack from scratch). Target junk = 0.
+            (pos? drop-count)
+              (let [ignore (- drop-count argc)
+                    off-ip (ir/chunk-emit-recur (chunk-of l) cur-sp argc ignore)]
+                (record-source-info! l nid)
+                (add-patch! l {:src-ip (dec off-ip)
+                               :target-block target
+                               :offset-slot 1
+                               :negate? true})
+                ;; RECUR also drops all the cur-junk slots below — runtime
+                ;; SP at target = argc + 0. But the RECUR's emitted drop is
+                ;; cur-sp slots, which DOESN'T include the junk-below of
+                ;; the current block. We need to add cur-junk to the
+                ;; emitted drop count so RECUR really empties the runtime
+                ;; stack down to the args.
+                (set-stack-sp! l target-params))
+            ;; drop-count == 0: forward fall-through with exact stack shape.
+            ;; Runtime SP at target = cur-junk + target-params.
+            :else
+              (let [arg-ip (emit-placeholder! l nid :branch)]
+                (record-block-junk! l target cur-junk)
+                (add-patch! l {:src-ip (dec arg-ip)
+                               :target-block target
+                               :offset-slot 1
+                               :negate? false}))))
+
+      :branch-if
+        (let [ct aux
+              ft (ir/cond-target-false ct)
+              tt (ir/cond-target-true ct)
+              ft-target (ir/branch-target-target ft)
+              tt-target (ir/branch-target-target tt)
+              ;; Emit BRANCH_FALSE to false-target; fall-through to true-target.
+              arg-ip (emit-placeholder! l nid :branch-if)
+              ;; Both targets receive (runtime-sp - 1) at entry. Their junk
+              ;; below their params = (cur-runtime-sp - 1) - target-params.
+              ;; For symmetric branch-if, both targets have the same params
+              ;; count; record same junk for both.
+              cur-junk (block-junk-of l (:current-block @l))
+              ;; cur-sp here is still pre-pop; lower-sp at branch-if includes
+              ;; the cond on top. Runtime SP also includes cond. After
+              ;; BRANCH_F pops, runtime SP at target = (lower-sp - 1) + junk.
+              target-junk (- (+ (stack-sp l) cur-junk) 1
+                             (count (ir/block-params ft-target f)))]
+          (record-block-junk! l ft-target target-junk)
+          (record-block-junk! l tt-target target-junk)
+          (add-patch! l {:src-ip (dec arg-ip)
+                         :target-block ft-target
+                         :offset-slot 1
+                         :negate? false})
+          (bump-stack-sp! l -1)  ; cond popped
+          ;; If true-target is the immediately-following block, fall through.
+          (let [my-block (ir/block-of nid f)
+                next-block-id (inc my-block)]
+            (when (not= tt-target next-block-id)
+              (let [arg-ip2 (emit-placeholder! l nid :branch)]
+                (add-patch! l {:src-ip (dec arg-ip2)
+                               :target-block tt-target
+                               :offset-slot 1
+                               :negate? false})))))
+
+      :load-closed
+        (do (emit-with-arg! l nid :load-closed (int aux))
+            (bump-stack-sp! l 1)
+            (bump-max-stack! l))
+
+      :make-closure
+        (emit! l nid :make-closure)  ; 1 in, 1 out — no SP change
+
+      :push-closed
+        (do (emit! l nid :push-closed)
+            (bump-stack-sp! l -1))  ; 2 in, 1 out
+
+      (throw (str "ir/lower: unsupported op for lowering: " op)))))
+
+;; --- block-level emission --------------------------------------------
+
+(defn- consume-refs-in-place! [l refs]
+  "Decrement use-count for each ref in the at-top fast path."
+  (doseq [r refs] (decrement-use! l r)))
+
+(defn- materialize-refs! [l refs]
+  "Materialize each operand to top of stack and decrement its use-count."
+  (doseq [r refs]
+    (materialize! l r)
+    (decrement-use! l r)))
+
+(defn- emit-inst! [l nid]
+  "Emit a single body inst: handle refs (fast path or materialize),
+   call lower-node!, then record def position if applicable. Shared by
+   the body walk and the deferred-cond path in :branch-if terminators."
+  (let [f    (f-of l)
+        op   (ir/op nid f)
+        refs (ir/refs nid f)]
+    (if (refs-at-top-last-use? l refs)
+      (consume-refs-in-place! l refs)
+      (materialize-refs! l refs))
+    (lower-node! l nid)
+    (when (= 1 (ir/op-stack-out op))
+      (set-value-pos! l nid (dec (stack-sp l))))))
+
+(defn- materialize-branch-args! [l args]
+  "Materialize a sequence of branch-target args at the bottom of the
+   stack (positions 0..len(args)-1). Mirrors OLD pkg/ir/lower.go's
+   logic for OpBranch's Aux arg handling: skip prefix already at target
+   positions, fast path if all args sit at top in order, otherwise
+   materialize the tail. Shared by :branch and :branch-if terminators."
+  (let [argc (count args)
+        skip (loop [k 0]
+               (if (>= k argc)
+                 k
+                 (let [pos (value-pos-of l (nth args k))]
+                   (if (and pos (= pos k))
+                     (recur (inc k))
+                     k))))
+        ]
+    (cond
+      ;; All args already at their target positions 0..N-1.
+      (= skip argc)
+        (consume-refs-in-place! l args)
+      ;; Args already at top of stack in order (back-edge / args-at-top
+      ;; fast path — OP_RECUR or BRANCH_FALSE cleanup happens later).
+      (args-at-top? l args)
+        (consume-refs-in-place! l args)
+      :else
+        (do
+          (doseq [a (subvec (vec args) skip)]
+            (materialize! l a)
+            (decrement-use! l a))
+          (loop [k 0]
+            (when (< k skip)
+              (decrement-use! l (nth args k))
+              (recur (inc k))))))))
+
+(defn- deferrable-branch-if-cond? [l term cond-ref]
+  "True iff cond-ref is safe to defer past the body walk: it has
+   exactly one use (use-count==1) and that user is the branch-if
+   terminator itself. build-if always produces such conds; only
+   hand-built IR could violate this."
+  (when cond-ref
+    (and (= 1 (use-count-of l cond-ref))
+         (let [uses (:uses @l)
+               us   (when (< cond-ref (count uses)) (nth uses cond-ref))]
+           (and us
+                (= 1 (count us))
+                (= term (first us)))))))
+
+(defn- lower-block! [l bid]
+  (swap! l assoc :current-block bid)
+  (let [f (f-of l)
+        params (ir/block-params bid f)
+        insts  (ir/block-insts bid f)
+        term   (ir/block-term bid f)
+        term-op (when-not (zero? term) (ir/op term f))
+        ;; For :branch-if, defer the cond's emission past the body walk
+        ;; so the branch-target args can be materialized BELOW the cond
+        ;; (positions 0..N-1) before BRANCH_FALSE pops the cond.
+        deferred-cond
+          (when (= term-op :branch-if)
+            (let [cond-ref (first (ir/refs term f))]
+              (when (deferrable-branch-if-cond? l term cond-ref)
+                cond-ref)))]
+    ;; Block-args are pre-placed by predecessors. Entry block has none.
+    (set-stack-sp! l (count params))
+    (loop [i 0]
+      (when (< i (count params))
+        (set-value-pos! l (nth params i) i)
+        (recur (inc i))))
+
+    ;; Body Insts (skipping the deferred cond if any).
+    (doseq [nid insts]
+      (let [op (ir/op nid f)]
+        (cond
+          ;; Skip dead ops (CSE/DCE leftovers).
+          (= op :invalid) nil
+          ;; Block-args not emitted (positioned by predecessors).
+          (= op :block-arg) nil
+          ;; Pop is a virtual marker — decrement operand counts, emit nothing.
+          (= op :pop)
+            (doseq [r (ir/refs nid f)] (decrement-use! l r))
+          ;; Deferred cond (emitted after branch-target args).
+          (and deferred-cond (= nid deferred-cond)) nil
+          ;; Cheap-load deferral: skip body emission when not body-emit-cheap.
+          (and (ir/op-cheap-load? op)
+               (not (should-body-emit-cheap? l nid)))
+            nil
+          :else (emit-inst! l nid))))
+
+    ;; Terminator.
+    (when (not (zero? term))
+      (cond
+        (= term-op :branch-if)
+          (let [cond-aux (ir/aux term f)
+                t-bt     (ir/cond-target-true cond-aux)
+                ;; build-if produces symmetric args; validate-fn! enforces
+                ;; true.args == false.args, so either side works.
+                args     (ir/branch-target-args t-bt)]
+            ;; 1. Materialize the branch-target args at positions 0..N-1.
+            (materialize-branch-args! l args)
+            ;; 2. Emit / materialize the cond to top of stack.
+            (cond
+              ;; Deferred — emit it now, fully (this also sets value-pos).
+              deferred-cond
+                (emit-inst! l deferred-cond)
+              ;; Not deferred: cond is either at a tracked position or
+              ;; cheap and must be re-materialized.
+              :else
+                (let [term-refs (ir/refs term f)]
+                  (if (refs-at-top-last-use? l term-refs)
+                    (consume-refs-in-place! l term-refs)
+                    (materialize-refs! l term-refs))))
+            ;; 3. Emit BRANCH_FALSE.
+            (lower-node! l term))
+        :else
+          (let [term-refs (ir/refs term f)]
+            ;; Direct Refs (return value, branch's empty refs, call's fn+args).
+            (if (refs-at-top-last-use? l term-refs)
+              (consume-refs-in-place! l term-refs)
+              (materialize-refs! l term-refs))
+            ;; Branch-target args for :branch (unconditional).
+            (when (= term-op :branch)
+              (let [bt (ir/aux term f)]
+                (materialize-branch-args! l (ir/branch-target-args bt))))
+            (lower-node! l term))))))
+
+;; --- branch patching -------------------------------------------------
+
+(defn- patch-branches! [l]
+  (doseq [p (:patches @l)]
+    (let [target-ip (block-ip l (:target-block p))
+          src-ip    (:src-ip p)
+          offset    (if (:negate? p)
+                      (- src-ip target-ip)   ; OP_RECUR uses f.ip -= offset
+                      (- target-ip src-ip))]
+      (ir/chunk-update! (chunk-of l)
+                        (+ src-ip (:offset-slot p))
+                        offset))))
+
+;; --- entry point -----------------------------------------------------
+
+(defn lower [f]
+  "Lower IR Function f to a *vm.CodeChunk. Returns the boxed chunk on
+   success; throws on cross-block direct-Refs uses (only branch-arg
+   uses may cross blocks)."
+  (when (nil? f)
+    (throw "ir/lower: nil function"))
+  (let [l (new-lowerer f)]
+    (check-cross-block! f (:uses @l))
+    (let [n-blocks (count (ir/blocks f))]
+      (loop [bid 0]
+        (when (< bid n-blocks)
+          (set-block-ip! l bid (ir/chunk-length (chunk-of l)))
+          (lower-block! l bid)
+          (recur (inc bid)))))
+    (patch-branches! l)
+    ;; Conservative max-stack guard: bump by the max number of params
+    ;; across all blocks. The block-junk tracking above handles the
+    ;; common cases (single-level if, loop+if) but multi-level nested
+    ;; ifs leave residual junk we don't precisely account for yet.
+    ;; This guarantees the runtime stack is sized to accommodate
+    ;; outer-scope locals plus inner-block materializations.
+    (let [c (chunk-of l)
+          n-blocks (count (ir/blocks f))
+          max-params (loop [bid 0 acc 0]
+                       (if (>= bid n-blocks)
+                         acc
+                         (let [p (count (ir/block-params bid f))]
+                           (recur (inc bid) (if (> p acc) p acc)))))]
+      (ir/chunk-set-max-stack! c (+ (ir/chunk-max-stack c) max-params)))
+    (chunk-of l)))

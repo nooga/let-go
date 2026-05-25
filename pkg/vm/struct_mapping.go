@@ -32,7 +32,7 @@ var structMappingsByRecord = map[*RecordType]*StructMapping{}
 // converted from CamelCase to kebab-case (e.g. FirstName → first-name).
 // Fields tagged `letgo:"-"` are skipped.
 func RegisterStructType(goType reflect.Type, name string) *StructMapping {
-	if goType.Kind() == reflect.Ptr {
+	if goType.Kind() == reflect.Pointer {
 		goType = goType.Elem()
 	}
 	if goType.Kind() != reflect.Struct {
@@ -103,7 +103,7 @@ func makeFieldConverter(t reflect.Type) fieldConverter {
 		return func(v reflect.Value) Value { return String(v.String()) }
 	case reflect.Interface:
 		// If the field is already a Value (e.g. vm.Value), return it directly.
-		valueInterface := reflect.TypeOf((*Value)(nil)).Elem()
+		valueInterface := reflect.TypeFor[Value]()
 		if t.Implements(valueInterface) || t == valueInterface {
 			return func(v reflect.Value) Value {
 				if v.IsNil() {
@@ -190,7 +190,7 @@ func makeFieldDeconverter(t reflect.Type) fieldDeconverter {
 			return fmt.Errorf("expected String, got %s", val.Type().Name())
 		}
 	case reflect.Interface:
-		valueInterface := reflect.TypeOf((*Value)(nil)).Elem()
+		valueInterface := reflect.TypeFor[Value]()
 		if t.Implements(valueInterface) || t == valueInterface {
 			return func(target reflect.Value, val Value) error {
 				target.Set(reflect.ValueOf(val))
@@ -211,9 +211,9 @@ func makeFieldDeconverter(t reflect.Type) fieldDeconverter {
 // StructToRecord converts a Go struct value to a Record.
 // The original value is stored for fast roundtrip back to Go.
 // Uses cached per-field converters to avoid BoxValue dispatch overhead.
-func (m *StructMapping) StructToRecord(v interface{}) *Record {
+func (m *StructMapping) StructToRecord(v any) *Record {
 	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Ptr {
+	if rv.Kind() == reflect.Pointer {
 		rv = rv.Elem()
 	}
 
@@ -232,16 +232,16 @@ func (m *StructMapping) StructToRecord(v interface{}) *Record {
 
 // RecordToStruct populates a Go struct from a Record's fields.
 // If the Record has an origin of the same type, returns it directly (fast path).
-func (m *StructMapping) RecordToStruct(r *Record, target interface{}) error {
+func (m *StructMapping) RecordToStruct(r *Record, target any) error {
 	// Fast path: if record has origin of same type, copy it
 	if r.origin != nil {
 		ov := reflect.ValueOf(r.origin)
-		if ov.Kind() == reflect.Ptr {
+		if ov.Kind() == reflect.Pointer {
 			ov = ov.Elem()
 		}
 		if ov.Type() == m.GoType {
 			tv := reflect.ValueOf(target)
-			if tv.Kind() != reflect.Ptr {
+			if tv.Kind() != reflect.Pointer {
 				return fmt.Errorf("target must be a pointer")
 			}
 			tv.Elem().Set(ov)
@@ -251,7 +251,7 @@ func (m *StructMapping) RecordToStruct(r *Record, target interface{}) error {
 
 	// Slow path: read fields from the Record using cached deconverters
 	tv := reflect.ValueOf(target)
-	if tv.Kind() != reflect.Ptr {
+	if tv.Kind() != reflect.Pointer {
 		return fmt.Errorf("target must be a pointer")
 	}
 	tv = tv.Elem()
@@ -270,7 +270,7 @@ func (m *StructMapping) RecordToStruct(r *Record, target interface{}) error {
 
 // LookupStructMapping returns the mapping for a Go type, or nil if not registered.
 func LookupStructMapping(goType reflect.Type) *StructMapping {
-	if goType.Kind() == reflect.Ptr {
+	if goType.Kind() == reflect.Pointer {
 		goType = goType.Elem()
 	}
 	return structMappings[goType]
@@ -321,7 +321,7 @@ func unboxInto(target reflect.Value, val Value) error {
 		if sq, ok := val.(Sequable); ok {
 			return unboxSliceInto(target, sq.Seq())
 		}
-	case reflect.Ptr:
+	case reflect.Pointer:
 		// If it's a Boxed value holding a pointer of the right type, unwrap it
 		if b, ok := val.(*Boxed); ok {
 			bv := reflect.ValueOf(b.Unbox())
@@ -350,7 +350,7 @@ func unboxInto(target reflect.Value, val Value) error {
 func unboxSliceInto(target reflect.Value, s Seq) error {
 	elemType := target.Type().Elem()
 	var result []reflect.Value
-	for s != nil {
+	for !SeqIsEmpty(s) {
 		elem := reflect.New(elemType).Elem()
 		if err := unboxInto(elem, s.First()); err != nil {
 			return err

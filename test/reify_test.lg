@@ -1,0 +1,57 @@
+(ns test.reify-test
+  (:require [test :refer :all]))
+
+(defprotocol ReifyGreeting
+  (greeting [this])
+  (greet [this name]))
+
+(defprotocol ReifyMath
+  (bump [this x]))
+
+(deftest reify-single-protocol
+  (testing "reify returns an anonymous instance implementing a protocol"
+    (let [r (reify
+              ReifyGreeting
+              (greeting [this] "hello")
+              (greet [this name] (str "hello " name)))]
+      (is (satisfies? ReifyGreeting r))
+      (is (= "hello" (greeting r)))
+      (is (= "hello ada" (greet r "ada"))))))
+
+(deftest reify-captures-lexical-locals
+  (testing "method bodies close over surrounding locals"
+    (let [prefix "hi"
+          r (reify
+              ReifyGreeting
+              (greeting [this] prefix)
+              (greet [this name] (str prefix " " name)))]
+      (is (= "hi" (greeting r)))
+      (is (= "hi grace" (greet r "grace"))))))
+
+(deftest reify-multiple-protocols
+  (testing "one reified value can implement multiple protocols"
+    (let [r (reify
+              ReifyGreeting
+              (greeting [this] "yo")
+              (greet [this name] (str "yo " name))
+              ReifyMath
+              (bump [this x] (inc x)))]
+      (is (satisfies? ReifyGreeting r))
+      (is (satisfies? ReifyMath r))
+      (is (= "yo lin" (greet r "lin")))
+      (is (= 42 (bump r 41))))))
+
+(deftest reify-produces-distinct-types
+  (testing "separate reify expressions have separate anonymous types"
+    (let [a (reify ReifyGreeting (greeting [this] "a") (greet [this name] name))
+          b (reify ReifyGreeting (greeting [this] "b") (greet [this name] name))]
+      (is (not (= (type a) (type b))))
+      (is (= "a" (greeting a)))
+      (is (= "b" (greeting b))))))
+
+(deftest reify-host-methods-remain-unsupported
+  (testing "Java Object-style method bodies are not protocol implementations"
+    (is (= :caught
+           (try
+             (load-string "(reify Object (toString [this] \"x\"))")
+             (catch e :caught))))))

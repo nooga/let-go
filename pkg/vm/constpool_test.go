@@ -26,3 +26,15 @@ func TestConstpool(t *testing.T) {
 	assert.Equal(t, 0, j)
 	assert.Equal(t, Int(9), c.get(j))
 }
+
+func TestConstpoolDistinguishesEmptyListFromNilList(t *testing.T) {
+	c := NewConsts()
+	nilList := NewList([]Value{NIL})
+
+	emptyIdx := c.Intern(EmptyList)
+	nilListIdx := c.Intern(nilList)
+
+	assert.NotEqual(t, emptyIdx, nilListIdx)
+	assert.Equal(t, EmptyList, c.get(emptyIdx))
+	assert.Equal(t, nilList, c.get(nilListIdx))
+}

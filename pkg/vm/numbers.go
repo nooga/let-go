@@ -6,17 +6,72 @@ import (
 	"math/big"
 )
 
+const maxIntValue = Int(int(^uint(0) >> 1))
+const minIntValue = -maxIntValue - 1
+
+func checkedAddInt(a, b Int) (Int, bool) {
+	if (b > 0 && a > maxIntValue-b) || (b < 0 && a < minIntValue-b) {
+		return 0, false
+	}
+	return a + b, true
+}
+
+func checkedSubInt(a, b Int) (Int, bool) {
+	if (b < 0 && a > maxIntValue+b) || (b > 0 && a < minIntValue+b) {
+		return 0, false
+	}
+	return a - b, true
+}
+
+func checkedMulInt(a, b Int) (Int, bool) {
+	if a == 0 || b == 0 {
+		return 0, true
+	}
+	if (a == minIntValue && b == -1) || (b == minIntValue && a == -1) {
+		return 0, false
+	}
+	if a > 0 {
+		if b > 0 && a > maxIntValue/b {
+			return 0, false
+		}
+		if b < 0 && b < minIntValue/a {
+			return 0, false
+		}
+	} else {
+		if b > 0 && a < minIntValue/b {
+			return 0, false
+		}
+		if b < 0 && a < maxIntValue/b {
+			return 0, false
+		}
+	}
+	return a * b, true
+}
+
 // Numeric type promotion and arithmetic dispatch.
 // All functions use direct type assertions (no Unbox) to avoid allocation.
 // Promotion: Int op BigInt → BigInt, BigInt op Float → Float, Int op Float → Float.
 
+func normalizeFloat32(v Value) Value {
+	if f, ok := v.(Float32); ok {
+		return Float(f)
+	}
+	return v
+}
+
 // NumAdd adds two numeric Values.
 func NumAdd(a, b Value) (Value, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			return MakeInt(int(av) + int(bv)), nil
+			r, ok := checkedAddInt(av, bv)
+			if !ok {
+				return NIL, fmt.Errorf("integer overflow")
+			}
+			return MakeInt(int(r)), nil
 		case Float:
 			return Float(float64(av) + float64(bv)), nil
 		case *BigInt:
@@ -54,11 +109,17 @@ func NumAdd(a, b Value) (Value, error) {
 
 // NumSub subtracts b from a.
 func NumSub(a, b Value) (Value, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			return MakeInt(int(av) - int(bv)), nil
+			r, ok := checkedSubInt(av, bv)
+			if !ok {
+				return NIL, fmt.Errorf("integer overflow")
+			}
+			return MakeInt(int(r)), nil
 		case Float:
 			return Float(float64(av) - float64(bv)), nil
 		case *BigInt:
@@ -96,11 +157,17 @@ func NumSub(a, b Value) (Value, error) {
 
 // NumMul multiplies two numeric Values.
 func NumMul(a, b Value) (Value, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			return MakeInt(int(av) * int(bv)), nil
+			r, ok := checkedMulInt(av, bv)
+			if !ok {
+				return NIL, fmt.Errorf("integer overflow")
+			}
+			return MakeInt(int(r)), nil
 		case Float:
 			return Float(float64(av) * float64(bv)), nil
 		case *BigInt:
@@ -138,6 +205,32 @@ func NumMul(a, b Value) (Value, error) {
 
 // NumDiv divides a by b. Int/Int returns Float when not exact.
 func NumDiv(a, b Value) (Value, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
+	if _, ok := a.(*BigDecimal); ok {
+		if bf, ok := ToFloat(b); ok && (math.IsNaN(bf) || math.IsInf(bf, 0)) {
+			af, _ := ToFloat(a)
+			return Float(floatDiv(af, bf)), nil
+		}
+	}
+	if _, ok := b.(*BigDecimal); ok {
+		if af, ok := ToFloat(a); ok && (math.IsNaN(af) || math.IsInf(af, 0)) {
+			bf, _ := ToFloat(b)
+			return Float(floatDiv(af, bf)), nil
+		}
+	}
+	if _, ok := a.(*BigDecimal); ok {
+		if bf, ok := b.(Float); ok {
+			af, _ := ToFloat(a)
+			return Float(floatDiv(af, float64(bf))), nil
+		}
+	}
+	if _, ok := b.(*BigDecimal); ok {
+		if af, ok := a.(Float); ok {
+			bf, _ := ToFloat(b)
+			return Float(floatDiv(float64(af), bf)), nil
+		}
+	}
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -200,6 +293,8 @@ func NumDiv(a, b Value) (Value, error) {
 
 // NumQuot performs integer division (quot in Clojure).
 func NumQuot(a, b Value) (Value, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -364,6 +459,8 @@ func numQuotFloat(a, b float64) (float64, error) {
 // NumRem computes the remainder of truncated division (like Java's %).
 // Sign follows the dividend: (rem -10 3) => -1
 func NumRem(a, b Value) (Value, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -538,6 +635,8 @@ func numRatRemainderValue(r *big.Rat) Value {
 // NumMod computes the floored modulus (like Clojure's mod).
 // Sign follows the divisor: (mod -10 3) => 2
 func NumMod(a, b Value) (Value, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -724,6 +823,7 @@ func numModFloat(a, b float64) (float64, error) {
 
 // NumNeg negates a numeric value.
 func NumNeg(a Value) (Value, error) {
+	a = normalizeFloat32(a)
 	switch av := a.(type) {
 	case Int:
 		return MakeInt(-int(av)), nil
@@ -741,6 +841,7 @@ func NumNeg(a Value) (Value, error) {
 
 // NumAbs returns absolute value.
 func NumAbs(a Value) (Value, error) {
+	a = normalizeFloat32(a)
 	switch av := a.(type) {
 	case Int:
 		v := int(av)
@@ -768,6 +869,8 @@ func NumAbs(a Value) (Value, error) {
 
 // NumGt returns true if a > b.
 func NumGt(a, b Value) (bool, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -807,6 +910,8 @@ func NumGt(a, b Value) (bool, error) {
 
 // NumLt returns true if a < b.
 func NumLt(a, b Value) (bool, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -845,6 +950,8 @@ func NumLt(a, b Value) (bool, error) {
 }
 
 func NumGe(a, b Value) (bool, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -883,6 +990,8 @@ func NumGe(a, b Value) (bool, error) {
 }
 
 func NumLe(a, b Value) (bool, error) {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -920,8 +1029,55 @@ func NumLe(a, b Value) (bool, error) {
 	return false, fmt.Errorf("cannot compare %s and %s", a.Type().Name(), b.Type().Name())
 }
 
-// NumEq tests numeric equality (cross-type: 1 == 1.0 is true).
+// NumEq tests Clojure = numeric equality. Exact integers compare across
+// fixed/big integer representations, floating values compare by value, and
+// BigDecimal only compares with BigDecimal.
 func NumEq(a, b Value) bool {
+	switch av := a.(type) {
+	case Int:
+		switch bv := b.(type) {
+		case Int:
+			return int(av) == int(bv)
+		case *BigInt:
+			return big.NewInt(int64(av)).Cmp(bv.val) == 0
+		}
+	case Float:
+		switch bv := b.(type) {
+		case Float:
+			return float64(av) == float64(bv)
+		case Float32:
+			return float64(av) == float64(bv)
+		}
+	case Float32:
+		switch bv := b.(type) {
+		case Float:
+			return float64(av) == float64(bv)
+		case Float32:
+			return float64(av) == float64(bv)
+		}
+	case *BigInt:
+		switch bv := b.(type) {
+		case Int:
+			return av.val.Cmp(big.NewInt(int64(bv))) == 0
+		case *BigInt:
+			return av.val.Cmp(bv.val) == 0
+		}
+	case *Ratio:
+		if bv, ok := b.(*Ratio); ok {
+			return av.val.Cmp(bv.val) == 0
+		}
+	case *BigDecimal:
+		if bv, ok := b.(*BigDecimal); ok {
+			return av.val.Cmp(bv.val) == 0
+		}
+	}
+	return false
+}
+
+// NumEquivalent tests broad numeric equivalence for == and numeric predicates.
+func NumEquivalent(a, b Value) bool {
+	a = normalizeFloat32(a)
+	b = normalizeFloat32(b)
 	switch av := a.(type) {
 	case Int:
 		switch bv := b.(type) {
@@ -956,7 +1112,7 @@ func NumEq(a, b Value) bool {
 // IsNumber returns true if the value is Int, Float, or BigInt.
 func IsNumber(v Value) bool {
 	switch v.(type) {
-	case Int, Float, *BigInt, *Ratio, *BigDecimal:
+	case Int, Float, Float32, *BigInt, *Ratio, *BigDecimal:
 		return true
 	}
 	return false
@@ -968,6 +1124,8 @@ func ToFloat(v Value) (float64, bool) {
 	case Int:
 		return float64(n), true
 	case Float:
+		return float64(n), true
+	case Float32:
 		return float64(n), true
 	case *BigInt:
 		f, _ := new(big.Float).SetInt(n.val).Float64()
@@ -982,13 +1140,28 @@ func ToFloat(v Value) (float64, bool) {
 	return 0, false
 }
 
+func intFromFloat64(f float64) int {
+	switch {
+	case math.IsNaN(f):
+		return 0
+	case math.IsInf(f, 1) || f > float64(maxIntValue):
+		return int(maxIntValue)
+	case math.IsInf(f, -1) || f < float64(minIntValue):
+		return int(minIntValue)
+	default:
+		return int(f)
+	}
+}
+
 // ToInt converts a numeric Value to int if possible.
 func ToInt(v Value) (int, bool) {
 	switch n := v.(type) {
 	case Int:
 		return int(n), true
 	case Float:
-		return int(n), true
+		return intFromFloat64(float64(n)), true
+	case Float32:
+		return intFromFloat64(float64(n)), true
 	case *BigInt:
 		if n.val.IsInt64() {
 			return int(n.val.Int64()), true
@@ -1001,10 +1174,10 @@ func ToInt(v Value) (int, bool) {
 		return 0, true
 	case *BigDecimal:
 		f, _ := n.Val().Float64()
-		return int(f), true
+		return intFromFloat64(f), true
 	case *Ratio:
 		f, _ := n.Val().Float64()
-		return int(f), true
+		return intFromFloat64(f), true
 	}
 	return 0, false
 }

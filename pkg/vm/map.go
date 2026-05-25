@@ -7,19 +7,20 @@ package vm
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 )
 
 type theMapType struct{}
 
-func (t *theMapType) String() string     { return t.Name() }
-func (t *theMapType) Type() ValueType    { return TypeType }
-func (t *theMapType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theMapType) String() string  { return t.Name() }
+func (t *theMapType) Type() ValueType { return TypeType }
+func (t *theMapType) Unbox() any      { return reflect.TypeFor[*theMapType]() }
 
 func (t *theMapType) Name() string { return "let-go.lang.Map" }
 
-func (t *theMapType) Box(bare interface{}) (Value, error) {
+func (t *theMapType) Box(bare any) (Value, error) {
 	casted, ok := bare.(map[Value]Value)
 	if !ok {
 		return NIL, NewTypeError(bare, "can't be boxed as", t)
@@ -54,7 +55,7 @@ func (l Map) Conj(value Value) Collection {
 func (l Map) Type() ValueType { return MapType }
 
 // Unbox implements Value
-func (l Map) Unbox() interface{} {
+func (l Map) Unbox() any {
 	return map[Value]Value(l)
 }
 
@@ -124,8 +125,8 @@ func (s *MapSeq) String() string {
 	return b.String()
 }
 
-func (s *MapSeq) Type() ValueType    { return ListType }
-func (s *MapSeq) Unbox() interface{} { return s.entries[s.i:] }
+func (s *MapSeq) Type() ValueType { return ListType }
+func (s *MapSeq) Unbox() any      { return s.entries[s.i:] }
 
 func (s *MapSeq) First() Value {
 	if s.i >= len(s.entries) {
@@ -174,9 +175,7 @@ func (l Map) Empty() Collection {
 
 func (l Map) Assoc(k Value, v Value) Associative {
 	newmap := make(Map)
-	for ok, ov := range l {
-		newmap[ok] = ov
-	}
+	maps.Copy(newmap, l)
 	newmap[k] = v
 	return newmap
 }

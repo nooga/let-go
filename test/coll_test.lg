@@ -27,6 +27,10 @@
   (testing "map creation"
     (is (= {} (hash-map)))
     (is (= {:a 1 :b 2} (hash-map :a 1 :b 2))))
+
+  (testing "map literals and array-map preserve insertion order"
+    (is (= '([:a 1] [:b 2] [:c 3]) (seq {:a 1 :b 2 :c 3})))
+    (is (= '([:a 1] [:b 2] [:c 3]) (seq (array-map :a 1 :b 2 :c 3)))))
   
   (testing "map access"
     (is (= 1 (get {:a 1 :b 2} :a)))
@@ -40,6 +44,10 @@
     (is (= :default (get {:a 1} :b :default))))
   
   (testing "map modification"
+    (is (= {:a 1 :b 2} (conj {:a 1} [:b 2])))
+    (is (= :caught (try (conj {:a 1} '(:b 2)) (catch e :caught))))
+    (is (= -1 (first (conj (range) -1))))
+    (is (= :caught (try (conj "a" "b") (catch e :caught))))
     (is (= {:a 1 :b 2} (assoc {:a 1} :b 2)))
     (is (= {:a 1 :b 2 :c 3} (assoc {:a 1} :b 2 :c 3)))
     (is (= {:b 2} (dissoc {:a 1 :b 2} :a)))
@@ -51,6 +59,21 @@
     (is (= {0 2} (update {0 1} 0 inc)))
     (is (= {:a nil} (update {:a 5} :a :missing)))
     (is (= :fallback (:missing 5 :fallback)))))
+
+(deftest conj-preserves-meta-test
+  (testing "conj preserves metadata on persistent collections"
+    (let [m {:tag :m}]
+      (is (= m (meta (conj (with-meta {} m) [:k :v]))))
+      (is (= m (meta (conj (with-meta [] m) :v))))
+      (is (= m (meta (conj (with-meta #{} m) :v))))
+      (is (= m (meta (conj (with-meta '() m) :v)))))))
+
+(deftest merge-map-entry-test
+  (testing "merge accepts map entries"
+    (is (= {:a 1 :b 2} (merge {:a 0} [:a 1] {:b 2})))
+    (is (= :caught (try (merge {} []) (catch e :caught))))
+    (is (= :caught (try (merge {} '(1 2)) (catch e :caught))))
+    (is (= :caught (try (merge {} "str") (catch e :caught))))))
 
 (deftest nested-access
   (testing "get-in"
@@ -105,7 +128,16 @@
     (is (empty? '()))
     (is (empty? {}))
     (is (empty? #{}))
-    (is (not (empty? [1])))))
+    (is (not (empty? [1]))))
+
+  (testing "empty returns empty list for ranges"
+    (is (= '() (empty (range))))
+    (is (= '() (empty (range 10)))))
+
+  (testing "empty returns nil for strings and non-collections"
+    (is (nil? (empty "")))
+    (is (nil? (empty 1)))
+    (is (nil? (empty :a)))))
 
 (deftest into-test
   (testing "into"

@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,7 +83,7 @@ func runLGB(filename string) error {
 		n := rt.DefNSBare(nsName)
 		v := n.LookupLocal(vm.Symbol(name))
 		if v == nil {
-			return n.Def(name, vm.NIL)
+			return n.DefStub(name)
 		}
 		return v
 	}
@@ -192,9 +193,7 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 	if len(nsRes.LoadedChunks) > 0 {
 		mainNS := ctx.CurrentNS().Name()
 		nsChunks := make(map[string]*vm.CodeChunk, len(nsRes.LoadedChunks)+1)
-		for k, v := range nsRes.LoadedChunks {
-			nsChunks[k] = v
-		}
+		maps.Copy(nsChunks, nsRes.LoadedChunks)
 		nsChunks[mainNS] = chunk
 		nsOrder := append(nsRes.LoadOrder, mainNS)
 		if err := bytecode.EncodeBundleOrdered(&lgbBuf, ctx.Consts(), nsChunks, nsOrder); err != nil {
@@ -299,9 +298,7 @@ func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ds
 		// Include the main chunk under its namespace name, last in order
 		mainNS := ctx.CurrentNS().Name()
 		nsChunks := make(map[string]*vm.CodeChunk, len(nsRes.LoadedChunks)+1)
-		for k, v := range nsRes.LoadedChunks {
-			nsChunks[k] = v
-		}
+		maps.Copy(nsChunks, nsRes.LoadedChunks)
 		nsChunks[mainNS] = chunk
 		nsOrder := append(nsRes.LoadOrder, mainNS)
 		return bytecode.EncodeBundleOrdered(out, ctx.Consts(), nsChunks, nsOrder)
@@ -356,7 +353,8 @@ func init() {
 }
 
 // buildSearchPaths resolves the resolver's path list from the -source-paths
-// flag (preferred) or the LG_SOURCE_PATHS env var (fallback).
+// flag (preferred), the LG_SOURCE_PATHS env var, or deps.edn in the
+// current directory (fallback). Always includes "." as the first entry.
 func buildSearchPaths() []string {
 	explicitSet := false
 	flag.Visit(func(f *flag.Flag) {
@@ -364,7 +362,13 @@ func buildSearchPaths() []string {
 			explicitSet = true
 		}
 	})
-	return resolver.PathsFromInputs(sourcePaths, os.Getenv("LG_SOURCE_PATHS"), explicitSet)
+	if explicitSet || os.Getenv("LG_SOURCE_PATHS") != "" {
+		return resolver.PathsFromInputs(sourcePaths, os.Getenv("LG_SOURCE_PATHS"), explicitSet)
+	}
+	if depsPaths := resolver.PathsFromDepsEdn("."); depsPaths != nil {
+		return append([]string{"."}, depsPaths...)
+	}
+	return []string{"."}
 }
 
 func initCompiler(debug bool) *compiler.Context {
@@ -399,7 +403,7 @@ func main() {
 			n := rt.DefNSBare(nsName)
 			v := n.LookupLocal(vm.Symbol(name))
 			if v == nil {
-				return n.Def(name, vm.NIL)
+				return n.DefStub(name)
 			}
 			return v
 		}

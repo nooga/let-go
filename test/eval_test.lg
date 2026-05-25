@@ -1,0 +1,20 @@
+(ns test.eval-test
+  (:require [test :refer :all]))
+
+(def eval-test-value 41)
+
+(deftest eval-built-in
+  (testing "self-evaluating values"
+    (is (= 1 (eval 1)))
+    (is (= "x" (eval "x")))
+    (is (= :k (eval :k))))
+  (testing "symbols resolve in the current namespace"
+    (is (= 41 (eval 'test.eval-test/eval-test-value))))
+  (testing "forms compile and run"
+    (is (= 42 (eval '(+ 40 2))))
+    (is (= 42 (eval '(let [x 40] (+ x 2)))))
+    (is (= 42 (eval '(eval '(+ 40 2))))))
+  (testing "collections are evaluated as forms"
+    (is (= [1 41] (eval [1 'test.eval-test/eval-test-value])))
+    (is (= {:value 41} (eval {:value 'test.eval-test/eval-test-value})))
+    (is (= #{41} (eval #{'test.eval-test/eval-test-value})))))

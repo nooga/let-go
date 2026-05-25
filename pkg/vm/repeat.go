@@ -11,12 +11,12 @@ type theRepeatType struct {
 	zero *Repeat
 }
 
-func (t *theRepeatType) String() string     { return t.Name() }
-func (t *theRepeatType) Type() ValueType    { return RepeatType }
-func (t *theRepeatType) Unbox() interface{} { return nil }
+func (t *theRepeatType) String() string  { return t.Name() }
+func (t *theRepeatType) Type() ValueType { return RepeatType }
+func (t *theRepeatType) Unbox() any      { return nil }
 
-func (t *theRepeatType) Name() string                     { return "let-go.lang.Repeat" }
-func (t *theRepeatType) Box(_ interface{}) (Value, error) { return t.zero, nil }
+func (t *theRepeatType) Name() string             { return "let-go.lang.Repeat" }
+func (t *theRepeatType) Box(_ any) (Value, error) { return t.zero, nil }
 
 // Repeat is a Value whose only value is Repeat
 type Repeat struct {
@@ -77,7 +77,7 @@ func (n *Repeat) RawCount() int {
 func (n *Repeat) Type() ValueType { return RepeatType }
 
 // Unbox implements Value
-func (n *Repeat) Unbox() interface{} { return nil }
+func (n *Repeat) Unbox() any { return nil }
 
 // RepeatType is the type of RepeatValues
 var RepeatType *theRepeatType = &theRepeatType{zero: nil}

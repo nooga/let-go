@@ -18,6 +18,15 @@
   (list 'do (cons 'defn (cons name (cons args body))) (list 'set-macro! (list 'var name))))
 (set-macro! (var defmacro))
 
+(defmacro def- [name form]
+  `(def ^:private ~name ~form))
+
+(defmacro defn- [name & forms]
+  `(def ^:private ~name (fn ~@forms)))
+
+(defmacro declare [name]
+  (list 'def name nil))
+
 (defmacro comment [& _] nil)
 
 ; define let as alias to let* for now
@@ -67,6 +76,17 @@
 
 (def parse-long parse-int)
 
+(declare odd?)
+(declare dec)
+(declare inc)
+(declare map)
+(declare integer?)
+(declare keyword?)
+(declare symbol?)
+(declare sequential?)
+(declare distinct)
+(declare list*)
+
 ;; lazy-seq macro - wraps body in a thunk that produces a seq when realized
 ;; Expands to: (lazy-seq* (fn [] body...))
 (defmacro lazy-seq [& body]
@@ -109,8 +129,12 @@
              (if (>= i pair-count)
                acc
                (let [test-val (nth fv i)
-                     result (nth fv (inc i))]
-                 (if (and (list? test-val) (not (empty? test-val)))
+                     result (nth fv (inc i))
+                     set-literal? (and (list? test-val) (= 'hash-set (first test-val)))
+                     quoted-test (if (or (set? test-val) set-literal?)
+                                   test-val
+                                   (list 'quote test-val))]
+                 (if (and (list? test-val) (not set-literal?) (not (empty? test-val)))
                    ;; List of alternatives: (a b c)
                    (recur (+ i 2)
                           (conj acc
@@ -119,7 +143,7 @@
                    ;; Single value — quote it
                    (recur (+ i 2)
                           (conj acc
-                                (list '= g (list 'quote test-val))
+                                (list '= g quoted-test)
                                 result))))))
          :else ~default-val))))
 
@@ -142,7 +166,7 @@
 
 (defn zero? [x]
   (if (number? x)
-    (= 0 x)
+    (== 0 x)
     (throw (str "zero? requires a number, got " x))))
 (defn pos? [x] (gt x 0))
 (defn neg? [x] (lt x 0))
@@ -168,9 +192,16 @@
 (defn inc' [x] (+' x 1))
 (defn dec' [x] (-' x 1))
 
+;; Unchecked variants: native unchecked-add / unchecked-subtract / etc. are
+;; registered in pkg/rt/lang.go. unchecked-inc / unchecked-dec compose on
+;; top of those, mirroring Clojure's `(defn unchecked-inc [x] (unchecked-add x 1))`.
+(defn unchecked-inc [x] (unchecked-add x 1))
+(defn unchecked-dec [x] (unchecked-subtract x 1))
+
 (defn num [x]
-  (if (number? x) x
-    (throw (str "Expected a number, got " (type x)))))
+  (if (nil? x) nil
+    (if (number? x) x
+      (throw (str "Expected a number, got " (type x))))))
 
 (defn ffirst [x] (first (first x)))
 (defn fnext [x] (first (next x)))
@@ -186,24 +217,14 @@
 (defn rational? [x] (or (int? x) (bigint? x) (ratio? x) (decimal? x)))
 
 ;; type coercion aliases
-(def long int)
 (defn byte [x]
   (if (and (>= x -128) (<= x 127))
     (int x)
     (throw (ex-info (str "Value out of range for byte: " x) {}))))
-(defn unchecked-byte [x]
-  (let [n (int x)
-        b (mod (+ (mod n 256) 256) 256)]
-    (if (> b 127) (- b 256) b)))
 (defn short [x]
   (if (and (>= x -32768) (<= x 32767))
     (int x)
     (throw (ex-info (str "Value out of range for short: " x) {}))))
-(defn unchecked-short [x]
-  (let [n (int x)
-        s (mod (+ (mod n 65536) 65536) 65536)]
-    (if (> s 32767) (- s 65536) s)))
-
 ;; ident predicates
 (defn ident? [x] (or (keyword? x) (symbol? x)))
 (defn simple-ident? [x] (and (ident? x) (nil? (namespace x))))
@@ -214,9 +235,8 @@
 (defn qualified-symbol? [x] (and (symbol? x) (some? (namespace x))))
 
 ;; bleh
-(defn list? [x] (= (type x) (type '())))
 (defn vector? [x] (= (type x) (type [])))
-;; map? and set? are native builtins (handle sorted variants)
+;; list?, map?, and set? are native builtins (handle seq/list distinctions and sorted variants)
 (defn symbol? [x] (= (type x) (type 'x)))
 (defn keyword? [x] (= (type x) (type :x)))
 (defn string? [x] (= (type x) (type "")))
@@ -228,7 +248,9 @@
 (defn empty? [x] (not (seq x)))
 
 (defn set [coll]
-  (reduce conj #{} coll))
+  (if (seq coll)
+    (reduce conj #{} coll)
+    #{}))
 
 (defn concat-vec [a b]
   (if (empty? b)
@@ -236,6 +258,24 @@
     (if (vector? a)
       (persistent! (reduce conj! (transient a) b))
       (reduce conj a b))))
+
+(defn reduce-kv [f init coll]
+  (cond
+    (map? coll)
+      (reduce (fn [acc pair] (f acc (first pair) (second pair))) init coll)
+    ;; Vectors: both ArrayVector (literal []) and PersistentVector (large
+    ;; vectors built incrementally) need integer-keyed iteration. Test via
+    ;; counted+nth contract rather than exact type, since IR insts grow
+    ;; large enough to migrate from ArrayVector to PersistentVector.
+    (or (vector? coll)
+        (= "let-go.lang.PersistentVector" (str (type coll))))
+      (let [n (count coll)]
+        (loop [i 0 acc init]
+          (if (>= i n)
+            acc
+            (recur (inc i) (f acc i (nth coll i))))))
+    (nil? coll) init
+    :else (throw (str "reduce-kv: unsupported coll type: " (type coll)))))
 
 (defmacro time [& body]
   (let [then   (gensym "time__")
@@ -322,6 +362,22 @@
         body (if (string? (first body)) (next body) body)
         ;; An attr-map as the next body form is valid too — drop for now.
         body (if (map? (first body)) (next body) body)
+        ;; Extract (:refer-clojure :exclude [sym ...]) — emit exclusions before
+        ;; any defs in the body so warn-on-shadow respects them.
+        refer-clojure-form (reduce (fn [acc form]
+                                     (if (and (sequential? form)
+                                              (= :refer-clojure (first form)))
+                                       form
+                                       acc))
+                                   nil
+                                   body)
+        excludes (when refer-clojure-form
+                   (let [opts (apply hash-map (rest refer-clojure-form))]
+                     (:exclude opts)))
+        exclude-forms (if (and excludes (sequential? excludes))
+                        [(cons 'exclude-in-current-ns
+                               (map (fn [s] (list 'quote s)) excludes))]
+                        [])
         emit-one (fn [forms req]
                    (cond
                      (symbol? req)
@@ -367,6 +423,7 @@
                           body)]
     `(do
        (in-ns '~n)
+       ~@exclude-forms
        ~@req-forms
        ~@legacy)))
 
@@ -390,6 +447,27 @@
              (cons x (filter f r))
              (filter f r))))))))
 
+(defmacro if-let
+  ([bindings then]
+   `(if-let ~bindings ~then nil))
+  ([bindings then else]
+   (let [form (bindings 0) tst (bindings 1)]
+     `(let [temp# ~tst]
+        (if temp#
+          (let [~form temp#]
+            ~then)
+          ~else)))))
+
+(defmacro when-let
+  [bindings & body]
+  (if (not (= 2 (count bindings)))
+    (throw "when-let requires exactly two forms in binding vector")
+    (let [form (bindings 0) tst (bindings 1)]
+      `(let [temp# ~tst]
+         (when temp#
+           (let [~form temp#]
+             ~@body))))))
+
 (defn take
   ([n]
    (fn [rf]
@@ -406,8 +484,11 @@
                 result))))))))
   ([n coll]
    (lazy-seq
-     (when (and (pos? n) (seq coll))
-       (cons (first coll) (take (dec n) (next coll)))))))
+     (when (pos? n)
+       (when-let [s (seq coll)]
+         (cons (first s)
+               (when (> n 1)
+                 (take (dec n) (rest s)))))))))
 
 (defn drop
   ([n]
@@ -454,6 +535,45 @@
         (cons (list 'let ['binding__result (cons 'do body)]
                     (cons 'do (concat-list (vec pops) (list 'binding__result))))
               nil)))))
+
+(defmacro bound-fn [& fntail]
+  (list 'bound-fn* (cons 'fn fntail)))
+
+;; Clojure/JVM compatibility: let-go does not implement host JVM interfaces.
+;; FIXME: This is a protocol-shaped compatibility bridge for portable tests and
+;; source compatibility with pure protocol use. It intentionally does not create
+;; JVM host interfaces.
+(defmacro definterface [name & sigs]
+  (let [method-names (distinct (map first sigs))
+        proto-sigs (map (fn [m] (list m '[this x])) method-names)]
+    (cons 'defprotocol (cons name proto-sigs))))
+
+;; Clojure/JVM compatibility: minimal host constructor bridge.
+;; FIXME: This only covers constructor forms that are meaningful in let-go's
+;; runtime. It is not JVM interop.
+(defn let-go-new [class & args]
+  (case class
+    Boolean false
+    Object nil
+    nil))
+
+(defmacro new [class & args]
+  `(let-go-new '~class ~@args))
+
+(defmacro with-precision [precision & body]
+  (let [rounding? (= :rounding (first body))
+        rounding (if rounding? (second body) :half-up)
+        forms (if rounding? (next (next body)) body)]
+    `(round-bigdec ~precision ~rounding (do ~@forms))))
+
+(def UP :up)
+(def DOWN :down)
+(def HALF_UP :half-up)
+(def HALF_DOWN :half-down)
+(def HALF_EVEN :half-even)
+(def CEILING :ceiling)
+(def FLOOR :floor)
+(def UNNECESSARY :unnecessary)
 
 (defmacro dotimes
   [bindings & body]
@@ -580,9 +700,29 @@
           `(~clean (let* ~nbs ~@body)))
         `(~bindings ~@body)))))
 
+(defn- name-fn-arity [name self arity]
+  (let [bindings (first arity)
+        body (next arity)]
+    (list bindings
+          (cons 'let (cons (vector name (list 'deref self)) body)))))
+
 (defmacro fn [& forms]
   (let [forms (if (string? (first forms)) (next forms) forms)]
     (cond
+      (symbol? (first forms))
+      (let [name (first forms)
+            forms (next forms)
+            forms (if (string? (first forms)) (next forms) forms)
+            self (gensym "self__")]
+        (if (vector? (first forms))
+          (let [arity (fn-expand (first forms) (next forms))]
+            `(let [~self (atom nil)]
+               (reset! ~self (fn* ~(name-fn-arity name self arity)))
+               (deref ~self)))
+          `(let [~self (atom nil)]
+             (reset! ~self (fn* ~@(map #(name-fn-arity name self (fn-expand (first %) (next %))) forms)))
+             (deref ~self))))
+
       (vector? (first forms))
       (cons 'fn* (fn-expand (first forms) (next forms)))
 
@@ -593,16 +733,41 @@
       nil ;; throw here
       )))
 
+;; *ir-compile* — when truthy, defn routes each fn body through the
+;; Lisp-side IR pipeline (ir.passes.pipeline/compile-form) instead of
+;; the standard Go compile path. Set this BEFORE the (defn ...) forms
+;; you want IR-compiled. The IR pipeline namespace must already be
+;; loaded (require ir.passes.pipeline) when defn fires.
+;;
+;; Only single-arity defns (with or without variadic &) take the IR
+;; path. Multi-arity and docstring-less edge cases fall back to the
+;; standard expansion. Used for stress-testing the IR pipeline against
+;; real codebases like xsofy without committing to a full toolchain
+;; switch.
+(def ^:dynamic *ir-compile* false)
+
 (defmacro defn [name & forms]
-  (let [forms (if (string? (first forms)) (next forms) forms)]
-    `(def ~name (fn ~@forms))))
-
-(defmacro def- [name form]
-  `(def ^:private ~name ~form))
-
-(defmacro defn- [name & forms]
-  (let [forms (if (string? (first forms)) (next forms) forms)]
-    `(def ^:private ~name (fn ~@forms))))
+  (let [forms     (if (string? (first forms)) (next forms) forms)
+        first-form (first forms)
+        single?    (vector? first-form)
+        args       (when single? first-form)
+        variadic?  (when single? (boolean (some (fn [a] (= a '&)) args)))
+        arity      (when single?
+                     (if variadic?
+                       (- (count args) 2)   ; & and the rest-sym don't count
+                       (count args)))]
+    (if (and *ir-compile* single?)
+      ;; `resolve` defers ir.passes.pipeline lookup to RUNTIME — core.lg
+      ;; compiles before ir.passes.pipeline exists, so a direct symbol
+      ;; reference would fail at bundle-gen time.
+      (let [whole-form (apply list 'defn name forms)
+            cf-var     (resolve 'ir.passes.pipeline/compile-form)
+            _          (when (nil? cf-var)
+                         (throw "*ir-compile* is true but ir.passes.pipeline isn't loaded; (require 'ir.passes.pipeline) first"))
+            chunk      (cf-var whole-form (deref #'*ns*))
+            fn-val     (chunk->fn arity variadic? chunk)]
+        (list 'def name fn-val))
+      `(def ~name (fn ~@forms)))))
 
 (defmacro while [test & body]
   `(loop* [] (when ~test ~@body (recur))))
@@ -689,24 +854,24 @@
   ([f] f)
   ([f arg1]
    (fn
-     ([] (f arg1))
-     ([x] (f arg1 x))
-     ([x y] (f arg1 x y))
-     ([x y z] (f arg1 x y z))
+     ([] (apply f (list arg1)))
+     ([x] (apply f (list arg1 x)))
+     ([x y] (apply f (list arg1 x y)))
+     ([x y z] (apply f (list arg1 x y z)))
      ([x y z & args] (apply f arg1 x y z args))))
   ([f arg1 arg2]
    (fn
-     ([] (f arg1 arg2))
-     ([x] (f arg1 arg2 x))
-     ([x y] (f arg1 arg2 x y))
-     ([x y z] (f arg1 arg2 x y z))
+     ([] (apply f (list arg1 arg2)))
+     ([x] (apply f (list arg1 arg2 x)))
+     ([x y] (apply f (list arg1 arg2 x y)))
+     ([x y z] (apply f (list arg1 arg2 x y z)))
      ([x y z & args] (apply f arg1 arg2 x y z args))))
   ([f arg1 arg2 arg3]
    (fn
-     ([] (f arg1 arg2 arg3))
-     ([x] (f arg1 arg2 arg3 x))
-     ([x y] (f arg1 arg2 arg3 x y))
-     ([x y z] (f arg1 arg2 arg3 x y z))
+     ([] (apply f (list arg1 arg2 arg3)))
+     ([x] (apply f (list arg1 arg2 arg3 x)))
+     ([x y] (apply f (list arg1 arg2 arg3 x y)))
+     ([x y z] (apply f (list arg1 arg2 arg3 x y z)))
      ([x y z & args] (apply f arg1 arg2 arg3 x y z args))))
   ([f arg1 arg2 arg3 & more]
    (fn [& args] (apply f arg1 arg2 arg3 (concat more args)))))
@@ -714,32 +879,15 @@
 (defn reverse [coll]
   (reduce conj () coll))
 
-(defmacro if-let
-  ([bindings then]
-   `(if-let ~bindings ~then nil))
-  ([bindings then else]
-   (let [form (bindings 0) tst (bindings 1)]
-     `(let [temp# ~tst]
-        (if temp#
-          (let [~form temp#]
-            ~then)
-          ~else)))))
-
-(defmacro when-let
-  [bindings & body]
-  (let [form (bindings 0) tst (bindings 1)]
-    `(let [temp# ~tst]
-       (when temp#
-         (let [~form temp#]
-           ~@body)))))
-
 (defmacro when-first
   [bindings & body]
-  (let [x (bindings 0) coll (bindings 1)
-        s (gensym "s__")]
-    `(when-let [~s (seq ~coll)]
-       (let [~x (first ~s)]
-         ~@body))))
+  (if (not (= 2 (count bindings)))
+    (throw "when-first requires exactly two forms in binding vector")
+    (let [x (bindings 0) coll (bindings 1)
+          s (gensym "s__")]
+      `(when-let [~s (seq ~coll)]
+         (let [~x (first ~s)]
+           ~@body)))))
 
 ;; letfn — mutually recursive local functions
 ;; (letfn [(f [x] ...) (g [x] ...)] body)
@@ -964,10 +1112,6 @@
   ([xform coll]
    (transformer-seq* xform coll)))
 
-;; array-map: in let-go, same as hash-map (we don't have a separate ArrayMap type)
-(defn array-map [& kvs]
-  (apply hash-map kvs))
-
 ;; rseq is a native builtin (supports vectors, sorted-map, sorted-set)
 
 ;; some-fn: complement of every-pred — returns first truthy result or false
@@ -986,7 +1130,7 @@
   ([m & maps]
    (reduce (fn [a b]
              (if b
-               (reduce conj (or a {}) (seq b))
+               (conj (or a {}) b)
                a))
            m maps)))
 
@@ -1473,7 +1617,13 @@
   ([k x] x)
   ([k x y] (if (< (k x) (k y)) x y))
   ([k x y & more]
-   (reduce #(min-key k %1 %2) (min-key k x y) more)))
+   (let [nan-key? (fn [v] (let [kv (k v)] (and (number? kv) (not (= kv kv)))))]
+     (reduce (fn [best candidate]
+               (if (or (nan-key? best) (nan-key? candidate))
+                 best
+                 (min-key k best candidate)))
+             (min-key k x y)
+             more))))
 
 (defn max-key
   ([k x] x)
@@ -1564,10 +1714,12 @@
         pos-ctor-body (cons 'make-deftype-instance (cons name fields))
         pos-ctor      (list 'def pos-ctor-name
                             (list 'fn (vec fields) pos-ctor-body))
+        protocol-parents (filter symbol? protocol-impls)
+        parent-forms  (map (fn [p] (list 'register-type-parent! name p)) protocol-parents)
         forms         (list 'do (list 'def name type-def) pos-ctor)]
     (if (seq protocol-impls)
-      (concat forms (list (cons 'extend-type (cons name protocol-impls))))
-      forms)))
+      (concat forms parent-forms (list (cons 'extend-type (cons name protocol-impls))))
+      (concat forms parent-forms))))
 
 (defmacro defrecord [name fields & protocol-impls]
   (let [field-keywords (map keyword fields)
@@ -1580,11 +1732,21 @@
         pos-ctor (list 'def pos-ctor-name (cons 'fn (cons (vec fields) (list pos-ctor-body))))
         ;; Map constructor: (map->Point {:x 1 :y 2}) → (make-record Point m)
         map-ctor-name (symbol (str "map->" name))
-        map-ctor (list 'def map-ctor-name (list 'fn ['m] (list 'make-record name 'm)))]
-    (list 'do
-          (list 'def name type-def)
-          pos-ctor
-          map-ctor)))
+        map-ctor (list 'def map-ctor-name (list 'fn ['m] (list 'make-record name 'm)))
+        protocol-parents (filter symbol? protocol-impls)
+        parent-forms (map (fn [p] (list 'register-type-parent! name p)) protocol-parents)]
+    (if (seq protocol-impls)
+      (concat (list 'do
+                    (list 'def name type-def)
+                    pos-ctor
+                    map-ctor)
+              parent-forms
+              (list (cons 'extend-type (cons name protocol-impls))))
+      (concat (list 'do
+                    (list 'def name type-def)
+                    pos-ctor
+                    map-ctor)
+              parent-forms))))
 
 ;; --- Protocols ---
 
@@ -1593,7 +1755,10 @@
 ;;   (method2 [this arg]))
 ;; Defines a protocol and creates vars for each method.
 (defmacro defprotocol [name & sigs]
-  (let [method-names (map first sigs)
+  (let [;; Optional leading docstring. Currently discarded — see defmulti
+        ;; comment; let-go doesn't yet thread :doc meta through def-forms.
+        sigs         (if (string? (first sigs)) (next sigs) sigs)
+        method-names (map first sigs)
         ;; Quote method names so they don't get resolved as vars
         quoted-names (map (fn [m] (list 'quote m)) method-names)
         proto-def    (list 'def name
@@ -1652,6 +1817,44 @@
                                  (apply hash-map impl-pairs))))
                        by-proto)]
       (cons 'do extends))))
+
+;; (reify
+;;   Protocol1
+;;   (method1 [this] body1)
+;;   (method2 [this arg] body2)
+;;   Protocol2
+;;   (method3 [this] body3))
+;; Creates an anonymous, fieldless type, extends it to the listed protocols,
+;; and returns one instance. Method bodies are plain closures, so they capture
+;; surrounding lexical locals naturally.
+(defmacro reify [& specs]
+  (let [type-sym (gensym "reify__")
+        parse (fn [specs]
+                (loop [s specs
+                       proto nil
+                       result []]
+                  (if (empty? s)
+                    result
+                    (let [item (first s)]
+                      (if (symbol? item)
+                        (recur (next s) item result)
+                        (let [mname   (first item)
+                              fn-tail (next item)
+                              entry   [proto mname (cons 'fn fn-tail)]]
+                          (recur (next s) proto (conj result entry))))))))]
+    (let [entries (parse specs)
+          by-proto (group-by first entries)
+          extends (map (fn [[proto-sym methods]]
+                         (let [impl-pairs (mapcat (fn [[_ mname fn-form]]
+                                                    [(keyword mname) fn-form])
+                                                  methods)]
+                           (list 'extend-type* proto-sym type-sym
+                                 (apply hash-map impl-pairs))))
+                       by-proto)]
+      (cons 'let
+            (cons [type-sym (list 'make-deftype (str type-sym))]
+                  (concat extends
+                          (list (list 'make-deftype-instance type-sym))))))))
 
 ;; (extend-protocol Protocol
 ;;   type-expr1
@@ -1812,10 +2015,12 @@
 
 (defn nthnext
   [coll n]
-  (loop [s coll i n]
-    (if (and (pos? i) (seq s))
-      (recur (next s) (dec i))
-      (seq s))))
+  (if (nil? coll)
+    nil
+    (loop [s coll i n]
+      (if (and (pos? i) (seq s))
+        (recur (next s) (dec i))
+        (seq s)))))
 
 ;; --- Tier 2 functions ---
 
@@ -1823,6 +2028,42 @@
 (defmacro future [& body]
   (list 'future* (cons 'fn (cons [] body))))
 
+;; Clojure compatibility: refs are atom-backed and do not provide STM
+;; coordination. Single-threaded `dosync` is just `do`.
+;; FIXME: Replace this with real STM if let-go ever supports coordinated refs.
+(def ref atom)
+(def ref-set (fn [r v] (reset! r v)))
+(def alter (fn [r f & args] (apply swap! r f args)))
+(def commute alter)
+(def ensure deref)
+(defmacro dosync [& body] `(do ~@body))
+
+;; Clojure compatibility: agents are synchronous atom-backed placeholders.
+;; FIXME: These retain action errors for compatibility, but they do not
+;; implement Clojure's asynchronous agent execution model.
+(def ^:private *agent-errors* (atom {}))
+(def agent atom)
+(def send (fn [a f & args]
+            (try
+              (apply swap! a f args)
+              (catch e
+                (swap! *agent-errors* assoc a e)))
+            a))
+(def send-off send)
+(def await (fn [& _] nil))
+(def await-for (fn [_ & _] true))
+(def agent-error (fn [a] (get @*agent-errors* a)))
+(def restart-agent (fn [a v & _]
+                     (swap! *agent-errors* dissoc a)
+                     (reset! a v)
+                     a))
+(def set-error-handler! (fn [_ _] nil))
+(def set-error-mode! (fn [_ _] nil))
+(def error-handler (fn [_] nil))
+(def error-mode (fn [_] :continue))
+(def shutdown-agents (fn [] nil))
+(def release-pending-sends (fn [] 0))
+(def future-cancel (fn [f] (deliver f nil) true))
 
 ;; tree-seq — lazy depth-first walk of a tree
 (defn- tree-walk [branch? children node]
@@ -1855,15 +2096,25 @@
 
 ;; --- Multimethods ---
 
-;; (defmulti name dispatch-fn)
-;; (defmulti name dispatch-fn :default default-val)
-(defmacro defmulti
-  ([name dispatch-fn]
-   `(def ~name (defmulti* ~(str name) ~dispatch-fn)))
-  ([name dispatch-fn default-key default-val]
-   (if (= default-key :default)
-     `(def ~name (defmulti* ~(str name) ~dispatch-fn ~default-val))
-     `(def ~name (defmulti* ~(str name) ~dispatch-fn)))))
+;; (defmulti name docstring? attr-map? dispatch-fn & options)
+;;   where options ∈ {:default <val> :hierarchy <val>}
+;;
+;; Docstring/attr-map are accepted but currently discarded — let-go does
+;; not yet thread :doc/etc. meta through any def-form (defn drops them
+;; too). :hierarchy is accepted for source compatibility but not wired
+;; into dispatch (defmulti* only honors :default).
+(defmacro defmulti [name & args]
+  (let [args (if (string? (first args)) (next args) args)
+        args (if (map? (first args)) (next args) args)
+        dispatch-fn (first args)
+        opts-list (next args)
+        _ (when (odd? (count opts-list))
+            (throw (str "defmulti " name
+                        ": options must be key-value pairs. "
+                        "Example: (defmulti name dispatch-fn :default dispatch-value)")))
+        options (apply hash-map opts-list)
+        default-val (get options :default :default)]
+    `(def ~name (defmulti* ~(str name) ~dispatch-fn ~default-val))))
 
 ;; (defmethod name dispatch-val [args] body)
 (defmacro defmethod [name dispatch-val & fn-tail]

@@ -1,7 +1,10 @@
 ;; string namespace — string utility functions
 ;; Native builtins (trim, upper-case, etc.) are defined in core via Go.
 ;; This namespace re-exports them under the string/ prefix.
-(ns string)
+(ns string
+  (:refer-clojure :exclude [replace reverse upper-case subs lower-case
+                            index-of last-index-of trim triml trimr
+                            starts-with? ends-with? includes? split]))
 
 (defn join
   ([coll] (apply str coll))
@@ -10,16 +13,31 @@
 (defn replace [s match replacement]
   (str-replace s match replacement))
 
+(defn- whitespace-char? [c]
+  (or (= c \space)
+      (= c \tab)
+      (= c \newline)
+      (= c \return)
+      (= c \formfeed)))
+
 (defn blank? [s]
-  (or (nil? s) (= "" s) (= "" (trim s))))
+  (cond
+    (nil? s) true
+    (not (string? s)) (throw "blank? expected String")
+    :else (every? whitespace-char? (seq s))))
 
 (defn reverse [s]
+  (when (nil? s)
+    (throw "reverse expected non-nil"))
   (apply str (core/reverse (vec s))))
 
 (defn capitalize [s]
-  (if (or (nil? s) (= "" s))
-    s
-    (str (upper-case (subs s 0 1)) (lower-case (subs s 1)))))
+  (when (nil? s)
+    (throw "capitalize expected non-nil"))
+  (let [s (str s)]
+    (if (= "" s)
+      s
+      (str (upper-case (subs s 0 1)) (lower-case (subs s 1))))))
 
 (defn index-of
   ([s value] (core/index-of s value))
@@ -30,6 +48,8 @@
   ([s value from-index] (core/last-index-of s value from-index)))
 
 (defn escape [s cmap]
+  (when (not (string? s))
+    (throw "escape expected String"))
   (apply str (map (fn [c] (or (get cmap c) c)) s)))
 
 (defn re-quote-replacement [replacement]
@@ -39,10 +59,29 @@
 (def trim core/trim)
 (def triml core/triml)
 (def trimr core/trimr)
-(def upper-case core/upper-case)
-(def lower-case core/lower-case)
-(def starts-with? core/starts-with?)
-(def ends-with? core/ends-with?)
+(defn upper-case [s]
+  (when (nil? s)
+    (throw "upper-case expected non-nil"))
+  (core/upper-case (str s)))
+
+(defn lower-case [s]
+  (when (nil? s)
+    (throw "lower-case expected non-nil"))
+  (core/lower-case (str s)))
+
+(defn starts-with? [s substr]
+  (when (nil? s)
+    (throw "starts-with? expected non-nil string"))
+  (when (not (string? substr))
+    (throw "starts-with? expected String prefix"))
+  (core/starts-with? (str s) substr))
+
+(defn ends-with? [s substr]
+  (when (nil? s)
+    (throw "ends-with? expected non-nil string"))
+  (when (not (string? substr))
+    (throw "ends-with? expected String suffix"))
+  (core/ends-with? (str s) substr))
 (def includes? core/includes?)
 (def split core/split)
 (def subs core/subs)

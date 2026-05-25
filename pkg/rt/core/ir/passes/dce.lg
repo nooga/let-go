@@ -1,0 +1,40 @@
+;; Dead-code elimination pass.
+;;
+;; Algorithm (matching OLD pkg/ir/passes/dce.go @ mxpovksx):
+;;   1. Iterate blocks. For each Inst:
+;;      - if its op is pure AND it has zero uses → remove it.
+;;   2. Removing an Inst can make its operands dead → iterate to fixed point.
+;;
+;; Removal: ir/remove-inst! marks the slot :invalid (InstId stability)
+;; and rips it from the block's Insts list. The uses cache invalidates
+;; on each remove; (ir/uses f) rebuilds on next read.
+
+(ns ir.passes.dce)
+
+(def pure-ops
+  "Ops eligible for DCE — same set as LICM's hoist-pure-ops."
+  #{:const :load-arg :load-var :load-closed :block-arg
+    :add :sub :mul :lt :lte :gt :gte :eq :inc :dec})
+
+(defn- removable? [nid f]
+  (and (pure-ops (ir/op nid f))
+       (zero? (count (nth (ir/uses f) nid)))))
+
+(defn- one-pass [f]
+  "One sweep over the function. Returns true if anything was removed,
+   so the driver knows whether to iterate again."
+  (let [removed (atom false)]
+    ;; doseq snapshot of block-insts because we mutate during iteration.
+    (doseq [bid (ir/blocks f)
+            nid (vec (ir/block-insts bid f))
+            :when (removable? nid f)]
+      (ir/remove-inst! f bid nid)
+      (reset! removed true))
+    @removed))
+
+(defn dce [f]
+  "Remove dead pure Insts. Iterates to fixed point — a single sweep
+   isn't enough because removing one Inst can make its operands dead."
+  (loop []
+    (when (one-pass f) (recur)))
+  f)

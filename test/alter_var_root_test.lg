@@ -121,3 +121,19 @@
         (is (= 13 result))
         (is (= 99 *t-dyn-y*))))
     (is (= 13 *t-dyn-y*))))
+
+;; --- watches ---
+
+(def t-watch-x 10)
+
+(deftest watches-fire
+  (testing "alter-var-root notifies var watches with key, var, old, and new"
+    (let [messages (atom [])]
+      (add-watch #'t-watch-x :watch
+                 (fn [k r old new]
+                   (swap! messages conj {:key k :ref r :old old :new new})))
+      (is (= 11 (alter-var-root #'t-watch-x inc)))
+      (remove-watch #'t-watch-x :watch)
+      (is (= 12 (alter-var-root #'t-watch-x inc)))
+      (is (= [{:key :watch :ref #'t-watch-x :old 10 :new 11}]
+             @messages)))))

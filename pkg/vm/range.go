@@ -11,13 +11,13 @@ import (
 
 type theRangeType struct{}
 
-func (t *theRangeType) String() string     { return t.Name() }
-func (t *theRangeType) Type() ValueType    { return TypeType }
-func (t *theRangeType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theRangeType) String() string  { return t.Name() }
+func (t *theRangeType) Type() ValueType { return TypeType }
+func (t *theRangeType) Unbox() any      { return reflect.TypeFor[*theRangeType]() }
 
 func (t *theRangeType) Name() string { return "let-go.lang.Range" }
 
-func (t *theRangeType) Box(bare interface{}) (Value, error) {
+func (t *theRangeType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 
@@ -43,7 +43,7 @@ func (l *Range) inBounds(val int) bool {
 func (l *Range) Type() ValueType { return RangeType }
 
 // Unbox implements Value
-func (l *Range) Unbox() interface{} {
+func (l *Range) Unbox() any {
 	return nil
 }
 
@@ -152,9 +152,9 @@ func NewInfiniteRange(start, step int) *InfiniteRange {
 	return &InfiniteRange{start: start, step: step}
 }
 
-func (r *InfiniteRange) Type() ValueType    { return RangeType }
-func (r *InfiniteRange) Unbox() interface{} { return nil }
-func (r *InfiniteRange) First() Value       { return Int(r.start) }
+func (r *InfiniteRange) Type() ValueType { return RangeType }
+func (r *InfiniteRange) Unbox() any      { return nil }
+func (r *InfiniteRange) First() Value    { return Int(r.start) }
 
 func (r *InfiniteRange) Next() Seq {
 	return &InfiniteRange{start: r.start + r.step, step: r.step}

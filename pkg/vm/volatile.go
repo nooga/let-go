@@ -23,8 +23,8 @@ func (v *Volatile) Reset(val Value) Value {
 	return val
 }
 
-func (v *Volatile) Type() ValueType    { return VolatileType }
-func (v *Volatile) Unbox() interface{} { return v }
+func (v *Volatile) Type() ValueType { return VolatileType }
+func (v *Volatile) Unbox() any      { return v }
 func (v *Volatile) String() string {
 	return fmt.Sprintf("#<Volatile@%p: %s>", v, v.value.String())
 }
@@ -32,11 +32,11 @@ func (v *Volatile) String() string {
 // VolatileType
 type theVolatileType struct{}
 
-func (t *theVolatileType) String() string     { return t.Name() }
-func (t *theVolatileType) Type() ValueType    { return TypeType }
-func (t *theVolatileType) Unbox() interface{} { return nil }
-func (t *theVolatileType) Name() string       { return "let-go.lang.Volatile" }
-func (t *theVolatileType) Box(bare interface{}) (Value, error) {
+func (t *theVolatileType) String() string  { return t.Name() }
+func (t *theVolatileType) Type() ValueType { return TypeType }
+func (t *theVolatileType) Unbox() any      { return nil }
+func (t *theVolatileType) Name() string    { return "let-go.lang.Volatile" }
+func (t *theVolatileType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 

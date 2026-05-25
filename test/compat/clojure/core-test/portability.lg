@@ -15,91 +15,38 @@
      (do ~@body false)
      (catch _# true)))
 
-;; Portability constants used by many test files
-(def max-int 9007199254740991)       ;; 2^53-1 (JS safe integer max, good enough)
-(def min-int -9007199254740991)
-(def max-double 1.7976931348623157E308)
-(def min-double 4.9E-324)
+;; Suite-local numeric bounds used by many test files. Clojure/JVM and bb
+;; expose the underlying host constants as Long/MAX_VALUE, Double/MAX_VALUE,
+;; etc.; let-go provides the same names natively for the :clj suite path.
+(def max-int Long/MAX_VALUE)
+(def min-int Long/MIN_VALUE)
+(def max-double Double/MAX_VALUE)
+(def min-double Double/MIN_VALUE)
 (def all-ones-int -1)
 
-;; big-int? — let-go doesn't have BigInteger, so always false for regular ints
-(defn big-int? [n]
-  (and (integer? n) (not (int? n))))
+;; Re-export let-go's native BigInt predicate under the suite-local helper name.
+(def big-int? clojure.core/big-int?)
 
-;; Java class name aliases used by upstream tests
-(def clojure.lang.BigInt (type 1N))
-(def clojure.lang.Ratio (type 1/2))
-(def clojure.lang.BigDecimal (type 1M))
+;; Re-export let-go's native lazy-seq? predicate. Upstream's lazy_seq.cljc
+;; and repeatedly.cljc tests assert that a (lazy-seq ...) form returns
+;; something distinguishable from a fully-realized seq.
+(def lazy-seq? clojure.core/lazy-seq?)
 
-;; MapEntry/create constructs a [k v] pair — our PersistentMap already uses vectors
-;; for entries so a plain vector satisfies (instance? ...) via vector equality checks.
-(ns clojure.lang.MapEntry)
-(defn create [k v] (first {k v}))
+;; Most JVM/Clojure compatibility names used by the suite now live in core:
+;; java.lang.* aliases, clojure.lang.* aliases, Long/Double constants,
+;; definterface/new, with-precision, refs, and synchronous agent placeholders.
+;; Keep this shim focused on test-portability helpers that require clojure.test
+;; integration or upstream-suite local names.
 
-;; Best-effort stubs for Clojure APIs that let-go doesn't implement. These
-;; let more test files compile; tests that exercise real behavior will fail
-;; at runtime but that's tracked via knownFailing.
+;; FIXME: Clojure JVM's `num` boxes primitive long/double values. let-go does
+;; not have separate primitive-vs-boxed numeric host types, so this remains a
+;; suite-local compatibility shim for overload-dispatch characterization tests.
 (in-ns 'core)
-(defn ^:private _compat-unsupported [op] (fn [& _] (throw (str op " not supported in let-go"))))
-(def ref atom)                                  ; refs → atoms (no STM)
-;; agents: stubbed as atoms with synchronous `send`. No real concurrency,
-;; no error queue. Behavior diverges from Clojure but tests at least load.
-(def agent atom)
-(def send (fn [a f & args] (apply swap! a f args) a))
-(def send-off send)
-(def await (fn [& _] nil))
-(def await-for (fn [_ & _] true))
-(def agent-error (fn [_] nil))
-(def restart-agent (fn [a v & _] (reset! a v) a))
-(def set-error-handler! (fn [_ _] nil))
-(def set-error-mode! (fn [_ _] nil))
-(def error-handler (fn [_] nil))
-(def error-mode (fn [_] :continue))
-(def shutdown-agents (fn [] nil))
-(def release-pending-sends (fn [] 0))
-(def get-validator (fn [_] nil))
-(def future-cancel (fn [_] false))
-(def disj! disj)                                ; no transients for sets
-(def bound-fn* identity)
-(defmacro bound-fn [& body] `(fn ~@body))
-(defmacro with-precision [_ & body] `(do ~@body))
-;; dosync — we don't have STM. Single-threaded evaluation of the body
-;; behaves atomically with respect to other let-go code.
-(defmacro dosync [& body] `(do ~@body))
-;; ref operations — treat refs as atoms, no coordination
-(def ref-set (fn [r v] (reset! r v)))
-(def alter (fn [r f & args] (apply swap! r f args)))
-(def commute alter)
-(def ensure deref)
-;; tap>, add-tap, remove-tap are now built-in.
-;; Java class-name aliases used in hierarchy tests
-(def String (type ""))
-(def clojure.lang.PersistentHashSet (type #{}))
-(def clojure.lang.Associative :clojure-lang-Associative-stub)
-(def clojure.lang.Counted :clojure-lang-Counted-stub)
-(def clojure.lang.Indexed :clojure-lang-Indexed-stub)
-(def clojure.lang.Seqable :clojure-lang-Seqable-stub)
-(def clojure.lang.IPersistentCollection :clojure-lang-IPersistentCollection-stub)
-;; Rounding enum sentinels for with-precision (which is a no-op anyway)
-(def UP :up)
-(def DOWN :down)
-(def HALF_UP :half-up)
-(def HALF_DOWN :half-down)
-(def HALF_EVEN :half-even)
-(def CEILING :ceiling)
-(def FLOOR :floor)
-(def UNNECESSARY :unnecessary)
-;; Hierarchy: minimal stubs. Most hierarchy tests also need derive+ancestors
-;; to produce real results; these just keep the compiler happy.
-(def make-hierarchy (fn [] {:parents {} :ancestors {} :descendants {}}))
-(def derive (fn [& _] (make-hierarchy)))
-(def underive (fn [& _] (make-hierarchy)))
-(def descendants (fn [& _] #{}))
-(def ancestors (fn [& _] #{}))
-(def parents (fn [& _] nil))
-(def isa? (fn [& args] (apply = (if (= (count args) 3) (rest args) args))))
-(def clojure.lang.IPending (type (promise)))    ; let-go IPending ≡ Promise
-;; Object shim: we don't have Java classes, but (instance? Object x) is used —
-;; define as a ValueType placeholder that matches nothing.
-(def Object (type nil))
+(deftype LetGoNumBox [value])
+(defn num [x]
+  (cond
+    (nil? x) nil
+    (not (number? x)) (throw (str "Expected a number, got " (type x)))
+    (or (bigint? x) (decimal? x)) x
+    :else (->LetGoNumBox x)))
 (in-ns 'clojure.core-test.portability)

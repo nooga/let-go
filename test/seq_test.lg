@@ -61,7 +61,12 @@
     (is (= 10 (reduce + 0 [1 2 3 4])))
     (is (= 0 (reduce + 0 [])))
     (is (= 0 (reduce + [])))  ; (reduce + []) should return (+) = 0... or error?
-    ))
+    ;; Regression: reduce over an empty LazySeq (e.g. (mapcat f [])) must
+    ;; short-circuit. Previously the LazySeq was iterated once with
+    ;; First()=nil, conj'ing nil into the accumulator.
+    (is (= #{}    (reduce conj #{} (mapcat (fn [x] #{x}) []))))
+    (is (= #{}    (into   #{}     (mapcat (fn [x] #{x}) []))))
+    (is (= [:init] (reduce conj [:init] (mapcat (fn [x] #{x}) []))))))
 
 (deftest take-drop
   (testing "take"

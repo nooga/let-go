@@ -92,10 +92,7 @@ func repl(ctx *compiler.Context) {
 			editor.Stylize(line.Span{Start: uint32(t.Start), End: uint32(t.End), Mode: line.SpanModeByte}, style)
 		}
 	})
-	for {
-		if interrupted {
-			break
-		}
+	for !interrupted {
 		in, err := editor.GetLine(prompt)
 		if err != nil {
 			fmt.Println("prompt failed: ", err)

@@ -35,9 +35,9 @@ func (t *TransientMap) ensureEditable() error {
 	return nil
 }
 
-func (t *TransientMap) Type() ValueType    { return TransientMapType }
-func (t *TransientMap) Unbox() interface{} { return t }
-func (t *TransientMap) String() string     { return fmt.Sprintf("<transient-map count=%d>", t.count) }
+func (t *TransientMap) Type() ValueType { return TransientMapType }
+func (t *TransientMap) Unbox() any      { return t }
+func (t *TransientMap) String() string  { return fmt.Sprintf("<transient-map count=%d>", t.count) }
 
 // Assoc mutates the transient map in place.
 func (t *TransientMap) Assoc(key Value, val Value) (*TransientMap, error) {
@@ -81,14 +81,47 @@ func (t *TransientMap) Conj(value Value) (*TransientMap, error) {
 	if err := t.ensureEditable(); err != nil {
 		return nil, err
 	}
+	if value == NIL {
+		return t, nil
+	}
+	switch m := value.(type) {
+	case *PersistentMap:
+		for _, e := range m.entries() {
+			k, v, ok := MapEntryKV(e)
+			if !ok {
+				continue
+			}
+			var err error
+			t, err = t.Assoc(k, v)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return t, nil
+	case *SortedMap:
+		for _, e := range m.entries() {
+			var err error
+			t, err = t.Assoc(e.Key, e.Value)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return t, nil
+	case Map:
+		for k, v := range m {
+			var err error
+			t, err = t.Assoc(k, v)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return t, nil
+	}
 	if k, v, ok := MapEntryKV(value); ok {
 		return t.Assoc(k, v)
 	}
-	// Handle PersistentVector or any 2-element vector/seq
-	if l, ok := value.(Lookup); ok {
-		if c, ok := value.(Counted); ok && c.RawCount() == 2 {
-			return t.Assoc(l.ValueAt(Int(0)), l.ValueAt(Int(1)))
-		}
+	if v, ok := value.(PersistentVector); ok && v.RawCount() == 2 {
+		return t.Assoc(v.ValueAt(Int(0)), v.ValueAt(Int(1)))
 	}
 	return nil, fmt.Errorf("conj! on transient map expects [key val] pair")
 }
@@ -165,8 +198,8 @@ func (t *TransientVector) ensureEditable() error {
 	return nil
 }
 
-func (t *TransientVector) Type() ValueType    { return TransientVectorType }
-func (t *TransientVector) Unbox() interface{} { return t }
+func (t *TransientVector) Type() ValueType { return TransientVectorType }
+func (t *TransientVector) Unbox() any      { return t }
 func (t *TransientVector) String() string {
 	return fmt.Sprintf("<transient-vector count=%d>", len(t.array))
 }
@@ -274,11 +307,11 @@ func (t *TransientVector) RawCount() int { return len(t.array) }
 
 type theTransientMapType struct{}
 
-func (t *theTransientMapType) String() string     { return t.Name() }
-func (t *theTransientMapType) Type() ValueType    { return TypeType }
-func (t *theTransientMapType) Unbox() interface{} { return nil }
-func (t *theTransientMapType) Name() string       { return "let-go.lang.TransientMap" }
-func (t *theTransientMapType) Box(bare interface{}) (Value, error) {
+func (t *theTransientMapType) String() string  { return t.Name() }
+func (t *theTransientMapType) Type() ValueType { return TypeType }
+func (t *theTransientMapType) Unbox() any      { return nil }
+func (t *theTransientMapType) Name() string    { return "let-go.lang.TransientMap" }
+func (t *theTransientMapType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 
@@ -286,11 +319,11 @@ var TransientMapType *theTransientMapType = &theTransientMapType{}
 
 type theTransientVectorType struct{}
 
-func (t *theTransientVectorType) String() string     { return t.Name() }
-func (t *theTransientVectorType) Type() ValueType    { return TypeType }
-func (t *theTransientVectorType) Unbox() interface{} { return nil }
-func (t *theTransientVectorType) Name() string       { return "let-go.lang.TransientVector" }
-func (t *theTransientVectorType) Box(bare interface{}) (Value, error) {
+func (t *theTransientVectorType) String() string  { return t.Name() }
+func (t *theTransientVectorType) Type() ValueType { return TypeType }
+func (t *theTransientVectorType) Unbox() any      { return nil }
+func (t *theTransientVectorType) Name() string    { return "let-go.lang.TransientVector" }
+func (t *theTransientVectorType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 
@@ -323,8 +356,8 @@ func (t *TransientSet) ensureEditable() error {
 	return nil
 }
 
-func (t *TransientSet) Type() ValueType    { return TransientSetType }
-func (t *TransientSet) Unbox() interface{} { return t }
+func (t *TransientSet) Type() ValueType { return TransientSetType }
+func (t *TransientSet) Unbox() any      { return t }
 func (t *TransientSet) String() string {
 	return fmt.Sprintf("<transient-set count=%d>", t.tm.count)
 }
@@ -385,11 +418,11 @@ func (t *TransientSet) RawCount() int { return t.tm.count }
 
 type theTransientSetType struct{}
 
-func (t *theTransientSetType) String() string     { return t.Name() }
-func (t *theTransientSetType) Type() ValueType    { return TypeType }
-func (t *theTransientSetType) Unbox() interface{} { return nil }
-func (t *theTransientSetType) Name() string       { return "let-go.lang.TransientSet" }
-func (t *theTransientSetType) Box(bare interface{}) (Value, error) {
+func (t *theTransientSetType) String() string  { return t.Name() }
+func (t *theTransientSetType) Type() ValueType { return TypeType }
+func (t *theTransientSetType) Unbox() any      { return nil }
+func (t *theTransientSetType) Name() string    { return "let-go.lang.TransientSet" }
+func (t *theTransientSetType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 

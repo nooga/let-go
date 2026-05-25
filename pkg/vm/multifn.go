@@ -25,8 +25,8 @@ func NewMultiFn(name string, dispatchFn Fn, defaultVal Value) *MultiFn {
 	}
 }
 
-func (m *MultiFn) Type() ValueType    { return MultiFnType }
-func (m *MultiFn) Unbox() interface{} { return m }
+func (m *MultiFn) Type() ValueType { return MultiFnType }
+func (m *MultiFn) Unbox() any      { return m }
 
 func (m *MultiFn) String() string {
 	return fmt.Sprintf("<multifn %s>", m.name)
@@ -88,11 +88,11 @@ func (m *MultiFn) Methods() *PersistentMap {
 
 type theMultiFnType struct{}
 
-func (t *theMultiFnType) String() string     { return t.Name() }
-func (t *theMultiFnType) Type() ValueType    { return TypeType }
-func (t *theMultiFnType) Unbox() interface{} { return nil }
-func (t *theMultiFnType) Name() string       { return "let-go.lang.MultiFn" }
-func (t *theMultiFnType) Box(bare interface{}) (Value, error) {
+func (t *theMultiFnType) String() string  { return t.Name() }
+func (t *theMultiFnType) Type() ValueType { return TypeType }
+func (t *theMultiFnType) Unbox() any      { return nil }
+func (t *theMultiFnType) Name() string    { return "let-go.lang.MultiFn" }
+func (t *theMultiFnType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 

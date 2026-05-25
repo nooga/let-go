@@ -173,7 +173,7 @@ func TestLGBParity(t *testing.T) {
 
 	assertSourceMatchesLGB(t, "macros", `
 		(defmacro unless [test & body]
-			` + "`" + `(if (not ~test) (do ~@body)))
+			`+"`"+`(if (not ~test) (do ~@body)))
 		(unless false (println "macro works"))
 		(unless true (println "should not print"))
 	`)

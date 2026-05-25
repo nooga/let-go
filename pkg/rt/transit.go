@@ -20,14 +20,14 @@ import (
 // --- Rolling cache (shared by encoder and decoder) ---
 
 const (
-	cacheDigits      = 44
-	cacheBase        = 48 // '0'
-	cacheSize        = cacheDigits * cacheDigits
-	minCacheableLen  = 4
-	cacheMarker = "^"
-	mapMarker   = "^ "
-	kwPrefix    = "~:"
-	symPrefix   = "~$"
+	cacheDigits     = 44
+	cacheBase       = 48 // '0'
+	cacheSize       = cacheDigits * cacheDigits
+	minCacheableLen = 4
+	cacheMarker     = "^"
+	mapMarker       = "^ "
+	kwPrefix        = "~:"
+	symPrefix       = "~$"
 )
 
 type transitCache struct {
@@ -124,14 +124,14 @@ func NewTransitDecoder() *TransitDecoder {
 
 // Decode parses a transit+json string into a vm.Value.
 func (d *TransitDecoder) Decode(s string) (vm.Value, error) {
-	var raw interface{}
+	var raw any
 	if err := json.Unmarshal([]byte(s), &raw); err != nil {
 		return vm.NIL, fmt.Errorf("transit: invalid JSON: %w", err)
 	}
 	return d.decodeValue(raw)
 }
 
-func (d *TransitDecoder) decodeValue(v interface{}) (vm.Value, error) {
+func (d *TransitDecoder) decodeValue(v any) (vm.Value, error) {
 	switch val := v.(type) {
 	case string:
 		return d.decodeString(val, false), nil
@@ -144,9 +144,9 @@ func (d *TransitDecoder) decodeValue(v interface{}) (vm.Value, error) {
 		return vm.Boolean(val), nil
 	case nil:
 		return vm.NIL, nil
-	case []interface{}:
+	case []any:
 		return d.decodeArray(val)
-	case map[string]interface{}:
+	case map[string]any:
 		return d.decodeObject(val)
 	default:
 		return vm.NIL, fmt.Errorf("transit: unsupported JSON type %T", v)
@@ -203,7 +203,7 @@ func parseTransit(s string) vm.Value {
 	}
 }
 
-func (d *TransitDecoder) decodeArray(arr []interface{}) (vm.Value, error) {
+func (d *TransitDecoder) decodeArray(arr []any) (vm.Value, error) {
 	if len(arr) == 0 {
 		return vm.NewArrayVector(nil), nil
 	}
@@ -237,7 +237,7 @@ func (d *TransitDecoder) decodeArray(arr []interface{}) (vm.Value, error) {
 	return vm.NewArrayVector(vals), nil
 }
 
-func (d *TransitDecoder) decodeMapArray(arr []interface{}) (vm.Value, error) {
+func (d *TransitDecoder) decodeMapArray(arr []any) (vm.Value, error) {
 	m := vm.EmptyPersistentMap
 	for i := 1; i+1 < len(arr); i += 2 {
 		k, err := d.decodeKeyValue(arr[i])
@@ -253,10 +253,10 @@ func (d *TransitDecoder) decodeMapArray(arr []interface{}) (vm.Value, error) {
 	return m, nil
 }
 
-func (d *TransitDecoder) decodeTagged(tag string, payload interface{}) (vm.Value, error) {
+func (d *TransitDecoder) decodeTagged(tag string, payload any) (vm.Value, error) {
 	switch tag {
 	case "set":
-		if items, ok := payload.([]interface{}); ok {
+		if items, ok := payload.([]any); ok {
 			set := vm.EmptyPersistentSet
 			for _, item := range items {
 				v, err := d.decodeValue(item)
@@ -268,7 +268,7 @@ func (d *TransitDecoder) decodeTagged(tag string, payload interface{}) (vm.Value
 			return set, nil
 		}
 	case "list":
-		if items, ok := payload.([]interface{}); ok {
+		if items, ok := payload.([]any); ok {
 			vals := make([]vm.Value, len(items))
 			for i, item := range items {
 				v, err := d.decodeValue(item)
@@ -288,7 +288,7 @@ func (d *TransitDecoder) decodeTagged(tag string, payload interface{}) (vm.Value
 		return d.decodeValue(payload)
 	case "cmap":
 		// Verbose map (array of k-v pairs when keys aren't stringable)
-		if items, ok := payload.([]interface{}); ok {
+		if items, ok := payload.([]any); ok {
 			m := vm.EmptyPersistentMap
 			for i := 0; i+1 < len(items); i += 2 {
 				k, err := d.decodeValue(items[i])
@@ -309,14 +309,14 @@ func (d *TransitDecoder) decodeTagged(tag string, payload interface{}) (vm.Value
 }
 
 // decodeKeyValue decodes a value in key position (enables caching for map keys).
-func (d *TransitDecoder) decodeKeyValue(v interface{}) (vm.Value, error) {
+func (d *TransitDecoder) decodeKeyValue(v any) (vm.Value, error) {
 	if s, ok := v.(string); ok {
 		return d.decodeString(s, true), nil
 	}
 	return d.decodeValue(v)
 }
 
-func (d *TransitDecoder) decodeObject(m map[string]interface{}) (vm.Value, error) {
+func (d *TransitDecoder) decodeObject(m map[string]any) (vm.Value, error) {
 	// JSON objects are rare in transit+json (maps use array encoding)
 	// but can appear for string-keyed maps
 	result := vm.EmptyPersistentMap
@@ -358,7 +358,7 @@ func (e *TransitEncoder) Encode(v vm.Value) (string, error) {
 
 // EncodeList encodes a slice of values as a transit list (used for pod args).
 func (e *TransitEncoder) EncodeList(vals []vm.Value) (string, error) {
-	items := make([]interface{}, len(vals))
+	items := make([]any, len(vals))
 	for i, v := range vals {
 		raw, err := e.encodeValue(v)
 		if err != nil {
@@ -366,12 +366,12 @@ func (e *TransitEncoder) EncodeList(vals []vm.Value) (string, error) {
 		}
 		items[i] = raw
 	}
-	list := []interface{}{"~#list", items}
+	list := []any{"~#list", items}
 	bs, err := json.Marshal(list)
 	return string(bs), err
 }
 
-func (e *TransitEncoder) encodeValue(v vm.Value) (interface{}, error) {
+func (e *TransitEncoder) encodeValue(v vm.Value) (any, error) {
 	switch v.Type() {
 	case vm.NilType:
 		return nil, nil
@@ -411,15 +411,15 @@ func (e *TransitEncoder) encodeValue(v vm.Value) (interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []interface{}{"~#set", items}, nil
+		return []any{"~#set", items}, nil
 	default:
 		// Lists and other seqs -> transit list tag
 		if sq, ok := v.(vm.Sequable); ok {
 			seq := sq.Seq()
 			if seq == nil {
-				return []interface{}{"~#list", []interface{}{}}, nil
+				return []any{"~#list", []any{}}, nil
 			}
-			var items []interface{}
+			var items []any
 			for s := seq; s != nil; s = s.Next() {
 				item, err := e.encodeValue(s.First())
 				if err != nil {
@@ -427,7 +427,7 @@ func (e *TransitEncoder) encodeValue(v vm.Value) (interface{}, error) {
 				}
 				items = append(items, item)
 			}
-			return []interface{}{"~#list", items}, nil
+			return []any{"~#list", items}, nil
 		}
 		// Records and other map-like types
 		if _, ok := v.(*vm.Record); ok {
@@ -438,12 +438,12 @@ func (e *TransitEncoder) encodeValue(v vm.Value) (interface{}, error) {
 	}
 }
 
-func (e *TransitEncoder) encodeSeqAsArray(v vm.Value) ([]interface{}, error) {
+func (e *TransitEncoder) encodeSeqAsArray(v vm.Value) ([]any, error) {
 	sq, ok := v.(vm.Sequable)
 	if !ok {
 		return nil, fmt.Errorf("transit: cannot seq %s", v.Type().Name())
 	}
-	var result []interface{}
+	var result []any
 	for s := sq.Seq(); s != nil; s = s.Next() {
 		item, err := e.encodeValue(s.First())
 		if err != nil {
@@ -452,17 +452,17 @@ func (e *TransitEncoder) encodeSeqAsArray(v vm.Value) ([]interface{}, error) {
 		result = append(result, item)
 	}
 	if result == nil {
-		result = []interface{}{}
+		result = []any{}
 	}
 	return result, nil
 }
 
-func (e *TransitEncoder) encodeMap(v vm.Value) (interface{}, error) {
+func (e *TransitEncoder) encodeMap(v vm.Value) (any, error) {
 	sq, ok := v.(vm.Sequable)
 	if !ok {
 		return nil, fmt.Errorf("transit: cannot seq map %s", v.Type().Name())
 	}
-	result := []interface{}{mapMarker}
+	result := []any{mapMarker}
 	for s := sq.Seq(); s != nil; s = s.Next() {
 		entry := s.First()
 		eSeq, ok := entry.(vm.Sequable)
@@ -483,7 +483,7 @@ func (e *TransitEncoder) encodeMap(v vm.Value) (interface{}, error) {
 	return result, nil
 }
 
-func (e *TransitEncoder) encodeKeyValue(v vm.Value) (interface{}, error) {
+func (e *TransitEncoder) encodeKeyValue(v vm.Value) (any, error) {
 	switch v.Type() {
 	case vm.KeywordType:
 		raw := kwPrefix + string(v.(vm.Keyword))
@@ -604,7 +604,7 @@ func SetEvalInNS(fn func(string, *vm.Namespace) (vm.Value, error)) {
 
 // JSONEncodeArgs encodes args as a plain JSON array string.
 func JSONEncodeArgs(args []vm.Value) (string, error) {
-	goArgs := make([]interface{}, len(args))
+	goArgs := make([]any, len(args))
 	for i, a := range args {
 		v, err := fromValue(a)
 		if err != nil {
@@ -618,7 +618,7 @@ func JSONEncodeArgs(args []vm.Value) (string, error) {
 
 // JSONDecodeValue decodes a JSON string into a vm.Value.
 func JSONDecodeValue(s string) (vm.Value, error) {
-	var v interface{}
+	var v any
 	if err := json.Unmarshal([]byte(s), &v); err != nil {
 		return vm.NIL, err
 	}

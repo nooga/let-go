@@ -44,11 +44,23 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 		resolve: resolve,
 	}
 
-	_, flags, err := d.readHeader()
+	version, flags, err := d.readHeader()
 	if err != nil {
 		return nil, err
 	}
 	d.flags = flags
+
+	if version == 1 {
+		return d.decodeToExecUnitV1(parent)
+	}
+	if version == 2 {
+		return d.decodeToExecUnitV2(parent)
+	}
+	return nil, fmt.Errorf("unsupported LGB version %d", version)
+}
+
+// decodeToExecUnitV1 is the frozen v1 decode path. Do not modify.
+func (d *decoder) decodeToExecUnitV1(parent *vm.Consts) (*ExecUnit, error) {
 	strings, err := d.readStringTable()
 	if err != nil {
 		return nil, err
@@ -60,7 +72,6 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 		return nil, err
 	}
 
-	// Build the const pool — layered if parent provided
 	var sharedConsts *vm.Consts
 	if parent != nil {
 		sharedConsts = vm.NewChildConsts(parent)
@@ -68,7 +79,6 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 		sharedConsts = vm.NewConsts()
 	}
 
-	// Build live CodeChunks first — readConsts needs d.chunks for Func resolution
 	d.chunks = make([]*vm.CodeChunk, len(chunkDatas))
 	for i, cd := range chunkDatas {
 		chunk := vm.NewCodeChunk(sharedConsts)
@@ -88,7 +98,6 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 		d.chunks[i] = chunk
 	}
 
-	// Now decode consts (Func entries reference d.chunks)
 	consts, err := d.readConsts()
 	if err != nil {
 		return nil, err
@@ -97,7 +106,6 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 		sharedConsts.Append(v)
 	}
 
-	// Read NS table
 	nsTable, err := d.readNSTable()
 	if err != nil {
 		return nil, err
@@ -112,10 +120,8 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 		MainChunk: d.chunks[0],
 	}
 
-	// If NS table is present, resolve chunk indices to live CodeChunks
 	if len(nsTable) > 0 {
 		unit.NSChunks = make(map[string]*vm.CodeChunk, len(nsTable))
-		// Build ordered list sorted by chunk index (preserves dependency order)
 		type nsEntry struct {
 			name string
 			idx  int
@@ -133,8 +139,108 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 		for i, e := range entries {
 			unit.NSOrder[i] = e.name
 		}
-		// MainChunk: for core bundles use the "core" entry;
-		// for user bundles use the last entry (highest chunk index = entry point).
+		if coreChunk, ok := unit.NSChunks["core"]; ok {
+			unit.MainChunk = coreChunk
+		} else if len(entries) > 0 {
+			last := entries[len(entries)-1]
+			unit.MainChunk = d.chunks[last.idx]
+		}
+	}
+
+	return unit, nil
+}
+
+func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
+	if d.flags&FlagCapabilities != 0 {
+		caps, err := d.r.ReadUint32()
+		if err != nil {
+			return nil, fmt.Errorf("reading capability mask: %w", err)
+		}
+		const supportedCaps uint32 = 0 // no optional features in v2.0
+		if caps&^supportedCaps != 0 {
+			return nil, fmt.Errorf("unsupported capability mask 0x%08x (supported: 0x%08x)", caps, supportedCaps)
+		}
+		d.moduleCaps = caps
+	}
+
+	strings, err := d.readStringTable()
+	if err != nil {
+		return nil, err
+	}
+	d.strings = strings
+
+	chunkDatas, err := d.readChunks()
+	if err != nil {
+		return nil, err
+	}
+
+	var sharedConsts *vm.Consts
+	if parent != nil {
+		sharedConsts = vm.NewChildConsts(parent)
+	} else {
+		sharedConsts = vm.NewConsts()
+	}
+
+	d.chunks = make([]*vm.CodeChunk, len(chunkDatas))
+	for i, cd := range chunkDatas {
+		chunk := vm.NewCodeChunk(sharedConsts)
+		chunk.Append(cd.Code...)
+		chunk.SetMaxStack(cd.MaxStack)
+		if len(cd.SourceMap) > 0 {
+			for _, e := range cd.SourceMap {
+				chunk.AddSourceInfo(vm.SourceInfo{
+					File:      e.File,
+					Line:      e.Line,
+					Column:    e.Column,
+					EndLine:   e.EndLine,
+					EndColumn: e.EndColumn,
+				})
+			}
+		}
+		d.chunks[i] = chunk
+	}
+
+	consts, err := d.readConstsV2()
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range consts {
+		sharedConsts.Append(v)
+	}
+
+	nsTable, err := d.readNSTable()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(d.chunks) == 0 {
+		return nil, fmt.Errorf("no chunks in module")
+	}
+
+	unit := &ExecUnit{
+		Consts:    sharedConsts,
+		MainChunk: d.chunks[0],
+	}
+
+	if len(nsTable) > 0 {
+		unit.NSChunks = make(map[string]*vm.CodeChunk, len(nsTable))
+		type nsEntry struct {
+			name string
+			idx  int
+		}
+		entries := make([]nsEntry, 0, len(nsTable))
+		for name, idx := range nsTable {
+			if idx >= len(d.chunks) {
+				return nil, fmt.Errorf("NS table chunk index %d out of range for %q", idx, name)
+			}
+			unit.NSChunks[name] = d.chunks[idx]
+			entries = append(entries, nsEntry{name, idx})
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
+		unit.NSOrder = make([]string, len(entries))
+		for i, e := range entries {
+			unit.NSOrder[i] = e.name
+		}
 		if coreChunk, ok := unit.NSChunks["core"]; ok {
 			unit.MainChunk = coreChunk
 		} else if len(entries) > 0 {
@@ -152,11 +258,18 @@ func DecodeWithResolver(r io.Reader, resolve VarResolver) (*Module, error) {
 		r:       NewReader(r),
 		resolve: resolve,
 	}
-	m, err := d.readModule()
+	version, flags, err := d.readHeader()
 	if err != nil {
 		return nil, err
 	}
-	return m, nil
+	d.flags = flags
+	if version == 1 {
+		return d.readModuleV1()
+	}
+	if version == 2 {
+		return d.readModuleV2()
+	}
+	return nil, fmt.Errorf("unsupported LGB version %d", version)
 }
 
 type decoder struct {
@@ -166,14 +279,11 @@ type decoder struct {
 	constsBase int
 	strings    []string
 	chunks     []*vm.CodeChunk
+	moduleCaps uint32 // populated when FlagCapabilities is set in v2
 }
 
-func (d *decoder) readModule() (*Module, error) {
-	version, flags, err := d.readHeader()
-	if err != nil {
-		return nil, err
-	}
-	d.flags = flags
+// readModuleV1 is the frozen v1 decode path. Do not modify.
+func (d *decoder) readModuleV1() (*Module, error) {
 	strings, err := d.readStringTable()
 	if err != nil {
 		return nil, err
@@ -217,14 +327,84 @@ func (d *decoder) readModule() (*Module, error) {
 	}
 
 	return &Module{
-		Version:    version,
-		Flags:      flags,
+		Version:    1,
+		Flags:      d.flags,
 		Strings:    strings,
 		Chunks:     chunkDatas,
 		Consts:     consts,
 		ConstsBase: d.constsBase,
 		NSTable:    nsTable,
 	}, nil
+}
+
+func (d *decoder) readModuleV2() (*Module, error) {
+	// If capability flag is set, read and validate the mask
+	if d.flags&FlagCapabilities != 0 {
+		caps, err := d.r.ReadUint32()
+		if err != nil {
+			return nil, fmt.Errorf("reading capability mask: %w", err)
+		}
+		const supportedCaps uint32 = 0 // no optional features in v2.0
+		if caps&^supportedCaps != 0 {
+			return nil, fmt.Errorf("unsupported capability mask 0x%08x (supported: 0x%08x)", caps, supportedCaps)
+		}
+		d.moduleCaps = caps
+	}
+
+	strings, err := d.readStringTable()
+	if err != nil {
+		return nil, err
+	}
+	d.strings = strings
+
+	chunkDatas, err := d.readChunks()
+	if err != nil {
+		return nil, err
+	}
+
+	sharedConsts := vm.NewConsts()
+	d.chunks = make([]*vm.CodeChunk, len(chunkDatas))
+	for i, cd := range chunkDatas {
+		chunk := vm.NewCodeChunk(sharedConsts)
+		chunk.Append(cd.Code...)
+		chunk.SetMaxStack(cd.MaxStack)
+		if len(cd.SourceMap) > 0 {
+			for _, e := range cd.SourceMap {
+				chunk.AddSourceInfo(vm.SourceInfo{
+					File:      e.File,
+					Line:      e.Line,
+					Column:    e.Column,
+					EndLine:   e.EndLine,
+					EndColumn: e.EndColumn,
+				})
+			}
+		}
+		d.chunks[i] = chunk
+	}
+
+	consts, err := d.readConstsV2()
+	if err != nil {
+		return nil, err
+	}
+
+	nsTable, err := d.readNSTable()
+	if err != nil {
+		return nil, err
+	}
+
+	m := &Module{
+		Version:    2,
+		Flags:      d.flags,
+		Strings:    strings,
+		Chunks:     chunkDatas,
+		Consts:     consts,
+		ConstsBase: d.constsBase,
+		NSTable:    nsTable,
+	}
+	if d.flags&FlagCapabilities != 0 {
+		m.Capabilities = d.moduleCaps
+	}
+	return m, nil
 }
 
 func (d *decoder) readHeader() (version, flags uint16, err error) {
@@ -647,6 +827,57 @@ func (d *decoder) readValue() (vm.Value, error) {
 	}
 }
 
+func (d *decoder) readVectorBatch() (vm.Value, error) {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, fmt.Errorf("reading vector count: %w", err)
+	}
+	items := make(vm.ArrayVector, count)
+	for i := range items {
+		items[i], err = d.readValueV2()
+		if err != nil {
+			return nil, fmt.Errorf("reading vector item[%d]: %w", i, err)
+		}
+	}
+	return items, nil
+}
+
+func (d *decoder) readMapBatch() (vm.Value, error) {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, fmt.Errorf("reading map count: %w", err)
+	}
+	kvs := make([]vm.Value, 0, count*2)
+	for i := 0; i < int(count); i++ {
+		k, err := d.readValueV2()
+		if err != nil {
+			return nil, fmt.Errorf("reading map key[%d]: %w", i, err)
+		}
+		v, err := d.readValueV2()
+		if err != nil {
+			return nil, fmt.Errorf("reading map value[%d]: %w", i, err)
+		}
+		kvs = append(kvs, k, v)
+	}
+	return vm.NewPersistentMap(kvs), nil
+}
+
+func (d *decoder) readSetBatch() (vm.Value, error) {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, fmt.Errorf("reading set count: %w", err)
+	}
+	items := make([]vm.Value, 0, count)
+	for i := 0; i < int(count); i++ {
+		item, err := d.readValueV2()
+		if err != nil {
+			return nil, fmt.Errorf("reading set item[%d]: %w", i, err)
+		}
+		items = append(items, item)
+	}
+	return vm.NewPersistentSet(items), nil
+}
+
 func (d *decoder) readMapValue() (vm.Value, error) {
 	count, err := d.r.ReadVarint()
 	if err != nil {
@@ -665,4 +896,272 @@ func (d *decoder) readMapValue() (vm.Value, error) {
 		m = m.Assoc(k, v).(*vm.PersistentMap)
 	}
 	return m, nil
+}
+
+func (d *decoder) readConstsV2() ([]vm.Value, error) {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, fmt.Errorf("reading const count: %w", err)
+	}
+	if d.flags&FlagConstsBase != 0 {
+		base, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, fmt.Errorf("reading consts base: %w", err)
+		}
+		d.constsBase = int(base)
+	}
+	consts := make([]vm.Value, count)
+	for i := range consts {
+		v, err := d.readValueV2()
+		if err != nil {
+			return nil, fmt.Errorf("reading const[%d]: %w", i, err)
+		}
+		consts[i] = v
+	}
+	return consts, nil
+}
+
+func isKnownTagID(id byte) bool {
+	switch id {
+	case TagIDNil, TagIDTrue, TagIDFalse, TagIDInt, TagIDFloat, TagIDString,
+		TagIDKeyword, TagIDSymbol, TagIDChar, TagIDBigInt, TagIDVoid, TagIDUUID,
+		TagIDInstant, TagIDFunc, TagIDVarRef, TagIDEmptyList, TagIDList,
+		TagIDVector, TagIDMap, TagIDSet, TagIDRecordType, TagIDRecord,
+		TagIDRegex, TagIDAtom:
+		return true
+	}
+	return false
+}
+
+func (d *decoder) readValueV2() (vm.Value, error) {
+	tagByte, err := d.r.ReadByte()
+	if err != nil {
+		return nil, fmt.Errorf("reading tag: %w", err)
+	}
+
+	tagID := tagByte & tagIDMask
+	tagVer := tagByte >> tagVersionShift
+
+	if tagVer != 0 && isKnownTagID(tagID) {
+		return nil, fmt.Errorf("unsupported tag version %d for tag ID 0x%02x", tagVer, tagID)
+	}
+
+	switch tagID {
+	case TagIDNil:
+		return vm.NIL, nil
+	case TagIDTrue:
+		return vm.TRUE, nil
+	case TagIDFalse:
+		return vm.FALSE, nil
+	case TagIDInt:
+		v, err := d.r.ReadSvarint()
+		if err != nil {
+			return nil, err
+		}
+		return vm.Int(v), nil
+	case TagIDFloat:
+		v, err := d.r.ReadFloat64()
+		if err != nil {
+			return nil, err
+		}
+		return vm.Float(v), nil
+	case TagIDString:
+		s, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		return vm.String(s), nil
+	case TagIDKeyword:
+		s, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		return vm.Keyword(s), nil
+	case TagIDSymbol:
+		s, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		return vm.Symbol(s), nil
+	case TagIDChar:
+		v, err := d.r.ReadInt32()
+		if err != nil {
+			return nil, err
+		}
+		return vm.Char(v), nil
+	case TagIDBigInt:
+		sign, err := d.r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		magLen, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, err
+		}
+		mag, err := d.r.ReadBytes(int(magLen))
+		if err != nil {
+			return nil, err
+		}
+		bi := new(big.Int).SetBytes(mag)
+		if sign != 0 {
+			bi.Neg(bi)
+		}
+		return vm.NewBigInt(bi), nil
+	case TagIDVoid:
+		return vm.VOID, nil
+	case TagIDUUID:
+		s, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		u := vm.ParseUUID(s)
+		if u == nil {
+			return nil, fmt.Errorf("invalid UUID in bytecode: %q", s)
+		}
+		return u, nil
+	case TagIDInstant:
+		s, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		i := vm.ParseInstant(s)
+		if i == nil {
+			return nil, fmt.Errorf("invalid #inst in bytecode: %q", s)
+		}
+		return i, nil
+	case TagIDFunc:
+		chunkIdx, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, err
+		}
+		if int(chunkIdx) >= len(d.chunks) {
+			return nil, fmt.Errorf("chunk index %d out of range (have %d)", chunkIdx, len(d.chunks))
+		}
+		arity, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, err
+		}
+		variadic, err := d.r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		name, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		fn := vm.MakeFunc(int(arity), variadic != 0, d.chunks[chunkIdx])
+		fn.SetName(name)
+		return fn, nil
+	case TagIDVarRef:
+		ns, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		name, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		if d.resolve != nil {
+			v := d.resolve(ns, name)
+			if v != nil {
+				return v, nil
+			}
+		}
+		return vm.NewVar(nil, ns, name), nil
+	case TagIDEmptyList:
+		return vm.EmptyList, nil
+	case TagIDList:
+		count, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, err
+		}
+		items := make([]vm.Value, count)
+		for i := range items {
+			items[i], err = d.readValueV2()
+			if err != nil {
+				return nil, err
+			}
+		}
+		result, _ := vm.ListType.Box(items)
+		return result, nil
+	case TagIDVector:
+		return d.readVectorBatch()
+	case TagIDMap:
+		return d.readMapBatch()
+	case TagIDSet:
+		return d.readSetBatch()
+	case TagIDRecordType:
+		name, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		fieldCount, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, err
+		}
+		fields := make([]vm.Keyword, fieldCount)
+		for i := range fields {
+			s, err := d.readStringRef()
+			if err != nil {
+				return nil, err
+			}
+			fields[i] = vm.Keyword(s)
+		}
+		return vm.NewRecordType(name, fields), nil
+	case TagIDRecord:
+		typeName, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		fieldCount, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, err
+		}
+		fieldKws := make([]vm.Keyword, fieldCount)
+		for i := range fieldKws {
+			s, err := d.readStringRef()
+			if err != nil {
+				return nil, err
+			}
+			fieldKws[i] = vm.Keyword(s)
+		}
+		rt := vm.NewRecordType(typeName, fieldKws)
+		fixedFields := make([]vm.Value, fieldCount)
+		for i := range fixedFields {
+			fixedFields[i], err = d.readValueV2()
+			if err != nil {
+				return nil, err
+			}
+		}
+		extraMap, err := d.readMapBatch()
+		if err != nil {
+			return nil, err
+		}
+		data := extraMap.(*vm.PersistentMap)
+		for i, kw := range fieldKws {
+			if fixedFields[i] != vm.NIL {
+				data = data.Assoc(kw, fixedFields[i]).(*vm.PersistentMap)
+			}
+		}
+		return vm.NewRecord(rt, data), nil
+	case TagIDRegex:
+		pattern, err := d.readStringRef()
+		if err != nil {
+			return nil, err
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("recompiling regex %q: %w", pattern, err)
+		}
+		v, _ := vm.RegexType.Box(re)
+		return v, nil
+	case TagIDAtom:
+		val, err := d.readValueV2()
+		if err != nil {
+			return nil, err
+		}
+		return vm.NewAtom(val), nil
+	default:
+		return nil, fmt.Errorf("unknown tag ID 0x%02x", tagID)
+	}
 }

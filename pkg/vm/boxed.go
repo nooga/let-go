@@ -15,12 +15,12 @@ type aBoxedType struct {
 	methods map[Symbol]*NativeFn
 }
 
-func (t *aBoxedType) String() string     { return t.Name() }
-func (t *aBoxedType) Type() ValueType    { return TypeType }
-func (t *aBoxedType) Unbox() interface{} { return t.typ }
+func (t *aBoxedType) String() string  { return t.Name() }
+func (t *aBoxedType) Type() ValueType { return TypeType }
+func (t *aBoxedType) Unbox() any      { return t.typ }
 
 func (t *aBoxedType) Name() string { return "go." + t.typ.String() }
-func (t *aBoxedType) Box(value interface{}) (Value, error) {
+func (t *aBoxedType) Box(value any) (Value, error) {
 	if !reflect.TypeOf(value).ConvertibleTo(t.typ) {
 		return NIL, NewTypeError(value, "can't be boxed as", t)
 	}
@@ -28,7 +28,7 @@ func (t *aBoxedType) Box(value interface{}) (Value, error) {
 }
 
 type Boxed struct {
-	value interface{}
+	value any
 	typ   *aBoxedType
 }
 
@@ -36,7 +36,7 @@ type Boxed struct {
 func (n *Boxed) Type() ValueType { return n.typ }
 
 // Unbox implements Value
-func (n *Boxed) Unbox() interface{} { return n.value }
+func (n *Boxed) Unbox() any { return n.value }
 
 func (n *Boxed) String() string {
 	return fmt.Sprintf("<%s %v>", n.typ.Name(), n.value)
@@ -72,7 +72,7 @@ func (n *Boxed) ValueAtOr(key Value, dflt Value) Value {
 // BoxedType is the type of NilValues
 var BoxedTypes map[string]*aBoxedType = map[string]*aBoxedType{}
 
-func valueType(value interface{}) *aBoxedType {
+func valueType(value any) *aBoxedType {
 	reflected := reflect.TypeOf(value)
 	t, ok := BoxedTypes[reflected.Name()]
 	if ok {
@@ -85,16 +85,16 @@ func valueType(value interface{}) *aBoxedType {
 	methodc := reflected.NumMethod()
 	if methodc > 0 {
 		t.methods = map[Symbol]*NativeFn{}
-		for i := 0; i < methodc; i++ {
+		for i := range methodc {
 			m := reflected.Method(i)
 			me, err := NativeFnType.Box(m.Func.Interface())
 			if err != nil {
-								fmt.Println(reflected.Name(), "boxing method failed", err)
+				fmt.Println(reflected.Name(), "boxing method failed", err)
 				continue
 			}
 			mef, ok := me.(*NativeFn)
 			if !ok {
-								fmt.Println(reflected.Name(), "boxed method is not a native fn")
+				fmt.Println(reflected.Name(), "boxed method is not a native fn")
 				continue
 			}
 			t.methods[Symbol(m.Name)] = mef
@@ -104,6 +104,6 @@ func valueType(value interface{}) *aBoxedType {
 	return t
 }
 
-func NewBoxed(value interface{}) *Boxed {
+func NewBoxed(value any) *Boxed {
 	return &Boxed{value: value, typ: valueType(value)}
 }

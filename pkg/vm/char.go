@@ -14,16 +14,16 @@ type theCharType struct {
 	zero Char
 }
 
-func (t *theCharType) String() string     { return t.Name() }
-func (t *theCharType) Type() ValueType    { return TypeType }
-func (t *theCharType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theCharType) String() string  { return t.Name() }
+func (t *theCharType) Type() ValueType { return TypeType }
+func (t *theCharType) Unbox() any      { return reflect.TypeFor[*theCharType]() }
 
-func (lt *theCharType) Name() string { return "let-go.lang.Character" }
+func (t *theCharType) Name() string { return "let-go.lang.Character" }
 
-func (lt *theCharType) Box(bare interface{}) (Value, error) {
+func (t *theCharType) Box(bare any) (Value, error) {
 	raw, ok := bare.(rune)
 	if !ok {
-		return CharType.zero, NewTypeError(bare, "can't be boxed as", lt)
+		return CharType.zero, NewTypeError(bare, "can't be boxed as", t)
 	}
 	return Char(raw), nil
 }
@@ -41,7 +41,7 @@ func (l Char) Hash() uint32 { return hashUint64(uint64(l)) }
 func (l Char) Type() ValueType { return CharType }
 
 // Unbox implements Unbox
-func (l Char) Unbox() interface{} {
+func (l Char) Unbox() any {
 	return rune(l)
 }
 

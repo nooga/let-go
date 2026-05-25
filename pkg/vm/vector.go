@@ -13,16 +13,16 @@ import (
 
 type theArrayVectorType struct{}
 
-func (t *theArrayVectorType) String() string     { return t.Name() }
-func (t *theArrayVectorType) Type() ValueType    { return TypeType }
-func (t *theArrayVectorType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theArrayVectorType) String() string  { return t.Name() }
+func (t *theArrayVectorType) Type() ValueType { return TypeType }
+func (t *theArrayVectorType) Unbox() any      { return reflect.TypeFor[*theArrayVectorType]() }
 
-func (lt *theArrayVectorType) Name() string { return "let-go.lang.ArrayVector" }
+func (t *theArrayVectorType) Name() string { return "let-go.lang.ArrayVector" }
 
-func (lt *theArrayVectorType) Box(bare interface{}) (Value, error) {
+func (t *theArrayVectorType) Box(bare any) (Value, error) {
 	arr, ok := bare.([]Value)
 	if !ok {
-		return NIL, NewTypeError(bare, "can't be boxed as", lt)
+		return NIL, NewTypeError(bare, "can't be boxed as", t)
 	}
 
 	return ArrayVector(arr), nil
@@ -74,7 +74,7 @@ func (l ArrayVector) WithMeta(m Value) Value {
 func (l ArrayVector) Type() ValueType { return ArrayVectorType }
 
 // Unbox implements Value
-func (l ArrayVector) Unbox() interface{} {
+func (l ArrayVector) Unbox() any {
 	return []Value(l)
 }
 
@@ -183,7 +183,7 @@ func (s *ArrayVectorSeq) Type() ValueType {
 	return ListType // seqs print as lists
 }
 
-func (s *ArrayVectorSeq) Unbox() interface{} {
+func (s *ArrayVectorSeq) Unbox() any {
 	return []Value(s.vec[s.i:])
 }
 
@@ -298,7 +298,7 @@ func (l ArrayVector) Contains(value Value) Boolean {
 }
 
 func (l ArrayVector) Assoc(k Value, v Value) Associative {
-	var new ArrayVector = NewArrayVector(l).(ArrayVector)
+	new := NewArrayVector(l).(ArrayVector)
 	ik, ok := k.(Int)
 	if !ok {
 		return NIL

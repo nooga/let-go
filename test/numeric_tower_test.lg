@@ -40,25 +40,60 @@
 
   (testing "division involving float returns float"
     (is (float? (/ 10.0 3)))
-    (is (float? (/ 10 3.0)))))
+    (is (float? (/ 10 3.0))))
+
+  (testing "unary division returns reciprocal"
+    (is (= 1/2 (/ 2)))
+    (is (= 0.5 (/ 2.0)))
+    (is (= 2 (/ 1/2)))))
 
 (deftest cross-type-comparison
   (testing "comparing int and float"
     (is (> 3.14 3))
     (is (< 3 3.14))
-    (is (= 1 1.0))
-    (is (= 1.0 1))
+    (is (== 1 1.0))
+    (is (== 1.0 1))
+    (is (not (= 1 1.0)))
+    (is (not (= 1.0 1)))
     (is (not (= 1 1.5)))))
 
 (deftest coercion-functions
   (testing "float coercion"
     (is (= 42.0 (float 42)))
-    (is (float? (float 42))))
+    (is (float? (float 42)))
+    (is (= 0.0 (float 4.9E-324)))
+    (is (= 4.9E-324 (double 4.9E-324)))
+    (is (try
+          (float 1.7976931348623157E308)
+          false
+          (catch e true))))
 
   (testing "int coercion truncates"
     (is (= 3 (int 3.7)))
     (is (int? (int 3.7)))
-    (is (= 3 (int 3.2)))))
+    (is (= 3 (int 3.2))))
+
+  (testing "int coercion checks 32-bit bounds"
+    (is (= 2147483647 (int 2147483647)))
+    (is (= -2147483648 (int -2147483648)))
+    (is (try
+          (int 2147483648)
+          false
+          (catch e true)))
+    (is (try
+          (int -2147483649)
+          false
+          (catch e true)))))
+
+(deftest long-coercion
+  (testing "long coercion accepts full 64-bit range"
+    (is (= 9223372036854775807 (long 9223372036854775807)))
+    (is (= -9223372036854775808 (long -9223372036854775808)))
+    (is (= -4611686018427387904 (long (/ -9223372036854775808 2))))
+    (is (try
+          (long 9223372036854775808N)
+          false
+          (catch e true)))))
 
 (deftest numeric-predicates
   (testing "number? recognizes both int and float"
@@ -67,8 +102,14 @@
     (is (not (number? "42")))
     (is (not (number? :foo))))
 
+  (testing "num preserves nil"
+    (is (nil? (num nil))))
+
   (testing "float? predicate"
     (is (float? 3.14))
+    (is (float? (float 3.14)))
+    (is (not (double? (float 3.14))))
+    (is (double? (double 3.14)))
     (is (not (float? 42)))
     (is (not (float? "3.14"))))
 
@@ -87,6 +128,21 @@
     (is (> 3 2 1))
     (is (> 5 4 3 2 1))
     (is (not (> 3 1 2)))))
+
+(deftest checked-int-arithmetic
+  (testing "integer overflow throws"
+    (let [max-int 9223372036854775807
+          min-int -9223372036854775808]
+      (is (try (+ max-int 1) false (catch e true)))
+      (is (try (+ min-int -1) false (catch e true)))
+      (is (try (- min-int 1) false (catch e true)))
+      (is (try (- max-int -1) false (catch e true)))
+      (is (try (* min-int -1) false (catch e true)))
+      (is (try (* -1 min-int) false (catch e true)))
+      (is (try (inc max-int) false (catch e true)))
+      (is (try (dec min-int) false (catch e true)))
+      (is (try (inc nil) false (catch e true)))
+      (is (try (dec nil) false (catch e true))))))
 
 (deftest apostrophe-overflow-promotion
   (testing "+' promotes at int64 boundary"

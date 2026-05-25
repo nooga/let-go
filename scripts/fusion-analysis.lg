@@ -1,0 +1,123 @@
+;; Operator fusion analysis: walk benchmark bytecode and report the
+;; most frequent 2-op and 3-op sequences. Candidates for fused opcodes.
+;;
+;; Run as:  lg scripts/fusion-analysis.lg
+;;
+;; For each benchmark we:
+;;   - Read the source.
+;;   - If it has named top-level defns, eval the file and disassemble
+;;     those defns by name.
+;;   - If the file is a single expression (loop-recur etc.), wrap it
+;;     in `(fn synthetic [] body)`, eval, and disassemble the wrapper.
+;;   - Recursively walk all *Func values found in each chunk's const pool.
+;;   - Count 2-op and 3-op contiguous sequences.
+
+(require '[string :as str])
+
+;; --- bytecode walking -----------------------------------------------
+
+(defn opcodes-of
+  "Disassemble fn-or-var and recursively walk nested fns in its const
+   pool. Returns a flat seq of opcode keywords (drop arg ints)."
+  [v]
+  (let [direct (map first (disasm/disassemble v))
+        nested (->> (disasm/constants v)
+                    (filter (fn [c]
+                              (str/includes? (str (core/type c)) "Func")))
+                    (mapcat opcodes-of))]
+    (concat direct nested)))
+
+;; --- n-gram counting ------------------------------------------------
+
+(defn ngrams [n xs]
+  (loop [acc [] xs xs]
+    (let [chunk (take n xs)]
+      (if (< (count chunk) n)
+        acc
+        (recur (conj acc (vec chunk)) (rest xs))))))
+
+(defn count-by [items]
+  (reduce (fn [m x] (assoc m x (inc (or (get m x) 0)))) {} items))
+
+(defn top [n counts]
+  (->> counts
+       (sort-by (fn [pair] (- (second pair))))
+       (take n)))
+
+(defn merge-counts [m1 m2]
+  (reduce (fn [acc pair]
+            (assoc acc (first pair) (+ (second pair) (or (get acc (first pair)) 0))))
+          m1 m2))
+
+;; --- loading + wrapping ---------------------------------------------
+
+(defn load-named-fns
+  "Load file's source; eval; return ops from named defns."
+  [file fn-names]
+  (load-string (slurp file))
+  (vec (mapcat (fn [name]
+                 (let [v (eval (list 'var name))]
+                   (opcodes-of v)))
+               fn-names)))
+
+(defn load-as-wrapped
+  "Wrap file's source in (fn synthetic-fn [] BODY), eval, disassemble."
+  [file]
+  (let [src (slurp file)
+        wrapped (str "(def synthetic-fn (fn [] " src "))")]
+    (load-string wrapped)
+    (opcodes-of (eval '(var synthetic-fn)))))
+
+;; --- benchmark specs ------------------------------------------------
+;;
+;; Each: [path mode arg]
+;;   mode :named — arg is vector of fn names
+;;   mode :wrap  — arg is ignored; whole body wrapped
+
+(def benchmarks
+  [["benchmark/fib.clj"            :named '[fib]]
+   ["benchmark/tak.clj"            :named '[tak]]
+   ["benchmark/loop-recur.clj"     :wrap nil]
+   ["benchmark/reduce.clj"         :wrap nil]
+   ["benchmark/map-filter.clj"     :wrap nil]
+   ["benchmark/transducers.clj"    :wrap nil]
+   ["benchmark/persistent-map.clj" :wrap nil]])
+
+;; --- reporting ------------------------------------------------------
+
+(defn fmt-key [k]
+  (str/join " ; " (map name k)))
+
+(defn print-top [label n counts total]
+  (println (str "  " label ":"))
+  (doseq [pair (top n counts)]
+    (let [pat (first pair)
+          n-count (second pair)
+          pct (if (> total 0) (int (* 100 (/ n-count total))) 0)]
+      (println (str "    " n-count "  (" pct "%)  " (fmt-key pat))))))
+
+;; --- run ------------------------------------------------------------
+
+(let [all-pairs   (atom {})
+      all-triples (atom {})
+      total       (atom 0)]
+  (doseq [bench benchmarks]
+    (let [file  (nth bench 0)
+          mode  (nth bench 1)
+          arg   (nth bench 2)
+          ops   (case mode
+                  :named (load-named-fns file arg)
+                  :wrap  (load-as-wrapped file))
+          ops   (vec ops)
+          n     (count ops)
+          pairs (count-by (ngrams 2 ops))
+          trips (count-by (ngrams 3 ops))]
+      (println (str "\n=== " file " (mode " mode ", " n " ops) ==="))
+      (print-top "top 5 pairs"   5 pairs n)
+      (print-top "top 5 triples" 5 trips n)
+      (swap! all-pairs   merge-counts pairs)
+      (swap! all-triples merge-counts trips)
+      (swap! total       + n)))
+  (println (str "\n=== AGGREGATE (total ops: " @total ") ==="))
+  (print-top "top 20 pairs"   20 @all-pairs   @total)
+  (print-top "top 20 triples" 20 @all-triples @total))

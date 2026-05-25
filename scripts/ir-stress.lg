@@ -1,0 +1,68 @@
+;; IR-pipeline coverage stress test against xsofy.
+;;
+;; For each listed xsofy .lg file, read its top-level (defn ...) forms
+;; and attempt (ir.passes.pipeline/compile-form form). Print per-file
+;; pass rate and a tally of the most common error-message prefixes.
+;;
+;; Skips cleanly if xsofy isn't checked out at the expected path.
+;;
+;; Usage:  go run . scripts/ir-stress.lg
+(require 'ir.data)
+(require 'ir.passes.pipeline)
+
+(def xsofy-dir "/Users/ndn/development/xsofy/xsofy/")
+(def files ["util.lg" "combat.lg" "ai.lg" "items.lg" "fov.lg" "fire.lg"
+            "effects.lg" "bestiary.lg" "input.lg" "lighting.lg"
+            "runes.lg" "sound.lg" "det.lg" "entities.lg" "check.lg"])
+
+(defn read-all [path]
+  (try
+    (let [src (slurp path)]
+      (read-string (str "(do " src ")")))
+    (catch e nil)))
+
+(defn defn-forms [src-form]
+  (when (and src-form (seq? src-form))
+    (filter (fn [f] (and (seq? f)
+                         (let [h (first f)]
+                           (or (= h 'defn) (= h 'defn-)))))
+            (rest src-form))))
+
+(defn err-prefix [msg]
+  (let [m (str msg)
+        n (min 60 (count m))]
+    (subs m 0 n)))
+
+(defn try-ir [form]
+  (try
+    (do (ir.passes.pipeline/compile-form form) :ok)
+    (catch e (err-prefix e))))
+
+(defn stress-file [path]
+  (let [parsed (read-all path)
+        defns  (vec (defn-forms parsed))]
+    (if (nil? parsed)
+      {:file path :read-error true}
+      (let [results (mapv (fn [d] [(nth d 1) (try-ir d)]) defns)
+            ok     (count (filter (fn [[_ r]] (= :ok r)) results))
+            errs   (filter (fn [[_ r]] (not= :ok r)) results)
+            classes (frequencies (map (fn [[_ r]] r) errs))]
+        {:file path :total (count defns) :ok ok :err (count errs)
+         :classes (take 5 (reverse (sort-by val classes)))}))))
+
+(defn run []
+  (println "=== IR-pipeline coverage stress test ===")
+  (let [results (mapv (fn [f] (stress-file (str xsofy-dir f))) files)
+        total   (reduce + 0 (map (fn [r] (or (:total r) 0)) results))
+        oks     (reduce + 0 (map (fn [r] (or (:ok r) 0)) results))
+        agg     (apply merge-with + (map (fn [r] (into {} (:classes r))) results))]
+    (doseq [r results]
+      (if (:read-error r)
+        (println (str (:file r) ": READ-ERROR (xsofy not checked out?)"))
+        (println (str (:file r) ": " (:ok r) "/" (:total r) " ok"))))
+    (println (str "\nTOTAL: " oks "/" total " ok"))
+    (println "\nTop error classes:")
+    (doseq [[msg n] (take 8 (reverse (sort-by val agg)))]
+      (println (str "  " n "  " msg)))))
+
+(run)

@@ -8,12 +8,12 @@ import (
 
 type theBigIntType struct{}
 
-func (t *theBigIntType) String() string     { return t.Name() }
-func (t *theBigIntType) Type() ValueType    { return TypeType }
-func (t *theBigIntType) Unbox() interface{} { return reflect.TypeOf(t) }
-func (t *theBigIntType) Name() string       { return "let-go.lang.BigInt" }
+func (t *theBigIntType) String() string  { return t.Name() }
+func (t *theBigIntType) Type() ValueType { return TypeType }
+func (t *theBigIntType) Unbox() any      { return reflect.TypeFor[*theBigIntType]() }
+func (t *theBigIntType) Name() string    { return "let-go.lang.BigInt" }
 
-func (t *theBigIntType) Box(bare interface{}) (Value, error) {
+func (t *theBigIntType) Box(bare any) (Value, error) {
 	switch v := bare.(type) {
 	case *big.Int:
 		return &BigInt{val: v}, nil
@@ -50,8 +50,8 @@ func NewBigIntFromInt64(n int64) *BigInt {
 
 func (b *BigInt) Val() *big.Int { return b.val }
 
-func (b *BigInt) Type() ValueType    { return BigIntType }
-func (b *BigInt) Unbox() interface{} { return b.val }
+func (b *BigInt) Type() ValueType { return BigIntType }
+func (b *BigInt) Unbox() any      { return b.val }
 
 func (b *BigInt) String() string {
 	return b.val.String() + "N"

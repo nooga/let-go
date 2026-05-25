@@ -11,12 +11,12 @@ type theVoidType struct {
 	zero *Void
 }
 
-func (t *theVoidType) String() string     { return t.Name() }
-func (t *theVoidType) Type() ValueType    { return TypeType }
-func (t *theVoidType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theVoidType) String() string  { return t.Name() }
+func (t *theVoidType) Type() ValueType { return TypeType }
+func (t *theVoidType) Unbox() any      { return reflect.TypeFor[*theVoidType]() }
 
-func (t *theVoidType) Name() string                     { return "VOID" }
-func (t *theVoidType) Box(_ interface{}) (Value, error) { return t.zero, nil }
+func (t *theVoidType) Name() string             { return "VOID" }
+func (t *theVoidType) Box(_ any) (Value, error) { return t.zero, nil }
 
 // Void is a Value whose only value is Void
 type Void struct{}
@@ -25,7 +25,7 @@ type Void struct{}
 func (n *Void) Type() ValueType { return VoidType }
 
 // Unbox implements Value
-func (n *Void) Unbox() interface{} { return nil }
+func (n *Void) Unbox() any { return nil }
 
 // VoidType is the type of VoidValues
 var VoidType *theVoidType = &theVoidType{zero: &Void{}}

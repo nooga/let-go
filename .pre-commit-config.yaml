@@ -1,0 +1,76 @@
+# Pre-commit / prek configuration. Mirrors .github/workflows/go.yml so local
+# checks catch what CI catches before pushing.
+#
+# Install:
+#   prek install --install-hooks --hook-type pre-commit --hook-type pre-push
+# Or with classic pre-commit:
+#   pre-commit install --install-hooks --hook-type pre-commit --hook-type pre-push
+#
+# Hook stages:
+#   pre-commit  → fast lint + build on every commit
+#   pre-push    → full test suite (including Clojure compat) before push
+#
+# Escape hatch for in-progress work:
+#   git commit --no-verify
+#   git push   --no-verify
+
+repos:
+  # golangci-lint via the official upstream — the binary is installed by
+  # prek/pre-commit on first run, so contributors don't need to install it
+  # separately. Pinned to the last v1.x release because .golangci.yml is in
+  # v1-format; bump to v2.x when the config is migrated.
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v1.64.8
+    hooks:
+      - id: golangci-lint-full
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      # Auto-fix formatting before linters run. gofmt ships with Go.
+      # goimports is fetched on demand via `go run ...@latest` so contributors
+      # don't need a separate install; the module cache makes subsequent runs
+      # cheap. -format-only matches gofmt's behavior plus import grouping,
+      # without trying to resolve new imports from the source tree.
+      - id: gofmt
+        name: gofmt -s -w
+        description: Auto-format Go sources (simplification + standard formatting)
+        entry: gofmt -s -w
+        language: system
+        types: [go]
+        stages: [pre-commit]
+
+      - id: goimports
+        name: goimports -w -format-only
+        description: Group and order imports (run after gofmt)
+        entry: go run golang.org/x/tools/cmd/goimports@latest -w -format-only
+        language: system
+        types: [go]
+        stages: [pre-commit]
+
+      - id: go-build
+        name: go build ./...
+        description: Verify the project builds (mirrors CI build step)
+        entry: go build ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: go-test
+        name: go test ./... -skip TestClojureTestSuite
+        description: Run Go test suite excluding the slow Clojure compat suite (mirrors CI test step)
+        entry: go test -timeout 60s ./... -skip TestClojureTestSuite
+        language: system
+        types: [go]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: clojure-compat-suite
+        name: Clojure compatibility test suite
+        description: Run the vendored jank-lang/clojure-test-suite (mirrors CI compat step)
+        entry: go test ./test/ -count=1 -run TestClojureTestSuite
+        language: system
+        types: [go]
+        pass_filenames: false
+        stages: [pre-push]

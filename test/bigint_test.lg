@@ -4,7 +4,9 @@
 (deftest bigint-literal
   (testing "N suffix creates BigInt"
     (is (bigint? 123N))
-    (is (not (bigint? 123))))
+    (is (big-int? 123N))
+    (is (not (bigint? 123)))
+    (is (not (big-int? 123))))
   (testing "large literals auto-promote"
     (is (bigint? 99999999999999999999999))))
 

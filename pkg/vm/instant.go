@@ -8,11 +8,11 @@ import (
 
 type theInstantType struct{}
 
-func (t *theInstantType) String() string     { return t.Name() }
-func (t *theInstantType) Type() ValueType    { return TypeType }
-func (t *theInstantType) Unbox() interface{} { return reflect.TypeOf(t) }
-func (t *theInstantType) Name() string       { return "let-go.lang.Instant" }
-func (t *theInstantType) Box(bare interface{}) (Value, error) {
+func (t *theInstantType) String() string  { return t.Name() }
+func (t *theInstantType) Type() ValueType { return TypeType }
+func (t *theInstantType) Unbox() any      { return reflect.TypeFor[*theInstantType]() }
+func (t *theInstantType) Name() string    { return "let-go.lang.Instant" }
+func (t *theInstantType) Box(bare any) (Value, error) {
 	switch v := bare.(type) {
 	case string:
 		i := ParseInstant(v)
@@ -70,9 +70,9 @@ func NewInstant(t time.Time) *Instant {
 	return &Instant{t: t.UTC().Truncate(time.Millisecond)}
 }
 
-func (i *Instant) Type() ValueType    { return InstantType }
-func (i *Instant) Unbox() interface{} { return i.t }
-func (i *Instant) String() string     { return "#inst \"" + i.t.Format(time.RFC3339Nano) + "\"" }
+func (i *Instant) Type() ValueType { return InstantType }
+func (i *Instant) Unbox() any      { return i.t }
+func (i *Instant) String() string  { return "#inst \"" + i.t.Format(time.RFC3339Nano) + "\"" }
 
 // Time returns the underlying time.Time (UTC, millisecond precision).
 func (i *Instant) Time() time.Time { return i.t }

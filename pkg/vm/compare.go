@@ -65,25 +65,11 @@ func DefaultCompare(a, b Value) (int, error) {
 		}
 	case Keyword:
 		if vb, ok := b.(Keyword); ok {
-			switch {
-			case string(va) < string(vb):
-				return -1, nil
-			case string(va) > string(vb):
-				return 1, nil
-			default:
-				return 0, nil
-			}
+			return compareNamed(va.Namespace(), va.Name(), vb.Namespace(), vb.Name()), nil
 		}
 	case Symbol:
 		if vb, ok := b.(Symbol); ok {
-			switch {
-			case string(va) < string(vb):
-				return -1, nil
-			case string(va) > string(vb):
-				return 1, nil
-			default:
-				return 0, nil
-			}
+			return compareNamed(va.Namespace(), va.Name(), vb.Namespace(), vb.Name()), nil
 		}
 	case Boolean:
 		if vb, ok := b.(Boolean); ok {
@@ -144,4 +130,29 @@ func DefaultCompare(a, b Value) (int, error) {
 		return 1, nil
 	}
 	return 0, fmt.Errorf("cannot compare %s and %s", a.Type(), b.Type())
+}
+
+func compareNamed(aNs, aName, bNs, bName Value) int {
+	if c := compareNamePart(aNs, bNs); c != 0 {
+		return c
+	}
+	return compareNamePart(aName, bName)
+}
+
+func compareNamePart(a, b Value) int {
+	as, bs := "", ""
+	if a != NIL {
+		as = string(a.(String))
+	}
+	if b != NIL {
+		bs = string(b.(String))
+	}
+	switch {
+	case as < bs:
+		return -1
+	case as > bs:
+		return 1
+	default:
+		return 0
+	}
 }

@@ -68,6 +68,13 @@ func (w *Writer) WriteUint16(v uint16) error {
 	return err
 }
 
+// WriteUint32 writes a little-endian uint32.
+func (w *Writer) WriteUint32(v uint32) error {
+	binary.LittleEndian.PutUint32(w.buf[:4], v)
+	_, err := w.w.Write(w.buf[:4])
+	return err
+}
+
 // WriteInt32 writes a little-endian int32.
 func (w *Writer) WriteInt32(v int32) error {
 	binary.LittleEndian.PutUint32(w.buf[:4], uint32(v))
@@ -100,7 +107,7 @@ func NewReader(r io.Reader) *Reader {
 func (r *Reader) ReadVarint() (uint64, error) {
 	var result uint64
 	var shift uint
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			return 0, err
@@ -150,6 +157,14 @@ func (r *Reader) ReadInt32() (int32, error) {
 		return 0, err
 	}
 	return int32(binary.LittleEndian.Uint32(r.buf[:4])), nil
+}
+
+// ReadUint32 reads a little-endian uint32.
+func (r *Reader) ReadUint32() (uint32, error) {
+	if _, err := io.ReadFull(r.r, r.buf[:4]); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint32(r.buf[:4]), nil
 }
 
 // ReadFloat64 reads an IEEE 754 little-endian float64.

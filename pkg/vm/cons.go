@@ -32,8 +32,8 @@ func (c *Cons) String() string {
 	return b.String()
 }
 
-func (c *Cons) Type() ValueType    { return ListType }
-func (c *Cons) Unbox() interface{} { return c }
+func (c *Cons) Type() ValueType { return ListType }
+func (c *Cons) Unbox() any      { return c }
 
 func (c *Cons) First() Value {
 	return c.first
@@ -94,3 +94,8 @@ func (c *Cons) Conj(val Value) Collection {
 	return NewCons(val, c)
 }
 
+// Hash implements Hashable using Clojure's ordered-collection Murmur3 mix.
+// Must match *List.Hash so a Cons of the same elements equates in sets/maps.
+func (c *Cons) Hash() uint32 {
+	return hashOrdered(c)
+}

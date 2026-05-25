@@ -1,0 +1,167 @@
+;; IR validator — sanity-checks an ir.Function between passes.
+;;
+;; Run after every transformation in (optimize-fn). When a pass produces
+;; malformed IR, the validator throws with the pass label so failure points
+;; at the producing pass instead of crashing five levels deep in the next
+;; pass's zipper.
+;;
+;; Checks (v1):
+;;   1. Each Inst is a vector of exactly 6 elements
+;;      [op refs aux block source-infos type].
+;;   2. Each Inst's :refs entries are in range [0, count-insts). Removed
+;;      Insts (:op = :invalid) are skipped — their refs may be stale.
+;;   3. Each block's :term points at an Inst whose op is a terminator
+;;      according to (ir/op-terminator?).
+;;
+;; Future additions (not v1):
+;;   - Predecessor consistency (b ∈ block-preds[t] ⇔ some Branch in b targets t)
+;;   - Branch-target arg refs in range
+;;   - Block-param matches BlockArg count in successors
+
+(ns ir.validate)
+
+(defn- check-inst-shapes! [insts label]
+  (loop [i 0]
+    (when (< i (count insts))
+      (let [ins (nth insts i)]
+        (when-not (and (vector? ins) (= 6 (count ins)))
+          (throw (str "validate after " label
+                      ": Inst #" i " has bad shape: " ins))))
+      (recur (inc i)))))
+
+(defn- check-refs-in-range! [insts label]
+  (let [n (count insts)]
+    (loop [i 0]
+      (when (< i n)
+        (let [ins  (nth insts i)
+              op   (nth ins 0)
+              refs (nth ins 1)]
+          ;; Skip Insts already marked removed — their refs are stale.
+          (when (not= op :invalid)
+            (doseq [r refs]
+              (when (or (nil? r) (< r 0) (>= r n))
+                (throw (str "validate after " label
+                            ": Inst #" i " (op=" op ")"
+                            " has out-of-range ref " r
+                            " (insts count=" n ")"))))))
+        (recur (inc i))))))
+
+(defn- check-blocks-terminated! [f label]
+  (let [blocks (:blocks @f)
+        insts  (:insts @f)]
+    (loop [i 0]
+      (when (< i (count blocks))
+        (let [blk     (nth blocks i)
+              term-id (:term blk)]
+          (when (nil? term-id)
+            (throw (str "validate after " label
+                        ": block #" i " has no :term field")))
+          (when (or (< term-id 0) (>= term-id (count insts)))
+            (throw (str "validate after " label
+                        ": block #" i " :term=" term-id
+                        " out of insts range [0," (count insts) ")")))
+          (let [term-inst (nth insts term-id)
+                term-op   (nth term-inst 0)]
+            (when-not (ir/op-terminator? term-op)
+              (throw (str "validate after " label
+                          ": block #" i " :term Inst #" term-id
+                          " has non-terminator op " term-op)))))
+        (recur (inc i))))))
+
+(defn- check-no-cross-block-refs! [f label]
+  "Every Inst.refs entry must point at an Inst in the SAME block.
+   Cross-block flow must go through Block.Params (BlockArg Insts),
+   not direct Refs.
+
+   :block-arg refs are allowed cross-context — they're the receive-side
+   of a value flowing in via params, conceptually intra-block.
+
+   :invalid Insts (already-removed slots) are skipped — their refs
+   are stale by design."
+  (let [insts (:insts @f)]
+    (doseq [[i ins] (map-indexed vector insts)
+            :let    [op (nth ins 0)]
+            :when   (not= op :invalid)
+            r       (nth ins 1)
+            :let    [referent  (nth insts r)
+                     ref-op    (nth referent 0)
+                     def-block (nth referent 3)
+                     use-block (nth ins 3)]
+            :when   (and (not= def-block use-block)
+                         (not= :block-arg ref-op))]
+      (throw (str "validate after " label
+                  ": Inst #" i " (op=" op ", block=" use-block ")"
+                  " has cross-block ref " r
+                  " (defined in block " def-block ")")))))
+
+(defn- check-branch-arg-arity-for-target! [label src-block target-bt blocks]
+  "Verify src-block's BranchTarget.args count matches the target block's params count."
+  (let [target  (ir/branch-target-target target-bt)
+        args    (ir/branch-target-args target-bt)
+        tgt-blk (nth blocks target)
+        params  (:params tgt-blk)]
+    (when-not (= (count args) (count params))
+      (throw (str "validate after " label
+                  ": block #" src-block " branch to b" target
+                  " passes " (count args) " args but b" target
+                  " has " (count params) " params")))))
+
+(defn- check-branch-arg-arities! [f label]
+  "For every terminator (:branch / :branch-if), verify the BranchTarget.args
+   count matches the successor block's params count. Catches stale BranchTargets
+   left by thread-block-args after it added new block params."
+  (let [blocks (:blocks @f)
+        insts  (:insts @f)]
+    (loop [i 0]
+      (when (< i (count blocks))
+        (let [blk     (nth blocks i)
+              term-id (:term blk)
+              term    (nth insts term-id)
+              op      (nth term 0)
+              aux     (nth term 2)]
+          (cond
+            (= op :branch)
+              (check-branch-arg-arity-for-target! label i aux blocks)
+            (= op :branch-if)
+              (do (check-branch-arg-arity-for-target! label i (ir/cond-target-true aux)  blocks)
+                  (check-branch-arg-arity-for-target! label i (ir/cond-target-false aux) blocks))))
+        (recur (inc i))))))
+
+(defn- check-branch-if-symmetric-args! [f label]
+  "build-if emits symmetric branch-target args (true.args == false.args)
+   so the lower-block! :branch-if path can place a single arg shape on
+   the stack just below the cond. Any pass that breaks this invariant
+   (or any hand-built IR that violates it) leaves lower without a
+   well-defined layout. Throws naming the offending block."
+  (let [blocks (:blocks @f)
+        insts  (:insts @f)]
+    (loop [i 0]
+      (when (< i (count blocks))
+        (let [term-id (:term (nth blocks i))]
+          (when (and term-id (> term-id 0))
+            (let [term (nth insts term-id)
+                  op   (nth term 0)]
+              (when (= op :branch-if)
+                (let [aux (nth term 2)
+                      t-args (ir/branch-target-args (ir/cond-target-true aux))
+                      f-args (ir/branch-target-args (ir/cond-target-false aux))]
+                  (when-not (= t-args f-args)
+                    (throw (str "validate after " label
+                                ": block #" i " :branch-if has asymmetric"
+                                " branch-target args (true=" t-args
+                                ", false=" f-args ") — lower-block! requires"
+                                " true.args == false.args"))))))))
+        (recur (inc i))))))
+
+(defn validate-fn! [f label]
+  "Throw if f is malformed. Returns f on success so it composes in -> chains.
+
+   `label` names the pass that just ran; appears in every error message."
+  (let [insts (:insts @f)]
+    (check-inst-shapes!              insts label)
+    (check-refs-in-range!            insts label)
+    (check-blocks-terminated!        f     label)
+    (check-no-cross-block-refs!      f     label)
+    (check-branch-arg-arities!       f     label)
+    (check-branch-if-symmetric-args! f     label))
+  f)

@@ -37,6 +37,16 @@
     (is (not (delay? nil)))
     (is (not (delay? (atom 1))))))
 
+(deftest realized-shapes
+  (testing "realized? rejects non-pending values"
+    (is (= :caught (try (realized? nil) (catch e :caught))))
+    (is (= :caught (try (realized? 42) (catch e :caught)))))
+  (testing "realized? tracks lazy seq realization"
+    (let [s (lazy-seq (cons 1 nil))]
+      (is (not (realized? s)))
+      (is (= 1 (first s)))
+      (is (realized? s)))))
+
 ;; --- volatile ---
 
 (deftest volatile-basic

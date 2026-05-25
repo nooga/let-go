@@ -5,6 +5,7 @@ project_name: let-go
 before:
   hooks:
     - go mod tidy
+    - go generate ./pkg/rt/
     - go test -timeout 60s ./...
 
 builds:
@@ -21,6 +22,12 @@ builds:
     goarch:
       - amd64
       - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm
   # Plan 9 / 9front. Go's plan9 port supports 386, amd64, and arm (32-bit).
   # No arm64 target exists upstream.
   - id: plan9
@@ -37,7 +44,7 @@ builds:
       - arm
 
 archives:
-  - format: tar.gz
+  - formats: ["tar.gz"]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -51,7 +58,25 @@ changelog:
       - '^test:'
       - '^chore:'
 
-# brews:
-#   Disabled for now — branch protection blocks direct push,
-#   and PR mode needs a PAT. Formula is maintained manually
-#   in HomebrewFormula/let-go.rb
+homebrew_casks:
+  - name: let-go
+    ids:
+      - default
+    binaries:
+      - lg
+    directory: Casks
+    repository:
+      owner: nooga
+      name: let-go
+      token: "{{ .Env.GORELEASER_PAT }}"
+      branch: "goreleaser-cask-{{ .Version }}"
+      pull_request:
+        enabled: true
+        base:
+          branch: main
+    homepage: https://github.com/nooga/let-go
+    description: Clojure dialect implemented as a bytecode VM in Go
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/lg"] if OS.mac?

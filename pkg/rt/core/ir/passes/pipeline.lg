@@ -1,0 +1,85 @@
+;; The Lisp optimization-pass pipeline driver.
+;;
+;; `(optimize-fn f)` runs the five enabled Lisp passes in a sensible order:
+;;   1. constfold   — fold Const arithmetic, identities, canonicalize
+;;   2. cse         — per-block common-subexpression elimination [disabled]
+;;   3. constfold   — again; CSE may expose new fold opportunities
+;;   4. licm        — hoist loop-invariant Insts to pre-headers [disabled]
+;;   5. constfold   — again; LICM may rearrange uses such that more
+;;                    folds become possible
+;;   6. dce         — drop pure Insts with zero uses (cleanup)
+;;
+;; Build (Phase 3) now emits BlockArg params proactively for all cross-block
+;; captures, eliminating the need for post-pass threading.
+;;
+;; Returns f (same object — passes mutate in place).
+
+(ns ir.passes.pipeline
+  (:require ir.build
+            [ir.passes.constfold :refer [constfold]]
+            [ir.passes.cse :refer [cse]]
+            [ir.passes.dce :refer [dce]]
+            [ir.passes.licm :refer [licm]]
+            [ir.validate :refer [validate-fn!]]
+            [ir.lower :as lower]))
+
+(defn optimize-fn [f]
+  (validate-fn! f "build")
+  (constfold f)           (validate-fn! f "constfold-1")
+  ;; CSE disabled: can produce cross-block refs that need direct threading
+  ;; through Params + BranchTarget.Args (Phase 3 now does this proactively).
+  ;; LICM is now re-enabled with full threadHoistedThroughHeader ported.
+  ;; (cse f)              (validate-fn! f "cse")
+  (constfold f)           (validate-fn! f "constfold-2")
+  (licm f)                (validate-fn! f "licm")
+  (constfold f)           (validate-fn! f "constfold-3")
+  (dce f)                 (validate-fn! f "dce")
+  f)
+
+;; --- end-to-end: form → IR → optimized IR → bytecode -----------------
+
+;; Heads build.lg dispatches on natively. expand-all leaves these alone
+;; so user-level macros (cond, when, and, or, ->) get expanded while
+;; build-known shapes reach build-form as the special forms they are.
+(def ^:private build-known-heads
+  #{'let 'if 'do 'quote 'loop 'recur
+    '+ '- '* '< '<= '> '>= '=})
+
+(defn- expand-fully
+  "Macroexpand to fixed point — let-go's `macroexpand` is one-level
+   (Clojure's `macroexpand-1`); loop until the head stops changing."
+  [form]
+  (loop [f form]
+    (let [e (macroexpand f)]
+      (if (= e f) e (recur e)))))
+
+(defn- expand-all [form]
+  ;; seq? not list? — macros frequently return Cons cells (from `cons`)
+  ;; which aren't list? but ARE seq?. Build-form will likewise need to
+  ;; accept seq? not list? if we want to feed it Cons-shaped output.
+  (cond
+    (seq? form)
+      (let [head (first form)]
+        (if (contains? build-known-heads head)
+          (apply list head (doall (map expand-all (rest form))))
+          (let [expanded (expand-fully form)]
+            (if (seq? expanded)
+              (if (= 'quote (first expanded))
+                expanded
+                (apply list (first expanded)
+                       (doall (map expand-all (rest expanded)))))
+              (expand-all expanded)))))
+    :else form))
+
+(defn compile-form [form]
+  "Drives (defn NAME [args] body...) through expand → build → optimize → lower.
+   Body forms are macroexpanded; defn and the args vector are passed through
+   intact so build-fn's structural reader still works."
+  (let [name-sym   (nth form 1)
+        args-vec   (nth form 2)
+        body-forms (map expand-all (drop 3 form))
+        expanded   (apply list 'defn name-sym args-vec body-forms)]
+    (-> expanded
+        ir.build/build-fn
+        optimize-fn
+        lower/lower)))

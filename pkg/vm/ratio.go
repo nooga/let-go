@@ -8,12 +8,12 @@ import (
 
 type theRatioType struct{}
 
-func (t *theRatioType) String() string     { return t.Name() }
-func (t *theRatioType) Type() ValueType    { return TypeType }
-func (t *theRatioType) Unbox() interface{} { return reflect.TypeOf(t) }
-func (t *theRatioType) Name() string       { return "let-go.lang.Ratio" }
+func (t *theRatioType) String() string  { return t.Name() }
+func (t *theRatioType) Type() ValueType { return TypeType }
+func (t *theRatioType) Unbox() any      { return reflect.TypeFor[*theRatioType]() }
+func (t *theRatioType) Name() string    { return "let-go.lang.Ratio" }
 
-func (t *theRatioType) Box(bare interface{}) (Value, error) {
+func (t *theRatioType) Box(bare any) (Value, error) {
 	switch v := bare.(type) {
 	case *big.Rat:
 		return NewRatio(v), nil
@@ -38,8 +38,8 @@ func NewRatioFromInts(num, den int64) *Ratio {
 
 func (r *Ratio) Val() *big.Rat { return r.val }
 
-func (r *Ratio) Type() ValueType    { return RatioType }
-func (r *Ratio) Unbox() interface{} { return r.val }
+func (r *Ratio) Type() ValueType { return RatioType }
+func (r *Ratio) Unbox() any      { return r.val }
 
 func (r *Ratio) String() string {
 	return r.val.RatString()

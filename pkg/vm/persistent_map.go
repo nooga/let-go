@@ -22,12 +22,12 @@ const (
 
 type thePersistentMapType struct{}
 
-func (t *thePersistentMapType) String() string     { return t.Name() }
-func (t *thePersistentMapType) Type() ValueType    { return TypeType }
-func (t *thePersistentMapType) Unbox() interface{} { return reflect.TypeOf(t) }
-func (t *thePersistentMapType) Name() string       { return "let-go.lang.PersistentHashMap" }
+func (t *thePersistentMapType) String() string  { return t.Name() }
+func (t *thePersistentMapType) Type() ValueType { return TypeType }
+func (t *thePersistentMapType) Unbox() any      { return reflect.TypeFor[*thePersistentMapType]() }
+func (t *thePersistentMapType) Name() string    { return "let-go.lang.PersistentHashMap" }
 
-func (t *thePersistentMapType) Box(bare interface{}) (Value, error) {
+func (t *thePersistentMapType) Box(bare any) (Value, error) {
 	if m, ok := bare.(*PersistentMap); ok {
 		return m, nil
 	}
@@ -53,8 +53,8 @@ type MapEntry struct {
 	Value Value
 }
 
-func (e MapEntry) Type() ValueType    { return ArrayVectorType }
-func (e MapEntry) Unbox() interface{} { return []Value{e.Key, e.Value} }
+func (e MapEntry) Type() ValueType { return ArrayVectorType }
+func (e MapEntry) Unbox() any      { return []Value{e.Key, e.Value} }
 func (e MapEntry) String() string {
 	return "[" + e.Key.String() + " " + e.Value.String() + "]"
 }
@@ -129,8 +129,8 @@ func hmapIndex(bitmap uint32, bit uint32) int {
 
 type hmapBitmapNode struct {
 	bitmap uint32
-	array  []interface{} // pairs: [key-or-nil, val-or-child, ...]
-	edit   *atomic.Bool  // non-nil for transient-owned nodes
+	array  []any        // pairs: [key-or-nil, val-or-child, ...]
+	edit   *atomic.Bool // non-nil for transient-owned nodes
 	// If array[2*i] == nil, then array[2*i+1] is an hmapNode child.
 	// If array[2*i] != nil, then array[2*i] is key and array[2*i+1] is value.
 }
@@ -194,7 +194,7 @@ func (n *hmapBitmapNode) assoc(shift uint, hash uint32, key Value, val Value, ad
 	// New entry — expand the array
 	*addedLeaf = true
 	nEntries := bits.OnesCount32(n.bitmap)
-	newArray := make([]interface{}, 2*(nEntries+1))
+	newArray := make([]any, 2*(nEntries+1))
 	// Copy entries before idx
 	copy(newArray, n.array[:2*idx])
 	// Insert new entry
@@ -249,7 +249,7 @@ func (n *hmapBitmapNode) dissoc(shift uint, hash uint32, key Value) hmapNode {
 func (n *hmapBitmapNode) nodeSeq() []MapEntry {
 	var entries []MapEntry
 	nSlots := len(n.array) / 2
-	for i := 0; i < nSlots; i++ {
+	for i := range nSlots {
 		keyOrNil := n.array[2*i]
 		valOrNode := n.array[2*i+1]
 		if keyOrNil != nil {
@@ -261,15 +261,15 @@ func (n *hmapBitmapNode) nodeSeq() []MapEntry {
 	return entries
 }
 
-func (n *hmapBitmapNode) cloneAndSet(i int, val interface{}) *hmapBitmapNode {
-	newArray := make([]interface{}, len(n.array))
+func (n *hmapBitmapNode) cloneAndSet(i int, val any) *hmapBitmapNode {
+	newArray := make([]any, len(n.array))
 	copy(newArray, n.array)
 	newArray[i] = val
 	return &hmapBitmapNode{bitmap: n.bitmap, array: newArray}
 }
 
-func (n *hmapBitmapNode) cloneAndSet2(i int, a interface{}, j int, b interface{}) *hmapBitmapNode {
-	newArray := make([]interface{}, len(n.array))
+func (n *hmapBitmapNode) cloneAndSet2(i int, a any, j int, b any) *hmapBitmapNode {
+	newArray := make([]any, len(n.array))
 	copy(newArray, n.array)
 	newArray[i] = a
 	newArray[j] = b
@@ -278,7 +278,7 @@ func (n *hmapBitmapNode) cloneAndSet2(i int, a interface{}, j int, b interface{}
 
 // editAndSet mutates in place if this node is owned by the given edit token,
 // otherwise clones and sets.
-func (n *hmapBitmapNode) editAndSet(edit *atomic.Bool, i int, val interface{}) *hmapBitmapNode {
+func (n *hmapBitmapNode) editAndSet(edit *atomic.Bool, i int, val any) *hmapBitmapNode {
 	if n.edit == edit {
 		n.array[i] = val
 		return n
@@ -286,7 +286,7 @@ func (n *hmapBitmapNode) editAndSet(edit *atomic.Bool, i int, val interface{}) *
 	return n.cloneAndSet(i, val)
 }
 
-func (n *hmapBitmapNode) editAndSet2(edit *atomic.Bool, i int, a interface{}, j int, b interface{}) *hmapBitmapNode {
+func (n *hmapBitmapNode) editAndSet2(edit *atomic.Bool, i int, a any, j int, b any) *hmapBitmapNode {
 	if n.edit == edit {
 		n.array[i] = a
 		n.array[j] = b
@@ -302,11 +302,8 @@ func (n *hmapBitmapNode) ensureEditable(edit *atomic.Bool) *hmapBitmapNode {
 	}
 	nEntries := bits.OnesCount32(n.bitmap)
 	// Allocate with room to grow (avoid frequent realloc during transient batch ops)
-	newLen := 2 * (nEntries + 1)
-	if newLen < len(n.array) {
-		newLen = len(n.array)
-	}
-	newArray := make([]interface{}, newLen)
+	newLen := max(2*(nEntries+1), len(n.array))
+	newArray := make([]any, newLen)
 	copy(newArray, n.array)
 	return &hmapBitmapNode{bitmap: n.bitmap, array: newArray[:len(n.array)], edit: edit}
 }
@@ -356,7 +353,7 @@ func (n *hmapBitmapNode) assocTransient(edit *atomic.Bool, shift uint, hash uint
 	nEntries := bits.OnesCount32(n.bitmap)
 	editable := n.ensureEditable(edit)
 	// Need to grow the array
-	newArray := make([]interface{}, 2*(nEntries+1))
+	newArray := make([]any, 2*(nEntries+1))
 	copy(newArray, editable.array[:2*idx])
 	newArray[2*idx] = key
 	newArray[2*idx+1] = val
@@ -367,7 +364,7 @@ func (n *hmapBitmapNode) assocTransient(edit *atomic.Bool, shift uint, hash uint
 }
 
 func (n *hmapBitmapNode) removePair(idx int) *hmapBitmapNode {
-	newArray := make([]interface{}, len(n.array)-2)
+	newArray := make([]any, len(n.array)-2)
 	copy(newArray, n.array[:2*idx])
 	copy(newArray[2*idx:], n.array[2*(idx+1):])
 	bit := uint32(1) << uint(n.indexToBit(idx))
@@ -383,7 +380,7 @@ func (n *hmapBitmapNode) removePair(idx int) *hmapBitmapNode {
 func (n *hmapBitmapNode) bitAtIndex(idx int) uint32 {
 	// Walk the bitmap to find the idx-th set bit
 	b := n.bitmap
-	for i := 0; i < idx; i++ {
+	for range idx {
 		b &= b - 1 // Clear lowest set bit
 	}
 	return b & (^b + 1) // Isolate lowest set bit
@@ -391,7 +388,7 @@ func (n *hmapBitmapNode) bitAtIndex(idx int) uint32 {
 
 func (n *hmapBitmapNode) indexToBit(idx int) int {
 	b := n.bitmap
-	for i := 0; i < idx; i++ {
+	for range idx {
 		b &= b - 1
 	}
 	return bits.TrailingZeros32(b)
@@ -404,7 +401,7 @@ func createNode(shift uint, hash1 uint32, key1 Value, val1 Value, hash2 uint32, 
 		return &hmapCollisionNode{
 			hash:  hash1,
 			count: 2,
-			array: []interface{}{key1, val1, key2, val2},
+			array: []any{key1, val1, key2, val2},
 		}
 	}
 	addedLeaf := false
@@ -417,7 +414,7 @@ func createNode(shift uint, hash1 uint32, key1 Value, val1 Value, hash2 uint32, 
 type hmapCollisionNode struct {
 	hash  uint32
 	count int
-	array []interface{} // pairs: [key0, val0, key1, val1, ...]
+	array []any // pairs: [key0, val0, key1, val1, ...]
 }
 
 func (n *hmapCollisionNode) find(shift uint, hash uint32, key Value) (Value, bool) {
@@ -437,14 +434,14 @@ func (n *hmapCollisionNode) assoc(shift uint, hash uint32, key Value, val Value,
 			if valueEquiv(n.array[idx+1].(Value), val) {
 				return n
 			}
-			newArray := make([]interface{}, len(n.array))
+			newArray := make([]any, len(n.array))
 			copy(newArray, n.array)
 			newArray[idx+1] = val
 			return &hmapCollisionNode{hash: n.hash, count: n.count, array: newArray}
 		}
 		// New key in collision bucket
 		*addedLeaf = true
-		newArray := make([]interface{}, len(n.array)+2)
+		newArray := make([]any, len(n.array)+2)
 		copy(newArray, n.array)
 		newArray[len(n.array)] = key
 		newArray[len(n.array)+1] = val
@@ -454,7 +451,7 @@ func (n *hmapCollisionNode) assoc(shift uint, hash uint32, key Value, val Value,
 	*addedLeaf = true
 	newNode := &hmapBitmapNode{
 		bitmap: hmapBitpos(n.hash, shift),
-		array:  []interface{}{nil, n},
+		array:  []any{nil, n},
 	}
 	return newNode.assoc(shift, hash, key, val, addedLeaf)
 }
@@ -479,7 +476,7 @@ func (n *hmapCollisionNode) dissoc(shift uint, hash uint32, key Value) hmapNode 
 		return (&hmapBitmapNode{}).assoc(0, n.hash, remainKey, remainVal, &addedLeaf)
 	}
 	// Remove the pair at idx
-	newArray := make([]interface{}, len(n.array)-2)
+	newArray := make([]any, len(n.array)-2)
 	copy(newArray, n.array[:idx])
 	copy(newArray[idx:], n.array[idx+2:])
 	return &hmapCollisionNode{hash: n.hash, count: n.count - 1, array: newArray}
@@ -509,6 +506,7 @@ type PersistentMap struct {
 	count    int
 	root     hmapNode
 	meta     Value
+	order    []Value
 	_hash    uint32
 	_hasHash bool
 }
@@ -548,6 +546,21 @@ func NewPersistentMap(kvs []Value) *PersistentMap {
 	return m
 }
 
+// NewArrayMap creates a PersistentMap that preserves insertion order for seq.
+func NewArrayMap(kvs []Value) *PersistentMap {
+	if len(kvs) == 0 {
+		return EmptyPersistentMap
+	}
+	if len(kvs)%2 != 0 {
+		return EmptyPersistentMap
+	}
+	m := &PersistentMap{order: make([]Value, 0, len(kvs)/2)}
+	for i := 0; i < len(kvs); i += 2 {
+		m = m.Assoc(kvs[i], kvs[i+1]).(*PersistentMap)
+	}
+	return m
+}
+
 // --- Value interface ---
 
 // Hash implements Hashable. Cached after first computation.
@@ -576,8 +589,8 @@ func (m *PersistentMap) Hash() uint32 {
 	return m._hash
 }
 
-func (m *PersistentMap) Type() ValueType    { return MapType }
-func (m *PersistentMap) Unbox() interface{} { return m }
+func (m *PersistentMap) Type() ValueType { return MapType }
+func (m *PersistentMap) Unbox() any      { return m }
 
 func (m *PersistentMap) String() string {
 	b := &strings.Builder{}
@@ -602,6 +615,9 @@ func (m *PersistentMap) Count() Value  { return Int(m.count) }
 func (m *PersistentMap) RawCount() int { return m.count }
 
 func (m *PersistentMap) Empty() Collection {
+	if m.meta != nil {
+		return EmptyPersistentMap.WithMeta(m.meta).(*PersistentMap)
+	}
 	return EmptyPersistentMap
 }
 
@@ -656,7 +672,14 @@ func (m *PersistentMap) Assoc(key Value, val Value) Associative {
 	if addedLeaf {
 		newCount++
 	}
-	return &PersistentMap{count: newCount, root: newRoot, meta: m.meta}
+	var newOrder []Value
+	if m.order != nil {
+		newOrder = append([]Value(nil), m.order...)
+		if addedLeaf {
+			newOrder = append(newOrder, key)
+		}
+	}
+	return &PersistentMap{count: newCount, root: newRoot, meta: m.meta, order: newOrder}
 }
 
 func (m *PersistentMap) Dissoc(key Value) Associative {
@@ -669,9 +692,21 @@ func (m *PersistentMap) Dissoc(key Value) Associative {
 		return m
 	}
 	if newRoot == nil {
+		if m.order != nil {
+			return &PersistentMap{count: 0, root: nil, meta: m.meta, order: []Value{}}
+		}
 		return &PersistentMap{count: 0, root: nil, meta: m.meta}
 	}
-	return &PersistentMap{count: m.count - 1, root: newRoot, meta: m.meta}
+	var newOrder []Value
+	if m.order != nil {
+		newOrder = make([]Value, 0, len(m.order)-1)
+		for _, k := range m.order {
+			if !valueEquiv(k, key) {
+				newOrder = append(newOrder, k)
+			}
+		}
+	}
+	return &PersistentMap{count: m.count - 1, root: newRoot, meta: m.meta, order: newOrder}
 }
 
 // --- Lookup interface ---
@@ -734,6 +769,15 @@ func (m *PersistentMap) Seq() Seq {
 func (m *PersistentMap) entries() []Value {
 	if m.root == nil {
 		return nil
+	}
+	if m.order != nil {
+		result := make([]Value, 0, m.count)
+		for _, k := range m.order {
+			if v, ok := m.root.find(0, hashValue(k), k); ok {
+				result = append(result, MapEntry{Key: k, Value: v})
+			}
+		}
+		return result
 	}
 	mes := m.root.nodeSeq()
 	result := make([]Value, len(mes))

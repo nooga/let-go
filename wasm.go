@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,7 +52,7 @@ func main() {
 		n := rt.DefNSBare(nsName)
 		v := n.LookupLocal(vm.Symbol(name))
 		if v == nil {
-			return n.Def(name, vm.NIL)
+			return n.DefStub(name)
 		}
 		return v
 	}
@@ -111,8 +112,21 @@ const wasmHTMLTemplate = `<!doctype html>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script>
-// --- Cross-origin isolation via Service Worker ---
-if (!crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigator) {
+// --- Cross-origin isolation: prefer server headers, fall back to SW ---
+// When the dev/host server sends the COI headers itself (dev/serve.json
+// does this), crossOriginIsolated is already true and we don't need the
+// SW. Any leftover SW from a prior visit (e.g. earlier GitHub Pages load)
+// would intercept future fetches with stale content — unregister it now
+// so the headers path stays clean.
+if (crossOriginIsolated && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(()=>{});
+}
+// No isolation? Register the SW shim — but only once per tab. Without a
+// loop guard, a SW that fails to provide isolation (Safari rejects
+// credentialless, or activation races a tab close) reloads forever.
+if (!crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigator
+    && !sessionStorage.getItem('_lgCoiTried')) {
+  sessionStorage.setItem('_lgCoiTried', '1');
   navigator.serviceWorker.register('coi-serviceworker.js').then(() => location.reload()).catch(()=>{});
 }
 
@@ -330,8 +344,19 @@ addEventListener('fetch', e => {
   e.respondWith(fetch(e.request).then(r => {
     if (r.status === 0) return r;
     const h = new Headers(r.headers);
-    h.set('Cross-Origin-Embedder-Policy', 'credentialless');
-    h.set('Cross-Origin-Opener-Policy', 'same-origin');
+    // Pass server-set isolation headers through untouched. Overriding them
+    // (the previous behavior) broke require-corp setups on dev servers
+    // that already provide proper headers, by replacing them with the
+    // credentialless variant Safari rejects — yielding pages that look
+    // like they should be isolated but aren't.
+    if (!h.has('Cross-Origin-Embedder-Policy')) {
+      // require-corp is the broadest-compatible option: Safari, Firefox,
+      // and Chrome all accept it; credentialless is Chrome-only.
+      h.set('Cross-Origin-Embedder-Policy', 'require-corp');
+    }
+    if (!h.has('Cross-Origin-Opener-Policy')) {
+      h.set('Cross-Origin-Opener-Policy', 'same-origin');
+    }
     return new Response(r.body, {status: r.status, statusText: r.statusText, headers: h});
   }).catch(() => new Response(null, {status: 500})));
 });
@@ -354,9 +379,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	if len(nsRes.LoadedChunks) > 0 {
 		mainNS := ctx.CurrentNS().Name()
 		nsChunks := make(map[string]*vm.CodeChunk, len(nsRes.LoadedChunks)+1)
-		for k, v := range nsRes.LoadedChunks {
-			nsChunks[k] = v
-		}
+		maps.Copy(nsChunks, nsRes.LoadedChunks)
 		nsChunks[mainNS] = chunk
 		nsOrder := append(nsRes.LoadOrder, mainNS)
 		if err := bytecode.EncodeBundleOrdered(&lgbBuf, ctx.Consts(), nsChunks, nsOrder); err != nil {

@@ -27,3 +27,10 @@
 (deftest ns-name-function
   (testing "current namespace name"
     (is (some? *ns*))))
+
+(deftest intern-preserves-existing-root
+  (testing "two-arity intern returns existing var without clearing its root"
+    (let [v (intern 'test.namespace-test 'interned-value 42)
+          same-v (intern 'test.namespace-test 'interned-value)]
+      (is (= 42 (var-get v)))
+      (is (= 42 (var-get same-v))))))

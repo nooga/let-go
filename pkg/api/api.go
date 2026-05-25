@@ -19,10 +19,12 @@ func NewLetGo(ns string) (*LetGo, error) {
 	cp := vm.NewConsts()
 	nso := rt.NS(ns)
 	c := compiler.NewCompiler(cp, nso)
+	loader := resolver.NewNSResolver(c, []string{"."})
+	loader.DiscoverDepsEdn(".")
 	ret := &LetGo{
 		cp:     cp,
 		c:      c,
-		loader: resolver.NewNSResolver(c, []string{"."}),
+		loader: loader,
 	}
 	rt.SetNSLoader(ret.loader)
 	return ret, nil
@@ -32,7 +34,7 @@ func (l *LetGo) SetLoadPath(path []string) {
 	l.loader.SetPath(path)
 }
 
-func (l *LetGo) Def(name string, value interface{}) error {
+func (l *LetGo) Def(name string, value any) error {
 	val, err := vm.BoxValue(reflect.ValueOf(value))
 	if err != nil {
 		return err

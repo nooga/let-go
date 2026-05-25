@@ -10,14 +10,15 @@
 Greetings loafers! _(λ-gophers haha, get it?)_
 
 let-go is a Clojure dialect with a bytecode compiler and stack VM, written in Go.
-A single ~10MB binary, ~7ms cold start, no JVM. Roughly 95% Clojure-compatible
-on the [jank-lang test suite](https://github.com/jank-lang/clojure-test-suite).
+A single ~10.7MB binary, ~7ms cold start, no JVM. It passes the
+[jank-lang test suite](https://github.com/jank-lang/clojure-test-suite).
 
 I started this in 2021 as an elaborate joke: an excuse to write Clojure while
 pretending to write Go. It turned out useful. I use it for CLIs, scripts, and
 web servers, and I built [a daemonless container runtime](https://github.com/nooga/lgcr)
 on top of it. You can compile let-go programs to standalone binaries or
-self-contained WASM web pages. [It even runs on Plan 9](https://x.com/MGasperowicz/status/2052428420592599507?s=20).
+self-contained WASM web pages. [It even runs on Plan 9](https://x.com/MGasperowicz/status/2052428420592599507?s=20),
+and ReMarkable 2.
 
 It is not a drop-in replacement for Clojure JVM. It does not load JARs and
 does not aim to. Most idiomatic Clojure code runs unmodified, but a real
@@ -47,7 +48,7 @@ files are valid Clojure that runs unmodified. Apple M1 Pro.
 
 |                 | let-go     | babashka | joker | go-joker | gloat | clojure JVM |
 | --------------- | ---------- | -------- | ----- | -------- | ----- | ----------- |
-| **Binary size** | **10MB**   | 68MB     | 26MB  | 32MB     | 26MB  | 304MB (JDK) |
+| **Binary size** | **10.7MB** | 68MB     | 26MB  | 32MB     | 26MB  | 304MB (JDK) |
 | **Startup**     | **6.7ms**  | 18ms     | 12ms  | 13ms     | 16ms  | 363ms       |
 | **Idle memory** | **13.5MB** | 27MB     | 22MB  | 23MB     | 23MB  | 92MB        |
 
@@ -68,16 +69,14 @@ Full per-benchmark numbers and methodology:
 ## Compatibility
 
 Tested against [jank-lang/clojure-test-suite](https://github.com/jank-lang/clojure-test-suite):
-**4696 / 4921 assertions pass (95.4%)** across 217 files. Remaining gaps are
-mostly numeric edge cases (overflow detection on `+`/`-`/`*`/`inc`/`dec`,
-BigInt promotion at the Long boundary, BigDecimal) plus a handful of stub
-namespaces.
+**5621 / 5621 assertions pass** across 232 files through the `:clj` reader
+lens, with no known failures, compile skips, panic skips, or runtime skips.
 
 ### Standard namespaces
 
 | Namespace            | Status                                                                                                                                                                                        |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `clojure.core`       | macros, destructuring, lazy seqs, transducers, protocols, records, multimethods, atoms, regex, metadata, BigInt                                                                               |
+| `clojure.core`       | macros, destructuring, lazy seqs, transducers, protocols, records, `deftype`, `reify`, multimethods, hierarchies, atoms, regex, metadata, BigInt, BigDecimal                                   |
 | `clojure.string`     | full                                                                                                                                                                                          |
 | `clojure.set`        | full                                                                                                                                                                                          |
 | `clojure.walk`       | `prewalk`, `postwalk`, `keywordize-keys`, `stringify-keys`, `walk`                                                                                                                            |
@@ -117,17 +116,12 @@ for what's available.
 
 ### Not implemented
 
-- **Refs / STM** (atoms + channels cover practical concurrency)
-- **Agents** (use `go` blocks and channels)
-- **Hierarchies** (`derive`, `underive`, `ancestors`, `descendants`, `parents`): stubs only
-- **`with-precision`**: `BigDecimal` works (`M` literals, `bigdec`, exact arithmetic) but `with-precision` is a no-op
+- **STM coordination**: `ref`/`dosync`/`alter`/`commute` are atom-backed compatibility aliases, not coordinated STM
+- **Asynchronous agents**: `agent`/`send`/`send-off` are synchronous atom-backed compatibility aliases
 - **Chunked sequences**: lazy seqs are unchunked
-- **Custom tagged literal readers**: built-in `#uuid` and `#inst` work; `*data-readers*` / `*default-data-reader-fn*` are not implemented
-- **`deftype`** (use `defrecord`)
-- **`reify`** (protocols can only be extended to named types)
+- **Custom tagged literal readers**: built-in `#uuid` and `#inst` work; unknown tags read as their payload, and `*data-readers*` / `*default-data-reader-fn*` are not implemented
+- **Java-style `deftype` / `reify` method bodies and host interfaces**: protocol implementations work; JVM host methods do not
 - **Spec** (no `clojure.spec`)
-- **`alter-var-root`**
-- **Numeric overflow detection**: `+`/`-`/`*`/`inc`/`dec` wrap silently on int64 overflow; use `+'`/`-'`/`*'` for BigInt math
 - **`subseq` / `rsubseq`**: sorted collections work (`sorted-map`, `sorted-set`, `rseq`); range queries don't
 
 ### Behavioral differences
@@ -135,7 +129,8 @@ for what's available.
 - `concat*` (used internally by quasiquote) is eager; user-facing `concat` is lazy
 - `<!` / `<!!` are identical, same for `>!` / `>!!` (Go channels always block)
 - `go` blocks are real goroutines, not IOC state machines (cheaper, and they can call blocking ops directly)
-- No BigDecimal: numeric tower is `int64` + `float64` + `BigInt`
+- Numeric tower is pragmatic: `int64`, `float64`, `BigInt`, ratios, and `BigDecimal`, without the JVM's full primitive/class model
+- Base integer `+`/`-`/`*`/`inc`/`dec` throw on overflow; use `+'`/`-'`/`*'`/`inc'`/`dec'` for BigInt-promoting exact math
 - Regex is Go flavor (`re2`), not Java regex
 - `letfn` uses atoms internally for forward references
 
@@ -167,7 +162,7 @@ brew install let-go
 
 ### Download
 
-Prebuilt binaries for Linux, macOS, and Windows on amd64/arm64 in
+Prebuilt binaries for Linux, macOS, and Plan 9 in
 [Releases](https://github.com/nooga/let-go/releases).
 
 ### From source (Go 1.22+)
@@ -302,6 +297,27 @@ embedding examples (defs, structs, channels, function calls).
 ```bash
 go test ./... -count=1 -timeout 30s
 ```
+
+## Contributing
+
+### Git merge driver for `core_compiled.lgb` (one-time setup)
+
+`pkg/rt/core_compiled.lgb` is a binary bundle regenerated from the embedded
+`.lg` sources. Git cannot meaningfully merge this binary on rebase, so we ship
+a custom merge driver that regenerates from sources after the `.lg` files have
+been merged as text.
+
+After cloning the repo (or pulling for the first time after this driver was
+added), register it locally:
+
+```bash
+git config merge.lgb.name "Regenerate core_compiled.lgb from sources"
+git config merge.lgb.driver "scripts/git-merge-lgb.sh %O %A %B %L %P"
+```
+
+This is a one-time per-clone step. After registration, rebases that touch any
+embedded `.lg` source will regenerate the `.lgb` automatically — no more
+binary merge conflicts when stacking PRs that edit `core.lg` and friends.
 
 ---
 

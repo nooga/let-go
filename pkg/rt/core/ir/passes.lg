@@ -1,0 +1,54 @@
+;; Pass DSL for sem-ir.
+;;
+;; (defpass NAME DOC [INST-PARAM] BODY...) defines a pass as a
+;; function (NAME f) → f (the same Function, possibly mutated).
+;;
+;; Inside the body, two dynamic vars are bound:
+;;   *current-fn*   — the Function being processed
+;;   *current-inst* — the InstId currently visited
+;;   *current-zip*  — the zipper cursor at this position
+;;
+;; Helpers callable from a pass body:
+;;   (replace-refs! new-refs)  — rewrite operand refs of current Inst
+;;   (replace-aux! new-aux)    — rewrite Aux of current Inst
+;;   (remove!)                 — drop current Inst from its block
+
+(ns ir.passes
+  (:require [ir.zipper :as zip]))
+
+(def ^:dynamic *current-fn*   nil)
+(def ^:dynamic *current-inst* nil)
+(def ^:dynamic *current-zip*  nil)
+
+(defn replace-refs! [new-refs]
+  (ir/set-refs! *current-fn* *current-inst* new-refs))
+
+(defn replace-aux! [new-aux]
+  (ir/set-aux! *current-fn* *current-inst* new-aux))
+
+(defn remove! []
+  (ir/remove-inst! *current-fn*
+                   (zip/current-block *current-zip*)
+                   *current-inst*))
+
+(defmacro defpass [name doc bindings & body]
+  "Define an IR pass — a function (NAME f) → f.
+
+   Binding-vector takes exactly one symbol: the current InstId. Inside
+   the body, *current-fn* / *current-inst* / *current-zip* are bound
+   for the duration of each visit, so the helpers above work.
+
+   The macro emits fully-qualified `ir.zipper/*` references rather than
+   aliased ones — consumers don't need to (:require [ir.zipper :as zip])
+   themselves, only :require ir.passes."
+  (let [inst-sym (first bindings)]
+    `(defn ~name [f#]
+       (loop [z# (ir.zipper/ir-zipper f#)]
+         (when-not (ir.zipper/end? z#)
+           (binding [*current-fn*   f#
+                     *current-inst* (ir.zipper/node z#)
+                     *current-zip*  z#]
+             (let [~inst-sym *current-inst*]
+               ~@body))
+           (recur (ir.zipper/next z#))))
+       f#)))

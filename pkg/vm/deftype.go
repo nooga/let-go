@@ -28,13 +28,13 @@ func NewDType(name string, fields []Symbol) *DType {
 	return &DType{typeName: name, fields: fields, fieldIdx: idx}
 }
 
-func (t *DType) String() string     { return t.typeName }
-func (t *DType) Type() ValueType    { return TypeType }
-func (t *DType) Unbox() interface{} { return t }
-func (t *DType) Name() string       { return t.typeName }
-func (t *DType) Fields() []Symbol   { return t.fields }
+func (t *DType) String() string   { return t.typeName }
+func (t *DType) Type() ValueType  { return TypeType }
+func (t *DType) Unbox() any       { return t }
+func (t *DType) Name() string     { return t.typeName }
+func (t *DType) Fields() []Symbol { return t.fields }
 
-func (t *DType) Box(bare interface{}) (Value, error) {
+func (t *DType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 
@@ -60,8 +60,8 @@ func NewDTypeInstance(dt *DType, fields []Value) *DTypeInstance {
 	return &DTypeInstance{dtype: dt, fields: fields}
 }
 
-func (d *DTypeInstance) Type() ValueType    { return d.dtype }
-func (d *DTypeInstance) Unbox() interface{} { return d }
+func (d *DTypeInstance) Type() ValueType { return d.dtype }
+func (d *DTypeInstance) Unbox() any      { return d }
 
 func (d *DTypeInstance) String() string {
 	b := &strings.Builder{}

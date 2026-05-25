@@ -1,0 +1,432 @@
+;; Generate pkg/rt/ir_bridge_generated.go — Lisp/Go bridge primitives
+;; for IR types. See docs/superpowers/specs/2026-05-22-defgostruct.md.
+;;
+;; Run with: lg -source-paths examples/go-gen examples/go-gen/ir_bridge.lg
+;;
+;; Each struct is declared via defgostruct. Two emission paths:
+;;
+;;   :fields  — simple typed field getters (one Self arg, return field)
+;;   :extras  — typed primitives with prelude-generated arg unboxing
+;;              and a hand-written Go body
+;;
+;; The prelude unboxes each arg into argN by type. The body uses arg0,
+;; arg1, ... and is responsible for returning (return vm.NIL, nil) or
+;; whatever shape is needed.
+
+;; --- registry -----------------------------------------------------------
+
+(def *gostructs* (atom []))
+
+;; --- naming helpers -----------------------------------------------------
+
+(defn kebab->pascal [s]
+  (apply str
+    (map (fn [chunk]
+           (if (zero? (count chunk))
+             ""
+             (str (upper-case (subs chunk 0 1)) (subs chunk 1))))
+         (split s "-"))))
+
+(defn lisp-name-of [field]
+  (let [base (str (:lisp field))
+        bool? (= (:type field) :Bool)]
+    (if bool? (str base "?") base)))
+
+(defn go-name-of [field]
+  (or (:go field) (kebab->pascal (str (:lisp field)))))
+
+(defn go-var-name [spec name-str]
+  (str (:short-name spec) "_"
+       (str-replace (str-replace (str-replace name-str "?" "") "!" "_bang") "-" "_")
+       "_Fn"))
+
+(defn full-lisp-name [spec local-name]
+  (str (:ns spec) "/" (:short-name spec) "-" local-name))
+
+;; --- return wrapping (for :fields) --------------------------------------
+
+(defn return-wrap [type-kw expr]
+  (case type-kw
+    :String  (str "vm.String(" expr ")")
+    :Int     (str "vm.MakeInt(" expr ")")
+    :Bool    (str "vm.Boolean(" expr ")")
+    :BlockID (str "vm.MakeInt(int(" expr "))")
+    :InstId  (str "vm.MakeInt(int(" expr "))")
+    (throw (str "return-wrap: unknown type " type-kw))))
+
+;; --- emit a field getter ------------------------------------------------
+
+(defn emit-getter [spec field]
+  (let [lname     (full-lisp-name spec (lisp-name-of field))
+        ;; In-namespace local name (sans "ir/" prefix).
+        local     (str (:short-name spec) "-" (lisp-name-of field))
+        gvar      (go-var-name spec (lisp-name-of field))
+        body      (return-wrap (:type field) (str "arg0." (go-name-of field)))]
+    (str
+      "\t" gvar ", _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {\n"
+      "\t\tif len(vs) != 1 {\n"
+      "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": expected (self), got %d args\", len(vs))\n"
+      "\t\t}\n"
+      "\t\targ0, err := " (:unbox-helper spec) "(vs[0])\n"
+      "\t\tif err != nil {\n"
+      "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": %v\", err)\n"
+      "\t\t}\n"
+      "\t\treturn " body ", nil\n"
+      "\t})\n"
+      "\tns.Def(\"" local "\", " gvar ")\n")))
+
+;; --- arg unbox snippets for :extras -------------------------------------
+;;
+;; Each takes the lisp-name (for err msgs), unbox-helper (for Self), the
+;; arg index, and the target variable name. Returns Go code (one or
+;; more lines).
+
+(defn unbox-arg [lname unbox-helper idx type-kw]
+  (let [vsI (str "vs[" idx "]")
+        var (str "arg" idx)]
+    (case type-kw
+      :Self
+        (str "\t\t" var ", err := " unbox-helper "(" vsI ")\n"
+             "\t\tif err != nil {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": %v\", err)\n"
+             "\t\t}\n")
+      :Int
+        (str "\t\t" var "Int, ok" idx " := " vsI ".(vm.Int)\n"
+             "\t\tif !ok" idx " {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be Int, got %s\", " vsI ".Type().Name())\n"
+             "\t\t}\n"
+             "\t\t" var " := int(" var "Int)\n")
+      :BlockID
+        (str "\t\t" var "Int, ok" idx " := " vsI ".(vm.Int)\n"
+             "\t\tif !ok" idx " {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be Int, got %s\", " vsI ".Type().Name())\n"
+             "\t\t}\n"
+             "\t\t" var " := ir.BlockID(int(" var "Int))\n")
+      :InstId
+        (str "\t\t" var "Int, ok" idx " := " vsI ".(vm.Int)\n"
+             "\t\tif !ok" idx " {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be Int, got %s\", " vsI ".Type().Name())\n"
+             "\t\t}\n"
+             "\t\t" var " := ir.InstId(int(" var "Int))\n")
+      :String
+        (str "\t\t" var "Str, ok" idx " := " vsI ".(vm.String)\n"
+             "\t\tif !ok" idx " {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be String, got %s\", " vsI ".Type().Name())\n"
+             "\t\t}\n"
+             "\t\t" var " := string(" var "Str)\n")
+      :Bool
+        (str "\t\t" var " := vm.IsTruthy(" vsI ")\n")
+      :Value
+        (str "\t\t" var " := " vsI "\n")
+      :ValueOrNil
+        ;; Same as :Value but with explicit nil normalization (Aux-style)
+        (str "\t\t" var "Val := " vsI "\n"
+             "\t\tvar " var " interface{} = " var "Val\n"
+             "\t\tif " var "Val == vm.NIL { " var " = nil }\n")
+      :BoxedAuxOrNil
+        ;; Aux unwrapper: nil → nil; *Boxed → underlying Go value;
+        ;; else → the Lisp Value as-is. Lets Lisp pass either a boxed
+        ;; *BranchTarget/*CondTarget or a primitive Value (e.g. an Int
+        ;; constant for OpConst's Aux).
+        (str "\t\t" var "Val := " vsI "\n"
+             "\t\tvar " var " interface{}\n"
+             "\t\tif " var "Val == vm.NIL {\n"
+             "\t\t\t" var " = nil\n"
+             "\t\t} else if b, isBoxed := " var "Val.(*vm.Boxed); isBoxed {\n"
+             "\t\t\t" var " = b.Unbox()\n"
+             "\t\t} else {\n"
+             "\t\t\t" var " = " var "Val\n"
+             "\t\t}\n")
+      :BoxedBranchTarget
+        ;; Strict: must be a Boxed *ir.BranchTarget.
+        (str "\t\t" var "Boxed, ok" idx " := " vsI ".(*vm.Boxed)\n"
+             "\t\tif !ok" idx " {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be boxed *BranchTarget, got %s\", " vsI ".Type().Name())\n"
+             "\t\t}\n"
+             "\t\t" var ", ok" idx "Bt := " var "Boxed.Unbox().(*ir.BranchTarget)\n"
+             "\t\tif !ok" idx "Bt {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be *BranchTarget, got %T\", " var "Boxed.Unbox())\n"
+             "\t\t}\n")
+      :OpKw
+        (str "\t\t" var "Kw, ok" idx " := " vsI ".(vm.Keyword)\n"
+             "\t\tif !ok" idx " {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be Keyword, got %s\", " vsI ".Type().Name())\n"
+             "\t\t}\n"
+             "\t\t" var ", okOp" idx " := ir.OpByKeyword(string(" var "Kw))\n"
+             "\t\tif !okOp" idx " {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": unknown op %s\", string(" var "Kw))\n"
+             "\t\t}\n")
+      :BoxedChunk
+        ;; Strict: must be a Boxed *vm.CodeChunk.
+        (str "\t\t" var "Boxed, ok" idx " := " vsI ".(*vm.Boxed)\n"
+             "\t\tif !ok" idx " {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be boxed *CodeChunk, got %s\", " vsI ".Type().Name())\n"
+             "\t\t}\n"
+             "\t\t" var ", ok" idx "Ch := " var "Boxed.Unbox().(*vm.CodeChunk)\n"
+             "\t\tif !ok" idx "Ch {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be *CodeChunk, got %T\", " var "Boxed.Unbox())\n"
+             "\t\t}\n")
+      :InstIdVec
+        (str "\t\t" var "Vec, ok" idx " := " vsI ".(vm.ArrayVector)\n"
+             "\t\tif !ok" idx " {\n"
+             "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " must be Vector, got %s\", " vsI ".Type().Name())\n"
+             "\t\t}\n"
+             "\t\t" var " := make([]ir.InstId, 0, len(" var "Vec))\n"
+             "\t\tfor _, r := range " var "Vec {\n"
+             "\t\t\tri, okR := r.(vm.Int)\n"
+             "\t\t\tif !okR {\n"
+             "\t\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": arg " idx " entries must be Int, got %s\", r.Type().Name())\n"
+             "\t\t\t}\n"
+             "\t\t\t" var " = append(" var ", ir.InstId(int(ri)))\n"
+             "\t\t}\n")
+      (throw (str "unbox-arg: unknown type " type-kw)))))
+
+;; --- emit a :extras entry -----------------------------------------------
+
+(defn emit-extra [spec extra]
+  (let [;; :lisp-name overrides the auto-prefix; bare :name uses
+        ;; "<ns>/<short-name>-<name>". The override lets us match
+        ;; existing plan-intended names (e.g. ir/op vs ir/fn-op).
+        lname  (if (:lisp-name extra)
+                 (:lisp-name extra)
+                 (full-lisp-name spec (:name extra)))
+        ;; In-namespace local name = lname minus the "<ns>/" prefix.
+        local  (let [prefix (str (:ns spec) "/")]
+                 (if (= prefix (subs lname 0 (count prefix)))
+                   (subs lname (count prefix))
+                   lname))
+        gvar   (go-var-name spec (:name extra))
+        nargs  (count (:args extra))
+        arg-sig (apply str (interpose " " (map name (:args extra))))
+        prelude (apply str
+                  (map-indexed
+                    (fn [i t] (unbox-arg lname (:unbox-helper spec) i t))
+                    (:args extra)))]
+    (str
+      "\t" gvar ", _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {\n"
+      "\t\tif len(vs) != " nargs " {\n"
+      "\t\t\treturn vm.NIL, fmt.Errorf(\"" lname ": expected (" arg-sig "), got %d args\", len(vs))\n"
+      "\t\t}\n"
+      prelude
+      "\t\t" (:body extra) "\n"
+      "\t})\n"
+      "\tns.Def(\"" local "\", " gvar ")\n")))
+
+;; --- emit one struct's primitives ---------------------------------------
+
+(defn emit-struct [spec]
+  (str
+    "\n\t// " (:type spec) " primitives\n"
+    (apply str (map (fn [f] (emit-getter spec f)) (:fields spec)))
+    (apply str (map (fn [e] (emit-extra spec e)) (:extras spec)))))
+
+;; --- emit the install function -----------------------------------------
+;;
+;; All specs in a single generator file share one target namespace
+;; (taken from the first spec's :ns). The generated installer creates
+;; that namespace, registers every primitive with its bare local name,
+;; and registers the namespace globally so namespaced Lisp refs like
+;; `(ir/new-fn ...)` resolve.
+
+(defn emit-install-fn [specs]
+  (let [ns-name (:ns (first specs))]
+    ;; Sanity: every spec must target the same namespace.
+    (doseq [s specs]
+      (when (not= (:ns s) ns-name)
+        (throw (str "emit-install-fn: specs target multiple namespaces "
+                    "(" ns-name " and " (:ns s) "). "
+                    "Split into separate generator files."))))
+    (str
+      "// installIRBridgeBuiltins creates the `" ns-name "` namespace and registers\n"
+      "// the generated bridge primitives in it. Called from installLangNS\n"
+      "// in lang.go.\n"
+      "func installIRBridgeBuiltins() {\n"
+      "\tns := vm.NewNamespace(\"" ns-name "\")\n"
+      (apply str (map emit-struct specs))
+      "\tRegisterNS(ns)\n"
+      "}\n")))
+
+;; --- the macro ---------------------------------------------------------
+
+(defmacro defgostruct
+  [type-sym & opts]
+  (let [opt-map (apply hash-map opts)
+        fields  (mapv (fn [f]
+                        {:lisp (name (first f))
+                         :type (keyword (str (nth f 1)))
+                         :go   (when (> (count f) 2) (nth f 2))})
+                      (:fields opt-map))
+        extras  (mapv (fn [e]
+                        {:name      (str (:name e))
+                         :lisp-name (:lisp-name e)
+                         :args      (mapv (fn [t] (keyword (str t))) (:args e))
+                         :body      (:body e)})
+                      (:extras opt-map))
+        spec    {:type         (str type-sym)
+                 :ns           (:ns opt-map)
+                 :short-name   (:short-name opt-map)
+                 :unbox-helper (:unbox-helper opt-map)
+                 :fields       fields
+                 :extras       extras}]
+    `(swap! *gostructs* conj ~spec)))
+
+;; --- ir.Function declaration -------------------------------------------
+;;
+;; Phase F: IR data lives in Lisp atoms (pkg/rt/core/ir/data.lg +
+;; data_generated.lg). The bridge for ir.Function shrinks to the
+;; op-metadata queries — they're keyed by op-keyword and don't touch
+;; any Function value, so they remain on the Go side where the op
+;; table lives. All field accessors and structural mutators were
+;; removed; their Lisp replacements live under (ir/op nid f),
+;; (ir/refs nid f), (ir/new-fn ...), etc.
+
+(defgostruct ir.Function
+  :ns           "ir"
+  :short-name   "fn"
+  :unbox-helper "irFunctionFromBoxed"
+  :fields []
+  :extras
+    [;; --- op-table queries (Phase F: only Function-attached bridges) ---
+     {:name "op-terminator?" :lisp-name "ir/op-terminator?"
+      :args [OpKw]
+      :body "return vm.Boolean(arg0.IsTerminator()), nil"}
+
+     {:name "op-pure?" :lisp-name "ir/op-pure?"
+      :args [OpKw]
+      :body "return vm.Boolean(arg0.IsPure()), nil"}
+
+     {:name "op-cheap-load?" :lisp-name "ir/op-cheap-load?"
+      :args [OpKw]
+      :body "return vm.Boolean(ir.IsCheapMaterializeOp(arg0)), nil"}
+
+     {:name "op-stack-out" :lisp-name "ir/op-stack-out"
+      :args [OpKw]
+      :body "return vm.MakeInt(arg0.StackOut()), nil"}])
+
+;; --- vm.CodeChunk declaration ------------------------------------------
+;;
+;; Chunk-emission primitives used by the Lisp Lower pass. The chunk is
+;; mutable state; primitives take a boxed *vm.CodeChunk plus the bytecode
+;; bits to emit.
+
+(defgostruct vm.CodeChunk
+  :ns           "ir"
+  :short-name   "chunk"
+  :unbox-helper "chunkFromBoxed"
+  :fields []
+  :extras
+    [;; --- VM-substrate constructors (no struct receiver) ----------
+     ;; Phase F: IR data lives in Lisp; only the VM-side substrate
+     ;; (Consts, SourceInfo, CodeChunk) is constructed via the bridge.
+
+     ;; Allocate a new vm.Consts pool. Lisp Function records hold
+     ;; one of these for source-const interning.
+     {:name "new-consts" :lisp-name "ir/new-consts"
+      :args []
+      :body "return vm.NewBoxed(vm.NewConsts()), nil"}
+
+     ;; Build a new chunk against an existing boxed *vm.Consts.
+     ;; Phase F: IR data lives in Lisp, so chunks are constructed
+     ;; against a Lisp-held *vm.Consts (extracted via ir/fn-consts).
+     {:name "new-chunk" :lisp-name "ir/new-chunk"
+      :args [BoxedAuxOrNil]
+      :body "consts, ok := arg0.(*vm.Consts)
+             if !ok { return vm.NIL, fmt.Errorf(\"ir/new-chunk: arg 0 must be boxed *vm.Consts, got %T\", arg0) }
+             return vm.NewBoxed(vm.NewCodeChunk(consts)), nil"}
+
+     ;; Construct a vm.SourceInfo from its fields. Used by build.lg
+     ;; when attaching source spans to Insts; the boxed result is
+     ;; stored in the Inst's :source-infos vector. The bridge takes
+     ;; five Int args (file is interned separately via Consts).
+     {:name "new-source-info" :lisp-name "ir/new-source-info"
+      :args [String Int Int Int Int]
+      :body "return vm.NewBoxed(vm.SourceInfo{File: arg0, Line: arg1, Column: arg2, EndLine: arg3, EndColumn: arg4}), nil"}
+
+     ;; Length / current IP.
+     {:name "chunk-length" :lisp-name "ir/chunk-length"
+      :args [Self]
+      :body "return vm.MakeInt(arg0.Length()), nil"}
+
+     ;; Emit a 1-word instruction: opcode | (sp<<16). Op is given as an
+     ;; IR op keyword (e.g. :return), mapped via IROpToBytecode.
+     {:name "chunk-emit" :lisp-name "ir/chunk-emit"
+      :args [Self OpKw Int]
+      :body "arg0.Append(ir.IROpToBytecode(arg1) | int32(arg2<<16))
+             return vm.NIL, nil"}
+
+     ;; Same as chunk-emit but appends an extra 32-bit arg word.
+     {:name "chunk-emit-with-arg" :lisp-name "ir/chunk-emit-with-arg"
+      :args [Self OpKw Int Int]
+      :body "arg0.Append(ir.IROpToBytecode(arg1) | int32(arg2<<16))
+             arg0.Append32(arg3)
+             return vm.NIL, nil"}
+
+     ;; Emit opcode + placeholder (0) arg; returns the arg slot's IP
+     ;; so the caller can patch it later when the branch target IP is
+     ;; known.
+     {:name "chunk-emit-placeholder" :lisp-name "ir/chunk-emit-placeholder"
+      :args [Self OpKw Int]
+      :body "arg0.Append(ir.IROpToBytecode(arg1) | int32(arg2<<16))
+             argIP := arg0.Length()
+             arg0.Append32(0)
+             return vm.MakeInt(argIP), nil"}
+
+     ;; Emit OP_DUP_NTH — bring stack[sp-1-nth] to the top. Used by
+     ;; materialize for multi-use defs (not an IR op, pure bytecode).
+     {:name "chunk-emit-dup-nth" :lisp-name "ir/chunk-emit-dup-nth"
+      :args [Self Int Int]
+      :body "arg0.Append(vm.OP_DUP_NTH | int32(arg1<<16))
+             arg0.Append32(arg2)
+             return vm.NIL, nil"}
+
+     ;; Emit the 4-word OP_RECUR sequence (for loop back-edges with
+     ;; stack cleanup). Returns the IP of the placeholder offset slot.
+     {:name "chunk-emit-recur" :lisp-name "ir/chunk-emit-recur"
+      :args [Self Int Int Int]
+      :body "arg0.Append(vm.OP_RECUR | int32(arg1<<16))
+             offIP := arg0.Length()
+             arg0.Append32(0)
+             arg0.Append32(arg2)
+             arg0.Append32(arg3)
+             return vm.MakeInt(offIP), nil"}
+
+     ;; Patch a previously-written 32-bit slot.
+     {:name "chunk-update!" :lisp-name "ir/chunk-update!"
+      :args [Self Int Int]
+      :body "arg0.Update32(arg1, int32(arg2))
+             return vm.NIL, nil"}
+
+     ;; Max-stack accessor + setter.
+     {:name "chunk-max-stack" :lisp-name "ir/chunk-max-stack"
+      :args [Self]
+      :body "return vm.MakeInt(arg0.MaxStack()), nil"}
+
+     {:name "chunk-set-max-stack!" :lisp-name "ir/chunk-set-max-stack!"
+      :args [Self Int]
+      :body "arg0.SetMaxStack(arg1)
+             return vm.NIL, nil"}
+
+     ;; Intern a constant in the chunk's consts pool; returns the index.
+     {:name "chunk-intern-const" :lisp-name "ir/chunk-intern-const"
+      :args [Self Value]
+      :body "return vm.MakeInt(arg0.Consts().Intern(arg1)), nil"}
+
+     ;; Add a single boxed *vm.SourceInfo to the chunk's source map
+     ;; at the current IP. Lisp iterates an Inst's source-infos vector
+     ;; and calls this per entry (replacing the old chunk-forward-
+     ;; source-infos! which read from a Go *ir.Function).
+     {:name "chunk-add-source-info!" :lisp-name "ir/chunk-add-source-info!"
+      :args [Self BoxedAuxOrNil]
+      :body "si, ok := arg1.(vm.SourceInfo)
+             if !ok {
+               // Allow boxed pointer too — accept either value or pointer.
+               if siPtr, okp := arg1.(*vm.SourceInfo); okp { si = *siPtr } else {
+                 return vm.NIL, fmt.Errorf(\"ir/chunk-add-source-info!: arg 1 must be vm.SourceInfo, got %T\", arg1)
+               }
+             }
+             arg0.AddSourceInfo(si)
+             return vm.NIL, nil"}])
+
+;; --- driver -----------------------------------------------------------
+
+(println (emit-install-fn @*gostructs*))

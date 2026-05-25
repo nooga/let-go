@@ -1,0 +1,55 @@
+;; Fn-scoped IR zipper for sem-ir passes.
+;;
+;; The cursor walks Insts in block-order: all Insts of block 0
+;; (excluding terminator), then block 1, etc. Terminators are skipped —
+;; passes that need to touch terminators use ir/block-term directly.
+;;
+;; State is a map:
+;;   :fn        — the Function being walked
+;;   :blocks    — vector of BlockIDs (cached at zipper creation)
+;;   :block-idx — current block's index into :blocks
+;;   :inst-idx  — current Inst's index into the block's Insts list
+;;   :ended     — true once we've walked past the last Inst
+
+(ns ir.zipper)
+
+(declare advance-empty)
+
+(defn ir-zipper [f]
+  "Create a zipper over fn, positioned at the first Inst of the entry
+   block (or end-state if every block is empty)."
+  (let [blocks (ir/blocks f)]
+    (advance-empty {:fn f :blocks blocks :block-idx 0 :inst-idx 0 :ended false})))
+
+(defn end? [z] (get z :ended))
+
+(defn fn-of [z] (get z :fn))
+
+(defn current-block [z]
+  (when-not (end? z)
+    (nth (get z :blocks) (get z :block-idx))))
+
+(defn node [z]
+  "Return the InstId the cursor is currently at, or nil if ended."
+  (when-not (end? z)
+    (let [insts (ir/block-insts (current-block z) (get z :fn))]
+      (nth insts (get z :inst-idx)))))
+
+(defn- advance-empty [z]
+  "Skip past empty blocks until we find an Inst or run out."
+  (loop [z z]
+    (cond
+      (>= (get z :block-idx) (count (get z :blocks)))
+        (assoc z :ended true)
+      :else
+        (let [block (nth (get z :blocks) (get z :block-idx))
+              insts (ir/block-insts block (get z :fn))]
+          (if (>= (get z :inst-idx) (count insts))
+            (recur (assoc z :block-idx (inc (get z :block-idx)) :inst-idx 0))
+            z)))))
+
+(defn next [z]
+  "Advance the cursor by one Inst."
+  (if (end? z)
+    z
+    (advance-empty (assoc z :inst-idx (inc (get z :inst-idx))))))

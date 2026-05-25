@@ -1,0 +1,110 @@
+;; Text dump for IR Functions — Lisp port of pkg/ir/dump.go.
+;;
+;; Phase D of docs/superpowers/specs/2026-05-22-retire-pkg-ir.md.
+;; Format is byte-identical to the Go version so existing tests and
+;; tooling don't need to change.
+;;
+;; Example output:
+;;
+;;   fn fib(arity=1, variadic=false):
+;;     entry b0(v0: ?):    ; preds: b3
+;;       v1 = LoadVar ; #'<=
+;;       v2 = Const ; 1
+;;       v3 = Call v1 v0 v2
+;;       BranchIf v3 -> b2() : b1()
+;;
+;;     b1():
+;;       v4 = ...
+;;       Return v4
+
+(ns ir.dump
+  (:require [string :as str]))
+
+(def terminator-ops #{:tail-call :return :branch :branch-if})
+
+(defn op-display-name [op-kw]
+  "Convert an ir op keyword (e.g. :branch-if, :load-arg) to its
+   PascalCase display name (BranchIf, LoadArg). Matches opTable's
+   name field in pkg/ir/op_generated.go."
+  (str/join "" (map str/capitalize (str/split (name op-kw) #"-"))))
+
+(defn type-display [t]
+  "Map an ir/type-of keyword to its dump-format string. :unknown → ?."
+  (case t
+    :unknown "?"
+    :int     "int"
+    :float   "float"
+    :bool    "bool"
+    :nil     "nil"
+    :string  "string"
+    :any     "any"
+    "??"))
+
+(defn- format-args [args]
+  (str/join ", " (map (fn [a] (str "v" a)) args)))
+
+(defn- format-target [bt]
+  (str "b" (ir/branch-target-target bt)
+       "(" (format-args (ir/branch-target-args bt)) ")"))
+
+(defn- terminator-targets-str [op aux]
+  (cond
+    (= op :branch)
+      (str " -> " (format-target aux))
+    (= op :branch-if)
+      (str " -> " (format-target (ir/cond-target-true aux))
+           " : "  (format-target (ir/cond-target-false aux)))
+    :else ""))
+
+(defn- format-refs [refs]
+  (str/join "" (map (fn [r] (str " v" r)) refs)))
+
+(defn- write-node [f id]
+  (let [op   (ir/op id f)
+        refs (ir/refs id f)
+        aux  (ir/aux id f)]
+    (if (contains? terminator-ops op)
+      ;; Terminator: "    OpName v0 v1 -> bT(...)"
+      (str "    " (op-display-name op)
+           (format-refs refs)
+           (terminator-targets-str op aux)
+           "\n")
+      ;; Value: "    vID = OpName v0 v1 ; AUX : TYPE"
+      (let [t (ir/type-of id f)]
+        (str "    v" id " = " (op-display-name op)
+             (format-refs refs)
+             (if (not (nil? aux)) (str " ; " aux) "")
+             (if (not= t :unknown) (str " : " (type-display t)) "")
+             "\n")))))
+
+(defn- write-block [f bid]
+  (let [params (ir/block-params bid f)
+        preds  (ir/block-preds bid f)
+        insts  (ir/block-insts bid f)
+        term   (ir/block-term bid f)
+        entry? (= bid (ir/fn-entry f))
+        header (str "  " (if entry? "entry " "")
+                    "b" bid "("
+                    (str/join ", "
+                              (map (fn [p] (str "v" p ": " (type-display (ir/type-of p f))))
+                                   params))
+                    "):"
+                    (if (seq preds)
+                      (str "    ; preds: " (str/join ", " (map (fn [p] (str "b" p)) preds)))
+                      "")
+                    "\n")
+        body   (str/join "" (map (fn [id] (write-node f id)) insts))
+        ;; The Go version emits the terminator if Term != 0 OR the block has any body insts.
+        ;; Term defaults to 0; blocks without a real terminator skip it.
+        term-line (if (or (not= term 0) (seq insts))
+                    (write-node f term)
+                    "")]
+    (str header body term-line "\n")))
+
+(defn dump [f]
+  "Return a human-readable text dump of Function f. Format matches
+   pkg/ir/dump.go byte-for-byte (Phase D retirement contract)."
+  (str "fn " (ir/fn-name f)
+       "(arity=" (ir/fn-arity f)
+       ", variadic=" (ir/fn-variadic? f) "):\n"
+       (str/join "" (map (fn [bid] (write-block f bid)) (ir/blocks f)))))

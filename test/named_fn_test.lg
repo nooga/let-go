@@ -1,0 +1,28 @@
+(ns test.named-fn-test
+  (:require [test :refer :all]))
+
+(deftest named-fn-recursion
+  (testing "named anonymous fns can call themselves"
+    (is (= :done ((fn step [n]
+                    (if (= n 0)
+                      :done
+                      (step (- n 1))))
+                  5)))))
+
+(deftest named-fn-lazy-self-reference
+  (testing "named fns work when recursive calls happen during lazy realization"
+    (let [calls (atom 0)
+          seq-fn (fn s []
+                   (lazy-seq
+                     (swap! calls inc)
+                     (cons 1 (s))))]
+      (is (= 1 (first (seq-fn))))
+      (is (= 1 @calls)))))
+
+(deftest named-fn-multi-arity
+  (testing "named fns preserve multi-arity dispatch"
+    (is (= 6 ((fn sum
+                ([] 0)
+                ([x] x)
+                ([x y] (+ x (sum y))))
+              1 5)))))

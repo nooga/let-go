@@ -14,13 +14,13 @@ type theIntType struct {
 	zero Int
 }
 
-func (t *theIntType) String() string     { return t.Name() }
-func (t *theIntType) Type() ValueType    { return TypeType }
-func (t *theIntType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theIntType) String() string  { return t.Name() }
+func (t *theIntType) Type() ValueType { return TypeType }
+func (t *theIntType) Unbox() any      { return reflect.TypeFor[*theIntType]() }
 
 func (t *theIntType) Name() string { return "let-go.lang.Int" }
 
-func (t *theIntType) Box(bare interface{}) (Value, error) {
+func (t *theIntType) Box(bare any) (Value, error) {
 	raw, ok := bare.(int)
 	if !ok {
 		return IntType.zero, NewTypeError(bare, "can't be boxed as", t)
@@ -41,7 +41,7 @@ func (l Int) Hash() uint32 { return hashUint64(uint64(l)) }
 func (l Int) Type() ValueType { return IntType }
 
 // Unbox implements Unbox
-func (l Int) Unbox() interface{} {
+func (l Int) Unbox() any {
 	return int(l)
 }
 

@@ -11,9 +11,9 @@ func NewReduced(v Value) *Reduced {
 	return &Reduced{value: v}
 }
 
-func (r *Reduced) Deref() Value        { return r.value }
-func (r *Reduced) Type() ValueType     { return ReducedType }
-func (r *Reduced) Unbox() interface{}  { return r.value }
+func (r *Reduced) Deref() Value    { return r.value }
+func (r *Reduced) Type() ValueType { return ReducedType }
+func (r *Reduced) Unbox() any      { return r.value }
 func (r *Reduced) String() string {
 	return fmt.Sprintf("#reduced<%s>", r.value.String())
 }
@@ -26,11 +26,11 @@ func IsReduced(v Value) bool {
 // ReducedType
 type theReducedType struct{}
 
-func (t *theReducedType) String() string     { return t.Name() }
-func (t *theReducedType) Type() ValueType    { return TypeType }
-func (t *theReducedType) Unbox() interface{} { return nil }
-func (t *theReducedType) Name() string       { return "let-go.lang.Reduced" }
-func (t *theReducedType) Box(bare interface{}) (Value, error) {
+func (t *theReducedType) String() string  { return t.Name() }
+func (t *theReducedType) Type() ValueType { return TypeType }
+func (t *theReducedType) Unbox() any      { return nil }
+func (t *theReducedType) Name() string    { return "let-go.lang.Reduced" }
+func (t *theReducedType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 

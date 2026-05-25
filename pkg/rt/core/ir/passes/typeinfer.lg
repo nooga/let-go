@@ -1,0 +1,79 @@
+;; Type-inference pass — populate Inst.Type for downstream optimizations.
+;;
+;; The pass walks Insts in block-order; for each Inst it derives a
+;; type from the op + operand types. Types are encoded as keywords:
+;;   :int :float :bool :nil :string :any :unknown
+;;
+;; Inference rules (MVP):
+;;   :const     — from Aux value's host type
+;;   :load-arg  — :unknown (caller may annotate later)
+;;   :load-var  — :unknown (vars are dynamically typed)
+;;   :add/:sub/:mul/:inc/:dec
+;;              — if all operands are :int  → :int
+;;                if any operand is :float  → :float
+;;                else                       → :unknown
+;;   :lt/:lte/:gt/:gte/:eq    — :bool
+;;   :block-arg              — :unknown (Phase 2 cleanup: take meet of pred args)
+;;   :branch/:branch-if/:return — :nil (no value; terminators)
+;;
+;; The pass is monotone — types only become MORE specific. Single
+;; linear walk handles non-loop cases; loops need a fixed-point pass
+;; for BlockArg refinement (filed as follow-up).
+
+(ns ir.passes.typeinfer
+  (:require [ir.passes :refer [defpass]]))
+
+;; --- Aux value classification -----------------------------------------
+
+(defn classify-const [aux]
+  "Pick a type keyword for a Const's Aux value."
+  (cond
+    (nil?     aux) :nil
+    (integer? aux) :int
+    (float?   aux) :float
+    (string?  aux) :string
+    ;; Bool literals — let-go uses :true/:false?? Actually true/false are
+    ;; primitives. Match by identity.
+    (= aux true)   :bool
+    (= aux false)  :bool
+    :else          :any))
+
+;; --- Op-based inference -----------------------------------------------
+
+(def numeric-ops #{:add :sub :mul :inc :dec})
+(def comparison-ops #{:lt :lte :gt :gte :eq})
+(def terminator-ops #{:branch :branch-if :return})
+
+(defn meet-numeric
+  "Join numeric operand types: if any is :float, result is :float;
+   if all are :int, result is :int; else :unknown."
+  [types]
+  (cond
+    (some #(= :float %) types) :float
+    (every? #(= :int %) types) :int
+    :else :unknown))
+
+(defn infer-one [inst f]
+  (let [op   (ir/op inst f)
+        refs (ir/refs inst f)]
+    (cond
+      (= op :const)            (classify-const (ir/aux inst f))
+      (= op :load-arg)         :unknown
+      (= op :load-var)         :unknown
+      (= op :block-arg)        :unknown
+      (contains? terminator-ops op) :nil
+      (contains? comparison-ops op) :bool
+      (contains? numeric-ops op)
+        (meet-numeric (map (fn [r] (ir/type-of r f)) refs))
+      :else :unknown)))
+
+;; --- driver -----------------------------------------------------------
+
+(defpass typeinfer
+  "Infer Inst.Type for every Inst in the function. Walks in block-order;
+   single pass (no fixed-point — block-arg refinement is a follow-up)."
+  [inst]
+  (let [f ir.passes/*current-fn*
+        t (infer-one inst f)]
+    (when-not (= t :unknown)
+      (ir/set-type! f inst t))))

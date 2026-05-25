@@ -69,7 +69,7 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	bodyBytes, err := io.ReadAll(request.Body)
 	if err != nil {
 		resp.WriteHeader(500)
-		_, err := resp.Write([]byte(fmt.Sprintf("%s", err)))
+		_, err := resp.Write(fmt.Appendf(nil, "%s", err))
 		if err != nil {
 			fmt.Println("HTTP Error while writing error 500", err)
 		}
@@ -104,7 +104,7 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	res, err := h.fn.Invoke([]vm.Value{req})
 	if err != nil {
 		resp.WriteHeader(500)
-		_, err := resp.Write([]byte(fmt.Sprintf("%s", err)))
+		_, err := resp.Write(fmt.Appendf(nil, "%s", err))
 		if err != nil {
 			fmt.Println("HTTP Error while writing error 500", err)
 		}
@@ -388,6 +388,9 @@ func installHttpNS() {
 	}
 
 	ns := vm.NewNamespace("http")
+
+	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
+	ns.Exclude("get")
 
 	ns.Def("serve", serve)
 	ns.Def("get", httpGet)

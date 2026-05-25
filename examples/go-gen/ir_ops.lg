@@ -1,0 +1,254 @@
+;; Generate pkg/ir/op_generated.go from a single op-spec.
+;;
+;; Run with: lg -source-paths examples/go-gen examples/go-gen/ir_ops.lg
+;;
+;; Architecture: the entire op catalog lives in `ops` below (a vector
+;; of vectors — deterministic iteration). From it we drive five
+;; artifacts in one Clojure pass, all expressed via gogen's gquote:
+;;
+;;   1. `type Op uint16`             -- (type-decl Op uint16)
+;;   2. const block with iota        -- (const-block ...)
+;;   3. `type opInfo struct {...}`   -- (type-decl opInfo (struct ...))
+;;   4. var opTable = [...]opInfo{}  -- (var-decl opTable nil
+;;                                       (composite-multi ...))
+;;   5. Op methods                   -- (method [(op Op)] Name ...)
+;;
+;; The wrapper script (scripts/generate-ir-ops.sh) prepends a
+;; "Code generated" header and `package ir` declaration, then writes
+;; the result to pkg/ir/op_generated.go.
+
+(require '[gogen :as g])
+
+;; --- the op catalog -------------------------------------------------
+;;
+;; One row per Op. Columns:
+;;   name        — bare name (no "Op" prefix); generates `Op<name>` and
+;;                  appears as the `name` field in opTable
+;;   stack-in    — number of operands popped (-1 = variadic)
+;;   stack-out   — number of results pushed (0 or 1)
+;;   pure?       — safe to CSE / fold / hoist
+;;   terminator? — ends a basic block
+;;   bytecode    — corresponding vm.OP_XXX symbol, or nil if none
+;;   cheap?      — true for ops materialize re-emits on demand
+;;                  (Const/LoadArg/LoadVar/LoadClosed)
+;;   display     — string for opTable.name (usually = name; OpInvalid
+;;                  uses "INVALID" for diagnostic clarity)
+;;   comment     — trailing line comment on the const decl + opTable row
+;;
+;; ORDER IS LOAD-BEARING. The iota values are positional. Reordering
+;; breaks every file that references Op<X> constants.
+
+(def ops
+  ;;  name         stk-in stk-out  pure?  term?  bytecode           cheap?  display      comment
+  '[["Invalid"    0  0 false false nil                false "INVALID"    ""]
+
+    ;; --- Values ---
+    ["Const"      0  1 true  false OP_LOAD_CONST      true  "Const"      ".Aux = vm.Value (the constant; lowered as OP_LOAD_CONST with interned index)"]
+    ["LoadArg"    0  1 true  false OP_LOAD_ARG        true  "LoadArg"    ".Aux = int (arg index)"]
+    ["LoadVar"    0  1 false false OP_LOAD_VAR        true  "LoadVar"    ".Aux = *vm.Var; var roots are mutable"]
+    ["LoadClosed" 0  1 true  false OP_LOAD_CLOSEDOVER true  "LoadClosed" ".Aux = int (closed-over index)"]
+
+    ;; Block parameter — value flowing in from a predecessor's
+    ;; branch-with-args. No Refs; (block-id, param-index) is implicit
+    ;; via position in Block.Params.
+    ["BlockArg"   0  1 true  false nil                false "BlockArg"   "block parameter"]
+
+    ;; --- Side-effecting ---
+    ["SetVar"     1  1 false false nil                false "SetVar"     ".Refs[0] = value; .Aux = *vm.Var; pushes value back"]
+    ["Call"      -1  1 false false OP_INVOKE          false "Call"       ".Refs[0] = fn, .Refs[1:] = args; .Aux = arity int"]
+    ["TailCall"  -1  1 false true  OP_TAIL_CALL       false "TailCall"   "tail call ends a block"]
+
+    ;; --- Pure arithmetic / comparison ---
+    ["Add"        2  1 true  false OP_ADD             false "Add"        ""]
+    ["Sub"        2  1 true  false OP_SUB             false "Sub"        ""]
+    ["Mul"        2  1 true  false OP_MUL             false "Mul"        ""]
+    ["Lt"         2  1 true  false OP_LT              false "Lt"         ""]
+    ["Lte"        2  1 true  false OP_LTE             false "Lte"        ""]
+    ["Gt"         2  1 true  false OP_GT              false "Gt"         ""]
+    ["Gte"        2  1 true  false OP_GTE             false "Gte"        ""]
+    ["Eq"         2  1 true  false OP_EQ              false "Eq"         ""]
+    ["Inc"        1  1 true  false OP_INC             false "Inc"        ""]
+    ["Dec"        1  1 true  false OP_DEC             false "Dec"        ""]
+
+    ["Pop"        1  0 false false nil                false "Pop"        "discard top stack value; no result (OP_POP)"]
+
+    ;; --- Terminators ---
+    ["Return"     1  0 false true  OP_RETURN          false "Return"     ".Refs[0] = value"]
+    ["Branch"     0  0 false true  OP_JUMP            false "Branch"     "unconditional; .Aux = *BranchTarget"]
+    ["BranchIf"   1  0 false true  OP_BRANCH_FALSE    false "BranchIf"   ".Refs[0] = cond; .Aux = struct{True,False *BranchTarget}"]
+
+    ;; --- Closures ---
+    ["MakeClosure" 1  1 false false OP_MAKE_CLOSURE    false "MakeClosure" ".Refs[0] = *Func value (the func to wrap as a closure)"]
+    ["PushClosed"  2  1 false false OP_PUSH_CLOSEDOVER false "PushClosed"  ".Refs[0] = closure, .Refs[1] = value to attach"]])
+
+(g/check-spec ops)
+
+;; --- helpers --------------------------------------------------------
+
+(defn- op-const-name [row]
+  (symbol (str "Op" (nth row 0))))
+
+(defn- op-bytecode [row]
+  ;; Returns the bytecode symbol (e.g. OP_ADD) or nil.
+  (nth row 5))
+
+(defn- op-cheap? [row]
+  ;; Returns true if this op is cheap to re-materialize.
+  (nth row 6))
+
+(defn- has-bytecode? [row]
+  (some? (op-bytecode row)))
+
+;; --- emit pieces ----------------------------------------------------
+
+(defn emit-type-decl []
+  (g/gquote (doc "Op is the kind of an IR node."
+              (type-decl Op uint16))))
+
+(defn emit-const-block []
+  ;; const ( OpInvalid Op = iota; OpConst; ... )
+  ;;
+  ;; First row gets `Op = iota`, the rest are bare names with `_`
+  ;; placeholders (Go semantics: inherit type/value from prior row).
+  ;; Each row is a vector [name type-form value comment].
+  (let [rows (map-indexed
+               (fn [i row]
+                 (let [name    (op-const-name row)
+                       comment (nth row 8)]
+                   (if (= i 0)
+                     [name 'Op 'iota comment]
+                     [name '_ '_ comment])))
+               ops)]
+    (g/gquote (const-block ~@rows))))
+
+(defn emit-struct-decl []
+  (g/gquote
+    (doc "opInfo describes an Op's structural metadata."
+      (type-decl opInfo
+                 (struct [name       string ""]
+                         [stackIn    int    "-1 = variable (decoded from Aux/arity)"]
+                         [stackOut   int    "0 or 1"]
+                         [pure       bool   "safe to CSE, fold, hoist"]
+                         [terminator bool   "ends a basic block"])))))
+
+(defn emit-op-table []
+  ;; var opTable = [...]opInfo{
+  ;;     OpInvalid: {"INVALID", 0, 0, false, false},
+  ;;     ...
+  ;; }
+  (let [kvs (map
+              (fn [row]
+                (let [[_ stack-in stack-out pure? term? _bytecode _cheap? display _] row
+                      name (op-const-name row)]
+                  (g/gquote
+                    (kv ~name (composite nil
+                                ~display
+                                ~stack-in
+                                ~stack-out
+                                ~pure?
+                                ~term?)))))
+              ops)]
+    (g/gquote
+      (var-decl opTable
+                nil
+                (composite-multi (type "[...]opInfo")
+                  ~@kvs)))))
+
+(defn emit-methods []
+  ;; Methods on Op — accessors over opTable.
+  [(g/gquote
+     (doc "String returns the op's display name (or \"Op?\" for an unknown op)."
+       (method [(op Op)] String [] string
+         (if (< (cast int op) (call len opTable))
+             [(return (field (index opTable op) name))])
+         (return "Op?"))))
+   (g/gquote
+     (doc "IsTerminator reports whether op ends a basic block."
+       (method [(op Op)] IsTerminator [] bool
+         (if (< (cast int op) (call len opTable))
+             [(return (field (index opTable op) terminator))])
+         (return false))))
+   (g/gquote
+     (doc "IsPure reports whether op has no observable side effects."
+       (method [(op Op)] IsPure [] bool
+         (if (< (cast int op) (call len opTable))
+             [(return (field (index opTable op) pure))])
+         (return false))))
+   (g/gquote
+     (doc "StackOut returns the number of values op pushes (0 or 1)."
+       (method [(op Op)] StackOut [] int
+         (if (< (cast int op) (call len opTable))
+             [(return (field (index opTable op) stackOut))])
+         (return 0))))])
+
+;; --- switch builders ------------------------------------------------
+;;
+;; The gquote walker has no `switch` form, so we call gogen/switch-stmt
+;; and gogen/case-clause directly at runtime.
+
+(defn emit-cheap-fn []
+  ;; func isCheapMaterializeOp(op Op) bool { switch op { case ...: return true } return false }
+  (let [cheap-rows  (filter op-cheap? ops)
+        case-clause (gogen/case-clause
+                      (mapv (fn [row] (g/gquote ~(op-const-name row))) cheap-rows)
+                      [(g/gquote (return true))])
+        default-clause (gogen/case-clause nil [(g/gquote (return false))])
+        switch-stmt (gogen/switch-stmt nil (g/gquote op) [case-clause default-clause])]
+    (g/gquote
+      (func isCheapMaterializeOp [(op Op)] [bool]
+        ~switch-stmt))))
+
+(defn emit-ir-to-bytecode-fn []
+  ;; func irOpToBytecode(op Op) int32 { switch op { case OpAdd: return vm.OP_ADD ... } return vm.OP_NOOP }
+  (let [bc-rows (filter has-bytecode? ops)
+        case-clauses (mapv
+                       (fn [row]
+                         (gogen/case-clause
+                           [(g/gquote ~(op-const-name row))]
+                           [(g/gquote (return ~(gogen/type (str "vm." (str (op-bytecode row))))))]))
+                       bc-rows)
+        default-clause (gogen/case-clause
+                         nil
+                         [(g/gquote (return ~(gogen/type "vm.OP_NOOP")))])
+        switch-stmt (gogen/switch-stmt nil (g/gquote op) (conj case-clauses default-clause))]
+    (g/gquote
+      (func irOpToBytecode [(op Op)] [int32]
+        ~switch-stmt))))
+
+(defn emit-bytecode-to-ir-fn []
+  ;; func bytecodeToIROp(op int32) Op { switch op & 0xff { case vm.OP_ADD: return OpAdd ... } return OpInvalid }
+  (let [bc-rows (filter has-bytecode? ops)
+        case-clauses (mapv
+                       (fn [row]
+                         (gogen/case-clause
+                           [(gogen/type (str "vm." (str (op-bytecode row))))]
+                           [(g/gquote (return ~(op-const-name row)))]))
+                       bc-rows)
+        default-clause (gogen/case-clause
+                         nil
+                         [(g/gquote (return OpInvalid))])
+        tag-expr  (g/gquote (& op 255))
+        switch-stmt (gogen/switch-stmt nil tag-expr (conj case-clauses default-clause))]
+    (g/gquote
+      (func bytecodeToIROp [(op int32)] [Op]
+        ~switch-stmt))))
+
+;; --- assemble + emit -------------------------------------------------
+
+(println (g/render (emit-type-decl)))
+(println)
+(println (g/render (emit-const-block)))
+(println)
+(println (g/render (emit-struct-decl)))
+(println)
+(println (g/render (emit-op-table)))
+(println)
+(doseq [m (emit-methods)]
+  (println (g/render m))
+  (println))
+(println (g/render (emit-cheap-fn)))
+(println)
+(println (g/render (emit-ir-to-bytecode-fn)))
+(println)
+(println (g/render (emit-bytecode-to-ir-fn)))
+(println)

@@ -11,12 +11,12 @@ type theIterateType struct {
 	zero *Iterate
 }
 
-func (t *theIterateType) String() string     { return t.Name() }
-func (t *theIterateType) Type() ValueType    { return IterateType }
-func (t *theIterateType) Unbox() interface{} { return nil }
+func (t *theIterateType) String() string  { return t.Name() }
+func (t *theIterateType) Type() ValueType { return IterateType }
+func (t *theIterateType) Unbox() any      { return nil }
 
-func (t *theIterateType) Name() string                     { return "let-go.lang.Iterate" }
-func (t *theIterateType) Box(_ interface{}) (Value, error) { return t.zero, nil }
+func (t *theIterateType) Name() string             { return "let-go.lang.Iterate" }
+func (t *theIterateType) Box(_ any) (Value, error) { return t.zero, nil }
 
 // Iterate is a Value whose only value is Iterate
 type Iterate struct {
@@ -59,7 +59,7 @@ func (n *Iterate) Seq() Seq {
 func (n *Iterate) Type() ValueType { return IterateType }
 
 // Unbox implements Value
-func (n *Iterate) Unbox() interface{} { return nil }
+func (n *Iterate) Unbox() any { return nil }
 
 // IterateType is the type of IterateValues
 var IterateType *theIterateType = &theIterateType{zero: nil}

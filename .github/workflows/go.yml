@@ -16,7 +16,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
       - name: Run golangci-lint
         run: golangci-lint run --timeout=5m
 
@@ -24,14 +24,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
+      - name: Regenerate bundled bytecode
+        run: go generate ./pkg/rt/
+
       - name: Build
         run: go build -v ./...
 
-      - name: Test
-        run: go test -v -timeout 60s ./...
+      - name: Test with bundled bytecode stdlib
+        run: go test -v -timeout 60s ./... -skip TestClojureTestSuite
+
+      - name: Clojure compatibility test suite with bundled bytecode stdlib
+        run: go test ./test/ -count=1 -run TestClojureTestSuite -v
+
+      - name: Test with source stdlib bootstrap
+        run: go test -tags bootstrap -v -timeout 60s ./... -skip TestClojureTestSuite
+
+      - name: Clojure compatibility test suite with source stdlib bootstrap
+        run: go test -tags bootstrap ./test/ -count=1 -run TestClojureTestSuite -v

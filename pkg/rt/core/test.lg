@@ -8,6 +8,7 @@
 (def ^:dynamic *report-counters* {:test 0 :pass 0 :fail 0 :error 0})
 (def ^:dynamic *registered-tests* {})
 (def ^:dynamic *each-fixtures* [])
+(def ^:dynamic *once-fixtures* [])
 
 (defn clear-registered-tests! []
   (set! *registered-tests* {}))
@@ -67,18 +68,20 @@
                      (set! *report-counters* (update *report-counters* :error inc))
                      (set! *test-result* false)
                      (println "ERROR in test:" e))))]
-    (if (seq nss)
-      (doseq [s nss]
-        (let [old-ns *ns*]
-          (in-ns s)
-          (doseq [t (get *registered-tests* *ns* [])]
-            (set! *report-counters* (update *report-counters* :test inc))
-            (runner t))
-          (in-ns (symbol (name old-ns)))))
-      (doseq [bs (vals *registered-tests*)]
-        (doseq [t bs]
-          (set! *report-counters* (update *report-counters* :test inc))
-          (runner t)))))
+    ((join-fixtures *once-fixtures*)
+     (fn []
+       (if (seq nss)
+         (doseq [s nss]
+           (let [old-ns *ns*]
+             (in-ns s)
+             (doseq [t (get *registered-tests* *ns* [])]
+               (set! *report-counters* (update *report-counters* :test inc))
+               (runner t))
+             (in-ns (symbol (name old-ns)))))
+         (doseq [bs (vals *registered-tests*)]
+           (doseq [t bs]
+             (set! *report-counters* (update *report-counters* :test inc))
+             (runner t)))))))
   (let [c *report-counters*]
     (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
     (set! *test-result* (and (= 0 (:fail c)) (= 0 (:error c))))))
@@ -110,7 +113,9 @@
 
 ; simple fixtures API (global per session)
 (defn use-fixtures [phase & fs]
-  (when (= phase :each)
-    (set! *each-fixtures* fs)))
+  (cond
+    (= phase :each) (set! *each-fixtures* fs)
+    (= phase :once) (set! *once-fixtures* fs)
+    :else nil))
 
 ; basic clojure.test shim for stock tests

@@ -80,7 +80,7 @@ func init() {
 
 	// Register global namespace lookup so qualified symbols (foo/x) work
 	vm.SetNSLookup(func(name string) *vm.Namespace {
-		return nsRegistry[resolveNSAlias(name)]
+		return LookupOrRegisterNS(resolveNSAlias(name))
 	})
 
 	// Wire up ValueEquals for OP_EQ fast path in the VM
@@ -102,6 +102,9 @@ func init() {
 	installSyscallNS()
 	installUnixNS()
 	installSystemNS()
+	installGogenNS()
+	installDisasmNS()
+	installProfileNS()
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 
@@ -125,7 +128,25 @@ func NS(name string) *vm.Namespace {
 	return LookupOrRegisterNS(resolveNSAlias(name))
 }
 
+// RequireNS loads/materializes a namespace and reports an error when a loader
+// is configured but the namespace could not be loaded.
+func RequireNS(name string) (*vm.Namespace, error) {
+	canonical := resolveNSAlias(name)
+	ns := LookupOrRegisterNS(canonical)
+	if nsLoader != nil && nsNeedsLoad[canonical] {
+		return nil, fmt.Errorf("unable to load namespace %s", name)
+	}
+	return ns, nil
+}
+
 func RegisterNS(namespace *vm.Namespace) *vm.Namespace {
+	// Auto-refer CoreNS so user code can use clojure.core symbols (defn, def,
+	// require, etc.) after switching into this namespace via (in-ns 'foo) —
+	// matching JVM Clojure semantics. Skip when registering CoreNS itself, and
+	// when CoreNS isn't installed yet (very early init).
+	if CoreNS != nil && namespace != CoreNS {
+		namespace.Refer(CoreNS, "", true)
+	}
 	nsRegistry[resolveNSAlias(namespace.Name())] = namespace
 	return namespace
 }
@@ -163,25 +184,33 @@ func DefNSBare(name string) *vm.Namespace {
 
 func LookupOrRegisterNS(name string) *vm.Namespace {
 	e := nsRegistry[name]
-	if e != nil && !nsNeedsLoad[name] {
+	needsLoad := nsNeedsLoad[name]
+	if e != nil && !needsLoad {
 		return e
 	}
 	if nsLoader != nil {
-		// Clear the flag before loading to prevent re-entrancy loops
-		delete(nsNeedsLoad, name)
 		n := nsLoader.Load(name)
 		if n != nil {
 			nsRegistry[name] = n
+			delete(nsNeedsLoad, name)
 			return n
 		}
 	}
-	// Check if loading side-effected the registry (in-ns during load creates the ns)
+	// Check if loading side-effected the registry (in-ns during load creates the ns).
+	// If loader is configured and failed, keep NeedsLoad true so later lookups retry.
 	if e := nsRegistry[name]; e != nil {
-		delete(nsNeedsLoad, name)
+		if nsLoader != nil {
+			nsNeedsLoad[name] = true
+		} else {
+			delete(nsNeedsLoad, name)
+		}
 		return e
 	}
 	nsRegistry[name] = vm.NewNamespace(name)
 	nsRegistry[name].Refer(CoreNS, "", true)
+	if nsLoader != nil {
+		nsNeedsLoad[name] = true
+	}
 	return nsRegistry[name]
 }
 
@@ -266,6 +295,20 @@ func isMapType(v vm.Value) bool {
 	switch v.(type) {
 	case vm.Map, *vm.PersistentMap, *vm.SortedMap:
 		return true
+	}
+	return false
+}
+
+func canConjMapEntry(v vm.Value) bool {
+	if isMapType(v) {
+		return true
+	}
+	if _, _, ok := vm.MapEntryKV(v); ok {
+		return true
+	}
+	switch pv := v.(type) {
+	case vm.PersistentVector:
+		return pv.RawCount() == 2
 	}
 	return false
 }
@@ -405,6 +448,19 @@ func valueEquals(a, b vm.Value) bool {
 	if isNilValue(a) || isNilValue(b) {
 		return false
 	}
+	if vm.IsNumber(a) && vm.IsNumber(b) {
+		return vm.NumEq(a, b)
+	}
+	switch av := a.(type) {
+	case *vm.Range:
+		if av == b {
+			return true
+		}
+	case *vm.InfiniteRange:
+		if av == b {
+			return true
+		}
+	}
 
 	// Allow cross-type comparison for numbers and vectors
 	if a.Type() != b.Type() {
@@ -469,13 +525,25 @@ func valueEquals(a, b vm.Value) bool {
 		return true
 	case *vm.List:
 		// b could be any Seq-like type (List, Cons, ArrayVectorSeq, etc.)
+		if av == vm.EmptyList {
+			if bl, ok := b.(*vm.List); ok {
+				return bl == vm.EmptyList || bl.RawCount() == 0
+			}
+			if isSequentialType(b) {
+				return toSeq(b) == nil
+			}
+			return false
+		}
+		if bl, ok := b.(*vm.List); ok && bl == vm.EmptyList {
+			return false
+		}
 		bs, ok := b.(vm.Seq)
 		if !ok {
 			return false
 		}
 		as := vm.Seq(av)
 		for as != nil && bs != nil {
-			if !valueEquals(as.First(), bs.First()) {
+			if !listElementEquals(as.First(), bs.First()) {
 				return false
 			}
 			as, bs = as.Next(), bs.Next()
@@ -594,8 +662,20 @@ func isNilValue(v vm.Value) bool {
 }
 
 func isNaNValue(v vm.Value) bool {
-	f, ok := v.(vm.Float)
-	return ok && math.IsNaN(float64(f))
+	if f, ok := v.(vm.Float); ok {
+		return math.IsNaN(float64(f))
+	}
+	if f, ok := v.(vm.Float32); ok {
+		return math.IsNaN(float64(f))
+	}
+	return false
+}
+
+func listElementEquals(a, b vm.Value) bool {
+	if isNaNValue(a) && isNaNValue(b) {
+		return true
+	}
+	return valueEquals(a, b)
 }
 
 func nilListEquivalent(a, b vm.Value) bool {
@@ -621,11 +701,28 @@ func isSequentialType(v vm.Value) bool {
 
 // toSeq converts a sequential value to a Seq for element-by-element comparison.
 func toSeq(v vm.Value) vm.Seq {
-	if s, ok := v.(vm.Seq); ok {
+	if v == vm.NIL || v == vm.EmptyList {
+		return nil
+	}
+	if ls, ok := v.(*vm.LazySeq); ok {
+		s := ls.Resolve()
+		if s == vm.EmptyList {
+			return nil
+		}
 		return s
 	}
+	if c, ok := v.(vm.Counted); ok && c.RawCount() == 0 {
+		return nil
+	}
 	if sq, ok := v.(vm.Sequable); ok {
-		return sq.Seq()
+		s := sq.Seq()
+		if s == vm.EmptyList {
+			return nil
+		}
+		return s
+	}
+	if s, ok := v.(vm.Seq); ok {
+		return s
 	}
 	return nil
 }
@@ -656,17 +753,35 @@ func seqOf(v vm.Value) (vm.Seq, error) {
 	return nil, fmt.Errorf("don't know how to create ISeq from %s", v.Type())
 }
 
+// forceSeq fully resolves a LazySeq chain to a concrete seq (or nil if empty).
+// Non-LazySeq inputs pass through unchanged.
+func forceSeq(s vm.Seq) vm.Seq {
+	if s == nil {
+		return nil
+	}
+	if ls, ok := s.(*vm.LazySeq); ok {
+		return ls.Resolve()
+	}
+	return s
+}
+
 func mapLazy1(f vm.Fn, s vm.Seq) vm.Seq {
 	if s == nil {
 		return nil
 	}
 	captured := s
 	thunk, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
-		v, err := f.Invoke([]vm.Value{captured.First()})
+		// Force the captured seq before reading First(): a LazySeq that
+		// resolves to empty must produce EmptyList, not f(nil).
+		head := forceSeq(captured)
+		if head == nil {
+			return vm.EmptyList, nil
+		}
+		v, err := f.Invoke([]vm.Value{head.First()})
 		if err != nil {
 			return vm.NIL, err
 		}
-		rest := captured.Next()
+		rest := head.Next()
 		tail := mapLazy1(f, rest)
 		if tail == nil {
 			return vm.EmptyList.Cons(v), nil
@@ -685,9 +800,19 @@ func mapLazyN(f vm.Fn, seqs []vm.Seq) vm.Seq {
 	captured := make([]vm.Seq, len(seqs))
 	copy(captured, seqs)
 	thunk, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
-		fargs := make([]vm.Value, len(captured))
-		nexts := make([]vm.Seq, len(captured))
+		// Force every captured seq before reading First(); if any is empty,
+		// the whole multi-coll map ends.
+		heads := make([]vm.Seq, len(captured))
 		for i, s := range captured {
+			h := forceSeq(s)
+			if h == nil {
+				return vm.EmptyList, nil
+			}
+			heads[i] = h
+		}
+		fargs := make([]vm.Value, len(heads))
+		nexts := make([]vm.Seq, len(heads))
+		for i, s := range heads {
 			fargs[i] = s.First()
 			nexts[i] = s.Next()
 		}
@@ -738,9 +863,151 @@ func fnComparator(comp vm.Fn) vm.Comparator {
 	}
 }
 
+func invokeMethodFallback(rec vm.Value, name vm.Symbol, args []vm.Value, originalErr error) (vm.Value, error) {
+	if isCompatChecker(rec) && len(args) == 1 {
+		switch name {
+		case "isLong":
+			if _, boxed := args[0].(*vm.DTypeInstance); boxed {
+				return vm.FALSE, nil
+			}
+			_, ok := args[0].(vm.Int)
+			return vm.Boolean(ok), nil
+		case "isDouble":
+			if _, boxed := args[0].(*vm.DTypeInstance); boxed {
+				return vm.FALSE, nil
+			}
+			_, ok := args[0].(vm.Float)
+			return vm.Boolean(ok), nil
+		}
+	}
+	if name == "reduce" && len(args) == 1 {
+		if v := CoreNS.Lookup(vm.Symbol("reduce")); v != vm.NIL {
+			if methodVar, ok := v.(*vm.Var); ok {
+				if fn, ok := methodVar.Deref().(vm.Fn); ok {
+					return fn.Invoke([]vm.Value{args[0], rec})
+				}
+			}
+		}
+	}
+	if name == "reduce" && len(args) == 2 {
+		if v := CoreNS.Lookup(vm.Symbol("reduce")); v != vm.NIL {
+			if methodVar, ok := v.(*vm.Var); ok {
+				if fn, ok := methodVar.Deref().(vm.Fn); ok {
+					return fn.Invoke([]vm.Value{args[0], args[1], rec})
+				}
+			}
+		}
+	}
+	if v := CurrentNS.Deref().(*vm.Namespace).Lookup(name); v != vm.NIL {
+		if methodVar, ok := v.(*vm.Var); ok {
+			if fn, ok := methodVar.Deref().(vm.Fn); ok {
+				return fn.Invoke(append([]vm.Value{rec}, args...))
+			}
+		}
+	}
+	for _, ns := range nsRegistry {
+		if v := ns.LookupLocal(name); v != nil {
+			if fn, ok := v.Deref().(vm.Fn); ok {
+				return fn.Invoke(append([]vm.Value{rec}, args...))
+			}
+		}
+	}
+	return vm.NIL, originalErr
+}
+
+func isCompatChecker(v vm.Value) bool {
+	inst, ok := v.(*vm.DTypeInstance)
+	if !ok {
+		return false
+	}
+	return strings.HasSuffix(inst.DType().Name(), "Checker")
+}
+
+func roundBigDecimalValue(v *vm.BigDecimal, precision int, modeName string) (vm.Value, error) {
+	if precision <= 0 {
+		return vm.NIL, fmt.Errorf("precision must be positive")
+	}
+	f, _ := v.Val().Float64()
+	if f == 0 {
+		return v, nil
+	}
+	sign := 1
+	if f < 0 {
+		sign = -1
+		f = -f
+	}
+	exp := int(math.Floor(math.Log10(f)))
+	scaleExp := precision - 1 - exp
+	rat, ok := new(big.Rat).SetString(v.Val().Text('f', -1))
+	if !ok {
+		return vm.NIL, fmt.Errorf("cannot round BigDecimal %s", v)
+	}
+	if sign < 0 {
+		rat.Abs(rat)
+	}
+	scaled := new(big.Rat).Mul(rat, pow10Rat(scaleExp))
+	rounded, err := roundRatToInt(scaled, sign, modeName)
+	if err != nil {
+		return vm.NIL, err
+	}
+	result := new(big.Rat).SetInt(rounded)
+	result.Quo(result, pow10Rat(scaleExp))
+	if sign < 0 {
+		result.Neg(result)
+	}
+	return vm.NewBigDecimal(new(big.Float).SetPrec(vm.BigDecimalPrecConst).SetRat(result)), nil
+}
+
+func pow10Rat(exp int) *big.Rat {
+	if exp >= 0 {
+		return new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil))
+	}
+	return new(big.Rat).Inv(new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exp)), nil)))
+}
+
+func roundRatToInt(r *big.Rat, sign int, modeName string) (*big.Int, error) {
+	q := new(big.Int).Quo(r.Num(), r.Denom())
+	rem := new(big.Int).Rem(r.Num(), r.Denom())
+	if rem.Sign() == 0 {
+		return q, nil
+	}
+	ceil := new(big.Int).Add(q, big.NewInt(1))
+	switch modeName {
+	case "up":
+		return ceil, nil
+	case "down":
+		return q, nil
+	case "ceiling":
+		if sign > 0 {
+			return ceil, nil
+		}
+		return q, nil
+	case "floor":
+		if sign < 0 {
+			return ceil, nil
+		}
+		return q, nil
+	case "unnecessary":
+		return nil, fmt.Errorf("rounding necessary")
+	case "half-up", "half-down", "half-even":
+		twiceRem := new(big.Int).Mul(rem, big.NewInt(2))
+		cmp := twiceRem.Cmp(r.Denom())
+		if cmp > 0 || (cmp == 0 && modeName == "half-up") {
+			return ceil, nil
+		}
+		if cmp == 0 && modeName == "half-even" && q.Bit(0) == 1 {
+			return ceil, nil
+		}
+		return q, nil
+	default:
+		return nil, fmt.Errorf("unknown rounding mode %s", modeName)
+	}
+}
+
 // nolint
+
 func installLangNS() {
-	plus, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	plus, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			return vm.MakeInt(0), nil
 		}
@@ -758,7 +1025,7 @@ func installLangNS() {
 		return acc, nil
 	})
 
-	mul, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	mul, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			return vm.MakeInt(1), nil
 		}
@@ -776,7 +1043,7 @@ func installLangNS() {
 		return acc, nil
 	})
 
-	sub, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	sub, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -794,9 +1061,12 @@ func installLangNS() {
 		return acc, nil
 	})
 
-	div, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	div, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		if len(vs) == 1 {
+			return vm.NumDiv(vm.MakeInt(1), vs[0])
 		}
 		acc := vs[0]
 		for i := 1; i < len(vs); i++ {
@@ -811,7 +1081,7 @@ func installLangNS() {
 
 	// Apostrophe arithmetic: identical to + - * but promotes to BigInt on
 	// int64 overflow instead of wrapping silently.
-	plusP, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	plusP, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			return vm.MakeInt(0), nil
 		}
@@ -829,7 +1099,7 @@ func installLangNS() {
 		return acc, nil
 	})
 
-	mulP, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	mulP, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			return vm.MakeInt(1), nil
 		}
@@ -847,7 +1117,7 @@ func installLangNS() {
 		return acc, nil
 	})
 
-	subP, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	subP, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -865,7 +1135,273 @@ func installLangNS() {
 		return acc, nil
 	})
 
-	equals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// unchecked-* family — silent wrap on int64 overflow.
+	//
+	// Mirrors Clojure's clojure.core/unchecked-add, unchecked-subtract,
+	// unchecked-multiply, unchecked-negate, unchecked-divide-int. Each is
+	// strict-arity (2-ary for binary ops, 1-ary for unary) to match Clojure's
+	// inliner signatures.
+	//
+	// Required for porting hash functions, splittable RNGs, and any other
+	// code that needs modular int64 / u64 semantics. Pair with the existing
+	// unsigned-bit-shift-right to build xxh3-64, splitmix64, SipHash, etc.
+	//
+	// Float and BigInt inputs are coerced to int64 (matching Clojure's
+	// long-arithmetic semantics). Use `+`/`-`/`*` for checked arithmetic,
+	// or `+'`/`-'`/`*'` for BigInt-promoting arithmetic.
+
+	uncheckedAdd, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[0].Type().Name())
+		}
+		b, ok := vm.ToInt(vs[1])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[1].Type().Name())
+		}
+		return vm.MakeInt(int(int64(a) + int64(b))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedSubtract, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[0].Type().Name())
+		}
+		b, ok := vm.ToInt(vs[1])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[1].Type().Name())
+		}
+		return vm.MakeInt(int(int64(a) - int64(b))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedMultiply, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[0].Type().Name())
+		}
+		b, ok := vm.ToInt(vs[1])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[1].Type().Name())
+		}
+		return vm.MakeInt(int(int64(a) * int64(b))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedNegate, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-negate expected integer, got %s", vs[0].Type().Name())
+		}
+		// Note: -Long/MIN_VALUE wraps to Long/MIN_VALUE in 2's-complement int64.
+		// This matches Clojure's unchecked-negate behavior.
+		return vm.MakeInt(int(-int64(a))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedDivideInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[0].Type().Name())
+		}
+		b, ok := vm.ToInt(vs[1])
+		if !ok {
+			return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[1].Type().Name())
+		}
+		if b == 0 {
+			return vm.NIL, fmt.Errorf("divide by zero")
+		}
+		// Note: Long/MIN_VALUE / -1 overflows in 2's-complement and throws.
+		// This matches Clojure's unchecked-divide-int (and JVM IDIV) behavior.
+		if int64(a) == math.MinInt64 && int64(b) == -1 {
+			return vm.NIL, fmt.Errorf("integer overflow")
+		}
+		return vm.MakeInt(int(int64(a) / int64(b))), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedLong, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return v, nil
+		case *vm.BigInt:
+			// Low-64 of two's-complement representation, matching Clojure JVM.
+			// big.Int doesn't expose two's-complement directly; mask with 2^64,
+			// then reinterpret the low-64 bits as signed int64.
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.MakeInt(int(int64(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.MakeInt(int(int64(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-long expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.MakeInt(int(int32(int64(v)))), nil
+		case *vm.BigInt:
+			// Low-32 of two's-complement representation, matching Clojure JVM.
+			// Mask with 2^64, take low-32 bits as int32, then sign-extend.
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.MakeInt(int(int32(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.MakeInt(int(int32(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-int expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedShort, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.MakeInt(int(int16(int64(v)))), nil
+		case *vm.BigInt:
+			// Low-16 of two's-complement representation, matching Clojure JVM.
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.MakeInt(int(int16(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.MakeInt(int(int16(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-short expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedByte, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.MakeInt(int(int8(int64(v)))), nil
+		case *vm.BigInt:
+			// Low-8 of two's-complement representation, matching Clojure JVM.
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.MakeInt(int(int8(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.MakeInt(int(int8(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-byte expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedChar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.Char(rune(uint16(int64(v)))), nil
+		case *vm.BigInt:
+			// Low-16 of two's-complement representation, then uint16 → Char (rune).
+			mask := new(big.Int).Lsh(big.NewInt(1), 64)
+			lo := new(big.Int).Mod(v.Val(), mask)
+			return vm.Char(rune(uint16(lo.Uint64()))), nil
+		case vm.Float:
+			return vm.Char(rune(uint16(int64(float64(v))))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-char expected integer or float, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedDouble, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return vm.Float(float64(int64(v))), nil
+		case *vm.BigInt:
+			// Convert BigInt to float64 via big.Float (handles overflow → ±Inf).
+			f, _ := new(big.Float).SetInt(v.Val()).Float64()
+			return vm.Float(f), nil
+		case vm.Float:
+			return v, nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-double expected numeric, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uncheckedFloat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			// Cast through float32 to introduce float32-precision loss + overflow → ±Inf.
+			return vm.Float(float64(float32(int64(v)))), nil
+		case *vm.BigInt:
+			f, _ := new(big.Float).SetInt(v.Val()).Float64()
+			return vm.Float(float64(float32(f))), nil
+		case vm.Float:
+			return vm.Float(float64(float32(float64(v)))), nil
+		default:
+			return vm.NIL, fmt.Errorf("unchecked-float expected numeric, got %s", vs[0].Type().Name())
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	equals, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		length := len(vs)
 		if length < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -879,8 +1415,11 @@ func installLangNS() {
 		return vm.TRUE, nil
 	})
 
-	notEq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	notEq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
+			return vm.FALSE, nil
+		}
+		if len(vs) == 2 && isNaNValue(vs[0]) && isNaNValue(vs[1]) {
 			return vm.FALSE, nil
 		}
 		eq, err := equals.(vm.Fn).Invoke(vs)
@@ -890,7 +1429,7 @@ func installLangNS() {
 		return vm.Boolean(!vm.IsTruthy(eq)), nil
 	})
 
-	gt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	gt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -909,7 +1448,7 @@ func installLangNS() {
 		return vm.TRUE, nil
 	})
 
-	lt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	lt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -928,7 +1467,7 @@ func installLangNS() {
 		return vm.TRUE, nil
 	})
 
-	ge, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	ge, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -947,7 +1486,7 @@ func installLangNS() {
 		return vm.TRUE, nil
 	})
 
-	le, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	le, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -966,14 +1505,14 @@ func installLangNS() {
 		return vm.TRUE, nil
 	})
 
-	mod, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	mod, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		return vm.NumMod(vs[0], vs[1])
 	})
 
-	abs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	abs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -982,14 +1521,14 @@ func installLangNS() {
 
 	// and/or are now short-circuiting macros defined in core.lg
 
-	not, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	not, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		return vm.Boolean(!vm.IsTruthy(vs[0])), nil
 	})
 
-	complement, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	complement, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1010,7 +1549,7 @@ func installLangNS() {
 		return wrapped, nil
 	})
 
-	setMacro, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	setMacro, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1019,7 +1558,7 @@ func installLangNS() {
 		return m, nil
 	})
 
-	gensym, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	gensym, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		prefix := "G__"
 		if len(vs) == 1 {
 			arg, ok := vs[0].(vm.String)
@@ -1031,28 +1570,34 @@ func installLangNS() {
 		return vm.Symbol(fmt.Sprintf("%s%d", prefix, nextID())), nil
 	})
 
-	vector, err := vm.NativeFnType.WrapNoErr(vm.NewArrayVector)
-	list, err := vm.NativeFnType.WrapNoErr(vm.NewList)
-	hashMap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	vector, _ := vm.NativeFnType.WrapNoErr(vm.NewArrayVector)
+	list, _ := vm.NativeFnType.WrapNoErr(vm.NewList)
+	hashMap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs)%2 != 0 {
 			return vm.NIL, fmt.Errorf("hash-map requires an even number of arguments, got %d", len(vs))
 		}
 		return vm.NewMap(vs), nil
 	})
-	hashSet, err := vm.NativeFnType.WrapNoErr(vm.NewSet)
+	arrayMap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs)%2 != 0 {
+			return vm.NIL, fmt.Errorf("array-map requires an even number of arguments, got %d", len(vs))
+		}
+		return vm.NewArrayMap(vs), nil
+	})
+	hashSet, _ := vm.NativeFnType.WrapNoErr(vm.NewSet)
 
-	sortedMap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	sortedMap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs)%2 != 0 {
 			return vm.NIL, fmt.Errorf("sorted-map requires even number of arguments, got %d", len(vs))
 		}
 		return vm.NewSortedMap(nil, vs), nil
 	})
 
-	sortedSet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	sortedSet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NewSortedSet(nil, vs), nil
 	})
 
-	sortedMapBy, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	sortedMapBy, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("sorted-map-by requires a comparator")
 		}
@@ -1067,7 +1612,7 @@ func installLangNS() {
 		return vm.NewSortedMap(fnComparator(comp), kvs), nil
 	})
 
-	sortedSetBy, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	sortedSetBy, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("sorted-set-by requires a comparator")
 		}
@@ -1078,7 +1623,7 @@ func installLangNS() {
 		return vm.NewSortedSet(fnComparator(comp), vs[1:]), nil
 	})
 
-	vec, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	vec, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1114,7 +1659,7 @@ func installLangNS() {
 		return vm.NewArrayVector(ret), nil
 	})
 
-	rangef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	rangef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			// Infinite range: (range) -> lazy seq 0, 1, 2, ...
 			return vm.NewInfiniteRange(0, 1), nil
@@ -1131,7 +1676,7 @@ func installLangNS() {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	})
 
-	keyword, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	keyword, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1173,7 +1718,7 @@ func installLangNS() {
 	})
 
 	// symbol(name) or symbol(ns, name)
-	symbolf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	symbolf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1220,7 +1765,7 @@ func installLangNS() {
 		return vm.Symbol(nsStr + "/" + nameStr), nil
 	})
 
-	assoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	assoc, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 3 || len(vs)%2 == 0 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1238,7 +1783,7 @@ func installLangNS() {
 		return ret, nil
 	})
 
-	dissoc, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	dissoc, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments 0")
 		}
@@ -1252,11 +1797,14 @@ func installLangNS() {
 		ret := coll
 		for i := 1; i < len(vs); i++ {
 			ret = ret.Dissoc(vs[i])
+			if vs[0] != vm.NIL && ret == vm.NIL {
+				return vm.NIL, fmt.Errorf("dissoc failed for key %s", vs[i].String())
+			}
 		}
 		return ret, nil
 	})
 
-	update, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	update, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1288,25 +1836,25 @@ func installLangNS() {
 		return colla.Assoc(key, v), nil
 	})
 
-	cons, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	cons, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		elem := vs[0]
 		if vs[1] == vm.NIL {
-			return vm.EmptyList.Cons(elem), nil
+			return vm.NewCons(elem, nil), nil
 		}
 		seq, err := seqOf(vs[1])
 		if err != nil {
 			return vm.NIL, fmt.Errorf("cons expected Seq")
 		}
 		if seq == nil {
-			return vm.EmptyList.Cons(elem), nil
+			return vm.NewCons(elem, nil), nil
 		}
-		return seq.Cons(elem), nil
+		return vm.NewCons(elem, seq), nil
 	})
 
-	conj, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	conj, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			return vm.ArrayVector{}, nil
 		}
@@ -1317,19 +1865,35 @@ func installLangNS() {
 		if vs[0] == vm.NIL {
 			seq = vm.EmptyList
 		} else {
+			if _, ok := vs[0].(vm.String); ok {
+				return vm.NIL, fmt.Errorf("conj expected Collection")
+			}
 			var ok bool
 			seq, ok = vs[0].(vm.Collection)
 			if !ok {
+				if s, ok := vs[0].(vm.Seq); ok {
+					for i := 1; i < len(vs); i++ {
+						if seq == nil {
+							seq = vm.NewCons(vs[i], s)
+						} else {
+							seq = seq.Conj(vs[i])
+						}
+					}
+					return seq, nil
+				}
 				return vm.NIL, fmt.Errorf("conj expected Collection")
 			}
 		}
 		for i := 1; i < len(vs); i++ {
+			if isMapType(seq) && !canConjMapEntry(vs[i]) {
+				return vm.NIL, fmt.Errorf("conj expected map entry")
+			}
 			seq = seq.Conj(vs[i])
 		}
 		return seq, nil
 	})
 
-	disj, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	disj, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1362,7 +1926,7 @@ func installLangNS() {
 		}
 	})
 
-	contains, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	contains, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1390,7 +1954,7 @@ func installLangNS() {
 		return vm.FALSE, nil
 	})
 
-	first, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	first, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1410,7 +1974,7 @@ func installLangNS() {
 		return vm.NIL, fmt.Errorf("first expected Seq")
 	})
 
-	second, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	second, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1431,7 +1995,7 @@ func installLangNS() {
 		return n.First(), nil
 	})
 
-	next, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	next, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1452,7 +2016,7 @@ func installLangNS() {
 		return n, nil
 	})
 
-	rest, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	rest, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1469,7 +2033,7 @@ func installLangNS() {
 		return s.More(), nil
 	})
 
-	seq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	seq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1503,7 +2067,7 @@ func installLangNS() {
 		return n, nil
 	})
 
-	isSeq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isSeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1518,7 +2082,15 @@ func installLangNS() {
 		return vm.Boolean(ok), nil
 	})
 
-	isColl, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isList, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		_, ok := vs[0].(*vm.List)
+		return vm.Boolean(ok), nil
+	})
+
+	isColl, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1530,18 +2102,27 @@ func installLangNS() {
 		return vm.Boolean(ok), nil
 	})
 
-	empty, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	empty, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
+		if vs[0] == vm.NIL || vs[0].Type() == vm.StringType {
+			return vm.NIL, nil
+		}
+		if _, ok := vs[0].(*vm.InfiniteRange); ok {
+			return vm.EmptyList, nil
+		}
+		if _, ok := vs[0].(*vm.Record); ok {
+			return vm.NIL, fmt.Errorf("empty is not supported on records")
+		}
 		coll, ok := vs[0].(vm.Collection)
 		if !ok {
-			return vm.NIL, fmt.Errorf("empty expected Collection")
+			return vm.NIL, nil
 		}
 		return coll.Empty(), nil
 	})
 
-	get, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	get, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		vl := len(vs)
 		if vl < 2 || vl > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -1561,7 +2142,7 @@ func installLangNS() {
 		return as.ValueAtOr(key, vs[2]), nil
 	})
 
-	keyf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	keyf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1571,7 +2152,7 @@ func installLangNS() {
 		return vm.NIL, fmt.Errorf("key expects map entry")
 	})
 
-	valf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	valf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1583,7 +2164,7 @@ func installLangNS() {
 
 	// nth: indexed access that works on any sequential type.
 	// Fast path for vectors (O(1)), linear walk for seqs (O(n)).
-	nthf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	nthf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		vl := len(vs)
 		if vl < 2 || vl > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -1637,7 +2218,7 @@ func installLangNS() {
 		return notFound, nil
 	})
 
-	count, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	count, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1654,8 +2235,11 @@ func installLangNS() {
 		return seq.Count(), nil
 	})
 
-	// map builtin: eager for small counted collections, lazy otherwise
-	mapf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// map builtin: always lazy. Clojure semantics require laziness on all
+	// inputs — small counted collections must still defer realization so
+	// consumers (rose trees, short-circuit take, side-effecting f) work.
+	// Use mapv for eager realization to a vector.
+	mapf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1672,32 +2256,6 @@ func installLangNS() {
 			if s == nil || s == vm.EmptyList {
 				return vm.EmptyList, nil
 			}
-			// Eager fast path: small counted collections (≤32 elements)
-			// Skip RawCount for LazySeq/Cons — could be infinite
-			length := 0
-			switch vs[1].(type) {
-			case *vm.LazySeq, *vm.Cons:
-				// Don't count — use lazy path
-			default:
-				if col, ok := vs[1].(vm.Counted); ok {
-					length = col.RawCount()
-				}
-			}
-			if length > 0 && length <= 32 {
-				newseq := make([]vm.Value, length)
-				i := 0
-				for s != nil {
-					newseq[i], err = mfn.Invoke([]vm.Value{s.First()})
-					if err != nil {
-						return vm.NIL, err
-					}
-					s = s.Next()
-					i++
-				}
-				ret, _ := vm.ListType.Box(newseq[:i])
-				return ret, nil
-			}
-			// lazy path
 			return mapLazy1(mfn, s), nil
 		}
 		// multi-collection path
@@ -1713,45 +2271,10 @@ func installLangNS() {
 			}
 			seqs[i] = s
 		}
-		// Check if all collections are small and counted (skip LazySeq/Cons)
-		minlen := math.MaxInt
-		allCounted := true
-		for i := range colls {
-			switch colls[i].(type) {
-			case *vm.LazySeq, *vm.Cons:
-				allCounted = false
-				continue
-			}
-			if coll, ok := colls[i].(vm.Counted); ok {
-				c := coll.RawCount()
-				if c < minlen {
-					minlen = c
-				}
-			} else {
-				allCounted = false
-				break
-			}
-		}
-		if allCounted && minlen > 0 && minlen <= 32 {
-			newseq := make([]vm.Value, minlen)
-			for i := 0; i < minlen; i++ {
-				fargs := make([]vm.Value, len(seqs))
-				for j := range seqs {
-					fargs[j] = seqs[j].First()
-					seqs[j] = seqs[j].Next()
-				}
-				newseq[i], err = mfn.Invoke(fargs)
-				if err != nil {
-					return vm.NIL, err
-				}
-			}
-			return vm.ListType.Box(newseq)
-		}
-		// lazy path for multi-collection
 		return mapLazyN(mfn, seqs), nil
 	})
 
-	mapv, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	mapv, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		v, err := mapf.(vm.Fn).Invoke(vs)
 		if err != nil {
 			return vm.NIL, err
@@ -1759,7 +2282,7 @@ func installLangNS() {
 		return vec.(vm.Fn).Invoke([]vm.Value{v})
 	})
 
-	reduce, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	reduce, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1800,6 +2323,13 @@ func installLangNS() {
 		if err != nil {
 			return vm.NIL, fmt.Errorf("reduce expected Seq")
 		}
+		// seqOf returns LazySeq objects without resolving them; an
+		// unresolved-empty LazySeq is non-nil but yields First()=NIL.
+		// Resolve here so empty inputs hit the early-return path
+		// instead of spuriously iterating once with a NIL element.
+		if ls, ok := seq.(*vm.LazySeq); ok {
+			seq = ls.Resolve()
+		}
 		if seq == nil {
 			if len(vs) == 3 {
 				return vs[1], nil
@@ -1827,7 +2357,7 @@ func installLangNS() {
 		return acc, nil
 	})
 
-	some, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	some, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1853,7 +2383,7 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
-	printlnf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	printlnf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
 		for i := range vs {
 			if i > 0 {
@@ -1872,25 +2402,15 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
-	str, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	str, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
 		for i := range vs {
-			if vs[i] == vm.NIL {
-				continue
-			}
-			if vs[i].Type() == vm.StringType {
-				b.WriteString(string(vs[i].(vm.String)))
-				continue
-			} else if vs[i].Type() == vm.CharType {
-				b.WriteRune(rune(vs[i].(vm.Char)))
-				continue
-			}
-			b.WriteString(vs[i].String())
+			b.WriteString(strValue(vs[i]))
 		}
 		return vm.String(b.String()), nil
 	})
 
-	typef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	typef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1901,7 +2421,7 @@ func installLangNS() {
 		return t, nil
 	})
 
-	apply, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	apply, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1930,7 +2450,7 @@ func installLangNS() {
 		return f.Invoke(args)
 	})
 
-	inNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	inNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1943,7 +2463,19 @@ func installLangNS() {
 		return nns, nil
 	})
 
-	use, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	excludeInCurrentNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		cns := CurrentNS.Deref().(*vm.Namespace)
+		for _, v := range vs {
+			sym, ok := v.(vm.Symbol)
+			if !ok {
+				return vm.NIL, fmt.Errorf("exclude-in-current-ns expected Symbol, got %s", v.Type().Name())
+			}
+			cns.Exclude(string(sym))
+		}
+		return vm.NIL, nil
+	})
+
+	use, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1958,7 +2490,7 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
-	aliasf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	aliasf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -1976,7 +2508,7 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
-	referList, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	referList, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2005,26 +2537,30 @@ func installLangNS() {
 
 	// removed resolve-var helper (prefer compile-time resolution)
 
-	now, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	now, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NewBoxed(time.Now()), nil
 	})
 
-	methodInvoke, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	methodInvoke, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		rec, ok := vs[0].(vm.Receiver)
-		if !ok {
-			return vm.NIL, fmt.Errorf("method-invoke expected Receiver")
 		}
 		name, ok := vs[1].(vm.Symbol)
 		if !ok {
 			return vm.NIL, fmt.Errorf("method-invoke expected Symbol")
 		}
-		return rec.InvokeMethod(name, vs[2:])
+		rec, ok := vs[0].(vm.Receiver)
+		if !ok {
+			return invokeMethodFallback(vs[0], name, vs[2:], fmt.Errorf("method-invoke expected Receiver"))
+		}
+		result, err := rec.InvokeMethod(name, vs[2:])
+		if err == nil {
+			return result, nil
+		}
+		return invokeMethodFallback(rec, name, vs[2:], err)
 	})
 
-	deref, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	deref, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2035,7 +2571,7 @@ func installLangNS() {
 		return ref.Deref(), nil
 	})
 
-	concat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	concat, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		var ret []vm.Value
 		for i := range vs {
 			if vs[i] == vm.NIL {
@@ -2058,7 +2594,7 @@ func installLangNS() {
 	})
 
 	// slurp (reintroduced)
-	slurp, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	slurp, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2073,7 +2609,7 @@ func installLangNS() {
 		return vm.String(data), nil
 	})
 
-	spit, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	spit, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2092,7 +2628,7 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
-	name, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	name, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2110,7 +2646,7 @@ func installLangNS() {
 		return named.Name(), nil
 	})
 
-	namespace, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	namespace, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2121,15 +2657,39 @@ func installLangNS() {
 		return named.Namespace(), nil
 	})
 
-	atom, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
+	atom, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		return vm.NewAtom(vs[0]), nil
+		if (len(vs)-1)%2 != 0 {
+			return vm.NIL, fmt.Errorf("atom options must be key/value pairs")
+		}
+		var meta vm.Value
+		var validator vm.Fn
+		for i := 1; i < len(vs); i += 2 {
+			switch vs[i] {
+			case vm.Keyword("meta"):
+				if vs[i+1] != vm.NIL && !isMapType(vs[i+1]) {
+					return vm.NIL, fmt.Errorf("atom :meta must be nil or map")
+				}
+				meta = vs[i+1]
+			case vm.Keyword("validator"):
+				if vs[i+1] == vm.NIL {
+					validator = nil
+					continue
+				}
+				fn, ok := vs[i+1].(vm.Fn)
+				if !ok {
+					return vm.NIL, fmt.Errorf("atom :validator must be nil or function")
+				}
+				validator = fn
+			}
+		}
+		return vm.NewAtomWithMetaValidator(vs[0], meta, validator)
 	})
 
 	// (swap! a fn)
-	swap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	swap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2145,7 +2705,7 @@ func installLangNS() {
 	})
 
 	// (reset! a fn)
-	reset, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	reset, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2153,11 +2713,11 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("reset expected Atom")
 		}
-		return at.Reset(vs[1]), nil
+		return at.Reset(vs[1])
 	})
 
 	// swap-vals!: like swap! but returns [old new]
-	swapVals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	swapVals, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2178,7 +2738,7 @@ func installLangNS() {
 	})
 
 	// reset-vals!: like reset! but returns [old new]
-	resetVals, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	resetVals, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2187,11 +2747,13 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("reset-vals! expected Atom")
 		}
 		old := at.Deref()
-		at.Reset(vs[1])
+		if _, err := at.Reset(vs[1]); err != nil {
+			return vm.NIL, err
+		}
 		return vm.ArrayVector{old, vs[1]}, nil
 	})
 
-	gof, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	gof, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2211,14 +2773,14 @@ func installLangNS() {
 		return ret, nil
 	})
 
-	chanf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	chanf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 0 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		return make(vm.Chan), nil
 	})
 
-	chanput, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	chanput, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2233,7 +2795,7 @@ func installLangNS() {
 		return vm.TRUE, nil
 	})
 
-	changet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	changet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2248,7 +2810,7 @@ func installLangNS() {
 		return v, nil
 	})
 
-	lines, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	lines, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2264,7 +2826,7 @@ func installLangNS() {
 		return vm.ArrayVector(av), nil
 	})
 
-	parseInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	parseInt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2279,7 +2841,7 @@ func installLangNS() {
 		return vm.MakeInt(i), nil
 	})
 
-	max, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	max, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2302,7 +2864,7 @@ func installLangNS() {
 		return m, nil
 	})
 
-	min, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	min, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2328,18 +2890,10 @@ func installLangNS() {
 	// compareValues delegates to the vm package's DefaultCompare
 	compareValues := vm.DefaultCompare
 
-	comparef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		c, err := compareValues(vs[0], vs[1])
-		if err != nil {
-			return vm.NIL, err
-		}
-		return vm.MakeInt(c), nil
-	})
+	// comparef is defined later (~line 4585); the earlier definition
+	// that lived here was unused — the later one shadowed it.
 
-	sort, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	sort, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2397,7 +2951,7 @@ func installLangNS() {
 		return vm.ListType.Box(temp)
 	})
 
-	split, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	split, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2426,7 +2980,7 @@ func installLangNS() {
 		return ret, nil
 	})
 
-	strReplace, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	strReplace, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2448,25 +3002,43 @@ func installLangNS() {
 		}
 	})
 
-	intf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	intf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
+		const minInt32 = -2147483648
+		const maxInt32 = 2147483647
+		coerce := func(f float64) (vm.Value, error) {
+			if f < minInt32 || f > maxInt32 {
+				return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
+			}
+			return vm.MakeInt(int(math.Trunc(f))), nil
+		}
 		switch v := vs[0].(type) {
 		case vm.Int:
+			if v < minInt32 || v > maxInt32 {
+				return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
+			}
 			return v, nil
 		case vm.Float:
-			return vm.MakeInt(int(v)), nil
+			return coerce(float64(v))
 		case vm.Char:
 			return vm.Int(int(v)), nil
 		case *vm.BigInt:
-			return vm.MakeInt(int(v.Unbox().(*big.Int).Int64())), nil
+			if !v.Val().IsInt64() {
+				return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
+			}
+			i := v.Val().Int64()
+			if i < minInt32 || i > maxInt32 {
+				return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
+			}
+			return vm.MakeInt(int(i)), nil
 		case *vm.BigDecimal:
 			f, _ := v.Val().Float64()
-			return vm.MakeInt(int(f)), nil
+			return coerce(f)
 		case *vm.Ratio:
 			f, _ := v.Val().Float64()
-			return vm.MakeInt(int(f)), nil
+			return coerce(f)
 		case vm.Boolean:
 			if bool(v) {
 				return vm.MakeInt(1), nil
@@ -2477,7 +3049,47 @@ func installLangNS() {
 		}
 	})
 
-	floatf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	longf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		const minInt64 = float64(-9223372036854775808)
+		const maxInt64 = float64(9223372036854775807)
+		coerce := func(f float64) (vm.Value, error) {
+			if f < minInt64 || f > maxInt64 {
+				return vm.NIL, fmt.Errorf("%s can't be coerced to long", vs[0])
+			}
+			return vm.Int(int64(math.Trunc(f))), nil
+		}
+		switch v := vs[0].(type) {
+		case vm.Int:
+			return v, nil
+		case vm.Float:
+			return coerce(float64(v))
+		case vm.Char:
+			return vm.Int(int(v)), nil
+		case *vm.BigInt:
+			if !v.Val().IsInt64() {
+				return vm.NIL, fmt.Errorf("%s can't be coerced to long", vs[0])
+			}
+			return vm.Int(v.Val().Int64()), nil
+		case *vm.BigDecimal:
+			f, _ := v.Val().Float64()
+			return coerce(f)
+		case *vm.Ratio:
+			f, _ := v.Val().Float64()
+			return coerce(f)
+		case vm.Boolean:
+			if bool(v) {
+				return vm.MakeInt(1), nil
+			}
+			return vm.MakeInt(0), nil
+		default:
+			return vm.NIL, fmt.Errorf("%s can't be coerced to long", vs[0])
+		}
+	})
+
+	floatf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2485,25 +3097,47 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("%s can't be coerced to float", vs[0])
 		}
+		if math.IsInf(f, 0) {
+			return vm.NIL, fmt.Errorf("%s can't be coerced to float", vs[0])
+		}
+		f32 := float32(f)
+		if math.IsInf(float64(f32), 0) {
+			return vm.NIL, fmt.Errorf("%s can't be coerced to float", vs[0])
+		}
+		return vm.Float32(float64(f32)), nil
+	})
+
+	doublef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		f, ok := vm.ToFloat(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("%s can't be coerced to double", vs[0])
+		}
 		return vm.Float(f), nil
 	})
 
-	isNumber, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isNumber, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		return vm.Boolean(vm.IsNumber(vs[0])), nil
 	})
 
-	isFloat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isFloat, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		_, ok := vs[0].(vm.Float)
+		switch vs[0].(type) {
+		case vm.Float, vm.Float32:
+			return vm.TRUE, nil
+		}
+		ok := false
 		return vm.Boolean(ok), nil
 	})
 
-	isInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isInt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2511,7 +3145,7 @@ func installLangNS() {
 		return vm.Boolean(ok), nil
 	})
 
-	char, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	char, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments")
 		}
@@ -2540,7 +3174,7 @@ func installLangNS() {
 		}
 	})
 
-	regex, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	regex, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2550,7 +3184,7 @@ func installLangNS() {
 		return vm.NIL, fmt.Errorf("regex expected String")
 	})
 
-	peek, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	peek, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2578,7 +3212,7 @@ func installLangNS() {
 		}
 	})
 
-	pop, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	pop, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2611,7 +3245,7 @@ func installLangNS() {
 		}
 	})
 
-	iterate, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	iterate, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2622,12 +3256,15 @@ func installLangNS() {
 		return vm.NewIterate(f, vs[1]), nil
 	})
 
-	repeat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	repeat, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		if len(vs) == 1 {
 			return vm.NewRepeat(vs[0], -1), nil
+		}
+		if _, ok := vs[0].(vm.Boolean); ok {
+			return vm.NIL, fmt.Errorf("repeat expected an Int")
 		}
 		ni, ok := vm.ToInt(vs[0])
 		if !ok {
@@ -2640,7 +3277,7 @@ func installLangNS() {
 		return vm.NewRepeat(vs[1], int(n)), nil
 	})
 
-	refer, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	refer, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2666,7 +3303,7 @@ func installLangNS() {
 	})
 
 	// String utility builtins (for string namespace)
-	trimf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	trimf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2677,7 +3314,7 @@ func installLangNS() {
 		return vm.String(strings.TrimSpace(string(s))), nil
 	})
 
-	trimlf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	trimlf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2688,7 +3325,7 @@ func installLangNS() {
 		return vm.String(strings.TrimLeft(string(s), " \t\n\r")), nil
 	})
 
-	trimrf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	trimrf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2699,7 +3336,7 @@ func installLangNS() {
 		return vm.String(strings.TrimRight(string(s), " \t\n\r")), nil
 	})
 
-	upperCase, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	upperCase, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2710,7 +3347,7 @@ func installLangNS() {
 		return vm.String(strings.ToUpper(string(s))), nil
 	})
 
-	lowerCase, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	lowerCase, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2721,7 +3358,7 @@ func installLangNS() {
 		return vm.String(strings.ToLower(string(s))), nil
 	})
 
-	startsWith, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	startsWith, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2736,7 +3373,7 @@ func installLangNS() {
 		return vm.Boolean(strings.HasPrefix(string(s), string(p))), nil
 	})
 
-	endsWith, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	endsWith, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2751,7 +3388,7 @@ func installLangNS() {
 		return vm.Boolean(strings.HasSuffix(string(s), string(p))), nil
 	})
 
-	includesStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	includesStr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2767,7 +3404,7 @@ func installLangNS() {
 	})
 
 	// subs: substring (character-indexed, not byte-indexed)
-	subs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	subs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2799,7 +3436,7 @@ func installLangNS() {
 	})
 
 	// format: sprintf-style string formatting
-	formatf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	formatf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2808,7 +3445,7 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("format expected String")
 		}
 		fmts := string(fmtStr)
-		args := make([]interface{}, len(vs)-1)
+		args := make([]any, len(vs)-1)
 		// Scan format string to determine which args need float promotion
 		vi := 0
 		for fi := 0; fi < len(fmts) && vi < len(args); fi++ {
@@ -2853,7 +3490,7 @@ func installLangNS() {
 
 	// rand: returns a random float between 0 (inclusive) and 1 (exclusive)
 	// or between 0 and n
-	randf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	randf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			return vm.Float(rand.Float64()), nil
 		}
@@ -2870,7 +3507,7 @@ func installLangNS() {
 	})
 
 	// rand-int: returns a random integer between 0 (inclusive) and n (exclusive)
-	randInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	randInt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2885,7 +3522,7 @@ func installLangNS() {
 	})
 
 	// random-uuid: generate a random UUID v4
-	randomUUID, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	randomUUID, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		var buf [16]byte
 		_, err := crand.Read(buf[:])
 		if err != nil {
@@ -2899,7 +3536,7 @@ func installLangNS() {
 	})
 
 	// rand-nth: returns a random element from a collection
-	randNth, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	randNth, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2920,14 +3557,14 @@ func installLangNS() {
 		}
 		// Fallback: iterate
 		s, _ := seqOf(vs[0])
-		for i := 0; i < idx; i++ {
+		for range idx {
 			s = s.Next()
 		}
 		return s.First(), nil
 	})
 
 	// shuffle: returns a random permutation of a collection as a vector
-	shuffle, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	shuffle, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2958,7 +3595,7 @@ func installLangNS() {
 	})
 
 	// transient: create a transient (mutable) version of a persistent collection
-	transientf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	transientf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2978,7 +3615,7 @@ func installLangNS() {
 	})
 
 	// persistent!: freeze a transient back to a persistent collection
-	persistentf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	persistentf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -2995,7 +3632,7 @@ func installLangNS() {
 	})
 
 	// conj!: mutating conj on a transient
-	conjBang, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	conjBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			return vm.NewTransientVector(nil), nil
 		}
@@ -3036,7 +3673,7 @@ func installLangNS() {
 	})
 
 	// assoc!: mutating assoc on a transient
-	assocBang, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	assocBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3072,8 +3709,27 @@ func installLangNS() {
 		}
 	})
 
+	// disj!: mutating disj on a transient set
+	disjBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		t, ok := vs[0].(*vm.TransientSet)
+		if !ok {
+			return vm.NIL, fmt.Errorf("disj! expected TransientSet")
+		}
+		var err error
+		for i := 1; i < len(vs); i++ {
+			t, err = t.Disj(vs[i])
+			if err != nil {
+				return vm.NIL, err
+			}
+		}
+		return t, nil
+	})
+
 	// dissoc!: mutating dissoc on a transient map
-	dissocBang, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	dissocBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3092,7 +3748,7 @@ func installLangNS() {
 	})
 
 	// make-record-type: create a RecordType with name and field keywords
-	makeRecordType, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	makeRecordType, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3112,7 +3768,7 @@ func installLangNS() {
 	})
 
 	// make-record: create a Record from a RecordType and a map
-	makeRecord, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	makeRecord, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3128,7 +3784,7 @@ func installLangNS() {
 	})
 
 	// record?: check if a value is a Record
-	isRecord, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isRecord, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3137,7 +3793,7 @@ func installLangNS() {
 	})
 
 	// make-deftype: create a DType (deftype class) with a name and field symbols.
-	makeDType, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	makeDType, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3157,7 +3813,7 @@ func installLangNS() {
 	})
 
 	// make-deftype-instance: construct an instance of a DType from positional field values.
-	makeDTypeInstance, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	makeDTypeInstance, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3172,7 +3828,7 @@ func installLangNS() {
 	})
 
 	// defprotocol*: create a protocol (called by defprotocol macro)
-	defProtocol, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	defProtocol, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3192,7 +3848,7 @@ func installLangNS() {
 	})
 
 	// extend-type*: extend a protocol for a type (called by extend-type macro)
-	extendType, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	extendType, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3218,7 +3874,7 @@ func installLangNS() {
 	})
 
 	// make-protocol-fn: create a ProtocolFn for dispatch
-	makeProtocolFn, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	makeProtocolFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3234,7 +3890,7 @@ func installLangNS() {
 	})
 
 	// satisfies?: check if a value's type implements a protocol
-	satisfies, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	satisfies, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3246,7 +3902,7 @@ func installLangNS() {
 	})
 
 	// defmulti*: create a multimethod (called by defmulti macro)
-	defMulti, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	defMulti, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3266,7 +3922,7 @@ func installLangNS() {
 	})
 
 	// defmethod*: add a method to a multimethod (called by defmethod macro)
-	defMethod, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	defMethod, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3283,7 +3939,7 @@ func installLangNS() {
 	})
 
 	// methods: return the method map of a multimethod
-	methods, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	methods, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3295,7 +3951,7 @@ func installLangNS() {
 	})
 
 	// pr-str: print readably to string (with quotes on strings)
-	prStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	prStr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
 		for i := range vs {
 			if i > 0 {
@@ -3307,7 +3963,7 @@ func installLangNS() {
 	})
 
 	// prn: print readably + newline
-	prn, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	prn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
 		for i := range vs {
 			if i > 0 {
@@ -3320,7 +3976,7 @@ func installLangNS() {
 	})
 
 	// prn-str: print readably + newline to string
-	prnStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	prnStr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
 		for i := range vs {
 			if i > 0 {
@@ -3333,7 +3989,7 @@ func installLangNS() {
 	})
 
 	// print-str: print human-readably to string (no quotes on strings)
-	printStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	printStr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
 		for i := range vs {
 			if i > 0 {
@@ -3352,7 +4008,7 @@ func installLangNS() {
 	})
 
 	// println-str: print human-readably + newline to string
-	printlnStr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	printlnStr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		b := &strings.Builder{}
 		for i := range vs {
 			if i > 0 {
@@ -3372,7 +4028,7 @@ func installLangNS() {
 	})
 
 	// re-find: find first match of regex in string
-	reFind, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	reFind, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3399,7 +4055,7 @@ func installLangNS() {
 	})
 
 	// re-matches: match entire string against regex
-	reMatches, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	reMatches, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3426,7 +4082,7 @@ func installLangNS() {
 	})
 
 	// re-seq: return lazy seq of all matches
-	reSeq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	reSeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3451,12 +4107,14 @@ func installLangNS() {
 
 	// require loads a namespace by name (like Clojure's require function for REPL use)
 	// Supports: (require 'foo), (require '[foo :as f]), (require '[foo :refer [a b]])
-	requiref, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	requiref, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		cns := CurrentNS.Deref().(*vm.Namespace)
 		for _, v := range vs {
 			switch arg := v.(type) {
 			case vm.Symbol:
-				NS(string(arg)) // triggers autoloading
+				if _, err := RequireNS(string(arg)); err != nil {
+					return vm.NIL, err
+				}
 			case vm.ArrayVector:
 				// Vector form: [ns-name :as alias] or [ns-name :refer [syms...]]
 				if arg.RawCount() < 1 {
@@ -3466,7 +4124,10 @@ func installLangNS() {
 				if !ok {
 					return vm.NIL, fmt.Errorf("require: first element must be a symbol")
 				}
-				target := NS(string(nsName))
+				target, err := RequireNS(string(nsName))
+				if err != nil {
+					return vm.NIL, err
+				}
 				// Parse options
 				for i := 1; i < arg.RawCount()-1; i += 2 {
 					opt := arg.ValueAt(vm.Int(int64(i)))
@@ -3496,7 +4157,7 @@ func installLangNS() {
 	})
 
 	// find-ns returns the namespace with the given name, or nil
-	findNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	findNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3511,8 +4172,26 @@ func installLangNS() {
 		return ns, nil
 	})
 
+	resolvef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		sym, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("resolve expected Symbol")
+		}
+		cns := CurrentNS.Deref().(*vm.Namespace)
+		if v := cns.Lookup(sym); v != vm.NIL {
+			return v, nil
+		}
+		return vm.NIL, nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
 	// all-ns returns a list of all loaded namespaces
-	allNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	allNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		var nss []vm.Value
 		for _, ns := range nsRegistry {
 			nss = append(nss, ns)
@@ -3521,7 +4200,7 @@ func installLangNS() {
 	})
 
 	// the-ns returns the namespace for a symbol, throwing if not found
-	theNs, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	theNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3541,7 +4220,7 @@ func installLangNS() {
 	})
 
 	// ns-name returns the name of a namespace as a symbol
-	nsName, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	nsName, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3553,7 +4232,7 @@ func installLangNS() {
 	})
 
 	// lazy-seq* creates a LazySeq from a thunk function
-	lazySeq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	lazySeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("lazy-seq* expected 1 argument, got %d", len(vs))
 		}
@@ -3564,7 +4243,7 @@ func installLangNS() {
 		return vm.NewLazySeq(fn), nil
 	})
 
-	pushBinding, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	pushBinding, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3576,7 +4255,7 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
-	popBinding, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	popBinding, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3588,7 +4267,27 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
-	withMeta, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	boundFnStar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("bound-fn* expects 1 arg")
+		}
+		fn, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bound-fn* expected Fn")
+		}
+		snap := vm.SnapshotBindings()
+		if len(snap) == 0 {
+			return fn, nil
+		}
+		wrapped, _ := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
+			return vm.RunWithBindings(snap, func() (vm.Value, error) {
+				return fn.Invoke(args)
+			})
+		})
+		return wrapped, nil
+	})
+
+	withMeta, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3602,7 +4301,7 @@ func installLangNS() {
 		return m.WithMeta(vs[1]), nil
 	})
 
-	metaf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	metaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3617,7 +4316,7 @@ func installLangNS() {
 	})
 
 	// throw
-	throwf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	throwf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3625,7 +4324,7 @@ func installLangNS() {
 	})
 
 	// ex-info
-	exInfo, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	exInfo, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -3647,7 +4346,7 @@ func installLangNS() {
 	})
 
 	// ex-message
-	exMessage, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	exMessage, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments")
 		}
@@ -3658,7 +4357,7 @@ func installLangNS() {
 	})
 
 	// ex-data
-	exData, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	exData, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments")
 		}
@@ -3669,7 +4368,7 @@ func installLangNS() {
 	})
 
 	// ex-cause
-	exCause, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	exCause, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments")
 		}
@@ -3686,7 +4385,7 @@ func installLangNS() {
 	// transformer-seq* — (transformer-seq* xform coll) → lazy seq
 	// Lazily pulls elements from coll through the transducer xform.
 	// Uses a buffer-based approach: each source element may produce 0, 1, or many outputs.
-	transformerSeq, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	transformerSeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("transformer-seq* expects 2 args")
 		}
@@ -3791,7 +4490,7 @@ func installLangNS() {
 	})
 
 	// delay — (delay body) is a macro in core.lg, but we need delay* as the constructor
-	delayStar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	delayStar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("delay* expects 1 arg (thunk fn)")
 		}
@@ -3803,7 +4502,7 @@ func installLangNS() {
 	})
 
 	// force — deref a delay (or return value if not a delay)
-	force, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	force, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("force expects 1 arg")
 		}
@@ -3814,7 +4513,7 @@ func installLangNS() {
 	})
 
 	// delay? — test if value is a Delay
-	isDelay, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isDelay, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
@@ -3822,10 +4521,10 @@ func installLangNS() {
 		return vm.Boolean(ok), nil
 	})
 
-	// realized? — test if a Delay, Promise, or Future has been realized
-	isRealized, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// realized? — test if a Delay, Promise, Future, or LazySeq has been realized
+	isRealized, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			return vm.FALSE, nil
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		if d, ok := vs[0].(*vm.Delay); ok {
 			return vm.Boolean(d.IsRealized()), nil
@@ -3833,11 +4532,14 @@ func installLangNS() {
 		if p, ok := vs[0].(*vm.Promise); ok {
 			return vm.Boolean(p.IsRealized()), nil
 		}
-		return vm.FALSE, nil
+		if s, ok := vs[0].(*vm.LazySeq); ok {
+			return vm.Boolean(s.IsRealized()), nil
+		}
+		return vm.NIL, fmt.Errorf("realized? expected delay, promise, future, or lazy seq")
 	})
 
 	// volatile! — create a volatile mutable box
-	volatilef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	volatilef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("volatile! expects 1 arg")
 		}
@@ -3845,7 +4547,7 @@ func installLangNS() {
 	})
 
 	// vreset! — set volatile value
-	vreset, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	vreset, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("vreset! expects 2 args")
 		}
@@ -3857,7 +4559,7 @@ func installLangNS() {
 	})
 
 	// vswap! — apply fn to volatile value: (vswap! vol f args...)
-	vswap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	vswap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("vswap! expects at least 2 args")
 		}
@@ -3880,7 +4582,7 @@ func installLangNS() {
 	})
 
 	// reduced — wrap a value to signal early termination
-	reducedf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	reducedf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("reduced expects 1 arg")
 		}
@@ -3888,7 +4590,7 @@ func installLangNS() {
 	})
 
 	// reduced? — test if value is Reduced
-	isReducedf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isReducedf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
@@ -3896,7 +4598,7 @@ func installLangNS() {
 	})
 
 	// compare — generic comparison: -1, 0, 1
-	comparef, err = vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	comparef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("compare expects 2 args")
 		}
@@ -3908,7 +4610,7 @@ func installLangNS() {
 	})
 
 	// print — like println but no newline, space-separated
-	printf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	printf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		for i, v := range vs {
 			if i > 0 {
 				fmt.Print(" ")
@@ -3923,7 +4625,7 @@ func installLangNS() {
 	})
 
 	// pr — print readably (like prn without newline)
-	prf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	prf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		for i, v := range vs {
 			if i > 0 {
 				fmt.Print(" ")
@@ -3935,7 +4637,7 @@ func installLangNS() {
 
 	// --- Bitwise ops ---
 
-	bitAnd, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitAnd, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-and expects 2 args")
 		}
@@ -3950,7 +4652,7 @@ func installLangNS() {
 		return vm.MakeInt(int(a) & int(b)), nil
 	})
 
-	bitOr, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitOr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-or expects 2 args")
 		}
@@ -3965,7 +4667,7 @@ func installLangNS() {
 		return vm.MakeInt(int(a) | int(b)), nil
 	})
 
-	bitXor, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitXor, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-xor expects 2 args")
 		}
@@ -3980,7 +4682,7 @@ func installLangNS() {
 		return vm.MakeInt(int(a) ^ int(b)), nil
 	})
 
-	bitNot, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitNot, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("bit-not expects 1 arg")
 		}
@@ -3991,7 +4693,7 @@ func installLangNS() {
 		return vm.MakeInt(^int(a)), nil
 	})
 
-	bitShiftLeft, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitShiftLeft, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-shift-left expects 2 args")
 		}
@@ -4006,7 +4708,7 @@ func installLangNS() {
 		return vm.MakeInt(int(a) << uint(b)), nil
 	})
 
-	bitShiftRight, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitShiftRight, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-shift-right expects 2 args")
 		}
@@ -4021,7 +4723,7 @@ func installLangNS() {
 		return vm.MakeInt(int(a) >> uint(b)), nil
 	})
 
-	unsignedBitShiftRight, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	unsignedBitShiftRight, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expects 2 args")
 		}
@@ -4036,7 +4738,7 @@ func installLangNS() {
 		return vm.MakeInt(int(uint(a) >> uint(b))), nil
 	})
 
-	bitTest, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitTest, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-test expects 2 args")
 		}
@@ -4051,7 +4753,7 @@ func installLangNS() {
 		return vm.Boolean(int(a)&(1<<uint(b)) != 0), nil
 	})
 
-	bitSet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitSet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-set expects 2 args")
 		}
@@ -4066,7 +4768,7 @@ func installLangNS() {
 		return vm.MakeInt(int(a) | (1 << uint(b))), nil
 	})
 
-	bitClear, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitClear, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-clear expects 2 args")
 		}
@@ -4081,7 +4783,7 @@ func installLangNS() {
 		return vm.MakeInt(int(a) &^ (1 << uint(b))), nil
 	})
 
-	bitAndNot, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitAndNot, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-and-not expects 2 args")
 		}
@@ -4096,7 +4798,7 @@ func installLangNS() {
 		return vm.MakeInt(int(a) &^ int(b)), nil
 	})
 
-	bitFlip, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bitFlip, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("bit-flip expects 2 args")
 		}
@@ -4112,7 +4814,7 @@ func installLangNS() {
 	})
 
 	// re-groups — find all submatch groups: (re-groups regex str) → vector of [match group1 group2 ...]
-	reGroups, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	reGroups, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("re-groups expects 2 args")
 		}
@@ -4140,12 +4842,12 @@ func installLangNS() {
 	})
 
 	// promise — create a promise
-	promisef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	promisef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NewPromise(), nil
 	})
 
 	// deliver — deliver a value to a promise
-	deliver, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	deliver, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("deliver expects 2 args")
 		}
@@ -4158,7 +4860,7 @@ func installLangNS() {
 
 	// future — run body in a goroutine, return a promise that delivers the result
 	// (future* thunk) — internal, macro wraps body
-	futureStar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	futureStar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("future* expects 1 arg (thunk fn)")
 		}
@@ -4166,9 +4868,12 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("future* expected Fn")
 		}
+		snap := vm.SnapshotBindings()
 		p := vm.NewPromise()
 		go func() {
-			v, err := fn.Invoke(nil)
+			v, err := vm.RunWithBindings(snap, func() (vm.Value, error) {
+				return fn.Invoke(nil)
+			})
 			if err != nil {
 				p.Deliver(vm.NIL)
 			} else {
@@ -4179,7 +4884,7 @@ func installLangNS() {
 	})
 
 	// add-tap / remove-tap / tap> — debug tap queue (synchronous)
-	addTap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	addTap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("add-tap expects 1 arg")
 		}
@@ -4193,7 +4898,7 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
-	removeTap, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	removeTap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("remove-tap expects 1 arg")
 		}
@@ -4208,7 +4913,7 @@ func installLangNS() {
 		return vm.NIL, nil
 	})
 
-	tapBang, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	tapBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("tap> expects 1 arg")
 		}
@@ -4222,38 +4927,44 @@ func installLangNS() {
 		return vm.TRUE, nil
 	})
 
-	// add-watch — (add-watch atom key fn)
-	addWatch, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// add-watch — (add-watch atom-or-var key fn)
+	addWatch, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
 			return vm.NIL, fmt.Errorf("add-watch expects 3 args")
-		}
-		a, ok := vs[0].(*vm.Atom)
-		if !ok {
-			return vm.NIL, fmt.Errorf("add-watch expected Atom")
 		}
 		fn, ok := vs[2].(vm.Fn)
 		if !ok {
 			return vm.NIL, fmt.Errorf("add-watch expected Fn")
 		}
-		a.AddWatch(vs[1], fn)
+		switch ref := vs[0].(type) {
+		case *vm.Atom:
+			ref.AddWatch(vs[1], fn)
+		case *vm.Var:
+			ref.AddWatch(vs[1], fn)
+		default:
+			return vm.NIL, fmt.Errorf("add-watch expected Atom or Var")
+		}
 		return vs[0], nil
 	})
 
-	// remove-watch — (remove-watch atom key)
-	removeWatch, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// remove-watch — (remove-watch atom-or-var key)
+	removeWatch, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("remove-watch expects 2 args")
 		}
-		a, ok := vs[0].(*vm.Atom)
-		if !ok {
-			return vm.NIL, fmt.Errorf("remove-watch expected Atom")
+		switch ref := vs[0].(type) {
+		case *vm.Atom:
+			ref.RemoveWatch(vs[1])
+		case *vm.Var:
+			ref.RemoveWatch(vs[1])
+		default:
+			return vm.NIL, fmt.Errorf("remove-watch expected Atom or Var")
 		}
-		a.RemoveWatch(vs[1])
 		return vs[0], nil
 	})
 
 	// alter-meta! — (alter-meta! ref f & args)
-	alterMeta, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	alterMeta, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.NIL, fmt.Errorf("alter-meta! expects at least 2 args")
 		}
@@ -4268,8 +4979,19 @@ func installLangNS() {
 		return a.AlterMeta(fn, vs[2:])
 	})
 
+	getValidator, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("get-validator expects 1 arg")
+		}
+		a, ok := vs[0].(*vm.Atom)
+		if !ok {
+			return vm.NIL, fmt.Errorf("get-validator expected Atom")
+		}
+		return a.Validator(), nil
+	})
+
 	// subvec — (subvec v start) or (subvec v start end)
-	subvecf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	subvecf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("subvec expects 2-3 args")
 		}
@@ -4317,7 +5039,7 @@ func installLangNS() {
 	})
 
 	// fn? — test if value is callable
-	isFn, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
@@ -4331,8 +5053,8 @@ func installLangNS() {
 		}
 	})
 
-	// double? — alias for float?
-	isDouble, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// double? — true only for float64 values; float? accepts float32 and float64.
+	isDouble, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
@@ -4341,7 +5063,7 @@ func installLangNS() {
 	})
 
 	// instance? — type check (simplified: checks if type name matches)
-	instancep, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	instancep, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -4353,7 +5075,7 @@ func installLangNS() {
 	})
 
 	// ifn? — true if value implements Fn (invokable: functions, keywords, maps, sets, vectors)
-	isIFn, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	isIFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
@@ -4366,7 +5088,7 @@ func installLangNS() {
 	})
 
 	// identical? — reference/value identity
-	identical, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	identical, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -4374,7 +5096,7 @@ func installLangNS() {
 	})
 
 	// any? — returns true for everything (every value satisfies any?)
-	anyp, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	anyp, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
@@ -4382,7 +5104,7 @@ func installLangNS() {
 	})
 
 	// unreduced — unwrap Reduced, or return value as-is
-	unreduced, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	unreduced, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("unreduced expects 1 arg")
 		}
@@ -4393,7 +5115,7 @@ func installLangNS() {
 	})
 
 	// ensure-reduced — if already Reduced, return as-is; otherwise wrap
-	ensureReduced, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	ensureReduced, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("ensure-reduced expects 1 arg")
 		}
@@ -4413,6 +5135,7 @@ func installLangNS() {
 	CurrentNS = ns.Def("*ns*", ns)
 	ns.Def("*compiling-aot*", vm.FALSE)
 	ns.Def("*in-wasm*", vm.FALSE)
+	ns.Def("Object", vm.AnyType)
 	// True if the host terminal renders ANSI escape sequences. Defaults to
 	// true; flipped to false on platforms that don't (e.g. plan9 / rio —
 	// see term_plan9.go).
@@ -4446,6 +5169,18 @@ func installLangNS() {
 	ns.Def("+'", plusP)
 	ns.Def("*'", mulP)
 	ns.Def("-'", subP)
+	ns.Def("unchecked-add", uncheckedAdd)
+	ns.Def("unchecked-subtract", uncheckedSubtract)
+	ns.Def("unchecked-multiply", uncheckedMultiply)
+	ns.Def("unchecked-negate", uncheckedNegate)
+	ns.Def("unchecked-divide-int", uncheckedDivideInt)
+	ns.Def("unchecked-long", uncheckedLong)
+	ns.Def("unchecked-int", uncheckedInt)
+	ns.Def("unchecked-short", uncheckedShort)
+	ns.Def("unchecked-byte", uncheckedByte)
+	ns.Def("unchecked-char", uncheckedChar)
+	ns.Def("unchecked-double", uncheckedDouble)
+	ns.Def("unchecked-float", uncheckedFloat)
 
 	ns.Def("=", equals)
 	ns.Def("not=", notEq)
@@ -4465,6 +5200,7 @@ func installLangNS() {
 	ns.Def("set-macro!", setMacro)
 	ns.Def("gensym", gensym)
 	ns.Def("in-ns", inNs)
+	ns.Def("exclude-in-current-ns", excludeInCurrentNs)
 	ns.Def("use", use)
 	ns.Def("alias", aliasf)
 	ns.Def("name", name)
@@ -4473,6 +5209,7 @@ func installLangNS() {
 	ns.Def("vector", vector)
 	ns.Def("vec", vec)
 	ns.Def("hash-map", hashMap)
+	ns.Def("array-map", arrayMap)
 	ns.Def("list", list)
 	ns.Def("range", rangef)
 	ns.Def("keyword", keyword)
@@ -4485,6 +5222,7 @@ func installLangNS() {
 
 	ns.Def("seq", seq)
 	ns.Def("seq?", isSeq)
+	ns.Def("list?", isList)
 
 	// basic predicates needed during early core bootstrap
 	ns.Def("coll?", isColl)
@@ -4552,11 +5290,11 @@ func installLangNS() {
 	ns.Def("<!!", changet)
 
 	ns.Def("int", intf)
-	ns.Def("long", intf)
+	ns.Def("long", longf)
 	ns.Def("byte", intf)
 	ns.Def("short", intf)
 	ns.Def("float", floatf)
-	ns.Def("double", floatf)
+	ns.Def("double", doublef)
 	ns.Def("number?", isNumber)
 	ns.Def("float?", isFloat)
 	ns.Def("int?", isInt)
@@ -4588,6 +5326,7 @@ func installLangNS() {
 	ns.Def("persistent!", persistentf)
 	ns.Def("conj!", conjBang)
 	ns.Def("assoc!", assocBang)
+	ns.Def("disj!", disjBang)
 	ns.Def("dissoc!", dissocBang)
 	ns.Def("make-record-type", makeRecordType)
 	ns.Def("make-record", makeRecord)
@@ -4595,6 +5334,7 @@ func installLangNS() {
 	ns.Def("make-deftype", makeDType)
 	ns.Def("make-deftype-instance", makeDTypeInstance)
 	ns.Def("defprotocol*", defProtocol)
+	installHierarchyBuiltins(ns)
 	ns.Def("make-protocol-fn", makeProtocolFn)
 	ns.Def("extend-type*", extendType)
 	ns.Def("satisfies?", satisfies)
@@ -4611,6 +5351,7 @@ func installLangNS() {
 	ns.Def("re-seq", reSeq)
 	ns.Def("require", requiref)
 	ns.Def("find-ns", findNs)
+	ns.Def("resolve", resolvef)
 	ns.Def("all-ns", allNs)
 	ns.Def("the-ns", theNs)
 	ns.Def("ns-name", nsName)
@@ -4626,6 +5367,7 @@ func installLangNS() {
 	ns.Def("meta", metaf)
 	ns.Def("push-binding!", pushBinding)
 	ns.Def("pop-binding!", popBinding)
+	ns.Def("bound-fn*", boundFnStar)
 
 	ns.Def("throw", throwf)
 	ns.Def("ex-info", exInfo)
@@ -4641,7 +5383,7 @@ func installLangNS() {
 	ns.Def("vreset!", vreset)
 	ns.Def("vswap!", vswap)
 	// bigint — coerce to BigInt
-	bigintf, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	bigintf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("bigint expects 1 arg")
 		}
@@ -4649,7 +5391,17 @@ func installLangNS() {
 		case vm.Int:
 			return vm.NewBigIntFromInt64(int64(v)), nil
 		case vm.Float:
-			return vm.NewBigIntFromInt64(int64(v)), nil
+			f := float64(v)
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0])
+			}
+			decimal := strconv.FormatFloat(f, 'g', -1, 64)
+			i, _, err := new(big.Float).SetPrec(4096).SetMode(big.ToZero).Parse(decimal, 10)
+			if err != nil || i == nil {
+				return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0])
+			}
+			bi, _ := i.Int(nil)
+			return vm.NewBigInt(bi), nil
 		case *vm.BigInt:
 			return v, nil
 		case vm.String:
@@ -4662,8 +5414,9 @@ func installLangNS() {
 		return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0].Type().Name())
 	})
 
-	// bigint? — test if value is BigInt
-	isBigInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// bigint?/big-int? — test if value is BigInt. Clojure core does not expose
+	// a BigInt-specific predicate; big-int? is useful for compatibility suites.
+	isBigInt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.FALSE, nil
 		}
@@ -4672,6 +5425,7 @@ func installLangNS() {
 
 	ns.Def("bigint", bigintf)
 	ns.Def("bigint?", isBigInt)
+	ns.Def("big-int?", isBigInt)
 
 	// ratio? — test if value is Ratio
 	isRatio, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -4730,6 +5484,32 @@ func installLangNS() {
 	})
 	ns.Def("set?", isSet)
 
+	// map-entry? — test if value is a key/value pair from a map
+	isMapEntry, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		if _, ok := vs[0].(vm.MapEntry); ok {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("map-entry?", isMapEntry)
+
+	// lazy-seq? — test if value is a thunk-backed lazy seq. LazySeq.Type()
+	// reports ListType for print/seq compatibility, so user-side type
+	// checks can't reach the underlying Go type; this predicate does.
+	isLazySeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.FALSE, nil
+		}
+		if _, ok := vs[0].(*vm.LazySeq); ok {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("lazy-seq?", isLazySeq)
+
 	// reversible? — test if value supports rseq
 	isReversible, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -4767,7 +5547,7 @@ func installLangNS() {
 				return vm.NIL, nil
 			}
 			var s vm.Seq = vm.EmptyList
-			for i := 0; i < n; i++ {
+			for i := range n {
 				s = vm.NewCons(v[i], s)
 			}
 			return s, nil
@@ -4777,7 +5557,7 @@ func installLangNS() {
 				return vm.NIL, nil
 			}
 			var s vm.Seq = vm.EmptyList
-			for i := 0; i < n; i++ {
+			for i := range n {
 				s = vm.NewCons(v.ValueAt(vm.MakeInt(i)), s)
 			}
 			return s, nil
@@ -4841,6 +5621,34 @@ func installLangNS() {
 	})
 	ns.Def("bigdec", bigdecf)
 
+	roundBigdec, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("round-bigdec expects precision, rounding mode, and value")
+		}
+		precision, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("round-bigdec expected integer precision")
+		}
+		var modeName string
+		switch m := vs[1].(type) {
+		case vm.Keyword:
+			modeName = string(m)
+		case vm.Symbol:
+			modeName = string(m)
+		case vm.String:
+			modeName = string(m)
+		default:
+			return vm.NIL, fmt.Errorf("round-bigdec expected rounding mode")
+		}
+		modeName = strings.TrimPrefix(strings.ToLower(modeName), ":")
+		bd, ok := vs[2].(*vm.BigDecimal)
+		if !ok {
+			return vs[2], nil
+		}
+		return roundBigDecimalValue(bd, precision, modeName)
+	})
+	ns.Def("round-bigdec", roundBigdec)
+
 	// rationalize — convert to Ratio
 	rationalizef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -4850,9 +5658,9 @@ func installLangNS() {
 		case *vm.Ratio:
 			return v, nil
 		case vm.Int:
-			return vm.NewRatioFromInts(int64(v), 1), nil
+			return vm.MaybeSimplifyRatio(big.NewRat(int64(v), 1)), nil
 		case *vm.BigInt:
-			return vm.NewRatio(new(big.Rat).SetInt(v.Val())), nil
+			return vm.MaybeSimplifyRatio(new(big.Rat).SetInt(v.Val())), nil
 		case vm.Float:
 			f := float64(v)
 			if math.IsInf(f, 0) || math.IsNaN(f) {
@@ -4902,6 +5710,7 @@ func installLangNS() {
 	ns.Def("add-watch", addWatch)
 	ns.Def("remove-watch", removeWatch)
 	ns.Def("alter-meta!", alterMeta)
+	ns.Def("get-validator", getValidator)
 	ns.Def("subvec", subvecf)
 	ns.Def("print", printf)
 	ns.Def("pr", prf)
@@ -4980,6 +5789,8 @@ func installLangNS() {
 		}
 		switch v := vs[0].(type) {
 		case vm.Float:
+			return vm.Boolean(math.IsNaN(float64(v))), nil
+		case vm.Float32:
 			return vm.Boolean(math.IsNaN(float64(v))), nil
 		case vm.Int, *vm.BigInt, *vm.Ratio, *vm.BigDecimal:
 			return vm.FALSE, nil
@@ -5132,7 +5943,7 @@ func installLangNS() {
 				arr = vm.NewObjectArray(size)
 			}
 			if len(vs) == 2 {
-				for i := 0; i < size; i++ {
+				for i := range size {
 					if err := arr.Set(i, vs[1]); err != nil {
 						return vm.NIL, err
 					}
@@ -5451,12 +6262,10 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("alter-var-root expects a function")
 		}
-		old := v.Root()
-		result, err := fn.Invoke(append([]vm.Value{old}, vs[2:]...))
+		result, err := v.AlterRootArgs(fn, vs[2:])
 		if err != nil {
 			return vm.NIL, err
 		}
-		v.SetRoot(result)
 		return result, nil
 	})
 	ns.Def("alter-var-root", alterVarRoot)
@@ -5480,14 +6289,19 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("macroexpand expects 1 arg")
 		}
 		form := vs[0]
-		lst, ok := form.(*vm.List)
-		if !ok {
+		// Accept *vm.List or any other vm.Seq (Cons, LazySeq). The cond
+		// macro expands one step into (if ... (cons 'cond rest)); the
+		// inner (cons 'cond ...) is a *vm.Cons, so the old *vm.List-only
+		// check left it unexpanded.
+		s, err := seqOf(form)
+		if err != nil || s == nil {
 			return form, nil
 		}
-		if lst == vm.EmptyList || lst.First() == nil {
+		first := s.First()
+		if first == nil {
 			return form, nil
 		}
-		sym, ok := lst.First().(vm.Symbol)
+		sym, ok := first.(vm.Symbol)
 		if !ok {
 			return form, nil
 		}
@@ -5514,8 +6328,8 @@ func installLangNS() {
 		}
 		// Call the macro with the form's args
 		args := make([]vm.Value, 0)
-		for s := lst.Next(); s != nil; s = s.Next() {
-			args = append(args, s.First())
+		for n := s.Next(); n != nil; n = n.Next() {
+			args = append(args, n.First())
 		}
 		macroFn, ok := resolved.Deref().(vm.Fn)
 		if !ok {
@@ -5527,6 +6341,37 @@ func installLangNS() {
 
 	// macroexpand-1 — same as macroexpand for now
 	ns.Def("macroexpand-1", macroexpandf)
+
+	// chunk->fn — wrap a *vm.CodeChunk (as produced by
+	// ir.passes.pipeline/compile-form) into a *vm.Func with the given
+	// arity and variadic flag. Used by the IR-compile path of the defn
+	// macro so the embedded function value flows back into the standard
+	// compile pipeline as a constant.
+	chunkToFnFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("chunk->fn expects (arity variadic? chunk), got %d args", len(vs))
+		}
+		arityV, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("chunk->fn: arity must be Int, got %s", vs[0].Type().Name())
+		}
+		variadic := false
+		if b, ok := vs[1].(vm.Boolean); ok {
+			variadic = bool(b)
+		} else if vs[1] != vm.NIL {
+			return vm.NIL, fmt.Errorf("chunk->fn: variadic? must be Boolean or nil, got %s", vs[1].Type().Name())
+		}
+		boxed, ok := vs[2].(*vm.Boxed)
+		if !ok {
+			return vm.NIL, fmt.Errorf("chunk->fn: third arg must be boxed CodeChunk, got %s", vs[2].Type().Name())
+		}
+		chunk, ok := boxed.Unbox().(*vm.CodeChunk)
+		if !ok {
+			return vm.NIL, fmt.Errorf("chunk->fn: boxed value is not a CodeChunk")
+		}
+		return vm.MakeFunc(int(arityV), variadic, chunk), nil
+	})
+	ns.Def("chunk->fn", chunkToFnFn)
 
 	// sleep — sleep for n milliseconds
 	sleepf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -5566,11 +6411,23 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("intern expects a symbol name")
 		}
-		var val vm.Value = vm.NIL
-		if len(vs) == 3 {
-			val = vs[2]
+		if len(vs) == 2 {
+			if existing := targetNS.LookupLocal(sym); existing != nil {
+				return existing, nil
+			}
+			return targetNS.Def(string(sym), vm.NIL), nil
 		}
-		v := targetNS.Def(string(sym), val)
+		// 3-arg form. If the Var already exists, UPDATE its root in
+		// place; otherwise create a fresh Var. This matters when
+		// other compiled code holds a captured Var pointer in its
+		// const pool — recreating the Var would leave those pointers
+		// referencing the old nil-rooted Var (the chicken-and-egg
+		// problem from Phase F's data-layer rollout).
+		if existing := targetNS.LookupLocal(sym); existing != nil {
+			existing.SetRoot(vs[2])
+			return existing, nil
+		}
+		v := targetNS.Def(string(sym), vs[2])
 		return v, nil
 	})
 	ns.Def("intern", internf)
@@ -5667,13 +6524,13 @@ func installLangNS() {
 	})
 	ns.Def("parse-uuid", parseUUID)
 
-	// == — numeric equality (same as = for our purposes)
+	// == — numeric equality across numeric categories.
 	numericEq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
 			return vm.TRUE, nil
 		}
 		for i := 1; i < len(vs); i++ {
-			if !valueEquals(vs[0], vs[i]) {
+			if !vm.NumEquivalent(vs[0], vs[i]) {
 				return vm.FALSE, nil
 			}
 		}
@@ -5681,10 +6538,116 @@ func installLangNS() {
 	})
 	ns.Def("==", numericEq)
 
+	// IR namespace primitives — declared in examples/go-gen/ir_bridge.lg,
+	// generated into pkg/rt/ir_bridge_generated.go via 'make generate-ir-bridge'.
+	// Creates a real `ir` namespace (registered globally via RegisterNS)
+	// so namespaced Lisp refs like `(ir/new-fn ...)` resolve.
+	// See docs/superpowers/specs/2026-05-22-defgostruct.md.
+	installIRBridgeBuiltins()
+
 	// IO builtins (open, close!, read-line, write!, etc.)
 	installIOBuiltins(ns)
 
 	CoreNS = ns
+	vm.SetCoreNamespace(ns)
 
 	RegisterNS(ns)
+	installClojureCompatAliases(ns)
+}
+
+func installClojureCompatAliases(ns *vm.Namespace) {
+	ns.Def("java.lang.Byte", vm.IntType)
+	ns.Def("java.lang.Short", vm.IntType)
+	ns.Def("java.lang.Integer", vm.IntType)
+	ns.Def("java.lang.Long", vm.IntType)
+	ns.Def("java.lang.Float", vm.FloatType)
+	ns.Def("java.lang.Double", vm.FloatType)
+	ns.Def("java.lang.Boolean", vm.BooleanType)
+	ns.Def("java.lang.Object", vm.AnyType)
+	ns.Def("java.math.BigDecimal", vm.BigDecimalType)
+	ns.Def("java.util.UUID", vm.UUIDType)
+
+	ns.Def("clojure.lang.BigInt", vm.BigIntType)
+	ns.Def("clojure.lang.Ratio", vm.RatioType)
+	ns.Def("clojure.lang.BigDecimal", vm.BigDecimalType)
+	ns.Def("clojure.lang.Atom", vm.AtomType)
+	ns.Def("clojure.lang.PersistentHashSet", vm.SetType)
+	ns.Def("clojure.lang.IPending", vm.PromiseType)
+
+	for _, name := range []string{
+		"clojure.lang.Associative",
+		"clojure.lang.Counted",
+		"clojure.lang.Indexed",
+		"clojure.lang.Seqable",
+		"clojure.lang.IPersistentCollection",
+		"clojure.lang.IReduce",
+	} {
+		ns.Def(name, vm.Symbol(name))
+	}
+	ns.Def("IReduce", vm.Symbol("clojure.lang.IReduce"))
+	ns.Def("String", vm.StringType)
+	ns.Def("Boolean", vm.BooleanType)
+	ns.Def("Integer.", ns.Lookup("int").(*vm.Var).Deref())
+	ns.Def("->Integer", ns.Lookup("int").(*vm.Var).Deref())
+
+	longNS := DefNSBare("Long")
+	longNS.Def("MAX_VALUE", longCompatValue(9223372036854775807))
+	longNS.Def("MIN_VALUE", longCompatValue(-9223372036854775808))
+	longNS.Def("TYPE", vm.IntType)
+
+	doubleNS := DefNSBare("Double")
+	doubleNS.Def("MAX_VALUE", vm.Float(1.7976931348623157e308))
+	doubleNS.Def("MIN_VALUE", vm.Float(4.9e-324))
+	doubleNS.Def("TYPE", vm.FloatType)
+
+	integerNS := DefNSBare("Integer")
+	integerNS.Def("TYPE", vm.IntType)
+
+	booleanNS := DefNSBare("Boolean")
+	booleanNS.Def("TYPE", vm.BooleanType)
+
+	mapEntryNS := DefNSBare("clojure.lang.MapEntry")
+	create, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("MapEntry/create expects 2 args")
+		}
+		return vm.MapEntry{Key: vs[0], Value: vs[1]}, nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	mapEntryNS.Def("create", create)
+}
+
+func longCompatValue(v int64) vm.Value {
+	if strconv.IntSize == 64 {
+		return vm.Int(v)
+	}
+	return vm.NewBigIntFromInt64(v)
+}
+
+func strValue(v vm.Value) string {
+	if v == vm.NIL {
+		return ""
+	}
+	switch x := v.(type) {
+	case vm.String:
+		return string(x)
+	case vm.Char:
+		return string(rune(x))
+	case vm.Float:
+		f := float64(x)
+		if math.IsInf(f, 1) {
+			return "Infinity"
+		}
+		if math.IsInf(f, -1) {
+			return "-Infinity"
+		}
+	case *vm.BigInt:
+		return x.Val().String()
+	case *vm.BigDecimal:
+		s := x.String()
+		return strings.TrimSuffix(s, "M")
+	}
+	return v.String()
 }

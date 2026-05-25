@@ -23,11 +23,11 @@ const (
 
 type theTypedArrayType struct{}
 
-func (t *theTypedArrayType) String() string     { return t.Name() }
-func (t *theTypedArrayType) Type() ValueType    { return TypeType }
-func (t *theTypedArrayType) Unbox() interface{} { return reflect.TypeOf(t) }
-func (t *theTypedArrayType) Name() string       { return "let-go.lang.Array" }
-func (t *theTypedArrayType) Box(bare interface{}) (Value, error) {
+func (t *theTypedArrayType) String() string  { return t.Name() }
+func (t *theTypedArrayType) Type() ValueType { return TypeType }
+func (t *theTypedArrayType) Unbox() any      { return reflect.TypeFor[*theTypedArrayType]() }
+func (t *theTypedArrayType) Name() string    { return "let-go.lang.Array" }
+func (t *theTypedArrayType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 
@@ -38,7 +38,7 @@ var TypedArrayType *theTypedArrayType = &theTypedArrayType{}
 // Unlike persistent collections, arrays support in-place mutation via Set.
 type TypedArray struct {
 	kind ArrayKind
-	data interface{} // one of: []byte, []int64, []float64, []Value
+	data any // one of: []byte, []int64, []float64, []Value
 }
 
 // --- Constructors ---
@@ -84,7 +84,7 @@ func NewObjectArrayFrom(data []Value) *TypedArray {
 func (a *TypedArray) Type() ValueType { return TypedArrayType }
 
 // Unbox returns the underlying Go slice directly for interop.
-func (a *TypedArray) Unbox() interface{} { return a.data }
+func (a *TypedArray) Unbox() any { return a.data }
 
 // Kind returns the element kind.
 func (a *TypedArray) Kind() ArrayKind { return a.kind }
@@ -102,7 +102,7 @@ func (a *TypedArray) String() string {
 	case ArrayObject:
 		b.WriteString("#object-array[")
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			b.WriteRune(' ')
 		}
@@ -212,14 +212,14 @@ func (a *TypedArray) Clone() *TypedArray {
 
 // --- Counted interface ---
 
-func (a *TypedArray) Count() Value    { return Int(a.Len()) }
-func (a *TypedArray) RawCount() int   { return a.Len() }
+func (a *TypedArray) Count() Value      { return Int(a.Len()) }
+func (a *TypedArray) RawCount() int     { return a.Len() }
 func (a *TypedArray) Empty() Collection { return NewObjectArray(0) }
 func (a *TypedArray) Conj(v Value) Collection {
 	// Conj on an array creates a new object-array with element appended
 	n := a.Len()
 	vals := make([]Value, n+1)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		vals[i] = a.Get(i)
 	}
 	vals[n] = v
@@ -277,9 +277,9 @@ type TypedArraySeq struct {
 	i   int
 }
 
-func (s *TypedArraySeq) Type() ValueType    { return ListType }
-func (s *TypedArraySeq) Unbox() interface{} { return s }
-func (s *TypedArraySeq) Meta() Value        { return NIL }
+func (s *TypedArraySeq) Type() ValueType        { return ListType }
+func (s *TypedArraySeq) Unbox() any             { return s }
+func (s *TypedArraySeq) Meta() Value            { return NIL }
 func (s *TypedArraySeq) WithMeta(_ Value) Value { return s }
 
 func (s *TypedArraySeq) First() Value {
@@ -309,8 +309,8 @@ func (s *TypedArraySeq) Cons(val Value) Seq {
 
 func (s *TypedArraySeq) Seq() Seq { return s }
 
-func (s *TypedArraySeq) Count() Value  { return Int(s.arr.Len() - s.i) }
-func (s *TypedArraySeq) RawCount() int { return s.arr.Len() - s.i }
+func (s *TypedArraySeq) Count() Value      { return Int(s.arr.Len() - s.i) }
+func (s *TypedArraySeq) RawCount() int     { return s.arr.Len() - s.i }
 func (s *TypedArraySeq) Empty() Collection { return EmptyList }
 func (s *TypedArraySeq) Conj(val Value) Collection {
 	return s.Cons(val).(*List)

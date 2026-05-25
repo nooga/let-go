@@ -14,12 +14,12 @@ import (
 type theAtomType struct {
 }
 
-func (t *theAtomType) String() string     { return t.Name() }
-func (t *theAtomType) Type() ValueType    { return TypeType }
-func (t *theAtomType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theAtomType) String() string  { return t.Name() }
+func (t *theAtomType) Type() ValueType { return TypeType }
+func (t *theAtomType) Unbox() any      { return reflect.TypeFor[*theAtomType]() }
 
 func (t *theAtomType) Name() string { return "let-go.lang.Atom" }
-func (t *theAtomType) Box(b interface{}) (Value, error) {
+func (t *theAtomType) Box(b any) (Value, error) {
 	val, err := BoxValue(reflect.ValueOf(b))
 	if err != nil {
 		return NIL, err
@@ -33,24 +33,50 @@ var AtomType *theAtomType = &theAtomType{}
 // Swap uses optimistic concurrency with a generation counter — no value comparison needed.
 // The function may be called multiple times under contention.
 type Atom struct {
-	val      Value
-	gen      uint64 // generation counter — incremented on every mutation
-	mu       sync.Mutex
-	meta     Value
-	watches  map[Value]Fn // key → watch fn
+	val       Value
+	gen       uint64 // generation counter — incremented on every mutation
+	mu        sync.Mutex
+	meta      Value
+	validator Fn
+	watches   map[Value]Fn // key → watch fn
 }
 
 func NewAtom(root Value) *Atom {
 	return &Atom{val: root}
 }
 
-func (a *Atom) notifyWatches(oldVal, newVal Value) {
+func NewAtomWithMetaValidator(root Value, meta Value, validator Fn) (*Atom, error) {
+	a := &Atom{val: root, meta: meta, validator: validator}
+	if err := a.validate(root); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+func (a *Atom) validate(newVal Value) error {
+	if a.validator == nil {
+		return nil
+	}
+	result, err := a.validator.Invoke([]Value{newVal})
+	if err != nil {
+		return err
+	}
+	if !IsTruthy(result) {
+		return fmt.Errorf("validator rejected reference state")
+	}
+	return nil
+}
+
+func (a *Atom) notifyWatches(oldVal, newVal Value) error {
 	if len(a.watches) == 0 {
-		return
+		return nil
 	}
 	for key, fn := range a.watches {
-		fn.Invoke([]Value{key, a, oldVal, newVal})
+		if _, err := fn.Invoke([]Value{key, a, oldVal, newVal}); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (a *Atom) AddWatch(key Value, fn Fn) {
@@ -75,10 +101,17 @@ func (a *Atom) Meta() Value {
 	return a.meta
 }
 
+func (a *Atom) Validator() Value {
+	if a.validator == nil {
+		return NIL
+	}
+	return a.validator
+}
+
 func (a *Atom) WithMeta(m Value) Value {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return &Atom{val: a.val, gen: a.gen, meta: m, watches: a.watches}
+	return &Atom{val: a.val, gen: a.gen, meta: m, validator: a.validator, watches: a.watches}
 }
 
 func (a *Atom) AlterMeta(fn Fn, args []Value) (Value, error) {
@@ -97,7 +130,10 @@ func (a *Atom) AlterMeta(fn Fn, args []Value) (Value, error) {
 	return newMeta, nil
 }
 
-func (a *Atom) Reset(newVal Value) Value {
+func (a *Atom) Reset(newVal Value) (Value, error) {
+	if err := a.validate(newVal); err != nil {
+		return NIL, err
+	}
 	a.mu.Lock()
 	oldVal := a.val
 	a.val = newVal
@@ -105,9 +141,11 @@ func (a *Atom) Reset(newVal Value) Value {
 	watches := a.watches
 	a.mu.Unlock()
 	if len(watches) > 0 {
-		a.notifyWatches(oldVal, newVal)
+		if err := a.notifyWatches(oldVal, newVal); err != nil {
+			return NIL, err
+		}
 	}
-	return newVal
+	return newVal, nil
 }
 
 // Swap applies fn to the current value and atomically sets the result.
@@ -126,6 +164,9 @@ func (a *Atom) Swap(fn Fn, args []Value) (Value, error) {
 		if err != nil {
 			return NIL, err
 		}
+		if err := a.validate(newVal); err != nil {
+			return NIL, err
+		}
 
 		// Try to set — only if generation hasn't changed
 		a.mu.Lock()
@@ -135,7 +176,9 @@ func (a *Atom) Swap(fn Fn, args []Value) (Value, error) {
 			watches := a.watches
 			a.mu.Unlock()
 			if len(watches) > 0 {
-				a.notifyWatches(oldVal, newVal)
+				if err := a.notifyWatches(oldVal, newVal); err != nil {
+					return NIL, err
+				}
 			}
 			return newVal, nil
 		}
@@ -151,14 +194,18 @@ func (a *Atom) Deref() Value {
 	return v
 }
 
-func (v *Atom) Type() ValueType {
+func (a *Atom) Type() ValueType {
 	return AtomType
 }
 
-func (v *Atom) Unbox() interface{} {
-	return v.Deref().Unbox()
+func (a *Atom) Unbox() any {
+	return a
 }
 
-func (v *Atom) String() string {
-	return fmt.Sprintf("<%s %s>", AtomType, v.Deref())
+func (a *Atom) Hash() uint32 {
+	return hashString(fmt.Sprintf("%p", a))
+}
+
+func (a *Atom) String() string {
+	return fmt.Sprintf("<%s %s>", AtomType, a.Deref())
 }

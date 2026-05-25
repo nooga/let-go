@@ -12,12 +12,12 @@ import (
 
 type theFuncType struct{}
 
-func (t *theFuncType) String() string     { return t.Name() }
-func (t *theFuncType) Type() ValueType    { return TypeType }
-func (t *theFuncType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theFuncType) String() string  { return t.Name() }
+func (t *theFuncType) Type() ValueType { return TypeType }
+func (t *theFuncType) Unbox() any      { return reflect.TypeFor[*theFuncType]() }
 
 func (t *theFuncType) Name() string { return "let-go.lang.Fn" }
-func (t *theFuncType) Box(fn interface{}) (Value, error) {
+func (t *theFuncType) Box(fn any) (Value, error) {
 	return NIL, NewTypeError(fn, "can't be boxed as", t)
 }
 
@@ -44,10 +44,10 @@ func (l *Func) SetName(n string) {
 
 func (l *Func) Type() ValueType { return FuncType }
 
-type FuncInterface func(interface{})
+type FuncInterface func(any)
 
 // Unbox implements Unbox
-func (l *Func) Unbox() interface{} {
+func (l *Func) Unbox() any {
 	proxy := func(in []reflect.Value) []reflect.Value {
 		args := make([]Value, len(in))
 		for i := range in {
@@ -58,7 +58,7 @@ func (l *Func) Unbox() interface{} {
 		out, _ := f.Run() // error not propagatable through reflect proxy
 		return []reflect.Value{reflect.ValueOf(out.Unbox())}
 	}
-	return func(fptr interface{}) {
+	return func(fptr any) {
 		fn := reflect.ValueOf(fptr).Elem()
 		v := reflect.MakeFunc(fn.Type(), proxy)
 		fn.Set(v)
@@ -122,7 +122,7 @@ type Closure struct {
 func (l *Closure) Type() ValueType { return FuncType }
 
 // Unbox implements Unbox
-func (l *Closure) Unbox() interface{} {
+func (l *Closure) Unbox() any {
 	proxy := func(in []reflect.Value) []reflect.Value {
 		args := make([]Value, len(in))
 		for i := range in {
@@ -134,7 +134,7 @@ func (l *Closure) Unbox() interface{} {
 		out, _ := f.Run() // error not propagatable through reflect proxy
 		return []reflect.Value{reflect.ValueOf(out.Unbox())}
 	}
-	return func(fptr interface{}) {
+	return func(fptr any) {
 		fn := reflect.ValueOf(fptr).Elem()
 		v := reflect.MakeFunc(fn.Type(), proxy)
 		fn.Set(v)
@@ -182,7 +182,7 @@ type MultiArityFn struct {
 func (l *MultiArityFn) Type() ValueType { return FuncType }
 
 // Unbox implements Unbox
-func (l *MultiArityFn) Unbox() interface{} {
+func (l *MultiArityFn) Unbox() any {
 	proxy := func(in []reflect.Value) []reflect.Value {
 		args := make([]Value, len(in))
 		for i := range in {
@@ -192,7 +192,7 @@ func (l *MultiArityFn) Unbox() interface{} {
 		out, _ := l.Invoke(args)
 		return []reflect.Value{reflect.ValueOf(out.Unbox())}
 	}
-	return func(fptr interface{}) {
+	return func(fptr any) {
 		fn := reflect.ValueOf(fptr).Elem()
 		v := reflect.MakeFunc(fn.Type(), proxy)
 		fn.Set(v)
@@ -238,6 +238,8 @@ func makeMultiArity(fns []Value) (*MultiArityFn, error) {
 			ma.arity = a
 		}
 		if rest, ok := f.(*Func); ok && rest.isVariadric {
+			ma.rest = rest
+		} else if rest, ok := f.(*Closure); ok && rest.fn.isVariadric {
 			ma.rest = rest
 		} else {
 			ma.fns[a] = f

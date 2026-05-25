@@ -10,9 +10,9 @@ import "fmt"
 // Protocol defines a named set of methods with type-based dispatch.
 type Protocol struct {
 	name    string
-	methods []Symbol           // method names
+	methods []Symbol                     // method names
 	impls   map[ValueType]*PersistentMap // type → {method-name → fn}
-	nilImpl *PersistentMap     // implementation for nil
+	nilImpl *PersistentMap               // implementation for nil
 }
 
 func NewProtocol(name string, methods []Symbol) *Protocol {
@@ -23,11 +23,11 @@ func NewProtocol(name string, methods []Symbol) *Protocol {
 	}
 }
 
-func (p *Protocol) Type() ValueType    { return ProtocolType }
-func (p *Protocol) Unbox() interface{} { return p }
-func (p *Protocol) String() string     { return fmt.Sprintf("<protocol %s>", p.name) }
-func (p *Protocol) Name() string       { return p.name }
-func (p *Protocol) Methods() []Symbol  { return p.methods }
+func (p *Protocol) Type() ValueType   { return ProtocolType }
+func (p *Protocol) Unbox() any        { return p }
+func (p *Protocol) String() string    { return fmt.Sprintf("<protocol %s>", p.name) }
+func (p *Protocol) Name() string      { return p.name }
+func (p *Protocol) Methods() []Symbol { return p.methods }
 
 // Extend adds implementations for a type.
 // implMap is a PersistentMap of {method-keyword → fn}.
@@ -95,10 +95,12 @@ func NewProtocolFn(protocol *Protocol, methodName Symbol) *ProtocolFn {
 	}
 }
 
-func (f *ProtocolFn) Type() ValueType    { return FuncType }
-func (f *ProtocolFn) Unbox() interface{} { return f }
-func (f *ProtocolFn) String() string     { return fmt.Sprintf("<protocol-fn %s/%s>", f.protocol.name, f.name) }
-func (f *ProtocolFn) Arity() int         { return -1 }
+func (f *ProtocolFn) Type() ValueType { return FuncType }
+func (f *ProtocolFn) Unbox() any      { return f }
+func (f *ProtocolFn) String() string {
+	return fmt.Sprintf("<protocol-fn %s/%s>", f.protocol.name, f.name)
+}
+func (f *ProtocolFn) Arity() int { return -1 }
 
 func (f *ProtocolFn) Invoke(args []Value) (Value, error) {
 	if len(args) == 0 {
@@ -122,11 +124,11 @@ func (f *ProtocolFn) Invoke(args []Value) (Value, error) {
 
 type theProtocolType struct{}
 
-func (t *theProtocolType) String() string     { return t.Name() }
-func (t *theProtocolType) Type() ValueType    { return TypeType }
-func (t *theProtocolType) Unbox() interface{} { return nil }
-func (t *theProtocolType) Name() string       { return "let-go.lang.Protocol" }
-func (t *theProtocolType) Box(bare interface{}) (Value, error) {
+func (t *theProtocolType) String() string  { return t.Name() }
+func (t *theProtocolType) Type() ValueType { return TypeType }
+func (t *theProtocolType) Unbox() any      { return nil }
+func (t *theProtocolType) Name() string    { return "let-go.lang.Protocol" }
+func (t *theProtocolType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 

@@ -14,13 +14,13 @@ import (
 type theRegexType struct {
 }
 
-func (t *theRegexType) String() string     { return t.Name() }
-func (t *theRegexType) Type() ValueType    { return TypeType }
-func (t *theRegexType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theRegexType) String() string  { return t.Name() }
+func (t *theRegexType) Type() ValueType { return TypeType }
+func (t *theRegexType) Unbox() any      { return reflect.TypeFor[*theRegexType]() }
 
 func (t *theRegexType) Name() string { return "let-go.lang.Regex" }
 
-func (t *theRegexType) Box(bare interface{}) (Value, error) {
+func (t *theRegexType) Box(bare any) (Value, error) {
 	raw, ok := bare.(*regexp.Regexp)
 	if !ok {
 		return NIL, NewTypeError(bare, "can't be boxed as", t)
@@ -40,7 +40,7 @@ type Regex struct {
 func (l *Regex) Type() ValueType { return RegexType }
 
 // Unbox implements Unbox
-func (l *Regex) Unbox() interface{} {
+func (l *Regex) Unbox() any {
 	return l
 }
 

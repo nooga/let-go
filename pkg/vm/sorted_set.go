@@ -14,12 +14,12 @@ import (
 
 type theSortedSetType struct{}
 
-func (t *theSortedSetType) String() string     { return t.Name() }
-func (t *theSortedSetType) Type() ValueType    { return TypeType }
-func (t *theSortedSetType) Unbox() interface{} { return t }
-func (t *theSortedSetType) Name() string       { return "let-go.lang.PersistentTreeSet" }
+func (t *theSortedSetType) String() string  { return t.Name() }
+func (t *theSortedSetType) Type() ValueType { return TypeType }
+func (t *theSortedSetType) Unbox() any      { return t }
+func (t *theSortedSetType) Name() string    { return "let-go.lang.PersistentTreeSet" }
 
-func (t *theSortedSetType) Box(bare interface{}) (Value, error) {
+func (t *theSortedSetType) Box(bare any) (Value, error) {
 	if s, ok := bare.(*SortedSet); ok {
 		return s, nil
 	}
@@ -52,8 +52,8 @@ func NewSortedSet(cmp Comparator, vals []Value) *SortedSet {
 
 // --- Value ---
 
-func (s *SortedSet) Type() ValueType    { return SortedSetType }
-func (s *SortedSet) Unbox() interface{} { return s.elements() }
+func (s *SortedSet) Type() ValueType { return SortedSetType }
+func (s *SortedSet) Unbox() any      { return s.elements() }
 
 func (s *SortedSet) String() string {
 	b := &strings.Builder{}
@@ -260,8 +260,8 @@ type SortedSetSeq struct {
 	i    int
 }
 
-func (s *SortedSetSeq) Type() ValueType    { return ListType }
-func (s *SortedSetSeq) Unbox() interface{} { return s.keys[s.i:] }
+func (s *SortedSetSeq) Type() ValueType { return ListType }
+func (s *SortedSetSeq) Unbox() any      { return s.keys[s.i:] }
 
 func (s *SortedSetSeq) String() string {
 	b := &strings.Builder{}

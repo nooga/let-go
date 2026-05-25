@@ -13,12 +13,12 @@ import (
 type theChanType struct {
 }
 
-func (t *theChanType) String() string     { return t.Name() }
-func (t *theChanType) Type() ValueType    { return TypeType }
-func (t *theChanType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theChanType) String() string  { return t.Name() }
+func (t *theChanType) Type() ValueType { return TypeType }
+func (t *theChanType) Unbox() any      { return reflect.TypeFor[*theChanType]() }
 
 func (t *theChanType) Name() string { return "let-go.lang.Chan" }
-func (t *theChanType) Box(b interface{}) (Value, error) {
+func (t *theChanType) Box(b any) (Value, error) {
 	chv := reflect.ValueOf(b)
 	if chv.Type().Kind() != reflect.Chan {
 		return NIL, NewTypeError(b, "is not a channel", t)
@@ -45,7 +45,7 @@ type Chan chan Value
 func (n Chan) Type() ValueType { return ChanType }
 
 // Unbox implements Value
-func (n Chan) Unbox() interface{} { return n }
+func (n Chan) Unbox() any { return n }
 
 // ChanType is the type of Chan
 var ChanType *theChanType = &theChanType{}

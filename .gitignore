@@ -16,12 +16,21 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+# Local sandboxed Go build cache used by Codex/test runs
+.gocache/
+
+# Go interop lazy binary (build artifact)
+go_interop_lazy
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
 ### Go Patch ###
 /vendor/
 /Godeps/
+
+### Makes cache dir - https://github.com/makeplus/makes ###
+/.cache/
 
 ### Intellij ###
 # Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio, WebStorm and Rider
@@ -154,3 +163,4 @@ AGENTS.md
 
 # Local goreleaser / cross-build artifacts
 /dist/
+lg-baseline

@@ -1,0 +1,310 @@
+;; IR data layer — see ./README.md for the framework overview, how
+;; to use it, and how to extend it (new passes, ops, fields, bridge
+;; primitives, plus the load-order quirks).
+;;
+;; The IR's data structures (Function, Block, Inst, BranchTarget,
+;; CondTarget) live in Lisp atoms instead of Go structs. The Go
+;; substrate provides only the VM-side primitives: chunk emission,
+;; op-table metadata, vm.Consts / vm.SourceInfo construction.
+;;
+;; Loading order matters: this file MUST be evaluated after the
+;; bridge primitives are installed (they live in the same `ir` ns)
+;; and BEFORE any pass code that calls (ir/*) accessors. cmd/lgbgen
+;; registers it accordingly.
+;;
+;; Data shape:
+;;
+;;   Function — atom holding:
+;;     {:name      String
+;;      :arity     Int
+;;      :variadic? Bool
+;;      :entry     BlockID (Int)
+;;      :consts    boxed *vm.Consts
+;;      :insts     vector of Inst maps, indexed by InstId
+;;      :blocks    vector of Block maps, indexed by BlockID
+;;      :uses-cache vector of vector of InstId | nil
+;;      :uses-dirty? Bool}
+;;
+;;   Inst (plain map):
+;;     {:op kw :refs [InstId] :aux v :block BlockID
+;;      :source-infos [boxed vm.SourceInfo] :type kw}
+;;
+;;   Block (plain map):
+;;     {:id BlockID :params [InstId] :insts [InstId]
+;;      :preds [BlockID] :term InstId}
+;;
+;;   BranchTarget (plain map):
+;;     {:target BlockID :args [InstId]}
+;;
+;;   CondTarget (plain map):
+;;     {:true-target BranchTarget :false-target BranchTarget}
+;;
+;; All accessors and mutators retain the bridge-primitive call
+;; signatures so existing pass / build / lower / dump / dominance
+;; code works unchanged.
+
+;; The `ir` namespace already exists (created by the Go bridge install
+;; at runtime). The precompile bundle context doesn't support
+;; `(ns ir ...)` for an already-existing native namespace, so we
+;; define data accessors in `ir.data` and then intern them into `ir`
+;; below so existing callers keep working with the bare `ir/op` etc.
+(ns ir.data)
+
+;; --- construction ----------------------------------------------------
+
+(defn new-fn [name arity variadic?]
+  "Allocate a new Function with an entry block (block 0). Holds a
+   fresh Consts pool. Matches Go's ir.NewFunction which calls AddBlock
+   to create the entry."
+  (atom {:name      name
+         :arity     arity
+         :variadic? variadic?
+         :entry     0
+         :consts    (ir/new-consts)
+         :insts     []
+         :blocks    [{:id 0 :params [] :insts [] :preds [] :term 0}]
+         :uses-cache nil
+         :uses-dirty? true}))
+
+(defn new-branch-target [target args]
+  {:target target :args (vec args)})
+
+(defn new-cond-target [tt ft]
+  {:true-target tt :false-target ft})
+
+;; --- read accessors --------------------------------------------------
+
+(defn fn-name      [f] (:name @f))
+(defn fn-arity     [f] (:arity @f))
+(defn fn-variadic? [f] (:variadic? @f))
+(defn fn-entry     [f] (:entry @f))
+(defn fn-consts    [f] (:consts @f))
+(defn entry-block  [f] (:entry @f))
+
+(defn inst-count [f] (count (:insts @f)))
+
+(defn blocks [f]
+  "All block IDs in construction order."
+  (vec (range (count (:blocks @f)))))
+
+;; Inst layout: positional vector [op refs aux block source-infos type].
+;; Indices 0..5; access via `nth` rather than keyword-as-fn to skip
+;; the Keyword.Invoke + hashUnencodedChars hot path.
+(defn op       [nid f] (nth (nth (:insts @f) nid) 0))
+(defn refs     [nid f] (nth (nth (:insts @f) nid) 1))
+(defn aux      [nid f] (nth (nth (:insts @f) nid) 2))
+(defn block-of [nid f] (nth (nth (:insts @f) nid) 3))
+
+(defn type-of [nid f]
+  (let [t (nth (nth (:insts @f) nid) 5)]
+    (if (nil? t) :unknown t)))
+
+(defn source-infos [nid f]
+  (let [si (nth (nth (:insts @f) nid) 4)]
+    (if (nil? si) [] si)))
+
+(defn block-params [bid f] (:params (nth (:blocks @f) bid)))
+(defn block-preds  [bid f] (:preds  (nth (:blocks @f) bid)))
+(defn block-insts  [bid f] (:insts  (nth (:blocks @f) bid)))
+(defn block-term   [bid f] (:term   (nth (:blocks @f) bid)))
+
+(defn branch-target-target [bt] (:target bt))
+(defn branch-target-args   [bt] (:args bt))
+(defn cond-target-true     [ct] (:true-target ct))
+(defn cond-target-false    [ct] (:false-target ct))
+
+;; --- uses cache management -------------------------------------------
+
+(defn- invalidate-uses-state! [f]
+  (swap! f assoc :uses-dirty? true :uses-cache nil))
+
+(defn invalidate-uses! [f]
+  (invalidate-uses-state! f))
+
+;; --- construction-time mutators --------------------------------------
+
+(defn add-block [f]
+  "Allocate a new empty Block; return its ID."
+  (let [bid (count (:blocks @f))]
+    (swap! f update :blocks conj
+           {:id bid :params [] :insts [] :preds [] :term 0})
+    bid))
+
+(defn add-inst [f block op-kw refs aux]
+  "Append a new Inst to the function and (unless it's a terminator)
+   to its block's :insts list. Returns the new InstId.
+   Signature matches the legacy bridge primitive: (f block op-kw refs aux)."
+  (let [nid (count (:insts @f))]
+    (swap! f update :insts conj
+           [op-kw (vec refs) aux block [] :unknown])
+    (when-not (ir/op-terminator? op-kw)
+      (swap! f update-in [:blocks block :insts] conj nid))
+    (invalidate-uses-state! f)
+    nid))
+
+(defn add-terminator! [f bid op-kw refs aux]
+  "Composite: create a new Inst with op-kw/refs/aux and install it as
+   block bid's terminator. Returns the new InstId.
+   Matches the legacy bridge primitive signature."
+  (let [nid (add-inst f bid op-kw refs aux)]
+    (swap! f assoc-in [:blocks bid :term] nid)
+    nid))
+
+(defn add-block-param! [f bid param-id]
+  (swap! f update-in [:blocks bid :params] conj param-id))
+
+(defn add-block-arg-front! [f block param-pos]
+  "Create a :block-arg Inst and INSERT IT AT THE FRONT of block.insts.
+   Use this when adding block-args after the block body is already built
+   (e.g. thread-block-args). Preserves indexed-RPN order — defs come
+   before uses in the block's linear traversal."
+  (let [nid (count (:insts @f))]
+    (swap! f update :insts conj
+           [:block-arg [] param-pos block [] :unknown])
+    (swap! f update-in [:blocks block :insts]
+           (fn [insts] (vec (cons nid insts))))
+    (invalidate-uses-state! f)
+    nid))
+
+(defn add-pred! [f bid pred-bid]
+  (swap! f update-in [:blocks bid :preds] conj pred-bid))
+
+(defn add-source-info! [f nid si]
+  (swap! f update-in [:insts nid 4] conj si))
+
+;; --- pass-time mutators ----------------------------------------------
+
+(defn replace-op! [f nid op-kw]
+  (swap! f assoc-in [:insts nid 0] op-kw)
+  (invalidate-uses-state! f))
+
+(defn set-refs! [f nid refs]
+  (swap! f assoc-in [:insts nid 1] (vec refs))
+  (invalidate-uses-state! f))
+
+(defn set-aux! [f nid aux-val]
+  (swap! f assoc-in [:insts nid 2] aux-val))
+
+(defn set-type! [f nid t]
+  (swap! f assoc-in [:insts nid 5] t))
+
+(defn cond-target-set-true! [ct bt]
+  (assoc ct :true-target bt))
+
+(defn cond-target-set-false! [ct bt]
+  (assoc ct :false-target bt))
+
+(defn remove-inst! [f bid nid]
+  "Drop nid from block bid's :insts vector. Marks the Inst's op
+   as :invalid so any stale iterator skips it. Caller must not use
+   nid afterwards."
+  (swap! f update-in [:blocks bid :insts]
+         (fn [insts] (vec (remove (fn [x] (= x nid)) insts))))
+  (swap! f assoc-in [:insts nid 0] :invalid)
+  (invalidate-uses-state! f))
+
+(defn- rewrite-refs [refs old new]
+  (vec (map (fn [r] (if (= r old) new r)) refs)))
+
+(defn- rewrite-branch-target-args [bt old new]
+  (assoc bt :args (rewrite-refs (:args bt) old new)))
+
+(defn clone-inst [f nid]
+  "Append a copy of nid's Inst record; return the new InstId. The
+   clone is NOT attached to any block — caller decides placement."
+  (let [src (nth (:insts @f) nid)
+        new-id (count (:insts @f))]
+    (swap! f update :insts conj src)
+    (invalidate-uses-state! f)
+    new-id))
+
+;; --- def→use index ---------------------------------------------------
+
+(defn- accumulate-uses-from-refs [acc user-id refs]
+  (reduce (fn [a r] (assoc a r (conj (nth a r) user-id))) acc refs))
+
+(defn- accumulate-uses-from-aux [acc user-id inst]
+  ;; case dispatch + threading. Eliminates `cond` + `nth ... 0` repetition.
+  (let [op  (nth inst 0)
+        aux (nth inst 2)]
+    (case op
+      :branch    (accumulate-uses-from-refs acc user-id (:args aux))
+      :branch-if (-> acc
+                     (accumulate-uses-from-refs user-id (:args (:true-target  aux)))
+                     (accumulate-uses-from-refs user-id (:args (:false-target aux))))
+      acc)))
+
+(defn- compute-uses [f]
+  (let [insts (:insts @f)
+        seed  (vec (repeat (count insts) []))]
+    (reduce-kv
+      (fn [acc i inst]
+        (-> acc
+            (accumulate-uses-from-refs i (nth inst 1))
+            (accumulate-uses-from-aux i inst)))
+      seed
+      insts)))
+
+(defn uses [f]
+  "Return the def→use index: a vector where uses[nid] is the vector
+   of InstIds whose :refs (or branch-target args) include nid. Cached
+   between mutations; invalidated automatically by any mutator that
+   could change the graph."
+  (when (:uses-dirty? @f)
+    (let [u (compute-uses f)]
+      (swap! f assoc :uses-cache u :uses-dirty? false)))
+  (:uses-cache @f))
+
+(defn replace-all-uses! [f old-id new-id]
+  "Rewrite every Inst whose :refs (or whose Branch/BranchIf Aux carries
+   old-id as a branch-target arg) to reference new-id instead.
+
+   Consults (uses f) to find the small set of consumers — O(consumers)
+   instead of the O(n) full-array walk the previous implementation did.
+   Single swap! per consumer; the uses cache is invalidated once at the
+   end."
+  (let [consumer-ids (nth (uses f) old-id)]
+    (doseq [cid consumer-ids]
+      (swap! f update-in [:insts cid]
+             (fn [i]
+               (let [op       (nth i 0)
+                     refs     (nth i 1)
+                     aux      (nth i 2)
+                     new-refs (rewrite-refs refs old-id new-id)
+                     i        (if (= refs new-refs) i (assoc i 1 new-refs))]
+                 (case op
+                   :branch
+                     (assoc i 2 (rewrite-branch-target-args aux old-id new-id))
+                   :branch-if
+                     (assoc i 2
+                       (-> aux
+                           (assoc :true-target  (rewrite-branch-target-args (:true-target  aux) old-id new-id))
+                           (assoc :false-target (rewrite-branch-target-args (:false-target aux) old-id new-id))))
+                   i))))))
+  (invalidate-uses-state! f))
+
+;; --- export into the `ir` namespace ----------------------------------
+;;
+;; The bridge install creates the `ir` namespace at Go init time and
+;; populates it with VM-substrate primitives. We re-intern every
+;; data-layer defn above under the same names in `ir`, so existing
+;; callers like `(ir/op nid f)` keep working transparently.
+
+(let [target 'ir
+      syms   '[new-fn new-branch-target new-cond-target
+               fn-name fn-arity fn-variadic? fn-entry fn-consts entry-block
+               inst-count blocks
+               op refs aux block-of type-of source-infos
+               block-params block-preds block-insts block-term
+               branch-target-target branch-target-args
+               cond-target-true cond-target-false
+               add-block add-inst add-terminator!
+               add-block-param! add-block-arg-front!
+               add-pred! add-source-info!
+               replace-op! set-refs! set-aux! set-type!
+               cond-target-set-true! cond-target-set-false!
+               remove-inst! replace-all-uses! clone-inst
+               uses invalidate-uses!]]
+  (doseq [sym syms]
+    (intern target sym (deref (resolve (symbol "ir.data" (str sym)))))))
+

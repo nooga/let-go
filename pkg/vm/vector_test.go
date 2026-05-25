@@ -333,7 +333,7 @@ func TestPersistentVectorSeq(t *testing.T) {
 
 		// Navigate to tail section (after index 32)
 		var seq Seq = largeSeq
-		for i := 0; i < 33; i++ {
+		for range 33 {
 			seq = seq.Next()
 		}
 
@@ -389,7 +389,7 @@ func TestPersistentVectorLargeAssoc(t *testing.T) {
 
 func TestPersistentVectorLargeConjNoMissingValues(t *testing.T) {
 	var c Collection = ArrayVector{}
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		c = c.Conj(Int(i))
 	}
 	v := c.(PersistentVector)

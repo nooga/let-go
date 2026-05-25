@@ -12,12 +12,12 @@ import (
 
 type theNativeFnType struct{}
 
-func (t *theNativeFnType) String() string     { return t.Name() }
-func (t *theNativeFnType) Type() ValueType    { return TypeType }
-func (t *theNativeFnType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theNativeFnType) String() string  { return t.Name() }
+func (t *theNativeFnType) Type() ValueType { return TypeType }
+func (t *theNativeFnType) Unbox() any      { return reflect.TypeFor[*theNativeFnType]() }
 
 func (t *theNativeFnType) Name() string { return "let-go.lang.NativeFn" }
-func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
+func (t *theNativeFnType) Box(fn any) (Value, error) {
 	ty := reflect.TypeOf(fn)
 	if ty.Kind() != reflect.Func {
 		return NIL, NewTypeError(fn, "can't be boxed into", t)
@@ -37,7 +37,7 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 			}
 			in := ty.In(j)
 			if args[i] != NIL {
-				rawArgs[i] = reflect.ValueOf(args[i].Unbox())
+				rawArgs[i] = boxArgForReflect(args[i], in)
 				if rawArgs[i].CanConvert(in) {
 					rawArgs[i] = rawArgs[i].Convert(in)
 				}
@@ -62,7 +62,7 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 		if err != nil {
 			return NIL, err
 		}
-		errorInterface := reflect.TypeOf((*error)(nil)).Elem()
+		errorInterface := reflect.TypeFor[error]()
 		if res[1].Type() == errorInterface && res[1].Interface() != nil {
 			return wv, res[1].Interface().(error)
 		}
@@ -77,6 +77,24 @@ func (t *theNativeFnType) Box(fn interface{}) (Value, error) {
 	}
 
 	return f, nil
+}
+
+// boxArgForReflect prepares a let-go Value for reflect.Call into a Go fn.
+//
+// When the Go parameter is a slice/array kind, we want per-element
+// conversion (so e.g. []vm.Int can flow into []int). The struct_mapping
+// machinery already does this via unboxSliceInto, so we delegate to it.
+// For non-slice targets and for boxed Go values, plain Unbox is correct.
+func boxArgForReflect(v Value, target reflect.Type) reflect.Value {
+	if target.Kind() == reflect.Slice || target.Kind() == reflect.Array {
+		if sq, ok := v.(Sequable); ok {
+			out := reflect.New(target).Elem()
+			if err := unboxSliceInto(out, sq.Seq()); err == nil {
+				return out
+			}
+		}
+	}
+	return reflect.ValueOf(v.Unbox())
 }
 
 func (t *theNativeFnType) WrapNoErr(fn func([]Value) Value) (Value, error) {
@@ -108,7 +126,7 @@ type NativeFn struct {
 	name        string
 	arity       int
 	isVariadric bool
-	fn          interface{}
+	fn          any
 	proxy       func([]Value) (Value, error)
 }
 
@@ -117,7 +135,7 @@ func (l *NativeFn) SetName(n string) { l.name = n }
 func (l *NativeFn) Type() ValueType { return NativeFnType }
 
 // Unbox implements Unbox
-func (l *NativeFn) Unbox() interface{} {
+func (l *NativeFn) Unbox() any {
 	return l.fn
 }
 

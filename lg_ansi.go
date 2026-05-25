@@ -8,10 +8,10 @@
 package main
 
 const (
-	ansiBold     = "[1m"
-	ansiBoldCyan = "[1;36m"
-	ansiDim      = "[90m"
-	ansiReset    = "[0m"
+	ansiBold     = "\x1b[1m"
+	ansiBoldCyan = "\x1b[1;36m"
+	ansiDim      = "\x1b[90m"
+	ansiReset    = "\x1b[0m"
 
 	bannerQuitHint = "Ctrl-C to quit"
 )

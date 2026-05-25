@@ -21,17 +21,17 @@ type ShellResult struct {
 
 // HTTPRequest is the struct behind ring-style HTTP request maps.
 type HTTPRequest struct {
-	RequestMethod string    `letgo:"request-method"`
-	Scheme        string    `letgo:"scheme"`
-	URI           string    `letgo:"uri"`
-	Path          string    `letgo:"path"`
-	QueryString   string    `letgo:"query-string"`
-	Body          string    `letgo:"body"`
-	RemoteAddr    string    `letgo:"remote-addr"`
-	ServerAddr    string    `letgo:"server-addr"`
-	ServerPort    string    `letgo:"server-port"`
-	ContentType   string    `letgo:"content-type"`
-	Headers       vm.Value  `letgo:"headers"`
+	RequestMethod string   `letgo:"request-method"`
+	Scheme        string   `letgo:"scheme"`
+	URI           string   `letgo:"uri"`
+	Path          string   `letgo:"path"`
+	QueryString   string   `letgo:"query-string"`
+	Body          string   `letgo:"body"`
+	RemoteAddr    string   `letgo:"remote-addr"`
+	ServerAddr    string   `letgo:"server-addr"`
+	ServerPort    string   `letgo:"server-port"`
+	ContentType   string   `letgo:"content-type"`
+	Headers       vm.Value `letgo:"headers"`
 }
 
 // HTTPResponse is the struct behind HTTP client response maps.
@@ -83,7 +83,7 @@ var (
 	shellResultMapping  *vm.StructMapping
 	httpRequestMapping  *vm.StructMapping
 	httpResponseMapping *vm.StructMapping
-	urlMapping *vm.StructMapping
+	urlMapping          *vm.StructMapping
 )
 
 // initTypeMappings registers all struct mappings. Called from lang.go init()

@@ -21,7 +21,7 @@ func TestNilType(t *testing.T) {
 }
 
 func TestIntType(t *testing.T) {
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		v := rand.Int()
 		bv, err := IntType.Box(v)
 		assert.NoError(t, err)
@@ -113,7 +113,7 @@ func TestListType(t *testing.T) {
 
 	n := 100
 	values := make([]Value, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		v, err := IntType.Box(rand.Int())
 		assert.NoError(t, err)
 		if err != nil {
@@ -127,7 +127,7 @@ func TestListType(t *testing.T) {
 	assert.Equal(t, n, list.(*List).count)
 
 	randomValues := list.Unbox().([]Value)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		assert.Equal(t, values[i], randomValues[i])
 	}
 

@@ -50,6 +50,17 @@
   (testing "cycle with single element"
     (is (= [42 42 42] (vec (take 3 (cycle [42])))))))
 
+(deftest take-realization-test
+  (testing "take does not realize beyond n"
+    (let [calls (atom 0)
+          seq-fn (fn s []
+                   (lazy-seq
+                     (swap! calls inc)
+                     (cons 1 (s))))
+          s (take 5 (seq-fn))]
+      (is (= '(1 1 1 1 1) s))
+      (is (= 5 @calls)))))
+
 ;; --- doall / dorun ---
 
 (deftest doall-test
@@ -128,7 +139,8 @@
     (is (= 1 (compare 1 nil))))
   (testing "compare keywords"
     (is (= 0 (compare :a :a)))
-    (is (= -1 (compare :a :b))))
+    (is (= -1 (compare :a :b)))
+    (is (= -1 (compare :cat :animal/cat))))
   (testing "compare mixed numeric"
     (is (= 0 (compare 1 1.0)))
     (is (= -1 (compare 1 1.5)))))
@@ -165,7 +177,8 @@
 (deftest nthnext-test
   (testing "nthnext drops n elements, returns nil at end"
     (is (= '(3 4 5) (nthnext [1 2 3 4 5] 2)))
-    (is (nil? (nthnext [1 2] 5)))))
+    (is (nil? (nthnext [1 2] 5)))
+    (is (nil? (nthnext nil nil)))))
 
 ;; --- cycle + take ---
 

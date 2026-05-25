@@ -1,0 +1,119 @@
+;; Constant folding pass.
+;;
+;; Three strategies (matching OLD pkg/ir/passes/constfold.go @ lrttrmzx):
+;;   1. Primitive fold:        (op Const Const) → Const
+;;   2. Algebraic identity:    (+ x 0) → x, (* x 1) → x, (* x 0) → 0
+;;   3. Commutative canon:     (+ 5 x) → (+ x 5)  (Const goes right)
+;;
+;; Each strategy is a PURE FUNCTION (try-primitive / try-identity /
+;; try-canonicalize) returning either nil (no fold) or an action map:
+;;   {:replace-with {:op KW :refs [...] :aux V}}  — overwrite this Inst
+;;   {:replace-uses NID}                          — redirect all uses
+;;   {:swap-refs [r0 r1]}                         — rewrite refs only
+;;
+;; The driver applies actions via existing mutators. Strategies are
+;; tried in order; first non-nil wins. No mutation inside the strategy
+;; code keeps the analysis testable and easy to read.
+
+(ns ir.passes.constfold
+  (:require [ir.passes :refer [defpass]]))
+
+;; --- op tables --------------------------------------------------------
+
+(def ^:private binop-fn
+  "Map IR op-kw → Lisp arithmetic fn for primitive fold."
+  {:add + :sub - :mul * :lt < :lte <= :gt > :gte >= :eq =})
+
+(def ^:private unary-fn
+  {:inc inc :dec dec})
+
+(def ^:private commutative
+  "Ops whose operand order doesn't affect the result — Const canonicalises right."
+  #{:add :mul :eq})
+
+;; --- helpers ----------------------------------------------------------
+
+(defn- const? [nid f] (= :const (ir/op nid f)))
+
+(defn- const-val [nid f]
+  (when (const? nid f) (ir/aux nid f)))
+
+;; --- strategies (pure) ------------------------------------------------
+
+(defn- try-primitive [nid f]
+  "Strategy 1: fold (op Const ...) into a single Const Inst."
+  (let [op   (ir/op nid f)
+        refs (ir/refs nid f)
+        n    (count refs)]
+    (cond
+      ;; Binary op with two Const operands.
+      (and (binop-fn op) (= n 2)
+           (const? (nth refs 0) f) (const? (nth refs 1) f))
+        (try
+          {:replace-with {:op :const :refs []
+                          :aux ((binop-fn op)
+                                (const-val (nth refs 0) f)
+                                (const-val (nth refs 1) f))}}
+          (catch _ nil))  ; overflow / divide-by-zero — leave the Inst alone
+      ;; Unary op with one Const operand.
+      (and (unary-fn op) (= n 1) (const? (nth refs 0) f))
+        (try
+          {:replace-with {:op :const :refs []
+                          :aux ((unary-fn op) (const-val (nth refs 0) f))}}
+          (catch _ nil)))))
+
+(defn- try-identity [nid f]
+  "Strategy 2: algebraic identities — (+ x 0), (* x 1), (* x 0), (- x 0)."
+  (let [op (ir/op nid f) refs (ir/refs nid f)]
+    (when (= 2 (count refs))
+      (let [r0 (nth refs 0) r1 (nth refs 1)
+            v0 (const-val r0 f) v1 (const-val r1 f)
+            zero? (fn [v] (and (number? v) (= 0 v)))
+            one?  (fn [v] (and (number? v) (= 1 v)))]
+        (case op
+          :add (cond
+                 (zero? v1) {:replace-uses r0}
+                 (zero? v0) {:replace-uses r1}
+                 :else nil)
+          :sub (when (zero? v1) {:replace-uses r0})
+          :mul (cond
+                 (one? v1)                  {:replace-uses r0}
+                 (one? v0)                  {:replace-uses r1}
+                 (or (zero? v0) (zero? v1)) {:replace-with {:op :const :refs [] :aux 0}}
+                 :else nil)
+          nil)))))
+
+(defn- try-canonicalize [nid f]
+  "Strategy 3: commutative canonicalisation — Const goes to refs[1]."
+  (let [op (ir/op nid f) refs (ir/refs nid f)]
+    (when (and (commutative op)
+               (= 2 (count refs))
+               (const? (nth refs 0) f)
+               (not (const? (nth refs 1) f)))
+      {:swap-refs [(nth refs 1) (nth refs 0)]})))
+
+;; --- driver -----------------------------------------------------------
+
+(defn- apply-action! [f nid action]
+  "Side-effecting: applies one of the three action shapes."
+  (cond
+    (:replace-with action)
+      (let [{:keys [op refs aux]} (:replace-with action)]
+        (ir/replace-op! f nid op)
+        (ir/set-refs!   f nid refs)
+        (ir/set-aux!    f nid aux))
+    (:replace-uses action)
+      (ir/replace-all-uses! f nid (:replace-uses action))
+    (:swap-refs action)
+      (ir/set-refs! f nid (:swap-refs action))))
+
+(defpass constfold
+  "Constant-fold, algebraic-identity-rewrite, and commutative-canonicalise.
+   Strategies tried in order; first non-nil wins."
+  [inst]
+  (let [f      ir.passes/*current-fn*
+        action (or (try-primitive    inst f)
+                   (try-identity     inst f)
+                   (try-canonicalize inst f))]
+    (when action
+      (apply-action! f inst action))))

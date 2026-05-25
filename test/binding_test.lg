@@ -42,3 +42,25 @@
   (testing "binding returns value of body"
     (is (= 42 (binding [*x* 1] 42)))
     (is (= :result (binding [*x* 1 *y* 2] :result)))))
+
+(deftest future-captures-dynamic-bindings
+  (testing "future sees bindings from creation time"
+    (let [read-x (fn [] *x*)
+          f (future (read-x))]
+      (binding [*x* 99]
+        (is (= 10 @f))))
+    (binding [*x* 77]
+      (let [f (future *x*)]
+        (binding [*x* 88]
+          (is (= 77 @f)))))))
+
+(deftest bound-fn-captures-dynamic-bindings
+  (testing "bound-fn uses captured bindings when invoked later"
+    (binding [*x* 42]
+      (let [f (bound-fn [] *x*)]
+        (binding [*x* 99]
+          (is (= 42 (f)))))))
+  (testing "bound-fn without captured bindings tracks caller"
+    (let [f (bound-fn [] *x*)]
+      (binding [*x* 55]
+        (is (= 55 (f)))))))

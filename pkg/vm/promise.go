@@ -50,8 +50,8 @@ func (p *Promise) IsRealized() bool {
 	return p.delivered
 }
 
-func (p *Promise) Type() ValueType    { return PromiseType }
-func (p *Promise) Unbox() interface{} { return p }
+func (p *Promise) Type() ValueType { return PromiseType }
+func (p *Promise) Unbox() any      { return p }
 func (p *Promise) String() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -63,11 +63,11 @@ func (p *Promise) String() string {
 
 type thePromiseType struct{}
 
-func (t *thePromiseType) String() string     { return t.Name() }
-func (t *thePromiseType) Type() ValueType    { return TypeType }
-func (t *thePromiseType) Unbox() interface{} { return nil }
-func (t *thePromiseType) Name() string       { return "let-go.lang.Promise" }
-func (t *thePromiseType) Box(bare interface{}) (Value, error) {
+func (t *thePromiseType) String() string  { return t.Name() }
+func (t *thePromiseType) Type() ValueType { return TypeType }
+func (t *thePromiseType) Unbox() any      { return nil }
+func (t *thePromiseType) Name() string    { return "let-go.lang.Promise" }
+func (t *thePromiseType) Box(bare any) (Value, error) {
 	return NIL, NewTypeError(bare, "can't be boxed as", t)
 }
 

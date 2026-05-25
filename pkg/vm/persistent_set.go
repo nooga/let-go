@@ -35,8 +35,8 @@ func NewPersistentSet(vals []Value) *PersistentSet {
 
 // --- Value interface ---
 
-func (s *PersistentSet) Type() ValueType    { return SetType }
-func (s *PersistentSet) Unbox() interface{} { return s.keys() }
+func (s *PersistentSet) Type() ValueType { return SetType }
+func (s *PersistentSet) Unbox() any      { return s.keys() }
 
 func (s *PersistentSet) String() string {
 	b := &strings.Builder{}
@@ -95,6 +95,9 @@ func (s *PersistentSet) Count() Value  { return s.impl.Count() }
 func (s *PersistentSet) RawCount() int { return s.impl.RawCount() }
 
 func (s *PersistentSet) Empty() Collection {
+	if s.meta != nil {
+		return EmptyPersistentSet.WithMeta(s.meta).(*PersistentSet)
+	}
 	return EmptyPersistentSet
 }
 

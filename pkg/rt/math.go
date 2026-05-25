@@ -78,6 +78,9 @@ func installMathNS() {
 	ns := vm.NewNamespace("math")
 	ns.Refer(CoreNS, "", true)
 
+	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
+	ns.Exclude("abs")
+
 	// Constants
 	ns.Def("E", vm.Float(math.E))
 	ns.Def("PI", vm.Float(math.Pi))

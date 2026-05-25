@@ -88,13 +88,11 @@ func (n *NreplServer) Start(port int) error {
 	n.stop = make(chan struct{})
 
 	// Write .nrepl-port file
-	os.WriteFile(".nrepl-port", []byte(fmt.Sprintf("%d", port)), 0644)
+	os.WriteFile(".nrepl-port", fmt.Appendf(nil, "%d", port), 0644)
 
 	fmt.Printf("nREPL server started on port %d on host 127.0.0.1 - nrepl://127.0.0.1:%d\n", port, port)
 
-	n.wg.Add(1)
-	go func() {
-		defer n.wg.Done()
+	n.wg.Go(func() {
 		for {
 			select {
 			case <-n.stop:
@@ -112,7 +110,7 @@ func (n *NreplServer) Start(port int) error {
 				go n.handleConn(conn)
 			}
 		}
-	}()
+	})
 	return nil
 }
 
@@ -130,7 +128,7 @@ func (n *NreplServer) handleConn(conn net.Conn) {
 	dec := bencode.NewDecoder(conn)
 
 	for {
-		var msg map[string]interface{}
+		var msg map[string]any
 		err := dec.Decode(&msg)
 		if err != nil {
 			if err == io.EOF {
@@ -143,7 +141,7 @@ func (n *NreplServer) handleConn(conn net.Conn) {
 }
 
 // handleMsg dispatches a single nREPL message.
-func (n *NreplServer) handleMsg(conn net.Conn, msg map[string]interface{}) {
+func (n *NreplServer) handleMsg(conn net.Conn, msg map[string]any) {
 	op, _ := msg["op"].(string)
 	id := msgStr(msg, "id")
 	sessID := msgStr(msg, "session")
@@ -151,7 +149,7 @@ func (n *NreplServer) handleMsg(conn net.Conn, msg map[string]interface{}) {
 	switch op {
 	case "clone":
 		s := n.newSession()
-		respond(conn, map[string]interface{}{
+		respond(conn, map[string]any{
 			"id":          id,
 			"status":      []string{"done"},
 			"new-session": s.id,
@@ -159,37 +157,37 @@ func (n *NreplServer) handleMsg(conn net.Conn, msg map[string]interface{}) {
 
 	case "close":
 		n.closeSession(sessID)
-		respond(conn, map[string]interface{}{
+		respond(conn, map[string]any{
 			"id":      id,
 			"session": sessID,
 			"status":  []string{"done", "session-closed"},
 		})
 
 	case "describe":
-		respond(conn, map[string]interface{}{
+		respond(conn, map[string]any{
 			"id":      id,
 			"session": sessID,
-			"ops": map[string]interface{}{
-				"clone":       map[string]interface{}{},
-				"close":       map[string]interface{}{},
-				"eval":        map[string]interface{}{},
-				"load-file":   map[string]interface{}{},
-				"describe":    map[string]interface{}{},
-				"completions": map[string]interface{}{},
-				"lookup":      map[string]interface{}{},
-				"info":        map[string]interface{}{},
-				"complete":    map[string]interface{}{},
-				"ls-sessions": map[string]interface{}{},
+			"ops": map[string]any{
+				"clone":       map[string]any{},
+				"close":       map[string]any{},
+				"eval":        map[string]any{},
+				"load-file":   map[string]any{},
+				"describe":    map[string]any{},
+				"completions": map[string]any{},
+				"lookup":      map[string]any{},
+				"info":        map[string]any{},
+				"complete":    map[string]any{},
+				"ls-sessions": map[string]any{},
 			},
-			"versions": map[string]interface{}{
-				"let-go": map[string]interface{}{
+			"versions": map[string]any{
+				"let-go": map[string]any{
 					"major": "1", "minor": "0",
 				},
-				"nrepl": map[string]interface{}{
+				"nrepl": map[string]any{
 					"major": "1", "minor": "0",
 				},
 			},
-			"aux":    map[string]interface{}{},
+			"aux":    map[string]any{},
 			"status": []string{"done"},
 		})
 
@@ -209,7 +207,7 @@ func (n *NreplServer) handleMsg(conn net.Conn, msg map[string]interface{}) {
 		n.handleInfo(conn, msg)
 
 	case "ls-sessions":
-		respond(conn, map[string]interface{}{
+		respond(conn, map[string]any{
 			"id":       id,
 			"session":  sessID,
 			"sessions": n.sessionIDs(),
@@ -217,14 +215,14 @@ func (n *NreplServer) handleMsg(conn net.Conn, msg map[string]interface{}) {
 		})
 
 	case "interrupt":
-		respond(conn, map[string]interface{}{
+		respond(conn, map[string]any{
 			"id":      id,
 			"session": sessID,
 			"status":  []string{"done", "session-idle"},
 		})
 
 	default:
-		respond(conn, map[string]interface{}{
+		respond(conn, map[string]any{
 			"id":      id,
 			"session": sessID,
 			"status":  []string{"done", "error", "unknown-op"},
@@ -233,7 +231,7 @@ func (n *NreplServer) handleMsg(conn net.Conn, msg map[string]interface{}) {
 }
 
 // handleEval evaluates code and streams out/err/value/done messages.
-func (n *NreplServer) handleEval(conn net.Conn, msg map[string]interface{}) {
+func (n *NreplServer) handleEval(conn net.Conn, msg map[string]any) {
 	id := msgStr(msg, "id")
 	sessID := msgStr(msg, "session")
 	code := msgStr(msg, "code")
@@ -261,7 +259,7 @@ func (n *NreplServer) handleEval(conn net.Conn, msg map[string]interface{}) {
 
 	// Send stdout if any
 	if outBuf.Len() > 0 {
-		respond(conn, map[string]interface{}{
+		respond(conn, map[string]any{
 			"id":      id,
 			"session": sessID,
 			"out":     outBuf.String(),
@@ -270,7 +268,7 @@ func (n *NreplServer) handleEval(conn net.Conn, msg map[string]interface{}) {
 
 	if err != nil {
 		errStr := vm.FormatError(err)
-		respond(conn, map[string]interface{}{
+		respond(conn, map[string]any{
 			"id":      id,
 			"session": sessID,
 			"err":     errStr + "\n",
@@ -282,7 +280,7 @@ func (n *NreplServer) handleEval(conn net.Conn, msg map[string]interface{}) {
 		if val != nil {
 			valStr = val.String()
 		}
-		respond(conn, map[string]interface{}{
+		respond(conn, map[string]any{
 			"id":      id,
 			"session": sessID,
 			"value":   valStr,
@@ -291,7 +289,7 @@ func (n *NreplServer) handleEval(conn net.Conn, msg map[string]interface{}) {
 	}
 
 	// Always end with done
-	respond(conn, map[string]interface{}{
+	respond(conn, map[string]any{
 		"id":      id,
 		"session": sessID,
 		"status":  []string{"done"},
@@ -299,7 +297,7 @@ func (n *NreplServer) handleEval(conn net.Conn, msg map[string]interface{}) {
 }
 
 // handleCompletions returns completion candidates.
-func (n *NreplServer) handleCompletions(conn net.Conn, msg map[string]interface{}) {
+func (n *NreplServer) handleCompletions(conn net.Conn, msg map[string]any) {
 	id := msgStr(msg, "id")
 	sessID := msgStr(msg, "session")
 
@@ -308,12 +306,12 @@ func (n *NreplServer) handleCompletions(conn net.Conn, msg map[string]interface{
 		prefix = msgStr(msg, "symbol")
 	}
 
-	var completions []interface{}
+	var completions []any
 	if prefix != "" {
 		sym := vm.Symbol(prefix)
 		matches := rt.FuzzyNamespacedSymbolLookup(n.ctx.CurrentNS(), sym)
 		for _, m := range matches {
-			completions = append(completions, map[string]interface{}{
+			completions = append(completions, map[string]any{
 				"candidate": string(m),
 				"type":      "function",
 			})
@@ -321,10 +319,10 @@ func (n *NreplServer) handleCompletions(conn net.Conn, msg map[string]interface{
 	}
 
 	if completions == nil {
-		completions = []interface{}{}
+		completions = []any{}
 	}
 
-	respond(conn, map[string]interface{}{
+	respond(conn, map[string]any{
 		"id":          id,
 		"session":     sessID,
 		"completions": completions,
@@ -333,7 +331,7 @@ func (n *NreplServer) handleCompletions(conn net.Conn, msg map[string]interface{
 }
 
 // handleInfo returns symbol info.
-func (n *NreplServer) handleInfo(conn net.Conn, msg map[string]interface{}) {
+func (n *NreplServer) handleInfo(conn net.Conn, msg map[string]any) {
 	id := msgStr(msg, "id")
 	sessID := msgStr(msg, "session")
 	op := msgStr(msg, "op")
@@ -348,7 +346,7 @@ func (n *NreplServer) handleInfo(conn net.Conn, msg map[string]interface{}) {
 		nsName = n.ctx.CurrentNS().Name()
 	}
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"id":      id,
 		"session": sessID,
 		"status":  []string{"done"},
@@ -364,7 +362,7 @@ func (n *NreplServer) handleInfo(conn net.Conn, msg map[string]interface{}) {
 		}
 		v := ns.Lookup(vm.Symbol(sym))
 		if v != vm.NIL {
-			info := map[string]interface{}{
+			info := map[string]any{
 				"name": sym,
 				"ns":   nsName,
 			}
@@ -386,7 +384,7 @@ func (n *NreplServer) handleInfo(conn net.Conn, msg map[string]interface{}) {
 
 // --- Helpers ---
 
-func respond(conn net.Conn, msg map[string]interface{}) {
+func respond(conn net.Conn, msg map[string]any) {
 	bs, err := bencode.EncodeBytes(msg)
 	if err != nil {
 		return
@@ -394,7 +392,7 @@ func respond(conn net.Conn, msg map[string]interface{}) {
 	conn.Write(bs)
 }
 
-func msgStr(msg map[string]interface{}, key string) string {
+func msgStr(msg map[string]any, key string) string {
 	v, ok := msg[key]
 	if !ok || v == nil {
 		return ""

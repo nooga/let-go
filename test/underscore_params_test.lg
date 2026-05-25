@@ -1,0 +1,43 @@
+;; Regression tests for multiple `_` parameters in fn/defn/let.
+;;
+;; Clojure convention allows `_` as an "ignored" parameter name. Multiple
+;; `_`s in the same parameter list are conventional and must each occupy
+;; their own slot. Before the fix, the compiler's formalArgs map (keyed
+;; by Symbol) collapsed duplicate `_`s into one slot, making the function
+;; appear to have lower arity than the parameter list suggested.
+
+(ns test.underscore-params-test
+  (:require [test :refer :all]))
+
+(deftest fn-two-underscores
+  (testing "anonymous fn with [_ _] is 2-arity"
+    (let [f (fn [_ _] :ok)]
+      (is (= :ok (f 1 2))))))
+
+(deftest fn-three-underscores
+  (testing "anonymous fn with [_ _ _] is 3-arity"
+    (let [f (fn [_ _ _] :ok)]
+      (is (= :ok (f 1 2 3))))))
+
+(deftest fn-mixed-underscores-and-names
+  (testing "[_ b _ d] preserves order and named-arg access"
+    (let [f (fn [_ b _ d] [b d])]
+      (is (= [10 30] (f 1 10 2 30))))))
+
+(deftest defn-two-underscores
+  (testing "defn with [_ _] is 2-arity"
+    (defn underscore-defn [_ _] :defn-ok)
+    (is (= :defn-ok (underscore-defn 1 2)))))
+
+(deftest fn-underscore-with-rest
+  (testing "[_ & rest] still binds rest correctly"
+    (let [f (fn [_ & rs] rs)]
+      (is (= '(2 3) (f 1 2 3))))))
+
+(deftest underscore-args-still-evaluated
+  (testing "args passed to _ parameters are still evaluated (Clojure is strict)"
+    (let [calls (atom 0)
+          bump! (fn [] (swap! calls inc) :v)
+          f     (fn [_ _ _] :done)]
+      (f (bump!) (bump!) (bump!))
+      (is (= 3 @calls)))))

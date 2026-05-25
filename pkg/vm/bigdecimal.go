@@ -11,12 +11,12 @@ import (
 
 type theBigDecimalType struct{}
 
-func (t *theBigDecimalType) String() string     { return t.Name() }
-func (t *theBigDecimalType) Type() ValueType    { return TypeType }
-func (t *theBigDecimalType) Unbox() interface{} { return reflect.TypeOf(t) }
-func (t *theBigDecimalType) Name() string       { return "let-go.lang.BigDecimal" }
+func (t *theBigDecimalType) String() string  { return t.Name() }
+func (t *theBigDecimalType) Type() ValueType { return TypeType }
+func (t *theBigDecimalType) Unbox() any      { return reflect.TypeFor[*theBigDecimalType]() }
+func (t *theBigDecimalType) Name() string    { return "let-go.lang.BigDecimal" }
 
-func (t *theBigDecimalType) Box(bare interface{}) (Value, error) {
+func (t *theBigDecimalType) Box(bare any) (Value, error) {
 	switch v := bare.(type) {
 	case *big.Float:
 		return &BigDecimal{val: v}, nil
@@ -56,8 +56,8 @@ func NewBigDecimalFromInt64(n int64) *BigDecimal {
 
 func (b *BigDecimal) Val() *big.Float { return b.val }
 
-func (b *BigDecimal) Type() ValueType    { return BigDecimalType }
-func (b *BigDecimal) Unbox() interface{} { return b.val }
+func (b *BigDecimal) Type() ValueType { return BigDecimalType }
+func (b *BigDecimal) Unbox() any      { return b.val }
 
 func (b *BigDecimal) String() string {
 	s := b.val.Text('f', -1)

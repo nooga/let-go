@@ -1,0 +1,17 @@
+;; Auto-generated from 02_fizzbuzz.ys via: ys --compile
+;; Do not edit by hand. Regenerate with: ./build.sh
+(require '[ys-runtime :refer [say ARGS]])
+(defn
+ fizzbuzz
+ [n]
+ (cond
+  (zero? (mod n 15))
+  "FizzBuzz"
+  (zero? (mod n 3))
+  "Fizz"
+  (zero? (mod n 5))
+  "Buzz"
+  :else
+  (str n)))
+(defn main [] (doseq [i (range 1 16)] (say (fizzbuzz i))))
+(apply main ARGS)

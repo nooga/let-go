@@ -46,6 +46,19 @@
       (is (= 3 (:z p)))
       (is (= Point (type p)))))
 
+  (testing "dissoc fixed field returns map"
+    (let [p (->Person "Ada" nil)
+          m (dissoc p :name)]
+      (is (= {:age nil} m))
+      (is (map? m))
+      (is (not (record? m)))))
+
+  (testing "dissoc rejects vectors"
+    (is (= :caught (try (dissoc [] 0) (catch e :caught)))))
+
+  (testing "empty rejects records"
+    (is (= :caught (try (empty (->Point 1 2)) (catch e :caught)))))
+
   (testing "get with default"
     (let [p (->Point 1 2)]
       (is (= 1 (get p :x)))

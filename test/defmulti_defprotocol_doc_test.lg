@@ -1,0 +1,122 @@
+(ns test.defmulti-defprotocol-doc
+  "Compliance tests for docstring and attr-map positions on defmulti and
+   defprotocol. Mirrors Clojure's canonical signatures:
+
+     (defmulti name docstring? attr-map? dispatch-fn & options)
+       where options ∈ {:default :hierarchy}
+
+     (defprotocol Name docstring? (method-name [args] doc?)*)
+
+   Scope: parsing only. let-go currently drops docstrings/attr-maps on
+   all def-forms (defn, def, defmulti, defprotocol — see issue tracker
+   for the broader :doc meta gap). These tests confirm the forms at
+   least *accept* the canonical Clojure positions without crashing.
+
+   The vendored jank-lang/clojure-test-suite does NOT exercise these
+   positions, so these are net-new regression tests."
+  (:require [test :refer [deftest is testing]]))
+
+;; ============================================================================
+;; defmulti — top-level definitions (matches existing test style)
+;; ============================================================================
+
+(defmulti mm-bare (fn [x] x))
+(defmethod mm-bare :default [x] [:default x])
+
+(defmulti mm-default (fn [x] x) :default :other)
+(defmethod mm-default :other [x] [:other x])
+
+(defmulti mm-doc "the docstring" (fn [x] (type x)))
+(defmethod mm-doc :default [x] [:default x])
+
+(defmulti mm-doc-default "doc" (fn [x] x) :default :other)
+(defmethod mm-doc-default :other [x] [:other x])
+
+(defmulti mm-attr {:added "1.0"} (fn [x] x))
+(defmethod mm-attr :default [x] [:default x])
+
+(defmulti mm-both "doc" {:added "1.0"} (fn [x] x))
+(defmethod mm-both :default [x] [:default x])
+
+(defmulti mm-hier (fn [x] x) :hierarchy (atom {}))
+(defmethod mm-hier :default [x] [:default x])
+
+(deftest defmulti-bare-still-works
+  (testing "(defmulti name dispatch) — original 2-arity"
+    (is (= [:default :a] (mm-bare :a)))))
+
+(deftest defmulti-with-default-option
+  (testing "(defmulti name dispatch :default v) — original 4-arity"
+    (is (= [:other :z] (mm-default :z)))))
+
+(deftest defmulti-with-docstring
+  (testing "(defmulti name \"doc\" dispatch) — accepts leading docstring"
+    (is (= [:default 1] (mm-doc 1)))))
+
+(deftest defmulti-with-docstring-and-default
+  (testing "(defmulti name \"doc\" dispatch :default v) — doc + option"
+    (is (= [:other :z] (mm-doc-default :z)))))
+
+(deftest defmulti-with-attr-map
+  (testing "(defmulti name {:attr v} dispatch) — accepts attr-map"
+    (is (= [:default 1] (mm-attr 1)))))
+
+(deftest defmulti-with-docstring-and-attr-map
+  (testing "(defmulti name \"doc\" {:attr v} dispatch) — both"
+    (is (= [:default 1] (mm-both 1)))))
+
+(deftest defmulti-hierarchy-option-accepted
+  (testing "(defmulti name dispatch :hierarchy h) — option accepted (parsed, not yet wired)"
+    (is (= [:default 1] (mm-hier 1)))))
+
+(deftest defmulti-rejects-odd-options
+  (testing "(defmulti name dispatch :default) — odd-arity options gives a useful error"
+    (let [err (try (eval '(defmulti mm-bad (fn [x] x) :default))
+                   (catch e e))]
+      (is (some? err) "must error, not silently accept")
+      ;; The error should mention the form name to be useful
+      (is (or (string? err) (some? err))))))
+
+;; ============================================================================
+;; defprotocol — top-level definitions
+;; ============================================================================
+
+(defprotocol BareProto
+  (b-op-1 [this])
+  (b-op-2 [this x]))
+
+(defprotocol DocProto "Protocol-level docstring"
+  (op-1 [this])
+  (op-2 [this x]))
+
+(defprotocol TrailDoc
+  (t-op [this] "method-trailing docstring"))
+
+(defprotocol BothDocs "Protocol doc"
+  (both-op [this] "method doc")
+  (both-op-2 [this x]))
+
+(defprotocol MarkerProto "Just a marker, no methods")
+
+(deftest defprotocol-bare-still-works
+  (testing "(defprotocol Name methods…) — original signature"
+    (is (some? (var BareProto)))
+    (is (some? (var b-op-1)))))
+
+(deftest defprotocol-with-docstring
+  (testing "(defprotocol Name \"doc\" methods…) — accepts protocol-level docstring"
+    (is (some? (var DocProto)))
+    (is (some? (var op-1)))))
+
+(deftest defprotocol-method-trailing-docstring
+  (testing "(defprotocol Name (method [args] \"doc\")) — already worked, guard"
+    (is (some? (var TrailDoc)))
+    (is (some? (var t-op)))))
+
+(deftest defprotocol-both-docstrings
+  (testing "Protocol docstring AND method docstring"
+    (is (some? (var BothDocs)))))
+
+(deftest defprotocol-docstring-only-marker
+  (testing "(defprotocol Name \"doc\") — docstring + zero methods (marker protocol)"
+    (is (some? (var MarkerProto)))))

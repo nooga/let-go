@@ -1,0 +1,37 @@
+(ns test.hierarchy-test
+  (:require [test :refer :all]))
+
+(defprotocol HierarchyProtocol)
+(defrecord HierarchyRecord [] HierarchyProtocol)
+(deftype HierarchyType [] HierarchyProtocol)
+
+(deftest explicit-hierarchy
+  (testing "make-hierarchy and local derive build parent indexes"
+    (let [h (-> (make-hierarchy)
+                (derive :test.hierarchy/child :test.hierarchy/parent)
+                (derive :test.hierarchy/parent :test.hierarchy/root))]
+      (is (= #{:test.hierarchy/parent} (parents h :test.hierarchy/child)))
+      (is (= #{:test.hierarchy/parent :test.hierarchy/root} (ancestors h :test.hierarchy/child)))
+      (is (= #{:test.hierarchy/parent :test.hierarchy/child} (descendants h :test.hierarchy/root)))
+      (is (isa? h :test.hierarchy/child :test.hierarchy/root)))))
+
+(deftest global-hierarchy
+  (testing "global derive and underive update isa?"
+    (try
+      (derive :test.hierarchy/global-child :test.hierarchy/global-parent)
+      (is (isa? :test.hierarchy/global-child :test.hierarchy/global-parent))
+      (finally
+        (underive :test.hierarchy/global-child :test.hierarchy/global-parent)))
+    (is (not (isa? :test.hierarchy/global-child :test.hierarchy/global-parent)))))
+
+(deftest type-hierarchy
+  (testing "core type ancestry composes with records and protocol registration"
+    (is (contains? (parents (type "")) Object))
+    (is (contains? (parents HierarchyRecord) HierarchyProtocol))
+    (is (contains? (parents HierarchyType) HierarchyProtocol))
+    (is (contains? (ancestors HierarchyRecord) HierarchyProtocol))
+    (is (= :caught (try (descendants Object) (catch e :caught))))))
+
+(deftest set-empty-lazy-seq
+  (testing "set preserves empty lazy seqs as empty sets"
+    (is (= #{} (set (filter keyword? #{}))))))

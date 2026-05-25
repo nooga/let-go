@@ -1,0 +1,47 @@
+;; Worked examples for gogen — refactored to use go/ast directly.
+;;
+;; Run with:  lg -source-paths examples/go-gen example.lg
+
+(require '[gogen :as g])
+
+;; --- Example 1: hand-written, no splicing ---------------------------
+
+(def add-fn
+  (g/gquote
+    (func Add [(x int64) (y int64)] int64
+      (return (+ x y)))))
+
+(println "--- Example 1: Add ---")
+(println (g/render add-fn))
+
+;; --- Example 2: unrolled inner loop --------------------------------
+;; The Clojure side picks how much to unroll; the macro splices the
+;; resulting statement sequence into the function body.
+
+(defn unrolled-dot [n]
+  (g/gquote
+    (func DotProduct [(a (slice float64)) (b (slice float64))] float64
+      (var sum float64 0.0)
+      ~@(for [i (range n)]
+          (g/gquote
+            (+= sum (* (index a ~i) (index b ~i)))))
+      (return sum))))
+
+(println "\n--- Example 2: 8-way unrolled dot product ---")
+(println (g/render (unrolled-dot 8)))
+
+;; --- Example 3: specification-driven --------------------------------
+;; Generate a struct-field-by-field equality function from an EDN spec.
+
+(defn equal-fn-for [type-name fields]
+  (g/gquote
+    (func ~(symbol (str "Equal" type-name))
+          [(a ~(symbol type-name)) (b ~(symbol type-name))]
+          bool
+      (return ~(reduce (fn [acc f]
+                         (g/gquote (&& ~acc (== (field a ~f) (field b ~f)))))
+                       (g/gquote true)
+                       fields)))))
+
+(println "\n--- Example 3: spec-driven equality ---")
+(println (g/render (equal-fn-for "Point" '[X Y Z])))

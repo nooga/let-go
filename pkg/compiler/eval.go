@@ -64,7 +64,9 @@ func evalInit() {
 	}
 
 	// Original path: compile from source
-	_, err := Eval(rt.CoreSrc)
+	c := NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("<embedded:core>")
+	_, _, err := c.CompileMultiple(strings.NewReader(rt.CoreSrc))
 	if err != nil {
 		panic("core.lg compilation failed: " + err.Error())
 	}
@@ -82,7 +84,9 @@ func loadPrecompiledBundle() error {
 		// LookupOrAdd (which also skips refers).
 		v := n.LookupLocal(vm.Symbol(name))
 		if v == nil {
-			return n.Def(name, vm.NIL)
+			// Use DefStub to avoid spurious warn-on-shadow warnings during
+			// bundle decoding (the chunk will properly Def the value later).
+			return n.DefStub(name)
 		}
 		return v
 	}
@@ -112,6 +116,15 @@ func loadPrecompiledBundle() error {
 				rt.MarkNSNeedsLoad(name)
 			}
 		}
+	}
+
+	// Source-only namespaces (precompiled bundle deliberately skips them
+	// because their precompiled stubs would intern nil into dependent
+	// namespaces — see cmd/lgbgen/main.go). Their vars may already exist
+	// as stubs in the registry from bundle decoding's VarRef pass; mark
+	// them NeedsLoad so (require 'name) re-loads from source.
+	for _, name := range []string{"ir.data"} {
+		rt.MarkNSNeedsLoad(name)
 	}
 
 	return nil
@@ -151,6 +164,32 @@ func postCoreInit() {
 	})
 	lsVar := coreNS.LookupOrAdd(vm.Symbol("load-string"))
 	lsVar.(*vm.Var).SetRoot(loadStringFn)
+
+	// eval: compile and evaluate a single already-read form in the current namespace.
+	evalFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, nil
+		}
+		ns := rt.CurrentNS.Deref().(*vm.Namespace)
+		c := NewCompiler(consts, ns)
+		c.source = "<eval>"
+		c.chunk = vm.NewCodeChunk(c.consts)
+		c.resetSP()
+		if err := c.compileForm(vs[0]); err != nil {
+			return vm.NIL, err
+		}
+		c.chunk.SetMaxStack(c.spMax)
+		c.emit(vm.OP_RETURN)
+		f := vm.NewFrame(c.chunk, nil)
+		out, err := f.RunProtected()
+		vm.ReleaseFrame(f)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return out, nil
+	})
+	evalVar := coreNS.LookupOrAdd(vm.Symbol("eval"))
+	evalVar.(*vm.Var).SetRoot(evalFn)
 
 	// set-read-clj!: opt in to matching :clj in reader conditionals.
 	// Used by the real-world compat runner; off by default so the

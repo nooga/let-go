@@ -1,0 +1,231 @@
+;; Generate pkg/rt/core/ir/data_generated.lg from a single IR-type spec.
+;;
+;; This is the Lisp counterpart to ir_bridge.lg (which emits Go bridge
+;; primitives). Where ir_bridge.lg's defgostruct describes Go-backed
+;; types, defirdata declares Lisp-native data types (atom-backed maps)
+;; and emits the boilerplate accessors / mutators / constructors.
+;;
+;; Run with: lg -source-paths examples/go-gen examples/go-gen/ir_data.lg
+;;
+;; Spec shape per type:
+;;
+;;   (defirdata Inst
+;;     :fields [[:op kw] [:refs (vec InstId)] [:aux any]
+;;              [:block BlockID] [:source-infos (vec any)] [:type kw]]
+;;     :defaults {:source-infos [] :type :unknown})
+;;
+;; The emitter generates (for each field NAME):
+;;   - getter      (NAME [nid f] (:NAME (nth (:insts @f) nid)))    — for Inst-style records
+;;   - setter      (set-NAME! [f nid v] (swap! f assoc-in [:insts nid :NAME] v))
+;;
+;; Plus per-type constructors, top-level intern block, and the
+;; uses-cache invalidation hook for mutators that touch graph shape.
+
+(require '[string :as str])
+
+;; --- registry --------------------------------------------------------
+
+(def *irdatas* (atom []))
+
+(defmacro defirdata [type-sym & opts]
+  (let [m (apply hash-map opts)]
+    `(swap! *irdatas* conj
+            (assoc ~m :type '~type-sym))))
+
+;; --- IR-type declarations -------------------------------------------
+
+;; Function — top-level IR object. Lives in an atom; the field
+;; collection is mutable via the per-field setters and the structural
+;; mutators below.
+(defirdata Function
+  :doc "Top-level IR object. Holds Insts, Blocks, and the consts pool."
+  :fields [[:name      :string]
+           [:arity     :int]
+           [:variadic? :bool]
+           [:entry     :block-id]
+           [:consts    :boxed-consts]
+           [:insts     :vec]
+           [:blocks    :vec]
+           [:uses-cache :any]
+           [:uses-dirty? :bool]]
+  :defaults {:entry 0 :insts [] :blocks []
+             :uses-cache nil :uses-dirty? true})
+
+(defirdata Block
+  :doc "Basic block. id + params + insts + preds + terminator."
+  :fields [[:id     :block-id]
+           [:params :vec]
+           [:insts  :vec]
+           [:preds  :vec]
+           [:term   :inst-id]]
+  :defaults {:params [] :insts [] :preds [] :term 0})
+
+(defirdata Inst
+  :doc "Single SSA Inst. Op + refs + aux + home block + source-infos + type."
+  :fields [[:op    :kw]
+           [:refs  :vec]
+           [:aux   :any]
+           [:block :block-id]
+           [:source-infos :vec]
+           [:type  :kw]]
+  :defaults {:refs [] :source-infos [] :type :unknown})
+
+(defirdata BranchTarget
+  :doc "Branch destination: target block + per-param args."
+  :fields [[:target :block-id]
+           [:args   :vec]]
+  :defaults {:args []})
+
+;; CondTarget's field names already end with -target; we strip the
+;; trailing -target in the accessor name so we get `cond-target-true`
+;; instead of `cond-target-true-target`. Spec keeps the descriptive
+;; field key; the emitter handles the rename.
+(defirdata CondTarget
+  :doc "Conditional branch: true-target + false-target (both BranchTarget)."
+  :fields [[:true-target  :any]
+           [:false-target :any]]
+  :accessor-rename {"true-target" "true" "false-target" "false"})
+
+;; --- emit helpers ---------------------------------------------------
+
+(defn- type-kebab [type-sym]
+  ;; Function → "fn", Block → "block", etc. The conventional Lisp prefix.
+  (case (str type-sym)
+    "Function"     "fn"
+    "Block"        "block"
+    "Inst"         ""           ; bare accessors: op, refs, aux, ...
+    "BranchTarget" "branch-target"
+    "CondTarget"   "cond-target"
+    (str/lower-case (str type-sym))))
+
+(defn- field-name-str [field]
+  (let [nm (str (first field))]
+    ;; strip the leading colon from the keyword.
+    (if (= (subs nm 0 1) ":") (subs nm 1) nm)))
+
+(defn- accessor-name [type-prefix field]
+  (let [fname (field-name-str field)]
+    (if (= "" type-prefix)
+      fname
+      (str type-prefix "-" fname))))
+
+;; For Function-level container fields (insts, blocks), accessors
+;; read/write the atom directly. For per-element fields (Inst.op, Block.id),
+;; accessors take (id f) and index into the parent vector.
+
+(defn- emit-function-accessors [spec]
+  ;; Function: (fn-NAME [f] (:NAME @f))
+  (let [type-prefix (type-kebab (:type spec))
+        getters (map
+                  (fn [field]
+                    (let [fname (field-name-str field)
+                          getter-name (accessor-name type-prefix field)]
+                      (str "(defn " getter-name " [f] (:" fname " @f))")))
+                  (:fields spec))]
+    (str/join "\n" getters)))
+
+(defn- inst-accessor-name [fname]
+  ;; Rename collisions with clojure.core: block → block-of, type → type-of.
+  ;; These match the hand-written API in data.lg.
+  (case fname
+    "block" "block-of"
+    "type"  "type-of"
+    fname))
+
+(defn- emit-inst-accessors [spec]
+  ;; Inst: (NAME [nid f] (:NAME (nth (:insts @f) nid)))
+  ;;       (set-NAME! [f nid v] (swap! f assoc-in [:insts nid :NAME] v))
+  ;;
+  ;; Mutators marked as graph-shape-affecting also invalidate uses.
+  (let [mutator-affects-uses? #{"op" "refs"}
+        lines (mapcat
+                (fn [field]
+                  (let [fname (field-name-str field)
+                        accname (inst-accessor-name fname)
+                        getter (str "(defn " accname " [nid f]"
+                                    " (:" fname " (nth (:insts @f) nid)))")
+                        setter-name (str "set-" accname "!")
+                        invalidates (contains? mutator-affects-uses? fname)
+                        setter-body (if invalidates
+                                      (str "(swap! f assoc-in [:insts nid :" fname "] v)"
+                                           " (swap! f assoc :uses-dirty? true :uses-cache nil)")
+                                      (str "(swap! f assoc-in [:insts nid :" fname "] v)"))
+                        setter (str "(defn " setter-name " [f nid v] "
+                                    setter-body ")")]
+                    [getter setter]))
+                (:fields spec))]
+    (str/join "\n" lines)))
+
+(defn- emit-block-accessors [spec]
+  ;; Block: (block-NAME [bid f] (:NAME (nth (:blocks @f) bid)))
+  ;;        (block-set-NAME! [f bid v] (swap! f assoc-in [:blocks bid :NAME] v))
+  (let [type-prefix (type-kebab (:type spec))
+        lines (mapcat
+                (fn [field]
+                  (let [fname (field-name-str field)
+                        getter-name (str type-prefix "-" fname)
+                        getter (str "(defn " getter-name " [bid f]"
+                                    " (:" fname " (nth (:blocks @f) bid)))")
+                        setter-name (str type-prefix "-set-" fname "!")
+                        setter (str "(defn " setter-name " [f bid v]"
+                                    " (swap! f assoc-in [:blocks bid :" fname "] v))")]
+                    [getter setter]))
+                (:fields spec))]
+    (str/join "\n" lines)))
+
+(defn- emit-value-accessors [spec]
+  ;; BranchTarget / CondTarget: plain immutable maps. Just getters.
+  (let [type-prefix (type-kebab (:type spec))
+        renames (or (:accessor-rename spec) {})
+        lines (map
+                (fn [field]
+                  (let [fname (field-name-str field)
+                        display (or (get renames fname) fname)
+                        getter-name (str type-prefix "-" display)]
+                    (str "(defn " getter-name " [bt] (:" fname " bt))")))
+                (:fields spec))]
+    (str/join "\n" lines)))
+
+(defn- emit-defaults [spec]
+  ;; Emit "{:field default :field default ...}" for the constructor.
+  (let [defaults (:defaults spec)]
+    (if (empty? defaults)
+      "{}"
+      (str "{"
+           (str/join " "
+                     (map (fn [kv] (str (first kv) " " (pr-str (second kv))))
+                          defaults))
+           "}"))))
+
+(defn- emit-accessors [spec]
+  (case (str (:type spec))
+    "Function"     (emit-function-accessors spec)
+    "Inst"         (emit-inst-accessors spec)
+    "Block"        (emit-block-accessors spec)
+    "BranchTarget" (emit-value-accessors spec)
+    "CondTarget"   (emit-value-accessors spec)))
+
+(defn- emit-type-section [spec]
+  (str "\n;; --- " (:type spec)
+       (if (:doc spec) (str " — " (:doc spec)) "") " ---\n"
+       (emit-accessors spec)))
+
+;; --- emit the full file ---------------------------------------------
+
+(defn emit-data-file []
+  (str
+   ";; Code generated by examples/go-gen/ir_data.lg. DO NOT EDIT.\n"
+   ";;\n"
+   ";; Lisp-native IR data layer (Phase F of the pkg/ir retirement).\n"
+   ";; Functions are Lisp atoms; Insts/Blocks/BranchTargets/CondTargets\n"
+   ";; are plain maps. Field accessors and mutators are mechanical;\n"
+   ";; structural operations (new-fn, add-inst, replace-all-uses!, etc.)\n"
+   ";; remain in hand-written data.lg.\n"
+   "\n"
+   "(ns ir.data.generated)\n"
+   (apply str (map emit-type-section @*irdatas*))
+   "\n"))
+
+;; --- driver ---------------------------------------------------------
+
+(println (emit-data-file))

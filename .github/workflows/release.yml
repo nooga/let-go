@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   release:
@@ -26,4 +27,10 @@ jobs:
           version: '~> v2'
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GORELEASER_PAT }}
+          GORELEASER_PAT: ${{ secrets.GORELEASER_PAT }}
+
+      - name: Merge Homebrew cask PR
+        env:
+          GH_TOKEN: ${{ secrets.GORELEASER_PAT }}
+        run: gh pr merge "goreleaser-cask-${GITHUB_REF_NAME#v}" --repo nooga/let-go --squash --admin --delete-branch

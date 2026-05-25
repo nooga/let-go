@@ -1,0 +1,62 @@
+(ns test.reader-hex-test
+  "Tests for hex literal parsing. Verifies Clojure-parity behavior:
+   literals fitting in int64 produce Int (including -0x8000000000000000
+   which fits when negated); literals exceeding Long/MAX_VALUE produce
+   BigInt; bit operations on the BigInt forms error (Clojure parity).
+
+   Ground truth captured from Clojure 1.12.5 on 2026-05-22:
+     (class 0xFF)                       => java.lang.Long
+     (class 0x7FFFFFFFFFFFFFFF)         => java.lang.Long
+     (class -0x8000000000000000)        => java.lang.Long
+     (class 0x8000000000000000)         => clojure.lang.BigInt
+     (class 0xbe4ba423396cfeb8)         => clojure.lang.BigInt
+     (class 0xFFFFFFFFFFFFFFFF)         => clojure.lang.BigInt
+     (= -0x8000000000000000 Long/MIN_VALUE)  => true"
+  (:require [test :refer :all]))
+
+;; --- Hex literals that fit in int64 (unchanged behavior) ---
+
+(deftest hex-small-stays-int
+  (testing "small hex literals are Int"
+    (is (= 255 0xFF))
+    (is (= 65535 0xFFFF))
+    (is (integer? 0xFF))))
+
+(deftest hex-max-long-stays-int
+  (testing "Long/MAX_VALUE hex literal stays as Int"
+    (is (= 9223372036854775807 0x7FFFFFFFFFFFFFFF))))
+
+(deftest hex-min-long-stays-int
+  (testing "-0x8000000000000000 (= Long/MIN_VALUE) stays as Int (load-bearing)"
+    (is (= -9223372036854775808 -0x8000000000000000))))
+
+;; --- Hex literals exceeding Long/MAX_VALUE: BigInt ---
+
+(deftest hex-overflow-becomes-bigint
+  (testing "0x8000000000000000 (1 past Long/MAX_VALUE) is BigInt"
+    (is (bigint? 0x8000000000000000)))
+  (testing "0xbe4ba423396cfeb8 is BigInt"
+    (is (bigint? 0xbe4ba423396cfeb8)))
+  (testing "0xFFFFFFFFFFFFFFFF is BigInt"
+    (is (bigint? 0xFFFFFFFFFFFFFFFF))))
+
+;; --- Roundtrip through unchecked-long ---
+;; NOTE: This depends on the coercion-family PR (#66) being merged. If
+;; unchecked-long isn't available, this deftest will fail with "unresolved
+;; symbol unchecked-long" — that's expected; rerun once #66 lands.
+
+;; (deftest hex-bigint-roundtrips-via-unchecked-long
+;;   (testing "(unchecked-long 0xbe...) returns the bit-pattern as int64"
+;;     (is (= -4734510112055689544 (unchecked-long 0xbe4ba423396cfeb8))))
+;;   (testing "(unchecked-long 0xFFFFFFFFFFFFFFFF) returns -1"
+;;     (is (= -1 (unchecked-long 0xFFFFFFFFFFFFFFFF))))
+;;   (testing "(unchecked-long 0x8000000000000000) returns Long/MIN_VALUE"
+;;     (is (= -9223372036854775808 (unchecked-long 0x8000000000000000)))))
+
+;; --- bit-ops on BigInt error (Clojure parity) ---
+
+(deftest hex-bigint-bit-ops-error
+  (testing "bit-and on a BigInt literal errors — user must coerce first"
+    (is (= :err (try (bit-and 0xbe4ba423396cfeb8 0xFF)
+                     :ok
+                     (catch e :err))))))

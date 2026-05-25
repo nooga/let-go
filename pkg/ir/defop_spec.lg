@@ -1,0 +1,189 @@
+;; defop — spec-driven IR operation definitions, generated via gogen.
+;;
+;; This file is the source of truth for IR ops. From each (defop ...)
+;; entry, the generator emits:
+;;
+;;   1. Op constant in pkg/ir/op_generated.go (next iota value)
+;;   2. opTable entry in pkg/ir/op_generated.go (metadata struct)
+;;   3. Constant-folder case in pkg/ir/passes/constfold_generated.go
+;;   4. Lowering case in pkg/ir/lower_generated.go (IR op → bytecode opcode)
+;;   5. Bytecode-to-IR mapping in pkg/ir/build_generated.go
+;;
+;; Run with `make generate-ir`. The committed *_generated.go files are
+;; the build-time artifact (same pattern as pkg/vm/numeric_handlers.go).
+;;
+;; This file demonstrates the spec; actual generation requires gogen
+;; switch + composite-lit support (queued as gogen-v2). For the spike,
+;; op.go is hand-written.
+
+(require '[gogen :as g])
+
+;; --- defop macro design -----------------------------------------------
+;;
+;; (defop name
+;;   :inputs       N or :variadic
+;;   :pushes       0 or 1
+;;   :pure?        true|false
+;;   :terminator?  true|false
+;;   :bytecode     OP_XXX symbol            ; corresponding bytecode op, if any
+;;   :fold-int     (fn [a b] ...)            ; const-fold rule for Int+Int (or nil)
+;;   :fold-float   (fn [a b] ...)            ; const-fold rule for Float+Float
+;;   :type-rule    keyword|fn                ; result type from arg types
+;;   :doc          "...")
+;;
+;; The fold-int / fold-float / type-rule are CLOJURE forms — when
+;; generation runs, gogen's macro emits the Go code that does the
+;; equivalent computation. (Requires gogen-v2's func-lit support.)
+
+;; --- catalog of IR ops ------------------------------------------------
+
+(defop Const
+  :inputs 0
+  :pushes 1
+  :pure? true
+  :type-rule :inferred-from-aux
+  :doc "Compile-time constant; Aux holds the vm.Value.")
+
+(defop LoadArg
+  :inputs 0
+  :pushes 1
+  :pure? true
+  :bytecode OP_LOAD_ARG
+  :type-rule :any
+  :doc "Read function argument N (Aux = arg index).")
+
+(defop LoadVar
+  :inputs 0
+  :pushes 1
+  :pure? false                                ; var roots are mutable
+  :bytecode OP_LOAD_VAR
+  :type-rule :any
+  :doc "Read var's current root.")
+
+(defop Add
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_ADD
+  :fold-int   (fn [a b] (+ a b))
+  :fold-float (fn [a b] (+ a b))
+  :type-rule  :numeric-join
+  :doc "Numeric addition (any pair of numeric types).")
+
+(defop Sub
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_SUB
+  :fold-int   (fn [a b] (- a b))
+  :fold-float (fn [a b] (- a b))
+  :type-rule  :numeric-join)
+
+(defop Mul
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_MUL
+  :fold-int   (fn [a b] (* a b))
+  :fold-float (fn [a b] (* a b))
+  :type-rule  :numeric-join)
+
+(defop Lt
+  :inputs 2 :pushes 1 :pure? true :bytecode OP_LT
+  :fold-int (fn [a b] (< a b)) :type-rule :bool)
+
+(defop Lte
+  :inputs 2 :pushes 1 :pure? true :bytecode OP_LTE
+  :fold-int (fn [a b] (<= a b)) :type-rule :bool)
+
+(defop Gt
+  :inputs 2 :pushes 1 :pure? true :bytecode OP_GT
+  :fold-int (fn [a b] (> a b)) :type-rule :bool)
+
+(defop Gte
+  :inputs 2 :pushes 1 :pure? true :bytecode OP_GTE
+  :fold-int (fn [a b] (>= a b)) :type-rule :bool)
+
+(defop Eq
+  :inputs 2 :pushes 1 :pure? true :bytecode OP_EQ
+  :fold-int (fn [a b] (= a b)) :type-rule :bool)
+
+(defop Inc
+  :inputs 1 :pushes 1 :pure? true :bytecode OP_INC
+  :fold-int (fn [a] (+ a 1)) :type-rule :pass-through)
+
+(defop Dec
+  :inputs 1 :pushes 1 :pure? true :bytecode OP_DEC
+  :fold-int (fn [a] (- a 1)) :type-rule :pass-through)
+
+(defop Call
+  :inputs :variadic                           ; arity in Aux; refs = [fn, args...]
+  :pushes 1
+  :pure? false                                ; arbitrary side effects
+  :bytecode OP_INVOKE
+  :type-rule :any)
+
+(defop TailCall
+  :inputs :variadic
+  :pushes 1
+  :pure? false
+  :terminator? true
+  :bytecode OP_TAIL_CALL)
+
+(defop Return
+  :inputs 1
+  :pushes 0
+  :pure? false
+  :terminator? true
+  :bytecode OP_RETURN)
+
+(defop Branch
+  :inputs 0                                   ; cond on aux for BranchIf; Branch is unconditional
+  :pushes 0
+  :pure? false
+  :terminator? true
+  :bytecode OP_JUMP)
+
+(defop BranchIf
+  :inputs 1
+  :pushes 0
+  :pure? false
+  :terminator? true
+  :bytecode OP_BRANCH_FALSE)                  ; conventionally lowered as BRANCH_FALSE
+
+(defop BlockArg
+  :inputs 0
+  :pushes 1
+  :pure? true
+  :type-rule :inferred-from-incoming-args
+  :doc "Block parameter; receives value from predecessor's branch-args.")
+
+;; --- type rules (referenced by defops above) -------------------------
+;;
+;; Each :type-rule keyword names a function the generator must emit.
+;; Hand-written for now; eventually defrule too.
+;;
+;;   :inferred-from-aux       — for Const: read from the Aux vm.Value's type
+;;   :any                     — TypeAny
+;;   :numeric-join            — meet of arg types under numeric promotion
+;;   :bool                    — TypeBool
+;;   :pass-through            — same as arg[0]
+;;   :inferred-from-incoming-args  — for BlockArg: meet of arg types across preds
+
+;; --- emission --------------------------------------------------------
+;;
+;; The full pipeline once gogen-v2 lands:
+;;
+;;   (def ops (collect-defops))   ; metaprogrammatically gather all defop forms
+;;   (let [f (g/gquote
+;;             (file ir
+;;               ;; iota constants
+;;               ~@(for [op ops] ...)
+;;               ;; opTable
+;;               ...
+;;               ;; folder cases
+;;               ...))]
+;;     (spit "pkg/ir/op_generated.go" (g/render f)))
+;;
+;; Each defop becomes ~50 lines of generated Go across 3-4 files.
+;; Adding a new op = one defop entry, regenerate, done.

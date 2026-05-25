@@ -18,21 +18,21 @@ const (
 )
 
 type vnode struct {
-	array []interface{} // can hold either Values or other nodes
+	array []any // can hold either Values or other nodes
 }
 
 func newNode() *vnode {
-	return &vnode{array: make([]interface{}, 0, nodeCap)}
+	return &vnode{array: make([]any, 0, nodeCap)}
 }
 
 type thePersistentVectorType struct{}
 
-func (t *thePersistentVectorType) String() string     { return t.Name() }
-func (t *thePersistentVectorType) Type() ValueType    { return TypeType }
-func (t *thePersistentVectorType) Unbox() interface{} { return reflect.TypeOf(t) }
-func (t *thePersistentVectorType) Name() string       { return "let-go.lang.PersistentVector" }
+func (t *thePersistentVectorType) String() string  { return t.Name() }
+func (t *thePersistentVectorType) Type() ValueType { return TypeType }
+func (t *thePersistentVectorType) Unbox() any      { return reflect.TypeFor[*thePersistentVectorType]() }
+func (t *thePersistentVectorType) Name() string    { return "let-go.lang.PersistentVector" }
 
-func (t *thePersistentVectorType) Box(bare interface{}) (Value, error) {
+func (t *thePersistentVectorType) Box(bare any) (Value, error) {
 	arr, ok := bare.([]Value)
 	if !ok {
 		return NIL, NewTypeError(bare, "can't be boxed as", t)
@@ -90,7 +90,7 @@ func (v PersistentVector) String() string {
 }
 
 // Unbox implements Value
-func (v PersistentVector) Unbox() interface{} {
+func (v PersistentVector) Unbox() any {
 	ret := make([]Value, v.count)
 	for i := 0; i < v.count; i++ {
 		ret[i] = v.ValueAt(Int(i))
@@ -281,6 +281,7 @@ func (v PersistentVector) Empty() Collection {
 		root:    newNode(),
 		tail:    make([]Value, 0, nodeCap),
 		tailOff: 0,
+		meta:    v.meta,
 	}
 }
 
@@ -352,7 +353,7 @@ func pushTail(level uint, parent *vnode, tailOff int, tail []Value) *vnode {
 	subidx := (tailOff >> level) & nodeMask
 
 	// Copy parent
-	ret := &vnode{array: make([]interface{}, len(parent.array))}
+	ret := &vnode{array: make([]any, len(parent.array))}
 	copy(ret.array, parent.array)
 
 	if level == shift {
@@ -484,7 +485,7 @@ func (v PersistentVector) Assoc(key Value, val Value) Associative {
 }
 
 func (v PersistentVector) doAssoc(n *vnode, level uint, idx int, val Value) *vnode {
-	newNode := &vnode{array: make([]interface{}, len(n.array))}
+	newNode := &vnode{array: make([]any, len(n.array))}
 	copy(newNode.array, n.array)
 
 	if level == 0 {
@@ -555,10 +556,10 @@ func NewPersistentVector(values []Value) Value {
 	// Build leaf nodes
 	leafCount := treeSize / nodeCap
 	leaves := make([]*vnode, leafCount)
-	for i := 0; i < leafCount; i++ {
-		node := &vnode{array: make([]interface{}, nodeCap)}
+	for i := range leafCount {
+		node := &vnode{array: make([]any, nodeCap)}
 		base := i * nodeCap
-		for j := 0; j < nodeCap; j++ {
+		for j := range nodeCap {
 			node.array[j] = values[base+j]
 		}
 		leaves[i] = node
@@ -570,13 +571,10 @@ func NewPersistentVector(values []Value) Value {
 	for len(currentLevel) > nodeCap {
 		parentCount := (len(currentLevel) + nodeCap - 1) / nodeCap
 		parents := make([]*vnode, parentCount)
-		for i := 0; i < parentCount; i++ {
+		for i := range parentCount {
 			start := i * nodeCap
-			end := start + nodeCap
-			if end > len(currentLevel) {
-				end = len(currentLevel)
-			}
-			node := &vnode{array: make([]interface{}, end-start)}
+			end := min(start+nodeCap, len(currentLevel))
+			node := &vnode{array: make([]any, end-start)}
 			for j := start; j < end; j++ {
 				node.array[j-start] = currentLevel[j]
 			}
@@ -587,7 +585,7 @@ func NewPersistentVector(values []Value) Value {
 	}
 
 	// Final root node wrapping the top-level nodes
-	root := &vnode{array: make([]interface{}, len(currentLevel))}
+	root := &vnode{array: make([]any, len(currentLevel))}
 	for i, n := range currentLevel {
 		root.array[i] = n
 	}
@@ -612,9 +610,9 @@ func (s *PersistentVectorSeq) Type() ValueType {
 }
 
 // Unbox implements Value
-func (s *PersistentVectorSeq) Unbox() interface{} {
+func (s *PersistentVectorSeq) Unbox() any {
 	vals := make([]Value, s.vec.count-s.i)
-	for i := 0; i < len(vals); i++ {
+	for i := range vals {
 		vals[i] = s.vec.ValueAt(Int(s.i + i))
 	}
 	return vals
@@ -649,12 +647,12 @@ func (s *PersistentVectorSeq) Conj(val Value) Collection {
 
 type theSequenceType struct{}
 
-func (t *theSequenceType) String() string     { return t.Name() }
-func (t *theSequenceType) Type() ValueType    { return TypeType }
-func (t *theSequenceType) Unbox() interface{} { return reflect.TypeOf(t) }
-func (t *theSequenceType) Name() string       { return "let-go.lang.Sequence" }
+func (t *theSequenceType) String() string  { return t.Name() }
+func (t *theSequenceType) Type() ValueType { return TypeType }
+func (t *theSequenceType) Unbox() any      { return reflect.TypeFor[*theSequenceType]() }
+func (t *theSequenceType) Name() string    { return "let-go.lang.Sequence" }
 
-func (t *theSequenceType) Box(bare interface{}) (Value, error) {
+func (t *theSequenceType) Box(bare any) (Value, error) {
 	return nil, NewTypeError(bare, "can't be boxed as", t)
 }
 

@@ -7,18 +7,19 @@ package vm
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 )
 
 type theNamespaceType struct{}
 
-func (t *theNamespaceType) String() string     { return t.Name() }
-func (t *theNamespaceType) Type() ValueType    { return TypeType }
-func (t *theNamespaceType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theNamespaceType) String() string  { return t.Name() }
+func (t *theNamespaceType) Type() ValueType { return TypeType }
+func (t *theNamespaceType) Unbox() any      { return reflect.TypeFor[*theNamespaceType]() }
 
 func (t *theNamespaceType) Name() string { return "let-go.lang.Namespace" }
-func (t *theNamespaceType) Box(fn interface{}) (Value, error) {
+func (t *theNamespaceType) Box(fn any) (Value, error) {
 	return NIL, NewTypeError(fn, "can't be boxed as", t)
 }
 
@@ -44,12 +45,34 @@ type Namespace struct {
 	registry map[Symbol]*Var
 	refers   map[Symbol]*Refer
 	aliases  map[Symbol]*Namespace
+	excludes map[Symbol]bool // names excluded from clojure.core auto-refer
+}
+
+// coreNamespacePtr is set by the rt package after clojure.core is registered.
+// Used by Def to check whether a name shadows core.
+var coreNamespacePtr *Namespace
+
+// SetCoreNamespace registers clojure.core for the warn-on-shadow check.
+// Called once during rt initialization.
+func SetCoreNamespace(ns *Namespace) {
+	coreNamespacePtr = ns
+}
+
+// Exclude marks a symbol as excluded from clojure.core auto-refer.
+// Called from the ns macro for :refer-clojure :exclude [...].
+func (n *Namespace) Exclude(name string) {
+	n.excludes[Symbol(name)] = true
+}
+
+// IsExcluded reports whether the symbol is in the exclude set.
+func (n *Namespace) IsExcluded(name Symbol) bool {
+	return n.excludes[name]
 }
 
 func (n *Namespace) Type() ValueType { return NamespaceType }
 
 // Unbox implements Unbox
-func (n *Namespace) Unbox() interface{} {
+func (n *Namespace) Unbox() any {
 	return nil
 }
 
@@ -59,13 +82,61 @@ func NewNamespace(name string) *Namespace {
 		registry: map[Symbol]*Var{},
 		refers:   map[Symbol]*Refer{},
 		aliases:  map[Symbol]*Namespace{},
+		excludes: map[Symbol]bool{},
 	}
 }
 
 func (n *Namespace) RegistrySize() int { return len(n.registry) }
 
+// isShadowingCoreRefer reports whether name `s` is currently visible
+// unqualified in namespace `n` via a refer of clojure.core.
+//
+// Refer entries are keyed by namespace name (e.g. "clojure.core"), not
+// by symbol — so we look up that single entry, then check whether `s`
+// is in scope via :refer :all or :refer :only.
+func isShadowingCoreRefer(n *Namespace, s Symbol) bool {
+	for _, ref := range n.refers {
+		if ref == nil || ref.ns != coreNamespacePtr {
+			continue
+		}
+		if ref.all {
+			return true
+		}
+		if ref.only != nil && ref.only[s] {
+			return true
+		}
+	}
+	return false
+}
+
 func (n *Namespace) Def(name string, val Value) *Var {
 	s := Symbol(name)
+	// Warn-on-core-shadow: emit Clojure-parity warning when a non-core
+	// namespace defines a name that is currently REFERRED in from
+	// clojure.core (i.e. previously visible in this ns unqualified),
+	// unless explicitly excluded via (:refer-clojure :exclude).
+	//
+	// Clojure JVM only warns on shadow-of-refer, not on raw name overlap:
+	//   (ns foo (:refer-clojure :only [defn]))
+	//   (defn reset! [x] x)  ;; no warning — reset! was never refered in
+	//
+	// Stdlib Go-side ns.Def calls (e.g. profile/reset!) build namespaces
+	// that don't auto-refer clojure.core, so they correctly stay silent.
+	// User code that uses the default (ns ...) form gets clojure.core
+	// auto-refered :all, so it does warn on shadow.
+	if coreNamespacePtr != nil && n != coreNamespacePtr && !n.excludes[s] {
+		if isShadowingCoreRefer(n, s) {
+			if existing, ok := coreNamespacePtr.registry[s]; ok && existing != nil && !existing.isPrivate {
+				// Only warn the first time we shadow in this ns; subsequent
+				// re-defs of our own var don't re-warn.
+				if _, alreadyDefined := n.registry[s]; !alreadyDefined {
+					fmt.Fprintf(os.Stderr,
+						"WARNING: %s already refers to: #'clojure.core/%s in namespace: %s, being replaced by: #'%s/%s\n",
+						name, name, n.name, n.name, name)
+				}
+			}
+		}
+	}
 	va := NewVar(n, n.name, name)
 	va.SetRoot(val)
 	if val.Type() == NativeFnType {
@@ -83,6 +154,18 @@ func (n *Namespace) LookupLocal(symbol Symbol) *Var {
 	return n.registry[symbol]
 }
 
+// DefStub creates a var with NIL root without triggering the warn-on-shadow
+// check. Intended for bundle decoders that pre-populate var references
+// before the namespace's own chunk runs (which would Def them properly).
+// Do NOT use DefStub to intentionally suppress warnings for new code; use
+// Namespace.Exclude (via :refer-clojure :exclude) instead.
+func (n *Namespace) DefStub(name string) *Var {
+	s := Symbol(name)
+	va := NewVar(n, n.name, name)
+	va.SetRoot(NIL)
+	n.registry[s] = va
+	return va
+}
 
 func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 	val, ok := n.registry[symbol]
@@ -115,6 +198,16 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 	// Alias-qualified resolution via aliases
 	if target, ok := n.aliases[sns.(Symbol)]; ok {
 		v := target.registry[sym.(Symbol)]
+		if v == nil && nsLookup != nil {
+			// Alias may point to a placeholder namespace created before source
+			// load completed. Re-resolve by name so runtime loader can
+			// materialize the namespace on demand, then retry the symbol lookup.
+			if loaded := nsLookup(target.Name()); loaded != nil {
+				target = loaded
+				n.aliases[sns.(Symbol)] = loaded
+				v = target.registry[sym.(Symbol)]
+			}
+		}
 		if v == nil || v.isPrivate {
 			return NIL
 		}

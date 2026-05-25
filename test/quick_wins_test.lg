@@ -341,8 +341,58 @@
   (testing "parse-uuid normalizes case for equality"
     (is (= (parse-uuid "550e8400-e29b-41d4-a716-446655440000")
            (parse-uuid "550E8400-E29B-41D4-A716-446655440000"))))
+  (testing "parse-uuid accepts Java UUID shorthand groups"
+    (is (= #uuid "00000000-0000-0000-0000-000000000000"
+           (parse-uuid "0-0-0-0-0")))
+    (is (= #uuid "00000012-0034-0056-0078-000000000009"
+           (parse-uuid "12-34-56-78-9")))
+    (is (= #uuid "00000005-0004-0003-0002-009000000001"
+           (parse-uuid "5-4-3-DEADBEEF0002-9000000001"))))
   (testing "#uuid reader literal produces a UUID"
     (is (uuid? #uuid "550e8400-e29b-41d4-a716-446655440000"))))
+
+(deftest repeat-boolean-count-test
+  (testing "repeat count rejects booleans"
+    (is (= :caught (try (repeat true :a) (catch e :caught))))
+    (is (= :caught (try (repeat false :a) (catch e :caught))))))
+
+(deftest clojure-numeric-equality-test
+  (testing "= keeps Clojure numeric categories while == compares numerically"
+    (is (not (= 2 2.0)))
+    (is (== 2 2.0))
+    (is (= 2 2N))
+    (is (not (= 1.0M 1)))
+    (is (= (float 0.5) (double 0.5)))
+    (is (not (= (float 0.1) (double 0.1)))))
+  (testing "JVM-compatible NaN equality edges"
+    (let [nan (/ 0.0 0.0)]
+      (is (not (= nan nan)))
+      (is (not (not= nan nan)))
+      (is (= (list nan) (list nan)))
+      (is (not (= [nan] [nan]))))))
+
+(deftest bigint-double-conversion-test
+  (testing "bigint converts doubles through their decimal representation"
+    (is (= 179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000N
+           (bigint 1.7976931348623157E308)))))
+
+(deftest case-set-literal-test
+  (testing "case treats set literals as constants, not list alternatives"
+    (is (= :set
+           (case (hash-set :kws :of :set :a)
+             #{:a :set :of :kws} :set
+             :default)))))
+
+(deftest round-bigdec-test
+  (testing "round-bigdec supports Clojure with-precision rounding modes"
+    (is (= 2.0M (round-bigdec 1 :up (* 1.1M 1.0M))))
+    (is (= -1.0M (round-bigdec 1 :ceiling (* -1.1M 1.0M))))
+    (is (= 1.0M (round-bigdec 1 :down (* 1.9M 1.0M))))
+    (is (= -2.0M (round-bigdec 1 :floor (* -1.9M 1.0M))))
+    (is (= 2.0M (round-bigdec 1 :half-even (* 2.5M 1.0M))))
+    (is (= 1.0M (round-bigdec 1 :half-down (* 1.5M 1.0M))))
+    (is (= :caught (try (round-bigdec 1 :unnecessary (* 1.5M 1.0M))
+                        (catch e :caught))))))
 
 ;; --- reader tagged literals: #inst, unknown tags ---
 
@@ -445,6 +495,13 @@
   (testing "string/reverse"
     (is (= "olleh" (s/reverse "hello")))
     (is (= "" (s/reverse "")))))
+
+(deftest resolve-test
+  (testing "resolve finds vars visible from the current namespace"
+    (is (var? (resolve 'long)))
+    (is (var? (resolve 'not)))
+    (is (var? (resolve 'some?)))
+    (is (nil? (resolve 'not-a-real-var)))))
 
 (deftest string-escape-test
   (testing "string/escape"

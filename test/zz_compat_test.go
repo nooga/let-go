@@ -27,56 +27,7 @@ const memLimitBytes = 512 * 1024 * 1024
 
 // knownFailing lists test names (filename stems) that are known to fail.
 // Tests that pass but appear here will cause an error so the list stays current.
-var knownFailing = map[string]bool{
-	"add_watch":      true, // agent stub is synchronous; some assertions need real agent behavior
-	"remove_watch":   true, // ditto
-	"ancestors":      true, // hierarchy stub returns empty
-	"parents":        true, // hierarchy stub returns nil
-	"atom":           true, // atom validator/meta edge cases
-	"bigint":         true, // BigInt promotion at Long range boundary
-	"binding":        true, // thread binding propagation to futures
-	"bound_fn":       true, // bound-fn shim doesn't propagate dyn vars
-	"bound_fn_star":  true, // bound-fn* shim is identity
-	"derive":         true, // hierarchy stub has no real behavior
-	"descendants":    true, // hierarchy stub has no real behavior
-	"disj_bang":      true, // disj! shim falls through to disj
-	"dissoc":         true, // dissoc on records has quirky behavior
-	"empty":          true, // empty on deftype/non-coll edge cases
-	"realized_qmark": true, // realized? semantics mismatch
-	"underive":       true, // hierarchy stub returns empty
-	"with_precision": true, // with-precision is a no-op; results don't round
-	"case":           true, // case macro complex matching
-	"compare":        true, // compare cross-type issues
-	"conj":           true, // conj arity/nil edge cases
-	"conj_bang":      true, // transient conj edge cases
-	"dec":            true, // dec overflow/type coercion
-	"double_qmark":   true, // no float32/float64 distinction
-	"empty_qmark":    true, // empty? on list containing nil
-	"float":          true, // BigDecimal edge cases
-	"inc":            true, // overflow untested assertion
-	"int":            true, // int overflow bounds
-	"intern":         true, // intern var binding
-	"juxt":           true, // juxt composition edge cases
-	"list_qmark":     true, // seq types report as list
-	"mapcat":         true, // hash-map iteration order (single edge case)
-	"merge":          true, // merge with nil/meta
-	"min_key":        true, // min-key edge cases
-	"minus":          true, // overflow not detected
-	"nnext":          true, // map ordering
-	"not_empty":      true, // not-empty on list containing nil
-	"nthnext":        true, // nthnext on various types
-	"num":            true, // num edge cases
-	"partial":        true, // lazy evaluation edge case
-	"peek":           true, // peek on cons
-	"plus":           true, // overflow not detected
-	"reduce":         true, // reduce interop edge cases
-	"short":          true, // short coercion
-	"slash":          true, // division edge cases
-	"star":           true, // overflow not detected
-	"str":            true, // str reader conditional
-	"when_first":     true, // when-first edge cases
-	"when_let":       true, // when-let macroexpand test
-}
+var knownFailing = map[string]bool{}
 
 // suiteCounters tracks aggregate assertion counts across the entire suite.
 type suiteCounters struct {
@@ -116,8 +67,11 @@ func (s *suiteCounters) summary() string {
 // Each .cljc file is compiled and executed through let-go with compat shims.
 // Files that fail to compile (e.g. missing builtins) are reported as skipped.
 func TestClojureTestSuite(t *testing.T) {
-	suiteDir := "clojure-test-suite/test/clojure/core_test"
-	if _, err := os.Stat(suiteDir); os.IsNotExist(err) {
+	compiler.SetMatchCljConditional(true)
+	defer compiler.SetMatchCljConditional(false)
+
+	suiteRoot := "clojure-test-suite/test/clojure"
+	if _, err := os.Stat(filepath.Join(suiteRoot, "core_test")); os.IsNotExist(err) {
 		t.Skip("clojure-test-suite submodule not initialized (run: git submodule update --init)")
 	}
 
@@ -147,12 +101,16 @@ func TestClojureTestSuite(t *testing.T) {
 		t.Fatal("failed to compile portability shim:", err)
 	}
 
-	files, err := filepath.Glob(filepath.Join(suiteDir, "*.cljc"))
-	if err != nil {
-		t.Fatal(err)
+	var files []string
+	for _, dir := range []string{"core_test", "string_test"} {
+		matches, err := filepath.Glob(filepath.Join(suiteRoot, dir, "*.cljc"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, matches...)
 	}
 	if len(files) == 0 {
-		t.Fatal("no .cljc files found in", suiteDir)
+		t.Fatal("no .cljc files found in", suiteRoot)
 	}
 
 	totals := &suiteCounters{}
@@ -224,6 +182,7 @@ func nsNameFromCompatPath(filename string) string {
 
 func runCompatTest(t *testing.T, c *vm.Consts, filename string, totals *suiteCounters) {
 	ch := make(chan compatTestResult, 1)
+	runtime.GC()
 	baseAlloc := currentAlloc()
 
 	go func() {
@@ -344,7 +303,10 @@ func runCompatTest(t *testing.T, c *vm.Consts, filename string, totals *suiteCou
 			return
 
 		case <-ticker.C:
-			// Check memory growth
+			// Check live memory growth. Force a collection first so large
+			// temporary allocations from legitimate bounded tests don't look
+			// like retained heap.
+			runtime.GC()
 			if currentAlloc()-baseAlloc > memLimitBytes {
 				totals.addSkip("runtime")
 				runtime.GC() // try to reclaim before moving on

@@ -419,7 +419,7 @@ func readRegex(r *LispReader, _ rune) (vm.Value, error) {
 // handling.
 func readHexEscape(r *LispReader) (int, error) {
 	hex := ""
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		ch, err := r.next()
 		if err != nil || !isHexDigit(ch) {
 			return 0, NewReaderError(r, fmt.Sprintf("invalid escape sequence \\u%s", hex))
@@ -549,15 +549,20 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 		neg = true
 		numStr = numStr[1:]
 	}
-	// Hex literal: 0xff or -0xff
+	// Hex literal: 0xff or -0xff. Matches Clojure JVM behavior:
+	//   - literals fitting in int64 produce Int (including -0x8000000000000000
+	//     which fits as the negated value),
+	//   - literals exceeding Long/MAX_VALUE positive promote to BigInt.
+	// MaybeDowngrade handles the size dispatch for us.
 	if len(numStr) > 2 && numStr[0] == '0' && (numStr[1] == 'x' || numStr[1] == 'X') {
-		if i, err := strconv.ParseUint(numStr[2:], 16, 64); err == nil {
-			n := int64(i)
+		hex := numStr[2:]
+		bi, ok := new(big.Int).SetString(hex, 16)
+		if ok {
 			if neg {
-				n = -n
+				bi.Neg(bi)
 			}
 			r.closeToken(TokenNumber)
-			return vm.MakeInt(int(n)), nil
+			return vm.MaybeDowngrade(bi), nil
 		}
 	}
 	// Octal literal: 0377
@@ -618,10 +623,9 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 
 func readList(r *LispReader, _ rune) (vm.Value, error) {
 	startLine := r.line
-	startCol := r.column - 1 // -1 because '(' was already consumed
-	if startCol < 0 {
-		startCol = 0
-	}
+	startCol := max(
+		// -1 because '(' was already consumed
+		r.column-1, 0)
 	var ret []vm.Value
 	for {
 		ch2, err := r.eatWhitespace()
@@ -653,10 +657,7 @@ func readList(r *LispReader, _ rune) (vm.Value, error) {
 
 func readVector(r *LispReader, _ rune) (vm.Value, error) {
 	startLine := r.line
-	startCol := r.column - 1
-	if startCol < 0 {
-		startCol = 0
-	}
+	startCol := max(r.column-1, 0)
 	ret := make([]vm.Value, 0)
 	for {
 		ch2, err := r.eatWhitespace()
@@ -685,10 +686,7 @@ func readVector(r *LispReader, _ rune) (vm.Value, error) {
 
 func readMap(r *LispReader, _ rune) (vm.Value, error) {
 	startLine := r.line
-	startCol := r.column - 1
-	if startCol < 0 {
-		startCol = 0
-	}
+	startCol := max(r.column-1, 0)
 	ret := make([]vm.Value, 0)
 	for {
 		ch2, err := r.eatWhitespace()
@@ -717,7 +715,7 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 	if len(ret)%2 != 0 {
 		return vm.NIL, NewReaderError(r, "map literal must contain even number of forms")
 	}
-	result := vm.NewMap(ret)
+	result := vm.NewArrayMap(ret)
 	vm.FormSource.Set(result, vm.SourceInfo{
 		File: r.inputName, Line: startLine, Column: startCol,
 	})
@@ -726,10 +724,9 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 
 func readSet(r *LispReader, _ rune) (vm.Value, error) {
 	startLine := r.line
-	startCol := r.column - 2 // -2 because '#' and '{' were consumed
-	if startCol < 0 {
-		startCol = 0
-	}
+	startCol := max(
+		// -2 because '#' and '{' were consumed
+		r.column-2, 0)
 	ret := vm.EmptyList
 	for {
 		ch2, err := r.eatWhitespace()
@@ -998,10 +995,9 @@ func readVarQuote(r *LispReader, _ rune) (vm.Value, error) {
 
 func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 	startLine := r.line
-	startCol := r.column - 2 // -2 because '#' and '(' were consumed
-	if startCol < 0 {
-		startCol = 0
-	}
+	startCol := max(
+		// -2 because '#' and '(' were consumed
+		r.column-2, 0)
 	var ret []vm.Value
 	r.maxPercent = 0
 	for {
@@ -1162,9 +1158,10 @@ func skipReaderForm(r *LispReader) {
 				return
 			}
 			if inString {
-				if c == '\\' {
+				switch c {
+				case '\\':
 					r.next() // skip escaped char
-				} else if c == '"' {
+				case '"':
 					inString = false
 				}
 				continue

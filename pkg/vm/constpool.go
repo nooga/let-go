@@ -158,10 +158,7 @@ func (c *Consts) insertBucket(h uint32, idx int, v Value) {
 }
 
 func (c *Consts) grow() {
-	newSize := (c.mask + 1) * 2
-	if newSize < 16 {
-		newSize = 16
-	}
+	newSize := max((c.mask+1)*2, 16)
 	old := c.buckets
 	c.buckets = make([]constBucket, newSize)
 	c.mask = uint32(newSize - 1)

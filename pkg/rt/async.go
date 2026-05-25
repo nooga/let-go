@@ -30,7 +30,7 @@ type Mult struct {
 type Pub struct {
 	src     vm.Chan
 	topicFn vm.Fn
-	subs    map[interface{}]vm.Chan
+	subs    map[any]vm.Chan
 	mu      sync.Mutex
 }
 
@@ -534,7 +534,7 @@ func installAsyncNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("pub expected Fn")
 		}
-		p := &Pub{src: src, topicFn: topicFn, subs: make(map[interface{}]vm.Chan)}
+		p := &Pub{src: src, topicFn: topicFn, subs: make(map[any]vm.Chan)}
 		go func() {
 			for v := range src {
 				topic, err := topicFn.Invoke([]vm.Value{v})
@@ -699,7 +699,7 @@ func installAsyncNS() {
 		out := make(vm.Chan)
 		go func() {
 			count := int(n)
-			for i := 0; i < count; i++ {
+			for range count {
 				v, ok := <-ch
 				if !ok {
 					break
@@ -713,6 +713,14 @@ func installAsyncNS() {
 
 	ns := vm.NewNamespace("async")
 	ns.Refer(CoreNS, "", true)
+
+	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
+	for _, n := range []string{
+		"go*", ">!", "<!", "chan", "close!", "split", "reduce",
+		">!!", "<!!", "map", "take", "merge", "into",
+	} {
+		ns.Exclude(n)
+	}
 
 	// Re-export core primitives (extract root value from Var)
 	ns.Def("go*", coreNS.Lookup("go*").(*vm.Var).Deref())

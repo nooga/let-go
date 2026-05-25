@@ -1,0 +1,128 @@
+;; Dominators — Lisp port of pkg/ir/dominance.go.
+;;
+;; Phase E of docs/superpowers/specs/2026-05-22-retire-pkg-ir.md.
+;; Iterative dataflow algorithm of Cooper, Harvey, and Kennedy
+;; ("A Simple, Fast Dominance Algorithm"). For typical function sizes
+;; (< 50 blocks) this runs in microseconds and is near-optimal.
+
+(ns ir.dominance)
+
+(defn successors [f bid]
+  "Successor block ids of bid in f, derived from its terminator.
+   BranchIf: true-target first, then false. Branch: single target.
+   Return/TailCall: empty."
+  (let [term (ir/block-term bid f)
+        op   (ir/op term f)
+        aux  (ir/aux term f)]
+    (cond
+      (= op :branch)
+        [(ir/branch-target-target aux)]
+      (= op :branch-if)
+        (let [t (ir/cond-target-true aux)
+              e (ir/cond-target-false aux)]
+          [(ir/branch-target-target t) (ir/branch-target-target e)])
+      :else [])))
+
+(defn- dfs-postorder [f entry]
+  "Iterative DFS from entry, returns blocks in postorder."
+  (loop [stack    [[entry (successors f entry) 0]]
+         visited  #{entry}
+         post     []]
+    (if (empty? stack)
+      post
+      (let [top   (peek stack)
+            bid   (nth top 0)
+            succs (nth top 1)
+            si    (nth top 2)]
+        (if (< si (count succs))
+          (let [s (nth succs si)
+                stack' (assoc stack (dec (count stack)) [bid succs (inc si)])]
+            (if (contains? visited s)
+              (recur stack' visited post)
+              (recur (conj stack' [s (successors f s) 0])
+                     (conj visited s)
+                     post)))
+          ;; All children done — emit and pop.
+          (recur (pop stack) visited (conj post bid)))))))
+
+(defn reverse-postorder [f]
+  "Reachable blocks in reverse postorder. Entry first, then blocks
+   ordered such that each appears after one of its predecessors
+   (for acyclic CFGs; loops mean iteration is needed to converge)."
+  (vec (reverse (dfs-postorder f (ir/fn-entry f)))))
+
+(defn- intersect [idom rpo-idx b1 b2]
+  "Walk up the dominator tree from b1 and b2 until they meet. The
+   finger with the higher (deeper) RPO index moves up first."
+  (loop [b1 b1 b2 b2]
+    (if (= b1 b2)
+      b1
+      (cond
+        (> (nth rpo-idx b1) (nth rpo-idx b2))
+          (recur (nth idom b1) b2)
+        (> (nth rpo-idx b2) (nth rpo-idx b1))
+          (recur b1 (nth idom b2))
+        :else b1))))
+
+(defn- refine-idom [f bid idom rpo-idx]
+  "Compute the new idom for bid by intersecting all reachable
+   predecessor chains. Returns the new idom or -1 if no reachable
+   predecessor exists."
+  (let [preds (ir/block-preds bid f)]
+    (loop [ps      preds
+           new-id  -1]
+      (if (empty? ps)
+        new-id
+        (let [p (first ps)]
+          (cond
+            (= -1 (nth idom p))
+              (recur (rest ps) new-id)
+            (= -1 new-id)
+              (recur (rest ps) p)
+            :else
+              (recur (rest ps) (intersect idom rpo-idx p new-id))))))))
+
+(defn dominators [f]
+  "Compute the immediate-dominator array: idom[bid] = nearest strict
+   dominator of bid, or -1 for the entry block and unreachable blocks.
+   Matches pkg/ir/dominance.go's Function.Dominators() byte-for-byte."
+  (let [n      (count (ir/blocks f))
+        entry  (ir/fn-entry f)
+        rpo    (reverse-postorder f)
+        ;; rpoIdx[bid] = position in RPO; -1 for unreachable.
+        rpo-idx (loop [i 0 idx (vec (repeat n -1))]
+                  (if (>= i (count rpo))
+                    idx
+                    (recur (inc i) (assoc idx (nth rpo i) i))))
+        ;; Algorithm uses idom[entry] = entry as a sentinel during the
+        ;; loop, restored to -1 before returning.
+        idom0  (assoc (vec (repeat n -1)) entry entry)]
+    (let [final (loop [idom idom0]
+                  (let [step (loop [bs   rpo
+                                    idom idom
+                                    changed? false]
+                               (if (empty? bs)
+                                 [idom changed?]
+                                 (let [b (first bs)]
+                                   (if (= b entry)
+                                     (recur (rest bs) idom changed?)
+                                     (let [ni (refine-idom f b idom rpo-idx)]
+                                       (if (or (= -1 ni) (= (nth idom b) ni))
+                                         (recur (rest bs) idom changed?)
+                                         (recur (rest bs)
+                                                (assoc idom b ni)
+                                                true)))))))]
+                    (if (nth step 1)
+                      (recur (nth step 0))
+                      (nth step 0))))]
+      (assoc final entry -1))))
+
+(defn dominates? [f a b]
+  "True iff block `a` dominates block `b` (a == b is also true).
+   Walks up b's dominator chain until reaching a or falling off."
+  (let [idom (dominators f)]
+    (loop [b b]
+      (cond
+        (= -1 b)  false
+        (= a b)   true
+        :else     (recur (nth idom b))))))

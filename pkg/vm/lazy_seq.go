@@ -5,15 +5,18 @@
 
 package vm
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // LazySeq delays computation of a sequence until first/next is called.
 // This is the foundation for lazy operations like map, filter, etc.
 type LazySeq struct {
-	fn  Fn       // thunk that produces the seq when called
-	s   Seq      // cached realized seq
-	sv  Value    // intermediate value from fn
-	err error    // error from thunk realization (propagated on access)
+	fn  Fn    // thunk that produces the seq when called
+	s   Seq   // cached realized seq
+	sv  Value // intermediate value from fn
+	err error // error from thunk realization (propagated on access)
 	mu  sync.Mutex
 }
 
@@ -21,11 +24,21 @@ func NewLazySeq(fn Fn) *LazySeq {
 	return &LazySeq{fn: fn}
 }
 
+func (l *LazySeq) IsRealized() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.fn == nil
+}
+
 // sval realizes the thunk and returns the raw value without converting to seq.
 // Used for unwrapping nested LazySeqs without locking issues.
 func (l *LazySeq) sval() Value {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// Re-raise stored error on repeated access, mirroring seq().
+	if l.err != nil {
+		panic(&thrownPanic{err: l.err})
+	}
 	if l.fn != nil {
 		sv, err := l.fn.Invoke(nil)
 		if err != nil {
@@ -67,10 +80,22 @@ func (l *LazySeq) seq() Seq {
 		l.sv = nil
 		if sv == nil || sv == NIL {
 			l.s = nil
+		} else if seqable, ok := sv.(Sequable); ok {
+			// Prefer Sequable.Seq() over a direct Seq cast: Sequable
+			// canonicalizes empty collections (empty ArrayVector,
+			// PersistentSet, etc.) to EmptyList/nil, so `(lazy-seq [])`
+			// and `(lazy-seq #{})` equate to `()`. Without this, an
+			// empty collection that also satisfies Seq would be cached
+			// as l.s directly and equality vs () would fail.
+			l.s = seqable.Seq()
 		} else if seq, ok := sv.(Seq); ok {
 			l.s = seq
-		} else if seqable, ok := sv.(Sequable); ok {
-			l.s = seqable.Seq()
+		} else {
+			// Realized to a non-seq, non-Sequable value. Match JVM Clojure's
+			// behavior: throw rather than silently coercing to nil.
+			err := fmt.Errorf("don't know how to create ISeq from %s", sv.Type())
+			l.err = err
+			panic(&thrownPanic{err: err})
 		}
 	}
 
@@ -85,8 +110,8 @@ func (l *LazySeq) String() string {
 	return s.String()
 }
 
-func (l *LazySeq) Type() ValueType    { return ListType }
-func (l *LazySeq) Unbox() interface{} { return l.seq() }
+func (l *LazySeq) Type() ValueType { return ListType }
+func (l *LazySeq) Unbox() any      { return l.seq() }
 
 func (l *LazySeq) First() Value {
 	s := l.Resolve()
@@ -152,6 +177,19 @@ func (l *LazySeq) RawCount() int {
 
 func (l *LazySeq) Empty() Collection { return EmptyList }
 
+// Hash implements Hashable. Resolves the lazy chain and hashes as an ordered
+// collection, matching *List/*Cons so the three sequence representations
+// equate in sets/maps. An empty resolution (Go nil from a (lazy-seq nil))
+// must hash the same as EmptyList — Resolve() returns nil but EmptyList.Hash
+// iterates once over its sentinel element, so we substitute EmptyList here.
+func (l *LazySeq) Hash() uint32 {
+	s := l.Resolve()
+	if s == nil {
+		s = EmptyList
+	}
+	return hashOrdered(s)
+}
+
 func (l *LazySeq) Conj(val Value) Collection {
 	return NewCons(val, l)
 }
@@ -175,4 +213,3 @@ func (l *LazySeq) ValueAtOr(key Value, notFound Value) Value {
 	}
 	return notFound
 }
-

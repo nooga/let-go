@@ -134,11 +134,11 @@ func splitLines(s string) []string {
 // Used by the compiler to attach source info to bytecode.
 // Only pointer-based types (like *List) can be tracked; slice/value types
 // are not hashable and are silently ignored.
-var FormSource = &formSourceMap{m: map[interface{}]*SourceInfo{}}
+var FormSource = &formSourceMap{m: map[any]*SourceInfo{}}
 
 type formSourceMap struct {
 	mu sync.RWMutex
-	m  map[interface{}]*SourceInfo
+	m  map[any]*SourceInfo
 }
 
 // Set associates a source location with a form value.

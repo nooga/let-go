@@ -11,12 +11,12 @@ type theBooleanType struct {
 	zero Boolean
 }
 
-func (t *theBooleanType) String() string     { return t.Name() }
-func (t *theBooleanType) Type() ValueType    { return TypeType }
-func (t *theBooleanType) Unbox() interface{} { return reflect.TypeOf(t) }
+func (t *theBooleanType) String() string  { return t.Name() }
+func (t *theBooleanType) Type() ValueType { return TypeType }
+func (t *theBooleanType) Unbox() any      { return reflect.TypeFor[*theBooleanType]() }
 
 func (t *theBooleanType) Name() string { return "let-go.lang.Boolean" }
-func (t *theBooleanType) Box(b interface{}) (Value, error) {
+func (t *theBooleanType) Box(b any) (Value, error) {
 	rb, ok := b.(bool)
 	if !ok {
 		return BooleanType.zero, NewTypeError(b, "can't be boxed as", t)
@@ -39,7 +39,7 @@ func (n Boolean) Hash() uint32 {
 func (n Boolean) Type() ValueType { return BooleanType }
 
 // Unbox implements Value
-func (n Boolean) Unbox() interface{} { return bool(n) }
+func (n Boolean) Unbox() any { return bool(n) }
 
 // BooleanType is the type of Boolean
 var BooleanType *theBooleanType = &theBooleanType{zero: FALSE}

@@ -1,0 +1,58 @@
+;; Common-subexpression elimination — per-block.
+;;
+;; Algorithm (matching OLD pkg/ir/passes/cse.go @ ynwoxxro):
+;;   For each block:
+;;     hash-table seen: (op refs aux) → first-seen-InstId
+;;     for each Inst in the block (in body order):
+;;       if op is in pure-cse-ops:
+;;         k = (op refs aux)
+;;         if k in seen: replace all uses of this Inst with seen[k]
+;;         else: seen[k] = this Inst
+;;
+;; pure-cse-ops EXCLUDES :load-var (state-dependent — needs the
+;; mutated-vars flow analysis from OLD CSE to safely dedupe across
+;; SetVar boundaries; helper is here for future widening).
+
+(ns ir.passes.cse)
+
+(def pure-cse-ops
+  "Ops safely CSE-eligible. Excludes :load-var (state-dependent;
+   needs flow analysis), :call (general effects), :branch / :branch-if
+   / :return (terminators)."
+  #{:const :load-arg :load-closed :block-arg
+    :add :sub :mul :lt :lte :gt :gte :eq :inc :dec})
+
+(defn- inst-key [nid f]
+  "Hashable key identifying this Inst's value. Two Insts with the
+   same key compute the same value."
+  [(ir/op nid f) (vec (ir/refs nid f)) (ir/aux nid f)])
+
+(defn- compute-mutated-vars [f]
+  "Set of var symbols mutated by any :set-var in the function. Used to
+   invalidate LoadVar CSE entries when a SetVar appears between two
+   LoadVars of the same var. Currently a no-op (pure-cse-ops excludes
+   :load-var); kept as infrastructure for future LoadVar widening."
+  (->> (range (count (:insts @f)))
+       (filter (fn [nid] (= :set-var (ir/op nid f))))
+       (map (fn [nid] (ir/aux nid f)))
+       (into #{})))
+
+(defn cse [f]
+  "Per-block CSE: hash eligible Insts by (op, refs, aux); subsequent
+   matches in the same block redirect their uses to the first occurrence
+   via ir/replace-all-uses!."
+  ;; Compute mutated-vars once (forward-compat for LoadVar widening;
+  ;; doesn't influence the current per-block eligibility check).
+  (let [_mutated (compute-mutated-vars f)]
+    (doseq [bid (ir/blocks f)]
+      ;; Per-block hash table. Atom is fine here — it's per-block
+      ;; CSE state, the analysis equivalent of one iteration scope.
+      (let [seen (atom {})]
+        (doseq [nid (vec (ir/block-insts bid f))
+                :let [op (ir/op nid f)]
+                :when (pure-cse-ops op)
+                :let [k (inst-key nid f)]]
+          (if-let [prior (@seen k)]
+            (ir/replace-all-uses! f nid prior)
+            (swap! seen assoc k nid))))))
+  f)

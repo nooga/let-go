@@ -52,6 +52,12 @@
   (testing "min-key finds minimum by key fn"
     (is (= {:x 1} (min-key :x {:x 1} {:x 2} {:x 3}))))
 
+  (testing "min-key preserves Clojure NaN ordering quirks in variadic form"
+    (is (= ##-Inf (min-key identity ##-Inf 1 ##NaN)))
+    (is (NaN? (min-key identity ##-Inf ##NaN 1)))
+    (is (= ##-Inf (min-key identity 1 ##-Inf ##NaN)))
+    (is (NaN? (min-key identity 1 ##NaN ##-Inf))))
+
   (testing "max-key finds maximum by key fn"
     (is (= {:x 3} (max-key :x {:x 1} {:x 2} {:x 3})))))
 
@@ -74,6 +80,17 @@
   (testing "str-join concatenates with separator"
     (is (= "a,b,c" (str-join "," ["a" "b" "c"])))
     (is (= "abc" (str-join ["a" "b" "c"])))))
+
+(deftest str-number-format-test
+  (testing "str formats numeric edge cases like Clojure"
+    (is (= "Infinity" (str ##Inf)))
+    (is (= "-Infinity" (str ##-Inf)))
+    (is (= "0" (str 0N)))
+    (is (= "1" (str 1N)))
+    (is (= "-1" (str -1N)))
+    (is (= "0.0" (str 0.0M)))
+    (is (= "1.0" (str 1.0M)))
+    (is (= "-1.0" (str -1.0M)))))
 
 (deftest rand-int-test
   (testing "rand-int returns int in range"

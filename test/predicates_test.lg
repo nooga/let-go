@@ -48,6 +48,9 @@
   (testing "type checks"
     (is (list? '(1 2 3)))
     (is (not (list? [1 2 3])))
+    (is (not (list? (seq [1 2 3]))))
+    (is (not (list? (seq (sorted-map :a 1)))))
+    (is (not (list? (seq (sorted-set :a)))))
     (is (vector? [1 2 3]))
     (is (not (vector? '(1 2 3))))
     (is (map? {:a 1}))
@@ -81,7 +84,8 @@
     (is (not= 1 2))
     (is (= [1 2] [1 2]))
     (is (= {:a 1} {:a 1}))
-    (is (= '(1 2) '(1 2)))))
+    (is (= '(1 2) '(1 2)))
+    (is (not= '() '(nil)))))
 
 (deftest comparison-predicates
   (testing "< > <= >="

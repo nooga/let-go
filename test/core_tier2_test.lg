@@ -53,6 +53,28 @@
       (swap! a + 3)
       (is (= [15 18] (deref log))))))
 
+(deftest watch-ref-identity
+  (testing "watch refs are stable inside hash collections"
+    (let [messages (atom #{})
+          a (atom 0)]
+      (add-watch a :w (fn [k r o n]
+                        (swap! messages conj {:key k :ref r :old o :new n})))
+      (swap! a inc)
+      (swap! a inc)
+      (is (= #{{:key :w :ref a :old 0 :new 1}
+               {:key :w :ref a :old 1 :new 2}}
+             (deref messages))))))
+
+(deftest watch-errors-propagate
+  (testing "watch errors are visible to callers"
+    (let [a (atom 0)]
+      (add-watch a :err (fn [k r o n] (throw (ex-info "watch failed" {:key k :old o :new n}))))
+      (is (= :caught
+             (try
+               (swap! a inc)
+               :missed
+               (catch e :caught)))))))
+
 (deftest remove-watch-test
   (testing "removed watch is not called"
     (let [log (atom 0)
@@ -63,6 +85,25 @@
       (reset! a 2)
       (is (= 1 (deref log))))))
 
+(def watchable-var 0)
+
+(deftest var-watch-test
+  (testing "var watches fire on alter-var-root"
+    (let [messages (atom #{})]
+      (alter-var-root #'watchable-var (fn [_] 0))
+      (add-watch #'watchable-var :w1
+                 (fn [k r o n] (swap! messages conj {:key k :ref r :old o :new n :watcher :w1})))
+      (add-watch #'watchable-var :w2
+                 (fn [k r o n] (swap! messages conj {:key k :ref r :old o :new n :watcher :w2})))
+      (alter-var-root #'watchable-var inc)
+      (remove-watch #'watchable-var :w1)
+      (alter-var-root #'watchable-var inc)
+      (remove-watch #'watchable-var :w2)
+      (is (= #{{:key :w1 :ref #'watchable-var :old 0 :new 1 :watcher :w1}
+               {:key :w2 :ref #'watchable-var :old 0 :new 1 :watcher :w2}
+               {:key :w2 :ref #'watchable-var :old 1 :new 2 :watcher :w2}}
+             (deref messages))))))
+
 ;; --- alter-meta! ---
 
 (deftest alter-meta-test
@@ -70,6 +111,23 @@
     (let [a (atom 42)]
       (alter-meta! a assoc :tag :special)
       (is (= {:tag :special} (meta a))))))
+
+(deftest atom-options-test
+  (testing "atom accepts metadata and validators"
+    (let [validator even?
+          a (atom 2 :meta {:tag :counter} :validator validator)]
+      (is (= {:tag :counter} (meta a)))
+      (is (= validator (get-validator a)))
+      (is (= 4 (reset! a 4)))
+      (is (= :caught
+             (try
+               (reset! a 5)
+               :missed
+               (catch e :caught))))
+      (is (= 4 (deref a)))))
+  (testing "nil option pairs are ignored"
+    (let [a (atom nil nil nil nil nil)]
+      (is (nil? (deref a))))))
 
 ;; --- vary-meta ---
 

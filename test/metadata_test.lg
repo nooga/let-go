@@ -46,3 +46,11 @@
       (is (= {:source "test"} (meta (assoc m :b 2))))
       (is (= {:tag :vec} (meta (assoc v 0 2))))
       (is (= {:tag :vec} (meta (assoc v 1 3)))))))
+
+(deftest empty-preserves-metadata
+  (testing "empty preserves metadata on collections"
+    (let [m {:tag :empty}]
+      (is (= m (meta (empty (with-meta {:a 1} m)))))
+      (is (= m (meta (empty (with-meta [1] m)))))
+      (is (= m (meta (empty (with-meta #{1} m)))))
+      (is (= m (meta (empty (with-meta '(1) m))))))))
