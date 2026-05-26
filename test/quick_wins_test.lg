@@ -469,14 +469,59 @@
     (is (= 0 (s/index-of "hello" "h")))
     (is (= 2 (s/index-of "hello" "l")))
     (is (nil? (s/index-of "hello" "z")))
-    (is (= 3 (s/index-of "hello" "l" 3)))))
+    (is (= 3 (s/index-of "hello" "l" 3))))
+  (testing "string/index-of — rune-indexed (UTF-8)"
+    ;; indices are rune offsets, consistent with subs and count
+    (is (= 1 (s/index-of "ᚠabc" "a")))
+    (is (= 1 (s/index-of "aᚠbc" "ᚠ")))
+    (is (= 0 (s/index-of "éclair" "é")))
+    (is (= 4 (s/index-of "abc日本語def" "本")))
+    (is (nil? (s/index-of "ᚠabc" "z")))
+    ;; from-index is also rune-indexed
+    (is (= 3 (s/index-of "aᚠbᚠc" "ᚠ" 2)))
+    ;; rune-indexed arithmetic: (subs s 0 i) on index-of result is safe
+    (let [s "ᚠabc"
+          i (s/index-of s "a")]
+      (is (= "ᚠ" (subs s 0 i))))
+  (testing "string/index-of — complex Unicode"
+    ;; combining characters: e + combining acute (2 runes) vs precomposed é (1 rune)
+    (is (= 3 (s/index-of "café" "é")))
+    ;; precomposed é is 1 rune — find it in "café"
+    (is (= 3 (s/index-of "café" "é")))
+    ;; emoji with skin-tone modifier (2 runes)
+    (is (= 1 (s/index-of "a👩🏽 b" "👩🏽")))
+    ;; past skin-tone emoji, find the space+b
+    (is (= 4 (s/index-of "a👩🏽 b" "b")))
+    ;; ZWJ family emoji sequence (7 runes)
+    (is (= 9 (s/index-of "a👨‍👩‍👧‍👦 b" "b")))
+    ;; bidi: Arabic in the middle of Latin text
+    (is (= 5 (s/index-of "helloمرحباworld" "مرحبا")))
+    (is (= 10 (s/index-of "helloمرحباworld" "world")))
+    ;; ZWJ sequence itself is findable
+    (is (= 1 (s/index-of "a👨‍👩‍👧‍👦 b" "👨‍👩‍👧‍👦"))))))
 
 (deftest string-last-index-of-test
   (testing "string/last-index-of"
     (is (= 3 (s/last-index-of "hello" "l")))
     (is (= 0 (s/last-index-of "hello" "h")))
     (is (nil? (s/last-index-of "hello" "z")))
-    (is (= 2 (s/last-index-of "hello" "l" 2)))))
+    (is (= 2 (s/last-index-of "hello" "l" 2))))
+  (testing "string/last-index-of — rune-indexed (UTF-8)"
+    (is (= 1 (s/last-index-of "ᚠabcᚠ" "a")))
+    (is (= 4 (s/last-index-of "ᚠabcᚠ" "ᚠ")))
+    (is (= 6 (s/last-index-of "éclairé" "é")))
+    (is (nil? (s/last-index-of "ᚠabc" "z")))
+    ;; from-index is also rune-indexed
+    (is (= 0 (s/last-index-of "ᚠabcᚠ" "ᚠ" 0)))))
+  (testing "string/last-index-of — complex Unicode"
+    ;; combining: last occurrence of combining sequence
+    (is (= 10 (s/last-index-of "xcaféycafé" "é")))
+    ;; emoji skin tone
+    (is (= 5 (s/last-index-of "👩🏽 x 👩🏽" "👩🏽")))
+    ;; bidi: Arabic word appears once
+    (is (= 5 (s/last-index-of "helloمرحباworld" "مرحبا")))
+    ;; bidi: from-index caps search in rune space
+    (is (nil? (s/last-index-of "helloمرحباworld" "مرحبا" 6))))
 
 (deftest string-blank-test
   (testing "string/blank?"

@@ -5816,7 +5816,7 @@ func installLangNS() {
 	})
 	ns.Def("var?", isVar)
 
-	// string/index-of — find first index of substring/char
+	// string/index-of — find first rune index of substring/char
 	indexOf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -5834,27 +5834,28 @@ func installLangNS() {
 		default:
 			return vm.NIL, fmt.Errorf("index-of expected String or Char as second arg")
 		}
-		str := string(s)
+		strRunes := []rune(string(s))
+		needleRunes := []rune(needle)
+		start := 0
 		if len(vs) == 3 {
 			from, ok := vs[2].(vm.Int)
 			if !ok {
 				return vm.NIL, fmt.Errorf("index-of expected Int as third arg")
 			}
-			idx := strings.Index(str[int(from):], needle)
-			if idx == -1 {
-				return vm.NIL, nil
-			}
-			return vm.MakeInt(idx + int(from)), nil
+			start = int(from)
 		}
-		idx := strings.Index(str, needle)
+		if start < 0 || start > len(strRunes) {
+			return vm.NIL, nil
+		}
+		idx := runeIndex(strRunes[start:], needleRunes)
 		if idx == -1 {
 			return vm.NIL, nil
 		}
-		return vm.MakeInt(idx), nil
+		return vm.MakeInt(idx + start), nil
 	})
 	ns.Def("index-of", indexOf)
 
-	// string/last-index-of — find last index of substring/char
+	// string/last-index-of — find last rune index of substring/char
 	lastIndexOf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -5872,19 +5873,20 @@ func installLangNS() {
 		default:
 			return vm.NIL, fmt.Errorf("last-index-of expected String or Char as second arg")
 		}
-		str := string(s)
+		strRunes := []rune(string(s))
+		needleRunes := []rune(needle)
+		end := len(strRunes)
 		if len(vs) == 3 {
 			from, ok := vs[2].(vm.Int)
 			if !ok {
 				return vm.NIL, fmt.Errorf("last-index-of expected Int as third arg")
 			}
-			idx := strings.LastIndex(str[:int(from)+1], needle)
-			if idx == -1 {
-				return vm.NIL, nil
-			}
-			return vm.MakeInt(idx), nil
+			end = int(from) + 1
 		}
-		idx := strings.LastIndex(str, needle)
+		if end > len(strRunes) {
+			end = len(strRunes)
+		}
+		idx := runeLastIndex(strRunes[:end], needleRunes)
 		if idx == -1 {
 			return vm.NIL, nil
 		}
@@ -6474,6 +6476,46 @@ func installLangNS() {
 
 	RegisterNS(ns)
 	installClojureCompatAliases(ns)
+}
+
+// runeIndex returns the index of needle in runes, or -1 if not found.
+func runeIndex(runes, needle []rune) int {
+	if len(needle) == 0 {
+		return 0
+	}
+	if len(needle) > len(runes) {
+		return -1
+	}
+outer:
+	for i := 0; i <= len(runes)-len(needle); i++ {
+		for j := range needle {
+			if runes[i+j] != needle[j] {
+				continue outer
+			}
+		}
+		return i
+	}
+	return -1
+}
+
+// runeLastIndex returns the last index of needle in runes, or -1 if not found.
+func runeLastIndex(runes, needle []rune) int {
+	if len(needle) == 0 {
+		return len(runes)
+	}
+	if len(needle) > len(runes) {
+		return -1
+	}
+outer:
+	for i := len(runes) - len(needle); i >= 0; i-- {
+		for j := range needle {
+			if runes[i+j] != needle[j] {
+				continue outer
+			}
+		}
+		return i
+	}
+	return -1
 }
 
 func installClojureCompatAliases(ns *vm.Namespace) {
