@@ -17,10 +17,10 @@
 repos:
   # golangci-lint via the official upstream — the binary is installed by
   # prek/pre-commit on first run, so contributors don't need to install it
-  # separately. Pinned to the last v1.x release because .golangci.yml is in
-  # v1-format; bump to v2.x when the config is migrated.
+  # separately. Pinned to v2.x to match the v2-format .golangci.yml (migrated
+  # in commit a8cdf40b / PR #82).
   - repo: https://github.com/golangci/golangci-lint
-    rev: v1.64.8
+    rev: v2.12.2
     hooks:
       - id: golangci-lint-full
         stages: [pre-commit]
