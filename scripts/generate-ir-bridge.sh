@@ -19,7 +19,7 @@ fi
 
 OUT=pkg/rt/ir_bridge_generated.go
 TMP=$(mktemp)
-trap 'rm -f "$TMP"' EXIT
+trap 'rm -f "$TMP" "$OUT.tmp"' EXIT
 
 cat > "$TMP" <<'EOF'
 /*
@@ -53,6 +53,7 @@ EOF
 
 ./lg -source-paths examples/go-gen examples/go-gen/ir_bridge.lg >> "$TMP"
 
-gofmt "$TMP" > "$OUT"
+gofmt "$TMP" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
 
 echo "wrote $OUT"

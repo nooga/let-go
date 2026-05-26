@@ -27,7 +27,7 @@ fi
 
 OUT=pkg/ir/op_generated.go
 TMP=$(mktemp)
-trap 'rm -f "$TMP"' EXIT
+trap 'rm -f "$TMP" "$OUT.tmp"' EXIT
 
 cat > "$TMP" <<'EOF'
 /*
@@ -62,6 +62,7 @@ EOF
 # Pipe through gofmt so the table literal and const block get canonical
 # layout (multi-line, aligned). gogen's render is correct Go but uses
 # go/format.Node's "compact" output for embedded nodes.
-gofmt "$TMP" > "$OUT"
+gofmt "$TMP" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
 
 echo "wrote $OUT"
