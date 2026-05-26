@@ -9,106 +9,165 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
-	"github.com/alimpfard/line"
+	"github.com/chzyer/readline"
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-var completionTerminators map[byte]bool
-var styles map[compiler.TokenKind]line.Style
+func isCompletionTerminator(r rune) bool {
+	switch r {
+	case '(', ')', '[', ']', '{', '}', '"', '\\', '\'', '@', '`', '~', ';', '#':
+		return true
+	}
+	return unicode.IsSpace(r)
+}
 
-func init() {
-	completionTerminators = map[byte]bool{
-		'(':  true,
-		')':  true,
-		'[':  true,
-		']':  true,
-		'{':  true,
-		'}':  true,
-		'"':  true,
-		'\\': true,
-		'\'': true,
-		'@':  true,
-		'`':  true,
-		'~':  true,
-		';':  true,
-		'#':  true,
+// completer implements readline's AutoCompleter interface.
+// readline passes line as []rune and pos as a rune index; we stay in runes
+// throughout so non-ASCII input and mid-line cursors are handled correctly.
+type completer struct {
+	ctx *compiler.Context
+}
+
+func (c *completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
+	if pos > len(line) {
+		pos = len(line)
 	}
-	styles = map[compiler.TokenKind]line.Style{
-		compiler.TokenNumber:      {ForegroundColor: line.MakeXtermColor(line.XtermColorMagenta)},
-		compiler.TokenPunctuation: {ForegroundColor: line.MakeXtermColor(line.XtermColorYellow)},
-		compiler.TokenKeyword:     {ForegroundColor: line.MakeXtermColor(line.XtermColorBlue)},
-		compiler.TokenString:      {ForegroundColor: line.MakeXtermColor(line.XtermColorCyan)},
-		compiler.TokenSpecial:     {ForegroundColor: line.MakeXtermColor(line.XtermColorUnchanged), Bold: true},
+	head := line[:pos]
+
+	start := pos
+	for start > 0 && !isCompletionTerminator(head[start-1]) {
+		start--
 	}
+	prefix := string(head[start:])
+
+	symbols := rt.FuzzyNamespacedSymbolLookup(c.ctx.CurrentNS(), vm.Symbol(prefix))
+	for _, s := range symbols {
+		newLine = append(newLine, []rune(string(s)+" "))
+	}
+	length = pos - start
+	return
+}
+
+// ANSI color codes for syntax highlighting. ansiReset and ansiBold are
+// declared in lg_ansi.go; the rest are repl-only.
+const (
+	ansiMagenta = "\x1b[35m"
+	ansiYellow  = "\x1b[33m"
+	ansiBlue    = "\x1b[34m"
+	ansiCyan    = "\x1b[36m"
+)
+
+var tokenColors = map[compiler.TokenKind]string{
+	compiler.TokenNumber:      ansiMagenta,
+	compiler.TokenPunctuation: ansiYellow,
+	compiler.TokenKeyword:     ansiBlue,
+	compiler.TokenString:      ansiCyan,
+	compiler.TokenSpecial:     ansiBold,
+}
+
+// syntaxHighlighter paints tokens with ANSI escape codes. Token positions
+// from LispReader are rune offsets (reader bumps pos per ReadRune), so we
+// slice the rune buffer directly rather than the UTF-8 byte string.
+type syntaxHighlighter struct{}
+
+func (s *syntaxHighlighter) Paint(line []rune, _ int) []rune {
+	if len(line) == 0 {
+		return line
+	}
+
+	reader := compiler.NewLispReaderTokenizing(strings.NewReader(string(line)), "syntax")
+	reader.Read() //nolint:errcheck // partial parse is expected mid-edit
+
+	var out strings.Builder
+	out.Grow(len(line) + 32)
+	cursor := 0
+	for _, t := range reader.Tokens {
+		if t.End <= t.Start || t.End > len(line) {
+			continue
+		}
+		color, ok := tokenColors[t.Kind]
+		if !ok {
+			continue
+		}
+		if t.Start > cursor {
+			out.WriteString(string(line[cursor:t.Start]))
+		}
+		out.WriteString(color)
+		out.WriteString(string(line[t.Start:t.End]))
+		out.WriteString(ansiReset)
+		cursor = t.End
+	}
+	if cursor < len(line) {
+		out.WriteString(string(line[cursor:]))
+	}
+	return []rune(out.String())
+}
+
+// historyFile returns a per-user history path, falling back to disabling
+// history if no suitable directory exists.
+func historyFile() string {
+	if dir, err := os.UserHomeDir(); err == nil && dir != "" {
+		return filepath.Join(dir, ".lg_history")
+	}
+	return ""
 }
 
 func repl(ctx *compiler.Context) {
-	interrupted := false
-	editor := line.NewEditor()
 	prompt := ctx.CurrentNS().Name() + "=> "
-	editor.SetInterruptHandler(func() {
-		interrupted = true
-		editor.Finish()
-	})
-	editor.SetTabCompletionHandler(func(editor line.Editor) []line.Completion {
-		lin := editor.Line()
-		prefix := ""
-		for i := len(lin) - 1; i >= -1; i-- {
-			if (i < 0 || completionTerminators[lin[i]] || unicode.IsSpace(rune(lin[i]))) && i+1 < len(lin) {
-				prefix = lin[i+1:]
-				break
-			}
-		}
-		cur := ctx.CurrentNS()
-		symbols := rt.FuzzyNamespacedSymbolLookup(cur, vm.Symbol(prefix))
-		completions := []line.Completion{}
-		for _, s := range symbols {
-			completions = append(completions, line.Completion{
-				Text:                      string(s) + " ",
-				InvariantOffset:           uint32(len(prefix)),
-				AllowCommitWithoutListing: true,
-			})
-		}
-		return completions
-	})
-	editor.SetRefreshHandler(func(editor line.Editor) {
-		lin := editor.Line()
-		reader := compiler.NewLispReaderTokenizing(strings.NewReader(lin), "syntax")
-		reader.Read() //nolint:errcheck // We really don't care, just need partial parse
-		editor.StripStyles()
-		for _, t := range reader.Tokens {
-			if t.End == -1 {
+
+	// Configure readline
+	config := &readline.Config{
+		Prompt:          prompt,
+		EOFPrompt:       "exit",
+		AutoComplete:    &completer{ctx: ctx},
+		InterruptPrompt: "^C",
+		HistoryFile:     historyFile(),
+		Painter:         &syntaxHighlighter{},
+	}
+
+	rl, err := readline.NewEx(config)
+	if err != nil {
+		fmt.Println("failed to initialize readline:", err)
+		return
+	}
+	defer rl.Close()
+
+	for {
+		// Update prompt in case namespace changed
+		prompt = ctx.CurrentNS().Name() + "=> "
+		rl.SetPrompt(prompt)
+
+		line, err := rl.Readline()
+		if err != nil { // io.EOF, readline.ErrInterrupt, etc.
+			if err == readline.ErrInterrupt {
+				// Ctrl-C on an empty line quits (matches banner hint);
+				// otherwise just discard the in-progress line.
+				if line == "" {
+					break
+				}
 				continue
 			}
-			style, ok := styles[t.Kind]
-			if !ok {
-				continue
-			}
-			editor.Stylize(line.Span{Start: uint32(t.Start), End: uint32(t.End), Mode: line.SpanModeByte}, style)
+			fmt.Println()
+			break
 		}
-	})
-	for !interrupted {
-		in, err := editor.GetLine(prompt)
-		if err != nil {
-			fmt.Println("prompt failed: ", err)
+
+		if line == "" {
 			continue
 		}
-		if in == "" {
-			continue
-		}
-		editor.AddToHistory(in)
+
 		ctx.SetSource("REPL")
-		val, err := runForm(ctx, in)
+		val, err := runForm(ctx, line)
 		if err != nil {
 			fmt.Print(vm.FormatError(err))
 		} else {
 			fmt.Println(val.String())
 		}
-		prompt = ctx.CurrentNS().Name() + "=> "
 	}
 }

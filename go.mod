@@ -3,11 +3,14 @@ module github.com/nooga/let-go
 go 1.26
 
 require (
-	github.com/alimpfard/line v0.0.0-20230131232016-03b4e7dee324
+	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
 	github.com/stretchr/testify v1.8.4
 )
 
-require golang.org/x/term v0.41.0 // indirect
+require (
+	github.com/chzyer/test v1.0.0 // indirect
+	golang.org/x/term v0.41.0
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -15,7 +18,7 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/zeebo/bencode v1.0.0
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sys v0.42.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
