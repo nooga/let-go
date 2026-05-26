@@ -835,6 +835,22 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 			}
 			return ret, nil
 		}
+		// Namespace-qualify bare symbols to current namespace if defined locally
+		// (Clojure JVM parity for helpers defined in macro-defining namespace)
+		// e.g., `helper where helper is defined in current ns => (quote current-ns/helper)
+		// Skip with-meta which is reader-generated for metadata and must remain unqualified
+		if ns == vm.NIL && sform != "with-meta" {
+			cns := rt.CurrentNS.Deref().(*vm.Namespace)
+			// Only qualify if symbol is defined in current namespace's local registry
+			if cns.LookupLocal(sform) != nil {
+				qualified := vm.Symbol(cns.Name() + "/" + string(sform))
+				ret, err := vm.ListType.Box([]vm.Value{vm.Symbol("quote"), qualified})
+				if err != nil {
+					return vm.NIL, NewReaderError(r, "boxing syntax-quoted qualified form").Wrap(err)
+				}
+				return ret, nil
+			}
+		}
 		ret, err := vm.ListType.Box([]vm.Value{vm.Symbol("quote"), form})
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "boxing syntax-quoted special form").Wrap(err)
