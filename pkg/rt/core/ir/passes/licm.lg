@@ -236,41 +236,37 @@
                                   :branch-if
                                     ;; Symmetric invariant (validate.lg's
                                     ;; check-branch-if-symmetric-args!): both
-                                    ;; targets' args vectors must be identical.
-                                    ;; Append prev-param to BOTH true and false
-                                    ;; args; if the sibling target isn't the
-                                    ;; thread destination, add a block-param to
-                                    ;; that block too so its params count matches.
+                                    ;; targets' args vectors must be identical
+                                    ;; in shape AND value, because lower-block!
+                                    ;; materializes a single arg stack and both
+                                    ;; targets pop from it. Append prev-param
+                                    ;; (the value-to-thread, defined at src-blk
+                                    ;; and thus materializable) to BOTH sides.
+                                    ;; If the sibling target isn't dst-blk, also
+                                    ;; pad its params with a fresh unused
+                                    ;; block-arg so the param count matches.
                                     (let [tt (ir/cond-target-true src-aux)
                                           ft (ir/cond-target-false src-aux)
                                           tt-blk (ir/branch-target-target tt)
-                                          ft-blk (ir/branch-target-target ft)
-                                          ;; If sibling-blk isn't dst-blk, give it a
-                                          ;; new block-arg to keep param counts
-                                          ;; balanced. (For dst-blk we already added
-                                          ;; new-pid above.)
-                                          tt-param (if (not= tt-blk dst-blk)
-                                                     (let [pos2 (count (ir/block-params tt-blk f))
-                                                           pid2 (ir/add-inst f tt-blk :block-arg [] pos2)]
-                                                       (ir/add-block-param! f tt-blk pid2)
-                                                       pid2)
-                                                     prev-param)
-                                          ft-param (if (not= ft-blk dst-blk)
-                                                     (let [pos2 (count (ir/block-params ft-blk f))
-                                                           pid2 (ir/add-inst f ft-blk :block-arg [] pos2)]
-                                                       (ir/add-block-param! f ft-blk pid2)
-                                                       pid2)
-                                                     prev-param)
-                                          new-tt (ir/new-branch-target tt-blk
-                                                   (conj (vec (ir/branch-target-args tt))
-                                                         tt-param))
-                                          new-ft (ir/new-branch-target ft-blk
-                                                   (conj (vec (ir/branch-target-args ft))
-                                                         ft-param))
-                                          new-aux (-> src-aux
-                                                      (ir/cond-target-set-true! new-tt)
-                                                      (ir/cond-target-set-false! new-ft))]
-                                      (ir/set-aux! f src-term new-aux)))
+                                          ft-blk (ir/branch-target-target ft)]
+                                      (when (not= tt-blk dst-blk)
+                                        (let [pos2 (count (ir/block-params tt-blk f))
+                                              pid2 (ir/add-inst f tt-blk :block-arg [] pos2)]
+                                          (ir/add-block-param! f tt-blk pid2)))
+                                      (when (not= ft-blk dst-blk)
+                                        (let [pos2 (count (ir/block-params ft-blk f))
+                                              pid2 (ir/add-inst f ft-blk :block-arg [] pos2)]
+                                          (ir/add-block-param! f ft-blk pid2)))
+                                      (let [new-tt (ir/new-branch-target tt-blk
+                                                     (conj (vec (ir/branch-target-args tt))
+                                                           prev-param))
+                                            new-ft (ir/new-branch-target ft-blk
+                                                     (conj (vec (ir/branch-target-args ft))
+                                                           prev-param))
+                                            new-aux (-> src-aux
+                                                        (ir/cond-target-set-true! new-tt)
+                                                        (ir/cond-target-set-false! new-ft))]
+                                        (ir/set-aux! f src-term new-aux))))
                                 new-pid))
                             param
                             path)
@@ -298,19 +294,34 @@
                               (ir/branch-target-target aux) new-args)]
                 (ir/set-aux! f term new-bt))
             :branch-if
-              ;; Update whichever side(s) target the header.
-              (let [tt       (ir/cond-target-true aux)
-                    ft       (ir/cond-target-false aux)
-                    new-aux  (cond-> aux
-                               (= header (ir/branch-target-target tt))
-                                 (ir/cond-target-set-true!
-                                   (ir/new-branch-target header
-                                     (into (vec (ir/branch-target-args tt)) extras)))
-                               (= header (ir/branch-target-target ft))
-                                 (ir/cond-target-set-false!
-                                   (ir/new-branch-target header
-                                     (into (vec (ir/branch-target-args ft)) extras))))]
-                (ir/set-aux! f term new-aux))))))))
+              ;; Append `extras` to BOTH true and false target args to
+              ;; preserve the symmetric branch-target-args invariant
+              ;; (lower-block! materializes a single arg stack for both
+              ;; targets). For whichever side doesn't target header, also
+              ;; pad that target block's params with fresh unused
+              ;; block-args so its param count matches the new arg count.
+              (let [tt     (ir/cond-target-true aux)
+                    ft     (ir/cond-target-false aux)
+                    tt-blk (ir/branch-target-target tt)
+                    ft-blk (ir/branch-target-target ft)]
+                (when (not= tt-blk header)
+                  (dotimes [_ (count extras)]
+                    (let [pos2 (count (ir/block-params tt-blk f))
+                          pid2 (ir/add-inst f tt-blk :block-arg [] pos2)]
+                      (ir/add-block-param! f tt-blk pid2))))
+                (when (not= ft-blk header)
+                  (dotimes [_ (count extras)]
+                    (let [pos2 (count (ir/block-params ft-blk f))
+                          pid2 (ir/add-inst f ft-blk :block-arg [] pos2)]
+                      (ir/add-block-param! f ft-blk pid2))))
+                (let [new-tt  (ir/new-branch-target tt-blk
+                                (into (vec (ir/branch-target-args tt)) extras))
+                      new-ft  (ir/new-branch-target ft-blk
+                                (into (vec (ir/branch-target-args ft)) extras))
+                      new-aux (-> aux
+                                  (ir/cond-target-set-true! new-tt)
+                                  (ir/cond-target-set-false! new-ft))]
+                  (ir/set-aux! f term new-aux)))))))))
 
 ;; --- driver ---------------------------------------------------------
 
