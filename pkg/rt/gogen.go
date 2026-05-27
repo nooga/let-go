@@ -1435,28 +1435,27 @@ var goFset = token.NewFileSet()
 // composite literals) depend on adjacent nodes having distinct line
 // positions, even if the actual offsets don't refer to real source.
 //
-// We pre-allocate a generous range of line offsets so allocPos() can
-// hand out fresh positions on different lines without ever needing to
-// re-AddLine. Each call to allocPos consumes one line.
+// Line offsets are registered lazily in allocPos so processes that never
+// touch gogen pay no startup cost. Each call to allocPos consumes one
+// line.
 var (
 	goSynthFile = goFset.AddFile("gogen.synthetic.go", -1, 1<<28)
 	goPosNext   = 1 // next byte offset to hand out (1-based)
 )
 
-// init pre-fills the synthetic file with line starts so token.Pos values
-// returned by allocPos all map to distinct lines.
-func init() {
-	for i := 1; i < 1<<20; i++ {
-		goSynthFile.AddLine(i)
-	}
-}
-
 // allocPos returns a fresh token.Pos on a new synthetic line. Used by
 // constructors that need to position adjacent nodes (e.g. const specs in
 // a block, fields in a struct, elements of a composite literal) on
 // distinct lines so go/format.Node emits them on separate output lines.
+//
+// The synthetic file's line table is extended on demand: the first call
+// registers offset 1 as the start of line 2, the next registers offset 2
+// as the start of line 3, and so on. token.File.AddLine ignores
+// duplicate or out-of-order offsets, so repeated calls past the high
+// water mark remain safe.
 func allocPos() token.Pos {
 	p := token.Pos(goPosNext)
+	goSynthFile.AddLine(goPosNext)
 	goPosNext++
 	return p
 }
