@@ -35,6 +35,7 @@ var embeddedSources = map[string]*string{
 	"async":               &rt.AsyncSrc,
 	"zip":                 &rt.ZipSrc,
 	"data":                &rt.DataSrc,
+	"graph":               &rt.GraphSrc,
 	"ir.data":             &rt.IRDataSrc,
 	"ir.zipper":           &rt.IRZipperSrc,
 	"ir.passes":           &rt.IRPassesSrc,

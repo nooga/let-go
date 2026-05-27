@@ -1,0 +1,116 @@
+;; Generic graph algorithms.
+;;
+;; A graph is represented as a map {node -> coll-of-deps}. Nodes can
+;; be any value usable as a map key. Missing keys are treated as
+;; nodes with no outgoing edges.
+
+(ns graph)
+
+;; --- toposort --------------------------------------------------------
+
+(defn toposort [graph]
+  "Topologically sort the nodes of `graph` in dependencies-first order.
+   `graph` is a map {node -> coll-of-deps}. Returns a vector of all
+   reachable nodes (including transitive deps not present as keys).
+   Returns nil if the graph contains a cycle — use `sccs` to handle
+   cyclic graphs explicitly."
+  (let [state  (atom {})        ; node -> :gray | :black
+        result (atom (transient []))
+        cycle? (atom false)]
+    (letfn [(visit [n]
+              (when-not @cycle?
+                (let [s (get @state n)]
+                  (cond
+                    (= :black s) nil
+                    (= :gray  s) (reset! cycle? true)
+                    :else
+                    (do
+                      (swap! state assoc n :gray)
+                      (doseq [d (get graph n)] (visit d))
+                      (swap! state assoc n :black)
+                      (swap! result conj! n))))))]
+      (doseq [n (keys graph)] (visit n)))
+    (when-not @cycle? (persistent! @result))))
+
+(defn toposort-by [key-fn xs deps-fn]
+  "Topologically sort the collection `xs` using `key-fn` for node
+   identity and `deps-fn` for outgoing edges. Returns the input
+   elements in deps-first order, or nil on cycle."
+  (let [by-key (reduce (fn [m x]
+                         (let [k (key-fn x)]
+                           (if (contains? m k) m (assoc m k x))))
+                       {} xs)
+        graph  (reduce-kv (fn [g k x] (assoc g k (deps-fn x))) {} by-key)
+        order  (toposort graph)]
+    (when order (vec (keep by-key order)))))
+
+;; --- strongly connected components -----------------------------------
+;;
+;; Tarjan's algorithm. Returns a vector of SCCs in dependencies-first
+;; order: an SCC appears after every SCC it depends on. Singleton
+;; nodes (the common case) come back as 1-element vectors. Non-trivial
+;; SCCs (size > 1) represent cycles of mutually recursive nodes — the
+;; caller can detect cycles via (> (count scc) 1) and decide how to
+;; handle them (e.g., emit forward declarations for mutual recursion).
+
+(defn sccs [graph]
+  "Return a vector of strongly connected components, each itself a
+   vector of node IDs, in dependencies-first topological order over
+   the condensation DAG. A component of size > 1 represents a cycle."
+  (let [index   (atom 0)
+        idx     (atom {})       ; node -> dfs index
+        low     (atom {})       ; node -> lowlink
+        stk     (atom [])       ; node stack
+        on-stk  (atom #{})      ; nodes currently on stk
+        result  (atom [])]      ; SCCs collected (reverse topo order)
+    (letfn [(strong [v]
+              (let [i @index]
+                (swap! idx assoc v i)
+                (swap! low assoc v i)
+                (swap! index inc))
+              (swap! stk conj v)
+              (swap! on-stk conj v)
+              (doseq [w (get graph v)]
+                (cond
+                  (not (contains? @idx w))
+                  (do (strong w)
+                      (swap! low assoc v (min (get @low v) (get @low w))))
+                  (contains? @on-stk w)
+                  (swap! low assoc v (min (get @low v) (get @idx w)))))
+              ;; If v is an SCC root, pop the stack down to v.
+              (when (= (get @low v) (get @idx v))
+                (let [scc (loop [acc []]
+                            (let [w (peek @stk)]
+                              (swap! stk pop)
+                              (swap! on-stk disj w)
+                              (let [acc' (conj acc w)]
+                                (if (= w v) acc' (recur acc')))))]
+                  (swap! result conj scc))))]
+      (doseq [n (keys graph)]
+        (when-not (contains? @idx n) (strong n))))
+    ;; Tarjan emits SCCs in deps-first order naturally: a component's
+    ;; root finishes DFS only after all its dependencies' roots have
+    ;; finished and been emitted. No reversal needed.
+    @result))
+
+(defn cyclic? [scc]
+  "True if `scc` (from `sccs`) represents a cycle — i.e. has > 1
+   node, OR is a self-loop (single node with itself in its deps).
+   Use this to decide whether to emit forward declarations."
+  (> (count scc) 1))
+
+(defn has-cycle? [graph]
+  "True iff `graph` contains at least one cycle (self-loop or larger)."
+  (boolean (some cyclic? (sccs graph))))
+
+;; --- reachability ----------------------------------------------------
+
+(defn reachable [graph from]
+  "Return the set of nodes reachable from `from`, inclusive."
+  (let [seen (atom #{})]
+    (letfn [(visit [n]
+              (when-not (@seen n)
+                (swap! seen conj n)
+                (doseq [d (get graph n)] (visit d))))]
+      (visit from))
+    @seen))

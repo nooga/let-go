@@ -1,0 +1,96 @@
+;; Topologically sort top-level definitions in a .lg file.
+;;
+;; Usage:
+;;   ./lg scripts/sort-defns.lg <path>           ; print sorted file to stdout
+;;
+;; Reads the source, parses every top-level form, identifies defn /
+;; defn- / defmacro / def, builds the call graph between them, runs
+;; SCC analysis, and emits the file in dependencies-first order.
+;; SCCs of size > 1 (mutually recursive groups) get a `(declare ...)`
+;; emitted before them.
+;;
+;; Non-defn forms (the (ns ...) declaration, top-level (let …)
+;; export blocks, etc.) are preserved in their original order; defns
+;; are placed in-between in topo order. The result is a no-op rewrite
+;; for files that are already correctly sorted.
+;;
+;; Comments are dropped — the reader doesn't preserve them. Run a
+;; diff against the original if you want to keep prose; for code
+;; this script is meant to be idempotent.
+
+(require '[graph :as g])
+
+(def ^:private defn-heads
+  #{'defn 'defn- 'defmacro 'def 'def- 'declare})
+
+(defn- form-name
+  "Return the defined name (symbol) if `form` is a top-level defn-like
+   form, else nil."
+  [form]
+  (when (and (seq? form) (defn-heads (first form)))
+    (let [s (second form)]
+      (when (symbol? s) s))))
+
+(defn- collect-refs
+  "Walk `form` and return the set of symbols it references that are
+   in `known` (the file's defn-name set, minus self)."
+  [form known]
+  (let [acc (atom #{})]
+    (letfn [(visit [v]
+              (cond
+                (symbol? v) (when (contains? known v) (swap! acc conj v))
+                (seq? v)    (doseq [x v] (visit x))
+                (vector? v) (doseq [x v] (visit x))
+                (map? v)    (doseq [[k vv] v] (visit k) (visit vv))
+                (set? v)    (doseq [x v] (visit x))
+                :else nil))]
+      (visit form))
+    @acc))
+
+(defn- pp [form]
+  "Render `form` as source-readable text."
+  (pr-str form))
+
+(defn- sort-file [path]
+  (let [source     (slurp path)
+        forms      (read-all-string source)
+        defns      (filter form-name forms)
+        names      (set (map form-name defns))
+        ;; Group multi-arity defs by name (first def-form per name wins
+        ;; for graph purposes; we'll preserve order of duplicates below).
+        name->form (reduce (fn [m f]
+                             (let [n (form-name f)]
+                               (if (contains? m n) m (assoc m n f))))
+                           {} defns)
+        graph      (reduce-kv (fn [g n f]
+                                (assoc g n (disj (collect-refs f names) n)))
+                              {} name->form)
+        sccs       (g/sccs graph)
+        ;; Things that aren't defn-likes: the (ns …), any top-level let,
+        ;; the export block. Preserve order.
+        non-defns  (remove form-name forms)
+        ;; Find the (ns …) form if any — it must come first.
+        ns-form    (first (filter #(and (seq? %) (= 'ns (first %))) non-defns))
+        rest-non   (remove #(= % ns-form) non-defns)]
+    (let [out (atom [])]
+      (letfn [(emit [s] (swap! out conj s))]
+        (when ns-form
+          (emit (pp ns-form)) (emit "\n\n"))
+        (doseq [scc sccs]
+          (when (g/cyclic? scc)
+            (emit (str "(declare " (apply str (interpose " " scc)) ")\n\n")))
+          (doseq [n scc]
+            (when-let [f (get name->form n)]
+              (emit (pp f)) (emit "\n\n"))))
+        ;; Trailing non-defn forms (export block, etc.)
+        (doseq [f rest-non]
+          (emit (pp f)) (emit "\n\n"))
+        (print (apply str @out))))))
+
+;; os/args is [binary script user-arg user-arg...]
+(let [args (vec (drop 2 (seq os/args)))]
+  (if (= 1 (count args))
+    (sort-file (first args))
+    (do
+      (println "Usage: lg scripts/sort-defns.lg <path>")
+      (System/exit 1))))
