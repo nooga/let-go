@@ -1,59 +1,56 @@
 ;; IR-pipeline coverage stress test — corpus-agnostic.
 ;;
-;; Drives a corpus of .lg files through the IR pipeline, reporting per-
-;; file pass rates, error buckets, and cold + warm timing. Replaces the
-;; previous xsofy-hardcoded harness.
-;;
 ;; Usage:
-;;   go run . scripts/ir-stress.lg <dir> <file> [<file>...]
+;;   go run . scripts/ir-stress.lg <mode> <dir> <file> [<file>...]
 ;;
+;;   <mode>  ir-compile  — eval each defn under (binding [*ir-compile* true])
+;;                         measures what users experience at load time
+;;           lower-go    — build IR + lower-go in :bridge mode, no eval
+;;                         measures AOT pass rate, safe to run vs live pipeline
 ;;   <dir>   corpus root (absolute or relative to cwd)
 ;;   <file>  one or more .lg paths relative to <dir>
 ;;
-;; Each top-level (defn ...) form is evaluated under
-;;   (binding [*ir-compile* true] (eval form))
-;; so the IR pipeline drives the compile path. Bodies that fail to
-;; IR-compile are bucketed by classify-error so the output highlights
-;; which language features still need IR support.
-;;
 ;; Examples:
 ;;   # xsofy IR-compile pass rate
-;;   LG_SOURCE_PATHS=/path/to/xsofy go run . scripts/ir-stress.lg \
-;;     /path/to/xsofy/xsofy \
+;;   LG_SOURCE_PATHS=/Users/ndn/development/xsofy go run . scripts/ir-stress.lg \
+;;     ir-compile /Users/ndn/development/xsofy/xsofy \
 ;;     util.lg combat.lg ai.lg items.lg fov.lg fire.lg effects.lg \
-;;     bestiary.lg input.lg lighting.lg runes.lg sound.lg det.lg \
-;;     entities.lg check.lg
+;;     bestiary.lg input.lg lighting.lg runes.lg sound.lg det.lg entities.lg check.lg
 ;;
-;;   # pkg/rt/core/ir self-load pass rate
-;;   go run . scripts/ir-stress.lg pkg/rt/core/ir \
-;;     data.lg zipper.lg build.lg lower.lg passes.lg \
-;;     passes/constfold.lg passes/cse.lg passes/dce.lg \
+;;   # IR-pipeline self-AOT pass rate
+;;   go run . scripts/ir-stress.lg lower-go pkg/rt/core/ir \
+;;     data.lg zipper.lg build.lg lower.lg lower_go.lg passes.lg \
+;;     passes/constfold.lg passes/cse.lg passes/dce.lg passes/typeinfer.lg \
 ;;     passes/licm.lg passes/pipeline.lg
-;;
-;; Per-fixture timeout via LG_STRESS_TIMEOUT_MS (default 5000).
-
 (require 'ir.data)
 (require 'ir.passes.pipeline)
 
 (defn- usage-and-exit [msg]
   (println (str "ir-stress: " msg))
-  (println "Usage: go run . scripts/ir-stress.lg <dir> <file>...")
+  (println "Usage: go run . scripts/ir-stress.lg <mode> <dir> <file>...")
+  (println "  <mode>: ir-compile | lower-go")
   (println "  <dir>:  corpus root")
   (println "  <file>: one or more .lg paths relative to <dir>")
   (System/exit 1))
 
 ;; os/args is [binary script user-arg user-arg...]
 (def user-args (vec (drop 2 (seq os/args))))
-(when (< (count user-args) 2)
-  (usage-and-exit "expected at least 2 args (dir, file)"))
+(when (< (count user-args) 3)
+  (usage-and-exit "expected at least 3 args (mode, dir, file)"))
 
-(def raw-dir (nth user-args 0))
+(def measurement-mode
+  (let [m (nth user-args 0)]
+    (cond
+      (= m "lower-go")   :lower-go
+      (= m "ir-compile") :ir-compile
+      :else (usage-and-exit (str "<mode> must be 'ir-compile' or 'lower-go', got: " m)))))
+(def raw-dir (nth user-args 1))
 (def corpus-dir
   (let [n (count raw-dir)]
     (if (and (pos? n) (= \/ (nth raw-dir (dec n))))
       raw-dir
       (str raw-dir "/"))))
-(def files (vec (drop 1 user-args)))
+(def files (vec (drop 2 user-args)))
 (def stress-target (str corpus-dir " (" (count files) " files)"))
 
 (defn read-all [path]
@@ -102,10 +99,12 @@
   (let [m (str err-str)
         truncated (if (> (count m) 100) (str (subs m 0 100) "...") m)]
     (cond
+      ;; Unresolved symbol errors
       (or (re-find #"unresolved symbol" m)
           (re-find #"Can't resolve" m))
         :unresolved-symbol
 
+      ;; Unsupported special forms
       (or (re-find #"def\s" m)
           (re-find #"set!" m)
           (re-find #"\btry\b" m)
@@ -114,9 +113,11 @@
           (re-find #"trace" m))
         :unsupported-special-form
 
+      ;; Destructuring issues
       (re-find #"destructur" m)
         :destructure-rejection
 
+      ;; Everything else: store the actual error message
       :else
         (str ":other | " truncated))))
 
@@ -140,14 +141,43 @@
         :else
           (do (sleep 10) (recur))))))
 
-(defn try-ir-compile-timed [form]
-  "Evaluate form under (binding [*ir-compile* true] ...) with a per-fixture
-   timeout. Returns [result-key time-ms]."
-  (let [thunk (fn [] (try
-                       (binding [*ir-compile* true]
-                         (eval form))
-                       :ok
-                       (catch e (classify-error e))))
+(defn try-lower-go [form]
+  "Run form through the AOT path: build IR + lower to Go (bridge mode).
+   Returns :ok | :fallback-<reason> | error-classification.
+   Does NOT eval/intern — safe to run against the live IR pipeline."
+  (try
+    (binding [ir.passes.pipeline/*target* :go]
+      (let [result (ir.passes.pipeline/compile-form form)]
+        (cond
+          ;; Single-arity success
+          (and (map? result) (= :lowered (:status result)))
+            :ok
+          ;; Single-arity fallback — capture reason
+          (and (map? result) (= :fallback (:status result)))
+            (let [reason (or (:reason result) "no-reason")
+                  short  (if (> (count reason) 60) (str (subs reason 0 60) "...") reason)]
+              (keyword (str "fallback | " short)))
+          ;; Multi-arity template: succeed if every arity lowered
+          (and (map? result) (= :multi-fn-template (:kind result)))
+            (if (every? (fn [e] (some? (:fn e))) (:fns result))
+              :ok
+              :multi-arity-partial-fallback)
+          :else :ok)))
+    (catch e (classify-error e))))
+
+(defn try-ir-timed [form]
+  "Per-fixture measurement, dispatched by measurement-mode.
+   :ir-compile  — eval via *ir-compile* (xsofy: measures user-load behavior)
+   :lower-go    — lower IR to Go via :bridge mode (ir-stack: AOT pass rate)
+   Wrapped in per-fixture-timeout-ms; runaway fixtures return :stress/timeout.
+   Returns [result-key time-ms]."
+  (let [thunk (if (= measurement-mode :lower-go)
+                (fn [] (try-lower-go form))
+                (fn [] (try
+                         (binding [*ir-compile* true]
+                           (eval form))
+                         :ok
+                         (catch e (classify-error e)))))
         t0 (System/nanoTime)
         result (try-with-timeout thunk per-fixture-timeout-ms)
         t1 (System/nanoTime)
@@ -155,6 +185,7 @@
     [result ms]))
 
 (defn stats-for [times]
+  "Given a list of times (ms), return {:mean N :median N :p95 N}."
   (if (empty? times)
     {:mean 0 :median 0 :p95 0}
     (let [sorted (sort times)
@@ -167,6 +198,7 @@
       {:mean mean :median median :p95 p95})))
 
 (defn stress-file [path]
+  "Compile each defn in path, tracking times and error buckets."
   (let [parsed (read-all path)
         defns  (vec (defn-forms parsed))]
     (if (nil? parsed)
@@ -179,7 +211,7 @@
             (eval (list 'in-ns (list 'quote ns-sym)))
             (catch e nil)))
         (require-deps! ns-form-)
-        (let [results (mapv (fn [d] [(nth d 1) (try-ir-compile-timed d)]) defns)
+        (let [results (mapv (fn [d] [(nth d 1) (try-ir-timed d)]) defns)
               ok     (count (filter (fn [[_ [r _]]] (= :ok r)) results))
               errs   (filter (fn [[_ [r _]]] (not= :ok r)) results)
               times  (map (fn [[_ [_ t]]] t) results)
@@ -190,7 +222,8 @@
            :error-buckets error-buckets})))))
 
 (defn run []
-  (println (str "=== IR-pipeline stress test — target: " stress-target " ===\n"))
+  (println (str "=== IR-pipeline stress test — target: " stress-target
+                " — mode: " measurement-mode " ===\n"))
 
   ;; Load all corpus modules upfront so cross-file refs resolve
   (print "Loading corpus dependencies... ")
@@ -204,7 +237,7 @@
           (when ns-sym
             (eval (list 'in-ns (list 'quote ns-sym))))
           (require-deps! ns-form-))
-        (catch e nil)))
+        (catch e nil)))  ;; Silently skip load errors; we'll catch them per-fixture
     (let [t1 (System/nanoTime)
           ms (double (/ (- t1 t0) 1000000.0))]
       (println (format "done in %.1f ms\n" ms))))
@@ -229,22 +262,26 @@
       (let [all-results (concat results results2)
             total   (reduce + 0 (map (fn [r] (or (:total r) 0)) all-results))
             oks     (reduce + 0 (map (fn [r] (or (:ok r) 0)) all-results))
+            all-times (mapcat (fn [r] (or (:times r) [])) all-results)
             all-errs (reduce (fn [acc r]
                               (merge-with + acc (or (:error-buckets r) {})))
                             {}
                             all-results)]
 
+        ;; Per-file summary
         (println "=== Per-file results (cold pass) ===")
         (doseq [r results]
           (if (:read-error r)
-            (println (str (:file r) ": READ-ERROR"))
+            (println (str (:file r) ": READ-ERROR (xsofy not checked out?)"))
             (println (str (:file r) ": " (:ok r) "/" (:total r) " ok"))))
 
+        ;; Overall stats
         (println (str "\n=== Summary (both passes combined) ==="))
         (println (str "Total fixtures: " total))
         (println (str "Passed: " oks " (" (int (/ (* oks 100) (max 1 total))) "%)"))
         (println (str "Failed: " (- total oks)))
 
+        ;; Timing stats
         (let [cold-stats (stats-for (mapcat (fn [r] (or (:times r) [])) results))
               warm-stats (stats-for (mapcat (fn [r] (or (:times r) [])) results2))]
           (println (str "\n=== Timing Statistics ==="))
@@ -253,6 +290,7 @@
           (println (format "Warm pass (second run): mean=%.2f ms  median=%.2f ms  p95=%.2f ms"
                           (:mean warm-stats) (:median warm-stats) (:p95 warm-stats))))
 
+        ;; Error buckets
         (println (str "\n=== Failure Buckets ==="))
         (doseq [[bucket count] (sort-by val (fn [a b] (compare b a)) all-errs)]
           (println (format "  %-40s %3d" (str bucket) count)))))))

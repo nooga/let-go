@@ -112,7 +112,7 @@
 
 (declare build-list build-symbol build-if build-let build-do build-quote
          build-loop build-recur build-fn*
-         build-vector build-map)
+         build-vector build-map build-call)
 
 ;; Sentinel returned by recur / any form whose current-block is already
 ;; terminated. Callers must check for this before emitting more code.
@@ -204,14 +204,19 @@
 ;; dispatch table the single source of truth.
 
 (def builtin-ops
-  {'+  :add
-   '-  :sub
-   '*  :mul
-   '<  :lt
-   '<= :lte
-   '>  :gt
-   '>= :gte
-   '=  :eq})
+  {'+   :add
+   '-   :sub
+   '*   :mul
+   '<   :lt
+   '<=  :lte
+   '>   :gt
+   '>=  :gte
+   '=   :eq
+   'inc :inc
+   'dec :dec})
+
+;; Ops whose arity-1 form is the canonical shape (no n-ary folding).
+(def unary-only-ops #{:inc :dec})
 
 (defn build-args [forms ctx]
   ;; Build each arg, AND register its result as a temporary live local
@@ -272,8 +277,15 @@
 
 (defn build-builtin-op [op-kw form ctx]
   ;; Builtin ops are binary (stack-effect 2→1). Fold n-ary calls.
+  ;; Unary-only ops (:inc, :dec) take exactly one ref.
   (let [args (build-args (rest form) ctx)]
     (cond
+      (contains? unary-only-ops op-kw)
+        (if (= 1 (count args))
+          (ir/add-inst (ctx-fn ctx) (ctx-block ctx) op-kw [(nth args 0)] nil)
+          ;; Wrong-arity (inc) / (inc x y) — fall back to a generic call so
+          ;; the runtime arity-error surfaces normally.
+          (build-call form ctx))
       ;; Unary: (- x) → (sub 0 x); (+ x), (* x), comparisons → identity.
       (= 1 (count args))
         (if (= op-kw :sub)

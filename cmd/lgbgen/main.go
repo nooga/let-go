@@ -60,6 +60,7 @@ var embeddedNS = []struct {
 	{"ir.build", &rt.IRBuildSrc},
 	{"ir.passes.pipeline", &rt.IRPassPipelineSrc},
 	{"ir.dump", &rt.IRDumpSrc},
+	{"ir.passes.trace", &rt.IRPassTraceSrc},
 	// zip and data are loaded from source on demand (precompiled ns chunks
 	// only replay nil stubs for defn, not the actual function bodies)
 }

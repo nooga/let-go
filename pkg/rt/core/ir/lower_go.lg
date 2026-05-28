@@ -5,7 +5,7 @@
 ;;   - strict mode: unsupported ops/shapes throw
 ;;   - bridge mode: unsupported functions fall back at whole-function granularity
 ;;   - supported ops: const, load-arg, block-arg, add/sub/mul, lt/lte/gt/gte/eq,
-;;     return, branch, branch-if, tail-call
+;;     inc/dec, return, branch, branch-if, tail-call
 ;;   - control flow lowers from block-parameter SSA to mutable locals plus labels/gotos
 
 (ns ir.lower-go
@@ -119,8 +119,26 @@
 (defn- value-name [nid]
   (str "v" nid))
 
+;; Munge Lisp-idiomatic identifier chars to a valid Go identifier.
+;; Convention is Clojure-flavoured: each unsafe char maps to a distinct
+;; underscore-bracketed token so munged names don't collide with
+;; legitimately-named Go identifiers like `foo_bang` already in source.
+(def go-name-munge-map
+  {\-  "_"
+   \!  "_BANG_"
+   \?  "_QMARK_"
+   \*  "_STAR_"
+   \/  "_SLASH_"
+   \+  "_PLUS_"
+   \=  "_EQ_"
+   \<  "_LT_"
+   \>  "_GT_"})
+
 (defn- go-name [s]
-  (apply str (map (fn [ch] (if (= ch \-) \_ ch)) s)))
+  (apply str
+         (map (fn [ch]
+                (or (get go-name-munge-map ch) ch))
+              s)))
 
 (defn- import-entry [path alias]
   {:path path :alias alias})
@@ -149,6 +167,8 @@
 (defn- local-carrying-op? [op]
   (or (= op :block-arg)
       (= op :call)
+      (= op :inc)
+      (= op :dec)
       (contains? binary-op op)))
 
 (defn- used? [f nid]
@@ -275,6 +295,11 @@
               rhs (value-expr f closed-exprs (nth refs 1))]
           (when (and lhs rhs)
             (gogen/binary (get binary-op op) lhs rhs)))
+
+      (or (= op :inc) (= op :dec))
+        (let [lhs (value-expr f closed-exprs (nth refs 0))]
+          (when lhs
+            (gogen/binary (if (= op :inc) "+" "-") lhs (gogen/int-lit 1))))
 
       :else nil)))
 
@@ -414,6 +439,12 @@
       (= op :push-closed)  []
       (= op :block-arg) []
       (contains? binary-op op)
+        (if (used? f nid)
+          (let [rhs (inst-rhs f closed-exprs nid)]
+            (when rhs
+              [(gogen/assign "=" (value-ident nid) rhs)]))
+          [])
+      (or (= op :inc) (= op :dec))
         (if (used? f nid)
           (let [rhs (inst-rhs f closed-exprs nid)]
             (when rhs

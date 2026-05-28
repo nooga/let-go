@@ -32,6 +32,9 @@ var IRPassLICMSrc string
 //go:embed core/ir/passes/pipeline.lg
 var IRPassPipelineSrc string
 
+//go:embed core/ir/passes/trace.lg
+var IRPassTraceSrc string
+
 //go:embed core/ir/dump.lg
 var IRDumpSrc string
 

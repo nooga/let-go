@@ -1,0 +1,154 @@
+;; Instrumentation for the optimization pipeline.
+;;
+;; Two layers:
+;;   1. `trace-pass` macro — wraps a single pass call, records the
+;;      live-inst-count delta and wall-clock time into `*pass-trace*`.
+;;   2. `optimize-fn-traced` — same fixpoint loop as `optimize-fn`,
+;;      with every pass wrapped in `trace-pass`. Returns the fn
+;;      (still mutated in place) and the trace as a side channel via
+;;      `*pass-trace*`.
+;;
+;; Use `(with-trace ... )` to bind a fresh trace atom for a scope and
+;; `(print-trace)` to render iter-by-iter pass deltas to stdout.
+;;
+;; Why this exists: the fixpoint loop runs each pass N times, and a
+;; subtle bug in any pass shows up as wasted iterations, slow
+;; convergence, or fixtures pushed past timeout. Without per-pass
+;; visibility, every regression debug starts from scratch with
+;; `ir.dump/dump` sprinkled by hand.
+
+(ns ir.passes.trace
+  (:require ir.dump
+            [ir.passes.constfold :refer [constfold]]
+            [ir.passes.cse :refer [cse]]
+            [ir.passes.dce :refer [dce]]
+            [ir.passes.licm :refer [licm]]
+            [ir.passes.typeinfer :refer [typeinfer]]
+            [ir.validate :refer [validate-fn!]]))
+
+;; --- live inst count (duplicated from pipeline.lg — not exported) -----
+
+(defn live-inst-count [f]
+  "Count valid (non-invalid) instructions across all blocks."
+  (reduce + (map (fn [bid] (count (ir/block-insts bid f)))
+                 (ir/blocks f))))
+
+;; --- trace atom + helpers ---------------------------------------------
+
+(def ^:dynamic *pass-trace* nil)
+
+(defn ns-now [] (System/nanoTime))
+
+;; --- the macro --------------------------------------------------------
+;;
+;; Note: the macro body is fully inlined to avoid forward-reference
+;; resolution issues during ns load. Calls to live-inst-count and
+;; ns-now use unqualified names — the expansion site provides them
+;; via :refer/:use or being in the same ns. If you call trace-pass
+;; from outside ir.passes.trace, refer-all the ns first.
+
+(defmacro trace-pass [pass-name iter pass-call f]
+  "Wrap a pass call to record into *pass-trace*.
+   `pass-call` is the actual invocation, e.g. (constfold f).
+   Returns the result of pass-call (the mutated f)."
+  `(let [_b#  (live-inst-count ~f)
+         _t0# (System/nanoTime)
+         _r#  ~pass-call
+         _t1# (System/nanoTime)
+         _a#  (live-inst-count ~f)
+         _ns# (- _t1# _t0#)]
+     (when *pass-trace*
+       (swap! *pass-trace* conj
+              {:pass    ~pass-name
+               :iter    ~iter
+               :before  _b#
+               :after   _a#
+               :delta   (- _b# _a#)
+               :ns      _ns#
+               :ms      (/ _ns# 1000000.0)}))
+     _r#))
+
+;; --- traced optimize-fn -----------------------------------------------
+
+(defn optimize-fn-traced [f]
+  "Same as ir.passes.pipeline/optimize-fn but every pass is
+   wrapped in `trace-pass`. Caller binds *pass-trace* to an atom
+   to receive the recording."
+  (validate-fn! f "build")
+  (trace-pass "typeinfer-pre" -1 (typeinfer f) f)
+  (loop [iter 0]
+    (let [before (live-inst-count f)]
+      (trace-pass "constfold" iter (constfold f) f)
+      (validate-fn! f (str "constfold/" iter))
+      (trace-pass "cse" iter (cse f) f)
+      (validate-fn! f (str "cse/" iter))
+      (trace-pass "licm" iter (licm f) f)
+      (validate-fn! f (str "licm/" iter))
+      (trace-pass "dce" iter (dce f) f)
+      (validate-fn! f (str "dce/" iter))
+      (let [after (live-inst-count f)]
+        (cond
+          (= before after) f
+          (>= iter 15)
+            (do (println (str "warn: optimize-fn-traced max iters (16) reached, "
+                              before " insts after 16 cycles"))
+                f)
+          :else (recur (inc iter))))))
+  (trace-pass "typeinfer-post" -1 (typeinfer f) f)
+  f)
+
+;; --- scope helpers ----------------------------------------------------
+
+(defmacro with-trace [& body]
+  "Binds *pass-trace* to a fresh atom for the duration of body.
+   Returns [result trace-vector]."
+  `(let [t# (atom [])]
+     (binding [*pass-trace* t#]
+       (let [r# (do ~@body)]
+         [r# @t#]))))
+
+;; --- pretty printer ---------------------------------------------------
+
+(defn print-trace [trace]
+  "Render a trace vector as a table:
+     iter  pass             before  after  delta    ms
+        0  typeinfer-pre        6      6      0   1.23
+        0  constfold            6      6      0   0.45
+        0  cse                  6      6      0   0.31
+        0  licm                 6      6      0   0.22
+        0  dce                  6      5      1   0.18
+        1  constfold            5      5      0   0.10
+        ...
+   `delta` is positive for removals, negative for adds (no pass
+   should add insts; negative is a bug signal)."
+  (println (format "%4s  %-18s  %6s  %6s  %6s  %7s"
+                   "iter" "pass" "before" "after" "delta" "ms"))
+  (println (apply str (repeat 55 "-")))
+  (doseq [e trace]
+    (println (format "%4d  %-18s  %6d  %6d  %+6d  %7.2f"
+                     (:iter e) (:pass e) (:before e) (:after e)
+                     (:delta e) (:ms e))))
+  (let [total-ms (reduce + (map :ms trace))
+        total-removed (reduce + (map :delta trace))]
+    (println (apply str (repeat 55 "-")))
+    (println (format "  %d passes, %d insts removed, %.2f ms total"
+                     (count trace) total-removed total-ms))))
+
+;; --- IR-level dump pairing --------------------------------------------
+
+(defn dump-pair [pass-name pass-fn f]
+  "Run a single pass and return {:before dump :after dump
+   :delta n :ms n}. For one-off pass-level inspection.
+   Does not touch *pass-trace*."
+  (let [before-dump (ir.dump/dump f)
+        before-cnt  (live-inst-count f)
+        t0          (ns-now)
+        _           (pass-fn f)
+        t1          (ns-now)
+        after-cnt   (live-inst-count f)
+        after-dump  (ir.dump/dump f)]
+    {:pass   pass-name
+     :before before-dump
+     :after  after-dump
+     :delta  (- before-cnt after-cnt)
+     :ms     (/ (- t1 t0) 1000000.0)}))

@@ -242,9 +242,12 @@
         seed  (vec (repeat (count insts) []))]
     (reduce-kv
       (fn [acc i inst]
-        (-> acc
-            (accumulate-uses-from-refs i (nth inst 1))
-            (accumulate-uses-from-aux i inst)))
+        ;; Skip :invalid insts (those marked for removal).
+        (if (= :invalid (nth inst 0))
+          acc
+          (-> acc
+              (accumulate-uses-from-refs i (nth inst 1))
+              (accumulate-uses-from-aux i inst))))
       seed
       insts)))
 
