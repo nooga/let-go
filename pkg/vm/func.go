@@ -116,7 +116,7 @@ func (l *Func) MakeClosure() Fn {
 
 type Closure struct {
 	closedOvers []Value
-	fn          *Func
+	fn          Fn
 }
 
 func (l *Closure) Type() ValueType { return FuncType }
@@ -129,9 +129,7 @@ func (l *Closure) Unbox() any {
 			a, _ := BoxValue(in[i]) // error not propagatable through reflect proxy
 			args[i] = a
 		}
-		f := NewFrame(l.fn.chunk, args)
-		f.closedOvers = l.closedOvers
-		out, _ := f.Run() // error not propagatable through reflect proxy
+		out, _ := l.Invoke(args)
 		return []reflect.Value{reflect.ValueOf(out.Unbox())}
 	}
 	return func(fptr any) {
@@ -142,30 +140,55 @@ func (l *Closure) Unbox() any {
 }
 
 func (l *Closure) Arity() int {
-	return l.fn.arity
+	return l.fn.Arity()
 }
 
 func (l *Closure) Invoke(pargs []Value) (result Value, err error) {
-	args := pargs
-	if l.fn.isVariadric {
-		if len(args) < l.fn.arity-1 {
-			return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", l, l.fn.arity-1, len(args)))
+	if f, ok := l.fn.(*Func); ok {
+		args := pargs
+		if f.isVariadric {
+			if len(args) < f.arity-1 {
+				return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", l, f.arity-1, len(args)))
+			}
+			sargs := args[0 : f.arity-1]
+			rest := args[f.arity-1:]
+			restlist, boxErr := ListType.Box(rest)
+			if boxErr != nil {
+				return NIL, boxErr
+			}
+			args = append(sargs, restlist)
+		} else if len(args) != f.arity {
+			return NIL, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", l, f.arity, len(args)))
 		}
-		sargs := args[0 : l.fn.arity-1]
-		rest := args[l.fn.arity-1:]
-		restlist, boxErr := ListType.Box(rest)
-		if boxErr != nil {
-			return NIL, boxErr
-		}
-		args = append(sargs, restlist)
-	} else if len(args) != l.fn.arity {
-		return NIL, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", l, l.fn.arity, len(args)))
+		frame := NewFrame(f.chunk, args)
+		frame.closedOvers = l.closedOvers
+		result, err = frame.Run()
+		ReleaseFrame(frame)
+		return result, err
 	}
-	f := NewFrame(l.fn.chunk, args)
-	f.closedOvers = l.closedOvers
-	result, err = f.Run()
-	ReleaseFrame(f)
-	return result, err
+
+	if mfn, ok := l.fn.(*MultiArityFn); ok {
+		le := len(pargs)
+		var variant Fn
+		if f, ok := mfn.fns[le]; ok {
+			variant = f
+		} else if mfn.rest != nil && le >= mfn.rest.Arity() {
+			variant = mfn.rest
+		} else {
+			return NIL, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", l, le))
+		}
+
+		if f, ok := variant.(*Func); ok {
+			subClosure := &Closure{
+				closedOvers: l.closedOvers,
+				fn:          f,
+			}
+			return subClosure.Invoke(pargs)
+		}
+		return variant.Invoke(pargs)
+	}
+
+	return NIL, NewExecutionError("unsupported closure function type")
 }
 
 func (l *Closure) String() string {
@@ -239,11 +262,22 @@ func MakeMultiArity(fns []Value) (*MultiArityFn, error) {
 		}
 		if rest, ok := f.(*Func); ok && rest.isVariadric {
 			ma.rest = rest
-		} else if rest, ok := f.(*Closure); ok && rest.fn.isVariadric {
-			ma.rest = rest
+		} else if rest, ok := f.(*Closure); ok {
+			if ff, ok := rest.fn.(*Func); ok && ff.isVariadric {
+				ma.rest = rest
+			} else {
+				ma.fns[a] = f
+			}
 		} else {
 			ma.fns[a] = f
 		}
 	}
 	return ma, nil
+}
+
+func (l *MultiArityFn) MakeClosure() Fn {
+	return &Closure{
+		closedOvers: nil,
+		fn:          l,
+	}
 }

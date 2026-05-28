@@ -50,16 +50,17 @@ const (
 
 	// Specialized arithmetic/comparison opcodes (binary, stack: [a b] -> [result])
 	// These inline the common int64 fast path and fall back to generic NumXxx for other types.
-	OP_ADD // + (2 args)
-	OP_SUB // - (2 args)
-	OP_MUL // * (2 args)
-	OP_LT  // < (2 args)
-	OP_LTE // <= (2 args)
-	OP_GT  // > (2 args)
-	OP_GTE // >= (2 args)
-	OP_EQ  // = (2 args)
-	OP_INC // inc (1 arg)
-	OP_DEC // dec (1 arg)
+	OP_ADD  // + (2 args)
+	OP_SUB  // - (2 args)
+	OP_MUL  // * (2 args)
+	OP_LT   // < (2 args)
+	OP_LTE  // <= (2 args)
+	OP_GT   // > (2 args)
+	OP_GTE  // >= (2 args)
+	OP_EQ   // = (2 args)
+	OP_INC  // inc (1 arg)
+	OP_DEC  // dec (1 arg)
+	OP_QUOT // quot — integer quotient, truncated toward zero (2 args)
 )
 
 func OpcodeToString(op int32) string {
@@ -101,6 +102,7 @@ func OpcodeToString(op int32) string {
 		"EQ",
 		"INC",
 		"DEC",
+		"QUOT",
 	}
 	if int(inst) < len(ops) {
 		return fmt.Sprintf("%d/%-16s", sp, ops[inst])
@@ -793,7 +795,10 @@ func (f *Frame) Run() (Value, error) {
 			if idx < 0 {
 				return NIL, NewExecutionError("MAKE_CLOSURE stack underflow")
 			}
-			fn, ok := f.stack[idx].(*Func)
+			type closureCreator interface {
+				MakeClosure() Fn
+			}
+			fn, ok := f.stack[idx].(closureCreator)
 			if !ok {
 				return NIL, NewExecutionError("MAKE_CLOSURE invalid func on stack")
 			}
@@ -997,6 +1002,36 @@ func (f *Frame) Run() (Value, error) {
 				}
 			}
 			r, err := NumMul(a, b)
+			if err != nil {
+				if f.handleError(err) {
+					continue
+				}
+				return NIL, err
+			}
+			f.stack[f.sp-2] = r
+			f.sp--
+			f.ip++
+
+		case OP_QUOT:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					if bi == 0 {
+						if f.handleError(NewExecutionError("integer division by zero")) {
+							continue
+						}
+						return NIL, NewExecutionError("integer division by zero")
+					}
+					// Int quot is truncated toward zero — Go's / on
+					// signed ints matches Clojure's quot semantics.
+					f.stack[f.sp-2] = Int(int64(ai) / int64(bi))
+					f.sp--
+					f.ip++
+					continue
+				}
+			}
+			r, err := NumQuot(a, b)
 			if err != nil {
 				if f.handleError(err) {
 					continue

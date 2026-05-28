@@ -7,7 +7,9 @@ package vm
 
 import (
 	"fmt"
+	"os"
 	"reflect"
+	"runtime/debug"
 
 	"github.com/nooga/let-go/pkg/errors"
 )
@@ -171,7 +173,13 @@ func recoverThrownPanic(errp *error) {
 		if tp, ok := r.(*thrownPanic); ok {
 			*errp = tp.err
 		} else {
-			// Convert arbitrary Go panics to let-go errors
+			// Convert arbitrary Go panics to let-go errors. When
+			// LG_PANIC_STACK=1, also dump the Go stack trace so
+			// gogen_ir self-host bugs surface their actual location
+			// instead of being lost behind a wrapped error.
+			if os.Getenv("LG_PANIC_STACK") != "" {
+				fmt.Fprintf(os.Stderr, "[panic-recover] %v\n%s\n", r, debug.Stack())
+			}
 			*errp = fmt.Errorf("%v", r)
 		}
 	}

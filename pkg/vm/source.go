@@ -11,12 +11,19 @@ import (
 )
 
 // SourceInfo tracks the source location of a form.
+//
+// Symbol is an optional user-visible name for the value the form binds
+// (e.g. a let-binding or parameter name). It is empty for SourceInfos
+// attached purely for line/column tracking, and populated by the IR
+// builder when a value flows through a `bind-local!` site so downstream
+// passes (notably lower-go) can emit human-readable identifiers.
 type SourceInfo struct {
 	File      string
 	Line      int // 0-based
 	Column    int // 0-based
 	EndLine   int
 	EndColumn int
+	Symbol    string
 }
 
 func (s *SourceInfo) String() string {

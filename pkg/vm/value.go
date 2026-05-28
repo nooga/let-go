@@ -129,9 +129,19 @@ func BoxValue(v reflect.Value) (Value, error) {
 	if !v.IsValid() {
 		return NIL, NewTypeError(v, "can't be boxed", nil)
 	}
+	// A reflect.Value carrying a nil-typed interface (e.g. a Go fn returned
+	// `(vm.Value)(nil)` instead of vm.NIL) reaches the default branch of the
+	// switch below and panics inside NewBoxed → reflect.TypeOf(nil).Name().
+	// Treat all nil-interface returns as let-go NIL up front.
+	if v.IsValid() && v.Kind() == reflect.Interface && v.IsNil() {
+		return NIL, nil
+	}
 	if v.CanInterface() {
 		rv, ok := v.Interface().(Value)
 		if ok {
+			if rv == nil {
+				return NIL, nil
+			}
 			return rv, nil
 		}
 	}

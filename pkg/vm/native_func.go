@@ -7,6 +7,7 @@ package vm
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 )
 
@@ -31,14 +32,28 @@ func (t *theNativeFnType) Box(fn any) (Value, error) {
 		rawArgs := make([]reflect.Value, len(args))
 
 		for i := range args {
-			j := i
+			// For variadic fns called via reflect.Call (not CallSlice),
+			// each variadic arg slot expects the slice's ELEMENT type, not
+			// the slice type itself. Previously the loop used the slice
+			// type ([]vm.Value) for variadic args, which sent vm.String
+			// through the slice-target branch of boxArgForReflect and out
+			// the Unbox fallback — surfacing a Go primitive that reflect
+			// rejected when dispatching through the let-go Value interface.
+			var in reflect.Type
 			if variadric && i >= declArgs-1 {
-				j = declArgs - 1
+				in = ty.In(declArgs - 1).Elem()
+			} else {
+				in = ty.In(i)
 			}
-			in := ty.In(j)
 			if args[i] != NIL {
 				rawArgs[i] = boxArgForReflect(args[i], in)
-				if rawArgs[i].CanConvert(in) {
+				// Skip the .Convert() step when the prepared value is
+				// already assignable to the param's interface type — Convert
+				// to an interface erases the dynamic type info reflect.Call
+				// needs to dispatch through the let-go Value interface.
+				if rawArgs[i].IsValid() && rawArgs[i].Type().AssignableTo(in) {
+					// already valid as-is
+				} else if rawArgs[i].CanConvert(in) {
 					rawArgs[i] = rawArgs[i].Convert(in)
 				}
 			} else {
@@ -86,6 +101,9 @@ func (t *theNativeFnType) Box(fn any) (Value, error) {
 // machinery already does this via unboxSliceInto, so we delegate to it.
 // For non-slice targets and for boxed Go values, plain Unbox is correct.
 func boxArgForReflect(v Value, target reflect.Type) reflect.Value {
+	if debugBoxArgs {
+		fmt.Fprintf(os.Stderr, "[boxArgForReflect] v=%T target=%s kind=%s\n", v, target.String(), target.Kind())
+	}
 	if target.Kind() == reflect.Slice || target.Kind() == reflect.Array {
 		if sq, ok := v.(Sequable); ok {
 			out := reflect.New(target).Elem()
@@ -94,8 +112,27 @@ func boxArgForReflect(v Value, target reflect.Type) reflect.Value {
 			}
 		}
 	}
+	// When the Go param is an interface (typically vm.Value itself), pass
+	// the boxed Value directly. Unboxing first would surface a Go-native
+	// type (int64, string, []any, …) that reflect.Call can't assign to a
+	// vm.Value-typed slot. The Generated Go IR-stack code (lowered defns
+	// wrapping inner closures via BoxNativeFn) relies on this path.
+	if target.Kind() == reflect.Interface {
+		rv := reflect.ValueOf(v)
+		if debugBoxArgs {
+			fmt.Fprintf(os.Stderr, "[boxArgForReflect]   interface path: rv.Type=%s assignable=%v\n", rv.Type().String(), rv.Type().AssignableTo(target))
+		}
+		if rv.IsValid() && rv.Type().AssignableTo(target) {
+			return rv
+		}
+	}
+	if debugBoxArgs {
+		fmt.Fprintf(os.Stderr, "[boxArgForReflect]   FALLBACK Unbox: v.Unbox()=%T\n", v.Unbox())
+	}
 	return reflect.ValueOf(v.Unbox())
 }
+
+var debugBoxArgs = os.Getenv("LG_BOXARGS_DEBUG") != ""
 
 func (t *theNativeFnType) WrapNoErr(fn func([]Value) Value) (Value, error) {
 	return t.Wrap(func(args []Value) (Value, error) {
