@@ -13,7 +13,8 @@
 ;; - loops converge by block worklist iteration
 ;; - branch-if can refine the carried condition value by truthiness/falsiness
 
-(ns ir.passes.typeinfer)
+(ns ir.passes.typeinfer
+  (:require ir.dominance))
 
 ;; --- lattice ---------------------------------------------------------
 
@@ -30,6 +31,15 @@
    :any 9
    :bottom 10})
 
+;; --- diagnostic instrumentation ---
+;; Bind *ti-counters* to an atom-map around a `typeinfer` call to record
+;; per-pass counts (e.g. analyze-block visits, type-join calls). Zero
+;; overhead when nil; used by scripts/ir-stress.lg's `trace` mode to
+;; surface convergence regressions early. See scripts/ir-stress.md.
+(def ^:dynamic *ti-counters* nil)
+(defn- ti-inc! [k]
+  (when *ti-counters* (swap! *ti-counters* update k (fnil inc 0))))
+
 (defn- union-type? [t]
   (and (vector? t) (= :union (first t))))
 
@@ -43,6 +53,7 @@
            members))
 
 (defn- normalize-type [t]
+  (ti-inc! :normalize)
   (cond
     (nil? t) :unknown
     (keyword? t) t
@@ -108,9 +119,14 @@
     :else :any))
 
 (defn- type-join [a b]
-  (let [a (normalize-type a)
-        b (normalize-type b)]
-    (cond
+  ;; Invariant: a and b are already canonical. Every type-join caller
+  ;; either reads from ir/type-of (stored only via set-type-if-changed!,
+  ;; which writes the normalized form) or feeds the result of an infer-*
+  ;; function (those return canonical types directly). Skipping the
+  ;; redundant per-call normalize halves normalize-type invocations on
+  ;; the hot path.
+  (ti-inc! :type-join)
+  (cond
       (= a b) a
       (= a :bottom) b
       (= b :bottom) a
@@ -139,7 +155,7 @@
           (and (or (= a :float) (= a [:const :float 0.0]))
                (or (= b :int) (= b [:const :int 0]))))
         :number
-      :else (normalize-type [:union a b]))))
+      :else (normalize-type [:union a b])))
 
 (defn- join-all [types]
   (reduce type-join :bottom types))
@@ -152,8 +168,12 @@
       (= t [:const :float 0.0])))
 
 (defn- numeric-op-type [types]
-  (let [types (map normalize-type types)]
-    (if (every? numeric-type? types)
+  ;; Caller passes types pulled from ir/type-of (canonical post-storage),
+  ;; so we don't need to re-normalize.
+  (cond
+    (some #(= :bottom %) types)
+      :bottom
+    (every? numeric-type? types)
       (cond
         (every? (fn [t] (or (= t :int) (= t [:const :int 0]))) types) :int
         (every? (fn [t] (or (= t :float) (= t [:const :float 0.0]))) types) :float
@@ -162,7 +182,8 @@
              (some #(or (= % :int) (= % [:const :int 0])) types)) :number
         (some #(or (= % :float) (= % [:const :float 0.0])) types) :float
         :else :int)
-      :unknown)))
+    :else
+      :unknown))
 
 (defn- truthy-type? [t]
   (let [t (normalize-type t)]
@@ -230,20 +251,6 @@
 
 (def terminator-ops #{:branch :branch-if :return})
 
-(defn- block-successors [bid f]
-  (let [term (ir/block-term bid f)]
-    (if (nil? term)
-      []
-      (let [op  (ir/op term f)
-            aux (ir/aux term f)]
-        (case op
-          :branch
-            [(ir/branch-target-target aux)]
-          :branch-if
-            [(ir/branch-target-target (ir/cond-target-true aux))
-             (ir/branch-target-target (ir/cond-target-false aux))]
-          [])))))
-
 (defn- refine-edge-arg-type [pred-bid target-bid arg-id arg-type f]
   (let [term (ir/block-term pred-bid f)]
     (if (nil? term)
@@ -304,12 +311,24 @@
       :bottom)))
 
 (defn- arg-seed [inst f]
-  (let [arg-types (ir/fn-arg-types f)
+  ;; Seed sources, in priority order:
+  ;;   1. Type already stored on the load-arg inst (e.g. by the
+  ;;      infer-arg-types backward pass) — strongest signal because it
+  ;;      reflects what callers actually pass.
+  ;;   2. fn-arg-types metadata, if explicitly populated.
+  ;;   3. :unknown.
+  (let [stored    (ir/type-of inst f)
+        arg-types (ir/fn-arg-types f)
         idx       (ir/aux inst f)]
-    (if (and (vector? arg-types)
-             (< (int idx) (count arg-types)))
-      (normalize-type (nth arg-types (int idx)))
-      :unknown)))
+    (cond
+      (and (not= stored :unknown)
+           (not= stored :bottom))
+        (normalize-type stored)
+      (and (vector? arg-types)
+           (< (int idx) (count arg-types)))
+        (normalize-type (nth arg-types (int idx)))
+      :else
+        :unknown)))
 
 ;; --- Op-based inference ----------------------------------------------
 
@@ -332,24 +351,30 @@
         (numeric-op-type (map (fn [r] (ir/type-of r f)) refs))
       :else :unknown)))
 
-;; --- worklist driver -------------------------------------------------
-
-(defn- enqueue-all [wl queued bids]
-  (reduce (fn [[cur-wl cur-queued] bid]
-            (if (contains? cur-queued bid)
-              [cur-wl cur-queued]
-              [(conj cur-wl bid) (conj cur-queued bid)]))
-          [wl queued]
-          bids))
+;; --- fixpoint driver -------------------------------------------------
 
 (defn- set-type-if-changed! [f inst new-type]
+  ;; Dataflow monotonicity: the stored type is the lattice JOIN of every
+  ;; inference seen so far, never just the most recent. Without the join,
+  ;; type-join(:int, :unknown) = :unknown (absorbing) — combined with
+  ;; raw-replace storage — lets an inst's type oscillate :int ↔ :unknown
+  ;; across worklist iterations as predecessors are re-visited in
+  ;; different orders, and the fixpoint never converges. (Smoking gun in
+  ;; bounded-count: insts 12/20/24/29/… flipped indefinitely.)
+  ;;
+  ;; old-type is already canonical (was the result of a prior join +
+  ;; normalize); we only normalize new-type and the join result.
   (let [new-type (normalize-type new-type)
-        old-type (normalize-type (ir/type-of inst f))]
-    (when-not (= old-type new-type)
-      (ir/set-type! f inst new-type)
+        old-type (ir/type-of inst f)
+        joined   (if (= old-type :bottom)
+                   new-type
+                   (type-join old-type new-type))]
+    (when-not (= old-type joined)
+      (ir/set-type! f inst joined)
       true)))
 
 (defn- analyze-block! [bid f]
+  (ti-inc! :analyze-block)
   (let [params (ir/block-params bid f)
         changed-param?
           (loop [ps params
@@ -376,27 +401,256 @@
             (set-type-if-changed! f term (infer-one term f)))]
     (or changed-param? changed-inst? changed-term?)))
 
-(defn typeinfer
-  "Infer Inst.Type for every Inst in the function using a block worklist.
-   Block params join predecessor-carried argument types, so joins and loops
-   converge instead of remaining permanently unknown."
+;; --- sparse worklist solver ------------------------------------------
+;;
+;; The previous algorithm RPO-swept every reachable block until no block
+;; changed. On dispatcher defns (build-if, lower-node!, value-expr, …) the
+;; cost was O(sweeps × blocks × insts) — every sweep re-inferred every
+;; value even though a single widening only invalidates that value's
+;; direct users. Profiles showed typeinfer-pre at >5s on these defns,
+;; dominating total compile time 10× over every other pass.
+;;
+;; This sparse worklist drains in O(widenings × dependents). The lattice
+;; is short (`:bottom → narrow → :union → :any`), so each value widens at
+;; most a small constant number of times. Convergence is bounded by the
+;; total transitive fanout of the seed set, not by sweep count.
+;;
+;; Dependency edges (built once after init, CFG is immutable during the
+;; pass):
+;;   inst-users        v → users where (ir/refs user) contains v
+;;   branch-arg-users  v → [bid pos] when v is the arg at slot `pos` of a
+;;                     terminator that targets `bid`; covers :branch and
+;;                     both edges of :branch-if. (Cond-id refinement is
+;;                     subsumed: refine-edge-arg-type only refines the
+;;                     position where arg-id == cond-id, and that arg-id
+;;                     is necessarily already in branch-arg-users.)
+;;
+;; Block-params get their type via infer-block-param (param inference
+;; owns the write). When a param widens, its dependents are enqueued via
+;; the same propagate-changed! helper used for any other value — a
+;; :block-arg inst's refs may flow into normal users, so the param
+;; widening must propagate transitively.
+;;
+;; Skipping work on :block-arg insts in the `:inst` drain branch is fine:
+;; infer-one on a :block-arg just normalizes-and-returns the stored
+;; type, and that stored type was just written by the `:param` path.
+
+(defn- build-deps
+  "Return dependency maps for the sparse solver.
+   Walks every reachable block once."
   [f]
-  (doseq [bid (ir/blocks f)]
-    (doseq [inst (ir/block-insts bid f)]
-      (ir/set-type! f inst :bottom))
-    (let [term (ir/block-term bid f)]
-      (when-not (nil? term)
-        (ir/set-type! f term :bottom))))
-  (loop [wl (vec (ir/blocks f))
-         queued (into #{} (ir/blocks f))]
-    (if (empty? wl)
-      f
-      (let [bid    (first wl)
-            wl     (vec (rest wl))
-            queued (disj queued bid)
-            changed? (analyze-block! bid f)
-            succs  (block-successors bid f)
-            [wl queued] (if changed?
-                          (enqueue-all wl queued succs)
-                          [wl queued])]
-        (recur wl queued)))))
+  (let [bu (atom {})
+        ps (atom {})
+        add (fn [m k v] (swap! m update k (fnil conj #{}) v))
+        add-branch-args
+            (fn [pred target args]
+              (loop [as args pos 0]
+                (when (seq as)
+                  (let [arg-id (first as)
+                        pp [target pos]]
+                    (add bu arg-id pp)
+                    (add ps pp [pred target arg-id]))
+                  (recur (rest as) (inc pos)))))]
+    (doseq [bid (ir/blocks f)]
+      (let [term (ir/block-term bid f)]
+        (when-not (nil? term)
+          (let [op  (ir/op term f)
+                aux (ir/aux term f)]
+            (case op
+              :branch
+                (add-branch-args bid
+                  (ir/branch-target-target aux)
+                  (ir/branch-target-args aux))
+              :branch-if
+                (let [tt (ir/cond-target-true aux)
+                      ft (ir/cond-target-false aux)]
+                  (add-branch-args bid
+                                   (ir/branch-target-target tt)
+                                   (ir/branch-target-args tt))
+                  (add-branch-args bid
+                                   (ir/branch-target-target ft)
+                                   (ir/branch-target-args ft)))
+              nil)))))
+    {:uses (ir/uses f) :branch-arg-users @bu :param-sources @ps}))
+
+(defn- source-arg-type [source f]
+  (let [pred-bid  (nth source 0)
+        target-bid (nth source 1)
+        arg-id    (nth source 2)
+        arg-type  (ir/type-of arg-id f)]
+    (normalize-type
+      (refine-edge-arg-type pred-bid target-bid arg-id arg-type f))))
+
+(defn- infer-block-param-from-deps [deps bid param-pos f]
+  (let [sources (get (:param-sources deps) [bid param-pos])]
+    (if (seq sources)
+      (join-all (map (fn [source] (source-arg-type source f)) sources))
+      :bottom)))
+
+(defn- param-has-ready-source? [deps bid param-pos f]
+  (some (fn [source]
+          (not= :bottom (ir/type-of (nth source 2) f)))
+        (get (:param-sources deps) [bid param-pos])))
+
+(defn- enqueue-entry [queue queued entry]
+  (ti-inc! :enqueue-attempt)
+  (if (contains? queued entry)
+    [queue queued]
+    (do
+      (ti-inc! :enqueue)
+      [(conj queue entry) (conj queued entry)])))
+
+(defn- propagate-changed!
+  "Value-id v's type widened — enqueue everyone whose inference reads it."
+  [v deps queue queued]
+  (let [[queue queued]
+          (let [uses (:uses deps)
+                us   (when (< v (count uses)) (nth uses v))
+                state (atom [queue queued])]
+            (when (and us (not (ir/uses-empty? us)))
+              (ir/uses-for-each us
+                (fn [user]
+                  (let [[q s] @state]
+                    (reset! state (enqueue-entry q s [:inst user]))))))
+            @state)]
+    (loop [params (get (:branch-arg-users deps) v)
+           q queue
+           s queued]
+      (if (seq params)
+        (let [[q2 s2] (enqueue-entry q s [:param (first params)])]
+          (recur (rest params) q2 s2))
+        [q s]))))
+
+;; Per-call wall-clock budget. Defensive guard against pathological
+;; inputs; should never fire under the sparse worklist on real code. If
+;; it does, that's a regression signal, not a normal escape hatch. Bail
+;; cleanly with the current partial result — every assigned type is
+;; sound (monotone-store), lower-go's rt.<Op>Value helper path handles
+;; :any operands correctly. Bind to nil for unbounded execution.
+(def ^:dynamic *typeinfer-budget-ms* 2000)
+
+(defn typeinfer
+  "Infer Inst.Type for every Inst in the function via a sparse monotone
+   worklist. Each value re-infers only when one of its operand types
+   widens, so the cost is proportional to widenings × dependents rather
+   than sweeps × insts."
+  [f]
+  ;; Reset (unchanged): zero every derived type. Preserves :load-arg
+  ;; pins from infer-arg-types — those are the only inputs that survive
+  ;; across typeinfer invocations.
+  (swap! f update :insts
+         (fn [insts]
+           (vec
+             (map (fn [inst]
+                    (let [op (nth inst 0)
+                          t  (nth inst 5)
+                          new-t (if (and (= op :load-arg)
+                                         (not= t :unknown))
+                                  t
+                                  :bottom)]
+                      (assoc inst 5 new-t)))
+                  insts))))
+  (let [deps-start-ns (System/nanoTime)
+        deps      (build-deps f)
+        start-ns  (System/nanoTime)
+        _         (when *ti-counters*
+                    (swap! *ti-counters*
+                           assoc
+                           :deps-ms
+                           (int (/ (- start-ns deps-start-ns) 1000000))))
+        budget-ns (when *typeinfer-budget-ms*
+                    (* *typeinfer-budget-ms* 1000000))
+        budget-exceeded?
+          (fn []
+            (and budget-ns
+                 (> (- (System/nanoTime) start-ns) budget-ns)))]
+    ;; Seed: enqueue every value once. Reachable blocks only — unreachable
+    ;; insts keep :bottom, which is correct (they hold no runtime value).
+    (let [[seed-queue seed-queued]
+            (loop [blocks (ir.dominance/reverse-postorder f)
+                   queue []
+                   queued #{}]
+              (if (empty? blocks)
+                [queue queued]
+                (let [bid (first blocks)
+                      [queue queued]
+                        (loop [ps (ir/block-params bid f)
+                               pos 0
+                               q queue
+                               s queued]
+                          (if (seq ps)
+                            (if (param-has-ready-source? deps bid pos f)
+                              (let [[q2 s2] (enqueue-entry q s [:param [bid pos]])]
+                                (recur (rest ps) (inc pos) q2 s2))
+                              (recur (rest ps) (inc pos) q s))
+                            [q s]))
+                      [queue queued]
+                        (loop [insts (ir/block-insts bid f)
+                               q queue
+                               s queued]
+                          (if (seq insts)
+                            (let [inst (first insts)]
+                              ;; Skip :block-arg insts here: their write is
+                              ;; owned by the :param path. infer-one on
+                              ;; :block-arg is a no-op against monotone
+                              ;; storage, but enqueuing them spuriously
+                              ;; bloats the queue.
+                              (if (= :block-arg (ir/op inst f))
+                                (recur (rest insts) q s)
+                                (let [[q2 s2] (enqueue-entry q s [:inst inst])]
+                                  (recur (rest insts) q2 s2))))
+                            [q s]))
+                      term (ir/block-term bid f)
+                      [queue queued] (if (nil? term)
+                                       [queue queued]
+                                       (enqueue-entry queue queued [:inst term]))]
+                  (recur (rest blocks) queue queued))))]
+    ;; Drain.
+    (loop [queue seed-queue
+           queued seed-queued
+           budget-tick 0]
+      (cond
+        (and (zero? budget-tick) (budget-exceeded?))
+          (do (println "typeinfer: hit *typeinfer-budget-ms*"
+                       (or *typeinfer-budget-ms* "<nil>")
+                       "— bailing with partial result")
+              (when *ti-counters*
+                (swap! *ti-counters*
+                       assoc
+                       :drain-ms
+                       (int (/ (- (System/nanoTime) start-ns) 1000000))))
+              f)
+        (empty? queue)
+          (do
+            (when *ti-counters*
+              (swap! *ti-counters*
+                     assoc
+                     :drain-ms
+                     (int (/ (- (System/nanoTime) start-ns) 1000000))))
+            f)
+        :else
+          (let [entry  (peek queue)
+                queue  (pop queue)
+                queued (disj queued entry)
+                [queue queued]
+            (case (first entry)
+              :inst
+                (let [n (second entry)]
+                  (ti-inc! :process-inst)
+                  (if (set-type-if-changed! f n (infer-one n f))
+                    (do
+                      (ti-inc! :type-change)
+                      (propagate-changed! n deps queue queued))
+                    [queue queued]))
+              :param
+                (let [[bid pos] (second entry)
+                      params    (ir/block-params bid f)
+                      param-id  (nth params pos)
+                      new-type  (infer-block-param-from-deps deps bid pos f)]
+                  (ti-inc! :process-param)
+                  (if (set-type-if-changed! f param-id new-type)
+                    (do
+                      (ti-inc! :type-change)
+                      (propagate-changed! param-id deps queue queued))
+                    [queue queued])))]
+            (recur queue queued (if (zero? budget-tick) 127 (dec budget-tick)))))))))

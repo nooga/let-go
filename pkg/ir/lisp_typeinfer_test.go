@@ -11,22 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
-
-func runLispExpr(t *testing.T, expr string) vm.Value {
-	t.Helper()
-	consts := vm.NewConsts()
-	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
-	c.SetSource("lisp-typeinfer-test")
-	_, result, err := c.CompileMultiple(strings.NewReader(expr))
-	if err != nil {
-		t.Fatalf("eval %s: %v", expr, err)
-	}
-	return result
-}
 
 func runTypeInfer(t *testing.T, f vm.Value) vm.Value {
 	t.Helper()
