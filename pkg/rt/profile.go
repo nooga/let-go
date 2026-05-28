@@ -32,6 +32,8 @@ var (
 	cpuProfFile *os.File
 )
 
+func init() { RegisterInstaller(installProfileNS) }
+
 func installProfileNS() {
 	enable, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 0 {

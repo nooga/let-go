@@ -14,6 +14,8 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+func init() { RegisterInstaller(installSyscallNS) }
+
 func installSyscallNS() {
 	unsupported := func(name string) vm.Value {
 		fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {

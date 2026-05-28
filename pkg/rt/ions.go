@@ -308,6 +308,8 @@ func protoImplMap(method vm.Keyword, fn vm.Value) *vm.PersistentMap {
 	return vm.EmptyPersistentMap.Assoc(method, fn).(*vm.PersistentMap)
 }
 
+func init() { RegisterInstaller(installIoNS) }
+
 // nolint
 func installIoNS() {
 	// --- Protocols ---

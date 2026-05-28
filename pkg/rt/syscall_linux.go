@@ -126,6 +126,8 @@ func apparmorStackOnExec(profile string) error {
 	return os.WriteFile("/proc/self/attr/exec", []byte("stack "+profile), 0)
 }
 
+func init() { RegisterInstaller(installSyscallNS) }
+
 func installSyscallNS() {
 	// syscall/clone — (syscall/clone flags) → pid
 	// Creates a new process with the given namespace flags.

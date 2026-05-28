@@ -34,6 +34,8 @@ type Pub struct {
 	mu      sync.Mutex
 }
 
+func init() { RegisterInstaller(installAsyncNS) }
+
 // nolint
 func installAsyncNS() {
 	// Look up the core builtins to re-export

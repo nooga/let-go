@@ -1604,6 +1604,8 @@ func cRender(v vm.Value) (result vm.Value, retErr error) {
 
 // --- namespace install -----------------------------------------------
 
+func init() { RegisterInstaller(installGogenNS) }
+
 // nolint
 func installGogenNS() {
 	ns := DefNSBare("gogen")

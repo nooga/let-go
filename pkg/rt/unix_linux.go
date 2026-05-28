@@ -33,6 +33,8 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+func init() { RegisterInstaller(installUnixNS) }
+
 func installUnixNS() {
 	unboxConn := func(v vm.Value) (*net.UnixConn, error) {
 		b, ok := v.(*vm.Boxed)

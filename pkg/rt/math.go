@@ -73,6 +73,8 @@ func mathFn2(f func(float64, float64) float64) vm.Value {
 	return v
 }
 
+func init() { RegisterInstaller(installMathNS) }
+
 // nolint
 func installMathNS() {
 	ns := vm.NewNamespace("math")

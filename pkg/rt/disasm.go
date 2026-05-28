@@ -97,6 +97,8 @@ func disassembleChunk(chunk *vm.CodeChunk) vm.Value {
 
 // installDisasmNS installs the `disasm` Clojure namespace with a single
 // fn: disassemble.
+func init() { RegisterInstaller(installDisasmNS) }
+
 func installDisasmNS() {
 	disasm, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {

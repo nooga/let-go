@@ -22,6 +22,8 @@ import (
 //   [7] terminal rows
 // Uint8Array view at byte offset 8, length 16: raw key bytes
 
+func init() { RegisterInstaller(installTermNS) }
+
 func installTermNS() {
 	// Set *in-wasm* so user code can detect WASM environment
 	CoreNS.Lookup("*in-wasm*").(*vm.Var).SetRoot(vm.TRUE)

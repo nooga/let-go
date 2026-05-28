@@ -44,6 +44,8 @@ func fdFromHandle(v vm.Value) (int, error) {
 
 var termOldState *term.State
 
+func init() { RegisterInstaller(installTermNS) }
+
 // nolint
 func installTermNS() {
 	ns := vm.NewNamespace("term")

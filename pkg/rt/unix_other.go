@@ -13,6 +13,8 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+func init() { RegisterInstaller(installUnixNS) }
+
 func installUnixNS() {
 	unsupported := func(name string) vm.Value {
 		fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {

@@ -141,6 +141,8 @@ func optionsHaveKeywordize(opts vm.Value) (bool, error) {
 	return vm.IsTruthy(o.ValueAt(vm.Keyword("keywords?"))), nil
 }
 
+func init() { RegisterInstaller(installJSONNS) }
+
 // nolint
 func installJSONNS() {
 	readJson, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {

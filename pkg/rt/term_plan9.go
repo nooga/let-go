@@ -19,6 +19,8 @@ import (
 // functions still run via fmt.Print (rio won't render escapes, but they're
 // harmless). If you need real terminal control on plan9, wire in /dev/cons here.
 
+func init() { RegisterInstaller(installTermNS) }
+
 func installTermNS() {
 	// rio doesn't render ANSI escapes — flip *ansi?* so user code (e.g.
 	// the test runner's PASS/FAIL printer) can avoid emitting them.

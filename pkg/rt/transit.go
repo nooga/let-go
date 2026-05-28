@@ -504,6 +504,8 @@ func (e *TransitEncoder) encodeKeyValue(v vm.Value) (any, error) {
 
 // --- Namespace ---
 
+func init() { RegisterInstaller(installTransitNS) }
+
 func installTransitNS() {
 	readTransit, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {

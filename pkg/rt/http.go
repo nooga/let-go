@@ -157,6 +157,8 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	}
 }
 
+func init() { RegisterInstaller(installHttpNS) }
+
 // nolint
 func installHttpNS() {
 	// http/serve — (http/serve handler addr)

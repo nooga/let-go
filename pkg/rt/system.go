@@ -48,6 +48,8 @@ func systemProperties() *vm.PersistentMap {
 	return vm.NewPersistentMap(pairs)
 }
 
+func init() { RegisterInstaller(installSystemNS) }
+
 // nolint
 func installSystemNS() {
 	ns := vm.NewNamespace("System")

@@ -16,6 +16,8 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+func init() { RegisterInstaller(installOsNS) }
+
 // nolint
 func installOsNS() {
 	getenv, err := vm.NativeFnType.Box(os.Getenv)
@@ -23,7 +25,7 @@ func installOsNS() {
 	tempDir, err := vm.NativeFnType.Box(os.TempDir)
 	args, err := vm.ToLetGo(os.Args)
 	withStdin, err := vm.NativeFnType.Wrap(func(v []vm.Value) (vm.Value, error) {
-		var cmd *exec.Cmd = v[0].Unbox().(*exec.Cmd)
+		var cmd = v[0].Unbox().(*exec.Cmd)
 		s := string(v[1].(vm.String))
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
