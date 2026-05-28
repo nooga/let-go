@@ -165,7 +165,7 @@ brew install let-go
 Prebuilt binaries for Linux, macOS, and Plan 9 in
 [Releases](https://github.com/nooga/let-go/releases).
 
-### From source (Go 1.22+)
+### From source (Go 1.26+)
 
 ```bash
 go install github.com/nooga/let-go@latest
