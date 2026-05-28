@@ -125,6 +125,17 @@ func ToLetGo(v any) (Value, error) {
 	return BoxValue(reflect.ValueOf(v))
 }
 
+// MustBox boxes a Go value via BoxValue and panics on error. Intended for
+// use at init time (e.g. namespace install functions) where boxing failure
+// is a programmer error, not a runtime condition.
+func MustBox(v any) Value {
+	val, err := BoxValue(reflect.ValueOf(v))
+	if err != nil {
+		panic("vm.MustBox: " + err.Error())
+	}
+	return val
+}
+
 func BoxValue(v reflect.Value) (Value, error) {
 	if !v.IsValid() {
 		return NIL, NewTypeError(v, "can't be boxed", nil)
@@ -136,8 +147,10 @@ func BoxValue(v reflect.Value) (Value, error) {
 		}
 	}
 	switch v.Type().Kind() {
-	case reflect.Int:
-		return IntType.Box(v.Interface())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return Int(v.Int()), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return Int(v.Uint()), nil
 	case reflect.String:
 		return StringType.Box(v.Interface())
 	case reflect.Float32, reflect.Float64:

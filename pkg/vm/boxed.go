@@ -74,7 +74,12 @@ var BoxedTypes map[string]*aBoxedType = map[string]*aBoxedType{}
 
 func valueType(value any) *aBoxedType {
 	reflected := reflect.TypeOf(value)
-	t, ok := BoxedTypes[reflected.Name()]
+	// Use the full reflect.Type.String() (e.g. "*xxh3.Hasher") as the cache
+	// key.  reflect.Type.Name() is empty for pointer/slice/map types, so
+	// distinct pointer types would collide on the empty key and the first
+	// boxed pointer would shadow every subsequent one.
+	key := reflected.String()
+	t, ok := BoxedTypes[key]
 	if ok {
 		return t
 	}
@@ -100,7 +105,7 @@ func valueType(value any) *aBoxedType {
 			t.methods[Symbol(m.Name)] = mef
 		}
 	}
-	BoxedTypes[reflected.Name()] = t
+	BoxedTypes[key] = t
 	return t
 }
 

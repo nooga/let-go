@@ -1,0 +1,31 @@
+;; hash — non-cryptographic hash utilities.
+;;
+;; Currently exposes 64-bit xxh3 (https://github.com/zeebo/xxh3) via the
+;; raw `xxh3` namespace registered by lginterop.  The user-facing API
+;; lives here so the friendly names (`xxh3-64`, `xxh3-hasher`) and the
+;; stateful-hasher record shape are written in let-go, not Go.
+(ns hash)
+
+;; One-shot hashes — keyword bytes or a string in, uint64 out.
+(def xxh3-64           xxh3/Hash)
+(def xxh3-64-seed      xxh3/HashSeed)
+(def xxh3-64-str       xxh3/HashString)
+(def xxh3-64-str-seed  xxh3/HashStringSeed)
+
+(defn- hasher-map [h]
+  {:write     (fn [b] (.Write h b))
+   :write-str (fn [s] (.WriteString h s))
+   :sum       (fn []  (.Sum64 h))
+   :reset     (fn []  (.Reset h))})
+
+(defn xxh3-hasher
+  "Returns a stateful 64-bit xxh3 hasher exposed as a map of callables:
+   `:write` (byte-array), `:write-str` (string), `:sum` (uint64),
+   `:reset` (nil)."
+  []
+  (hasher-map (xxh3/New)))
+
+(defn xxh3-hasher-seed
+  "Like `xxh3-hasher` but seeded."
+  [seed]
+  (hasher-map (xxh3/NewSeed seed)))

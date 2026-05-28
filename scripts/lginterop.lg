@@ -169,21 +169,23 @@
     (build-wrapper-body go-alias qname name params results variadic?)))
 
 (defn build-install-stmt [go-alias ex smart?]
-  "Returns a gogen statement node (or nil) for registering one export.
-   Generic funcs/types are skipped in Go output because they require
-   explicit instantiation and cannot be passed as values to lg.Def."
+  "Returns a gogen statement node (or nil) for registering one export
+   on the local `ns` (a *vm.Namespace).  Generic funcs/types are skipped
+   in Go output because they require explicit instantiation."
   (case (ex-kind ex)
     :func
       (when (not (generic? ex))
         (if (and smart? (smartable? ex))
           (gogen/expr-stmt
-            (gogen/call (gogen/field-sel (gogen/ident "lg") "Def")
-              [(gogen/string-lit (str go-alias "/" (ex-name ex)))
-               (gogen/ident (str "wrap" go-alias (ex-name ex)))]))
+            (gogen/call (gogen/field-sel (gogen/ident "ns") "Def")
+              [(gogen/string-lit (ex-name ex))
+               (gogen/call (gogen/field-sel (gogen/ident "vm") "MustBox")
+                 [(gogen/ident (str "wrap" go-alias (ex-name ex)))])]))
           (gogen/expr-stmt
-            (gogen/call (gogen/field-sel (gogen/ident "lg") "Def")
-              [(gogen/string-lit (str go-alias "/" (ex-name ex)))
-               (gogen/field-sel (gogen/ident go-alias) (ex-name ex))]))))
+            (gogen/call (gogen/field-sel (gogen/ident "ns") "Def")
+              [(gogen/string-lit (ex-name ex))
+               (gogen/call (gogen/field-sel (gogen/ident "vm") "MustBox")
+                 [(gogen/field-sel (gogen/ident go-alias) (ex-name ex))])]))))
     :type
       (when (and (ex-struct? ex) (not (generic? ex)))
         (gogen/expr-stmt
@@ -193,21 +195,33 @@
             [(gogen/string-lit (str go-alias "/" (ex-name ex)))])))
     (:const :var)
       (gogen/expr-stmt
-        (gogen/call (gogen/field-sel (gogen/ident "lg") "Def")
-          [(gogen/string-lit (str go-alias "/" (ex-name ex)))
-           (gogen/field-sel (gogen/ident go-alias) (ex-name ex))]))
+        (gogen/call (gogen/field-sel (gogen/ident "ns") "Def")
+          [(gogen/string-lit (ex-name ex))
+           (gogen/call (gogen/field-sel (gogen/ident "vm") "MustBox")
+             [(gogen/field-sel (gogen/ident go-alias) (ex-name ex))])]))
     nil))
 
 (defn build-install-fn [go-alias exports smart?]
-  "Returns a gogen/func-decl AST node for the install function."
-  (let [stmts (mapcat (fn [ex]
-                        (let [stmt (build-install-stmt go-alias ex smart?)]
-                          (if stmt [stmt] [])))
-                      exports)]
+  "Returns a gogen/func-decl AST node for the install function.
+   The emitted function takes no arguments: it constructs a fresh
+   *vm.Namespace named after the alias, defines every export on it,
+   and registers it via rt.RegisterNS — matching the existing built-in
+   namespace install pattern in pkg/rt."
+  (let [def-stmts (mapcat (fn [ex]
+                            (let [stmt (build-install-stmt go-alias ex smart?)]
+                              (if stmt [stmt] [])))
+                          exports)
+        ns-init (gogen/assign ":="
+                  (gogen/ident "ns")
+                  (gogen/call (gogen/field-sel (gogen/ident "vm") "NewNamespace")
+                    [(gogen/string-lit go-alias)]))
+        register (gogen/expr-stmt
+                   (gogen/call (gogen/ident "RegisterNS")
+                     [(gogen/ident "ns")]))]
     (gogen/func-decl (str "Install" (pascal-case go-alias))
-      [(gogen/param "lg" (gogen/type "*api.LetGo"))]
       []
-      stmts)))
+      []
+      (concat [ns-init] def-stmts [register]))))
 
 (defn build-file [pkg-name go-alias exports smart?]
   "Returns a gogen/file AST node for the complete generated file."
@@ -235,10 +249,9 @@
                             exports)
         imports (filter identity
                   [(when has-smart? (gogen/import-spec "fmt"))
-                   (gogen/import-spec "github.com/nooga/let-go/pkg/api")
-                   (when (or has-smart? has-structs?) (gogen/import-spec "github.com/nooga/let-go/pkg/vm"))
+                   (gogen/import-spec "github.com/nooga/let-go/pkg/vm")
                    (when has-pkg-refs? (gogen/import-spec pkg-name go-alias))])]
-    (gogen/file "lginterop"
+    (gogen/file "rt"
       imports
       (concat wrapper-fns [install-fn]))))
 
