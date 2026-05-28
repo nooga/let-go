@@ -1,59 +1,98 @@
 ;; IR-pipeline coverage stress test — corpus-agnostic.
 ;;
-;; Drives a corpus of .lg files through the IR pipeline, reporting per-
-;; file pass rates, error buckets, and cold + warm timing. Replaces the
-;; previous xsofy-hardcoded harness.
+;; Full reference: scripts/ir-stress.md
 ;;
 ;; Usage:
-;;   go run . scripts/ir-stress.lg <dir> <file> [<file>...]
+;;   go run . scripts/ir-stress.lg <mode> <args>...
 ;;
-;;   <dir>   corpus root (absolute or relative to cwd)
-;;   <file>  one or more .lg paths relative to <dir>
+;;   <mode>:
+;;     ir-compile <dir> <file>...           eval each defn under
+;;                                          (binding [*ir-compile* true])
+;;                                          — measures user-load behavior
+;;     lower-go   <dir> <file>...           build IR + lower-go in :bridge
+;;                                          mode, no eval — AOT pass rate
+;;     trace      <dir> <file> <defn-name>  drill into ONE slow defn:
+;;                                          per-stage (expand/build/optimize/
+;;                                          lower) ms, per-pass table from
+;;                                          ir.passes.trace
 ;;
-;; Each top-level (defn ...) form is evaluated under
-;;   (binding [*ir-compile* true] (eval form))
-;; so the IR pipeline drives the compile path. Bodies that fail to
-;; IR-compile are bucketed by classify-error so the output highlights
-;; which language features still need IR support.
+;; Env vars:
+;;   LG_STRESS_TIMEOUT_MS   per-defn timeout in ms (default 5000)
+;;   LG_STRESS_PASSES       1 = single pass; 2 = cold+warm (default 2)
+;;   LG_STRESS_LOG          path to per-defn TSV log
+;;                          (file<TAB>defn<TAB>bucket<TAB>ms)
+;;   LG_STRESS_AUTOTRACE    "1" = on each :stress/timeout, re-run that defn
+;;                          with the trace harness and emit the per-pass
+;;                          breakdown inline. Doubles work for slow defns
+;;                          but turns "X timed out" into "X timed out IN
+;;                          PASS Y".
+;;   LG_STRESS_TOPK         "1" = at run end, print top-K passes by
+;;                          cumulative ms (aggregated across all defns).
+;;                          Sampled from the auto-trace runs, so requires
+;;                          LG_STRESS_AUTOTRACE=1 to populate.
 ;;
 ;; Examples:
-;;   # xsofy IR-compile pass rate
-;;   LG_SOURCE_PATHS=/path/to/xsofy go run . scripts/ir-stress.lg \
-;;     /path/to/xsofy/xsofy \
-;;     util.lg combat.lg ai.lg items.lg fov.lg fire.lg effects.lg \
-;;     bestiary.lg input.lg lighting.lg runes.lg sound.lg det.lg \
-;;     entities.lg check.lg
+;;   # IR-pipeline self-AOT pass rate (most common):
+;;   LG_STRESS_PASSES=1 LG_STRESS_LOG=/tmp/ir-stress.log \
+;;     go run . scripts/ir-stress.lg lower-go pkg/rt/core \
+;;       core.lg ir/build.lg ir/lower.lg ir/lower_go.lg ...
 ;;
-;;   # pkg/rt/core/ir self-load pass rate
-;;   go run . scripts/ir-stress.lg pkg/rt/core/ir \
-;;     data.lg zipper.lg build.lg lower.lg passes.lg \
-;;     passes/constfold.lg passes/cse.lg passes/dce.lg \
-;;     passes/licm.lg passes/pipeline.lg
+;;   # Drill into ONE slow defn:
+;;   go run . scripts/ir-stress.lg trace pkg/rt/core core.lg for-emit
 ;;
-;; Per-fixture timeout via LG_STRESS_TIMEOUT_MS (default 5000).
-
+;;   # Auto-trace every timeout + top-K pass cost summary:
+;;   LG_STRESS_AUTOTRACE=1 LG_STRESS_TOPK=1 LG_STRESS_PASSES=1 \
+;;     go run . scripts/ir-stress.lg lower-go pkg/rt/core/ir \
+;;       data.lg build.lg lower.lg ...
 (require 'ir.data)
 (require 'ir.passes.pipeline)
+(require 'ir.passes.trace)
+(require 'ir.passes.constfold)
+(require 'ir.passes.cse)
+(require 'ir.passes.dce)
+(require 'ir.passes.licm)
+(require 'ir.passes.typeinfer)
+(require 'ir.build)
+(require 'ir.lower-go)
 
 (defn- usage-and-exit [msg]
   (println (str "ir-stress: " msg))
-  (println "Usage: go run . scripts/ir-stress.lg <dir> <file>...")
-  (println "  <dir>:  corpus root")
-  (println "  <file>: one or more .lg paths relative to <dir>")
+  (println "Usage: go run . scripts/ir-stress.lg <mode> <args>")
+  (println "  ir-compile <dir> <file>...           eval-mode harness")
+  (println "  lower-go   <dir> <file>...           AOT-mode harness")
+  (println "  trace      <dir> <file> <defn-name>  drill into one defn")
+  (println "See scripts/ir-stress.md for env vars and full reference.")
   (System/exit 1))
 
 ;; os/args is [binary script user-arg user-arg...]
 (def user-args (vec (drop 2 (seq os/args))))
-(when (< (count user-args) 2)
-  (usage-and-exit "expected at least 2 args (dir, file)"))
+(when (< (count user-args) 3)
+  (usage-and-exit "expected at least 3 args (mode + per-mode args)"))
 
-(def raw-dir (nth user-args 0))
+(def measurement-mode
+  (let [m (nth user-args 0)]
+    (cond
+      (= m "lower-go")   :lower-go
+      (= m "ir-compile") :ir-compile
+      (= m "trace")      :trace
+      :else (usage-and-exit (str "<mode> must be 'ir-compile', 'lower-go', or 'trace', got: " m)))))
+(def raw-dir (nth user-args 1))
 (def corpus-dir
   (let [n (count raw-dir)]
     (if (and (pos? n) (= \/ (nth raw-dir (dec n))))
       raw-dir
       (str raw-dir "/"))))
-(def files (vec (drop 1 user-args)))
+;; trace mode: args are <dir> <file> <defn-name>. ir-compile/lower-go: args
+;; are <dir> <file>....
+(def files
+  (if (= measurement-mode :trace)
+    [(nth user-args 2)]
+    (vec (drop 2 user-args))))
+(def trace-defn-name
+  (when (= measurement-mode :trace)
+    (when (< (count user-args) 4)
+      (usage-and-exit "trace mode needs <dir> <file> <defn-name>"))
+    (symbol (nth user-args 3))))
 (def stress-target (str corpus-dir " (" (count files) " files)"))
 
 (defn read-all [path]
@@ -97,32 +136,110 @@
     (subs m 0 n)))
 
 (defn classify-error [err-str]
-  "Classify error into bucket: :unresolved-symbol, :unsupported-special-form,
-   :destructure-rejection, or :other (with first 100 chars)."
+  "Classify error into a bucket keyword.
+
+   IMPORTANT: build.lg wraps unresolved-symbol errors as
+   'ir/build: unresolved symbol X' — including special-form heads like
+   set!/var/def/trace when build-list doesn't recognize them and they
+   fall through to build-call → build-symbol. So we must check the
+   special-form patterns BEFORE the generic 'unresolved symbol' regex,
+   otherwise set!/var/def/trace failures get pooled into a single
+   :unresolved-symbol bucket and the real cause is hidden.
+
+   For genuinely-unresolved symbols (not special forms), bucket by the
+   symbol name itself so we see one row per missing dep instead of
+   one giant pile."
   (let [m (str err-str)
         truncated (if (> (count m) 100) (str (subs m 0 100) "...") m)]
     (cond
-      (or (re-find #"unresolved symbol" m)
-          (re-find #"Can't resolve" m))
-        :unresolved-symbol
+      ;; Special-form heads first — these surface as 'unresolved symbol X'
+      ;; because build-list has no case for them and falls into build-call.
+      (re-find #"unresolved symbol set!" m)    :missing-form/set!
+      (re-find #"unresolved symbol var$" m)    :missing-form/var
+      (re-find #"unresolved symbol var " m)    :missing-form/var
+      (re-find #"unresolved symbol def$" m)    :missing-form/def
+      (re-find #"unresolved symbol def " m)    :missing-form/def
+      (re-find #"unresolved symbol try" m)     :missing-form/try
+      (re-find #"unresolved symbol trace" m)   :missing-form/trace
 
-      (or (re-find #"def\s" m)
-          (re-find #"set!" m)
-          (re-find #"\btry\b" m)
-          (re-find #"catch" m)
-          (re-find #"\bvar\b" m)
-          (re-find #"trace" m))
-        :unsupported-special-form
+      ;; Genuinely-unresolved symbol: bucket by the symbol name.
+      (re-find #"unresolved symbol" m)
+        (let [match (re-find #"unresolved symbol ([^\s,)]+)" m)]
+          (if match
+            (keyword "unresolved" (second match))
+            :unresolved-symbol))
+      (re-find #"Can't resolve" m)
+        (let [match (re-find #"Can't resolve ([^\s,)]+)" m)]
+          (if match
+            (keyword "unresolved" (second match))
+            :unresolved-symbol))
 
-      (re-find #"destructur" m)
-        :destructure-rejection
+      ;; Destructuring issues
+      (re-find #"destructur" m)  :destructure-rejection
 
-      :else
-        (str ":other | " truncated))))
+      ;; Build-form errors with structural cause.
+      (re-find #"no :term" m)              :validate/no-term
+      (re-find #"cross-block ref" m)       :validate/cross-block-ref
+      (re-find #"is not a valid i" m)      :gogen/bad-identifier
+      (re-find #"nth index must be an integer" m) :gogen/nth-non-int
+      (re-find #"nested closure" m)        :lower-go/nested-closure
+      (re-find #"unrecognized form" m)     :build/unrecognized-form
+
+      ;; Everything else: store the actual error message
+      :else (str ":other | " truncated))))
 
 (def per-fixture-timeout-ms
   (let [v (System/getenv "LG_STRESS_TIMEOUT_MS")]
     (if (and v (not= v "")) (parse-int v) 5000)))
+
+;; Number of passes: 2 = cold+warm (default; lets us measure cache effect),
+;; 1 = single pass (faster; sufficient for gap analysis where buckets are
+;; deterministic). Set LG_STRESS_PASSES=1 when iterating on the harness.
+(def stress-passes
+  (let [v (System/getenv "LG_STRESS_PASSES")]
+    (if (and v (not= v "")) (parse-int v) 2)))
+
+;; Optional per-defn analysis log. When LG_STRESS_LOG is set, each defn
+;; produces one TSV row: file<TAB>defn-name<TAB>bucket<TAB>time-ms.
+;; Buckets include :ok and the classify-error keys, so a single grep
+;; like `grep :missing-form ir-stress.log` answers "what's the gap?".
+(def log-path
+  (let [v (System/getenv "LG_STRESS_LOG")]
+    (if (and v (not= v "")) v nil)))
+
+(def log-entries (atom []))
+
+;; --- per-pass cost aggregation (LG_STRESS_TOPK) ---------------------------
+;;
+;; Each entry of pass-totals maps a pass name (string) → cumulative ms across
+;; every trace we ran. Populated by the auto-trace path; printed at run end
+;; when LG_STRESS_TOPK=1. Empty (and skipped) otherwise.
+(def autotrace-on?
+  (let [v (System/getenv "LG_STRESS_AUTOTRACE")] (= v "1")))
+(def topk-on?
+  (let [v (System/getenv "LG_STRESS_TOPK")] (= v "1")))
+(def pass-totals (atom {}))
+(def autotrace-rows (atom []))  ;; per-defn worst-pass summaries
+
+(defn- accumulate-pass-trace! [defn-name trace]
+  "Add the per-pass ms from one optimize-fn-traced trace into pass-totals.
+   Also remember which pass dominated this defn (worst row by ms) so the
+   top-K summary can name the offender."
+  (when (seq trace)
+    (let [worst (reduce (fn [a b] (if (> (:ms b) (:ms a)) b a))
+                       (first trace)
+                       (rest trace))]
+      (swap! autotrace-rows conj
+             {:defn defn-name :worst-pass (:pass worst) :worst-ms (:ms worst)
+              :total-ms (reduce + (map :ms trace))}))
+    (doseq [row trace]
+      (swap! pass-totals update (:pass row) (fnil + 0.0) (:ms row)))))
+
+(defn- log! [file-path defn-name bucket time-ms]
+  (when log-path
+    (swap! log-entries conj
+      (str file-path "\t" defn-name "\t" bucket "\t"
+           (format "%.1f" time-ms) "\n"))))
 
 (defn try-with-timeout [thunk timeout-ms]
   "Run thunk in a goroutine; return its result (or thrown exception) within
@@ -140,21 +257,194 @@
         :else
           (do (sleep 10) (recur))))))
 
-(defn try-ir-compile-timed [form]
-  "Evaluate form under (binding [*ir-compile* true] ...) with a per-fixture
-   timeout. Returns [result-key time-ms]."
-  (let [thunk (fn [] (try
-                       (binding [*ir-compile* true]
-                         (eval form))
-                       :ok
-                       (catch e (classify-error e))))
+(defn try-lower-go [form]
+  "Run form through the AOT path: build IR + lower to Go (bridge mode).
+   Returns :ok | :fallback-<reason> | error-classification.
+   Does NOT eval/intern — safe to run against the live IR pipeline."
+  (try
+    (binding [ir.passes.pipeline/*target* :go]
+      (let [result (ir.passes.pipeline/compile-form form)]
+        (cond
+          ;; Single-arity success
+          (and (map? result) (= :lowered (:status result)))
+            :ok
+          ;; Single-arity fallback — route reason through classify-error so
+          ;; gogen/lower-go fallback reasons land in the same structural
+          ;; buckets as build-side throws (e.g. :gogen/bad-identifier rather
+          ;; than a long unique 'fallback | ...' string per defn).
+          (and (map? result) (= :fallback (:status result)))
+            (classify-error (or (:reason result) "no-reason"))
+          ;; Multi-arity template: succeed if every arity lowered
+          (and (map? result) (= :multi-fn-template (:kind result)))
+            (if (every? (fn [e] (some? (:fn e))) (:fns result))
+              :ok
+              :multi-arity-partial-fallback)
+          :else :ok)))
+    (catch e (classify-error e))))
+
+(defn trace-one-defn [form]
+  "Drill into one defn: time each pipeline stage and capture the per-pass
+   trace from ir.passes.trace/optimize-fn-traced. Returns a map:
+     {:expand-ms N :build-ms N :optimize-ms N :lower-ms N
+      :pass-trace [...] :lower-status :lowered|:fallback|:throw
+      :error <str when caught>}
+   Stages mirror ir.passes.pipeline/compile-form*. Body forms are
+   macroexpanded the same way before build, so timings match the live
+   AOT pipeline."
+  (try
+    (let [name-sym    (nth form 1)
+          maybe-doc   (nth form 2)
+          has-doc?    (string? maybe-doc)
+          first-form  (if has-doc? (nth form 3) maybe-doc)
+          go-target?  true]
+      (when-not (vector? first-form)
+        (throw "trace-one-defn: multi-arity not supported"))
+      (let [args-vec   first-form
+            raw-body   (drop (if has-doc? 4 3) form)
+            _          (println "  expanding...")
+            t-expand0  (System/nanoTime)
+            body-forms (mapv (fn [b] (ir.passes.pipeline/expand-all b)) raw-body)
+            expanded   (apply list 'defn name-sym args-vec body-forms)
+            t-expand1  (System/nanoTime)
+            _          (println (format "%.1f ms" (double (/ (- t-expand1 t-expand0) 1000000.0))))
+            _          (println "  building IR...")
+            ir-fn      (ir.build/build-fn expanded)
+            t-build1   (System/nanoTime)
+            _          (println (format "%.1f ms" (double (/ (- t-build1 t-expand1) 1000000.0))))
+            _          (println "  optimizing (live, per-pass):")
+            ;; Run the passes inline so we can print each one's wall time as
+            ;; it happens. If a pass loops or quadratics on this defn, the
+            ;; hang is now visibly tied to the named pass instead of silent.
+            ;; Mirrors ir.passes.pipeline/optimize-fn structure.
+            pt         (atom [])
+            _          (let [run-pass! (fn [pass-name iter f-call]
+                                         (let [b (ir.passes.trace/live-inst-count ir-fn)
+                                               t0 (System/nanoTime)
+                                               _  (f-call)
+                                               t1 (System/nanoTime)
+                                               a (ir.passes.trace/live-inst-count ir-fn)
+                                               ms (double (/ (- t1 t0) 1000000.0))]
+                                           (println (format "    iter=%-2d  %-15s  %4d→%-4d  Δ=%+d  %7.2f ms"
+                                                            iter pass-name b a (- b a) ms))
+                                           (swap! pt conj {:pass pass-name :iter iter
+                                                           :before b :after a
+                                                           :delta (- b a) :ms ms})))]
+                         (let [ti1 (atom {})]
+                           (binding [ir.passes.typeinfer/*ti-counters* ti1]
+                             (run-pass! "typeinfer-pre" -1 #(ir.passes.typeinfer/typeinfer ir-fn)))
+                           (let [s @ti1]
+                             (println (format "      typeinfer: %d analyze-block, %d type-join, %d normalize"
+                                              (or (:analyze-block s) 0)
+                                              (or (:type-join s) 0)
+                                              (or (:normalize s) 0)))
+                             (println (format "      worklist: %d inst, %d param, %d changes, %d/%d enqueues"
+                                              (or (:process-inst s) 0)
+                                              (or (:process-param s) 0)
+                                              (or (:type-change s) 0)
+                                              (or (:enqueue s) 0)
+                                              (or (:enqueue-attempt s) 0)))
+                             (println (format "      timing: deps=%d ms, drain=%d ms"
+                                              (or (:deps-ms s) 0)
+                                              (or (:drain-ms s) 0)))))
+                         (loop [iter 0]
+                           (let [before (ir.passes.trace/live-inst-count ir-fn)]
+                             (run-pass! "constfold" iter #(ir.passes.constfold/constfold ir-fn))
+                             (run-pass! "cse"       iter #(ir.passes.cse/cse ir-fn))
+                             (run-pass! "licm"      iter #(ir.passes.licm/licm ir-fn))
+                             (run-pass! "dce"       iter #(ir.passes.dce/dce ir-fn))
+                             (let [after (ir.passes.trace/live-inst-count ir-fn)]
+                               (cond
+                                 (= before after) nil
+                                 (>= iter 15)     (println "    !! 16-iter cap hit")
+                                 :else            (recur (inc iter))))))
+                         (let [ti2 (atom {})]
+                           (binding [ir.passes.typeinfer/*ti-counters* ti2]
+                             (run-pass! "typeinfer-post" -1 #(ir.passes.typeinfer/typeinfer ir-fn)))
+                           (let [s @ti2]
+                             (println (format "      typeinfer: %d analyze-block, %d type-join, %d normalize"
+                                              (or (:analyze-block s) 0)
+                                              (or (:type-join s) 0)
+                                              (or (:normalize s) 0)))
+                             (println (format "      worklist: %d inst, %d param, %d changes, %d/%d enqueues"
+                                              (or (:process-inst s) 0)
+                                              (or (:process-param s) 0)
+                                              (or (:type-change s) 0)
+                                              (or (:enqueue s) 0)
+                                              (or (:enqueue-attempt s) 0)))
+                             (println (format "      timing: deps=%d ms, drain=%d ms"
+                                              (or (:deps-ms s) 0)
+                                              (or (:drain-ms s) 0))))))
+            pt         @pt
+            t-opt1     (System/nanoTime)
+            _          (println (format "  optimize total: %.1f ms (%d pass rows)"
+                                        (double (/ (- t-opt1 t-build1) 1000000.0))
+                                        (count pt)))
+            _          (println "  lowering...")
+            lowered    (binding [ir.passes.pipeline/*target* :go]
+                         (ir.lower-go/lower ir-fn :bridge))
+            t-lower1   (System/nanoTime)
+            _          (println (format "%.1f ms" (double (/ (- t-lower1 t-opt1) 1000000.0))))
+            ms-of      (fn [start end] (double (/ (- end start) 1000000.0)))]
+        {:expand-ms   (ms-of t-expand0 t-expand1)
+         :build-ms    (ms-of t-expand1 t-build1)
+         :optimize-ms (ms-of t-build1 t-opt1)
+         :lower-ms    (ms-of t-opt1 t-lower1)
+         :pass-trace  pt
+         :lower-status (or (:status lowered) :unknown)}))
+    (catch e
+      {:error (str e) :lower-status :throw :pass-trace []})))
+
+(defn print-trace-report [defn-name r]
+  "Pretty-print the result of trace-one-defn."
+  (println (str "\n=== trace: " defn-name " ==="))
+  (if (:error r)
+    (println (str "  ERROR: " (:error r)))
+    (do
+      (println (format "  expand:   %7.2f ms" (:expand-ms r)))
+      (println (format "  build:    %7.2f ms" (:build-ms r)))
+      (println (format "  optimize: %7.2f ms" (:optimize-ms r)))
+      (println (format "  lower:    %7.2f ms  (status=%s)"
+                       (:lower-ms r) (str (:lower-status r))))
+      (let [total (+ (:expand-ms r) (:build-ms r) (:optimize-ms r) (:lower-ms r))]
+        (println (format "  TOTAL:    %7.2f ms" total)))
+      (println "")
+      (when (seq (:pass-trace r))
+        (ir.passes.trace/print-trace (:pass-trace r))))))
+
+(defn try-ir-timed [form]
+  "Per-fixture measurement, dispatched by measurement-mode.
+   :ir-compile  — eval via *ir-compile* (xsofy: measures user-load behavior)
+   :lower-go    — lower IR to Go via :bridge mode (ir-stack: AOT pass rate)
+   Wrapped in per-fixture-timeout-ms; runaway fixtures return :stress/timeout.
+   On timeout, if LG_STRESS_AUTOTRACE=1, re-run with a longer timeout under
+   trace-one-defn to capture per-pass cost and accumulate into pass-totals.
+   Returns [result-key time-ms]."
+  (let [thunk (if (= measurement-mode :lower-go)
+                (fn [] (try-lower-go form))
+                (fn [] (try
+                         (binding [*ir-compile* true]
+                           (eval form))
+                         :ok
+                         (catch e (classify-error e)))))
         t0 (System/nanoTime)
         result (try-with-timeout thunk per-fixture-timeout-ms)
         t1 (System/nanoTime)
         ms (double (/ (- t1 t0) 1000000.0))]
+    (when (and (= result :stress/timeout) autotrace-on?
+               (= measurement-mode :lower-go)
+               (vector? (nth form 2 nil)))  ; single-arity only
+      (let [tr (try-with-timeout (fn [] (trace-one-defn form))
+                                 (* 4 per-fixture-timeout-ms))]
+        (when (map? tr)
+          (accumulate-pass-trace! (nth form 1) (:pass-trace tr))
+          (println (format "  [autotrace] %s: expand=%.0f build=%.0f optimize=%.0f lower=%.0f ms"
+                          (str (nth form 1))
+                          (:expand-ms tr) (:build-ms tr)
+                          (:optimize-ms tr) (:lower-ms tr))))))
     [result ms]))
 
 (defn stats-for [times]
+  "Given a list of times (ms), return {:mean N :median N :p95 N}."
   (if (empty? times)
     {:mean 0 :median 0 :p95 0}
     (let [sorted (sort times)
@@ -167,6 +457,7 @@
       {:mean mean :median median :p95 p95})))
 
 (defn stress-file [path]
+  "Compile each defn in path, tracking times and error buckets."
   (let [parsed (read-all path)
         defns  (vec (defn-forms parsed))]
     (if (nil? parsed)
@@ -174,12 +465,20 @@
       (let [ns-form- (first (filter (fn [f] (and (seq? f) (= (first f) 'ns)))
                                     (rest parsed)))
             ns-sym   (ns-name-from ns-form-)]
+        ;; Switch to the file's namespace so aliases resolve correctly
         (when ns-sym
           (try
             (eval (list 'in-ns (list 'quote ns-sym)))
             (catch e nil)))
+        ;; Load dependencies (but not the file itself — that can fail
+        ;; due to unsupported forms in the Go compiler).
         (require-deps! ns-form-)
-        (let [results (mapv (fn [d] [(nth d 1) (try-ir-compile-timed d)]) defns)
+        (let [results (mapv (fn [d]
+                              (let [name (nth d 1)
+                                    [r ms] (try-ir-timed d)]
+                                (log! path name r ms)
+                                [name [r ms]]))
+                            defns)
               ok     (count (filter (fn [[_ [r _]]] (= :ok r)) results))
               errs   (filter (fn [[_ [r _]]] (not= :ok r)) results)
               times  (map (fn [[_ [_ t]]] t) results)
@@ -189,8 +488,37 @@
            :times times
            :error-buckets error-buckets})))))
 
+(defn trace-mode-run []
+  "Drill into one defn. Loads the corpus file like the main harness so the
+   ns + deps resolve, finds the named defn, and prints stage + per-pass
+   timings."
+  (println (str "=== ir-stress trace: " trace-defn-name
+                " in " (first files) " ===\n"))
+  (let [path (str corpus-dir (first files))
+        parsed (read-all path)]
+    (when (nil? parsed)
+      (println (str "READ-ERROR: " path)) (System/exit 1))
+    (let [ns-form- (first (filter (fn [f] (and (seq? f) (= (first f) 'ns)))
+                                  (rest parsed)))
+          ns-sym   (ns-name-from ns-form-)]
+      (when ns-sym
+        (try (eval (list 'in-ns (list 'quote ns-sym))) (catch e nil)))
+      (require-deps! ns-form-)
+      (let [defns      (vec (defn-forms parsed))
+            target     (first (filter (fn [d] (= (nth d 1) trace-defn-name)) defns))]
+        (when (nil? target)
+          (println (str "no defn named '" trace-defn-name "' in " path))
+          (println "Available defns:")
+          (doseq [d defns] (println (str "  " (nth d 1))))
+          (System/exit 1))
+        (print-trace-report trace-defn-name (trace-one-defn target))))))
+
 (defn run []
-  (println (str "=== IR-pipeline stress test — target: " stress-target " ===\n"))
+  (when (= measurement-mode :trace)
+    (trace-mode-run)
+    (System/exit 0))
+  (println (str "=== IR-pipeline stress test — target: " stress-target
+                " — mode: " measurement-mode " ===\n"))
 
   ;; Load all corpus modules upfront so cross-file refs resolve
   (print "Loading corpus dependencies... ")
@@ -204,7 +532,7 @@
           (when ns-sym
             (eval (list 'in-ns (list 'quote ns-sym))))
           (require-deps! ns-form-))
-        (catch e nil)))
+        (catch e nil)))  ;; Silently skip load errors; we'll catch them per-fixture
     (let [t1 (System/nanoTime)
           ms (double (/ (- t1 t0) 1000000.0))]
       (println (format "done in %.1f ms\n" ms))))
@@ -216,35 +544,45 @@
         t1 (System/nanoTime)
         cold-ms (double (/ (- t1 t0) 1000000.0))]
 
-    ;; WARM pass: run again
-    (print (format "done in %.0f ms\nWarm pass (second run)... " cold-ms))
-    (let [t0 (System/nanoTime)
-          results2 (mapv (fn [f] (stress-file (str corpus-dir f))) files)
+    ;; WARM pass: run again (unless LG_STRESS_PASSES=1)
+    (let [skip-warm? (<= stress-passes 1)
+          _ (if skip-warm?
+              (print (format "done in %.0f ms\n" cold-ms))
+              (print (format "done in %.0f ms\nWarm pass (second run)... " cold-ms)))
+          t0 (System/nanoTime)
+          results2 (if skip-warm?
+                     []
+                     (mapv (fn [f] (stress-file (str corpus-dir f))) files))
           t1 (System/nanoTime)
           warm-ms (double (/ (- t1 t0) 1000000.0))]
 
-      (println (format "done in %.0f ms\n" warm-ms))
+      (when-not skip-warm?
+        (println (format "done in %.0f ms\n" warm-ms)))
 
       ;; Aggregate both passes
       (let [all-results (concat results results2)
             total   (reduce + 0 (map (fn [r] (or (:total r) 0)) all-results))
             oks     (reduce + 0 (map (fn [r] (or (:ok r) 0)) all-results))
+            all-times (mapcat (fn [r] (or (:times r) [])) all-results)
             all-errs (reduce (fn [acc r]
                               (merge-with + acc (or (:error-buckets r) {})))
                             {}
                             all-results)]
 
+        ;; Per-file summary
         (println "=== Per-file results (cold pass) ===")
         (doseq [r results]
           (if (:read-error r)
-            (println (str (:file r) ": READ-ERROR"))
+            (println (str (:file r) ": READ-ERROR (xsofy not checked out?)"))
             (println (str (:file r) ": " (:ok r) "/" (:total r) " ok"))))
 
+        ;; Overall stats
         (println (str "\n=== Summary (both passes combined) ==="))
         (println (str "Total fixtures: " total))
         (println (str "Passed: " oks " (" (int (/ (* oks 100) (max 1 total))) "%)"))
         (println (str "Failed: " (- total oks)))
 
+        ;; Timing stats
         (let [cold-stats (stats-for (mapcat (fn [r] (or (:times r) [])) results))
               warm-stats (stats-for (mapcat (fn [r] (or (:times r) [])) results2))]
           (println (str "\n=== Timing Statistics ==="))
@@ -253,8 +591,27 @@
           (println (format "Warm pass (second run): mean=%.2f ms  median=%.2f ms  p95=%.2f ms"
                           (:mean warm-stats) (:median warm-stats) (:p95 warm-stats))))
 
+        ;; Error buckets
         (println (str "\n=== Failure Buckets ==="))
         (doseq [[bucket count] (sort-by val (fn [a b] (compare b a)) all-errs)]
-          (println (format "  %-40s %3d" (str bucket) count)))))))
+          (println (format "  %-50s %3d" (str bucket) count)))
+
+        ;; Top-K pass cost summary (populated by auto-trace)
+        (when (and topk-on? (seq @pass-totals))
+          (println "\n=== Top passes by cumulative ms (auto-trace sample) ===")
+          (let [sorted (sort-by val (fn [a b] (compare b a)) @pass-totals)]
+            (doseq [[pass total-ms] sorted]
+              (println (format "  %-20s %8.1f ms" pass total-ms))))
+          (println "\n=== Worst-pass per traced defn ===")
+          (doseq [r (reverse (sort-by :worst-ms @autotrace-rows))]
+            (println (format "  %-35s worst=%-15s %6.1f ms  total=%6.1f ms"
+                            (str (:defn r)) (str (:worst-pass r))
+                            (:worst-ms r) (:total-ms r)))))
+
+        ;; Per-defn analysis log
+        (when log-path
+          (spit log-path (apply str @log-entries))
+          (println (str "\nPer-defn log: " log-path
+                        " (" (count @log-entries) " rows)")))))))
 
 (run)

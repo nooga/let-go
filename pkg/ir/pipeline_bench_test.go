@@ -342,7 +342,7 @@ func TestPipelineRoundTrip_ProducesExecutableChunks(t *testing.T) {
 			}
 			defResult := run(defChunk)
 			lispResult := run(lispChunk)
-			if defResult.String() != lispResult.String() {
+			if !vm.ValueEquals(defResult, lispResult) {
 				t.Errorf("results differ: default=%s lisp=%s", defResult, lispResult)
 			}
 		})

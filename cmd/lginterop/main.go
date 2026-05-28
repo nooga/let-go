@@ -462,7 +462,6 @@ func serializeMethods(named *types.Named) string {
 	b.WriteString("[")
 	first := true
 	for m := range named.Methods() {
-		m := m
 		if !m.Exported() {
 			continue
 		}
