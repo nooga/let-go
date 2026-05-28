@@ -441,11 +441,21 @@
    (lazy-seq
      (let [s (seq xs)]
        (when s
-         (let [x (first s)
-               r (next s)]
-           (if (f x)
-             (cons x (filter f r))
-             (filter f r))))))))
+         (if (chunked-seq? s)
+           (let [c (chunk-first s)
+                 size (count c)
+                 b (chunk-buffer size)]
+             (loop [i 0]
+               (when (< i size)
+                 (let [v (nth c i)]
+                   (when (f v) (chunk-append b v)))
+                 (recur (inc i))))
+             (chunk-cons (chunk b) (filter f (chunk-rest s))))
+           (let [x (first s)
+                 r (next s)]
+             (if (f x)
+               (cons x (filter f r))
+               (filter f r)))))))))
 
 (defmacro if-let
   ([bindings then]
@@ -486,9 +496,22 @@
    (lazy-seq
      (when (pos? n)
        (when-let [s (seq coll)]
-         (cons (first s)
-               (when (> n 1)
-                 (take (dec n) (rest s)))))))))
+         (if (chunked-seq? s)
+           (let [c (chunk-first s)
+                 size (count c)]
+             (if (<= size n)
+               ;; whole chunk fits in the remaining quota — emit it and
+               ;; recurse with the reduced quota on chunked rest.
+               (chunk-cons c (take (- n size) (chunk-rest s)))
+               ;; partial: the chunk is larger than the quota. Fall back
+               ;; to element-wise for the tail; this only spans at most
+               ;; one chunk (≤32 cons cells) before quota runs out.
+               (cons (first s)
+                     (when (> n 1)
+                       (take (dec n) (rest s))))))
+           (cons (first s)
+                 (when (> n 1)
+                   (take (dec n) (rest s))))))))))
 
 (defn drop
   ([n]
@@ -1217,10 +1240,20 @@
   ([f coll]
    (lazy-seq
      (when-let [s (seq coll)]
-       (let [x (f (first s))]
-         (if (nil? x)
-           (keep f (rest s))
-           (cons x (keep f (rest s)))))))))
+       (if (chunked-seq? s)
+         (let [c (chunk-first s)
+               size (count c)
+               b (chunk-buffer size)]
+           (loop [i 0]
+             (when (< i size)
+               (let [v (f (nth c i))]
+                 (when-not (nil? v) (chunk-append b v)))
+               (recur (inc i))))
+           (chunk-cons (chunk b) (keep f (chunk-rest s))))
+         (let [x (f (first s))]
+           (if (nil? x)
+             (keep f (rest s))
+             (cons x (keep f (rest s))))))))))
 
 (defn- keepi [f idx coll]
   (lazy-seq
@@ -1988,7 +2021,12 @@
 (defn dorun
   ([coll]
    (when-let [s (seq coll)]
-     (recur (next s))))
+     ;; Chunked walk: chunk-next advances by ~32 elements per step,
+     ;; forcing one LazySeq thunk per chunk instead of per element. For
+     ;; non-chunked sources, fall back to element-wise next.
+     (if (chunked-seq? s)
+       (recur (chunk-next s))
+       (recur (next s)))))
   ([n coll]
    (when (and (pos? n) (seq coll))
      (recur (dec n) (next coll)))))
@@ -2126,12 +2164,31 @@
 (defn vary-meta [obj f & args]
   (with-meta obj (apply f (meta obj) args)))
 
-;; pmap — parallel map using futures
+;; pmap — parallel map using futures, with a real sliding-window of
+;; in-flight work.
+;;
+;; Mechanics: `rets` is a lazy seq of futures over coll. `(drop n rets)`
+;; lazily forces realization of `rets` n elements ahead of the deref
+;; head, so at any moment up to n futures are in flight. When `coll` is
+;; a chunked source (range, persistent vector) the chunked fast path in
+;; map realizes futures in bursts of 32, which is exactly what makes
+;; pmap profitable on small fast f — without chunking the bookkeeping
+;; cost per element drowns out the parallelism.
+;;
+;; Default window: 32 (one chunk on most chunked sources). Override via
+;; the 3-arity (pmap n f coll) for fine control.
 (defn pmap
   ([f coll]
-   (let [n (+ 2 (count (take 32 coll))) ;; parallelism window
-         rets (map #(future (f %)) coll)]
-     (map deref rets)))
+   (pmap 32 f coll))
+  ([n f coll]
+   (let [rets (map #(future (f %)) coll)
+         step (fn step [vs fs]
+                (lazy-seq
+                  (if-let [s (seq fs)]
+                    (cons (deref (first vs))
+                          (step (rest vs) (rest s)))
+                    (map deref vs))))]
+     (step rets (drop n rets))))
   ([f coll & colls]
    (let [step (fn step [cs]
                 (lazy-seq

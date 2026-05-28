@@ -869,6 +869,26 @@ func mapLazy1(f vm.Fn, s vm.Seq) vm.Seq {
 		if head == nil {
 			return vm.EmptyList, nil
 		}
+		// Chunked fast path: if the input exposes a chunk, apply f across
+		// the whole chunk into a ChunkBuffer and emit a ChunkedCons. This
+		// preserves chunked-ness through map so pmap (and any other
+		// downstream chunk-aware consumer) sees bursts of work rather
+		// than element-at-a-time realization.
+		if cs, ok := vm.AsChunkedSeq(head); ok {
+			c := cs.ChunkedFirst()
+			n := c.ChunkCount()
+			buf := vm.NewChunkBuffer(n)
+			for i := 0; i < n; i++ {
+				v, err := f.Invoke([]vm.Value{c.Nth(i)})
+				if err != nil {
+					return vm.NIL, err
+				}
+				buf.Append(v)
+			}
+			more := cs.ChunkedNext()
+			tail := mapLazy1(f, more)
+			return vm.ConsChunk(buf.Chunk(), tail), nil
+		}
 		v, err := f.Invoke([]vm.Value{head.First()})
 		if err != nil {
 			return vm.NIL, err
@@ -881,6 +901,22 @@ func mapLazy1(f vm.Fn, s vm.Seq) vm.Seq {
 		return vm.NewCons(v, tail), nil
 	})
 	return vm.NewLazySeq(thunk.(vm.Fn))
+}
+
+// chunkedHeads returns the chunked view of every head if and only if all of
+// them expose one. Used to decide whether the multi-coll map path can take
+// the chunked fast path; falls back to element-wise when any input is not
+// chunked.
+func chunkedHeads(heads []vm.Seq) ([]vm.IChunkedSeq, bool) {
+	out := make([]vm.IChunkedSeq, len(heads))
+	for i, h := range heads {
+		cs, ok := vm.AsChunkedSeq(h)
+		if !ok {
+			return nil, false
+		}
+		out[i] = cs
+	}
+	return out, true
 }
 
 func mapLazyN(f vm.Fn, seqs []vm.Seq) vm.Seq {
@@ -901,6 +937,49 @@ func mapLazyN(f vm.Fn, seqs []vm.Seq) vm.Seq {
 				return vm.EmptyList, nil
 			}
 			heads[i] = h
+		}
+		// Chunked fast path: requires every input to be chunked. Bulk-apply
+		// over min(ChunkCount()) elements; the next batch picks up where
+		// each input left off via ChunkedMore + DropFirst.
+		if css, ok := chunkedHeads(heads); ok {
+			chunks := make([]vm.IChunk, len(css))
+			minN := -1
+			for i, cs := range css {
+				chunks[i] = cs.ChunkedFirst()
+				if minN < 0 || chunks[i].ChunkCount() < minN {
+					minN = chunks[i].ChunkCount()
+				}
+			}
+			buf := vm.NewChunkBuffer(minN)
+			fargs := make([]vm.Value, len(chunks))
+			for j := 0; j < minN; j++ {
+				for i, c := range chunks {
+					fargs[i] = c.Nth(j)
+				}
+				v, err := f.Invoke(fargs)
+				if err != nil {
+					return vm.NIL, err
+				}
+				buf.Append(v)
+			}
+			// Advance each input by minN. If a chunk had more than minN
+			// elements remaining, leave the residual as a ChunkedCons of
+			// (chunk.dropN, ChunkedMore); otherwise just ChunkedMore.
+			nexts := make([]vm.Seq, len(css))
+			for i, cs := range css {
+				c := chunks[i]
+				if c.ChunkCount() > minN {
+					d := c
+					for k := 0; k < minN; k++ {
+						d = d.DropFirst()
+					}
+					nexts[i] = vm.ConsChunk(d, cs.ChunkedMore())
+				} else {
+					nexts[i] = cs.ChunkedNext()
+				}
+			}
+			tail := mapLazyN(f, nexts)
+			return vm.ConsChunk(buf.Chunk(), tail), nil
 		}
 		fargs := make([]vm.Value, len(heads))
 		nexts := make([]vm.Seq, len(heads))
@@ -1751,6 +1830,137 @@ func installLangNS() {
 		return vm.NewArrayVector(ret), nil
 	})
 
+	// ---- Chunked-seq primitives ------------------------------------------
+	//
+	// chunk-first / chunk-rest / chunk-next dispatch on IChunkedSeq (via
+	// AsChunkedSeq, so they resolve through LazySeq wrappers). chunk-cons
+	// builds a ChunkedCons; chunk-buffer / chunk-append / chunk are the
+	// mutable builder API. chunked-seq? answers the type predicate.
+	asChunked := func(v vm.Value, op string) (vm.IChunkedSeq, error) {
+		s, err := seqOf(v)
+		if err != nil {
+			return nil, fmt.Errorf("%s: not a sequence", op)
+		}
+		cs, ok := vm.AsChunkedSeq(s)
+		if !ok {
+			return nil, fmt.Errorf("%s: not a chunked seq", op)
+		}
+		return cs, nil
+	}
+
+	chunkFirst, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("chunk-first: wrong number of arguments %d", len(vs))
+		}
+		cs, err := asChunked(vs[0], "chunk-first")
+		if err != nil {
+			return vm.NIL, err
+		}
+		return cs.ChunkedFirst().(vm.Value), nil
+	})
+
+	chunkRest, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("chunk-rest: wrong number of arguments %d", len(vs))
+		}
+		cs, err := asChunked(vs[0], "chunk-rest")
+		if err != nil {
+			return vm.NIL, err
+		}
+		m := cs.ChunkedMore()
+		if m == nil {
+			return vm.EmptyList, nil
+		}
+		return m.(vm.Value), nil
+	})
+
+	chunkNext, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("chunk-next: wrong number of arguments %d", len(vs))
+		}
+		cs, err := asChunked(vs[0], "chunk-next")
+		if err != nil {
+			return vm.NIL, err
+		}
+		n := cs.ChunkedNext()
+		if n == nil {
+			return vm.NIL, nil
+		}
+		return n.(vm.Value), nil
+	})
+
+	chunkConsF, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("chunk-cons: wrong number of arguments %d", len(vs))
+		}
+		chunk, ok := vs[0].(vm.IChunk)
+		if !ok {
+			return vm.NIL, fmt.Errorf("chunk-cons: first arg must be a chunk")
+		}
+		var tail vm.Seq
+		if vs[1] != vm.NIL {
+			s, err := seqOf(vs[1])
+			if err != nil {
+				return vm.NIL, fmt.Errorf("chunk-cons: second arg must be a seq or nil")
+			}
+			tail = s
+		}
+		out := vm.ConsChunk(chunk, tail)
+		if out == nil {
+			return vm.EmptyList, nil
+		}
+		return out.(vm.Value), nil
+	})
+
+	chunkedSeqP, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("chunked-seq?: wrong number of arguments %d", len(vs))
+		}
+		if vs[0] == vm.NIL {
+			return vm.FALSE, nil
+		}
+		s, err := seqOf(vs[0])
+		if err != nil || s == nil {
+			return vm.FALSE, nil
+		}
+		_, ok := vm.AsChunkedSeq(s)
+		return vm.Boolean(ok), nil
+	})
+
+	chunkBufferF, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("chunk-buffer: wrong number of arguments %d", len(vs))
+		}
+		n, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("chunk-buffer: arg must be Int")
+		}
+		return vm.NewChunkBuffer(int(n)), nil
+	})
+
+	chunkAppendF, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("chunk-append: wrong number of arguments %d", len(vs))
+		}
+		b, ok := vs[0].(*vm.ChunkBuffer)
+		if !ok {
+			return vm.NIL, fmt.Errorf("chunk-append: first arg must be a chunk-buffer")
+		}
+		b.Append(vs[1])
+		return b, nil
+	})
+
+	chunkF, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("chunk: wrong number of arguments %d", len(vs))
+		}
+		b, ok := vs[0].(*vm.ChunkBuffer)
+		if !ok {
+			return vm.NIL, fmt.Errorf("chunk: arg must be a chunk-buffer")
+		}
+		return b.Chunk().(vm.Value), nil
+	})
+
 	rangef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			// Infinite range: (range) -> lazy seq 0, 1, 2, ...
@@ -2436,6 +2646,25 @@ func installLangNS() {
 			seq = seq.Next()
 		}
 		for seq != nil {
+			// Chunked fast path: when the source exposes a chunk, walk via
+			// Nth in a tight inner loop and advance one chunk at a time. This
+			// avoids the per-element LazySeq/Cons allocation churn that
+			// dominates plain Next()-based reduce on chunked sources.
+			if cs, ok := vm.AsChunkedSeq(seq); ok {
+				c := cs.ChunkedFirst()
+				n := c.ChunkCount()
+				for i := 0; i < n; i++ {
+					acc, err = mfn.Invoke([]vm.Value{acc, c.Nth(i)})
+					if err != nil {
+						return vm.NIL, err
+					}
+					if r, ok := acc.(*vm.Reduced); ok {
+						return r.Deref(), nil
+					}
+				}
+				seq = cs.ChunkedNext()
+				continue
+			}
 			acc, err = mfn.Invoke([]vm.Value{acc, seq.First()})
 			if err != nil {
 				return vm.NIL, err
@@ -5349,6 +5578,14 @@ func installLangNS() {
 
 	ns.Def("map*", mapf)
 	ns.Def("mapv", mapv)
+	ns.Def("chunk-first", chunkFirst)
+	ns.Def("chunk-rest", chunkRest)
+	ns.Def("chunk-next", chunkNext)
+	ns.Def("chunk-cons", chunkConsF)
+	ns.Def("chunked-seq?", chunkedSeqP)
+	ns.Def("chunk-buffer", chunkBufferF)
+	ns.Def("chunk-append", chunkAppendF)
+	ns.Def("chunk", chunkF)
 	ns.Def("reduce", reduce)
 	ns.Def("concat*", concat)
 	ns.Def("some", some)

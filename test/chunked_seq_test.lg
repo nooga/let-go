@@ -1,0 +1,85 @@
+(ns test.chunked-seq
+  (:require [test :refer :all]))
+
+;; ============================================================================
+;; chunked-seq?
+;; ============================================================================
+
+(deftest chunked-seq?-on-chunked-sources
+  (testing "(range n) is a chunked seq"
+    (is (= true (chunked-seq? (range 100))))
+    (is (= true (chunked-seq? (range 5))))))
+
+(deftest chunked-seq?-on-non-chunked-sources
+  (testing "lists and nil are not chunked"
+    (is (= false (chunked-seq? '(1 2 3))))
+    (is (= false (chunked-seq? nil)))
+    (is (= false (chunked-seq? "string")))))
+
+;; ============================================================================
+;; chunk-first / chunk-rest / chunk-next
+;; ============================================================================
+
+(deftest chunk-first-on-range
+  (testing "chunk-first returns the first chunk"
+    (let [c (chunk-first (range 10))]
+      (is (= 10 (count c))))))
+
+(deftest chunk-first-respects-32-cap
+  (testing "chunk-first over large range caps at 32"
+    (let [c (chunk-first (range 100))]
+      (is (= 32 (count c))))))
+
+(deftest chunk-next-walks-chunks
+  (testing "chunk-next moves to the start of the next chunk"
+    (let [s (range 100)
+          next-s (chunk-next s)
+          c2 (chunk-first next-s)]
+      (is (= 32 (count c2))))))
+
+(deftest chunk-next-nil-at-end
+  (testing "chunk-next on a single-chunk source returns nil"
+    (is (nil? (chunk-next (range 10))))))
+
+(deftest chunk-rest-empty-list-at-end
+  (testing "chunk-rest on a single-chunk source returns ()"
+    (is (= () (chunk-rest (range 10))))))
+
+;; ============================================================================
+;; chunk-buffer / chunk-append / chunk
+;; ============================================================================
+
+(deftest chunk-buffer-roundtrip
+  (testing "chunk-buffer + chunk-append + chunk produces a usable chunk"
+    (let [b (chunk-buffer 4)]
+      (chunk-append b 1)
+      (chunk-append b 2)
+      (chunk-append b 3)
+      (let [c (chunk b)]
+        (is (= 3 (count c)))))))
+
+(deftest chunk-buffer-resets-after-chunk
+  (testing "after (chunk b), b is reusable as a fresh buffer"
+    (let [b (chunk-buffer 2)]
+      (chunk-append b :a)
+      (let [c1 (chunk b)]
+        (chunk-append b :b)
+        (let [c2 (chunk b)]
+          (is (= 1 (count c1)))
+          (is (= 1 (count c2))))))))
+
+;; ============================================================================
+;; chunk-cons
+;; ============================================================================
+
+(deftest chunk-cons-prepends-chunk-to-seq
+  (testing "chunk-cons builds a chunked-cons that walks chunk then tail"
+    (let [c (chunk-first (range 3))
+          cc (chunk-cons c '(:a :b))]
+      (is (= '(0 1 2 :a :b) cc)))))
+
+(deftest chunk-cons-nil-tail
+  (testing "chunk-cons with nil tail yields just the chunk"
+    (let [c (chunk-first (range 3))
+          cc (chunk-cons c nil)]
+      (is (= '(0 1 2) cc)))))

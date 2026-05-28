@@ -23,12 +23,15 @@
       (is (= 3 @a))
       (is (nil? (agent-error a))))))
 
-(deftest chunked-seq-apis-not-implemented
-  (testing "chunked sequence APIs are not exposed"
-    (is (unsupported? "(chunked-seq? (map inc [1 2 3]))"))
-    (is (unsupported? "(chunk-first (seq [1 2 3]))"))
-    (is (unsupported? "(chunk-rest (seq [1 2 3]))"))
-    (is (unsupported? "(chunk-next (seq [1 2 3]))"))))
+(deftest chunked-seq-apis-implemented
+  (testing "chunked sequence APIs are now exposed"
+    ;; Range and PersistentVector seqs are chunked; ArrayVector seqs and
+    ;; cons-chains are not. The primitives dispatch on IChunkedSeq.
+    (is (= true (chunked-seq? (range 100))))
+    (is (= false (chunked-seq? '(1 2 3))))
+    (is (= 32 (count (chunk-first (range 100)))))
+    (is (= () (chunk-rest (range 5))))
+    (is (nil? (chunk-next (range 5))))))
 
 (deftest custom-tagged-literal-readers-not-implemented
   (testing "built-in tags work, but custom reader hooks do not"

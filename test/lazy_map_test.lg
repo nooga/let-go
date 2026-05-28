@@ -1,48 +1,65 @@
 (ns test.lazymap
   (:require [test :refer :all]))
 
-;; Tests for map/mapcat laziness regressions discovered while building
-;; a QuickCheck-style property library in let-go. Two distinct bugs:
+;; Tests for map/mapcat laziness — chunked-seq aware (matches Clojure).
 ;;
-;;   A. map* has an eager fast path for counted collections of ≤32
-;;      elements. This converts `(map f [1 2 3])` into a fully realized
-;;      PersistentList, breaking any consumer that relies on shrink
-;;      laziness (rose trees) or short-circuit semantics.
+;; Laziness contract:
+;;   - Chunked inputs (Range, PersistentVector seq) realize one whole
+;;     chunk per pull (chunk size ≤32). `(first (map f (range 5)))`
+;;     realizes all 5; `(take 2 (map f (range 100)))` realizes 32.
+;;   - Non-chunked inputs (Cons chains, ArrayVector literals, plain
+;;     LazySeq) realize one element per pull.
 ;;
-;;   B. mapLazy1/mapLazyN don't force their input LazySeq before
-;;      wrapping First() in a thunk. An empty `(lazy-seq nil)` becomes
-;;      a non-empty LazySeq whose realization calls f(nil).
+;; Historical bugs guarded against:
+;;   A. map* used to have an eager fast path for counted collections of
+;;      ≤32 elements; that's now properly lazy (chunk-granular for
+;;      chunked sources, element-granular otherwise).
+;;   B. mapLazy1/mapLazyN must force their input LazySeq before reading
+;;      First(). An empty `(lazy-seq nil)` must not become a non-empty
+;;      LazySeq whose realization calls f(nil).
 
 ;; ============================================================================
 ;; A. Laziness — f must not run until the consumer pulls values
 ;; ============================================================================
 
 (deftest map-is-lazy-for-small-vector
-  (testing "map over a 3-element vector does not realize before first"
+  (testing "map over a 3-element ArrayVector literal is element-lazy"
     (let [realized (atom 0)
           s (map (fn [x] (swap! realized inc) (* x 2)) [1 2 3])]
       (is (= 0 @realized)
           "map should be lazy: nothing realized before access")
       (is (= 2 (first s)))
       (is (= 1 @realized)
-          "first should realize exactly one element"))))
+          "ArrayVector is non-chunked, so first realizes exactly one element"))))
 
-(deftest map-is-lazy-for-small-range
-  (testing "map over (range 5) realizes lazily"
+(deftest map-realizes-one-chunk-for-small-range
+  (testing "map over (range 5) realizes one chunk (all 5) per pull"
+    ;; Range is chunked. The whole range fits in one chunk (size 5),
+    ;; so (first s) realizes all 5 elements — matches Clojure.
     (let [realized (atom 0)
           s (map (fn [x] (swap! realized inc) x) (range 5))]
       (is (= 0 @realized) "no realization before pull")
       (first s)
-      (is (= 1 @realized) "one realization after one pull"))))
+      (is (= 5 @realized)
+          "chunked range: one pull realizes the whole chunk"))))
 
-(deftest map-short-circuits-via-take
-  (testing "take 2 of map over 10-vec only realizes 2"
+(deftest map-short-circuits-at-chunk-boundary-via-take
+  (testing "take 2 of map over a chunked source realizes one chunk"
+    ;; Chunked-seq semantics: short-circuit happens at chunk boundary,
+    ;; not element boundary. Range of 100 → first chunk of 32.
+    (let [realized (atom 0)
+          s (take 2 (map (fn [x] (swap! realized inc) x) (range 100)))]
+      (doall s)
+      (is (= 32 @realized)
+          "take 2 over chunked source realizes the first whole chunk (32)")))
+  (testing "take 2 of map over a non-chunked source still realizes 2"
+    ;; ArrayVector literal is non-chunked → element-granular laziness.
     (let [realized (atom 0)
           s (take 2 (map (fn [x] (swap! realized inc) x)
                          [0 1 2 3 4 5 6 7 8 9]))]
       (doall s)
       (is (= 2 @realized)
-          "take 2 must short-circuit; eager fast path realizes all 10"))))
+          "ArrayVector source preserves element-wise short-circuit"))))
 
 (deftest map-multi-coll-is-lazy
   (testing "two-arg map is lazy on small counted inputs"
