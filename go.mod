@@ -5,7 +5,10 @@ go 1.26
 require (
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
 	github.com/stretchr/testify v1.8.4
+	github.com/zeebo/xxh3 v1.1.0
 )
+
+require github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 
 require (
 	github.com/chzyer/test v1.0.0 // indirect

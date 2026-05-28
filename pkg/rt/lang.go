@@ -108,6 +108,7 @@ func init() {
 	installSyscallNS()
 	installUnixNS()
 	installSystemNS()
+	installHashNS()
 	installGogenNS()
 	installDisasmNS()
 	installProfileNS()

@@ -21,11 +21,29 @@ func (t *theIntType) Unbox() any      { return reflect.TypeFor[*theIntType]() }
 func (t *theIntType) Name() string { return "let-go.lang.Int" }
 
 func (t *theIntType) Box(bare any) (Value, error) {
-	raw, ok := bare.(int)
-	if !ok {
-		return IntType.zero, NewTypeError(bare, "can't be boxed as", t)
+	switch v := bare.(type) {
+	case int:
+		return Int(v), nil
+	case int8:
+		return Int(v), nil
+	case int16:
+		return Int(v), nil
+	case int32:
+		return Int(v), nil
+	case int64:
+		return Int(v), nil
+	case uint:
+		return Int(v), nil
+	case uint8:
+		return Int(v), nil
+	case uint16:
+		return Int(v), nil
+	case uint32:
+		return Int(v), nil
+	case uint64:
+		return Int(v), nil
 	}
-	return Int(raw), nil
+	return IntType.zero, NewTypeError(bare, "can't be boxed as", t)
 }
 
 // IntType is the type of IntValues
