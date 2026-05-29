@@ -117,7 +117,35 @@
           (= head 'var)   #{}
           (= head 'set!)  (let [[_ _sym val] form]
                             (captures-of val known-locals))
-          (= head 'fn*)   #{}
+          (= head 'fn*)
+            ;; fn* captures its free vars via push-closed in the current
+            ;; block. If those captured InstIds live in a different block
+            ;; (e.g. the entry block's LoadArgs), the closure-emit creates
+            ;; a cross-block direct-ref. Including the captures here makes
+            ;; build-if/build-loop thread them through block-args so the
+            ;; push-closed refs the local block-arg instead. Shadowing
+            ;; logic mirrors free-vars's fn* case.
+            (let [[_ maybe-name & raw-rest] form
+                  has-name?  (symbol? maybe-name)
+                  name-sym   (if has-name? maybe-name nil)
+                  rest-forms (if has-name? raw-rest (cons maybe-name raw-rest))
+                  multi?     (and (seq rest-forms) (list? (first rest-forms)))
+                  shadow-for (fn [args-vec]
+                               (if name-sym
+                                 (conj (into #{} args-vec) name-sym)
+                                 (into #{} args-vec)))]
+              (if-not multi?
+                (let [args-vec   (first rest-forms)
+                      body       (rest rest-forms)
+                      inner-known (difference known-locals (shadow-for args-vec))]
+                  (into #{} (mapcat #(captures-of % inner-known) body)))
+                (into #{} (mapcat (fn [arity-form]
+                                    (let [args-vec    (first arity-form)
+                                          body        (rest arity-form)
+                                          inner-known (difference known-locals
+                                                                  (shadow-for args-vec))]
+                                      (mapcat #(captures-of % inner-known) body)))
+                                  rest-forms))))
           (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
             (let [[_ bindings & body] form
                   pairs    (partition 2 bindings)
