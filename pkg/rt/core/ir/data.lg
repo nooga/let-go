@@ -51,6 +51,31 @@
 ;; below so existing callers keep working with the bare `ir/op` etc.
 (ns ir.data)
 
+;; --- file ordering invariant -----------------------------------------
+;;
+;; let-go's compiler resolves names top-to-bottom within a file. Each
+;; defn must come AFTER its callees. Sections are arranged in
+;; dependency order; when you add a defn, put it in the section it
+;; belongs to, not the one your editor's cursor happens to be in.
+;;
+;;   1. construction primitives    (new-fn, new-branch-target, …)
+;;   2. read accessors             (fn-name, op, refs, blocks, …)
+;;   3. bitset shim                (bs-empty, bs-add, bs-remove, …)
+;;   4. uses cache invalidation    (invalidate-uses-state!, invalidate-uses!)
+;;   5. construction-time mutators (add-block, add-inst, …)
+;;   6. pass-time mutators         (replace-op!, set-refs!, remove-inst!,
+;;                                  clone-inst, …)
+;;   7. uses cache build           (accumulate-uses-*!, compute-uses, uses,
+;;                                  uses-empty?, uses-for-each, uses-contains?)
+;;   8. consults-uses mutators     (replace-all-uses! — needs both the cache
+;;                                  reader AND the bitset shim)
+;;   9. export into `ir`           (interns into the live ir namespace)
+;;
+;; Section 6 mutators must call into invalidate from section 4 OR patch
+;; the cache directly (which requires section 3); Section 8 needs
+;; the read API from section 7. If a future toposort tool ever lands,
+;; it should re-emit the file in this order.
+
 ;; --- construction ----------------------------------------------------
 
 (defn new-fn [name arity variadic?]
