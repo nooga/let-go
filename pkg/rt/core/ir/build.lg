@@ -115,6 +115,7 @@
         (cond
           (= head 'quote) #{}
           (= head 'var)   #{}
+          (= head 'set!)  (captures-of (nth form 2) known-locals)
           (= head 'fn*)   #{}
           (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
             (let [bindings (nth form 1)
@@ -144,7 +145,7 @@
 ;; --- form dispatch -------------------------------------------------------
 
 (declare build-list build-symbol build-if build-let build-do build-quote
-         build-var build-loop build-recur build-fn*
+         build-var build-set! build-loop build-recur build-fn*
          build-vector build-map build-call)
 
 ;; Sentinel returned by recur / any form whose current-block is already
@@ -211,6 +212,7 @@
         (cond
           (= head 'quote) #{}
           (= head 'var)   #{}
+          (= head 'set!)  (free-vars (nth form 2) bound)
           (= head 'fn*)
             (let [maybe-name (nth form 1)
                   has-name?  (symbol? maybe-name)
@@ -390,6 +392,7 @@
       (= head 'do)    (build-do form ctx)
       (= head 'quote) (build-quote form ctx)
       (= head 'var)   (build-var form ctx)
+      (= head 'set!)  (build-set! form ctx)
       (= head 'loop)  (build-loop form ctx)
       (= head 'loop*) (build-loop form ctx)
       (= head 'recur) (build-recur form ctx)
@@ -419,6 +422,20 @@
     (if (nil? v)
       (throw (str "ir/build: can't resolve var " sym))
       (add-inst! ctx (ctx-block ctx) :const [] v))))
+
+(defn build-set! [form ctx]
+  "(set! sym val) resolves sym to a *vm.Var at build time and emits a
+   :set-var Inst whose refs are [var-inst val-inst]. Matches bytecode
+   setBangCompiler: LOAD_CONST(var) → compile val → OP_SET_VAR. Result
+   is the Var itself (SET_VAR pushes the var back)."
+  (let [sym (nth form 1)
+        val (nth form 2)
+        v   (resolve sym)]
+    (when (nil? v)
+      (throw (str "ir/build: set! can't resolve " sym)))
+    (let [var-nid (add-inst! ctx (ctx-block ctx) :const [] v)
+          val-nid (build-form val ctx)]
+      (add-inst! ctx (ctx-block ctx) :set-var [var-nid val-nid] nil))))
 
 (defn build-vector [form ctx]
   "[a b c] → (vector a b c). Empty vector → Const literal.

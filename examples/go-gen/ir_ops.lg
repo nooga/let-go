@@ -54,7 +54,7 @@
     ["BlockArg"   0  1 true  false nil                false "BlockArg"   "block parameter"]
 
     ;; --- Side-effecting ---
-    ["SetVar"     1  1 false false nil                false "SetVar"     ".Refs[0] = value; .Aux = *vm.Var; pushes value back"]
+    ["SetVar"     2  1 false false OP_SET_VAR         false "SetVar"     ".Refs[0] = var (Const aux=*vm.Var), .Refs[1] = value; pushes var back"]
     ["Call"      -1  1 false false OP_INVOKE          false "Call"       ".Refs[0] = fn, .Refs[1:] = args; .Aux = arity int"]
     ["TailCall"  -1  1 false true  OP_TAIL_CALL       false "TailCall"   "tail call ends a block"]
 

@@ -337,6 +337,12 @@
         (do (emit-with-arg! l nid :call (int aux))
             (bump-stack-sp! l (- (int aux))))  ; pops fn+args, pushes result
 
+      :set-var
+        ;; Refs[0]=var (on stack via prior Const), Refs[1]=value (on stack).
+        ;; OP_SET_VAR pops value, pops var, sets root, pushes var back.
+        (do (emit! l nid :set-var)
+            (bump-stack-sp! l -1))  ; 2→1
+
       :tail-call
         (emit-with-arg! l nid :tail-call (int aux))
         ;; TAIL_CALL is a true terminator; no SP tracking needed past this.

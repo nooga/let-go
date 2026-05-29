@@ -33,7 +33,7 @@ const (
 	OpLoadVar       // .Aux = *vm.Var; var roots are mutable
 	OpLoadClosed    // .Aux = int (closed-over index)
 	OpBlockArg      // block parameter
-	OpSetVar        // .Refs[0] = value; .Aux = *vm.Var; pushes value back
+	OpSetVar        // .Refs[0] = var (Const aux=*vm.Var), .Refs[1] = value; pushes var back
 	OpCall          // .Refs[0] = fn, .Refs[1:] = args; .Aux = arity int
 	OpTailCall      // tail call ends a block
 	OpAdd
@@ -70,7 +70,7 @@ var opTable = [...]opInfo{
 	OpLoadVar:     {"LoadVar", 0, 1, false, false},
 	OpLoadClosed:  {"LoadClosed", 0, 1, true, false},
 	OpBlockArg:    {"BlockArg", 0, 1, true, false},
-	OpSetVar:      {"SetVar", 1, 1, false, false},
+	OpSetVar:      {"SetVar", 2, 1, false, false},
 	OpCall:        {"Call", -1, 1, false, false},
 	OpTailCall:    {"TailCall", -1, 1, false, true},
 	OpAdd:         {"Add", 2, 1, true, false},
@@ -142,6 +142,8 @@ func irOpToBytecode(op Op) int32 {
 		return vm.OP_LOAD_VAR
 	case OpLoadClosed:
 		return vm.OP_LOAD_CLOSEDOVER
+	case OpSetVar:
+		return vm.OP_SET_VAR
 	case OpCall:
 		return vm.OP_INVOKE
 	case OpTailCall:
@@ -191,6 +193,8 @@ func bytecodeToIROp(op int32) Op {
 		return OpLoadVar
 	case vm.OP_LOAD_CLOSEDOVER:
 		return OpLoadClosed
+	case vm.OP_SET_VAR:
+		return OpSetVar
 	case vm.OP_INVOKE:
 		return OpCall
 	case vm.OP_TAIL_CALL:
