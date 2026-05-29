@@ -223,10 +223,77 @@
 
 ;; --- def→use index ---------------------------------------------------
 
+;; --- bitset shim (Phase B) ------------------------------------------
+;;
+;; A bitset is a vector of int64 words. Bit k (0-indexed) lives in
+;; word (k >> 6), at bit position (k & 63). Used as the set-of-users
+;; representation in the uses cache: uses[def-id] is a bitset whose
+;; bits are the user-ids referencing def-id.
+;;
+;; Rationale: most defs have 0-2 users, but a few popular defs (loop
+;; vars, common consts) can have many. Persistent-vec-per-set burned
+;; allocation on both extremes; word-packing collapses the small-set
+;; case (one int64 covers 64 inst-ids) and the large-set case
+;; (linear in word count, cache-friendly).
+;;
+;; The bit-shift-left of 1 to position 63 wraps to the sign bit of
+;; int64 in let-go; that's fine — bitwise ops don't care about sign.
+
+(defn- bs-word-count [n]
+  (bit-shift-right (+ n 63) 6))
+
+(defn- bs-empty [n-bits]
+  (vec (repeat (bs-word-count n-bits) 0)))
+
+(defn- bs-add [bs i]
+  (let [wi (bit-shift-right i 6)
+        bm (bit-shift-left 1 (bit-and i 63))]
+    (assoc bs wi (bit-or (nth bs wi) bm))))
+
+(defn- bs-add! [bs i]
+  (let [wi (bit-shift-right i 6)
+        bm (bit-shift-left 1 (bit-and i 63))]
+    (assoc! bs wi (bit-or (nth bs wi) bm))))
+
+(defn- bs-remove [bs i]
+  (let [wi (bit-shift-right i 6)
+        bm (bit-shift-left 1 (bit-and i 63))]
+    (assoc bs wi (bit-and (nth bs wi) (bit-not bm)))))
+
+(defn- bs-contains? [bs i]
+  (let [wi (bit-shift-right i 6)
+        bm (bit-shift-left 1 (bit-and i 63))]
+    (not= 0 (bit-and (nth bs wi) bm))))
+
+(defn- bs-empty? [bs]
+  (every? zero? bs))
+
+(defn- bs-union [bs1 bs2]
+  ;; Pairwise bit-or. Both inputs assumed same word count.
+  (vec (map bit-or bs1 bs2)))
+
+;; Iterate set bits and call (f bit-index). Word-at-a-time scan
+;; using low-bit isolation: lowest set bit is (bit-and w (- w)).
+(defn- bs-for-each [bs f]
+  (loop [wi 0]
+    (when (< wi (count bs))
+      (loop [w (nth bs wi)]
+        (when (not= w 0)
+          (let [lo  (bit-and w (- w))
+                ;; bit position of lo within the word: trailing zeros.
+                ;; let-go has no native ctz, so use a small loop.
+                ;; (Most words have 0-2 bits, so this is short.)
+                pos (loop [p 0 v lo]
+                      (if (= 1 (bit-and v 1)) p (recur (inc p) (bit-shift-right v 1))))]
+            (f (+ (bit-shift-left wi 6) pos))
+            (recur (bit-xor w lo)))))
+      (recur (inc wi)))))
+
+;; --- uses-cache build ------------------------------------------------
+
 (defn- accumulate-uses-from-refs! [acc user-id refs]
-  ;; Transient-mode: acc is a transient vec, inner uses[r] vecs remain
-  ;; persistent (conj on a 0-2 element vec is O(1) and cheap).
-  (reduce (fn [a r] (assoc! a r (conj (nth a r) user-id))) acc refs))
+  ;; Transient outer; inner uses[r] is a persistent bitset vec.
+  (reduce (fn [a r] (assoc! a r (bs-add (nth a r) user-id))) acc refs))
 
 (defn- accumulate-uses-from-aux! [acc user-id inst]
   (let [op  (nth inst 0)
@@ -239,15 +306,16 @@
       acc)))
 
 (defn- compute-uses [f]
-  ;; Phase A: transient outer vector. Most insts have 0-2 uses, so
-  ;; keep the inner vecs persistent — the win is avoiding the N
-  ;; persistent-assoc path copies on the outer.
+  ;; Phase A: transient outer vector.
+  ;; Phase B: inner uses[r] is a bitset (vec of int64 words) instead of
+  ;; vec of user-ids. Each Inst gets one bitset of size ⌈N/64⌉ words.
   (let [insts (:insts @f)
-        seed  (transient (vec (repeat (count insts) [])))]
+        n     (count insts)
+        empty (bs-empty n)
+        seed  (transient (vec (repeat n empty)))]
     (persistent!
       (reduce-kv
         (fn [acc i inst]
-          ;; Skip :invalid insts (those marked for removal).
           (if (= :invalid (nth inst 0))
             acc
             (-> acc
@@ -257,14 +325,30 @@
         insts))))
 
 (defn uses [f]
-  "Return the def→use index: a vector where uses[nid] is the vector
-   of InstIds whose :refs (or branch-target args) include nid. Cached
-   between mutations; invalidated automatically by any mutator that
-   could change the graph."
+  "Return the def→use index: a vector where uses[nid] is a bitset
+   (vec of int64 words) whose set bits are the InstIds that
+   reference nid via :refs or branch-target args. Cached between
+   mutations; invalidated automatically by any mutator that could
+   change the graph.
+
+   Use `uses-empty?`, `uses-for-each`, and `uses-contains?` to
+   query a slot; do not depend on the bitset's internal shape."
   (when (:uses-dirty? @f)
     (let [u (compute-uses f)]
       (swap! f assoc :uses-cache u :uses-dirty? false)))
   (:uses-cache @f))
+
+(defn uses-empty? [bs]
+  "True if the uses bitset bs has no set bits (zero users)."
+  (bs-empty? bs))
+
+(defn uses-for-each [bs f]
+  "Call (f user-id) for each user-id in the uses bitset bs."
+  (bs-for-each bs f))
+
+(defn uses-contains? [bs uid]
+  "True if user-id uid is in the uses bitset bs."
+  (bs-contains? bs uid))
 
 (defn replace-all-uses! [f old-id new-id]
   "Rewrite every Inst whose :refs (or whose Branch/BranchIf Aux carries
@@ -274,7 +358,12 @@
    instead of the O(n) full-array walk the previous implementation did.
    Single swap! per consumer; the uses cache is invalidated once at the
    end."
-  (let [consumer-ids (nth (uses f) old-id)
+  (let [consumer-bs (nth (uses f) old-id)
+        ;; Materialize consumer-ids as a vec so we can iterate twice
+        ;; (once below for the doseq) and so the `seq` test on it is cheap.
+        consumer-ids (let [acc (atom [])]
+                       (bs-for-each consumer-bs #(swap! acc conj %))
+                       @acc)
         old-sis      (source-infos old-id f)]
     (when (seq old-sis)
       (swap! f update-in [:insts new-id 4]
@@ -321,6 +410,7 @@
                replace-op! set-refs! set-aux! set-type!
                cond-target-set-true! cond-target-set-false!
                remove-inst! replace-all-uses! clone-inst
-               uses invalidate-uses!]]
+               uses invalidate-uses!
+               uses-empty? uses-for-each uses-contains?]]
   (doseq [sym syms]
     (intern target sym (deref (resolve (symbol "ir.data" (str sym)))))))

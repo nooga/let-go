@@ -18,7 +18,7 @@
 
 (defn- removable? [nid f]
   (and (pure-ops (ir/op nid f))
-       (zero? (count (nth (ir/uses f) nid)))))
+       (ir/uses-empty? (nth (ir/uses f) nid))))
 
 (defn- one-pass [f]
   "One sweep over the function. Returns true if anything was removed,
