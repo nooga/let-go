@@ -116,6 +116,72 @@
 (defn cond-target-true     [ct] (:true-target ct))
 (defn cond-target-false    [ct] (:false-target ct))
 
+;; --- bitset shim (Phase B) ------------------------------------------
+;;
+;; A bitset is a vector of int64 words. Bit k (0-indexed) lives in
+;; word (k >> 6), at bit position (k & 63). Used as the set-of-users
+;; representation in the uses cache: uses[def-id] is a bitset whose
+;; bits are the user-ids referencing def-id.
+;;
+;; Rationale: most defs have 0-2 users, but a few popular defs (loop
+;; vars, common consts) can have many. Persistent-vec-per-set burned
+;; allocation on both extremes; word-packing collapses the small-set
+;; case (one int64 covers 64 inst-ids) and the large-set case
+;; (linear in word count, cache-friendly).
+;;
+;; The bit-shift-left of 1 to position 63 wraps to the sign bit of
+;; int64 in let-go; that's fine — bitwise ops don't care about sign.
+
+(defn- bs-word-count [n]
+  (bit-shift-right (+ n 63) 6))
+
+(defn- bs-empty [n-bits]
+  (vec (repeat (bs-word-count n-bits) 0)))
+
+(defn- bs-add [bs i]
+  (let [wi (bit-shift-right i 6)
+        bm (bit-shift-left 1 (bit-and i 63))]
+    (assoc bs wi (bit-or (nth bs wi) bm))))
+
+(defn- bs-add! [bs i]
+  (let [wi (bit-shift-right i 6)
+        bm (bit-shift-left 1 (bit-and i 63))]
+    (assoc! bs wi (bit-or (nth bs wi) bm))))
+
+(defn- bs-remove [bs i]
+  (let [wi (bit-shift-right i 6)
+        bm (bit-shift-left 1 (bit-and i 63))]
+    (assoc bs wi (bit-and (nth bs wi) (bit-not bm)))))
+
+(defn- bs-contains? [bs i]
+  (let [wi (bit-shift-right i 6)
+        bm (bit-shift-left 1 (bit-and i 63))]
+    (not= 0 (bit-and (nth bs wi) bm))))
+
+(defn- bs-empty? [bs]
+  (every? zero? bs))
+
+(defn- bs-union [bs1 bs2]
+  ;; Pairwise bit-or. Both inputs assumed same word count.
+  (vec (map bit-or bs1 bs2)))
+
+;; Iterate set bits and call (f bit-index). Word-at-a-time scan
+;; using low-bit isolation: lowest set bit is (bit-and w (- w)).
+(defn- bs-for-each [bs f]
+  (loop [wi 0]
+    (when (< wi (count bs))
+      (loop [w (nth bs wi)]
+        (when (not= w 0)
+          (let [lo  (bit-and w (- w))
+                ;; bit position of lo within the word: trailing zeros.
+                ;; let-go has no native ctz, so use a small loop.
+                ;; (Most words have 0-2 bits, so this is short.)
+                pos (loop [p 0 v lo]
+                      (if (= 1 (bit-and v 1)) p (recur (inc p) (bit-shift-right v 1))))]
+            (f (+ (bit-shift-left wi 6) pos))
+            (recur (bit-xor w lo)))))
+      (recur (inc wi)))))
+
 ;; --- uses cache management -------------------------------------------
 
 (defn- invalidate-uses-state! [f]
@@ -200,11 +266,35 @@
 (defn remove-inst! [f bid nid]
   "Drop nid from block bid's :insts vector. Marks the Inst's op
    as :invalid so any stale iterator skips it. Caller must not use
-   nid afterwards."
-  (swap! f update-in [:blocks bid :insts]
-         (fn [insts] (vec (remove (fn [x] (= x nid)) insts))))
-  (swap! f assoc-in [:insts nid 0] :invalid)
-  (invalidate-uses-state! f))
+   nid afterwards.
+
+   Phase 1: if the uses cache is live (not dirty), incrementally
+   clear bit nid from uses[r] for each r in this inst's refs and
+   branch-target args. Avoids the O(N) recompute on the next read."
+  (let [inst (nth (:insts @f) nid)
+        refs (nth inst 1)
+        op   (nth inst 0)
+        aux  (nth inst 2)
+        ;; Collect aux-side refs (branch/branch-if targets) so we
+        ;; can clear those entries too.
+        aux-refs (case op
+                   :branch    (:args aux)
+                   :branch-if (concat (:args (:true-target aux))
+                                      (:args (:false-target aux)))
+                   nil)]
+    (swap! f update-in [:blocks bid :insts]
+           (fn [insts] (vec (remove (fn [x] (= x nid)) insts))))
+    (swap! f assoc-in [:insts nid 0] :invalid)
+    (if (:uses-dirty? @f)
+      nil  ;; cache already invalid, no point patching
+      (swap! f update :uses-cache
+             (fn [u]
+               (let [u' (reduce (fn [a r] (assoc a r (bs-remove (nth a r) nid)))
+                                u refs)]
+                 (if aux-refs
+                   (reduce (fn [a r] (assoc a r (bs-remove (nth a r) nid)))
+                           u' aux-refs)
+                   u')))))))
 
 (defn- rewrite-refs [refs old new]
   (vec (map (fn [r] (if (= r old) new r)) refs)))
@@ -222,72 +312,6 @@
     new-id))
 
 ;; --- def→use index ---------------------------------------------------
-
-;; --- bitset shim (Phase B) ------------------------------------------
-;;
-;; A bitset is a vector of int64 words. Bit k (0-indexed) lives in
-;; word (k >> 6), at bit position (k & 63). Used as the set-of-users
-;; representation in the uses cache: uses[def-id] is a bitset whose
-;; bits are the user-ids referencing def-id.
-;;
-;; Rationale: most defs have 0-2 users, but a few popular defs (loop
-;; vars, common consts) can have many. Persistent-vec-per-set burned
-;; allocation on both extremes; word-packing collapses the small-set
-;; case (one int64 covers 64 inst-ids) and the large-set case
-;; (linear in word count, cache-friendly).
-;;
-;; The bit-shift-left of 1 to position 63 wraps to the sign bit of
-;; int64 in let-go; that's fine — bitwise ops don't care about sign.
-
-(defn- bs-word-count [n]
-  (bit-shift-right (+ n 63) 6))
-
-(defn- bs-empty [n-bits]
-  (vec (repeat (bs-word-count n-bits) 0)))
-
-(defn- bs-add [bs i]
-  (let [wi (bit-shift-right i 6)
-        bm (bit-shift-left 1 (bit-and i 63))]
-    (assoc bs wi (bit-or (nth bs wi) bm))))
-
-(defn- bs-add! [bs i]
-  (let [wi (bit-shift-right i 6)
-        bm (bit-shift-left 1 (bit-and i 63))]
-    (assoc! bs wi (bit-or (nth bs wi) bm))))
-
-(defn- bs-remove [bs i]
-  (let [wi (bit-shift-right i 6)
-        bm (bit-shift-left 1 (bit-and i 63))]
-    (assoc bs wi (bit-and (nth bs wi) (bit-not bm)))))
-
-(defn- bs-contains? [bs i]
-  (let [wi (bit-shift-right i 6)
-        bm (bit-shift-left 1 (bit-and i 63))]
-    (not= 0 (bit-and (nth bs wi) bm))))
-
-(defn- bs-empty? [bs]
-  (every? zero? bs))
-
-(defn- bs-union [bs1 bs2]
-  ;; Pairwise bit-or. Both inputs assumed same word count.
-  (vec (map bit-or bs1 bs2)))
-
-;; Iterate set bits and call (f bit-index). Word-at-a-time scan
-;; using low-bit isolation: lowest set bit is (bit-and w (- w)).
-(defn- bs-for-each [bs f]
-  (loop [wi 0]
-    (when (< wi (count bs))
-      (loop [w (nth bs wi)]
-        (when (not= w 0)
-          (let [lo  (bit-and w (- w))
-                ;; bit position of lo within the word: trailing zeros.
-                ;; let-go has no native ctz, so use a small loop.
-                ;; (Most words have 0-2 bits, so this is short.)
-                pos (loop [p 0 v lo]
-                      (if (= 1 (bit-and v 1)) p (recur (inc p) (bit-shift-right v 1))))]
-            (f (+ (bit-shift-left wi 6) pos))
-            (recur (bit-xor w lo)))))
-      (recur (inc wi)))))
 
 ;; --- uses-cache build ------------------------------------------------
 
@@ -386,8 +410,19 @@
                        (-> aux
                            (assoc :true-target  (rewrite-branch-target-args (:true-target  aux) old-id new-id))
                            (assoc :false-target (rewrite-branch-target-args (:false-target aux) old-id new-id))))
-                   i))))))
-  (invalidate-uses-state! f))
+                   i))))) ;; close: case, let, fn, swap!, doseq
+    ;; Phase 1: incremental uses-cache update.
+    ;; After rewrite, every consumer's old-id ref is now new-id, so
+    ;; uses[new-id] gains exactly consumer-bs's bits and uses[old-id]
+    ;; becomes empty. Skip if cache is already dirty.
+    (when (not (:uses-dirty? @f))
+      (swap! f update :uses-cache
+             (fn [u]
+               (let [new-bs   (bs-union (nth u new-id) consumer-bs)
+                     empty-bs (bs-empty (count (:insts @f)))]
+                 (-> u
+                     (assoc new-id new-bs)
+                     (assoc old-id empty-bs))))))))
 
 ;; --- export into the `ir` namespace ----------------------------------
 ;;
