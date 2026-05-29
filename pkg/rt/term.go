@@ -125,6 +125,27 @@ func installTermNS() {
 	})
 	ns.Def("read-key", readKey)
 
+	// key-pending? — true if stdin has at least one byte buffered (the
+	// OS has received input from the TTY but read-key has not yet
+	// consumed it). Uses the FIONREAD ioctl on the stdin fd;
+	// non-consuming. fionread is defined per-OS alongside tiocswinsz.
+	//
+	// Lets animation / poll loops break out on user input without
+	// entering read-key (which would block on the underlying read).
+	// Returns false if the ioctl errors (e.g. stdin is not a TTY).
+	keyPendingFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		var n int32
+		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL,
+			uintptr(os.Stdin.Fd()),
+			uintptr(fionread),
+			uintptr(unsafe.Pointer(&n)))
+		if errno != 0 || n <= 0 {
+			return vm.FALSE, nil
+		}
+		return vm.TRUE, nil
+	})
+	ns.Def("key-pending?", keyPendingFn)
+
 	// size — returns [cols rows] or nil if not a TTY
 	//   (term/size)         → stdout winsize
 	//   (term/size handle)  → arbitrary fd winsize

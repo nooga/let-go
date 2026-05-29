@@ -18,6 +18,7 @@ const (
 	tiocswinsz = 0x5414
 	tiocgptn   = 0x80045430
 	tiocsptlck = 0x40045431
+	fionread   = 0x541B
 )
 
 func openPtyPair() (master *os.File, slave *os.File, slavePath string, err error) {

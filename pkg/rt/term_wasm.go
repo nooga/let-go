@@ -76,6 +76,23 @@ func installTermNS() {
 	})
 	ns.Def("read-key", readKey)
 
+	// key-pending? — true if the key-ready flag at SAB[0] is set, i.e.
+	// the JS side has written a key that read-key has not yet consumed.
+	// Lets animation / poll loops break out on user input without
+	// entering read-key (which would Atomics.wait if no key is queued).
+	keyPendingFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		keyInt32 := js.Global().Get("_lgKeyInt32")
+		if keyInt32.IsUndefined() {
+			return vm.FALSE, nil
+		}
+		atomics := js.Global().Get("Atomics")
+		if atomics.Call("load", keyInt32, 0).Int() != 0 {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("key-pending?", keyPendingFn)
+
 	// size — read from SharedArrayBuffer
 	sizeFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		keyInt32 := js.Global().Get("_lgKeyInt32")
