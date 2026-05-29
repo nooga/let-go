@@ -44,16 +44,19 @@
    eagerly so seeding use-count and the cross-block check share work."
   (let [uses    (ir/uses f)
         n-blocks (count (ir/blocks f))
-        ;; Seed use-count from the index: count[nid] = len(uses[nid]).
-        ;; Stored only for nodes with ≥1 use, mirroring Go's map.
+        ;; Seed use-count from the index: count[nid] = popcount(uses[nid]).
+        ;; uses[nid] is a bitset (vec of int64 words) — use the uses-* API
+        ;; to query it, not raw count/first (which return word-count and
+        ;; first-word). Stored only for nodes with ≥1 use, mirroring Go's
+        ;; map.
         use-count (loop [i 0 acc {}]
                     (if (>= i (count uses))
                       acc
                       (let [us (nth uses i)]
                         (recur (inc i)
-                               (if (pos? (count us))
-                                 (assoc acc i (count us))
-                                 acc)))))]
+                               (if (ir/uses-empty? us)
+                                 acc
+                                 (assoc acc i (ir/uses-count us)))))))]
     (atom {:f         f
            :chunk     (ir/new-chunk (ir/fn-consts f))
            :block-ips (vec (repeat n-blocks 0))
@@ -162,21 +165,24 @@
 
 (defn- check-cross-block! [f uses]
   "Walk uses; reject any cross-block direct-Refs use (only branch-arg
-   uses may cross). Throws on violation, matching Go's error message."
+   uses may cross). Throws on violation, matching Go's error message.
+   uses[i] is a bitset of user-ids — iterate via ir/uses-for-each, not
+   raw seq ops (which would treat int64 words as ids)."
   (loop [i 0]
     (when (< i (count uses))
       (let [us (nth uses i)]
-        (when (pos? (count us))
+        (when-not (ir/uses-empty? us)
           (let [def-block (ir/block-of i f)]
-            (doseq [user-id us]
-              (let [user-block (ir/block-of user-id f)]
-                (when (and (not= user-block def-block)
-                           (not (is-terminator-branch-arg-use? user-id i f)))
-                  (throw (str "ir/lower: cross-block use of value %"
-                              i " via direct Refs (defined in block "
-                              def-block ", used in block " user-block
-                              ") — only branch-target args may cross blocks; "
-                              "see follow-up issue D"))))))))
+            (ir/uses-for-each us
+              (fn [user-id]
+                (let [user-block (ir/block-of user-id f)]
+                  (when (and (not= user-block def-block)
+                             (not (is-terminator-branch-arg-use? user-id i f)))
+                    (throw (str "ir/lower: cross-block use of value %"
+                                i " via direct Refs (defined in block "
+                                def-block ", used in block " user-block
+                                ") — only branch-target args may cross blocks; "
+                                "see follow-up issue D")))))))))
       (recur (inc i)))))
 
 ;; --- heuristics ------------------------------------------------------
@@ -234,12 +240,15 @@
       (zero? uc) false
       (> uc 1) false
       :else
+        ;; uc == 1 already → bitset has exactly one user-id. Pull it via
+        ;; ir/uses-first (raw `first`/`count` would return the first int64
+        ;; word and the word-count, not user-ids).
         (let [uses (:uses @l)
               us   (when (< nid (count uses)) (nth uses nid))]
           (cond
-            (or (nil? us) (not= 1 (count us))) false
+            (or (nil? us) (ir/uses-empty? us)) false
             :else
-              (let [user-id (first us)
+              (let [user-id   (ir/uses-first us)
                     user-refs (ir/refs user-id (f-of l))]
                 (cond
                   (zero? (count user-refs)) true  ; used only as branch-arg
@@ -500,11 +509,14 @@
    hand-built IR could violate this."
   (when cond-ref
     (and (= 1 (use-count-of l cond-ref))
+         ;; use-count==1 → bitset has exactly one user-id; read via
+         ;; ir/uses-first (bitsets are vec-of-int64-words, so raw
+         ;; `first`/`count` would return a word and the word-count).
          (let [uses (:uses @l)
                us   (when (< cond-ref (count uses)) (nth uses cond-ref))]
            (and us
-                (= 1 (count us))
-                (= term (first us)))))))
+                (not (ir/uses-empty? us))
+                (= term (ir/uses-first us)))))))
 
 (defn- lower-block! [l bid]
   (swap! l assoc :current-block bid)

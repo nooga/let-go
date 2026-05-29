@@ -399,6 +399,20 @@
   "True if user-id uid is in the uses bitset bs."
   (bs-contains? bs uid))
 
+(defn uses-count [bs]
+  "Number of set bits in the uses bitset bs (popcount)."
+  (let [n (atom 0)]
+    (bs-for-each bs (fn [_] (swap! n inc)))
+    @n))
+
+(defn uses-first [bs]
+  "Return the smallest user-id in the uses bitset, or nil if empty.
+   Faster than collecting all ids when caller only needs one."
+  (let [found (atom nil)]
+    (bs-for-each bs (fn [id]
+                      (when (nil? @found) (reset! found id))))
+    @found))
+
 (defn replace-all-uses! [f old-id new-id]
   "Rewrite every Inst whose :refs (or whose Branch/BranchIf Aux carries
    old-id as a branch-target arg) to reference new-id instead.
@@ -471,6 +485,7 @@
                cond-target-set-true! cond-target-set-false!
                remove-inst! replace-all-uses! clone-inst
                uses invalidate-uses!
-               uses-empty? uses-for-each uses-contains?]]
+               uses-empty? uses-for-each uses-contains?
+               uses-count uses-first]]
   (doseq [sym syms]
     (intern target sym (deref (resolve (symbol "ir.data" (str sym)))))))
