@@ -223,33 +223,38 @@
 
 ;; --- def→use index ---------------------------------------------------
 
-(defn- accumulate-uses-from-refs [acc user-id refs]
-  (reduce (fn [a r] (assoc a r (conj (nth a r) user-id))) acc refs))
+(defn- accumulate-uses-from-refs! [acc user-id refs]
+  ;; Transient-mode: acc is a transient vec, inner uses[r] vecs remain
+  ;; persistent (conj on a 0-2 element vec is O(1) and cheap).
+  (reduce (fn [a r] (assoc! a r (conj (nth a r) user-id))) acc refs))
 
-(defn- accumulate-uses-from-aux [acc user-id inst]
-  ;; case dispatch + threading. Eliminates `cond` + `nth ... 0` repetition.
+(defn- accumulate-uses-from-aux! [acc user-id inst]
   (let [op  (nth inst 0)
         aux (nth inst 2)]
     (case op
-      :branch    (accumulate-uses-from-refs acc user-id (:args aux))
+      :branch    (accumulate-uses-from-refs! acc user-id (:args aux))
       :branch-if (-> acc
-                     (accumulate-uses-from-refs user-id (:args (:true-target  aux)))
-                     (accumulate-uses-from-refs user-id (:args (:false-target aux))))
+                     (accumulate-uses-from-refs! user-id (:args (:true-target  aux)))
+                     (accumulate-uses-from-refs! user-id (:args (:false-target aux))))
       acc)))
 
 (defn- compute-uses [f]
+  ;; Phase A: transient outer vector. Most insts have 0-2 uses, so
+  ;; keep the inner vecs persistent — the win is avoiding the N
+  ;; persistent-assoc path copies on the outer.
   (let [insts (:insts @f)
-        seed  (vec (repeat (count insts) []))]
-    (reduce-kv
-      (fn [acc i inst]
-        ;; Skip :invalid insts (those marked for removal).
-        (if (= :invalid (nth inst 0))
-          acc
-          (-> acc
-              (accumulate-uses-from-refs i (nth inst 1))
-              (accumulate-uses-from-aux i inst))))
-      seed
-      insts)))
+        seed  (transient (vec (repeat (count insts) [])))]
+    (persistent!
+      (reduce-kv
+        (fn [acc i inst]
+          ;; Skip :invalid insts (those marked for removal).
+          (if (= :invalid (nth inst 0))
+            acc
+            (-> acc
+                (accumulate-uses-from-refs! i (nth inst 1))
+                (accumulate-uses-from-aux! i inst))))
+        seed
+        insts))))
 
 (defn uses [f]
   "Return the def→use index: a vector where uses[nid] is the vector
