@@ -114,6 +114,7 @@
       (let [head (first form)]
         (cond
           (= head 'quote) #{}
+          (= head 'var)   #{}
           (= head 'fn*)   #{}
           (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
             (let [bindings (nth form 1)
@@ -143,7 +144,7 @@
 ;; --- form dispatch -------------------------------------------------------
 
 (declare build-list build-symbol build-if build-let build-do build-quote
-         build-loop build-recur build-fn*
+         build-var build-loop build-recur build-fn*
          build-vector build-map build-call)
 
 ;; Sentinel returned by recur / any form whose current-block is already
@@ -209,6 +210,7 @@
       (let [head (first form)]
         (cond
           (= head 'quote) #{}
+          (= head 'var)   #{}
           (= head 'fn*)
             (let [maybe-name (nth form 1)
                   has-name?  (symbol? maybe-name)
@@ -387,6 +389,7 @@
       (= head 'let*)  (build-let form ctx)
       (= head 'do)    (build-do form ctx)
       (= head 'quote) (build-quote form ctx)
+      (= head 'var)   (build-var form ctx)
       (= head 'loop)  (build-loop form ctx)
       (= head 'loop*) (build-loop form ctx)
       (= head 'recur) (build-recur form ctx)
@@ -406,6 +409,16 @@
 (defn build-quote [form ctx]
   "(quote x) emits a Const Inst with x as the Aux."
   (add-inst! ctx (ctx-block ctx) :const [] (nth form 1)))
+
+(defn build-var [form ctx]
+  "(var sym) and reader macro #'sym resolve sym at build time and emit
+   a Const Inst with the *vm.Var as the Aux — same as bytecode's
+   varCompiler: LOAD_CONST of the Var object itself (not its value)."
+  (let [sym (nth form 1)
+        v   (resolve sym)]
+    (if (nil? v)
+      (throw (str "ir/build: can't resolve var " sym))
+      (add-inst! ctx (ctx-block ctx) :const [] v))))
 
 (defn build-vector [form ctx]
   "[a b c] → (vector a b c). Empty vector → Const literal.
