@@ -153,6 +153,43 @@ func installIRBridgeBuiltins() {
 		return vm.NewBoxed(vm.SourceInfo{File: arg0, Line: arg1, Column: arg2, EndLine: arg3, EndColumn: arg4}), nil
 	})
 	ns.Def("new-source-info", chunk_new_source_info_Fn)
+	chunk_new_named_source_info_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("ir/new-named-source-info: expected (String), got %d args", len(vs))
+		}
+		arg0Str, ok0 := vs[0].(vm.String)
+		if !ok0 {
+			return vm.NIL, fmt.Errorf("ir/new-named-source-info: arg 0 must be String, got %s", vs[0].Type().Name())
+		}
+		arg0 := string(arg0Str)
+		return vm.NewBoxed(vm.SourceInfo{Symbol: arg0}), nil
+	})
+	ns.Def("new-named-source-info", chunk_new_named_source_info_Fn)
+	chunk_source_info_symbol_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("ir/source-info-symbol: expected (BoxedAuxOrNil), got %d args", len(vs))
+		}
+		arg0Val := vs[0]
+		var arg0 interface{}
+		if arg0Val == vm.NIL {
+			arg0 = nil
+		} else if b, isBoxed := arg0Val.(*vm.Boxed); isBoxed {
+			arg0 = b.Unbox()
+		} else {
+			arg0 = arg0Val
+		}
+		if arg0 == nil {
+			return vm.String(""), nil
+		}
+		if si, ok := arg0.(vm.SourceInfo); ok {
+			return vm.String(si.Symbol), nil
+		}
+		if siPtr, ok := arg0.(*vm.SourceInfo); ok {
+			return vm.String(siPtr.Symbol), nil
+		}
+		return vm.String(""), nil
+	})
+	ns.Def("source-info-symbol", chunk_source_info_symbol_Fn)
 	chunk_form_source_info_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("ir/form-source-info: expected (Value), got %d args", len(vs))

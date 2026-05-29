@@ -1,0 +1,68 @@
+;; Backward inference of :load-arg types from their users' op constraints.
+;;
+;; Forward typeinfer seeds every :load-arg with :unknown (because
+;; fn-arg-types is empty by default). That keeps function parameters
+;; lowered as vm.Value, which means lower-go boxes natives at every
+;; call boundary. This pass walks each load-arg's users; ops with
+;; native-typed operand signatures (numeric arithmetic, comparisons)
+;; impose a type constraint backward to the load-arg.
+;;
+;; The result is stored back via ir/set-type! on the load-arg inst.
+;; The follow-up typeinfer pass then forward-propagates the now-known
+;; param types through the rest of the function.
+
+(ns ir.passes.infer-arg-types
+  (:require ir.data))
+
+;; Ops that constrain their operands to be :int. Conservative — we don't
+;; try to distinguish :int from :float here; the dominant case in the
+;; bootstrap codebase is integer arithmetic, and forward typeinfer can
+;; still widen later if needed.
+(def ^:private int-constraint-ops
+  #{:add :sub :mul :inc :dec
+    :lt :lte :gt :gte})
+
+(defn- constraint-from-user [user-op]
+  "Type constraint a user op imposes on its operands.
+   :eq accepts any operand types, so returns :unknown.
+   Returns :unknown for ops that don't constrain."
+  (cond
+    (contains? int-constraint-ops user-op) :int
+    :else                                  :unknown))
+
+(defn- join-types [a b]
+  "Conservative join: if either side is :unknown, return the other.
+   If both agree, return that. If they disagree, fall back to :unknown
+   so we never narrow incorrectly (better to box than to misemit a Go
+   native type)."
+  (cond
+    (= a :unknown) b
+    (= b :unknown) a
+    (= a b)        a
+    :else          :unknown))
+
+(defn- infer-one-load-arg! [f use-index nid]
+  "Walk the users of load-arg inst nid; JOIN their op constraints.
+   When the result is more specific than :unknown, store it via
+   set-type! so downstream passes pick it up."
+  (let [bs     (nth use-index nid)
+        joined (atom :unknown)]
+    (when-not (ir/uses-empty? bs)
+      (ir/uses-for-each bs
+        (fn [user-nid]
+          (let [user-op (ir/op user-nid f)
+                c       (constraint-from-user user-op)]
+            (swap! joined join-types c))))
+      (when (not= :unknown @joined)
+        (ir/set-type! f nid @joined)))))
+
+(defn infer-arg-types [f]
+  "Scan the entry block for :load-arg insts and infer each one's type
+   from its users' op constraints. Mutates f. Idempotent."
+  (let [entry-bid (ir/entry-block f)
+        insts     (ir/block-insts entry-bid f)
+        use-index (ir/uses f)]
+    (doseq [nid insts]
+      (when (= :load-arg (ir/op nid f))
+        (infer-one-load-arg! f use-index nid))))
+  f)

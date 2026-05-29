@@ -43,12 +43,21 @@
         stack (get s :locals)]
     (reset! ctx (assoc s :locals (subvec stack 0 (dec (count stack)))))))
 
+(defn- attach-name! [ctx inst-id sym]
+  "Attach a name-only SourceInfo to the inst so lower-go can emit a
+   readable Go identifier. Skipped for non-positive inst-ids (block
+   params, which use a different addressing scheme)."
+  (when (and (integer? inst-id) (>= inst-id 0))
+    (let [f (ctx-fn ctx)]
+      (ir/add-source-info! f inst-id (ir/new-named-source-info (str sym))))))
+
 (defn bind-local! [ctx sym inst-id]
   (let [s @ctx
         stack (get s :locals)
         top-idx (dec (count stack))
         top (nth stack top-idx)]
-    (reset! ctx (assoc s :locals (assoc stack top-idx (assoc top sym inst-id))))))
+    (reset! ctx (assoc s :locals (assoc stack top-idx (assoc top sym inst-id))))
+    (attach-name! ctx inst-id sym)))
 
 (defn rebind-local! [ctx sym inst-id]
   "Find the nearest frame containing sym and update it there;
@@ -61,7 +70,8 @@
         (contains? (nth stack i) sym)
           (let [updated-frame (assoc (nth stack i) sym inst-id)
                 new-stack (assoc stack i updated-frame)]
-            (reset! ctx (assoc s :locals new-stack)))
+            (reset! ctx (assoc s :locals new-stack))
+            (attach-name! ctx inst-id sym))
         :else (recur (dec i))))))
 
 (defn lookup-local [ctx sym]
@@ -281,16 +291,17 @@
 ;; dispatch table the single source of truth.
 
 (def builtin-ops
-  {'+   :add
-   '-   :sub
-   '*   :mul
-   '<   :lt
-   '<=  :lte
-   '>   :gt
-   '>=  :gte
-   '=   :eq
-   'inc :inc
-   'dec :dec})
+  {'+    :add
+   '-    :sub
+   '*    :mul
+   'quot :quot
+   '<    :lt
+   '<=   :lte
+   '>    :gt
+   '>=   :gte
+   '=    :eq
+   'inc  :inc
+   'dec  :dec})
 
 ;; Ops whose arity-1 form is the canonical shape (no n-ary folding).
 (def unary-only-ops #{:inc :dec})

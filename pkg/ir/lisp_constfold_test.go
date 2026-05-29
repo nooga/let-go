@@ -48,6 +48,7 @@ func ensureLoader() {
 			"ir.zipper", "ir.passes",
 			"ir.passes.dce", "ir.passes.constfold",
 			"ir.passes.mutability", "ir.passes.cse",
+			"ir.passes.typeinfer", "ir.passes.infer-arg-types",
 			"ir.passes.licm",
 			"ir.passes.pipeline", "ir.dump", "ir.dominance", "ir.lower-go"} {
 			if res.Load(ns) == nil {

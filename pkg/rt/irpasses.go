@@ -32,6 +32,9 @@ var IRPassTypeInferSrc string
 //go:embed core/ir/passes/licm.lg
 var IRPassLICMSrc string
 
+//go:embed core/ir/passes/infer_arg_types.lg
+var IRPassInferArgTypesSrc string
+
 //go:embed core/ir/passes/pipeline.lg
 var IRPassPipelineSrc string
 

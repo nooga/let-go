@@ -24,19 +24,26 @@
             [ir.passes.dce :refer [dce]]
             [ir.passes.licm :refer [licm]]
             [ir.passes.typeinfer :refer [typeinfer]]
+            [ir.passes.infer-arg-types :refer [infer-arg-types]]
             [ir.validate :refer [validate-fn!]]
             [ir.lower :as lower]
-            [ir.lower-go :as lower-go]))
+            [ir.lower-go :as lower-go]
+            [graph :as g]))
 
 (defn optimize-fn [f]
   (validate-fn! f "build")
-  (constfold f)           (validate-fn! f "constfold-1")
-  ;; LICM is now re-enabled with full threadHoistedThroughHeader ported.
-  (cse f)                 (validate-fn! f "cse")
-  (constfold f)           (validate-fn! f "constfold-2")
-  (licm f)                (validate-fn! f "licm")
-  (constfold f)           (validate-fn! f "constfold-3")
-  (dce f)                 (validate-fn! f "dce")
+  ;; infer-arg-types walks backward from each load-arg's users. It only
+  ;; needs the op of each user (e.g. :add → :int constraint), not their
+  ;; types — so it can run BEFORE typeinfer and have its seeds picked up
+  ;; by typeinfer's arg-seed in the same pass. One typeinfer sweep.
+  (infer-arg-types f) (validate-fn! f "infer-arg-types")
+  (typeinfer f)
+  (constfold f)        (validate-fn! f "constfold-1")
+  (cse f)              (validate-fn! f "cse")
+  (constfold f)        (validate-fn! f "constfold-2")
+  (licm f)             (validate-fn! f "licm")
+  (constfold f)        (validate-fn! f "constfold-3")
+  (dce f)              (validate-fn! f "dce")
   (typeinfer f)
   f)
 
@@ -153,13 +160,110 @@
     ;; Replace hyphens with underscores
     (apply str (map (fn [c] (if (= c \-) \_ c)) s))))
 
+(defn- defn-key
+  "Returns [name-string arity-or-:multi] for a (defn ...) form. Used to
+   dedupe consecutive same-name same-arity defns (Lisp's last-write-wins
+   for var bindings; Go has no overloading, so emitting both would
+   produce a function-redeclaration error). Returns nil if the form
+   shape isn't recognised — those are left alone."
+  [form]
+  (when (and (seq? form) (>= (count form) 3))
+    (let [raw-name (nth form 1)
+          name-sym (unwrap-name raw-name)
+          name-str (str name-sym)
+          maybe-doc (nth form 2)
+          has-doc?  (string? maybe-doc)
+          args-or-arity (if has-doc?
+                          (if (>= (count form) 4) (nth form 3) nil)
+                          maybe-doc)]
+      (cond
+        (vector? args-or-arity) [name-str (count args-or-arity)]
+        (list? args-or-arity)   [name-str :multi]
+        :else                   nil))))
+
+(defn- collect-call-targets
+  "Walk form, return a set of symbol-name strings used in
+   call-head position. A symbol in head position of a list-form is
+   treated as a call target. We over-approximate: this includes locals,
+   special forms, macros — toposort-by only uses these to find graph
+   edges between known defn names, so spurious entries are harmless."
+  [form]
+  (let [acc (atom #{})]
+    (letfn [(visit [x]
+              (cond
+                (seq? x)
+                  (let [head (first x)]
+                    (when (symbol? head)
+                      (swap! acc conj (str head)))
+                    (doseq [el (rest x)] (visit el)))
+                (vector? x)
+                  (doseq [el x] (visit el))
+                (map? x)
+                  (doseq [entry x]
+                    (visit (key entry))
+                    (visit (val entry)))
+                :else nil))]
+      (visit form))
+    @acc))
+
+(defn- forms-by-arity
+  "Group same-name forms by their [name arity] key, keeping only the
+   LAST occurrence per key (Lisp redefinition semantics). Returns a
+   map {[name arity] -> form}."
+  [forms]
+  (loop [remaining forms acc {}]
+    (if (empty? remaining)
+      acc
+      (let [form (first remaining)
+            k    (defn-key form)]
+        (recur (rest remaining)
+               (if k (assoc acc k form) acc))))))
+
+(defn- order-defn-forms
+  "Dedupe same-(name,arity) forms (last wins) and arrange in
+   dependencies-first topological order using graph/toposort-by.
+   Tiebreak among independently-ready nodes by lexical name asc, then
+   arity asc — so same-name arities cluster together and the overall
+   output is deterministic across runs. Returns a vector of forms.
+
+   Non-defn forms (anything `defn-key` doesn't recognise) and forms
+   that participate in a dependency cycle fall through to the end in
+   source order."
+  [forms]
+  (let [keyed     (forms-by-arity forms)
+        own-names (set (map first (keys keyed)))
+        ;; Sort keys deterministically: lex name asc, then arity asc
+        ;; (multi-arity placeholder :multi sorts after numbers).
+        cmp       (fn [[na aa] [nb ab]]
+                    (let [c (compare na nb)]
+                      (if (zero? c)
+                        (compare (str aa) (str ab))
+                        c)))
+        sorted-ks (vec (sort cmp (keys keyed)))
+        sorted-forms (mapv keyed sorted-ks)
+        deps-fn   (fn [form]
+                    (let [self-name (first (defn-key form))]
+                      (filterv (fn [n] (and (not= n self-name)
+                                            (own-names n)))
+                               (collect-call-targets form))))
+        topo (g/toposort-by (fn [form] (first (defn-key form)))
+                            sorted-forms
+                            deps-fn)
+        ;; If the call graph has a cycle (mutual recursion), toposort
+        ;; returns nil — Go is fine with mutual recursion within a
+        ;; package, so fall back to the lex-sorted order.
+        ordered (or topo sorted-forms)
+        non-defn (vec (remove (fn [f] (some? (defn-key f))) forms))]
+    (into ordered non-defn)))
+
 (defn lower-ns-to-go [pkg-name ns-name defn-forms]
   "Process defn forms through the Go-lowering pipeline and return rendered
    Go source for a package. pkg-name is the Go package name string,
    ns-name is the namespace symbol (for *ns* binding), and defn-forms is
    a vector of raw (defn ...) list forms."
   (binding [*ns* (the-ns ns-name)]
-    (let [results (loop [remaining defn-forms out []]
+    (let [defn-forms (order-defn-forms defn-forms)
+          results (loop [remaining defn-forms out []]
                     (if (empty? remaining)
                       out
                       (let [form (first remaining)

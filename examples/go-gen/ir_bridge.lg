@@ -342,6 +342,25 @@
       :args [String Int Int Int Int]
       :body "return vm.NewBoxed(vm.SourceInfo{File: arg0, Line: arg1, Column: arg2, EndLine: arg3, EndColumn: arg4}), nil"}
 
+     ;; Construct a vm.SourceInfo that carries only a user-visible Symbol
+     ;; name (no file/line/col). Used by build.lg when a let-binding or
+     ;; parameter brings a new inst into scope so lower-go can emit a
+     ;; readable Go identifier instead of `v<nid>`.
+     {:name "new-named-source-info" :lisp-name "ir/new-named-source-info"
+      :args [String]
+      :body "return vm.NewBoxed(vm.SourceInfo{Symbol: arg0}), nil"}
+
+     ;; Read the Symbol field from a boxed SourceInfo. Returns the empty
+     ;; string when the SourceInfo carries no name (location-only spans).
+     ;; Lisp-side callers should treat empty as "no source name".
+     {:name "source-info-symbol" :lisp-name "ir/source-info-symbol"
+      :args [BoxedAuxOrNil]
+      :body "if arg0 == nil { return vm.String(\"\"), nil }
+             if si, ok := arg0.(vm.SourceInfo); ok { return vm.String(si.Symbol), nil }
+             if siPtr, ok := arg0.(*vm.SourceInfo); ok { return vm.String(siPtr.Symbol), nil }
+             return vm.String(\"\"), nil"}
+
+
      ;; Look up the SourceInfo of a given form using the global FormSource map.
      {:name "form-source-info" :lisp-name "ir/form-source-info"
       :args [Value]

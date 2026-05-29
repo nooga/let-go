@@ -136,6 +136,27 @@
 (defn block-insts  [bid f] (:insts  (nth (:blocks @f) bid)))
 (defn block-term   [bid f] (:term   (nth (:blocks @f) bid)))
 
+(defn fn-load-arg [f i]
+  "Find the :load-arg inst-id for argument index i in the function's
+   entry block. Returns nil if no such inst exists (variadic rest, etc.)."
+  (let [entry-bid (entry-block f)
+        insts     (block-insts entry-bid f)]
+    (loop [remaining insts]
+      (cond
+        (empty? remaining) nil
+        (let [nid (first remaining)]
+          (and (= :load-arg (op nid f))
+               (= i (aux nid f))))
+          (first remaining)
+        :else (recur (rest remaining))))))
+
+(defn fn-load-arg-type [f i]
+  "Type-of the load-arg inst for argument index i, or :unknown when no
+   load-arg exists for that index. Used by lower-go's params-for to
+   pick native types when a backward-inference pass has narrowed them."
+  (let [nid (fn-load-arg f i)]
+    (if nid (type-of nid f) :unknown)))
+
 (defn branch-target-target [bt] (:target bt))
 (defn branch-target-args   [bt] (:args bt))
 (defn cond-target-true     [ct] (:true-target ct))
@@ -476,6 +497,7 @@
                inst-count blocks
                op refs aux block-of type-of source-infos
                block-params block-preds block-insts block-term
+               fn-load-arg fn-load-arg-type
                branch-target-target branch-target-args
                cond-target-true cond-target-false
                add-block add-inst add-terminator!
