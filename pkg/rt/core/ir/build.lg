@@ -115,25 +115,20 @@
         (cond
           (= head 'quote) #{}
           (= head 'var)   #{}
-          (= head 'set!)  (captures-of (nth form 2) known-locals)
+          (= head 'set!)  (let [[_ _sym val] form]
+                            (captures-of val known-locals))
           (= head 'fn*)   #{}
           (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
-            (let [bindings (nth form 1)
+            (let [[_ bindings & body] form
                   pairs    (partition 2 bindings)
-                  acc-res  (reduce (fn [acc pair]
-                                     (let [caps (nth acc 0)
-                                           shadowed (nth acc 1)
-                                           sym  (first pair)
-                                           init (second pair)
-                                           locs (difference known-locals shadowed)]
-                                       [(into caps (captures-of init locs))
-                                        (into shadowed (binding-syms sym))]))
-                                   [#{} #{}]
-                                   pairs)
-                  used          (nth acc-res 0)
-                  let-bound-set (nth acc-res 1)
+                  [used let-bound-set]
+                    (reduce (fn [[caps shadowed] [sym init]]
+                              (let [locs (difference known-locals shadowed)]
+                                [(into caps (captures-of init locs))
+                                 (into shadowed (binding-syms sym))]))
+                            [#{} #{}]
+                            pairs)
                   new-locals    (into known-locals let-bound-set)
-                  body          (drop 2 form)
                   body-captures (into #{} (mapcat #(captures-of % new-locals) body))]
               (into used (difference body-captures let-bound-set)))
           :else
@@ -212,13 +207,12 @@
         (cond
           (= head 'quote) #{}
           (= head 'var)   #{}
-          (= head 'set!)  (free-vars (nth form 2) bound)
+          (= head 'set!)  (let [[_ _sym val] form] (free-vars val bound))
           (= head 'fn*)
-            (let [maybe-name (nth form 1)
+            (let [[_ maybe-name & raw-rest] form
                   has-name?  (symbol? maybe-name)
-                  raw-rest   (drop 1 form)
                   name-sym   (if has-name? maybe-name nil)
-                  rest-forms (if has-name? (drop 1 raw-rest) raw-rest)
+                  rest-forms (if has-name? raw-rest (cons maybe-name raw-rest))
                   multi?     (and (seq rest-forms) (list? (first rest-forms)))]
               (if-not multi?
                 (let [args-vec (first rest-forms)
@@ -236,15 +230,14 @@
                                       (mapcat #(free-vars % arg-set) body)))
                                   rest-forms))))
           (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
-            (let [bindings (nth form 1)
+            (let [[_ bindings & body] form
                   pairs    (partition 2 bindings)
                   [used new-bound]
                     (reduce (fn [[caps b] [sym init]]
                               [(into caps (free-vars init b))
                                (into b (binding-syms sym))])
                             [#{} bound]
-                            pairs)
-                  body     (drop 2 form)]
+                            pairs)]
               (into used (mapcat #(free-vars % new-bound) body)))
           :else
             (into #{} (mapcat #(free-vars % bound) form))))
@@ -411,14 +404,15 @@
 
 (defn build-quote [form ctx]
   "(quote x) emits a Const Inst with x as the Aux."
-  (add-inst! ctx (ctx-block ctx) :const [] (nth form 1)))
+  (let [[_ x] form]
+    (add-inst! ctx (ctx-block ctx) :const [] x)))
 
 (defn build-var [form ctx]
   "(var sym) and reader macro #'sym resolve sym at build time and emit
    a Const Inst with the *vm.Var as the Aux — same as bytecode's
    varCompiler: LOAD_CONST of the Var object itself (not its value)."
-  (let [sym (nth form 1)
-        v   (resolve sym)]
+  (let [[_ sym] form
+        v       (resolve sym)]
     (if (nil? v)
       (throw (str "ir/build: can't resolve var " sym))
       (add-inst! ctx (ctx-block ctx) :const [] v))))
@@ -428,9 +422,8 @@
    :set-var Inst whose refs are [var-inst val-inst]. Matches bytecode
    setBangCompiler: LOAD_CONST(var) → compile val → OP_SET_VAR. Result
    is the Var itself (SET_VAR pushes the var back)."
-  (let [sym (nth form 1)
-        val (nth form 2)
-        v   (resolve sym)]
+  (let [[_ sym val] form
+        v           (resolve sym)]
     (when (nil? v)
       (throw (str "ir/build: set! can't resolve " sym)))
     (let [var-nid (add-inst! ctx (ctx-block ctx) :const [] v)
@@ -478,8 +471,7 @@
 
 (defn build-let [form ctx]
   "let pushes a locals scope, evaluates bindings pairwise, then body."
-  (let [bindings (nth form 1)
-        body     (drop 2 form)]
+  (let [[_ bindings & body] form]
     (push-locals! ctx)
     (loop [i 0]
       (when (< i (count bindings))
@@ -520,9 +512,8 @@
    register it as a join-pred. The join block then has fewer preds.
    If both branches terminate, the if itself is terminated and we return
    TERMINATED without entering the join block."
-  (let [test-form (nth form 1)
-        then-form (nth form 2)
-        else-form (nth form 3 nil)
+  (let [[_ test-form then-form & rest-form] form
+        else-form (first rest-form)  ; nil when (if test then) — else omitted
         f         (ctx-fn ctx)
         entry-blk (ctx-block ctx)
         ;; Pass ALL current locals as branch-target args (symmetric).
@@ -634,8 +625,7 @@
    captures, and builds the body in that header. Recur branches back
    to the header carrying new loop-var values and self-passing the
    captures (loop-invariant pass-through)."
-  (let [bindings   (nth form 1)
-        body       (drop 2 form)
+  (let [[_ bindings & body] form
         f          (ctx-fn ctx)
         n-slots    (/ (count bindings) 2)
         old-header (get @ctx :loop-header)
@@ -933,11 +923,10 @@
    lower fn* bodies natively instead of collapsing them here."
   (let [;; Detect multi-arity: (fn* ([args] body...) ([args2] body2...))
         ;;                  or (fn* name ([args] body...) ([args2] body2...))
-        maybe-name (nth form 1)
+        [_ maybe-name & raw-rest] form
         has-name?  (symbol? maybe-name)
-        raw-rest   (drop 1 form)
         name-sym   (if has-name? maybe-name "fn*")
-        rest-forms (if has-name? (drop 1 raw-rest) raw-rest)
+        rest-forms (if has-name? raw-rest (cons maybe-name raw-rest))
         multi?     (and (seq rest-forms) (list? (first rest-forms)))]
     (if-not multi?
       ;; Single-arity path
