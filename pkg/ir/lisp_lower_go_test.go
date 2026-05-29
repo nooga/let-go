@@ -377,7 +377,10 @@ func TestLowerGoStrictJoinValueFeedsLaterArithmetic(t *testing.T) {
 	if !strings.Contains(rendered, "goto ") {
 		t.Fatalf("expected join lowering to use CFG goto\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "+ 1") {
+	// Join block params are typed vm.Value (typeinfer doesn't currently
+	// narrow them from int-typed feeds), so the trailing arithmetic
+	// lowers via rt.AddValue rather than a Go-native `+ 1`.
+	if !strings.Contains(rendered, "+ 1") && !strings.Contains(rendered, "rt.AddValue") {
 		t.Fatalf("expected joined value to feed later arithmetic\n--- go ---\n%s", rendered)
 	}
 }
@@ -460,7 +463,7 @@ func TestLowerGoStrictVecDestructureDefn(t *testing.T) {
 	if !strings.Contains(rendered, "func vec_") {
 		t.Fatalf("expected func decl\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "+") {
+	if !strings.Contains(rendered, "rt.AddValue") && !strings.Contains(rendered, "+") {
 		t.Fatalf("expected arithmetic in lowered body\n--- go ---\n%s", rendered)
 	}
 }
@@ -477,7 +480,9 @@ func TestLowerGoStrictMapKeysDestructureDefn(t *testing.T) {
 	}
 
 	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "+") {
+	// Destructured locals don't carry an inferred numeric type, so + on
+	// them routes through rt.AddValue instead of a Go-native `+`.
+	if !strings.Contains(rendered, "rt.AddValue") && !strings.Contains(rendered, "+") {
 		t.Fatalf("expected arithmetic in lowered body\n--- go ---\n%s", rendered)
 	}
 }
@@ -494,7 +499,7 @@ func TestLowerGoStrictNestedDestructureDefn(t *testing.T) {
 	}
 
 	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "+") {
+	if !strings.Contains(rendered, "rt.AddValue") && !strings.Contains(rendered, "+") {
 		t.Fatalf("expected arithmetic in lowered body\n--- go ---\n%s", rendered)
 	}
 }
