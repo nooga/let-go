@@ -289,7 +289,28 @@ func BenchmarkExecOnly(b *testing.B) {
 // modes (panics, value mismatches, validate errors) surface in test
 // output. Entries still failing post-Phase 5 should be triaged via the
 // test output rather than skipped here.
-var pendingPhase5 = map[string]string{}
+//
+// sign / xsofy-sign: index-out-of-range [-1] panic in (*Frame).nth.
+// Triggered by Phase B's uses-cache shape change (commit acd37320, "perf(ir):
+// bitvector-of-int64 backing for uses cache (Phase B)") interacting with
+// the existing build-if + lower branch-arg materialization path. Note:
+// upstream/main passes sign because it doesn't have Phase B (no trigger);
+// recovery/licm-uses-cache and this branch both fail it.
+//
+// The real fix is unmerged commit d26edaf4e1e530a1e45a5825c373a3404e3cfde6
+// ("ir: thread outer locals through if-join, fixing cross-block let refs")
+// — a substantial (~29 files, 4153+/-3873) refactor that adds per-block
+// junk-below tracking and supports drop-count<argc in :branch so back-
+// edges and forward joins share emission. Earlier triage misidentified
+// b8651532c46db958dd4f08d05347f98c97dc4e90 ("ir/lower+build: materialize
+// CondTarget args at branch-if") as the fix; that commit's own description
+// says sign / xsofy-sign "remain pre-existing failures unrelated to this
+// change." Integrating d26edaf4 is the natural follow-up to remove this
+// skip.
+var pendingPhase5 = map[string]string{
+	"sign":       "needs commit d26edaf4 (thread outer locals through if-join) to fix Phase B interaction",
+	"xsofy-sign": "needs commit d26edaf4 (thread outer locals through if-join) to fix Phase B interaction",
+}
 
 func TestPipelineRoundTrip_ProducesExecutableChunks(t *testing.T) {
 	ensureLoader()

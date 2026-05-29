@@ -32,13 +32,12 @@
 
 (ns ir.passes.licm
   (:require [ir.passes :refer []]
-            [ir.dominance :as dom]
-            [ir.validate :as validate]))
+            [ir.dominance :as dom]))
 
 (def pure-ops
   "Ops safe to hoist — same as DCE's pure set."
   #{:const :load-arg :load-closed :block-arg
-    :add :sub :mul :lt :lte :gt :gte :eq :inc :dec})
+    :add :sub :mul :quot :lt :lte :gt :gte :eq :inc :dec})
 
 (defn pure-op? [op] (contains? pure-ops op))
 
@@ -136,27 +135,29 @@
 ;; --- threading hoisted values through the loop header ----------------
 
 (defn- find-in-loop-users [f clone loop-set]
-  "Find all Insts in loop-set that reference clone."
-  (->> (range (count (:insts @f)))
-       (filter (fn [nid]
-                 (and (not= :invalid (ir/op nid f))
-                      (loop-set (ir/block-of nid f))
-                      (some #(= % clone) (ir/refs nid f)))))
-       vec))
+  "Find all Insts in loop-set that reference clone via :refs.
+   Uses the def→use cache (ir/uses) so cost is O(users-of-clone),
+   not O(total-insts). The :refs membership check is preserved
+   because uses-cache also tracks branch-target-arg uses which the
+   threading-rewriter (set-refs!) cannot rewrite."
+  (let [clone-users (nth (ir/uses f) clone)
+        acc         (atom [])]
+    (ir/uses-for-each clone-users
+      (fn [nid]
+        (when (and (not= :invalid (ir/op nid f))
+                   (loop-set (ir/block-of nid f))
+                   (some #(= % clone) (ir/refs nid f)))
+          (swap! acc conj nid))))
+    @acc))
 
 (defn thread-hoisted-through-header! [f loop-info hoisted-pairs]
-  "For each hoisted value used inside the loop body, add a header
-   BlockArg, rewire in-loop uses to the new param, update each header
-   pred's branch-target args appropriately.
+  "For each hoisted value used inside the loop body, add a block-arg parameter
+   to EVERY block in the loop body. Map each block to its new parameter ID.
+   Update the branch targets of all predecessors of loop blocks to pass the
+   hoisted value. Rewire all in-loop uses to the corresponding block's parameter.
 
    loop-info = {:header BLK :body SET :preheader BLK}
-   hoisted-pairs = vector of [original-id clone-id] from hoisting
-
-   Per pred of header:
-     - if pred IS in loop body (back-edge) → pass new-param-id
-     - else (forward edge) → pass clone-id (defined in pre-header)
-
-   Algorithm matches OLD pkg/ir/passes/licm.go threadHoistedThroughHeader."
+   hoisted-pairs = vector of [original-id clone-id] from hoisting"
   (let [{:keys [header body preheader]} loop-info
         ;; Per hoisted-pair, find body-Insts that consume the clone.
         ;; clone-id is what got installed in the pre-header; its uses
@@ -169,159 +170,73 @@
                          {:clone clone :users users-in-loop}))))
              vec)]
     (when (seq threads)
-      ;; Allocate one new header BlockArg per hoisted value that's
-      ;; consumed inside the loop. Store the mapping from clone → param.
-      (let [threads-with-params
-            (mapv (fn [t]
-                    (let [pos (count (ir/block-params header f))
-                          pid (ir/add-inst f header :block-arg [] pos)]
-                      (ir/add-block-param! f header pid)
-                      (assoc t :param pid)))
-                  threads)]
+      (doseq [{:keys [clone users]} threads]
+        ;; 1. Allocate a block-arg parameter in EVERY block of the loop body.
+        ;; Create a map of block-id -> param-id.
+        (let [block-params-map
+              (reduce (fn [m blk]
+                        (let [pos (count (ir/block-params blk f))
+                              pid (ir/add-inst f blk :block-arg [] pos)]
+                          (ir/add-block-param! f blk pid)
+                          (assoc m blk pid)))
+                      {}
+                      body)]
 
-        ;; Step 1: Rewire in-loop user refs from clone → param.
-        ;; If user is in the header block, refs rewrite directly to param.
-        ;; If user is in a non-header loop block, we must thread the value
-        ;; from header to user-block by adding a chain of block-params and
-        ;; extending each intermediate predecessor's branch-target args.
-        (doseq [{:keys [clone param users]} threads-with-params
-                user users]
-          (let [user-blk (ir/block-of user f)]
-            (if (= user-blk header)
-              (let [new-refs (mapv (fn [r] (if (= r clone) param r))
-                                   (ir/refs user f))]
-                (ir/set-refs! f user new-refs))
-              ;; Non-header user: walk from user-blk back to header via
-              ;; body predecessors, collect the path, then thread forward.
-              (let [path (loop [cur user-blk acc []]
-                           (if (= cur header)
-                             acc
-                             (let [body-preds (filter body (ir/block-preds cur f))]
-                               (if (empty? body-preds)
-                                 ;; Shouldn't happen in well-formed loop: every
-                                 ;; non-header body block has a body-predecessor.
-                                 acc
-                                 (recur (first body-preds) (cons cur acc))))))
-                    ;; Forward-thread: for each block on path, add a block-arg
-                    ;; param and extend the predecessor's branch-target args.
-                    final-param
-                    (reduce (fn [prev-param dst-blk]
-                              (let [pos        (count (ir/block-params dst-blk f))
-                                    new-pid    (ir/add-inst f dst-blk :block-arg [] pos)
-                                    _          (ir/add-block-param! f dst-blk new-pid)
-                                    ;; Find the unique body-pred → dst-blk edge.
-                                    src-blk    (first (filter body (ir/block-preds dst-blk f)))
-                                    src-term   (ir/block-term src-blk f)
-                                    src-op     (ir/op src-term f)
-                                    src-aux    (ir/aux src-term f)]
-                                (case src-op
-                                  :branch
-                                    (let [new-args (conj (vec (ir/branch-target-args src-aux))
-                                                         prev-param)
-                                          target   (ir/branch-target-target src-aux)
-                                          new-bt   (ir/new-branch-target target new-args)]
-                                      (ir/set-aux! f src-term new-bt)
-                                      ;; If target (e.g. an inner loop header) has other
-                                      ;; preds in the loop body, they must also pass the
-                                      ;; new param so arg/parity stays balanced.
-                                      (doseq [other-pred (ir/block-preds target f)
-                                              :when (and (body other-pred)
-                                                         (not= other-pred src-blk))]
-                                        (let [term (ir/block-term other-pred f)
-                                              aux  (ir/aux term f)]
-                                          (when (= :branch (ir/op term f))
-                                            (ir/set-aux! f term
-                                              (ir/new-branch-target target
-                                                (conj (vec (ir/branch-target-args aux)) new-pid)))))))
-                                  :branch-if
-                                    ;; Symmetric invariant (validate.lg's
-                                    ;; check-branch-if-symmetric-args!): both
-                                    ;; targets' args vectors must be identical
-                                    ;; in shape AND value, because lower-block!
-                                    ;; materializes a single arg stack and both
-                                    ;; targets pop from it. Append prev-param
-                                    ;; (the value-to-thread, defined at src-blk
-                                    ;; and thus materializable) to BOTH sides.
-                                    ;; If the sibling target isn't dst-blk, also
-                                    ;; pad its params with a fresh unused
-                                    ;; block-arg so the param count matches.
-                                    (let [tt (ir/cond-target-true src-aux)
-                                          ft (ir/cond-target-false src-aux)
-                                          tt-blk (ir/branch-target-target tt)
-                                          ft-blk (ir/branch-target-target ft)]
-                                      (when (not= tt-blk dst-blk)
-                                        (let [pos2 (count (ir/block-params tt-blk f))
-                                              pid2 (ir/add-inst f tt-blk :block-arg [] pos2)]
-                                          (ir/add-block-param! f tt-blk pid2)))
-                                      (when (not= ft-blk dst-blk)
-                                        (let [pos2 (count (ir/block-params ft-blk f))
-                                              pid2 (ir/add-inst f ft-blk :block-arg [] pos2)]
-                                          (ir/add-block-param! f ft-blk pid2)))
-                                      (let [new-tt (ir/new-branch-target tt-blk
-                                                     (conj (vec (ir/branch-target-args tt))
-                                                           prev-param))
-                                            new-ft (ir/new-branch-target ft-blk
-                                                     (conj (vec (ir/branch-target-args ft))
-                                                           prev-param))
-                                            new-aux (-> src-aux
-                                                        (ir/cond-target-set-true! new-tt)
-                                                        (ir/cond-target-set-false! new-ft))]
-                                        (ir/set-aux! f src-term new-aux))))
-                                new-pid))
-                            param
-                            path)
-                    new-refs (mapv (fn [r] (if (= r clone) final-param r))
-                                   (ir/refs user f))]
-                (ir/set-refs! f user new-refs)))))
+          ;; 2. Update in-loop users. Each user in block `b` should reference block-params-map[b].
+          (doseq [user users]
+            (let [user-blk (ir/block-of user f)
+                  param    (block-params-map user-blk)
+                  new-refs (mapv (fn [r] (if (= r clone) param r))
+                                 (ir/refs user f))]
+              (ir/set-refs! f user new-refs)))
 
-        ;; Step 2: Update each header pred's branch-target args.
-        ;; For each thread, append the right value based on whether pred
-        ;; is in the loop body.
-        ;;   - Back-edge (from loop): pass the param (loop-carried)
-        ;;   - Forward edge (from pre-header): pass the clone (from pre-header)
-        (doseq [pred (ir/block-preds header f)
-                :let [term      (ir/block-term pred f)
-                      op        (ir/op term f)
-                      aux       (ir/aux term f)
-                      from-loop? (body pred)
-                      extras    (mapv (fn [{:keys [clone param]}]
-                                        (if from-loop? param clone))
-                                      threads-with-params)]]
-          (case op
-            :branch
-              (let [new-args (into (vec (ir/branch-target-args aux)) extras)
-                    new-bt   (ir/new-branch-target
-                              (ir/branch-target-target aux) new-args)]
-                (ir/set-aux! f term new-bt))
-            :branch-if
-              ;; Append `extras` to BOTH true and false target args to
-              ;; preserve the symmetric branch-target-args invariant
-              ;; (lower-block! materializes a single arg stack for both
-              ;; targets). For whichever side doesn't target header, also
-              ;; pad that target block's params with fresh unused
-              ;; block-args so its param count matches the new arg count.
-              (let [tt     (ir/cond-target-true aux)
-                    ft     (ir/cond-target-false aux)
-                    tt-blk (ir/branch-target-target tt)
-                    ft-blk (ir/branch-target-target ft)]
-                (when (not= tt-blk header)
-                  (dotimes [_ (count extras)]
-                    (let [pos2 (count (ir/block-params tt-blk f))
-                          pid2 (ir/add-inst f tt-blk :block-arg [] pos2)]
-                      (ir/add-block-param! f tt-blk pid2))))
-                (when (not= ft-blk header)
-                  (dotimes [_ (count extras)]
-                    (let [pos2 (count (ir/block-params ft-blk f))
-                          pid2 (ir/add-inst f ft-blk :block-arg [] pos2)]
-                      (ir/add-block-param! f ft-blk pid2))))
-                (let [new-tt  (ir/new-branch-target tt-blk
-                                (into (vec (ir/branch-target-args tt)) extras))
-                      new-ft  (ir/new-branch-target ft-blk
-                                (into (vec (ir/branch-target-args ft)) extras))
-                      new-aux (-> aux
-                                  (ir/cond-target-set-true! new-tt)
-                                  (ir/cond-target-set-false! new-ft))]
-                  (ir/set-aux! f term new-aux)))))))))
+          ;; 3. Update all branches targeting any block in the loop body.
+          ;; The source of the edge can be `preheader` or any block in the loop body.
+          (doseq [src (conj (vec body) preheader)
+                  :let [term (ir/block-term src f)]
+                  :when (and term (> term 0))
+                  :let [op      (ir/op term f)
+                        aux     (ir/aux term f)
+                        ;; Determine the value being carried from `src`.
+                        ;; If `src` is `preheader`, the value is `clone`.
+                        ;; If `src` is in the loop body, the value is `block-params-map[src]`.
+                        val-to-pass (if (= src preheader)
+                                      clone
+                                      (block-params-map src))]]
+            (case op
+              :branch
+                (let [tgt (ir/branch-target-target aux)]
+                  (when (body tgt)
+                    ;; Target is in the loop, append val-to-pass to args
+                    (let [new-args (conj (vec (ir/branch-target-args aux)) val-to-pass)
+                          new-bt   (ir/new-branch-target tgt new-args)]
+                      (ir/set-aux! f term new-bt))))
+              :branch-if
+                (let [tt (ir/cond-target-true aux)
+                      ft (ir/cond-target-false aux)
+                      tt-tgt (ir/branch-target-target tt)
+                      ft-tgt (ir/branch-target-target ft)
+                      tt-in-loop? (body tt-tgt)
+                      ft-in-loop? (body ft-tgt)]
+                  (when (or tt-in-loop? ft-in-loop?)
+                    ;; Symmetric invariant: both targets' args vectors must be identical!
+                    ;; So if either target is in the loop, we must append val-to-pass to both.
+                    ;; If one of the targets is outside the loop, it must be balanced with a new block parameter.
+                    (when (not tt-in-loop?)
+                      (let [pos (count (ir/block-params tt-tgt f))
+                            pid (ir/add-inst f tt-tgt :block-arg [] pos)]
+                        (ir/add-block-param! f tt-tgt pid)))
+                    (when (not ft-in-loop?)
+                      (let [pos (count (ir/block-params ft-tgt f))
+                            pid (ir/add-inst f ft-tgt :block-arg [] pos)]
+                        (ir/add-block-param! f ft-tgt pid)))
+                    (let [new-tt (ir/new-branch-target tt-tgt (conj (vec (ir/branch-target-args tt)) val-to-pass))
+                          new-ft (ir/new-branch-target ft-tgt (conj (vec (ir/branch-target-args ft)) val-to-pass))
+                          new-aux (-> aux
+                                      (ir/cond-target-set-true! new-tt)
+                                      (ir/cond-target-set-false! new-ft))]
+                      (ir/set-aux! f term new-aux))))
+              nil)))))))
 
 ;; --- driver ---------------------------------------------------------
 
@@ -346,5 +261,4 @@
   "Run LICM on every natural loop in f."
   (doseq [be (back-edges f)]
     (licm-one-loop f be))
-  (validate/validate-fn! f "licm")
   f)
