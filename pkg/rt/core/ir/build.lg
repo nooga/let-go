@@ -607,7 +607,6 @@
   (let [bindings   (nth form 1)
         body       (drop 2 form)
         f          (ctx-fn ctx)
-        entry      (ctx-block ctx)
         n-slots    (/ (count bindings) 2)
         old-header (get @ctx :loop-header)
         old-caps   (get @ctx :loop-capture-syms)
@@ -633,15 +632,19 @@
                                  (ir/add-block-param! f header pid)
                                  pid))
                              (range n-caps))
-        ;; Evaluate initial values in the PRE-loop block (entry).
+        ;; Evaluate initial values in the PRE-loop block. Each build-form
+        ;; can switch ctx-block if the init expression contains nested
+        ;; control flow, so we must re-read ctx-block AFTER building all
+        ;; inits and terminate THAT block — not the block we entered with.
         init-vals (mapv (fn [i] (build-form (nth bindings (inc (* i 2))) ctx))
                         (range n-slots))
         ;; Look up each capture's parent-scope InstId.
         cap-vals  (mapv (fn [sym] (lookup-local ctx sym)) body-caps)
-        ;; Branch entry → header(init-vals ++ cap-vals).
+        ;; Branch entry-end → header(init-vals ++ cap-vals).
         bt        (ir/new-branch-target header (vec (concat init-vals cap-vals)))
-        _         (add-terminator! ctx entry :branch [] bt)
-        _         (ir/add-pred! f header entry)]
+        entry-end (ctx-block ctx)
+        _         (add-terminator! ctx entry-end :branch [] bt)
+        _         (ir/add-pred! f header entry-end)]
     ;; Switch to header.
     (ctx-set-block! ctx header)
     (push-locals! ctx)
@@ -684,10 +687,17 @@
 
 (defn build-recur [form ctx]
   "recur emits Branch back to the current loop header, or :tail-call for
-   function-level recursion."
+   function-level recursion.
+
+   Subtle: ctx-block must be re-read AFTER building the recur args, not
+   captured at entry. A recur arg may contain nested control flow (e.g.
+   `(recur (if cond a b) (next ks))`) whose build-form sequence creates
+   join blocks and leaves ctx-block pointing at the join. The terminator
+   has to land on that current join block, otherwise we'd terminate the
+   already-sealed entry block and the join block would be left without
+   a :term — failing validate-after-build."
   (let [headers (get @ctx :loop-headers)
-        f       (ctx-fn ctx)
-        cur     (ctx-block ctx)]
+        f       (ctx-fn ctx)]
     (if (and headers (seq headers))
       ;; Inside loop*: branch back to loop header.
       (let [header (peek headers)
@@ -696,14 +706,16 @@
             cap-vals (mapv (fn [sym] (lookup-local ctx sym)) cap-syms)
             loop-arg-ids (mapv (fn [a] (build-form a ctx)) (rest form))
             all-args (vec (concat loop-arg-ids cap-vals))
-            bt       (ir/new-branch-target header all-args)]
+            bt       (ir/new-branch-target header all-args)
+            cur      (ctx-block ctx)]
         (ir/add-terminator! f cur :branch [] bt)
         (ir/add-pred! f header cur)
         TERMINATED)
       ;; Function-level recur: emit :tail-call.
       (let [arg-syms (get @ctx :fn-arg-syms)]
         (if arg-syms
-          (let [arg-ids (mapv (fn [a] (build-form a ctx)) (rest form))]
+          (let [arg-ids (mapv (fn [a] (build-form a ctx)) (rest form))
+                cur     (ctx-block ctx)]
             ;; :tail-call refs are just the new arg values (self-recursive,
             ;; no fn ref needed).
             (ir/add-terminator! f cur :tail-call arg-ids (count arg-ids))
