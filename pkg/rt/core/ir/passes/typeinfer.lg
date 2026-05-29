@@ -13,7 +13,8 @@
 ;; - loops converge by block worklist iteration
 ;; - branch-if can refine the carried condition value by truthiness/falsiness
 
-(ns ir.passes.typeinfer)
+(ns ir.passes.typeinfer
+  (:require ir.dominance))
 
 ;; --- lattice ---------------------------------------------------------
 
@@ -30,6 +31,15 @@
    :any 9
    :bottom 10})
 
+;; --- diagnostic instrumentation ---
+;; Bind *ti-counters* to an atom-map around a `typeinfer` call to record
+;; per-pass counts (e.g. analyze-block visits, type-join calls). Zero
+;; overhead when nil; used by scripts/ir-stress.lg's `trace` mode to
+;; surface convergence regressions early. See scripts/ir-stress.md.
+(def ^:dynamic *ti-counters* nil)
+(defn- ti-inc! [k]
+  (when *ti-counters* (swap! *ti-counters* update k (fnil inc 0))))
+
 (defn- union-type? [t]
   (and (vector? t) (= :union (first t))))
 
@@ -43,6 +53,7 @@
            members))
 
 (defn- normalize-type [t]
+  (ti-inc! :normalize)
   (cond
     (nil? t) :unknown
     (keyword? t) t
@@ -108,9 +119,14 @@
     :else :any))
 
 (defn- type-join [a b]
-  (let [a (normalize-type a)
-        b (normalize-type b)]
-    (cond
+  ;; Invariant: a and b are already canonical. Every type-join caller
+  ;; either reads from ir/type-of (stored only via set-type-if-changed!,
+  ;; which writes the normalized form) or feeds the result of an infer-*
+  ;; function (those return canonical types directly). Skipping the
+  ;; redundant per-call normalize halves normalize-type invocations on
+  ;; the hot path.
+  (ti-inc! :type-join)
+  (cond
       (= a b) a
       (= a :bottom) b
       (= b :bottom) a
@@ -139,7 +155,7 @@
           (and (or (= a :float) (= a [:const :float 0.0]))
                (or (= b :int) (= b [:const :int 0]))))
         :number
-      :else (normalize-type [:union a b]))))
+      :else (normalize-type [:union a b])))
 
 (defn- join-all [types]
   (reduce type-join :bottom types))
@@ -152,8 +168,9 @@
       (= t [:const :float 0.0])))
 
 (defn- numeric-op-type [types]
-  (let [types (map normalize-type types)]
-    (if (every? numeric-type? types)
+  ;; Caller passes types pulled from ir/type-of (canonical post-storage),
+  ;; so we don't need to re-normalize.
+  (if (every? numeric-type? types)
       (cond
         (every? (fn [t] (or (= t :int) (= t [:const :int 0]))) types) :int
         (every? (fn [t] (or (= t :float) (= t [:const :float 0.0]))) types) :float
@@ -162,7 +179,7 @@
              (some #(or (= % :int) (= % [:const :int 0])) types)) :number
         (some #(or (= % :float) (= % [:const :float 0.0])) types) :float
         :else :int)
-      :unknown)))
+      :unknown))
 
 (defn- truthy-type? [t]
   (let [t (normalize-type t)]
@@ -229,20 +246,6 @@
 ;; --- CFG helpers -----------------------------------------------------
 
 (def terminator-ops #{:branch :branch-if :return})
-
-(defn- block-successors [bid f]
-  (let [term (ir/block-term bid f)]
-    (if (nil? term)
-      []
-      (let [op  (ir/op term f)
-            aux (ir/aux term f)]
-        (case op
-          :branch
-            [(ir/branch-target-target aux)]
-          :branch-if
-            [(ir/branch-target-target (ir/cond-target-true aux))
-             (ir/branch-target-target (ir/cond-target-false aux))]
-          [])))))
 
 (defn- refine-edge-arg-type [pred-bid target-bid arg-id arg-type f]
   (let [term (ir/block-term pred-bid f)]
@@ -332,24 +335,30 @@
         (numeric-op-type (map (fn [r] (ir/type-of r f)) refs))
       :else :unknown)))
 
-;; --- worklist driver -------------------------------------------------
-
-(defn- enqueue-all [wl queued bids]
-  (reduce (fn [[cur-wl cur-queued] bid]
-            (if (contains? cur-queued bid)
-              [cur-wl cur-queued]
-              [(conj cur-wl bid) (conj cur-queued bid)]))
-          [wl queued]
-          bids))
+;; --- fixpoint driver -------------------------------------------------
 
 (defn- set-type-if-changed! [f inst new-type]
+  ;; Dataflow monotonicity: the stored type is the lattice JOIN of every
+  ;; inference seen so far, never just the most recent. Without the join,
+  ;; type-join(:int, :unknown) = :unknown (absorbing) — combined with
+  ;; raw-replace storage — lets an inst's type oscillate :int ↔ :unknown
+  ;; across worklist iterations as predecessors are re-visited in
+  ;; different orders, and the fixpoint never converges. (Smoking gun in
+  ;; bounded-count: insts 12/20/24/29/… flipped indefinitely.)
+  ;;
+  ;; old-type is already canonical (was the result of a prior join +
+  ;; normalize); we only normalize new-type and the join result.
   (let [new-type (normalize-type new-type)
-        old-type (normalize-type (ir/type-of inst f))]
-    (when-not (= old-type new-type)
-      (ir/set-type! f inst new-type)
+        old-type (ir/type-of inst f)
+        joined   (if (= old-type :bottom)
+                   new-type
+                   (type-join old-type new-type))]
+    (when-not (= old-type joined)
+      (ir/set-type! f inst joined)
       true)))
 
 (defn- analyze-block! [bid f]
+  (ti-inc! :analyze-block)
   (let [params (ir/block-params bid f)
         changed-param?
           (loop [ps params
@@ -387,16 +396,30 @@
     (let [term (ir/block-term bid f)]
       (when-not (nil? term)
         (ir/set-type! f term :bottom))))
-  (loop [wl (vec (ir/blocks f))
-         queued (into #{} (ir/blocks f))]
-    (if (empty? wl)
-      f
-      (let [bid    (first wl)
-            wl     (vec (rest wl))
-            queued (disj queued bid)
-            changed? (analyze-block! bid f)
-            succs  (block-successors bid f)
-            [wl queued] (if changed?
-                          (enqueue-all wl queued succs)
-                          [wl queued])]
-        (recur wl queued)))))
+  ;; RPO-ordered fixpoint: sweep blocks in reverse-postorder repeatedly
+  ;; until no block's analysis changes. For acyclic CFGs this converges in
+  ;; one sweep; loops add one sweep per back-edge chain depth (typically
+  ;; 1-2). Replaces the prior construction-order worklist that re-visited
+  ;; each block ~6× even on linear control flow.
+  ;;
+  ;; reverse-postorder returns only REACHABLE blocks. Unreachable blocks
+  ;; keep :bottom — correct, since they hold no runtime values.
+  ;;
+  ;; The 5000-sweep cap is defensive: the monotonic-store fix makes the
+  ;; lattice ascending-chain finite, so this should not fire.
+  (let [rpo (ir.dominance/reverse-postorder f)]
+    (loop [sweep 0]
+      (cond
+        (>= sweep 5000)
+          (do (println "typeinfer: bailed at 5000 sweeps — fixpoint not converging")
+              f)
+        :else
+          (let [changed? (loop [bs rpo any? false]
+                           (if (empty? bs)
+                             any?
+                             (let [bid (first bs)
+                                   c   (analyze-block! bid f)]
+                               (recur (rest bs) (or any? c)))))]
+            (if changed?
+              (recur (inc sweep))
+              f))))))
