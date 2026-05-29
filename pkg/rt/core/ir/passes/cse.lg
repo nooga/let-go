@@ -9,16 +9,17 @@
 ;;         if k in seen: replace all uses of this Inst with seen[k]
 ;;         else: seen[k] = this Inst
 ;;
-;; pure-cse-ops EXCLUDES :load-var (state-dependent — needs the
-;; mutated-vars flow analysis from OLD CSE to safely dedupe across
-;; SetVar boundaries; helper is here for future widening).
+;; :load-var is CSE-eligible only when ir.passes.mutability proves the
+;; loaded Var is stable. Calls to known var-mutating builtins
+;; conservatively mark all vars unstable.
 
-(ns ir.passes.cse)
+(ns ir.passes.cse
+  (:require [ir.passes.mutability :as mut]))
 
 (def pure-cse-ops
-  "Ops safely CSE-eligible. Excludes :load-var (state-dependent;
-   needs flow analysis), :call (general effects), :branch / :branch-if
-   / :return (terminators)."
+  "Ops safely CSE-eligible without additional flow analysis. Excludes
+   :call (general effects), :branch / :branch-if / :return
+   (terminators)."
   #{:const :load-arg :load-closed :block-arg
     :add :sub :mul :lt :lte :gt :gte :eq :inc :dec})
 
@@ -27,30 +28,23 @@
    same key compute the same value."
   [(ir/op nid f) (vec (ir/refs nid f)) (ir/aux nid f)])
 
-(defn- compute-mutated-vars [f]
-  "Set of var symbols mutated by any :set-var in the function. Used to
-   invalidate LoadVar CSE entries when a SetVar appears between two
-   LoadVars of the same var. Currently a no-op (pure-cse-ops excludes
-   :load-var); kept as infrastructure for future LoadVar widening."
-  (->> (range (count (:insts @f)))
-       (filter (fn [nid] (= :set-var (ir/op nid f))))
-       (map (fn [nid] (ir/aux nid f)))
-       (into #{})))
+(defn- cse-eligible? [op nid f var-facts]
+  (or (contains? pure-cse-ops op)
+      (and (= op :load-var)
+           (mut/stable-load-var? var-facts (ir/aux nid f)))))
 
 (defn cse [f]
   "Per-block CSE: hash eligible Insts by (op, refs, aux); subsequent
    matches in the same block redirect their uses to the first occurrence
    via ir/replace-all-uses!."
-  ;; Compute mutated-vars once (forward-compat for LoadVar widening;
-  ;; doesn't influence the current per-block eligibility check).
-  (let [_mutated (compute-mutated-vars f)]
+  (let [var-facts (mut/analyze-var-stability f)]
     (doseq [bid (ir/blocks f)]
       ;; Per-block hash table. Atom is fine here — it's per-block
       ;; CSE state, the analysis equivalent of one iteration scope.
       (let [seen (atom {})]
         (doseq [nid (vec (ir/block-insts bid f))
                 :let [op (ir/op nid f)]
-                :when (pure-cse-ops op)
+                :when (cse-eligible? op nid f var-facts)
                 :let [k (inst-key nid f)]]
           (if-let [prior (@seen k)]
             (ir/replace-all-uses! f nid prior)

@@ -28,8 +28,10 @@
     (doseq [bid (ir/blocks f)
             nid (vec (ir/block-insts bid f))
             :when (removable? nid f)]
+      (println (str "DEBUG: removing inst " nid " op=" (ir/op nid f)))
       (ir/remove-inst! f bid nid)
       (reset! removed true))
+    (println (str "DEBUG: one-pass removed=" @removed))
     @removed))
 
 (defn dce [f]

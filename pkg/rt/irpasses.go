@@ -23,6 +23,9 @@ var IRPassConstFoldSrc string
 //go:embed core/ir/passes/cse.lg
 var IRPassCSESrc string
 
+//go:embed core/ir/passes/mutability.lg
+var IRPassMutabilitySrc string
+
 //go:embed core/ir/passes/typeinfer.lg
 var IRPassTypeInferSrc string
 

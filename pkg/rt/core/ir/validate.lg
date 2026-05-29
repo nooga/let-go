@@ -119,16 +119,17 @@
     (loop [i 0]
       (when (< i (count blocks))
         (let [blk     (nth blocks i)
-              term-id (:term blk)
-              term    (nth insts term-id)
-              op      (nth term 0)
-              aux     (nth term 2)]
-          (cond
-            (= op :branch)
-              (check-branch-arg-arity-for-target! label i aux blocks)
-            (= op :branch-if)
-              (do (check-branch-arg-arity-for-target! label i (ir/cond-target-true aux)  blocks)
-                  (check-branch-arg-arity-for-target! label i (ir/cond-target-false aux) blocks))))
+              term-id (:term blk)]
+          (when term-id
+            (let [term    (nth insts term-id)
+                  op      (nth term 0)
+                  aux     (nth term 2)]
+              (cond
+                (= op :branch)
+                  (check-branch-arg-arity-for-target! label i aux blocks)
+                (= op :branch-if)
+                  (do (check-branch-arg-arity-for-target! label i (ir/cond-target-true aux)  blocks)
+                      (check-branch-arg-arity-for-target! label i (ir/cond-target-false aux) blocks))))))
         (recur (inc i))))))
 
 (defn- check-branch-if-symmetric-args! [f label]

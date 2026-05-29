@@ -512,7 +512,7 @@
         params (ir/block-params bid f)
         insts  (ir/block-insts bid f)
         term   (ir/block-term bid f)
-        term-op (when-not (zero? term) (ir/op term f))
+        term-op (when (and term (not (zero? term))) (ir/op term f))
         ;; For :branch-if, defer the cond's emission past the body walk
         ;; so the branch-target args can be materialized BELOW the cond
         ;; (positions 0..N-1) before BRANCH_FALSE pops the cond.
@@ -548,7 +548,7 @@
           :else (emit-inst! l nid))))
 
     ;; Terminator.
-    (when (not (zero? term))
+    (when (and term (not (zero? term)))
       (cond
         (= term-op :branch-if)
           (let [cond-aux (ir/aux term f)

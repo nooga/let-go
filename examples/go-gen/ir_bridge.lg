@@ -342,6 +342,13 @@
       :args [String Int Int Int Int]
       :body "return vm.NewBoxed(vm.SourceInfo{File: arg0, Line: arg1, Column: arg2, EndLine: arg3, EndColumn: arg4}), nil"}
 
+     ;; Look up the SourceInfo of a given form using the global FormSource map.
+     {:name "form-source-info" :lisp-name "ir/form-source-info"
+      :args [Value]
+      :body "info := vm.FormSource.Get(arg0)
+             if info == nil { return vm.NIL, nil }
+             return vm.NewBoxed(*info), nil"}
+
      ;; Length / current IP.
      {:name "chunk-length" :lisp-name "ir/chunk-length"
       :args [Self]

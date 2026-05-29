@@ -1,0 +1,57 @@
+;; Conservative mutation/effect facts for IR passes.
+;;
+;; This namespace owns var-root stability analysis. Consumers such as
+;; CSE, LICM, and later GVN should ask this namespace whether a LoadVar
+;; can be treated as stable instead of embedding mutation policy locally.
+
+(ns ir.passes.mutability)
+
+(def known-var-mutating-builtins
+  "Core vars whose calls can mutate var roots. If one appears as an
+   OpCall callee, this analysis cannot statically identify the target
+   var, so every LoadVar is treated as unstable."
+  #{"#'core/alter-var-root"
+    "#'core/alter-var-root!"
+    "#'core/intern"
+    "#'core/with-redefs"})
+
+(defn mutating-var-call? [nid f]
+  "True when Inst nid is a call to a known var-root mutating builtin."
+  (when (= :call (ir/op nid f))
+    (let [refs   (ir/refs nid f)
+          callee (when (seq refs) (first refs))]
+      (and callee
+           (= :load-var (ir/op callee f))
+           (contains? known-var-mutating-builtins
+                      (str (ir/aux callee f)))))))
+
+(defn analyze-var-stability [f]
+  "Return conservative var-root stability facts:
+     {:unknown-all? bool :mutated-vars set}
+
+   :mutated-vars contains Vars written by direct :set-var instructions.
+   :unknown-all? means an indirect/global var-mutating call was observed,
+   so no LoadVar can be assumed stable."
+  (loop [ids          (range (count (:insts @f)))
+         mutated-vars #{}
+         unknown-all? false]
+    (if (or unknown-all? (empty? ids))
+      {:unknown-all? unknown-all? :mutated-vars mutated-vars}
+      (let [nid (first ids)
+            op  (ir/op nid f)]
+        (cond
+          (= op :set-var)
+            (recur (rest ids)
+                   (conj mutated-vars (ir/aux nid f))
+                   unknown-all?)
+
+          (mutating-var-call? nid f)
+            (recur (rest ids) mutated-vars true)
+
+          :else
+            (recur (rest ids) mutated-vars unknown-all?))))))
+
+(defn stable-load-var? [facts var-value]
+  "True when facts prove loading var-value is stable within the function."
+  (and (not (:unknown-all? facts))
+       (not (contains? (:mutated-vars facts) var-value))))

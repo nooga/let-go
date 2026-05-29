@@ -269,7 +269,13 @@
    instead of the O(n) full-array walk the previous implementation did.
    Single swap! per consumer; the uses cache is invalidated once at the
    end."
-  (let [consumer-ids (nth (uses f) old-id)]
+  (let [consumer-ids (nth (uses f) old-id)
+        old-sis      (source-infos old-id f)]
+    (when (seq old-sis)
+      (swap! f update-in [:insts new-id 4]
+             (fn [new-sis]
+               (let [nsis (if (nil? new-sis) [] new-sis)]
+                 (vec (distinct (concat nsis old-sis)))))))
     (doseq [cid consumer-ids]
       (swap! f update-in [:insts cid]
              (fn [i]

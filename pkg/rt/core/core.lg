@@ -235,7 +235,10 @@
 (defn qualified-symbol? [x] (and (symbol? x) (some? (namespace x))))
 
 ;; bleh
-(defn vector? [x] (= (type x) (type [])))
+(defn vector? [x]
+  (let [t (type x)]
+    (or (= t (type []))
+        (= "let-go.lang.PersistentVector" (str t)))))
 ;; list?, map?, and set? are native builtins (handle seq/list distinctions and sorted variants)
 (defn symbol? [x] (= (type x) (type 'x)))
 (defn keyword? [x] (= (type x) (type :x)))
@@ -810,10 +813,8 @@
                        (- (count args) 1)   ; only & doesn't count; rest-sym occupies a frame slot
                        (count args)))]
     (if *ir-compile*
-      ;; `resolve` defers ir.passes.pipeline lookup to RUNTIME — core.lg
-      ;; compiles before ir.passes.pipeline exists, so a direct symbol
-      ;; reference would fail at bundle-gen time.
-      (let [whole-form (apply list 'defn name forms)
+      (let [_          (intern (deref #'*ns*) name)
+            whole-form (apply list 'defn name forms)
             cf-var     (resolve 'ir.passes.pipeline/compile-form)
             _          (when (nil? cf-var)
                          (throw "*ir-compile* is true but ir.passes.pipeline isn't loaded; (require 'ir.passes.pipeline) first"))

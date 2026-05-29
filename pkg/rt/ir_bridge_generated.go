@@ -153,6 +153,18 @@ func installIRBridgeBuiltins() {
 		return vm.NewBoxed(vm.SourceInfo{File: arg0, Line: arg1, Column: arg2, EndLine: arg3, EndColumn: arg4}), nil
 	})
 	ns.Def("new-source-info", chunk_new_source_info_Fn)
+	chunk_form_source_info_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("ir/form-source-info: expected (Value), got %d args", len(vs))
+		}
+		arg0 := vs[0]
+		info := vm.FormSource.Get(arg0)
+		if info == nil {
+			return vm.NIL, nil
+		}
+		return vm.NewBoxed(*info), nil
+	})
+	ns.Def("form-source-info", chunk_form_source_info_Fn)
 	chunk_chunk_length_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("ir/chunk-length: expected (Self), got %d args", len(vs))

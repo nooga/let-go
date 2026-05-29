@@ -1,16 +1,19 @@
 ;; The Lisp optimization-pass pipeline driver.
 ;;
-;; `(optimize-fn f)` runs the five enabled Lisp passes in a sensible order:
+;; `(optimize-fn f)` runs the enabled Lisp passes in a sensible order:
 ;;   1. constfold   — fold Const arithmetic, identities, canonicalize
-;;   2. cse         — per-block common-subexpression elimination [disabled]
+;;   2. cse         — same-block common-subexpression elimination
 ;;   3. constfold   — again; CSE may expose new fold opportunities
-;;   4. licm        — hoist loop-invariant Insts to pre-headers [disabled]
+;;   4. licm        — hoist loop-invariant Insts to pre-headers
 ;;   5. constfold   — again; LICM may rearrange uses such that more
 ;;                    folds become possible
 ;;   6. dce         — drop pure Insts with zero uses (cleanup)
 ;;
 ;; Build (Phase 3) now emits BlockArg params proactively for all cross-block
 ;; captures, eliminating the need for post-pass threading.
+;;
+;; CSE remains intentionally narrow: same-block pure ops plus stable
+;; LoadVar values only. Dominance/GVN-style cross-block CSE is deferred.
 ;;
 ;; Returns f (same object — passes mutate in place).
 
@@ -28,10 +31,8 @@
 (defn optimize-fn [f]
   (validate-fn! f "build")
   (constfold f)           (validate-fn! f "constfold-1")
-  ;; CSE disabled: can produce cross-block refs that need direct threading
-  ;; through Params + BranchTarget.Args (Phase 3 now does this proactively).
   ;; LICM is now re-enabled with full threadHoistedThroughHeader ported.
-  ;; (cse f)              (validate-fn! f "cse")
+  (cse f)                 (validate-fn! f "cse")
   (constfold f)           (validate-fn! f "constfold-2")
   (licm f)                (validate-fn! f "licm")
   (constfold f)           (validate-fn! f "constfold-3")
@@ -72,6 +73,10 @@
                 (apply list (first expanded)
                        (doall (map expand-all (rest expanded)))))
               (expand-all expanded)))))
+    (vector? form)
+      (vec (doall (map expand-all form)))
+    (map? form)
+      (into {} (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
     :else form))
 
 (def ^:dynamic *target* :bytecode)

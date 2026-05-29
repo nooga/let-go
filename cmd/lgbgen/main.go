@@ -54,6 +54,7 @@ var embeddedNS = []struct {
 	{"ir.validate", &rt.IRValidateSrc},
 	{"ir.passes.dce", &rt.IRPassDCESrc},
 	{"ir.passes.constfold", &rt.IRPassConstFoldSrc},
+	{"ir.passes.mutability", &rt.IRPassMutabilitySrc},
 	{"ir.passes.cse", &rt.IRPassCSESrc},
 	{"ir.passes.typeinfer", &rt.IRPassTypeInferSrc},
 	{"ir.passes.licm", &rt.IRPassLICMSrc},

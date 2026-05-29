@@ -46,7 +46,8 @@ func ensureLoader() {
 		}
 		for _, ns := range []string{
 			"ir.zipper", "ir.passes",
-			"ir.passes.dce", "ir.passes.constfold", "ir.passes.cse",
+			"ir.passes.dce", "ir.passes.constfold",
+			"ir.passes.mutability", "ir.passes.cse",
 			"ir.passes.licm",
 			"ir.passes.pipeline", "ir.dump", "ir.dominance", "ir.lower-go"} {
 			if res.Load(ns) == nil {
@@ -115,6 +116,21 @@ func runLispPass(t *testing.T, passNS, passFn string, f vm.Value) vm.Value {
 		t.Fatalf("eval %s: %v", expr, err)
 	}
 	return f
+}
+
+// runLispExpr evaluates a Lisp expression via the runtime compiler
+// and returns the result. Used by tests that need direct expression evaluation
+// without constructing IR via ir.build/build-fn.
+func runLispExpr(t *testing.T, expr string) vm.Value {
+	t.Helper()
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("lisp-ir-test")
+	_, result, err := c.CompileMultiple(strings.NewReader(expr))
+	if err != nil {
+		t.Fatalf("eval %s: %v", expr, err)
+	}
+	return result
 }
 
 // constFoldCase — one regression case. `mustContain` lists substrings
