@@ -9,11 +9,20 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"sync/atomic"
 )
 
 type Var struct {
-	root      Value
-	bindings  []Value // dynamic binding stack (nil when unused — zero cost)
+	// root and curr are atomic so Deref — by far the hottest var
+	// operation — is lock-free. Previously every Deref (even of a var
+	// with no dynamic binding) took the global bindingsMu just to check
+	// the binding stack, serializing all var reads across goroutines.
+	// curr holds the current dynamic top binding (nil = use root); it is
+	// kept in sync with the bindings stack by push/pop/RunWithBindings
+	// under bindingsMu (the cold path).
+	root      atomic.Pointer[Value] // root binding (lock-free read)
+	curr      atomic.Pointer[Value] // current dynamic top binding; nil = use root
+	bindings  []Value               // full dynamic binding stack (guarded by bindingsMu)
 	nsref     *Namespace
 	ns        string
 	name      string
@@ -21,7 +30,7 @@ type Var struct {
 	isMacro   bool
 	isDynamic bool
 	isPrivate bool
-	mu        sync.Mutex
+	mu        sync.Mutex // guards meta + watches
 	watches   map[Value]Fn
 }
 
@@ -30,18 +39,32 @@ var (
 	activeVars = map[*Var]struct{}{}
 )
 
+// valPtr boxes a Value for storage in an atomic.Pointer[Value].
+func valPtr(v Value) *Value { return &v }
+
+// syncCurrLocked refreshes the atomic current-binding pointer from the
+// bindings stack. Must be called while holding bindingsMu.
+func (v *Var) syncCurrLocked() {
+	if len(v.bindings) == 0 {
+		v.curr.Store(nil)
+	} else {
+		v.curr.Store(valPtr(v.bindings[len(v.bindings)-1]))
+	}
+}
+
 type BindingSnapshot map[*Var][]Value
 
 func (v *Var) Invoke(values []Value) (Value, error) {
-	f, ok := v.root.(Fn)
+	root := v.Root()
+	f, ok := root.(Fn)
 	if !ok {
-		return NIL, fmt.Errorf("%v root does not implement Fn", v.root)
+		return NIL, fmt.Errorf("%v root does not implement Fn", root)
 	}
 	return f.Invoke(values)
 }
 
 func (v *Var) Arity() int {
-	f, ok := v.root.(Fn)
+	f, ok := v.Root().(Fn)
 	if !ok {
 		return 0
 	}
@@ -49,36 +72,31 @@ func (v *Var) Arity() int {
 }
 
 func NewVar(nsref *Namespace, ns string, name string) *Var {
-	return &Var{
-		nsref:     nsref,
-		ns:        ns,
-		name:      name,
-		root:      NIL,
-		isMacro:   false,
-		isDynamic: false,
-		isPrivate: false,
+	v := &Var{
+		nsref: nsref,
+		ns:    ns,
+		name:  name,
 	}
-}
-
-func (v *Var) SetRoot(val Value) *Var {
-	v.mu.Lock()
-	v.root = val
-	v.mu.Unlock()
+	v.root.Store(valPtr(NIL))
 	return v
 }
 
-func (v *Var) Deref() Value {
-	bindingsMu.Lock()
-	if len(v.bindings) > 0 {
-		out := v.bindings[len(v.bindings)-1]
-		bindingsMu.Unlock()
-		return out
-	}
-	bindingsMu.Unlock()
+func (v *Var) SetRoot(val Value) *Var {
+	v.root.Store(valPtr(val))
+	return v
+}
 
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.root
+// Deref returns the current value: the dynamic top binding if one is
+// active, else the root. Lock-free — two atomic loads, no mutex — so it
+// scales across goroutines.
+func (v *Var) Deref() Value {
+	if p := v.curr.Load(); p != nil {
+		return *p
+	}
+	if p := v.root.Load(); p != nil {
+		return *p
+	}
+	return NIL
 }
 
 // Root returns the var's root binding directly, bypassing any current
@@ -86,9 +104,10 @@ func (v *Var) Deref() Value {
 // the root (e.g. alter-var-root) rather than the currently visible deref
 // value.
 func (v *Var) Root() Value {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.root
+	if p := v.root.Load(); p != nil {
+		return *p
+	}
+	return NIL
 }
 
 // PushBinding pushes a dynamic binding value.
@@ -96,6 +115,7 @@ func (v *Var) PushBinding(val Value) {
 	bindingsMu.Lock()
 	defer bindingsMu.Unlock()
 	v.bindings = append(v.bindings, val)
+	v.syncCurrLocked()
 	activeVars[v] = struct{}{}
 }
 
@@ -106,6 +126,7 @@ func (v *Var) PopBinding() {
 	if len(v.bindings) > 0 {
 		v.bindings = v.bindings[:len(v.bindings)-1]
 	}
+	v.syncCurrLocked()
 	if len(v.bindings) == 0 {
 		delete(activeVars, v)
 	}
@@ -151,6 +172,7 @@ func RunWithBindings(snap BindingSnapshot, fn func() (Value, error)) (Value, err
 			v.bindings = nil
 			delete(activeVars, v)
 		}
+		v.syncCurrLocked()
 	}
 	bindingsMu.Unlock()
 
@@ -164,6 +186,7 @@ func RunWithBindings(snap BindingSnapshot, fn func() (Value, error)) (Value, err
 		} else {
 			delete(activeVars, v)
 		}
+		v.syncCurrLocked()
 	}
 	bindingsMu.Unlock()
 	return out, err
@@ -196,9 +219,7 @@ func (v *Var) AlterRootArgs(fn Fn, args []Value) (Value, error) {
 	if err != nil {
 		return NIL, err
 	}
-	v.mu.Lock()
-	v.root = result
-	v.mu.Unlock()
+	v.root.Store(valPtr(result))
 	if err := v.notifyWatches(old, result); err != nil {
 		return NIL, err
 	}
