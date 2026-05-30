@@ -131,3 +131,9 @@ func isErrorEOF(err error) bool {
 	}
 	return false
 }
+
+// IsErrorEOF reports whether err represents end-of-input: a plain io.EOF, or a
+// ReaderError whose (possibly nested) cause is io.EOF. Use this instead of
+// errors.Is(err, io.EOF) for reader output — ReaderError wraps io.EOF in a
+// `cause` field and does not implement Unwrap, so errors.Is never matches it.
+func IsErrorEOF(err error) bool { return isErrorEOF(err) }

@@ -35,6 +35,7 @@ func FormatError(err error) string {
 	}
 
 	var frames []frame
+	var goStack string
 	current := err
 	for current != nil {
 		switch e := current.(type) {
@@ -45,6 +46,13 @@ func FormatError(err error) string {
 		case *TypeError:
 			frames = append(frames, frame{msg: current.Error()})
 			current = e.cause
+		case *GoPanicError:
+			// An unexpected Go panic (e.g. syscall/js under WASM, nil deref in
+			// a builtin). Carries the Go stack — the only traceback that pins
+			// the actual crash site, since native fns have no .lg source.
+			goStack = e.GoStack()
+			frames = append(frames, frame{msg: e.Error()})
+			current = nil
 		default:
 			frames = append(frames, frame{msg: current.Error()})
 			current = nil
@@ -89,7 +97,46 @@ func FormatError(err error) string {
 		}
 	}
 
+	// For an unexpected Go panic, surface the let-go-relevant Go frames so the
+	// real crash site (the .go file:line) is visible — otherwise the only
+	// traceback is the source-less let-go frames above.
+	if origin := letGoStackFrames(goStack); origin != "" {
+		b.WriteString("\n" + ansiBold + "go panic origin:" + ansiReset + "\n")
+		b.WriteString(origin)
+	}
+
 	return b.String()
+}
+
+// letGoStackFrames extracts the let-go-relevant func+location pairs from a
+// debug.Stack() dump (those inside this repo), skipping the panic-recover
+// machinery, so a Go panic's actual origin (e.g. term_wasm.go:91) is shown.
+// Returns "" when there are no in-repo frames (or no stack at all).
+func letGoStackFrames(stack string) string {
+	if stack == "" {
+		return ""
+	}
+	const repo = "nooga/let-go/"
+	lines := strings.Split(stack, "\n")
+	var out strings.Builder
+	shown := 0
+	for i := 0; i+1 < len(lines) && shown < 8; i++ {
+		fn := strings.TrimSpace(lines[i])
+		if !strings.Contains(fn, repo) || strings.Contains(fn, "recoverThrownPanic") {
+			continue
+		}
+		loc := strings.TrimSpace(lines[i+1])
+		if idx := strings.Index(loc, repo); idx >= 0 {
+			loc = loc[idx+len(repo):]
+		}
+		if sp := strings.IndexByte(loc, ' '); sp >= 0 {
+			loc = loc[:sp]
+		}
+		fmt.Fprintf(&out, "  %s\n     %s\n", fn, loc)
+		shown++
+		i++ // consume the location line
+	}
+	return out.String()
 }
 
 func formatCompileError(ce compileErrorLike) string {

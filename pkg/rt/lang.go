@@ -3350,7 +3350,7 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("go expected Fn")
 		}
 		ret := make(vm.Chan)
-		vm.Goroutines.Go(func(ctx context.Context) {
+		vm.CurrentScope().Go(func(ctx context.Context) {
 			v, err := at.Invoke(nil)
 			if err != nil {
 				fmt.Println(err)
@@ -3377,6 +3377,50 @@ func installLangNS() {
 		return make(vm.Chan), nil
 	})
 
+	scopeOpen, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 0 {
+			return vm.NIL, fmt.Errorf("scope-open expects 0 arguments")
+		}
+		return vm.OpenChild(), nil
+	})
+
+	scopeClose, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("scope-close! expects 2 arguments (scope timeout-ms)")
+		}
+		s, ok := vs[0].(*vm.Scope)
+		if !ok {
+			return vm.NIL, fmt.Errorf("scope-close! expected a scope")
+		}
+		ms, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("scope-close! expected an integer timeout-ms")
+		}
+		vm.CloseScoped(s, time.Duration(int64(ms))*time.Millisecond)
+		return vm.NIL, nil
+	})
+
+	scopeLive, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("scope-live expects 1 argument")
+		}
+		s, ok := vs[0].(*vm.Scope)
+		if !ok {
+			return vm.NIL, fmt.Errorf("scope-live expected a scope")
+		}
+		return vm.Int(s.LiveTree()), nil
+	})
+
+	scopeQmark, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("scope? expects 1 argument")
+		}
+		if _, ok := vs[0].(*vm.Scope); ok {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+
 	chanput, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -3399,7 +3443,7 @@ func installLangNS() {
 		select {
 		case ch <- vs[1]:
 			return vm.TRUE, nil
-		case <-vm.Goroutines.Context().Done():
+		case <-vm.CurrentContext().Done():
 			return vm.NIL, nil
 		}
 	})
@@ -3409,7 +3453,7 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		if pc, ok := asPromiseChan(vs[0]); ok {
-			return pc.take(vm.Goroutines.Context()), nil
+			return pc.take(vm.CurrentContext()), nil
 		}
 		ch, ok := vs[0].(vm.Chan)
 		if !ok {
@@ -3425,7 +3469,7 @@ func installLangNS() {
 				return vm.NIL, nil // closed — not an error
 			}
 			return v, nil
-		case <-vm.Goroutines.Context().Done():
+		case <-vm.CurrentContext().Done():
 			return vm.NIL, nil
 		}
 	})
@@ -5496,7 +5540,7 @@ func installLangNS() {
 		}
 		snap := vm.SnapshotBindings()
 		p := vm.NewPromise()
-		vm.Goroutines.Go(func(ctx context.Context) {
+		vm.CurrentScope().Go(func(ctx context.Context) {
 			v, err := vm.RunWithBindings(snap, func() (vm.Value, error) {
 				return fn.Invoke(nil)
 			})
@@ -5927,6 +5971,10 @@ func installLangNS() {
 	ns.Def("<!", changet)
 	ns.Def(">!!", chanput)
 	ns.Def("<!!", changet)
+	ns.Def("scope-open", scopeOpen)
+	ns.Def("scope-close!", scopeClose)
+	ns.Def("scope-live", scopeLive)
+	ns.Def("scope?", scopeQmark)
 
 	ns.Def("int", intf)
 	ns.Def("long", longf)
@@ -7058,7 +7106,7 @@ func installLangNS() {
 		defer t.Stop()
 		select {
 		case <-t.C:
-		case <-vm.Goroutines.Context().Done():
+		case <-vm.CurrentContext().Done():
 		}
 		return vm.NIL, nil
 	})

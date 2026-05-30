@@ -418,9 +418,18 @@
             :else nil))
 
       (or (= op :inc) (= op :dec))
-        (let [lhs (value-expr f closed-exprs (nth refs 0))]
-          (when lhs
-            (gogen/binary (if (= op :inc) "+" "-") lhs (gogen/int-lit 1))))
+        (let [lhs-id   (nth refs 0)
+              lhs-spec (go-type-spec (ir/type-of lhs-id f))]
+          (if (= "vm.Value" lhs-spec)
+            (let [lhs (box-as-value f closed-exprs lhs-id)]
+              (when lhs
+                (gogen/call
+                  (gogen/field-sel (gogen/ident "rt")
+                                    (if (= op :inc) "AddValue" "SubValue"))
+                  [lhs (vm-call "Int" [(gogen/int-lit 1)])])))
+            (let [lhs (value-expr f closed-exprs lhs-id)]
+              (when lhs
+                (gogen/binary (if (= op :inc) "+" "-") lhs (gogen/int-lit 1))))))
 
       :else nil)))
 
@@ -685,7 +694,13 @@
                                  (and (contains? binary-op op)
                                       (not= op :eq)
                                       (or (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))
-                                          (= "vm.Value" (go-type-spec (ir/type-of (nth refs 1) f))))))))
+                                          (= "vm.Value" (go-type-spec (ir/type-of (nth refs 1) f)))))
+                                 ;; inc/dec over vm.Value also delegates to
+                                 ;; rt.AddValue/SubValue so unknown numeric
+                                 ;; values do not emit invalid native Go
+                                 ;; arithmetic.
+                                 (and (or (= op :inc) (= op :dec))
+                                      (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))))))
                          (ir/block-insts (first blocks) f))
                      true
                    :else (recur (rest blocks))))]

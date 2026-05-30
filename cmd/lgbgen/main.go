@@ -13,9 +13,7 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +28,55 @@ import (
 type embeddedNamespace struct {
 	name string
 	src  string
+}
+
+// goLoweringNSOrder is intentionally explicit. The bytecode bundle can use
+// discovered dependency order, but Go lowering has pass-state dependencies that
+// are not fully represented by namespace :require clauses. In particular,
+// ir.build must lower after the type-inference passes have been loaded and
+// exercised, or arithmetic like (dec (count xs)) is emitted as vm.Value - 1.
+var goLoweringNSOrder = []string{
+	"core",
+	"walk",
+	"string",
+	"set",
+	"pprint",
+	"edn",
+	"io",
+	"async",
+	"hash",
+	"test",
+	"ir.data.generated",
+	"ir.zipper",
+	"ir.passes",
+	"ir.dominance",
+	"ir.lower",
+	"ir.lower-go",
+	"ir.validate",
+	"ir.passes.dce",
+	"ir.passes.constfold",
+	"ir.passes.mutability",
+	"ir.passes.cse",
+	"ir.passes.typeinfer",
+	"ir.passes.licm",
+	"ir.passes.infer-arg-types",
+	"graph",
+	"ir.build",
+	"ir.passes.pipeline",
+	"ir.dump",
+	"ir.passes.trace",
+}
+
+func orderedEmbeddedNS(names []string) ([]embeddedNamespace, error) {
+	out := make([]embeddedNamespace, 0, len(names))
+	for _, name := range names {
+		src, ok := rt.EmbeddedSource(name)
+		if !ok {
+			return nil, fmt.Errorf("embedded namespace %q not found", name)
+		}
+		out = append(out, embeddedNamespace{name: name, src: src})
+	}
+	return out, nil
 }
 
 // discoverEmbeddedNS walks pkg/rt's coreFS to find every namespace
@@ -76,7 +123,27 @@ func hasLgbgenSkipDirective(src string) bool {
 		if i > 2 {
 			break
 		}
-		if strings.Contains(line, "lgbgen:skip") {
+		// `lgbgen:skip-go` is a distinct directive (go-lowering only) and must
+		// NOT trigger the bundle skip — exclude it from this substring match.
+		if strings.Contains(line, "lgbgen:skip") && !strings.Contains(line, "lgbgen:skip-go") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLgbgenSkipGoDirective reports whether the source opts out of Go-lowering
+// (the --target=go path) via `;; lgbgen:skip-go`. Such a namespace is still
+// compiled into the bytecode bundle; it just isn't lowered to Go. Used for
+// namespaces whose forms the lowering pipeline can't emit as valid Go (e.g.
+// `core`'s multi-arity `apply`, which would produce redeclared funcs) — they
+// run via bytecode under -tags gogen_ir instead.
+func hasLgbgenSkipGoDirective(src string) bool {
+	for i, line := range strings.SplitN(src, "\n", 4) {
+		if i > 2 {
+			break
+		}
+		if strings.Contains(line, "lgbgen:skip-go") {
 			return true
 		}
 	}
@@ -256,13 +323,15 @@ func main() {
 		}
 	}
 
-	// Register an on-demand namespace loader so a bundled namespace that
-	// depends at compile time on an lgbgen:skip namespace (e.g.
-	// ir.passes.pipeline calls graph/toposort-by, and graph is skip'd) can
-	// load that source on demand instead of failing to resolve. The skip'd
-	// ns is compiled into the shared consts/VM state so dependents resolve,
-	// but it is never added to nsChunks, so it stays out of the bundle —
-	// matching the on-demand-from-source contract its skip directive declares.
+	// Register an on-demand namespace loader so a namespace that depends at
+	// compile time on an lgbgen:skip namespace NOT present in
+	// goLoweringNSOrder can load that source on demand instead of failing to
+	// resolve. Note that some skip'd namespaces (e.g. graph, a compile-time
+	// dependency of the lowered ir.* pipeline via graph/toposort-by) ARE
+	// listed in goLoweringNSOrder and therefore are bundled — their skip
+	// directive only governs discovery-driven bundling, not the explicit
+	// go-lowering order. The loader covers the remaining skip'd namespaces
+	// that are referenced but not explicitly listed.
 	{
 		coreNS := rt.NS(rt.NameCoreNS)
 		loaderCtx := compiler.NewCompiler(consts, coreNS)
@@ -270,9 +339,9 @@ func main() {
 	}
 
 	// Phase 1: compile all namespaces from source (bytecode, sets up VM state).
-	embeddedNS, err := discoverEmbeddedNS()
+	embeddedNS, err := orderedEmbeddedNS(goLoweringNSOrder)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ns discovery failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-lowering ns list failed: %v\n", err)
 		os.Exit(1)
 	}
 	nsChunks := make(map[string]*vm.CodeChunk)
@@ -353,22 +422,37 @@ func runGoTarget(outDir string) {
 		if src == "" {
 			continue
 		}
+		// Namespaces marked lgbgen:skip-go are bundled (bytecode) but not
+		// lowered to Go — their forms don't emit valid Go. They run via
+		// bytecode under -tags gogen_ir.
+		if hasLgbgenSkipGoDirective(src) {
+			fmt.Printf("  skip-go %-20s (lgbgen:skip-go)\n", ns.name)
+			continue
+		}
 
-		// Read forms from source and pick out defn forms only.
+		// Read forms from source and pick out single-arity defn/defn- forms.
 		// defmacro forms are skipped for now — their bodies are macro
-		// template construction code that doesn't lower cleanly.
+		// template construction code that doesn't lower cleanly. Multi-arity
+		// functions are also skipped: the Go target emits one func per arity
+		// under the same Go name, which Go rejects as a redeclaration. They
+		// fall back to bytecode under -tags gogen_ir.
 		r := compiler.NewLispReader(strings.NewReader(src), "<embedded:"+ns.name+">")
 		var defnForms []vm.Value
 		for {
 			form, err := r.Read()
 			if err != nil {
-				if errors.Is(err, io.EOF) {
+				// The reader signals end-of-input with a ReaderError wrapping
+				// io.EOF, which errors.Is(io.EOF) does NOT match (ReaderError
+				// has no Unwrap). Use compiler.IsErrorEOF, the same check the
+				// compiler's own read loop uses, so a clean EOF isn't mistaken
+				// for a syntax error.
+				if compiler.IsErrorEOF(err) {
 					break
 				}
 				fmt.Fprintf(os.Stderr, "%s: read error: %v\n", ns.name, err)
 				os.Exit(1)
 			}
-			if isDefnOnly(form) {
+			if isDefnOnly(form) && isSingleArityDefn(form) {
 				defnForms = append(defnForms, form)
 			}
 		}
@@ -418,29 +502,13 @@ func runGoTarget(outDir string) {
 	}
 }
 
-// isDefnLike returns true if form is a list beginning with defn or defmacro.
-func isDefnLike(form vm.Value) bool {
-	return isDefnOnly(form) || isDefmacroForm(form)
-}
-
-func isDefmacroForm(form vm.Value) bool {
-	list, ok := form.(vm.Sequable)
-	if !ok {
-		return false
-	}
-	seq := list.Seq()
-	if seq == nil {
-		return false
-	}
-	head := seq.First()
-	sym, ok := head.(vm.Symbol)
-	if !ok {
-		return false
-	}
-	return string(sym) == "defmacro"
-}
-
-// isDefnOnly returns true if form is a list beginning with defn (not defmacro).
+// isDefnOnly returns true if form is a list beginning with defn or defn-
+// (a public or private function definition), but not defmacro. Both defn
+// and defn- are candidates for Go lowering: private helpers are called by
+// the public functions in the same namespace, so omitting them would
+// silently drop their native lowering and fall back to bytecode. Callers
+// must additionally gate on isSingleArityDefn — see its note on why
+// multi-arity forms cannot lower to a single Go function.
 func isDefnOnly(form vm.Value) bool {
 	list, ok := form.(vm.Sequable)
 	if !ok {
@@ -455,5 +523,32 @@ func isDefnOnly(form vm.Value) bool {
 	if !ok {
 		return false
 	}
-	return string(sym) == "defn"
+	return string(sym) == "defn" || string(sym) == "defn-"
+}
+
+// isSingleArityDefn reports whether a defn/defn- form has exactly one arity.
+// A single-arity form places its argument vector at the top level —
+// (defn name docstring? meta? [args] body...) — whereas a multi-arity form
+// wraps each arity in its own list — (defn name ([a] ...) ([a b] ...)) — and
+// so has no top-level vector. The Go target emits one func per arity under
+// the same Go name; for multi-arity that is a redeclaration Go rejects, so
+// those forms are skipped and run as bytecode under -tags gogen_ir.
+func isSingleArityDefn(form vm.Value) bool {
+	list, ok := form.(vm.Sequable)
+	if !ok {
+		return false
+	}
+	seq := list.Seq()
+	if seq == nil {
+		return false
+	}
+	// Skip the head (defn/defn-) and the name symbol; scan the remaining
+	// top-level elements for an argument vector.
+	for s := seq.Next(); s != nil; s = s.Next() {
+		switch s.First().(type) {
+		case vm.ArrayVector, vm.PersistentVector:
+			return true
+		}
+	}
+	return false
 }

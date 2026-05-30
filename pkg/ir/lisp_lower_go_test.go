@@ -180,6 +180,26 @@ func TestLowerGoStrictCallLowersViaInvokeValue(t *testing.T) {
 	}
 }
 
+func TestLowerGoStrictDecUnknownValueUsesRuntimeHelper(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn dec-count [xs] (dec (count xs)))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "rt.SubValue") {
+		t.Fatalf("expected vm.Value dec to lower via rt.SubValue\n--- go ---\n%s", rendered)
+	}
+	if strings.Contains(rendered, " - 1") {
+		t.Fatalf("vm.Value dec lowered to native subtraction\n--- go ---\n%s", rendered)
+	}
+}
+
 func TestLowerGoStrictDynamicFnArgCallLowersViaInvokeValue(t *testing.T) {
 	ensureLoader()
 

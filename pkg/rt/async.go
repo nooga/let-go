@@ -479,7 +479,7 @@ func installAsyncNS() {
 		cancelIdx := len(cases)
 		cases = append(cases, reflect.SelectCase{
 			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(vm.Goroutines.Context().Done()),
+			Chan: reflect.ValueOf(vm.CurrentContext().Done()),
 		})
 
 		chosen, value, ok := reflect.Select(cases)
