@@ -164,6 +164,23 @@ type thrownPanic struct {
 	err error
 }
 
+// GoPanicError wraps an unexpected Go panic (one that is NOT a let-go thrown
+// error) together with the Go stack captured at the recover site. Native-fn
+// crashes — e.g. a `syscall/js: Value.Int on undefined` under WASM, or a nil
+// dereference in a Go builtin — have no let-go source location, so without this
+// the only traceback was an unhelpful `at <fn> (<unknown>)`. The captured Go
+// stack pins the actual crash site (the .go file:line) and FormatError surfaces
+// the let-go-relevant frames.
+type GoPanicError struct {
+	value any
+	stack []byte
+}
+
+func (e *GoPanicError) Error() string { return fmt.Sprintf("%v", e.value) }
+
+// GoStack returns the raw Go stack trace captured when the panic was recovered.
+func (e *GoPanicError) GoStack() string { return string(e.stack) }
+
 // recoverThrownPanic catches a thrownPanic and converts it back to an error return.
 // It also catches arbitrary Go panics and converts them to ExecutionErrors so that
 // they produce let-go errors instead of crashing with Go stack traces.
@@ -173,14 +190,16 @@ func recoverThrownPanic(errp *error) {
 		if tp, ok := r.(*thrownPanic); ok {
 			*errp = tp.err
 		} else {
-			// Convert arbitrary Go panics to let-go errors. When
-			// LG_PANIC_STACK=1, also dump the Go stack trace so
-			// gogen_ir self-host bugs surface their actual location
-			// instead of being lost behind a wrapped error.
+			// Convert arbitrary Go panics to let-go errors, capturing the Go
+			// stack so the crash site is reportable instead of lost behind a
+			// `%v`-wrapped error. FormatError prints the let-go-relevant
+			// frames; LG_PANIC_STACK=1 additionally dumps the full stack to
+			// stderr at the recover site.
+			stack := debug.Stack()
 			if os.Getenv("LG_PANIC_STACK") != "" {
-				fmt.Fprintf(os.Stderr, "[panic-recover] %v\n%s\n", r, debug.Stack())
+				fmt.Fprintf(os.Stderr, "[panic-recover] %v\n%s\n", r, stack)
 			}
-			*errp = fmt.Errorf("%v", r)
+			*errp = &GoPanicError{value: r, stack: stack}
 		}
 	}
 }
