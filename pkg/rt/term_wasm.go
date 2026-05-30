@@ -22,6 +22,18 @@ import (
 //   [7] terminal rows
 // Uint8Array view at byte offset 8, length 16: raw key bytes
 
+// jsLoadInt does an Atomics.load and returns the int value, falling back to 0
+// when the result is undefined/null (e.g. an uninitialized SAB slot or a
+// non-cross-origin-isolated context). This guards the `.Int()` call, which
+// otherwise panics with "syscall/js: call of Value.Int on undefined".
+func jsLoadInt(atomics, arr js.Value, idx int) int {
+	v := atomics.Call("load", arr, idx)
+	if v.IsUndefined() || v.IsNull() {
+		return 0
+	}
+	return v.Int()
+}
+
 func init() { RegisterInstaller(installTermNS) }
 
 func installTermNS() {
@@ -60,7 +72,7 @@ func installTermNS() {
 		atomics.Call("wait", keyInt32, 0, 0)
 
 		// Read key length and bytes
-		keyLen := atomics.Call("load", keyInt32, 1).Int()
+		keyLen := jsLoadInt(atomics, keyInt32, 1)
 		if keyLen <= 0 || keyLen > 16 {
 			atomics.Call("store", keyInt32, 0, 0)
 			return vm.NIL, nil
@@ -84,11 +96,15 @@ func installTermNS() {
 	// entering read-key (which would Atomics.wait if no key is queued).
 	keyPendingFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		keyInt32 := js.Global().Get("_lgKeyInt32")
-		if keyInt32.IsUndefined() {
+		atomics := js.Global().Get("Atomics")
+		if keyInt32.IsUndefined() || atomics.IsUndefined() {
 			return vm.FALSE, nil
 		}
-		atomics := js.Global().Get("Atomics")
-		if atomics.Call("load", keyInt32, 0).Int() != 0 {
+		v := atomics.Call("load", keyInt32, 0)
+		if v.IsUndefined() || v.IsNull() {
+			return vm.FALSE, nil
+		}
+		if v.Int() != 0 {
 			return vm.TRUE, nil
 		}
 		return vm.FALSE, nil
@@ -98,12 +114,12 @@ func installTermNS() {
 	// size — read from SharedArrayBuffer
 	sizeFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		keyInt32 := js.Global().Get("_lgKeyInt32")
-		if keyInt32.IsUndefined() {
+		atomics := js.Global().Get("Atomics")
+		if keyInt32.IsUndefined() || atomics.IsUndefined() {
 			return vm.NewPersistentVector([]vm.Value{vm.MakeInt(80), vm.MakeInt(24)}), nil
 		}
-		atomics := js.Global().Get("Atomics")
-		w := atomics.Call("load", keyInt32, 6).Int()
-		h := atomics.Call("load", keyInt32, 7).Int()
+		w := jsLoadInt(atomics, keyInt32, 6)
+		h := jsLoadInt(atomics, keyInt32, 7)
 		if w == 0 {
 			w = 80
 		}
