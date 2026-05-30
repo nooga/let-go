@@ -183,7 +183,7 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 	if embedded := r.loadEmbedded(name); embedded != nil {
 		return embedded
 	}
-	// Build candidate paths: try .lg and .cljc extensions,
+	// Build candidate paths: try .lg, .cljc, then .clj extensions,
 	// and hyphen vs underscore variants for each path segment.
 	hyphenPath := path.Join(blocks...)
 	for i, b := range blocks {
@@ -196,6 +196,8 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 		underscorePath + ".lg",
 		hyphenPath + ".cljc",
 		underscorePath + ".cljc",
+		hyphenPath + ".clj",
+		underscorePath + ".clj",
 	}
 
 	for _, dir := range r.path {

@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -1065,9 +1066,9 @@ const defaultConditionalTag = vm.Keyword("default")
 // :clj branch in many libraries reaches JVM-only code (Long/MAX_VALUE,
 // java.util.UUID, etc.) that fails to compile here. The compat runner
 // (which targets Clojure-the-language) flips this on; the conformance
-// test suite does not. Set via SetMatchCljConditional or the
-// LETGO_READ_CLJ env var at startup.
-var matchCljConditional = false
+// test suite does not. Set via SetMatchCljConditional, set-read-clj! at
+// runtime, or the LG_READ_CLJ env var at startup.
+var matchCljConditional = os.Getenv("LG_READ_CLJ") != ""
 
 // SetMatchCljConditional toggles whether reader conditionals match :clj.
 func SetMatchCljConditional(v bool) { matchCljConditional = v }
