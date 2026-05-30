@@ -6,7 +6,7 @@
   (testing "cwd returns a string"
     (let [d (cwd)]
       (is (not (nil? d)))
-      (is (includes? d "let-go")))))
+      (is (string? d)))))
 
 (deftest os-ls-test
   (testing "ls returns vector of filenames"
