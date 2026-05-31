@@ -3149,14 +3149,28 @@ func installLangNS() {
 	})
 
 	deref, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		switch len(vs) {
+		case 1:
+			ref, ok := vs[0].(vm.Reference)
+			if !ok {
+				return vm.NIL, fmt.Errorf("deref expected Reference")
+			}
+			return ref.Deref(), nil
+		case 3:
+			// (deref blocking-ref timeout-ms timeout-val): block up to ms for a
+			// promise/future's value, else return timeout-val.
+			bref, ok := vs[0].(vm.BlockingDeref)
+			if !ok {
+				return vm.NIL, fmt.Errorf("deref with timeout expects a blocking ref (promise or future)")
+			}
+			ms, ok := vs[1].(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("deref timeout must be an integer number of milliseconds")
+			}
+			return bref.DerefTimeout(int64(ms), vs[2]), nil
+		default:
+			return vm.NIL, fmt.Errorf("deref: wrong number of arguments %d (expected 1 or 3)", len(vs))
 		}
-		ref, ok := vs[0].(vm.Reference)
-		if !ok {
-			return vm.NIL, fmt.Errorf("deref expected Reference")
-		}
-		return ref.Deref(), nil
 	})
 
 	concat, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
