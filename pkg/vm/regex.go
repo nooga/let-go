@@ -52,6 +52,17 @@ func (l *Regex) ReplaceAll(s string, replacement string) string {
 	return l.re.ReplaceAllString(s, replacement)
 }
 
+// ReplaceFirst replaces only the first match, expanding $-group references in
+// the replacement (as ReplaceAll does), matching clojure.string/replace-first.
+func (l *Regex) ReplaceFirst(s string, replacement string) string {
+	loc := l.re.FindStringSubmatchIndex(s)
+	if loc == nil {
+		return s
+	}
+	out := l.re.ExpandString([]byte(s[:loc[0]]), replacement, s, loc)
+	return string(out) + s[loc[1]:]
+}
+
 func (l *Regex) FindStringSubmatch(s string) []string {
 	return l.re.FindStringSubmatch(s)
 }

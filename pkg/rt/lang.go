@@ -3685,6 +3685,28 @@ func installLangNS() {
 		}
 	})
 
+	strReplaceFirst, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("str-replace-first expected String")
+		}
+		r, ok := vs[2].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("str-replace-first expected String")
+		}
+		switch vs[1].(type) {
+		case vm.String:
+			return vm.String(strings.Replace(string(s), string(vs[1].(vm.String)), string(r), 1)), nil
+		case *vm.Regex:
+			return vm.String(vs[1].(*vm.Regex).ReplaceFirst(string(s), string(r))), nil
+		default:
+			return vm.NIL, fmt.Errorf("str-replace-first expected String or Regex")
+		}
+	})
+
 	intf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -6030,6 +6052,7 @@ func installLangNS() {
 	ns.Def("str", str)
 	ns.Def("split", split)
 	ns.Def("str-replace", strReplace)
+	ns.Def("str-replace-first", strReplaceFirst)
 	ns.Def("re-pattern", regex)
 	// namespace utilities
 	ns.Def("refer-list", referList)
