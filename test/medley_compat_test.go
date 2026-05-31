@@ -71,4 +71,80 @@ func TestMedleyCompat(t *testing.T) {
 		_, err := evalMedley(`(defn g [n] (java.util.ArrayList. n))`)
 		assert.NoError(t, err)
 	})
+
+	// Blocker #3: Throwable bare in (instance? Throwable ex). The marker is false
+	// for non-exceptions (matching medley's "nil for all other types" fallback)
+	// and true for let-go ex-info values, which ARE-A Throwable (see hierarchy).
+	t.Run("Throwable marker instance? is false for non-exceptions", func(t *testing.T) {
+		v, err := evalMedley(`(instance? Throwable nil)`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.FALSE, v)
+	})
+
+	t.Run("Throwable marker instance? is true for ex-info", func(t *testing.T) {
+		v, err := evalMedley(`(instance? Throwable (ex-info "boom" {}))`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.TRUE, v)
+	})
+
+	// .getMessage / .getCause dispatch on ex-info via ExInfo.InvokeMethod. Use
+	// the TYPE-HINTED form medley actually emits — (.getMessage ^Throwable ex) —
+	// which compiles to with-meta on the value, so this also exercises ExInfo's
+	// IMeta support. An unhinted call would miss the real medley path.
+	t.Run("getMessage dispatches on type-hinted ex-info", func(t *testing.T) {
+		v, err := evalMedley(`(.getMessage ^Throwable (ex-info "boom" {}))`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.String("boom"), v)
+	})
+
+	t.Run("getCause returns nil when no cause (type-hinted)", func(t *testing.T) {
+		v, err := evalMedley(`(.getCause ^Throwable (ex-info "boom" {}))`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.NIL, v)
+	})
+
+	// instance? Throwable must remain true after a type hint adds metadata.
+	t.Run("Throwable marker instance? true for hinted ex-info", func(t *testing.T) {
+		v, err := evalMedley(`(instance? Throwable ^Throwable (ex-info "boom" {}))`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.TRUE, v)
+	})
+
+	// Blocker #4a: java.util.UUID/fromString reuses vm.ParseUUID → m/uuid works.
+	t.Run("UUID/fromString returns a UUID", func(t *testing.T) {
+		v, err := evalMedley(`(java.util.UUID/fromString "00000000-0000-0000-0000-000000000000")`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.UUIDType, v.Type())
+	})
+
+	// Blocker #4b: java.util.UUID/randomUUID reuses the random-uuid builtin →
+	// m/random-uuid works.
+	t.Run("UUID/randomUUID returns a UUID", func(t *testing.T) {
+		v, err := evalMedley(`(java.util.UUID/randomUUID)`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.UUIDType, v.Type())
+	})
+
+	// Blocker #5: java.util.regex.Pattern aliased to vm.RegexType → m/regexp?
+	// works against real let-go regexes.
+	t.Run("Pattern instance? is true for a regex", func(t *testing.T) {
+		v, err := evalMedley(`(instance? java.util.regex.Pattern #"x")`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.TRUE, v)
+	})
+
+	// Blocker #6 (found by running the e2e load): medley's deref-swap! uses
+	// compare-and-set!, which let-go lacked. It's a real atom primitive, not a
+	// stub. Success path swaps and returns true; mismatch returns false.
+	t.Run("compare-and-set! succeeds on matching value", func(t *testing.T) {
+		v, err := evalMedley(`(let [a (atom 1)] [(compare-and-set! a 1 2) @a])`)
+		assert.NoError(t, err)
+		assert.Equal(t, "[true 2]", v.String())
+	})
+
+	t.Run("compare-and-set! fails on mismatched value", func(t *testing.T) {
+		v, err := evalMedley(`(let [a (atom 1)] [(compare-and-set! a 99 2) @a])`)
+		assert.NoError(t, err)
+		assert.Equal(t, "[false 1]", v.String())
+	})
 }

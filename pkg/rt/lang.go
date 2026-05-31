@@ -3304,6 +3304,20 @@ func installLangNS() {
 		return at.Reset(vs[1])
 	})
 
+	// (compare-and-set! atom oldval newval) — atomically set to newval iff the
+	// current value equals oldval; returns true on success, false otherwise.
+	// medley's deref-swap!/deref-reset! build on this.
+	compareAndSet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("compare-and-set! expects 3 args, got %d", len(vs))
+		}
+		at, ok := vs[0].(*vm.Atom)
+		if !ok {
+			return vm.NIL, fmt.Errorf("compare-and-set! expected Atom")
+		}
+		return at.CompareAndSet(vs[1], vs[2])
+	})
+
 	// swap-vals!: like swap! but returns [old new]
 	swapVals, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
@@ -5955,6 +5969,7 @@ func installLangNS() {
 	ns.Def("atom", atom)
 	ns.Def("reset!", reset)
 	ns.Def("swap!", swap)
+	ns.Def("compare-and-set!", compareAndSet)
 	ns.Def("swap-vals!", swapVals)
 	ns.Def("reset-vals!", resetVals)
 
@@ -7429,6 +7444,46 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("java.util.ArrayList", vm.Symbol("java.util.ArrayList"))
 	ns.Def("java.util.ArrayList.", arrayListStub)
 	ns.Def("->java.util.ArrayList", arrayListStub)
+
+	// medley (blocker #3): bare Throwable in (instance? Throwable ex). Registered
+	// as a symbol marker; ExInfoType reports it as an ancestor (see hierarchy.go),
+	// so (instance? Throwable ex) is true for let-go ex-info values and false for
+	// everything else. Paired with ExInfo.InvokeMethod (getMessage/getCause), this
+	// makes medley's ex-message/ex-cause genuinely work on ex-info while still
+	// returning nil for all other types (medley's documented fallback).
+	ns.Def("Throwable", vm.Symbol("Throwable"))
+
+	// medley (blocker #4): java.util.UUID statics. java.util.UUID is already a
+	// bare class alias to vm.UUIDType above; a same-named DefNSBare namespace for
+	// the statics is fine and has precedent in Boolean (bare + DefNSBare coexist).
+	// Both fns are REAL: fromString reuses vm.ParseUUID; randomUUID reuses the
+	// existing random-uuid builtin by value (mirrors the Integer./int alias). So
+	// m/uuid and m/random-uuid genuinely work.
+	uuidNS := DefNSBare("java.util.UUID")
+	uuidFromString, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("java.util.UUID/fromString expects 1 arg")
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("java.util.UUID/fromString expects a string, got %s", vs[0].Type().Name())
+		}
+		u := vm.ParseUUID(string(s))
+		if u == nil {
+			return vm.NIL, fmt.Errorf("java.util.UUID/fromString: invalid UUID string %q", string(s))
+		}
+		return u, nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	uuidNS.Def("fromString", uuidFromString)
+	uuidNS.Def("randomUUID", ns.Lookup("random-uuid").(*vm.Var).Deref())
+
+	// medley (blocker #5): java.util.regex.Pattern bare in (instance? ... #"x").
+	// let-go already models regexes as vm.RegexType, so aliasing the JVM class to
+	// it makes m/regexp? genuinely work.
+	ns.Def("java.util.regex.Pattern", vm.RegexType)
 }
 
 func longCompatValue(v int64) vm.Value {

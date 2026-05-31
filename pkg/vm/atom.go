@@ -187,6 +187,31 @@ func (a *Atom) Swap(fn Fn, args []Value) (Value, error) {
 	}
 }
 
+// CompareAndSet atomically sets the value to newVal if the current value
+// equals oldVal, returning TRUE if the swap happened and FALSE otherwise.
+// Mirrors Clojure's compare-and-set!.
+func (a *Atom) CompareAndSet(oldVal, newVal Value) (Boolean, error) {
+	if err := a.validate(newVal); err != nil {
+		return FALSE, err
+	}
+	a.mu.Lock()
+	if !ValueEquals(a.val, oldVal) {
+		a.mu.Unlock()
+		return FALSE, nil
+	}
+	prev := a.val
+	a.val = newVal
+	a.gen++
+	watches := a.watches
+	a.mu.Unlock()
+	if len(watches) > 0 {
+		if err := a.notifyWatches(prev, newVal); err != nil {
+			return FALSE, err
+		}
+	}
+	return TRUE, nil
+}
+
 func (a *Atom) Deref() Value {
 	a.mu.Lock()
 	v := a.val
