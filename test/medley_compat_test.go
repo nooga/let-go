@@ -56,4 +56,19 @@ func TestMedleyCompat(t *testing.T) {
 		_, err := evalMedley(`(into clojure.lang.PersistentQueue/EMPTY [1 2 3])`)
 		assert.Error(t, err)
 	})
+
+	// Blocker #2: (java.util.ArrayList.) / (java.util.ArrayList. n). medley's
+	// partition-between / sliding construct one on their :clj branch. let-go
+	// has no mutable ArrayList, so this is a load-only ctor stub: the defn must
+	// COMPILE (the constructor symbol must resolve); .add/.toArray throw at
+	// runtime if ever called (out of scope).
+	t.Run("ArrayList zero-arg ctor compiles", func(t *testing.T) {
+		_, err := evalMedley(`(defn f [] (java.util.ArrayList.))`)
+		assert.NoError(t, err)
+	})
+
+	t.Run("ArrayList one-arg ctor compiles", func(t *testing.T) {
+		_, err := evalMedley(`(defn g [n] (java.util.ArrayList. n))`)
+		assert.NoError(t, err)
+	})
 }

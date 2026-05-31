@@ -7409,6 +7409,26 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// "conj expected Collection" instead of silently returning a reversed list
 	// (a plausible-but-wrong FIFO). queue?/queue stay degraded by design.
 	DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.Symbol("clojure.lang.PersistentQueue/EMPTY"))
+
+	// medley (blocker #2): (java.util.ArrayList.) / (java.util.ArrayList. n).
+	// medley's partition-between / sliding build a mutable ArrayList on their
+	// :clj branch. let-go has no mutable ArrayList, so this is a load-only ctor
+	// stub: it lets those defns COMPILE (the constructor symbol must resolve).
+	// The stub returns a non-collection marker symbol, so the subsequent
+	// .add/.toArray/.clear/.size calls fail cleanly at runtime via let-go's
+	// normal method-dispatch error — partition-between/sliding throw if invoked.
+	arrayListStub, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) > 1 {
+			return vm.NIL, fmt.Errorf("java.util.ArrayList. expects 0 or 1 args, got %d", len(vs))
+		}
+		return vm.Symbol("java.util.ArrayList"), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	ns.Def("java.util.ArrayList", vm.Symbol("java.util.ArrayList"))
+	ns.Def("java.util.ArrayList.", arrayListStub)
+	ns.Def("->java.util.ArrayList", arrayListStub)
 }
 
 func longCompatValue(v int64) vm.Value {
