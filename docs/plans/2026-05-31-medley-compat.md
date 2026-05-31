@@ -1,4 +1,4 @@
-# medley Compatibility Implementation Plan
+# medley Compatibility Implementation Plan ✅ COMPLETE
 
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -192,19 +192,19 @@ separately. These changes are already in the working tree (stash-recovered).
 - Modify: `pkg/rt/hierarchy.go` (already changed)
 - Modify: `pkg/rt/lang.go` (already changed)
 
-- [ ] **Step 1: Confirm the recovered changes are present and build**
+- [x] **Step 1: Confirm the recovered changes are present and build**
   Run: `cd /Users/andrew/Projects/let-go && grep -c IEditableCollection pkg/rt/hierarchy.go pkg/rt/lang.go && go build -o /tmp/lg-medley ./`
   Expected: non-zero counts in both files; build exits 0.
 
-- [ ] **Step 2: Confirm no regressions from the recovered changes**
+- [x] **Step 2: Confirm no regressions from the recovered changes**
   Run: `go test ./pkg/rt/... ./pkg/compiler/...`
   Expected: PASS (ok for both packages).
 
-- [ ] **Step 3: Stage only the two source files (not mise.toml)**
+- [x] **Step 3: Stage only the two source files (not mise.toml)**
   Run: `git add pkg/rt/hierarchy.go pkg/rt/lang.go`
   Note: leave the unrelated `mise.toml` working-tree change unstaged.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   `git commit -m "feat(rt): IEditableCollection + MapEntry compat for medley"`
 
 ### Task 2: PersistentQueue marker + EMPTY stub (blocker #1)
@@ -213,7 +213,7 @@ separately. These changes are already in the working tree (stash-recovered).
 - Modify: `pkg/rt/lang.go`
 - Test: `test/medley_compat_test.go` (new, `package test`)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
   Create `test/medley_compat_test.go` in `package test`. Add a small helper that
   evaluates a string and returns `(vm.Value, error)` via
   `compiler.NewCompiler(vm.NewConsts(), rt.NS(rt.NameCoreNS)).CompileMultiple(strings.NewReader(expr))`
@@ -222,20 +222,25 @@ separately. These changes are already in the working tree (stash-recovered).
   `clojure.lang.PersistentQueue/EMPTY` evaluates without a compile error. Use
   `github.com/stretchr/testify/assert`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
   Run: `go test ./test/ -run TestMedleyCompat`
   Expected: FAIL with `Can't resolve clojure.lang.PersistentQueue`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   In `installClojureCompatAliases`, add the `clojure.lang.PersistentQueue` leaf
   marker to the marker list (alongside `IEditableCollection`), and a
-  `DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.EmptyList)`.
+  `DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", ...)`.
+  **Codex-review deviation:** `EMPTY` binds to a non-collection marker symbol
+  (`vm.Symbol("clojure.lang.PersistentQueue/EMPTY")`), NOT `vm.EmptyList`. With
+  `vm.EmptyList`, medley's `(queue coll)` = `(into (queue) coll)` silently
+  returned a reversed list; the marker symbol makes it FAIL LOUDLY with "conj
+  expected Collection". queue/queue? remain degraded by design. (User-approved.)
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
   Run: `go test ./test/ -run TestMedleyCompat`
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -am "feat(rt): PersistentQueue compat stub for medley"`
 
 ### Task 3: ArrayList constructor stub (blocker #2)
@@ -244,27 +249,27 @@ separately. These changes are already in the working tree (stash-recovered).
 - Modify: `pkg/rt/lang.go`
 - Test: `test/medley_compat_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
   Assert that `(defn f [] (java.util.ArrayList.))` and
   `(defn g [n] (java.util.ArrayList. n))` compile without error (eval returns no
   error). Do not assert runtime behavior of `.add`/`.toArray` (out of scope).
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
   Run: `go test ./test/ -run TestMedleyCompat`
   Expected: FAIL with `Can't resolve ->java.util.ArrayList`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   Add `ns.Def("java.util.ArrayList", <marker>)`, plus constructor sugar
   `ns.Def("java.util.ArrayList.", ctorStub)` and
   `ns.Def("->java.util.ArrayList", ctorStub)`, where `ctorStub` is a NativeFn
   accepting 0 or 1 args and returning a load-only placeholder value. Document in
   a comment that this is load-only (partition-between/sliding throw at runtime).
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
   Run: `go test ./test/ -run TestMedleyCompat`
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -am "feat(rt): java.util.ArrayList ctor stub for medley"`
 
 ### Task 4: Throwable marker, UUID statics, Pattern alias (blockers #3, #4, #5)
@@ -273,18 +278,18 @@ separately. These changes are already in the working tree (stash-recovered).
 - Modify: `pkg/rt/lang.go`
 - Test: `test/medley_compat_test.go`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
   Assert: `(instance? Throwable nil)` → `vm.FALSE` (compiles + correct);
   `(java.util.UUID/fromString "00000000-0000-0000-0000-000000000000")` →
   a `UUIDType` value; `(java.util.UUID/randomUUID)` → a `UUIDType` value;
   `(instance? java.util.regex.Pattern #"x")` → `vm.TRUE`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `go test ./test/ -run TestMedleyCompat`
   Expected: FAIL with `Can't resolve Throwable` / `java.util.UUID/fromString` /
   `java.util.regex.Pattern`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   Add: `Throwable` leaf marker; `DefNSBare("java.util.UUID")` with
   `fromString` (a NativeFn over `vm.ParseUUID`, erroring on invalid input) and
   `randomUUID`. For `randomUUID`, reuse the existing `random-uuid` builtin by
@@ -299,39 +304,53 @@ separately. These changes are already in the working tree (stash-recovered).
   fine and has direct precedent in `Boolean` (both `ns.Def("Boolean", ...)` and
   `DefNSBare("Boolean")` coexist).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
   Run: `go test ./test/ -run TestMedleyCompat`
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -am "feat(rt): Throwable/UUID/Pattern compat for medley"`
+
+**Codex-review deviations (user-approved) folded into this task:**
+1. **Throwable made real, not always-false.** The plan claimed "let-go has no
+   JVM exceptions" so a false marker is correct. But let-go HAS `ex-info`
+   (`vm.ExInfoType`), and real Clojure's `ExceptionInfo` IS-A `Throwable`, so
+   `m/ex-message`/`m/ex-cause` must return the message for ex-info values.
+   Fix: `hierarchy.go` reports `cljThrowable` as an ancestor of `ExInfoType`;
+   `ExInfo` now implements `Receiver` (`getMessage`/`getCause`) **and** `IMeta`
+   (type hints like `^Throwable` compile to runtime `with-meta`, which ExInfo
+   must support). Non-exception inputs still return nil (medley's fallback).
+2. **`compare-and-set!` added (blocker #6, missed by the plan).** Found by
+   running the e2e load: medley's `deref-swap!` needs it. Added as a real Atom
+   primitive (`atom.go` `CompareAndSet` + `compare-and-set!` builtin), not a
+   stub. This was the last blocker — medley.core now loads cleanly.
 
 ### Task 5: End-to-end medley load verification
 
 **Files:**
 - (none committed; uses external medley source)
 
-- [ ] **Step 1: Rebuild lg**
+- [x] **Step 1: Rebuild lg**
   Run: `go build -o /tmp/lg-medley ./`
   Expected: exit 0.
 
-- [ ] **Step 2: Run the with-medley example**
+- [x] **Step 2: Run the with-medley example**
   Run: `cd /Users/andrew/Projects/lgx/examples/clojure-libs/with-medley && LG_READ_CLJ=1 /tmp/lg-medley -source-paths /home/agent.guest/.lgx/gitlibs/github.com/weavejester/medley/1.10.0/src main.lg`
   Expected: prints `"Bool?" false`, no load error.
 
-- [ ] **Step 3: Run a spectrum verify script**
+- [x] **Step 3: Run a spectrum verify script**
   Create a temp `verify.lg` requiring `[medley.core :as m]` and exercising:
   `m/map-vals`, `m/index-by`, `m/assoc-some`, `m/filter-vals`,
   `(m/uuid "…")`, `(m/random-uuid)`, `(m/regexp? #"x")`, and the marker
   `instance?` cases. Run with the same `LG_READ_CLJ=1 -source-paths` invocation.
   Expected: pure fns print correct values; uuid/random-uuid/regexp? work.
 
-- [ ] **Step 4: Regression — full test suite**
+- [x] **Step 4: Regression — full test suite**
   Run: `go test ./pkg/... ./test/`
   Expected: PASS. If `test/zz_compat_test.go` reports failures, compare against a
   clean-`HEAD` baseline (worktree) to confirm zero NEW failures.
 
-- [ ] **Step 5: vet + lint**
+- [x] **Step 5: vet + lint**
   Run: `go vet ./pkg/rt/... && golangci-lint run pkg/rt/... 2>/dev/null || true`
   Expected: no new issues in changed files.
 
@@ -341,18 +360,71 @@ separately. These changes are already in the working tree (stash-recovered).
 - Modify: `pkg/compiler/reader.go` (if comment stale)
 - Modify (lgx): `/Users/andrew/Projects/lgx/docs/issues/clojure-lib-compat.md`
 
-- [ ] **Step 1: Fix the env-var comment in reader.go**
+- [x] **Step 1: Fix the env-var comment in reader.go**
   Verify the `matchCljConditional` doc comment names `LG_READ_CLJ`. If it still
   says `LETGO_READ_CLJ`, update it to match the implemented variable.
   Run: `grep -n "READ_CLJ" pkg/compiler/reader.go`
+  **No-op:** the comment already names `LG_READ_CLJ`; no stale `LETGO_READ_CLJ`
+  anywhere in `pkg/`/`cmd/`. reader.go unchanged.
 
-- [ ] **Step 2: Update the lgx issue doc**
+- [x] **Step 2: Update the lgx issue doc**
   In lgx `docs/issues/clojure-lib-compat.md`, mark the medley
   `:default`/`instance?` items resolved and note the let-go compat aliases that
   fixed them (reference this plan).
 
-- [ ] **Step 3: Commit (let-go)**
-  `git commit -am "docs(rt): fix LG_READ_CLJ comment; note medley compat"`
+- [x] **Step 3: Commit (let-go)**
+  Committed the plan-doc updates (reader.go needed no change).
 
-- [ ] **Step 4: Commit (lgx)**
+- [x] **Step 4: Commit (lgx)**
   In the lgx repo, commit the issue-doc update with a clear one-line message.
+
+---
+
+## ✅ Plan complete (2026-05-31)
+
+### Summary of what was implemented
+
+All six blockers resolved; **medley 1.10.0 `medley.core` now loads cleanly**
+under `LG_READ_CLJ=1`, and the spectrum of core fns works end-to-end (verified
+via the with-medley example + a spectrum `verify.lg`):
+`map-vals`/`map-keys`/`filter-vals`/`index-by`/`assoc-some` (pure),
+`uuid`/`uuid?`/`random-uuid` (real), `regexp?` (real), `boolean?`,
+`ex-message`/`ex-cause` (real, incl. `^Throwable` hint path), `deref-swap!`.
+
+Commits on `medley-compat-minimal`:
+1. `IEditableCollection` + `MapEntry` compat (recovered stash).
+2. `PersistentQueue` marker + load-only `EMPTY` (fails loudly if conj'd).
+3. `java.util.ArrayList` load-only ctor stub.
+4. `Throwable`/`UUID`/`Pattern` + `compare-and-set!` compat.
+
+The outcome **exceeds the plan's stated "load-only" scope**: `ex-message`/
+`ex-cause` are fully functional rather than load-only.
+
+### Deviations from the plan (all codex-review-driven, user-approved)
+
+1. **`PersistentQueue/EMPTY`** binds to a non-collection marker symbol (not
+   `vm.EmptyList`) so `(queue coll)` fails loudly instead of silently returning
+   a reversed list.
+2. **`Throwable` made real, not always-false.** The plan assumed "let-go has no
+   JVM exceptions"; it has `ex-info`. Wired `ExInfoType`→`Throwable` ancestry,
+   made `ExInfo` a `Receiver` (`getMessage`/`getCause`) + `IMeta` (for the
+   `^Throwable` runtime-`with-meta` type-hint path). `m/ex-message`/`m/ex-cause`
+   now genuinely work on ex-info and return nil for all other types.
+3. **`compare-and-set!` added (blocker #6, missed by the plan).** Found by
+   running the e2e load (medley's `deref-swap!` needs it). Implemented as a real
+   Atom primitive (`atom.go` `CompareAndSet` + builtin), not a stub.
+
+### Issues encountered
+
+- The codex CLI in this environment rejects `--color` and a positional PROMPT
+  with `--uncommitted`; reviews were run with `--uncommitted -o <file>` only.
+- Pre-existing `go vet` self-assignment warnings in the **generated**
+  `pkg/rt/core_go_lowered/ir_passes_pipeline` package are unrelated to this work
+  (changed packages `pkg/vm`, `pkg/rt` root vet clean).
+- `golangci-lint` is v1 in this env but the repo config is v2 — lint skipped
+  (the plan permitted this).
+
+### Out of scope (unchanged)
+
+Real `PersistentQueue`/`ArrayList` collection types; `queue`/`queue?`/
+`partition-between`/`sliding` remain load-only (resolve, may throw at runtime).
