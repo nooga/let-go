@@ -5744,6 +5744,16 @@ func installLangNS() {
 		if t, ok := vs[0].(vm.ValueType); ok {
 			return vm.Boolean(vs[1].Type() == t), nil
 		}
+		// Clojure-compat interface markers (e.g. clojure.lang.IEditableCollection)
+		// are registered as plain symbols by installClojureCompatAliases. Answer
+		// instance? for them via the type→interface hierarchy so libraries that
+		// branch on (instance? clojure.lang.IEditableCollection coll) — like
+		// medley — observe the JVM-equivalent answer.
+		if marker, ok := vs[0].(vm.Symbol); ok {
+			if anc := directTypeAncestors(vs[1].Type()); anc != nil {
+				return vm.Boolean(anc.Contains(marker) == vm.TRUE), nil
+			}
+		}
 		return vm.FALSE, nil
 	})
 
@@ -7343,6 +7353,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		"clojure.lang.Seqable",
 		"clojure.lang.IPersistentCollection",
 		"clojure.lang.IReduce",
+		"clojure.lang.IEditableCollection",
 	} {
 		ns.Def(name, vm.Symbol(name))
 	}
@@ -7379,6 +7390,12 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		panic(err)
 	}
 	mapEntryNS.Def("create", create)
+
+	// Interop-constructor sugar: (clojure.lang.MapEntry. k v) desugars to
+	// (->clojure.lang.MapEntry k v) in the compiler. medley's map-entry uses
+	// this form on its :default branch. Mirror the Integer./->Integer aliases.
+	ns.Def("->clojure.lang.MapEntry", create)
+	ns.Def("clojure.lang.MapEntry.", create)
 }
 
 func longCompatValue(v int64) vm.Value {
