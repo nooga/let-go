@@ -4491,6 +4491,26 @@ func installLangNS() {
 		return vm.NewDTypeInstance(dt, fields), nil
 	})
 
+	// set-field!: mutate a deftype instance field in place (backs ^:mutable).
+	// (set-field! instance 'field-name value) -> value
+	setField, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("set-field! expected 3 arguments, got %d", len(vs))
+		}
+		inst, ok := vs[0].(*vm.DTypeInstance)
+		if !ok {
+			return vm.NIL, fmt.Errorf("set-field! expected a deftype instance, got %s", vs[0].Type().Name())
+		}
+		name, ok := vs[1].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("set-field! expected a Symbol field name")
+		}
+		if err := inst.SetField(name, vs[2]); err != nil {
+			return vm.NIL, err
+		}
+		return vs[2], nil
+	})
+
 	// defprotocol*: create a protocol (called by defprotocol macro)
 	defProtocol, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
@@ -6020,6 +6040,7 @@ func installLangNS() {
 	ns.Def("record?", isRecord)
 	ns.Def("make-deftype", makeDType)
 	ns.Def("make-deftype-instance", makeDTypeInstance)
+	ns.Def("set-field!", setField)
 	ns.Def("defprotocol*", defProtocol)
 	installHierarchyBuiltins(ns)
 	ns.Def("make-protocol-fn", makeProtocolFn)

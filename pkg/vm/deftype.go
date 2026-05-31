@@ -107,5 +107,21 @@ func (d *DTypeInstance) InvokeMethod(name Symbol, args []Value) (Value, error) {
 // Fields returns the field values.
 func (d *DTypeInstance) Fields() []Value { return d.fields }
 
+// SetField mutates a field in place by name. Backs cljs-style ^:mutable
+// deftype fields. UNSYNCHRONIZED: not safe for concurrent access; callers must
+// ensure exclusive access (single-threaded use, atoms, or explicit locks).
+// A Go nil is normalized to NIL to preserve the field-value invariant.
+func (d *DTypeInstance) SetField(name Symbol, val Value) error {
+	idx, ok := d.dtype.fieldIdx[name]
+	if !ok {
+		return fmt.Errorf("no field %s on deftype %s", name, d.dtype.typeName)
+	}
+	if val == nil {
+		val = NIL
+	}
+	d.fields[idx] = val
+	return nil
+}
+
 // DType returns the type.
 func (d *DTypeInstance) DType() *DType { return d.dtype }
