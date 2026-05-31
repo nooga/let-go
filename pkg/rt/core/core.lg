@@ -1279,7 +1279,11 @@
 
 (defn find [m key]
   (when (and m (contains? m key))
-    [key (get m key)]))
+    ;; Clojure's find returns a MapEntry, not a bare [k v] vector: it carries
+    ;; the map-entry protocol so (key/val (find m k)) work. A plain vector does
+    ;; not satisfy that protocol — (key [:a 1]) must throw — so build a real
+    ;; MapEntry here, matching every other entry-yielding path (first/seq/reduce).
+    (clojure.lang.MapEntry/create key (get m key))))
 
 (defn select-keys
   [map keyseq]

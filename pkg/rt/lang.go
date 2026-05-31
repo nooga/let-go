@@ -3918,11 +3918,18 @@ func installLangNS() {
 			}
 			return vm.ArrayVector(v[0 : len(v)-1]), nil
 		case vm.Seq:
-			r := vs[0].(vm.Seq).Next()
-			if r == nil {
+			s := vs[0].(vm.Seq)
+			// pop drops the first element and returns the rest. Use More (not
+			// Next): More yields the empty list () for a one-element seq,
+			// whereas Next returns nil there — which would wrongly read as
+			// "empty" and error. Only an already-empty seq is illegal to pop.
+			if s == vm.EmptyList {
 				return vm.NIL, fmt.Errorf("can't pop empty seq")
 			}
-			return r, nil
+			if c, ok := vs[0].(vm.Counted); ok && c.RawCount() == 0 {
+				return vm.NIL, fmt.Errorf("can't pop empty seq")
+			}
+			return s.More(), nil
 		default:
 			return vm.NIL, fmt.Errorf("pop expected Seq or Vec")
 		}

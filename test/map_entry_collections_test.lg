@@ -1,0 +1,30 @@
+;; Map-entry protocol + collection-semantics tests.
+(ns test.map-entry-collections-test
+  (:require [test :refer :all]))
+
+;; --- find returns a real MapEntry (carries the map-entry protocol) ---
+
+(deftest find-returns-map-entry
+  (testing "find yields a MapEntry that key/val/map-entry? accept"
+    (let [e (find {:a 1 :b 2} :a)]
+      (is (map-entry? e))
+      (is (= :a (key e)))
+      (is (= 1 (val e)))))
+  (testing "find returns nil for a missing key"
+    (is (nil? (find {:a 1} :z)))))
+
+;; --- key/val are strict: a plain vector is NOT a map entry ---
+
+(deftest key-val-strict-on-vectors
+  (testing "(key/val v) on a plain 2-vector throws — a vector is not a MapEntry"
+    (is (= :caught (try (key [:a 1]) (catch e :caught))))
+    (is (= :caught (try (val [:a 1]) (catch e :caught))))))
+
+;; --- pop on a seq drops the first element; only an empty seq is illegal ---
+
+(deftest pop-on-seq
+  (testing "pop returns the rest, even for a one-element seq"
+    (is (= '() (pop '(0))))
+    (is (= '(2 3) (pop '(1 2 3)))))
+  (testing "popping an empty seq throws"
+    (is (= :caught (try (pop '()) (catch e :caught))))))
