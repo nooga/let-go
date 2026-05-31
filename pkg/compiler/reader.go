@@ -1059,6 +1059,7 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 
 const lgConditionalTag = vm.Keyword("lg")
 const cljConditionalTag = vm.Keyword("clj")
+const bbConditionalTag = vm.Keyword("bb")
 const defaultConditionalTag = vm.Keyword("default")
 
 // matchCljConditional controls whether reader conditionals match the :clj
@@ -1072,6 +1073,17 @@ var matchCljConditional = os.Getenv("LG_READ_CLJ") != ""
 
 // SetMatchCljConditional toggles whether reader conditionals match :clj.
 func SetMatchCljConditional(v bool) { matchCljConditional = v }
+
+// matchBbConditional controls whether reader conditionals match the :bb
+// (babashka) branch, in addition to :lg and :default. Opt-in like :clj: many
+// libraries ship :bb fallbacks that avoid JVM-internal constructors (the
+// babashka path), which is exactly what a JVM-free host wants. Enable alongside
+// :clj to run babashka-compatible libraries. Set via SetMatchBbConditional,
+// set-read-bb! at runtime, or the LG_READ_BB env var at startup.
+var matchBbConditional = os.Getenv("LG_READ_BB") != ""
+
+// SetMatchBbConditional toggles whether reader conditionals match :bb.
+func SetMatchBbConditional(v bool) { matchBbConditional = v }
 
 func readConditional(r *LispReader, s rune) (vm.Value, error) {
 	n, err := r.next()
@@ -1124,6 +1136,7 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 		}
 		isMatch := !found && (key == lgConditionalTag ||
 			(matchCljConditional && key == cljConditionalTag) ||
+			(matchBbConditional && key == bbConditionalTag) ||
 			key == defaultConditionalTag)
 		if isMatch {
 			// Read the value form normally
