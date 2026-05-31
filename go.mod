@@ -5,13 +5,13 @@ go 1.26
 require (
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
 	github.com/stretchr/testify v1.8.4
+	github.com/zeebo/xxh3 v1.1.0
+	golang.org/x/perf v0.0.0-20260512194132-3cf34090a3db
 )
 
 require (
 	github.com/aclements/go-moremath v0.0.0-20210112150236-f10218a38794 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
-	github.com/zeebo/xxh3 v1.1.0 // indirect
-	golang.org/x/perf v0.0.0-20260512194132-3cf34090a3db // indirect
 )
 
 require (
