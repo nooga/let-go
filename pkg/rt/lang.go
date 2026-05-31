@@ -7013,6 +7013,25 @@ func installLangNS() {
 	})
 	ns.Def("var-get", varGet)
 
+	// bound? — true when the var has a bound value: a root binding or an active
+	// dynamic binding (matching Clojure). Distinguishes a forward-declared/
+	// compiler-interned var from one that has actually been set, which `defonce`
+	// relies on.
+	boundQ, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("bound? expects 1 arg")
+		}
+		v, ok := vs[0].(*vm.Var)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bound? expects a Var")
+		}
+		if v.IsBound() {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("bound?", boundQ)
+
 	// macroexpand — expand a macro form once
 	macroexpandf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {

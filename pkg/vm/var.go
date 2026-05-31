@@ -77,7 +77,10 @@ func NewVar(nsref *Namespace, ns string, name string) *Var {
 		ns:    ns,
 		name:  name,
 	}
-	v.root.Store(valPtr(NIL))
+	// Leave the root pointer unset (unbound). Deref/Root already fall back to
+	// NIL when no root is stored, so reads are unchanged, but HasRoot() now
+	// correctly reports false until a real assignment — which is what `defonce`
+	// needs to tell a "compiler-interned forward ref" from "actually defined".
 	return v
 }
 
@@ -108,6 +111,14 @@ func (v *Var) Root() Value {
 		return *p
 	}
 	return NIL
+}
+
+// IsBound reports whether the var has any bound value — a root binding OR an
+// active dynamic binding — matching Clojure's bound?. A var interned by the
+// compiler for a forward `(def x v)` (before it runs) has neither yet, which
+// distinguishes "declared but unset" from "set", as `defonce` needs.
+func (v *Var) IsBound() bool {
+	return v.curr.Load() != nil || v.root.Load() != nil
 }
 
 // PushBinding pushes a dynamic binding value.
