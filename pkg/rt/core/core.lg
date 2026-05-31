@@ -1790,18 +1790,142 @@
 ;; Unlike defrecord, deftype instances don't support keyword lookup, assoc,
 ;; seq, or count. Fields are accessed via (.field-name instance).
 ;; Inline protocol implementations are expanded to extend-type calls.
-(defmacro deftype [name fields & protocol-impls]
-  (let [quoted-fields (map (fn [f] (list 'quote f)) fields)
-        type-def      (cons 'make-deftype (cons (str name) quoted-fields))
-        pos-ctor-name (symbol (str "->" name))
-        pos-ctor-body (cons 'make-deftype-instance (cons name fields))
+;; --- mutable deftype support (mainline Clojure semantics) ---
+;; Fields are lexically in scope inside method bodies (bare reads), and
+;; ^:mutable / ^:unsynchronized-mutable fields are mutated with (set! field v).
+;; let-go has no compiler-level field scope, so the deftype macro rewrites
+;; method bodies: a bare field ref -> (.field recv); (set! mut-field v) ->
+;; (set-field! recv 'field v). recv is each method's first parameter.
+
+;; A field is either a bare symbol `n` or a metadata form `(with-meta n {..})`
+;; (let-go's reader emits the latter for `^:mutable n` rather than attaching
+;; metadata to the symbol object as JVM Clojure does).
+(defn- -dt-field-name [f]
+  (if (symbol? f) f (second f)))
+
+(defn- -dt-field-meta [f]
+  (if (symbol? f) nil (nth f 2)))
+
+(defn- -dt-mutable? [f]
+  (let [m (-dt-field-meta f)]
+    (boolean (or (:mutable m) (:unsynchronized-mutable m) (:volatile-mutable m)))))
+
+;; Shadowing: a `bound` set tracks names introduced by enclosing binding forms
+;; (method params, let/loop/fn/...) so a local that shares a field's name wins.
+;; The first method parameter is the receiver (`this`), like mainline Clojure.
+;; KNOWN LIMITATIONS: `for`, `doseq` (their :let/:when/:while modifiers break the
+;; plain [target init] pair assumption) and `letfn` (locally-bound fn names) are
+;; not treated as binding forms — a local in one of those that shares a field's
+;; name would be wrongly rewritten. These are rare in deftype method bodies;
+;; add them to -dt-let-like with modifier-aware handling if needed.
+(declare -dt-rewrite-let)
+(declare -dt-rewrite-fn)
+
+;; binding forms with a clean `[target init ...]` vector (no for/doseq-style
+;; modifiers). Their inits are rewritten in the outer scope; targets shadow.
+;; NB: a *quoted* set literal '#{..} reads as a (hash-set ..) form in let-go,
+;; not a set value — build the set explicitly.
+(def -dt-let-like
+  (set '(let let* loop loop* when-let when-let* if-let if-let*
+         when-some if-some binding with-open with-local-vars dotimes)))
+
+;; Collect the symbols a binding target introduces (conservative over
+;; destructuring: every symbol in the pattern except &).
+(defn- -dt-collect-syms [form]
+  (cond
+    (and (symbol? form) (not= form '&)) (list form)
+    (vector? form) (apply concat (map -dt-collect-syms form))
+    (map? form) (apply concat (map (fn [e] (-dt-collect-syms (vec e))) (seq form)))
+    :else nil))
+
+(defn- -dt-rewrite [recv fields muts bound form]
+  (cond
+    (symbol? form)
+      (if (and (contains? fields form) (not (contains? bound form)))
+        (list (symbol (str "." (name form))) recv)
+        form)
+    (vector? form)
+      (vec (map (fn [x] (-dt-rewrite recv fields muts bound x)) form))
+    (not (seq? form)) form
+    (empty? form) form
+    :else
+      (let [h (first form)]
+        (cond
+          (= h 'quote) form
+          (= h 'set!)
+            (let [tgt (second form)
+                  v   (-dt-rewrite recv fields muts bound (nth form 2))]
+              (if (and (contains? muts tgt) (not (contains? bound tgt)))
+                (list 'set-field! recv (list 'quote tgt) v)
+                (list 'set! tgt v)))
+          (and (contains? -dt-let-like h) (vector? (second form)))
+            (-dt-rewrite-let recv fields muts bound form)
+          (or (= h 'fn) (= h 'fn*))
+            (-dt-rewrite-fn recv fields muts bound form)
+          :else
+            (apply list (map (fn [x] (-dt-rewrite recv fields muts bound x)) form))))))
+
+(defn- -dt-rewrite-let [recv fields muts bound form]
+  (let [h    (first form)
+        bvec (second form)
+        body (next (next form))]
+    (loop [v (seq bvec) b bound out []]
+      (if (or (nil? v) (nil? (next v)))
+        (apply list h (vec out)
+               (map (fn [x] (-dt-rewrite recv fields muts b x)) body))
+        (let [target   (first v)
+              init     (second v)
+              new-init (-dt-rewrite recv fields muts b init)
+              b2       (reduce conj b (-dt-collect-syms target))]
+          (recur (next (next v)) b2 (conj (conj out target) new-init)))))))
+
+(defn- -dt-rewrite-fn [recv fields muts bound form]
+  (let [h     (first form)
+        tail  (next form)
+        named (if (and tail (symbol? (first tail))) (first tail) nil)
+        rest1 (if named (next tail) tail)
+        b1    (if named (conj bound named) bound)
+        rw    (fn [params body]
+                (let [b2 (reduce conj b1 (-dt-collect-syms params))]
+                  (apply list params
+                         (map (fn [x] (-dt-rewrite recv fields muts b2 x)) body))))]
+    (if (and rest1 (vector? (first rest1)))
+      (apply list h (concat (if named (list named) (list)) (rw (first rest1) (next rest1))))
+      (apply list h (concat (if named (list named) (list))
+                            (map (fn [c] (rw (first c) (next c))) rest1))))))
+
+(defn- -dt-rewrite-method [fields muts m]
+  (let [mname  (first m)
+        params (second m)
+        recv   (first params)
+        body   (next (next m))
+        bound0 (set (-dt-collect-syms params))]
+    (apply list mname params
+           (map (fn [f] (-dt-rewrite recv fields muts bound0 f)) body))))
+
+(defn- -dt-rewrite-impls [fields muts impls]
+  (map (fn [x]
+         (if (and (seq? x) (symbol? (first x)) (vector? (second x)))
+           (-dt-rewrite-method fields muts x)
+           x))
+       impls))
+
+(defmacro deftype [tname fields & protocol-impls]
+  (let [bare-fields   (map -dt-field-name fields)
+        fieldset      (set bare-fields)
+        mutset        (set (map -dt-field-name (filter -dt-mutable? fields)))
+        quoted-fields (map (fn [f] (list 'quote f)) bare-fields)
+        type-def      (cons 'make-deftype (cons (str tname) quoted-fields))
+        pos-ctor-name (symbol (str "->" tname))
+        pos-ctor-body (cons 'make-deftype-instance (cons tname bare-fields))
         pos-ctor      (list 'def pos-ctor-name
-                            (list 'fn (vec fields) pos-ctor-body))
-        protocol-parents (filter symbol? protocol-impls)
-        parent-forms  (map (fn [p] (list 'register-type-parent! name p)) protocol-parents)
-        forms         (list 'do (list 'def name type-def) pos-ctor)]
+                            (list 'fn (vec bare-fields) pos-ctor-body))
+        rewritten     (-dt-rewrite-impls fieldset mutset protocol-impls)
+        protocol-parents (filter symbol? rewritten)
+        parent-forms  (map (fn [p] (list 'register-type-parent! tname p)) protocol-parents)
+        forms         (list 'do (list 'def tname type-def) pos-ctor)]
     (if (seq protocol-impls)
-      (concat forms parent-forms (list (cons 'extend-type (cons name protocol-impls))))
+      (concat forms parent-forms (list (cons 'extend-type (cons tname rewritten))))
       (concat forms parent-forms))))
 
 (defmacro defrecord [name fields & protocol-impls]

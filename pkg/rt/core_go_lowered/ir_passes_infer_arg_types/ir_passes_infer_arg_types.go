@@ -1,8 +1,8 @@
 package ir_passes_infer_arg_types
 
 import (
-	rt "github.com/nooga/let-go/pkg/rt"
 	vm "github.com/nooga/let-go/pkg/vm"
+	rt "github.com/nooga/let-go/pkg/rt"
 )
 
 func join_types(arg0 vm.Value, arg1 vm.Value) vm.Value {
