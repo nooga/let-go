@@ -1240,12 +1240,12 @@ func skipReaderForm(r *LispReader) {
 		if err != nil {
 			return
 		}
-		switch {
-		case c == '(' || c == '{':
+		switch c {
+		case '(', '{':
 			// #(...) anon fn or #{...} set — balanced delimiters.
 			r.unread()
 			skipReaderForm(r)
-		case c == '"':
+		case '"':
 			// #"regex" — a string literal; skip to its closing quote.
 			for {
 				cc, err := r.next()
@@ -1258,10 +1258,10 @@ func skipReaderForm(r *LispReader) {
 					break
 				}
 			}
-		case c == '\'' || c == '_':
+		case '\'', '_':
 			// #'var-quote or #_discard — applies to the single next form.
 			skipReaderForm(r)
-		case c == '?':
+		case '?':
 			// Nested reader conditional #?(...) / #?@(...) inside a skipped
 			// branch — skip the whole (list) (consume the optional @ first).
 			cc, err := r.next()
