@@ -7354,6 +7354,10 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		"clojure.lang.IPersistentCollection",
 		"clojure.lang.IReduce",
 		"clojure.lang.IEditableCollection",
+		// medley (blocker #1): bare in (instance? clojure.lang.PersistentQueue x).
+		// Leaf marker only — no type reports it as an ancestor, so queue? is
+		// always false (load-only; real PersistentQueue is out of scope).
+		"clojure.lang.PersistentQueue",
 	} {
 		ns.Def(name, vm.Symbol(name))
 	}
@@ -7396,6 +7400,15 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// this form on its :default branch. Mirror the Integer./->Integer aliases.
 	ns.Def("->clojure.lang.MapEntry", create)
 	ns.Def("clojure.lang.MapEntry.", create)
+
+	// medley (blocker #1b): clojure.lang.PersistentQueue/EMPTY. let-go has no
+	// real PersistentQueue, so this is a load-only stub: it must merely resolve
+	// as a var at compile time (medley derefs it only at runtime inside `queue`).
+	// Bind it to a non-collection marker symbol rather than vm.EmptyList — that
+	// way medley's `(queue coll)` = `(into (queue) coll)` FAILS LOUDLY with
+	// "conj expected Collection" instead of silently returning a reversed list
+	// (a plausible-but-wrong FIFO). queue?/queue stay degraded by design.
+	DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.Symbol("clojure.lang.PersistentQueue/EMPTY"))
 }
 
 func longCompatValue(v int64) vm.Value {
