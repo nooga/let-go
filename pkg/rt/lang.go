@@ -3861,6 +3861,11 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
+		// (re-pattern p) on an already-compiled regex returns it unchanged,
+		// matching Clojure where re-pattern accepts a Pattern, not only a String.
+		if r, ok := vs[0].(*vm.Regex); ok {
+			return r, nil
+		}
 		if s, ok := vs[0].(vm.String); ok {
 			return vm.NewRegex(string(s))
 		}
@@ -5782,6 +5787,12 @@ func installLangNS() {
 		// We accept type objects (e.g. IntType) and check if the value's type matches
 		if t, ok := vs[0].(vm.ValueType); ok {
 			return vm.Boolean(vs[1].Type() == t), nil
+		}
+		// A protocol behaves like an interface: (instance? SomeProtocol x) is a
+		// membership test, matching Clojure where defprotocol generates a host
+		// interface.
+		if p, ok := vs[0].(*vm.Protocol); ok {
+			return vm.Boolean(p.Satisfies(vs[1])), nil
 		}
 		return vm.FALSE, nil
 	})
