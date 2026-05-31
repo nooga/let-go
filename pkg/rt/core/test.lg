@@ -78,10 +78,17 @@
                (set! *report-counters* (update *report-counters* :test inc))
                (runner t))
              (in-ns (symbol (name old-ns)))))
-         (doseq [bs (vals *registered-tests*)]
-           (doseq [t bs]
-             (set! *report-counters* (update *report-counters* :test inc))
-             (runner t)))))))
+         ;; Run every registered ns's tests IN that ns, so runtime name
+         ;; resolution inside a test (resolve, *ns*, aliases) matches the ns
+         ;; the test was defined in — not whatever ns run-tests was called from.
+         ;; Keys are namespace objects, so derive the name via ns-name.
+         (doseq [[s bs] *registered-tests*]
+           (let [old-ns *ns*]
+             (in-ns (ns-name s))
+             (doseq [t bs]
+               (set! *report-counters* (update *report-counters* :test inc))
+               (runner t))
+             (in-ns (ns-name old-ns))))))))
   (let [c *report-counters*]
     (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
     (set! *test-result* (and (= 0 (:fail c)) (= 0 (:error c))))))
