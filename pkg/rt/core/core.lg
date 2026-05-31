@@ -1911,7 +1911,13 @@
        impls))
 
 (defmacro deftype [tname fields & protocol-impls]
-  (let [bare-fields   (map -dt-field-name fields)
+  (let [;; The type name may carry metadata (e.g. `^:private CacheEntry`,
+        ;; read as `(with-meta CacheEntry {:private true})`). Unwrap to the
+        ;; bare symbol so the `def`, `->Ctor`, and make-deftype name are built
+        ;; from the name itself, not the wrapper form. (The metadata — privacy
+        ;; — is advisory and currently dropped.)
+        tname         (-dt-field-name tname)
+        bare-fields   (map -dt-field-name fields)
         fieldset      (set bare-fields)
         mutset        (set (map -dt-field-name (filter -dt-mutable? fields)))
         quoted-fields (map (fn [f] (list 'quote f)) bare-fields)
@@ -1929,7 +1935,8 @@
       (concat forms parent-forms))))
 
 (defmacro defrecord [name fields & protocol-impls]
-  (let [field-keywords (map keyword fields)
+  (let [name (-dt-field-name name) ; unwrap ^meta on the record name (see deftype)
+        field-keywords (map keyword fields)
         type-def (cons 'make-record-type (cons (str name) field-keywords))
         ;; Positional constructor: (->Point x y) → (make-record Point {:x x :y y})
         pos-ctor-name (symbol (str "->" name))
@@ -2010,7 +2017,14 @@
                         ;; It's a method impl (name [args] body...)
                         (let [mname   (first item)
                               fn-tail (next item)
-                              entry   [proto mname (cons 'fn fn-tail)]]
+                              ;; Emit qualified core/fn rather than bare 'fn so
+                              ;; the generated method bodies are hygienic: a
+                              ;; lexical binding named `fn` in the user's scope
+                              ;; must not capture the method-fn constructor and
+                              ;; turn (fn [params] ...) into a call. Clojure's
+                              ;; reify/deftype qualify to clojure.core/fn for the
+                              ;; same reason.
+                              entry   [proto mname (cons 'core/fn fn-tail)]]
                           (recur (next s) proto (conj result entry))))))))]
     (let [entries (parse specs)
           ;; Group by protocol
@@ -2047,7 +2061,14 @@
                         (recur (next s) item result)
                         (let [mname   (first item)
                               fn-tail (next item)
-                              entry   [proto mname (cons 'fn fn-tail)]]
+                              ;; Emit qualified core/fn rather than bare 'fn so
+                              ;; the generated method bodies are hygienic: a
+                              ;; lexical binding named `fn` in the user's scope
+                              ;; must not capture the method-fn constructor and
+                              ;; turn (fn [params] ...) into a call. Clojure's
+                              ;; reify/deftype qualify to clojure.core/fn for the
+                              ;; same reason.
+                              entry   [proto mname (cons 'core/fn fn-tail)]]
                           (recur (next s) proto (conj result entry))))))))]
     (let [entries (parse specs)
           by-proto (group-by first entries)
@@ -2101,7 +2122,8 @@
                        (let [type-expr (nth group 0)
                              methods   (nth group 1)
                              impl-pairs (mapcat (fn [m]
-                                                  [(keyword (first m)) (cons 'fn (next m))])
+                                                  ;; qualified core/fn for method-body hygiene (see reify)
+                                                  [(keyword (first m)) (cons 'core/fn (next m))])
                                                 methods)]
                          (list 'extend-type* protocol type-expr
                                (apply hash-map impl-pairs))))
