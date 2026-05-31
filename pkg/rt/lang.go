@@ -3304,6 +3304,25 @@ func installLangNS() {
 		return at.Reset(vs[1])
 	})
 
+	// (compare-and-set! a old new): set to new iff current is identical to old.
+	compareAndSet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("compare-and-set! expected 3 arguments, got %d", len(vs))
+		}
+		at, ok := vs[0].(*vm.Atom)
+		if !ok {
+			return vm.NIL, fmt.Errorf("compare-and-set! expected Atom")
+		}
+		swapped, err := at.CompareAndSet(vs[1], vs[2])
+		if err != nil {
+			return vm.NIL, err
+		}
+		if swapped {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+
 	// swap-vals!: like swap! but returns [old new]
 	swapVals, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
@@ -5944,6 +5963,7 @@ func installLangNS() {
 
 	ns.Def("atom", atom)
 	ns.Def("reset!", reset)
+	ns.Def("compare-and-set!", compareAndSet)
 	ns.Def("swap!", swap)
 	ns.Def("swap-vals!", swapVals)
 	ns.Def("reset-vals!", resetVals)
