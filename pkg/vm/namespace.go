@@ -170,7 +170,13 @@ func (n *Namespace) DefStub(name string) *Var {
 func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 	val, ok := n.registry[symbol]
 	if !ok {
-		return n.Def(string(symbol), NIL)
+		// Intern an UNBOUND var (no root) rather than Def(NIL): the compiler
+		// calls this while compiling a `(def x v)` form before it runs, and
+		// `defonce` must be able to tell that interned-but-unrun state from a
+		// var that has actually been assigned. Deref still yields NIL.
+		va := NewVar(n, n.name, string(symbol))
+		n.registry[symbol] = va
+		return va
 	}
 	return val
 }
@@ -217,7 +223,11 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 	if nsLookup != nil {
 		if target := nsLookup(string(sns.(Symbol))); target != nil {
 			v := target.registry[sym.(Symbol)]
-			if v != nil && !v.isPrivate {
+			// A private var is visible to a fully-qualified reference only from
+			// within its own namespace — `my.ns/-priv` is legal inside my.ns
+			// (e.g. a macro that expands to a qualified call to a private helper
+			// in the same ns).
+			if v != nil && (!v.isPrivate || target == n) {
 				return v
 			}
 		}

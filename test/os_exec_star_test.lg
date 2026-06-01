@@ -1,0 +1,12 @@
+;; os/exec* runs a command with inherited stdio and returns its exit code.
+(ns test.os-exec-star-test
+  (:require [test :refer :all]))
+
+(deftest exec-star-exit-codes
+  (testing "returns 0 for a successful command"
+    (is (= 0 (os/exec* "true"))))
+  (testing "returns the non-zero exit code of a failing command"
+    (is (= 1 (os/exec* "false")))
+    (is (= 3 (os/exec* "sh" "-c" "exit 3"))))
+  (testing "coerces non-string args to strings"
+    (is (= 0 (os/exec* "sh" "-c" "exit 0")))))
