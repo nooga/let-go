@@ -1,0 +1,32 @@
+;; Regression tests: (:require [lib :as alias]) must ONLY create an alias — it
+;; must NOT refer lib's vars into the unqualified namespace. The ns macro used
+;; to `(use lib)` (refer-all) for every require, leaking an aliased lib's publics
+;; unqualified. When such a lib redefines a clojure.core fn (as malli.util does
+;; for merge/get/assoc), that leak races clojure.core during lookup — and because
+;; refer resolution iterated a Go map, the unqualified name resolved to core OR
+;; the lib non-deterministically across runs, breaking malli's decode at random.
+;;
+;; `string` is a convenient probe: it has `join` (NOT in core) and `reverse`
+;; (also in core).
+
+(ns tmp.as-alias-no-refer-test (:require [string :as str] [test :refer :all]))
+
+(deftest as-alias-resolves-qualified
+  (testing "an :as alias resolves the lib's vars when qualified"
+    (is (= "a,b" (str/join "," ["a" "b"])))
+    (is (= "cba" (str/reverse "abc")))
+    ;; the alias must also resolve at runtime, not just compile time
+    (is (some? (resolve 'str/join)))))
+
+(deftest as-alias-does-not-refer-lib-vars
+  (testing "an :as alias does NOT make the lib's vars available unqualified"
+    ;; `join` exists in string but not in core; with :as it must stay unqualified
+    (is (nil? (resolve 'join)))))
+
+(deftest unqualified-name-resolves-to-core-not-aliased-lib
+  (testing "a name defined in BOTH core and an :as-aliased lib resolves to core, deterministically"
+    ;; unqualified `reverse` must be core/reverse, not the leaked string/reverse
+    (is (= (resolve 'core/reverse) (resolve 'reverse)))
+    ;; behavioural: core/reverse reverses a sequence (string/reverse would not)
+    (is (= 3 (first (reverse [1 2 3]))))
+    (is (= 1 (last (reverse [1 2 3]))))))

@@ -21,8 +21,8 @@ func intersect(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value, arg3 vm.Value) (vm.V
 	var b1_17 vm.Value
 	var rpo_idx_18 vm.Value
 	var idom_19 vm.Value
-	var arg__8453_32 vm.Value
-	var arg__8459_34 vm.Value
+	var arg__8454_32 vm.Value
+	var arg__8460_34 vm.Value
 	var v35 bool
 	var v88 vm.Value
 	var b2_89 vm.Value
@@ -38,8 +38,8 @@ func intersect(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value, arg3 vm.Value) (vm.V
 	var b1_28 vm.Value
 	var rpo_idx_29 vm.Value
 	var idom_30 vm.Value
-	var arg__8470_49 vm.Value
-	var arg__8476_51 vm.Value
+	var arg__8471_49 vm.Value
+	var arg__8477_51 vm.Value
 	var v52 bool
 	var v82 vm.Value
 	var b2_83 vm.Value
@@ -74,7 +74,7 @@ func intersect(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value, arg3 vm.Value) (vm.V
 	var rpo_idx_73 vm.Value
 	var idom_74 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = b1_5, b2_6, b2_7, b1_8, rpo_idx_9, idom_10, v20, b2_12, b1_13, rpo_idx_14, idom_15, b2_16, b1_17, rpo_idx_18, idom_19, arg__8453_32, arg__8459_34, v35, v88, b2_89, b1_90, rpo_idx_91, idom_92, b2_23, b1_24, rpo_idx_25, idom_26, v38, b2_27, b1_28, rpo_idx_29, idom_30, arg__8470_49, arg__8476_51, v52, v82, b2_83, b1_84, rpo_idx_85, idom_86, b2_40, b1_41, rpo_idx_42, idom_43, v55, b2_44, b1_45, rpo_idx_46, idom_47, v76, b2_77, b1_78, rpo_idx_79, idom_80, b2_57, b1_58, rpo_idx_59, idom_60, b2_61, b1_62, rpo_idx_63, idom_64, v70, b2_71, b1_72, rpo_idx_73, idom_74
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = b1_5, b2_6, b2_7, b1_8, rpo_idx_9, idom_10, v20, b2_12, b1_13, rpo_idx_14, idom_15, b2_16, b1_17, rpo_idx_18, idom_19, arg__8454_32, arg__8460_34, v35, v88, b2_89, b1_90, rpo_idx_91, idom_92, b2_23, b1_24, rpo_idx_25, idom_26, v38, b2_27, b1_28, rpo_idx_29, idom_30, arg__8471_49, arg__8477_51, v52, v82, b2_83, b1_84, rpo_idx_85, idom_86, b2_40, b1_41, rpo_idx_42, idom_43, v55, b2_44, b1_45, rpo_idx_46, idom_47, v76, b2_77, b1_78, rpo_idx_79, idom_80, b2_57, b1_58, rpo_idx_59, idom_60, b2_61, b1_62, rpo_idx_63, idom_64, v70, b2_71, b1_72, rpo_idx_73, idom_74
 	b1_5 = arg2
 	b2_6 = arg3
 	b2_7 = arg3
@@ -108,15 +108,15 @@ b2:
 	goto b4
 b3:
 	;
-	arg__8453_32, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_idx_18, b1_17})
+	arg__8454_32, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_idx_18, b1_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8459_34, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_idx_18, b2_16})
+	arg__8460_34, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_idx_18, b2_16})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v35 = rt.GtValue(arg__8453_32, arg__8459_34)
+	v35 = rt.GtValue(arg__8454_32, arg__8460_34)
 	if v35 {
 		b2_23 = b2_16
 		b1_24 = b1_17
@@ -148,15 +148,15 @@ b5:
 	goto b1
 b6:
 	;
-	arg__8470_49, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_idx_29, b2_27})
+	arg__8471_49, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_idx_29, b2_27})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8476_51, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_idx_29, b1_28})
+	arg__8477_51, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_idx_29, b1_28})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v52 = rt.GtValue(arg__8470_49, arg__8476_51)
+	v52 = rt.GtValue(arg__8471_49, arg__8477_51)
 	if v52 {
 		b2_40 = b2_27
 		b1_41 = b1_28
@@ -249,7 +249,7 @@ func successors(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var term_11 vm.Value
 	var op_12 vm.Value
 	var aux_13 vm.Value
-	var arg__8503_24 vm.Value
+	var arg__8504_24 vm.Value
 	var v25 vm.Value
 	var f_14 vm.Value
 	var bid_15 vm.Value
@@ -270,8 +270,8 @@ func successors(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var aux_31 vm.Value
 	var t_41 vm.Value
 	var e_43 vm.Value
-	var arg__8516_46 vm.Value
-	var arg__8520_48 vm.Value
+	var arg__8517_46 vm.Value
+	var arg__8521_48 vm.Value
 	var v49 vm.Value
 	var f_32 vm.Value
 	var bid_33 vm.Value
@@ -301,7 +301,7 @@ func successors(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var op_71 vm.Value
 	var aux_72 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = term_4, op_6, aux_8, v20, f_9, bid_10, term_11, op_12, aux_13, arg__8503_24, v25, f_14, bid_15, term_16, op_17, aux_18, v38, v81, f_82, bid_83, term_84, op_85, aux_86, f_27, bid_28, term_29, op_30, aux_31, t_41, e_43, arg__8516_46, arg__8520_48, v49, f_32, bid_33, term_34, op_35, aux_36, v74, f_75, bid_76, term_77, op_78, aux_79, f_51, bid_52, term_53, op_54, aux_55, f_56, bid_57, term_58, op_59, aux_60, v67, f_68, bid_69, term_70, op_71, aux_72
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = term_4, op_6, aux_8, v20, f_9, bid_10, term_11, op_12, aux_13, arg__8504_24, v25, f_14, bid_15, term_16, op_17, aux_18, v38, v81, f_82, bid_83, term_84, op_85, aux_86, f_27, bid_28, term_29, op_30, aux_31, t_41, e_43, arg__8517_46, arg__8521_48, v49, f_32, bid_33, term_34, op_35, aux_36, v74, f_75, bid_76, term_77, op_78, aux_79, f_51, bid_52, term_53, op_54, aux_55, f_56, bid_57, term_58, op_59, aux_60, v67, f_68, bid_69, term_70, op_71, aux_72
 	term_4, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-term").Deref(), []vm.Value{arg1, arg0})
 	if callErr != nil {
 		return nil, callErr
@@ -332,11 +332,11 @@ func successors(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	}
 b1:
 	;
-	arg__8503_24, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-target").Deref(), []vm.Value{aux_13})
+	arg__8504_24, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-target").Deref(), []vm.Value{aux_13})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v25, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__8503_24})
+	v25, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__8504_24})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -378,15 +378,15 @@ b4:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8516_46, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-target").Deref(), []vm.Value{t_41})
+	arg__8517_46, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-target").Deref(), []vm.Value{t_41})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8520_48, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-target").Deref(), []vm.Value{e_43})
+	arg__8521_48, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-target").Deref(), []vm.Value{e_43})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v49, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__8516_46, arg__8520_48})
+	v49, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__8517_46, arg__8521_48})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -452,8 +452,8 @@ b9:
 	goto b6
 }
 func dfs_postorder(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
-	var arg__8529_10 vm.Value
-	var arg__8531_12 vm.Value
+	var arg__8530_10 vm.Value
+	var arg__8532_12 vm.Value
 	var v13 vm.Value
 	var v15 vm.Value
 	var stack_3 vm.Value
@@ -475,7 +475,7 @@ func dfs_postorder(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var bid_37 vm.Value
 	var succs_41 vm.Value
 	var si_45 vm.Value
-	var arg__8560_65 vm.Value
+	var arg__8561_65 vm.Value
 	var v66 bool
 	var v130 vm.Value
 	var entry_131 vm.Value
@@ -493,12 +493,12 @@ func dfs_postorder(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var succs_53 vm.Value
 	var si_54 vm.Value
 	var s_69 vm.Value
-	var arg__8570_71 vm.Value
-	var arg__8576_74 vm.Value
-	var arg__8577_75 vm.Value
-	var arg__8583_78 vm.Value
-	var arg__8584_79 vm.Value
-	var arg__8590_82 vm.Value
+	var arg__8571_71 vm.Value
+	var arg__8577_74 vm.Value
+	var arg__8578_75 vm.Value
+	var arg__8584_78 vm.Value
+	var arg__8585_79 vm.Value
+	var arg__8591_82 vm.Value
 	var stack_PRIME__83 vm.Value
 	var v107 vm.Value
 	var entry_55 vm.Value
@@ -534,23 +534,23 @@ func dfs_postorder(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var si_103 vm.Value
 	var s_104 vm.Value
 	var stack_PRIME__105 vm.Value
-	var arg__8604_112 vm.Value
-	var arg__8606_114 vm.Value
-	var arg__8616_118 vm.Value
-	var arg__8618_120 vm.Value
+	var arg__8605_112 vm.Value
+	var arg__8607_114 vm.Value
+	var arg__8617_118 vm.Value
+	var arg__8619_120 vm.Value
 	var v121 vm.Value
 	var v123 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__8529_10, arg__8531_12, v13, v15, stack_3, visited_4, post_5, f_6, v29, entry_18, stack_19, visited_20, post_21, f_22, entry_23, stack_24, visited_25, post_26, f_27, top_33, bid_37, succs_41, si_45, arg__8560_65, v66, v130, entry_131, stack_132, visited_133, post_134, f_135, entry_46, stack_47, visited_48, post_49, f_50, top_51, bid_52, succs_53, si_54, s_69, arg__8570_71, arg__8576_74, arg__8577_75, arg__8583_78, arg__8584_79, arg__8590_82, stack_PRIME__83, v107, entry_55, stack_56, visited_57, post_58, f_59, top_60, bid_61, succs_62, si_63, v126, v128, entry_84, stack_85, visited_86, post_87, f_88, top_89, bid_90, succs_91, si_92, s_93, stack_PRIME__94, entry_95, stack_96, visited_97, post_98, f_99, top_100, bid_101, succs_102, si_103, s_104, stack_PRIME__105, arg__8604_112, arg__8606_114, arg__8616_118, arg__8618_120, v121, v123
-	arg__8529_10, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "successors").Deref(), []vm.Value{arg0, arg1})
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__8530_10, arg__8532_12, v13, v15, stack_3, visited_4, post_5, f_6, v29, entry_18, stack_19, visited_20, post_21, f_22, entry_23, stack_24, visited_25, post_26, f_27, top_33, bid_37, succs_41, si_45, arg__8561_65, v66, v130, entry_131, stack_132, visited_133, post_134, f_135, entry_46, stack_47, visited_48, post_49, f_50, top_51, bid_52, succs_53, si_54, s_69, arg__8571_71, arg__8577_74, arg__8578_75, arg__8584_78, arg__8585_79, arg__8591_82, stack_PRIME__83, v107, entry_55, stack_56, visited_57, post_58, f_59, top_60, bid_61, succs_62, si_63, v126, v128, entry_84, stack_85, visited_86, post_87, f_88, top_89, bid_90, succs_91, si_92, s_93, stack_PRIME__94, entry_95, stack_96, visited_97, post_98, f_99, top_100, bid_101, succs_102, si_103, s_104, stack_PRIME__105, arg__8605_112, arg__8607_114, arg__8617_118, arg__8619_120, v121, v123
+	arg__8530_10, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "successors").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8531_12, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg1, arg__8529_10, vm.Int(0)})
+	arg__8532_12, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg1, arg__8530_10, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v13, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__8531_12})
+	v13, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__8532_12})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -611,11 +611,11 @@ b3:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8560_65, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{succs_41})
+	arg__8561_65, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{succs_41})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v66 = rt.LtValue(si_45, arg__8560_65)
+	v66 = rt.LtValue(si_45, arg__8561_65)
 	if v66 {
 		entry_46 = entry_23
 		stack_47 = stack_24
@@ -648,25 +648,25 @@ b5:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8570_71, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{stack_47})
+	arg__8571_71, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{stack_47})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8576_74 = rt.AddValue(si_54, vm.Int(1))
-	arg__8577_75, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{bid_52, succs_53, arg__8576_74})
+	arg__8577_74 = rt.AddValue(si_54, vm.Int(1))
+	arg__8578_75, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{bid_52, succs_53, arg__8577_74})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8583_78, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{stack_47})
+	arg__8584_78, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{stack_47})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8584_79 = rt.SubValue(arg__8583_78, vm.Int(1))
-	arg__8590_82, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{bid_52, succs_53, arg__8576_74})
+	arg__8585_79 = rt.SubValue(arg__8584_78, vm.Int(1))
+	arg__8591_82, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{bid_52, succs_53, arg__8577_74})
 	if callErr != nil {
 		return nil, callErr
 	}
-	stack_PRIME__83, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "assoc").Deref(), []vm.Value{stack_47, arg__8584_79, arg__8590_82})
+	stack_PRIME__83, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "assoc").Deref(), []vm.Value{stack_47, arg__8585_79, arg__8591_82})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -725,23 +725,23 @@ b8:
 	goto b1
 b9:
 	;
-	arg__8604_112, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "successors").Deref(), []vm.Value{f_99, s_104})
+	arg__8605_112, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "successors").Deref(), []vm.Value{f_99, s_104})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8606_114, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{s_104, arg__8604_112, vm.Int(0)})
+	arg__8607_114, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{s_104, arg__8605_112, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8616_118, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "successors").Deref(), []vm.Value{f_99, s_104})
+	arg__8617_118, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "successors").Deref(), []vm.Value{f_99, s_104})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8618_120, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{s_104, arg__8616_118, vm.Int(0)})
+	arg__8619_120, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{s_104, arg__8617_118, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v121, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "conj").Deref(), []vm.Value{stack_PRIME__105, arg__8618_120})
+	v121, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "conj").Deref(), []vm.Value{stack_PRIME__105, arg__8619_120})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -756,80 +756,80 @@ b9:
 	goto b1
 }
 func reverse_postorder(arg0 vm.Value) (vm.Value, error) {
-	var arg__8636_3 vm.Value
-	var arg__8642_6 vm.Value
-	var arg__8643_7 vm.Value
-	var arg__8649_10 vm.Value
-	var arg__8655_13 vm.Value
-	var arg__8656_14 vm.Value
-	var arg__8657_15 vm.Value
-	var arg__8663_18 vm.Value
-	var arg__8669_21 vm.Value
-	var arg__8670_22 vm.Value
-	var arg__8676_25 vm.Value
-	var arg__8682_28 vm.Value
-	var arg__8683_29 vm.Value
-	var arg__8684_30 vm.Value
+	var arg__8637_3 vm.Value
+	var arg__8643_6 vm.Value
+	var arg__8644_7 vm.Value
+	var arg__8650_10 vm.Value
+	var arg__8656_13 vm.Value
+	var arg__8657_14 vm.Value
+	var arg__8658_15 vm.Value
+	var arg__8664_18 vm.Value
+	var arg__8670_21 vm.Value
+	var arg__8671_22 vm.Value
+	var arg__8677_25 vm.Value
+	var arg__8683_28 vm.Value
+	var arg__8684_29 vm.Value
+	var arg__8685_30 vm.Value
 	var v31 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__8636_3, arg__8642_6, arg__8643_7, arg__8649_10, arg__8655_13, arg__8656_14, arg__8657_15, arg__8663_18, arg__8669_21, arg__8670_22, arg__8676_25, arg__8682_28, arg__8683_29, arg__8684_30, v31
-	arg__8636_3, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__8637_3, arg__8643_6, arg__8644_7, arg__8650_10, arg__8656_13, arg__8657_14, arg__8658_15, arg__8664_18, arg__8670_21, arg__8671_22, arg__8677_25, arg__8683_28, arg__8684_29, arg__8685_30, v31
+	arg__8637_3, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8642_6, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
+	arg__8643_6, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8643_7, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "dfs-postorder").Deref(), []vm.Value{arg0, arg__8642_6})
+	arg__8644_7, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "dfs-postorder").Deref(), []vm.Value{arg0, arg__8643_6})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8649_10, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
+	arg__8650_10, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8655_13, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
+	arg__8656_13, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8656_14, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "dfs-postorder").Deref(), []vm.Value{arg0, arg__8655_13})
+	arg__8657_14, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "dfs-postorder").Deref(), []vm.Value{arg0, arg__8656_13})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8657_15, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "reverse").Deref(), []vm.Value{arg__8656_14})
+	arg__8658_15, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "reverse").Deref(), []vm.Value{arg__8657_14})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8663_18, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
+	arg__8664_18, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8669_21, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
+	arg__8670_21, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8670_22, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "dfs-postorder").Deref(), []vm.Value{arg0, arg__8669_21})
+	arg__8671_22, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "dfs-postorder").Deref(), []vm.Value{arg0, arg__8670_21})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8676_25, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
+	arg__8677_25, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8682_28, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
+	arg__8683_28, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-entry").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8683_29, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "dfs-postorder").Deref(), []vm.Value{arg0, arg__8682_28})
+	arg__8684_29, callErr = rt.InvokeValue(rt.LookupVar("ir.dominance", "dfs-postorder").Deref(), []vm.Value{arg0, arg__8683_28})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8684_30, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "reverse").Deref(), []vm.Value{arg__8683_29})
+	arg__8685_30, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "reverse").Deref(), []vm.Value{arg__8684_29})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v31, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__8684_30})
+	v31, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__8685_30})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -857,7 +857,7 @@ func refine_idom(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value, arg3 vm.Value) (vm
 	var rpo_idx_25 vm.Value
 	var idom_26 vm.Value
 	var p_32 vm.Value
-	var arg__8702_51 vm.Value
+	var arg__8703_51 vm.Value
 	var v52 bool
 	var v134 vm.Value
 	var f_135 vm.Value
@@ -948,7 +948,7 @@ func refine_idom(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value, arg3 vm.Value) (vm
 	var idom_111 vm.Value
 	var p_112 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = preds_6, ps_7, new_id_8, rpo_idx_9, idom_10, v28, f_13, bid_14, preds_15, ps_16, new_id_17, rpo_idx_18, idom_19, f_20, bid_21, preds_22, ps_23, new_id_24, rpo_idx_25, idom_26, p_32, arg__8702_51, v52, v134, f_135, bid_136, preds_137, ps_138, new_id_139, rpo_idx_140, idom_141, f_33, bid_34, preds_35, ps_36, new_id_37, rpo_idx_38, idom_39, p_40, v55, f_41, bid_42, preds_43, ps_44, new_id_45, rpo_idx_46, idom_47, p_48, v74, v124, f_125, bid_126, preds_127, ps_128, new_id_129, rpo_idx_130, idom_131, p_132, f_57, bid_58, preds_59, ps_60, new_id_61, rpo_idx_62, idom_63, p_64, v77, f_65, bid_66, preds_67, ps_68, new_id_69, rpo_idx_70, idom_71, p_72, v114, f_115, bid_116, preds_117, ps_118, new_id_119, rpo_idx_120, idom_121, p_122, f_79, bid_80, preds_81, ps_82, new_id_83, rpo_idx_84, idom_85, p_86, v98, v100, f_87, bid_88, preds_89, ps_90, new_id_91, rpo_idx_92, idom_93, p_94, v104, f_105, bid_106, preds_107, ps_108, new_id_109, rpo_idx_110, idom_111, p_112
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = preds_6, ps_7, new_id_8, rpo_idx_9, idom_10, v28, f_13, bid_14, preds_15, ps_16, new_id_17, rpo_idx_18, idom_19, f_20, bid_21, preds_22, ps_23, new_id_24, rpo_idx_25, idom_26, p_32, arg__8703_51, v52, v134, f_135, bid_136, preds_137, ps_138, new_id_139, rpo_idx_140, idom_141, f_33, bid_34, preds_35, ps_36, new_id_37, rpo_idx_38, idom_39, p_40, v55, f_41, bid_42, preds_43, ps_44, new_id_45, rpo_idx_46, idom_47, p_48, v74, v124, f_125, bid_126, preds_127, ps_128, new_id_129, rpo_idx_130, idom_131, p_132, f_57, bid_58, preds_59, ps_60, new_id_61, rpo_idx_62, idom_63, p_64, v77, f_65, bid_66, preds_67, ps_68, new_id_69, rpo_idx_70, idom_71, p_72, v114, f_115, bid_116, preds_117, ps_118, new_id_119, rpo_idx_120, idom_121, p_122, f_79, bid_80, preds_81, ps_82, new_id_83, rpo_idx_84, idom_85, p_86, v98, v100, f_87, bid_88, preds_89, ps_90, new_id_91, rpo_idx_92, idom_93, p_94, v104, f_105, bid_106, preds_107, ps_108, new_id_109, rpo_idx_110, idom_111, p_112
 	preds_6, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-preds").Deref(), []vm.Value{arg1, arg0})
 	if callErr != nil {
 		return nil, callErr
@@ -1000,11 +1000,11 @@ b3:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8702_51, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{idom_26, p_32})
+	arg__8703_51, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{idom_26, p_32})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v52 = arg__8702_51 == vm.Int(-1)
+	v52 = arg__8703_51 == vm.Int(-1)
 	if v52 {
 		f_33 = f_20
 		bid_34 = bid_21
@@ -1162,18 +1162,18 @@ b13:
 	goto b10
 }
 func dominators(arg0 vm.Value) (vm.Value, error) {
-	var arg__8726_3 vm.Value
-	var arg__8731_6 vm.Value
+	var arg__8727_3 vm.Value
+	var arg__8732_6 vm.Value
 	var n_7 vm.Value
 	var entry_9 vm.Value
 	var rpo_11 vm.Value
-	var arg__8743_19 vm.Value
-	var arg__8750_24 vm.Value
+	var arg__8744_19 vm.Value
+	var arg__8751_24 vm.Value
 	var v25 vm.Value
 	var i_12 int
 	var idx_13 vm.Value
 	var rpo_14 vm.Value
-	var arg__8755_40 vm.Value
+	var arg__8756_40 vm.Value
 	var v41 bool
 	var f_27 vm.Value
 	var n_28 vm.Value
@@ -1188,8 +1188,8 @@ func dominators(arg0 vm.Value) (vm.Value, error) {
 	var idx_37 vm.Value
 	var rpo_38 vm.Value
 	var v44 int
-	var arg__8763_46 vm.Value
-	var arg__8772_49 vm.Value
+	var arg__8764_46 vm.Value
+	var arg__8773_49 vm.Value
 	var v50 vm.Value
 	var rpo_idx_52 vm.Value
 	var f_53 vm.Value
@@ -1198,12 +1198,12 @@ func dominators(arg0 vm.Value) (vm.Value, error) {
 	var i_56 int
 	var idx_57 vm.Value
 	var rpo_58 vm.Value
-	var arg__8779_62 vm.Value
-	var arg__8786_67 vm.Value
-	var arg__8787_68 vm.Value
-	var arg__8796_73 vm.Value
-	var arg__8803_78 vm.Value
-	var arg__8804_79 vm.Value
+	var arg__8780_62 vm.Value
+	var arg__8787_67 vm.Value
+	var arg__8788_68 vm.Value
+	var arg__8797_73 vm.Value
+	var arg__8804_78 vm.Value
+	var arg__8805_79 vm.Value
 	var idom0_80 vm.Value
 	var idom_81 vm.Value
 	var rpo_idx_82 vm.Value
@@ -1373,7 +1373,7 @@ func dominators(arg0 vm.Value) (vm.Value, error) {
 	var v329 int
 	var v343 int
 	var v357 int
-	var arg__8837_216 vm.Value
+	var arg__8838_216 vm.Value
 	var v217 bool
 	var v219 bool
 	var n_220 vm.Value
@@ -1440,16 +1440,16 @@ func dominators(arg0 vm.Value) (vm.Value, error) {
 	var entry_307 vm.Value
 	var v311 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__8726_3, arg__8731_6, n_7, entry_9, rpo_11, arg__8743_19, arg__8750_24, v25, i_12, idx_13, rpo_14, arg__8755_40, v41, f_27, n_28, entry_29, i_30, idx_31, rpo_32, f_33, n_34, entry_35, i_36, idx_37, rpo_38, v44, arg__8763_46, arg__8772_49, v50, rpo_idx_52, f_53, n_54, entry_55, i_56, idx_57, rpo_58, arg__8779_62, arg__8786_67, arg__8787_68, arg__8796_73, arg__8803_78, arg__8804_79, idom0_80, idom_81, rpo_idx_82, rpo_83, f_84, entry_85, v327, v341, v355, bs_87, idom_88, changed_QMARK__89, rpo_idx_90, idom_91, f_92, entry_93, v325, v339, v353, v119, n_96, i_97, idx_98, idom0_99, rpo_100, bs_101, changed_QMARK__102, rpo_idx_103, idom_104, f_105, entry_106, v332, v346, v360, v122, n_107, i_108, idx_109, idom0_110, rpo_111, bs_112, changed_QMARK__113, rpo_idx_114, idom_115, f_116, entry_117, v323, v337, v351, b_125, v150, step_244, n_245, i_246, idx_247, idom0_248, rpo_249, bs_250, changed_QMARK__251, rpo_idx_252, idom_253, f_254, entry_255, v328, v342, v356, v283, n_126, i_127, idx_128, idom0_129, rpo_130, bs_131, changed_QMARK__132, rpo_idx_133, idom_134, f_135, entry_136, b_137, v324, v338, v352, v153, n_138, i_139, idx_140, idom0_141, rpo_142, bs_143, changed_QMARK__144, rpo_idx_145, idom_146, f_147, entry_148, b_149, v321, v335, v349, ni_156, or__x_184, n_157, i_158, idx_159, idom0_160, rpo_161, bs_162, changed_QMARK__163, rpo_idx_164, idom_165, f_166, entry_167, b_168, ni_169, v322, v336, v350, v236, n_170, i_171, idx_172, idom0_173, rpo_174, bs_175, changed_QMARK__176, rpo_idx_177, idom_178, f_179, entry_180, b_181, ni_182, v331, v345, v359, v239, v241, n_185, i_186, idx_187, idom0_188, rpo_189, bs_190, changed_QMARK__191, rpo_idx_192, idom_193, f_194, entry_195, b_196, ni_197, or__x_198, v320, v334, v348, n_199, i_200, idx_201, idom0_202, rpo_203, bs_204, changed_QMARK__205, rpo_idx_206, idom_207, f_208, entry_209, b_210, ni_211, or__x_212, v329, v343, v357, arg__8837_216, v217, v219, n_220, i_221, idx_222, idom0_223, rpo_224, bs_225, changed_QMARK__226, rpo_idx_227, idom_228, f_229, entry_230, b_231, ni_232, or__x_233, v326, v340, v354, step_256, n_257, i_258, idx_259, idom0_260, rpo_261, bs_262, changed_QMARK__263, rpo_idx_264, idom_265, f_266, entry_267, v330, v344, v358, v288, step_268, n_269, i_270, idx_271, idom0_272, rpo_273, bs_274, changed_QMARK__275, rpo_idx_276, idom_277, f_278, entry_279, v333, v347, v361, v293, final_295, step_296, n_297, i_298, idx_299, idom0_300, rpo_301, bs_302, changed_QMARK__303, rpo_idx_304, idom_305, f_306, entry_307, v311
-	arg__8726_3, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__8727_3, arg__8732_6, n_7, entry_9, rpo_11, arg__8744_19, arg__8751_24, v25, i_12, idx_13, rpo_14, arg__8756_40, v41, f_27, n_28, entry_29, i_30, idx_31, rpo_32, f_33, n_34, entry_35, i_36, idx_37, rpo_38, v44, arg__8764_46, arg__8773_49, v50, rpo_idx_52, f_53, n_54, entry_55, i_56, idx_57, rpo_58, arg__8780_62, arg__8787_67, arg__8788_68, arg__8797_73, arg__8804_78, arg__8805_79, idom0_80, idom_81, rpo_idx_82, rpo_83, f_84, entry_85, v327, v341, v355, bs_87, idom_88, changed_QMARK__89, rpo_idx_90, idom_91, f_92, entry_93, v325, v339, v353, v119, n_96, i_97, idx_98, idom0_99, rpo_100, bs_101, changed_QMARK__102, rpo_idx_103, idom_104, f_105, entry_106, v332, v346, v360, v122, n_107, i_108, idx_109, idom0_110, rpo_111, bs_112, changed_QMARK__113, rpo_idx_114, idom_115, f_116, entry_117, v323, v337, v351, b_125, v150, step_244, n_245, i_246, idx_247, idom0_248, rpo_249, bs_250, changed_QMARK__251, rpo_idx_252, idom_253, f_254, entry_255, v328, v342, v356, v283, n_126, i_127, idx_128, idom0_129, rpo_130, bs_131, changed_QMARK__132, rpo_idx_133, idom_134, f_135, entry_136, b_137, v324, v338, v352, v153, n_138, i_139, idx_140, idom0_141, rpo_142, bs_143, changed_QMARK__144, rpo_idx_145, idom_146, f_147, entry_148, b_149, v321, v335, v349, ni_156, or__x_184, n_157, i_158, idx_159, idom0_160, rpo_161, bs_162, changed_QMARK__163, rpo_idx_164, idom_165, f_166, entry_167, b_168, ni_169, v322, v336, v350, v236, n_170, i_171, idx_172, idom0_173, rpo_174, bs_175, changed_QMARK__176, rpo_idx_177, idom_178, f_179, entry_180, b_181, ni_182, v331, v345, v359, v239, v241, n_185, i_186, idx_187, idom0_188, rpo_189, bs_190, changed_QMARK__191, rpo_idx_192, idom_193, f_194, entry_195, b_196, ni_197, or__x_198, v320, v334, v348, n_199, i_200, idx_201, idom0_202, rpo_203, bs_204, changed_QMARK__205, rpo_idx_206, idom_207, f_208, entry_209, b_210, ni_211, or__x_212, v329, v343, v357, arg__8838_216, v217, v219, n_220, i_221, idx_222, idom0_223, rpo_224, bs_225, changed_QMARK__226, rpo_idx_227, idom_228, f_229, entry_230, b_231, ni_232, or__x_233, v326, v340, v354, step_256, n_257, i_258, idx_259, idom0_260, rpo_261, bs_262, changed_QMARK__263, rpo_idx_264, idom_265, f_266, entry_267, v330, v344, v358, v288, step_268, n_269, i_270, idx_271, idom0_272, rpo_273, bs_274, changed_QMARK__275, rpo_idx_276, idom_277, f_278, entry_279, v333, v347, v361, v293, final_295, step_296, n_297, i_298, idx_299, idom0_300, rpo_301, bs_302, changed_QMARK__303, rpo_idx_304, idom_305, f_306, entry_307, v311
+	arg__8727_3, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8731_6, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
+	arg__8732_6, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	n_7, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__8731_6})
+	n_7, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__8732_6})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1461,15 +1461,15 @@ func dominators(arg0 vm.Value) (vm.Value, error) {
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8743_19, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_7, vm.Int(-1)})
+	arg__8744_19, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_7, vm.Int(-1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8750_24, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_7, vm.Int(-1)})
+	arg__8751_24, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_7, vm.Int(-1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v25, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__8750_24})
+	v25, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__8751_24})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1479,11 +1479,11 @@ func dominators(arg0 vm.Value) (vm.Value, error) {
 	goto b1
 b1:
 	;
-	arg__8755_40, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{rpo_14})
+	arg__8756_40, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{rpo_14})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v41 = rt.GeValue(vm.Int(i_12), arg__8755_40)
+	v41 = rt.GeValue(vm.Int(i_12), arg__8756_40)
 	if v41 {
 		f_27 = arg0
 		n_28 = n_7
@@ -1514,15 +1514,15 @@ b2:
 b3:
 	;
 	v44 = i_36 + 1
-	arg__8763_46, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_38, vm.Int(i_36)})
+	arg__8764_46, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_38, vm.Int(i_36)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8772_49, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_38, vm.Int(i_36)})
+	arg__8773_49, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{rpo_38, vm.Int(i_36)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v50, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "assoc").Deref(), []vm.Value{idx_37, arg__8772_49, vm.Int(i_36)})
+	v50, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "assoc").Deref(), []vm.Value{idx_37, arg__8773_49, vm.Int(i_36)})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1532,31 +1532,31 @@ b3:
 	goto b1
 b4:
 	;
-	arg__8779_62, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_54, vm.Int(-1)})
+	arg__8780_62, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_54, vm.Int(-1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8786_67, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_54, vm.Int(-1)})
+	arg__8787_67, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_54, vm.Int(-1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8787_68, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__8786_67})
+	arg__8788_68, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__8787_67})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8796_73, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_54, vm.Int(-1)})
+	arg__8797_73, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_54, vm.Int(-1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8803_78, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_54, vm.Int(-1)})
+	arg__8804_78, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_54, vm.Int(-1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__8804_79, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__8803_78})
+	arg__8805_79, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__8804_78})
 	if callErr != nil {
 		return nil, callErr
 	}
-	idom0_80, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "assoc").Deref(), []vm.Value{arg__8804_79, entry_55, entry_55})
+	idom0_80, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "assoc").Deref(), []vm.Value{arg__8805_79, entry_55, entry_55})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1850,11 +1850,11 @@ b16:
 	goto b18
 b17:
 	;
-	arg__8837_216, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{idom_207, b_210})
+	arg__8838_216, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{idom_207, b_210})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v217 = arg__8837_216 == ni_211
+	v217 = arg__8838_216 == ni_211
 	v219 = v217
 	n_220 = n_199
 	i_221 = i_200

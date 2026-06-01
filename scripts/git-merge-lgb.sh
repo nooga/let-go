@@ -23,4 +23,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 # Regenerate from sources. Output path comes from "$2" (%A).
-go run ./cmd/lgbgen "$2"
+# lgbgen only compiles the embedded core sources under the `bootstrap` build
+# tag; without it, lgbgen refuses to run.
+go run -tags bootstrap ./cmd/lgbgen "$2"
