@@ -157,6 +157,40 @@ func installOsNS() {
 		}), nil
 	})
 
+	// os/exec* — (os/exec* cmd & args) → exit code (Int). Unlike os/sh, the
+	// child inherits the parent's stdin/stdout/stderr, so output streams and the
+	// child stays interactive (e.g. launching a REPL). Returns the exit code.
+	execStar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("os/exec* expects at least 1 arg")
+		}
+		cmdName, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/exec* expected String command")
+		}
+		cmdArgs := make([]string, len(vs)-1)
+		for i := 1; i < len(vs); i++ {
+			if s, ok := vs[i].(vm.String); ok {
+				cmdArgs[i-1] = string(s)
+			} else {
+				cmdArgs[i-1] = vs[i].String()
+			}
+		}
+		cmd := exec.Command(string(cmdName), cmdArgs...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		exitCode := 0
+		if runErr := cmd.Run(); runErr != nil {
+			if exitErr, ok := runErr.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				return vm.NIL, runErr
+			}
+		}
+		return vm.Int(exitCode), nil
+	})
+
 	if err != nil {
 		panic(fmt.Sprintf("os NS init failed: %e", err))
 	}
@@ -174,6 +208,7 @@ func installOsNS() {
 	ns.Def("ls", ls)
 	ns.Def("stat", stat)
 	ns.Def("sh", sh)
+	ns.Def("exec*", execStar)
 
 	// os/os-name — (os/os-name) → "linux", "darwin", "windows", ...
 	ns.Def("os-name", mustWrap(func(vs []vm.Value) (vm.Value, error) {

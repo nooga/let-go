@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Promise is a write-once, read-many synchronization primitive.
@@ -42,6 +43,25 @@ func (p *Promise) Deref() Value {
 	p.mu.Unlock()
 	<-p.ch // block until delivered
 	return p.value
+}
+
+// DerefTimeout blocks until the promise is delivered or timeoutMs elapses,
+// returning timeoutVal on timeout. Backs Clojure's 3-arg deref for blocking
+// refs (promises/futures).
+func (p *Promise) DerefTimeout(timeoutMs int64, timeoutVal Value) Value {
+	p.mu.Lock()
+	if p.delivered {
+		v := p.value
+		p.mu.Unlock()
+		return v
+	}
+	p.mu.Unlock()
+	select {
+	case <-p.ch:
+		return p.value
+	case <-time.After(time.Duration(timeoutMs) * time.Millisecond):
+		return timeoutVal
+	}
 }
 
 func (p *Promise) IsRealized() bool {

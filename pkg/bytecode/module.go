@@ -25,6 +25,15 @@ type ChunkData struct {
 	MaxStack  int
 	Code      []int32
 	SourceMap []SourceEntry
+	// LocalVars is the chunk's local-variable debug table (slot -> name),
+	// serialized in an optional section under FlagLocalVars.
+	LocalVars []LocalVarEntry
+}
+
+// LocalVarEntry is a local-variable debug entry for serialization.
+type LocalVarEntry struct {
+	Slot int
+	Name string
 }
 
 // SourceEntry is a source map entry for serialization.

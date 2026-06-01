@@ -616,6 +616,16 @@
 (defmacro declare [& names]
   `(do ~@(map #(list 'def % nil) names)))
 
+(defmacro defonce [name expr]
+  (let [bare (if (and (seq? name) (= (first name) 'with-meta)) (second name) name)
+        v (gensym "v")]
+    ;; Compiling the (def name expr) branch interns the var, so a plain
+    ;; `resolve` would always see it. Gate on bound? (does it have a ROOT
+    ;; value yet) instead, so the def runs once and re-evaluation is a no-op.
+    (list 'let [v (list 'resolve (list 'quote bare))]
+          (list 'when-not (list 'and v (list 'bound? v))
+                (list 'def name expr)))))
+
 (declare destructure*)
 
 ;; nth is now a native Go builtin for performance (used by destructuring)

@@ -111,12 +111,22 @@ func OpcodeToString(op int32) string {
 }
 
 // CodeChunk holds bytecode and provides facilities for reading and writing it
+// LocalVar is a debug-info entry mapping a stack slot to the original
+// source name of a local binding (let/loop binding, fn parameter, catch
+// binding). Carried so crash traces from bundle-loaded code (e.g. under
+// WASM) can name local variables, not just slots.
+type LocalVar struct {
+	Slot int
+	Name string
+}
+
 type CodeChunk struct {
 	maxStack  int
 	consts    *Consts
 	code      []int32
 	length    int
 	sourceMap *SourceMap
+	localVars []LocalVar
 }
 
 func NewCodeChunk(consts *Consts) *CodeChunk {
@@ -126,6 +136,14 @@ func NewCodeChunk(consts *Consts) *CodeChunk {
 		length: 0,
 	}
 }
+
+// AddLocalVar records the source name bound to a stack slot (debug info).
+func (c *CodeChunk) AddLocalVar(slot int, name string) {
+	c.localVars = append(c.localVars, LocalVar{Slot: slot, Name: name})
+}
+
+// LocalVars returns the chunk's local-variable debug table (may be nil).
+func (c *CodeChunk) LocalVars() []LocalVar { return c.localVars }
 
 func (c *CodeChunk) Debug() {
 	consts := c.consts
@@ -187,6 +205,9 @@ func (c *CodeChunk) AppendChunk(o *CodeChunk) {
 			c.sourceMap.Add(base+e.startIP, e.info)
 		}
 	}
+	// Carry local-variable debug entries. Slots are frame-relative (not IP),
+	// so they are appended as-is.
+	c.localVars = append(c.localVars, o.localVars...)
 	c.code = append(c.code, o.code...)
 	c.length += len(o.code)
 }

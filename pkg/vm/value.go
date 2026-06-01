@@ -96,6 +96,13 @@ type Reference interface {
 	Deref() Value
 }
 
+// BlockingDeref is a reference whose value may not be available yet (promise,
+// future). DerefTimeout blocks up to timeoutMs for the value, returning
+// timeoutVal on timeout. Backs Clojure's 3-arg deref.
+type BlockingDeref interface {
+	DerefTimeout(timeoutMs int64, timeoutVal Value) Value
+}
+
 type theTypeType struct{}
 
 var TypeType *theTypeType = &theTypeType{}
