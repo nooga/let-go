@@ -97,9 +97,17 @@ func (d *DTypeInstance) Hash() uint32 {
 }
 
 // InvokeMethod implements Receiver so (.fieldname instance) returns the field.
+// Both (.field x) and the explicit field-access form (.-field x) are accepted:
+// the reader hands the latter through as the member symbol "-field", so a
+// leading "-" is stripped before the field lookup (Clojure's .-field syntax).
 func (d *DTypeInstance) InvokeMethod(name Symbol, args []Value) (Value, error) {
 	if idx, ok := d.dtype.fieldIdx[name]; ok {
 		return d.fields[idx], nil
+	}
+	if len(name) > 1 && name[0] == '-' {
+		if idx, ok := d.dtype.fieldIdx[name[1:]]; ok {
+			return d.fields[idx], nil
+		}
 	}
 	return NIL, fmt.Errorf("no field %s on deftype %s", name, d.dtype.typeName)
 }

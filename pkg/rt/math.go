@@ -75,9 +75,19 @@ func mathFn2(f func(float64, float64) float64) vm.Value {
 
 func init() { RegisterInstaller(installMathNS) }
 
-// nolint
+// installMathNS registers the math functions under both "math" (let-go's
+// historical name) and "clojure.math" (the namespace Clojure actually uses, so
+// stock libraries that (require 'clojure.math) load). The contents are
+// identical; each name gets its own namespace object.
 func installMathNS() {
-	ns := vm.NewNamespace("math")
+	for _, name := range []string{"math", "clojure.math"} {
+		installMathInto(name)
+	}
+}
+
+// nolint
+func installMathInto(nsName string) {
+	ns := vm.NewNamespace(nsName)
 	ns.Refer(CoreNS, "", true)
 
 	// Intentional shadows of clojure.core names — suppress warn-on-shadow.

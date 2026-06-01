@@ -1301,7 +1301,47 @@ func fnComparator(comp vm.Fn) vm.Comparator {
 	}
 }
 
+// hostMethods backs the pluggable host-method-dispatch seam: a (type, method)
+// registry consulted by the `.`-form when a value has no native method of that
+// name. Mirrors the pluggable NSLoader — core ships the seam; callers (e.g. a
+// library-compat module) register the specific method names they need, rather
+// than baking a general reflective bridge into core.
+var (
+	hostMethodsMu sync.RWMutex
+	hostMethods   = map[vm.ValueType]map[vm.Symbol]vm.Fn{}
+)
+
+// RegisterHostMethod registers fn as the handler for `.name` on values whose
+// type is t. The handler is invoked with the receiver as its first argument.
+func RegisterHostMethod(t vm.ValueType, name vm.Symbol, fn vm.Fn) {
+	hostMethodsMu.Lock()
+	defer hostMethodsMu.Unlock()
+	m := hostMethods[t]
+	if m == nil {
+		m = map[vm.Symbol]vm.Fn{}
+		hostMethods[t] = m
+	}
+	m[name] = fn
+}
+
+func lookupHostMethod(t vm.ValueType, name vm.Symbol) (vm.Fn, bool) {
+	hostMethodsMu.RLock()
+	defer hostMethodsMu.RUnlock()
+	if m := hostMethods[t]; m != nil {
+		fn, ok := m[name]
+		return fn, ok
+	}
+	return nil, false
+}
+
 func invokeMethodFallback(rec vm.Value, name vm.Symbol, args []vm.Value, originalErr error) (vm.Value, error) {
+	// Explicit host-method registrations win over the generic name→fn fallbacks
+	// below (so e.g. a registered `.pop` is not shadowed by core `pop`).
+	if rec != nil {
+		if fn, ok := lookupHostMethod(rec.Type(), name); ok {
+			return fn.Invoke(append([]vm.Value{rec}, args...))
+		}
+	}
 	if isCompatChecker(rec) && len(args) == 1 {
 		switch name {
 		case "isLong":
@@ -3148,15 +3188,51 @@ func installLangNS() {
 		return invokeMethodFallback(rec, name, vs[2:], err)
 	})
 
-	deref, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	// (register-host-method! Type 'name (fn [rec & args] ...)) — register a
+	// handler for `.name` dot-forms on values of Type (the host-method seam).
+	registerHostMethod, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("register-host-method! expected 3 arguments, got %d", len(vs))
 		}
-		ref, ok := vs[0].(vm.Reference)
+		t, ok := vs[0].(vm.ValueType)
 		if !ok {
-			return vm.NIL, fmt.Errorf("deref expected Reference")
+			return vm.NIL, fmt.Errorf("register-host-method! expected a type, got %s", vs[0].Type().Name())
 		}
-		return ref.Deref(), nil
+		name, ok := vs[1].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("register-host-method! expected a Symbol method name")
+		}
+		fn, ok := vs[2].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("register-host-method! expected a fn")
+		}
+		RegisterHostMethod(t, name, fn)
+		return vm.NIL, nil
+	})
+
+	deref, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		switch len(vs) {
+		case 1:
+			ref, ok := vs[0].(vm.Reference)
+			if !ok {
+				return vm.NIL, fmt.Errorf("deref expected Reference")
+			}
+			return ref.Deref(), nil
+		case 3:
+			// (deref blocking-ref timeout-ms timeout-val): block up to ms for a
+			// promise/future's value, else return timeout-val.
+			bref, ok := vs[0].(vm.BlockingDeref)
+			if !ok {
+				return vm.NIL, fmt.Errorf("deref with timeout expects a blocking ref (promise or future)")
+			}
+			ms, ok := vs[1].(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("deref timeout must be an integer number of milliseconds")
+			}
+			return bref.DerefTimeout(int64(ms), vs[2]), nil
+		default:
+			return vm.NIL, fmt.Errorf("deref: wrong number of arguments %d (expected 1 or 3)", len(vs))
+		}
 	})
 
 	concat, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -3860,6 +3936,11 @@ func installLangNS() {
 	regex, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		// (re-pattern p) on an already-compiled regex returns it unchanged,
+		// matching Clojure where re-pattern accepts a Pattern, not only a String.
+		if r, ok := vs[0].(*vm.Regex); ok {
+			return r, nil
 		}
 		if s, ok := vs[0].(vm.String); ok {
 			return vm.NewRegex(string(s))
@@ -5783,6 +5864,12 @@ func installLangNS() {
 		if t, ok := vs[0].(vm.ValueType); ok {
 			return vm.Boolean(vs[1].Type() == t), nil
 		}
+		// A protocol behaves like an interface: (instance? SomeProtocol x) is a
+		// membership test, matching Clojure where defprotocol generates a host
+		// interface.
+		if p, ok := vs[0].(*vm.Protocol); ok {
+			return vm.Boolean(p.Satisfies(vs[1])), nil
+		}
 		return vm.FALSE, nil
 	})
 
@@ -5980,6 +6067,7 @@ func installLangNS() {
 
 	ns.Def("apply*", apply)
 	ns.Def("deref", deref)
+	ns.Def("register-host-method!", registerHostMethod)
 
 	ns.Def("atom", atom)
 	ns.Def("reset!", reset)
@@ -7012,6 +7100,25 @@ func installLangNS() {
 		return v.Deref(), nil
 	})
 	ns.Def("var-get", varGet)
+
+	// bound? — true when the var has a bound value: a root binding or an active
+	// dynamic binding (matching Clojure). Distinguishes a forward-declared/
+	// compiler-interned var from one that has actually been set, which `defonce`
+	// relies on.
+	boundQ, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("bound? expects 1 arg")
+		}
+		v, ok := vs[0].(*vm.Var)
+		if !ok {
+			return vm.NIL, fmt.Errorf("bound? expects a Var")
+		}
+		if v.IsBound() {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("bound?", boundQ)
 
 	// macroexpand — expand a macro form once
 	macroexpandf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
