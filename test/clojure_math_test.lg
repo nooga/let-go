@@ -1,0 +1,19 @@
+;; clojure.math is available under its real Clojure name (not only `math`).
+(ns test.clojure-math-test
+  (:require [clojure.math :as m]
+            [test :refer :all]))
+
+(deftest clojure-math-is-requirable
+  (testing "(require 'clojure.math) works and its functions behave"
+    (is (= 3 (m/round 2.7)))          ; round -> long
+    (is (= 4.0 (m/sqrt 16)))
+    (is (= 1024.0 (m/pow 2 10)))
+    (is (= 1.0 (m/floor 1.9)))
+    (is (= 2.0 (m/ceil 1.1)))
+    (is (< 3.14 m/PI 3.15))
+    (is (= 7 (m/floor-div 15 2)))))
+
+(deftest math-alias-still-works
+  (testing "the historical `math` namespace is unchanged"
+    (is (= 5 (math/round 5.2)))
+    (is (= 3.0 (math/sqrt 9)))))
