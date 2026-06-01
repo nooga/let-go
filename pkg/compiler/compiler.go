@@ -8,6 +8,7 @@ package compiler
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/rt"
@@ -217,17 +218,12 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 			}
 			i = i - 1
 		}
-		// Clojure allows `_` to appear multiple times in a parameter list
-		// as the conventional "ignored" placeholder. Multiple `_`s would
-		// collide in formalArgs (a Symbol-keyed map), so we simply don't
-		// register `_` for name lookup — but the slot still exists and
-		// the corresponding argument is still evaluated and passed (Clojure
-		// is strict; the caller's side effects must happen). argCount tracks
-		// the total slot count, including `_`s, for arity checks.
+		// `_` is the conventional "ignored" placeholder but is still an ordinary
+		// symbol in Clojure: it IS bound and may be referenced. When `_` repeats,
+		// the last occurrence wins, which the Symbol-keyed map gives us for free
+		// by overwriting on assignment. argCount tracks the total slot count,
+		// including `_`s, for arity checks.
 		fc.argCount++
-		if s == "_" {
-			continue
-		}
 		fc.formalArgs[s] = i
 	}
 	return fc, nil
@@ -235,6 +231,19 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 
 func (c *Context) leaveFn(ctx *Context) {
 	fnchunk := ctx.chunk
+	// Record parameter names as debug info (slot -> name), sorted by slot for
+	// deterministic output (formalArgs is a map). `_` and `&` are already
+	// excluded from formalArgs.
+	if len(ctx.formalArgs) > 0 {
+		params := make([]vm.LocalVar, 0, len(ctx.formalArgs))
+		for name, slot := range ctx.formalArgs {
+			params = append(params, vm.LocalVar{Slot: slot, Name: string(name)})
+		}
+		sort.Slice(params, func(i, j int) bool { return params[i].Slot < params[j].Slot })
+		for _, p := range params {
+			fnchunk.AddLocalVar(p.Slot, p.Name)
+		}
+	}
 	fnchunk.SetMaxStack(ctx.spMax)
 	f := vm.MakeFunc(ctx.argCount, ctx.variadric, fnchunk)
 	f.SetName(c.defName)
@@ -255,12 +264,10 @@ func (c *Context) leaveFn(ctx *Context) {
 }
 
 func (c *Context) symbolLookup(s vm.Symbol) cell {
-	if c.isClosure {
-		clo := c.closedOvers[s]
-		if clo != nil {
-			return clo
-		}
-	}
+	// Locals and args in the current scope shadow a closed-over variable of the
+	// same name: `(let [v (f v)] v)` where v is also captured from an enclosing
+	// scope must see the NEW binding in the body, not the captured value.
+	// Checking closedOvers first (as before) made the let binding a no-op.
 	local := c.lookupLocal(s)
 	if local >= 0 {
 		// we have a local symbol in scope
@@ -274,6 +281,12 @@ func (c *Context) symbolLookup(s vm.Symbol) cell {
 		return &argCell{
 			scope: c,
 			arg:   arg,
+		}
+	}
+	if c.isClosure {
+		clo := c.closedOvers[s]
+		if clo != nil {
+			return clo
 		}
 	}
 	if c.parent == nil {
@@ -515,9 +528,10 @@ func (c *Context) compileForm(o vm.Value) error {
 				return c.compileForm(newform)
 			}
 
-			// Locals shadow macros: skip macro expansion if name is bound locally.
+			// Locals shadow macros: skip macro expansion if name is bound in the
+			// enclosing lexical scope (local, arg, or captured by a closure).
 			fvar := vm.Value(vm.NIL)
-			if c.lookupLocal(fnsym) < 0 {
+			if !c.resolvesAsLexical(fnsym) {
 				fvar = c.CurrentNS().Lookup(fnsym)
 			}
 			if fvar != vm.NIL && fvar.(*vm.Var).IsMacro() {
@@ -674,6 +688,11 @@ func (c *Context) popLocals() {
 
 func (c *Context) addLocal(name vm.Symbol) {
 	c.locals[len(c.locals)-1][name] = c.sp - 1
+	// Record the source name for this slot as debug info (slot -> name), so it
+	// survives into the bundle and can name locals in crash traces.
+	if name != "_" {
+		c.chunk.AddLocalVar(c.sp-1, string(name))
+	}
 	// Count every binding, even shadowed ones: the older slot is still on the
 	// stack and counts toward this scope's footprint. recurCompiler relies on
 	// this to compute `ignore` correctly when crossing a shadowing scope.
@@ -707,6 +726,28 @@ func (c *Context) lookupLocal(symbol vm.Symbol) int {
 		}
 	}
 	return -1
+}
+
+// resolvesAsLexical reports whether symbol is bound as a local, formal arg, or
+// closed-over variable anywhere in the enclosing lexical scope, WITHOUT the
+// capture side effects of symbolLookup. Used to decide head-position macro
+// shadowing: a lexical binding named like a macro/special form (e.g. a local
+// `fn`) must shadow it even when the use site is inside a nested fn/closure
+// that captures it. lookupLocal alone only sees the current frame, so a
+// captured binding would otherwise be mistaken for the macro.
+func (c *Context) resolvesAsLexical(symbol vm.Symbol) bool {
+	for ctx := c; ctx != nil; ctx = ctx.parent {
+		if ctx.isClosure && ctx.closedOvers[symbol] != nil {
+			return true
+		}
+		if ctx.lookupLocal(symbol) >= 0 {
+			return true
+		}
+		if ctx.arg(symbol) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 type recurPoint struct {
@@ -1040,6 +1081,15 @@ func compileBindings(c *Context, binds []vm.Value, opName string) (int, error) {
 	bindn := 0
 	for i := 0; i < len(binds); i += 2 {
 		name := binds[i]
+		// Strip a metadata wrapper from the binding name: `^long x` is read as
+		// `(with-meta x {:tag long})`. As with fn params, we don't yet attach
+		// the tag to the local (a future hook for the IR typeinfer pass), just
+		// unwrap to the bare symbol so the check below succeeds.
+		if lst, ok := name.(*vm.List); ok && lst.First() == vm.Symbol("with-meta") {
+			if rest := lst.Next(); rest != nil {
+				name = rest.First()
+			}
+		}
 		if name.Type() != vm.SymbolType {
 			return 0, NewCompileError(fmt.Sprintf("%s binding name must be a symbol: %v", opName, name))
 		}

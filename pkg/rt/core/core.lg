@@ -621,6 +621,16 @@
 (defmacro declare [& names]
   `(do ~@(map #(list 'def % nil) names)))
 
+(defmacro defonce [name expr]
+  (let [bare (if (and (seq? name) (= (first name) 'with-meta)) (second name) name)
+        v (gensym "v")]
+    ;; Compiling the (def name expr) branch interns the var, so a plain
+    ;; `resolve` would always see it. Gate on bound? (does it have a ROOT
+    ;; value yet) instead, so the def runs once and re-evaluation is a no-op.
+    (list 'let [v (list 'resolve (list 'quote bare))]
+          (list 'when-not (list 'and v (list 'bound? v))
+                (list 'def name expr)))))
+
 (declare destructure*)
 
 ;; nth is now a native Go builtin for performance (used by destructuring)
@@ -635,6 +645,11 @@
           (= x :as) (recur (drop 2 e) i (conj o (second e) n))
           :else (recur (next e) (inc i) (conj o x (list 'nth n i nil))))))))
 
+(defn ^:private destructure-directive? [k]
+  (and (keyword? k)
+       (let [nm (name k)]
+         (or (= nm "keys") (= nm "syms") (= nm "strs")))))
+
 (defn ^:private destructure-map [n m]
   (let [defaults (:or m)
         ;; Helper: generate (get n key) or (get n key default) based on :or
@@ -644,23 +659,43 @@
                                (list 'get n key (get defaults sym))
                                (list 'get n key))
                              (list 'get n key)))
-        ;; Explicit key-value bindings {a :x b :y}
+        ;; Explicit key-value bindings {a :x b :y} — everything that is
+        ;; neither :as/:or nor a keys/syms/strs directive (plain OR namespaced).
+        explicit (reduce (fn [acc x]
+                           (let [k (first x)]
+                             (if (or (= k :as) (= k :or) (destructure-directive? k))
+                               acc
+                               (conj acc x))))
+                         [] (map identity m))
         gs (reduce (fn [a x] (conj a (first x) (get-with-default (first x) (second x))))
                    []
-                   (map identity (dissoc m :keys :strs :as :or)))
+                   explicit)
         ;; :as binding
         rs (if (:as m) (conj gs (:as m) n) gs)
-        ;; :keys binding — keyword keys (supports both symbols and keywords in the vector)
-        rs (if (:keys m)
-             (reduce (fn [a x]
-                       (let [sym (if (keyword? x) (symbol (name x)) x)]
-                         (conj a sym (get-with-default sym (keyword sym)))))
-                     rs (:keys m))
-             rs)
-        ;; :strs binding — string keys
-        rs (if (:strs m)
-             (reduce (fn [a x] (conj a x (get-with-default x (str x)))) rs (:strs m))
-             rs)]
+        ;; keys/syms/strs directives, plain and namespaced. For a directive
+        ;; key with namespace `ns` and name "keys"/"syms"/"strs", each entry
+        ;; binds the simple-named local to a lookup keyed by ns + the entry
+        ;; name (keyword for keys, symbol for syms, string for strs).
+        rs (reduce
+             (fn [acc entry]
+               (let [dk (first entry)]
+                 (if (destructure-directive? dk)
+                   (let [dns (namespace dk)
+                         kind (name dk)]
+                     (reduce
+                       (fn [a x]
+                         (let [sym (if (or (keyword? x) (symbol? x)) (symbol (name x)) x)
+                               lookup (cond
+                                        ;; strs/keys keys are self-evaluating
+                                        ;; literals; a syms key is a symbol, so
+                                        ;; quote it or it compiles as a var ref.
+                                        (= kind "strs") (str (name x))
+                                        (= kind "syms") (list 'quote (symbol dns (name x)))
+                                        :else (keyword dns (name x)))]
+                           (conj a sym (get-with-default sym lookup))))
+                       acc (second entry)))
+                   acc)))
+             rs (map identity m))]
     (destructure* rs)))
 
 (defn ^:private destructure [binds]
@@ -1916,7 +1951,13 @@
        impls))
 
 (defmacro deftype [tname fields & protocol-impls]
-  (let [bare-fields   (map -dt-field-name fields)
+  (let [;; The type name may carry metadata (e.g. `^:private CacheEntry`,
+        ;; read as `(with-meta CacheEntry {:private true})`). Unwrap to the
+        ;; bare symbol so the `def`, `->Ctor`, and make-deftype name are built
+        ;; from the name itself, not the wrapper form. (The metadata — privacy
+        ;; — is advisory and currently dropped.)
+        tname         (-dt-field-name tname)
+        bare-fields   (map -dt-field-name fields)
         fieldset      (set bare-fields)
         mutset        (set (map -dt-field-name (filter -dt-mutable? fields)))
         quoted-fields (map (fn [f] (list 'quote f)) bare-fields)
@@ -1934,7 +1975,8 @@
       (concat forms parent-forms))))
 
 (defmacro defrecord [name fields & protocol-impls]
-  (let [field-keywords (map keyword fields)
+  (let [name (-dt-field-name name) ; unwrap ^meta on the record name (see deftype)
+        field-keywords (map keyword fields)
         type-def (cons 'make-record-type (cons (str name) field-keywords))
         ;; Positional constructor: (->Point x y) → (make-record Point {:x x :y y})
         pos-ctor-name (symbol (str "->" name))
@@ -1991,6 +2033,21 @@
         alias-def    (list 'def class-alias name)]
     (cons 'do (cons proto-def (concat method-defs (list alias-def))))))
 
+;; IFn — the invokable trait. A type that implements -invoke becomes callable:
+;; (x arg ...) on such a value dispatches to (-invoke x [arg ...]), the call's
+;; arguments handed over as one vector so a single variadic -invoke covers every
+;; arity. -set-invokable-protocol! wires the VM's call path to this protocol.
+(defprotocol IFn
+  (-invoke [this args]))
+(-set-invokable-protocol! IFn -invoke)
+
+;; IDeref — the derefable trait. A type that implements -deref becomes usable
+;; with @ / deref: @x dispatches to (-deref x). -set-deref-protocol! wires the
+;; VM's deref path to this protocol.
+(defprotocol IDeref
+  (-deref [this]))
+(-set-deref-protocol! IDeref -deref)
+
 ;; Helper: create a ProtocolFn (native, can't be created from let-go directly)
 ;; This is defined as a native function below
 
@@ -2015,7 +2072,14 @@
                         ;; It's a method impl (name [args] body...)
                         (let [mname   (first item)
                               fn-tail (next item)
-                              entry   [proto mname (cons 'fn fn-tail)]]
+                              ;; Emit qualified core/fn rather than bare 'fn so
+                              ;; the generated method bodies are hygienic: a
+                              ;; lexical binding named `fn` in the user's scope
+                              ;; must not capture the method-fn constructor and
+                              ;; turn (fn [params] ...) into a call. Clojure's
+                              ;; reify/deftype qualify to clojure.core/fn for the
+                              ;; same reason.
+                              entry   [proto mname (cons 'core/fn fn-tail)]]
                           (recur (next s) proto (conj result entry))))))))]
     (let [entries (parse specs)
           ;; Group by protocol
@@ -2052,7 +2116,14 @@
                         (recur (next s) item result)
                         (let [mname   (first item)
                               fn-tail (next item)
-                              entry   [proto mname (cons 'fn fn-tail)]]
+                              ;; Emit qualified core/fn rather than bare 'fn so
+                              ;; the generated method bodies are hygienic: a
+                              ;; lexical binding named `fn` in the user's scope
+                              ;; must not capture the method-fn constructor and
+                              ;; turn (fn [params] ...) into a call. Clojure's
+                              ;; reify/deftype qualify to clojure.core/fn for the
+                              ;; same reason.
+                              entry   [proto mname (cons 'core/fn fn-tail)]]
                           (recur (next s) proto (conj result entry))))))))]
     (let [entries (parse specs)
           by-proto (group-by first entries)
@@ -2106,7 +2177,8 @@
                        (let [type-expr (nth group 0)
                              methods   (nth group 1)
                              impl-pairs (mapcat (fn [m]
-                                                  [(keyword (first m)) (cons 'fn (next m))])
+                                                  ;; qualified core/fn for method-body hygiene (see reify)
+                                                  [(keyword (first m)) (cons 'core/fn (next m))])
                                                 methods)]
                          (list 'extend-type* protocol type-expr
                                (apply hash-map impl-pairs))))

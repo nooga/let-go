@@ -1,0 +1,19 @@
+;; clojure.string/replace-first: first-occurrence replacement, String and Regex.
+(ns test.string-replace-first-test
+  (:require [string :as str]
+            [test :refer :all]))
+
+(deftest replace-first-string-match
+  (testing "replaces only the FIRST literal occurrence"
+    (is (= "a+b-c" (str/replace-first "a-b-c" "-" "+")))
+    (is (= "Xbc" (str/replace-first "abc" "a" "X"))))
+  (testing "returns the string unchanged when the match is absent"
+    (is (= "abc" (str/replace-first "abc" "z" "+")))))
+
+(deftest replace-first-regex-match
+  (testing "replaces only the first regex match"
+    (is (= "aXb2c3" (str/replace-first "a1b2c3" #"[0-9]" "X"))))
+  (testing "expands $-group references in the replacement"
+    (is (= "Smith John" (str/replace-first "John Smith" #"(\w+)\s(\w+)" "$2 $1"))))
+  (testing "returns the string unchanged when the pattern does not match"
+    (is (= "abc" (str/replace-first "abc" #"[0-9]" "X")))))

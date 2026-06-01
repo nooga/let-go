@@ -176,5 +176,24 @@ install-golangci-lint: $(GO)
 	which golangci-lint || \
 	  GO111MODULE=off go get -u $(GO111MODULE-LINT)
 
+# Register the local git merge driver that resolves pkg/rt/core_compiled.lgb
+# conflicts by regenerating the bundle from the merged .lg sources (see
+# .gitattributes `merge=lgb` and scripts/git-merge-lgb.sh). A merge driver
+# lives in .git/config, which is not shared, so each clone must run this once.
+install-hooks:
+	git config merge.lgb.name "regenerate core_compiled.lgb from merged .lg sources"
+	git config merge.lgb.driver "scripts/git-merge-lgb.sh %O %A %B %L %P"
+	@echo "Registered the 'lgb' merge driver. core_compiled.lgb conflicts now auto-regenerate."
+
+# Content-based freshness gate (complements the mtime-based check-bundle-fresh,
+# which is unreliable after a checkout/merge where mtimes are arbitrary).
+# Regenerates the bundle and fails if the committed bytes differ — the same
+# check CI runs. Run this after a merge/rebase that touched pkg/rt/core/**.
+check-bundle-content: $(GO)
+	go run -tags bootstrap ./cmd/lgbgen
+	@git diff --exit-code -- pkg/rt/core_compiled.lgb \
+	  || { echo "ERROR: pkg/rt/core_compiled.lgb is stale — run 'make generate' and commit it."; exit 1; }
+	@echo "core_compiled.lgb is in lockstep with the .lg sources."
+
 # PHONY targets are for ones that have conflicting files/dirs present:
-.PHONY: test bench-ratchet bench-ratchet-update bench-ratchet-show check-bundle-fresh check-lowered-fresh
+.PHONY: test bench-ratchet bench-ratchet-update bench-ratchet-show check-bundle-fresh check-lowered-fresh install-hooks check-bundle-content

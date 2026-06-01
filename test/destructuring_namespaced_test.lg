@@ -1,0 +1,22 @@
+;; Associative destructuring: keys/syms/strs directives, plain and namespaced.
+(ns test.destructuring-namespaced-test
+  (:require [test :refer :all]))
+
+(deftest plain-directives
+  (testing ":keys binds keyword-keyed entries"
+    (is (= [1 2] (let [{:keys [a b]} {:a 1 :b 2}] [a b]))))
+  (testing ":strs binds string-keyed entries"
+    (is (= 3 (let [{:strs [c]} {"c" 3}] c))))
+  (testing ":syms binds symbol-keyed entries"
+    (is (= 4 (let [{:syms [d]} {'d 4}] d)))))
+
+(deftest namespaced-directives
+  (testing ":ns/keys binds namespaced-keyword entries by simple name"
+    (is (= [10 20] (let [{:p/keys [x y]} {:p/x 10 :p/y 20}] [x y]))))
+  (testing ":ns/syms binds namespaced-symbol entries by simple name"
+    (is (= 6 (let [{:q/syms [e]} {'q/e 6}] e)))))
+
+(deftest explicit-and-modifiers-still-work
+  (testing "explicit {local key} bindings, :or defaults, and :as all compose"
+    (is (= 5 (let [{z :z} {:z 5}] z)))
+    (is (= [9 {}] (let [{:keys [w] :or {w 9} :as m} {}] [w m])))))

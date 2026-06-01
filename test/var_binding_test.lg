@@ -1,0 +1,37 @@
+;; Var binding-semantics regression tests: lazy var roots + bound? + defonce,
+;; and fully-qualified access to a private var from its own namespace.
+(ns test.var-binding-test
+  (:require [test :refer :all]))
+
+;; --- defonce evaluates its body exactly once ---
+;; This exercises lazy var roots + bound? + LookupOrAdd together: compiling the
+;; (def name expr) branch interns the var, so defonce must gate on whether the
+;; var has a ROOT yet (bound?), not merely whether it resolves. With an eager
+;; NIL root the var would look "bound" before the def ran and defonce would
+;; never assign.
+(def ^:private defonce-counter (atom 0))
+(defonce defonce-val (do (swap! defonce-counter inc) :first))
+(defonce defonce-val (do (swap! defonce-counter inc) :second))
+
+(deftest defonce-evaluates-once
+  (testing "a second defonce of the same name is a no-op"
+    (is (= :first defonce-val))
+    (is (= 1 @defonce-counter))))
+
+;; --- bound? reports a var that has a root binding ---
+(def assigned-var 7)
+(deftest bound-on-assigned-var
+  (testing "bound? is true for a var that has been assigned"
+    (is (bound? (var assigned-var)))))
+
+;; --- bound? is true while a dynamic binding is active (Clojure semantics) ---
+(def ^:dynamic dynvar 1)
+(deftest bound-under-dynamic-binding
+  (testing "bound? is true while a dynamic binding is active"
+    (is (binding [dynvar 2] (bound? (var dynvar))))))
+
+;; --- a private var is reachable by a fully-qualified ref from its own ns ---
+(defn- secret-helper [] 42)
+(deftest private-var-qualified-self-reference
+  (testing "my.ns/-priv resolves from within my.ns"
+    (is (= 42 (test.var-binding-test/secret-helper)))))

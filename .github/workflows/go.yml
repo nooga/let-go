@@ -35,6 +35,18 @@ jobs:
       - name: Regenerate bundled bytecode
         run: go generate ./pkg/rt/
 
+      # Content-based freshness gate. The previous step regenerated the bundle
+      # from the committed .lg sources; if the committed bundle differs from
+      # that regeneration it is stale (e.g. a merge/rebase that updated .lg but
+      # not the bundle — the merge driver resolves the conflict but cannot emit
+      # a fresh bundle mid-merge). Unlike the mtime-based bundle-fresh job, this
+      # survives a fresh checkout. Fail loudly so a stale bundle never reaches
+      # main, where `go install` would embed the wrong bytes.
+      - name: Verify committed bundle matches regeneration
+        run: |
+          git diff --exit-code -- pkg/rt/core_compiled.lgb \
+            || { echo "::error::pkg/rt/core_compiled.lgb is stale — run 'make generate' and commit it."; exit 1; }
+
       - name: Build
         run: go build -v ./...
 

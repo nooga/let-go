@@ -311,13 +311,15 @@ After cloning the repo (or pulling for the first time after this driver was
 added), register it locally:
 
 ```bash
-git config merge.lgb.name "Regenerate core_compiled.lgb from sources"
-git config merge.lgb.driver "scripts/git-merge-lgb.sh %O %A %B %L %P"
+make install-hooks
 ```
 
-This is a one-time per-clone step. After registration, rebases that touch any
-embedded `.lg` source will regenerate the `.lgb` automatically — no more
-binary merge conflicts when stacking PRs that edit `core.lg` and friends.
+(A merge driver lives in `.git/config`, which is not shared, so each clone
+needs this once. The target just runs the `git config` commands for you.)
+
+After registration, rebases and merges that touch any embedded `.lg` source
+will regenerate the `.lgb` automatically — no more binary merge conflicts when
+stacking PRs that edit `core.lg` and friends.
 
 ---
 

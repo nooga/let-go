@@ -212,6 +212,17 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 	if err != nil {
 		return nil, err
 	}
+	if d.flags&FlagLocalVars != 0 {
+		tables, err := d.readLocalVarTables(len(d.chunks))
+		if err != nil {
+			return nil, err
+		}
+		for i, lvs := range tables {
+			for _, lv := range lvs {
+				d.chunks[i].AddLocalVar(lv.Slot, lv.Name)
+			}
+		}
+	}
 
 	if len(d.chunks) == 0 {
 		return nil, fmt.Errorf("no chunks in module")
@@ -390,6 +401,15 @@ func (d *decoder) readModuleV2() (*Module, error) {
 	nsTable, err := d.readNSTable()
 	if err != nil {
 		return nil, err
+	}
+	if d.flags&FlagLocalVars != 0 {
+		tables, err := d.readLocalVarTables(len(chunkDatas))
+		if err != nil {
+			return nil, err
+		}
+		for i := range chunkDatas {
+			chunkDatas[i].LocalVars = tables[i]
+		}
 	}
 
 	m := &Module{
@@ -573,6 +593,36 @@ func (d *decoder) readNSTable() (map[string]int, error) {
 		table[name] = int(chunkIdx)
 	}
 	return table, nil
+}
+
+// readLocalVarTables reads the optional per-chunk local-variable debug section
+// (written under FlagLocalVars, after the NS table). Returns one slice per chunk
+// in index order. Mirrors encoder.writeLocalVarTables.
+func (d *decoder) readLocalVarTables(numChunks int) ([][]LocalVarEntry, error) {
+	out := make([][]LocalVarEntry, numChunks)
+	for i := 0; i < numChunks; i++ {
+		count, err := d.r.ReadVarint()
+		if err != nil {
+			return nil, fmt.Errorf("reading local var count[%d]: %w", i, err)
+		}
+		if count == 0 {
+			continue
+		}
+		lvs := make([]LocalVarEntry, count)
+		for j := range lvs {
+			slot, err := d.r.ReadVarint()
+			if err != nil {
+				return nil, fmt.Errorf("reading local var slot[%d][%d]: %w", i, j, err)
+			}
+			name, err := d.readStringRef()
+			if err != nil {
+				return nil, fmt.Errorf("reading local var name[%d][%d]: %w", i, j, err)
+			}
+			lvs[j] = LocalVarEntry{Slot: int(slot), Name: name}
+		}
+		out[i] = lvs
+	}
+	return out, nil
 }
 
 func (d *decoder) readValue() (vm.Value, error) {
