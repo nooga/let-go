@@ -10,13 +10,57 @@ package rt
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"sync"
 	"syscall"
 	"unicode/utf8"
 	"unsafe"
 
 	"github.com/nooga/let-go/pkg/vm"
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
+
+// SIGWINCH wake-byte plumbing for term/read-key.
+//
+// Without this, term/read-key sits in a blocking os.Stdin.Read until input
+// arrives, so terminal resizes are invisible to a game loop sitting at the
+// prompt — the loop's (term/size) check only runs after the next keypress
+// even though the OS has already delivered SIGWINCH.
+//
+// Design: a SIGWINCH handler writes one BEL byte (0x07) into a self-pipe.
+// read-key uses unix.Poll to wait on stdin OR the pipe. When the pipe fires,
+// read-key returns BEL as if the user typed it — caller-side parse-key
+// equivalents see :unknown, the game loop's (term/size) check fires on the
+// next iteration and triggers a redraw at the new dimensions. No caller-side
+// wiring needed beyond what's already in place for keypress-driven resize
+// detection.
+//
+// The wake-byte pattern generalizes to any blocking read where an external
+// event needs to be surfaced — only the signaling source changes.
+var (
+	winchPipeR     *os.File
+	winchSetupOnce sync.Once
+)
+
+func setupWinch() {
+	winchSetupOnce.Do(func() {
+		r, w, err := os.Pipe()
+		if err != nil {
+			return // best-effort; read-key falls back to plain stdin
+		}
+		winchPipeR = r
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, unix.SIGWINCH)
+		go func() {
+			for range sigCh {
+				// One BEL per SIGWINCH. Storms collapse — the read side
+				// drains whatever's pending in a single Read regardless.
+				_, _ = w.Write([]byte{0x07})
+			}
+		}()
+	})
+}
 
 type winsize struct {
 	rows, cols, xpix, ypix uint16
@@ -113,38 +157,125 @@ func installTermNS() {
 	ns.Def("restore-mode!", restoreMode)
 
 	// read-key — read a single keypress, returns a string
-	// Returns single chars, or escape sequences like "\x1b[A" for arrow keys
+	// Returns single chars, or escape sequences like "\x1b[A" for arrow keys.
+	// Also returns BEL ("\x07") when the terminal is resized (SIGWINCH) so
+	// the game loop's term/size check can fire without waiting for input;
+	// see setupWinch above for the design.
 	readKey, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		buf := make([]byte, 16)
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			return vm.NIL, nil // EOF or error
+		setupWinch() // idempotent; armed on first read-key
+
+		if winchPipeR == nil {
+			// Pipe setup failed; plain blocking read (preserves prior behavior).
+			buf := make([]byte, 16)
+			n, err := os.Stdin.Read(buf)
+			if err != nil || n == 0 {
+				return vm.NIL, nil
+			}
+			return vm.String(buf[:n]), nil
 		}
-		if n == 0 {
-			return vm.NIL, nil
+
+		stdinFd := int(os.Stdin.Fd())
+		winchFd := int(winchPipeR.Fd())
+		fds := []unix.PollFd{
+			{Fd: int32(stdinFd), Events: unix.POLLIN},
+			{Fd: int32(winchFd), Events: unix.POLLIN},
 		}
-		return vm.String(buf[:n]), nil
+
+		// Retry on EINTR — golang.org/x/sys/unix.Poll doesn't auto-retry.
+		// SIGWINCH (which we install) and Go runtime preemption (SIGURG)
+		// can both interrupt the blocking poll(2). Pre-PR os.Stdin.Read
+		// got transparent EINTR retry via Go's ignoringEINTR; preserve
+		// that contract here.
+		for {
+			_, err := unix.Poll(fds, -1)
+			if err == unix.EINTR {
+				continue
+			}
+			if err != nil {
+				return vm.NIL, nil
+			}
+			break
+		}
+
+		// Drain the wake pipe unconditionally if it fired — keeps it
+		// quiescent for the next cycle even when stdin also has data.
+		if fds[1].Revents&unix.POLLIN != 0 {
+			drain := make([]byte, 16)
+			_, _ = winchPipeR.Read(drain)
+		}
+
+		// Disconnect / error on stdin (POLLHUP / POLLERR / POLLNVAL).
+		// These are always reported in Revents regardless of requested
+		// Events. Some kernels set POLLIN alongside (Linux on pipe EOF:
+		// POLLIN|POLLHUP → falls into the POLLIN branch below, Read
+		// returns n==0); some don't (Linux on closed pty master:
+		// POLLHUP only). Without explicit handling, the latter would
+		// fall through to the BEL return below, the caller would re-
+		// enter read-key, Poll would re-fire immediately, and the loop
+		// would spin at 100% CPU emitting BEL forever — EOF never
+		// surfaced. Routing through os.Stdin.Read here too surfaces
+		// n==0 as vm.NIL, the same end-of-input contract callers had
+		// pre-PR.
+		if fds[0].Revents&(unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) != 0 {
+			buf := make([]byte, 16)
+			n, err := os.Stdin.Read(buf)
+			if err != nil || n == 0 {
+				return vm.NIL, nil
+			}
+			return vm.String(buf[:n]), nil
+		}
+
+		// Prefer real input — user keys shouldn't queue behind a resize wake.
+		if fds[0].Revents&unix.POLLIN != 0 {
+			buf := make([]byte, 16)
+			n, err := os.Stdin.Read(buf)
+			if err != nil || n == 0 {
+				return vm.NIL, nil
+			}
+			return vm.String(buf[:n]), nil
+		}
+
+		// Only the wake fired — return BEL so the loop's term/size diff runs.
+		return vm.String("\x07"), nil
 	})
 	ns.Def("read-key", readKey)
 
 	// key-pending? — true if stdin has at least one byte buffered (the
 	// OS has received input from the TTY but read-key has not yet
-	// consumed it). Uses the FIONREAD ioctl on the stdin fd;
-	// non-consuming. fionread is defined per-OS alongside tiocswinsz.
+	// consumed it), OR if a SIGWINCH wake byte is queued in the winch
+	// self-pipe. Uses the FIONREAD ioctl on both fds; non-consuming.
+	// fionread is defined per-OS alongside tiocswinsz.
 	//
-	// Lets animation / poll loops break out on user input without
-	// entering read-key (which would block on the underlying read).
-	// Returns false if the ioctl errors (e.g. stdin is not a TTY).
+	// Including the winch pipe matches what callers see on a future
+	// read-key call (resize wakes surface as BEL there) and keeps the
+	// (when (key-pending?) (read-key)) idiom honest for animation /
+	// poll loops that want to break out on input OR on resize.
+	// Returns false if both checks come up empty or error out.
 	keyPendingFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		// Arm the winch handler if it hasn't been already — a caller
+		// that hits key-pending? before any read-key would otherwise
+		// miss SIGWINCH wakes entirely.
+		setupWinch()
+
 		var n int32
 		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL,
 			uintptr(os.Stdin.Fd()),
 			uintptr(fionread),
 			uintptr(unsafe.Pointer(&n)))
-		if errno != 0 || n <= 0 {
-			return vm.FALSE, nil
+		if errno == 0 && n > 0 {
+			return vm.TRUE, nil
 		}
-		return vm.TRUE, nil
+		if winchPipeR != nil {
+			var pn int32
+			_, _, perrno := syscall.Syscall(syscall.SYS_IOCTL,
+				uintptr(winchPipeR.Fd()),
+				uintptr(fionread),
+				uintptr(unsafe.Pointer(&pn)))
+			if perrno == 0 && pn > 0 {
+				return vm.TRUE, nil
+			}
+		}
+		return vm.FALSE, nil
 	})
 	ns.Def("key-pending?", keyPendingFn)
 
