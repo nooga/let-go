@@ -68,7 +68,7 @@ type iderefAdapter struct{ recv Value }
 func (a iderefAdapter) Deref() Value {
 	v, err := IDerefDeref.Invoke([]Value{a.recv})
 	if err != nil {
-		panic(err)
+		panic(&thrownPanic{err: err})
 	}
 	return v
 }
