@@ -15,10 +15,10 @@ var (
 	IFnInvoke   Fn
 )
 
-// asFn returns fraw as a callable Fn: directly if it already is one, or — when
+// AsFn returns fraw as a callable Fn: directly if it already is one, or — when
 // fraw's type satisfies the IFn protocol — wrapped in an adapter that routes
 // calls to its -invoke method. Reports false when fraw is not callable.
-func asFn(fraw Value) (Fn, bool) {
+func AsFn(fraw Value) (Fn, bool) {
 	if fn, ok := fraw.(Fn); ok {
 		return fn, true
 	}
