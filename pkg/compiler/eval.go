@@ -248,6 +248,16 @@ func postCoreInit() {
 	})
 	coreNS.LookupOrAdd(vm.Symbol("set-read-clj!")).(*vm.Var).SetRoot(setReadCljFn)
 
+	// set-read-bb!: opt in to matching :bb (babashka) in reader conditionals.
+	// Enable alongside set-read-clj! to read babashka-compatible libraries,
+	// which ship :bb fallbacks that avoid JVM-internal constructors.
+	setReadBbFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		v := vs[0]
+		SetMatchBbConditional(v != vm.NIL && v != vm.FALSE)
+		return vm.NIL, nil
+	})
+	coreNS.LookupOrAdd(vm.Symbol("set-read-bb!")).(*vm.Var).SetRoot(setReadBbFn)
+
 	// Wire up EDN reader for pod support
 	rt.SetReadEDN(func(s string) (vm.Value, error) {
 		return ReadString(s)
