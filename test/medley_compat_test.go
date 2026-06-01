@@ -34,7 +34,7 @@ func evalMedley(expr string) (vm.Value, error) {
 // reaches on its :clj / :default reader-conditional branches; without the
 // alias the namespace fails to compile with "Can't resolve ...".
 func TestMedleyCompat(t *testing.T) {
-	// Blocker #1: clojure.lang.PersistentQueue marker + EMPTY stub.
+	// clojure.lang.PersistentQueue marker + EMPTY stub.
 	// The marker resolves so (instance? clojure.lang.PersistentQueue x)
 	// compiles; nothing carries the marker as an ancestor, so it is false
 	// (load-only semantics — queue?/queue are degraded).
@@ -57,7 +57,7 @@ func TestMedleyCompat(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	// Blocker #2: (java.util.ArrayList.) / (java.util.ArrayList. n). medley's
+	// (java.util.ArrayList.) / (java.util.ArrayList. n). medley's
 	// partition-between / sliding construct one on their :clj branch. let-go
 	// has no mutable ArrayList, so this is a load-only ctor stub: the defn must
 	// COMPILE (the constructor symbol must resolve); .add/.toArray throw at
@@ -72,7 +72,7 @@ func TestMedleyCompat(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	// Blocker #3: Throwable bare in (instance? Throwable ex). The marker is false
+	// Throwable bare in (instance? Throwable ex). The marker is false
 	// for non-exceptions (matching medley's "nil for all other types" fallback)
 	// and true for let-go ex-info values, which ARE-A Throwable (see hierarchy).
 	t.Run("Throwable marker instance? is false for non-exceptions", func(t *testing.T) {
@@ -110,22 +110,21 @@ func TestMedleyCompat(t *testing.T) {
 		assert.Equal(t, vm.TRUE, v)
 	})
 
-	// Blocker #4a: java.util.UUID/fromString reuses vm.ParseUUID → m/uuid works.
+	// java.util.UUID/fromString reuses vm.ParseUUID → m/uuid works.
 	t.Run("UUID/fromString returns a UUID", func(t *testing.T) {
 		v, err := evalMedley(`(java.util.UUID/fromString "00000000-0000-0000-0000-000000000000")`)
 		assert.NoError(t, err)
 		assert.Equal(t, vm.UUIDType, v.Type())
 	})
 
-	// Blocker #4b: java.util.UUID/randomUUID reuses the random-uuid builtin →
-	// m/random-uuid works.
+	// java.util.UUID/randomUUID reuses the random-uuid builtin → m/random-uuid works.
 	t.Run("UUID/randomUUID returns a UUID", func(t *testing.T) {
 		v, err := evalMedley(`(java.util.UUID/randomUUID)`)
 		assert.NoError(t, err)
 		assert.Equal(t, vm.UUIDType, v.Type())
 	})
 
-	// Blocker #5: java.util.regex.Pattern aliased to vm.RegexType → m/regexp?
+	// java.util.regex.Pattern aliased to vm.RegexType → m/regexp?
 	// works against real let-go regexes.
 	t.Run("Pattern instance? is true for a regex", func(t *testing.T) {
 		v, err := evalMedley(`(instance? java.util.regex.Pattern #"x")`)
@@ -133,9 +132,9 @@ func TestMedleyCompat(t *testing.T) {
 		assert.Equal(t, vm.TRUE, v)
 	})
 
-	// Blocker #6 (found by running the e2e load): medley's deref-swap! uses
-	// compare-and-set!, which let-go lacked. It's a real atom primitive, not a
-	// stub. Success path swaps and returns true; mismatch returns false.
+	// medley's deref-swap! uses compare-and-set!, which let-go lacked.
+	// It's a real atom primitive, not a stub. Success path swaps and returns true;
+	// mismatch returns false.
 	t.Run("compare-and-set! succeeds on matching value", func(t *testing.T) {
 		v, err := evalMedley(`(let [a (atom 1)] [(compare-and-set! a 1 2) @a])`)
 		assert.NoError(t, err)

@@ -7369,7 +7369,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		"clojure.lang.IPersistentCollection",
 		"clojure.lang.IReduce",
 		"clojure.lang.IEditableCollection",
-		// medley (blocker #1): bare in (instance? clojure.lang.PersistentQueue x).
+		// Bare in (instance? clojure.lang.PersistentQueue x).
 		// Leaf marker only — no type reports it as an ancestor, so queue? is
 		// always false (load-only; real PersistentQueue is out of scope).
 		"clojure.lang.PersistentQueue",
@@ -7416,7 +7416,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("->clojure.lang.MapEntry", create)
 	ns.Def("clojure.lang.MapEntry.", create)
 
-	// medley (blocker #1b): clojure.lang.PersistentQueue/EMPTY. let-go has no
+	// clojure.lang.PersistentQueue/EMPTY. let-go has no
 	// real PersistentQueue, so this is a load-only stub: it must merely resolve
 	// as a var at compile time (medley derefs it only at runtime inside `queue`).
 	// Bind it to a non-collection marker symbol rather than vm.EmptyList — that
@@ -7425,7 +7425,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// (a plausible-but-wrong FIFO). queue?/queue stay degraded by design.
 	DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.Symbol("clojure.lang.PersistentQueue/EMPTY"))
 
-	// medley (blocker #2): (java.util.ArrayList.) / (java.util.ArrayList. n).
+	// (java.util.ArrayList.) / (java.util.ArrayList. n).
 	// medley's partition-between / sliding build a mutable ArrayList on their
 	// :clj branch. let-go has no mutable ArrayList, so this is a load-only ctor
 	// stub: it lets those defns COMPILE (the constructor symbol must resolve).
@@ -7445,7 +7445,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("java.util.ArrayList.", arrayListStub)
 	ns.Def("->java.util.ArrayList", arrayListStub)
 
-	// medley (blocker #3): bare Throwable in (instance? Throwable ex). Registered
+	// bare Throwable in (instance? Throwable ex). Registered
 	// as a symbol marker; ExInfoType reports it as an ancestor (see hierarchy.go),
 	// so (instance? Throwable ex) is true for let-go ex-info values and false for
 	// everything else. Paired with ExInfo.InvokeMethod (getMessage/getCause), this
@@ -7453,7 +7453,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// returning nil for all other types (medley's documented fallback).
 	ns.Def("Throwable", vm.Symbol("Throwable"))
 
-	// medley (blocker #4): java.util.UUID statics. java.util.UUID is already a
+	// java.util.UUID statics. java.util.UUID is already a
 	// bare class alias to vm.UUIDType above; a same-named DefNSBare namespace for
 	// the statics is fine and has precedent in Boolean (bare + DefNSBare coexist).
 	// Both fns are REAL: fromString reuses vm.ParseUUID; randomUUID reuses the
@@ -7480,7 +7480,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	uuidNS.Def("fromString", uuidFromString)
 	uuidNS.Def("randomUUID", ns.Lookup("random-uuid").(*vm.Var).Deref())
 
-	// medley (blocker #5): java.util.regex.Pattern bare in (instance? ... #"x").
+	// java.util.regex.Pattern bare in (instance? ... #"x").
 	// let-go already models regexes as vm.RegexType, so aliasing the JVM class to
 	// it makes m/regexp? genuinely work.
 	ns.Def("java.util.regex.Pattern", vm.RegexType)
