@@ -1,3 +1,20 @@
+---
+status: active
+last-verified: 2026-06-01
+authoritative-for:
+  - xsofy-side-clojure-compat-evidence
+  - intentional-jvm-divergences
+shipped:
+  - A1 (class-less catch — pkg/compiler/compiler.go:799-820)
+  - A3 (int-array / byte-array / long-array constructors — pkg/rt/lang.go:6738-6760)
+  - D2 (hex BigInt promotion — #70, in v1.8.0+)
+  - D3 (unchecked-* coercion — #66, in v1.8.0+)
+  - D4 (destructure-shadow-in-loop bug — #68, in v1.8.0+)
+  - D5 (clojure.core shadow warnings — #69, in v1.8.0+)
+remaining-open:
+  - A2 aset polymorphism (recommendation in doc: keep behavior, document as intentional divergence)
+---
+
 # let-go ↔ Clojure JVM portability gaps surfaced by xsofy
 
 Real-world portability findings from attempting to load
