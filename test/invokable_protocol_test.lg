@@ -1,0 +1,26 @@
+;; A value whose type implements the IFn trait is callable: (x arg ...) is
+;; dispatched to (-invoke x [arg ...]).
+(ns test.invokable-protocol-test
+  (:require [test :refer :all]))
+
+(deftype Adder [n]
+  IFn
+  (-invoke [self args] (+ n (apply + args))))
+
+(deftype Const [v]
+  IFn
+  (-invoke [self args] v))
+
+(deftest invokable-deftype
+  (testing "a deftype implementing IFn is callable at every arity"
+    (is (= 10 ((->Adder 10))))          ; zero args
+    (is (= 15 ((->Adder 10) 5)))        ; one arg
+    (is (= 16 ((->Adder 10) 1 2 3))))   ; many args (handed over as a vector)
+  (testing "the deftype's field state is captured by the call"
+    (is (= :x ((->Const :x) 1 2 3)))))
+
+(deftest invokable-reify
+  (testing "a reify implementing IFn is callable"
+    (let [sum (reify IFn (-invoke [self args] (apply + args)))]
+      (is (= 6 (sum 1 2 3)))
+      (is (= 0 (sum))))))

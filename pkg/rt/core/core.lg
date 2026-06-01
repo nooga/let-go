@@ -1986,6 +1986,14 @@
         alias-def    (list 'def class-alias name)]
     (cons 'do (cons proto-def (concat method-defs (list alias-def))))))
 
+;; IFn — the invokable trait. A type that implements -invoke becomes callable:
+;; (x arg ...) on such a value dispatches to (-invoke x [arg ...]), the call's
+;; arguments handed over as one vector so a single variadic -invoke covers every
+;; arity. -set-invokable-protocol! wires the VM's call path to this protocol.
+(defprotocol IFn
+  (-invoke [this args]))
+(-set-invokable-protocol! IFn -invoke)
+
 ;; Helper: create a ProtocolFn (native, can't be created from let-go directly)
 ;; This is defined as a native function below
 

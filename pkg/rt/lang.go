@@ -4592,6 +4592,26 @@ func installLangNS() {
 		return vm.NewProtocolFn(protocol, methodName), nil
 	})
 
+	// -set-invokable-protocol!: wire the VM's "invokable value" support to the
+	// IFn protocol + its -invoke fn (called once from core after defining IFn).
+	// Thereafter any value whose type satisfies IFn can be called like a fn.
+	setInvokableProtocol, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("-set-invokable-protocol! expects 2 args")
+		}
+		protocol, ok := vs[0].(*vm.Protocol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("-set-invokable-protocol! expected a Protocol")
+		}
+		invokeFn, ok := vs[1].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("-set-invokable-protocol! expected the -invoke fn")
+		}
+		vm.IFnProtocol = protocol
+		vm.IFnInvoke = invokeFn
+		return vm.NIL, nil
+	})
+
 	// satisfies?: check if a value's type implements a protocol
 	satisfies, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
@@ -6062,6 +6082,7 @@ func installLangNS() {
 	ns.Def("make-deftype-instance", makeDTypeInstance)
 	ns.Def("set-field!", setField)
 	ns.Def("defprotocol*", defProtocol)
+	ns.Def("-set-invokable-protocol!", setInvokableProtocol)
 	installHierarchyBuiltins(ns)
 	ns.Def("make-protocol-fn", makeProtocolFn)
 	ns.Def("extend-type*", extendType)
