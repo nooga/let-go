@@ -35,7 +35,32 @@ func Encode(w io.Writer, m *Module) error {
 	if err := enc.writeNSTable(m.NSTable); err != nil {
 		return err
 	}
+	if m.Flags&FlagLocalVars != 0 {
+		if err := enc.writeLocalVarTables(); err != nil {
+			return err
+		}
+	}
 	return enc.w.Flush()
+}
+
+// writeLocalVarTables serializes per-chunk local-variable debug tables (under
+// FlagLocalVars), in chunk-index order: each chunk writes a count followed by
+// (slot, name-ref) pairs. Mirrors decoder.readLocalVarTables.
+func (e *encoder) writeLocalVarTables() error {
+	for _, ch := range e.chunks {
+		if err := e.w.WriteVarint(uint64(len(ch.LocalVars))); err != nil {
+			return err
+		}
+		for _, lv := range ch.LocalVars {
+			if err := e.w.WriteVarint(uint64(lv.Slot)); err != nil {
+				return err
+			}
+			if err := e.writeStringRef(lv.Name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // EncodeModule builds a Module from live VM objects and serializes it.
@@ -154,6 +179,10 @@ func (b *ModuleBuilder) AddChunk(c *vm.CodeChunk) int {
 			})
 		}
 	}
+	for _, lv := range c.LocalVars() {
+		b.internString(lv.Name)
+		cd.LocalVars = append(cd.LocalVars, LocalVarEntry{Slot: lv.Slot, Name: lv.Name})
+	}
 	idx := len(b.chunks)
 	b.chunks = append(b.chunks, cd)
 	b.chunkIndex[c] = idx
@@ -259,6 +288,12 @@ func (b *ModuleBuilder) Build() *Module {
 	}
 	if b.constsBase > 0 {
 		m.Flags |= FlagConstsBase
+	}
+	for _, cd := range b.chunks {
+		if len(cd.LocalVars) > 0 {
+			m.Flags |= FlagLocalVars
+			break
+		}
 	}
 	return m
 }

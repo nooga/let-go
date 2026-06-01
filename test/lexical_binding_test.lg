@@ -1,0 +1,58 @@
+(ns test.lexical-binding-test
+  (:require [test :refer :all]))
+
+;; Regression tests for lexical binding resolution in the compiler.
+;;
+;; Three related correctness fixes:
+;;  1. A let/loop binding that SHADOWS a captured variable must take effect in
+;;     the body. symbolLookup used to consult closed-over variables BEFORE
+;;     locals/args, so the shadowing binding was silently ignored.
+;;  2. `_` parameters are ordinary bound symbols (last-wins on repeat), not
+;;     unbindable placeholders.
+;;  3. A lexical binding named like a macro/special form must shadow it in head
+;;     position even when the use site is inside a closure that captures it.
+
+;; --- 1. value shadowing (symbolLookup: locals/args before closed-overs) ---
+
+(deftest let-binding-shadows-captured-variable
+  (testing "a let binding shadows a variable captured by an inner fn"
+    ;; the inner (fn []) captures v; the let must rebind it for the body
+    (is (= 6 ((fn [v] ((fn [] (let [v (inc v)] v)))) 5)))
+    (is (= 60 ((fn [v] ((fn [] (let [v (inc v)] (* v 10))))) 5)))
+    ;; nested lets each shadow the same captured name
+    (is (= 7 ((fn [v] ((fn [] (let [v (inc v)] (let [v (inc v)] v))))) 5)))))
+
+(deftest loop-binding-shadows-captured-variable
+  (testing "a loop binding shadows a variable captured by an inner fn"
+    (is (= 6 ((fn [v] ((fn [] (loop [v (inc v)] v)))) 5)))))
+
+(deftest self-referential-let-over-captured-variable
+  (testing "(let [v (f v)] v) where v is captured: RHS sees the captured value, body the new binding"
+    ;; RHS reads the captured value, body returns the freshly-bound one
+    (is (= "outer->5" ((fn [v] ((fn [] (let [v (str "outer->" v)] v)))) 5)))
+    ;; the reduce shape: the reduce fn captures `base`, a let in its body
+    ;; shadows it; the RHS reads the captured `base`, the body the new binding.
+    ;; With the bug the body returned the captured value, so reduce yielded "init".
+    (is (= "init2" ((fn [base]
+                      (reduce (fn [acc x] (let [base (str base x)] base)) base [0 1 2]))
+                    "init")))))
+
+;; --- 2. `_` is an ordinary bound parameter (last-wins on repeat) ---
+
+(deftest underscore-param-is-bound
+  (testing "a single `_` parameter is bound and referenceable"
+    (is (= 5 ((fn [_] _) 5))))
+  (testing "repeated `_` parameters bind last-wins, and all arg slots still pass"
+    (is (= 2 ((fn [_ _] _) 1 2)))
+    (is (= 3 ((fn [_ _ _] _) 1 2 3)))))
+
+;; --- 3. lexical binding shadows a macro in head position, through a closure ---
+
+(deftest local-shadows-macro-in-head-position-through-closure
+  (testing "a param shadowing a core macro is called as a fn, even when captured by an inner closure"
+    ;; `or` the macro on (or 42) yields 42; the shadowing fn doubles it to 84.
+    ;; The use site is inside (fn []) which CAPTURES `or` — lookupLocal alone
+    ;; would miss the capture and wrongly expand the `or` macro.
+    (is (= 84 ((fn [or] ((fn [] (or 42)))) (fn [x] (* x 2)))))
+    ;; same, with `when`: the macro (when 42) with no body is nil; the fn returns 42.
+    (is (= 42 ((fn [when] ((fn [] (when 42)))) (fn [x] x))))))

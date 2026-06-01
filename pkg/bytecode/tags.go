@@ -10,6 +10,7 @@ const FormatVersion uint16 = 2
 const (
 	FlagConstsBase   uint16 = 1 << 0 // ConstsBase field is present in consts section
 	FlagCapabilities uint16 = 1 << 1 // Capability mask follows the header
+	FlagLocalVars    uint16 = 1 << 2 // per-chunk local-variable debug tables follow the NS table (v2+)
 )
 
 // Tag byte layout: 0bVV_TTTTTT

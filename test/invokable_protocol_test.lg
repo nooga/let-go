@@ -1,0 +1,43 @@
+;; A value whose type implements the IFn trait is callable: (x arg ...) is
+;; dispatched to (-invoke x [arg ...]).
+(ns test.invokable-protocol-test
+  (:require [test :refer :all]))
+
+(deftype Adder [n]
+  IFn
+  (-invoke [self args] (+ n (apply + args))))
+
+(deftype Const [v]
+  IFn
+  (-invoke [self args] v))
+
+(deftest invokable-deftype
+  (testing "a deftype implementing IFn is callable at every arity"
+    (is (= 10 ((->Adder 10))))          ; zero args
+    (is (= 15 ((->Adder 10) 5)))        ; one arg
+    (is (= 16 ((->Adder 10) 1 2 3))))   ; many args (handed over as a vector)
+  (testing "the deftype's field state is captured by the call"
+    (is (= :x ((->Const :x) 1 2 3)))))
+
+(deftest invokable-reify
+  (testing "a reify implementing IFn is callable"
+    (let [sum (reify IFn (-invoke [self args] (apply + args)))]
+      (is (= 6 (sum 1 2 3)))
+      (is (= 0 (sum))))))
+
+(deftest invokable-through-hofs
+  (testing "an invokable value works through Go-native higher-order fns"
+    (let [add3 (->Adder 3)]
+      (is (= [4 5 6] (map add3 [1 2 3])))      ; map calls the invokable per element
+      (is (= 3 (apply add3 [])))               ; apply with empty args -> just n
+      (is (= 9 (apply add3 [1 2 3])))          ; apply spreads args
+      (is (= 6 (reduce add3 [1 2])))))         ; reduce folds with the invokable
+  (testing "comp composes invokable values with fns"
+    (is (= 7 ((comp inc (->Adder 3)) 3))))     ; (inc (add3 3)) = (inc 6) = 7
+  (testing "filter accepts an invokable predicate"
+    (is (= [1 2 3] (filter (reify IFn (-invoke [_ args] (pos? (first args))))
+                           [1 -1 2 -2 3])))))
+
+(deftest non-fn-still-errors
+  (testing "a real non-fn value still errors through a HOF"
+    (is (= :error (try (map 5 [1 2 3]) (catch e :error))))))

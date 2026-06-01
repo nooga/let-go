@@ -1,0 +1,36 @@
+;; Macro-hygiene tests for deftype/defrecord/reify/extend-protocol.
+(ns test.deftype-reify-hygiene-test
+  (:require [test :refer :all]))
+
+;; --- deftype/defrecord type name may carry metadata (e.g. ^:private) ---
+
+(deftype ^:private CacheEntry [k v])
+(defrecord ^:private Pt [x y])
+
+(deftest type-name-metadata-is-unwrapped
+  (testing "a ^:private deftype name builds the ctor/accessors from the bare name"
+    (let [e (->CacheEntry 1 2)]
+      (is (= 1 (.k e)))
+      (is (= 2 (.v e)))))
+  (testing "a ^:private defrecord name works the same way"
+    (let [p (->Pt 3 4)]
+      (is (= 3 (:x p)))
+      (is (= 4 (:y p))))))
+
+;; --- generated method bodies are hygienic w.r.t. a user-shadowed `fn` ---
+
+(defprotocol Sized (sz [this]))
+
+(deftest extend-protocol-hygienic-under-shadowed-fn
+  (testing "extend-protocol method bodies use core/fn, not a captured local fn"
+    (let [fn :shadowed]
+      (extend-protocol Sized (type "") (sz [s] (count s))))
+    (is (= 3 (sz "abc")))))
+
+(defprotocol Named2 (nm [this]))
+
+(deftest reify-hygienic-under-shadowed-fn
+  (testing "reify method bodies use core/fn, not a captured local fn"
+    (let [fn :shadowed
+          r (reify Named2 (nm [_] "ok"))]
+      (is (= "ok" (nm r))))))
