@@ -46,6 +46,7 @@ var goLoweringNSOrder = []string{
 	"async",
 	"hash",
 	"test",
+	"let-go.semver",
 	"ir.data.generated",
 	"ir.zipper",
 	"ir.passes",

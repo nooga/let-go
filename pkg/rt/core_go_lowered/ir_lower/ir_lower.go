@@ -31,7 +31,7 @@ func args_at_top_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_16 vm.Value
 	var args_17 vm.Value
 	var n_18 vm.Value
-	var arg__10309_25 vm.Value
+	var arg__10313_25 vm.Value
 	var base_26 vm.Value
 	var v36 vm.Value
 	var l_19 vm.Value
@@ -73,8 +73,8 @@ func args_at_top_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var args_55 vm.Value
 	var l_56 vm.Value
 	var v171 vm.Value
-	var arg__10322_72 vm.Value
-	var arg__10330_75 vm.Value
+	var arg__10326_72 vm.Value
+	var arg__10334_75 vm.Value
 	var pos_76 vm.Value
 	var or__x_78 vm.Value
 	var v141 vm.Value
@@ -117,7 +117,7 @@ func args_at_top_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var pos_91 vm.Value
 	var or__x_92 vm.Value
 	var v170 vm.Value
-	var arg__10337_95 vm.Value
+	var arg__10341_95 vm.Value
 	var v98 vm.Value
 	var v100 vm.Value
 	var i_101 int
@@ -148,7 +148,7 @@ func args_at_top_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var args_131 vm.Value
 	var l_132 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = n_4, v12, l_5, args_6, n_7, l_8, args_9, n_10, v161, l_162, args_163, n_164, l_16, args_17, n_18, arg__10309_25, base_26, v36, l_19, args_20, n_21, v156, l_157, args_158, n_159, l_27, args_28, n_29, base_30, l_31, args_32, n_33, base_34, v148, l_149, args_150, n_151, base_152, i_40, n_41, base_42, args_43, l_44, v169, v57, i_47, n_48, base_49, args_50, l_51, v175, i_52, n_53, base_54, args_55, l_56, v171, arg__10322_72, arg__10330_75, pos_76, or__x_78, v141, i_142, n_143, base_144, args_145, l_146, i_61, n_62, base_63, args_64, l_65, v176, i_66, n_67, base_68, args_69, l_70, v168, v134, i_135, n_136, base_137, args_138, l_139, i_79, n_80, base_81, args_82, l_83, pos_84, or__x_85, v172, i_86, n_87, base_88, args_89, l_90, pos_91, or__x_92, v170, arg__10337_95, v98, v100, i_101, n_102, base_103, args_104, l_105, pos_106, or__x_107, v173, i_111, n_112, base_113, args_114, l_115, v167, v123, i_116, n_117, base_118, args_119, l_120, v174, v127, i_128, n_129, base_130, args_131, l_132
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = n_4, v12, l_5, args_6, n_7, l_8, args_9, n_10, v161, l_162, args_163, n_164, l_16, args_17, n_18, arg__10313_25, base_26, v36, l_19, args_20, n_21, v156, l_157, args_158, n_159, l_27, args_28, n_29, base_30, l_31, args_32, n_33, base_34, v148, l_149, args_150, n_151, base_152, i_40, n_41, base_42, args_43, l_44, v169, v57, i_47, n_48, base_49, args_50, l_51, v175, i_52, n_53, base_54, args_55, l_56, v171, arg__10326_72, arg__10334_75, pos_76, or__x_78, v141, i_142, n_143, base_144, args_145, l_146, i_61, n_62, base_63, args_64, l_65, v176, i_66, n_67, base_68, args_69, l_70, v168, v134, i_135, n_136, base_137, args_138, l_139, i_79, n_80, base_81, args_82, l_83, pos_84, or__x_85, v172, i_86, n_87, base_88, args_89, l_90, pos_91, or__x_92, v170, arg__10341_95, v98, v100, i_101, n_102, base_103, args_104, l_105, pos_106, or__x_107, v173, i_111, n_112, base_113, args_114, l_115, v167, v123, i_116, n_117, base_118, args_119, l_120, v174, v127, i_128, n_129, base_130, args_131, l_132
 	n_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg1})
 	if callErr != nil {
 		return nil, callErr
@@ -193,11 +193,11 @@ b3:
 	return v161, nil
 b4:
 	;
-	arg__10309_25, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_16})
+	arg__10313_25, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_16})
 	if callErr != nil {
 		return nil, callErr
 	}
-	base_26 = rt.SubValue(arg__10309_25, n_18)
+	base_26 = rt.SubValue(arg__10313_25, n_18)
 	v36, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "neg?").Deref(), []vm.Value{base_26})
 	if callErr != nil {
 		return nil, callErr
@@ -284,15 +284,15 @@ b11:
 	goto b13
 b12:
 	;
-	arg__10322_72, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_55, vm.Int(i_52)})
+	arg__10326_72, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_55, vm.Int(i_52)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10330_75, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_55, vm.Int(i_52)})
+	arg__10334_75, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_55, vm.Int(i_52)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	pos_76, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "value-pos-of").Deref(), []vm.Value{l_56, arg__10330_75})
+	pos_76, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "value-pos-of").Deref(), []vm.Value{l_56, arg__10334_75})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -380,8 +380,8 @@ b17:
 	goto b19
 b18:
 	;
-	arg__10337_95 = rt.AddValue(base_88, vm.Int(i_86))
-	v98, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not=").Deref(), []vm.Value{pos_91, arg__10337_95})
+	arg__10341_95 = rt.AddValue(base_88, vm.Int(i_86))
+	v98, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not=").Deref(), []vm.Value{pos_91, arg__10341_95})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -444,60 +444,60 @@ b22:
 	goto b16
 }
 func block_ip(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
-	var arg__10348_4 vm.Value
-	var arg__10349_5 vm.Value
-	var arg__10356_9 vm.Value
-	var arg__10357_10 vm.Value
+	var arg__10352_4 vm.Value
+	var arg__10353_5 vm.Value
+	var arg__10360_9 vm.Value
+	var arg__10361_10 vm.Value
 	var v11 vm.Value
 	var callErr error
-	_, _, _, _, _ = arg__10348_4, arg__10349_5, arg__10356_9, arg__10357_10, v11
-	arg__10348_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	_, _, _, _, _ = arg__10352_4, arg__10353_5, arg__10360_9, arg__10361_10, v11
+	arg__10352_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10349_5, callErr = rt.InvokeValue(vm.Keyword("block-ips"), []vm.Value{arg__10348_4})
+	arg__10353_5, callErr = rt.InvokeValue(vm.Keyword("block-ips"), []vm.Value{arg__10352_4})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10356_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	arg__10360_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10357_10, callErr = rt.InvokeValue(vm.Keyword("block-ips"), []vm.Value{arg__10356_9})
+	arg__10361_10, callErr = rt.InvokeValue(vm.Keyword("block-ips"), []vm.Value{arg__10360_9})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{arg__10357_10, arg1})
+	v11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{arg__10361_10, arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
 	return v11, nil
 }
 func block_junk_of(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
-	var arg__10363_4 vm.Value
-	var arg__10364_5 vm.Value
-	var arg__10372_10 vm.Value
-	var arg__10373_11 vm.Value
+	var arg__10367_4 vm.Value
+	var arg__10368_5 vm.Value
+	var arg__10376_10 vm.Value
+	var arg__10377_11 vm.Value
 	var v13 vm.Value
 	var callErr error
-	_, _, _, _, _ = arg__10363_4, arg__10364_5, arg__10372_10, arg__10373_11, v13
-	arg__10363_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	_, _, _, _, _ = arg__10367_4, arg__10368_5, arg__10376_10, arg__10377_11, v13
+	arg__10367_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10364_5, callErr = rt.InvokeValue(vm.Keyword("block-junk"), []vm.Value{arg__10363_4})
+	arg__10368_5, callErr = rt.InvokeValue(vm.Keyword("block-junk"), []vm.Value{arg__10367_4})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10372_10, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	arg__10376_10, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10373_11, callErr = rt.InvokeValue(vm.Keyword("block-junk"), []vm.Value{arg__10372_10})
+	arg__10377_11, callErr = rt.InvokeValue(vm.Keyword("block-junk"), []vm.Value{arg__10376_10})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v13, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{arg__10373_11, arg1, vm.Int(0)})
+	v13, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{arg__10377_11, arg1, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -505,14 +505,14 @@ func block_junk_of(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 }
 func bump_max_stack_BANG_(arg0 vm.Value) (vm.Value, error) {
 	var c_3 vm.Value
-	var arg__10382_5 vm.Value
-	var arg__10388_8 vm.Value
-	var arg__10389_9 vm.Value
-	var arg__10396_13 vm.Value
-	var arg__10397_14 vm.Value
-	var arg__10398_15 vm.Value
+	var arg__10386_5 vm.Value
+	var arg__10392_8 vm.Value
+	var arg__10393_9 vm.Value
+	var arg__10400_13 vm.Value
+	var arg__10401_14 vm.Value
+	var arg__10402_15 vm.Value
 	var rt_sp_16 vm.Value
-	var arg__10403_24 vm.Value
+	var arg__10407_24 vm.Value
 	var v25 bool
 	var l_17 vm.Value
 	var c_18 vm.Value
@@ -526,41 +526,41 @@ func bump_max_stack_BANG_(arg0 vm.Value) (vm.Value, error) {
 	var c_34 vm.Value
 	var rt_sp_35 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = c_3, arg__10382_5, arg__10388_8, arg__10389_9, arg__10396_13, arg__10397_14, arg__10398_15, rt_sp_16, arg__10403_24, v25, l_17, c_18, rt_sp_19, v28, l_20, c_21, rt_sp_22, v32, l_33, c_34, rt_sp_35
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = c_3, arg__10386_5, arg__10392_8, arg__10393_9, arg__10400_13, arg__10401_14, arg__10402_15, rt_sp_16, arg__10407_24, v25, l_17, c_18, rt_sp_19, v28, l_20, c_21, rt_sp_22, v32, l_33, c_34, rt_sp_35
 	c_3, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10382_5, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{arg0})
+	arg__10386_5, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10388_8, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	arg__10392_8, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10389_9, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__10388_8})
+	arg__10393_9, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__10392_8})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10396_13, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	arg__10400_13, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10397_14, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__10396_13})
+	arg__10401_14, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__10400_13})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10398_15, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "block-junk-of").Deref(), []vm.Value{arg0, arg__10397_14})
+	arg__10402_15, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "block-junk-of").Deref(), []vm.Value{arg0, arg__10401_14})
 	if callErr != nil {
 		return nil, callErr
 	}
-	rt_sp_16 = rt.AddValue(arg__10382_5, arg__10398_15)
-	arg__10403_24, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-max-stack").Deref(), []vm.Value{c_3})
+	rt_sp_16 = rt.AddValue(arg__10386_5, arg__10402_15)
+	arg__10407_24, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-max-stack").Deref(), []vm.Value{c_3})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v25 = rt.GtValue(rt_sp_16, arg__10403_24)
+	v25 = rt.GtValue(rt_sp_16, arg__10407_24)
 	if v25 {
 		l_17 = arg0
 		c_18 = c_3
@@ -605,67 +605,67 @@ func bump_stack_sp_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	return v9, nil
 }
 func chunk_of(arg0 vm.Value) (vm.Value, error) {
-	var arg__10576_3 vm.Value
+	var arg__10580_3 vm.Value
 	var v4 vm.Value
 	var callErr error
-	_, _ = arg__10576_3, v4
-	arg__10576_3, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	_, _ = arg__10580_3, v4
+	arg__10580_3, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v4, callErr = rt.InvokeValue(vm.Keyword("chunk"), []vm.Value{arg__10576_3})
+	v4, callErr = rt.InvokeValue(vm.Keyword("chunk"), []vm.Value{arg__10580_3})
 	if callErr != nil {
 		return nil, callErr
 	}
 	return v4, nil
 }
 func consume_refs_in_place_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
-	var doseq_seq__10577_4 vm.Value
-	var doseq_loop__10578_5 vm.Value
+	var doseq_seq__10581_4 vm.Value
+	var doseq_loop__10582_5 vm.Value
 	var l_6 vm.Value
 	var refs_8 vm.Value
-	var doseq_seq__10577_9 vm.Value
-	var doseq_loop__10578_10 vm.Value
+	var doseq_seq__10581_9 vm.Value
+	var doseq_loop__10582_10 vm.Value
 	var l_11 vm.Value
 	var r_18 vm.Value
 	var v20 vm.Value
 	var v22 vm.Value
 	var refs_12 vm.Value
-	var doseq_seq__10577_13 vm.Value
-	var doseq_loop__10578_14 vm.Value
+	var doseq_seq__10581_13 vm.Value
+	var doseq_loop__10582_14 vm.Value
 	var l_15 vm.Value
 	var v26 vm.Value
 	var refs_27 vm.Value
-	var doseq_seq__10577_28 vm.Value
-	var doseq_loop__10578_29 vm.Value
+	var doseq_seq__10581_28 vm.Value
+	var doseq_loop__10582_29 vm.Value
 	var l_30 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = doseq_seq__10577_4, doseq_loop__10578_5, l_6, refs_8, doseq_seq__10577_9, doseq_loop__10578_10, l_11, r_18, v20, v22, refs_12, doseq_seq__10577_13, doseq_loop__10578_14, l_15, v26, refs_27, doseq_seq__10577_28, doseq_loop__10578_29, l_30
-	doseq_seq__10577_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg1})
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = doseq_seq__10581_4, doseq_loop__10582_5, l_6, refs_8, doseq_seq__10581_9, doseq_loop__10582_10, l_11, r_18, v20, v22, refs_12, doseq_seq__10581_13, doseq_loop__10582_14, l_15, v26, refs_27, doseq_seq__10581_28, doseq_loop__10582_29, l_30
+	doseq_seq__10581_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__10578_5 = doseq_seq__10577_4
+	doseq_loop__10582_5 = doseq_seq__10581_4
 	l_6 = arg0
 	goto b1
 b1:
 	;
-	if vm.IsTruthy(doseq_loop__10578_5) {
+	if vm.IsTruthy(doseq_loop__10582_5) {
 		refs_8 = arg1
-		doseq_seq__10577_9 = doseq_seq__10577_4
-		doseq_loop__10578_10 = doseq_loop__10578_5
+		doseq_seq__10581_9 = doseq_seq__10581_4
+		doseq_loop__10582_10 = doseq_loop__10582_5
 		l_11 = l_6
 		goto b2
 	} else {
 		refs_12 = arg1
-		doseq_seq__10577_13 = doseq_seq__10577_4
-		doseq_loop__10578_14 = doseq_loop__10578_5
+		doseq_seq__10581_13 = doseq_seq__10581_4
+		doseq_loop__10582_14 = doseq_loop__10582_5
 		l_15 = l_6
 		goto b3
 	}
 b2:
 	;
-	r_18, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__10578_10})
+	r_18, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__10582_10})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -673,19 +673,19 @@ b2:
 	if callErr != nil {
 		return nil, callErr
 	}
-	v22, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__10578_10})
+	v22, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__10582_10})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__10578_5 = v22
+	doseq_loop__10582_5 = v22
 	l_6 = l_11
 	goto b1
 b3:
 	;
 	v26 = vm.NIL
 	refs_27 = refs_12
-	doseq_seq__10577_28 = doseq_seq__10577_13
-	doseq_loop__10578_29 = doseq_loop__10578_14
+	doseq_seq__10581_28 = doseq_seq__10581_13
+	doseq_loop__10582_29 = doseq_loop__10582_14
 	l_30 = l_15
 	goto b4
 b4:
@@ -698,7 +698,7 @@ func contains_after_QMARK_(arg0 vm.Value, arg1 int, arg2 vm.Value) (vm.Value, er
 	var refs_5 vm.Value
 	var target_6 vm.Value
 	var v71 vm.Value
-	var arg__10598_18 vm.Value
+	var arg__10602_18 vm.Value
 	var v19 bool
 	var i_9 int
 	var j_10 int
@@ -710,7 +710,7 @@ func contains_after_QMARK_(arg0 vm.Value, arg1 int, arg2 vm.Value) (vm.Value, er
 	var refs_15 vm.Value
 	var target_16 vm.Value
 	var v72 vm.Value
-	var arg__10604_32 vm.Value
+	var arg__10608_32 vm.Value
 	var v33 bool
 	var v63 vm.Value
 	var i_64 int
@@ -749,7 +749,7 @@ func contains_after_QMARK_(arg0 vm.Value, arg1 int, arg2 vm.Value) (vm.Value, er
 	var refs_54 vm.Value
 	var target_55 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = v7, j_4, refs_5, target_6, v71, arg__10598_18, v19, i_9, j_10, refs_11, target_12, v74, i_13, j_14, refs_15, target_16, v72, arg__10604_32, v33, v63, i_64, j_65, refs_66, target_67, i_23, j_24, refs_25, target_26, v75, i_27, j_28, refs_29, target_30, v73, v57, i_58, j_59, refs_60, target_61, i_37, j_38, refs_39, target_40, v70, v47, i_41, j_42, refs_43, target_44, v76, v51, i_52, j_53, refs_54, target_55
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = v7, j_4, refs_5, target_6, v71, arg__10602_18, v19, i_9, j_10, refs_11, target_12, v74, i_13, j_14, refs_15, target_16, v72, arg__10608_32, v33, v63, i_64, j_65, refs_66, target_67, i_23, j_24, refs_25, target_26, v75, i_27, j_28, refs_29, target_30, v73, v57, i_58, j_59, refs_60, target_61, i_37, j_38, refs_39, target_40, v70, v47, i_41, j_42, refs_43, target_44, v76, v51, i_52, j_53, refs_54, target_55
 	v7 = arg1 + 1
 	j_4 = v7
 	refs_5 = arg0
@@ -758,11 +758,11 @@ func contains_after_QMARK_(arg0 vm.Value, arg1 int, arg2 vm.Value) (vm.Value, er
 	goto b1
 b1:
 	;
-	arg__10598_18, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{refs_5})
+	arg__10602_18, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{refs_5})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v19 = rt.GeValue(vm.Int(j_4), arg__10598_18)
+	v19 = rt.GeValue(vm.Int(j_4), arg__10602_18)
 	if v19 {
 		i_9 = arg1
 		j_10 = j_4
@@ -788,11 +788,11 @@ b2:
 	goto b4
 b3:
 	;
-	arg__10604_32, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_15, vm.Int(j_14)})
+	arg__10608_32, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_15, vm.Int(j_14)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v33 = arg__10604_32 == target_16
+	v33 = arg__10608_32 == target_16
 	if v33 {
 		i_23 = i_13
 		j_24 = j_14
@@ -875,7 +875,7 @@ func decrement_use_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_5 vm.Value
 	var nid_6 vm.Value
 	var cur_7 vm.Value
-	var arg__10621_17 vm.Value
+	var arg__10625_17 vm.Value
 	var v23 vm.Value
 	var l_8 vm.Value
 	var nid_9 vm.Value
@@ -885,7 +885,7 @@ func decrement_use_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_29 vm.Value
 	var cur_30 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _ = cur_4, v12, l_5, nid_6, cur_7, arg__10621_17, v23, l_8, nid_9, cur_10, v27, l_28, nid_29, cur_30
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _ = cur_4, v12, l_5, nid_6, cur_7, arg__10625_17, v23, l_8, nid_9, cur_10, v27, l_28, nid_29, cur_30
 	cur_4, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return nil, callErr
@@ -907,8 +907,8 @@ func decrement_use_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	}
 b1:
 	;
-	arg__10621_17 = rt.SubValue(cur_7, vm.Int(1))
-	v23, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "swap!").Deref(), []vm.Value{l_5, rt.LookupVar("clojure.core", "update").Deref(), vm.Keyword("use-count"), rt.LookupVar("clojure.core", "assoc").Deref(), nid_6, arg__10621_17})
+	arg__10625_17 = rt.SubValue(cur_7, vm.Int(1))
+	v23, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "swap!").Deref(), []vm.Value{l_5, rt.LookupVar("clojure.core", "update").Deref(), vm.Keyword("use-count"), rt.LookupVar("clojure.core", "assoc").Deref(), nid_6, arg__10625_17})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -932,7 +932,7 @@ func deferrable_branch_if_cond_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Valu
 	var l_4 vm.Value
 	var term_5 vm.Value
 	var cond_ref_6 vm.Value
-	var arg__10636_13 vm.Value
+	var arg__10640_13 vm.Value
 	var and__x_14 bool
 	var l_7 vm.Value
 	var term_8 vm.Value
@@ -945,9 +945,9 @@ func deferrable_branch_if_cond_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Valu
 	var term_16 vm.Value
 	var cond_ref_17 vm.Value
 	var and__x_18 bool
-	var arg__10641_26 vm.Value
+	var arg__10645_26 vm.Value
 	var uses_27 vm.Value
-	var arg__10646_39 vm.Value
+	var arg__10650_39 vm.Value
 	var v40 bool
 	var l_19 vm.Value
 	var term_20 vm.Value
@@ -981,8 +981,8 @@ func deferrable_branch_if_cond_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Valu
 	var term_56 vm.Value
 	var cond_ref_57 vm.Value
 	var uses_58 vm.Value
-	var arg__10655_67 vm.Value
-	var arg__10660_70 vm.Value
+	var arg__10659_67 vm.Value
+	var arg__10664_70 vm.Value
 	var and__x_71 vm.Value
 	var and__x_59 vm.Value
 	var us_60 vm.Value
@@ -1003,7 +1003,7 @@ func deferrable_branch_if_cond_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Valu
 	var cond_ref_75 vm.Value
 	var uses_76 vm.Value
 	var and__x_77 vm.Value
-	var arg__10665_86 vm.Value
+	var arg__10669_86 vm.Value
 	var v87 bool
 	var us_78 vm.Value
 	var l_79 vm.Value
@@ -1019,7 +1019,7 @@ func deferrable_branch_if_cond_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Valu
 	var uses_95 vm.Value
 	var and__x_96 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_4, term_5, cond_ref_6, arg__10636_13, and__x_14, l_7, term_8, cond_ref_9, v116, l_117, term_118, cond_ref_119, l_15, term_16, cond_ref_17, and__x_18, arg__10641_26, uses_27, arg__10646_39, v40, l_19, term_20, cond_ref_21, and__x_22, v108, l_109, term_110, cond_ref_111, and__x_112, l_28, term_29, cond_ref_30, and__x_31, uses_32, v43, l_33, term_34, cond_ref_35, and__x_36, uses_37, us_47, l_48, term_49, cond_ref_50, and__x_51, uses_52, and__x_53, us_54, l_55, term_56, cond_ref_57, uses_58, arg__10655_67, arg__10660_70, and__x_71, and__x_59, us_60, l_61, term_62, cond_ref_63, uses_64, v99, and__x_100, us_101, l_102, term_103, cond_ref_104, uses_105, us_72, l_73, term_74, cond_ref_75, uses_76, and__x_77, arg__10665_86, v87, us_78, l_79, term_80, cond_ref_81, uses_82, and__x_83, v90, us_91, l_92, term_93, cond_ref_94, uses_95, and__x_96
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_4, term_5, cond_ref_6, arg__10640_13, and__x_14, l_7, term_8, cond_ref_9, v116, l_117, term_118, cond_ref_119, l_15, term_16, cond_ref_17, and__x_18, arg__10645_26, uses_27, arg__10650_39, v40, l_19, term_20, cond_ref_21, and__x_22, v108, l_109, term_110, cond_ref_111, and__x_112, l_28, term_29, cond_ref_30, and__x_31, uses_32, v43, l_33, term_34, cond_ref_35, and__x_36, uses_37, us_47, l_48, term_49, cond_ref_50, and__x_51, uses_52, and__x_53, us_54, l_55, term_56, cond_ref_57, uses_58, arg__10659_67, arg__10664_70, and__x_71, and__x_59, us_60, l_61, term_62, cond_ref_63, uses_64, v99, and__x_100, us_101, l_102, term_103, cond_ref_104, uses_105, us_72, l_73, term_74, cond_ref_75, uses_76, and__x_77, arg__10669_86, v87, us_78, l_79, term_80, cond_ref_81, uses_82, and__x_83, v90, us_91, l_92, term_93, cond_ref_94, uses_95, and__x_96
 	if vm.IsTruthy(arg2) {
 		l_4 = arg0
 		term_5 = arg1
@@ -1033,11 +1033,11 @@ func deferrable_branch_if_cond_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Valu
 	}
 b1:
 	;
-	arg__10636_13, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{l_4, cond_ref_6})
+	arg__10640_13, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{l_4, cond_ref_6})
 	if callErr != nil {
 		return nil, callErr
 	}
-	and__x_14 = arg__10636_13 == vm.Int(1)
+	and__x_14 = arg__10640_13 == vm.Int(1)
 	if and__x_14 {
 		l_15 = l_4
 		term_16 = term_5
@@ -1063,19 +1063,19 @@ b3:
 	return v116, nil
 b4:
 	;
-	arg__10641_26, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_15})
+	arg__10645_26, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_15})
 	if callErr != nil {
 		return nil, callErr
 	}
-	uses_27, callErr = rt.InvokeValue(vm.Keyword("uses"), []vm.Value{arg__10641_26})
+	uses_27, callErr = rt.InvokeValue(vm.Keyword("uses"), []vm.Value{arg__10645_26})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10646_39, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{uses_27})
+	arg__10650_39, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{uses_27})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v40 = rt.LtValue(cond_ref_17, arg__10646_39)
+	v40 = rt.LtValue(cond_ref_17, arg__10650_39)
 	if v40 {
 		l_28 = l_15
 		term_29 = term_16
@@ -1149,15 +1149,15 @@ b9:
 	}
 b10:
 	;
-	arg__10655_67, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-empty?").Deref(), []vm.Value{us_54})
+	arg__10659_67, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-empty?").Deref(), []vm.Value{us_54})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10660_70, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-empty?").Deref(), []vm.Value{us_54})
+	arg__10664_70, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-empty?").Deref(), []vm.Value{us_54})
 	if callErr != nil {
 		return nil, callErr
 	}
-	and__x_71, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not").Deref(), []vm.Value{arg__10660_70})
+	and__x_71, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not").Deref(), []vm.Value{arg__10664_70})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1198,11 +1198,11 @@ b12:
 	goto b6
 b13:
 	;
-	arg__10665_86, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-first").Deref(), []vm.Value{us_72})
+	arg__10669_86, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-first").Deref(), []vm.Value{us_72})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v87 = term_74 == arg__10665_86
+	v87 = term_74 == arg__10669_86
 	v90 = vm.Boolean(v87)
 	us_91 = us_72
 	l_92 = l_73
@@ -1244,13 +1244,13 @@ func emit_BANG_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) (vm.Value, error) {
 	var l_16 vm.Value
 	var inst_id_17 vm.Value
 	var op_kw_18 vm.Value
-	var arg__10674_20 vm.Value
-	var arg__10679_22 vm.Value
-	var arg__10684_25 vm.Value
-	var arg__10689_27 vm.Value
+	var arg__10678_20 vm.Value
+	var arg__10683_22 vm.Value
+	var arg__10688_25 vm.Value
+	var arg__10693_27 vm.Value
 	var v28 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_3, inst_id_4, op_kw_5, v11, l_6, inst_id_7, op_kw_8, v15, l_16, inst_id_17, op_kw_18, arg__10674_20, arg__10679_22, arg__10684_25, arg__10689_27, v28
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_3, inst_id_4, op_kw_5, v11, l_6, inst_id_7, op_kw_8, v15, l_16, inst_id_17, op_kw_18, arg__10678_20, arg__10683_22, arg__10688_25, arg__10693_27, v28
 	if vm.IsTruthy(arg1) {
 		l_3 = arg0
 		inst_id_4 = arg1
@@ -1282,23 +1282,23 @@ b2:
 	goto b3
 b3:
 	;
-	arg__10674_20, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_16})
+	arg__10678_20, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_16})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10679_22, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_16})
+	arg__10683_22, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_16})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10684_25, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_16})
+	arg__10688_25, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_16})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10689_27, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_16})
+	arg__10693_27, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_16})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v28, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit").Deref(), []vm.Value{arg__10684_25, op_kw_18, arg__10689_27})
+	v28, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit").Deref(), []vm.Value{arg__10688_25, op_kw_18, arg__10693_27})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1328,16 +1328,16 @@ func emit_inst_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var op_32 vm.Value
 	var refs_33 vm.Value
 	var v35 vm.Value
-	var arg__10727_48 vm.Value
+	var arg__10731_48 vm.Value
 	var v49 bool
 	var l_36 vm.Value
 	var nid_37 vm.Value
 	var f_38 vm.Value
 	var op_39 vm.Value
 	var refs_40 vm.Value
-	var arg__10733_52 vm.Value
-	var arg__10741_56 vm.Value
-	var arg__10742_57 vm.Value
+	var arg__10737_52 vm.Value
+	var arg__10745_56 vm.Value
+	var arg__10746_57 vm.Value
 	var v58 vm.Value
 	var l_41 vm.Value
 	var nid_42 vm.Value
@@ -1351,7 +1351,7 @@ func emit_inst_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var op_66 vm.Value
 	var refs_67 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = f_4, op_6, refs_8, v20, l_9, nid_10, f_11, op_12, refs_13, v23, l_14, nid_15, f_16, op_17, refs_18, v26, v28, l_29, nid_30, f_31, op_32, refs_33, v35, arg__10727_48, v49, l_36, nid_37, f_38, op_39, refs_40, arg__10733_52, arg__10741_56, arg__10742_57, v58, l_41, nid_42, f_43, op_44, refs_45, v62, l_63, nid_64, f_65, op_66, refs_67
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = f_4, op_6, refs_8, v20, l_9, nid_10, f_11, op_12, refs_13, v23, l_14, nid_15, f_16, op_17, refs_18, v26, v28, l_29, nid_30, f_31, op_32, refs_33, v35, arg__10731_48, v49, l_36, nid_37, f_38, op_39, refs_40, arg__10737_52, arg__10745_56, arg__10746_57, v58, l_41, nid_42, f_43, op_44, refs_45, v62, l_63, nid_64, f_65, op_66, refs_67
 	f_4, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
@@ -1415,11 +1415,11 @@ b3:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10727_48, callErr = rt.InvokeValue(rt.LookupVar("ir", "op-stack-out").Deref(), []vm.Value{op_32})
+	arg__10731_48, callErr = rt.InvokeValue(rt.LookupVar("ir", "op-stack-out").Deref(), []vm.Value{op_32})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v49 = arg__10727_48 == vm.Int(1)
+	v49 = arg__10731_48 == vm.Int(1)
 	if v49 {
 		l_36 = l_29
 		nid_37 = nid_30
@@ -1437,16 +1437,16 @@ b3:
 	}
 b4:
 	;
-	arg__10733_52, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_36})
+	arg__10737_52, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_36})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10741_56, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_36})
+	arg__10745_56, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_36})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10742_57 = rt.SubValue(arg__10741_56, vm.Int(1))
-	v58, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "set-value-pos!").Deref(), []vm.Value{l_36, nid_37, arg__10742_57})
+	arg__10746_57 = rt.SubValue(arg__10745_56, vm.Int(1))
+	v58, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "set-value-pos!").Deref(), []vm.Value{l_36, nid_37, arg__10746_57})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1482,13 +1482,13 @@ func emit_placeholder_BANG_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) (vm.Val
 	var l_17 vm.Value
 	var inst_id_18 vm.Value
 	var op_kw_19 vm.Value
-	var arg__10751_21 vm.Value
-	var arg__10756_23 vm.Value
-	var arg__10761_26 vm.Value
-	var arg__10766_28 vm.Value
+	var arg__10755_21 vm.Value
+	var arg__10760_23 vm.Value
+	var arg__10765_26 vm.Value
+	var arg__10770_28 vm.Value
 	var v29 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_4, inst_id_5, op_kw_6, v12, l_7, inst_id_8, op_kw_9, v16, l_17, inst_id_18, op_kw_19, arg__10751_21, arg__10756_23, arg__10761_26, arg__10766_28, v29
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_4, inst_id_5, op_kw_6, v12, l_7, inst_id_8, op_kw_9, v16, l_17, inst_id_18, op_kw_19, arg__10755_21, arg__10760_23, arg__10765_26, arg__10770_28, v29
 	if vm.IsTruthy(arg1) {
 		l_4 = arg0
 		inst_id_5 = arg1
@@ -1520,23 +1520,23 @@ b2:
 	goto b3
 b3:
 	;
-	arg__10751_21, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_17})
+	arg__10755_21, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10756_23, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_17})
+	arg__10760_23, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10761_26, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_17})
+	arg__10765_26, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10766_28, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_17})
+	arg__10770_28, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v29, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit-placeholder").Deref(), []vm.Value{arg__10761_26, op_kw_19, arg__10766_28})
+	v29, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit-placeholder").Deref(), []vm.Value{arg__10765_26, op_kw_19, arg__10770_28})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1557,13 +1557,13 @@ func emit_with_arg_BANG_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value, arg3 vm.Va
 	var inst_id_20 vm.Value
 	var op_kw_21 vm.Value
 	var arg_22 vm.Value
-	var arg__10775_24 vm.Value
-	var arg__10780_26 vm.Value
-	var arg__10786_29 vm.Value
-	var arg__10791_31 vm.Value
+	var arg__10779_24 vm.Value
+	var arg__10784_26 vm.Value
+	var arg__10790_29 vm.Value
+	var arg__10795_31 vm.Value
 	var v32 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_4, inst_id_5, op_kw_6, arg_7, v14, l_8, inst_id_9, op_kw_10, arg_11, v18, l_19, inst_id_20, op_kw_21, arg_22, arg__10775_24, arg__10780_26, arg__10786_29, arg__10791_31, v32
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_4, inst_id_5, op_kw_6, arg_7, v14, l_8, inst_id_9, op_kw_10, arg_11, v18, l_19, inst_id_20, op_kw_21, arg_22, arg__10779_24, arg__10784_26, arg__10790_29, arg__10795_31, v32
 	if vm.IsTruthy(arg1) {
 		l_4 = arg0
 		inst_id_5 = arg1
@@ -1599,38 +1599,38 @@ b2:
 	goto b3
 b3:
 	;
-	arg__10775_24, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_19})
+	arg__10779_24, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_19})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10780_26, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_19})
+	arg__10784_26, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_19})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10786_29, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_19})
+	arg__10790_29, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_19})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10791_31, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_19})
+	arg__10795_31, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_19})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v32, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit-with-arg").Deref(), []vm.Value{arg__10786_29, op_kw_21, arg__10791_31, arg_22})
+	v32, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit-with-arg").Deref(), []vm.Value{arg__10790_29, op_kw_21, arg__10795_31, arg_22})
 	if callErr != nil {
 		return nil, callErr
 	}
 	return v32, nil
 }
 func f_of(arg0 vm.Value) (vm.Value, error) {
-	var arg__10797_3 vm.Value
+	var arg__10801_3 vm.Value
 	var v4 vm.Value
 	var callErr error
-	_, _ = arg__10797_3, v4
-	arg__10797_3, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	_, _ = arg__10801_3, v4
+	arg__10801_3, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v4, callErr = rt.InvokeValue(vm.Keyword("f"), []vm.Value{arg__10797_3})
+	v4, callErr = rt.InvokeValue(vm.Keyword("f"), []vm.Value{arg__10801_3})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1645,8 +1645,8 @@ func is_terminator_branch_arg_use_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.V
 	var f_10 vm.Value
 	var op_11 vm.Value
 	var aux_12 vm.Value
-	var arg__10816_25 vm.Value
-	var arg__10824_31 vm.Value
+	var arg__10820_25 vm.Value
+	var arg__10828_31 vm.Value
 	var v32 vm.Value
 	var term_id_13 vm.Value
 	var target_id_14 vm.Value
@@ -1667,8 +1667,8 @@ func is_terminator_branch_arg_use_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.V
 	var aux_38 vm.Value
 	var t_48 vm.Value
 	var e_50 vm.Value
-	var arg__10839_55 vm.Value
-	var arg__10847_61 vm.Value
+	var arg__10843_55 vm.Value
+	var arg__10851_61 vm.Value
 	var or__x_62 vm.Value
 	var term_id_39 vm.Value
 	var target_id_40 vm.Value
@@ -1697,8 +1697,8 @@ func is_terminator_branch_arg_use_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.V
 	var t_76 vm.Value
 	var e_77 vm.Value
 	var or__x_78 vm.Value
-	var arg__10854_85 vm.Value
-	var arg__10862_91 vm.Value
+	var arg__10858_85 vm.Value
+	var arg__10866_91 vm.Value
 	var v92 vm.Value
 	var v94 vm.Value
 	var term_id_95 vm.Value
@@ -1726,7 +1726,7 @@ func is_terminator_branch_arg_use_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.V
 	var op_124 vm.Value
 	var aux_125 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = op_5, aux_7, v19, term_id_8, target_id_9, f_10, op_11, aux_12, arg__10816_25, arg__10824_31, v32, term_id_13, target_id_14, f_15, op_16, aux_17, v45, v134, term_id_135, target_id_136, f_137, op_138, aux_139, term_id_34, target_id_35, f_36, op_37, aux_38, t_48, e_50, arg__10839_55, arg__10847_61, or__x_62, term_id_39, target_id_40, f_41, op_42, aux_43, v127, term_id_128, target_id_129, f_130, op_131, aux_132, term_id_63, target_id_64, f_65, op_66, aux_67, t_68, e_69, or__x_70, term_id_71, target_id_72, f_73, op_74, aux_75, t_76, e_77, or__x_78, arg__10854_85, arg__10862_91, v92, v94, term_id_95, target_id_96, f_97, op_98, aux_99, t_100, e_101, or__x_102, term_id_104, target_id_105, f_106, op_107, aux_108, term_id_109, target_id_110, f_111, op_112, aux_113, v120, term_id_121, target_id_122, f_123, op_124, aux_125
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = op_5, aux_7, v19, term_id_8, target_id_9, f_10, op_11, aux_12, arg__10820_25, arg__10828_31, v32, term_id_13, target_id_14, f_15, op_16, aux_17, v45, v134, term_id_135, target_id_136, f_137, op_138, aux_139, term_id_34, target_id_35, f_36, op_37, aux_38, t_48, e_50, arg__10843_55, arg__10851_61, or__x_62, term_id_39, target_id_40, f_41, op_42, aux_43, v127, term_id_128, target_id_129, f_130, op_131, aux_132, term_id_63, target_id_64, f_65, op_66, aux_67, t_68, e_69, or__x_70, term_id_71, target_id_72, f_73, op_74, aux_75, t_76, e_77, or__x_78, arg__10858_85, arg__10866_91, v92, v94, term_id_95, target_id_96, f_97, op_98, aux_99, t_100, e_101, or__x_102, term_id_104, target_id_105, f_106, op_107, aux_108, term_id_109, target_id_110, f_111, op_112, aux_113, v120, term_id_121, target_id_122, f_123, op_124, aux_125
 	op_5, callErr = rt.InvokeValue(rt.LookupVar("ir", "op").Deref(), []vm.Value{arg0, arg2})
 	if callErr != nil {
 		return nil, callErr
@@ -1753,11 +1753,11 @@ func is_terminator_branch_arg_use_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.V
 	}
 b1:
 	;
-	arg__10816_25, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{aux_12})
+	arg__10820_25, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{aux_12})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10824_31, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{aux_12})
+	arg__10828_31, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{aux_12})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1766,7 +1766,7 @@ b1:
 		_ = v2
 		v2 = vm.Boolean(arg0 == target_id_9)
 		return v2
-	}), arg__10824_31})
+	}), arg__10828_31})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1808,11 +1808,11 @@ b4:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10839_55, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{t_48})
+	arg__10843_55, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{t_48})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10847_61, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{t_48})
+	arg__10851_61, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{t_48})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1821,7 +1821,7 @@ b4:
 		_ = v2
 		v2 = vm.Boolean(arg0 == target_id_35)
 		return v2
-	}), arg__10847_61})
+	}), arg__10851_61})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1886,11 +1886,11 @@ b7:
 	goto b9
 b8:
 	;
-	arg__10854_85, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{e_77})
+	arg__10858_85, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{e_77})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10862_91, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{e_77})
+	arg__10866_91, callErr = rt.InvokeValue(rt.LookupVar("ir", "branch-target-args").Deref(), []vm.Value{e_77})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1899,7 +1899,7 @@ b8:
 		_ = v2
 		v2 = vm.Boolean(arg0 == target_id_72)
 		return v2
-	}), arg__10862_91})
+	}), arg__10866_91})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1958,13 +1958,13 @@ func lower(arg0 vm.Value) (vm.Value, error) {
 	var v14 vm.Value
 	var f_15 vm.Value
 	var l_17 vm.Value
-	var arg__10877_20 vm.Value
-	var arg__10878_21 vm.Value
-	var arg__10885_25 vm.Value
-	var arg__10886_26 vm.Value
+	var arg__10881_20 vm.Value
+	var arg__10882_21 vm.Value
+	var arg__10889_25 vm.Value
+	var arg__10890_26 vm.Value
 	var v27 vm.Value
-	var arg__10890_29 vm.Value
-	var arg__10895_32 vm.Value
+	var arg__10894_29 vm.Value
+	var arg__10899_32 vm.Value
 	var n_blocks_33 vm.Value
 	var bid_34 int
 	var l_35 vm.Value
@@ -1974,12 +1974,12 @@ func lower(arg0 vm.Value) (vm.Value, error) {
 	var bid_40 int
 	var l_41 vm.Value
 	var n_blocks_42 vm.Value
-	var arg__10903_50 vm.Value
-	var arg__10908_53 vm.Value
-	var arg__10909_54 vm.Value
-	var arg__10916_57 vm.Value
-	var arg__10921_60 vm.Value
-	var arg__10922_61 vm.Value
+	var arg__10907_50 vm.Value
+	var arg__10912_53 vm.Value
+	var arg__10913_54 vm.Value
+	var arg__10920_57 vm.Value
+	var arg__10925_60 vm.Value
+	var arg__10926_61 vm.Value
 	var v62 vm.Value
 	var v64 vm.Value
 	var v65 int
@@ -1994,8 +1994,8 @@ func lower(arg0 vm.Value) (vm.Value, error) {
 	var n_blocks_73 vm.Value
 	var v75 vm.Value
 	var c_77 vm.Value
-	var arg__10938_79 vm.Value
-	var arg__10943_82 vm.Value
+	var arg__10942_79 vm.Value
+	var arg__10947_82 vm.Value
 	var n_blocks_83 vm.Value
 	var bid_84 int
 	var acc_85 vm.Value
@@ -2015,8 +2015,8 @@ func lower(arg0 vm.Value) (vm.Value, error) {
 	var f_101 vm.Value
 	var bid_102 int
 	var n_blocks_103 vm.Value
-	var arg__10951_108 vm.Value
-	var arg__10958_111 vm.Value
+	var arg__10955_108 vm.Value
+	var arg__10962_111 vm.Value
 	var p_112 vm.Value
 	var v113 int
 	var v128 bool
@@ -2027,9 +2027,9 @@ func lower(arg0 vm.Value) (vm.Value, error) {
 	var f_145 vm.Value
 	var bid_146 int
 	var n_blocks_147 vm.Value
-	var arg__10966_149 vm.Value
-	var arg__10974_153 vm.Value
-	var arg__10976_154 vm.Value
+	var arg__10970_149 vm.Value
+	var arg__10978_153 vm.Value
+	var arg__10980_154 vm.Value
 	var v155 vm.Value
 	var v157 vm.Value
 	var l_114 vm.Value
@@ -2055,7 +2055,7 @@ func lower(arg0 vm.Value) (vm.Value, error) {
 	var n_blocks_138 vm.Value
 	var p_139 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = v5, f_2, v10, f_3, v14, f_15, l_17, arg__10877_20, arg__10878_21, arg__10885_25, arg__10886_26, v27, arg__10890_29, arg__10895_32, n_blocks_33, bid_34, l_35, n_blocks_36, v47, f_39, bid_40, l_41, n_blocks_42, arg__10903_50, arg__10908_53, arg__10909_54, arg__10916_57, arg__10921_60, arg__10922_61, v62, v64, v65, f_43, bid_44, l_45, n_blocks_46, v69, f_70, bid_71, l_72, n_blocks_73, v75, c_77, arg__10938_79, arg__10943_82, n_blocks_83, bid_84, acc_85, f_86, bid_87, n_blocks_88, v104, l_92, c_93, acc_94, f_95, bid_96, n_blocks_97, l_98, c_99, acc_100, f_101, bid_102, n_blocks_103, arg__10951_108, arg__10958_111, p_112, v113, v128, max_params_141, l_142, c_143, acc_144, f_145, bid_146, n_blocks_147, arg__10966_149, arg__10974_153, arg__10976_154, v155, v157, l_114, c_115, acc_116, f_117, bid_118, n_blocks_119, p_120, l_121, c_122, acc_123, f_124, bid_125, n_blocks_126, p_127, v132, l_133, c_134, acc_135, f_136, bid_137, n_blocks_138, p_139
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = v5, f_2, v10, f_3, v14, f_15, l_17, arg__10881_20, arg__10882_21, arg__10889_25, arg__10890_26, v27, arg__10894_29, arg__10899_32, n_blocks_33, bid_34, l_35, n_blocks_36, v47, f_39, bid_40, l_41, n_blocks_42, arg__10907_50, arg__10912_53, arg__10913_54, arg__10920_57, arg__10925_60, arg__10926_61, v62, v64, v65, f_43, bid_44, l_45, n_blocks_46, v69, f_70, bid_71, l_72, n_blocks_73, v75, c_77, arg__10942_79, arg__10947_82, n_blocks_83, bid_84, acc_85, f_86, bid_87, n_blocks_88, v104, l_92, c_93, acc_94, f_95, bid_96, n_blocks_97, l_98, c_99, acc_100, f_101, bid_102, n_blocks_103, arg__10955_108, arg__10962_111, p_112, v113, v128, max_params_141, l_142, c_143, acc_144, f_145, bid_146, n_blocks_147, arg__10970_149, arg__10978_153, arg__10980_154, v155, v157, l_114, c_115, acc_116, f_117, bid_118, n_blocks_119, p_120, l_121, c_122, acc_123, f_124, bid_125, n_blocks_126, p_127, v132, l_133, c_134, acc_135, f_136, bid_137, n_blocks_138, p_139
 	v5, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nil?").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
@@ -2087,35 +2087,35 @@ b3:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10877_20, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_17})
+	arg__10881_20, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10878_21, callErr = rt.InvokeValue(vm.Keyword("uses"), []vm.Value{arg__10877_20})
+	arg__10882_21, callErr = rt.InvokeValue(vm.Keyword("uses"), []vm.Value{arg__10881_20})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10885_25, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_17})
+	arg__10889_25, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10886_26, callErr = rt.InvokeValue(vm.Keyword("uses"), []vm.Value{arg__10885_25})
+	arg__10890_26, callErr = rt.InvokeValue(vm.Keyword("uses"), []vm.Value{arg__10889_25})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v27, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "check-cross-block!").Deref(), []vm.Value{f_15, arg__10886_26})
+	v27, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "check-cross-block!").Deref(), []vm.Value{f_15, arg__10890_26})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10890_29, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{f_15})
+	arg__10894_29, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{f_15})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10895_32, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{f_15})
+	arg__10899_32, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{f_15})
 	if callErr != nil {
 		return nil, callErr
 	}
-	n_blocks_33, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__10895_32})
+	n_blocks_33, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__10899_32})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -2141,31 +2141,31 @@ b4:
 	}
 b5:
 	;
-	arg__10903_50, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_41})
+	arg__10907_50, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_41})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10908_53, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_41})
+	arg__10912_53, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_41})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10909_54, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-length").Deref(), []vm.Value{arg__10908_53})
+	arg__10913_54, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-length").Deref(), []vm.Value{arg__10912_53})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10916_57, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_41})
+	arg__10920_57, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_41})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10921_60, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_41})
+	arg__10925_60, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_41})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10922_61, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-length").Deref(), []vm.Value{arg__10921_60})
+	arg__10926_61, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-length").Deref(), []vm.Value{arg__10925_60})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v62, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "set-block-ip!").Deref(), []vm.Value{l_41, vm.Int(bid_40), arg__10922_61})
+	v62, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "set-block-ip!").Deref(), []vm.Value{l_41, vm.Int(bid_40), arg__10926_61})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -2196,15 +2196,15 @@ b7:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10938_79, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{f_70})
+	arg__10942_79, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{f_70})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10943_82, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{f_70})
+	arg__10947_82, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{f_70})
 	if callErr != nil {
 		return nil, callErr
 	}
-	n_blocks_83, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__10943_82})
+	n_blocks_83, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__10947_82})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -2246,15 +2246,15 @@ b9:
 	goto b11
 b10:
 	;
-	arg__10951_108, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{vm.Int(bid_102), f_101})
+	arg__10955_108, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{vm.Int(bid_102), f_101})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10958_111, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{vm.Int(bid_102), f_101})
+	arg__10962_111, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{vm.Int(bid_102), f_101})
 	if callErr != nil {
 		return nil, callErr
 	}
-	p_112, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__10958_111})
+	p_112, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__10962_111})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -2281,16 +2281,16 @@ b10:
 	}
 b11:
 	;
-	arg__10966_149, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-max-stack").Deref(), []vm.Value{c_143})
+	arg__10970_149, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-max-stack").Deref(), []vm.Value{c_143})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10974_153, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-max-stack").Deref(), []vm.Value{c_143})
+	arg__10978_153, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-max-stack").Deref(), []vm.Value{c_143})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__10976_154 = rt.AddValue(arg__10974_153, max_params_141)
-	v155, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-set-max-stack!").Deref(), []vm.Value{c_143, arg__10976_154})
+	arg__10980_154 = rt.AddValue(arg__10978_153, max_params_141)
+	v155, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-set-max-stack!").Deref(), []vm.Value{c_143, arg__10980_154})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -2338,13 +2338,13 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_9 vm.Value
 	var nid_10 vm.Value
 	var f_11 vm.Value
-	var case__11248_12 vm.Value
+	var case__11252_12 vm.Value
 	var op_13 vm.Value
 	var aux_14 vm.Value
 	var l_15 vm.Value
 	var nid_16 vm.Value
 	var f_17 vm.Value
-	var case__11248_18 vm.Value
+	var case__11252_18 vm.Value
 	var op_19 vm.Value
 	var aux_20 vm.Value
 	var v39 bool
@@ -2352,19 +2352,19 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_1058 vm.Value
 	var nid_1059 vm.Value
 	var f_1060 vm.Value
-	var case__11248_1061 vm.Value
+	var case__11252_1061 vm.Value
 	var op_1062 vm.Value
 	var aux_1063 vm.Value
 	var l_26 vm.Value
 	var nid_27 vm.Value
 	var f_28 vm.Value
-	var case__11248_29 vm.Value
+	var case__11252_29 vm.Value
 	var op_30 vm.Value
 	var aux_31 vm.Value
-	var arg__11269_42 vm.Value
-	var arg__11273_44 vm.Value
-	var arg__11278_47 vm.Value
-	var arg__11282_49 vm.Value
+	var arg__11273_42 vm.Value
+	var arg__11277_44 vm.Value
+	var arg__11282_47 vm.Value
+	var arg__11286_49 vm.Value
 	var idx_50 vm.Value
 	var v54 vm.Value
 	var v58 vm.Value
@@ -2372,7 +2372,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_32 vm.Value
 	var nid_33 vm.Value
 	var f_34 vm.Value
-	var case__11248_35 vm.Value
+	var case__11252_35 vm.Value
 	var op_36 vm.Value
 	var aux_37 vm.Value
 	var v75 bool
@@ -2380,24 +2380,24 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_1050 vm.Value
 	var nid_1051 vm.Value
 	var f_1052 vm.Value
-	var case__11248_1053 vm.Value
+	var case__11252_1053 vm.Value
 	var op_1054 vm.Value
 	var aux_1055 vm.Value
 	var l_62 vm.Value
 	var nid_63 vm.Value
 	var f_64 vm.Value
-	var case__11248_65 vm.Value
+	var case__11252_65 vm.Value
 	var op_66 vm.Value
 	var aux_67 vm.Value
-	var arg__11308_79 vm.Value
-	var arg__11316_83 vm.Value
+	var arg__11312_79 vm.Value
+	var arg__11320_83 vm.Value
 	var v84 vm.Value
 	var v88 vm.Value
 	var v90 vm.Value
 	var l_68 vm.Value
 	var nid_69 vm.Value
 	var f_70 vm.Value
-	var case__11248_71 vm.Value
+	var case__11252_71 vm.Value
 	var op_72 vm.Value
 	var aux_73 vm.Value
 	var v105 bool
@@ -2405,17 +2405,17 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_1042 vm.Value
 	var nid_1043 vm.Value
 	var f_1044 vm.Value
-	var case__11248_1045 vm.Value
+	var case__11252_1045 vm.Value
 	var op_1046 vm.Value
 	var aux_1047 vm.Value
 	var l_92 vm.Value
 	var nid_93 vm.Value
 	var f_94 vm.Value
-	var case__11248_95 vm.Value
+	var case__11252_95 vm.Value
 	var op_96 vm.Value
 	var aux_97 vm.Value
-	var arg__11330_108 vm.Value
-	var arg__11336_111 vm.Value
+	var arg__11334_108 vm.Value
+	var arg__11340_111 vm.Value
 	var idx_112 vm.Value
 	var v116 vm.Value
 	var v120 vm.Value
@@ -2423,7 +2423,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_98 vm.Value
 	var nid_99 vm.Value
 	var f_100 vm.Value
-	var case__11248_101 vm.Value
+	var case__11252_101 vm.Value
 	var op_102 vm.Value
 	var aux_103 vm.Value
 	var or__x_137 bool
@@ -2431,13 +2431,13 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_1034 vm.Value
 	var nid_1035 vm.Value
 	var f_1036 vm.Value
-	var case__11248_1037 vm.Value
+	var case__11252_1037 vm.Value
 	var op_1038 vm.Value
 	var aux_1039 vm.Value
 	var l_124 vm.Value
 	var nid_125 vm.Value
 	var f_126 vm.Value
-	var case__11248_127 vm.Value
+	var case__11252_127 vm.Value
 	var op_128 vm.Value
 	var aux_129 vm.Value
 	var v329 vm.Value
@@ -2445,7 +2445,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_130 vm.Value
 	var nid_131 vm.Value
 	var f_132 vm.Value
-	var case__11248_133 vm.Value
+	var case__11252_133 vm.Value
 	var op_134 vm.Value
 	var aux_135 vm.Value
 	var or__x_348 bool
@@ -2453,20 +2453,20 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_1026 vm.Value
 	var nid_1027 vm.Value
 	var f_1028 vm.Value
-	var case__11248_1029 vm.Value
+	var case__11252_1029 vm.Value
 	var op_1030 vm.Value
 	var aux_1031 vm.Value
 	var l_138 vm.Value
 	var nid_139 vm.Value
 	var f_140 vm.Value
-	var case__11248_141 vm.Value
+	var case__11252_141 vm.Value
 	var op_142 vm.Value
 	var aux_143 vm.Value
 	var or__x_144 bool
 	var l_145 vm.Value
 	var nid_146 vm.Value
 	var f_147 vm.Value
-	var case__11248_148 vm.Value
+	var case__11252_148 vm.Value
 	var op_149 vm.Value
 	var aux_150 vm.Value
 	var or__x_151 bool
@@ -2475,21 +2475,21 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_320 vm.Value
 	var nid_321 vm.Value
 	var f_322 vm.Value
-	var case__11248_323 vm.Value
+	var case__11252_323 vm.Value
 	var op_324 vm.Value
 	var aux_325 vm.Value
 	var or__x_326 vm.Value
 	var l_156 vm.Value
 	var nid_157 vm.Value
 	var f_158 vm.Value
-	var case__11248_159 vm.Value
+	var case__11252_159 vm.Value
 	var op_160 vm.Value
 	var aux_161 vm.Value
 	var or__x_162 bool
 	var l_163 vm.Value
 	var nid_164 vm.Value
 	var f_165 vm.Value
-	var case__11248_166 vm.Value
+	var case__11252_166 vm.Value
 	var op_167 vm.Value
 	var aux_168 vm.Value
 	var or__x_169 bool
@@ -2498,21 +2498,21 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_311 vm.Value
 	var nid_312 vm.Value
 	var f_313 vm.Value
-	var case__11248_314 vm.Value
+	var case__11252_314 vm.Value
 	var op_315 vm.Value
 	var aux_316 vm.Value
 	var or__x_317 vm.Value
 	var l_174 vm.Value
 	var nid_175 vm.Value
 	var f_176 vm.Value
-	var case__11248_177 vm.Value
+	var case__11252_177 vm.Value
 	var op_178 vm.Value
 	var aux_179 vm.Value
 	var or__x_180 bool
 	var l_181 vm.Value
 	var nid_182 vm.Value
 	var f_183 vm.Value
-	var case__11248_184 vm.Value
+	var case__11252_184 vm.Value
 	var op_185 vm.Value
 	var aux_186 vm.Value
 	var or__x_187 bool
@@ -2521,21 +2521,21 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_302 vm.Value
 	var nid_303 vm.Value
 	var f_304 vm.Value
-	var case__11248_305 vm.Value
+	var case__11252_305 vm.Value
 	var op_306 vm.Value
 	var aux_307 vm.Value
 	var or__x_308 vm.Value
 	var l_192 vm.Value
 	var nid_193 vm.Value
 	var f_194 vm.Value
-	var case__11248_195 vm.Value
+	var case__11252_195 vm.Value
 	var op_196 vm.Value
 	var aux_197 vm.Value
 	var or__x_198 bool
 	var l_199 vm.Value
 	var nid_200 vm.Value
 	var f_201 vm.Value
-	var case__11248_202 vm.Value
+	var case__11252_202 vm.Value
 	var op_203 vm.Value
 	var aux_204 vm.Value
 	var or__x_205 bool
@@ -2544,21 +2544,21 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_293 vm.Value
 	var nid_294 vm.Value
 	var f_295 vm.Value
-	var case__11248_296 vm.Value
+	var case__11252_296 vm.Value
 	var op_297 vm.Value
 	var aux_298 vm.Value
 	var or__x_299 vm.Value
 	var l_210 vm.Value
 	var nid_211 vm.Value
 	var f_212 vm.Value
-	var case__11248_213 vm.Value
+	var case__11252_213 vm.Value
 	var op_214 vm.Value
 	var aux_215 vm.Value
 	var or__x_216 bool
 	var l_217 vm.Value
 	var nid_218 vm.Value
 	var f_219 vm.Value
-	var case__11248_220 vm.Value
+	var case__11252_220 vm.Value
 	var op_221 vm.Value
 	var aux_222 vm.Value
 	var or__x_223 bool
@@ -2567,21 +2567,21 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_284 vm.Value
 	var nid_285 vm.Value
 	var f_286 vm.Value
-	var case__11248_287 vm.Value
+	var case__11252_287 vm.Value
 	var op_288 vm.Value
 	var aux_289 vm.Value
 	var or__x_290 vm.Value
 	var l_228 vm.Value
 	var nid_229 vm.Value
 	var f_230 vm.Value
-	var case__11248_231 vm.Value
+	var case__11252_231 vm.Value
 	var op_232 vm.Value
 	var aux_233 vm.Value
 	var or__x_234 bool
 	var l_235 vm.Value
 	var nid_236 vm.Value
 	var f_237 vm.Value
-	var case__11248_238 vm.Value
+	var case__11252_238 vm.Value
 	var op_239 vm.Value
 	var aux_240 vm.Value
 	var or__x_241 bool
@@ -2590,21 +2590,21 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_275 vm.Value
 	var nid_276 vm.Value
 	var f_277 vm.Value
-	var case__11248_278 vm.Value
+	var case__11252_278 vm.Value
 	var op_279 vm.Value
 	var aux_280 vm.Value
 	var or__x_281 vm.Value
 	var l_246 vm.Value
 	var nid_247 vm.Value
 	var f_248 vm.Value
-	var case__11248_249 vm.Value
+	var case__11252_249 vm.Value
 	var op_250 vm.Value
 	var aux_251 vm.Value
 	var or__x_252 bool
 	var l_253 vm.Value
 	var nid_254 vm.Value
 	var f_255 vm.Value
-	var case__11248_256 vm.Value
+	var case__11252_256 vm.Value
 	var op_257 vm.Value
 	var aux_258 vm.Value
 	var or__x_259 bool
@@ -2613,21 +2613,21 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_266 vm.Value
 	var nid_267 vm.Value
 	var f_268 vm.Value
-	var case__11248_269 vm.Value
+	var case__11252_269 vm.Value
 	var op_270 vm.Value
 	var aux_271 vm.Value
 	var or__x_272 vm.Value
 	var l_335 vm.Value
 	var nid_336 vm.Value
 	var f_337 vm.Value
-	var case__11248_338 vm.Value
+	var case__11252_338 vm.Value
 	var op_339 vm.Value
 	var aux_340 vm.Value
 	var v378 vm.Value
 	var l_341 vm.Value
 	var nid_342 vm.Value
 	var f_343 vm.Value
-	var case__11248_344 vm.Value
+	var case__11252_344 vm.Value
 	var op_345 vm.Value
 	var aux_346 vm.Value
 	var v393 bool
@@ -2635,20 +2635,20 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_1018 vm.Value
 	var nid_1019 vm.Value
 	var f_1020 vm.Value
-	var case__11248_1021 vm.Value
+	var case__11252_1021 vm.Value
 	var op_1022 vm.Value
 	var aux_1023 vm.Value
 	var l_349 vm.Value
 	var nid_350 vm.Value
 	var f_351 vm.Value
-	var case__11248_352 vm.Value
+	var case__11252_352 vm.Value
 	var op_353 vm.Value
 	var aux_354 vm.Value
 	var or__x_355 bool
 	var l_356 vm.Value
 	var nid_357 vm.Value
 	var f_358 vm.Value
-	var case__11248_359 vm.Value
+	var case__11252_359 vm.Value
 	var op_360 vm.Value
 	var aux_361 vm.Value
 	var or__x_362 bool
@@ -2657,27 +2657,27 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_369 vm.Value
 	var nid_370 vm.Value
 	var f_371 vm.Value
-	var case__11248_372 vm.Value
+	var case__11252_372 vm.Value
 	var op_373 vm.Value
 	var aux_374 vm.Value
 	var or__x_375 vm.Value
 	var l_380 vm.Value
 	var nid_381 vm.Value
 	var f_382 vm.Value
-	var case__11248_383 vm.Value
+	var case__11252_383 vm.Value
 	var op_384 vm.Value
 	var aux_385 vm.Value
-	var arg__11402_397 vm.Value
-	var arg__11410_401 vm.Value
+	var arg__11406_397 vm.Value
+	var arg__11414_401 vm.Value
 	var v402 vm.Value
-	var arg__11415_404 vm.Value
-	var arg__11422_409 vm.Value
-	var arg__11423_411 vm.Value
+	var arg__11419_404 vm.Value
+	var arg__11426_409 vm.Value
+	var arg__11427_411 vm.Value
 	var v412 vm.Value
 	var l_386 vm.Value
 	var nid_387 vm.Value
 	var f_388 vm.Value
-	var case__11248_389 vm.Value
+	var case__11252_389 vm.Value
 	var op_390 vm.Value
 	var aux_391 vm.Value
 	var v427 bool
@@ -2685,13 +2685,13 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_1010 vm.Value
 	var nid_1011 vm.Value
 	var f_1012 vm.Value
-	var case__11248_1013 vm.Value
+	var case__11252_1013 vm.Value
 	var op_1014 vm.Value
 	var aux_1015 vm.Value
 	var l_414 vm.Value
 	var nid_415 vm.Value
 	var f_416 vm.Value
-	var case__11248_417 vm.Value
+	var case__11252_417 vm.Value
 	var op_418 vm.Value
 	var aux_419 vm.Value
 	var v432 vm.Value
@@ -2699,7 +2699,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_420 vm.Value
 	var nid_421 vm.Value
 	var f_422 vm.Value
-	var case__11248_423 vm.Value
+	var case__11252_423 vm.Value
 	var op_424 vm.Value
 	var aux_425 vm.Value
 	var v451 bool
@@ -2707,22 +2707,22 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_1002 vm.Value
 	var nid_1003 vm.Value
 	var f_1004 vm.Value
-	var case__11248_1005 vm.Value
+	var case__11252_1005 vm.Value
 	var op_1006 vm.Value
 	var aux_1007 vm.Value
 	var l_438 vm.Value
 	var nid_439 vm.Value
 	var f_440 vm.Value
-	var case__11248_441 vm.Value
+	var case__11252_441 vm.Value
 	var op_442 vm.Value
 	var aux_443 vm.Value
-	var arg__11446_455 vm.Value
-	var arg__11454_459 vm.Value
+	var arg__11450_455 vm.Value
+	var arg__11458_459 vm.Value
 	var v460 vm.Value
 	var l_444 vm.Value
 	var nid_445 vm.Value
 	var f_446 vm.Value
-	var case__11248_447 vm.Value
+	var case__11252_447 vm.Value
 	var op_448 vm.Value
 	var aux_449 vm.Value
 	var v475 bool
@@ -2730,20 +2730,20 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_994 vm.Value
 	var nid_995 vm.Value
 	var f_996 vm.Value
-	var case__11248_997 vm.Value
+	var case__11252_997 vm.Value
 	var op_998 vm.Value
 	var aux_999 vm.Value
 	var l_462 vm.Value
 	var nid_463 vm.Value
 	var f_464 vm.Value
-	var case__11248_465 vm.Value
+	var case__11252_465 vm.Value
 	var op_466 vm.Value
 	var aux_467 vm.Value
 	var v480 vm.Value
 	var l_468 vm.Value
 	var nid_469 vm.Value
 	var f_470 vm.Value
-	var case__11248_471 vm.Value
+	var case__11252_471 vm.Value
 	var op_472 vm.Value
 	var aux_473 vm.Value
 	var v495 bool
@@ -2751,33 +2751,33 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_986 vm.Value
 	var nid_987 vm.Value
 	var f_988 vm.Value
-	var case__11248_989 vm.Value
+	var case__11252_989 vm.Value
 	var op_990 vm.Value
 	var aux_991 vm.Value
 	var l_482 vm.Value
 	var nid_483 vm.Value
 	var f_484 vm.Value
-	var case__11248_485 vm.Value
+	var case__11252_485 vm.Value
 	var op_486 vm.Value
 	var aux_487 vm.Value
 	var args_498 vm.Value
 	var target_500 vm.Value
 	var argc_502 vm.Value
-	var arg__11480_504 vm.Value
-	var arg__11487_507 vm.Value
+	var arg__11484_504 vm.Value
+	var arg__11491_507 vm.Value
 	var target_params_508 vm.Value
 	var cur_sp_510 vm.Value
 	var drop_count_511 vm.Value
-	var arg__11498_514 vm.Value
-	var arg__11499_515 vm.Value
-	var arg__11506_519 vm.Value
-	var arg__11507_520 vm.Value
+	var arg__11502_514 vm.Value
+	var arg__11503_515 vm.Value
+	var arg__11510_519 vm.Value
+	var arg__11511_520 vm.Value
 	var cur_junk_521 vm.Value
 	var v551 vm.Value
 	var l_488 vm.Value
 	var nid_489 vm.Value
 	var f_490 vm.Value
-	var case__11248_491 vm.Value
+	var case__11252_491 vm.Value
 	var op_492 vm.Value
 	var aux_493 vm.Value
 	var v689 bool
@@ -2785,13 +2785,13 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_978 vm.Value
 	var nid_979 vm.Value
 	var f_980 vm.Value
-	var case__11248_981 vm.Value
+	var case__11252_981 vm.Value
 	var op_982 vm.Value
 	var aux_983 vm.Value
 	var l_522 vm.Value
 	var nid_523 vm.Value
 	var f_524 vm.Value
-	var case__11248_525 vm.Value
+	var case__11252_525 vm.Value
 	var op_526 vm.Value
 	var bt_527 vm.Value
 	var aux_528 vm.Value
@@ -2803,19 +2803,19 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var drop_count_534 vm.Value
 	var cur_junk_535 vm.Value
 	var ignore_553 vm.Value
-	var arg__11516_555 vm.Value
-	var arg__11524_558 vm.Value
+	var arg__11520_555 vm.Value
+	var arg__11528_558 vm.Value
 	var off_ip_559 vm.Value
 	var v561 vm.Value
-	var arg__11537_564 vm.Value
-	var arg__11544_570 vm.Value
-	var arg__11557_580 vm.Value
+	var arg__11541_564 vm.Value
+	var arg__11548_570 vm.Value
+	var arg__11561_580 vm.Value
 	var v581 vm.Value
 	var v583 vm.Value
 	var l_536 vm.Value
 	var nid_537 vm.Value
 	var f_538 vm.Value
-	var case__11248_539 vm.Value
+	var case__11252_539 vm.Value
 	var op_540 vm.Value
 	var bt_541 vm.Value
 	var aux_542 vm.Value
@@ -2830,7 +2830,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_661 vm.Value
 	var nid_662 vm.Value
 	var f_663 vm.Value
-	var case__11248_664 vm.Value
+	var case__11252_664 vm.Value
 	var op_665 vm.Value
 	var bt_666 vm.Value
 	var aux_667 vm.Value
@@ -2844,7 +2844,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_585 vm.Value
 	var nid_586 vm.Value
 	var f_587 vm.Value
-	var case__11248_588 vm.Value
+	var case__11252_588 vm.Value
 	var op_589 vm.Value
 	var bt_590 vm.Value
 	var aux_591 vm.Value
@@ -2857,14 +2857,14 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var cur_junk_598 vm.Value
 	var arg_ip_618 vm.Value
 	var v620 vm.Value
-	var arg__11581_623 vm.Value
-	var arg__11588_629 vm.Value
-	var arg__11601_639 vm.Value
+	var arg__11585_623 vm.Value
+	var arg__11592_629 vm.Value
+	var arg__11605_639 vm.Value
 	var v640 vm.Value
 	var l_599 vm.Value
 	var nid_600 vm.Value
 	var f_601 vm.Value
-	var case__11248_602 vm.Value
+	var case__11252_602 vm.Value
 	var op_603 vm.Value
 	var bt_604 vm.Value
 	var aux_605 vm.Value
@@ -2879,7 +2879,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_645 vm.Value
 	var nid_646 vm.Value
 	var f_647 vm.Value
-	var case__11248_648 vm.Value
+	var case__11252_648 vm.Value
 	var op_649 vm.Value
 	var bt_650 vm.Value
 	var aux_651 vm.Value
@@ -2893,7 +2893,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_676 vm.Value
 	var nid_677 vm.Value
 	var f_678 vm.Value
-	var case__11248_679 vm.Value
+	var case__11252_679 vm.Value
 	var op_680 vm.Value
 	var aux_681 vm.Value
 	var ft_692 vm.Value
@@ -2901,23 +2901,23 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var ft_target_696 vm.Value
 	var tt_target_698 vm.Value
 	var arg_ip_702 vm.Value
-	var arg__11628_705 vm.Value
-	var arg__11629_706 vm.Value
-	var arg__11636_710 vm.Value
-	var arg__11637_711 vm.Value
+	var arg__11632_705 vm.Value
+	var arg__11633_706 vm.Value
+	var arg__11640_710 vm.Value
+	var arg__11641_711 vm.Value
 	var cur_junk_712 vm.Value
-	var arg__11641_714 vm.Value
-	var arg__11643_715 vm.Value
-	var arg__11650_718 vm.Value
-	var arg__11657_721 vm.Value
-	var arg__11658_722 vm.Value
+	var arg__11645_714 vm.Value
+	var arg__11647_715 vm.Value
+	var arg__11654_718 vm.Value
+	var arg__11661_721 vm.Value
+	var arg__11662_722 vm.Value
 	var v723 vm.Value
 	var target_junk_724 vm.Value
 	var v726 vm.Value
 	var v728 vm.Value
-	var arg__11677_731 vm.Value
-	var arg__11684_737 vm.Value
-	var arg__11697_747 vm.Value
+	var arg__11681_731 vm.Value
+	var arg__11688_737 vm.Value
+	var arg__11701_747 vm.Value
 	var v748 vm.Value
 	var v752 vm.Value
 	var my_block_754 vm.Value
@@ -2926,7 +2926,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_682 vm.Value
 	var nid_683 vm.Value
 	var f_684 vm.Value
-	var case__11248_685 vm.Value
+	var case__11252_685 vm.Value
 	var op_686 vm.Value
 	var aux_687 vm.Value
 	var v849 bool
@@ -2934,13 +2934,13 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_970 vm.Value
 	var nid_971 vm.Value
 	var f_972 vm.Value
-	var case__11248_973 vm.Value
+	var case__11252_973 vm.Value
 	var op_974 vm.Value
 	var aux_975 vm.Value
 	var l_756 vm.Value
 	var nid_757 vm.Value
 	var f_758 vm.Value
-	var case__11248_759 vm.Value
+	var case__11252_759 vm.Value
 	var op_760 vm.Value
 	var ct_761 vm.Value
 	var aux_762 vm.Value
@@ -2954,14 +2954,14 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var my_block_770 vm.Value
 	var next_block_id_771 vm.Value
 	var arg_ip2_794 vm.Value
-	var arg__11725_797 vm.Value
-	var arg__11732_803 vm.Value
-	var arg__11745_813 vm.Value
+	var arg__11729_797 vm.Value
+	var arg__11736_803 vm.Value
+	var arg__11749_813 vm.Value
 	var v814 vm.Value
 	var l_772 vm.Value
 	var nid_773 vm.Value
 	var f_774 vm.Value
-	var case__11248_775 vm.Value
+	var case__11252_775 vm.Value
 	var op_776 vm.Value
 	var ct_777 vm.Value
 	var aux_778 vm.Value
@@ -2978,7 +2978,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_819 vm.Value
 	var nid_820 vm.Value
 	var f_821 vm.Value
-	var case__11248_822 vm.Value
+	var case__11252_822 vm.Value
 	var op_823 vm.Value
 	var ct_824 vm.Value
 	var aux_825 vm.Value
@@ -2994,18 +2994,18 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_836 vm.Value
 	var nid_837 vm.Value
 	var f_838 vm.Value
-	var case__11248_839 vm.Value
+	var case__11252_839 vm.Value
 	var op_840 vm.Value
 	var aux_841 vm.Value
-	var arg__11754_853 vm.Value
-	var arg__11762_857 vm.Value
+	var arg__11758_853 vm.Value
+	var arg__11766_857 vm.Value
 	var v858 vm.Value
 	var v862 vm.Value
 	var v864 vm.Value
 	var l_842 vm.Value
 	var nid_843 vm.Value
 	var f_844 vm.Value
-	var case__11248_845 vm.Value
+	var case__11252_845 vm.Value
 	var op_846 vm.Value
 	var aux_847 vm.Value
 	var v879 bool
@@ -3013,20 +3013,20 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_962 vm.Value
 	var nid_963 vm.Value
 	var f_964 vm.Value
-	var case__11248_965 vm.Value
+	var case__11252_965 vm.Value
 	var op_966 vm.Value
 	var aux_967 vm.Value
 	var l_866 vm.Value
 	var nid_867 vm.Value
 	var f_868 vm.Value
-	var case__11248_869 vm.Value
+	var case__11252_869 vm.Value
 	var op_870 vm.Value
 	var aux_871 vm.Value
 	var v884 vm.Value
 	var l_872 vm.Value
 	var nid_873 vm.Value
 	var f_874 vm.Value
-	var case__11248_875 vm.Value
+	var case__11252_875 vm.Value
 	var op_876 vm.Value
 	var aux_877 vm.Value
 	var v899 bool
@@ -3034,13 +3034,13 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_954 vm.Value
 	var nid_955 vm.Value
 	var f_956 vm.Value
-	var case__11248_957 vm.Value
+	var case__11252_957 vm.Value
 	var op_958 vm.Value
 	var aux_959 vm.Value
 	var l_886 vm.Value
 	var nid_887 vm.Value
 	var f_888 vm.Value
-	var case__11248_889 vm.Value
+	var case__11252_889 vm.Value
 	var op_890 vm.Value
 	var aux_891 vm.Value
 	var v904 vm.Value
@@ -3048,40 +3048,40 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_892 vm.Value
 	var nid_893 vm.Value
 	var f_894 vm.Value
-	var case__11248_895 vm.Value
+	var case__11252_895 vm.Value
 	var op_896 vm.Value
 	var aux_897 vm.Value
 	var v945 vm.Value
 	var l_946 vm.Value
 	var nid_947 vm.Value
 	var f_948 vm.Value
-	var case__11248_949 vm.Value
+	var case__11252_949 vm.Value
 	var op_950 vm.Value
 	var aux_951 vm.Value
 	var l_910 vm.Value
 	var nid_911 vm.Value
 	var f_912 vm.Value
-	var case__11248_913 vm.Value
+	var case__11252_913 vm.Value
 	var op_914 vm.Value
 	var aux_915 vm.Value
-	var arg__11799_927 vm.Value
-	var arg__11806_932 vm.Value
+	var arg__11803_927 vm.Value
+	var arg__11810_932 vm.Value
 	var v933 vm.Value
 	var l_916 vm.Value
 	var nid_917 vm.Value
 	var f_918 vm.Value
-	var case__11248_919 vm.Value
+	var case__11252_919 vm.Value
 	var op_920 vm.Value
 	var aux_921 vm.Value
 	var v937 vm.Value
 	var l_938 vm.Value
 	var nid_939 vm.Value
 	var f_940 vm.Value
-	var case__11248_941 vm.Value
+	var case__11252_941 vm.Value
 	var op_942 vm.Value
 	var aux_943 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = f_4, op_6, aux_8, v22, l_9, nid_10, f_11, case__11248_12, op_13, aux_14, l_15, nid_16, f_17, case__11248_18, op_19, aux_20, v39, v1057, l_1058, nid_1059, f_1060, case__11248_1061, op_1062, aux_1063, l_26, nid_27, f_28, case__11248_29, op_30, aux_31, arg__11269_42, arg__11273_44, arg__11278_47, arg__11282_49, idx_50, v54, v58, v60, l_32, nid_33, f_34, case__11248_35, op_36, aux_37, v75, v1049, l_1050, nid_1051, f_1052, case__11248_1053, op_1054, aux_1055, l_62, nid_63, f_64, case__11248_65, op_66, aux_67, arg__11308_79, arg__11316_83, v84, v88, v90, l_68, nid_69, f_70, case__11248_71, op_72, aux_73, v105, v1041, l_1042, nid_1043, f_1044, case__11248_1045, op_1046, aux_1047, l_92, nid_93, f_94, case__11248_95, op_96, aux_97, arg__11330_108, arg__11336_111, idx_112, v116, v120, v122, l_98, nid_99, f_100, case__11248_101, op_102, aux_103, or__x_137, v1033, l_1034, nid_1035, f_1036, case__11248_1037, op_1038, aux_1039, l_124, nid_125, f_126, case__11248_127, op_128, aux_129, v329, v333, l_130, nid_131, f_132, case__11248_133, op_134, aux_135, or__x_348, v1025, l_1026, nid_1027, f_1028, case__11248_1029, op_1030, aux_1031, l_138, nid_139, f_140, case__11248_141, op_142, aux_143, or__x_144, l_145, nid_146, f_147, case__11248_148, op_149, aux_150, or__x_151, or__x_155, v319, l_320, nid_321, f_322, case__11248_323, op_324, aux_325, or__x_326, l_156, nid_157, f_158, case__11248_159, op_160, aux_161, or__x_162, l_163, nid_164, f_165, case__11248_166, op_167, aux_168, or__x_169, or__x_173, v310, l_311, nid_312, f_313, case__11248_314, op_315, aux_316, or__x_317, l_174, nid_175, f_176, case__11248_177, op_178, aux_179, or__x_180, l_181, nid_182, f_183, case__11248_184, op_185, aux_186, or__x_187, or__x_191, v301, l_302, nid_303, f_304, case__11248_305, op_306, aux_307, or__x_308, l_192, nid_193, f_194, case__11248_195, op_196, aux_197, or__x_198, l_199, nid_200, f_201, case__11248_202, op_203, aux_204, or__x_205, or__x_209, v292, l_293, nid_294, f_295, case__11248_296, op_297, aux_298, or__x_299, l_210, nid_211, f_212, case__11248_213, op_214, aux_215, or__x_216, l_217, nid_218, f_219, case__11248_220, op_221, aux_222, or__x_223, or__x_227, v283, l_284, nid_285, f_286, case__11248_287, op_288, aux_289, or__x_290, l_228, nid_229, f_230, case__11248_231, op_232, aux_233, or__x_234, l_235, nid_236, f_237, case__11248_238, op_239, aux_240, or__x_241, or__x_245, v274, l_275, nid_276, f_277, case__11248_278, op_279, aux_280, or__x_281, l_246, nid_247, f_248, case__11248_249, op_250, aux_251, or__x_252, l_253, nid_254, f_255, case__11248_256, op_257, aux_258, or__x_259, v263, v265, l_266, nid_267, f_268, case__11248_269, op_270, aux_271, or__x_272, l_335, nid_336, f_337, case__11248_338, op_339, aux_340, v378, l_341, nid_342, f_343, case__11248_344, op_345, aux_346, v393, v1017, l_1018, nid_1019, f_1020, case__11248_1021, op_1022, aux_1023, l_349, nid_350, f_351, case__11248_352, op_353, aux_354, or__x_355, l_356, nid_357, f_358, case__11248_359, op_360, aux_361, or__x_362, v366, v368, l_369, nid_370, f_371, case__11248_372, op_373, aux_374, or__x_375, l_380, nid_381, f_382, case__11248_383, op_384, aux_385, arg__11402_397, arg__11410_401, v402, arg__11415_404, arg__11422_409, arg__11423_411, v412, l_386, nid_387, f_388, case__11248_389, op_390, aux_391, v427, v1009, l_1010, nid_1011, f_1012, case__11248_1013, op_1014, aux_1015, l_414, nid_415, f_416, case__11248_417, op_418, aux_419, v432, v436, l_420, nid_421, f_422, case__11248_423, op_424, aux_425, v451, v1001, l_1002, nid_1003, f_1004, case__11248_1005, op_1006, aux_1007, l_438, nid_439, f_440, case__11248_441, op_442, aux_443, arg__11446_455, arg__11454_459, v460, l_444, nid_445, f_446, case__11248_447, op_448, aux_449, v475, v993, l_994, nid_995, f_996, case__11248_997, op_998, aux_999, l_462, nid_463, f_464, case__11248_465, op_466, aux_467, v480, l_468, nid_469, f_470, case__11248_471, op_472, aux_473, v495, v985, l_986, nid_987, f_988, case__11248_989, op_990, aux_991, l_482, nid_483, f_484, case__11248_485, op_486, aux_487, args_498, target_500, argc_502, arg__11480_504, arg__11487_507, target_params_508, cur_sp_510, drop_count_511, arg__11498_514, arg__11499_515, arg__11506_519, arg__11507_520, cur_junk_521, v551, l_488, nid_489, f_490, case__11248_491, op_492, aux_493, v689, v977, l_978, nid_979, f_980, case__11248_981, op_982, aux_983, l_522, nid_523, f_524, case__11248_525, op_526, bt_527, aux_528, args_529, target_530, argc_531, target_params_532, cur_sp_533, drop_count_534, cur_junk_535, ignore_553, arg__11516_555, arg__11524_558, off_ip_559, v561, arg__11537_564, arg__11544_570, arg__11557_580, v581, v583, l_536, nid_537, f_538, case__11248_539, op_540, bt_541, aux_542, args_543, target_544, argc_545, target_params_546, cur_sp_547, drop_count_548, cur_junk_549, v660, l_661, nid_662, f_663, case__11248_664, op_665, bt_666, aux_667, args_668, target_669, argc_670, target_params_671, cur_sp_672, drop_count_673, cur_junk_674, l_585, nid_586, f_587, case__11248_588, op_589, bt_590, aux_591, args_592, target_593, argc_594, target_params_595, cur_sp_596, drop_count_597, cur_junk_598, arg_ip_618, v620, arg__11581_623, arg__11588_629, arg__11601_639, v640, l_599, nid_600, f_601, case__11248_602, op_603, bt_604, aux_605, args_606, target_607, argc_608, target_params_609, cur_sp_610, drop_count_611, cur_junk_612, v644, l_645, nid_646, f_647, case__11248_648, op_649, bt_650, aux_651, args_652, target_653, argc_654, target_params_655, cur_sp_656, drop_count_657, cur_junk_658, l_676, nid_677, f_678, case__11248_679, op_680, aux_681, ft_692, tt_694, ft_target_696, tt_target_698, arg_ip_702, arg__11628_705, arg__11629_706, arg__11636_710, arg__11637_711, cur_junk_712, arg__11641_714, arg__11643_715, arg__11650_718, arg__11657_721, arg__11658_722, v723, target_junk_724, v726, v728, arg__11677_731, arg__11684_737, arg__11697_747, v748, v752, my_block_754, next_block_id_755, v789, l_682, nid_683, f_684, case__11248_685, op_686, aux_687, v849, v969, l_970, nid_971, f_972, case__11248_973, op_974, aux_975, l_756, nid_757, f_758, case__11248_759, op_760, ct_761, aux_762, ft_763, tt_764, ft_target_765, tt_target_766, arg_ip_767, cur_junk_768, target_junk_769, my_block_770, next_block_id_771, arg_ip2_794, arg__11725_797, arg__11732_803, arg__11745_813, v814, l_772, nid_773, f_774, case__11248_775, op_776, ct_777, aux_778, ft_779, tt_780, ft_target_781, tt_target_782, arg_ip_783, cur_junk_784, target_junk_785, my_block_786, next_block_id_787, v818, l_819, nid_820, f_821, case__11248_822, op_823, ct_824, aux_825, ft_826, tt_827, ft_target_828, tt_target_829, arg_ip_830, cur_junk_831, target_junk_832, my_block_833, next_block_id_834, l_836, nid_837, f_838, case__11248_839, op_840, aux_841, arg__11754_853, arg__11762_857, v858, v862, v864, l_842, nid_843, f_844, case__11248_845, op_846, aux_847, v879, v961, l_962, nid_963, f_964, case__11248_965, op_966, aux_967, l_866, nid_867, f_868, case__11248_869, op_870, aux_871, v884, l_872, nid_873, f_874, case__11248_875, op_876, aux_877, v899, v953, l_954, nid_955, f_956, case__11248_957, op_958, aux_959, l_886, nid_887, f_888, case__11248_889, op_890, aux_891, v904, v908, l_892, nid_893, f_894, case__11248_895, op_896, aux_897, v945, l_946, nid_947, f_948, case__11248_949, op_950, aux_951, l_910, nid_911, f_912, case__11248_913, op_914, aux_915, arg__11799_927, arg__11806_932, v933, l_916, nid_917, f_918, case__11248_919, op_920, aux_921, v937, l_938, nid_939, f_940, case__11248_941, op_942, aux_943
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = f_4, op_6, aux_8, v22, l_9, nid_10, f_11, case__11252_12, op_13, aux_14, l_15, nid_16, f_17, case__11252_18, op_19, aux_20, v39, v1057, l_1058, nid_1059, f_1060, case__11252_1061, op_1062, aux_1063, l_26, nid_27, f_28, case__11252_29, op_30, aux_31, arg__11273_42, arg__11277_44, arg__11282_47, arg__11286_49, idx_50, v54, v58, v60, l_32, nid_33, f_34, case__11252_35, op_36, aux_37, v75, v1049, l_1050, nid_1051, f_1052, case__11252_1053, op_1054, aux_1055, l_62, nid_63, f_64, case__11252_65, op_66, aux_67, arg__11312_79, arg__11320_83, v84, v88, v90, l_68, nid_69, f_70, case__11252_71, op_72, aux_73, v105, v1041, l_1042, nid_1043, f_1044, case__11252_1045, op_1046, aux_1047, l_92, nid_93, f_94, case__11252_95, op_96, aux_97, arg__11334_108, arg__11340_111, idx_112, v116, v120, v122, l_98, nid_99, f_100, case__11252_101, op_102, aux_103, or__x_137, v1033, l_1034, nid_1035, f_1036, case__11252_1037, op_1038, aux_1039, l_124, nid_125, f_126, case__11252_127, op_128, aux_129, v329, v333, l_130, nid_131, f_132, case__11252_133, op_134, aux_135, or__x_348, v1025, l_1026, nid_1027, f_1028, case__11252_1029, op_1030, aux_1031, l_138, nid_139, f_140, case__11252_141, op_142, aux_143, or__x_144, l_145, nid_146, f_147, case__11252_148, op_149, aux_150, or__x_151, or__x_155, v319, l_320, nid_321, f_322, case__11252_323, op_324, aux_325, or__x_326, l_156, nid_157, f_158, case__11252_159, op_160, aux_161, or__x_162, l_163, nid_164, f_165, case__11252_166, op_167, aux_168, or__x_169, or__x_173, v310, l_311, nid_312, f_313, case__11252_314, op_315, aux_316, or__x_317, l_174, nid_175, f_176, case__11252_177, op_178, aux_179, or__x_180, l_181, nid_182, f_183, case__11252_184, op_185, aux_186, or__x_187, or__x_191, v301, l_302, nid_303, f_304, case__11252_305, op_306, aux_307, or__x_308, l_192, nid_193, f_194, case__11252_195, op_196, aux_197, or__x_198, l_199, nid_200, f_201, case__11252_202, op_203, aux_204, or__x_205, or__x_209, v292, l_293, nid_294, f_295, case__11252_296, op_297, aux_298, or__x_299, l_210, nid_211, f_212, case__11252_213, op_214, aux_215, or__x_216, l_217, nid_218, f_219, case__11252_220, op_221, aux_222, or__x_223, or__x_227, v283, l_284, nid_285, f_286, case__11252_287, op_288, aux_289, or__x_290, l_228, nid_229, f_230, case__11252_231, op_232, aux_233, or__x_234, l_235, nid_236, f_237, case__11252_238, op_239, aux_240, or__x_241, or__x_245, v274, l_275, nid_276, f_277, case__11252_278, op_279, aux_280, or__x_281, l_246, nid_247, f_248, case__11252_249, op_250, aux_251, or__x_252, l_253, nid_254, f_255, case__11252_256, op_257, aux_258, or__x_259, v263, v265, l_266, nid_267, f_268, case__11252_269, op_270, aux_271, or__x_272, l_335, nid_336, f_337, case__11252_338, op_339, aux_340, v378, l_341, nid_342, f_343, case__11252_344, op_345, aux_346, v393, v1017, l_1018, nid_1019, f_1020, case__11252_1021, op_1022, aux_1023, l_349, nid_350, f_351, case__11252_352, op_353, aux_354, or__x_355, l_356, nid_357, f_358, case__11252_359, op_360, aux_361, or__x_362, v366, v368, l_369, nid_370, f_371, case__11252_372, op_373, aux_374, or__x_375, l_380, nid_381, f_382, case__11252_383, op_384, aux_385, arg__11406_397, arg__11414_401, v402, arg__11419_404, arg__11426_409, arg__11427_411, v412, l_386, nid_387, f_388, case__11252_389, op_390, aux_391, v427, v1009, l_1010, nid_1011, f_1012, case__11252_1013, op_1014, aux_1015, l_414, nid_415, f_416, case__11252_417, op_418, aux_419, v432, v436, l_420, nid_421, f_422, case__11252_423, op_424, aux_425, v451, v1001, l_1002, nid_1003, f_1004, case__11252_1005, op_1006, aux_1007, l_438, nid_439, f_440, case__11252_441, op_442, aux_443, arg__11450_455, arg__11458_459, v460, l_444, nid_445, f_446, case__11252_447, op_448, aux_449, v475, v993, l_994, nid_995, f_996, case__11252_997, op_998, aux_999, l_462, nid_463, f_464, case__11252_465, op_466, aux_467, v480, l_468, nid_469, f_470, case__11252_471, op_472, aux_473, v495, v985, l_986, nid_987, f_988, case__11252_989, op_990, aux_991, l_482, nid_483, f_484, case__11252_485, op_486, aux_487, args_498, target_500, argc_502, arg__11484_504, arg__11491_507, target_params_508, cur_sp_510, drop_count_511, arg__11502_514, arg__11503_515, arg__11510_519, arg__11511_520, cur_junk_521, v551, l_488, nid_489, f_490, case__11252_491, op_492, aux_493, v689, v977, l_978, nid_979, f_980, case__11252_981, op_982, aux_983, l_522, nid_523, f_524, case__11252_525, op_526, bt_527, aux_528, args_529, target_530, argc_531, target_params_532, cur_sp_533, drop_count_534, cur_junk_535, ignore_553, arg__11520_555, arg__11528_558, off_ip_559, v561, arg__11541_564, arg__11548_570, arg__11561_580, v581, v583, l_536, nid_537, f_538, case__11252_539, op_540, bt_541, aux_542, args_543, target_544, argc_545, target_params_546, cur_sp_547, drop_count_548, cur_junk_549, v660, l_661, nid_662, f_663, case__11252_664, op_665, bt_666, aux_667, args_668, target_669, argc_670, target_params_671, cur_sp_672, drop_count_673, cur_junk_674, l_585, nid_586, f_587, case__11252_588, op_589, bt_590, aux_591, args_592, target_593, argc_594, target_params_595, cur_sp_596, drop_count_597, cur_junk_598, arg_ip_618, v620, arg__11585_623, arg__11592_629, arg__11605_639, v640, l_599, nid_600, f_601, case__11252_602, op_603, bt_604, aux_605, args_606, target_607, argc_608, target_params_609, cur_sp_610, drop_count_611, cur_junk_612, v644, l_645, nid_646, f_647, case__11252_648, op_649, bt_650, aux_651, args_652, target_653, argc_654, target_params_655, cur_sp_656, drop_count_657, cur_junk_658, l_676, nid_677, f_678, case__11252_679, op_680, aux_681, ft_692, tt_694, ft_target_696, tt_target_698, arg_ip_702, arg__11632_705, arg__11633_706, arg__11640_710, arg__11641_711, cur_junk_712, arg__11645_714, arg__11647_715, arg__11654_718, arg__11661_721, arg__11662_722, v723, target_junk_724, v726, v728, arg__11681_731, arg__11688_737, arg__11701_747, v748, v752, my_block_754, next_block_id_755, v789, l_682, nid_683, f_684, case__11252_685, op_686, aux_687, v849, v969, l_970, nid_971, f_972, case__11252_973, op_974, aux_975, l_756, nid_757, f_758, case__11252_759, op_760, ct_761, aux_762, ft_763, tt_764, ft_target_765, tt_target_766, arg_ip_767, cur_junk_768, target_junk_769, my_block_770, next_block_id_771, arg_ip2_794, arg__11729_797, arg__11736_803, arg__11749_813, v814, l_772, nid_773, f_774, case__11252_775, op_776, ct_777, aux_778, ft_779, tt_780, ft_target_781, tt_target_782, arg_ip_783, cur_junk_784, target_junk_785, my_block_786, next_block_id_787, v818, l_819, nid_820, f_821, case__11252_822, op_823, ct_824, aux_825, ft_826, tt_827, ft_target_828, tt_target_829, arg_ip_830, cur_junk_831, target_junk_832, my_block_833, next_block_id_834, l_836, nid_837, f_838, case__11252_839, op_840, aux_841, arg__11758_853, arg__11766_857, v858, v862, v864, l_842, nid_843, f_844, case__11252_845, op_846, aux_847, v879, v961, l_962, nid_963, f_964, case__11252_965, op_966, aux_967, l_866, nid_867, f_868, case__11252_869, op_870, aux_871, v884, l_872, nid_873, f_874, case__11252_875, op_876, aux_877, v899, v953, l_954, nid_955, f_956, case__11252_957, op_958, aux_959, l_886, nid_887, f_888, case__11252_889, op_890, aux_891, v904, v908, l_892, nid_893, f_894, case__11252_895, op_896, aux_897, v945, l_946, nid_947, f_948, case__11252_949, op_950, aux_951, l_910, nid_911, f_912, case__11252_913, op_914, aux_915, arg__11803_927, arg__11810_932, v933, l_916, nid_917, f_918, case__11252_919, op_920, aux_921, v937, l_938, nid_939, f_940, case__11252_941, op_942, aux_943
 	f_4, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
@@ -3099,7 +3099,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 		l_9 = arg0
 		nid_10 = arg1
 		f_11 = f_4
-		case__11248_12 = op_6
+		case__11252_12 = op_6
 		op_13 = op_6
 		aux_14 = aux_8
 		goto b1
@@ -3107,7 +3107,7 @@ func lower_node_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 		l_15 = arg0
 		nid_16 = arg1
 		f_17 = f_4
-		case__11248_18 = op_6
+		case__11252_18 = op_6
 		op_19 = op_6
 		aux_20 = aux_8
 		goto b2
@@ -3118,18 +3118,18 @@ b1:
 	l_1058 = l_9
 	nid_1059 = nid_10
 	f_1060 = f_11
-	case__11248_1061 = case__11248_12
+	case__11252_1061 = case__11252_12
 	op_1062 = op_13
 	aux_1063 = aux_14
 	goto b3
 b2:
 	;
-	v39 = case__11248_18 == vm.Keyword("const")
+	v39 = case__11252_18 == vm.Keyword("const")
 	if v39 {
 		l_26 = l_15
 		nid_27 = nid_16
 		f_28 = f_17
-		case__11248_29 = case__11248_18
+		case__11252_29 = case__11252_18
 		op_30 = op_19
 		aux_31 = aux_20
 		goto b4
@@ -3137,7 +3137,7 @@ b2:
 		l_32 = l_15
 		nid_33 = nid_16
 		f_34 = f_17
-		case__11248_35 = case__11248_18
+		case__11252_35 = case__11252_18
 		op_36 = op_19
 		aux_37 = aux_20
 		goto b5
@@ -3147,23 +3147,23 @@ b3:
 	return v1057, nil
 b4:
 	;
-	arg__11269_42, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_26})
+	arg__11273_42, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_26})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11273_44, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "template-value").Deref(), []vm.Value{aux_31})
+	arg__11277_44, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "template-value").Deref(), []vm.Value{aux_31})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11278_47, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_26})
+	arg__11282_47, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_26})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11282_49, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "template-value").Deref(), []vm.Value{aux_31})
+	arg__11286_49, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "template-value").Deref(), []vm.Value{aux_31})
 	if callErr != nil {
 		return nil, callErr
 	}
-	idx_50, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-intern-const").Deref(), []vm.Value{arg__11278_47, arg__11282_49})
+	idx_50, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-intern-const").Deref(), []vm.Value{arg__11282_47, arg__11286_49})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -3183,18 +3183,18 @@ b4:
 	l_1050 = l_26
 	nid_1051 = nid_27
 	f_1052 = f_28
-	case__11248_1053 = case__11248_29
+	case__11252_1053 = case__11252_29
 	op_1054 = op_30
 	aux_1055 = aux_31
 	goto b6
 b5:
 	;
-	v75 = case__11248_35 == vm.Keyword("load-arg")
+	v75 = case__11252_35 == vm.Keyword("load-arg")
 	if v75 {
 		l_62 = l_32
 		nid_63 = nid_33
 		f_64 = f_34
-		case__11248_65 = case__11248_35
+		case__11252_65 = case__11252_35
 		op_66 = op_36
 		aux_67 = aux_37
 		goto b7
@@ -3202,7 +3202,7 @@ b5:
 		l_68 = l_32
 		nid_69 = nid_33
 		f_70 = f_34
-		case__11248_71 = case__11248_35
+		case__11252_71 = case__11252_35
 		op_72 = op_36
 		aux_73 = aux_37
 		goto b8
@@ -3213,21 +3213,21 @@ b6:
 	l_1058 = l_1050
 	nid_1059 = nid_1051
 	f_1060 = f_1052
-	case__11248_1061 = case__11248_1053
+	case__11252_1061 = case__11252_1053
 	op_1062 = op_1054
 	aux_1063 = aux_1055
 	goto b3
 b7:
 	;
-	arg__11308_79, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_67})
+	arg__11312_79, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_67})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11316_83, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_67})
+	arg__11320_83, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_67})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v84, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_62, nid_63, vm.Keyword("load-arg"), arg__11316_83})
+	v84, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_62, nid_63, vm.Keyword("load-arg"), arg__11320_83})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -3243,18 +3243,18 @@ b7:
 	l_1042 = l_62
 	nid_1043 = nid_63
 	f_1044 = f_64
-	case__11248_1045 = case__11248_65
+	case__11252_1045 = case__11252_65
 	op_1046 = op_66
 	aux_1047 = aux_67
 	goto b9
 b8:
 	;
-	v105 = case__11248_71 == vm.Keyword("load-var")
+	v105 = case__11252_71 == vm.Keyword("load-var")
 	if v105 {
 		l_92 = l_68
 		nid_93 = nid_69
 		f_94 = f_70
-		case__11248_95 = case__11248_71
+		case__11252_95 = case__11252_71
 		op_96 = op_72
 		aux_97 = aux_73
 		goto b10
@@ -3262,7 +3262,7 @@ b8:
 		l_98 = l_68
 		nid_99 = nid_69
 		f_100 = f_70
-		case__11248_101 = case__11248_71
+		case__11252_101 = case__11252_71
 		op_102 = op_72
 		aux_103 = aux_73
 		goto b11
@@ -3273,21 +3273,21 @@ b9:
 	l_1050 = l_1042
 	nid_1051 = nid_1043
 	f_1052 = f_1044
-	case__11248_1053 = case__11248_1045
+	case__11252_1053 = case__11252_1045
 	op_1054 = op_1046
 	aux_1055 = aux_1047
 	goto b6
 b10:
 	;
-	arg__11330_108, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_92})
+	arg__11334_108, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_92})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11336_111, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_92})
+	arg__11340_111, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_92})
 	if callErr != nil {
 		return nil, callErr
 	}
-	idx_112, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-intern-const").Deref(), []vm.Value{arg__11336_111, aux_97})
+	idx_112, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-intern-const").Deref(), []vm.Value{arg__11340_111, aux_97})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -3307,18 +3307,18 @@ b10:
 	l_1034 = l_92
 	nid_1035 = nid_93
 	f_1036 = f_94
-	case__11248_1037 = case__11248_95
+	case__11252_1037 = case__11252_95
 	op_1038 = op_96
 	aux_1039 = aux_97
 	goto b12
 b11:
 	;
-	or__x_137 = case__11248_101 == vm.Keyword("add")
+	or__x_137 = case__11252_101 == vm.Keyword("add")
 	if or__x_137 {
 		l_138 = l_98
 		nid_139 = nid_99
 		f_140 = f_100
-		case__11248_141 = case__11248_101
+		case__11252_141 = case__11252_101
 		op_142 = op_102
 		aux_143 = aux_103
 		or__x_144 = or__x_137
@@ -3327,7 +3327,7 @@ b11:
 		l_145 = l_98
 		nid_146 = nid_99
 		f_147 = f_100
-		case__11248_148 = case__11248_101
+		case__11252_148 = case__11252_101
 		op_149 = op_102
 		aux_150 = aux_103
 		or__x_151 = or__x_137
@@ -3339,7 +3339,7 @@ b12:
 	l_1042 = l_1034
 	nid_1043 = nid_1035
 	f_1044 = f_1036
-	case__11248_1045 = case__11248_1037
+	case__11252_1045 = case__11252_1037
 	op_1046 = op_1038
 	aux_1047 = aux_1039
 	goto b9
@@ -3357,18 +3357,18 @@ b13:
 	l_1026 = l_124
 	nid_1027 = nid_125
 	f_1028 = f_126
-	case__11248_1029 = case__11248_127
+	case__11252_1029 = case__11252_127
 	op_1030 = op_128
 	aux_1031 = aux_129
 	goto b15
 b14:
 	;
-	or__x_348 = case__11248_133 == vm.Keyword("inc")
+	or__x_348 = case__11252_133 == vm.Keyword("inc")
 	if or__x_348 {
 		l_349 = l_130
 		nid_350 = nid_131
 		f_351 = f_132
-		case__11248_352 = case__11248_133
+		case__11252_352 = case__11252_133
 		op_353 = op_134
 		aux_354 = aux_135
 		or__x_355 = or__x_348
@@ -3377,7 +3377,7 @@ b14:
 		l_356 = l_130
 		nid_357 = nid_131
 		f_358 = f_132
-		case__11248_359 = case__11248_133
+		case__11252_359 = case__11252_133
 		op_360 = op_134
 		aux_361 = aux_135
 		or__x_362 = or__x_348
@@ -3389,7 +3389,7 @@ b15:
 	l_1034 = l_1026
 	nid_1035 = nid_1027
 	f_1036 = f_1028
-	case__11248_1037 = case__11248_1029
+	case__11252_1037 = case__11252_1029
 	op_1038 = op_1030
 	aux_1039 = aux_1031
 	goto b12
@@ -3399,19 +3399,19 @@ b16:
 	l_320 = l_138
 	nid_321 = nid_139
 	f_322 = f_140
-	case__11248_323 = case__11248_141
+	case__11252_323 = case__11252_141
 	op_324 = op_142
 	aux_325 = aux_143
 	or__x_326 = vm.Boolean(or__x_144)
 	goto b18
 b17:
 	;
-	or__x_155 = case__11248_148 == vm.Keyword("sub")
+	or__x_155 = case__11252_148 == vm.Keyword("sub")
 	if or__x_155 {
 		l_156 = l_145
 		nid_157 = nid_146
 		f_158 = f_147
-		case__11248_159 = case__11248_148
+		case__11252_159 = case__11252_148
 		op_160 = op_149
 		aux_161 = aux_150
 		or__x_162 = or__x_155
@@ -3420,7 +3420,7 @@ b17:
 		l_163 = l_145
 		nid_164 = nid_146
 		f_165 = f_147
-		case__11248_166 = case__11248_148
+		case__11252_166 = case__11252_148
 		op_167 = op_149
 		aux_168 = aux_150
 		or__x_169 = or__x_155
@@ -3432,7 +3432,7 @@ b18:
 		l_124 = l_320
 		nid_125 = nid_321
 		f_126 = f_322
-		case__11248_127 = case__11248_323
+		case__11252_127 = case__11252_323
 		op_128 = op_324
 		aux_129 = aux_325
 		goto b13
@@ -3440,7 +3440,7 @@ b18:
 		l_130 = l_320
 		nid_131 = nid_321
 		f_132 = f_322
-		case__11248_133 = case__11248_323
+		case__11252_133 = case__11252_323
 		op_134 = op_324
 		aux_135 = aux_325
 		goto b14
@@ -3451,19 +3451,19 @@ b19:
 	l_311 = l_156
 	nid_312 = nid_157
 	f_313 = f_158
-	case__11248_314 = case__11248_159
+	case__11252_314 = case__11252_159
 	op_315 = op_160
 	aux_316 = aux_161
 	or__x_317 = vm.Boolean(or__x_162)
 	goto b21
 b20:
 	;
-	or__x_173 = case__11248_166 == vm.Keyword("mul")
+	or__x_173 = case__11252_166 == vm.Keyword("mul")
 	if or__x_173 {
 		l_174 = l_163
 		nid_175 = nid_164
 		f_176 = f_165
-		case__11248_177 = case__11248_166
+		case__11252_177 = case__11252_166
 		op_178 = op_167
 		aux_179 = aux_168
 		or__x_180 = or__x_173
@@ -3472,7 +3472,7 @@ b20:
 		l_181 = l_163
 		nid_182 = nid_164
 		f_183 = f_165
-		case__11248_184 = case__11248_166
+		case__11252_184 = case__11252_166
 		op_185 = op_167
 		aux_186 = aux_168
 		or__x_187 = or__x_173
@@ -3484,7 +3484,7 @@ b21:
 	l_320 = l_311
 	nid_321 = nid_312
 	f_322 = f_313
-	case__11248_323 = case__11248_314
+	case__11252_323 = case__11252_314
 	op_324 = op_315
 	aux_325 = aux_316
 	or__x_326 = vm.Boolean(or__x_151)
@@ -3495,19 +3495,19 @@ b22:
 	l_302 = l_174
 	nid_303 = nid_175
 	f_304 = f_176
-	case__11248_305 = case__11248_177
+	case__11252_305 = case__11252_177
 	op_306 = op_178
 	aux_307 = aux_179
 	or__x_308 = vm.Boolean(or__x_180)
 	goto b24
 b23:
 	;
-	or__x_191 = case__11248_184 == vm.Keyword("lt")
+	or__x_191 = case__11252_184 == vm.Keyword("lt")
 	if or__x_191 {
 		l_192 = l_181
 		nid_193 = nid_182
 		f_194 = f_183
-		case__11248_195 = case__11248_184
+		case__11252_195 = case__11252_184
 		op_196 = op_185
 		aux_197 = aux_186
 		or__x_198 = or__x_191
@@ -3516,7 +3516,7 @@ b23:
 		l_199 = l_181
 		nid_200 = nid_182
 		f_201 = f_183
-		case__11248_202 = case__11248_184
+		case__11252_202 = case__11252_184
 		op_203 = op_185
 		aux_204 = aux_186
 		or__x_205 = or__x_191
@@ -3528,7 +3528,7 @@ b24:
 	l_311 = l_302
 	nid_312 = nid_303
 	f_313 = f_304
-	case__11248_314 = case__11248_305
+	case__11252_314 = case__11252_305
 	op_315 = op_306
 	aux_316 = aux_307
 	or__x_317 = vm.Boolean(or__x_169)
@@ -3539,19 +3539,19 @@ b25:
 	l_293 = l_192
 	nid_294 = nid_193
 	f_295 = f_194
-	case__11248_296 = case__11248_195
+	case__11252_296 = case__11252_195
 	op_297 = op_196
 	aux_298 = aux_197
 	or__x_299 = vm.Boolean(or__x_198)
 	goto b27
 b26:
 	;
-	or__x_209 = case__11248_202 == vm.Keyword("lte")
+	or__x_209 = case__11252_202 == vm.Keyword("lte")
 	if or__x_209 {
 		l_210 = l_199
 		nid_211 = nid_200
 		f_212 = f_201
-		case__11248_213 = case__11248_202
+		case__11252_213 = case__11252_202
 		op_214 = op_203
 		aux_215 = aux_204
 		or__x_216 = or__x_209
@@ -3560,7 +3560,7 @@ b26:
 		l_217 = l_199
 		nid_218 = nid_200
 		f_219 = f_201
-		case__11248_220 = case__11248_202
+		case__11252_220 = case__11252_202
 		op_221 = op_203
 		aux_222 = aux_204
 		or__x_223 = or__x_209
@@ -3572,7 +3572,7 @@ b27:
 	l_302 = l_293
 	nid_303 = nid_294
 	f_304 = f_295
-	case__11248_305 = case__11248_296
+	case__11252_305 = case__11252_296
 	op_306 = op_297
 	aux_307 = aux_298
 	or__x_308 = vm.Boolean(or__x_187)
@@ -3583,19 +3583,19 @@ b28:
 	l_284 = l_210
 	nid_285 = nid_211
 	f_286 = f_212
-	case__11248_287 = case__11248_213
+	case__11252_287 = case__11252_213
 	op_288 = op_214
 	aux_289 = aux_215
 	or__x_290 = vm.Boolean(or__x_216)
 	goto b30
 b29:
 	;
-	or__x_227 = case__11248_220 == vm.Keyword("gt")
+	or__x_227 = case__11252_220 == vm.Keyword("gt")
 	if or__x_227 {
 		l_228 = l_217
 		nid_229 = nid_218
 		f_230 = f_219
-		case__11248_231 = case__11248_220
+		case__11252_231 = case__11252_220
 		op_232 = op_221
 		aux_233 = aux_222
 		or__x_234 = or__x_227
@@ -3604,7 +3604,7 @@ b29:
 		l_235 = l_217
 		nid_236 = nid_218
 		f_237 = f_219
-		case__11248_238 = case__11248_220
+		case__11252_238 = case__11252_220
 		op_239 = op_221
 		aux_240 = aux_222
 		or__x_241 = or__x_227
@@ -3616,7 +3616,7 @@ b30:
 	l_293 = l_284
 	nid_294 = nid_285
 	f_295 = f_286
-	case__11248_296 = case__11248_287
+	case__11252_296 = case__11252_287
 	op_297 = op_288
 	aux_298 = aux_289
 	or__x_299 = vm.Boolean(or__x_205)
@@ -3627,19 +3627,19 @@ b31:
 	l_275 = l_228
 	nid_276 = nid_229
 	f_277 = f_230
-	case__11248_278 = case__11248_231
+	case__11252_278 = case__11252_231
 	op_279 = op_232
 	aux_280 = aux_233
 	or__x_281 = vm.Boolean(or__x_234)
 	goto b33
 b32:
 	;
-	or__x_245 = case__11248_238 == vm.Keyword("gte")
+	or__x_245 = case__11252_238 == vm.Keyword("gte")
 	if or__x_245 {
 		l_246 = l_235
 		nid_247 = nid_236
 		f_248 = f_237
-		case__11248_249 = case__11248_238
+		case__11252_249 = case__11252_238
 		op_250 = op_239
 		aux_251 = aux_240
 		or__x_252 = or__x_245
@@ -3648,7 +3648,7 @@ b32:
 		l_253 = l_235
 		nid_254 = nid_236
 		f_255 = f_237
-		case__11248_256 = case__11248_238
+		case__11252_256 = case__11252_238
 		op_257 = op_239
 		aux_258 = aux_240
 		or__x_259 = or__x_245
@@ -3660,7 +3660,7 @@ b33:
 	l_284 = l_275
 	nid_285 = nid_276
 	f_286 = f_277
-	case__11248_287 = case__11248_278
+	case__11252_287 = case__11252_278
 	op_288 = op_279
 	aux_289 = aux_280
 	or__x_290 = vm.Boolean(or__x_223)
@@ -3671,19 +3671,19 @@ b34:
 	l_266 = l_246
 	nid_267 = nid_247
 	f_268 = f_248
-	case__11248_269 = case__11248_249
+	case__11252_269 = case__11252_249
 	op_270 = op_250
 	aux_271 = aux_251
 	or__x_272 = vm.Boolean(or__x_252)
 	goto b36
 b35:
 	;
-	v263 = case__11248_256 == vm.Keyword("eq")
+	v263 = case__11252_256 == vm.Keyword("eq")
 	v265 = v263
 	l_266 = l_253
 	nid_267 = nid_254
 	f_268 = f_255
-	case__11248_269 = case__11248_256
+	case__11252_269 = case__11252_256
 	op_270 = op_257
 	aux_271 = aux_258
 	or__x_272 = vm.Boolean(or__x_259)
@@ -3694,7 +3694,7 @@ b36:
 	l_275 = l_266
 	nid_276 = nid_267
 	f_277 = f_268
-	case__11248_278 = case__11248_269
+	case__11252_278 = case__11252_269
 	op_279 = op_270
 	aux_280 = aux_271
 	or__x_281 = vm.Boolean(or__x_241)
@@ -3709,18 +3709,18 @@ b37:
 	l_1018 = l_335
 	nid_1019 = nid_336
 	f_1020 = f_337
-	case__11248_1021 = case__11248_338
+	case__11252_1021 = case__11252_338
 	op_1022 = op_339
 	aux_1023 = aux_340
 	goto b39
 b38:
 	;
-	v393 = case__11248_344 == vm.Keyword("call")
+	v393 = case__11252_344 == vm.Keyword("call")
 	if v393 {
 		l_380 = l_341
 		nid_381 = nid_342
 		f_382 = f_343
-		case__11248_383 = case__11248_344
+		case__11252_383 = case__11252_344
 		op_384 = op_345
 		aux_385 = aux_346
 		goto b43
@@ -3728,7 +3728,7 @@ b38:
 		l_386 = l_341
 		nid_387 = nid_342
 		f_388 = f_343
-		case__11248_389 = case__11248_344
+		case__11252_389 = case__11252_344
 		op_390 = op_345
 		aux_391 = aux_346
 		goto b44
@@ -3739,7 +3739,7 @@ b39:
 	l_1026 = l_1018
 	nid_1027 = nid_1019
 	f_1028 = f_1020
-	case__11248_1029 = case__11248_1021
+	case__11252_1029 = case__11252_1021
 	op_1030 = op_1022
 	aux_1031 = aux_1023
 	goto b15
@@ -3749,19 +3749,19 @@ b40:
 	l_369 = l_349
 	nid_370 = nid_350
 	f_371 = f_351
-	case__11248_372 = case__11248_352
+	case__11252_372 = case__11252_352
 	op_373 = op_353
 	aux_374 = aux_354
 	or__x_375 = vm.Boolean(or__x_355)
 	goto b42
 b41:
 	;
-	v366 = case__11248_359 == vm.Keyword("dec")
+	v366 = case__11252_359 == vm.Keyword("dec")
 	v368 = v366
 	l_369 = l_356
 	nid_370 = nid_357
 	f_371 = f_358
-	case__11248_372 = case__11248_359
+	case__11252_372 = case__11252_359
 	op_373 = op_360
 	aux_374 = aux_361
 	or__x_375 = vm.Boolean(or__x_362)
@@ -3772,7 +3772,7 @@ b42:
 		l_335 = l_369
 		nid_336 = nid_370
 		f_337 = f_371
-		case__11248_338 = case__11248_372
+		case__11252_338 = case__11252_372
 		op_339 = op_373
 		aux_340 = aux_374
 		goto b37
@@ -3780,35 +3780,35 @@ b42:
 		l_341 = l_369
 		nid_342 = nid_370
 		f_343 = f_371
-		case__11248_344 = case__11248_372
+		case__11252_344 = case__11252_372
 		op_345 = op_373
 		aux_346 = aux_374
 		goto b38
 	}
 b43:
 	;
-	arg__11402_397, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_385})
+	arg__11406_397, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_385})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11410_401, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_385})
+	arg__11414_401, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_385})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v402, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_380, nid_381, vm.Keyword("call"), arg__11410_401})
+	v402, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_380, nid_381, vm.Keyword("call"), arg__11414_401})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11415_404, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_385})
+	arg__11419_404, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_385})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11422_409, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_385})
+	arg__11426_409, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_385})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11423_411 = rt.SubValue(vm.Int(0), arg__11422_409)
-	v412, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "bump-stack-sp!").Deref(), []vm.Value{l_380, arg__11423_411})
+	arg__11427_411 = rt.SubValue(vm.Int(0), arg__11426_409)
+	v412, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "bump-stack-sp!").Deref(), []vm.Value{l_380, arg__11427_411})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -3816,18 +3816,18 @@ b43:
 	l_1010 = l_380
 	nid_1011 = nid_381
 	f_1012 = f_382
-	case__11248_1013 = case__11248_383
+	case__11252_1013 = case__11252_383
 	op_1014 = op_384
 	aux_1015 = aux_385
 	goto b45
 b44:
 	;
-	v427 = case__11248_389 == vm.Keyword("set-var")
+	v427 = case__11252_389 == vm.Keyword("set-var")
 	if v427 {
 		l_414 = l_386
 		nid_415 = nid_387
 		f_416 = f_388
-		case__11248_417 = case__11248_389
+		case__11252_417 = case__11252_389
 		op_418 = op_390
 		aux_419 = aux_391
 		goto b46
@@ -3835,7 +3835,7 @@ b44:
 		l_420 = l_386
 		nid_421 = nid_387
 		f_422 = f_388
-		case__11248_423 = case__11248_389
+		case__11252_423 = case__11252_389
 		op_424 = op_390
 		aux_425 = aux_391
 		goto b47
@@ -3846,7 +3846,7 @@ b45:
 	l_1018 = l_1010
 	nid_1019 = nid_1011
 	f_1020 = f_1012
-	case__11248_1021 = case__11248_1013
+	case__11252_1021 = case__11252_1013
 	op_1022 = op_1014
 	aux_1023 = aux_1015
 	goto b39
@@ -3864,18 +3864,18 @@ b46:
 	l_1002 = l_414
 	nid_1003 = nid_415
 	f_1004 = f_416
-	case__11248_1005 = case__11248_417
+	case__11252_1005 = case__11252_417
 	op_1006 = op_418
 	aux_1007 = aux_419
 	goto b48
 b47:
 	;
-	v451 = case__11248_423 == vm.Keyword("tail-call")
+	v451 = case__11252_423 == vm.Keyword("tail-call")
 	if v451 {
 		l_438 = l_420
 		nid_439 = nid_421
 		f_440 = f_422
-		case__11248_441 = case__11248_423
+		case__11252_441 = case__11252_423
 		op_442 = op_424
 		aux_443 = aux_425
 		goto b49
@@ -3883,7 +3883,7 @@ b47:
 		l_444 = l_420
 		nid_445 = nid_421
 		f_446 = f_422
-		case__11248_447 = case__11248_423
+		case__11252_447 = case__11252_423
 		op_448 = op_424
 		aux_449 = aux_425
 		goto b50
@@ -3894,21 +3894,21 @@ b48:
 	l_1010 = l_1002
 	nid_1011 = nid_1003
 	f_1012 = f_1004
-	case__11248_1013 = case__11248_1005
+	case__11252_1013 = case__11252_1005
 	op_1014 = op_1006
 	aux_1015 = aux_1007
 	goto b45
 b49:
 	;
-	arg__11446_455, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_443})
+	arg__11450_455, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_443})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11454_459, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_443})
+	arg__11458_459, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_443})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v460, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_438, nid_439, vm.Keyword("tail-call"), arg__11454_459})
+	v460, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_438, nid_439, vm.Keyword("tail-call"), arg__11458_459})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -3916,18 +3916,18 @@ b49:
 	l_994 = l_438
 	nid_995 = nid_439
 	f_996 = f_440
-	case__11248_997 = case__11248_441
+	case__11252_997 = case__11252_441
 	op_998 = op_442
 	aux_999 = aux_443
 	goto b51
 b50:
 	;
-	v475 = case__11248_447 == vm.Keyword("return")
+	v475 = case__11252_447 == vm.Keyword("return")
 	if v475 {
 		l_462 = l_444
 		nid_463 = nid_445
 		f_464 = f_446
-		case__11248_465 = case__11248_447
+		case__11252_465 = case__11252_447
 		op_466 = op_448
 		aux_467 = aux_449
 		goto b52
@@ -3935,7 +3935,7 @@ b50:
 		l_468 = l_444
 		nid_469 = nid_445
 		f_470 = f_446
-		case__11248_471 = case__11248_447
+		case__11252_471 = case__11252_447
 		op_472 = op_448
 		aux_473 = aux_449
 		goto b53
@@ -3946,7 +3946,7 @@ b51:
 	l_1002 = l_994
 	nid_1003 = nid_995
 	f_1004 = f_996
-	case__11248_1005 = case__11248_997
+	case__11252_1005 = case__11252_997
 	op_1006 = op_998
 	aux_1007 = aux_999
 	goto b48
@@ -3960,18 +3960,18 @@ b52:
 	l_986 = l_462
 	nid_987 = nid_463
 	f_988 = f_464
-	case__11248_989 = case__11248_465
+	case__11252_989 = case__11252_465
 	op_990 = op_466
 	aux_991 = aux_467
 	goto b54
 b53:
 	;
-	v495 = case__11248_471 == vm.Keyword("branch")
+	v495 = case__11252_471 == vm.Keyword("branch")
 	if v495 {
 		l_482 = l_468
 		nid_483 = nid_469
 		f_484 = f_470
-		case__11248_485 = case__11248_471
+		case__11252_485 = case__11252_471
 		op_486 = op_472
 		aux_487 = aux_473
 		goto b55
@@ -3979,7 +3979,7 @@ b53:
 		l_488 = l_468
 		nid_489 = nid_469
 		f_490 = f_470
-		case__11248_491 = case__11248_471
+		case__11252_491 = case__11252_471
 		op_492 = op_472
 		aux_493 = aux_473
 		goto b56
@@ -3990,7 +3990,7 @@ b54:
 	l_994 = l_986
 	nid_995 = nid_987
 	f_996 = f_988
-	case__11248_997 = case__11248_989
+	case__11252_997 = case__11252_989
 	op_998 = op_990
 	aux_999 = aux_991
 	goto b51
@@ -4008,15 +4008,15 @@ b55:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11480_504, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{target_500, f_484})
+	arg__11484_504, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{target_500, f_484})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11487_507, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{target_500, f_484})
+	arg__11491_507, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{target_500, f_484})
 	if callErr != nil {
 		return nil, callErr
 	}
-	target_params_508, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__11487_507})
+	target_params_508, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__11491_507})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -4025,23 +4025,23 @@ b55:
 		return nil, callErr
 	}
 	drop_count_511 = rt.SubValue(cur_sp_510, target_params_508)
-	arg__11498_514, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_482})
+	arg__11502_514, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_482})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11499_515, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__11498_514})
+	arg__11503_515, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__11502_514})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11506_519, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_482})
+	arg__11510_519, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_482})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11507_520, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__11506_519})
+	arg__11511_520, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__11510_519})
 	if callErr != nil {
 		return nil, callErr
 	}
-	cur_junk_521, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "block-junk-of").Deref(), []vm.Value{l_482, arg__11507_520})
+	cur_junk_521, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "block-junk-of").Deref(), []vm.Value{l_482, arg__11511_520})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -4053,7 +4053,7 @@ b55:
 		l_522 = l_482
 		nid_523 = nid_483
 		f_524 = f_484
-		case__11248_525 = case__11248_485
+		case__11252_525 = case__11252_485
 		op_526 = op_486
 		bt_527 = aux_487
 		aux_528 = aux_487
@@ -4069,7 +4069,7 @@ b55:
 		l_536 = l_482
 		nid_537 = nid_483
 		f_538 = f_484
-		case__11248_539 = case__11248_485
+		case__11252_539 = case__11252_485
 		op_540 = op_486
 		bt_541 = aux_487
 		aux_542 = aux_487
@@ -4084,12 +4084,12 @@ b55:
 	}
 b56:
 	;
-	v689 = case__11248_491 == vm.Keyword("branch-if")
+	v689 = case__11252_491 == vm.Keyword("branch-if")
 	if v689 {
 		l_676 = l_488
 		nid_677 = nid_489
 		f_678 = f_490
-		case__11248_679 = case__11248_491
+		case__11252_679 = case__11252_491
 		op_680 = op_492
 		aux_681 = aux_493
 		goto b64
@@ -4097,7 +4097,7 @@ b56:
 		l_682 = l_488
 		nid_683 = nid_489
 		f_684 = f_490
-		case__11248_685 = case__11248_491
+		case__11252_685 = case__11252_491
 		op_686 = op_492
 		aux_687 = aux_493
 		goto b65
@@ -4108,22 +4108,22 @@ b57:
 	l_986 = l_978
 	nid_987 = nid_979
 	f_988 = f_980
-	case__11248_989 = case__11248_981
+	case__11252_989 = case__11252_981
 	op_990 = op_982
 	aux_991 = aux_983
 	goto b54
 b58:
 	;
 	ignore_553 = rt.SubValue(drop_count_534, argc_531)
-	arg__11516_555, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_522})
+	arg__11520_555, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_522})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11524_558, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_522})
+	arg__11528_558, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_522})
 	if callErr != nil {
 		return nil, callErr
 	}
-	off_ip_559, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit-recur").Deref(), []vm.Value{arg__11524_558, cur_sp_533, argc_531, ignore_553})
+	off_ip_559, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit-recur").Deref(), []vm.Value{arg__11528_558, cur_sp_533, argc_531, ignore_553})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -4131,16 +4131,16 @@ b58:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11537_564 = rt.SubValue(off_ip_559, vm.Int(1))
-	arg__11544_570, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11537_564, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(true), vm.Keyword("target-block"), target_530})
+	arg__11541_564 = rt.SubValue(off_ip_559, vm.Int(1))
+	arg__11548_570, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11541_564, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(true), vm.Keyword("target-block"), target_530})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11557_580, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11537_564, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(true), vm.Keyword("target-block"), target_530})
+	arg__11561_580, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11541_564, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(true), vm.Keyword("target-block"), target_530})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v581, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "add-patch!").Deref(), []vm.Value{l_522, arg__11557_580})
+	v581, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "add-patch!").Deref(), []vm.Value{l_522, arg__11561_580})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -4152,7 +4152,7 @@ b58:
 	l_661 = l_522
 	nid_662 = nid_523
 	f_663 = f_524
-	case__11248_664 = case__11248_525
+	case__11252_664 = case__11252_525
 	op_665 = op_526
 	bt_666 = bt_527
 	aux_667 = aux_528
@@ -4170,7 +4170,7 @@ b59:
 		l_585 = l_536
 		nid_586 = nid_537
 		f_587 = f_538
-		case__11248_588 = case__11248_539
+		case__11252_588 = case__11252_539
 		op_589 = op_540
 		bt_590 = bt_541
 		aux_591 = aux_542
@@ -4186,7 +4186,7 @@ b59:
 		l_599 = l_536
 		nid_600 = nid_537
 		f_601 = f_538
-		case__11248_602 = case__11248_539
+		case__11252_602 = case__11252_539
 		op_603 = op_540
 		bt_604 = bt_541
 		aux_605 = aux_542
@@ -4205,7 +4205,7 @@ b60:
 	l_978 = l_661
 	nid_979 = nid_662
 	f_980 = f_663
-	case__11248_981 = case__11248_664
+	case__11252_981 = case__11252_664
 	op_982 = op_665
 	aux_983 = aux_667
 	goto b57
@@ -4219,16 +4219,16 @@ b61:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11581_623 = rt.SubValue(arg_ip_618, vm.Int(1))
-	arg__11588_629, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11581_623, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), target_593})
+	arg__11585_623 = rt.SubValue(arg_ip_618, vm.Int(1))
+	arg__11592_629, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11585_623, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), target_593})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11601_639, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11581_623, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), target_593})
+	arg__11605_639, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11585_623, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), target_593})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v640, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "add-patch!").Deref(), []vm.Value{l_585, arg__11601_639})
+	v640, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "add-patch!").Deref(), []vm.Value{l_585, arg__11605_639})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -4236,7 +4236,7 @@ b61:
 	l_645 = l_585
 	nid_646 = nid_586
 	f_647 = f_587
-	case__11248_648 = case__11248_588
+	case__11252_648 = case__11252_588
 	op_649 = op_589
 	bt_650 = bt_590
 	aux_651 = aux_591
@@ -4254,7 +4254,7 @@ b62:
 	l_645 = l_599
 	nid_646 = nid_600
 	f_647 = f_601
-	case__11248_648 = case__11248_602
+	case__11252_648 = case__11252_602
 	op_649 = op_603
 	bt_650 = bt_604
 	aux_651 = aux_605
@@ -4272,7 +4272,7 @@ b63:
 	l_661 = l_645
 	nid_662 = nid_646
 	f_663 = f_647
-	case__11248_664 = case__11248_648
+	case__11252_664 = case__11252_648
 	op_665 = op_649
 	bt_666 = bt_650
 	aux_667 = aux_651
@@ -4306,45 +4306,45 @@ b64:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11628_705, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_676})
+	arg__11632_705, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_676})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11629_706, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__11628_705})
+	arg__11633_706, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__11632_705})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11636_710, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_676})
+	arg__11640_710, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_676})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11637_711, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__11636_710})
+	arg__11641_711, callErr = rt.InvokeValue(vm.Keyword("current-block"), []vm.Value{arg__11640_710})
 	if callErr != nil {
 		return nil, callErr
 	}
-	cur_junk_712, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "block-junk-of").Deref(), []vm.Value{l_676, arg__11637_711})
+	cur_junk_712, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "block-junk-of").Deref(), []vm.Value{l_676, arg__11641_711})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11641_714, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_676})
+	arg__11645_714, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_676})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11643_715 = rt.AddValue(arg__11641_714, cur_junk_712)
-	arg__11650_718, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{ft_target_696, f_678})
+	arg__11647_715 = rt.AddValue(arg__11645_714, cur_junk_712)
+	arg__11654_718, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{ft_target_696, f_678})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11657_721, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{ft_target_696, f_678})
+	arg__11661_721, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-params").Deref(), []vm.Value{ft_target_696, f_678})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11658_722, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__11657_721})
+	arg__11662_722, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__11661_721})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v723 = rt.SubValue(arg__11643_715, vm.Int(1))
-	target_junk_724 = rt.SubValue(v723, arg__11658_722)
+	v723 = rt.SubValue(arg__11647_715, vm.Int(1))
+	target_junk_724 = rt.SubValue(v723, arg__11662_722)
 	v726, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "record-block-junk!").Deref(), []vm.Value{l_676, ft_target_696, target_junk_724})
 	if callErr != nil {
 		return nil, callErr
@@ -4353,16 +4353,16 @@ b64:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11677_731 = rt.SubValue(arg_ip_702, vm.Int(1))
-	arg__11684_737, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11677_731, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), ft_target_696})
+	arg__11681_731 = rt.SubValue(arg_ip_702, vm.Int(1))
+	arg__11688_737, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11681_731, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), ft_target_696})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11697_747, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11677_731, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), ft_target_696})
+	arg__11701_747, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11681_731, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), ft_target_696})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v748, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "add-patch!").Deref(), []vm.Value{l_676, arg__11697_747})
+	v748, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "add-patch!").Deref(), []vm.Value{l_676, arg__11701_747})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -4383,7 +4383,7 @@ b64:
 		l_756 = l_676
 		nid_757 = nid_677
 		f_758 = f_678
-		case__11248_759 = case__11248_679
+		case__11252_759 = case__11252_679
 		op_760 = op_680
 		ct_761 = aux_681
 		aux_762 = aux_681
@@ -4401,7 +4401,7 @@ b64:
 		l_772 = l_676
 		nid_773 = nid_677
 		f_774 = f_678
-		case__11248_775 = case__11248_679
+		case__11252_775 = case__11252_679
 		op_776 = op_680
 		ct_777 = aux_681
 		aux_778 = aux_681
@@ -4418,12 +4418,12 @@ b64:
 	}
 b65:
 	;
-	v849 = case__11248_685 == vm.Keyword("load-closed")
+	v849 = case__11252_685 == vm.Keyword("load-closed")
 	if v849 {
 		l_836 = l_682
 		nid_837 = nid_683
 		f_838 = f_684
-		case__11248_839 = case__11248_685
+		case__11252_839 = case__11252_685
 		op_840 = op_686
 		aux_841 = aux_687
 		goto b70
@@ -4431,7 +4431,7 @@ b65:
 		l_842 = l_682
 		nid_843 = nid_683
 		f_844 = f_684
-		case__11248_845 = case__11248_685
+		case__11252_845 = case__11252_685
 		op_846 = op_686
 		aux_847 = aux_687
 		goto b71
@@ -4442,7 +4442,7 @@ b66:
 	l_978 = l_970
 	nid_979 = nid_971
 	f_980 = f_972
-	case__11248_981 = case__11248_973
+	case__11252_981 = case__11252_973
 	op_982 = op_974
 	aux_983 = aux_975
 	goto b57
@@ -4452,16 +4452,16 @@ b67:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11725_797 = rt.SubValue(arg_ip2_794, vm.Int(1))
-	arg__11732_803, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11725_797, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), tt_target_766})
+	arg__11729_797 = rt.SubValue(arg_ip2_794, vm.Int(1))
+	arg__11736_803, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11729_797, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), tt_target_766})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11745_813, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11725_797, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), tt_target_766})
+	arg__11749_813, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("src-ip"), arg__11729_797, vm.Keyword("offset-slot"), vm.Int(1), vm.Keyword("negate?"), vm.Boolean(false), vm.Keyword("target-block"), tt_target_766})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v814, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "add-patch!").Deref(), []vm.Value{l_756, arg__11745_813})
+	v814, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "add-patch!").Deref(), []vm.Value{l_756, arg__11749_813})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -4469,7 +4469,7 @@ b67:
 	l_819 = l_756
 	nid_820 = nid_757
 	f_821 = f_758
-	case__11248_822 = case__11248_759
+	case__11252_822 = case__11252_759
 	op_823 = op_760
 	ct_824 = ct_761
 	aux_825 = aux_762
@@ -4489,7 +4489,7 @@ b68:
 	l_819 = l_772
 	nid_820 = nid_773
 	f_821 = f_774
-	case__11248_822 = case__11248_775
+	case__11252_822 = case__11252_775
 	op_823 = op_776
 	ct_824 = ct_777
 	aux_825 = aux_778
@@ -4509,21 +4509,21 @@ b69:
 	l_970 = l_819
 	nid_971 = nid_820
 	f_972 = f_821
-	case__11248_973 = case__11248_822
+	case__11252_973 = case__11252_822
 	op_974 = op_823
 	aux_975 = aux_825
 	goto b66
 b70:
 	;
-	arg__11754_853, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_841})
+	arg__11758_853, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_841})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11762_857, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_841})
+	arg__11766_857, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_841})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v858, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_836, nid_837, vm.Keyword("load-closed"), arg__11762_857})
+	v858, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_836, nid_837, vm.Keyword("load-closed"), arg__11766_857})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -4539,18 +4539,18 @@ b70:
 	l_962 = l_836
 	nid_963 = nid_837
 	f_964 = f_838
-	case__11248_965 = case__11248_839
+	case__11252_965 = case__11252_839
 	op_966 = op_840
 	aux_967 = aux_841
 	goto b72
 b71:
 	;
-	v879 = case__11248_845 == vm.Keyword("make-closure")
+	v879 = case__11252_845 == vm.Keyword("make-closure")
 	if v879 {
 		l_866 = l_842
 		nid_867 = nid_843
 		f_868 = f_844
-		case__11248_869 = case__11248_845
+		case__11252_869 = case__11252_845
 		op_870 = op_846
 		aux_871 = aux_847
 		goto b73
@@ -4558,7 +4558,7 @@ b71:
 		l_872 = l_842
 		nid_873 = nid_843
 		f_874 = f_844
-		case__11248_875 = case__11248_845
+		case__11252_875 = case__11252_845
 		op_876 = op_846
 		aux_877 = aux_847
 		goto b74
@@ -4569,7 +4569,7 @@ b72:
 	l_970 = l_962
 	nid_971 = nid_963
 	f_972 = f_964
-	case__11248_973 = case__11248_965
+	case__11252_973 = case__11252_965
 	op_974 = op_966
 	aux_975 = aux_967
 	goto b66
@@ -4583,18 +4583,18 @@ b73:
 	l_954 = l_866
 	nid_955 = nid_867
 	f_956 = f_868
-	case__11248_957 = case__11248_869
+	case__11252_957 = case__11252_869
 	op_958 = op_870
 	aux_959 = aux_871
 	goto b75
 b74:
 	;
-	v899 = case__11248_875 == vm.Keyword("push-closed")
+	v899 = case__11252_875 == vm.Keyword("push-closed")
 	if v899 {
 		l_886 = l_872
 		nid_887 = nid_873
 		f_888 = f_874
-		case__11248_889 = case__11248_875
+		case__11252_889 = case__11252_875
 		op_890 = op_876
 		aux_891 = aux_877
 		goto b76
@@ -4602,7 +4602,7 @@ b74:
 		l_892 = l_872
 		nid_893 = nid_873
 		f_894 = f_874
-		case__11248_895 = case__11248_875
+		case__11252_895 = case__11252_875
 		op_896 = op_876
 		aux_897 = aux_877
 		goto b77
@@ -4613,7 +4613,7 @@ b75:
 	l_962 = l_954
 	nid_963 = nid_955
 	f_964 = f_956
-	case__11248_965 = case__11248_957
+	case__11252_965 = case__11252_957
 	op_966 = op_958
 	aux_967 = aux_959
 	goto b72
@@ -4631,7 +4631,7 @@ b76:
 	l_946 = l_886
 	nid_947 = nid_887
 	f_948 = f_888
-	case__11248_949 = case__11248_889
+	case__11252_949 = case__11252_889
 	op_950 = op_890
 	aux_951 = aux_891
 	goto b78
@@ -4641,7 +4641,7 @@ b77:
 		l_910 = l_892
 		nid_911 = nid_893
 		f_912 = f_894
-		case__11248_913 = case__11248_895
+		case__11252_913 = case__11252_895
 		op_914 = op_896
 		aux_915 = aux_897
 		goto b79
@@ -4649,7 +4649,7 @@ b77:
 		l_916 = l_892
 		nid_917 = nid_893
 		f_918 = f_894
-		case__11248_919 = case__11248_895
+		case__11252_919 = case__11252_895
 		op_920 = op_896
 		aux_921 = aux_897
 		goto b80
@@ -4660,21 +4660,21 @@ b78:
 	l_954 = l_946
 	nid_955 = nid_947
 	f_956 = f_948
-	case__11248_957 = case__11248_949
+	case__11252_957 = case__11252_949
 	op_958 = op_950
 	aux_959 = aux_951
 	goto b75
 b79:
 	;
-	arg__11799_927, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "str").Deref(), []vm.Value{vm.String("ir/lower: unsupported op for lowering: "), op_914})
+	arg__11803_927, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "str").Deref(), []vm.Value{vm.String("ir/lower: unsupported op for lowering: "), op_914})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11806_932, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "str").Deref(), []vm.Value{vm.String("ir/lower: unsupported op for lowering: "), op_914})
+	arg__11810_932, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "str").Deref(), []vm.Value{vm.String("ir/lower: unsupported op for lowering: "), op_914})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v933, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "throw").Deref(), []vm.Value{arg__11806_932})
+	v933, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "throw").Deref(), []vm.Value{arg__11810_932})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -4682,7 +4682,7 @@ b79:
 	l_938 = l_910
 	nid_939 = nid_911
 	f_940 = f_912
-	case__11248_941 = case__11248_913
+	case__11252_941 = case__11252_913
 	op_942 = op_914
 	aux_943 = aux_915
 	goto b81
@@ -4692,7 +4692,7 @@ b80:
 	l_938 = l_916
 	nid_939 = nid_917
 	f_940 = f_918
-	case__11248_941 = case__11248_919
+	case__11252_941 = case__11252_919
 	op_942 = op_920
 	aux_943 = aux_921
 	goto b81
@@ -4702,7 +4702,7 @@ b81:
 	l_946 = l_938
 	nid_947 = nid_939
 	f_948 = f_940
-	case__11248_949 = case__11248_941
+	case__11252_949 = case__11252_941
 	op_950 = op_942
 	aux_951 = aux_943
 	goto b78
@@ -4714,8 +4714,8 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_8 vm.Value
 	var f_9 vm.Value
 	var pos_10 vm.Value
-	var arg__11820_25 vm.Value
-	var arg__11821_26 vm.Value
+	var arg__11824_25 vm.Value
+	var arg__11825_26 vm.Value
 	var and__x_27 bool
 	var l_11 vm.Value
 	var nid_12 vm.Value
@@ -4737,13 +4737,13 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_21 vm.Value
 	var f_22 vm.Value
 	var pos_23 vm.Value
-	var arg__11832_55 vm.Value
-	var arg__11833_56 vm.Value
+	var arg__11836_55 vm.Value
+	var arg__11837_56 vm.Value
 	var nth_arg_57 vm.Value
-	var arg__11838_59 vm.Value
-	var arg__11842_61 vm.Value
-	var arg__11848_64 vm.Value
-	var arg__11852_66 vm.Value
+	var arg__11842_59 vm.Value
+	var arg__11846_61 vm.Value
+	var arg__11852_64 vm.Value
+	var arg__11856_66 vm.Value
 	var v67 vm.Value
 	var v71 vm.Value
 	var v73 vm.Value
@@ -4757,7 +4757,7 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var f_30 vm.Value
 	var pos_31 vm.Value
 	var and__x_32 bool
-	var arg__11828_41 vm.Value
+	var arg__11832_41 vm.Value
 	var v42 bool
 	var l_33 vm.Value
 	var nid_34 vm.Value
@@ -4774,13 +4774,13 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_86 vm.Value
 	var f_87 vm.Value
 	var pos_88 vm.Value
-	var case__11807_89 vm.Value
+	var case__11811_89 vm.Value
 	var op_90 vm.Value
 	var aux_91 vm.Value
-	var arg__11877_103 vm.Value
-	var arg__11881_105 vm.Value
-	var arg__11886_108 vm.Value
-	var arg__11890_110 vm.Value
+	var arg__11881_103 vm.Value
+	var arg__11885_105 vm.Value
+	var arg__11890_108 vm.Value
+	var arg__11894_110 vm.Value
 	var idx_111 vm.Value
 	var v115 vm.Value
 	var v119 vm.Value
@@ -4789,7 +4789,7 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_93 vm.Value
 	var f_94 vm.Value
 	var pos_95 vm.Value
-	var case__11807_96 vm.Value
+	var case__11811_96 vm.Value
 	var op_97 vm.Value
 	var aux_98 vm.Value
 	var v138 bool
@@ -4798,18 +4798,18 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_296 vm.Value
 	var f_297 vm.Value
 	var pos_298 vm.Value
-	var case__11807_299 vm.Value
+	var case__11811_299 vm.Value
 	var op_300 vm.Value
 	var aux_301 vm.Value
 	var l_123 vm.Value
 	var nid_124 vm.Value
 	var f_125 vm.Value
 	var pos_126 vm.Value
-	var case__11807_127 vm.Value
+	var case__11811_127 vm.Value
 	var op_128 vm.Value
 	var aux_129 vm.Value
-	var arg__11916_142 vm.Value
-	var arg__11924_146 vm.Value
+	var arg__11920_142 vm.Value
+	var arg__11928_146 vm.Value
 	var v147 vm.Value
 	var v151 vm.Value
 	var v153 vm.Value
@@ -4817,7 +4817,7 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_131 vm.Value
 	var f_132 vm.Value
 	var pos_133 vm.Value
-	var case__11807_134 vm.Value
+	var case__11811_134 vm.Value
 	var op_135 vm.Value
 	var aux_136 vm.Value
 	var v170 bool
@@ -4826,18 +4826,18 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_287 vm.Value
 	var f_288 vm.Value
 	var pos_289 vm.Value
-	var case__11807_290 vm.Value
+	var case__11811_290 vm.Value
 	var op_291 vm.Value
 	var aux_292 vm.Value
 	var l_155 vm.Value
 	var nid_156 vm.Value
 	var f_157 vm.Value
 	var pos_158 vm.Value
-	var case__11807_159 vm.Value
+	var case__11811_159 vm.Value
 	var op_160 vm.Value
 	var aux_161 vm.Value
-	var arg__11938_173 vm.Value
-	var arg__11944_176 vm.Value
+	var arg__11942_173 vm.Value
+	var arg__11948_176 vm.Value
 	var idx_177 vm.Value
 	var v181 vm.Value
 	var v185 vm.Value
@@ -4846,7 +4846,7 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_163 vm.Value
 	var f_164 vm.Value
 	var pos_165 vm.Value
-	var case__11807_166 vm.Value
+	var case__11811_166 vm.Value
 	var op_167 vm.Value
 	var aux_168 vm.Value
 	var v204 bool
@@ -4855,18 +4855,18 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_278 vm.Value
 	var f_279 vm.Value
 	var pos_280 vm.Value
-	var case__11807_281 vm.Value
+	var case__11811_281 vm.Value
 	var op_282 vm.Value
 	var aux_283 vm.Value
 	var l_189 vm.Value
 	var nid_190 vm.Value
 	var f_191 vm.Value
 	var pos_192 vm.Value
-	var case__11807_193 vm.Value
+	var case__11811_193 vm.Value
 	var op_194 vm.Value
 	var aux_195 vm.Value
-	var arg__11971_208 vm.Value
-	var arg__11979_212 vm.Value
+	var arg__11975_208 vm.Value
+	var arg__11983_212 vm.Value
 	var v213 vm.Value
 	var v217 vm.Value
 	var v219 vm.Value
@@ -4874,7 +4874,7 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_197 vm.Value
 	var f_198 vm.Value
 	var pos_199 vm.Value
-	var case__11807_200 vm.Value
+	var case__11811_200 vm.Value
 	var op_201 vm.Value
 	var aux_202 vm.Value
 	var v267 vm.Value
@@ -4882,24 +4882,24 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_269 vm.Value
 	var f_270 vm.Value
 	var pos_271 vm.Value
-	var case__11807_272 vm.Value
+	var case__11811_272 vm.Value
 	var op_273 vm.Value
 	var aux_274 vm.Value
 	var l_221 vm.Value
 	var nid_222 vm.Value
 	var f_223 vm.Value
 	var pos_224 vm.Value
-	var case__11807_225 vm.Value
+	var case__11811_225 vm.Value
 	var op_226 vm.Value
 	var aux_227 vm.Value
-	var arg__11999_244 vm.Value
-	var arg__12012_253 vm.Value
+	var arg__12003_244 vm.Value
+	var arg__12016_253 vm.Value
 	var v254 vm.Value
 	var l_228 vm.Value
 	var nid_229 vm.Value
 	var f_230 vm.Value
 	var pos_231 vm.Value
-	var case__11807_232 vm.Value
+	var case__11811_232 vm.Value
 	var op_233 vm.Value
 	var aux_234 vm.Value
 	var v258 vm.Value
@@ -4907,11 +4907,11 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_260 vm.Value
 	var f_261 vm.Value
 	var pos_262 vm.Value
-	var case__11807_263 vm.Value
+	var case__11811_263 vm.Value
 	var op_264 vm.Value
 	var aux_265 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = f_4, pos_6, l_7, nid_8, f_9, pos_10, arg__11820_25, arg__11821_26, and__x_27, l_11, nid_12, f_13, pos_14, op_82, aux_84, v100, v303, l_304, nid_305, f_306, pos_307, l_16, nid_17, f_18, pos_19, l_20, nid_21, f_22, pos_23, arg__11832_55, arg__11833_56, nth_arg_57, arg__11838_59, arg__11842_61, arg__11848_64, arg__11852_66, v67, v71, v73, v75, l_76, nid_77, f_78, pos_79, l_28, nid_29, f_30, pos_31, and__x_32, arg__11828_41, v42, l_33, nid_34, f_35, pos_36, and__x_37, v45, l_46, nid_47, f_48, pos_49, and__x_50, l_85, nid_86, f_87, pos_88, case__11807_89, op_90, aux_91, arg__11877_103, arg__11881_105, arg__11886_108, arg__11890_110, idx_111, v115, v119, v121, l_92, nid_93, f_94, pos_95, case__11807_96, op_97, aux_98, v138, v294, l_295, nid_296, f_297, pos_298, case__11807_299, op_300, aux_301, l_123, nid_124, f_125, pos_126, case__11807_127, op_128, aux_129, arg__11916_142, arg__11924_146, v147, v151, v153, l_130, nid_131, f_132, pos_133, case__11807_134, op_135, aux_136, v170, v285, l_286, nid_287, f_288, pos_289, case__11807_290, op_291, aux_292, l_155, nid_156, f_157, pos_158, case__11807_159, op_160, aux_161, arg__11938_173, arg__11944_176, idx_177, v181, v185, v187, l_162, nid_163, f_164, pos_165, case__11807_166, op_167, aux_168, v204, v276, l_277, nid_278, f_279, pos_280, case__11807_281, op_282, aux_283, l_189, nid_190, f_191, pos_192, case__11807_193, op_194, aux_195, arg__11971_208, arg__11979_212, v213, v217, v219, l_196, nid_197, f_198, pos_199, case__11807_200, op_201, aux_202, v267, l_268, nid_269, f_270, pos_271, case__11807_272, op_273, aux_274, l_221, nid_222, f_223, pos_224, case__11807_225, op_226, aux_227, arg__11999_244, arg__12012_253, v254, l_228, nid_229, f_230, pos_231, case__11807_232, op_233, aux_234, v258, l_259, nid_260, f_261, pos_262, case__11807_263, op_264, aux_265
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = f_4, pos_6, l_7, nid_8, f_9, pos_10, arg__11824_25, arg__11825_26, and__x_27, l_11, nid_12, f_13, pos_14, op_82, aux_84, v100, v303, l_304, nid_305, f_306, pos_307, l_16, nid_17, f_18, pos_19, l_20, nid_21, f_22, pos_23, arg__11836_55, arg__11837_56, nth_arg_57, arg__11842_59, arg__11846_61, arg__11852_64, arg__11856_66, v67, v71, v73, v75, l_76, nid_77, f_78, pos_79, l_28, nid_29, f_30, pos_31, and__x_32, arg__11832_41, v42, l_33, nid_34, f_35, pos_36, and__x_37, v45, l_46, nid_47, f_48, pos_49, and__x_50, l_85, nid_86, f_87, pos_88, case__11811_89, op_90, aux_91, arg__11881_103, arg__11885_105, arg__11890_108, arg__11894_110, idx_111, v115, v119, v121, l_92, nid_93, f_94, pos_95, case__11811_96, op_97, aux_98, v138, v294, l_295, nid_296, f_297, pos_298, case__11811_299, op_300, aux_301, l_123, nid_124, f_125, pos_126, case__11811_127, op_128, aux_129, arg__11920_142, arg__11928_146, v147, v151, v153, l_130, nid_131, f_132, pos_133, case__11811_134, op_135, aux_136, v170, v285, l_286, nid_287, f_288, pos_289, case__11811_290, op_291, aux_292, l_155, nid_156, f_157, pos_158, case__11811_159, op_160, aux_161, arg__11942_173, arg__11948_176, idx_177, v181, v185, v187, l_162, nid_163, f_164, pos_165, case__11811_166, op_167, aux_168, v204, v276, l_277, nid_278, f_279, pos_280, case__11811_281, op_282, aux_283, l_189, nid_190, f_191, pos_192, case__11811_193, op_194, aux_195, arg__11975_208, arg__11983_212, v213, v217, v219, l_196, nid_197, f_198, pos_199, case__11811_200, op_201, aux_202, v267, l_268, nid_269, f_270, pos_271, case__11811_272, op_273, aux_274, l_221, nid_222, f_223, pos_224, case__11811_225, op_226, aux_227, arg__12003_244, arg__12016_253, v254, l_228, nid_229, f_230, pos_231, case__11811_232, op_233, aux_234, v258, l_259, nid_260, f_261, pos_262, case__11811_263, op_264, aux_265
 	f_4, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
@@ -4935,12 +4935,12 @@ func materialize_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	}
 b1:
 	;
-	arg__11820_25, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_7})
+	arg__11824_25, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_7})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11821_26 = rt.SubValue(arg__11820_25, vm.Int(1))
-	and__x_27 = pos_10 == arg__11821_26
+	arg__11825_26 = rt.SubValue(arg__11824_25, vm.Int(1))
+	and__x_27 = pos_10 == arg__11825_26
 	if and__x_27 {
 		l_28 = l_7
 		nid_29 = nid_8
@@ -4972,7 +4972,7 @@ b2:
 		nid_86 = nid_12
 		f_87 = f_13
 		pos_88 = pos_14
-		case__11807_89 = op_82
+		case__11811_89 = op_82
 		op_90 = op_82
 		aux_91 = aux_84
 		goto b10
@@ -4981,7 +4981,7 @@ b2:
 		nid_93 = nid_12
 		f_94 = f_13
 		pos_95 = pos_14
-		case__11807_96 = op_82
+		case__11811_96 = op_82
 		op_97 = op_82
 		aux_98 = aux_84
 		goto b11
@@ -4999,29 +4999,29 @@ b4:
 	goto b6
 b5:
 	;
-	arg__11832_55, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_20})
+	arg__11836_55, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_20})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11833_56 = rt.SubValue(arg__11832_55, vm.Int(1))
-	nth_arg_57 = rt.SubValue(arg__11833_56, pos_23)
-	arg__11838_59, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_20})
+	arg__11837_56 = rt.SubValue(arg__11836_55, vm.Int(1))
+	nth_arg_57 = rt.SubValue(arg__11837_56, pos_23)
+	arg__11842_59, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_20})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11842_61, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_20})
+	arg__11846_61, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_20})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11848_64, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_20})
+	arg__11852_64, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_20})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11852_66, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_20})
+	arg__11856_66, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "stack-sp").Deref(), []vm.Value{l_20})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v67, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit-dup-nth").Deref(), []vm.Value{arg__11848_64, arg__11852_66, nth_arg_57})
+	v67, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-emit-dup-nth").Deref(), []vm.Value{arg__11852_64, arg__11856_66, nth_arg_57})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -5049,11 +5049,11 @@ b6:
 	goto b3
 b7:
 	;
-	arg__11828_41, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{l_28, nid_29})
+	arg__11832_41, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{l_28, nid_29})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v42 = arg__11828_41 == vm.Int(1)
+	v42 = arg__11832_41 == vm.Int(1)
 	v45 = v42
 	l_46 = l_28
 	nid_47 = nid_29
@@ -5087,23 +5087,23 @@ b9:
 	}
 b10:
 	;
-	arg__11877_103, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_85})
+	arg__11881_103, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_85})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11881_105, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "template-value").Deref(), []vm.Value{aux_91})
+	arg__11885_105, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "template-value").Deref(), []vm.Value{aux_91})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11886_108, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_85})
+	arg__11890_108, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_85})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11890_110, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "template-value").Deref(), []vm.Value{aux_91})
+	arg__11894_110, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "template-value").Deref(), []vm.Value{aux_91})
 	if callErr != nil {
 		return nil, callErr
 	}
-	idx_111, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-intern-const").Deref(), []vm.Value{arg__11886_108, arg__11890_110})
+	idx_111, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-intern-const").Deref(), []vm.Value{arg__11890_108, arg__11894_110})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -5124,19 +5124,19 @@ b10:
 	nid_296 = nid_86
 	f_297 = f_87
 	pos_298 = pos_88
-	case__11807_299 = case__11807_89
+	case__11811_299 = case__11811_89
 	op_300 = op_90
 	aux_301 = aux_91
 	goto b12
 b11:
 	;
-	v138 = case__11807_96 == vm.Keyword("load-arg")
+	v138 = case__11811_96 == vm.Keyword("load-arg")
 	if v138 {
 		l_123 = l_92
 		nid_124 = nid_93
 		f_125 = f_94
 		pos_126 = pos_95
-		case__11807_127 = case__11807_96
+		case__11811_127 = case__11811_96
 		op_128 = op_97
 		aux_129 = aux_98
 		goto b13
@@ -5145,7 +5145,7 @@ b11:
 		nid_131 = nid_93
 		f_132 = f_94
 		pos_133 = pos_95
-		case__11807_134 = case__11807_96
+		case__11811_134 = case__11811_96
 		op_135 = op_97
 		aux_136 = aux_98
 		goto b14
@@ -5160,15 +5160,15 @@ b12:
 	goto b3
 b13:
 	;
-	arg__11916_142, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_129})
+	arg__11920_142, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_129})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11924_146, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_129})
+	arg__11928_146, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_129})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v147, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_123, nid_124, vm.Keyword("load-arg"), arg__11924_146})
+	v147, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_123, nid_124, vm.Keyword("load-arg"), arg__11928_146})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -5185,19 +5185,19 @@ b13:
 	nid_287 = nid_124
 	f_288 = f_125
 	pos_289 = pos_126
-	case__11807_290 = case__11807_127
+	case__11811_290 = case__11811_127
 	op_291 = op_128
 	aux_292 = aux_129
 	goto b15
 b14:
 	;
-	v170 = case__11807_134 == vm.Keyword("load-var")
+	v170 = case__11811_134 == vm.Keyword("load-var")
 	if v170 {
 		l_155 = l_130
 		nid_156 = nid_131
 		f_157 = f_132
 		pos_158 = pos_133
-		case__11807_159 = case__11807_134
+		case__11811_159 = case__11811_134
 		op_160 = op_135
 		aux_161 = aux_136
 		goto b16
@@ -5206,7 +5206,7 @@ b14:
 		nid_163 = nid_131
 		f_164 = f_132
 		pos_165 = pos_133
-		case__11807_166 = case__11807_134
+		case__11811_166 = case__11811_134
 		op_167 = op_135
 		aux_168 = aux_136
 		goto b17
@@ -5218,21 +5218,21 @@ b15:
 	nid_296 = nid_287
 	f_297 = f_288
 	pos_298 = pos_289
-	case__11807_299 = case__11807_290
+	case__11811_299 = case__11811_290
 	op_300 = op_291
 	aux_301 = aux_292
 	goto b12
 b16:
 	;
-	arg__11938_173, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_155})
+	arg__11942_173, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_155})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11944_176, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_155})
+	arg__11948_176, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_155})
 	if callErr != nil {
 		return nil, callErr
 	}
-	idx_177, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-intern-const").Deref(), []vm.Value{arg__11944_176, aux_161})
+	idx_177, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-intern-const").Deref(), []vm.Value{arg__11948_176, aux_161})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -5253,19 +5253,19 @@ b16:
 	nid_278 = nid_156
 	f_279 = f_157
 	pos_280 = pos_158
-	case__11807_281 = case__11807_159
+	case__11811_281 = case__11811_159
 	op_282 = op_160
 	aux_283 = aux_161
 	goto b18
 b17:
 	;
-	v204 = case__11807_166 == vm.Keyword("load-closed")
+	v204 = case__11811_166 == vm.Keyword("load-closed")
 	if v204 {
 		l_189 = l_162
 		nid_190 = nid_163
 		f_191 = f_164
 		pos_192 = pos_165
-		case__11807_193 = case__11807_166
+		case__11811_193 = case__11811_166
 		op_194 = op_167
 		aux_195 = aux_168
 		goto b19
@@ -5274,7 +5274,7 @@ b17:
 		nid_197 = nid_163
 		f_198 = f_164
 		pos_199 = pos_165
-		case__11807_200 = case__11807_166
+		case__11811_200 = case__11811_166
 		op_201 = op_167
 		aux_202 = aux_168
 		goto b20
@@ -5286,21 +5286,21 @@ b18:
 	nid_287 = nid_278
 	f_288 = f_279
 	pos_289 = pos_280
-	case__11807_290 = case__11807_281
+	case__11811_290 = case__11811_281
 	op_291 = op_282
 	aux_292 = aux_283
 	goto b15
 b19:
 	;
-	arg__11971_208, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_195})
+	arg__11975_208, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_195})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__11979_212, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_195})
+	arg__11983_212, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "int").Deref(), []vm.Value{aux_195})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v213, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_189, nid_190, vm.Keyword("load-closed"), arg__11979_212})
+	v213, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "emit-with-arg!").Deref(), []vm.Value{l_189, nid_190, vm.Keyword("load-closed"), arg__11983_212})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -5317,7 +5317,7 @@ b19:
 	nid_269 = nid_190
 	f_270 = f_191
 	pos_271 = pos_192
-	case__11807_272 = case__11807_193
+	case__11811_272 = case__11811_193
 	op_273 = op_194
 	aux_274 = aux_195
 	goto b21
@@ -5328,7 +5328,7 @@ b20:
 		nid_222 = nid_197
 		f_223 = f_198
 		pos_224 = pos_199
-		case__11807_225 = case__11807_200
+		case__11811_225 = case__11811_200
 		op_226 = op_201
 		aux_227 = aux_202
 		goto b22
@@ -5337,7 +5337,7 @@ b20:
 		nid_229 = nid_197
 		f_230 = f_198
 		pos_231 = pos_199
-		case__11807_232 = case__11807_200
+		case__11811_232 = case__11811_200
 		op_233 = op_201
 		aux_234 = aux_202
 		goto b23
@@ -5349,21 +5349,21 @@ b21:
 	nid_278 = nid_269
 	f_279 = f_270
 	pos_280 = pos_271
-	case__11807_281 = case__11807_272
+	case__11811_281 = case__11811_272
 	op_282 = op_273
 	aux_283 = aux_274
 	goto b18
 b22:
 	;
-	arg__11999_244, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "str").Deref(), []vm.Value{vm.String("ir/lower: value %"), nid_222, vm.String(" not on stack for materialize (op="), op_226, vm.String(")")})
+	arg__12003_244, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "str").Deref(), []vm.Value{vm.String("ir/lower: value %"), nid_222, vm.String(" not on stack for materialize (op="), op_226, vm.String(")")})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12012_253, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "str").Deref(), []vm.Value{vm.String("ir/lower: value %"), nid_222, vm.String(" not on stack for materialize (op="), op_226, vm.String(")")})
+	arg__12016_253, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "str").Deref(), []vm.Value{vm.String("ir/lower: value %"), nid_222, vm.String(" not on stack for materialize (op="), op_226, vm.String(")")})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v254, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "throw").Deref(), []vm.Value{arg__12012_253})
+	v254, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "throw").Deref(), []vm.Value{arg__12016_253})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -5372,7 +5372,7 @@ b22:
 	nid_260 = nid_222
 	f_261 = f_223
 	pos_262 = pos_224
-	case__11807_263 = case__11807_225
+	case__11811_263 = case__11811_225
 	op_264 = op_226
 	aux_265 = aux_227
 	goto b24
@@ -5383,7 +5383,7 @@ b23:
 	nid_260 = nid_229
 	f_261 = f_230
 	pos_262 = pos_231
-	case__11807_263 = case__11807_232
+	case__11811_263 = case__11811_232
 	op_264 = op_233
 	aux_265 = aux_234
 	goto b24
@@ -5394,7 +5394,7 @@ b24:
 	nid_269 = nid_260
 	f_270 = f_261
 	pos_271 = pos_262
-	case__11807_272 = case__11807_263
+	case__11811_272 = case__11811_263
 	op_273 = op_264
 	aux_274 = aux_265
 	goto b21
@@ -5414,8 +5414,8 @@ func materialize_branch_args_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, erro
 	var argc_16 vm.Value
 	var args_17 vm.Value
 	var l_18 vm.Value
-	var arg__12026_23 vm.Value
-	var arg__12034_26 vm.Value
+	var arg__12030_23 vm.Value
+	var arg__12038_26 vm.Value
 	var pos_27 vm.Value
 	var skip_72 int
 	var k_73 int
@@ -5500,13 +5500,13 @@ func materialize_branch_args_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, erro
 	var argc_110 vm.Value
 	var args_111 vm.Value
 	var l_112 vm.Value
-	var arg__12058_121 vm.Value
-	var arg__12064_124 vm.Value
-	var arg__12066_125 vm.Value
-	var arg__12071_128 vm.Value
-	var arg__12077_131 vm.Value
-	var arg__12079_132 vm.Value
-	var doseq_seq__12013_133 vm.Value
+	var arg__12062_121 vm.Value
+	var arg__12068_124 vm.Value
+	var arg__12070_125 vm.Value
+	var arg__12075_128 vm.Value
+	var arg__12081_131 vm.Value
+	var arg__12083_132 vm.Value
+	var doseq_seq__12017_133 vm.Value
 	var skip_113 int
 	var k_114 int
 	var argc_115 vm.Value
@@ -5518,14 +5518,14 @@ func materialize_branch_args_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, erro
 	var argc_215 vm.Value
 	var args_216 vm.Value
 	var l_217 vm.Value
-	var doseq_loop__12014_134 vm.Value
+	var doseq_loop__12018_134 vm.Value
 	var l_135 vm.Value
 	var skip_137 int
 	var k_138 int
 	var argc_139 vm.Value
 	var args_140 vm.Value
-	var doseq_seq__12013_141 vm.Value
-	var doseq_loop__12014_142 vm.Value
+	var doseq_seq__12017_141 vm.Value
+	var doseq_loop__12018_142 vm.Value
 	var l_143 vm.Value
 	var a_153 vm.Value
 	var v155 vm.Value
@@ -5535,16 +5535,16 @@ func materialize_branch_args_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, erro
 	var k_145 int
 	var argc_146 vm.Value
 	var args_147 vm.Value
-	var doseq_seq__12013_148 vm.Value
-	var doseq_loop__12014_149 vm.Value
+	var doseq_seq__12017_148 vm.Value
+	var doseq_loop__12018_149 vm.Value
 	var l_150 vm.Value
 	var v163 vm.Value
 	var skip_164 int
 	var k_165 int
 	var argc_166 vm.Value
 	var args_167 vm.Value
-	var doseq_seq__12013_168 vm.Value
-	var doseq_loop__12014_169 vm.Value
+	var doseq_seq__12017_168 vm.Value
+	var doseq_loop__12018_169 vm.Value
 	var l_170 vm.Value
 	var k_171 int
 	var k_172 int
@@ -5553,30 +5553,30 @@ func materialize_branch_args_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, erro
 	var skip_175 int
 	var v190 bool
 	var argc_178 vm.Value
-	var doseq_loop__12014_179 vm.Value
+	var doseq_loop__12018_179 vm.Value
 	var k_180 int
 	var args_181 vm.Value
 	var l_182 vm.Value
 	var skip_183 int
-	var arg__12104_193 vm.Value
-	var arg__12112_196 vm.Value
+	var arg__12108_193 vm.Value
+	var arg__12116_196 vm.Value
 	var v197 vm.Value
 	var v198 int
 	var argc_184 vm.Value
-	var doseq_loop__12014_185 vm.Value
+	var doseq_loop__12018_185 vm.Value
 	var k_186 int
 	var args_187 vm.Value
 	var l_188 vm.Value
 	var skip_189 int
 	var v202 vm.Value
 	var argc_203 vm.Value
-	var doseq_loop__12014_204 vm.Value
+	var doseq_loop__12018_204 vm.Value
 	var k_205 int
 	var args_206 vm.Value
 	var l_207 vm.Value
 	var skip_208 int
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = argc_4, k_5, argc_6, args_7, l_8, v19, k_11, argc_12, args_13, l_14, k_15, argc_16, args_17, l_18, arg__12026_23, arg__12034_26, pos_27, skip_72, k_73, argc_74, args_75, l_76, v87, k_28, argc_29, args_30, l_31, pos_32, v62, k_33, argc_34, args_35, l_36, pos_37, v65, k_66, argc_67, args_68, l_69, pos_70, k_38, argc_39, args_40, l_41, and__x_42, pos_43, v51, k_44, argc_45, args_46, l_47, and__x_48, pos_49, v54, k_55, argc_56, args_57, l_58, and__x_59, pos_60, skip_77, k_78, argc_79, args_80, l_81, v90, skip_82, k_83, argc_84, args_85, l_86, v103, v226, skip_227, k_228, argc_229, args_230, l_231, skip_92, k_93, argc_94, args_95, l_96, v106, skip_97, k_98, argc_99, args_100, l_101, v219, skip_220, k_221, argc_222, args_223, l_224, skip_108, k_109, argc_110, args_111, l_112, arg__12058_121, arg__12064_124, arg__12066_125, arg__12071_128, arg__12077_131, arg__12079_132, doseq_seq__12013_133, skip_113, k_114, argc_115, args_116, l_117, v212, skip_213, k_214, argc_215, args_216, l_217, doseq_loop__12014_134, l_135, skip_137, k_138, argc_139, args_140, doseq_seq__12013_141, doseq_loop__12014_142, l_143, a_153, v155, v157, v159, skip_144, k_145, argc_146, args_147, doseq_seq__12013_148, doseq_loop__12014_149, l_150, v163, skip_164, k_165, argc_166, args_167, doseq_seq__12013_168, doseq_loop__12014_169, l_170, k_171, k_172, args_173, l_174, skip_175, v190, argc_178, doseq_loop__12014_179, k_180, args_181, l_182, skip_183, arg__12104_193, arg__12112_196, v197, v198, argc_184, doseq_loop__12014_185, k_186, args_187, l_188, skip_189, v202, argc_203, doseq_loop__12014_204, k_205, args_206, l_207, skip_208
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = argc_4, k_5, argc_6, args_7, l_8, v19, k_11, argc_12, args_13, l_14, k_15, argc_16, args_17, l_18, arg__12030_23, arg__12038_26, pos_27, skip_72, k_73, argc_74, args_75, l_76, v87, k_28, argc_29, args_30, l_31, pos_32, v62, k_33, argc_34, args_35, l_36, pos_37, v65, k_66, argc_67, args_68, l_69, pos_70, k_38, argc_39, args_40, l_41, and__x_42, pos_43, v51, k_44, argc_45, args_46, l_47, and__x_48, pos_49, v54, k_55, argc_56, args_57, l_58, and__x_59, pos_60, skip_77, k_78, argc_79, args_80, l_81, v90, skip_82, k_83, argc_84, args_85, l_86, v103, v226, skip_227, k_228, argc_229, args_230, l_231, skip_92, k_93, argc_94, args_95, l_96, v106, skip_97, k_98, argc_99, args_100, l_101, v219, skip_220, k_221, argc_222, args_223, l_224, skip_108, k_109, argc_110, args_111, l_112, arg__12062_121, arg__12068_124, arg__12070_125, arg__12075_128, arg__12081_131, arg__12083_132, doseq_seq__12017_133, skip_113, k_114, argc_115, args_116, l_117, v212, skip_213, k_214, argc_215, args_216, l_217, doseq_loop__12018_134, l_135, skip_137, k_138, argc_139, args_140, doseq_seq__12017_141, doseq_loop__12018_142, l_143, a_153, v155, v157, v159, skip_144, k_145, argc_146, args_147, doseq_seq__12017_148, doseq_loop__12018_149, l_150, v163, skip_164, k_165, argc_166, args_167, doseq_seq__12017_168, doseq_loop__12018_169, l_170, k_171, k_172, args_173, l_174, skip_175, v190, argc_178, doseq_loop__12018_179, k_180, args_181, l_182, skip_183, arg__12108_193, arg__12116_196, v197, v198, argc_184, doseq_loop__12018_185, k_186, args_187, l_188, skip_189, v202, argc_203, doseq_loop__12018_204, k_205, args_206, l_207, skip_208
 	argc_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg1})
 	if callErr != nil {
 		return nil, callErr
@@ -5612,15 +5612,15 @@ b2:
 	goto b4
 b3:
 	;
-	arg__12026_23, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_17, vm.Int(k_15)})
+	arg__12030_23, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_17, vm.Int(k_15)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12034_26, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_17, vm.Int(k_15)})
+	arg__12038_26, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_17, vm.Int(k_15)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	pos_27, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "value-pos-of").Deref(), []vm.Value{l_18, arg__12034_26})
+	pos_27, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "value-pos-of").Deref(), []vm.Value{l_18, arg__12038_26})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -5800,35 +5800,35 @@ b16:
 	goto b13
 b17:
 	;
-	arg__12058_121, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{args_111})
+	arg__12062_121, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{args_111})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12064_124, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{args_111})
+	arg__12068_124, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{args_111})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12066_125, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "subvec").Deref(), []vm.Value{arg__12064_124, vm.Int(skip_108)})
+	arg__12070_125, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "subvec").Deref(), []vm.Value{arg__12068_124, vm.Int(skip_108)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12071_128, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{args_111})
+	arg__12075_128, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{args_111})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12077_131, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{args_111})
+	arg__12081_131, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{args_111})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12079_132, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "subvec").Deref(), []vm.Value{arg__12077_131, vm.Int(skip_108)})
+	arg__12083_132, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "subvec").Deref(), []vm.Value{arg__12081_131, vm.Int(skip_108)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_seq__12013_133, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__12079_132})
+	doseq_seq__12017_133, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__12083_132})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__12014_134 = doseq_seq__12013_133
+	doseq_loop__12018_134 = doseq_seq__12017_133
 	l_135 = l_112
 	goto b20
 b18:
@@ -5851,13 +5851,13 @@ b19:
 	goto b16
 b20:
 	;
-	if vm.IsTruthy(doseq_loop__12014_134) {
+	if vm.IsTruthy(doseq_loop__12018_134) {
 		skip_137 = skip_108
 		k_138 = k_109
 		argc_139 = argc_110
 		args_140 = args_111
-		doseq_seq__12013_141 = doseq_seq__12013_133
-		doseq_loop__12014_142 = doseq_loop__12014_134
+		doseq_seq__12017_141 = doseq_seq__12017_133
+		doseq_loop__12018_142 = doseq_loop__12018_134
 		l_143 = l_135
 		goto b21
 	} else {
@@ -5865,14 +5865,14 @@ b20:
 		k_145 = k_109
 		argc_146 = argc_110
 		args_147 = args_111
-		doseq_seq__12013_148 = doseq_seq__12013_133
-		doseq_loop__12014_149 = doseq_loop__12014_134
+		doseq_seq__12017_148 = doseq_seq__12017_133
+		doseq_loop__12018_149 = doseq_loop__12018_134
 		l_150 = l_135
 		goto b22
 	}
 b21:
 	;
-	a_153, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__12014_142})
+	a_153, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__12018_142})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -5884,11 +5884,11 @@ b21:
 	if callErr != nil {
 		return nil, callErr
 	}
-	v159, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__12014_142})
+	v159, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__12018_142})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__12014_134 = v159
+	doseq_loop__12018_134 = v159
 	l_135 = l_143
 	goto b20
 b22:
@@ -5898,8 +5898,8 @@ b22:
 	k_165 = k_145
 	argc_166 = argc_146
 	args_167 = args_147
-	doseq_seq__12013_168 = doseq_seq__12013_148
-	doseq_loop__12014_169 = doseq_loop__12014_149
+	doseq_seq__12017_168 = doseq_seq__12017_148
+	doseq_loop__12018_169 = doseq_loop__12018_149
 	l_170 = l_150
 	goto b23
 b23:
@@ -5915,7 +5915,7 @@ b24:
 	v190 = k_172 < skip_175
 	if v190 {
 		argc_178 = argc_166
-		doseq_loop__12014_179 = doseq_loop__12014_169
+		doseq_loop__12018_179 = doseq_loop__12018_169
 		k_180 = k_172
 		args_181 = args_173
 		l_182 = l_174
@@ -5923,7 +5923,7 @@ b24:
 		goto b25
 	} else {
 		argc_184 = argc_166
-		doseq_loop__12014_185 = doseq_loop__12014_169
+		doseq_loop__12018_185 = doseq_loop__12018_169
 		k_186 = k_172
 		args_187 = args_173
 		l_188 = l_174
@@ -5932,15 +5932,15 @@ b24:
 	}
 b25:
 	;
-	arg__12104_193, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_181, vm.Int(k_180)})
+	arg__12108_193, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_181, vm.Int(k_180)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12112_196, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_181, vm.Int(k_180)})
+	arg__12116_196, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{args_181, vm.Int(k_180)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v197, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "decrement-use!").Deref(), []vm.Value{l_182, arg__12112_196})
+	v197, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "decrement-use!").Deref(), []vm.Value{l_182, arg__12116_196})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -5955,7 +5955,7 @@ b26:
 	;
 	v202 = vm.NIL
 	argc_203 = argc_184
-	doseq_loop__12014_204 = doseq_loop__12014_185
+	doseq_loop__12018_204 = doseq_loop__12018_185
 	k_205 = k_186
 	args_206 = args_187
 	l_207 = l_188
@@ -5972,53 +5972,53 @@ b27:
 	goto b19
 }
 func materialize_refs_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
-	var doseq_seq__12114_4 vm.Value
-	var doseq_loop__12115_5 vm.Value
+	var doseq_seq__12118_4 vm.Value
+	var doseq_loop__12119_5 vm.Value
 	var l_6 vm.Value
 	var refs_8 vm.Value
-	var doseq_seq__12114_9 vm.Value
-	var doseq_loop__12115_10 vm.Value
+	var doseq_seq__12118_9 vm.Value
+	var doseq_loop__12119_10 vm.Value
 	var l_11 vm.Value
 	var r_18 vm.Value
 	var v20 vm.Value
 	var v22 vm.Value
 	var v24 vm.Value
 	var refs_12 vm.Value
-	var doseq_seq__12114_13 vm.Value
-	var doseq_loop__12115_14 vm.Value
+	var doseq_seq__12118_13 vm.Value
+	var doseq_loop__12119_14 vm.Value
 	var l_15 vm.Value
 	var v28 vm.Value
 	var refs_29 vm.Value
-	var doseq_seq__12114_30 vm.Value
-	var doseq_loop__12115_31 vm.Value
+	var doseq_seq__12118_30 vm.Value
+	var doseq_loop__12119_31 vm.Value
 	var l_32 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = doseq_seq__12114_4, doseq_loop__12115_5, l_6, refs_8, doseq_seq__12114_9, doseq_loop__12115_10, l_11, r_18, v20, v22, v24, refs_12, doseq_seq__12114_13, doseq_loop__12115_14, l_15, v28, refs_29, doseq_seq__12114_30, doseq_loop__12115_31, l_32
-	doseq_seq__12114_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg1})
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = doseq_seq__12118_4, doseq_loop__12119_5, l_6, refs_8, doseq_seq__12118_9, doseq_loop__12119_10, l_11, r_18, v20, v22, v24, refs_12, doseq_seq__12118_13, doseq_loop__12119_14, l_15, v28, refs_29, doseq_seq__12118_30, doseq_loop__12119_31, l_32
+	doseq_seq__12118_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__12115_5 = doseq_seq__12114_4
+	doseq_loop__12119_5 = doseq_seq__12118_4
 	l_6 = arg0
 	goto b1
 b1:
 	;
-	if vm.IsTruthy(doseq_loop__12115_5) {
+	if vm.IsTruthy(doseq_loop__12119_5) {
 		refs_8 = arg1
-		doseq_seq__12114_9 = doseq_seq__12114_4
-		doseq_loop__12115_10 = doseq_loop__12115_5
+		doseq_seq__12118_9 = doseq_seq__12118_4
+		doseq_loop__12119_10 = doseq_loop__12119_5
 		l_11 = l_6
 		goto b2
 	} else {
 		refs_12 = arg1
-		doseq_seq__12114_13 = doseq_seq__12114_4
-		doseq_loop__12115_14 = doseq_loop__12115_5
+		doseq_seq__12118_13 = doseq_seq__12118_4
+		doseq_loop__12119_14 = doseq_loop__12119_5
 		l_15 = l_6
 		goto b3
 	}
 b2:
 	;
-	r_18, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__12115_10})
+	r_18, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__12119_10})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -6030,19 +6030,19 @@ b2:
 	if callErr != nil {
 		return nil, callErr
 	}
-	v24, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__12115_10})
+	v24, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__12119_10})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__12115_5 = v24
+	doseq_loop__12119_5 = v24
 	l_6 = l_11
 	goto b1
 b3:
 	;
 	v28 = vm.NIL
 	refs_29 = refs_12
-	doseq_seq__12114_30 = doseq_seq__12114_13
-	doseq_loop__12115_31 = doseq_loop__12115_14
+	doseq_seq__12118_30 = doseq_seq__12118_13
+	doseq_loop__12119_31 = doseq_loop__12119_14
 	l_32 = l_15
 	goto b4
 b4:
@@ -6051,13 +6051,13 @@ b4:
 }
 func new_lowerer(arg0 vm.Value) (vm.Value, error) {
 	var uses_3 vm.Value
-	var arg__12141_5 vm.Value
-	var arg__12146_8 vm.Value
+	var arg__12145_5 vm.Value
+	var arg__12150_8 vm.Value
 	var n_blocks_9 vm.Value
 	var i_10 int
 	var acc_11 vm.Value
 	var uses_12 vm.Value
-	var arg__12151_27 vm.Value
+	var arg__12155_27 vm.Value
 	var v28 bool
 	var f_16 vm.Value
 	var n_blocks_17 vm.Value
@@ -6078,26 +6078,26 @@ func new_lowerer(arg0 vm.Value) (vm.Value, error) {
 	var i_68 int
 	var acc_69 vm.Value
 	var uses_70 vm.Value
-	var arg__12181_76 vm.Value
-	var arg__12186_79 vm.Value
-	var arg__12187_80 vm.Value
-	var arg__12198_87 vm.Value
-	var arg__12205_92 vm.Value
-	var arg__12206_93 vm.Value
-	var arg__12213_98 vm.Value
-	var arg__12220_103 vm.Value
-	var arg__12221_104 vm.Value
-	var arg__12230_112 vm.Value
-	var arg__12239_119 vm.Value
-	var arg__12244_122 vm.Value
-	var arg__12245_123 vm.Value
-	var arg__12256_130 vm.Value
-	var arg__12263_135 vm.Value
-	var arg__12264_136 vm.Value
-	var arg__12271_141 vm.Value
-	var arg__12278_146 vm.Value
-	var arg__12279_147 vm.Value
-	var arg__12288_155 vm.Value
+	var arg__12185_76 vm.Value
+	var arg__12190_79 vm.Value
+	var arg__12191_80 vm.Value
+	var arg__12202_87 vm.Value
+	var arg__12209_92 vm.Value
+	var arg__12210_93 vm.Value
+	var arg__12217_98 vm.Value
+	var arg__12224_103 vm.Value
+	var arg__12225_104 vm.Value
+	var arg__12234_112 vm.Value
+	var arg__12243_119 vm.Value
+	var arg__12248_122 vm.Value
+	var arg__12249_123 vm.Value
+	var arg__12260_130 vm.Value
+	var arg__12267_135 vm.Value
+	var arg__12268_136 vm.Value
+	var arg__12275_141 vm.Value
+	var arg__12282_146 vm.Value
+	var arg__12283_147 vm.Value
+	var arg__12292_155 vm.Value
 	var v156 vm.Value
 	var f_34 vm.Value
 	var n_blocks_35 vm.Value
@@ -6111,8 +6111,8 @@ func new_lowerer(arg0 vm.Value) (vm.Value, error) {
 	var acc_43 vm.Value
 	var uses_44 vm.Value
 	var us_45 vm.Value
-	var arg__12166_51 vm.Value
-	var arg__12173_54 vm.Value
+	var arg__12170_51 vm.Value
+	var arg__12177_54 vm.Value
 	var v55 vm.Value
 	var v57 vm.Value
 	var f_58 vm.Value
@@ -6122,20 +6122,20 @@ func new_lowerer(arg0 vm.Value) (vm.Value, error) {
 	var uses_62 vm.Value
 	var us_63 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = uses_3, arg__12141_5, arg__12146_8, n_blocks_9, i_10, acc_11, uses_12, arg__12151_27, v28, f_16, n_blocks_17, i_18, acc_19, uses_20, f_21, n_blocks_22, i_23, acc_24, uses_25, us_32, v33, v47, use_count_65, f_66, n_blocks_67, i_68, acc_69, uses_70, arg__12181_76, arg__12186_79, arg__12187_80, arg__12198_87, arg__12205_92, arg__12206_93, arg__12213_98, arg__12220_103, arg__12221_104, arg__12230_112, arg__12239_119, arg__12244_122, arg__12245_123, arg__12256_130, arg__12263_135, arg__12264_136, arg__12271_141, arg__12278_146, arg__12279_147, arg__12288_155, v156, f_34, n_blocks_35, i_36, acc_37, uses_38, us_39, f_40, n_blocks_41, i_42, acc_43, uses_44, us_45, arg__12166_51, arg__12173_54, v55, v57, f_58, n_blocks_59, i_60, acc_61, uses_62, us_63
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = uses_3, arg__12145_5, arg__12150_8, n_blocks_9, i_10, acc_11, uses_12, arg__12155_27, v28, f_16, n_blocks_17, i_18, acc_19, uses_20, f_21, n_blocks_22, i_23, acc_24, uses_25, us_32, v33, v47, use_count_65, f_66, n_blocks_67, i_68, acc_69, uses_70, arg__12185_76, arg__12190_79, arg__12191_80, arg__12202_87, arg__12209_92, arg__12210_93, arg__12217_98, arg__12224_103, arg__12225_104, arg__12234_112, arg__12243_119, arg__12248_122, arg__12249_123, arg__12260_130, arg__12267_135, arg__12268_136, arg__12275_141, arg__12282_146, arg__12283_147, arg__12292_155, v156, f_34, n_blocks_35, i_36, acc_37, uses_38, us_39, f_40, n_blocks_41, i_42, acc_43, uses_44, us_45, arg__12170_51, arg__12177_54, v55, v57, f_58, n_blocks_59, i_60, acc_61, uses_62, us_63
 	uses_3, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12141_5, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
+	arg__12145_5, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12146_8, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
+	arg__12150_8, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	n_blocks_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__12146_8})
+	n_blocks_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg__12150_8})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -6145,11 +6145,11 @@ func new_lowerer(arg0 vm.Value) (vm.Value, error) {
 	goto b1
 b1:
 	;
-	arg__12151_27, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{uses_12})
+	arg__12155_27, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{uses_12})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v28 = rt.GeValue(vm.Int(i_10), arg__12151_27)
+	v28 = rt.GeValue(vm.Int(i_10), arg__12155_27)
 	if v28 {
 		f_16 = arg0
 		n_blocks_17 = n_blocks_9
@@ -6204,87 +6204,87 @@ b3:
 	}
 b4:
 	;
-	arg__12181_76, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-consts").Deref(), []vm.Value{f_66})
+	arg__12185_76, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-consts").Deref(), []vm.Value{f_66})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12186_79, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-consts").Deref(), []vm.Value{f_66})
+	arg__12190_79, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-consts").Deref(), []vm.Value{f_66})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12187_80, callErr = rt.InvokeValue(rt.LookupVar("ir", "new-chunk").Deref(), []vm.Value{arg__12186_79})
+	arg__12191_80, callErr = rt.InvokeValue(rt.LookupVar("ir", "new-chunk").Deref(), []vm.Value{arg__12190_79})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12198_87, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
+	arg__12202_87, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12205_92, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
+	arg__12209_92, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12206_93, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__12205_92})
+	arg__12210_93, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__12209_92})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12213_98, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
+	arg__12217_98, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12220_103, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
+	arg__12224_103, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12221_104, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__12220_103})
+	arg__12225_104, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__12224_103})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12230_112, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("value-stack-pos"), vm.EmptyPersistentMap, vm.Keyword("chunk"), arg__12187_80, vm.Keyword("uses"), uses_70, vm.Keyword("f"), f_66, vm.Keyword("block-junk"), arg__12206_93, vm.Keyword("block-ips"), arg__12221_104, vm.Keyword("patches"), vm.NewArrayVector([]vm.Value{}), vm.Keyword("use-count"), use_count_65, vm.Keyword("current-block"), vm.Int(0), vm.Keyword("stack-sp"), vm.Int(0)})
+	arg__12234_112, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("value-stack-pos"), vm.EmptyPersistentMap, vm.Keyword("chunk"), arg__12191_80, vm.Keyword("uses"), uses_70, vm.Keyword("f"), f_66, vm.Keyword("block-junk"), arg__12210_93, vm.Keyword("block-ips"), arg__12225_104, vm.Keyword("patches"), vm.NewArrayVector([]vm.Value{}), vm.Keyword("use-count"), use_count_65, vm.Keyword("current-block"), vm.Int(0), vm.Keyword("stack-sp"), vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12239_119, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-consts").Deref(), []vm.Value{f_66})
+	arg__12243_119, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-consts").Deref(), []vm.Value{f_66})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12244_122, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-consts").Deref(), []vm.Value{f_66})
+	arg__12248_122, callErr = rt.InvokeValue(rt.LookupVar("ir", "fn-consts").Deref(), []vm.Value{f_66})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12245_123, callErr = rt.InvokeValue(rt.LookupVar("ir", "new-chunk").Deref(), []vm.Value{arg__12244_122})
+	arg__12249_123, callErr = rt.InvokeValue(rt.LookupVar("ir", "new-chunk").Deref(), []vm.Value{arg__12248_122})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12256_130, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
+	arg__12260_130, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12263_135, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
+	arg__12267_135, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12264_136, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__12263_135})
+	arg__12268_136, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__12267_135})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12271_141, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
+	arg__12275_141, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12278_146, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
+	arg__12282_146, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "repeat").Deref(), []vm.Value{n_blocks_67, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12279_147, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__12278_146})
+	arg__12283_147, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__12282_146})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12288_155, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("value-stack-pos"), vm.EmptyPersistentMap, vm.Keyword("chunk"), arg__12245_123, vm.Keyword("uses"), uses_70, vm.Keyword("f"), f_66, vm.Keyword("block-junk"), arg__12264_136, vm.Keyword("block-ips"), arg__12279_147, vm.Keyword("patches"), vm.NewArrayVector([]vm.Value{}), vm.Keyword("use-count"), use_count_65, vm.Keyword("current-block"), vm.Int(0), vm.Keyword("stack-sp"), vm.Int(0)})
+	arg__12292_155, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("value-stack-pos"), vm.EmptyPersistentMap, vm.Keyword("chunk"), arg__12249_123, vm.Keyword("uses"), uses_70, vm.Keyword("f"), f_66, vm.Keyword("block-junk"), arg__12268_136, vm.Keyword("block-ips"), arg__12283_147, vm.Keyword("patches"), vm.NewArrayVector([]vm.Value{}), vm.Keyword("use-count"), use_count_65, vm.Keyword("current-block"), vm.Int(0), vm.Keyword("stack-sp"), vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v156, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "atom").Deref(), []vm.Value{arg__12288_155})
+	v156, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "atom").Deref(), []vm.Value{arg__12292_155})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -6301,15 +6301,15 @@ b5:
 	goto b7
 b6:
 	;
-	arg__12166_51, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-count").Deref(), []vm.Value{us_45})
+	arg__12170_51, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-count").Deref(), []vm.Value{us_45})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12173_54, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-count").Deref(), []vm.Value{us_45})
+	arg__12177_54, callErr = rt.InvokeValue(rt.LookupVar("ir", "uses-count").Deref(), []vm.Value{us_45})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v55, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "assoc").Deref(), []vm.Value{acc_43, vm.Int(i_42), arg__12173_54})
+	v55, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "assoc").Deref(), []vm.Value{acc_43, vm.Int(i_42), arg__12177_54})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -6329,43 +6329,43 @@ b7:
 	goto b1
 }
 func patch_branches_BANG_(arg0 vm.Value) (vm.Value, error) {
-	var arg__12295_3 vm.Value
-	var arg__12296_4 vm.Value
-	var arg__12302_8 vm.Value
-	var arg__12303_9 vm.Value
-	var doseq_seq__12289_10 vm.Value
-	var doseq_loop__12290_11 vm.Value
+	var arg__12299_3 vm.Value
+	var arg__12300_4 vm.Value
+	var arg__12306_8 vm.Value
+	var arg__12307_9 vm.Value
+	var doseq_seq__12293_10 vm.Value
+	var doseq_loop__12294_11 vm.Value
 	var l_12 vm.Value
 	var v86 vm.Value
 	var v92 vm.Value
 	var v98 vm.Value
 	var v104 vm.Value
-	var doseq_seq__12289_14 vm.Value
-	var doseq_loop__12290_15 vm.Value
+	var doseq_seq__12293_14 vm.Value
+	var doseq_loop__12294_15 vm.Value
 	var l_16 vm.Value
 	var v85 vm.Value
 	var v91 vm.Value
 	var v97 vm.Value
 	var v103 vm.Value
 	var p_22 vm.Value
-	var arg__12310_24 vm.Value
-	var arg__12315_27 vm.Value
+	var arg__12314_24 vm.Value
+	var arg__12319_27 vm.Value
 	var target_ip_28 vm.Value
 	var src_ip_30 vm.Value
 	var v44 vm.Value
-	var doseq_seq__12289_17 vm.Value
-	var doseq_loop__12290_18 vm.Value
+	var doseq_seq__12293_17 vm.Value
+	var doseq_loop__12294_18 vm.Value
 	var l_19 vm.Value
 	var v90 vm.Value
 	var v96 vm.Value
 	var v102 vm.Value
 	var v108 vm.Value
 	var v74 vm.Value
-	var doseq_seq__12289_75 vm.Value
-	var doseq_loop__12290_76 vm.Value
+	var doseq_seq__12293_75 vm.Value
+	var doseq_loop__12294_76 vm.Value
 	var l_77 vm.Value
-	var doseq_seq__12289_31 vm.Value
-	var doseq_loop__12290_32 vm.Value
+	var doseq_seq__12293_31 vm.Value
+	var doseq_loop__12294_32 vm.Value
 	var l_33 vm.Value
 	var p_34 vm.Value
 	var target_ip_35 vm.Value
@@ -6375,8 +6375,8 @@ func patch_branches_BANG_(arg0 vm.Value) (vm.Value, error) {
 	var v100 vm.Value
 	var v106 vm.Value
 	var v46 vm.Value
-	var doseq_seq__12289_37 vm.Value
-	var doseq_loop__12290_38 vm.Value
+	var doseq_seq__12293_37 vm.Value
+	var doseq_loop__12294_38 vm.Value
 	var l_39 vm.Value
 	var p_40 vm.Value
 	var target_ip_41 vm.Value
@@ -6387,8 +6387,8 @@ func patch_branches_BANG_(arg0 vm.Value) (vm.Value, error) {
 	var v105 vm.Value
 	var v48 vm.Value
 	var offset_50 vm.Value
-	var doseq_seq__12289_51 vm.Value
-	var doseq_loop__12290_52 vm.Value
+	var doseq_seq__12293_51 vm.Value
+	var doseq_loop__12294_52 vm.Value
 	var l_53 vm.Value
 	var p_54 vm.Value
 	var target_ip_55 vm.Value
@@ -6397,36 +6397,36 @@ func patch_branches_BANG_(arg0 vm.Value) (vm.Value, error) {
 	var v95 vm.Value
 	var v101 vm.Value
 	var v107 vm.Value
-	var arg__12327_58 vm.Value
-	var arg__12331_60 vm.Value
-	var arg__12338_64 vm.Value
-	var arg__12342_66 vm.Value
-	var arg__12343_67 vm.Value
+	var arg__12331_58 vm.Value
+	var arg__12335_60 vm.Value
+	var arg__12342_64 vm.Value
+	var arg__12346_66 vm.Value
+	var arg__12347_67 vm.Value
 	var v68 vm.Value
 	var v70 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__12295_3, arg__12296_4, arg__12302_8, arg__12303_9, doseq_seq__12289_10, doseq_loop__12290_11, l_12, v86, v92, v98, v104, doseq_seq__12289_14, doseq_loop__12290_15, l_16, v85, v91, v97, v103, p_22, arg__12310_24, arg__12315_27, target_ip_28, src_ip_30, v44, doseq_seq__12289_17, doseq_loop__12290_18, l_19, v90, v96, v102, v108, v74, doseq_seq__12289_75, doseq_loop__12290_76, l_77, doseq_seq__12289_31, doseq_loop__12290_32, l_33, p_34, target_ip_35, src_ip_36, v88, v94, v100, v106, v46, doseq_seq__12289_37, doseq_loop__12290_38, l_39, p_40, target_ip_41, src_ip_42, v87, v93, v99, v105, v48, offset_50, doseq_seq__12289_51, doseq_loop__12290_52, l_53, p_54, target_ip_55, src_ip_56, v89, v95, v101, v107, arg__12327_58, arg__12331_60, arg__12338_64, arg__12342_66, arg__12343_67, v68, v70
-	arg__12295_3, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__12299_3, arg__12300_4, arg__12306_8, arg__12307_9, doseq_seq__12293_10, doseq_loop__12294_11, l_12, v86, v92, v98, v104, doseq_seq__12293_14, doseq_loop__12294_15, l_16, v85, v91, v97, v103, p_22, arg__12314_24, arg__12319_27, target_ip_28, src_ip_30, v44, doseq_seq__12293_17, doseq_loop__12294_18, l_19, v90, v96, v102, v108, v74, doseq_seq__12293_75, doseq_loop__12294_76, l_77, doseq_seq__12293_31, doseq_loop__12294_32, l_33, p_34, target_ip_35, src_ip_36, v88, v94, v100, v106, v46, doseq_seq__12293_37, doseq_loop__12294_38, l_39, p_40, target_ip_41, src_ip_42, v87, v93, v99, v105, v48, offset_50, doseq_seq__12293_51, doseq_loop__12294_52, l_53, p_54, target_ip_55, src_ip_56, v89, v95, v101, v107, arg__12331_58, arg__12335_60, arg__12342_64, arg__12346_66, arg__12347_67, v68, v70
+	arg__12299_3, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12296_4, callErr = rt.InvokeValue(vm.Keyword("patches"), []vm.Value{arg__12295_3})
+	arg__12300_4, callErr = rt.InvokeValue(vm.Keyword("patches"), []vm.Value{arg__12299_3})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12302_8, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	arg__12306_8, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12303_9, callErr = rt.InvokeValue(vm.Keyword("patches"), []vm.Value{arg__12302_8})
+	arg__12307_9, callErr = rt.InvokeValue(vm.Keyword("patches"), []vm.Value{arg__12306_8})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_seq__12289_10, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__12303_9})
+	doseq_seq__12293_10, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__12307_9})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__12290_11 = doseq_seq__12289_10
+	doseq_loop__12294_11 = doseq_seq__12293_10
 	l_12 = arg0
 	v86 = vm.Keyword("target-block")
 	v92 = vm.Keyword("src-ip")
@@ -6435,9 +6435,9 @@ func patch_branches_BANG_(arg0 vm.Value) (vm.Value, error) {
 	goto b1
 b1:
 	;
-	if vm.IsTruthy(doseq_loop__12290_11) {
-		doseq_seq__12289_14 = doseq_seq__12289_10
-		doseq_loop__12290_15 = doseq_loop__12290_11
+	if vm.IsTruthy(doseq_loop__12294_11) {
+		doseq_seq__12293_14 = doseq_seq__12293_10
+		doseq_loop__12294_15 = doseq_loop__12294_11
 		l_16 = l_12
 		v85 = v86
 		v91 = v92
@@ -6445,8 +6445,8 @@ b1:
 		v103 = v104
 		goto b2
 	} else {
-		doseq_seq__12289_17 = doseq_seq__12289_10
-		doseq_loop__12290_18 = doseq_loop__12290_11
+		doseq_seq__12293_17 = doseq_seq__12293_10
+		doseq_loop__12294_18 = doseq_loop__12294_11
 		l_19 = l_12
 		v90 = v86
 		v96 = v92
@@ -6456,19 +6456,19 @@ b1:
 	}
 b2:
 	;
-	p_22, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__12290_15})
+	p_22, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__12294_15})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12310_24, callErr = rt.InvokeValue(v85, []vm.Value{p_22})
+	arg__12314_24, callErr = rt.InvokeValue(v85, []vm.Value{p_22})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12315_27, callErr = rt.InvokeValue(v85, []vm.Value{p_22})
+	arg__12319_27, callErr = rt.InvokeValue(v85, []vm.Value{p_22})
 	if callErr != nil {
 		return nil, callErr
 	}
-	target_ip_28, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "block-ip").Deref(), []vm.Value{l_16, arg__12315_27})
+	target_ip_28, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "block-ip").Deref(), []vm.Value{l_16, arg__12319_27})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -6481,8 +6481,8 @@ b2:
 		return nil, callErr
 	}
 	if vm.IsTruthy(v44) {
-		doseq_seq__12289_31 = doseq_seq__12289_14
-		doseq_loop__12290_32 = doseq_loop__12290_15
+		doseq_seq__12293_31 = doseq_seq__12293_14
+		doseq_loop__12294_32 = doseq_loop__12294_15
 		l_33 = l_16
 		p_34 = p_22
 		target_ip_35 = target_ip_28
@@ -6493,8 +6493,8 @@ b2:
 		v106 = v103
 		goto b5
 	} else {
-		doseq_seq__12289_37 = doseq_seq__12289_14
-		doseq_loop__12290_38 = doseq_loop__12290_15
+		doseq_seq__12293_37 = doseq_seq__12293_14
+		doseq_loop__12294_38 = doseq_loop__12294_15
 		l_39 = l_16
 		p_40 = p_22
 		target_ip_41 = target_ip_28
@@ -6508,8 +6508,8 @@ b2:
 b3:
 	;
 	v74 = vm.NIL
-	doseq_seq__12289_75 = doseq_seq__12289_17
-	doseq_loop__12290_76 = doseq_loop__12290_18
+	doseq_seq__12293_75 = doseq_seq__12293_17
+	doseq_loop__12294_76 = doseq_loop__12294_18
 	l_77 = l_19
 	goto b4
 b4:
@@ -6519,8 +6519,8 @@ b5:
 	;
 	v46 = rt.SubValue(src_ip_36, target_ip_35)
 	offset_50 = v46
-	doseq_seq__12289_51 = doseq_seq__12289_31
-	doseq_loop__12290_52 = doseq_loop__12290_32
+	doseq_seq__12293_51 = doseq_seq__12293_31
+	doseq_loop__12294_52 = doseq_loop__12294_32
 	l_53 = l_33
 	p_54 = p_34
 	target_ip_55 = target_ip_35
@@ -6534,8 +6534,8 @@ b6:
 	;
 	v48 = rt.SubValue(target_ip_41, src_ip_42)
 	offset_50 = v48
-	doseq_seq__12289_51 = doseq_seq__12289_37
-	doseq_loop__12290_52 = doseq_loop__12290_38
+	doseq_seq__12293_51 = doseq_seq__12293_37
+	doseq_loop__12294_52 = doseq_loop__12294_38
 	l_53 = l_39
 	p_54 = p_40
 	target_ip_55 = target_ip_41
@@ -6547,32 +6547,32 @@ b6:
 	goto b7
 b7:
 	;
-	arg__12327_58, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_53})
+	arg__12331_58, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_53})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12331_60, callErr = rt.InvokeValue(v107, []vm.Value{p_54})
+	arg__12335_60, callErr = rt.InvokeValue(v107, []vm.Value{p_54})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12338_64, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_53})
+	arg__12342_64, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "chunk-of").Deref(), []vm.Value{l_53})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12342_66, callErr = rt.InvokeValue(v107, []vm.Value{p_54})
+	arg__12346_66, callErr = rt.InvokeValue(v107, []vm.Value{p_54})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12343_67 = rt.AddValue(src_ip_56, arg__12342_66)
-	v68, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-update!").Deref(), []vm.Value{arg__12338_64, arg__12343_67, offset_50})
+	arg__12347_67 = rt.AddValue(src_ip_56, arg__12346_66)
+	v68, callErr = rt.InvokeValue(rt.LookupVar("ir", "chunk-update!").Deref(), []vm.Value{arg__12342_64, arg__12347_67, offset_50})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v70, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__12290_52})
+	v70, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__12294_52})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__12290_11 = v70
+	doseq_loop__12294_11 = v70
 	l_12 = l_53
 	v86 = v89
 	v92 = v95
@@ -6645,41 +6645,41 @@ func record_source_info_BANG_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var l_2 vm.Value
 	var inst_id_3 vm.Value
 	var c_8 vm.Value
-	var arg__12377_10 vm.Value
-	var arg__12383_13 vm.Value
-	var arg__12384_14 vm.Value
-	var arg__12390_17 vm.Value
-	var arg__12396_20 vm.Value
-	var arg__12397_21 vm.Value
-	var doseq_seq__12368_22 vm.Value
+	var arg__12381_10 vm.Value
+	var arg__12387_13 vm.Value
+	var arg__12388_14 vm.Value
+	var arg__12394_17 vm.Value
+	var arg__12400_20 vm.Value
+	var arg__12401_21 vm.Value
+	var doseq_seq__12372_22 vm.Value
 	var l_4 vm.Value
 	var inst_id_5 vm.Value
 	var v55 vm.Value
 	var l_56 vm.Value
 	var inst_id_57 vm.Value
-	var doseq_loop__12369_23 vm.Value
+	var doseq_loop__12373_23 vm.Value
 	var c_24 vm.Value
 	var l_26 vm.Value
 	var inst_id_27 vm.Value
-	var doseq_seq__12368_28 vm.Value
-	var doseq_loop__12369_29 vm.Value
+	var doseq_seq__12372_28 vm.Value
+	var doseq_loop__12373_29 vm.Value
 	var c_30 vm.Value
 	var si_38 vm.Value
 	var v40 vm.Value
 	var v42 vm.Value
 	var l_31 vm.Value
 	var inst_id_32 vm.Value
-	var doseq_seq__12368_33 vm.Value
-	var doseq_loop__12369_34 vm.Value
+	var doseq_seq__12372_33 vm.Value
+	var doseq_loop__12373_34 vm.Value
 	var c_35 vm.Value
 	var v46 vm.Value
 	var l_47 vm.Value
 	var inst_id_48 vm.Value
-	var doseq_seq__12368_49 vm.Value
-	var doseq_loop__12369_50 vm.Value
+	var doseq_seq__12372_49 vm.Value
+	var doseq_loop__12373_50 vm.Value
 	var c_51 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_2, inst_id_3, c_8, arg__12377_10, arg__12383_13, arg__12384_14, arg__12390_17, arg__12396_20, arg__12397_21, doseq_seq__12368_22, l_4, inst_id_5, v55, l_56, inst_id_57, doseq_loop__12369_23, c_24, l_26, inst_id_27, doseq_seq__12368_28, doseq_loop__12369_29, c_30, si_38, v40, v42, l_31, inst_id_32, doseq_seq__12368_33, doseq_loop__12369_34, c_35, v46, l_47, inst_id_48, doseq_seq__12368_49, doseq_loop__12369_50, c_51
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = l_2, inst_id_3, c_8, arg__12381_10, arg__12387_13, arg__12388_14, arg__12394_17, arg__12400_20, arg__12401_21, doseq_seq__12372_22, l_4, inst_id_5, v55, l_56, inst_id_57, doseq_loop__12373_23, c_24, l_26, inst_id_27, doseq_seq__12372_28, doseq_loop__12373_29, c_30, si_38, v40, v42, l_31, inst_id_32, doseq_seq__12372_33, doseq_loop__12373_34, c_35, v46, l_47, inst_id_48, doseq_seq__12372_49, doseq_loop__12373_50, c_51
 	if vm.IsTruthy(arg1) {
 		l_2 = arg0
 		inst_id_3 = arg1
@@ -6695,35 +6695,35 @@ b1:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12377_10, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_2})
+	arg__12381_10, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_2})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12383_13, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_2})
+	arg__12387_13, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_2})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12384_14, callErr = rt.InvokeValue(rt.LookupVar("ir", "source-infos").Deref(), []vm.Value{inst_id_3, arg__12383_13})
+	arg__12388_14, callErr = rt.InvokeValue(rt.LookupVar("ir", "source-infos").Deref(), []vm.Value{inst_id_3, arg__12387_13})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12390_17, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_2})
+	arg__12394_17, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_2})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12396_20, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_2})
+	arg__12400_20, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_2})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12397_21, callErr = rt.InvokeValue(rt.LookupVar("ir", "source-infos").Deref(), []vm.Value{inst_id_3, arg__12396_20})
+	arg__12401_21, callErr = rt.InvokeValue(rt.LookupVar("ir", "source-infos").Deref(), []vm.Value{inst_id_3, arg__12400_20})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_seq__12368_22, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__12397_21})
+	doseq_seq__12372_22, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__12401_21})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__12369_23 = doseq_seq__12368_22
+	doseq_loop__12373_23 = doseq_seq__12372_22
 	c_24 = c_8
 	goto b4
 b2:
@@ -6737,24 +6737,24 @@ b3:
 	return v55, nil
 b4:
 	;
-	if vm.IsTruthy(doseq_loop__12369_23) {
+	if vm.IsTruthy(doseq_loop__12373_23) {
 		l_26 = l_2
 		inst_id_27 = inst_id_3
-		doseq_seq__12368_28 = doseq_seq__12368_22
-		doseq_loop__12369_29 = doseq_loop__12369_23
+		doseq_seq__12372_28 = doseq_seq__12372_22
+		doseq_loop__12373_29 = doseq_loop__12373_23
 		c_30 = c_24
 		goto b5
 	} else {
 		l_31 = l_2
 		inst_id_32 = inst_id_3
-		doseq_seq__12368_33 = doseq_seq__12368_22
-		doseq_loop__12369_34 = doseq_loop__12369_23
+		doseq_seq__12372_33 = doseq_seq__12372_22
+		doseq_loop__12373_34 = doseq_loop__12373_23
 		c_35 = c_24
 		goto b6
 	}
 b5:
 	;
-	si_38, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__12369_29})
+	si_38, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__12373_29})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -6762,11 +6762,11 @@ b5:
 	if callErr != nil {
 		return nil, callErr
 	}
-	v42, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__12369_29})
+	v42, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__12373_29})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__12369_23 = v42
+	doseq_loop__12373_23 = v42
 	c_24 = c_30
 	goto b4
 b6:
@@ -6774,8 +6774,8 @@ b6:
 	v46 = vm.NIL
 	l_47 = l_31
 	inst_id_48 = inst_id_32
-	doseq_seq__12368_49 = doseq_seq__12368_33
-	doseq_loop__12369_50 = doseq_loop__12369_34
+	doseq_seq__12372_49 = doseq_seq__12372_33
+	doseq_loop__12373_50 = doseq_loop__12373_34
 	c_51 = c_35
 	goto b7
 b7:
@@ -6786,15 +6786,15 @@ b7:
 	goto b3
 }
 func refs_at_top_last_use_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
-	var arg__12412_8 vm.Value
-	var arg__12417_11 vm.Value
+	var arg__12416_8 vm.Value
+	var arg__12421_11 vm.Value
 	var v12 vm.Value
 	var l_3 vm.Value
 	var refs_4 vm.Value
 	var l_5 vm.Value
 	var refs_6 vm.Value
-	var arg__12423_21 vm.Value
-	var arg__12430_24 vm.Value
+	var arg__12427_21 vm.Value
+	var arg__12434_24 vm.Value
 	var v25 vm.Value
 	var v134 vm.Value
 	var l_135 vm.Value
@@ -6818,7 +6818,7 @@ func refs_at_top_last_use_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error)
 	var l_37 vm.Value
 	var v143 int
 	var v152 vm.Value
-	var arg__12435_47 vm.Value
+	var arg__12439_47 vm.Value
 	var v48 bool
 	var i_40 int
 	var refs_41 vm.Value
@@ -6830,12 +6830,12 @@ func refs_at_top_last_use_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error)
 	var l_45 vm.Value
 	var v145 int
 	var v154 vm.Value
-	var arg__12443_60 vm.Value
-	var arg__12451_63 vm.Value
-	var arg__12452_64 vm.Value
-	var arg__12461_68 vm.Value
-	var arg__12469_71 vm.Value
-	var arg__12470_72 vm.Value
+	var arg__12447_60 vm.Value
+	var arg__12455_63 vm.Value
+	var arg__12456_64 vm.Value
+	var arg__12465_68 vm.Value
+	var arg__12473_71 vm.Value
+	var arg__12474_72 vm.Value
 	var v73 vm.Value
 	var v119 vm.Value
 	var i_120 int
@@ -6851,8 +6851,8 @@ func refs_at_top_last_use_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error)
 	var l_57 vm.Value
 	var v142 int
 	var v151 vm.Value
-	var arg__12478_84 vm.Value
-	var arg__12487_87 vm.Value
+	var arg__12482_84 vm.Value
+	var arg__12491_87 vm.Value
 	var v88 vm.Value
 	var v114 vm.Value
 	var i_115 int
@@ -6888,16 +6888,16 @@ func refs_at_top_last_use_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, error)
 	var refs_106 vm.Value
 	var l_107 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__12412_8, arg__12417_11, v12, l_3, refs_4, l_5, refs_6, arg__12423_21, arg__12430_24, v25, v134, l_135, refs_136, l_16, refs_17, l_18, refs_19, v130, l_131, refs_132, l_29, refs_30, l_31, refs_32, v126, l_127, refs_128, i_35, refs_36, l_37, v143, v152, arg__12435_47, v48, i_40, refs_41, l_42, v147, v156, i_43, refs_44, l_45, v145, v154, arg__12443_60, arg__12451_63, arg__12452_64, arg__12461_68, arg__12469_71, arg__12470_72, v73, v119, i_120, refs_121, l_122, i_52, refs_53, l_54, v149, v158, i_55, refs_56, l_57, v142, v151, arg__12478_84, arg__12487_87, v88, v114, i_115, refs_116, l_117, i_77, refs_78, l_79, v146, v155, i_80, refs_81, l_82, v144, v153, v109, i_110, refs_111, l_112, i_92, refs_93, l_94, v141, v150, v100, i_95, refs_96, l_97, v148, v157, v104, i_105, refs_106, l_107
-	arg__12412_8, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg1})
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__12416_8, arg__12421_11, v12, l_3, refs_4, l_5, refs_6, arg__12427_21, arg__12434_24, v25, v134, l_135, refs_136, l_16, refs_17, l_18, refs_19, v130, l_131, refs_132, l_29, refs_30, l_31, refs_32, v126, l_127, refs_128, i_35, refs_36, l_37, v143, v152, arg__12439_47, v48, i_40, refs_41, l_42, v147, v156, i_43, refs_44, l_45, v145, v154, arg__12447_60, arg__12455_63, arg__12456_64, arg__12465_68, arg__12473_71, arg__12474_72, v73, v119, i_120, refs_121, l_122, i_52, refs_53, l_54, v149, v158, i_55, refs_56, l_57, v142, v151, arg__12482_84, arg__12491_87, v88, v114, i_115, refs_116, l_117, i_77, refs_78, l_79, v146, v155, i_80, refs_81, l_82, v144, v153, v109, i_110, refs_111, l_112, i_92, refs_93, l_94, v141, v150, v100, i_95, refs_96, l_97, v148, v157, v104, i_105, refs_106, l_107
+	arg__12416_8, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12417_11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg1})
+	arg__12421_11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v12, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "zero?").Deref(), []vm.Value{arg__12417_11})
+	v12, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "zero?").Deref(), []vm.Value{arg__12421_11})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -6918,15 +6918,15 @@ b1:
 	goto b3
 b2:
 	;
-	arg__12423_21, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "args-at-top?").Deref(), []vm.Value{l_5, refs_6})
+	arg__12427_21, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "args-at-top?").Deref(), []vm.Value{l_5, refs_6})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12430_24, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "args-at-top?").Deref(), []vm.Value{l_5, refs_6})
+	arg__12434_24, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "args-at-top?").Deref(), []vm.Value{l_5, refs_6})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v25, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not").Deref(), []vm.Value{arg__12430_24})
+	v25, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not").Deref(), []vm.Value{arg__12434_24})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -6987,11 +6987,11 @@ b9:
 	goto b6
 b10:
 	;
-	arg__12435_47, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{refs_36})
+	arg__12439_47, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{refs_36})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v48 = rt.GeValue(vm.Int(i_35), arg__12435_47)
+	v48 = rt.GeValue(vm.Int(i_35), arg__12439_47)
 	if v48 {
 		i_40 = i_35
 		refs_41 = refs_36
@@ -7016,31 +7016,31 @@ b11:
 	goto b13
 b12:
 	;
-	arg__12443_60, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_44, vm.Int(i_43)})
+	arg__12447_60, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_44, vm.Int(i_43)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12451_63, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_44, vm.Int(i_43)})
+	arg__12455_63, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_44, vm.Int(i_43)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12452_64, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{l_45, arg__12451_63})
+	arg__12456_64, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{l_45, arg__12455_63})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12461_68, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_44, vm.Int(i_43)})
+	arg__12465_68, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_44, vm.Int(i_43)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12469_71, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_44, vm.Int(i_43)})
+	arg__12473_71, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_44, vm.Int(i_43)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12470_72, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{l_45, arg__12469_71})
+	arg__12474_72, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{l_45, arg__12473_71})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v73, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not=").Deref(), []vm.Value{vm.Int(v145), arg__12470_72})
+	v73, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not=").Deref(), []vm.Value{vm.Int(v145), arg__12474_72})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -7074,15 +7074,15 @@ b14:
 	goto b16
 b15:
 	;
-	arg__12478_84, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(i_55)})
+	arg__12482_84, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(i_55)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12487_87, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(i_55)})
+	arg__12491_87, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(i_55)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v88, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "contains-after?").Deref(), []vm.Value{refs_56, vm.Int(i_55), arg__12487_87})
+	v88, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "contains-after?").Deref(), []vm.Value{refs_56, vm.Int(i_55), arg__12491_87})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -7229,9 +7229,9 @@ func should_body_emit_cheap_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, erro
 	var l_27 vm.Value
 	var nid_28 vm.Value
 	var uc_29 vm.Value
-	var arg__12548_37 vm.Value
+	var arg__12552_37 vm.Value
 	var uses_38 vm.Value
-	var arg__12553_48 vm.Value
+	var arg__12557_48 vm.Value
 	var v49 bool
 	var l_30 vm.Value
 	var nid_31 vm.Value
@@ -7297,11 +7297,11 @@ func should_body_emit_cheap_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, erro
 	var uc_103 vm.Value
 	var uses_104 vm.Value
 	var user_id_113 vm.Value
-	var arg__12572_115 vm.Value
-	var arg__12578_118 vm.Value
+	var arg__12576_115 vm.Value
+	var arg__12582_118 vm.Value
 	var user_refs_119 vm.Value
-	var arg__12582_135 vm.Value
-	var arg__12587_138 vm.Value
+	var arg__12586_135 vm.Value
+	var arg__12591_138 vm.Value
 	var v139 vm.Value
 	var us_105 vm.Value
 	var l_106 vm.Value
@@ -7343,7 +7343,7 @@ func should_body_emit_cheap_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, erro
 	var uses_147 vm.Value
 	var user_id_148 vm.Value
 	var user_refs_149 vm.Value
-	var arg__12591_160 vm.Value
+	var arg__12595_160 vm.Value
 	var v161 bool
 	var us_150 vm.Value
 	var l_151 vm.Value
@@ -7361,7 +7361,7 @@ func should_body_emit_cheap_QMARK_(arg0 vm.Value, arg1 vm.Value) (vm.Value, erro
 	var user_id_171 vm.Value
 	var user_refs_172 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = uc_4, v12, l_5, nid_6, uc_7, l_8, nid_9, uc_10, v23, v211, l_212, nid_213, uc_214, l_16, nid_17, uc_18, l_19, nid_20, uc_21, v206, l_207, nid_208, uc_209, l_27, nid_28, uc_29, arg__12548_37, uses_38, arg__12553_48, v49, l_30, nid_31, uc_32, v201, l_202, nid_203, uc_204, l_39, nid_40, uc_41, uses_42, v52, l_43, nid_44, uc_45, uses_46, us_56, l_57, nid_58, uc_59, uses_60, or__x_72, us_61, l_62, nid_63, uc_64, uses_65, us_66, l_67, nid_68, uc_69, uses_70, v192, us_193, l_194, nid_195, uc_196, uses_197, us_73, l_74, nid_75, uc_76, uses_77, or__x_78, us_79, l_80, nid_81, uc_82, uses_83, or__x_84, v88, v90, us_91, l_92, nid_93, uc_94, uses_95, or__x_96, us_100, l_101, nid_102, uc_103, uses_104, user_id_113, arg__12572_115, arg__12578_118, user_refs_119, arg__12582_135, arg__12587_138, v139, us_105, l_106, nid_107, uc_108, uses_109, v185, us_186, l_187, nid_188, uc_189, uses_190, us_120, l_121, nid_122, uc_123, uses_124, user_id_125, user_refs_126, us_127, l_128, nid_129, uc_130, uses_131, user_id_132, user_refs_133, v174, us_175, l_176, nid_177, uc_178, uses_179, user_id_180, user_refs_181, us_143, l_144, nid_145, uc_146, uses_147, user_id_148, user_refs_149, arg__12591_160, v161, us_150, l_151, nid_152, uc_153, uses_154, user_id_155, user_refs_156, v165, us_166, l_167, nid_168, uc_169, uses_170, user_id_171, user_refs_172
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = uc_4, v12, l_5, nid_6, uc_7, l_8, nid_9, uc_10, v23, v211, l_212, nid_213, uc_214, l_16, nid_17, uc_18, l_19, nid_20, uc_21, v206, l_207, nid_208, uc_209, l_27, nid_28, uc_29, arg__12552_37, uses_38, arg__12557_48, v49, l_30, nid_31, uc_32, v201, l_202, nid_203, uc_204, l_39, nid_40, uc_41, uses_42, v52, l_43, nid_44, uc_45, uses_46, us_56, l_57, nid_58, uc_59, uses_60, or__x_72, us_61, l_62, nid_63, uc_64, uses_65, us_66, l_67, nid_68, uc_69, uses_70, v192, us_193, l_194, nid_195, uc_196, uses_197, us_73, l_74, nid_75, uc_76, uses_77, or__x_78, us_79, l_80, nid_81, uc_82, uses_83, or__x_84, v88, v90, us_91, l_92, nid_93, uc_94, uses_95, or__x_96, us_100, l_101, nid_102, uc_103, uses_104, user_id_113, arg__12576_115, arg__12582_118, user_refs_119, arg__12586_135, arg__12591_138, v139, us_105, l_106, nid_107, uc_108, uses_109, v185, us_186, l_187, nid_188, uc_189, uses_190, us_120, l_121, nid_122, uc_123, uses_124, user_id_125, user_refs_126, us_127, l_128, nid_129, uc_130, uses_131, user_id_132, user_refs_133, v174, us_175, l_176, nid_177, uc_178, uses_179, user_id_180, user_refs_181, us_143, l_144, nid_145, uc_146, uses_147, user_id_148, user_refs_149, arg__12595_160, v161, us_150, l_151, nid_152, uc_153, uses_154, user_id_155, user_refs_156, v165, us_166, l_167, nid_168, uc_169, uses_170, user_id_171, user_refs_172
 	uc_4, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "use-count-of").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return nil, callErr
@@ -7434,19 +7434,19 @@ b6:
 	goto b3
 b7:
 	;
-	arg__12548_37, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_27})
+	arg__12552_37, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{l_27})
 	if callErr != nil {
 		return nil, callErr
 	}
-	uses_38, callErr = rt.InvokeValue(vm.Keyword("uses"), []vm.Value{arg__12548_37})
+	uses_38, callErr = rt.InvokeValue(vm.Keyword("uses"), []vm.Value{arg__12552_37})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12553_48, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{uses_38})
+	arg__12557_48, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{uses_38})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v49 = rt.LtValue(nid_28, arg__12553_48)
+	v49 = rt.LtValue(nid_28, arg__12557_48)
 	if v49 {
 		l_39 = l_27
 		nid_40 = nid_28
@@ -7597,27 +7597,27 @@ b19:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12572_115, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_101})
+	arg__12576_115, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_101})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12578_118, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_101})
+	arg__12582_118, callErr = rt.InvokeValue(rt.LookupVar("ir.lower", "f-of").Deref(), []vm.Value{l_101})
 	if callErr != nil {
 		return nil, callErr
 	}
-	user_refs_119, callErr = rt.InvokeValue(rt.LookupVar("ir", "refs").Deref(), []vm.Value{user_id_113, arg__12578_118})
+	user_refs_119, callErr = rt.InvokeValue(rt.LookupVar("ir", "refs").Deref(), []vm.Value{user_id_113, arg__12582_118})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12582_135, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{user_refs_119})
+	arg__12586_135, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{user_refs_119})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12587_138, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{user_refs_119})
+	arg__12591_138, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{user_refs_119})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v139, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "zero?").Deref(), []vm.Value{arg__12587_138})
+	v139, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "zero?").Deref(), []vm.Value{arg__12591_138})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -7701,11 +7701,11 @@ b24:
 	goto b21
 b25:
 	;
-	arg__12591_160, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{user_refs_149})
+	arg__12595_160, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{user_refs_149})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v161 = arg__12591_160 == nid_145
+	v161 = arg__12595_160 == nid_145
 	v165 = vm.Boolean(v161)
 	us_166 = us_143
 	l_167 = l_144
@@ -7739,15 +7739,15 @@ b27:
 	goto b24
 }
 func stack_sp(arg0 vm.Value) (vm.Value, error) {
-	var arg__12597_3 vm.Value
+	var arg__12601_3 vm.Value
 	var v4 vm.Value
 	var callErr error
-	_, _ = arg__12597_3, v4
-	arg__12597_3, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	_, _ = arg__12601_3, v4
+	arg__12601_3, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v4, callErr = rt.InvokeValue(vm.Keyword("stack-sp"), []vm.Value{arg__12597_3})
+	v4, callErr = rt.InvokeValue(vm.Keyword("stack-sp"), []vm.Value{arg__12601_3})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -7767,7 +7767,7 @@ func template_value(arg0 vm.Value) (vm.Value, error) {
 	var aux_83 vm.Value
 	var aux_5 vm.Value
 	var and__x_6 vm.Value
-	var arg__12603_11 vm.Value
+	var arg__12607_11 vm.Value
 	var v13 bool
 	var aux_7 vm.Value
 	var and__x_8 vm.Value
@@ -7775,18 +7775,18 @@ func template_value(arg0 vm.Value) (vm.Value, error) {
 	var aux_17 vm.Value
 	var and__x_18 vm.Value
 	var aux_31 vm.Value
-	var arg__12631_52 vm.Value
-	var arg__12636_56 vm.Value
+	var arg__12635_52 vm.Value
+	var arg__12640_56 vm.Value
 	var fn_vals_57 vm.Value
-	var arg__12642_61 vm.Value
-	var arg__12649_66 vm.Value
+	var arg__12646_61 vm.Value
+	var arg__12653_66 vm.Value
 	var v67 vm.Value
 	var aux_32 vm.Value
 	var v79 vm.Value
 	var aux_80 vm.Value
 	var aux_35 vm.Value
 	var and__x_36 vm.Value
-	var arg__12626_41 vm.Value
+	var arg__12630_41 vm.Value
 	var v43 bool
 	var aux_37 vm.Value
 	var and__x_38 vm.Value
@@ -7798,7 +7798,7 @@ func template_value(arg0 vm.Value) (vm.Value, error) {
 	var v76 vm.Value
 	var aux_77 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = and__x_4, aux_1, inner_21, arity_23, variadic_QMARK__25, chunk_27, v29, aux_2, and__x_34, v82, aux_83, aux_5, and__x_6, arg__12603_11, v13, aux_7, and__x_8, v16, aux_17, and__x_18, aux_31, arg__12631_52, arg__12636_56, fn_vals_57, arg__12642_61, arg__12649_66, v67, aux_32, v79, aux_80, aux_35, and__x_36, arg__12626_41, v43, aux_37, and__x_38, v46, aux_47, and__x_48, aux_69, aux_70, v76, aux_77
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = and__x_4, aux_1, inner_21, arity_23, variadic_QMARK__25, chunk_27, v29, aux_2, and__x_34, v82, aux_83, aux_5, and__x_6, arg__12607_11, v13, aux_7, and__x_8, v16, aux_17, and__x_18, aux_31, arg__12635_52, arg__12640_56, fn_vals_57, arg__12646_61, arg__12653_66, v67, aux_32, v79, aux_80, aux_35, and__x_36, arg__12630_41, v43, aux_37, and__x_38, v46, aux_47, and__x_48, aux_69, aux_70, v76, aux_77
 	and__x_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "map?").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
@@ -7857,11 +7857,11 @@ b3:
 	return v82, nil
 b4:
 	;
-	arg__12603_11, callErr = rt.InvokeValue(vm.Keyword("kind"), []vm.Value{aux_5})
+	arg__12607_11, callErr = rt.InvokeValue(vm.Keyword("kind"), []vm.Value{aux_5})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v13 = arg__12603_11 == vm.Keyword("fn-template")
+	v13 = arg__12607_11 == vm.Keyword("fn-template")
 	v16 = vm.Boolean(v13)
 	aux_17 = aux_5
 	and__x_18 = and__x_6
@@ -7883,27 +7883,27 @@ b6:
 	}
 b7:
 	;
-	arg__12631_52, callErr = rt.InvokeValue(vm.Keyword("fns"), []vm.Value{aux_31})
+	arg__12635_52, callErr = rt.InvokeValue(vm.Keyword("fns"), []vm.Value{aux_31})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12636_56, callErr = rt.InvokeValue(vm.Keyword("fns"), []vm.Value{aux_31})
+	arg__12640_56, callErr = rt.InvokeValue(vm.Keyword("fns"), []vm.Value{aux_31})
 	if callErr != nil {
 		return nil, callErr
 	}
-	fn_vals_57, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "mapv").Deref(), []vm.Value{rt.LookupVar("ir.lower", "template-value").Deref(), arg__12636_56})
+	fn_vals_57, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "mapv").Deref(), []vm.Value{rt.LookupVar("ir.lower", "template-value").Deref(), arg__12640_56})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12642_61, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "apply").Deref(), []vm.Value{rt.LookupVar("clojure.core", "list").Deref(), fn_vals_57})
+	arg__12646_61, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "apply").Deref(), []vm.Value{rt.LookupVar("clojure.core", "list").Deref(), fn_vals_57})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12649_66, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "apply").Deref(), []vm.Value{rt.LookupVar("clojure.core", "list").Deref(), fn_vals_57})
+	arg__12653_66, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "apply").Deref(), []vm.Value{rt.LookupVar("clojure.core", "list").Deref(), fn_vals_57})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v67, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "make-multi-arity").Deref(), []vm.Value{arg__12649_66})
+	v67, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "make-multi-arity").Deref(), []vm.Value{arg__12653_66})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -7926,11 +7926,11 @@ b9:
 	goto b3
 b10:
 	;
-	arg__12626_41, callErr = rt.InvokeValue(vm.Keyword("kind"), []vm.Value{aux_35})
+	arg__12630_41, callErr = rt.InvokeValue(vm.Keyword("kind"), []vm.Value{aux_35})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v43 = arg__12626_41 == vm.Keyword("multi-fn-template")
+	v43 = arg__12630_41 == vm.Keyword("multi-fn-template")
 	v46 = vm.Boolean(v43)
 	aux_47 = aux_35
 	and__x_48 = and__x_36
@@ -7967,10 +7967,10 @@ b15:
 	goto b9
 }
 func use_count_of(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
-	var arg__12654_4 vm.Value
-	var arg__12655_5 vm.Value
-	var arg__12662_9 vm.Value
-	var arg__12663_10 vm.Value
+	var arg__12658_4 vm.Value
+	var arg__12659_5 vm.Value
+	var arg__12666_9 vm.Value
+	var arg__12667_10 vm.Value
 	var or__x_11 vm.Value
 	var l_12 vm.Value
 	var nid_13 vm.Value
@@ -7983,24 +7983,24 @@ func use_count_of(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var nid_24 vm.Value
 	var or__x_25 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__12654_4, arg__12655_5, arg__12662_9, arg__12663_10, or__x_11, l_12, nid_13, or__x_14, l_15, nid_16, or__x_17, v22, l_23, nid_24, or__x_25
-	arg__12654_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = arg__12658_4, arg__12659_5, arg__12666_9, arg__12667_10, or__x_11, l_12, nid_13, or__x_14, l_15, nid_16, or__x_17, v22, l_23, nid_24, or__x_25
+	arg__12658_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12655_5, callErr = rt.InvokeValue(vm.Keyword("use-count"), []vm.Value{arg__12654_4})
+	arg__12659_5, callErr = rt.InvokeValue(vm.Keyword("use-count"), []vm.Value{arg__12658_4})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12662_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	arg__12666_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12663_10, callErr = rt.InvokeValue(vm.Keyword("use-count"), []vm.Value{arg__12662_9})
+	arg__12667_10, callErr = rt.InvokeValue(vm.Keyword("use-count"), []vm.Value{arg__12666_9})
 	if callErr != nil {
 		return nil, callErr
 	}
-	or__x_11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{arg__12663_10, arg1})
+	or__x_11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{arg__12667_10, arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -8034,30 +8034,30 @@ b3:
 	return v22, nil
 }
 func value_pos_of(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
-	var arg__12669_4 vm.Value
-	var arg__12670_5 vm.Value
-	var arg__12677_9 vm.Value
-	var arg__12678_10 vm.Value
+	var arg__12673_4 vm.Value
+	var arg__12674_5 vm.Value
+	var arg__12681_9 vm.Value
+	var arg__12682_10 vm.Value
 	var v11 vm.Value
 	var callErr error
-	_, _, _, _, _ = arg__12669_4, arg__12670_5, arg__12677_9, arg__12678_10, v11
-	arg__12669_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	_, _, _, _, _ = arg__12673_4, arg__12674_5, arg__12681_9, arg__12682_10, v11
+	arg__12673_4, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12670_5, callErr = rt.InvokeValue(vm.Keyword("value-stack-pos"), []vm.Value{arg__12669_4})
+	arg__12674_5, callErr = rt.InvokeValue(vm.Keyword("value-stack-pos"), []vm.Value{arg__12673_4})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12677_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
+	arg__12681_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__12678_10, callErr = rt.InvokeValue(vm.Keyword("value-stack-pos"), []vm.Value{arg__12677_9})
+	arg__12682_10, callErr = rt.InvokeValue(vm.Keyword("value-stack-pos"), []vm.Value{arg__12681_9})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{arg__12678_10, arg1})
+	v11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{arg__12682_10, arg1})
 	if callErr != nil {
 		return nil, callErr
 	}

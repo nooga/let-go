@@ -1,0 +1,107 @@
+(ns test.semver-test
+  (:require
+   [let-go.semver :as semver]
+   [test :refer :all]))
+
+;; --- Layer 0: Comparable seam (compare / sort / sorted-set all dispatch) ---
+
+(deftest version-compare-dispatch
+  (testing "compare dispatches to Comparable for Version"
+    (is (= -1 (compare (semver/version "1.0.0") (semver/version "2.0.0"))))
+    (is (=  0 (compare (semver/version "1.0.0") (semver/version "1.0.0"))))
+    (is (=  1 (compare (semver/version "2.0.0") (semver/version "1.0.0"))))))
+
+(deftest version-sort-dispatch
+  (testing "sort routes through compare -> Comparable"
+    (is (= ["1.0.0" "1.2.0" "2.0.0"]
+           (map semver/render
+                (sort [(semver/version "2.0.0")
+                       (semver/version "1.0.0")
+                       (semver/version "1.2.0")])))))
+  (testing "sorted-set routes through compare -> Comparable"
+    (is (= ["1.0.0" "1.2.0" "2.0.0"]
+           (map semver/render
+                (into (sorted-set)
+                      [(semver/version "2.0.0")
+                       (semver/version "1.0.0")
+                       (semver/version "1.2.0")
+                       (semver/version "1.2.0")]))))))
+
+;; --- Layer 1: parsing + SemVer §11 precedence ---
+
+(deftest version-parse
+  (testing "tolerates a leading v"
+    (is (= "1.2.3" (semver/render (semver/version "v1.2.3")))))
+  (testing "parses pre-release and build, render keeps full form"
+    (is (= "1.0.0-alpha.1+build.5"
+           (semver/render (semver/version "1.0.0-alpha.1+build.5"))))
+    (let [v (semver/version "1.0.0-alpha.1+build.5")]
+      (is (= "alpha.1" (:pre v)))
+      (is (= "build.5" (:build v))))))
+
+(deftest version-precedence
+  (testing "pre-release has lower precedence than release"
+    (is (= -1 (compare (semver/version "1.0.0-alpha") (semver/version "1.0.0")))))
+  (testing "build metadata is ignored in precedence"
+    (is (= 0 (compare (semver/version "1.0.0+a") (semver/version "1.0.0+b"))))
+    (is (= 0 (compare (semver/version "1.0.0-x+a") (semver/version "1.0.0-x+b")))))
+  (testing "SemVer §11.4 canonical pre-release ordering"
+    (is (= ["1.0.0-alpha" "1.0.0-alpha.1" "1.0.0-alpha.beta"
+            "1.0.0-beta" "1.0.0-beta.2" "1.0.0-beta.11"
+            "1.0.0-rc.1" "1.0.0"]
+           (map semver/render
+                (sort (map semver/version
+                           ["1.0.0" "1.0.0-rc.1" "1.0.0-beta.11" "1.0.0-beta.2"
+                            "1.0.0-beta" "1.0.0-alpha.beta" "1.0.0-alpha.1"
+                            "1.0.0-alpha"])))))))
+
+;; --- ergonomic predicates (core < stays numeric; these use compare) ---
+
+(deftest version-predicates
+  (let [a (semver/version "1.2.0")
+        b (semver/version "1.10.0")]
+    (is (semver/lt? a b))
+    (is (semver/gt? b a))
+    (is (semver/lte? a a))
+    (is (semver/gte? b b))
+    (is (semver/eq? a (semver/version "1.2.0")))
+    (is (not (semver/lt? b a)))))
+
+;; --- Layer 2: restriction grammar + sha matching ---
+
+(deftest satisfies-range
+  (testing "bare version means >="
+    (is (semver/satisfies-range? "1.9.0" "1.9.0"))
+    (is (semver/satisfies-range? "2.0.0" "1.9.0"))
+    (is (not (semver/satisfies-range? "1.8.0" "1.9.0"))))
+  (testing "single comparators"
+    (is (semver/satisfies-range? "1.9.0" "=1.9.0"))
+    (is (not (semver/satisfies-range? "1.9.1" "=1.9.0")))
+    (is (semver/satisfies-range? "1.9.1" ">1.9.0"))
+    (is (not (semver/satisfies-range? "1.9.0" ">1.9.0")))
+    (is (semver/satisfies-range? "1.9.0" "<=1.9.0"))
+    (is (semver/satisfies-range? "1.8.9" "<1.9.0"))
+    (is (semver/satisfies-range? "1.9.1" "!=1.9.0")))
+  (testing "space-AND-composed bounds (the dead-v2.x case)"
+    (is (semver/satisfies-range? "1.9.5" ">=1.9.0 <2.0.0"))
+    (is (not (semver/satisfies-range? "2.0.0" ">=1.9.0 <2.0.0")))
+    (is (not (semver/satisfies-range? "1.8.0" ">=1.9.0 <2.0.0")))
+    (is (semver/satisfies-range? "1.9.0" ">=1.9.0 !=2.0.0"))
+    (is (not (semver/satisfies-range? "2.0.0" ">=1.9.0 !=2.0.0")))))
+
+(deftest sha-matching
+  (testing "case-insensitive hex prefix match"
+    (is (semver/sha-match? "cd4ce1216a9b" "cd4ce12"))
+    (is (semver/sha-match? "cd4ce1216a9b" "CD4CE12"))
+    (is (not (semver/sha-match? "cd4ce1216a9b" "ff00aa1"))))
+  (testing "prefix must be 7-40 hex chars"
+    (is (not (semver/sha-match? "cd4ce1216a9b" "cd4ce")))   ; too short
+    (is (not (semver/sha-match? "cd4ce1216a9b" "nothex0")))))
+
+;; --- current build version (baked into the binary via ldflags) ---
+
+(deftest current-build
+  (testing "dev/unknown build reports nil (not a release version)"
+    ;; the test binary carries default rt.Version=dev / rt.Commit=none
+    (is (nil? (semver/current)))
+    (is (nil? (semver/current-commit)))))

@@ -6236,6 +6236,39 @@ func installLangNS() {
 	ns.Def("make-protocol-fn", makeProtocolFn)
 	ns.Def("extend-type*", extendType)
 	ns.Def("satisfies?", satisfies)
+
+	// Comparable: the extensible ordering protocol (Clojure-compat). compare,
+	// sort, and sorted-set all funnel through vm.DefaultCompare, so wiring the
+	// protocol into its fallback hook makes all three dispatch to user types —
+	// matching Clojure, where compare uses Comparable and sort/sorted-set use
+	// compare. Dispatch is on the first arg only (Clojure's a.compareTo(b)).
+	// Created here (mirroring io's IReadable in ions.go) so the same *vm.Protocol
+	// object is shared by extend-type* (which mutates it) and the hook.
+	comparableProto := vm.NewProtocol("Comparable", []vm.Symbol{"compare-to"})
+	vm.ComparableFallback = func(a, b vm.Value) (int, bool, error) {
+		impl, ok := comparableProto.Lookup(vm.Symbol("compare-to"), a)
+		if !ok {
+			return 0, false, nil
+		}
+		r, err := impl.Invoke([]vm.Value{a, b})
+		if err != nil {
+			return 0, true, err
+		}
+		n, ok := r.(vm.Int)
+		if !ok {
+			return 0, true, fmt.Errorf("compare-to must return an integer, got %s", r.Type().Name())
+		}
+		switch {
+		case n < 0:
+			return -1, true, nil
+		case n > 0:
+			return 1, true, nil
+		default:
+			return 0, true, nil
+		}
+	}
+	ns.Def("Comparable", comparableProto)
+	ns.Def("compare-to", vm.NewProtocolFn(comparableProto, "compare-to"))
 	ns.Def("defmulti*", defMulti)
 	ns.Def("defmethod*", defMethod)
 	ns.Def("methods", methods)

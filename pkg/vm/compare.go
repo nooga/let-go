@@ -10,6 +10,17 @@ import "fmt"
 // Comparator is a function that compares two Values, returning -1, 0, or 1.
 type Comparator func(a, b Value) (int, error)
 
+// ComparableFallback, when set, is consulted by DefaultCompare for values it
+// cannot order natively. It dispatches on a's type only (mirroring Clojure's
+// compare, which calls a.compareTo(b)) and returns (result, handled, err):
+// handled is false when a's type has no Comparable implementation, in which
+// case DefaultCompare reports its usual error. The runtime (package rt) wires
+// this at init to route through the Comparable protocol; it lives here as a
+// hook to avoid a vm->rt import cycle. Because compare, sort, and sorted-set
+// all funnel through DefaultCompare, registering once makes all three respect
+// Comparable — matching Clojure, where sort/sorted-set use compare.
+var ComparableFallback func(a, b Value) (int, bool, error)
+
 func isSeqComparable(v Value) bool {
 	switch v.(type) {
 	case ArrayVector, PersistentVector, *PersistentVector, MapEntry:
@@ -128,6 +139,11 @@ func DefaultCompare(a, b Value) (int, error) {
 			return -1, nil
 		}
 		return 1, nil
+	}
+	if ComparableFallback != nil {
+		if c, handled, err := ComparableFallback(a, b); handled || err != nil {
+			return c, err
+		}
 	}
 	return 0, fmt.Errorf("cannot compare %s and %s", a.Type(), b.Type())
 }

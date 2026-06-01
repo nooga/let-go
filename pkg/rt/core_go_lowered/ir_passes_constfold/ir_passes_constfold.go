@@ -6,15 +6,15 @@ import (
 )
 
 func const_QMARK_(arg0 vm.Value, arg1 vm.Value) (bool, error) {
-	var arg__17331_4 vm.Value
+	var arg__17335_4 vm.Value
 	var v5 bool
 	var callErr error
-	_, _ = arg__17331_4, v5
-	arg__17331_4, callErr = rt.InvokeValue(rt.LookupVar("ir", "op").Deref(), []vm.Value{arg0, arg1})
+	_, _ = arg__17335_4, v5
+	arg__17335_4, callErr = rt.InvokeValue(rt.LookupVar("ir", "op").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return false, callErr
 	}
-	v5 = arg__17331_4 == vm.Keyword("const")
+	v5 = arg__17335_4 == vm.Keyword("const")
 	return v5, nil
 }
 func const_val(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
@@ -67,7 +67,7 @@ func apply_action_BANG_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) (vm.Value, 
 	var f_4 vm.Value
 	var nid_5 vm.Value
 	var action_6 vm.Value
-	var map__17469_14 vm.Value
+	var map__17473_14 vm.Value
 	var op_18 vm.Value
 	var refs_22 vm.Value
 	var aux_26 vm.Value
@@ -85,8 +85,8 @@ func apply_action_BANG_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) (vm.Value, 
 	var f_34 vm.Value
 	var nid_35 vm.Value
 	var action_36 vm.Value
-	var arg__17516_44 vm.Value
-	var arg__17522_47 vm.Value
+	var arg__17520_44 vm.Value
+	var arg__17526_47 vm.Value
 	var v48 vm.Value
 	var f_37 vm.Value
 	var nid_38 vm.Value
@@ -99,8 +99,8 @@ func apply_action_BANG_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) (vm.Value, 
 	var f_50 vm.Value
 	var nid_51 vm.Value
 	var action_52 vm.Value
-	var arg__17529_60 vm.Value
-	var arg__17535_63 vm.Value
+	var arg__17533_60 vm.Value
+	var arg__17539_63 vm.Value
 	var v64 vm.Value
 	var f_53 vm.Value
 	var nid_54 vm.Value
@@ -110,7 +110,7 @@ func apply_action_BANG_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) (vm.Value, 
 	var nid_70 vm.Value
 	var action_71 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = v11, f_4, nid_5, action_6, map__17469_14, op_18, refs_22, aux_26, v28, v30, v32, f_7, nid_8, action_9, v41, v78, f_79, nid_80, action_81, f_34, nid_35, action_36, arg__17516_44, arg__17522_47, v48, f_37, nid_38, action_39, v57, v73, f_74, nid_75, action_76, f_50, nid_51, action_52, arg__17529_60, arg__17535_63, v64, f_53, nid_54, action_55, v68, f_69, nid_70, action_71
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = v11, f_4, nid_5, action_6, map__17473_14, op_18, refs_22, aux_26, v28, v30, v32, f_7, nid_8, action_9, v41, v78, f_79, nid_80, action_81, f_34, nid_35, action_36, arg__17520_44, arg__17526_47, v48, f_37, nid_38, action_39, v57, v73, f_74, nid_75, action_76, f_50, nid_51, action_52, arg__17533_60, arg__17539_63, v64, f_53, nid_54, action_55, v68, f_69, nid_70, action_71
 	v11, callErr = rt.InvokeValue(vm.Keyword("replace-with"), []vm.Value{arg2})
 	if callErr != nil {
 		return nil, callErr
@@ -128,19 +128,19 @@ func apply_action_BANG_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) (vm.Value, 
 	}
 b1:
 	;
-	map__17469_14, callErr = rt.InvokeValue(vm.Keyword("replace-with"), []vm.Value{action_6})
+	map__17473_14, callErr = rt.InvokeValue(vm.Keyword("replace-with"), []vm.Value{action_6})
 	if callErr != nil {
 		return nil, callErr
 	}
-	op_18, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{map__17469_14, vm.Keyword("op")})
+	op_18, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{map__17473_14, vm.Keyword("op")})
 	if callErr != nil {
 		return nil, callErr
 	}
-	refs_22, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{map__17469_14, vm.Keyword("refs")})
+	refs_22, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{map__17473_14, vm.Keyword("refs")})
 	if callErr != nil {
 		return nil, callErr
 	}
-	aux_26, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{map__17469_14, vm.Keyword("aux")})
+	aux_26, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "get").Deref(), []vm.Value{map__17473_14, vm.Keyword("aux")})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -183,15 +183,15 @@ b3:
 	return v78, nil
 b4:
 	;
-	arg__17516_44, callErr = rt.InvokeValue(vm.Keyword("replace-uses"), []vm.Value{action_36})
+	arg__17520_44, callErr = rt.InvokeValue(vm.Keyword("replace-uses"), []vm.Value{action_36})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17522_47, callErr = rt.InvokeValue(vm.Keyword("replace-uses"), []vm.Value{action_36})
+	arg__17526_47, callErr = rt.InvokeValue(vm.Keyword("replace-uses"), []vm.Value{action_36})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v48, callErr = rt.InvokeValue(rt.LookupVar("ir", "replace-all-uses!").Deref(), []vm.Value{f_34, nid_35, arg__17522_47})
+	v48, callErr = rt.InvokeValue(rt.LookupVar("ir", "replace-all-uses!").Deref(), []vm.Value{f_34, nid_35, arg__17526_47})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -226,15 +226,15 @@ b6:
 	goto b3
 b7:
 	;
-	arg__17529_60, callErr = rt.InvokeValue(vm.Keyword("swap-refs"), []vm.Value{action_52})
+	arg__17533_60, callErr = rt.InvokeValue(vm.Keyword("swap-refs"), []vm.Value{action_52})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17535_63, callErr = rt.InvokeValue(vm.Keyword("swap-refs"), []vm.Value{action_52})
+	arg__17539_63, callErr = rt.InvokeValue(vm.Keyword("swap-refs"), []vm.Value{action_52})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v64, callErr = rt.InvokeValue(rt.LookupVar("ir", "set-refs!").Deref(), []vm.Value{f_50, nid_51, arg__17535_63})
+	v64, callErr = rt.InvokeValue(rt.LookupVar("ir", "set-refs!").Deref(), []vm.Value{f_50, nid_51, arg__17539_63})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -261,7 +261,7 @@ b9:
 func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var op_4 vm.Value
 	var refs_6 vm.Value
-	var arg__17551_17 vm.Value
+	var arg__17555_17 vm.Value
 	var v18 bool
 	var nid_7 vm.Value
 	var f_8 vm.Value
@@ -283,7 +283,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var refs_574 vm.Value
 	var nid_34 vm.Value
 	var f_35 vm.Value
-	var case__17536_36 vm.Value
+	var case__17540_36 vm.Value
 	var op_37 vm.Value
 	var refs_38 vm.Value
 	var r0_39 vm.Value
@@ -295,7 +295,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v81 vm.Value
 	var nid_45 vm.Value
 	var f_46 vm.Value
-	var case__17536_47 vm.Value
+	var case__17540_47 vm.Value
 	var op_48 vm.Value
 	var refs_49 vm.Value
 	var r0_50 vm.Value
@@ -308,7 +308,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v555 vm.Value
 	var nid_556 vm.Value
 	var f_557 vm.Value
-	var case__17536_558 vm.Value
+	var case__17540_558 vm.Value
 	var op_559 vm.Value
 	var refs_560 vm.Value
 	var r0_561 vm.Value
@@ -319,7 +319,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__566 vm.Value
 	var nid_59 vm.Value
 	var f_60 vm.Value
-	var case__17536_61 vm.Value
+	var case__17540_61 vm.Value
 	var op_62 vm.Value
 	var refs_63 vm.Value
 	var r0_64 vm.Value
@@ -331,7 +331,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v85 vm.Value
 	var nid_70 vm.Value
 	var f_71 vm.Value
-	var case__17536_72 vm.Value
+	var case__17540_72 vm.Value
 	var op_73 vm.Value
 	var refs_74 vm.Value
 	var r0_75 vm.Value
@@ -344,7 +344,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v169 vm.Value
 	var nid_170 vm.Value
 	var f_171 vm.Value
-	var case__17536_172 vm.Value
+	var case__17540_172 vm.Value
 	var op_173 vm.Value
 	var refs_174 vm.Value
 	var r0_175 vm.Value
@@ -355,7 +355,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__180 vm.Value
 	var nid_87 vm.Value
 	var f_88 vm.Value
-	var case__17536_89 vm.Value
+	var case__17540_89 vm.Value
 	var op_90 vm.Value
 	var refs_91 vm.Value
 	var r0_92 vm.Value
@@ -367,7 +367,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v113 vm.Value
 	var nid_98 vm.Value
 	var f_99 vm.Value
-	var case__17536_100 vm.Value
+	var case__17540_100 vm.Value
 	var op_101 vm.Value
 	var refs_102 vm.Value
 	var r0_103 vm.Value
@@ -379,7 +379,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v156 vm.Value
 	var nid_157 vm.Value
 	var f_158 vm.Value
-	var case__17536_159 vm.Value
+	var case__17540_159 vm.Value
 	var op_160 vm.Value
 	var refs_161 vm.Value
 	var r0_162 vm.Value
@@ -390,7 +390,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__167 vm.Value
 	var nid_115 vm.Value
 	var f_116 vm.Value
-	var case__17536_117 vm.Value
+	var case__17540_117 vm.Value
 	var op_118 vm.Value
 	var refs_119 vm.Value
 	var r0_120 vm.Value
@@ -401,7 +401,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__125 vm.Value
 	var nid_126 vm.Value
 	var f_127 vm.Value
-	var case__17536_128 vm.Value
+	var case__17540_128 vm.Value
 	var op_129 vm.Value
 	var refs_130 vm.Value
 	var r0_131 vm.Value
@@ -413,7 +413,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v143 vm.Value
 	var nid_144 vm.Value
 	var f_145 vm.Value
-	var case__17536_146 vm.Value
+	var case__17540_146 vm.Value
 	var op_147 vm.Value
 	var refs_148 vm.Value
 	var r0_149 vm.Value
@@ -424,7 +424,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__154 vm.Value
 	var nid_182 vm.Value
 	var f_183 vm.Value
-	var case__17536_184 vm.Value
+	var case__17540_184 vm.Value
 	var op_185 vm.Value
 	var refs_186 vm.Value
 	var r0_187 vm.Value
@@ -436,7 +436,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v229 vm.Value
 	var nid_193 vm.Value
 	var f_194 vm.Value
-	var case__17536_195 vm.Value
+	var case__17540_195 vm.Value
 	var op_196 vm.Value
 	var refs_197 vm.Value
 	var r0_198 vm.Value
@@ -449,7 +449,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v542 vm.Value
 	var nid_543 vm.Value
 	var f_544 vm.Value
-	var case__17536_545 vm.Value
+	var case__17540_545 vm.Value
 	var op_546 vm.Value
 	var refs_547 vm.Value
 	var r0_548 vm.Value
@@ -460,7 +460,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__553 vm.Value
 	var nid_207 vm.Value
 	var f_208 vm.Value
-	var case__17536_209 vm.Value
+	var case__17540_209 vm.Value
 	var op_210 vm.Value
 	var refs_211 vm.Value
 	var r0_212 vm.Value
@@ -472,7 +472,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v233 vm.Value
 	var nid_218 vm.Value
 	var f_219 vm.Value
-	var case__17536_220 vm.Value
+	var case__17540_220 vm.Value
 	var op_221 vm.Value
 	var refs_222 vm.Value
 	var r0_223 vm.Value
@@ -484,7 +484,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v237 vm.Value
 	var nid_238 vm.Value
 	var f_239 vm.Value
-	var case__17536_240 vm.Value
+	var case__17540_240 vm.Value
 	var op_241 vm.Value
 	var refs_242 vm.Value
 	var r0_243 vm.Value
@@ -495,7 +495,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__248 vm.Value
 	var nid_250 vm.Value
 	var f_251 vm.Value
-	var case__17536_252 vm.Value
+	var case__17540_252 vm.Value
 	var op_253 vm.Value
 	var refs_254 vm.Value
 	var r0_255 vm.Value
@@ -507,7 +507,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v297 vm.Value
 	var nid_261 vm.Value
 	var f_262 vm.Value
-	var case__17536_263 vm.Value
+	var case__17540_263 vm.Value
 	var op_264 vm.Value
 	var refs_265 vm.Value
 	var r0_266 vm.Value
@@ -519,7 +519,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v529 vm.Value
 	var nid_530 vm.Value
 	var f_531 vm.Value
-	var case__17536_532 vm.Value
+	var case__17540_532 vm.Value
 	var op_533 vm.Value
 	var refs_534 vm.Value
 	var r0_535 vm.Value
@@ -530,7 +530,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__540 vm.Value
 	var nid_275 vm.Value
 	var f_276 vm.Value
-	var case__17536_277 vm.Value
+	var case__17540_277 vm.Value
 	var op_278 vm.Value
 	var refs_279 vm.Value
 	var r0_280 vm.Value
@@ -542,7 +542,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v301 vm.Value
 	var nid_286 vm.Value
 	var f_287 vm.Value
-	var case__17536_288 vm.Value
+	var case__17540_288 vm.Value
 	var op_289 vm.Value
 	var refs_290 vm.Value
 	var r0_291 vm.Value
@@ -555,7 +555,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v475 vm.Value
 	var nid_476 vm.Value
 	var f_477 vm.Value
-	var case__17536_478 vm.Value
+	var case__17540_478 vm.Value
 	var op_479 vm.Value
 	var refs_480 vm.Value
 	var r0_481 vm.Value
@@ -566,7 +566,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__486 vm.Value
 	var nid_303 vm.Value
 	var f_304 vm.Value
-	var case__17536_305 vm.Value
+	var case__17540_305 vm.Value
 	var op_306 vm.Value
 	var refs_307 vm.Value
 	var r0_308 vm.Value
@@ -578,7 +578,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v329 vm.Value
 	var nid_314 vm.Value
 	var f_315 vm.Value
-	var case__17536_316 vm.Value
+	var case__17540_316 vm.Value
 	var op_317 vm.Value
 	var refs_318 vm.Value
 	var r0_319 vm.Value
@@ -591,7 +591,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v462 vm.Value
 	var nid_463 vm.Value
 	var f_464 vm.Value
-	var case__17536_465 vm.Value
+	var case__17540_465 vm.Value
 	var op_466 vm.Value
 	var refs_467 vm.Value
 	var r0_468 vm.Value
@@ -602,7 +602,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__473 vm.Value
 	var nid_331 vm.Value
 	var f_332 vm.Value
-	var case__17536_333 vm.Value
+	var case__17540_333 vm.Value
 	var op_334 vm.Value
 	var refs_335 vm.Value
 	var r0_336 vm.Value
@@ -611,11 +611,11 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v1_339 vm.Value
 	var zero_QMARK__340 vm.Value
 	var one_QMARK__341 vm.Value
-	var arg__17633_405 vm.Value
+	var arg__17637_405 vm.Value
 	var v406 vm.Value
 	var nid_342 vm.Value
 	var f_343 vm.Value
-	var case__17536_344 vm.Value
+	var case__17540_344 vm.Value
 	var op_345 vm.Value
 	var refs_346 vm.Value
 	var r0_347 vm.Value
@@ -627,7 +627,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v449 vm.Value
 	var nid_450 vm.Value
 	var f_451 vm.Value
-	var case__17536_452 vm.Value
+	var case__17540_452 vm.Value
 	var op_453 vm.Value
 	var refs_454 vm.Value
 	var r0_455 vm.Value
@@ -638,7 +638,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__460 vm.Value
 	var nid_354 vm.Value
 	var f_355 vm.Value
-	var case__17536_356 vm.Value
+	var case__17540_356 vm.Value
 	var op_357 vm.Value
 	var refs_358 vm.Value
 	var r0_359 vm.Value
@@ -650,7 +650,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var or__x_365 vm.Value
 	var nid_366 vm.Value
 	var f_367 vm.Value
-	var case__17536_368 vm.Value
+	var case__17540_368 vm.Value
 	var op_369 vm.Value
 	var refs_370 vm.Value
 	var r0_371 vm.Value
@@ -664,7 +664,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v382 vm.Value
 	var nid_383 vm.Value
 	var f_384 vm.Value
-	var case__17536_385 vm.Value
+	var case__17540_385 vm.Value
 	var op_386 vm.Value
 	var refs_387 vm.Value
 	var r0_388 vm.Value
@@ -676,7 +676,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var or__x_394 vm.Value
 	var nid_408 vm.Value
 	var f_409 vm.Value
-	var case__17536_410 vm.Value
+	var case__17540_410 vm.Value
 	var op_411 vm.Value
 	var refs_412 vm.Value
 	var r0_413 vm.Value
@@ -687,7 +687,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__418 vm.Value
 	var nid_419 vm.Value
 	var f_420 vm.Value
-	var case__17536_421 vm.Value
+	var case__17540_421 vm.Value
 	var op_422 vm.Value
 	var refs_423 vm.Value
 	var r0_424 vm.Value
@@ -699,7 +699,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v436 vm.Value
 	var nid_437 vm.Value
 	var f_438 vm.Value
-	var case__17536_439 vm.Value
+	var case__17540_439 vm.Value
 	var op_440 vm.Value
 	var refs_441 vm.Value
 	var r0_442 vm.Value
@@ -710,7 +710,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__447 vm.Value
 	var nid_488 vm.Value
 	var f_489 vm.Value
-	var case__17536_490 vm.Value
+	var case__17540_490 vm.Value
 	var op_491 vm.Value
 	var refs_492 vm.Value
 	var r0_493 vm.Value
@@ -721,7 +721,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var one_QMARK__498 vm.Value
 	var nid_499 vm.Value
 	var f_500 vm.Value
-	var case__17536_501 vm.Value
+	var case__17540_501 vm.Value
 	var op_502 vm.Value
 	var refs_503 vm.Value
 	var r0_504 vm.Value
@@ -733,7 +733,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var v516 vm.Value
 	var nid_517 vm.Value
 	var f_518 vm.Value
-	var case__17536_519 vm.Value
+	var case__17540_519 vm.Value
 	var op_520 vm.Value
 	var refs_521 vm.Value
 	var r0_522 vm.Value
@@ -743,7 +743,7 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var zero_QMARK__526 vm.Value
 	var one_QMARK__527 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = op_4, refs_6, arg__17551_17, v18, nid_7, f_8, op_9, refs_10, r0_23, r1_27, v0_29, v1_31, v57, nid_11, f_12, op_13, refs_14, v570, nid_571, f_572, op_573, refs_574, nid_34, f_35, case__17536_36, op_37, refs_38, r0_39, r1_40, v0_41, v1_42, zero_QMARK__43, one_QMARK__44, v81, nid_45, f_46, case__17536_47, op_48, refs_49, r0_50, r1_51, v0_52, v1_53, zero_QMARK__54, one_QMARK__55, v205, v555, nid_556, f_557, case__17536_558, op_559, refs_560, r0_561, r1_562, v0_563, v1_564, zero_QMARK__565, one_QMARK__566, nid_59, f_60, case__17536_61, op_62, refs_63, r0_64, r1_65, v0_66, v1_67, zero_QMARK__68, one_QMARK__69, v85, nid_70, f_71, case__17536_72, op_73, refs_74, r0_75, r1_76, v0_77, v1_78, zero_QMARK__79, one_QMARK__80, v109, v169, nid_170, f_171, case__17536_172, op_173, refs_174, r0_175, r1_176, v0_177, v1_178, zero_QMARK__179, one_QMARK__180, nid_87, f_88, case__17536_89, op_90, refs_91, r0_92, r1_93, v0_94, v1_95, zero_QMARK__96, one_QMARK__97, v113, nid_98, f_99, case__17536_100, op_101, refs_102, r0_103, r1_104, v0_105, v1_106, zero_QMARK__107, one_QMARK__108, v156, nid_157, f_158, case__17536_159, op_160, refs_161, r0_162, r1_163, v0_164, v1_165, zero_QMARK__166, one_QMARK__167, nid_115, f_116, case__17536_117, op_118, refs_119, r0_120, r1_121, v0_122, v1_123, zero_QMARK__124, one_QMARK__125, nid_126, f_127, case__17536_128, op_129, refs_130, r0_131, r1_132, v0_133, v1_134, zero_QMARK__135, one_QMARK__136, v143, nid_144, f_145, case__17536_146, op_147, refs_148, r0_149, r1_150, v0_151, v1_152, zero_QMARK__153, one_QMARK__154, nid_182, f_183, case__17536_184, op_185, refs_186, r0_187, r1_188, v0_189, v1_190, zero_QMARK__191, one_QMARK__192, v229, nid_193, f_194, case__17536_195, op_196, refs_197, r0_198, r1_199, v0_200, v1_201, zero_QMARK__202, one_QMARK__203, v273, v542, nid_543, f_544, case__17536_545, op_546, refs_547, r0_548, r1_549, v0_550, v1_551, zero_QMARK__552, one_QMARK__553, nid_207, f_208, case__17536_209, op_210, refs_211, r0_212, r1_213, v0_214, v1_215, zero_QMARK__216, one_QMARK__217, v233, nid_218, f_219, case__17536_220, op_221, refs_222, r0_223, r1_224, v0_225, v1_226, zero_QMARK__227, one_QMARK__228, v237, nid_238, f_239, case__17536_240, op_241, refs_242, r0_243, r1_244, v0_245, v1_246, zero_QMARK__247, one_QMARK__248, nid_250, f_251, case__17536_252, op_253, refs_254, r0_255, r1_256, v0_257, v1_258, zero_QMARK__259, one_QMARK__260, v297, nid_261, f_262, case__17536_263, op_264, refs_265, r0_266, r1_267, v0_268, v1_269, zero_QMARK__270, one_QMARK__271, v529, nid_530, f_531, case__17536_532, op_533, refs_534, r0_535, r1_536, v0_537, v1_538, zero_QMARK__539, one_QMARK__540, nid_275, f_276, case__17536_277, op_278, refs_279, r0_280, r1_281, v0_282, v1_283, zero_QMARK__284, one_QMARK__285, v301, nid_286, f_287, case__17536_288, op_289, refs_290, r0_291, r1_292, v0_293, v1_294, zero_QMARK__295, one_QMARK__296, v325, v475, nid_476, f_477, case__17536_478, op_479, refs_480, r0_481, r1_482, v0_483, v1_484, zero_QMARK__485, one_QMARK__486, nid_303, f_304, case__17536_305, op_306, refs_307, r0_308, r1_309, v0_310, v1_311, zero_QMARK__312, one_QMARK__313, v329, nid_314, f_315, case__17536_316, op_317, refs_318, r0_319, r1_320, v0_321, v1_322, zero_QMARK__323, one_QMARK__324, or__x_353, v462, nid_463, f_464, case__17536_465, op_466, refs_467, r0_468, r1_469, v0_470, v1_471, zero_QMARK__472, one_QMARK__473, nid_331, f_332, case__17536_333, op_334, refs_335, r0_336, r1_337, v0_338, v1_339, zero_QMARK__340, one_QMARK__341, arg__17633_405, v406, nid_342, f_343, case__17536_344, op_345, refs_346, r0_347, r1_348, v0_349, v1_350, zero_QMARK__351, one_QMARK__352, v449, nid_450, f_451, case__17536_452, op_453, refs_454, r0_455, r1_456, v0_457, v1_458, zero_QMARK__459, one_QMARK__460, nid_354, f_355, case__17536_356, op_357, refs_358, r0_359, r1_360, v0_361, v1_362, zero_QMARK__363, one_QMARK__364, or__x_365, nid_366, f_367, case__17536_368, op_369, refs_370, r0_371, r1_372, v0_373, v1_374, zero_QMARK__375, one_QMARK__376, or__x_377, v380, v382, nid_383, f_384, case__17536_385, op_386, refs_387, r0_388, r1_389, v0_390, v1_391, zero_QMARK__392, one_QMARK__393, or__x_394, nid_408, f_409, case__17536_410, op_411, refs_412, r0_413, r1_414, v0_415, v1_416, zero_QMARK__417, one_QMARK__418, nid_419, f_420, case__17536_421, op_422, refs_423, r0_424, r1_425, v0_426, v1_427, zero_QMARK__428, one_QMARK__429, v436, nid_437, f_438, case__17536_439, op_440, refs_441, r0_442, r1_443, v0_444, v1_445, zero_QMARK__446, one_QMARK__447, nid_488, f_489, case__17536_490, op_491, refs_492, r0_493, r1_494, v0_495, v1_496, zero_QMARK__497, one_QMARK__498, nid_499, f_500, case__17536_501, op_502, refs_503, r0_504, r1_505, v0_506, v1_507, zero_QMARK__508, one_QMARK__509, v516, nid_517, f_518, case__17536_519, op_520, refs_521, r0_522, r1_523, v0_524, v1_525, zero_QMARK__526, one_QMARK__527
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = op_4, refs_6, arg__17555_17, v18, nid_7, f_8, op_9, refs_10, r0_23, r1_27, v0_29, v1_31, v57, nid_11, f_12, op_13, refs_14, v570, nid_571, f_572, op_573, refs_574, nid_34, f_35, case__17540_36, op_37, refs_38, r0_39, r1_40, v0_41, v1_42, zero_QMARK__43, one_QMARK__44, v81, nid_45, f_46, case__17540_47, op_48, refs_49, r0_50, r1_51, v0_52, v1_53, zero_QMARK__54, one_QMARK__55, v205, v555, nid_556, f_557, case__17540_558, op_559, refs_560, r0_561, r1_562, v0_563, v1_564, zero_QMARK__565, one_QMARK__566, nid_59, f_60, case__17540_61, op_62, refs_63, r0_64, r1_65, v0_66, v1_67, zero_QMARK__68, one_QMARK__69, v85, nid_70, f_71, case__17540_72, op_73, refs_74, r0_75, r1_76, v0_77, v1_78, zero_QMARK__79, one_QMARK__80, v109, v169, nid_170, f_171, case__17540_172, op_173, refs_174, r0_175, r1_176, v0_177, v1_178, zero_QMARK__179, one_QMARK__180, nid_87, f_88, case__17540_89, op_90, refs_91, r0_92, r1_93, v0_94, v1_95, zero_QMARK__96, one_QMARK__97, v113, nid_98, f_99, case__17540_100, op_101, refs_102, r0_103, r1_104, v0_105, v1_106, zero_QMARK__107, one_QMARK__108, v156, nid_157, f_158, case__17540_159, op_160, refs_161, r0_162, r1_163, v0_164, v1_165, zero_QMARK__166, one_QMARK__167, nid_115, f_116, case__17540_117, op_118, refs_119, r0_120, r1_121, v0_122, v1_123, zero_QMARK__124, one_QMARK__125, nid_126, f_127, case__17540_128, op_129, refs_130, r0_131, r1_132, v0_133, v1_134, zero_QMARK__135, one_QMARK__136, v143, nid_144, f_145, case__17540_146, op_147, refs_148, r0_149, r1_150, v0_151, v1_152, zero_QMARK__153, one_QMARK__154, nid_182, f_183, case__17540_184, op_185, refs_186, r0_187, r1_188, v0_189, v1_190, zero_QMARK__191, one_QMARK__192, v229, nid_193, f_194, case__17540_195, op_196, refs_197, r0_198, r1_199, v0_200, v1_201, zero_QMARK__202, one_QMARK__203, v273, v542, nid_543, f_544, case__17540_545, op_546, refs_547, r0_548, r1_549, v0_550, v1_551, zero_QMARK__552, one_QMARK__553, nid_207, f_208, case__17540_209, op_210, refs_211, r0_212, r1_213, v0_214, v1_215, zero_QMARK__216, one_QMARK__217, v233, nid_218, f_219, case__17540_220, op_221, refs_222, r0_223, r1_224, v0_225, v1_226, zero_QMARK__227, one_QMARK__228, v237, nid_238, f_239, case__17540_240, op_241, refs_242, r0_243, r1_244, v0_245, v1_246, zero_QMARK__247, one_QMARK__248, nid_250, f_251, case__17540_252, op_253, refs_254, r0_255, r1_256, v0_257, v1_258, zero_QMARK__259, one_QMARK__260, v297, nid_261, f_262, case__17540_263, op_264, refs_265, r0_266, r1_267, v0_268, v1_269, zero_QMARK__270, one_QMARK__271, v529, nid_530, f_531, case__17540_532, op_533, refs_534, r0_535, r1_536, v0_537, v1_538, zero_QMARK__539, one_QMARK__540, nid_275, f_276, case__17540_277, op_278, refs_279, r0_280, r1_281, v0_282, v1_283, zero_QMARK__284, one_QMARK__285, v301, nid_286, f_287, case__17540_288, op_289, refs_290, r0_291, r1_292, v0_293, v1_294, zero_QMARK__295, one_QMARK__296, v325, v475, nid_476, f_477, case__17540_478, op_479, refs_480, r0_481, r1_482, v0_483, v1_484, zero_QMARK__485, one_QMARK__486, nid_303, f_304, case__17540_305, op_306, refs_307, r0_308, r1_309, v0_310, v1_311, zero_QMARK__312, one_QMARK__313, v329, nid_314, f_315, case__17540_316, op_317, refs_318, r0_319, r1_320, v0_321, v1_322, zero_QMARK__323, one_QMARK__324, or__x_353, v462, nid_463, f_464, case__17540_465, op_466, refs_467, r0_468, r1_469, v0_470, v1_471, zero_QMARK__472, one_QMARK__473, nid_331, f_332, case__17540_333, op_334, refs_335, r0_336, r1_337, v0_338, v1_339, zero_QMARK__340, one_QMARK__341, arg__17637_405, v406, nid_342, f_343, case__17540_344, op_345, refs_346, r0_347, r1_348, v0_349, v1_350, zero_QMARK__351, one_QMARK__352, v449, nid_450, f_451, case__17540_452, op_453, refs_454, r0_455, r1_456, v0_457, v1_458, zero_QMARK__459, one_QMARK__460, nid_354, f_355, case__17540_356, op_357, refs_358, r0_359, r1_360, v0_361, v1_362, zero_QMARK__363, one_QMARK__364, or__x_365, nid_366, f_367, case__17540_368, op_369, refs_370, r0_371, r1_372, v0_373, v1_374, zero_QMARK__375, one_QMARK__376, or__x_377, v380, v382, nid_383, f_384, case__17540_385, op_386, refs_387, r0_388, r1_389, v0_390, v1_391, zero_QMARK__392, one_QMARK__393, or__x_394, nid_408, f_409, case__17540_410, op_411, refs_412, r0_413, r1_414, v0_415, v1_416, zero_QMARK__417, one_QMARK__418, nid_419, f_420, case__17540_421, op_422, refs_423, r0_424, r1_425, v0_426, v1_427, zero_QMARK__428, one_QMARK__429, v436, nid_437, f_438, case__17540_439, op_440, refs_441, r0_442, r1_443, v0_444, v1_445, zero_QMARK__446, one_QMARK__447, nid_488, f_489, case__17540_490, op_491, refs_492, r0_493, r1_494, v0_495, v1_496, zero_QMARK__497, one_QMARK__498, nid_499, f_500, case__17540_501, op_502, refs_503, r0_504, r1_505, v0_506, v1_507, zero_QMARK__508, one_QMARK__509, v516, nid_517, f_518, case__17540_519, op_520, refs_521, r0_522, r1_523, v0_524, v1_525, zero_QMARK__526, one_QMARK__527
 	op_4, callErr = rt.InvokeValue(rt.LookupVar("ir", "op").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return nil, callErr
@@ -752,11 +752,11 @@ func try_identity(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17551_17, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{refs_6})
+	arg__17555_17, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{refs_6})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v18 = arg__17551_17 == vm.Int(2)
+	v18 = arg__17555_17 == vm.Int(2)
 	if v18 {
 		nid_7 = arg0
 		f_8 = arg1
@@ -792,7 +792,7 @@ b1:
 	if v57 {
 		nid_34 = nid_7
 		f_35 = f_8
-		case__17536_36 = op_9
+		case__17540_36 = op_9
 		op_37 = op_9
 		refs_38 = refs_10
 		r0_39 = r0_23
@@ -887,7 +887,7 @@ b1:
 	} else {
 		nid_45 = nid_7
 		f_46 = f_8
-		case__17536_47 = op_9
+		case__17540_47 = op_9
 		op_48 = op_9
 		refs_49 = refs_10
 		r0_50 = r0_23
@@ -1000,7 +1000,7 @@ b4:
 	if vm.IsTruthy(v81) {
 		nid_59 = nid_34
 		f_60 = f_35
-		case__17536_61 = case__17536_36
+		case__17540_61 = case__17540_36
 		op_62 = op_37
 		refs_63 = refs_38
 		r0_64 = r0_39
@@ -1013,7 +1013,7 @@ b4:
 	} else {
 		nid_70 = nid_34
 		f_71 = f_35
-		case__17536_72 = case__17536_36
+		case__17540_72 = case__17540_36
 		op_73 = op_37
 		refs_74 = refs_38
 		r0_75 = r0_39
@@ -1026,11 +1026,11 @@ b4:
 	}
 b5:
 	;
-	v205 = case__17536_47 == vm.Keyword("sub")
+	v205 = case__17540_47 == vm.Keyword("sub")
 	if v205 {
 		nid_182 = nid_45
 		f_183 = f_46
-		case__17536_184 = case__17536_47
+		case__17540_184 = case__17540_47
 		op_185 = op_48
 		refs_186 = refs_49
 		r0_187 = r0_50
@@ -1043,7 +1043,7 @@ b5:
 	} else {
 		nid_193 = nid_45
 		f_194 = f_46
-		case__17536_195 = case__17536_47
+		case__17540_195 = case__17540_47
 		op_196 = op_48
 		refs_197 = refs_49
 		r0_198 = r0_50
@@ -1071,7 +1071,7 @@ b7:
 	v169 = v85
 	nid_170 = nid_59
 	f_171 = f_60
-	case__17536_172 = case__17536_61
+	case__17540_172 = case__17540_61
 	op_173 = op_62
 	refs_174 = refs_63
 	r0_175 = r0_64
@@ -1090,7 +1090,7 @@ b8:
 	if vm.IsTruthy(v109) {
 		nid_87 = nid_70
 		f_88 = f_71
-		case__17536_89 = case__17536_72
+		case__17540_89 = case__17540_72
 		op_90 = op_73
 		refs_91 = refs_74
 		r0_92 = r0_75
@@ -1103,7 +1103,7 @@ b8:
 	} else {
 		nid_98 = nid_70
 		f_99 = f_71
-		case__17536_100 = case__17536_72
+		case__17540_100 = case__17540_72
 		op_101 = op_73
 		refs_102 = refs_74
 		r0_103 = r0_75
@@ -1119,7 +1119,7 @@ b9:
 	v555 = v169
 	nid_556 = nid_170
 	f_557 = f_171
-	case__17536_558 = case__17536_172
+	case__17540_558 = case__17540_172
 	op_559 = op_173
 	refs_560 = refs_174
 	r0_561 = r0_175
@@ -1138,7 +1138,7 @@ b10:
 	v156 = v113
 	nid_157 = nid_87
 	f_158 = f_88
-	case__17536_159 = case__17536_89
+	case__17540_159 = case__17540_89
 	op_160 = op_90
 	refs_161 = refs_91
 	r0_162 = r0_92
@@ -1153,7 +1153,7 @@ b11:
 	if vm.IsTruthy(vm.Keyword("else")) {
 		nid_115 = nid_98
 		f_116 = f_99
-		case__17536_117 = case__17536_100
+		case__17540_117 = case__17540_100
 		op_118 = op_101
 		refs_119 = refs_102
 		r0_120 = r0_103
@@ -1166,7 +1166,7 @@ b11:
 	} else {
 		nid_126 = nid_98
 		f_127 = f_99
-		case__17536_128 = case__17536_100
+		case__17540_128 = case__17540_100
 		op_129 = op_101
 		refs_130 = refs_102
 		r0_131 = r0_103
@@ -1182,7 +1182,7 @@ b12:
 	v169 = v156
 	nid_170 = nid_157
 	f_171 = f_158
-	case__17536_172 = case__17536_159
+	case__17540_172 = case__17540_159
 	op_173 = op_160
 	refs_174 = refs_161
 	r0_175 = r0_162
@@ -1197,7 +1197,7 @@ b13:
 	v143 = vm.NIL
 	nid_144 = nid_115
 	f_145 = f_116
-	case__17536_146 = case__17536_117
+	case__17540_146 = case__17540_117
 	op_147 = op_118
 	refs_148 = refs_119
 	r0_149 = r0_120
@@ -1212,7 +1212,7 @@ b14:
 	v143 = vm.NIL
 	nid_144 = nid_126
 	f_145 = f_127
-	case__17536_146 = case__17536_128
+	case__17540_146 = case__17540_128
 	op_147 = op_129
 	refs_148 = refs_130
 	r0_149 = r0_131
@@ -1227,7 +1227,7 @@ b15:
 	v156 = v143
 	nid_157 = nid_144
 	f_158 = f_145
-	case__17536_159 = case__17536_146
+	case__17540_159 = case__17540_146
 	op_160 = op_147
 	refs_161 = refs_148
 	r0_162 = r0_149
@@ -1246,7 +1246,7 @@ b16:
 	if vm.IsTruthy(v229) {
 		nid_207 = nid_182
 		f_208 = f_183
-		case__17536_209 = case__17536_184
+		case__17540_209 = case__17540_184
 		op_210 = op_185
 		refs_211 = refs_186
 		r0_212 = r0_187
@@ -1259,7 +1259,7 @@ b16:
 	} else {
 		nid_218 = nid_182
 		f_219 = f_183
-		case__17536_220 = case__17536_184
+		case__17540_220 = case__17540_184
 		op_221 = op_185
 		refs_222 = refs_186
 		r0_223 = r0_187
@@ -1272,11 +1272,11 @@ b16:
 	}
 b17:
 	;
-	v273 = case__17536_195 == vm.Keyword("mul")
+	v273 = case__17540_195 == vm.Keyword("mul")
 	if v273 {
 		nid_250 = nid_193
 		f_251 = f_194
-		case__17536_252 = case__17536_195
+		case__17540_252 = case__17540_195
 		op_253 = op_196
 		refs_254 = refs_197
 		r0_255 = r0_198
@@ -1289,7 +1289,7 @@ b17:
 	} else {
 		nid_261 = nid_193
 		f_262 = f_194
-		case__17536_263 = case__17536_195
+		case__17540_263 = case__17540_195
 		op_264 = op_196
 		refs_265 = refs_197
 		r0_266 = r0_198
@@ -1305,7 +1305,7 @@ b18:
 	v555 = v542
 	nid_556 = nid_543
 	f_557 = f_544
-	case__17536_558 = case__17536_545
+	case__17540_558 = case__17540_545
 	op_559 = op_546
 	refs_560 = refs_547
 	r0_561 = r0_548
@@ -1324,7 +1324,7 @@ b19:
 	v237 = v233
 	nid_238 = nid_207
 	f_239 = f_208
-	case__17536_240 = case__17536_209
+	case__17540_240 = case__17540_209
 	op_241 = op_210
 	refs_242 = refs_211
 	r0_243 = r0_212
@@ -1339,7 +1339,7 @@ b20:
 	v237 = vm.NIL
 	nid_238 = nid_218
 	f_239 = f_219
-	case__17536_240 = case__17536_220
+	case__17540_240 = case__17540_220
 	op_241 = op_221
 	refs_242 = refs_222
 	r0_243 = r0_223
@@ -1354,7 +1354,7 @@ b21:
 	v542 = v237
 	nid_543 = nid_238
 	f_544 = f_239
-	case__17536_545 = case__17536_240
+	case__17540_545 = case__17540_240
 	op_546 = op_241
 	refs_547 = refs_242
 	r0_548 = r0_243
@@ -1373,7 +1373,7 @@ b22:
 	if vm.IsTruthy(v297) {
 		nid_275 = nid_250
 		f_276 = f_251
-		case__17536_277 = case__17536_252
+		case__17540_277 = case__17540_252
 		op_278 = op_253
 		refs_279 = refs_254
 		r0_280 = r0_255
@@ -1386,7 +1386,7 @@ b22:
 	} else {
 		nid_286 = nid_250
 		f_287 = f_251
-		case__17536_288 = case__17536_252
+		case__17540_288 = case__17540_252
 		op_289 = op_253
 		refs_290 = refs_254
 		r0_291 = r0_255
@@ -1402,7 +1402,7 @@ b23:
 	if vm.IsTruthy(vm.Keyword("else")) {
 		nid_488 = nid_261
 		f_489 = f_262
-		case__17536_490 = case__17536_263
+		case__17540_490 = case__17540_263
 		op_491 = op_264
 		refs_492 = refs_265
 		r0_493 = r0_266
@@ -1415,7 +1415,7 @@ b23:
 	} else {
 		nid_499 = nid_261
 		f_500 = f_262
-		case__17536_501 = case__17536_263
+		case__17540_501 = case__17540_263
 		op_502 = op_264
 		refs_503 = refs_265
 		r0_504 = r0_266
@@ -1431,7 +1431,7 @@ b24:
 	v542 = v529
 	nid_543 = nid_530
 	f_544 = f_531
-	case__17536_545 = case__17536_532
+	case__17540_545 = case__17540_532
 	op_546 = op_533
 	refs_547 = refs_534
 	r0_548 = r0_535
@@ -1450,7 +1450,7 @@ b25:
 	v475 = v301
 	nid_476 = nid_275
 	f_477 = f_276
-	case__17536_478 = case__17536_277
+	case__17540_478 = case__17540_277
 	op_479 = op_278
 	refs_480 = refs_279
 	r0_481 = r0_280
@@ -1469,7 +1469,7 @@ b26:
 	if vm.IsTruthy(v325) {
 		nid_303 = nid_286
 		f_304 = f_287
-		case__17536_305 = case__17536_288
+		case__17540_305 = case__17540_288
 		op_306 = op_289
 		refs_307 = refs_290
 		r0_308 = r0_291
@@ -1482,7 +1482,7 @@ b26:
 	} else {
 		nid_314 = nid_286
 		f_315 = f_287
-		case__17536_316 = case__17536_288
+		case__17540_316 = case__17540_288
 		op_317 = op_289
 		refs_318 = refs_290
 		r0_319 = r0_291
@@ -1498,7 +1498,7 @@ b27:
 	v529 = v475
 	nid_530 = nid_476
 	f_531 = f_477
-	case__17536_532 = case__17536_478
+	case__17540_532 = case__17540_478
 	op_533 = op_479
 	refs_534 = refs_480
 	r0_535 = r0_481
@@ -1517,7 +1517,7 @@ b28:
 	v462 = v329
 	nid_463 = nid_303
 	f_464 = f_304
-	case__17536_465 = case__17536_305
+	case__17540_465 = case__17540_305
 	op_466 = op_306
 	refs_467 = refs_307
 	r0_468 = r0_308
@@ -1536,7 +1536,7 @@ b29:
 	if vm.IsTruthy(or__x_353) {
 		nid_354 = nid_314
 		f_355 = f_315
-		case__17536_356 = case__17536_316
+		case__17540_356 = case__17540_316
 		op_357 = op_317
 		refs_358 = refs_318
 		r0_359 = r0_319
@@ -1550,7 +1550,7 @@ b29:
 	} else {
 		nid_366 = nid_314
 		f_367 = f_315
-		case__17536_368 = case__17536_316
+		case__17540_368 = case__17540_316
 		op_369 = op_317
 		refs_370 = refs_318
 		r0_371 = r0_319
@@ -1567,7 +1567,7 @@ b30:
 	v475 = v462
 	nid_476 = nid_463
 	f_477 = f_464
-	case__17536_478 = case__17536_465
+	case__17540_478 = case__17540_465
 	op_479 = op_466
 	refs_480 = refs_467
 	r0_481 = r0_468
@@ -1579,18 +1579,18 @@ b30:
 	goto b27
 b31:
 	;
-	arg__17633_405, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("op"), vm.Keyword("const"), vm.Keyword("aux"), vm.Int(0), vm.Keyword("refs"), vm.NewArrayVector([]vm.Value{})})
+	arg__17637_405, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("op"), vm.Keyword("const"), vm.Keyword("aux"), vm.Int(0), vm.Keyword("refs"), vm.NewArrayVector([]vm.Value{})})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v406, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("replace-with"), arg__17633_405})
+	v406, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("replace-with"), arg__17637_405})
 	if callErr != nil {
 		return nil, callErr
 	}
 	v449 = v406
 	nid_450 = nid_331
 	f_451 = f_332
-	case__17536_452 = case__17536_333
+	case__17540_452 = case__17540_333
 	op_453 = op_334
 	refs_454 = refs_335
 	r0_455 = r0_336
@@ -1605,7 +1605,7 @@ b32:
 	if vm.IsTruthy(vm.Keyword("else")) {
 		nid_408 = nid_342
 		f_409 = f_343
-		case__17536_410 = case__17536_344
+		case__17540_410 = case__17540_344
 		op_411 = op_345
 		refs_412 = refs_346
 		r0_413 = r0_347
@@ -1618,7 +1618,7 @@ b32:
 	} else {
 		nid_419 = nid_342
 		f_420 = f_343
-		case__17536_421 = case__17536_344
+		case__17540_421 = case__17540_344
 		op_422 = op_345
 		refs_423 = refs_346
 		r0_424 = r0_347
@@ -1634,7 +1634,7 @@ b33:
 	v462 = v449
 	nid_463 = nid_450
 	f_464 = f_451
-	case__17536_465 = case__17536_452
+	case__17540_465 = case__17540_452
 	op_466 = op_453
 	refs_467 = refs_454
 	r0_468 = r0_455
@@ -1649,7 +1649,7 @@ b34:
 	v382 = or__x_365
 	nid_383 = nid_354
 	f_384 = f_355
-	case__17536_385 = case__17536_356
+	case__17540_385 = case__17540_356
 	op_386 = op_357
 	refs_387 = refs_358
 	r0_388 = r0_359
@@ -1669,7 +1669,7 @@ b35:
 	v382 = v380
 	nid_383 = nid_366
 	f_384 = f_367
-	case__17536_385 = case__17536_368
+	case__17540_385 = case__17540_368
 	op_386 = op_369
 	refs_387 = refs_370
 	r0_388 = r0_371
@@ -1685,7 +1685,7 @@ b36:
 	if vm.IsTruthy(v382) {
 		nid_331 = nid_383
 		f_332 = f_384
-		case__17536_333 = case__17536_385
+		case__17540_333 = case__17540_385
 		op_334 = op_386
 		refs_335 = refs_387
 		r0_336 = r0_388
@@ -1698,7 +1698,7 @@ b36:
 	} else {
 		nid_342 = nid_383
 		f_343 = f_384
-		case__17536_344 = case__17536_385
+		case__17540_344 = case__17540_385
 		op_345 = op_386
 		refs_346 = refs_387
 		r0_347 = r0_388
@@ -1714,7 +1714,7 @@ b37:
 	v436 = vm.NIL
 	nid_437 = nid_408
 	f_438 = f_409
-	case__17536_439 = case__17536_410
+	case__17540_439 = case__17540_410
 	op_440 = op_411
 	refs_441 = refs_412
 	r0_442 = r0_413
@@ -1729,7 +1729,7 @@ b38:
 	v436 = vm.NIL
 	nid_437 = nid_419
 	f_438 = f_420
-	case__17536_439 = case__17536_421
+	case__17540_439 = case__17540_421
 	op_440 = op_422
 	refs_441 = refs_423
 	r0_442 = r0_424
@@ -1744,7 +1744,7 @@ b39:
 	v449 = v436
 	nid_450 = nid_437
 	f_451 = f_438
-	case__17536_452 = case__17536_439
+	case__17540_452 = case__17540_439
 	op_453 = op_440
 	refs_454 = refs_441
 	r0_455 = r0_442
@@ -1759,7 +1759,7 @@ b40:
 	v516 = vm.NIL
 	nid_517 = nid_488
 	f_518 = f_489
-	case__17536_519 = case__17536_490
+	case__17540_519 = case__17540_490
 	op_520 = op_491
 	refs_521 = refs_492
 	r0_522 = r0_493
@@ -1774,7 +1774,7 @@ b41:
 	v516 = vm.NIL
 	nid_517 = nid_499
 	f_518 = f_500
-	case__17536_519 = case__17536_501
+	case__17540_519 = case__17540_501
 	op_520 = op_502
 	refs_521 = refs_503
 	r0_522 = r0_504
@@ -1789,7 +1789,7 @@ b42:
 	v529 = v516
 	nid_530 = nid_517
 	f_531 = f_518
-	case__17536_532 = case__17536_519
+	case__17540_532 = case__17540_519
 	op_533 = op_520
 	refs_534 = refs_521
 	r0_535 = r0_522
@@ -1808,9 +1808,9 @@ func try_canonicalize(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var f_8 vm.Value
 	var op_9 vm.Value
 	var refs_10 vm.Value
-	var arg__17708_117 vm.Value
-	var arg__17714_121 vm.Value
-	var arg__17715_122 vm.Value
+	var arg__17712_117 vm.Value
+	var arg__17718_121 vm.Value
+	var arg__17719_122 vm.Value
 	var v123 vm.Value
 	var nid_11 vm.Value
 	var f_12 vm.Value
@@ -1826,7 +1826,7 @@ func try_canonicalize(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var op_19 vm.Value
 	var refs_20 vm.Value
 	var and__x_21 vm.Value
-	var arg__17651_30 vm.Value
+	var arg__17655_30 vm.Value
 	var and__x_31 bool
 	var nid_22 vm.Value
 	var f_23 vm.Value
@@ -1844,8 +1844,8 @@ func try_canonicalize(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var op_34 vm.Value
 	var refs_35 vm.Value
 	var and__x_36 bool
-	var arg__17657_46 vm.Value
-	var arg__17665_51 vm.Value
+	var arg__17661_46 vm.Value
+	var arg__17669_51 vm.Value
 	var and__x_52 vm.Value
 	var nid_37 vm.Value
 	var f_38 vm.Value
@@ -1863,12 +1863,12 @@ func try_canonicalize(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var op_55 vm.Value
 	var refs_56 vm.Value
 	var and__x_57 vm.Value
-	var arg__17672_67 vm.Value
-	var arg__17680_72 vm.Value
-	var arg__17682_73 vm.Value
-	var arg__17689_78 vm.Value
-	var arg__17697_83 vm.Value
-	var arg__17699_84 vm.Value
+	var arg__17676_67 vm.Value
+	var arg__17684_72 vm.Value
+	var arg__17686_73 vm.Value
+	var arg__17693_78 vm.Value
+	var arg__17701_83 vm.Value
+	var arg__17703_84 vm.Value
 	var v85 vm.Value
 	var nid_58 vm.Value
 	var f_59 vm.Value
@@ -1882,7 +1882,7 @@ func try_canonicalize(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	var refs_92 vm.Value
 	var and__x_93 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = op_4, refs_6, and__x_16, nid_7, f_8, op_9, refs_10, arg__17708_117, arg__17714_121, arg__17715_122, v123, nid_11, f_12, op_13, refs_14, v127, nid_128, f_129, op_130, refs_131, nid_17, f_18, op_19, refs_20, and__x_21, arg__17651_30, and__x_31, nid_22, f_23, op_24, refs_25, and__x_26, v104, nid_105, f_106, op_107, refs_108, and__x_109, nid_32, f_33, op_34, refs_35, and__x_36, arg__17657_46, arg__17665_51, and__x_52, nid_37, f_38, op_39, refs_40, and__x_41, v96, nid_97, f_98, op_99, refs_100, and__x_101, nid_53, f_54, op_55, refs_56, and__x_57, arg__17672_67, arg__17680_72, arg__17682_73, arg__17689_78, arg__17697_83, arg__17699_84, v85, nid_58, f_59, op_60, refs_61, and__x_62, v88, nid_89, f_90, op_91, refs_92, and__x_93
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = op_4, refs_6, and__x_16, nid_7, f_8, op_9, refs_10, arg__17712_117, arg__17718_121, arg__17719_122, v123, nid_11, f_12, op_13, refs_14, v127, nid_128, f_129, op_130, refs_131, nid_17, f_18, op_19, refs_20, and__x_21, arg__17655_30, and__x_31, nid_22, f_23, op_24, refs_25, and__x_26, v104, nid_105, f_106, op_107, refs_108, and__x_109, nid_32, f_33, op_34, refs_35, and__x_36, arg__17661_46, arg__17669_51, and__x_52, nid_37, f_38, op_39, refs_40, and__x_41, v96, nid_97, f_98, op_99, refs_100, and__x_101, nid_53, f_54, op_55, refs_56, and__x_57, arg__17676_67, arg__17684_72, arg__17686_73, arg__17693_78, arg__17701_83, arg__17703_84, v85, nid_58, f_59, op_60, refs_61, and__x_62, v88, nid_89, f_90, op_91, refs_92, and__x_93
 	op_4, callErr = rt.InvokeValue(rt.LookupVar("ir", "op").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return nil, callErr
@@ -1912,19 +1912,19 @@ func try_canonicalize(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
 	}
 b1:
 	;
-	arg__17708_117, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_10, vm.Int(1)})
+	arg__17712_117, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_10, vm.Int(1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17714_121, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_10, vm.Int(0)})
+	arg__17718_121, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_10, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17715_122, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__17708_117, arg__17714_121})
+	arg__17719_122, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__17712_117, arg__17718_121})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v123, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("swap-refs"), arg__17715_122})
+	v123, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "array-map").Deref(), []vm.Value{vm.Keyword("swap-refs"), arg__17719_122})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -1947,11 +1947,11 @@ b3:
 	return v127, nil
 b4:
 	;
-	arg__17651_30, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{refs_20})
+	arg__17655_30, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "count").Deref(), []vm.Value{refs_20})
 	if callErr != nil {
 		return nil, callErr
 	}
-	and__x_31 = arg__17651_30 == vm.Int(2)
+	and__x_31 = arg__17655_30 == vm.Int(2)
 	if and__x_31 {
 		nid_32 = nid_17
 		f_33 = f_18
@@ -1993,15 +1993,15 @@ b6:
 	}
 b7:
 	;
-	arg__17657_46, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_35, vm.Int(0)})
+	arg__17661_46, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_35, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17665_51, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_35, vm.Int(0)})
+	arg__17669_51, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_35, vm.Int(0)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	and__x_52, callErr = rt.InvokeValue(rt.LookupVar("ir.passes.constfold", "const?").Deref(), []vm.Value{arg__17665_51, f_33})
+	and__x_52, callErr = rt.InvokeValue(rt.LookupVar("ir.passes.constfold", "const?").Deref(), []vm.Value{arg__17669_51, f_33})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -2040,31 +2040,31 @@ b9:
 	goto b6
 b10:
 	;
-	arg__17672_67, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(1)})
+	arg__17676_67, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17680_72, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(1)})
+	arg__17684_72, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17682_73, callErr = rt.InvokeValue(rt.LookupVar("ir.passes.constfold", "const?").Deref(), []vm.Value{arg__17680_72, f_54})
+	arg__17686_73, callErr = rt.InvokeValue(rt.LookupVar("ir.passes.constfold", "const?").Deref(), []vm.Value{arg__17684_72, f_54})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17689_78, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(1)})
+	arg__17693_78, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17697_83, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(1)})
+	arg__17701_83, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "nth").Deref(), []vm.Value{refs_56, vm.Int(1)})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17699_84, callErr = rt.InvokeValue(rt.LookupVar("ir.passes.constfold", "const?").Deref(), []vm.Value{arg__17697_83, f_54})
+	arg__17703_84, callErr = rt.InvokeValue(rt.LookupVar("ir.passes.constfold", "const?").Deref(), []vm.Value{arg__17701_83, f_54})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v85, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not").Deref(), []vm.Value{arg__17699_84})
+	v85, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "not").Deref(), []vm.Value{arg__17703_84})
 	if callErr != nil {
 		return nil, callErr
 	}

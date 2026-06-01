@@ -6,35 +6,35 @@ import (
 )
 
 func inst_key(arg0 vm.Value, arg1 vm.Value) (vm.Value, error) {
-	var arg__17883_5 vm.Value
-	var arg__17889_7 vm.Value
-	var arg__17896_10 vm.Value
-	var arg__17897_11 vm.Value
-	var arg__17903_13 vm.Value
+	var arg__17887_5 vm.Value
+	var arg__17893_7 vm.Value
+	var arg__17900_10 vm.Value
+	var arg__17901_11 vm.Value
+	var arg__17907_13 vm.Value
 	var v14 vm.Value
 	var callErr error
-	_, _, _, _, _, _ = arg__17883_5, arg__17889_7, arg__17896_10, arg__17897_11, arg__17903_13, v14
-	arg__17883_5, callErr = rt.InvokeValue(rt.LookupVar("ir", "op").Deref(), []vm.Value{arg0, arg1})
+	_, _, _, _, _, _ = arg__17887_5, arg__17893_7, arg__17900_10, arg__17901_11, arg__17907_13, v14
+	arg__17887_5, callErr = rt.InvokeValue(rt.LookupVar("ir", "op").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17889_7, callErr = rt.InvokeValue(rt.LookupVar("ir", "refs").Deref(), []vm.Value{arg0, arg1})
+	arg__17893_7, callErr = rt.InvokeValue(rt.LookupVar("ir", "refs").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17896_10, callErr = rt.InvokeValue(rt.LookupVar("ir", "refs").Deref(), []vm.Value{arg0, arg1})
+	arg__17900_10, callErr = rt.InvokeValue(rt.LookupVar("ir", "refs").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17897_11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__17896_10})
+	arg__17901_11, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__17900_10})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17903_13, callErr = rt.InvokeValue(rt.LookupVar("ir", "aux").Deref(), []vm.Value{arg0, arg1})
+	arg__17907_13, callErr = rt.InvokeValue(rt.LookupVar("ir", "aux").Deref(), []vm.Value{arg0, arg1})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v14, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__17883_5, arg__17897_11, arg__17903_13})
+	v14, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vector").Deref(), []vm.Value{arg__17887_5, arg__17901_11, arg__17907_13})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -65,8 +65,8 @@ func cse_eligible_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value, arg3 vm.Va
 	var var_facts_25 vm.Value
 	var or__x_26 vm.Value
 	var and__x_27 bool
-	var arg__17917_36 vm.Value
-	var arg__17925_39 vm.Value
+	var arg__17921_36 vm.Value
+	var arg__17929_39 vm.Value
 	var v40 vm.Value
 	var op_28 vm.Value
 	var nid_29 vm.Value
@@ -82,7 +82,7 @@ func cse_eligible_QMARK_(arg0 vm.Value, arg1 vm.Value, arg2 vm.Value, arg3 vm.Va
 	var or__x_48 vm.Value
 	var and__x_49 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = or__x_7, op_8, nid_9, f_10, var_facts_11, or__x_12, op_13, nid_14, f_15, var_facts_16, or__x_17, and__x_21, v51, op_52, nid_53, f_54, var_facts_55, or__x_56, op_22, nid_23, f_24, var_facts_25, or__x_26, and__x_27, arg__17917_36, arg__17925_39, v40, op_28, nid_29, f_30, var_facts_31, or__x_32, and__x_33, v43, op_44, nid_45, f_46, var_facts_47, or__x_48, and__x_49
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = or__x_7, op_8, nid_9, f_10, var_facts_11, or__x_12, op_13, nid_14, f_15, var_facts_16, or__x_17, and__x_21, v51, op_52, nid_53, f_54, var_facts_55, or__x_56, op_22, nid_23, f_24, var_facts_25, or__x_26, and__x_27, arg__17921_36, arg__17929_39, v40, op_28, nid_29, f_30, var_facts_31, or__x_32, and__x_33, v43, op_44, nid_45, f_46, var_facts_47, or__x_48, and__x_49
 	or__x_7, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "contains?").Deref(), []vm.Value{rt.LookupVar("ir.passes.cse", "pure-cse-ops").Deref(), arg0})
 	if callErr != nil {
 		return nil, callErr
@@ -136,15 +136,15 @@ b3:
 	return v51, nil
 b4:
 	;
-	arg__17917_36, callErr = rt.InvokeValue(rt.LookupVar("ir", "aux").Deref(), []vm.Value{nid_23, f_24})
+	arg__17921_36, callErr = rt.InvokeValue(rt.LookupVar("ir", "aux").Deref(), []vm.Value{nid_23, f_24})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17925_39, callErr = rt.InvokeValue(rt.LookupVar("ir", "aux").Deref(), []vm.Value{nid_23, f_24})
+	arg__17929_39, callErr = rt.InvokeValue(rt.LookupVar("ir", "aux").Deref(), []vm.Value{nid_23, f_24})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v40, callErr = rt.InvokeValue(rt.LookupVar("ir.passes.mutability", "stable-load-var?").Deref(), []vm.Value{var_facts_25, arg__17925_39})
+	v40, callErr = rt.InvokeValue(rt.LookupVar("ir.passes.mutability", "stable-load-var?").Deref(), []vm.Value{var_facts_25, arg__17929_39})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -178,47 +178,47 @@ b6:
 }
 func cse(arg0 vm.Value) (vm.Value, error) {
 	var var_facts_3 vm.Value
-	var arg__17936_5 vm.Value
-	var arg__17941_8 vm.Value
-	var doseq_seq__17926_9 vm.Value
-	var doseq_loop__17927_10 vm.Value
+	var arg__17940_5 vm.Value
+	var arg__17945_8 vm.Value
+	var doseq_seq__17930_9 vm.Value
+	var doseq_loop__17931_10 vm.Value
 	var var_facts_11 vm.Value
 	var f_12 vm.Value
 	var v177 vm.Value
-	var doseq_seq__17926_14 vm.Value
-	var doseq_loop__17927_15 vm.Value
+	var doseq_seq__17930_14 vm.Value
+	var doseq_loop__17931_15 vm.Value
 	var var_facts_16 vm.Value
 	var f_17 vm.Value
 	var v176 vm.Value
 	var bid_24 vm.Value
 	var seen_28 vm.Value
-	var arg__17953_30 vm.Value
-	var arg__17960_33 vm.Value
-	var arg__17961_34 vm.Value
-	var arg__17968_37 vm.Value
-	var arg__17975_40 vm.Value
-	var arg__17976_41 vm.Value
-	var doseq_seq__17928_42 vm.Value
-	var doseq_seq__17926_18 vm.Value
-	var doseq_loop__17927_19 vm.Value
+	var arg__17957_30 vm.Value
+	var arg__17964_33 vm.Value
+	var arg__17965_34 vm.Value
+	var arg__17972_37 vm.Value
+	var arg__17979_40 vm.Value
+	var arg__17980_41 vm.Value
+	var doseq_seq__17932_42 vm.Value
+	var doseq_seq__17930_18 vm.Value
+	var doseq_loop__17931_19 vm.Value
 	var var_facts_20 vm.Value
 	var f_21 vm.Value
 	var v185 vm.Value
 	var v165 vm.Value
-	var doseq_seq__17926_166 vm.Value
-	var doseq_loop__17927_167 vm.Value
+	var doseq_seq__17930_166 vm.Value
+	var doseq_loop__17931_167 vm.Value
 	var var_facts_168 vm.Value
 	var f_169 vm.Value
-	var doseq_loop__17929_43 vm.Value
+	var doseq_loop__17933_43 vm.Value
 	var var_facts_44 vm.Value
 	var f_45 vm.Value
 	var seen_46 vm.Value
 	var v181 vm.Value
-	var doseq_seq__17926_48 vm.Value
-	var doseq_loop__17927_49 vm.Value
+	var doseq_seq__17930_48 vm.Value
+	var doseq_loop__17931_49 vm.Value
 	var bid_50 vm.Value
-	var doseq_seq__17928_51 vm.Value
-	var doseq_loop__17929_52 vm.Value
+	var doseq_seq__17932_51 vm.Value
+	var doseq_loop__17933_52 vm.Value
 	var var_facts_53 vm.Value
 	var f_54 vm.Value
 	var seen_55 vm.Value
@@ -226,31 +226,31 @@ func cse(arg0 vm.Value) (vm.Value, error) {
 	var nid_66 vm.Value
 	var op_68 vm.Value
 	var v90 vm.Value
-	var doseq_seq__17926_56 vm.Value
-	var doseq_loop__17927_57 vm.Value
+	var doseq_seq__17930_56 vm.Value
+	var doseq_loop__17931_57 vm.Value
 	var bid_58 vm.Value
-	var doseq_seq__17928_59 vm.Value
-	var doseq_loop__17929_60 vm.Value
+	var doseq_seq__17932_59 vm.Value
+	var doseq_loop__17933_60 vm.Value
 	var var_facts_61 vm.Value
 	var f_62 vm.Value
 	var seen_63 vm.Value
 	var v184 vm.Value
 	var v151 vm.Value
-	var doseq_seq__17926_152 vm.Value
-	var doseq_loop__17927_153 vm.Value
+	var doseq_seq__17930_152 vm.Value
+	var doseq_loop__17931_153 vm.Value
 	var bid_154 vm.Value
-	var doseq_seq__17928_155 vm.Value
-	var doseq_loop__17929_156 vm.Value
+	var doseq_seq__17932_155 vm.Value
+	var doseq_loop__17933_156 vm.Value
 	var var_facts_157 vm.Value
 	var f_158 vm.Value
 	var seen_159 vm.Value
 	var v175 vm.Value
 	var v161 vm.Value
-	var doseq_seq__17926_69 vm.Value
-	var doseq_loop__17927_70 vm.Value
+	var doseq_seq__17930_69 vm.Value
+	var doseq_loop__17931_70 vm.Value
 	var bid_71 vm.Value
-	var doseq_seq__17928_72 vm.Value
-	var doseq_loop__17929_73 vm.Value
+	var doseq_seq__17932_72 vm.Value
+	var doseq_loop__17933_73 vm.Value
 	var var_facts_74 vm.Value
 	var f_75 vm.Value
 	var seen_76 vm.Value
@@ -258,13 +258,13 @@ func cse(arg0 vm.Value) (vm.Value, error) {
 	var op_78 vm.Value
 	var v182 vm.Value
 	var k_93 vm.Value
-	var head__18003_95 vm.Value
+	var head__18007_95 vm.Value
 	var tem__G__0_96 vm.Value
-	var doseq_seq__17926_79 vm.Value
-	var doseq_loop__17927_80 vm.Value
+	var doseq_seq__17930_79 vm.Value
+	var doseq_loop__17931_80 vm.Value
 	var bid_81 vm.Value
-	var doseq_seq__17928_82 vm.Value
-	var doseq_loop__17929_83 vm.Value
+	var doseq_seq__17932_82 vm.Value
+	var doseq_loop__17933_83 vm.Value
 	var var_facts_84 vm.Value
 	var f_85 vm.Value
 	var seen_86 vm.Value
@@ -272,11 +272,11 @@ func cse(arg0 vm.Value) (vm.Value, error) {
 	var op_88 vm.Value
 	var v178 vm.Value
 	var v147 vm.Value
-	var doseq_seq__17926_97 vm.Value
-	var doseq_loop__17927_98 vm.Value
+	var doseq_seq__17930_97 vm.Value
+	var doseq_loop__17931_98 vm.Value
 	var bid_99 vm.Value
-	var doseq_seq__17928_100 vm.Value
-	var doseq_loop__17929_101 vm.Value
+	var doseq_seq__17932_100 vm.Value
+	var doseq_loop__17933_101 vm.Value
 	var var_facts_102 vm.Value
 	var f_103 vm.Value
 	var seen_104 vm.Value
@@ -286,11 +286,11 @@ func cse(arg0 vm.Value) (vm.Value, error) {
 	var tem__G__0_108 vm.Value
 	var v180 vm.Value
 	var v123 vm.Value
-	var doseq_seq__17926_109 vm.Value
-	var doseq_loop__17927_110 vm.Value
+	var doseq_seq__17930_109 vm.Value
+	var doseq_loop__17931_110 vm.Value
 	var bid_111 vm.Value
-	var doseq_seq__17928_112 vm.Value
-	var doseq_loop__17929_113 vm.Value
+	var doseq_seq__17932_112 vm.Value
+	var doseq_loop__17933_113 vm.Value
 	var var_facts_114 vm.Value
 	var f_115 vm.Value
 	var seen_116 vm.Value
@@ -301,11 +301,11 @@ func cse(arg0 vm.Value) (vm.Value, error) {
 	var v174 vm.Value
 	var v128 vm.Value
 	var v130 vm.Value
-	var doseq_seq__17926_131 vm.Value
-	var doseq_loop__17927_132 vm.Value
+	var doseq_seq__17930_131 vm.Value
+	var doseq_loop__17931_132 vm.Value
 	var bid_133 vm.Value
-	var doseq_seq__17928_134 vm.Value
-	var doseq_loop__17929_135 vm.Value
+	var doseq_seq__17932_134 vm.Value
+	var doseq_loop__17933_135 vm.Value
 	var var_facts_136 vm.Value
 	var f_137 vm.Value
 	var seen_138 vm.Value
@@ -316,40 +316,40 @@ func cse(arg0 vm.Value) (vm.Value, error) {
 	var v183 vm.Value
 	var v144 vm.Value
 	var callErr error
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = var_facts_3, arg__17936_5, arg__17941_8, doseq_seq__17926_9, doseq_loop__17927_10, var_facts_11, f_12, v177, doseq_seq__17926_14, doseq_loop__17927_15, var_facts_16, f_17, v176, bid_24, seen_28, arg__17953_30, arg__17960_33, arg__17961_34, arg__17968_37, arg__17975_40, arg__17976_41, doseq_seq__17928_42, doseq_seq__17926_18, doseq_loop__17927_19, var_facts_20, f_21, v185, v165, doseq_seq__17926_166, doseq_loop__17927_167, var_facts_168, f_169, doseq_loop__17929_43, var_facts_44, f_45, seen_46, v181, doseq_seq__17926_48, doseq_loop__17927_49, bid_50, doseq_seq__17928_51, doseq_loop__17929_52, var_facts_53, f_54, seen_55, v179, nid_66, op_68, v90, doseq_seq__17926_56, doseq_loop__17927_57, bid_58, doseq_seq__17928_59, doseq_loop__17929_60, var_facts_61, f_62, seen_63, v184, v151, doseq_seq__17926_152, doseq_loop__17927_153, bid_154, doseq_seq__17928_155, doseq_loop__17929_156, var_facts_157, f_158, seen_159, v175, v161, doseq_seq__17926_69, doseq_loop__17927_70, bid_71, doseq_seq__17928_72, doseq_loop__17929_73, var_facts_74, f_75, seen_76, nid_77, op_78, v182, k_93, head__18003_95, tem__G__0_96, doseq_seq__17926_79, doseq_loop__17927_80, bid_81, doseq_seq__17928_82, doseq_loop__17929_83, var_facts_84, f_85, seen_86, nid_87, op_88, v178, v147, doseq_seq__17926_97, doseq_loop__17927_98, bid_99, doseq_seq__17928_100, doseq_loop__17929_101, var_facts_102, f_103, seen_104, nid_105, op_106, k_107, tem__G__0_108, v180, v123, doseq_seq__17926_109, doseq_loop__17927_110, bid_111, doseq_seq__17928_112, doseq_loop__17929_113, var_facts_114, f_115, seen_116, nid_117, op_118, k_119, tem__G__0_120, v174, v128, v130, doseq_seq__17926_131, doseq_loop__17927_132, bid_133, doseq_seq__17928_134, doseq_loop__17929_135, var_facts_136, f_137, seen_138, nid_139, op_140, k_141, tem__G__0_142, v183, v144
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = var_facts_3, arg__17940_5, arg__17945_8, doseq_seq__17930_9, doseq_loop__17931_10, var_facts_11, f_12, v177, doseq_seq__17930_14, doseq_loop__17931_15, var_facts_16, f_17, v176, bid_24, seen_28, arg__17957_30, arg__17964_33, arg__17965_34, arg__17972_37, arg__17979_40, arg__17980_41, doseq_seq__17932_42, doseq_seq__17930_18, doseq_loop__17931_19, var_facts_20, f_21, v185, v165, doseq_seq__17930_166, doseq_loop__17931_167, var_facts_168, f_169, doseq_loop__17933_43, var_facts_44, f_45, seen_46, v181, doseq_seq__17930_48, doseq_loop__17931_49, bid_50, doseq_seq__17932_51, doseq_loop__17933_52, var_facts_53, f_54, seen_55, v179, nid_66, op_68, v90, doseq_seq__17930_56, doseq_loop__17931_57, bid_58, doseq_seq__17932_59, doseq_loop__17933_60, var_facts_61, f_62, seen_63, v184, v151, doseq_seq__17930_152, doseq_loop__17931_153, bid_154, doseq_seq__17932_155, doseq_loop__17933_156, var_facts_157, f_158, seen_159, v175, v161, doseq_seq__17930_69, doseq_loop__17931_70, bid_71, doseq_seq__17932_72, doseq_loop__17933_73, var_facts_74, f_75, seen_76, nid_77, op_78, v182, k_93, head__18007_95, tem__G__0_96, doseq_seq__17930_79, doseq_loop__17931_80, bid_81, doseq_seq__17932_82, doseq_loop__17933_83, var_facts_84, f_85, seen_86, nid_87, op_88, v178, v147, doseq_seq__17930_97, doseq_loop__17931_98, bid_99, doseq_seq__17932_100, doseq_loop__17933_101, var_facts_102, f_103, seen_104, nid_105, op_106, k_107, tem__G__0_108, v180, v123, doseq_seq__17930_109, doseq_loop__17931_110, bid_111, doseq_seq__17932_112, doseq_loop__17933_113, var_facts_114, f_115, seen_116, nid_117, op_118, k_119, tem__G__0_120, v174, v128, v130, doseq_seq__17930_131, doseq_loop__17931_132, bid_133, doseq_seq__17932_134, doseq_loop__17933_135, var_facts_136, f_137, seen_138, nid_139, op_140, k_141, tem__G__0_142, v183, v144
 	var_facts_3, callErr = rt.InvokeValue(rt.LookupVar("ir.passes.mutability", "analyze-var-stability").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17936_5, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
+	arg__17940_5, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17941_8, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
+	arg__17945_8, callErr = rt.InvokeValue(rt.LookupVar("ir", "blocks").Deref(), []vm.Value{arg0})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_seq__17926_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__17941_8})
+	doseq_seq__17930_9, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__17945_8})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__17927_10 = doseq_seq__17926_9
+	doseq_loop__17931_10 = doseq_seq__17930_9
 	var_facts_11 = var_facts_3
 	f_12 = arg0
 	v177 = vm.EmptyPersistentMap
 	goto b1
 b1:
 	;
-	if vm.IsTruthy(doseq_loop__17927_10) {
-		doseq_seq__17926_14 = doseq_seq__17926_9
-		doseq_loop__17927_15 = doseq_loop__17927_10
+	if vm.IsTruthy(doseq_loop__17931_10) {
+		doseq_seq__17930_14 = doseq_seq__17930_9
+		doseq_loop__17931_15 = doseq_loop__17931_10
 		var_facts_16 = var_facts_11
 		f_17 = f_12
 		v176 = v177
 		goto b2
 	} else {
-		doseq_seq__17926_18 = doseq_seq__17926_9
-		doseq_loop__17927_19 = doseq_loop__17927_10
+		doseq_seq__17930_18 = doseq_seq__17930_9
+		doseq_loop__17931_19 = doseq_loop__17931_10
 		var_facts_20 = var_facts_11
 		f_21 = f_12
 		v185 = v177
@@ -357,7 +357,7 @@ b1:
 	}
 b2:
 	;
-	bid_24, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__17927_15})
+	bid_24, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__17931_15})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -365,35 +365,35 @@ b2:
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17953_30, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-insts").Deref(), []vm.Value{bid_24, f_17})
+	arg__17957_30, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-insts").Deref(), []vm.Value{bid_24, f_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17960_33, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-insts").Deref(), []vm.Value{bid_24, f_17})
+	arg__17964_33, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-insts").Deref(), []vm.Value{bid_24, f_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17961_34, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__17960_33})
+	arg__17965_34, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__17964_33})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17968_37, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-insts").Deref(), []vm.Value{bid_24, f_17})
+	arg__17972_37, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-insts").Deref(), []vm.Value{bid_24, f_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17975_40, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-insts").Deref(), []vm.Value{bid_24, f_17})
+	arg__17979_40, callErr = rt.InvokeValue(rt.LookupVar("ir", "block-insts").Deref(), []vm.Value{bid_24, f_17})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17976_41, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__17975_40})
+	arg__17980_41, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "vec").Deref(), []vm.Value{arg__17979_40})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_seq__17928_42, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__17976_41})
+	doseq_seq__17932_42, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "seq").Deref(), []vm.Value{arg__17980_41})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__17929_43 = doseq_seq__17928_42
+	doseq_loop__17933_43 = doseq_seq__17932_42
 	var_facts_44 = var_facts_16
 	f_45 = f_17
 	seen_46 = seen_28
@@ -402,8 +402,8 @@ b2:
 b3:
 	;
 	v165 = vm.NIL
-	doseq_seq__17926_166 = doseq_seq__17926_18
-	doseq_loop__17927_167 = doseq_loop__17927_19
+	doseq_seq__17930_166 = doseq_seq__17930_18
+	doseq_loop__17931_167 = doseq_loop__17931_19
 	var_facts_168 = var_facts_20
 	f_169 = f_21
 	goto b4
@@ -412,23 +412,23 @@ b4:
 	return f_169, nil
 b5:
 	;
-	if vm.IsTruthy(doseq_loop__17929_43) {
-		doseq_seq__17926_48 = doseq_seq__17926_14
-		doseq_loop__17927_49 = doseq_loop__17927_15
+	if vm.IsTruthy(doseq_loop__17933_43) {
+		doseq_seq__17930_48 = doseq_seq__17930_14
+		doseq_loop__17931_49 = doseq_loop__17931_15
 		bid_50 = bid_24
-		doseq_seq__17928_51 = doseq_seq__17928_42
-		doseq_loop__17929_52 = doseq_loop__17929_43
+		doseq_seq__17932_51 = doseq_seq__17932_42
+		doseq_loop__17933_52 = doseq_loop__17933_43
 		var_facts_53 = var_facts_44
 		f_54 = f_45
 		seen_55 = seen_46
 		v179 = v181
 		goto b6
 	} else {
-		doseq_seq__17926_56 = doseq_seq__17926_14
-		doseq_loop__17927_57 = doseq_loop__17927_15
+		doseq_seq__17930_56 = doseq_seq__17930_14
+		doseq_loop__17931_57 = doseq_loop__17931_15
 		bid_58 = bid_24
-		doseq_seq__17928_59 = doseq_seq__17928_42
-		doseq_loop__17929_60 = doseq_loop__17929_43
+		doseq_seq__17932_59 = doseq_seq__17932_42
+		doseq_loop__17933_60 = doseq_loop__17933_43
 		var_facts_61 = var_facts_44
 		f_62 = f_45
 		seen_63 = seen_46
@@ -437,7 +437,7 @@ b5:
 	}
 b6:
 	;
-	nid_66, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__17929_52})
+	nid_66, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "first").Deref(), []vm.Value{doseq_loop__17933_52})
 	if callErr != nil {
 		return nil, callErr
 	}
@@ -450,11 +450,11 @@ b6:
 		return nil, callErr
 	}
 	if vm.IsTruthy(v90) {
-		doseq_seq__17926_69 = doseq_seq__17926_48
-		doseq_loop__17927_70 = doseq_loop__17927_49
+		doseq_seq__17930_69 = doseq_seq__17930_48
+		doseq_loop__17931_70 = doseq_loop__17931_49
 		bid_71 = bid_50
-		doseq_seq__17928_72 = doseq_seq__17928_51
-		doseq_loop__17929_73 = doseq_loop__17929_52
+		doseq_seq__17932_72 = doseq_seq__17932_51
+		doseq_loop__17933_73 = doseq_loop__17933_52
 		var_facts_74 = var_facts_53
 		f_75 = f_54
 		seen_76 = seen_55
@@ -463,11 +463,11 @@ b6:
 		v182 = v179
 		goto b9
 	} else {
-		doseq_seq__17926_79 = doseq_seq__17926_48
-		doseq_loop__17927_80 = doseq_loop__17927_49
+		doseq_seq__17930_79 = doseq_seq__17930_48
+		doseq_loop__17931_80 = doseq_loop__17931_49
 		bid_81 = bid_50
-		doseq_seq__17928_82 = doseq_seq__17928_51
-		doseq_loop__17929_83 = doseq_loop__17929_52
+		doseq_seq__17932_82 = doseq_seq__17932_51
+		doseq_loop__17933_83 = doseq_loop__17933_52
 		var_facts_84 = var_facts_53
 		f_85 = f_54
 		seen_86 = seen_55
@@ -479,11 +479,11 @@ b6:
 b7:
 	;
 	v151 = vm.NIL
-	doseq_seq__17926_152 = doseq_seq__17926_56
-	doseq_loop__17927_153 = doseq_loop__17927_57
+	doseq_seq__17930_152 = doseq_seq__17930_56
+	doseq_loop__17931_153 = doseq_loop__17931_57
 	bid_154 = bid_58
-	doseq_seq__17928_155 = doseq_seq__17928_59
-	doseq_loop__17929_156 = doseq_loop__17929_60
+	doseq_seq__17932_155 = doseq_seq__17932_59
+	doseq_loop__17933_156 = doseq_loop__17933_60
 	var_facts_157 = var_facts_61
 	f_158 = f_62
 	seen_159 = seen_63
@@ -491,11 +491,11 @@ b7:
 	goto b8
 b8:
 	;
-	v161, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__17927_153})
+	v161, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__17931_153})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__17927_10 = v161
+	doseq_loop__17931_10 = v161
 	var_facts_11 = var_facts_157
 	f_12 = f_158
 	v177 = v175
@@ -506,20 +506,20 @@ b9:
 	if callErr != nil {
 		return nil, callErr
 	}
-	head__18003_95, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{seen_76})
+	head__18007_95, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "deref").Deref(), []vm.Value{seen_76})
 	if callErr != nil {
 		return nil, callErr
 	}
-	tem__G__0_96, callErr = rt.InvokeValue(head__18003_95, []vm.Value{k_93})
+	tem__G__0_96, callErr = rt.InvokeValue(head__18007_95, []vm.Value{k_93})
 	if callErr != nil {
 		return nil, callErr
 	}
 	if vm.IsTruthy(tem__G__0_96) {
-		doseq_seq__17926_97 = doseq_seq__17926_69
-		doseq_loop__17927_98 = doseq_loop__17927_70
+		doseq_seq__17930_97 = doseq_seq__17930_69
+		doseq_loop__17931_98 = doseq_loop__17931_70
 		bid_99 = bid_71
-		doseq_seq__17928_100 = doseq_seq__17928_72
-		doseq_loop__17929_101 = doseq_loop__17929_73
+		doseq_seq__17932_100 = doseq_seq__17932_72
+		doseq_loop__17933_101 = doseq_loop__17933_73
 		var_facts_102 = var_facts_74
 		f_103 = f_75
 		seen_104 = seen_76
@@ -530,11 +530,11 @@ b9:
 		v180 = v182
 		goto b12
 	} else {
-		doseq_seq__17926_109 = doseq_seq__17926_69
-		doseq_loop__17927_110 = doseq_loop__17927_70
+		doseq_seq__17930_109 = doseq_seq__17930_69
+		doseq_loop__17931_110 = doseq_loop__17931_70
 		bid_111 = bid_71
-		doseq_seq__17928_112 = doseq_seq__17928_72
-		doseq_loop__17929_113 = doseq_loop__17929_73
+		doseq_seq__17932_112 = doseq_seq__17932_72
+		doseq_loop__17933_113 = doseq_loop__17933_73
 		var_facts_114 = var_facts_74
 		f_115 = f_75
 		seen_116 = seen_76
@@ -547,11 +547,11 @@ b9:
 	}
 b10:
 	;
-	v147, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__17929_83})
+	v147, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__17933_83})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__17929_43 = v147
+	doseq_loop__17933_43 = v147
 	var_facts_44 = var_facts_84
 	f_45 = f_85
 	seen_46 = seen_86
@@ -564,11 +564,11 @@ b12:
 		return nil, callErr
 	}
 	v130 = v123
-	doseq_seq__17926_131 = doseq_seq__17926_97
-	doseq_loop__17927_132 = doseq_loop__17927_98
+	doseq_seq__17930_131 = doseq_seq__17930_97
+	doseq_loop__17931_132 = doseq_loop__17931_98
 	bid_133 = bid_99
-	doseq_seq__17928_134 = doseq_seq__17928_100
-	doseq_loop__17929_135 = doseq_loop__17929_101
+	doseq_seq__17932_134 = doseq_seq__17932_100
+	doseq_loop__17933_135 = doseq_loop__17933_101
 	var_facts_136 = var_facts_102
 	f_137 = f_103
 	seen_138 = seen_104
@@ -585,11 +585,11 @@ b13:
 		return nil, callErr
 	}
 	v130 = v128
-	doseq_seq__17926_131 = doseq_seq__17926_109
-	doseq_loop__17927_132 = doseq_loop__17927_110
+	doseq_seq__17930_131 = doseq_seq__17930_109
+	doseq_loop__17931_132 = doseq_loop__17931_110
 	bid_133 = bid_111
-	doseq_seq__17928_134 = doseq_seq__17928_112
-	doseq_loop__17929_135 = doseq_loop__17929_113
+	doseq_seq__17932_134 = doseq_seq__17932_112
+	doseq_loop__17933_135 = doseq_loop__17933_113
 	var_facts_136 = var_facts_114
 	f_137 = f_115
 	seen_138 = seen_116
@@ -601,11 +601,11 @@ b13:
 	goto b14
 b14:
 	;
-	v144, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__17929_135})
+	v144, callErr = rt.InvokeValue(rt.LookupVar("clojure.core", "next").Deref(), []vm.Value{doseq_loop__17933_135})
 	if callErr != nil {
 		return nil, callErr
 	}
-	doseq_loop__17929_43 = v144
+	doseq_loop__17933_43 = v144
 	var_facts_44 = var_facts_136
 	f_45 = f_137
 	seen_46 = seen_138

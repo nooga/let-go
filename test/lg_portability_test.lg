@@ -1,0 +1,31 @@
+;; Portability guard for let-go-specific code (issue #132).
+;;
+;; let-go-only namespaces like let-go.semver cannot be loaded by JVM Clojure
+;; (let-go.semver extends the let-go core Comparable *protocol*, which Clojure
+;; has no equivalent of). The guard is reader conditionals keyed on :lg: a
+;; JVM-Clojure reader never matches :lg (it knows only :clj/:cljs/:cljr), so
+;; let-go-specific requires and forms wrapped in #?(:lg ...) / #?@(:lg [...])
+;; are invisible to it. This must be guarded at READ time — an unresolved
+;; require-letgo symbol or a missing namespace fails at compile time, before
+;; any eval-time when/if could intervene.
+;;
+;; These fixtures are real .cljc files (resolver tries .lg, then .cljc, .clj),
+;; so this exercises the actual reader + loader path a shared file would hit.
+(ns test.lg-portability-test
+  (:require
+   [portable-consumer :as pc]
+   [portable-foreign :as pf]
+   [test :refer :all]))
+
+(deftest cljc-lg-guarded-require-loads-under-let-go
+  (testing ":lg-guarded require + body in a .cljc file resolve let-go.semver under let-go"
+    (is (= "1.9.0" (pc/version-render "v1.9.0")))
+    (is (pc/at-least? "2.0.0" "1.9.0"))
+    (is (not (pc/at-least? "1.8.0" "1.9.0")))))
+
+(deftest cljc-foreign-feature-require-fully-skipped
+  (testing "a require under an unmatched feature is dropped entirely at read time"
+    ;; portable-foreign loads cleanly only because its :cljs-guarded require to a
+    ;; non-existent namespace was skipped — the same mechanism that makes a
+    ;; Clojure consumer skip an #?@(:lg ...) let-go-only require.
+    (is (= :ok pf/loaded))))

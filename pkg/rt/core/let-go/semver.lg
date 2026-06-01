@@ -1,0 +1,182 @@
+;; lgbgen:skip-go — uses defrecord / protocol / string parsing; bytecode only.
+
+;; let-go.semver — semantic-version values and comparison.
+;;
+;; A Version is a defrecord that extends the core Comparable protocol, so
+;; (compare a b), (sort versions) and (sorted-set versions) all order
+;; correctly via SemVer §11 precedence. The core comparison operators
+;; (< > <= >=) stay numeric-only, matching Clojure; use the predicates
+;; below (lt? gt? lte? gte? eq?) for ergonomic version comparison.
+(ns let-go.semver
+  (:require
+   [string :as str]))
+
+(defrecord Version [major minor patch pre build])
+
+;; --- compare helpers ---
+
+(defn- cmp-chain
+  "Return the first non-zero comparison in cs, else 0."
+  [& cs]
+  (loop [cs cs]
+    (if (empty? cs)
+      0
+      (let [c (first cs)]
+        (if (zero? c) (recur (rest cs)) c)))))
+
+;; --- parsing ---
+
+(defn- parse-core
+  "Parse the dotted numeric core 'M.N.P' into [major minor patch]."
+  [s]
+  (mapv parse-int (split s ".")))
+
+(defn parse
+  "Parse a SemVer string into a Version. Tolerates a leading 'v'.
+   Grammar: <major>.<minor>.<patch>(-<pre>)?(+<build>)?"
+  [s]
+  (let [s          (if (= "v" (subs s 0 1)) (subs s 1) s)
+        plus       (str/index-of s "+")
+        [s build]  (if plus [(subs s 0 plus) (subs s (inc plus))] [s nil])
+        dash       (str/index-of s "-")
+        [core pre] (if dash [(subs s 0 dash) (subs s (inc dash))] [s nil])
+        [major minor patch] (parse-core core)]
+    (->Version major minor patch pre build)))
+
+(defn version
+  "Coerce x to a Version: a Version is returned as-is, a string is parsed."
+  [x]
+  (if (instance? Version x) x (parse x)))
+
+(defn render
+  "Render a Version back to its canonical SemVer string."
+  [v]
+  (str (:major v) "." (:minor v) "." (:patch v)
+       (when (:pre v) (str "-" (:pre v)))
+       (when (:build v) (str "+" (:build v)))))
+
+;; --- SemVer §11 precedence ---
+
+(defn- numeric-id? [s] (boolean (re-matches #"[0-9]+" s)))
+
+(defn- compare-id
+  "Compare two pre-release identifiers (§11.4.1-3): numeric < alphanumeric;
+   numerics compared numerically, alphanumerics by ASCII."
+  [a b]
+  (let [an (numeric-id? a) bn (numeric-id? b)]
+    (cond
+      (and an bn) (compare (parse-int a) (parse-int b))
+      an          -1
+      bn          1
+      :else       (compare a b))))
+
+(defn- compare-pre
+  "Compare two non-nil dot-separated pre-release strings (§11.4.4: a larger
+   set of fields has higher precedence when all preceding are equal)."
+  [a b]
+  (loop [as (split a ".") bs (split b ".")]
+    (cond
+      (and (empty? as) (empty? bs)) 0
+      (empty? as) -1
+      (empty? bs) 1
+      :else (let [c (compare-id (first as) (first bs))]
+              (if (zero? c) (recur (rest as) (rest bs)) c)))))
+
+(extend-type Version
+  Comparable
+  (compare-to [a b]
+    (let [c (cmp-chain
+              (compare (:major a) (:major b))
+              (compare (:minor a) (:minor b))
+              (compare (:patch a) (:patch b)))]
+      (if-not (zero? c)
+        c
+        ;; equal core: a version WITH pre-release is lower than one without;
+        ;; build metadata is ignored entirely.
+        (let [pa (:pre a) pb (:pre b)]
+          (cond
+            (and (nil? pa) (nil? pb)) 0
+            (nil? pa) 1
+            (nil? pb) -1
+            :else (compare-pre pa pb)))))))
+
+;; --- ergonomic predicates ---
+;; Core < > <= >= stay numeric-only (matching Clojure, where they throw on
+;; non-numbers); these build on compare for version ordering.
+
+(defn lt?  [a b] (neg?  (compare (version a) (version b))))
+(defn gt?  [a b] (pos?  (compare (version a) (version b))))
+(defn eq?  [a b] (zero? (compare (version a) (version b))))
+(defn lte? [a b] (not (gt? a b)))
+(defn gte? [a b] (not (lt? a b)))
+
+;; --- restriction grammar ---
+;; A restriction is space-AND-composed comparator clauses:
+;;   ">=1.9.0 <2.0.0 !=1.9.3"
+;; Comparators: >= <= < > = != . A bare version ("1.9.0") means ">=1.9.0".
+;; The author writes their own bounds to exclude dead versions, e.g. a yanked
+;; 2.x that sorts above 1.9.0: ">=1.9.0 <2.0.0".
+
+(defn- parse-clause
+  "Split a token into [op version-string]; bare version implies >=."
+  [tok]
+  (cond
+    (str/starts-with? tok ">=") [">=" (subs tok 2)]
+    (str/starts-with? tok "<=") ["<=" (subs tok 2)]
+    (str/starts-with? tok "!=") ["!=" (subs tok 2)]
+    (str/starts-with? tok ">")  [">"  (subs tok 1)]
+    (str/starts-with? tok "<")  ["<"  (subs tok 1)]
+    (str/starts-with? tok "=")  ["="  (subs tok 1)]
+    :else                       [">=" tok]))
+
+(defn- clause-ok?
+  "Does actual (a Version) satisfy one [op version-string] clause?"
+  [actual [op vstr]]
+  (let [c (compare actual (version vstr))]
+    (cond
+      (= op ">=") (>= c 0)
+      (= op "<=") (<= c 0)
+      (= op ">")  (> c 0)
+      (= op "<")  (< c 0)
+      (= op "=")  (= c 0)
+      (= op "!=") (not (= c 0))
+      :else       false)))
+
+(defn satisfies-range?
+  "True when v (Version or string) satisfies every clause of restriction."
+  [v restriction]
+  (let [actual (version v)
+        toks   (remove empty? (split (str/trim restriction) " "))]
+    (every? (fn [tok] (clause-ok? actual (parse-clause tok))) toks)))
+
+;; --- commit-sha matching ---
+
+(defn- hex? [s] (boolean (re-matches #"[0-9a-fA-F]+" s)))
+
+(defn sha-match?
+  "True when commit (a hex sha) begins with prefix, case-insensitively.
+   prefix must be 7-40 hex chars (git's abbreviated-sha range)."
+  [commit prefix]
+  (and (hex? prefix)
+       (>= (count prefix) 7)
+       (<= (count prefix) 40)
+       (str/starts-with? (str/lower-case commit) (str/lower-case prefix))))
+
+;; --- current build ---
+;; rt.Version / rt.Commit are baked into the binary by goreleaser ldflags and
+;; surface as the System properties "let-go.version" / "let-go.commit". Local
+;; builds carry the defaults "dev" / "none"; these accessors report nil there,
+;; so callers can warn-and-pass on an unknown host (the require-letgo contract).
+
+(defn current
+  "The running let-go build's Version, or nil when the build version is
+   unknown (a \"dev\" build is not a release version)."
+  []
+  (let [v (System/getProperty "let-go.version")]
+    (when (and v (not= v "dev")) (parse v))))
+
+(defn current-commit
+  "The running let-go build's commit sha, or nil when unknown (\"none\")."
+  []
+  (let [c (System/getProperty "let-go.commit")]
+    (when (and c (not= c "none")) c)))

@@ -26,20 +26,20 @@ func replace_aux_BANG_(arg0 vm.Value) (vm.Value, error) {
 	return v6, nil
 }
 func remove_BANG_() (vm.Value, error) {
-	var arg__17316_4 vm.Value
-	var arg__17323_11 vm.Value
+	var arg__17320_4 vm.Value
+	var arg__17327_11 vm.Value
 	var v13 vm.Value
 	var callErr error
-	_, _, _ = arg__17316_4, arg__17323_11, v13
-	arg__17316_4, callErr = rt.InvokeValue(rt.LookupVar("ir.zipper", "current-block").Deref(), []vm.Value{rt.LookupVar("ir.passes", "*current-zip*").Deref()})
+	_, _, _ = arg__17320_4, arg__17327_11, v13
+	arg__17320_4, callErr = rt.InvokeValue(rt.LookupVar("ir.zipper", "current-block").Deref(), []vm.Value{rt.LookupVar("ir.passes", "*current-zip*").Deref()})
 	if callErr != nil {
 		return nil, callErr
 	}
-	arg__17323_11, callErr = rt.InvokeValue(rt.LookupVar("ir.zipper", "current-block").Deref(), []vm.Value{rt.LookupVar("ir.passes", "*current-zip*").Deref()})
+	arg__17327_11, callErr = rt.InvokeValue(rt.LookupVar("ir.zipper", "current-block").Deref(), []vm.Value{rt.LookupVar("ir.passes", "*current-zip*").Deref()})
 	if callErr != nil {
 		return nil, callErr
 	}
-	v13, callErr = rt.InvokeValue(rt.LookupVar("ir", "remove-inst!").Deref(), []vm.Value{rt.LookupVar("ir.passes", "*current-fn*").Deref(), arg__17323_11, rt.LookupVar("ir.passes", "*current-inst*").Deref()})
+	v13, callErr = rt.InvokeValue(rt.LookupVar("ir", "remove-inst!").Deref(), []vm.Value{rt.LookupVar("ir.passes", "*current-fn*").Deref(), arg__17327_11, rt.LookupVar("ir.passes", "*current-inst*").Deref()})
 	if callErr != nil {
 		return nil, callErr
 	}
