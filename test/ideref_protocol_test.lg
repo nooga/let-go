@@ -1,0 +1,27 @@
+;; A value whose type implements IDeref is derefable: @x / (deref x) dispatch
+;; to (-deref x).
+(ns test.ideref-protocol-test
+  (:require [test :refer :all]))
+
+(deftype Boxed [v]
+  IDeref
+  (-deref [self] v))
+
+(defn- throws? [thunk]
+  (try (thunk) false (catch _ true)))
+
+(deftest derefable-deftype
+  (testing "a deftype implementing IDeref works with deref and @"
+    (is (= 42 (deref (->Boxed 42))))
+    (is (= 42 @(->Boxed 42)))
+    (is (= :x @(->Boxed :x))))
+  (testing "a reify implementing IDeref is derefable"
+    (is (= 7 @(reify IDeref (-deref [self] 7))))))
+
+(deftest engine-refs-still-deref
+  (testing "real engine references still deref unchanged (fast path)"
+    (is (= 1 @(atom 1)))))
+
+(deftest non-ref-still-errors
+  (testing "a non-derefable value still errors"
+    (is (throws? #(deref 5)))))

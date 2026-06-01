@@ -1994,6 +1994,13 @@
   (-invoke [this args]))
 (-set-invokable-protocol! IFn -invoke)
 
+;; IDeref — the derefable trait. A type that implements -deref becomes usable
+;; with @ / deref: @x dispatches to (-deref x). -set-deref-protocol! wires the
+;; VM's deref path to this protocol.
+(defprotocol IDeref
+  (-deref [this]))
+(-set-deref-protocol! IDeref -deref)
+
 ;; Helper: create a ProtocolFn (native, can't be created from let-go directly)
 ;; This is defined as a native function below
 

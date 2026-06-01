@@ -3152,7 +3152,7 @@ func installLangNS() {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		ref, ok := vs[0].(vm.Reference)
+		ref, ok := vm.AsRef(vs[0])
 		if !ok {
 			return vm.NIL, fmt.Errorf("deref expected Reference")
 		}
@@ -4609,6 +4609,26 @@ func installLangNS() {
 		}
 		vm.IFnProtocol = protocol
 		vm.IFnInvoke = invokeFn
+		return vm.NIL, nil
+	})
+
+	// -set-deref-protocol!: wire the VM's "derefable value" support to the
+	// IDeref protocol + its -deref fn (called once from core after defining
+	// IDeref). Thereafter any value whose type satisfies IDeref works with @/deref.
+	setDerefProtocol, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("-set-deref-protocol! expects 2 args")
+		}
+		protocol, ok := vs[0].(*vm.Protocol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("-set-deref-protocol! expected a Protocol")
+		}
+		derefFn, ok := vs[1].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("-set-deref-protocol! expected the -deref fn")
+		}
+		vm.IDerefProtocol = protocol
+		vm.IDerefDeref = derefFn
 		return vm.NIL, nil
 	})
 
@@ -6083,6 +6103,7 @@ func installLangNS() {
 	ns.Def("set-field!", setField)
 	ns.Def("defprotocol*", defProtocol)
 	ns.Def("-set-invokable-protocol!", setInvokableProtocol)
+	ns.Def("-set-deref-protocol!", setDerefProtocol)
 	installHierarchyBuiltins(ns)
 	ns.Def("make-protocol-fn", makeProtocolFn)
 	ns.Def("extend-type*", extendType)
