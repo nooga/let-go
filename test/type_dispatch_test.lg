@@ -1,0 +1,60 @@
+;; Type-dispatch regression tests: protocol Object/universal default,
+;; instance? on a protocol, deftype .-field access, re-pattern idempotence.
+(ns test.type-dispatch-test
+  (:require [test :refer :all]))
+
+;; --- 1. protocol Object/universal default (extend-type Object) ---
+
+(defprotocol Describable
+  (describe [this]))
+
+(extend-type (type "")
+  Describable
+  (describe [s] (str "string:" s)))
+
+;; a universal default extended onto Object answers for every other type
+(extend-type Object
+  Describable
+  (describe [_] "default"))
+
+(deftest protocol-object-default
+  (testing "an explicit impl is used when present"
+    (is (= "string:hi" (describe "hi"))))
+  (testing "types without an explicit impl fall back to the Object default"
+    (is (= "default" (describe 42)))
+    (is (= "default" (describe :kw)))
+    (is (= "default" (describe [1 2])))))
+
+;; --- 2. instance? on a protocol is a membership test ---
+
+(defprotocol OnlyStrings
+  (only-str [this]))
+
+(extend-type (type "")
+  OnlyStrings
+  (only-str [s] s))
+
+(deftest instance-on-protocol
+  (testing "(instance? Protocol x) reflects protocol membership"
+    (is (instance? OnlyStrings "hi"))
+    (is (not (instance? OnlyStrings 42)))))
+
+;; --- 3. deftype .-field access ---
+
+(deftype Point [x y])
+
+(deftest deftype-field-access
+  (testing "both (.field p) and (.-field p) read the field"
+    (let [p (->Point 3 4)]
+      (is (= 3 (.x p)))
+      (is (= 4 (.y p)))
+      (is (= 3 (.-x p)))
+      (is (= 4 (.-y p))))))
+
+;; --- 4. re-pattern is idempotent on an already-compiled pattern ---
+
+(deftest re-pattern-idempotent
+  (testing "(re-pattern p) returns p unchanged when p is already a regex"
+    (is (= "42" (re-find (re-pattern #"\d+") "abc42def"))))
+  (testing "(re-pattern s) still compiles a string"
+    (is (= "42" (re-find (re-pattern "\\d+") "abc42def")))))

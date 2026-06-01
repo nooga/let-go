@@ -57,27 +57,43 @@ func (p *Protocol) Lookup(methodName Symbol, target Value) (Fn, bool) {
 	}
 
 	vt := target.Type()
-	implMap, ok := p.impls[vt]
-	if !ok {
+	if fn, ok := p.lookupIn(p.impls[vt], key); ok {
+		return fn, true
+	}
+	// Fall back to a default extended onto Object (AnyType) — Clojure's
+	// (extend-type Object ...) universal default. Also covers a partial impl
+	// that is missing this particular method.
+	if vt != AnyType {
+		if fn, ok := p.lookupIn(p.impls[AnyType], key); ok {
+			return fn, true
+		}
+	}
+	return nil, false
+}
+
+// lookupIn pulls a method fn out of one type's impl map, if present.
+func (p *Protocol) lookupIn(implMap *PersistentMap, key Value) (Fn, bool) {
+	if implMap == nil {
 		return nil, false
 	}
-
 	v := implMap.ValueAt(key)
 	if v == NIL {
 		return nil, false
 	}
-
 	fn, ok := v.(Fn)
 	return fn, ok
 }
 
-// Satisfies returns true if the given value's type has an implementation.
+// Satisfies returns true if the given value's type has an implementation, or a
+// universal default was extended onto Object (AnyType).
 func (p *Protocol) Satisfies(target Value) bool {
 	if target == NIL {
-		return p.nilImpl != nil
+		return p.nilImpl != nil || p.impls[AnyType] != nil
 	}
-	_, ok := p.impls[target.Type()]
-	return ok
+	if _, ok := p.impls[target.Type()]; ok {
+		return ok
+	}
+	return p.impls[AnyType] != nil
 }
 
 // ProtocolFn is a function that dispatches on the first arg's type via a protocol.

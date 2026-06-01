@@ -616,6 +616,16 @@
 (defmacro declare [& names]
   `(do ~@(map #(list 'def % nil) names)))
 
+(defmacro defonce [name expr]
+  (let [bare (if (and (seq? name) (= (first name) 'with-meta)) (second name) name)
+        v (gensym "v")]
+    ;; Compiling the (def name expr) branch interns the var, so a plain
+    ;; `resolve` would always see it. Gate on bound? (does it have a ROOT
+    ;; value yet) instead, so the def runs once and re-evaluation is a no-op.
+    (list 'let [v (list 'resolve (list 'quote bare))]
+          (list 'when-not (list 'and v (list 'bound? v))
+                (list 'def name expr)))))
+
 (declare destructure*)
 
 ;; nth is now a native Go builtin for performance (used by destructuring)
@@ -1985,6 +1995,21 @@
         class-alias  (symbol (str munged-ns "." (str name)))
         alias-def    (list 'def class-alias name)]
     (cons 'do (cons proto-def (concat method-defs (list alias-def))))))
+
+;; IFn — the invokable trait. A type that implements -invoke becomes callable:
+;; (x arg ...) on such a value dispatches to (-invoke x [arg ...]), the call's
+;; arguments handed over as one vector so a single variadic -invoke covers every
+;; arity. -set-invokable-protocol! wires the VM's call path to this protocol.
+(defprotocol IFn
+  (-invoke [this args]))
+(-set-invokable-protocol! IFn -invoke)
+
+;; IDeref — the derefable trait. A type that implements -deref becomes usable
+;; with @ / deref: @x dispatches to (-deref x). -set-deref-protocol! wires the
+;; VM's deref path to this protocol.
+(defprotocol IDeref
+  (-deref [this]))
+(-set-deref-protocol! IDeref -deref)
 
 ;; Helper: create a ProtocolFn (native, can't be created from let-go directly)
 ;; This is defined as a native function below
