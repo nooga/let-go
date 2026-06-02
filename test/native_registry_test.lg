@@ -1,0 +1,9 @@
+(ns test.native-registry-test
+  (:require [test :refer :all]))
+
+(deftest native-modules-has-core-seq
+  (let [mods (rt/native-modules)]
+    (is (contains? mods "clojure.core"))
+    (let [core-fns (reduce merge {} (map :fns (get mods "clojure.core")))]
+      (is (contains? core-fns "seq"))
+      (is (= "Seq" (:go-ident (get core-fns "seq")))))))

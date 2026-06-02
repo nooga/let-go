@@ -22,6 +22,8 @@ import (
 	"github.com/nooga/let-go/pkg/resolver"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
+
+	_ "github.com/nooga/let-go/pkg/rt/corefns"
 )
 
 // Trailers appended to standalone binaries.
