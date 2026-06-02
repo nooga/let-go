@@ -785,6 +785,49 @@
 ;; behavior is exactly as before (bytecode path and any single-pass caller).
 (def ^:dynamic *lowered-siblings* nil)
 
+;; [ns name arity] -> {:go-name :arity :needs-error? :param-specs :result-spec :native? :go-pkg}
+;; Calls whose callee resolves to an entry are emitted as direct Go calls.
+;; Default {} -> inert.
+(def ^:dynamic *lowered-registry* {})
+
+(def ^:private coercion-supported-types
+  #{"vm.Value" "string" "int" "int64" "bool" "float64"})
+
+(defn- supported-coercion-type? [t]
+  (contains? coercion-supported-types t))
+
+;; Per-NS accumulator (an atom) of native-module Go import paths actually used.
+;; nil at top level disables tracking. Bound by pipeline.lg's lower-ns-to-go.
+(def ^:dynamic *native-imports-used* nil)
+
+(def ^:private alias->internal-ns
+  {"clojure.core" 'core   "clojure.test" 'test   "clojure.string" 'string
+   "clojure.set"  'set    "clojure.walk" 'walk   "clojure.edn"    'edn
+   "clojure.zip"  'zip    "clojure.data" 'data   "clojure.pprint" 'pprint})
+
+(defn- internal-ns-sym [ns-str]
+  (or (get alias->internal-ns ns-str) (symbol ns-str)))
+
+(defn- pkg-alias-from [pkg-path]
+  ;; last path segment of a Go import path; "github.com/.../corefns" -> "corefns"
+  (loop [i (dec (count pkg-path))]
+    (cond (< i 0) pkg-path
+          (= (nth pkg-path i) \/) (subs pkg-path (inc i))
+          :else (recur (dec i)))))
+
+(defn registry-key [ns-sym name-str arity] [ns-sym name-str arity])
+
+(defn registry-entry-from-result [result ns-sym pkg-name]
+  ;; Build a registry entry for a lowered single-arity vm.Value sibling.
+  ;; Returns a 1-entry map or nil. (Native entries are built in pipeline.lg.)
+  (when-let [fn-name (:fn-name result)]
+    (when (:override-eligible? result)
+      {(registry-key (internal-ns-sym (str ns-sym)) fn-name (:arity result))
+       {:go-name (:go-name result) :arity (:arity result)
+        :needs-error? (:needs-error? result)
+        :param-specs (vec (repeat (:arity result) "vm.Value"))
+        :result-spec "vm.Value" :native? false :go-pkg nil}})))
+
 (defn- direct-call-target
   "If callee-ref is a :load-var naming a same-namespace lowered sibling in
    *lowered-siblings* with matching arity, return its entry
