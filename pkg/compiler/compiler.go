@@ -360,6 +360,12 @@ func (c *Context) compileForm(o vm.Value) error {
 			// Non-core qualified: honor aliases and refers in current ns
 			v := c.CurrentNS().Lookup(symVal)
 			if v == vm.NIL {
+				if hc, ok := rt.LookupHostClass(string(symVal)); ok {
+					n := c.constant(hc)
+					c.emitWithArg(vm.OP_LOAD_CONST, n)
+					c.incSP(1)
+					return nil
+				}
 				return c.compileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
 			}
 			varn := c.constant(v)
@@ -375,6 +381,15 @@ func (c *Context) compileForm(o vm.Value) error {
 		// when symbol not found so far we have a free variable on our hands
 		v := c.CurrentNS().Lookup(symVal)
 		if v == vm.NIL {
+			// Host-class fallback: a bare class symbol used as a value (e.g.
+			// java.util.Map, CharSequence in `(instance? java.util.Map x)`)
+			// resolves to a registered let-go value (typically a type).
+			if hc, ok := rt.LookupHostClass(string(symVal)); ok {
+				n := c.constant(hc)
+				c.emitWithArg(vm.OP_LOAD_CONST, n)
+				c.incSP(1)
+				return nil
+			}
 			return c.compileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
 		}
 		varn := c.constant(v)
