@@ -1,5 +1,6 @@
 (ns test.clojure-compat-aliases-test
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 (definterface CompatInterface
   (compat-method [this x]))
@@ -8,6 +9,16 @@
 
 (defrecord CompatImpl [] CompatInterface
   (compat-method [this x] x))
+
+(register-constructor! 'CompatCtor
+                       (fn [& xs]
+                         {:ctor :symbol
+                          :args xs}))
+
+(register-constructor! "CompatStringCtor"
+                       (fn [& xs]
+                         {:ctor :string
+                          :args xs}))
 
 (deftest clojure-class-aliases-test
   (testing "JVM-style class vars point at let-go runtime types"
@@ -44,8 +55,24 @@
   (testing "definterface lowers to a protocol"
     (is (= 42 (compat-method (->CompatImpl) 42))))
   (testing "minimal new bridge covers Object and Boolean"
-    (is (nil? (new Object)))
-    (is (= false (new Boolean)))))
+    (is (some? (new Object)))
+    (is (not (identical? (new Object) (new Object))))
+    (is (= false (new Boolean))))
+  (testing "constructor shorthand mirrors the minimal new bridge"
+    (is (some? (Object.)))
+    (is (not (identical? (Object.) (Object.))))
+    (is (= false (Boolean.))))
+  (testing "register-constructor! exposes constructors through both new and shorthand"
+    (is (= {:ctor :symbol :args '(1 2)} (new CompatCtor 1 2)))
+    (is (= {:ctor :symbol :args '(3 4)} (CompatCtor. 3 4)))
+    (is (= {:ctor :string :args '(:a)} (new CompatStringCtor :a)))
+    (is (= {:ctor :string :args '(:b)} (CompatStringCtor. :b))))
+  (testing "missing constructors raise a clear error"
+    (is (= "new: no constructor var ->MissingCompatCtor for MissingCompatCtor"
+           (try
+             (new MissingCompatCtor)
+             :no-error
+             (catch e (ex-message e)))))))
 
 (deftest clojure-compat-ref-agent-placeholders-test
   (testing "ref compatibility is atom-backed"

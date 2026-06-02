@@ -7620,6 +7620,8 @@ outer:
 }
 
 func installClojureCompatAliases(ns *vm.Namespace) {
+	type compatObject struct{}
+
 	ns.Def("java.lang.Byte", vm.IntType)
 	ns.Def("java.lang.Short", vm.IntType)
 	ns.Def("java.lang.Integer", vm.IntType)
@@ -7658,6 +7660,24 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("Boolean", vm.BooleanType)
 	ns.Def("Integer.", ns.Lookup("int").(*vm.Var).Deref())
 	ns.Def("->Integer", ns.Lookup("int").(*vm.Var).Deref())
+
+	objectCtor, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.NewBoxed(&compatObject{}), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	ns.Def("Object.", objectCtor)
+	ns.Def("->Object", objectCtor)
+
+	booleanCtor, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.FALSE, nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	ns.Def("Boolean.", booleanCtor)
+	ns.Def("->Boolean", booleanCtor)
 
 	longNS := DefNSBare("Long")
 	longNS.Def("MAX_VALUE", longCompatValue(9223372036854775807))
