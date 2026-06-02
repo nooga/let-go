@@ -21,3 +21,14 @@ func TestNativeRegistryRegisterAndLookup(t *testing.T) {
 		t.Fatal("module not in AllNativeModules snapshot")
 	}
 }
+
+func TestNativeModulesToLispShape(t *testing.T) {
+	RegisterNativeModule(&NativeModule{
+		GoPkg: "example.com/baz", Namespace: "test.ns.unique2",
+		Fns: map[string]NativeDirectFn{"q": {GoIdent: "Q", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true}},
+	})
+	m := nativeModulesToLisp()
+	if m == nil {
+		t.Fatal("nil map")
+	}
+}

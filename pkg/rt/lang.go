@@ -341,6 +341,7 @@ func init() {
 	// happens from zz_run_installers.go::init which sorts last
 	// alphabetically so every file has registered first.
 	installLangNS()
+	installNativeDirectNS()
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 
