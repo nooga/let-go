@@ -62,8 +62,13 @@ async function decompressWasm(b64) {
 //   onOutput(cb)      register sink for VM stdout; cb(string)
 //   onEmit(cb)        register sink for js/emit events; cb(name, parsedData)
 //   sendInput(str)    inject UTF-8 keystrokes/bytes toward the VM
-//   wake()            unblock a parked read without sending input (TBD; alias of sendInput('\x07') for now)
 //   setSize(c, r)     advertise a new terminal size to the VM
+//
+// wake() is intentionally NOT in this slice. Unblocking a parked read-key
+// without sending real input requires a SAB-level protocol change (a
+// wake-epoch cell or tri-state ready flag) so the Go-side read-key can
+// distinguish a real keystroke from an unblock. That lands in its own
+// PR with a concrete contract.
 //
 // The internal _lg* globals (_lgKey, _lgSetSize, _lgFlush, _lgEmit) remain
 // as compatibility hooks and are also the implementation backing for the
@@ -79,7 +84,6 @@ window.LetGoHost = (function() {
     onOutput(cb) { outputSink = cb; },
     onEmit(cb) { emitSink = cb; },
     sendInput(s) { return window._lgKey ? window._lgKey(s) : false; },
-    wake() { return window._lgWake ? window._lgWake() : undefined; },
     setSize(c, r) { return window._lgSetSize ? window._lgSetSize(c, r) : undefined; },
     // Internal — invoked by the runtime/relay code below.
     _output(s) { outputSink(s); },

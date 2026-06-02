@@ -35,6 +35,40 @@ async function decompressWasm(b64) {
   return out;
 }
 
+// --- window.LetGoHost — public host API ---
+// Single object on window for custom shells to talk to. Surface:
+//   onOutput(cb)      register sink for VM stdout; cb(string)
+//   onEmit(cb)        register sink for js/emit events; cb(name, parsedData)
+//   sendInput(str)    inject UTF-8 keystrokes/bytes toward the VM
+//   setSize(c, r)     advertise a new terminal size to the VM
+//
+// wake() is intentionally NOT in this slice. Unblocking a parked read-key
+// without sending real input requires a SAB-level protocol change (a
+// wake-epoch cell or tri-state ready flag) so the Go-side read-key can
+// distinguish a real keystroke from an unblock. That lands in its own
+// PR with a concrete contract.
+//
+// The internal _lg* globals (_lgKey, _lgSetSize, _lgFlush, _lgEmit) remain
+// as compatibility hooks and are also the implementation backing for the
+// LetGoHost methods. Callers using either shape keep working.
+window.LetGoHost = (function() {
+  let outputSink = (s) => console.log(s);
+  let emitSink = (name, data) => {
+    try {
+      window.dispatchEvent(new CustomEvent(name, { detail: data }));
+    } catch (err) { console.error('lg emit:', err); }
+  };
+  return {
+    onOutput(cb) { outputSink = cb; },
+    onEmit(cb) { emitSink = cb; },
+    sendInput(s) { return window._lgKey ? window._lgKey(s) : false; },
+    setSize(c, r) { return window._lgSetSize ? window._lgSetSize(c, r) : undefined; },
+    // Internal — invoked by the runtime/relay code below.
+    _output(s) { outputSink(s); },
+    _emit(name, data) { emitSink(name, data); },
+  };
+})();
+
 const status = document.getElementById('status');
 const termEl = document.getElementById('terminal');
 
@@ -57,6 +91,10 @@ function showTerminal() {
   term.focus();
 }
 
+// xterm is the default output sink in this template. Custom shells can
+// call LetGoHost.onOutput(...) before the WASM boots to redirect.
+window.LetGoHost.onOutput((s) => term.write(s));
+
 window.addEventListener('resize', () => fitAddon.fit());
 
 // --- Worker mode (interactive, needs cross-origin isolation) ---
@@ -67,25 +105,32 @@ function startWorkerMode() {
 
   showTerminal();
 
-  // Store terminal size in SAB
-  Atomics.store(keyInt32, 6, term.cols);
-  Atomics.store(keyInt32, 7, term.rows);
-  term.onResize(({cols, rows}) => {
-    Atomics.store(keyInt32, 6, cols);
-    Atomics.store(keyInt32, 7, rows);
-  });
-
-  // Send keystrokes to worker via SAB
-  term.onData(data => {
+  // Public input hook — backs LetGoHost.sendInput. Returns true if accepted,
+  // false if the input was too long (>16 bytes). xterm's onData calls into
+  // this; custom shells can call it directly or via LetGoHost.sendInput.
+  window._lgKey = function(data) {
     const bytes = new TextEncoder().encode(data);
-    if (bytes.length > 16) return;
-    // Spin-wait if previous key hasn't been consumed yet
+    if (bytes.length === 0 || bytes.length > 16) return false;
     while (Atomics.load(keyInt32, 0) !== 0) { /* busy wait */ }
     keyUint8.set(bytes);
     Atomics.store(keyInt32, 1, bytes.length);
     Atomics.store(keyInt32, 0, 1);
     Atomics.notify(keyInt32, 0);
-  });
+    return true;
+  };
+
+  // Public size hook — backs LetGoHost.setSize.
+  window._lgSetSize = function(cols, rows) {
+    Atomics.store(keyInt32, 6, cols);
+    Atomics.store(keyInt32, 7, rows);
+  };
+
+  // Initial size + xterm resize hook route through the public API.
+  window._lgSetSize(term.cols, term.rows);
+  term.onResize(({cols, rows}) => window._lgSetSize(cols, rows));
+
+  // xterm keystrokes feed into _lgKey (which is what the VM reads).
+  term.onData((data) => window._lgKey(data));
 
   // Build worker code: fs shim + wasm_exec.js + bootstrap
   const workerCode = `
@@ -118,6 +163,11 @@ function startWorkerMode() {
     globalThis._lgFlush = function() {
       if (outputBuf.length > 0) { postMessage({t:'out', d:outputBuf}); outputBuf = ''; }
     };
+    // Worker side of the js/emit bridge — forward to main thread, which
+    // dispatches into LetGoHost (workers have no DOM, no LetGoHost).
+    globalThis._lgEmit = function(name, dataJson) {
+      postMessage({t:'emit', name, data: dataJson});
+    };
     onmessage = async (e) => {
       if (e.data.t !== 'init') return;
       const { sab, wasmGzB64, wasmExecJS } = e.data;
@@ -148,8 +198,12 @@ function startWorkerMode() {
   const worker = new Worker(URL.createObjectURL(blob));
 
   worker.onmessage = (e) => {
-    if (e.data.t === 'out') term.write(e.data.d);
-    if (e.data.t === 'exit') term.write('\r\n\x1b[90m[program exited]\x1b[0m\r\n');
+    if (e.data.t === 'out') window.LetGoHost._output(e.data.d);
+    if (e.data.t === 'exit') window.LetGoHost._output('\r\n\x1b[90m[program exited]\x1b[0m\r\n');
+    if (e.data.t === 'emit') {
+      try { window.LetGoHost._emit(e.data.name, JSON.parse(e.data.data)); }
+      catch (err) { console.error('lg emit relay:', err); }
+    }
   };
 
   worker.postMessage({ t: 'init', sab, wasmGzB64: WASM_GZ_B64, wasmExecJS: WASM_EXEC_JS });
@@ -158,13 +212,14 @@ function startWorkerMode() {
 // --- Main-thread mode (output only, no input) ---
 async function startMainThreadMode() {
   showTerminal();
+  const out = (s) => window.LetGoHost._output(s);
   if (location.protocol === 'file:') {
-    term.write('\x1b[33mInteractive input requires a local server. Run:\x1b[0m\r\n');
-    term.write('\x1b[33m  python3 -m http.server\x1b[0m\r\n');
-    term.write('\x1b[33mthen open http://localhost:8000\x1b[0m\r\n\r\n');
+    out('\x1b[33mInteractive input requires a local server. Run:\x1b[0m\r\n');
+    out('\x1b[33m  python3 -m http.server\x1b[0m\r\n');
+    out('\x1b[33mthen open http://localhost:8000\x1b[0m\r\n\r\n');
   } else {
-    term.write('\x1b[33mInteractive input unavailable (no cross-origin isolation).\x1b[0m\r\n');
-    term.write('\x1b[33mDeploy coi-serviceworker.js alongside this file.\x1b[0m\r\n\r\n');
+    out('\x1b[33mInteractive input unavailable (no cross-origin isolation).\x1b[0m\r\n');
+    out('\x1b[33mDeploy coi-serviceworker.js alongside this file.\x1b[0m\r\n\r\n');
   }
 
   const decoder = new TextDecoder('utf-8');
@@ -172,7 +227,7 @@ async function startMainThreadMode() {
   globalThis.fs = {
     constants: { O_WRONLY:-1, O_RDWR:-1, O_CREAT:-1, O_TRUNC:-1, O_APPEND:-1, O_EXCL:-1, O_DIRECTORY:-1 },
     writeSync(fd, buf) {
-      if (fd === 1 || fd === 2) { term.write(decoder.decode(buf)); return buf.length; }
+      if (fd === 1 || fd === 2) { window.LetGoHost._output(decoder.decode(buf)); return buf.length; }
       return 0;
     },
     write(fd, buf, offset, length, position, callback) {
@@ -195,6 +250,12 @@ async function startMainThreadMode() {
     unlink(p,cb){cb(null);}, utimes(p,a,m,cb){cb(null);},
   };
   globalThis._lgFlush = function(){};
+  // Main-thread side of the js/emit bridge — dispatch straight into
+  // LetGoHost (no worker round-trip needed).
+  globalThis._lgEmit = function(name, dataJson) {
+    try { window.LetGoHost._emit(name, JSON.parse(dataJson)); }
+    catch (err) { console.error('lg emit:', err); }
+  };
 
   // Load wasm_exec.js
   eval(WASM_EXEC_JS);
