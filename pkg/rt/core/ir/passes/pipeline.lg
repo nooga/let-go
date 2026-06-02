@@ -360,7 +360,7 @@
 
 (defn- lower-defn-forms
   "Lower each defn form via the Go pipeline; return the vector of result maps.
-   Independent of *lowered-siblings* — the caller binds it for pass 2."
+   Independent of *lowered-registry* — the caller binds it for pass 2."
   [defn-forms]
   (loop [remaining defn-forms out []]
     (if (empty? remaining)
@@ -401,15 +401,12 @@
           ;; Pass 1 discovers lowered single-arity vm.Value-uniform siblings
           ;; (:override-eligible?) — the intra-ns calls slice 1 can lift.
           pass1 (lower-defn-forms defn-forms)
-          siblings {:ns (str ns-name)
-                    :fns (reduce (fn [m r]
-                                   (if (:override-eligible? r)
-                                     (assoc m (:fn-name r) {:arity (:arity r) :go-name (:go-name r) :needs-error? (:needs-error? r)})
-                                     m))
-                                 {} pass1)}
-          ;; Pass 2 re-lowers with the sibling set visible so intra-ns calls
+          sibling-registry (reduce (fn [m r]
+                                     (merge m (lower-go/registry-entry-from-result r ns-name pkg-name)))
+                                   {} pass1)
+          ;; Pass 2 re-lowers with the registry visible so intra-ns calls
           ;; lower to direct Go calls.
-          results (binding [lower-go/*lowered-siblings* siblings]
+          results (binding [lower-go/*lowered-registry* sibling-registry]
                     (lower-defn-forms defn-forms))
           ;; Filter out results with nil decls (failures that slipped through).
           valid-results (filterv (fn [r] (some? (:decl r))) results)

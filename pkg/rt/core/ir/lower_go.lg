@@ -778,13 +778,6 @@
 
 (declare function-needs-error?)
 
-;; When bound (by the two-pass go-lowering in pipeline.lg) to
-;;   {:ns "<namespace>" :fns {"<let-go-name>" {:arity n :go-name "<go-func>"}}}
-;; intra-namespace calls to single-arity, vm.Value-uniform lowered siblings are
-;; emitted as direct Go calls instead of rt.InvokeValue/LookupVar. Default nil →
-;; behavior is exactly as before (bytecode path and any single-pass caller).
-(def ^:dynamic *lowered-siblings* nil)
-
 ;; [ns name arity] -> {:go-name :arity :needs-error? :param-specs :result-spec :native? :go-pkg}
 ;; Calls whose callee resolves to an entry are emitted as direct Go calls.
 ;; Default {} -> inert.
@@ -828,51 +821,107 @@
         :param-specs (vec (repeat (:arity result) "vm.Value"))
         :result-spec "vm.Value" :native? false :go-pkg nil}})))
 
-(defn- direct-call-target
-  "If callee-ref is a :load-var naming a same-namespace lowered sibling in
-   *lowered-siblings* with matching arity, return its entry
-   {:go-name :arity :needs-error?}; else nil."
-  [f callee-ref argc]
-  (when (and *lowered-siblings* (= :load-var (ir/op callee-ref f)))
-    (let [sym   (symbol (ir/aux callee-ref f))
-          sns   (namespace sym)
-          entry (get (:fns *lowered-siblings*) (name sym))]
-      (when (and entry
-                 (or (nil? sns) (= sns (:ns *lowered-siblings*)))
-                 (= argc (:arity entry)))
-        entry))))
+(defn- coerce-arg-to-type
+  "Emit a Go expression that produces a value of `target-type` from
+   arg id `rid`. If typeinfer already typed rid as the matching Go
+   type, pass the value through unchanged; otherwise wrap with the
+   appropriate `<type>(arg.(vm.<Boxed>))` unbox.
 
-(defn- call-assign-stmts [f closed-exprs nid]
-  (let [refs      (ir/refs nid f)
-        arg-exprs (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))
-        entry     (direct-call-target f (first refs) (count (rest refs)))]
-    (if (and entry (not (:needs-error? entry)))
-      ;; Direct call to a sibling returning a single vm.Value (no error):
-      ;; emit `result = callee(args)` with NO callErr / err-check. (rt.InvokeValue
-      ;; always returns (vm.Value, error), so the 2-value form below applies only
-      ;; to it and to error-returning direct callees.)
-      (let [call-expr (gogen/call (gogen/ident (:go-name entry)) arg-exprs)]
-        (when (every? identity arg-exprs)
-          (if (live? f nid)
-            [(gogen/multi-assign "=" [(value-ident f nid)] [call-expr])]
-            [(gogen/multi-assign "=" [(gogen/ident "_")] [call-expr])])))
-      ;; Two-value form: rt.InvokeValue, or a direct call to an error-returning
-      ;; sibling. Both yield (vm.Value, error).
-      (let [call-expr (if entry
-                        (gogen/call (gogen/ident (:go-name entry)) arg-exprs)
-                        (let [callee (box-as-value f closed-exprs (first refs))]
-                          (when callee
-                            (gogen/call
-                              (gogen/field-sel (gogen/ident "rt") "InvokeValue")
-                              [callee (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]))))
-            err-id    (gogen/ident "callErr")]
-        (when (and call-expr (every? identity arg-exprs))
-          (let [assign (if (live? f nid)
-                         (gogen/multi-assign "=" [(value-ident f nid) err-id] [call-expr])
-                         (gogen/multi-assign "=" [(gogen/ident "_") err-id] [call-expr]))
-                ;; Error-path return zero value must match the function's actual
-                ;; declared return type (not always nil — bool/int/etc. have
-                ;; different zeros).
+   Returns nil when target-type is outside the supported set —
+   call-assign-stmts uses that to fall back to the trampoline."
+  [f closed-exprs rid target-type]
+  (let [src-spec (go-type-spec (ir/type-of rid f))
+        bare     (value-expr f closed-exprs rid)
+        boxed    (box-as-value f closed-exprs rid)]
+    (cond
+      (nil? bare) nil
+      (= target-type "vm.Value")
+      boxed
+      (= src-spec target-type)
+      ;; typeinfer landed on the same Go type already — pass through.
+      bare
+      (= target-type "string")
+      (gogen/call (gogen/ident "string")
+                  [(gogen/type-assert boxed (gogen/type "vm.String"))])
+      (= target-type "bool")
+      (gogen/call (gogen/ident "bool")
+                  [(gogen/type-assert boxed (gogen/type "vm.Boolean"))])
+      (or (= target-type "int") (= target-type "int64"))
+      (gogen/call (gogen/ident target-type)
+                  [(gogen/type-assert boxed (gogen/type "vm.Int"))])
+      (= target-type "float64")
+      (gogen/call (gogen/ident "float64")
+                  [(gogen/type-assert boxed (gogen/type "vm.Float"))])
+      :else nil)))
+
+(defn- box-result-from-type
+  "Wrap a typed Go expression in the right vm.* constructor so the
+   call site sees a vm.Value. The :no-box result-spec leaves the
+   expression unchanged (used for vm.Value-returning fns)."
+  [result-expr result-type]
+  (cond
+    (= result-type "vm.Value") result-expr
+    (= result-type "bool")    (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [result-expr])
+    (= result-type "string")  (gogen/call (gogen/field-sel (gogen/ident "vm") "String")  [result-expr])
+    (or (= result-type "int") (= result-type "int64"))
+    (gogen/call (gogen/field-sel (gogen/ident "vm") "Int")     [result-expr])
+    (= result-type "float64") (gogen/call (gogen/field-sel (gogen/ident "vm") "Float")   [result-expr])
+    :else nil))
+
+(defn- emit-call-stmts [f assign-target invoke-expr]
+  "Build the [assign err-check] statement pair shared by both call paths.
+   assign-target is either a gogen ident (used? case) or '_'; invoke-expr
+   is the right-hand side that produces (result, error) at runtime."
+  (let [err-id     (gogen/ident "callErr")
+        assign     (gogen/multi-assign "=" [assign-target err-id] [invoke-expr])
+        zero-expr  (case (function-return-spec f)
+                     "bool"    (gogen/ident "false")
+                     "int"     (gogen/int-lit 0)
+                     "float64" (gogen/float-lit 0.0)
+                     "string"  (gogen/string-lit "")
+                     (gogen/ident "nil"))
+        err-check  (gogen/if-stmt nil
+                                  (gogen/binary "!=" err-id (gogen/ident "nil"))
+                                  [(gogen/return-stmt [zero-expr err-id])]
+                                  nil)]
+    [assign err-check]))
+
+(defn- emit-typed-direct-call
+  "Direct-call emit with per-arg coercion + result boxing. Branches on
+   the call entry's typed signature (param-specs + result-spec). Falls
+   back gracefully (returns nothing) when any arg can't be coerced —
+   call-assign-stmts then skips this branch and the next cond handles
+   the trampoline path."
+  [f closed-exprs target refs entry]
+  (let [arg-rids   (rest refs)
+        param-specs (vec (:param-specs entry))
+        result-spec (:result-spec entry)
+        coerced    (mapv (fn [rid spec] (coerce-arg-to-type f closed-exprs rid spec))
+                         arg-rids
+                         param-specs)
+        callee-ident (if (:native? entry)
+                       (gogen/field-sel
+                         (gogen/ident (pkg-alias-from (:go-pkg entry)))
+                         (:go-name entry))
+                       (gogen/ident (:go-name entry)))]
+    (when (every? identity coerced)
+      (let [raw-call (gogen/call callee-ident coerced)]
+        (cond
+          ;; (vm.Value, error) — current shape. Keep the existing
+          ;; assign + err-check path.
+          (and (= result-spec "vm.Value") (:needs-error? entry))
+          (emit-call-stmts f target raw-call)
+          ;; Typed result + no error: result := <call>; target = vm.<Box>(result)
+          (and (not (:needs-error? entry))
+               (not= result-spec "vm.Value"))
+          (let [boxed (box-result-from-type raw-call result-spec)]
+            [(gogen/assign "=" target boxed)])
+          ;; Typed result + error: result, err := <call>; if err return; target = vm.<Box>(result)
+          (and (:needs-error? entry)
+               (not= result-spec "vm.Value"))
+          (let [res-id (gogen/ident "result")
+                err-id (gogen/ident "callErr")
+                assign (gogen/multi-assign "=" [res-id err-id] [raw-call])
                 zero-expr (case (function-return-spec f)
                             "bool"    (gogen/ident "false")
                             "int"     (gogen/int-lit 0)
@@ -882,8 +931,82 @@
                 err-check (gogen/if-stmt nil
                                          (gogen/binary "!=" err-id (gogen/ident "nil"))
                                          [(gogen/return-stmt [zero-expr err-id])]
-                                         nil)]
-            [assign err-check]))))))
+                                         nil)
+                boxed (box-result-from-type res-id result-spec)
+                box-assign (gogen/assign "=" target boxed)]
+            [assign err-check box-assign])
+          ;; vm.Value result, no error: target = <call>
+          (= result-spec "vm.Value")
+          [(gogen/assign "=" target raw-call)]
+          :else nil)))))
+
+(defn- lookup-direct-callable
+  "Same-NS direct-call hit. Returns the registry entry when the callee
+   is a :load-var to a defn already registered in *lowered-registry*
+   that (a) lives in the SAME ns as the function being lowered, and
+   (b) has a vm.Value-only signature compatible with a bare Go call.
+
+   Returns nil if any condition fails; the caller falls back to the
+   trampoline (rt.LookupVar + rt.InvokeValue) when nil. Cross-ns is
+   intentionally deferred — adding it needs an import accumulator
+   threaded through lower-fn*, separate change."
+  [f callee-nid arg-count]
+  (when (= :load-var (ir/op callee-nid f))
+    (let [aux        (ir/aux callee-nid f)
+          sym        (try (symbol aux) (catch e nil))
+          callee-ns  (when sym (internal-ns-sym (namespace sym)))
+          callee-name (when sym (name sym))
+          key         (when (and callee-ns callee-name)
+                        (registry-key callee-ns callee-name arg-count))
+          entry      (when key (get *lowered-registry* key))]
+      (when (and entry
+                 ;; Same-ns OR cross-pkg native module. The native
+                 ;; case is what the rt.RegisterNativeModule registry
+                 ;; serves: arbitrary Go packages declaring fns that
+                 ;; let-go binds to a target namespace. We can call
+                 ;; them by their qualified Go ident
+                 ;; (<alias>.<GoIdent>) without any same-ns gate.
+                 (or (= (ns-name *ns*) callee-ns)
+                     (:native? entry))
+                 (not (:variadic? entry))
+                 ;; Param + result types must be ones we know how to
+                 ;; coerce. Complex types (func, slice, iter.Seq,
+                 ;; named external types) fall through to the
+                 ;; trampoline.
+                 (every? supported-coercion-type?
+                         (or (:param-specs entry) []))
+                 (supported-coercion-type? (:result-spec entry))
+                 ;; Same-NS lowered defns: accept vm.Value-only signatures
+                 ;; (all params and result are vm.Value). No error handling
+                 ;; shape gate — both (vm.Value, error) and vm.Value-only
+                 ;; can be direct-called now.
+                 ;; Native modules can use the typed path freely.
+                 (or (:native? entry)
+                     (and (= "vm.Value" (:result-spec entry))
+                          (every? (fn [s] (= "vm.Value" s))
+                                  (or (:param-specs entry) [])))))
+        (when (and *native-imports-used*
+                   (:native? entry)
+                   (:go-pkg entry))
+          (swap! *native-imports-used* conj (:go-pkg entry)))
+        entry))))
+
+(defn- call-assign-stmts [f closed-exprs nid]
+  (let [refs       (ir/refs nid f)
+        arg-count  (count (rest refs))
+        target     (if (used? f nid)
+                     (value-ident f nid)
+                     (gogen/ident "_"))
+        entry      (lookup-direct-callable f (first refs) arg-count)
+        direct     (when entry (emit-typed-direct-call f closed-exprs target refs entry))]
+    (if direct
+      direct
+      (let [callee     (box-as-value f closed-exprs (first refs))
+            arg-exprs  (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))
+            args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)
+            invoke     (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValue") [callee args-slice])]
+        (when (and callee (every? identity arg-exprs))
+          (emit-call-stmts f target invoke))))))
 
 (defn- lower-inst-stmts [f closed-exprs nid]
   (let [op  (ir/op nid f)

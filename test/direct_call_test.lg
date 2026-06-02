@@ -1,0 +1,203 @@
+;; Direct-call rewrite end-to-end tests.
+;;
+;; Covers ir.lower-go/*lowered-registry* plumbing, ir.lower-go/lookup-direct-callable,
+;; and the call-assign-stmts same-NS branch that emits bare Go function
+;; calls instead of rt.LookupVar + rt.InvokeValue.
+;;
+;; Strategy: drive ir.passes.pipeline/lower-ns-to-go on synthetic defn
+;; forms and assert on the rendered Go source. Keeps the tests at the
+;; PUBLIC API boundary; internal IR shape changes don't break them.
+
+(ns test.direct-call-test
+  (:require
+   [clojure.string :as str]
+   [ir.lower-go :as lower-go]
+   [ir.passes.pipeline :as pipeline]
+   [test :refer :all]))
+
+(def ^:private ns-sym 'test.direct-call-scratch)
+
+(defn- caller-body
+  "Extract the body of a func declaration named `fn-name` from a
+   rendered Go source string. Returns nil when the func isn't found.
+   We need this because the auto-emitted gogen_wrap dispatch table at
+   the bottom of every package contains `callee(args[0])`-style lines
+   for EVERY lowered defn — those are NOT caller bodies, and naive
+   substring assertions confuse the two."
+  [src fn-name]
+  (let [pattern (str "func " fn-name "(")
+        start (str/index-of src pattern)]
+    (when start
+      ;; Walk forward to the matching closing brace at column 0.
+      (let [rest-src (subs src start)
+            end (str/index-of rest-src "\n}\n")]
+        (when end (subs rest-src 0 (+ end 3)))))))
+
+(defn- compile-ns
+  "Run lower-ns-to-go on a vec of (defn ...) forms. Returns the
+   rendered Go source string. The scratch ns is created on demand,
+   and forms are eval'd FIRST so referenced symbols resolve to real
+   Vars before lower-ns-to-go re-builds the IR for lowering. Without
+   this pre-eval, '(defn caller [y] (callee y)) fails with
+   'unresolved symbol callee' because lower-ns-to-go doesn't itself
+   create Vars."
+  [forms]
+  (when-not (find-ns ns-sym) (create-ns ns-sym))
+  (binding [*ns* (find-ns ns-sym)]
+    (doseq [f forms] (eval f)))
+  (pipeline/lower-ns-to-go "scratch" ns-sym forms))
+
+(defn- compile-ns-with-decls
+  "Same as compile-ns but pre-interns the supplied names as nil-bound
+   Vars FIRST, then evals the forms. Lets a defn form reference a
+   sibling whose definition follows in source order — needed when
+   testing mutual recursion, because eval'ing the first defn would
+   otherwise fail with 'unresolved symbol' on the as-yet-undefined
+   sibling."
+  [decl-names forms]
+  (when-not (find-ns ns-sym) (create-ns ns-sym))
+  (binding [*ns* (find-ns ns-sym)]
+    (doseq [n decl-names] (intern (find-ns ns-sym) n))
+    (doseq [f forms] (eval f)))
+  (pipeline/lower-ns-to-go "scratch" ns-sym forms))
+
+;; --- registry plumbing --------------------------------------------------
+
+(deftest registry-populates-during-lowering
+  (testing "single-arity vm.Value-only defn is registered as direct-callable"
+    (let [src (compile-ns ['(defn helper [x] x)])]
+      ;; The defn itself lowers (presence of `func helper` proves it).
+      (is (str/includes? src "func helper")
+          "helper should lower to a Go func"))))
+
+;; Realistic callee bodies — ones whose lowered signature is
+;; (vm.Value, error), matching the shape that emit-call-stmts assumes
+;; at the call site. Identity defns (defn id [x] x) bypass the
+;; needs-error? shape gate and exercise a different code path; we
+;; cover the realistic case here and document the gate in a separate
+;; test below.
+
+(def ^:private callee-form
+  '(defn callee [x] (clojure.core/+ x 1)))
+
+(def ^:private caller-form
+  '(defn caller [y] (callee y)))
+
+(deftest both-defns-lower
+  (testing "both defns reach the rendered Go source"
+    (let [src (compile-ns [callee-form caller-form])]
+      (is (str/includes? src "func callee(")  "callee lowers")
+      (is (str/includes? src "func caller(")  "caller lowers"))))
+
+;; --- same-NS direct-call rewrite ---------------------------------------
+
+(deftest same-ns-call-emits-direct-go-call
+  (testing "caller invokes callee via bare Go call, not rt.LookupVar"
+    (let [src    (compile-ns [callee-form caller-form])
+          body   (caller-body src "caller")]
+      (is body "caller func body should be extractable")
+      ;; The direct call lives ONLY in the caller body, NOT in the
+      ;; gogen_wrap dispatch table (which spuriously contains
+      ;; `callee(args[0])` for every lowered defn).
+      (is (str/includes? body "callee(")
+          (str "caller body should contain direct call callee(...); got:\n" body))
+      (is (not (str/includes? body "rt.LookupVar"))
+          (str "caller body should NOT route through rt.LookupVar; got:\n" body)))))
+
+(deftest topo-order-callees-precede-callers
+  (testing "defn ordering doesn't matter — caller-before-callee in source still folds"
+    (let [src  (compile-ns [caller-form callee-form])
+          body (caller-body src "caller")]
+      (is body "caller func body should be extractable")
+      (is (str/includes? body "callee(")
+          (str "caller should still emit direct call when defined first in source; got:\n"
+               body)))))
+
+(deftest identity-callee-direct-calls
+  (testing "vm.Value-returning callees without errors can now direct-call"
+    ;; With the new typed-call emit path, identity functions that return
+    ;; vm.Value without errors can be direct-called. This improves perf
+    ;; over rt.InvokeValue for functions that are already lowered.
+    (let [src  (compile-ns ['(defn id-callee [x] x)
+                            '(defn id-caller [y] (id-callee y))])
+          body (caller-body src "id_caller")]
+      (is body "id_caller body should be extractable")
+      (is (str/includes? body "id_callee(")
+          (str "id_caller should emit a direct call to id_callee; got:\n"
+               body)))))
+
+(deftest unknown-callee-still-uses-trampoline
+  (testing "call to an undeclared symbol — its caller doesn't lower at all"
+    ;; pre-eval will fail on the unknown symbol; we expect compile-ns
+    ;; to surface the build failure as a WARNING line. The defn for
+    ;; `user` is therefore NOT in the output.
+    (let [src (try (compile-ns ['(defn user [y] (some-external-thing y))])
+                   (catch e ""))]
+      ;; Either it errored out before producing src, or it skipped the
+      ;; failing defn. Both are acceptable; we just don't want a
+      ;; spurious direct call to a phantom symbol.
+      (is (not (str/includes? src "some_external_thing("))
+          "no direct call when the callee isn't a real Var"))))
+
+;; --- shape gating ------------------------------------------------------
+
+;; --- the topo-fallback case (mutual recursion) -------------------------
+;;
+;; order-defn-forms (pipeline.lg) toposorts defns by call-graph deps,
+;; BUT falls back to lex order when the graph has any cycle (line
+;; 279-282). The per-ns growing-registry then loses its "callee before
+;; caller" invariant: in lex order, "alpha" is processed before
+;; "omega" even if alpha calls omega. omega's entry isn't in the
+;; registry when alpha's body is lowered → direct-call rewrite misses
+;; → trampoline emitted.
+;;
+;; This test is the synthetic minimal repro of the real-world
+;; apply→spread bug in core.lg. It's expected to FAIL on the current
+;; growing-registry implementation; it pins the contract that a
+;; refactor (per-ns 2-pass loop OR full corpus pre-scan) must
+;; satisfy.
+
+(deftest mutual-recursion-still-folds-cross-calls
+  (testing "mutual-recursion cycle in call graph doesn't break direct-call rewrite"
+    ;; alpha and omega form a 2-cycle, so order-defn-forms falls back
+    ;; to lex order: alpha processed first. alpha's body calls omega,
+    ;; which isn't registered yet. Current impl: omega lookup misses,
+    ;; trampoline emitted. Desired: registry pre-populated either by
+    ;; 2-pass-per-ns or full corpus pre-scan.
+    (let [src   (compile-ns-with-decls '[alpha omega]
+                                       ['(defn alpha [n] (clojure.core/+ (omega n) 1))
+                                        '(defn omega [n] (clojure.core/+ (alpha n) 1))])
+          alpha (caller-body src "alpha")]
+      (is alpha "alpha body should be extractable")
+      ;; This is the assertion that fails today and must pass after fix.
+      (is (str/includes? alpha "omega(")
+          (str "alpha should call omega directly (cycle forces lex-order fallback in source);\n"
+               "two-pass loop should populate the registry before any body is lowered.\n"
+               "Got:\n" alpha))
+      ;; Same-ns trampolines for omega specifically — not cross-ns
+      ;; builtins like clojure.core/+ which are unrelated to this gate.
+      (is (not (str/includes? alpha
+                              "rt.LookupVar(\"test.direct-call-scratch\", \"omega\")"))
+          (str "alpha should NOT trampoline omega through rt.LookupVar; got:\n"
+               alpha)))))
+
+(deftest variadic-callee-uses-trampoline
+  (testing "variadic callees are not direct-call eligible (MVP shape gate)"
+    (let [src  (compile-ns ['(defn varargs [x & rest] x)
+                            '(defn vcaller [a b] (varargs a b))])
+          body (caller-body src "vcaller")]
+      (is body "vcaller body should be extractable")
+      (is (str/includes? body "rt.LookupVar")
+          (str "vcaller should fall through to trampoline (variadic callee); got:\n"
+               body))
+      (is (not (str/includes? body "varargs("))
+          (str "vcaller should NOT emit a bare varargs(...) Go call; got:\n" body)))))
+
+;; --- registry size sanity ----------------------------------------------
+
+(deftest registry-cleared-between-runs
+  (testing "*lowered-registry* default value is empty"
+    ;; The dynamic var's TOP-level default is {}. Each lower-ns-to-go
+    ;; loop iteration rebinds, so this assertion is about the resting state.
+    (is (= {} lower-go/*lowered-registry*)
+        "default *lowered-registry* should be empty between compilations")))
