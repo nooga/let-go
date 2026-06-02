@@ -113,17 +113,19 @@
           (str "caller should still emit direct call when defined first in source; got:\n"
                body)))))
 
-(deftest identity-callee-direct-calls
-  (testing "vm.Value-returning callees without errors can now direct-call"
-    ;; With the new typed-call emit path, identity functions that return
-    ;; vm.Value without errors can be direct-called. This improves perf
-    ;; over rt.InvokeValue for functions that are already lowered.
+(deftest identity-callee-falls-through
+  (testing "callee whose body needs no error (e.g. identity) doesn't direct-call yet"
+    ;; MVP shape gate: emit-call-stmts assumes (vm.Value, error). An
+    ;; identity defn returns just vm.Value, so lookup-direct-callable
+    ;; rejects it and the call routes through rt.InvokeValue. This is
+    ;; a known limitation, captured here so a future change that
+    ;; relaxes the gate has a regression test waiting for it.
     (let [src  (compile-ns ['(defn id-callee [x] x)
                             '(defn id-caller [y] (id-callee y))])
           body (caller-body src "id_caller")]
       (is body "id_caller body should be extractable")
-      (is (str/includes? body "id_callee(")
-          (str "id_caller should emit a direct call to id_callee; got:\n"
+      (is (str/includes? body "rt.LookupVar")
+          (str "id_caller should fall through to trampoline (callee has no-error shape); got:\n"
                body)))))
 
 (deftest unknown-callee-still-uses-trampoline

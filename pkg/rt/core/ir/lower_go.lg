@@ -951,50 +951,33 @@
    intentionally deferred — adding it needs an import accumulator
    threaded through lower-fn*, separate change."
   [f callee-nid arg-count]
-  (when (= :load-var (ir/op callee-nid f))
-    (let [aux        (ir/aux callee-nid f)
-          sym        (try (symbol aux) (catch e nil))
-          callee-ns  (when sym (internal-ns-sym (namespace sym)))
-          callee-name (when sym (name sym))
-          key         (when (and callee-ns callee-name)
-                        (registry-key callee-ns callee-name arg-count))
-          entry      (when key (get *lowered-registry* key))]
+  (when (and (seq *lowered-registry*) (= :load-var (ir/op callee-nid f)))
+    (let [sym    (symbol (ir/aux callee-nid f))
+          sns    (namespace sym)
+          ns-sym (if sns (internal-ns-sym sns) nil)
+          ;; Match by name + arity; ns optional. During a namespace's
+          ;; Pass-2 the registry holds that ns's siblings plus native
+          ;; modules, so an unqualified call (ns-sym nil) matches its
+          ;; own sibling, and a qualified call matches the named ns.
+          ks     (filter (fn [[kns kname karity]]
+                           (and (= kname (name sym)) (= karity arg-count)
+                                (or (nil? ns-sym) (= ns-sym kns))))
+                         (keys *lowered-registry*))
+          entry  (some (fn [k] (get *lowered-registry* k)) ks)]
       (when (and entry
-                 ;; Same-ns OR cross-pkg native module. The native
-                 ;; case is what the rt.RegisterNativeModule registry
-                 ;; serves: arbitrary Go packages declaring fns that
-                 ;; let-go binds to a target namespace. We can call
-                 ;; them by their qualified Go ident
-                 ;; (<alias>.<GoIdent>) without any same-ns gate.
-                 (or (= (ns-name *ns*) callee-ns)
-                     (:native? entry))
                  (not (:variadic? entry))
-                 ;; Param + result types must be ones we know how to
-                 ;; coerce. Complex types (func, slice, iter.Seq,
-                 ;; named external types) fall through to the
-                 ;; trampoline.
-                 (every? supported-coercion-type?
-                         (or (:param-specs entry) []))
-                 (supported-coercion-type? (:result-spec entry))
-                 ;; Same-NS lowered defns: accept vm.Value-only signatures
-                 ;; (all params and result are vm.Value). No error handling
-                 ;; shape gate — both (vm.Value, error) and vm.Value-only
-                 ;; can be direct-called now.
-                 ;; Native modules can use the typed path freely.
-                 (or (:native? entry)
-                     (and (= "vm.Value" (:result-spec entry))
-                          (every? (fn [s] (= "vm.Value" s))
-                                  (or (:param-specs entry) [])))))
-        (when (and *native-imports-used*
-                   (:native? entry)
-                   (:go-pkg entry))
+                 ;; Param + result types must be coercion-supported;
+                 ;; complex types fall through to the trampoline.
+                 (every? supported-coercion-type? (or (:param-specs entry) []))
+                 (supported-coercion-type? (:result-spec entry)))
+        (when (and (:native? entry) (:go-pkg entry) *native-imports-used*)
           (swap! *native-imports-used* conj (:go-pkg entry)))
         entry))))
 
 (defn- call-assign-stmts [f closed-exprs nid]
   (let [refs       (ir/refs nid f)
         arg-count  (count (rest refs))
-        target     (if (used? f nid)
+        target     (if (live? f nid)
                      (value-ident f nid)
                      (gogen/ident "_"))
         entry      (lookup-direct-callable f (first refs) arg-count)
