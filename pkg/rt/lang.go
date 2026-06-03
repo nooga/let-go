@@ -1311,6 +1311,30 @@ var (
 	hostMethods   = map[vm.ValueType]map[vm.Symbol]vm.Fn{}
 )
 
+// hostClasses backs host-class resolution: a bare class symbol used as a
+// value (e.g. `java.util.Map`, `CharSequence` in `(instance? java.util.Map x)`)
+// resolves to a registered let-go value (typically a type). Like the
+// host-method seam, core ships the lookup; a compat module registers names.
+var (
+	hostClassesMu sync.RWMutex
+	hostClasses   = map[string]vm.Value{}
+)
+
+// RegisterHostClass maps a bare class name to a let-go value.
+func RegisterHostClass(name string, v vm.Value) {
+	hostClassesMu.Lock()
+	hostClasses[name] = v
+	hostClassesMu.Unlock()
+}
+
+// LookupHostClass resolves a registered host-class name.
+func LookupHostClass(name string) (vm.Value, bool) {
+	hostClassesMu.RLock()
+	defer hostClassesMu.RUnlock()
+	v, ok := hostClasses[name]
+	return v, ok
+}
+
 // RegisterHostMethod registers fn as the handler for `.name` on values whose
 // type is t. The handler is invoked with the receiver as its first argument.
 func RegisterHostMethod(t vm.ValueType, name vm.Symbol, fn vm.Fn) {
@@ -3207,6 +3231,20 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("register-host-method! expected a fn")
 		}
 		RegisterHostMethod(t, name, fn)
+		return vm.NIL, nil
+	})
+
+	// (register-host-class! "java.util.Map" value) — make a bare class symbol
+	// resolve to value (typically a let-go type) when used as a value.
+	registerHostClass, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("register-host-class! expected 2 arguments, got %d", len(vs))
+		}
+		name, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("register-host-class! expected a String class name")
+		}
+		RegisterHostClass(string(name), vs[1])
 		return vm.NIL, nil
 	})
 
@@ -5155,7 +5193,7 @@ func installLangNS() {
 		}
 		m, ok := vs[0].(vm.IMeta)
 		if !ok {
-			return vm.NIL, fmt.Errorf("with-meta not supported on %s", vs[0].Type().Name())
+			return vs[0], nil
 		}
 		return m.WithMeta(vs[1]), nil
 	})
@@ -6147,6 +6185,7 @@ func installLangNS() {
 	ns.Def("apply*", apply)
 	ns.Def("deref", deref)
 	ns.Def("register-host-method!", registerHostMethod)
+	ns.Def("register-host-class!", registerHostClass)
 
 	ns.Def("atom", atom)
 	ns.Def("reset!", reset)
@@ -7581,6 +7620,8 @@ outer:
 }
 
 func installClojureCompatAliases(ns *vm.Namespace) {
+	type compatObject struct{}
+
 	ns.Def("java.lang.Byte", vm.IntType)
 	ns.Def("java.lang.Short", vm.IntType)
 	ns.Def("java.lang.Integer", vm.IntType)
@@ -7619,6 +7660,24 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("Boolean", vm.BooleanType)
 	ns.Def("Integer.", ns.Lookup("int").(*vm.Var).Deref())
 	ns.Def("->Integer", ns.Lookup("int").(*vm.Var).Deref())
+
+	objectCtor, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.NewBoxed(&compatObject{}), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	ns.Def("Object.", objectCtor)
+	ns.Def("->Object", objectCtor)
+
+	booleanCtor, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.FALSE, nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	ns.Def("Boolean.", booleanCtor)
+	ns.Def("->Boolean", booleanCtor)
 
 	longNS := DefNSBare("Long")
 	longNS.Def("MAX_VALUE", longCompatValue(9223372036854775807))

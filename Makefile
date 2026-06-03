@@ -213,5 +213,20 @@ check-generated: $(GO)
 		exit 1; \
 	fi
 
+# Fanout ratchet: gate on the size of the generated -tags gogen_ir lowered tree.
+# Gates the byte-sum of ALREADY-TRACKED modules against a percent band; new
+# modules are exempt. Baseline is docs/perf/fanout-baseline.edn (committed).
+#   fanout-ratchet         regenerate tree, fail on tracked-module bloat > band
+#   fanout-ratchet-update  recompute + MIN-merge the baseline (tighten-only)
+#   fanout-ratchet-show    print current metrics, write nothing
+fanout-ratchet: build
+	./lg scripts/fanout-ratchet.lg check --go "$$(command -v go)"
+
+fanout-ratchet-update: build
+	./lg scripts/fanout-ratchet.lg update --go "$$(command -v go)"
+
+fanout-ratchet-show: build
+	./lg scripts/fanout-ratchet.lg show --go "$$(command -v go)"
+
 # PHONY targets are for ones that have conflicting files/dirs present:
-.PHONY: test bench-ratchet bench-ratchet-update bench-ratchet-show install-hooks check-generated
+.PHONY: test bench-ratchet bench-ratchet-update bench-ratchet-show install-hooks check-generated fanout-ratchet fanout-ratchet-update fanout-ratchet-show

@@ -584,13 +584,44 @@
 ;; FIXME: This only covers constructor forms that are meaningful in let-go's
 ;; runtime. It is not JVM interop.
 (defn let-go-new [class & args]
-  (case class
-    Boolean false
-    Object nil
-    nil))
+  (let [ctor-sym (symbol (str "->" class))
+        ctor-var (resolve ctor-sym)]
+    (cond
+      (nil? ctor-var)
+      (throw
+       (ex-info
+        (str "new: no constructor var " ctor-sym " for " class)
+        {:class class
+         :constructor ctor-sym
+         :check-type :constructor}))
+
+      (ifn? ctor-var)
+      (apply ctor-var args)
+
+      :else
+      (throw
+       (ex-info
+        (str "new: constructor var " ctor-sym " is not invokable")
+        {:class class
+         :constructor ctor-sym
+         :value ctor-var
+         :check-type :constructor})))))
 
 (defmacro new [class & args]
   `(let-go-new '~class ~@args))
+
+(defmacro register-constructor! [class ctor]
+  (let [class-name (cond
+                     (symbol? class) (str class)
+                     (string? class) class
+                     (and (seq? class)
+                          (= 'quote (first class))
+                          (symbol? (second class))) (str (second class))
+                     :else (throw (ex-info "register-constructor! expects a symbol or string literal class"
+                                           {:class class
+                                            :check-type :constructor})))
+        ctor-sym (symbol (str "->" class-name))]
+    `(def ~ctor-sym ~ctor)))
 
 (defmacro with-precision [precision & body]
   (let [rounding? (= :rounding (first body))

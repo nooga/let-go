@@ -1,0 +1,35 @@
+;; :main driver. Loads the shims, requires malli, then run.sh attaches a REPL
+;; (lg -r). aliases: m=core mt=transform mu=util me=error.
+(require 'malli-shims.prelude)
+(in-ns 'user)
+(require 'malli.core)
+(require 'malli.transform)
+(require 'malli.error)
+(alias 'm 'malli.core)
+(alias 'mt 'malli.transform)
+(alias 'me 'malli.error)
+
+;; --- extra namespaces that load cleanly ---
+(require 'malli.util) (alias 'mu 'malli.util)   ; schema algebra: merge / closed / optional
+
+;; --- ready ---
+(println "")
+(println "  malli is loaded.  m=malli.core mt=malli.transform mu=malli.util me=malli.error")
+(println "")
+(println "  human-readable errors:")
+(println "    (me/humanize (m/explain [:map [:a :int] [:b :string]] {:a \"x\"}))")
+(println "    (me/humanize (m/explain [:map [:items [:vector :int]]] {:items [1 \"x\" 3]}))")
+(println "  validate / explain:")
+(println "    (m/validate [:map [:a :int]] {:a 1})")
+(println "    (m/explain  [:map [:a :int]] {:a \"bad\"})")
+(println "  parse a sequence into tagged values:")
+(println "    (m/parse [:catn [:x :int] [:y :string]] [1 \"hi\"])")
+(println "    (m/parse [:orn  [:i :int] [:s :string]] \"hi\")")
+(println "  schema algebra (malli.util):")
+(println "    (m/form (mu/merge [:map [:a :int]] [:map [:b :string]]))")
+(println "  coercion transformers:")
+(println "    (m/decode [:map [:a {:default 5} :int]] {} (mt/default-value-transformer))")
+(println "    (m/decode [:map [:a :int]] {:a 1 :b 2} (mt/strip-extra-keys-transformer))")
+(println "  function schema:")
+(println "    (m/validate [:=> [:cat :int] :int] inc)")
+(println "")

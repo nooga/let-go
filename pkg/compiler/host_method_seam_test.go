@@ -67,3 +67,19 @@ func TestHostMethodSeam(t *testing.T) {
 		t.Fatalf("registered .pop must win over core pop: want 99, got %v", v)
 	}
 }
+
+func TestHostClassSeam(t *testing.T) {
+	runHM(t, `(register-host-class! "java.util.Map" (type {}))`)
+	if v := runHM(t, `(instance? java.util.Map {})`); v != vm.TRUE {
+		t.Fatalf("registered host class should resolve in instance?: want true, got %v", v)
+	}
+}
+
+func TestWithMetaOnProtocolDoesNotError(t *testing.T) {
+	v := runHM(t, `(do
+                     (defprotocol P (f [x]))
+                     (with-meta P {:tag :compat}))`)
+	if _, ok := v.(*vm.Protocol); !ok {
+		t.Fatalf("with-meta on protocol should return the protocol, got %T (%v)", v, v)
+	}
+}

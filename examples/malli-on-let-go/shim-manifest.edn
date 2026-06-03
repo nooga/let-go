@@ -1,0 +1,54 @@
+;; malli-compat shim manifest for let-go.
+;; Declares exactly what host-interop surface metosin/malli requires to LOAD on
+;; let-go under the :bb+:clj reader lens. "How much shimming" = the counts below.
+;; Each entry: what malli references, and how the compat layer satisfies it.
+{:lens {:read-bb true :read-clj true}      ; reader feature flags required
+
+ ;; (1) Host CLASSES used as values (instance? / class keys). Resolved to a
+ ;;     let-go type via register-host-class!.  [count 4]
+ :host-classes
+ {"java.util.Map"          (type {})
+  "java.util.AbstractList" (type [])
+  "java.util.Vector"       (type [])
+  "CharSequence"           (type "")}
+
+ ;; (2) Host CONSTRUCTORS  (ClassName. ...) -> ->ClassName.  [count 4]
+ :host-constructors
+ {"MapEntry"   :lg/map-entry          ; (first (hash-map k v))
+  "FutureTask" :lg/future-task        ; goroutine future + 3-arg deref
+  "Thread"     :lg/thread
+  "HashMap"    :lg/mutable-map}        ; ^:mutable-deftype + seam
+
+ ;; (3) Host METHODS on the constructed objects, via register-host-method!.
+ ;;     [count 6]
+ :host-methods
+ {"Thread"     ["start"]
+  "FutureTask" ["get" "cancel"]
+  "HashMap"    ["putAll" "get"]
+  :type/type   ["isArray"]}            ; (.isArray (class x)) -> false
+
+ ;; (4) Host STATIC members (Class/MEMBER).  [count 2]
+ :host-statics
+ {"System/arraycopy"      :lg/arraycopy
+  "TimeUnit/MILLISECONDS" :millis}
+
+ ;; (5) clojure.core fns missing from let-go (candidates to add to lg core).
+ ;;     [count 5]
+ :missing-core-fns
+ ["unchecked-inc-int" "unchecked-dec-int" "unchecked-add-int"
+  "unchecked-multiply-int" "indexed?"]
+
+ ;; (6) clojure.core machinery stubbed.  [count 1]
+ :stdlib-stubs
+ ["print-method"]
+
+ ;; (7) Namespace stubs (avoid external deps).  [count 1]
+ :ns-stubs
+ {"malli.sci" :stub/sci-disabled}      ; avoids borkdude.dynaload; :fn schemas off
+
+ ;; Totals — the whole compat surface to LOAD malli core + impl.* + registry.
+ :summary
+ {:host-classes 4 :host-constructors 4 :host-methods 6 :host-statics 2
+  :missing-core-fns 5 :stdlib-stubs 1 :ns-stubs 1
+  :external-go-deps 0                  ; pure-.lg + core re2; no gojava/regexp2
+  :malli-source-edits 0}}             ; stock malli, unmodified

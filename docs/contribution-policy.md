@@ -1,3 +1,17 @@
+---
+status: active
+last-verified: 2026-06-01
+authoritative-for:
+  - design-contracts
+  - regression-checkpoints
+  - callback-error-contract
+  - go-deps-schema
+  - host-interop-syntax-map
+  - wasm-constraints
+supersedes:
+  - master-plan.md (on direction — self-host as committed direction, gogen_ir as deployment path)
+---
+
 # Contribution policy
 
 This document captures the design contracts, regression checkpoints, and

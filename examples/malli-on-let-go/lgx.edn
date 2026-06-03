@@ -1,0 +1,10 @@
+{:deps {metosin/malli {:local/root "/Users/ndn/development/malli"
+                       :deps/root "src"}}
+ :paths ["src"]
+ :main "repl.lg"}
+
+;; Dependency manifest (lgx). malli is pulled in via :local/root; the shim
+;; namespace (malli-shims.prelude) lives under this project's own :paths.
+;; To pin an upstream malli instead of a local checkout, swap the coord to:
+;;   metosin/malli {:git/url "https://github.com/metosin/malli"
+;;                  :git/sha "<sha>" :deps/root "src"}

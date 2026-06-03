@@ -1,0 +1,6 @@
+;; Stub for malli.sci: avoids the borkdude.dynaload/sci dependency. SCI-backed
+;; :fn schemas are unsupported (they fail! when actually evaluated), but basic
+;; validation never calls eval, so malli.core loads and validates fine.
+(ns malli.sci)
+(defn evaluator [options fail!]
+  (fn [] (fn [code] (fail! code))))
