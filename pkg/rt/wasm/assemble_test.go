@@ -9,13 +9,13 @@ import (
 
 var updateGolden = flag.Bool("update", false, "update golden files in testdata/")
 
-// TestAssembleHTMLGolden guards the byte-identity claim that backs the
-// "pure refactor" framing of the lg-host.js extraction. AssembleHTML is
-// a pure function; given fixed inputs it must produce a fixed output.
-// Any drift in host.html, lg-host.js, the markers, or the assembly
-// logic shows up as a diff against testdata/assemble_golden.html.
+// TestAssembleHTMLGolden pins the assembled HTML against
+// testdata/assemble_golden.html. Any edit to host.html, lg-host.js, the
+// markers, or the assembly logic that changes the bundle `lg -w` ships
+// surfaces as a golden diff.
 //
-// Regenerate after intentional changes:
+// This is a self-consistency pin, not a byte-identity guarantee against
+// any prior implementation. Regenerate after intentional changes:
 //
 //	go test ./pkg/rt/wasm -update
 func TestAssembleHTMLGolden(t *testing.T) {
