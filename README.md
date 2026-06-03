@@ -84,7 +84,7 @@ lens, with no known failures, compile skips, panic skips, or runtime skips.
 | `clojure.pprint`     | `pprint`, `cl-format`                                                                                                                                                                         |
 | `clojure.test`       | `deftest`, `is`, `testing`, `are`, fixtures                                                                                                                                                   |
 | `clojure.core.async` | channels, `go`/`go-loop`, `alts!`, `mult`/`pub`, `pipe`/`merge`/`split` (real goroutines, not IOC)                                                                                            |
-| `io`                 | polymorphic readers/writers, `slurp`/`spit`, lazy line-seq, encoding, URLs, `with-open`                                                                                                       |
+| `io`                 | polymorphic readers/writers, `slurp`/`spit`, lazy line-seq, encoding, URLs, `with-open`, `resource` (filesystem in dev, embedded in `-b` binaries)                                                |
 | `http`               | Ring-style server + client, streaming responses                                                                                                                                               |
 | `json`               | `read-json`, `write-json` (float-preserving, record-aware)                                                                                                                                    |
 | `transit`            | transit+json codec with rolling cache                                                                                                                                                         |
@@ -286,6 +286,40 @@ The `*compiling-aot*` var is `true` during `-c`/`-b`/`-w` compilation and
 ```
 
 `*in-wasm*` is `true` when running inside a WASM build.
+
+### Resources
+
+Programs can read non-source files (templates, static web assets, data) via
+`io/resource`, which returns a reader-coercible handle (or `nil` if missing)
+that composes with `io/slurp`, `io/reader`, and `io/line-seq`:
+
+```clojure
+(when-let [r (io/resource "templates/index.html")]
+  (io/slurp r))                     ; => the file contents, or skips if absent
+```
+
+Resource roots are given explicitly with `-resource-paths` (path-list
+separated by `:` on Unix, `;` on Windows), or via the `LG_RESOURCE_PATHS`
+env var. Resources are addressed by their path relative to a root; with
+multiple roots, the first match wins.
+
+```bash
+lg -resource-paths resources app.lg          # dev: read from ./resources
+```
+
+When you bundle with `-b`, every file under the resource roots is embedded in
+the binary, so `io/resource` works on any machine with no files alongside it:
+
+```bash
+lg -b myapp -resource-paths resources app.lg  # embed resources into the binary
+./myapp                                        # io/resource reads embedded copies
+```
+
+A bundled binary reads **only** its embedded resources — it ignores the
+ambient filesystem, so deployment is self-contained and predictable. There is
+no default resource directory; `lg` is explicit-only. Project tooling such as
+[lgx](https://github.com/nooga/lgx) owns conventions like a default
+`resources/` dir and passes `-resource-paths` for you.
 
 ## nREPL
 

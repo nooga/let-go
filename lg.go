@@ -24,8 +24,15 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// Footer appended to standalone binaries: [lgb data][8-byte size][4-byte magic]
+// Trailers appended to standalone binaries.
+//
+// Legacy (no resources): [lgb data][8-byte lgbSize][4-byte 'LGBX']  (12-byte trailer)
+// v2    (resources):     [lgb data][resource archive][8-byte lgbSize][8-byte resSize][4-byte 'LGB2']  (20-byte trailer)
+//
+// A v2 trailer is written only when the bundle carries resources; resource-less
+// bundles keep the byte-identical legacy trailer. Readers recognize both.
 var bundleMagic = [4]byte{'L', 'G', 'B', 'X'}
+var bundleMagicV2 = [4]byte{'L', 'G', 'B', '2'}
 
 func versionString() string {
 	if commit != "none" && len(commit) > 7 {
@@ -115,9 +122,11 @@ func runLGB(filename string) error {
 	return err
 }
 
-// checkBundledLGB checks if the current executable has an appended LGB payload.
-// Returns the LGB data or nil if no payload is found.
-func checkBundledLGB() []byte {
+// checkBundledLGB checks if the current executable has an appended payload.
+// Returns the LGB bytecode and (for a v2 bundle) the gzipped resource archive;
+// both are nil when no payload is found. The resource archive is nil for a
+// legacy bundle or one built without resources.
+func checkBundledLGB() (lgb []byte, res []byte) {
 	candidates := make([]string, 0, 3)
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		candidates = append(candidates, exe)
@@ -133,51 +142,99 @@ func checkBundledLGB() []byte {
 			continue
 		}
 		seen[path] = true
-		if data := readBundledLGB(path); data != nil {
-			return data
+		if data, resData := readBundledLGB(path); data != nil {
+			return data, resData
 		}
 	}
-	return nil
+	return nil, nil
 }
 
-func readBundledLGB(path string) []byte {
+// readBundledLGB extracts the appended payload from the file at path. It
+// recognizes both the v2 (resource-carrying) trailer and the legacy trailer;
+// res is nil for legacy bundles.
+func readBundledLGB(path string) (lgb []byte, res []byte) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	defer f.Close()
 
-	// Read the 12-byte footer: [8-byte size][4-byte magic]
-	_, err = f.Seek(-12, io.SeekEnd)
-	if err != nil {
-		return nil
+	// Read the 4-byte trailing magic to discriminate the trailer format.
+	if _, err := f.Seek(-4, io.SeekEnd); err != nil {
+		return nil, nil
 	}
-	var footer [12]byte
-	if _, err := io.ReadFull(f, footer[:]); err != nil {
-		return nil
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return nil, nil
 	}
-	if footer[8] != bundleMagic[0] || footer[9] != bundleMagic[1] ||
-		footer[10] != bundleMagic[2] || footer[11] != bundleMagic[3] {
-		return nil
-	}
-	lgbSize := binary.LittleEndian.Uint64(footer[:8])
 
-	// Seek to start of LGB data
-	_, err = f.Seek(-12-int64(lgbSize), io.SeekEnd)
-	if err != nil {
-		return nil
+	switch magic {
+	case bundleMagicV2:
+		// 20-byte trailer: [8-byte lgbSize][8-byte resSize][4-byte 'LGB2']
+		if _, err := f.Seek(-20, io.SeekEnd); err != nil {
+			return nil, nil
+		}
+		var tr [20]byte
+		if _, err := io.ReadFull(f, tr[:]); err != nil {
+			return nil, nil
+		}
+		lgbSize := binary.LittleEndian.Uint64(tr[0:8])
+		resSize := binary.LittleEndian.Uint64(tr[8:16])
+		// Payload layout: [lgb][resArc][trailer]
+		if _, err := f.Seek(-20-int64(resSize)-int64(lgbSize), io.SeekEnd); err != nil {
+			return nil, nil
+		}
+		lgb = make([]byte, lgbSize)
+		if _, err := io.ReadFull(f, lgb); err != nil {
+			return nil, nil
+		}
+		if resSize > 0 {
+			res = make([]byte, resSize)
+			if _, err := io.ReadFull(f, res); err != nil {
+				return nil, nil
+			}
+		}
+		return lgb, res
+	case bundleMagic:
+		// 12-byte legacy trailer: [8-byte lgbSize][4-byte 'LGBX']
+		if _, err := f.Seek(-12, io.SeekEnd); err != nil {
+			return nil, nil
+		}
+		var footer [12]byte
+		if _, err := io.ReadFull(f, footer[:]); err != nil {
+			return nil, nil
+		}
+		lgbSize := binary.LittleEndian.Uint64(footer[:8])
+		if _, err := f.Seek(-12-int64(lgbSize), io.SeekEnd); err != nil {
+			return nil, nil
+		}
+		lgb = make([]byte, lgbSize)
+		if _, err := io.ReadFull(f, lgb); err != nil {
+			return nil, nil
+		}
+		return lgb, nil
+	default:
+		return nil, nil
 	}
-	data := make([]byte, lgbSize)
-	if _, err := io.ReadFull(f, data); err != nil {
-		return nil
-	}
-	return data
 }
 
 // bundleBinary creates a standalone executable by copying the lg binary
 // and appending the compiled LGB + footer.
 func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string, basePath string) error {
 	ctx.SetSource(src)
+
+	// Snapshot the resource roots and output path *before* compiling — and
+	// absolutize them against the current cwd — because CompileMultiple runs
+	// the program's top-level forms, which may change the working directory.
+	// Relative roots resolved afterward would point at the wrong place.
+	resRoots := buildResourcePaths()
+	for i, r := range resRoots {
+		if abs, aerr := filepath.Abs(r); aerr == nil {
+			resRoots[i] = abs
+		}
+	}
+	dstAbs, _ := filepath.Abs(dst)
+
 	f, err := os.Open(src)
 	if err != nil {
 		return err
@@ -202,6 +259,23 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 	} else {
 		if err := bytecode.EncodeCompilation(&lgbBuf, ctx.Consts(), chunk); err != nil {
 			return err
+		}
+	}
+	lgbData := lgbBuf.Bytes()
+
+	// Collect resources under the -resource-paths roots *before* creating the
+	// output file, and exclude the output path itself — otherwise a dst that
+	// lives inside a resource root would embed its own (in-progress) binary.
+	// resRoots/dstAbs were snapshot before user code ran (see top of func).
+	resFiles, err := collectResources(resRoots, dstAbs)
+	if err != nil {
+		return fmt.Errorf("collecting resources: %w", err)
+	}
+	var resArc []byte
+	if len(resFiles) > 0 {
+		resArc, err = rt.EncodeResourceArchive(resFiles)
+		if err != nil {
+			return fmt.Errorf("encoding resources: %w", err)
 		}
 	}
 
@@ -236,12 +310,27 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 	}
 
 	// Append LGB data
-	lgbData := lgbBuf.Bytes()
 	if _, err := out.Write(lgbData); err != nil {
 		return err
 	}
 
-	// Append footer: [8-byte size][4-byte magic]
+	// Embed the resource archive (if any) between the lgb and the trailer.
+	if len(resArc) > 0 {
+		if _, err := out.Write(resArc); err != nil {
+			return err
+		}
+		// v2 trailer: [8-byte lgbSize][8-byte resSize][4-byte 'LGB2']
+		var tr [20]byte
+		binary.LittleEndian.PutUint64(tr[0:8], uint64(len(lgbData)))
+		binary.LittleEndian.PutUint64(tr[8:16], uint64(len(resArc)))
+		copy(tr[16:], bundleMagicV2[:])
+		if _, err := out.Write(tr[:]); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// No resources: legacy trailer [8-byte lgbSize][4-byte 'LGBX'].
 	var footer [12]byte
 	binary.LittleEndian.PutUint64(footer[:8], uint64(len(lgbData)))
 	copy(footer[8:], bundleMagic[:])
@@ -249,6 +338,105 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 		return err
 	}
 
+	return nil
+}
+
+// collectResources returns a map of slash-relative path → file bytes for every
+// regular file reachable under the resource roots. It follows symlinks
+// everywhere the dev FS provider does (which resolves names with os.Stat) — to
+// symlinked roots, symlinked sub-directories, and symlinked files — so a -b
+// bundle embeds exactly what dev lookup would find. Symlink cycles are guarded
+// by real-path. When the same relative path exists under multiple roots the
+// first root wins (matching the provider's precedence). The bundle's own output
+// file (excludeAbs) is never embedded, so a dst inside a resource root can't
+// embed itself.
+func collectResources(roots []string, excludeAbs string) (map[string][]byte, error) {
+	files := map[string][]byte{}
+	var exclude os.FileInfo
+	if excludeAbs != "" {
+		// os.Stat (not Lstat) so the comparison is symlink/hardlink robust.
+		if fi, err := os.Stat(excludeAbs); err == nil {
+			exclude = fi
+		}
+	}
+	for _, root := range roots {
+		realRoot, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			continue // missing or dangling root
+		}
+		absRoot, err := filepath.Abs(realRoot)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(absRoot); err != nil || !info.IsDir() {
+			continue
+		}
+		ancestors := map[string]bool{}
+		if err := collectResourceDir(absRoot, absRoot, "", files, exclude, ancestors); err != nil {
+			return nil, err
+		}
+	}
+	return files, nil
+}
+
+// collectResourceDir recursively collects regular files under dir (an absolute,
+// symlink-resolved directory inside rootReal) into files, keyed by relPrefix +
+// entry name (slash-separated). Symlinks to files and sub-directories are
+// followed, but only when they resolve to a path inside rootReal — a symlink
+// escaping the root (e.g. `up -> ..`) is skipped, so a bundle never embeds
+// files outside the declared resource tree. ancestors holds the resolved
+// directory paths on the current descent path; revisiting one is a cycle and is
+// skipped (while distinct names aliasing the same in-root dir are both kept).
+func collectResourceDir(dir, rootReal, relPrefix string, files map[string][]byte, exclude os.FileInfo, ancestors map[string]bool) error {
+	if ancestors[dir] {
+		return nil // symlink cycle
+	}
+	ancestors[dir] = true
+	defer delete(ancestors, dir)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		key := e.Name()
+		if relPrefix != "" {
+			key = relPrefix + "/" + e.Name()
+		}
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			continue // dangling symlink, race — skip
+		}
+		// Containment: never follow a symlink that escapes the resource root.
+		if !rt.WithinRoot(rootReal, real) {
+			continue
+		}
+		info, err := os.Stat(real)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			if err := collectResourceDir(real, rootReal, key, files, exclude, ancestors); err != nil {
+				return err
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			continue // FIFO, device, socket
+		}
+		if exclude != nil && os.SameFile(info, exclude) {
+			continue // never embed the bundle's own output file
+		}
+		if _, exists := files[key]; exists {
+			continue // first root wins
+		}
+		data, err := os.ReadFile(real)
+		if err != nil {
+			return err
+		}
+		files[key] = data
+	}
 	return nil
 }
 
@@ -262,18 +450,38 @@ func getBaseBinarySize(f *os.File) (int64, error) {
 	if total < 12 {
 		return total, nil
 	}
-	// Check for existing bundle footer
-	f.Seek(-12, io.SeekEnd)
-	var footer [12]byte
-	if _, err := io.ReadFull(f, footer[:]); err != nil {
+	// Discriminate the trailer by its trailing 4-byte magic.
+	if _, err := f.Seek(-4, io.SeekEnd); err != nil {
 		return total, nil
 	}
-	if footer[8] == bundleMagic[0] && footer[9] == bundleMagic[1] &&
-		footer[10] == bundleMagic[2] && footer[11] == bundleMagic[3] {
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return total, nil
+	}
+	switch magic {
+	case bundleMagicV2:
+		if total < 20 {
+			return total, nil
+		}
+		f.Seek(-20, io.SeekEnd)
+		var tr [20]byte
+		if _, err := io.ReadFull(f, tr[:]); err != nil {
+			return total, nil
+		}
+		lgbSize := binary.LittleEndian.Uint64(tr[0:8])
+		resSize := binary.LittleEndian.Uint64(tr[8:16])
+		return total - int64(lgbSize) - int64(resSize) - 20, nil
+	case bundleMagic:
+		f.Seek(-12, io.SeekEnd)
+		var footer [12]byte
+		if _, err := io.ReadFull(f, footer[:]); err != nil {
+			return total, nil
+		}
 		lgbSize := binary.LittleEndian.Uint64(footer[:8])
 		return total - int64(lgbSize) - 12, nil
+	default:
+		return total, nil
 	}
-	return total, nil
 }
 
 func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string) error {
@@ -334,6 +542,7 @@ var bundleOutput string
 var bundleBase string
 var wasmOutput string
 var sourcePaths string
+var resourcePaths string
 
 func init() {
 	flag.BoolVar(&runREPL, "r", false, "attach REPL after running given files")
@@ -350,6 +559,10 @@ func init() {
 	flag.StringVar(&sourcePaths, "source-paths", "",
 		"additional namespace search paths separated by the OS path-list separator "+
 			"(':' on Unix, ';' on Windows). Falls back to LG_SOURCE_PATHS if unset.")
+	flag.StringVar(&resourcePaths, "resource-paths", "",
+		"resource root directories for io/resource, separated by the OS path-list "+
+			"separator (':' on Unix, ';' on Windows). Falls back to LG_RESOURCE_PATHS "+
+			"if unset. With -b, resources under these roots are embedded in the binary.")
 }
 
 // buildSearchPaths resolves the resolver's path list from the -source-paths
@@ -369,6 +582,28 @@ func buildSearchPaths() []string {
 		return append([]string{"."}, depsPaths...)
 	}
 	return []string{"."}
+}
+
+// buildResourcePaths resolves the io/resource search roots from the
+// -resource-paths flag (preferred) or the LG_RESOURCE_PATHS env var. Unlike
+// buildSearchPaths it is explicit-only: it does NOT prepend "." and does NOT
+// consult deps.edn. Returns nil when neither is set. Project-level config
+// (e.g. a conventional resources/ dir) is owned by lgx, which passes this flag.
+func buildResourcePaths() []string {
+	// An explicit -resource-paths wins even when empty, so `-resource-paths ""`
+	// clears the LG_RESOURCE_PATHS fallback (the flag is documented as
+	// preferred). Mirrors buildSearchPaths.
+	explicitSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "resource-paths" {
+			explicitSet = true
+		}
+	})
+	raw := resourcePaths
+	if !explicitSet {
+		raw = os.Getenv("LG_RESOURCE_PATHS")
+	}
+	return resolver.ParseSearchPaths(raw)
 }
 
 func initCompiler(debug bool) *compiler.Context {
@@ -392,12 +627,23 @@ func main() {
 
 	// Check for appended LGB payload before anything else.
 	// If found, we're a standalone binary — run it directly.
-	if lgbData := checkBundledLGB(); lgbData != nil {
+	if lgbData, resData := checkBundledLGB(); lgbData != nil {
 		// Set up resolver so embedded namespaces (string, set, etc.) can load
 		ctx := initCompiler(false)
 		nsResolver := resolver.NewNSResolver(ctx, buildSearchPaths())
 		rt.SetNSLoader(nsResolver)
 		defer rt.ShutdownAllPods()
+
+		// Resources are self-contained in a bundle: serve io/resource from the
+		// embedded archive only, ignoring the filesystem and -resource-paths.
+		if resData != nil {
+			files, err := rt.DecodeResourceArchive(resData)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: decoding embedded resources: %v\n", err)
+				os.Exit(1)
+			}
+			rt.SetResourceProvider(rt.NewEmbeddedResourceProvider(files))
+		}
 
 		resolve := func(nsName, name string) *vm.Var {
 			n := rt.DefNSBare(nsName)
@@ -451,6 +697,13 @@ func main() {
 	context := initCompiler(debug)
 	nsResolver := resolver.NewNSResolver(context, buildSearchPaths())
 	rt.SetNSLoader(nsResolver)
+
+	// Dev/run resources: serve io/resource from the -resource-paths roots on
+	// the filesystem. (In a bundled binary this branch is never reached — the
+	// embedded provider is installed earlier, before flag.Parse.)
+	if rp := buildResourcePaths(); len(rp) > 0 {
+		rt.SetResourceProvider(rt.NewFSResourceProvider(rp))
+	}
 
 	// Compile mode: compile .lg → .lgb
 	if compileOutput != "" || bundleOutput != "" || wasmOutput != "" {
