@@ -1,9 +1,9 @@
+//go:build unix
+
 /*
  * Copyright (c) 2026 let-go contributors; see CONTRIBUTORS.
  * SPDX-License-Identifier: MIT
  */
-
-//go:build unix
 
 package rt
 

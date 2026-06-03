@@ -588,7 +588,7 @@ func buildSearchPaths() []string {
 // -resource-paths flag (preferred) or the LG_RESOURCE_PATHS env var. Unlike
 // buildSearchPaths it is explicit-only: it does NOT prepend "." and does NOT
 // consult deps.edn. Returns nil when neither is set. Project-level config
-// (e.g. a conventional resources/ dir) is owned by external tools, 
+// (e.g. a conventional resources/ dir) is owned by external tools,
 // which passes this flag.
 func buildResourcePaths() []string {
 	// An explicit -resource-paths wins even when empty, so `-resource-paths ""`
