@@ -1,5 +1,7 @@
 # Unify Bundle Trailer Parser Implementation Plan
 
+> **Status: ✅ COMPLETED (2026-06-03).** See the Implementation Summary at the end.
+
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Collapse the two standalone-binary trailer parsers in `lg.go` into one validated helper, restoring dropped error checks and guarding against a corrupt trailer that can panic at `make([]byte, lgbSize)`.
@@ -98,3 +100,17 @@ Existing `TestResourceBundle` and `TestLegacyBundleStillRuns` must still pass (r
 
 - [ ] **Step 6: Commit**
   `git commit -m "refactor(lg): single validated bundle-trailer parser; guard corrupt sizes"`
+
+---
+
+## Implementation Summary (2026-06-03)
+
+Done in commit `5e97654` (`lg.go`, `resources_e2e_test.go`).
+
+- Added `bundleKind` (`bundleNone`/`bundleLegacy`/`bundleV2`) with a `trailerLen()` method, and one `parseBundleTrailer(f)` that discriminates the magic, reads the 12-/20-byte trailer with every `Seek`/`ReadFull` error checked, and validates the claimed payload against the file size.
+- Rewired `readBundledLGB` (returns `nil, nil` on a corrupt or absent trailer — no panic) and `getBaseBinarySize` (propagates a `"corrupt bundle"` error, returns `total` for a non-bundle) onto the helper. Both lost their duplicated parsing.
+- Size guard lives in `payloadFitsFile`, which subtracts step by step instead of summing, so the fit test can't overflow `uint64` on a huge/sparse file with crafted sizes.
+
+**Issue encountered (caught by codex review):** the first guard summed the sizes (`lgb + res + trailerLen`), which can wrap `uint64` when each field is individually `≤ total` on a near-`MaxInt64` file. Replaced with the subtractive `payloadFitsFile` and added `TestPayloadFitsFile` covering the overflow case directly (deterministic, no huge file needed).
+
+**Verification:** `TestParseBundleTrailer`, `TestPayloadFitsFile`, `TestResourceBundle`, and `TestLegacyBundleStillRuns` pass; `gofmt`/`go vet`/`go build` clean; `golangci-lint` reports 0 issues; final codex review found nothing.
