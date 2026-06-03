@@ -6,6 +6,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,123 @@ import (
 	"strings"
 	"testing"
 )
+
+// writeTrailerFile builds base+lgb+res bytes followed by a trailer using the
+// given raw size fields, so tests can craft both valid and corrupt trailers.
+// kind is "lgbx", "lgb2", or "none".
+func writeTrailerFile(t *testing.T, base, lgb, res []byte, kind string, lgbSizeField, resSizeField uint64) string {
+	t.Helper()
+	buf := append([]byte{}, base...)
+	buf = append(buf, lgb...)
+	buf = append(buf, res...)
+	switch kind {
+	case "lgbx":
+		var tr [12]byte
+		binary.LittleEndian.PutUint64(tr[:8], lgbSizeField)
+		copy(tr[8:], bundleMagic[:])
+		buf = append(buf, tr[:]...)
+	case "lgb2":
+		var tr [20]byte
+		binary.LittleEndian.PutUint64(tr[0:8], lgbSizeField)
+		binary.LittleEndian.PutUint64(tr[8:16], resSizeField)
+		copy(tr[16:], bundleMagicV2[:])
+		buf = append(buf, tr[:]...)
+	case "none":
+		// no trailer
+	}
+	p := filepath.Join(t.TempDir(), "bin")
+	if err := os.WriteFile(p, buf, 0644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func baseSize(t *testing.T, path string) (int64, error) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	return getBaseBinarySize(f)
+}
+
+func TestPayloadFitsFile(t *testing.T) {
+	const maxI64 = int64(^uint64(0) >> 1) // math.MaxInt64
+	cases := []struct {
+		name           string
+		lgb, res       uint64
+		trailer, total int64
+		want           bool
+	}{
+		{"legacy fits", 7, 0, 12, 30, true},
+		{"v2 fits exactly", 3, 6, 20, 29, true},
+		{"lgb exceeds file", 30, 0, 12, 30, false},
+		{"huge lgb", 0xFFFFFFFFFFFFFFFF, 0, 20, 30, false},
+		// Each size <= total, but lgb+res+trailer would overflow uint64 if summed.
+		{"sum overflows uint64", uint64(maxI64), uint64(maxI64), 20, maxI64, false},
+	}
+	for _, c := range cases {
+		if got := payloadFitsFile(c.lgb, c.res, c.trailer, c.total); got != c.want {
+			t.Errorf("%s: payloadFitsFile(%d,%d,%d,%d) = %v, want %v",
+				c.name, c.lgb, c.res, c.trailer, c.total, got, c.want)
+		}
+	}
+}
+
+func TestParseBundleTrailer(t *testing.T) {
+	base := []byte("BASEBINARY") // len 10
+
+	t.Run("valid LGBX", func(t *testing.T) {
+		lgb := []byte("LGBDATA")
+		p := writeTrailerFile(t, base, lgb, nil, "lgbx", uint64(len(lgb)), 0)
+		gotLgb, gotRes := readBundledLGB(p)
+		if string(gotLgb) != "LGBDATA" || gotRes != nil {
+			t.Fatalf("readBundledLGB = (%q, %v), want (LGBDATA, nil)", gotLgb, gotRes)
+		}
+		if bs, err := baseSize(t, p); err != nil || bs != int64(len(base)) {
+			t.Fatalf("getBaseBinarySize = (%d, %v), want (%d, nil)", bs, err, len(base))
+		}
+	})
+
+	t.Run("valid LGB2", func(t *testing.T) {
+		lgb := []byte("LGB")
+		res := []byte("RESARC")
+		p := writeTrailerFile(t, base, lgb, res, "lgb2", uint64(len(lgb)), uint64(len(res)))
+		gotLgb, gotRes := readBundledLGB(p)
+		if string(gotLgb) != "LGB" || string(gotRes) != "RESARC" {
+			t.Fatalf("readBundledLGB = (%q, %q), want (LGB, RESARC)", gotLgb, gotRes)
+		}
+		if bs, err := baseSize(t, p); err != nil || bs != int64(len(base)) {
+			t.Fatalf("getBaseBinarySize = (%d, %v), want (%d, nil)", bs, err, len(base))
+		}
+	})
+
+	t.Run("corrupt huge lgbSize does not panic", func(t *testing.T) {
+		lgb := []byte("x")
+		// lgbSize field claims a size far larger than the file.
+		p := writeTrailerFile(t, base, lgb, nil, "lgb2", 0xFFFFFFFFFFFFFFFF, 0)
+		gotLgb, gotRes := readBundledLGB(p)
+		if gotLgb != nil || gotRes != nil {
+			t.Fatalf("readBundledLGB on corrupt trailer = (%q, %q), want (nil, nil)", gotLgb, gotRes)
+		}
+		if _, err := baseSize(t, p); err == nil {
+			t.Fatalf("getBaseBinarySize on corrupt trailer: expected error, got nil")
+		}
+	})
+
+	t.Run("non-bundle file", func(t *testing.T) {
+		junk := []byte("just some random bytes, definitely not a bundle trailer!!")
+		p := writeTrailerFile(t, junk, nil, nil, "none", 0, 0)
+		gotLgb, _ := readBundledLGB(p)
+		if gotLgb != nil {
+			t.Fatalf("readBundledLGB on non-bundle = %q, want nil", gotLgb)
+		}
+		if bs, err := baseSize(t, p); err != nil || bs != int64(len(junk)) {
+			t.Fatalf("getBaseBinarySize = (%d, %v), want (%d, nil)", bs, err, len(junk))
+		}
+	})
+}
 
 // TestResourceDevMode: running from source with -resource-paths, io/resource
 // finds files on the filesystem and io/slurp reads them; a missing resource

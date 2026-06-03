@@ -34,6 +34,110 @@ import (
 var bundleMagic = [4]byte{'L', 'G', 'B', 'X'}
 var bundleMagicV2 = [4]byte{'L', 'G', 'B', '2'}
 
+// bundleKind classifies a standalone binary's appended trailer.
+type bundleKind int
+
+const (
+	bundleNone   bundleKind = iota // no recognized trailer (a plain, non-bundled binary)
+	bundleLegacy                   // 12-byte 'LGBX' trailer (lgb only)
+	bundleV2                       // 20-byte 'LGB2' trailer (lgb + resource archive)
+)
+
+// trailerLen returns the on-disk size of the trailer for this kind.
+func (k bundleKind) trailerLen() int64 {
+	switch k {
+	case bundleV2:
+		return 20
+	case bundleLegacy:
+		return 12
+	default:
+		return 0
+	}
+}
+
+// parseBundleTrailer reads and validates the trailer appended to f, the single
+// place that discriminates the LGB2/LGBX formats. It returns bundleNone with a
+// nil error when f carries no recognized trailer (a normal, non-bundled
+// binary). For a recognized trailer it validates that the claimed payload fits
+// within the file and returns a "corrupt bundle" error otherwise — so callers
+// never seek to a bogus offset or allocate a garbage-sized slice.
+func parseBundleTrailer(f *os.File) (kind bundleKind, lgbSize, resSize uint64, err error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return bundleNone, 0, 0, err
+	}
+	total := fi.Size()
+	if total < bundleLegacy.trailerLen() {
+		return bundleNone, 0, 0, nil
+	}
+
+	// Discriminate by the trailing 4-byte magic.
+	if _, err := f.Seek(-4, io.SeekEnd); err != nil {
+		return bundleNone, 0, 0, err
+	}
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return bundleNone, 0, 0, err
+	}
+
+	switch magic {
+	case bundleMagicV2:
+		if total < bundleV2.trailerLen() {
+			return bundleNone, 0, 0, nil
+		}
+		if _, err := f.Seek(-bundleV2.trailerLen(), io.SeekEnd); err != nil {
+			return bundleNone, 0, 0, err
+		}
+		var tr [20]byte
+		if _, err := io.ReadFull(f, tr[:]); err != nil {
+			return bundleNone, 0, 0, err
+		}
+		kind = bundleV2
+		lgbSize = binary.LittleEndian.Uint64(tr[0:8])
+		resSize = binary.LittleEndian.Uint64(tr[8:16])
+	case bundleMagic:
+		if _, err := f.Seek(-bundleLegacy.trailerLen(), io.SeekEnd); err != nil {
+			return bundleNone, 0, 0, err
+		}
+		var tr [12]byte
+		if _, err := io.ReadFull(f, tr[:]); err != nil {
+			return bundleNone, 0, 0, err
+		}
+		kind = bundleLegacy
+		lgbSize = binary.LittleEndian.Uint64(tr[0:8])
+	default:
+		return bundleNone, 0, 0, nil
+	}
+
+	// Size guard: the claimed payload plus trailer must fit within the file.
+	// A crafted size that fails this can no longer reach a make([]byte, lgbSize)
+	// or a negative seek offset.
+	if !payloadFitsFile(lgbSize, resSize, kind.trailerLen(), total) {
+		return bundleNone, 0, 0, fmt.Errorf("corrupt bundle: payload size exceeds file size")
+	}
+	return kind, lgbSize, resSize, nil
+}
+
+// payloadFitsFile reports whether a payload of lgbSize + resSize bytes plus a
+// trailerLen-byte trailer fits within a total-byte file. It subtracts step by
+// step instead of summing, so the test can't overflow uint64 even on a huge
+// (e.g. sparse) file where the individual sizes are valid but their sum wraps.
+func payloadFitsFile(lgbSize, resSize uint64, trailerLen, total int64) bool {
+	if total < 0 || trailerLen < 0 {
+		return false
+	}
+	avail := uint64(total)
+	if lgbSize > avail {
+		return false
+	}
+	avail -= lgbSize
+	if resSize > avail {
+		return false
+	}
+	avail -= resSize
+	return uint64(trailerLen) <= avail
+}
+
 func versionString() string {
 	if commit != "none" && len(commit) > 7 {
 		return fmt.Sprintf("%s (%s)", version, commit[:7])
@@ -159,63 +263,27 @@ func readBundledLGB(path string) (lgb []byte, res []byte) {
 	}
 	defer f.Close()
 
-	// Read the 4-byte trailing magic to discriminate the trailer format.
-	if _, err := f.Seek(-4, io.SeekEnd); err != nil {
-		return nil, nil
-	}
-	var magic [4]byte
-	if _, err := io.ReadFull(f, magic[:]); err != nil {
-		return nil, nil
+	kind, lgbSize, resSize, err := parseBundleTrailer(f)
+	if err != nil || kind == bundleNone {
+		return nil, nil // not a bundle, or a corrupt one — behave as no payload
 	}
 
-	switch magic {
-	case bundleMagicV2:
-		// 20-byte trailer: [8-byte lgbSize][8-byte resSize][4-byte 'LGB2']
-		if _, err := f.Seek(-20, io.SeekEnd); err != nil {
-			return nil, nil
-		}
-		var tr [20]byte
-		if _, err := io.ReadFull(f, tr[:]); err != nil {
-			return nil, nil
-		}
-		lgbSize := binary.LittleEndian.Uint64(tr[0:8])
-		resSize := binary.LittleEndian.Uint64(tr[8:16])
-		// Payload layout: [lgb][resArc][trailer]
-		if _, err := f.Seek(-20-int64(resSize)-int64(lgbSize), io.SeekEnd); err != nil {
-			return nil, nil
-		}
-		lgb = make([]byte, lgbSize)
-		if _, err := io.ReadFull(f, lgb); err != nil {
-			return nil, nil
-		}
-		if resSize > 0 {
-			res = make([]byte, resSize)
-			if _, err := io.ReadFull(f, res); err != nil {
-				return nil, nil
-			}
-		}
-		return lgb, res
-	case bundleMagic:
-		// 12-byte legacy trailer: [8-byte lgbSize][4-byte 'LGBX']
-		if _, err := f.Seek(-12, io.SeekEnd); err != nil {
-			return nil, nil
-		}
-		var footer [12]byte
-		if _, err := io.ReadFull(f, footer[:]); err != nil {
-			return nil, nil
-		}
-		lgbSize := binary.LittleEndian.Uint64(footer[:8])
-		if _, err := f.Seek(-12-int64(lgbSize), io.SeekEnd); err != nil {
-			return nil, nil
-		}
-		lgb = make([]byte, lgbSize)
-		if _, err := io.ReadFull(f, lgb); err != nil {
-			return nil, nil
-		}
-		return lgb, nil
-	default:
+	// Payload layout: [lgb][resArc][trailer]. Sizes are validated to fit the
+	// file, so the seek offset is a valid negative and make() can't overrun.
+	if _, err := f.Seek(-kind.trailerLen()-int64(resSize)-int64(lgbSize), io.SeekEnd); err != nil {
 		return nil, nil
 	}
+	lgb = make([]byte, lgbSize)
+	if _, err := io.ReadFull(f, lgb); err != nil {
+		return nil, nil
+	}
+	if resSize > 0 {
+		res = make([]byte, resSize)
+		if _, err := io.ReadFull(f, res); err != nil {
+			return nil, nil
+		}
+	}
+	return lgb, res
 }
 
 // bundleBinary creates a standalone executable by copying the lg binary
@@ -440,48 +508,24 @@ func collectResourceDir(dir, rootReal, relPrefix string, files map[string][]byte
 	return nil
 }
 
-// getBaseBinarySize returns the size of the lg binary without any appended bundle.
+// getBaseBinarySize returns the size of the lg binary without any appended
+// bundle, so re-bundling can strip an existing payload. A corrupt trailer
+// surfaces as an error rather than a silently wrong size.
 func getBaseBinarySize(f *os.File) (int64, error) {
+	kind, lgbSize, resSize, err := parseBundleTrailer(f)
+	if err != nil {
+		return 0, err
+	}
 	fi, err := f.Stat()
 	if err != nil {
 		return 0, err
 	}
 	total := fi.Size()
-	if total < 12 {
+	if kind == bundleNone {
 		return total, nil
 	}
-	// Discriminate the trailer by its trailing 4-byte magic.
-	if _, err := f.Seek(-4, io.SeekEnd); err != nil {
-		return total, nil
-	}
-	var magic [4]byte
-	if _, err := io.ReadFull(f, magic[:]); err != nil {
-		return total, nil
-	}
-	switch magic {
-	case bundleMagicV2:
-		if total < 20 {
-			return total, nil
-		}
-		f.Seek(-20, io.SeekEnd)
-		var tr [20]byte
-		if _, err := io.ReadFull(f, tr[:]); err != nil {
-			return total, nil
-		}
-		lgbSize := binary.LittleEndian.Uint64(tr[0:8])
-		resSize := binary.LittleEndian.Uint64(tr[8:16])
-		return total - int64(lgbSize) - int64(resSize) - 20, nil
-	case bundleMagic:
-		f.Seek(-12, io.SeekEnd)
-		var footer [12]byte
-		if _, err := io.ReadFull(f, footer[:]); err != nil {
-			return total, nil
-		}
-		lgbSize := binary.LittleEndian.Uint64(footer[:8])
-		return total - int64(lgbSize) - 12, nil
-	default:
-		return total, nil
-	}
+	// Sizes are validated to fit the file, so this can't go negative.
+	return total - int64(lgbSize) - int64(resSize) - kind.trailerLen(), nil
 }
 
 func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string) error {
