@@ -317,9 +317,7 @@ lg -b myapp -resource-paths resources app.lg  # embed resources into the binary
 
 A bundled binary reads **only** its embedded resources — it ignores the
 ambient filesystem, so deployment is self-contained and predictable. There is
-no default resource directory; `lg` is explicit-only. Project tooling such as
-[lgx](https://github.com/nooga/lgx) owns conventions like a default
-`resources/` dir and passes `-resource-paths` for you.
+no default resource directory; `lg` is explicit-only.
 
 ## nREPL
 
