@@ -854,16 +854,173 @@ func TestLowerNsToGoLiftsIntraNsCall(t *testing.T) {
 	}
 }
 
-// Scope guard: a cross-namespace callee (clojure.core/count) is NOT lifted —
-// it stays on the InvokeValue path (slice 1 is intra-ns only).
-func TestLowerNsToGoLeavesCrossNsCall(t *testing.T) {
+// A cross-namespace callee (clojure.core/count) is lifted to cached-var IFn
+// dispatch — it no longer pays a per-call rt.LookupVar at the call site.
+// (Superseded the old "stays on InvokeValue" scope guard: the IFn-dispatch
+// slice is exactly what lifts cross-ns calls.)
+func TestLowerNsToGoLiftsCrossNsCall(t *testing.T) {
 	ensureLoader()
 	runLispExpr(t, `(create-ns (quote directtest2))`)
 	v := runLispExpr(t,
 		`(ir.passes.pipeline/lower-ns-to-go "directtest2" (quote directtest2)
 		   [(quote (defn caller2 [y] (count y)))])`)
-	got := string(v.(vm.String))
-	if !regexp.MustCompile(`InvokeValue\([^\n]*LookupVar\([^\n]*"count"`).MatchString(got) {
-		t.Fatalf("expected cross-ns count call to stay on InvokeValue:\n%s", got)
+	src := string(v.(vm.String))
+	f := parseLoweredGo(t, src)
+	caller, ok := findFunc(f, func(n string) bool { return n == "caller2" })
+	if !ok {
+		t.Fatalf("no caller2 in:\n%s", src)
+	}
+	if _, ok := findIFnDispatch(caller.Body); !ok {
+		t.Fatalf("expected cross-ns count to lift to cached-var IFn dispatch:\n%s", src)
+	}
+	if callsLookupVarNamed(caller, "count") {
+		t.Fatalf("caller2 must not do a per-call rt.LookupVar for count:\n%s", src)
+	}
+}
+
+// IFn-dispatch lowering: a cross-ns callee (clojure.core/count) makes the
+// lowered package declare a package-level cached `var __v_* *vm.Var`. Resolution
+// + memoization happen at the call site via the shared rt.CachedVarFn helper (no
+// per-callee accessor func is emitted), and NOT eagerly in init() — blank-
+// imported lowered packages run init() before the bundle replay loads
+// namespaces, where the lookup would return nil.
+//
+// Assertions are structural (go/ast), not regex over rendered text.
+func TestLowerGoCrossNsEmitsCachedVar(t *testing.T) {
+	ensureLoader()
+	runLispExpr(t, `(create-ns (quote crossnsvar))`)
+	v := runLispExpr(t,
+		`(ir.passes.pipeline/lower-ns-to-go "crossnsvar" (quote crossnsvar)
+		   [(quote (defn caller3 [y] (count y)))])`)
+	src := string(v.(vm.String))
+	f := parseLoweredGo(t, src)
+
+	isCountVar := func(n string) bool {
+		return strings.HasPrefix(n, "__v_") && strings.HasSuffix(n, "count")
+	}
+
+	// 1. package-level cached *vm.Var decl for count.
+	name, typ, ok := findPkgVar(f, isCountVar)
+	if !ok {
+		t.Fatalf("expected package-level cached var for count:\n%s", src)
+	}
+	if typ != "*vm.Var" {
+		t.Fatalf("cached var %s has type %q, want *vm.Var", name, typ)
+	}
+
+	// 2. the call site resolves it via the shared rt.CachedVarFn helper, and NO
+	//    per-callee accessor func is emitted (that bloat is what rt.CachedVarFn
+	//    replaces).
+	if _, ok := findIFnDispatch(f); !ok {
+		t.Fatalf("expected rt.CachedVarFn IFn dispatch for count:\n%s", src)
+	}
+	if _, ok := findFunc(f, func(n string) bool { return strings.HasPrefix(n, "__getv_") }); ok {
+		t.Fatalf("no per-callee accessor func should be emitted (use rt.CachedVarFn):\n%s", src)
+	}
+
+	// 3. resolution is lazy: no init() may eagerly call rt.LookupVar (that would
+	//    cache nil before bundle replay loads namespaces).
+	for _, in := range initFuncs(f) {
+		if callsLookupVarNamed(in, "count") {
+			t.Fatalf("cached var must NOT be resolved eagerly in init():\n%s", src)
+		}
+	}
+}
+
+// Task 2 (IFn-dispatch lowering): a cross-ns call lowers its CALL SITE to the
+// cached-var IFn dispatch
+//
+//	rt.CachedVarFn(&__v_<ns>_<name>, "ns", "name").Invoke([]vm.Value{...})
+//
+// keeping the per-call .Deref() as the override seam, and NO per-call
+// rt.LookupVar at the call site.
+func TestLowerGoCrossNsCallLiftsToIFn(t *testing.T) {
+	ensureLoader()
+	runLispExpr(t, `(create-ns (quote crossnsifn))`)
+	v := runLispExpr(t,
+		`(ir.passes.pipeline/lower-ns-to-go "crossnsifn" (quote crossnsifn)
+		   [(quote (defn caller4 [y] (count y)))])`)
+	src := string(v.(vm.String))
+	f := parseLoweredGo(t, src)
+
+	caller, ok := findFunc(f, func(n string) bool { return n == "caller4" })
+	if !ok {
+		t.Fatalf("no caller4 in:\n%s", src)
+	}
+	d, ok := findIFnDispatch(caller.Body)
+	if !ok {
+		t.Fatalf("expected cached-var IFn dispatch in caller4:\n%s", src)
+	}
+	if d.nargs != 1 {
+		t.Fatalf("Invoke got %d args, want 1", d.nargs)
+	}
+	if !strings.HasSuffix(d.varName, "count") {
+		t.Fatalf("dispatch var %q does not target count", d.varName)
+	}
+	if d.nsArg != "clojure.core" || d.nameArg != "count" {
+		t.Fatalf("CachedVarFn resolves (%q,%q), want (clojure.core,count)", d.nsArg, d.nameArg)
+	}
+	// The call site must NOT do a per-call rt.LookupVar for count anymore.
+	if callsLookupVarNamed(caller, "count") {
+		t.Fatalf("caller4 still does a per-call rt.LookupVar for count:\n%s", src)
+	}
+}
+
+// Task 2: a callee that is NOT a static load-var (here, an invoked parameter)
+// must stay on the rt.InvokeValue trampoline — cached-var dispatch only applies
+// to resolvable vars.
+func TestLowerGoNonVarCallStaysTrampoline(t *testing.T) {
+	ensureLoader()
+	runLispExpr(t, `(create-ns (quote nonvarcall))`)
+	v := runLispExpr(t,
+		`(ir.passes.pipeline/lower-ns-to-go "nonvarcall" (quote nonvarcall)
+		   [(quote (defn apply1 [f y] (f y)))])`)
+	src := string(v.(vm.String))
+	f := parseLoweredGo(t, src)
+
+	caller, ok := findFunc(f, func(n string) bool { return n == "apply1" })
+	if !ok {
+		t.Fatalf("no apply1 in:\n%s", src)
+	}
+	if _, ok := findIFnDispatch(caller.Body); ok {
+		t.Fatalf("calling a parameter must NOT use cached-var dispatch:\n%s", src)
+	}
+	if !callsInvokeValue(caller) {
+		t.Fatalf("expected rt.InvokeValue trampoline for a parameter call:\n%s", src)
+	}
+}
+
+// Task 3 (decision: fall back): (deref x) is itself a cross-ns call to
+// clojure.core/deref, so it is already lifted to cached-var IFn dispatch by
+// the Task-2 path — eliminating the per-call rt.LookupVar. We deliberately do
+// NOT lower it to a direct x.(vm.IDeref).Deref(): there is no vm.IDeref Go
+// interface, and protocol-based derefables (IDerefProtocol/iderefAdapter) have
+// no Go Deref() method, so a type-assert would panic. This pins that the
+// optimized cached-var dispatch is used and no IDeref assertion is emitted.
+func TestLowerGoDerefUsesCachedVarDispatch(t *testing.T) {
+	ensureLoader()
+	runLispExpr(t, `(create-ns (quote derefns))`)
+	v := runLispExpr(t,
+		`(ir.passes.pipeline/lower-ns-to-go "derefns" (quote derefns)
+		   [(quote (defn dr [a] (deref a)))])`)
+	src := string(v.(vm.String))
+	f := parseLoweredGo(t, src)
+
+	caller, ok := findFunc(f, func(n string) bool { return n == "dr" })
+	if !ok {
+		t.Fatalf("no dr in:\n%s", src)
+	}
+	d, ok := findIFnDispatch(caller.Body)
+	if !ok {
+		t.Fatalf("expected deref to lower to cached-var IFn dispatch:\n%s", src)
+	}
+	if !strings.HasSuffix(d.varName, "deref") {
+		t.Fatalf("dispatch var %q does not target deref", d.varName)
+	}
+	if callsLookupVarNamed(caller, "deref") {
+		t.Fatalf("dr must not do a per-call rt.LookupVar for deref:\n%s", src)
+	}
+	if assertsType(caller.Body, "vm.IDeref") {
+		t.Fatalf("deref must NOT lower to a direct .(vm.IDeref) assertion:\n%s", src)
 	}
 }

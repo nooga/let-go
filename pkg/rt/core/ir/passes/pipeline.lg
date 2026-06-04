@@ -405,8 +405,11 @@
                                      (merge m (lower-go/registry-entry-from-result r ns-name pkg-name)))
                                    {} pass1)
           ;; Pass 2 re-lowers with the registry visible so intra-ns calls
-          ;; lower to direct Go calls.
-          results (binding [lower-go/*lowered-registry* sibling-registry]
+          ;; lower to direct Go calls. The cross-ns atom records trampoline-
+          ;; reaching load-var callees for memoized cached-*vm.Var resolution.
+          cross-ns-vars (atom {})
+          results (binding [lower-go/*lowered-registry* sibling-registry
+                            lower-go/*cross-ns-vars-used* cross-ns-vars]
                     (lower-defn-forms defn-forms))
           ;; Filter out results with nil decls (failures that slipped through).
           valid-results (filterv (fn [r] (some? (:decl r))) results)
@@ -419,6 +422,9 @@
                          {:decl (override-init-decl (str ns-name) reg-entries)
                           :imports override-decl-imports}]
                         [])
-          all-results (into valid-results extra-decls)
+          ;; Package-level cached *vm.Var decls + lazy accessors for the
+          ;; recorded cross-ns callees (deterministic, sorted by base name).
+          cached-var-decls (lower-go/cross-ns-var-decls @cross-ns-vars)
+          all-results (into (into valid-results extra-decls) cached-var-decls)
           file-ast (lower-go/file pkg-name all-results)]
       (gogen/render file-ast))))

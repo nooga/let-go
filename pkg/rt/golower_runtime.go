@@ -29,6 +29,25 @@ func LookupVar(nsName, symName string) *vm.Var {
 	return out
 }
 
+// CachedVarFn lazily resolves a cross-namespace Var ONCE — memoizing it through
+// the caller-supplied package-level pointer — then returns that var's CURRENT
+// fn root for invocation. The lowered Go calls it as
+//
+//	rt.CachedVarFn(&__v_ns_name, "ns", "name").Invoke(args)
+//
+// The *Var (not the fn) is what's cached, and its root is re-read on every call,
+// so the var stays the override seam (^:dynamic / ^:redef / alter-var-root still
+// work). Resolution is lazy (first call), not at package init(): blank-imported
+// lowered packages run init() before the bundle replay loads namespaces, where
+// LookupVar would return nil. The .(vm.Fn) assertion matches the trampoline's
+// contract — every callable vm value implements vm.Fn.
+func CachedVarFn(ptr **vm.Var, nsName, symName string) vm.Fn {
+	if *ptr == nil {
+		*ptr = LookupVar(nsName, symName)
+	}
+	return (*ptr).Deref().(vm.Fn)
+}
+
 // InvokeValue applies a runtime callable using let-go's dynamic invocation path.
 func InvokeValue(target vm.Value, args []vm.Value) (vm.Value, error) {
 	if target == vm.NIL {

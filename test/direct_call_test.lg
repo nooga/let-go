@@ -189,17 +189,26 @@
           (str "alpha should NOT trampoline omega through rt.LookupVar; got:\n"
                alpha)))))
 
-(deftest variadic-callee-uses-trampoline
-  (testing "variadic callees are not direct-call eligible (MVP shape gate)"
+(deftest variadic-callee-uses-ifn-dispatch
+  (testing "variadic callees are not direct-call eligible (MVP shape gate); they
+            lift to cached-var IFn dispatch — var-mediated, not a bare Go call"
     (let [src  (compile-ns ['(defn varargs [x & rest] x)
                             '(defn vcaller [a b] (varargs a b))])
           body (caller-body src "vcaller")]
       (is body "vcaller body should be extractable")
-      (is (str/includes? body "rt.LookupVar")
-          (str "vcaller should fall through to trampoline (variadic callee); got:\n"
+      ;; Not direct-call eligible: no bare `vN = varargs(arg0, ...)` Go call.
+      (is (not (str/includes? body "varargs(arg"))
+          (str "vcaller should NOT emit a bare direct varargs(...) Go call; got:\n"
                body))
-      (is (not (str/includes? body "varargs("))
-          (str "vcaller should NOT emit a bare varargs(...) Go call; got:\n" body)))))
+      ;; Instead it lifts to cached-var IFn dispatch via rt.CachedVarFn (the
+      ;; override seam: the *Var is cached, its fn root re-read each call).
+      (is (str/includes? body "rt.CachedVarFn(")
+          (str "vcaller should dispatch the variadic callee via rt.CachedVarFn; got:\n"
+               body))
+      ;; The per-call rt.LookupVar is eliminated — resolution moves into the
+      ;; shared rt.CachedVarFn helper, memoized through the package-level var.
+      (is (not (str/includes? body "rt.LookupVar"))
+          (str "vcaller body should not do a per-call rt.LookupVar; got:\n" body)))))
 
 ;; --- registry size sanity ----------------------------------------------
 

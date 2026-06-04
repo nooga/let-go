@@ -821,6 +821,78 @@
 ;; nil at top level disables tracking. Bound by pipeline.lg's lower-ns-to-go.
 (def ^:dynamic *native-imports-used* nil)
 
+;; ---------------------------------------------------------------------------
+;; Cross-ns IFn dispatch: cached *vm.Var accumulator
+;;
+;; A call whose callee is a :load-var reaching the trampoline (i.e. NOT an
+;; intra-ns direct call and NOT a typed native-direct registry hit) otherwise
+;; pays a per-call rt.LookupVar(ns,name) — a string-keyed namespace lookup, the
+;; measured dominant cost. Instead we resolve the var ONCE via a lazily-memoized
+;; package-level accessor and keep a per-call .Deref() so the var stays the
+;; override seam (^:dynamic / ^:redef / alter-var-root still work — we cache the
+;; *var*, never the fn).
+;;
+;; Resolution is LAZY (first call), NOT eager in init(): blank-imported lowered
+;; packages run init() before the bundle replay loads namespaces, where
+;; rt.LookupVar would return nil.
+;;
+;; *cross-ns-vars-used* is a per-package atom of {[ns-str name-str] base-name},
+;; bound by pipeline.lg's lower-ns-to-go; nil disables recording.
+(def ^:dynamic *cross-ns-vars-used* nil)
+
+(def ^:private cached-var-seg-munge-map
+  ;; Reuse go-name's char map (handles - ! ? * / + = < > '), plus '.' so dotted
+  ;; namespaces like clojure.core become Go-identifier-safe.
+  (assoc go-name-munge-map \. "_"))
+
+(defn- cached-var-seg [s]
+  (apply str (map (fn [ch] (or (get cached-var-seg-munge-map ch) ch)) s)))
+
+(defn- cached-var-base [ns-str name-str]
+  (str "__v_" (cached-var-seg ns-str) "_" (cached-var-seg name-str)))
+
+(defn- load-var-ns+name
+  "If callee-nid is a :load-var, return [ns-str name-str] using the SAME ns
+   resolution the trampoline uses (unqualified -> \"core\"); else nil."
+  [f callee-nid]
+  (when (= :load-var (ir/op callee-nid f))
+    (let [sym (symbol (ir/aux callee-nid f))
+          sns (namespace sym)]
+      [(if (nil? sns) "core" sns) (name sym)])))
+
+(defn- record-cross-ns-var!
+  "Record a trampoline-reaching load-var callee for memoized resolution and
+   return its cached-var base name (the package-level *vm.Var the call site
+   passes to rt.CachedVarFn). No-op (returns nil) when *cross-ns-vars-used* is
+   unbound."
+  [ns-str name-str]
+  (when *cross-ns-vars-used*
+    (let [base (cached-var-base ns-str name-str)]
+      (swap! *cross-ns-vars-used* assoc [ns-str name-str] base)
+      base)))
+
+(def ^:private cross-ns-decl-imports
+  [{:path "github.com/nooga/let-go/pkg/vm" :alias "vm"}])
+
+(defn cross-ns-var-decls
+  "Build the package-level cached `var __v_* *vm.Var` decls for the recorded
+   callees in vars-map ({[ns name] base}). One decl per callee; resolution +
+   memoization happen at the call site via the shared rt.CachedVarFn helper, so
+   no per-callee accessor function is emitted. Sorted by base name for
+   deterministic output. Throws on a base-name collision (distinct callees
+   munging to one Go name)."
+  [vars-map]
+  (let [entries (sort-by (fn [[_ base]] base) vars-map)
+        bases   (mapv (fn [[_ base]] base) entries)]
+    (when (not= (count bases) (count (set bases)))
+      (throw (ex-info "gogen: cached cross-ns var name collision"
+                      {:vars vars-map})))
+    (mapv
+      (fn [[[ns-str name-str] base]]
+        {:decl (gogen/top-var-decl base (gogen/type "*vm.Var") nil)
+         :imports cross-ns-decl-imports})
+      entries)))
+
 (def ^:private alias->internal-ns
   {"clojure.core" 'core   "clojure.test" 'test   "clojure.string" 'string
    "clojure.set"  'set    "clojure.walk" 'walk   "clojure.edn"    'edn
@@ -1012,12 +1084,43 @@
         direct     (when entry (emit-typed-direct-call f closed-exprs target refs entry))]
     (if direct
       direct
-      (let [callee     (box-as-value f closed-exprs (first refs))
+      (let [nn         (load-var-ns+name f (first refs))
+            ;; Lift EVERY trampoline-reaching :load-var callee (same-ns
+            ;; non-direct-callable + cross-ns) to cached-var IFn dispatch. This
+            ;; is var-mediated, so it resolves at runtime via the var's root
+            ;; whether or not the callee was emitted as a Go func — strictly
+            ;; more robust than a bare direct call (which dangles if the callee
+            ;; fell back) and it eliminates the per-call rt.LookupVar uniformly.
+            ;; record-cross-ns-var! no-ops when *cross-ns-vars-used* is unbound
+            ;; (pass 1 / per-fn lower), so base stays nil there. Branch on BASE,
+            ;; not nn: a load-var callee with base=nil must NOT build a dispatch.
+            base       (when nn (record-cross-ns-var! (first nn) (second nn)))
             arg-exprs  (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))
-            args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)
-            invoke     (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValue") [callee args-slice])]
-        (when (and callee (every? identity arg-exprs))
-          (emit-call-stmts f target invoke))))))
+            args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]
+        (when (every? identity arg-exprs)
+          (if base
+            ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
+            ;; callee var ONCE (memoized through the package-level __v_* pointer)
+            ;; and re-reads its fn root each call, so per call:
+            ;;   rt.CachedVarFn(&__v, "ns", "name").Invoke(args)
+            ;; Caching the *Var (not the fn) keeps the var as the override seam
+            ;; (^:dynamic / ^:redef / alter-var-root); .Invoke returns
+            ;; (vm.Value, error), so emit-call-stmts' 2-value form applies.
+            (let [cached-fn (gogen/call
+                              (gogen/field-sel (gogen/ident "rt") "CachedVarFn")
+                              [(gogen/unary "&" (gogen/ident base))
+                               (gogen/string-lit (first nn))
+                               (gogen/string-lit (second nn))])
+                  invoke    (gogen/call
+                              (gogen/field-sel cached-fn "Invoke")
+                              [args-slice])]
+              (emit-call-stmts f target invoke))
+            ;; Default trampoline: callee value boxed, then rt.InvokeValue.
+            (let [callee (box-as-value f closed-exprs (first refs))
+                  invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValue")
+                                     [callee args-slice])]
+              (when callee
+                (emit-call-stmts f target invoke)))))))))
 
 (defn- lower-inst-stmts [f closed-exprs nid]
   (let [op  (ir/op nid f)
