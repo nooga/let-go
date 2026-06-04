@@ -750,8 +750,8 @@ func TestLowerGoCharLiteral(t *testing.T) {
 	}
 }
 
-// With *lowered-siblings* naming a same-ns single-arity sibling, an intra-ns
-// call lowers to a direct Go call (no InvokeValue / LookupVar).
+// With a same-ns single-arity sibling registered in *lowered-registry*, an
+// intra-ns call lowers to a direct Go call (no InvokeValue / LookupVar).
 func TestLowerGoIntraNsCallLiftsToDirect(t *testing.T) {
 	ensureLoader()
 	// Define a dummy callee function in the core namespace so the symbol resolves.
@@ -767,25 +767,31 @@ func TestLowerGoIntraNsCallLiftsToDirect(t *testing.T) {
 	if lowerGoNS == nil {
 		t.Fatalf("ir.lower-go namespace not found")
 	}
-	loweredSiblingsVar := lowerGoNS.LookupLocal(vm.Symbol("*lowered-siblings*"))
-	if loweredSiblingsVar == nil {
-		t.Fatalf("*lowered-siblings* var not found")
+	loweredRegistryVar := lowerGoNS.LookupLocal(vm.Symbol("*lowered-registry*"))
+	if loweredRegistryVar == nil {
+		t.Fatalf("*lowered-registry* var not found")
 	}
 
-	// Create the siblings map at the Go level
-	// NOTE: buildLispIR compiles in rt.NameCoreNS which maps to "clojure.core"
-	siblingsMap := vm.NewPersistentMap([]vm.Value{
-		vm.Keyword("ns"), vm.String("clojure.core"),
-		vm.Keyword("fns"), vm.NewPersistentMap([]vm.Value{
-			vm.String("callee"), vm.NewPersistentMap([]vm.Value{
-				vm.Keyword("arity"), vm.Int(1),
-				vm.Keyword("go-name"), vm.String("callee"),
-			}),
-		}),
+	// Register `callee` as a same-ns single-arity sibling, matching the shape
+	// lower-go/registry-entry-from-result produces. Key is [ns-sym name arity];
+	// an unqualified intra-ns call matches by name+arity (ns optional), so the
+	// key's ns is not load-bearing here.
+	registryKey := vm.NewPersistentVector([]vm.Value{
+		vm.Symbol("core"), vm.String("callee"), vm.Int(1),
 	})
-	oldVal := loweredSiblingsVar.Deref()
-	loweredSiblingsVar.SetRoot(siblingsMap)
-	defer loweredSiblingsVar.SetRoot(oldVal)
+	registryEntry := vm.NewPersistentMap([]vm.Value{
+		vm.Keyword("go-name"), vm.String("callee"),
+		vm.Keyword("arity"), vm.Int(1),
+		vm.Keyword("needs-error?"), vm.FALSE,
+		vm.Keyword("param-specs"), vm.NewPersistentVector([]vm.Value{vm.String("vm.Value")}),
+		vm.Keyword("result-spec"), vm.String("vm.Value"),
+		vm.Keyword("native?"), vm.FALSE,
+		vm.Keyword("go-pkg"), vm.NIL,
+	})
+	registryMap := vm.NewPersistentMap([]vm.Value{registryKey, registryEntry})
+	oldVal := loweredRegistryVar.Deref()
+	loweredRegistryVar.SetRoot(registryMap)
+	defer loweredRegistryVar.SetRoot(oldVal)
 
 	v := runLispExpr(t, fmt.Sprintf(
 		`(gogen/render (:decl (ir.lower-go/lower %s :bridge)))`, varName))
@@ -802,7 +808,7 @@ func TestLowerGoIntraNsCallLiftsToDirect(t *testing.T) {
 	}
 }
 
-// With *lowered-siblings* nil (the default), behavior is unchanged: the call
+// With *lowered-registry* empty (the default), behavior is unchanged: the call
 // stays on the rt.InvokeValue / LookupVar path. Guards the bytecode path.
 func TestLowerGoCallDefaultStaysInvokeValue(t *testing.T) {
 	ensureLoader()
@@ -817,7 +823,7 @@ func TestLowerGoCallDefaultStaysInvokeValue(t *testing.T) {
 		`(gogen/render (:decl (ir.lower-go/lower %s :bridge)))`, varName))
 	got := string(v.(vm.String))
 	if !strings.Contains(got, "InvokeValue") {
-		t.Fatalf("expected InvokeValue when *lowered-siblings* is nil:\n%s", got)
+		t.Fatalf("expected InvokeValue when *lowered-registry* is empty:\n%s", got)
 	}
 }
 
@@ -840,7 +846,7 @@ func TestLowerNsToGoLiftsIntraNsCall(t *testing.T) {
 	got := string(v.(vm.String))
 	// With two-pass lowering in place:
 	// - pass 1 discovers callee as override-eligible (single-arity, vm.Value uniform)
-	// - pass 2 re-lowers with *lowered-siblings* bound
+	// - pass 2 re-lowers with *lowered-registry* bound
 	// - caller should emit a direct callee(...) call, NOT InvokeValue+LookupVar
 	hasDirectCall := strings.Contains(got, "callee(") && !regexp.MustCompile(`InvokeValue\([^\n]*LookupVar\([^\n]*"callee"`).MatchString(got)
 	if !hasDirectCall {
