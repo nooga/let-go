@@ -7,6 +7,15 @@ authoritative-for:
   - transients
   - transducers
   - equality-hashing
+shipped:
+  - Phase 1 PersistentVector (BPTR) — pkg/vm/persistent_vector.go
+  - Phase 1 TransientVector + transient builtins (`transient`, `persistent!`, `conj!`, `assoc!`, `pop!`) — pkg/rt/lang.go:4410
+  - Phase 2 PersistentHashMap (HAMT) + transient variant — pkg/vm/persistent_map.go
+  - Phase 2 PersistentHashSet + transient variant
+  - Phase 3 Hashable interface and Equiv/Hash on core value types — pkg/vm/hash.go:15
+remaining-open:
+  - Phase 4 transducers (`transduce`, `eduction`, `sequence`, `completing`)
+  - Phase 4 ChunkedSeq + Reducible fast path
 human-verified:
 ---
 

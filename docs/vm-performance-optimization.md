@@ -5,6 +5,13 @@ authoritative-for:
   - vm-calling-convention
   - frame-pooling
   - tco-design
+shipped:
+  - Frame pool — mutex-guarded LIFO, switched from sync.Pool after profiling showed ~25% CPU in pool overhead — pkg/vm/vm.go:284
+remaining-open:
+  - Phase A argument-slice copy / retention fixes
+  - Phase A closure TCO (extend OP_TAIL_CALL frame reuse to *Closure)
+  - Phase B small-arity invoke/tail-call opcodes (INVOKE_0/1/2/3)
+  - Phase C Reducible + chunked-seq throughput fast paths
 human-verified:
 ---
 

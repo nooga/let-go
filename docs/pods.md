@@ -1,8 +1,15 @@
 ---
-status: planning
+status: active
 last-verified: 2026-06-05
 authoritative-for:
   - pods-design
+shipped:
+  - load-pod / invoke registered in `pods` and `babashka.pods` namespaces (pkg/rt/pods.go:688)
+  - Stdio transport with EDN encode/decode and request/response routing (pkg/rt/pods.go)
+remaining-open:
+  - CLI helpers (`lg pods describe`, `lg pods run`)
+  - TCP transport
+  - Streaming and binary/transit encoding (stretch goals)
 human-verified:
 ---
 
