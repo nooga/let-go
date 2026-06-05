@@ -71,6 +71,33 @@ jobs:
       - name: make check-generated
         run: make check-generated
 
+  # Floor check on docs/**/*.md frontmatter for contributors who don't
+  # have the pre-commit hook installed. The hook (run locally) handles
+  # maintenance (last-verified bump); this CI step enforces only that the
+  # frontmatter exists and is well-formed on docs changed in the PR. PRs
+  # that sit across dates still pass — staleness is a reader signal, not
+  # a CI gate. See docs/frontmatter-hook.md.
+  docs-frontmatter:
+    name: docs-frontmatter
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check changed docs have well-formed frontmatter
+        run: |
+          git fetch --no-tags --depth=50 origin "${GITHUB_BASE_REF}"
+          changed=$(git diff --name-only --diff-filter=AM \
+            "origin/${GITHUB_BASE_REF}...HEAD" -- 'docs/**/*.md' || true)
+          if [ -z "$changed" ]; then
+            echo "No docs/**/*.md changed in this PR."
+            exit 0
+          fi
+          echo "Checking:"
+          echo "$changed"
+          echo "$changed" | xargs python3 scripts/docs_frontmatter_hook.py --check
+
   # Bootstrap-parity gate (deferred — runs as 'make parity-full' locally).
   # Until parity-full is wired as a CI job, `make check-generated` protects
   # the artifacts parity-full depends on.

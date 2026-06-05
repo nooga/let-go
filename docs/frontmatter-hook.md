@@ -63,7 +63,7 @@ wired into [`.pre-commit-config.yaml`](../.pre-commit-config.yaml).
 Runs on every staged `docs/**/*.md`. Stdlib-only Python — pre-commit
 itself already requires Python, so no new dependency.
 
-What it does:
+### Maintenance mode (default)
 
 1. **Missing frontmatter** → prepends a minimal stub:
    ```yaml
@@ -80,7 +80,9 @@ What it does:
    stamped today.
 3. **Never touches** `status:` (when present), `authoritative-for:`,
    `supersedes:`, `superseded-by:`, `shipped:`, `remaining-open:`, or
-   `human-verified:`.
+   `human-verified:`. Only top-level `last-verified:` (no leading
+   whitespace) is bumped — indented occurrences inside block scalars
+   or nested mappings under human-authored keys are left alone.
 
 The hook modifies files in place. Pre-commit then reports "files
 were modified by this hook," at which point you review the changes
@@ -91,6 +93,33 @@ at this file — the channel an agent contributor can't miss.
 
 To bypass for in-progress work: `git commit --no-verify` (same
 escape hatch as the other hooks).
+
+### Check mode (CI)
+
+```
+python3 scripts/docs_frontmatter_hook.py --check <files…>
+```
+
+Validates that each path has well-formed frontmatter with a
+top-level `status:` and `last-verified:`. Never mutates. Exits
+non-zero on any failure.
+
+The CI workflow runs this against the docs changed in each PR. The
+check is deliberately the *floor* — frontmatter present and
+parseable — not a freshness gate, so PRs that sit across dates still
+pass. Staleness is a signal for readers (via `last-verified:` and
+`human-verified:`), not a CI failure.
+
+### Edge cases
+
+- **Malformed frontmatter** (opening `---` with no closing delimiter):
+  treated as a hard error in both modes. The file is not modified;
+  the hook exits non-zero. Fix the delimiter and re-run.
+- **UTF-8 BOM** at the start of the file: stripped on read; written
+  back without one.
+- **Symlinks**: skipped. A staged `docs/*.md` symlink would otherwise
+  cause the hook to write through to whatever the symlink points at,
+  potentially outside `docs/` or outside the repo.
 
 ## Out of scope (follow-ups)
 
