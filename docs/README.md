@@ -1,3 +1,11 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - docs-index
+human-verified:
+---
+
 # let-go docs
 
 Design plans, execution roadmaps, and policy for the let-go implementation. Each doc carries a `status:` frontmatter line indicating whether it's the current authority or has been superseded. See "What's current" below.

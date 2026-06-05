@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-06-01
+last-verified: 2026-06-05
 authoritative-for:
   - xsofy-side-clojure-compat-evidence
   - intentional-jvm-divergences

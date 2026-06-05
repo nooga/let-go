@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-06-01
+last-verified: 2026-06-05
 authoritative-for:
   - design-contracts
   - regression-checkpoints
