@@ -88,8 +88,11 @@ jobs:
       - name: Check changed docs have well-formed frontmatter
         run: |
           git fetch --no-tags --depth=50 origin "${GITHUB_BASE_REF}"
+          # `:(glob)` pathspec magic: without it, `**` matches a single
+          # segment, so root-level docs like docs/frontmatter-hook.md
+          # are skipped and only nested paths like docs/perf/foo.md match.
           changed=$(git diff --name-only --diff-filter=AM \
-            "origin/${GITHUB_BASE_REF}...HEAD" -- 'docs/**/*.md' || true)
+            "origin/${GITHUB_BASE_REF}...HEAD" -- ':(glob)docs/**/*.md' || true)
           if [ -z "$changed" ]; then
             echo "No docs/**/*.md changed in this PR."
             exit 0
