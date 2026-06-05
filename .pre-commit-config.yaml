@@ -57,6 +57,19 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      # Frontmatter maintenance for docs/**/*.md: stub on missing,
+      # bump `last-verified:` on staged docs. Never touches
+      # `human-verified:` or any human-authored field. Stdlib-only
+      # Python — pre-commit itself already requires Python, so this
+      # adds no new dependency. See docs/frontmatter-hook.md.
+      - id: docs-frontmatter
+        name: docs frontmatter (stub + last-verified bump)
+        description: Maintain status/last-verified frontmatter on docs/**/*.md
+        entry: python3 scripts/docs_frontmatter_hook.py
+        language: system
+        files: ^docs/.*\.md$
+        stages: [pre-commit]
+
       - id: go-test
         name: go test ./... -skip TestClojureTestSuite
         description: Run Go test suite excluding the slow Clojure compat suite (mirrors CI test step)
