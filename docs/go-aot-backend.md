@@ -1,3 +1,12 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - go-aot-backend-design
+  - two-tier-aot-approach
+human-verified:
+---
+
 ## Go AOT backend — compiling let-go to Go while keeping the runtime
 
 This document proposes a second backend that compiles let-go code to Go, preserving the runtime (`pkg/vm` and `pkg/rt`) semantics and interop. Dynamic `eval` continues to use the VM and targets the same `Var`s, enabling mixed compiled+interpreted systems and ultimate AOT via the Go toolchain.

@@ -13,6 +13,7 @@ shipped:
   - D5 (clojure.core shadow warnings — #69, in v1.8.0+)
 remaining-open:
   - A2 aset polymorphism (recommendation in doc: keep behavior, document as intentional divergence)
+human-verified:
 ---
 
 # let-go ↔ Clojure JVM portability gaps surfaced by xsofy

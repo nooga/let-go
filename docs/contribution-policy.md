@@ -10,6 +10,7 @@ authoritative-for:
   - wasm-constraints
 supersedes:
   - master-plan.md (on direction — self-host as committed direction, gogen_ir as deployment path)
+human-verified:
 ---
 
 # Contribution policy

@@ -1,3 +1,12 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - numeric-representation
+  - int-unbox-paths
+human-verified:
+---
+
 ## Value representation and numeric performance
 
 This note documents how values (especially numbers) are represented today, performance implications in Go, and actionable optimizations. It complements the VM and collections plans.

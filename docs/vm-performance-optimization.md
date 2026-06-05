@@ -1,3 +1,13 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - vm-calling-convention
+  - frame-pooling
+  - tco-design
+human-verified:
+---
+
 ## VM performance and calling convention — Audit and Optimization Plan
 
 This document summarizes performance bottlenecks in the VM interpreter and function calling convention, with concrete optimization steps, file pointers, and a rollout plan.

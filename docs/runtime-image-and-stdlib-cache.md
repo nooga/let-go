@@ -1,3 +1,11 @@
+---
+status: planning
+last-verified: 2026-06-05
+authoritative-for:
+  - runtime-image-design
+human-verified:
+---
+
 ## Runtime images and precompiled stdlib
 
 This document captures the design for dumping/loading a self-contained image of code + heap for fast startup, and precompiling the standard library to cache compilation.

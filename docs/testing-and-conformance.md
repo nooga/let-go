@@ -1,3 +1,12 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - clojure-test-api-design
+  - conformance-strategy
+human-verified:
+---
+
 ## Testing and Conformance — framework, CI, and compatibility strategy
 
 This document defines how we test let-go: unit/integration/perf tests, a `clojure.test`-compatible layer, conformance approach vs Clojure/Babashka/Joker, property testing, fuzzing, and CI/perf gating.

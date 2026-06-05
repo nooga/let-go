@@ -1,3 +1,11 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - benchmark-ratchet
+human-verified:
+---
+
 # Benchmark Ratchet
 
 A small system for catching perf regressions in CI without requiring

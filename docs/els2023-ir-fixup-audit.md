@@ -1,3 +1,11 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - ir-link-fixup-pass-design
+human-verified:
+---
+
 # ELS 2023 Architecture Audit (IR Branch) and Proposed IR Link/Fixup Pass
 
 Date: 2026-05-23

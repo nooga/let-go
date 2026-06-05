@@ -1,3 +1,15 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - persistent-collections
+  - seq-tower
+  - transients
+  - transducers
+  - equality-hashing
+human-verified:
+---
+
 ## Clojure-like collections, seq tower, transients and transducers — Refactor Plan
 
 This document captures the plan to refactor VM data structures and core APIs to better align with Clojure semantics while minimizing breakage. It covers: current gaps, target interface hierarchy (seq tower), persistent data structures, transients, transducers, migration steps, tests, and risks.

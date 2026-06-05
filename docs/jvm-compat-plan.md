@@ -1,3 +1,12 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - jvm-compat-strategy
+  - jvm-shim-layer-architecture
+human-verified:
+---
+
 # JVM Compatibility Shim — Plan
 
 Goal: load real-world Clojure libraries (hiccup, fipp, medley, …) from

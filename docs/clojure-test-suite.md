@@ -1,3 +1,11 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - clojure-test-suite-workflow
+human-verified:
+---
+
 # Clojure Test Suite — Workflow Guide
 
 ## Overview

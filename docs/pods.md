@@ -1,3 +1,11 @@
+---
+status: planning
+last-verified: 2026-06-05
+authoritative-for:
+  - pods-design
+human-verified:
+---
+
 ## Pods — Babashka-compatible external process integration
 
 This document proposes implementing Babashka-compatible pods to provide an industrial-strength extension mechanism without relying on Go plugins. Pods are external processes speaking a simple EDN-based RPC over stdio (or TCP). let-go will act as a host, enabling script-friendly access to system APIs, databases, and tools while staying safe and portable.

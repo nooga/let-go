@@ -1,3 +1,12 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - parallel-lowering-findings
+  - type-discovery-cache-design
+human-verified:
+---
+
 # Parallel IR lowering, and a mergeable type-discovery cache
 
 Status: design note / findings. Captures the 2026-05-30 investigation into

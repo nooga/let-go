@@ -1,3 +1,12 @@
+---
+status: active
+last-verified: 2026-06-05
+authoritative-for:
+  - jvm-compat-execution-plan
+  - clojure-test-suite-improvement-sequence
+human-verified:
+---
+
 # Clojure Compatibility Roadmap — Execution Plan
 
 Goal: load `hiccup` from source AND improve the
