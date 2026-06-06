@@ -606,7 +606,8 @@ func init() {
 		"namespace search paths separated by the OS path-list separator "+
 			"(':' on Unix, ';' on Windows). When given, fully defines the search "+
 			"path: the current directory is NOT searched implicitly — include '.' "+
-			"to search it. Falls back to LG_SOURCE_PATHS if unset.")
+			"to search it. Falls back to LG_SOURCE_PATHS if unset. "+
+			"If flag or env var not given, it defaults to '.'")
 	flag.StringVar(&resourcePaths, "resource-paths", "",
 		"resource root directories for io/resource, separated by the OS path-list "+
 			"separator (':' on Unix, ';' on Windows). Falls back to LG_RESOURCE_PATHS "+

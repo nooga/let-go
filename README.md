@@ -322,22 +322,21 @@ no default resource directory; `lg` is explicit-only.
 ### Source paths
 
 `require`d namespaces are resolved against a list of search roots. By default
-`lg` searches the current directory (plus any `:paths` from a `deps.edn` in
-it). You can set the roots explicitly with `-source-paths` (path-list
+`lg` searches the current directory. You can set the roots explicitly with `-source-paths` (path-list
 separated by `:` on Unix, `;` on Windows) or the `LG_SOURCE_PATHS` env var:
 
 ```bash
 lg -source-paths src:lib app.lg     # search ./src and ./lib
 ```
 
-When you provide the search path — by flag or env var — it is taken as the
+When you provide the search path - by flag or env var - it is taken as the
 **complete** list: the current directory is **not** searched implicitly. Add
 `.` to the list to include it (`-source-paths .:lib`). A present-but-empty
-value (`-source-paths ""` or `LG_SOURCE_PATHS=`) means "no source paths" —
-only embedded namespaces resolve. This lets tooling that drives `lg` (e.g.
-project managers) control exactly which files are loadable. The script passed
-on the command line is always loaded by its path, independent of the search
-path.
+value (`-source-paths ""` or `LG_SOURCE_PATHS=`) means "no source paths" -
+only embedded namespaces resolve. The script passed on the command line 
+is always loaded by its path, independent of the search path.
+
+If search path is not given by flag or env var, it defaults to `.` (current directory).
 
 ## nREPL
 
