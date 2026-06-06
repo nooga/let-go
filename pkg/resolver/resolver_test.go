@@ -18,7 +18,7 @@ func TestParseSearchPaths(t *testing.T) {
 func TestPathsFromInputs_UsesFallbackWhenNotExplicit(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	got := PathsFromInputs("ignored", "x"+sep+"y", false)
-	want := []string{".", "x", "y"}
+	want := []string{"x", "y"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("PathsFromInputs() = %#v, want %#v", got, want)
 	}
@@ -27,16 +27,15 @@ func TestPathsFromInputs_UsesFallbackWhenNotExplicit(t *testing.T) {
 func TestPathsFromInputs_ExplicitOverridesFallback(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	got := PathsFromInputs("a"+sep+"b", "x"+sep+"y", true)
-	want := []string{".", "a", "b"}
+	want := []string{"a", "b"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("PathsFromInputs() = %#v, want %#v", got, want)
 	}
 }
 
-func TestPathsFromInputs_ExplicitEmptyMeansCurrentDirOnly(t *testing.T) {
+func TestPathsFromInputs_ExplicitEmptyMeansNoPaths(t *testing.T) {
 	got := PathsFromInputs("", "x", true)
-	want := []string{"."}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("PathsFromInputs() = %#v, want %#v", got, want)
+	if len(got) != 0 {
+		t.Fatalf("PathsFromInputs() = %#v, want empty (no paths)", got)
 	}
 }

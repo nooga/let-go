@@ -46,13 +46,16 @@ func TestPathsFromInputs(t *testing.T) {
 		explicitSet bool
 		want        []string
 	}{
-		{"both empty", "", "", false, []string{"."}},
-		{"explicit only", "a:b", "", true, []string{".", "a", "b"}},
-		{"fallback only", "", "x:y", false, []string{".", "x", "y"}},
-		{"explicit wins over fallback", "a:b", "x:y", true, []string{".", "a", "b"}},
+		// The current directory is no longer prepended implicitly: the parsed
+		// inputs are the complete search path (callers add "." when they want it).
+		{"both empty", "", "", false, nil},
+		{"explicit only", "a:b", "", true, []string{"a", "b"}},
+		{"fallback only", "", "x:y", false, []string{"x", "y"}},
+		{"explicit wins over fallback", "a:b", "x:y", true, []string{"a", "b"}},
 		// Empty explicit must still override the fallback when the flag was
 		// explicitly set; otherwise "flag wins over env" silently leaks env.
-		{"explicit empty wins over fallback", "", "x:y", true, []string{"."}},
+		// With no implicit ".", that override now yields an empty search path.
+		{"explicit empty wins over fallback", "", "x:y", true, nil},
 	}
 	// Adjust separators for the host platform without rebuilding cases.
 	sep := string(os.PathListSeparator)

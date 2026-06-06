@@ -50,13 +50,16 @@ func ParseSearchPaths(raw string) []string {
 
 // PathsFromInputs returns the namespace search path from explicit and
 // fallback inputs. When explicitSet is true the explicit value wins
-// even if empty. Otherwise the fallback is used.
+// even if empty. Otherwise the fallback is used. The returned path is
+// exactly the parsed inputs — the current directory is NOT included
+// implicitly; callers that want it must list "." themselves. An empty
+// input therefore yields no paths.
 func PathsFromInputs(explicit, fallback string, explicitSet bool) []string {
 	raw := fallback
 	if explicitSet {
 		raw = explicit
 	}
-	return append([]string{"."}, ParseSearchPaths(raw)...)
+	return ParseSearchPaths(raw)
 }
 
 // PathsFromDepsEdn reads deps.edn in dir and returns the :paths entries.
