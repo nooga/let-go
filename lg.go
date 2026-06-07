@@ -14,6 +14,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/bytecode"
@@ -614,6 +615,18 @@ func init() {
 			"if unset. With -b, resources under these roots are embedded in the binary.")
 }
 
+// warn prints an intentional transition/deprecation notice to stderr, unless
+// LG_SUPPRESS_WARNINGS is set to any non-empty value. It is the shared switch
+// for temporary migration warnings (not hard errors); future transition
+// notices reuse it so a single env var silences them all. The "warning:"
+// prefix mirrors the "error:" prefix used elsewhere in this file.
+func warn(format string, args ...any) {
+	if os.Getenv("LG_SUPPRESS_WARNINGS") != "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)
+}
+
 // buildSearchPaths resolves the resolver's path list from the -source-paths
 // flag (preferred), the LG_SOURCE_PATHS env var, or deps.edn in the current
 // directory (fallback). When the path is supplied explicitly — the
@@ -632,7 +645,15 @@ func buildSearchPaths() []string {
 	})
 	envVal, envSet := os.LookupEnv("LG_SOURCE_PATHS")
 	if explicitSet || envSet {
-		return resolver.PathsFromInputs(sourcePaths, envVal, explicitSet)
+		paths := resolver.PathsFromInputs(sourcePaths, envVal, explicitSet)
+		if !slices.Contains(paths, ".") {
+			warn(`the current directory (".") is no longer added to the ` +
+				`namespace search path automatically when -source-paths or ` +
+				`LG_SOURCE_PATHS is set; add "." to the list to keep searching ` +
+				`it. This notice will be removed in a future release ` +
+				`(set LG_SUPPRESS_WARNINGS=1 to silence).`)
+		}
+		return paths
 	}
 	if depsPaths := resolver.PathsFromDepsEdn("."); depsPaths != nil {
 		return append([]string{"."}, depsPaths...)
