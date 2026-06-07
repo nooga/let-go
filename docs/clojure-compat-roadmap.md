@@ -4,7 +4,19 @@ last-verified: 2026-06-05
 authoritative-for:
   - jvm-compat-execution-plan
   - clojure-test-suite-improvement-sequence
-human-verified:
+shipped:
+  - P1 reader conditionals (`#?`, `#?@` with `:lg`/`:default` branch selection) — pkg/compiler/reader.go (skipReaderForm + branch picker)
+  - P2 `\uXXXX` unicode escapes + surrogate pair joining — pkg/compiler/reader.go
+  - P3 `(catch <ClassSymbol> e …)` — test/catch_class_test.lg covers it
+  - P4 `&env` / `&form` macro context — test/macro_env_test.lg covers it
+  - P5 `*print-level*` / `*print-length*` / `tagged-literal?` stubs — test/print_dynvars_test.lg covers it
+remaining-open:
+  - Step 1 class-symbol registry (`clojure.lang` + `java.lang` namespaces, `AnyType`, auto-import)
+  - Step 2 protocol fallback dispatch (`Object`/`AnyType` in `Protocol.Lookup`)
+  - Step 3 `.startsWith` / `.substring` etc. on built-in types
+  - Step 4 `java.net` shim (`URI`, `URLEncoder`)
+  - Step 5 `deftype` with Object/protocol method bodies (only if needed)
+human-verified: 2026-06-07
 ---
 
 # Clojure Compatibility Roadmap — Execution Plan

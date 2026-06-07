@@ -16,7 +16,7 @@ shipped:
 remaining-open:
   - Phase 4 transducers (`transduce`, `eduction`, `sequence`, `completing`)
   - Phase 4 ChunkedSeq + Reducible fast path
-human-verified:
+human-verified: 2026-06-07
 ---
 
 ## Clojure-like collections, seq tower, transients and transducers — Refactor Plan

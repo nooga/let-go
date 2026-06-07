@@ -12,7 +12,7 @@ remaining-open:
   - Phase A closure TCO (extend OP_TAIL_CALL frame reuse to *Closure)
   - Phase B small-arity invoke/tail-call opcodes (INVOKE_0/1/2/3)
   - Phase C Reducible + chunked-seq throughput fast paths
-human-verified:
+human-verified: 2026-06-07
 ---
 
 ## VM performance and calling convention — Audit and Optimization Plan

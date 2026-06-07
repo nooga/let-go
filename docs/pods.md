@@ -10,7 +10,7 @@ remaining-open:
   - CLI helpers (`lg pods describe`, `lg pods run`)
   - TCP transport
   - Streaming and binary/transit encoding (stretch goals)
-human-verified:
+human-verified: 2026-06-07
 ---
 
 ## Pods — Babashka-compatible external process integration
