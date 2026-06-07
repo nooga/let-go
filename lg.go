@@ -635,8 +635,8 @@ func buildSearchPaths() []string {
 	if explicitSet || envSet {
 		paths := resolver.PathsFromInputs(sourcePaths, envVal, explicitSet)
 		// Transition notice for the dropped implicit ".". Tooling that owns the
-		// search path (e.g. the lgx project manager) deliberately omits "." and
-		// can set LG_SUPPRESS_SOURCE_PATHS_WARNING to silence this; the notice is
+		// search path deliberately omits "." and can set
+		// LG_SUPPRESS_SOURCE_PATHS_WARNING to silence this; the notice is
 		// removed in a future release.
 		if !slices.Contains(paths, ".") && os.Getenv("LG_SUPPRESS_SOURCE_PATHS_WARNING") == "" {
 			fmt.Fprintln(os.Stderr, `WARNING: the current directory (".") is no `+
