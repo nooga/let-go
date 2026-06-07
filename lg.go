@@ -624,7 +624,7 @@ func warn(format string, args ...any) {
 	if os.Getenv("LG_SUPPRESS_WARNINGS") != "" {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "WARNING: "+format+"\n", args...)
 }
 
 // buildSearchPaths resolves the resolver's path list from the -source-paths
