@@ -63,7 +63,7 @@ A short, stable sentinel substring (e.g. `is no longer added to the namespace se
 - Modify: `lg.go`
 - Test: `source_paths_e2e_test.go`
 
-- [ ] **Step 1: Write the failing e2e test**
+- [x] **Step 1: Write the failing e2e test**
   In `source_paths_e2e_test.go`, add `TestSourcePathsTransitionWarning`. Reuse the existing pattern (`buildLG(t)`, a `cleanEnv` that strips `LG_SOURCE_PATHS` *and* `LG_SUPPRESS_WARNINGS`, and a `run` helper that sets `cmd.Dir` to a temp dir and returns combined output). Define `const warnMarker = "is no longer added to the namespace search path"`. Add subtests:
   - `explicit flag without dot warns` → `-source-paths <libDir> -e "(println 1)"`, assert output **contains** `warnMarker`.
   - `explicit flag with dot does not warn` → `-source-paths .:<libDir> -e "(println 1)"`, assert output does **not** contain `warnMarker`.
@@ -72,25 +72,25 @@ A short, stable sentinel substring (e.g. `is no longer added to the namespace se
   - `suppress env silences` → `-source-paths <libDir>` plus env `LG_SUPPRESS_WARNINGS=1`, assert does **not** contain.
   - `default run does not warn` → no flag, no env, assert does **not** contain.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
   Run: `go test -run TestSourcePathsTransitionWarning .`
   Expected: FAIL — the warning is never emitted, so the "contains" subtests fail.
 
-- [ ] **Step 3: Implement the `warn` helper and trigger**
+- [x] **Step 3: Implement the `warn` helper and trigger**
   In `lg.go`:
   - Add `"slices"` to the import block.
   - Add the `warn(format string, args ...any)` helper near `buildSearchPaths`: return early if `os.Getenv("LG_SUPPRESS_WARNINGS") != ""`, otherwise `fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)`. Include a doc comment describing it as the switch for intentional transition warnings.
   - In `buildSearchPaths`, change the explicit branch to bind `paths := resolver.PathsFromInputs(...)`, then `if !slices.Contains(paths, ".") { warn(<message>) }`, then `return paths`. Use the message from the Design section.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
   Run: `go test -run TestSourcePathsTransitionWarning .`
   Expected: PASS.
 
-- [ ] **Step 5: Run the existing source-paths suite to confirm no regressions**
+- [x] **Step 5: Run the existing source-paths suite to confirm no regressions**
   Run: `go test -run TestSourcePaths . ./pkg/resolver/...`
   Expected: PASS (existing `TestSourcePathsControlSearchPath` and resolver tests unaffected — they assert on resolution behavior, not warning text).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   `git commit -am "feat(source-paths): warn when explicit search path drops implicit '.'"`
 
 ## Task 2: Document the warning and opt-out
@@ -98,22 +98,67 @@ A short, stable sentinel substring (e.g. `is no longer added to the namespace se
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Update the "Source paths" section**
+- [x] **Step 1: Update the "Source paths" section**
   In the existing "### Source paths" section, after the sentence explaining that the current directory is not searched implicitly, add a short note: setting the search path without `.` prints a transition warning (to be removed in a future release) to help spot reliance on the old implicit-cwd behavior, and `LG_SUPPRESS_WARNINGS=1` silences it (and any future transition warnings). Use the /writing-clearly skill for the wording.
 
-- [ ] **Step 2: Verify the docs build/render**
+- [x] **Step 2: Verify the docs build/render**
   Run: `git diff README.md`
   Expected: the new sentence reads cleanly and matches surrounding style; no broken markdown.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
   `git commit -am "docs(source-paths): note transition warning and LG_SUPPRESS_WARNINGS opt-out"`
 
 ## Task 3: Full verification
 
-- [ ] **Step 1: Build and vet**
+- [x] **Step 1: Build and vet**
   Run: `go build ./... && go vet ./...`
   Expected: clean.
 
-- [ ] **Step 2: Run the full test suite**
+- [x] **Step 2: Run the full test suite**
   Run: `go test ./...`
   Expected: PASS.
+
+---
+
+## Status: Completed (2026-06-07)
+
+All three tasks implemented and verified.
+
+### What was implemented
+
+- **`lg.go`** — added a generic `warn(format, args...)` helper that prints
+  `warning: …` to stderr unless `LG_SUPPRESS_WARNINGS` is set to any non-empty
+  value (matching the codebase's `os.Getenv(...) != ""` boolean-env idiom). In
+  `buildSearchPaths`, the explicit branch now warns via `slices.Contains` when
+  the parsed path lacks `"."` — covering the empty case (`-source-paths ""` /
+  `LG_SOURCE_PATHS=`) per the design decision. Added the `slices` import.
+- **`source_paths_e2e_test.go`** — new `TestSourcePathsTransitionWarning` with
+  six subtests (explicit flag with/without `.`, empty env, explicit env,
+  `LG_SUPPRESS_WARNINGS` suppression, default run), asserting on a stable
+  `warnMarker` substring so wording tweaks don't break tests.
+- **`README.md`** — extended the "Source paths" section with a note on the
+  transition warning and the `LG_SUPPRESS_WARNINGS=1` opt-out.
+
+### Verification
+
+- `go test -run TestSourcePathsTransitionWarning .` — PASS
+- `go test -run TestSourcePaths . ./pkg/resolver/...` — PASS (no regressions)
+- `go build ./... && go vet ./...` — clean
+- `go test ./...` — PASS
+- Second-opinion review via `review-with-codex` (uncommitted scope) — no
+  correctness issues found.
+
+### Notes / known nuances
+
+- In the bundled-binary branch, `buildSearchPaths()` runs at `lg.go:690`
+  *before* `flag.Parse()`, so `flag.Visit` finds nothing and only the
+  `LG_SOURCE_PATHS` env channel can trigger the warning there. Harmless
+  (bundles are pre-resolved; the env channel still works) and pre-existing;
+  not changed by this work.
+- Only an exact `"."` entry suppresses the warning; alternate spellings
+  (`"./"`, an absolute cwd path) still warn, as documented.
+
+### Commits
+
+- `48de96b` feat(source-paths): warn when explicit search path drops implicit '.'
+- `9260167` docs(source-paths): note transition warning and LG_SUPPRESS_WARNINGS opt-out
