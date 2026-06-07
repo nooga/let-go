@@ -119,7 +119,7 @@ func TestSourcePathsControlSearchPath(t *testing.T) {
 // explicitly (via -source-paths or LG_SOURCE_PATHS) without listing "." prints
 // a transition warning, since commit 5c75260 dropped the previously-implicit
 // current directory. Listing "." suppresses it, the default run never warns,
-// and LG_SUPPRESS_WARNINGS silences it.
+// and LG_SUPPRESS_SOURCE_PATHS_WARNING silences it.
 func TestSourcePathsTransitionWarning(t *testing.T) {
 	bin := buildLG(t)
 
@@ -137,7 +137,7 @@ func TestSourcePathsTransitionWarning(t *testing.T) {
 		out := os.Environ()[:0:0]
 		for _, kv := range os.Environ() {
 			if strings.HasPrefix(kv, "LG_SOURCE_PATHS=") ||
-				strings.HasPrefix(kv, "LG_SUPPRESS_WARNINGS=") {
+				strings.HasPrefix(kv, "LG_SUPPRESS_SOURCE_PATHS_WARNING=") {
 				continue
 			}
 			out = append(out, kv)
@@ -185,10 +185,10 @@ func TestSourcePathsTransitionWarning(t *testing.T) {
 	})
 
 	t.Run("suppress env silences", func(t *testing.T) {
-		env := append(cleanEnv(), "LG_SUPPRESS_WARNINGS=1")
+		env := append(cleanEnv(), "LG_SUPPRESS_SOURCE_PATHS_WARNING=1")
 		out := run(t, env, "-source-paths", libDir, "-e", `(println 1)`)
 		if strings.Contains(out, warnMarker) {
-			t.Fatalf("expected LG_SUPPRESS_WARNINGS to silence the warning, got:\n%s", out)
+			t.Fatalf("expected LG_SUPPRESS_SOURCE_PATHS_WARNING to silence the warning, got:\n%s", out)
 		}
 	})
 
