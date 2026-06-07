@@ -336,6 +336,11 @@ value (`-source-paths ""` or `LG_SOURCE_PATHS=`) means "no source paths" -
 only embedded namespaces resolve. The script passed on the command line 
 is always loaded by its path, independent of the search path.
 
+The current directory used to be searched implicitly, so setting the path
+without `.` prints a transition warning to flag any reliance on the old
+behavior. The warning will be removed in a future release; set
+`LG_SUPPRESS_WARNINGS=1` to silence it (and any later transition warnings).
+
 If search path is not given by flag or env var, it defaults to `.` (current directory).
 
 ## nREPL
