@@ -258,10 +258,6 @@ whether you run a script or a bundled binary, so you never slice argv by hand:
   (println "Hello," name))
 ```
 
-This matches Clojure and Babashka, so portable code works unmodified. `os/args`
-stays the full process argv (program name, script path, and the rest); reach for
-`*command-line-args*` when you want only the user's arguments.
-
 ## Compile and distribute
 
 let-go can compile programs to bytecode (`.lgb` files) and bundle them as

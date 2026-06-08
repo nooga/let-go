@@ -678,7 +678,7 @@ func buildResourcePaths() []string {
 
 // commandLineArgsValue converts the user's CLI args — the positionals after
 // the script — into the value of core/*command-line-args*: nil when there are
-// none, else a seq of strings, matching Clojure/Babashka.
+// none, else a seq of strings.
 func commandLineArgsValue(args []string) vm.Value {
 	if len(args) == 0 {
 		return vm.NIL
