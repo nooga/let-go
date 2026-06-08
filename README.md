@@ -244,8 +244,23 @@ go install github.com/nooga/let-go@latest
 lg                                # REPL
 lg -e '(+ 1 1)'                   # eval expression
 lg myfile.lg                      # run file
+lg myfile.lg a b                  # run file with arguments
 lg -r myfile.lg                   # run file, then REPL
 ```
+
+`*command-line-args*` holds the program's arguments — the positionals after the
+script — as a seq of strings, or `nil` when there are none. It reads the same
+whether you run a script or a bundled binary, so you never slice argv by hand:
+
+```clojure
+;; greet.lg — run as `lg greet.lg Alice Bob` or `./greet Alice Bob`
+(doseq [name *command-line-args*]
+  (println "Hello," name))
+```
+
+This matches Clojure and Babashka, so portable code works unmodified. `os/args`
+stays the full process argv (program name, script path, and the rest); reach for
+`*command-line-args*` when you want only the user's arguments.
 
 ## Compile and distribute
 

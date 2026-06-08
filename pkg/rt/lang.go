@@ -6003,6 +6003,12 @@ func installLangNS() {
 	CurrentNS = ns.Def("*ns*", ns)
 	ns.Def("*compiling-aot*", vm.FALSE)
 	ns.Def("*in-wasm*", vm.FALSE)
+	// The user's command-line arguments — the positionals after the script —
+	// as a seq of strings, or nil when there are none. Set by lg at startup
+	// (see commandLineArgsValue in lg.go); os/args remains the full process
+	// argv. nil is the correct default for core bootstrap, AOT compilation,
+	// and the REPL.
+	ns.Def("*command-line-args*", vm.NIL)
 	ns.Def("Object", vm.AnyType)
 	// True if the host terminal renders ANSI escape sequences. Defaults to
 	// true; flipped to false on platforms that don't (e.g. plan9 / rio —

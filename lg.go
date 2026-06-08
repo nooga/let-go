@@ -676,6 +676,28 @@ func buildResourcePaths() []string {
 	return resolver.ParseSearchPaths(raw)
 }
 
+// commandLineArgsValue converts the user's CLI args — the positionals after
+// the script — into the value of core/*command-line-args*: nil when there are
+// none, else a seq of strings, matching Clojure/Babashka.
+func commandLineArgsValue(args []string) vm.Value {
+	if len(args) == 0 {
+		return vm.NIL
+	}
+	vs := make([]vm.Value, len(args))
+	for i, a := range args {
+		vs[i] = vm.String(a)
+	}
+	return vm.NewList(vs)
+}
+
+// setCommandLineArgs publishes the user's CLI args to core/*command-line-args*.
+// lg is the only layer that knows authoritatively where the script ends and
+// the user's args begin, so it computes them once and every consumer reads the
+// var instead of slicing os/args by hand.
+func setCommandLineArgs(args []string) {
+	rt.CoreNS.Lookup("*command-line-args*").(*vm.Var).SetRoot(commandLineArgsValue(args))
+}
+
 func initCompiler(debug bool) *compiler.Context {
 	consts := vm.NewConsts()
 	ns := rt.NS("user")
@@ -703,6 +725,10 @@ func main() {
 		nsResolver := resolver.NewNSResolver(ctx, buildSearchPaths())
 		rt.SetNSLoader(nsResolver)
 		defer rt.ShutdownAllPods()
+
+		// A bundle skips flag parsing, so every arg after the program name is a
+		// user arg. Set this before any chunk runs — top-level forms read it.
+		setCommandLineArgs(os.Args[1:])
 
 		// Resources are self-contained in a bundle: serve io/resource from the
 		// embedded archive only, ignoring the filesystem and -resource-paths.
@@ -767,6 +793,15 @@ func main() {
 	context := initCompiler(debug)
 	nsResolver := resolver.NewNSResolver(context, buildSearchPaths())
 	rt.SetNSLoader(nsResolver)
+
+	// files[0] is the script; the rest are the user's args. Set unconditionally
+	// so script, -e, compile, bundle, and wasm modes all see it, and before any
+	// user code runs.
+	var userArgs []string
+	if len(files) >= 1 {
+		userArgs = files[1:]
+	}
+	setCommandLineArgs(userArgs)
 
 	// Dev/run resources: serve io/resource from the -resource-paths roots on
 	// the filesystem. (In a bundled binary this branch is never reached — the
