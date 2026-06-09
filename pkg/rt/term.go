@@ -78,7 +78,11 @@ func fdFromHandle(v vm.Value) (int, error) {
 		return -1, fmt.Errorf("expected IOHandle")
 	}
 	if h, ok := b.Unbox().(*IOHandle); ok {
-		return int(h.File.Fd()), nil
+		f := h.File()
+		if f == nil {
+			return -1, fmt.Errorf("IOHandle is not file-backed; raw-mode terminal ops require a real file descriptor")
+		}
+		return int(f.Fd()), nil
 	}
 	if f, ok := b.Unbox().(*os.File); ok {
 		return int(f.Fd()), nil

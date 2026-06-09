@@ -181,7 +181,11 @@ func coerceReaderBuiltin(v vm.Value) (*LGReader, error) {
 			return newLGReader(buf, nil), nil
 		}
 		if h, ok := b.Unbox().(*IOHandle); ok {
-			return newLGReader(h.Reader(), nil), nil
+			r := h.Reader()
+			if r == nil {
+				return nil, fmt.Errorf("cannot coerce IOHandle %q to reader: handle is not readable", h.name)
+			}
+			return newLGReader(r, nil), nil
 		}
 		// Any boxed io.Reader
 		if r, ok := b.Unbox().(io.Reader); ok {
@@ -234,7 +238,11 @@ func coerceWriterBuiltin(v vm.Value) (*LGWriter, error) {
 			return newLGWriter(buf, nil), nil
 		}
 		if h, ok := b.Unbox().(*IOHandle); ok {
-			return newLGWriter(h.File, nil), nil
+			w := h.Writer()
+			if w == nil {
+				return nil, fmt.Errorf("cannot coerce IOHandle %q to writer: handle is not writable", h.name)
+			}
+			return newLGWriter(w, nil), nil
 		}
 		if w, ok := b.Unbox().(io.Writer); ok {
 			var closer io.Closer

@@ -8,34 +8,103 @@ package rt
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// IOHandle wraps an *os.File with optional buffered reader for line-based reads.
+// IOHandle is the runtime's I/O abstraction. It wraps an io.Writer and/or
+// io.Reader so the same type backs file handles, stdin/stdout/stderr,
+// bytes.Buffer-style captures, and embedder-supplied sinks. File-backed
+// handles also retain the *os.File so callers that need Fd()/Sync() still
+// have it.
 type IOHandle struct {
-	File   *os.File
-	reader *bufio.Reader
+	name   string
+	file   *os.File // set only when this handle wraps a file
+	writer io.Writer
+	reader io.Reader
+	bufrd  *bufio.Reader
 }
 
+// NewIOHandle wraps an *os.File. Preserves all existing call sites and
+// keeps file-specific operations (Fd, Sync) available via File().
 func NewIOHandle(f *os.File) *IOHandle {
-	return &IOHandle{File: f}
+	return &IOHandle{name: f.Name(), file: f, writer: f, reader: f}
+}
+
+// NewWriterHandle wraps an arbitrary io.Writer. No reads.
+func NewWriterHandle(name string, w io.Writer) *IOHandle {
+	return &IOHandle{name: name, writer: w}
+}
+
+// NewReaderHandle wraps an arbitrary io.Reader. No writes.
+func NewReaderHandle(name string, r io.Reader) *IOHandle {
+	return &IOHandle{name: name, reader: r}
+}
+
+// File returns the underlying *os.File or nil when the handle wraps an
+// arbitrary writer/reader. Callers that need Fd()/Sync() (e.g. term/raw
+// mode) must handle nil.
+func (h *IOHandle) File() *os.File { return h.file }
+
+// Writer / Reader are the interface-shaped accessors the print/error
+// refactor consults.
+func (h *IOHandle) Writer() io.Writer    { return h.writer }
+func (h *IOHandle) ReaderRaw() io.Reader { return h.reader }
+
+// Write is the convenience write-string path used by the print fns and
+// (write! handle x). Returns an error if the handle isn't writable.
+func (h *IOHandle) Write(s string) (int, error) {
+	if h.writer == nil {
+		return 0, fmt.Errorf("IOHandle %q is not writable", h.name)
+	}
+	return io.WriteString(h.writer, s)
 }
 
 func (h *IOHandle) String() string {
-	return fmt.Sprintf("#<IOHandle %s>", h.File.Name())
+	return fmt.Sprintf("#<IOHandle %s>", h.name)
 }
 
+// Reader returns a buffered reader over the underlying io.Reader, lazily
+// constructed on first use. Returns nil for write-only handles.
 func (h *IOHandle) Reader() *bufio.Reader {
 	if h.reader == nil {
-		h.reader = bufio.NewReader(h.File)
+		return nil
 	}
-	return h.reader
+	if h.bufrd == nil {
+		h.bufrd = bufio.NewReader(h.reader)
+	}
+	return h.bufrd
 }
 
+// Close closes the underlying file if file-backed, or any wrapped writer/
+// reader that implements io.Closer. No-op for non-closable handles like
+// bytes.Buffer or os.Stdout.
 func (h *IOHandle) Close() error {
-	return h.File.Close()
+	if h.file != nil {
+		return h.file.Close()
+	}
+	if c, ok := h.writer.(io.Closer); ok {
+		return c.Close()
+	}
+	if c, ok := h.reader.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+// Sync flushes/syncs the handle. For file-backed handles, calls File.Sync.
+// For writers that implement a Flush() error method (e.g. bufio.Writer),
+// calls that. Otherwise no-op (buffers are eager).
+func (h *IOHandle) Sync() error {
+	if h.file != nil {
+		return h.file.Sync()
+	}
+	if f, ok := h.writer.(interface{ Flush() error }); ok {
+		return f.Flush()
+	}
+	return nil
 }
 
 // getIOHandle extracts an *IOHandle from a Boxed value or wraps a raw *os.File.
@@ -44,11 +113,11 @@ func getIOHandle(v vm.Value) (*IOHandle, error) {
 	if !ok {
 		return nil, fmt.Errorf("expected IOHandle, got %s", v.Type().Name())
 	}
-	if h, ok := b.Unbox().(*IOHandle); ok {
-		return h, nil
-	}
-	if f, ok := b.Unbox().(*os.File); ok {
-		return NewIOHandle(f), nil
+	switch u := b.Unbox().(type) {
+	case *IOHandle:
+		return u, nil
+	case *os.File:
+		return NewIOHandle(u), nil
 	}
 	return nil, fmt.Errorf("expected IOHandle, got %T", b.Unbox())
 }
@@ -120,7 +189,11 @@ func installIOBuiltins(ns *vm.Namespace) {
 		if err != nil {
 			return vm.NIL, err
 		}
-		line, err := h.Reader().ReadString('\n')
+		r := h.Reader()
+		if r == nil {
+			return vm.NIL, fmt.Errorf("read-line: handle %q is not readable", h.name)
+		}
+		line, err := r.ReadString('\n')
 		if err != nil {
 			if len(line) > 0 {
 				// Return what we have even on EOF
@@ -153,7 +226,7 @@ func installIOBuiltins(ns *vm.Namespace) {
 		} else {
 			s = vs[1].String()
 		}
-		_, err = h.File.WriteString(s)
+		_, err = h.Write(s)
 		return vm.NIL, err
 	})
 
@@ -166,7 +239,7 @@ func installIOBuiltins(ns *vm.Namespace) {
 		if err != nil {
 			return vm.NIL, err
 		}
-		return vm.NIL, h.File.Sync()
+		return vm.NIL, h.Sync()
 	})
 
 	// read-bytes — (read-bytes handle n) → String or nil at EOF
@@ -182,8 +255,11 @@ func installIOBuiltins(ns *vm.Namespace) {
 		if !ok {
 			return vm.NIL, fmt.Errorf("read-bytes expected Int count")
 		}
+		if h.reader == nil {
+			return vm.NIL, fmt.Errorf("read-bytes: handle is not readable")
+		}
 		buf := make([]byte, int(n))
-		nread, err := h.File.Read(buf)
+		nread, err := h.reader.Read(buf)
 		if nread == 0 {
 			return vm.NIL, nil // EOF
 		}

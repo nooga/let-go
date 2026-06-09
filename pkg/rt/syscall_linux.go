@@ -760,7 +760,7 @@ func installSyscallNS() {
 		if err != nil {
 			return nil, false, err
 		}
-		return h.File, false, nil
+		return h.File(), false, nil
 	}
 
 	// syscall/spawn-async — (syscall/spawn-async path argv env cloneflags stdin stdout stderr [opts])

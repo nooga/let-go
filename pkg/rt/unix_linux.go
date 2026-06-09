@@ -112,7 +112,7 @@ func installUnixNS() {
 			return int(fv), nil
 		case *vm.Boxed:
 			if h, ok := fv.Unbox().(*IOHandle); ok {
-				return int(h.File.Fd()), nil
+				return int(h.File().Fd()), nil
 			}
 			if f, ok := fv.Unbox().(*os.File); ok {
 				return int(f.Fd()), nil
