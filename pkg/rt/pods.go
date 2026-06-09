@@ -414,8 +414,8 @@ func createProxyNamespaces(p *Pod) error {
 				// Client-side code: evaluate in the pod's namespace
 				if err := evalPodCode(pv.code, ns); err != nil {
 					// Non-fatal: log and continue (the var may still be usable)
-					fmt.Fprintf(os.Stderr, "pod %s: client code eval error for %s/%s: %v\n",
-						p.id, pns.name, pv.name, err)
+					_ = WriteToErr(fmt.Sprintf("pod %s: client code eval error for %s/%s: %v\n",
+						p.id, pns.name, pv.name, err))
 				}
 				continue
 			}
@@ -515,7 +515,15 @@ func startPod(binary string) (*Pod, error) {
 	}
 
 	go func() {
-		io.Copy(os.Stderr, stderr) //nolint:errcheck
+		// Stream the child pod's stderr to *err*. Resolve once at start;
+		// if *err* later rebinds, this goroutine keeps writing to the
+		// originally-resolved sink (acceptable for a child process's
+		// stderr that lives for its lifetime).
+		if h := resolveIOHandleVar("*err*"); h != nil && h.Writer() != nil {
+			io.Copy(h.Writer(), stderr) //nolint:errcheck
+		} else {
+			io.Copy(os.Stderr, stderr) //nolint:errcheck
+		}
 	}()
 
 	p := &Pod{
@@ -709,7 +717,7 @@ type invokable interface {
 func callFn(fn vm.Value, args []vm.Value) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "pod callback panic: %v\n", r)
+			_ = WriteToErr(fmt.Sprintf("pod callback panic: %v\n", r))
 		}
 	}()
 	if f, ok := fn.(invokable); ok {

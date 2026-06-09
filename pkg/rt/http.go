@@ -71,7 +71,7 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(500)
 		_, err := resp.Write(fmt.Appendf(nil, "%s", err))
 		if err != nil {
-			fmt.Println("HTTP Error while writing error 500", err)
+			_ = WriteToErr(fmt.Sprintln("HTTP Error while writing error 500", err))
 		}
 		return
 	}
@@ -106,7 +106,7 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(500)
 		_, err := resp.Write(fmt.Appendf(nil, "%s", err))
 		if err != nil {
-			fmt.Println("HTTP Error while writing error 500", err)
+			_ = WriteToErr(fmt.Sprintln("HTTP Error while writing error 500", err))
 		}
 		return
 	}
@@ -116,7 +116,7 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(500)
 		_, err := resp.Write([]byte("handler returned malformed response"))
 		if err != nil {
-			fmt.Println("HTTP Error while writing error 500", err)
+			_ = WriteToErr(fmt.Sprintln("HTTP Error while writing error 500", err))
 		}
 		return
 	}
@@ -146,14 +146,14 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(int(status.(vm.Int)))
 	respBody, bodyErr := coerceResponseBody(body)
 	if bodyErr != nil {
-		fmt.Println("HTTP Error coercing body:", bodyErr)
+		_ = WriteToErr(fmt.Sprintln("HTTP Error coercing body:", bodyErr))
 		return
 	}
 	if respBody != nil {
 		_, err = resp.Write(respBody)
 	}
 	if err != nil {
-		fmt.Println("HTTP Error while writing error 500", err)
+		_ = WriteToErr(fmt.Sprintln("HTTP Error while writing error 500", err))
 	}
 }
 

@@ -3468,7 +3468,10 @@ func installLangNS() {
 		vm.CurrentScope().Go(func(ctx context.Context) {
 			v, err := at.Invoke(nil)
 			if err != nil {
-				fmt.Println(err)
+				// Async (go ...) error — route to *err*. Previously
+				// fmt.Println, which targets stdout despite being error
+				// output: double-wrong.
+				_ = WriteToErr(fmt.Sprintln(err))
 			}
 			// The result send is cancellable via the registry. (Channel
 			// ops <!/>! INSIDE the block are still synchronous and not yet
