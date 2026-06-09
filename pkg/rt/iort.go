@@ -380,3 +380,14 @@ func WriteToErr(s string) error {
 	_, err := io.WriteString(os.Stderr, s)
 	return err
 }
+
+// LookupCoreVar returns the *Var for a name in the core namespace, or nil
+// if not installed. Exported for packages (e.g. nrepl) that need to
+// PushBinding/PopBinding on the core I/O vars to implement scoped capture.
+func LookupCoreVar(varName string) *vm.Var {
+	ns := lookupNSCached(NameCoreNS)
+	if ns == nil {
+		return nil
+	}
+	return ns.LookupLocal(vm.Symbol(varName))
+}

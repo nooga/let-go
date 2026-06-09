@@ -236,26 +236,27 @@ func (n *NreplServer) handleEval(conn net.Conn, msg map[string]any) {
 	sessID := msgStr(msg, "session")
 	code := msgStr(msg, "code")
 
-	// Capture stdout
+	// Capture eval output via binding-based capture: rebind *out* to a
+	// per-call bytes.Buffer for the eval's scope, restore via defer.
+	// Replaces the prior os.Stdout = pw swap, which was broken after the
+	// print refactor (println now writes via the IOHandle's saved *os.File
+	// instead of os.Stdout, so the swap stopped capturing).
+	//
+	// Concurrency caveat: vm.Var's binding stack is process-global, not
+	// per-goroutine. Concurrent nREPL evals can still interleave their
+	// captures, and the captures still race with with-out-str calls
+	// happening elsewhere in the process. No worse than the prior swap
+	// (which had the same hazard), but no better either. Proper isolation
+	// would need goroutine-local bindings or serialization at this layer.
 	var outBuf bytes.Buffer
-	origStdout := os.Stdout
-	pr, pw, _ := os.Pipe()
-	os.Stdout = pw
-
-	// Read pipe in background
-	outDone := make(chan struct{})
-	go func() {
-		io.Copy(&outBuf, pr)
-		close(outDone)
-	}()
+	outVar := rt.LookupCoreVar("*out*")
+	if outVar != nil {
+		outVar.PushBinding(vm.NewBoxed(rt.NewWriterHandle("nrepl-eval", &outBuf)))
+		defer outVar.PopBinding()
+	}
 
 	// Eval
 	_, val, err := n.ctx.CompileMultiple(strings.NewReader(code))
-
-	// Restore stdout and flush
-	pw.Close()
-	os.Stdout = origStdout
-	<-outDone
 
 	// Send stdout if any
 	if outBuf.Len() > 0 {
