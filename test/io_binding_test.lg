@@ -1,0 +1,90 @@
+;; Dynamic *out* / *err* binding tests — the cases that gave the
+;; runtime I/O proposal its production-bug grounding. Before the print
+;; refactor, every (binding [*out* x] (println ...)) write silently went
+;; to stdout regardless of what x was. These tests pin the fixed
+;; behavior so the regression can't sneak back.
+(ns test.io-binding-test
+  (:require [test :refer :all]))
+
+;; ----------------------------------------------------------------
+;; Core claim: println/print/pr/prn consult the CURRENT binding
+;; of *out*, not the runtime's stdout.
+;; ----------------------------------------------------------------
+
+(deftest println-consults-out-binding
+  (testing "println output goes through *out*'s current binding"
+    (is (= "hello\n"
+           (with-out-str (println "hello"))))))
+
+(deftest print-consults-out-binding
+  (testing "print (no newline) goes through *out*'s current binding"
+    (is (= "hello"
+           (with-out-str (print "hello"))))))
+
+(deftest pr-consults-out-binding
+  (testing "pr (readable, no newline) goes through *out*'s current binding"
+    (is (= "\"hello\""
+           (with-out-str (pr "hello"))))))
+
+(deftest prn-consults-out-binding
+  (testing "prn (readable + newline) goes through *out*'s current binding"
+    (is (= "\"hello\"\n"
+           (with-out-str (prn "hello"))))))
+
+;; ----------------------------------------------------------------
+;; The lgcr die pattern: (binding [*out* *err*] (println ...))
+;; Before fix: println wrote to stdout regardless. After fix: it
+;; respects *err*. We can't easily assert against the process
+;; stderr from inside a deftest, but we CAN observe that the
+;; outer with-out-str (binding *out* to a buffer) doesn't capture
+;; output emitted under (binding [*out* something-else] ...) —
+;; which is the same Clojure-correct semantic.
+;; ----------------------------------------------------------------
+
+(deftest binding-out-respects-rebind
+  (testing "(binding [*out* x] (println ...)) writes to x, not the outer binding"
+    ;; Outer captures *out*; inner rebinds to a fresh handle; the
+    ;; outer buffer must be empty because println wrote to the
+    ;; inner binding, not the outer one.
+    (let [outer (with-out-str
+                  (binding [*out* *err*]
+                    ;; Output goes to *err*, not the outer with-out-str
+                    ;; buffer. We don't check *err* here (process-level
+                    ;; assertion is awkward in deftest); the load-bearing
+                    ;; observation is that the OUTER buffer is empty.
+                    (println "to-err")))]
+      (is (= "" outer)))))
+
+;; ----------------------------------------------------------------
+;; Arbitrary handle as binding target (the lgcr stream-file pattern).
+;; ----------------------------------------------------------------
+
+(deftest binding-out-to-arbitrary-handle
+  (testing "(binding [*out* file-handle] (print ...)) writes to the file"
+    (let [path "/tmp/letgo-io-binding-test.txt"
+          f (open path :write)]
+      (binding [*out* f]
+        (print "via-binding"))
+      (close! f)
+      (is (= "via-binding" (slurp path))))))
+
+;; ----------------------------------------------------------------
+;; with-out-str composability (regression check for the rewrite).
+;; ----------------------------------------------------------------
+
+(deftest with-out-str-nests
+  (testing "with-out-str nested in with-out-str captures correctly"
+    (let [inner (with-out-str
+                  (println "outer-1")
+                  (let [captured (with-out-str
+                                   (println "inner"))]
+                    (println "captured was:" (count captured))))]
+      ;; Outer captured: outer-1, then "captured was: 6" (the count of "inner\n")
+      (is (= "outer-1\ncaptured was: 6\n" inner)))))
+
+(deftest with-out-str-default-stdout-unchanged
+  (testing "outside any with-out-str/binding, println goes to runtime stdout"
+    ;; We can't directly assert against the process stdout from
+    ;; inside a test, but we can ensure (a) it doesn't throw and
+    ;; (b) the return value is nil (matches Clojure).
+    (is (nil? (println "this goes to process stdout — visible in test output")))))
