@@ -6,6 +6,7 @@
 package rt
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	_ "embed"
@@ -7452,7 +7453,19 @@ func installLangNS() {
 	})
 	ns.Def("pop!", popBang)
 
-	// with-out-str — capture stdout as string (macro helper)
+	// with-out-str* — capture *out* output as string. Binding-based capture
+	// (no process-global os.Stdout swap). Rebinds *out* to a bytes.Buffer-
+	// backed IOHandle for the thunk's scope; restores via defer so a
+	// panicking thunk doesn't leak the binding.
+	//
+	// Concurrency caveat: vm.Var holds a single process-global binding
+	// stack guarded by bindingsMu (pkg/vm/var.go:38). Concurrent
+	// with-out-str calls on the same *out* DO NOT isolate captures from
+	// each other — their push/pop interleavings can cause one goroutine's
+	// println to land in another's buffer. This is no worse than the
+	// previous os.Stdout swap (which had the same global-state race),
+	// but it's also not better. Real isolation would require either
+	// goroutine-local binding stacks in vm.Var or external serialization.
 	withOutStrf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("with-out-str* expects 1 arg (a thunk)")
@@ -7461,23 +7474,19 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("with-out-str* expects a function")
 		}
-		// Capture stdout
-		old := os.Stdout
-		r, w, err := os.Pipe()
-		if err != nil {
-			return vm.NIL, err
+		outVar := lookupNSCached(NameCoreNS).LookupLocal(vm.Symbol("*out*"))
+		if outVar == nil {
+			return vm.NIL, fmt.Errorf("with-out-str*: *out* not installed")
 		}
-		os.Stdout = w
+		buf := &bytes.Buffer{}
+		handle := vm.NewBoxed(NewWriterHandle("with-out-str*", buf))
+		outVar.PushBinding(handle)
+		defer outVar.PopBinding()
 		_, callErr := fn.Invoke(nil)
-		w.Close()
-		os.Stdout = old
-		buf := make([]byte, 64*1024)
-		n, _ := r.Read(buf)
-		r.Close()
 		if callErr != nil {
 			return vm.NIL, callErr
 		}
-		return vm.String(buf[:n]), nil
+		return vm.String(buf.String()), nil
 	})
 	ns.Def("with-out-str*", withOutStrf)
 
