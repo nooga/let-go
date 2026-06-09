@@ -141,12 +141,15 @@ func (p *Pod) startRouter() {
 				return
 			}
 
-			// Handle out/err on any message
+			// Handle out/err on any message — route through the runtime's
+			// dynamic *out*/*err*, not raw stdio. Pod stdout/stderr is
+			// pod content; it should follow whatever capture/redirect the
+			// caller has set up via (binding ...) or pkg/api options.
 			if out, ok := msg["out"].(string); ok {
-				fmt.Print(out)
+				_ = WriteToOut(out)
 			}
 			if errStr, ok := msg["err"].(string); ok {
-				fmt.Fprint(os.Stderr, errStr)
+				_ = WriteToErr(errStr)
 			}
 
 			// Route by id

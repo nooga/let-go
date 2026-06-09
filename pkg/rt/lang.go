@@ -4828,14 +4828,13 @@ func installLangNS() {
 		return prThroughToString(vs, true)
 	})
 
-	// prn: print readably + newline to stdout
+	// prn: print readably + newline through *out*
 	prn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		s, err := prThroughToString(vs, true)
 		if err != nil {
 			return vm.NIL, err
 		}
-		fmt.Fprintln(os.Stdout, string(s.(vm.String)))
-		return vm.NIL, nil
+		return vm.NIL, WriteToOut(string(s.(vm.String)) + "\n")
 	})
 
 	// prn-str: print readably + newline to string
@@ -5454,34 +5453,31 @@ func installLangNS() {
 		return vm.MakeInt(c), nil
 	})
 
-	// print — print human-readably to stdout, no newline
+	// print — print human-readably through *out*, no newline
 	printf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		s, err := prThroughToString(vs, false)
 		if err != nil {
 			return vm.NIL, err
 		}
-		fmt.Fprint(os.Stdout, string(s.(vm.String)))
-		return vm.NIL, nil
+		return vm.NIL, WriteToOut(string(s.(vm.String)))
 	})
 
-	// pr — print readably to stdout, no newline
+	// pr — print readably through *out*, no newline
 	prf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		s, err := prThroughToString(vs, true)
 		if err != nil {
 			return vm.NIL, err
 		}
-		fmt.Fprint(os.Stdout, string(s.(vm.String)))
-		return vm.NIL, nil
+		return vm.NIL, WriteToOut(string(s.(vm.String)))
 	})
 
-	// println — print human-readably to stdout with newline
+	// println — print human-readably through *out* with newline
 	printlnf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		s, err := prThroughToString(vs, false)
 		if err != nil {
 			return vm.NIL, err
 		}
-		fmt.Fprintln(os.Stdout, string(s.(vm.String)))
-		return vm.NIL, nil
+		return vm.NIL, WriteToOut(string(s.(vm.String)) + "\n")
 	})
 
 	// --- Bitwise ops ---

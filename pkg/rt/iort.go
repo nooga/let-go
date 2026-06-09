@@ -327,3 +327,56 @@ func installIOBuiltins(ns *vm.Namespace) {
 	ns.Def("*out*", stdoutHandle)
 	ns.Def("*err*", stderrHandle)
 }
+
+// resolveIOHandleVar looks up a var (e.g. "*out*") in the core namespace
+// and unwraps its current binding to an *IOHandle. Returns nil if the var
+// isn't installed yet (e.g. during early init) or the current binding
+// doesn't unwrap to a handle / *os.File. Callers must fall back to a sane
+// default in that case.
+//
+// Resolution path: ns.LookupLocal -> Var.Deref (lock-free atomic load,
+// respects (binding [...] ...) per pkg/vm/var.go:95-103) -> Boxed.Unbox.
+func resolveIOHandleVar(varName string) *IOHandle {
+	ns := lookupNSCached(NameCoreNS)
+	if ns == nil {
+		return nil
+	}
+	v := ns.LookupLocal(vm.Symbol(varName))
+	if v == nil {
+		return nil
+	}
+	b, ok := v.Deref().(*vm.Boxed)
+	if !ok {
+		return nil
+	}
+	switch u := b.Unbox().(type) {
+	case *IOHandle:
+		return u
+	case *os.File:
+		return NewIOHandle(u)
+	}
+	return nil
+}
+
+// WriteToOut writes s through the current dynamic binding of *out*. Falls
+// back to os.Stdout if *out* isn't installed yet or doesn't resolve to a
+// handle (early-boot conditions only).
+func WriteToOut(s string) error {
+	if h := resolveIOHandleVar("*out*"); h != nil {
+		_, err := h.Write(s)
+		return err
+	}
+	_, err := io.WriteString(os.Stdout, s)
+	return err
+}
+
+// WriteToErr writes s through the current dynamic binding of *err*. Falls
+// back to os.Stderr.
+func WriteToErr(s string) error {
+	if h := resolveIOHandleVar("*err*"); h != nil {
+		_, err := h.Write(s)
+		return err
+	}
+	_, err := io.WriteString(os.Stderr, s)
+	return err
+}
