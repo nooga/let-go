@@ -112,7 +112,11 @@ func installUnixNS() {
 			return int(fv), nil
 		case *vm.Boxed:
 			if h, ok := fv.Unbox().(*IOHandle); ok {
-				return int(h.File().Fd()), nil
+				f := h.File()
+				if f == nil {
+					return 0, fmt.Errorf("IOHandle is not file-backed; fd ops require a real file descriptor")
+				}
+				return int(f.Fd()), nil
 			}
 			if f, ok := fv.Unbox().(*os.File); ok {
 				return int(f.Fd()), nil

@@ -760,7 +760,11 @@ func installSyscallNS() {
 		if err != nil {
 			return nil, false, err
 		}
-		return h.File(), false, nil
+		f := h.File()
+		if f == nil {
+			return nil, false, fmt.Errorf("IOHandle is not file-backed; spawn stdio requires a real file descriptor")
+		}
+		return f, false, nil
 	}
 
 	// syscall/spawn-async — (syscall/spawn-async path argv env cloneflags stdin stdout stderr [opts])
