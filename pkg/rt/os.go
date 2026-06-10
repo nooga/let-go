@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -209,6 +210,26 @@ func installOsNS() {
 	ns.Def("stat", stat)
 	ns.Def("sh", sh)
 	ns.Def("exec*", execStar)
+
+	// os/free-port — (os/free-port) → an OS-assigned free TCP port (Int).
+	// Binds 127.0.0.1:0, reads the assigned port, and releases the listener.
+	// Check-then-use: the port could in principle be taken between this call
+	// and the caller's own bind, so treat it as a strong hint rather than a
+	// reservation (kernels avoid immediately reissuing a just-released port).
+	ns.Def("free-port", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 0 {
+			return vm.NIL, fmt.Errorf("os/free-port expects no args")
+		}
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return vm.NIL, err
+		}
+		port := l.Addr().(*net.TCPAddr).Port
+		if err := l.Close(); err != nil {
+			return vm.NIL, err
+		}
+		return vm.Int(port), nil
+	}))
 
 	// os/os-name — (os/os-name) → "linux", "darwin", "windows", ...
 	ns.Def("os-name", mustWrap(func(vs []vm.Value) (vm.Value, error) {
