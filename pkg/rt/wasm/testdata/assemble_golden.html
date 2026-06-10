@@ -156,13 +156,15 @@ function startWorkerMode() {
 
   // Build worker code: fs shim + wasm_exec.js + bootstrap
   const workerCode = `
-    let outputBuf = '';
     const decoder = new TextDecoder('utf-8');
     const enosys = () => { const e = new Error("not implemented"); e.code = "ENOSYS"; return e; };
     globalThis.fs = {
       constants: { O_WRONLY:-1, O_RDWR:-1, O_CREAT:-1, O_TRUNC:-1, O_APPEND:-1, O_EXCL:-1, O_DIRECTORY:-1 },
+      // App output now flows through _lgOutput (the Go-side HostWriter), not
+      // fd 1/2 interception. This only catches Go-runtime direct writes
+      // (e.g. panics) — surface those on the worker console.
       writeSync(fd, buf) {
-        if (fd === 1 || fd === 2) { outputBuf += decoder.decode(buf); return buf.length; }
+        if (fd === 1 || fd === 2) { console.log(decoder.decode(buf)); return buf.length; }
         return 0;
       },
       write(fd, buf, offset, length, position, callback) {
@@ -182,9 +184,12 @@ function startWorkerMode() {
       symlink(p,l,cb){cb(null);}, truncate(p,l,cb){cb(null);},
       unlink(p,cb){cb(null);}, utimes(p,a,m,cb){cb(null);},
     };
-    globalThis._lgFlush = function() {
-      if (outputBuf.length > 0) { postMessage({t:'out', d:outputBuf}); outputBuf = ''; }
+    // Worker side of the output bridge — the Go HostWriter calls _lgOutput;
+    // relay each chunk to the main thread, which feeds LetGoHost._output.
+    globalThis._lgOutput = function(s) {
+      postMessage({t:'out', d:s});
     };
+    globalThis._lgFlush = function() {};
     // Worker side of the js/emit bridge — forward to main thread, which
     // dispatches into LetGoHost (workers have no DOM, no LetGoHost).
     globalThis._lgEmit = function(name, dataJson) {
@@ -248,8 +253,11 @@ async function startMainThreadMode() {
   const enosys = () => { const e = new Error("not implemented"); e.code = "ENOSYS"; return e; };
   globalThis.fs = {
     constants: { O_WRONLY:-1, O_RDWR:-1, O_CREAT:-1, O_TRUNC:-1, O_APPEND:-1, O_EXCL:-1, O_DIRECTORY:-1 },
+    // App output now flows through _lgOutput (the Go-side HostWriter), not
+    // fd 1/2 interception. This only catches Go-runtime direct writes
+    // (e.g. panics) — surface those on the console.
     writeSync(fd, buf) {
-      if (fd === 1 || fd === 2) { window.LetGoHost._output(decoder.decode(buf)); return buf.length; }
+      if (fd === 1 || fd === 2) { console.log(decoder.decode(buf)); return buf.length; }
       return 0;
     },
     write(fd, buf, offset, length, position, callback) {
@@ -272,6 +280,11 @@ async function startMainThreadMode() {
     unlink(p,cb){cb(null);}, utimes(p,a,m,cb){cb(null);},
   };
   globalThis._lgFlush = function(){};
+  // Main-thread side of the output bridge — the Go HostWriter calls
+  // _lgOutput; feed it straight into LetGoHost (no worker round-trip).
+  globalThis._lgOutput = function(s) {
+    window.LetGoHost._output(s);
+  };
   // Main-thread side of the js/emit bridge — dispatch straight into
   // LetGoHost (no worker round-trip needed).
   globalThis._lgEmit = function(name, dataJson) {
