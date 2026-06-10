@@ -361,7 +361,7 @@ func installTermNS() {
 	ns.Def("open-pty", openPty)
 
 	// move-cursor — (move-cursor col row) — 1-based ANSI positioning
-	moveCursor, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	moveCursor := vm.NewCtxNativeFn("move-cursor", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("move-cursor expects 2 args (col row)")
 		}
@@ -370,48 +370,44 @@ func installTermNS() {
 		if !ok1 || !ok2 {
 			return vm.NIL, fmt.Errorf("move-cursor expects integers")
 		}
-		fmt.Printf("\033[%d;%dH", int(row), int(col))
-		return vm.NIL, nil
+		return vm.NIL, WriteToOut(ec, fmt.Sprintf("\033[%d;%dH", int(row), int(col)))
 	})
 	ns.Def("move-cursor", moveCursor)
 
 	// clear — clear screen
-	clearFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[2J")
-		return vm.NIL, nil
+	clearFn := vm.NewCtxNativeFn("clear", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[2J")
 	})
 	ns.Def("clear", clearFn)
 
 	// clear-line — clear current line
-	clearLine, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[2K")
-		return vm.NIL, nil
+	clearLine := vm.NewCtxNativeFn("clear-line", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[2K")
 	})
 	ns.Def("clear-line", clearLine)
 
 	// hide-cursor — hide terminal cursor
-	hideCursor, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[?25l")
-		return vm.NIL, nil
+	hideCursor := vm.NewCtxNativeFn("hide-cursor", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[?25l")
 	})
 	ns.Def("hide-cursor", hideCursor)
 
 	// show-cursor — show terminal cursor
-	showCursor, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[?25h")
-		return vm.NIL, nil
+	showCursor := vm.NewCtxNativeFn("show-cursor", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[?25h")
 	})
 	ns.Def("show-cursor", showCursor)
 
 	// set-fg — (set-fg r g b) or (set-fg color-code)
-	setFg, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	setFg := vm.NewCtxNativeFn("set-fg", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		var seq string
 		switch len(vs) {
 		case 1:
 			c, ok := vs[0].(vm.Int)
 			if !ok {
 				return vm.NIL, fmt.Errorf("set-fg expects integer color code")
 			}
-			fmt.Printf("\033[38;5;%dm", int(c))
+			seq = fmt.Sprintf("\033[38;5;%dm", int(c))
 		case 3:
 			r, ok1 := vs[0].(vm.Int)
 			g, ok2 := vs[1].(vm.Int)
@@ -419,23 +415,24 @@ func installTermNS() {
 			if !ok1 || !ok2 || !ok3 {
 				return vm.NIL, fmt.Errorf("set-fg expects 3 integers (r g b)")
 			}
-			fmt.Printf("\033[38;2;%d;%d;%dm", int(r), int(g), int(b))
+			seq = fmt.Sprintf("\033[38;2;%d;%d;%dm", int(r), int(g), int(b))
 		default:
 			return vm.NIL, fmt.Errorf("set-fg expects 1 or 3 args")
 		}
-		return vm.NIL, nil
+		return vm.NIL, WriteToOut(ec, seq)
 	})
 	ns.Def("set-fg", setFg)
 
 	// set-bg — (set-bg r g b) or (set-bg color-code)
-	setBg, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	setBg := vm.NewCtxNativeFn("set-bg", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		var seq string
 		switch len(vs) {
 		case 1:
 			c, ok := vs[0].(vm.Int)
 			if !ok {
 				return vm.NIL, fmt.Errorf("set-bg expects integer color code")
 			}
-			fmt.Printf("\033[48;5;%dm", int(c))
+			seq = fmt.Sprintf("\033[48;5;%dm", int(c))
 		case 3:
 			r, ok1 := vs[0].(vm.Int)
 			g, ok2 := vs[1].(vm.Int)
@@ -443,44 +440,40 @@ func installTermNS() {
 			if !ok1 || !ok2 || !ok3 {
 				return vm.NIL, fmt.Errorf("set-bg expects 3 integers (r g b)")
 			}
-			fmt.Printf("\033[48;2;%d;%d;%dm", int(r), int(g), int(b))
+			seq = fmt.Sprintf("\033[48;2;%d;%d;%dm", int(r), int(g), int(b))
 		default:
 			return vm.NIL, fmt.Errorf("set-bg expects 1 or 3 args")
 		}
-		return vm.NIL, nil
+		return vm.NIL, WriteToOut(ec, seq)
 	})
 	ns.Def("set-bg", setBg)
 
 	// reset-style — reset all ANSI attributes
-	resetStyle, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[0m")
-		return vm.NIL, nil
+	resetStyle := vm.NewCtxNativeFn("reset-style", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[0m")
 	})
 	ns.Def("reset-style", resetStyle)
 
 	// bold — enable bold
-	bold, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[1m")
-		return vm.NIL, nil
+	bold := vm.NewCtxNativeFn("bold", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[1m")
 	})
 	ns.Def("bold", bold)
 
 	// underline — enable underline
-	underline, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[4m")
-		return vm.NIL, nil
+	underline := vm.NewCtxNativeFn("underline", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[4m")
 	})
 	ns.Def("underline", underline)
 
 	// inverse — enable inverse/reverse video
-	inverse, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[7m")
-		return vm.NIL, nil
+	inverse := vm.NewCtxNativeFn("inverse", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[7m")
 	})
 	ns.Def("inverse", inverse)
 
 	// write — (write str) — write string at current cursor position, no newline
-	writeFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	writeFn := vm.NewCtxNativeFn("write", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("write expects 1 arg")
 		}
@@ -490,13 +483,12 @@ func installTermNS() {
 		} else {
 			s = vs[0].String()
 		}
-		fmt.Print(s)
-		return vm.NIL, nil
+		return vm.NIL, WriteToOut(ec, s)
 	})
 	ns.Def("write", writeFn)
 
 	// write-at — (write-at col row str) — write string at position
-	writeAt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	writeAt := vm.NewCtxNativeFn("write-at", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
 			return vm.NIL, fmt.Errorf("write-at expects 3 args (col row str)")
 		}
@@ -511,8 +503,7 @@ func installTermNS() {
 		} else {
 			s = vs[2].String()
 		}
-		fmt.Printf("\033[%d;%dH%s", int(row), int(col), s)
-		return vm.NIL, nil
+		return vm.NIL, WriteToOut(ec, fmt.Sprintf("\033[%d;%dH%s", int(row), int(col), s))
 	})
 	ns.Def("write-at", writeAt)
 
@@ -534,16 +525,14 @@ func installTermNS() {
 	ns.Def("char-width", charWidth)
 
 	// alternate-screen — switch to alternate screen buffer
-	altScreen, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[?1049h")
-		return vm.NIL, nil
+	altScreen := vm.NewCtxNativeFn("alternate-screen", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[?1049h")
 	})
 	ns.Def("alternate-screen", altScreen)
 
 	// main-screen — switch back to main screen buffer
-	mainScreen, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		fmt.Print("\033[?1049l")
-		return vm.NIL, nil
+	mainScreen := vm.NewCtxNativeFn("main-screen", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, WriteToOut(ec, "\033[?1049l")
 	})
 	ns.Def("main-screen", mainScreen)
 
