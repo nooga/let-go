@@ -141,10 +141,13 @@ func (p *Pod) startRouter() {
 				return
 			}
 
-			// Handle out/err on any message — route through the runtime's
-			// dynamic *out*/*err*, not raw stdio. Pod stdout/stderr is
-			// pod content; it should follow whatever capture/redirect the
-			// caller has set up via (binding ...) or pkg/api options.
+			// Handle out/err on any message — route pod stdout/stderr through
+			// the runtime's dynamic *out*/*err* rather than raw stdio. In
+			// practice this resolves to the *root* *out*/*err*: startRouter is
+			// a long-lived goroutine that typically outlives a caller's
+			// (binding [*out* ...] ...) scope, so the binding is usually popped
+			// before pod messages arrive. The win here is that errors now reach
+			// *err* (→ stderr) instead of being hard-wired to stdout.
 			if out, ok := msg["out"].(string); ok {
 				_ = WriteToOut(out)
 			}
