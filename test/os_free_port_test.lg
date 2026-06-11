@@ -1,0 +1,17 @@
+;; os/free-port asks the OS for a free TCP port and returns it as an Int.
+(ns test.os-free-port-test
+  (:require [test :refer :all]))
+
+(deftest free-port-returns-valid-port
+  (testing "returns an integer in the valid port range"
+    (let [p (os/free-port)]
+      (is (int? p))
+      (is (> p 0))
+      (is (<= p 65535))))
+  (testing "consecutive calls keep returning valid ports"
+    (dotimes [_ 5]
+      (let [p (os/free-port)]
+        (is (and (> p 0) (<= p 65535))))))
+  (testing "rejects args"
+    ;; let-go has no thrown? — use try/catch directly.
+    (is (= :threw (try (os/free-port 1) :no-throw (catch _ :threw))))))
