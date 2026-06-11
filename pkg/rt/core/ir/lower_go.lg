@@ -922,33 +922,41 @@
         :result-spec "vm.Value" :native? false :go-pkg nil}})))
 
 (defn resolve-registry-entry
-  "Deterministically resolve ONE *lowered-registry* entry for a call to
-   `name-str` at `arity`. `ns-sym` is the call's (already internalized)
-   namespace symbol, or nil for an unqualified call.
+  "Exact-key lookup into *lowered-registry* (the flat {[ns name arity] entry}
+   map). `ns-sym` must be a concrete namespace symbol — nil is NOT a
+   wildcard. One `(get …)`; never a scan over (keys registry). This is the
+   O(1) primitive; resolve-call-entry layers Clojure refer semantics on top
+   for unqualified calls.
 
-   This is the pure core of lookup-direct-callable. The old matcher used
-   `(some (get) (filter … (keys registry)))` — first match in HASH-KEY
-   order — so an unqualified call that collides with a seeded native
-   (same name+arity, e.g. an own-ns sibling vs clojure.core from
-   native_direct_install.go) resolved differently across regens. That is
-   the #188 non-determinism that intermittently drops a func definition
-   under -tags gogen_ir.
-
-   We instead unify the call key against the registry keys with an
-   explicit precedence: a qualified call binds its ns exactly (at most one
-   key); an unqualified call leaves ns free, and we bind it preferring the
-   non-native (own-ns) entry, then the lexicographically-smallest ns. The
-   result is a pure function of registry CONTENT, never key iteration
-   order — which is what makes the lowered tree reproducible."
+   The flat key already registers each form's symbol+arity, so resolution
+   is a direct get — replacing the old `(some (get) (filter … (keys)))`
+   first-match-in-HASH-KEY-order matcher that intermittently dropped a func
+   definition under -tags gogen_ir (#188)."
   [registry ns-sym name-str arity]
-  (let [match? (fn [[kns kname karity]]
-                 (and (= kname name-str) (= karity arity)
-                      (or (nil? ns-sym) (= ns-sym kns))))
-        rank   (fn [k]
-                 (str (if (:native? (get registry k)) "1" "0") (first k)))
-        ks     (sort-by rank (filter match? (keys registry)))]
-    (when-let [k (first ks)]
-      (get registry k))))
+  (get registry (registry-key ns-sym name-str arity)))
+
+(def ^:private referred-default-ns-syms
+  ;; An unqualified symbol a namespace doesn't intern resolves to the
+  ;; referred clojure.core. Native modules register under "clojure.core";
+  ;; lowered core siblings under the internal 'core. Try both.
+  ['clojure.core 'core])
+
+(defn resolve-call-entry
+  "Resolve a (maybe-unqualified) call to a *lowered-registry* entry with
+   Clojure refer semantics, using only exact-key gets — no fanout.
+
+   A qualified call binds `call-ns` exactly. An unqualified call (`call-ns`
+   nil) resolves through `cur-ns`: the current namespace's own intern
+   shadows the referred clojure.core default, so we try cur-ns first, then
+   core. Because it is resolve-then-get rather than a key scan, the result
+   is independent of the registry's internal key order — which is what
+   makes the lowered tree reproducible (#188)."
+  [registry cur-ns call-ns name-str arity]
+  (if call-ns
+    (resolve-registry-entry registry call-ns name-str arity)
+    (or (resolve-registry-entry registry cur-ns name-str arity)
+        (some (fn [dns] (resolve-registry-entry registry dns name-str arity))
+              referred-default-ns-syms))))
 
 (defn- coerce-arg-to-type
   "Emit a Go expression that produces a value of `target-type` from
@@ -1081,16 +1089,15 @@
    threaded through lower-fn*, separate change."
   [f callee-nid arg-count]
   (when (and (seq *lowered-registry*) (= :load-var (ir/op callee-nid f)))
-    (let [sym    (symbol (ir/aux callee-nid f))
-          sns    (namespace sym)
-          ns-sym (if sns (internal-ns-sym sns) nil)
-          ;; Match by name + arity; ns optional. During a namespace's
-          ;; Pass-2 the registry holds that ns's siblings plus native
-          ;; modules, so an unqualified call (ns-sym nil) matches its
-          ;; own sibling, and a qualified call matches the named ns.
-          ;; resolve-registry-entry picks ONE deterministically (own-ns
-          ;; non-native preferred) — never hash-key order.
-          entry  (resolve-registry-entry *lowered-registry* ns-sym (name sym) arg-count)]
+    (let [sym     (symbol (ir/aux callee-nid f))
+          sns     (namespace sym)
+          call-ns (when sns (internal-ns-sym sns))
+          ;; Unqualified calls resolve through the ns being lowered (*ns*),
+          ;; mirroring Clojure: the current ns's own intern shadows the
+          ;; referred core. resolve-call-entry does exact-key gets only —
+          ;; never a scan over (keys *lowered-registry*).
+          cur-ns  (internal-ns-sym (str (ns-name *ns*)))
+          entry   (resolve-call-entry *lowered-registry* cur-ns call-ns (name sym) arg-count)]
       (when (and entry
                  (not (:variadic? entry))
                  ;; Param + result types must be coercion-supported;

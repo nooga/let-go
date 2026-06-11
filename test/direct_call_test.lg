@@ -71,17 +71,22 @@
       (is (str/includes? src "func helper")
           "helper should lower to a Go func"))))
 
-;; --- deterministic registry resolution ---------------------------------
-;; resolve-registry-entry is the pure core of lookup-direct-callable:
-;; given (registry, call-ns-or-nil, name, arity) it must pick ONE entry
-;; deterministically. The old matcher used (some (get) (filter (keys …))),
-;; i.e. first match in HASH-KEY order, so an unqualified call that collides
-;; with a seeded native (same name+arity, e.g. native_direct_install.go's
-;; clojure.core/seq vs an own-ns sibling) resolved differently across regens
-;; — the #188 non-determinism that drops a func def under -tags gogen_ir.
-;; Contract: qualified → exact-ns lookup; unqualified → prefer the own-ns
-;; (non-native) sibling, then lexicographic by ns; result independent of
-;; the registry's internal key order.
+;; --- registry resolution: resolve-then-get, no key scan ----------------
+;; The flat *lowered-registry* key [ns name arity] already registers each
+;; form's symbol+arity, so resolution is exact-key gets — never a scan over
+;; (keys registry). Two layers:
+;;
+;;   resolve-registry-entry [registry ns name arity]
+;;     a single exact (get registry [ns name arity]). ns is concrete; nil is
+;;     NOT a wildcard. This is the O(1) primitive.
+;;
+;;   resolve-call-entry [registry cur-ns call-ns name arity]
+;;     Clojure refer semantics. A qualified call binds call-ns exactly. An
+;;     unqualified call (call-ns nil) resolves through the current ns: the
+;;     ns's own intern shadows the referred core default, so we try cur-ns
+;;     then clojure.core/core. resolve-then-get, so it's inherently order-
+;;     independent — fixing the #188 non-determinism where the old hash-key
+;;     scan dropped a func def under -tags gogen_ir.
 
 (def ^:private sibling-entry
   {:go-name "myfn" :arity 1 :needs-error? false
@@ -91,31 +96,40 @@
   {:go-name "Myfn" :arity 1 :needs-error? false
    :param-specs ["vm.Value"] :result-spec "vm.Value" :native? true :go-pkg "corefns"})
 
-(deftest resolve-registry-entry-is-order-independent
-  (testing "unqualified collision picks the non-native own-ns sibling, regardless of key order"
-    ;; array-map preserves insertion order, so the two registries below
-    ;; iterate their keys in OPPOSITE orders. A hash/insertion-order
-    ;; dependent resolver returns different entries for them; a
-    ;; deterministic one returns the sibling for both.
-    (let [reg-sib-first (array-map ['my.ns "myfn" 1]        sibling-entry
-                                   ['clojure.core "myfn" 1] native-entry)
-          reg-nat-first (array-map ['clojure.core "myfn" 1] native-entry
-                                   ['my.ns "myfn" 1]        sibling-entry)]
-      (is (= sibling-entry (lower-go/resolve-registry-entry reg-sib-first nil "myfn" 1))
-          "sibling-first registry must resolve unqualified call to the sibling")
-      (is (= sibling-entry (lower-go/resolve-registry-entry reg-nat-first nil "myfn" 1))
-          "native-first registry must ALSO resolve to the sibling (order independent)"))))
-
-(deftest resolve-registry-entry-respects-qualification-and-misses
+(deftest resolve-registry-entry-is-exact-get
   (let [reg (array-map ['my.ns "myfn" 1]        sibling-entry
                        ['clojure.core "myfn" 1] native-entry)]
-    (testing "qualified call resolves to the named ns"
-      (is (= native-entry  (lower-go/resolve-registry-entry reg 'clojure.core "myfn" 1)))
-      (is (= sibling-entry (lower-go/resolve-registry-entry reg 'my.ns "myfn" 1))))
-    (testing "no name/arity match yields nil"
-      (is (nil? (lower-go/resolve-registry-entry reg nil "nope" 1)))
-      (is (nil? (lower-go/resolve-registry-entry reg nil "myfn" 2)))
-      (is (nil? (lower-go/resolve-registry-entry reg 'other.ns "myfn" 1))))))
+    (testing "exact [ns name arity] key resolves to that entry"
+      (is (= sibling-entry (lower-go/resolve-registry-entry reg 'my.ns "myfn" 1)))
+      (is (= native-entry  (lower-go/resolve-registry-entry reg 'clojure.core "myfn" 1))))
+    (testing "ns / name / arity miss yields nil — exact key, never a scan"
+      (is (nil? (lower-go/resolve-registry-entry reg 'other.ns "myfn" 1)))
+      (is (nil? (lower-go/resolve-registry-entry reg 'my.ns "nope" 1)))
+      (is (nil? (lower-go/resolve-registry-entry reg 'my.ns "myfn" 2))))
+    (testing "nil ns is not a wildcard — unqualified resolution is resolve-call-entry's job"
+      (is (nil? (lower-go/resolve-registry-entry reg nil "myfn" 1))))))
+
+(deftest resolve-call-entry-shadows-core-and-falls-back
+  (let [core-only     (assoc native-entry :go-name "OnlyCore")
+        reg-sib-first (array-map ['my.ns "myfn" 1]             sibling-entry
+                                 ['clojure.core "myfn" 1]      native-entry
+                                 ['clojure.core "only-core" 1] core-only)
+        reg-nat-first (array-map ['clojure.core "myfn" 1]      native-entry
+                                 ['clojure.core "only-core" 1] core-only
+                                 ['my.ns "myfn" 1]             sibling-entry)]
+    (testing "unqualified call: own-ns sibling shadows the core native, regardless of key order"
+      (is (= sibling-entry (lower-go/resolve-call-entry reg-sib-first 'my.ns nil "myfn" 1))
+          "sibling-first registry resolves unqualified call to the own-ns sibling")
+      (is (= sibling-entry (lower-go/resolve-call-entry reg-nat-first 'my.ns nil "myfn" 1))
+          "native-first registry ALSO resolves to the sibling (order independent)"))
+    (testing "unqualified call with no own-ns entry falls back to the referred core"
+      (is (= core-only (lower-go/resolve-call-entry reg-sib-first 'my.ns nil "only-core" 1))))
+    (testing "qualified call ignores current ns and binds the named ns exactly"
+      (is (= native-entry  (lower-go/resolve-call-entry reg-sib-first 'my.ns 'clojure.core "myfn" 1)))
+      (is (= sibling-entry (lower-go/resolve-call-entry reg-sib-first 'anything 'my.ns "myfn" 1))))
+    (testing "name / arity miss yields nil"
+      (is (nil? (lower-go/resolve-call-entry reg-sib-first 'my.ns nil "nope" 1)))
+      (is (nil? (lower-go/resolve-call-entry reg-sib-first 'my.ns nil "myfn" 2))))))
 
 ;; Realistic callee bodies — ones whose lowered signature is
 ;; (vm.Value, error), matching the shape that emit-call-stmts assumes
