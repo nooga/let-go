@@ -73,13 +73,104 @@ func renderStructuredFile(t *testing.T, name, src string) string {
 	return bindAndRenderGoFile(t, file)
 }
 
+// goShapes is a histogram of the control-flow node kinds present in a
+// rendered lowered-Go function, recovered by traversing the parsed go/ast
+// rather than substring-matching the rendered text. Substring checks for
+// "goto " / "_blk:" are brittle (false-positives inside string literals or
+// comments, and couple to the label-naming convention); an AST traversal
+// asserts the actual emitted structure.
+type goShapes struct {
+	forLoops, ifs, continues, breaks, gotos, labels int
+}
+
+// shapesOf parses rendered lowered Go and counts the control-flow node kinds
+// reachable from the file. Reuses parseLoweredGo (lisp_lower_go_ast_test.go).
+func shapesOf(t *testing.T, rendered string) goShapes {
+	t.Helper()
+	f := parseLoweredGo(t, rendered)
+	var s goShapes
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch b := n.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			s.forLoops++
+		case *ast.IfStmt:
+			s.ifs++
+		case *ast.LabeledStmt:
+			s.labels++
+		case *ast.BranchStmt:
+			switch b.Tok {
+			case token.CONTINUE:
+				s.continues++
+			case token.BREAK:
+				s.breaks++
+			case token.GOTO:
+				s.gotos++
+			}
+		}
+		return true
+	})
+	return s
+}
+
+// TestStructuredEmissionIsGotoFree asserts, at the AST level, that the
+// structured emitter produced zero `goto` statements and zero labeled
+// statements for every corpus case.
 func TestStructuredEmissionIsGotoFree(t *testing.T) {
 	ensureLoader()
 	for _, c := range structuredCorpus {
 		t.Run(c.name, func(t *testing.T) {
 			rendered := renderStructuredFile(t, c.name, c.src)
-			if strings.Contains(rendered, "goto ") || strings.Contains(rendered, "_blk:") {
-				t.Fatalf("%s: expected structured (goto-free) Go, found goto/label\n--- go ---\n%s", c.name, rendered)
+			s := shapesOf(t, rendered)
+			if s.gotos != 0 || s.labels != 0 {
+				t.Fatalf("%s: expected goto-free structured Go, found %d goto / %d labels\n--- go ---\n%s",
+					c.name, s.gotos, s.labels, rendered)
+			}
+		})
+	}
+}
+
+// TestStructuredEmissionHasExpectedStructure verifies the emitter produced the
+// CONTROL STRUCTURES the corpus is designed to exercise — not merely that no
+// goto remains. A goto-free-but-degenerate emission (e.g. structurize silently
+// falling back to an empty body, or emitting an `if` where a `for` was
+// required) is goto-free yet wrong; this gate catches that by asserting the
+// presence of for/if/continue per case. Expectations are the observed shapes
+// of the structured emitter (see the probe in the PR review).
+func TestStructuredEmissionHasExpectedStructure(t *testing.T) {
+	ensureLoader()
+	// want* are MINIMUMS / required presence, not exact counts, so the test
+	// is robust to incidental emission changes while still pinning the
+	// structural intent of each case.
+	cases := map[string]struct {
+		wantLoop     bool // recur/loop must lower to a Go for-loop
+		minIfs       int  // conditionals must lower to if statements
+		wantContinue bool // a recur back-edge must emit `continue`
+		wantNoLoop   bool // straight-line code must NOT introduce a loop
+	}{
+		"straight": {wantNoLoop: true},
+		"one-if":   {minIfs: 1, wantNoLoop: true},
+		"classify": {minIfs: 2, wantNoLoop: true}, // nested if; second if consumes the join binding
+		"sum":      {wantLoop: true, minIfs: 1, wantContinue: true},
+		"loop-if":  {wantLoop: true, minIfs: 2, wantContinue: true},
+	}
+	for _, c := range structuredCorpus {
+		want, ok := cases[c.name]
+		if !ok {
+			t.Fatalf("no structural expectation for corpus case %q", c.name)
+		}
+		t.Run(c.name, func(t *testing.T) {
+			s := shapesOf(t, renderStructuredFile(t, c.name, c.src))
+			if want.wantLoop && s.forLoops < 1 {
+				t.Errorf("%s: expected a for-loop (recur→for), got %d", c.name, s.forLoops)
+			}
+			if want.wantNoLoop && s.forLoops != 0 {
+				t.Errorf("%s: expected no loop in straight-line/conditional code, got %d for-loops", c.name, s.forLoops)
+			}
+			if s.ifs < want.minIfs {
+				t.Errorf("%s: expected >=%d if statements, got %d", c.name, want.minIfs, s.ifs)
+			}
+			if want.wantContinue && s.continues < 1 {
+				t.Errorf("%s: expected a continue (recur back-edge), got %d", c.name, s.continues)
 			}
 		})
 	}
