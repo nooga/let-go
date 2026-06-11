@@ -32,6 +32,16 @@ func newBoundVar() *Var {
 	return v
 }
 
+// newPreviouslyBoundVar models the most common read of a declared-dynamic var:
+// it was bound at least once (so isDynamic is permanently set, as ^:dynamic and
+// any binding both set it), but no binding is active now. Every such deref still
+// consults the binding stack — the cost this optimization targets.
+func newPreviouslyBoundVar() *Var {
+	v := newBoundVar()
+	v.PopBinding()
+	return v
+}
+
 // Root-only (the common case: fn vars, config) — no dynamic binding.
 func BenchmarkVarDerefRoot(b *testing.B) {
 	v := newRootVar()
@@ -42,6 +52,25 @@ func BenchmarkVarDerefRoot(b *testing.B) {
 
 func BenchmarkVarDerefRootParallel(b *testing.B) {
 	v := newRootVar()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			derefSink = v.Deref()
+		}
+	})
+}
+
+// Declared dynamic, bound once, now unbound — the common steady-state read of
+// *out*/*ns* outside any binding. isDynamic stays set, so the deref still has to
+// consult the (empty-for-this-var) stack.
+func BenchmarkVarDerefPreviouslyBound(b *testing.B) {
+	v := newPreviouslyBoundVar()
+	for i := 0; i < b.N; i++ {
+		derefSink = v.Deref()
+	}
+}
+
+func BenchmarkVarDerefPreviouslyBoundParallel(b *testing.B) {
+	v := newPreviouslyBoundVar()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			derefSink = v.Deref()
@@ -75,4 +104,16 @@ func BenchmarkVarDerefDistinctParallel(b *testing.B) {
 			derefSink = v.Deref()
 		}
 	})
+}
+
+// BenchmarkBindingPushPop measures one full binding extent (the (binding […])
+// write path). Copy-on-write makes reads lock-free at the cost of allocating a
+// fresh map per push/pop, so this is the side of the trade that gets more
+// expensive — binding establishment is far rarer than the reads inside it.
+func BenchmarkBindingPushPop(b *testing.B) {
+	v := newRootVar()
+	for i := 0; i < b.N; i++ {
+		v.PushBinding(Int(7))
+		v.PopBinding()
+	}
 }
