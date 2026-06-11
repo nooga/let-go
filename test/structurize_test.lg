@@ -1,0 +1,95 @@
+;; Tests for ir.structurize — recovery of structured control flow from the
+;; IR's block-parameter SSA CFG.
+;;
+;; The central premise of the structured-emission AOT path is that build.lg
+;; only ever produces reducible CFGs (if / loop-recur shapes), so they
+;; structure with ZERO :goto fallbacks. These tests assert that premise over
+;; a representative corpus and check the shape of a few key trees.
+
+(ns test.structurize-test
+  (:require
+   [ir.build :as build]
+   [ir.passes.pipeline :as pipeline]
+   [ir.structurize :as st]
+   [test :refer :all]))
+
+(defn- tree-of
+  "Expand, build and optimize a quoted (defn ...) form, then structurize.
+   Returns {:tree <node> :fallbacks <int>}."
+  [defn-form]
+  (let [body-raw (drop 3 defn-form)
+        body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
+        expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+        ir-fn    (build/build-fn expanded)
+        _        (pipeline/optimize-fn ir-fn)]
+    (st/structurize ir-fn)))
+
+(defn- contains-tag?
+  "True iff the control tree contains any node tagged `tag`. Recurses only
+   into vector children; edge objects and ints are leaves."
+  [node tag]
+  (and (vector? node)
+       (or (= (first node) tag)
+           (some (fn [c] (contains-tag? c tag)) (rest node)))))
+
+;; --- the corpus: every shape build.lg can emit -----------------------
+
+(def ^:private corpus
+  ['(defn straight [x] (+ x 1))
+   '(defn one-if [x] (if (< x 0) 1 2))
+   '(defn nested-if [x] (if (< x 0) (if (> x -5) 1 2) 3))
+   '(defn cond3 [x] (cond (< x 0) :neg (= x 0) :zero :else :pos))
+   '(defn and3 [x y] (and (< x 10) (> y 0) (not= x y)))
+   '(defn or3 [x] (or (= x 1) (= x 2) (= x 3)))
+   '(defn when1 [x] (when (pos? x) (* x x)))
+   '(defn sum [n] (loop [i 0 s 0] (if (< i n) (recur (inc i) (+ s i)) s)))
+   '(defn countup [n] (loop [i 0] (when (< i n) (recur (inc i)))))
+   '(defn fact [n] (loop [i n acc 1] (if (<= i 1) acc (recur (dec i) (* acc i)))))
+   '(defn len [xs] (loop [ys xs acc 0] (if (empty? ys) acc (recur (rest ys) (inc acc)))))
+   '(defn classify [x] (let [y (if (< x 0) (- x) x)]
+                         (if (> y 100) :big (if (> y 10) :med :small))))
+   '(defn loop-if [n] (loop [i 0 t 0]
+                        (if (< i n) (recur (inc i) (if (even? i) (+ t i) t)) t)))
+   ;; lambda-bearing: the OUTER fn's control flow must structure cleanly.
+   ;; (each nested fn is a separate IR Function, structurized independently)
+   '(defn adder [x] (fn [y] (+ x y)))
+   '(defn pick [n] (fn [y] (if (< y n) (* y y) y)))])
+
+(deftest corpus-has-zero-fallbacks
+  (testing "every build.lg-emitted shape structures with no :goto fallbacks"
+    (doseq [form corpus]
+      (let [r (tree-of form)]
+        (is (= 0 (:fallbacks r))
+            (str (nth form 1) " produced " (:fallbacks r) " goto fallbacks"))))))
+
+(deftest straight-line-is-return
+  (testing "a branchless body is a single :return node"
+    (let [r (tree-of '(defn f [x] (+ x 1)))]
+      (is (= 0 (:fallbacks r)))
+      (is (= :return (first (:tree r)))))))
+
+(deftest if-produces-if-node
+  (testing "an if expression yields an :if node"
+    (let [r (tree-of '(defn f [x] (if (< x 0) 1 2)))]
+      (is (= 0 (:fallbacks r)))
+      (is (contains-tag? (:tree r) :if)))))
+
+(deftest loop-produces-loop-with-continue-and-break
+  (testing "loop/recur yields a :loop whose body continues and breaks"
+    (let [r (tree-of '(defn f [n] (loop [i 0 s 0]
+                                    (if (< i n) (recur (inc i) (+ s i)) s))))]
+      (is (= 0 (:fallbacks r)))
+      (is (contains-tag? (:tree r) :loop))
+      ;; the recur arm must continue the loop; the exit arm must break
+      (is (contains-tag? (:tree r) :continue))
+      (is (contains-tag? (:tree r) :break)))))
+
+(deftest nested-loop-structures-cleanly
+  (testing "a loop carrying an inner if still has zero fallbacks"
+    (let [r (tree-of '(defn f [n] (loop [i 0 t 0]
+                                    (if (< i n)
+                                      (recur (inc i) (if (even? i) (+ t i) t))
+                                      t))))]
+      (is (= 0 (:fallbacks r)))
+      (is (contains-tag? (:tree r) :loop))
+      (is (contains-tag? (:tree r) :if)))))

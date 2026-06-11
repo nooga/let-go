@@ -1,0 +1,266 @@
+;; Copyright (c) 2026 Norman Nunley, Jr
+;; SPDX-License-Identifier: MIT
+;;
+;; ir.structurize — recover STRUCTURED control flow from the IR's
+;; block-parameter SSA CFG.
+;;
+;; build.lg only ever emits `if` and `loop`/`recur` shapes, so the CFG it
+;; produces is reducible. This pass walks that CFG and returns a
+;; target-INDEPENDENT control tree:
+;;
+;;   [:return    bid]                 block bid's terminator is :return
+;;   [:tail      bid]                 terminator is :tail-call
+;;   [:seq       bid edge next]       :branch; edge = branch-target, then `next`
+;;   [:if        bid tt et then else cont]
+;;                                    :branch-if; tt/et = the true/false
+;;                                    branch-targets (carry block-args),
+;;                                    `cont` = structured join region (or nil)
+;;   [:loop      bid body cont]       bid is a loop header; `body` uses
+;;                                    :continue/:break; `cont` = region after
+;;   [:continue  bid edge]            back-edge to the enclosing loop header
+;;   [:break     bid edge]            edge exits the enclosing loop
+;;   [:fallthrough bid]               region rejoins an enclosing continuation
+;;   [:goto      bid]                 FALLBACK: unstructurable transfer
+;;
+;; lower_go (and a future wasm backend) walk this tree; `bid` leaves let the
+;; backend emit each block's instructions + edge copies. The :goto escape
+;; hatch means correctness never depends on full structural coverage — the
+;; `:fallbacks` counter ratchets toward zero on the real corpus.
+
+(ns ir.structurize
+  (:require
+   [ir.dominance :as dom]))
+
+(declare structure structure-straight structure-loop)
+
+;; --- generic Cooper/Harvey/Kennedy dominators ------------------------
+;; A copy of dominance.lg's algorithm parameterized by succ/pred functions
+;; and a root, so we can run it on the REVERSE graph to get post-dominators.
+
+(defn- g-postorder [root succ-fn]
+  (loop [stack   [[root (succ-fn root) 0]]
+         visited #{root}
+         post    []]
+    (if (empty? stack)
+      post
+      (let [top   (peek stack)
+            bid   (nth top 0)
+            succs (nth top 1)
+            si    (nth top 2)]
+        (if (< si (count succs))
+          (let [s      (nth succs si)
+                stack' (assoc stack (dec (count stack)) [bid succs (inc si)])]
+            (if (contains? visited s)
+              (recur stack' visited post)
+              (recur (conj stack' [s (succ-fn s) 0])
+                     (conj visited s)
+                     post)))
+          (recur (pop stack) visited (conj post bid)))))))
+
+(defn- g-intersect [idom rpo-idx b1 b2]
+  (loop [b1 b1 b2 b2]
+    (if (= b1 b2)
+      b1
+      (cond
+        (> (nth rpo-idx b1) (nth rpo-idx b2)) (recur (nth idom b1) b2)
+        (> (nth rpo-idx b2) (nth rpo-idx b1)) (recur b1 (nth idom b2))
+        :else b1))))
+
+(defn- g-refine [preds idom rpo-idx]
+  (loop [ps preds new-id -1]
+    (if (empty? ps)
+      new-id
+      (let [p (first ps)]
+        (cond
+          (= -1 (nth idom p)) (recur (rest ps) new-id)
+          (= -1 new-id)       (recur (rest ps) p)
+          :else               (recur (rest ps) (g-intersect idom rpo-idx p new-id)))))))
+
+(defn- g-idoms [node-count root succ-fn pred-fn]
+  (let [rpo     (vec (reverse (g-postorder root succ-fn)))
+        rpo-idx (loop [i 0 idx (vec (repeat node-count -1))]
+                  (if (>= i (count rpo))
+                    idx
+                    (recur (inc i) (assoc idx (nth rpo i) i))))
+        idom0   (assoc (vec (repeat node-count -1)) root root)]
+    (let [final (loop [idom idom0]
+                  (let [step (loop [bs rpo idom idom changed? false]
+                               (if (empty? bs)
+                                 [idom changed?]
+                                 (let [b (first bs)]
+                                   (if (= b root)
+                                     (recur (rest bs) idom changed?)
+                                     (let [ni (g-refine (pred-fn b) idom rpo-idx)]
+                                       (if (or (= -1 ni) (= (nth idom b) ni))
+                                         (recur (rest bs) idom changed?)
+                                         (recur (rest bs) (assoc idom b ni) true)))))))]
+                    (if (nth step 1)
+                      (recur (nth step 0))
+                      (nth step 0))))]
+      (assoc final root -1))))
+
+(defn post-idoms [f]
+  "Immediate post-dominators. ipdom[bid] = the nearest block that
+   post-dominates bid (the join point of branches out of bid), or -1 for
+   exit blocks / blocks that reach no exit. Computed as dominators of the
+   reverse CFG rooted at a virtual exit node (id = block-count)."
+  (let [n     (count (ir/blocks f))
+        virt  n
+        exits (filterv (fn [b] (empty? (dom/successors f b))) (range n))
+        succ-fn (fn [b] (if (= b virt) exits (ir/block-preds b f)))
+        pred-fn (fn [b]
+                  (if (= b virt)
+                    []
+                    (let [fs (dom/successors f b)]
+                      (if (empty? fs) [virt] fs))))
+        idom (g-idoms (inc n) virt succ-fn pred-fn)]
+    (mapv (fn [b]
+            (let [d (nth idom b)]
+              (if (= d virt) -1 d)))
+          (range n))))
+
+;; --- loop detection (self-contained; mirrors licm's natural loops) ----
+
+(defn- header->latches [f]
+  "Map loop-header block id -> vector of latch preds (preds the header
+   dominates — the back-edge invariant). Only headers with >=1 latch.
+   Computes the dominator tree once (dom/dominates? would recompute it
+   per call)."
+  (let [idom (dom/dominators f)
+        dominates? (fn [a b]
+                     (loop [b b]
+                       (cond
+                         (= -1 b) false
+                         (= a b)  true
+                         :else    (recur (nth idom b)))))]
+    (reduce (fn [m header]
+              (let [latches (filterv (fn [p] (dominates? header p))
+                                     (ir/block-preds header f))]
+                (if (empty? latches) m (assoc m header latches))))
+            {}
+            (ir/blocks f))))
+
+(defn- reachable-back [f start avoid]
+  "Blocks reachable from `start` by walking predecessors, not crossing
+   `avoid` (the loop header). Used to compute the natural-loop body."
+  (loop [visited #{start} frontier [start]]
+    (if (empty? frontier)
+      visited
+      (let [b   (peek frontier)
+            wl  (pop frontier)
+            nps (filterv (fn [p] (and (not= p avoid) (not (visited p))))
+                         (ir/block-preds b f))]
+        (recur (into visited nps) (into wl nps))))))
+
+(defn- loop-set-of [f header latches]
+  "Set of blocks in the natural loop rooted at `header`: the header plus
+   everything reachable backward from each latch without re-crossing it."
+  (reduce (fn [s latch] (into s (reachable-back f latch header)))
+          #{header}
+          latches))
+
+(defn- loop-exit-of [f loop-set ipdom header]
+  "The single exit block of a loop, or :none / :multi. The exit is a block
+   OUTSIDE loop-set that a loop block branches to. When several candidates
+   exist we prefer the header's immediate post-dominator if it is one."
+  (let [cands (reduce (fn [s b]
+                        (reduce (fn [s2 t] (if (contains? loop-set t) s2 (conj s2 t)))
+                                s
+                                (dom/successors f b)))
+                      #{}
+                      loop-set)]
+    (cond
+      (empty? cands)      :none
+      (= 1 (count cands)) (first cands)
+      :else               (let [pd (nth ipdom header)]
+                            (if (contains? cands pd) pd :multi)))))
+
+;; --- context helpers --------------------------------------------------
+
+(defn- continue-target? [ctx b]
+  (some (fn [fr] (= (:header fr) b)) (:loops ctx)))
+
+(defn- break-target? [ctx b]
+  (some (fn [fr] (= (:exit fr) b)) (:loops ctx)))
+
+(defn- fresh-header? [ctx b]
+  (contains? (:headers ctx) b))
+
+;; --- the structuring walk --------------------------------------------
+
+(defn- edge->node [f ctx edge stop]
+  "Resolve a branch-target edge to a control node: continue/break for loop
+   edges, fallthrough when it rejoins an enclosing region, else structure
+   the target inline."
+  (let [t (ir/branch-target-target edge)]
+    (cond
+      (continue-target? ctx t) [:continue t edge]
+      (break-target? ctx t)    [:break t edge]
+      (= t stop)               [:fallthrough t]
+      :else                    (structure f ctx t stop))))
+
+(defn- structure-straight [f ctx b stop]
+  (let [term (ir/block-term b f)
+        op   (ir/op term f)]
+    (cond
+      (= op :return)    [:return b]
+      (= op :tail-call) [:tail b]
+
+      (= op :branch)
+      (let [edge (ir/aux term f)]
+        [:seq b edge (edge->node f ctx edge stop)])
+
+      (= op :branch-if)
+      (let [ct (ir/aux term f)
+            tt (ir/cond-target-true ct)
+            et (ir/cond-target-false ct)
+            t  (ir/branch-target-target tt)
+            e  (ir/branch-target-target et)
+            jn (nth (:ipdom ctx) b)
+            valid-join? (and (>= jn 0)
+                             (not= jn stop)
+                             (not (continue-target? ctx jn))
+                             (not (break-target? ctx jn)))
+            arm-stop (if valid-join? jn stop)
+            then-node (edge->node f ctx tt arm-stop)
+            else-node (edge->node f ctx et arm-stop)
+            cont (if (and valid-join? (not= jn stop))
+                   (structure f ctx jn stop)
+                   nil)]
+        [:if b tt et then-node else-node cont])
+
+      :else
+      (do (swap! (:fallbacks ctx) inc) [:goto b]))))
+
+(defn- structure-loop [f ctx h stop]
+  (let [latches  (get (:headers ctx) h)
+        loop-set (loop-set-of f h latches)
+        exit     (loop-exit-of f loop-set (:ipdom ctx) h)
+        frame    {:header h :exit exit :set loop-set}
+        ctx-in   (update ctx :loops conj frame)
+        body     (structure-straight f ctx-in h :none)
+        cont     (if (or (= exit :none) (= exit :multi))
+                   nil
+                   (structure f ctx exit stop))]
+    (when (= exit :multi) (swap! (:fallbacks ctx) inc))
+    [:loop h body cont]))
+
+(defn- structure [f ctx b stop]
+  (cond
+    (= b stop)               [:fallthrough b]
+    (continue-target? ctx b) [:continue b nil]
+    (break-target? ctx b)    [:break b nil]
+    (fresh-header? ctx b)    (structure-loop f ctx b stop)
+    :else                    (structure-straight f ctx b stop)))
+
+(defn structurize [f]
+  "Build the structured control tree for IR function `f`. Returns
+   {:tree <node> :fallbacks <int>} where :fallbacks is the number of
+   regions that could not be structured (emitted as :goto)."
+  (let [fallbacks (atom 0)
+        ctx {:ipdom    (post-idoms f)
+             :headers  (header->latches f)
+             :loops    []
+             :fallbacks fallbacks}
+        tree (structure f ctx (ir/fn-entry f) :none)]
+    {:tree tree :fallbacks (deref fallbacks)}))
