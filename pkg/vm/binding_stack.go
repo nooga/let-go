@@ -91,38 +91,43 @@ func (b *bindingStack) hasBinding(v *Var) bool {
 	return false
 }
 
+// rebuildAbove relinks the frames in above (top-to-bottom order) on top of
+// tail, innermost ending up at the head. Used by pop/set to reconstruct the
+// frames that sat above the changed binding.
+func rebuildAbove(above []*bindingFrame, tail *bindingFrame) *bindingFrame {
+	for i := len(above) - 1; i >= 0; i-- {
+		tail = &bindingFrame{v: above[i].v, val: above[i].val, next: tail}
+	}
+	return tail
+}
+
 // removeTopBinding returns head with the topmost frame for v spliced out,
-// rebuilding only the frames above it (each a fresh frame) and sharing the tail
-// below. If v is not bound, head is returned unchanged (no allocation).
+// rebuilding only the frames above it and sharing the tail below. If v is not
+// bound, head is returned unchanged (no allocation). Iterative so deep nesting
+// can't blow the stack; the common case (v at head) allocates nothing.
 func removeTopBinding(head *bindingFrame, v *Var) *bindingFrame {
-	if head == nil {
-		return nil
+	var above []*bindingFrame
+	for f := head; f != nil; f = f.next {
+		if f.v == v {
+			return rebuildAbove(above, f.next)
+		}
+		above = append(above, f)
 	}
-	if head.v == v {
-		return head.next
-	}
-	rest := removeTopBinding(head.next, v)
-	if rest == head.next {
-		return head
-	}
-	return &bindingFrame{v: head.v, val: head.val, next: rest}
+	return head // not bound
 }
 
 // replaceTopBinding returns head with v's topmost frame replaced by one holding
 // val, rebuilding the frames above it. ok is false (and head unchanged) if v is
 // not bound.
 func replaceTopBinding(head *bindingFrame, v *Var, val Value) (*bindingFrame, bool) {
-	if head == nil {
-		return nil, false
+	var above []*bindingFrame
+	for f := head; f != nil; f = f.next {
+		if f.v == v {
+			return rebuildAbove(above, &bindingFrame{v: v, val: val, next: f.next}), true
+		}
+		above = append(above, f)
 	}
-	if head.v == v {
-		return &bindingFrame{v: v, val: val, next: head.next}, true
-	}
-	rest, ok := replaceTopBinding(head.next, v, val)
-	if !ok {
-		return head, false
-	}
-	return &bindingFrame{v: head.v, val: head.val, next: rest}, true
+	return head, false // not bound
 }
 
 // snapshot converts the frame chain to the public BindingSnapshot map
@@ -131,10 +136,16 @@ func replaceTopBinding(head *bindingFrame, v *Var, val Value) (*bindingFrame, bo
 // consistent immutable chain.
 func (b *bindingStack) snapshot() BindingSnapshot {
 	out := BindingSnapshot{}
+	// Walk head (innermost) to tail, appending each var's values innermost-first;
+	// then reverse each stack so the current (innermost) value lands last,
+	// matching the map's top-is-last convention. O(n) overall.
 	for f := b.head.Load(); f != nil; f = f.next {
-		// head is the innermost binding; prepend so the current (innermost)
-		// value lands last, matching the map's top-is-last convention.
-		out[f.v] = append([]Value{f.val}, out[f.v]...)
+		out[f.v] = append(out[f.v], f.val)
+	}
+	for _, stack := range out {
+		for i, j := 0, len(stack)-1; i < j; i, j = i+1, j-1 {
+			stack[i], stack[j] = stack[j], stack[i]
+		}
 	}
 	return out
 }
