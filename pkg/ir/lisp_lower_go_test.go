@@ -418,12 +418,17 @@ func TestLowerGoStrictJoinValueFeedsLaterArithmetic(t *testing.T) {
 	}
 
 	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "goto ") {
-		t.Fatalf("expected join lowering to use CFG goto\n--- go ---\n%s", rendered)
+	// Structured emission lowers the value-if to an if/else that assigns the
+	// join local, then the continuation consumes it — no goto/labels.
+	if !strings.Contains(rendered, "} else {") {
+		t.Fatalf("expected join lowering to use a structured if/else\n--- go ---\n%s", rendered)
 	}
-	// Join block params are typed vm.Value (typeinfer doesn't currently
-	// narrow them from int-typed feeds), so the trailing arithmetic
-	// lowers via rt.AddValue rather than a Go-native `+ 1`.
+	if strings.Contains(rendered, "goto ") {
+		t.Fatalf("expected structured (goto-free) join lowering\n--- go ---\n%s", rendered)
+	}
+	// The join value must still feed the later arithmetic. Depending on
+	// whether typeinfer narrows the join param to int, this is either a
+	// Go-native `+ 1` or rt.AddValue.
 	if !strings.Contains(rendered, "+ 1") && !strings.Contains(rendered, "rt.AddValue") {
 		t.Fatalf("expected joined value to feed later arithmetic\n--- go ---\n%s", rendered)
 	}
@@ -446,8 +451,16 @@ func TestLowerGoStrictLoopLowersToCFG(t *testing.T) {
 	}
 
 	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "goto ") || !strings.Contains(rendered, ":") {
-		t.Fatalf("expected loop lowering to use labels/gotos\n--- go ---\n%s", rendered)
+	// Structured emission lowers loop*/recur to a `for { ... }` with the
+	// recur arm as `continue` and the exit arm as `break` — no goto/labels.
+	if !strings.Contains(rendered, "for {") {
+		t.Fatalf("expected loop lowering to use a structured for-loop\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "continue") || !strings.Contains(rendered, "break") {
+		t.Fatalf("expected loop lowering to use continue/break for the back-edge and exit\n--- go ---\n%s", rendered)
+	}
+	if strings.Contains(rendered, "goto ") {
+		t.Fatalf("expected structured (goto-free) loop lowering\n--- go ---\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "if ") || !strings.Contains(rendered, "return") {
 		t.Fatalf("expected loop lowering to preserve conditional exit\n--- go ---\n%s", rendered)

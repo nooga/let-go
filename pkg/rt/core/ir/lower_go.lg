@@ -10,7 +10,8 @@
 
 (ns ir.lower-go
   (:require
-   [ir.data]))
+   [ir.data]
+   [ir.structurize :as st]))
 
 (def ^:private binary-op
   {:add  "+"
@@ -1562,6 +1563,170 @@
   (when-let [cp (:const-params (deref f))]
     (get cp nid)))
 
+;; ---------------------------------------------------------------------------
+;; Structured Go emission (ir.structurize tree-walk).
+;;
+;; build.lg emits only reducible CFGs, so lower-body can walk a recovered
+;; control tree and emit if / for / break / continue instead of goto+labels.
+;; These helpers feed lower-tree; lower-body tries the structured path first
+;; and falls back to the goto emitter when structurize reports any fallback.
+;; ---------------------------------------------------------------------------
+
+(defn- return-stmts [f closed-exprs bid]
+  "Lower the return terminator of a block to statement(s).
+   Returns a vector of statements or nil."
+  (when-let [term (ir/block-term bid f)]
+    (when (= :return (ir/op term f))
+      (when (= 1 (count (ir/refs term f)))
+        ;; Coerce the return value to the function's declared return type.
+        ;; If the function returns vm.Value, box raw values. Otherwise emit
+        ;; raw and let result-node have chosen the matching type.
+        (let [ret-spec (function-return-spec f)
+              expr (if (= "vm.Value" ret-spec)
+                     (box-as-value f closed-exprs (nth (ir/refs term f) 0))
+                     (value-expr f closed-exprs (nth (ir/refs term f) 0)))
+              needs-error? (function-needs-error? f)]
+          (when expr
+            [(gogen/return-stmt
+               (if needs-error?
+                 [expr (gogen/ident "nil")]
+                 [expr]))]))))))
+
+(defn- branch-cond-expr [f closed-exprs bid]
+  "Compute the condition expression for a :branch-if terminator.
+   Returns an ast.Expr or nil."
+  (when-let [term (ir/block-term bid f)]
+    (when (= :branch-if (ir/op term f))
+      (when (= 1 (count (ir/refs term f)))
+        (let [cond-nid    (nth (ir/refs term f) 0)
+              cond-spec   (go-type-spec (ir/type-of cond-nid f))
+              raw-cond    (value-expr f closed-exprs cond-nid)]
+          (when raw-cond
+            (if (= "bool" cond-spec)
+              raw-cond
+              (gogen/call
+                (gogen/field-sel (gogen/ident "vm") "IsTruthy")
+                [raw-cond]))))))))
+
+(defn- block-inst-stmts [f closed-exprs bid]
+  "Lower the instruction sequence in a block (NOT including the label or terminator).
+   Returns a vector of statements or nil to force whole-function fallback."
+  (let [insts (ir/block-insts bid f)]
+    (loop [remaining insts out []]
+      (if (empty? remaining)
+        out
+        (let [stmts (lower-inst-stmts f closed-exprs (first remaining))]
+          (if (nil? stmts)
+            (let [op (ir/op (first remaining) f)]
+              ;; A nil result means "no statement". Side-effect-free
+              ;; ops (loads/const/block-arg, and any other dead value)
+              ;; can be skipped. A :call that returns nil, however, is
+              ;; an un-lowerable side-effecting call (e.g. push-binding!
+              ;; with a (var X) arg) — dropping it would change behavior,
+              ;; so the whole function must fall back instead.
+              (if (and (not= op :call)
+                       (or (= op :load-arg)
+                           (= op :load-var)
+                           (= op :load-closed)
+                           (= op :const)
+                           (= op :block-arg)
+                           (not (live? f (first remaining)))))
+                (recur (rest remaining) out)
+                nil))
+            (recur (rest remaining) (into out stmts))))))))
+
+(defn- lower-tree [f closed-exprs node]
+  "Lower a structurized control tree to Go statements.
+   Returns a vector of statements or nil to force whole-fn fallback."
+  (cond
+    (nil? node) []
+
+    :else
+    (let [[kind & args] node]
+      (case kind
+        :return
+        (let [bid (first args)]
+          (when-let [inst-stmts (block-inst-stmts f closed-exprs bid)]
+            (when-let [ret-stmts (return-stmts f closed-exprs bid)]
+              (vec (concat inst-stmts ret-stmts)))))
+
+        :tail
+        (let [bid (first args)]
+          (when-let [inst-stmts (block-inst-stmts f closed-exprs bid)]
+            (when-let [term (ir/block-term bid f)]
+              (when (= :tail-call (ir/op term f))
+                (let [tail-args (ir/refs term f)
+                      fixed-arity (if (ir/fn-variadic? f) (dec (ir/fn-arity f)) (ir/fn-arity f))
+                      assigns (loop [i 0 remaining tail-args out []]
+                                (if (empty? remaining)
+                                  out
+                                  (let [val-expr (box-as-value f closed-exprs (first remaining))
+                                        lhs (if (and (ir/fn-variadic? f) (= i fixed-arity))
+                                              (gogen/ident "args0")
+                                              (gogen/ident (str "a" i)))]
+                                    (if (nil? val-expr)
+                                      nil
+                                      (recur (inc i) (rest remaining)
+                                             (if (same-ident? lhs val-expr)
+                                               out
+                                               (conj out (gogen/assign "=" lhs val-expr))))))))]
+                  (when assigns
+                    (vec (concat inst-stmts (conj assigns (gogen/goto-stmt "func_entry"))))))))))
+
+        :seq
+        (let [[bid edge next-node] args]
+          (when-let [inst-stmts (block-inst-stmts f closed-exprs bid)]
+            (let [edge-stmts (emit-assignments-for-target f closed-exprs edge)
+                  next-stmts (lower-tree f closed-exprs next-node)]
+              (when (and edge-stmts next-stmts)
+                (vec (concat inst-stmts edge-stmts next-stmts))))))
+
+        :if
+        (let [[bid tt et then-node else-node cont-node] args]
+          (when-let [inst-stmts (block-inst-stmts f closed-exprs bid)]
+            (when-let [cond-expr (branch-cond-expr f closed-exprs bid)]
+              (let [then-stmts (when-let [ts (lower-tree f closed-exprs then-node)]
+                                 (vec (concat (emit-assignments-for-target f closed-exprs tt) ts)))
+                    else-stmts (when-let [es (lower-tree f closed-exprs else-node)]
+                                 (vec (concat (emit-assignments-for-target f closed-exprs et) es)))
+                    cont-stmts (lower-tree f closed-exprs cont-node)]
+                (when (and then-stmts else-stmts)
+                  (let [if-stmt [(gogen/if-stmt nil cond-expr then-stmts else-stmts)]]
+                    (if cont-stmts
+                      (vec (concat inst-stmts if-stmt cont-stmts))
+                      (vec (concat inst-stmts if-stmt)))))))))
+
+        :loop
+        (let [[h body-node cont-node] args]
+          (when-let [body-stmts (lower-tree f closed-exprs body-node)]
+            (let [for-stmt [(gogen/for-stmt nil nil nil body-stmts)]
+                  cont-stmts (lower-tree f closed-exprs cont-node)]
+              (if cont-stmts
+                (vec (concat for-stmt cont-stmts))
+                (vec for-stmt)))))
+
+        :continue
+        (let [[bid edge] args]
+          (if edge
+            (when-let [edge-stmts (emit-assignments-for-target f closed-exprs edge)]
+              (vec (concat edge-stmts [(gogen/continue-stmt)])))
+            [(gogen/continue-stmt)]))
+
+        :break
+        (let [[bid edge] args]
+          (if edge
+            (when-let [edge-stmts (emit-assignments-for-target f closed-exprs edge)]
+              (vec (concat edge-stmts [(gogen/break-stmt)])))
+            [(gogen/break-stmt)]))
+
+        :fallthrough
+        []
+
+        :goto
+        nil
+
+        []))))
+
 (defn- lower-body
   ([f] (lower-body f nil))
   ([f closed-exprs]
@@ -1586,21 +1751,32 @@
          decls  (into decls1 arg-decls)
          entry-label [(gogen/label-stmt "func_entry" nil)]]
      (when decls
-       (loop [blocks (ir/blocks f)
-              out    (if needs-tail-call?
-                       (vec (concat decls arg-inits entry-label))
-                       decls)]
-         (if (empty? blocks)
-           out
-           (let [bid (first blocks)]
-             ;; Skip dead/unterminated blocks — build can leave them and
-             ;; lower-terminator would call (ir/op nil f), failing.
-             (if (nil? (ir/block-term bid f))
-               (recur (rest blocks) out)
-               (let [stmts (lower-block-stmts f closed-exprs bid)]
-                 (if (nil? stmts)
-                   nil
-                   (recur (rest blocks) (into out stmts))))))))))))
+       (let [base (if needs-tail-call?
+                    (vec (concat decls arg-inits entry-label))
+                    decls)
+             ;; Structured path: build.lg emits reducible CFGs, so try to
+             ;; recover a control tree and emit if/for/break/continue. Fall
+             ;; back to the goto+label emitter when structurize reports any
+             ;; fallback or the tree-walk cannot lower a block.
+             st-result (st/structurize f)
+             structured-body (when (zero? (:fallbacks st-result))
+                               (lower-tree f closed-exprs (:tree st-result)))]
+         (if structured-body
+           (into base structured-body)
+           ;; Fallback: per-block goto emitter.
+           (loop [blocks (ir/blocks f)
+                  out    base]
+             (if (empty? blocks)
+               out
+               (let [bid (first blocks)]
+                 ;; Skip dead/unterminated blocks — build can leave them and
+                 ;; lower-terminator would call (ir/op nil f), failing.
+                 (if (nil? (ir/block-term bid f))
+                   (recur (rest blocks) out)
+                   (let [stmts (lower-block-stmts f closed-exprs bid)]
+                     (if (nil? stmts)
+                       nil
+                       (recur (rest blocks) (into out stmts))))))))))))))
 (defn- params-for [f]
   (let [arity       (ir/fn-arity f)
         variadic?   (ir/fn-variadic? f)

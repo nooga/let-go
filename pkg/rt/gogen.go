@@ -207,6 +207,15 @@ func opTokenOrErr(op string) (token.Token, error) {
 
 // --- constructor helpers ---------------------------------------------
 
+func wrap0(name string, fn func() (vm.Value, error)) (vm.Value, error) {
+	return vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 0 {
+			return vm.NIL, fmt.Errorf("gogen/%s: expected 0 args, got %d", name, len(vs))
+		}
+		return fn()
+	})
+}
+
 func wrap1(name string, fn func(vm.Value) (vm.Value, error)) (vm.Value, error) {
 	return vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -662,6 +671,14 @@ func cGotoStmt(nameV vm.Value) (vm.Value, error) {
 		return vm.NIL, fmt.Errorf("gogen/goto-stmt: %q is not a valid identifier", name)
 	}
 	return box(&ast.BranchStmt{Tok: token.GOTO, Label: ast.NewIdent(name)}), nil
+}
+
+func cContinueStmt() (vm.Value, error) {
+	return box(&ast.BranchStmt{Tok: token.CONTINUE}), nil
+}
+
+func cBreakStmt() (vm.Value, error) {
+	return box(&ast.BranchStmt{Tok: token.BREAK}), nil
 }
 
 func cLabelStmt(nameV, stmtV vm.Value) (vm.Value, error) {
@@ -1667,6 +1684,8 @@ func installGogenNS() {
 		mk(wrap1Named("expr-stmt", cExprStmt)),
 		mk(wrap1Named("return-stmt", cReturn)),
 		mk(wrap1Named("goto-stmt", cGotoStmt)),
+		mk(wrap0Named("continue-stmt", cContinueStmt)),
+		mk(wrap0Named("break-stmt", cBreakStmt)),
 
 		mk(wrap2Named("unary", cUnary)),
 		mk(wrap2Named("index", cIndex)),
@@ -1715,6 +1734,10 @@ func installGogenNS() {
 }
 
 // helpers to keep the entries table readable.
+func wrap0Named(name string, fn func() (vm.Value, error)) (string, vm.Value, error) {
+	v, err := wrap0(name, fn)
+	return name, v, err
+}
 func wrap1Named(name string, fn func(vm.Value) (vm.Value, error)) (string, vm.Value, error) {
 	v, err := wrap1(name, fn)
 	return name, v, err
