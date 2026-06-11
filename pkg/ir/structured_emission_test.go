@@ -23,6 +23,7 @@ import (
 	"go/ast"
 	"go/importer"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"go/types"
 	"strings"
@@ -172,6 +173,48 @@ func TestStructuredEmissionHasExpectedStructure(t *testing.T) {
 			if want.wantContinue && s.continues < 1 {
 				t.Errorf("%s: expected a continue (recur back-edge), got %d", c.name, s.continues)
 			}
+		})
+	}
+}
+
+// stmtStr renders a statement back to source for duplicate detection.
+func stmtStr(s ast.Stmt) string {
+	var sb strings.Builder
+	_ = printer.Fprint(&sb, token.NewFileSet(), s)
+	return sb.String()
+}
+
+// TestStructuredEmissionNoDuplicateRecurCopies guards against the back-edge
+// parallel-copy being emitted twice. A recur lowers to `i = <tmp>; s = <tmp>`
+// before `continue`; if both the enclosing `:if`/`:seq` node AND the child
+// `:continue` node emit the edge copies, the assignment block is duplicated
+// (i = v15; s = v16; i = v15; s = v16). It is idempotent here so it type-checks
+// and is goto-free — invisible to the other gates — but it is still wrong
+// emission. Assert no statement block contains the same assignment twice.
+func TestStructuredEmissionNoDuplicateRecurCopies(t *testing.T) {
+	ensureLoader()
+	for _, c := range structuredCorpus {
+		t.Run(c.name, func(t *testing.T) {
+			f := parseLoweredGo(t, renderStructuredFile(t, c.name, c.src))
+			ast.Inspect(f, func(n ast.Node) bool {
+				blk, ok := n.(*ast.BlockStmt)
+				if !ok {
+					return true
+				}
+				seen := map[string]bool{}
+				for _, s := range blk.List {
+					a, ok := s.(*ast.AssignStmt)
+					if !ok {
+						continue
+					}
+					key := stmtStr(a)
+					if seen[key] {
+						t.Errorf("%s: duplicate assignment %q in a single block (recur copy emitted twice)", c.name, key)
+					}
+					seen[key] = true
+				}
+				return true
+			})
 		})
 	}
 }

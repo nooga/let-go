@@ -1705,19 +1705,16 @@
                 (vec (concat for-stmt cont-stmts))
                 (vec for-stmt)))))
 
+        ;; Edge copies for a :continue/:break are owned by the enclosing
+        ;; :if/:seq node, which always emits emit-assignments-for-target for
+        ;; this same branch-target (the :fallthrough and inline-structured
+        ;; arms depend on the parent emitting them). Re-emitting here would
+        ;; duplicate the back-edge parallel copy, so emit only the transfer.
         :continue
-        (let [[bid edge] args]
-          (if edge
-            (when-let [edge-stmts (emit-assignments-for-target f closed-exprs edge)]
-              (vec (concat edge-stmts [(gogen/continue-stmt)])))
-            [(gogen/continue-stmt)]))
+        [(gogen/continue-stmt)]
 
         :break
-        (let [[bid edge] args]
-          (if edge
-            (when-let [edge-stmts (emit-assignments-for-target f closed-exprs edge)]
-              (vec (concat edge-stmts [(gogen/break-stmt)])))
-            [(gogen/break-stmt)]))
+        [(gogen/break-stmt)]
 
         :fallthrough
         []
