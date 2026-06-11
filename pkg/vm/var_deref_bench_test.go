@@ -189,7 +189,6 @@ func benchNsWorkload(b *testing.B, depth, readsPerWrite int) {
 }
 
 func BenchmarkNsWorkload(b *testing.B) {
-	const depth = 8 // a deep-ish nested-namespace extent
 	profiles := []struct {
 		name          string
 		readsPerWrite int
@@ -198,9 +197,13 @@ func BenchmarkNsWorkload(b *testing.B) {
 		{"balanced", 4},
 		{"write-heavy", 1},
 	}
-	for _, p := range profiles {
-		b.Run(fmt.Sprintf("d%d/%s", depth, p.name), func(b *testing.B) {
-			benchNsWorkload(b, depth, p.readsPerWrite)
-		})
+	// Several nested-extent depths: deeper stacks stress the frame-list read
+	// walk while the copy-on-write map pays its whole-map copy on every write.
+	for _, depth := range []int{8, 16, 32} {
+		for _, p := range profiles {
+			b.Run(fmt.Sprintf("d%d/%s", depth, p.name), func(b *testing.B) {
+				benchNsWorkload(b, depth, p.readsPerWrite)
+			})
+		}
 	}
 }
