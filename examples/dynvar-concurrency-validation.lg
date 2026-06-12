@@ -1,0 +1,117 @@
+;; Concurrency-heavy real-world validation for the dynamic-var deref fork (#211).
+;;
+;; Models the canonical Clojure shape that actually stresses dynamic-var deref
+;; under concurrency: a multi-tenant web request pipeline.
+;;   - thread-per-request fan-out          (Ring / http-kit)
+;;   - per-request bound context           (ring *request*, tools.logging MDC)
+;;   - tenant-routed data access           (next.jdbc *db* bound dynamically)
+;; Each in-flight request binds its context ONCE, then a deep call stack reads
+;; those vars many times inside the binding extent — the exact pattern the
+;; synthetic depth/ratio benches abstract. This checks the assumption holds on
+;; a real-shaped program, and that bindings stay isolated across futures.
+
+(ns validate.dynvar-concurrency)
+
+;; --- per-request dynamic context (read-hot, bound-once) ---
+(def ^:dynamic *request-id* nil)   ; tracing id, read by every log line
+(def ^:dynamic *tenant*     nil)   ; multi-tenant routing key, read by every query
+(def ^:dynamic *user*       nil)   ; auth principal, read by log + authz
+
+;; --- logging layer (MDC): 3 derefs per line, called on every step ---
+(defn log-line [level msg]
+  (str "[" *request-id* "][" *tenant* "][" *user* "] " level " " msg))
+
+;; --- repo layer: tenant-routed query, logs + reads tenant/request-id ---
+(defn db-query [q]
+  (log-line "DEBUG" (str "exec " q))
+  (str *tenant* "/" q "#" *request-id*))
+
+;; --- service layer: deref-heavy loop, repo + log on each step ---
+(defn service-op [n]
+  (reduce (fn [acc i]
+            (log-line "INFO" (str "step " i))
+            (str acc "|" (db-query (str "row-" i))))
+          (log-line "INFO" "start")
+          (range n)))
+
+;; --- handler: establishes the request binding extent (depth 1), with a
+;;     nested cross-tenant audit lookup (depth 2) modeling middleware/txn
+;;     stacking (with-transaction inside with-logging-context). ---
+(defn handle [req]
+  (binding [*request-id* (:id req)
+            *tenant*     (:tenant req)
+            *user*       (:user req)]
+    (let [main (service-op (:work req))
+          aux  (binding [*tenant* (str (:tenant req) "-audit")]
+                 (db-query "audit"))]
+      (str main " || " aux))))
+
+;; --- Workload 2: deref-dominated, allocation-free ---
+;; Isolates what the synthetic benches measure: concurrent reads of a bound
+;; dynamic var inside its binding extent. Under baseline every read takes the
+;; shared deref lock, so concurrent readers serialize; A/B/C are lock-free here.
+;; No string building, so wall time tracks deref throughput, not the allocator.
+(def ^:dynamic *shard* 0)
+
+(defn hot-read-loop [k]
+  (loop [i 0 acc 0]
+    (if (< i k)
+      (recur (inc i) (+ acc *shard*))
+      acc)))
+
+(defn handle-hot [req k]
+  (binding [*shard* (:shard req)]
+    (hot-read-loop k)))
+
+(defn make-reqs [n work]
+  (mapv (fn [i] {:id (str "req-" i)
+                 :tenant (str "tenant-" (mod i 8))
+                 :user (str "user-" i)
+                 :work work})
+        (range n)))
+
+;; one timed concurrent run; returns [elapsed-ms correct?]
+(defn run-once [reqs golden]
+  (let [t0 (System/nanoTime)
+        futs (mapv (fn [r] (future (handle r))) reqs)
+        conc (mapv deref futs)
+        t1 (System/nanoTime)]
+    [(/ (- t1 t0) 1000000.0)
+     (= golden conc)]))
+
+;; timed deref-dominated concurrent run; returns [elapsed-ms correct?]
+(defn run-hot-once [reqs k golden]
+  (let [t0 (System/nanoTime)
+        futs (mapv (fn [r] (future (handle-hot r k))) reqs)
+        conc (mapv deref futs)
+        t1 (System/nanoTime)]
+    [(/ (- t1 t0) 1000000.0)
+     (= golden conc)]))
+
+(defn median [xs]
+  (let [s (vec (sort xs))
+        n (count s)]
+    (nth s (quot n 2))))
+
+(defn mn [xs] (first (sort xs)))
+
+(let [n-req 200
+      work  50
+      reps  9
+      reqs  (make-reqs n-req work)
+      ;; --- W1: realistic mixed handler (string/alloc heavy) ---
+      golden (mapv handle reqs)
+      w1     (mapv (fn [_] (run-once reqs golden)) (range reps))
+      ;; --- W2: deref-dominated concurrent reads (allocation-free) ---
+      hotk   2000
+      hreqs  (mapv (fn [i] (assoc i :shard (mod (count (:id i)) 7))) reqs)
+      hgold  (mapv (fn [r] (handle-hot r hotk)) hreqs)
+      w2     (mapv (fn [_] (run-hot-once hreqs hotk hgold)) (range reps))]
+  (println "=== W1: realistic mixed handler ===")
+  (println "  " n-req "concurrent reqs, work=" work "; ~" (+ (* work 8) 6) "derefs/req")
+  (println "   binding isolation:" (if (every? second w1) "OK" "FAIL — bleed!"))
+  (println "   min ms:" (mn (mapv first w1)) " median ms:" (median (mapv first w1)))
+  (println "=== W2: deref-dominated concurrent reads ===")
+  (println "  " n-req "concurrent reqs x" hotk "in-extent reads = " (* n-req hotk) "derefs/run")
+  (println "   binding isolation:" (if (every? second w2) "OK" "FAIL — bleed!"))
+  (println "   min ms:" (mn (mapv first w2)) " median ms:" (median (mapv first w2))))
