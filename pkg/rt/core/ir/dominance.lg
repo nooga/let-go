@@ -5,7 +5,15 @@
 ;; ("A Simple, Fast Dominance Algorithm"). For typical function sizes
 ;; (< 50 blocks) this runs in microseconds and is near-optimal.
 
-(ns ir.dominance)
+;; ir.data interns the block-access primitives (ir/blocks, ir/block-term,
+;; ir/block-preds, …) into the `ir` namespace. Requiring it guarantees those
+;; are loaded before this namespace compiles under the source-bootstrap loader
+;; (the bundle bakes a load order, but a fresh `require 'ir.dominance` does
+;; not — relying on implicit order broke when ir.structurize pulled dominance
+;; in ahead of ir.build).
+(ns ir.dominance
+  (:require
+   [ir.data]))
 
 (defn successors [f bid]
   "Successor block ids of bid in f, derived from its terminator.
@@ -16,11 +24,11 @@
         aux  (ir/aux term f)]
     (cond
       (= op :branch)
-        [(ir/branch-target-target aux)]
+      [(ir/branch-target-target aux)]
       (= op :branch-if)
-        (let [t (ir/cond-target-true aux)
-              e (ir/cond-target-false aux)]
-          [(ir/branch-target-target t) (ir/branch-target-target e)])
+      (let [t (ir/cond-target-true aux)
+            e (ir/cond-target-false aux)]
+        [(ir/branch-target-target t) (ir/branch-target-target e)])
       :else [])))
 
 (defn- dfs-postorder [f entry]
@@ -59,9 +67,9 @@
       b1
       (cond
         (> (nth rpo-idx b1) (nth rpo-idx b2))
-          (recur (nth idom b1) b2)
+        (recur (nth idom b1) b2)
         (> (nth rpo-idx b2) (nth rpo-idx b1))
-          (recur b1 (nth idom b2))
+        (recur b1 (nth idom b2))
         :else b1))))
 
 (defn- refine-idom [f bid idom rpo-idx]
@@ -76,11 +84,11 @@
         (let [p (first ps)]
           (cond
             (= -1 (nth idom p))
-              (recur (rest ps) new-id)
+            (recur (rest ps) new-id)
             (= -1 new-id)
-              (recur (rest ps) p)
+            (recur (rest ps) p)
             :else
-              (recur (rest ps) (intersect idom rpo-idx p new-id))))))))
+            (recur (rest ps) (intersect idom rpo-idx p new-id))))))))
 
 (defn dominators [f]
   "Compute the immediate-dominator array: idom[bid] = nearest strict

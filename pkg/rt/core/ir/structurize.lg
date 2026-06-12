@@ -29,6 +29,10 @@
 
 (ns ir.structurize
   (:require
+   ;; ir.data interns ir/blocks, ir/block-term, … into the `ir` namespace;
+   ;; require it so they resolve under the source-bootstrap loader (the bundle
+   ;; bakes a load order, a fresh require does not).
+   [ir.data]
    [ir.dominance :as dom]))
 
 (declare structure structure-straight structure-loop)

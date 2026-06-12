@@ -65,7 +65,11 @@
     (let [e (macroexpand f)]
       (if (= e f) e (recur e)))))
 
-(defn- expand-all [form]
+;; Public: structurize_test.lg (and any out-of-ns IR driver) needs to expand
+;; forms exactly as the pipeline does before build. Privacy was unenforced via
+;; the bundle but rejected under the source-bootstrap loader, so this must be
+;; `defn`, not `defn-`.
+(defn expand-all [form]
   ;; seq? not list? — macros frequently return Cons cells (from `cons`)
   ;; which aren't list? but ARE seq?. Build-form will likewise need to
   ;; accept seq? not list? if we want to feed it Cons-shaped output.
