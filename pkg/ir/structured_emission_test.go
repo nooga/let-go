@@ -219,6 +219,137 @@ func TestStructuredEmissionNoDuplicateRecurCopies(t *testing.T) {
 	}
 }
 
+// isTempIdent reports whether name is a generated SSA temp local (vNN / _pcNN).
+func isTempIdent(name string) bool {
+	for _, pre := range []string{"v", "_pc"} {
+		if rest := strings.TrimPrefix(name, pre); rest != name && rest != "" {
+			allDigits := true
+			for _, r := range rest {
+				if r < '0' || r > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// forSelfUpdate reports whether a for-loop body contains a direct
+// self-referential update `x = x <op> ...` for the named variable.
+func forSelfUpdate(fr *ast.ForStmt, name string) bool {
+	found := false
+	ast.Inspect(fr.Body, func(m ast.Node) bool {
+		a, ok := m.(*ast.AssignStmt)
+		if !ok || len(a.Lhs) != 1 || len(a.Rhs) != 1 {
+			return true
+		}
+		lhs, lok := a.Lhs[0].(*ast.Ident)
+		if !lok || lhs.Name != name {
+			return true
+		}
+		bin, bok := a.Rhs[0].(*ast.BinaryExpr)
+		if !bok {
+			return true
+		}
+		// one operand is the variable itself: x = x + 1 (self-update)
+		for _, operand := range []ast.Expr{bin.X, bin.Y} {
+			if id, ok := operand.(*ast.Ident); ok && id.Name == name {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// forStmtOf returns the (single) for-loop in a parsed lowered function.
+func forStmtOf(t *testing.T, f *ast.File) *ast.ForStmt {
+	t.Helper()
+	var fr *ast.ForStmt
+	ast.Inspect(f, func(n ast.Node) bool {
+		if x, ok := n.(*ast.ForStmt); ok && fr == nil {
+			fr = x
+		}
+		return true
+	})
+	if fr == nil {
+		t.Fatal("no for-loop in lowered output")
+	}
+	return fr
+}
+
+// loopVarTempAssign reports the first loop-carried var routed through a temp
+// (`x = vNN`), or "" if none.
+func loopVarTempAssign(fr *ast.ForStmt) string {
+	bad := ""
+	ast.Inspect(fr.Body, func(m ast.Node) bool {
+		a, ok := m.(*ast.AssignStmt)
+		if !ok || len(a.Lhs) != 1 || len(a.Rhs) != 1 || bad != "" {
+			return true
+		}
+		lhs, lok := a.Lhs[0].(*ast.Ident)
+		rhs, rok := a.Rhs[0].(*ast.Ident)
+		if lok && rok && !isTempIdent(lhs.Name) && isTempIdent(rhs.Name) {
+			bad = stmtStr(a)
+		}
+		return true
+	})
+	return bad
+}
+
+// TestStructuredEmissionInlinesRecurUpdates asserts pure-arithmetic recur
+// updates are inlined directly (i = i + 1, s = s + i) rather than routed through
+// single-use temps. `sum` is all pure arithmetic so it fully collapses; the
+// accumulator `s = s + i` must be emitted BEFORE `i = i + 1` so it reads the OLD
+// i — the parallel-rebind invariant (cycle-safe sequencing). `loop-if`'s `t` is
+// a conditional (phi), not pure-inline, so it legitimately keeps its temp.
+func TestStructuredEmissionInlinesRecurUpdates(t *testing.T) {
+	ensureLoader()
+
+	t.Run("sum-full-collapse", func(t *testing.T) {
+		var src string
+		for _, c := range structuredCorpus {
+			if c.name == "sum" {
+				src = c.src
+			}
+		}
+		fr := forStmtOf(t, parseLoweredGo(t, renderStructuredFile(t, "sum", src)))
+		if bad := loopVarTempAssign(fr); bad != "" {
+			t.Errorf("sum: loop var still routed through a temp: %q (expected i = i + 1 / s = s + i inlined)", bad)
+		}
+		if !forSelfUpdate(fr, "i") {
+			t.Errorf("sum: expected inlined self-update i = i + 1")
+		}
+		// parallel rebind: the accumulator s must read the OLD i, so `s = s + i`
+		// must be sequenced before `i = i + 1`.
+		body := stmtStr(fr.Body)
+		si := strings.Index(body, "s = s + i")
+		ii := strings.Index(body, "i = i + 1")
+		if si < 0 || ii < 0 {
+			t.Errorf("sum: expected both `s = s + i` and `i = i + 1` inlined; got:\n%s", body)
+		} else if si > ii {
+			t.Errorf("sum: `s = s + i` must precede `i = i + 1` (parallel rebind: s reads OLD i); got:\n%s", body)
+		}
+	})
+
+	t.Run("loop-if-induction", func(t *testing.T) {
+		var src string
+		for _, c := range structuredCorpus {
+			if c.name == "loop-if" {
+				src = c.src
+			}
+		}
+		fr := forStmtOf(t, parseLoweredGo(t, renderStructuredFile(t, "loop-if", src)))
+		if !forSelfUpdate(fr, "i") {
+			t.Errorf("loop-if: expected inlined self-update i = i + 1")
+		}
+	})
+}
+
 func TestStructuredEmissionTypeChecks(t *testing.T) {
 	ensureLoader()
 	for _, c := range structuredCorpus {

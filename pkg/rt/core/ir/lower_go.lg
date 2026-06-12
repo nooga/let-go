@@ -10,6 +10,7 @@
 
 (ns ir.lower-go
   (:require
+   [graph]
    [ir.data]
    [ir.structurize :as st]))
 
@@ -599,6 +600,8 @@
 
       :else nil)))
 
+(declare inlined-arg?)
+
 (defn- collect-local-ids [f]
   (let [block-ids (ir/blocks f)]
     (loop [bs block-ids out []]
@@ -616,6 +619,8 @@
                                       (not= op :block-arg)
                                       (live? f nid)
                                       (not (closure-value? f nid))
+                                      ;; inlined edge-args carry no local
+                                      (not (inlined-arg? f nid))
                                       (infer-go-type (ir/type-of nid f)))))
                              (ir/block-insts bid f))]
           (recur (rest bs) (into out (concat params insts))))))))
@@ -639,14 +644,129 @@
                       (recur (rest remaining)
                              (conj out (gogen/var-decl nm go-type nil))))))))))
 
-;; --- parallel-copy sequencing for block-arg edge transfers ------------------
-;; A branch-target's param<-arg copies execute simultaneously (parallel copy).
-;; After coalescing, an arg that is a bare reference to another param (e.g. a
-;; loop swap `(recur b a)`) becomes `a = b` / `b = a`, which clobbers if
-;; emitted naively. We order copies so no destination is overwritten while a
-;; pending copy still reads it, breaking read/write cycles with a fresh `:=`
-;; temp. Computed args are materialized into distinct temps upstream, so only
-;; bare-ident copies can ever form a cycle.
+;; --- single-use computed edge-arg inlining ---------------------------------
+;; A recur/loop back-edge copies param<-arg. When the arg is a pure, single-use
+;; computed value (e.g. (inc i) / (+ s i)), its SSA temp is a pure indirection:
+;; `v15 = i + 1; i = v15`. We inline the expression into the copy (`i = i + 1`)
+;; and drop the temp's local + statement. The expression then READS its operand
+;; params, so the parallel-copy sequencer must order copies so an arg still
+;; reads the OLD value of any sibling target (`s = s + i` BEFORE `i = i + 1`).
+
+(declare arg-reads-target-names)
+
+(defn- pure-inline-op? [op]
+  ;; Pure, value-producing ops whose RHS may be inlined into an edge copy.
+  ;; Excludes :call (effectful / error-propagating) and :block-arg.
+  (or (= op :inc) (= op :dec) (contains? binary-op op)))
+
+(defn- n-uses [f nid]
+  (let [u (ir/uses f)]
+    (if (< nid (count u)) (ir/uses-count (nth u nid)) 0)))
+
+(defn- inlinable-copy? [f pid arg-nid]
+  ;; A param<-arg copy is inline-eligible when the arg is a pure, live,
+  ;; single-use computed value AND param/arg share one Go type (so no
+  ;; box/unbox coercion — those keep the temp path).
+  (and (live? f arg-nid)
+       (pure-inline-op? (ir/op arg-nid f))
+       (= 1 (n-uses f arg-nid))
+       (= (go-type-spec (ir/type-of pid f))
+          (go-type-spec (ir/type-of arg-nid f)))))
+
+(defn- branch-targets-of [f term]
+  (let [op (ir/op term f)]
+    (cond
+      (= op :branch)    [(ir/aux term f)]
+      (= op :branch-if) (let [ct (ir/aux term f)]
+                          [(ir/cond-target-true ct) (ir/cond-target-false ct)])
+      :else             [])))
+
+(defn- edge-candidates [f bt cond-refs]
+  ;; Inline-eligible copies of one branch-target as maps
+  ;; {:arg nid :name dst-name :reads #{names}}. cond-refs is the source
+  ;; terminator's direct refs (its condition): a value used as BOTH the branch
+  ;; condition AND an edge-arg (the `or` macro's `(if x x b)`) counts as a single
+  ;; use in the cache, so suppressing its local would leave the condition
+  ;; referencing an undefined var — exclude it.
+  (let [params (ir/block-params (ir/branch-target-target bt) f)
+        args   (ir/branch-target-args bt)]
+    (loop [i 0 acc []]
+      (if (>= i (count params))
+        acc
+        (let [pid (nth params i)
+              arg (nth args i)]
+          (recur (inc i)
+                 (if (and (inlinable-copy? f pid arg)
+                          (not (contains? cond-refs arg)))
+                   (conj acc {:arg   arg
+                              :name  (gogen/ident-name (value-ident f pid))
+                              :reads (arg-reads-target-names f arg params)})
+                   acc)))))))
+
+(defn- acyclic-inline-args [cands]
+  ;; Inline every candidate EXCEPT those whose destinations form a mutual-read
+  ;; cycle (e.g. (recur (+ i s) (+ s i))): a size>1 SCC over the
+  ;; dst -> sibling-dsts-it-reads graph. Acyclic candidates (self-updates AND
+  ;; accumulators like s <- (+ s i)) are safe — oos sequences them so each reads
+  ;; the OLD value of any sibling. Cyclic ones keep their temp (oos's computed-
+  ;; cycle fallback never needs to fire, so no function becomes un-lowerable).
+  (let [names  (set (map :name cands))
+        graph  (reduce (fn [m c]
+                         (assoc m (:name c)
+                                (vec (filter (fn [nm] (and (not= nm (:name c))
+                                                           (contains? names nm)))
+                                             (:reads c)))))
+                       {} cands)
+        cyclic (reduce (fn [s scc] (if (> (count scc) 1) (into s scc) s))
+                       #{} (graph/sccs graph))]
+    (reduce (fn [acc c] (if (contains? cyclic (:name c)) acc (conj acc (:arg c))))
+            #{} cands)))
+
+(defn- compute-inline-args [f]
+  ;; Set of arg-nids to inline, computed once per fn (consulted by local-decls,
+  ;; block-inst-stmts and emit-assignments-for-target so all three agree).
+  (reduce
+    (fn [s bid]
+      (let [term (ir/block-term bid f)]
+        (if (nil? term)
+          s
+          (let [cond-refs (set (ir/refs term f))]
+            (reduce (fn [s2 bt]
+                      (into s2 (acyclic-inline-args (edge-candidates f bt cond-refs))))
+                    s
+                    (branch-targets-of f term))))))
+    #{}
+    (ir/blocks f)))
+
+(defn- inlined-arg? [f nid]
+  (contains? (or (:inline-args (deref f)) #{}) nid))
+
+(defn- arg-reads-target-names [f arg-nid _params]
+  ;; Coalesced local NAMES the inlined expression for arg-nid DIRECTLY reads.
+  ;; Compared by NAME, not nid: a body block-param and the header target it
+  ;; feeds coalesce to the same Go local yet are distinct IR nids, so a nid
+  ;; comparison silently misses the interference (and would wrongly inline an
+  ;; accumulator `(+ s i)` as a self-update, reordering it AFTER `i` updates —
+  ;; reading the NEW i, violating recur's parallel rebind). Only direct operand
+  ;; refs matter: a materialized temp operand already snapshots its inputs, so
+  ;; reads do not propagate through it.
+  (reduce (fn [acc r]
+            (if (and (local-carrying-op? (ir/op r f))
+                     (not (closure-value? f r)))
+              (conj acc (gogen/ident-name (value-ident f r)))
+              acc))
+          #{}
+          (ir/refs arg-nid f)))
+
+  ;; --- parallel-copy sequencing for block-arg edge transfers ------------------
+  ;; A branch-target's param<-arg copies execute simultaneously (parallel copy).
+  ;; A copy whose RHS is a bare param ref (loop swap `(recur b a)`) or an inlined
+  ;; computed expression (`s = s + i`) reads sibling targets; emitting it after
+  ;; one of those targets is written clobbers the read. We order copies so no
+  ;; destination is overwritten while a pending copy still reads it. Read/write
+  ;; cycles among BARE-IDENT copies break with a fresh `:=` temp; a cycle that
+  ;; would require redirecting a computed expression falls back (nil) to the goto
+  ;; emitter rather than risk a miscompile.
 
 (defn- oos-next-tmp! [f]
   (let [n (or (:pc-tmp (deref f)) 0)]
@@ -656,43 +776,61 @@
 (defn- oos-vec-remove [v i]
   (vec (concat (take i v) (drop (inc i) v))))
 
-(defn- oos-rhs-read-name [rhs]
-  ;; The single dst name this rhs reads, IF rhs is a bare identifier; else nil.
-  (when (gogen/ident? rhs) (gogen/ident-name rhs)))
+(defn- oos-other-reads? [pending skip-i nm]
+  ;; Does any pending pair OTHER than index skip-i read the name nm?
+  (loop [i 0]
+    (if (< i (count pending))
+      (if (and (not= i skip-i) (contains? (:reads (nth pending i)) nm))
+        true
+        (recur (inc i)))
+      false)))
 
 (defn- oos-sequence-copies [f pairs]
-  ;; pairs: vec of [lhs-ident rhs-expr]. Returns ordered gogen assign stmts.
+  ;; pairs: vec of {:lhs ident :rhs expr :reads #{names} :computed? bool}.
+  ;; Orders the simultaneous param<-arg copies so no destination is overwritten
+  ;; while another pending copy still reads it. A copy reading its OWN dst
+  ;; (i = i + 1) never blocks. Read/write cycles among BARE-IDENT copies (loop
+  ;; swaps) break with a fresh `:=` temp; a cycle that would require rewriting a
+  ;; computed expression returns nil (whole-fn fallback). The latter is a safety
+  ;; net — unreachable while only self-referential computed copies are inlined.
   (if (<= (count pairs) 1)
-    (mapv (fn [p] (gogen/assign "=" (nth p 0) (nth p 1))) pairs)
+    (mapv (fn [p] (gogen/assign "=" (:lhs p) (:rhs p))) pairs)
     (loop [pending pairs out []]
       (if (empty? pending)
         out
-        (let [reads (reduce (fn [s p]
-                              (let [rd (oos-rhs-read-name (nth p 1))]
-                                (if rd (conj s rd) s)))
-                            #{} pending)
-              ;; a writer is safe iff no pending copy still reads its dst
-              ready (loop [i 0]
+        (let [ready (loop [i 0]
                       (if (< i (count pending))
-                        (if (contains? reads (gogen/ident-name (nth (nth pending i) 0)))
-                          (recur (inc i)) i)
+                        (if (oos-other-reads? pending i
+                                              (gogen/ident-name (:lhs (nth pending i))))
+                          (recur (inc i))
+                          i)
                         -1))]
           (if (>= ready 0)
             (let [p (nth pending ready)]
               (recur (oos-vec-remove pending ready)
-                     (conj out (gogen/assign "=" (nth p 0) (nth p 1)))))
-            ;; all remaining are in cycles: save one dst to a temp, redirect readers
-            (let [p     (nth pending 0)
-                  dname (gogen/ident-name (nth p 0))
-                  tname (oos-next-tmp! f)
-                  save  (gogen/assign ":=" (gogen/ident tname) (gogen/ident dname))
-                  pending* (mapv (fn [q]
-                                   (let [r (nth q 1)]
-                                     (if (and (gogen/ident? r) (= dname (gogen/ident-name r)))
-                                       [(nth q 0) (gogen/ident tname)]
-                                       q)))
-                                 pending)]
-              (recur pending* (conj out save)))))))))
+                     (conj out (gogen/assign "=" (:lhs p) (:rhs p)))))
+            ;; all remaining are in cycles: break a bare-ident copy with a temp
+            (let [bi (loop [i 0]
+                       (if (< i (count pending))
+                         (if (:computed? (nth pending i)) (recur (inc i)) i)
+                         -1))]
+              (if (< bi 0)
+                nil
+                (let [p     (nth pending bi)
+                      dname (gogen/ident-name (:lhs p))]
+                  (if (some (fn [q] (and (:computed? q) (contains? (:reads q) dname)))
+                            pending)
+                    nil
+                    (let [tname    (oos-next-tmp! f)
+                          save     (gogen/assign ":=" (gogen/ident tname) (gogen/ident dname))
+                          pending* (mapv (fn [q]
+                                           (if (and (not (:computed? q))
+                                                    (contains? (:reads q) dname))
+                                             {:lhs (:lhs q) :rhs (gogen/ident tname)
+                                              :reads #{tname} :computed? false}
+                                             q))
+                                         pending)]
+                      (recur pending* (conj out save)))))))))))))
 
 (defn- emit-assignments-for-target [f closed-exprs bt]
   (let [params (ir/block-params (ir/branch-target-target bt) f)
@@ -717,7 +855,13 @@
             (let [lhs (value-ident f pid)
                   lhs-spec (go-type-spec (ir/type-of pid f))
                   arg-spec (go-type-spec (ir/type-of arg-nid f))
+                  inline?  (inlined-arg? f arg-nid)
                   rhs (cond
+                        ;; Inlined single-use computed arg: emit the expression
+                        ;; itself (its temp's local + defining statement are
+                        ;; suppressed in local-decls / block emission).
+                        inline?
+                        (inst-rhs f closed-exprs arg-nid)
                         ;; LHS is vm.Value: box raw RHS if needed.
                         (= "vm.Value" lhs-spec)
                         (box-as-value f closed-exprs arg-nid)
@@ -736,7 +880,12 @@
                 nil
                 (if (same-ident? lhs rhs)
                   (recur (inc i) pairs)
-                  (recur (inc i) (conj pairs [lhs rhs])))))))))))
+                  (let [reads (cond
+                                inline?            (arg-reads-target-names f arg-nid params)
+                                (gogen/ident? rhs) #{(gogen/ident-name rhs)}
+                                :else              #{})
+                        pair  {:lhs lhs :rhs rhs :reads reads :computed? inline?}]
+                    (recur (inc i) (conj pairs pair))))))))))))
 
 (defn- transfer-stmts [f closed-exprs bt]
   (let [assigns (emit-assignments-for-target f closed-exprs bt)]
@@ -818,8 +967,8 @@
 (defn- supported-coercion-type? [t]
   (contains? coercion-supported-types t))
 
-;; Per-NS accumulator (an atom) of native-module Go import paths actually used.
-;; nil at top level disables tracking. Bound by pipeline.lg's lower-ns-to-go.
+  ;; Per-NS accumulator (an atom) of native-module Go import paths actually used.
+  ;; nil at top level disables tracking. Bound by pipeline.lg's lower-ns-to-go.
 (def ^:dynamic *native-imports-used* nil)
 
 ;; ---------------------------------------------------------------------------
@@ -1190,7 +1339,7 @@
   (let [label-stmts (if (= bid (ir/entry-block f))
                       []
                       [(gogen/label-stmt (label-name bid) nil)])
-        insts (ir/block-insts bid f)
+        insts (filter (fn [nid] (not (inlined-arg? f nid))) (ir/block-insts bid f))
         inst-stmts (loop [remaining insts out []]
                      (if (empty? remaining)
                        out
@@ -1299,15 +1448,15 @@
                  (conj assigns
                        (gogen/assign "=" (gogen/ident sym) (gogen/ident arg-sym)))))))))
 
-;; --- out-of-SSA coalescing (block-oriented; phi-free) -----------------------
-;; The IR is block-parameter SSA, and the build pass propagates each source
-;; variable's name onto its block params. A variable's SSA versions are
-;; sequential (each def kills the prior), so they can share ONE mutable Go
-;; local: name every nid carrying source name S as `S`. The only unsafe case
-;; is shadowing — two distinct same-named bindings live at once — detected
-;; conservatively: a name is unsafe if a single inst references two DIFFERENT
-;; nids carrying it. Unsafe names stay versioned. No union-find, no dominance,
-;; no liveness engine.
+  ;; --- out-of-SSA coalescing (block-oriented; phi-free) -----------------------
+  ;; The IR is block-parameter SSA, and the build pass propagates each source
+  ;; variable's name onto its block params. A variable's SSA versions are
+  ;; sequential (each def kills the prior), so they can share ONE mutable Go
+  ;; local: name every nid carrying source name S as `S`. The only unsafe case
+  ;; is shadowing — two distinct same-named bindings live at once — detected
+  ;; conservatively: a name is unsafe if a single inst references two DIFFERENT
+  ;; nids carrying it. Unsafe names stay versioned. No union-find, no dominance,
+  ;; no liveness engine.
 
 (defn- oos-all-nids [f]
   (let [acc (atom [])]
@@ -1499,9 +1648,9 @@
       (when (not (any-fn-template? aux))
         [aux]))))
 
-;; Lattice for constant-param analysis: :top (no info yet) ⊐ [const-value] ⊐ :bot
-;; (provably not a single constant). meet moves DOWN only, so the fixpoint is
-;; monotone and terminates.
+  ;; Lattice for constant-param analysis: :top (no info yet) ⊐ [const-value] ⊐ :bot
+  ;; (provably not a single constant). meet moves DOWN only, so the fixpoint is
+  ;; monotone and terminates.
 (defn- cp-meet [a b]
   (cond
     (= a :top) b
@@ -1563,14 +1712,14 @@
   (when-let [cp (:const-params (deref f))]
     (get cp nid)))
 
-;; ---------------------------------------------------------------------------
-;; Structured Go emission (ir.structurize tree-walk).
-;;
-;; build.lg emits only reducible CFGs, so lower-body can walk a recovered
-;; control tree and emit if / for / break / continue instead of goto+labels.
-;; These helpers feed lower-tree; lower-body tries the structured path first
-;; and falls back to the goto emitter when structurize reports any fallback.
-;; ---------------------------------------------------------------------------
+  ;; ---------------------------------------------------------------------------
+  ;; Structured Go emission (ir.structurize tree-walk).
+  ;;
+  ;; build.lg emits only reducible CFGs, so lower-body can walk a recovered
+  ;; control tree and emit if / for / break / continue instead of goto+labels.
+  ;; These helpers feed lower-tree; lower-body tries the structured path first
+  ;; and falls back to the goto emitter when structurize reports any fallback.
+  ;; ---------------------------------------------------------------------------
 
 (defn- return-stmts [f closed-exprs bid]
   "Lower the return terminator of a block to statement(s).
@@ -1611,7 +1760,9 @@
 (defn- block-inst-stmts [f closed-exprs bid]
   "Lower the instruction sequence in a block (NOT including the label or terminator).
    Returns a vector of statements or nil to force whole-function fallback."
-  (let [insts (ir/block-insts bid f)]
+  ;; Inlined edge-args carry no statement — their expression is emitted directly
+  ;; into the back-edge copy by emit-assignments-for-target.
+  (let [insts (filter (fn [nid] (not (inlined-arg? f nid))) (ir/block-insts bid f))]
     (loop [remaining insts out []]
       (if (empty? remaining)
         out
@@ -1736,6 +1887,8 @@
    (swap! f assoc :gensym-renames (gensym-renumber-map f))
    (swap! f assoc :coalesce (coalesce-map f))
    (swap! f assoc :live (live-nids f))
+   ;; Single-use computed edge-args to inline (needs :live + uses cache above).
+   (swap! f assoc :inline-args (compute-inline-args f))
    (let [needs-error? (function-needs-error? f)
          needs-tail-call? (function-needs-tail-call? f)
          decls0 (local-decls f)
