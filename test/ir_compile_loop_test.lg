@@ -1,0 +1,81 @@
+;; Tests for *ir-compile* path with loop/recur forms
+;; Covers the bytecode compilation of loop/recur, including direct loops,
+;; loops inside returned closures, and loops with binding shadowing.
+(ns test.ir-compile-loop-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+;; Test fixture: direct loop/recur
+(set! *ir-compile* true)
+
+(defn ir-direct-loop [n]
+  (loop [i 0] (if (< i n) (recur (inc i)) i)))
+
+(set! *ir-compile* false)
+
+(deftest ir-compile-direct-loop
+  (testing "loop/recur under *ir-compile* true"
+    (is (= 3 (ir-direct-loop 3)))))
+
+;; Test fixture: loop inside returned closure
+(set! *ir-compile* true)
+
+(defn ir-closure-with-loop [p]
+  (fn [n] (loop [i 0] (if (< i n) (recur (inc i)) i))))
+
+(set! *ir-compile* false)
+
+(deftest ir-compile-closure-with-loop
+  (testing "loop/recur inside a returned closure under *ir-compile* true"
+    (is (= 3 ((ir-closure-with-loop nil) 3)))))
+
+;; Test fixture: loop with binding shadowing closure param
+(set! *ir-compile* true)
+
+(defn ir-rep* [p]
+  (fn [s pos]
+    (loop [pos pos]
+      (let [r (p s pos)]
+        (if (neg? r) pos (recur r))))))
+
+(set! *ir-compile* false)
+
+(deftest ir-compile-loop-shadowing-param
+  (testing "loop binding that shadows closure parameter under *ir-compile* true"
+    (is (= 3 ((ir-rep* (fn [s i] (if (< i 3) (inc i) -1))) "x" 0)))))
+
+;; Test fixture: loop with captured function call
+(set! *ir-compile* true)
+
+(defn ir-captured-fn-loop [p]
+  (fn [s pos]
+    (loop [pos pos]
+      (let [r (p s pos)]
+        (if (neg? r) pos (recur r))))))
+
+(set! *ir-compile* false)
+
+(deftest ir-compile-captured-fn-call
+  (testing "loop calling a captured function under *ir-compile* true"
+    (let [pred (fn [s i] (if (< i 3) (inc i) -1))]
+      (is (= 3 ((ir-captured-fn-loop pred) "x" 0))))))
+
+;; Test fixture: nested loop
+(set! *ir-compile* true)
+
+(defn ir-nested-loop [n m]
+  (loop [i 0]
+    (if (< i n)
+      (loop [j 0]
+        (if (< j m)
+          (recur (inc j))
+          j))
+      i)))
+
+(set! *ir-compile* false)
+
+(deftest ir-compile-nested-loop
+  (testing "nested loop/recur under *ir-compile* true"
+    ;; outer: i=0 < 3 → result is the inner loop's value, which runs j to m.
+    (is (= 5 (ir-nested-loop 3 5)))))

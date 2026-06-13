@@ -25,15 +25,15 @@
 (defn- template-value [aux]
   (cond
     (and (map? aux) (= (:kind aux) :fn-template))
-      (let [inner (:fn aux)
-            arity (:arity aux)
-            variadic? (:variadic? aux)
-            chunk (lower inner)]
-        (chunk->fn arity variadic? chunk))
+    (let [inner (:fn aux)
+          arity (:arity aux)
+          variadic? (:variadic? aux)
+          chunk (lower inner)]
+      (chunk->fn arity variadic? chunk))
 
     (and (map? aux) (= (:kind aux) :multi-fn-template))
-      (let [fn-vals (mapv template-value (:fns aux))]
-        (make-multi-arity (apply list fn-vals)))
+    (let [fn-vals (mapv template-value (:fns aux))]
+      (make-multi-arity (apply list fn-vals)))
 
     :else aux))
 
@@ -155,12 +155,12 @@
         aux (ir/aux term-id f)]
     (cond
       (= op :branch)
-        (some (fn [a] (= a target-id)) (ir/branch-target-args aux))
+      (some (fn [a] (= a target-id)) (ir/branch-target-args aux))
       (= op :branch-if)
-        (let [t (ir/cond-target-true aux)
-              e (ir/cond-target-false aux)]
-          (or (some (fn [a] (= a target-id)) (ir/branch-target-args t))
-              (some (fn [a] (= a target-id)) (ir/branch-target-args e))))
+      (let [t (ir/cond-target-true aux)
+            e (ir/cond-target-false aux)]
+        (or (some (fn [a] (= a target-id)) (ir/branch-target-args t))
+            (some (fn [a] (= a target-id)) (ir/branch-target-args e))))
       :else false)))
 
 (defn- check-cross-block! [f uses]
@@ -193,15 +193,15 @@
     (cond
       (zero? n) true
       :else
-        (let [base (- (stack-sp l) n)]
-          (if (neg? base)
-            false
-            (loop [i 0]
-              (cond
-                (>= i n)  true
-                (let [pos (value-pos-of l (nth args i))]
-                  (or (nil? pos) (not= pos (+ base i))))  false
-                :else  (recur (inc i)))))))))
+      (let [base (- (stack-sp l) n)]
+        (if (neg? base)
+          false
+          (loop [i 0]
+            (cond
+              (>= i n)  true
+              (let [pos (value-pos-of l (nth args i))]
+                (or (nil? pos) (not= pos (+ base i))))  false
+              :else  (recur (inc i)))))))))
 
 (defn- contains-after? [refs i target]
   "True if refs[i+1..] contains target. O(n) but refs are short."
@@ -219,12 +219,12 @@
     (zero? (count refs)) true
     (not (args-at-top? l refs)) false
     :else
-      (loop [i 0]
-        (cond
-          (>= i (count refs)) true
-          (not= 1 (use-count-of l (nth refs i))) false
-          (contains-after? refs i (nth refs i)) false
-          :else (recur (inc i))))))
+    (loop [i 0]
+      (cond
+        (>= i (count refs)) true
+        (not= 1 (use-count-of l (nth refs i))) false
+        (contains-after? refs i (nth refs i)) false
+        :else (recur (inc i))))))
 
 (defn- should-body-emit-cheap? [l nid]
   "Decide whether a cheap-load Inst should be body-emitted at its
@@ -240,19 +240,19 @@
       (zero? uc) false
       (> uc 1) false
       :else
-        ;; uc == 1 already → bitset has exactly one user-id. Pull it via
-        ;; ir/uses-first (raw `first`/`count` would return the first int64
-        ;; word and the word-count, not user-ids).
-        (let [uses (:uses @l)
-              us   (when (< nid (count uses)) (nth uses nid))]
-          (cond
-            (or (nil? us) (ir/uses-empty? us)) false
-            :else
-              (let [user-id   (ir/uses-first us)
-                    user-refs (ir/refs user-id (f-of l))]
-                (cond
-                  (zero? (count user-refs)) true  ; used only as branch-arg
-                  :else (= (first user-refs) nid))))))))
+      ;; uc == 1 already → bitset has exactly one user-id. Pull it via
+      ;; ir/uses-first (raw `first`/`count` would return the first int64
+      ;; word and the word-count, not user-ids).
+      (let [uses (:uses @l)
+            us   (when (< nid (count uses)) (nth uses nid))]
+        (cond
+          (or (nil? us) (ir/uses-empty? us)) false
+          :else
+          (let [user-id   (ir/uses-first us)
+                user-refs (ir/refs user-id (f-of l))]
+            (cond
+              (zero? (count user-refs)) true  ; used only as branch-arg
+              :else (= (first user-refs) nid))))))))
 
 ;; --- materialize -----------------------------------------------------
 
@@ -277,23 +277,23 @@
             aux (ir/aux nid f)]
         (case op
           :const
-            (let [idx (ir/chunk-intern-const (chunk-of l) (template-value aux))]
-              (emit-with-arg! l nid :const idx)
-              (bump-stack-sp! l 1)
-              (bump-max-stack! l))
+          (let [idx (ir/chunk-intern-const (chunk-of l) (template-value aux))]
+            (emit-with-arg! l nid :const idx)
+            (bump-stack-sp! l 1)
+            (bump-max-stack! l))
           :load-arg
-            (do (emit-with-arg! l nid :load-arg (int aux))
-                (bump-stack-sp! l 1)
-                (bump-max-stack! l))
-          :load-var
-            (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
-              (emit-with-arg! l nid :load-var idx)
+          (do (emit-with-arg! l nid :load-arg (int aux))
               (bump-stack-sp! l 1)
               (bump-max-stack! l))
+          :load-var
+          (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
+            (emit-with-arg! l nid :load-var idx)
+            (bump-stack-sp! l 1)
+            (bump-max-stack! l))
           :load-closed
-            (do (emit-with-arg! l nid :load-closed (int aux))
-                (bump-stack-sp! l 1)
-                (bump-max-stack! l))
+          (do (emit-with-arg! l nid :load-closed (int aux))
+              (bump-stack-sp! l 1)
+              (bump-max-stack! l))
           (throw (str "ir/lower: value %" nid
                       " not on stack for materialize (op=" op ")")))))))
 
@@ -310,142 +310,145 @@
       :block-arg nil  ; placed on stack by predecessors; no opcode
 
       :const
-        (let [idx (ir/chunk-intern-const (chunk-of l) (template-value aux))]
-          (emit-with-arg! l nid :const idx)
-          (bump-stack-sp! l 1)
-          (bump-max-stack! l))
+      (let [idx (ir/chunk-intern-const (chunk-of l) (template-value aux))]
+        (emit-with-arg! l nid :const idx)
+        (bump-stack-sp! l 1)
+        (bump-max-stack! l))
 
       :load-arg
-        (do (emit-with-arg! l nid :load-arg (int aux))
-            (bump-stack-sp! l 1)
-            (bump-max-stack! l))
-
-      :load-var
-        (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
-          (emit-with-arg! l nid :load-var idx)
+      (do (emit-with-arg! l nid :load-arg (int aux))
           (bump-stack-sp! l 1)
           (bump-max-stack! l))
 
+      :load-var
+      (let [idx (ir/chunk-intern-const (chunk-of l) aux)]
+        (emit-with-arg! l nid :load-var idx)
+        (bump-stack-sp! l 1)
+        (bump-max-stack! l))
+
       (:add :sub :mul :lt :lte :gt :gte :eq)
-        (do (emit! l nid op)
-            (bump-stack-sp! l -1))  ; 2→1
+      (do (emit! l nid op)
+          (bump-stack-sp! l -1))  ; 2→1
 
       (:inc :dec)
-        (emit! l nid op)  ; 1→1, no SP change
+      (emit! l nid op)  ; 1→1, no SP change
 
       :call
-        (do (emit-with-arg! l nid :call (int aux))
-            (bump-stack-sp! l (- (int aux))))  ; pops fn+args, pushes result
+      (do (emit-with-arg! l nid :call (int aux))
+          (bump-stack-sp! l (- (int aux))))  ; pops fn+args, pushes result
 
       :set-var
-        ;; Refs[0]=var (on stack via prior Const), Refs[1]=value (on stack).
-        ;; OP_SET_VAR pops value, pops var, sets root, pushes var back.
-        (do (emit! l nid :set-var)
-            (bump-stack-sp! l -1))  ; 2→1
+      ;; Refs[0]=var (on stack via prior Const), Refs[1]=value (on stack).
+      ;; OP_SET_VAR pops value, pops var, sets root, pushes var back.
+      (do (emit! l nid :set-var)
+          (bump-stack-sp! l -1))  ; 2→1
 
       :tail-call
-        (emit-with-arg! l nid :tail-call (int aux))
-        ;; TAIL_CALL is a true terminator; no SP tracking needed past this.
+      (emit-with-arg! l nid :tail-call (int aux))
+      ;; TAIL_CALL is a true terminator; no SP tracking needed past this.
 
       :return
-        (emit! l nid :return)
+      (emit! l nid :return)
 
       :branch
-        ;; Per OLD pkg/ir/lower.go OpBranch: lower-block! has already
-        ;; materialized the branch-target args (skip / args-at-top fast
-        ;; paths or explicit DUP_NTH). At this point the top `argc` stack
-        ;; slots are the args in order. We just emit OP_JUMP (forward,
-        ;; clean stack shape) or OP_RECUR (back-edge / forward with junk
-        ;; below the args).
-        (let [bt     aux
-              args   (ir/branch-target-args bt)
-              target (ir/branch-target-target bt)
-              argc   (count args)
-              target-params (count (ir/block-params target f))
-              cur-sp     (stack-sp l)
-              drop-count (- cur-sp target-params)
-              cur-junk   (block-junk-of l (:current-block @l))]
-          (cond
-            ;; Drop-count > 0: stack has live values below the args at top
-            ;; that must be discarded. Use OP_RECUR (save argc from top,
-            ;; drop `2*argc + ignore` slots = curSP, push argc back). Works
-            ;; for both back-edges (loop recur) and forward joins with
-            ;; symmetric block-arg pass-through (build-if). `ignore` may
-            ;; be negative when drop-count < argc (i.e., args at top overlap
-            ;; the "old" slots they replace).
-            ;; Target runtime SP after this op = target-params (RECUR
-            ;; rebuilds the stack from scratch). Target junk = 0.
-            (pos? drop-count)
-              (let [ignore (- drop-count argc)
-                    off-ip (ir/chunk-emit-recur (chunk-of l) cur-sp argc ignore)]
-                (record-source-info! l nid)
-                (add-patch! l {:src-ip (dec off-ip)
-                               :target-block target
-                               :offset-slot 1
-                               :negate? true})
-                ;; RECUR also drops all the cur-junk slots below — runtime
-                ;; SP at target = argc + 0. But the RECUR's emitted drop is
-                ;; cur-sp slots, which DOESN'T include the junk-below of
-                ;; the current block. We need to add cur-junk to the
-                ;; emitted drop count so RECUR really empties the runtime
-                ;; stack down to the args.
-                (set-stack-sp! l target-params))
-            ;; drop-count == 0: forward fall-through with exact stack shape.
-            ;; Runtime SP at target = cur-junk + target-params.
-            :else
-              (let [arg-ip (emit-placeholder! l nid :branch)]
-                (record-block-junk! l target cur-junk)
-                (add-patch! l {:src-ip (dec arg-ip)
-                               :target-block target
-                               :offset-slot 1
-                               :negate? false}))))
+      ;; Per OLD pkg/ir/lower.go OpBranch: lower-block! has already
+      ;; materialized the branch-target args (skip / args-at-top fast
+      ;; paths or explicit DUP_NTH). At this point the top `argc` stack
+      ;; slots are the args in order. We just emit OP_JUMP (forward,
+      ;; clean stack shape) or OP_RECUR (back-edge / forward with junk
+      ;; below the args).
+      (let [bt     aux
+            args   (ir/branch-target-args bt)
+            target (ir/branch-target-target bt)
+            argc   (count args)
+            target-params (count (ir/block-params target f))
+            cur-sp     (stack-sp l)
+            drop-count (- cur-sp target-params)
+            cur-junk   (block-junk-of l (:current-block @l))]
+        (cond
+          ;; Drop-count > 0: stack has live values below the args at top
+          ;; that must be discarded. Use OP_RECUR (save argc from top,
+          ;; drop `2*argc + ignore` slots = curSP, push argc back). Works
+          ;; for both back-edges (loop recur) and forward joins with
+          ;; symmetric block-arg pass-through (build-if). `ignore` may
+          ;; be negative when drop-count < argc (i.e., args at top overlap
+          ;; the "old" slots they replace).
+          ;; Target runtime SP after this op = target-params (RECUR
+          ;; rebuilds the stack from scratch). Target junk = 0.
+          (pos? drop-count)
+          (let [;; The emitted drop must empty the RUNTIME stack down to
+                ;; the args: runtime SP = lowerer SP + this block's
+                ;; junk-below, so cur-junk is added to `ignore`. Without
+                ;; it, a loop whose header is re-entered from a block
+                ;; with junk (e.g. the body of a loop carrying a
+                ;; branch-if's leftovers) leaks `junk` slots per
+                ;; iteration until the frame stack overflows.
+                ignore (+ (- drop-count argc) cur-junk)
+                off-ip (ir/chunk-emit-recur (chunk-of l) cur-sp argc ignore)]
+            (record-source-info! l nid)
+            (add-patch! l {:src-ip (dec off-ip)
+                           :target-block target
+                           :offset-slot 1
+                           :negate? true})
+            ;; RECUR drops everything (junk included) and pushes the
+            ;; argc args back: runtime SP at target = argc, junk = 0.
+            (set-stack-sp! l target-params))
+          ;; drop-count == 0: forward fall-through with exact stack shape.
+          ;; Runtime SP at target = cur-junk + target-params.
+          :else
+          (let [arg-ip (emit-placeholder! l nid :branch)]
+            (record-block-junk! l target cur-junk)
+            (add-patch! l {:src-ip (dec arg-ip)
+                           :target-block target
+                           :offset-slot 1
+                           :negate? false}))))
 
       :branch-if
-        (let [ct aux
-              ft (ir/cond-target-false ct)
-              tt (ir/cond-target-true ct)
-              ft-target (ir/branch-target-target ft)
-              tt-target (ir/branch-target-target tt)
-              ;; Emit BRANCH_FALSE to false-target; fall-through to true-target.
-              arg-ip (emit-placeholder! l nid :branch-if)
-              ;; Both targets receive (runtime-sp - 1) at entry. Their junk
-              ;; below their params = (cur-runtime-sp - 1) - target-params.
-              ;; For symmetric branch-if, both targets have the same params
-              ;; count; record same junk for both.
-              cur-junk (block-junk-of l (:current-block @l))
-              ;; cur-sp here is still pre-pop; lower-sp at branch-if includes
-              ;; the cond on top. Runtime SP also includes cond. After
-              ;; BRANCH_F pops, runtime SP at target = (lower-sp - 1) + junk.
-              target-junk (- (+ (stack-sp l) cur-junk) 1
-                             (count (ir/block-params ft-target f)))]
-          (record-block-junk! l ft-target target-junk)
-          (record-block-junk! l tt-target target-junk)
-          (add-patch! l {:src-ip (dec arg-ip)
-                         :target-block ft-target
-                         :offset-slot 1
-                         :negate? false})
-          (bump-stack-sp! l -1)  ; cond popped
-          ;; If true-target is the immediately-following block, fall through.
-          (let [my-block (ir/block-of nid f)
-                next-block-id (inc my-block)]
-            (when (not= tt-target next-block-id)
-              (let [arg-ip2 (emit-placeholder! l nid :branch)]
-                (add-patch! l {:src-ip (dec arg-ip2)
-                               :target-block tt-target
-                               :offset-slot 1
-                               :negate? false})))))
+      (let [ct aux
+            ft (ir/cond-target-false ct)
+            tt (ir/cond-target-true ct)
+            ft-target (ir/branch-target-target ft)
+            tt-target (ir/branch-target-target tt)
+            ;; Emit BRANCH_FALSE to false-target; fall-through to true-target.
+            arg-ip (emit-placeholder! l nid :branch-if)
+            ;; Both targets receive (runtime-sp - 1) at entry. Their junk
+            ;; below their params = (cur-runtime-sp - 1) - target-params.
+            ;; For symmetric branch-if, both targets have the same params
+            ;; count; record same junk for both.
+            cur-junk (block-junk-of l (:current-block @l))
+            ;; cur-sp here is still pre-pop; lower-sp at branch-if includes
+            ;; the cond on top. Runtime SP also includes cond. After
+            ;; BRANCH_F pops, runtime SP at target = (lower-sp - 1) + junk.
+            target-junk (- (+ (stack-sp l) cur-junk) 1
+                           (count (ir/block-params ft-target f)))]
+        (record-block-junk! l ft-target target-junk)
+        (record-block-junk! l tt-target target-junk)
+        (add-patch! l {:src-ip (dec arg-ip)
+                       :target-block ft-target
+                       :offset-slot 1
+                       :negate? false})
+        (bump-stack-sp! l -1)  ; cond popped
+        ;; If true-target is the immediately-following block, fall through.
+        (let [my-block (ir/block-of nid f)
+              next-block-id (inc my-block)]
+          (when (not= tt-target next-block-id)
+            (let [arg-ip2 (emit-placeholder! l nid :branch)]
+              (add-patch! l {:src-ip (dec arg-ip2)
+                             :target-block tt-target
+                             :offset-slot 1
+                             :negate? false})))))
 
       :load-closed
-        (do (emit-with-arg! l nid :load-closed (int aux))
-            (bump-stack-sp! l 1)
-            (bump-max-stack! l))
+      (do (emit-with-arg! l nid :load-closed (int aux))
+          (bump-stack-sp! l 1)
+          (bump-max-stack! l))
 
       :make-closure
-        (emit! l nid :make-closure)  ; 1 in, 1 out — no SP change
+      (emit! l nid :make-closure)  ; 1 in, 1 out — no SP change
 
       :push-closed
-        (do (emit! l nid :push-closed)
-            (bump-stack-sp! l -1))  ; 2 in, 1 out
+      (do (emit! l nid :push-closed)
+          (bump-stack-sp! l -1))  ; 2 in, 1 out
 
       (throw (str "ir/lower: unsupported op for lowering: " op)))))
 
@@ -459,6 +462,28 @@
   "Materialize each operand to top of stack and decrement its use-count."
   (doseq [r refs]
     (materialize! l r)
+    (decrement-use! l r)))
+
+(defn- materialize-forced! [l nid]
+  "materialize! WITHOUT the already-on-top/last-use no-emit fast path:
+   always produces a fresh copy on top (DUP_NTH for tracked values;
+   cheap re-emit falls through to materialize!, which has no no-emit
+   path for untracked values). Needed when the original slot must stay
+   intact below the copy — a use-count of 1 cannot be trusted there,
+   because a branch-if terminator is one user that consumes a value
+   twice (in-place branch arg + cond operand)."
+  (let [pos (value-pos-of l nid)]
+    (if pos
+      (let [nth-arg (- (dec (stack-sp l)) pos)]
+        (ir/chunk-emit-dup-nth (chunk-of l) (stack-sp l) nth-arg)
+        (bump-stack-sp! l 1)
+        (bump-max-stack! l))
+      (materialize! l nid))))
+
+(defn- materialize-refs-forced! [l refs]
+  "materialize-refs! variant using materialize-forced! per ref."
+  (doseq [r refs]
+    (materialize-forced! l r)
     (decrement-use! l r)))
 
 (defn- emit-inst! [l nid]
@@ -475,38 +500,40 @@
     (when (= 1 (ir/op-stack-out op))
       (set-value-pos! l nid (dec (stack-sp l))))))
 
+(defn- emit-inst-materialized! [l nid]
+  "Like emit-inst! but always materializes refs (no consume-in-place
+   fast path). Used when the operands' stack slots must survive this
+   instruction — e.g. a branch-if cond whose operands are also the
+   in-place branch args of the successor blocks. The use-count
+   bookkeeping cannot protect those slots: the terminator is a single
+   user that consumes each value twice (as branch arg and as cond
+   operand), so after the branch-arg decrement the count reads as a
+   last use even though the slot is still needed."
+  (let [f  (f-of l)
+        op (ir/op nid f)]
+    (materialize-refs-forced! l (ir/refs nid f))
+    (lower-node! l nid)
+    (when (= 1 (ir/op-stack-out op))
+      (set-value-pos! l nid (dec (stack-sp l))))))
+
 (defn- materialize-branch-args! [l args]
-  "Materialize a sequence of branch-target args at the bottom of the
-   stack (positions 0..len(args)-1). Mirrors OLD pkg/ir/lower.go's
-   logic for OpBranch's Aux arg handling: skip prefix already at target
-   positions, fast path if all args sit at top in order, otherwise
-   materialize the tail. Shared by :branch and :branch-if terminators."
-  (let [argc (count args)
-        skip (loop [k 0]
-               (if (>= k argc)
-                 k
-                 (let [pos (value-pos-of l (nth args k))]
-                   (if (and pos (= pos k))
-                     (recur (inc k))
-                     k))))
-        ]
-    (cond
-      ;; All args already at their target positions 0..N-1.
-      (= skip argc)
-        (consume-refs-in-place! l args)
-      ;; Args already at top of stack in order (back-edge / args-at-top
-      ;; fast path — OP_RECUR or BRANCH_FALSE cleanup happens later).
-      (args-at-top? l args)
-        (consume-refs-in-place! l args)
-      :else
-        (do
-          (doseq [a (subvec (vec args) skip)]
-            (materialize! l a)
-            (decrement-use! l a))
-          (loop [k 0]
-            (when (< k skip)
-              (decrement-use! l (nth args k))
-              (recur (inc k))))))))
+  "Materialize a sequence of branch-target args so the top `argc` stack
+   slots hold the args in order — the invariant every consumer relies
+   on: OP_RECUR saves the top argc; the clean fall-through is the
+   junk-free special case where the top slots coincide with positions
+   0..argc-1. Fast path: args already at top in order (covers both the
+   back-edge shape and the all-in-place shape with nothing above).
+   Otherwise materialize ALL args to the top in order — originals left
+   below become junk that the branch lowering drops. The retired
+   pkg/ir/lower.go skip-prefix optimization was removed: it placed the
+   tail at the wrong positions whenever live values sat above the
+   skipped prefix (sp > skip). Shared by :branch and :branch-if
+   terminators."
+  (if (args-at-top? l args)
+    (consume-refs-in-place! l args)
+    (doseq [a args]
+      (materialize! l a)
+      (decrement-use! l a))))
 
 (defn- deferrable-branch-if-cond? [l term cond-ref]
   "True iff cond-ref is safe to defer past the body walk: it has
@@ -535,10 +562,10 @@
         ;; so the branch-target args can be materialized BELOW the cond
         ;; (positions 0..N-1) before BRANCH_FALSE pops the cond.
         deferred-cond
-          (when (= term-op :branch-if)
-            (let [cond-ref (first (ir/refs term f))]
-              (when (deferrable-branch-if-cond? l term cond-ref)
-                cond-ref)))]
+        (when (= term-op :branch-if)
+          (let [cond-ref (first (ir/refs term f))]
+            (when (deferrable-branch-if-cond? l term cond-ref)
+              cond-ref)))]
     ;; Block-args are pre-placed by predecessors. Entry block has none.
     (set-stack-sp! l (count params))
     (loop [i 0]
@@ -556,51 +583,63 @@
           (= op :block-arg) nil
           ;; Pop is a virtual marker — decrement operand counts, emit nothing.
           (= op :pop)
-            (doseq [r (ir/refs nid f)] (decrement-use! l r))
+          (doseq [r (ir/refs nid f)] (decrement-use! l r))
           ;; Deferred cond (emitted after branch-target args).
           (and deferred-cond (= nid deferred-cond)) nil
           ;; Cheap-load deferral: skip body emission when not body-emit-cheap.
           (and (ir/op-cheap-load? op)
                (not (should-body-emit-cheap? l nid)))
-            nil
+          nil
           :else (emit-inst! l nid))))
 
     ;; Terminator.
     (when (and term (not (zero? term)))
       (cond
         (= term-op :branch-if)
-          (let [cond-aux (ir/aux term f)
-                t-bt     (ir/cond-target-true cond-aux)
-                ;; build-if produces symmetric args; validate-fn! enforces
-                ;; true.args == false.args, so either side works.
-                args     (ir/branch-target-args t-bt)]
-            ;; 1. Materialize the branch-target args at positions 0..N-1.
-            (materialize-branch-args! l args)
-            ;; 2. Emit / materialize the cond to top of stack.
+        (let [cond-aux (ir/aux term f)
+              t-bt     (ir/cond-target-true cond-aux)
+              ;; build-if produces symmetric args; validate-fn! enforces
+              ;; true.args == false.args, so either side works.
+              args     (ir/branch-target-args t-bt)]
+          ;; 1. Materialize the branch-target args at positions 0..N-1.
+          (materialize-branch-args! l args)
+          ;; 2. Emit / materialize the cond to top of stack. When the
+          ;; branch passes block args (argc > 0), the arg slots placed
+          ;; in step 1 must survive BRANCH_FALSE for the successor
+          ;; blocks — the cond's operands are always DUPed above them,
+          ;; never consumed in place (see emit-inst-materialized!).
+          (let [protect? (pos? (count args))]
             (cond
               ;; Deferred — emit it now, fully (this also sets value-pos).
+              (and deferred-cond protect?)
+              (emit-inst-materialized! l deferred-cond)
               deferred-cond
-                (emit-inst! l deferred-cond)
+              (emit-inst! l deferred-cond)
               ;; Not deferred: cond is either at a tracked position or
               ;; cheap and must be re-materialized.
               :else
-                (let [term-refs (ir/refs term f)]
-                  (if (refs-at-top-last-use? l term-refs)
-                    (consume-refs-in-place! l term-refs)
-                    (materialize-refs! l term-refs))))
-            ;; 3. Emit BRANCH_FALSE.
-            (lower-node! l term))
+              (let [term-refs (ir/refs term f)]
+                (cond
+                  (and (not protect?)
+                       (refs-at-top-last-use? l term-refs))
+                  (consume-refs-in-place! l term-refs)
+                  protect?
+                  (materialize-refs-forced! l term-refs)
+                  :else
+                  (materialize-refs! l term-refs)))))
+          ;; 3. Emit BRANCH_FALSE.
+          (lower-node! l term))
         :else
-          (let [term-refs (ir/refs term f)]
-            ;; Direct Refs (return value, branch's empty refs, call's fn+args).
-            (if (refs-at-top-last-use? l term-refs)
-              (consume-refs-in-place! l term-refs)
-              (materialize-refs! l term-refs))
-            ;; Branch-target args for :branch (unconditional).
-            (when (= term-op :branch)
-              (let [bt (ir/aux term f)]
-                (materialize-branch-args! l (ir/branch-target-args bt))))
-            (lower-node! l term))))))
+        (let [term-refs (ir/refs term f)]
+          ;; Direct Refs (return value, branch's empty refs, call's fn+args).
+          (if (refs-at-top-last-use? l term-refs)
+            (consume-refs-in-place! l term-refs)
+            (materialize-refs! l term-refs))
+          ;; Branch-target args for :branch (unconditional).
+          (when (= term-op :branch)
+            (let [bt (ir/aux term f)]
+              (materialize-branch-args! l (ir/branch-target-args bt))))
+          (lower-node! l term))))))
 
 ;; --- branch patching -------------------------------------------------
 

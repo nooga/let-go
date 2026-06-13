@@ -1,0 +1,9 @@
+(require 'ir.passes.pipeline)
+(set! *ir-compile* true)
+(defn v1 [p]
+  (fn [s pos]
+    (loop [q pos]
+      (let [r (p s q)]
+        (if (neg? r) q (recur r))))))
+(set! *ir-compile* false)
+(println "no-shadow:" ((v1 (fn [s i] (if (< i 3) (inc i) -1))) "x" 0))

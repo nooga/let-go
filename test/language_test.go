@@ -76,8 +76,10 @@ func TestRunner(t *testing.T) {
 		}
 		if info.IsDir() {
 			// Skip directories that contain non-test .lg files (e.g.
-			// compat/ holds the corpus runner, which is invoked manually).
-			if info.Name() == "compat" || info.Name() == "clojure-test-suite" {
+			// compat/ holds the corpus runner, which is invoked manually;
+			// benches/ holds standalone benchmarks + bug-repro fixtures that
+			// run for seconds and assert nothing — run by hand with ./lg).
+			if info.Name() == "compat" || info.Name() == "clojure-test-suite" || info.Name() == "benches" {
 				return filepath.SkipDir
 			}
 			return nil

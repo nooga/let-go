@@ -1,0 +1,8 @@
+(require 'ir.passes.pipeline)
+(set! *ir-compile* true)
+(defn v2 [p]
+  (fn [s pos]
+    (loop [pos pos]
+      (if (< pos 3) (recur (inc pos)) pos))))
+(set! *ir-compile* false)
+(println "no-captured-call:" ((v2 nil) "x" 0))

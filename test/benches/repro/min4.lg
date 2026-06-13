@@ -1,0 +1,12 @@
+(require 'ir.passes.pipeline)
+(set! *ir-compile* true)
+(defn direct-loop [n]
+  (loop [i 0] (if (< i n) (recur (inc i)) i)))
+(defn closure-no-loop [p]
+  (fn [x] (+ x p)))
+(defn closure-with-loop [p]
+  (fn [n] (loop [i 0] (if (< i n) (recur (inc i)) i))))
+(set! *ir-compile* false)
+(println "direct-loop:" (direct-loop 3))
+(println "closure-no-loop:" ((closure-no-loop 10) 5))
+(println "closure-with-loop:" ((closure-with-loop nil) 3))

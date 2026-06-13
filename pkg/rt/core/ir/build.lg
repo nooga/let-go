@@ -691,9 +691,15 @@
         old-header (get @ctx :loop-header)
         old-caps   (get @ctx :loop-capture-syms)
         ;; Loop pushes its own scope AFTER this captures pass, so the
-        ;; parent locals don't include the loop vars yet — captures-of
-        ;; over `known` naturally excludes them.
-        known     (set (keys (current-locals-flat ctx)))
+        ;; parent locals don't include the loop vars yet. A loop var may
+        ;; still SHADOW a parent local of the same name (loop [pos pos]):
+        ;; body references to that name are the loop var, not a capture,
+        ;; so the loop-binding names are subtracted from the capture
+        ;; universe. Without this, the capture rebind below clobbers the
+        ;; loop-var binding and the body reads the pre-loop value on
+        ;; every iteration.
+        loop-syms (set (mapv (fn [i] (nth bindings (* i 2))) (range n-slots)))
+        known     (set (remove loop-syms (keys (current-locals-flat ctx))))
         body-caps (vec (reduce (fn [acc bf] (into acc (captures-of bf known)))
                                #{}
                                body))

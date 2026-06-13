@@ -1,0 +1,9 @@
+(require 'ir.passes.pipeline)
+(set! *ir-compile* true)
+(defn rep* [p]
+  (fn [s pos]
+    (loop [pos pos]
+      (let [r (p s pos)]
+        (if (neg? r) pos (recur r))))))
+(set! *ir-compile* false)
+(println "simple-p:" ((rep* (fn [s i] (if (< i 3) (inc i) -1))) "x" 0))

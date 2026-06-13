@@ -1,0 +1,48 @@
+;; pegbench with *ir-compile* on: defns route through ir.build → optimize → lower
+;; (bytecode target) instead of the direct bytecode compiler.
+;; Internal timing separates IR-compile cost from run cost.
+(require 'ir.passes.pipeline)
+
+(def t-compile-start (System/nanoTime))
+
+(defn chr [c]
+  (fn [s pos]
+    (if (and (< pos (count s)) (= (subs s pos (inc pos)) c))
+      (inc pos)
+      -1)))
+
+(defn alt2 [a b]
+  (fn [s pos]
+    (let [r (a s pos)]
+      (if (neg? r) (b s pos) r))))
+
+(defn cat2 [a b]
+  (fn [s pos]
+    (let [r (a s pos)]
+      (if (neg? r) -1 (b s r)))))
+
+(defn rep* [p]
+  (fn [s pos]
+    (loop [pos pos]
+      (let [r (p s pos)]
+        (if (neg? r) pos (recur r))))))
+
+(defn make-grammar []
+  (rep* (cat2 (alt2 (chr "a") (chr "b")) (chr "c"))))
+
+(defn run-bench [n]
+  (let [grammar (make-grammar)
+        s "acbcacbcacbcacbcacbcacbcacbcacbc"]
+    (loop [i 0 acc 0]
+      (if (< i n)
+        (recur (inc i) (+ acc (grammar s 0)))
+        acc))))
+
+(def t-compile-end (System/nanoTime))
+
+(let [t0 (System/nanoTime)
+      r  (run-bench 200000)
+      t1 (System/nanoTime)]
+  (println "result:" r)
+  (println "ir-compile-ms:" (/ (- t-compile-end t-compile-start) 1000000.0))
+  (println "run-ms:" (/ (- t1 t0) 1000000.0)))
