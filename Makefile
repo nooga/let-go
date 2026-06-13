@@ -56,7 +56,7 @@ build: $(LG)
 # the bundle in lockstep with the .lg sources.
 CORE-LG-FILES := $(shell find pkg/rt/core -name '*.lg' -type f 2>/dev/null)
 LGBGEN-SOURCES := $(shell find cmd/lgbgen -name '*.go' -type f 2>/dev/null)
-pkg/rt/core_compiled.lgb: $(CORE-LG-FILES) $(LGBGEN-SOURCES)
+pkg/rt/core_compiled.lgb: $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
 	go run -tags bootstrap ./cmd/lgbgen
 
 # Lowered-Go target. The -tags gogen_ir build path links these generated
@@ -65,7 +65,7 @@ pkg/rt/core_compiled.lgb: $(CORE-LG-FILES) $(LGBGEN-SOURCES)
 # the two engines silently disagree (parity-full diverges on bucket
 # hashes even when pass/fail counts match). lower_go.go is the timestamp
 # anchor for the whole tree — every regen rewrites it.
-pkg/rt/core_go_lowered/ir_lower_go/ir_lower_go.go: $(CORE-LG-FILES) $(LGBGEN-SOURCES)
+pkg/rt/core_go_lowered/ir_lower_go/ir_lower_go.go: $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
 	go run -tags bootstrap ./cmd/lgbgen --target=go
 
 # Regenerate every committed code-gen artifact via the let-go orchestrator
@@ -112,10 +112,10 @@ clojure-compat-report: $(GO)
 #
 # All three are anchor-normalized — see cmd/bench-ratchet/main.go
 # and docs/perf/ratchet.md.
-perf-page:
+perf-page: $(GO)
 	go run ./cmd/perf-page -out docs/perf/index.html
 
-perf-snapshot: lowered
+perf-snapshot: lowered $(GO)
 	mkdir -p $(PERF-TIMELINE-DIR)
 	go run ./cmd/bench-ratchet -full -baseline $(PERF-SNAPSHOT) snapshot
 
@@ -123,39 +123,39 @@ perf-snapshot: lowered
 # committed — see check-generated). Any target that builds -tags gogen_ir
 # depends on this. Cheap relative to the runs that follow.
 .PHONY: lowered
-lowered:
+lowered: $(GO)
 	@go run -tags bootstrap ./cmd/lgbgen --target=go >/dev/null
 
 # Default gate (~1 min): the jank suite under BOTH VM variants (bytecode +
 # gogen_ir-lowered) + the calibration anchor. This is what CI runs.
-bench-ratchet: lowered
+bench-ratchet: lowered $(GO)
 	go run ./cmd/bench-ratchet check
 
-bench-ratchet-update: lowered
+bench-ratchet-update: lowered $(GO)
 	go run ./cmd/bench-ratchet update
 
-bench-ratchet-show: lowered
+bench-ratchet-show: lowered $(GO)
 	go run ./cmd/bench-ratchet show
   
 # Parity checks: untagged vs -tags gogen_ir across jank + ir-stress.
 # `parity-check` is the default cadence (~3 min); `parity-quick` for
 # pre-commit smoke (~2 sec); `parity-full` for the long check (~5 min).
-parity-quick:
+parity-quick: $(GO)
 	@scripts/gogen-parity.sh --quick
 
-parity-check:
+parity-check: $(GO)
 	@scripts/gogen-parity.sh
 
-parity-full:
+parity-full: $(GO)
 	@scripts/gogen-parity.sh --full
 
 # Manual deep-dive (~25 min): the pkg/vm fleet plus suite/IR variants. Not
 # gated in PR CI — run by hand when investigating a specific regression. Pair
 # with `update` to refresh the full baseline.
-bench-ratchet-full: lowered
+bench-ratchet-full: lowered $(GO)
 	go run ./cmd/bench-ratchet -full check
 
-bench-ratchet-full-update: lowered
+bench-ratchet-full-update: lowered $(GO)
 	go run ./cmd/bench-ratchet -full update
 
 clean:
@@ -252,11 +252,11 @@ fanout-ratchet-show: build
 # it ONCE via `lowered`, runs the speed gate against it, then runs the size gate
 # with --no-regen so it reuses the same tree — ~halving wall time vs running
 # `make bench-ratchet fanout-ratchet`. Use this in CI.
-ratchets: build lowered
+ratchets: build lowered $(GO)
 	go run ./cmd/bench-ratchet check
 	./lg scripts/fanout-ratchet.lg check --go "$$(command -v go)" --no-regen
 
-ratchets-update: build lowered
+ratchets-update: build lowered $(GO)
 	go run ./cmd/bench-ratchet update
 	./lg scripts/fanout-ratchet.lg update --go "$$(command -v go)" --no-regen
 
