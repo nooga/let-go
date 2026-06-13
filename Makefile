@@ -136,7 +136,7 @@ bench-ratchet-update: lowered $(GO)
 
 bench-ratchet-show: lowered $(GO)
 	go run ./cmd/bench-ratchet show
-  
+
 # Parity checks: untagged vs -tags gogen_ir across jank + ir-stress.
 # `parity-check` is the default cadence (~3 min); `parity-quick` for
 # pre-commit smoke (~2 sec); `parity-full` for the long check (~5 min).
@@ -261,4 +261,4 @@ ratchets-update: build lowered $(GO)
 	./lg scripts/fanout-ratchet.lg update --go "$$(command -v go)" --no-regen
 
 # PHONY targets are for ones that have conflicting files/dirs present:
-.PHONY: test bench-ratchet bench-ratchet-update bench-ratchet-show perf-page perf-snapshot install-hooks check-generated fanout-ratchet fanout-ratchet-update fanout-ratchet-show ratchets ratchets-update
+.PHONY: test
