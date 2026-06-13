@@ -70,6 +70,13 @@ func (l *Func) Arity() int {
 }
 
 func (l *Func) Invoke(pargs []Value) (result Value, err error) {
+	return l.invokeIn(RootExecContext, pargs)
+}
+
+// invokeIn runs the function with the given ExecContext active in its frame,
+// so dynamic bindings propagate into the call. Invoke is invokeIn against the
+// root context.
+func (l *Func) invokeIn(ec *ExecContext, pargs []Value) (result Value, err error) {
 	args := pargs
 	if l.isVariadric {
 		if len(args) < l.arity-1 {
@@ -86,6 +93,7 @@ func (l *Func) Invoke(pargs []Value) (result Value, err error) {
 		return NIL, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", l, l.arity, len(args)))
 	}
 	f := NewFrame(l.chunk, args)
+	f.ec = ec
 	result, err = f.Run()
 	ReleaseFrame(f)
 	return result, err
@@ -144,6 +152,13 @@ func (l *Closure) Arity() int {
 }
 
 func (l *Closure) Invoke(pargs []Value) (result Value, err error) {
+	return l.invokeIn(RootExecContext, pargs)
+}
+
+// invokeIn runs the closure with the given ExecContext active in its frame,
+// so dynamic bindings propagate into the call. Invoke delegates to invokeIn
+// against the root context.
+func (l *Closure) invokeIn(ec *ExecContext, pargs []Value) (result Value, err error) {
 	if f, ok := l.fn.(*Func); ok {
 		args := pargs
 		if f.isVariadric {
@@ -162,6 +177,7 @@ func (l *Closure) Invoke(pargs []Value) (result Value, err error) {
 		}
 		frame := NewFrame(f.chunk, args)
 		frame.closedOvers = l.closedOvers
+		frame.ec = ec
 		result, err = frame.Run()
 		ReleaseFrame(frame)
 		return result, err
@@ -183,9 +199,9 @@ func (l *Closure) Invoke(pargs []Value) (result Value, err error) {
 				closedOvers: l.closedOvers,
 				fn:          f,
 			}
-			return subClosure.Invoke(pargs)
+			return subClosure.invokeIn(ec, pargs)
 		}
-		return variant.Invoke(pargs)
+		return ec.Invoke(variant, pargs)
 	}
 
 	return NIL, NewExecutionError("unsupported closure function type")
@@ -227,12 +243,19 @@ func (l *MultiArityFn) Arity() int {
 }
 
 func (l *MultiArityFn) Invoke(pargs []Value) (Value, error) {
+	return l.invokeIn(RootExecContext, pargs)
+}
+
+// invokeIn runs the multi-arity function with the given ExecContext active,
+// so dynamic bindings propagate into the selected variant's call. Invoke delegates
+// to invokeIn against the root context.
+func (l *MultiArityFn) invokeIn(ec *ExecContext, pargs []Value) (Value, error) {
 	le := len(pargs)
 	if f, ok := l.fns[le]; ok {
-		return f.Invoke(pargs)
+		return ec.Invoke(f, pargs)
 	}
 	if l.rest != nil && le >= l.rest.Arity() {
-		return l.rest.Invoke(pargs)
+		return ec.Invoke(l.rest, pargs)
 	}
 	return NIL, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", l, le))
 }

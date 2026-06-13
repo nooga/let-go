@@ -329,7 +329,7 @@ func installAsyncNS() {
 	})
 
 	// reduce — async reduce: (async/reduce f init ch) → channel with result
-	reducef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	reducef := vm.NewCtxNativeFn("reduce", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
 			return vm.NIL, fmt.Errorf("async/reduce expects 3 args")
 		}
@@ -343,6 +343,8 @@ func installAsyncNS() {
 			return vm.NIL, fmt.Errorf("async/reduce expected Chan")
 		}
 		out := make(vm.Chan, 1)
+		// Convey the caller's bindings into the loop goroutine (like future).
+		childEc := ec.Child()
 		vm.Goroutines.Go(func(ctx context.Context) {
 			acc := init
 			for {
@@ -353,7 +355,7 @@ func installAsyncNS() {
 				if !ok {
 					break
 				}
-				result, err := fn.Invoke([]vm.Value{acc, v})
+				result, err := childEc.Invoke(fn, []vm.Value{acc, v})
 				if err != nil {
 					break
 				}
@@ -420,7 +422,7 @@ func installAsyncNS() {
 	// alts! — select on multiple channel operations
 	// (alts! [ch1 ch2 [ch3 val]]) → [val port]
 	// Each entry is either a channel (take) or [channel value] (put).
-	altsf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	altsf := vm.NewCtxNativeFn("alts!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("alts! expects 1 arg (vector of ports)")
 		}
@@ -479,7 +481,7 @@ func installAsyncNS() {
 		cancelIdx := len(cases)
 		cases = append(cases, reflect.SelectCase{
 			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(vm.CurrentContext().Done()),
+			Chan: reflect.ValueOf(ec.Context().Done()),
 		})
 
 		chosen, value, ok := reflect.Select(cases)
@@ -663,7 +665,7 @@ func installAsyncNS() {
 	})
 
 	// pub — create a pub from a source channel with a topic fn
-	pubf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	pubf := vm.NewCtxNativeFn("pub", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("pub expects 2 args (ch, topic-fn)")
 		}
@@ -676,6 +678,8 @@ func installAsyncNS() {
 			return vm.NIL, fmt.Errorf("pub expected Fn")
 		}
 		p := &Pub{src: src, topicFn: topicFn, subs: make(map[any]vm.Chan)}
+		// Convey the caller's bindings into the loop goroutine (like future).
+		childEc := ec.Child()
 		vm.Goroutines.Go(func(ctx context.Context) {
 			for {
 				v, ok, live := ctxRecv(ctx, src)
@@ -685,7 +689,7 @@ func installAsyncNS() {
 				if !ok {
 					break
 				}
-				topic, err := topicFn.Invoke([]vm.Value{v})
+				topic, err := childEc.Invoke(topicFn, []vm.Value{v})
 				if err != nil {
 					continue
 				}
@@ -754,7 +758,7 @@ func installAsyncNS() {
 	})
 
 	// split — route values from ch into two channels based on predicate
-	splitf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	splitf := vm.NewCtxNativeFn("split", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 4 {
 			return vm.NIL, fmt.Errorf("split expects 2-4 args")
 		}
@@ -768,6 +772,8 @@ func installAsyncNS() {
 		}
 		trueCh := make(vm.Chan)
 		falseCh := make(vm.Chan)
+		// Convey the caller's bindings into the loop goroutine (like future).
+		childEc := ec.Child()
 		vm.Goroutines.Go(func(ctx context.Context) {
 			for {
 				v, ok, live := ctxRecv(ctx, src)
@@ -777,7 +783,7 @@ func installAsyncNS() {
 				if !ok {
 					break
 				}
-				result, err := pred.Invoke([]vm.Value{v})
+				result, err := childEc.Invoke(pred, []vm.Value{v})
 				if err != nil || !vm.IsTruthy(result) {
 					if !ctxSend(ctx, falseCh, v) {
 						return
@@ -795,7 +801,7 @@ func installAsyncNS() {
 	})
 
 	// async/map — apply f to values taken from multiple channels simultaneously
-	mapf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	mapf := vm.NewCtxNativeFn("map", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("async/map expects 2 args (f, chs)")
 		}
@@ -816,6 +822,8 @@ func installAsyncNS() {
 			chs = append(chs, ch)
 		}
 		out := make(vm.Chan)
+		// Convey the caller's bindings into the loop goroutine (like future).
+		childEc := ec.Child()
 		vm.Goroutines.Go(func(ctx context.Context) {
 			for {
 				args := make([]vm.Value, len(chs))
@@ -834,7 +842,7 @@ func installAsyncNS() {
 				if !allOk {
 					break
 				}
-				result, err := fn.Invoke(args)
+				result, err := childEc.Invoke(fn, args)
 				if err != nil {
 					break
 				}

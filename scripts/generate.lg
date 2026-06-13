@@ -115,8 +115,8 @@
 (gen-go   "scripts/gen/ir_bridge_generated.head" (str src-paths "/ir_bridge.lg") "pkg/rt/ir_bridge_generated.go")
 (gen-lisp (str src-paths "/ir_data.lg") "pkg/rt/core/ir/data/generated.lg")
 
-(run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen")
-(run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=go")
+;; One core compile emits BOTH the .lgb bundle and the gogen_ir Go tree.
+(run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both")
 
 (spit PROVENANCE
       (pr-str {:lg-version  cur-version

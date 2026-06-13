@@ -50,8 +50,20 @@ func CachedVarFn(ptr **vm.Var, nsName, symName string) vm.Fn {
 
 // InvokeValue applies a runtime callable using let-go's dynamic invocation path.
 func InvokeValue(target vm.Value, args []vm.Value) (vm.Value, error) {
+	return InvokeValueEC(nil, target, args)
+}
+
+// InvokeValueEC is InvokeValue threaded with the caller's ExecContext, so a
+// callable invoked from lowered code resolves dynamic vars (and propagates the
+// scope to spawned goroutines) against the running context rather than the
+// process root. A nil ec resolves to the root context. Values that are not
+// vm.Fn (only the bare invoker interface) take the context-free path.
+func InvokeValueEC(ec *vm.ExecContext, target vm.Value, args []vm.Value) (vm.Value, error) {
 	if target == vm.NIL {
 		return vm.NIL, fmt.Errorf("invoke of nil")
+	}
+	if fn, ok := target.(vm.Fn); ok {
+		return ec.Invoke(fn, args)
 	}
 	inv, ok := target.(invoker)
 	if !ok {

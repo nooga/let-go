@@ -758,7 +758,7 @@ func TestLowerGoCharLiteral(t *testing.T) {
 	optimizeLispIR(t, fn2)
 	result2 := lowerGo(t, fn2, ":bridge")
 	r2 := bindAndRenderGoDecl(t, result2)
-	if !strings.Contains(r2, "func ch() vm.Char") {
+	if !strings.Contains(r2, "func ch(ec *vm.ExecContext) vm.Char") {
 		t.Fatalf("expected char return to UNBOX to vm.Char\n%s", r2)
 	}
 }

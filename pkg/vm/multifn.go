@@ -57,8 +57,16 @@ func (m *MultiFn) Arity() int { return -1 }
 
 // Invoke calls the dispatch function, looks up the method, and calls it.
 func (m *MultiFn) Invoke(args []Value) (Value, error) {
+	return m.invokeIn(RootExecContext, args)
+}
+
+// invokeIn runs both the dispatch function and the selected method under ec, so
+// dynamic vars (and *out*/*err*/scope) read inside either resolve against the
+// caller's context rather than the root. Mirrors the Closure/MultiArityFn ec
+// threading.
+func (m *MultiFn) invokeIn(ec *ExecContext, args []Value) (Value, error) {
 	// Call dispatch function
-	dv, err := m.dispatchFn.Invoke(args)
+	dv, err := ec.Invoke(m.dispatchFn, args)
 	if err != nil {
 		return NIL, fmt.Errorf("multimethod %s dispatch failed: %w", m.name, err)
 	}
@@ -78,7 +86,7 @@ func (m *MultiFn) Invoke(args []Value) (Value, error) {
 		return NIL, fmt.Errorf("multimethod '%s' method is not a function", m.name)
 	}
 
-	return fn.Invoke(args)
+	return ec.Invoke(fn, args)
 }
 
 // Methods returns the method map.

@@ -13,44 +13,29 @@ import (
 )
 
 type Var struct {
-	// root and curr are atomic so Deref — by far the hottest var
-	// operation — is lock-free. Previously every Deref (even of a var
-	// with no dynamic binding) took the global bindingsMu just to check
-	// the binding stack, serializing all var reads across goroutines.
-	// curr holds the current dynamic top binding (nil = use root); it is
-	// kept in sync with the bindings stack by push/pop/RunWithBindings
-	// under bindingsMu (the cold path).
-	root      atomic.Pointer[Value] // root binding (lock-free read)
-	curr      atomic.Pointer[Value] // current dynamic top binding; nil = use root
-	bindings  []Value               // full dynamic binding stack (guarded by bindingsMu)
-	nsref     *Namespace
-	ns        string
-	name      string
-	meta      Value
-	isMacro   bool
-	isDynamic bool
+	// root is atomic so Deref — by far the hottest var operation — is
+	// lock-free. Dynamic (thread-local) bindings no longer live on the Var;
+	// they are held by the ExecContext binding stack and resolved via
+	// RootExecContext.deref / ec.deref. Only the process-wide root binding
+	// remains here.
+	root    atomic.Pointer[Value] // root binding (lock-free read)
+	nsref   *Namespace
+	ns      string
+	name    string
+	meta    Value
+	isMacro bool
+	// isDynamic is atomic: push-binding/deref of a var can happen on different
+	// goroutines concurrently (e.g. two futures both `(binding [*v* ...] ...)`),
+	// so the dynamic flag is read on the hot deref path while being set by a
+	// concurrent bind. A plain bool here is a data race.
+	isDynamic atomic.Bool
 	isPrivate bool
 	mu        sync.Mutex // guards meta + watches
 	watches   map[Value]Fn
 }
 
-var (
-	bindingsMu sync.Mutex
-	activeVars = map[*Var]struct{}{}
-)
-
 // valPtr boxes a Value for storage in an atomic.Pointer[Value].
 func valPtr(v Value) *Value { return &v }
-
-// syncCurrLocked refreshes the atomic current-binding pointer from the
-// bindings stack. Must be called while holding bindingsMu.
-func (v *Var) syncCurrLocked() {
-	if len(v.bindings) == 0 {
-		v.curr.Store(nil)
-	} else {
-		v.curr.Store(valPtr(v.bindings[len(v.bindings)-1]))
-	}
-}
 
 type BindingSnapshot map[*Var][]Value
 
@@ -89,17 +74,12 @@ func (v *Var) SetRoot(val Value) *Var {
 	return v
 }
 
-// Deref returns the current value: the dynamic top binding if one is
-// active, else the root. Lock-free — two atomic loads, no mutex — so it
-// scales across goroutines.
+// Deref returns the current value in the root execution context: the dynamic
+// top binding if one is active, else the root. Host and lowered callers that
+// hold no ExecContext resolve here; the interpreter resolves against its
+// frame's context (which is the root context unless a child was installed).
 func (v *Var) Deref() Value {
-	if p := v.curr.Load(); p != nil {
-		return *p
-	}
-	if p := v.root.Load(); p != nil {
-		return *p
-	}
-	return NIL
+	return RootExecContext.deref(v)
 }
 
 // Root returns the var's root binding directly, bypassing any current
@@ -118,88 +98,35 @@ func (v *Var) Root() Value {
 // compiler for a forward `(def x v)` (before it runs) has neither yet, which
 // distinguishes "declared but unset" from "set", as `defonce` needs.
 func (v *Var) IsBound() bool {
-	return v.curr.Load() != nil || v.root.Load() != nil
+	return RootExecContext.hasBinding(v) || v.root.Load() != nil
 }
 
-// PushBinding pushes a dynamic binding value.
+// PushBinding pushes a dynamic binding value in the root execution context.
 func (v *Var) PushBinding(val Value) {
-	bindingsMu.Lock()
-	defer bindingsMu.Unlock()
-	v.bindings = append(v.bindings, val)
-	v.syncCurrLocked()
-	activeVars[v] = struct{}{}
+	RootExecContext.pushBinding(v, val)
 }
 
-// PopBinding removes the most recent dynamic binding.
+// PopBinding removes the most recent dynamic binding in the root context.
 func (v *Var) PopBinding() {
-	bindingsMu.Lock()
-	defer bindingsMu.Unlock()
-	if len(v.bindings) > 0 {
-		v.bindings = v.bindings[:len(v.bindings)-1]
-	}
-	v.syncCurrLocked()
-	if len(v.bindings) == 0 {
-		delete(activeVars, v)
-	}
+	RootExecContext.popBinding(v)
 }
 
+// SnapshotBindings captures the root context's dynamic bindings — the
+// explicit-propagation primitive a goroutine spawn hands to its child.
 func SnapshotBindings() BindingSnapshot {
-	bindingsMu.Lock()
-	defer bindingsMu.Unlock()
-	snap := BindingSnapshot{}
-	for v := range activeVars {
-		if len(v.bindings) == 0 {
-			continue
-		}
-		bs := make([]Value, len(v.bindings))
-		copy(bs, v.bindings)
-		snap[v] = bs
-	}
-	return snap
+	return globalBindingStack.snapshot()
 }
 
+// RunWithBindings runs fn with snap installed as the root context's dynamic
+// bindings, restoring the prior state afterwards. This is the legacy
+// process-global bracketing used by spawn sites that have not yet moved to a
+// child ExecContext; true per-goroutine isolation comes from running fn under
+// ec.Child() instead (see docs/design/exec-context-threading.md).
 func RunWithBindings(snap BindingSnapshot, fn func() (Value, error)) (Value, error) {
-	bindingsMu.Lock()
-	saved := BindingSnapshot{}
-	for v := range activeVars {
-		bs := make([]Value, len(v.bindings))
-		copy(bs, v.bindings)
-		saved[v] = bs
-	}
-	for v := range snap {
-		if _, ok := saved[v]; !ok {
-			saved[v] = nil
-		}
-	}
-	for v := range saved {
-		if bs, ok := snap[v]; ok {
-			v.bindings = append([]Value(nil), bs...)
-			if len(v.bindings) > 0 {
-				activeVars[v] = struct{}{}
-			} else {
-				delete(activeVars, v)
-			}
-		} else {
-			v.bindings = nil
-			delete(activeVars, v)
-		}
-		v.syncCurrLocked()
-	}
-	bindingsMu.Unlock()
-
+	saved := globalBindingStack.snapshot()
+	globalBindingStack.installSnapshot(snap)
 	out, err := fn()
-
-	bindingsMu.Lock()
-	for v, bs := range saved {
-		v.bindings = append([]Value(nil), bs...)
-		if len(v.bindings) > 0 {
-			activeVars[v] = struct{}{}
-		} else {
-			delete(activeVars, v)
-		}
-		v.syncCurrLocked()
-	}
-	bindingsMu.Unlock()
+	globalBindingStack.installSnapshot(saved)
 	return out, err
 }
 
@@ -269,7 +196,7 @@ func (v *Var) IsMacro() bool {
 }
 
 func (v *Var) IsDynamic() bool {
-	return v.isDynamic
+	return v.isDynamic.Load()
 }
 
 func (v *Var) IsPrivate() bool {
@@ -318,7 +245,7 @@ func (v *Var) SetMacro() {
 }
 
 func (v *Var) SetDynamic() {
-	v.isDynamic = true
+	v.isDynamic.Store(true)
 }
 
 func (v *Var) SetPrivate() {

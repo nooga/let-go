@@ -25,7 +25,17 @@ REPORT-SCRIPT := scripts/clojure_compat_report.sh
 GOMEMLIMIT ?= 2GiB
 GO-TEST-TIMEOUT ?= 60s
 
+# Export the heap cap to EVERY recipe's environment, not just `make test`.
+# The bootstrap/lowering targets (generate, lowered, parity) shell out to
+# `go run -tags bootstrap` / `go test`, which compile the whole .lg stdlib
+# from source and balloon the heap; uncapped, parallel invocations OOM a
+# 16GB machine. `export` makes GOMEMLIMIT visible to those go subprocesses
+# too. Sub-make/scripts inherit it unless they override.
+export GOMEMLIMIT
+
 # Standard flags + env for `go test`. Use as: $(GO-TEST-ENV) go test $(GO-TEST-FLAGS) ./...
+# GO-TEST-ENV is retained for explicitness at test call sites; the value is
+# already exported above, so it is now belt-and-suspenders.
 GO-TEST-ENV := GOMEMLIMIT=$(GOMEMLIMIT)
 GO-TEST-FLAGS := -timeout $(GO-TEST-TIMEOUT)
 
@@ -197,9 +207,10 @@ install-hooks:
 # This is the gate CI runs. After a merge/rebase touching pkg/rt/core/**, run
 # `make check-generated` (or `make generate` to refresh, then commit).
 check-generated: $(GO)
-	@echo ">> bundle: regenerate + verify lockstep (content-based, VCS-agnostic)"
+	@echo ">> regenerate bundle + lowered tree from a SINGLE core compile (--target=both)"
 	@cp pkg/rt/core_compiled.lgb pkg/rt/.core_compiled.lgb.committed
-	@go run -tags bootstrap ./cmd/lgbgen >/dev/null
+	@go run -tags bootstrap ./cmd/lgbgen --target=both >/dev/null
+	@echo ">> bundle: verify lockstep (content-based, VCS-agnostic)"
 	@if cmp -s pkg/rt/core_compiled.lgb pkg/rt/.core_compiled.lgb.committed; then \
 		rm -f pkg/rt/.core_compiled.lgb.committed; \
 		echo "OK: core_compiled.lgb in lockstep with the .lg sources."; \
@@ -209,8 +220,7 @@ check-generated: $(GO)
 		echo "       Run 'make generate' and commit the regenerated bundle."; \
 		exit 1; \
 	fi
-	@echo ">> lowered tree: regenerate (gitignored build artifact), then compile + dispatch natively under -tags gogen_ir"
-	@go run -tags bootstrap ./cmd/lgbgen --target=go >/dev/null
+	@echo ">> lowered tree: compile + dispatch natively under -tags gogen_ir"
 	@go build -tags gogen_ir ./...
 	@out=$$(printf '(require (quote ir.passes.dce)) (println "DCE-TYPE:" (type ir.passes.dce/dce))' \
 	        | go run -tags gogen_ir . /dev/stdin 2>&1); \

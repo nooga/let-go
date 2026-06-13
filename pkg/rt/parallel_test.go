@@ -19,7 +19,7 @@ func TestPmapvPreservesOrder(t *testing.T) {
 		return vm.Int(n * n), nil
 	})
 	coll := vm.NewArrayVector([]vm.Value{vm.Int(1), vm.Int(2), vm.Int(3), vm.Int(4), vm.Int(5)})
-	r, err := parallelMapV([]vm.Value{sq, coll})
+	r, err := parallelMapV(vm.RootExecContext, []vm.Value{sq, coll})
 	if err != nil {
 		t.Fatalf("pmapv: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestPmapvSharesCallerBindings(t *testing.T) {
 	mul, _ := vm.NativeFnType.Wrap(func(a []vm.Value) (vm.Value, error) {
 		return vm.Int(int(a[0].(vm.Int)) * int(v.Deref().(vm.Int))), nil
 	})
-	r, err := parallelMapV([]vm.Value{mul, vm.NewArrayVector([]vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)})})
+	r, err := parallelMapV(vm.RootExecContext, []vm.Value{mul, vm.NewArrayVector([]vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)})})
 	if err != nil {
 		t.Fatalf("pmapv: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestPmapvSharesCallerBindings(t *testing.T) {
 
 func TestPmapvEmpty(t *testing.T) {
 	id, _ := vm.NativeFnType.Wrap(func(a []vm.Value) (vm.Value, error) { return a[0], nil })
-	r, err := parallelMapV([]vm.Value{id, vm.NIL})
+	r, err := parallelMapV(vm.RootExecContext, []vm.Value{id, vm.NIL})
 	if err != nil {
 		t.Fatalf("pmapv nil: %v", err)
 	}

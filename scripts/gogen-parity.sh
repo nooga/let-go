@@ -27,6 +27,12 @@
 
 set -euo pipefail
 
+# Bound the Go heap for the bootstrap `go run`/`go test` invocations below.
+# These compile the whole .lg stdlib from source and balloon the heap;
+# uncapped they OOM a 16GB machine. Soft cap — runtime GCs to stay under.
+# Honors an outer GOMEMLIMIT (e.g. from the Makefile export) if already set.
+export GOMEMLIMIT="${GOMEMLIMIT:-2GiB}"
+
 MODE="${1:-default}"
 case "$MODE" in
     --quick)      RUN_JANK=1; RUN_LOWERGO=0; RUN_IRCOMPILE=0 ;;

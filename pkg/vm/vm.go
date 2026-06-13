@@ -278,7 +278,8 @@ type Frame struct {
 	ip          int
 	sp          int
 	debug       bool
-	handlers    []exHandler // exception handler stack (nil when unused)
+	handlers    []exHandler  // exception handler stack (nil when unused)
+	ec          *ExecContext // per-execution context (dynamic bindings); nil = none installed
 }
 
 // Frame reuse via a mutex-guarded LIFO.
@@ -341,6 +342,7 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 	f.ip = 0
 	f.sp = 0
 	f.debug = false
+	f.ec = nil
 	if f.handlers != nil {
 		f.handlers = f.handlers[:0]
 	}
@@ -558,7 +560,7 @@ func (f *Frame) Run() (Value, error) {
 				if err != nil {
 					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 				}
-				out, err = fn.Invoke(a)
+				out, err = f.ec.Invoke(fn, a)
 				if err != nil {
 					srcInfo := f.code.LookupSource(f.ip)
 					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
@@ -585,7 +587,7 @@ func (f *Frame) Run() (Value, error) {
 				if !ok {
 					return NIL, NewTypeError(fraw, "is not a function", nil)
 				}
-				out, err = fn.Invoke(nil)
+				out, err = f.ec.Invoke(fn, nil)
 				if err != nil {
 					srcInfo := f.code.LookupSource(f.ip)
 					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
@@ -623,7 +625,7 @@ func (f *Frame) Run() (Value, error) {
 					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 				}
 				if _, ok := fn.(*Func); !ok {
-					out, err = fn.Invoke(a)
+					out, err = f.ec.Invoke(fn, a)
 					if err != nil {
 						srcInfo := f.code.LookupSource(f.ip)
 						wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
@@ -684,7 +686,7 @@ func (f *Frame) Run() (Value, error) {
 					return NIL, NewTypeError(fraw, "is not a function", nil)
 				}
 				if _, ok := fn.(*Func); !ok {
-					out, err = fn.Invoke(nil)
+					out, err = f.ec.Invoke(fn, nil)
 					if err != nil {
 						srcInfo := f.code.LookupSource(f.ip)
 						wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
@@ -793,7 +795,16 @@ func (f *Frame) Run() (Value, error) {
 			if !ok {
 				return NIL, NewExecutionError("SET_VAR invalid Var").Wrap(err)
 			}
-			varrd.SetRoot(val)
+			// (set! *v* val) mutates the current execution's top dynamic
+			// binding (thread-local, matching Clojure) when one is active.
+			// PERMISSIVE DEVIATION: with no binding in scope let-go falls
+			// through to mutating the root, whereas Clojure throws
+			// "Can't set!: ... from non-binding thread". This leniency is
+			// load-bearing — core test.lg's run-tests set!s *report-counters*
+			// etc. at the root with no surrounding binding.
+			if !f.ec.setBinding(varrd, val) {
+				varrd.SetRoot(val)
+			}
 			err = f.push(varr)
 			if err != nil {
 				return NIL, NewExecutionError("SET_VAR push var failed").Wrap(err)
@@ -805,7 +816,7 @@ func (f *Frame) Run() (Value, error) {
 			if int(idx) >= f.constsc {
 				return NIL, NewExecutionError("const lookup out of bounds")
 			}
-			err := f.push(f.consts.get(int(idx)).(*Var).Deref())
+			err := f.push(f.ec.deref(f.consts.get(int(idx)).(*Var)))
 			if err != nil {
 				return NIL, NewExecutionError("const push failed").Wrap(err)
 			}

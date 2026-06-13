@@ -149,10 +149,10 @@ func (p *Pod) startRouter() {
 			// before pod messages arrive. The win here is that errors now reach
 			// *err* (→ stderr) instead of being hard-wired to stdout.
 			if out, ok := msg["out"].(string); ok {
-				_ = WriteToOut(out)
+				_ = WriteToOut(nil, out)
 			}
 			if errStr, ok := msg["err"].(string); ok {
-				_ = WriteToErr(errStr)
+				_ = WriteToErr(nil, errStr)
 			}
 
 			// Route by id
@@ -417,7 +417,7 @@ func createProxyNamespaces(p *Pod) error {
 				// Client-side code: evaluate in the pod's namespace
 				if err := evalPodCode(pv.code, ns); err != nil {
 					// Non-fatal: log and continue (the var may still be usable)
-					_ = WriteToErr(fmt.Sprintf("pod %s: client code eval error for %s/%s: %v\n",
+					_ = WriteToErr(nil, fmt.Sprintf("pod %s: client code eval error for %s/%s: %v\n",
 						p.id, pns.name, pv.name, err))
 				}
 				continue
@@ -522,7 +522,7 @@ func startPod(binary string) (*Pod, error) {
 		// if *err* later rebinds, this goroutine keeps writing to the
 		// originally-resolved sink (acceptable for a child process's
 		// stderr that lives for its lifetime).
-		if h := resolveIOHandleVar("*err*"); h != nil && h.Writer() != nil {
+		if h := resolveIOHandleVar(nil, "*err*"); h != nil && h.Writer() != nil {
 			io.Copy(h.Writer(), stderr) //nolint:errcheck
 		} else {
 			io.Copy(os.Stderr, stderr) //nolint:errcheck
@@ -720,7 +720,7 @@ type invokable interface {
 func callFn(fn vm.Value, args []vm.Value) {
 	defer func() {
 		if r := recover(); r != nil {
-			_ = WriteToErr(fmt.Sprintf("pod callback panic: %v\n", r))
+			_ = WriteToErr(nil, fmt.Sprintf("pod callback panic: %v\n", r))
 		}
 	}()
 	if f, ok := fn.(invokable); ok {

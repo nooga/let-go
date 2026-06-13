@@ -336,7 +336,7 @@ func installIOBuiltins(ns *vm.Namespace) {
 //
 // Resolution path: ns.LookupLocal -> Var.Deref (lock-free atomic load,
 // respects (binding [...] ...) per pkg/vm/var.go:95-103) -> Boxed.Unbox.
-func resolveIOHandleVar(varName string) *IOHandle {
+func resolveIOHandleVar(ec *vm.ExecContext, varName string) *IOHandle {
 	ns := lookupNSCached(NameCoreNS)
 	if ns == nil {
 		return nil
@@ -345,7 +345,7 @@ func resolveIOHandleVar(varName string) *IOHandle {
 	if v == nil {
 		return nil
 	}
-	b, ok := v.Deref().(*vm.Boxed)
+	b, ok := ec.Deref(v).(*vm.Boxed)
 	if !ok {
 		return nil
 	}
@@ -361,8 +361,8 @@ func resolveIOHandleVar(varName string) *IOHandle {
 // WriteToOut writes s through the current dynamic binding of *out*. Falls
 // back to os.Stdout if *out* isn't installed yet or doesn't resolve to a
 // handle (early-boot conditions only).
-func WriteToOut(s string) error {
-	if h := resolveIOHandleVar("*out*"); h != nil {
+func WriteToOut(ec *vm.ExecContext, s string) error {
+	if h := resolveIOHandleVar(ec, "*out*"); h != nil {
 		_, err := h.Write(s)
 		return err
 	}
@@ -372,8 +372,8 @@ func WriteToOut(s string) error {
 
 // WriteToErr writes s through the current dynamic binding of *err*. Falls
 // back to os.Stderr.
-func WriteToErr(s string) error {
-	if h := resolveIOHandleVar("*err*"); h != nil {
+func WriteToErr(ec *vm.ExecContext, s string) error {
+	if h := resolveIOHandleVar(ec, "*err*"); h != nil {
 		_, err := h.Write(s)
 		return err
 	}

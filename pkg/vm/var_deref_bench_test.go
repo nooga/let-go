@@ -15,6 +15,11 @@ import "testing"
 // expose that contention; after making root/curr atomic, Deref is a
 // couple of atomic loads and scales.
 
+// derefSink defeats dead-code elimination: without a package-level sink the
+// compiler may elide the Deref call entirely, producing impossible sub-ns
+// numbers that say nothing about the real cost.
+var derefSink Value
+
 func newRootVar() *Var {
 	v := NewVar(nil, "bench", "x")
 	v.SetRoot(Int(42))
@@ -31,7 +36,7 @@ func newBoundVar() *Var {
 func BenchmarkVarDerefRoot(b *testing.B) {
 	v := newRootVar()
 	for i := 0; i < b.N; i++ {
-		_ = v.Deref()
+		derefSink = v.Deref()
 	}
 }
 
@@ -39,7 +44,7 @@ func BenchmarkVarDerefRootParallel(b *testing.B) {
 	v := newRootVar()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_ = v.Deref()
+			derefSink = v.Deref()
 		}
 	})
 }
@@ -48,7 +53,7 @@ func BenchmarkVarDerefRootParallel(b *testing.B) {
 func BenchmarkVarDerefBound(b *testing.B) {
 	v := newBoundVar()
 	for i := 0; i < b.N; i++ {
-		_ = v.Deref()
+		derefSink = v.Deref()
 	}
 }
 
@@ -56,7 +61,7 @@ func BenchmarkVarDerefBoundParallel(b *testing.B) {
 	v := newBoundVar()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_ = v.Deref()
+			derefSink = v.Deref()
 		}
 	})
 }
@@ -67,7 +72,7 @@ func BenchmarkVarDerefDistinctParallel(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		v := newRootVar()
 		for pb.Next() {
-			_ = v.Deref()
+			derefSink = v.Deref()
 		}
 	})
 }

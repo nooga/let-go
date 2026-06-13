@@ -165,6 +165,29 @@ type NativeFn struct {
 	isVariadric bool
 	fn          any
 	proxy       func([]Value) (Value, error)
+	// ctxProxy, when non-nil, is the ExecContext-aware entry point. ec.Invoke
+	// routes the live context through it; plain Invoke calls it with the root
+	// context. Builtins that read dynamic vars (print → *out*, push-binding!,
+	// …) set this.
+	ctxProxy func(*ExecContext, []Value) (Value, error)
+}
+
+// HasCtx reports whether this native takes an ExecContext.
+func (l *NativeFn) HasCtx() bool { return l.ctxProxy != nil }
+
+// invokeCtx runs the context-aware entry point with panic recovery.
+func (l *NativeFn) invokeCtx(ec *ExecContext, args []Value) (ret Value, err error) {
+	defer recoverThrownPanic(&err)
+	return l.ctxProxy(ec, args)
+}
+
+// NewCtxNativeFn builds a context-aware native builtin. Its plain Invoke
+// resolves against the root context (host/reflection callers); ec.Invoke
+// routes the real context in.
+func NewCtxNativeFn(name string, fn func(ec *ExecContext, args []Value) (Value, error)) *NativeFn {
+	n := &NativeFn{name: name, arity: -1, isVariadric: true, ctxProxy: fn}
+	n.proxy = func(args []Value) (Value, error) { return fn(RootExecContext, args) }
+	return n
 }
 
 func (l *NativeFn) SetName(n string) { l.name = n }

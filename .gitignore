@@ -15,6 +15,8 @@
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+# ...but the committed gold differential goldens are real source, not coverage.
+!test/gold/*.out
 
 # Local sandboxed Go build cache used by Codex/test runs
 .gocache/
@@ -139,6 +141,7 @@ fabric.properties
 /letgo
 /let-go
 /lg
+/lg-gogen
 /letgo.wasm
 
 /scratch
@@ -182,3 +185,4 @@ pkg/rt/core_go_lowered/
 /lg_gogen_ir.go
 /cmd/lgbgen/main_gogen_ir.go
 /pkg/ir/zz_gogen_ir_wire_test.go
+.gold-clojure-version

@@ -9,6 +9,7 @@ package vm
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -98,24 +99,11 @@ func (s *Scope) Go(fn func(ctx context.Context)) {
 	ctx := s.state.Load().ctx
 	s.wg.Add(1)
 	s.live.Add(1)
-	// Only goroutines running under a NON-root scope need a gid registration:
-	// a goroutine under the root resolves to Goroutines via the fast-path
-	// fallback anyway, so registering it would pointlessly bump scopedLive and
-	// defeat the scopedLive==0 guard for every other goroutine's channel ops
-	// (futures, go-blocks, sleeps and the async pumps all spawn under root).
-	register := s != Goroutines
+	// The spawned goroutine's scope association travels with its ExecContext
+	// (the caller seeds a child ec whose .scope is this scope), so there is no
+	// goroutine-id registration to do — only liveness accounting.
 	go func() {
-		var gid int64
-		if register {
-			gid = goID()
-			scopeByGID.Store(gid, s)
-			scopedLive.Add(1)
-		}
 		defer func() {
-			if register {
-				scopeByGID.Delete(gid)
-				scopedLive.Add(-1)
-			}
 			s.live.Add(-1)
 			s.wg.Done()
 		}()
@@ -244,3 +232,23 @@ func (t *theScopeType) Box(bare any) (Value, error) {
 
 // ScopeType is the Value type of a Scope handle.
 var ScopeType *theScopeType = &theScopeType{}
+
+// CloseScoped tears a with-scope child down: cancel the subtree, drain up to
+// timeout (warn on a straggler), restore the caller's previous current scope
+// via the restore closure OpenChildEC installed, and unparent the child so it
+// is not retained.
+func CloseScoped(c *Scope, timeout time.Duration) {
+	c.Cancel()
+	if !c.Await(timeout) {
+		fmt.Fprintf(os.Stderr,
+			"warning: with-scope drain timed out; %d goroutine(s) still live\n",
+			c.LiveTree())
+	}
+	if c.closeRestore != nil {
+		c.closeRestore()
+		c.closeRestore = nil
+	}
+	if c.parent != nil {
+		c.parent.removeChild(c)
+	}
+}

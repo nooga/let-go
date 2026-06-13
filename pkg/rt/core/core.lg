@@ -1904,11 +1904,20 @@
 (defn contains-val? [coll val]
   (some #(= val %) (vals coll)))
 
-(defn mapv [f & colls]
-  (vec (apply map f colls)))
+;; mapv/filterv are EAGER (like Clojure's reduce/transduce-based versions):
+;; the callback must run inside the caller's extent so dynamic bindings are
+;; live. Routing through lazy map/filter + vec would invoke the callback via
+;; context-free thunks and lose any binding established in a child context.
+(defn mapv
+  ([f coll]
+   (persistent! (reduce (fn [acc x] (conj! acc (f x))) (transient []) coll)))
+  ([f c1 & colls]
+   ;; Multi-coll path still rides on lazy map; bound-fn* pins the callback
+   ;; to the current context so eager realization in vec conveys bindings.
+   (vec (apply map (bound-fn* f) c1 colls))))
 
 (defn filterv [pred coll]
-  (vec (filter pred coll)))
+  (persistent! (reduce (fn [acc x] (if (pred x) (conj! acc x) acc)) (transient []) coll)))
 
 (defn range?
   [x] (= (type x) (type (range 1))))

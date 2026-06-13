@@ -498,14 +498,15 @@
           (let [sym (symbol aux)
                 sns (namespace sym)
                 sn  (name sym)]
+            ;; Resolve the var against the running ExecContext so a dynamic
+            ;; binding active in the caller's context (e.g. inside a future or
+            ;; with-scope) is honoured: ec.Deref(rt.LookupVar(ns, name)).
             (gogen/call
-              (gogen/field-sel
-                (gogen/call
-                  (gogen/field-sel (gogen/ident "rt") "LookupVar")
-                  [(gogen/string-lit (if (nil? sns) "core" sns))
-                   (gogen/string-lit sn)])
-                "Deref")
-              []))
+              (gogen/field-sel (gogen/ident "ec") "Deref")
+              [(gogen/call
+                 (gogen/field-sel (gogen/ident "rt") "LookupVar")
+                 [(gogen/string-lit (if (nil? sns) "core" sns))
+                  (gogen/string-lit sn)])]))
 
           (= op :const)
           (if (= "vm.Value" (go-type-spec t))
@@ -1192,7 +1193,12 @@
                          (:go-name entry))
                        (gogen/ident (:go-name entry)))]
     (when (every? identity coerced)
-      (let [raw-call (gogen/call callee-ident coerced)]
+      ;; A direct call to another LOWERED let-go fn passes ec as its first arg;
+      ;; native Go-module fns (:native?) keep their context-free signature.
+      (let [call-args (if (:native? entry)
+                        coerced
+                        (into [(gogen/ident "ec")] coerced))
+            raw-call (gogen/call callee-ident call-args)]
         (cond
           ;; (vm.Value, error) — current shape. Keep the existing
           ;; assign + err-check path.
@@ -1295,14 +1301,18 @@
                               [(gogen/unary "&" (gogen/ident base))
                                (gogen/string-lit (first nn))
                                (gogen/string-lit (second nn))])
+                  ;; Dispatch through ec so the callee (and any dynamic vars it
+                  ;; reads, or goroutines it spawns) sees the running context:
+                  ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
                   invoke    (gogen/call
-                              (gogen/field-sel cached-fn "Invoke")
-                              [args-slice])]
+                              (gogen/field-sel (gogen/ident "ec") "Invoke")
+                              [cached-fn args-slice])]
               (emit-call-stmts f target invoke))
-            ;; Default trampoline: callee value boxed, then rt.InvokeValue.
+            ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
+            ;; which threads ec into the dynamic invocation path.
             (let [callee (box-as-value f closed-exprs (first refs))
-                  invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValue")
-                                     [callee args-slice])]
+                  invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
+                                     [(gogen/ident "ec") callee args-slice])]
               (when callee
                 (emit-call-stmts f target invoke)))))))))
 
@@ -2035,16 +2045,16 @@
         results (result-node f)
         body    (lower-body f)
         needs-rt? (function-needs-rt? f)
-        needs-vm? (function-needs-vm? f)
         needs-error? (function-needs-error? f)
+        ;; Every lowered fn now takes an `ec *vm.ExecContext` first parameter,
+        ;; so the vm import is always required regardless of whether the body
+        ;; otherwise references vm.
         imports (vec
                   (concat
                     (if needs-rt?
                       [(import-entry "github.com/nooga/let-go/pkg/rt" "rt")]
                       [])
-                    (if needs-vm?
-                      [(import-entry "github.com/nooga/let-go/pkg/vm" "vm")]
-                      [])))]
+                    [(import-entry "github.com/nooga/let-go/pkg/vm" "vm")]))]
     (cond
       (nil? params)  (unsupported mode "unsupported parameter types")
       (nil? results) (unsupported mode "unsupported result type")
@@ -2065,7 +2075,13 @@
        :arity (ir/fn-arity f)
        :needs-error? needs-error?
        :override-eligible? (override-uniform-value? f)
-       :decl   (gogen/func-decl (go-name (ir/fn-name f)) params results body)})))
+       ;; Prepend the ExecContext param: every top-level lowered fn is
+       ;; `func name(ec *vm.ExecContext, arg0 …)`. Inline lambdas (lower-fn-lit)
+       ;; do NOT get this param — they capture the enclosing fn's ec lexically.
+       :decl   (gogen/func-decl
+                 (go-name (ir/fn-name f))
+                 (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))] params)
+                 results body)})))
 
 (defn- import-spec-node [entry]
   (let [path  (:path entry)

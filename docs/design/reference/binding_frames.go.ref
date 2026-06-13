@@ -1,0 +1,237 @@
+/*
+ * Copyright (c) 2026 Norman Nunley, Jr <nnunley@gmail.com>
+ * Part of the let-go project; see CONTRIBUTORS for full list of authors.
+ * SPDX-License-Identifier: MIT
+ */
+
+package vm
+
+import (
+	"sync"
+	"sync/atomic"
+)
+
+// bindingFrameStore is the backend contract for dynamic-binding state.
+// The current backend is goroutine-local frames; explicit propagation
+// still uses SnapshotBindings/RunWithBindings.
+type bindingFrameStore interface {
+	push(v *Var, val Value)
+	pop(v *Var)
+	snapshot() BindingSnapshot
+	runWith(snap BindingSnapshot, fn func() (Value, error)) (Value, error)
+	current(v *Var) (Value, bool)
+	hasBinding(v *Var) bool
+}
+
+// bindingFrames is the Var-facing shim. Keeping this layer thin allows
+// backend swaps without touching Var's public methods.
+type bindingFrames struct {
+	store bindingFrameStore
+}
+
+func newBindingFrames() *bindingFrames {
+	return &bindingFrames{store: newGoroutineLocalBindingStore()}
+}
+
+func (b *bindingFrames) push(v *Var, val Value) {
+	b.store.push(v, val)
+}
+
+func (b *bindingFrames) pop(v *Var) {
+	b.store.pop(v)
+}
+
+func (b *bindingFrames) snapshot() BindingSnapshot {
+	return b.store.snapshot()
+}
+
+func (b *bindingFrames) runWith(snap BindingSnapshot, fn func() (Value, error)) (Value, error) {
+	return b.store.runWith(snap, fn)
+}
+
+func (b *bindingFrames) current(v *Var) (Value, bool) {
+	return b.store.current(v)
+}
+
+func (b *bindingFrames) hasBinding(v *Var) bool {
+	return b.store.hasBinding(v)
+}
+
+// goroutineLocalBindingStore keeps each goroutine's dynamic bindings isolated.
+// A goroutine sees only its own frame unless bindings are explicitly propagated
+// via SnapshotBindings/RunWithBindings.
+type goroutineLocalBindingStore struct {
+	framesMu sync.RWMutex
+	frames   map[int64]*goroutineBindingFrame
+	live     atomic.Int64
+}
+
+type goroutineBindingFrame struct {
+	mu       sync.Mutex
+	bindings BindingSnapshot
+	depth    int
+}
+
+func newGoroutineLocalBindingStore() *goroutineLocalBindingStore {
+	return &goroutineLocalBindingStore{frames: make(map[int64]*goroutineBindingFrame)}
+}
+
+func (b *goroutineLocalBindingStore) frameForCurrent(create bool) *goroutineBindingFrame {
+	gid := goID()
+
+	b.framesMu.RLock()
+	frame, ok := b.frames[gid]
+	b.framesMu.RUnlock()
+	if ok {
+		return frame
+	}
+	if !create {
+		return nil
+	}
+
+	b.framesMu.Lock()
+	defer b.framesMu.Unlock()
+	if frame, ok = b.frames[gid]; ok {
+		return frame
+	}
+	frame = &goroutineBindingFrame{bindings: make(BindingSnapshot)}
+	b.frames[gid] = frame
+	return frame
+}
+
+func copySnapshot(src BindingSnapshot) BindingSnapshot {
+	out := make(BindingSnapshot, len(src))
+	for v, stack := range src {
+		out[v] = append([]Value(nil), stack...)
+	}
+	return out
+}
+
+func snapshotDepth(snap BindingSnapshot) int {
+	depth := 0
+	for _, stack := range snap {
+		depth += len(stack)
+	}
+	return depth
+}
+
+func (b *goroutineLocalBindingStore) updateLiveDepth(beforeDepth, afterDepth int) {
+	switch {
+	case beforeDepth == 0 && afterDepth > 0:
+		b.live.Add(1)
+	case beforeDepth > 0 && afterDepth == 0:
+		b.live.Add(-1)
+	}
+}
+
+func (b *goroutineLocalBindingStore) ensureFrameRegistration(frame *goroutineBindingFrame, depth int) {
+	gid := goID()
+	b.framesMu.Lock()
+	defer b.framesMu.Unlock()
+	if depth == 0 {
+		if current, ok := b.frames[gid]; ok && current == frame {
+			delete(b.frames, gid)
+		}
+		return
+	}
+	b.frames[gid] = frame
+}
+
+func (b *goroutineLocalBindingStore) push(v *Var, val Value) {
+	frame := b.frameForCurrent(true)
+	frame.mu.Lock()
+	before := frame.depth
+	frame.bindings[v] = append(frame.bindings[v], val)
+	frame.depth++
+	after := frame.depth
+	frame.mu.Unlock()
+	b.updateLiveDepth(before, after)
+}
+
+func (b *goroutineLocalBindingStore) pop(v *Var) {
+	frame := b.frameForCurrent(false)
+	if frame == nil {
+		return
+	}
+
+	frame.mu.Lock()
+	before := frame.depth
+	stack := frame.bindings[v]
+	if len(stack) > 0 {
+		stack = stack[:len(stack)-1]
+		frame.depth--
+		if len(stack) == 0 {
+			delete(frame.bindings, v)
+		} else {
+			frame.bindings[v] = stack
+		}
+	}
+	after := frame.depth
+	frame.mu.Unlock()
+
+	b.updateLiveDepth(before, after)
+	b.ensureFrameRegistration(frame, after)
+}
+
+func (b *goroutineLocalBindingStore) snapshot() BindingSnapshot {
+	frame := b.frameForCurrent(false)
+	if frame == nil {
+		return BindingSnapshot{}
+	}
+	frame.mu.Lock()
+	snap := copySnapshot(frame.bindings)
+	frame.mu.Unlock()
+	return snap
+}
+
+func (b *goroutineLocalBindingStore) runWith(snap BindingSnapshot, fn func() (Value, error)) (out Value, err error) {
+	frame := b.frameForCurrent(true)
+
+	frame.mu.Lock()
+	before := frame.depth
+	saved := copySnapshot(frame.bindings)
+	savedDepth := frame.depth
+	frame.bindings = copySnapshot(snap)
+	frame.depth = snapshotDepth(frame.bindings)
+	afterInstall := frame.depth
+	frame.mu.Unlock()
+
+	b.updateLiveDepth(before, afterInstall)
+	defer func() {
+		frame.mu.Lock()
+		beforeRestore := frame.depth
+		frame.bindings = saved
+		frame.depth = savedDepth
+		afterRestore := frame.depth
+		frame.mu.Unlock()
+
+		b.updateLiveDepth(beforeRestore, afterRestore)
+		b.ensureFrameRegistration(frame, afterRestore)
+	}()
+
+	return fn()
+}
+
+func (b *goroutineLocalBindingStore) current(v *Var) (Value, bool) {
+	if b.live.Load() == 0 {
+		return NIL, false
+	}
+	frame := b.frameForCurrent(false)
+	if frame == nil {
+		return NIL, false
+	}
+	frame.mu.Lock()
+	stack := frame.bindings[v]
+	if len(stack) == 0 {
+		frame.mu.Unlock()
+		return NIL, false
+	}
+	val := stack[len(stack)-1]
+	frame.mu.Unlock()
+	return val, true
+}
+
+func (b *goroutineLocalBindingStore) hasBinding(v *Var) bool {
+	_, ok := b.current(v)
+	return ok
+}

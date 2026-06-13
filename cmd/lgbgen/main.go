@@ -287,8 +287,11 @@ func sortStrings(s []string) {
 }
 
 func main() {
-	// Parse mode: --target=go <out-dir> or default bytecode mode
+	// Parse mode: --target=go <out-dir>, --target=both [bundle-path], or
+	// default bytecode mode. `both` emits the .lgb bundle AND the gogen_ir
+	// Go tree from a single core compile (see the dispatch below).
 	targetGo := false
+	targetBoth := false
 	outPath := "pkg/rt/core_compiled.lgb"
 	goOutDir := "pkg/rt/core_go_lowered"
 
@@ -301,6 +304,8 @@ func main() {
 				goOutDir = args[i+1]
 				i++
 			}
+		case "--target=both":
+			targetBoth = true
 		default:
 			outPath = args[i]
 		}
@@ -364,32 +369,49 @@ func main() {
 		}
 		nsChunks[ns.name] = chunk
 		nsOrder = append(nsOrder, ns.name)
-		if targetGo {
+		if targetGo || targetBoth {
 			fmt.Printf("  compiled %-20s (%d bytecode + lowering to Go)\n", ns.name, len(chunk.Code())*4)
 		} else {
 			fmt.Printf("  compiled %-10s (%d bytes bytecode)\n", ns.name, len(chunk.Code())*4)
 		}
 	}
 
+	// Emit artifacts from the single compile above. `both` writes the bundle
+	// first (a read-only encode of the compiled chunks), then lowers to Go —
+	// runGoTarget re-pipelines the same loaded namespaces, so the order is
+	// immaterial and both artifacts come from one core compile.
 	if targetGo {
+		runGoTarget(goOutDir)
+		return
+	}
+	if targetBoth {
+		writeBundle(outPath, consts, nsChunks, nsOrder)
 		runGoTarget(goOutDir)
 		return
 	}
 
 	// Bytecode mode: write .lgb bundle.
+	writeBundle(outPath, consts, nsChunks, nsOrder)
+}
+
+// writeBundle encodes the compiled namespace chunks into the .lgb bundle at
+// outPath and closes the file before returning (so callers may proceed to the
+// Go-lowering target against the same in-memory state).
+func writeBundle(outPath string, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string) {
 	f, err := os.Create(outPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create %s: %v\n", outPath, err)
 		os.Exit(1)
 	}
-	defer f.Close()
 
 	if err := bytecode.EncodeBundleOrdered(f, consts, nsChunks, nsOrder); err != nil {
+		f.Close()
 		fmt.Fprintf(os.Stderr, "encode failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	fi, _ := f.Stat()
+	f.Close()
 	fmt.Printf("wrote %s (%d bytes, %d consts, %d namespaces)\n",
 		outPath, fi.Size(), len(consts.Values()), len(nsChunks))
 }

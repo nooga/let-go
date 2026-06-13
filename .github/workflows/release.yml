@@ -30,7 +30,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GORELEASER_PAT }}
           GORELEASER_PAT: ${{ secrets.GORELEASER_PAT }}
 
-      - name: Merge Homebrew cask PR
+      - name: Merge Homebrew formula PR
         env:
           GH_TOKEN: ${{ secrets.GORELEASER_PAT }}
-        run: gh pr merge "goreleaser-cask-${GITHUB_REF_NAME#v}" --repo nooga/let-go --squash --admin --delete-branch
+        run: gh pr merge "let-go-${GITHUB_REF_NAME#v}" --repo nooga/homebrew-tap --squash --admin --delete-branch

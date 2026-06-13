@@ -1,6 +1,7 @@
 ;; Dynamic binding tests
 (ns test.binding-test
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 (def ^:dynamic *x* 10)
 (def ^:dynamic *y* 20)
@@ -64,3 +65,22 @@
     (let [f (bound-fn [] *x*)]
       (binding [*x* 55]
         (is (= 55 (f)))))))
+
+(deftest nested-future-inherits-enclosing-binding
+  (testing "a future spawned inside a future inherits the OUTER future's binding"
+    ;; This pins explicit-context propagation: the inner future must capture
+    ;; the enclosing future's dynamic scope (*x* = 2), not the process root
+    ;; (*x* = 1). It only holds if future* captures the caller's ExecContext
+    ;; rather than the root context.
+    (binding [*x* 1]
+      (let [outer (future
+                    (binding [*x* 2]
+                      @(future *x*)))]
+        (is (= 2 @outer)))))
+  (testing "concurrent futures do not clobber each other's rebinding"
+    (binding [*x* 0]
+      (let [a (future (binding [*x* :a] *x*))
+            b (future (binding [*x* :b] *x*))]
+        (is (= :a @a))
+        (is (= :b @b)))
+      (is (= 0 *x*)))))

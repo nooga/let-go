@@ -136,6 +136,14 @@ func (f *ProtocolFn) String() string {
 func (f *ProtocolFn) Arity() int { return -1 }
 
 func (f *ProtocolFn) Invoke(args []Value) (Value, error) {
+	return f.invokeIn(RootExecContext, args)
+}
+
+// invokeIn resolves the protocol implementation for args[0]'s type and runs it
+// under ec, so dynamic vars (and *out*/*err*/scope) read inside a protocol
+// method resolve against the caller's context rather than the root. Mirrors the
+// Closure/MultiArityFn ec threading.
+func (f *ProtocolFn) invokeIn(ec *ExecContext, args []Value) (Value, error) {
 	if len(args) == 0 {
 		return NIL, fmt.Errorf("protocol fn %s requires at least one argument", f.name)
 	}
@@ -150,7 +158,7 @@ func (f *ProtocolFn) Invoke(args []Value) (Value, error) {
 			f.protocol.name, f.name, typeName)
 	}
 
-	return impl.Invoke(args)
+	return ec.Invoke(impl, args)
 }
 
 // Protocol type metadata

@@ -1,0 +1,45 @@
+;; clojure.string/replace + replace-first with a FUNCTION replacement.
+;; The fn is called per match with the whole match (a String) when the
+;; pattern has no capture groups, or a vector [whole g1 g2 ...] when it does;
+;; it must return a String.
+(ns test.string-replace-fn-test
+  (:require
+   [string :as str]
+   [test :refer :all]))
+
+(deftest replace-regex-fn-no-groups
+  (testing "fn receives the whole match string when there are no groups"
+    (is (= "a<1>b<2>"
+           (str/replace "a1b2" #"\d" (fn [m] (str "<" m ">")))))))
+
+(deftest replace-regex-fn-with-groups
+  (testing "fn receives a vector [whole g1 g2 ...] when the pattern has groups"
+    (is (= "a[1]b[2]"
+           (str/replace "a1b2" #"(\d)" (fn [[_ g1]] (str "[" g1 "]")))))
+    (is (= "John|Smith"
+           (str/replace "John Smith" #"(\w+) (\w+)"
+                        (fn [[_ a b]] (str a "|" b)))))))
+
+(deftest replace-regex-fn-multigroup-yamlstar-shape
+  (testing "destructuring [[_ n1 n2]] over two groups, as yamlstar scalar folding does"
+    (is (= "xXy"
+           (str/replace "x\ny" #"(\n)(\n*)"
+                        (fn [[_ _n1 n2]] (if (pos? (count n2)) n2 "X")))))))
+
+(deftest replace-first-regex-fn
+  (testing "replace-first calls the fn only for the first match"
+    (is (= "aXb2"
+           (str/replace-first "a1b2" #"\d" (fn [_] "X"))))))
+
+(deftest replace-literal-fn
+  (testing "a literal-string match with a fn replacement"
+    (is (= "a/b/c"
+           (str/replace "a.b.c" "." (fn [_] "/"))))
+    (is (= "a/b.c"
+           (str/replace-first "a.b.c" "." (fn [_] "/"))))))
+
+(deftest replace-string-and-regex-string-still-work
+  (testing "string and regex replacements with a String replacement are unchanged"
+    (is (= "hell0 w0rld" (str/replace "hello world" "o" "0")))
+    (is (= "a#b#c#" (str/replace "a1b2c3" #"[0-9]" "#")))
+    (is (= "Smith John" (str/replace "John Smith" #"(\w+) (\w+)" "$2 $1")))))

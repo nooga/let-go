@@ -33,7 +33,7 @@ import (
 // that PUSHES its own dynamic binding (a `binding` form) on a var would
 // race the shared global stack. pmapv is for read-only-binding workloads
 // (e.g. lowering a namespace's defns, which only read *ns*/*target*).
-func parallelMapV(vs []vm.Value) (vm.Value, error) {
+func parallelMapV(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("pmapv expects 2 args (fn coll)")
 	}
@@ -41,6 +41,10 @@ func parallelMapV(vs []vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("pmapv expected Fn as first arg")
 	}
+	// Convey the caller's context to the workers (Clojure pmap conveys).
+	// Reads of the shared binding stack are safe; the push-a-binding caveat
+	// below is unchanged.
+	fn = ec.Bind(fn)
 	if vs[1] == vm.NIL {
 		return vm.NewArrayVector(nil), nil
 	}

@@ -44,7 +44,15 @@ builds:
       - arm
 
 archives:
-  - formats: ["tar.gz"]
+  - id: unix
+    ids:
+      - unix
+    formats: ["tar.gz"]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: plan9
+    ids:
+      - plan9
+    formats: ["tar.gz"]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -58,25 +66,22 @@ changelog:
       - '^test:'
       - '^chore:'
 
-homebrew_casks:
+brews:
   - name: let-go
     ids:
-      - default
-    binaries:
-      - lg
-    directory: Casks
+      - unix
+    goarm: 7
+    directory: Formula
+    install: |
+      bin.install "lg"
     repository:
       owner: nooga
-      name: let-go
+      name: homebrew-tap
       token: "{{ .Env.GORELEASER_PAT }}"
-      branch: "goreleaser-cask-{{ .Version }}"
+      branch: "let-go-{{ .Version }}"
       pull_request:
         enabled: true
         base:
           branch: main
     homepage: https://github.com/nooga/let-go
     description: Clojure dialect implemented as a bytecode VM in Go
-    hooks:
-      post:
-        install: |
-          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/lg"] if OS.mac?

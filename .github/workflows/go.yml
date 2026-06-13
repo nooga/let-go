@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Manual trigger for the gold-differential job (re-derive goldens vs live Clojure).
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -42,6 +44,10 @@ jobs:
       - name: Build
         run: go build -v ./...
 
+      # The gold differential tests (gold_dynvar_e2e_test.go) are clojure-free by
+      # default: they run each script under let-go and compare to the committed
+      # test/gold/*.out goldens. Re-deriving those goldens from a LIVE Clojure is
+      # done in the dedicated `gold-differential` job (no JVM dependency here).
       - name: Test with bundled bytecode stdlib
         run: go test -v -timeout 60s ./... -skip TestClojureTestSuite
 
@@ -53,6 +59,63 @@ jobs:
 
       - name: Clojure compatibility test suite with source stdlib bootstrap
         run: go test -tags bootstrap ./test/ -count=1 -run TestClojureTestSuite -v
+
+  # Differential gold check against a LIVE Clojure. The everyday `build` job is
+  # clojure-free (it compares let-go to the committed test/gold/*.out goldens);
+  # this job re-derives those goldens from real Clojure and fails if they drift.
+  # To avoid paying the JVM cost (and its flakiness) on every push, the re-derive
+  # runs only when it's worth it: on a manual workflow_dispatch, or when the
+  # resolved Clojure CLI version changes (a cache keyed on `clojure --version`
+  # makes routine same-version runs a no-op).
+  gold-differential:
+    name: gold-differential
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Provide the Clojure CLI on demand via makeplus (clojure.cc/cli/) — it
+      # installs the JDK and the Clojure CLI into the runner's temp dir. Nothing
+      # (not even java) is assumed preinstalled. Record the resolved version so
+      # the cache below can detect a version change.
+      - name: Provide Clojure CLI (makeplus) and record its version
+        id: clj
+        run: |
+          CLJ=$(make -f <(curl -sL clojure.cc/cmd.mk) clj)
+          CLJ_BIN=$(dirname "$CLJ")
+          JAVA_BIN=$(dirname "$(find "${TMPDIR:-/tmp}/clojure-cc-cmd/local" -type f -name java -path '*/bin/*' | head -1)")
+          echo "$CLJ_BIN" >> "$GITHUB_PATH"
+          echo "$JAVA_BIN" >> "$GITHUB_PATH"
+          ver=$(PATH="$CLJ_BIN:$JAVA_BIN:$PATH" clojure --version 2>&1 | tr -cd 'A-Za-z0-9._-')
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Resolved Clojure: $ver"
+
+      # Cache a marker keyed on the Clojure version. A cache HIT means this exact
+      # version was already verified, so the re-derive below is skipped.
+      - name: Version marker cache
+        id: cljcache
+        uses: actions/cache@v4
+        with:
+          path: .gold-clojure-version
+          key: gold-clojure-${{ steps.clj.outputs.version }}
+
+      - name: Re-derive goldens from Clojure and fail on drift
+        if: steps.cljcache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          LETGO_GOLD_REDERIVE=1 go test -run '^TestGold' -count=1 -v -timeout 120s .
+          if ! git diff --quiet -- test/gold; then
+            echo "::error::Committed test/gold/*.out drifted under Clojure ${{ steps.clj.outputs.version }}. Run 'LETGO_GOLD_REDERIVE=1 go test -run ^TestGold .' locally and commit the refreshed goldens."
+            git --no-pager diff -- test/gold
+            exit 1
+          fi
+          echo "${{ steps.clj.outputs.version }}" > .gold-clojure-version
+          echo "Goldens verified against Clojure ${{ steps.clj.outputs.version }}."
 
   # Single gate for every generated artifact (Policy: docs/contribution-policy.md §3):
   # the bundle is verified in lockstep with pkg/rt/core/**/*.lg (content-based, so

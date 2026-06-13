@@ -303,36 +303,37 @@
                        nil)
         arg-exprs    (mapv (fn [i] (gogen/index args-id (gogen/int-lit i)))
                            (range arity))
-        inner-call   (gogen/call (gogen/ident go-name) arg-exprs)
+        ;; Pass the wrapper's ExecContext as the lowered fn's first arg, so
+        ;; dynamic-var resolution inside the lowered body runs against the
+        ;; caller's context (matching the bytecode path) rather than the root.
+        inner-call   (gogen/call (gogen/ident go-name)
+                                 (into [(gogen/ident "ec")] arg-exprs))
         ret-stmt     (if needs-error?
                        (gogen/return-stmt [inner-call])
                        (gogen/return-stmt [inner-call (gogen/ident "nil")]))]
     (gogen/func-lit
-      [(gogen/param "args" (gogen/type "[]vm.Value"))]
+      [(gogen/param "ec" (gogen/type "*vm.ExecContext"))
+       (gogen/param "args" (gogen/type "[]vm.Value"))]
       [(gogen/result (gogen/type "vm.Value"))
        (gogen/result (gogen/type "error"))]
       [len-check ret-stmt])))
 
 (defn- override-helper-decl []
   "Build the package-local `__gogen_wrap` helper:
-     func __gogen_wrap(fn func(args []vm.Value) (vm.Value, error)) vm.Value {
-       v, _ := vm.NativeFnType.Wrap(fn)
-       return v
-     }"
+     func __gogen_wrap(fn func(ec *vm.ExecContext, args []vm.Value) (vm.Value, error)) vm.Value {
+       return vm.NewCtxNativeFn(\"\", fn)
+     }
+   The override is a context-aware native: ec.Invoke hands it the caller's
+   ExecContext, which the wrapper forwards into the lowered fn."
   (let [wrap-call (gogen/call
-                    (gogen/field-sel
-                      (gogen/field-sel (gogen/ident "vm") "NativeFnType")
-                      "Wrap")
-                    [(gogen/ident "fn")])
-        assign    (gogen/multi-assign ":="
-                    [(gogen/ident "v") (gogen/ident "_")]
-                    [wrap-call])
-        ret       (gogen/return-stmt [(gogen/ident "v")])]
+                    (gogen/field-sel (gogen/ident "vm") "NewCtxNativeFn")
+                    [(gogen/string-lit "") (gogen/ident "fn")])
+        ret       (gogen/return-stmt [wrap-call])]
     (gogen/func-decl
       "__gogen_wrap"
-      [(gogen/param "fn" (gogen/type "func(args []vm.Value) (vm.Value, error)"))]
+      [(gogen/param "fn" (gogen/type "func(ec *vm.ExecContext, args []vm.Value) (vm.Value, error)"))]
       [(gogen/result (gogen/type "vm.Value"))]
-      [assign ret])))
+      [ret])))
 
 (defn- override-init-decl [ns-name entries]
   "Build the package's init() that calls rt.RegisterGoOverrides with a
@@ -424,10 +425,37 @@
           ;; Pass 2 re-lowers with the registry visible so intra-ns calls
           ;; lower to direct Go calls. The cross-ns atom records trampoline-
           ;; reaching load-var callees for memoized cached-*vm.Var resolution.
-          cross-ns-vars (atom {})
-          results (binding [lower-go/*lowered-registry* sibling-registry
-                            lower-go/*cross-ns-vars-used* cross-ns-vars]
-                    (lower-defn-forms defn-forms))
+          ;;
+          ;; Dangling-call hazard: a fn registered from pass 1 can take a
+          ;; different (registry-visible) path in pass 2 and BAIL (no :decl),
+          ;; yet its callers still emit a *direct* Go call to it — a reference
+          ;; to an undefined function. Whether this happens is nondeterministic
+          ;; (depends on per-pass typeinfer/gensym state), which is why a fresh
+          ;; `make check-generated` intermittently fails to compile the lowered
+          ;; tree. Fix: iterate to a fixpoint where the registry holds ONLY fns
+          ;; that actually emit a decl in that pass. reg' = reg ∩ emitted ⊆ reg,
+          ;; so the registry is monotonically shrinking and this terminates;
+          ;; worst case it empties and every intra-ns call falls back to the
+          ;; always-compilable trampoline. A fresh cross-ns atom is used per
+          ;; pass; the converged pass's atom is the one we keep.
+          emitted-registry (fn [res]
+                             (reduce (fn [m r]
+                                       (if (some? (:decl r))
+                                         (merge m (lower-go/registry-entry-from-result r ns-name pkg-name))
+                                         m))
+                                     {} res))
+          pass2 (let [cap (+ 2 (count sibling-registry))]
+                  (loop [reg sibling-registry guard 0]
+                    (let [cross (atom {})
+                          res (binding [lower-go/*lowered-registry* reg
+                                        lower-go/*cross-ns-vars-used* cross]
+                                (lower-defn-forms defn-forms))
+                          reg' (select-keys reg (keys (emitted-registry res)))]
+                      (if (or (= reg' reg) (>= guard cap))
+                        {:results res :cross cross}
+                        (recur reg' (inc guard))))))
+          cross-ns-vars (:cross pass2)
+          results (:results pass2)
           ;; Filter out results with nil decls (failures that slipped through).
           valid-results (filterv (fn [r] (some? (:decl r))) results)
           ;; gogen_ir: append a __gogen_wrap helper + init() that
