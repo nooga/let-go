@@ -1,0 +1,85 @@
+;; Concurrency correctness guard for the lock-free dynamic-var deref (#211 / #220).
+;;
+;; Models the Clojure shape that stresses dynamic-var deref under concurrency — a
+;; multi-tenant request pipeline: thread-per-request fan-out, a per-request bound
+;; context (ring *request* / tools.logging MDC), tenant-routed data access
+;; (next.jdbc *db*). Each request binds its context once and a deep call stack
+;; reads those vars inside the extent.
+;;
+;; The assertion is binding ISOLATION across futures: running the requests
+;; concurrently must produce the same result as running them serially. A bleed
+;; (one goroutine observing another's bindings) diverges from the serial golden
+;; and fails the test, so `go test ./test` doubles as a CI sentinel for it.
+;; Performance is covered separately by the Go benchmarks in pkg/vm
+;; (BenchmarkNsWorkload, BenchmarkVarDerefDepth).
+
+(ns test.dynvar-concurrency
+  (:require [test :refer :all]))
+
+(def ^:dynamic *request-id* nil)
+(def ^:dynamic *tenant*     nil)
+(def ^:dynamic *user*       nil)
+
+;; logging layer (MDC): reads request-id/tenant/user on every line
+(defn log-line [level msg]
+  (str "[" *request-id* "][" *tenant* "][" *user* "] " level " " msg))
+
+;; repo layer: tenant-routed query, logs + reads tenant/request-id
+(defn db-query [q]
+  (log-line "DEBUG" (str "exec " q))
+  (str *tenant* "/" q "#" *request-id*))
+
+;; service layer: deref-heavy loop, repo + log on each step
+(defn service-op [n]
+  (reduce (fn [acc i]
+            (log-line "INFO" (str "step " i))
+            (str acc "|" (db-query (str "row-" i))))
+          (log-line "INFO" "start")
+          (range n)))
+
+;; handler: per-request extent (depth 1) plus a nested cross-tenant audit lookup
+;; (depth 2), modeling middleware/txn stacking (with-transaction inside
+;; with-logging-context)
+(defn handle [req]
+  (binding [*request-id* (:id req)
+            *tenant*     (:tenant req)
+            *user*       (:user req)]
+    (let [main (service-op (:work req))
+          aux  (binding [*tenant* (str (:tenant req) "-audit")]
+                 (db-query "audit"))]
+      (str main " || " aux))))
+
+;; deref-dominated, allocation-free: concurrent reads of a bound var inside its
+;; extent — the case the lock-free path is built for
+(def ^:dynamic *shard* 0)
+
+(defn hot-read-loop [k]
+  (loop [i 0 acc 0]
+    (if (< i k) (recur (inc i) (+ acc *shard*)) acc)))
+
+(defn handle-hot [req k]
+  (binding [*shard* (:shard req)] (hot-read-loop k)))
+
+(defn make-reqs [n work]
+  (mapv (fn [i] {:id (str "req-" i)
+                 :tenant (str "tenant-" (mod i 8))
+                 :user (str "user-" i)
+                 :shard (mod i 7)
+                 :work work})
+        (range n)))
+
+;; concurrent results must equal the serial golden on every rep — otherwise a
+;; binding bled across futures. Multiple reps because a bleed is nondeterministic.
+(defn isolated? [f reqs reps]
+  (let [golden (mapv f reqs)]
+    (every? (fn [_]
+              (= golden (mapv deref (mapv (fn [r] (future (f r))) reqs))))
+            (range reps))))
+
+(deftest binding-isolation-mixed-handler
+  (testing "concurrent multi-tenant handlers don't bleed dynamic context"
+    (is (isolated? handle (make-reqs 200 50) 5))))
+
+(deftest binding-isolation-hot-reads
+  (testing "concurrent deref-heavy readers don't bleed dynamic context"
+    (is (isolated? (fn [r] (handle-hot r 2000)) (make-reqs 200 0) 5))))
