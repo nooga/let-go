@@ -150,20 +150,23 @@ func bindDepth(b *testing.B, depth int) (vars []*Var, miss *Var) {
 // stay cheap for the list, but tail hits and misses pay the walk.
 func BenchmarkVarDerefDepth(b *testing.B) {
 	for _, depth := range []int{1, 4, 16, 64} {
-		vars, miss := bindDepth(b, depth)
-		targets := map[string]*Var{
-			"head": vars[depth-1], // most-recently bound (top of stack)
-			"tail": vars[0],       // first bound (bottom of stack)
-			"miss": miss,          // not on the stack — walks all frames
-		}
-		for _, pos := range []string{"head", "tail", "miss"} {
-			t := targets[pos]
-			b.Run(fmt.Sprintf("d%d/%s", depth, pos), func(b *testing.B) {
-				for i := 0; i < b.N; i++ {
-					derefSink = t.Deref()
-				}
-			})
-		}
+		depth := depth
+		b.Run(fmt.Sprintf("d%d", depth), func(b *testing.B) {
+			vars, miss := bindDepth(b, depth)
+			targets := map[string]*Var{
+				"head": vars[depth-1], // most-recently bound (top of stack)
+				"tail": vars[0],       // first bound (bottom of stack)
+				"miss": miss,          // not on the stack — walks all frames
+			}
+			for _, pos := range []string{"head", "tail", "miss"} {
+				t := targets[pos]
+				b.Run(pos, func(b *testing.B) {
+					for i := 0; i < b.N; i++ {
+						derefSink = t.Deref()
+					}
+				})
+			}
+		})
 	}
 }
 
