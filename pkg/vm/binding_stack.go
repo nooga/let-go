@@ -101,6 +101,14 @@ func rebuildAbove(above []*bindingFrame, tail *bindingFrame) *bindingFrame {
 	return tail
 }
 
+// removeTopBinding and replaceTopBinding share the walk-collect-rebuildAbove
+// shape and differ only in the tail they splice in. They're kept as separate
+// functions rather than folded into a shared higher-order helper on purpose:
+// removeTopBinding is the hot pop path (every binding exit), and a helper taking
+// a newTail func can't inline (its append loop blocks inlining) and the func
+// argument won't devirtualize, so the dedup would add a non-inlined + indirect
+// call per pop. The duplication is one differing line; the hot path wins.
+
 // removeTopBinding returns head with the topmost frame for v spliced out,
 // rebuilding only the frames above it and sharing the tail below. If v is not
 // bound, head is returned unchanged (no allocation). Iterative so deep nesting
