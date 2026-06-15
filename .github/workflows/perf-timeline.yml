@@ -6,6 +6,15 @@ on:
     paths-ignore:
       - 'docs/perf/index.html'
       - 'docs/perf/timeline/**'
+  # Manual backfill: dispatch once per historical commit to fill the timeline
+  # gap. Snapshot identity is derived from the checked-out HEAD (name, sha,
+  # commit time), so the rest of the job is already commit-agnostic.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit SHA/ref to snapshot (backfill)'
+        required: true
+        default: 'main'
 
 permissions:
   contents: write
@@ -13,6 +22,11 @@ permissions:
 concurrency:
   group: perf-timeline-main
   cancel-in-progress: false
+  # Retain every queued run (FIFO, up to 100) instead of the default
+  # queue: single, which keeps only the latest pending run. The backfill
+  # dispatches one run per historical commit; under queue: single all but
+  # the last would supersede each other and be canceled.
+  queue: max
 
 jobs:
   profile:
@@ -22,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
           submodules: recursive
           fetch-depth: 0
 
@@ -94,5 +109,8 @@ jobs:
             echo "No perf changes to commit."
             exit 0
           fi
-          git -C "$wt" commit -m "perf: record timeline snapshot for ${{ github.sha }}"
+          # Name the snapshot's own commit, not the dispatch ref (under
+          # workflow_dispatch github.sha is the branch tip, not the backfilled
+          # commit). snapshot_name embeds the correct short sha + commit time.
+          git -C "$wt" commit -m "perf: record timeline snapshot ${snapshot_name}"
           git -C "$wt" push "$remote" HEAD:perf-data
