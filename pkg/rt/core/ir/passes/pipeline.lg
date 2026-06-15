@@ -48,6 +48,54 @@
   (typeinfer f)
   f)
 
+(declare expand-all)
+
+(defn- dt-rewrite-field
+  "Rewrite bare field symbols in a deftype method body into (. this field)
+   member-access forms (lowered natively by build-dot/:dot). Walking-skeleton
+   scope: no shadowing / let-binding awareness (mirrors core.lg's -dt-rewrite
+   shape but emits the canonical (. this field) form the :go path lowers)."
+  [fieldset this-sym form]
+  (cond
+    (and (symbol? form) (contains? fieldset form))
+    (list '. this-sym form)
+    (vector? form)
+    (vec (map (fn [x] (dt-rewrite-field fieldset this-sym x)) form))
+    (and (seq? form) (seq form))
+    (if (= 'quote (first form))
+      form
+      (apply list (map (fn [x] (dt-rewrite-field fieldset this-sym x)) form)))
+    :else form))
+
+(defn lower-deftype-methods
+  "Lower the protocol-method impls of a :deftype capture to native Go receiver
+   methods. For each (mname [this & args] body...): bare field refs become
+   (. this field), the body is built+optimized as an IR fn whose receiver arg
+   is seeded as [:dtype T], then lowered (ir.lower-go/lower-method) to a method
+   on *T. Returns {:status :lowered :decls [<method-decl> ...]}."
+  [decl]
+  (let [tname       (:name decl)
+        struct-name (lower-go/go-export-name tname)
+        recv-type   (str "*" struct-name)
+        fieldset    (set (:fields decl))
+        methods     (filter (fn [x] (and (seq? x) (symbol? (first x)) (vector? (second x))))
+                            (:impls decl))
+        decls       (mapv
+                      (fn [m]
+                        (let [mname     (first m)
+                              params    (second m)
+                              this-sym  (first params)
+                              body      (drop 2 m)
+                              rewritten (map (fn [b] (dt-rewrite-field fieldset this-sym b)) body)
+                              defn-form (apply list 'defn mname params (map expand-all rewritten))
+                              ir-fn     (-> defn-form ir.build/build-fn optimize-fn)
+                              _         (swap! ir-fn assoc :arg-types [[:dtype tname]])
+                              result    (lower-go/lower-method ir-fn recv-type
+                                          (lower-go/go-export-name mname))]
+                          (:decl result)))
+                      methods)]
+    {:status :lowered :decls decls}))
+
 ;; --- end-to-end: form → IR → optimized IR → bytecode -----------------
 
 ;; Heads build.lg dispatches on natively. expand-all leaves these alone

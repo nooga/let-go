@@ -33,6 +33,7 @@
 (declare return-ref-ids)
 (declare function-return-spec)
 (declare const-param-of)
+(declare go-export-name)
 
 (defn- unsupported [mode msg]
   (if (= mode :bridge)
@@ -50,6 +51,9 @@
     (= t :char)                                  "vm.Char"
     (or (= t :unknown) (= t :any) (= t :nil))    "vm.Value"
     (and (vector? t) (= (first t) :union))       "vm.Value"
+    ;; [:dtype T] — a native deftype instance, lowered as a pointer *T to the
+    ;; generated struct (drives receiver typing + devirtualized field access).
+    (and (vector? t) (= (first t) :dtype))       (str "*" (go-export-name (second t)))
     :else nil))
 
 (defn- infer-go-type [t]
@@ -291,6 +295,7 @@
       (= op :try)   ; try-assign-stmts materialises the result into a local
       (= op :inc)
       (= op :dec)
+      (= op :dot)   ; (. obj field) materialised into a local: vN := obj.field
       (contains? binary-op op)))
 
 (defn- used? [f nid]
@@ -600,6 +605,14 @@
           (let [lhs (value-expr f closed-exprs lhs-id)]
             (when lhs
               (gogen/binary (if (= op :inc) "+" "-") lhs (gogen/int-lit 1))))))
+
+      ;; (. obj field) -> Go struct field selector obj.field
+      (= op :dot)
+      (let [obj-id   (nth refs 0)
+            field    (ir/aux nid f)
+            obj-expr (value-expr f closed-exprs obj-id)]
+        (when obj-expr
+          (gogen/field-sel obj-expr (name field))))
 
       :else nil)))
 
@@ -1451,6 +1464,12 @@
           (when rhs
             [(gogen/assign "=" (value-ident f nid) rhs)]))
         [])
+      (= op :dot)
+      (if (live? f nid)
+        (let [rhs (inst-rhs f closed-exprs nid)]
+          (when rhs
+            [(gogen/assign "=" (value-ident f nid) rhs)]))
+        [])
       (= op :call)
       (call-assign-stmts f closed-exprs nid)
       (= op :try)
@@ -2197,12 +2216,40 @@
                  (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))] params)
                  results body)})))
 
-(defn- go-export-name
+(defn go-export-name
   "Convert a symbol/string to an exported Go name (PascalCase).
    Handles multi-word kebab-case names like do-thing -> DoThing."
   [s]
   (let [name-str (str s)]
     (clojure.string/join "" (map clojure.string/capitalize (clojure.string/split name-str #"-")))))
+
+(defn lower-method [f recv-type method-name]
+  "Lower an already-built+optimized IR fn as a Go receiver method:
+
+     func (arg0 <recv-type>) <method-name>(<params after arg0>) <result> { body }
+
+   The receiver is arg-0 (its type is seeded via the fn's :arg-types, e.g.
+   [:dtype Square], so params-for types it as *Square and field accesses
+   arg0.side type-check). The body references the receiver as arg0, matching
+   value-ident output, so the receiver field-decl is named arg0. No ec param:
+   devirtualized methods capture nothing; callers thread ec explicitly if a
+   later body needs it (the skeleton's (* side side) does not)."
+  (let [all-params (params-for f)
+        results    (result-node f)
+        body       (lower-body f)]
+    (cond
+      (nil? all-params)   {:status :fallback :decl nil :reason "method: unsupported parameter types"}
+      (nil? results)      {:status :fallback :decl nil :reason "method: unsupported result type"}
+      (nil? body)         {:status :fallback :decl nil :reason "method: unsupported body shape"}
+      (empty? all-params) {:status :fallback :decl nil :reason "method: missing receiver param"}
+      :else
+      {:status :lowered
+       :decl (gogen/method-decl
+               [(gogen/field-decl "arg0" (gogen/type recv-type) "")]
+               method-name
+               (vec (rest all-params))
+               results
+               body)})))
 
 (defn lower-defprotocol [decl]
   "Lower a defprotocol capture map to a Go interface type declaration.
@@ -2225,6 +2272,47 @@
                  (:methods decl))]
     {:status :lowered
      :decl (gogen/type-decl iname (gogen/interface-type ms))}))
+
+(defn lower-deftype-struct [decl]
+  "Lower a :deftype capture to Go struct + constructor.
+   Input: {:decl-kind :deftype :name 'Square :fields '[side] :impls [...]}
+   Output: {:status :lowered :decls [<type-decl> <func-decl>]}"
+  (let [struct-name (go-export-name (:name decl))
+        field-names (:fields decl)
+        ;; Build the embedded vm.RecordBase field
+        record-base-embed (gogen/embed-field (gogen/type "vm.RecordBase"))
+        ;; Build named fields for each declared field
+        named-fields (mapv (fn [fld]
+                             (gogen/field-decl (str fld) (gogen/type "vm.Value") ""))
+                           field-names)
+        ;; All fields: RecordBase first, then named fields
+        all-fields (into [record-base-embed] named-fields)
+        ;; Build struct type
+        struct-type (gogen/struct-type all-fields)
+        ;; Build type declaration
+        type-decl (gogen/type-decl struct-name struct-type)
+
+        ;; Build constructor function: func _Square(side vm.Value) vm.Value
+        ctor-name (str "_" struct-name)
+        ctor-params (mapv (fn [fld]
+                            (gogen/param (str fld) (gogen/type "vm.Value")))
+                          field-names)
+        ctor-result [(gogen/result (gogen/type "vm.Value"))]
+        ;; Build the composite literal: &Square{RecordBase: vm.RecordBase{TypeName: "Square"}, side: side, ...}
+        record-base-lit (gogen/composite-lit (gogen/type "vm.RecordBase")
+                                             [(gogen/kv-expr (gogen/ident "TypeName")
+                                                (gogen/string-lit struct-name))])
+        field-kvs (cons (gogen/kv-expr (gogen/ident "RecordBase") record-base-lit)
+                        (mapv (fn [fld]
+                                (gogen/kv-expr (gogen/ident (str fld))
+                                               (gogen/ident (str fld))))
+                              field-names))
+        struct-lit (gogen/unary "&" (gogen/composite-lit (gogen/type struct-name) field-kvs))
+        return-stmt (gogen/return-stmt [struct-lit])
+        ctor-body [return-stmt]
+        func-decl (gogen/func-decl ctor-name ctor-params ctor-result ctor-body)]
+    {:status :lowered
+     :decls [type-decl func-decl]}))
 
 (defn- import-spec-node [entry]
   (let [path  (:path entry)

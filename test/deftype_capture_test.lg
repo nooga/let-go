@@ -29,3 +29,36 @@
       (is (= :lowered (:status result)))
       (is (clojure.string/includes? src "type Shape interface"))
       (is (clojure.string/includes? src "Area() vm.Value")))))
+
+(deftest lowers-member-access-to-field-selector
+  (testing "(. obj field) lowers to a native Go struct field selector"
+    (binding [ir.passes.pipeline/*target* :go]
+      (let [result (ir.passes.pipeline/compile-form '(defn -dot-probe [x] (. x side)))
+            src (g/render (:decl result))]
+        (is (= :lowered (:status result)))
+        ;; param x is renamed (arg0) by lowering; assert the field selector itself.
+        (is (clojure.string/includes? src ".side"))))))
+
+(deftest lowers-deftype-method-to-receiver-method
+  (testing "deftype method lowers to a native Go receiver method with field access"
+    (let [result (ir.passes.pipeline/lower-deftype-methods
+                   {:decl-kind :deftype :name 'Square :fields '[side]
+                    :impls '[Shape (area [this] (* side side))]})
+          src (clojure.string/join "\n" (map g/render (:decls result)))]
+      (is (= :lowered (:status result)))
+      (is (clojure.string/includes? src "*Square)"))    ; receiver typed *Square
+      (is (clojure.string/includes? src "Area("))         ; exported method name
+      (is (clojure.string/includes? src ".side")))))      ; field access on receiver
+
+(deftest lowers-deftype-to-struct-and-constructor
+  (testing "lower-deftype-struct renders a Go struct embedding vm.RecordBase + a constructor"
+    (let [result (lower-go/lower-deftype-struct
+                   {:decl-kind :deftype :name 'Square :fields '[side]
+                    :impls '[Shape (area [this] (* side side))]})
+          src (clojure.string/join "\n" (map g/render (:decls result)))]
+      (is (= :lowered (:status result)))
+      (is (clojure.string/includes? src "type Square struct"))
+      (is (clojure.string/includes? src "vm.RecordBase"))
+      (is (clojure.string/includes? src "side vm.Value"))
+      (is (clojure.string/includes? src "func _Square(side vm.Value) vm.Value"))
+      (is (clojure.string/includes? src "RecordBase: vm.RecordBase{TypeName: \"Square\"}")))))

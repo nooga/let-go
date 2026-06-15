@@ -1145,6 +1145,23 @@ func cFieldDecl(nameV, typeV, commentV vm.Value) (vm.Value, error) {
 	return box(f), nil
 }
 
+// embed-field: (gogen/embed-field type-expr) -> *ast.Field
+// An embedded (anonymous) struct field, e.g. `vm.RecordBase` inside a struct.
+// The field has no Names, so the type itself is promoted — the mechanism by
+// which a generated record struct inherits vm.RecordBase's vm.Value contract.
+func cEmbedField(typeV vm.Value) (vm.Value, error) {
+	t, err := unboxExpr(typeV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/embed-field: type: %w", err)
+	}
+	// Allocate a fresh line so the embedded field lands on its own line.
+	pos := allocPos()
+	if id, ok := t.(*ast.Ident); ok {
+		id.NamePos = pos
+	}
+	return box(&ast.Field{Type: t}), nil
+}
+
 // struct-type: (gogen/struct-type [fields]) -> *ast.StructType
 // A struct type expression, suitable as the type slot in a type-decl
 // or as a nested type.
@@ -1804,6 +1821,7 @@ func installGogenNS() {
 		mk(wrap3Named("func-lit", cFuncLit)),
 		mk(wrap3Named("switch-stmt", cSwitchStmt)),
 		mk(wrap3Named("field-decl", cFieldDecl)),
+		mk(wrap1Named("embed-field", cEmbedField)),
 		mk(wrap3Named("top-var-decl", cTopVarDecl)),
 		mk(wrap3Named("iface-method", cIfaceMethod)),
 

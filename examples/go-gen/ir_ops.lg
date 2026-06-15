@@ -88,7 +88,13 @@
     ;; as straight-line Go by lower_go's try-assign-stmts. No bytecode op (the
     ;; bytecode VM compiles try natively via OP_TRY_PUSH/POP); this op exists
     ;; only on the IR→Go lowering path.
-    ["Try"       -1  1 false false nil                false "Try"        ".Refs[0] = body closure; then optional handler closure (binds the caught value), then optional finally closure; .Aux = {:has-handler bool :has-finally bool}"]])
+    ["Try"       -1  1 false false nil                false "Try"        ".Refs[0] = body closure; then optional handler closure (binds the caught value), then optional finally closure; .Aux = {:has-handler bool :has-finally bool}"]
+
+    ;; Struct field selector for native deftype lowering: (. obj field)
+    ;; lowers to Go `obj.field`. Aux = field symbol, Refs[0] = obj. No
+    ;; bytecode op (the bytecode path accesses deftype fields via runtime
+    ;; DType dispatch); this op exists only on the IR→Go lowering path.
+    ["Dot"        1  1 false false nil                false "Dot"        ".Refs[0] = obj; .Aux = field symbol; Go struct field selector obj.field (gogen_ir path only)"]])
 
 (g/check-spec ops)
 

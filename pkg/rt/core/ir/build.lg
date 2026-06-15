@@ -228,6 +228,9 @@
                          (mapcat #(captures-of % known-locals) (:body finally-clause))
                          [])]
           (into #{} (concat body-caps catch-caps fin-caps)))
+        (= head '.)
+        ;; (. obj field): only obj carries captures; field is literal.
+        (let [[_ obj _field] form] (captures-of obj known-locals))
         :else
         (into #{} (mapcat #(captures-of % known-locals) form))))
     (vector? form)
@@ -238,7 +241,7 @@
 
 (declare build-list build-symbol build-if build-let build-do build-quote
          build-var build-set! build-loop build-recur build-fn*
-         build-vector build-map build-call build-try)
+         build-vector build-map build-call build-try build-dot)
 
 ;; Sentinel returned by recur / any form whose current-block is already
 ;; terminated. Callers must check for this before emitting more code.
@@ -348,6 +351,9 @@
                        (mapcat #(free-vars % bound) (:body finally-clause))
                        [])]
           (into #{} (concat body-fv catch-fv fin-fv)))
+        (= head '.)
+        ;; (. obj field): field is a literal symbol, not a var; only obj.
+        (let [[_ obj _field] form] (free-vars obj bound))
         :else
         (into #{} (mapcat #(free-vars % bound) form))))
     (vector? form)
@@ -501,6 +507,7 @@
       (= head 'recur) (build-recur form ctx)
       (= head 'fn*)   (build-fn* form ctx)
       (= head 'try)   (build-try form ctx)
+      (= head '.)     (build-dot form ctx)
       builtin         (build-builtin-op builtin form ctx)
       ;; Keywords, numbers, strings are callable (implement IFn in Clojure).
       ;; Treat them as Const values, build as generic call with const head.
@@ -512,6 +519,16 @@
       :else           (build-call form ctx))))
 
 ;; --- special forms -------------------------------------------------------
+
+(defn build-dot [form ctx]
+  "(. obj field) emits a :dot Inst with refs=[obj-id] and aux=field-symbol.
+   Lowers (on the :go path) to a Go struct field selector obj.field. The
+   field name is a literal symbol; only obj is an evaluated sub-expression."
+  (let [[_ obj field] form]
+    (when-not (symbol? field)
+      (throw (str "ir/build: . field must be a symbol, got " field)))
+    (let [obj-id (build-form obj ctx)]
+      (add-inst! ctx (ctx-block ctx) :dot [obj-id] field))))
 
 (defn build-quote [form ctx]
   "(quote x) emits a Const Inst with x as the Aux."
