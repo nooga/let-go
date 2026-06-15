@@ -10,6 +10,7 @@
 
 (ns ir.lower-go
   (:require
+   [clojure.string]
    [graph]
    [ir.data]
    [ir.structurize :as st]))
@@ -2195,6 +2196,35 @@
                  (go-name (ir/fn-name f))
                  (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))] params)
                  results body)})))
+
+(defn- go-export-name
+  "Convert a symbol/string to an exported Go name (PascalCase).
+   Handles multi-word kebab-case names like do-thing -> DoThing."
+  [s]
+  (let [name-str (str s)]
+    (clojure.string/join "" (map clojure.string/capitalize (clojure.string/split name-str #"-")))))
+
+(defn lower-defprotocol [decl]
+  "Lower a defprotocol capture map to a Go interface type declaration.
+
+   Input: {:decl-kind :defprotocol :name 'Shape :methods ['(area [this])]}
+   Output: {:status :lowered :decl <*ast.GenDecl>}"
+  (let [iname (go-export-name (:name decl))
+        ms (mapv (fn [method-form]
+                   (let [mname (first method-form)
+                         margs (second method-form)
+                         param-count (dec (count margs))
+                         param-fields (loop [i 0 out []]
+                                        (if (>= i param-count)
+                                          out
+                                          (recur (inc i) (conj out (gogen/param (str "p" i) (gogen/type "vm.Value"))))))
+                         result-fields [(gogen/result (gogen/type "vm.Value"))]]
+                     (gogen/iface-method (go-export-name mname)
+                                         param-fields
+                                         result-fields)))
+                 (:methods decl))]
+    {:status :lowered
+     :decl (gogen/type-decl iname (gogen/interface-type ms))}))
 
 (defn- import-spec-node [entry]
   (let [path  (:path entry)

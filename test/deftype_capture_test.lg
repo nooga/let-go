@@ -1,5 +1,8 @@
 (ns test.deftype-capture-test
   (:require
+   [clojure.string]
+   [gogen :as g]
+   [ir.lower-go :as lower-go]
    [ir.passes.pipeline]
    [test :refer :all]))
 
@@ -17,3 +20,12 @@
         (is (= :deftype (:decl-kind r)))
         (is (= 'Square (:name r)))
         (is (= '[side] (:fields r)))))))
+
+(deftest lowers-defprotocol-to-interface
+  (testing "lower-defprotocol renders a Go interface type-decl"
+    (let [result (lower-go/lower-defprotocol
+                   {:decl-kind :defprotocol :name 'Shape :methods ['(area [this])]})
+          src (g/render (:decl result))]
+      (is (= :lowered (:status result)))
+      (is (clojure.string/includes? src "type Shape interface"))
+      (is (clojure.string/includes? src "Area() vm.Value")))))
