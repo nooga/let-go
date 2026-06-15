@@ -84,6 +84,11 @@ func (n *NreplServer) Start(port int) error {
 		return err
 	}
 	n.listener = l
+	// Resolve the port the OS actually bound. With -p 0 the kernel picks a
+	// free ephemeral port; the supplied `port` is still 0 and would be a lie
+	// in the banner and .nrepl-port (which CIDER and other clients scrape to
+	// discover the server).
+	port = l.Addr().(*net.TCPAddr).Port
 	n.port = port
 	n.stop = make(chan struct{})
 
@@ -112,6 +117,12 @@ func (n *NreplServer) Start(port int) error {
 		}
 	})
 	return nil
+}
+
+// Port returns the port the server is bound to. After Start with -p 0 this is
+// the OS-assigned ephemeral port, not the 0 that was requested.
+func (n *NreplServer) Port() int {
+	return n.port
 }
 
 // Stop shuts down the server and cleans up.
