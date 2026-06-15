@@ -1,0 +1,19 @@
+(ns test.deftype-capture-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+(deftest captures-defprotocol-declaration
+  (testing "compile-form captures defprotocol as declaration"
+    (binding [ir.passes.pipeline/*target* :go]
+      (let [r (ir.passes.pipeline/compile-form '(defprotocol Shape (area [this])))]
+        (is (= :defprotocol (:decl-kind r)))
+        (is (= 'Shape (:name r)))))))
+
+(deftest captures-deftype-declaration
+  (testing "compile-form captures deftype as declaration"
+    (binding [ir.passes.pipeline/*target* :go]
+      (let [r (ir.passes.pipeline/compile-form '(deftype Square [side] Shape (area [this] (* side side))))]
+        (is (= :deftype (:decl-kind r)))
+        (is (= 'Square (:name r)))
+        (is (= '[side] (:fields r)))))))
