@@ -14,7 +14,8 @@
 ;; - branch-if can refine the carried condition value by truthiness/falsiness
 
 (ns ir.passes.typeinfer
-  (:require ir.dominance))
+  (:require
+   [ir.dominance]))
 
 ;; --- lattice ---------------------------------------------------------
 
@@ -41,6 +42,27 @@
 (defn- ti-inc! [k]
   (when *ti-counters* (swap! *ti-counters* update k (fnil inc 0))))
 
+;; --- deftype constructor registry ---
+;; Bind to a map {constructor-name-string -> deftype-name-symbol} around a
+;; typeinfer call (during the :go generation pass) so a call to a known
+;; deftype constructor — e.g. (->Square 3) — is typed [:dtype Square]. This
+;; carries the concrete receiver type to field access and devirtualized
+;; dispatch. nil (the default) disables the classification (zero overhead).
+(def ^:dynamic *deftype-ctor-types* nil)
+
+(defn- call-dtype
+  "If a :call inst's callee is a :load-var of a registered deftype
+   constructor, return [:dtype T]; otherwise nil."
+  [inst f]
+  (when *deftype-ctor-types*
+    (let [refs (ir/refs inst f)]
+      (when (seq refs)
+        (let [callee (first refs)]
+          (when (= :load-var (ir/op callee f))
+            (let [vname (name (symbol (ir/aux callee f)))
+                  tsym  (get *deftype-ctor-types* vname)]
+              (when tsym [:dtype tsym]))))))))
+
 (defn- union-type? [t]
   (and (vector? t) (= :union (first t))))
 
@@ -59,64 +81,68 @@
     (nil? t) :unknown
     (keyword? t) t
     (const-type? t)
-      (let [tag (nth t 1)
-            v   (nth t 2)]
-        (cond
-          (and (= tag :int) (= v 0)) [:const :int 0]
-          (and (= tag :float) (= v 0.0)) [:const :float 0.0]
-          :else (case tag
-                  :int :int
-                  :float :float
-                  :any)))
+    (let [tag (nth t 1)
+          v   (nth t 2)]
+      (cond
+        (and (= tag :int) (= v 0)) [:const :int 0]
+        (and (= tag :float) (= v 0.0)) [:const :float 0.0]
+        :else (case tag
+                :int :int
+                :float :float
+                :any)))
     (union-type? t)
-      (let [flat (reduce (fn [acc member]
-                           (let [norm (normalize-type member)]
-                             (cond
-                               (= norm :bottom) acc
-                               (= norm :any) (reduced [:any])
-                               (union-type? norm) (into acc (rest norm))
-                               :else (conj acc norm))))
-                         []
-                         (rest t))]
-        (if (= flat [:any])
-          :any
-          (let [members0 (distinct flat)
-                has-bool? (some #(= :bool %) members0)
-                has-number? (some #(= :number %) members0)
-                members1 (if has-bool?
-                           (remove (fn [member]
-                                     (or (= member :true) (= member :false)))
-                                   members0)
-                           members0)
-                members2 (if has-number?
-                           (remove (fn [member]
-                                     (or (= member :int)
-                                         (= member :float)
-                                         (= member [:const :int 0])
-                                         (= member [:const :float 0.0])))
-                                   members1)
-                           members1)
-                members3 (if (and (some #(or (= % :int) (= % [:const :int 0])) members2)
-                                  (some #(or (= % :float) (= % [:const :float 0.0])) members2))
-                           (conj (remove (fn [member]
-                                           (or (= member :int)
-                                               (= member :float)
-                                               (= member [:const :int 0])
-                                               (= member [:const :float 0.0])))
-                                         members2)
-                                 :number)
-                           members2)
-                members4 (if (some #(= :int %) members3)
-                           (remove #(= % [:const :int 0]) members3)
-                           members3)
-                members5 (if (some #(= :float %) members4)
-                           (remove #(= % [:const :float 0.0]) members4)
-                           members4)
-                members6 (vec (sort-members (distinct members5)))]
-            (cond
-              (empty? members6) :bottom
-              (= 1 (count members6)) (first members6)
-              :else (into [:union] members6)))))
+    (let [flat (reduce (fn [acc member]
+                         (let [norm (normalize-type member)]
+                           (cond
+                             (= norm :bottom) acc
+                             (= norm :any) (reduced [:any])
+                             (union-type? norm) (into acc (rest norm))
+                             :else (conj acc norm))))
+                       []
+                       (rest t))]
+      (if (= flat [:any])
+        :any
+        (let [members0 (distinct flat)
+              has-bool? (some #(= :bool %) members0)
+              has-number? (some #(= :number %) members0)
+              members1 (if has-bool?
+                         (remove (fn [member]
+                                   (or (= member :true) (= member :false)))
+                                 members0)
+                         members0)
+              members2 (if has-number?
+                         (remove (fn [member]
+                                   (or (= member :int)
+                                       (= member :float)
+                                       (= member [:const :int 0])
+                                       (= member [:const :float 0.0])))
+                                 members1)
+                         members1)
+              members3 (if (and (some #(or (= % :int) (= % [:const :int 0])) members2)
+                                (some #(or (= % :float) (= % [:const :float 0.0])) members2))
+                         (conj (remove (fn [member]
+                                         (or (= member :int)
+                                             (= member :float)
+                                             (= member [:const :int 0])
+                                             (= member [:const :float 0.0])))
+                                       members2)
+                               :number)
+                         members2)
+              members4 (if (some #(= :int %) members3)
+                         (remove #(= % [:const :int 0]) members3)
+                         members3)
+              members5 (if (some #(= :float %) members4)
+                         (remove #(= % [:const :float 0.0]) members4)
+                         members4)
+              members6 (vec (sort-members (distinct members5)))]
+          (cond
+            (empty? members6) :bottom
+            (= 1 (count members6)) (first members6)
+            :else (into [:union] members6)))))
+    ;; [:dtype T] — a native deftype instance type. Canonical as-is; must be
+    ;; preserved (not collapsed to :any) so the receiver keeps its concrete
+    ;; type for *T field access and devirtualized dispatch.
+    (and (vector? t) (= (first t) :dtype)) t
     :else :any))
 
 (defn- type-join [a b]
@@ -128,35 +154,35 @@
   ;; the hot path.
   (ti-inc! :type-join)
   (cond
-      (= a b) a
-      (= a :bottom) b
-      (= b :bottom) a
-      (= a :any) :any
-      (= b :any) :any
-      (= a :unknown) :unknown
-      (= b :unknown) :unknown
-      (and (= a :int) (= b [:const :int 0])) :int
-      (and (= b :int) (= a [:const :int 0])) :int
-      (and (= a :float) (= b [:const :float 0.0])) :float
-      (and (= b :float) (= a [:const :float 0.0])) :float
-      (and (= a :bool) (or (= b :true) (= b :false))) :bool
-      (and (= b :bool) (or (= a :true) (= a :false))) :bool
-      (= a :number)
-        (if (or (= b :int) (= b :float) (= b :number)
-                (= b [:const :int 0]) (= b [:const :float 0.0]))
-          :number
-          (normalize-type [:union a b]))
-      (= b :number)
-        (if (or (= a :int) (= a :float) (= a :number)
-                (= a [:const :int 0]) (= a [:const :float 0.0]))
-          :number
-          (normalize-type [:union a b]))
-      (or (and (or (= a :int) (= a [:const :int 0]))
-               (or (= b :float) (= b [:const :float 0.0])))
-          (and (or (= a :float) (= a [:const :float 0.0]))
-               (or (= b :int) (= b [:const :int 0]))))
-        :number
-      :else (normalize-type [:union a b])))
+    (= a b) a
+    (= a :bottom) b
+    (= b :bottom) a
+    (= a :any) :any
+    (= b :any) :any
+    (= a :unknown) :unknown
+    (= b :unknown) :unknown
+    (and (= a :int) (= b [:const :int 0])) :int
+    (and (= b :int) (= a [:const :int 0])) :int
+    (and (= a :float) (= b [:const :float 0.0])) :float
+    (and (= b :float) (= a [:const :float 0.0])) :float
+    (and (= a :bool) (or (= b :true) (= b :false))) :bool
+    (and (= b :bool) (or (= a :true) (= a :false))) :bool
+    (= a :number)
+    (if (or (= b :int) (= b :float) (= b :number)
+            (= b [:const :int 0]) (= b [:const :float 0.0]))
+      :number
+      (normalize-type [:union a b]))
+    (= b :number)
+    (if (or (= a :int) (= a :float) (= a :number)
+            (= a [:const :int 0]) (= a [:const :float 0.0]))
+      :number
+      (normalize-type [:union a b]))
+    (or (and (or (= a :int) (= a [:const :int 0]))
+             (or (= b :float) (= b [:const :float 0.0])))
+        (and (or (= a :float) (= a [:const :float 0.0]))
+             (or (= b :int) (= b [:const :int 0]))))
+    :number
+    :else (normalize-type [:union a b])))
 
 (defn- join-all [types]
   (reduce type-join :bottom types))
@@ -173,18 +199,18 @@
   ;; so we don't need to re-normalize.
   (cond
     (some #(= :bottom %) types)
-      :bottom
+    :bottom
     (every? numeric-type? types)
-      (cond
-        (every? (fn [t] (or (= t :int) (= t [:const :int 0]))) types) :int
-        (every? (fn [t] (or (= t :float) (= t [:const :float 0.0]))) types) :float
-        (some #(= :number %) types) :number
-        (and (some #(or (= % :float) (= % [:const :float 0.0])) types)
-             (some #(or (= % :int) (= % [:const :int 0])) types)) :number
-        (some #(or (= % :float) (= % [:const :float 0.0])) types) :float
-        :else :int)
+    (cond
+      (every? (fn [t] (or (= t :int) (= t [:const :int 0]))) types) :int
+      (every? (fn [t] (or (= t :float) (= t [:const :float 0.0]))) types) :float
+      (some #(= :number %) types) :number
+      (and (some #(or (= % :float) (= % [:const :float 0.0])) types)
+           (some #(or (= % :int) (= % [:const :int 0])) types)) :number
+      (some #(or (= % :float) (= % [:const :float 0.0])) types) :float
+      :else :int)
     :else
-      :unknown))
+    :unknown))
 
 (defn- truthy-type? [t]
   (let [t (normalize-type t)]
@@ -216,9 +242,9 @@
       (= t :false) :bottom
       (= t :nil) :bottom
       (union-type? t)
-        (normalize-type (into [:union]
-                              (remove (fn [m] (or (= m :nil) (= m :false)))
-                                      (rest t))))
+      (normalize-type (into [:union]
+                            (remove (fn [m] (or (= m :nil) (= m :false)))
+                                    (rest t))))
       :else t)))
 
 (defn- refine-falsey [t]
@@ -228,9 +254,9 @@
       (= t :true) :bottom
       (truthy-type? t) :bottom
       (union-type? t)
-        (normalize-type (into [:union]
-                              (filter (fn [m] (or (= m :nil) (= m :false)))
-                                      (rest t))))
+      (normalize-type (into [:union]
+                            (filter (fn [m] (or (= m :nil) (= m :false)))
+                                    (rest t))))
       :else t)))
 
 ;; --- Aux value classification ----------------------------------------
@@ -282,25 +308,25 @@
             aux (ir/aux term f)]
         (case op
           :branch
-            (if (= target-bid (ir/branch-target-target aux))
-              (let [arg-id   (nth (ir/branch-target-args aux) param-pos)
-                    arg-type (ir/type-of arg-id f)]
-                [(normalize-type arg-type)])
-              [])
+          (if (= target-bid (ir/branch-target-target aux))
+            (let [arg-id   (nth (ir/branch-target-args aux) param-pos)
+                  arg-type (ir/type-of arg-id f)]
+              [(normalize-type arg-type)])
+            [])
           :branch-if
-            (let [tt (ir/cond-target-true aux)
-                  ft (ir/cond-target-false aux)
-                  tt-types (if (= target-bid (ir/branch-target-target tt))
-                             (let [arg-id   (nth (ir/branch-target-args tt) param-pos)
-                                   arg-type (ir/type-of arg-id f)]
-                               [(normalize-type (refine-edge-arg-type pred-bid target-bid arg-id arg-type f))])
-                             [])
-                  ft-types (if (= target-bid (ir/branch-target-target ft))
-                             (let [arg-id   (nth (ir/branch-target-args ft) param-pos)
-                                   arg-type (ir/type-of arg-id f)]
-                               [(normalize-type (refine-edge-arg-type pred-bid target-bid arg-id arg-type f))])
-                             [])]
-              (vec (concat tt-types ft-types)))
+          (let [tt (ir/cond-target-true aux)
+                ft (ir/cond-target-false aux)
+                tt-types (if (= target-bid (ir/branch-target-target tt))
+                           (let [arg-id   (nth (ir/branch-target-args tt) param-pos)
+                                 arg-type (ir/type-of arg-id f)]
+                             [(normalize-type (refine-edge-arg-type pred-bid target-bid arg-id arg-type f))])
+                           [])
+                ft-types (if (= target-bid (ir/branch-target-target ft))
+                           (let [arg-id   (nth (ir/branch-target-args ft) param-pos)
+                                 arg-type (ir/type-of arg-id f)]
+                             [(normalize-type (refine-edge-arg-type pred-bid target-bid arg-id arg-type f))])
+                           [])]
+            (vec (concat tt-types ft-types)))
           [])))))
 
 (defn- infer-block-param [bid param-pos f]
@@ -325,12 +351,12 @@
     (cond
       (and (not= stored :unknown)
            (not= stored :bottom))
-        (normalize-type stored)
+      (normalize-type stored)
       (and (vector? arg-types)
            (< (int idx) (count arg-types)))
-        (normalize-type (nth arg-types (int idx)))
+      (normalize-type (nth arg-types (int idx)))
       :else
-        :unknown)))
+      :unknown)))
 
 ;; --- Op-based inference ----------------------------------------------
 
@@ -345,12 +371,12 @@
       (= op :load-arg)         (arg-seed inst f)
       (= op :load-var)         :unknown
       (= op :load-closed)      :unknown
-      (= op :call)             :unknown
+      (= op :call)             (or (call-dtype inst f) :unknown)
       (= op :block-arg)        (normalize-type (ir/type-of inst f))
       (contains? terminator-ops op) :nil
       (contains? comparison-ops op) :bool
       (contains? numeric-ops op)
-        (numeric-op-type (map (fn [r] (ir/type-of r f)) refs))
+      (numeric-op-type (map (fn [r] (ir/type-of r f)) refs))
       :else :unknown)))
 
 ;; --- fixpoint driver -------------------------------------------------
@@ -379,28 +405,28 @@
   (ti-inc! :analyze-block)
   (let [params (ir/block-params bid f)
         changed-param?
-          (loop [ps params
-                 idx 0
-                 changed? false]
-            (if (seq ps)
-              (let [param-id (first ps)
-                    param-type (infer-block-param bid idx f)
-                    param-changed? (set-type-if-changed! f param-id param-type)]
-                (recur (rest ps) (inc idx) (or changed? param-changed?)))
-              changed?))
+        (loop [ps params
+               idx 0
+               changed? false]
+          (if (seq ps)
+            (let [param-id (first ps)
+                  param-type (infer-block-param bid idx f)
+                  param-changed? (set-type-if-changed! f param-id param-type)]
+              (recur (rest ps) (inc idx) (or changed? param-changed?)))
+            changed?))
         changed-inst?
-          (loop [insts (ir/block-insts bid f)
-                 changed? false]
-            (if (seq insts)
-              (let [inst (first insts)
-                    inst-changed? (set-type-if-changed! f inst (infer-one inst f))]
-                (recur (rest insts) (or changed? inst-changed?)))
-              changed?))
+        (loop [insts (ir/block-insts bid f)
+               changed? false]
+          (if (seq insts)
+            (let [inst (first insts)
+                  inst-changed? (set-type-if-changed! f inst (infer-one inst f))]
+              (recur (rest insts) (or changed? inst-changed?)))
+            changed?))
         term (ir/block-term bid f)
         changed-term?
-          (if (nil? term)
-            false
-            (set-type-if-changed! f term (infer-one term f)))]
+        (if (nil? term)
+          false
+          (set-type-if-changed! f term (infer-one term f)))]
     (or changed-param? changed-inst? changed-term?)))
 
 ;; --- sparse worklist solver ------------------------------------------
@@ -445,14 +471,14 @@
         ps (atom {})
         add (fn [m k v] (swap! m update k (fnil conj #{}) v))
         add-branch-args
-            (fn [pred target args]
-              (loop [as args pos 0]
-                (when (seq as)
-                  (let [arg-id (first as)
-                        pp [target pos]]
-                    (add bu arg-id pp)
-                    (add ps pp [pred target arg-id]))
-                  (recur (rest as) (inc pos)))))]
+        (fn [pred target args]
+          (loop [as args pos 0]
+            (when (seq as)
+              (let [arg-id (first as)
+                    pp [target pos]]
+                (add bu arg-id pp)
+                (add ps pp [pred target arg-id]))
+              (recur (rest as) (inc pos)))))]
     (doseq [bid (ir/blocks f)]
       (let [term (ir/block-term bid f)]
         (when-not (nil? term)
@@ -460,18 +486,18 @@
                 aux (ir/aux term f)]
             (case op
               :branch
-                (add-branch-args bid
-                  (ir/branch-target-target aux)
-                  (ir/branch-target-args aux))
+              (add-branch-args bid
+                (ir/branch-target-target aux)
+                (ir/branch-target-args aux))
               :branch-if
-                (let [tt (ir/cond-target-true aux)
-                      ft (ir/cond-target-false aux)]
-                  (add-branch-args bid
-                                   (ir/branch-target-target tt)
-                                   (ir/branch-target-args tt))
-                  (add-branch-args bid
-                                   (ir/branch-target-target ft)
-                                   (ir/branch-target-args ft)))
+              (let [tt (ir/cond-target-true aux)
+                    ft (ir/cond-target-false aux)]
+                (add-branch-args bid
+                                 (ir/branch-target-target tt)
+                                 (ir/branch-target-args tt))
+                (add-branch-args bid
+                                 (ir/branch-target-target ft)
+                                 (ir/branch-target-args ft)))
               nil)))))
     {:uses (ir/uses f) :branch-arg-users @bu :param-sources @ps}))
 
@@ -506,15 +532,15 @@
   "Value-id v's type widened — enqueue everyone whose inference reads it."
   [v deps queue queued]
   (let [[queue queued]
-          (let [uses (:uses deps)
-                us   (when (< v (count uses)) (nth uses v))
-                state (atom [queue queued])]
-            (when (and us (not (ir/uses-empty? us)))
-              (ir/uses-for-each us
-                (fn [user]
-                  (let [[q s] @state]
-                    (reset! state (enqueue-entry q s [:inst user]))))))
-            @state)]
+        (let [uses (:uses deps)
+              us   (when (< v (count uses)) (nth uses v))
+              state (atom [queue queued])]
+          (when (and us (not (ir/uses-empty? us)))
+            (ir/uses-for-each us
+              (fn [user]
+                (let [[q s] @state]
+                  (reset! state (enqueue-entry q s [:inst user]))))))
+          @state)]
     (loop [params (get (:branch-arg-users deps) v)
            q queue
            s queued]
@@ -563,56 +589,56 @@
         budget-ns (when *typeinfer-budget-ms*
                     (* *typeinfer-budget-ms* 1000000))
         budget-exceeded?
-          (fn []
-            (and budget-ns
-                 (> (- (System/nanoTime) start-ns) budget-ns)))]
+        (fn []
+          (and budget-ns
+               (> (- (System/nanoTime) start-ns) budget-ns)))]
     ;; Seed: enqueue every value once. Reachable blocks only — unreachable
     ;; insts keep :bottom, which is correct (they hold no runtime value).
     (let [[seed-queue seed-queued]
-            (loop [blocks (ir.dominance/reverse-postorder f)
-                   queue []
-                   queued #{}]
-              (if (empty? blocks)
-                [queue queued]
-                (let [bid (first blocks)
-                      [queue queued]
-                        (loop [ps (ir/block-params bid f)
-                               pos 0
-                               q queue
-                               s queued]
-                          (if (seq ps)
-                            (if (param-has-ready-source? deps bid pos f)
-                              (let [[q2 s2] (enqueue-entry q s [:param [bid pos]])]
-                                (recur (rest ps) (inc pos) q2 s2))
-                              (recur (rest ps) (inc pos) q s))
-                            [q s]))
-                      [queue queued]
-                        (loop [insts (ir/block-insts bid f)
-                               q queue
-                               s queued]
-                          (if (seq insts)
-                            (let [inst (first insts)]
-                              ;; Skip :block-arg insts here: their write is
-                              ;; owned by the :param path. infer-one on
-                              ;; :block-arg is a no-op against monotone
-                              ;; storage, but enqueuing them spuriously
-                              ;; bloats the queue.
-                              (if (= :block-arg (ir/op inst f))
-                                (recur (rest insts) q s)
-                                (let [[q2 s2] (enqueue-entry q s [:inst inst])]
-                                  (recur (rest insts) q2 s2))))
-                            [q s]))
-                      term (ir/block-term bid f)
-                      [queue queued] (if (nil? term)
-                                       [queue queued]
-                                       (enqueue-entry queue queued [:inst term]))]
-                  (recur (rest blocks) queue queued))))]
-    ;; Drain.
-    (loop [queue seed-queue
-           queued seed-queued
-           budget-tick 0]
-      (cond
-        (and (zero? budget-tick) (budget-exceeded?))
+          (loop [blocks (ir.dominance/reverse-postorder f)
+                 queue []
+                 queued #{}]
+            (if (empty? blocks)
+              [queue queued]
+              (let [bid (first blocks)
+                    [queue queued]
+                    (loop [ps (ir/block-params bid f)
+                           pos 0
+                           q queue
+                           s queued]
+                      (if (seq ps)
+                        (if (param-has-ready-source? deps bid pos f)
+                          (let [[q2 s2] (enqueue-entry q s [:param [bid pos]])]
+                            (recur (rest ps) (inc pos) q2 s2))
+                          (recur (rest ps) (inc pos) q s))
+                        [q s]))
+                    [queue queued]
+                    (loop [insts (ir/block-insts bid f)
+                           q queue
+                           s queued]
+                      (if (seq insts)
+                        (let [inst (first insts)]
+                          ;; Skip :block-arg insts here: their write is
+                          ;; owned by the :param path. infer-one on
+                          ;; :block-arg is a no-op against monotone
+                          ;; storage, but enqueuing them spuriously
+                          ;; bloats the queue.
+                          (if (= :block-arg (ir/op inst f))
+                            (recur (rest insts) q s)
+                            (let [[q2 s2] (enqueue-entry q s [:inst inst])]
+                              (recur (rest insts) q2 s2))))
+                        [q s]))
+                    term (ir/block-term bid f)
+                    [queue queued] (if (nil? term)
+                                     [queue queued]
+                                     (enqueue-entry queue queued [:inst term]))]
+                (recur (rest blocks) queue queued))))]
+      ;; Drain.
+      (loop [queue seed-queue
+             queued seed-queued
+             budget-tick 0]
+        (cond
+          (and (zero? budget-tick) (budget-exceeded?))
           (do (println "typeinfer: hit *typeinfer-budget-ms*"
                        (or *typeinfer-budget-ms* "<nil>")
                        "— bailing with partial result")
@@ -622,7 +648,7 @@
                        :drain-ms
                        (int (/ (- (System/nanoTime) start-ns) 1000000))))
               f)
-        (empty? queue)
+          (empty? queue)
           (do
             (when *ti-counters*
               (swap! *ti-counters*
@@ -630,29 +656,29 @@
                      :drain-ms
                      (int (/ (- (System/nanoTime) start-ns) 1000000))))
             f)
-        :else
+          :else
           (let [entry  (peek queue)
                 queue  (pop queue)
                 queued (disj queued entry)
                 [queue queued]
-            (case (first entry)
-              :inst
-                (let [n (second entry)]
-                  (ti-inc! :process-inst)
-                  (if (set-type-if-changed! f n (infer-one n f))
-                    (do
-                      (ti-inc! :type-change)
-                      (propagate-changed! n deps queue queued))
-                    [queue queued]))
-              :param
-                (let [[bid pos] (second entry)
-                      params    (ir/block-params bid f)
-                      param-id  (nth params pos)
-                      new-type  (infer-block-param-from-deps deps bid pos f)]
-                  (ti-inc! :process-param)
-                  (if (set-type-if-changed! f param-id new-type)
-                    (do
-                      (ti-inc! :type-change)
-                      (propagate-changed! param-id deps queue queued))
-                    [queue queued])))]
+                (case (first entry)
+                  :inst
+                  (let [n (second entry)]
+                    (ti-inc! :process-inst)
+                    (if (set-type-if-changed! f n (infer-one n f))
+                      (do
+                        (ti-inc! :type-change)
+                        (propagate-changed! n deps queue queued))
+                      [queue queued]))
+                  :param
+                  (let [[bid pos] (second entry)
+                        params    (ir/block-params bid f)
+                        param-id  (nth params pos)
+                        new-type  (infer-block-param-from-deps deps bid pos f)]
+                    (ti-inc! :process-param)
+                    (if (set-type-if-changed! f param-id new-type)
+                      (do
+                        (ti-inc! :type-change)
+                        (propagate-changed! param-id deps queue queued))
+                      [queue queued])))]
             (recur queue queued (if (zero? budget-tick) 127 (dec budget-tick)))))))))
