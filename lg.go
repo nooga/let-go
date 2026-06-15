@@ -14,7 +14,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/bytecode"
@@ -633,19 +632,7 @@ func buildSearchPaths() []string {
 	})
 	envVal, envSet := os.LookupEnv("LG_SOURCE_PATHS")
 	if explicitSet || envSet {
-		paths := resolver.PathsFromInputs(sourcePaths, envVal, explicitSet)
-		// Transition notice for the dropped implicit ".". Tooling that owns the
-		// search path deliberately omits "." and can set
-		// LG_SUPPRESS_SOURCE_PATHS_WARNING to silence this; the notice is
-		// removed in a future release.
-		if !slices.Contains(paths, ".") && os.Getenv("LG_SUPPRESS_SOURCE_PATHS_WARNING") == "" {
-			fmt.Fprintln(os.Stderr, `WARNING: the current directory (".") is no `+
-				`longer added to the namespace search path automatically when `+
-				`-source-paths or LG_SOURCE_PATHS is set; add "." to the list to `+
-				`keep searching it. This notice will be removed in a future release `+
-				`(set LG_SUPPRESS_SOURCE_PATHS_WARNING=1 to silence).`)
-		}
-		return paths
+		return resolver.PathsFromInputs(sourcePaths, envVal, explicitSet)
 	}
 	if depsPaths := resolver.PathsFromDepsEdn("."); depsPaths != nil {
 		return append([]string{"."}, depsPaths...)
