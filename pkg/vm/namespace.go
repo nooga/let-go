@@ -362,9 +362,21 @@ func (n *Namespace) ReferList(ns *Namespace, symbols []Symbol) {
 }
 
 // Alias creates a symbol alias to another namespace in this namespace.
+//
+// Collision guard: re-pointing an existing alias at a DIFFERENT namespace is
+// almost always a bug — either two `:as` clauses in one ns picking the same
+// short name for different libs, or (historically) cross-namespace alias-table
+// contamination during dependency loading. Rather than letting the last writer
+// silently win, warn so the conflict is visible. Re-aliasing to the SAME target
+// (idempotent ns reload) and first-time aliasing are silent.
 func (n *Namespace) Alias(alias Symbol, target *Namespace) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if prev, ok := n.aliases[alias]; ok && prev != nil && target != nil && prev != target {
+		fmt.Fprintf(os.Stderr,
+			"WARNING: alias %s in namespace %s already points to %s, being repointed to %s\n",
+			string(alias), n.name, string(prev.Name()), string(target.Name()))
+	}
 	n.aliases[alias] = target
 }
 

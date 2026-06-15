@@ -127,11 +127,32 @@ func (r *NSResolver) loadFile(path string) *vm.Namespace {
 
 func (r *NSResolver) loadSource(sourceName string, reader io.Reader, recordChunk bool) *vm.Namespace {
 	ons := r.ctx.CurrentNS()
-	freshCtx := compiler.NewCompiler(r.ctx.Consts(), ons)
+	// Restore the requiring namespace on EVERY exit path. CurrentNS is a
+	// process-wide var that the compile below repoints (via the scratch ns and
+	// the loaded file's own `(ns …)`); if CompileMultiple panics or returns
+	// early, an explicit single-site restore would be skipped and leave a stale
+	// CurrentNS poisoning later compiles. Deferring makes restoration
+	// unconditional.
+	defer r.ctx.SetCurrentNS(ons)
+	// Compile the dependency with a throwaway namespace as the initial
+	// CurrentNS — NOT the requiring namespace (ons). CurrentNS is a process-wide
+	// var, and the alias/refer simulations run against whatever it points at; if
+	// we seed it with `ons`, any ns-op the dependency emits before its own
+	// `(ns …)` switches CurrentNS lands in the REQUIRING namespace's alias/refer
+	// table and clobbers it (e.g. a `[graph :as g]` in the dependency overwrites
+	// the requiring ns's `[gogen :as g]`). A well-formed namespace file's first
+	// form is `(ns …)`, which immediately switches CurrentNS to its own ns, so
+	// the scratch ns is only transiently current and never receives real defs.
+	// It still needs clojure.core referred so that very first `(ns …)` form can
+	// resolve the `ns` macro itself (RegisterNS does the same for real ns's).
+	scratch := vm.NewNamespace("<load:" + sourceName + ">")
+	if rt.CoreNS != nil {
+		scratch.Refer(rt.CoreNS, "", true)
+	}
+	freshCtx := compiler.NewCompiler(r.ctx.Consts(), scratch)
 	freshCtx.SetSource(sourceName)
 	chunk, _, err := freshCtx.CompileMultiple(reader)
 	nns := freshCtx.CurrentNS()
-	r.ctx.SetCurrentNS(ons)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to load %s: %s\n", sourceName, err)
 		return nil
