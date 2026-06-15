@@ -190,11 +190,33 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 	return nil
 }
 
+// forceSourceNS reports whether namespace `name` is listed in the
+// LG_FORCE_SOURCE_NS env var (comma-separated). Such namespaces skip the
+// precompiled bundle chunk and load from the //go:embed raw .lg source, which
+// `go build`/`go test` recompiles whenever the .lg file changes — giving a
+// fast edit→test loop for a single namespace WITHOUT `make generate`. Dev/test
+// only; empty/unset means normal (bundle-first) behavior for every namespace.
+func forceSourceNS(name string) bool {
+	env := os.Getenv("LG_FORCE_SOURCE_NS")
+	if env == "" {
+		return false
+	}
+	for _, s := range stdstrings.Split(env, ",") {
+		if stdstrings.TrimSpace(s) == name {
+			return true
+		}
+	}
+	return false
+}
+
 // loadEmbedded loads bundled namespaces from embedded sources
 func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
-	// Try precompiled bytecode first
-	if chunk := compiler.PrecompiledNSChunk(name); chunk != nil {
-		return r.execPrecompiled(name, chunk)
+	// Try precompiled bytecode first — unless this ns is pinned to source
+	// loading via LG_FORCE_SOURCE_NS (dev loop; see forceSourceNS).
+	if !forceSourceNS(name) {
+		if chunk := compiler.PrecompiledNSChunk(name); chunk != nil {
+			return r.execPrecompiled(name, chunk)
+		}
 	}
 
 	if name == "term" {
