@@ -1188,6 +1188,83 @@ func cStructType(fieldsV vm.Value) (vm.Value, error) {
 	}), nil
 }
 
+// iface-method: (gogen/iface-method "name" [params] [results]) -> *ast.Field
+// An interface method signature. Returns an *ast.Field with a FuncType.
+// The field's Name list contains the method name, and the Type is a
+// *ast.FuncType with Params and Results.
+func cIfaceMethod(nameV, paramsV, resultsV vm.Value) (vm.Value, error) {
+	name, err := asString(nameV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if !validIdent(name) {
+		return vm.NIL, fmt.Errorf("gogen/iface-method: %q is not a valid identifier", name)
+	}
+	params, err := fieldSlice(paramsV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/iface-method: params: %w", err)
+	}
+	results, err := fieldSlice(resultsV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/iface-method: results: %w", err)
+	}
+	// Allocate a fresh position for the method name.
+	pos := allocPos()
+	funcType := &ast.FuncType{
+		Params: &ast.FieldList{List: params},
+	}
+	if len(results) > 0 {
+		funcType.Results = &ast.FieldList{List: results}
+	}
+	return box(&ast.Field{
+		Names: []*ast.Ident{{Name: name, NamePos: pos}},
+		Type:  funcType,
+	}), nil
+}
+
+// interface-type: (gogen/interface-type [methods]) -> *ast.InterfaceType
+// An interface type expression, suitable as the type slot in a type-decl
+// or as a nested type.
+//
+// Position scheme: Interface/Opening go one line BEFORE the first method;
+// Closing goes ONE LINE AFTER the last method. This makes the printer
+// emit each method on its own line without leading or trailing blank
+// lines inside the braces.
+func cInterfaceType(methodsV vm.Value) (vm.Value, error) {
+	methods, err := fieldSlice(methodsV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/interface-type: methods: %w", err)
+	}
+	// Find min/max position among methods to bracket Opening/Closing.
+	var minPos, maxPos token.Pos
+	for _, m := range methods {
+		for _, n := range m.Names {
+			if minPos == 0 || n.NamePos < minPos {
+				minPos = n.NamePos
+			}
+			if n.NamePos > maxPos {
+				maxPos = n.NamePos
+			}
+		}
+	}
+	openPos := token.Pos(1)
+	if minPos > 1 {
+		openPos = minPos - 1
+	}
+	closePos := maxPos + 1
+	if closePos == 0 {
+		closePos = allocPos()
+	}
+	return box(&ast.InterfaceType{
+		Interface: openPos,
+		Methods: &ast.FieldList{
+			Opening: openPos,
+			List:    methods,
+			Closing: closePos,
+		},
+	}), nil
+}
+
 // const-spec: (gogen/const-spec "name" type-or-nil value-or-nil "trailing comment")
 // -> *ast.ValueSpec
 // One row inside a const block. Type and value may both be nil for
@@ -1714,6 +1791,7 @@ func installGogenNS() {
 		mk(wrap2Named("case-clause", cCaseClause)),
 		mk(wrap2Named("type-decl", cTypeDecl)),
 		mk(wrap1Named("struct-type", cStructType)),
+		mk(wrap1Named("interface-type", cInterfaceType)),
 		mk(wrap1Named("const-block", cConstBlock)),
 		mk(wrap2Named("with-doc", cWithDoc)),
 		mk(wrap2Named("label-stmt", cLabelStmt)),
@@ -1727,6 +1805,7 @@ func installGogenNS() {
 		mk(wrap3Named("switch-stmt", cSwitchStmt)),
 		mk(wrap3Named("field-decl", cFieldDecl)),
 		mk(wrap3Named("top-var-decl", cTopVarDecl)),
+		mk(wrap3Named("iface-method", cIfaceMethod)),
 
 		mk(wrap4Named("if-stmt", cIfStmt)),
 		mk(wrap4Named("for-stmt", cForStmt)),
