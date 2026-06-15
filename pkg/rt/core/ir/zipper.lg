@@ -13,7 +13,11 @@
 ;;   :inst-idx  — current Inst's index into the block's Insts list
 ;;   :ended     — true once we've walked past the last Inst
 
-(ns ir.zipper)
+(ns ir.zipper
+  ;; ir.data interns the `ir/*` accessors into the native `ir` ns; require it so
+  ;; load order is forced rather than incidental (see ir.lower for the why).
+  (:require
+   [ir.data]))
 
 (declare advance-empty)
 
@@ -42,13 +46,13 @@
   (loop [z z]
     (cond
       (>= (get z :block-idx) (count (get z :blocks)))
-        (assoc z :ended true)
+      (assoc z :ended true)
       :else
-        (let [block (nth (get z :blocks) (get z :block-idx))
-              insts (ir/block-insts block (get z :fn))]
-          (if (>= (get z :inst-idx) (count insts))
-            (recur (assoc z :block-idx (inc (get z :block-idx)) :inst-idx 0))
-            z)))))
+      (let [block (nth (get z :blocks) (get z :block-idx))
+            insts (ir/block-insts block (get z :fn))]
+        (if (>= (get z :inst-idx) (count insts))
+          (recur (assoc z :block-idx (inc (get z :block-idx)) :inst-idx 0))
+          z)))))
 
 (defn next [z]
   "Advance the cursor by one Inst."

@@ -78,8 +78,10 @@ func TestRunner(t *testing.T) {
 			// Skip directories that contain non-test .lg files (e.g.
 			// compat/ holds the corpus runner, which is invoked manually;
 			// benches/ holds standalone benchmarks + bug-repro fixtures that
-			// run for seconds and assert nothing — run by hand with ./lg).
-			if info.Name() == "compat" || info.Name() == "clojure-test-suite" || info.Name() == "benches" {
+			// run for seconds and assert nothing — run by hand with ./lg;
+			// gogen/ holds native-lowering harness fixtures driven by the
+			// deftype_skeleton_lowering_e2e_test, not bytecode deftests).
+			if info.Name() == "compat" || info.Name() == "clojure-test-suite" || info.Name() == "benches" || info.Name() == "gogen" {
 				return filepath.SkipDir
 			}
 			return nil

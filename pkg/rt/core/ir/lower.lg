@@ -18,7 +18,15 @@
 ;;
 ;; State is a Lisp atom holding a map; mutations via swap!.
 
-(ns ir.lower)
+(ns ir.lower
+  ;; ir.data interns the `ir/*` accessors (uses, op, chunk-emit, …) into the
+  ;; native `ir` namespace; it MUST be loaded before this file compiles or those
+  ;; refs are unresolvable. Declaring the dependency makes that load-order-
+  ;; independent — without it, compilation only succeeds when some other require
+  ;; happens to pull ir.data in first (e.g. it breaks under -tags bootstrap when
+  ;; gogen is required ahead of this ns). Mirrors ir.build.
+  (:require
+   [ir.data]))
 
 (declare lower)
 

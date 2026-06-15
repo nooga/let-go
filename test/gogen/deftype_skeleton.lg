@@ -1,0 +1,28 @@
+;; Native-lowering trampoline fixture: a protocol + a deftype + one method +
+;; a defn that constructs and dispatches. Driven by scripts/gogen-trampoline.lg
+;; (and deftype_skeleton_lowering_e2e_test.go): the trampoline lowers these forms
+;; to Go, wires the lowered package in under a build tag, then `require`s this ns
+;; so the resolver drains the Go-native override — making (run) dispatch to the
+;; generated code. It asserts (run) matches the bytecode VM, and that the entry
+;; var is actually a native fn under the tag (so the compare isn't vacuous).
+;;
+;; Trampoline contract: a fixture ns defines a 0-arg `run` returning a printable,
+;; deterministic value, and is free of top-level side effects so `require` is
+;; clean.
+(ns examples.deftype-skeleton)
+
+(defprotocol Shape
+  (area [this]))
+
+(deftype Square [side]
+  Shape
+  (area [this] (* side side)))
+
+;; The devirtualized call site: (->Square n) lowers to the native _Square(n)
+;; constructor and (area …) to a direct recv.Area() method call (no
+;; rt.InvokeValue).
+(defn square-area [n]
+  (area (->Square n)))
+
+(defn run []
+  (square-area 3))

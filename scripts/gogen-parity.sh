@@ -35,15 +35,15 @@ export GOMEMLIMIT="${GOMEMLIMIT:-2GiB}"
 
 MODE="${1:-default}"
 case "$MODE" in
-    --quick)      RUN_JANK=1; RUN_LOWERGO=0; RUN_IRCOMPILE=0 ;;
-    --jank-only)  RUN_JANK=1; RUN_LOWERGO=0; RUN_IRCOMPILE=0 ;;
+    --quick)      RUN_JANK=1; RUN_LOWERGO=0; RUN_IRCOMPILE=0; RUN_DEFTYPE=0 ;;
+    --jank-only)  RUN_JANK=1; RUN_LOWERGO=0; RUN_IRCOMPILE=0; RUN_DEFTYPE=0 ;;
     # ir-compile only: the IR-optimizing bytecode path (binds *ir-compile*),
     # which runs the native passes under -tags gogen_ir and is byte-stable
     # across engines — unlike lower-go, whose AOT run trips the wall-clock
     # *typeinfer-budget-ms* and flakes. This is the CI-safe parity gate.
-    --ir-compile) RUN_JANK=0; RUN_LOWERGO=0; RUN_IRCOMPILE=1 ;;
-    --full)       RUN_JANK=1; RUN_LOWERGO=1; RUN_IRCOMPILE=1 ;;
-    default)      RUN_JANK=1; RUN_LOWERGO=1; RUN_IRCOMPILE=0 ;;
+    --ir-compile) RUN_JANK=0; RUN_LOWERGO=0; RUN_IRCOMPILE=1; RUN_DEFTYPE=0 ;;
+    --full)       RUN_JANK=1; RUN_LOWERGO=1; RUN_IRCOMPILE=1; RUN_DEFTYPE=1 ;;
+    default)      RUN_JANK=1; RUN_LOWERGO=1; RUN_IRCOMPILE=0; RUN_DEFTYPE=1 ;;
     -h|--help)
         sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
         exit 0
@@ -187,6 +187,26 @@ compare_summaries() {
     fi
 }
 
+# deftype/defprotocol native lowering ------------------------------------
+# Delegates to the generalized trampoline (scripts/gogen-trampoline.lg), which
+# lowers every test/gogen/*.lg fixture to Go, wires it in under a build tag, and
+# `require`s it so the resolver drains the Go-native override — then asserts each
+# fixture's (run) matches the bytecode VM AND actually dispatched natively. This
+# is the real runtime dispatch path, not a hand-written in-package call.
+run_deftype_native() {
+    local log="$LOG_DIR/deftype-native.log" lg="$LOG_DIR/lg-trampoline"
+    # The trampoline is an lg script; build lg once, run it, and pass the same
+    # binary as the bytecode-side engine it compares against.
+    if go build -o "$lg" . >"$log" 2>&1 && \
+       "$lg" scripts/gogen-trampoline.lg --lg "$lg" --go "$(command -v go)" >>"$log" 2>&1; then
+        sed -nE 's/^  //p' "$log"   # echo the per-fixture result lines
+        return 0
+    fi
+    echo "  deftype native trampoline FAILED — last 20 lines of $log:" >&2
+    tail -20 "$log" >&2
+    return 1
+}
+
 # Run --------------------------------------------------------------------
 
 divergence=0
@@ -209,6 +229,12 @@ if [ "$RUN_IRCOMPILE" -eq 1 ]; then
     echo "=== ir-stress ir-compile (IR corpus: ${#IR_CORPUS[@]} files) ==="
     run_ir_stress ir-compile untagged ""
     run_ir_stress ir-compile gogen_ir "-tags gogen_ir"
+    echo
+fi
+
+if [ "${RUN_DEFTYPE:-0}" -eq 1 ]; then
+    echo "=== deftype/defprotocol native skeleton ==="
+    run_deftype_native || divergence=$((divergence+1))
     echo
 fi
 

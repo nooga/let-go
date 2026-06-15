@@ -18,7 +18,11 @@
 ;;   - Branch-target arg refs in range
 ;;   - Block-param matches BlockArg count in successors
 
-(ns ir.validate)
+(ns ir.validate
+  ;; ir.data interns the `ir/*` accessors into the native `ir` ns; require it so
+  ;; load order is forced rather than incidental (see ir.lower for the why).
+  (:require
+   [ir.data]))
 
 (defn- check-inst-shapes! [insts label]
   (loop [i 0]
@@ -126,10 +130,10 @@
                   aux     (nth term 2)]
               (cond
                 (= op :branch)
-                  (check-branch-arg-arity-for-target! label i aux blocks)
+                (check-branch-arg-arity-for-target! label i aux blocks)
                 (= op :branch-if)
-                  (do (check-branch-arg-arity-for-target! label i (ir/cond-target-true aux)  blocks)
-                      (check-branch-arg-arity-for-target! label i (ir/cond-target-false aux) blocks))))))
+                (do (check-branch-arg-arity-for-target! label i (ir/cond-target-true aux)  blocks)
+                    (check-branch-arg-arity-for-target! label i (ir/cond-target-false aux) blocks))))))
         (recur (inc i))))))
 
 (defn- check-branch-if-symmetric-args! [f label]

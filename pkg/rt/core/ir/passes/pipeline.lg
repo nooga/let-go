@@ -459,76 +459,129 @@
                              (:fns result))]
             (recur (rest remaining) (into out flat)))
           :else
-          (recur (rest remaining) out))))))
+          (do
+            ;; A non-:lowered single result (e.g. {:status :fallback :reason …})
+            ;; carries no decl — warn rather than silently drop it, so a form
+            ;; that failed to lower stays visible instead of vanishing from the
+            ;; generated package with no trace.
+            (println (str "WARNING: not lowered ("
+                          (pr-str (or (:status result) (:kind result)))
+                          ") for "
+                          (pr-str (try (second form) (catch _ form)))
+                          (if (:reason result) (str ": " (:reason result)) "")))
+            (recur (rest remaining) out)))))))
 
-(defn lower-ns-to-go [pkg-name ns-name defn-forms]
-  "Process defn forms through the Go-lowering pipeline and return rendered
-   Go source for a package. pkg-name is the Go package name string,
-   ns-name is the namespace symbol (for *ns* binding), and defn-forms is
-   a vector of raw (defn ...) list forms."
+(defn lower-ns-to-go [pkg-name ns-name forms]
+  "Process a namespace's forms through the Go-lowering pipeline and return
+   rendered Go source for a package. pkg-name is the Go package name string,
+   ns-name is the namespace symbol (for *ns* binding), and forms is a vector of
+   raw top-level forms: (defn ...) plus optional (defprotocol ...) / (deftype
+   ...) declaration forms. Declaration forms are emitted as a native Go
+   interface / struct+constructor / receiver methods, and the deftype
+   constructor + protocol-method registries are bound so the namespace's own
+   functions devirtualize constructor calls and protocol dispatch."
   ;; Determinism: the Go-lowering path encodes inferred types into the
   ;; rendered source, so typeinfer MUST run to fixpoint here — a wall-clock
   ;; budget would yield a partial, time-dependent result (non-deterministic
   ;; tree, and :bottom-heavy partials that drop forms → undefined: builds).
   ;; The monotone lattice has finite height, so unbounded execution always
   ;; terminates; it's just slower than the interactive/bytecode default.
-  (binding [*ns* (the-ns ns-name)
-            ir.passes.typeinfer/*typeinfer-budget-ms* nil]
-    (let [defn-forms (order-defn-forms defn-forms)
-          ;; Pass 1 discovers lowered single-arity vm.Value-uniform siblings
-          ;; (:override-eligible?) — the intra-ns calls slice 1 can lift.
-          pass1 (lower-defn-forms defn-forms)
-          sibling-registry (reduce (fn [m r]
-                                     (merge m (lower-go/registry-entry-from-result r ns-name pkg-name)))
-                                   {} pass1)
-          ;; Pass 2 re-lowers with the registry visible so intra-ns calls
-          ;; lower to direct Go calls. The cross-ns atom records trampoline-
-          ;; reaching load-var callees for memoized cached-*vm.Var resolution.
-          ;;
-          ;; Dangling-call hazard: a fn registered from pass 1 can take a
-          ;; different (registry-visible) path in pass 2 and BAIL (no :decl),
-          ;; yet its callers still emit a *direct* Go call to it — a reference
-          ;; to an undefined function. Whether this happens is nondeterministic
-          ;; (depends on per-pass typeinfer/gensym state), which is why a fresh
-          ;; `make check-generated` intermittently fails to compile the lowered
-          ;; tree. Fix: iterate to a fixpoint where the registry holds ONLY fns
-          ;; that actually emit a decl in that pass. reg' = reg ∩ emitted ⊆ reg,
-          ;; so the registry is monotonically shrinking and this terminates;
-          ;; worst case it empties and every intra-ns call falls back to the
-          ;; always-compilable trampoline. A fresh cross-ns atom is used per
-          ;; pass; the converged pass's atom is the one we keep.
-          emitted-registry (fn [res]
-                             (reduce (fn [m r]
-                                       (if (some? (:decl r))
-                                         (merge m (lower-go/registry-entry-from-result r ns-name pkg-name))
-                                         m))
-                                     {} res))
-          pass2 (let [cap (+ 2 (count sibling-registry))]
-                  (loop [reg sibling-registry guard 0]
-                    (let [cross (atom {})
-                          res (binding [lower-go/*lowered-registry* reg
-                                        lower-go/*cross-ns-vars-used* cross]
-                                (lower-defn-forms defn-forms))
-                          reg' (select-keys reg (keys (emitted-registry res)))]
-                      (if (or (= reg' reg) (>= guard cap))
-                        {:results res :cross cross}
-                        (recur reg' (inc guard))))))
-          cross-ns-vars (:cross pass2)
-          results (:results pass2)
-          ;; Filter out results with nil decls (failures that slipped through).
-          valid-results (filterv (fn [r] (some? (:decl r))) results)
-          ;; gogen_ir: append a __gogen_wrap helper + init() that
-          ;; registers Go-native overrides for the eligible lowered fns.
-          reg-entries (override-entries valid-results)
-          extra-decls (if (seq reg-entries)
-                        [{:decl (override-helper-decl)
-                          :imports override-decl-imports}
-                         {:decl (override-init-decl (str ns-name) reg-entries)
-                          :imports override-decl-imports}]
-                        [])
-          ;; Package-level cached *vm.Var decls + lazy accessors for the
-          ;; recorded cross-ns callees (deterministic, sorted by base name).
-          cached-var-decls (lower-go/cross-ns-var-decls @cross-ns-vars)
-          all-results (into (into valid-results extra-decls) cached-var-decls)
-          file-ast (lower-go/file pkg-name all-results)]
-      (gogen/render file-ast))))
+  (let [decl-form?  (fn [form]
+                      (and (seq? form)
+                           (contains? #{'defprotocol 'deftype} (first form))))
+        decl-forms  (filterv decl-form? forms)
+        defn-forms0 (filterv (fn [form] (not (decl-form? form))) forms)
+        ;; Capture each declaration form ({:decl-kind … :name … …}).
+        captures    (mapv (fn [form] (binding [*target* :go] (compile-form* form))) decl-forms)
+        protocols   (filterv (fn [c] (= :defprotocol (:decl-kind c))) captures)
+        deftypes    (filterv (fn [c] (= :deftype (:decl-kind c))) captures)
+        ;; Registries built from THIS namespace's captures, bound below so the
+        ;; namespace's own defns type ctor results as [:dtype T] (typeinfer),
+        ;; lower (->T …) to the native _T(…) constructor, and devirtualize
+        ;; protocol-method calls on a known-concrete receiver to recv.M().
+        protocol-method-set (into #{} (mapcat (fn [p] (map (fn [m] (str (first m))) (:methods p))) protocols))
+        ctor-types  (into {} (map (fn [dt] [(str "->" (:name dt)) (:name dt)]) deftypes))
+        ctors       (into {} (map (fn [dt] [(str "->" (:name dt)) (lower-go/go-export-name (:name dt))]) deftypes))
+        vm-import   {:path "github.com/nooga/let-go/pkg/vm" :alias "vm"}
+        rt-import   {:path "github.com/nooga/let-go/pkg/rt" :alias "rt"}]
+    (binding [*ns* (the-ns ns-name)
+              ir.passes.typeinfer/*typeinfer-budget-ms* nil
+              ir.passes.typeinfer/*deftype-ctor-types* (when (seq ctor-types) ctor-types)
+              lower-go/*deftype-ctors* (when (seq ctors) ctors)
+              lower-go/*protocol-methods* (when (seq protocol-method-set) protocol-method-set)]
+      (let [;; Native decls for captured protocols (interface) and deftypes
+            ;; (struct + constructor + receiver methods). The interface/struct
+            ;; reference vm.* (vm import); receiver method bodies also call rt.*
+            ;; arithmetic/dispatch helpers (rt import).
+            protocol-decls (mapv (fn [p]
+                                   {:decl (:decl (lower-go/lower-defprotocol p))
+                                    :imports [vm-import]})
+                                 protocols)
+            deftype-decls  (vec (mapcat
+                                  (fn [dt]
+                                    (let [s (lower-go/lower-deftype-struct dt)
+                                          m (lower-deftype-methods dt)]
+                                      (into (mapv (fn [d] {:decl d :imports [vm-import]}) (:decls s))
+                                            (mapv (fn [d] {:decl d :imports [vm-import rt-import]}) (:decls m)))))
+                                  deftypes))
+            type-decls (into protocol-decls deftype-decls)
+            defn-forms (order-defn-forms defn-forms0)
+            ;; Pass 1 discovers lowered single-arity vm.Value-uniform siblings
+            ;; (:override-eligible?) — the intra-ns calls slice 1 can lift.
+            pass1 (lower-defn-forms defn-forms)
+            sibling-registry (reduce (fn [m r]
+                                       (merge m (lower-go/registry-entry-from-result r ns-name pkg-name)))
+                                     {} pass1)
+            ;; Pass 2 re-lowers with the registry visible so intra-ns calls
+            ;; lower to direct Go calls. The cross-ns atom records trampoline-
+            ;; reaching load-var callees for memoized cached-*vm.Var resolution.
+            ;;
+            ;; Dangling-call hazard: a fn registered from pass 1 can take a
+            ;; different (registry-visible) path in pass 2 and BAIL (no :decl),
+            ;; yet its callers still emit a *direct* Go call to it — a reference
+            ;; to an undefined function. Whether this happens is nondeterministic
+            ;; (depends on per-pass typeinfer/gensym state), which is why a fresh
+            ;; `make check-generated` intermittently fails to compile the lowered
+            ;; tree. Fix: iterate to a fixpoint where the registry holds ONLY fns
+            ;; that actually emit a decl in that pass. reg' = reg ∩ emitted ⊆ reg,
+            ;; so the registry is monotonically shrinking and this terminates;
+            ;; worst case it empties and every intra-ns call falls back to the
+            ;; always-compilable trampoline. A fresh cross-ns atom is used per
+            ;; pass; the converged pass's atom is the one we keep.
+            emitted-registry (fn [res]
+                               (reduce (fn [m r]
+                                         (if (some? (:decl r))
+                                           (merge m (lower-go/registry-entry-from-result r ns-name pkg-name))
+                                           m))
+                                       {} res))
+            pass2 (let [cap (+ 2 (count sibling-registry))]
+                    (loop [reg sibling-registry guard 0]
+                      (let [cross (atom {})
+                            res (binding [lower-go/*lowered-registry* reg
+                                          lower-go/*cross-ns-vars-used* cross]
+                                  (lower-defn-forms defn-forms))
+                            reg' (select-keys reg (keys (emitted-registry res)))]
+                        (if (or (= reg' reg) (>= guard cap))
+                          {:results res :cross cross}
+                          (recur reg' (inc guard))))))
+            cross-ns-vars (:cross pass2)
+            results (:results pass2)
+            ;; Filter out results with nil decls (failures that slipped through).
+            valid-results (filterv (fn [r] (some? (:decl r))) results)
+            ;; gogen_ir: append a __gogen_wrap helper + init() that
+            ;; registers Go-native overrides for the eligible lowered fns.
+            reg-entries (override-entries valid-results)
+            extra-decls (if (seq reg-entries)
+                          [{:decl (override-helper-decl)
+                            :imports override-decl-imports}
+                           {:decl (override-init-decl (str ns-name) reg-entries)
+                            :imports override-decl-imports}]
+                          [])
+            ;; Package-level cached *vm.Var decls + lazy accessors for the
+            ;; recorded cross-ns callees (deterministic, sorted by base name).
+            cached-var-decls (lower-go/cross-ns-var-decls @cross-ns-vars)
+            ;; Native type/struct/method decls lead the file; Go resolves
+            ;; package-scope references regardless of declaration order.
+            all-results (into (into (into type-decls valid-results) extra-decls) cached-var-decls)
+            file-ast (lower-go/file pkg-name all-results)]
+        (gogen/render file-ast)))))

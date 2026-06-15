@@ -1171,10 +1171,22 @@
     (= result-type "float64") (gogen/call (gogen/field-sel (gogen/ident "vm") "Float")   [result-expr])
     :else nil))
 
+;; Set to an atom per-fn by lower-body; the call lowerings that emit a `callErr`
+;; reference flip it true, so lower-body declares `var callErr error` ONLY when
+;; the body actually uses it. (function-needs-error? still drives the fn's error
+;; RESULT/return shape — a fn can return (vm.Value, error) yet reference no
+;; callErr, e.g. when its only call lowers to an error-free constructor,
+;; devirtualized method, or single-return lowered sibling.)
+(def ^:dynamic *call-err-used* nil)
+
+(defn- mark-call-err-used! []
+  (when *call-err-used* (reset! *call-err-used* true)))
+
 (defn- emit-call-stmts [f assign-target invoke-expr]
   "Build the [assign err-check] statement pair shared by both call paths.
    assign-target is either a gogen ident (used? case) or '_'; invoke-expr
    is the right-hand side that produces (result, error) at runtime."
+  (mark-call-err-used!)
   (let [err-id     (gogen/ident "callErr")
         assign     (gogen/multi-assign "=" [assign-target err-id] [invoke-expr])
         zero-expr  (case (function-return-spec f)
@@ -1227,7 +1239,8 @@
           ;; Typed result + error: result, err := <call>; if err return; target = vm.<Box>(result)
           (and (:needs-error? entry)
                (not= result-spec "vm.Value"))
-          (let [res-id (gogen/ident "result")
+          (let [_      (mark-call-err-used!)
+                res-id (gogen/ident "result")
                 err-id (gogen/ident "callErr")
                 assign (gogen/multi-assign "=" [res-id err-id] [raw-call])
                 zero-expr (case (function-return-spec f)
@@ -1298,9 +1311,15 @@
               (when sname
                 (let [arg-exprs (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))]
                   (when (every? identity arg-exprs)
-                    (let [target (if (live? f nid) (value-ident f nid) (gogen/ident "_"))
-                          ccall  (gogen/call (gogen/ident (str "_" sname)) arg-exprs)]
-                      [(gogen/assign "=" target ccall)])))))))))))
+                    ;; A deftype constructor is pure (struct allocation, no side
+                    ;; effects), so a dead result needs NO statement — dropping
+                    ;; it elides the `_ = _T(args)` wart left when a dead
+                    ;; duplicate ctor node survives (CSE never merges :call
+                    ;; nodes; DCE keeps them, assuming calls may be effectful).
+                    (if (live? f nid)
+                      [(gogen/assign "=" (value-ident f nid)
+                                     (gogen/call (gogen/ident (str "_" sname)) arg-exprs))]
+                      [])))))))))))
 
 ;; Protocol-method registry: a set of method names (let-go names, e.g.
 ;; #{"area"}) bound during the :go pass. A call (area recv) whose receiver is a
@@ -1561,11 +1580,33 @@
     (when (and inst-stmts term-stmts)
       (vec (concat label-stmts inst-stmts term-stmts)))))
 
+(defn- call-error-free? [nid f]
+  "True when a :call node lowers to an error-free Go call: a deftype
+   constructor (callee in *deftype-ctors*) or a devirtualized protocol-method
+   call on a known-concrete [:dtype T] receiver (callee in *protocol-methods*).
+   These emit _T(args) / recv.M(args) — neither returns an error — so they must
+   NOT force the enclosing fn to declare `callErr` or carry an error result.
+   Mirrors ctor-call-stmts / devirtual-call-stmts so needs-error? agrees with
+   what call lowering actually emits. Registries unbound => always false (the
+   pre-existing behavior: every :call is treated as error-producing)."
+  (let [refs (ir/refs nid f)]
+    (and (seq refs)
+         (= :load-var (ir/op (first refs) f))
+         (let [vname (name (symbol (ir/aux (first refs) f)))]
+           (or (and *deftype-ctors* (contains? *deftype-ctors* vname))
+               (and *protocol-methods*
+                    (contains? *protocol-methods* vname)
+                    (>= (count refs) 2)
+                    (let [rtype (ir/type-of (nth refs 1) f)]
+                      (and (vector? rtype) (= (first rtype) :dtype)))))))))
+
 (defn- function-needs-error? [f]
   (loop [blocks (ir/blocks f)]
     (cond
       (empty? blocks) false
-      (some (fn [nid] (let [op (ir/op nid f)] (or (= :call op) (= :try op))))
+      (some (fn [nid] (let [op (ir/op nid f)]
+                        (or (= :try op)
+                            (and (= :call op) (not (call-error-free? nid f))))))
             (ir/block-insts (first blocks) f)) true
       :else (recur (rest blocks)))))
 
@@ -2086,44 +2127,53 @@
    (swap! f assoc :live (live-nids f))
    ;; Single-use computed edge-args to inline (needs :live + uses cache above).
    (swap! f assoc :inline-args (compute-inline-args f))
-   (let [needs-error? (function-needs-error? f)
-         needs-tail-call? (function-needs-tail-call? f)
-         decls0 (local-decls f)
-         decls1 (if needs-error?
-                  (conj decls0 (gogen/var-decl "callErr" (gogen/type "error") nil))
-                  decls0)
-         [arg-decls arg-inits] (if needs-tail-call?
-                                 (arg-local-decls f)
-                                 [[] []])
-         decls  (into decls1 arg-decls)
-         entry-label [(gogen/label-stmt "func_entry" nil)]]
-     (when decls
-       (let [base (if needs-tail-call?
-                    (vec (concat decls arg-inits entry-label))
-                    decls)
-             ;; Structured path: build.lg emits reducible CFGs, so try to
-             ;; recover a control tree and emit if/for/break/continue. Fall
-             ;; back to the goto+label emitter when structurize reports any
-             ;; fallback or the tree-walk cannot lower a block.
-             st-result (st/structurize f)
-             structured-body (when (zero? (:fallbacks st-result))
-                               (lower-tree f closed-exprs (:tree st-result)))]
-         (if structured-body
-           (into base structured-body)
-           ;; Fallback: per-block goto emitter.
-           (loop [blocks (ir/blocks f)
-                  out    base]
-             (if (empty? blocks)
-               out
-               (let [bid (first blocks)]
-                 ;; Skip dead/unterminated blocks — build can leave them and
-                 ;; lower-terminator would call (ir/op nil f), failing.
-                 (if (nil? (ir/block-term bid f))
-                   (recur (rest blocks) out)
-                   (let [stmts (lower-block-stmts f closed-exprs bid)]
-                     (if (nil? stmts)
-                       nil
-                       (recur (rest blocks) (into out stmts))))))))))))))
+   (binding [*call-err-used* (atom false)]
+     (let [needs-error?     (function-needs-error? f)
+           needs-tail-call? (function-needs-tail-call? f)
+           ;; Build the body FIRST (inside the *call-err-used* binding) so we
+           ;; know whether it actually references callErr before deciding to
+           ;; declare it. Structured path: build.lg emits reducible CFGs, so try
+           ;; to recover a control tree and emit if/for/break/continue; fall back
+           ;; to the goto+label emitter when structurize reports any fallback or
+           ;; the tree-walk cannot lower a block. A nil body => a block failed to
+           ;; lower => the whole fn bails (caller falls back to bytecode).
+           st-result        (st/structurize f)
+           structured-body  (when (zero? (:fallbacks st-result))
+                              (lower-tree f closed-exprs (:tree st-result)))
+           body-stmts       (if structured-body
+                              structured-body
+                              (loop [blocks (ir/blocks f) out []]
+                                (if (empty? blocks)
+                                  out
+                                  (let [bid (first blocks)]
+                                    ;; Skip dead/unterminated blocks — build can
+                                    ;; leave them; lower-terminator would call
+                                    ;; (ir/op nil f) and fail.
+                                    (if (nil? (ir/block-term bid f))
+                                      (recur (rest blocks) out)
+                                      (let [stmts (lower-block-stmts f closed-exprs bid)]
+                                        (if (nil? stmts)
+                                          nil
+                                          (recur (rest blocks) (into out stmts)))))))))]
+       (when body-stmts
+         (let [decls0 (local-decls f)
+               ;; Declare `var callErr error` ONLY when a call lowering in the
+               ;; body actually emitted a callErr reference — otherwise it is an
+               ;; unused-variable compile error (e.g. a fn that returns
+               ;; (vm.Value, error) but whose only call is an error-free
+               ;; constructor / devirtualized method / single-return sibling).
+               decls1 (if (and needs-error? @*call-err-used*)
+                        (conj decls0 (gogen/var-decl "callErr" (gogen/type "error") nil))
+                        decls0)
+               [arg-decls arg-inits] (if needs-tail-call?
+                                       (arg-local-decls f)
+                                       [[] []])
+               decls  (into decls1 arg-decls)
+               entry-label [(gogen/label-stmt "func_entry" nil)]
+               base (if needs-tail-call?
+                      (vec (concat decls arg-inits entry-label))
+                      decls)]
+           (into base body-stmts)))))))
 (defn- params-for [f]
   (let [arity       (ir/fn-arity f)
         variadic?   (ir/fn-variadic? f)

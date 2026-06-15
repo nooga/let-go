@@ -1,0 +1,164 @@
+;; scripts/gogen-trampoline.lg — compile .lg fixtures to native Go, then re-run
+;; their (run) entry THROUGH the generated code and assert parity with the
+;; bytecode VM. A generalized native-lowering suite, in the os/sh + os/exec*
+;; style of scripts/generate.lg (and reusing its flag / die / trim-tail idioms).
+;;
+;; "Rerun the code with the generated code": each fixture's defprotocol/deftype/
+;; defn forms are lowered (ir.passes.pipeline/lower-ns-to-go) to a Go package;
+;; that package is blank-imported under a build tag so its init() registers the
+;; Go-native overrides; the fixture is then `require`d as a library namespace —
+;; which makes the resolver DRAIN those overrides, clobbering the bytecode vars
+;; with the lowered NativeFns. (run) then dispatches to the generated code. This
+;; reuses the production override path (pkg/rt/gogen_override.go + resolver), so
+;; it exercises real runtime dispatch — not a hand-written in-package call. The
+;; override registry is compiled unconditionally; the tag only controls which
+;; lowered package is imported, so the tagged binary stays lightweight (core
+;; itself runs on bytecode — only the fixture is native).
+;;
+;; Fixture contract: each ns defines a 0-arg `run` returning a printable,
+;; deterministic value, free of top-level side effects (so `require` is clean).
+;;
+;; Usage:
+;;   ./lg scripts/gogen-trampoline.lg                 # all of test/gogen/*.lg
+;;   ./lg scripts/gogen-trampoline.lg FILE.lg [...]   # specific fixtures
+;;   flags: --go <path> (default "go")  --lg <path> (default "./lg")
+
+(require 'ir.passes.pipeline)
+(require 'string)
+
+;; --- CLI (same flag idiom as scripts/generate.lg) ---
+(defn flag [argv name default]
+  (loop [xs argv]
+    (cond
+      (empty? xs)         default
+      (= (first xs) name) (second xs)
+      :else               (recur (rest xs)))))
+
+(def argv     *command-line-args*)
+(def go-bin   (flag argv "--go" "go"))
+(def lg-bin   (flag argv "--lg" "./lg"))
+(def fixtures
+  (let [given (filter (fn [a] (re-find #"\.lg$" (str a))) argv)]
+    (if (seq given)
+      (vec given)
+      ;; default suite: every fixture under test/gogen
+      (let [r (os/sh "sh" "-c" "ls test/gogen/*.lg 2>/dev/null")]
+        (vec (filter (fn [s] (> (count s) 0))
+                     (string/split (str (:out r)) #"\n")))))))
+
+(defn die [msg] (println "gogen-trampoline ERROR:" msg) (os/exit 2))
+(defn trim-tail [s] (or (re-find #"[\s\S]*\S" s) s))
+
+;; Capture a command; die (with its output) on nonzero exit. Returns stdout.
+(defn sh! [& cmd]
+  (let [r (apply os/sh cmd)]
+    (when (not= 0 (:exit r))
+      (println (:err r)) (println (:out r))
+      (die (str "command failed: " (first cmd))))
+    (:out r)))
+
+;; --- lowering (absorbed from the one-off harness) ---
+(defn- lowerable? [form]
+  (and (seq? form)
+       (symbol? (first form))
+       (let [h (str (first form))]
+         (or (= h "defn") (= h "defn-") (= h "deftype") (= h "defprotocol")))))
+
+(defn- ns-form? [form] (and (seq? form) (= 'ns (first form))))
+
+(defn- nsname->pkg [ns-name]
+  (string/replace (string/replace (str ns-name) "." "_") "-" "_"))
+
+;; The lowered Go package name for a fixture, read independently of lowering so
+;; cleanup can remove it even when lowering/building threw.
+(defn fixture-pkg [fixture]
+  (let [forms (read-string (str "[" (slurp fixture) "]"))
+        nsd   (first (filter ns-form? forms))]
+    (when nsd (nsname->pkg (second nsd)))))
+
+;; Lower one fixture FILE into <out-dir>/<pkg>/<pkg>.go and return {:ns :pkg}.
+;; Establishes lower-ns-to-go's precondition by evaluating the whole fixture
+;; first (so build-fn can resolve the fixture's own ->T / protocol / sibling
+;; names) — the native Go is emitted separately from the captured forms.
+(defn lower-fixture! [fixture out-dir]
+  (let [forms   (read-string (str "[" (slurp fixture) "]"))
+        ns-decl (first (filter ns-form? forms))
+        ns-name (when ns-decl (second ns-decl))]
+    (when (nil? ns-name) (die (str "no (ns ...) form in " fixture)))
+    (doseq [form forms] (eval form))
+    (let [pkg     (nsname->pkg ns-name)
+          go-src  (ir.passes.pipeline/lower-ns-to-go pkg ns-name (vec (filter lowerable? forms)))
+          pkg-dir (str out-dir "/" pkg)]
+      (mkdir pkg-dir)
+      (spit (str pkg-dir "/" pkg ".go") go-src)
+      {:ns ns-name :pkg pkg})))
+
+;; Run the (run) entry under a binary, requiring the fixture from src-root.
+;; Returns {:result <str> :native <bool>} — :native reflects whether the entry
+;; var is a NativeFn (the lowered override) rather than a bytecode fn, so a
+;; tagged run that silently fell back to bytecode is caught.
+(defn drive [bin src-root ns-name driver]
+  (let [out (sh! bin "-source-paths" src-root driver)
+        rs  (string/split (str out) #"\n")
+        line (fn [tag] (some (fn [l] (when (re-find (re-pattern (str "^" tag " ")) l)
+                                       (trim-tail (subs l (inc (count tag)))))) rs))]
+    {:result (line "RESULT")
+     :native (boolean (re-find #"native-fn" (str (line "FNREPR"))))}))
+
+;; --- per-fixture trampoline ---
+(def WIREUP "zz_lg_trampoline_gen.go")        ; //go:build lg_trampoline (gitignored)
+(def work   (trim-tail (str (:out (os/sh "mktemp" "-d")))))
+
+(defn cleanup [pkg]
+  (os/sh "rm" "-f" WIREUP)
+  (when pkg (os/sh "rm" "-rf" (str "pkg/rt/core_go_lowered/" pkg)))
+  (os/sh "rm" "-rf" work))
+
+(defn trampoline-one [fixture]
+  (let [{:keys [ns pkg]} (lower-fixture! fixture "pkg/rt/core_go_lowered")
+        ;; stage the fixture on a source path matching its ns so `require` finds it
+        rel      (string/replace (string/replace (str ns) "." "/") "-" "_")
+        src-root (str work "/src-" pkg)
+        driver   (str work "/driver-" pkg ".lg")]
+    (os/sh "mkdir" "-p" (str src-root "/" (or (re-find #"^.*/" rel) "")))
+    (spit (str src-root "/" rel ".lg") (slurp fixture))
+    (spit driver (str "(require '" ns ")\n"
+                      "(println \"RESULT\" (" ns "/run))\n"
+                      "(println \"FNREPR\" (str " ns "/run))\n"))
+    ;; wire ONLY this package in under the lg_trampoline tag; build a tagged binary
+    (spit WIREUP (str "//go:build lg_trampoline\n\n"
+                      "package main\n\n"
+                      "import _ \"github.com/nooga/let-go/pkg/rt/core_go_lowered/" pkg "\"\n"))
+    (let [tagged (str work "/lg-" pkg)
+          br (os/sh go-bin "build" "-tags" "lg_trampoline" "-o" tagged ".")]
+      (os/sh "rm" "-f" WIREUP)
+      (when (not= 0 (:exit br))
+        (println (:err br))
+        (die (str fixture ": tagged build failed")))
+      (let [bc  (drive lg-bin src-root ns driver)
+            nat (drive tagged src-root ns driver)
+            ok  (and (= (:result bc) (:result nat)) (:native nat))]
+        (println (str "  " ns
+                      "  bytecode=" (:result bc)
+                      " native=" (:result nat)
+                      (if (:native nat) " (native-dispatch ok)" " [NOT NATIVE]")))
+        {:ns ns :pkg pkg :ok ok}))))
+
+;; --- run ---
+(when (empty? fixtures) (die "no fixtures (test/gogen/*.lg)"))
+(println "gogen-trampoline: go =" go-bin "| lg =" lg-bin "| fixtures =" (count fixtures))
+
+(let [results (mapv (fn [fixture]
+                      ;; pkg is read up front so cleanup removes the lowered
+                      ;; package even when lowering or the tagged build throws.
+                      (let [pkg (try (fixture-pkg fixture) (catch _ nil))
+                            r   (try (trampoline-one fixture)
+                                     (catch e (println (str "  " fixture " ERROR: " e)) {:ok false}))]
+                        (cleanup pkg)
+                        r))
+                    fixtures)]
+  (if (every? :ok results)
+    (do (println (str "gogen-trampoline: OK (" (count results)
+                      " fixture(s) — native (run) == bytecode (run))"))
+        (os/exit 0))
+    (do (println "gogen-trampoline: FAIL") (os/exit 1))))

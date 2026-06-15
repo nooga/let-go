@@ -18,7 +18,11 @@
 ;;       Return v4
 
 (ns ir.dump
-  (:require [string :as str]))
+  ;; ir.data interns the `ir/*` accessors into the native `ir` ns; require it so
+  ;; load order is forced rather than incidental (see ir.lower for the why).
+  (:require
+   [ir.data]
+   [string :as str]))
 
 (def terminator-ops #{:tail-call :return :branch :branch-if})
 
@@ -60,22 +64,22 @@
   "Render an IR type for diagnostics. Unions print in a stable pretty form."
   (cond
     (keyword? t)
-      (scalar-type-display t)
+    (scalar-type-display t)
     (and (vector? t) (= :union (first t)))
-      (str "union{"
-           (str/join ","
-                     (map type-display
-                          (sort-by (fn [member]
-                                     (get type-order member 100))
-                                   (rest t))))
-           "}")
+    (str "union{"
+         (str/join ","
+                   (map type-display
+                        (sort-by (fn [member]
+                                   (get type-order member 100))
+                                 (rest t))))
+         "}")
     (and (vector? t) (= :const (first t)))
-      (let [tag (nth t 1)
-            v   (nth t 2)]
-        (case tag
-          :int   (str "int(" v ")")
-          :float (str "float(" v ")")
-          "??"))
+    (let [tag (nth t 1)
+          v   (nth t 2)]
+      (case tag
+        :int   (str "int(" v ")")
+        :float (str "float(" v ")")
+        "??"))
     :else "??"))
 
 (defn- format-args [args]
@@ -88,10 +92,10 @@
 (defn- terminator-targets-str [op aux]
   (cond
     (= op :branch)
-      (str " -> " (format-target aux))
+    (str " -> " (format-target aux))
     (= op :branch-if)
-      (str " -> " (format-target (ir/cond-target-true aux))
-           " : "  (format-target (ir/cond-target-false aux)))
+    (str " -> " (format-target (ir/cond-target-true aux))
+         " : "  (format-target (ir/cond-target-false aux)))
     :else ""))
 
 (defn- format-refs [refs]
