@@ -1,0 +1,15 @@
+;; Walking skeleton: one protocol + one deftype + one method, exercised end
+;; to end. Proves the source semantics ((area (->Square 3)) = 9) under the
+;; bytecode VM. The native (gogen_ir) lowering of these same forms is covered
+;; by deftype_capture_test.lg (capture / interface / struct+ctor / member
+;; access / receiver method / devirtualized dispatch).
+(ns test.deftype-native-skeleton
+  (:require
+   [test :refer :all]))
+
+(defprotocol Shape (area [this]))
+(deftype Square [side] Shape (area [this] (* side side)))
+
+(deftest square-area
+  (testing "(area (->Square 3)) = 9"
+    (is (= 9 (area (->Square 3))))))

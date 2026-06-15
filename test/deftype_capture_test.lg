@@ -30,6 +30,27 @@
       (is (clojure.string/includes? src "type Shape interface"))
       (is (clojure.string/includes? src "Area() vm.Value")))))
 
+;; Real protocol + deftype so ->Sq8 / area8 resolve at build time.
+(defprotocol Shape8 (area8 [this]))
+(deftype Sq8 [side] Shape8 (area8 [this] (* side side)))
+
+(deftest devirtualizes-protocol-dispatch-on-dtype-receiver
+  (testing "(method (->Ctor ..)) lowers to native constructor + devirtualized method call"
+    (binding [ir.passes.pipeline/*target* :go
+              ir.passes.typeinfer/*deftype-ctor-types* {"->Sq8" 'Sq8}
+              ir.lower-go/*deftype-ctors* {"->Sq8" "Sq8"}
+              ir.lower-go/*protocol-methods* #{"area8"}]
+      (let [result (ir.passes.pipeline/compile-form
+                     '(defn -area8-call [] (area8 (->Sq8 3))))
+            src (g/render (:decl result))]
+        (is (= :lowered (:status result)))
+        ;; (->Sq8 3) -> native constructor call returning *Sq8
+        (is (clojure.string/includes? src "_Sq8("))
+        ;; (area8 recv) -> devirtualized direct method call on the receiver
+        (is (clojure.string/includes? src ".Area8()"))
+        ;; NOT the boxed dynamic-dispatch path
+        (is (not (clojure.string/includes? src "InvokeValue")))))))
+
 (deftest lowers-member-access-to-field-selector
   (testing "(. obj field) lowers to a native Go struct field selector"
     (binding [ir.passes.pipeline/*target* :go]
@@ -60,5 +81,5 @@
       (is (clojure.string/includes? src "type Square struct"))
       (is (clojure.string/includes? src "vm.RecordBase"))
       (is (clojure.string/includes? src "side vm.Value"))
-      (is (clojure.string/includes? src "func _Square(side vm.Value) vm.Value"))
+      (is (clojure.string/includes? src "func _Square(side vm.Value) *Square"))
       (is (clojure.string/includes? src "RecordBase: vm.RecordBase{TypeName: \"Square\"}")))))
