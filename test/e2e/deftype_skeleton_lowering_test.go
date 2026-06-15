@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package e2e
 
 import (
 	"os/exec"
@@ -25,16 +25,19 @@ import (
 //
 // This is the committed, `go test ./...`-discovered gate for the feature; the
 // trampoline script is the reusable, fixture-agnostic suite it delegates to.
-// (buildLG is defined in scope_e2e_test.go, same package.)
+// (buildLG / repoRoot are defined in helpers_test.go, same package.)
 func TestDeftypeSkeletonNativeLowering(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping native-lowering trampoline (builds go subprocesses) in -short mode")
 	}
 
 	// The trampoline is itself an lg script: run it on a freshly-built lg, and
-	// pass that same lg as the bytecode-side binary it compares against.
+	// pass that same lg as the bytecode-side binary it compares against. It reads
+	// scripts/ and test/gogen/ by repo-relative path, so run from the repo root.
 	lg := buildLG(t)
-	out, err := exec.Command(lg, "scripts/gogen-trampoline.lg", "--lg", lg).CombinedOutput()
+	cmd := exec.Command(lg, "scripts/gogen-trampoline.lg", "--lg", lg)
+	cmd.Dir = repoRoot(t)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("gogen-trampoline.lg failed: %v\n%s", err, out)
 	}

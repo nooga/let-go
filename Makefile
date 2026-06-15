@@ -105,7 +105,7 @@ $(LG): $(GO) lg.go pkg/**/* pkg/rt/core_compiled.lgb
 	go build -ldflags="-s -w -X main.commit=$(COMMIT)" -o $@ .
 
 test: pkg/**/* pkg/rt/core_compiled.lgb $(GO)
-	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -count=1 -v ./test
+	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -count=1 -v ./test/...
 
 clojure-compat-report: $(GO)
 	@$(REPORT-SCRIPT)

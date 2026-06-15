@@ -4,12 +4,13 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package e2e
 
 import (
 	"bytes"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -74,7 +75,9 @@ func goldPath(script string) string {
 // that gold file from real Clojure (which must then be on PATH).
 func checkGold(t *testing.T, script string) {
 	t.Helper()
-	gold := goldPath(script)
+	// Gold .out files live under the repo's test/gold; resolve against the repo
+	// root since the test's cwd is this package's dir, not the root.
+	gold := filepath.Join(repoRoot(t), goldPath(script))
 
 	if os.Getenv(rederiveGoldEnv) == "1" {
 		clj, err := exec.LookPath("clojure")
@@ -109,6 +112,8 @@ func checkGold(t *testing.T, script string) {
 func stdoutOf(t *testing.T, name string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(name, args...)
+	// Script args (test/gold/*.cljc) are repo-relative; run from the repo root.
+	cmd.Dir = repoRoot(t)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb

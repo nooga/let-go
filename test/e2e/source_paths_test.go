@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package e2e
 
 import (
 	"os"
@@ -21,7 +21,7 @@ import (
 //
 // Note: `lg -e` exits 0 even when a require fails, so these subtests assert on
 // output content (sentinel tokens / the load-failure message), not exit code.
-// (buildLG is defined in scope_e2e_test.go, same package.)
+// (buildLG is defined in helpers_test.go, same package.)
 func TestSourcePathsControlSearchPath(t *testing.T) {
 	bin := buildLG(t)
 

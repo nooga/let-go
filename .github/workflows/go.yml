@@ -22,6 +22,17 @@ jobs:
       - name: Run golangci-lint
         run: golangci-lint run --timeout=5m
 
+  # Enforce the "no test files at the repo root" guard. The pre-commit hook of
+  # the same name is the local equivalent, but jj does not run git hooks, so CI
+  # is the real gate.
+  test-location:
+    name: test-location
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No test files at repo root
+        run: python3 scripts/check_test_location.py
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -44,7 +55,7 @@ jobs:
       - name: Build
         run: go build -v ./...
 
-      # The gold differential tests (gold_dynvar_e2e_test.go) are clojure-free by
+      # The gold differential tests (test/e2e/gold_dynvar_test.go) are clojure-free by
       # default: they run each script under let-go and compare to the committed
       # test/gold/*.out goldens. Re-deriving those goldens from a LIVE Clojure is
       # done in the dedicated `gold-differential` job (no JVM dependency here).
@@ -108,9 +119,9 @@ jobs:
       - name: Re-derive goldens from Clojure and fail on drift
         if: steps.cljcache.outputs.cache-hit != 'true' || github.event_name == 'workflow_dispatch'
         run: |
-          LETGO_GOLD_REDERIVE=1 go test -run '^TestGold' -count=1 -v -timeout 120s .
+          LETGO_GOLD_REDERIVE=1 go test -run '^TestGold' -count=1 -v -timeout 120s ./test/e2e/
           if ! git diff --quiet -- test/gold; then
-            echo "::error::Committed test/gold/*.out drifted under Clojure ${{ steps.clj.outputs.version }}. Run 'LETGO_GOLD_REDERIVE=1 go test -run ^TestGold .' locally and commit the refreshed goldens."
+            echo "::error::Committed test/gold/*.out drifted under Clojure ${{ steps.clj.outputs.version }}. Run 'LETGO_GOLD_REDERIVE=1 go test -run ^TestGold ./test/e2e/' locally and commit the refreshed goldens."
             git --no-pager diff -- test/gold
             exit 1
           fi

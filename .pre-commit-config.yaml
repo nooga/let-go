@@ -57,6 +57,18 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      # Guard: no test files at the repo root. Test files belong next to the
+      # package they test (pkg/<x>/, test/, test/e2e/). Stdlib-only Python,
+      # scans the root regardless of which files staged. Mirrors the CI job.
+      - id: check-test-location
+        name: no test files at repo root
+        description: Reject *_test.go / *_test.lg added at the repository root
+        entry: python3 scripts/check_test_location.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
       # Frontmatter maintenance for docs/**/*.md: stub on missing,
       # bump `last-verified:` on staged docs. Never touches
       # `human-verified:` or any human-authored field. Stdlib-only

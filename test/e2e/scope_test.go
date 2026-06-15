@@ -4,26 +4,14 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package e2e
 
 import (
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
-
-// buildLG builds the lg binary once into a temp dir and returns its path.
-func buildLG(t *testing.T) string {
-	t.Helper()
-	bin := filepath.Join(t.TempDir(), "lg")
-	out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
-	if err != nil {
-		t.Fatalf("build lg: %v\n%s", err, out)
-	}
-	return bin
-}
 
 // TestWithScopeTeardownReleasesParkedTake: a go-block parked on (<! ch) inside
 // with-scope is released when the block exits (scope cancel), runs to its end,
