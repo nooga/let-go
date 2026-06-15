@@ -5,8 +5,6 @@
 
 package vm
 
-import "unicode/utf16"
-
 const (
 	fnvOffset32 = uint32(2166136261)
 	fnvPrime32  = uint32(16777619)
@@ -56,49 +54,28 @@ func hashString(s string) uint32 {
 	return h
 }
 
+// hashUnencodedChars computes a Murmur3-derived 32-bit hash over the string's
+// UTF-8 bytes, two bytes per mix word. It deliberately does NOT decode to runes
+// or re-encode to UTF-16: the previous code did that purely for Java/Clojure
+// hash parity, but this hash is used only for internal map/set bucketing
+// (consistency, not specific values), and no normalization or case-folding is
+// involved — so the raw byte sequence suffices. For ASCII input (every keyword
+// and identifier — the hot path during lowering) the result is identical to the
+// old UTF-16-code-unit hash; for non-ASCII the value differs but stays
+// consistent (equal strings hash equal). Single pass, no allocation, no
+// interface dispatch.
 func hashUnencodedChars(s string) uint32 {
-	ascii := true
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 {
-			ascii = false
-			break
-		}
-	}
-	if ascii {
-		return hashUTF16CodeUnits(uint16FromBytes(s))
-	}
-	return hashUTF16CodeUnits(uint16Slice(utf16.Encode([]rune(s))))
-}
-
-type uint16FromBytes string
-
-func (s uint16FromBytes) Len() int            { return len(s) }
-func (s uint16FromBytes) At(i int) uint32     { return uint32(s[i]) }
-func (s uint16FromBytes) LengthBytes() uint32 { return uint32(2 * len(s)) }
-
-type uint16Slice []uint16
-
-func (s uint16Slice) Len() int            { return len(s) }
-func (s uint16Slice) At(i int) uint32     { return uint32(s[i]) }
-func (s uint16Slice) LengthBytes() uint32 { return uint32(2 * len(s)) }
-
-type utf16CodeUnits interface {
-	Len() int
-	At(int) uint32
-	LengthBytes() uint32
-}
-
-func hashUTF16CodeUnits(s utf16CodeUnits) uint32 {
 	var h uint32
+	n := len(s)
 	i := 1
-	for ; i < s.Len(); i += 2 {
-		k := s.At(i-1) | s.At(i)<<16
+	for ; i < n; i += 2 {
+		k := uint32(s[i-1]) | uint32(s[i])<<16
 		h = mixH1(h, mixK1(k))
 	}
-	if i == s.Len() {
-		h ^= mixK1(s.At(i - 1))
+	if i == n {
+		h ^= mixK1(uint32(s[i-1]))
 	}
-	return mixFinishLen(h, s.LengthBytes())
+	return mixFinishLen(h, uint32(2*n))
 }
 
 func mixK1(k uint32) uint32 {
@@ -177,11 +154,23 @@ func valueEquiv(a, b Value) bool {
 	if IsNumber(a) && IsNumber(b) {
 		return NumEq(a, b)
 	}
-	// Fast negative: if both are Hashable and hashes differ, not equal
-	ha, aOk := a.(Hashable)
-	hb, bOk := b.(Hashable)
-	if aOk && bOk {
-		if ha.Hash() != hb.Hash() {
+	// Fast negative via hash — ONLY when neither operand is a collection.
+	// Collections (anything Sequable: vectors/lists/maps/sets) have O(size)
+	// Hash(), exactly as costly as the structural Equals it would avoid — and
+	// Equals short-circuits on length and then the first differing element,
+	// whereas the hash is always a full pass with no short-circuit. valueEquiv
+	// is also reached during map/set lookup only AFTER the hash trie matched, so
+	// the operands' hashes usually agree, making the check pure overhead (it
+	// dominated PersistentVector.Hash in lowering profiles). Boxed (not
+	// Sequable, and has no Equals) keeps the check — its cached hash is its only
+	// fast discriminator. Correctness is unaffected: this is only a negative
+	// shortcut; equal values still hash equal and fall through to Equals.
+	_, aSeqable := a.(Sequable)
+	_, bSeqable := b.(Sequable)
+	if !aSeqable && !bSeqable {
+		ha, aOk := a.(Hashable)
+		hb, bOk := b.(Hashable)
+		if aOk && bOk && ha.Hash() != hb.Hash() {
 			return false
 		}
 	}
