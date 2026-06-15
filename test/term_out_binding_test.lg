@@ -58,8 +58,35 @@
 ;; ----------------------------------------------------------------
 
 (deftest term-respects-out-rebind
-  (testing "(binding [*out* *err*] (term/clear)) does NOT hit the outer *out*"
-    (let [outer (with-out-str
-                  (binding [*out* *err*]
+  (testing "(binding [*out* file] (term/clear)) routes to the rebound handle, not the outer *out*"
+    ;; Rebind to a temp file rather than *err*: *err* is a real terminal, so
+    ;; the ESC[2J would clear/pollute the terminal or CI log during the run.
+    ;; The file lets us assert both halves — the outer *out* captured nothing,
+    ;; and the rebound handle received the escape.
+    (let [path "/tmp/letgo-term-out-rebind-test.txt"
+          f (open path :write)
+          outer (with-out-str
+                  (binding [*out* f]
                     (term/clear)))]
-      (is (= "" outer)))))
+      (close! f)
+      (is (= "" outer))
+      (is (= "\u001b[2J" (slurp path))))))
+
+;; ----------------------------------------------------------------
+;; term/flush syncs the ACTIVE *out* binding, not the process stdout —
+;; so a redirected render flushes the same sink that received the bytes.
+;; A file handle is unbuffered, so this pins that flush resolves *out*
+;; and targets it without error; it can't catch a byte-level missed
+;; flush. The buffered-writer case (where the flush is load-bearing) is
+;; an embedder concern, and the wasm xterm flush runs every render frame.
+;; ----------------------------------------------------------------
+
+(deftest flush-targets-out-binding
+  (testing "(binding [*out* file] (term/write ...) (term/flush)) lands in the rebound handle"
+    (let [path "/tmp/letgo-term-flush-test.txt"
+          f (open path :write)]
+      (binding [*out* f]
+        (term/write "frame")
+        (term/flush))
+      (close! f)
+      (is (= "frame" (slurp path))))))

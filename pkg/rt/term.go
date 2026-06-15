@@ -536,10 +536,16 @@ func installTermNS() {
 	})
 	ns.Def("main-screen", mainScreen)
 
-	// flush — flush stdout
-	flushFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		os.Stdout.Sync()
-		return vm.NIL, nil
+	// flush — sync the active *out* binding so flush hits the same sink the
+	// term/* bytes did. File-backed handles fsync; buffered embedder writers
+	// flush; otherwise no-op. Falls back to os.Stdout only at early boot
+	// (before *out* is installed). Pre-#223 this synced os.Stdout directly,
+	// which diverged once the term/* ops started honoring *out*.
+	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
+			return vm.NIL, h.Sync()
+		}
+		return vm.NIL, os.Stdout.Sync()
 	})
 	ns.Def("flush", flushFn)
 

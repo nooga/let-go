@@ -295,8 +295,17 @@ func installTermNS() {
 	})
 	ns.Def("main-screen", mainScreen)
 
-	// flush — flush buffered output to xterm.js via postMessage
-	flushFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// flush — sync the active *out* binding, then drive the JS-side transport
+	// flush so the default screen path still reaches xterm.js. A rebound
+	// (buffered/embedder) *out* is flushed by Sync(); _lgFlush then no-ops on
+	// the empty screen buffer. The default-root *out* wraps os.Stdout, whose
+	// Sync() is a no-op in wasm, so _lgFlush stays the real screen flush.
+	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
+			if err := h.Sync(); err != nil {
+				return vm.NIL, err
+			}
+		}
 		flush := js.Global().Get("_lgFlush")
 		if !flush.IsUndefined() {
 			flush.Invoke()

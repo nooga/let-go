@@ -186,9 +186,12 @@ func installTermNS() {
 	})
 	ns.Def("char-width", charWidth)
 
-	flushFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		os.Stdout.Sync()
-		return vm.NIL, nil
+	// flush — sync the active *out* binding (see term.go for rationale).
+	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
+			return vm.NIL, h.Sync()
+		}
+		return vm.NIL, os.Stdout.Sync()
 	})
 	ns.Def("flush", flushFn)
 
