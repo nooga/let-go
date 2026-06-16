@@ -1,0 +1,35 @@
+;; Native-lowering trampoline fixture: proves that total protocol methods lower
+;; to the error-free `M(ec) vm.Value` shape while effectful methods (those whose
+;; bodies contain non-error-free calls) keep the `M(ec) (vm.Value, error)` shape.
+;;
+;; Two methods on the same deftype exercise both lattice ends:
+;;   measure [this]       -> total (pure arithmetic)    -> func ... Measure(...) vm.Value
+;;   describe [this extra] -> effectful (calls combine) -> func ... Describe(...) (vm.Value, error)
+;;
+;; `run` calls BOTH so the trampoline parity check exercises the clean path (direct
+;; single-value assignment) and the error path (assign + error check) at native
+;; dispatch.
+(ns examples.deftype-total-method)
+
+(defprotocol Measurable
+  (measure [this])
+  (describe [this extra]))
+
+;; A regular defn: calling it from a method body makes that method effectful
+;; (function-needs-error? returns true because `combine` is not a deftype
+;; constructor or total protocol method, so call-error-free? returns false).
+(defn combine [a b] (+ a b))
+
+(deftype Box [w h]
+  Measurable
+  (measure [this] (* w h))                        ; total: pure arithmetic ops only
+  (describe [this extra] (combine (* w h) extra)))  ; effectful: calls combine
+
+(defn run []
+  (let [b (->Box 3 4)]
+    ;; Call both methods: measure exercises the error-free devirtual path,
+    ;; describe exercises the (vm.Value, error) error-handling path.
+    ;; Both must produce the same result under bytecode and native dispatch.
+    (do
+      (describe b 0)   ; effectful call: result 12, exercised for native-dispatch proof
+      (measure b))))   ; total call: result 12, returned as the canonical run value
