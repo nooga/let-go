@@ -1329,6 +1329,14 @@
 ;; recv.Area(), bypassing rt.InvokeValue / interface dispatch. Unbound => off.
 (def ^:dynamic *protocol-methods* nil)
 
+;; Per-protocol-method unified signature, computed once per namespace in
+;; lower-ns-to-go (join across all impls). Keyed by the EXPORTED Go method name
+;; (go-export-name), matching the method-name arg passed to lower-method. Value:
+;; {:needs-error? bool}. MVP keeps params/results at vm.Value (deftype fields are
+;; vm.Value); only :needs-error? is joined (OR across impls). Unbound ⇒ emission
+;; falls back to #232's forced (vm.Value, error) shape, so output is identical.
+(def ^:dynamic *protocol-method-sigs* nil)
+
 (defn- devirtual-call-stmts [f closed-exprs nid]
   "If this :call is a protocol-method call on a known-concrete [:dtype T]
    receiver, emit a direct Go method call recv.Method(ec, args...). Returns the
@@ -1352,10 +1360,15 @@
                 (let [recv-expr (value-expr f closed-exprs recv-id)
                       arg-exprs (mapv (fn [rid] (box-as-value f closed-exprs rid)) (drop 2 refs))]
                   (when (and recv-expr (every? identity arg-exprs))
-                    (let [target (if (live? f nid) (value-ident f nid) (gogen/ident "_"))
-                          mcall  (gogen/call (gogen/field-sel recv-expr (go-export-name mname))
+                    (let [gname  (go-export-name mname)
+                          sig    (get *protocol-method-sigs* gname)
+                          needs? (if sig (:needs-error? sig) true)
+                          target (if (live? f nid) (value-ident f nid) (gogen/ident "_"))
+                          mcall  (gogen/call (gogen/field-sel recv-expr gname)
                                              (into [(gogen/ident "ec")] arg-exprs))]
-                      (emit-call-stmts f target mcall))))))))))))
+                      (if needs?
+                        (emit-call-stmts f target mcall)
+                        [(gogen/assign "=" target mcall)]))))))))))))
 
 (defn- call-assign-stmts [f closed-exprs nid]
   (or
@@ -1615,14 +1628,6 @@
 ;; path must all agree on one signature across every impl. Inner fn-lits rebind
 ;; this to nil (lower-fn-lit) so nested closures keep their body-derived shape.
 (def ^:dynamic *force-needs-error* nil)
-
-;; Per-protocol-method unified signature, computed once per namespace in
-;; lower-ns-to-go (join across all impls). Keyed by the EXPORTED Go method name
-;; (go-export-name), matching the method-name arg passed to lower-method. Value:
-;; {:needs-error? bool}. MVP keeps params/results at vm.Value (deftype fields are
-;; vm.Value); only :needs-error? is joined (OR across impls). Unbound ⇒ emission
-;; falls back to #232's forced (vm.Value, error) shape, so output is identical.
-(def ^:dynamic *protocol-method-sigs* nil)
 
 (defn function-needs-error? [f]
   (if *force-needs-error*
