@@ -28,7 +28,10 @@
           src (g/render (:decl result))]
       (is (= :lowered (:status result)))
       (is (clojure.string/includes? src "type Shape interface"))
-      (is (clojure.string/includes? src "Area() vm.Value")))))
+      ;; Methods use the uniform IFn ABI: ec is threaded and the result is
+      ;; (vm.Value, error), so the interface is satisfiable by the concrete
+      ;; receiver methods and consistent with rt.InvokeValueEC dispatch.
+      (is (clojure.string/includes? src "Area(ec *vm.ExecContext) (vm.Value, error)")))))
 
 ;; Real protocol + deftype so ->Sq8 / area8 resolve at build time.
 (defprotocol Shape8 (area8 [this]))
@@ -46,8 +49,9 @@
         (is (= :lowered (:status result)))
         ;; (->Sq8 3) -> native constructor call returning *Sq8
         (is (clojure.string/includes? src "_Sq8("))
-        ;; (area8 recv) -> devirtualized direct method call on the receiver
-        (is (clojure.string/includes? src ".Area8()"))
+        ;; (area8 recv) -> devirtualized direct method call on the receiver.
+        ;; ec is threaded as the first arg (uniform IFn method ABI).
+        (is (clojure.string/includes? src ".Area8(ec)"))
         ;; NOT the boxed dynamic-dispatch path
         (is (not (clojure.string/includes? src "InvokeValue")))))))
 

@@ -1,0 +1,14 @@
+(ns examples.deftype-method-call)
+
+(defn plus1 [x]
+  (+ x 1))
+
+(defprotocol MethodCall
+  (calc [this]))
+
+(deftype BoxCall [n]
+  MethodCall
+  (calc [this] (plus1 n)))
+
+(defn run []
+  (calc (->BoxCall 4)))

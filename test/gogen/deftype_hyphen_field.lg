@@ -1,0 +1,11 @@
+(ns examples.deftype-hyphen-field)
+
+(defprotocol HyphenField
+  (read-field [this]))
+
+(deftype HyphenBox [the-side]
+  HyphenField
+  (read-field [this] the-side))
+
+(defn run []
+  (read-field (->HyphenBox 7)))

@@ -43,8 +43,13 @@ func (r *RecordBase) Type() ValueType {
 	return r.typeVal
 }
 
-// Unbox returns the embedding struct itself (the Value).
-// Called by code that needs to interact with the raw Go value.
+// Unbox returns the embedded *RecordBase, NOT the outer embedding struct.
+// Because Unbox is a method on RecordBase promoted onto the embedding type, its
+// receiver is always *RecordBase — Go method promotion cannot recover the outer
+// value. Callers that need the concrete record (e.g. *Square) must hold a typed
+// reference; they cannot recover it through this Value-level Unbox. This is
+// sufficient for the type-identity/stringification contract RecordBase covers;
+// field access on native records goes through the generated struct directly.
 func (r *RecordBase) Unbox() any {
 	return r
 }

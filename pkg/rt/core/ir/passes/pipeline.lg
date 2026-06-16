@@ -50,22 +50,83 @@
 
 (declare expand-all)
 
+(declare dt-rewrite-field dt-rewrite-let dt-rewrite-fn)
+
+;; Binding forms with a clean `[target init ...]` vector (no for/doseq-style
+;; :let/:when modifiers). Their inits are rewritten in the outer scope; their
+;; targets shadow field names inside the body. Mirrors core.lg's -dt-let-like.
+;; NB: a *quoted* set literal '#{..} reads as a (hash-set ..) form in let-go,
+;; so build the set explicitly with (set '(...)).
+(def -dt-field-let-like
+  (set '(let let* loop loop* when-let when-let* if-let if-let*
+          when-some if-some binding with-open with-local-vars dotimes)))
+
+;; Symbols a binding target introduces (conservative over destructuring: every
+;; symbol in the pattern except &).
+(defn- dt-collect-syms [form]
+  (cond
+    (and (symbol? form) (not= form '&)) (list form)
+    (vector? form) (apply concat (map dt-collect-syms form))
+    (map? form) (apply concat (map (fn [e] (dt-collect-syms (vec e))) (seq form)))
+    :else nil))
+
 (defn- dt-rewrite-field
   "Rewrite bare field symbols in a deftype method body into (. this field)
-   member-access forms (lowered natively by build-dot/:dot). Walking-skeleton
-   scope: no shadowing / let-binding awareness (mirrors core.lg's -dt-rewrite
-   shape but emits the canonical (. this field) form the :go path lowers)."
-  [fieldset this-sym form]
+   member-access forms (lowered natively by build-dot/:dot), honoring lexical
+   shadowing: a field symbol rebound by the method params or an inner let/loop/
+   fn binding is left untouched. `bound` is the set of locally-bound symbols in
+   scope. Mirrors core.lg's -dt-rewrite (the bytecode path), minus mutable-field
+   / set! handling — the native deftype path is immutable. Known limitation
+   (shared with core.lg): for/doseq/letfn are not treated as binding forms."
+  [fieldset this-sym bound form]
   (cond
-    (and (symbol? form) (contains? fieldset form))
-    (list '. this-sym form)
+    (symbol? form)
+    (if (and (contains? fieldset form) (not (contains? bound form)))
+      (list '. this-sym form)
+      form)
     (vector? form)
-    (vec (map (fn [x] (dt-rewrite-field fieldset this-sym x)) form))
-    (and (seq? form) (seq form))
-    (if (= 'quote (first form))
-      form
-      (apply list (map (fn [x] (dt-rewrite-field fieldset this-sym x)) form)))
-    :else form))
+    (vec (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) form))
+    (not (seq? form)) form
+    (empty? form) form
+    :else
+    (let [h (first form)]
+      (cond
+        (= h 'quote) form
+        (and (contains? -dt-field-let-like h) (vector? (second form)))
+        (dt-rewrite-let fieldset this-sym bound form)
+        (or (= h 'fn) (= h 'fn*))
+        (dt-rewrite-fn fieldset this-sym bound form)
+        :else
+        (apply list (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) form))))))
+
+(defn- dt-rewrite-let [fieldset this-sym bound form]
+  (let [h    (first form)
+        bvec (second form)
+        body (next (next form))]
+    (loop [v (seq bvec) b bound out []]
+      (if (or (nil? v) (nil? (next v)))
+        (apply list h (vec out)
+               (map (fn [x] (dt-rewrite-field fieldset this-sym b x)) body))
+        (let [target   (first v)
+              init     (second v)
+              new-init (dt-rewrite-field fieldset this-sym b init)
+              b2       (reduce conj b (dt-collect-syms target))]
+          (recur (next (next v)) b2 (conj (conj out target) new-init)))))))
+
+(defn- dt-rewrite-fn [fieldset this-sym bound form]
+  (let [h     (first form)
+        tail  (next form)
+        named (if (and tail (symbol? (first tail))) (first tail) nil)
+        rest1 (if named (next tail) tail)
+        b1    (if named (conj bound named) bound)
+        rw    (fn [params body]
+                (let [b2 (reduce conj b1 (dt-collect-syms params))]
+                  (apply list params
+                         (map (fn [x] (dt-rewrite-field fieldset this-sym b2 x)) body))))]
+    (if (and rest1 (vector? (first rest1)))
+      (apply list h (concat (if named (list named) (list)) (rw (first rest1) (next rest1))))
+      (apply list h (concat (if named (list named) (list))
+                            (map (fn [c] (rw (first c) (next c))) rest1))))))
 
 (defn lower-deftype-methods
   "Lower the protocol-method impls of a :deftype capture to native Go receiver
@@ -86,7 +147,12 @@
                               params    (second m)
                               this-sym  (first params)
                               body      (drop 2 m)
-                              rewritten (map (fn [b] (dt-rewrite-field fieldset this-sym b)) body)
+                              ;; The method params (receiver + args) shadow
+                              ;; field names: seed the bound set with all of
+                              ;; them so a param like `side` on a type with a
+                              ;; `side` field stays the param, not (. this side).
+                              bound0    (set (dt-collect-syms params))
+                              rewritten (map (fn [b] (dt-rewrite-field fieldset this-sym bound0 b)) body)
                               defn-form (apply list 'defn mname params (map expand-all rewritten))
                               ir-fn     (-> defn-form ir.build/build-fn optimize-fn)
                               _         (swap! ir-fn assoc :arg-types [[:dtype tname]])

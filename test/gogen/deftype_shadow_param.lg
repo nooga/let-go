@@ -1,0 +1,11 @@
+(ns examples.deftype-shadow-param)
+
+(defprotocol ShadowParam
+  (pick [this side]))
+
+(deftype SquareShadow [side]
+  ShadowParam
+  (pick [this side] side))
+
+(defn run []
+  (pick (->SquareShadow 3) 9))
