@@ -116,6 +116,10 @@
 (gen-lisp (str src-paths "/ir_data.lg") "pkg/rt/core/ir/data/generated.lg")
 
 ;; One core compile emits BOTH the .lgb bundle and the gogen_ir Go tree.
+;; Hermetic generation (clearing the stale lowered-tree before regen) is
+;; handled inside lgbgen's runGoTarget, so every entry point — `make generate`
+;; here, plus `make lowered`/`make check-generated` which call lgbgen directly —
+;; gets the clean.
 (run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both")
 
 (spit PROVENANCE
