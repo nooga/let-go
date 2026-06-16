@@ -1603,22 +1603,26 @@
 
 (defn- call-error-free? [nid f]
   "True when a :call node lowers to an error-free Go call: a deftype
-   constructor (callee in *deftype-ctors*). These emit _T(args), which returns
-   the concrete pointer with no error, so they must NOT force the enclosing fn
-   to declare `callErr` or carry an error result.
-
-   Devirtualized protocol-method calls are NOT error-free: recv.Method(ec, …)
-   uses the uniform IFn ABI (vm.Value, error) — see devirtual-call-stmts /
-   lower-method — so they DO force the enclosing fn to handle the error.
-
-   Mirrors ctor-call-stmts so needs-error? agrees with what call lowering
-   actually emits. Registries unbound => always false (the pre-existing
-   behavior: every :call is treated as error-producing)."
+   constructor (callee in *deftype-ctors*), or a total devirtualized protocol
+   method (callee in *protocol-methods* with a non-error sig in *protocol-method-sigs*).
+   Constructors emit _T(args) returning a concrete pointer with no error.
+   Total protocol-method devirtual calls emit `x = recv.M(ec)` (single value).
+   Mirrors the actual emission in ctor-call-stmts / devirtual-call-stmts so
+   needs-error? agrees with what call lowering actually emits. Registries
+   unbound => always false (pre-existing behavior: every :call is error-producing)."
   (let [refs (ir/refs nid f)]
     (and (seq refs)
          (= :load-var (ir/op (first refs) f))
          (let [vname (name (symbol (ir/aux (first refs) f)))]
-           (and *deftype-ctors* (contains? *deftype-ctors* vname))))))
+           (or
+             ;; deftype constructor: _T(args) returns concrete ptr, no error
+             (and *deftype-ctors* (contains? *deftype-ctors* vname))
+             ;; total protocol method: devirtual call emits `x = recv.M(ec)`
+             (and *protocol-methods* (contains? *protocol-methods* vname)
+                  (let [sig (get *protocol-method-sigs* (go-export-name vname))]
+                    (and sig (not (:needs-error? sig))))))))))
+
+
 
 ;; Force the (vm.Value, error) result shape regardless of body contents. Bound
 ;; true while lowering a protocol-method body (lower-method) so EVERY method
