@@ -1622,8 +1622,6 @@
                   (let [sig (get *protocol-method-sigs* (go-export-name vname))]
                     (and sig (not (:needs-error? sig))))))))))
 
-
-
 ;; Force the (vm.Value, error) result shape regardless of body contents. Bound
 ;; true while lowering a protocol-method body (lower-method) so EVERY method
 ;; presents the uniform IFn ABI — `Method(ec, …) (vm.Value, error)` — even when
@@ -1633,6 +1631,8 @@
 ;; this to nil (lower-fn-lit) so nested closures keep their body-derived shape.
 (def ^:dynamic *force-needs-error* nil)
 
+;; Public (was defn-): ir.passes.pipeline/protocol-method-sigs calls this to
+;; derive each impl body shape (force-needs-error? unbound) when joining sigs.
 (defn function-needs-error? [f]
   (if *force-needs-error*
     true
