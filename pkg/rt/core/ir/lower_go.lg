@@ -2383,30 +2383,32 @@
    Only methods whose non-receiver params and result are uniformly vm.Value can
    satisfy the vm.Value interface and accept the boxed args the devirtual call
    site passes; a typed (int/bool/…) param or result falls back to bytecode."
-  (binding [*force-needs-error* true]
-    (let [all-params (params-for f)
-          ret-spec   (function-return-spec f)
-          ;; param-specs[0] is the receiver (*T); the rest must be vm.Value to
-          ;; match the interface signature and the boxed devirtual-call args.
-          non-recv-specs (vec (rest (function-param-specs f)))
-          uniform?   (and (= "vm.Value" ret-spec)
-                          (every? (fn [s] (= "vm.Value" s)) non-recv-specs))
-          results    (result-node f)
-          body       (lower-body f)]
-      (cond
-        (nil? all-params)   {:status :fallback :decl nil :reason "method: unsupported parameter types"}
-        (nil? results)      {:status :fallback :decl nil :reason "method: unsupported result type"}
-        (nil? body)         {:status :fallback :decl nil :reason "method: unsupported body shape"}
-        (empty? all-params) {:status :fallback :decl nil :reason "method: missing receiver param"}
-        (not uniform?)      {:status :fallback :decl nil :reason "method: non-vm.Value param/result ABI"}
-        :else
-        {:status :lowered
-         :decl (gogen/method-decl
-                 [(gogen/field-decl "arg0" (gogen/type recv-type) "")]
-                 method-name
-                 (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))] (vec (rest all-params)))
-                 results
-                 body)}))))
+  (let [sig         (get *protocol-method-sigs* method-name)
+        force-err?  (if sig (:needs-error? sig) true)]
+    (binding [*force-needs-error* force-err?]
+      (let [all-params (params-for f)
+            ret-spec   (function-return-spec f)
+            ;; param-specs[0] is the receiver (*T); the rest must be vm.Value to
+            ;; match the interface signature and the boxed devirtual-call args.
+            non-recv-specs (vec (rest (function-param-specs f)))
+            uniform?   (and (= "vm.Value" ret-spec)
+                            (every? (fn [s] (= "vm.Value" s)) non-recv-specs))
+            results    (result-node f)
+            body       (lower-body f)]
+        (cond
+          (nil? all-params)   {:status :fallback :decl nil :reason "method: unsupported parameter types"}
+          (nil? results)      {:status :fallback :decl nil :reason "method: unsupported result type"}
+          (nil? body)         {:status :fallback :decl nil :reason "method: unsupported body shape"}
+          (empty? all-params) {:status :fallback :decl nil :reason "method: missing receiver param"}
+          (not uniform?)      {:status :fallback :decl nil :reason "method: non-vm.Value param/result ABI"}
+          :else
+          {:status :lowered
+           :decl (gogen/method-decl
+                   [(gogen/field-decl "arg0" (gogen/type recv-type) "")]
+                   method-name
+                   (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))] (vec (rest all-params)))
+                   results
+                   body)})))))
 
 (defn lower-defprotocol [decl]
   "Lower a defprotocol capture map to a Go interface type declaration.
