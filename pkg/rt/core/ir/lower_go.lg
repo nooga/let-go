@@ -2423,17 +2423,23 @@
    Output: {:status :lowered :decl <*ast.GenDecl>}"
   (let [iname (go-export-name (:name decl))
         ms (mapv (fn [method-form]
-                   (let [mname (first method-form)
-                         margs (second method-form)
+                   (let [mname       (first method-form)
+                         margs       (second method-form)
                          param-count (dec (count margs))
-                         ;; ec is the first param, mirroring lower-method.
+                         gname       (go-export-name mname)
+                         sig         (get *protocol-method-sigs* gname)
+                         needs-err?  (if sig (:needs-error? sig) true)
+                         ;; ec is always threaded (matches lower-method, which
+                         ;; always takes ec even when the body ignores it).
                          param-fields (loop [i 0 out [(gogen/param "ec" (gogen/type "*vm.ExecContext"))]]
                                         (if (>= i param-count)
                                           out
                                           (recur (inc i) (conj out (gogen/param (str "p" i) (gogen/type "vm.Value"))))))
-                         result-fields [(gogen/result (gogen/type "vm.Value"))
-                                        (gogen/result (gogen/type "error"))]]
-                     (gogen/iface-method (go-export-name mname)
+                         result-fields (if needs-err?
+                                         [(gogen/result (gogen/type "vm.Value"))
+                                          (gogen/result (gogen/type "error"))]
+                                         [(gogen/result (gogen/type "vm.Value"))])]
+                     (gogen/iface-method gname
                                          param-fields
                                          result-fields)))
                  (:methods decl))]
