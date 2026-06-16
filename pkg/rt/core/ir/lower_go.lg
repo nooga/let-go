@@ -1616,7 +1616,7 @@
 ;; this to nil (lower-fn-lit) so nested closures keep their body-derived shape.
 (def ^:dynamic *force-needs-error* nil)
 
-(defn- function-needs-error? [f]
+(defn function-needs-error? [f]
   (if *force-needs-error*
     true
     (loop [blocks (ir/blocks f)]
