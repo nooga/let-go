@@ -40,6 +40,10 @@ func installTermNS() {
 	// Set *in-wasm* so user code can detect WASM environment
 	CoreNS.Lookup("*in-wasm*").(*vm.Var).SetRoot(vm.TRUE)
 
+	// Bind the WASM key source (SharedArrayBuffer) at the *keys* root — the
+	// input dual of the HostWriter *out* install in wasmMainTmpl.
+	CoreNS.Lookup("*keys*").(*vm.Var).SetRoot(vm.NewBoxed(NewHostKeySource()))
+
 	ns := vm.NewNamespace("term")
 	ns.Refer(CoreNS, "", true)
 
@@ -55,56 +59,25 @@ func installTermNS() {
 	})
 	ns.Def("restore-mode!", restoreMode)
 
-	// read-key — blocks via Atomics.wait on SharedArrayBuffer
-	readKey, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		atomics := js.Global().Get("Atomics")
-		keyInt32 := js.Global().Get("_lgKeyInt32")
-		keyUint8 := js.Global().Get("_lgKeyUint8")
-
-		if keyInt32.IsUndefined() || keyUint8.IsUndefined() {
-			return vm.NIL, fmt.Errorf("read-key: terminal input not available (no SharedArrayBuffer)")
+	// read-key — reads through the *keys* source (HostKeySource → SAB by
+	// default). Ctx-aware so api.WithKeySource / (binding [*keys* …]) is
+	// honored. "" is the end-of-input nil contract.
+	readKey := vm.NewCtxNativeFn("read-key", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		s, err := boundKeySource(ec).ReadKey()
+		if err != nil {
+			return vm.NIL, err
 		}
-
-		// Flush output before blocking
-		js.Global().Call("_lgFlush")
-
-		// Block until a key is ready
-		atomics.Call("wait", keyInt32, 0, 0)
-
-		// Read key length and bytes
-		keyLen := jsLoadInt(atomics, keyInt32, 1)
-		if keyLen <= 0 || keyLen > 16 {
-			atomics.Call("store", keyInt32, 0, 0)
+		if s == "" {
 			return vm.NIL, nil
 		}
-
-		keyBytes := make([]byte, keyLen)
-		for i := 0; i < keyLen; i++ {
-			keyBytes[i] = byte(keyUint8.Index(i).Int())
-		}
-
-		// Reset flag for next key
-		atomics.Call("store", keyInt32, 0, 0)
-
-		return vm.String(keyBytes), nil
+		return vm.String(s), nil
 	})
 	ns.Def("read-key", readKey)
 
-	// key-pending? — true if the key-ready flag at SAB[0] is set, i.e.
-	// the JS side has written a key that read-key has not yet consumed.
-	// Lets animation / poll loops break out on user input without
-	// entering read-key (which would Atomics.wait if no key is queued).
-	keyPendingFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		keyInt32 := js.Global().Get("_lgKeyInt32")
-		atomics := js.Global().Get("Atomics")
-		if keyInt32.IsUndefined() || atomics.IsUndefined() {
-			return vm.FALSE, nil
-		}
-		v := atomics.Call("load", keyInt32, 0)
-		if v.IsUndefined() || v.IsNull() {
-			return vm.FALSE, nil
-		}
-		if v.Int() != 0 {
+	// key-pending? — non-blocking peek at the *keys* source. Lets animation
+	// / poll loops break out on input without parking in read-key.
+	keyPendingFn := vm.NewCtxNativeFn("key-pending?", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if boundKeySource(ec).KeyPending() {
 			return vm.TRUE, nil
 		}
 		return vm.FALSE, nil

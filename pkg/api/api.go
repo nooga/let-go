@@ -20,6 +20,7 @@ type config struct {
 	stdout io.Writer
 	stderr io.Writer
 	emit   func(name, dataJSON string)
+	keys   rt.KeySource
 }
 
 // WithStdout configures the runtime to route output written via *out*
@@ -70,10 +71,27 @@ func WithEmit(fn func(name, dataJSON string)) Option {
 	return func(c *config) { c.emit = fn }
 }
 
+// WithKeySource routes term/read-key and key-pending? through ks for this
+// instance, the input dual of WithStdout. An embedder or test supplies the
+// keystrokes the guest reads — driving a TUI without a real terminal, or
+// feeding a deterministic script. ks is an rt.KeySource (ReadKey +
+// KeyPending); see pkg/rt/keysource.go.
+//
+// Implementation: each Run pushes ks as a dynamic binding on *keys*, popped
+// on return. Same per-Run isolation and process-global-binding-stack
+// concurrency caveat as WithStdout.
+//
+// Default: the platform key source (stdin+SIGWINCH on native, the SAB in
+// WASM). Wake — unblocking a parked read-key without a real key — is not part
+// of this seam yet; see the note in pkg/rt/wasm/lg-host.js.
+func WithKeySource(ks rt.KeySource) Option {
+	return func(c *config) { c.keys = ks }
+}
+
 // (Other options deliberately NOT exposed:
 //
-//   - WithStdin: stdin substitution is tied to the wake() / SAB protocol
-//     deferred from nooga/let-go#174 and the readline-driven REPL path.
+//   - WithStdin: line-stream stdin substitution is the *in* io.Reader dual
+//     of WithStdout, separate from WithKeySource's interactive key input.
 //     *in*'s root binding remains os.Stdin; embedders that need stdin
 //     substitution today can rebind *in* manually before calling Run.)
 
@@ -88,6 +106,7 @@ type LetGo struct {
 	stdoutHandle vm.Value
 	stderrHandle vm.Value
 	emitHandle   vm.Value
+	keysHandle   vm.Value
 }
 
 // NewLetGo constructs a runtime. With no options, behavior is exactly
@@ -121,6 +140,9 @@ func NewLetGo(ns string, opts ...Option) (*LetGo, error) {
 	}
 	if cfg.emit != nil {
 		ret.emitHandle = vm.NewBoxed(rt.FuncEmitter(cfg.emit))
+	}
+	if cfg.keys != nil {
+		ret.keysHandle = vm.NewBoxed(cfg.keys)
 	}
 
 	return ret, nil
@@ -165,6 +187,12 @@ func (l *LetGo) Run(expr string) (vm.Value, error) {
 	if l.emitHandle != nil {
 		if v := rt.LookupCoreVar("*emit*"); v != nil {
 			v.PushBinding(l.emitHandle)
+			defer v.PopBinding()
+		}
+	}
+	if l.keysHandle != nil {
+		if v := rt.LookupCoreVar("*keys*"); v != nil {
+			v.PushBinding(l.keysHandle)
 			defer v.PopBinding()
 		}
 	}

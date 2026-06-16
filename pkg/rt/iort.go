@@ -333,6 +333,12 @@ func installIOBuiltins(ns *vm.Namespace) {
 	// api.WithEmit. Lives in core (not the js ns) so it binds the same way
 	// *out* does. See emitter.go.
 	ns.Def("*emit*", vm.NewBoxed(nopEmitter{}))
+
+	// *keys* — host key-source for term/read-key and key-pending?. Defaults
+	// to a no-op (no input); each platform's term install replaces the root
+	// with a real source (stdin+SIGWINCH on native, the SAB in WASM), and
+	// api.WithKeySource rebinds it per Run. See keysource.go.
+	ns.Def("*keys*", vm.NewBoxed(nopKeySource{}))
 }
 
 // resolveIOHandleVar looks up a var (e.g. "*out*") in the core namespace
