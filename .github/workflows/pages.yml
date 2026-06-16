@@ -6,6 +6,16 @@ on:
     branches: [main]
   # Fresh perf-data snapshots are read at deploy time.
   workflow_dispatch:
+  # Perf snapshots are written to the `perf-data` branch by perf-timeline.yml,
+  # which runs on the SAME main push but takes ~60 min — long after this ~5-min
+  # deploy has already fetched perf-data and baked the (stale) timeline into the
+  # static HTML. So a push-triggered deploy is perpetually >=1 snapshot behind.
+  # Re-deploy when "Perf Timeline" finishes, so the freshly-written snapshot is
+  # actually picked up. (Keeps the push trigger for prompt WASM playground updates.)
+  workflow_run:
+    workflows: ["Perf Timeline"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
