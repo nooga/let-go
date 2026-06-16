@@ -127,7 +127,7 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string) error {
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool) error {
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
 	f, err := os.Open(src)
@@ -218,8 +218,10 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		return err
 	}
 
-	// 9. Build single self-contained HTML
-	html := wasmassets.AssembleHTML(string(wasmExecJS), wasmB64)
+	// 9. Build single self-contained HTML. shell=false emits the core glue
+	// only (no xterm shell / CDN tags); the client binds its own shell to
+	// window.LetGoHost.
+	html := wasmassets.AssembleHTML(string(wasmExecJS), wasmB64, shell)
 
 	// 10. Write output
 	if err := os.MkdirAll(outDir, 0755); err != nil {

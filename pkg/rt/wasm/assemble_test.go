@@ -25,30 +25,39 @@ func TestAssembleHTMLGolden(t *testing.T) {
 	const wasmExecJS = "// stub wasm_exec.js for the golden test\nconsole.log('exec stub');\n"
 	const wasmGzB64 = "STUBWASMBLOBB64=="
 
-	got := AssembleHTML(wasmExecJS, wasmGzB64)
-	goldenPath := filepath.Join("testdata", "assemble_golden.html")
+	// Pin both bundle shapes: the default xterm shell and the shell-less
+	// core-only build (-w-shell none).
+	for _, tc := range []struct {
+		name   string
+		shell  bool
+		golden string
+	}{
+		{"default xterm shell", true, "assemble_golden.html"},
+		{"shell-less core", false, "assemble_golden_shellless.html"},
+	} {
+		got := AssembleHTML(wasmExecJS, wasmGzB64, tc.shell)
+		goldenPath := filepath.Join("testdata", tc.golden)
 
-	if *updateGolden {
-		if err := os.MkdirAll("testdata", 0755); err != nil {
-			t.Fatalf("mkdir testdata: %v", err)
+		if *updateGolden {
+			if err := os.MkdirAll("testdata", 0755); err != nil {
+				t.Fatalf("mkdir testdata: %v", err)
+			}
+			if err := os.WriteFile(goldenPath, []byte(got), 0644); err != nil {
+				t.Fatalf("writing golden: %v", err)
+			}
+			t.Logf("golden updated: %s (%d bytes)", goldenPath, len(got))
+			continue
 		}
-		if err := os.WriteFile(goldenPath, []byte(got), 0644); err != nil {
-			t.Fatalf("writing golden: %v", err)
-		}
-		t.Logf("golden updated: %s (%d bytes)", goldenPath, len(got))
-		return
-	}
 
-	golden, err := os.ReadFile(goldenPath)
-	if err != nil {
-		t.Fatalf("reading golden (run `go test ./pkg/rt/wasm -update` to create): %v", err)
-	}
-	if string(golden) != got {
-		// Surface the size delta so the developer has a quick signal
-		// before diving into a diff.
-		t.Errorf("AssembleHTML output drift (golden=%d bytes, got=%d bytes).\n"+
-			"Run `go test ./pkg/rt/wasm -update` to refresh after intentional changes.",
-			len(golden), len(got))
+		golden, err := os.ReadFile(goldenPath)
+		if err != nil {
+			t.Fatalf("%s: reading golden (run `go test ./pkg/rt/wasm -update` to create): %v", tc.name, err)
+		}
+		if string(golden) != got {
+			t.Errorf("%s: AssembleHTML output drift (golden=%d bytes, got=%d bytes).\n"+
+				"Run `go test ./pkg/rt/wasm -update` to refresh after intentional changes.",
+				tc.name, len(golden), len(got))
+		}
 	}
 }
 
@@ -58,14 +67,18 @@ func TestAssembleHTMLGolden(t *testing.T) {
 // works in that case (the broken marker is just literal text in the
 // JS), so the golden test alone wouldn't catch it cleanly.
 func TestMarkersGone(t *testing.T) {
-	got := AssembleHTML("anything", "whatever")
-	for _, m := range []string{
-		"__WASM_EXEC_JS__",
-		"__WASM_GZ_B64__",
-		"__LG_HOST_JS_BODY_PLACEHOLDER__",
-	} {
-		if contains(got, m) {
-			t.Errorf("marker %q still present in assembled output", m)
+	for _, shell := range []bool{true, false} {
+		got := AssembleHTML("anything", "whatever", shell)
+		for _, m := range []string{
+			"__WASM_EXEC_JS__",
+			"__WASM_GZ_B64__",
+			"__LG_HOST_JS_BODY_PLACEHOLDER__",
+			"__LG_XTERM_CSS__",
+			"__LG_XTERM_JS__",
+		} {
+			if contains(got, m) {
+				t.Errorf("shell=%v: marker %q still present in assembled output", shell, m)
+			}
 		}
 	}
 }

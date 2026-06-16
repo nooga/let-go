@@ -1,3 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>let-go app</title>
+
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body{height:100%;background:#0c0c0c;color:#e8e6df;overflow:hidden}
+    body{display:flex;flex-direction:column}
+    #terminal{flex:1}
+    #status{color:#5a584f;font-family:monospace;font-size:13px;padding:1rem;position:absolute;
+            top:50%;left:50%;transform:translate(-50%,-50%)}
+    .xterm{height:100%}
+  </style>
+</head>
+<body>
+  <div id="status">loading...</div>
+  <div id="terminal" style="display:none"></div>
+
+  <script>
 // --- Cross-origin isolation: prefer server headers, fall back to SW ---
 // When the dev/host server sends the COI headers itself (dev/serve.json
 // does this), crossOriginIsolated is already true and we don't need the
@@ -17,8 +38,8 @@ if (!crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigat
 }
 
 // --- Inline wasm_exec.js and WASM data ---
-const WASM_EXEC_JS = __WASM_EXEC_JS__;
-const WASM_GZ_B64 = __WASM_GZ_B64__;
+const WASM_EXEC_JS = "// stub wasm_exec.js for the golden test\nconsole.log('exec stub');\n";
+const WASM_GZ_B64 = "STUBWASMBLOBB64==";
 
 // --- Decompress gzipped base64 WASM ---
 async function decompressWasm(b64) {
@@ -36,7 +57,12 @@ async function decompressWasm(b64) {
 }
 
 // --- window.LetGoHost — public host API ---
-// Single object on window for custom shells to talk to. Surface:
+// Single object on window. This is the whole contract between the runtime
+// glue (this file) and a shell — the default xterm shell that ships with
+// `lg -w`, or a client's own under `-w-shell none`. Surface:
+//   onReady(cb)       cb(mode) once glue is wired and the boot mode
+//                     ('worker' | 'main') is known, before the VM runs.
+//                     A shell opens its UI and binds output/input here.
 //   onOutput(cb)      register sink for VM stdout; cb(string)
 //   onEmit(cb)        register sink for js/emit events; cb(name, parsedData)
 //   sendInput(str)    inject UTF-8 keystrokes/bytes toward the VM
@@ -52,50 +78,46 @@ async function decompressWasm(b64) {
 // as compatibility hooks and are also the implementation backing for the
 // LetGoHost methods. Callers using either shape keep working.
 window.LetGoHost = (function() {
-  let outputSink = (s) => console.log(s);
+  // Output emitted before a shell registers onOutput is buffered and
+  // replayed on the first onOutput, not dropped to console. The boot path
+  // runs synchronously to its first await, so in main-thread mode the
+  // "interactive input unavailable" notice is written before the default
+  // shell (concatenated after core) registers its sink; without the buffer
+  // that text would leak to console instead of the terminal. Buffering also
+  // covers a client shell that binds onOutput late (e.g. after an async CDN
+  // load) under -w-shell none.
+  let outputSink = null;
+  const outputBuffer = [];
   let emitSink = (name, data) => {
     try {
       window.dispatchEvent(new CustomEvent(name, { detail: data }));
     } catch (err) { console.error('lg emit:', err); }
   };
+  let readyCb = null;
+  let readyMode = null; // set if _ready fires before onReady registers
   return {
-    onOutput(cb) { outputSink = cb; },
+    onReady(cb) {
+      readyCb = cb;
+      if (readyMode !== null) cb(readyMode); // late registration still fires
+    },
+    onOutput(cb) {
+      outputSink = cb;
+      if (outputBuffer.length) { for (const s of outputBuffer.splice(0)) cb(s); }
+    },
     onEmit(cb) { emitSink = cb; },
     sendInput(s) { return window._lgKey ? window._lgKey(s) : false; },
     setSize(c, r) { return window._lgSetSize ? window._lgSetSize(c, r) : undefined; },
     // Internal — invoked by the runtime/relay code below.
-    _output(s) { outputSink(s); },
+    _output(s) { if (outputSink) outputSink(s); else outputBuffer.push(s); },
     _emit(name, data) { emitSink(name, data); },
+    _ready(mode) { readyMode = mode; if (readyCb) readyCb(mode); },
   };
 })();
 
+// Boot status text. May be absent when a client ships its own HTML without
+// a #status element, so every use is guarded.
 const status = document.getElementById('status');
-const termEl = document.getElementById('terminal');
-
-// --- Initialize xterm.js ---
-const term = new Terminal({
-  fontFamily: '"IBM Plex Mono", "Menlo", "Consolas", monospace',
-  fontSize: 14,
-  theme: { background: '#0c0c0c', foreground: '#e8e6df', cursor: '#5ec4b6' },
-  allowProposedApi: true,
-  convertEol: true,
-});
-const fitAddon = new FitAddon.FitAddon();
-term.loadAddon(fitAddon);
-
-function showTerminal() {
-  status.style.display = 'none';
-  termEl.style.display = 'block';
-  term.open(termEl);
-  fitAddon.fit();
-  term.focus();
-}
-
-// xterm is the default output sink in this template. Custom shells can
-// call LetGoHost.onOutput(...) before the WASM boots to redirect.
-window.LetGoHost.onOutput((s) => term.write(s));
-
-window.addEventListener('resize', () => fitAddon.fit());
+function setStatus(t) { if (status) status.textContent = t; }
 
 // --- Worker mode (interactive, needs cross-origin isolation) ---
 function startWorkerMode() {
@@ -103,11 +125,9 @@ function startWorkerMode() {
   const keyInt32 = new Int32Array(sab);
   const keyUint8 = new Uint8Array(sab, 8, 16);
 
-  showTerminal();
-
   // Public input hook — backs LetGoHost.sendInput. Returns true if accepted,
-  // false if the input was too long (>16 bytes). xterm's onData calls into
-  // this; custom shells can call it directly or via LetGoHost.sendInput.
+  // false if the input was too long (>16 bytes). A shell's keystrokes feed
+  // through here via LetGoHost.sendInput.
   window._lgKey = function(data) {
     const bytes = new TextEncoder().encode(data);
     if (bytes.length === 0 || bytes.length > 16) return false;
@@ -125,12 +145,9 @@ function startWorkerMode() {
     Atomics.store(keyInt32, 7, rows);
   };
 
-  // Initial size + xterm resize hook route through the public API.
-  window._lgSetSize(term.cols, term.rows);
-  term.onResize(({cols, rows}) => window._lgSetSize(cols, rows));
-
-  // xterm keystrokes feed into _lgKey (which is what the VM reads).
-  term.onData((data) => window._lgKey(data));
+  // Glue is wired (_lgKey / _lgSetSize installed). The shell opens its UI,
+  // binds output via onOutput, and pushes input/size via sendInput/setSize.
+  window.LetGoHost._ready('worker');
 
   // Build worker code: fs shim + wasm_exec.js + bootstrap
   const workerCode = `
@@ -216,7 +233,10 @@ function startWorkerMode() {
 
 // --- Main-thread mode (output only, no input) ---
 async function startMainThreadMode() {
-  showTerminal();
+  // Glue is wired (no SAB input in this mode). The shell opens its UI and
+  // binds output via onOutput before the unavailable-input notice below.
+  window.LetGoHost._ready('main');
+
   const out = (s) => window.LetGoHost._output(s);
   if (location.protocol === 'file:') {
     out('\x1b[33mInteractive input requires a local server. Run:\x1b[0m\r\n');
@@ -281,14 +301,18 @@ async function startMainThreadMode() {
 // --- Entry point ---
 (async () => {
   try {
-    status.textContent = 'decompressing wasm...';
+    setStatus('decompressing wasm...');
     if (typeof SharedArrayBuffer !== 'undefined' && crossOriginIsolated) {
       startWorkerMode();
     } else {
       await startMainThreadMode();
     }
   } catch(err) {
-    status.textContent = 'error: ' + err;
+    setStatus('error: ' + err);
     console.error(err);
   }
 })();
+
+  </script>
+</body>
+</html>

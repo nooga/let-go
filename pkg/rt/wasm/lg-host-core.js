@@ -1,25 +1,3 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>let-go app</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
-  <style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    html,body{height:100%;background:#0c0c0c;color:#e8e6df;overflow:hidden}
-    body{display:flex;flex-direction:column}
-    #terminal{flex:1}
-    #status{color:#5a584f;font-family:monospace;font-size:13px;padding:1rem;position:absolute;
-            top:50%;left:50%;transform:translate(-50%,-50%)}
-    .xterm{height:100%}
-  </style>
-</head>
-<body>
-  <div id="status">loading...</div>
-  <div id="terminal" style="display:none"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
-  <script>
 // --- Cross-origin isolation: prefer server headers, fall back to SW ---
 // When the dev/host server sends the COI headers itself (dev/serve.json
 // does this), crossOriginIsolated is already true and we don't need the
@@ -39,8 +17,8 @@ if (!crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigat
 }
 
 // --- Inline wasm_exec.js and WASM data ---
-const WASM_EXEC_JS = "// stub wasm_exec.js for the golden test\nconsole.log('exec stub');\n";
-const WASM_GZ_B64 = "STUBWASMBLOBB64==";
+const WASM_EXEC_JS = __WASM_EXEC_JS__;
+const WASM_GZ_B64 = __WASM_GZ_B64__;
 
 // --- Decompress gzipped base64 WASM ---
 async function decompressWasm(b64) {
@@ -313,51 +291,3 @@ async function startMainThreadMode() {
     console.error(err);
   }
 })();
-
-// --- Default xterm.js shell ---
-// The shell `lg -w` ships unless built with -w-shell none. It owns the
-// presentation layer (the Terminal, its font/theme, the DOM) and binds to
-// the runtime purely through window.LetGoHost — the same surface a client's
-// own shell uses. Nothing in lg-host-core.js references xterm; everything
-// terminal-specific lives here.
-(function() {
-  const status = document.getElementById('status');
-  const termEl = document.getElementById('terminal');
-
-  const term = new Terminal({
-    fontFamily: '"IBM Plex Mono", "Menlo", "Consolas", monospace',
-    fontSize: 14,
-    theme: { background: '#0c0c0c', foreground: '#e8e6df', cursor: '#5ec4b6' },
-    allowProposedApi: true,
-    convertEol: true,
-  });
-  const fitAddon = new FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
-
-  function showTerminal() {
-    if (status) status.style.display = 'none';
-    termEl.style.display = 'block';
-    term.open(termEl);
-    fitAddon.fit();
-    term.focus();
-  }
-
-  window.addEventListener('resize', () => fitAddon.fit());
-
-  // Bind once the core glue is wired. onOutput routes VM stdout to xterm;
-  // in worker mode the keystroke/size path is live, so advertise the
-  // initial size and forward xterm input + resizes through LetGoHost.
-  window.LetGoHost.onReady((mode) => {
-    showTerminal();
-    window.LetGoHost.onOutput((s) => term.write(s));
-    if (mode === 'worker') {
-      window.LetGoHost.setSize(term.cols, term.rows);
-      term.onResize(({cols, rows}) => window.LetGoHost.setSize(cols, rows));
-      term.onData((data) => window.LetGoHost.sendInput(data));
-    }
-  });
-})();
-
-  </script>
-</body>
-</html>
