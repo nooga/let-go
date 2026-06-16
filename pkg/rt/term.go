@@ -8,6 +8,7 @@
 package rt
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -542,10 +543,26 @@ func installTermNS() {
 	// (before *out* is installed). Pre-#223 this synced os.Stdout directly,
 	// which diverged once the term/* ops started honoring *out*.
 	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		var (
+			err        error
+			fileBacked bool
+		)
 		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
-			return vm.NIL, h.Sync()
+			err = h.Sync()
+			fileBacked = h.File() != nil
+		} else {
+			err = os.Stdout.Sync()
+			fileBacked = true
 		}
-		return vm.NIL, os.Stdout.Sync()
+		// fsync on a terminal returns ENOTTY (macOS/BSD); flushing a TTY is a
+		// no-op, so swallow it. Only for a file-backed *out* — an embedder
+		// writer's Sync goes through Flush() and must surface its own errors.
+		// A regular file's fsync never returns ENOTTY, so real I/O errors
+		// (EIO, ENOSPC, …) still propagate.
+		if fileBacked && errors.Is(err, syscall.ENOTTY) {
+			err = nil
+		}
+		return vm.NIL, err
 	})
 	ns.Def("flush", flushFn)
 
