@@ -326,6 +326,13 @@ func installIOBuiltins(ns *vm.Namespace) {
 	ns.Def("*in*", stdinHandle)
 	ns.Def("*out*", stdoutHandle)
 	ns.Def("*err*", stderrHandle)
+
+	// *emit* — host event sink for (js/emit ...). Defaults to a no-op so
+	// emit is harmless when no host is listening; the WASM bundle installs
+	// a HostEmitter root and Go embedders push a FuncEmitter via
+	// api.WithEmit. Lives in core (not the js ns) so it binds the same way
+	// *out* does. See emitter.go.
+	ns.Def("*emit*", vm.NewBoxed(nopEmitter{}))
 }
 
 // resolveIOHandleVar looks up a var (e.g. "*out*") in the core namespace

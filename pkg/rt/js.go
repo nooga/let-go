@@ -2,11 +2,12 @@
  * Copyright (c) 2026 Matt Parrett
  * SPDX-License-Identifier: MIT
  *
- * Platform-independent half of the js namespace. Argument validation and
- * marshaling live here so that bugs (wrong arity, bad event-name type) are
- * caught the same way whether .lg code is running native or in WASM. The
- * platform-specific files (js_wasm.go, js_other.go) only provide the
- * dispatch primitive.
+ * The js namespace. (js/emit ...) validates and marshals its args here, then
+ * dispatches through the *emit* host seam (see emitter.go) — so the native
+ * code path is identical on every platform. The platform difference is only
+ * which Emitter sits at the *emit* root: HostEmitter in the WASM bundle
+ * (hostemitter_js_wasm.go), a FuncEmitter via api.WithEmit for Go embedders,
+ * or the default no-op otherwise.
  */
 
 package rt
@@ -53,4 +54,26 @@ func eventName(v vm.Value) (string, error) {
 	default:
 		return "", fmt.Errorf("js/emit event-name must be keyword, symbol, or string; got %s", v.Type().Name())
 	}
+}
+
+func init() { RegisterInstaller(installJSNS) }
+
+func installJSNS() {
+	ns := vm.NewNamespace("js")
+
+	// (js/emit event-name data) -> nil. Fire-and-forget through the *emit*
+	// host seam. Arg validation runs on every platform so type bugs surface
+	// in native dev, not just at runtime in the browser. Ctx-aware so the
+	// dispatch respects the current (binding [*emit* ...]) / api.WithEmit.
+	emitFn := vm.NewCtxNativeFn("emit", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		name, dataJSON, err := prepareEmit(vs)
+		if err != nil {
+			return vm.NIL, err
+		}
+		EmitVia(ec, name, dataJSON)
+		return vm.NIL, nil
+	})
+	ns.Def("emit", emitFn)
+
+	RegisterNS(ns)
 }

@@ -19,6 +19,7 @@ type Option func(*config)
 type config struct {
 	stdout io.Writer
 	stderr io.Writer
+	emit   func(name, dataJSON string)
 }
 
 // WithStdout configures the runtime to route output written via *out*
@@ -54,18 +55,27 @@ func WithStderr(w io.Writer) Option {
 	return func(c *config) { c.stderr = w }
 }
 
+// WithEmit configures the runtime to route (js/emit event-name data)
+// through fn for this instance, the emit dual of WithStdout. fn receives
+// the event name and the JSON-marshaled data — the same (name, dataJSON)
+// pair the WASM bundle hands to LetGoHost.onEmit — so a Go embedder gets
+// the events its guest dispatches without depending on the browser host.
+//
+// Implementation: each Run pushes a FuncEmitter wrapping fn as a dynamic
+// binding on *emit*, popped on return. Same per-Run isolation and
+// process-global-binding-stack concurrency caveat as WithStdout.
+//
+// Default: no-op (the *emit* root nopEmitter; (js/emit ...) is dropped).
+func WithEmit(fn func(name, dataJSON string)) Option {
+	return func(c *config) { c.emit = fn }
+}
+
 // (Other options deliberately NOT exposed:
 //
 //   - WithStdin: stdin substitution is tied to the wake() / SAB protocol
 //     deferred from nooga/let-go#174 and the readline-driven REPL path.
 //     *in*'s root binding remains os.Stdin; embedders that need stdin
-//     substitution today can rebind *in* manually before calling Run.
-//
-//   - WithEmit: a callback for (js/emit ...) would require either
-//     a *emit-fn* var in the core ns that js/emit consults, or a
-//     refactor of pkg/rt/js_wasm.go's _lgEmit lookup path. Neither is
-//     done. Until the wiring is real, a public option that silently
-//     does nothing would be misleading.)
+//     substitution today can rebind *in* manually before calling Run.)
 
 type LetGo struct {
 	cp     *vm.Consts
@@ -77,6 +87,7 @@ type LetGo struct {
 	// bindings on *out*/*err* and pops on return.
 	stdoutHandle vm.Value
 	stderrHandle vm.Value
+	emitHandle   vm.Value
 }
 
 // NewLetGo constructs a runtime. With no options, behavior is exactly
@@ -107,6 +118,9 @@ func NewLetGo(ns string, opts ...Option) (*LetGo, error) {
 	}
 	if cfg.stderr != nil {
 		ret.stderrHandle = vm.NewBoxed(rt.NewWriterHandle("api.WithStderr", cfg.stderr))
+	}
+	if cfg.emit != nil {
+		ret.emitHandle = vm.NewBoxed(rt.FuncEmitter(cfg.emit))
 	}
 
 	return ret, nil
@@ -145,6 +159,12 @@ func (l *LetGo) Run(expr string) (vm.Value, error) {
 	if l.stderrHandle != nil {
 		if v := rt.LookupCoreVar("*err*"); v != nil {
 			v.PushBinding(l.stderrHandle)
+			defer v.PopBinding()
+		}
+	}
+	if l.emitHandle != nil {
+		if v := rt.LookupCoreVar("*emit*"); v != nil {
+			v.PushBinding(l.emitHandle)
 			defer v.PopBinding()
 		}
 	}

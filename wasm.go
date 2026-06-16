@@ -61,6 +61,13 @@ func main() {
 		v.SetRoot(vm.NewBoxed(rt.NewWriterHandle("host-stderr", hostWriter)))
 	}
 
+	// Route (js/emit ...) to the JS host via _lgEmit (HostEmitter), the dual
+	// of the HostWriter *out* routing above. Same SetRoot rationale.
+	hostEmitter := rt.NewHostEmitter()
+	if v := rt.LookupCoreVar("*emit*"); v != nil {
+		v.SetRoot(vm.NewBoxed(hostEmitter))
+	}
+
 	resolve := func(nsName, name string) *vm.Var {
 		n := rt.DefNSBare(nsName)
 		v := n.LookupLocal(vm.Symbol(name))
