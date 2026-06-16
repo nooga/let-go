@@ -128,6 +128,39 @@
       (apply list h (concat (if named (list named) (list))
                             (map (fn [c] (rw (first c) (next c))) rest1))))))
 
+(defn- protocol-method-sigs
+  "Join across all impls of every protocol method to a unified signature map
+   keyed by exported Go method name: {go-name {:needs-error? bool}}.
+   MVP: only :needs-error? is joined (OR). An impl is total when its built IR fn
+   needs no error (no try / only error-free calls), evaluated with
+   *force-needs-error* unbound so the body's real shape shows through."
+  [deftypes]
+  (reduce
+    (fn [acc dt]
+      (let [tname    (:name dt)
+            fieldset (set (:fields dt))]
+        (reduce
+          (fn [m mform]
+            (let [mname     (first mform)
+                  params    (second mform)
+                  this-sym  (first params)
+                  body      (drop 2 mform)
+                  bound0    (set (dt-collect-syms params))
+                  rewritten (map (fn [b] (dt-rewrite-field fieldset this-sym bound0 b)) body)
+                  defn-form (apply list 'defn mname params (map expand-all rewritten))
+                  ir-fn     (-> defn-form ir.build/build-fn optimize-fn)
+                  _         (swap! ir-fn assoc :arg-types [[:dtype tname]])
+                  ne?       (binding [lower-go/*force-needs-error* nil]
+                              (lower-go/function-needs-error? ir-fn))
+                  gname     (lower-go/go-export-name mname)
+                  prev      (get m gname)]
+              (assoc m gname {:needs-error? (or (:needs-error? prev) ne?)})))
+          acc
+          (filter (fn [x] (and (seq? x) (symbol? (first x)) (vector? (second x))))
+                  (:impls dt)))))
+    {}
+    deftypes))
+
 (defn lower-deftype-methods
   "Lower the protocol-method impls of a :deftype capture to native Go receiver
    methods. For each (mname [this & args] body...): bare field refs become
@@ -574,7 +607,9 @@
               ir.passes.typeinfer/*typeinfer-budget-ms* nil
               ir.passes.typeinfer/*deftype-ctor-types* (when (seq ctor-types) ctor-types)
               lower-go/*deftype-ctors* (when (seq ctors) ctors)
-              lower-go/*protocol-methods* (when (seq protocol-method-set) protocol-method-set)]
+              lower-go/*protocol-methods* (when (seq protocol-method-set) protocol-method-set)
+              lower-go/*protocol-method-sigs* (let [s (protocol-method-sigs deftypes)]
+                                                (when (seq s) s))]
       (let [;; Native decls for captured protocols (interface) and deftypes
             ;; (struct + constructor + receiver methods). The interface/struct
             ;; reference vm.* (vm import); receiver method bodies also call rt.*

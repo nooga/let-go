@@ -1616,6 +1616,14 @@
 ;; this to nil (lower-fn-lit) so nested closures keep their body-derived shape.
 (def ^:dynamic *force-needs-error* nil)
 
+;; Per-protocol-method unified signature, computed once per namespace in
+;; lower-ns-to-go (join across all impls). Keyed by the EXPORTED Go method name
+;; (go-export-name), matching the method-name arg passed to lower-method. Value:
+;; {:needs-error? bool}. MVP keeps params/results at vm.Value (deftype fields are
+;; vm.Value); only :needs-error? is joined (OR across impls). Unbound ⇒ emission
+;; falls back to #232's forced (vm.Value, error) shape, so output is identical.
+(def ^:dynamic *protocol-method-sigs* nil)
+
 (defn function-needs-error? [f]
   (if *force-needs-error*
     true
