@@ -36,9 +36,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.ref || github.sha }}
           submodules: recursive
           fetch-depth: 0
+
+      - name: Check out target ref
+        run: |
+          ref="${{ github.event.inputs.ref || github.sha }}"
+          # actions/checkout only treats a *full* 40-char SHA as a commit; a
+          # short SHA is read as a branch/tag name and fails ("a branch or tag
+          # with the name '<sha>' could not be found"). Resolve here instead —
+          # fetch-depth:0 already pulled every branch and tag, so any committish
+          # (short SHA, full SHA, branch, tag) resolves locally.
+          git checkout --force "$ref"
+          git submodule update --init --recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
