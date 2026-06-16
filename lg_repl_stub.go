@@ -1,4 +1,4 @@
-//go:build plan9
+//go:build plan9 || js
 
 /*
  * Copyright (c) 2021 Marcin Gasperowicz <xnooga@gmail.com>
@@ -18,10 +18,11 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// repl is a minimal line-by-line REPL for plan9. The alimpfard/line readline
-// library depends on termios/ioctl (not available on plan9), so this build
-// reads from stdin via bufio.Scanner — no completion, no syntax highlighting,
-// no in-line editing. Use rio's edit-line history instead.
+// repl is a minimal line-by-line REPL for platforms without readline. The
+// chzyer/readline library depends on termios/ioctl, unavailable on plan9 and
+// js/wasm, so these builds read from stdin via bufio.Scanner — no completion,
+// no syntax highlighting, no in-line editing. (On js the root binary isn't the
+// REPL entry at all; this just keeps GOOS=js go build ./... compiling.)
 func repl(ctx *compiler.Context) {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
