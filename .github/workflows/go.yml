@@ -91,21 +91,33 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Provide the Clojure CLI on demand via makeplus (clojure.cc/cli/) — it
-      # installs the JDK and the Clojure CLI into the runner's temp dir. Nothing
-      # (not even java) is assumed preinstalled. Record the resolved version so
-      # the cache below can detect a version change.
-      - name: Provide Clojure CLI (makeplus) and record its version
+      # Provision the Clojure CLI from pinned actions — Java first, since the CLI
+      # is a JVM tool. Replaces the previous makeplus install, which curled and
+      # `git pull`ed an unpinned remote toolchain (clojure.cc/cmd.mk ->
+      # makeplus/makes HEAD) on every run, so an upstream change there broke CI
+      # with no change in this repo. The CLI is pinned to the version the
+      # committed goldens were derived under, for reproducible re-derivation.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Clojure CLI
+        uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: 1.12.4.1602
+
+      # Record the resolved version for the cache key below, and fail loudly if
+      # clojure didn't actually land on PATH (the old step echoed a captured
+      # error string and exited 0, so a broken install reported green).
+      - name: Record Clojure version
         id: clj
         run: |
-          CLJ=$(make -f <(curl -sL clojure.cc/cmd.mk) clj)
-          CLJ_BIN=$(dirname "$CLJ")
-          JAVA_BIN=$(dirname "$(find "${TMPDIR:-/tmp}/clojure-cc-cmd/local" -type f -name java -path '*/bin/*' | head -1)")
-          echo "$CLJ_BIN" >> "$GITHUB_PATH"
-          echo "$JAVA_BIN" >> "$GITHUB_PATH"
-          ver=$(PATH="$CLJ_BIN:$JAVA_BIN:$PATH" clojure --version 2>&1 | tr -cd 'A-Za-z0-9._-')
+          command -v clojure >/dev/null || { echo "::error::clojure not on PATH after setup-clojure"; exit 1; }
+          ver=$(clojure --version | tr -cd 'A-Za-z0-9._-')
           echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "Resolved Clojure: $ver"
+          echo "Resolved Clojure: $(clojure --version)"
 
       # Cache a marker keyed on the Clojure version. A cache HIT means this exact
       # version was already verified, so the re-derive below is skipped.
