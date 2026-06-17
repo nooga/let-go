@@ -134,10 +134,19 @@ async function startWorkerMode() {
   const keyInt32 = new Int32Array(sab);
   const keyUint8 = new Uint8Array(sab, 8, 16);
 
+  // Input is unsafe until the worker has been told to start (init posted):
+  // before that there is no consumer to drain the SAB slot, so the producer
+  // busy-wait below would spin the main thread — worst case for the whole
+  // multi-second external fetch+compile. Drop pre-start keys rather than block.
+  // (The narrow post-start window before the VM first reads a key is the
+  // pre-existing busy-wait; retiring that belongs to the input seam, #244.)
+  let workerReady = false;
+
   // Public input hook — backs LetGoHost.sendInput. Returns true if accepted,
-  // false if the input was too long (>16 bytes). A shell's keystrokes feed
-  // through here via LetGoHost.sendInput.
+  // false if dropped (worker not started yet, or input too long >16 bytes).
+  // A shell's keystrokes feed through here via LetGoHost.sendInput.
   window._lgKey = function(data) {
+    if (!workerReady) return false;
     const bytes = new TextEncoder().encode(data);
     if (bytes.length === 0 || bytes.length > 16) return false;
     while (Atomics.load(keyInt32, 0) !== 0) { /* busy wait */ }
@@ -264,6 +273,9 @@ async function startWorkerMode() {
     initMsg.wasmGzB64 = WASM_GZ_B64;       // worker decodes the inline payload
   }
   worker.postMessage(initMsg);
+  // A consumer now exists — accept input. Keys typed during the (possibly
+  // multi-second, external-mode) load above were dropped, not queued.
+  workerReady = true;
 }
 
 // --- Main-thread mode (output only, no input) ---
@@ -350,7 +362,10 @@ async function startMainThreadMode() {
   try {
     setStatus(WASM_MODE === 'external' ? 'fetching wasm...' : 'decompressing wasm...');
     if (typeof SharedArrayBuffer !== 'undefined' && crossOriginIsolated) {
-      startWorkerMode();
+      // await so external-mode fetch/compile rejections (after the first await
+      // in startWorkerMode) surface through the catch below, not as an
+      // unhandled rejection that strands the page at "fetching wasm...".
+      await startWorkerMode();
     } else {
       await startMainThreadMode();
     }
