@@ -36,6 +36,29 @@
 (declare const-param-of)
 (declare go-export-name)
 
+;; --- closure-local arg naming -----------------------------------------------
+;; A lowered fn names its parameters arg0/arg1/… and (for tail-call fns) its
+;; mutable locals a0/a1/… and rest slot args0. An inline closure (lower-fn-lit)
+;; is lowered with the SAME scheme, but its captured values (:load-closed) are
+;; spliced in as the ENCLOSING scope's identifiers (e.g. arg0). A closure
+;; parameter named arg0 then SHADOWS a captured arg0, so the closure reads its
+;; own parameter where it meant the capture — the "captured name shadowed by
+;; block param" miscompile (e.g. dump's `(map (fn [bid] (write-block f bid)) …)`
+;; lowered to `write_block(ec, arg0, arg0)`, passing bid for f). To keep the two
+;; namespaces disjoint, every closure body is lowered under a per-closure prefix
+;; derived from its make-closure nid: deterministic, unique per closure site, so
+;; even nested closures don't collide. Top-level fns leave the prefix nil, so
+;; their emitted Go is byte-for-byte unchanged.
+(def ^:dynamic *closure-arg-prefix* nil)
+
+(defn- go-arg-name [base i]
+  ;; base is "arg" (immutable Go param) or "a" (tail-call mutable local).
+  (str (or *closure-arg-prefix* "") base i))
+
+(defn- go-args-name [base]
+  ;; variadic rest slot: "args" (param/rest read) or "args0" (tail-call local).
+  (str (or *closure-arg-prefix* "") base))
+
 (defn- unsupported [mode msg]
   (if (= mode :bridge)
     {:status :fallback
@@ -442,10 +465,10 @@
                           insts)]
         (recur (rest blocks) (into out found))))))
 
-(defn- lower-template-closure-expr [template capture-exprs]
+(defn- lower-template-closure-expr [template capture-exprs cid]
   (cond
     (fn-template? template)
-    (let [inner* (lower-fn-lit (:fn template) capture-exprs)]
+    (let [inner* (lower-fn-lit (:fn template) capture-exprs cid)]
       (when inner*
         (gogen/call
           (gogen/field-sel (gogen/ident "rt") "BoxNativeFn")
@@ -453,7 +476,7 @@
 
     (multi-fn-template? template)
     (let [inners (mapv (fn [entry]
-                         (lower-fn-lit (:fn entry) capture-exprs))
+                         (lower-fn-lit (:fn entry) capture-exprs cid))
                        (:fns template))]
       (when (every? identity inners)
         (let [boxed (mapv (fn [inner*]
@@ -487,7 +510,9 @@
       ;; `[]vm.Value{i_5}` / `return i_5`, which doesn't typecheck.
       (let [capture-exprs (mapv (fn [rid] (box-as-value f closed-exprs rid)) (:captures info))]
         (when (every? identity capture-exprs)
-          (lower-template-closure-expr (:template info) capture-exprs))))))
+          ;; nid (the make-closure inst id) tags this closure's arg namespace so
+          ;; its params/locals never collide with the captured outer identifiers.
+          (lower-template-closure-expr (:template info) capture-exprs nid))))))
 
 (defn- value-expr [f closed-exprs nid]
   (let [op  (ir/op nid f)
@@ -509,12 +534,11 @@
 
           (= op :load-arg)
           (if (and (ir/fn-variadic? f) (= aux (dec (ir/fn-arity f))))
-            (let [rest-var (if (function-needs-tail-call? f) "args0" "args")]
+            (let [rest-var (go-args-name (if (function-needs-tail-call? f) "args0" "args"))]
               (gogen/call
                 (gogen/field-sel (gogen/ident "rt") "BoxRestArgs")
                 [(gogen/ident rest-var)]))
-            (let [prefix (if (function-needs-tail-call? f) "a" "arg")]
-              (gogen/ident (str prefix aux))))
+            (gogen/ident (go-arg-name (if (function-needs-tail-call? f) "a" "arg") aux)))
 
           (= op :load-var)
           ;; rt.LookupVar returns *vm.Var; .Deref() returns the value-typed
@@ -999,8 +1023,8 @@
                         out
                         (let [val-expr (box-as-value f closed-exprs (first remaining))
                               lhs (if (and (ir/fn-variadic? f) (= i fixed-arity))
-                                    (gogen/ident "args0")
-                                    (gogen/ident (str "a" i)))]
+                                    (gogen/ident (go-args-name "args0"))
+                                    (gogen/ident (go-arg-name "a" i)))]
                           (if (nil? val-expr)
                             nil
                             (recur (inc i) (rest remaining)
@@ -1752,12 +1776,12 @@
         (let [final-decls decls
               final-assigns assigns]
           (if variadic?
-            [(conj final-decls (gogen/var-decl "args0" (gogen/type "[]vm.Value") nil))
+            [(conj final-decls (gogen/var-decl (go-args-name "args0") (gogen/type "[]vm.Value") nil))
              (conj final-assigns
-                   (gogen/assign "=" (gogen/ident "args0") (gogen/ident "args")))]
+                   (gogen/assign "=" (gogen/ident (go-args-name "args0")) (gogen/ident (go-args-name "args"))))]
             [final-decls final-assigns]))
-        (let [sym (str "a" i)
-              arg-sym (str "arg" i)]
+        (let [sym (go-arg-name "a" i)
+              arg-sym (go-arg-name "arg" i)]
           (recur (inc i)
                  (conj decls (gogen/var-decl sym (gogen/type "vm.Value") nil))
                  (conj assigns
@@ -2128,8 +2152,8 @@
                                   out
                                   (let [val-expr (box-as-value f closed-exprs (first remaining))
                                         lhs (if (and (ir/fn-variadic? f) (= i fixed-arity))
-                                              (gogen/ident "args0")
-                                              (gogen/ident (str "a" i)))]
+                                              (gogen/ident (go-args-name "args0"))
+                                              (gogen/ident (go-arg-name "a" i)))]
                                     (if (nil? val-expr)
                                       nil
                                       (recur (inc i) (rest remaining)
@@ -2259,7 +2283,7 @@
     (loop [i 0 out []]
       (if (>= i fixed-arity)
         (if variadic?
-          (conj out (gogen/variadic-param "args" (gogen/type "vm.Value")))
+          (conj out (gogen/variadic-param (go-args-name "args") (gogen/type "vm.Value")))
           out)
         ;; Priority: load-arg inst's inferred type > explicit fn-arg-types
         ;; metadata > :unknown. The load-arg path picks up backward
@@ -2272,7 +2296,7 @@
               go-type     (infer-go-type t)]
           (if (nil? go-type)
             nil
-            (recur (inc i) (conj out (gogen/param (str "arg" i) go-type)))))))))
+            (recur (inc i) (conj out (gogen/param (go-arg-name "arg" i) go-type)))))))))
 
 (defn- return-ref-ids [f]
   (loop [blocks (ir/blocks f) out []]
@@ -2339,7 +2363,7 @@
        (= "vm.Value" (function-return-spec f))
        (every? (fn [s] (= "vm.Value" s)) (function-param-specs f))))
 
-(defn- lower-fn-lit [f closed-exprs]
+(defn- lower-fn-lit [f closed-exprs cid]
   ;; Returns nil on any unlowerable inner — callers (closure-expr →
   ;; lower-template-closure-expr) propagate nil up through value-expr,
   ;; which makes the OUTER defn fall back via the normal :status :fallback
@@ -2351,7 +2375,26 @@
   ;; Inner closures keep their natural, body-derived error shape even when the
   ;; enclosing form is a protocol method lowered under *force-needs-error*: a
   ;; lambda is a plain Go func-lit value, not a method on the uniform IFn ABI.
-  (binding [*force-needs-error* nil]
+  ;;
+  ;; cid (the make-closure nid) prefixes this closure's arg namespace
+  ;; (params arg0/locals a0/rest args0 → c<cid>_arg0 …) so its own slots
+  ;; can't be shadowed by — or shadow — the captured outer identifiers
+  ;; that :load-closed splices into the body. Unique per closure site, so
+  ;; nested closures stay disjoint too.
+  ;;
+  ;; ONLY prefix when the closure actually captures: a capture-free closure
+  ;; (e.g. (fn [x] x)) references no outer identifier, so there's no shadow
+  ;; risk and the plain arg0/a0 naming is kept — avoids gratuitously churning
+  ;; the emitted Go for the common no-capture case.
+  (binding [*force-needs-error* nil
+            ;; Extend the ENCLOSING prefix rather than replacing it, so the
+            ;; prefix is lexically cumulative (c<outer>_c<inner>_…). cid is an
+            ;; IR nid unique only within one function template, so two nested
+            ;; closure templates can share a nid; a flat c<cid>_ would then let
+            ;; an inner capturing closure's param collide with the captured
+            ;; outer param it shadows. The cumulative path is unique by
+            ;; construction across nesting depth.
+            *closure-arg-prefix* (when (seq closed-exprs) (str *closure-arg-prefix* "c" cid "_"))]
     (let [params  (params-for f)
           results (result-node f)
           body    (lower-body f closed-exprs)]

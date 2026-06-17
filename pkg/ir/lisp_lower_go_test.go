@@ -1196,3 +1196,44 @@ func TestLowerGoStrictExactDTypeArgStaysConcrete(t *testing.T) {
 		t.Fatalf("dtype arg widened back to vm.Value\n--- go ---\n%s", rendered)
 	}
 }
+
+// A capturing closure nested inside another capturing closure must get a
+// LEXICALLY cumulative arg prefix (c<outer>_c<inner>_...), not a flat
+// c<nid>_. nid is unique only within one function IR, so two nested closure
+// templates can share a nid; a flat prefix then makes the inner closure's
+// param collide with the captured outer param it shadows — the same
+// "captured name shadowed by block param" miscompile this PR fixes, just one
+// level deeper. (Reported on PR #247.)
+func TestLowerGoNestedCapturedClosurePrefixesAreLexical(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn nested-captures [x]
+		(fn* [y]
+			(fn* [z]
+				[x y z])))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v (reason: %v)", got, result.ValueAt(vm.Keyword("reason")))
+	}
+
+	rendered := bindAndRenderGoDecl(t, result)
+
+	// Each capturing closure names its first param <prefix>arg0 where prefix is
+	// one or more c<nid>_ segments. The two nested capturing closures appear in
+	// source order: outer first, inner second. The inner prefix must LEXICALLY
+	// EXTEND the outer (c<o>_ -> c<o>_c<i>_), which guarantees distinctness
+	// regardless of whether the two templates happen to share a nid. A flat
+	// per-nid scheme would instead emit sibling prefixes (c<o>_, c<i>_) that are
+	// only accidentally distinct.
+	re := regexp.MustCompile(`func\(((?:c[0-9]+_)+)arg0 vm\.Value\)`)
+	ms := re.FindAllStringSubmatch(rendered, -1)
+	if len(ms) < 2 {
+		t.Fatalf("expected two nested prefixed closure params, found %d\n--- go ---\n%s", len(ms), rendered)
+	}
+	outer, inner := ms[0][1], ms[1][1]
+	if inner == outer || !strings.HasPrefix(inner, outer) {
+		t.Fatalf("inner closure prefix %q must lexically extend outer %q (else inner param can shadow captured outer param)\n--- go ---\n%s", inner, outer, rendered)
+	}
+}
