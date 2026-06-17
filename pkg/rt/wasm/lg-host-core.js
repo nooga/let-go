@@ -16,11 +16,19 @@ if (!crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigat
   navigator.serviceWorker.register('coi-serviceworker.js').then(() => location.reload()).catch(()=>{});
 }
 
-// --- Inline wasm_exec.js and WASM data ---
+// --- wasm_exec.js + WASM payload ---
+// WASM_MODE is 'inline' (gzip-base64 baked into this page, decoded in JS) or
+// 'external' (a separate main.wasm fetched + stream-compiled). Both load paths
+// ship below; the build picks one via -w-wasm.
 const WASM_EXEC_JS = __WASM_EXEC_JS__;
-const WASM_GZ_B64 = __WASM_GZ_B64__;
+const WASM_MODE = __WASM_MODE__;
+const WASM_GZ_B64 = __WASM_GZ_B64__; // inline payload; "" in external mode
+// External mode resolves the payload to an absolute URL so the Blob-URL worker
+// (whose relative base is the blob, not the page) can fetch it. A client can
+// override this to point at its own CDN.
+const WASM_URL = WASM_MODE === 'external' ? new URL('main.wasm', location.href).href : null;
 
-// --- Decompress gzipped base64 WASM ---
+// --- Decompress gzipped base64 WASM (inline mode) ---
 async function decompressWasm(b64) {
   const compressed = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   const ds = new DecompressionStream('gzip');
@@ -99,7 +107,7 @@ const status = document.getElementById('status');
 function setStatus(t) { if (status) status.textContent = t; }
 
 // --- Worker mode (interactive, needs cross-origin isolation) ---
-function startWorkerMode() {
+async function startWorkerMode() {
   const sab = new SharedArrayBuffer(64);
   const keyInt32 = new Int32Array(sab);
   const keyUint8 = new Uint8Array(sab, 8, 16);
@@ -171,29 +179,49 @@ function startWorkerMode() {
     };
     onmessage = async (e) => {
       if (e.data.t !== 'init') return;
-      const { sab, wasmGzB64, wasmExecJS } = e.data;
+      const { sab, mode, wasmModule, wasmGzB64, wasmExecJS } = e.data;
       globalThis._lgKeyInt32 = new Int32Array(sab);
       globalThis._lgKeyUint8 = new Uint8Array(sab, 8, 16);
       // Load wasm_exec.js in worker scope
       eval(wasmExecJS);
-      // Decompress WASM
-      const compressed = Uint8Array.from(atob(wasmGzB64), c => c.charCodeAt(0));
-      const ds = new DecompressionStream('gzip');
-      const w = ds.writable.getWriter(); w.write(compressed); w.close();
-      const r = ds.readable.getReader();
-      const chunks = []; let total = 0;
-      while (true) { const {done,value} = await r.read(); if(done) break; chunks.push(value); total += value.length; }
-      const wasmBytes = new Uint8Array(total);
-      let off = 0; for(const c of chunks) { wasmBytes.set(c, off); off += c.length; }
-      // Run Go WASM
       const go = new Go();
-      const { instance } = await WebAssembly.instantiate(wasmBytes, go.importObject);
+      let instance;
+      if (mode === 'external') {
+        // External: the main thread compiled the payload via compileStreaming
+        // and posted the WebAssembly.Module (structured-cloneable). The worker
+        // only instantiates — no fetch, no recompile — so download+compile
+        // overlapped worker spin-up. instantiate(Module, imports) resolves to
+        // the Instance directly (the {instance,module} shape is BufferSource-only).
+        instance = await WebAssembly.instantiate(wasmModule, go.importObject);
+      } else {
+        // Inline: decode the gzip-base64 payload posted from the main thread.
+        const compressed = Uint8Array.from(atob(wasmGzB64), c => c.charCodeAt(0));
+        const ds = new DecompressionStream('gzip');
+        const w = ds.writable.getWriter(); w.write(compressed); w.close();
+        const r = ds.readable.getReader();
+        const chunks = []; let total = 0;
+        while (true) { const {done,value} = await r.read(); if(done) break; chunks.push(value); total += value.length; }
+        const wasmBytes = new Uint8Array(total);
+        let off = 0; for(const c of chunks) { wasmBytes.set(c, off); off += c.length; }
+        ({ instance } = await WebAssembly.instantiate(wasmBytes, go.importObject));
+      }
       postMessage({t:'ready'});
       await go.run(instance);
       globalThis._lgFlush();
       postMessage({t:'exit'});
     };
   `;
+
+  // External mode: kick off download + streaming compile on the main thread
+  // *now*, so it overlaps worker creation. instantiateStreaming is MIME-strict,
+  // so fall back to compile(arrayBuffer) if the host doesn't serve application/wasm.
+  const modPromise = WASM_MODE === 'external' ? (async () => {
+    try {
+      return await WebAssembly.compileStreaming(fetch(WASM_URL));
+    } catch (streamErr) {
+      return await WebAssembly.compile(await (await fetch(WASM_URL)).arrayBuffer());
+    }
+  })() : null;
 
   const blob = new Blob([workerCode], { type: 'application/javascript' });
   const worker = new Worker(URL.createObjectURL(blob));
@@ -207,7 +235,13 @@ function startWorkerMode() {
     }
   };
 
-  worker.postMessage({ t: 'init', sab, wasmGzB64: WASM_GZ_B64, wasmExecJS: WASM_EXEC_JS });
+  const initMsg = { t: 'init', sab, mode: WASM_MODE, wasmExecJS: WASM_EXEC_JS };
+  if (WASM_MODE === 'external') {
+    initMsg.wasmModule = await modPromise; // compiled on the main thread
+  } else {
+    initMsg.wasmGzB64 = WASM_GZ_B64;       // worker decodes the inline payload
+  }
+  worker.postMessage(initMsg);
 }
 
 // --- Main-thread mode (output only, no input) ---
@@ -271,16 +305,28 @@ async function startMainThreadMode() {
 
   // Load wasm_exec.js
   eval(WASM_EXEC_JS);
-  const wasmBytes = await decompressWasm(WASM_GZ_B64);
   const go = new Go();
-  const { instance } = await WebAssembly.instantiate(wasmBytes, go.importObject);
+  let instance;
+  if (WASM_MODE === 'external') {
+    // Fetch the separate payload (streaming, with arrayBuffer fallback).
+    try {
+      ({ instance } = await WebAssembly.instantiateStreaming(fetch(WASM_URL), go.importObject));
+    } catch (streamErr) {
+      const buf = await (await fetch(WASM_URL)).arrayBuffer();
+      ({ instance } = await WebAssembly.instantiate(buf, go.importObject));
+    }
+  } else {
+    // Decode the inline gzip-base64 payload.
+    const wasmBytes = await decompressWasm(WASM_GZ_B64);
+    ({ instance } = await WebAssembly.instantiate(wasmBytes, go.importObject));
+  }
   go.run(instance);
 }
 
 // --- Entry point ---
 (async () => {
   try {
-    setStatus('decompressing wasm...');
+    setStatus(WASM_MODE === 'external' ? 'fetching wasm...' : 'decompressing wasm...');
     if (typeof SharedArrayBuffer !== 'undefined' && crossOriginIsolated) {
       startWorkerMode();
     } else {

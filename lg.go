@@ -294,6 +294,7 @@ var bundleOutput string
 var bundleBase string
 var wasmOutput string
 var wasmShell string
+var wasmPayload string
 var sourcePaths string
 var resourcePaths string
 
@@ -310,6 +311,7 @@ func init() {
 	flag.StringVar(&bundleBase, "bundle-base", "", "path to target-platform lg binary for cross-OS bundling (defaults to current executable)")
 	flag.StringVar(&wasmOutput, "w", "", "build .lg file into a WASM web app (specify output directory)")
 	flag.StringVar(&wasmShell, "w-shell", "xterm", "shell for -w: 'xterm' (default) or 'none' (emit core only; client supplies its own shell via window.LetGoHost)")
+	flag.StringVar(&wasmPayload, "w-wasm", "inline", "wasm delivery for -w: 'inline' (default; gzip-base64 baked into index.html) or 'external' (emit a separate main.wasm the loader fetches + streams)")
 	flag.StringVar(&sourcePaths, "source-paths", "",
 		"namespace search paths separated by the OS path-list separator "+
 			"(':' on Unix, ';' on Windows). When given, fully defines the search "+
@@ -545,7 +547,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: -w-shell must be 'xterm' or 'none', got %q\n", wasmShell)
 			os.Exit(1)
 		}
-		if err := buildWasm(context, nsResolver, files[0], wasmOutput, wasmShell == "xterm"); err != nil {
+		if wasmPayload != "inline" && wasmPayload != "external" {
+			fmt.Fprintf(os.Stderr, "error: -w-wasm must be 'inline' or 'external', got %q\n", wasmPayload)
+			os.Exit(1)
+		}
+		if err := buildWasm(context, nsResolver, files[0], wasmOutput, wasmShell == "xterm", wasmPayload == "external"); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

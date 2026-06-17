@@ -134,7 +134,7 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool) error {
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool) error {
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
 	f, err := os.Open(src)
@@ -207,17 +207,21 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		return fmt.Errorf("go build wasm: %w", err)
 	}
 
-	// 7. Read and compress WASM binary
-	fmt.Println("compressing...")
+	// 7. Read the WASM binary. Inline mode gzip+base64s it into the page;
+	// external mode ships it as a separate file the loader fetches + streams.
 	wasmData, err := os.ReadFile(wasmPath)
 	if err != nil {
 		return err
 	}
-	var gzBuf bytes.Buffer
-	gz, _ := gzip.NewWriterLevel(&gzBuf, gzip.BestCompression)
-	gz.Write(wasmData)
-	gz.Close()
-	wasmB64 := base64.StdEncoding.EncodeToString(gzBuf.Bytes())
+	var wasmB64 string
+	if !externalWasm {
+		fmt.Println("compressing...")
+		var gzBuf bytes.Buffer
+		gz, _ := gzip.NewWriterLevel(&gzBuf, gzip.BestCompression)
+		gz.Write(wasmData)
+		gz.Close()
+		wasmB64 = base64.StdEncoding.EncodeToString(gzBuf.Bytes())
+	}
 
 	// 8. Read wasm_exec.js
 	wasmExecJS, err := readWasmExecJS()
@@ -225,10 +229,10 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		return err
 	}
 
-	// 9. Build single self-contained HTML. shell=false emits the core glue
-	// only (no xterm shell / CDN tags); the client binds its own shell to
-	// window.LetGoHost.
-	html := wasmassets.AssembleHTML(string(wasmExecJS), wasmB64, shell)
+	// 9. Build the HTML. shell=false emits the core glue only (no xterm shell
+	// / CDN tags). externalWasm=true emits the streaming loader and an empty
+	// inline payload (the wasm ships as main.wasm, written below).
+	html := wasmassets.AssembleHTML(string(wasmExecJS), wasmB64, shell, externalWasm)
 
 	// 10. Write output
 	if err := os.MkdirAll(outDir, 0755); err != nil {
@@ -237,6 +241,14 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	outPath := filepath.Join(outDir, "index.html")
 	if err := os.WriteFile(outPath, []byte(html), 0644); err != nil {
 		return err
+	}
+
+	// External mode: emit the raw wasm as a separately-servable asset. The
+	// loader fetches it (instantiateStreaming) instead of decoding an inline blob.
+	if externalWasm {
+		if err := os.WriteFile(filepath.Join(outDir, "main.wasm"), wasmData, 0644); err != nil {
+			return err
+		}
 	}
 
 	// 11. Write coi-serviceworker.js for cross-origin isolation on hosted servers

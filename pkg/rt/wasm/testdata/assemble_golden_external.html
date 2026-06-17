@@ -43,8 +43,8 @@ if (!crossOriginIsolated && window.isSecureContext && 'serviceWorker' in navigat
 // 'external' (a separate main.wasm fetched + stream-compiled). Both load paths
 // ship below; the build picks one via -w-wasm.
 const WASM_EXEC_JS = "// stub wasm_exec.js for the golden test\nconsole.log('exec stub');\n";
-const WASM_MODE = "inline";
-const WASM_GZ_B64 = "STUBWASMBLOBB64=="; // inline payload; "" in external mode
+const WASM_MODE = "external";
+const WASM_GZ_B64 = ""; // inline payload; "" in external mode
 // External mode resolves the payload to an absolute URL so the Blob-URL worker
 // (whose relative base is the blob, not the page) can fetch it. A client can
 // override this to point at its own CDN.

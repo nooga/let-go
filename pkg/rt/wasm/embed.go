@@ -40,13 +40,26 @@ const (
 // AssembleHTML returns the full self-contained HTML page produced by
 // `lg -w`. With shell == true the default xterm shell and its CDN tags are
 // included; with shell == false only the host-agnostic core ships and the
-// client binds its own shell to window.LetGoHost. Pure function: same inputs
-// produce same output. Tested via golden files in testdata/.
-func AssembleHTML(wasmExecJS, wasmGzB64 string, shell bool) string {
+// client binds its own shell to window.LetGoHost. With externalWasm == true
+// the payload is delivered as a separate main.wasm the loader fetches and
+// streams (wasmGzB64 is ignored); otherwise it is gzip-base64 inlined into the
+// page. Pure function: same inputs produce same output. Tested via golden
+// files in testdata/.
+func AssembleHTML(wasmExecJS, wasmGzB64 string, shell, externalWasm bool) string {
 	execJSON, _ := json.Marshal(wasmExecJS)
+
+	// WASM_MODE selects the loader path; in external mode the inline payload
+	// is emptied (the wasm ships as a separate main.wasm), keeping index small.
+	mode := "inline"
+	if externalWasm {
+		mode = "external"
+		wasmGzB64 = ""
+	}
+	modeJSON, _ := json.Marshal(mode)
 	b64JSON, _ := json.Marshal(wasmGzB64)
 
 	hostJS := mustReplaceOnce(lgHostCoreJS, "__WASM_EXEC_JS__", string(execJSON))
+	hostJS = mustReplaceOnce(hostJS, "__WASM_MODE__", string(modeJSON))
 	hostJS = mustReplaceOnce(hostJS, "__WASM_GZ_B64__", string(b64JSON))
 
 	css, js := "", ""
