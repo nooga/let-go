@@ -163,40 +163,47 @@ function setStatus(t) { if (status) status.textContent = t; }
 
 // --- Worker mode (interactive, needs cross-origin isolation) ---
 async function startWorkerMode() {
-  const sab = new SharedArrayBuffer(64);
+  // SPSC ring buffer between this main thread (producer) and the worker
+  // (consumer). Layout MUST stay in sync with pkg/rt/term_wasm.go — the consts
+  // below mirror the Go consts. The producer never blocks the main thread:
+  // when the ring is full, _lgKey returns false and the caller decides (held-
+  // repeat callers ignore the return; 8 slots is plenty for human/auto-repeat
+  // input rates). Replaces the old single-slot busy-wait that spun the main
+  // thread for the worker's whole per-key turn cost under hold-to-repeat.
+  //
+  // Int32 view: [0] readIdx, [1] writeIdx, [6] cols, [7] rows.
+  // Uint8 view: bytes 64..71 slot lengths, bytes 72..199 slot keys (8×16).
+  const CAPACITY = 8, MAX_KEY_LEN = 16, LEN_OFFSET = 64, KEY_OFFSET = 72, READ_IDX = 0, WRITE_IDX = 1;
+  const sab = new SharedArrayBuffer(256);
   const keyInt32 = new Int32Array(sab);
-  const keyUint8 = new Uint8Array(sab, 8, 16);
+  const keyUint8 = new Uint8Array(sab);
 
   // Input is unsafe until the worker has been told to start (init posted):
-  // before that there is no consumer to drain the SAB slot. Drop pre-start
-  // keys rather than write into a slot nothing will ever read.
+  // before that there is no consumer, so pre-start keys would sit in the ring
+  // and be replayed as stale input once the VM boots. Drop them. (Kept from the
+  // single-slot era; with the ring there's no main-thread lock to avoid, but
+  // dropping pre-boot keystrokes is still the correct behavior.)
   let workerReady = false;
 
-  // Public input hook — backs LetGoHost.sendInput. Returns true if accepted,
-  // false if dropped (worker not started yet, or input too long >16 bytes).
-  // A shell's keystrokes feed through here via LetGoHost.sendInput.
-  //
-  // Non-blocking: never wait for the consumer to drain (that wait is what froze
-  // the page on key bursts). We drop rather than overwrite while a key is still
-  // pending (ready==1): overwriting concurrently would tear the consumer's
-  // byte-by-byte copy and, worse, the consumer's unconditional clear after copy
-  // would stomp our just-set ready flag and lose the accepted key.
-  //
-  // This makes the slot oldest-pending-wins, not newest-wins. In practice when
-  // the program is waiting on input the consumer drains immediately and parks at
-  // ready==0, so the freshest key still lands (the interactive common case).
-  // Drops only happen while a prior key sits unconsumed — i.e. the program is
-  // busy and not reading keys — where keeping the first pending key (the
-  // interrupt) and dropping the rest is the behavior we want anyway.
+  // Public input hook — backs LetGoHost.sendInput. Writes UTF-8 bytes to the
+  // next ring slot and advances writeIdx; never blocks. Returns true if
+  // accepted, false if dropped (worker not started, input >16 bytes, or ring
+  // full). Single producer (only this context writes), so no CAS needed; the
+  // slot write happens-before the writeIdx publish because Atomics.store is
+  // sequentially consistent, so the worker never sees an advanced writeIdx
+  // over an unwritten slot.
   window._lgKey = function(data) {
     if (!workerReady) return false;
     const bytes = new TextEncoder().encode(data);
-    if (bytes.length === 0 || bytes.length > 16) return false;
-    if (Atomics.load(keyInt32, 0) !== 0) return false;
-    keyUint8.set(bytes);
-    Atomics.store(keyInt32, 1, bytes.length);
-    Atomics.store(keyInt32, 0, 1);
-    Atomics.notify(keyInt32, 0);
+    if (bytes.length === 0 || bytes.length > MAX_KEY_LEN) return false;
+    const w = Atomics.load(keyInt32, WRITE_IDX);
+    const r = Atomics.load(keyInt32, READ_IDX);
+    if (w - r >= CAPACITY) return false;            // ring full → drop
+    const slot = w % CAPACITY;
+    keyUint8[LEN_OFFSET + slot] = bytes.length;
+    keyUint8.set(bytes, KEY_OFFSET + slot * MAX_KEY_LEN);
+    Atomics.store(keyInt32, WRITE_IDX, w + 1);       // publish
+    Atomics.notify(keyInt32, WRITE_IDX, 1);          // wake the consumer
     return true;
   };
 
@@ -272,7 +279,7 @@ async function startWorkerMode() {
       if (e.data.t !== 'init') return;
       const { sab, mode, wasmModule, wasmGzB64, wasmExecJS, urlSearch } = e.data;
       globalThis._lgKeyInt32 = new Int32Array(sab);
-      globalThis._lgKeyUint8 = new Uint8Array(sab, 8, 16);
+      globalThis._lgKeyUint8 = new Uint8Array(sab); // full ring (lengths @64, keys @72)
       // Page URL search string, forwarded from the main thread (the worker's
       // own location is the blob URL, not the page). Read by js/url-param.
       globalThis._lgUrlSearch = urlSearch || '';
