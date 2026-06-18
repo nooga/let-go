@@ -45,12 +45,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Check generated manifest before regeneration
+        run: make check-generated-manifest
+
       - name: Regenerate bundled bytecode
         run: go generate ./pkg/rt/
 
-      # Freshness of the committed artifacts is gated once, in the dedicated
-      # `generated` job below (make check-generated). This job regenerates the
-      # bundle only so build/test exercise the current .lg sources.
+      # Freshness of the committed manifest is checked before this job mutates
+      # the worktree. The regeneration here is only so build/test exercise the
+      # current .lg sources.
 
       - name: Build
         run: go build -v ./...

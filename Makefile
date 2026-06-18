@@ -196,6 +196,12 @@ install-hooks:
 	git config merge.lgb.driver "scripts/git-merge-lgb.sh %O %A %B %L %P"
 	@echo "Registered the 'lgb' merge driver. core_compiled.lgb conflicts now auto-regenerate."
 
+# Non-mutating front gate: fail before any target has a chance to refresh
+# pkg/rt/generated.sums. This catches the exact drift that a prior go generate
+# or lgbgen invocation would otherwise mask in CI.
+check-generated-manifest: $(GO)
+	@go run ./cmd/check-generated
+
 # Single gate for every generated artifact. One target to remember, and it
 # treats the two artifacts by their actual nature. VCS-agnostic by design:
 # it shells out to no `git` (this repo is used with jj, whose secondary
@@ -219,7 +225,7 @@ install-hooks:
 #
 # This is the gate CI runs. After a merge/rebase touching pkg/rt/core/**, run
 # `make check-generated` (or `make generate` to refresh, then commit).
-check-generated: $(GO)
+check-generated: check-generated-manifest $(GO)
 	@echo ">> regenerate bundle + lowered tree from a SINGLE core compile (--target=both)"
 	@cp pkg/rt/core_compiled.lgb pkg/rt/.core_compiled.lgb.committed
 	@go run -tags bootstrap ./cmd/lgbgen --target=both >/dev/null
