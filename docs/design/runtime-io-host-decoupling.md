@@ -1,13 +1,15 @@
 ---
-status: planning
-last-verified: 2026-06-15
-human-verified: 2026-06-15
+status: active
+last-verified: 2026-06-18
+human-verified: 2026-06-18
+shipped: ["#206", "#207", "#223", "#231", "#241", "#244"]
+remaining-open: ["peer capabilities (audio, graphics, controller) — nooga/let-go#255"]
 ---
 
 # Decoupling runtime I/O from the host
 
-**Status:** design proposal — where the runtime-I/O work is going and why
-**Decision leaning:** the runtime exposes a small set of I/O *seams*; each host (native, embedder, WASM) binds the concrete stream. Output is done; input is the live frontier.
+**Status:** active. The I/O seams below shipped (see §4); this doc stays as the design rationale. Remaining forward work (peer capabilities) is scoped in nooga/let-go#255.
+**Decision:** the runtime exposes a small set of I/O *seams*; each host (native, embedder, WASM) binds the concrete stream. Output, input, and emit are all decoupled.
 
 ## 1. Where this came from
 
@@ -43,16 +45,20 @@ Two rules keep the boundary honest:
 - **Host-bound capabilities live in `pkg/rt`, never `pkg/vm`.** The guest *names* the capability (`println`, `read-key`, `emit`); the host *supplies* the backend. The VM core stays free of it — and today it is (no `syscall/js` in `pkg/vm`).
 - **The seam is as thin as the operation allows.** Output is a byte stream, so it's a plain `io.Writer`; no richer interface earns its keep. Input isn't (§5), so it gets a slightly larger seam. The interface widens only where the operation differs across platforms.
 
-## 4. Status: output is decoupled
+## 4. Status: I/O is decoupled
+
+All three streams now reach the host through typed seams.
 
 | Step | What it did | State |
 |---|---|---|
 | print → `*out*` | print fns consult the dynamic binding, not `os.Stdout` | #206 (merged) |
 | embedder options | `WithStdout` / `WithStderr` as per-`Run` bindings | #207 (merged) |
 | `term/*` → `*out*` | ANSI control ops join the same path | #223 (merged) |
-| WASM host writer | `*out*` / `*err*` bound to a `HostWriter`; `fs` output shim retired | #231 (open) |
+| WASM host writer | `*out*` / `*err*` bound to a `HostWriter`; `fs` output shim retired | #231 (merged) |
+| input seam | `read-key` / `key-pending?` via a typed `KeySource` / `HostReader` | #244 (merged) |
+| emit seam | `js/emit` via a typed `HostEmitter`, off the raw `_lgEmit` lookup | #241 (merged) |
 
-After #231, output (plain text and ANSI alike) reaches the host through one configurable sink per stream, and the browser bundle stops intercepting file descriptors. The relevant input primitives are already upstream too: a non-blocking peek (`key-pending?`, #118), the native wake-a-blocked-`read-key` mechanism (BEL self-pipe on resize, #165), and the browser-interop surface itself (`js/emit` + `LetGoHost`, #174). The direction builds on accepted ground.
+Output, input, and emit reach the host through one configurable seam per stream, and the browser bundle no longer intercepts file descriptors. The input work built on primitives already upstream: a non-blocking peek (`key-pending?`, #118), the native wake-a-blocked-`read-key` mechanism (BEL self-pipe on resize, #165), and the browser-interop surface itself (`js/emit` + `LetGoHost`, #174). The client-owned shell that #79 was aiming at also landed on the same `LetGoHost` surface: `lg -w -w-shell none` emits the host-agnostic core and lets a client supply its own shell (#245).
 
 ## 5. Design decisions
 
@@ -66,15 +72,16 @@ For each: the proposal or decision, one alternative, and the tradeoff.
 
 ### 5.2 Input shape: capability op + `HostReader` vs `*in*` as `io.Reader`
 
-- **Proposal:** keep `read-key` / `key-pending?` as `term/*` capability ops, backed by a host-supplied `HostReader` (plus a wake primitive). Treat `*in*`-as-`io.Reader` as a separate, later seam for generic stdin streaming.
+- **Decided (#244):** keep `read-key` / `key-pending?` as `term/*` capability ops, backed by a host-supplied `KeySource` / `HostReader` (plus a wake primitive). `*in*`-as-`io.Reader` stays a separate, later seam for generic stdin streaming.
 - **Alternative:** make `*in*` an `io.Reader` and model `read-key` as a read off it, the symmetric dual of `*out*`.
 - **Tradeoff:** there are two distinct input needs. Interactive keys are event-shaped (one keystroke = one unit), blocking, and need interruption; `io.Reader.Read` fits them awkwardly, and the siblings (`key-pending?`, `size`) aren't reads at all. Generic stdin *is* a byte stream and `io.Reader` fits it. Forcing both through one type buys symmetry at the cost of a leaky abstraction; two seams keep each focused. The interactive seam is the one the browser game needs.
 
 ### 5.3 Blocking + wake model
 
-- **Proposal:** generalize the wake mechanism that already exists rather than invent one. Native interrupts a blocked `read-key` with a self-pipe wake-byte (returns `BEL` on resize, #165); WASM polls via `Atomics` + `key-pending?`. Make "a blocked read is interruptible by resize/EOF/stop" an explicit part of the `HostReader` seam.
+- **Proposal:** generalize the wake mechanism that already exists rather than invent one. Native interrupts a blocked `read-key` with a self-pipe wake-byte (returns `BEL` on resize, #165); WASM polls via `Atomics` + `key-pending?`. Make "a blocked read is interruptible by resize/EOF/stop" an explicit part of the seam.
 - **Alternative:** non-blocking-only reads plus a callback/event model, pushing the blocking up into guest code.
-- **Tradeoff:** a blocking `read-key` is what TUI/game loops want, and both platforms already solve the interrupt, so codifying it is cheaper than rewriting. The callback model inverts control and breaks the `(read-key)`-returns-a-key ergonomics `.lg` code expects. This is the gating design question for the input PR.
+- **Tradeoff:** a blocking `read-key` is what TUI/game loops want, and both platforms already solve the interrupt, so codifying it is cheaper than rewriting. The callback model inverts control and breaks the `(read-key)`-returns-a-key ergonomics `.lg` code expects.
+- **Status:** #244 shipped the input seam with the native wake-pipe relocated behind it verbatim, but deferred the cross-platform wake protocol — unblocking a parked WASM read without a real key — as its own later change. Still open (§7).
 
 ### 5.4 ANSI plain-vs-color: gate at emission vs strip downstream
 
@@ -100,21 +107,25 @@ For each: the proposal or decision, one alternative, and the tradeoff.
 - **Alternative:** push all JS-aware code out of `pkg/rt` into the bundle/host layer, leaving `pkg/rt` with only the seams.
 - **Tradeoff:** a thin build-tagged adapter in `pkg/rt` keeps the capability ops next to their backends. Fully evicting them is purer but a bigger refactor for little gain: the seam is already the `io` boundary, which is what matters.
 
-## 6. Where this is going
+## 6. Where this went, and what's next
 
-1. **Input** (`HostReader`) — the output dual, and the harder half (§5.2, §5.3). The live frontier.
-2. **Emit** (`HostEmitter`) — promote the existing `_lgEmit` bridge to a typed host capability, the same shape as the writer.
-3. **Peer capabilities** — graphics (sixel/canvas rides `*out*` or a sibling seam), audio, controller input. Each is a guest-named capability bound by the host; none is special once the I/O seams set the pattern.
+The I/O seams shipped in the order this doc laid out:
 
-The endgame: a runtime that boots, runs bytecode, and talks to its host through a handful of bound seams, with the `lg -w` generator wiring those seams instead of installing shims.
+1. **Input** (`KeySource` / `HostReader`): the output dual, and the harder half (§5.2, §5.3). **Shipped 2026-06-17 (#244).**
+2. **Emit** (`HostEmitter`): the `_lgEmit` bridge promoted to a typed host capability, the same shape as the writer. **Shipped 2026-06-17 (#241).**
+3. **Peer capabilities**: graphics (sixel/canvas rides `*out*` or a sibling seam), audio, controller input. Each is a guest-named capability bound by the host; none is special once the I/O seams set the pattern. **Now scoped in nooga/let-go#255**, with the client-owned shell (`-w-shell none`, #245) already landed as the surface they bind.
+
+The endgame is mostly realized: the runtime boots, runs bytecode, and talks to its host through a handful of bound seams, with the `lg -w` generator wiring those seams (including `-w-shell none` for client shells) instead of installing shims. The I/O half is done; peer capabilities are the remaining work, in #255.
 
 ## 7. Risks & open questions
 
-- **The wake API.** A `wake()`/`interrupt()` method, a sentinel return (native's `BEL`-on-resize), or a context/channel? This gates the input PR.
-- **`read-key` granularity.** One key per call (current), or a framed byte stream? Decides whether `io.Reader` is the right Go type for input at all.
-- **Key transport.** The current WASM handoff is a single SharedArrayBuffer slot (one key in flight, 16-byte cap). A ring-buffer prototype gave noticeably more responsive input in browser builds; whether to fold that into the input PR or keep it separate (the way flush stayed per-platform) is open.
-- **How much terminal-interface vocabulary to borrow** before the input seam sets, so we don't reinvent a worse version of a solved interface.
-- **`vm`-level diagnostics in WASM.** A few `pkg/vm` last-resort writes (panic-recover, core-shadow, GLS-drain) can't import `pkg/rt`, so they bypass `*err*` and now land on the browser console rather than the terminal. Acceptable (a panic shouldn't scribble over the app), but noted.
+The input seam (#244) settled its shape and granularity. The wake protocol it deferred, plus the rest, carry forward — several into #255.
+
+- **The wake API.** A `wake()`/`interrupt()` method, a sentinel return (native's `BEL`-on-resize), or a context/channel? **Still open.** #244 shipped the input seam and relocated the native wake-pipe behind it, but deferred the cross-platform wake protocol (unblocking a parked WASM read without a real key) as its own change.
+- **`read-key` granularity.** One key per call, or a framed byte stream? **Settled in #244** (one key per call; `*in*`-as-`io.Reader` stays the separate later seam for byte streams).
+- **Key transport.** The WASM handoff is a single SharedArrayBuffer slot (one key in flight, 16-byte cap). A ring-buffer prototype gave noticeably more responsive input in browser builds; whether to fold that in or keep it separate is still open.
+- **How much terminal-interface vocabulary to borrow** before a rich render layer is built above the seam. Carries into the peer-capabilities work (#255), where the graphics surface raises the same question.
+- **`vm`-level diagnostics in WASM.** A few `pkg/vm` last-resort writes (panic-recover, core-shadow, GLS-drain) can't import `pkg/rt`, so they bypass `*err*` and land on the browser console rather than the terminal. Acceptable (a panic shouldn't scribble over the app), but noted.
 
 ## Glossary
 
