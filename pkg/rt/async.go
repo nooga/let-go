@@ -420,15 +420,28 @@ func installAsyncNS() {
 	})
 
 	// alts! — select on multiple channel operations
-	// (alts! [ch1 ch2 [ch3 val]]) → [val port]
+	// (alts! [ch1 ch2 [ch3 val]] :default v) → [val port]
 	// Each entry is either a channel (take) or [channel value] (put).
+	// With :default, alts! never parks: if no port is immediately ready it
+	// returns [v :default]. This is the non-blocking form the single-threaded
+	// wasm event loop needs, since a parked take freezes the whole runtime.
 	altsf := vm.NewCtxNativeFn("alts!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("alts! expects 1 arg (vector of ports)")
+		if len(vs) < 1 {
+			return vm.NIL, fmt.Errorf("alts! expects at least 1 arg (vector of ports)")
 		}
 		seq, ok := vs[0].(vm.Sequable)
 		if !ok {
 			return vm.NIL, fmt.Errorf("alts! expected sequable of ports")
+		}
+
+		// Trailing options as keyword/value pairs. Only :default is honored.
+		var hasDefault bool
+		var defaultVal vm.Value = vm.NIL
+		for i := 1; i+1 < len(vs); i += 2 {
+			if kw, ok := vs[i].(vm.Keyword); ok && kw == vm.Keyword("default") {
+				hasDefault = true
+				defaultVal = vs[i+1]
+			}
 		}
 
 		var cases []reflect.SelectCase
@@ -474,19 +487,31 @@ func installAsyncNS() {
 			return vm.NIL, fmt.Errorf("alts! requires at least one port")
 		}
 
-		// Append a recv on the registry context's Done channel so an
-		// alts! parked on its ports — e.g. inside a (go ...) block — is
-		// released by a CancelAll/Drain on shutdown. If that case wins,
-		// return nil (no port chosen).
-		cancelIdx := len(cases)
-		cases = append(cases, reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(ec.Context().Done()),
-		})
+		// With :default, add a SelectDefault case so reflect.Select returns
+		// immediately when no port is ready — never parking. The ctx Done
+		// case is unneeded here: the non-blocking path can't block, so there
+		// is nothing for a cancel to release.
+		//
+		// Without :default, append a recv on the registry context's Done
+		// channel so an alts! parked on its ports — e.g. inside a (go ...)
+		// block — is released by a CancelAll/Drain on shutdown. If that case
+		// wins, return nil (no port chosen).
+		sentinelIdx := len(cases)
+		if hasDefault {
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
+		} else {
+			cases = append(cases, reflect.SelectCase{
+				Dir:  reflect.SelectRecv,
+				Chan: reflect.ValueOf(ec.Context().Done()),
+			})
+		}
 
 		chosen, value, ok := reflect.Select(cases)
-		if chosen == cancelIdx {
-			return vm.NIL, nil
+		if chosen == sentinelIdx {
+			if hasDefault {
+				return vm.NewArrayVector([]vm.Value{defaultVal, vm.Keyword("default")}), nil
+			}
+			return vm.NIL, nil // ctx cancelled
 		}
 		port := ports[chosen]
 

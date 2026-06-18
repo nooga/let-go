@@ -102,6 +102,23 @@
       (is (= t port))
       (is (nil? val)))))
 
+(deftest alts-default-nothing-ready
+  (testing "alts! with :default returns the default when no port is ready"
+    (let [c1 (async/chan)
+          c2 (async/chan)
+          [val port] (alts! [c1 c2] :default :nothing)]
+      (is (= :nothing val))
+      (is (= :default port)))))
+
+(deftest alts-default-port-ready
+  (testing "alts! with :default still prefers a ready port"
+    (let [c1 (async/chan 1)
+          c2 (async/chan 1)]
+      (>! c1 :ready)
+      (let [[val port] (alts! [c1 c2] :default :nothing)]
+        (is (= :ready val))
+        (is (= c1 port))))))
+
 (deftest alts-put-test
   (testing "alts! with put operation"
     (let [c (async/chan 1)
