@@ -20,12 +20,14 @@
 package genmanifest
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -48,8 +50,45 @@ var sourceSpecs = []struct {
 	{"cmd/lgbgen", ".go"},
 }
 
+// generatedMarker matches the conventional line that flags a Go file as
+// machine-generated (https://pkg.go.dev/cmd/go#hdr-Generate_Go_files).
+var generatedMarker = regexp.MustCompile(`^// Code generated .* DO NOT EDIT\.$`)
+
+// isGenerated reports whether a Go file carries the standard
+// generated-code marker before its package clause.
+//
+// Some generated Go lives under a source root: cmd/lgbgen emits the
+// gitignored gogen_ir wireup (cmd/lgbgen/main_gogen_ir.go) there. That
+// file is a build artifact — absent on a clean checkout, present only
+// after a generation run (see the Makefile's check-generated note: the
+// gogen_ir wireup files are "NOT committed ... a build artifact"). The
+// Makefile's `find cmd/lgbgen -name '*.go'` prerequisite sweeps it in
+// too, but for an mtime prereq that is harmless. Here it is not: the
+// digest is committed, so folding in a file whose presence depends on
+// local build state breaks the "checkout-independent" guarantee and
+// makes a pre-regeneration check disagree with a post-regeneration one.
+func isGenerated(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "package ") {
+			return false, nil // marker must precede the package clause
+		}
+		if generatedMarker.MatchString(line) {
+			return true, nil
+		}
+	}
+	return false, sc.Err()
+}
+
 // SourceFiles returns the sorted list of generator-input files,
-// expressed as slash-separated paths relative to repoRoot.
+// expressed as slash-separated paths relative to repoRoot. Generated Go
+// (see isGenerated) is excluded: it is build output, not source.
 func SourceFiles(repoRoot string) ([]string, error) {
 	var files []string
 	for _, spec := range sourceSpecs {
@@ -60,6 +99,15 @@ func SourceFiles(repoRoot string) ([]string, error) {
 			}
 			if d.IsDir() || !strings.HasSuffix(path, spec.ext) {
 				return nil
+			}
+			if spec.ext == ".go" {
+				gen, err := isGenerated(path)
+				if err != nil {
+					return err
+				}
+				if gen {
+					return nil
+				}
 			}
 			rel, err := filepath.Rel(repoRoot, path)
 			if err != nil {
