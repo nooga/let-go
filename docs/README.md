@@ -10,6 +10,8 @@ human-verified: 2026-06-07
 
 Design plans, execution roadmaps, and policy for the let-go implementation. Each doc carries a `status:` frontmatter line indicating whether it's the current authority or has been superseded. See "What's current" below.
 
+User-facing reference (for writing/shipping let-go programs) lives under [`guide/`](guide/); the rest of `docs/` is contributor/implementation material.
+
 ## What's current
 
 `contribution-policy.md` is the most authoritative doc on overall direction (self-host as committed direction, `gogen_ir` deployment path, CI gates, callback error contract, `:go-deps` interop schema). Where it disagrees with older docs on direction, it wins.
