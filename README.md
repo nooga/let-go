@@ -222,24 +222,13 @@ lg -w site app.lg                 # compile to a WASM web app
 open site/index.html
 ```
 
-The output is a self-contained `index.html` (~6MB, inlined WASM, gzipped)
-plus a service worker that supplies the COOP/COEP headers GitHub Pages needs
-for SharedArrayBuffer. Programs that use the `term` namespace get full
-terminal emulation via xterm.js: ANSI colors, cursor positioning, raw
-keyboard input.
+The WASM output is a self-contained `index.html` (~6MB, inlined and gzipped) with
+a service worker for the COOP/COEP headers SharedArrayBuffer needs; `term`-using
+programs get full xterm.js terminal emulation.
 
-The `*compiling-aot*` var is `true` during `-c`/`-b`/`-w` compilation and
-`false` at runtime, useful for keeping side effects out of compile time:
-
-```clojure
-(defn -main []
-  (start-server))
-
-(when-not *compiling-aot*
-  (-main))
-```
-
-`*in-wasm*` is `true` when running inside a WASM build.
+See [docs/guide/usage.md](docs/guide/usage.md) for the `*compiling-aot*` /
+`*in-wasm*` compile-time vars, more on each output format, and project/dependency
+management with [lgx](https://github.com/abogoyavlensky/lgx).
 
 ### Resources and source paths
 
