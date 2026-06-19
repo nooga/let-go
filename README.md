@@ -72,26 +72,12 @@ Tested against [jank-lang/clojure-test-suite](https://github.com/jank-lang/cloju
 **5621 / 5621 assertions pass** across 232 files through the `:clj` reader
 lens, with no known failures, compile skips, panic skips, or runtime skips.
 
-### Standard namespaces
-
-| Namespace            | Status                                                                                                                                                                                        |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `clojure.core`       | macros, destructuring, lazy seqs, transducers, protocols, records, `deftype`, `reify`, multimethods, hierarchies, atoms, regex, metadata, BigInt, BigDecimal                                   |
-| `clojure.string`     | full                                                                                                                                                                                          |
-| `clojure.set`        | full                                                                                                                                                                                          |
-| `clojure.walk`       | `prewalk`, `postwalk`, `keywordize-keys`, `stringify-keys`, `walk`                                                                                                                            |
-| `clojure.edn`        | `read`, `read-string`                                                                                                                                                                         |
-| `clojure.pprint`     | `pprint`, `cl-format`                                                                                                                                                                         |
-| `clojure.test`       | `deftest`, `is`, `testing`, `are`, fixtures                                                                                                                                                   |
-| `clojure.core.async` | channels, `go`/`go-loop`, `alts!`, `mult`/`pub`, `pipe`/`merge`/`split` (real goroutines, not IOC)                                                                                            |
-| `io`                 | polymorphic readers/writers, `slurp`/`spit`, lazy line-seq, encoding, URLs, `with-open`, `resource` (filesystem in dev, embedded in `-b` binaries)                                                |
-| `http`               | Ring-style server + client, streaming responses                                                                                                                                               |
-| `json`               | `read-json`, `write-json` (float-preserving, record-aware)                                                                                                                                    |
-| `transit`            | transit+json codec with rolling cache                                                                                                                                                         |
-| `os`                 | `sh`, `stat`, `ls`, `cwd`, `getenv`/`setenv`, `exit`, `os-name`, `arch`, `user-name`, `hostname`, separators                                                                                  |
-| `System`             | JVM-shaped: `getProperty`, `getProperties`, `getenv`, `exit`, `currentTimeMillis`, `nanoTime`. Exposes `let-go.version`, `let-go.commit`, `user.home`, `user.dir`, `os.name`, `os.arch`, etc. |
-| `syscall`            | direct Linux syscalls (mount, unshare, mknod, prctl, capset, seccomp, AppArmor)                                                                                                               |
-| `pods`               | Babashka pods over JSON / EDN / transit                                                                                                                                                       |
+Core namespaces cover `clojure.core` (macros, lazy seqs, transducers, protocols,
+records, multimethods, BigInt/BigDecimal) plus `string`, `set`, `walk`, `edn`,
+`pprint`, `test`, and `core.async`, alongside let-go's own `io`, `http`, `json`,
+`transit`, `os`, `System`, `syscall`, and `pods`. See
+[docs/guide/clojure-compatibility.md](docs/guide/clojure-compatibility.md) for
+the full per-namespace status table and the Clojure differences.
 
 ### Babashka pods
 
@@ -149,25 +135,15 @@ so shared `.cljc` stays JVM-loadable. See
 
 ## Known limitations
 
-### Not implemented
+Not a drop-in JVM Clojure. The main gaps: no coordinated STM or async agents
+(`ref`/`agent` are atom-backed aliases), no `clojure.spec`, unchunked lazy seqs,
+no custom `*data-readers*`, no JVM host interop on `deftype`/`reify`, and no
+`subseq`/`rsubseq` range queries. Behavior also differs in places — pragmatic
+numeric tower, always-blocking channels, real-goroutine `go` blocks, and `re2`
+(not Java) regex.
 
-- **STM coordination**: `ref`/`dosync`/`alter`/`commute` are atom-backed compatibility aliases, not coordinated STM
-- **Asynchronous agents**: `agent`/`send`/`send-off` are synchronous atom-backed compatibility aliases
-- **Chunked sequences**: lazy seqs are unchunked
-- **Custom tagged literal readers**: built-in `#uuid` and `#inst` work; unknown tags read as their payload, and `*data-readers*` / `*default-data-reader-fn*` are not implemented
-- **Java-style `deftype` / `reify` method bodies and host interfaces**: protocol implementations work; JVM host methods do not
-- **Spec** (no `clojure.spec`)
-- **`subseq` / `rsubseq`**: sorted collections work (`sorted-map`, `sorted-set`, `rseq`); range queries don't
-
-### Behavioral differences
-
-- `concat*` (used internally by quasiquote) is eager; user-facing `concat` is lazy
-- `<!` / `<!!` are identical, same for `>!` / `>!!` (Go channels always block)
-- `go` blocks are real goroutines, not IOC state machines (cheaper, and they can call blocking ops directly)
-- Numeric tower is pragmatic: `int64`, `float64`, `BigInt`, ratios, and `BigDecimal`, without the JVM's full primitive/class model
-- Base integer `+`/`-`/`*`/`inc`/`dec` throw on overflow; use `+'`/`-'`/`*'`/`inc'`/`dec'` for BigInt-promoting exact math
-- Regex is Go flavor (`re2`), not Java regex
-- `letfn` uses atoms internally for forward references
+Full list with rationale:
+[docs/guide/clojure-compatibility.md](docs/guide/clojure-compatibility.md).
 
 ## Examples
 

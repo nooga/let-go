@@ -41,6 +41,7 @@ Design plans, execution roadmaps, and policy for the let-go implementation. Each
 | `io/resource`, `-resource-paths` / `-source-paths` resolution | `guide/resources-and-source-paths.md` |
 | Embedding let-go in a Go program | `guide/embedding-in-go.md` |
 | nREPL server + editor setup | `guide/nrepl.md` |
+| Clojure compatibility: namespace table + differences | `guide/clojure-compatibility.md` |
 | IR fixup / link pass | `els2023-ir-fixup-audit.md` |
 | Parallel IR lowering + determinism | `parallel-lowering-and-type-cache.md` |
 | Runtime I/O, host decoupling | `design/runtime-io-host-decoupling.md` |
