@@ -428,26 +428,11 @@ go test ./... -count=1 -timeout 30s
 
 ## Contributing
 
-### Git merge driver for `core_compiled.lgb` (one-time setup)
-
-`pkg/rt/core_compiled.lgb` is a binary bundle regenerated from the embedded
-`.lg` sources. Git cannot meaningfully merge this binary on rebase, so we ship
-a custom merge driver that regenerates from sources after the `.lg` files have
-been merged as text.
-
-After cloning the repo (or pulling for the first time after this driver was
-added), register it locally:
-
-```bash
-make install-hooks
-```
-
-(A merge driver lives in `.git/config`, which is not shared, so each clone
-needs this once. The target just runs the `git config` commands for you.)
-
-After registration, rebases and merges that touch any embedded `.lg` source
-will regenerate the `.lgb` automatically — no more binary merge conflicts when
-stacking PRs that edit `core.lg` and friends.
+After cloning, run `make install-hooks` once to register the pre-commit hook and
+the `core_compiled.lgb` merge driver (each clone needs this — the config lives in
+`.git/config`, which isn't shared). See
+[docs/regenerating-generated-artifacts.md](docs/regenerating-generated-artifacts.md)
+for how generated artifacts are regenerated and kept in sync.
 
 ---
 

@@ -45,6 +45,23 @@ long-standing "`make build` didn't actually regenerate" footgun.
   which blocks a commit with stale artifacts. **Note:** `jj` does not run git
   hooks; jj users rely on the test + `make check-generated`.
 
+## Git merge driver for `core_compiled.lgb`
+
+`pkg/rt/core_compiled.lgb` is a binary bundle regenerated from the embedded
+`.lg` sources. Git cannot meaningfully merge this binary on rebase, so we ship a
+custom merge driver that regenerates it from sources *after* the `.lg` files
+have been merged as text.
+
+```sh
+make install-hooks
+```
+
+`make install-hooks` registers both the pre-commit hook above and this merge
+driver. A merge driver lives in `.git/config`, which is not shared, so each
+clone needs the registration once. After it, rebases and merges that touch any
+embedded `.lg` source regenerate the `.lgb` automatically — no binary merge
+conflicts when stacking PRs that edit `core.lg` and friends.
+
 ## `go build` cannot regenerate
 
 Go has no build-time codegen hook, so `go build` never regenerates. Only
