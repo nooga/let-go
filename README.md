@@ -363,9 +363,9 @@ go test ./... -count=1 -timeout 30s
 
 ## Contributing
 
-After cloning, run `make install-hooks` once to register the pre-commit hook and
-the `core_compiled.lgb` merge driver (each clone needs this — the config lives in
-`.git/config`, which isn't shared). See
+After cloning, run `make install-hooks` once to register the `core_compiled.lgb`
+merge driver (each clone needs this — the config lives in `.git/config`, which
+isn't shared). See
 [docs/regenerating-generated-artifacts.md](docs/regenerating-generated-artifacts.md)
 for how generated artifacts are regenerated and kept in sync.
 
