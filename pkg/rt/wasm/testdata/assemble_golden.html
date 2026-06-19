@@ -135,21 +135,22 @@ async function startWorkerMode() {
   const keyUint8 = new Uint8Array(sab, 8, 16);
 
   // Input is unsafe until the worker has been told to start (init posted):
-  // before that there is no consumer to drain the SAB slot, so the producer
-  // busy-wait below would spin the main thread — worst case for the whole
-  // multi-second external fetch+compile. Drop pre-start keys rather than block.
-  // (The narrow post-start window before the VM first reads a key is the
-  // pre-existing busy-wait; retiring that belongs to the input seam, #244.)
+  // before that there is no consumer to drain the SAB slot. Drop pre-start
+  // keys rather than write into a slot nothing will ever read.
   let workerReady = false;
 
   // Public input hook — backs LetGoHost.sendInput. Returns true if accepted,
   // false if dropped (worker not started yet, or input too long >16 bytes).
   // A shell's keystrokes feed through here via LetGoHost.sendInput.
+  //
+  // Non-blocking, newest-wins: write unconditionally — never wait for the
+  // consumer to drain (that wait is what froze the page on key bursts). Under
+  // load the slot coalesces to the freshest key; lossy only for *distinct* keys
+  // overlapping within one consumer read, never for same-key repeat.
   window._lgKey = function(data) {
     if (!workerReady) return false;
     const bytes = new TextEncoder().encode(data);
     if (bytes.length === 0 || bytes.length > 16) return false;
-    while (Atomics.load(keyInt32, 0) !== 0) { /* busy wait */ }
     keyUint8.set(bytes);
     Atomics.store(keyInt32, 1, bytes.length);
     Atomics.store(keyInt32, 0, 1);
