@@ -35,4 +35,3 @@ things to know:
 - **Put `:lg` before `:clj`.** First match wins. If a let-go user opted into
   `:clj` matching to consume a Clojure library, then in `#?(:clj … :lg …)`
   let-go would take the `:clj` branch.
-</content>

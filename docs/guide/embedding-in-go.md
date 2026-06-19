@@ -60,4 +60,3 @@ c.Run(`(go (loop [i (<! in)]
 
 [`pkg/api/interop_test.go`](../../pkg/api/interop_test.go) has the full set of
 embedding examples (defs, structs, channels, function calls).
-</content>

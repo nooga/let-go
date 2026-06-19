@@ -27,4 +27,3 @@ Supported ops: `clone`, `close`, `eval`, `load-file`, `describe`, `completions`,
   (Jack-In)" → "let-go", or "Calva: Connect to a Running REPL Server" if nREPL is
   already up.
 - **Neovim (Conjure)**: auto-connects when `.nrepl-port` exists.
-</content>

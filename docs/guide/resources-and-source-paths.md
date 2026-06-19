@@ -60,4 +60,3 @@ loaded by its path, independent of the search path.
 
 If the search path is not given by flag or env var, it defaults to `.` (current
 directory).
-</content>

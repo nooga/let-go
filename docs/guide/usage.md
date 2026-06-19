@@ -72,4 +72,3 @@ lgx run                           # fetch deps, run :main
 lgx build                         # bundle a standalone binary
 lgx test                          # run tests under test/
 ```
-</content>

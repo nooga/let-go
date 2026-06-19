@@ -42,4 +42,3 @@ on JVM Clojure:
 
 #?(:lg (require-letgo ">=1.9.0"))   ; one clear failure line on too-old lg
 ```
-</content>
