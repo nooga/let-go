@@ -13,8 +13,10 @@ functions are callable from let-go.
 
 ```go
 import (
+    "fmt"
+
     "github.com/nooga/let-go/pkg/api"
-    "github.com/nooga/let-go/pkg/vm"
+    "github.com/nooga/let-go/pkg/vm" // used in the sections below
 )
 
 c, _ := api.NewLetGo("myapp")
