@@ -125,8 +125,8 @@ the same way it skips `:cljs`:
 ```
 
 The guard is at **read** time, so a missing namespace never reaches compilation.
-See [docs/portability.md](docs/portability.md) for the `.cljc` resolution rule
-and `:lg`/`:clj` ordering gotcha.
+See [docs/guide/portability.md](docs/guide/portability.md) for the `.cljc`
+resolution rule and `:lg`/`:clj` ordering gotcha.
 
 ### Version requirements (`let-go.semver`)
 
@@ -143,8 +143,9 @@ enough and fails with one clear line instead of a "can't resolve" cascade:
 ```
 
 Guard it behind [`:lg` reader conditionals](#portable-code-lg-reader-conditionals)
-so shared `.cljc` stays JVM-loadable. See [docs/semver.md](docs/semver.md) for
-the range grammar and `require-letgo`'s detection/failure semantics.
+so shared `.cljc` stays JVM-loadable. See
+[docs/guide/semver.md](docs/guide/semver.md) for the range grammar and
+`require-letgo`'s detection/failure semantics.
 
 ## Known limitations
 
@@ -279,8 +280,9 @@ embeds every file under those roots, so a bundled binary is self-contained.
 (default `.`). When you set the search path it's taken as the **complete** list —
 the current directory isn't added implicitly.
 
-See [docs/resources-and-source-paths.md](docs/resources-and-source-paths.md) for
-path-list syntax, multi-root precedence, embedding behavior, and the
+See
+[docs/guide/resources-and-source-paths.md](docs/guide/resources-and-source-paths.md)
+for path-list syntax, multi-root precedence, embedding behavior, and the
 empty-value/explicit-only rules.
 
 ## nREPL
