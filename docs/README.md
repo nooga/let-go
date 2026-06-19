@@ -38,6 +38,7 @@ Design plans, execution roadmaps, and policy for the let-go implementation. Each
 | Babashka pod support | `pods.md` |
 | Portable `.cljc` / `:lg` reader conditionals | `portability.md` |
 | Version requirements, range matching (`let-go.semver`) | `semver.md` |
+| `io/resource`, `-resource-paths` / `-source-paths` resolution | `resources-and-source-paths.md` |
 | IR fixup / link pass | `els2023-ir-fixup-audit.md` |
 | Parallel IR lowering + determinism | `parallel-lowering-and-type-cache.md` |
 | Runtime I/O, host decoupling | `design/runtime-io-host-decoupling.md` |

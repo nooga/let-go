@@ -264,56 +264,24 @@ The `*compiling-aot*` var is `true` during `-c`/`-b`/`-w` compilation and
 
 `*in-wasm*` is `true` when running inside a WASM build.
 
-### Resources
+### Resources and source paths
 
-Programs can read non-source files (templates, static web assets, data) via
-`io/resource`, which returns a reader-coercible handle (or `nil` if missing)
-that composes with `io/slurp`, `io/reader`, and `io/line-seq`:
+Programs read non-source files (templates, web assets, data) via `io/resource`,
+with roots set by `-resource-paths` / `LG_RESOURCE_PATHS`. Bundling with `-b`
+embeds every file under those roots, so a bundled binary is self-contained.
 
 ```clojure
 (when-let [r (io/resource "templates/index.html")]
-  (io/slurp r))                     ; => the file contents, or skips if absent
+  (io/slurp r))
 ```
 
-Resource roots are given explicitly with `-resource-paths` (path-list
-separated by `:` on Unix, `;` on Windows), or via the `LG_RESOURCE_PATHS`
-env var. Resources are addressed by their path relative to a root; with
-multiple roots, the first match wins.
+`require`d namespaces resolve against `-source-paths` / `LG_SOURCE_PATHS`
+(default `.`). When you set the search path it's taken as the **complete** list —
+the current directory isn't added implicitly.
 
-```bash
-lg -resource-paths resources app.lg          # dev: read from ./resources
-```
-
-When you bundle with `-b`, every file under the resource roots is embedded in
-the binary, so `io/resource` works on any machine with no files alongside it:
-
-```bash
-lg -b myapp -resource-paths resources app.lg  # embed resources into the binary
-./myapp                                        # io/resource reads embedded copies
-```
-
-A bundled binary reads **only** its embedded resources — it ignores the
-ambient filesystem, so deployment is self-contained and predictable. There is
-no default resource directory; `lg` is explicit-only.
-
-### Source paths
-
-`require`d namespaces are resolved against a list of search roots. By default
-`lg` searches the current directory. You can set the roots explicitly with `-source-paths` (path-list
-separated by `:` on Unix, `;` on Windows) or the `LG_SOURCE_PATHS` env var:
-
-```bash
-lg -source-paths src:lib app.lg     # search ./src and ./lib
-```
-
-When you provide the search path - by flag or env var - it is taken as the
-**complete** list: the current directory is **not** searched implicitly. Add
-`.` to the list to include it (`-source-paths .:lib`). A present-but-empty
-value (`-source-paths ""` or `LG_SOURCE_PATHS=`) means "no source paths" -
-only embedded namespaces resolve. The script passed on the command line 
-is always loaded by its path, independent of the search path.
-
-If search path is not given by flag or env var, it defaults to `.` (current directory).
+See [docs/resources-and-source-paths.md](docs/resources-and-source-paths.md) for
+path-list syntax, multi-root precedence, embedding behavior, and the
+empty-value/explicit-only rules.
 
 ## nREPL
 
