@@ -37,6 +37,7 @@ Design plans, execution roadmaps, and policy for the let-go implementation. Each
 | Perf ratchet, regression checkpoints, historical baselines | `perf/ratchet.md` |
 | Babashka pod support | `pods.md` |
 | Portable `.cljc` / `:lg` reader conditionals | `portability.md` |
+| Version requirements, range matching (`let-go.semver`) | `semver.md` |
 | IR fixup / link pass | `els2023-ir-fixup-audit.md` |
 | Parallel IR lowering + determinism | `parallel-lowering-and-type-cache.md` |
 | Runtime I/O, host decoupling | `design/runtime-io-host-decoupling.md` |
