@@ -10,6 +10,7 @@
 ;; Flags:
 ;;   --go <path>        go binary for regeneration    (default "go")
 ;;   --tree-dir <dir>   lowered tree root             (default "pkg/rt/core_go_lowered")
+;;   --source-dir <dir> .lg source root (denominator) (default "pkg/rt/core")
 ;;   --baseline <path>  baseline EDN                  (default "docs/perf/fanout-baseline.edn")
 ;;   --threshold <pct>  allowed growth, integer pct   (default "5")
 ;;   --no-regen         skip regeneration (use tree as-is; for tests/fixtures)
@@ -34,6 +35,7 @@
 (def subcommand    (first argv))
 (def go-bin        (flag argv "--go" "go"))
 (def tree-dir      (flag argv "--tree-dir" "pkg/rt/core_go_lowered"))
+(def source-dir    (flag argv "--source-dir" "pkg/rt/core"))
 (def baseline-path (flag argv "--baseline" "docs/perf/fanout-baseline.edn"))
 (def threshold-pct (read-string (flag argv "--threshold" "5")))
 (def no-regen?     (has-flag? argv "--no-regen"))
@@ -49,13 +51,44 @@
 (defn file-exists? [path] (= 0 (:exit (os/sh "test" "-f" path))))
 
 ;; List *.go files under dir (recursive). Empty vec if dir missing.
-(defn list-go-files [dir]
-  (let [r (os/sh "find" dir "-name" "*.go" "-type" "f")]
-    (if (= 0 (:exit r)) (vec (re-seq #"[^\n]+" (:out r))) [])))
+;; Portable recursive directory walk via the native os/ls + os/stat primitives
+;; — NO shell `find`, so it works on targets without a shell (WASM, sandboxed,
+;; Windows). os/ls returns a vector of entry names; os/stat gives {:dir? :size}.
+(defn has-ext? [path ext]
+  (let [pl (count path) el (count ext)]
+    (and (>= pl el) (= ext (subs path (- pl el) pl)))))
+
+(defn walk-files [dir ext]
+  ;; A missing or non-directory root yields []: os/ls errors on a path that
+  ;; doesn't exist, so stat the root first and short-circuit. This preserves the
+  ;; old shell-find wrapper's "empty vec if dir missing" contract for
+  ;; show/check --no-regen against a tree that hasn't been generated yet.
+  (let [root (os/stat dir)]
+    (if (or (nil? root) (not (:dir? root)))
+      []
+      (reduce (fn [acc name]
+                (let [path (str dir "/" name)
+                      st   (os/stat path)]
+                  (cond
+                    (nil? st)           acc
+                    (:dir? st)          (into acc (walk-files path ext))
+                    (has-ext? path ext) (conj acc path)
+                    :else               acc)))
+              []
+              (os/ls dir)))))
+
+(defn list-go-files [dir] (walk-files dir ".go"))
+
+;; The .lg source corpus the lowering consumes. Used as the STABLE denominator
+;; for the expansion gate: go-output-bytes / lg-source-bytes. Anchoring to the
+;; source (which doesn't move when codegen REPRESENTATION changes, e.g.
+;; goto->structured) means the ratio reacts only to genuine output verbosity —
+;; unlike bytes/loc-of-go, whose denominator is itself a codegen artifact.
+(defn list-lg-files [dir] (walk-files dir ".lg"))
 
 ;; Size in chars (== bytes for the ASCII gofmt'd corpus). Deterministic; no
 ;; per-file subprocess.
-(defn file-size [path] (count (slurp path)))
+(defn file-size [path] (let [s (os/stat path)] (if s (:size s) 0)))
 (defn file-loc  [path] (count (re-seq #"\n" (slurp path))))
 
 ;; Parent-directory name: ".../ir/lower_go/lower_go.go" -> "lower_go".
@@ -64,6 +97,9 @@
 
 (defn module-bytes [metrics m]
   (let [e (get (:modules metrics) m)] (if e (:bytes e) 0)))
+
+(defn module-loc [metrics m]
+  (let [e (get (:modules metrics) m)] (if e (:loc e) 0)))
 
 (defn read-baseline [path]
   (when (file-exists? path) (read-string (slurp path))))
@@ -77,20 +113,43 @@
 (defn gated-total [current baseline]
   (reduce + 0 (map (fn [m] (module-bytes current m)) (keys (:modules baseline)))))
 
-(defn limit-for [baseline-bytes]
-  (quot (* baseline-bytes (+ 100 threshold-pct)) 100))
+;; EXPANSION gate. Compare CURRENT (go-bytes / lg-source-bytes) against the
+;; BASELINE expansion, with a percent band. Coverage growth — more defns
+;; lowering — adds to BOTH the go output AND the lg source, so the ratio stays
+;; flat and does NOT trip; only the generator emitting MORE Go per byte of
+;; source (the "not leveraging Go features" signal: callErr threading, dynamic
+;; invokes for keyword lookups, vm.Value everywhere) trips it.
+;; Ratio reported in milli-units (go bytes per 1000 source bytes).
+;; Integer cross-multiply to avoid float rounding:
+;;   cur_go/cur_src > base_go/base_src * (100+t)/100
+;;   <=>  cur_go * base_src * 100  >  base_go * cur_src * (100+t)
+(defn expansion-milli [go-bytes src-bytes]
+  (if (> src-bytes 0) (quot (* go-bytes 1000) src-bytes) 0))
 
 (defn compare-result [current baseline]
   (let [base-mods (keys (:modules baseline))
         cur-mods  (keys (:modules current))
-        gated     (gated-total current baseline)
-        limit     (limit-for (:total-bytes baseline))]
-    {:status   (if (> gated limit) :regression :ok)
-     :gated    gated
-     :baseline (:total-bytes baseline)
-     :limit    limit
-     :new      (sort (set-diff cur-mods base-mods))
-     :removed  (sort (set-diff base-mods cur-mods))}))
+        cur-go    (:total-bytes current)
+        cur-src   (:source-bytes current)
+        base-go   (:total-bytes baseline)
+        base-src  (:source-bytes baseline)
+        ;; A legacy baseline predating the expansion gate carries no
+        ;; :source-bytes, so the ratio is uncomputable. Gate the cross-multiply
+        ;; on a valid denominator — never feed nil to `*` — and treat an
+        ;; uncomparable baseline as in-band, leaving the next `update` to record
+        ;; source bytes.
+        comparable? (and base-src (> base-src 0) cur-src (> cur-src 0))
+        regression? (and comparable?
+                         (> (* cur-go base-src 100)
+                            (* base-go cur-src (+ 100 threshold-pct))))]
+    {:status      (if regression? :regression :ok)
+     :comparable? comparable?
+     :cur-go      cur-go
+     :cur-src     cur-src
+     :cur-ratio   (expansion-milli cur-go cur-src)
+     :base-ratio  (if (and base-src (> base-src 0)) (expansion-milli base-go base-src) 0)
+     :new         (sort (set-diff cur-mods base-mods))
+     :removed     (sort (set-diff base-mods cur-mods))}))
 
 ;; Build {module {:bytes :loc :files}} + totals over the tree + present wireup files.
 (defn collect-metrics [tree-dir wireup]
@@ -107,10 +166,11 @@
                                        :loc   (+ (:loc cur) l)
                                        :files (+ (:files cur) 1)})))
                      {} entries)]
-    {:total-bytes (reduce + 0 (map :bytes (vals modules)))
-     :total-loc   (reduce + 0 (map :loc   (vals modules)))
-     :files       (reduce + 0 (map :files (vals modules)))
-     :modules     modules}))
+    {:total-bytes  (reduce + 0 (map :bytes (vals modules)))
+     :total-loc    (reduce + 0 (map :loc   (vals modules)))
+     :files        (reduce + 0 (map :files (vals modules)))
+     :source-bytes (reduce + 0 (map file-size (list-lg-files source-dir)))
+     :modules      modules}))
 
 ;; --- deterministic, diff-friendly EDN emission (sorted module keys) ---
 ;; Deterministic, diff-friendly EDN emission via the core writer (edn/pretty):
@@ -133,13 +193,18 @@
         baseline (read-baseline baseline-path)]
     (when-not baseline (die (str "no baseline at " baseline-path " — run 'update' first")))
     (let [r (compare-result current baseline)]
-      (println (str "tracked gated bytes: " (:gated r) " / limit " (:limit r)
-                    " (baseline " (:baseline r) " +" threshold-pct "%)"))
-      (when (seq (:new r))     (println (str "NEW modules (exempt): " (:new r))))
+      (println (str "lg->go expansion: " (:cur-ratio r) " vs baseline " (:base-ratio r)
+                    " (go bytes per 1000 source bytes, +" threshold-pct "% band)"
+                    " [go " (:cur-go r) " src " (:cur-src r) "]"))
+      (when (seq (:new r))     (println (str "new modules: " (:new r))))
       (when (seq (:removed r)) (println (str "removed modules: " (:removed r))))
-      (if (= :regression (:status r))
-        (do (println "FANOUT REGRESSION: tracked modules grew beyond band.") (os/exit 1))
-        (do (println "OK: tracked fanout within band.") (os/exit 0))))))
+      (cond
+        (not (:comparable? r))
+        (do (println "OK: baseline has no :source-bytes (predates the expansion gate) — run 'update' to enable ratio gating.") (os/exit 0))
+        (= :regression (:status r))
+        (do (println "FANOUT REGRESSION: lg->go expansion grew beyond band — generator emitting more Go per byte of source (verbosity up, not just coverage).") (os/exit 1))
+        :else
+        (do (println "OK: lg->go expansion within band.") (os/exit 0))))))
 
 ;; MIN-merge current into baseline: existing modules tighten (MIN per metric),
 ;; new modules added at current size, removed modules drop. :total-bytes is
@@ -165,11 +230,14 @@
 
 (defn do-update []
   (regen!)
-  (let [current  (collect-metrics tree-dir wireup-files)
-        baseline (read-baseline baseline-path)
-        merged   (if baseline (merge-baseline current baseline) current)]
-    (spit baseline-path (metrics->edn merged))
-    (println (str "wrote " baseline-path " (total-bytes " (:total-bytes merged) ")"))
+  ;; The expansion gate is a RATIO, not a per-module byte floor, so the baseline
+  ;; is a coherent current snapshot (go totals + source totals) rather than a
+  ;; per-module MIN-merge (which would pair mismatched go/src totals).
+  (let [current (collect-metrics tree-dir wireup-files)]
+    (spit baseline-path (metrics->edn current))
+    (println (str "wrote " baseline-path " (lg->go expansion "
+                  (expansion-milli (:total-bytes current) (:source-bytes current))
+                  " per 1000 source bytes)"))
     (os/exit 0)))
 
 (cond

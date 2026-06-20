@@ -66,6 +66,21 @@ func writeModule(t *testing.T, treeDir, module string, size int) {
 	}
 }
 
+// writeSource writes <dir>/<name>.lg with exactly `size` bytes — the denominator
+// of the expansion ratio. The script sums :source-bytes over the --source-dir
+// tree, so tests drive both numerator (--tree-dir Go bytes) and denominator
+// (--source-dir .lg bytes) to make the ratio deterministic.
+func writeSource(t *testing.T, srcDir, name string, size int) {
+	t.Helper()
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Repeat("a", size-1) + "\n"
+	if err := os.WriteFile(filepath.Join(srcDir, name+".lg"), []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeBaseline(t *testing.T, path, edn string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(edn), 0644); err != nil {
@@ -76,7 +91,8 @@ func writeBaseline(t *testing.T, path, edn string) {
 func TestFanoutShow(t *testing.T) {
 	tree := t.TempDir()
 	writeModule(t, tree, "a", 1000)
-	out, code := runRatchet(t, "show", "--no-regen", "--no-wireup", "--tree-dir", tree)
+	src := t.TempDir() // empty source dir keeps the run hermetic and fast
+	out, code := runRatchet(t, "show", "--no-regen", "--no-wireup", "--tree-dir", tree, "--source-dir", src)
 	if code != 0 {
 		t.Fatalf("show exit=%d, want 0\n%s", code, out)
 	}
@@ -88,8 +104,28 @@ func TestFanoutShow(t *testing.T) {
 	}
 }
 
-// baseline: a=1000, b=1000, total 2000.
+// A missing tree (or source) directory must yield empty metrics, not an
+// interpreter error — the portable os/ls walker has to match the old find
+// wrapper's "empty vec if dir missing" contract.
+func TestFanoutShowMissingTree(t *testing.T) {
+	missingTree := filepath.Join(t.TempDir(), "does-not-exist")
+	missingSrc := filepath.Join(t.TempDir(), "also-missing")
+	out, code := runRatchet(t, "show", "--no-regen", "--no-wireup", "--tree-dir", missingTree, "--source-dir", missingSrc)
+	if code != 0 {
+		t.Fatalf("show exit=%d, want 0 (missing tree must not error)\n%s", code, out)
+	}
+	if strings.Contains(out, "ERROR") || strings.Contains(out, "error:") {
+		t.Errorf("missing tree produced an error instead of empty metrics:\n%s", out)
+	}
+	if !strings.Contains(out, ":total-bytes 0") {
+		t.Errorf("expected :total-bytes 0 for a missing tree:\n%s", out)
+	}
+}
+
+// Ratio baseline: go=2000 over src=1000 → expansion 2000 (go bytes per 1000
+// source bytes). The +5% band admits ratios up to 2100.
 const fixtureBaseline = `{:total-bytes 2000
+ :source-bytes 1000
  :total-loc 2
  :files 2
  :modules {
@@ -98,13 +134,16 @@ const fixtureBaseline = `{:total-bytes 2000
            }}
 `
 
+// Current go=2050 over src=1000 → ratio 2050, within the 2100 band → OK.
 func TestFanoutCheckWithinBand(t *testing.T) {
 	tree := t.TempDir()
 	writeModule(t, tree, "a", 1000)
-	writeModule(t, tree, "b", 1020) // +2% on b; gated 2020 <= limit 2100
+	writeModule(t, tree, "b", 1050) // cur-go 2050
+	src := t.TempDir()
+	writeSource(t, src, "core", 1000) // cur-src 1000 → ratio 2050 <= 2100
 	bl := filepath.Join(t.TempDir(), "base.edn")
 	writeBaseline(t, bl, fixtureBaseline)
-	out, code := runRatchet(t, "check", "--no-regen", "--no-wireup", "--tree-dir", tree, "--baseline", bl)
+	out, code := runRatchet(t, "check", "--no-regen", "--no-wireup", "--tree-dir", tree, "--source-dir", src, "--baseline", bl)
 	if code != 0 {
 		t.Fatalf("check exit=%d, want 0 (within band)\n%s", code, out)
 	}
@@ -113,13 +152,16 @@ func TestFanoutCheckWithinBand(t *testing.T) {
 	}
 }
 
+// Current go=2200 over src=1000 → ratio 2200, beyond the 2100 band → REGRESSION.
 func TestFanoutCheckOverBand(t *testing.T) {
 	tree := t.TempDir()
 	writeModule(t, tree, "a", 1000)
-	writeModule(t, tree, "b", 1200) // gated 2200 > limit 2100
+	writeModule(t, tree, "b", 1200) // cur-go 2200
+	src := t.TempDir()
+	writeSource(t, src, "core", 1000) // cur-src 1000 → ratio 2200 > 2100
 	bl := filepath.Join(t.TempDir(), "base.edn")
 	writeBaseline(t, bl, fixtureBaseline)
-	out, code := runRatchet(t, "check", "--no-regen", "--no-wireup", "--tree-dir", tree, "--baseline", bl)
+	out, code := runRatchet(t, "check", "--no-regen", "--no-wireup", "--tree-dir", tree, "--source-dir", src, "--baseline", bl)
 	if code != 1 {
 		t.Fatalf("check exit=%d, want 1 (over band)\n%s", code, out)
 	}
@@ -128,20 +170,64 @@ func TestFanoutCheckOverBand(t *testing.T) {
 	}
 }
 
-// The key requirement: a new module never causes failure, even when large.
-func TestFanoutCheckNewModuleExempt(t *testing.T) {
+// The headline property of the ratio gate: coverage growth — lowering a brand
+// new module — adds to BOTH the Go output and the .lg source, so the ratio
+// stays flat and the gate does NOT trip, even though absolute Go bytes double.
+// (Under the old byte-band gate this was "new modules are exempt"; under the
+// ratio gate it generalizes to "proportional growth is exempt".)
+const fixtureBaselineSingle = `{:total-bytes 2000
+ :source-bytes 1000
+ :total-loc 1
+ :files 1
+ :modules {
+            "a" {:bytes 2000 :loc 1 :files 1}
+           }}
+`
+
+func TestFanoutCheckCoverageGrowthNeutral(t *testing.T) {
+	tree := t.TempDir()
+	writeModule(t, tree, "a", 2000)
+	writeModule(t, tree, "c", 2000) // brand new module, doubles Go bytes to 4000
+	src := t.TempDir()
+	writeSource(t, src, "a", 1000)
+	writeSource(t, src, "c", 1000) // source also doubles to 2000 → ratio stays 2000
+	bl := filepath.Join(t.TempDir(), "base.edn")
+	writeBaseline(t, bl, fixtureBaselineSingle)
+	out, code := runRatchet(t, "check", "--no-regen", "--no-wireup", "--tree-dir", tree, "--source-dir", src, "--baseline", bl)
+	if code != 0 {
+		t.Fatalf("check exit=%d, want 0 (proportional growth exempt)\n%s", code, out)
+	}
+	if !strings.Contains(out, "new modules") || !strings.Contains(out, "c") {
+		t.Errorf("expected new module c reported:\n%s", out)
+	}
+}
+
+// A legacy baseline written before the expansion gate has no :source-bytes. The
+// ratio is then uncomputable, so check must treat it as in-band (exit 0) and
+// say so — never crash multiplying nil.
+const fixtureBaselineLegacy = `{:total-bytes 2000
+ :total-loc 2
+ :files 2
+ :modules {
+            "a" {:bytes 1000 :loc 1 :files 1}
+            "b" {:bytes 1000 :loc 1 :files 1}
+           }}
+`
+
+func TestFanoutCheckLegacyBaseline(t *testing.T) {
 	tree := t.TempDir()
 	writeModule(t, tree, "a", 1000)
-	writeModule(t, tree, "b", 1000)
-	writeModule(t, tree, "c", 50000) // brand new, huge — must NOT fail
+	writeModule(t, tree, "b", 5000) // would be way over band if it were comparable
+	src := t.TempDir()
+	writeSource(t, src, "core", 1000)
 	bl := filepath.Join(t.TempDir(), "base.edn")
-	writeBaseline(t, bl, fixtureBaseline)
-	out, code := runRatchet(t, "check", "--no-regen", "--no-wireup", "--tree-dir", tree, "--baseline", bl)
+	writeBaseline(t, bl, fixtureBaselineLegacy)
+	out, code := runRatchet(t, "check", "--no-regen", "--no-wireup", "--tree-dir", tree, "--source-dir", src, "--baseline", bl)
 	if code != 0 {
-		t.Fatalf("check exit=%d, want 0 (new module exempt)\n%s", code, out)
+		t.Fatalf("check exit=%d, want 0 (legacy baseline uncomparable, not a regression)\n%s", code, out)
 	}
-	if !strings.Contains(out, "NEW") || !strings.Contains(out, "c") {
-		t.Errorf("expected NEW module c reported:\n%s", out)
+	if !strings.Contains(out, "source-bytes") {
+		t.Errorf("expected a notice that the baseline lacks source-bytes:\n%s", out)
 	}
 }
 
@@ -149,9 +235,10 @@ func TestFanoutUpdateTightens(t *testing.T) {
 	tree := t.TempDir()
 	writeModule(t, tree, "a", 800) // shrank from 1000
 	writeModule(t, tree, "b", 1000)
+	src := t.TempDir()
 	bl := filepath.Join(t.TempDir(), "base.edn")
 	writeBaseline(t, bl, fixtureBaseline)
-	_, code := runRatchet(t, "update", "--no-regen", "--no-wireup", "--tree-dir", tree, "--baseline", bl)
+	_, code := runRatchet(t, "update", "--no-regen", "--no-wireup", "--tree-dir", tree, "--source-dir", src, "--baseline", bl)
 	if code != 0 {
 		t.Fatalf("update exit=%d, want 0", code)
 	}
@@ -170,9 +257,10 @@ func TestFanoutUpdateFoldsNewModule(t *testing.T) {
 	writeModule(t, tree, "a", 1000)
 	writeModule(t, tree, "b", 1000)
 	writeModule(t, tree, "c", 500) // new module
+	src := t.TempDir()
 	bl := filepath.Join(t.TempDir(), "base.edn")
 	writeBaseline(t, bl, fixtureBaseline)
-	_, code := runRatchet(t, "update", "--no-regen", "--no-wireup", "--tree-dir", tree, "--baseline", bl)
+	_, code := runRatchet(t, "update", "--no-regen", "--no-wireup", "--tree-dir", tree, "--source-dir", src, "--baseline", bl)
 	if code != 0 {
 		t.Fatalf("update exit=%d, want 0", code)
 	}
@@ -191,11 +279,12 @@ func TestFanoutUpdateDeterministic(t *testing.T) {
 	writeModule(t, tree, "b", 1000)
 	writeModule(t, tree, "a", 1000)
 	writeModule(t, tree, "c", 1000)
+	src := t.TempDir()
 	bl := filepath.Join(t.TempDir(), "base.edn")
 	writeBaseline(t, bl, fixtureBaseline)
-	runRatchet(t, "update", "--no-regen", "--no-wireup", "--tree-dir", tree, "--baseline", bl)
+	runRatchet(t, "update", "--no-regen", "--no-wireup", "--tree-dir", tree, "--source-dir", src, "--baseline", bl)
 	first, _ := os.ReadFile(bl)
-	runRatchet(t, "update", "--no-regen", "--no-wireup", "--tree-dir", tree, "--baseline", bl)
+	runRatchet(t, "update", "--no-regen", "--no-wireup", "--tree-dir", tree, "--source-dir", src, "--baseline", bl)
 	second, _ := os.ReadFile(bl)
 	if string(first) != string(second) {
 		t.Errorf("update output not byte-stable:\nfirst:\n%s\nsecond:\n%s", first, second)
