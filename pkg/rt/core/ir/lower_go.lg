@@ -516,30 +516,41 @@
     (get (compute-param-sources f) nid)))
 
 (defn- closure-info* [f nid visited]
+  ;; The visited-check MUST precede the memo so a nid currently on the recursion
+  ;; stack (cycle) returns nil without being cached half-computed. Resolved
+  ;; results are path-independent (the closure a value denotes is the same
+  ;; however you reach it), so memoizing EVERY nid here — not just the top-level
+  ;; entry in closure-info — collapses the per-param-per-edge re-walk of shared
+  ;; block-arg lineage from O(n^2) to O(n). (#266 lowering-timeout root cause.)
   (if (contains? visited nid)
     nil
-    (let [op   (ir/op nid f)
-          aux  (ir/aux nid f)
-          refs (ir/refs nid f)]
-      (cond
-        (and (= op :const) (any-fn-template? aux))
-        {:template aux :captures []}
+    (let [memo (:closure-memo (deref f))]
+      (if (and memo (contains? (deref memo) nid))
+        (get (deref memo) nid)
+        (let [op   (ir/op nid f)
+              aux  (ir/aux nid f)
+              refs (ir/refs nid f)
+              r (cond
+                  (and (= op :const) (any-fn-template? aux))
+                  {:template aux :captures []}
 
-        (= op :make-closure)
-        (when (= 1 (count refs))
-          (closure-info* f (nth refs 0) visited))
+                  (= op :make-closure)
+                  (when (= 1 (count refs))
+                    (closure-info* f (nth refs 0) visited))
 
-        (= op :push-closed)
-        (when (= 2 (count refs))
-          (let [base (closure-info* f (nth refs 0) visited)]
-            (when base
-              (assoc base :captures (conj (:captures base) (nth refs 1))))))
+                  (= op :push-closed)
+                  (when (= 2 (count refs))
+                    (let [base (closure-info* f (nth refs 0) visited)]
+                      (when base
+                        (assoc base :captures (conj (:captures base) (nth refs 1))))))
 
-        (= op :block-arg)
-        (some (fn [src] (closure-info* f src (conj visited nid)))
-              (block-arg-sources f nid))
+                  (= op :block-arg)
+                  (some (fn [src] (closure-info* f src (conj visited nid)))
+                        (block-arg-sources f nid))
 
-        :else nil))))
+                  :else nil)]
+          (when memo (swap! memo assoc nid r))
+          r)))))
 
 (defn- closure-info
   "Resolve the closure a value refers to: {:template <aux> :captures [nid …]}
