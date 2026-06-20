@@ -131,25 +131,45 @@
 (defn own-def-names [parsed]
   "Every top-level name this file defines: the 2nd element of any form whose
    head is a def-like special/macro (def, defn, defn-, defmacro, defonce,
-   def-, deftype, defprotocol). Used to pre-declare a file's own vars so the
-   per-defn AOT build resolves self/sibling references — exactly the state a
-   loaded namespace is in during production lowering.
+   def-, deftype, defrecord, defprotocol). Used to pre-declare a file's own
+   vars so the per-defn AOT build resolves self/sibling references — exactly
+   the state a loaded namespace is in during production lowering.
 
    The name slot may be meta-wrapped: `(def ^:private x v)` reads as
    `(def (with-meta x {:private true}) v)`, so unwrap (with-meta sym ...) to
-   the bare symbol — otherwise ^:private / ^:dynamic siblings stay unresolved."
+   the bare symbol — otherwise ^:private / ^:dynamic siblings stay unresolved.
+
+   deftype/defrecord ALSO intern generated constructors when the namespace
+   loads (->T positional, plus map->T for records), and defprotocol interns
+   each METHOD name (not just the protocol name) — so sibling defns reference
+   those generated names. Emit them too, else `(->T ...)` / `(method ...)` hits
+   'unresolved symbol' even though production lowering resolves it."
   (when (and parsed (seq? parsed))
     (->> (rest parsed)
-         (keep (fn [f]
-                 (when (and (seq? f) (>= (count f) 2))
-                   (let [h (first f)]
-                     (when (and (symbol? h)
-                                (clojure.string/starts-with? (str h) "def"))
-                       (let [raw (nth f 1)
-                             nm  (if (and (seq? raw) (= (first raw) 'with-meta))
-                                   (second raw)
-                                   raw)]
-                         (when (symbol? nm) nm)))))))
+         (mapcat (fn [f]
+                   (if (and (seq? f) (>= (count f) 2)
+                            (symbol? (first f))
+                            (clojure.string/starts-with? (str (first f)) "def"))
+                     (let [h   (str (first f))
+                           raw (nth f 1)
+                           nm  (if (and (seq? raw) (= (first raw) 'with-meta))
+                                 (second raw)
+                                 raw)]
+                       (if (symbol? nm)
+                         (cond
+                           (= h "deftype")   [nm (symbol (str "->" nm))]
+                           (= h "defrecord") [nm (symbol (str "->" nm))
+                                              (symbol (str "map->" nm))]
+                           ;; defprotocol: name + each method (first of each
+                           ;; method-spec list after the name, skipping a docstring).
+                           (= h "defprotocol")
+                           (into [nm] (->> (drop 2 f)
+                                           (filter seq?)
+                                           (map first)
+                                           (filter symbol?)))
+                           :else             [nm])
+                         []))
+                     [])))
          (vec))))
 
 (defn declare-own-defns! [parsed]
