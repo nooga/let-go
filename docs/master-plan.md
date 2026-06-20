@@ -53,11 +53,11 @@ Acceptance:
 - Benchmarks added: arithmetic loops, seq ops baselines; perf budgets recorded.
 - Numeric primitives show fewer allocations and improved ns/op over baseline.
 
-References: `docs/clojurelike-refactor-plan.md` (Phase 0), `docs/value-representation-and-numeric-performance.md` (checklist).
+References: `docs/clojurelike-refactor-plan.md` (Phase 0), `docs/design/value-representation-and-numeric-performance.md` (checklist).
 
 ### Phase 1 — VM calling convention and memory retention fixes
 
-Scope (see `docs/vm-performance-optimization.md`):
+Scope (see `docs/design/vm-performance-optimization.md`):
 
 - Copy argument slices before entering bytecode callees, including tail-call growth branch.
 - Extend TCO to closures (`*Closure`) in `OP_TAIL_CALL`.
@@ -125,7 +125,7 @@ Acceptance:
 
 ### Phase 5 — Runtime images and precompiled stdlib
 
-Scope (see `docs/runtime-image-and-stdlib-cache.md`):
+Scope (see `docs/design/runtime-image-and-stdlib-cache.md`):
 
 - Define image schema and versioning; implement value, const-pool, code, namespace, and var serialization.
 - Implement host/native extern resolution via `HostRegistry`.
@@ -157,7 +157,7 @@ Acceptance:
 
 ### Phase 7 — Go AOT backend (optional, high-impact)
 
-Scope (see `docs/go-aot-backend.md`):
+Scope (see `docs/design/go-aot-backend.md`):
 
 - Add a second backend that compiles let-go code to Go while keeping the runtime and `Var` interop intact.
 - Start with the embedding tier (bytecode/consts as Go data registering into `Var`s), then progress to native lowering of hot functions to Go.
@@ -271,7 +271,7 @@ See `docs/testing-and-conformance.md` for the testing strategy and CI gating. In
 
 ## References
 
-- `docs/vm-performance-optimization.md`
+- `docs/design/vm-performance-optimization.md`
 - `docs/clojurelike-refactor-plan.md`
-- `docs/value-representation-and-numeric-performance.md`
-- `docs/runtime-image-and-stdlib-cache.md`
+- `docs/design/value-representation-and-numeric-performance.md`
+- `docs/design/runtime-image-and-stdlib-cache.md`

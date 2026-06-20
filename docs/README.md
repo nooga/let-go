@@ -24,13 +24,13 @@ User-facing reference (for writing/shipping let-go programs) lives under [`guide
 |---|---|
 | Design contracts, CI gates, interop schema | `contribution-policy.md` |
 | Phase skeleton, success metrics | `master-plan.md` |
-| Calling convention, allocation, TCO | `vm-performance-optimization.md` |
-| Numeric/value representation | `value-representation-and-numeric-performance.md` |
+| Calling convention, allocation, TCO | `design/vm-performance-optimization.md` |
+| Numeric/value representation | `design/value-representation-and-numeric-performance.md` |
 | Persistent collections, seq tower, transients | `clojurelike-refactor-plan.md` |
 | Equality/hashing across types | `clojurelike-refactor-plan.md` (Phase 3) |
 | Transducers, reduction fast paths | `clojurelike-refactor-plan.md` (Phase 4) |
-| Runtime image / stdlib precompile | `runtime-image-and-stdlib-cache.md` |
-| Go AOT / self-host deployment | `go-aot-backend.md` + `contribution-policy.md` §2–3 |
+| Runtime image / stdlib precompile | `design/runtime-image-and-stdlib-cache.md` |
+| Go AOT / self-host deployment | `design/go-aot-backend.md` + `contribution-policy.md` §2–3 |
 | JVM-shape interop (strategy) | `jvm-compat-plan.md` |
 | JVM-shape interop (execution) | `clojure-compat-roadmap.md` |
 | Real-world Clojure compat findings | `xsofy-portability-gaps.md` |
@@ -45,8 +45,8 @@ User-facing reference (for writing/shipping let-go programs) lives under [`guide
 | nREPL server + editor setup | `guide/nrepl.md` |
 | Clojure compatibility: namespace table + differences | `guide/clojure-compatibility.md` |
 | Running, compiling, WASM, project mgmt (lgx) | `guide/usage.md` |
-| IR fixup / link pass | `els2023-ir-fixup-audit.md` |
-| Parallel IR lowering + determinism | `parallel-lowering-and-type-cache.md` |
+| IR fixup / link pass | `design/els2023-ir-fixup-audit.md` |
+| Parallel IR lowering + determinism | `design/parallel-lowering-and-type-cache.md` |
 | Runtime I/O, host decoupling | `design/runtime-io-host-decoupling.md` |
 
 ## Reading order if starting cold
