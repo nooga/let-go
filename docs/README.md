@@ -10,7 +10,16 @@ human-verified: 2026-06-07
 
 Design plans, execution roadmaps, and policy for the let-go implementation. Each doc carries a `status:` frontmatter line indicating whether it's the current authority or has been superseded. See "What's current" below.
 
-User-facing reference (for writing/shipping let-go programs) lives under [`guide/`](guide/); the rest of `docs/` is contributor/implementation material.
+## Layout
+
+Docs are bucketed by audience, then by cluster:
+
+- **[`guide/`](guide/)** — user-facing reference for writing and shipping let-go programs: language features, usage, Clojure compatibility.
+- **[`design/`](design/)** — contributor-facing architecture: how a subsystem works or was designed (VM, value representation, IR lowering, runtime image, Go AOT, I/O host decoupling).
+- **[`perf/`](perf/)** — performance baselines, the regression ratchet, and historical data.
+- **`docs/` root** — cross-cutting contributor material that isn't subsystem-scoped: the master plan, roadmaps, contribution policy, and dev workflow (regeneration, frontmatter, testing).
+
+A subdir is earned when a cluster of related docs justifies one; one-off cross-cutting docs stay at root.
 
 ## What's current
 
