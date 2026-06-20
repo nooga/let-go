@@ -121,14 +121,23 @@ async function startWorkerMode() {
   // false if dropped (worker not started yet, or input too long >16 bytes).
   // A shell's keystrokes feed through here via LetGoHost.sendInput.
   //
-  // Non-blocking, newest-wins: write unconditionally — never wait for the
-  // consumer to drain (that wait is what froze the page on key bursts). Under
-  // load the slot coalesces to the freshest key; lossy only for *distinct* keys
-  // overlapping within one consumer read, never for same-key repeat.
+  // Non-blocking: never wait for the consumer to drain (that wait is what froze
+  // the page on key bursts). We drop rather than overwrite while a key is still
+  // pending (ready==1): overwriting concurrently would tear the consumer's
+  // byte-by-byte copy and, worse, the consumer's unconditional clear after copy
+  // would stomp our just-set ready flag and lose the accepted key.
+  //
+  // This makes the slot oldest-pending-wins, not newest-wins. In practice when
+  // the program is waiting on input the consumer drains immediately and parks at
+  // ready==0, so the freshest key still lands (the interactive common case).
+  // Drops only happen while a prior key sits unconsumed — i.e. the program is
+  // busy and not reading keys — where keeping the first pending key (the
+  // interrupt) and dropping the rest is the behavior we want anyway.
   window._lgKey = function(data) {
     if (!workerReady) return false;
     const bytes = new TextEncoder().encode(data);
     if (bytes.length === 0 || bytes.length > 16) return false;
+    if (Atomics.load(keyInt32, 0) !== 0) return false;
     keyUint8.set(bytes);
     Atomics.store(keyInt32, 1, bytes.length);
     Atomics.store(keyInt32, 0, 1);
