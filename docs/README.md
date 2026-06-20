@@ -46,7 +46,8 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Clojure-test-suite (jank) workflow | `clojure-test-suite.md` |
 | Testing strategy, conformance | `testing-and-conformance.md` |
 | Perf ratchet, regression checkpoints, historical baselines | `perf/ratchet.md` |
-| Babashka pod support | `pods.md` |
+| Babashka pods (usage) | `guide/pods.md` |
+| Babashka pods (host protocol / design) | `design/pods.md` |
 | Portable `.cljc` / `:lg` reader conditionals | `guide/portability.md` |
 | Version requirements, range matching (`let-go.semver`) | `guide/semver.md` |
 | `io/resource`, `-resource-paths` / `-source-paths` resolution | `guide/resources-and-source-paths.md` |

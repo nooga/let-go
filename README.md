@@ -81,22 +81,17 @@ the full per-namespace status table and the Clojure differences.
 
 ### Babashka pods
 
-let-go can load [Babashka pods](https://github.com/babashka/pods), which
-opens up the whole pod ecosystem: SQLite, AWS, Docker, file watching, etc.
+let-go can load [Babashka pods](https://github.com/babashka/pods), opening up the
+whole pod ecosystem (SQLite, AWS, Docker, file watching, …) and sharing
+`~/.babashka/pods/` with `bb`.
 
 ```clojure
 (pods/load-pod 'org.babashka/go-sqlite3 "0.3.13")
-
-(pod.babashka.go-sqlite3/execute! "app.db"
-  ["create table users (id integer primary key, name text)"])
-(pod.babashka.go-sqlite3/query "app.db"
-  ["select * from users"])
-;; => [{:id 1 :name "Alice"}]
+(pod.babashka.go-sqlite3/query "app.db" ["select * from users"])
 ```
 
-It shares `~/.babashka/pods/` with `bb`, so install pods with babashka and use
-them from `lg`. See the [pod registry](https://github.com/babashka/pod-registry)
-for what's available.
+See [docs/guide/pods.md](docs/guide/pods.md) for a full example and the shared
+pod cache.
 
 ### Portable code (`:lg` reader conditionals)
 
