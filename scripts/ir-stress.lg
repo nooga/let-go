@@ -186,6 +186,23 @@
               :else nil)
             (catch e nil)))))))
 
+(defn require-top-level! [parsed]
+  "Eval every top-level (require ...) / (use ...) form in a file so deps
+   pulled in OUTSIDE an (ns ...) form load and their :as aliases register.
+   require-deps! only covers the ns-form :require clause; many corpus files
+   require at top level (scripts/generate.lg -> let-go.semver :as sv,
+   sort-defns.lg -> graph :as g, fusion-analysis.lg -> string :as str),
+   and files with an ns form sometimes add an extra top-level require too.
+   Without this the alias is never bound and the lowering reports a bogus
+   'unresolved symbol <alias>/...' gap instead of resolving the sibling.
+   Runs after in-ns so the alias lands in the file's own namespace,
+   mirroring how the namespace is fully loaded before production lowering."
+  (when (and parsed (seq? parsed))
+    (doseq [f (rest parsed)]
+      (when (and (seq? f) (symbol? (first f))
+                 (let [h (str (first f))] (or (= h "require") (= h "use"))))
+        (try (eval f) (catch e nil))))))
+
 (defn defn-forms [src-form]
   (when (and src-form (seq? src-form))
     (filter (fn [f] (and (seq? f)
@@ -540,6 +557,7 @@
             (eval (list 'in-ns (list 'quote ns-sym)))
             (catch e nil)))
         (require-deps! ns-form-)
+        (require-top-level! parsed)
         (declare-own-defns! parsed)
         (let [results (mapv (fn [d]
                               (let [name (nth d 1)
@@ -572,6 +590,7 @@
       (when ns-sym
         (try (eval (list 'in-ns (list 'quote ns-sym))) (catch e nil)))
       (require-deps! ns-form-)
+      (require-top-level! parsed)
       (let [defns      (vec (defn-forms parsed))
             target     (first (filter (fn [d] (= (nth d 1) trace-defn-name)) defns))]
         (when (nil? target)
@@ -600,6 +619,7 @@
           (when ns-sym
             (eval (list 'in-ns (list 'quote ns-sym))))
           (require-deps! ns-form-)
+          (require-top-level! parsed)
           (declare-own-defns! parsed))
         (catch e nil)))  ;; Silently skip load errors; we'll catch them per-fixture
     (let [t1 (System/nanoTime)
