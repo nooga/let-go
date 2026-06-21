@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-06-20
-human-verified:
+human-verified: 2026-06-20
 ---
 
 # Babashka pods
