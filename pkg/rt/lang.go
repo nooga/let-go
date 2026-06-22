@@ -4206,9 +4206,8 @@ func installLangNS() {
 			if v.RawCount() < 1 {
 				return vm.NIL, fmt.Errorf("can't pop empty vector")
 			}
-			// Rebuild without last element
-			vals := v.Unbox().([]vm.Value)
-			return vm.NewPersistentVector(vals[:len(vals)-1]), nil
+			// O(1)-amortized structural pop (was O(n) Unbox()+rebuild).
+			return v.Pop(), nil
 		case vm.ArrayVector:
 			v := vs[0].(vm.ArrayVector)
 			if v.RawCount() < 1 {

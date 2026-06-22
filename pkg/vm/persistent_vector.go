@@ -396,6 +396,105 @@ func newPath(level uint, tail []Value) *vnode {
 	return ret
 }
 
+// Pop returns a new vector with the last element removed, in O(1) amortized
+// time (mirrors Clojure's PersistentVector.pop). The previous behavior — the
+// `pop` builtin doing Unbox()+NewPersistentVector(all-but-last) — was O(n) per
+// call, which made vector-as-stack uses (e.g. the typeinfer worklist drain via
+// peek/pop) O(n^2) and a major allocation source. Returns the empty vector for
+// count <= 1; callers that must reject popping an empty vector check count
+// first.
+func (v PersistentVector) Pop() PersistentVector {
+	if v.count <= 1 {
+		return v.Empty().(PersistentVector)
+	}
+	// More than one element in the tail: just shrink the tail (O(tail) <= 32).
+	if len(v.tail) > 1 {
+		newTail := make([]Value, len(v.tail)-1)
+		copy(newTail, v.tail[:len(v.tail)-1])
+		return PersistentVector{
+			count:   v.count - 1,
+			shift:   v.shift,
+			root:    v.root,
+			tail:    newTail,
+			tailOff: v.tailOff,
+			meta:    v.meta,
+		}
+	}
+	// The tail holds 0 or 1 elements, so the new tail is pulled from the
+	// rightmost trie leaf. (NewPersistentVector leaves an empty tail when the
+	// count is a multiple of nodeCap, so the empty case is real.) removeIdx is
+	// the index of an element in that leaf: count-2 when the tail had the last
+	// element, count-1 when the last element lives in the leaf itself.
+	removeIdx := v.count - 1 - len(v.tail)
+	newTail := v.leafArrayFor(removeIdx)
+	if len(v.tail) == 0 {
+		// The popped element was the last of this leaf — drop it from the tail.
+		newTail = newTail[:len(newTail)-1]
+	}
+	newShift := v.shift
+	newRoot := v.popTail(v.shift, v.root, removeIdx)
+	if newRoot == nil {
+		newRoot = newNode()
+	}
+	// Collapse a now-redundant root level (only one child left).
+	if v.shift > shift && len(newRoot.array) == 1 {
+		newRoot = newRoot.array[0].(*vnode)
+		newShift -= shift
+	}
+	return PersistentVector{
+		count:   v.count - 1,
+		shift:   newShift,
+		root:    newRoot,
+		tail:    newTail,
+		tailOff: (v.count - 1) - len(newTail),
+		meta:    v.meta,
+	}
+}
+
+// leafArrayFor returns a fresh []Value copy of the leaf array holding index i
+// (i must be in the trie portion, i.e. i < tailOff).
+func (v PersistentVector) leafArrayFor(i int) []Value {
+	node := v.root
+	for level := v.shift; level > 0; level -= shift {
+		node = node.array[(i>>level)&nodeMask].(*vnode)
+	}
+	out := make([]Value, len(node.array))
+	for j, x := range node.array {
+		out[j] = x.(Value)
+	}
+	return out
+}
+
+// popTail removes the leaf containing idx from the trie rooted at node,
+// returning the new subtree (nil when it becomes empty). Mirrors Clojure's
+// popTail, adapted to the dynamically-sized node arrays used here: the
+// rightmost child is dropped by truncation rather than nulled in a fixed
+// 32-slot array.
+func (v PersistentVector) popTail(level uint, node *vnode, idx int) *vnode {
+	subidx := (idx >> level) & nodeMask
+	if level > shift {
+		newChild := v.popTail(level-shift, node.array[subidx].(*vnode), idx)
+		if newChild == nil && subidx == 0 {
+			return nil
+		}
+		ret := &vnode{array: make([]any, len(node.array))}
+		copy(ret.array, node.array)
+		if newChild == nil {
+			ret.array = ret.array[:subidx]
+		} else {
+			ret.array[subidx] = newChild
+		}
+		return ret
+	}
+	if subidx == 0 {
+		return nil
+	}
+	// Leaf-parent level: drop the rightmost leaf.
+	ret := &vnode{array: make([]any, subidx)}
+	copy(ret.array, node.array[:subidx])
+	return ret
+}
+
 // Nth implements Indexed: positional access by integer index.
 func (v PersistentVector) Nth(i int) Value { return v.ValueAt(Int(i)) }
 
