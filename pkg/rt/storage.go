@@ -137,7 +137,7 @@ func (s *FileStorage) Set(key, value string) error {
 	// over the target. A crash or full disk mid-write leaves an orphan temp
 	// file behind, never a truncated existing value — the failure mode that
 	// matters for save data. The "tmp-" prefix keeps these out of Keys/Get,
-	// which only see "k-"-encoded names. os.CreateTemp creates with 0600.
+	// which only see "k-"-encoded names.
 	tmp, err := os.CreateTemp(s.root, "tmp-*")
 	if err != nil {
 		return err

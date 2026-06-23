@@ -100,10 +100,8 @@ func WithKeySource(ks rt.KeySource) Option {
 // Default: the runtime root binding. In ordinary native lg this is a
 // file-backed store configured by the CLI; in bare embedders it is in-memory.
 //
-// Error contract (see rt.Storage): storage/get of an absent key yields nil,
-// while a backend failure — unreadable file, unavailable or quota-exceeded
-// localStorage — throws in the guest rather than reading back nil or dropping
-// a write. The store should distinguish absence from failure on this seam.
+// Error contract: a store must distinguish an absent key (storage/get yields
+// nil) from a backend failure (throws in the guest) — see rt.Storage.
 func WithStorage(store rt.Storage) Option {
 	return func(c *config) { c.store = store }
 }
