@@ -398,26 +398,9 @@ func setCommandLineArgs(args []string) {
 }
 
 func storageIDForScript(script string) string {
-	if storageID != "" {
-		return storageID
-	}
-	if script != "" {
-		base := strings.TrimSuffix(filepath.Base(script), filepath.Ext(script))
-		if base != "" && base != "." && base != "main" && base != "init" {
-			return base
-		}
-		if cwd, err := os.Getwd(); err == nil {
-			if dir := filepath.Base(cwd); dir != "" && dir != "." {
-				return dir
-			}
-		}
-	}
-	if exe, err := os.Executable(); err == nil {
-		if base := strings.TrimSuffix(filepath.Base(exe), filepath.Ext(exe)); base != "" {
-			return base
-		}
-	}
-	return "default"
+	cwd, _ := os.Getwd()
+	exe, _ := os.Executable()
+	return rt.StorageIDFrom(storageID, script, cwd, exe)
 }
 
 func installPersistentStorage(storeID string) {
