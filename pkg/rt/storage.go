@@ -20,6 +20,15 @@ import (
 // Storage is the host seam for persistent string key/value storage.
 // Guest code names logical keys; the host owns the physical backend and
 // namespace. Values are strings so callers keep serialization policy.
+//
+// Error contract, uniform across backends and surfaced to guest code:
+//   - Get of an absent key returns ok=false with a nil error, so storage/get
+//     yields nil. Get returns a non-nil error only when the backend itself
+//     fails (unreadable file, unavailable localStorage); that throws in the
+//     guest. Absence and failure are deliberately distinguishable.
+//   - Set and Remove return an error on backend failure (full disk, quota,
+//     private-mode localStorage), which throws. They never silently drop a
+//     write — losing a save with no signal is the failure mode to avoid.
 type Storage interface {
 	Get(key string) (value string, ok bool, err error)
 	Set(key, value string) error
@@ -75,6 +84,10 @@ func (s *MemoryStorage) Keys(prefix string) ([]string, error) {
 // FileStorage persists keys as files below one host-selected root. Logical
 // keys are encoded, never used as raw filenames, so callers can use portable
 // string keys without learning filesystem path rules.
+//
+// No in-process lock: native lg drives it from a single guest thread, and
+// Set's atomic temp-then-rename keeps a concurrent reader from observing a
+// torn value. Cross-process coordination is the host's responsibility.
 type FileStorage struct {
 	root string
 }
@@ -83,9 +96,10 @@ func NewFileStorage(root string) (*FileStorage, error) {
 	if root == "" {
 		return nil, fmt.Errorf("storage: empty file storage root")
 	}
-	if err := os.MkdirAll(root, 0700); err != nil {
-		return nil, err
-	}
+	// The root is created lazily by Set, not here: installing the store is a
+	// side effect of every lg run, so eager MkdirAll would litter the config
+	// dir with an empty store dir for scripts that never touch storage. Read
+	// paths (Get/Keys/Remove) already treat a missing root as empty.
 	return &FileStorage{root: root}, nil
 }
 
@@ -119,7 +133,30 @@ func (s *FileStorage) Set(key, value string) error {
 	if err := os.MkdirAll(s.root, 0700); err != nil {
 		return err
 	}
-	return os.WriteFile(s.pathFor(key), []byte(value), 0600)
+	// Atomic replace: write to a temp file in the same directory, then rename
+	// over the target. A crash or full disk mid-write leaves an orphan temp
+	// file behind, never a truncated existing value — the failure mode that
+	// matters for save data. The "tmp-" prefix keeps these out of Keys/Get,
+	// which only see "k-"-encoded names. os.CreateTemp creates with 0600.
+	tmp, err := os.CreateTemp(s.root, "tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write([]byte(value)); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, s.pathFor(key)); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func (s *FileStorage) Remove(key string) error {
@@ -168,12 +205,11 @@ func decodeStorageKey(name string) (string, bool) {
 	return string(data), true
 }
 
-type nopStorage struct{}
-
-func (nopStorage) Get(string) (string, bool, error) { return "", false, nil }
-func (nopStorage) Set(string, string) error         { return nil }
-func (nopStorage) Remove(string) error              { return nil }
-func (nopStorage) Keys(string) ([]string, error)    { return nil, nil }
+// fallbackStorage backs *storage* when no host binding resolves (the var is
+// missing or not yet installed). A shared in-memory store keeps "no host
+// bound" semantics identical to the default root binding installed in
+// iort.go: writes are visible within the process, never silently dropped.
+var fallbackStorage = NewMemoryStorage()
 
 func resolveStorageVar(ec *vm.ExecContext, varName string) Storage {
 	ns := lookupNSCached(NameCoreNS)
@@ -198,7 +234,7 @@ func boundStorage(ec *vm.ExecContext) Storage {
 	if s := resolveStorageVar(ec, "*storage*"); s != nil {
 		return s
 	}
-	return nopStorage{}
+	return fallbackStorage
 }
 
 func storageStringArg(name string, v vm.Value) (string, error) {
