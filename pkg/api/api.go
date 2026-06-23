@@ -21,6 +21,7 @@ type config struct {
 	stderr io.Writer
 	emit   func(name, dataJSON string)
 	keys   rt.KeySource
+	store  rt.Storage
 }
 
 // WithStdout configures the runtime to route output written via *out*
@@ -88,6 +89,20 @@ func WithKeySource(ks rt.KeySource) Option {
 	return func(c *config) { c.keys = ks }
 }
 
+// WithStorage routes the storage namespace through store for this instance.
+// The store receives app-local logical keys; callers should not encode host
+// filesystem or browser-origin details into those keys.
+//
+// Implementation: each Run pushes store as a dynamic binding on *storage*,
+// popped on return. Same process-global-binding-stack concurrency caveat as
+// WithStdout.
+//
+// Default: the runtime root binding. In ordinary native lg this is a
+// file-backed store configured by the CLI; in bare embedders it is in-memory.
+func WithStorage(store rt.Storage) Option {
+	return func(c *config) { c.store = store }
+}
+
 // (Other options deliberately NOT exposed:
 //
 //   - WithStdin: line-stream stdin substitution is the *in* io.Reader dual
@@ -107,6 +122,7 @@ type LetGo struct {
 	stderrHandle vm.Value
 	emitHandle   vm.Value
 	keysHandle   vm.Value
+	storeHandle  vm.Value
 }
 
 // NewLetGo constructs a runtime. With no options, behavior is exactly
@@ -143,6 +159,9 @@ func NewLetGo(ns string, opts ...Option) (*LetGo, error) {
 	}
 	if cfg.keys != nil {
 		ret.keysHandle = vm.NewBoxed(cfg.keys)
+	}
+	if cfg.store != nil {
+		ret.storeHandle = vm.NewBoxed(cfg.store)
 	}
 
 	return ret, nil
@@ -193,6 +212,12 @@ func (l *LetGo) Run(expr string) (vm.Value, error) {
 	if l.keysHandle != nil {
 		if v := rt.LookupCoreVar("*keys*"); v != nil {
 			v.PushBinding(l.keysHandle)
+			defer v.PopBinding()
+		}
+	}
+	if l.storeHandle != nil {
+		if v := rt.LookupCoreVar("*storage*"); v != nil {
+			v.PushBinding(l.storeHandle)
 			defer v.PopBinding()
 		}
 	}

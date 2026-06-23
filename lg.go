@@ -295,6 +295,7 @@ var bundleBase string
 var wasmOutput string
 var wasmShell string
 var wasmPayload string
+var storageID string
 var sourcePaths string
 var resourcePaths string
 
@@ -312,6 +313,7 @@ func init() {
 	flag.StringVar(&wasmOutput, "w", "", "build .lg file into a WASM web app (specify output directory)")
 	flag.StringVar(&wasmShell, "w-shell", "xterm", "shell for -w: 'xterm' (default) or 'none' (emit core only; client supplies its own shell via window.LetGoHost)")
 	flag.StringVar(&wasmPayload, "w-wasm", "inline", "wasm delivery for -w: 'inline' (default; gzip-base64 baked into index.html) or 'external' (emit a separate main.wasm the loader fetches + streams)")
+	flag.StringVar(&storageID, "storage-id", "", "logical storage store id for the storage namespace (default: script name, or current directory for main.lg)")
 	flag.StringVar(&sourcePaths, "source-paths", "",
 		"namespace search paths separated by the OS path-list separator "+
 			"(':' on Unix, ';' on Windows). When given, fully defines the search "+
@@ -395,6 +397,40 @@ func setCommandLineArgs(args []string) {
 	rt.CoreNS.Lookup("*command-line-args*").(*vm.Var).SetRoot(commandLineArgsValue(args))
 }
 
+func storageIDForScript(script string) string {
+	if storageID != "" {
+		return storageID
+	}
+	if script != "" {
+		base := strings.TrimSuffix(filepath.Base(script), filepath.Ext(script))
+		if base != "" && base != "." && base != "main" && base != "init" {
+			return base
+		}
+		if cwd, err := os.Getwd(); err == nil {
+			if dir := filepath.Base(cwd); dir != "" && dir != "." {
+				return dir
+			}
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		if base := strings.TrimSuffix(filepath.Base(exe), filepath.Ext(exe)); base != "" {
+			return base
+		}
+	}
+	return "default"
+}
+
+func installPersistentStorage(storeID string) {
+	store, err := rt.NewDefaultFileStorage(storeID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: storage disabled: %v\n", err)
+		return
+	}
+	if v := rt.LookupCoreVar("*storage*"); v != nil {
+		v.SetRoot(vm.NewBoxed(store))
+	}
+}
+
 func initCompiler(debug bool) *compiler.Context {
 	consts := vm.NewConsts()
 	ns := rt.NS("user")
@@ -426,6 +462,7 @@ func main() {
 		// A bundle skips flag parsing, so every arg after the program name is a
 		// user arg. Set this before any chunk runs — top-level forms read it.
 		setCommandLineArgs(os.Args[1:])
+		installPersistentStorage(storageIDForScript(""))
 
 		// Resources are self-contained in a bundle: serve io/resource from the
 		// embedded archive only, ignoring the filesystem and -resource-paths.
@@ -499,6 +536,11 @@ func main() {
 		userArgs = files[1:]
 	}
 	setCommandLineArgs(userArgs)
+	scriptForStorage := ""
+	if len(files) >= 1 {
+		scriptForStorage = files[0]
+	}
+	installPersistentStorage(storageIDForScript(scriptForStorage))
 
 	// Dev/run resources: serve io/resource from the -resource-paths roots on
 	// the filesystem. (In a bundled binary this branch is never reached — the
@@ -551,7 +593,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: -w-wasm must be 'inline' or 'external', got %q\n", wasmPayload)
 			os.Exit(1)
 		}
-		if err := buildWasm(context, nsResolver, files[0], wasmOutput, wasmShell == "xterm", wasmPayload == "external"); err != nil {
+		if err := buildWasm(context, nsResolver, files[0], wasmOutput, wasmShell == "xterm", wasmPayload == "external", storageIDForScript(files[0])); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

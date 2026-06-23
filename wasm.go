@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/bytecode"
@@ -66,6 +67,13 @@ func main() {
 	hostEmitter := rt.NewHostEmitter()
 	if v := rt.LookupCoreVar("*emit*"); v != nil {
 		v.SetRoot(vm.NewBoxed(hostEmitter))
+	}
+
+	// Route storage through browser localStorage, scoped by the bundle's
+	// host-selected store id so guest keys remain app-local.
+	hostStorage := rt.NewHostStorage(__LG_STORAGE_ID__)
+	if v := rt.LookupCoreVar("*storage*"); v != nil {
+		v.SetRoot(vm.NewBoxed(hostStorage))
 	}
 
 	resolve := func(nsName, name string) *vm.Var {
@@ -134,7 +142,7 @@ addEventListener('fetch', e => {
 });
 `
 
-func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool) error {
+func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, storeID string) error {
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
 	f, err := os.Open(src)
@@ -174,7 +182,8 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	if err := os.WriteFile(filepath.Join(tmpDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(wasmMainTmpl), 0644); err != nil {
+	mainSrc := strings.ReplaceAll(wasmMainTmpl, "__LG_STORAGE_ID__", strconv.Quote(storeID))
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(mainSrc), 0644); err != nil {
 		return err
 	}
 

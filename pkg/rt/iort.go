@@ -339,6 +339,11 @@ func installIOBuiltins(ns *vm.Namespace) {
 	// with a real source (stdin+SIGWINCH on native, the SAB in WASM), and
 	// api.WithKeySource rebinds it per Run. See keysource.go.
 	ns.Def("*keys*", vm.NewBoxed(nopKeySource{}))
+
+	// *storage* — host key/value store for the storage namespace. Defaults to
+	// per-process memory so native dev/tests get deterministic behavior even
+	// when no persistent host binding is installed.
+	ns.Def("*storage*", vm.NewBoxed(NewMemoryStorage()))
 }
 
 // resolveIOHandleVar looks up a var (e.g. "*out*") in the core namespace
