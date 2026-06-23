@@ -17,6 +17,14 @@ import (
 // HostStorage binds the storage namespace to browser localStorage. Logical
 // keys are scoped under a host-selected store id before they reach the
 // origin-wide localStorage keyspace.
+//
+// Each method recovers a thrown localStorage access (Safari private mode,
+// storage disabled, quota exceeded) into a returned error rather than a nil,
+// honoring the Storage contract: a genuinely absent key reads back as nil,
+// but an unavailable or failing backend surfaces as a guest exception
+// instead of a silent miss or dropped write. A future refinement could probe
+// availability once at construction so private mode fails once, clearly,
+// rather than on every call.
 type HostStorage struct {
 	prefix string
 }
