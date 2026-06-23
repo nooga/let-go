@@ -4,6 +4,8 @@ name: Deploy wasm let-go to Pages
 on:
   push:
     branches: [main]
+  # Fresh perf-data snapshots are read at deploy time.
+  workflow_dispatch:
 
 permissions:
   contents: read
