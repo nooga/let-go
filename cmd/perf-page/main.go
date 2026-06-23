@@ -164,6 +164,7 @@ func main() {
 		outPath        = flag.String("out", "docs/perf/index.html", "HTML output path")
 		logoPath       = flag.String("logo", "meta/logo.svg", "logo SVG to embed")
 		cpuFilter      = flag.String("cpu", "", "keep only timeline snapshots whose machine cpu_model contains this substring (CI runs land on ≥2 CPU tiers whose ratio_to_anchor doesn't normalize across them, so a mixed timeline zig-zags ~2x; filtering to one tier gives a clean series). Empty = all.")
+		anchorName     = flag.String("anchor", "", "historical baseline to compare against, by file stem (e.g. 'v1.8.0'); empty = newest. Lets the page swap anchors — e.g. a fresh same-machine baseline for the modern suite vs the legacy v1.8.0 (Apple M3, pre-IR) reference.")
 	)
 	flag.Parse()
 
@@ -171,7 +172,7 @@ func main() {
 	if err != nil {
 		die("load baseline: %v", err)
 	}
-	reference, referenceName, err := loadLatestHistorical(*historicalPath)
+	reference, referenceName, err := loadHistoricalAnchor(*historicalPath, *anchorName)
 	if err != nil {
 		die("load historical baseline: %v", err)
 	}
@@ -298,6 +299,23 @@ func loadLatestHistorical(dir string) (Baseline, string, error) {
 		return all[i].path > all[j].path
 	})
 	return all[0].baseline, all[0].name, nil
+}
+
+// loadHistoricalAnchor selects the comparison baseline. With name empty it
+// keeps the existing behavior (newest historical). With a name (file stem,
+// e.g. "v1.8.0") it loads that specific baseline — so the page can anchor the
+// modern suite to a fresh same-machine baseline while keeping v1.8.0 available
+// as an explicit, labeled legacy reference rather than the silent default.
+func loadHistoricalAnchor(dir, name string) (Baseline, string, error) {
+	if name == "" {
+		return loadLatestHistorical(dir)
+	}
+	path := filepath.Join(dir, name+".json")
+	baseline, err := loadBaseline(path)
+	if err != nil {
+		return Baseline{}, "", fmt.Errorf("anchor %q (%s): %w", name, path, err)
+	}
+	return baseline, name, nil
 }
 
 func loadTimeline(timelineDir, historicalDir string, current Baseline) ([]Snapshot, error) {
