@@ -180,6 +180,9 @@ func (s *FileStorage) Keys(prefix string) ([]string, error) {
 		if e.IsDir() {
 			continue
 		}
+		// decodeStorageKey rejects any name without the "k-" prefix, which is
+		// also what filters out Set's "tmp-*" temp files (orphaned by a crash
+		// between CreateTemp and Rename). Keep that prefix in sync with Set.
 		k, ok := decodeStorageKey(e.Name())
 		if !ok || !strings.HasPrefix(k, prefix) {
 			continue
@@ -209,6 +212,10 @@ func decodeStorageKey(name string) (string, bool) {
 // missing or not yet installed). A shared in-memory store keeps "no host
 // bound" semantics identical to the default root binding installed in
 // iort.go: writes are visible within the process, never silently dropped.
+//
+// This deliberately differs from the nop fallbacks on *emit*/*keys*, whose
+// root defaults are themselves nops — matching their roots. *storage*'s root
+// is a MemoryStorage, so its fallback matches that, not a nop.
 var fallbackStorage = NewMemoryStorage()
 
 func resolveStorageVar(ec *vm.ExecContext, varName string) Storage {

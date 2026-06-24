@@ -15,10 +15,12 @@ import (
 // and executable path so the policy stays unit-testable. Precedence:
 //
 //   - an explicit flag id, when set;
-//   - the script's basename, extension trimmed;
-//   - the working-directory basename, when the script name says nothing about
-//     the app (empty, ".", "main", or "init");
-//   - the executable's basename;
+//   - for a named script, its basename with the extension trimmed;
+//   - for a named script whose basename says nothing about the app (".",
+//     "main", or "init"), the working-directory basename;
+//   - the executable's basename. This is the bundle case: the script argument
+//     is empty, so cwd is not consulted and bundles key by exe name (stable
+//     regardless of the launch directory);
 //   - "default".
 //
 // cwd or exePath may be empty when the caller's lookup failed; an empty input
