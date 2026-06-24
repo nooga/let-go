@@ -1163,10 +1163,21 @@ func readConditional(r *LispReader, s rune) (vm.Value, error) {
 			(matchBbConditional && key == bbConditionalTag) ||
 			key == defaultConditionalTag)
 		if isMatch {
-			// Read the value form normally
-			val, err := r.Read()
-			if err != nil {
-				return vm.NIL, NewReaderError(r, "reading reader conditional value")
+			// Read the value form. Read() skips whitespace but surfaces a
+			// comment (and #_ discard) as VOID, so a comment/discard between the
+			// branch keyword and its value — e.g. `:default ;; note<newline> 42`
+			// — would yield VOID here, then the real value would be misread as
+			// the next key and the closing ) swallowed. Loop past VOID until the
+			// actual value form is read. (Reached jank's core_test/long.cljc.)
+			var val vm.Value = vm.VOID
+			for {
+				val, err = r.Read()
+				if err != nil {
+					return vm.NIL, NewReaderError(r, "reading reader conditional value")
+				}
+				if val.Type() != vm.VoidType {
+					break
+				}
 			}
 			form = val
 			found = true

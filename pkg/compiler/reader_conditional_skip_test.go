@@ -45,3 +45,28 @@ func TestReaderConditionalSkipsGnarlyBranches(t *testing.T) {
 		assert.Equalf(t, e.second, second, "second form of %q", p)
 	}
 }
+
+// The MATCHED branch must also skip a leading comment/discard between the
+// branch keyword and its value. Read() skips whitespace but surfaces a comment
+// as VOID (the comment macro's result), so a bare r.Read() for the matched
+// value returned VOID; the real value was then misread as the next key and the
+// closing ) got swallowed, desyncing the surrounding form (EOF at end of file).
+// Triggered by jank's core_test/long.cljc: `:default <newline> ;; note <vec>`.
+func TestReaderConditionalSkipsCommentsBeforeMatchedValue(t *testing.T) {
+	type twoForms struct{ first, second vm.Value }
+	cases := map[string]twoForms{
+		"#?(:default ; note\n 1) 2":            {vm.Int(1), vm.Int(2)}, // comment before matched value
+		"#?(:default\n ;; line comment\n 3) 4": {vm.Int(3), vm.Int(4)}, // comment on its own line
+		"#?(:cljs [] :default ; c\n 5) 6":      {vm.Int(5), vm.Int(6)}, // skipped branch, then commented match
+		"#?(:default #_ x 7) 8":                {vm.Int(7), vm.Int(8)}, // discard before matched value
+	}
+	for p, e := range cases {
+		r := NewLispReader(strings.NewReader(p), "<reader>")
+		first, err := r.Read()
+		assert.NoErrorf(t, err, "first form of %q", p)
+		assert.Equalf(t, e.first, first, "first form of %q", p)
+		second, err := r.Read()
+		assert.NoErrorf(t, err, "second form of %q", p)
+		assert.Equalf(t, e.second, second, "second form of %q", p)
+	}
+}
