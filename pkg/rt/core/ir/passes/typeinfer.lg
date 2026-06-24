@@ -167,9 +167,14 @@
     (nil?     aux) :nil
     (= aux true)   :true
     (= aux false)  :false
-    (and (integer? aux) (= aux 0)) [:const :int 0]
+    ;; int? — NOT integer? — for the native :int lattice: a BigInt satisfies
+    ;; integer? but is an arbitrary-precision heap value with no native Go int
+    ;; representation. Typing it :int would route gogen through int-lit (which
+    ;; can't render it) and let constfold treat it as a machine int. It falls to
+    ;; :any below → boxes to vm.Value, like Ratio/BigDecimal.
+    (and (int? aux) (= aux 0)) [:const :int 0]
     (and (float? aux) (= aux 0.0)) [:const :float 0.0]
-    (integer? aux) :int
+    (int?     aux) :int
     (float?   aux) :float
     (ratio?   aux) :ratio
     (string?  aux) :string

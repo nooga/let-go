@@ -44,6 +44,18 @@ func NewBigIntFromString(s string) (*BigInt, bool) {
 	return &BigInt{val: v}, true
 }
 
+// MustBigIntFromString builds a BigInt from its base-10 string form, panicking
+// on an unparseable input. Intended for gogen-emitted constant literals (the
+// source was validated at read time, so the panic is unreachable in generated
+// code); gives a single-value expression form the (value, ok) constructor can't.
+func MustBigIntFromString(s string) *BigInt {
+	v, ok := NewBigIntFromString(s)
+	if !ok {
+		panic("MustBigIntFromString: invalid BigInt literal: " + s)
+	}
+	return v
+}
+
 func NewBigIntFromInt64(n int64) *BigInt {
 	return &BigInt{val: big.NewInt(n)}
 }

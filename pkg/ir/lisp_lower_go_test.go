@@ -665,6 +665,25 @@ func TestLowerGoBridgeLowersRatioConst(t *testing.T) {
 	}
 }
 
+func TestLowerGoBridgeLowersBigIntConst(t *testing.T) {
+	ensureLoader()
+
+	// BigInt satisfies integer? but not int?, so it must NOT lower through the
+	// native int-lit path (gogen/int-lit can't render an arbitrary-precision
+	// *vm.BigInt — it produced an ExceptionInfo that leaked into the func body).
+	fn := buildLispIR(t, `(defn a-bigint [] 12345678901234567890N)`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, `vm.MustBigIntFromString("12345678901234567890")`) {
+		t.Fatalf("expected BigInt const to lower through vm.MustBigIntFromString\n--- go ---\n%s", rendered)
+	}
+}
+
 func TestLowerGoStrictVecDestructureDefn(t *testing.T) {
 	ensureLoader()
 

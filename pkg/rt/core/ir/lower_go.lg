@@ -131,7 +131,10 @@
                                   [(gogen/char-lit aux)])
     (keyword? aux)    nil
     (or (= t :float) (= t [:const :float 0.0])) (gogen/float-lit aux)
-    (integer? aux)    (gogen/int-lit aux)
+    ;; int? not integer?: a BigInt has no native Go int form (see boxed-value-expr).
+    ;; It is typed :any (vm.Value) by classify-const so it routes through the boxed
+    ;; path, not here — but guard int-lit regardless so a stray BigInt can't reach it.
+    (int? aux)        (gogen/int-lit aux)
     (float? aux)      (gogen/float-lit aux)
     :else nil))
 
@@ -232,7 +235,11 @@
     (nil? v)        (vm-sel "NIL")
     (= v true)      (vm-sel "TRUE")
     (= v false)     (vm-sel "FALSE")
-    (integer? v)    (vm-call "Int" [(gogen/int-lit v)])
+    ;; int? (machine int), NOT integer?: a BigInt also satisfies integer? but
+    ;; gogen/int-lit can't render an arbitrary-precision value — it must take the
+    ;; runtime-constructor path below, like the other non-fixnum numerics.
+    (int? v)        (vm-call "Int" [(gogen/int-lit v)])
+    (bigint? v)     (vm-call "MustBigIntFromString" [(gogen/string-lit (str v))])  ; (str 12N) -> "12"
     (float? v)      (vm-call "Float" [(gogen/float-lit v)])
     (string? v)     (vm-call "String" [(gogen/string-lit v)])
     (char? v)       (vm-call "Char" [(gogen/char-lit v)])
