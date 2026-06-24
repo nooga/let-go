@@ -416,6 +416,30 @@
     (= 'deftype (first form))
     {:decl-kind :deftype :name (nth form 1) :fields (nth form 2) :impls (vec (drop 3 form))}
 
+    ;; Capture defmulti as a declaration form. Mirror the defmulti macro's
+    ;; argument parse (name docstring? attr-map? dispatch-fn & options) so the
+    ;; dispatcher registry can later recognise a type-dispatch fn and the
+    ;; default method's dispatch value.
+    (= 'defmulti (first form))
+    (let [margs       (drop 2 form)
+          margs       (if (string? (first margs)) (next margs) margs)
+          margs       (if (map? (first margs)) (next margs) margs)
+          dispatch-fn (first margs)
+          opts        (apply hash-map (or (next margs) '()))]
+      {:decl-kind   :defmulti
+       :name        (unwrap-name (nth form 1))
+       :dispatch-fn dispatch-fn
+       :default-val (get opts :default :default)})
+
+    ;; Capture defmethod as a declaration form. The dispatch value selects the
+    ;; switch arm; the fn-tail ([args] body...) is the method body lowered into
+    ;; that arm.
+    (= 'defmethod (first form))
+    {:decl-kind    :defmethod
+     :name         (unwrap-name (nth form 1))
+     :dispatch-val (nth form 2)
+     :fn-tail      (vec (drop 3 form))}
+
     ;; Otherwise, fall through to the existing defn logic
     :else
     (let [name-sym    (unwrap-name (nth form 1))

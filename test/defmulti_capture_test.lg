@@ -1,0 +1,35 @@
+(ns test.defmulti-capture-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+;; compile-form captures defmulti/defmethod as declaration forms (mirror of the
+;; defprotocol/deftype capture in test/deftype_capture_test.lg). This
+;; pre-expansion capture is what the Go-lowering pipeline consumes to build a
+;; multimethod dispatcher registry and emit a native dispatch switch.
+
+;; compile-form throws on an unrecognised top-level form, so guard with a
+;; try/catch: an uncaptured defmulti/defmethod yields {} here and fails the
+;; assertions loudly rather than aborting the test silently.
+(defn- capture [form]
+  (binding [ir.passes.pipeline/*target* :go]
+    (try (ir.passes.pipeline/compile-form form)
+         (catch e {}))))
+
+(deftest captures-defmulti-declaration
+  (testing "compile-form captures defmulti as a :defmulti declaration"
+    (let [r (capture '(defmulti shape-area (fn [x] (type x))))]
+      (is (= :defmulti (:decl-kind r)))
+      (is (= 'shape-area (:name r)))
+      ;; the dispatch fn is carried through for later type-dispatch recognition
+      (is (= '(fn [x] (type x)) (:dispatch-fn r)))
+      (is (= :default (:default-val r))))))
+
+(deftest captures-defmethod-declaration
+  (testing "compile-form captures defmethod as a :defmethod declaration"
+    (let [r (capture '(defmethod shape-area :square [x] (* x x)))]
+      (is (= :defmethod (:decl-kind r)))
+      (is (= 'shape-area (:name r)))
+      (is (= :square (:dispatch-val r)))
+      ;; the method body (a fn-tail) is carried for IR lowering of the arm
+      (is (= '([x] (* x x)) (:fn-tail r))))))
