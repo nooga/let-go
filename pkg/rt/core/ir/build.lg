@@ -549,6 +549,26 @@
         args   (rest (rest form))]
     (cons '. (cons recv (cons (list 'quote member) args)))))
 
+(defn- record-ctor-head?
+  "True for a record/type constructor shorthand head like TestDissocRecord. —
+   an UNQUALIFIED symbol whose name ENDS with '.' and has a type name before it.
+   Mirrors compiler.go's `(Name. args...)` rewrite guard (fnsym[-1]=='.' && len>1)."
+  [head]
+  (and (symbol? head)
+       (nil? (namespace head))
+       (let [hn (name head)
+             n  (count hn)]
+         (and (> n 1) (= "." (subs hn (dec n)))))))
+
+(defn- rewrite-record-ctor
+  "(Name. args...) -> (->Name args...), the positional constructor defrecord
+   defines. Mirrors compiler.go so the gogen path builds it as an ordinary call
+   to ->Name (a sibling var the loaded namespace already interned)."
+  [form]
+  (let [hn   (name (first form))
+        ctor (symbol (str "->" (subs hn 0 (dec (count hn)))))]
+    (cons ctor (rest form))))
+
 (defn build-list [form ctx]
   (let [head    (first form)
         builtin (get builtin-ops head)]
@@ -571,6 +591,9 @@
       ;; canonical dot form and build as a generic call to `.`.
       (and (method-call-head? head) (seq (rest form)))
       (build-call (rewrite-method-call form) ctx)
+      ;; Record/type constructor shorthand: (Name. arg...) → (->Name arg...).
+      (record-ctor-head? head)
+      (build-call (rewrite-record-ctor form) ctx)
       builtin         (build-builtin-op builtin form ctx)
       ;; Keywords, numbers, strings are callable (implement IFn in Clojure).
       ;; Treat them as Const values, build as generic call with const head.
@@ -1145,14 +1168,11 @@
         (bind-local! inner-ctx (nth capture-syms i)
                      (ir/add-inst inner entry :load-closed [] i))
         (recur (inc i))))
-    (let [last-val (loop [fs body-forms last-id nil]
-                     (if (seq fs)
-                       (recur (rest fs) (build-form (first fs) inner-ctx))
-                       last-id))
+    (let [last-val (build-body-result body-forms inner-ctx)
           final-blk (ctx-block inner-ctx)]
       (when-not (terminated? last-val)
         (add-terminator! inner-ctx final-blk :return
-          (if (nil? last-val) [] [last-val])
+          [last-val]
           nil)))
     {:kind :fn-template
      :fn inner
@@ -1273,14 +1293,11 @@
             (let [arg-id (ir/add-inst f entry-blk :load-arg [] i)]
               (bind-local! ctx (nth flat-args i) arg-id)
               (recur (inc i)))))
-        (let [last-val  (loop [fs flat-body last-id nil]
-                          (if (seq fs)
-                            (recur (rest fs) (build-form (first fs) ctx))
-                            last-id))
+        (let [last-val  (build-body-result flat-body ctx)
               final-blk (ctx-block ctx)]
           (when-not (terminated? last-val)
             (ir/add-terminator! f final-blk :return
-                                (if (nil? last-val) [] [last-val])
+                                [last-val]
                                 nil)))
         f)
       ;; Multi-arity path: preserve each arity as a nested template

@@ -770,6 +770,44 @@ func TestLowerGoBridgeLowersDefNoValue(t *testing.T) {
 	}
 }
 
+func TestLowerGoBridgeLowersEmptyFnBody(t *testing.T) {
+	ensureLoader()
+
+	// (defn f []) — empty body returns nil. build-body-result materialises a
+	// nil-const so the fn has a typed return; previously :return [] gave
+	// result-node nothing to type → "unsupported result type".
+	fn := buildLispIR(t, `(defn f [])`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "return vm.NIL") {
+		t.Fatalf("expected empty-body fn to return vm.NIL\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestLowerGoBridgeLowersRecordCtorShorthand(t *testing.T) {
+	ensureLoader()
+
+	// (Name. args...) record-constructor shorthand rewrites to (->Name args...),
+	// the positional ctor defrecord defines. Define the record so ->TCtor exists.
+	runLispExpr(t, `(defrecord TCtor [a b])`)
+	fn := buildLispIR(t, `(defn g [] (TCtor. 1 2))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "->TCtor") {
+		t.Fatalf("expected (TCtor. ...) to lower as a call to ->TCtor\n--- go ---\n%s", rendered)
+	}
+}
+
 func TestLowerGoStrictVecDestructureDefn(t *testing.T) {
 	ensureLoader()
 
