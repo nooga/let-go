@@ -58,7 +58,7 @@ esac
 # artifact, so regenerate it before any `-tags gogen_ir` build below. Cheap
 # relative to the parity runs; non-determinism is irrelevant here (we compare
 # program output across engines, not the generated Go bytes).
-go run -tags bootstrap ./cmd/lgbgen --target=go >/dev/null
+go run -tags bootstrap ./cmd/lgbgen --target=go --source-paths pkg/rt/core:pkg/rt/gogen >/dev/null
 
 # IR corpus used by ir-stress. Order matters (data.lg must load first).
 IR_CORPUS=(

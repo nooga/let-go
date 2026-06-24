@@ -361,13 +361,27 @@ func main() {
 	// never rewrites the real checkout's wireup. When set, the manifest refresh
 	// is skipped too, keeping the run side-effect-free outside codeDir/outDir.
 	var codeDir string
+	var sourcePaths string
 
 	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 	fs.StringVar(&target, "target", "", "generation target: go, both, or empty for bundle-only")
 	fs.StringVar(&cpuProfilePath, "cpuprofile", "", "write Go CPU profile for the lgbgen process")
 	fs.StringVar(&memProfilePath, "memprofile", "", "write Go allocation profile (allocs) for the lgbgen process")
 	fs.StringVar(&codeDir, "code-dir", "", "base dir for generated gogen_ir wireup files (default: repo root)")
+	fs.StringVar(&sourcePaths, "source-paths", "", "classpath-style list of .lg/.cljc/.clj namespace source roots, separated by the OS path-list separator (':' on unix, ';' on windows), searched in addition to the embedded core (e.g. pkg/rt/core:pkg/rt/gogen). Lets lgbgen build from .lg sources without hardcoded paths.")
 	fs.Parse(os.Args[1:])
+
+	// Configurable namespace source roots: an unset flag preserves the
+	// embedded-only behavior (nil path); otherwise the resolver also searches
+	// these dirs, so namespaces living outside the embedded core/ tree (gogen,
+	// or external user code) load from source. Split like a shell/Java
+	// classpath via the OS path-list separator.
+	var nsLoadPaths []string
+	for _, p := range filepath.SplitList(sourcePaths) {
+		if p = strings.TrimSpace(p); p != "" {
+			nsLoadPaths = append(nsLoadPaths, p)
+		}
+	}
 
 	switch target {
 	case "":
@@ -466,7 +480,7 @@ func main() {
 	{
 		coreNS := rt.NS(rt.NameCoreNS)
 		loaderCtx := compiler.NewCompiler(consts, coreNS)
-		rt.SetNSLoader(resolver.NewNSResolver(loaderCtx, nil))
+		rt.SetNSLoader(resolver.NewNSResolver(loaderCtx, nsLoadPaths))
 	}
 
 	// Phase 1: compile all namespaces from source (bytecode, sets up VM state).
@@ -573,26 +587,50 @@ func refreshManifest() {
 	fmt.Printf("wrote %s (%s)\n", genmanifest.ManifestRelPath, digest[:12])
 }
 
+// callGogenMangler invokes one of the gogen ns→Go-package mangler vars
+// (gogen/ns->go-pkg, gogen/ns->go-reldir) through the runtime. Those gogen.lg
+// fns are the SINGLE source of truth for the ns→package convention — shared
+// with the .lg AOT driver (scripts/lg-compile) — so the bytecode-VM path and
+// the native-lowering path can never drift. Only called from runGoTarget, after
+// the runtime is loaded.
+func callGogenMangler(varName, nsName string) string {
+	v := rt.LookupVar("gogen", varName)
+	if v == nil {
+		fmt.Fprintf(os.Stderr, "fatal: gogen/%s not found\n", varName)
+		os.Exit(1)
+	}
+	res, err := v.Invoke([]vm.Value{vm.String(nsName)})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fatal: gogen/%s(%q): %v\n", varName, nsName, err)
+		os.Exit(1)
+	}
+	s, ok := res.(vm.String)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "fatal: gogen/%s returned %T, want String\n", varName, res)
+		os.Exit(1)
+	}
+	return string(s)
+}
+
 // nsToGoPkgName converts a let-go namespace name to a valid Go package name:
 // the LAST dot-segment, with hyphens turned into underscores
 // (ir.passes.pipeline → pipeline, ir.lower-go → lower_go, edn → edn). This is
 // both the `package` identifier and the filename stem; the directory nesting
-// that mirrors the full namespace is built by nsToGoRelDir. Mirrors Glojure's
-// mungeID(getLastNSPart(ns)).
+// that mirrors the full namespace is built by nsToGoRelDir. Delegates to the
+// canonical gogen/ns->go-pkg.
 func nsToGoPkgName(nsName string) string {
-	parts := strings.Split(nsName, ".")
-	last := parts[len(parts)-1]
-	return strings.ReplaceAll(last, "-", "_")
+	return callGogenMangler("ns->go-pkg", nsName)
 }
 
 // nsToGoRelDir converts a let-go namespace name to the relative directory path
 // (under the lowered-output root) that mirrors the namespace nesting: dots
 // become path separators, hyphens become underscores
 // (ir.passes.pipeline → ir/passes/pipeline, ir.lower-go → ir/lower_go).
-// Mirrors Glojure's nsToPath.
+// Delegates to the canonical gogen/ns->go-reldir.
 func nsToGoRelDir(nsName string) string {
-	s := strings.ReplaceAll(nsName, "-", "_")
-	return filepath.FromSlash(strings.ReplaceAll(s, ".", "/"))
+	// gogen emits slash-separated paths; convert to the host separator for
+	// filepath.Join callers (no-op on unix, correct on Windows).
+	return filepath.FromSlash(callGogenMangler("ns->go-reldir", nsName))
 }
 
 // goGeneratedBanner is stamped on the first line of every Go file lgbgen
@@ -700,6 +738,15 @@ func runGoTarget(outDir, codeDir string) {
 	pipelineVar := rt.LookupVar("ir.passes.pipeline", "lower-ns-to-go")
 	if pipelineVar == nil {
 		fmt.Fprintf(os.Stderr, "fatal: ir.passes.pipeline/lower-ns-to-go not found\n")
+		os.Exit(1)
+	}
+	// The ns→Go-package manglers live in gogen.lg (the single source of truth,
+	// shared with scripts/lg-compile). gogen lazy-loads its .lg layer on require
+	// (installGogenNS marks it needs-load); with --source-paths pointing at
+	// pkg/rt/gogen the resolver can find the file. Load it now so
+	// gogen/ns->go-pkg / gogen/ns->go-reldir are interned before nsToGoPkgName.
+	if _, err := compiler.Eval("(require 'gogen)"); err != nil {
+		fmt.Fprintf(os.Stderr, "fatal: require gogen: %v\n", err)
 		os.Exit(1)
 	}
 

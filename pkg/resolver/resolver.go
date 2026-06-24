@@ -174,17 +174,14 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 		return nil
 	}
 	blocks := stdstrings.Split(name, ".")
-	// Try embedded namespaces first
-	if embedded := r.loadEmbedded(name); embedded != nil {
-		return embedded
-	}
-	// Build candidate paths: try .lg, .cljc, then .clj extensions,
+	// Build candidate relative paths: try .lg, .cljc, then .clj extensions,
 	// and hyphen vs underscore variants for each path segment.
 	hyphenPath := path.Join(blocks...)
+	ublocks := make([]string, len(blocks))
 	for i, b := range blocks {
-		blocks[i] = stdstrings.ReplaceAll(b, "-", "_")
+		ublocks[i] = stdstrings.ReplaceAll(b, "-", "_")
 	}
-	underscorePath := path.Join(blocks...)
+	underscorePath := path.Join(ublocks...)
 
 	candidates := []string{
 		hyphenPath + ".lg",
@@ -195,20 +192,57 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 		underscorePath + ".clj",
 	}
 
-	for _, dir := range r.path {
-		for _, candidate := range candidates {
-			cp := path.Join(dir, candidate)
-			if _, err := os.Stat(cp); err == nil {
-				r.cloading[name] = true
-				lns := r.loadFile(cp)
-				delete(r.cloading, name)
-				// gogen_ir: drain Go-native overrides (no-op untagged).
-				rt.ApplyGoOverrides(lns)
-				return lns
+	// loadFromPath searches the explicit source roots (r.path) — the classpath.
+	loadFromPath := func() *vm.Namespace {
+		for _, dir := range r.path {
+			for _, candidate := range candidates {
+				cp := path.Join(dir, candidate)
+				if _, err := os.Stat(cp); err == nil {
+					r.cloading[name] = true
+					lns := r.loadFile(cp)
+					delete(r.cloading, name)
+					// gogen_ir: drain Go-native overrides (no-op untagged).
+					rt.ApplyGoOverrides(lns)
+					return lns
+				}
 			}
 		}
+		return nil
 	}
-	return nil
+
+	// Explicit source roots win over the embedded/bundled copy, so a classpath
+	// build (lgbgen --source-paths …) compiles what's actually on disk rather
+	// than a stale baked-in snapshot — UNLESS this ns is pinned to the embedded
+	// copy via LG_PREFER_EMBEDDED_NS. When r.path is empty (the common case: no
+	// --source-paths), loadFromPath is a no-op and embedded serves, so default
+	// behavior — and ./lg / test startup cost — is unchanged.
+	if preferEmbeddedNS(name) {
+		if embedded := r.loadEmbedded(name); embedded != nil {
+			return embedded
+		}
+		return loadFromPath()
+	}
+	if ns := loadFromPath(); ns != nil {
+		return ns
+	}
+	return r.loadEmbedded(name)
+}
+
+// preferEmbeddedNS reports whether namespace `name` is pinned to load from the
+// embedded/bundled copy even when an explicit source root also provides it
+// (the override for the explicit-sources-win default). Comma-separated list in
+// LG_PREFER_EMBEDDED_NS. Mirrors forceSourceNS / LG_FORCE_SOURCE_NS.
+func preferEmbeddedNS(name string) bool {
+	env := os.Getenv("LG_PREFER_EMBEDDED_NS")
+	if env == "" {
+		return false
+	}
+	for _, s := range stdstrings.Split(env, ",") {
+		if stdstrings.TrimSpace(s) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // forceSourceNS reports whether namespace `name` is listed in the

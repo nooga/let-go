@@ -59,9 +59,17 @@ build-profile: $(LG-PROFILE)
 # behavior silently diverges from source. This prereq rule makes the
 # regeneration automatic — `make test`, `make build`, etc. now keep
 # the bundle in lockstep with the .lg sources.
-CORE-LG-FILES := $(shell find pkg/rt/core -name '*.lg' -type f 2>/dev/null)
+CORE-LG-FILES := $(shell find pkg/rt/core pkg/rt/gogen -name '*.lg' -type f 2>/dev/null)
 LGBGEN-SOURCES := $(shell find cmd/lgbgen -name '*.go' -type f 2>/dev/null)
 ROOT-GO-FILES := $(shell find . -maxdepth 1 -name '*.go' -type f 2>/dev/null)
+# The FULL list of .lg namespace source roots a core compile pulls from — the
+# single place that enumerates them. lgbgen searches these for any namespace not
+# served by the embedded FS (embedded still wins when present, so output is
+# unchanged). Listing pkg/rt/core makes the core itself buildable from source,
+# and pkg/rt/gogen supplies gogen.lg (the ns->Go-package manglers) — keeping that
+# convention in .lg instead of hardcoded Go bindings inside lgbgen. Every
+# --target=go/both invocation, and the generate orchestrator, passes this.
+LGBGEN-SOURCE-PATHS := pkg/rt/core:pkg/rt/gogen
 pkg/rt/core_compiled.lgb: $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
 	go run -tags bootstrap ./cmd/lgbgen
 
@@ -72,7 +80,7 @@ pkg/rt/core_compiled.lgb: $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
 # hashes even when pass/fail counts match). lower_go.go is the timestamp
 # anchor for the whole tree — every regen rewrites it.
 pkg/rt/core_go_lowered/ir/lower_go/lower_go.go: $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
-	go run -tags bootstrap ./cmd/lgbgen --target=go
+	go run -tags bootstrap ./cmd/lgbgen --target=go --source-paths $(LGBGEN-SOURCE-PATHS)
 
 # Regenerate every committed code-gen artifact via the let-go orchestrator
 # scripts/generate.lg: the three Go-gen files (op_generated.go,
@@ -82,7 +90,7 @@ pkg/rt/core_go_lowered/ir/lower_go/lower_go.go: $(CORE-LG-FILES) $(LGBGEN-SOURCE
 # `go run -tags bootstrap ./cmd/lgbgen [--target=go]` for the bundle/lowered
 # tree. (Replaces the former generate-ir-{ops,bridge,data}.sh shell scripts.)
 generate: build
-	./lg scripts/generate.lg --go "$$(command -v go)" --lg ./lg --source-paths pkg/rt/gogen
+	./lg scripts/generate.lg --go "$$(command -v go)" --lg ./lg --source-paths $(LGBGEN-SOURCE-PATHS)
 
 # Short commit for `-X main.commit` so SHA-pin require-letgo checks can fire on
 # `make` builds. Release builds get this from goreleaser; a bare `make` build
@@ -102,7 +110,7 @@ check-lowered-fresh:
 	if [ -n "$$stale" ]; then \
 		echo "ERROR: pkg/rt/core_go_lowered/ is stale relative to:"; \
 		echo "$$stale" | sed 's/^/  /'; \
-		echo "Run 'go run -tags bootstrap ./cmd/lgbgen --target=go' to regenerate."; \
+		echo "Run 'go run -tags bootstrap ./cmd/lgbgen --target=go --source-paths $(LGBGEN-SOURCE-PATHS)' to regenerate."; \
 		exit 1; \
 	fi
 
@@ -147,7 +155,7 @@ perf-snapshot: lowered $(GO)
 # depends on this. Cheap relative to the runs that follow.
 .PHONY: lowered
 lowered: $(GO)
-	@go run -tags bootstrap ./cmd/lgbgen --target=go >/dev/null
+	@go run -tags bootstrap ./cmd/lgbgen --target=go --source-paths $(LGBGEN-SOURCE-PATHS) >/dev/null
 
 # Differential self-AOT execution gate: build let-go twice (bytecode + the
 # -tags gogen_ir native), run each test/gold-aot/*.lg fixture under both, and
@@ -254,7 +262,7 @@ check-generated-manifest: $(GO)
 check-generated: check-generated-manifest $(GO)
 	@echo ">> regenerate bundle + lowered tree from a SINGLE core compile (--target=both)"
 	@cp pkg/rt/core_compiled.lgb pkg/rt/.core_compiled.lgb.committed
-	@go run -tags bootstrap ./cmd/lgbgen --target=both >/dev/null
+	@go run -tags bootstrap ./cmd/lgbgen --target=both --source-paths $(LGBGEN-SOURCE-PATHS) >/dev/null
 	@echo ">> bundle: verify lockstep (content-based, VCS-agnostic)"
 	@if cmp -s pkg/rt/core_compiled.lgb pkg/rt/.core_compiled.lgb.committed; then \
 		rm -f pkg/rt/.core_compiled.lgb.committed; \

@@ -1,0 +1,125 @@
+;; lg-compile — AOT-compile a SET of let-go .lg files to .go packages, with
+;; DIRECT cross-package calls between them (pkg.Fn(ec, …) instead of runtime
+;; CachedVarFn trampolines) and the matching Go imports.
+;;
+;;   ./lg scripts/lg-compile <out-dir> <import-prefix> <file.lg>...
+;;
+;;   <import-prefix>  Go import path of <out-dir> (each package is
+;;                    <import-prefix>/<reldir>). e.g. for out-dir
+;;                    examples/aot/ys-on-let-go/go_lowered under module
+;;                    github.com/nooga/let-go, prefix is
+;;                    github.com/nooga/let-go/examples/aot/ys-on-let-go/go_lowered
+;;
+;; Two passes (like lgbgen's intra-ns fixpoint, lifted to span packages):
+;;   A. Lower every fn with *export-lowered-fns* on to learn each ns's exported
+;;      Go name + signature, and build a cross-package registry keyed
+;;      [internal-ns name arity] -> {… :go-pkg <import-path> :go-name <Exported>}.
+;;   B. Re-lower each file with that registry + export bound: a call to another
+;;      file's fn resolves to a direct pkg.Fn(ec,…) call and records the import.
+;; Variadic / non-coercible fns aren't :direct-callable?, so they're left off the
+;; registry and stay on the trampoline (correct).
+
+(require 'ir.data)
+(require 'ir.passes.pipeline)
+(require 'ir.passes.typeinfer)
+(require 'ir.lattice)
+(require 'ir.build)
+(require 'ir.lower-go)
+(require 'clojure.string)
+(require 'gogen)
+
+;; Evaluating a file's (ns ..) form switches the GLOBAL current ns; capture this
+;; script's ns so we can restore it after loading (else later top-level defs in
+;; this script resolve against a loaded file's ns and break).
+(def --script-ns *ns*)
+
+(def argv (vec (drop 2 (seq os/args))))
+(def out-dir (nth argv 0))
+(def import-prefix (nth argv 1))
+(def files (vec (drop 2 argv)))
+
+(defn read-all [path]
+  (read-string (str "(do " (slurp path) "\n)")))
+
+(defn single-arity-defn? [f] (boolean (some vector? (drop 2 f))))
+
+(defn lowerable? [f]
+  (and (seq? f)
+       (let [h (first f)]
+         (or (and (or (= h 'defn) (= h 'defn-)) (single-arity-defn? f))
+             (= h 'defmulti) (= h 'defmethod)))))
+
+(defn find-ns-name [forms]
+  (some (fn [f] (when (and (seq? f) (= 'ns (first f))) (second f))) forms))
+
+;; ns->Go-package naming uses the CANONICAL gogen manglers (gogen/ns->go-pkg,
+;; gogen/ns->go-reldir) — the same single source of truth cmd/lgbgen uses for the
+;; core_go_lowered tree — so AOT output here is laid out identically: package =
+;; leaf segment, directory = nested ns path. (e.g. yamlstar.parser.parser ->
+;; package "parser" at dir "yamlstar/parser/parser".)
+
+(defn basename-stem [path]
+  (let [segs (clojure.string/split path "/")
+        base (nth segs (dec (count segs)))]
+    (clojure.string/replace base ".lg" "")))
+
+;; Everything below runs in ONE top-level form so it is COMPILED in this script's
+;; ns (all symbols resolve) BEFORE the runtime (ns ..)/eval calls switch the
+;; global current ns. Lexical lets (specs, cross-pkg-registry) are ns-independent.
+(let [;; --- parse all files into specs ---
+      specs (mapv (fn [path]
+                    (let [parsed (read-all path)
+                          forms  (vec (rest parsed))
+                          ns-sym (find-ns-name forms)
+                          lf     (vec (filter lowerable? forms))
+                          ;; canonical gogen naming: pkg = leaf segment,
+                          ;; reldir = nested ns path. Files lacking an (ns ..)
+                          ;; get a synthetic flat ys_<stem> for both.
+                          nsstr  (if ns-sym (str ns-sym) (str "ys-" (basename-stem path)))
+                          pkg    (gogen/ns->go-pkg nsstr)
+                          reldir (gogen/ns->go-reldir nsstr)]
+                      {:path path :forms forms :ns-sym ns-sym :lf lf
+                       :pkg pkg :reldir reldir
+                       :nsn (if ns-sym ns-sym (symbol nsstr))
+                       :go-pkg (str import-prefix "/" reldir)}))
+                  files)
+      ;; --- load every ns first, form-by-form, so cross-ns refers resolve in
+      ;;     BOTH passes (a whole-(do ..) eval compiles before the require runs; #195) ---
+      _load (doseq [s specs]
+              (when-not (:ns-sym s) (eval (list 'ns (:nsn s))))
+              (doseq [f (:forms s)] (eval f)))
+      ;; --- pass A: build the cross-package direct-call registry ---
+      cross-pkg-registry
+      (binding [ir.passes.pipeline/*target* :go
+                ir.lower-go/*export-lowered-fns* true]
+        (reduce
+          (fn [reg s]
+            (binding [*ns* (the-ns (:nsn s))]
+              (reduce
+                (fn [r form]
+                  (let [result (try (ir.passes.pipeline/compile-form* form) (catch _e nil))
+                        entry  (when (and result (= :lowered (:status result)))
+                                 (ir.lower-go/registry-entry-from-result result (:nsn s) (:pkg s)))]
+                    (if entry
+                      ;; stamp :go-pkg (this ns's Go import path) onto each entry so
+                      ;; the call lowers to pkg.Fn(ec,…) + imports the package.
+                      (reduce-kv (fn [acc k v] (assoc acc k (assoc v :go-pkg (:go-pkg s)))) r entry)
+                      r)))
+                reg (:lf s))))
+          {} specs))]
+  (println (str "cross-package registry: " (count cross-pkg-registry) " direct-callable entries"))
+  ;; --- pass B: emit each package with cross-package direct calls + imports ---
+  (doseq [s specs]
+    (if (empty? (:lf s))
+      (println (str (:path s) ": no lowerable defns — skipped"))
+      (let [go  (binding [ir.lower-go/*export-lowered-fns* true
+                          ir.lower-go/*cross-package-registry* cross-pkg-registry]
+                  (ir.passes.pipeline/lower-ns-to-go (:pkg s) (:nsn s) (:lf s)))
+            dir (str out-dir "/" (:reldir s))
+            out (str dir "/" (:pkg s) ".go")]
+        (if (string? go)
+          (do (mkdir dir) (spit out go)
+              (println (str (:path s) " -> " out)))
+          (println (str "EMIT-FAIL " (:path s) " pkg=" (:pkg s)
+                        " returned " (clojure.core/type go) " :: " (pr-str go)))))))
+  (println "done."))

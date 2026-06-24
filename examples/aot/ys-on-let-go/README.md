@@ -13,7 +13,7 @@ without `ys` installed.
 ## Run the examples
 
 ```bash
-cd examples/ys-on-let-go
+cd examples/aot/ys-on-let-go
 
 lg -source-paths . 01_hello.lg
 lg -source-paths . 02_fizzbuzz.lg

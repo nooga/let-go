@@ -14,7 +14,10 @@
 ;;
 ;;     --go <path>            go compiler          (default "go")
 ;;     --lg <path>            lg binary            (default "./lg")
-;;     --source-paths <dir>   gogen lib require root (default "pkg/rt/gogen")
+;;     --source-paths <roots> classpath-style .lg source roots for lgbgen to
+;;                            search, separated by the OS path-list separator
+;;                            (':' unix / ';' windows) (default
+;;                            "pkg/rt/core:pkg/rt/gogen")
 ;;
 ;; Bootstrap note: this script runs ON ./lg (built from the bundle) and shells
 ;; out to `<go> run -tags bootstrap ./cmd/lgbgen` for the bundle and lowered
@@ -41,7 +44,7 @@
 (def argv      os/args)
 (def go-bin    (flag argv "--go" "go"))
 (def lg-bin    (flag argv "--lg" "./lg"))
-(def src-paths (flag argv "--source-paths" "pkg/rt/gogen"))
+(def src-paths (flag argv "--source-paths" "pkg/rt/core:pkg/rt/gogen"))
 
 (defn die [msg]
   (println "generate.lg ERROR:" msg)
@@ -138,7 +141,10 @@
 ;; handled inside lgbgen's runGoTarget, so every entry point — `make generate`
 ;; here, plus `make lowered`/`make check-generated` which call lgbgen directly —
 ;; gets the clean.
-(run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both")
+;; --source-paths lets lgbgen load namespaces that live outside the embedded
+;; core/ tree (gogen.lg, the home of the ns→Go-package manglers) from source,
+;; instead of lgbgen carrying hardcoded Go bindings for them.
+(run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both" "--source-paths" src-paths)
 
 (spit PROVENANCE
       (pr-str {:lg-version  cur-version

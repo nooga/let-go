@@ -828,7 +828,16 @@
                     (loop [sib-reg sibling-registry guard 0]
                       (let [cross (atom {})
                             reg (merge native-reg sib-reg)
-                            res (binding [lower-go/*lowered-registry* reg
+                            ;; *cross-package-registry* makes OTHER lowered packages'
+                            ;; fns (with :go-pkg) visible so cross-package user calls
+                            ;; lower to direct pkg.Fn(ec,…); empty {} when lowering a
+                            ;; ns alone. reg (THIS ns's own siblings) is merged LAST so
+                            ;; its own fns resolve intra-package (bare call, :go-pkg
+                            ;; nil) rather than self-qualifying into an import cycle.
+                            ;; Stable across the fixpoint — only reg shrinks (reg'
+                            ;; below selects from reg, not eff-reg).
+                            eff-reg (merge lower-go/*cross-package-registry* reg)
+                            res (binding [lower-go/*lowered-registry* eff-reg
                                           lower-go/*native-imports-used* native-imports
                                           lower-go/*cross-ns-vars-used* cross]
                                   (lower-defn-forms defn-forms))

@@ -47,6 +47,7 @@ var sourceSpecs = []struct {
 	ext string
 }{
 	{"pkg/rt/core", ".lg"},
+	{"pkg/rt/gogen", ".lg"},
 	{"cmd/lgbgen", ".go"},
 }
 

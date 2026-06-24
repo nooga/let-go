@@ -129,7 +129,7 @@
 
 (defn regen! []
   (when-not no-regen?
-    (let [r (os/sh go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=go")]
+    (let [r (os/sh go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=go" "--source-paths" "pkg/rt/core:pkg/rt/gogen")]
       (when-not (= 0 (:exit r)) (die (str "regeneration failed: " (:err r)))))))
 
 (defn get-timing-text []
@@ -137,7 +137,7 @@
     (if (and timing-file (file-exists? timing-file))
       (slurp timing-file)
       (die (str "no --timing-file specified or file not found")))
-    (let [r (os/sh go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=go")]
+    (let [r (os/sh go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=go" "--source-paths" "pkg/rt/core:pkg/rt/gogen")]
       (when-not (= 0 (:exit r)) (die (str "regeneration failed: " (:err r))))
       (:err r))))
 

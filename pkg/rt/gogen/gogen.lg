@@ -646,3 +646,31 @@
                         (->value-or-nil value)
                         comment))
     :else (throw (str "const-row: don't know how to process " (pr-str r)))))
+
+;; --- namespace → Go package naming --------------------------------------
+;;
+;; The single source of truth for how an AOT lowerer maps a let-go namespace
+;; onto a Go package name and directory layout. Both drivers consume these:
+;; cmd/lgbgen (Go, for the core_go_lowered tree — loads gogen.lg via
+;; --source-paths and invokes these vars through the runtime) and
+;; scripts/lg-compile (.lg, directly). Keeping the rule here in the gogen layer
+;; means the bytecode-VM path and the native-lowering path can never drift in
+;; how they name packages. Mirrors Glojure's mungeID(getLastNSPart(ns)) /
+;; nsToPath.
+
+(defn ns->go-pkg
+  "The Go package name for namespace `ns-name`: the LAST dot-segment with
+   hyphens turned into underscores. This is both the `package` identifier and
+   the per-namespace filename stem.
+     (gogen/ns->go-pkg \"ir.passes.pipeline\") => \"pipeline\"
+     (gogen/ns->go-pkg \"ir.lower-go\")        => \"lower_go\""
+  [ns-name]
+  (str/replace (last (str/split ns-name ".")) "-" "_"))
+
+(defn ns->go-reldir
+  "The relative directory path (under the lowered-output root) that mirrors the
+   namespace nesting: dots become path separators, hyphens become underscores.
+     (gogen/ns->go-reldir \"ir.passes.pipeline\") => \"ir/passes/pipeline\"
+     (gogen/ns->go-reldir \"ir.lower-go\")        => \"ir/lower_go\""
+  [ns-name]
+  (str/replace (str/replace ns-name "-" "_") "." "/"))

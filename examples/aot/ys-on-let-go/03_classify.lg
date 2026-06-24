@@ -2,11 +2,11 @@
 ;; Do not edit by hand. Regenerate with: ./build.sh
 (require '[ys-runtime :refer [say ARGS]])
 (defn
- classify
- [n]
- (cond (pos? n) "positive" (neg? n) "negative" :else "zero"))
+  classify
+  [n]
+  (cond (pos? n) "positive" (neg? n) "negative" :else "zero"))
 (defn
- main
- []
- (doseq [n (range -2 3)] (say (str n " is " (classify n)))))
+  main
+  []
+  (doseq [n (range -2 3)] (say (str n " is " (classify n)))))
 (apply main ARGS)

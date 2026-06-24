@@ -1,0 +1,53 @@
+;; ys-lower-report — actually ATTEMPT to lower each single-arity defn in a file
+;; and report :lowered vs fallback (with the error). Loads the file form-by-form
+;; first (so refers resolve), then runs compile-form* per lowerable form under
+;; *target* :go, catching failures.
+;;
+;;   ./lg scripts/ys-lower-report.lg <file.lg>   (one ns per invocation)
+;;
+;; Prereq namespaces must already be loadable on LG_SOURCE_PATHS.
+
+(require 'ir.data)
+(require 'ir.passes.pipeline)
+(require 'ir.passes.typeinfer)
+(require 'ir.lattice)
+(require 'ir.build)
+(require 'ir.lower-go)
+(require 'clojure.string)
+
+(def argv (vec (drop 2 (seq os/args))))
+(def path (nth argv 0))
+
+(defn read-all [p] (read-string (str "(do " (slurp p) "\n)")))
+(defn single-arity-defn? [f] (boolean (some vector? (drop 2 f))))
+(defn lowerable? [f]
+  (and (seq? f)
+       (let [h (first f)]
+         (or (and (or (= h 'defn) (= h 'defn-)) (single-arity-defn? f))
+             (= h 'defmulti) (= h 'defmethod)))))
+(defn find-ns-name [forms]
+  (some (fn [f] (when (and (seq? f) (= 'ns (first f))) (second f))) forms))
+(defn form-name [f] (str (second f)))
+
+(let [parsed (read-all path)
+      forms  (vec (rest parsed))
+      nsn    (find-ns-name forms)
+      lf     (vec (filter lowerable? forms))]
+  (println (str "file=" path " ns=" nsn " lowerable-forms=" (count lf)))
+  ;; load the ns so its internal refers resolve
+  (when-not nsn (eval (list 'ns 'ys-report-tmp)))
+  (doseq [f forms] (try (eval f) (catch _e nil)))
+  (binding [ir.passes.pipeline/*target* :go
+            *ns* (the-ns (or nsn 'ys-report-tmp))]
+    (let [r (reduce
+              (fn [acc f]
+                (let [nm  (form-name f)
+                      res (try (ir.passes.pipeline/compile-form* f)
+                               (catch e {:status :threw :err (str e)}))
+                      st  (:status res)]
+                  (cond
+                    (= st :lowered) (do (println (str "  OK   " nm)) (update acc :ok inc))
+                    (= st :threw)   (do (println (str "  THROW " nm " :: " (:err res))) (update acc :threw inc))
+                    :else           (do (println (str "  FB   " nm " :: status=" st)) (update acc :fb inc)))))
+              {:ok 0 :fb 0 :threw 0} lf)]
+      (println (str "SUMMARY " path " ok=" (:ok r) " fallback=" (:fb r) " threw=" (:threw r))))))

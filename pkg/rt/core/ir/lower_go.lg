@@ -1223,6 +1223,37 @@
 ;; Default {} -> inert.
 (def ^:dynamic *lowered-registry* {})
 
+;; Extra direct-call registry entries for fns in OTHER lowered packages, merged
+;; into *lowered-registry* by lower-ns-to-go so a call to a cross-PACKAGE lowered
+;; sibling resolves to a direct `pkg.Fn(ec, …)` call (entries carry :go-pkg + an
+;; exported :go-name). Bound by the cross-package AOT driver; {} → inert (a single
+;; ns lowered alone keeps cross-ns user calls on the trampoline, as before).
+(def ^:dynamic *cross-package-registry* {})
+
+;; When true, top-level lowered fns are emitted with EXPORTED (PascalCase) Go
+;; names so another lowered package can direct-call them (pkg.Say(ec, …)). Off
+;; (nil) by default → package-private names, so core lowering is byte-identical.
+;; Bound by the cross-package AOT driver, which lowers a set of user namespaces
+;; together with a registry that records each exported name + its :go-pkg.
+(def ^:dynamic *export-lowered-fns* nil)
+
+(defn export-go-name
+  "Export a go-name (already a valid Go identifier from `go-name`) by
+   capitalizing its leading letter: say -> Say. Returns nil when the name does
+   not start with a lowercase ASCII letter (e.g. `_PERCENT_1` for `%`) — such a
+   fn is not safely exportable and stays on the trampoline path."
+  [gn]
+  (when (and (string? gn) (pos? (count gn)))
+    (let [c (clojure.core/int (first gn))]
+      (when (and (>= c (clojure.core/int \a)) (<= c (clojure.core/int \z)))
+        (str (clojure.string/upper-case (subs gn 0 1)) (subs gn 1))))))
+
+;; The Go name to emit for a top-level lowered fn: exported when *export-lowered-fns*
+;; is set AND the base name is exportable, else the package-private base.
+(defn- emit-go-name [fn-name]
+  (let [base (go-name fn-name)]
+    (or (and *export-lowered-fns* (export-go-name base)) base)))
+
 (def ^:private coercion-supported-types
   #{"vm.Value" "string" "int" "int64" "bool" "float64"})
 
@@ -2835,7 +2866,11 @@
       {:status :lowered
        :imports imports
        :fn-name (str (ir/fn-name f))
-       :go-name (go-name (ir/fn-name f))
+       ;; emit-go-name exports (PascalCase) when *export-lowered-fns* is bound so
+       ;; another lowered package can direct-call it; package-private otherwise.
+       ;; :go-name and the func-decl name MUST agree (callers resolve the callee
+       ;; through the registry's :go-name) — both go through emit-go-name.
+       :go-name (emit-go-name (ir/fn-name f))
        :arity (ir/fn-arity f)
        :needs-error? needs-error?
        :override-eligible? (override-uniform-value? f)
@@ -2850,7 +2885,7 @@
        ;; `func name(ec *vm.ExecContext, arg0 …)`. Inline lambdas (lower-fn-lit)
        ;; do NOT get this param — they capture the enclosing fn's ec lexically.
        :decl   (gogen/func-decl
-                 (go-name (ir/fn-name f))
+                 (emit-go-name (ir/fn-name f))
                  (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))] params)
                  results body)})))
 
