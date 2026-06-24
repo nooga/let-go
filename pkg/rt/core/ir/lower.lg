@@ -369,6 +369,17 @@
       (do (emit! l nid :set-var)
           (bump-stack-sp! l -1))  ; 2→1
 
+      :def
+      ;; (def x [v]) — the var (Refs[0]) is a build-time-interned Const already
+      ;; on the stack. With a value (Refs[1] also on stack) it is exactly the
+      ;; bytecode defCompiler shape: OP_SET_VAR sets root, pushes var back (2→1).
+      ;; Without a value the var IS the result, already on the stack — emit
+      ;; nothing (1→1 passthrough; emit-inst! records the def's pos at the top).
+      (if (= 2 (count (ir/refs nid f)))
+        (do (emit! l nid :set-var)
+            (bump-stack-sp! l -1))  ; 2→1
+        nil)                         ; 1→1, var already on stack, no opcode
+
       :tail-call
       (emit-with-arg! l nid :tail-call (int aux))
       ;; TAIL_CALL is a true terminator; no SP tracking needed past this.

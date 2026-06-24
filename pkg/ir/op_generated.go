@@ -56,6 +56,7 @@ const (
 	OpPushClosed  // .Refs[0] = closure, .Refs[1] = value to attach
 	OpTry         // .Refs[0] = body closure; then optional handler closure (binds the caught value), then optional finally closure; .Aux = {:has-handler bool :has-finally bool}
 	OpDot         // .Refs[0] = obj; .Aux = field symbol; Go struct field selector obj.field (gogen_ir path only)
+	OpDef         // .Refs[0] = var (Const aux=*vm.Var), optional .Refs[1] = value; interns + returns the var (2-ref also sets root)
 )
 
 // opInfo describes an Op's structural metadata.
@@ -97,6 +98,7 @@ var opTable = [...]opInfo{
 	OpPushClosed:  {"PushClosed", 2, 1, false, false},
 	OpTry:         {"Try", -1, 1, false, false},
 	OpDot:         {"Dot", 1, 1, false, false},
+	OpDef:         {"Def", -1, 1, false, false},
 }
 
 // String returns the op's display name (or "Op?" for an unknown op).

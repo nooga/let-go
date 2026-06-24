@@ -729,6 +729,47 @@ func TestLowerGoBridgeLowersEmptyLetBody(t *testing.T) {
 	}
 }
 
+func TestLowerGoBridgeLowersDefWithValue(t *testing.T) {
+	ensureLoader()
+
+	// (def x v) — interns x at runtime (rt.InternVar, NOT LookupVar which only
+	// resolves an existing var) and sets its root; result is the var.
+	fn := buildLispIR(t, `(defn d [] (def dvar 1))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, `rt.InternVar("`) || !strings.Contains(rendered, `"dvar")`) {
+		t.Fatalf("expected def to intern via rt.InternVar(ns, \"dvar\")\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, ".SetRoot(vm.Int(1))") {
+		t.Fatalf("expected def value to set the var root\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestLowerGoBridgeLowersDefNoValue(t *testing.T) {
+	ensureLoader()
+
+	// (def x) — forward declaration: intern the var, leave its root unaffected.
+	fn := buildLispIR(t, `(defn d [] (def dvar))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, `rt.InternVar("`) {
+		t.Fatalf("expected (def x) to intern via rt.InternVar\n--- go ---\n%s", rendered)
+	}
+	if strings.Contains(rendered, ".SetRoot(") {
+		t.Fatalf("expected no-value def to leave root unaffected (no SetRoot)\n--- go ---\n%s", rendered)
+	}
+}
+
 func TestLowerGoStrictVecDestructureDefn(t *testing.T) {
 	ensureLoader()
 

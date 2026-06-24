@@ -246,7 +246,7 @@
 ;; --- form dispatch -------------------------------------------------------
 
 (declare build-list build-symbol build-if build-let build-do build-quote
-         build-var build-set! build-loop build-recur build-fn*
+         build-var build-set! build-def build-loop build-recur build-fn*
          build-vector build-map build-call build-try build-dot)
 
 ;; Sentinel returned by recur / any form whose current-block is already
@@ -558,6 +558,7 @@
       (= head 'let*)  (build-let form ctx)
       (= head 'do)    (build-do form ctx)
       (= head 'quote) (build-quote form ctx)
+      (= head 'def)   (build-def form ctx)
       (= head 'var)   (build-var form ctx)
       (= head 'set!)  (build-set! form ctx)
       (= head 'loop)  (build-loop form ctx)
@@ -619,6 +620,33 @@
     (let [var-nid (add-inst! ctx (ctx-block ctx) :const [] v)
           val-nid (build-form val ctx)]
       (add-inst! ctx (ctx-block ctx) :set-var [var-nid val-nid] nil))))
+
+(defn build-def [form ctx]
+  "(def sym), (def sym val), (def sym doc val). Interns sym in the current ns
+   at build time (LookupOrAdd — matching the bytecode defCompiler's compile-time
+   interning, so sibling/forward refs resolve), and emits a :def whose Refs[0]
+   is the var (as a Const) and optional Refs[1] is the value. Result is the var.
+   The 1-arg form leaves the root unaffected (forward declaration); the 2/3-arg
+   forms set the root. The name slot may be (with-meta sym meta) — unwrap it."
+  (let [args (rest form)
+        n    (count args)]
+    (when (or (< n 1) (> n 3))
+      (throw (str "ir/build: def wrong number of forms (" n "), need 1-3")))
+    (let [raw-sym  (nth args 0)
+          ;; (def sym doc val): value is the 3rd arg; (def sym val): 2nd.
+          val-form (cond (>= n 3) (nth args 2) (= n 2) (nth args 1) :else nil)
+          sym      (if (and (seq? raw-sym) (= (first raw-sym) 'with-meta))
+                     (second raw-sym)
+                     raw-sym)
+          _        (when-not (symbol? sym)
+                     (throw (str "ir/build: def name must be a symbol, got " (pr-str sym))))
+          ;; resolve-or-intern: existing var, else intern a fresh one in *ns*.
+          var-obj  (or (resolve sym) (intern *ns* sym))
+          var-nid  (add-inst! ctx (ctx-block ctx) :const [] var-obj)]
+      (if val-form
+        (let [val-nid (build-form val-form ctx)]
+          (add-inst! ctx (ctx-block ctx) :def [var-nid val-nid] nil))
+        (add-inst! ctx (ctx-block ctx) :def [var-nid] nil)))))
 
 (defn build-vector [form ctx]
   "[a b c] → (vector a b c). Empty vector → Const literal.

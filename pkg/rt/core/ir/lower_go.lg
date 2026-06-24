@@ -116,6 +116,18 @@
       (gogen/field-sel (gogen/ident "rt") "LookupVar")
       [(gogen/string-lit vns) (gogen/string-lit vn)])))
 
+(defn- var-intern-expr [v]
+  ;; rt.InternVar(ns, name) for a lowered `def`: interns-or-gets the var (creating
+  ;; it if absent) and returns it. Unlike var-const-expr's LookupVar — which only
+  ;; resolves an existing var — def must CREATE the var at runtime. Same #'ns/name
+  ;; parsing as var-const-expr.
+  (let [sym (symbol (subs (str v) 2))
+        vns (or (namespace sym) "core")
+        vn  (name sym)]
+    (gogen/call
+      (gogen/field-sel (gogen/ident "rt") "InternVar")
+      [(gogen/string-lit vns) (gogen/string-lit vn)])))
+
 (defn- const-expr [aux t]
   (cond
     ;; var? MUST come first: a *vm.Var's Type() delegates to its VALUE's type,
@@ -409,6 +421,7 @@
       (= op :inc)
       (= op :dec)
       (= op :dot)   ; (. obj field) materialised into a local: vN := obj.field
+      (= op :def)   ; def-assign-stmts materialises the interned var into a local
       (contains? binary-op op)))
 
 ;; A :load-var is normally re-emitted inline as ec.Deref(rt.LookupVar(...)) at
@@ -1777,6 +1790,31 @@
                (gogen/assign "=" target bodyV)])]
         [(gogen/block-stmt stmts)]))))
 
+(defn- def-assign-stmts [f closed-exprs nid]
+  "Lower a :def op (def NAME [val]) to straight-line Go. Refs[0] is the var (a
+   Const whose aux is the *vm.Var); optional Refs[1] is the value. The var is
+   INTERNED at runtime (rt.InternVar — it may not exist yet), unlike set!'s
+   LookupVar. With a value, also set the root. The result (the var) is captured
+   in the def's local when live, so later uses read it via value-expr."
+  (let [refs    (ir/refs nid f)
+        var-obj (ir/aux (nth refs 0) f)
+        intern  (var-intern-expr var-obj)
+        live    (live? f nid)]
+    (if (= 2 (count refs))
+      (let [valx (box-as-value f closed-exprs (nth refs 1))]
+        (when valx
+          (if live
+            ;; vN = rt.InternVar(...); vN.SetRoot(val)
+            [(gogen/assign "=" (value-ident f nid) intern)
+             (gogen/expr-stmt (gogen/call (gogen/field-sel (value-ident f nid) "SetRoot") [valx]))]
+            ;; rt.InternVar(...).SetRoot(val)   (var discarded)
+            [(gogen/expr-stmt (gogen/call (gogen/field-sel intern "SetRoot") [valx]))])))
+      ;; 1-arg (def x): intern only. Keep the var in a local if live, else the
+      ;; intern is a bare side-effecting statement (forward declaration).
+      (if live
+        [(gogen/assign "=" (value-ident f nid) intern)]
+        [(gogen/expr-stmt intern)]))))
+
 (defn- lower-inst-stmts [f closed-exprs nid]
   (let [op  (ir/op nid f)
         aux (ir/aux nid f)]
@@ -1821,6 +1859,8 @@
       (call-assign-stmts f closed-exprs nid)
       (= op :try)
       (try-assign-stmts f closed-exprs nid)
+      (= op :def)
+      (def-assign-stmts f closed-exprs nid)
       (= op :set-var)
       ;; Mirror OP_SET_VAR (vm.go): set the active thread binding if one is
       ;; live, else mutate the root —

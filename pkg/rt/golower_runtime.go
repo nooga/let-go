@@ -15,6 +15,17 @@ type invoker interface {
 	Invoke([]vm.Value) (vm.Value, error)
 }
 
+// InternVar interns (LookupOrAdd) a Var by namespace and symbol name, creating
+// the namespace and/or the var if absent, and returns it. Used by gogen-lowered
+// `def` forms, which must CREATE the var at runtime — unlike LookupVar, which
+// only resolves an already-existing one (returning nil otherwise).
+func InternVar(nsName, symName string) *vm.Var {
+	ns := NS(nsName)
+	v := ns.LookupOrAdd(vm.Symbol(symName))
+	out, _ := v.(*vm.Var)
+	return out
+}
+
 // LookupVar resolves a runtime Var by namespace and symbol name.
 func LookupVar(nsName, symName string) *vm.Var {
 	ns := NS(nsName)
