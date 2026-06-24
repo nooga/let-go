@@ -19,7 +19,7 @@ name: Perf PR
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
       - 'pkg/**'
       - 'cmd/**'
@@ -33,7 +33,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: perf-pr-${{ github.event.pull_request.number || github.event.inputs.pr }}
@@ -46,11 +45,14 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'perf')
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    outputs:
+      pr: ${{ steps.refs.outputs.pr }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
@@ -161,19 +163,43 @@ jobs:
             echo "_Showing ${shown:-0} of ${total:-0} benchmarks (past budget). [Full table in the run summary →](${run_url})_"
           } > "${RUNNER_TEMP}/comment.md"
 
+      - name: Upload PR comment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-pr-comment
+          path: ${{ runner.temp }}/comment.md
+          if-no-files-found: error
+
+  comment:
+    needs: bench
+    if: needs.bench.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download PR comment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: perf-pr-comment
+          path: ${{ runner.temp }}/perf-pr-comment
+
       # Sticky PR comment (upsert by marker). Fork PRs get a read-only token, so
-      # this can't post there — continue-on-error keeps the job green and the
-      # job summary still carries the report.
+      # this can't post there — continue-on-error keeps the workflow green and
+      # the benchmark job summary still carries the report.
       - name: Upsert PR comment
         continue-on-error: true
         uses: actions/github-script@v7
         env:
-          PR: ${{ steps.refs.outputs.pr }}
+          PR: ${{ needs.bench.outputs.pr }}
+          COMMENT_PATH: ${{ runner.temp }}/perf-pr-comment/comment.md
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- perf-pr-report -->';
-            const body = marker + '\n' + fs.readFileSync(process.env.RUNNER_TEMP + '/comment.md', 'utf8');
+            const body = marker + '\n' + fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
             const {owner, repo} = context.repo;
             // Resolved in the refs step so it works for both pull_request and
             // workflow_dispatch (where there's no pull_request in the payload).
