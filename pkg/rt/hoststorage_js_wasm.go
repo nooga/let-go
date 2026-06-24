@@ -16,7 +16,10 @@ import (
 
 // HostStorage binds the storage namespace to browser localStorage. Logical
 // keys are scoped under a host-selected store id before they reach the
-// origin-wide localStorage keyspace.
+// origin-wide localStorage keyspace. The id is run through encodeStorageKey
+// first — same as the native FileStorage root — so it can't contain the ':'
+// separator and the (store-id, logical-key) -> physical-key mapping stays
+// unambiguous when two bundles share an origin.
 //
 // Each method recovers a thrown localStorage access (Safari private mode,
 // storage disabled, quota exceeded) into a returned error rather than a nil,
@@ -33,7 +36,7 @@ func NewHostStorage(storeID string) *HostStorage {
 	if storeID == "" {
 		storeID = "default"
 	}
-	return &HostStorage{prefix: "let-go:" + storeID + ":"}
+	return &HostStorage{prefix: "let-go:" + encodeStorageKey(storeID) + ":"}
 }
 
 func (s *HostStorage) physicalKey(key string) string {
