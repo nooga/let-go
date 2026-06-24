@@ -15,6 +15,8 @@
 
 (ns test.gogen-method-interop-test
   (:require
+   [clojure.string :as str]
+   [gogen :as g]
    [ir.passes.pipeline :as pipeline]
    [test :refer :all]))
 
@@ -22,15 +24,22 @@
   (binding [pipeline/*target* :go]
     (:status (pipeline/compile-form form))))
 
+(defn- lower-src [form]
+  (binding [pipeline/*target* :go]
+    (g/render (:decl (pipeline/compile-form form)))))
+
 (deftest go-method-interop-lowers
   (testing "a (.Method recv args) interop call lowers cleanly instead of throwing unresolved symbol"
     (is (= :lowered (lower-status '(defn writes [w s] (.WriteString w s)))))
     (is (= :lowered (lower-status '(defn millis [inst] (.UnixMilli inst)))))))
 
 (deftest qualified-dot-head-is-not-method-interop
-  (testing "(foo/.bar x) — a namespace-qualified head whose name starts with '.' — is an ordinary var call, NOT Go method interop, matching the bytecode compiler's raw-symbol guard"
-    ;; Before the fix, (name 'foo/.bar) => ".bar" misclassified this as method
-    ;; interop and it lowered to a (. x (quote bar)) dot call. After the fix the
-    ;; head must be unqualified, so a qualified head falls through to normal
-    ;; (here: unresolved) symbol resolution and does NOT lower as interop.
-    (is (not= :lowered (lower-status '(defn call-qualified [o] (foo/.bar o)))))))
+  (testing "(foo/.bar x) — a namespace-qualified head whose name starts with '.' — is an ordinary qualified var call, NOT a Go method-interop rewrite to clojure.core/."
+    ;; Method interop rewrites (.bar recv) to a call on the clojure.core/.
+    ;; builtin: rt.LookupVar(\"clojure.core\", \".\") with the member as a quoted
+    ;; symbol arg. A namespace-qualified head must NOT be rewritten that way —
+    ;; it resolves the literal var foo/.bar, matching the bytecode compiler's
+    ;; raw-symbol guard (the raw text \"foo/.bar\" does not start with '.').
+    (let [src (lower-src '(defn call-qualified [o] (foo/.bar o)))]
+      (is (str/includes? src "rt.LookupVar(\"foo\", \".bar\")"))
+      (is (not (str/includes? src "rt.LookupVar(\"clojure.core\", \".\")"))))))

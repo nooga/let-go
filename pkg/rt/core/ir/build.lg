@@ -308,9 +308,16 @@
   (let [local (lookup-local ctx sym)]
     (if local
       local
-      (let [v (resolve sym)]
+      (let [v (resolve sym)
+            sym-str (str sym)
+            qualified? (some? (index-of sym-str "/"))]
         (if (nil? v)
-          (throw (str "ir/build: unresolved symbol " sym))
+          (if qualified?
+            ;; Qualified symbols (namespace/name) are external references
+            ;; (e.g., Go interop calls like xxh3/HashSeed). Emit as :load-var
+            ;; with the symbol itself as the constant, allowing runtime resolution.
+            (add-inst! ctx (ctx-block ctx) :load-var [] sym)
+            (throw (str "ir/build: unresolved symbol " sym)))
           (add-inst! ctx (ctx-block ctx) :load-var [] v))))))
 
 (defn- free-vars [form bound]
