@@ -45,12 +45,16 @@
 
 (defn back-edges [f]
   "Return a vector of [pred-block header-block] pairs where
-   header-block dominates pred-block (the back-edge invariant)."
-  (vec
-    (for [header (ir/blocks f)
-          pred   (ir/block-preds header f)
-          :when  (dom/dominates? f header pred)]
-      [pred header])))
+   header-block dominates pred-block (the back-edge invariant).
+   Computes the dominator tree ONCE and reuses it for every (header, pred)
+   dominance check — dom/dominates? would rebuild it per pair, which made this
+   O(blocks² × edges) and dominated lowering time on large functions."
+  (let [idom (dom/dominators f)]
+    (vec
+      (for [header (ir/blocks f)
+            pred   (ir/block-preds header f)
+            :when  (dom/dominates-idom? idom header pred)]
+        [pred header]))))
 
 (defn reachable-without [f start avoid]
   "Set of blocks reachable from `start` by walking PREDECESSORS,

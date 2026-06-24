@@ -131,12 +131,22 @@
                       (nth step 0))))]
       (assoc final entry -1))))
 
+(defn dominates-idom? [idom a b]
+  "True iff block `a` dominates block `b` (a == b is also true), against a
+   PRECOMPUTED idom array (from `dominators`). Pure walk up b's dominator chain.
+   Hot read-only callers (e.g. licm/back-edges) compute the dominator tree once
+   and reuse it across many queries instead of rebuilding it per call — the
+   dominators recompute is what made LICM quadratic on large functions."
+  (loop [b b]
+    (cond
+      (= -1 b)  false
+      (= a b)   true
+      :else     (recur (nth idom b)))))
+
 (defn dominates? [f a b]
-  "True iff block `a` dominates block `b` (a == b is also true).
-   Walks up b's dominator chain until reaching a or falling off."
-  (let [idom (dominators f)]
-    (loop [b b]
-      (cond
-        (= -1 b)  false
-        (= a b)   true
-        :else     (recur (nth idom b))))))
+  "True iff block `a` dominates block `b` (a == b is also true). One-shot form:
+   recomputes the dominator tree each call — fine for cold/occasional callers,
+   but a hot loop should hoist `(dominators f)` and use `dominates-idom?`. Not
+   memoized on f: f is mutable (passes add blocks/edges), so a cached tree would
+   go stale."
+  (dominates-idom? (dominators f) a b))
