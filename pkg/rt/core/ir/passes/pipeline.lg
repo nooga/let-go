@@ -824,7 +824,16 @@
                       di      (lower-go/recognize-type-dispatch-fn (:dispatch-fn dm))
                       methods (get methods-by-mm mm-name [])]
                   (if (nil? di)
-                    {:entry nil :decls []}
+                    ;; Not the (type x) shape → value/unknown dispatch. Register a
+                    ;; MINIMAL entry (just :dispatch-type) so the multifn is VISIBLE
+                    ;; to the coverage tooling (ITER-0012) and trampolines BY TAG
+                    ;; rather than by omission. No :home-ns/:dispatch-arg-index/:arms:
+                    ;; defmulti-call-stmts' (= :type …) guard rejects it before any of
+                    ;; those are read, so emission is byte-identical AND we avoid the
+                    ;; (resolve …) call here (keeps the registry deterministic).
+                    {:name  mm-name
+                     :entry {:dispatch-type (lower-go/classify-dispatch (:dispatch-fn dm))}
+                     :decls []}
                     (let [arm+decl
                           (vec (keep-indexed
                                  (fn [i meth]
@@ -866,7 +875,14 @@
                                             (when v (namespace (symbol v))))
                                  :arms arms}
                          :decls decls}
-                        {:entry nil :decls []})))))
+                        ;; Type-dispatch SHAPE but no method mapped to a Go type →
+                        ;; no native arms. Still register it (tag :type, no :arms) so
+                        ;; it is visible to coverage tooling; the empty :arms means
+                        ;; defmulti-call-stmts trampolines (byte-identical to the
+                        ;; prior omission).
+                        {:name  mm-name
+                         :entry {:dispatch-type :type}
+                         :decls []})))))
               defmulti-caps)
             defmulti-registry (into {} (keep (fn [x] (when (:entry x) [(:name x) (:entry x)]))
                                              defmulti-lowered))

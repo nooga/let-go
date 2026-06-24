@@ -1,0 +1,38 @@
+;; Behavioural contract for value-dispatched multimethods (ITER-0011).
+;;
+;; A value-dispatched multimethod (dispatch fn is a keyword / non-type value
+;; extractor, here `:shape`) is NOT eligible for the native `switch v.(type)`
+;; devirtualisation — it is tagged :value in *defmulti-dispatchers* and lowers to
+;; the runtime vm.MultiFn trampoline. This file runs under the bytecode VM
+;; (TestRunner) and pins the RUNTIME semantics the trampoline must preserve: the
+;; right method per dispatch value, and an uncovered value → the :default method.
+;;
+;; The lowering half (value dispatch tagged :value, no native arm emitted) is
+;; asserted by the Go test pkg/ir TestValueDispatchMultimethodTrampolines /
+;; TestClassifyDispatchTags.
+(ns test.defmulti-value-dispatch-test
+  (:require
+   [test :refer :all]))
+
+(defmulti vd-area :shape :default :default)
+(defmethod vd-area :circle [s] (* 3 (:r s) (:r s)))
+(defmethod vd-area :square [s] (* (:side s) (:side s)))
+(defmethod vd-area :default [s] :unknown-shape)
+
+;; A caller in a real fn (mirrors the lowered call site that trampolines).
+(defn area-of [s] (vd-area s))
+
+(deftest value-dispatch-circle-arm
+  (is (= 12 (area-of {:shape :circle :r 2})))
+  (is (= 48 (area-of {:shape :circle :r 4}))))
+
+(deftest value-dispatch-square-arm
+  (is (= 25 (area-of {:shape :square :side 5})))
+  (is (= 9  (area-of {:shape :square :side 3}))))
+
+;; An uncovered dispatch value (:triangle has no method) → the runtime MultiFn
+;; default method. This is the value-dispatch analogue of the native switch's
+;; default arm: non-type dispatch never silently drops, it trampolines.
+(deftest value-dispatch-default-fallback
+  (is (= :unknown-shape (area-of {:shape :triangle})))
+  (is (= :unknown-shape (area-of {:shape :hexagon :side 7}))))

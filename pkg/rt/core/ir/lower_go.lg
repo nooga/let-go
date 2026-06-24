@@ -3008,6 +3008,28 @@
         (let [arg (second (first body))]
           (first (keep-indexed (fn [i p] (when (= p arg) i)) params)))))))
 
+(defn classify-dispatch [dispatch-fn]
+  "Classify a multimethod's dispatch fn for the *defmulti-dispatchers* registry's
+   :dispatch-type tag, which records how a call to the multifn lowers:
+     :type    — the (fn [a …] (type p)) shape (recognize-type-dispatch-fn matches);
+                eligible for native `switch v.(type)` devirtualization.
+     :value   — a STATICALLY ANALYZABLE value dispatch: a keyword
+                (e.g. (defmulti area :shape)) or an (fn …)/(fn* …) form that is not
+                the type shape. The dispatch-value set is in principle enumerable,
+                so ITER-0012's closed-set coverage detector targets these.
+     :unknown — the dispatch fn is not statically analyzable (a bare symbol naming
+                a fn defined elsewhere, or a computed expression).
+   :value and :unknown BOTH lower to the runtime vm.MultiFn trampoline (no native
+   switch arms — defmulti-call-stmts emits a switch only for :type); the tag merely
+   records WHY, for diagnostics and the ITER-0012 coverage tooling. Conservative:
+   anything not provably :type/:value is :unknown."
+  (cond
+    (recognize-type-dispatch-fn dispatch-fn) :type
+    (keyword? dispatch-fn)                    :value
+    (and (seq? dispatch-fn)
+         (contains? #{'fn 'fn*} (first dispatch-fn))) :value
+    :else :unknown))
+
 (defn dispatch-val-to-go-type [dispatch-val]
   "Map a defmethod dispatch value to the Go concrete type for a `case <T>:` arm,
    or nil if it cannot be mapped with CERTAINTY. Correctness contract: a value of
