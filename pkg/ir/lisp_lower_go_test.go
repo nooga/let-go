@@ -684,6 +684,51 @@ func TestLowerGoBridgeLowersBigIntConst(t *testing.T) {
 	}
 }
 
+func TestLowerGoBridgeLowersZeroArgVariadicOp(t *testing.T) {
+	ensureLoader()
+
+	// (+) with zero args: build-builtin-op built an empty arg vector, then
+	// fold-binary-chain indexed (nth args 0) out of bounds during IR build.
+	// 0-arg must fall back to a normal call (runtime + returns 0).
+	fn := buildLispIR(t, `(defn z [] (+))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+}
+
+func TestLowerGoBridgeLowersEmptyDo(t *testing.T) {
+	ensureLoader()
+
+	// (if true (do)) — the empty (do) is `when`-without-body's expansion. build-do
+	// returned nil (Clojure nil, not an InstId), so the if's true branch passed a
+	// nil block-arg; typeinfer's compute-uses then did (nth acc nil) → crash.
+	fn := buildLispIR(t, `(defn w [] (if true (do)))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+}
+
+func TestLowerGoBridgeLowersEmptyLetBody(t *testing.T) {
+	ensureLoader()
+
+	// (if true (let [x 1])) — empty `let` body is the same class as empty (do):
+	// `when-first` without a body expands to (let* [x (first s)]). build-let used
+	// the same body loop and returned a bare nil, crashing typeinfer as above.
+	fn := buildLispIR(t, `(defn w [] (if true (let* [x 1])))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+}
+
 func TestLowerGoStrictVecDestructureDefn(t *testing.T) {
 	ensureLoader()
 

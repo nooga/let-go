@@ -486,6 +486,12 @@
         ;; Wrong-arity (inc) / (inc x y) — fall back to a generic call so
         ;; the runtime arity-error surfaces normally.
         (build-call form ctx))
+      ;; Zero args: the binary folds below all index args[0]/args[1], so an
+      ;; empty arg list (e.g. (+), (*), (-)) would nth out of bounds. Fall back
+      ;; to a generic call to the op's var — the runtime gives the right answer:
+      ;; (+) => 0, (*) => 1 identities; (-) (/) (< ) etc. => arity error.
+      (zero? (count args))
+      (build-call form ctx)
       ;; Unary: (- x) → (sub 0 x); (/ x) → (div 1 x) [reciprocal];
       ;; (+ x), (* x), comparisons → identity.
       (= 1 (count args))
@@ -676,13 +682,21 @@
               :has-finally (some? finally-id)}]
     (add-inst! ctx (ctx-block ctx) :try refs aux)))
 
+(defn build-body-result [body ctx]
+  "Build body forms in order; return the last form's InstId. An empty body is
+   nil in Clojure — materialize a nil :const so the result is ALWAYS a real
+   InstId, never a bare nil. A bare nil used in value position (a do/let body
+   feeding an `if` branch's block-arg) leaked into branch :args and crashed
+   typeinfer's compute-uses on (nth uses nil). Used by build-do and build-let;
+   the fn-body builders guard nil separately (they emit :return [] when empty)."
+  (loop [fs body last-id nil]
+    (if (seq fs)
+      (recur (rest fs) (build-form (first fs) ctx))
+      (or last-id (add-inst! ctx (ctx-block ctx) :const [] nil)))))
+
 (defn build-do [form ctx]
-  "do evaluates each form sequentially; result is the last one."
-  (let [forms (rest form)]
-    (loop [fs forms last-id nil]
-      (if (seq fs)
-        (recur (rest fs) (build-form (first fs) ctx))
-        last-id))))
+  "do evaluates each form sequentially; result is the last one (nil if empty)."
+  (build-body-result (rest form) ctx))
 
 (defn build-let [form ctx]
   "let pushes a locals scope, evaluates bindings pairwise, then body."
@@ -695,10 +709,7 @@
               expr-id (build-form expr ctx)]
           (bind-local! ctx sym expr-id)
           (recur (+ i 2)))))
-    (let [result (loop [fs body last-id nil]
-                   (if (seq fs)
-                     (recur (rest fs) (build-form (first fs) ctx))
-                     last-id))
+    (let [result (build-body-result body ctx)
           ;; If the body switched to a join block (via nested if),
           ;; build-if rebound outer-scope vars to BlockArgs in the
           ;; current scope.  After we pop the let-scope those rebindings
