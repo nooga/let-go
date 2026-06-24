@@ -11,6 +11,7 @@ import (
 	crand "crypto/rand"
 	_ "embed"
 	"fmt"
+	"io"
 	"math"
 	"math/big"
 	"math/rand/v2"
@@ -3456,16 +3457,20 @@ func installLangNS() {
 		return r, nil
 	})
 
-	// slurp (reintroduced)
+	// slurp — reads a String (file path) or any reader-coercible value: an
+	// IOHandle like *in*, a boxed LGReader/LGBuffer, an io.Reader, or an
+	// IReadable. Mirrors Clojure's (slurp *in*) / (slurp reader); a String
+	// still reads the named file.
 	slurp, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		filename, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("slurp expected String")
+		r, err := coerceReader(vs[0])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("slurp failed: %w", err)
 		}
-		data, err := os.ReadFile(string(filename))
+		defer r.Close()
+		data, err := io.ReadAll(r)
 		if err != nil {
 			return vm.NIL, fmt.Errorf("slurp failed: %w", err)
 		}
@@ -3938,12 +3943,13 @@ func installLangNS() {
 		} else {
 			frags = strings.Split(string(s), "")
 		}
-		var ret vm.Seq = vm.EmptyList
-		l := len(frags)
-		for i := range frags {
-			ret = ret.Cons(vm.String(frags[l-i-1]))
+		// clojure.string/split returns a VECTOR (Clojure contract), not a list —
+		// so subvec/nth/vector? behave as callers expect.
+		out := make([]vm.Value, len(frags))
+		for i, f := range frags {
+			out[i] = vm.String(f)
 		}
-		return ret, nil
+		return vm.NewArrayVector(out), nil
 	})
 
 	strReplace, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
