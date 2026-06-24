@@ -26,6 +26,30 @@ func InternVar(nsName, symName string) *vm.Var {
 	return out
 }
 
+// ApplyVarMeta applies def metadata to v exactly as the bytecode defCompiler
+// does: it sets the var's meta map, then mirrors the :dynamic / :private flags
+// onto the Var. Shared by build-time def lowering (the apply-def-meta! builtin)
+// and gogen-lowered `def` forms so both paths reproduce defCompiler's var setup
+// (docstrings, type hints, ^:dynamic / ^:private). A nil/NIL meta is a no-op.
+func ApplyVarMeta(v *vm.Var, meta vm.Value) {
+	if v == nil || meta == nil || meta == vm.NIL {
+		return
+	}
+	v.SetMeta(meta)
+	m, ok := meta.(interface {
+		ValueAt(vm.Value) vm.Value
+	})
+	if !ok {
+		return
+	}
+	if vm.IsTruthy(m.ValueAt(vm.Keyword("dynamic"))) {
+		v.SetDynamic()
+	}
+	if vm.IsTruthy(m.ValueAt(vm.Keyword("private"))) {
+		v.SetPrivate()
+	}
+}
+
 // LookupVar resolves a runtime Var by namespace and symbol name.
 func LookupVar(nsName, symName string) *vm.Var {
 	ns := NS(nsName)

@@ -7664,6 +7664,23 @@ func installLangNS() {
 	})
 	ns.Def("intern", internf)
 
+	// apply-def-meta! — apply def metadata (and the :dynamic / :private flags it
+	// implies) to a Var, mirroring the bytecode defCompiler. Used by the IR
+	// build-def lowering, which interns the var at build time and so must apply
+	// its meta then, just as defCompiler does at compile time.
+	applyDefMetaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("apply-def-meta! expects 2 args")
+		}
+		v, ok := vs[0].(*vm.Var)
+		if !ok {
+			return vm.NIL, fmt.Errorf("apply-def-meta! expects a Var")
+		}
+		ApplyVarMeta(v, vs[1])
+		return v, nil
+	})
+	ns.Def("apply-def-meta!", applyDefMetaf)
+
 	// create-ns — create or return existing namespace
 	createNsf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {

@@ -650,26 +650,43 @@
    interning, so sibling/forward refs resolve), and emits a :def whose Refs[0]
    is the var (as a Const) and optional Refs[1] is the value. Result is the var.
    The 1-arg form leaves the root unaffected (forward declaration); the 2/3-arg
-   forms set the root. The name slot may be (with-meta sym meta) — unwrap it."
+   forms set the root.
+
+   Faithful to defCompiler's metadata handling: the name slot may be
+   (with-meta sym meta) — the meta map is preserved (it can carry type hints,
+   ^:dynamic / ^:private flags); the 3-arg form requires a String docstring as
+   its middle argument, merged into :doc. The meta is applied to the var NOW
+   (apply-def-meta!, since the var is interned at build time like defCompiler's
+   compile-time LookupOrAdd) AND carried as the :def's Aux so the gogen path,
+   which re-interns the var at runtime, can re-apply it."
   (let [args (rest form)
         n    (count args)]
     (when (or (< n 1) (> n 3))
       (throw (str "ir/build: def wrong number of forms (" n "), need 1-3")))
-    (let [raw-sym  (nth args 0)
+    (let [doc      (when (= n 3)
+                     (let [d (nth args 1)]
+                       (when-not (string? d)
+                         (throw "ir/build: def 3-arg form requires a docstring (String) as second argument"))
+                       d))
+          raw-sym  (nth args 0)
           ;; (def sym doc val): value is the 3rd arg; (def sym val): 2nd.
-          val-form (cond (>= n 3) (nth args 2) (= n 2) (nth args 1) :else nil)
-          sym      (if (and (seq? raw-sym) (= (first raw-sym) 'with-meta))
-                     (second raw-sym)
-                     raw-sym)
+          val-form (cond (= n 3) (nth args 2) (= n 2) (nth args 1) :else nil)
+          with-m?  (and (seq? raw-sym) (= (first raw-sym) 'with-meta))
+          sym      (if with-m? (second raw-sym) raw-sym)
+          meta0    (when with-m? (nth raw-sym 2))
+          meta     (if doc (assoc (or meta0 {}) :doc doc) meta0)
           _        (when-not (symbol? sym)
                      (throw (str "ir/build: def name must be a symbol, got " (pr-str sym))))
           ;; resolve-or-intern: existing var, else intern a fresh one in *ns*.
           var-obj  (or (resolve sym) (intern *ns* sym))
+          ;; Apply meta to the build-time var now (the bytecode-lowered path has
+          ;; no SET_META opcode — defCompiler likewise sets it at compile time).
+          _        (when (and meta (seq meta)) (apply-def-meta! var-obj meta))
           var-nid  (add-inst! ctx (ctx-block ctx) :const [] var-obj)]
       (if val-form
         (let [val-nid (build-form val-form ctx)]
-          (add-inst! ctx (ctx-block ctx) :def [var-nid val-nid] nil))
-        (add-inst! ctx (ctx-block ctx) :def [var-nid] nil)))))
+          (add-inst! ctx (ctx-block ctx) :def [var-nid val-nid] meta))
+        (add-inst! ctx (ctx-block ctx) :def [var-nid] meta)))))
 
 (defn build-vector [form ctx]
   "[a b c] → (vector a b c). Empty vector → Const literal.

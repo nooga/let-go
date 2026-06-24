@@ -1792,28 +1792,39 @@
 
 (defn- def-assign-stmts [f closed-exprs nid]
   "Lower a :def op (def NAME [val]) to straight-line Go. Refs[0] is the var (a
-   Const whose aux is the *vm.Var); optional Refs[1] is the value. The var is
-   INTERNED at runtime (rt.InternVar — it may not exist yet), unlike set!'s
-   LookupVar. With a value, also set the root. The result (the var) is captured
-   in the def's local when live, so later uses read it via value-expr."
+   Const whose aux is the *vm.Var); optional Refs[1] is the value; the :def's own
+   Aux is the metadata map (nil when none). The var is INTERNED at runtime
+   (rt.InternVar — it may not exist yet), unlike set!'s LookupVar. Any metadata
+   is re-applied at runtime via rt.ApplyVarMeta (the build-time var the bytecode
+   path mutates does not exist in the lowered program), then the root is set when
+   a value is present. The result (the var) is captured in the def's local when
+   it is live downstream or when we must issue more than one call against it."
   (let [refs    (ir/refs nid f)
         var-obj (ir/aux (nth refs 0) f)
+        meta    (ir/aux nid f)
+        meta-x  (when (and meta (seq meta)) (boxed-value-expr meta))
         intern  (var-intern-expr var-obj)
-        live    (live? f nid)]
-    (if (= 2 (count refs))
-      (let [valx (box-as-value f closed-exprs (nth refs 1))]
-        (when valx
-          (if live
-            ;; vN = rt.InternVar(...); vN.SetRoot(val)
-            [(gogen/assign "=" (value-ident f nid) intern)
-             (gogen/expr-stmt (gogen/call (gogen/field-sel (value-ident f nid) "SetRoot") [valx]))]
-            ;; rt.InternVar(...).SetRoot(val)   (var discarded)
-            [(gogen/expr-stmt (gogen/call (gogen/field-sel intern "SetRoot") [valx]))])))
-      ;; 1-arg (def x): intern only. Keep the var in a local if live, else the
-      ;; intern is a bare side-effecting statement (forward declaration).
-      (if live
-        [(gogen/assign "=" (value-ident f nid) intern)]
-        [(gogen/expr-stmt intern)]))))
+        live    (live? f nid)
+        has-val (= 2 (count refs))
+        valx    (when has-val (box-as-value f closed-exprs (nth refs 1)))]
+    ;; A boxed value is required when a value ref is present; if it can't be
+    ;; boxed, drop the whole def (matches the prior nil-guard behaviour).
+    (when (or (not has-val) valx)
+      (let [;; Need a local handle when the var is live OR we issue more than one
+            ;; call against it (apply-meta and/or set-root).
+            need-local (or live meta-x)
+            target     (if need-local (value-ident f nid) intern)
+            stmts      (cond-> []
+                         need-local (conj (gogen/assign "=" (value-ident f nid) intern))
+                         meta-x     (conj (gogen/expr-stmt
+                                            (gogen/call (gogen/field-sel (gogen/ident "rt") "ApplyVarMeta")
+                                                        [target meta-x])))
+                         has-val    (conj (gogen/expr-stmt
+                                            (gogen/call (gogen/field-sel target "SetRoot") [valx]))))]
+        (if (seq stmts)
+          stmts
+          ;; 1-arg (def x), not live, no meta: bare side-effecting intern.
+          [(gogen/expr-stmt intern)])))))
 
 (defn- lower-inst-stmts [f closed-exprs nid]
   (let [op  (ir/op nid f)

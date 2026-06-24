@@ -770,6 +770,104 @@ func TestLowerGoBridgeLowersDefNoValue(t *testing.T) {
 	}
 }
 
+func TestLowerGoBridgeDefEmitsDynamicMeta(t *testing.T) {
+	ensureLoader()
+
+	// (def ^:dynamic x v) — the lowered Go must reproduce the bytecode
+	// defCompiler's var setup: intern, apply the meta map (which carries the
+	// :dynamic flag), then set the root. Without this the runtime-interned var
+	// silently loses its dynamic flag / metadata.
+	fn := buildLispIR(t, `(defn d [] (def ^:dynamic dynmetav 1))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "rt.ApplyVarMeta(") {
+		t.Fatalf("expected rt.ApplyVarMeta for ^:dynamic def\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, `vm.Keyword("dynamic")`) {
+		t.Fatalf("expected emitted meta to carry :dynamic\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, ".SetRoot(vm.Int(1))") {
+		t.Fatalf("expected def value to still set the var root\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestLowerGoBridgeDefEmitsDocstringMeta(t *testing.T) {
+	ensureLoader()
+
+	// (def x "doc" v) — the docstring becomes :doc metadata (exactly as the
+	// bytecode defCompiler merges it), so the lowered Go must emit it.
+	fn := buildLispIR(t, `(defn d [] (def docmetav "the doc" 1))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "rt.ApplyVarMeta(") ||
+		!strings.Contains(rendered, `vm.Keyword("doc")`) ||
+		!strings.Contains(rendered, `vm.String("the doc")`) {
+		t.Fatalf("expected docstring to lower into :doc meta\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, ".SetRoot(vm.Int(1))") {
+		t.Fatalf("expected def value to still set the var root\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestLowerGoBridgeDefNoMetaOmitsApplyVarMeta(t *testing.T) {
+	ensureLoader()
+
+	// A plain (def x v) carries no metadata, so no rt.ApplyVarMeta call should
+	// be emitted — only intern + SetRoot.
+	fn := buildLispIR(t, `(defn d [] (def plainmetav 1))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	rendered := bindAndRenderGoDecl(t, result)
+	if strings.Contains(rendered, "rt.ApplyVarMeta(") {
+		t.Fatalf("plain def must not emit rt.ApplyVarMeta\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestBuildDefAppliesVarMetaAndDynamicFlag(t *testing.T) {
+	ensureLoader()
+
+	// build-def interns the var at build time (like the bytecode defCompiler's
+	// compile-time LookupOrAdd), so it must ALSO apply the metadata/flags then —
+	// otherwise the bytecode-lowered path drops ^:dynamic / type hints.
+	buildLispIR(t, `(defn d [] (def ^:dynamic ^{:tag (quote Integer)} dynflagprobe 1))`)
+
+	v := rt.NS(rt.NameCoreNS).Lookup(vm.Symbol("dynflagprobe"))
+	vr, ok := v.(*vm.Var)
+	if !ok {
+		t.Fatalf("dynflagprobe not interned as a Var, got %T", v)
+	}
+	if !vr.IsDynamic() {
+		t.Fatalf("expected build-def to mark ^:dynamic var dynamic")
+	}
+	meta := vr.Meta()
+	m, ok := meta.(interface {
+		ValueAt(vm.Value) vm.Value
+	})
+	if !ok {
+		t.Fatalf("expected var meta to be a map, got %T", meta)
+	}
+	if got := m.ValueAt(vm.Keyword("tag")); got == vm.NIL {
+		t.Fatalf("expected :tag type hint preserved in var meta, got %v", meta)
+	}
+}
+
+func TestBuildDefThreeArgRequiresStringDoc(t *testing.T) {
+	ensureLoader()
+
+	// (def x non-string v) is invalid: the 3-arg form's middle argument must be
+	// a docstring. build-def must reject it rather than silently treating the
+	// non-string as a discarded value (matching the bytecode defCompiler).
+	err := runLispExprErr(`(ir.build/build-fn (quote (defn d [] (def badx 1 2))))`)
+	if err == nil {
+		t.Fatalf("expected build error for 3-arg def with non-string docstring")
+	}
+}
+
 func TestLowerGoBridgeLowersEmptyFnBody(t *testing.T) {
 	ensureLoader()
 
