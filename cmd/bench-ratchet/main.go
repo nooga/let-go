@@ -37,6 +37,8 @@
 //	-count int          go test -count (default 1)
 //	-benchtime string   go test -benchtime (default 1s)
 //	-filter string      regexp filter on bench names (default: all)
+//	-profile string     named profile (e.g. pr-fast): a fixed job list plus
+//	                    default count/benchtime/budget; excludes manual flags
 //	-timeout string     go test -timeout per package (default 10m)
 //	-out string         capture .jsonl output path
 //	                    (default docs/perf/.runs/<sha>-<ts>.jsonl)
@@ -162,6 +164,7 @@ func main() {
 		tags         = flag.String("tags", defaultTags, "go test -tags. Default 'gogen_ir' so the lowered-to-Go VM is compiled into the test binary alongside the bytecode VM. Has no effect on releases that pre-date the lowered-Go work (the build tag matches no files there).")
 		format       = flag.String("format", "text", "report format: text (default, ANSI terminal), markdown (GitHub/Slack-friendly table), json (the raw baseline)")
 		full         = flag.Bool("full", false, "run the FULL benchmark profile: pkg/vm fleet under -tags plus jank + IR compile under both VM variants. Slow (~25 min) — for mainline profiling and manual deep-dives.")
+		profile      = flag.String("profile", "", "named benchmark profile (e.g. 'pr-fast'). Mutually exclusive with -packages/-filter/-full. Sets the job list plus default count/benchtime/budget; explicit flags still override.")
 	)
 	flag.Parse()
 
@@ -208,9 +211,41 @@ func main() {
 		die("invalid -filter regexp: %v", err)
 	}
 
-	jobs, scope, err := buildJobs(*packages, *tags, *full, manual, filterRE)
-	if err != nil {
-		die("%v", err)
+	// Effective tuning: a profile's count/benchtime/budget apply only where the
+	// flag wasn't set explicitly, so an operator can still override per run.
+	set := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	effCount, effBenchtime, effBudget := *count, *benchtime, *budget
+
+	var jobs []captureJob
+	var scope string
+	if *profile != "" {
+		if manual || *full {
+			die("-profile can't be combined with -packages/-filter/-full")
+		}
+		p, ok := profiles[*profile]
+		if !ok {
+			die("unknown profile %q (have: %s)", *profile, profileNames())
+		}
+		jobs, err = p.jobs(*tags)
+		if err != nil {
+			die("profile %q: %v", *profile, err)
+		}
+		scope = "profile " + *profile
+		if p.count != 0 && !set["count"] {
+			effCount = p.count
+		}
+		if p.benchtime != "" && !set["benchtime"] {
+			effBenchtime = p.benchtime
+		}
+		if p.budget != 0 && !set["budget"] {
+			effBudget = p.budget
+		}
+	} else {
+		jobs, scope, err = buildJobs(*packages, *tags, *full, manual, filterRE)
+		if err != nil {
+			die("%v", err)
+		}
 	}
 
 	if *outPath == "" {
@@ -221,7 +256,7 @@ func main() {
 	}
 
 	fmt.Printf("bench-ratchet: %s mode, %s, %d job(s), budget=%.1f%%\n",
-		mode, scope, len(jobs), *budget*100)
+		mode, scope, len(jobs), effBudget*100)
 	for _, j := range jobs {
 		variant := ""
 		if j.variant != "" {
@@ -235,7 +270,7 @@ func main() {
 	}
 	fmt.Printf("  raw .jsonl: %s\n", *outPath)
 
-	if err := captureJobs(jobs, *count, *benchtime, *timeout, *outPath); err != nil {
+	if err := captureJobs(jobs, effCount, effBenchtime, *timeout, *outPath); err != nil {
 		die("capture: %v", err)
 	}
 
@@ -255,7 +290,7 @@ func main() {
 	if mode == "snapshot" {
 		writeSnapshot(*baselinePath, current)
 	} else {
-		writeOrCheck(*baselinePath, current, mode, *budget, *force, *format)
+		writeOrCheck(*baselinePath, current, mode, effBudget, *force, *format)
 	}
 }
 
@@ -555,6 +590,51 @@ func (j captureJob) effectiveCount(def int) int {
 //   - default: the fast gate — the calibration anchor plus the end-to-end jank
 //     suite measured under BOTH VM variants (bytecode and gogen_ir-lowered),
 //     which is the only thing the ratchet needs to catch a real regression.
+//
+// profile is a named, hardcoded benchmark selection plus its tuning defaults.
+// It gives CI a stable name instead of an ad-hoc -filter per run, and a place
+// to re-tier which benchmarks run on the PR gate vs the timeline without
+// inventing a regexp per invocation. count/benchtime/budget of 0/"" fall back
+// to the CLI defaults.
+type profile struct {
+	count     int
+	benchtime string
+	budget    float64
+	jobs      func(tags string) ([]captureJob, error)
+}
+
+// prFastFilter selects the stable VM micro-benchmark families for the PR gate,
+// at family granularity — no '/', so go test's segment matching stays simple
+// and the whole set is one pkg/vm job. It includes the anchor so normalization
+// works from that one job, and leaves out the sub-nanosecond families
+// (StackOps, IsTruthy, ConsCreation) and *Parallel variants, whose runner
+// jitter swamps any real signal.
+const prFastFilter = `^Benchmark(RatchetAnchor|FrameDispatch|FrameAlloc|FuncInvoke|MultiArity|VariadicInvoke|StructToRecord|RecordToStructFastPath|RecordToStructSlowPath|VarDerefRoot|VarDerefBound|MapAssoc|SeqIteration|VectorConj|VectorCreation)$`
+
+var profiles = map[string]profile{
+	"pr-fast": {
+		count:     6,
+		benchtime: "1s",
+		budget:    0.12,
+		jobs: func(tags string) ([]captureJob, error) {
+			re, err := regexp.Compile(prFastFilter)
+			if err != nil {
+				return nil, err
+			}
+			return []captureJob{{pkg: anchorPackage, tags: tags, filter: re}}, nil
+		},
+	},
+}
+
+func profileNames() string {
+	ns := make([]string, 0, len(profiles))
+	for n := range profiles {
+		ns = append(ns, n)
+	}
+	sort.Strings(ns)
+	return strings.Join(ns, ", ")
+}
+
 func buildJobs(packages, tags string, full, manual bool, filterRE *regexp.Regexp) ([]captureJob, string, error) {
 	switch {
 	case manual:

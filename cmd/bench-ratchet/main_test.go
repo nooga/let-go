@@ -148,6 +148,36 @@ func TestSuiteJobsPinCountToOne(t *testing.T) {
 	}
 }
 
+// The pr-fast profile includes the anchor and the kept families, excludes the
+// sub-nanosecond noise families, and sets its own tuning defaults.
+func TestProfilePrFast(t *testing.T) {
+	p, ok := profiles["pr-fast"]
+	if !ok {
+		t.Fatal("pr-fast profile missing")
+	}
+	if p.count == 0 || p.benchtime == "" || p.budget == 0 {
+		t.Errorf("pr-fast should set count/benchtime/budget defaults, got %+v", p)
+	}
+	jobs, err := p.jobs("gogen_ir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].pkg != anchorPackage {
+		t.Fatalf("want one pkg/vm job, got %+v", jobs)
+	}
+	f := jobs[0].filter
+	for _, keep := range []string{anchorName, "BenchmarkFrameDispatch", "BenchmarkMapAssoc"} {
+		if !f.MatchString(keep) {
+			t.Errorf("pr-fast should include %s", keep)
+		}
+	}
+	for _, drop := range []string{"BenchmarkStackOps", "BenchmarkIsTruthy", "BenchmarkConsCreation"} {
+		if f.MatchString(drop) {
+			t.Errorf("pr-fast should exclude %s", drop)
+		}
+	}
+}
+
 func keysOf(m map[string]captureJob) []string {
 	ks := make([]string, 0, len(m))
 	for k := range m {
