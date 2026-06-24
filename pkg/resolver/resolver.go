@@ -116,6 +116,55 @@ func (r *NSResolver) DiscoverDepsEdn(dir string) {
 	}
 }
 
+// declaredNSName returns the namespace a source file declares via its first
+// real form — (ns NAME …) or (in-ns 'NAME) — or "" if it can't be determined
+// (no ns form, read error). Read-only: it parses just the leading form and
+// never evaluates the file, so it has no side effects. Used by loadFromPath to
+// confirm a filename-matched candidate actually provides the requested ns.
+func declaredNSName(p string) string {
+	f, err := os.Open(p)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	rdr := compiler.NewLispReader(f, p)
+	var form vm.Value
+	for tries := 0; tries < 64; tries++ {
+		v, err := rdr.Read()
+		if err != nil {
+			return ""
+		}
+		if v != nil && v.Type() != vm.VoidType {
+			form = v
+			break
+		}
+	}
+	list, ok := form.(*vm.List)
+	if !ok || list.Count() == nil {
+		return ""
+	}
+	headSym, ok := list.First().(vm.Symbol)
+	if !ok || (string(headSym) != "ns" && string(headSym) != "in-ns") {
+		return ""
+	}
+	rest := list.Next()
+	if rest == nil {
+		return ""
+	}
+	// (ns NAME …) → NAME is a bare symbol. (in-ns 'NAME) → a (quote NAME) list.
+	switch nm := rest.First().(type) {
+	case vm.Symbol:
+		return string(nm)
+	case *vm.List:
+		if nx := nm.Next(); nx != nil {
+			if s, ok := nx.First().(vm.Symbol); ok {
+				return string(s)
+			}
+		}
+	}
+	return ""
+}
+
 func (r *NSResolver) loadFile(path string) *vm.Namespace {
 	f, err := os.Open(path)
 	if err != nil {
@@ -197,14 +246,25 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 		for _, dir := range r.path {
 			for _, candidate := range candidates {
 				cp := path.Join(dir, candidate)
-				if _, err := os.Stat(cp); err == nil {
-					r.cloading[name] = true
-					lns := r.loadFile(cp)
-					delete(r.cloading, name)
-					// gogen_ir: drain Go-native overrides (no-op untagged).
-					rt.ApplyGoOverrides(lns)
-					return lns
+				if _, err := os.Stat(cp); err != nil {
+					continue
 				}
+				// A file provides namespace `name` only if it actually declares
+				// (ns name). The filename-match is necessary but not sufficient:
+				// e.g. test/async.lg matches a request for `async` by filename
+				// but declares (ns test.async), so loading it would shadow the
+				// real (native) async with the wrong namespace. Skip such files
+				// so the request falls through to the embedded/native provider.
+				// A file with no determinable (ns …) form is loaded as before.
+				if d := declaredNSName(cp); d != "" && d != name {
+					continue
+				}
+				r.cloading[name] = true
+				lns := r.loadFile(cp)
+				delete(r.cloading, name)
+				// gogen_ir: drain Go-native overrides (no-op untagged).
+				rt.ApplyGoOverrides(lns)
+				return lns
 			}
 		}
 		return nil
