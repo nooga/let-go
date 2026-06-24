@@ -615,18 +615,53 @@ func TestLowerGoStrictMultiArityDefnLowersToNativeMultiArity(t *testing.T) {
 	}
 }
 
-func TestLowerGoBridgeFallsBackOnUnsupportedQuotedUUIDConst(t *testing.T) {
+func TestLowerGoBridgeLowersUUIDConst(t *testing.T) {
 	ensureLoader()
 
-	fn := buildLispIR(t, `(defn quoted-uuid [] (quote #uuid "123e4567-e89b-12d3-a456-426614174000"))`)
+	fn := buildLispIR(t, `(defn a-uuid [] #uuid "123e4567-e89b-12d3-a456-426614174000")`)
 	optimizeLispIR(t, fn)
 	result := lowerGo(t, fn, ":bridge")
 
-	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("fallback") {
-		t.Fatalf("expected :fallback status, got %v", got)
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
 	}
-	if result.ValueAt(vm.Keyword("decl")) != vm.NIL {
-		t.Fatalf("expected bridge fallback to omit :decl")
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, `vm.ParseUUID("123e4567-e89b-12d3-a456-426614174000")`) {
+		t.Fatalf("expected UUID const to lower through vm.ParseUUID with the bare canonical string\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestLowerGoBridgeLowersBigDecimalConst(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn a-bigdec [] 123.456M)`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	// str on a BigDecimal drops the M suffix, so the emitted parse string is the
+	// plain numeric form that vm.MustBigDecimalFromString round-trips.
+	if !strings.Contains(rendered, `vm.MustBigDecimalFromString("123.456")`) {
+		t.Fatalf("expected BigDecimal const to lower through vm.MustBigDecimalFromString\n--- go ---\n%s", rendered)
+	}
+}
+
+func TestLowerGoBridgeLowersRatioConst(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn a-ratio [] 1/2)`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":bridge")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, `vm.MustRatioFromString("1/2")`) {
+		t.Fatalf("expected Ratio const to lower through vm.MustRatioFromString\n--- go ---\n%s", rendered)
 	}
 }
 

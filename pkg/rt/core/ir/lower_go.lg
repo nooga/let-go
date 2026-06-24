@@ -238,6 +238,13 @@
     (char? v)       (vm-call "Char" [(gogen/char-lit v)])
     (keyword? v)    (vm-call "Keyword" [(gogen/string-lit (subs (str v) 1))])
     (symbol? v)     (vm-call "Symbol" [(gogen/string-lit (str v))])
+    ;; Non-integer numeric / tagged consts reconstruct from their own readable
+    ;; string via a single-value runtime constructor. The source string was
+    ;; validated at read time, so the Must* helpers never panic in practice.
+    (decimal? v)    (vm-call "MustBigDecimalFromString" [(gogen/string-lit (str v))])  ; (str 1.0M) -> "1.0"
+    (ratio? v)      (vm-call "MustRatioFromString" [(gogen/string-lit (str v))])       ; (str 1/2)  -> "1/2"
+    ;; UUID's String() is `#uuid "X"`; pass the bare canonical X to ParseUUID.
+    (uuid? v)       (vm-call "ParseUUID" [(gogen/string-lit (let [s (str v)] (subs s 7 (dec (count s)))))])
     (list? v)       (boxed-list-expr v)
     (vector? v)     (boxed-vector-expr v)
     (map? v)        (boxed-map-expr v)

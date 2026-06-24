@@ -284,11 +284,22 @@
               (char?    form)  (add-inst! ctx (ctx-block ctx) :const [] form)
               (keyword? form)  (add-inst! ctx (ctx-block ctx) :const [] form)
               (boolean? form)  (add-inst! ctx (ctx-block ctx) :const [] form)
+              ;; Non-integer numeric and tagged literals carry as plain consts:
+              ;; the reader has already materialized them into proper values
+              ;; (BigDecimal `M`, Ratio `a/b`, UUID `#uuid`), so build just needs
+              ;; a :const arm — there is no data-reader gap. (BigInt satisfies
+              ;; integer? above; Float satisfies float?.)
+              (decimal? form)  (add-inst! ctx (ctx-block ctx) :const [] form)
+              (ratio?   form)  (add-inst! ctx (ctx-block ctx) :const [] form)
+              (uuid?    form)  (add-inst! ctx (ctx-block ctx) :const [] form)
               (symbol?  form)  (build-symbol form ctx)
               (vector?  form)  (build-vector form ctx)
               (map?     form)  (build-map form ctx)
               (list?    form)  (build-list form ctx)
-              :else (throw (str "build-form: unrecognized form " form)))]
+              ;; pr-str (not str): a BigDecimal's str drops the `M` suffix, so an
+              ;; unrecognized 0.0M would mis-report as a float `0.0`. The readable
+              ;; form keeps the type legible in the failure bucket.
+              :else (throw (str "build-form: unrecognized form " (pr-str form))))]
     (when si
       (swap! ctx assoc :source-info old-si))
     nid))

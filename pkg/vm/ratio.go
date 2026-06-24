@@ -36,6 +36,19 @@ func NewRatioFromInts(num, den int64) *Ratio {
 	return &Ratio{val: new(big.Rat).SetFrac64(num, den)}
 }
 
+// MustRatioFromString builds a Ratio from its "num/den" string form, panicking
+// on an unparseable input. Intended for gogen-emitted constant literals: the
+// source was already validated at read time (and reduced past integer form, so
+// the value is genuinely a Ratio), making the panic unreachable in generated
+// code. Gives a single-value expression form keyed off the value's own String().
+func MustRatioFromString(s string) *Ratio {
+	v, ok := new(big.Rat).SetString(s)
+	if !ok {
+		panic("MustRatioFromString: invalid Ratio literal: " + s)
+	}
+	return &Ratio{val: v}
+}
+
 func (r *Ratio) Val() *big.Rat { return r.val }
 
 func (r *Ratio) Type() ValueType { return RatioType }

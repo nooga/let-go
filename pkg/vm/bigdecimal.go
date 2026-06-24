@@ -46,6 +46,19 @@ func NewBigDecimalFromString(s string) (*BigDecimal, bool) {
 	return &BigDecimal{val: v}, true
 }
 
+// MustBigDecimalFromString builds a BigDecimal from a string, panicking on an
+// unparseable input. Intended for gogen-emitted constant literals, whose source
+// strings were already validated at read time, so the panic is unreachable in
+// generated code — it exists only to give a single-value expression form (the
+// (value, ok) signature of NewBigDecimalFromString can't be used inline).
+func MustBigDecimalFromString(s string) *BigDecimal {
+	v, ok := NewBigDecimalFromString(s)
+	if !ok {
+		panic("MustBigDecimalFromString: invalid BigDecimal literal: " + s)
+	}
+	return v
+}
+
 func NewBigDecimalFromFloat64(f float64) *BigDecimal {
 	return &BigDecimal{val: new(big.Float).SetPrec(bigDecimalPrec).SetFloat64(f)}
 }
