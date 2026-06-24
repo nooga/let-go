@@ -1,0 +1,187 @@
+name: Perf PR
+
+# Same-runner A/B microbenchmark check for pull requests. Benches the PR's
+# merge-base and its head on the SAME runner, back to back, then posts the
+# delta. Running both halves on one machine cancels the cross-runner CPU-tier
+# noise that makes comparing against stored timeline data unreliable — so the
+# only honest signal on free shared runners is base-vs-head in one job.
+#
+# Informational only: it never fails the PR. The pkg/vm fleet (~1-100 ns ops)
+# has real within-run variance, so it reports deltas for a human to read rather
+# than gating. A budget gate can come later, once the observed noise floor is
+# known.
+#
+# Opt-in: a two-pass bench is ~35-40 min, too costly to run on every PR. It runs
+# only on PRs carrying the `perf` label — add the label to run it, and it
+# re-runs on each push while the label is on; remove the label to stop. Without
+# the label the job is skipped instantly (no runner minutes). The path filter is
+# a second guard so a labeled doc-only PR still skips.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - 'pkg/**'
+      - 'cmd/**'
+      - '.github/workflows/perf-pr.yml'
+  # Manual escape hatch: run against any PR by number without touching labels.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to benchmark'
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: perf-pr-${{ github.event.pull_request.number || github.event.inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    # Opt-in: the `perf` label (pull_request), or a manual workflow_dispatch.
+    # Unlabeled PR events skip the job instantly, with no runner allocated.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'perf')
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve base and head
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          PR_FROM_INPUT: ${{ github.event.inputs.pr }}
+          BASE_FROM_EVENT: ${{ github.event.pull_request.base.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # workflow_dispatch has no PR context, so take the number from the
+          # input and look the base branch up via the API. pull_request carries
+          # both directly.
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            pr="$PR_FROM_INPUT"
+            [[ "$pr" =~ ^[0-9]+$ ]] || { echo "pr input must be a number, got: ${pr}" >&2; exit 1; }
+            base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" --jq .base.ref)"
+          else
+            pr="$PR_FROM_EVENT"
+            base_ref="$BASE_FROM_EVENT"
+          fi
+          # refs/pull/<n>/head is on the BASE repo for both same-repo and fork
+          # PRs, so this resolves the head without needing fork remote access.
+          git fetch --no-tags origin "$base_ref" "refs/pull/${pr}/head:pr-head"
+          head_sha="$(git rev-parse pr-head)"
+          # The merge-base is the PR's own fork point, so we measure the PR's
+          # delta, not unrelated drift that landed on the base branch since.
+          base_sha="$(git merge-base "origin/${base_ref}" pr-head)"
+          {
+            echo "pr=${pr}"
+            echo "head=${head_sha}"
+            echo "base=${base_sha}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Base (merge-base): ${base_sha}"
+          echo "Head:              ${head_sha}"
+
+      # pkg/vm holds the micro-benchmark fleet plus BenchmarkRatchetAnchor (the
+      # normalization anchor), so -packages pkg/vm is a self-contained subset:
+      # fast, and it excludes the slow end-to-end test.BenchmarkClojureTestSuite.
+      - name: Bench merge-base
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+        run: |
+          set -euo pipefail
+          git checkout --force "$BASE"
+          git submodule update --init --recursive
+          make lowered
+          go run ./cmd/bench-ratchet \
+            -baseline "${RUNNER_TEMP}/base.json" \
+            -packages github.com/nooga/let-go/pkg/vm \
+            -count 3 -benchtime 500ms -timeout 15m \
+            update
+
+      - name: Bench head and compare
+        id: bench
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: |
+          set -euo pipefail
+          git checkout --force "$HEAD"
+          git submodule update --init --recursive
+          make lowered
+          # Inform-only: never fail the job on a regression (|| true). The
+          # markdown report is the product; the exit code is ignored.
+          go run ./cmd/bench-ratchet \
+            -baseline "${RUNNER_TEMP}/base.json" \
+            -packages github.com/nooga/let-go/pkg/vm \
+            -count 3 -benchtime 500ms -timeout 15m \
+            -format markdown \
+            check > "${RUNNER_TEMP}/report.md" || true
+
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          header() {
+            echo "## Perf (pkg/vm micros) — base vs head, same runner"
+            echo
+            echo "Base \`${BASE:0:12}\` vs head \`${HEAD:0:12}\`. Anchor-normalized; informational, not a gate."
+            echo
+          }
+
+          # Full table → job summary, which renders on the run page (and is the
+          # only channel that works on fork PRs, where the comment token is RO).
+          { header; sed -n '/\*\*bench-ratchet\*\*/,$p' "${RUNNER_TEMP}/report.md"; } > "${RUNNER_TEMP}/summary.md"
+          cat "${RUNNER_TEMP}/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+          # Abbreviated PR comment: the preamble plus only rows past the budget
+          # (REGRESSION/IMPROVED/NEW/MISSING), then a link to the full table. The
+          # full table (~120 rows) is too long for a comment; the run summary holds it.
+          total="$(grep -cE '^\| `' "${RUNNER_TEMP}/report.md" || true)"
+          changed="$(grep -E '\| (REGRESSION|IMPROVED|NEW|MISSING) \|$' "${RUNNER_TEMP}/report.md" || true)"
+          shown="$(printf '%s' "$changed" | grep -c . || true)"
+          {
+            header
+            # Preamble (summary + machine + anchor lines) through the table header.
+            sed -n '/\*\*bench-ratchet\*\*/,/^| Benchmark/p' "${RUNNER_TEMP}/report.md"
+            echo "|---|---:|---:|---:|---:|---|---|"
+            if [ -n "$changed" ]; then
+              echo "$changed"
+            else
+              echo "| _nothing past the budget threshold_ | | | | | | |"
+            fi
+            echo
+            echo "_Showing ${shown:-0} of ${total:-0} benchmarks (past budget). [Full table in the run summary →](${run_url})_"
+          } > "${RUNNER_TEMP}/comment.md"
+
+      # Sticky PR comment (upsert by marker). Fork PRs get a read-only token, so
+      # this can't post there — continue-on-error keeps the job green and the
+      # job summary still carries the report.
+      - name: Upsert PR comment
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR: ${{ steps.refs.outputs.pr }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- perf-pr-report -->';
+            const body = marker + '\n' + fs.readFileSync(process.env.RUNNER_TEMP + '/comment.md', 'utf8');
+            const {owner, repo} = context.repo;
+            // Resolved in the refs step so it works for both pull_request and
+            // workflow_dispatch (where there's no pull_request in the payload).
+            const issue_number = Number(process.env.PR);
+            const {data: comments} = await github.rest.issues.listComments({owner, repo, issue_number});
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({owner, repo, comment_id: existing.id, body});
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body});
+            }
