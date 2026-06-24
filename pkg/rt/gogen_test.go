@@ -191,6 +191,41 @@ func TestCast(t *testing.T) {
 	}
 }
 
+func TestTypeSwitchStmt(t *testing.T) {
+	// switch x := v.(type) { case *vm.ArrayVector: return x; default: return nil }
+	v := must(t)(cIdent(vm.String("v")))
+	avT := must(t)(cType(vm.String("*vm.ArrayVector")))
+	xIdent := must(t)(cIdent(vm.String("x")))
+	retX := must(t)(cReturn(vm.NewArrayVector([]vm.Value{xIdent})))
+	caseArm := must(t)(cCaseClause(
+		vm.NewArrayVector([]vm.Value{avT}),
+		vm.NewArrayVector([]vm.Value{retX})))
+	nilIdent := must(t)(cIdent(vm.String("nil")))
+	retNil := must(t)(cReturn(vm.NewArrayVector([]vm.Value{nilIdent})))
+	defArm := must(t)(cCaseClause(vm.NIL, vm.NewArrayVector([]vm.Value{retNil})))
+	node := must(t)(cTypeSwitchStmt(vm.String("x"), v,
+		vm.NewArrayVector([]vm.Value{caseArm, defArm})))
+	got := render(t, node)
+	for _, want := range []string{"switch x := v.(type)", "case *vm.ArrayVector:", "default:", "return x", "return nil"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("render %q missing %q", got, want)
+		}
+	}
+}
+
+func TestTypeSwitchStmtNoBinding(t *testing.T) {
+	// switch v.(type) { default: return nil }  (no x := binding)
+	v := must(t)(cIdent(vm.String("v")))
+	nilIdent := must(t)(cIdent(vm.String("nil")))
+	retNil := must(t)(cReturn(vm.NewArrayVector([]vm.Value{nilIdent})))
+	defArm := must(t)(cCaseClause(vm.NIL, vm.NewArrayVector([]vm.Value{retNil})))
+	node := must(t)(cTypeSwitchStmt(vm.NIL, v, vm.NewArrayVector([]vm.Value{defArm})))
+	got := render(t, node)
+	if !strings.Contains(got, "switch v.(type)") {
+		t.Errorf("render %q missing %q", got, "switch v.(type)")
+	}
+}
+
 // --- statement constructors -----------------------------------------
 
 func TestVarDecl(t *testing.T) {

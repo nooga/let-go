@@ -1,0 +1,37 @@
+;; Behavioural contract for native multimethod lowering (ITER-0010).
+;;
+;; This file runs under the bytecode VM (TestRunner), so it verifies the
+;; RUNTIME semantics that native Go lowering must preserve: a type-dispatched
+;; multimethod returns the right method's result for each dispatched type, and
+;; an uncovered type falls through to the :default method. The NATIVE emission
+;; itself (the `switch v.(type)` devirtualisation) is asserted separately by the
+;; Go test pkg/ir TestDefmultiNativeTypeSwitchLowering, which greps the rendered
+;; Go. Together they pin both halves of the contract: the lowered switch arms
+;; must agree, type-for-type, with this runtime dispatch.
+(ns test.defmulti-native-lowering-test
+  (:require
+   [test :refer :all]))
+
+(defmulti td-nlt (fn [x] (type x)) :default :default)
+(defmethod td-nlt (type [])     [x] :vector)
+(defmethod td-nlt (type (list)) [x] :list)
+(defmethod td-nlt :default      [x] :other)
+
+;; A caller in a real fn (mirrors the lowered call site that devirtualises).
+(defn dispatch-it [x] (td-nlt x))
+
+(deftest type-dispatch-vector-arm
+  (is (= :vector (dispatch-it [])))
+  (is (= :vector (dispatch-it [1 2 3]))))
+
+(deftest type-dispatch-list-arm
+  (is (= :list (dispatch-it (list))))
+  (is (= :list (dispatch-it (list 1 2)))))
+
+;; Uncovered types (Int, String) have no matching method → the runtime MultiFn
+;; default arm. This is exactly what the lowered `default:` arm trampolines to,
+;; so it proves the fallback path the native switch relies on.
+(deftest type-dispatch-default-fallback
+  (is (= :other (dispatch-it 42)))
+  (is (= :other (dispatch-it "hello")))
+  (is (= :other (dispatch-it :kw))))

@@ -1736,64 +1736,138 @@
          (keyword? (ir/aux callee f))
          (or (= 1 arg-count) (= 2 arg-count)))))
 
+(defn- trampoline-call-stmts [f closed-exprs nid target refs]
+  "Emit the runtime-dispatch trampoline for a :call, assigning the result to
+   `target`. This is the always-correct fallback path: a cross-ns cached-var
+   IFn dispatch when the callee var is recorded (base set), else the boxed
+   rt.InvokeValueEC path. Extracted from call-assign-stmts so the native
+   multimethod type-switch can reuse the IDENTICAL trampoline for its default:
+   arm (open/late/unmapped-type dispatch must behave exactly as today)."
+  (let [nn         (load-var-ns+name f (first refs))
+        ;; Lift EVERY trampoline-reaching :load-var callee (same-ns
+        ;; non-direct-callable + cross-ns) to cached-var IFn dispatch. This
+        ;; is var-mediated, so it resolves at runtime via the var's root
+        ;; whether or not the callee was emitted as a Go func — strictly
+        ;; more robust than a bare direct call (which dangles if the callee
+        ;; fell back) and it eliminates the per-call rt.LookupVar uniformly.
+        ;; record-cross-ns-var! no-ops when *cross-ns-vars-used* is unbound
+        ;; (pass 1 / per-fn lower), so base stays nil there. Branch on BASE,
+        ;; not nn: a load-var callee with base=nil must NOT build a dispatch.
+        base       (when nn (record-cross-ns-var! (first nn) (second nn)))
+        arg-exprs  (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))
+        args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]
+    (when (every? identity arg-exprs)
+      (if base
+        ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
+        ;; callee var ONCE (memoized through the package-level __v_* pointer)
+        ;; and re-reads its fn root each call, so per call:
+        ;;   rt.CachedVarFn(&__v, "ns", "name").Invoke(args)
+        ;; Caching the *Var (not the fn) keeps the var as the override seam
+        ;; (^:dynamic / ^:redef / alter-var-root); .Invoke returns
+        ;; (vm.Value, error), so emit-call-stmts' 2-value form applies.
+        (let [cached-fn (gogen/call
+                          (gogen/field-sel (gogen/ident "rt") "CachedVarFn")
+                          [(gogen/unary "&" (gogen/ident base))
+                           (gogen/string-lit (first nn))
+                           (gogen/string-lit (second nn))])
+              ;; Dispatch through ec so the callee (and any dynamic vars it
+              ;; reads, or goroutines it spawns) sees the running context:
+              ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
+              invoke    (gogen/call
+                          (gogen/field-sel (gogen/ident "ec") "Invoke")
+                          [cached-fn args-slice])]
+          (emit-call-stmts f target invoke))
+        ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
+        ;; which threads ec into the dynamic invocation path.
+        (let [callee (box-as-value f closed-exprs (first refs))
+              invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
+                                 [(gogen/ident "ec") callee args-slice])]
+          (when callee
+            (if (keyword-callee-total? f refs)
+              ;; Total keyword lookup: the error is always nil at arity
+              ;; 1-2, so discard it (`_`) and skip the dead check.
+              [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
+              (emit-call-stmts f target invoke))))))))
+
+;; Multimethod dispatcher registry, bound during the :go pass in lower-ns-to-go.
+;; Shape: {multifn-name-str {:dispatch-type :type
+;;                           :dispatch-arg-index N
+;;                           :arms [{:go-case-type "vm.ArrayVector"
+;;                                   :go-fn-name "_mm_<gomulti>_0"
+;;                                   :param-count K} ...]}}
+;; Only entries whose dispatch fn is a recognized (fn [x] (type x)) shape AND
+;; that have >=1 method whose dispatch-val maps confidently to a Go type are
+;; present (as :type). Everything else stays on the runtime vm.MultiFn path —
+;; defmulti-call-stmts returns nil for it. Unbound => off.
+(def ^:dynamic *defmulti-dispatchers* nil)
+
+(defn- defmulti-call-stmts [f closed-exprs nid]
+  "If this :call targets a same-ns type-dispatched multimethod present in
+   *defmulti-dispatchers*, emit a native `switch dispatchArg.(type) { ... }`:
+   one `case <GoType>:` per confidently-mapped method (calling its lowered Go
+   fn _mm_*), plus a `default:` arm reproducing the runtime vm.MultiFn
+   trampoline so every OTHER Go representation — and open/late methods — stay
+   correct. The default is the safety net: native arms are a partial
+   devirtualization, not a replacement for runtime dispatch. Returns the stmt
+   vector, or nil to fall through to the normal trampoline path."
+  (when *defmulti-dispatchers*
+    (let [refs   (ir/refs nid f)
+          callee (first refs)
+          nn     (load-var-ns+name f callee)]
+      ;; Same-ns only: the registry holds THIS ns's multifns, keyed by bare name.
+      ;; A call resolves to [ns name]; match only when ns is the ns being lowered
+      ;; (a cross-ns multifn call falls through to the trampoline → correct).
+      (when nn
+        (let [disp (get *defmulti-dispatchers* (second nn))]
+          (when (and disp
+                     (= :type (:dispatch-type disp))
+                     ;; Same-ns guard: the call's resolved ns must equal the
+                     ;; multifn var's home ns (both resolved through the var).
+                     ;; Fall back to the lowered ns name when home-ns is unknown
+                     ;; (multifn not yet interned at lower time).
+                     (= (first nn) (or (:home-ns disp) (str (ns-name *ns*)))))
+            (let [arg-exprs (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))
+                  di        (:dispatch-arg-index disp)
+                  arms      (filterv (fn [a] (= (:param-count a) (count arg-exprs)))
+                                     (:arms disp))]
+              (when (and (seq arms)
+                         (every? identity arg-exprs)
+                         (< di (count arg-exprs)))
+                (let [target    (if (live? f nid) (value-ident f nid) (gogen/ident "_"))
+                      disp-expr (nth arg-exprs di)
+                      arm->case (fn [arm]
+                                  (let [call (gogen/call (gogen/ident (:go-fn-name arm))
+                                                         (into [(gogen/ident "ec")] arg-exprs))]
+                                    (gogen/case-clause
+                                      [(gogen/type (:go-case-type arm))]
+                                      ;; The lowered method fn returns either
+                                      ;; (vm.Value, error) or a bare vm.Value,
+                                      ;; per :needs-error? — emit the matching
+                                      ;; assignment shape.
+                                      (if (:needs-error? arm)
+                                        (emit-call-stmts f target call)
+                                        [(gogen/assign "=" target call)]))))
+                      cases     (mapv arm->case arms)
+                      default   (gogen/case-clause nil
+                                  (trampoline-call-stmts f closed-exprs nid target refs))
+                      sw        (gogen/type-switch-stmt nil disp-expr (conj cases default))]
+                  [sw])))))))))
+
 (defn- call-assign-stmts [f closed-exprs nid]
   (or
     (ctor-call-stmts f closed-exprs nid)
     (devirtual-call-stmts f closed-exprs nid)
-    (let [refs       (ir/refs nid f)
-          arg-count  (count (rest refs))
-          target     (if (live? f nid)
-                       (value-ident f nid)
-                       (gogen/ident "_"))
-          entry      (lookup-direct-callable f (first refs) arg-count)
-          direct     (when entry (emit-typed-direct-call f closed-exprs nid target refs entry))]
+    (defmulti-call-stmts f closed-exprs nid)
+    (let [refs      (ir/refs nid f)
+          arg-count (count (rest refs))
+          target    (if (live? f nid)
+                      (value-ident f nid)
+                      (gogen/ident "_"))
+          entry     (lookup-direct-callable f (first refs) arg-count)
+          direct    (when entry (emit-typed-direct-call f closed-exprs nid target refs entry))]
       (if direct
         direct
-        (let [nn         (load-var-ns+name f (first refs))
-              ;; Lift EVERY trampoline-reaching :load-var callee (same-ns
-              ;; non-direct-callable + cross-ns) to cached-var IFn dispatch. This
-              ;; is var-mediated, so it resolves at runtime via the var's root
-              ;; whether or not the callee was emitted as a Go func — strictly
-              ;; more robust than a bare direct call (which dangles if the callee
-              ;; fell back) and it eliminates the per-call rt.LookupVar uniformly.
-              ;; record-cross-ns-var! no-ops when *cross-ns-vars-used* is unbound
-              ;; (pass 1 / per-fn lower), so base stays nil there. Branch on BASE,
-              ;; not nn: a load-var callee with base=nil must NOT build a dispatch.
-              base       (when nn (record-cross-ns-var! (first nn) (second nn)))
-              arg-exprs  (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))
-              args-slice (gogen/composite-lit (gogen/type "[]vm.Value") arg-exprs)]
-          (when (every? identity arg-exprs)
-            (if base
-              ;; Cross-ns cached-var IFn dispatch. rt.CachedVarFn resolves the
-              ;; callee var ONCE (memoized through the package-level __v_* pointer)
-              ;; and re-reads its fn root each call, so per call:
-              ;;   rt.CachedVarFn(&__v, "ns", "name").Invoke(args)
-              ;; Caching the *Var (not the fn) keeps the var as the override seam
-              ;; (^:dynamic / ^:redef / alter-var-root); .Invoke returns
-              ;; (vm.Value, error), so emit-call-stmts' 2-value form applies.
-              (let [cached-fn (gogen/call
-                                (gogen/field-sel (gogen/ident "rt") "CachedVarFn")
-                                [(gogen/unary "&" (gogen/ident base))
-                                 (gogen/string-lit (first nn))
-                                 (gogen/string-lit (second nn))])
-                    ;; Dispatch through ec so the callee (and any dynamic vars it
-                    ;; reads, or goroutines it spawns) sees the running context:
-                    ;;   ec.Invoke(rt.CachedVarFn(&__v, "ns", "name"), args)
-                    invoke    (gogen/call
-                                (gogen/field-sel (gogen/ident "ec") "Invoke")
-                                [cached-fn args-slice])]
-                (emit-call-stmts f target invoke))
-              ;; Default trampoline: callee value boxed, then rt.InvokeValueEC,
-              ;; which threads ec into the dynamic invocation path.
-              (let [callee (box-as-value f closed-exprs (first refs))
-                    invoke (gogen/call (gogen/field-sel (gogen/ident "rt") "InvokeValueEC")
-                                       [(gogen/ident "ec") callee args-slice])]
-                (when callee
-                  (if (keyword-callee-total? f refs)
-                    ;; Total keyword lookup: the error is always nil at arity
-                    ;; 1-2, so discard it (`_`) and skip the dead check.
-                    [(gogen/multi-assign "=" [target (gogen/ident "_")] [invoke])]
-                    (emit-call-stmts f target invoke)))))))))))
+        (trampoline-call-stmts f closed-exprs nid target refs)))))
 
 (defn- try-assign-stmts [f closed-exprs nid]
   "Lower a :try op (guarded region) to straight-line Go.
@@ -2913,6 +2987,56 @@
                    (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))] (vec (rest all-params)))
                    results
                    body)})))))
+
+(defn recognize-type-dispatch-fn [dispatch-fn]
+  "If `dispatch-fn` is the type-dispatch shape (fn [a b …] (type <param>)) —
+   a single body form `(type p)` where p is one of the params — return the
+   0-based index of the dispatched param. Else nil. Conservative: any other
+   shape (named fn, multi-form body, non-param arg, computed dispatch) → nil,
+   so the multimethod stays on the runtime path."
+  (when (and (seq? dispatch-fn) (= 'fn (first dispatch-fn)))
+    (let [tail   (next dispatch-fn)
+          tail   (if (symbol? (first tail)) (next tail) tail)  ; drop (fn name …)
+          params (first tail)
+          body   (next tail)]
+      (when (and (vector? params)
+                 (= 1 (count body))
+                 (seq? (first body))
+                 (= 'type (first (first body)))
+                 (= 2 (count (first body)))
+                 (symbol? (second (first body))))
+        (let [arg (second (first body))]
+          (first (keep-indexed (fn [i p] (when (= p arg) i)) params)))))))
+
+(defn dispatch-val-to-go-type [dispatch-val]
+  "Map a defmethod dispatch value to the Go concrete type for a `case <T>:` arm,
+   or nil if it cannot be mapped with CERTAINTY. Correctness contract: a value of
+   the returned Go type must have `(type v)` EXACTLY equal to dispatch-val's
+   runtime type — otherwise the native arm would mis-dispatch (the default arm
+   only catches UNMATCHED types, it cannot fix a wrong match). So only the
+   unambiguous, single-representation literal shapes are mapped; everything else
+   (non-empty vectors which may be PersistentVector, maps, ranges, custom types)
+   returns nil and routes through the runtime vm.MultiFn default arm.
+     (type [])       -> vm.ArrayVector   (empty vector literal is an ArrayVector)
+     (type (list))   -> *vm.List
+     (type (quote ())) -> *vm.List
+     (type #{})      -> vm.Set"
+  (when (and (seq? dispatch-val) (= 'type (first dispatch-val)) (= 2 (count dispatch-val)))
+    (let [elem (second dispatch-val)]
+      (cond
+        (and (vector? elem) (empty? elem)) "vm.ArrayVector"
+        (set? elem)                        "vm.Set"
+        (and (seq? elem) (= 'list (first elem))) "*vm.List"
+        (and (seq? elem) (= 'quote (first elem))
+             (seq? (second elem)) (empty? (second elem))) "*vm.List"
+        :else nil))))
+
+(defn defmulti-method-go-name [multifn-name idx]
+  "Deterministic package-level Go fn name for a multimethod's idx-th method
+   (source order). Lowercase `_mm_` prefix keeps it package-private; both the
+   decl emission (pipeline) and the call-site switch (defmulti-call-stmts) derive
+   the name identically from (multifn-name, idx)."
+  (str "_mm_" (clojure.string/replace (str multifn-name) #"[^A-Za-z0-9]" "_") "_" idx))
 
 (defn lower-defprotocol [decl]
   "Lower a defprotocol capture map to a Go interface type declaration.

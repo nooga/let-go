@@ -959,6 +959,58 @@ func cSwitchStmt(initV, tagV, clausesV vm.Value) (vm.Value, error) {
 	}), nil
 }
 
+// type-switch-stmt: (gogen/type-switch-stmt bind-name-or-nil expr [case-clauses])
+//
+//	-> *ast.TypeSwitchStmt
+//
+// A Go type switch `switch [x :=] expr.(type) { case *T: ... default: ... }`.
+// bind-name is a string for the bound variable form (`x := expr.(type)`); pass
+// nil for the binding-less form (`switch expr.(type)`). Each clause must be a
+// *ast.CaseClause (from cCaseClause) whose List holds TYPE expressions (e.g.
+// (gogen/type "*vm.ArrayVector")); an empty List yields the `default:` arm.
+func cTypeSwitchStmt(bindV, exprV, clausesV vm.Value) (vm.Value, error) {
+	expr, err := unboxExpr(exprV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/type-switch-stmt: expr: %w", err)
+	}
+	// The `.(type)` form is a TypeAssertExpr with a nil Type.
+	assert := &ast.TypeAssertExpr{X: expr, Type: nil}
+	var assign ast.Stmt
+	if bindV != vm.NIL {
+		name, err := asString(bindV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/type-switch-stmt: bind: %w", err)
+		}
+		assign = &ast.AssignStmt{
+			Lhs: []ast.Expr{ast.NewIdent(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{assert},
+		}
+	} else {
+		assign = &ast.ExprStmt{X: assert}
+	}
+	clauseVals, err := seqToValues(clausesV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/type-switch-stmt: clauses: %w", err)
+	}
+	body := make([]ast.Stmt, 0, len(clauseVals))
+	for i, cv := range clauseVals {
+		n, err := unboxNode(cv)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/type-switch-stmt: clause %d: %w", i, err)
+		}
+		cc, ok := n.(*ast.CaseClause)
+		if !ok {
+			return vm.NIL, fmt.Errorf("gogen/type-switch-stmt: clause %d: expected *ast.CaseClause, got %T", i, n)
+		}
+		body = append(body, cc)
+	}
+	return box(&ast.TypeSwitchStmt{
+		Assign: assign,
+		Body:   &ast.BlockStmt{List: body},
+	}), nil
+}
+
 // kv-expr: (gogen/kv-expr key value) -> *ast.KeyValueExpr
 // A key/value pair, used inside composite literals (map and struct).
 func cKVExpr(keyV, valueV vm.Value) (vm.Value, error) {
@@ -1820,6 +1872,7 @@ func installGogenNS() {
 		mk(wrap3Named("file", cFile)),
 		mk(wrap3Named("func-lit", cFuncLit)),
 		mk(wrap3Named("switch-stmt", cSwitchStmt)),
+		mk(wrap3Named("type-switch-stmt", cTypeSwitchStmt)),
 		mk(wrap3Named("field-decl", cFieldDecl)),
 		mk(wrap1Named("embed-field", cEmbedField)),
 		mk(wrap3Named("top-var-decl", cTopVarDecl)),

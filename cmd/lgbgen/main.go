@@ -787,7 +787,7 @@ func runGoTarget(outDir, codeDir string) {
 				fmt.Fprintf(os.Stderr, "%s: read error: %v\n", ns.name, err)
 				os.Exit(1)
 			}
-			if isDefnOnly(form) && isSingleArityDefn(form) {
+			if (isDefnOnly(form) && isSingleArityDefn(form)) || isMultimethodForm(form) {
 				defnForms = append(defnForms, form)
 			}
 		}
@@ -937,6 +937,29 @@ func isDefnOnly(form vm.Value) bool {
 		return false
 	}
 	return string(sym) == "defn" || string(sym) == "defn-"
+}
+
+// isMultimethodForm returns true for (defmulti ...) / (defmethod ...) forms.
+// They are forwarded to the Go-lowering pipeline (alongside defn forms) so
+// lower-ns-to-go can capture the dispatcher, lower type-dispatched methods to
+// native Go funcs, and devirtualize matching call sites to a `switch v.(type)`
+// (with a runtime-vm.MultiFn default arm). The pipeline filters them by
+// decl-kind; non-type-dispatched multimethods conservatively stay on the
+// runtime path.
+func isMultimethodForm(form vm.Value) bool {
+	list, ok := form.(vm.Sequable)
+	if !ok {
+		return false
+	}
+	seq := list.Seq()
+	if seq == nil {
+		return false
+	}
+	sym, ok := seq.First().(vm.Symbol)
+	if !ok {
+		return false
+	}
+	return string(sym) == "defmulti" || string(sym) == "defmethod"
 }
 
 // isSingleArityDefn reports whether a defn/defn- form has exactly one arity.
