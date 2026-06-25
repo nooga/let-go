@@ -828,6 +828,12 @@
                     (loop [sib-reg sibling-registry guard 0]
                       (let [cross (atom {})
                             reg (merge native-reg sib-reg)
+                            ;; Fresh per pass (like `cross`): the Go import paths of
+                            ;; cross-package callees direct-called in THIS pass, so
+                            ;; the converged pass's set is what the file imports. A
+                            ;; fn that direct-calls then falls back in a later pass
+                            ;; must not leave a dangling (unused) import behind.
+                            nimports (atom #{})
                             ;; *cross-package-registry* makes OTHER lowered packages'
                             ;; fns (with :go-pkg) visible so cross-package user calls
                             ;; lower to direct pkg.Fn(ec,…); empty {} when lowering a
@@ -838,14 +844,15 @@
                             ;; below selects from reg, not eff-reg).
                             eff-reg (merge lower-go/*cross-package-registry* reg)
                             res (binding [lower-go/*lowered-registry* eff-reg
-                                          lower-go/*native-imports-used* native-imports
-                                          lower-go/*cross-ns-vars-used* cross]
+                                          lower-go/*cross-ns-vars-used* cross
+                                          lower-go/*native-imports-used* nimports]
                                   (lower-defn-forms defn-forms))
                             sib-reg' (select-keys sib-reg (keys (emitted-registry res)))]
                         (if (or (= sib-reg' sib-reg) (>= guard cap))
-                          {:results res :cross cross}
+                          {:results res :cross cross :nimports nimports}
                           (recur sib-reg' (inc guard))))))
             cross-ns-vars (:cross pass2)
+            native-imports (:nimports pass2)
             results (:results pass2)
             ;; Filter out results with nil decls (failures that slipped through).
             valid-results (filterv (fn [r] (some? (:decl r))) results)
@@ -864,11 +871,17 @@
             ;; Native type/struct/method decls lead the file; Go resolves
             ;; package-scope references regardless of declaration order.
             all-results (into (into (into type-decls valid-results) extra-decls) cached-var-decls)
-            ;; Carry the accumulated native-module imports (corefns, …) into the
-            ;; file's import block via a decl-less import-only result.
+            ;; Carry the accumulated cross-package callee imports into the file's
+            ;; import block via a decl-less import-only result. Each gets an
+            ;; EXPLICIT alias (lower-go/pkg-alias-from) — the same alias the call
+            ;; sites emit — so a package whose leaf matches a local variable
+            ;; (e.g. `parser`) isn't shadowed and `alias.Fn` resolves. (Empty
+            ;; unless *cross-package-registry* drove direct cross-package calls;
+            ;; core's cross-ns calls trampoline and need no package import.)
             native-import-results (if (seq @native-imports)
                                     [{:decl nil
-                                      :imports (mapv (fn [p] {:path p}) (sort @native-imports))}]
+                                      :imports (mapv (fn [p] {:path p :alias (lower-go/pkg-alias-from p)})
+                                                     (sort @native-imports))}]
                                     [])
             all-results (into all-results native-import-results)
             file-ast (lower-go/file pkg-name all-results)]

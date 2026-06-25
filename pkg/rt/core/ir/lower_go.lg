@@ -1345,12 +1345,31 @@
 (defn- internal-ns-sym [ns-str]
   (or (get alias->internal-ns ns-str) (symbol ns-str)))
 
-(defn- pkg-alias-from [pkg-path]
-  ;; last path segment of a Go import path; "github.com/.../corefns" -> "corefns"
-  (loop [i (dec (count pkg-path))]
-    (cond (< i 0) pkg-path
-          (= (nth pkg-path i) \/) (subs pkg-path (inc i))
-          :else (recur (dec i)))))
+(defn pkg-alias-from [pkg-path]
+  ;; The explicit Go import alias for a cross-package callee, derived
+  ;; deterministically from its import path. Used in BOTH places that must agree:
+  ;; the import spec (pipeline.lg) and the call qualifier `alias.Fn` (below).
+  ;;
+  ;; A bare leaf segment (e.g. "parser" for .../yamlstar/parser/parser) collides
+  ;; with ubiquitous local variables of the same name — once `parser, _ := …`
+  ;; binds, the package import is shadowed and `parser.Fn` no longer resolves. So
+  ;; we use a `pkg_`-prefixed join of the last TWO path segments
+  ;; (.../parser/parser -> "pkg_parser_parser", .../parser/receiver ->
+  ;; "pkg_parser_receiver"): the prefix dodges local-var shadowing and two
+  ;; segments disambiguate same-leaf siblings within one file. Non-alphanumerics
+  ;; are mapped to "_" for a valid identifier.
+  (let [segs   (clojure.string/split pkg-path "/")  ; a vector (Clojure contract)
+        n      (count segs)
+        last2  (if (>= n 2) (subvec segs (- n 2) n) segs)
+        joined (clojure.string/join "_" last2)
+        safe   (apply str (map (fn [ch]
+                                 (let [c (clojure.core/int ch)]
+                                   (if (or (and (>= c (clojure.core/int \a)) (<= c (clojure.core/int \z)))
+                                           (and (>= c (clojure.core/int \A)) (<= c (clojure.core/int \Z)))
+                                           (and (>= c (clojure.core/int \0)) (<= c (clojure.core/int \9))))
+                                     ch \_)))
+                               joined))]
+    (str "pkg_" safe)))
 
 (defn registry-key [ns-sym name-str arity] [ns-sym name-str arity])
 
@@ -1568,10 +1587,10 @@
         coerced    (mapv (fn [rid spec] (coerce-arg-to-type f closed-exprs rid spec))
                          arg-rids
                          param-specs)
-        ;; A :go-pkg means the callee lives in ANOTHER Go package — a native
-        ;; module (:native?) OR a cross-ns lowered sibling — so qualify the call
-        ;; `pkg.Fn` and import that package. Intra-ns lowered siblings (no
-        ;; :go-pkg) call bare. The ec arg is separate (keyed on :native? below).
+        ;; Any :go-pkg callee — a native module (:native?) OR a cross-package
+        ;; lowered sibling (*cross-package-registry*, :native? false) — qualifies
+        ;; as `alias.Fn` and imports its package; intra-package siblings (:go-pkg
+        ;; nil) call bare. The alias MUST match native-import-results' pkg-alias-from.
         callee-ident (if (:go-pkg entry)
                        (gogen/field-sel
                          (gogen/ident (pkg-alias-from (:go-pkg entry)))
@@ -3056,8 +3075,9 @@
                             (let [entries (:imports result)]
                               (if entries entries [])))
                           results))
-        ;; Some results carry only :imports (e.g. native-module import
-        ;; carriers) with a nil :decl — skip those when collecting decls.
+        ;; Drop nil decls: an import-only result (cross-package callee imports,
+        ;; carried via {:decl nil :imports …}) contributes imports but no decl;
+        ;; a nil in File.Decls panics go/format.
         decls   (filterv some? (mapv (fn [result] (:decl result)) results))
         import-nodes (mapv import-spec-node imports)]
     (gogen/file pkg import-nodes decls)))
