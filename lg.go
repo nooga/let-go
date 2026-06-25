@@ -146,10 +146,12 @@ func checkBundledLGB() (lgb []byte, res []byte, storeID string) {
 func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string, basePath string) error {
 	ctx.SetSource(src)
 
-	// Snapshot the resource roots and output path *before* compiling — and
-	// absolutize them against the current cwd — because CompileMultiple runs
-	// the program's top-level forms, which may change the working directory.
-	// Relative roots resolved afterward would point at the wrong place.
+	// Snapshot the resource roots, output path, and storage store id *before*
+	// compiling — and absolutize the paths against the current cwd — because
+	// CompileMultiple runs the program's top-level forms, which may change the
+	// working directory. Relative roots resolved afterward would point at the
+	// wrong place, and the store id (which falls back to the cwd basename for
+	// main.lg/init.lg) would key off the changed directory.
 	resRoots := buildResourcePaths()
 	for i, r := range resRoots {
 		if abs, aerr := filepath.Abs(r); aerr == nil {
@@ -157,6 +159,7 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 		}
 	}
 	dstAbs, _ := filepath.Abs(dst)
+	bundleStoreID := storageIDForScript(src)
 
 	f, err := os.Open(src)
 	if err != nil {
@@ -232,11 +235,12 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 		return err
 	}
 
-	// Append the lgb payload + optional resource archive + trailer. Bake the
-	// store id (explicit -storage-id, else the source basename) so the bundle
-	// keys its storage by the app rather than by whatever the binary is renamed
-	// to at runtime. Mirrors the WASM build, which bakes the same id.
-	return bundle.AppendTrailer(out, lgbData, resArc, storageIDForScript(src))
+	// Append the lgb payload + optional resource archive + trailer. The store
+	// id (explicit -storage-id, else the source basename) was snapshotted
+	// before compilation so the bundle keys its storage by the app rather than
+	// by whatever the binary is renamed to at runtime, or by a directory the
+	// compiled forms chdir'd into. Mirrors the WASM build, which bakes the same id.
+	return bundle.AppendTrailer(out, lgbData, resArc, bundleStoreID)
 }
 
 func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string) error {
