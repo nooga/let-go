@@ -94,9 +94,11 @@ jobs:
           echo "Base (merge-base): ${base_sha}"
           echo "Head:              ${head_sha}"
 
-      # pkg/vm holds the micro-benchmark fleet plus BenchmarkRatchetAnchor (the
-      # normalization anchor), so -packages pkg/vm is a self-contained subset:
-      # fast, and it excludes the slow end-to-end test.BenchmarkClojureTestSuite.
+      # The pr-fast profile is the curated PR gate: the stable pkg/vm
+      # micro-benchmark families plus the anchor, with its own count/benchtime/
+      # budget. It drops the noisy sub-nanosecond families and the slow
+      # end-to-end suite, and keeps the selection in one place in bench-ratchet
+      # rather than spread across this workflow.
       - name: Bench merge-base
         env:
           BASE: ${{ steps.refs.outputs.base }}
@@ -107,8 +109,7 @@ jobs:
           make lowered
           go run ./cmd/bench-ratchet \
             -baseline "${RUNNER_TEMP}/base.json" \
-            -packages github.com/nooga/let-go/pkg/vm \
-            -count 3 -benchtime 500ms -timeout 15m \
+            -profile pr-fast -timeout 15m \
             update
 
       - name: Bench head and compare
@@ -125,8 +126,7 @@ jobs:
           # markdown report is the product; the exit code is ignored.
           go run ./cmd/bench-ratchet \
             -baseline "${RUNNER_TEMP}/base.json" \
-            -packages github.com/nooga/let-go/pkg/vm \
-            -count 3 -benchtime 500ms -timeout 15m \
+            -profile pr-fast -timeout 15m \
             -format markdown \
             check > "${RUNNER_TEMP}/report.md" || true
 
@@ -145,7 +145,7 @@ jobs:
 
           # Abbreviated PR comment: the preamble plus only rows past the budget
           # (REGRESSION/IMPROVED/NEW/MISSING), then a link to the full table. The
-          # full table (~120 rows) is too long for a comment; the run summary holds it.
+          # full table (~50 rows) is too long for a comment; the run summary holds it.
           total="$(grep -cE '^\| `' "${RUNNER_TEMP}/report.md" || true)"
           changed="$(grep -E '\| (REGRESSION|IMPROVED|NEW|MISSING) \|$' "${RUNNER_TEMP}/report.md" || true)"
           shown="$(printf '%s' "$changed" | grep -c . || true)"
