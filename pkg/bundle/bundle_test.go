@@ -12,11 +12,12 @@ import (
 	"testing"
 )
 
-func writeTrailerFile(t *testing.T, base, lgb, res []byte, kind string, lgbSizeField, resSizeField uint64) string {
+func writeTrailerFile(t *testing.T, base, lgb, res, id []byte, kind string, lgbSizeField, resSizeField, idSizeField uint64) string {
 	t.Helper()
 	buf := append([]byte{}, base...)
 	buf = append(buf, lgb...)
 	buf = append(buf, res...)
+	buf = append(buf, id...)
 	switch kind {
 	case "lgbx":
 		var tr [12]byte
@@ -28,6 +29,13 @@ func writeTrailerFile(t *testing.T, base, lgb, res []byte, kind string, lgbSizeF
 		binary.LittleEndian.PutUint64(tr[0:8], lgbSizeField)
 		binary.LittleEndian.PutUint64(tr[8:16], resSizeField)
 		copy(tr[16:], bundleMagicV2[:])
+		buf = append(buf, tr[:]...)
+	case "lgb3":
+		var tr [28]byte
+		binary.LittleEndian.PutUint64(tr[0:8], lgbSizeField)
+		binary.LittleEndian.PutUint64(tr[8:16], resSizeField)
+		binary.LittleEndian.PutUint64(tr[16:24], idSizeField)
+		copy(tr[24:], bundleMagicV3[:])
 		buf = append(buf, tr[:]...)
 	case "none":
 		// no trailer
@@ -53,21 +61,23 @@ func TestPayloadFitsFile(t *testing.T) {
 	const maxI64 = int64(^uint64(0) >> 1) // math.MaxInt64
 	cases := []struct {
 		name           string
-		lgb, res       uint64
+		lgb, res, id   uint64
 		trailer, total int64
 		want           bool
 	}{
-		{"legacy fits", 7, 0, 12, 30, true},
-		{"v2 fits exactly", 3, 6, 20, 29, true},
-		{"lgb exceeds file", 30, 0, 12, 30, false},
-		{"huge lgb", 0xFFFFFFFFFFFFFFFF, 0, 20, 30, false},
-		// Each size <= total, but lgb+res+trailer would overflow uint64 if summed.
-		{"sum overflows uint64", uint64(maxI64), uint64(maxI64), 20, maxI64, false},
+		{"legacy fits", 7, 0, 0, 12, 30, true},
+		{"v2 fits exactly", 3, 6, 0, 20, 29, true},
+		{"v3 fits exactly", 3, 6, 4, 28, 41, true},
+		{"v3 id exceeds remainder", 3, 6, 5, 28, 41, false},
+		{"lgb exceeds file", 30, 0, 0, 12, 30, false},
+		{"huge lgb", 0xFFFFFFFFFFFFFFFF, 0, 0, 20, 30, false},
+		// Each size <= total, but lgb+res+id+trailer would overflow uint64 if summed.
+		{"sum overflows uint64", uint64(maxI64), uint64(maxI64), uint64(maxI64), 28, maxI64, false},
 	}
 	for _, c := range cases {
-		if got := payloadFitsFile(c.lgb, c.res, c.trailer, c.total); got != c.want {
-			t.Errorf("%s: payloadFitsFile(%d,%d,%d,%d) = %v, want %v",
-				c.name, c.lgb, c.res, c.trailer, c.total, got, c.want)
+		if got := payloadFitsFile(c.lgb, c.res, c.id, c.trailer, c.total); got != c.want {
+			t.Errorf("%s: payloadFitsFile(%d,%d,%d,%d,%d) = %v, want %v",
+				c.name, c.lgb, c.res, c.id, c.trailer, c.total, got, c.want)
 		}
 	}
 }
@@ -77,10 +87,10 @@ func TestParseBundleTrailer(t *testing.T) {
 
 	t.Run("valid LGBX", func(t *testing.T) {
 		lgb := []byte("LGBDATA")
-		p := writeTrailerFile(t, base, lgb, nil, "lgbx", uint64(len(lgb)), 0)
-		gotLgb, gotRes := ReadBundled(p)
-		if string(gotLgb) != "LGBDATA" || gotRes != nil {
-			t.Fatalf("ReadBundled = (%q, %v), want (LGBDATA, nil)", gotLgb, gotRes)
+		p := writeTrailerFile(t, base, lgb, nil, nil, "lgbx", uint64(len(lgb)), 0, 0)
+		gotLgb, gotRes, gotID := ReadBundled(p)
+		if string(gotLgb) != "LGBDATA" || gotRes != nil || gotID != "" {
+			t.Fatalf("ReadBundled = (%q, %v, %q), want (LGBDATA, nil, \"\")", gotLgb, gotRes, gotID)
 		}
 		if bs, err := baseSize(t, p); err != nil || bs != int64(len(base)) {
 			t.Fatalf("BaseBinarySize = (%d, %v), want (%d, nil)", bs, err, len(base))
@@ -90,21 +100,45 @@ func TestParseBundleTrailer(t *testing.T) {
 	t.Run("valid LGB2", func(t *testing.T) {
 		lgb := []byte("LGB")
 		res := []byte("RESARC")
-		p := writeTrailerFile(t, base, lgb, res, "lgb2", uint64(len(lgb)), uint64(len(res)))
-		gotLgb, gotRes := ReadBundled(p)
-		if string(gotLgb) != "LGB" || string(gotRes) != "RESARC" {
-			t.Fatalf("ReadBundled = (%q, %q), want (LGB, RESARC)", gotLgb, gotRes)
+		p := writeTrailerFile(t, base, lgb, res, nil, "lgb2", uint64(len(lgb)), uint64(len(res)), 0)
+		gotLgb, gotRes, gotID := ReadBundled(p)
+		if string(gotLgb) != "LGB" || string(gotRes) != "RESARC" || gotID != "" {
+			t.Fatalf("ReadBundled = (%q, %q, %q), want (LGB, RESARC, \"\")", gotLgb, gotRes, gotID)
 		}
 		if bs, err := baseSize(t, p); err != nil || bs != int64(len(base)) {
 			t.Fatalf("BaseBinarySize = (%d, %v), want (%d, nil)", bs, err, len(base))
 		}
 	})
 
+	t.Run("valid LGB3 with resources", func(t *testing.T) {
+		lgb := []byte("LGB")
+		res := []byte("RESARC")
+		id := []byte("my-app")
+		p := writeTrailerFile(t, base, lgb, res, id, "lgb3", uint64(len(lgb)), uint64(len(res)), uint64(len(id)))
+		gotLgb, gotRes, gotID := ReadBundled(p)
+		if string(gotLgb) != "LGB" || string(gotRes) != "RESARC" || gotID != "my-app" {
+			t.Fatalf("ReadBundled = (%q, %q, %q), want (LGB, RESARC, my-app)", gotLgb, gotRes, gotID)
+		}
+		if bs, err := baseSize(t, p); err != nil || bs != int64(len(base)) {
+			t.Fatalf("BaseBinarySize = (%d, %v), want (%d, nil)", bs, err, len(base))
+		}
+	})
+
+	t.Run("valid LGB3 without resources", func(t *testing.T) {
+		lgb := []byte("LGBDATA")
+		id := []byte("solo")
+		p := writeTrailerFile(t, base, lgb, nil, id, "lgb3", uint64(len(lgb)), 0, uint64(len(id)))
+		gotLgb, gotRes, gotID := ReadBundled(p)
+		if string(gotLgb) != "LGBDATA" || gotRes != nil || gotID != "solo" {
+			t.Fatalf("ReadBundled = (%q, %v, %q), want (LGBDATA, nil, solo)", gotLgb, gotRes, gotID)
+		}
+	})
+
 	t.Run("corrupt huge lgbSize does not panic", func(t *testing.T) {
 		lgb := []byte("x")
 		// lgbSize field claims a size far larger than the file.
-		p := writeTrailerFile(t, base, lgb, nil, "lgb2", 0xFFFFFFFFFFFFFFFF, 0)
-		gotLgb, gotRes := ReadBundled(p)
+		p := writeTrailerFile(t, base, lgb, nil, nil, "lgb2", 0xFFFFFFFFFFFFFFFF, 0, 0)
+		gotLgb, gotRes, _ := ReadBundled(p)
 		if gotLgb != nil || gotRes != nil {
 			t.Fatalf("ReadBundled on corrupt trailer = (%q, %q), want (nil, nil)", gotLgb, gotRes)
 		}
@@ -113,10 +147,24 @@ func TestParseBundleTrailer(t *testing.T) {
 		}
 	})
 
+	t.Run("corrupt huge idSize does not panic", func(t *testing.T) {
+		lgb := []byte("x")
+		id := []byte("y")
+		// idSize field claims a size far larger than the file.
+		p := writeTrailerFile(t, base, lgb, nil, id, "lgb3", uint64(len(lgb)), 0, 0xFFFFFFFFFFFFFFFF)
+		gotLgb, _, gotID := ReadBundled(p)
+		if gotLgb != nil || gotID != "" {
+			t.Fatalf("ReadBundled on corrupt v3 trailer = (%q, %q), want (nil, \"\")", gotLgb, gotID)
+		}
+		if _, err := baseSize(t, p); err == nil {
+			t.Fatalf("BaseBinarySize on corrupt v3 trailer: expected error, got nil")
+		}
+	})
+
 	t.Run("non-bundle file", func(t *testing.T) {
 		junk := []byte("just some random bytes, definitely not a bundle trailer!!")
-		p := writeTrailerFile(t, junk, nil, nil, "none", 0, 0)
-		gotLgb, _ := ReadBundled(p)
+		p := writeTrailerFile(t, junk, nil, nil, nil, "none", 0, 0, 0)
+		gotLgb, _, _ := ReadBundled(p)
 		if gotLgb != nil {
 			t.Fatalf("ReadBundled on non-bundle = %q, want nil", gotLgb)
 		}
