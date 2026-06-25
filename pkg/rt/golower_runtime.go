@@ -102,6 +102,19 @@ func CachedVarFn(ptr **vm.Var, nsName, symName string) vm.Fn {
 	return (*ptr).Deref().(vm.Fn)
 }
 
+// CachedVarDeref is the value-position analogue of CachedVarFn: it memoizes the
+// *Var resolution into ptr (lazy, first use) and returns ec.Deref of it, so a
+// :load-var used as a value — e.g. a parser-combinator rule referencing a
+// sibling rule's var — pays the ns+symbol hash lookup once instead of on every
+// access, while ec.Deref still honors any active dynamic binding. Equivalent to
+// ec.Deref(rt.LookupVar(ns, name)) with the lookup cached.
+func CachedVarDeref(ec *vm.ExecContext, ptr **vm.Var, nsName, symName string) vm.Value {
+	if *ptr == nil {
+		*ptr = LookupVar(nsName, symName)
+	}
+	return ec.Deref(*ptr)
+}
+
 // InvokeValue applies a runtime callable using let-go's dynamic invocation path.
 func InvokeValue(target vm.Value, args []vm.Value) (vm.Value, error) {
 	return InvokeValueEC(nil, target, args)

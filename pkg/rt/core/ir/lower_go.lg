@@ -279,6 +279,7 @@
     :else nil))
 
 (declare go-name)
+(declare record-cross-ns-var!)
 
 (defn- source-name-of [f nid]
   "Pick a user-visible source name from the inst's attached source-infos,
@@ -666,20 +667,32 @@
           (lower-template-closure-expr (:template info) capture-exprs nid))))))
 
 (defn- load-var-deref-expr [aux]
-  "The inline `ec.Deref(rt.LookupVar(ns, name))` expression for a :load-var.
-   Resolves the var against the running ExecContext so an active dynamic
-   binding (e.g. inside a future or with-scope) is honoured, and derefs to the
-   value-typed root. This is the RHS of the var's one-time snapshot local;
-   :load-var is materialised (see local-carrying-op?), not re-emitted at uses."
-  (let [sym (symbol aux)
-        sns (namespace sym)
-        sn  (name sym)]
-    (gogen/call
-      (gogen/field-sel (gogen/ident "ec") "Deref")
-      [(gogen/call
-         (gogen/field-sel (gogen/ident "rt") "LookupVar")
-         [(gogen/string-lit (if (nil? sns) "core" sns))
-          (gogen/string-lit sn)])])))
+  "The `ec.Deref(<var>)` expression for a :load-var, honouring any active
+   dynamic binding and derefing to the value-typed root. When a recording
+   context is bound (*cross-ns-vars-used*), the var is memoized into a
+   package-level *vm.Var cell and read via rt.CachedVarDeref(ec, &cell, …) so
+   each reference pays the ns+symbol lookup ONCE rather than on every access —
+   the hot path for a parser-combinator rule referencing sibling rules. With no
+   recording context (e.g. an isolated unit test) it falls back to the inline
+   ec.Deref(rt.LookupVar(…))."
+  (let [sym    (symbol aux)
+        sns    (namespace sym)
+        sn     (name sym)
+        ns-str (if (nil? sns) "core" sns)
+        base   (record-cross-ns-var! ns-str sn)]
+    (if base
+      (gogen/call
+        (gogen/field-sel (gogen/ident "rt") "CachedVarDeref")
+        [(gogen/ident "ec")
+         (gogen/unary "&" (gogen/ident base))
+         (gogen/string-lit ns-str)
+         (gogen/string-lit sn)])
+      (gogen/call
+        (gogen/field-sel (gogen/ident "ec") "Deref")
+        [(gogen/call
+           (gogen/field-sel (gogen/ident "rt") "LookupVar")
+           [(gogen/string-lit ns-str)
+            (gogen/string-lit sn)])]))))
 
 (defn- value-expr [f closed-exprs nid]
   (let [op  (ir/op nid f)
