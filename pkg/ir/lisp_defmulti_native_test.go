@@ -67,4 +67,14 @@ func TestDefmultiNativeTypeSwitchLowering(t *testing.T) {
 	if !strings.Contains(rendered, "switch") {
 		t.Fatalf("expected a native switch, got a pure trampoline:\n%s", rendered)
 	}
+	// P1 guard (#326): the native arms are only valid while the multifn var
+	// still holds its frozen native baseline. The switch must be gated by
+	// rt.MultiFnNativeFrozen so a late defmethod falls back to runtime dispatch,
+	// and the ns must register the multifn for freezing at load.
+	if !strings.Contains(rendered, `rt.MultiFnNativeFrozen(&__v_clojure_core_tdnative, "clojure.core", "tdnative")`) {
+		t.Fatalf("native type-switch must be guarded by rt.MultiFnNativeFrozen:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, `rt.RegisterNativeMultiFns("core", []string{"tdnative"})`) {
+		t.Fatalf("ns must register its native multimethods for load-time freezing:\n%s", rendered)
+	}
 }

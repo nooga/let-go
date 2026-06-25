@@ -14,6 +14,12 @@ type MultiFn struct {
 	dispatchFn Fn
 	methods    *PersistentMap
 	defaultVal Value // dispatch value for the default method
+	// frozen marks a MultiFn whose method set was captured as the baseline for
+	// generated native dispatch arms (gogen_ir). AddMethod/RemoveMethod build a
+	// fresh struct, so the flag never propagates to an extended MultiFn — a late
+	// defmethod replaces the var's value with an unfrozen one, which is the
+	// signal the generated guard uses to fall back to runtime dispatch.
+	frozen bool
 }
 
 func NewMultiFn(name string, dispatchFn Fn, defaultVal Value) *MultiFn {
@@ -93,6 +99,17 @@ func (m *MultiFn) invokeIn(ec *ExecContext, args []Value) (Value, error) {
 func (m *MultiFn) Methods() *PersistentMap {
 	return m.methods
 }
+
+// FreezeNative marks this MultiFn as the captured baseline for generated
+// native dispatch arms. Done once, in place, at namespace-load completion
+// (rt.ApplyGoOverrides) — the var still points at this exact pointer, and any
+// later AddMethod/RemoveMethod yields a fresh, unfrozen MultiFn.
+func (m *MultiFn) FreezeNative() { m.frozen = true }
+
+// IsNativeFrozen reports whether this MultiFn is still the native baseline
+// (no defmethod has replaced it since FreezeNative). The generated type-switch
+// only trusts its baked arms while this holds.
+func (m *MultiFn) IsNativeFrozen() bool { return m.frozen }
 
 type theMultiFnType struct{}
 

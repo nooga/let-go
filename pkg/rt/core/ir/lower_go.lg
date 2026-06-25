@@ -1848,10 +1848,41 @@
                                         (emit-call-stmts f target call)
                                         [(gogen/assign "=" target call)]))))
                       cases     (mapv arm->case arms)
-                      default   (gogen/case-clause nil
-                                  (trampoline-call-stmts f closed-exprs nid target refs))
-                      sw        (gogen/type-switch-stmt nil disp-expr (conj cases default))]
-                  [sw])))))))))
+                      ;; The runtime trampoline: the default arm (unmapped Go
+                      ;; types) AND the not-frozen fallback both use it, so the
+                      ;; open/late path is byte-identical to the pure-trampoline
+                      ;; lowering. Computed once and shared.
+                      runtime   (trampoline-call-stmts f closed-exprs nid target refs)
+                      default   (gogen/case-clause nil runtime)
+                      sw        (gogen/type-switch-stmt nil disp-expr (conj cases default))
+                      ;; Currency guard. The baked `case <GoType>:` arms are only
+                      ;; valid while the multifn var still holds its frozen native
+                      ;; baseline (captured at ns-load). A late (defmethod …)
+                      ;; set!s the var to a fresh, unfrozen MultiFn, so the guard
+                      ;; falls to the runtime trampoline and the override is seen.
+                      ;; base is the __v_* pointer the trampoline already memoizes.
+                      ;;
+                      ;; FUTURE (closed-world AOT): a build with no `eval` and a
+                      ;; bound *main* has a CLOSED defmethod set — no late
+                      ;; (defmethod …) can run — so the guard is dead weight and
+                      ;; the bare `[sw]` (full devirtualization) is provably
+                      ;; correct. When a world-closedness analysis lands, emit the
+                      ;; unguarded switch here under that flag; the default stays
+                      ;; guarded for the open/library/REPL world.
+                      base      (record-cross-ns-var! (first nn) (second nn))]
+                  (if base
+                    [(gogen/if-stmt nil
+                       (gogen/call
+                         (gogen/field-sel (gogen/ident "rt") "MultiFnNativeFrozen")
+                         [(gogen/unary "&" (gogen/ident base))
+                          (gogen/string-lit (first nn))
+                          (gogen/string-lit (second nn))])
+                       [sw]
+                       runtime)]
+                    ;; No memoized var (does not occur in pass 2, where the
+                    ;; dispatcher registry is bound) — emit the always-correct
+                    ;; trampoline rather than an unguarded native switch.
+                    runtime))))))))))
 
 (defn- call-assign-stmts [f closed-exprs nid]
   (or

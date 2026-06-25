@@ -686,6 +686,22 @@
       "init" [] []
       [(gogen/expr-stmt register-call)])))
 
+(defn- native-multifn-init-decl [ns-name names]
+  "Build an init() that registers this ns's native-baked multimethods via
+   rt.RegisterNativeMultiFns(\"ns\", []string{...}). The runtime freezes them
+   as the native dispatch baseline once the ns finishes loading, so the
+   generated type-switch guard (rt.MultiFnNativeFrozen) can detect a later
+   defmethod and fall back to runtime dispatch."
+  (let [slice-lit (gogen/composite-lit
+                    (gogen/type "[]string")
+                    (mapv gogen/string-lit names))
+        register  (gogen/call
+                    (gogen/field-sel (gogen/ident "rt") "RegisterNativeMultiFns")
+                    [(gogen/string-lit ns-name) slice-lit])]
+    (gogen/func-decl
+      "init" [] []
+      [(gogen/expr-stmt register)])))
+
 (defn- override-entries [valid-results]
   "Lowered results eligible for override registration: single-arity fns
    (carry :fn-name) whose Go signature is uniformly vm.Value, so the
@@ -962,6 +978,19 @@
                            {:decl (override-init-decl (str ns-name) reg-entries)
                             :imports override-decl-imports}]
                           [])
+            ;; Native-baked multimethods (a :type dispatcher with >=1 arm) must
+            ;; be frozen at ns-load so the generated MultiFnNativeFrozen guard
+            ;; can detect later defmethods. Register them via their own init().
+            native-mm-names (sort (keep (fn [[nm entry]]
+                                          (when (and (= :type (:dispatch-type entry))
+                                                     (seq (:arms entry)))
+                                            nm))
+                                        defmulti-registry))
+            extra-decls (if (seq native-mm-names)
+                          (conj extra-decls
+                                {:decl (native-multifn-init-decl (str ns-name) native-mm-names)
+                                 :imports override-decl-imports})
+                          extra-decls)
             ;; Package-level cached *vm.Var decls + lazy accessors for the
             ;; recorded cross-ns callees (deterministic, sorted by base name).
             cached-var-decls (lower-go/cross-ns-var-decls @cross-ns-vars)

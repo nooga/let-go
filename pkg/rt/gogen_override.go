@@ -62,12 +62,53 @@ func ApplyGoOverrides(ns *vm.Namespace) {
 	if ns == nil {
 		return
 	}
-	defs := pendingGoOverrides[ns.Name()]
-	if defs == nil {
+	if defs := pendingGoOverrides[ns.Name()]; defs != nil {
+		for name, fn := range defs {
+			ns.Def(name, fn)
+		}
+		delete(pendingGoOverrides, ns.Name())
+	}
+	if names := pendingNativeMultiFns[ns.Name()]; names != nil {
+		freezeNativeMultiFns(ns, names)
+		delete(pendingNativeMultiFns, ns.Name())
+	}
+}
+
+// Native-baked multimethods (gogen_ir): a lowered package emitting native
+// type-switch dispatch arms registers its multifn names here so the runtime
+// can freeze them as the native baseline once the namespace finishes loading
+// — i.e. after bytecode replay has created the multifn var and applied every
+// build-time defmethod. A later defmethod then replaces the var with an
+// unfrozen MultiFn, and the generated guard falls back to runtime dispatch.
+var pendingNativeMultiFns = map[string][]string{}
+
+// RegisterNativeMultiFns queues multimethod names whose native dispatch arms
+// must be frozen for ns. If ns has already finished loading, the multifns are
+// frozen immediately (the immediate-apply path RegisterGoOverrides also uses);
+// otherwise they wait for ApplyGoOverrides.
+func RegisterNativeMultiFns(nsName string, names []string) {
+	if len(names) == 0 {
 		return
 	}
-	for name, fn := range defs {
-		ns.Def(name, fn)
+	if ns := LookupNS(nsName); ns != nil {
+		freezeNativeMultiFns(ns, names)
+		return
 	}
-	delete(pendingGoOverrides, ns.Name())
+	pendingNativeMultiFns[nsName] = append(pendingNativeMultiFns[nsName], names...)
+}
+
+// freezeNativeMultiFns marks each named var's MultiFn value as the native
+// baseline. Names that are absent or not bound to a MultiFn are skipped — the
+// generated guard treats a non-MultiFn / unfrozen value as "use runtime
+// dispatch", so a miss is safe, never incorrect.
+func freezeNativeMultiFns(ns *vm.Namespace, names []string) {
+	for _, name := range names {
+		v := ns.LookupLocal(vm.Symbol(name))
+		if v == nil {
+			continue
+		}
+		if mm, ok := v.Deref().(*vm.MultiFn); ok {
+			mm.FreezeNative()
+		}
+	}
 }

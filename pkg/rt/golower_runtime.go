@@ -83,6 +83,26 @@ func CachedVarFn(ptr **vm.Var, nsName, symName string) vm.Fn {
 	return (*ptr).Deref().(vm.Fn)
 }
 
+// MultiFnNativeFrozen reports whether the multimethod var still holds its
+// native baseline — the frozen *MultiFn captured at namespace-load completion.
+// Generated native dispatch (the type-switch with baked _mm_* arms) calls this
+// first and only takes the native arms when it returns true; otherwise it falls
+// back to runtime dispatch through the var, which sees any late defmethod.
+//
+// Resolution is lazy + memoized like CachedVarFn (the var pointer is filled on
+// first call). A nil var, a non-MultiFn value, or an unfrozen MultiFn all
+// return false — the safe default that routes through runtime dispatch.
+func MultiFnNativeFrozen(ptr **vm.Var, nsName, symName string) bool {
+	if *ptr == nil {
+		*ptr = LookupVar(nsName, symName)
+	}
+	if *ptr == nil {
+		return false
+	}
+	mm, ok := (*ptr).Deref().(*vm.MultiFn)
+	return ok && mm.IsNativeFrozen()
+}
+
 // InvokeValue applies a runtime callable using let-go's dynamic invocation path.
 func InvokeValue(target vm.Value, args []vm.Value) (vm.Value, error) {
 	return InvokeValueEC(nil, target, args)
