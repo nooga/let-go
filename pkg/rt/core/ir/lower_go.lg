@@ -1980,10 +1980,14 @@
             stmts      (cond-> []
                          need-local (conj (gogen/assign "=" (value-ident f nid) intern))
                          meta-x     (conj (gogen/expr-stmt
-                                            (gogen/call (gogen/field-sel (gogen/ident "rt") "ApplyVarMeta")
+                                            (gogen/call (gogen/field-sel (gogen/ident "rt") "ApplyVarMetaV")
                                                         [target meta-x])))
+                         ;; SetRoot is a *vm.Var method; target is typed vm.Value
+                         ;; (so the :def result stays a vm.Value downstream), so go
+                         ;; through rt.SetVarRoot which casts.
                          has-val    (conj (gogen/expr-stmt
-                                            (gogen/call (gogen/field-sel target "SetRoot") [valx]))))]
+                                            (gogen/call (gogen/field-sel (gogen/ident "rt") "SetVarRoot")
+                                                        [target valx]))))]
         (if (seq stmts)
           stmts
           ;; 1-arg (def x), not live, no meta: bare side-effecting intern.

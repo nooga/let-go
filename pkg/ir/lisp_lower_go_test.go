@@ -778,7 +778,7 @@ func TestLowerGoBridgeLowersDefWithValue(t *testing.T) {
 	if !strings.Contains(rendered, `rt.InternVar("`) || !strings.Contains(rendered, `"dvar")`) {
 		t.Fatalf("expected def to intern via rt.InternVar(ns, \"dvar\")\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, ".SetRoot(vm.Int(1))") {
+	if !strings.Contains(rendered, "rt.SetVarRoot(") || !strings.Contains(rendered, "vm.Int(1))") {
 		t.Fatalf("expected def value to set the var root\n--- go ---\n%s", rendered)
 	}
 }
@@ -798,8 +798,8 @@ func TestLowerGoBridgeLowersDefNoValue(t *testing.T) {
 	if !strings.Contains(rendered, `rt.InternVar("`) {
 		t.Fatalf("expected (def x) to intern via rt.InternVar\n--- go ---\n%s", rendered)
 	}
-	if strings.Contains(rendered, ".SetRoot(") {
-		t.Fatalf("expected no-value def to leave root unaffected (no SetRoot)\n--- go ---\n%s", rendered)
+	if strings.Contains(rendered, "rt.SetVarRoot(") {
+		t.Fatalf("expected no-value def to leave root unaffected (no SetVarRoot)\n--- go ---\n%s", rendered)
 	}
 }
 
@@ -815,13 +815,13 @@ func TestLowerGoBridgeDefEmitsDynamicMeta(t *testing.T) {
 	result := lowerGo(t, fn, ":bridge")
 
 	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "rt.ApplyVarMeta(") {
-		t.Fatalf("expected rt.ApplyVarMeta for ^:dynamic def\n--- go ---\n%s", rendered)
+	if !strings.Contains(rendered, "rt.ApplyVarMetaV(") {
+		t.Fatalf("expected rt.ApplyVarMetaV for ^:dynamic def\n--- go ---\n%s", rendered)
 	}
 	if !strings.Contains(rendered, `vm.Keyword("dynamic")`) {
 		t.Fatalf("expected emitted meta to carry :dynamic\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, ".SetRoot(vm.Int(1))") {
+	if !strings.Contains(rendered, "rt.SetVarRoot(") || !strings.Contains(rendered, "vm.Int(1))") {
 		t.Fatalf("expected def value to still set the var root\n--- go ---\n%s", rendered)
 	}
 }
@@ -836,12 +836,12 @@ func TestLowerGoBridgeDefEmitsDocstringMeta(t *testing.T) {
 	result := lowerGo(t, fn, ":bridge")
 
 	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "rt.ApplyVarMeta(") ||
+	if !strings.Contains(rendered, "rt.ApplyVarMetaV(") ||
 		!strings.Contains(rendered, `vm.Keyword("doc")`) ||
 		!strings.Contains(rendered, `vm.String("the doc")`) {
 		t.Fatalf("expected docstring to lower into :doc meta\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, ".SetRoot(vm.Int(1))") {
+	if !strings.Contains(rendered, "rt.SetVarRoot(") || !strings.Contains(rendered, "vm.Int(1))") {
 		t.Fatalf("expected def value to still set the var root\n--- go ---\n%s", rendered)
 	}
 }
@@ -856,8 +856,8 @@ func TestLowerGoBridgeDefNoMetaOmitsApplyVarMeta(t *testing.T) {
 	result := lowerGo(t, fn, ":bridge")
 
 	rendered := bindAndRenderGoDecl(t, result)
-	if strings.Contains(rendered, "rt.ApplyVarMeta(") {
-		t.Fatalf("plain def must not emit rt.ApplyVarMeta\n--- go ---\n%s", rendered)
+	if strings.Contains(rendered, "rt.ApplyVarMetaV(") {
+		t.Fatalf("plain def must not emit rt.ApplyVarMetaV\n--- go ---\n%s", rendered)
 	}
 }
 

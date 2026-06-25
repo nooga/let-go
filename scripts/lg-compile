@@ -47,6 +47,10 @@
   (and (seq? f)
        (let [h (first f)]
          (or (and (or (= h 'defn) (= h 'defn-)) (single-arity-defn? f))
+             ;; A valued top-level (def NAME value) lowers to a native
+             ;; var-initializer (rt.RegisterGoVarInits); (def NAME) alone is a
+             ;; declaration with no root and stays on bytecode.
+             (and (= h 'def) (> (count f) 2))
              (= h 'defmulti) (= h 'defmethod)))))
 
 (defn find-ns-name [forms]

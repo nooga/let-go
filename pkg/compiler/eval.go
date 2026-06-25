@@ -280,4 +280,5 @@ func postCoreInit() {
 	// bytecode-produced vars with NativeFn wrappers. No-op on untagged
 	// builds — pendingGoOverrides is empty, so this is one map lookup.
 	rt.ApplyGoOverrides(coreNS)
+	rt.ApplyGoVarInits(coreNS, vm.RootExecContext)
 }

@@ -26,6 +26,25 @@ func InternVar(nsName, symName string) *vm.Var {
 	return out
 }
 
+// SetVarRoot sets the root of a var whose handle is typed vm.Value (the
+// lowered :def path holds the InternVar result as vm.Value so a (def …) whose
+// value is used downstream — e.g. returned from a var-initializer — keeps a
+// vm.Value type). SetRoot is a *vm.Var method, so it can't be called on the
+// interface directly; this casts. A non-Var handle is a no-op.
+func SetVarRoot(v vm.Value, root vm.Value) {
+	if vr, ok := v.(*vm.Var); ok {
+		vr.SetRoot(root)
+	}
+}
+
+// ApplyVarMetaV is ApplyVarMeta for a var handle typed vm.Value (see
+// SetVarRoot). A non-Var handle is a no-op.
+func ApplyVarMetaV(v vm.Value, meta vm.Value) {
+	if vr, ok := v.(*vm.Var); ok {
+		ApplyVarMeta(vr, meta)
+	}
+}
+
 // ApplyVarMeta applies def metadata to v exactly as the bytecode defCompiler
 // does: it sets the var's meta map, then mirrors the :dynamic / :private flags
 // onto the Var. Shared by build-time def lowering (the apply-def-meta! builtin)

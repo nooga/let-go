@@ -416,6 +416,38 @@
     (= 'deftype (first form))
     {:decl-kind :deftype :name (nth form 1) :fields (nth form 2) :impls (vec (drop 3 form))}
 
+    ;; Top-level (def NAME value) / (def NAME doc value): lower the VALUE as the
+    ;; body of a synthetic zero-arg fn __init_<name>, forced to return
+    ;; (vm.Value, error) so it matches rt.GoVarInit.Init. lower-ns-to-go collects
+    ;; these and emits the RegisterGoVarInits registration; ApplyGoVarInits runs
+    ;; them with an ec at ns-load and SetRoots each var. The value's embedded
+    ;; (fn …) closures lower to native Go — the point of the whole exercise
+    ;; (a parser combinator tree that executes natively). Declaration-only
+    ;; (def NAME) carries no value and stays on the bytecode path.
+    (and (= 'def (first form)) (> (count form) 2) (= *target* :go))
+    (let [raw-sym  (nth form 1)
+          sym      (if (and (seq? raw-sym) (= (first raw-sym) 'with-meta))
+                     (second raw-sym) raw-sym)
+          val-form (last form)
+          init-sym (symbol (str "__init_" sym))
+          ;; Body is the def itself: the :def op interns the var + SetRoots the
+          ;; (boxed) value at runtime and yields the var, so the synth fn's
+          ;; result is uniformly vm.Value (no scalar narrowing) and matches
+          ;; rt.GoVarInit.Init. raw-sym preserves any ^meta for build-def.
+          expanded (list 'defn init-sym [] (list 'def raw-sym (expand-all val-form)))
+          ir-fn    (-> expanded ir.build/build-fn optimize-fn)
+          result   (binding [lower-go/*force-needs-error* true]
+                     (lower-go/lower ir-fn :bridge))]
+      (if (= :lowered (:status result))
+        (assoc result :var-init? true
+                      :var-name (str sym)
+                      :var-init-go-name (:go-name result)
+                      ;; Not a public fn: keep it out of the override + direct-call
+                      ;; registries (those gate on :fn-name + :override-eligible?).
+                      :fn-name nil
+                      :override-eligible? false)
+        result))
+
     ;; Otherwise, fall through to the existing defn logic
     :else
     (let [name-sym    (unwrap-name (nth form 1))
@@ -662,6 +694,28 @@
       "init" [] []
       [(gogen/expr-stmt register-call)])))
 
+(defn- var-init-init-decl [ns-name entries]
+  "Build an init() that calls rt.RegisterGoVarInits with an ordered
+   []rt.GoVarInit of {Name: <lisp var name>, Init: <__init fn>} — one per
+   top-level (def …) lowered to a native var-initializer. Order is source
+   order so ApplyGoVarInits' phase-1 pre-intern + in-order build matches the
+   bytecode def sequence."
+  (let [structs (mapv (fn [e]
+                        (gogen/composite-lit
+                          (gogen/type "rt.GoVarInit")
+                          [(gogen/kv-expr (gogen/ident "Name")
+                                          (gogen/string-lit (:var-name e)))
+                           (gogen/kv-expr (gogen/ident "Init")
+                                          (gogen/ident (:var-init-go-name e)))]))
+                      entries)
+        slice   (gogen/composite-lit-multi (gogen/type "[]rt.GoVarInit") structs)
+        register-call (gogen/call
+                        (gogen/field-sel (gogen/ident "rt") "RegisterGoVarInits")
+                        [(gogen/string-lit ns-name) slice])]
+    (gogen/func-decl
+      "init" [] []
+      [(gogen/expr-stmt register-call)])))
+
 (defn- override-entries [valid-results]
   "Lowered results eligible for override registration: single-arity fns
    (carry :fn-name) whose Go signature is uniformly vm.Value, so the
@@ -738,8 +792,13 @@
   (let [decl-form?  (fn [form]
                       (and (seq? form)
                            (contains? #{'defprotocol 'deftype} (first form))))
+        ;; Top-level (def …): valued defs lower to native var-initializers; a
+        ;; declaration-only (def NAME) carries no root and stays on bytecode.
+        def-form?   (fn [form] (and (seq? form) (= 'def (first form))))
+        valued-def? (fn [form] (and (def-form? form) (> (count form) 2)))
         decl-forms  (filterv decl-form? forms)
-        defn-forms0 (filterv (fn [form] (not (decl-form? form))) forms)
+        def-forms   (filterv valued-def? forms)
+        defn-forms0 (filterv (fn [form] (not (or (decl-form? form) (def-form? form)))) forms)
         ;; Capture each declaration form ({:decl-kind … :name … …}).
         captures    (mapv (fn [form] (binding [*target* :go] (compile-form* form))) decl-forms)
         protocols   (filterv (fn [c] (= :defprotocol (:decl-kind c))) captures)
@@ -849,10 +908,13 @@
                                   (lower-defn-forms defn-forms))
                             sib-reg' (select-keys sib-reg (keys (emitted-registry res)))]
                         (if (or (= sib-reg' sib-reg) (>= guard cap))
-                          {:results res :cross cross :nimports nimports}
+                          {:results res :cross cross :nimports nimports :eff-reg eff-reg}
                           (recur sib-reg' (inc guard))))))
             cross-ns-vars (:cross pass2)
             native-imports (:nimports pass2)
+            ;; The converged (dangling-free) registry pass2 settled on, reused to
+            ;; lower the var-init bodies so their calls devirtualize identically.
+            eff-reg (:eff-reg pass2)
             results (:results pass2)
             ;; Filter out results with nil decls (failures that slipped through).
             valid-results (filterv (fn [r] (some? (:decl r))) results)
@@ -865,12 +927,34 @@
                            {:decl (override-init-decl (str ns-name) reg-entries)
                             :imports override-decl-imports}]
                           [])
+            ;; Top-level (def …) var-initializers: lower each value (in source
+            ;; order) to a __init_<name> fn, then emit one init() registering
+            ;; them via rt.RegisterGoVarInits. Drained at ns-load by
+            ;; ApplyGoVarInits, which builds + SetRoots each var with an ec.
+            ;; Lowered INSIDE pass2's converged registry bindings (same atoms),
+            ;; so a rule body's cross-package combinator calls (p/any, …) and
+            ;; sibling-defn calls devirtualize to direct Go calls — and their
+            ;; cross-ns var caches + native imports flow into the same decls
+            ;; below — exactly as the defn bodies do. Without this the grammar
+            ;; emits thousands of ec.Invoke(CachedVarFn)/LookupVar trampolines.
+            var-init-results (binding [lower-go/*lowered-registry* eff-reg
+                                       lower-go/*cross-ns-vars-used* cross-ns-vars
+                                       lower-go/*native-imports-used* native-imports]
+                               (mapv (fn [form] (binding [*target* :go] (compile-form* form))) def-forms))
+            var-init-valid   (filterv (fn [r] (and (:var-init? r) (some? (:decl r)))) var-init-results)
+            var-init-decls   (if (seq var-init-valid)
+                               (conj (mapv (fn [r] {:decl (:decl r) :imports (:imports r)}) var-init-valid)
+                                     {:decl (var-init-init-decl (str ns-name) var-init-valid)
+                                      :imports override-decl-imports})
+                               [])
             ;; Package-level cached *vm.Var decls + lazy accessors for the
             ;; recorded cross-ns callees (deterministic, sorted by base name).
+            ;; Computed AFTER var-init lowering so the rule bodies' cross-ns
+            ;; refs are included.
             cached-var-decls (lower-go/cross-ns-var-decls @cross-ns-vars)
             ;; Native type/struct/method decls lead the file; Go resolves
             ;; package-scope references regardless of declaration order.
-            all-results (into (into (into type-decls valid-results) extra-decls) cached-var-decls)
+            all-results (into (into (into (into type-decls valid-results) extra-decls) cached-var-decls) var-init-decls)
             ;; Carry the accumulated cross-package callee imports into the file's
             ;; import block via a decl-less import-only result. Each gets an
             ;; EXPLICIT alias (lower-go/pkg-alias-from) — the same alias the call
