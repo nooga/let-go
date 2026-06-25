@@ -1560,3 +1560,69 @@ func TestLowerGoNestedCapturedClosurePrefixesAreLexical(t *testing.T) {
 		t.Fatalf("inner closure prefix %q must lexically extend outer %q (else inner param can shadow captured outer param)\n--- go ---\n%s", inner, outer, rendered)
 	}
 }
+
+// End-to-end through the file pipeline (ITER-0014, AC-MA.1/AC-MA.3): a
+// multi-arity defn must lower to a SINGLE dispatching value
+// (rt.MakeNativeMultiArity), registered as one Go override — not the legacy
+// per-arity path that emitted two colliding `func foo` decls and registered
+// nothing.
+func TestLowerNsToGoMultiArityRegistersDispatchingValue(t *testing.T) {
+	ensureLoader()
+	runLispExpr(t, `(create-ns 'matest)`)
+	v := runLispExpr(t, `(ir.passes.pipeline/lower-ns-to-go "matest" 'matest `+
+		`[(quote (defn foo ([x] x) ([x y] (+ x y))))])`)
+	src, ok := v.(vm.String)
+	if !ok {
+		t.Fatalf("expected rendered Go source string, got %T", v)
+	}
+	s := string(src)
+
+	if n := strings.Count(s, "func foo("); n != 1 {
+		t.Fatalf("expected exactly one `func foo(` decl (no redeclaration), got %d\n--- go ---\n%s", n, s)
+	}
+	if !strings.Contains(s, "rt.MakeNativeMultiArity") {
+		t.Fatalf("expected multi-arity defn to lower via rt.MakeNativeMultiArity\n--- go ---\n%s", s)
+	}
+	if !strings.Contains(s, "RegisterGoOverrides") || !strings.Contains(s, `"foo"`) {
+		t.Fatalf("expected foo to be registered as a Go override\n--- go ---\n%s", s)
+	}
+	// The constructor `foo(ec)` captures ec, so it cannot run at init time;
+	// registration defers it via rt.MakeNativeMultiArityDeferred(foo) (the
+	// constructor passed by reference, never eagerly called as foo()).
+	if !strings.Contains(s, "rt.MakeNativeMultiArityDeferred(foo)") {
+		t.Fatalf("expected deferred multi-arity registration rt.MakeNativeMultiArityDeferred(foo)\n--- go ---\n%s", s)
+	}
+	// Never wrap it as a 0-arity native fn (which would reject (foo 1 2) with an
+	// "expected 0" arity error).
+	if strings.Contains(s, "expected 0") {
+		t.Fatalf("multi-arity override must not be wrapped as a 0-arity fn\n--- go ---\n%s", s)
+	}
+}
+
+// A multi-arity defn whose last arity is variadic must lower too (ITER-0014,
+// AC-MA.2): the variadic branch becomes a Go-variadic closure (`args
+// ...vm.Value`) that packs the tail via rt.BoxRestArgs, and
+// rt.MakeNativeMultiArity / vm.MakeMultiArity dispatch.
+func TestLowerNsToGoVariadicMultiArityLowers(t *testing.T) {
+	ensureLoader()
+	runLispExpr(t, `(create-ns 'vmatest)`)
+	v := runLispExpr(t, `(ir.passes.pipeline/lower-ns-to-go "vmatest" 'vmatest `+
+		`[(quote (defn g ([x] x) ([x & more] more)))])`)
+	s := string(v.(vm.String))
+
+	if n := strings.Count(s, "func g("); n != 1 {
+		t.Fatalf("expected one `func g(` decl, got %d\n--- go ---\n%s", n, s)
+	}
+	if !strings.Contains(s, "rt.MakeNativeMultiArity") {
+		t.Fatalf("variadic multi-arity should lower via rt.MakeNativeMultiArity\n--- go ---\n%s", s)
+	}
+	if !strings.Contains(s, "args ...vm.Value") || !strings.Contains(s, "rt.BoxRestArgs") {
+		t.Fatalf("variadic arity should pack the tail via a Go-variadic closure + rt.BoxRestArgs\n--- go ---\n%s", s)
+	}
+	if !strings.Contains(s, "RegisterGoOverrides") || !strings.Contains(s, `"g"`) {
+		t.Fatalf("variadic multi-arity g should be registered as an override\n--- go ---\n%s", s)
+	}
+	if !strings.Contains(s, "rt.MakeNativeMultiArityDeferred(g)") {
+		t.Fatalf("expected deferred multi-arity registration rt.MakeNativeMultiArityDeferred(g)\n--- go ---\n%s", s)
+	}
+}

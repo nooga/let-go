@@ -160,6 +160,26 @@ func MakeNativeMultiArity(fns []vm.Value) vm.Value {
 	return v
 }
 
+// MakeNativeMultiArityDeferred registers a native-lowered multi-arity defn
+// whose constructor needs an ExecContext. A multi-arity defn lowers to a
+// constructor `func name(ec) vm.Value` that returns the rt.MakeNativeMultiArity
+// dispatch value; its per-arity branches capture that ec. The constructor
+// therefore cannot run at package-init time (init has no ec), and capturing a
+// single construction-time ec would be wrong for a value invoked later under a
+// different ec. So we defer: the registered override is a CtxNativeFn that, on
+// each invocation, builds the dispatch value with the live ec and dispatches
+// the args through it. Still fully native (no bytecode Frame.Run); the per-call
+// rebuild can be optimized away later when the arity bodies are ec-independent.
+func MakeNativeMultiArityDeferred(build func(ec *vm.ExecContext) vm.Value) vm.Value {
+	return vm.NewCtxNativeFn("", func(ec *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+		ma, ok := build(ec).(vm.Fn)
+		if !ok {
+			return vm.NIL, vm.NewExecutionError("multi-arity constructor did not return a callable")
+		}
+		return ec.Invoke(ma, args)
+	})
+}
+
 // Polymorphic binary-op helpers used by lower-go when an operand is
 // vm.Value-typed (type inference didn't narrow to a primitive). Each
 // mirrors the bytecode VM's OP_<X> handler: vm.Int/vm.Int fast path,

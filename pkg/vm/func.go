@@ -285,6 +285,13 @@ func MakeMultiArity(fns []Value) (*MultiArityFn, error) {
 		}
 		if rest, ok := f.(*Func); ok && rest.isVariadric {
 			ma.rest = rest
+		} else if rest, ok := f.(*NativeFn); ok && rest.isVariadric {
+			// Native-lowered variadic arity branches (rt.BoxNativeFn of a
+			// `func(args ...vm.Value)` closure) are *NativeFn, not *Func. Treat a
+			// variadic NativeFn as the rest branch too, or a native multi-arity
+			// defn's variadic arity would be mis-indexed as a fixed arity and
+			// reject any call with more than its declared arg count.
+			ma.rest = rest
 		} else if rest, ok := f.(*Closure); ok {
 			if ff, ok := rest.fn.(*Func); ok && ff.isVariadric {
 				ma.rest = rest

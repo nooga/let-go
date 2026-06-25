@@ -1396,7 +1396,10 @@
   ;; coerce-arg-to-type keeps it sound — a typed param is only direct-called
   ;; when the arg is proven that type, else the whole call falls back.
   (when-let [fn-name (:fn-name result)]
-    (when (:direct-callable? result)
+    ;; Multi-arity fns lower to a constructor returning a dispatching value;
+    ;; they must NOT seed a direct-call [ns name arity] entry — callers reach
+    ;; them through the registered override value instead (AC-MA.3).
+    (when (and (:direct-callable? result) (not (:multi-arity? result)))
       {(registry-key (internal-ns-sym (str ns-sym)) fn-name (:arity result))
        {:go-name (:go-name result) :arity (:arity result)
         :needs-error? (:needs-error? result)
@@ -2896,9 +2899,10 @@
       ;; register-init-decl). :override-eligible? is true only for
       ;; uniformly-vm.Value signatures the Part-1 wrapper can adapt
       ;; without coercion; typed (int/bool/…) and variadic fns are
-      ;; excluded and stay on bytecode. (Multi-arity defns never reach
-      ;; this path: lgbgen's runGoTarget pre-filters to isSingleArityDefn
-      ;; before calling lower-ns-to-go.)
+      ;; excluded and stay on bytecode. (Multi-arity defns reach this path
+      ;; as one reconstructed fn whose body returns the rt.MakeNativeMultiArity
+      ;; dispatch value; pipeline.lg tags that result :multi-arity? so it is
+      ;; kept out of the direct-call registry — see registry-entry-from-result.)
       {:status :lowered
        :imports imports
        :fn-name (str (ir/fn-name f))

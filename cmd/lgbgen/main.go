@@ -785,12 +785,16 @@ func runGoTarget(outDir, codeDir string) {
 			continue
 		}
 
-		// Read forms from source and pick out single-arity defn/defn- forms.
-		// defmacro forms are skipped for now — their bodies are macro
-		// template construction code that doesn't lower cleanly. Multi-arity
-		// functions are also skipped: the Go target emits one func per arity
-		// under the same Go name, which Go rejects as a redeclaration. They
-		// fall back to bytecode under -tags gogen_ir.
+		// Read forms from source and pick out defn/defn- forms (single- AND
+		// multi-arity). defmacro forms are still skipped — their bodies are macro
+		// template construction code that doesn't lower cleanly (native defmacro
+		// lowering is tracked separately). Multi-arity defns now lower to a single
+		// constructor returning an rt.MakeNativeMultiArity dispatch value
+		// (pipeline.lg routes them; see TestLowerNsToGo{,Variadic}MultiArity*),
+		// so they no longer collide. The pass-1/pass-2 sibling-emission asymmetry
+		// — a sibling that entered the direct-call registry in pass 1 but drops in
+		// pass 2 — is handled by lower-ns-to-go's pass-2 fixpoint, which re-lowers
+		// callers against the shrunken registry so no direct call can dangle.
 		r := compiler.NewLispReader(strings.NewReader(src), "<embedded:"+ns.name+">")
 		var defnForms []vm.Value
 		for {
@@ -807,7 +811,7 @@ func runGoTarget(outDir, codeDir string) {
 				fmt.Fprintf(os.Stderr, "%s: read error: %v\n", ns.name, err)
 				os.Exit(1)
 			}
-			if isDefnOnly(form) && isSingleArityDefn(form) {
+			if isDefnOnly(form) {
 				defnForms = append(defnForms, form)
 			}
 		}
@@ -939,9 +943,10 @@ func writeGogenWireup(pkgNames []string, codeDir string) {
 // (a public or private function definition), but not defmacro. Both defn
 // and defn- are candidates for Go lowering: private helpers are called by
 // the public functions in the same namespace, so omitting them would
-// silently drop their native lowering and fall back to bytecode. Callers
-// must additionally gate on isSingleArityDefn — see its note on why
-// multi-arity forms cannot lower to a single Go function.
+// silently drop their native lowering and fall back to bytecode. Both
+// single- and multi-arity defns are admitted — multi-arity forms lower to a
+// single constructor returning an rt.MakeNativeMultiArity dispatch value
+// (see pipeline.lg), so they no longer collide as redeclared Go funcs.
 func isDefnOnly(form vm.Value) bool {
 	list, ok := form.(vm.Sequable)
 	if !ok {
@@ -957,31 +962,4 @@ func isDefnOnly(form vm.Value) bool {
 		return false
 	}
 	return string(sym) == "defn" || string(sym) == "defn-"
-}
-
-// isSingleArityDefn reports whether a defn/defn- form has exactly one arity.
-// A single-arity form places its argument vector at the top level —
-// (defn name docstring? meta? [args] body...) — whereas a multi-arity form
-// wraps each arity in its own list — (defn name ([a] ...) ([a b] ...)) — and
-// so has no top-level vector. The Go target emits one func per arity under
-// the same Go name; for multi-arity that is a redeclaration Go rejects, so
-// those forms are skipped and run as bytecode under -tags gogen_ir.
-func isSingleArityDefn(form vm.Value) bool {
-	list, ok := form.(vm.Sequable)
-	if !ok {
-		return false
-	}
-	seq := list.Seq()
-	if seq == nil {
-		return false
-	}
-	// Skip the head (defn/defn-) and the name symbol; scan the remaining
-	// top-level elements for an argument vector.
-	for s := seq.Next(); s != nil; s = s.Next() {
-		switch s.First().(type) {
-		case vm.ArrayVector, vm.PersistentVector:
-			return true
-		}
-	}
-	return false
 }
