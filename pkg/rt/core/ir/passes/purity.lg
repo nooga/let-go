@@ -1,4 +1,3 @@
-;; lgbgen:skip-go — not yet wired into the ir-exploration pipeline; bytecode only
 ;; Purity analysis — single source of truth for "is this side-effect-free?"
 ;; questions, queried at four nested levels:
 ;;
@@ -22,6 +21,7 @@
 
 (ns ir.passes.purity
   (:require
+   [ir.data]
    [ir.passes.mutability :as mut]))
 
 ;; --- Op-level -----------------------------------------------------------
