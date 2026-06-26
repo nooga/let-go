@@ -513,15 +513,19 @@
   ;; Refs[1:] are the args), matching OpCall in op_generated.go.
   ;; Head may be a computed expression, not just a symbol.
   ;;
-  ;; Build args FIRST so any nested control-flow inside args switches to
-  ;; a join block BEFORE we build the head.  Otherwise the head (e.g. a
-  ;; LoadVar for `not`) ends up in the entry block while the Call ends
-  ;; up in the join block — a cross-block ref.
-  (let [head    (first form)
-        arg-ids (build-args (rest form) ctx)
-        fn-id   (if (symbol? head)
-                  (build-symbol head ctx)
-                  (build-form head ctx))]
+  ;; Build the head, then build-call-with-head builds the args ONCE and
+  ;; threads the head id through any block joins the args introduce (via
+  ;; bind-local!/lookup-local), so a head built in an earlier block and a
+  ;; Call emitted in a later join block is NOT a cross-block ref. An earlier
+  ;; implementation also built the args here first (purely to switch blocks
+  ;; before building the head) and discarded the result — but that left a dead
+  ;; duplicate of every nested-call argument in the stream. Harmless for pure
+  ;; ops (DCE drops them), but a dead duplicate of an EFFECTFUL call — e.g.
+  ;; (chunk b), which consumes its buffer — still executes and corrupts state.
+  (let [head  (first form)
+        fn-id (if (symbol? head)
+                (build-symbol head ctx)
+                (build-form head ctx))]
     (build-call-with-head fn-id (rest form) ctx)))
 
 (defn- method-call-head?
