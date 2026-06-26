@@ -1630,13 +1630,20 @@
                    (not= result-spec "vm.Value"))
               (let [boxed (box-result-from-type raw-call result-spec)]
                 [(gogen/assign "=" target boxed)])
-              ;; Typed result + error: tr<nid>, te<nid> := <call>; if err return;
-              ;; target = vm.<Box>(tr<nid>). The intermediate result+err vars are
-              ;; declared in-place with `:=` under UNIQUE names keyed by the node's
+              ;; Typed result + error: { tr<nid>, te<nid> := <call>; if err return;
+              ;; target = vm.<Box>(tr<nid>) }. The result+err vars are declared
+              ;; in-place with `:=` under UNIQUE names keyed by the node's
               ;; Indexed-RPN position nid (the typed result can't be assigned to the
               ;; vm.Value target directly, and a fixed `result` name would collide
               ;; across multiple typed-error calls in one fn). The RPN index is
               ;; positional → stable, so the names stay deterministic across regens.
+              ;;
+              ;; The trio is wrapped in a bare `{ … }` block (like the :try
+              ;; lowering) so tr/te are BLOCK-scoped, not statement-list-scoped.
+              ;; Otherwise, when this call lands in a goto-CFG block, an earlier
+              ;; `goto <later-label>` jumps OVER the `:=` declaration — illegal Go
+              ;; ("goto jumps over declaration"). target is the outer hoisted var,
+              ;; assigned from inside the block, so it stays visible afterward.
               (and (:needs-error? entry)
                    (not= result-spec "vm.Value"))
               (let [res-id (gogen/ident (str "tr" nid))
@@ -1654,7 +1661,7 @@
                                              nil)
                     boxed (box-result-from-type res-id result-spec)
                     box-assign (gogen/assign "=" target boxed)]
-                [assign err-check box-assign])
+                [(gogen/block-stmt [assign err-check box-assign])])
               ;; vm.Value result, no error: target = <call>
               (= result-spec "vm.Value")
               [(gogen/assign "=" target raw-call)]
