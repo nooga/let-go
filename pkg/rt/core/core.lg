@@ -1,4 +1,9 @@
-;; lgbgen:skip-go — multi-arity / macro forms do not emit valid Go; bytecode only
+;; core is Go-lowered: multi-arity defns lower to one rt.MakeNativeMultiArity
+;; dispatch value (ITER-0014) and defmacro forms are skipped per-form, so the
+;; old "doesn't emit valid Go" blocker is gone. With cross-namespace direct
+;; calling, callers into core emit direct `core.Fn(ec, …)` calls instead of the
+;; allocating ec.Invoke(CachedVarFn(…)) trampoline — the point of lowering it.
+;; (Was `;; lgbgen:skip-go`.)
 
 ;
 ; Copyright (c) 2021 Marcin Gasperowicz <xnooga@gmail.com>
