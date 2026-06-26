@@ -188,7 +188,7 @@ func (l *Closure) invokeIn(ec *ExecContext, pargs []Value) (result Value, err er
 		var variant Fn
 		if f, ok := mfn.fns[le]; ok {
 			variant = f
-		} else if mfn.rest != nil && le >= mfn.rest.Arity() {
+		} else if mfn.rest != nil && le >= restMinArity(mfn.rest) {
 			variant = mfn.rest
 		} else {
 			return NIL, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", l, le))
@@ -254,7 +254,7 @@ func (l *MultiArityFn) invokeIn(ec *ExecContext, pargs []Value) (Value, error) {
 	if f, ok := l.fns[le]; ok {
 		return ec.Invoke(f, pargs)
 	}
-	if l.rest != nil && le >= l.rest.Arity() {
+	if l.rest != nil && le >= restMinArity(l.rest) {
 		return ec.Invoke(l.rest, pargs)
 	}
 	return NIL, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", l, le))
@@ -262,6 +262,20 @@ func (l *MultiArityFn) invokeIn(ec *ExecContext, pargs []Value) (Value, error) {
 
 func (l *MultiArityFn) String() string {
 	return fmt.Sprintf("<mfn %s %p>", l.name, l)
+}
+
+// restMinArity returns the minimum argument count the variadic rest branch f
+// accepts. A variadic *NativeFn stores arity = its declared Go parameter count
+// (the fixed params PLUS the trailing ...slice), so its minimum accepted count
+// is arity-1; *Func/*Closure already report the fixed-param count as Arity().
+// Multi-arity dispatch uses this so a native variadic branch like
+// (fn [x & more] …) accepts its minimum call (one arg, empty rest), matching
+// *Func variadic semantics.
+func restMinArity(f Fn) int {
+	if nf, ok := f.(*NativeFn); ok && nf.isVariadric {
+		return nf.arity - 1
+	}
+	return f.Arity()
 }
 
 func MakeMultiArity(fns []Value) (*MultiArityFn, error) {

@@ -80,3 +80,38 @@ func TestMakeNativeMultiArityDeferredDispatch(t *testing.T) {
 		t.Fatalf("re-invoke arity-1 = %v (err %v), want 42", r3, err)
 	}
 }
+
+// TestNativeVariadicOnlyAcceptsMinArity guards the variadic-min-arity edge a
+// fixed companion branch would mask: a native multi-arity defn whose ONLY
+// matching branch is variadic — `(defn f ([x & more] more))` — must accept its
+// minimum-arity call `(f 1)` with `more = ()`. A variadic *NativeFn stores
+// arity = declared Go params (fixed + the ...slice), so its minimum accepted
+// count is arity-1; dispatching on Arity() directly wrongly rejects the call.
+func TestNativeVariadicOnlyAcceptsMinArity(t *testing.T) {
+	ec := vm.NewExecContext()
+
+	// Only a variadic branch, no fixed arity-1 — so (f 1) can ONLY match the
+	// rest branch with an empty tail.
+	fn := MakeNativeMultiArity([]vm.Value{
+		BoxNativeFn(func(arg0 vm.Value, args ...vm.Value) (vm.Value, error) {
+			return BoxRestArgs(args), nil
+		}),
+	})
+	callable, ok := fn.(vm.Fn)
+	if !ok {
+		t.Fatalf("multi-arity value is not callable: %T", fn)
+	}
+
+	r, err := ec.Invoke(callable, []vm.Value{vm.Int(1)})
+	if err != nil {
+		t.Fatalf("variadic-min (f 1) errored: %v", err)
+	}
+	// more = () : an empty seq — its First() is vm.NIL (a Value, not Go nil).
+	if seq, ok := r.(vm.Seq); ok {
+		if seq.First() != vm.NIL {
+			t.Fatalf("variadic-min (f 1) rest = %v, want () empty", r)
+		}
+	} else if r != vm.NIL {
+		t.Fatalf("variadic-min (f 1) = %v (%T), want an empty seq", r, r)
+	}
+}
