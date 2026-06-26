@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -112,7 +113,11 @@ func generateLoweredTree(repoRoot, bin, runDir string) (string, error) {
 
 	// cmd.Dir is the repo root so lgbgen can read the .lg sources, but the
 	// lowered tree and wireup both go to absolute temp dirs under runDir.
-	cmd := exec.Command(bin, "--target=go", "--code-dir", codeDir, outDir)
+	// --source-paths includes pkg/rt/gogen so the ns->Go-package manglers
+	// (gogen/ns->go-pkg) used by cross-package lowering resolve — mirrors the
+	// Makefile's LGBGEN-SOURCE-PATHS that every --target=go invocation passes.
+	sourcePaths := strings.Join([]string{"pkg/rt/core", "pkg/rt/gogen"}, string(os.PathListSeparator))
+	cmd := exec.Command(bin, "--target=go", "--source-paths", sourcePaths, "--code-dir", codeDir, outDir)
 	cmd.Dir = repoRoot
 
 	// Capture stderr (timing summary / warnings) for the failure message.
