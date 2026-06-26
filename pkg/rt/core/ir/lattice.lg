@@ -15,7 +15,11 @@
 ;;   - bitset mask form (O(1) join for the hot worklist; pure-kind only —
 ;;     numeric VALUES live in the separate numeric track, not here)
 
-(ns ir.lattice)
+(ns ir.lattice
+  ;; ir.data supplies the ir/* accessors (ir/fn-name, ir/type-of, …) used below.
+  ;; Require it so a fresh source-stdlib bootstrap resolves them regardless of
+  ;; namespace load order.
+  (:require [ir.data]))
 
 (def ^:private type-order
   {:true 0

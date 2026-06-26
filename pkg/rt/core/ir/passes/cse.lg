@@ -15,6 +15,7 @@
 
 (ns ir.passes.cse
   (:require
+   [ir.data]
    [ir.passes.mutability :as mut]
    ;; Explicit dependency: cse-eligible? consults purity/pure-ops directly
    ;; rather than relying on a transitive load or bundle ordering.
