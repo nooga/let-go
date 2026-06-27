@@ -78,3 +78,44 @@ func TestDefmultiNativeTypeSwitchLowering(t *testing.T) {
 		t.Fatalf("ns must register its native multimethods for load-time freezing:\n%s", rendered)
 	}
 }
+
+// P1 regression: repeated defmethod definitions for the same dispatch value are
+// last-write-wins at runtime (the later method replaces the earlier in the
+// MultiFn map). The native type-switch must collapse them to a SINGLE
+// `case <GoType>:` arm calling the latest method — two arms would (a) be invalid
+// Go (duplicate case) and (b) let an older/stale-arity arm win over the runtime's
+// latest method.
+func TestDefmultiNativeDuplicateDispatchCollapsed(t *testing.T) {
+	ensureLoader()
+
+	runLispExpr(t, `(do
+	  (defmulti tddup (fn [x] (type x)) :default :default)
+	  (defmethod tddup (type []) [x] :first)
+	  (defmethod tddup (type []) [x] :second)
+	  (defmethod tddup :default  [x] :other))`)
+
+	v := runLispExpr(t, `(ir.passes.pipeline/lower-ns-to-go "tdduppkg" (quote core)
+	  (quote [(defmulti tddup (fn [x] (type x)) :default :default)
+	          (defmethod tddup (type []) [x] :first)
+	          (defmethod tddup (type []) [x] :second)
+	          (defmethod tddup :default  [x] :other)
+	          (defn call-tddup [x] (tddup x))]))`)
+
+	s, ok := v.(vm.String)
+	if !ok {
+		t.Fatalf("expected rendered Go string, got %T: %v", v, v)
+	}
+	rendered := string(s)
+
+	// Exactly one ArrayVector arm — the duplicate must be collapsed.
+	if n := strings.Count(rendered, "case vm.ArrayVector:"); n != 1 {
+		t.Fatalf("expected exactly 1 `case vm.ArrayVector:` arm (last-wins collapse), got %d:\n%s", n, rendered)
+	}
+	// Last-wins: the surviving arm is the SECOND method (_mm_tddup_1), not the first.
+	if !strings.Contains(rendered, "_mm_tddup_1(ec") {
+		t.Fatalf("collapsed arm must call the LAST method (_mm_tddup_1):\n%s", rendered)
+	}
+	if strings.Contains(rendered, "_mm_tddup_0(ec") {
+		t.Fatalf("stale first method (_mm_tddup_0) must not be dispatched after a later redefinition:\n%s", rendered)
+	}
+}

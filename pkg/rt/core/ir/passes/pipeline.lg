@@ -875,8 +875,29 @@
                                             :decl {:decl (:decl result)
                                                    :imports (or (:imports result) [vm-import rt-import])}})))))
                                  methods))
-                          arms  (mapv :arm arm+decl)
-                          decls (mapv :decl arm+decl)]
+                          ;; Runtime multimethod semantics are last-write-wins
+                          ;; by dispatch value: a later (defmethod mm dv …)
+                          ;; replaces the earlier method in the MultiFn map. For
+                          ;; the native :type switch each :go-case-type IS that
+                          ;; dispatch value's Go representation, so two
+                          ;; (defmethod mm (type []) …) would otherwise emit
+                          ;; duplicate `case vm.ArrayVector:` clauses — invalid
+                          ;; Go, and semantically wrong (an older arm could win,
+                          ;; or a stale-arity arm survive the call-site
+                          ;; :param-count filter while the runtime would use the
+                          ;; latest method). Collapse to the LAST arm+decl per
+                          ;; :go-case-type, kept at its last source position so
+                          ;; native dispatch matches runtime last-wins. No
+                          ;; duplicates → identical to source order, no churn.
+                          collapsed (let [last-ix (reduce (fn [m [i x]]
+                                                            (assoc m (:go-case-type (:arm x)) i))
+                                                          {} (map-indexed vector arm+decl))]
+                                      (mapv second
+                                            (filterv (fn [[i x]]
+                                                       (= i (get last-ix (:go-case-type (:arm x)))))
+                                                     (map-indexed vector arm+decl))))
+                          arms  (mapv :arm collapsed)
+                          decls (mapv :decl collapsed)]
                       (if (seq arms)
                         {:name  mm-name
                          ;; :home-ns is the multifn var's namespace, resolved the
