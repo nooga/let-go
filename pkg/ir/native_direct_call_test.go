@@ -90,6 +90,33 @@ func runLispString(t *testing.T, expr string) string {
 	return string(s)
 }
 
+// TestBuildCallEvaluatesCalleeFirst guards call evaluation order: the bytecode
+// compiler evaluates the CALLEE before the arguments, so the gogen lowering must
+// too. build-call builds the head first, then build-call-with-head (which builds
+// the args once and threads the head across argument control-flow joins). If it
+// instead built arguments first, an argument carrying a side effect would run
+// before the callee — observable here as the ARGMARK println emitted ahead of the
+// HEADMARK println in the lowered Go.
+func TestBuildCallEvaluatesCalleeFirst(t *testing.T) {
+	ensureLoader()
+	rendered := runLispString(t,
+		`(do (create-ns (quote evordns))
+		     (intern (quote evordns) (quote probe))
+		     (ir.passes.pipeline/lower-ns-to-go "evordns" (quote evordns)
+		       [(quote (defn probe [x]
+		                 ((do (println :HEADMARK) identity)
+		                  (if x (do (println :ARGMARK) 1) 2))))]))`)
+
+	head := strings.Index(rendered, `vm.Keyword("HEADMARK")`)
+	arg := strings.Index(rendered, `vm.Keyword("ARGMARK")`)
+	if head < 0 || arg < 0 {
+		t.Fatalf("expected both HEADMARK and ARGMARK in lowered Go (head=%d arg=%d):\n%s", head, arg, rendered)
+	}
+	if head > arg {
+		t.Fatalf("callee must be evaluated before arguments: HEADMARK (%d) emitted after ARGMARK (%d):\n%s", head, arg, rendered)
+	}
+}
+
 // TestWithRedefsDisablesNativeDirect guards the Var override seam: a body that
 // rebinds a core var via with-redefs must NOT lower calls to that var into a
 // baked native-direct call (corefns.Count), because with-redefs mutates the

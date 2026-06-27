@@ -520,15 +520,21 @@
   ;; Refs[1:] are the args), matching OpCall in op_generated.go.
   ;; Head may be a computed expression, not just a symbol.
   ;;
-  ;; Build args FIRST so any nested control-flow inside args switches to
-  ;; a join block BEFORE we build the head.  Otherwise the head (e.g. a
-  ;; LoadVar for `not`) ends up in the entry block while the Call ends
-  ;; up in the join block — a cross-block ref.
-  (let [head    (first form)
-        arg-ids (build-args (rest form) ctx)
-        fn-id   (if (symbol? head)
-                  (build-symbol head ctx)
-                  (build-form head ctx))]
+  ;; Evaluation order: the bytecode compiler evaluates the CALLEE first, then
+  ;; the arguments. So build the head first, then build-call-with-head, which
+  ;; builds the args ONCE and threads the already-built head across any block
+  ;; join a control-flow argument introduces (it binds the head to a head__ local
+  ;; and re-looks it up after build-args). That threading is exactly what keeps
+  ;; the head out of a stale block — the old code instead pre-built the args
+  ;; purely for that block-switching side effect, discarded them, then let
+  ;; build-call-with-head rebuild them, duplicating every argument expression into
+  ;; the IR (a dead copy + the live copy). Building the head first drops the
+  ;; duplication AND preserves callee-before-arguments order: a control-flow arg
+  ;; can no longer run before the head is evaluated.
+  (let [head  (first form)
+        fn-id (if (symbol? head)
+                (build-symbol head ctx)
+                (build-form head ctx))]
     (build-call-with-head fn-id (rest form) ctx)))
 
 (defn- method-call-head?
