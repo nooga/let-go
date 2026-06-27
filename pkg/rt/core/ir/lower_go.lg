@@ -1346,71 +1346,55 @@
    module is {:go-pkg :ns :fns {name {:go-ident :arity :variadic?
    :param-specs :result-spec :needs-error?}}}.
 
-   Variadic fns are skipped — the direct-call path can't coerce a rest
-   slice, so they stay on the trampoline. Entries are keyed under the
-   INTERNAL ns symbol (internal-ns-sym), matching how lookup-direct-callable
-   derives call-ns, so both qualified (clojure.core/seq) and referred-core
-   (bare seq) calls resolve via resolve-call-entry."
+   A VARIADIC native fn is EXPANDED into fixed-arity entries [ns name k] for
+   k = min-fixed .. min-fixed+8. A call (f a b) supplies INDIVIDUAL args, and
+   Go calls a variadic `func(…T)` as `f(a, b)`, so each expanded arity reuses
+   the existing fixed-arity emit path unchanged — param-specs = the fixed specs
+   plus the rest-element spec repeated (- k min). Calls beyond +8 args stay on
+   the trampoline. Entries are keyed under the INTERNAL ns symbol
+   (internal-ns-sym), matching how lookup-direct-callable derives call-ns, so
+   both qualified (clojure.core/seq) and referred-core (bare seq) calls resolve
+   via resolve-call-entry."
   [native-modules]
-  (reduce-kv
-    (fn [acc ns-str mods]
-      (let [ns-sym (internal-ns-sym ns-str)]
-        (reduce
-          (fn [acc2 mod]
-            (let [go-pkg (:go-pkg mod)]
-              (reduce-kv
-                (fn [acc3 fn-name desc]
-                  (if (:variadic? desc)
-                    acc3
-                    (assoc acc3
-                           (registry-key ns-sym fn-name (:arity desc))
-                           {:go-name      (:go-ident desc)
-                            :arity        (:arity desc)
-                            :needs-error? (:needs-error? desc)
-                            :param-specs  (vec (:param-specs desc))
-                            :result-spec  (:result-spec desc)
-                            :native?      true
-                            :go-pkg       go-pkg
-                            :variadic?    false})))
-                acc2 (:fns mod))))
-          acc mods)))
-    {} native-modules))
-
-(defn native-registry
-  "Build the native half of *lowered-registry* from the modules exposed by
-   (rt/native-modules): a flat {[ns-sym name arity] entry} map. Each native
-   module is {:go-pkg :ns :fns {name {:go-ident :arity :variadic?
-   :param-specs :result-spec :needs-error?}}}.
-
-   Variadic fns are skipped — the direct-call path can't coerce a rest
-   slice, so they stay on the trampoline. Entries are keyed under the
-   INTERNAL ns symbol (internal-ns-sym), matching how lookup-direct-callable
-   derives call-ns, so both qualified (clojure.core/seq) and referred-core
-   (bare seq) calls resolve via resolve-call-entry."
-  [native-modules]
-  (reduce-kv
-    (fn [acc ns-str mods]
-      (let [ns-sym (internal-ns-sym ns-str)]
-        (reduce
-          (fn [acc2 mod]
-            (let [go-pkg (:go-pkg mod)]
-              (reduce-kv
-                (fn [acc3 fn-name desc]
-                  (if (:variadic? desc)
-                    acc3
-                    (assoc acc3
-                           (registry-key ns-sym fn-name (:arity desc))
-                           {:go-name      (:go-ident desc)
-                            :arity        (:arity desc)
-                            :needs-error? (:needs-error? desc)
-                            :param-specs  (vec (:param-specs desc))
-                            :result-spec  (:result-spec desc)
-                            :native?      true
-                            :go-pkg       go-pkg
-                            :variadic?    false})))
-                acc2 (:fns mod))))
-          acc mods)))
-    {} native-modules))
+  (let [max-variadic-extra 8]
+    (reduce-kv
+      (fn [acc ns-str mods]
+        (let [ns-sym (internal-ns-sym ns-str)]
+          (reduce
+            (fn [acc2 mod]
+              (let [go-pkg (:go-pkg mod)]
+                (reduce-kv
+                  (fn [acc3 fn-name desc]
+                    (let [base {:go-name      (:go-ident desc)
+                                :needs-error? (:needs-error? desc)
+                                :result-spec  (:result-spec desc)
+                                :native?      true
+                                :go-pkg       go-pkg
+                                :variadic?    false}]
+                      (if (:variadic? desc)
+                        ;; Expand the variadic fn into fixed-arity keys.
+                        (let [specs    (vec (:param-specs desc))
+                              nspecs   (count specs)
+                              min-ar   (:arity desc)
+                              fixed-sp (if (pos? nspecs) (subvec specs 0 (dec nspecs)) [])
+                              elem-sp  (if (pos? nspecs) (peek specs) "vm.Value")]
+                          (reduce
+                            (fn [a k]
+                              (assoc a (registry-key ns-sym fn-name k)
+                                     (assoc base
+                                            :arity       k
+                                            :param-specs (into fixed-sp (vec (repeat (- k min-ar) elem-sp))))))
+                            acc3
+                            (range min-ar (+ min-ar max-variadic-extra 1))))
+                        ;; Fixed arity: one entry under its declared arity.
+                        (assoc acc3
+                               (registry-key ns-sym fn-name (:arity desc))
+                               (assoc base
+                                      :arity       (:arity desc)
+                                      :param-specs (vec (:param-specs desc)))))))
+                  acc2 (:fns mod))))
+            acc mods)))
+      {} native-modules)))
 
 (defn resolve-registry-entry
   "Exact-key lookup into *lowered-registry* (the flat {[ns name arity] entry}
@@ -1505,6 +1489,18 @@
 (defn- mark-call-err-used! []
   (when *call-err-used* (reset! *call-err-used* true)))
 
+;; Typed direct-call result/error temps (tr<nid>/te<nid>) must be FUNCTION-scoped
+;; `var` decls, not inline `:=`. The body is a goto-CFG; a `goto` that jumps over
+;; an in-scope `:=` declaration is illegal Go ("goto jumps over declaration").
+;; All other temps are pre-declared `var` at the top and assigned with `=`, so
+;; gotos over them are legal — the typed-call temps must do the same. emit-typed-
+;; direct-call registers each [name go-type] here; the prologue emits the decls.
+;; (Same pattern as *call-err-used*: collect during body build, emit in prologue.)
+(def ^:dynamic *typed-call-temps* nil)
+
+(defn- register-typed-call-temp! [name go-type]
+  (when *typed-call-temps* (swap! *typed-call-temps* conj [name go-type])))
+
 (defn- emit-call-stmts [f assign-target invoke-expr]
   "Build the [assign err-check] statement pair shared by both call paths.
    assign-target is either a gogen ident (used? case) or '_'; invoke-expr
@@ -1564,18 +1560,22 @@
                    (not= result-spec "vm.Value"))
               (let [boxed (box-result-from-type raw-call result-spec)]
                 [(gogen/assign "=" target boxed)])
-              ;; Typed result + error: tr<nid>, te<nid> := <call>; if err return;
+              ;; Typed result + error: tr<nid>, te<nid> = <call>; if err return;
               ;; target = vm.<Box>(tr<nid>). The intermediate result+err vars are
-              ;; declared in-place with `:=` under UNIQUE names keyed by the node's
-              ;; Indexed-RPN position nid (the typed result can't be assigned to the
-              ;; vm.Value target directly, and a fixed `result` name would collide
-              ;; across multiple typed-error calls in one fn). The RPN index is
-              ;; positional → stable, so the names stay deterministic across regens.
+              ;; FUNCTION-scoped (registered via register-typed-call-temp! and
+              ;; emitted as `var` in the prologue), assigned here with `=` — NOT an
+              ;; inline `:=`. The body is a goto-CFG, and a goto that jumps over an
+              ;; in-scope `:=` declaration is illegal Go ("goto jumps over
+              ;; declaration"); function-scope `var` + `=` is goto-safe, matching
+              ;; every other temp. Names are keyed by the node's Indexed-RPN
+              ;; position nid (positional → stable + unique across regens).
               (and (:needs-error? entry)
                    (not= result-spec "vm.Value"))
               (let [res-id (gogen/ident (str "tr" nid))
                     err-id (gogen/ident (str "te" nid))
-                    assign (gogen/multi-assign ":=" [res-id err-id] [raw-call])
+                    _ (register-typed-call-temp! (str "tr" nid) result-spec)
+                    _ (register-typed-call-temp! (str "te" nid) "error")
+                    assign (gogen/multi-assign "=" [res-id err-id] [raw-call])
                     zero-expr (case (function-return-spec f)
                                 "bool"    (gogen/ident "false")
                                 "int"     (gogen/int-lit 0)
@@ -1884,8 +1884,31 @@
                     ;; trampoline rather than an unguarded native switch.
                     runtime))))))))))
 
+(defn- list-intrinsic-call-stmts [f closed-exprs nid]
+  ;; Intrinsic for (clojure.core/list a0 … aN-1): emit the *List directly as
+  ;; vm.EmptyList.Cons(aN-1)…Cons(a0). List.Cons returns a *List (so `list?`
+  ;; stays true — a cons-chain via NewCons would be a *Cons and break it), and
+  ;; this builds the linked nodes with NO args-slice allocation — unlike the
+  ;; variadic builtins.List(args…) / trampoline, which heap-allocate the
+  ;; []vm.Value at the call site (measured ~2.1× faster / -40% allocs). Seq
+  ;; embeds Value, so the chain assigns straight to the vm.Value target.
+  ;; Returns nil (fall through to the normal direct/trampoline path) unless the
+  ;; callee is the core `list` var applied to a fixed arg list.
+  (let [refs (ir/refs nid f)
+        nn   (load-var-ns+name f (first refs))]
+    (when (and nn (= "clojure.core" (first nn)) (= "list" (second nn)))
+      (let [arg-exprs (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))]
+        (when (every? identity arg-exprs)
+          (let [target (if (live? f nid) (value-ident f nid) (gogen/ident "_"))
+                chain  (reduce (fn [acc arg]
+                                 (gogen/call (gogen/field-sel acc "Cons") [arg]))
+                               (gogen/field-sel (gogen/ident "vm") "EmptyList")
+                               (reverse arg-exprs))]
+            [(gogen/assign "=" target chain)]))))))
+
 (defn- call-assign-stmts [f closed-exprs nid]
   (or
+    (list-intrinsic-call-stmts f closed-exprs nid)
     (ctor-call-stmts f closed-exprs nid)
     (devirtual-call-stmts f closed-exprs nid)
     (defmulti-call-stmts f closed-exprs nid)
@@ -2709,7 +2732,8 @@
    (swap! f assoc :live (live-nids f))
    ;; Single-use computed edge-args to inline (needs :live + uses cache above).
    (swap! f assoc :inline-args (compute-inline-args f))
-   (binding [*call-err-used* (atom false)]
+   (binding [*call-err-used* (atom false)
+             *typed-call-temps* (atom [])]
      (let [needs-error?     (function-needs-error? f)
            needs-tail-call? (function-needs-tail-call? f)
            ;; Build the body FIRST (inside the *call-err-used* binding) so we
@@ -2747,6 +2771,14 @@
                decls1 (if (and needs-error? @*call-err-used*)
                         (conj decls0 (gogen/var-decl "callErr" (gogen/type "error") nil))
                         decls0)
+               ;; Function-scope `var` decls for typed direct-call result/error
+               ;; temps (tr<nid>/te<nid>), collected during body build. Emitting
+               ;; them at the top (not inline `:=`) keeps gotos that jump over the
+               ;; call site legal — see *typed-call-temps*.
+               decls1 (reduce (fn [acc [nm go-type]]
+                                (conj acc (gogen/var-decl nm (gogen/type go-type) nil)))
+                              decls1
+                              @*typed-call-temps*)
                [arg-decls arg-inits] (if needs-tail-call?
                                        (arg-local-decls f)
                                        [[] []])

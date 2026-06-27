@@ -344,7 +344,33 @@ func init() {
 	// alphabetically so every file has registered first.
 	installLangNS()
 	installNativeDirectNS()
+	registerBuiltinsModule()
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
+}
+
+// registerBuiltinsModule registers pkg/rt/builtins as a native direct-call
+// module for clojure.core. The descriptors are pure metadata (GoPkg/GoIdent
+// strings), so rt does not import builtins here — only the AOT-generated tree
+// imports it to emit `builtins.X(...)` direct calls. This is the seam that
+// turns hot clojure.core primitives (list, vector, …) from allocating
+// CachedVarFn trampolines into direct Go calls under -tags gogen_ir. The full
+// clojure.core builtin set migrates here incrementally (EPIC-012); this is the
+// first hot batch.
+func registerBuiltinsModule() {
+	RegisterNativeModule(&NativeModule{
+		GoPkg:     "github.com/nooga/let-go/pkg/rt/builtins",
+		Namespace: "clojure.core",
+		Fns: map[string]NativeDirectFn{
+			// `list` is handled by a lowering intrinsic (list-intrinsic-call-stmts):
+			// it emits vm.EmptyList.Cons(…) directly, with no args-slice alloc — a
+			// strictly better path than a variadic native call, so it is NOT
+			// registered here.
+			"vector":    {GoIdent: "Vector", Arity: 0, Variadic: true, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"not":       {GoIdent: "Not", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"cons":      {GoIdent: "Cons", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"contains?": {GoIdent: "Contains", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+		},
+	})
 }
 
 func AllNSes() map[string]*vm.Namespace {
