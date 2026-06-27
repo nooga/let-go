@@ -112,3 +112,25 @@ func TestWithRedefsDisablesNativeDirect(t *testing.T) {
 		t.Fatalf("expected count to fall back to the cached-var trampoline:\n--- go ---\n%s", rendered)
 	}
 }
+
+// TestWithRedefsDisablesListIntrinsic is the list-intrinsic analogue of
+// TestWithRedefsDisablesNativeDirect: the (clojure.core/list …) lowering
+// intrinsic bakes vm.EmptyList.Cons(…) directly, bypassing the Var. Inside a
+// (with-redefs [list …] …) body — which rebinds the var root at runtime — the
+// intrinsic must stand down and dispatch through the var, or the rebinding (and
+// alter-var-root / intern) is silently ignored.
+func TestWithRedefsDisablesListIntrinsic(t *testing.T) {
+	ensureLoader()
+	rendered := runLispString(t,
+		`(do (create-ns (quote withredeflistns))
+		     (intern (quote withredeflistns) (quote probe))
+		     (ir.passes.pipeline/lower-ns-to-go "withredeflistns" (quote withredeflistns)
+		       [(quote (defn probe [x] (with-redefs [list (fn [& _] :overridden)] (list x))))]))`)
+
+	if strings.Contains(rendered, "vm.EmptyList.Cons(") {
+		t.Fatalf("with-redefs over list must disable the list intrinsic; found baked vm.EmptyList.Cons(...):\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, `rt.CachedVarFn(&__v_clojure_core_list, "clojure.core", "list")`) {
+		t.Fatalf("expected list to fall back to the cached-var trampoline:\n--- go ---\n%s", rendered)
+	}
+}

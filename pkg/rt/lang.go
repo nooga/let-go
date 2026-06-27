@@ -24,6 +24,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/nooga/let-go/pkg/rt/builtins"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
@@ -2192,11 +2193,14 @@ func installLangNS() {
 
 	// and/or are now short-circuiting macros defined in core.lg
 
+	// Body delegates to pkg/rt/builtins (the single source shared with the AOT
+	// direct-call target registered in registerBuiltinsModule); the wrapper only
+	// enforces interpreter arity.
 	not, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		return vm.Boolean(!vm.IsTruthy(vs[0])), nil
+		return builtins.Not(vs[0])
 	})
 
 	complement, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -2240,7 +2244,9 @@ func installLangNS() {
 		return vm.Symbol(fmt.Sprintf("%s%d", prefix, nextID())), nil
 	})
 
-	vector, _ := vm.NativeFnType.WrapNoErr(vm.NewArrayVector)
+	vector, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return builtins.Vector(vs...)
+	})
 	list, _ := vm.NativeFnType.WrapNoErr(vm.NewList)
 	hashMap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs)%2 != 0 {
@@ -2641,18 +2647,7 @@ func installLangNS() {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		elem := vs[0]
-		if vs[1] == vm.NIL {
-			return vm.NewCons(elem, nil), nil
-		}
-		seq, err := seqOf(vs[1])
-		if err != nil {
-			return vm.NIL, fmt.Errorf("cons expected Seq")
-		}
-		if seq == nil {
-			return vm.NewCons(elem, nil), nil
-		}
-		return vm.NewCons(elem, seq), nil
+		return builtins.Cons(vs[0], vs[1])
 	})
 
 	conj, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -2731,28 +2726,7 @@ func installLangNS() {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		if vs[0] == vm.NIL {
-			return vm.FALSE, nil
-		}
-		// Keyed types: maps and sets
-		if s, ok := vs[0].(vm.Keyed); ok {
-			return s.Contains(vs[1]), nil
-		}
-		// Vectors: contains? checks if index exists
-		if idx, ok := vs[1].(vm.Int); ok {
-			i := int(idx)
-			if c, ok := vs[0].(vm.Counted); ok {
-				return vm.Boolean(i >= 0 && i < c.RawCount()), nil
-			}
-		}
-		// Strings: contains? checks if index exists (must be integer key)
-		if s, ok := vs[0].(vm.String); ok {
-			if idx, ok := vs[1].(vm.Int); ok {
-				return vm.Boolean(int(idx) >= 0 && int(idx) < len([]rune(string(s)))), nil
-			}
-			return vm.NIL, fmt.Errorf("contains? on a string requires an integer key, got %s", vs[1].Type().Name())
-		}
-		return vm.FALSE, nil
+		return builtins.Contains(vs[0], vs[1])
 	})
 
 	first, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {

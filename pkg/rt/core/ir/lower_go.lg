@@ -1894,9 +1894,16 @@
   ;; embeds Value, so the chain assigns straight to the vm.Value target.
   ;; Returns nil (fall through to the normal direct/trampoline path) unless the
   ;; callee is the core `list` var applied to a fixed arg list.
+  ;;
+  ;; Honors *direct-calls-disabled?* like every other devirtualization: inside a
+  ;; (with-redefs [list …] …) body that flag is bound true, so the intrinsic must
+  ;; stand down and let the call dispatch through the Var — otherwise the rebinding
+  ;; (also alter-var-root / intern) is silently ignored and the baked
+  ;; vm.EmptyList.Cons chain wins.
   (let [refs (ir/refs nid f)
         nn   (load-var-ns+name f (first refs))]
-    (when (and nn (= "clojure.core" (first nn)) (= "list" (second nn)))
+    (when (and (not *direct-calls-disabled?*)
+               nn (= "clojure.core" (first nn)) (= "list" (second nn)))
       (let [arg-exprs (mapv (fn [rid] (box-as-value f closed-exprs rid)) (rest refs))]
         (when (every? identity arg-exprs)
           (let [target (if (live? f nid) (value-ident f nid) (gogen/ident "_"))
