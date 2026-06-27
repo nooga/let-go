@@ -1311,7 +1311,12 @@
    "clojure.set"  'set    "clojure.walk" 'walk   "clojure.edn"    'edn
    "clojure.zip"  'zip    "clojure.data" 'data   "clojure.pprint" 'pprint})
 
-(defn- internal-ns-sym [ns-str]
+(defn internal-ns-sym [ns-str]
+  ;; Public: the cross-package collector (pipeline/lower-all-ns-to-go) normalizes
+  ;; both the recorded cross-ns refs ("clojure.core") and the package being
+  ;; lowered ("core") through this so the wrapper-target match agrees with how
+  ;; registry keys are formed — the alias-remapped namespaces (clojure.core→core,
+  ;; clojure.string→string, …) otherwise never match and emit no wrappers.
   (or (get alias->internal-ns ns-str) (symbol ns-str)))
 
 (defn- pkg-alias-from [pkg-path]

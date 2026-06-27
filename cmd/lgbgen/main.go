@@ -724,9 +724,12 @@ func writeGeneratedFile(path string, data []byte) error {
 func runGoTarget(outDir, codeDir string) {
 	var failed []string
 	var generated []string // Go package names successfully written, for the wireup files.
-	pipelineVar := rt.LookupVar("ir.passes.pipeline", "lower-ns-to-go")
+	// EPIC-012/ITER-0025: lower the whole program in one call so cross-package
+	// direct calls resolve (a phase-0 collector builds the global registry of
+	// every package's direct-callable exports; phase-1 emits with it visible).
+	pipelineVar := rt.LookupVar("ir.passes.pipeline", "lower-all-ns-to-go")
 	if pipelineVar == nil {
-		fmt.Fprintf(os.Stderr, "fatal: ir.passes.pipeline/lower-ns-to-go not found\n")
+		fmt.Fprintf(os.Stderr, "fatal: ir.passes.pipeline/lower-all-ns-to-go not found\n")
 		os.Exit(1)
 	}
 
@@ -752,6 +755,18 @@ func runGoTarget(outDir, codeDir string) {
 		fmt.Fprintf(os.Stderr, "ns discovery failed: %v\n", err)
 		os.Exit(1)
 	}
+	// Gather specs for every lowerable namespace; the whole program is lowered
+	// in ONE lower-all-ns-to-go call below so cross-package direct calls resolve.
+	type goNsSpec struct {
+		nsName    string
+		pkgName   string
+		pkgDir    string
+		relDir    string
+		defnCount int
+	}
+	var goSpecs []goNsSpec
+	var specVals []vm.Value // parallel Lisp specs: [pkg-name ns-sym forms import-path]
+	const loweredImportPrefix = "github.com/nooga/let-go/pkg/rt/core_go_lowered/"
 	for _, ns := range embeddedNS {
 		src := ns.src
 		if src == "" {
@@ -809,38 +824,67 @@ func runGoTarget(outDir, codeDir string) {
 			os.Exit(1)
 		}
 
-		// Batch all forms into one namespace file.
-		formsVec := vm.NewPersistentVector(defnForms)
-		args := []vm.Value{
+		// Accumulate this namespace's lowering spec; emission happens once below.
+		importPath := loweredImportPrefix + filepath.ToSlash(relDir)
+		specVals = append(specVals, vm.NewPersistentVector([]vm.Value{
 			vm.String(pkgName),
 			vm.Symbol(ns.name),
-			formsVec,
-		}
-		result, err := pipelineVar.Invoke(args)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: Go lowering failed: %v\n", ns.name, err)
-			failed = append(failed, ns.name)
-			continue
-		}
-		goSrc, ok := result.(vm.String)
+			vm.NewPersistentVector(defnForms),
+			vm.String(importPath),
+		}))
+		goSpecs = append(goSpecs, goNsSpec{
+			nsName:    ns.name,
+			pkgName:   pkgName,
+			pkgDir:    pkgDir,
+			relDir:    relDir,
+			defnCount: len(defnForms),
+		})
+	}
+
+	// Whole-program lowering in one call (cross-package registry resolved inside).
+	result, err := pipelineVar.Invoke([]vm.Value{vm.NewPersistentVector(specVals)})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fatal: lower-all-ns-to-go failed: %v\n", err)
+		os.Exit(1)
+	}
+	// mapv returns an indexed vector of per-ns Go source strings, in spec order;
+	// a nil/non-string slot means that namespace failed to lower (per-ns
+	// resilience preserved — record it as failed, keep going).
+	type indexed interface {
+		Count() vm.Value
+		ValueAt(vm.Value) vm.Value
+	}
+	results, ok := result.(indexed)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "fatal: lower-all-ns-to-go returned %T, want indexed vector\n", result)
+		os.Exit(1)
+	}
+	n := 0
+	if c, ok := results.Count().(vm.Int); ok {
+		n = int(c)
+	}
+	for i := 0; i < n && i < len(goSpecs); i++ {
+		spec := goSpecs[i]
+		goSrcVal := results.ValueAt(vm.Int(i))
+		goSrc, ok := goSrcVal.(vm.String)
 		if !ok {
-			fmt.Fprintf(os.Stderr, "%s: expected string result, got %T\n", ns.name, result)
-			failed = append(failed, ns.name)
+			fmt.Fprintf(os.Stderr, "%s: Go lowering failed (no source)\n", spec.nsName)
+			failed = append(failed, spec.nsName)
 			continue
 		}
-		filename := filepath.Join(pkgDir, pkgName+".go")
+		filename := filepath.Join(spec.pkgDir, spec.pkgName+".go")
 		// Stamp the generated banner so cleanGoOutputDir can later recognize
 		// this as an lgbgen-owned file and never mistake a user file for one.
 		banneredSrc := goGeneratedBanner + "\n\n" + string(goSrc)
 		if err := writeGeneratedFile(filename, []byte(banneredSrc)); err != nil {
-			fmt.Fprintf(os.Stderr, "%s: write %s: %v\n", ns.name, filename, err)
+			fmt.Fprintf(os.Stderr, "%s: write %s: %v\n", spec.nsName, filename, err)
 			os.Exit(1)
 		}
-		fmt.Printf("  wrote %s (%d bytes, %d defns)\n", filename, len(goSrc), len(defnForms))
-		// Wireup blank-imports by directory path (slash-separated), not the
-		// leaf package name — sibling namespaces share a leaf name but live at
+		fmt.Printf("  wrote %s (%d bytes, %d defns)\n", filename, len(goSrc), spec.defnCount)
+		// Wireup blank-imports by directory path (slash-separated), not the leaf
+		// package name — sibling namespaces share a leaf name but live at
 		// distinct paths.
-		generated = append(generated, filepath.ToSlash(relDir))
+		generated = append(generated, filepath.ToSlash(spec.relDir))
 	}
 	// Emit the //go:build gogen_ir blank-import wireup files from exactly
 	// the set we just wrote — so namespaces that were skipped or failed to

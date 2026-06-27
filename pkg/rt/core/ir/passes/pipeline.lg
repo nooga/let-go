@@ -717,6 +717,56 @@
    {:path "github.com/nooga/let-go/pkg/vm" :alias "vm"}
    {:path "fmt" :alias nil}])
 
+;; EPIC-012 / ITER-0025 (cross-package direct calls). When true, lower-ns-to-go
+;; emits an exported thin wrapper `func LG_<go>(ec, …) <ret> { return <go>(ec, …) }`
+;; for each direct-callable lowered fn, so it is reachable from another Go
+;; package. DEFAULT false: the committed lowered tree stays byte-identical until
+;; the whole-program collector (registering cross-package entries that actually
+;; emit `core.LG_<go>(…)` calls) is wired — keeping the bootstrap codegen green
+;; at every step. Flipped on by the collector (and by the T3 unit test).
+(def ^:dynamic *emit-exported-wrappers* false)
+
+;; The whole-program cross-package registry, bound by lower-all-ns-to-go: a flat
+;; {[internal-ns name arity] -> {:go-pkg <import-path> :go-name "LG_<go>" …}} of
+;; every OTHER lowered package's direct-callable exports. Merged into the per-ns
+;; `reg` like native-reg (stable, never shrunk by the per-ns fixpoint) so a call
+;; into another lowered package resolves to `pkg.LG_<go>(ec, …)`. Default {} ⇒
+;; lower-ns-to-go behaves exactly as before (no cross-package entries).
+(def ^:dynamic *cross-pkg-registry* {})
+
+;; Set of [defining-ns-str fn-name-str] that ARE referenced cross-package (from
+;; the collector's union of @*cross-ns-vars-used*). lower-ns-to-go emits an
+;; exported wrapper ONLY for a fn in this set — so we export exactly the fns some
+;; other package calls, never dead wrappers. nil/empty ⇒ none.
+(def ^:dynamic *wrapper-target-names* #{})
+
+(defn- exported-wrapper-decl [result]
+  "Exported thin forwarding wrapper for a direct-callable lowered fn, so it is
+   callable from another Go package without renaming the unexported fn (which
+   would perturb byte-stable intra-package call sites). Name is `LG_<go-name>`:
+   the munged go-name is already a valid+unique Go identifier, and the `LG_`
+   prefix makes it exported (capital L) and valid even for go-names starting
+   with `_` (e.g. `_dt_collect_syms` -> `LG__dt_collect_syms`). Signature mirrors
+   the lowered fn exactly (param-specs/result-spec/needs-error?), forwarding ec +
+   args positionally — so emit-typed-direct-call's `pkg.LG_<go>(ec, coerced…)`
+   typechecks identically to a same-package direct call."
+  (let [go-name      (:go-name result)
+        exp-name     (str "LG_" go-name)
+        arity        (:arity result)
+        param-specs  (vec (:param-specs result))
+        result-spec  (:result-spec result)
+        needs-error? (:needs-error? result)
+        params  (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))]
+                      (mapv (fn [i] (gogen/param (str "arg" i)
+                                      (gogen/type (nth param-specs i "vm.Value"))))
+                            (range arity)))
+        results (if needs-error?
+                  [(gogen/result (gogen/type result-spec)) (gogen/result (gogen/type "error"))]
+                  [(gogen/result (gogen/type result-spec))])
+        arg-ids (mapv (fn [i] (gogen/ident (str "arg" i))) (range arity))
+        call    (gogen/call (gogen/ident go-name) (into [(gogen/ident "ec")] arg-ids))]
+    (gogen/func-decl exp-name params results [(gogen/return-stmt [call])])))
+
 (defn- lower-defn-forms
   "Lower each defn form via the Go pipeline; return the vector of result maps.
    Independent of *lowered-registry* — the caller binds it for pass 2."
@@ -975,7 +1025,11 @@
                     ;; native-reg is always merged on top and never shrinks.
                     (loop [sib-reg sibling-registry guard 0]
                       (let [cross (atom {})
-                            reg (merge native-reg sib-reg)
+                            ;; *cross-pkg-registry* (other lowered packages'
+                            ;; exports) is merged like native-reg — stable, never
+                            ;; shrunk — BELOW sib-reg so this ns's own siblings
+                            ;; (bare intra-pkg calls) shadow their cross-pkg form.
+                            reg (merge native-reg *cross-pkg-registry* sib-reg)
                             res (binding [lower-go/*lowered-registry* reg
                                           lower-go/*native-imports-used* native-imports
                                           lower-go/*cross-ns-vars-used* cross
@@ -1015,9 +1069,24 @@
             ;; Package-level cached *vm.Var decls + lazy accessors for the
             ;; recorded cross-ns callees (deterministic, sorted by base name).
             cached-var-decls (lower-go/cross-ns-var-decls @cross-ns-vars)
+            ;; EPIC-012/ITER-0025: exported wrappers for direct-callable fns so
+            ;; another lowered package can call them. Gated off by default
+            ;; (*emit-exported-wrappers*) → committed tree byte-identical until
+            ;; the whole-program collector wires real cross-package calls.
+            wrapper-results (if *emit-exported-wrappers*
+                              (let [ns-int (lower-go/internal-ns-sym (str ns-name))
+                                    target? (fn [r]
+                                              (and (:direct-callable? r)
+                                                   (or (empty? *wrapper-target-names*)
+                                                       (contains? *wrapper-target-names*
+                                                                  [ns-int (str (:fn-name r))]))))]
+                                (mapv (fn [r] {:decl (exported-wrapper-decl r)
+                                               :imports [vm-import]})
+                                      (filterv target? valid-results)))
+                              [])
             ;; Native type/struct/method decls lead the file; Go resolves
             ;; package-scope references regardless of declaration order.
-            all-results (into (into (into type-decls valid-results) extra-decls) cached-var-decls)
+            all-results (into (into (into (into type-decls valid-results) extra-decls) cached-var-decls) wrapper-results)
             ;; Carry the accumulated native-module imports (corefns, …) into the
             ;; file's import block via a decl-less import-only result.
             native-import-results (if (seq @native-imports)
@@ -1027,3 +1096,79 @@
             all-results (into all-results native-import-results)
             file-ast (lower-go/file pkg-name all-results)]
         (gogen/render file-ast)))))
+
+;; --- EPIC-012 / ITER-0025: whole-program cross-package direct-call collector ---
+
+(defn- collect-ns-exports [pkg-name ns-sym forms import-path]
+  "Phase-0 discovery for one namespace: run pass-1 lowering (no cross-pkg
+   registry) and return {:exports {<key> <cross-pkg-entry>} :refs #{[ns name]}}.
+   :exports are this ns's direct-callable fns re-keyed for cross-package dispatch
+   via the canonical registry-entry-from-result, then stamped with :go-pkg =
+   import-path and :go-name = LG_<go> (the exported wrapper). :refs are the
+   cross-ns callees it references (same-ns calls filtered — they need no wrapper)."
+  (binding [*ns* (the-ns ns-sym)
+            ir.passes.typeinfer/*typeinfer-budget-ms* nil]
+    (let [cross   (atom {})
+          results (binding [lower-go/*cross-ns-vars-used* cross]
+                    (lower-defn-forms (order-defn-forms forms)))
+          exports (reduce
+                    (fn [m r]
+                      (let [base (when (:decl r)
+                                   (lower-go/registry-entry-from-result r ns-sym pkg-name))]
+                        (if base
+                          (into m (map (fn [kv]
+                                         [(key kv) (assoc (val kv)
+                                                          :go-pkg  import-path
+                                                          :go-name (str "LG_" (:go-name (val kv))))])
+                                       base))
+                          m)))
+                    {} results)
+          ns-str  (str ns-sym)
+          refs    (reduce (fn [s kv]
+                            (let [k (key kv)]      ; k = [ns-str name-str]
+                              (if (= (first k) ns-str) s (conj s k))))
+                          #{} @cross)]
+      {:exports exports :refs refs})))
+
+(defn lower-all-ns-to-go [specs]
+  "Whole-program Go lowering with cross-package direct calls (EPIC-012/ITER-0025).
+   specs: vector of positional [pkg-name ns-sym forms import-path]. Phase 0 collects the
+   global cross-package registry + the set of fns referenced cross-package; phase
+   1 lowers every namespace with that registry visible (a call into another
+   lowered package emits `pkg.LG_<go>(ec, …)`) and emits an exported wrapper for
+   each cross-referenced fn. Two SEPARATED phases (collect-all then emit-all), so
+   emission order is irrelevant: the global registry is complete before any
+   package is emitted. Soundness: registry visibility only turns trampolines into
+   direct calls (or the same trampoline on coercion failure) — it never causes a
+   fn that emitted in phase 0 to bail in phase 1 — so every confirmed export's
+   wrapper is emitted; `make check-generated`'s compile step is the hard backstop
+   against any residual dangling reference. Returns a vector of Go source strings
+   in spec order; a namespace that fails to lower yields nil at its slot (the Go
+   driver treats nil as a per-ns failure, preserving per-namespace resilience)."
+  (let [collected  (mapv (fn [s]
+                           (try
+                             (collect-ns-exports (nth s 0) (nth s 1) (nth s 2) (nth s 3))
+                             (catch e
+                               (println (str "WARNING: cross-pkg collect failed for "
+                                             (nth s 1) ": " e))
+                               {:exports {} :refs #{}})))
+                         specs)
+        global-reg (reduce (fn [m c] (merge m (:exports c))) {} collected)
+        ;; Normalize each ref's ns through internal-ns-sym so the wrapper-target
+        ;; match agrees with the registry key space (a ref to clojure.core/nil?
+        ;; and the lowered ns `core` both reduce to 'core) — otherwise the
+        ;; alias-remapped namespaces emit no wrappers and their callers dangle.
+        targets    (reduce (fn [s c]
+                             (into s (map (fn [k] [(lower-go/internal-ns-sym (first k)) (second k)])
+                                          (:refs c))))
+                           #{} collected)]
+    (binding [*cross-pkg-registry*     global-reg
+              *wrapper-target-names*   targets
+              *emit-exported-wrappers* true]
+      (mapv (fn [s]
+              (try
+                (lower-ns-to-go (nth s 0) (nth s 1) (nth s 2))
+                (catch e
+                  (println (str "WARNING: Go lowering failed for " (nth s 1) ": " e))
+                  nil)))
+            specs))))
