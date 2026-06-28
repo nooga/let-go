@@ -56,6 +56,67 @@
         base (nth segs (dec (count segs)))]
     (clojure.string/replace base ".lg" "")))
 
+;; Only DEFINITIONAL forms are evaluated during compilation: lowering needs each
+;; ns set up (its require/refer/alias table) and its vars interned so cross-ns
+;; calls resolve — but NOT arbitrary top-level expressions. Evaluating e.g.
+;; `(apply main ARGS)` would run user code (side effects) at compile time, and
+;; that form isn't part of the lowered Go output anyway.
+(def definitional-heads
+  (set '(ns in-ns require use import refer load load-file
+         def defn defn- defonce defmacro defmulti defmethod defprotocol
+         deftype defrecord declare definterface defmulti- def-)))
+
+(defn definitional? [f]
+  (and (seq? f) (symbol? (first f)) (contains? definitional-heads (first f))))
+
+;; A require entry names a namespace as a bare symbol, a [ns …] vector, or either
+;; wrapped in a (quote …) (top-level `(require '[ns …])`).
+(defn dep-ns-of-entry [e]
+  (cond
+    (and (seq? e) (= 'quote (first e))) (dep-ns-of-entry (second e))
+    (vector? e)                         (first e)
+    (symbol? e)                         e
+    :else                               nil))
+
+;; The namespaces a file depends on: ns-form :require/:use clauses + top-level
+;; (require …)/(use …). Used to load inputs in dependency order so compilation is
+;; independent of the order files are passed on the command line.
+(defn spec-dep-syms [forms]
+  (let [out (atom [])]
+    (doseq [f forms]
+      (when (and (seq? f) (symbol? (first f)))
+        (cond
+          (= 'ns (first f))
+          (doseq [clause (drop 2 f)]
+            (when (and (seq? clause) (contains? #{:require :use} (first clause)))
+              (doseq [e (rest clause)]
+                (when-let [n (dep-ns-of-entry e)] (swap! out conj n)))))
+          (contains? #{'require 'use} (first f))
+          (doseq [e (rest f)]
+            (when-let [n (dep-ns-of-entry e)] (swap! out conj n))))))
+    @out))
+
+;; Topologically order specs so a namespace loads after the sibling inputs it
+;; requires (deps outside the input set are ignored — they load via the normal
+;; path). DFS marks-before-recursing, so a require cycle terminates (its members
+;; come out in discovery order) rather than looping.
+(defn topo-order-specs [specs]
+  (let [by-ns (reduce (fn [m s] (assoc m (:nsn s) s)) {} specs)
+        nsset (set (keys by-ns))
+        deps  (reduce (fn [m s]
+                        (assoc m (:nsn s) (vec (filter nsset (spec-dep-syms (:forms s))))))
+                      {} specs)
+        seen  (atom #{})
+        out   (atom [])]
+    (doseq [s specs]
+      ((fn visit [nsn]
+         (when-not (contains? @seen nsn)
+           (swap! seen conj nsn)
+           (doseq [d (get deps nsn)] (visit d))
+           (swap! out conj (get by-ns nsn))))
+       (:nsn s)))
+    @out))
+
 ;; Everything below runs in ONE top-level form so it is COMPILED in this script's
 ;; ns (all symbols resolve) BEFORE the runtime (ns ..)/eval calls switch the
 ;; global current ns.
@@ -76,12 +137,14 @@
                        :nsn (if ns-sym ns-sym (symbol nsstr))
                        :go-pkg (str import-prefix "/" reldir)}))
                   files)
-      ;; --- load every ns first, form-by-form, so cross-ns refers resolve when
-      ;;     lower-all-ns-to-go lowers them (a whole-(do ..) eval would compile
-      ;;     before the require runs; #195) ---
-      _load (doseq [s specs]
+      ;; --- load every ns first, in dependency order, evaluating ONLY
+      ;;     definitional forms, so cross-ns refers resolve when
+      ;;     lower-all-ns-to-go lowers them — regardless of input order, and
+      ;;     without running top-level user code at compile time ---
+      _load (doseq [s (topo-order-specs specs)]
               (when-not (:ns-sym s) (eval (list 'ns (:nsn s))))
-              (doseq [f (:forms s)] (eval f)))
+              (doseq [f (:forms s)]
+                (when (definitional? f) (eval f))))
       ;; --- whole-program cross-package lowering (collect-all then emit-all) ---
       gospecs (mapv (fn [s] [(:pkg s) (:nsn s) (:lf s) (:go-pkg s)]) specs)
       results (binding [ir.passes.pipeline/*target* :go]
