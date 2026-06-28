@@ -1,0 +1,55 @@
+;; ys-coverage — measure lowerability of a set of .lg/.clj(c) files WITHOUT a
+;; full compile. For each file: can the reader ingest it? Then classify each
+;; top-level form into buckets that predict AOT-lowering behavior:
+;;   native-defn   single-arity (defn/defn-)         -> lowers to a Go func
+;;   multi-defn    multi-arity defn                  -> stays on trampoline
+;;   defmulti/defmethod                              -> native (ITER-0010/0011)
+;;   def           plain def (value)                 -> emitted as var/trampoline
+;;   macro/special ns, require, defmacro, import …   -> setup, not lowered
+;;   other         everything else
+;;
+;;   ./lg scripts/ys-coverage.lg <file>...
+
+(require 'clojure.string)
+
+(def argv (vec (drop 2 (seq os/args))))
+
+(defn read-all [path]
+  (try
+    (read-string (str "(do " (slurp path) "\n)"))
+    (catch _e :READ-FAIL)))
+
+(defn single-arity-defn? [f] (boolean (some vector? (drop 2 f))))
+
+(defn classify [f]
+  (if-not (seq? f)
+    :other
+    (let [h (first f)]
+      (cond
+        (or (= h 'defn) (= h 'defn-)) (if (single-arity-defn? f) :native-defn :multi-defn)
+        (= h 'defmulti)  :defmulti
+        (= h 'defmethod) :defmethod
+        (= h 'def)       :def
+        (or (= h 'ns) (= h 'require) (= h 'import) (= h 'defmacro)
+            (= h 'in-ns) (= h 'refer) (= h 'use) (= h 'declare)) :setup
+        :else :other))))
+
+(defn tally [forms]
+  (reduce (fn [m f] (let [k (classify f)] (assoc m k (inc (get m k 0))))) {} forms))
+
+(doseq [path argv]
+  (let [parsed (read-all path)]
+    (if (= parsed :READ-FAIL)
+      (println (str path "\tREAD-FAIL"))
+      (let [forms (vec (rest parsed))
+            t     (tally forms)]
+        (println (str path
+                      "\tforms="   (count forms)
+                      "\tnative="  (get t :native-defn 0)
+                      "\tmulti="   (get t :multi-defn 0)
+                      "\tdefmulti="(get t :defmulti 0)
+                      "\tdefmethod="(get t :defmethod 0)
+                      "\tdef="     (get t :def 0)
+                      "\tsetup="   (get t :setup 0)
+                      "\tother="   (get t :other 0)))))))
+(println "done.")

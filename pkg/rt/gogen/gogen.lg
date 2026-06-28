@@ -646,3 +646,25 @@
                         (->value-or-nil value)
                         comment))
     :else (throw (str "const-row: don't know how to process " (pr-str r)))))
+
+;; Namespace -> Go package/dir manglers. Single source of truth shared by the
+;; cross-package AOT path: cmd/lgbgen (cross-package packaging) and
+;; scripts/lg-compile (the multi-namespace AOT driver) name packages identically.
+;; Mirrors Glojure's mungeID(getLastNSPart(ns)) / nsToPath.
+
+(defn ns->go-pkg
+  "The Go package name for namespace `ns-name`: the LAST dot-segment with
+   hyphens turned into underscores. This is both the `package` identifier and
+   the per-namespace filename stem.
+     (gogen/ns->go-pkg \"ir.passes.pipeline\") => \"pipeline\"
+     (gogen/ns->go-pkg \"ir.lower-go\")        => \"lower_go\""
+  [ns-name]
+  (str/replace (last (str/split ns-name ".")) "-" "_"))
+
+(defn ns->go-reldir
+  "The relative directory path (under the lowered-output root) that mirrors the
+   namespace nesting: dots become path separators, hyphens become underscores.
+     (gogen/ns->go-reldir \"ir.passes.pipeline\") => \"ir/passes/pipeline\"
+     (gogen/ns->go-reldir \"ir.lower-go\")        => \"ir/lower_go\""
+  [ns-name]
+  (str/replace (str/replace ns-name "-" "_") "." "/"))

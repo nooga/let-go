@@ -1,0 +1,103 @@
+;; lg-compile — AOT-compile a SET of let-go .lg files to .go packages, with
+;; DIRECT cross-package calls between them (pkg.Fn(ec, …) instead of runtime
+;; CachedVarFn trampolines) and the matching Go imports.
+;;
+;;   ./lg scripts/lg-compile <out-dir> <import-prefix> <file.lg>...
+;;
+;;   <import-prefix>  Go import path of <out-dir> (each package is
+;;                    <import-prefix>/<reldir>). e.g. for out-dir
+;;                    examples/aot/cross-package/go under module
+;;                    github.com/nooga/let-go, prefix is
+;;                    github.com/nooga/let-go/examples/aot/cross-package/go
+;;
+;; A thin CLI wrapper over ir.passes.pipeline/lower-all-ns-to-go (the
+;; whole-program cross-package lowering driver): it parses each file into a
+;; lowering spec, interns every namespace so cross-ns refers resolve, hands the
+;; whole set to lower-all-ns-to-go (which builds the cross-package registry in a
+;; collect-all/emit-all pass and emits direct pkg.Fn(ec,…) calls + imports +
+;; exported wrappers), then writes each returned Go package to disk. Variadic /
+;; non-coercible fns aren't :direct-callable?, so they stay on the trampoline.
+
+(require 'ir.data)
+(require 'ir.passes.pipeline)
+(require 'ir.passes.typeinfer)
+(require 'ir.lattice)
+(require 'ir.build)
+(require 'ir.lower-go)
+(require 'clojure.string)
+(require 'gogen)
+
+;; Evaluating a file's (ns ..) form switches the GLOBAL current ns; capture this
+;; script's ns so we can restore it after loading (else later top-level defs in
+;; this script resolve against a loaded file's ns and break).
+(def --script-ns *ns*)
+
+(def argv (vec (drop 2 (seq os/args))))
+(def out-dir (nth argv 0))
+(def import-prefix (nth argv 1))
+(def files (vec (drop 2 argv)))
+
+(defn read-all [path]
+  (read-string (str "(do " (slurp path) "\n)")))
+
+(defn single-arity-defn? [f] (boolean (some vector? (drop 2 f))))
+
+(defn lowerable? [f]
+  (and (seq? f)
+       (let [h (first f)]
+         (or (and (or (= h 'defn) (= h 'defn-)) (single-arity-defn? f))
+             (= h 'defmulti) (= h 'defmethod)))))
+
+(defn find-ns-name [forms]
+  (some (fn [f] (when (and (seq? f) (= 'ns (first f))) (second f))) forms))
+
+(defn basename-stem [path]
+  (let [segs (clojure.string/split path "/")
+        base (nth segs (dec (count segs)))]
+    (clojure.string/replace base ".lg" "")))
+
+;; Everything below runs in ONE top-level form so it is COMPILED in this script's
+;; ns (all symbols resolve) BEFORE the runtime (ns ..)/eval calls switch the
+;; global current ns.
+(let [;; --- parse all files into specs ---
+      specs (mapv (fn [path]
+                    (let [parsed (read-all path)
+                          forms  (vec (rest parsed))
+                          ns-sym (find-ns-name forms)
+                          lf     (vec (filter lowerable? forms))
+                          ;; canonical gogen naming: pkg = leaf segment,
+                          ;; reldir = nested ns path. Files lacking an (ns ..)
+                          ;; get a synthetic flat ys_<stem> for both.
+                          nsstr  (if ns-sym (str ns-sym) (str "ys-" (basename-stem path)))
+                          pkg    (gogen/ns->go-pkg nsstr)
+                          reldir (gogen/ns->go-reldir nsstr)]
+                      {:path path :forms forms :ns-sym ns-sym :lf lf
+                       :pkg pkg :reldir reldir
+                       :nsn (if ns-sym ns-sym (symbol nsstr))
+                       :go-pkg (str import-prefix "/" reldir)}))
+                  files)
+      ;; --- load every ns first, form-by-form, so cross-ns refers resolve when
+      ;;     lower-all-ns-to-go lowers them (a whole-(do ..) eval would compile
+      ;;     before the require runs; #195) ---
+      _load (doseq [s specs]
+              (when-not (:ns-sym s) (eval (list 'ns (:nsn s))))
+              (doseq [f (:forms s)] (eval f)))
+      ;; --- whole-program cross-package lowering (collect-all then emit-all) ---
+      gospecs (mapv (fn [s] [(:pkg s) (:nsn s) (:lf s) (:go-pkg s)]) specs)
+      results (binding [ir.passes.pipeline/*target* :go]
+                (ir.passes.pipeline/lower-all-ns-to-go gospecs))]
+  ;; --- write each emitted package to disk ---
+  (doseq [pair (map-indexed vector specs)]
+    (let [i  (first pair)
+          s  (second pair)
+          go (nth results i)]
+      (cond
+        (empty? (:lf s)) (println (str (:path s) ": no lowerable defns — skipped"))
+        (string? go)     (let [dir (str out-dir "/" (:reldir s))
+                               out (str dir "/" (:pkg s) ".go")]
+                           (mkdir dir)
+                           (spit out go)
+                           (println (str (:path s) " -> " out)))
+        :else            (println (str "EMIT-FAIL " (:path s) " pkg=" (:pkg s)
+                                       " returned " (clojure.core/type go))))))
+  (println "done."))
