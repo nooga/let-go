@@ -10,7 +10,7 @@
 Greetings loafers! _(λ-gophers haha, get it?)_
 
 let-go is a Clojure dialect with a bytecode compiler and stack VM, written in Go.
-A single ~10.7MB binary, ~7ms cold start, no JVM. It passes the
+A single ~13MB binary, ~15ms cold start, no JVM. It passes the
 [jank-lang test suite](https://github.com/jank-lang/clojure-test-suite).
 
 I started this in 2021 as an elaborate joke: an excuse to write Clojure while
@@ -48,20 +48,20 @@ files are valid Clojure that runs unmodified. Apple M1 Pro.
 
 |                 | let-go     | babashka | joker | go-joker | gloat | clojure JVM |
 | --------------- | ---------- | -------- | ----- | -------- | ----- | ----------- |
-| **Binary size** | **10.7MB** | 68MB     | 26MB  | 32MB     | 26MB  | 304MB (JDK) |
-| **Startup**     | **6.7ms**  | 18ms     | 12ms  | 13ms     | 16ms  | 363ms       |
-| **Idle memory** | **13.5MB** | 27MB     | 22MB  | 23MB     | 23MB  | 92MB        |
+| **Binary size** | **13MB**   | 68MB     | 26MB  | 32MB     | 26MB  | 304MB (JDK) |
+| **Startup**     | 15.3ms     | 20.8ms   | 12.2ms | 12.7ms   | 15.7ms | 381ms       |
+| **Idle memory** | 22.4MB     | 27.0MB   | 21.4MB | 23.5MB   | 23.1MB | 97.6MB      |
 
-let-go wins decisively on the small things: smallest binary, fastest startup
-(~50× under JVM, ~3× under Babashka), lowest memory. It also wins on
-short-lived data work like map/filter (7.9ms vs Babashka's 21.5ms) and
-persistent maps (20.8ms vs 23.7ms).
+let-go stays compact and quick to launch: a small native binary, sub-20ms
+startup, low RSS, and no JVM dependency. On this run Joker/go-joker edge it on
+startup, but let-go remains far below JVM startup and memory cost.
 
-On bigger numerical workloads other implementations pull ahead. go-joker's
-WASM JIT compiles inner numeric loops and beats us on fib (1.47s vs 2.08s),
-tak, reduce, and transducers. The JVM dominates on long compute runs once
-HotSpot warms up. We're about even with Babashka on most algorithmic
-benchmarks and 10×+ faster than upstream Joker (bytecode VM vs tree-walk).
+On runtime benchmarks, let-go is competitive on short-lived data work like
+map/filter (17.8ms) and persistent maps (26.5ms), and it is still much faster
+than upstream Joker on numeric/tree-walk-heavy cases. go-joker's WASM JIT leads
+hot loops and reduction/transducer workloads; Babashka is ahead on several
+algorithmic cases; and the JVM dominates long compute runs once HotSpot warms
+up.
 
 Full per-benchmark numbers and methodology:
 [benchmark/results.md](benchmark/results.md).
