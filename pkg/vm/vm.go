@@ -144,6 +144,28 @@ func (c *CodeChunk) AddLocalVar(slot int, name string) {
 	c.localVars = append(c.localVars, LocalVar{Slot: slot, Name: name})
 }
 
+// ReserveSourceMap pre-sizes the chunk's source map for n entries so the
+// per-instruction AddSourceInfo calls during bundle decode do not reallocate.
+func (c *CodeChunk) ReserveSourceMap(n int) {
+	if n <= 0 {
+		return
+	}
+	if c.sourceMap == nil {
+		c.sourceMap = NewSourceMap()
+	}
+	c.sourceMap.Reserve(n)
+}
+
+// ReserveLocalVars pre-sizes the chunk's local-variable debug table for n
+// entries so the per-slot AddLocalVar calls during decode do not reallocate.
+func (c *CodeChunk) ReserveLocalVars(n int) {
+	if n > cap(c.localVars) {
+		grown := make([]LocalVar, len(c.localVars), n)
+		copy(grown, c.localVars)
+		c.localVars = grown
+	}
+}
+
 // LocalVars returns the chunk's local-variable debug table (may be nil).
 func (c *CodeChunk) LocalVars() []LocalVar { return c.localVars }
 

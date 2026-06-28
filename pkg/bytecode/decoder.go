@@ -85,6 +85,7 @@ func (d *decoder) decodeToExecUnitV1(parent *vm.Consts) (*ExecUnit, error) {
 		chunk.Append(cd.Code...)
 		chunk.SetMaxStack(cd.MaxStack)
 		if len(cd.SourceMap) > 0 {
+			chunk.ReserveSourceMap(len(cd.SourceMap))
 			for _, e := range cd.SourceMap {
 				chunk.AddSourceInfo(vm.SourceInfo{
 					File:      e.File,
@@ -187,6 +188,7 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 		chunk.Append(cd.Code...)
 		chunk.SetMaxStack(cd.MaxStack)
 		if len(cd.SourceMap) > 0 {
+			chunk.ReserveSourceMap(len(cd.SourceMap))
 			for _, e := range cd.SourceMap {
 				chunk.AddSourceInfo(vm.SourceInfo{
 					File:      e.File,
@@ -218,6 +220,7 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 			return nil, err
 		}
 		for i, lvs := range tables {
+			d.chunks[i].ReserveLocalVars(len(lvs))
 			for _, lv := range lvs {
 				d.chunks[i].AddLocalVar(lv.Slot, lv.Name)
 			}
@@ -314,6 +317,7 @@ func (d *decoder) readModuleV1() (*Module, error) {
 		chunk.Append(cd.Code...)
 		chunk.SetMaxStack(cd.MaxStack)
 		if len(cd.SourceMap) > 0 {
+			chunk.ReserveSourceMap(len(cd.SourceMap))
 			for _, e := range cd.SourceMap {
 				chunk.AddSourceInfo(vm.SourceInfo{
 					File:      e.File,
@@ -380,6 +384,7 @@ func (d *decoder) readModuleV2() (*Module, error) {
 		chunk.Append(cd.Code...)
 		chunk.SetMaxStack(cd.MaxStack)
 		if len(cd.SourceMap) > 0 {
+			chunk.ReserveSourceMap(len(cd.SourceMap))
 			for _, e := range cd.SourceMap {
 				chunk.AddSourceInfo(vm.SourceInfo{
 					File:      e.File,

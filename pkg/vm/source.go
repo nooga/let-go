@@ -53,6 +53,18 @@ func (sm *SourceMap) Add(ip int, info SourceInfo) {
 	sm.entries = append(sm.entries, sourceMapEntry{startIP: ip, info: info})
 }
 
+// Reserve grows the backing array so that n subsequent Add calls do not
+// reallocate. The decoder knows the entry count up front (it reads a counted
+// section), so a single sized allocation replaces O(n) append-growth garbage —
+// the dominant source of startup heap churn.
+func (sm *SourceMap) Reserve(n int) {
+	if n > cap(sm.entries) {
+		grown := make([]sourceMapEntry, len(sm.entries), n)
+		copy(grown, sm.entries)
+		sm.entries = grown
+	}
+}
+
 // SourceMapEntry is the exported version of sourceMapEntry.
 type SourceMapEntry struct {
 	StartIP int
