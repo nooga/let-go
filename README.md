@@ -161,6 +161,8 @@ build of let-go.
 
 ### Homebrew (macOS / Linux)
 
+Primary install command:
+
 ```bash
 brew install nooga/tap/let-go
 ```
