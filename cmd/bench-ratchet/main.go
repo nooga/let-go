@@ -100,6 +100,15 @@ const (
 	// zz_gogen_ir_wire_test.go, so the gogen_ir variant dispatches native.
 	irCompilePackage = "github.com/nooga/let-go/pkg/ir"
 	irCompileFilter  = "^BenchmarkIRCompile$"
+
+	// Startup cost: decoding the precompiled core bundle and running its
+	// main chunk — exactly what `lg -e nil` does minus process spawn. This
+	// is the guard for startup regressions (the per-instruction source-map /
+	// local-var realloc churn that doubled cold-start). Its B/op and
+	// allocs/op are deterministic and machine-independent, so the ratchet
+	// catches a reintroduction even when ns/op is noisy.
+	initPackage = "github.com/nooga/let-go/pkg/compiler"
+	initFilter  = "^BenchmarkInitFromLGB$"
 )
 
 // defaultPackages is the scope when no -packages flag is given.
@@ -659,6 +668,10 @@ func buildJobs(packages, tags string, full, manual bool, filterRE *regexp.Regexp
 		if err != nil {
 			return nil, "", fmt.Errorf("ir-compile filter: %w", err)
 		}
+		initRE, err := regexp.Compile(initFilter)
+		if err != nil {
+			return nil, "", fmt.Errorf("init filter: %w", err)
+		}
 		jobs := []captureJob{
 			{pkg: anchorPackage, tags: tags, filter: filterRE},
 			{pkg: suitePackage, tags: "", filter: suiteRE, variant: "bytecode", count: 1},
@@ -666,8 +679,9 @@ func buildJobs(packages, tags string, full, manual bool, filterRE *regexp.Regexp
 			{pkg: suitePackage, tags: "gogen_ir", filter: suiteRE, variant: "aot_native", count: 1, env: []string{"LG_SUITE_IR=1"}},
 			{pkg: irCompilePackage, tags: "", filter: irCompileRE, variant: "bytecode"},
 			{pkg: irCompilePackage, tags: "gogen_ir", filter: irCompileRE, variant: "gogen_ir"},
+			{pkg: initPackage, tags: "", filter: initRE, variant: "bytecode"},
 		}
-		return jobs, "full profile (vm fleet + jank ×3 + ir-compile ×2)", nil
+		return jobs, "full profile (vm fleet + jank ×3 + ir-compile ×2 + startup-init)", nil
 	default:
 		anchorRE, err := regexp.Compile(anchorFilter)
 		if err != nil {
@@ -681,6 +695,10 @@ func buildJobs(packages, tags string, full, manual bool, filterRE *regexp.Regexp
 		if err != nil {
 			return nil, "", fmt.Errorf("ir-compile filter: %w", err)
 		}
+		initRE, err := regexp.Compile(initFilter)
+		if err != nil {
+			return nil, "", fmt.Errorf("init filter: %w", err)
+		}
 		jobs := []captureJob{
 			{pkg: anchorPackage, tags: "", filter: anchorRE},
 			{pkg: suitePackage, tags: "", filter: suiteRE, variant: "bytecode", count: 1},
@@ -688,8 +706,9 @@ func buildJobs(packages, tags string, full, manual bool, filterRE *regexp.Regexp
 			{pkg: suitePackage, tags: "gogen_ir", filter: suiteRE, variant: "aot_native", count: 1, env: []string{"LG_SUITE_IR=1"}},
 			{pkg: irCompilePackage, tags: "", filter: irCompileRE, variant: "bytecode"},
 			{pkg: irCompilePackage, tags: "gogen_ir", filter: irCompileRE, variant: "gogen_ir"},
+			{pkg: initPackage, tags: "", filter: initRE, variant: "bytecode"},
 		}
-		return jobs, "fast gate (jank ×3 + ir-compile ×2 + anchor)", nil
+		return jobs, "fast gate (jank ×3 + ir-compile ×2 + startup-init + anchor)", nil
 	}
 }
 
