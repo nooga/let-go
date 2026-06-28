@@ -734,11 +734,18 @@
 ;; lower-ns-to-go behaves exactly as before (no cross-package entries).
 (def ^:dynamic *cross-pkg-registry* {})
 
-;; Set of [defining-ns-str fn-name-str] that ARE referenced cross-package (from
-;; the collector's union of @*cross-ns-vars-used*). lower-ns-to-go emits an
-;; exported wrapper ONLY for a fn in this set — so we export exactly the fns some
-;; other package calls, never dead wrappers. nil/empty ⇒ none.
-(def ^:dynamic *wrapper-target-names* #{})
+;; Set of [defining-ns-internal-sym fn-name-str] that ARE referenced
+;; cross-package (from the collector's union of @*cross-ns-vars-used*).
+;; lower-ns-to-go emits an exported wrapper ONLY for a fn in this set — so we
+;; export exactly the fns some other package calls, never dead wrappers.
+;;   :all (default) ⇒ emit a wrapper for EVERY direct-callable fn (the manual /
+;;     single-ns convenience: `(binding [*emit-exported-wrappers* true] …)` with
+;;     no collected target set).
+;;   a concrete set ⇒ emit wrappers for exactly its members; an EMPTY set ⇒ none.
+;; lower-all-ns-to-go always binds the concrete `targets` set, so a whole-program
+;; build with no cross-package references emits no wrappers (no dead exported API)
+;; rather than exporting everything.
+(def ^:dynamic *wrapper-target-names* :all)
 
 (defn- exported-wrapper-decl [result]
   "Exported thin forwarding wrapper for a direct-callable lowered fn, so it is
@@ -1077,7 +1084,7 @@
                               (let [ns-int (lower-go/internal-ns-sym (str ns-name))
                                     target? (fn [r]
                                               (and (:direct-callable? r)
-                                                   (or (empty? *wrapper-target-names*)
+                                                   (or (= :all *wrapper-target-names*)
                                                        (contains? *wrapper-target-names*
                                                                   [ns-int (str (:fn-name r))]))))]
                                 (mapv (fn [r] {:decl (exported-wrapper-decl r)
@@ -1130,6 +1137,54 @@
                           #{} @cross)]
       {:exports exports :refs refs})))
 
+(defn- cross-pkg-owners [global-reg]
+  "Internal-ns symbols that OWN at least one cross-package export — i.e. the
+   packages a direct call would `import`."
+  (reduce (fn [s k] (conj s (first k))) #{} (keys global-reg)))
+
+(defn- cross-pkg-dep-graph [specs collected owners]
+  "Candidate cross-package call graph: caller-internal-ns -> #{callee-internal-ns},
+   over refs whose callee package actually owns a registry export (those are the
+   edges that would become Go imports). Self-edges dropped. A cycle here is a Go
+   import cycle, so these edges are what must be kept acyclic."
+  (reduce
+    (fn [m i]
+      (let [caller  (lower-go/internal-ns-sym (str (nth (nth specs i) 1)))
+            callees (reduce (fn [s ref]
+                              (let [q (lower-go/internal-ns-sym (first ref))]
+                                (if (or (= q caller) (not (contains? owners q)))
+                                  s
+                                  (conj s q))))
+                            #{} (:refs (nth collected i)))]
+        (assoc m caller (into (get m caller #{}) callees))))
+    {} (range (count specs))))
+
+(defn- transitive-reach [graph]
+  "graph: node -> #{direct successors}. Returns node -> #{all nodes reachable via
+   one or more edges}. Fixpoint over the finite node set."
+  (let [nodes (keys graph)]
+    (loop [reach (reduce (fn [m n] (assoc m n (get graph n #{}))) {} nodes)]
+      (let [nxt (reduce
+                  (fn [m n]
+                    (assoc m n
+                           (reduce (fn [acc s] (into acc (get reach s #{})))
+                                   (get reach n #{})
+                                   (get reach n #{}))))
+                  {} nodes)]
+        (if (= nxt reach) reach (recur nxt))))))
+
+(defn- acyclic-registry-for [global-reg reach caller]
+  "global-reg minus entries whose owner package can transitively reach `caller`:
+   keeping such a `caller -> owner` edge would close an import cycle, so that call
+   stays on the cached-var trampoline until cycle support exists. DAG edges
+   (including an acyclic external caller into a cyclic component) are preserved."
+  (reduce (fn [m kv]
+            (let [q (first (key kv))]
+              (if (or (= q caller) (not (contains? (get reach q #{}) caller)))
+                (assoc m (key kv) (val kv))
+                m)))
+          {} global-reg))
+
 (defn lower-all-ns-to-go [specs]
   "Whole-program Go lowering with cross-package direct calls (EPIC-012/ITER-0025).
    specs: vector of positional [pkg-name ns-sym forms import-path]. Phase 0 collects the
@@ -1161,14 +1216,23 @@
         targets    (reduce (fn [s c]
                              (into s (map (fn [k] [(lower-go/internal-ns-sym (first k)) (second k)])
                                           (:refs c))))
-                           #{} collected)]
-    (binding [*cross-pkg-registry*     global-reg
-              *wrapper-target-names*   targets
+                           #{} collected)
+        ;; Cross-package edges must stay acyclic or the emitted Go has an import
+        ;; cycle. Build the candidate call graph, take its transitive closure,
+        ;; and give each package a registry view that excludes any callee able to
+        ;; reach back to it (those calls keep trampolining). Cycle-free programs
+        ;; are unaffected — every callee passes the reach test.
+        owners     (cross-pkg-owners global-reg)
+        dep-graph  (cross-pkg-dep-graph specs collected owners)
+        reach      (transitive-reach dep-graph)]
+    (binding [*wrapper-target-names*   targets
               *emit-exported-wrappers* true]
       (mapv (fn [s]
-              (try
-                (lower-ns-to-go (nth s 0) (nth s 1) (nth s 2))
-                (catch e
-                  (println (str "WARNING: Go lowering failed for " (nth s 1) ": " e))
-                  nil)))
+              (let [caller (lower-go/internal-ns-sym (str (nth s 1)))]
+                (binding [*cross-pkg-registry* (acyclic-registry-for global-reg reach caller)]
+                  (try
+                    (lower-ns-to-go (nth s 0) (nth s 1) (nth s 2))
+                    (catch e
+                      (println (str "WARNING: Go lowering failed for " (nth s 1) ": " e))
+                      nil)))))
             specs))))

@@ -86,3 +86,58 @@ func TestExportedWrapperSuppressedByDefault(t *testing.T) {
 		t.Fatalf("flag OFF must not emit an exported wrapper\n--- go ---\n%s", string(s))
 	}
 }
+
+// P1 regression: a mutual cross-package call cycle must NOT be lowered into
+// reciprocal direct calls — `cyca` importing `cycb` while `cycb` imports `cyca`
+// is a Go import cycle (uncompilable). The cycle-closing edges stay on the
+// cached-var trampoline.
+func TestCrossPackageCyclicEdgesStayTrampolined(t *testing.T) {
+	ensureLoader()
+
+	// Setup forms (intern from-a/from-b so the mutual calls resolve) are separate
+	// top-level forms; only the final lower-all-ns-to-go call is wrapped in nth.
+	setup := `
+      (ns cyca)
+      (defn from-a [x] x)
+      (ns cycb)
+      (defn from-b [x] x)
+      (ns user)
+      `
+	call := `(ir.passes.pipeline/lower-all-ns-to-go
+        [["cyca" (quote cyca) [(quote (defn from-a [x] (cycb/from-b x)))] "ex/cyca"]
+         ["cycb" (quote cycb) [(quote (defn from-b [x] (cyca/from-a x)))] "ex/cycb"]])`
+
+	caV := runLispExpr(t, setup+"(nth "+call+" 0)")
+	cbV := runLispExpr(t, setup+"(nth "+call+" 1)")
+	ca, ok1 := caV.(vm.String)
+	cb, ok2 := cbV.(vm.String)
+	if !ok1 || !ok2 {
+		t.Fatalf("expected two source strings, got %T and %T", caV, cbV)
+	}
+	caImportsCb := strings.Contains(string(ca), "cycb.LG_")
+	cbImportsCa := strings.Contains(string(cb), "cyca.LG_")
+	if caImportsCb && cbImportsCa {
+		t.Fatalf("mutual cross-package direct calls form a Go import cycle:\n--- cyca ---\n%s\n--- cycb ---\n%s", ca, cb)
+	}
+}
+
+// P2 regression: a whole-program lowering with NO cross-package references must
+// emit NO exported wrappers — an empty collected target set means "export
+// nothing", not "export everything" (which would add dead exported API).
+func TestWholeProgramNoCrossRefEmitsNoWrappers(t *testing.T) {
+	ensureLoader()
+
+	v := runLispExpr(t, `
+      (ns solo)
+      (defn only-here [x] (+ x 1))
+      (ns user)
+      (nth (ir.passes.pipeline/lower-all-ns-to-go
+             [["solo" (quote solo) [(quote (defn only-here [x] (+ x 1)))] "ex/solo"]]) 0)`)
+	s, ok := v.(vm.String)
+	if !ok {
+		t.Fatalf("expected solo source string, got %T", v)
+	}
+	if strings.Contains(string(s), "func LG_") {
+		t.Fatalf("no fn is called cross-package, so no exported wrapper should be emitted:\n--- go ---\n%s", string(s))
+	}
+}
