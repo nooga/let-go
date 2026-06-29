@@ -49,15 +49,15 @@ files are valid Clojure that runs unmodified. Apple M1 Pro.
 |                 | let-go     | babashka | joker | go-joker | gloat | clojure JVM |
 | --------------- | ---------- | -------- | ----- | -------- | ----- | ----------- |
 | **Binary size** | **13MB**   | 68MB     | 26MB  | 32MB     | 26MB  | 304MB (JDK) |
-| **Startup**     | 15.3ms     | 20.8ms   | 12.2ms | 12.7ms   | 15.7ms | 381ms       |
-| **Idle memory** | 22.4MB     | 27.0MB   | 21.4MB | 23.5MB   | 23.1MB | 97.6MB      |
+| **Startup**     | 15.0ms     | 20.4ms   | 12.2ms | 12.7ms   | 15.8ms | 417ms       |
+| **Idle memory** | 21.5MB     | 27.0MB   | 21.4MB | 23.4MB   | 23.0MB | 97.2MB      |
 
 let-go stays compact and quick to launch: a small native binary, sub-20ms
 startup, low RSS, and no JVM dependency. On this run Joker/go-joker edge it on
 startup, but let-go remains far below JVM startup and memory cost.
 
 On runtime benchmarks, let-go is competitive on short-lived data work like
-map/filter (17.8ms) and persistent maps (26.5ms), and it is still much faster
+map/filter (14.9ms) and persistent maps (26.3ms), and it is still much faster
 than upstream Joker on numeric/tree-walk-heavy cases. go-joker's WASM JIT leads
 hot loops and reduction/transducer workloads; Babashka is ahead on several
 algorithmic cases; and the JVM dominates long compute runs once HotSpot warms
