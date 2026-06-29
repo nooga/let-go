@@ -1,0 +1,238 @@
+<!--
+  Minimal host-eval demo shell for let-go 1.11. Injected into a
+  `lg -w -w-shell none -w-host-eval` bundle. Binds the runtime ONLY through
+  window.LetGoHost: onReady/onOutput for stdout, and eval(code) -> Promise<string>
+  to drive the live in-page image from JS. No reaching into generated glue.
+
+  Layout: two fixed-height panes. Left is an inline REPL — the prompt is the
+  last line of the transcript; Enter freezes it to history, prints the return
+  value below, and a fresh `user=>` prompt waits. Right is stdout — what the
+  image prints (*out* → HostWriter → onOutput). Both seams of the 1.11 story.
+
+  Palette + type mirror let-go's hosted REPL (wasm/index.html) dark theme so the
+  demo reads as the same brand: warm parchment-on-brown, amber accent, JetBrains
+  Mono. Token names match that page (--bg/--fg/--accent/--rule/--mono).
+-->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<style>
+  :root {
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --bg: #1a1610; --fg: #ede1c4; --muted: #7a6d52; --rule: #34291c;
+    --accent: #f5b041; --hot: #ffe3b0; --panel: #241c12;
+    --term-bg: #110d08; --ok: #a8c98a; --err: #e07b5a;
+  }
+  /* The bundle's host page sets body{display:flex} + html,body{height:100dvh;
+     overflow:hidden} for its own shell. We own the layout now: restore normal
+     block flow so the page sizes to content and scrolls — otherwise #wrap
+     shrink-wraps as a flex item (a sideways jump) and the lower pane is clipped.
+     Our <style> is injected after the bundle's, so these win on source order. */
+  html, body { margin: 0; height: auto; min-height: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--mono); }
+  body { display: block; overflow: visible; }
+  html { overflow-y: scroll; scrollbar-gutter: stable; }
+  #wrap { max-width: 900px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 15px; font-weight: 600; color: var(--accent); margin: 0 0 4px; letter-spacing: .01em; }
+  .sub { font-size: 12px; color: var(--muted); margin: 0 0 14px; }
+
+  #panes { display: flex; gap: 12px; }
+  .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .pane-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 5px; }
+  .pane-h .k { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+  .pane-h .v { font-size: 10.5px; color: var(--muted); opacity: .8; white-space: nowrap; }
+  .hgroup { display: flex; align-items: baseline; gap: 10px; }
+  #clear { background: transparent; color: var(--muted); border: 1px solid var(--rule); border-radius: 4px;
+    padding: 1px 7px; font: 10.5px var(--mono); cursor: pointer; }
+  #clear:hover { border-color: var(--accent); color: var(--hot); }
+
+  /* overflow:hidden clips xterm's pre-fit default grid so it can't transiently
+     widen the flex row before fit() shrinks it. */
+  .box { height: 300px; border: 1px solid var(--rule); border-radius: 6px; box-sizing: border-box; overflow: hidden; }
+  /* NOT #terminal — the bundle's host page already owns that id; a dupe sends
+     xterm into the hidden one. Use a unique id so our visible box gets output. */
+  #evalio { padding: 6px; background: var(--term-bg); }
+
+  /* REPL pane: one scroll flow; the prompt is the last line (no separate box). */
+  .repl { padding: 0; }
+  #log { height: 100%; overflow-y: auto; padding: 8px 10px; font-size: 13px; line-height: 1.5; cursor: text; }
+  #log > div { white-space: pre-wrap; overflow-wrap: anywhere; }
+  #promptline, .echo { display: flex; align-items: flex-start; gap: 6px; }
+  .ps { color: var(--accent); user-select: none; }
+  .echo .src { flex: 1; min-width: 0; }
+  .r { color: var(--ok); } .e { color: var(--err); } .q { color: var(--muted); }
+  #expr { flex: 1; min-width: 0; resize: none; overflow: hidden; background: transparent;
+    color: var(--fg); border: 0; outline: none; padding: 0; margin: 0; font: inherit; line-height: inherit; }
+  #expr:disabled { opacity: .5; }
+
+  /* "try" example chips — mirrors let-go's hosted browser REPL */
+  .examples { margin: 12px 0 0; }
+  .exrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .exrow + .exrow { margin-top: 6px; }
+  .exrow .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; min-width: 46px; }
+  .exrow button { background: var(--panel); color: var(--fg); border: 1px solid var(--rule);
+    border-radius: 999px; padding: 4px 11px; font: 12px var(--mono); cursor: pointer; }
+  .exrow button:hover { border-color: var(--accent); color: var(--hot); }
+
+  @media (max-width: 680px) {
+    #panes { flex-direction: column; }
+    .box { height: 240px; }
+  }
+  /* iOS Safari auto-zooms a focused field under 16px. Target touch devices
+     directly — a width query (max-width) misses iOS's wider CSS viewport, which
+     is why the earlier attempt didn't take. Bump the whole REPL to 16px so the
+     input never trips the trigger and input + history stay matched. (#expr
+     inherits via font:inherit.) Pairs with the maximum-scale viewport patch. */
+  @media (pointer: coarse) {
+    #log { font-size: 16px; }
+  }
+</style>
+<div id="wrap">
+  <h1>let-go 1.11 &middot; repl + host-eval</h1>
+  <p class="sub">The page owns the shell. JS drives the live image through
+    <code>window.LetGoHost.eval</code>.</p>
+  <div id="panes">
+    <section class="pane">
+      <div class="pane-h"><span class="k">repl</span><span class="v">eval &rArr; value</span></div>
+      <div class="box repl">
+        <div id="log">
+          <div id="promptline"><span class="ps">user=&gt;</span><textarea id="expr" rows="1"
+            spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off"
+            data-1p-ignore data-lpignore="true" disabled>(+ 1 2 3)</textarea></div>
+        </div>
+      </div>
+    </section>
+    <section class="pane">
+      <div class="pane-h"><span class="k">stdout</span><span class="hgroup"><span class="v"><code>*out*</code> &rarr; onOutput</span><button id="clear" type="button" title="clear stdout">clear</button></span></div>
+      <div id="evalio" class="box"></div>
+    </section>
+  </div>
+  <div class="examples" id="examples">
+    <div class="exrow">
+      <span class="label">value</span>
+      <button data-send="(->> (range 20) (filter odd?) (map #(* % %)) (take 5))">threading</button>
+      <button data-send="(do (def n (atom 0)) (dotimes [_ 10] (swap! n inc)) @n)">atoms</button>
+      <button data-send="(take 10 (iterate #(* 2 %) 1))">lazy seq</button>
+      <button data-send="(let [{:keys [a b]} {:a 1 :b 2 :c 3}] (+ a b))">destructure</button>
+      <button data-send="(do (defn fact [n] (if (< n 2) 1 (* n (fact (dec n))))) (fact 20))">recursion</button>
+    </div>
+    <div class="exrow">
+      <span class="label">stdout</span>
+      <button data-send="(time (reduce + (range 1000)))">time</button>
+      <button data-send="(doseq [w [&quot;let&quot; &quot;go&quot; &quot;1.11&quot;]] (println w))">doseq</button>
+      <button data-send="(do (dotimes [i 15] (let [n (inc i)] (println (cond (zero? (mod n 15)) &quot;FizzBuzz&quot; (zero? (mod n 3)) &quot;Fizz&quot; (zero? (mod n 5)) &quot;Buzz&quot; :else n)))) :done)">fizzbuzz</button>
+    </div>
+  </div>
+</div>
+<script>
+  // iOS Safari auto-zooms when focusing a sub-16px field. maximum-scale=1 stops
+  // that automatic zoom; since iOS 10 Safari ignores the cap for user-initiated
+  // pinch, so manual zoom still works (no accessibility regression). The bundle
+  // owns the <head> viewport meta (#291), so patch it here rather than the head.
+  (function () {
+    var vp = document.querySelector('meta[name="viewport"]');
+    if (!vp) { vp = document.createElement("meta"); vp.name = "viewport"; document.head.appendChild(vp); }
+    vp.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1");
+  })();
+
+  const term = new Terminal({
+    fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace', fontSize: 13,
+    // stdout is read-only output, not an input: disable stdin and hide the
+    // cursor (block = bg color, no blink, none when unfocused) so it doesn't
+    // read as a text box. Text stays selectable — selection is independent.
+    theme: { background: "#110d08", foreground: "#ede1c4", cursor: "#110d08" },
+    convertEol: true,
+    disableStdin: true,
+    cursorBlink: false,
+    cursorInactiveStyle: "none",
+    scrollback: 1000, // ring buffer: keep the last ~1000 lines, scroll to see them
+  });
+  // Without fitting, xterm opens at a default grid that paints nothing into the
+  // sized container — fit on open (and again after layout settles) and on resize.
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  const refit = () => { try { fit.fit(); } catch (_) {} };
+
+  const logEl = document.getElementById("log");
+  const promptline = document.getElementById("promptline");
+  const expr = document.getElementById("expr");
+  let ready = false;
+
+  const scroll = () => { logEl.scrollTop = logEl.scrollHeight; };
+  const autosize = () => { expr.style.height = "auto"; expr.style.height = expr.scrollHeight + "px"; };
+
+  // Insert a transcript line just above the live prompt (which stays last).
+  function emit(text, cls) {
+    const d = document.createElement("div");
+    if (cls) d.className = cls;
+    d.textContent = text;
+    logEl.insertBefore(d, promptline);
+  }
+  // Freeze the submitted input as a history line: "user=> <expr>".
+  function echo(src) {
+    const d = document.createElement("div");
+    d.className = "echo";
+    const ps = document.createElement("span"); ps.className = "ps"; ps.textContent = "user=>";
+    const s = document.createElement("span"); s.className = "src"; s.textContent = src;
+    d.append(ps, s);
+    logEl.insertBefore(d, promptline);
+  }
+
+  async function submit() {
+    if (!ready) return;
+    const src = expr.value.trim();
+    if (!src) return;
+    expr.value = ""; autosize();
+    echo(src); scroll();
+    expr.disabled = true;
+    try {
+      const result = await window.LetGoHost.eval(src);
+      emit(String(result), "r");
+    } catch (e) {
+      emit("error: " + (e && e.message ? e.message : String(e)), "e");
+    } finally {
+      expr.disabled = false; expr.focus(); scroll();
+    }
+  }
+
+  // Bind only through the public surface. onReady gives the boot mode;
+  // onOutput sinks VM stdout into xterm; eval() is the 1.11 host-eval hook.
+  window.LetGoHost.onReady((mode) => {
+    // The bundle's boot "decompressing wasm…" #status lingers and overlays the
+    // page (intercepts clicks). Hide it once the runtime is wired.
+    const boot = document.getElementById("status");
+    if (boot) boot.style.display = "none";
+    term.open(document.getElementById("evalio"));
+    refit();
+    requestAnimationFrame(refit); // correct the first-paint grid once laid out
+    window.LetGoHost.onOutput((s) => term.write(s));
+    if (typeof window.LetGoHost.eval !== "function") {
+      emit("LetGoHost.eval missing — bundle not built with -w-host-eval", "e");
+      return;
+    }
+    emit(`runtime ready (mode: ${mode}). type a form and press Enter.`, "q");
+    ready = true;
+    expr.disabled = false; expr.focus(); scroll();
+  });
+
+  // Enter evaluates; Shift+Enter inserts a newline (multi-form snippets).
+  expr.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+    else if (e.key === "Enter") { setTimeout(autosize, 0); }
+  });
+  expr.addEventListener("input", autosize);
+  // Clicking anywhere in the transcript drops the caret back in the prompt.
+  logEl.addEventListener("click", (e) => { if (e.target !== expr) expr.focus(); });
+  window.addEventListener("resize", refit);
+
+  // Clear the stdout pane (the REPL transcript is left intact).
+  document.getElementById("clear").addEventListener("click", () => { term.reset(); refit(); });
+
+  // "try" chips: drop the snippet into the prompt and evaluate it.
+  document.querySelectorAll("#examples button").forEach((btn) => {
+    btn.addEventListener("click", () => { expr.value = btn.dataset.send; autosize(); submit(); });
+  });
+</script>
