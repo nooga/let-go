@@ -22,7 +22,12 @@ import (
 
 const modulePrefix = "github.com/nooga/let-go/"
 
-type Baseline = perfdata.Baseline
+// Baseline here is one MACHINE PROFILE's data — the page renders a single
+// machine's numbers (anchor-relative ratios only normalize within a CPU model).
+// MultiBaseline is the on-disk arch-partitioned file that loadBaseline reads
+// and selects a profile from.
+type Baseline = perfdata.MachineBaseline
+type MultiBaseline = perfdata.Baseline
 type Machine = perfdata.Machine
 type Anchor = perfdata.Anchor
 type BenchmarkEntry = perfdata.BenchmarkEntry
@@ -154,6 +159,149 @@ type PageData struct {
 	TopImprovements   []ChangeRow
 	TopSlowdowns      []ChangeRow
 	RecentlyTightened []BenchmarkRow
+
+	// ExplorerURL is where the page fetches the tidy explorer data
+	// ({date, cpu, bench, metric, value} rows) at load time — written as a
+	// separate explorer.json rather than inlined, so the HTML stays small.
+	ExplorerURL string
+}
+
+// explorerDatum is one tidy row: a single metric of one benchmark at one
+// timeline snapshot, tagged by the CPU that produced it.
+type explorerDatum struct {
+	Date   string  `json:"date"`
+	CPU    string  `json:"cpu"`
+	Bench  string  `json:"bench"`
+	Metric string  `json:"metric"`
+	Value  float64 `json:"value"`
+	// Lo/Hi are the min/max of this metric across the snapshot's retained
+	// samples — the run-to-run spread the explorer shades as a band. With a
+	// single sample (the end-to-end suite) Lo==Hi==Value (no band). This is an
+	// honest spread, NOT a 95% CI (typically only ~3 samples).
+	Lo float64 `json:"lo"`
+	Hi float64 `json:"hi"`
+	// Samples are the individual per-run measurements behind Value (the raw
+	// gathered points), so the chart/sparkline can show each sample as an
+	// observable dot rather than only the summarized mean+band.
+	Samples []float64 `json:"samples,omitempty"`
+}
+
+// metricInfo carries a metric's display unit and direction so the explorer can
+// label the axis and show whether an increase is good or bad. All current perf
+// metrics are lower-is-better, but keeping it explicit (and per-metric) means a
+// future higher-is-better metric (e.g. throughput) renders correctly.
+type metricInfo struct {
+	Unit          string `json:"unit"`
+	LowerIsBetter bool   `json:"lower_is_better"`
+}
+
+// metricMeta maps each emitted metric to its unit + direction. The keys must
+// match the metric strings used in explorerDatum rows.
+var metricMeta = map[string]metricInfo{
+	"ratio_to_anchor": {Unit: "× anchor", LowerIsBetter: true},
+	"allocs_per_op":   {Unit: "allocs/op", LowerIsBetter: true},
+	"bytes_per_op":    {Unit: "B/op", LowerIsBetter: true},
+}
+
+// explorerPayload is the shape of explorer.json: per-metric metadata plus the
+// tidy rows.
+type explorerPayload struct {
+	Meta map[string]metricInfo `json:"meta"`
+	Rows []explorerDatum       `json:"rows"`
+}
+
+// sig6 rounds to 6 significant figures — ample for a trend chart, and it keeps
+// the embedded JSON small (raw float64 ratios stringify to ~17 digits).
+func sig6(v float64) float64 {
+	if v == 0 {
+		return 0
+	}
+	d := math.Pow(10, 5-math.Floor(math.Log10(math.Abs(v))))
+	return math.Round(v*d) / d
+}
+
+// buildExplorerData flattens the timeline into tidy rows for the Vega-Lite
+// explorer. Each snapshot contributes, per benchmark, one row per non-zero
+// metric (ratio_to_anchor / ns_per_op / allocs_per_op / bytes_per_op), tagged
+// with the snapshot's CPU model — so the explorer plots a line per CPU.
+func buildExplorerData(timeline []Snapshot) []byte {
+	var rows []explorerDatum
+	for _, s := range timeline {
+		date := s.Baseline.CapturedAt
+		cpu := s.Baseline.Machine.CPUModel
+		if cpu == "" {
+			cpu = "(unknown)"
+		}
+		for name, e := range s.Baseline.Benchmarks {
+			bench := strings.TrimPrefix(name, modulePrefix)
+			samples := e.Samples
+			// add emits a row for one metric; sampleVal pulls that metric out of
+			// a raw sample so we can shade the min/max run-to-run spread.
+			add := func(metric string, v float64, sampleVal func(BenchmarkSample) float64) {
+				if v == 0 {
+					return
+				}
+				lo, hi, seen := v, v, false
+				var pts []float64
+				for _, sm := range samples {
+					sv := sampleVal(sm)
+					if sv == 0 {
+						continue
+					}
+					pts = append(pts, sig6(sv))
+					if !seen {
+						lo, hi, seen = sv, sv, true
+						continue
+					}
+					if sv < lo {
+						lo = sv
+					}
+					if sv > hi {
+						hi = sv
+					}
+				}
+				// Drop samples that carry no spread: deterministic metrics
+				// (allocs/op, bytes/op) repeat the identical value every run, so
+				// their samples[] would just triple the payload with no signal.
+				// The renderers fall back to the mean when samples is absent.
+				distinct := false
+				for _, p := range pts {
+					if p != pts[0] {
+						distinct = true
+						break
+					}
+				}
+				if !distinct {
+					pts = nil
+				}
+				rows = append(rows, explorerDatum{
+					Date: date, CPU: cpu, Bench: bench, Metric: metric,
+					Value: sig6(v), Lo: sig6(lo), Hi: sig6(hi), Samples: pts,
+				})
+			}
+			// ratio_to_anchor is the machine-portable timing metric (raw
+			// ns_per_op is intentionally omitted — it's CPU-dependent and
+			// redundant with the ratio); allocs/bytes are the deterministic
+			// metrics this explorer was added to surface.
+			add("ratio_to_anchor", e.RatioToAnchor, func(sm BenchmarkSample) float64 { return sm.RatioToAnchor })
+			add("allocs_per_op", float64(e.AllocsPerOp), func(sm BenchmarkSample) float64 { return float64(sm.AllocsPerOp) })
+			add("bytes_per_op", float64(e.BytesPerOp), func(sm BenchmarkSample) float64 { return float64(sm.BytesPerOp) })
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Bench != rows[j].Bench {
+			return rows[i].Bench < rows[j].Bench
+		}
+		if rows[i].Metric != rows[j].Metric {
+			return rows[i].Metric < rows[j].Metric
+		}
+		return rows[i].Date < rows[j].Date
+	})
+	b, err := json.Marshal(explorerPayload{Meta: metricMeta, Rows: rows})
+	if err != nil {
+		return []byte(`{"meta":{},"rows":[]}`)
+	}
+	return b
 }
 
 func main() {
@@ -162,6 +310,8 @@ func main() {
 		historicalPath = flag.String("historical", "docs/perf/historical", "historical baseline directory")
 		timelinePath   = flag.String("timeline", "docs/perf/timeline", "timeline snapshot directory")
 		outPath        = flag.String("out", "docs/perf/index.html", "HTML output path")
+		explorerOut    = flag.String("explorer-out", "", "path to write the explorer data JSON (default: explorer.json next to -out). The page fetches this file rather than inlining ~tens of thousands of rows.")
+		explorerURL    = flag.String("explorer-url", "explorer.json", "URL the page fetches the explorer data from (relative to the page = same-origin; or an absolute https URL, e.g. raw.githubusercontent of the perf-data branch)")
 		logoPath       = flag.String("logo", "meta/logo.svg", "logo SVG to embed")
 		cpuFilter      = flag.String("cpu", "", "keep only timeline snapshots whose machine cpu_model contains this substring (CI runs land on ≥2 CPU tiers whose ratio_to_anchor doesn't normalize across them, so a mixed timeline zig-zags ~2x; filtering to one tier gives a clean series). Empty = all.")
 		anchorName     = flag.String("anchor", "", "historical baseline to compare against, by file stem (e.g. 'v1.8.0'); empty = newest. Lets the page swap anchors — e.g. a fresh same-machine baseline for the modern suite vs the legacy v1.8.0 (Apple M3, pre-IR) reference.")
@@ -187,6 +337,7 @@ func main() {
 	}
 
 	page := buildPage(current, reference, referenceName, timeline, logo)
+	page.ExplorerURL = *explorerURL
 	html, err := renderPage(page)
 	if err != nil {
 		die("render page: %v", err)
@@ -197,7 +348,18 @@ func main() {
 	if err := os.WriteFile(*outPath, html, 0o644); err != nil {
 		die("write %s: %v", *outPath, err)
 	}
-	fmt.Printf("wrote %s (%d benchmarks)\n", *outPath, len(current.Benchmarks))
+	// Write the explorer data as a separate file the page fetches (keeps the
+	// HTML small instead of inlining tens of thousands of rows).
+	explorerPath := *explorerOut
+	if explorerPath == "" {
+		explorerPath = filepath.Join(filepath.Dir(*outPath), "explorer.json")
+	}
+	data := buildExplorerData(timeline)
+	if err := os.WriteFile(explorerPath, data, 0o644); err != nil {
+		die("write %s: %v", explorerPath, err)
+	}
+	fmt.Printf("wrote %s (%d benchmarks)\n  explorer data → %s (%d KB)\n",
+		*outPath, len(current.Benchmarks), explorerPath, len(data)/1024)
 }
 
 func die(format string, args ...any) {
@@ -243,19 +405,53 @@ func filterTimelineByCPU(timeline []Snapshot, sub string) []Snapshot {
 	return kept
 }
 
+// loadBaseline reads an arch-partitioned (v2) or legacy single-machine (v1)
+// baseline file and returns ONE machine profile's data. With multiple profiles
+// it currently selects the first by key (sorted) — the page is per-machine, and
+// multi-machine rendering is a follow-up.
 func loadBaseline(path string) (Baseline, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return Baseline{}, err
 	}
-	var baseline Baseline
-	if err := json.Unmarshal(b, &baseline); err != nil {
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(b, &probe); err != nil {
 		return Baseline{}, err
 	}
-	if len(baseline.Benchmarks) == 0 {
+	var multi MultiBaseline
+	if probe.Version <= 1 {
+		var v1 perfdata.LegacyBaselineV1
+		if err := json.Unmarshal(b, &v1); err != nil {
+			return Baseline{}, err
+		}
+		multi = MultiBaseline{
+			Version:  2,
+			Machines: map[string]Baseline{perfdata.MachineKey(v1.Machine): v1.ToMachineBaseline()},
+		}
+	} else if err := json.Unmarshal(b, &multi); err != nil {
+		return Baseline{}, err
+	}
+	prof, ok := selectProfile(multi)
+	if !ok || len(prof.Benchmarks) == 0 {
 		return Baseline{}, fmt.Errorf("%s has no benchmarks", path)
 	}
-	return baseline, nil
+	return prof, nil
+}
+
+// selectProfile picks one machine profile from a multi-arch baseline (first by
+// sorted key). Deterministic; multi-machine rendering can refine this later.
+func selectProfile(b MultiBaseline) (Baseline, bool) {
+	keys := make([]string, 0, len(b.Machines))
+	for k := range b.Machines {
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return Baseline{}, false
+	}
+	sort.Strings(keys)
+	return b.Machines[keys[0]], true
 }
 
 func loadLatestHistorical(dir string) (Baseline, string, error) {
@@ -1761,6 +1957,39 @@ const pageTemplate = `<!doctype html>
       .lede { font-size: 16px; }
       th, td { padding: 9px; }
     }
+    .explorer-controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+    .explorer-controls label { font-size: 0.8rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
+    .explorer-controls select { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); max-width: 420px; }
+    .explorer-controls input[type="search"] { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); min-width: 180px; }
+    .explorer-controls label.cb { gap: 0.35rem; cursor: pointer; }
+    .explorer-controls label.cb input { cursor: pointer; }
+    .spark-count { font-size: 0.78rem; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .explorer-chart { width: 100%; overflow-x: auto; }
+    .explorer-chart figure { margin: 0; }
+    .spark-table-wrap { max-height: 620px; overflow: auto; border: 1px solid rgba(0,0,0,0.08); border-radius: 10px; background: var(--paper); }
+    table.spark-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    table.spark-table th { position: sticky; top: 0; background: var(--paper); text-align: left; padding: 0.5rem 0.75rem; color: var(--muted); font-weight: 640; border-bottom: 1px solid rgba(0,0,0,0.1); z-index: 1; white-space: nowrap; }
+    table.spark-table td { padding: 0.25rem 0.75rem; border-bottom: 1px solid rgba(0,0,0,0.045); white-space: nowrap; }
+    table.spark-table td.spark { padding: 0.1rem 0.5rem; line-height: 0; }
+    table.spark-table th.num, table.spark-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    table.spark-table td.num { color: var(--muted); }
+    table.spark-table tr:hover td { background: rgba(36,92,115,0.045); }
+    table.spark-table .bench { color: var(--ink); max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+    table.spark-table .delta { min-width: 0; }
+    table.spark-table td.scales { white-space: normal; text-align: right; }
+    .scalepill { display: inline-flex; gap: 0.25rem; align-items: baseline; margin-left: 0.4rem; font-size: 0.72rem; padding: 1px 5px; border-radius: 5px; font-variant-numeric: tabular-nums; }
+    .scalepill b { font-weight: 700; opacity: 0.65; }
+    .scalepill.good { color: var(--green); background: var(--green-bg); }
+    .scalepill.bad { color: var(--red); background: var(--red-bg); }
+    .spark-tip { position: fixed; z-index: 50; pointer-events: none; background: var(--ink); color: #fff; padding: 6px 9px; border-radius: 7px; font-size: 0.72rem; line-height: 1.4; box-shadow: 0 4px 16px rgba(0,0,0,0.28); max-width: 280px; opacity: 0; transition: opacity 0.08s; }
+    .spark-tip .tip-h { font-weight: 700; }
+    .spark-tip .tip-sub { opacity: 0.65; margin-bottom: 3px; }
+    .spark-tip .tip-r { display: flex; gap: 10px; align-items: baseline; font-variant-numeric: tabular-nums; }
+    .spark-tip .tip-r b { min-width: 26px; opacity: 0.65; font-weight: 700; }
+    .spark-tip .tip-r span:nth-of-type(1) { margin-left: auto; }
+    .spark-tip .tip-r .good { color: #7fdca4; }
+    .spark-tip .tip-r .bad { color: #f3a3a3; }
+    .spark-tip .tip-r.muted { opacity: 0.6; }
   </style>
 </head>
 <body>
@@ -1869,6 +2098,22 @@ const pageTemplate = `<!doctype html>
 
     <section>
       <div class="section-head">
+        <h2>Explore metrics over time</h2>
+        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them.</p>
+      </div>
+      <div id="perf-explorer" style="width:100%;min-height:420px"></div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Trend sparklines (first → last)</h2>
+        <p>One row per benchmark × CPU. Benchmarks that differ only by a scaling factor (…/10, /100, /1000) are merged into a single row: their lines are overlaid and each is indexed to its own first value (% change from a shared 0% baseline) so you can compare how each scale moved — darker line = larger scale — with the per-scale Δ shown at right. Un-scaled benchmarks show one absolute sparkline (every sample a faint dot; hollow ring = first snapshot, filled = last) plus first/last/Δ. Slope reads direction; green = improvement, red = regression. Sorted by the largest endpoint change — click Δ to flip; use the filters to hide single-point or unchanged series.</p>
+      </div>
+      <div id="perf-sparklines" style="width:100%"></div>
+    </section>
+
+    <section>
+      <div class="section-head">
         <h2>Largest changes</h2>
         <p>Current ratchet compared with {{.ReferenceName}}.</p>
       </div>
@@ -1964,6 +2209,396 @@ const pageTemplate = `<!doctype html>
   <footer>
     <div class="wrap">Source data: docs/perf/baseline.json, docs/perf/historical/*.json, and docs/perf/timeline/*.json. Page generation does not run benchmarks.</div>
   </footer>
+
+  <!-- One declarative d3-based stack drives every chart on the page. Observable
+       Plot (the grammar-of-graphics layer from the d3 authors) renders the
+       marks; it externalizes d3, so d3 MUST load first and Plot reuses that same
+       global d3 (no duplicate copy — that's why Plot's bundle is small). We also
+       use d3-array directly to shape the timeline (group/extent/endpoints).
+       Both pinned + SRI-verified. This replaced the vega/vega-lite/vega-embed
+       trio: Plot is lighter, consistent with our d3 data layer, and has the
+       exact marks this dashboard needs (faceting, link/dumbbell, tip). -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.16/dist/plot.umd.min.js" integrity="sha384-XzQ+KW4LBWHv6FLjiPA1vjDz//oGlY8We4XROgpir5jHgg2+Qvo/6fT5TjbnqyYi" crossorigin="anonymous"></script>
+  <script>
+    // Shared helpers for the two Observable Plot views below.
+    const PERF = (function () {
+      const rootStyle = getComputedStyle(document.documentElement);
+      const cssVar = function (name, fallback) {
+        const v = rootStyle.getPropertyValue(name);
+        return (v && v.trim()) || fallback;
+      };
+      return {
+        GREEN: cssVar("--green", "#167a48"),
+        RED: cssVar("--red", "#aa2e2e"),
+        INK: cssVar("--ink", "#171717"),
+        PAPER: cssVar("--paper", "#ffffff"),
+        // CPU model strings are long; collapse to a short tag for axis labels.
+        shortCPU: function (s) {
+          if (!s) return s;
+          const t = s.replace(/\(R\)|\(TM\)|Processor|Platinum|\d+-Core|Core|CPU.*$/gi, " ");
+          const m = t.match(/(EPYC\s+\w+|Xeon[\s\w]*?\d{3,}\w*|Apple\s+M\w+|Ryzen\s+\w+)/i);
+          return (m ? m[1] : t).replace(/\s+/g, " ").trim();
+        },
+        metricLabel: function (meta, m) {
+          const mi = meta[m];
+          return mi ? m + "  (" + mi.unit + ", " + (mi.lower_is_better ? "↓ lower is better" : "↑ higher is better") + ")" : m;
+        },
+        fmt: function (v) {
+          if (v == null || isNaN(v)) return "—";
+          const a = Math.abs(v);
+          if (a >= 1000) return Math.round(v).toLocaleString();
+          if (a >= 10) return v.toFixed(1);
+          return v.toPrecision(3);
+        },
+        // Build the bench + metric <select> controls; calls onChange() on input.
+        controls: function (host, opts) {
+          const bar = d3.select(host).append("div").attr("class", "explorer-controls");
+          if (opts.benches) {
+            const bSel = bar.append("label").text("Benchmark ").append("select");
+            bSel.selectAll("option").data(opts.benches).join("option")
+              .attr("value", function (d) { return d; }).text(function (d) { return d; })
+              .property("selected", function (d) { return d === opts.bench(); });
+            bSel.on("change", function () { opts.setBench(this.value); opts.onChange(); });
+          }
+          const mSel = bar.append("label").text("Metric ").append("select");
+          mSel.selectAll("option").data(opts.metrics).join("option")
+            .attr("value", function (d) { return d; }).text(opts.metricText)
+            .property("selected", function (d) { return d === opts.metric(); });
+          mSel.on("change", function () { opts.setMetric(this.value); opts.onChange(); });
+        }
+      };
+    })();
+  </script>
+  <script>
+    // Explorer (Observable Plot): pick a benchmark + metric, see one line per
+    // CPU with its min/max band AND every individual gathered sample as a dot.
+    (function () {
+      const host = document.getElementById("perf-explorer");
+      if (!host) return;
+      fetch({{.ExplorerURL}})
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(render)
+        .catch(function (e) { host.innerHTML = '<div class="empty">Could not load explorer data (' + e + ').</div>'; });
+
+      function render(payload) {
+        const rows = (payload && payload.rows) || [];
+        const meta = (payload && payload.meta) || {};
+        if (!window.Plot || !window.d3 || !rows.length) {
+          host.innerHTML = '<div class="empty">No timeline data to explore yet.</div>';
+          return;
+        }
+        rows.forEach(function (r) { r._t = new Date(r.date); });
+        const benches = Array.from(new Set(rows.map(function (r) { return r.bench; }))).sort();
+        const metrics = Array.from(new Set(rows.map(function (r) { return r.metric; }))).sort();
+        let curBench = benches.find(function (b) { return b.indexOf("ClojureTestSuite [aot_native]") >= 0; }) || benches[0];
+        let curMetric = metrics.indexOf("ratio_to_anchor") >= 0 ? "ratio_to_anchor" : metrics[0];
+
+        host.innerHTML = "";
+        PERF.controls(host, {
+          benches: benches, metrics: metrics,
+          bench: function () { return curBench; }, setBench: function (v) { curBench = v; },
+          metric: function () { return curMetric; }, setMetric: function (v) { curMetric = v; },
+          metricText: function (m) { return PERF.metricLabel(meta, m); },
+          onChange: draw
+        });
+        const chart = d3.select(host).append("div").attr("class", "explorer-chart");
+
+        function draw() {
+          const mi = meta[curMetric] || { unit: curMetric, lower_is_better: true };
+          const sub = rows.filter(function (r) { return r.bench === curBench && r.metric === curMetric; })
+            .map(function (r) { return { _t: r._t, cpu: PERF.shortCPU(r.cpu), value: r.value, lo: r.lo, hi: r.hi, samples: r.samples }; });
+          chart.selectAll("*").remove();
+          if (!sub.length) { chart.append("div").attr("class", "empty").text("No data for this selection."); return; }
+          // Flatten every retained sample into its own observable point.
+          const samples = [];
+          sub.forEach(function (r) {
+            (r.samples && r.samples.length ? r.samples : [r.value]).forEach(function (v) {
+              samples.push({ _t: r._t, cpu: r.cpu, sample: v });
+            });
+          });
+          const width = chart.node().clientWidth || 720;
+          const fig = Plot.plot({
+            width: width, height: 380, marginLeft: 60, marginBottom: 34,
+            x: { label: null, type: "utc" },
+            y: { grid: true, label: mi.unit + "  (" + (mi.lower_is_better ? "↓ better" : "↑ better") + ")", tickFormat: "~s" },
+            color: { legend: true, label: "CPU" },
+            marks: [
+              Plot.areaY(sub, { x: "_t", y1: "lo", y2: "hi", fill: "cpu", fillOpacity: 0.1, curve: "monotone-x" }),
+              Plot.dot(samples, { x: "_t", y: "sample", stroke: "cpu", r: 1.7, strokeOpacity: 0.45 }),
+              Plot.lineY(sub, { x: "_t", y: "value", stroke: "cpu", strokeWidth: 1.7, curve: "monotone-x" }),
+              Plot.dot(sub, { x: "_t", y: "value", fill: "cpu", r: 2.6, stroke: "white", strokeWidth: 0.6, tip: true })
+            ]
+          });
+          chart.node().append(fig);
+        }
+        draw();
+        let raf;
+        window.addEventListener("resize", function () { cancelAnimationFrame(raf); raf = requestAnimationFrame(draw); });
+      }
+    })();
+  </script>
+  <script>
+    // Trend sparklines (canvas + d3). One row per benchmark × CPU; the cell is
+    // a real sparkline of the whole series (so you see the SHAPE, not just two
+    // endpoints), each scaled to its own y-range, with every gathered sample as
+    // a faint dot and hollow/filled rings marking first/last. Canvas, not SVG or
+    // Plot: hundreds of rows × hundreds of sample dots would be tens of thousands
+    // of nodes, and Plot can't give each row an independent y-scale (faceted
+    // scales are shared) — exactly the dense, per-row-scaled case canvas owns.
+    (function () {
+      const host = document.getElementById("perf-sparklines");
+      if (!host) return;
+      fetch({{.ExplorerURL}})
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(render)
+        .catch(function (e) { host.innerHTML = '<div class="empty">Could not load sparkline data (' + e + ').</div>'; });
+
+      function render(payload) {
+        const rows = (payload && payload.rows) || [];
+        const meta = (payload && payload.meta) || {};
+        if (!window.d3 || !rows.length) {
+          host.innerHTML = '<div class="empty">No timeline data for sparklines yet.</div>';
+          return;
+        }
+        rows.forEach(function (r) { r._t = +new Date(r.date); });
+        const metrics = Array.from(new Set(rows.map(function (r) { return r.metric; }))).sort();
+        let curMetric = metrics.indexOf("ratio_to_anchor") >= 0 ? "ratio_to_anchor" : metrics[0];
+        let sortDesc = true;   // by |Δ| descending
+        let hideSingle = true; // drop series with a single snapshot (no trend, Δ=0)
+        let hideFlat = true;   // drop series whose endpoints didn't move (|Δ| < 0.1%)
+        let nameFilter = "";   // substring match on "bench · cpu"
+
+        host.innerHTML = "";
+        const bar = d3.select(host).append("div").attr("class", "explorer-controls");
+        const mSel = bar.append("label").text("Metric ").append("select");
+        mSel.selectAll("option").data(metrics).join("option")
+          .attr("value", function (d) { return d; }).text(function (m) { return PERF.metricLabel(meta, m); })
+          .property("selected", function (d) { return d === curMetric; });
+        mSel.on("change", function () { curMetric = this.value; draw(); });
+        bar.append("label").text("Filter ").append("input")
+          .attr("type", "search").attr("placeholder", "benchmark or CPU…")
+          .on("input", function () { nameFilter = this.value.trim().toLowerCase(); draw(); });
+        const cbSingle = bar.append("label").attr("class", "cb");
+        cbSingle.append("input").attr("type", "checkbox").property("checked", hideSingle)
+          .on("change", function () { hideSingle = this.checked; draw(); });
+        cbSingle.append("span").text("hide single-point");
+        const cbFlat = bar.append("label").attr("class", "cb");
+        cbFlat.append("input").attr("type", "checkbox").property("checked", hideFlat)
+          .on("change", function () { hideFlat = this.checked; draw(); });
+        cbFlat.append("span").text("hide unchanged (Δ≈0)");
+        const count = bar.append("span").attr("class", "spark-count");
+        const wrap = d3.select(host).append("div").attr("class", "spark-table-wrap");
+
+        // Hover tooltip: the actual value (+ % change vs each line's first) at
+        // the snapshot under the cursor — the numbers the overlaid lines can't
+        // show on their own.
+        const tip = d3.select(host).append("div").attr("class", "spark-tip").style("opacity", 0);
+        function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"; }); }
+        function hideTip() { tip.style("opacity", 0); }
+        function rowAt(se, t0) { for (let i = 0; i < se.s.length; i++) { if (se.s[i]._t === t0) return se.s[i]; } return null; }
+        function showTip(ev, d, t0) {
+          const lib = (meta[curMetric] || {}).lower_is_better;
+          let dateStr = "";
+          for (let i = 0; i < d.series.length; i++) { const r = rowAt(d.series[i], t0); if (r && r.date) { dateStr = String(r.date).slice(0, 10); break; } }
+          let html = '<div class="tip-h">' + esc(d.base) + '</div><div class="tip-sub">' + esc(d.cpu) + (dateStr ? " · " + dateStr : "") + '</div>';
+          d.series.forEach(function (se) {
+            const r = rowAt(se, t0); if (!r) return;
+            const pct = se.first ? (r.value / se.first - 1) * 100 : 0;
+            const cls = pct === 0 ? "" : ((lib ? pct < 0 : pct > 0) ? "good" : "bad");
+            const lab = d.grouped ? '<b>' + fmtScale(se.scale) + '</b>' : '<b></b>';
+            html += '<div class="tip-r">' + lab + '<span>' + PERF.fmt(r.value) + '</span><span class="' + cls + '">' + deltaStr(pct) + '</span></div>';
+            if (!d.grouped && r.lo !== r.hi) { html += '<div class="tip-r muted"><b></b><span>spread</span><span>' + PERF.fmt(r.lo) + "–" + PERF.fmt(r.hi) + '</span></div>'; }
+          });
+          tip.html(html).style("opacity", 1);
+          const tw = tip.node().offsetWidth, th = tip.node().offsetHeight, gap = 14;
+          let lx = ev.clientX + gap, ly = ev.clientY + gap;
+          if (lx + tw > window.innerWidth - 8) lx = ev.clientX - tw - gap;
+          if (ly + th > window.innerHeight - 8) ly = ev.clientY - th - gap;
+          tip.style("left", lx + "px").style("top", ly + "px");
+        }
+
+        // Split a benchmark name into its base and scaling factor: a trailing
+        // /<digits> size (before any [mode] suffix). MapAssoc/HAMT-Assoc/01000
+        // [bytecode] → base "MapAssoc/HAMT-Assoc [bytecode]", scale 1000.
+        function parseBench(bench) {
+          let mode = "";
+          const mm = bench.match(/(\s*\[[^\]]*\])$/);
+          let core = bench;
+          if (mm) { mode = mm[1]; core = bench.slice(0, bench.length - mm[1].length); }
+          const sm = core.match(/^(.*)\/0*(\d+)$/);
+          if (sm) { return { base: sm[1] + mode, scale: +sm[2] }; }
+          return { base: bench, scale: null };
+        }
+        function fmtScale(n) {
+          if (n == null) return "";
+          if (n >= 1000000) return (n / 1000000) + "M";
+          if (n >= 1000) return (n / 1000) + "k";
+          return "" + n;
+        }
+        function deltaStr(p) { return (p >= 0 ? "+" : "") + p.toFixed(1) + "%"; }
+
+        function draw() {
+          const mi = meta[curMetric] || { unit: curMetric, lower_is_better: true };
+          const sub = rows.filter(function (r) { return r.metric === curMetric; });
+          // Group by (base benchmark, CPU); scaling-factor variants collapse into
+          // one row carrying a SET of per-scale series.
+          const byKey = d3.group(sub, function (d) {
+            const p = parseBench(d.bench); d.__base = p.base; d.__scale = p.scale;
+            return p.base + " @@ " + d.cpu;
+          });
+          let recs = [];
+          byKey.forEach(function (items) {
+            const base = items[0].__base, cpu = items[0].cpu;
+            const byScale = d3.group(items, function (d) { return d.__scale; });
+            let series = [];
+            byScale.forEach(function (rs, scale) {
+              const s = rs.slice().sort(function (a, b) { return a._t - b._t; });
+              if (!s.length) return;
+              const first = s[0].value, last = s[s.length - 1].value;
+              const deltaPct = first ? (last - first) / first * 100 : 0;
+              const good = mi.lower_is_better ? deltaPct < 0 : deltaPct > 0;
+              series.push({ scale: scale, s: s, first: first, last: last, deltaPct: deltaPct, good: good, n: s.length });
+            });
+            series.sort(function (a, b) { return (a.scale || 0) - (b.scale || 0); });
+            recs.push({
+              base: base, cpu: PERF.shortCPU(cpu), series: series, grouped: series.length > 1,
+              n: d3.max(series, function (d) { return d.n; }) || 1,
+              sortDelta: d3.max(series, function (d) { return Math.abs(d.deltaPct); }) || 0
+            });
+          });
+          const total = recs.length;
+          // Dynamic filtering: most rows are single-snapshot or flat (Δ≈0).
+          if (hideSingle) { recs = recs.filter(function (r) { return r.n >= 2; }); }
+          if (hideFlat) { recs = recs.filter(function (r) { return r.sortDelta >= 0.1; }); }
+          if (nameFilter) { recs = recs.filter(function (r) { return (r.base + " · " + r.cpu).toLowerCase().indexOf(nameFilter) >= 0; }); }
+          recs.sort(function (a, b) { return (sortDesc ? -1 : 1) * (a.sortDelta - b.sortDelta); });
+          count.text(recs.length + " of " + total + " series");
+
+          wrap.selectAll("*").remove();
+          if (!recs.length) { wrap.append("div").attr("class", "empty").text("No series match the current filters."); return; }
+
+          const table = wrap.append("table").attr("class", "spark-table");
+          const htr = table.append("thead").append("tr");
+          htr.append("th").text("Benchmark");
+          htr.append("th").text("CPU");
+          htr.append("th").text("Trend (scale variants overlaid, indexed to % change)");
+          htr.append("th").attr("class", "num").text("First");
+          htr.append("th").attr("class", "num").text("Last");
+          htr.append("th").attr("class", "num").style("cursor", "pointer").text("Δ " + (sortDesc ? "▼" : "▲"))
+            .on("click", function () { sortDesc = !sortDesc; draw(); });
+
+          const tb = table.append("tbody");
+          tb.selectAll("tr").data(recs).join("tr").each(function (d) {
+            const row = d3.select(this);
+            row.append("td").attr("class", "bench").attr("title", d.base).text(d.base);
+            row.append("td").text(d.cpu);
+            row.append("td").attr("class", "spark").each(function () { drawSpark(this, d); });
+            if (d.grouped) {
+              // Scale family: per-scale Δ pills span the First/Last/Δ columns.
+              const cell = row.append("td").attr("colspan", 3).attr("class", "scales");
+              d.series.forEach(function (se) {
+                const pill = cell.append("span").attr("class", "scalepill " + (se.good ? "good" : "bad"));
+                pill.append("b").text(fmtScale(se.scale));
+                pill.append("span").text(deltaStr(se.deltaPct));
+              });
+            } else {
+              const se = d.series[0];
+              row.append("td").attr("class", "num").text(PERF.fmt(se.first));
+              row.append("td").attr("class", "num").text(PERF.fmt(se.last));
+              row.append("td").attr("class", "num").append("span")
+                .attr("class", "delta " + (se.good ? "good" : "bad")).text(deltaStr(se.deltaPct));
+            }
+          });
+        }
+
+        // Build the sparkline canvas plus a render(hoverTime) closure and the
+        // list of snapshot times, then wire mousemove → crosshair + tooltip so
+        // you can read the actual value (and % change) at any snapshot.
+        function drawSpark(td, d) {
+          const W = 160, H = 30, pad = 4;
+          const dpr = window.devicePixelRatio || 1;
+          const canvas = d3.select(td).append("canvas")
+            .attr("width", Math.round(W * dpr)).attr("height", Math.round(H * dpr))
+            .style("width", W + "px").style("height", H + "px").node();
+          const ctx = canvas.getContext("2d");
+          ctx.scale(dpr, dpr); // CSS pixels, crisp on HiDPI
+          let x, times, render;
+
+          if (d.grouped) {
+            // One line per scale, each indexed to its own first value (% change)
+            // so they share a 0% baseline; color ramps light→dark with scale.
+            const allT = [];
+            d.series.forEach(function (se) {
+              se.idx = se.s.map(function (p) { return se.first ? (p.value / se.first - 1) * 100 : 0; });
+              se.s.forEach(function (p) { allT.push(p._t); });
+            });
+            x = d3.scaleLinear().domain(d3.extent(allT)).range([pad, W - pad]);
+            let lo = d3.min(d.series, function (se) { return d3.min(se.idx); });
+            let hi = d3.max(d.series, function (se) { return d3.max(se.idx); });
+            if (lo === hi) { lo -= 1; hi += 1; }
+            const y = d3.scaleLinear().domain([lo, hi]).range([H - pad, pad]);
+            times = Array.from(new Set(allT)).sort(function (a, b) { return a - b; });
+            const n = d.series.length;
+            render = function (ht) {
+              ctx.clearRect(0, 0, W, H);
+              ctx.beginPath(); ctx.moveTo(pad, y(0)); ctx.lineTo(W - pad, y(0));
+              ctx.strokeStyle = "rgba(0,0,0,0.18)"; ctx.lineWidth = 0.5; ctx.stroke();
+              if (ht != null) { ctx.beginPath(); ctx.moveTo(x(ht), pad); ctx.lineTo(x(ht), H - pad); ctx.strokeStyle = "rgba(0,0,0,0.3)"; ctx.lineWidth = 0.5; ctx.stroke(); }
+              d.series.forEach(function (se, i) {
+                const col = d3.interpolateBlues(0.45 + 0.5 * (n > 1 ? i / (n - 1) : 0));
+                ctx.beginPath();
+                d3.line().x(function (v, j) { return x(se.s[j]._t); }).y(function (v) { return y(v); }).curve(d3.curveMonotoneX).context(ctx)(se.idx);
+                ctx.lineWidth = 1.2; ctx.strokeStyle = col; ctx.stroke();
+                const last = se.s.length - 1;
+                ctx.beginPath(); ctx.arc(x(se.s[0]._t), y(se.idx[0]), 2, 0, 2 * Math.PI); ctx.fillStyle = PERF.PAPER; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = col; ctx.stroke();
+                ctx.beginPath(); ctx.arc(x(se.s[last]._t), y(se.idx[last]), 2, 0, 2 * Math.PI); ctx.fillStyle = col; ctx.fill();
+                if (ht != null) { for (let j = 0; j < se.s.length; j++) { if (se.s[j]._t === ht) { ctx.beginPath(); ctx.arc(x(se.s[j]._t), y(se.idx[j]), 2.6, 0, 2 * Math.PI); ctx.fillStyle = col; ctx.fill(); break; } } }
+              });
+            };
+          } else {
+            // Absolute trend + every sample dot + first/last rings.
+            const se = d.series[0], col = se.good ? PERF.GREEN : PERF.RED;
+            x = d3.scaleLinear().domain(d3.extent(se.s, function (p) { return p._t; })).range([pad, W - pad]);
+            let lo = d3.min(se.s, function (p) { return Math.min(p.lo, d3.min(p.samples && p.samples.length ? p.samples : [p.value])); });
+            let hi = d3.max(se.s, function (p) { return Math.max(p.hi, d3.max(p.samples && p.samples.length ? p.samples : [p.value])); });
+            if (lo === hi) { lo -= 1; hi += 1; }
+            const y = d3.scaleLinear().domain([lo, hi]).range([H - pad, pad]);
+            times = se.s.map(function (p) { return p._t; });
+            render = function (ht) {
+              ctx.clearRect(0, 0, W, H);
+              if (ht != null) { ctx.beginPath(); ctx.moveTo(x(ht), pad); ctx.lineTo(x(ht), H - pad); ctx.strokeStyle = "rgba(0,0,0,0.3)"; ctx.lineWidth = 0.5; ctx.stroke(); }
+              ctx.beginPath();
+              d3.line().x(function (p) { return x(p._t); }).y(function (p) { return y(p.value); }).curve(d3.curveMonotoneX).context(ctx)(se.s);
+              ctx.lineWidth = 1.3; ctx.strokeStyle = col; ctx.stroke();
+              ctx.fillStyle = col; ctx.globalAlpha = 0.5;
+              se.s.forEach(function (p) {
+                const vs = p.samples && p.samples.length ? p.samples : [p.value];
+                for (let i = 0; i < vs.length; i++) { ctx.beginPath(); ctx.arc(x(p._t), y(vs[i]), 1.3, 0, 2 * Math.PI); ctx.fill(); }
+              });
+              ctx.globalAlpha = 1;
+              const f = se.s[0], l = se.s[se.s.length - 1];
+              ctx.beginPath(); ctx.arc(x(f._t), y(f.value), 2.4, 0, 2 * Math.PI); ctx.fillStyle = PERF.PAPER; ctx.fill(); ctx.lineWidth = 1.1; ctx.strokeStyle = col; ctx.stroke();
+              ctx.beginPath(); ctx.arc(x(l._t), y(l.value), 2.4, 0, 2 * Math.PI); ctx.fillStyle = col; ctx.fill();
+              if (ht != null) { for (let j = 0; j < se.s.length; j++) { if (se.s[j]._t === ht) { ctx.beginPath(); ctx.arc(x(se.s[j]._t), y(se.s[j].value), 2.8, 0, 2 * Math.PI); ctx.fillStyle = col; ctx.fill(); break; } } }
+            };
+          }
+          render(null);
+          d3.select(canvas).style("cursor", "crosshair")
+            .on("mousemove", function (ev) {
+              const px = d3.pointer(ev, canvas)[0];
+              const t = x.invert(px);
+              let t0 = times[0], best = Infinity;
+              for (let i = 0; i < times.length; i++) { const dd = Math.abs(times[i] - t); if (dd < best) { best = dd; t0 = times[i]; } }
+              render(t0); showTip(ev, d, t0);
+            })
+            .on("mouseleave", function () { render(null); hideTip(); });
+        }
+
+        draw();
+      }
+    })();
+  </script>
 </body>
 </html>
 `

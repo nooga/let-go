@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nooga/let-go/pkg/perfdata"
 )
 
 func TestAggregateFromFileRetainsSamples(t *testing.T) {
@@ -59,12 +61,19 @@ func TestAggregateFromFileRetainsSamples(t *testing.T) {
 
 func TestWriteBaselineWritesAtomicallyReadableJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "baseline.json")
+	mach := Machine{OS: "darwin", Arch: "arm64", CPUModel: "Apple M3"}
+	key := perfdata.MachineKey(mach)
 	baseline := Baseline{
-		Version:       schemaVersion,
-		CapturedAt:    "2026-06-01T00:00:00Z",
-		CapturedAtSHA: "abc",
-		Benchmarks: map[string]BenchmarkEntry{
-			"pkg.BenchmarkA": {NSPerOp: 1, RatioToAnchor: 2},
+		Version: schemaVersion,
+		Machines: map[string]MachineBaseline{
+			key: {
+				CapturedAt:    "2026-06-01T00:00:00Z",
+				CapturedAtSHA: "abc",
+				Machine:       mach,
+				Benchmarks: map[string]BenchmarkEntry{
+					"pkg.BenchmarkA": {NSPerOp: 1, RatioToAnchor: 2},
+				},
+			},
 		},
 	}
 	if err := writeBaseline(path, baseline); err != nil {
@@ -74,8 +83,8 @@ func TestWriteBaselineWritesAtomicallyReadableJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if read.Benchmarks["pkg.BenchmarkA"].RatioToAnchor != 2 {
-		t.Fatalf("ratio = %v, want 2", read.Benchmarks["pkg.BenchmarkA"].RatioToAnchor)
+	if read.Machines[key].Benchmarks["pkg.BenchmarkA"].RatioToAnchor != 2 {
+		t.Fatalf("ratio = %v, want 2", read.Machines[key].Benchmarks["pkg.BenchmarkA"].RatioToAnchor)
 	}
 	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".*.tmp-*"))
 	if err != nil {

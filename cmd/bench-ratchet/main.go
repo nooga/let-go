@@ -75,13 +75,18 @@ const (
 	defaultBaselinePath = "docs/perf/baseline.json"
 	defaultRunsDir      = "docs/perf/.runs"
 	defaultBudget       = 0.05
-	defaultCount        = 1
-	defaultBenchtime    = "1s"
-	defaultTimeout      = "10m"
-	defaultTags         = "gogen_ir"
-	anchorName          = "BenchmarkRatchetAnchor"
-	anchorPackage       = "github.com/nooga/let-go/pkg/vm"
-	schemaVersion       = 1
+	// allocBudget is the tolerance for the machine-independent allocs/bytes
+	// gate. These metrics are deterministic (no CPU-dependent noise), so the
+	// budget is tight — it only absorbs rare boundary effects (e.g. a map
+	// resize landing one element differently).
+	allocBudget      = 0.02
+	defaultCount     = 1
+	defaultBenchtime = "1s"
+	defaultTimeout   = "10m"
+	defaultTags      = "gogen_ir"
+	anchorName       = "BenchmarkRatchetAnchor"
+	anchorPackage    = "github.com/nooga/let-go/pkg/vm"
+	schemaVersion    = 2
 
 	// The default (CI-gating) scope: the end-to-end jank suite and targeted
 	// IR compile benchmark measured under both VM variants, plus the
@@ -137,6 +142,7 @@ var defaultPackages = []string{
 type Baseline = perfdata.Baseline
 type Machine = perfdata.Machine
 type AnchorRecord = perfdata.Anchor
+type MachineBaseline = perfdata.MachineBaseline
 type BenchmarkEntry = perfdata.BenchmarkEntry
 type BenchmarkSample = perfdata.BenchmarkSample
 type StreamRecord = perfdata.StreamRecord
@@ -303,7 +309,7 @@ func main() {
 	}
 }
 
-func writeSnapshot(path string, current Baseline) {
+func writeSnapshot(path string, current MachineBaseline) {
 	if path == defaultBaselinePath {
 		die("snapshot mode needs -baseline <snapshot.json>; refusing to write %s", defaultBaselinePath)
 	}
@@ -313,14 +319,16 @@ func writeSnapshot(path string, current Baseline) {
 		die("stat snapshot %s: %v", path, err)
 	}
 	stampAll(&current)
-	if err := writeBaseline(path, current); err != nil {
+	key := perfdata.MachineKey(current.Machine)
+	b := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{key: current}}
+	if err := writeBaseline(path, b); err != nil {
 		die("write snapshot: %v", err)
 	}
-	fmt.Printf("\nwrote snapshot → %s (%d benchmarks)\n", path, len(current.Benchmarks))
+	fmt.Printf("\nwrote snapshot → %s (%d benchmarks for %s)\n", path, len(current.Benchmarks), key)
 }
 
 // writeOrCheck dispatches the post-aggregate action.
-func writeOrCheck(baselinePath string, current Baseline, mode string, budget float64, force bool, format string) {
+func writeOrCheck(baselinePath string, current MachineBaseline, mode string, budget float64, force bool, format string) {
 	switch mode {
 	case "show":
 		switch format {
@@ -332,44 +340,63 @@ func writeOrCheck(baselinePath string, current Baseline, mode string, budget flo
 			die("unknown -format %q (want text / markdown / json)", format)
 		}
 	case "update":
-		// Ratchet semantics: if a baseline exists, MERGE rather than
-		// overwrite. Each (benchmark, metric) only moves toward
-		// faster / fewer-allocs / fewer-bytes. -force bypasses the
-		// ratchet and writes current as-is.
+		// Ratchet semantics, scoped to THIS machine's profile: metrics only
+		// move toward faster / fewer-allocs / fewer-bytes, and only within the
+		// same {arch, cpu_model} profile so an M1 run never tightens an M3 bar.
+		// -force bypasses the ratchet for this profile.
+		key := perfdata.MachineKey(current.Machine)
 		existing, err := readBaseline(baselinePath)
 		if err != nil {
-			// No prior baseline — first run. Stamp every entry with
-			// current's commit/time and write.
-			fmt.Printf("  no existing baseline at %s — writing current as the initial bar.\n", baselinePath)
-			stampAll(&current)
-			if err := writeBaseline(baselinePath, current); err != nil {
-				die("write baseline: %v", err)
+			if !os.IsNotExist(err) {
+				die("read baseline (%s): %v", baselinePath, err)
 			}
-			fmt.Printf("\nwrote baseline → %s (%d benchmarks)\n", baselinePath, len(current.Benchmarks))
-			return
+			fmt.Printf("  no existing baseline at %s — writing current (%s) as the initial bar.\n", baselinePath, key)
+			existing = Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{}}
 		}
-		if force {
-			fmt.Printf("  -force: writing current numbers as the new bar, bypassing ratchet.\n")
+		prof, ok := existing.Machines[key]
+		switch {
+		case force:
+			fmt.Printf("  -force: writing current %s numbers as the new bar, bypassing ratchet.\n", key)
 			stampAll(&current)
-			if err := writeBaseline(baselinePath, current); err != nil {
-				die("write baseline: %v", err)
-			}
-			fmt.Printf("\nwrote baseline → %s (%d benchmarks)\n", baselinePath, len(current.Benchmarks))
-			return
+			existing.Machines[key] = current
+		case !ok:
+			fmt.Printf("  new machine profile %s — seeding its baseline.\n", key)
+			stampAll(&current)
+			existing.Machines[key] = current
+		default:
+			merged, summary := ratchetMerge(prof, current)
+			printRatchetSummary(summary)
+			existing.Machines[key] = merged
 		}
-		merged, summary := ratchetMerge(existing, current)
-		printRatchetSummary(summary)
-		if err := writeBaseline(baselinePath, merged); err != nil {
+		if err := writeBaseline(baselinePath, existing); err != nil {
 			die("write baseline: %v", err)
 		}
-		fmt.Printf("\nwrote baseline → %s (%d benchmarks)\n", baselinePath, len(merged.Benchmarks))
+		fmt.Printf("\nwrote baseline → %s (%d benchmarks for %s)\n", baselinePath, len(existing.Machines[key].Benchmarks), key)
 	case "check":
+		key := perfdata.MachineKey(current.Machine)
 		baseline, err := readBaseline(baselinePath)
 		if err != nil {
 			die("read baseline (%s): %v\n  hint: run `bench-ratchet update` to seed it",
 				baselinePath, err)
 		}
-		if exit := compareAndReport(baseline, current, budget, format); exit != 0 {
+		exit := 0
+		// Machine-independent gate: allocs/bytes are deterministic, so check
+		// them against the global-min across ALL profiles — this catches an
+		// allocation regression on any machine, even one with no timing bar.
+		if compareDeterministic(machineIndependentBar(baseline), current, allocBudget) > 0 {
+			exit = 1
+		}
+		// Timing gate: ns/op and ratio_to_anchor are CPU-dependent, so gate
+		// them ONLY against this machine's own profile.
+		if prof, ok := baseline.Machines[key]; ok {
+			if e := compareAndReport(prof, current, budget, format); e != 0 {
+				exit = e
+			}
+		} else {
+			fmt.Printf("note: no timing baseline for machine profile %q (have: %s) — gated deterministic metrics only; run `bench-ratchet update` here to seed timing.\n",
+				key, strings.Join(profileKeys(baseline), ", "))
+		}
+		if exit != 0 {
 			os.Exit(exit)
 		}
 	}
@@ -406,7 +433,7 @@ type SummaryEntry struct {
 //   - missing from current                   → stamp = unchanged (entry kept)
 //
 // Returns a summary so the caller can print what moved.
-func ratchetMerge(existing, current Baseline) (Baseline, RatchetSummary) {
+func ratchetMerge(existing, current MachineBaseline) (MachineBaseline, RatchetSummary) {
 	out := current // machine, anchor, captured_at, version, sha — all current
 	out.Benchmarks = make(map[string]BenchmarkEntry, len(current.Benchmarks))
 	var summary RatchetSummary
@@ -500,7 +527,7 @@ func minI(a, b int64) int64 {
 // stampAll fills in per-entry provenance from the baseline's top-level
 // commit/time. Used for initial writes and -force writes where every
 // entry is being "newly set" rather than ratcheted.
-func stampAll(b *Baseline) {
+func stampAll(b *MachineBaseline) {
 	for name, e := range b.Benchmarks {
 		e.BestSinceSHA = b.CapturedAtSHA
 		e.BestSinceAt = b.CapturedAt
@@ -802,10 +829,12 @@ func captureOnePackage(pkg string, count int, benchtime, timeout, tags string, f
 		// It also tags the result with a "-N" GOMAXPROCS suffix
 		// (e.g. "RatchetAnchor-8"); strip via trimGoMaxProcsSuffix.
 		name := "Benchmark" + trimGoMaxProcsSuffix(string(rec.Name.Full()))
-		// A variant label (e.g. "bytecode" / "gogen_ir") distinguishes the
-		// same benchmark run under different VM build tags, so both land as
-		// separate baseline entries instead of colliding on package+name.
-		// The anchor is always recorded variant-free so findAnchor matches it.
+		// Aligned keying: every measured benchmark carries its representation
+		// label (bytecode / ir_bytecode / gogen_ir / aot_native) so each entry
+		// self-describes the VM build it ran under and pairing is unambiguous.
+		// bytecode is NOT special-cased. The anchor is the sole exception — it
+		// is representation-independent and recorded variant-free so findAnchor
+		// matches it (callers pass variant "" for the anchor job).
 		if variant != "" {
 			name = name + " [" + variant + "]"
 		}
@@ -852,10 +881,10 @@ func captureOnePackage(pkg string, count int, benchtime, timeout, tags string, f
 // aggregateFromFile reads a .jsonl of StreamRecord lines and returns
 // a Baseline computed from them. Same-named records (e.g. multiple
 // -count repetitions) are averaged.
-func aggregateFromFile(path string) (Baseline, error) {
+func aggregateFromFile(path string) (MachineBaseline, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return Baseline{}, fmt.Errorf("open %s: %w", path, err)
+		return MachineBaseline{}, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 
@@ -872,7 +901,7 @@ func aggregateFromFile(path string) (Baseline, error) {
 	for dec.More() {
 		var rec StreamRecord
 		if err := dec.Decode(&rec); err != nil {
-			return Baseline{}, fmt.Errorf("decode: %w", err)
+			return MachineBaseline{}, fmt.Errorf("decode: %w", err)
 		}
 		key := rec.Package + "." + rec.Name
 		a := byName[key]
@@ -906,10 +935,10 @@ func aggregateFromFile(path string) (Baseline, error) {
 
 	anchor, ok := findAnchor(results)
 	if !ok {
-		return Baseline{}, fmt.Errorf("anchor benchmark %q not found in %s", anchorName, path)
+		return MachineBaseline{}, fmt.Errorf("anchor benchmark %q not found in %s", anchorName, path)
 	}
 	if anchor.NSPerOp <= 0 {
-		return Baseline{}, fmt.Errorf("anchor ns/op is %.3f — divide-by-zero protection", anchor.NSPerOp)
+		return MachineBaseline{}, fmt.Errorf("anchor ns/op is %.3f — divide-by-zero protection", anchor.NSPerOp)
 	}
 	return buildCurrentBaseline(results, anchor), nil
 }
@@ -923,7 +952,7 @@ func findAnchor(results []Result) (Result, bool) {
 	return Result{}, false
 }
 
-func buildCurrentBaseline(results []Result, anchor Result) Baseline {
+func buildCurrentBaseline(results []Result, anchor Result) MachineBaseline {
 	m := detectMachine()
 	bm := map[string]BenchmarkEntry{}
 	for _, r := range results {
@@ -942,8 +971,7 @@ func buildCurrentBaseline(results []Result, anchor Result) Baseline {
 			Samples:       samples,
 		}
 	}
-	return Baseline{
-		Version:       schemaVersion,
+	return MachineBaseline{
 		CapturedAt:    time.Now().UTC().Format(time.RFC3339),
 		CapturedAtSHA: gitShortSHA(),
 		Machine:       m,
@@ -1044,16 +1072,181 @@ func readBaseline(path string) (Baseline, error) {
 	if err != nil {
 		return b, err
 	}
-	if err := json.Unmarshal(body, &b); err != nil {
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
 		return b, err
 	}
-	if b.Version != schemaVersion {
-		return b, fmt.Errorf("baseline version %d, want %d (regenerate with `update`)", b.Version, schemaVersion)
+	switch probe.Version {
+	case schemaVersion:
+		if err := json.Unmarshal(body, &b); err != nil {
+			return b, err
+		}
+	case 1:
+		// Migrate the single-machine v1 baseline into a one-profile v2,
+		// keyed by the machine it was captured on.
+		var v1 perfdata.LegacyBaselineV1
+		if err := json.Unmarshal(body, &v1); err != nil {
+			return b, fmt.Errorf("migrate v1 baseline: %w", err)
+		}
+		b = Baseline{
+			Version:  schemaVersion,
+			Machines: map[string]MachineBaseline{perfdata.MachineKey(v1.Machine): v1.ToMachineBaseline()},
+		}
+	default:
+		return b, fmt.Errorf("baseline version %d, want %d or 1 (regenerate with `update`)", probe.Version, schemaVersion)
+	}
+	if b.Machines == nil {
+		b.Machines = map[string]MachineBaseline{}
+	}
+	// Align legacy benchmark keys WITHIN each machine profile (older captures
+	// recorded the bytecode run un-suffixed and the suite gogen_ir run as
+	// "[gogen_ir]"; see legacyKeyAlias).
+	for k, prof := range b.Machines {
+		prof.Benchmarks = canonicalizeBenchmarks(prof.Benchmarks)
+		b.Machines[k] = prof
 	}
 	return b, nil
 }
 
-func printBaseline(b Baseline) {
+// profileKeys returns the machine-profile keys present in a baseline, sorted,
+// for diagnostics.
+func profileKeys(b Baseline) []string {
+	ks := make([]string, 0, len(b.Machines))
+	for k := range b.Machines {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
+
+// Aligned keying: every measured benchmark is keyed
+// "<package>.<Benchmark> [<representation>]", where representation is the VM
+// build it ran under (bytecode / ir_bytecode / gogen_ir / aot_native). bytecode
+// is NOT special-cased — it carries its label like every other variant, so each
+// entry self-describes its representation and pairing is unambiguous. (The
+// calibration anchor is the sole exception; it is representation-independent and
+// recorded variant-free so findAnchor matches it.)
+//
+// legacyKeyAlias migrates keys from the older mixed convention onto the aligned
+// form on read: the bytecode runs of InitFromLGB and ClojureTestSuite were once
+// recorded un-suffixed. These are the SAME workload, just relabeled, so aliasing
+// (and MIN-merging metrics) is safe. Explicit per-key, not string surgery, so it
+// can't corrupt a still-valid key such as IRCompile [gogen_ir].
+var legacyKeyAlias = map[string]string{
+	"github.com/nooga/let-go/pkg/compiler.BenchmarkInitFromLGB": "github.com/nooga/let-go/pkg/compiler.BenchmarkInitFromLGB [bytecode]",
+	"github.com/nooga/let-go/test.BenchmarkClojureTestSuite":    "github.com/nooga/let-go/test.BenchmarkClojureTestSuite [bytecode]",
+}
+
+// legacyKeyDrop lists obsolete keys removed on read. The suite's old "[gogen_ir]"
+// entry measured the pre-native-dispatch run (the "bytecode-vs-bytecode
+// tautology") — a DIFFERENT, lower-alloc workload than today's "[aot_native]"
+// native run. Aliasing it onto [aot_native] would wrongly tighten the
+// deterministic allocs/bytes bar to an unreachable value, so drop it instead.
+var legacyKeyDrop = map[string]bool{
+	"github.com/nooga/let-go/test.BenchmarkClojureTestSuite [gogen_ir]": true,
+}
+
+func aliasBenchKey(name string) string {
+	if a, ok := legacyKeyAlias[name]; ok {
+		return a
+	}
+	return name
+}
+
+// canonicalizeBenchmarks rewrites legacy keys onto the aligned form via
+// legacyKeyAlias, drops obsolete keys (legacyKeyDrop), and MIN-merges metrics
+// when an alias collides with an existing key (the one-time migration from a
+// mixed-convention baseline).
+func canonicalizeBenchmarks(bm map[string]BenchmarkEntry) map[string]BenchmarkEntry {
+	if bm == nil {
+		return bm
+	}
+	out := make(map[string]BenchmarkEntry, len(bm))
+	for k, e := range bm {
+		if legacyKeyDrop[k] {
+			continue
+		}
+		ck := aliasBenchKey(k)
+		if prev, ok := out[ck]; ok {
+			prev.NSPerOp = minF(prev.NSPerOp, e.NSPerOp)
+			prev.AllocsPerOp = minI(prev.AllocsPerOp, e.AllocsPerOp)
+			prev.BytesPerOp = minI(prev.BytesPerOp, e.BytesPerOp)
+			prev.RatioToAnchor = minF(prev.RatioToAnchor, e.RatioToAnchor)
+			out[ck] = prev
+		} else {
+			out[ck] = e
+		}
+	}
+	return out
+}
+
+// machineIndependentBar collapses every machine profile into one bar of the
+// DETERMINISTIC metrics (allocs/op, bytes/op) per benchmark, taking the global
+// minimum across profiles. allocs/bytes don't depend on the CPU, so this bar is
+// valid to gate against on any machine — including one with no timing profile.
+func machineIndependentBar(b Baseline) map[string]BenchmarkEntry {
+	bar := map[string]BenchmarkEntry{}
+	for _, prof := range b.Machines {
+		for name, e := range prof.Benchmarks {
+			if cur, ok := bar[name]; ok {
+				cur.AllocsPerOp = minI(cur.AllocsPerOp, e.AllocsPerOp)
+				cur.BytesPerOp = minI(cur.BytesPerOp, e.BytesPerOp)
+				bar[name] = cur
+			} else {
+				bar[name] = BenchmarkEntry{AllocsPerOp: e.AllocsPerOp, BytesPerOp: e.BytesPerOp}
+			}
+		}
+	}
+	return bar
+}
+
+// compareDeterministic gates the machine-independent allocs/op and bytes/op of
+// current against the global-min bar, with allocBudget tolerance. Prints any
+// regressions and returns their count. Runs regardless of whether a timing
+// profile exists for this machine.
+func compareDeterministic(bar map[string]BenchmarkEntry, current MachineBaseline, budget float64) int {
+	type reg struct {
+		name, metric string
+		base, cur    int64
+		delta        float64
+	}
+	var regs []reg
+	names := make([]string, 0, len(current.Benchmarks))
+	for n := range current.Benchmarks {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		cur := current.Benchmarks[n]
+		base, ok := bar[n]
+		if !ok {
+			continue
+		}
+		check := func(metric string, b, c int64) {
+			if b <= 0 {
+				return
+			}
+			if d := float64(c-b) / float64(b); d > budget {
+				regs = append(regs, reg{n, metric, b, c, d})
+			}
+		}
+		check("allocs/op", base.AllocsPerOp, cur.AllocsPerOp)
+		check("bytes/op", base.BytesPerOp, cur.BytesPerOp)
+	}
+	if len(regs) == 0 {
+		fmt.Printf("deterministic (allocs/bytes, machine-independent): OK — within %.0f%% of global min\n", budget*100)
+		return 0
+	}
+	fmt.Printf("\ndeterministic regressions (machine-independent, > %.0f%% of global min):\n", budget*100)
+	for _, r := range regs {
+		fmt.Printf("  %-55s %-10s %d -> %d  (%+.1f%%)\n", short(r.name, 55), r.metric, r.base, r.cur, r.delta*100)
+	}
+	return len(regs)
+}
+
+func printBaseline(b MachineBaseline) {
 	body, _ := json.MarshalIndent(b, "", "  ")
 	fmt.Println(string(body))
 }
@@ -1062,7 +1255,7 @@ func printBaseline(b Baseline) {
 // non-zero exit code when any benchmark exceeded the regression budget.
 // format is "text" (default ANSI terminal) or "markdown" (a single
 // GitHub/Slack-friendly table).
-func compareAndReport(baseline, current Baseline, budget float64, format string) int {
+func compareAndReport(baseline, current MachineBaseline, budget float64, format string) int {
 	if format == "markdown" {
 		return compareAndReportMarkdown(baseline, current, budget)
 	}
@@ -1216,7 +1409,7 @@ func formatWall(ns float64) string {
 //
 // The output is also Slack-friendly when wrapped in a code block, since
 // Slack renders the pipes monospace.
-func compareAndReportMarkdown(baseline, current Baseline, budget float64) int {
+func compareAndReportMarkdown(baseline, current MachineBaseline, budget float64) int {
 	type row struct {
 		name          string
 		baseR, curR   float64
@@ -1313,7 +1506,7 @@ func compareAndReportMarkdown(baseline, current Baseline, budget float64) int {
 // row per benchmark with the current bar, the commit that set it, and
 // the human-readable wall time. Sorted by ratio_to_anchor descending so
 // the heaviest benchmarks land at top.
-func printBaselineMarkdown(b Baseline) {
+func printBaselineMarkdown(b MachineBaseline) {
 	fmt.Printf("**bench-ratchet baseline** — captured %s @ `%s`\n\n",
 		b.CapturedAt, b.CapturedAtSHA)
 	fmt.Printf("- machine: `%s` / `%s` / `%s`\n", b.Machine.CPUModel, b.Machine.GoVersion, b.Machine.OS+"-"+b.Machine.Arch)
