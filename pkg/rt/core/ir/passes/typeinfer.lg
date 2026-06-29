@@ -62,6 +62,52 @@
                   tsym  (get *deftype-ctor-types* vname)]
               (when tsym [:dtype tsym]))))))))
 
+(defn- load-var-ns+name [nid f]
+  (when (= :load-var (ir/op nid f))
+    (let [sym (symbol (ir/aux nid f))]
+      [(namespace sym) (name sym)])))
+
+(defn- transient-kind-of [t]
+  (cond
+    (= t :vector) :transient-vector
+    (= t :map) :transient-map
+    (= t :set) :transient-set
+    :else nil))
+
+(defn- persistent-kind-of [t]
+  (cond
+    (= t :transient-vector) :vector
+    (= t :transient-map) :map
+    (= t :transient-set) :set
+    :else nil))
+
+(defn- call-core-type
+  "Infer result type for a small set of clojure.core builtins whose result
+   kind is structurally known from operand kinds."
+  [inst f state]
+  (let [refs (ir/refs inst f)]
+    (when (seq refs)
+      (let [callee (first refs)
+            args   (rest refs)]
+        (when-let [[ns name] (load-var-ns+name callee f)]
+          (when (= ns "clojure.core")
+            (cond
+              (= name "transient")
+              (when (= 1 (count args))
+                (transient-kind-of (normalize-type (state-type state (first args)))))
+
+              (= name "persistent!")
+              (when (= 1 (count args))
+                (persistent-kind-of (normalize-type (state-type state (first args)))))
+
+              (or (= name "conj!") (= name "assoc!") (= name "dissoc!") (= name "disj!"))
+              (when (seq args)
+                (let [t (normalize-type (state-type state (first args)))]
+                  (when (contains? #{:transient-vector :transient-map :transient-set} t)
+                    t)))
+
+              :else nil)))))))
+
 (defn- numeric-type? [t]
   (or (= t :int)
       (= t :float)
@@ -259,7 +305,9 @@
       (= op :load-arg)         (arg-seed inst f state)
       (= op :load-var)         :unknown
       (= op :load-closed)      :unknown
-      (= op :call)             (or (call-dtype inst f) :unknown)
+      (= op :call)             (or (call-dtype inst f)
+                                   (call-core-type inst f state)
+                                   :unknown)
       (= op :block-arg)        (normalize-type (state-type state inst))
       (contains? terminator-ops op) :nil
       (contains? comparison-ops op) :bool
@@ -284,11 +332,23 @@
   [f]
   ;; bu (branch-arg-users) and ps (param-sources) are built with transient
   ;; maps threaded through the walk — no atom + swap! + persistent assoc per
-  ;; edge. These maps carry one entry per value/param, so the old
-  ;; (swap! m update k (fnil conj #{}) v) dominated lowering allocation via
-  ;; Atom.Swap + PersistentMap.Assoc. Transient assoc! mutates in place;
-  ;; iteration order is irrelevant (sets are joined order-independently).
-  (let [add (fn [m k v] (assoc! m k (conj (get m k #{}) v)))
+  ;; edge. The remaining hot cost was the VALUE at each key: rebuilding a
+  ;; persistent set via (conj (get m k #{}) v) still path-copies on every
+  ;; insert. Keep a transient set per key instead, mutate it in place, then
+  ;; freeze all values once at the boundary. Iteration order is irrelevant
+  ;; (sets are joined order-independently).
+  (let [add (fn [m k v]
+              (let [cur (get m k nil)]
+                (if (nil? cur)
+                  (assoc! m k (conj! (transient #{}) v))
+                  (do (conj! cur v) m))))
+        freeze-values
+        (fn [m]
+          (persistent!
+            (reduce-kv
+              (fn [ret k vs] (assoc! ret k (persistent! vs)))
+              (transient {})
+              m)))
         process-args
         (fn [bu ps pred target args]
           (loop [as args pos 0 bu bu ps ps]
@@ -324,7 +384,7 @@
                     [bu ps])))))
           [(transient {}) (transient {})]
           (ir/blocks f))]
-    {:uses (ir/uses f) :branch-arg-users (persistent! bu) :param-sources (persistent! ps)}))
+    {:uses (ir/uses f) :branch-arg-users (freeze-values bu) :param-sources (freeze-values ps)}))
 
 (defn- source-arg-type [source f state]
   (let [pred-bid  (nth source 0)

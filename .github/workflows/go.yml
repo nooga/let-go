@@ -86,6 +86,8 @@ jobs:
       # ~60-120s on CI, ~200s on a contended local machine. It runs here under a
       # generous ceiling instead of inflating every package's budget.
       - name: Expensive lowering e2e (determinism, deftype skeleton)
+        env:
+          LETGO_RUN_LOWERING_DETERMINISM: "1"
         run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering'
 
   # Differential gold check against a LIVE Clojure. The everyday `build` job is
