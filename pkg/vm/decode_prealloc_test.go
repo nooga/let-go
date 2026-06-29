@@ -33,6 +33,21 @@ func TestCodeChunkReserveLocalVarsPreallocatesStorage(t *testing.T) {
 	}
 }
 
+func TestCodeChunkReserveLocalVarsPreservesExistingEntries(t *testing.T) {
+	chunk := NewCodeChunk(NewConsts())
+	chunk.AddLocalVar(3, "x")
+	chunk.ReserveLocalVars(11)
+	if len(chunk.localVars) != 1 {
+		t.Fatalf("len(localVars) = %d, want 1", len(chunk.localVars))
+	}
+	if chunk.localVars[0].Slot != 3 || chunk.localVars[0].Name != "x" {
+		t.Fatalf("localVars[0] = %#v, want slot=3 name=x", chunk.localVars[0])
+	}
+	if cap(chunk.localVars) != 11 {
+		t.Fatalf("cap(localVars) = %d, want 11", cap(chunk.localVars))
+	}
+}
+
 func TestCodeChunkAddSourceInfoAtUsesProvidedIP(t *testing.T) {
 	chunk := NewCodeChunk(NewConsts())
 	chunk.AddSourceInfoAt(7, SourceInfo{File: "test.lg", Line: 3})

@@ -155,7 +155,9 @@ func (c *CodeChunk) ReserveLocalVars(n int) {
 	if cap(c.localVars) >= n {
 		return
 	}
-	c.localVars = make([]LocalVar, 0, n)
+	next := make([]LocalVar, 0, n)
+	next = append(next, c.localVars...)
+	c.localVars = next
 }
 
 // AddLocalVar records the source name bound to a stack slot (debug info).
