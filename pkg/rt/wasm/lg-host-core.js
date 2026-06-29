@@ -105,31 +105,40 @@ window.LetGoHost = (function() {
   };
 })();
 
-// --- LetGoHost.eval plumbing (-w-host-eval bundles only) ---
-// runtimeReady resolves once the wasm runtime has installed its _lgEval hook and
-// called _lgRuntimeReady (wired per boot mode below). evalImpl is installed by
-// whichever boot mode runs: a direct _lgEval call on the main thread, or a worker
-// round-trip when cross-origin isolated. The vars stay declared in every bundle
-// (the boot relays below reference them), but eval is exposed only when the bundle
-// was built with -w-host-eval: a default bundle never calls _lgRuntimeReady, so an
-// installed eval would await a ready signal that never comes (hang) and would lie
-// to feature detection. Omitting it keeps `typeof LetGoHost.eval` honest.
+// --- LetGoHost request/eval plumbing (-w-host-eval bundles only) ---
+// runtimeReady resolves once the wasm runtime has installed its _lgEval/_lgRequest
+// hooks and called _lgRuntimeReady (wired per boot mode below). requestImpl is
+// installed by whichever boot mode runs: a direct _lgRequest call on the main
+// thread, or a worker round-trip when cross-origin isolated. The vars stay
+// declared in every bundle (the boot relays below reference them), but the public
+// request/eval APIs are exposed only when the bundle was built with -w-host-eval:
+// a default bundle never calls _lgRuntimeReady, so installed APIs would await a
+// ready signal that never comes (hang) and would lie to feature detection.
 let runtimeReadyResolve;
 const runtimeReady = new Promise((r) => { runtimeReadyResolve = r; });
-let evalImpl = null;
-let evalSeq = 0;
-const evalPending = new Map();
+let requestImpl = null;
+let requestSeq = 0;
+const requestPending = new Map();
 // Worker-path safety net: a worker crash or dropped message means the
-// 'eval-result' reply never arrives, so without this the pending entry leaks
+// 'request-result' reply never arrives, so without this the pending entry leaks
 // and the caller's Promise hangs forever. The timer rejects + removes the entry
 // so the leak is bounded and the caller sees a failure. A late reply arriving
-// after the timeout is harmless — its id is already gone from evalPending and
-// the result is dropped. Generous by design: the worker runs eval synchronously,
-// so this guards lost responses, not slow-but-valid evaluation.
-const EVAL_TIMEOUT_MS = 30000;
+// after the timeout is harmless — its id is already gone from requestPending and
+// the result is dropped. Generous by design: the worker runs host requests
+// synchronously today, so this guards lost responses, not slow-but-valid work.
+const REQUEST_TIMEOUT_MS = 30000;
 if (HOST_EVAL) {
+  window.LetGoHost.request = function(req) {
+    return runtimeReady.then(() => requestImpl(req || {}));
+  };
   window.LetGoHost.eval = function(code) {
-    return runtimeReady.then(() => evalImpl(code));
+    return window.LetGoHost.request({ op: 'eval', session: 'default', code }).then((resp) => {
+      if (!resp || !resp.ok) {
+        const msg = resp && resp.error && resp.error.message ? resp.error.message : 'request failed';
+        throw new Error(msg);
+      }
+      return resp.value;
+    });
   };
 }
 
@@ -234,12 +243,12 @@ async function startWorkerMode() {
       postMessage({t:'host-eval-ready'});
     };
     onmessage = async (e) => {
-      if (e.data.t === 'eval') {
+      if (e.data.t === 'request') {
         // Runs synchronously even while the program is parked on go.run: an
-        // async onmessage doesn't block the worker, and the _lgEval FuncOf
+        // async onmessage doesn't block the worker, and the _lgRequest FuncOf
         // returns its value on the calling stack.
-        const r = globalThis._lgEval ? globalThis._lgEval(e.data.code) : 'error: runtime not ready';
-        postMessage({t:'eval-result', id: e.data.id, result: r});
+        const r = globalThis._lgRequest ? globalThis._lgRequest(JSON.stringify(e.data.req || {})) : '{"ok":false,"error":{"code":"not-ready","message":"runtime not ready"}}';
+        postMessage({t:'request-result', id: e.data.id, result: r});
         return;
       }
       if (e.data.t !== 'init') return;
@@ -300,28 +309,32 @@ async function startWorkerMode() {
       try { window.LetGoHost._emit(e.data.name, JSON.parse(e.data.data)); }
       catch (err) { console.error('lg emit relay:', err); }
     }
-    // Host-eval relay: the worker runs the eval and posts the string back,
-    // matched to its request id. evalImpl is installed here (not at startup) so
-    // it only exists once the worker's runtime is actually ready.
+    // Host-request relay: the worker runs the request and posts the JSON string
+    // back, matched to its request id. requestImpl is installed here (not at
+    // startup) so it only exists once the worker's runtime is actually ready.
     if (e.data.t === 'host-eval-ready') {
-      evalImpl = (code) => new Promise((resolve, reject) => {
-        const id = ++evalSeq;
+      requestImpl = (req) => new Promise((resolve, reject) => {
+        const id = ++requestSeq;
         const timer = setTimeout(() => {
-          if (evalPending.delete(id)) {
-            reject(new Error('LetGoHost.eval: no worker response within ' + EVAL_TIMEOUT_MS + 'ms'));
+          if (requestPending.delete(id)) {
+            reject(new Error('LetGoHost.request: no worker response within ' + REQUEST_TIMEOUT_MS + 'ms'));
           }
-        }, EVAL_TIMEOUT_MS);
-        evalPending.set(id, { resolve, timer });
-        worker.postMessage({t:'eval', id, code});
+        }, REQUEST_TIMEOUT_MS);
+        requestPending.set(id, { resolve, reject, timer });
+        worker.postMessage({t:'request', id, req});
       });
       runtimeReadyResolve();
     }
-    if (e.data.t === 'eval-result') {
-      const pending = evalPending.get(e.data.id);
+    if (e.data.t === 'request-result') {
+      const pending = requestPending.get(e.data.id);
       if (pending) {
         clearTimeout(pending.timer);
-        evalPending.delete(e.data.id);
-        pending.resolve(e.data.result);
+        requestPending.delete(e.data.id);
+        try {
+          pending.resolve(JSON.parse(e.data.result));
+        } catch (err) {
+          pending.reject(err);
+        }
       }
     }
   };
@@ -399,10 +412,10 @@ async function startMainThreadMode() {
     try { window.LetGoHost._emit(name, JSON.parse(dataJson)); }
     catch (err) { console.error('lg emit:', err); }
   };
-  // Host-eval (main thread): the runtime sets window._lgEval, then calls this to
-  // announce readiness. Eval runs in-page, so dispatch is a direct call.
+  // Host-request (main thread): the runtime sets window._lgRequest, then calls
+  // this to announce readiness. Requests run in-page, so dispatch is a direct call.
   globalThis._lgRuntimeReady = function() {
-    evalImpl = (code) => window._lgEval(code);
+    requestImpl = (req) => JSON.parse(window._lgRequest(JSON.stringify(req || {})));
     runtimeReadyResolve();
   };
 

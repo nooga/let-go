@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>let-go browser inspector</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: #101316;
+      color: #e7ecef;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    #status {
+      display: none;
+    }
+    #inspector-app {
+      min-height: 100vh;
+      padding: 20px;
+      background:
+        radial-gradient(circle at top left, rgba(252, 163, 17, 0.14), transparent 28%),
+        linear-gradient(180deg, #11161b 0%, #0c1014 100%);
+    }
+    .inspector-shell {
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+    .hero {
+      margin-bottom: 16px;
+    }
+    .hero h1 {
+      font-size: 30px;
+      line-height: 1.1;
+      margin: 0 0 6px;
+    }
+    .hero p {
+      margin: 0;
+      color: #9eb0bc;
+    }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      margin: 14px 0 18px;
+      flex-wrap: wrap;
+    }
+    .toolbar button {
+      background: #fca311;
+      color: #101316;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .toolbar button.secondary {
+      background: #25313b;
+      color: #d7e3ea;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(360px, 1.05fr) minmax(420px, 1fr);
+      gap: 16px;
+    }
+    .panel {
+      border: 1px solid #28313a;
+      border-radius: 14px;
+      background: rgba(9, 12, 16, 0.88);
+      backdrop-filter: blur(6px);
+      overflow: hidden;
+    }
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-bottom: 1px solid #1b2229;
+      color: #9eb0bc;
+    }
+    textarea {
+      width: 100%;
+      min-height: 520px;
+      border: 0;
+      resize: vertical;
+      padding: 16px;
+      background: #0b0f13;
+      color: #eef4f6;
+      font: 13px/1.55 ui-monospace, "SF Mono", Menlo, monospace;
+      outline: none;
+    }
+    .result-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+    .artifact {
+      border: 1px solid #1f2931;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #0b0f13;
+    }
+    .artifact header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid #1a2229;
+      font-size: 12px;
+      color: #9eb0bc;
+    }
+    .artifact pre {
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #eaf0f4;
+      font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    .status-ok { color: #7bd389; }
+    .status-unavailable { color: #f9c74f; }
+    .status-error { color: #ff7b72; }
+    .meta {
+      margin-top: 12px;
+      color: #9eb0bc;
+      font-size: 12px;
+    }
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      textarea {
+        min-height: 320px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="status">loading...</div>
+  <div id="inspector-app">
+    <div class="inspector-shell">
+      <div class="hero">
+        <h1>Let-Go Explorer</h1>
+        <p>Single-workbench preview over <code>LetGoHost.request(...)</code>.</p>
+      </div>
+
+      <div class="toolbar">
+        <button id="inspect-all-btn">Inspect All</button>
+        <button id="eval-btn" class="secondary">Eval</button>
+        <button id="compile-btn" class="secondary">Compile</button>
+      </div>
+
+      <div class="layout">
+        <section class="panel">
+          <h2>Forms Input</h2>
+          <textarea id="code-input">(defn sum3 [x]
+  (+ x 1 2))
+
+(sum3 4)</textarea>
+        </section>
+
+        <section class="panel">
+          <h2>Artifacts</h2>
+          <div class="result-grid" id="results"></div>
+        </section>
+      </div>
+
+      <div class="meta" id="meta"></div>
+    </div>
+  </div>
+
+  <script>
+__LG_HOST_SCRIPT__
+  </script>
+
+  <script>
+  (() => {
+    const codeEl = document.getElementById('code-input');
+    const resultsEl = document.getElementById('results');
+    const metaEl = document.getElementById('meta');
+    const session = 'browser-inspector';
+
+    function renderArtifact(name, payload) {
+      const status = payload && payload.status ? payload.status : 'ok';
+      const pretty = JSON.stringify(payload, null, 2);
+      return `
+        <section class="artifact">
+          <header>
+            <strong>${name}</strong>
+            <span class="status-${status}">${status}</span>
+          </header>
+          <pre>${escapeHtml(pretty)}</pre>
+        </section>
+      `;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    }
+
+    async function send(op) {
+      metaEl.textContent = `Running ${op}...`;
+      resultsEl.innerHTML = '';
+      try {
+        const resp = await window.LetGoHost.request({
+          id: `${op}-${Date.now()}`,
+          session,
+          op,
+          code: codeEl.value
+        });
+        metaEl.textContent = `session=${resp.session || session} op=${resp.op} ok=${resp.ok}`;
+        if (!resp.ok) {
+          resultsEl.innerHTML = renderArtifact('error', {
+            status: 'error',
+            error: resp.error,
+            warnings: resp.warnings || []
+          });
+          return;
+        }
+        const artifacts = resp.artifacts || {};
+        const sections = [];
+        sections.push(renderArtifact('response', {
+          status: 'ok',
+          value: resp.value,
+          warnings: resp.warnings || [],
+          metrics: resp.metrics || null
+        }));
+        Object.entries(artifacts).forEach(([name, payload]) => {
+          if (name === 'namespace') return;
+          sections.push(renderArtifact(name, payload));
+        });
+        if (artifacts.namespace) {
+          metaEl.textContent += ` ns=${artifacts.namespace}`;
+        }
+        resultsEl.innerHTML = sections.join('');
+      } catch (err) {
+        metaEl.textContent = 'request failed';
+        resultsEl.innerHTML = renderArtifact('error', {
+          status: 'error',
+          message: err && err.message ? err.message : String(err)
+        });
+      }
+    }
+
+    document.getElementById('inspect-all-btn').addEventListener('click', () => send('inspect-all'));
+    document.getElementById('eval-btn').addEventListener('click', () => send('eval'));
+    document.getElementById('compile-btn').addEventListener('click', () => send('compile'));
+
+    send('inspect-all');
+  })();
+  </script>
+</body>
+</html>
