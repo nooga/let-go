@@ -31,7 +31,17 @@ concurrency:
 jobs:
   profile:
     if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Serialize the legs: both push to the single perf-data branch, so
+      # running them in parallel would race on the branch ref.
+      max-parallel: 1
+      matrix:
+        # amd64 (GitHub Linux runner) + Apple-Silicon arm64 (macos-14). With
+        # the machine-profile-partitioned ratchet these coexist cleanly; the
+        # explorer then shows both an amd64 and an Apple-M line per benchmark.
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -61,16 +71,25 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Generate lowered runtime
-        run: make lowered
+      - name: Generate lowered runtime (best-effort)
+        # Tags before v1.10 have no `lowered` target. Skip it there rather than
+        # fail — the tag's own bench-ratchet then captures its available
+        # (bytecode) benches, so e.g. v1.9 gets a bytecode-only snapshot with no
+        # gogen_ir/aot_native variants. That's intended (no lowered comparison
+        # for pre-v1.10 releases).
+        run: make lowered || echo "no 'lowered' target at this ref — skipping; gogen_ir/aot_native variants will be absent"
 
       - name: Capture full perf snapshot
         id: perf
         run: |
           short_sha="$(git rev-parse --short=12 HEAD)"
           commit_epoch="$(git show -s --format=%ct HEAD)"
-          stamp="$(date -u -d "@${commit_epoch}" +%Y%m%dT%H%M%SZ)"
-          snapshot_name="${stamp}-${short_sha}.json"
+          # GNU date (Linux) uses -d @epoch; BSD date (macOS) uses -r epoch.
+          stamp="$(date -u -r "${commit_epoch}" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -d "@${commit_epoch}" +%Y%m%dT%H%M%SZ)"
+          # Tag the filename with arch so amd64 and arm64 snapshots of the SAME
+          # commit don't collide on one name (x86_64 / arm64).
+          arch="$(uname -m)"
+          snapshot_name="${stamp}-${short_sha}-${arch}.json"
           snapshot_tmp="${RUNNER_TEMP}/${snapshot_name}"
           raw_tmp="${RUNNER_TEMP}/${snapshot_name%.json}.jsonl"
 

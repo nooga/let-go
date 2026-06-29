@@ -1,0 +1,90 @@
+name: Perf Backfill Releases
+
+# Backfills the perf timeline for tagged releases that don't yet have a
+# snapshot on the perf-data branch. Floors naturally at the release where the
+# benchmark harness landed (#119 / v1.8): a tag is only eligible if it carries
+# pkg/vm/bench_ratchet_anchor_test.go, so older releases (which predate the
+# framework — including the by-date-older v2.0.x line) are skipped. Carrying the
+# harness back onto a pre-harness tag without changing the release would mean
+# overlaying today's bench files on the old tree and hoping it still compiles;
+# that's deliberately out of scope here (best-effort, per-tag, would need its
+# own job) — see README/ratchet docs.
+
+on:
+  schedule:
+    # Weekly — new releases self-backfill within a week of tagging.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'List the missing tags but do not dispatch'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # Needed to dispatch perf-timeline.yml. NOTE: the automatic GITHUB_TOKEN
+  # cannot trigger a workflow_dispatch run (GitHub blocks token-initiated events
+  # to prevent recursion), so the dispatch step uses the PERF_DISPATCH_TOKEN
+  # secret (a fine-grained PAT with actions:write) when present and falls back
+  # to GITHUB_TOKEN (which will enqueue nothing) otherwise.
+  actions: write
+
+concurrency:
+  group: perf-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need every tag and its tree
+
+      - name: Find tagged releases missing from perf-data
+        id: scan
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+
+          # Existing timeline snapshots (filenames embed the short SHA:
+          # <stamp>-<sha>[-<arch>].json). Clone perf-data shallow; tolerate the
+          # branch not existing yet.
+          if git clone --depth 1 --branch perf-data "$remote" /tmp/pd 2>/dev/null; then
+            ls /tmp/pd/timeline 2>/dev/null > /tmp/existing.txt || : > /tmp/existing.txt
+          else
+            : > /tmp/existing.txt
+          fi
+
+          missing=""
+          for tag in $(git tag); do
+            # Eligible if the tag carries the calibration anchor (>= v1.8 / #119).
+            # The `lowered` (gogen_ir) target only exists from v1.10, but
+            # perf-timeline now skips it gracefully, so v1.9 still backfills —
+            # just bytecode-only, with no gogen_ir/aot_native variants.
+            git cat-file -e "${tag}:pkg/vm/bench_ratchet_anchor_test.go" 2>/dev/null || continue
+            sha="$(git rev-parse --short=12 "${tag}^{commit}")"
+            # A single perf-timeline dispatch produces both amd64 + arm64
+            # snapshots, so "any snapshot carrying this SHA" means done.
+            if grep -q -- "-${sha}" /tmp/existing.txt; then
+              continue
+            fi
+            missing="${missing} ${tag}"
+          done
+          missing="$(echo "${missing}" | xargs || true)"
+          echo "Eligible-but-missing release tags: ${missing:-<none>}"
+          echo "missing=${missing}" >> "${GITHUB_OUTPUT}"
+
+      - name: Dispatch perf-timeline for each missing tag
+        if: steps.scan.outputs.missing != '' && github.event.inputs.dry_run != 'true'
+        env:
+          # PAT (actions:write) so the dispatch actually starts runs; GITHUB_TOKEN
+          # would be silently dropped by the recursion guard.
+          GH_TOKEN: ${{ secrets.PERF_DISPATCH_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          for tag in ${{ steps.scan.outputs.missing }}; do
+            echo "Dispatching perf-timeline backfill for ${tag}"
+            gh workflow run perf-timeline.yml --repo "${{ github.repository }}" -f ref="${tag}"
+          done
