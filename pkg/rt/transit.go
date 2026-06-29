@@ -385,7 +385,9 @@ func (e *TransitEncoder) encodeValue(v vm.Value) (any, error) {
 		}
 		return n, nil
 	case vm.FloatType:
-		return float64(v.(vm.Float)), nil
+		// Float and Float32 both report FloatType; assert via Unbox so a Float32
+		// (e.g. from `(float x)`) doesn't panic the float64 type assertion.
+		return v.Unbox().(float64), nil
 	case vm.StringType:
 		s := string(v.(vm.String))
 		if len(s) > 0 && (s[0] == '~' || s[0] == '^') {

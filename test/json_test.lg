@@ -71,3 +71,16 @@
           parsed (read-json json-str {:keywords? true})]
       (is (= 9.99 (:price parsed)))
       (is (= 3 (:qty parsed))))))
+
+(deftest json-write-float32
+  ;; (float x) yields a Float32, which reports FloatType but is a distinct
+  ;; concrete type from Float (float64). write-json used to panic asserting it
+  ;; straight to float64; values chosen exact in float32 to avoid drift.
+  (testing "float32 scalar"
+    (is (= "1.5" (write-json (float 1.5)))))
+
+  (testing "float32 nested in a map"
+    (is (= "{\"rate\":0.25}" (write-json {:rate (float 0.25)}))))
+
+  (testing "float32 in a vector"
+    (is (= "[2.5]" (write-json [(float 2.5)])))))

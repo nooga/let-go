@@ -102,7 +102,9 @@ func fromValue(v vm.Value) (any, error) {
 	case vm.IntType:
 		return int(v.(vm.Int)), nil
 	case vm.FloatType:
-		return float64(v.(vm.Float)), nil
+		// Float and Float32 both report FloatType; assert via Unbox so a Float32
+		// (e.g. from `(float x)`) doesn't panic the float64 type assertion.
+		return v.Unbox().(float64), nil
 	case vm.BooleanType:
 		return bool(v.(vm.Boolean)), nil
 	case vm.MapType, vm.PersistentMapType:
