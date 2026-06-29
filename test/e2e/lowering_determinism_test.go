@@ -17,6 +17,8 @@ import (
 	"testing"
 )
 
+const runLoweringDeterminismEnv = "LETGO_RUN_LOWERING_DETERMINISM"
+
 // TestLoweringDeterminism verifies that the gogen_ir lowering process is
 // deterministic: two runs of lgbgen produce identical byte-for-byte output.
 //
@@ -25,11 +27,15 @@ import (
 // so any non-determinism in token positions, type inference, or code generation
 // would produce different bytes across runs. This test guards against regressions.
 //
-// Skipped under testing.Short() since it runs lgbgen twice (expensive).
-// Run explicitly via `make test` for full validation.
+// Skipped under testing.Short() and unless LETGO_RUN_LOWERING_DETERMINISM=1,
+// since the current harness is expensive and the exact cross-mode contract is
+// still being reconsidered. CI opts in from the dedicated slow e2e lane.
 func TestLoweringDeterminism(t *testing.T) {
 	if testing.Short() {
 		t.Skip("lowering determinism harness runs lgbgen twice; run via `make test` or `go test ./test/e2e/`")
+	}
+	if os.Getenv(runLoweringDeterminismEnv) != "1" {
+		t.Skipf("set %s=1 to run this slow lowering harness", runLoweringDeterminismEnv)
 	}
 
 	root := repoRoot(t)

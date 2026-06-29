@@ -1,0 +1,10 @@
+(ns test.transient-map-reduce-kv-test
+  (:require [test :refer :all]))
+
+(deftest reduce-kv-supports-transient-map
+  (let [tm (-> (transient {})
+               (assoc! :a 1)
+               (assoc! :b 2))]
+    (is (= 3 (reduce-kv (fn [acc _ v] (+ acc v)) 0 tm)))
+    ;; Iteration must not consume/freeze the transient.
+    (is (= 3 (count (assoc! tm :c 3))))))

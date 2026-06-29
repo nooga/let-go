@@ -647,7 +647,7 @@ func setEquals(a, b setLike) bool {
 
 func isMapType(v vm.Value) bool {
 	switch v.(type) {
-	case vm.Map, *vm.PersistentMap, *vm.SortedMap:
+	case vm.Map, *vm.PersistentMap, *vm.SortedMap, *vm.TransientMap:
 		return true
 	}
 	return false

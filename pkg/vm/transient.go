@@ -154,6 +154,18 @@ func (t *TransientMap) ValueAtOr(key Value, notFound Value) Value {
 	return v
 }
 
+func (t *TransientMap) Seq() Seq {
+	if t.count == 0 || t.root == nil {
+		return EmptyList
+	}
+	mes := t.root.nodeSeq()
+	result := make([]Value, len(mes))
+	for i, e := range mes {
+		result[i] = e
+	}
+	return &MapSeq{entries: result, i: 0}
+}
+
 func (t *TransientMap) Count() Value  { return MakeInt(t.count) }
 func (t *TransientMap) RawCount() int { return t.count }
 

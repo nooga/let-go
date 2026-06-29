@@ -100,7 +100,8 @@
     ;; not the local's Go type, so they map to vm.Value here. (Set mirrors
     ;; ir.lattice/collection-kinds — kept local to avoid a cross-ns require +
     ;; goLoweringNSOrder churn.)
-    (contains? #{:vector :map :set :list :cons :lazyseq :seq} t) "vm.Value"
+    (contains? #{:vector :map :set :list :cons :lazyseq :seq
+                 :transient-vector :transient-map :transient-set} t) "vm.Value"
     (and (vector? t) (= (first t) :union))       "vm.Value"
     ;; [:dtype T] — a native deftype instance, lowered as a pointer *T to the
     ;; generated struct (drives receiver typing + devirtualized field access).

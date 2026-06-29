@@ -46,10 +46,14 @@
    :set 16
    :list 17
    :cons 18
-   :lazyseq 19})
+   :lazyseq 19
+   :transient-vector 20
+   :transient-map 21
+   :transient-set 22})
 
 ;; The concrete collection/seq kinds (keyword lattice members, non-maskable).
-(def collection-kinds #{:vector :map :set :list :cons :lazyseq})
+(def collection-kinds #{:vector :map :set :list :cons :lazyseq
+                        :transient-vector :transient-map :transient-set})
 
 ;; vm interface membership: which lattice kinds implement each runtime
 ;; interface. Membership is the Go method-set test against pkg/vm — a kind
@@ -66,7 +70,8 @@
 ;; once represented (e.g. *InfiniteRange is vm.Seq but not vm.Counted), at
 ;; which point only the relevant set gains the new kind.
 (def ^:private seqable-kinds #{:vector :map :set :list :cons :lazyseq :string})
-(def ^:private counted-kinds #{:vector :map :set :list :cons :lazyseq :string})
+(def ^:private counted-kinds #{:vector :map :set :list :cons :lazyseq :string
+                               :transient-vector :transient-map :transient-set})
 (def ^:private seq-kinds     #{:vector :map :set :list :cons :lazyseq :string})
 
 (defn classify-const [aux]

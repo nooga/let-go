@@ -291,6 +291,8 @@
   (cond
     (map? coll)
     (reduce (fn [acc pair] (f acc (first pair) (second pair))) init coll)
+    (= "let-go.lang.TransientMap" (str (type coll)))
+    (reduce (fn [acc pair] (f acc (first pair) (second pair))) init coll)
     ;; Vectors: both ArrayVector (literal []) and PersistentVector (large
     ;; vectors built incrementally) need integer-keyed iteration. Test via
     ;; counted+nth contract rather than exact type, since IR insts grow
