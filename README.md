@@ -10,7 +10,7 @@
 Greetings loafers! _(λ-gophers haha, get it?)_
 
 let-go is a Clojure dialect with a bytecode compiler and stack VM, written in Go.
-A single ~13MB binary, ~15ms cold start, no JVM. It passes the
+A single ~12MB binary, ~8ms cold start, no JVM. It passes the
 [jank-lang test suite](https://github.com/jank-lang/clojure-test-suite).
 
 I started this in 2021 as an elaborate joke: an excuse to write Clojure while
@@ -48,16 +48,15 @@ files are valid Clojure that runs unmodified. Apple M1 Pro.
 
 |                 | let-go     | babashka | joker | go-joker | gloat | clojure JVM |
 | --------------- | ---------- | -------- | ----- | -------- | ----- | ----------- |
-| **Binary size** | **13MB**   | 68MB     | 26MB  | 32MB     | 26MB  | 304MB (JDK) |
-| **Startup**     | 15.0ms     | 20.4ms   | 12.2ms | 12.7ms   | 15.8ms | 417ms       |
-| **Idle memory** | 21.5MB     | 27.0MB   | 21.4MB | 23.4MB   | 23.0MB | 97.2MB      |
+| **Binary size** | **12MB**   | 68MB     | 26MB  | 32MB     | 26MB  | 304MB (JDK) |
+| **Startup**     | **8.2ms**  | 17.7ms   | 11.5ms | 12.5ms   | 14.7ms | 360ms       |
+| **Idle memory** | **14.7MB** | 27.0MB   | 21.6MB | 23.7MB   | 22.9MB | 98.0MB      |
 
-let-go stays compact and quick to launch: a small native binary, sub-20ms
-startup, low RSS, and no JVM dependency. On this run Joker/go-joker edge it on
-startup, but let-go remains far below JVM startup and memory cost.
+let-go stays compact and quick to launch: a small native binary, fastest startup
+in this run, low RSS, and no JVM dependency.
 
 On runtime benchmarks, let-go is competitive on short-lived data work like
-map/filter (14.9ms) and persistent maps (26.3ms), and it is still much faster
+map/filter (7.2ms) and persistent maps (20.2ms), and it is still much faster
 than upstream Joker on numeric/tree-walk-heavy cases. go-joker's WASM JIT leads
 hot loops and reduction/transducer workloads; Babashka is ahead on several
 algorithmic cases; and the JVM dominates long compute runs once HotSpot warms
