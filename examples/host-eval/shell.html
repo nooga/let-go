@@ -110,6 +110,15 @@
       <div id="evalio" class="box"></div>
     </section>
   </div>
+  <template id="line-template">
+    <div data-ref="row" data-text="text"></div>
+  </template>
+  <template id="echo-template">
+    <div class="echo" data-ref="row">
+      <span class="ps">user=&gt;</span>
+      <span class="src" data-text="src"></span>
+    </div>
+  </template>
   <div class="examples" id="examples">
     <div class="exrow">
       <span class="label">value</span>
@@ -149,26 +158,36 @@
   const logEl = document.getElementById("log");
   const promptline = document.getElementById("promptline");
   const expr = document.getElementById("expr");
+  const templates = {
+    line: document.getElementById("line-template"),
+    echo: document.getElementById("echo-template"),
+  };
   let ready = false;
 
   const scroll = () => { logEl.scrollTop = logEl.scrollHeight; };
   const autosize = () => { expr.style.height = "auto"; expr.style.height = expr.scrollHeight + "px"; };
 
+  // Stamp a template with text inputs and return named output refs. Dynamic
+  // values always go through textContent, so submitted code cannot inject HTML.
+  function stamp(name, values) {
+    const root = templates[name].content.firstElementChild.cloneNode(true);
+    const refs = { row: root };
+    root.querySelectorAll("[data-ref]").forEach((el) => { refs[el.dataset.ref] = el; });
+    root.querySelectorAll("[data-text]").forEach((el) => { el.textContent = values[el.dataset.text] ?? ""; });
+    if (root.dataset.text) root.textContent = values[root.dataset.text] ?? "";
+    return refs;
+  }
+
   // Insert a transcript line just above the live prompt (which stays last).
   function emit(text, cls) {
-    const d = document.createElement("div");
-    if (cls) d.className = cls;
-    d.textContent = text;
-    logEl.insertBefore(d, promptline);
+    const { row } = stamp("line", { text });
+    if (cls) row.className = cls;
+    logEl.insertBefore(row, promptline);
   }
   // Freeze the submitted input as a history line: "user=> <expr>".
   function echo(src) {
-    const d = document.createElement("div");
-    d.className = "echo";
-    const ps = document.createElement("span"); ps.className = "ps"; ps.textContent = "user=>";
-    const s = document.createElement("span"); s.className = "src"; s.textContent = src;
-    d.append(ps, s);
-    logEl.insertBefore(d, promptline);
+    const { row } = stamp("echo", { src });
+    logEl.insertBefore(row, promptline);
   }
 
   async function submit() {
