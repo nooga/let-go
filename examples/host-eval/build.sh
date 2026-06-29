@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the host-eval demo: a client-owned-shell WASM bundle, with shell.html
-# grafted in to make one self-contained page.
+# grafted in to make one page (wasm inlined; xterm + web font load from a CDN).
 #
 #   LG=lg ./build.sh
 #

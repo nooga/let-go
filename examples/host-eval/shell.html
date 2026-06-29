@@ -82,10 +82,10 @@
     .box { height: 240px; }
   }
   /* iOS Safari auto-zooms a focused field under 16px. Target touch devices
-     directly — a width query (max-width) misses iOS's wider CSS viewport, which
-     is why the earlier attempt didn't take. Bump the whole REPL to 16px so the
-     input never trips the trigger and input + history stay matched. (#expr
-     inherits via font:inherit.) Pairs with the maximum-scale viewport patch. */
+     directly — a width query (max-width) misses iOS's wider CSS viewport. Bump
+     the whole REPL to 16px so the input never trips the trigger and input +
+     history stay matched (#expr inherits via font:inherit). This alone prevents
+     the zoom — we leave the page's pinch-zoom untouched. */
   @media (pointer: coarse) {
     #log { font-size: 16px; }
   }
@@ -128,16 +128,6 @@
   </div>
 </div>
 <script>
-  // iOS Safari auto-zooms when focusing a sub-16px field. maximum-scale=1 stops
-  // that automatic zoom; since iOS 10 Safari ignores the cap for user-initiated
-  // pinch, so manual zoom still works (no accessibility regression). The bundle
-  // owns the <head> viewport meta (#291), so patch it here rather than the head.
-  (function () {
-    var vp = document.querySelector('meta[name="viewport"]');
-    if (!vp) { vp = document.createElement("meta"); vp.name = "viewport"; document.head.appendChild(vp); }
-    vp.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1");
-  })();
-
   const term = new Terminal({
     fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace', fontSize: 13,
     // stdout is read-only output, not an input: disable stdin and hide the

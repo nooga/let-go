@@ -20,9 +20,11 @@ surface. It demonstrates two seams at once:
 LG=lg ./build.sh
 ```
 
-This produces a self-contained `dist/index.html`. Serve it **with cross-origin
-isolation** — the wasm input ring is `SharedArrayBuffer`-backed, so the page
-must be `crossOriginIsolated`, which needs:
+This produces a single `dist/index.html` with the wasm inlined. It still pulls
+xterm and the JetBrains Mono web font from a CDN at runtime, so it needs network
+access (vendor those assets if you want a fully offline page). Serve it **with
+cross-origin isolation** — the wasm input ring is `SharedArrayBuffer`-backed, so
+the page must be `crossOriginIsolated`, which needs:
 
 ```
 Cross-Origin-Opener-Policy: same-origin
