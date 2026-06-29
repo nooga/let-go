@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"unsafe"
 )
 
 // Writer wraps a buffered writer with binary encoding helpers.
@@ -141,6 +142,20 @@ func (r *Reader) ReadBytes(n int) ([]byte, error) {
 	buf := make([]byte, n)
 	_, err := io.ReadFull(r.r, buf)
 	return buf, err
+}
+
+// ReadString reads exactly n bytes and returns them as a string with a single
+// backing allocation. The returned string owns its storage and is safe to
+// retain after the reader advances.
+func (r *Reader) ReadString(n int) (string, error) {
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(r.r, buf); err != nil {
+		return "", err
+	}
+	if len(buf) == 0 {
+		return "", nil
+	}
+	return unsafe.String(unsafe.SliceData(buf), len(buf)), nil
 }
 
 // ReadUint16 reads a little-endian uint16.

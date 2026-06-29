@@ -802,11 +802,16 @@ func captureOnePackage(pkg string, count int, benchtime, timeout, tags string, f
 		// It also tags the result with a "-N" GOMAXPROCS suffix
 		// (e.g. "RatchetAnchor-8"); strip via trimGoMaxProcsSuffix.
 		name := "Benchmark" + trimGoMaxProcsSuffix(string(rec.Name.Full()))
-		// A variant label (e.g. "bytecode" / "gogen_ir") distinguishes the
-		// same benchmark run under different VM build tags, so both land as
+		// A variant label (e.g. "gogen_ir") distinguishes the same benchmark
+		// run under different VM build tags, so distinct variants land as
 		// separate baseline entries instead of colliding on package+name.
-		// The anchor is always recorded variant-free so findAnchor matches it.
-		if variant != "" {
+		// "bytecode" is the canonical default (no build tags, no IR bit), so
+		// it is recorded UN-suffixed — bridging onto the bare benchmark key
+		// rather than a redundant "[bytecode]" entry. This keeps one canonical
+		// entry per benchmark and folds older un-suffixed captures in (see
+		// canonicalizeBenchmarks on read). The anchor is always recorded
+		// variant-free so findAnchor matches it.
+		if variant != "" && variant != "bytecode" {
 			name = name + " [" + variant + "]"
 		}
 
@@ -1050,7 +1055,54 @@ func readBaseline(path string) (Baseline, error) {
 	if b.Version != schemaVersion {
 		return b, fmt.Errorf("baseline version %d, want %d (regenerate with `update`)", b.Version, schemaVersion)
 	}
+	// Bridge legacy "[bytecode]" entries onto the canonical un-suffixed key so
+	// an older baseline (captured before bytecode became the canonical default)
+	// merges cleanly instead of leaving stale duplicates.
+	b.Benchmarks = canonicalizeBenchmarks(b.Benchmarks)
 	return b, nil
+}
+
+// canonicalBenchKey maps the redundant " [bytecode]" variant label to the
+// un-suffixed canonical key. "bytecode" is the default no-tag, no-IR run, so
+// it IS the canonical baseline entry; only the genuinely distinct variants
+// (gogen_ir, ir_bytecode, aot_native) keep a suffix.
+func canonicalBenchKey(name string) string {
+	return strings.TrimSuffix(name, " [bytecode]")
+}
+
+// legacyKeyAlias maps renamed benchmark keys onto their current canonical form
+// so an older baseline migrates cleanly. The suite's gogen_ir-tagged run was
+// relabeled "aot_native"; IRCompile still uses the "gogen_ir" variant, so this
+// is a TARGETED per-key alias, not a blanket "[gogen_ir]"->"[aot_native]"
+// rename (which would corrupt the valid IRCompile [gogen_ir] entry).
+var legacyKeyAlias = map[string]string{
+	"github.com/nooga/let-go/test.BenchmarkClojureTestSuite [gogen_ir]": "github.com/nooga/let-go/test.BenchmarkClojureTestSuite [aot_native]",
+}
+
+// canonicalizeBenchmarks rewrites " [bytecode]"-suffixed keys to their
+// canonical un-suffixed form, MIN-merging metrics when both forms are present
+// (the one-time migration from a mixed-convention baseline).
+func canonicalizeBenchmarks(bm map[string]BenchmarkEntry) map[string]BenchmarkEntry {
+	if bm == nil {
+		return bm
+	}
+	out := make(map[string]BenchmarkEntry, len(bm))
+	for k, e := range bm {
+		ck := canonicalBenchKey(k)
+		if alias, ok := legacyKeyAlias[ck]; ok {
+			ck = alias
+		}
+		if prev, ok := out[ck]; ok {
+			prev.NSPerOp = minF(prev.NSPerOp, e.NSPerOp)
+			prev.AllocsPerOp = minI(prev.AllocsPerOp, e.AllocsPerOp)
+			prev.BytesPerOp = minI(prev.BytesPerOp, e.BytesPerOp)
+			prev.RatioToAnchor = minF(prev.RatioToAnchor, e.RatioToAnchor)
+			out[ck] = prev
+		} else {
+			out[ck] = e
+		}
+	}
+	return out
 }
 
 func printBaseline(b Baseline) {

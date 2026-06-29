@@ -60,6 +60,18 @@ Full profile (`-full`): the broad timeline/deep-dive profile. It runs
 the full `pkg/vm` benchmark fleet under `-tags gogen_ir`, plus the
 suite and IR compile benchmark under both bytecode and `gogen_ir`.
 
+> **Reading the `gogen_ir` / `aot_native` numbers.** These exercise the
+> natively-lowered IR passes (the dispatch is guarded by
+> `TestIRBenchDispatchesNativeUnderTag`), but the lowered Go currently
+> *boxes* most cross-namespace and `clojure.core` calls — runtime
+> `LookupVar`/`Deref` + a fresh `[]vm.Value` arg slice per call — rather
+> than emitting direct calls. So the `gogen_ir` variant can allocate
+> **more** than `bytecode` (e.g. IRCompile ~1.7×) and is only marginally
+> faster. Treat these as "native dispatch works, codegen not yet
+> optimized" — not "native is fast." Direct-call lowering (cross-ns +
+> IFn-typed + `clojure.core`) is the lever that would push them below the
+> bytecode line.
+
 Deliberately out of scope: `pkg/compiler` (compile time — measured by
 parity scripts) and `pkg/bytecode` (decode time — measured at `make
 build`). Keeping the ratchet narrow means a slow compiler change
