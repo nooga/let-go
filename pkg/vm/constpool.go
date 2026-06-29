@@ -1,6 +1,8 @@
 package vm
 
-import "unsafe"
+import (
+	"unsafe"
+)
 
 // Consts is a constant pool with O(1) indexed access and O(1) amortized interning.
 // Uses a custom open-addressing hash map (not Go's built-in map) so that all Value
@@ -45,6 +47,40 @@ func NewChildConsts(parent *Consts) *Consts {
 		consts:  make([]Value, 0, 32),
 		buckets: make([]constBucket, 16),
 		mask:    15,
+	}
+}
+
+// Reserve ensures this const pool can append at least n additional values
+// without growing its value slice or hash table.
+func (c *Consts) Reserve(n int) {
+	if cap(c.consts) < n {
+		next := make([]Value, len(c.consts), n)
+		copy(next, c.consts)
+		c.consts = next
+	}
+	needed := n
+	if needed < 1 {
+		needed = 1
+	}
+	minBuckets := needed*4/3 + 1
+	if len(c.buckets) >= minBuckets {
+		return
+	}
+	newSize := len(c.buckets)
+	if newSize < 16 {
+		newSize = 16
+	}
+	for newSize < minBuckets {
+		newSize *= 2
+	}
+	old := c.buckets
+	c.buckets = make([]constBucket, newSize)
+	c.mask = uint32(newSize - 1)
+	c.size = 0
+	for _, e := range old {
+		if e.value != nil {
+			c.insertBucket(e.hash, e.index, e.value)
+		}
 	}
 }
 

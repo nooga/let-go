@@ -48,6 +48,12 @@ func NewSourceMap() *SourceMap {
 	return &SourceMap{}
 }
 
+// NewSourceMapWithCapacity creates an empty SourceMap with preallocated storage
+// for n entries.
+func NewSourceMapWithCapacity(n int) *SourceMap {
+	return &SourceMap{entries: make([]sourceMapEntry, 0, n)}
+}
+
 // Add records a source location for the given instruction pointer offset.
 func (sm *SourceMap) Add(ip int, info SourceInfo) {
 	sm.entries = append(sm.entries, sourceMapEntry{startIP: ip, info: info})

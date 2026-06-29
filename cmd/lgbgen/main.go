@@ -138,6 +138,19 @@ func deriveGoLoweringOrder() ([]embeddedNamespace, error) {
 // from the bundle — they have runtime intern blocks that need live
 // function values and must be loaded from source on demand. `core`
 // is always emitted first since the language depends on it.
+//
+// The `ir.*` AOT/lowering pipeline (build, lower, lower-go, passes/*,
+// etc.) is ALSO omitted from the bytecode bundle. It is ~10k lines /
+// ~480K of source — more than the entire rest of core — yet it is a
+// build-time/opt-in tool: a plain `letgo` script never touches it, and
+// the runtime optimizer (`*ir-compile*`, see core.lg) loads it lazily
+// via `(require 'ir.passes.pipeline)`. Decoding it eagerly on every
+// process start cost ~6ms (the bundle had grown 109K→650K). Excluding
+// it here keeps cold startup fast; when the pipeline IS needed it loads
+// from embedded source on demand. This skip is intentionally scoped to
+// the BUNDLE only — the Go-lowering path (deriveGoLoweringOrder) must
+// still see ir.* so `core_go_lowered/ir/**` is generated for the
+// `-tags gogen_ir` build, so it does NOT consult isIRBundleSkipped.
 func discoverEmbeddedNS() ([]embeddedNamespace, error) {
 	names := rt.EmbeddedNSNames()
 	allowed := map[string]string{}
@@ -164,6 +177,13 @@ func discoverEmbeddedNS() ([]embeddedNamespace, error) {
 		out = append(out, embeddedNamespace{name: n, src: allowed[n]})
 	}
 	return out, nil
+}
+
+// isIRBundleSkipped reports whether namespace n belongs to the ir.* AOT
+// pipeline and should be excluded from the BYTECODE bundle (but not the
+// Go-lowering output). Matches the `ir` root and any `ir.` descendant.
+func isIRBundleSkipped(n string) bool {
+	return n == "ir" || strings.HasPrefix(n, "ir.")
 }
 
 // hasLgbgenSkipDirective reports whether the source begins with a line
@@ -476,9 +496,9 @@ func main() {
 		os.Exit(1)
 	}
 	nsChunks := make(map[string]*vm.CodeChunk)
-	nsOrder := make([]string, 0, len(embeddedNS))
+	bundleOrder := make([]string, 0, len(embeddedNS)) // non-ir: encoded into the .lgb
 
-	for _, ns := range embeddedNS {
+	compileNS := func(ns embeddedNamespace) {
 		coreNS := rt.NS(rt.NameCoreNS)
 		c := compiler.NewCompiler(consts, coreNS)
 		c.SetSource("<embedded:" + ns.name + ">")
@@ -489,7 +509,6 @@ func main() {
 			os.Exit(1)
 		}
 		nsChunks[ns.name] = chunk
-		nsOrder = append(nsOrder, ns.name)
 		if targetGo || targetBoth {
 			fmt.Printf("  compiled %-20s (%d bytecode + lowering to Go)\n", ns.name, len(chunk.Code())*4)
 		} else {
@@ -497,11 +516,39 @@ func main() {
 		}
 	}
 
-	// Emit artifacts from the single compile above. `both` writes the bundle
-	// first (a read-only encode of the compiled chunks), then lowers to Go —
-	// runGoTarget re-pipelines the same loaded namespaces, so the order is
-	// immaterial and both artifacts come from one core compile.
+	// Phase 1a: compile every NON-ir namespace into the shared const pool, in
+	// dependency order. The ir.* AOT/lowering pipeline is deliberately kept OUT
+	// of the bytecode bundle (it loads from source on demand at runtime — see
+	// isIRBundleSkipped and core.lg's *ir-compile*). It must be excluded HERE,
+	// before the bundle is encoded, because EncodeBundleOrdered emits every
+	// const in the pool (encoder.go) and each func const drags in its chunk —
+	// so filtering only the ns-order would NOT keep ir bytecode out of the
+	// .lgb; ir must never enter the pool before writeBundle.
+	var irNS []embeddedNamespace
+	for _, ns := range embeddedNS {
+		if isIRBundleSkipped(ns.name) {
+			irNS = append(irNS, ns)
+			continue
+		}
+		compileNS(ns)
+		bundleOrder = append(bundleOrder, ns.name)
+	}
+
+	// compileIRForLowering compiles the ir.* namespaces into VM state so the
+	// Go-lowering pass can resolve them. Kept in the order derived above, which
+	// carries the synthetic ir.build-after-passes edge (deriveGoLoweringOrder)
+	// — losing it makes lowering emit untyped arithmetic. Always runs AFTER the
+	// bundle is written so ir consts never reach the .lgb pool.
+	compileIRForLowering := func() {
+		for _, ns := range irNS {
+			compileNS(ns)
+		}
+	}
+
+	// Emit artifacts. `both` writes the (ir-free) bundle first, then compiles
+	// ir and lowers the whole program to Go.
 	if targetGo {
+		compileIRForLowering()
 		runGoTarget(goOutDir, codeDir)
 		// Skip the manifest refresh when lowering into a throwaway codeDir —
 		// the canonical generated.sums must only move under a real regen.
@@ -511,13 +558,14 @@ func main() {
 		return
 	}
 	if targetBoth {
-		writeBundle(outPath, consts, nsChunks, nsOrder)
+		writeBundle(outPath, consts, nsChunks, bundleOrder)
+		compileIRForLowering()
 		runGoTarget(goOutDir, codeDir)
 		return
 	}
 
-	// Bytecode mode: write .lgb bundle.
-	writeBundle(outPath, consts, nsChunks, nsOrder)
+	// Bytecode mode: write .lgb bundle (ir.* excluded).
+	writeBundle(outPath, consts, nsChunks, bundleOrder)
 }
 
 // writeBundle encodes the compiled namespace chunks into the .lgb bundle at

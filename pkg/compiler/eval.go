@@ -9,13 +9,27 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/errors"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+var bootTiming = os.Getenv("LG_BOOT_TIMING") != ""
+var decodeTagStats = os.Getenv("LG_DECODE_TAG_STATS") != ""
+var lookupStats = os.Getenv("LG_LOOKUP_STATS") != ""
+
+func bootMark(label string, since time.Time) time.Time {
+	if bootTiming {
+		fmt.Fprintf(os.Stderr, "[boot] %-22s %8.3f ms\n", label, float64(time.Since(since).Microseconds())/1000)
+	}
+	return time.Now()
+}
 
 var consts *vm.Consts
 
@@ -57,12 +71,30 @@ func ReadString(s string) (vm.Value, error) {
 }
 
 func evalInit() {
+	tStart := time.Now()
+
+	// Bundle decode is a short, allocation-heavy burst (~5MB of transient
+	// garbage). Letting the GC fire mid-decode adds latency and jitter to a
+	// path that runs on every process start. Pause GC for the duration of
+	// boot and restore the prior target afterward; the transient garbage is
+	// reclaimed on the first collection once normal allocation resumes.
+	prevGC := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(prevGC)
+
+	if lookupStats {
+		vm.ResetLookupStats()
+		vm.SetLookupStatsEnabled(true)
+	}
+
 	consts = vm.NewConsts()
 
 	// Try loading pre-compiled bundle
 	if len(rt.CoreCompiledLGB) > 0 {
 		if err := loadPrecompiledBundle(); err == nil {
+			tPost := time.Now()
 			postCoreInit()
+			bootMark("post-core-init", tPost)
+			bootMark("evalInit-total", tStart)
 			return
 		}
 		// Fall through to source compilation on error
@@ -91,25 +123,43 @@ func loadPrecompiledBundle() error {
 		if v == nil {
 			// Use DefStub to avoid spurious warn-on-shadow warnings during
 			// bundle decoding (the chunk will properly Def the value later).
+			if decodeTagStats {
+				bytecode.NoteDecodeVarRefMiss(true)
+			}
 			return n.DefStub(name)
 		}
+		if decodeTagStats {
+			bytecode.NoteDecodeVarRefHit()
+		}
 		return v
+	}
+	t0 := time.Now()
+	if decodeTagStats {
+		bytecode.ResetDecodeStats()
+		bytecode.SetDecodeStatsEnabled(true)
+		defer bytecode.SetDecodeStatsEnabled(false)
 	}
 	unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(rt.CoreCompiledLGB), resolve)
 	if err != nil {
 		return err
+	}
+	bootMark("decode-bundle", t0)
+	if decodeTagStats {
+		fmt.Fprint(os.Stderr, bytecode.SnapshotDecodeStats().Summary())
 	}
 
 	// Use the decoded const pool as the global pool
 	consts = unit.Consts
 
 	// Execute core's main chunk to replay all def/defn/defmacro definitions
+	t1 := time.Now()
 	f := vm.NewFrame(unit.MainChunk, nil)
 	_, err = f.RunProtected()
 	vm.ReleaseFrame(f)
 	if err != nil {
 		return err
 	}
+	bootMark("run-core-chunk", t1)
 
 	// Store remaining namespace chunks for on-demand loading by the resolver.
 	// Mark non-core namespaces as needing load so LookupOrRegisterNS triggers

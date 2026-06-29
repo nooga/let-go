@@ -139,6 +139,25 @@ func NewCodeChunk(consts *Consts) *CodeChunk {
 	}
 }
 
+// NewCodeChunkWithCapacity creates an empty chunk with preallocated code
+// storage for n instructions.
+func NewCodeChunkWithCapacity(consts *Consts, n int) *CodeChunk {
+	return &CodeChunk{
+		consts: consts,
+		code:   make([]int32, 0, n),
+		length: 0,
+	}
+}
+
+// ReserveLocalVars ensures the local-var debug table can hold n entries
+// without growing.
+func (c *CodeChunk) ReserveLocalVars(n int) {
+	if cap(c.localVars) >= n {
+		return
+	}
+	c.localVars = make([]LocalVar, 0, n)
+}
+
 // AddLocalVar records the source name bound to a stack slot (debug info).
 func (c *CodeChunk) AddLocalVar(slot int, name string) {
 	c.localVars = append(c.localVars, LocalVar{Slot: slot, Name: name})
@@ -216,10 +235,31 @@ func (c *CodeChunk) AppendChunk(o *CodeChunk) {
 
 // AddSourceInfo records the source location for the current bytecode offset.
 func (c *CodeChunk) AddSourceInfo(info SourceInfo) {
+	c.AddSourceInfoAt(c.length, info)
+}
+
+// AddSourceInfoAt records the source location for the provided bytecode
+// offset.
+func (c *CodeChunk) AddSourceInfoAt(ip int, info SourceInfo) {
 	if c.sourceMap == nil {
 		c.sourceMap = NewSourceMap()
 	}
-	c.sourceMap.Add(c.length, info)
+	c.sourceMap.Add(ip, info)
+}
+
+// ReserveSourceMap ensures the source-map backing storage can hold n entries
+// without growing.
+func (c *CodeChunk) ReserveSourceMap(n int) {
+	if c.sourceMap == nil {
+		c.sourceMap = NewSourceMapWithCapacity(n)
+		return
+	}
+	if cap(c.sourceMap.entries) >= n {
+		return
+	}
+	next := NewSourceMapWithCapacity(n)
+	next.entries = append(next.entries, c.sourceMap.entries...)
+	c.sourceMap = next
 }
 
 // LookupSource finds the source location for a given instruction pointer.

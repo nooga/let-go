@@ -437,7 +437,13 @@ func initCompiler(debug bool) *compiler.Context {
 	}
 }
 
-func main() {
+func emitRuntimeStats() {
+	if os.Getenv("LG_LOOKUP_STATS") != "" {
+		fmt.Fprint(os.Stderr, vm.SnapshotLookupStats().Summary())
+	}
+}
+
+func runMain() int {
 	// Propagate version metadata to runtime so System/getProperty exposes it.
 	rt.Version = version
 	rt.Commit = commit
@@ -468,7 +474,7 @@ func main() {
 			files, err := rt.DecodeResourceArchive(resData)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: decoding embedded resources: %v\n", err)
-				os.Exit(1)
+				return 1
 			}
 			rt.SetResourceProvider(rt.NewEmbeddedResourceProvider(files))
 		}
@@ -484,7 +490,7 @@ func main() {
 		unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(lgbData), resolve)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 		// Execute namespace chunks in dependency order before main
 		for _, name := range unit.NSOrder {
@@ -497,7 +503,7 @@ func main() {
 			vm.ReleaseFrame(f)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: loading namespace %s: %v\n", name, err)
-				os.Exit(1)
+				return 1
 			}
 		}
 		f := vm.NewFrame(unit.MainChunk, nil)
@@ -505,16 +511,16 @@ func main() {
 		vm.ReleaseFrame(f)
 		if err != nil {
 			fmt.Fprint(os.Stderr, vm.FormatError(err))
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	flag.Parse()
 
 	if showVersion {
 		fmt.Printf("lg %s\n", versionString())
-		os.Exit(0)
+		return 0
 	}
 
 	files := flag.Args()
@@ -555,47 +561,47 @@ func main() {
 	if compileOutput != "" {
 		if len(files) != 1 {
 			fmt.Fprintln(os.Stderr, "error: -c requires exactly one input file")
-			os.Exit(1)
+			return 1
 		}
 		if err := compileLG(context, nsResolver, files[0], compileOutput); err != nil {
 			fmt.Fprint(os.Stderr, vm.FormatError(err))
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	// Bundle mode: compile .lg → standalone executable
 	if bundleOutput != "" {
 		if len(files) != 1 {
 			fmt.Fprintln(os.Stderr, "error: -b requires exactly one input file")
-			os.Exit(1)
+			return 1
 		}
 		if err := bundleBinary(context, nsResolver, files[0], bundleOutput, bundleBase); err != nil {
 			fmt.Fprint(os.Stderr, vm.FormatError(err))
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	// WASM mode: compile .lg → web app directory
 	if wasmOutput != "" {
 		if len(files) != 1 {
 			fmt.Fprintln(os.Stderr, "error: -w requires exactly one input file")
-			os.Exit(1)
+			return 1
 		}
 		if wasmShell != "xterm" && wasmShell != "none" {
 			fmt.Fprintf(os.Stderr, "error: -w-shell must be 'xterm' or 'none', got %q\n", wasmShell)
-			os.Exit(1)
+			return 1
 		}
 		if wasmPayload != "inline" && wasmPayload != "external" {
 			fmt.Fprintf(os.Stderr, "error: -w-wasm must be 'inline' or 'external', got %q\n", wasmPayload)
-			os.Exit(1)
+			return 1
 		}
 		if err := buildWasm(context, nsResolver, files[0], wasmOutput, wasmShell == "xterm", wasmPayload == "external", wasmHostEval, storageIDForScript(files[0])); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	// In profiling builds, profile only the script/REPL execution below.
@@ -643,4 +649,13 @@ func main() {
 	}
 
 	stopProfiling()
+	return 0
+}
+
+func main() {
+	code := runMain()
+	emitRuntimeStats()
+	if code != 0 {
+		os.Exit(code)
+	}
 }

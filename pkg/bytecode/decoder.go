@@ -42,7 +42,9 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 	d := &decoder{
 		r:       NewReader(r),
 		resolve: resolve,
+		stats:   decoderStats(),
 	}
+	defer recordDecodeStats(d.stats)
 
 	version, flags, err := d.readHeader()
 	if err != nil {
@@ -67,11 +69,6 @@ func (d *decoder) decodeToExecUnitV1(parent *vm.Consts) (*ExecUnit, error) {
 	}
 	d.strings = strings
 
-	chunkDatas, err := d.readChunks()
-	if err != nil {
-		return nil, err
-	}
-
 	var sharedConsts *vm.Consts
 	if parent != nil {
 		sharedConsts = vm.NewChildConsts(parent)
@@ -79,31 +76,12 @@ func (d *decoder) decodeToExecUnitV1(parent *vm.Consts) (*ExecUnit, error) {
 		sharedConsts = vm.NewConsts()
 	}
 
-	d.chunks = make([]*vm.CodeChunk, len(chunkDatas))
-	for i, cd := range chunkDatas {
-		chunk := vm.NewCodeChunk(sharedConsts)
-		chunk.Append(cd.Code...)
-		chunk.SetMaxStack(cd.MaxStack)
-		if len(cd.SourceMap) > 0 {
-			for _, e := range cd.SourceMap {
-				chunk.AddSourceInfo(vm.SourceInfo{
-					File:      e.File,
-					Line:      e.Line,
-					Column:    e.Column,
-					EndLine:   e.EndLine,
-					EndColumn: e.EndColumn,
-				})
-			}
-		}
-		d.chunks[i] = chunk
-	}
-
-	consts, err := d.readConsts()
-	if err != nil {
+	if err := d.readLiveChunks(sharedConsts); err != nil {
 		return nil, err
 	}
-	for _, v := range consts {
-		sharedConsts.Append(v)
+
+	if err := d.readConstsInto(sharedConsts); err != nil {
+		return nil, err
 	}
 
 	nsTable, err := d.readNSTable()
@@ -169,11 +147,6 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 	}
 	d.strings = strings
 
-	chunkDatas, err := d.readChunks()
-	if err != nil {
-		return nil, err
-	}
-
 	var sharedConsts *vm.Consts
 	if parent != nil {
 		sharedConsts = vm.NewChildConsts(parent)
@@ -181,31 +154,12 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 		sharedConsts = vm.NewConsts()
 	}
 
-	d.chunks = make([]*vm.CodeChunk, len(chunkDatas))
-	for i, cd := range chunkDatas {
-		chunk := vm.NewCodeChunk(sharedConsts)
-		chunk.Append(cd.Code...)
-		chunk.SetMaxStack(cd.MaxStack)
-		if len(cd.SourceMap) > 0 {
-			for _, e := range cd.SourceMap {
-				chunk.AddSourceInfo(vm.SourceInfo{
-					File:      e.File,
-					Line:      e.Line,
-					Column:    e.Column,
-					EndLine:   e.EndLine,
-					EndColumn: e.EndColumn,
-				})
-			}
-		}
-		d.chunks[i] = chunk
-	}
-
-	consts, err := d.readConstsV2()
-	if err != nil {
+	if err := d.readLiveChunks(sharedConsts); err != nil {
 		return nil, err
 	}
-	for _, v := range consts {
-		sharedConsts.Append(v)
+
+	if err := d.readConstsV2Into(sharedConsts); err != nil {
+		return nil, err
 	}
 
 	nsTable, err := d.readNSTable()
@@ -213,14 +167,8 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 		return nil, err
 	}
 	if d.flags&FlagLocalVars != 0 {
-		tables, err := d.readLocalVarTables(len(d.chunks))
-		if err != nil {
+		if err := d.readLocalVarTablesInto(d.chunks); err != nil {
 			return nil, err
-		}
-		for i, lvs := range tables {
-			for _, lv := range lvs {
-				d.chunks[i].AddLocalVar(lv.Slot, lv.Name)
-			}
 		}
 	}
 
@@ -268,7 +216,9 @@ func DecodeWithResolver(r io.Reader, resolve VarResolver) (*Module, error) {
 	d := &decoder{
 		r:       NewReader(r),
 		resolve: resolve,
+		stats:   decoderStats(),
 	}
+	defer recordDecodeStats(d.stats)
 	version, flags, err := d.readHeader()
 	if err != nil {
 		return nil, err
@@ -291,6 +241,7 @@ type decoder struct {
 	strings    []string
 	chunks     []*vm.CodeChunk
 	moduleCaps uint32 // populated when FlagCapabilities is set in v2
+	stats      *DecodeStats
 }
 
 // readModuleV1 is the frozen v1 decode path. Do not modify.
@@ -310,12 +261,13 @@ func (d *decoder) readModuleV1() (*Module, error) {
 	sharedConsts := vm.NewConsts()
 	d.chunks = make([]*vm.CodeChunk, len(chunkDatas))
 	for i, cd := range chunkDatas {
-		chunk := vm.NewCodeChunk(sharedConsts)
+		chunk := vm.NewCodeChunkWithCapacity(sharedConsts, len(cd.Code))
 		chunk.Append(cd.Code...)
 		chunk.SetMaxStack(cd.MaxStack)
 		if len(cd.SourceMap) > 0 {
+			chunk.ReserveSourceMap(len(cd.SourceMap))
 			for _, e := range cd.SourceMap {
-				chunk.AddSourceInfo(vm.SourceInfo{
+				chunk.AddSourceInfoAt(e.StartIP, vm.SourceInfo{
 					File:      e.File,
 					Line:      e.Line,
 					Column:    e.Column,
@@ -376,12 +328,13 @@ func (d *decoder) readModuleV2() (*Module, error) {
 	sharedConsts := vm.NewConsts()
 	d.chunks = make([]*vm.CodeChunk, len(chunkDatas))
 	for i, cd := range chunkDatas {
-		chunk := vm.NewCodeChunk(sharedConsts)
+		chunk := vm.NewCodeChunkWithCapacity(sharedConsts, len(cd.Code))
 		chunk.Append(cd.Code...)
 		chunk.SetMaxStack(cd.MaxStack)
 		if len(cd.SourceMap) > 0 {
+			chunk.ReserveSourceMap(len(cd.SourceMap))
 			for _, e := range cd.SourceMap {
-				chunk.AddSourceInfo(vm.SourceInfo{
+				chunk.AddSourceInfoAt(e.StartIP, vm.SourceInfo{
 					File:      e.File,
 					Line:      e.Line,
 					Column:    e.Column,
@@ -457,11 +410,14 @@ func (d *decoder) readStringTable() ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading string length: %w", err)
 		}
-		b, err := d.r.ReadBytes(int(slen))
+		s, err := d.r.ReadString(int(slen))
 		if err != nil {
 			return nil, fmt.Errorf("reading string data: %w", err)
 		}
-		strings[i] = string(b)
+		strings[i] = s
+		if d.stats != nil {
+			d.stats.addString(len(s))
+		}
 	}
 	return strings, nil
 }
@@ -475,6 +431,77 @@ func (d *decoder) readStringRef() (string, error) {
 		return "", fmt.Errorf("string ref %d out of range (have %d)", idx, len(d.strings))
 	}
 	return d.strings[idx], nil
+}
+
+func (d *decoder) readLiveChunks(sharedConsts *vm.Consts) error {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return fmt.Errorf("reading chunk count: %w", err)
+	}
+	d.chunks = make([]*vm.CodeChunk, count)
+	for i := range d.chunks {
+		ms, err := d.r.ReadVarint()
+		if err != nil {
+			return fmt.Errorf("reading max_stack: %w", err)
+		}
+
+		codeLen, err := d.r.ReadVarint()
+		if err != nil {
+			return fmt.Errorf("reading code_len: %w", err)
+		}
+		chunk := vm.NewCodeChunkWithCapacity(sharedConsts, int(codeLen))
+		for j := 0; j < int(codeLen); j++ {
+			op, err := d.r.ReadInt32()
+			if err != nil {
+				return fmt.Errorf("reading code[%d]: %w", j, err)
+			}
+			chunk.Append(op)
+		}
+		chunk.SetMaxStack(int(ms))
+
+		smCount, err := d.r.ReadVarint()
+		if err != nil {
+			return fmt.Errorf("reading source_map count: %w", err)
+		}
+		if smCount > 0 {
+			chunk.ReserveSourceMap(int(smCount))
+		}
+		for j := 0; j < int(smCount); j++ {
+			startIP, err := d.r.ReadVarint()
+			if err != nil {
+				return err
+			}
+			file, err := d.readStringRef()
+			if err != nil {
+				return err
+			}
+			line, err := d.r.ReadVarint()
+			if err != nil {
+				return err
+			}
+			col, err := d.r.ReadVarint()
+			if err != nil {
+				return err
+			}
+			eline, err := d.r.ReadVarint()
+			if err != nil {
+				return err
+			}
+			ecol, err := d.r.ReadVarint()
+			if err != nil {
+				return err
+			}
+			chunk.AddSourceInfoAt(int(startIP), vm.SourceInfo{
+				File:      file,
+				Line:      int(line),
+				Column:    int(col),
+				EndLine:   int(eline),
+				EndColumn: int(ecol),
+			})
+		}
+		d.chunks[i] = chunk
+	}
+	return nil
 }
 
 func (d *decoder) readChunks() ([]*ChunkData, error) {
@@ -571,6 +598,29 @@ func (d *decoder) readConsts() ([]vm.Value, error) {
 	return consts, nil
 }
 
+func (d *decoder) readConstsInto(shared *vm.Consts) error {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return fmt.Errorf("reading const count: %w", err)
+	}
+	if d.flags&FlagConstsBase != 0 {
+		base, err := d.r.ReadVarint()
+		if err != nil {
+			return fmt.Errorf("reading consts base: %w", err)
+		}
+		d.constsBase = int(base)
+	}
+	shared.Reserve(int(count))
+	for i := 0; i < int(count); i++ {
+		v, err := d.readValue()
+		if err != nil {
+			return fmt.Errorf("reading const[%d]: %w", i, err)
+		}
+		shared.Append(v)
+	}
+	return nil
+}
+
 func (d *decoder) readNSTable() (map[string]int, error) {
 	count, err := d.r.ReadVarint()
 	if err != nil {
@@ -623,6 +673,34 @@ func (d *decoder) readLocalVarTables(numChunks int) ([][]LocalVarEntry, error) {
 		out[i] = lvs
 	}
 	return out, nil
+}
+
+// readLocalVarTablesInto reads the optional per-chunk local-variable debug
+// section directly into the live chunks, avoiding the temporary [][]LocalVarEntry
+// allocation used by the generic Module decode path.
+func (d *decoder) readLocalVarTablesInto(chunks []*vm.CodeChunk) error {
+	for i, chunk := range chunks {
+		count, err := d.r.ReadVarint()
+		if err != nil {
+			return fmt.Errorf("reading local var count[%d]: %w", i, err)
+		}
+		if count == 0 {
+			continue
+		}
+		chunk.ReserveLocalVars(int(count))
+		for j := 0; j < int(count); j++ {
+			slot, err := d.r.ReadVarint()
+			if err != nil {
+				return fmt.Errorf("reading local var slot[%d][%d]: %w", i, j, err)
+			}
+			name, err := d.readStringRef()
+			if err != nil {
+				return fmt.Errorf("reading local var name[%d][%d]: %w", i, j, err)
+			}
+			chunk.AddLocalVar(int(slot), name)
+		}
+	}
+	return nil
 }
 
 func (d *decoder) readValue() (vm.Value, error) {
@@ -971,6 +1049,29 @@ func (d *decoder) readConstsV2() ([]vm.Value, error) {
 	return consts, nil
 }
 
+func (d *decoder) readConstsV2Into(shared *vm.Consts) error {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return fmt.Errorf("reading const count: %w", err)
+	}
+	if d.flags&FlagConstsBase != 0 {
+		base, err := d.r.ReadVarint()
+		if err != nil {
+			return fmt.Errorf("reading consts base: %w", err)
+		}
+		d.constsBase = int(base)
+	}
+	shared.Reserve(int(count))
+	for i := 0; i < int(count); i++ {
+		v, err := d.readValueV2()
+		if err != nil {
+			return fmt.Errorf("reading const[%d]: %w", i, err)
+		}
+		shared.Append(v)
+	}
+	return nil
+}
+
 func isKnownTagID(id byte) bool {
 	switch id {
 	case TagIDNil, TagIDTrue, TagIDFalse, TagIDInt, TagIDFloat, TagIDString,
@@ -991,6 +1092,9 @@ func (d *decoder) readValueV2() (vm.Value, error) {
 
 	tagID := tagByte & tagIDMask
 	tagVer := tagByte >> tagVersionShift
+	if d.stats != nil {
+		d.stats.addTag(tagID)
+	}
 
 	if tagVer != 0 && isKnownTagID(tagID) {
 		return nil, fmt.Errorf("unsupported tag version %d for tag ID 0x%02x", tagVer, tagID)
