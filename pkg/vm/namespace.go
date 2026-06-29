@@ -269,6 +269,7 @@ func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 }
 
 func (n *Namespace) Lookup(symbol Symbol) Value {
+	noteLookup(n.name, string(symbol))
 	sns, sym := symbol.Namespaced()
 	if sns == NIL {
 		if v := n.localVar(sym.(Symbol)); v != nil {

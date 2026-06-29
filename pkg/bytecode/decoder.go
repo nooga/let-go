@@ -42,7 +42,9 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 	d := &decoder{
 		r:       NewReader(r),
 		resolve: resolve,
+		stats:   decoderStats(),
 	}
+	defer recordDecodeStats(d.stats)
 
 	version, flags, err := d.readHeader()
 	if err != nil {
@@ -214,7 +216,9 @@ func DecodeWithResolver(r io.Reader, resolve VarResolver) (*Module, error) {
 	d := &decoder{
 		r:       NewReader(r),
 		resolve: resolve,
+		stats:   decoderStats(),
 	}
+	defer recordDecodeStats(d.stats)
 	version, flags, err := d.readHeader()
 	if err != nil {
 		return nil, err
@@ -237,6 +241,7 @@ type decoder struct {
 	strings    []string
 	chunks     []*vm.CodeChunk
 	moduleCaps uint32 // populated when FlagCapabilities is set in v2
+	stats      *DecodeStats
 }
 
 // readModuleV1 is the frozen v1 decode path. Do not modify.
@@ -410,6 +415,9 @@ func (d *decoder) readStringTable() ([]string, error) {
 			return nil, fmt.Errorf("reading string data: %w", err)
 		}
 		strings[i] = s
+		if d.stats != nil {
+			d.stats.addString(len(s))
+		}
 	}
 	return strings, nil
 }
@@ -1084,6 +1092,9 @@ func (d *decoder) readValueV2() (vm.Value, error) {
 
 	tagID := tagByte & tagIDMask
 	tagVer := tagByte >> tagVersionShift
+	if d.stats != nil {
+		d.stats.addTag(tagID)
+	}
 
 	if tagVer != 0 && isKnownTagID(tagID) {
 		return nil, fmt.Errorf("unsupported tag version %d for tag ID 0x%02x", tagVer, tagID)

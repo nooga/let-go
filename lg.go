@@ -437,6 +437,12 @@ func initCompiler(debug bool) *compiler.Context {
 	}
 }
 
+func emitRuntimeStats() {
+	if os.Getenv("LG_LOOKUP_STATS") != "" {
+		fmt.Fprint(os.Stderr, vm.SnapshotLookupStats().Summary())
+	}
+}
+
 func runMain() int {
 	// Propagate version metadata to runtime so System/getProperty exposes it.
 	rt.Version = version
@@ -648,6 +654,7 @@ func runMain() int {
 
 func main() {
 	code := runMain()
+	emitRuntimeStats()
 	if code != 0 {
 		os.Exit(code)
 	}

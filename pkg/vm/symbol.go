@@ -51,6 +51,7 @@ func (l Symbol) String() string {
 }
 
 func (l Symbol) Namespaced() (Value, Value) {
+	noteNamespaced(string(l))
 	if string(l) == "/" {
 		return NIL, l
 	}

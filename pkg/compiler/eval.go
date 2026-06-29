@@ -21,6 +21,8 @@ import (
 )
 
 var bootTiming = os.Getenv("LG_BOOT_TIMING") != ""
+var decodeTagStats = os.Getenv("LG_DECODE_TAG_STATS") != ""
+var lookupStats = os.Getenv("LG_LOOKUP_STATS") != ""
 
 func bootMark(label string, since time.Time) time.Time {
 	if bootTiming {
@@ -79,6 +81,11 @@ func evalInit() {
 	prevGC := debug.SetGCPercent(-1)
 	defer debug.SetGCPercent(prevGC)
 
+	if lookupStats {
+		vm.ResetLookupStats()
+		vm.SetLookupStatsEnabled(true)
+	}
+
 	consts = vm.NewConsts()
 
 	// Try loading pre-compiled bundle
@@ -116,16 +123,30 @@ func loadPrecompiledBundle() error {
 		if v == nil {
 			// Use DefStub to avoid spurious warn-on-shadow warnings during
 			// bundle decoding (the chunk will properly Def the value later).
+			if decodeTagStats {
+				bytecode.NoteDecodeVarRefMiss(true)
+			}
 			return n.DefStub(name)
+		}
+		if decodeTagStats {
+			bytecode.NoteDecodeVarRefHit()
 		}
 		return v
 	}
 	t0 := time.Now()
+	if decodeTagStats {
+		bytecode.ResetDecodeStats()
+		bytecode.SetDecodeStatsEnabled(true)
+		defer bytecode.SetDecodeStatsEnabled(false)
+	}
 	unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(rt.CoreCompiledLGB), resolve)
 	if err != nil {
 		return err
 	}
 	bootMark("decode-bundle", t0)
+	if decodeTagStats {
+		fmt.Fprint(os.Stderr, bytecode.SnapshotDecodeStats().Summary())
+	}
 
 	// Use the decoded const pool as the global pool
 	consts = unit.Consts
