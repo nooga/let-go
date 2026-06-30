@@ -8,6 +8,7 @@ package vm
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 )
 
@@ -56,9 +57,14 @@ func BenchmarkVarDerefRoot(b *testing.B) {
 func BenchmarkVarDerefRootParallel(b *testing.B) {
 	v := newRootVar()
 	b.RunParallel(func(pb *testing.PB) {
+		// Per-goroutine local sink: the deref path is lock-free, so a shared
+		// package-global sink would be the only contended cache line —
+		// measuring cache-coherence ping-pong, not deref cost.
+		var sink Value
 		for pb.Next() {
-			derefSink = v.Deref()
+			sink = v.Deref()
 		}
+		runtime.KeepAlive(sink)
 	})
 }
 
@@ -75,9 +81,11 @@ func BenchmarkVarDerefPreviouslyBound(b *testing.B) {
 func BenchmarkVarDerefPreviouslyBoundParallel(b *testing.B) {
 	v := newPreviouslyBoundVar()
 	b.RunParallel(func(pb *testing.PB) {
+		var sink Value
 		for pb.Next() {
-			derefSink = v.Deref()
+			sink = v.Deref()
 		}
+		runtime.KeepAlive(sink)
 	})
 }
 
@@ -95,9 +103,11 @@ func BenchmarkVarDerefBoundParallel(b *testing.B) {
 	v := newBoundVar()
 	b.Cleanup(v.PopBinding)
 	b.RunParallel(func(pb *testing.PB) {
+		var sink Value
 		for pb.Next() {
-			derefSink = v.Deref()
+			sink = v.Deref()
 		}
+		runtime.KeepAlive(sink)
 	})
 }
 
@@ -106,9 +116,11 @@ func BenchmarkVarDerefBoundParallel(b *testing.B) {
 func BenchmarkVarDerefDistinctParallel(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		v := newRootVar()
+		var sink Value
 		for pb.Next() {
-			derefSink = v.Deref()
+			sink = v.Deref()
 		}
+		runtime.KeepAlive(sink)
 	})
 }
 
