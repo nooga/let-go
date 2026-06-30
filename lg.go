@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	runtimeDebug "runtime/debug"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/bundle"
@@ -31,6 +32,98 @@ func versionString() string {
 		return fmt.Sprintf("%s (%s)", version, commit[:7])
 	}
 	return version
+}
+
+func applyBuildInfoMetadata() {
+	info, ok := runtimeDebug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	version, commit = resolveBuildMetadata(version, commit, info)
+}
+
+func resolveBuildMetadata(stampedVersion, stampedCommit string, info *runtimeDebug.BuildInfo) (string, string) {
+	resolvedVersion := stampedVersion
+	resolvedCommit := stampedCommit
+	if info == nil {
+		return resolvedVersion, resolvedCommit
+	}
+
+	if resolvedVersion == "dev" && !buildInfoModified(info) {
+		if buildVersion := buildInfoVersion(info.Main.Version); buildVersion != "" {
+			resolvedVersion = buildVersion
+		}
+	}
+	if resolvedCommit == "none" {
+		if vcsRevision := buildInfoVCSRevision(info); vcsRevision != "" {
+			resolvedCommit = vcsRevision
+		} else if pseudoRevision := pseudoVersionRevision(info.Main.Version); pseudoRevision != "" {
+			resolvedCommit = pseudoRevision
+		}
+	}
+	return resolvedVersion, resolvedCommit
+}
+
+func buildInfoVersion(moduleVersion string) string {
+	if moduleVersion == "" || moduleVersion == "(devel)" {
+		return ""
+	}
+	return strings.TrimPrefix(moduleVersion, "v")
+}
+
+func buildInfoVCSRevision(info *runtimeDebug.BuildInfo) string {
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.revision" && setting.Value != "" {
+			return setting.Value
+		}
+	}
+	return ""
+}
+
+func buildInfoModified(info *runtimeDebug.BuildInfo) bool {
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.modified" && setting.Value == "true" {
+			return true
+		}
+	}
+	return false
+}
+
+func pseudoVersionRevision(moduleVersion string) string {
+	parts := strings.Split(moduleVersion, "-")
+	if len(parts) < 3 {
+		return ""
+	}
+	revision := parts[len(parts)-1]
+	timePart := parts[len(parts)-2]
+	if dot := strings.LastIndex(timePart, "."); dot >= 0 {
+		timePart = timePart[dot+1:]
+	}
+	if len(timePart) != 14 || !allDigits(timePart) {
+		return ""
+	}
+	if len(revision) != 12 || !allHex(revision) {
+		return ""
+	}
+	return revision
+}
+
+func allDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func allHex(s string) bool {
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func motd() {
@@ -444,6 +537,8 @@ func emitRuntimeStats() {
 }
 
 func runMain() int {
+	applyBuildInfoMetadata()
+
 	// Propagate version metadata to runtime so System/getProperty exposes it.
 	rt.Version = version
 	rt.Commit = commit
