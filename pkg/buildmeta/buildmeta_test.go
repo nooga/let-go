@@ -3,22 +3,22 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package buildmeta
 
 import (
-	runtimeDebug "runtime/debug"
+	"runtime/debug"
 	"testing"
 )
 
-func TestResolveBuildMetadataPreservesStampedValues(t *testing.T) {
-	info := &runtimeDebug.BuildInfo{
-		Main: runtimeDebug.Module{Version: "v1.11.1"},
-		Settings: []runtimeDebug.BuildSetting{
+func TestResolvePreservesStampedValues(t *testing.T) {
+	info := &debug.BuildInfo{
+		Main: debug.Module{Version: "v1.11.1"},
+		Settings: []debug.BuildSetting{
 			{Key: "vcs.revision", Value: "25ccf5505588cfd6fd0c1ed7e870446ae1ec4a2a"},
 		},
 	}
 
-	gotVersion, gotCommit := resolveBuildMetadata("1.99.0", "feedface", info)
+	gotVersion, gotCommit := Resolve("1.99.0", "feedface", info)
 
 	if gotVersion != "1.99.0" {
 		t.Fatalf("version = %q, want stamped value", gotVersion)
@@ -28,12 +28,12 @@ func TestResolveBuildMetadataPreservesStampedValues(t *testing.T) {
 	}
 }
 
-func TestResolveBuildMetadataUsesTaggedModuleVersion(t *testing.T) {
-	info := &runtimeDebug.BuildInfo{
-		Main: runtimeDebug.Module{Version: "v1.11.1"},
+func TestResolveUsesTaggedModuleVersion(t *testing.T) {
+	info := &debug.BuildInfo{
+		Main: debug.Module{Version: "v1.11.1"},
 	}
 
-	gotVersion, gotCommit := resolveBuildMetadata("dev", "none", info)
+	gotVersion, gotCommit := Resolve("dev", "none", info)
 
 	if gotVersion != "1.11.1" {
 		t.Fatalf("version = %q, want tag without v prefix", gotVersion)
@@ -43,16 +43,16 @@ func TestResolveBuildMetadataUsesTaggedModuleVersion(t *testing.T) {
 	}
 }
 
-func TestResolveBuildMetadataKeepsDirtyBuildVersionUnknown(t *testing.T) {
-	info := &runtimeDebug.BuildInfo{
-		Main: runtimeDebug.Module{Version: "v1.11.1+dirty"},
-		Settings: []runtimeDebug.BuildSetting{
+func TestResolveKeepsDirtyBuildVersionUnknown(t *testing.T) {
+	info := &debug.BuildInfo{
+		Main: debug.Module{Version: "v1.11.1+dirty"},
+		Settings: []debug.BuildSetting{
 			{Key: "vcs.modified", Value: "true"},
 			{Key: "vcs.revision", Value: "25ccf5505588cfd6fd0c1ed7e870446ae1ec4a2a"},
 		},
 	}
 
-	gotVersion, gotCommit := resolveBuildMetadata("dev", "none", info)
+	gotVersion, gotCommit := Resolve("dev", "none", info)
 
 	if gotVersion != "dev" {
 		t.Fatalf("version = %q, want unchanged dev version for dirty build", gotVersion)
@@ -62,15 +62,15 @@ func TestResolveBuildMetadataKeepsDirtyBuildVersionUnknown(t *testing.T) {
 	}
 }
 
-func TestResolveBuildMetadataUsesVCSRevision(t *testing.T) {
-	info := &runtimeDebug.BuildInfo{
-		Main: runtimeDebug.Module{Version: "(devel)"},
-		Settings: []runtimeDebug.BuildSetting{
+func TestResolveUsesVCSRevision(t *testing.T) {
+	info := &debug.BuildInfo{
+		Main: debug.Module{Version: "(devel)"},
+		Settings: []debug.BuildSetting{
 			{Key: "vcs.revision", Value: "25ccf5505588cfd6fd0c1ed7e870446ae1ec4a2a"},
 		},
 	}
 
-	gotVersion, gotCommit := resolveBuildMetadata("dev", "none", info)
+	gotVersion, gotCommit := Resolve("dev", "none", info)
 
 	if gotVersion != "dev" {
 		t.Fatalf("version = %q, want unchanged dev version", gotVersion)
@@ -80,12 +80,12 @@ func TestResolveBuildMetadataUsesVCSRevision(t *testing.T) {
 	}
 }
 
-func TestResolveBuildMetadataUsesPseudoVersionRevision(t *testing.T) {
-	info := &runtimeDebug.BuildInfo{
-		Main: runtimeDebug.Module{Version: "v1.10.1-0.20260628062305-25ccf5505588"},
+func TestResolveUsesPseudoVersionRevision(t *testing.T) {
+	info := &debug.BuildInfo{
+		Main: debug.Module{Version: "v1.10.1-0.20260628062305-25ccf5505588"},
 	}
 
-	gotVersion, gotCommit := resolveBuildMetadata("dev", "none", info)
+	gotVersion, gotCommit := Resolve("dev", "none", info)
 
 	if gotVersion != "1.10.1-0.20260628062305-25ccf5505588" {
 		t.Fatalf("version = %q, want pseudo-version without v prefix", gotVersion)
