@@ -399,6 +399,13 @@
   {'+    :add
    '-    :sub
    '*    :mul
+   'bit-and :bit-and
+   'bit-or :bit-or
+   'bit-xor :bit-xor
+   'bit-and-not :bit-and-not
+   'bit-shift-left :bit-shift-left
+   'bit-shift-right :bit-shift-right
+   'unsigned-bit-shift-right :unsigned-bit-shift-right
    'quot :quot
    '/    :div
    '<    :lt
@@ -407,10 +414,25 @@
    '>=   :gte
    '=    :eq
    'inc  :inc
-   'dec  :dec})
+   'dec  :dec
+   'bit-not :bit-not})
 
 ;; Ops whose arity-1 form is the canonical shape (no n-ary folding).
-(def unary-only-ops #{:inc :dec})
+(def unary-only-ops #{:inc :dec :bit-not})
+
+(defn- intrinsic-builtin-op [head ctx]
+  "Return the builtin op keyword only when HEAD is an unqualified symbol,
+   not lexically shadowed, and resolves to the core var of the same name.
+   This matches the bytecode compiler's fast-opcode gate: shadowing or runtime
+   rebinding seams must stay on the ordinary var/call path."
+  (when (and (symbol? head)
+             (nil? (namespace head))
+             (nil? (lookup-local ctx head)))
+    (let [op       (get builtin-ops head)
+          resolved (when op (resolve head))
+          core-var (when op (ns-resolve 'clojure.core head))]
+      (when (and op resolved core-var (= resolved core-var))
+        op))))
 
 ;; Comparison ops are NOT associative the way +/-/*/= (arithmetic) are, so
 ;; they can't go through fold-binary-chain's left fold: (<= a b c) means
@@ -616,7 +638,7 @@
 
 (defn build-list [form ctx]
   (let [head    (first form)
-        builtin (get builtin-ops head)]
+        builtin (intrinsic-builtin-op head ctx)]
     (cond
       ;; The empty list `()` is a self-evaluating constant (the empty list),
       ;; NOT a call with no operator. Without this, `head` is nil and the form

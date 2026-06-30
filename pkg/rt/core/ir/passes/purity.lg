@@ -34,10 +34,13 @@
    interchangeable; a pure Inst can be hoisted).
 
    Value-purity is NOT the same as effect-freedom: :quot is value-pure but
-   traps on a zero divisor, so it is in pure-ops (CSE/LICM eligible) yet in
-   trapping-ops too (NOT DCE-removable — see effect-free-inst?)."
+  traps on a zero divisor, so it is in pure-ops (CSE/LICM eligible) yet in
+  trapping-ops too (NOT DCE-removable — see effect-free-inst?)."
   #{:const :load-arg :load-closed :block-arg
-    :add :sub :mul :quot :lt :lte :gt :gte :eq :inc :dec})
+    :add :sub :mul
+    :bit-and :bit-or :bit-xor :bit-and-not
+    :bit-shift-left :bit-shift-right :unsigned-bit-shift-right
+    :quot :lt :lte :gt :gte :eq :inc :dec :bit-not})
 
 (def trapping-ops
   "Value-pure ops that can still raise at runtime (e.g. :quot divide-by-zero).

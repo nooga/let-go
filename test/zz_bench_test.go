@@ -80,6 +80,71 @@ import (
 // custom metrics surface in the raw `go test -bench` output and in
 // streaming .jsonl records when a future bench-ratchet learns to parse
 // them. Right now they're documentation + dump-for-grep.
+//
+// Benchmark pair:
+//   - BenchmarkClojureTestSuite              → execution-only cost
+//   - BenchmarkClojureTestSuiteCompileAndRun → total request cost
+//
+// The latter answers the "IR crossover" question: once the IR pipeline itself
+// runs natively, is routing forms through *ir-compile* no worse than the
+// direct bytecode compiler on realistic jank-sized code?
+func BenchmarkClojureTestSuiteCompileAndRun(b *testing.B) {
+	compiler.SetMatchCljConditional(true)
+	defer compiler.SetMatchCljConditional(false)
+
+	suiteRoot := "clojure-test-suite/test/clojure"
+	if _, err := os.Stat(filepath.Join(suiteRoot, "core_test")); os.IsNotExist(err) {
+		b.Skip("clojure-test-suite submodule not initialized (run: git submodule update --init)")
+	}
+
+	var files []string
+	for _, dir := range []string{"core_test", "string_test"} {
+		matches, err := filepath.Glob(filepath.Join(suiteRoot, dir, "*.cljc"))
+		if err != nil {
+			b.Fatal(err)
+		}
+		files = append(files, matches...)
+	}
+	if len(files) == 0 {
+		b.Fatal("no .cljc files found in ", suiteRoot)
+	}
+
+	origStdout := os.Stdout
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		b.Fatal("open /dev/null:", err)
+	}
+	os.Stdout = devnull
+	defer func() {
+		os.Stdout = origStdout
+		devnull.Close()
+	}()
+
+	var counters benchCounters
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		runSuiteOnce(b, files, &counters)
+	}
+	b.StopTimer()
+
+	n := float64(b.N)
+	if n < 1 {
+		n = 1
+	}
+	b.ReportMetric(float64(counters.pass.Load())/n, "pass")
+	b.ReportMetric(float64(counters.fail.Load())/n, "fail")
+	b.ReportMetric(float64(counters.errs.Load())/n, "error")
+	b.ReportMetric(float64(counters.tests.Load())/n, "tests")
+	b.ReportMetric(float64(counters.files.Load())/n, "files")
+	skips := counters.skipCompile.Load() + counters.skipPanic.Load() +
+		counters.skipTimeout.Load() + counters.skipMem.Load()
+	b.ReportMetric(float64(skips)/n, "skips")
+	const msPerNs = 1.0 / 1e6
+	b.ReportMetric(float64(counters.compileNanos.Load())*msPerNs/n, "compile_ms")
+	b.ReportMetric(float64(counters.runNanos.Load())*msPerNs/n, "run_ms")
+}
+
 func BenchmarkClojureTestSuite(b *testing.B) {
 	compiler.SetMatchCljConditional(true)
 	defer compiler.SetMatchCljConditional(false)

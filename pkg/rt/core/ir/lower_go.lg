@@ -4,8 +4,8 @@
 ;;   - single optimized function
 ;;   - strict mode: unsupported ops/shapes throw
 ;;   - bridge mode: unsupported functions fall back at whole-function granularity
-;;   - supported ops: const, load-arg, block-arg, add/sub/mul, lt/lte/gt/gte/eq,
-;;     inc/dec, return, branch, branch-if, tail-call
+;;   - supported ops: const, load-arg, block-arg, add/sub/mul, bitwise int ops,
+;;     lt/lte/gt/gte/eq, inc/dec, return, branch, branch-if, tail-call
 ;;   - control flow lowers from block-parameter SSA to mutable locals plus labels/gotos
 
 (ns ir.lower-go
@@ -21,6 +21,13 @@
   {:add  "+"
    :sub  "-"
    :mul  "*"
+   :bit-and "&"
+   :bit-or  "|"
+   :bit-xor "^"
+   :bit-and-not "&^"
+   :bit-shift-left "<<"
+   :bit-shift-right ">>"
+   :unsigned-bit-shift-right ">>"
    :quot "/"
    :div  "/"
    :lt   "<"
@@ -438,6 +445,7 @@
       (= op :try)   ; try-assign-stmts materialises the result into a local
       (= op :inc)
       (= op :dec)
+      (= op :bit-not)
       (= op :dot)   ; (. obj field) materialised into a local: vN := obj.field
       (= op :def)   ; def-assign-stmts materialises the interned var into a local
       (contains? binary-op op)))
@@ -756,7 +764,9 @@
             s0           (go-type-spec (ir/type-of (nth refs 0) f))
             s1           (go-type-spec (ir/type-of (nth refs 1) f))
             order-op?    (#{"<" "<=" ">" ">="} op-str)
-            arith-op?    (#{"+" "-" "*" "/"} op-str)
+            arith-op?    (#{"+" "-" "*" "/" "&" "|" "^" "&^" "<<" ">>"} op-str)
+            bitwise-op?  (contains? #{:bit-and :bit-or :bit-xor :bit-and-not
+                                      :bit-shift-left :bit-shift-right :unsigned-bit-shift-right} op)
             any-vm?      (or (= "vm.Value" s0) (= "vm.Value" s1))
             ;; quot ("/") lowers to native Go `/` ONLY for int/int — Go integer
             ;; division truncates toward zero exactly like clojure.core/quot.
@@ -776,13 +786,16 @@
                               (not (and (= "int" s0) (= "int" s1))))
             div-rt?      (and (= op :div)
                               (not (and (= "float64" s0) (= "float64" s1))))
+            bitwise-rt?  (and bitwise-op?
+                              (or (not (= "int" s0))
+                                  (not (= "int" s1))))
             ;; rt.LtValue/AddValue/... polymorphic helpers — used when any
             ;; operand is vm.Value (so we don't bail the whole defn), or when
             ;; quot/div need the runtime divide (above). Each helper mirrors the
             ;; bytecode VM's OP_<X>: vm.Int fast path then vm.Num<X> fallback for
             ;; ordering; always-delegate to vm.Num<X> for arithmetic (keeps
             ;; overflow / BigInt / Ratio promotion semantics in one place).
-            vm-helper    (when (or any-vm? quot-rt? div-rt?)
+            vm-helper    (when (or any-vm? quot-rt? div-rt? bitwise-rt?)
                            (cond
                              (= op-str "<")  "LtValue"
                              (= op-str "<=") "LeValue"
@@ -791,6 +804,13 @@
                              (= op-str "+")  "AddValue"
                              (= op-str "-")  "SubValue"
                              (= op-str "*")  "MulValue"
+                             (= op :bit-and) "BitAndValue"
+                             (= op :bit-or)  "BitOrValue"
+                             (= op :bit-xor) "BitXorValue"
+                             (= op :bit-and-not) "BitAndNotValue"
+                             (= op :bit-shift-left) "BitShiftLeftValue"
+                             (= op :bit-shift-right) "BitShiftRightValue"
+                             (= op :unsigned-bit-shift-right) "UnsignedBitShiftRightValue"
                              (= op :quot)    "QuotValue"
                              (= op :div)     "DivValue"
                              ;; = on a vm.Value operand: Clojure value-equality,
@@ -831,14 +851,21 @@
 
           ;; Native Go binary path: both operands typed compatibly.
           (and lhs-expr rhs-expr)
-          (let [raw-binary (gogen/binary op-str lhs-expr rhs-expr)]
+          (let [raw-binary (cond
+                             (= op :unsigned-bit-shift-right)
+                             (gogen/call (gogen/ident "int")
+                               [(gogen/binary ">>"
+                                  (gogen/call (gogen/ident "uint") [lhs-expr])
+                                  (gogen/call (gogen/ident "uint") [rhs-expr]))])
+                             :else
+                             (gogen/binary op-str lhs-expr rhs-expr))]
             (if (and (comparison-op? op-str) (= "vm.Value" result-spec))
               (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [raw-binary])
               raw-binary))
 
           :else nil))
 
-      (or (= op :inc) (= op :dec))
+      (or (= op :inc) (= op :dec) (= op :bit-not))
       (let [lhs-id   (nth refs 0)
             lhs-spec (go-type-spec (ir/type-of lhs-id f))]
         (if (= "vm.Value" lhs-spec)
@@ -846,11 +873,19 @@
             (when lhs
               (gogen/call
                 (gogen/field-sel (gogen/ident "rt")
-                  (if (= op :inc) "AddValue" "SubValue"))
-                [lhs (vm-call "Int" [(gogen/int-lit 1)])])))
+                  (cond
+                    (= op :inc) "AddValue"
+                    (= op :dec) "SubValue"
+                    :else "BitNotValue"))
+                (if (= op :bit-not)
+                  [lhs]
+                  [lhs (vm-call "Int" [(gogen/int-lit 1)])]))))
           (let [lhs (value-expr f closed-exprs lhs-id)]
             (when lhs
-              (gogen/binary (if (= op :inc) "+" "-") lhs (gogen/int-lit 1))))))
+              (cond
+                (= op :inc) (gogen/binary "+" lhs (gogen/int-lit 1))
+                (= op :dec) (gogen/binary "-" lhs (gogen/int-lit 1))
+                :else       (gogen/unary "^" lhs))))))
 
       ;; (. obj field) -> Go struct field selector obj.field. The field name
       ;; is munged (go-name) to the same valid Go identifier the struct decl
@@ -927,7 +962,7 @@
 (defn- pure-inline-op? [op]
   ;; Pure, value-producing ops whose RHS may be inlined into an edge copy.
   ;; Excludes :call (effectful / error-propagating) and :block-arg.
-  (or (= op :inc) (= op :dec) (contains? binary-op op)))
+  (or (= op :inc) (= op :dec) (= op :bit-not) (contains? binary-op op)))
 
 (defn- n-uses [f nid]
   (let [u (ir/uses f)]
@@ -2141,7 +2176,7 @@
           (when rhs
             [(gogen/assign "=" (value-ident f nid) rhs)]))
         [])
-      (or (= op :inc) (= op :dec))
+      (or (= op :inc) (= op :dec) (= op :bit-not))
       (if (live? f nid)
         (let [rhs (inst-rhs f closed-exprs nid)]
           (when rhs
@@ -2287,11 +2322,10 @@
                                       (not= op :eq)
                                       (or (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))
                                           (= "vm.Value" (go-type-spec (ir/type-of (nth refs 1) f)))))
-                                 ;; inc/dec over vm.Value also delegates to
-                                 ;; rt.AddValue/SubValue so unknown numeric
-                                 ;; values do not emit invalid native Go
-                                 ;; arithmetic.
-                                 (and (or (= op :inc) (= op :dec))
+                                 ;; inc/dec/bit-not over vm.Value also delegate
+                                 ;; to rt helpers so unknown values do not emit
+                                 ;; invalid native Go arithmetic/bitwise ops.
+                                 (and (or (= op :inc) (= op :dec) (= op :bit-not))
                                       (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))))))
                          (ir/block-insts (first blocks) f))
                    true

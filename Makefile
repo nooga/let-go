@@ -196,7 +196,7 @@ bench-ratchet-full-update: lowered $(GO)
 
 clean-lowered:
 	$(RM) -r pkg/rt/core_go_lowered
-	$(RM) lg_gogen_ir.go lg_gogen_accel.go cmd/lgbgen/main_gogen_ir.go cmd/lgbgen/main_gogen_accel.go pkg/ir/zz_gogen_ir_wire_test.go pkg/ir/zz_gogen_accel_wire_test.go pkg/rt/generated.provenance
+	$(RM) lg_gogen_ir.go lg_gogen_accel.go cmd/lgbgen/main_gogen_ir.go cmd/lgbgen/main_gogen_accel.go pkg/ir/zz_gogen_ir_wire_test.go pkg/ir/zz_gogen_accel_wire_test.go pkg/wasmhost/zz_gogen_ir_wire_test.go pkg/rt/generated.provenance
 	@echo "Cleaned lowered Go tree and wireup files"
 
 clean: clean-lowered
@@ -353,3 +353,8 @@ ratchets-update: build lowered $(GO)
 
 # PHONY targets are for ones that have conflicting files/dirs present:
 .PHONY: test clean clean-lowered ir-stress-gate
+
+# Build the browser-inspector example (delegates to its own Makefile).
+.PHONY: browser-inspector
+browser-inspector:
+	$(MAKE) -C examples/browser-inspector build

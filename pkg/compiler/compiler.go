@@ -655,6 +655,20 @@ func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
 			return vm.OP_SUB
 		case "*":
 			return vm.OP_MUL
+		case "bit-and":
+			return vm.OP_BIT_AND
+		case "bit-or":
+			return vm.OP_BIT_OR
+		case "bit-xor":
+			return vm.OP_BIT_XOR
+		case "bit-and-not":
+			return vm.OP_BIT_AND_NOT
+		case "bit-shift-left":
+			return vm.OP_BIT_SHIFT_LEFT
+		case "bit-shift-right":
+			return vm.OP_BIT_SHIFT_RIGHT
+		case "unsigned-bit-shift-right":
+			return vm.OP_UNSIGNED_BIT_SHIFT_RIGHT
 		case "<":
 			return vm.OP_LT
 		case "<=":
@@ -672,6 +686,8 @@ func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
 			return vm.OP_INC
 		case "dec":
 			return vm.OP_DEC
+		case "bit-not":
+			return vm.OP_BIT_NOT
 		}
 	}
 	return 0

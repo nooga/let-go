@@ -95,6 +95,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	}
 	goEnv := wasmBuildEnv(tmpDir)
 	goTool := goToolPath()
+	buildTags := strings.TrimSpace(os.Getenv("LG_WASM_BUILD_TAGS"))
 
 	// 3. Write generated source files
 	if err := os.WriteFile(filepath.Join(tmpDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
@@ -102,6 +103,15 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	}
 	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval)), 0644); err != nil {
 		return err
+	}
+	if wasmassets.HasBuildTag(buildTags, "gogen_ir") {
+		srcDir, err := findLetGoModuleDir()
+		if err != nil {
+			return fmt.Errorf("gogen_ir wasm build requires local let-go source for wireup: %w", err)
+		}
+		if err := wasmassets.WriteGogenIRWireup(tmpDir, srcDir); err != nil {
+			return err
+		}
 	}
 
 	// 4. Write go.mod
@@ -124,7 +134,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	// network-only packages that the wasm build itself does not need.
 	fmt.Println("building wasm...")
 	wasmPath := filepath.Join(tmpDir, "app.wasm")
-	build := exec.Command(goTool, "build", "-o", wasmPath, ".")
+	build := exec.Command(goTool, wasmassets.GoBuildArgs(wasmPath, buildTags)...)
 	build.Dir = tmpDir
 	build.Env = append(goEnv, "GOOS=js", "GOARCH=wasm")
 	build.Stderr = os.Stderr

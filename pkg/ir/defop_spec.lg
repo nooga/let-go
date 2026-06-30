@@ -88,6 +88,62 @@
   :fold-float (fn [a b] (* a b))
   :type-rule  :numeric-join)
 
+(defop BitAnd
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_BIT_AND
+  :fold-int   (fn [a b] (bit-and a b))
+  :type-rule  (fn [_] :int))
+
+(defop BitOr
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_BIT_OR
+  :fold-int   (fn [a b] (bit-or a b))
+  :type-rule  (fn [_] :int))
+
+(defop BitXor
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_BIT_XOR
+  :fold-int   (fn [a b] (bit-xor a b))
+  :type-rule  (fn [_] :int))
+
+(defop BitAndNot
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_BIT_AND_NOT
+  :fold-int   (fn [a b] (bit-and-not a b))
+  :type-rule  (fn [_] :int))
+
+(defop BitShiftLeft
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_BIT_SHIFT_LEFT
+  :fold-int   (fn [a b] (bit-shift-left a b))
+  :type-rule  (fn [_] :int))
+
+(defop BitShiftRight
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_BIT_SHIFT_RIGHT
+  :fold-int   (fn [a b] (bit-shift-right a b))
+  :type-rule  (fn [_] :int))
+
+(defop UnsignedBitShiftRight
+  :inputs 2
+  :pushes 1
+  :pure? true
+  :bytecode OP_UNSIGNED_BIT_SHIFT_RIGHT
+  :fold-int   (fn [a b] (unsigned-bit-shift-right a b))
+  :type-rule  (fn [_] :int))
+
 (defop Lt
   :inputs 2 :pushes 1 :pure? true :bytecode OP_LT
   :fold-int (fn [a b] (< a b)) :type-rule :bool)
@@ -115,6 +171,10 @@
 (defop Dec
   :inputs 1 :pushes 1 :pure? true :bytecode OP_DEC
   :fold-int (fn [a] (- a 1)) :type-rule :pass-through)
+
+(defop BitNot
+  :inputs 1 :pushes 1 :pure? true :bytecode OP_BIT_NOT
+  :fold-int (fn [a] (bit-not a)) :type-rule (fn [_] :int))
 
 (defop Call
   :inputs :variadic                           ; arity in Aux; refs = [fn, args...]

@@ -156,6 +156,36 @@ func TestLispConstFold(t *testing.T) {
 		{name: "const-sub", src: `(defn const-sub [] (- 10 4))`,
 			mustContain:    []string{"Const ; 6"},
 			mustNotContain: []string{"Sub"}},
+		{name: "const-quot-int", src: `(defn const-quot-int [] (quot 7 3))`,
+			mustContain:    []string{"Const ; 2"},
+			mustNotContain: []string{"Quot"}},
+		{name: "const-div-float", src: `(defn const-div-float [] (/ 7.5 2.5))`,
+			mustContain:    []string{"Const ; 3"},
+			mustNotContain: []string{"Div"}},
+		{name: "const-bit-and", src: `(defn const-bit-and [] (bit-and 14 12))`,
+			mustContain:    []string{"Const ; 12"},
+			mustNotContain: []string{"Call", "LoadVar"}},
+		{name: "const-bit-or", src: `(defn const-bit-or [] (bit-or 5 3))`,
+			mustContain:    []string{"Const ; 7"},
+			mustNotContain: []string{"Call", "LoadVar"}},
+		{name: "const-bit-xor", src: `(defn const-bit-xor [] (bit-xor 5 3))`,
+			mustContain:    []string{"Const ; 6"},
+			mustNotContain: []string{"Call", "LoadVar"}},
+		{name: "const-bit-not", src: `(defn const-bit-not [] (bit-not 1))`,
+			mustContain:    []string{"Const ; -2"},
+			mustNotContain: []string{"Call", "LoadVar"}},
+		{name: "const-bit-shift-left", src: `(defn const-bit-shift-left [] (bit-shift-left 1 4))`,
+			mustContain:    []string{"Const ; 16"},
+			mustNotContain: []string{"Call", "LoadVar"}},
+		{name: "const-bit-shift-right", src: `(defn const-bit-shift-right [] (bit-shift-right 8 2))`,
+			mustContain:    []string{"Const ; 2"},
+			mustNotContain: []string{"Call", "LoadVar"}},
+		{name: "const-unsigned-bit-shift-right", src: `(defn const-unsigned-bit-shift-right [] (unsigned-bit-shift-right -1 1))`,
+			mustContain:    []string{"Const ; 9223372036854775807"},
+			mustNotContain: []string{"Call", "LoadVar"}},
+		{name: "const-bit-and-not", src: `(defn const-bit-and-not [] (bit-and-not 7 3))`,
+			mustContain:    []string{"Const ; 4"},
+			mustNotContain: []string{"Call", "LoadVar"}},
 		// Strategy 2 — algebraic identity. The dead Add/Mul stays in
 		// the inst list (DCE's job to remove it later); what matters
 		// is that uses get redirected past it. Assert via the Return.
@@ -182,11 +212,19 @@ func TestLispConstFold(t *testing.T) {
 			mustContain: []string{"Add"}},
 		{name: "use-let", src: `(defn use-let [x] (let [y 1] (+ x y)))`,
 			mustContain: []string{"Add"}},
+		{name: "shadowed-builtin-stays-call", src: `(defn shadowed-builtin-stays-call [bit-and] (bit-and 14 12))`,
+			mustContain: []string{"LoadArg", "Call"}},
 		// Numeric tower — BigInt i64 overflow refuses to fold (matches
 		// Go's foldNumeric ok=false branch). safe-apply in constfold.lg
 		// resolves spec open question #1.
 		{name: "bigint-fold", src: `(defn bigint-fold [] (+ 9223372036854775807 1))`,
 			mustContain: []string{"Add"}},
+		{name: "quot-divide-by-zero", src: `(defn quot-divide-by-zero [] (quot 1 0))`,
+			mustContain: []string{"Quot"}},
+		{name: "div-int-int-stays-div", src: `(defn div-int-int-stays-div [] (/ 3 2))`,
+			mustContain: []string{"Div"}},
+		{name: "quot-mixed-stays-quot", src: `(defn quot-mixed-stays-quot [] (quot 7 2.0))`,
+			mustContain: []string{"Quot"}},
 	}
 
 	for _, tc := range cases {

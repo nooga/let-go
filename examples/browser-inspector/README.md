@@ -20,14 +20,16 @@ Current scope:
 ## Build
 
 ```bash
-LG=./lg ./examples/browser-inspector/build.sh
+make -C examples/browser-inspector build
+# or, with a prebuilt lg binary:
+LG=./lg make -C examples/browser-inspector build
+# with IR/native lowering in the wasm app:
+LG_WASM_BUILD_TAGS=gogen_ir make -C examples/browser-inspector build
+# from the repo root:
+make browser-inspector
 ```
 
-Output:
-
-```text
-examples/browser-inspector/dist/index.html
-```
+Output: `examples/browser-inspector/dist/index.html`
 
 ## Serve
 

@@ -319,6 +319,16 @@
 
 (def comparison-ops #{:lt :lte :gt :gte :eq})
 (def numeric-ops #{:add :sub :mul :inc :dec})
+(def bitwise-binary-ops
+  #{:bit-and :bit-or :bit-xor :bit-and-not
+    :bit-shift-left :bit-shift-right :unsigned-bit-shift-right})
+(def bitwise-unary-ops #{:bit-not})
+
+(defn- bitwise-op-type [types]
+  (cond
+    (some #(= :bottom %) types) :bottom
+    (every? #(or (= % :int) (= % [:const :int 0])) types) :int
+    :else :unknown))
 
 (defn infer-one [inst f state]
   (let [op   (ir/op inst f)
@@ -339,6 +349,10 @@
       (quot-op-type (map (fn [r] (state-type state r)) refs))
       (= op :div)
       (div-op-type (map (fn [r] (state-type state r)) refs))
+      (contains? bitwise-binary-ops op)
+      (bitwise-op-type (map (fn [r] (state-type state r)) refs))
+      (contains? bitwise-unary-ops op)
+      (bitwise-op-type (map (fn [r] (state-type state r)) refs))
       (contains? numeric-ops op)
       (numeric-op-type (map (fn [r] (state-type state r)) refs))
       :else :unknown)))

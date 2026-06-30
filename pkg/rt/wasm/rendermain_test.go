@@ -24,7 +24,7 @@ func TestRenderMainSubstitutesAllMarkers(t *testing.T) {
 // syscall/js unused would fail to compile, and the bundle should stay as it was.
 func TestRenderMainHostEvalOff(t *testing.T) {
 	got := RenderMain("s", false)
-	for _, leak := range []string{"syscall/js", "encoding/json", "_lgEval", "_lgRequest", "select {}"} {
+	for _, leak := range []string{"syscall/js", "pkg/wasmhost", "_lgEval", "_lgRequest", "select {}"} {
 		if strings.Contains(got, leak) {
 			t.Fatalf("host-eval code leaked into default bundle: %q", leak)
 		}
@@ -35,7 +35,7 @@ func TestRenderMainHostEvalOff(t *testing.T) {
 // and _lgRequest hooks, signals readiness, and parks so the runtime stays callable.
 func TestRenderMainHostEvalOn(t *testing.T) {
 	got := RenderMain("s", true)
-	for _, want := range []string{`"syscall/js"`, `"encoding/json"`, `js.Global().Set("_lgEval", hostEval)`, `js.Global().Set("_lgRequest", hostRequestFn)`, "_lgRuntimeReady", "select {}"} {
+	for _, want := range []string{`"syscall/js"`, `"github.com/nooga/let-go/pkg/wasmhost"`, `js.Global().Set("_lgEval", hostEval)`, `js.Global().Set("_lgRequest", hostRequestFn)`, "_lgRuntimeReady", "select {}"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("host-eval output missing %q", want)
 		}

@@ -39,8 +39,15 @@ const (
 	OpAdd
 	OpSub
 	OpMul
-	OpQuot // clojure.core/quot — integer quotient truncated toward zero. int/int lowers to native Go `/` (which truncates identically); any float/ratio/boxed operand lowers via rt.QuotValue (native float `/` does NOT truncate)
-	OpDiv  // clojure.core// — true division. float/float lowers to native Go `/`; any other operand mix (int/int -> Ratio, mixed -> Float) lowers via rt.DivValue. Distinguished from Quot by op-kw in lower-go (both render Go `/`)
+	OpBitAnd                // clojure.core/bit-and — integer bitwise and
+	OpBitOr                 // clojure.core/bit-or — integer bitwise or
+	OpBitXor                // clojure.core/bit-xor — integer bitwise xor
+	OpBitAndNot             // clojure.core/bit-and-not — integer bit clear (&^)
+	OpBitShiftLeft          // clojure.core/bit-shift-left — integer left shift
+	OpBitShiftRight         // clojure.core/bit-shift-right — integer arithmetic right shift
+	OpUnsignedBitShiftRight // clojure.core/unsigned-bit-shift-right — integer logical right shift
+	OpQuot                  // clojure.core/quot — integer quotient truncated toward zero. int/int lowers to native Go `/` (which truncates identically); any float/ratio/boxed operand lowers via rt.QuotValue (native float `/` does NOT truncate)
+	OpDiv                   // clojure.core// — true division. float/float lowers to native Go `/`; any other operand mix (int/int -> Ratio, mixed -> Float) lowers via rt.DivValue. Distinguished from Quot by op-kw in lower-go (both render Go `/`)
 	OpLt
 	OpLte
 	OpGt
@@ -48,6 +55,7 @@ const (
 	OpEq
 	OpInc
 	OpDec
+	OpBitNot      // clojure.core/bit-not — integer bitwise complement
 	OpPop         // discard top stack value; no result (OP_POP)
 	OpReturn      // .Refs[0] = value
 	OpBranch      // unconditional; .Aux = *BranchTarget
@@ -69,36 +77,44 @@ type opInfo struct {
 }
 
 var opTable = [...]opInfo{
-	OpInvalid:     {"INVALID", 0, 0, false, false},
-	OpConst:       {"Const", 0, 1, true, false},
-	OpLoadArg:     {"LoadArg", 0, 1, true, false},
-	OpLoadVar:     {"LoadVar", 0, 1, false, false},
-	OpLoadClosed:  {"LoadClosed", 0, 1, true, false},
-	OpBlockArg:    {"BlockArg", 0, 1, true, false},
-	OpSetVar:      {"SetVar", 2, 1, false, false},
-	OpCall:        {"Call", -1, 1, false, false},
-	OpTailCall:    {"TailCall", -1, 1, false, true},
-	OpAdd:         {"Add", 2, 1, true, false},
-	OpSub:         {"Sub", 2, 1, true, false},
-	OpMul:         {"Mul", 2, 1, true, false},
-	OpQuot:        {"Quot", 2, 1, true, false},
-	OpDiv:         {"Div", 2, 1, true, false},
-	OpLt:          {"Lt", 2, 1, true, false},
-	OpLte:         {"Lte", 2, 1, true, false},
-	OpGt:          {"Gt", 2, 1, true, false},
-	OpGte:         {"Gte", 2, 1, true, false},
-	OpEq:          {"Eq", 2, 1, true, false},
-	OpInc:         {"Inc", 1, 1, true, false},
-	OpDec:         {"Dec", 1, 1, true, false},
-	OpPop:         {"Pop", 1, 0, false, false},
-	OpReturn:      {"Return", 1, 0, false, true},
-	OpBranch:      {"Branch", 0, 0, false, true},
-	OpBranchIf:    {"BranchIf", 1, 0, false, true},
-	OpMakeClosure: {"MakeClosure", 1, 1, false, false},
-	OpPushClosed:  {"PushClosed", 2, 1, false, false},
-	OpTry:         {"Try", -1, 1, false, false},
-	OpDot:         {"Dot", 1, 1, false, false},
-	OpDef:         {"Def", -1, 1, false, false},
+	OpInvalid:               {"INVALID", 0, 0, false, false},
+	OpConst:                 {"Const", 0, 1, true, false},
+	OpLoadArg:               {"LoadArg", 0, 1, true, false},
+	OpLoadVar:               {"LoadVar", 0, 1, false, false},
+	OpLoadClosed:            {"LoadClosed", 0, 1, true, false},
+	OpBlockArg:              {"BlockArg", 0, 1, true, false},
+	OpSetVar:                {"SetVar", 2, 1, false, false},
+	OpCall:                  {"Call", -1, 1, false, false},
+	OpTailCall:              {"TailCall", -1, 1, false, true},
+	OpAdd:                   {"Add", 2, 1, true, false},
+	OpSub:                   {"Sub", 2, 1, true, false},
+	OpMul:                   {"Mul", 2, 1, true, false},
+	OpBitAnd:                {"BitAnd", 2, 1, true, false},
+	OpBitOr:                 {"BitOr", 2, 1, true, false},
+	OpBitXor:                {"BitXor", 2, 1, true, false},
+	OpBitAndNot:             {"BitAndNot", 2, 1, true, false},
+	OpBitShiftLeft:          {"BitShiftLeft", 2, 1, true, false},
+	OpBitShiftRight:         {"BitShiftRight", 2, 1, true, false},
+	OpUnsignedBitShiftRight: {"UnsignedBitShiftRight", 2, 1, true, false},
+	OpQuot:                  {"Quot", 2, 1, true, false},
+	OpDiv:                   {"Div", 2, 1, true, false},
+	OpLt:                    {"Lt", 2, 1, true, false},
+	OpLte:                   {"Lte", 2, 1, true, false},
+	OpGt:                    {"Gt", 2, 1, true, false},
+	OpGte:                   {"Gte", 2, 1, true, false},
+	OpEq:                    {"Eq", 2, 1, true, false},
+	OpInc:                   {"Inc", 1, 1, true, false},
+	OpDec:                   {"Dec", 1, 1, true, false},
+	OpBitNot:                {"BitNot", 1, 1, true, false},
+	OpPop:                   {"Pop", 1, 0, false, false},
+	OpReturn:                {"Return", 1, 0, false, true},
+	OpBranch:                {"Branch", 0, 0, false, true},
+	OpBranchIf:              {"BranchIf", 1, 0, false, true},
+	OpMakeClosure:           {"MakeClosure", 1, 1, false, false},
+	OpPushClosed:            {"PushClosed", 2, 1, false, false},
+	OpTry:                   {"Try", -1, 1, false, false},
+	OpDot:                   {"Dot", 1, 1, false, false},
+	OpDef:                   {"Def", -1, 1, false, false},
 }
 
 // String returns the op's display name (or "Op?" for an unknown op).
@@ -164,6 +180,20 @@ func irOpToBytecode(op Op) int32 {
 		return vm.OP_SUB
 	case OpMul:
 		return vm.OP_MUL
+	case OpBitAnd:
+		return vm.OP_BIT_AND
+	case OpBitOr:
+		return vm.OP_BIT_OR
+	case OpBitXor:
+		return vm.OP_BIT_XOR
+	case OpBitAndNot:
+		return vm.OP_BIT_AND_NOT
+	case OpBitShiftLeft:
+		return vm.OP_BIT_SHIFT_LEFT
+	case OpBitShiftRight:
+		return vm.OP_BIT_SHIFT_RIGHT
+	case OpUnsignedBitShiftRight:
+		return vm.OP_UNSIGNED_BIT_SHIFT_RIGHT
 	case OpQuot:
 		return vm.OP_QUOT
 	case OpDiv:
@@ -182,6 +212,8 @@ func irOpToBytecode(op Op) int32 {
 		return vm.OP_INC
 	case OpDec:
 		return vm.OP_DEC
+	case OpBitNot:
+		return vm.OP_BIT_NOT
 	case OpReturn:
 		return vm.OP_RETURN
 	case OpBranch:
@@ -219,6 +251,20 @@ func bytecodeToIROp(op int32) Op {
 		return OpSub
 	case vm.OP_MUL:
 		return OpMul
+	case vm.OP_BIT_AND:
+		return OpBitAnd
+	case vm.OP_BIT_OR:
+		return OpBitOr
+	case vm.OP_BIT_XOR:
+		return OpBitXor
+	case vm.OP_BIT_AND_NOT:
+		return OpBitAndNot
+	case vm.OP_BIT_SHIFT_LEFT:
+		return OpBitShiftLeft
+	case vm.OP_BIT_SHIFT_RIGHT:
+		return OpBitShiftRight
+	case vm.OP_UNSIGNED_BIT_SHIFT_RIGHT:
+		return OpUnsignedBitShiftRight
 	case vm.OP_QUOT:
 		return OpQuot
 	case vm.OP_DIV:
@@ -237,6 +283,8 @@ func bytecodeToIROp(op int32) Op {
 		return OpInc
 	case vm.OP_DEC:
 		return OpDec
+	case vm.OP_BIT_NOT:
+		return OpBitNot
 	case vm.OP_RETURN:
 		return OpReturn
 	case vm.OP_JUMP:

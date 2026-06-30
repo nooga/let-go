@@ -128,16 +128,30 @@ const requestPending = new Map();
 // synchronously today, so this guards lost responses, not slow-but-valid work.
 const REQUEST_TIMEOUT_MS = 30000;
 if (HOST_EVAL) {
-  window.LetGoHost.request = function(req) {
-    return runtimeReady.then(() => requestImpl(req || {}));
+  window.LetGoHost.request = function(req, onFrame) {
+    return runtimeReady.then(() => requestImpl(req || {}, onFrame));
   };
   window.LetGoHost.eval = function(code) {
-    return window.LetGoHost.request({ op: 'eval', session: 'default', code }).then((resp) => {
-      if (!resp || !resp.ok) {
-        const msg = resp && resp.error && resp.error.message ? resp.error.message : 'request failed';
-        throw new Error(msg);
+    let lastValue = null;
+    let lastError = null;
+    return window.LetGoHost.request({ op: 'eval', session: 'default', code }, (frame) => {
+      if (!frame || typeof frame !== 'object') return;
+      if (frame.kind === 'out' && typeof frame.text === 'string') {
+        window.LetGoHost._output(frame.text);
       }
-      return resp.value;
+      if (frame.kind === 'value' && typeof frame.value === 'string') {
+        lastValue = frame.value;
+      }
+      if (frame.kind === 'err' && typeof frame.text === 'string') {
+        lastError = frame.text;
+      }
+    }).then((resp) => {
+      const frames = resp && Array.isArray(resp.frames) ? resp.frames : [];
+      const failed = frames.some((frame) => frame && frame.kind === 'status' && Array.isArray(frame.status) && frame.status.includes('error'));
+      if (failed || lastError !== null) {
+        throw new Error(lastError || 'request failed');
+      }
+      return lastValue === null ? 'nil' : lastValue;
     });
   };
 }
@@ -247,8 +261,12 @@ async function startWorkerMode() {
         // Runs synchronously even while the program is parked on go.run: an
         // async onmessage doesn't block the worker, and the _lgRequest FuncOf
         // returns its value on the calling stack.
+        globalThis._lgRequestFrame = function(frameJson) {
+          postMessage({t:'request-frame', id: e.data.id, frame: frameJson});
+        };
         const r = globalThis._lgRequest ? globalThis._lgRequest(JSON.stringify(e.data.req || {})) : '{"ok":false,"error":{"code":"not-ready","message":"runtime not ready"}}';
         postMessage({t:'request-result', id: e.data.id, result: r});
+        globalThis._lgRequestFrame = undefined;
         return;
       }
       if (e.data.t !== 'init') return;
@@ -313,17 +331,33 @@ async function startWorkerMode() {
     // back, matched to its request id. requestImpl is installed here (not at
     // startup) so it only exists once the worker's runtime is actually ready.
     if (e.data.t === 'host-eval-ready') {
-      requestImpl = (req) => new Promise((resolve, reject) => {
+      requestImpl = (req, onFrame) => new Promise((resolve, reject) => {
         const id = ++requestSeq;
         const timer = setTimeout(() => {
           if (requestPending.delete(id)) {
             reject(new Error('LetGoHost.request: no worker response within ' + REQUEST_TIMEOUT_MS + 'ms'));
           }
         }, REQUEST_TIMEOUT_MS);
-        requestPending.set(id, { resolve, reject, timer });
+        requestPending.set(id, { resolve, reject, timer, onFrame, frames: [] });
         worker.postMessage({t:'request', id, req});
       });
       runtimeReadyResolve();
+    }
+    if (e.data.t === 'request-frame') {
+      const pending = requestPending.get(e.data.id);
+      if (pending) {
+        try {
+          const frame = JSON.parse(e.data.frame);
+          pending.frames.push(frame);
+          if (typeof pending.onFrame === 'function') {
+            pending.onFrame(frame);
+          }
+        } catch (err) {
+          clearTimeout(pending.timer);
+          requestPending.delete(e.data.id);
+          pending.reject(err);
+        }
+      }
     }
     if (e.data.t === 'request-result') {
       const pending = requestPending.get(e.data.id);
@@ -331,7 +365,7 @@ async function startWorkerMode() {
         clearTimeout(pending.timer);
         requestPending.delete(e.data.id);
         try {
-          pending.resolve(JSON.parse(e.data.result));
+          pending.resolve({ ack: JSON.parse(e.data.result), frames: pending.frames });
         } catch (err) {
           pending.reject(err);
         }
@@ -415,7 +449,23 @@ async function startMainThreadMode() {
   // Host-request (main thread): the runtime sets window._lgRequest, then calls
   // this to announce readiness. Requests run in-page, so dispatch is a direct call.
   globalThis._lgRuntimeReady = function() {
-    requestImpl = (req) => JSON.parse(window._lgRequest(JSON.stringify(req || {})));
+    requestImpl = (req, onFrame) => {
+      const frames = [];
+      const prevEmitFrame = window._lgRequestFrame;
+      window._lgRequestFrame = function(frameJson) {
+        const frame = JSON.parse(frameJson);
+        frames.push(frame);
+        if (typeof onFrame === 'function') {
+          onFrame(frame);
+        }
+      };
+      try {
+        const ack = JSON.parse(window._lgRequest(JSON.stringify(req || {})));
+        return Promise.resolve({ ack, frames });
+      } finally {
+        window._lgRequestFrame = prevEmitFrame;
+      }
+    };
     runtimeReadyResolve();
   };
 

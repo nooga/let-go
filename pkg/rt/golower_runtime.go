@@ -263,6 +263,46 @@ func DivValue(a, b vm.Value) vm.Value {
 	return r
 }
 
+func bitwiseInt(v vm.Value, opname string) int {
+	i, ok := v.(vm.Int)
+	if !ok {
+		panic(fmt.Errorf("%s expected Int", opname))
+	}
+	return int(i)
+}
+
+func BitAndValue(a, b vm.Value) vm.Value {
+	return vm.MakeInt(bitwiseInt(a, "bit-and") & bitwiseInt(b, "bit-and"))
+}
+
+func BitOrValue(a, b vm.Value) vm.Value {
+	return vm.MakeInt(bitwiseInt(a, "bit-or") | bitwiseInt(b, "bit-or"))
+}
+
+func BitXorValue(a, b vm.Value) vm.Value {
+	return vm.MakeInt(bitwiseInt(a, "bit-xor") ^ bitwiseInt(b, "bit-xor"))
+}
+
+func BitAndNotValue(a, b vm.Value) vm.Value {
+	return vm.MakeInt(bitwiseInt(a, "bit-and-not") &^ bitwiseInt(b, "bit-and-not"))
+}
+
+func BitNotValue(a vm.Value) vm.Value {
+	return vm.MakeInt(^bitwiseInt(a, "bit-not"))
+}
+
+func BitShiftLeftValue(a, b vm.Value) vm.Value {
+	return vm.MakeInt(bitwiseInt(a, "bit-shift-left") << uint(bitwiseInt(b, "bit-shift-left")))
+}
+
+func BitShiftRightValue(a, b vm.Value) vm.Value {
+	return vm.MakeInt(bitwiseInt(a, "bit-shift-right") >> uint(bitwiseInt(b, "bit-shift-right")))
+}
+
+func UnsignedBitShiftRightValue(a, b vm.Value) vm.Value {
+	return vm.MakeInt(int(uint(bitwiseInt(a, "unsigned-bit-shift-right")) >> uint(bitwiseInt(b, "unsigned-bit-shift-right"))))
+}
+
 // BoxRestArgs boxes a variadic rest-args slice into a vm.Value list.
 // Used by the Go lowering when lowering :load-arg for the rest arg of
 // a variadic function (where the Go param is ...vm.Value).
