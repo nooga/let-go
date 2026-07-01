@@ -412,6 +412,14 @@
 ;; Ops whose arity-1 form is the canonical shape (no n-ary folding).
 (def unary-only-ops #{:inc :dec})
 
+;; Comparison ops are NOT associative the way +/-/*/= (arithmetic) are, so
+;; they can't go through fold-binary-chain's left fold: (<= a b c) means
+;; "b is between a and c" — pairwise checks between ADJACENT original args,
+;; ANDed — NOT (((a <= b) <= c) ...), which would feed a comparison's bool
+;; RESULT back in as an operand of the next comparison (wrong type, and
+;; wrong even if the type happened to line up). See build-comparison-chain.
+(def comparison-ops #{:lt :lte :gt :gte :eq})
+
 (defn build-args [forms ctx]
   ;; Build each arg, AND register its result as a temporary live local
   ;; under a gensym so any subsequent arg's build-if symmetric pass-
@@ -482,6 +490,28 @@
                op-kw [acc (nth args i)] nil)
              (inc i)))))
 
+(defn build-comparison-chain [op-kw args ctx]
+  "[a b c d] → (and (op a b) (op b c) (op c d)): one comparison Inst per
+   ADJACENT pair of original args, joined with real short-circuiting `if`s
+   (same shape the `and` macro expands to) instead of fold-binary-chain's
+   left fold. Reuses build-if/build-form for the join logic, so this needs
+   no new IR op — just gensym'd locals naming each pairwise comparison so
+   the synthetic `if` forms below can refer back to them by symbol."
+  (push-locals! ctx)
+  (let [pair-syms (mapv (fn [i]
+                          (let [pid (add-inst! ctx (ctx-block ctx) op-kw
+                                      [(nth args i) (nth args (inc i))] nil)
+                                sym (ctx-gensym! ctx "cmp__")]
+                            (bind-local! ctx sym pid)
+                            sym))
+                        (range (dec (count args))))
+        chain-form (reduce (fn [acc sym] (list 'if sym acc false))
+                           true
+                           (reverse pair-syms))
+        result (build-form chain-form ctx)]
+    (pop-locals! ctx)
+    result))
+
 (defn build-builtin-op [op-kw form ctx]
   ;; Builtin ops are binary (stack-effect 2→1). Fold n-ary calls.
   ;; Unary-only ops (:inc, :dec) take exactly one ref.
@@ -512,6 +542,8 @@
         :else (nth args 0))
       (= 2 (count args))
       (add-inst! ctx (ctx-block ctx) op-kw args nil)
+      (contains? comparison-ops op-kw)
+      (build-comparison-chain op-kw args ctx)
       :else
       (fold-binary-chain op-kw args ctx))))
 

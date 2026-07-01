@@ -373,7 +373,13 @@
   #{"break" "default" "func" "interface" "select" "case" "defer" "go"
     "map" "struct" "chan" "else" "goto" "package" "switch" "const"
     "fallthrough" "if" "range" "type" "continue" "for" "import"
-    "return" "var"})
+    "return" "var"
+    ;; Not Go keywords, but fixed Go identifiers this lowering itself emits
+    ;; into every generated function's own scope (the *vm.ExecContext param,
+    ;; and the shared `error` local) — a Lisp local literally named `ec` or
+    ;; `callErr` (e.g. a legmacs `end-column` destructured as `ec`) would
+    ;; otherwise redeclare them in the same block.
+    "ec" "callErr"})
 
 ;; Munge one char to a Go-identifier-safe token using `m`, with a catch-all so
 ;; nothing unmapped ever leaks through: explicit map entry wins; otherwise
