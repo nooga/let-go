@@ -182,6 +182,7 @@ type NativeFn struct {
 	// context. Builtins that read dynamic vars (print → *out*, push-binding!,
 	// …) set this.
 	ctxProxy func(*ExecContext, []Value) (Value, error)
+	meta     Value // IMeta support; nil until (with-meta fn m) copies one in
 }
 
 // HasCtx reports whether this native takes an ExecContext.
@@ -225,4 +226,21 @@ func (l *NativeFn) String() string {
 		return fmt.Sprintf("<native-fn %s %p>", l.name, l)
 	}
 	return fmt.Sprintf("<native-fn %p>", l)
+}
+
+// Meta implements IMeta.
+func (l *NativeFn) Meta() Value {
+	if l.meta == nil {
+		return NIL
+	}
+	return l.meta
+}
+
+// WithMeta implements IMeta. Returns a copy carrying m. Native builtins are
+// shared singletons (e.g. one core/+), so this MUST copy rather than mutate;
+// the wrapped fn/proxies are immutable, so sharing them across the copy is safe.
+func (l *NativeFn) WithMeta(m Value) Value {
+	cp := *l
+	cp.meta = m
+	return &cp
 }

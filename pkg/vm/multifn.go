@@ -20,6 +20,7 @@ type MultiFn struct {
 	// defmethod replaces the var's value with an unfrozen one, which is the
 	// signal the generated guard uses to fall back to runtime dispatch.
 	frozen bool
+	meta   Value // IMeta support; carried across AddMethod/RemoveMethod
 }
 
 func NewMultiFn(name string, dispatchFn Fn, defaultVal Value) *MultiFn {
@@ -38,6 +39,25 @@ func (m *MultiFn) String() string {
 	return fmt.Sprintf("<multifn %s>", m.name)
 }
 
+// Meta implements IMeta.
+func (m *MultiFn) Meta() Value {
+	if m.meta == nil {
+		return NIL
+	}
+	return m.meta
+}
+
+// WithMeta implements IMeta. Returns a copy carrying meta; the dispatch fn and
+// (immutable-persistent) method map are shared. let-go's fn? includes MultiFn,
+// so multimethods round-trip metadata like every other fn? value. The copy
+// keeps frozen=false — a meta'd copy is not the native dispatch baseline.
+func (m *MultiFn) WithMeta(meta Value) Value {
+	cp := *m
+	cp.meta = meta
+	cp.frozen = false
+	return &cp
+}
+
 // AddMethod registers an implementation for a dispatch value.
 func (m *MultiFn) AddMethod(dispatchVal Value, method Fn) *MultiFn {
 	return &MultiFn{
@@ -45,6 +65,7 @@ func (m *MultiFn) AddMethod(dispatchVal Value, method Fn) *MultiFn {
 		dispatchFn: m.dispatchFn,
 		methods:    m.methods.Assoc(dispatchVal, method).(*PersistentMap),
 		defaultVal: m.defaultVal,
+		meta:       m.meta,
 	}
 }
 
@@ -55,6 +76,7 @@ func (m *MultiFn) RemoveMethod(dispatchVal Value) *MultiFn {
 		dispatchFn: m.dispatchFn,
 		methods:    m.methods.Dissoc(dispatchVal).(*PersistentMap),
 		defaultVal: m.defaultVal,
+		meta:       m.meta,
 	}
 }
 
