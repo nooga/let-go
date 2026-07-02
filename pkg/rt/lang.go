@@ -5353,6 +5353,38 @@ func installLangNS() {
 		return vm.Symbol(ns.Name()), nil
 	})
 
+	// ns-publics returns a map of symbol -> Var for the public (non-private)
+	// interned vars of a namespace, given either the namespace or a symbol
+	// naming it (matching Clojure, which passes its arg through the-ns).
+	nsPublics, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		var ns *vm.Namespace
+		switch a := vs[0].(type) {
+		case *vm.Namespace:
+			ns = a
+		case vm.Symbol:
+			// resolveNSAlias canonicalizes the Clojure-facing names the rest of
+			// the runtime accepts (clojure.core -> core, clojure.string ->
+			// string, …); non-aliases pass through unchanged.
+			nsMu.RLock()
+			ns = nsRegistry[resolveNSAlias(string(a))]
+			nsMu.RUnlock()
+			if ns == nil {
+				return vm.NIL, fmt.Errorf("no namespace: %s found", a)
+			}
+		default:
+			return vm.NIL, fmt.Errorf("ns-publics expected Symbol or Namespace")
+		}
+		pubs := ns.PublicVars()
+		kvs := make([]vm.Value, 0, len(pubs)*2)
+		for sym, v := range pubs {
+			kvs = append(kvs, sym, v)
+		}
+		return vm.NewMap(kvs), nil
+	})
+
 	// lazy-seq* creates a LazySeq from a thunk function
 	lazySeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -6574,6 +6606,7 @@ func installLangNS() {
 	ns.Def("all-ns", allNs)
 	ns.Def("the-ns", theNs)
 	ns.Def("ns-name", nsName)
+	ns.Def("ns-publics", nsPublics)
 
 	ns.Def("peek", peek)
 	ns.Def("pop", pop)
