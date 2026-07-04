@@ -211,6 +211,94 @@ func wrapGlplatWindowSize(vs []vm.Value) (vm.Value, error) {
 	return vm.NewArrayVector([]vm.Value{vm.Int(int64(w)), vm.Int(int64(h))}), nil
 }
 
+func wrapGlplatFontLoad(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("glplat/FontLoad: expected 1 arg, got %d", len(vs))
+	}
+	pathStr, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("glplat/FontLoad: arg 0 must be String, got %s", vs[0].Type().Name())
+	}
+	path := string(pathStr)
+	fontID, err := glplat.FontLoad(path)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return vm.Int(int64(fontID)), nil
+}
+
+func wrapGlplatFontHasGlyph(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("glplat/FontHasGlyph: expected 2 args, got %d", len(vs))
+	}
+	fontID, _ := vm.ToInt(vs[0])
+	chStr, ok := vs[1].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("glplat/FontHasGlyph: arg 1 must be String, got %s", vs[1].Type().Name())
+	}
+	ch := string(chStr)
+	result := glplat.FontHasGlyph(int(fontID), ch)
+	return vm.Boolean(result), nil
+}
+
+func wrapGlplatFontRasterizeCell(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 4 {
+		return vm.NIL, fmt.Errorf("glplat/FontRasterizeCell: expected 4 args, got %d", len(vs))
+	}
+	fontID, _ := vm.ToInt(vs[0])
+	chStr, ok := vs[1].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("glplat/FontRasterizeCell: arg 1 must be String, got %s", vs[1].Type().Name())
+	}
+	ch := string(chStr)
+	cellW, _ := vm.ToInt(vs[2])
+	cellH, _ := vm.ToInt(vs[3])
+
+	alphas, err := glplat.FontRasterizeCell(int(fontID), ch, int(cellW), int(cellH))
+	if err != nil {
+		return vm.NIL, err
+	}
+
+	// Convert float64 array to lg vector
+	vals := make([]vm.Value, len(alphas))
+	for i, a := range alphas {
+		vals[i] = vm.Float(a)
+	}
+	return vm.NewArrayVector(vals), nil
+}
+
+func wrapGlplatSaveGlyphAtlasPNG(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 4 {
+		return vm.NIL, fmt.Errorf("glplat/SaveGlyphAtlasPNG: expected 4 args, got %d", len(vs))
+	}
+	pathStr, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("glplat/SaveGlyphAtlasPNG: arg 0 must be String, got %s", vs[0].Type().Name())
+	}
+	path := string(pathStr)
+
+	w, _ := vm.ToInt(vs[1])
+	h, _ := vm.ToInt(vs[2])
+
+	// Unbox alphas vector
+	var alphas []float64
+	if seq, ok := vs[3].(vm.Sequable); ok {
+		for s := seq.Seq(); s != nil; s = s.Next() {
+			val := s.First()
+			f, _ := vm.ToFloat(val)
+			alphas = append(alphas, f)
+		}
+	} else {
+		return vm.NIL, fmt.Errorf("glplat/SaveGlyphAtlasPNG: alphas must be sequable")
+	}
+
+	err := glplat.SaveGlyphAtlasPNG(path, int(w), int(h), alphas)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return vm.NIL, nil
+}
+
 func installGlplatNS() {
 	ns := vm.NewNamespace("glplat")
 
@@ -255,6 +343,18 @@ func installGlplatNS() {
 
 	winSizeFn, _ := vm.NativeFnType.Wrap(wrapGlplatWindowSize)
 	ns.Def("WindowSize", winSizeFn)
+
+	fontLoadFn, _ := vm.NativeFnType.Wrap(wrapGlplatFontLoad)
+	ns.Def("FontLoad", fontLoadFn)
+
+	fontHasGlyphFn, _ := vm.NativeFnType.Wrap(wrapGlplatFontHasGlyph)
+	ns.Def("FontHasGlyph", fontHasGlyphFn)
+
+	fontRasterizeCellFn, _ := vm.NativeFnType.Wrap(wrapGlplatFontRasterizeCell)
+	ns.Def("FontRasterizeCell", fontRasterizeCellFn)
+
+	saveGlyphAtlasPNGFn, _ := vm.NativeFnType.Wrap(wrapGlplatSaveGlyphAtlasPNG)
+	ns.Def("SaveGlyphAtlasPNG", saveGlyphAtlasPNGFn)
 
 	RegisterNS(ns)
 }
