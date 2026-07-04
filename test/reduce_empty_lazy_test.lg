@@ -1,0 +1,57 @@
+(ns test.reduce-empty-lazy-test
+  (:require
+   [test :refer :all]))
+
+;; Regression: reduce over an empty (map f (concat ...)) invoked f once with a
+;; phantom nil element, even though seq/count/vec/doall all agreed the seq was
+;; empty. Root cause: a LazySeq that realized to empty leaked the non-nil
+;; EmptyList singleton out of Resolve(), so reduce's `seq == nil` guard missed
+;; and its loop ran once with EmptyList.First() => nil. Fixed by canonicalizing
+;; a realized-empty LazySeq to nil in LazySeq.seq().
+
+(defn- reduce-calls
+  "Returns the vector of elements the reducing fn was actually called with."
+  [coll]
+  (let [seen (atom [])]
+    (reduce (fn [a x] (swap! seen conj x) a) :init coll)
+    @seen))
+
+(deftest reduce-over-empty-lazy-no-phantom
+  (testing "map over empty concat — f is never called (was: called once with nil)"
+    (is (= [] (reduce-calls (map identity (concat [] []))))))
+
+  (testing "map over single empty concat arg"
+    (is (= [] (reduce-calls (map identity (concat []))))))
+
+  (testing "map over empty filter"
+    (is (= [] (reduce-calls (map identity (filter pos? []))))))
+
+  (testing "reduce returns init for these empty lazy seqs"
+    (is (= :init (reduce (fn [a _] a) :init (map identity (concat [] [])))))
+    (is (= :init (reduce (fn [a _] a) :init (map identity (filter pos? [])))))))
+
+(deftest reduce-empty-lazy-no-init
+  (testing "no-init reduce over empty lazy seq calls f with no args (=> f's 0-arity)"
+    (is (= 0 (reduce + (map identity (concat [] [])))))))
+
+(deftest empty-lazy-seq-agrees-empty
+  (testing "seq/count/vec/doall/first/last all agree the seq is empty"
+    (is (= nil (seq   (map identity (concat [] [])))))
+    (is (= 0   (count (map identity (concat [] [])))))
+    (is (= []  (vec   (map identity (concat [] [])))))
+    (is (= nil (first (map identity (concat [] [])))))
+    (is (= nil (last  (map identity (concat [] [])))))))
+
+(deftest genuine-nil-element-still-seen
+  (testing "a real nil element must still reach the reducing fn (no over-normalization)"
+    (is (= [nil] (reduce-calls (map identity [nil]))))
+    (is (= [nil nil] (reduce-calls (map identity (concat [nil] [nil])))))))
+
+(deftest non-empty-lazy-reduce-correctness
+  (testing "non-empty map-over-concat reduces correctly"
+    (is (= 6 (reduce + 0 (map inc (concat [] [0 1 2])))))
+    (is (= [1 2 3] (reduce-calls (map inc (concat [] [0 1 2])))))))
+
+(deftest some-over-empty-lazy-no-phantom
+  (testing "some over empty lazy seq returns nil without invoking pred on phantom nil"
+    (is (= nil (some pos? (map identity (concat [] [])))))))
