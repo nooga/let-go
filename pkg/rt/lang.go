@@ -1173,11 +1173,8 @@ func toSeq(v vm.Value) vm.Seq {
 		return nil
 	}
 	if ls, ok := v.(*vm.LazySeq); ok {
-		s := ls.Resolve()
-		if s == vm.EmptyList {
-			return nil
-		}
-		return s
+		// Resolve() returns nil (never EmptyList) for an empty lazy seq.
+		return ls.Resolve()
 	}
 	if c, ok := v.(vm.Counted); ok && c.RawCount() == 0 {
 		return nil
