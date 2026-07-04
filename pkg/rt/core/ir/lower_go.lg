@@ -3178,37 +3178,96 @@
    \% "Pct" \& "Amp" \| "Bar" \: "Colon" \~ "Tilde" \^ "Caret"
    \/ "Slash" \' "Quote"})
 
-(defn go-export-name
-  "Convert a symbol/string to an exported Go name (PascalCase). Multi-word
-   kebab-case names PascalCase (do-thing -> DoThing). A word containing chars
-   illegal in a Go identifier (?!*<>=… — predicates, bang-mutators, etc.) is
-   munged to a valid capitalized form (vector? -> VectorQmark, conj! -> ConjBang)
-   rather than emitting an invalid identifier. Clean alphanumeric words keep the
-   exact prior behavior (capitalize), so already-generated names are unchanged."
+(def ^:dynamic *export-name-overrides*
+  "Per-namespace {source-name-string -> resolved exported Go name}, bound around a
+   namespace's collect + lower passes (see build-export-name-map). PascalCase is
+   NOT injective, so this remaps the loser of any collision to a distinct name.
+   nil (the default) means compute the plain PascalCase — the collision-free case."
+  nil)
+
+(defn go-export-name*
+  "Pure exported Go name (PascalCase) for s, ignoring collision overrides. Multi-word
+   kebab-case names PascalCase (do-thing -> DoThing). A word containing a char
+   illegal in a Go identifier is munged: a mapped predicate/bang/etc. char uses its
+   token (vector? -> VectorQmark, conj! -> ConjBang); ANY other illegal char gets a
+   deterministic U<hex> escape (foo@bar -> FooU0040bar) so the result is ALWAYS a
+   valid identifier. Clean alphanumeric words keep the exact prior behavior
+   (capitalize), so already-generated names are unchanged."
   [s]
   (let [name-str (str s)
-        special? (fn [w] (some (fn [ch] (contains? go-export-munge-map ch)) w))
+        alnum?   (fn [ch] (let [c (int ch)]
+                            (or (and (>= c 97) (<= c 122))    ; a-z
+                                (and (>= c 65) (<= c 90))     ; A-Z
+                                (and (>= c 48) (<= c 57))     ; 0-9
+                                (= c 95))))                   ; _ (legal Go ident char)
+        special? (fn [w] (some (fn [ch] (or (contains? go-export-munge-map ch)
+                                            (not (alnum? ch)))) w))
         cap-word (fn [w]
                    (if (special? w)
                      (apply str
                             (map-indexed
                               (fn [i ch]
                                 (or (get go-export-munge-map ch)
-                                    (if (zero? i)
-                                      (clojure.string/upper-case (str ch))
-                                      (str ch))))
+                                    (cond
+                                      (not (alnum? ch)) (format "U%04X" (int ch))
+                                      (zero? i)         (clojure.string/upper-case (str ch))
+                                      :else             (str ch))))
                               w))
                      (clojure.string/capitalize w)))]
     (let [pascal (clojure.string/join "" (map cap-word (clojure.string/split name-str #"-")))]
-      ;; A non-empty result always starts with an uppercase letter (munge tokens
-      ;; and capitalize both do; a leading `-` only drops an empty first segment),
-      ;; so the ONLY way to get an illegal Go identifier is an all-separator name
-      ;; (e.g. a public fn literally named `-`) collapsing to "". Guard it with the
-      ;; design's LG_ last-resort — `LG_<go-name>` is always exported (leading L)
-      ;; and a valid identifier. Untriggered by the current corpus (verified), so
-      ;; every real name keeps its exact PascalCase; this just replaces a confusing
-      ;; empty-identifier `go build` failure with a defined, legal name.
+      ;; A non-empty result always starts with an uppercase letter (munge tokens,
+      ;; U<hex> escapes, and capitalize all do), so the ONLY way to get an illegal
+      ;; identifier is an all-separator name (e.g. a public fn literally named `-`)
+      ;; collapsing to "". Guard it with the LG_ last-resort — `LG_<go-name>` is
+      ;; always exported and valid. Untriggered by the current corpus (verified).
       (if (pos? (count pascal)) pascal (str "LG_" (go-name s))))))
+
+(defn go-export-name
+  "Exported Go name for s, honoring the active namespace's collision-resolution
+   overrides (*export-name-overrides*). Falls back to the plain PascalCase."
+  [s]
+  (or (get *export-name-overrides* (str s))
+      (go-export-name* s)))
+
+(defn- form-export-name
+  "Source-name string of a top-level form that becomes an EXPORTED Go identifier
+   (public defn / deftype / defprotocol / defmulti), else nil. defn- and ^:private
+   defns stay package-private (go-name, never go-export-name), so they never enter
+   the exported-name space and can't collide there."
+  [form]
+  (when (seq? form)
+    (let [head (first form)
+          nm   (second form)]
+      (cond
+        (= head 'defn)        (when-not (:private (meta nm)) (str nm))
+        (= head 'deftype)     (str nm)
+        (= head 'defprotocol) (str nm)
+        (= head 'defmulti)    (str nm)
+        :else nil))))
+
+(defn build-export-name-map
+  "Deterministic {source-name -> resolved exported Go name} for a namespace's forms.
+   PascalCase is not injective (vector? and vector-qmark both -> VectorQmark), so
+   when distinct source names claim the same identifier the FIRST in source order
+   keeps it and each later one gets a collision-free suffix (the injective safe
+   munge, go-name). No collisions -> every name maps to its plain PascalCase, so a
+   collision-free namespace is byte-identical to running without a map."
+  [forms]
+  (:map
+    (reduce
+      (fn [acc nm]
+        (if (contains? (:map acc) nm)
+          acc
+          (let [base     (go-export-name* nm)
+                claimed  (:claimed acc)
+                resolved (if (contains? claimed base)
+                           (loop [cand (str base "_" (go-name nm))]
+                             (if (contains? claimed cand) (recur (str cand "_")) cand))
+                           base)]
+            {:map     (assoc (:map acc) nm resolved)
+             :claimed (conj claimed resolved)})))
+      {:map {} :claimed #{}}
+      (keep form-export-name forms))))
 
 (defn lower-method [f recv-type method-name]
   "Lower an already-built+optimized IR fn as a Go receiver method using the

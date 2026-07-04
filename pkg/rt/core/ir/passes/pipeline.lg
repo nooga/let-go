@@ -983,6 +983,9 @@
               ir.passes.typeinfer/*deftype-ctor-types* (when (seq ctor-types) ctor-types)
               lower-go/*deftype-ctors* (when (seq ctors) ctors)
               lower-go/*protocol-methods* (when (seq protocol-method-set) protocol-method-set)
+              ;; Resolve non-injective PascalCase export collisions deterministically;
+              ;; the identical pure map is bound in collect-ns-exports (registry side).
+              lower-go/*export-name-overrides* (lower-go/build-export-name-map forms)
               lower-go/*protocol-method-sigs* (let [s (protocol-method-sigs deftypes)]
                                                 (when (seq s) s))]
       (let [;; Native decls for captured protocols (interface) and deftypes
@@ -1229,7 +1232,10 @@
    call resolves to `pkg.Conj(ec,…)`. :refs are the cross-ns callees it references
    (same-ns calls filtered — those resolve intra-package with no import)."
   (binding [*ns* (the-ns ns-sym)
-            ir.passes.typeinfer/*typeinfer-budget-ms* nil]
+            ir.passes.typeinfer/*typeinfer-budget-ms* nil
+            ;; Same pure map bound in lower-ns-to-go so the registry's :go-name and
+            ;; the emitted decl agree on a collision-resolved export name.
+            lower-go/*export-name-overrides* (lower-go/build-export-name-map forms)]
     (let [cross   (atom {})
           results (binding [lower-go/*cross-ns-vars-used* cross]
                     (lower-defn-forms (order-defn-forms forms)))

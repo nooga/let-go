@@ -111,8 +111,12 @@ func TestCrossPackageCyclicEdgesStayTrampolined(t *testing.T) {
 	if !ok1 || !ok2 {
 		t.Fatalf("expected two source strings, got %T and %T", caV, cbV)
 	}
-	caImportsCb := strings.Contains(string(ca), "cycb.LG_")
-	cbImportsCa := strings.Contains(string(cb), "cyca.LG_")
+	// A cross-package DIRECT call now emits `pkg.<PascalCase>(` (public fns are
+	// their own exported name — the `LG_` forwarding prefix was removed). Grep the
+	// real direct-call form so a regressed acyclic guard (both directions emitting
+	// direct calls → Go import cycle) still trips this test.
+	caImportsCb := strings.Contains(string(ca), "cycb.FromB(")
+	cbImportsCa := strings.Contains(string(cb), "cyca.FromA(")
 	if caImportsCb && cbImportsCa {
 		t.Fatalf("mutual cross-package direct calls form a Go import cycle:\n--- cyca ---\n%s\n--- cycb ---\n%s", ca, cb)
 	}
