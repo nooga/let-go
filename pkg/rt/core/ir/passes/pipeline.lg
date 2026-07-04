@@ -503,6 +503,21 @@
 ;; When set to :go, compile-form* routes through ir.lower-go instead of ir.lower.
 ;; Set this before calling compile-form to generate Go-lowered output.
 
+;; Lowering strategy registry — one entry per backend. A strategy takes the
+;; optimized interim IR (`ir-fn`) and returns the backend's NATIVE lowered
+;; value: :bytecode -> a CodeChunk; :go -> {:status :lowered :decl …}. This is
+;; the single seam compile-form* dispatches through and the composite fans out.
+(def lowerings
+  {:bytecode (fn [ir-fn] (lower/lower ir-fn))
+   :go       (fn [ir-fn] (lower-go/lower ir-fn :bridge))})
+
+;; Composite: run every registered lowering strategy against ONE shared
+;; interim IR. The emitter (Spec 2) uses this so the IR pane and both lowering
+;; panes are projections of the same IR (no second build/optimize, no
+;; gensym-nondeterminism divergence).
+(defn lower-fn-all [ir-fn]
+  (into {} (map (fn [[k s]] [k (s ir-fn)]) lowerings)))
+
 (defn- compile-form* [form]
   "Drives (defn NAME [args] body...) through expand → build → optimize → lower.
    Body forms are macroexpanded; defn and the args vector are passed through
@@ -574,14 +589,20 @@
               _          (when ir.passes.inline/*enable-inline*
                            (swap! *runtime-defn-ir-cache*
                                   assoc-in [(str (ns-name *ns*)) (str name-sym)] built))]
+          ;; Target-specific orchestration (lambda-lift for :go, fold-outline for
+          ;; :bytecode) wraps the actual lowering — but the lowering itself is
+          ;; DELEGATED to the `lowerings` strategy registry via *target* (#387's
+          ;; single seam). So both features coexist: the registry is the one place
+          ;; a target's IR→native lowering happens, and the orchestration around
+          ;; it stays target-specific where it must be.
           (if go-target?
             ;; Wire lambda-lift: thread lifted siblings through compile pipeline
             (let [{:keys [main lifted]} (ir.passes.lambda-lift/lambda-lift built)
-                  lower1 (fn [g] (let [r (lower-go/lower (optimize-fn g) :bridge)]
+                  lower1 (fn [g] (let [r ((lowerings :go) (optimize-fn g))]
                                    (if (= :lowered (:status r)) {:fn (:decl r)} r)))]
               (if (empty? lifted)
                 ;; No lifted siblings: return single-decl result unchanged
-                (lower-go/lower (optimize-fn main) :bridge)
+                ((lowerings :go) (optimize-fn main))
                 ;; Has lifted siblings: return multi-fn-template for flatten path
                 {:kind :multi-fn-template
                  :fns (into [(lower1 main)] (mapv lower1 lifted))}))
@@ -602,7 +623,7 @@
                                  ir.passes.inline/*inline-registry*)]
                   (when (seq registry)
                     (fold-outline! built registry))))
-              (lower/lower (optimize-fn built)))))
+              ((lowerings :bytecode) (optimize-fn built)))))
         ;; Multi-arity: build each arity separately, combine
         (let [arities   (drop (if has-doc? 3 2) form)]
           (if go-target?
@@ -619,7 +640,7 @@
                                              ;; (not a dynamic var) so it survives native lowering.
                                              _          (swap! ir-fn assoc :multi-arity? true
                                                           :private? private?)
-                                             result     (lower-go/lower ir-fn :bridge)]
+                                             result     ((lowerings :go) ir-fn)]
                                          (if (= :lowered (:status result))
                                            ;; Keep :fn (the decl) for existing consumers
                                            ;; (lower-defn-forms flatten, lower-template-closure-expr)
@@ -638,10 +659,8 @@
                                     (let [args-vec   (first arity-form)
                                           body-forms (map expand-all (rest arity-form))
                                           expanded   (apply list 'defn name-sym args-vec body-forms)
-                                          chunk      (-> expanded
-                                                         ir.build/build-fn
-                                                         optimize-fn
-                                                         lower/lower)]
+                                          ir-fn      (-> expanded ir.build/build-fn optimize-fn)
+                                          chunk      ((lowerings :bytecode) ir-fn)]
                                       (chunk->fn (count args-vec) false chunk)))
                                   arities)]
               (make-multi-arity (apply list fn-vals)))))))))
