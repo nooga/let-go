@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-06-05
+last-verified: 2026-07-05
 authoritative-for:
   - clojure-test-suite-workflow
 human-verified: 2026-06-07
@@ -24,6 +24,20 @@ The TOTALS line in verbose output shows the key metrics:
 ```
 files=105 assertions: pass=3530 fail=454 | skipped: compile=115 panic=0 runtime=1
 ```
+
+## Native lowering coverage (`make jank-stress`)
+
+`TestClojureTestSuite` above measures *runtime conformance* — does the suite run correctly (interpreted), assertion-by-assertion. A separate axis measures *native-lowering coverage* — how many of the suite's fixtures the AOT pipeline can lower to native Go (`gogen_ir`), rather than falling back to interpretation.
+
+```bash
+make jank-stress    # lower-go AOT over the suite's deftest bodies; prints :ok/:fail per fixture + buckets
+```
+
+Fixtures are the macro-generated test fns (`deftest` bodies), enumerated by the pipeline's canonical `ir.passes.pipeline/lowerable-fn-forms` (siblings pre-declared via `defined-names`) — so the number tracks what production lowering covers, not a harness-private notion.
+
+**Current: 273/273 (100%), 0 failures (verified 2026-07-05).** The suite lowers fully; the earlier 65% baseline (2026-06-23) and its failure buckets — float `unrecognized form` in `are`/`is` bodies, ratios, BigDecimal, `#uuid`, `gogen/func-decl` ExceptionInfo, `nth` build/typeinfer — have all been closed.
+
+**Regression gate:** any failure (`:ok` < 273) is a regression. A newly-surfaced failure after a lowering change is a *discovered gap* — record it with its bucket, don't silently absorb.
 
 ## Architecture
 
