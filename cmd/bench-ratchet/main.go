@@ -188,9 +188,21 @@ func main() {
 		mode = flag.Arg(0)
 	}
 	switch mode {
-	case "check", "update", "show", "capture", "aggregate", "snapshot":
+	case "check", "update", "show", "capture", "aggregate", "snapshot", "machine-key":
 	default:
-		die("unknown mode %q (want check / update / show / capture / aggregate / snapshot)", mode)
+		die("unknown mode %q (want check / update / show / capture / aggregate / snapshot / machine-key)", mode)
+	}
+
+	// machine-key: print the canonical machine token ("<arch>-<cpumodel>",
+	// slugified) and exit — no benchmarks. The perf-timeline workflow uses it
+	// to name timeline snapshots so two machine classes that share a GOARCH
+	// (e.g. Apple M1 vs M2, both arm64) get DISTINCT filenames and cannot
+	// overwrite each other's snapshot on the perf-data branch. Keeping this
+	// here (vs a shell reimplementation) makes the filename dimension track the
+	// exact "<arch>/<CPUModel>" partition the timeline groups snapshots by.
+	if mode == "machine-key" {
+		fmt.Println(machineKey())
+		return
 	}
 
 	// aggregate-only mode reads an existing .jsonl, no benchmarks run.
@@ -1020,6 +1032,43 @@ func detectCPUModel() string {
 		}
 	}
 	return "unknown"
+}
+
+// machineKey returns a filesystem-safe token identifying the machine CLASS a
+// snapshot belongs to. It slugifies perfdata.MachineKey (the exact
+// "<arch>/<CPUModel>" key the timeline groups snapshots by), so the filename
+// dimension is derived from — and stays in lockstep with — the content
+// partition. Machines that share a GOARCH but differ in CPU (Apple M1 vs M2 —
+// both arm64) therefore get DISTINCT filenames and never overwrite one
+// another's snapshot on the perf-data branch. Arch is runtime.GOARCH (matching
+// the snapshot content), not `uname -m`, so filename and content agree.
+func machineKey() string {
+	key := slugify(perfdata.MachineKey(detectMachine()))
+	if key == "" {
+		return "unknown"
+	}
+	return key
+}
+
+// slugify lowercases s and collapses each run of non-[a-z0-9] characters into a
+// single '-', trimming leading/trailing dashes. Deterministic and stable for a
+// given CPU model string.
+func slugify(s string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func gitShortSHA() string {

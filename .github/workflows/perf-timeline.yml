@@ -86,10 +86,30 @@ jobs:
           commit_epoch="$(git show -s --format=%ct HEAD)"
           # GNU date (Linux) uses -d @epoch; BSD date (macOS) uses -r epoch.
           stamp="$(date -u -r "${commit_epoch}" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -d "@${commit_epoch}" +%Y%m%dT%H%M%SZ)"
-          # Tag the filename with arch so amd64 and arm64 snapshots of the SAME
-          # commit don't collide on one name (x86_64 / arm64).
-          arch="$(uname -m)"
-          snapshot_name="${stamp}-${short_sha}-${arch}.json"
+          # Tag the filename with the canonical machine key ("<arch>-<cpumodel>")
+          # so snapshots of the SAME commit from different machine classes never
+          # collide on one name. `uname -m` alone is NOT enough: Apple M1 and M2
+          # (and future arm parts) all report `arm64`, so an arm-only key would
+          # let an M2 run overwrite an M1 run — and vice-versa — for a commit.
+          # bench-ratchet derives the token from the same <arch>/<CPUModel> the
+          # timeline partitions on (arch = GOARCH, model via sysctl / cpuinfo),
+          # keeping the filename dimension in lockstep with the snapshot content.
+          machine_key="$(go run ./cmd/bench-ratchet machine-key 2>/dev/null || true)"
+          if [ -z "${machine_key}" ]; then
+            # Backfill checks out old release tags whose bench-ratchet predates
+            # the `machine-key` subcommand. Derive the same slug in shell so
+            # backfilled snapshots stay collision-safe across machine classes.
+            arch="$(go env GOARCH)"
+            if [ "$(uname -s)" = "Darwin" ]; then
+              model="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo)"
+            else
+              model="$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -1)"
+            fi
+            machine_key="$(printf '%s-%s' "${arch}" "${model}" \
+              | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed -E 's/-+/-/g; s/^-+//; s/-+$//')"
+            [ -n "${machine_key}" ] || machine_key="unknown"
+          fi
+          snapshot_name="${stamp}-${short_sha}-${machine_key}.json"
           snapshot_tmp="${RUNNER_TEMP}/${snapshot_name}"
           raw_tmp="${RUNNER_TEMP}/${snapshot_name%.json}.jsonl"
 

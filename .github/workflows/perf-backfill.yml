@@ -49,8 +49,10 @@ jobs:
           remote="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
 
           # Existing timeline snapshots (filenames embed the short SHA:
-          # <stamp>-<sha>[-<arch>].json). Clone perf-data shallow; tolerate the
-          # branch not existing yet.
+          # <stamp>-<sha>-<machine-key>.json, where machine-key is
+          # "<arch>-<cpumodel>"). We only match on the SHA below, so the
+          # machine-key suffix doesn't affect detection. Clone perf-data
+          # shallow; tolerate the branch not existing yet.
           if git clone --depth 1 --branch perf-data "$remote" /tmp/pd 2>/dev/null; then
             ls /tmp/pd/timeline 2>/dev/null > /tmp/existing.txt || : > /tmp/existing.txt
           else
@@ -65,8 +67,9 @@ jobs:
             # just bytecode-only, with no gogen_ir/aot_native variants.
             git cat-file -e "${tag}:pkg/vm/bench_ratchet_anchor_test.go" 2>/dev/null || continue
             sha="$(git rev-parse --short=12 "${tag}^{commit}")"
-            # A single perf-timeline dispatch produces both amd64 + arm64
-            # snapshots, so "any snapshot carrying this SHA" means done.
+            # A single perf-timeline dispatch produces one snapshot per machine
+            # leg (amd64 + arm64, distinct machine-keys), all carrying this SHA,
+            # so "any snapshot carrying this SHA" means done.
             if grep -q -- "-${sha}" /tmp/existing.txt; then
               continue
             fi

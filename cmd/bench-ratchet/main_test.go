@@ -59,6 +59,36 @@ func TestAggregateFromFileRetainsSamples(t *testing.T) {
 	}
 }
 
+func TestSlugifyIsFilesystemSafeAndStable(t *testing.T) {
+	cases := map[string]string{
+		"arm64/Apple M1": "arm64-apple-m1",
+		"arm64/Apple M2": "arm64-apple-m2",
+		"arm64/Apple M3": "arm64-apple-m3",
+		"amd64/Intel(R) Xeon(R) Platinum 8275CL CPU @ 3.00GHz": "amd64-intel-r-xeon-r-platinum-8275cl-cpu-3-00ghz",
+		"  weird//name  ": "weird-name",
+	}
+	for in, want := range cases {
+		if got := slugify(in); got != want {
+			t.Errorf("slugify(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The whole point of the machine key in the snapshot filename: M1 and M2 both
+// report GOARCH arm64, so a uname-based key would collide. Slugifying the
+// <arch>/<CPUModel> partition key keeps them distinct.
+func TestMachineKeyDistinguishesSameArchDifferentCPU(t *testing.T) {
+	m1 := perfdata.MachineKey(Machine{OS: "darwin", Arch: "arm64", CPUModel: "Apple M1"})
+	m2 := perfdata.MachineKey(Machine{OS: "darwin", Arch: "arm64", CPUModel: "Apple M2"})
+	s1, s2 := slugify(m1), slugify(m2)
+	if s1 == s2 {
+		t.Fatalf("M1 and M2 slugify to the same key %q — snapshots would collide", s1)
+	}
+	if s1 != "arm64-apple-m1" || s2 != "arm64-apple-m2" {
+		t.Fatalf("unexpected slugs: M1=%q M2=%q", s1, s2)
+	}
+}
+
 func TestWriteBaselineWritesAtomicallyReadableJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "baseline.json")
 	mach := Machine{OS: "darwin", Arch: "arm64", CPUModel: "Apple M3"}
