@@ -715,6 +715,9 @@ func (f *Frame) Run() (Value, error) {
 					ff := fn.(*Func)
 					// Package variadic args for direct frame reuse
 					if ff.isVariadric {
+						if len(a) < ff.arity-1 {
+							return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", ff, ff.arity-1, len(a)))
+						}
 						sargs := a[0 : ff.arity-1]
 						rest := a[ff.arity-1:]
 						restlist, boxErr := ListType.Box(rest)
@@ -773,6 +776,16 @@ func (f *Frame) Run() (Value, error) {
 					return out, nil
 				} else {
 					ff := fn.(*Func)
+					// Package the empty rest list for variadic functions,
+					// exactly like the arity > 0 path above; without it the
+					// reused frame runs LOAD_ARG against zero args.
+					var a []Value
+					if ff.isVariadric {
+						if ff.arity > 1 {
+							return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got 0", ff, ff.arity-1))
+						}
+						a = []Value{EmptyList}
+					}
 					f.code = ff.chunk
 					f.consts = f.code.consts
 					f.constsc = f.code.consts.count()
@@ -781,8 +794,8 @@ func (f *Frame) Run() (Value, error) {
 					if len(f.stack) < f.code.maxStack {
 						f.stack = make([]Value, f.code.maxStack)
 					}
-					f.argc = 0
-					f.args = nil
+					f.args = a
+					f.argc = len(a)
 					continue
 				}
 			}
