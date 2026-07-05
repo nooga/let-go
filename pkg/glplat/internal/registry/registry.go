@@ -20,6 +20,7 @@ type Backend interface {
 	SubmitTriangles(tex int, verts []float64) error
 	PollInputEvents() []string
 	WindowSize() (w, h int)
+	Screenshot(path string) error
 }
 
 // backend holds the current platform backend instance.
