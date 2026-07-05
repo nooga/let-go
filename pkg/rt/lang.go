@@ -472,6 +472,15 @@ func MarkNSNeedsLoad(name string) {
 	nsNeedsLoad[name] = true
 }
 
+// ClearNSNeedsLoad removes the needs-load flag — used after a namespace's
+// precompiled chunk has been executed eagerly (hybrid native+bundled
+// namespaces; see compiler.loadPrecompiledBundle).
+func ClearNSNeedsLoad(name string) {
+	nsMu.Lock()
+	defer nsMu.Unlock()
+	delete(nsNeedsLoad, name)
+}
+
 // LookupNS returns a namespace if it exists, nil otherwise. Does not create.
 // lookupNSCached returns a namespace from the registry without invoking the loader.
 // Used by the VM's qualified symbol resolver to avoid triggering loads on every miss.
@@ -3753,16 +3762,20 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf(">! expected Chan")
 		}
-		// Select on the registry context so a put parked on a full/unread
+		// putWithPolicy (async.go) honors dropping/sliding buffers, returns
+		// false on a closed channel (core.async parity — no panic), and
+		// selects on the registry context so a put parked on a full/unread
 		// channel — e.g. inside a (go ...) block — is released by a
 		// CancelAll/Drain on shutdown instead of leaking the goroutine.
 		// Cancellation returns nil (the put did not complete).
-		select {
-		case ch <- vs[1]:
-			return vm.TRUE, nil
-		case <-ec.Context().Done():
+		accepted, cancelled := putWithPolicy(ec.Context(), ch, vs[1])
+		if cancelled {
 			return vm.NIL, nil
 		}
+		if accepted {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
 	})
 
 	changet := vm.NewCtxNativeFn("<!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {

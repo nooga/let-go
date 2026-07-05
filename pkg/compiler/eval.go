@@ -111,6 +111,17 @@ func evalInit() {
 }
 
 func loadPrecompiledBundle() error {
+	// Namespaces that exist BEFORE decode are native-backed (installers run
+	// at package init). If the bundle also carries a chunk for one of them
+	// — a HYBRID namespace like async (native fns + lg-source macros) —
+	// lazy loading is broken for it: qualified symbol resolution finds the
+	// already-registered ns and its decoded nil stubs without ever
+	// triggering the loader. Those chunks must run eagerly (below).
+	preexisting := map[string]bool{}
+	for name := range rt.AllNSes() {
+		preexisting[name] = true
+	}
+
 	resolve := func(nsName, name string) *vm.Var {
 		// Use DefNSBare to create minimal namespaces without triggering
 		// the loader. This ensures vars have a home namespace but the
@@ -170,6 +181,26 @@ func loadPrecompiledBundle() error {
 			if name != "core" {
 				rt.MarkNSNeedsLoad(name)
 			}
+		}
+		// Eagerly execute chunks of hybrid namespaces (native + bundled lg
+		// source): their vars are reachable via qualified symbols without a
+		// (require ...), so lazy loading would leave the bundle-defined
+		// vars as nil stubs. The loader isn't configured yet at this point
+		// (api.NewContext sets it later), so run the chunk directly, the
+		// same way the core main chunk runs above. Note: a hybrid chunk
+		// that :requires another lazy bundled ns would load it too early
+		// here — fine for today's hybrids (async: macros over core only).
+		for name, ch := range precompiledNS {
+			if name == "core" || !preexisting[name] || ch == nil {
+				continue
+			}
+			f := vm.NewFrame(ch, nil)
+			_, err := f.RunProtected()
+			vm.ReleaseFrame(f)
+			if err != nil {
+				return err
+			}
+			rt.ClearNSNeedsLoad(name)
 		}
 	}
 
