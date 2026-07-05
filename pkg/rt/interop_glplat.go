@@ -299,6 +299,20 @@ func wrapGlplatSaveGlyphAtlasPNG(vs []vm.Value) (vm.Value, error) {
 	return vm.NIL, nil
 }
 
+func wrapGlplatScreenshot(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("glplat/Screenshot: expected 1 arg, got %d", len(vs))
+	}
+	pathStr, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("glplat/Screenshot: arg 0 must be String, got %s", vs[0].Type().Name())
+	}
+	if err := glplat.Screenshot(string(pathStr)); err != nil {
+		return vm.NIL, err
+	}
+	return vm.NIL, nil
+}
+
 func installGlplatNS() {
 	ns := vm.NewNamespace("glplat")
 
@@ -355,6 +369,9 @@ func installGlplatNS() {
 
 	saveGlyphAtlasPNGFn, _ := vm.NativeFnType.Wrap(wrapGlplatSaveGlyphAtlasPNG)
 	ns.Def("SaveGlyphAtlasPNG", saveGlyphAtlasPNGFn)
+
+	screenshotFn, _ := vm.NativeFnType.Wrap(wrapGlplatScreenshot)
+	ns.Def("Screenshot", screenshotFn)
 
 	RegisterNS(ns)
 }
