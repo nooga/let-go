@@ -335,6 +335,37 @@ func (b *Backend) SubmitTriangles(texID int, verts []float64) error {
 	return nil
 }
 
+// Screenshot reads the current framebuffer (back buffer — call after
+// rendering, BEFORE EndFrame swaps) and writes it as PNG.
+func (b *Backend) Screenshot(path string) error {
+	if b.window == nil {
+		return fmt.Errorf("Screenshot: no window")
+	}
+	fbW, fbH := b.window.GetFramebufferSize()
+	pixels := make([]byte, fbW*fbH*4)
+	gl.ReadPixels(0, 0, int32(fbW), int32(fbH), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
+
+	img := image.NewRGBA(image.Rect(0, 0, fbW, fbH))
+	// GL rows are bottom-up; flip into the image's top-down layout.
+	rowLen := fbW * 4
+	for y := 0; y < fbH; y++ {
+		src := pixels[(fbH-1-y)*rowLen : (fbH-y)*rowLen]
+		dst := img.Pix[y*img.Stride : y*img.Stride+rowLen]
+		copy(dst, src)
+	}
+	// Force opaque alpha (the framebuffer's alpha channel is meaningless here).
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 255
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("Screenshot: %w", err)
+	}
+	defer f.Close()
+	return png.Encode(f, img)
+}
+
 func (b *Backend) PollInputEvents() []string {
 	b.eventMu.Lock()
 	events := b.eventQueue

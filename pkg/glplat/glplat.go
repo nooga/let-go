@@ -152,6 +152,16 @@ func WindowSize() (w, h int) {
 	return backend.WindowSize()
 }
 
+// Screenshot writes the current framebuffer to a PNG file. Call after
+// submitting geometry and BEFORE EndFrame (which swaps buffers).
+func Screenshot(path string) error {
+	backend := registry.Get()
+	if backend == nil {
+		return errNoBackend("Screenshot")
+	}
+	return backend.Screenshot(path)
+}
+
 // errNoBackend returns an error when no backend is registered.
 func errNoBackend(op string) error {
 	return &backendError{op: op}
