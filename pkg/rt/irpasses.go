@@ -35,6 +35,12 @@ var IRPassLICMSrc string
 //go:embed core/ir/passes/infer_arg_types.lg
 var IRPassInferArgTypesSrc string
 
+//go:embed core/ir/passes/lambda_lift.lg
+var IRPassLambdaLiftSrc string
+
+//go:embed core/ir/passes/inline.lg
+var IRPassInlineSrc string
+
 //go:embed core/ir/passes/pipeline.lg
 var IRPassPipelineSrc string
 

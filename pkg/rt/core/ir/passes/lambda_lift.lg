@@ -1,0 +1,79 @@
+;; lambda-lift.lg — Hoisting inner fn literals to top-level siblings.
+;; Part of let-go; see CONTRIBUTORS for full list of authors.
+;; SPDX-License-Identifier: MIT
+
+(ns ir.passes.lambda-lift
+  (:require
+   [ir.data]))
+
+(defn- fn-template? [nid f]
+  "True iff nid is a :const holding an inner fn template
+   {:kind :fn-template :fn <Function> ...} (Phase 0 finding #2)."
+  (and (= :const (ir/op nid f))
+       (let [a (ir/aux nid f)]
+         (and (map? a) (= :fn-template (:kind a))))))
+
+(defn- template-nids [f]
+  "InstIds of fn-template :const ops, in structural (block then inst) order."
+  (vec (for [bid (ir/blocks f)
+             nid (ir/block-insts bid f)
+             :when (fn-template? nid f)]
+         nid)))
+
+(defn- template-fn [f template-const]
+  "Resolve the inner Function atom held in the template :const's aux map.
+   aux = {:kind :fn-template :fn <Atom Function> :arity N :variadic? b} (Phase 0)."
+  (:fn (ir/aux template-const f)))
+
+(defn- load-closed-indices [inner-f]
+  "Extract distinct :load-closed capture indices from the inner function's instructions."
+  (vec (distinct
+         (for [bid (ir/blocks inner-f)
+               nid (ir/block-insts bid inner-f)
+               :when (= :load-closed (ir/op nid inner-f))]
+           (ir/aux nid inner-f)))))
+
+(defn candidate-info [f]
+  "For each fn-template :const, record it along with capture indices.
+   The const IS the template anchor (Phase 0 finding #4);
+   capturing closures additionally feed it into a :make-closure,
+   capture-free ones use it directly. :captures holds distinct :load-closed indices."
+  (vec (for [nid (template-nids f)]
+         (let [inner (template-fn f nid)]
+           {:template-const nid
+            :inner inner
+            :captures (if inner (load-closed-indices inner) [])}))))
+
+(defn- lift-sibling [f outer-name ordinal cand]
+  "Capture-free: take the template's inner Function (cand :inner) as a top-level
+   sibling with a deterministic name. The inner Function already has the right
+   blocks/insts/arity; just rename it."
+  (let [inner (:inner cand)
+        nm    (str outer-name "__lifted" ordinal)]
+    (swap! inner assoc :name nm)
+    inner))
+
+(defn- rewrite-site! [f cand sibling-name]
+  "Capture-free: the fn-template :const becomes a :load-var of the sibling.
+   Keeping the same nid means all consumers (the name*/applier Call args)
+   keep referencing it with no further rewrite."
+  (let [nid (:template-const cand)]
+    (ir/replace-op! f nid :load-var)
+    (ir/set-refs!   f nid [])
+    (ir/set-aux!    f nid (symbol sibling-name))))
+
+(defn lambda-lift [f]
+  "Hoist inner fn literals to top-level siblings. Returns {:main f :lifted [...]}.
+   Minimal form: no candidates → identity."
+  (let [cands (candidate-info f)]
+    (if (empty? cands)
+      {:main f :lifted []}
+      (let [outer (str (ir/fn-name f))
+            free  (filter (fn [c] (empty? (:captures c))) cands)
+            lifted (vec (map-indexed
+                          (fn [i c]
+                            (let [g (lift-sibling f outer i c)]
+                              (rewrite-site! f c (str (ir/fn-name g)))
+                              g))
+                          free))]
+        {:main f :lifted lifted}))))
