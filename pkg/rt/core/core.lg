@@ -114,8 +114,10 @@
     (cond (= l 0) nil
           ;; this is an error
           (= l 1) (first forms)
+          ;; Clojure calls the predicate as (pred test-val expr), so
+          ;; e.g. (condp instance? x Type ...) works.
           :else   (list 'if
-                        (list comparator arg (first forms))
+                        (list comparator (first forms) arg)
                         (second forms)
                         (cons 'condp (cons comparator (cons arg (next (next forms)))))))))
 
