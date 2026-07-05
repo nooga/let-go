@@ -398,6 +398,31 @@
     (invalidate-uses-state! f)
     new-id))
 
+(defn move-inst! [f nid to-bid]
+  "Re-home a non-terminator inst nid to block to-bid, PRESERVING its InstId (so
+   all refs to nid stay valid). Removes nid from its current block's :insts and
+   appends to to-bid's :insts. Refs are unchanged, so the uses cache is unaffected."
+  (let [from (nth (nth (:insts @f) nid) 3)]
+    (swap! f update-in [:blocks from :insts]
+           (fn [insts] (vec (remove (fn [x] (= x nid)) insts))))
+    (swap! f assoc-in [:insts nid 3] to-bid)
+    (swap! f update-in [:blocks to-bid :insts] conj nid)))
+
+(defn reparent-terminator! [f from-bid to-bid]
+  "Move from-bid's terminator inst to become to-bid's terminator; clear from-bid's
+   :term. Does NOT touch CFG preds — the caller fixes those. Returns the term nid."
+  (let [term (:term (nth (:blocks @f) from-bid))]
+    (when term
+      (swap! f assoc-in [:insts term 3] to-bid)
+      (swap! f assoc-in [:blocks to-bid :term] term)
+      (swap! f assoc-in [:blocks from-bid :term] nil))
+    term))
+
+(defn replace-block-pred! [f bid old-pred new-pred]
+  "In block bid's :preds, replace every old-pred with new-pred."
+  (swap! f update-in [:blocks bid :preds]
+         (fn [ps] (vec (map (fn [p] (if (= p old-pred) new-pred p)) ps)))))
+
 ;; --- def→use index ---------------------------------------------------
 
 ;; --- uses-cache build ------------------------------------------------
@@ -547,6 +572,7 @@
                replace-op! set-refs! set-aux! set-type!
                cond-target-set-true! cond-target-set-false!
                remove-inst! replace-all-uses! clone-inst
+               move-inst! reparent-terminator! replace-block-pred!
                uses invalidate-uses!
                uses-empty? uses-for-each uses-contains?
                uses-count uses-first]]

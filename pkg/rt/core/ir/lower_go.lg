@@ -597,7 +597,7 @@
           (when memo (swap! memo assoc nid r))
           r)))))
 
-(defn- closure-info
+(defn closure-info
   "Resolve the closure a value refers to: {:template <aux> :captures [nid …]}
    or nil. Walks make-closure/push-closed and follows block-parameter lineage
    so closures threaded through a loop header still resolve (captures on
