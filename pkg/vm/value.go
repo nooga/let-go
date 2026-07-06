@@ -76,6 +76,14 @@ type Lookup interface {
 	ValueAtOr(Value, Value) Value
 }
 
+// KeywordLookup is an optional fast path for keyword-keyed lookup that avoids
+// boxing the Keyword into a Value interface (type Keyword string boxes on
+// interface conversion — a heap alloc). Keyword.Invoke prefers it when present.
+type KeywordLookup interface {
+	ValueAtKeyword(k Keyword) Value
+	ValueAtKeywordOr(k Keyword, dflt Value) Value
+}
+
 // Indexed marks positional collections — those whose elements are addressed by
 // a 0-based integer index, as opposed to maps/sets (key-addressable) and lazy
 // seqs (sequential-only). `nth` dispatches on this to use an O(1)-ish indexed

@@ -42,6 +42,7 @@ var PersistentMapType *thePersistentMapType = &thePersistentMapType{}
 // hmapNode is the internal node interface for the HAMT.
 type hmapNode interface {
 	find(shift uint, hash uint32, key Value) (Value, bool)
+	findKeyword(shift uint, hash uint32, k Keyword) (Value, bool)
 	assoc(shift uint, hash uint32, key Value, val Value, addedLeaf *bool) hmapNode
 	dissoc(shift uint, hash uint32, key Value) hmapNode
 	nodeSeq() []MapEntry
@@ -152,6 +153,25 @@ func (n *hmapBitmapNode) find(shift uint, hash uint32, key Value) (Value, bool) 
 		return valOrNode.(hmapNode).find(shift+hmapShift, hash, key)
 	}
 	if valueEquiv(key, keyOrNil.(Value)) {
+		return valOrNode.(Value), true
+	}
+	return nil, false
+}
+
+func (n *hmapBitmapNode) findKeyword(shift uint, hash uint32, k Keyword) (Value, bool) {
+	bit := hmapBitpos(hash, shift)
+	if n.bitmap&bit == 0 {
+		return nil, false
+	}
+	idx := hmapIndex(n.bitmap, bit)
+	keyOrNil := n.array[2*idx]
+	valOrNode := n.array[2*idx+1]
+	if keyOrNil == nil {
+		return valOrNode.(hmapNode).findKeyword(shift+hmapShift, hash, k)
+	}
+	// Box-free compare: a keyword only ever equals a keyword with the same
+	// string; non-keyword stored keys (incl. hash collisions) never match.
+	if sk, ok := keyOrNil.(Keyword); ok && sk == k {
 		return valOrNode.(Value), true
 	}
 	return nil, false
@@ -445,6 +465,16 @@ func (n *hmapCollisionNode) find(shift uint, hash uint32, key Value) (Value, boo
 		return nil, false
 	}
 	return n.array[idx+1].(Value), true
+}
+
+func (n *hmapCollisionNode) findKeyword(shift uint, hash uint32, k Keyword) (Value, bool) {
+	// same linear scan as find(), comparing keys typed:
+	for i := 0; i < len(n.array); i += 2 {
+		if sk, ok := n.array[i].(Keyword); ok && sk == k {
+			return n.array[i+1].(Value), true
+		}
+	}
+	return nil, false
 }
 
 func (n *hmapCollisionNode) assoc(shift uint, hash uint32, key Value, val Value, addedLeaf *bool) hmapNode {
@@ -752,6 +782,21 @@ func (m *PersistentMap) ValueAtOr(key Value, dflt Value) Value {
 	}
 	hash := hashValue(key)
 	val, ok := m.root.find(0, hash, key)
+	if !ok {
+		return dflt
+	}
+	return val
+}
+
+func (m *PersistentMap) ValueAtKeyword(k Keyword) Value {
+	return m.ValueAtKeywordOr(k, NIL)
+}
+
+func (m *PersistentMap) ValueAtKeywordOr(k Keyword, dflt Value) Value {
+	if m.root == nil {
+		return dflt
+	}
+	val, ok := m.root.findKeyword(0, k.Hash(), k)
 	if !ok {
 		return dflt
 	}
