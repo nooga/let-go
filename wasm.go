@@ -1,3 +1,5 @@
+//go:build !runtime_only
+
 /*
  * Copyright (c) 2021-2026 Marcin Gasperowicz <xnooga@gmail.com>
  * SPDX-License-Identifier: MIT
