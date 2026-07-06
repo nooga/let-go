@@ -50,30 +50,42 @@ func (l Symbol) String() string {
 	return string(l)
 }
 
+// NamespacedRaw splits "ns/name" WITHOUT allocating: IndexByte finds the
+// separator and the two parts are substrings (which share the receiver's
+// string backing — no new allocation), returned as raw Symbols rather than
+// boxed into Value interfaces. hasNS is false for an unqualified symbol and
+// for the bare "/" symbol. This is the hot path — it does NOT touch the
+// lookup-stats mutex; the boxing Namespaced() below carries that.
+func (l Symbol) NamespacedRaw() (ns Symbol, name Symbol, hasNS bool) {
+	s := string(l)
+	if s == "/" {
+		return "", l, false
+	}
+	i := strings.IndexByte(s, '/')
+	if i < 0 {
+		return "", l, false
+	}
+	return Symbol(s[:i]), Symbol(s[i+1:]), true
+}
+
 func (l Symbol) Namespaced() (Value, Value) {
 	noteNamespaced(string(l))
-	if string(l) == "/" {
-		return NIL, l
+	ns, name, hasNS := l.NamespacedRaw()
+	if !hasNS {
+		return NIL, name
 	}
-	x := strings.SplitN(string(l), "/", 2)
-	if len(x) == 2 {
-		return Symbol(x[0]), Symbol(x[1])
-	}
-	return NIL, Symbol(x[0])
+	return ns, name
 }
 
 func (l Symbol) Name() Value {
-	_, n := l.Namespaced()
-	if n == NIL {
-		return NIL
-	}
-	return String(n.(Symbol))
+	_, name, _ := l.NamespacedRaw()
+	return String(name)
 }
 
 func (l Symbol) Namespace() Value {
-	n, _ := l.Namespaced()
-	if n == NIL {
+	ns, _, hasNS := l.NamespacedRaw()
+	if !hasNS {
 		return NIL
 	}
-	return String(n.(Symbol))
+	return String(ns)
 }

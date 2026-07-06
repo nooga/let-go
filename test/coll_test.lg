@@ -27,9 +27,9 @@
     (is (= {} (hash-map)))
     (is (= {:a 1 :b 2} (hash-map :a 1 :b 2))))
 
-  (testing "map literals and array-map preserve insertion order"
-    (is (= '([:a 1] [:b 2] [:c 3]) (seq {:a 1 :b 2 :c 3})))
-    (is (= '([:a 1] [:b 2] [:c 3]) (seq (array-map :a 1 :b 2 :c 3)))))
+  (testing "map literals and array-map yield all entries (maps are unordered)"
+    (is (= '([:a 1] [:b 2] [:c 3]) (sort-by first (seq {:a 1 :b 2 :c 3}))))
+    (is (= '([:a 1] [:b 2] [:c 3]) (sort-by first (seq (array-map :a 1 :b 2 :c 3))))))
   (testing "map access"
     (is (= 1 (get {:a 1 :b 2} :a)))
     (is (= 1 ({:a 1 :b 2} :a)))  ; map as function

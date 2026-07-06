@@ -169,14 +169,36 @@ func (l ArrayVector) Seq() Seq {
 	return &ArrayVectorSeq{vec: l, i: 0}
 }
 
-// ArrayVectorSeq is a lightweight seq view over an ArrayVector
+// ArrayVectorSeq is a lightweight seq view over an ArrayVector.
+//
+// Chunk sizes GROW geometrically from 1 (1, 2, 4, 8, … clamped to length)
+// rather than a fixed 32 quantum. The size-1 head chunk keeps `first`/short-
+// circuit consumption element-wise (no over-realization), while the doubling
+// amortizes longer walks — the allocation-minimizing shape given that
+// ArrayVectors are overwhelmingly tiny (avg ~1.4 elements).
 type ArrayVectorSeq struct {
-	vec ArrayVector
-	i   int
+	vec      ArrayVector
+	i        int
+	chunkLen int // intended size of THIS chunk; 0 == 1, doubles per ChunkedNext
 }
 
+// curChunkLen is the intended chunk quantum at this position (min 1). A seq
+// produced by element-wise Next/More leaves chunkLen zero; a chunk-walk that
+// starts from it restarts the geometric growth at 1.
+func (s *ArrayVectorSeq) curChunkLen() int {
+	if s.chunkLen < 1 {
+		return 1
+	}
+	return s.chunkLen
+}
+
+// *ArrayVectorSeq yields whole chunks so map/reduce fast-paths avoid
+// per-element seq-node allocation.
+var _ IChunkedSeq = (*ArrayVectorSeq)(nil)
+
 func (s *ArrayVectorSeq) String() string {
-	return "(" + s.vec[s.i:].String()[1:] // reuse vector's string but change brackets
+	str := s.vec[s.i:].String()
+	return "(" + str[1:len(str)-1] + ")" // reuse vector's string but change brackets
 }
 
 func (s *ArrayVectorSeq) Type() ValueType {
@@ -206,6 +228,47 @@ func (s *ArrayVectorSeq) Next() Seq {
 		return nil
 	}
 	return &ArrayVectorSeq{vec: s.vec, i: s.i + 1}
+}
+
+// ChunkedFirst returns a window over the backing array starting at the current
+// position, sized by the current geometric quantum. No copy — the ArrayChunk
+// shares the backing slice; ArrayVector is immutable so aliasing is safe.
+//
+// The returned chunk is a FRESH, independent value on every call (never a
+// pointer into the seq node), matching PersistentVectorSeq/Range: an
+// *ArrayVectorSeq stays read/share-safe across goroutines, so two callers may
+// call ChunkedFirst on the same node concurrently. (A previous revision reused
+// an embedded chunk field to skip this allocation, but that raced on the shared
+// node — see TestArrayVectorSeqChunkedFirstRace.)
+func (s *ArrayVectorSeq) ChunkedFirst() IChunk {
+	// Clamp to length: the trailing chunk spans only the real remainder, never
+	// the full quantum — so ChunkCount() reports the actual size and consumers
+	// don't over-allocate/over-realize past the vector's end.
+	end := s.i + s.curChunkLen()
+	if end > len(s.vec) {
+		end = len(s.vec)
+	}
+	return &ArrayChunk{vs: []Value(s.vec), off: s.i, end: end}
+}
+
+// ChunkedNext advances past this chunk and DOUBLES the quantum, returning the
+// seq positioned at the start of the next (larger) chunk, or nil at the end.
+func (s *ArrayVectorSeq) ChunkedNext() Seq {
+	cl := s.curChunkLen()
+	next := s.i + cl
+	if next >= len(s.vec) {
+		return nil
+	}
+	return &ArrayVectorSeq{vec: s.vec, i: next, chunkLen: cl * 2}
+}
+
+// ChunkedMore is ChunkedNext but returns EmptyList (not nil) at the end.
+func (s *ArrayVectorSeq) ChunkedMore() Seq {
+	n := s.ChunkedNext()
+	if n == nil {
+		return EmptyList
+	}
+	return n
 }
 
 func (s *ArrayVectorSeq) Cons(val Value) Seq {

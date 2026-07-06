@@ -1,5 +1,6 @@
 (ns test.lazymap
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 ;; Tests for map/mapcat laziness — chunked-seq aware (matches Clojure).
 ;;
@@ -7,8 +8,11 @@
 ;;   - Chunked inputs (Range, PersistentVector seq) realize one whole
 ;;     chunk per pull (chunk size ≤32). `(first (map f (range 5)))`
 ;;     realizes all 5; `(take 2 (map f (range 100)))` realizes 32.
-;;   - Non-chunked inputs (Cons chains, ArrayVector literals, plain
-;;     LazySeq) realize one element per pull.
+;;   - ArrayVector seqs use chunks that GROW from 1 (1, 2, 4, … clamped),
+;;     so take-1/`first` is element-wise (realizes 1) while longer pulls
+;;     amortize; the head is never over-realized.
+;;   - Non-chunked inputs (Cons chains, plain LazySeq) realize one
+;;     element per pull.
 ;;
 ;; Historical bugs guarded against:
 ;;   A. map* used to have an eager fast path for counted collections of
@@ -30,7 +34,7 @@
           "map should be lazy: nothing realized before access")
       (is (= 2 (first s)))
       (is (= 1 @realized)
-          "ArrayVector is non-chunked, so first realizes exactly one element"))))
+          "ArrayVector's size-1 head chunk realizes exactly one element on first"))))
 
 (deftest map-realizes-one-chunk-for-small-range
   (testing "map over (range 5) realizes one chunk (all 5) per pull"
@@ -52,14 +56,21 @@
       (doall s)
       (is (= 32 @realized)
           "take 2 over chunked source realizes the first whole chunk (32)")))
-  (testing "take 2 of map over a non-chunked source still realizes 2"
-    ;; ArrayVector literal is non-chunked → element-granular laziness.
+  (testing "map over an ArrayVector realizes with geometrically growing chunks"
+    ;; ArrayVector uses chunks that grow from 1 (1, 2, 4, 8, … clamped), so the
+    ;; size-1 head chunk keeps `first`/take-1 element-wise, while take-2 pulls
+    ;; into the size-2 second chunk. Far tighter than a fixed 32 quantum, and
+    ;; the head is never over-realized.
     (let [realized (atom 0)
-          s (take 2 (map (fn [x] (swap! realized inc) x)
-                         [0 1 2 3 4 5 6 7 8 9]))]
-      (doall s)
-      (is (= 2 @realized)
-          "ArrayVector source preserves element-wise short-circuit"))))
+          f (fn [x] (swap! realized inc) x)
+          v [0 1 2 3 4 5 6 7 8 9]]
+      (doall (take 1 (map f v)))
+      (is (= 1 @realized)
+          "take 1 realizes exactly 1 (size-1 head chunk)")
+      (reset! realized 0)
+      (doall (take 2 (map f v)))
+      (is (= 3 @realized)
+          "take 2 realizes 3 (head chunk of 1 + second chunk of 2)"))))
 
 (deftest map-multi-coll-is-lazy
   (testing "two-arg map is lazy on small counted inputs"
@@ -128,5 +139,5 @@
 (deftest mapcat-of-empty-lazy-seq
   (testing "mapcat over empty lazy-seq yields empty, no f(nil)"
     (let [r (mapcat (fn [x] (throw (ex-info "should not be called" {:x x})))
-                   (lazy-seq nil))]
+              (lazy-seq nil))]
       (is (nil? (seq r))))))
