@@ -1,4 +1,4 @@
-//go:build !linux && !js
+//go:build (!linux || tinygo) && !js
 
 /*
  * Copyright (c) 2026 Marcin Gasperowicz <xnooga@gmail.com>
