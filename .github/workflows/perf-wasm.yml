@@ -85,6 +85,11 @@ jobs:
       # -wasm runs the pr-fast families under the shim and forces -tags off (the
       # wasm bundle ships the bytecode VM, not the lowered-Go path), so there is
       # no `make lowered` step. A wider timeout absorbs wasm's slower per-op.
+      - name: Build bench-ratchet runner
+        run: |
+          set -euo pipefail
+          go build -o "${RUNNER_TEMP}/bench-ratchet" ./cmd/bench-ratchet
+
       - name: Bench merge-base (wasm)
         env:
           BASE: ${{ steps.refs.outputs.base }}
@@ -92,7 +97,7 @@ jobs:
           set -euo pipefail
           git checkout --force "$BASE"
           git submodule update --init --recursive
-          go run ./cmd/bench-ratchet \
+          "${RUNNER_TEMP}/bench-ratchet" \
             -baseline "${RUNNER_TEMP}/base.json" \
             -profile pr-fast -wasm -timeout 25m \
             update
@@ -112,7 +117,7 @@ jobs:
           # movers on untouched code. 30% suppresses the bulk of that while still
           # surfacing real regressions. Informational only, so this tunes the
           # report's "past budget" rows, not a pass/fail.
-          go run ./cmd/bench-ratchet \
+          "${RUNNER_TEMP}/bench-ratchet" \
             -baseline "${RUNNER_TEMP}/base.json" \
             -profile pr-fast -wasm -budget 0.30 -timeout 25m \
             -format markdown \
