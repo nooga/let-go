@@ -91,4 +91,21 @@ func TestErrorExitCode(t *testing.T) {
 			t.Fatalf("want exit 0, got %d; output:\n%s", code, out)
 		}
 	})
+
+	// The one carve-out in runMain: a failing script under -r drops into the
+	// REPL, which recovers and exits clean. Feeding /dev/null gives the REPL an
+	// immediate EOF so it returns instead of blocking.
+	t.Run("failing script with -r exits zero", func(t *testing.T) {
+		app := writeScript(t, `(undefined-fn-xyz)`)
+		cmd := exec.Command(bin, "-r", app)
+		cmd.Stdin = nil // nil Stdin reads from the null device -> EOF
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) {
+				t.Fatalf("run lg -r %s: %v\n%s", app, err, out)
+			}
+			t.Fatalf("want exit 0, got %d; output:\n%s", ee.ExitCode(), out)
+		}
+	})
 }
