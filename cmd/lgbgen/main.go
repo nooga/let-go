@@ -440,6 +440,9 @@ func main() {
 		}()
 		defer stopProfile()
 	}
+	if vm.AllocAttrEnabled() {
+		defer vm.DumpAllocAttr(os.Stderr)
+	}
 	if memProfilePath != "" {
 		defer func() {
 			f, err := os.Create(memProfilePath)

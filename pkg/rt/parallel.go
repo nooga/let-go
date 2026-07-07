@@ -69,6 +69,11 @@ func parallelMapV(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 	if workers > n {
 		workers = n
 	}
+	// Alloc attribution keeps a single shadow frame stack; serialize so
+	// samples attribute to the right .lg caller.
+	if vm.AllocAttrEnabled() {
+		workers = 1
+	}
 
 	var next int64 = -1
 	var wg sync.WaitGroup

@@ -21,6 +21,9 @@ type LazySeq struct {
 }
 
 func NewLazySeq(fn Fn) *LazySeq {
+	if allocAttrEnabled {
+		recordAllocAttr(akLazySeq, 64)
+	}
 	return &LazySeq{fn: fn}
 }
 

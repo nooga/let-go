@@ -166,6 +166,9 @@ func (l ArrayVector) Seq() Seq {
 	if len(l) == 0 {
 		return EmptyList
 	}
+	if allocAttrEnabled {
+		recordAllocAttr(akArrayVectorSeq, 64)
+	}
 	return &ArrayVectorSeq{vec: l, i: 0}
 }
 
@@ -241,6 +244,9 @@ func (s *ArrayVectorSeq) More() Seq {
 func (s *ArrayVectorSeq) Next() Seq {
 	if s.i+1 >= len(s.vec) {
 		return nil
+	}
+	if allocAttrEnabled {
+		recordAllocAttr(akArrayVectorSeq, 64)
 	}
 	return &ArrayVectorSeq{vec: s.vec, i: s.i + 1}
 }
@@ -349,6 +355,9 @@ func (l ArrayVector) Empty() Collection {
 }
 
 func NewArrayVector(v []Value) Value {
+	if allocAttrEnabled {
+		recordAllocAttr(akNewArrayVector, len(v)*16+24)
+	}
 	vk := make([]Value, len(v))
 	copy(vk, v)
 	return ArrayVector(vk)

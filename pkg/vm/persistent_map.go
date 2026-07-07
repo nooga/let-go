@@ -282,6 +282,9 @@ func (n *hmapBitmapNode) nodeSeq() []MapEntry {
 			entries = append(entries, valOrNode.(hmapNode).nodeSeq()...)
 		}
 	}
+	if allocAttrEnabled {
+		recordAllocAttr(akMapNodeSeq, len(entries)*32+24)
+	}
 	return entries
 }
 
@@ -304,6 +307,9 @@ func (n *hmapBitmapNode) each(fn func(key, val Value) bool) bool {
 }
 
 func (n *hmapBitmapNode) cloneAndSet(i int, val any) *hmapBitmapNode {
+	if allocAttrEnabled {
+		recordAllocAttr(akMapCloneAndSet, len(n.array)*16+48)
+	}
 	newArray := make([]any, len(n.array))
 	copy(newArray, n.array)
 	newArray[i] = val
@@ -311,6 +317,9 @@ func (n *hmapBitmapNode) cloneAndSet(i int, val any) *hmapBitmapNode {
 }
 
 func (n *hmapBitmapNode) cloneAndSet2(i int, a any, j int, b any) *hmapBitmapNode {
+	if allocAttrEnabled {
+		recordAllocAttr(akMapCloneAndSet, len(n.array)*16+48)
+	}
 	newArray := make([]any, len(n.array))
 	copy(newArray, n.array)
 	newArray[i] = a
@@ -847,6 +856,9 @@ func (m *PersistentMap) entries() []Value {
 		return nil
 	}
 	mes := m.root.nodeSeq()
+	if allocAttrEnabled {
+		recordAllocAttr(akMapEntries, len(mes)*16+24)
+	}
 	result := make([]Value, len(mes))
 	for i, e := range mes {
 		result[i] = e

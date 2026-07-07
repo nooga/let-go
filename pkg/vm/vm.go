@@ -549,6 +549,10 @@ func (f *Frame) RunProtected() (result Value, err error) {
 }
 
 func (f *Frame) Run() (Value, error) {
+	if allocAttrEnabled {
+		attrPushFrame(f)
+		defer attrPopFrame()
+	}
 	if f.debug {
 		fmt.Print("run", f.args, "\n")
 		f.code.Debug()
