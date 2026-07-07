@@ -1416,10 +1416,12 @@
 
 (defn- pkg-alias-from [pkg-path]
   ;; last path segment of a Go import path; "github.com/.../corefns" -> "corefns"
-  (loop [i (dec (count pkg-path))]
-    (cond (< i 0) pkg-path
-          (= (nth pkg-path i) \/) (subs pkg-path (inc i))
-          :else (recur (dec i)))))
+  ;; NB: runs per registry entry per lowered fn — the old per-char (nth …)
+  ;; scan was the #1 allocator of a --target=go run (each nth on a String
+  ;; materialized the whole rune slice).
+  (if-let [i (last-index-of pkg-path \/)]
+    (subs pkg-path (inc i))
+    pkg-path))
 
 (defn registry-key [ns-sym name-str arity] [ns-sym name-str arity])
 
@@ -1813,7 +1815,9 @@
    (cached-var IFn dispatch) when nil."
   [f callee-nid arg-count]
   (when (and (not *direct-calls-disabled?*)
-             (seq *lowered-registry*) (= :load-var (ir/op callee-nid f)))
+             ;; O(1) emptiness check — (seq m) on a map materializes EVERY
+             ;; entry (nodeSeq), and this runs per call site being lowered.
+             (pos? (count *lowered-registry*)) (= :load-var (ir/op callee-nid f)))
     (let [sym     (symbol (ir/aux callee-nid f))
           sns     (namespace sym)
           call-ns (when sns (internal-ns-sym sns))

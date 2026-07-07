@@ -158,12 +158,24 @@ func (l String) ValueAtOr(key Value, dflt Value) Value {
 	if key == NIL {
 		return dflt
 	}
-	r := []rune(l)
 	numkey, ok := key.(Int)
-	if !ok || numkey < 0 || int(numkey) >= len(r) {
+	if !ok || numkey < 0 || int(numkey) >= len(l) {
+		// len(l) is a byte count ≥ rune count, so negative/oversized keys
+		// bail here without walking; in-range-by-bytes keys verify below.
 		return dflt
 	}
-	return Char(r[numkey])
+	// Walk runes in place instead of materializing []rune(l) — a single
+	// (nth s i) used to allocate the WHOLE rune slice (O(n) bytes per
+	// char lookup; 1.4GB in one lgbgen --target=go run).
+	i := int(numkey)
+	n := 0
+	for _, r := range string(l) {
+		if n == i {
+			return Char(r)
+		}
+		n++
+	}
+	return dflt
 }
 
 // String returns the EDN/Clojure-readable form: surrounded by double quotes
