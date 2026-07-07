@@ -2520,7 +2520,8 @@ func installLangNS() {
 		if len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		var start, end, step vm.Int = 0, 0, 1
+		var start, end, step vm.Int
+		step = 1
 		var err error
 		var endArg vm.Value
 		switch len(vs) {
