@@ -443,34 +443,45 @@
           (not= :bottom (state-type state (nth source 2))))
         (get (:param-sources deps) [bid param-pos])))
 
-(defn- enqueue-entry [queue queued entry]
+(defn- enqueue-entry! [queue queued entry]
+  ;; queued is a TRANSIENT map entry→in-queue? (the drain is
+  ;; single-threaded). Membership flips via assoc! true/false: transient
+  ;; assoc mutates owned HAMT nodes IN PLACE, so after an entry's first
+  ;; insertion its enqueue/pop cost zero allocation. (A transient SET
+  ;; would not help here: disj!/Dissoc has no transient path — it clones
+  ;; the node array per removal, which is exactly the ~750MB cloneAndSet
+  ;; churn this replaces.) Returns the queue; queued mutates by side
+  ;; effect.
   (ti-inc! :enqueue-attempt)
-  (if (contains? queued entry)
-    [queue queued]
+  (if (get queued entry)
+    queue
     (do
       (ti-inc! :enqueue)
-      [(conj queue entry) (conj queued entry)])))
+      (assoc! queued entry true)
+      (conj queue entry))))
 
 (defn- propagate-changed!
-  "Value-id v's type widened — enqueue everyone whose inference reads it."
+  "Value-id v's type widened — enqueue everyone whose inference reads it.
+   Mutates queued (transient membership set); returns the new queue."
   [v deps queue queued]
-  (let [[queue queued]
+  (let [queue
         (let [uses (:uses deps)
               us   (when (< v (count uses)) (nth uses v))
-              state (atom [queue queued])]
+              qref (atom queue)]
           (when (and us (not (ir/uses-empty? us)))
             (ir/uses-for-each us
               (fn [user]
-                (let [[q s] @state]
-                  (reset! state (enqueue-entry q s [:inst user]))))))
-          @state)]
+                (reset! qref (enqueue-entry! @qref queued [:inst user])))))
+          @qref)]
     (loop [params (get (:branch-arg-users deps) v)
-           q queue
-           s queued]
+           q queue]
       (if (seq params)
-        (let [[q2 s2] (enqueue-entry q s [:param (first params)])]
-          (recur (rest params) q2 s2))
-        [q s]))))
+        (recur (rest params) (enqueue-entry! q queued [:param (first params)]))
+        q))))
+
+(defn- mark-dequeued! [queued entry]
+  ;; In-place flag flip (see enqueue-entry!) — NOT disj!, which clones.
+  (assoc! queued entry false))
 
 ;; Per-call wall-clock budget. Defensive guard against pathological
 ;; inputs. Bail cleanly with the current partial result — every assigned
@@ -491,7 +502,8 @@
                            (if term [[:inst term]] []))))
                      (ir/blocks f)))
         flat-items (vec (apply concat items))]
-    [flat-items (set flat-items)]))
+    [flat-items
+     (reduce (fn [m e] (assoc! m e true)) (transient {}) flat-items)]))
 
 (defn typeinfer
   "Infer typeinfra facts for every Inst in the function."
@@ -510,8 +522,10 @@
          (fn []
            (and budget-ns
                 (> (- (System/nanoTime) start-ns) budget-ns)))]
+     ;; queued0 is a transient entry→in-queue? map closed over by the loop —
+     ;; enqueue-entry! and the pop below mutate it in place, so it is not
+     ;; threaded.
      (loop [queue queue0
-            queued queued0
             s state
             tick 0]
        (cond
@@ -546,7 +560,7 @@
          ;; equivalent and far cheaper (typeinfer runs twice per optimize-fn).
          (let [entry (peek queue)
                queue' (pop queue)
-               queued' (disj queued entry)]
+               _ (mark-dequeued! queued0 entry)]
            (case (first entry)
              :param
              (let [[bid param-pos] (second entry)
@@ -554,14 +568,12 @@
                    param-type (infer-block-param-from-deps deps bid param-pos f s)
                    [s' changed?] (join-state-type s param-id param-type)]
                (if changed?
-                 (let [[q2 qq2] (propagate-changed! param-id deps queue' queued')]
-                   (recur q2 qq2 s' (inc tick)))
-                 (recur queue' queued' s (inc tick))))
+                 (recur (propagate-changed! param-id deps queue' queued0) s' (inc tick))
+                 (recur queue' s (inc tick))))
              :inst
              (let [nid (second entry)
                    [s' changed?] (join-state-type s nid (infer-one nid f s))]
                (if changed?
-                 (let [[q2 qq2] (propagate-changed! nid deps queue' queued')]
-                   (recur q2 qq2 s' (inc tick)))
-                 (recur queue' queued' s (inc tick))))
-             (recur queue' queued' s (inc tick)))))))))
+                 (recur (propagate-changed! nid deps queue' queued0) s' (inc tick))
+                 (recur queue' s (inc tick))))
+             (recur queue' s (inc tick)))))))))
