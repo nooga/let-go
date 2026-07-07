@@ -68,8 +68,8 @@
   (testing "single-arity vm.Value-only defn is registered as direct-callable"
     (let [src (compile-ns ['(defn helper [x] x)])]
       ;; The defn itself lowers (presence of `func helper` proves it).
-      (is (str/includes? src "func helper")
-          "helper should lower to a Go func"))))
+      (is (str/includes? src "func Helper")
+          "helper should lower to an exported Go func"))))
 
 ;; --- registry resolution: resolve-then-get, no key scan ----------------
 ;; The flat *lowered-registry* key [ns name arity] already registers each
@@ -147,20 +147,20 @@
 (deftest both-defns-lower
   (testing "both defns reach the rendered Go source"
     (let [src (compile-ns [callee-form caller-form])]
-      (is (str/includes? src "func callee(")  "callee lowers")
-      (is (str/includes? src "func caller(")  "caller lowers"))))
+      (is (str/includes? src "func Callee(")  "callee lowers")
+      (is (str/includes? src "func Caller(")  "caller lowers"))))
 
 ;; --- same-NS direct-call rewrite ---------------------------------------
 
 (deftest same-ns-call-emits-direct-go-call
   (testing "caller invokes callee via bare Go call, not rt.LookupVar"
     (let [src    (compile-ns [callee-form caller-form])
-          body   (caller-body src "caller")]
+          body   (caller-body src "Caller")]
       (is body "caller func body should be extractable")
       ;; The direct call lives ONLY in the caller body, NOT in the
       ;; gogen_wrap dispatch table (which spuriously contains
-      ;; `callee(args[0])` for every lowered defn).
-      (is (str/includes? body "callee(")
+      ;; `Callee(args[0])` for every lowered defn).
+      (is (str/includes? body "Callee(")
           (str "caller body should contain direct call callee(...); got:\n" body))
       (is (not (str/includes? body "rt.LookupVar"))
           (str "caller body should NOT route through rt.LookupVar; got:\n" body)))))
@@ -168,9 +168,9 @@
 (deftest topo-order-callees-precede-callers
   (testing "defn ordering doesn't matter — caller-before-callee in source still folds"
     (let [src  (compile-ns [caller-form callee-form])
-          body (caller-body src "caller")]
+          body (caller-body src "Caller")]
       (is body "caller func body should be extractable")
-      (is (str/includes? body "callee(")
+      (is (str/includes? body "Callee(")
           (str "caller should still emit direct call when defined first in source; got:\n"
                body)))))
 
@@ -186,9 +186,9 @@
     ;; test was waiting for.
     (let [src  (compile-ns ['(defn id-callee [x] x)
                             '(defn id-caller [y] (id-callee y))])
-          body (caller-body src "id_caller")]
+          body (caller-body src "IdCaller")]
       (is body "id_caller body should be extractable")
-      (is (str/includes? body "id_callee(")
+      (is (str/includes? body "IdCallee(")
           (str "id_caller should direct-call id_callee (no-error shape now lowered); got:\n"
                body))
       (is (not (str/includes? body "rt.LookupVar"))
@@ -205,7 +205,7 @@
       ;; Either it errored out before producing src, or it skipped the
       ;; failing defn. Both are acceptable; we just don't want a
       ;; spurious direct call to a phantom symbol.
-      (is (not (str/includes? src "some_external_thing("))
+      (is (not (str/includes? src "SomeExternalThing("))
           "no direct call when the callee isn't a real Var"))))
 
 ;; --- shape gating ------------------------------------------------------
@@ -236,10 +236,10 @@
     (let [src   (compile-ns-with-decls '[alpha omega]
                                        ['(defn alpha [n] (clojure.core/+ (omega n) 1))
                                         '(defn omega [n] (clojure.core/+ (alpha n) 1))])
-          alpha (caller-body src "alpha")]
+          alpha (caller-body src "Alpha")]
       (is alpha "alpha body should be extractable")
       ;; This is the assertion that fails today and must pass after fix.
-      (is (str/includes? alpha "omega(")
+      (is (str/includes? alpha "Omega(")
           (str "alpha should call omega directly (cycle forces lex-order fallback in source);\n"
                "two-pass loop should populate the registry before any body is lowered.\n"
                "Got:\n" alpha))
@@ -255,10 +255,10 @@
             lift to cached-var IFn dispatch — var-mediated, not a bare Go call"
     (let [src  (compile-ns ['(defn varargs [x & rest] x)
                             '(defn vcaller [a b] (varargs a b))])
-          body (caller-body src "vcaller")]
+          body (caller-body src "Vcaller")]
       (is body "vcaller body should be extractable")
-      ;; Not direct-call eligible: no bare `vN = varargs(arg0, ...)` Go call.
-      (is (not (str/includes? body "varargs(arg"))
+      ;; Not direct-call eligible: no bare `vN = Varargs(arg0, ...)` Go call.
+      (is (not (str/includes? body "Varargs(arg"))
           (str "vcaller should NOT emit a bare direct varargs(...) Go call; got:\n"
                body))
       ;; Instead it lifts to cached-var IFn dispatch via rt.CachedVarFn (the
@@ -318,6 +318,6 @@
           (str "rendered Go must be invariant to *typeinfer-budget-ms*;\n"
                "starved (len " (count starved) ") != full (len " (count full) ")"))
       ;; Goal (a): entry points must not disappear under budget pressure.
-      (is (str/includes? starved "func budget_countdown(")
+      (is (str/includes? starved "func BudgetCountdown(")
           (str "the budget_countdown entry point must survive a starved budget; got:\n"
                starved)))))

@@ -281,6 +281,17 @@
     (second raw-name)
     raw-name))
 
+(defn- private-name?
+  "True when a defn NAME position carries `^:private` — i.e. it reads as the
+   literal form `(with-meta sym {:private true …})`. (`defn-` is detected
+   separately via the form head, since it doesn't wrap the name.) Used to carry
+   :private? onto the ir-fn so emission picks an unexported go-name."
+  [raw-name]
+  (and (seq? raw-name) (= 'with-meta (first raw-name))
+       (>= (count raw-name) 3)
+       (let [m (nth raw-name 2)]
+         (boolean (and (map? m) (get m :private))))))
+
 (defn- try-expand-all
   "expand-all, but returns nil instead of throwing — a form that won't expand
    simply contributes no units."
@@ -443,6 +454,13 @@
     ;; Otherwise, fall through to the existing defn logic
     :else
     (let [name-sym    (unwrap-name (nth form 1))
+          ;; Public/private drives the emitted Go name (public → exported
+          ;; PascalCase, private → unexported lowercase). Carried ON THE FORM
+          ;; (:private?), like :multi-arity?, so the native self-hosted lowering
+          ;; path needs no dynamic var. Private = `defn-` head OR `^:private` on
+          ;; the name (raw forms reach here un-normalized, so both survive).
+          private?    (or (= (first form) 'defn-)
+                          (private-name? (nth form 1)))
           maybe-doc   (nth form 2)
           has-doc?    (string? maybe-doc)
           first-form  (if has-doc? (nth form 3) maybe-doc)
@@ -452,7 +470,8 @@
         (let [args-vec   first-form
               body-forms (map expand-all (drop (if has-doc? 4 3) form))
               expanded   (apply list 'defn name-sym args-vec body-forms)
-              ir-fn      (-> expanded ir.build/build-fn optimize-fn)]
+              ir-fn      (-> expanded ir.build/build-fn optimize-fn)
+              _          (swap! ir-fn assoc :private? private?)]
           (if go-target?
             (lower-go/lower ir-fn :bridge)
             (lower/lower ir-fn)))
@@ -464,9 +483,26 @@
                                              body-forms (map expand-all (rest arity-form))
                                              expanded   (apply list 'defn name-sym args-vec body-forms)
                                              ir-fn      (-> expanded ir.build/build-fn optimize-fn)
+                                             ;; Mark the form as a multi-arity member (arity is
+                                             ;; already carried on the form as :arity). Lowering
+                                             ;; suffixes its Go name `<name>_<arity>` so the arities
+                                             ;; don't redeclare `func <name>` and each is
+                                             ;; independently direct-callable. Carried ON THE FORM
+                                             ;; (not a dynamic var) so it survives native lowering.
+                                             _          (swap! ir-fn assoc :multi-arity? true
+                                                          :private? private?)
                                              result     (lower-go/lower ir-fn :bridge)]
                                          (if (= :lowered (:status result))
-                                           {:fn (:decl result)}
+                                           ;; Keep :fn (the decl) for existing consumers
+                                           ;; (lower-defn-forms flatten, lower-template-closure-expr)
+                                           ;; AND carry the FULL per-arity result — its typed
+                                           ;; :param-specs/:result-spec/:needs-error?, :arity,
+                                           ;; :direct-callable? and :override-eligible?. Brick 4
+                                           ;; (open the multi-arity gate) needs these to emit
+                                           ;; per-arity fixed helpers + per-arity direct-callable
+                                           ;; registry entries + the MakeNativeMultiArity dynamic
+                                           ;; dispatcher. Additive: today's readers still use :fn.
+                                           {:fn (:decl result) :result result}
                                            result)))
                                      arities)]
               {:kind :multi-fn-template :fns fn-templates})
@@ -650,6 +686,45 @@
        (gogen/result (gogen/type "error"))]
       [len-check ret-stmt])))
 
+(defn- multi-arity-override-wrapper-fn-lit [arities]
+  "Combined `func(ec, args []vm.Value) (vm.Value, error)` adapter for a
+   multi-arity fn: `switch len(args)` routes each arity to its per-arity helper
+   `<name>_<arity>(ec, args[0], …)`. Registered under the bare :fn-name (via
+   __gogen_wrap/NewCtxNativeFn) so the dynamic var path stays multi-arity AND is
+   context-aware — the caller's ec is threaded into each helper (a
+   MakeNativeMultiArity value can't, being built at package load with no ec).
+   Only used when every arity is override-eligible (uniform vm.Value)."
+  (let [fn-name  (:fn-name (first arities))
+        args-id  (gogen/ident "args")
+        len-call (gogen/call (gogen/ident "len") [args-id])
+        arm->case
+        (fn [r]
+          (let [arity        (:arity r)
+                go-name      (:go-name r)
+                needs-error? (:needs-error? r)
+                arg-exprs    (mapv (fn [i] (gogen/index args-id (gogen/int-lit i)))
+                                   (range arity))
+                inner-call   (gogen/call (gogen/ident go-name)
+                                         (into [(gogen/ident "ec")] arg-exprs))
+                ret-stmt     (if needs-error?
+                               (gogen/return-stmt [inner-call])
+                               (gogen/return-stmt [inner-call (gogen/ident "nil")]))]
+            (gogen/case-clause [(gogen/int-lit arity)] [ret-stmt])))
+        cases    (mapv arm->case arities)
+        msg      (str fn-name ": wrong number of arguments %d")
+        default  (gogen/case-clause nil
+                   [(gogen/return-stmt
+                      [(gogen/ident "nil")
+                       (gogen/call (gogen/field-sel (gogen/ident "fmt") "Errorf")
+                                   [(gogen/string-lit msg) len-call])])])
+        sw       (gogen/switch-stmt nil len-call (conj cases default))]
+    (gogen/func-lit
+      [(gogen/param "ec" (gogen/type "*vm.ExecContext"))
+       (gogen/param "args" (gogen/type "[]vm.Value"))]
+      [(gogen/result (gogen/type "vm.Value"))
+       (gogen/result (gogen/type "error"))]
+      [sw])))
+
 (defn- override-helper-decl []
   "Build the package-local `__gogen_wrap` helper:
      func __gogen_wrap(fn func(ec *vm.ExecContext, args []vm.Value) (vm.Value, error)) vm.Value {
@@ -667,15 +742,24 @@
       [(gogen/result (gogen/type "vm.Value"))]
       [ret])))
 
-(defn- override-init-decl [ns-name entries]
+(defn- override-init-decl [ns-name entries multi-groups]
   "Build the package's init() that calls rt.RegisterGoOverrides with a
-   map[string]vm.Value literal of __gogen_wrap-wrapped adapters."
-  (let [kv-pairs (mapv (fn [e]
-                         (gogen/kv-expr
-                           (gogen/string-lit (:fn-name e))
-                           (gogen/call (gogen/ident "__gogen_wrap")
-                                       [(override-wrapper-fn-lit e)])))
-                       entries)
+   map[string]vm.Value literal of __gogen_wrap-wrapped adapters. `entries` are
+   single-arity results (one fixed-arity wrapper each); `multi-groups` are
+   [fn-name (sorted-by-arity results)] pairs (one len-switch adapter each)."
+  (let [single-kvs (mapv (fn [e]
+                           (gogen/kv-expr
+                             (gogen/string-lit (:fn-name e))
+                             (gogen/call (gogen/ident "__gogen_wrap")
+                                         [(override-wrapper-fn-lit e)])))
+                         entries)
+        multi-kvs  (mapv (fn [[nm arities]]
+                           (gogen/kv-expr
+                             (gogen/string-lit nm)
+                             (gogen/call (gogen/ident "__gogen_wrap")
+                                         [(multi-arity-override-wrapper-fn-lit arities)])))
+                         multi-groups)
+        kv-pairs (into single-kvs multi-kvs)
         map-lit  (gogen/composite-lit-multi
                    (gogen/type "map[string]vm.Value")
                    kv-pairs)
@@ -703,12 +787,36 @@
       [(gogen/expr-stmt register)])))
 
 (defn- override-entries [valid-results]
-  "Lowered results eligible for override registration: single-arity fns
-   (carry :fn-name) whose Go signature is uniformly vm.Value, so the
+  "Lowered results eligible for SINGLE-arity override registration: single-arity
+   fns (carry :fn-name) whose Go signature is uniformly vm.Value, so the
    fixed-arity wrapper adapts them without boxing/unboxing. Typed and
-   variadic fns are flagged :override-eligible? false and stay on bytecode."
-  (filterv (fn [r] (and (:fn-name r) (:override-eligible? r)))
+   variadic fns are flagged :override-eligible? false and stay on bytecode.
+   Multi-arity arities (:multi-arity?) are EXCLUDED here — they'd each register a
+   colliding single-arity wrapper under the same bare :fn-name; the whole fn gets
+   one multi-arity override adapter instead (multi-arity-override-groups)."
+  (filterv (fn [r] (and (:fn-name r) (:override-eligible? r) (not (:multi-arity? r))))
            valid-results))
+
+(defn- multi-arity-override-groups [valid-results]
+  "Group the multi-arity per-arity results by bare :fn-name for ONE combined
+   override adapter each. Only emit the override when EVERY arity is
+   :override-eligible? (uniform vm.Value) — a typed arity can't be called with
+   boxed args[i] from the dynamic dispatch adapter. When any arity is typed the
+   whole fn's dynamic (var) path stays on bytecode; the per-arity STATIC direct
+   calls still go native (registry-entry-from-result gates on the broader
+   :direct-callable?, coercing typed args at the call site). Returns a sorted vec
+   of [fn-name (sorted-by-arity results)] pairs for deterministic emission."
+  (let [by-name (reduce (fn [m r]
+                          (if (:multi-arity? r)
+                            (update m (:fn-name r) (fnil conj []) r)
+                            m))
+                        {} valid-results)]
+    (vec
+      (keep (fn [nm]
+              (let [arities (sort-by :arity (get by-name nm))]
+                (when (every? :override-eligible? arities)
+                  [nm arities])))
+            (sort (keys by-name))))))
 
   ;; Extra decls reference rt + vm + fmt; attach the imports explicitly so a
   ;; package whose lowered fns happen to need none still compiles.
@@ -796,11 +904,23 @@
           (= :lowered (:status result))
           (recur (rest remaining) (conj out result))
           (= :multi-fn-template (:kind result))
-          ;; Flatten multi-arity templates into individual decls.
+          ;; Flatten multi-arity templates into individual per-arity results.
+          ;; Carry each arity's FULL result (compile-form* stashed it under
+          ;; :result) so it registers as a per-arity direct-callable
+          ;; [ns name arity] -> name_arity entry exactly like a single-arity fn
+          ;; (registry-entry-from-result keys on the bare :fn-name + :arity and
+          ;; calls the suffixed :go-name). Tag :multi-arity? so the SINGLE-arity
+          ;; override path skips it — the whole fn instead gets ONE multi-arity
+          ;; override adapter (see override-init-decl), avoiding N colliding
+          ;; bare-name override map entries. Older templates without :result
+          ;; (defensive) fall back to the decl-only shape.
           (let [flat (reduce (fn [acc entry]
-                               (if-let [d (:fn entry)]
-                                 (conj acc {:status :lowered :decl d :imports []})
-                                 acc))
+                               (cond
+                                 (:result entry)
+                                 (conj acc (assoc (:result entry) :multi-arity? true))
+                                 (:fn entry)
+                                 (conj acc {:status :lowered :decl (:fn entry) :imports []})
+                                 :else acc))
                              []
                              (:fns result))]
             (recur (rest remaining) (into out flat)))
@@ -863,6 +983,9 @@
               ir.passes.typeinfer/*deftype-ctor-types* (when (seq ctor-types) ctor-types)
               lower-go/*deftype-ctors* (when (seq ctors) ctors)
               lower-go/*protocol-methods* (when (seq protocol-method-set) protocol-method-set)
+              ;; Resolve non-injective PascalCase export collisions deterministically;
+              ;; the identical pure map is bound in collect-ns-exports (registry side).
+              lower-go/*export-name-overrides* (lower-go/build-export-name-map forms)
               lower-go/*protocol-method-sigs* (let [s (protocol-method-sigs deftypes)]
                                                 (when (seq s) s))]
       (let [;; Native decls for captured protocols (interface) and deftypes
@@ -1054,10 +1177,11 @@
             ;; gogen_ir: append a __gogen_wrap helper + init() that
             ;; registers Go-native overrides for the eligible lowered fns.
             reg-entries (override-entries valid-results)
-            extra-decls (if (seq reg-entries)
+            multi-groups (multi-arity-override-groups valid-results)
+            extra-decls (if (or (seq reg-entries) (seq multi-groups))
                           [{:decl (override-helper-decl)
                             :imports override-decl-imports}
-                           {:decl (override-init-decl (str ns-name) reg-entries)
+                           {:decl (override-init-decl (str ns-name) reg-entries multi-groups)
                             :imports override-decl-imports}]
                           [])
             ;; Native-baked multimethods (a :type dispatcher with >=1 arm) must
@@ -1076,21 +1200,13 @@
             ;; Package-level cached *vm.Var decls + lazy accessors for the
             ;; recorded cross-ns callees (deterministic, sorted by base name).
             cached-var-decls (lower-go/cross-ns-var-decls @cross-ns-vars)
-            ;; EPIC-012/ITER-0025: exported wrappers for direct-callable fns so
-            ;; another lowered package can call them. Gated off by default
-            ;; (*emit-exported-wrappers*) → committed tree byte-identical until
-            ;; the whole-program collector wires real cross-package calls.
-            wrapper-results (if *emit-exported-wrappers*
-                              (let [ns-int (lower-go/internal-ns-sym (str ns-name))
-                                    target? (fn [r]
-                                              (and (:direct-callable? r)
-                                                   (or (= :all *wrapper-target-names*)
-                                                       (contains? *wrapper-target-names*
-                                                                  [ns-int (str (:fn-name r))]))))]
-                                (mapv (fn [r] {:decl (exported-wrapper-decl r)
-                                               :imports [vm-import]})
-                                      (filterv target? valid-results)))
-                              [])
+            ;; EPIC-012/ITER-0025 → ITER-0037: cross-package calls now resolve to
+            ;; a public fn's OWN exported PascalCase name (emit-go-name), so the
+            ;; `LG_<go>` forwarding-wrapper indirection is gone — no wrapper decls
+            ;; are emitted. (*emit-exported-wrappers*/*wrapper-target-names* and
+            ;; exported-wrapper-decl are retained only as the legacy manual
+            ;; single-ns path; the whole-program collector no longer needs them.)
+            wrapper-results []
             ;; Native type/struct/method decls lead the file; Go resolves
             ;; package-scope references regardless of declaration order.
             all-results (into (into (into (into type-decls valid-results) extra-decls) cached-var-decls) wrapper-results)
@@ -1111,10 +1227,15 @@
    registry) and return {:exports {<key> <cross-pkg-entry>} :refs #{[ns name]}}.
    :exports are this ns's direct-callable fns re-keyed for cross-package dispatch
    via the canonical registry-entry-from-result, then stamped with :go-pkg =
-   import-path and :go-name = LG_<go> (the exported wrapper). :refs are the
-   cross-ns callees it references (same-ns calls filtered — they need no wrapper)."
+   import-path. The :go-name is the fn's OWN exported PascalCase name (public fns
+   are their own callable name — no `LG_` forwarding wrapper), so a cross-package
+   call resolves to `pkg.Conj(ec,…)`. :refs are the cross-ns callees it references
+   (same-ns calls filtered — those resolve intra-package with no import)."
   (binding [*ns* (the-ns ns-sym)
-            ir.passes.typeinfer/*typeinfer-budget-ms* nil]
+            ir.passes.typeinfer/*typeinfer-budget-ms* nil
+            ;; Same pure map bound in lower-ns-to-go so the registry's :go-name and
+            ;; the emitted decl agree on a collision-resolved export name.
+            lower-go/*export-name-overrides* (lower-go/build-export-name-map forms)]
     (let [cross   (atom {})
           results (binding [lower-go/*cross-ns-vars-used* cross]
                     (lower-defn-forms (order-defn-forms forms)))
@@ -1125,8 +1246,7 @@
                         (if base
                           (into m (map (fn [kv]
                                          [(key kv) (assoc (val kv)
-                                                          :go-pkg  import-path
-                                                          :go-name (str "LG_" (:go-name (val kv))))])
+                                                          :go-pkg  import-path)])
                                        base))
                           m)))
                     {} results)

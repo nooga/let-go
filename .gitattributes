@@ -1,3 +1,11 @@
 *.lg linguist-language=Clojure
 pkg/rt/core_compiled.lgb binary
 pkg/rt/core_compiled.lgb merge=lgb
+
+# generated.sums is a one-line content digest of the .lg/lgbgen sources. It has
+# no meaningful 3-way text merge, and keeping one side would leave a STALE
+# signature — so the `sums` driver recomputes the digest from the merged sources
+# (scripts/git-merge-sums.sh). It can't reuse merge=lgb (that driver writes a
+# .lgb to its output path). NOTE: jj does not run git merge drivers, so under jj
+# this is still resolved by `make generate` after a rebase, same as the bundle.
+pkg/rt/generated.sums merge=sums

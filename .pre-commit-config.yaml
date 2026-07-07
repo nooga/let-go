@@ -99,6 +99,23 @@ repos:
         types: [go]
         pass_filenames: false
         stages: [pre-push]
+
+      # Lowering-coverage ratchet (ITER-0021). ~60s, so pre-push not
+      # pre-commit, and deliberately NOT in CI. Fails if a form newly falls
+      # back to bytecode / vm dispatch (a trampoline, not a direct/native
+      # call) vs docs/perf/ir-stress-baseline.edn — or if the corpus :total
+      # drifted. always_run: a regression can come from a .lg OR a Go runtime
+      # change, so it must run on every push, not only when *.go is staged.
+      # NOTE: jj does not run git hooks — jj users gate with `make
+      # ir-stress-gate` (the same command this hook runs) before pushing.
+      - id: ir-stress-gate
+        name: ir-stress lowering-coverage ratchet (ITER-0021)
+        description: Fail if native-lowering coverage regressed vs the committed baseline
+        entry: make ir-stress-gate
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
   - repo: https://github.com/checkmake/checkmake.git
     rev: v0.2.2
     hooks:

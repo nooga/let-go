@@ -34,3 +34,22 @@
           same-v (intern 'test.namespace-test 'interned-value)]
       (is (= 42 (var-get v)))
       (is (= 42 (var-get same-v))))))
+
+(defn ns-pub-fn [x] x)
+(def ns-pub-val 99)
+(defn- ns-priv-fn [x] x)
+
+(deftest ns-publics-function
+  (testing "ns-publics returns a symbol->var map of the public interned vars"
+    (let [pubs (ns-publics 'test.namespace-test)]
+      (is (contains? pubs 'ns-pub-fn))
+      (is (contains? pubs 'ns-pub-val))
+      (is (var? (get pubs 'ns-pub-fn)))
+      (is (= 99 (deref (get pubs 'ns-pub-val))))))
+  (testing "ns-publics excludes private vars"
+    (is (not (contains? (ns-publics 'test.namespace-test) 'ns-priv-fn))))
+  (testing "ns-publics accepts a namespace object as well as a symbol"
+    (is (contains? (ns-publics (the-ns 'test.namespace-test)) 'ns-pub-fn)))
+  (testing "ns-publics resolves clojure-facing aliases (clojure.core -> core)"
+    (is (contains? (ns-publics 'clojure.core) 'map))
+    (is (= (ns-publics 'clojure.core) (ns-publics 'core)))))

@@ -30,6 +30,12 @@
 ;;                          cumulative ms (aggregated across all defns).
 ;;                          Sampled from the auto-trace runs, so requires
 ;;                          LG_STRESS_AUTOTRACE=1 to populate.
+;;   LG_STRESS_BASELINE     path to a committed coverage baseline EDN
+;;                          ({:failed N :total M ...}). When set, the corpus
+;;                          run asserts native-lowering failures did not grow
+;;                          vs the baseline (ITER-0021 ratchet; exits non-zero
+;;                          on regression or corpus drift). See `make
+;;                          ir-stress-gate`.
 ;;
 ;; Examples:
 ;;   # IR-pipeline self-AOT pass rate (most common):
@@ -315,6 +321,19 @@
 ;; like `grep :missing-form ir-stress.log` answers "what's the gap?".
 (def log-path
   (let [v (System/getenv "LG_STRESS_LOG")]
+    (if (and v (not= v "")) v nil)))
+
+;; Optional coverage-ratchet gate (ITER-0021). When LG_STRESS_BASELINE points at
+;; a committed EDN baseline ({:failed N ...}), the corpus run compares its failure
+;; count to the baseline AFTER printing the summary: more failures than baseline
+;; (a form that newly fell back to bytecode / failed to lower instead of native
+;; lowering) is a regression and exits non-zero. The ratchet only tightens —
+;; fewer failures pass and should be ratcheted into the baseline. This makes the
+;; roadmap's BE-2 "ir-stress :ok non-decreasing" gate automated instead of a
+;; manual eyeball. Reuses this harness's existing fallback census — no separate
+;; fallback detector.
+(def gate-baseline-path
+  (let [v (System/getenv "LG_STRESS_BASELINE")]
     (if (and v (not= v "")) v nil)))
 
 (def log-entries (atom []))
@@ -752,6 +771,48 @@
         (when log-path
           (spit log-path (apply str @log-entries))
           (println (str "\nPer-defn log: " log-path
-                        " (" (count @log-entries) " rows)")))))))
+                        " (" (count @log-entries) " rows)")))
+
+        ;; --- ITER-0021 coverage-ratchet gate (reuses THIS fallback census;
+        ;; no separate fallback detector). Active only when LG_STRESS_BASELINE
+        ;; is set; fails the run if failures grew vs the committed baseline. ---
+        (when gate-baseline-path
+          (let [failed      (- total oks)
+                baseline    (try (read-string (slurp gate-baseline-path)) (catch e nil))
+                base-failed (or (:failed baseline) 0)
+                base-total  (:total baseline)]
+            (println (str "\n=== Coverage ratchet (baseline " gate-baseline-path ") ==="))
+            (cond
+              (nil? baseline)
+              (do (println (str "GATE ERROR: cannot read baseline " gate-baseline-path))
+                  (System/exit 2))
+              ;; Corpus-stability guard: the absolute failure count is only a
+              ;; valid ratchet if it counts the SAME corpus. A changed :total
+              ;; (a fixture added/removed) can mask a regression — e.g. drop a
+              ;; failing fixture and `failed` falls without any lowering fix. So
+              ;; a drifted corpus is a hard error: re-baseline, don't auto-pass.
+              (and base-total (not= total base-total))
+              (do (println (str "GATE ERROR: corpus size changed — " total " forms now vs "
+                                base-total " baselined."))
+                  (println "      The corpus list is part of the gate contract; a changed :total")
+                  (println "      can hide a coverage regression. Re-baseline before landing:")
+                  (println "      LG_STRESS_PASSES=1 make ir-stress, then update docs/perf/ir-stress-baseline.edn.")
+                  (System/exit 2))
+              (> failed base-failed)
+              (do
+                (println (str "FAIL: lowering coverage REGRESSED — " failed " failures vs "
+                              base-failed " baselined (" (- failed base-failed) " new)."))
+                (println "      Forms newly NOT lowering to native Go (fell back to bytecode / vm")
+                (println "      dispatch — trampolines, not direct calls). Failure buckets:")
+                (doseq [[bucket cnt] (sort-by val (fn [a b] (compare b a)) all-errs)]
+                  (println (format "  %-50s %3d" (str bucket) cnt)))
+                (System/exit 1))
+              :else
+              (println (str "OK: " oks "/" total " lower natively; failures " failed
+                            " <= baseline " base-failed
+                            (if (< failed base-failed)
+                              (str " — improved by " (- base-failed failed)
+                                   "; ratchet the baseline down")
+                              ""))))))))))
 
 (run)

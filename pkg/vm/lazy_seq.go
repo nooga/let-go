@@ -97,6 +97,19 @@ func (l *LazySeq) seq() Seq {
 			l.err = err
 			panic(&thrownPanic{err: err})
 		}
+
+		// Canonicalize a realized *empty* sequence to nil. Empty
+		// collections' Seq() (and mapLazy1's empty thunk) yield the
+		// non-nil EmptyList singleton, not nil. Without this, a LazySeq
+		// that resolves to empty leaks EmptyList to consumers whose loop
+		// invariant is "non-nil seq ⇒ at least one element" (reduce, some,
+		// Cons.Next, ChunkedCons.Next, `for s != nil`), invoking f once
+		// with a phantom NIL first element. JVM Clojure's (seq ()) is
+		// likewise nil, so every consumer of seq()/Resolve() gets the
+		// invariant they already assume.
+		if SeqIsEmpty(l.s) {
+			l.s = nil
+		}
 	}
 
 	return l.s
@@ -161,7 +174,7 @@ func (l *LazySeq) Seq() Seq {
 
 func (l *LazySeq) Count() Value {
 	n := 0
-	for s := l.seq(); s != nil && s != EmptyList; s = s.Next() {
+	for s := l.seq(); !SeqIsEmpty(s); s = s.Next() {
 		n++
 	}
 	return Int(n)
@@ -169,7 +182,7 @@ func (l *LazySeq) Count() Value {
 
 func (l *LazySeq) RawCount() int {
 	n := 0
-	for s := l.seq(); s != nil && s != EmptyList; s = s.Next() {
+	for s := l.seq(); !SeqIsEmpty(s); s = s.Next() {
 		n++
 	}
 	return n
@@ -205,7 +218,7 @@ func (l *LazySeq) ValueAtOr(key Value, notFound Value) Value {
 	}
 	i := int(idx)
 	s := l.seq()
-	for j := 0; s != nil && s != EmptyList; j++ {
+	for j := 0; !SeqIsEmpty(s); j++ {
 		if j == i {
 			return s.First()
 		}

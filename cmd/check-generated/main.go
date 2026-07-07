@@ -9,9 +9,17 @@
 // their .lg / lgbgen sources. Content-based, so it is reliable across
 // git/jj checkouts. Used by the Makefile `check-generated` target, by
 // CI, and by the git pre-commit hook (scripts/pre-commit).
+//
+// With -write it instead recomputes the digest and rewrites the canonical
+// manifest (a light refresh — the digest only, no bundle/tree rebuild).
+// With -o PATH it writes the recomputed digest to PATH; that is how the
+// generated.sums git merge driver (scripts/git-merge-sums.sh) produces the
+// merged manifest at git's output path. Recomputing beats keep-current so
+// the signature never lands stale after a merge.
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -19,10 +27,39 @@ import (
 )
 
 func main() {
+	writeCanonical := flag.Bool("write", false,
+		"recompute the source digest and rewrite the canonical manifest, then exit")
+	outPath := flag.String("o", "",
+		"recompute the source digest and write the manifest to this path (for the merge driver)")
+	flag.Parse()
+
 	root, err := genmanifest.FindRepoRoot(".")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "check-generated: %v\n", err)
 		os.Exit(2)
+	}
+
+	// Regenerate modes: recompute the digest from the sources on disk and
+	// write it (canonical for -write, an arbitrary path for -o). No bundle
+	// or lowered-tree rebuild — the digest is a pure function of the sources.
+	if *writeCanonical || *outPath != "" {
+		digest, err := genmanifest.Compute(root)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "check-generated: %v\n", err)
+			os.Exit(2)
+		}
+		target := *outPath
+		if target == "" {
+			if err := genmanifest.Write(root, digest); err != nil {
+				fmt.Fprintf(os.Stderr, "check-generated: %v\n", err)
+				os.Exit(2)
+			}
+		} else if err := genmanifest.WriteTo(target, digest); err != nil {
+			fmt.Fprintf(os.Stderr, "check-generated: %v\n", err)
+			os.Exit(2)
+		}
+		fmt.Printf("check-generated: wrote manifest digest %s\n", digest[:12])
+		return
 	}
 
 	res, err := genmanifest.Check(root)

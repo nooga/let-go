@@ -31,7 +31,51 @@
     (is (nil? (meta [1 2 3])))
     (is (nil? (meta {:a 1})))
     (is (nil? (meta '(1 2 3))))
-    (is (nil? (meta nil)))))
+    (is (nil? (meta nil)))
+    (is (nil? (meta (fn [x] x))))))
+
+(deftest meta-on-fn
+  (testing "with-meta and meta round-trip on a fn, leaving it callable"
+    (let [f (with-meta (fn [x] (* x 2)) {:tag :doubler})]
+      (is (fn? f))
+      (is (= {:tag :doubler} (meta f)))
+      (is (= 6 (f 3)))))
+  (testing "round-trip works on a variadic fn"
+    (let [g (with-meta (fn [& args] (apply + args)) {:kind :sum})]
+      (is (= {:kind :sum} (meta g)))
+      (is (= 6 (g 1 2 3)))))
+  (testing "with-meta returns a copy; the original fn keeps its own metadata"
+    (let [f (fn [x] x)
+          f1 (with-meta f {:v 1})
+          f2 (with-meta f1 {:v 2})]
+      (is (nil? (meta f)))
+      (is (= {:v 1} (meta f1)))
+      (is (= {:v 2} (meta f2)))))
+  (testing "round-trip works on a native builtin, leaving the shared original clean"
+    (is (= {:tag :plus} (meta (with-meta + {:tag :plus}))))
+    (is (= 6 ((with-meta + {:tag :plus}) 1 2 3)))
+    (is (nil? (meta +)))))
+
+(defmulti meta-mm identity)
+(defmethod meta-mm :a [_] "A")
+
+(deftest meta-on-multifn
+  (testing "with-meta round-trips on a multimethod (fn? includes MultiFn)"
+    (is (fn? meta-mm))
+    (let [m (with-meta meta-mm {:tag :multi})]
+      (is (= {:tag :multi} (meta m)))
+      (is (= "A" (m :a))))
+    (is (nil? (meta meta-mm)))))
+
+(defprotocol MetaProto (mp-op [x]))
+(extend-type (type 0) MetaProto (mp-op [_] "int"))
+
+(deftest meta-on-protocol-fn
+  (testing "with-meta round-trips on a protocol method fn, leaving dispatch intact"
+    (let [m (with-meta mp-op {:tag :proto})]
+      (is (= {:tag :proto} (meta m)))
+      (is (= "int" (m 7))))
+    (is (nil? (meta mp-op)))))
 
 (deftest equality-ignores-metadata
   (testing "equal values with different metadata are still equal"

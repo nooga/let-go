@@ -828,12 +828,16 @@ func runGoTarget(outDir, codeDir string) {
 			continue
 		}
 
-		// Read forms from source and pick out single-arity defn/defn- forms.
-		// defmacro forms are skipped for now — their bodies are macro
-		// template construction code that doesn't lower cleanly. Multi-arity
-		// functions are also skipped: the Go target emits one func per arity
-		// under the same Go name, which Go rejects as a redeclaration. They
-		// fall back to bytecode under -tags gogen_ir.
+		// Read forms from source and pick out defn/defn- forms (single- AND
+		// multi-arity). defmacro forms are skipped for now — their bodies are
+		// macro template construction code that doesn't lower cleanly.
+		// Multi-arity defns lower per-arity: each arity emits its own
+		// `<name>_<arity>` Go func (distinct name — no redeclaration; the ir-fn
+		// carries :multi-arity? + :arity so lowering names it from the form),
+		// registers per-arity direct-callable [ns name arity] entries, and the
+		// whole fn gets one context-aware len(args)-switch var-override adapter.
+		// So statically-known calls to multi-arity clojure.core fns
+		// (conj/reduce/map/…) go direct instead of trampolining via rt.CachedVarFn.
 		r := compiler.NewLispReader(strings.NewReader(src), "<embedded:"+ns.name+">")
 		var defnForms []vm.Value
 		for {
@@ -850,7 +854,7 @@ func runGoTarget(outDir, codeDir string) {
 				fmt.Fprintf(os.Stderr, "%s: read error: %v\n", ns.name, err)
 				os.Exit(1)
 			}
-			if (isDefnOnly(form) && isSingleArityDefn(form)) || isMultimethodForm(form) {
+			if isDefnOnly(form) || isMultimethodForm(form) {
 				defnForms = append(defnForms, form)
 			}
 		}

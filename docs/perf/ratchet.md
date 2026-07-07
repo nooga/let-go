@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-06-05
+last-verified: 2026-06-30
 authoritative-for:
   - benchmark-ratchet
 human-verified:
@@ -207,6 +207,34 @@ current run that don't appear in the baseline are flagged **NEW**.
 The default budget is **5%**. Raise it for noisy benchmarks via
 `-budget`. Lower it once you've improved benchmark stability (e.g.
 `-benchtime 5s -count 5`).
+
+## Running the check on a PR (the `perf` label)
+
+CI runs the A/B on a pull request only when the PR carries the **`perf`**
+label — `.github/workflows/perf-pr.yml`. Add the label to run it; it
+re-runs on each push while the label is on; remove it to stop. An
+unlabeled PR skips the job instantly, with no runner allocated, so the
+label is a deliberate opt-in for the multi-minute sweep.
+
+Guards and escape hatches:
+
+- **Path filter.** The job only fires for changes under `pkg/**` or
+  `cmd/**` (plus the workflow file itself), so a labeled doc-only PR
+  still skips.
+- **Manual dispatch.** Run against any PR by number without touching
+  labels via the workflow's `workflow_dispatch` input `pr` (needs Actions
+  access).
+
+The PR job builds with the same `-tags gogen_ir` default as local runs
+(see [Build tags](#build-tags)), so it measures the native-lowered path.
+It runs the `pr-fast` profile — the stable `pkg/vm` micro-benchmark
+families (frame dispatch, allocation, invoke, arity, record ops) plus the
+calibration anchor, sized for quick two-pass feedback. The end-to-end
+suite and the IR-compile bench are not in the PR gate; they run in the
+fuller profiles on `main`. None of the `pr-fast` families is a
+numeric/float kernel, so a change that only helps tight numeric code (e.g.
+native float unboxing) reads flat here until such a benchmark is added —
+see [Adding a new benchmark](#adding-a-new-benchmark).
 
 ## Cross-machine sanity
 

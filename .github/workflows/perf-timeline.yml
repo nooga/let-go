@@ -31,7 +31,17 @@ concurrency:
 jobs:
   profile:
     if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Serialize the legs: both push to the single perf-data branch, so
+      # running them in parallel would race on the branch ref.
+      max-parallel: 1
+      matrix:
+        # amd64 (GitHub Linux runner) + Apple-Silicon arm64 (macos-14). With
+        # the machine-profile-partitioned ratchet these coexist cleanly; the
+        # explorer then shows both an amd64 and an Apple-M line per benchmark.
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -61,16 +71,45 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Generate lowered runtime
-        run: make lowered
+      - name: Generate lowered runtime (best-effort)
+        # Tags before v1.10 have no `lowered` target. Skip it there rather than
+        # fail — the tag's own bench-ratchet then captures its available
+        # (bytecode) benches, so e.g. v1.9 gets a bytecode-only snapshot with no
+        # gogen_ir/aot_native variants. That's intended (no lowered comparison
+        # for pre-v1.10 releases).
+        run: make lowered || echo "no 'lowered' target at this ref — skipping; gogen_ir/aot_native variants will be absent"
 
       - name: Capture full perf snapshot
         id: perf
         run: |
           short_sha="$(git rev-parse --short=12 HEAD)"
           commit_epoch="$(git show -s --format=%ct HEAD)"
-          stamp="$(date -u -d "@${commit_epoch}" +%Y%m%dT%H%M%SZ)"
-          snapshot_name="${stamp}-${short_sha}.json"
+          # GNU date (Linux) uses -d @epoch; BSD date (macOS) uses -r epoch.
+          stamp="$(date -u -r "${commit_epoch}" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -d "@${commit_epoch}" +%Y%m%dT%H%M%SZ)"
+          # Tag the filename with the canonical machine key ("<arch>-<cpumodel>")
+          # so snapshots of the SAME commit from different machine classes never
+          # collide on one name. `uname -m` alone is NOT enough: Apple M1 and M2
+          # (and future arm parts) all report `arm64`, so an arm-only key would
+          # let an M2 run overwrite an M1 run — and vice-versa — for a commit.
+          # bench-ratchet derives the token from the same <arch>/<CPUModel> the
+          # timeline partitions on (arch = GOARCH, model via sysctl / cpuinfo),
+          # keeping the filename dimension in lockstep with the snapshot content.
+          machine_key="$(go run ./cmd/bench-ratchet machine-key 2>/dev/null || true)"
+          if [ -z "${machine_key}" ]; then
+            # Backfill checks out old release tags whose bench-ratchet predates
+            # the `machine-key` subcommand. Derive the same slug in shell so
+            # backfilled snapshots stay collision-safe across machine classes.
+            arch="$(go env GOARCH)"
+            if [ "$(uname -s)" = "Darwin" ]; then
+              model="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo)"
+            else
+              model="$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -1)"
+            fi
+            machine_key="$(printf '%s-%s' "${arch}" "${model}" \
+              | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '-' | sed -E 's/-+/-/g; s/^-+//; s/-+$//')"
+            [ -n "${machine_key}" ] || machine_key="unknown"
+          fi
+          snapshot_name="${stamp}-${short_sha}-${machine_key}.json"
           snapshot_tmp="${RUNNER_TEMP}/${snapshot_name}"
           raw_tmp="${RUNNER_TEMP}/${snapshot_name%.json}.jsonl"
 

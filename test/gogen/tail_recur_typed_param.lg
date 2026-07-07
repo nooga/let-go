@@ -1,0 +1,25 @@
+;; Native-lowering trampoline fixture — regression for the tail-call loop-local
+;; type bug. A tail-recursive fn with a TYPE-SPECIALIZED (int) parameter must
+;; lower to a native Go func whose mutable recur loop-local shares the param's
+;; inferred type (int), NOT a hardcoded vm.Value.
+;;
+;; Before the fix, lower_go.lg declared the loop-local `a0` as vm.Value
+;; (arg-local-decls) and the recur back-edge boxed to match (box-as-value ->
+;; `a0 = vm.Int(v4)`), while the body used it natively (`a0 - 1`, from the
+;; int-typed IR). Go rejected the resulting `var a0 vm.Value; a0 = arg0(int)` /
+;; `a0 - 1` as type mismatches, so the whole lowered `core` package failed to
+;; `go build`. Multi-arity `dorun` ([n coll] arity) was the first corpus fn of
+;; this shape to actually reach lowering (multi-arity was gated out before), but
+;; the bug is single-arity too — this fixture pins the minimal single-arity case.
+;;
+;; The trampoline lowers `run` to Go, wires it in under a build tag, and checks
+;; (run) matches the bytecode VM AND dispatches natively — so a miscompiled
+;; loop-local is caught as a build failure here.
+(ns examples.tail-recur-typed-param)
+
+;; countdown's `n` is inferred int (pos?/dec), and the recur carries it int.
+(defn countdown [n]
+  (if (pos? n) (recur (dec n)) n))
+
+(defn run []
+  (countdown 5))

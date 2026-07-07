@@ -6,7 +6,7 @@
 // terminal-specific lives here.
 (function() {
   const status = document.getElementById('status');
-  const termEl = document.getElementById('terminal');
+  const termEl = document.getElementById('app');
 
   const term = new Terminal({
     fontFamily: '"IBM Plex Mono", "Menlo", "Consolas", monospace',
@@ -20,7 +20,6 @@
 
   function showTerminal() {
     if (status) status.style.display = 'none';
-    termEl.style.display = 'block';
     term.open(termEl);
     fitAddon.fit();
     term.focus();

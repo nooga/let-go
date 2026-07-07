@@ -133,7 +133,7 @@ func TestLowerGoStrictArithmeticLowersToFuncDeclAST(t *testing.T) {
 	}
 
 	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "func add(") {
+	if !strings.Contains(rendered, "func Add(") {
 		t.Fatalf("expected rendered Go func decl\n--- go ---\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "int") || !strings.Contains(rendered, "return") || !strings.Contains(rendered, "+") {
@@ -283,7 +283,7 @@ func TestLowerGoFileRendersFullGoFile(t *testing.T) {
 	if !strings.HasPrefix(rendered, "package main") {
 		t.Fatalf("expected package header\n--- go ---\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "func add(") {
+	if !strings.Contains(rendered, "func Add(") {
 		t.Fatalf("expected func decl in file\n--- go ---\n%s", rendered)
 	}
 }
@@ -951,7 +951,7 @@ func TestLowerGoStrictVecDestructureDefn(t *testing.T) {
 	}
 
 	rendered := bindAndRenderGoDecl(t, result)
-	if !strings.Contains(rendered, "func vec_") {
+	if !strings.Contains(rendered, "func VecDest(") {
 		t.Fatalf("expected func decl\n--- go ---\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "rt.AddValue") && !strings.Contains(rendered, "+") {
@@ -1205,7 +1205,7 @@ func TestLowerGoCharLiteral(t *testing.T) {
 	optimizeLispIR(t, fn2)
 	result2 := lowerGo(t, fn2, ":bridge")
 	r2 := bindAndRenderGoDecl(t, result2)
-	if !strings.Contains(r2, "func ch(ec *vm.ExecContext) vm.Char") {
+	if !strings.Contains(r2, "func Ch(ec *vm.ExecContext) vm.Char") {
 		t.Fatalf("expected char return to UNBOX to vm.Char\n%s", r2)
 	}
 }
@@ -1308,9 +1308,9 @@ func TestLowerNsToGoLiftsIntraNsCall(t *testing.T) {
 	// - pass 1 discovers callee as override-eligible (single-arity, vm.Value uniform)
 	// - pass 2 re-lowers with *lowered-registry* bound
 	// - caller should emit a direct callee(...) call, NOT InvokeValue+LookupVar
-	hasDirectCall := strings.Contains(got, "callee(") && !regexp.MustCompile(`InvokeValue\([^\n]*LookupVar\([^\n]*"callee"`).MatchString(got)
+	hasDirectCall := strings.Contains(got, "Callee(") && !regexp.MustCompile(`InvokeValue\([^\n]*LookupVar\([^\n]*"callee"`).MatchString(got)
 	if !hasDirectCall {
-		t.Fatalf("expected direct callee(...) call (no InvokeValue+LookupVar for callee) in:\n%s", got)
+		t.Fatalf("expected direct Callee(...) call (no InvokeValue+LookupVar for callee) in:\n%s", got)
 	}
 }
 
@@ -1327,9 +1327,9 @@ func TestLowerNsToGoLiftsCrossNsCall(t *testing.T) {
 		   [(quote (defn caller2 [y] (str y)))])`)
 	src := string(v.(vm.String))
 	f := parseLoweredGo(t, src)
-	caller, ok := findFunc(f, func(n string) bool { return n == "caller2" })
+	caller, ok := findFunc(f, func(n string) bool { return n == "Caller2" })
 	if !ok {
-		t.Fatalf("no caller2 in:\n%s", src)
+		t.Fatalf("no Caller2 in:\n%s", src)
 	}
 	if _, ok := findIFnDispatch(caller.Body); !ok {
 		t.Fatalf("expected cross-ns str to lift to cached-var IFn dispatch:\n%s", src)
@@ -1404,9 +1404,9 @@ func TestLowerGoCrossNsCallLiftsToIFn(t *testing.T) {
 	src := string(v.(vm.String))
 	f := parseLoweredGo(t, src)
 
-	caller, ok := findFunc(f, func(n string) bool { return n == "caller4" })
+	caller, ok := findFunc(f, func(n string) bool { return n == "Caller4" })
 	if !ok {
-		t.Fatalf("no caller4 in:\n%s", src)
+		t.Fatalf("no Caller4 in:\n%s", src)
 	}
 	d, ok := findIFnDispatch(caller.Body)
 	if !ok {
@@ -1439,9 +1439,9 @@ func TestLowerGoNonVarCallStaysTrampoline(t *testing.T) {
 	src := string(v.(vm.String))
 	f := parseLoweredGo(t, src)
 
-	caller, ok := findFunc(f, func(n string) bool { return n == "apply1" })
+	caller, ok := findFunc(f, func(n string) bool { return n == "Apply1" })
 	if !ok {
-		t.Fatalf("no apply1 in:\n%s", src)
+		t.Fatalf("no Apply1 in:\n%s", src)
 	}
 	if _, ok := findIFnDispatch(caller.Body); ok {
 		t.Fatalf("calling a parameter must NOT use cached-var dispatch:\n%s", src)
@@ -1467,9 +1467,9 @@ func TestLowerGoDerefUsesCachedVarDispatch(t *testing.T) {
 	src := string(v.(vm.String))
 	f := parseLoweredGo(t, src)
 
-	caller, ok := findFunc(f, func(n string) bool { return n == "dr" })
+	caller, ok := findFunc(f, func(n string) bool { return n == "Dr" })
 	if !ok {
-		t.Fatalf("no dr in:\n%s", src)
+		t.Fatalf("no Dr in:\n%s", src)
 	}
 	d, ok := findIFnDispatch(caller.Body)
 	if !ok {
@@ -1558,5 +1558,89 @@ func TestLowerGoNestedCapturedClosurePrefixesAreLexical(t *testing.T) {
 	outer, inner := ms[0][1], ms[1][1]
 	if inner == outer || !strings.HasPrefix(inner, outer) {
 		t.Fatalf("inner closure prefix %q must lexically extend outer %q (else inner param can shadow captured outer param)\n--- go ---\n%s", inner, outer, rendered)
+	}
+}
+
+// Brick 4 (multi-arity gate) step 2a: a top-level multi-arity defn must lower
+// its arities to DISTINCT Go func names (`<name>_<arity>`), because Go has no
+// function overloading — emitting `func foo` twice is a redeclaration error
+// (the exact reason multi-arity was gated out of Go-lowering). compile-form*
+// binds ir.lower-go/*go-name-suffix* to `_<arity>` per arity so each emits a
+// uniquely-named, independently direct-callable helper.
+func TestLowerGoMultiArityEmitsDistinctPerArityHelperNames(t *testing.T) {
+	ensureLoader()
+
+	// `bar` calls `foo` at a statically-known arity (2) — it must lower to a
+	// STATIC direct call `foo_2(ec, …)`, not a CachedVarFn trampoline. That is
+	// the whole point of opening the multi-arity gate.
+	v := runLispExpr(t, `(do (create-ns 'lgtest)
+	                        (intern (the-ns 'lgtest) 'foo)
+	                        (intern (the-ns 'lgtest) 'bar)
+	                        (ir.passes.pipeline/lower-ns-to-go "lgtest" 'lgtest
+	                          '[(defn foo ([x] x) ([x y] y))
+	                            (defn bar [a b] (foo a b))]))`)
+	src, ok := v.(vm.String)
+	if !ok {
+		t.Fatalf("expected lower-ns-to-go to return rendered Go source string, got %T (%v)", v, v)
+	}
+	rendered := string(src)
+
+	// Step 2a: distinct per-arity helpers, no bare-name redeclaration.
+	if !strings.Contains(rendered, "func Foo_1(") || !strings.Contains(rendered, "func Foo_2(") {
+		t.Fatalf("expected per-arity helpers `func Foo_1(` + `func Foo_2(`\n--- go ---\n%s", rendered)
+	}
+	if strings.Contains(rendered, "func Foo(ec *vm.ExecContext, arg") {
+		t.Fatalf("arities collided on the bare name `func Foo(` (Go redeclaration)\n--- go ---\n%s", rendered)
+	}
+	// Step 3: the sibling `bar` call resolves to a per-arity STATIC direct call.
+	// bar's params render as arg0/arg1, distinguishing its call site from the
+	// override adapter's `foo_2(ec, args[0], args[1])`.
+	if !strings.Contains(rendered, "Foo_2(ec, arg0") {
+		t.Fatalf("expected sibling `(foo a b)` to lower to a direct `Foo_2(ec, arg0, …)` call, not a trampoline\n--- go ---\n%s", rendered)
+	}
+	if strings.Contains(rendered, `CachedVarFn(&__v_lgtest_foo`) {
+		t.Fatalf("sibling call to multi-arity `foo` still trampolines via CachedVarFn\n--- go ---\n%s", rendered)
+	}
+	// Step 2b: one multi-arity override adapter registered under the bare name,
+	// dispatching on len(args) (the dynamic/var path). Context-aware via
+	// __gogen_wrap; no MakeNativeMultiArity (can't thread ec at package load).
+	if !strings.Contains(rendered, "RegisterGoOverrides") || !strings.Contains(rendered, "\"foo\"") {
+		t.Fatalf("expected a var-override registration for \"foo\"\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "len(args)") {
+		t.Fatalf("expected the multi-arity override adapter to switch on len(args)\n--- go ---\n%s", rendered)
+	}
+}
+
+// go-export-name maps a public lg fn name to its exported Go name. Real names
+// keep their exact PascalCase (the naming-switch contract); an all-separator
+// name PascalCases to "" — an illegal Go identifier — and MUST fall back to the
+// LG_ last-resort (always exported + non-empty) rather than emit `func (ec …)`.
+func TestGoExportNameGuardsDegenerateNames(t *testing.T) {
+	ensureLoader()
+	// Real names: unchanged by the guard.
+	for in, want := range map[string]string{
+		"conj":     "Conj",
+		"vector?":  "VectorQmark",
+		"do-thing": "DoThing",
+		"conj!":    "ConjBang",
+		"->":       "Gt", // leading '-' only drops an empty first segment
+	} {
+		got := runLispExpr(t, `(ir.lower-go/go-export-name "`+in+`")`)
+		if s, ok := got.(vm.String); !ok || string(s) != want {
+			t.Fatalf("go-export-name %q = %v, want %q", in, got, want)
+		}
+	}
+	// Degenerate all-separator names collapse to "": must NOT be empty, and must
+	// be an exported (LG_-prefixed) identifier.
+	for _, in := range []string{"-", "--"} {
+		got := runLispExpr(t, `(ir.lower-go/go-export-name "`+in+`")`)
+		s, ok := got.(vm.String)
+		if !ok || len(string(s)) == 0 {
+			t.Fatalf("go-export-name %q must not be empty; got %v", in, got)
+		}
+		if !strings.HasPrefix(string(s), "LG_") {
+			t.Fatalf("go-export-name %q should fall back to an exported LG_ name; got %q", in, string(s))
+		}
 	}
 }

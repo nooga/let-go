@@ -180,17 +180,42 @@ func main() {
 		format       = flag.String("format", "text", "report format: text (default, ANSI terminal), markdown (GitHub/Slack-friendly table), json (the raw baseline)")
 		full         = flag.Bool("full", false, "run the FULL benchmark profile: pkg/vm fleet under -tags plus jank + IR compile under both VM variants. Slow (~25 min) — for mainline profiling and manual deep-dives.")
 		profile      = flag.String("profile", "", "named benchmark profile (e.g. 'pr-fast'). Mutually exclusive with -packages/-filter/-full. Sets the job list plus default count/benchtime/budget; explicit flags still override.")
+		wasm         = flag.Bool("wasm", false, "run benchmarks under GOOS=js/wasm via the go_js_wasm_exec shim (Node), reporting the machine as js/wasm. Forces -tags off (the wasm bundle ships the bytecode VM, not the lowered-Go path). Slower and noisier than native; for the wasm A/B gate.")
 	)
 	flag.Parse()
+
+	// Wasm mode: resolve the exec shim and pin the reported machine to js/wasm.
+	// The benchmark bundle xsofy ships runs the bytecode interpreter, so drop the
+	// gogen_ir tag — it also sidesteps building the lowered-Go tree under js/wasm.
+	if *wasm {
+		shim, err := resolveWasmExec()
+		if err != nil {
+			die("wasm: %v", err)
+		}
+		wasmExec = shim
+		*tags = ""
+	}
 
 	mode := "check"
 	if flag.NArg() > 0 {
 		mode = flag.Arg(0)
 	}
 	switch mode {
-	case "check", "update", "show", "capture", "aggregate", "snapshot":
+	case "check", "update", "show", "capture", "aggregate", "snapshot", "machine-key":
 	default:
-		die("unknown mode %q (want check / update / show / capture / aggregate / snapshot)", mode)
+		die("unknown mode %q (want check / update / show / capture / aggregate / snapshot / machine-key)", mode)
+	}
+
+	// machine-key: print the canonical machine token ("<arch>-<cpumodel>",
+	// slugified) and exit — no benchmarks. The perf-timeline workflow uses it
+	// to name timeline snapshots so two machine classes that share a GOARCH
+	// (e.g. Apple M1 vs M2, both arm64) get DISTINCT filenames and cannot
+	// overwrite each other's snapshot on the perf-data branch. Keeping this
+	// here (vs a shell reimplementation) makes the filename dimension track the
+	// exact "<arch>/<CPUModel>" partition the timeline groups snapshots by.
+	if mode == "machine-key" {
+		fmt.Println(machineKey())
+		return
 	}
 
 	// aggregate-only mode reads an existing .jsonl, no benchmarks run.
@@ -793,9 +818,18 @@ func captureOnePackage(pkg string, count int, benchtime, timeout, tags string, f
 	if tags != "" {
 		args = append(args, "-tags", tags)
 	}
+	if wasmExec != "" {
+		args = append(args, "-exec", wasmExec)
+	}
 	args = append(args, pkg)
 	cmd := exec.Command("go", args...)
-	if len(env) > 0 {
+	switch {
+	case wasmExec != "":
+		// A GOOS=js run needs a trimmed environment: the shim forwards the whole
+		// env into the wasm sandbox via Node argv, overflowing Node's arg-length
+		// limit when the parent env is large (CI, dev shells).
+		cmd.Env = wasmTestEnv(env)
+	case len(env) > 0:
 		cmd.Env = append(os.Environ(), env...)
 	}
 	stdout, err := cmd.StdoutPipe()
@@ -986,10 +1020,52 @@ func buildCurrentBaseline(results []Result, anchor Result) MachineBaseline {
 	}
 }
 
+// wasmExec is the go_js_wasm_exec shim path when running under -wasm, else "".
+// A package var (not threaded) because capture and machine detection both need
+// it and it is set once at startup.
+var wasmExec string
+
+// resolveWasmExec locates the go_js_wasm_exec shim in the active GOROOT. Go 1.21+
+// ships it under lib/wasm; older toolchains under misc/wasm.
+func resolveWasmExec() (string, error) {
+	out, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		return "", fmt.Errorf("go env GOROOT: %w", err)
+	}
+	goroot := strings.TrimSpace(string(out))
+	for _, rel := range []string{"lib/wasm/go_js_wasm_exec", "misc/wasm/go_js_wasm_exec"} {
+		p := filepath.Join(goroot, rel)
+		if _, statErr := os.Stat(p); statErr == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("go_js_wasm_exec not found under %s (lib/wasm or misc/wasm)", goroot)
+}
+
+// wasmTestEnv builds a minimal environment for a GOOS=js `go test` run, keeping
+// only what the toolchain and the Node shim need. See the call site for why the
+// full environment cannot be forwarded.
+func wasmTestEnv(extra []string) []string {
+	e := []string{"GOOS=js", "GOARCH=wasm"}
+	for _, k := range []string{"HOME", "PATH", "GOROOT", "GOCACHE", "GOMODCACHE", "GOPATH", "TMPDIR"} {
+		if v, ok := os.LookupEnv(k); ok {
+			e = append(e, k+"="+v)
+		}
+	}
+	return append(e, extra...)
+}
+
 func detectMachine() Machine {
+	osName, arch := runtime.GOOS, runtime.GOARCH
+	if wasmExec != "" {
+		// The bench binary is native (it shells `go test`), but the benchmarks
+		// execute under js/wasm — report that, so wasm numbers key to their own
+		// machine profile and never mix with the native baseline.
+		osName, arch = "js", "wasm"
+	}
 	return Machine{
-		OS:        runtime.GOOS,
-		Arch:      runtime.GOARCH,
+		OS:        osName,
+		Arch:      arch,
 		NumCPU:    runtime.NumCPU(),
 		CPUModel:  detectCPUModel(),
 		GoVersion: runtime.Version(),
@@ -1020,6 +1096,43 @@ func detectCPUModel() string {
 		}
 	}
 	return "unknown"
+}
+
+// machineKey returns a filesystem-safe token identifying the machine CLASS a
+// snapshot belongs to. It slugifies perfdata.MachineKey (the exact
+// "<arch>/<CPUModel>" key the timeline groups snapshots by), so the filename
+// dimension is derived from — and stays in lockstep with — the content
+// partition. Machines that share a GOARCH but differ in CPU (Apple M1 vs M2 —
+// both arm64) therefore get DISTINCT filenames and never overwrite one
+// another's snapshot on the perf-data branch. Arch is runtime.GOARCH (matching
+// the snapshot content), not `uname -m`, so filename and content agree.
+func machineKey() string {
+	key := slugify(perfdata.MachineKey(detectMachine()))
+	if key == "" {
+		return "unknown"
+	}
+	return key
+}
+
+// slugify lowercases s and collapses each run of non-[a-z0-9] characters into a
+// single '-', trimming leading/trailing dashes. Deterministic and stable for a
+// given CPU model string.
+func slugify(s string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func gitShortSHA() string {

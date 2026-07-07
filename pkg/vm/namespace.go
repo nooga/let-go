@@ -424,6 +424,22 @@ func (n *Namespace) registrySnapshot() map[Symbol]*Var {
 	return out
 }
 
+// PublicVars snapshots the namespace's own non-private interned vars, keyed by
+// their unqualified symbol. Backs the ns-publics core fn. isPrivate is a plain
+// field read, so filtering under the read lock introduces no lock-order risk.
+func (n *Namespace) PublicVars() map[Symbol]*Var {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make(map[Symbol]*Var, len(n.registry))
+	for k, v := range n.registry {
+		if v.isPrivate {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
 	ret := []Symbol{}
 	for _, r := range ns.refersSnapshot() {

@@ -37,6 +37,8 @@
 (declare function-return-spec)
 (declare const-param-of)
 (declare go-export-name)
+(declare param-inferred-type)
+(declare param-go-spec)
 
 ;; --- closure-local arg naming -----------------------------------------------
 ;; A lowered fn names its parameters arg0/arg1/… and (for tail-call fns) its
@@ -1160,6 +1162,26 @@
     (when assigns
       (conj assigns (gogen/goto-stmt (label-name (ir/branch-target-target bt)))))))
 
+(defn- tail-call-arg-expr [f closed-exprs nid i variadic-slot?]
+  "Expression assigned to recur loop-slot i (`a<i>`) at a tail-call back-edge.
+   Coerces the arg to the SLOT's type (param-go-spec) instead of unconditionally
+   boxing to vm.Value: a native slot (int/float64/…) whose arg already has that
+   type gets the raw expr (`a0 = v4`, no box); box/unbox only across a genuine
+   vm.Value boundary. The variadic rest slot (args0 []vm.Value) still boxes.
+   Shared by BOTH tail-call emitters (lower-terminator + the structured :tail
+   case) so they can't diverge — the divergence that left the back-edge boxing
+   an int slot after the loop-local was fixed to int."
+  (if variadic-slot?
+    (box-as-value f closed-exprs nid)
+    (let [target-spec (param-go-spec f i)
+          arg-spec    (go-type-spec (ir/type-of nid f))]
+      (cond
+        (= target-spec arg-spec)   (value-expr f closed-exprs nid)
+        (= target-spec "vm.Value") (box-as-value f closed-exprs nid)
+        (= arg-spec "vm.Value")    (let [raw (value-expr f closed-exprs nid)]
+                                     (when raw (unbox-from-value target-spec raw)))
+        :else                      (box-as-value f closed-exprs nid)))))
+
 (defn- lower-terminator [f closed-exprs bid]
   (let [term (ir/block-term bid f)
         op   (ir/op term f)
@@ -1208,8 +1230,10 @@
             assigns (loop [i 0 remaining tail-args out []]
                       (if (empty? remaining)
                         out
-                        (let [val-expr (box-as-value f closed-exprs (first remaining))
-                              lhs (if (and (ir/fn-variadic? f) (= i fixed-arity))
+                        (let [nid            (first remaining)
+                              variadic-slot? (and (ir/fn-variadic? f) (= i fixed-arity))
+                              val-expr       (tail-call-arg-expr f closed-exprs nid i variadic-slot?)
+                              lhs (if variadic-slot?
                                     (gogen/ident (go-args-name "args0"))
                                     (gogen/ident (go-arg-name "a" i)))]
                           (if (nil? val-expr)
@@ -2216,6 +2240,19 @@
 ;; this to nil (lower-fn-lit) so nested closures keep their body-derived shape.
 (def ^:dynamic *force-needs-error* nil)
 
+;; Strictness gate: when true, a function whose CFG the structurizer cannot
+;; fully recover (structurize reports fallbacks > 0) is REFUSED rather than
+;; emitted through the goto+label path. The goto-CFG emitter is the accidental
+;; SSA-style drift away from the Indexed-RPN model — its out-of-form coalescing
+;; can alias two distinct, simultaneously-live opaque (vm.Value) locals onto one
+;; Go variable (see coalesce-map). Under strict mode we surface that drift loudly
+;; (throw, caller falls the whole fn back to bytecode) instead of silently
+;; emitting a mis-lowered goto body. Bound from the LG_STRICT_STRUCTURED env at
+;; the driver, or directly in tests. Default off: the non-strict path stays
+;; correct via the coalesce-map interference fix, this just forbids the path.
+(def ^:dynamic *strict-structured?*
+  (boolean (System/getenv "LG_STRICT_STRUCTURED")))
+
 ;; Public (was defn-): ir.passes.pipeline/protocol-method-sigs calls this to
 ;; derive each impl body shape (force-needs-error? unbound) when joining sigs.
 (defn function-needs-error? [f]
@@ -2285,9 +2322,33 @@
           (= :tail-call (ir/op term f)) true
           :else (recur (rest blocks)))))))
 
+(defn- param-inferred-type [f i]
+  "Lattice type inferred for parameter i — for a tail-call fn this IS the
+   loop-carried type, since typeinfer's fixpoint folds every recur back-edge arg
+   into the entry LoadArg. Priority: load-arg inst inference > explicit
+   fn-arg-types metadata > :unknown. The single source of truth for a param's
+   type, shared by params-for (the Go param decl `arg<i>`), arg-local-decls (its
+   mutable tail-call loop-local `a<i>`), and the tail-call back-edge assignment —
+   so the three can never diverge. That divergence was the bug: params-for learned
+   to specialize `arg<i>` to a native type (int/float64) from the indexed IR type,
+   but the loop-local + back-edge stayed hardcoded vm.Value, producing Go that
+   both used `a<i>` natively and assigned it boxed."
+  (let [arg-types  (or (ir/fn-arg-types f) [])
+        load-arg-t (ir/fn-load-arg-type f i)
+        meta-t     (if (< i (count arg-types)) (nth arg-types i) :unknown)]
+    (if (not= :unknown load-arg-t) load-arg-t meta-t)))
+
+(defn- param-go-spec [f i]
+  "Go type spec string for parameter i's loop-local (int/float64/string/bool/
+   vm.Value/…). Falls back to vm.Value for an un-narrowed/unsupported type, which
+   is exactly the pre-fix behaviour for those params."
+  (or (go-type-spec (param-inferred-type f i)) "vm.Value"))
+
 (defn- arg-local-decls [f]
   "For tail-call fns, declare mutable locals (a0, a1, ...) that shadow the
-   immutable Go params, plus init assignments (a0 = arg0, ...).
+   immutable Go params, plus init assignments (a0 = arg0, ...). Each loop-local
+   takes its param's inferred Go type (param-go-spec), NOT a hardcoded vm.Value —
+   so `a<i> = arg<i>` and the body's native uses of `a<i>` agree.
    Returns [var-decls assign-stmts]."
   (let [arity       (ir/fn-arity f)
         variadic?   (ir/fn-variadic? f)
@@ -2304,7 +2365,7 @@
         (let [sym (go-arg-name "a" i)
               arg-sym (go-arg-name "arg" i)]
           (recur (inc i)
-                 (conj decls (gogen/var-decl sym (gogen/type "vm.Value") nil))
+                 (conj decls (gogen/var-decl sym (gogen/type (param-go-spec f i)) nil))
                  (conj assigns
                        (gogen/assign "=" (gogen/ident sym) (gogen/ident arg-sym)))))))))
 
@@ -2325,9 +2386,23 @@
       (doseq [nid (ir/block-insts bid f)] (swap! acc conj nid)))
     (distinct @acc)))
 
+(declare oos-branch-targets)
+
 (defn- oos-unsafe-names [f]
-  ;; #{source-name} unsafe to coalesce: some single inst references two
-  ;; distinct nids sharing the name (both live at once — e.g. shadowing).
+  ;; #{source-name} unsafe to coalesce. Two interference sources:
+  ;;  (a) intra-inst: a single inst references two distinct nids sharing the
+  ;;      name (both live at once — e.g. lexical shadowing).
+  ;;  (b) edge-copy vs in-block def: a block DEFINES a nid carrying name S while
+  ;;      its terminator's branch-target args copy a DIFFERENT nid carrying S
+  ;;      into a successor param. The parallel edge copies run at block END —
+  ;;      after the in-block def has overwritten the shared Go local — so the
+  ;;      copy reads the clobbered value. This is NOT caught by (a): the two
+  ;;      S-values are read by different insts (the def's inst vs the terminator
+  ;;      edge). Auto-gensym temps (`when-let`/`if-let` `temp#`) are not unique
+  ;;      across sibling/nested macroexpansions, so two nested when-lets carry
+  ;;      the SAME source name `tem__G__N` while both are live — exactly this
+  ;;      interference. Marking the name unsafe versions both onto distinct
+  ;;      locals (`<name>_<nid>`), restoring Indexed-RPN value identity.
   (let [unsafe (atom #{})]
     (doseq [bid (ir/blocks f)
             nid (ir/block-insts bid f)]
@@ -2338,6 +2413,28 @@
               (if-let [prev (get @seen s)]
                 (when (not= prev r) (swap! unsafe conj s))
                 (swap! seen assoc s r)))))))
+    ;; `defs` records each name's LAST def in the block — the value live at the
+    ;; terminator — so re-defining then forwarding the fresh value stays safe.
+    ;; Only :branch/:branch-if terminators carry branch-target args, so the
+    ;; map + scan are built only for blocks that can actually clobber; the common
+    ;; leaf :return/:tail blocks (whose oos-branch-targets is empty) are skipped.
+    (doseq [bid (ir/blocks f)]
+      (let [term    (ir/block-term bid f)
+            targets (when term (oos-branch-targets term f))]
+        (when (seq targets)
+          (let [defs (reduce (fn [m nid]
+                               (let [s (source-name-of f nid)]
+                                 (if (and (string? s) (pos? (count s)))
+                                   (assoc m s nid)
+                                   m)))
+                             {}
+                             (ir/block-insts bid f))]
+            (doseq [bt targets]
+              (doseq [arg (ir/branch-target-args bt)]
+                (let [s (source-name-of f arg)]
+                  (when (and (string? s) (pos? (count s)))
+                    (when-let [d (get defs s)]
+                      (when (not= d arg) (swap! unsafe conj s)))))))))))
     @unsafe))
 
 (defn- oos-captured-names [f]
@@ -2388,6 +2485,19 @@
               (swap! renames assoc s (str prefix k)))))))
     @renames))
 
+(defn- imported-pkg-aliases []
+  "Go package aliases a lowered file may import — the leaf segment of every
+   cross-package (:go-pkg) callee in the active *lowered-registry*. A LOCAL Go
+   name equal to one of these would SHADOW the imported package: a cross-pkg
+   direct call `graph.Sccs_1(ec, graph)` binds the `graph` qualifier to the
+   local `var graph vm.Value`, not the package (Go has no `pkg.pkg` escape). So
+   coalesce-map keeps such locals OFF the bare source name and versions them
+   (`graph_<nid>`) instead — the callee package stays reachable by its plain
+   alias. Empty in pass 1 (registry not yet populated); the final whole-program
+   pass has the full cross-pkg registry, which is the emission that matters."
+  (reduce (fn [s e] (if (:go-pkg e) (conj s (pkg-alias-from (:go-pkg e))) s))
+          #{} (vals *lowered-registry*)))
+
 (defn- coalesce-map [f]
   ;; {nid go-name} for every nid whose source name is safe to coalesce; all
   ;; same-named versions map to the one bare name. Absent nids fall through to
@@ -2395,7 +2505,8 @@
   ;; A name is coalescable only when it is (1) interference-safe and (2) every
   ;; version shares ONE Go type — versions of differing type (e.g. the and/or
   ;; macro temps, bool vs vm.Value) cannot share a single mutable local.
-  (let [unsafe (into (oos-unsafe-names f) (oos-captured-names f))
+  (let [reserved (imported-pkg-aliases)
+        unsafe (into (oos-unsafe-names f) (oos-captured-names f))
         nids   (oos-all-nids f)
         name-types (reduce (fn [m nid]
                              (let [s (source-name-of f nid)]
@@ -2435,9 +2546,12 @@
                          (not (contains? conflicted s))
                          (= 1 (count (get name-types s))))
                   (let [gn (go-name (canonical-name f s))]
-                    ;; never coalesce to the Go blank identifier or an empty
-                    ;; name; those fall through to versioned naming (valid).
-                    (if (and (pos? (count gn)) (not= "_" gn))
+                    ;; never coalesce to the Go blank identifier, an empty name,
+                    ;; or a name that would shadow an imported package alias
+                    ;; (reserved) — those fall through to collision-free versioned
+                    ;; naming (`<name>_<nid>`), keeping the package reachable.
+                    (if (and (pos? (count gn)) (not= "_" gn)
+                             (not (contains? reserved gn)))
                       (assoc result nid gn)
                       result))
                   result)))
@@ -2673,8 +2787,10 @@
                       assigns (loop [i 0 remaining tail-args out []]
                                 (if (empty? remaining)
                                   out
-                                  (let [val-expr (box-as-value f closed-exprs (first remaining))
-                                        lhs (if (and (ir/fn-variadic? f) (= i fixed-arity))
+                                  (let [nid            (first remaining)
+                                        variadic-slot? (and (ir/fn-variadic? f) (= i fixed-arity))
+                                        val-expr       (tail-call-arg-expr f closed-exprs nid i variadic-slot?)
+                                        lhs (if variadic-slot?
                                               (gogen/ident (go-args-name "args0"))
                                               (gogen/ident (go-arg-name "a" i)))]
                                     (if (nil? val-expr)
@@ -2765,6 +2881,15 @@
            st-result        (st/structurize f)
            structured-body  (when (zero? (:fallbacks st-result))
                               (lower-tree f closed-exprs (:tree st-result)))
+           ;; Strict mode: refuse the goto-CFG drift path outright. A fn that
+           ;; structurize could not fully recover would otherwise be emitted via
+           ;; the coalescing-prone goto+label loop below; hard-fail instead so
+           ;; the caller falls the whole fn back to bytecode (always correct).
+           _                (when (and *strict-structured?* (not structured-body))
+                              (throw (str "strict-structured: refusing goto-CFG lowering of "
+                                          (ir/fn-name f)
+                                          " (structurize fallbacks="
+                                          (:fallbacks st-result) ")")))
            body-stmts       (if structured-body
                               structured-body
                               (loop [blocks (ir/blocks f) out []]
@@ -2957,6 +3082,38 @@
 (defn- lower-fn* [f mode]
   (let [params  (params-for f)
         results (result-node f)
+        ;; The Go identifier this fn's decl + call sites use. Go has no function
+        ;; overloading, so a multi-arity defn's arities cannot all emit
+        ;; `func <name>` (redeclaration). For a multi-arity member the emitted
+        ;; name is `<go-name>_<arity>` (distinct, independently direct-callable);
+        ;; single-arity fns stay bare (byte-identical to before). Both the
+        ;; multi-arity flag AND the arity are carried ON THE FORM (the ir-fn map,
+        ;; passed as `f`), so no dynamic var / LookupVar is involved — this stays
+        ;; correct under native lowering (a `def`'d var would not be interned).
+        ;; :fn-name stays the bare name (the registry keys [ns name arity] and the
+        ;; var-override register the whole multi-arity under it).
+        ;; Base Go name: PUBLIC fns get an EXPORTED PascalCase name
+        ;; (go-export-name: conj -> Conj, vector? -> VectorQmark) so cross-package
+        ;; direct calls read `core.Conj(ec,…)` — the fn IS its own callable name,
+        ;; no `LG_`-prefixed forwarding wrapper. PRIVATE fns (`defn-`/`^:private`)
+        ;; keep the unexported lowercase go-name (conj -> conj); they are never
+        ;; cross-package referenced, so package-private is correct and a future
+        ;; violation surfaces as a go-build "undefined: pkg.foo" (caught by
+        ;; check-generated), not a silent miscompile. Public/private is carried ON
+        ;; THE FORM (ir/fn-private?), like :multi-arity? — no dynamic var, so the
+        ;; native self-hosted lowering path stays correct.
+        emit-go-name (let [nm   (ir/fn-name f)
+                           base (if (ir/fn-private? f)
+                                  (go-name nm)
+                                  (go-export-name nm))]
+                       (if (ir/fn-multi-arity? f)
+                         ;; `_<arity>`, plus a `v` marker for a variadic arity so
+                         ;; it can't redeclare a same-count FIXED arity — e.g.
+                         ;; pmap's fixed [n f coll] (arity 3) and variadic
+                         ;; [f coll & colls] (also arity 3) become pmap_3 vs
+                         ;; pmap_3v. fn-arity + fn-variadic? are both on the form.
+                         (str base "_" (ir/fn-arity f) (if (ir/fn-variadic? f) "v" ""))
+                         base))
         ;; Disable native/typed direct calls in this fn AND its nested closures
         ;; (lowered within this dynamic extent via lower-fn-lit) when the body
         ;; can rebind a var root — with-redefs / alter-var-root / intern. The
@@ -2991,7 +3148,7 @@
       {:status :lowered
        :imports imports
        :fn-name (str (ir/fn-name f))
-       :go-name (go-name (ir/fn-name f))
+       :go-name emit-go-name
        :arity (ir/fn-arity f)
        :needs-error? needs-error?
        :override-eligible? (override-uniform-value? f)
@@ -3006,16 +3163,111 @@
        ;; `func name(ec *vm.ExecContext, arg0 …)`. Inline lambdas (lower-fn-lit)
        ;; do NOT get this param — they capture the enclosing fn's ec lexically.
        :decl   (gogen/func-decl
-                 (go-name (ir/fn-name f))
+                 emit-go-name
                  (into [(gogen/param "ec" (gogen/type "*vm.ExecContext"))] params)
                  results body)})))
 
-(defn go-export-name
-  "Convert a symbol/string to an exported Go name (PascalCase).
-   Handles multi-word kebab-case names like do-thing -> DoThing."
+;; PascalCase munge tokens for the chars that aren't valid in a Go identifier,
+;; so a predicate/bang/etc. name exports as clean PascalCase (vector? ->
+;; VectorQmark, conj! -> ConjBang, map* -> MapStar) instead of an invalid Go
+;; identifier. Capitalized (no surrounding underscores) so they read as
+;; PascalCase word-parts. Distinct from go-name-munge-map (the _QMARK_-style
+;; unexported scheme) — this one is only for EXPORTED names.
+(def ^:private go-export-munge-map
+  {\? "Qmark" \! "Bang" \* "Star" \+ "Plus" \> "Gt" \< "Lt" \= "Eq"
+   \% "Pct" \& "Amp" \| "Bar" \: "Colon" \~ "Tilde" \^ "Caret"
+   \/ "Slash" \' "Quote"})
+
+(def ^:dynamic *export-name-overrides*
+  "Per-namespace {source-name-string -> resolved exported Go name}, bound around a
+   namespace's collect + lower passes (see build-export-name-map). PascalCase is
+   NOT injective, so this remaps the loser of any collision to a distinct name.
+   nil (the default) means compute the plain PascalCase — the collision-free case."
+  nil)
+
+(defn go-export-name*
+  "Pure exported Go name (PascalCase) for s, ignoring collision overrides. Multi-word
+   kebab-case names PascalCase (do-thing -> DoThing). A word containing a char
+   illegal in a Go identifier is munged: a mapped predicate/bang/etc. char uses its
+   token (vector? -> VectorQmark, conj! -> ConjBang); ANY other illegal char gets a
+   deterministic U<hex> escape (foo@bar -> FooU0040bar) so the result is ALWAYS a
+   valid identifier. Clean alphanumeric words keep the exact prior behavior
+   (capitalize), so already-generated names are unchanged."
   [s]
-  (let [name-str (str s)]
-    (clojure.string/join "" (map clojure.string/capitalize (clojure.string/split name-str #"-")))))
+  (let [name-str (str s)
+        alnum?   (fn [ch] (let [c (int ch)]
+                            (or (and (>= c 97) (<= c 122))    ; a-z
+                                (and (>= c 65) (<= c 90))     ; A-Z
+                                (and (>= c 48) (<= c 57))     ; 0-9
+                                (= c 95))))                   ; _ (legal Go ident char)
+        special? (fn [w] (some (fn [ch] (or (contains? go-export-munge-map ch)
+                                            (not (alnum? ch)))) w))
+        cap-word (fn [w]
+                   (if (special? w)
+                     (apply str
+                            (map-indexed
+                              (fn [i ch]
+                                (or (get go-export-munge-map ch)
+                                    (cond
+                                      (not (alnum? ch)) (format "U%04X" (int ch))
+                                      (zero? i)         (clojure.string/upper-case (str ch))
+                                      :else             (str ch))))
+                              w))
+                     (clojure.string/capitalize w)))]
+    (let [pascal (clojure.string/join "" (map cap-word (clojure.string/split name-str #"-")))]
+      ;; A non-empty result always starts with an uppercase letter (munge tokens,
+      ;; U<hex> escapes, and capitalize all do), so the ONLY way to get an illegal
+      ;; identifier is an all-separator name (e.g. a public fn literally named `-`)
+      ;; collapsing to "". Guard it with the LG_ last-resort — `LG_<go-name>` is
+      ;; always exported and valid. Untriggered by the current corpus (verified).
+      (if (pos? (count pascal)) pascal (str "LG_" (go-name s))))))
+
+(defn go-export-name
+  "Exported Go name for s, honoring the active namespace's collision-resolution
+   overrides (*export-name-overrides*). Falls back to the plain PascalCase."
+  [s]
+  (or (get *export-name-overrides* (str s))
+      (go-export-name* s)))
+
+(defn- form-export-name
+  "Source-name string of a top-level form that becomes an EXPORTED Go identifier
+   (public defn / deftype / defprotocol / defmulti), else nil. defn- and ^:private
+   defns stay package-private (go-name, never go-export-name), so they never enter
+   the exported-name space and can't collide there."
+  [form]
+  (when (seq? form)
+    (let [head (first form)
+          nm   (second form)]
+      (cond
+        (= head 'defn)        (when-not (:private (meta nm)) (str nm))
+        (= head 'deftype)     (str nm)
+        (= head 'defprotocol) (str nm)
+        (= head 'defmulti)    (str nm)
+        :else nil))))
+
+(defn build-export-name-map
+  "Deterministic {source-name -> resolved exported Go name} for a namespace's forms.
+   PascalCase is not injective (vector? and vector-qmark both -> VectorQmark), so
+   when distinct source names claim the same identifier the FIRST in source order
+   keeps it and each later one gets a collision-free suffix (the injective safe
+   munge, go-name). No collisions -> every name maps to its plain PascalCase, so a
+   collision-free namespace is byte-identical to running without a map."
+  [forms]
+  (:map
+    (reduce
+      (fn [acc nm]
+        (if (contains? (:map acc) nm)
+          acc
+          (let [base     (go-export-name* nm)
+                claimed  (:claimed acc)
+                resolved (if (contains? claimed base)
+                           (loop [cand (str base "_" (go-name nm))]
+                             (if (contains? claimed cand) (recur (str cand "_")) cand))
+                           base)]
+            {:map     (assoc (:map acc) nm resolved)
+             :claimed (conj claimed resolved)})))
+      {:map {} :claimed #{}}
+      (keep form-export-name forms))))
 
 (defn lower-method [f recv-type method-name]
   "Lower an already-built+optimized IR fn as a Go receiver method using the

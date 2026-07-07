@@ -10,6 +10,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	_ "embed"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"math/big"
@@ -272,6 +273,23 @@ func ClearTaps() {
 	tapsMu.Lock()
 	taps = nil
 	tapsMu.Unlock()
+}
+
+// asBytes returns the raw bytes of a String or a byte-array (an ArrayByte
+// TypedArray) for the binary file/stream sinks (spit, write!). A let-go String
+// already holds arbitrary bytes — read-bytes/read-file return one — but there was
+// no way to *write* a byte-array's bytes: it would stringify to its #byte-array[…]
+// repr. This is the inverse of the `bytes` coercion. ok is false for other values.
+func asBytes(v vm.Value) ([]byte, bool) {
+	switch c := v.(type) {
+	case vm.String:
+		return []byte(string(c)), true
+	case *vm.TypedArray:
+		if c.Kind() == vm.ArrayByte {
+			return c.Unbox().([]byte), true
+		}
+	}
+	return nil, false
 }
 
 // nsAliases maps alternative namespace names to canonical names.
@@ -1156,11 +1174,8 @@ func toSeq(v vm.Value) vm.Seq {
 		return nil
 	}
 	if ls, ok := v.(*vm.LazySeq); ok {
-		s := ls.Resolve()
-		if s == vm.EmptyList {
-			return nil
-		}
-		return s
+		// Resolve() returns nil (never EmptyList) for an empty lazy seq.
+		return ls.Resolve()
 	}
 	if c, ok := v.(vm.Counted); ok && c.RawCount() == 0 {
 		return nil
@@ -3480,11 +3495,11 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("spit expected String")
 		}
-		contents, ok := vs[1].(vm.String)
+		contents, ok := asBytes(vs[1])
 		if !ok {
-			return vm.NIL, fmt.Errorf("spit expected String")
+			return vm.NIL, fmt.Errorf("spit expected String or byte-array")
 		}
-		err := os.WriteFile(string(filename), []byte(contents), 0644)
+		err := os.WriteFile(string(filename), contents, 0644)
 		if err != nil {
 			return vm.NIL, fmt.Errorf("spit failed: %w", err)
 		}
@@ -5336,6 +5351,38 @@ func installLangNS() {
 		return vm.Symbol(ns.Name()), nil
 	})
 
+	// ns-publics returns a map of symbol -> Var for the public (non-private)
+	// interned vars of a namespace, given either the namespace or a symbol
+	// naming it (matching Clojure, which passes its arg through the-ns).
+	nsPublics, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		var ns *vm.Namespace
+		switch a := vs[0].(type) {
+		case *vm.Namespace:
+			ns = a
+		case vm.Symbol:
+			// resolveNSAlias canonicalizes the Clojure-facing names the rest of
+			// the runtime accepts (clojure.core -> core, clojure.string ->
+			// string, …); non-aliases pass through unchanged.
+			nsMu.RLock()
+			ns = nsRegistry[resolveNSAlias(string(a))]
+			nsMu.RUnlock()
+			if ns == nil {
+				return vm.NIL, fmt.Errorf("no namespace: %s found", a)
+			}
+		default:
+			return vm.NIL, fmt.Errorf("ns-publics expected Symbol or Namespace")
+		}
+		pubs := ns.PublicVars()
+		kvs := make([]vm.Value, 0, len(pubs)*2)
+		for sym, v := range pubs {
+			kvs = append(kvs, sym, v)
+		}
+		return vm.NewMap(kvs), nil
+	})
+
 	// lazy-seq* creates a LazySeq from a thunk function
 	lazySeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -6557,6 +6604,7 @@ func installLangNS() {
 	ns.Def("all-ns", allNs)
 	ns.Def("the-ns", theNs)
 	ns.Def("ns-name", nsName)
+	ns.Def("ns-publics", nsPublics)
 
 	ns.Def("peek", peek)
 	ns.Def("pop", pop)
@@ -7413,6 +7461,71 @@ func installLangNS() {
 		return vm.NIL, fmt.Errorf("bytes expects String or byte-array, got %s", vs[0].Type().Name())
 	})
 	ns.Def("bytes", bytesf)
+
+	// base64-encode — (base64-encode x) → standard padded base64 String. x is a
+	// String or byte-array; pairs with the byte-array sinks and read-bytes.
+	b64encodef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		data, ok := asBytes(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("base64-encode expects String or byte-array, got %s", vs[0].Type().Name())
+		}
+		return vm.String(base64.StdEncoding.EncodeToString(data)), nil
+	})
+	ns.Def("base64-encode", b64encodef)
+
+	// base64-decode — (base64-decode s) → byte-array of the decoded bytes.
+	b64decodef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("base64-decode expects String")
+		}
+		data, derr := base64.StdEncoding.DecodeString(string(s))
+		if derr != nil {
+			return vm.NIL, fmt.Errorf("base64-decode: %w", derr)
+		}
+		return vm.NewByteArrayFrom(data), nil
+	})
+	ns.Def("base64-decode", b64decodef)
+
+	// base64url-encode — (base64url-encode x) → URL-safe base64 String, no
+	// padding (RFC 4648 §5, the "base64url"/JWT alphabet). Unlike base64-encode,
+	// the output is safe in URL query params, env vars, and filenames: it uses
+	// -_ instead of +/ and omits = padding, so it needs no percent-encoding.
+	b64urlencodef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		data, ok := asBytes(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("base64url-encode expects String or byte-array, got %s", vs[0].Type().Name())
+		}
+		return vm.String(base64.RawURLEncoding.EncodeToString(data)), nil
+	})
+	ns.Def("base64url-encode", b64urlencodef)
+
+	// base64url-decode — (base64url-decode s) → byte-array. Inverse of
+	// base64url-encode; decodes the URL-safe, unpadded alphabet only.
+	b64urldecodef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("base64url-decode expects String")
+		}
+		data, derr := base64.RawURLEncoding.DecodeString(string(s))
+		if derr != nil {
+			return vm.NIL, fmt.Errorf("base64url-decode: %w", derr)
+		}
+		return vm.NewByteArrayFrom(data), nil
+	})
+	ns.Def("base64url-decode", b64urldecodef)
 
 	// ints — coerce seq to int-array
 	intsf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {

@@ -118,6 +118,7 @@ type ProtocolFn struct {
 	protocol   *Protocol
 	methodName Symbol
 	name       string
+	meta       Value // IMeta support; nil until (with-meta fn m) copies one in
 }
 
 func NewProtocolFn(protocol *Protocol, methodName Symbol) *ProtocolFn {
@@ -134,6 +135,23 @@ func (f *ProtocolFn) String() string {
 	return fmt.Sprintf("<protocol-fn %s/%s>", f.protocol.name, f.name)
 }
 func (f *ProtocolFn) Arity() int { return -1 }
+
+// Meta implements IMeta.
+func (f *ProtocolFn) Meta() Value {
+	if f.meta == nil {
+		return NIL
+	}
+	return f.meta
+}
+
+// WithMeta implements IMeta. Returns a copy carrying m; the protocol and method
+// name are shared (metadata does not affect dispatch), matching the other
+// FuncType values so a protocol method round-trips metadata like any fn.
+func (f *ProtocolFn) WithMeta(m Value) Value {
+	cp := *f
+	cp.meta = m
+	return &cp
+}
 
 func (f *ProtocolFn) Invoke(args []Value) (Value, error) {
 	return f.invokeIn(RootExecContext, args)

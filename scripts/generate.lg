@@ -95,12 +95,21 @@
     (in-ns saved)                          ; restore the ns the generator switched away from
     (spit out result)))
 
-;; Run a build command (the resolved go) with inherited stdio; abort nonzero.
+;; Run a build command (the resolved go) and abort on nonzero exit. os/exec*
+;; streams the child's stdout/stderr through the current *out*/*err* bindings, so
+;; we rebind *err* to *out* for the call: the child's diagnostics (e.g. lgbgen's
+;; `Can't resolve <sym>` CompileError, which it prints to stderr) land in the
+;; SAME stream as our progress. That stream is the one reliably logged — a
+;; `make generate` whose tee captured only stdout used to show `command failed
+;; (exit 1)` with the child's real error nowhere in the log. Merged here so it
+;; can never hide again, while keeping live (streamed, not buffered) output.
 (defn run! [& cmd]
-  (println ">>" (apply str (interpose " " cmd)))
-  (let [code (apply os/exec* cmd)]
-    (when (not= 0 code)
-      (die (str "command failed (exit " code "): " (first cmd))))))
+  (let [line (apply str (interpose " " cmd))]
+    (println ">>" line)
+    (let [code (binding [*err* *out*] (apply os/exec* cmd))]
+      (when (not= 0 code)
+        (die (str "command failed (exit " code "): " line
+                  " — see the child's output above for the underlying error"))))))
 
 ;; --- provenance ---
 (defn read-prior []

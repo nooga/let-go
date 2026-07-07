@@ -180,12 +180,20 @@ func installIOBuiltins(ns *vm.Namespace) {
 		return vm.NIL, h.Close()
 	})
 
-	// read-line — (read-line handle) → String or nil at EOF
-	readLine, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("read-line expects 1 arg")
+	// read-line — (read-line handle) -> String or nil at EOF.
+	// (read-line) with no args reads the current *in*, like Clojure.
+	stdinHandle := vm.NewBoxed(NewIOHandle(os.Stdin))
+	readLine := vm.NewCtxNativeFn("read-line", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) > 1 {
+			return vm.NIL, fmt.Errorf("read-line expects 0 or 1 args")
 		}
-		h, err := getIOHandle(vs[0])
+		src := vm.Value(stdinHandle)
+		if len(vs) == 1 {
+			src = vs[0]
+		} else if v := LookupCoreVar("*in*"); v != nil {
+			src = ec.Deref(v)
+		}
+		h, err := getIOHandle(src)
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -220,9 +228,12 @@ func installIOBuiltins(ns *vm.Namespace) {
 		if err != nil {
 			return vm.NIL, err
 		}
+		// A String writes its bytes verbatim, and a byte-array writes its raw bytes
+		// (not its #byte-array[…] repr) so binary output works; anything else falls
+		// back to its printed form.
 		var s string
-		if str, ok := vs[1].(vm.String); ok {
-			s = string(str)
+		if b, ok := asBytes(vs[1]); ok {
+			s = string(b)
 		} else {
 			s = vs[1].String()
 		}
@@ -310,7 +321,6 @@ func installIOBuiltins(ns *vm.Namespace) {
 	})
 
 	// *in*, *out*, *err* — stdin, stdout, stderr as IOHandle
-	stdinHandle := vm.NewBoxed(NewIOHandle(os.Stdin))
 	stdoutHandle := vm.NewBoxed(NewIOHandle(os.Stdout))
 	stderrHandle := vm.NewBoxed(NewIOHandle(os.Stderr))
 

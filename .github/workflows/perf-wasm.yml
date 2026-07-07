@@ -1,0 +1,195 @@
+name: Perf WASM
+
+# Same-runner A/B microbenchmark check under GOOS=js/wasm, run via the
+# go_js_wasm_exec shim on Node. Mirrors Perf PR (base vs head, one runner, no
+# gate) but measures the wasm bundle's execution path — the bytecode VM that
+# `lg -w` ships. Native perf can't see wasm-only regressions: different codegen,
+# single-threaded, and a GC where allocation pressure hits harder.
+#
+# Wasm is ~4-8x slower per-op and noisier than native, so this is opt-in via the
+# `perf-wasm` label, separate from the native `perf` gate. Add the label to run;
+# remove it to stop. Informational only.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - 'pkg/**'
+      - 'cmd/**'
+      - '.github/workflows/perf-wasm.yml'
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to benchmark'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-wasm-${{ github.event.pull_request.number || github.event.inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'perf-wasm')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      pr: ${{ steps.refs.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The go_js_wasm_exec shim runs the wasm test binary under Node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Resolve base and head
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          PR_FROM_INPUT: ${{ github.event.inputs.pr }}
+          BASE_FROM_EVENT: ${{ github.event.pull_request.base.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            pr="$PR_FROM_INPUT"
+            [[ "$pr" =~ ^[0-9]+$ ]] || { echo "pr input must be a number, got: ${pr}" >&2; exit 1; }
+            base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" --jq .base.ref)"
+          else
+            pr="$PR_FROM_EVENT"
+            base_ref="$BASE_FROM_EVENT"
+          fi
+          git fetch --no-tags origin "$base_ref" "refs/pull/${pr}/head:pr-head"
+          head_sha="$(git rev-parse pr-head)"
+          base_sha="$(git merge-base "origin/${base_ref}" pr-head)"
+          {
+            echo "pr=${pr}"
+            echo "head=${head_sha}"
+            echo "base=${base_sha}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Base (merge-base): ${base_sha}"
+          echo "Head:              ${head_sha}"
+
+      # -wasm runs the pr-fast families under the shim and forces -tags off (the
+      # wasm bundle ships the bytecode VM, not the lowered-Go path), so there is
+      # no `make lowered` step. A wider timeout absorbs wasm's slower per-op.
+      - name: Build bench-ratchet runner
+        run: |
+          set -euo pipefail
+          go build -o "${RUNNER_TEMP}/bench-ratchet" ./cmd/bench-ratchet
+
+      - name: Bench merge-base (wasm)
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+        run: |
+          set -euo pipefail
+          git checkout --force "$BASE"
+          git submodule update --init --recursive
+          "${RUNNER_TEMP}/bench-ratchet" \
+            -baseline "${RUNNER_TEMP}/base.json" \
+            -profile pr-fast -wasm -timeout 25m \
+            update
+
+      - name: Bench head and compare (wasm)
+        id: bench
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: |
+          set -euo pipefail
+          git checkout --force "$HEAD"
+          git submodule update --init --recursive
+          # -budget 0.30 overrides the native pr-fast 0.12: wasm micro-benchmarks
+          # under V8 have a higher noise floor (Go-map lookups especially can swing
+          # tens of percent run to run), so the tighter native budget flags phantom
+          # movers on untouched code. 30% suppresses the bulk of that while still
+          # surfacing real regressions. Informational only, so this tunes the
+          # report's "past budget" rows, not a pass/fail.
+          "${RUNNER_TEMP}/bench-ratchet" \
+            -baseline "${RUNNER_TEMP}/base.json" \
+            -profile pr-fast -wasm -budget 0.30 -timeout 25m \
+            -format markdown \
+            check > "${RUNNER_TEMP}/report.md" || true
+
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          header() {
+            echo "## Perf (wasm micros) — base vs head, same runner"
+            echo
+            echo "Base \`${BASE:0:12}\` vs head \`${HEAD:0:12}\`, under GOOS=js/wasm on Node. Anchor-normalized; informational, not a gate."
+            echo
+          }
+
+          { header; sed -n '/\*\*bench-ratchet\*\*/,$p' "${RUNNER_TEMP}/report.md"; } > "${RUNNER_TEMP}/summary.md"
+          cat "${RUNNER_TEMP}/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+          total="$(grep -cE '^\| `' "${RUNNER_TEMP}/report.md" || true)"
+          changed="$(grep -E '\| (REGRESSION|IMPROVED|NEW|MISSING) \|$' "${RUNNER_TEMP}/report.md" || true)"
+          shown="$(printf '%s' "$changed" | grep -c . || true)"
+          {
+            header
+            sed -n '/\*\*bench-ratchet\*\*/,/^| Benchmark/p' "${RUNNER_TEMP}/report.md"
+            echo "|---|---:|---:|---:|---:|---|---|"
+            if [ -n "$changed" ]; then
+              echo "$changed"
+            else
+              echo "| _nothing past the budget threshold_ | | | | | | |"
+            fi
+            echo
+            echo "_Showing ${shown:-0} of ${total:-0} benchmarks (past budget). [Full table in the run summary →](${run_url})_"
+          } > "${RUNNER_TEMP}/comment.md"
+
+      - name: Upload PR comment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-wasm-comment
+          path: ${{ runner.temp }}/comment.md
+          if-no-files-found: error
+
+  comment:
+    needs: bench
+    if: needs.bench.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download PR comment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: perf-wasm-comment
+          path: ${{ runner.temp }}/perf-wasm-comment
+
+      - name: Upsert PR comment
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR: ${{ needs.bench.outputs.pr }}
+          COMMENT_PATH: ${{ runner.temp }}/perf-wasm-comment/comment.md
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- perf-wasm-report -->';
+            const body = marker + '\n' + fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            const {owner, repo} = context.repo;
+            const issue_number = Number(process.env.PR);
+            const {data: comments} = await github.rest.issues.listComments({owner, repo, issue_number});
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({owner, repo, comment_id: existing.id, body});
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body});
+            }

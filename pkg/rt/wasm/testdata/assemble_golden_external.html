@@ -5,19 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>let-go app</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <style>.xterm{height:100%}</style>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     html,body{height:100%;height:100dvh;background:#0c0c0c;color:#e8e6df;overflow:hidden}
     body{display:flex;flex-direction:column}
-    #terminal{flex:1;min-height:0}
+    #app{flex:1;min-height:0}
     #status{color:#5a584f;font-family:monospace;font-size:13px;padding:1rem;position:absolute;
             top:50%;left:50%;transform:translate(-50%,-50%)}
-    .xterm{height:100%}
   </style>
 </head>
 <body>
   <div id="status">loading...</div>
-  <div id="terminal" style="display:none"></div>
+  <div id="app"></div>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script>
@@ -475,7 +475,7 @@ async function startMainThreadMode() {
 // terminal-specific lives here.
 (function() {
   const status = document.getElementById('status');
-  const termEl = document.getElementById('terminal');
+  const termEl = document.getElementById('app');
 
   const term = new Terminal({
     fontFamily: '"IBM Plex Mono", "Menlo", "Consolas", monospace',
@@ -489,7 +489,6 @@ async function startMainThreadMode() {
 
   function showTerminal() {
     if (status) status.style.display = 'none';
-    termEl.style.display = 'block';
     term.open(termEl);
     fitAddon.fit();
     term.focus();

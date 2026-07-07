@@ -159,10 +159,17 @@ func installOsNS() {
 		}), nil
 	})
 
-	// os/exec* — (os/exec* cmd & args) → exit code (Int). Unlike os/sh, the
-	// child inherits the parent's stdin/stdout/stderr, so output streams and the
-	// child stays interactive (e.g. launching a REPL). Returns the exit code.
-	execStar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// os/exec* — (os/exec* cmd & args) → exit code (Int). Unlike os/sh (which
+	// buffers and returns {:out :err :exit}), the child STREAMS: its stdout and
+	// stderr are wired to the current dynamic bindings of *out* and *err* — the
+	// same streams println / (binding [*out* ...] ...) / with-out-str drive — so
+	// a caller that redirects or captures those vars actually sees the child's
+	// output. (Previously the child was pinned to the raw os.Stdout/os.Stderr,
+	// which escaped every rebinding: a build harness capturing only *out* lost
+	// the child's stderr entirely.) Falls back to the process streams when the
+	// vars aren't installed (early boot). Stdin stays os.Stdin so the child can
+	// stay interactive (e.g. launching a REPL). Returns the exit code.
+	execStar := vm.NewCtxNativeFn("exec*", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 {
 			return vm.NIL, fmt.Errorf("os/exec* expects at least 1 arg")
 		}
@@ -180,10 +187,31 @@ func installOsNS() {
 		}
 		cmd := exec.Command(string(cmdName), cmdArgs...)
 		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		// Wire child stdout/stderr to the current *out*/*err* writers, mirroring
+		// how println resolves *out* (resolveIOHandleVar respects binding).
+		outH := resolveIOHandleVar(ec, "*out*")
+		errH := resolveIOHandleVar(ec, "*err*")
+		if outH != nil && outH.Writer() != nil {
+			cmd.Stdout = outH.Writer()
+		} else {
+			cmd.Stdout = os.Stdout
+		}
+		if errH != nil && errH.Writer() != nil {
+			cmd.Stderr = errH.Writer()
+		} else {
+			cmd.Stderr = os.Stderr
+		}
 		exitCode := 0
-		if runErr := cmd.Run(); runErr != nil {
+		runErr := cmd.Run()
+		// Flush buffered handles (bufio-backed *out*/*err*) so the child's output
+		// is visible before we hand control back to the caller.
+		if outH != nil {
+			_ = outH.Sync()
+		}
+		if errH != nil {
+			_ = errH.Sync()
+		}
+		if runErr != nil {
 			if exitErr, ok := runErr.(*exec.ExitError); ok {
 				exitCode = exitErr.ExitCode()
 			} else {

@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-06-05
+last-verified: 2026-06-30
 authoritative-for:
   - docs-index
 human-verified: 2026-06-20
@@ -49,6 +49,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Docs judgement-layer report (stale/supersession/index) | `docs-status.md` |
 | Regenerating generated artifacts after `.lg` edits | `regenerating-generated-artifacts.md` |
 | Perf ratchet, regression checkpoints, historical baselines | `perf/ratchet.md` |
+| Running the perf A/B on a PR (the `perf` label) | `perf/ratchet.md` (§ Running the check on a PR) |
 | gogen_ir native-lowering compute microbench gate | `perf/microbench/README.md` |
 | Babashka pods (usage) | `guide/pods.md` |
 | Babashka pods (host protocol / design) | `design/pods.md` |

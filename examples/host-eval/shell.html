@@ -52,8 +52,8 @@
   /* overflow:hidden clips xterm's pre-fit default grid so it can't transiently
      widen the flex row before fit() shrinks it. */
   .box { height: 300px; border: 1px solid var(--rule); border-radius: 6px; box-sizing: border-box; overflow: hidden; }
-  /* NOT #terminal — the bundle's host page already owns that id; a dupe sends
-     xterm into the hidden one. Use a unique id so our visible box gets output. */
+  /* NOT the host mount (#app) — the bundle's host page already owns that id; a
+     dupe sends xterm into the hidden one. Use a unique id so our box gets output. */
   #evalio { padding: 6px; background: var(--term-bg); }
 
   /* REPL pane: one scroll flow; the prompt is the last line (no separate box). */

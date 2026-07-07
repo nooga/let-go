@@ -17,10 +17,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+      # Use the official action: it installs a cached, prebuilt golangci-lint
+      # binary from GitHub Releases instead of `go install`-ing it through
+      # proxy.golang.org, which intermittently drops the HTTP/2 stream
+      # mid-download and fails the job (INTERNAL_ERROR received from peer).
       - name: Run golangci-lint
-        run: golangci-lint run --timeout=5m
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12
+          args: --timeout=5m
 
   # Enforce the "no test files at the repo root" guard. The pre-commit hook of
   # the same name is the local equivalent, but jj does not run git hooks, so CI

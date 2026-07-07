@@ -110,6 +110,16 @@
 (defn fn-name      [f] (:name @f))
 (defn fn-arity     [f] (:arity @f))
 (defn fn-variadic? [f] (:variadic? @f))
+;; True when this fn is one arity of a multi-arity defn (set by compile-form*'s
+;; multi-arity branch). Lowering suffixes its Go name with `_<arity>` so the
+;; arities don't redeclare `func <name>`. Carried ON THE FORM so native lowering
+;; needs no dynamic var (a `def`'d var would not be interned in the native path).
+(defn fn-multi-arity? [f] (:multi-arity? @f))
+;; True when the source defn was private (`defn-` or `^:private`). Carried ON
+;; THE FORM (like :multi-arity?) so native lowering needs no dynamic var. Drives
+;; emit-go-name: private → unexported lowercase go-name; public → exported
+;; PascalCase go-export-name.
+(defn fn-private?  [f] (:private? @f))
 (defn fn-arg-types [f] (:arg-types @f))
 (defn fn-entry     [f] (:entry @f))
 (defn fn-consts    [f] (:consts @f))
@@ -524,7 +534,7 @@
 
 (let [target 'ir
       syms   '[new-fn new-branch-target new-cond-target
-               fn-name fn-arity fn-variadic? fn-arg-types fn-entry fn-consts entry-block
+               fn-name fn-arity fn-variadic? fn-multi-arity? fn-private? fn-arg-types fn-entry fn-consts entry-block
                inst-count blocks
                op refs aux block-of type-of source-infos
                block-params block-preds block-insts block-term

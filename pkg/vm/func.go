@@ -28,6 +28,7 @@ type Func struct {
 	arity       int
 	isVariadric bool
 	chunk       *CodeChunk
+	meta        Value // IMeta support; nil until (with-meta fn m) copies one in
 }
 
 func MakeFunc(arity int, variadric bool, c *CodeChunk) *Func {
@@ -43,6 +44,24 @@ func (l *Func) SetName(n string) {
 }
 
 func (l *Func) Type() ValueType { return FuncType }
+
+// Meta implements IMeta.
+func (l *Func) Meta() Value {
+	if l.meta == nil {
+		return NIL
+	}
+	return l.meta
+}
+
+// WithMeta implements IMeta. Returns a copy carrying m. A capture-free fn is a
+// shared compiler constant pushed by OP_LOAD_CONST, so this MUST copy rather
+// than mutate — otherwise every evaluation of the fn literal would observe the
+// metadata. The chunk is immutable, so sharing it across the copy is safe.
+func (l *Func) WithMeta(m Value) Value {
+	cp := *l
+	cp.meta = m
+	return &cp
+}
 
 type FuncInterface func(any)
 
@@ -125,9 +144,28 @@ func (l *Func) MakeClosure() Fn {
 type Closure struct {
 	closedOvers []Value
 	fn          Fn
+	meta        Value // IMeta support: (with-meta (fn ...) m); nil until set
 }
 
 func (l *Closure) Type() ValueType { return FuncType }
+
+// Meta implements IMeta.
+func (l *Closure) Meta() Value {
+	if l.meta == nil {
+		return NIL
+	}
+	return l.meta
+}
+
+// WithMeta implements IMeta. Returns a copy carrying m; the compiled fn and the
+// closed-over slots are immutable at call time, so sharing them is safe and only
+// the metadata differs. Lets (with-meta (fn ...) m) round-trip through meta,
+// which spying/instrumentation libraries (e.g. bond) rely on.
+func (l *Closure) WithMeta(m Value) Value {
+	cp := *l
+	cp.meta = m
+	return &cp
+}
 
 // Unbox implements Unbox
 func (l *Closure) Unbox() any {
@@ -216,9 +254,26 @@ type MultiArityFn struct {
 	rest  Fn
 	arity int
 	name  string
+	meta  Value // IMeta support; nil until (with-meta fn m) copies one in
 }
 
 func (l *MultiArityFn) Type() ValueType { return FuncType }
+
+// Meta implements IMeta.
+func (l *MultiArityFn) Meta() Value {
+	if l.meta == nil {
+		return NIL
+	}
+	return l.meta
+}
+
+// WithMeta implements IMeta. Returns a copy carrying m; the arity variants are
+// immutable at call time, so sharing them across the copy is safe.
+func (l *MultiArityFn) WithMeta(m Value) Value {
+	cp := *l
+	cp.meta = m
+	return &cp
+}
 
 // Unbox implements Unbox
 func (l *MultiArityFn) Unbox() any {
