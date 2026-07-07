@@ -681,7 +681,7 @@ func installIoNS() {
 			}
 			return vm.String(b), nil
 		case "base64url":
-			b, err := base64.URLEncoding.DecodeString(data)
+			b, err := decodeBase64URL(data)
 			if err != nil {
 				return vm.NIL, err
 			}

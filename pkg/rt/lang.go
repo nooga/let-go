@@ -7510,7 +7510,7 @@ func installLangNS() {
 	ns.Def("base64url-encode", b64urlencodef)
 
 	// base64url-decode — (base64url-decode s) → byte-array. Inverse of
-	// base64url-encode; decodes the URL-safe, unpadded alphabet only.
+	// base64url-encode; decodes URL-safe base64 with or without padding.
 	b64urldecodef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -7519,7 +7519,7 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("base64url-decode expects String")
 		}
-		data, derr := base64.RawURLEncoding.DecodeString(string(s))
+		data, derr := decodeBase64URL(string(s))
 		if derr != nil {
 			return vm.NIL, fmt.Errorf("base64url-decode: %w", derr)
 		}

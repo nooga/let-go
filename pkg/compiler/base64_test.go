@@ -42,4 +42,12 @@ func TestBase64URL(t *testing.T) {
 	if v := evalStr(t, `(count (base64url-decode (base64url-encode (byte-array (range 100)))))`); v != vm.Int(100) {
 		t.Fatalf("round-trip count: got %v", v)
 	}
+	// Decoders accept both padded and unpadded URL-safe base64, keeping the new
+	// base64url builtins interoperable with the existing io namespace helpers.
+	if v := evalStr(t, `(count (base64url-decode (io/encode :base64url "x")))`); v != vm.Int(1) {
+		t.Fatalf("decode padded io/encode output: got %v", v)
+	}
+	if v := evalStr(t, `(io/decode :base64url (base64url-encode "x"))`); v != vm.String("x") {
+		t.Fatalf("io/decode raw base64url output: got %v", v)
+	}
 }
