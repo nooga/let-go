@@ -125,6 +125,16 @@ func runLGB(filename string) error {
 	return err
 }
 
+// runScript dispatches a positional script to the .lgb loader or the source
+// runner. Split out so the caller's error/exit-code handling stays flat rather
+// than nesting the format-dispatch inside it.
+func runScript(ctx *compiler.Context, script string) error {
+	if filepath.Ext(script) == ".lgb" {
+		return runLGB(script)
+	}
+	return runFile(ctx, script)
+}
+
 // checkBundledLGB checks if the current executable has an appended payload.
 // Returns the LGB bytecode, the gzipped resource archive (for a v2/v3 bundle),
 // and the baked storage store id (v3 only). The latter two are empty for a
@@ -627,17 +637,9 @@ func runMain() int {
 	ranSomething := false
 	runFailed := false
 	if len(files) >= 1 {
-		script := files[0]
-		if filepath.Ext(script) == ".lgb" {
-			if err := runLGB(script); err != nil {
-				fmt.Print(vm.FormatError(err))
-				runFailed = true
-			}
-		} else {
-			if err := runFile(context, script); err != nil {
-				fmt.Print(vm.FormatError(err))
-				runFailed = true
-			}
+		if err := runScript(context, files[0]); err != nil {
+			fmt.Print(vm.FormatError(err))
+			runFailed = true
 		}
 		ranSomething = true
 	}
