@@ -277,13 +277,36 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 		}
 		// Unqualified miss: search refers. Snapshot first so we follow each
 		// refer's target via its own lock, never holding n's lock across.
+		//
+		// Precedence (Clojure semantics): an explicit refer — (:require [lib
+		// :refer :all]) or :refer [syms], and (use lib) — SHADOWS the
+		// clojure.core auto-refer that RegisterNS installs into every ns. So we
+		// treat the core refer as a lowest-priority baseline: return the first
+		// matching explicit refer, honoring :all / :only, and only fall back to
+		// core if no explicit refer provides the symbol.
+		var coreHit *Var
 		for _, ref := range n.refersSnapshot() {
-			if v := ref.ns.localVar(sym.(Symbol)); v != nil {
-				if v.isPrivate {
-					return NIL
-				}
-				return v
+			v := ref.ns.localVar(sym.(Symbol))
+			if v == nil || v.isPrivate {
+				continue
 			}
+			isCore := coreNamespacePtr != nil && ref.ns == coreNamespacePtr
+			// The clojure.core refer is always the full auto-refer :all
+			// baseline: an explicit (:require [clojure.core :refer [...]]) is
+			// additive, never restrictive (core is trimmed via :refer-clojure
+			// :exclude, not here). For every OTHER refer, honor :refer [syms] —
+			// an :only refer contributes a symbol only when it is listed.
+			if !isCore && !ref.all && (ref.only == nil || !ref.only[sym.(Symbol)]) {
+				continue
+			}
+			if isCore {
+				coreHit = v
+				continue
+			}
+			return v
+		}
+		if coreHit != nil {
+			return coreHit
 		}
 		return NIL
 	}

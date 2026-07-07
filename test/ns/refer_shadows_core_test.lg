@@ -1,0 +1,30 @@
+;; Clojure compat: an explicit (:require [lib :refer :all]) — and :refer [syms]
+;; — must SHADOW the auto-refer'd clojure.core mappings, matching JVM Clojure.
+;;
+;; This is the exact class of bug reported for lg: clojure.core carries lg-only
+;; extras (gt/lt/ge/le), and a lib refer'd :all that re-exports those names kept
+;; resolving to clojure.core instead of the referred lib (e.g. ys.std/ys.dwim).
+
+(ns mylib.core)
+(defn gt [& _] :mylib-gt)             ;; shadows clojure.core/gt via :refer :all
+(defn lt [& _] :mylib-lt)             ;; shadows clojure.core/lt via :refer :all
+
+(ns mylib.only)
+(defn le [& _] :mylib-le)             ;; brought in via :refer [le]
+(defn hidden [_] :should-not-leak)    ;; NOT listed in :refer — must not leak
+
+(ns refer-shadow.app
+  (:require [mylib.core :refer :all]
+            [mylib.only :refer [le]]
+            [test :refer :all]))
+
+(deftest refer-all-shadows-core
+  (testing ":refer :all shadows clojure.core mappings"
+    (is (= :mylib-gt (gt 1 2)))
+    (is (= :mylib-lt (lt 1 2))))
+  (testing ":refer [sym] shadows core only for the listed symbol"
+    (is (= :mylib-le (le 1 2)))
+    ;; `hidden` was not in the :refer list, so it must not leak in unqualified.
+    (is (nil? (resolve 'hidden))))
+  (testing "unshadowed core symbols still resolve to clojure.core"
+    (is (= 3 (+ 1 2)))))
