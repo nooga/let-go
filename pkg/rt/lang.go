@@ -2503,21 +2503,55 @@ func installLangNS() {
 		return b.Chunk().(vm.Value), nil
 	})
 
+	// rangeInt coerces a range bound: Int passes through; anything
+	// else is a graceful error (a raw .(vm.Int) assertion panics).
+	rangeInt := func(v vm.Value, what string) (vm.Int, error) {
+		if n, ok := v.(vm.Int); ok {
+			return n, nil
+		}
+		return 0, fmt.Errorf("range %s must be an integer, got %s",
+			what, v.Type().Name())
+	}
 	rangef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			// Infinite range: (range) -> lazy seq 0, 1, 2, ...
 			return vm.NewInfiniteRange(0, 1), nil
 		}
-		if len(vs) == 1 {
-			return vm.NewRange(0, vs[0].(vm.Int), 1), nil
+		if len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		if len(vs) == 2 {
-			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), 1), nil
+		var start, end, step vm.Int = 0, 0, 1
+		var err error
+		var endArg vm.Value
+		switch len(vs) {
+		case 1:
+			endArg = vs[0]
+		case 2:
+			endArg = vs[1]
+			if start, err = rangeInt(vs[0], "start"); err != nil {
+				return vm.NIL, err
+			}
+		case 3:
+			endArg = vs[1]
+			if start, err = rangeInt(vs[0], "start"); err != nil {
+				return vm.NIL, err
+			}
+			if step, err = rangeInt(vs[2], "step"); err != nil {
+				return vm.NIL, err
+			}
 		}
-		if len(vs) == 3 {
-			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), vs[2].(vm.Int)), nil
+		// An infinite float end makes an infinite (or empty) range,
+		// like (range 1 ##Inf) on the JVM
+		if f, ok := endArg.(vm.Float); ok && math.IsInf(float64(f), 0) {
+			if (f > 0 && step > 0) || (f < 0 && step < 0) {
+				return vm.NewInfiniteRange(int(start), int(step)), nil
+			}
+			return vm.NewRange(0, 0, 1), nil
 		}
-		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		if end, err = rangeInt(endArg, "end"); err != nil {
+			return vm.NIL, err
+		}
+		return vm.NewRange(start, end, step), nil
 	})
 
 	keyword, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
