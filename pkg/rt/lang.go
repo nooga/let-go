@@ -4805,16 +4805,13 @@ func installLangNS() {
 		case *vm.PersistentMap, vm.Map, *vm.SortedMap:
 			return vm.NIL, fmt.Errorf("shuffle not supported on map")
 		}
-		// Collect into slice
+		// Collect into slice. forceSeq realizes lazy seqs first, so
+		// an empty lazy seq yields [] rather than [nil].
 		s, err := seqOf(vs[0])
 		if err != nil {
 			return vm.NIL, err
 		}
-		var vals []vm.Value
-		for s != nil {
-			vals = append(vals, s.First())
-			s = s.Next()
-		}
+		vals := appendSeqValues(nil, forceSeq(s))
 		// Fisher-Yates shuffle
 		rngShuffle(len(vals), func(i, j int) {
 			vals[i], vals[j] = vals[j], vals[i]
@@ -5359,13 +5356,23 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("re-seq expected String")
 		}
-		all := re.FindAllString(string(s), -1)
+		// Like Clojure (and re-find above): a groupless pattern yields
+		// the match string, capture groups yield [full g1 g2 ...].
+		all := re.FindAllStringSubmatch(string(s), -1)
 		if all == nil {
 			return vm.EmptyList, nil
 		}
 		vals := make([]vm.Value, len(all))
-		for i, m := range all {
-			vals[i] = vm.String(m)
+		for i, matches := range all {
+			if len(matches) == 1 {
+				vals[i] = vm.String(matches[0])
+				continue
+			}
+			groups := make(vm.ArrayVector, len(matches))
+			for j, m := range matches {
+				groups[j] = vm.String(m)
+			}
+			vals[i] = groups
 		}
 		return vm.ListType.Box(vals)
 	})
