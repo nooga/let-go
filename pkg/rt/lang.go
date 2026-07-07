@@ -2540,13 +2540,21 @@ func installLangNS() {
 				return vm.NIL, err
 			}
 		}
-		// An infinite float end makes an infinite (or empty) range,
-		// like (range 1 ##Inf) on the JVM
-		if f, ok := endArg.(vm.Float); ok && math.IsInf(float64(f), 0) {
-			if (f > 0 && step > 0) || (f < 0 && step < 0) {
-				return vm.NewInfiniteRange(int(start), int(step)), nil
+		// A float end still yields integers, like the JVM: infinite
+		// for ##Inf toward the step, else every int short of the end
+		// ((range 2 5.29) => 2 3 4 5).
+		if f, ok := endArg.(vm.Float); ok {
+			if math.IsInf(float64(f), 0) {
+				if (f > 0 && step > 0) || (f < 0 && step < 0) {
+					return vm.NewInfiniteRange(int(start), int(step)), nil
+				}
+				return vm.NewRange(0, 0, 1), nil
 			}
-			return vm.NewRange(0, 0, 1), nil
+			if step > 0 {
+				endArg = vm.Int(math.Ceil(float64(f)))
+			} else {
+				endArg = vm.Int(math.Floor(float64(f)))
+			}
 		}
 		if end, err = rangeInt(endArg, "end"); err != nil {
 			return vm.NIL, err

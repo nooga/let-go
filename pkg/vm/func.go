@@ -88,6 +88,15 @@ func (l *Func) Arity() int {
 	return l.arity
 }
 
+// boxRest packages variadic rest args for the rest parameter. Empty
+// rest binds nil, like Clojure: (defn f [& xs] xs) (f) => nil.
+func boxRest(rest []Value) (Value, error) {
+	if len(rest) == 0 {
+		return NIL, nil
+	}
+	return ListType.Box(rest)
+}
+
 func (l *Func) Invoke(pargs []Value) (result Value, err error) {
 	return l.invokeIn(RootExecContext, pargs)
 }
@@ -103,7 +112,7 @@ func (l *Func) invokeIn(ec *ExecContext, pargs []Value) (result Value, err error
 		}
 		sargs := args[0 : l.arity-1]
 		rest := args[l.arity-1:]
-		restlist, boxErr := ListType.Box(rest)
+		restlist, boxErr := boxRest(rest)
 		if boxErr != nil {
 			return NIL, boxErr
 		}
@@ -205,7 +214,7 @@ func (l *Closure) invokeIn(ec *ExecContext, pargs []Value) (result Value, err er
 			}
 			sargs := args[0 : f.arity-1]
 			rest := args[f.arity-1:]
-			restlist, boxErr := ListType.Box(rest)
+			restlist, boxErr := boxRest(rest)
 			if boxErr != nil {
 				return NIL, boxErr
 			}

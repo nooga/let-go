@@ -17,6 +17,14 @@
     (let [f (fn [& xs] xs)]
       (is (= (f) (apply f [])))))
 
+  (testing "empty rest binds nil, like Clojure"
+    (let [f (fn [& xs] xs)
+          g (fn [a & xs] xs)]
+      (is (nil? (f)))
+      (is (nil? (apply f [])))
+      (is (nil? (g 1)))
+      (is (= :none (if (f) :some :none)))))
+
   (testing "multi-arity fn with empty args still selects zero arity"
     (let [f (fn ([] :zero) ([x] x))]
       (is (= :zero (apply f [])))
