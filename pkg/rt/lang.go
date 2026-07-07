@@ -3242,6 +3242,35 @@ func installLangNS() {
 			}
 			return acc, nil
 		}
+		// Range fast path: a range is (start, end, step) arithmetic — reduce
+		// by direct iteration with zero seq/chunk allocation. Mirrors the
+		// ArrayVector fast path above.
+		if rng, ok := vs[sidx].(*vm.Range); ok {
+			start, end, step := rng.Bounds()
+			var acc vm.Value
+			i := start
+			if len(vs) == 3 {
+				acc = vs[1]
+			} else {
+				acc = vm.Int(i)
+				i += step
+			}
+			fargs := []vm.Value{nil, nil}
+			for (step > 0 && i < end) || (step < 0 && i > end) {
+				fargs[0] = acc
+				fargs[1] = vm.Int(i)
+				res, err := ec.Invoke(mfn, fargs)
+				if err != nil {
+					return vm.NIL, err
+				}
+				if r, ok := res.(*vm.Reduced); ok {
+					return r.Deref(), nil
+				}
+				acc = res
+				i += step
+			}
+			return acc, nil
+		}
 		seq, err := seqOf(vs[sidx])
 		if err != nil {
 			return vm.NIL, fmt.Errorf("reduce expected Seq")

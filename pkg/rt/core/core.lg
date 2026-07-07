@@ -279,7 +279,7 @@
 
 (defn set [coll]
   (if (seq coll)
-    (reduce conj #{} coll)
+    (persistent! (reduce conj! (transient #{}) coll))
     #{}))
 
 (defn concat-vec [a b]
@@ -1308,7 +1308,7 @@
        (reduce rrf result input)))))
 
 (defn- transientable? [c]
-  (and (or (map? c) (vector? c)) (not (sorted? c))))
+  (and (or (map? c) (vector? c) (set? c)) (not (sorted? c))))
 
 (defn into
   ([c r]

@@ -31,6 +31,13 @@ type Range struct {
 	step  int
 }
 
+// Bounds exposes the range arithmetic (start, end, step) so callers like
+// reduce can iterate a Range with plain arithmetic — no seq or chunk
+// allocation. step is never 0 for a materialized *Range.
+func (l *Range) Bounds() (start, end, step int) {
+	return l.start, l.end, l.step
+}
+
 // inBounds reports whether val is within [start, end) respecting step direction.
 func (l *Range) inBounds(val int) bool {
 	if l.step > 0 {

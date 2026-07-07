@@ -1,7 +1,7 @@
-{:failed 19
- :total 2385
- :passed 2366
- :captured "2026-07-09"
+{:failed 20
+ :total 2395
+ :passed 2375
+ :captured "2026-07-10"
  :how "LG_STRESS_PASSES=1 make ir-stress (corpus = every shipped/test/example .lg)"
  :note
  "ITER-0021 lowering-coverage ratchet. `make ir-stress-gate` fails when the
@@ -11,4 +11,7 @@
   gain (fewer failures), the baseline re-tightens and locks the improvement in.
   NEVER loosens the gate after a coverage loss without human investigation —
   it's always a real regression, and the gate's role is to prevent PR merges
-  from masking a regression."}
+  from masking a regression.
+
+  Corpus is discovered from every shipped/test/example .lg, so upstream growth
+  moves :total. :failed stays 20 in already-known bucket classes; no new mode."}
