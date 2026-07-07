@@ -4045,10 +4045,14 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("sort expected a Collection")
 			}
 		}
-		temp := make([]vm.Value, coll.RawCount())
+		// Stop at the end of the seq as well as at RawCount: a
+		// String's RawCount is bytes but its Seq yields runes, so
+		// multibyte content overran the seq (nil deref).
+		n := coll.RawCount()
+		temp := make([]vm.Value, 0, n)
 		seq := coll.(vm.Sequable).Seq()
-		for i := range temp {
-			temp[i] = seq.First()
+		for i := 0; i < n && !vm.SeqIsEmpty(seq); i++ {
+			temp = append(temp, seq.First())
 			seq = seq.Next()
 		}
 		var err error
