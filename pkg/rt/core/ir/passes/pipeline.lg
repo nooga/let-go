@@ -21,6 +21,7 @@
   (:require
    [graph :as g]
    [ir.build]
+   [ir.data]
    [ir.lattice :as lat]
    [ir.lower :as lower]
    [ir.lower-go :as lower-go]
@@ -41,12 +42,28 @@
     (lat/flush-state-types! state2 f)
     f))
 
-(defn optimize-fn [f]
-  (validate-fn! f "build")
-  (when (and ir.passes.inline/*enable-inline*
-             (seq ir.passes.inline/*inline-registry*))
-    (ir.passes.inline/inline-with f ir.passes.inline/*inline-registry*)
-    (validate-fn! f "inline"))
+;; Runtime per-ns defn IR cache: when compile-form compiles a defn
+;; under *ir-compile* with *enable-inline* bound, its built IR Function is
+;; stashed here (keyed ns-name -> fn-name -> ir-fn) BEFORE optimization, so
+;; later defns in the same ns can seed the inline registry from previously
+;; defined siblings — the runtime analogue of the AOT path's
+;; build-inline-registry seeding in lower-ns-to-go. Zero cost when the flags
+;; are off (never consulted, never populated). Entries are the LIVE atoms:
+;; optimize-fn mutates them after stashing, so later readers see the
+;; optimized IR — the fold recognizer is structural and tolerates that.
+(def *runtime-defn-ir-cache* (atom {}))
+
+(defn- seed-inline-registry-from-cache [ns-name]
+  "Registry of previously-compiled same-ns single-arity defns, mirroring
+   build-inline-registry's shape: each fn name mapped (bare and ns-qualified)
+   to its built IR Function."
+  (reduce
+    (fn [m [fn-name ir-fn]]
+      (assoc m (symbol (str ns-name "/" fn-name)) ir-fn
+               (symbol fn-name) ir-fn))
+    {} (get @*runtime-defn-ir-cache* ns-name {})))
+
+(defn- optimize-fn-tail [f]
   (run-typeinfra-epoch f) (validate-fn! f "infer-arg-types")
   (constfold f)        (validate-fn! f "constfold-1")
   (cse f)              (validate-fn! f "cse")
@@ -55,6 +72,76 @@
   (constfold f)        (validate-fn! f "constfold-3")
   (dce f)              (validate-fn! f "dce")
   (run-typeinfra-epoch f)
+  f)
+
+(defn optimize-fn [f]
+  (validate-fn! f "build")
+  (when (and ir.passes.inline/*enable-inline*
+             (seq ir.passes.inline/*inline-registry*))
+    (ir.passes.inline/inline-with f ir.passes.inline/*inline-registry*)
+    (validate-fn! f "inline"))
+  (optimize-fn-tail f))
+
+;; Vars realized by realize-specialized-fold!, keyed "ns/name". Ownership
+;; ledger: only vars recorded here may be reused as specializations — a
+;; pre-existing user var that happens to share the deterministic name is
+;; neither trusted nor clobbered (the call is left as the plain loop).
+(def *realized-folds* (atom {}))
+
+(defn- realize-specialized-fold! [spec-name desc n]
+  "Compile the unrolled specialization for a fold-over-rest combinator and
+   intern it under spec-name in *ns*. The deterministic name is the reuse key
+   across call sites, but only for vars THIS fn created (*realized-folds*).
+   Returns the var, or nil when a foreign var owns the name.
+   Staleness note: like all compile-time specialization, a realized var
+   persists across combinator redefinition — mirrors inlining semantics."
+  (let [k (str (ns-name *ns*) "/" spec-name)]
+    (if-let [v (get @*realized-folds* k)]
+      v
+      (if (some? (resolve spec-name))
+        nil
+        (let [spec-ir (ir.passes.inline/specialize-fold desc n)
+              chunk   (lower/lower (optimize-fn spec-ir))
+              arity   (+ (:rest-index desc) n)
+              v       (intern *ns* spec-name (chunk->fn arity false chunk))]
+          (swap! *realized-folds* assoc k v)
+          v)))))
+
+(defn- fold-outline! [f registry]
+  "Rewrite each fold-over-rest combinator call in f to call an unrolled
+   fixed-arity specialization interned as a same-ns sibling. This is the
+   bytecode-path counterpart of the AOT splice: outlining (rather than
+   splicing) keeps f free of the cross-block direct refs the stack lowering
+   rejects, while still eliminating the per-element seq walk
+   (empty?/first/rest + rest-seq boxing) that dominates the combinator loop
+   on the VM. The call site keeps its flat operands; only the callee var
+   changes, so dispatch drops from variadic to fixed-arity. Returns f."
+  (doseq [bid (ir/blocks f)
+          call-nid (vec (ir/block-insts bid f))
+          :when (= :call (ir/op call-nid f))]
+    (when-let [g (ir.passes.inline/resolve-callee f call-nid registry)]
+      (when-let [desc (ir.passes.inline/fold-over-rest? g)]
+        (let [nargs (count (rest (ir/refs call-nid f)))
+              n     (- nargs (:rest-index desc))]
+          (cond
+            (and (>= n 1) (<= n ir.passes.inline/*max-unroll*))
+            (let [head-nid (nth (ir/refs call-nid f) 0)]
+              ;; Only rewrite a :load-var head this call solely owns —
+              ;; mutating a shared head would redirect other uses too.
+              (when (and (= :load-var (ir/op head-nid f))
+                         (= 1 (ir.data/uses-count (nth (ir.data/uses f) head-nid))))
+                (let [spec-name (symbol (str (:fn-name desc) "$" (name (:kind desc)) "$" n))]
+                  (if-let [spec-var (realize-specialized-fold! spec-name desc n)]
+                    (ir.data/set-aux! f head-nid spec-var)
+                    (println (str "inline: fold-over-rest specialization name "
+                                  spec-name " already owned by a foreign var; "
+                                  "call left as the loop"))))))
+
+            (> n ir.passes.inline/*max-unroll*)
+            (println (str "inline: fold-over-rest " (:fn-name desc) " call has "
+                          n " operands > *max-unroll* " ir.passes.inline/*max-unroll*
+                          "; left as a runtime call"))))))
+    nil)
   f)
 
 (declare expand-all)
@@ -480,7 +567,13 @@
               ;; Carry visibility onto the built fn so #371's export naming
               ;; (public → PascalCase, private → unexported) survives lambda-lift
               ;; + optimize into lower-go. merge-def-meta preserves it to :main.
-              _          (swap! built assoc :private? private?)]
+              _          (swap! built assoc :private? private?)
+              ;; Stash the built IR (pre-optimize) so later same-ns defns can
+              ;; seed the inline registry from this one. Opt-in: only when
+              ;; *enable-inline* is bound true.
+              _          (when ir.passes.inline/*enable-inline*
+                           (swap! *runtime-defn-ir-cache*
+                                  assoc-in [(str (ns-name *ns*)) (str name-sym)] built))]
           (if go-target?
             ;; Wire lambda-lift: thread lifted siblings through compile pipeline
             (let [{:keys [main lifted]} (ir.passes.lambda-lift/lambda-lift built)
@@ -492,8 +585,24 @@
                 ;; Has lifted siblings: return multi-fn-template for flatten path
                 {:kind :multi-fn-template
                  :fns (into [(lower1 main)] (mapv lower1 lifted))}))
-            ;; Bytecode path: no lambda-lift
-            (lower/lower (optimize-fn built))))
+            ;; Bytecode path: no lambda-lift. When inlining is enabled,
+            ;; fold-over-rest combinator calls are OUTLINED to unrolled
+            ;; fixed-arity siblings (never spliced — the AOT splice creates
+            ;; cross-block direct refs the stack lowering rejects). The
+            ;; registry of candidate combinators comes from previously
+            ;; compiled same-ns defns and is passed to fold-outline! as a
+            ;; local — *inline-registry* itself is NOT bound here, so on the
+            ;; default path optimize-fn's splicing inliner cannot fire. A
+            ;; caller that explicitly binds a registry opts into splicing
+            ;; (and into the stack lowering's cross-block rejection risk).
+            (do
+              (when ir.passes.inline/*enable-inline*
+                (let [registry (if (empty? ir.passes.inline/*inline-registry*)
+                                 (seed-inline-registry-from-cache (str (ns-name *ns*)))
+                                 ir.passes.inline/*inline-registry*)]
+                  (when (seq registry)
+                    (fold-outline! built registry))))
+              (lower/lower (optimize-fn built)))))
         ;; Multi-arity: build each arity separately, combine
         (let [arities   (drop (if has-doc? 3 2) form)]
           (if go-target?
