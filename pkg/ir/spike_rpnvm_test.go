@@ -125,6 +125,16 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 		return result, err
 	}
 
+	// STORY-0059: run the pre-execution cleanup IR pass BEFORE flattening. It drops
+	// dead (DCE-tombstoned) block-params + their in-edge args, strips :pop markers,
+	// and DCE-sweeps insts orphaned by the compaction — promoting what used to be the
+	// Go-side compactDeadParams into the real ir.passes.cleanup pass. cleanup mutates
+	// the IR atom in place, so every field read below sees the cleaned form, and
+	// validateLiveInvariants then holds with NO decoder-side compaction.
+	if _, err := evalExpr(fmt.Sprintf("(ir.passes.cleanup/cleanup %s)", varName)); err != nil {
+		return nil, fmt.Errorf("eval cleanup pass: %w", err)
+	}
+
 	// Get the consts pool via (ir.data/fn-consts ir-var)
 	constPoolVal, err := evalExpr(fmt.Sprintf("(ir.data/fn-consts %s)", varName))
 	if err != nil {
@@ -618,52 +628,13 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 		routes:        computeRouting(insts),
 	}
 
-	compactDeadParams(fn)
+	// No decoder-side compaction: ir.passes.cleanup (run above, before flattening)
+	// already produced a tombstone-free, arity-aligned form. validateLiveInvariants
+	// is now a pure assertion that the pass did its job (AC-PO-CL.1).
 	if err := validateLiveInvariants(fn); err != nil {
 		return nil, err
 	}
 	return fn, nil
-}
-
-// compactDeadParams drops tombstoned block params AND the corresponding
-// edge-arg positions on every in-edge. DCE marks a dead block-arg :invalid
-// but leaves it in the block's params, and in-edges still thread a value
-// into it — a per-iteration write nothing reads. Removing the position at
-// decode keeps arity aligned and keeps tombstones out of the VM entirely.
-func compactDeadParams(fn *spikeFn) {
-	for bid := range fn.blocks {
-		b := &fn.blocks[bid]
-		var dead []int
-		for i, p := range b.params {
-			if p >= 0 && p < int32(len(fn.insts)) && fn.insts[p].opc == spikeOpInvalid {
-				dead = append(dead, i)
-			}
-		}
-		if len(dead) == 0 {
-			continue
-		}
-		keep := func(vals []int32) []int32 {
-			out := vals[:0]
-			di := 0
-			for i, v := range vals {
-				if di < len(dead) && i == dead[di] {
-					di++
-					continue
-				}
-				out = append(out, v)
-			}
-			return out
-		}
-		b.params = keep(b.params)
-		for sid := range fn.blocks {
-			t := &fn.blocks[sid].term
-			for _, e := range []*spikeEdge{&t.simpleEdge, &t.trueEdge, &t.falseEdge} {
-				if e.target == int32(bid) && len(e.args) > 0 {
-					e.args = keep(e.args)
-				}
-			}
-		}
-	}
 }
 
 // validateLiveInvariants enforces at DECODE time that tombstones and
