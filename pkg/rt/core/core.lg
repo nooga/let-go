@@ -2002,6 +2002,7 @@
 ;; add them to -dt-let-like with modifier-aware handling if needed.
 (declare -dt-rewrite-let)
 (declare -dt-rewrite-fn)
+(declare -dt-rewrite-case)
 
 ;; binding forms with a clean `[target init ...]` vector (no for/doseq-style
 ;; modifiers). Their inits are rewritten in the outer scope; targets shadow.
@@ -2020,48 +2021,56 @@
     (map? form) (apply concat (map (fn [e] (-dt-collect-syms (vec e))) (seq form)))
     :else nil))
 
-(defn- -dt-rewrite [recv fields muts bound form]
+;; How a bare field read is emitted, injected into the rewrite family so
+;; deftype and defrecord can differ. deftype instances store fields in native
+;; slots read via interop `(.field recv)`; defrecord instances are map-backed,
+;; so a field is read with canonical, nil-safe keyword access `(:field recv)`.
+(def -dt-dot-emit (fn [recv f] (list (symbol (str "." (name f))) recv)))
+(def -dt-kw-emit  (fn [recv f] (list (keyword f) recv)))
+
+(defn- -dt-rewrite [emit recv fields muts bound form]
   (cond
     (symbol? form)
     (if (and (contains? fields form) (not (contains? bound form)))
-      (list (symbol (str "." (name form))) recv)
+      (emit recv form)
       form)
     (vector? form)
-    (vec (map (fn [x] (-dt-rewrite recv fields muts bound x)) form))
+    (vec (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) form))
     (not (seq? form)) form
     (empty? form) form
     :else
     (let [h (first form)]
       (cond
         (= h 'quote) form
+        (= h 'case) (-dt-rewrite-case emit recv fields muts bound form)
         (= h 'set!)
         (let [tgt (second form)
-              v   (-dt-rewrite recv fields muts bound (nth form 2))]
+              v   (-dt-rewrite emit recv fields muts bound (nth form 2))]
           (if (and (contains? muts tgt) (not (contains? bound tgt)))
             (list 'set-field! recv (list 'quote tgt) v)
             (list 'set! tgt v)))
         (and (contains? -dt-let-like h) (vector? (second form)))
-        (-dt-rewrite-let recv fields muts bound form)
+        (-dt-rewrite-let emit recv fields muts bound form)
         (or (= h 'fn) (= h 'fn*))
-        (-dt-rewrite-fn recv fields muts bound form)
+        (-dt-rewrite-fn emit recv fields muts bound form)
         :else
-        (apply list (map (fn [x] (-dt-rewrite recv fields muts bound x)) form))))))
+        (apply list (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) form))))))
 
-(defn- -dt-rewrite-let [recv fields muts bound form]
+(defn- -dt-rewrite-let [emit recv fields muts bound form]
   (let [h    (first form)
         bvec (second form)
         body (next (next form))]
     (loop [v (seq bvec) b bound out []]
       (if (or (nil? v) (nil? (next v)))
         (apply list h (vec out)
-               (map (fn [x] (-dt-rewrite recv fields muts b x)) body))
+               (map (fn [x] (-dt-rewrite emit recv fields muts b x)) body))
         (let [target   (first v)
               init     (second v)
-              new-init (-dt-rewrite recv fields muts b init)
+              new-init (-dt-rewrite emit recv fields muts b init)
               b2       (reduce conj b (-dt-collect-syms target))]
           (recur (next (next v)) b2 (conj (conj out target) new-init)))))))
 
-(defn- -dt-rewrite-fn [recv fields muts bound form]
+(defn- -dt-rewrite-fn [emit recv fields muts bound form]
   (let [h     (first form)
         tail  (next form)
         named (if (and tail (symbol? (first tail))) (first tail) nil)
@@ -2070,25 +2079,47 @@
         rw    (fn [params body]
                 (let [b2 (reduce conj b1 (-dt-collect-syms params))]
                   (apply list params
-                         (map (fn [x] (-dt-rewrite recv fields muts b2 x)) body))))]
+                         (map (fn [x] (-dt-rewrite emit recv fields muts b2 x)) body))))]
     (if (and rest1 (vector? (first rest1)))
       (apply list h (concat (if named (list named) (list)) (rw (first rest1) (next rest1))))
       (apply list h (concat (if named (list named) (list))
                             (map (fn [c] (rw (first c) (next c))) rest1))))))
 
-(defn- -dt-rewrite-method [fields muts m]
+;; `case` test constants are unevaluated literals — the case macro quotes them,
+;; so a field-named symbol in a test position must stay a literal, not become a
+;; field read. Rewrite the dispatch expr and every result expr (plus the
+;; optional trailing default), but pass each test constant through untouched.
+;; Other symbol-quoting macros (a user macro that treats a symbol as data) are
+;; still not recognized here — a field-named symbol handed to one as a literal
+;; would be wrongly rewritten, same class of limitation as for/doseq/letfn.
+(defn- -dt-rewrite-case [emit recv fields muts bound form]
+  (let [e       (-dt-rewrite emit recv fields muts bound (second form))
+        clauses (nnext form)]
+    (loop [c (seq clauses) out []]
+      (cond
+        (nil? c) (apply list 'case e out)
+        ;; a lone trailing form is the default result — evaluated, so rewrite it
+        (nil? (next c))
+        (apply list 'case e (conj out (-dt-rewrite emit recv fields muts bound (first c))))
+        ;; a (test-constant result) pair: keep the constant, rewrite the result
+        :else
+        (recur (next (next c))
+               (conj out (first c)
+                     (-dt-rewrite emit recv fields muts bound (second c))))))))
+
+(defn- -dt-rewrite-method [emit fields muts m]
   (let [mname  (first m)
         params (second m)
         recv   (first params)
         body   (next (next m))
         bound0 (set (-dt-collect-syms params))]
     (apply list mname params
-           (map (fn [f] (-dt-rewrite recv fields muts bound0 f)) body))))
+           (map (fn [f] (-dt-rewrite emit recv fields muts bound0 f)) body))))
 
-(defn- -dt-rewrite-impls [fields muts impls]
+(defn- -dt-rewrite-impls [emit fields muts impls]
   (map (fn [x]
          (if (and (seq? x) (symbol? (first x)) (vector? (second x)))
-           (-dt-rewrite-method fields muts x)
+           (-dt-rewrite-method emit fields muts x)
            x))
        impls))
 
@@ -2108,7 +2139,7 @@
         pos-ctor-body (cons 'make-deftype-instance (cons tname bare-fields))
         pos-ctor      (list 'def pos-ctor-name
                             (list 'fn (vec bare-fields) pos-ctor-body))
-        rewritten     (-dt-rewrite-impls fieldset mutset protocol-impls)
+        rewritten     (-dt-rewrite-impls -dt-dot-emit fieldset mutset protocol-impls)
         protocol-parents (filter symbol? rewritten)
         parent-forms  (map (fn [p] (list 'register-type-parent! tname p)) protocol-parents)
         forms         (list 'do (list 'def tname type-def) pos-ctor)]
@@ -2118,26 +2149,32 @@
 
 (defmacro defrecord [name fields & protocol-impls]
   (let [name (-dt-field-name name) ; unwrap ^meta on the record name (see deftype)
-        field-keywords (map keyword fields)
+        bare-fields (map -dt-field-name fields)
+        fieldset (set bare-fields)
+        field-keywords (map keyword bare-fields)
         type-def (cons 'make-record-type (cons (str name) field-keywords))
         ;; Positional constructor: (->Point x y) → (make-record Point {:x x :y y})
         pos-ctor-name (symbol (str "->" name))
         pos-ctor-body (list 'make-record name
                             (cons 'hash-map
-                                  (mapcat (fn [f] [(keyword f) f]) fields)))
-        pos-ctor (list 'def pos-ctor-name (cons 'fn (cons (vec fields) (list pos-ctor-body))))
+                                  (mapcat (fn [f] [(keyword f) f]) bare-fields)))
+        pos-ctor (list 'def pos-ctor-name (cons 'fn (cons (vec bare-fields) (list pos-ctor-body))))
         ;; Map constructor: (map->Point {:x 1 :y 2}) → (make-record Point m)
         map-ctor-name (symbol (str "map->" name))
         map-ctor (list 'def map-ctor-name (list 'fn ['m] (list 'make-record name 'm)))
         protocol-parents (filter symbol? protocol-impls)
-        parent-forms (map (fn [p] (list 'register-type-parent! name p)) protocol-parents)]
+        parent-forms (map (fn [p] (list 'register-type-parent! name p)) protocol-parents)
+        ;; Records have no mutable fields, so muts is empty; bare field reads in
+        ;; method bodies become keyword access (:field recv) — the piece
+        ;; defrecord previously omitted, unlike deftype.
+        rewritten (-dt-rewrite-impls -dt-kw-emit fieldset #{} protocol-impls)]
     (if (seq protocol-impls)
       (concat (list 'do
                     (list 'def name type-def)
                     pos-ctor
                     map-ctor)
               parent-forms
-              (list (cons 'extend-type (cons name protocol-impls))))
+              (list (cons 'extend-type (cons name rewritten))))
       (concat (list 'do
                     (list 'def name type-def)
                     pos-ctor

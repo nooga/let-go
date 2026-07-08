@@ -1,0 +1,37 @@
+;; defrecord must lexically scope its fields inside inline protocol-method
+;; bodies, the same way deftype does. A bare field reference in a method body
+;; should read that field from the receiver; a local that shadows a field name
+;; should win. Regression for weavejester/dependency's MapDependencyGraph,
+;; whose methods reference their `dependencies`/`dependents` fields by bare name.
+(ns test.defrecord-field-scope-test
+  (:require [test :refer :all]))
+
+(defprotocol P
+  (m1 [g n])
+  (m2 [g])
+  (shadow [g])
+  (pick [g k]))
+
+(defrecord R [a b]
+  P
+  (m1 [g n] (get a n :none))       ; bare field `a` -> (:a g)
+  (m2 [g] (+ (count a) (count b))) ; bare fields `a` and `b`
+  (shadow [g] (let [a 99] a))      ; local `a` shadows the field
+  (pick [g k] (case k              ; `a`/`b` are case CONSTANTS, not field reads
+                a :label-a
+                b :label-b
+                (count a))))       ; default result: `a` here IS a field read
+
+(deftest record-field-scope
+  (testing "a bare field reference resolves to the field value"
+    (is (= 1 (m1 (->R {:x 1} {}) :x)))
+    (is (= :none (m1 (->R {:x 1} {}) :z)))
+    (is (= 3 (m2 (->R {:x 1} {:y 2 :z 3})))))
+  (testing "the interop constructor form (R. ...) builds a record"
+    (is (= 1 (m1 (R. {:x 1} {}) :x))))
+  (testing "a let binding shadows the field of the same name"
+    (is (= 99 (shadow (->R {:x 1} {})))))
+  (testing "case test constants that share a field name stay literal"
+    (is (= :label-a (pick (->R {:z 1} {}) 'a)))   ; matches the constant `a`
+    (is (= :label-b (pick (->R {:z 1} {}) 'b)))   ; matches the constant `b`
+    (is (= 1 (pick (->R {:z 1} {}) 'nope)))))     ; default reads field a -> {:z 1}
