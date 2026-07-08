@@ -1,0 +1,68 @@
+;; Pre-execution cleanup pass (STORY-0059).
+;;
+;; Removes the dead code the stack model needed but the index form doesn't,
+;; BEFORE an index-RPN form shifts to execution. Runs on the execution-form path
+;; only — NOT the shared optimize-fn pipeline — so mainline bytecode/gogen
+;; lowering is untouched (make check-generated stays byte-identical). Promotes the
+;; ITER-0057 spike's decoder-side compactDeadParams/validateLiveInvariants
+;; prototype from test-only Go into a real IR->IR pass.
+;;
+;; Order matters:
+;;   1. compact-dead-params — drop :invalid (DCE-tombstoned) block-params + their
+;;      in-edge args. DCE removes a dead block-arg from the block's inst list and
+;;      marks it :invalid but leaves it in :params with in-edges still threading a
+;;      value in (a per-iteration write nothing reads).
+;;   2. strip-pops — remove :pop insts (a stack-VM accommodation; in the index form
+;;      an unused result is simply unreferenced). Near-vestigial: no current build
+;;      path emits :pop, so this strips ~0 on the corpus — kept so the execution
+;;      form structurally never carries stack markers.
+;;   3. dce — a sweep to collect insts orphaned by step 1: an inst whose only use
+;;      was a now-dropped edge-arg becomes dead, which DCE could not see earlier.
+;;
+;; Every ir.data symbol used here is required EXPLICITLY (no reliance on data.lg's
+;; blanket intern-into-`ir` re-export).
+
+(ns ir.passes.cleanup
+  (:require
+   [ir.data :refer [block-insts block-params block-term blocks drop-block-params! op remove-inst!]]
+   [ir.passes.dce :refer [dce]]))
+
+(defn- dead-param-idxs [f bid]
+  "Positions of block bid's params whose defining inst is a tombstone (:invalid)."
+  (let [ps (block-params bid f)]
+    (vec (filter (fn [i] (= :invalid (op (nth ps i) f)))
+                 (range (count ps))))))
+
+(defn compact-dead-params [f]
+  "Drop every :invalid (DCE-tombstoned) block-param and realign its in-edge args."
+  (doseq [bid (blocks f)]
+    (drop-block-params! f bid (dead-param-idxs f bid)))
+  f)
+
+(defn strip-pops [f]
+  "Remove :pop insts — stack-VM accommodations with no meaning in the index form."
+  (doseq [bid (blocks f)]
+    (doseq [nid (vec (block-insts bid f))]
+      (when (= :pop (op nid f))
+        (remove-inst! f bid nid))))
+  f)
+
+(defn- has-invalid-param? [f]
+  "True iff any block still carries a tombstoned (:invalid) param."
+  (some (fn [bid]
+          (some (fn [p] (= :invalid (op p f))) (block-params bid f)))
+        (blocks f)))
+
+(defn cleanup [f]
+  "Pre-execution cleanup: strip :pop markers, then compact dead block-params +
+   edge-args and DCE-sweep to a fixed point. The sweep is iterated because
+   dropping an edge-arg can orphan the inst that computed it (its last use), and
+   removing that inst can in turn tombstone a further block-arg — a cascade that
+   only settles once no :invalid param remains. Param count strictly decreases
+   each round, so this terminates. Mutates f in place; returns f."
+  (strip-pops f)
+  (loop []
+    (compact-dead-params f)
+    (dce f)
+    (when (has-invalid-param? f) (recur)))
+  f)
