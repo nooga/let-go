@@ -19,6 +19,7 @@ import (
 // spikeInst is a flattened IR instruction (test-only decoder output).
 type spikeInst struct {
 	op     string   // IR op keyword (e.g., "const", "add")
+	opc    uint8    // Interned opcode for fast dispatch
 	args   []int32  // RefInstIds (instruction indices)
 	aux    int32    // Auxiliary data: arg index for :load-arg, param index for :block-arg
 	auxVal vm.Value // For :const, the actual constant value; for :load-var, resolved var value
@@ -34,6 +35,7 @@ type spikeEdge struct {
 // spikeTerm describes a terminator's shape for a spikeBlock.
 type spikeTerm struct {
 	op         string    // terminator op: "return", "branch", "branch-if"
+	opc        uint8     // Interned opcode for fast dispatch
 	returnVal  int32     // for return: the value inst-id
 	condRef    int32     // for branch-if: the condition inst-id
 	trueEdge   spikeEdge // for branch-if: true branch edge
@@ -64,6 +66,29 @@ const (
 	// ROUTE_BOOL: comparison results stored as 0/1 in localsI; branch-if reads
 	// them natively, boxing to vm.Boolean only at value boundaries.
 	ROUTE_BOOL = uint8(3)
+)
+
+// spikeOp* are interned integer opcodes for spike VM dispatch.
+const (
+	spikeOpInvalid  = uint8(0)
+	spikeOpConst    = uint8(1)
+	spikeOpLoadArg  = uint8(2)
+	spikeOpLoadVar  = uint8(3)
+	spikeOpBlockArg = uint8(4)
+	spikeOpAdd      = uint8(5)
+	spikeOpSub      = uint8(6)
+	spikeOpMul      = uint8(7)
+	spikeOpInc      = uint8(8)
+	spikeOpDec      = uint8(9)
+	spikeOpLt       = uint8(10)
+	spikeOpLte      = uint8(11)
+	spikeOpGt       = uint8(12)
+	spikeOpGte      = uint8(13)
+	spikeOpEq       = uint8(14)
+	spikeOpBranch   = uint8(15)
+	spikeOpBranchIf = uint8(16)
+	spikeOpReturn   = uint8(17)
+	spikeOpCall     = uint8(18)
 )
 
 // spikeFn is the flattened output of decode: slices replace persistent maps.
@@ -169,6 +194,7 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 		// Make the gap explicit: set op to "invalid" so accidental execution is loud
 		if opStr == "invalid" {
 			insts[nid].op = "invalid"
+			insts[nid].opc = spikeOpInvalid
 			continue
 		}
 
@@ -323,6 +349,7 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 
 		insts[nid] = spikeInst{
 			op:     opStr,
+			opc:    opcFromStr(opStr),
 			args:   refInstIDs,
 			aux:    auxInt,
 			auxVal: auxValue,
@@ -412,6 +439,7 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 		// Decode terminator based on op
 		var term spikeTerm
 		term.op = termOp
+		term.opc = opcFromStr(termOp)
 
 		switch termOp {
 		case "return":
@@ -617,6 +645,52 @@ func resolveVar(auxVal vm.Value, ns *vm.Namespace) (vm.Value, error) {
 
 // isValidScopeOp checks if an op keyword is in the spike's bounded subset.
 // The op string is the keyword name without the leading colon (e.g., "add" not ":add").
+// opcFromStr maps an op string to its opcode.
+func opcFromStr(op string) uint8 {
+	switch op {
+	case "invalid":
+		return spikeOpInvalid
+	case "const":
+		return spikeOpConst
+	case "load-arg":
+		return spikeOpLoadArg
+	case "load-var":
+		return spikeOpLoadVar
+	case "block-arg":
+		return spikeOpBlockArg
+	case "add":
+		return spikeOpAdd
+	case "sub":
+		return spikeOpSub
+	case "mul":
+		return spikeOpMul
+	case "inc":
+		return spikeOpInc
+	case "dec":
+		return spikeOpDec
+	case "lt":
+		return spikeOpLt
+	case "lte":
+		return spikeOpLte
+	case "gt":
+		return spikeOpGt
+	case "gte":
+		return spikeOpGte
+	case "eq":
+		return spikeOpEq
+	case "branch":
+		return spikeOpBranch
+	case "branch-if":
+		return spikeOpBranchIf
+	case "return":
+		return spikeOpReturn
+	case "call":
+		return spikeOpCall
+	default:
+		return spikeOpInvalid
+	}
+}
+
 func isValidScopeOp(op string) bool {
 	switch op {
 	case "const", "load-arg", "load-var", "block-arg", "add", "sub", "mul", "inc", "dec", "lt", "lte", "gt", "gte", "eq",
@@ -647,19 +721,19 @@ func computeRouting(insts []spikeInst) []uint8 {
 
 	// Seed: const, block-arg, and ops with typ code
 	for i, inst := range insts {
-		if inst.op == "const" && inst.typ == 1 {
+		if inst.opc == spikeOpConst && inst.typ == 1 {
 			routes[i] = ROUTE_INT
-		} else if inst.op == "const" && inst.typ == 2 {
+		} else if inst.opc == spikeOpConst && inst.typ == 2 {
 			routes[i] = ROUTE_FLOAT
-		} else if inst.op == "block-arg" && inst.typ == 1 {
+		} else if inst.opc == spikeOpBlockArg && inst.typ == 1 {
 			routes[i] = ROUTE_INT
-		} else if inst.op == "block-arg" && inst.typ == 2 {
+		} else if inst.opc == spikeOpBlockArg && inst.typ == 2 {
 			routes[i] = ROUTE_FLOAT
-		} else if inst.op == "load-arg" && inst.typ == 1 {
+		} else if inst.opc == spikeOpLoadArg && inst.typ == 1 {
 			// typeinfer narrowed the argument: unbox once at entry
 			// (constant boundary cost), then the whole loop runs native.
 			routes[i] = ROUTE_INT
-		} else if inst.op == "load-arg" && inst.typ == 2 {
+		} else if inst.opc == spikeOpLoadArg && inst.typ == 2 {
 			routes[i] = ROUTE_FLOAT
 		} else {
 			routes[i] = ROUTE_BOXED // conservative default
@@ -676,8 +750,8 @@ func computeRouting(insts []spikeInst) []uint8 {
 			}
 
 			// Check if this is a numeric op that could be routed
-			switch inst.op {
-			case "add", "sub", "mul", "inc", "dec":
+			switch inst.opc {
+			case spikeOpAdd, spikeOpSub, spikeOpMul, spikeOpInc, spikeOpDec:
 				if inst.typ == 1 && canOperandsRoute(insts, inst.args, ROUTE_INT, routes) {
 					routes[i] = ROUTE_INT
 					changed = true
@@ -685,7 +759,7 @@ func computeRouting(insts []spikeInst) []uint8 {
 					routes[i] = ROUTE_FLOAT
 					changed = true
 				}
-			case "lt", "lte", "gt", "gte", "eq":
+			case spikeOpLt, spikeOpLte, spikeOpGt, spikeOpGte, spikeOpEq:
 				// Comparisons over fully-narrowed operands run natively and
 				// produce a native bool (0/1 in localsI) — the per-iteration
 				// box of the loop condition is the cost this removes.
@@ -748,13 +822,13 @@ func TestSpikeDecode_Simple(t *testing.T) {
 	hasAdd := false
 	hasMul := false
 	for _, inst := range fn.insts {
-		if inst.op == "load-arg" {
+		if inst.opc == spikeOpLoadArg {
 			hasLoadArg = true
 		}
-		if inst.op == "add" {
+		if inst.opc == spikeOpAdd {
 			hasAdd = true
 		}
-		if inst.op == "mul" {
+		if inst.opc == spikeOpMul {
 			hasMul = true
 		}
 	}
@@ -789,7 +863,7 @@ func TestSpikeDecode_ConstValues(t *testing.T) {
 
 	// Verify that const insts have auxVal populated
 	for _, inst := range fn.insts {
-		if inst.op == "const" {
+		if inst.opc == spikeOpConst {
 			// Const insts should have auxVal populated
 			if inst.auxVal == nil {
 				t.Error("const inst has nil auxVal")
@@ -820,7 +894,7 @@ func TestSpikeDecode_ArgIndices(t *testing.T) {
 	// Find mul inst; it should have two refs (both to the same load-arg inst)
 	foundMul := false
 	for _, inst := range fn.insts {
-		if inst.op == "mul" {
+		if inst.opc == spikeOpMul {
 			foundMul = true
 			if len(inst.args) != 2 {
 				t.Errorf("mul inst has %d args, expected 2", len(inst.args))
@@ -857,7 +931,7 @@ func TestSpikeDecode_AuxField(t *testing.T) {
 	// Find load-arg; it should have aux == argument index
 	foundLoadArg := false
 	for _, inst := range fn.insts {
-		if inst.op == "load-arg" {
+		if inst.opc == spikeOpLoadArg {
 			foundLoadArg = true
 			if inst.aux < 0 || inst.aux >= int32(fn.nargs) {
 				t.Errorf("load-arg aux %d out of range [0, %d)", inst.aux, fn.nargs)
@@ -933,7 +1007,7 @@ func TestSpikeDecode_EdgeArgs(t *testing.T) {
 	// Find a branch-if terminator and check its edges
 	foundBranchIf := false
 	for _, block := range fn.blocks {
-		if block.term.op == "branch-if" {
+		if block.term.opc == spikeOpBranchIf {
 			foundBranchIf = true
 			// Both edges should have valid targets
 			if block.term.trueEdge.target < 0 || block.term.trueEdge.target >= int32(len(fn.blocks)) {
@@ -1068,7 +1142,7 @@ func TestSpikeDecode_LoopKernel(t *testing.T) {
 	// Find the recur back-edge (should have non-empty edge args)
 	foundRecurEdge := false
 	for bid, block := range fn.blocks {
-		if block.term.op == "branch" || block.term.op == "branch-if" {
+		if block.term.opc == spikeOpBranch || block.term.opc == spikeOpBranchIf {
 			// Check for edges with arguments (recur threading values back to loop header)
 			if len(block.term.simpleEdge.args) > 0 {
 				foundRecurEdge = true
@@ -1078,14 +1152,14 @@ func TestSpikeDecode_LoopKernel(t *testing.T) {
 					t.Errorf("block %d edge has %d args but target has %d params", bid, len(block.term.simpleEdge.args), len(targetBlock.params))
 				}
 			}
-			if block.term.op == "branch-if" && len(block.term.trueEdge.args) > 0 {
+			if block.term.opc == spikeOpBranchIf && len(block.term.trueEdge.args) > 0 {
 				foundRecurEdge = true
 				targetBlock := fn.blocks[block.term.trueEdge.target]
 				if len(block.term.trueEdge.args) != len(targetBlock.params) {
 					t.Errorf("block %d true edge has %d args but target has %d params", bid, len(block.term.trueEdge.args), len(targetBlock.params))
 				}
 			}
-			if block.term.op == "branch-if" && len(block.term.falseEdge.args) > 0 {
+			if block.term.opc == spikeOpBranchIf && len(block.term.falseEdge.args) > 0 {
 				foundRecurEdge = true
 				targetBlock := fn.blocks[block.term.falseEdge.target]
 				if len(block.term.falseEdge.args) != len(targetBlock.params) {
@@ -1123,7 +1197,7 @@ func TestSpikeDecode_TypeInferConsumption(t *testing.T) {
 	// Find the add inst; it should have typ == 1 (int)
 	foundAdd := false
 	for _, inst := range fn.insts {
-		if inst.op == "add" {
+		if inst.opc == spikeOpAdd {
 			foundAdd = true
 			if inst.typ != 1 {
 				t.Errorf("expected add to be typed as int (1), got %d", inst.typ)
@@ -1156,7 +1230,7 @@ func TestSpikeDecode_IncOp(t *testing.T) {
 	// Find the inc inst
 	foundInc := false
 	for _, inst := range fn.insts {
-		if inst.op == "inc" {
+		if inst.opc == spikeOpInc {
 			foundInc = true
 			// inc should be a unary op with one ref
 			if len(inst.args) != 1 {
@@ -2175,38 +2249,38 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 			inst := fn.insts[nid]
 
 			// Skip invalid insts (tombstones from DCE)
-			if inst.op == "invalid" {
+			if inst.opc == spikeOpInvalid {
 				continue
 			}
 
 			// Skip terminator insts (they're handled by the terminator execution below)
 			// Terminator ops are: return, branch, branch-if
-			if inst.op == "return" || inst.op == "branch" || inst.op == "branch-if" {
+			if inst.opc == spikeOpReturn || inst.opc == spikeOpBranch || inst.opc == spikeOpBranchIf {
 				continue
 			}
 
 			// Skip block-arg insts (they don't compute anything, just hold values from edges)
-			if inst.op == "block-arg" {
+			if inst.opc == spikeOpBlockArg {
 				continue
 			}
 
 			var result vm.Value
 			var err error
 
-			switch inst.op {
-			case "const":
+			switch inst.opc {
+			case spikeOpConst:
 				result = inst.auxVal
 
-			case "load-arg":
+			case spikeOpLoadArg:
 				if inst.aux < 0 || inst.aux >= int32(fn.nargs) {
 					return nil, fmt.Errorf("spikeRun: load-arg aux %d out of range [0, %d)", inst.aux, fn.nargs)
 				}
 				result = args[inst.aux]
 
-			case "load-var":
+			case spikeOpLoadVar:
 				result = inst.auxVal
 
-			case "add":
+			case spikeOpAdd:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRun: add inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2216,7 +2290,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 					return nil, fmt.Errorf("spikeRun: inst %d (add) error: %w", nid, err)
 				}
 
-			case "sub":
+			case spikeOpSub:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRun: sub inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2226,7 +2300,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 					return nil, fmt.Errorf("spikeRun: inst %d (sub) error: %w", nid, err)
 				}
 
-			case "mul":
+			case spikeOpMul:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRun: mul inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2236,7 +2310,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 					return nil, fmt.Errorf("spikeRun: inst %d (mul) error: %w", nid, err)
 				}
 
-			case "inc":
+			case spikeOpInc:
 				if len(inst.args) != 1 {
 					return nil, fmt.Errorf("spikeRun: inc inst %d has %d args, expected 1", nid, len(inst.args))
 				}
@@ -2247,7 +2321,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 					return nil, fmt.Errorf("spikeRun: inst %d (inc) error: %w", nid, err)
 				}
 
-			case "dec":
+			case spikeOpDec:
 				if len(inst.args) != 1 {
 					return nil, fmt.Errorf("spikeRun: dec inst %d has %d args, expected 1", nid, len(inst.args))
 				}
@@ -2257,7 +2331,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 					return nil, fmt.Errorf("spikeRun: inst %d (dec) error: %w", nid, err)
 				}
 
-			case "lt":
+			case spikeOpLt:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRun: lt inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2268,7 +2342,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 				}
 				result = vm.Boolean(ltResult)
 
-			case "lte":
+			case spikeOpLte:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRun: lte inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2279,7 +2353,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 				}
 				result = vm.Boolean(lteResult)
 
-			case "gt":
+			case spikeOpGt:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRun: gt inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2290,7 +2364,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 				}
 				result = vm.Boolean(gtResult)
 
-			case "gte":
+			case spikeOpGte:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRun: gte inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2301,7 +2375,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 				}
 				result = vm.Boolean(gteResult)
 
-			case "eq":
+			case spikeOpEq:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRun: eq inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2327,7 +2401,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 				}
 				result = vm.Boolean(vm.ValueEquals(a, b))
 
-			case "call":
+			case spikeOpCall:
 				// Call op: first ref is callee (as inst-id), remaining refs are args
 				if len(inst.args) < 1 {
 					return nil, fmt.Errorf("spikeRun: call inst %d has no callee ref", nid)
@@ -2373,14 +2447,14 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 		// Execute terminator to decide next block or return
 		term := block.term
 
-		switch term.op {
-		case "return":
+		switch term.opc {
+		case spikeOpReturn:
 			if term.returnVal < 0 || term.returnVal >= int32(len(fn.insts)) {
 				return nil, fmt.Errorf("spikeRun: return value inst %d out of bounds", term.returnVal)
 			}
 			return locals[term.returnVal], nil
 
-		case "branch":
+		case spikeOpBranch:
 			// Thread edge args and jump
 			// IMPORTANT: snapshot all edge arg values BEFORE writing any params,
 			// since a param inst-id could coincide with an arg inst-id in a loop back-edge
@@ -2411,7 +2485,7 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 			currentBlockID = int(target)
 			continue
 
-		case "branch-if":
+		case spikeOpBranchIf:
 			// Evaluate condition using truthiness rule: anything except NIL and FALSE is truthy
 			condRef := term.condRef
 			if condRef < 0 || condRef >= int32(len(fn.insts)) {
@@ -2524,22 +2598,22 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 
 			inst := fn.insts[nid]
 
-			if inst.op == "invalid" {
+			if inst.opc == spikeOpInvalid {
 				continue
 			}
 
-			if inst.op == "return" || inst.op == "branch" || inst.op == "branch-if" {
+			if inst.opc == spikeOpReturn || inst.opc == spikeOpBranch || inst.opc == spikeOpBranchIf {
 				continue
 			}
 
-			if inst.op == "block-arg" {
+			if inst.opc == spikeOpBlockArg {
 				continue
 			}
 
 			route := fn.routes[nid]
 
-			switch inst.op {
-			case "const":
+			switch inst.opc {
+			case spikeOpConst:
 				if route == ROUTE_INT {
 					if iv, ok := inst.auxVal.(vm.Int); ok {
 						localsI[nid] = int64(iv)
@@ -2552,7 +2626,7 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					locals[nid] = inst.auxVal
 				}
 
-			case "load-arg":
+			case spikeOpLoadArg:
 				if inst.aux < 0 || inst.aux >= int32(fn.nargs) {
 					return nil, fmt.Errorf("spikeRunTyped: load-arg aux %d out of range [0, %d)", inst.aux, fn.nargs)
 				}
@@ -2580,10 +2654,10 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					locals[nid] = argValue
 				}
 
-			case "load-var":
+			case spikeOpLoadVar:
 				locals[nid] = inst.auxVal
 
-			case "add":
+			case spikeOpAdd:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRunTyped: add inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2617,7 +2691,7 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					stats.boxedArithOps++
 				}
 
-			case "sub":
+			case spikeOpSub:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRunTyped: sub inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2651,7 +2725,7 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					stats.boxedArithOps++
 				}
 
-			case "mul":
+			case spikeOpMul:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRunTyped: mul inst %d has %d args, expected 2", nid, len(inst.args))
 				}
@@ -2685,7 +2759,7 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					stats.boxedArithOps++
 				}
 
-			case "inc":
+			case spikeOpInc:
 				if len(inst.args) != 1 {
 					return nil, fmt.Errorf("spikeRunTyped: inc inst %d has %d args, expected 1", nid, len(inst.args))
 				}
@@ -2711,7 +2785,7 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					stats.boxedArithOps++
 				}
 
-			case "dec":
+			case spikeOpDec:
 				if len(inst.args) != 1 {
 					return nil, fmt.Errorf("spikeRunTyped: dec inst %d has %d args, expected 1", nid, len(inst.args))
 				}
@@ -2737,7 +2811,7 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					stats.boxedArithOps++
 				}
 
-			case "lt", "lte", "gt", "gte", "eq":
+			case spikeOpLt, spikeOpLte, spikeOpGt, spikeOpGte, spikeOpEq:
 				if len(inst.args) != 2 {
 					return nil, fmt.Errorf("spikeRunTyped: %s inst %d has %d args, expected 2", inst.op, nid, len(inst.args))
 				}
@@ -2748,30 +2822,30 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					var cmp bool
 					if fn.routes[aID] == ROUTE_INT {
 						a, b := localsI[aID], localsI[bID]
-						switch inst.op {
-						case "lt":
+						switch inst.opc {
+						case spikeOpLt:
 							cmp = a < b
-						case "lte":
+						case spikeOpLte:
 							cmp = a <= b
-						case "gt":
+						case spikeOpGt:
 							cmp = a > b
-						case "gte":
+						case spikeOpGte:
 							cmp = a >= b
-						case "eq":
+						case spikeOpEq:
 							cmp = a == b
 						}
 					} else {
 						a, b := localsF[aID], localsF[bID]
-						switch inst.op {
-						case "lt":
+						switch inst.opc {
+						case spikeOpLt:
 							cmp = a < b
-						case "lte":
+						case spikeOpLte:
 							cmp = a <= b
-						case "gt":
+						case spikeOpGt:
 							cmp = a > b
-						case "gte":
+						case spikeOpGte:
 							cmp = a >= b
-						case "eq":
+						case spikeOpEq:
 							cmp = a == b
 						}
 					}
@@ -2792,32 +2866,32 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					return nil, bErr
 				}
 				var result vm.Value
-				switch inst.op {
-				case "lt":
+				switch inst.opc {
+				case spikeOpLt:
 					r, err := vm.NumLt(a, b)
 					if err != nil {
 						return nil, fmt.Errorf("spikeRunTyped: inst %d (lt) error: %w", nid, err)
 					}
 					result = vm.Boolean(r)
-				case "lte":
+				case spikeOpLte:
 					r, err := vm.NumLe(a, b)
 					if err != nil {
 						return nil, fmt.Errorf("spikeRunTyped: inst %d (lte) error: %w", nid, err)
 					}
 					result = vm.Boolean(r)
-				case "gt":
+				case spikeOpGt:
 					r, err := vm.NumGt(a, b)
 					if err != nil {
 						return nil, fmt.Errorf("spikeRunTyped: inst %d (gt) error: %w", nid, err)
 					}
 					result = vm.Boolean(r)
-				case "gte":
+				case spikeOpGte:
 					r, err := vm.NumGe(a, b)
 					if err != nil {
 						return nil, fmt.Errorf("spikeRunTyped: inst %d (gte) error: %w", nid, err)
 					}
 					result = vm.Boolean(r)
-				case "eq":
+				case spikeOpEq:
 					// Mirror OP_EQ: Int/Keyword fast paths, then structural.
 					result = nil
 					if ai, ok := a.(vm.Int); ok {
@@ -2841,9 +2915,8 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 				}
 				locals[nid] = result
 				stats.boxedArithOps++
-				stats.boxedArithOps++
 
-			case "call":
+			case spikeOpCall:
 				// Call op: first ref is callee (as inst-id), remaining refs are args
 				if len(inst.args) < 1 {
 					return nil, fmt.Errorf("spikeRunTyped: call inst %d has no callee ref", nid)
@@ -2895,8 +2968,8 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 
 		term := block.term
 
-		switch term.op {
-		case "return":
+		switch term.opc {
+		case spikeOpReturn:
 			if term.returnVal < 0 || term.returnVal >= int32(len(fn.insts)) {
 				return nil, fmt.Errorf("spikeRunTyped: return value inst %d out of bounds", term.returnVal)
 			}
@@ -2914,7 +2987,7 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 			}
 			return locals[term.returnVal], nil
 
-		case "branch":
+		case spikeOpBranch:
 			target := term.simpleEdge.target
 			if target < 0 || target >= int32(len(fn.blocks)) {
 				return nil, fmt.Errorf("spikeRunTyped: branch target %d out of bounds", target)
@@ -2931,13 +3004,15 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					return nil, fmt.Errorf("spikeRunTyped: branch edge arg %d out of bounds", edgeArgID)
 				}
 				paramID := targetBlock.params[i]
-				threadEdgeValueTyped(edgeArgID, paramID, fn.routes, localsI, localsF, locals, stats)
+				if terr := threadEdgeValueTyped(edgeArgID, paramID, fn.routes, localsI, localsF, locals, stats); terr != nil {
+					return nil, terr
+				}
 			}
 
 			currentBlockID = int(target)
 			continue
 
-		case "branch-if":
+		case spikeOpBranchIf:
 			condRef := term.condRef
 			if condRef < 0 || condRef >= int32(len(fn.insts)) {
 				return nil, fmt.Errorf("spikeRunTyped: branch-if condition ref %d out of bounds", condRef)
@@ -2984,7 +3059,9 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 					return nil, fmt.Errorf("spikeRunTyped: branch-if edge arg %d out of bounds", edgeArgID)
 				}
 				paramID := targetBlock.params[i]
-				threadEdgeValueTyped(edgeArgID, paramID, fn.routes, localsI, localsF, locals, stats)
+				if terr := threadEdgeValueTyped(edgeArgID, paramID, fn.routes, localsI, localsF, locals, stats); terr != nil {
+					return nil, terr
+				}
 			}
 
 			currentBlockID = int(target)
@@ -2996,8 +3073,10 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 	}
 }
 
-// threadEdgeValueTyped copies values between slots, handling route mismatches with boxing/unboxing.
-func threadEdgeValueTyped(fromID, toID int32, routes []uint8, localsI []int64, localsF []float64, locals []vm.Value, stats *spikeStats) {
+// threadEdgeValueTyped copies values between slots, handling route mismatches
+// with boxing/unboxing. A boxed value whose runtime type contradicts the
+// target's narrowed route is a routing bug — error loudly, never drop silently.
+func threadEdgeValueTyped(fromID, toID int32, routes []uint8, localsI []int64, localsF []float64, locals []vm.Value, stats *spikeStats) error {
 	fromRoute := routes[fromID]
 	toRoute := routes[toID]
 
@@ -3025,14 +3104,23 @@ func threadEdgeValueTyped(fromID, toID int32, routes []uint8, localsI []int64, l
 		stats.boxOps++
 		locals[toID] = vm.Float(localsF[fromID])
 	} else if fromRoute == ROUTE_BOXED && toRoute == ROUTE_INT {
-		if iv, ok := locals[fromID].(vm.Int); ok {
-			localsI[toID] = int64(iv)
+		iv, ok := locals[fromID].(vm.Int)
+		if !ok {
+			return fmt.Errorf("threadEdgeValueTyped: edge %d→%d target narrowed to int but boxed value is %T", fromID, toID, locals[fromID])
 		}
+		stats.unboxOps++
+		localsI[toID] = int64(iv)
 	} else if fromRoute == ROUTE_BOXED && toRoute == ROUTE_FLOAT {
-		if fv, ok := locals[fromID].(vm.Float); ok {
-			localsF[toID] = float64(fv)
+		fv, ok := locals[fromID].(vm.Float)
+		if !ok {
+			return fmt.Errorf("threadEdgeValueTyped: edge %d→%d target narrowed to float but boxed value is %T", fromID, toID, locals[fromID])
 		}
+		stats.unboxOps++
+		localsF[toID] = float64(fv)
+	} else {
+		return fmt.Errorf("threadEdgeValueTyped: unsupported route transition %d→%d (routes %d→%d)", fromID, toID, fromRoute, toRoute)
 	}
+	return nil
 }
 
 // Overflow checking helpers
@@ -3304,7 +3392,7 @@ func TestDebugRouting(t *testing.T) {
 	t.Logf("=== Decoded IR dump ===")
 	t.Logf("Total insts: %d", len(fn.insts))
 	for i, inst := range fn.insts {
-		if inst.op == "invalid" {
+		if inst.opc == spikeOpInvalid {
 			continue
 		}
 		route := fn.routes[i]
@@ -3350,7 +3438,7 @@ func TestSpikeRun_TypedFloat(t *testing.T) {
 	t.Logf("=== Float kernel typ codes ===")
 	hasFloatRoute := false
 	for i, inst := range fn.insts {
-		if inst.op == "invalid" {
+		if inst.opc == spikeOpInvalid {
 			continue
 		}
 		route := fn.routes[i]
