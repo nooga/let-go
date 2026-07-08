@@ -6,6 +6,7 @@
 
 (ns ir.passes.inline
   (:require
+   [ir.build :as build]
    [ir.data]
    [ir.lower-go :as lower-go]
    [ir.passes.mutability :as mut]))
@@ -514,7 +515,10 @@
                                         (let [recur-bid (if (= kind :any) fb tb)
                                               sc-bid    (if (= kind :any) tb fb)]
                                           {:kind kind :arity arity :rest-index rest-index
-                                           :header hdr :loop-var lv :input-arg input-arg
+                                           :fn-name (ir/fn-name f)
+                                           :header hdr :loop-var lv
+                                           :input-arg input-arg
+                                           :input-pos (ir/aux input-arg f)
                                            :first-nid first-nid :pred-nid pcnd
                                            :step-bid step-b
                                            :short-circuit-bid sc-bid
@@ -522,6 +526,40 @@
                                            :terminal-bid term-b
                                            :terminal-val (const-in-block f term-b)
                                            :recur-bid recur-bid})))))))))))))))))))))
+
+(defn- unrolled-fold-form
+  "Synthesize a (defn name [p0..p(num-fixed-1) e0..e(n-1)] <unrolled if-chain>)
+   form for a fold-over-rest combinator. Each element ei is applied to the fixed
+   param at input-pos: (ei p<input-pos>). :any short-circuits true on a truthy
+   element result (base false); :all short-circuits false on a falsey result
+   (base true). The chain is a RIGHT fold of `if`, so build-fn emits a straight-
+   line, loop-free CFG (branch-if symmetry + block-args handled by the builder)."
+  [name-sym kind num-fixed input-pos n]
+  (let [fixed  (mapv (fn [i] (symbol (str "p" i))) (range num-fixed))
+        elems  (mapv (fn [i] (symbol (str "e" i))) (range n))
+        params (vec (concat fixed elems))
+        input  (nth fixed input-pos)
+        base   (if (= kind :any) false true)
+        body   (reduce (fn [acc i]
+                         (let [call (list (nth elems i) input)]
+                           (if (= kind :any)
+                             (list 'if call true acc)
+                             (list 'if call acc false))))
+                       base
+                       (reverse (range n)))]
+    (list 'defn name-sym params body)))
+
+(defn specialize-fold [desc n]
+  "Build the unrolled specialized IR Function for a recognized fold-over-rest
+   combinator (desc from fold-over-rest?) applied to n known rest operands. The
+   specialized fn's params are the combinator's fixed args followed by n element
+   params, and its body is the unrolled short-circuit if-chain — so each element
+   application becomes a direct call once the operands are routed in by inlining.
+   Deterministic name derived from the source fn (no gensym)."
+  (let [name-sym (symbol (str (:fn-name desc) "$" (name (:kind desc)) "$" n))
+        form     (unrolled-fold-form name-sym (:kind desc)
+                                     (:rest-index desc) (:input-pos desc) n)]
+    (build/build-fn form)))
 
 (defn- inline-pass [f registry]
   "Single pass: inline eligible callees within function f.

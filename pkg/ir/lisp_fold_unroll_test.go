@@ -7,8 +7,13 @@
 package ir_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/rt"
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 // ITER-0034 / STORY-0035 (EPIC-013, Component 2 of the multiblock-inliner +
@@ -85,4 +90,61 @@ func TestFoldOverRestRejectsVariadicNonFold(t *testing.T) {
 	if got := foldRecognized(t, `(defn vf [p & xs] xs)`); got != "false" {
 		t.Fatalf("variadic non-fold fn must NOT be recognized, got %s", got)
 	}
+}
+
+// ── T2: specialize a recognized fold-over-rest to a fixed-arity unrolled fn ──
+
+func specializeFold(t *testing.T, comboSrc string, n int) vm.Value {
+	t.Helper()
+	f := buildLispIR(t, comboSrc)
+	return lispEvalReturn(t, f,
+		fmt.Sprintf(`(ir.passes.inline/specialize-fold (ir.passes.inline/fold-over-rest? %%s) %d)`, n))
+}
+
+// assertValidatesVal runs ir.validate/validate-fn! on a Function value; a
+// throw (malformed IR) surfaces as an eval error and fails the test.
+func assertValidatesVal(t *testing.T, f vm.Value, label string) {
+	t.Helper()
+	passVarCounter++
+	varName := fmt.Sprintf("*vf-%d*", passVarCounter)
+	coreNS := rt.NS(rt.NameCoreNS)
+	coreNS.Def(varName, f)
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, coreNS)
+	c.SetSource("validate-val")
+	expr := fmt.Sprintf(`(ir.validate/validate-fn! %s "%s")`, varName, label)
+	if _, _, err := c.CompileMultiple(strings.NewReader(expr)); err != nil {
+		t.Fatalf("specialized IR failed validation (%s): %v", label, err)
+	}
+}
+
+func TestSpecializeFoldAnyUnrolls(t *testing.T) {
+	ensureLoader()
+	spec := specializeFold(t, anycSrc, 3)
+	// arity = num-fixed(1: input) + N(3 elements) = 4; non-variadic.
+	if got := strings.TrimSpace(lispEvalOn(t, spec, "(ir/fn-arity %s)")); got != "4" {
+		t.Fatalf("specialized any arity should be 4, got %s", got)
+	}
+	if got := strings.TrimSpace(lispEvalOn(t, spec, "(ir/fn-variadic? %s)")); got != "false" {
+		t.Fatalf("specialized fn should be non-variadic, got %s", got)
+	}
+	dump := lispDump(t, spec)
+	// Unrolled any(N=3) = 3 short-circuit branch-ifs, loop-free.
+	if n := strings.Count(dump, "BranchIf"); n != 3 {
+		t.Fatalf("expected 3 BranchIf (unrolled chain), got %d:\n%s", n, dump)
+	}
+	assertValidatesVal(t, spec, "specialize-any")
+}
+
+func TestSpecializeFoldAllUnrolls(t *testing.T) {
+	ensureLoader()
+	spec := specializeFold(t, allcSrc, 2)
+	if got := strings.TrimSpace(lispEvalOn(t, spec, "(ir/fn-arity %s)")); got != "3" {
+		t.Fatalf("specialized all arity should be 3, got %s", got)
+	}
+	dump := lispDump(t, spec)
+	if n := strings.Count(dump, "BranchIf"); n != 2 {
+		t.Fatalf("expected 2 BranchIf (unrolled chain), got %d:\n%s", n, dump)
+	}
+	assertValidatesVal(t, spec, "specialize-all")
 }
