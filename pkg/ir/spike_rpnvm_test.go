@@ -53,6 +53,7 @@ type spikeStats struct {
 	boxOps        int // number of vm.Value allocations from typed slots
 	unboxOps      int // number of reads from unboxed slots
 	boxedArithOps int // number of arithmetic ops executed on boxed path
+	callOps       int // number of call ops executed
 }
 
 // spikeRoute indicates where an inst's result is stored: unboxed or boxed.
@@ -67,12 +68,13 @@ const (
 
 // spikeFn is the flattened output of decode: slices replace persistent maps.
 type spikeFn struct {
-	insts   []spikeInst  // indexed by inst-id
-	blocks  []spikeBlock // indexed by block-id
-	consts  []vm.Value   // const pool (unused for spike; for reference)
-	callees []vm.Value   // resolved callees (one per call in insts)
-	nargs   int          // arity
-	routes  []uint8      // routing for each inst: ROUTE_BOXED/INT/FLOAT (computed post-decode for typed path)
+	insts         []spikeInst  // indexed by inst-id
+	blocks        []spikeBlock // indexed by block-id
+	consts        []vm.Value   // const pool (unused for spike; for reference)
+	callees       []vm.Value   // resolved callees (one per call in insts)
+	calleeIndices []int        // indexed by inst-id: index in callees slice for call insts, -1 otherwise
+	nargs         int          // arity
+	routes        []uint8      // routing for each inst: ROUTE_BOXED/INT/FLOAT (computed post-decode for typed path)
 }
 
 var spikeDecodeVarCounter int
@@ -145,6 +147,11 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 	// Decode all insts
 	insts := make([]spikeInst, instCount) // Pre-allocate; :invalid tombstones create gaps
 	var callees []vm.Value
+	calleeIndices := make([]int, instCount)
+	// Initialize all to -1 (not a call)
+	for i := range calleeIndices {
+		calleeIndices[i] = -1
+	}
 
 	for nid := 0; nid < instCount; nid++ {
 		// Get op
@@ -310,6 +317,7 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 			default:
 				return nil, fmt.Errorf("inst %d (call) resolved to non-callable: %T", nid, calleeVal)
 			}
+			calleeIndices[nid] = len(callees)
 			callees = append(callees, calleeVal)
 		}
 
@@ -573,12 +581,13 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 	}
 
 	fn := &spikeFn{
-		insts:   insts,
-		blocks:  blocks,
-		consts:  constPool.AllValues(),
-		callees: callees,
-		nargs:   arity,
-		routes:  computeRouting(insts),
+		insts:         insts,
+		blocks:        blocks,
+		consts:        constPool.AllValues(),
+		callees:       callees,
+		calleeIndices: calleeIndices,
+		nargs:         arity,
+		routes:        computeRouting(insts),
 	}
 
 	return fn, nil
@@ -1370,6 +1379,250 @@ func TestSpikeRun_LoopKernel(t *testing.T) {
 	}
 }
 
+// TestSpikeRun_ContainerKernel tests AC-WS.1 kernel (c): container-touching via function calls.
+// Kernel: (defn kvec [v] (loop [i 0 acc 0] (if (< i (count v)) (recur (+ i 1) (+ acc (nth v i))) acc)))
+// This tests that call ops work with container access (nth on vector arg).
+func TestSpikeRun_ContainerKernel(t *testing.T) {
+	ensureLoader()
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("test-spike-container")
+
+	// Compile via the spike pipeline
+	expr := `(ir.passes.pipeline/optimize-fn (ir.build/build-fn (quote (defn kvec [v] (loop [i 0 acc 0] (if (< i (count v)) (recur (+ i 1) (+ acc (nth v i))) acc))))))`
+	_, irVal, err := c.CompileMultiple(strings.NewReader(expr))
+	if err != nil {
+		t.Fatalf("compile spike IR: %v", err)
+	}
+
+	spikeFn, decodeErr := decodeOptimizedIR(irVal)
+	if decodeErr != nil {
+		t.Fatalf("decode spike IR: %v", decodeErr)
+	}
+
+	// Compile via the stack VM pipeline
+	ns := rt.NS(rt.NameCoreNS)
+	stackC := compiler.NewCompiler(vm.NewConsts(), ns)
+	stackC.SetSource("test-stack-container")
+	if _, _, stackErr := stackC.CompileMultiple(strings.NewReader(`(defn kvec [v] (loop [i 0 acc 0] (if (< i (count v)) (recur (+ i 1) (+ acc (nth v i))) acc)))`)); stackErr != nil {
+		t.Fatalf("compile stack VM code: %v", stackErr)
+	}
+
+	stackVar := ns.Lookup(vm.Symbol("kvec"))
+	if stackVar == nil {
+		t.Fatal("stack VM: kvec not found in namespace")
+	}
+	stackFn := stackVar.(*vm.Var).Deref().(*vm.Func)
+	stackChunk := stackFn.Chunk()
+
+	// Test with different vectors
+	testCases := []struct {
+		values []vm.Value
+		label  string
+	}{
+		{[]vm.Value{}, "empty-vector"},
+		{[]vm.Value{vm.Int(1)}, "single-element"},
+		{[]vm.Value{vm.Int(3), vm.Int(1), vm.Int(4), vm.Int(1), vm.Int(5), vm.Int(9), vm.Int(2), vm.Int(6)}, "multi-element"},
+	}
+
+	for _, tc := range testCases {
+		vec := vm.NewPersistentVector(tc.values)
+
+		// Run spike (boxed)
+		spikeResult, spikeErr := spikeRun(spikeFn, []vm.Value{vec})
+		if spikeErr != nil {
+			t.Errorf("spikeRun container kernel %s error: %v", tc.label, spikeErr)
+			continue
+		}
+
+		// Run typed
+		stats := &spikeStats{}
+		spikeResultTyped, spikeErrTyped := spikeRunTyped(spikeFn, []vm.Value{vec}, stats)
+		if spikeErrTyped != nil {
+			t.Errorf("spikeRunTyped container kernel %s error: %v", tc.label, spikeErrTyped)
+			continue
+		}
+
+		// Run stack VM
+		stackFrame := vm.NewFrame(stackChunk, []vm.Value{vec})
+		stackResult, stackErr := stackFrame.Run()
+		if stackErr != nil {
+			t.Errorf("stack VM container kernel %s error: %v", tc.label, stackErr)
+			continue
+		}
+
+		// Compare boxed spike with stack VM
+		if !valuesEqual(spikeResult, stackResult) {
+			t.Errorf("container kernel (boxed) FAIL %s: spike=%v, stack=%v", tc.label, spikeResult, stackResult)
+		} else {
+			t.Logf("container kernel (boxed) PASS %s: result=%v", tc.label, spikeResult)
+		}
+
+		// Compare typed spike with stack VM
+		if !valuesEqual(spikeResultTyped, stackResult) {
+			t.Errorf("container kernel (typed) FAIL %s: spike=%v, stack=%v", tc.label, spikeResultTyped, stackResult)
+		} else {
+			t.Logf("container kernel (typed) PASS %s: result=%v, callOps=%d", tc.label, spikeResultTyped, stats.callOps)
+		}
+	}
+}
+
+// TestSpikeRun_GoNativeKernel tests AC-WS.1 kernel (d): Go-native callout via function calls.
+// Kernel: (defn kmax [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (max acc (- n i))) acc)))
+// This tests that call ops work with native Go functions (max).
+func TestSpikeRun_GoNativeKernel(t *testing.T) {
+	ensureLoader()
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("test-spike-native")
+
+	// Compile via the spike pipeline
+	expr := `(ir.passes.pipeline/optimize-fn (ir.build/build-fn (quote (defn kmax [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (max acc (- n i))) acc))))))`
+	_, irVal, err := c.CompileMultiple(strings.NewReader(expr))
+	if err != nil {
+		t.Fatalf("compile spike IR: %v", err)
+	}
+
+	spikeFn, decodeErr := decodeOptimizedIR(irVal)
+	if decodeErr != nil {
+		t.Fatalf("decode spike IR: %v", decodeErr)
+	}
+
+	// Compile via the stack VM pipeline
+	ns := rt.NS(rt.NameCoreNS)
+	stackC := compiler.NewCompiler(vm.NewConsts(), ns)
+	stackC.SetSource("test-stack-native")
+	if _, _, stackErr := stackC.CompileMultiple(strings.NewReader(`(defn kmax [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (max acc (- n i))) acc)))`)); stackErr != nil {
+		t.Fatalf("compile stack VM code: %v", stackErr)
+	}
+
+	stackVar := ns.Lookup(vm.Symbol("kmax"))
+	if stackVar == nil {
+		t.Fatal("stack VM: kmax not found in namespace")
+	}
+	stackFn := stackVar.(*vm.Var).Deref().(*vm.Func)
+	stackChunk := stackFn.Chunk()
+
+	// Test cases: n ∈ {0, 10, 100}
+	testCases := []vm.Value{
+		vm.Int(0),
+		vm.Int(10),
+		vm.Int(100),
+	}
+
+	for _, n := range testCases {
+		// Run spike (boxed)
+		spikeResult, spikeErr := spikeRun(spikeFn, []vm.Value{n})
+		if spikeErr != nil {
+			t.Errorf("spikeRun native kernel n=%v error: %v", n, spikeErr)
+			continue
+		}
+
+		// Run typed
+		stats := &spikeStats{}
+		spikeResultTyped, spikeErrTyped := spikeRunTyped(spikeFn, []vm.Value{n}, stats)
+		if spikeErrTyped != nil {
+			t.Errorf("spikeRunTyped native kernel n=%v error: %v", n, spikeErrTyped)
+			continue
+		}
+
+		// Run stack VM
+		stackFrame := vm.NewFrame(stackChunk, []vm.Value{n})
+		stackResult, stackErr := stackFrame.Run()
+		if stackErr != nil {
+			t.Errorf("stack VM native kernel n=%v error: %v", n, stackErr)
+			continue
+		}
+
+		// Compare boxed spike with stack VM
+		if !valuesEqual(spikeResult, stackResult) {
+			t.Errorf("native kernel (boxed) FAIL n=%v: spike=%v, stack=%v", n, spikeResult, stackResult)
+		} else {
+			t.Logf("native kernel (boxed) PASS n=%v: result=%v", n, spikeResult)
+		}
+
+		// Compare typed spike with stack VM
+		if !valuesEqual(spikeResultTyped, stackResult) {
+			t.Errorf("native kernel (typed) FAIL n=%v: spike=%v, stack=%v", n, spikeResultTyped, stackResult)
+		} else {
+			t.Logf("native kernel (typed) PASS n=%v: result=%v, callOps=%d", n, spikeResultTyped, stats.callOps)
+		}
+	}
+}
+
+// TestSpikeRun_CallError tests error handling in call operations.
+// Kernel: (defn kbad [v] (nth v 99)) — should error on out-of-bounds access.
+func TestSpikeRun_CallError(t *testing.T) {
+	ensureLoader()
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("test-spike-call-error")
+
+	// Compile via the spike pipeline
+	expr := `(ir.passes.pipeline/optimize-fn (ir.build/build-fn (quote (defn kbad [v] (nth v 99)))))`
+	_, irVal, err := c.CompileMultiple(strings.NewReader(expr))
+	if err != nil {
+		t.Fatalf("compile spike IR: %v", err)
+	}
+
+	spikeFn, decodeErr := decodeOptimizedIR(irVal)
+	if decodeErr != nil {
+		t.Fatalf("decode spike IR: %v", decodeErr)
+	}
+
+	// Compile via the stack VM pipeline
+	ns := rt.NS(rt.NameCoreNS)
+	stackC := compiler.NewCompiler(vm.NewConsts(), ns)
+	stackC.SetSource("test-stack-call-error")
+	if _, _, stackErr := stackC.CompileMultiple(strings.NewReader(`(defn kbad [v] (nth v 99))`)); stackErr != nil {
+		t.Fatalf("compile stack VM code: %v", stackErr)
+	}
+
+	stackVar := ns.Lookup(vm.Symbol("kbad"))
+	if stackVar == nil {
+		t.Fatal("stack VM: kbad not found in namespace")
+	}
+	stackFn := stackVar.(*vm.Var).Deref().(*vm.Func)
+	stackChunk := stackFn.Chunk()
+
+	// Create a small vector
+	vec := vm.NewPersistentVector([]vm.Value{vm.Int(1), vm.Int(2), vm.Int(3)})
+
+	// Run spike (should error)
+	_, spikeErr := spikeRun(spikeFn, []vm.Value{vec})
+	if spikeErr == nil {
+		t.Error("spikeRun expected error on out-of-bounds access, got nil")
+	} else {
+		t.Logf("spikeRun correctly errored: %v", spikeErr)
+	}
+
+	// Run typed spike (should error)
+	stats := &spikeStats{}
+	_, spikeErrTyped := spikeRunTyped(spikeFn, []vm.Value{vec}, stats)
+	if spikeErrTyped == nil {
+		t.Error("spikeRunTyped expected error on out-of-bounds access, got nil")
+	} else {
+		t.Logf("spikeRunTyped correctly errored: %v", spikeErrTyped)
+	}
+
+	// Run stack VM (should error)
+	stackFrame := vm.NewFrame(stackChunk, []vm.Value{vec})
+	_, stackErr := stackFrame.Run()
+	if stackErr == nil {
+		t.Error("stack VM expected error on out-of-bounds access, got nil")
+	} else {
+		t.Logf("stack VM correctly errored: %v", stackErr)
+	}
+
+	// Document that both error (exact message parity not required)
+	if (spikeErr != nil) && (spikeErrTyped != nil) && (stackErr != nil) {
+		t.Logf("call error parity: all three paths error (spike boxed, spike typed, stack VM)")
+	}
+}
+
 // TestSpikeRun_NonNumberError verifies error handling parity with stack VM.
 // Passes a non-number arg into arithmetic operations and checks for error.
 func TestSpikeRun_NonNumberError(t *testing.T) {
@@ -2075,8 +2328,40 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 				result = vm.Boolean(vm.ValueEquals(a, b))
 
 			case "call":
-				// T4 task
-				return nil, fmt.Errorf("spikeRun: call not implemented until T4")
+				// Call op: first ref is callee (as inst-id), remaining refs are args
+				if len(inst.args) < 1 {
+					return nil, fmt.Errorf("spikeRun: call inst %d has no callee ref", nid)
+				}
+
+				calleeIdx := fn.calleeIndices[nid]
+				if calleeIdx < 0 || calleeIdx >= len(fn.callees) {
+					return nil, fmt.Errorf("spikeRun: call inst %d has invalid callee index %d", nid, calleeIdx)
+				}
+				callee := fn.callees[calleeIdx]
+
+				// Remaining args are the actual call arguments
+				callArgs := make([]vm.Value, len(inst.args)-1)
+				for i, argID := range inst.args[1:] {
+					if argID < 0 || argID >= int32(len(fn.insts)) {
+						return nil, fmt.Errorf("spikeRun: call arg %d out of bounds", argID)
+					}
+					callArgs[i] = locals[argID]
+				}
+
+				// Invoke the callee
+				var callResult vm.Value
+				switch c := callee.(type) {
+				case *vm.Func:
+					callResult, err = c.Invoke(callArgs)
+				case *vm.NativeFn:
+					callResult, err = c.Invoke(callArgs)
+				default:
+					return nil, fmt.Errorf("spikeRun: call callee %T is not callable", callee)
+				}
+				if err != nil {
+					return nil, fmt.Errorf("spikeRun: inst %d (call) error: %w", nid, err)
+				}
+				result = callResult
 
 			default:
 				return nil, fmt.Errorf("spikeRun: inst %d has unknown op: %s", nid, inst.op)
@@ -2559,7 +2844,49 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 				stats.boxedArithOps++
 
 			case "call":
-				return nil, fmt.Errorf("spikeRunTyped: call not implemented until T4")
+				// Call op: first ref is callee (as inst-id), remaining refs are args
+				if len(inst.args) < 1 {
+					return nil, fmt.Errorf("spikeRunTyped: call inst %d has no callee ref", nid)
+				}
+
+				calleeIdx := fn.calleeIndices[nid]
+				if calleeIdx < 0 || calleeIdx >= len(fn.callees) {
+					return nil, fmt.Errorf("spikeRunTyped: call inst %d has invalid callee index %d", nid, calleeIdx)
+				}
+				callee := fn.callees[calleeIdx]
+
+				// Remaining args are the actual call arguments
+				// Box typed operands at the boundary
+				callArgs := make([]vm.Value, len(inst.args)-1)
+				for i, argID := range inst.args[1:] {
+					if argID < 0 || argID >= int32(len(fn.insts)) {
+						return nil, fmt.Errorf("spikeRunTyped: call arg %d out of bounds", argID)
+					}
+					// Use boxedOperand to materialize the argument value
+					v, boxErr := boxedOperand(argID, fn.routes, locals, localsI, localsF, stats)
+					if boxErr != nil {
+						return nil, boxErr
+					}
+					callArgs[i] = v
+				}
+
+				// Invoke the callee
+				var callResult vm.Value
+				var callErr error
+				switch c := callee.(type) {
+				case *vm.Func:
+					callResult, callErr = c.Invoke(callArgs)
+				case *vm.NativeFn:
+					callResult, callErr = c.Invoke(callArgs)
+				default:
+					return nil, fmt.Errorf("spikeRunTyped: call callee %T is not callable", callee)
+				}
+				if callErr != nil {
+					return nil, fmt.Errorf("spikeRunTyped: inst %d (call) error: %w", nid, callErr)
+				}
+				stats.callOps++
+				// Call result is always boxed
+				locals[nid] = callResult
 
 			default:
 				return nil, fmt.Errorf("spikeRunTyped: inst %d has unknown op: %s", nid, inst.op)
