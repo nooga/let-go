@@ -5383,6 +5383,14 @@ func installLangNS() {
 		return vm.NewMap(kvs), nil
 	})
 
+	// enumeration-seq: only reached by integrant's JVM-only classpath scanners
+	// (resources/load-hierarchy/load-annotations). let-go has no java.util
+	// Enumeration, so this is a compile-only stub — it lets those :clj defns
+	// load, and fails loudly if actually called.
+	enumerationSeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, fmt.Errorf("enumeration-seq is not supported under let-go (no java.util.Enumeration)")
+	})
+
 	// lazy-seq* creates a LazySeq from a thunk function
 	lazySeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -6605,6 +6613,7 @@ func installLangNS() {
 	ns.Def("the-ns", theNs)
 	ns.Def("ns-name", nsName)
 	ns.Def("ns-publics", nsPublics)
+	ns.Def("enumeration-seq", enumerationSeq)
 
 	ns.Def("peek", peek)
 	ns.Def("pop", pop)
@@ -8150,6 +8159,19 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("java.util.ArrayList", vm.Symbol("java.util.ArrayList"))
 	ns.Def("java.util.ArrayList.", arrayListStub)
 	ns.Def("->java.util.ArrayList", arrayListStub)
+
+	// (clojure.lang.RT/baseLoader). integrant's JVM-only classpath scanners
+	// (resources/load-hierarchy/load-annotations) call it to get a classloader
+	// for (.getResources ...). let-go has no classloader, so this is a
+	// compile-only stub: it lets those :clj defns load and returns a marker, so
+	// the subsequent .getResources / enumeration-seq fail cleanly if invoked.
+	baseLoaderStub, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.Symbol("clojure.lang.RT/baseLoader"), nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	DefNSBare("clojure.lang.RT").Def("baseLoader", baseLoaderStub)
 
 	// bare Throwable in (instance? Throwable ex). Registered
 	// as a symbol marker; ExInfoType reports it as an ancestor (see hierarchy.go),
