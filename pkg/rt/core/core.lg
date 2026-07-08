@@ -904,6 +904,16 @@
 ;; switch.
 (def ^:dynamic *ir-compile* false)
 
+;; When true, the defn macro's IR-compile fallback path logs diagnostic
+;; warnings (name + error) whenever a defn falls back to bytecode compilation.
+;; Default false for silent operation.
+(def ^:dynamic *ir-compile-verbose* false)
+
+;; Diagnostic log for IR compile fallbacks: vector of [name error-msg] pairs.
+;; Used by the defn macro when *ir-compile-verbose* is true to record
+;; fallback events for testing/analysis.
+(def ^:dynamic *ir-compile-fallback-log* (atom []))
+
 (defmacro defn [name & forms]
   (let [doc        (if (string? (first forms)) (first forms) nil)
         forms      (if (string? (first forms)) (next forms) forms)
@@ -938,7 +948,13 @@
                   (list 'def def-name (chunk->fn arity variadic? result))
                   ;; Multi-arity: result is the raw *MultiArityFn value
                   (list 'def def-name result)))
-              (catch e nil))
+              (catch e
+                (do
+                  (when *ir-compile-verbose*
+                    (let [error-msg (str e)]
+                      (println (str "ir-compile: defn " name " fell back to direct compile: " error-msg))
+                      (swap! *ir-compile-fallback-log* conj [name error-msg])))
+                  nil)))
             ;; Fallback: standard bytecode compile (same as *ir-compile* off).
             `(def ~def-name (fn ~@forms))))
       `(def ~def-name (fn ~@forms)))))
