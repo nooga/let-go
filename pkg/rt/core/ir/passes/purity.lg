@@ -226,6 +226,149 @@
     ["clojure.core" "subs"]
     ["clojure.core" "format"]})
 
+(def total-pure-builtins
+  "Subset of pure-builtins that are GUARANTEED never to throw at runtime.
+   These are eligible for speculative hoisting in LICM (loops may run zero
+   times, so a hoisted call must not trap).
+
+   Excludes: nth/get/first/rest/subs (index/key out of bounds),
+   quot (divide by zero), and any constructor that validates input.
+
+   Includes: structural predicates, count, empty?, keys, vals, type predicates,
+   comparisons, and pure read-only projections that never fail on valid input."
+  #{;; constructors (safe, no validation errors)
+    ["clojure.core" "str"]
+    ["clojure.core" "vector"]
+    ["clojure.core" "vec"]
+    ["clojure.core" "list"]
+    ["clojure.core" "list*"]
+    ["clojure.core" "hash-map"]
+    ["clojure.core" "hash-set"]
+    ["clojure.core" "sorted-map"]
+    ["clojure.core" "sorted-set"]
+    ["clojure.core" "into"]
+    ["clojure.core" "concat"]
+    ["clojure.core" "cons"]
+    ["clojure.core" "conj"]
+    ["clojure.core" "assoc"]
+    ["clojure.core" "dissoc"]
+    ["clojure.core" "merge"]
+
+    ;; projections / coercions (never trap)
+    ["clojure.core" "keyword"]
+    ["clojure.core" "symbol"]
+    ["clojure.core" "name"]
+    ["clojure.core" "namespace"]
+    ["clojure.core" "identity"]
+    ["clojure.core" "constantly"]
+    ["clojure.core" "int"]
+    ["clojure.core" "long"]
+    ["clojure.core" "double"]
+    ["clojure.core" "float"]
+    ["clojure.core" "boolean"]
+    ["clojure.core" "byte"]
+    ["clojure.core" "short"]
+    ["clojure.core" "char"]
+
+    ;; arithmetic (non-trapping subset; quot/rem excluded due to divide-by-zero)
+    ["clojure.core" "+"]
+    ["clojure.core" "-"]
+    ["clojure.core" "*"]
+    ["clojure.core" "/"]
+    ["clojure.core" "mod"]
+    ["clojure.core" "max"]
+    ["clojure.core" "min"]
+    ["clojure.core" "abs"]
+    ["clojure.core" "inc"]
+    ["clojure.core" "dec"]
+    ["clojure.core" "inc'"]
+    ["clojure.core" "dec'"]
+
+    ;; comparisons / predicates (never trap)
+    ["clojure.core" "<"]
+    ["clojure.core" "<="]
+    ["clojure.core" ">"]
+    ["clojure.core" ">="]
+    ["clojure.core" "="]
+    ["clojure.core" "not="]
+    ["clojure.core" "=="]
+    ["clojure.core" "not"]
+    ["clojure.core" "compare"]
+
+    ;; type predicates (never trap)
+    ["clojure.core" "pos?"]
+    ["clojure.core" "neg?"]
+    ["clojure.core" "zero?"]
+    ["clojure.core" "even?"]
+    ["clojure.core" "odd?"]
+    ["clojure.core" "int?"]
+    ["clojure.core" "string?"]
+    ["clojure.core" "keyword?"]
+    ["clojure.core" "symbol?"]
+    ["clojure.core" "nil?"]
+    ["clojure.core" "boolean?"]
+    ["clojure.core" "number?"]
+    ["clojure.core" "float?"]
+    ["clojure.core" "decimal?"]
+    ["clojure.core" "ratio?"]
+    ["clojure.core" "bigint?"]
+    ["clojure.core" "integer?"]
+    ["clojure.core" "rational?"]
+    ["clojure.core" "ident?"]
+    ["clojure.core" "simple-keyword?"]
+    ["clojure.core" "qualified-keyword?"]
+    ["clojure.core" "simple-symbol?"]
+    ["clojure.core" "qualified-symbol?"]
+    ["clojure.core" "map?"]
+    ["clojure.core" "set?"]
+    ["clojure.core" "vector?"]
+    ["clojure.core" "list?"]
+    ["clojure.core" "seq?"]
+    ["clojure.core" "sequential?"]
+    ["clojure.core" "coll?"]
+    ["clojure.core" "associative?"]
+    ["clojure.core" "counted?"]
+    ["clojure.core" "fn?"]
+    ["clojure.core" "ifn?"]
+
+    ;; structural projections (safe on valid input)
+    ["clojure.core" "count"]
+    ["clojure.core" "empty?"]
+    ["clojure.core" "keys"]
+    ["clojure.core" "vals"]
+    ;; rest/next never fail (return empty seq if needed)
+    ["clojure.core" "rest"]
+    ["clojure.core" "next"]
+
+    ;; bitwise (never trap)
+    ["clojure.core" "bit-and"]
+    ["clojure.core" "bit-or"]
+    ["clojure.core" "bit-xor"]
+    ["clojure.core" "bit-not"]
+    ["clojure.core" "bit-shift-left"]
+    ["clojure.core" "bit-shift-right"]
+    ["clojure.core" "unsigned-bit-shift-right"]
+
+    ;; clojure.string (all pure projections; never trap)
+    ["clojure.string" "lower-case"]
+    ["clojure.string" "upper-case"]
+    ["clojure.string" "capitalize"]
+    ["clojure.string" "join"]
+    ["clojure.string" "split"]
+    ["clojure.string" "split-lines"]
+    ["clojure.string" "replace"]
+    ["clojure.string" "replace-first"]
+    ["clojure.string" "trim"]
+    ["clojure.string" "triml"]
+    ["clojure.string" "trimr"]
+    ["clojure.string" "starts-with?"]
+    ["clojure.string" "ends-with?"]
+    ["clojure.string" "blank?"]
+    ["clojure.string" "includes?"]
+    ["clojure.string" "index-of"]
+    ["clojure.string" "last-index-of"]
+    ["clojure.string" "reverse"]})
+
 ;; --- User-defined-function purity registry -----------------------------
 ;;
 ;; pure-builtins captures STATICALLY-known pure functions. user-pure-fns
@@ -318,6 +461,30 @@
                                name-str (name sym)]
                            (or (contains? pure-builtins [ns-str name-str])
                                (user-pure-fn? ns-str name-str)))))))))))
+
+(defn total-pure-call?
+  "True when nid is a :call op whose callee is guaranteed never to throw.
+   Subset of pure-call? that also checks the callee is in total-pure-builtins.
+   Used by LICM to hoist calls speculatively (into a pre-header that may
+   skip if the loop runs zero times).
+
+   The distinction from pure-call?: pure-call? includes nth/get/first/subs
+   (value-pure but can trap on invalid indices). total-pure-call? excludes
+   those, restricting to count/empty?/keys/vals/predicates/arithmetic that
+   NEVER throw on any input."
+  [f nid var-facts]
+  (and (= :call (ir/op nid f))
+       (let [refs (ir/refs nid f)]
+         (when (pos? (count refs))
+           (let [callee-nid (first refs)]
+             (and (= :load-var (ir/op callee-nid f))
+                  (mut/stable-load-var? var-facts (ir/aux callee-nid f))
+                  (let [aux (ir/aux callee-nid f)
+                        sym (try (symbol aux) (catch e nil))]
+                    (and sym
+                         (let [ns-str (namespace sym)
+                               name-str (name sym)]
+                           (contains? total-pure-builtins [ns-str name-str]))))))))))
 
 ;; --- Inst-level (the right predicate for most passes) -------------------
 

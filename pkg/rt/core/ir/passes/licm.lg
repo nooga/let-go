@@ -35,6 +35,7 @@
    [ir.data]
    [ir.dominance :as dom]
    [ir.passes]
+   [ir.passes.mutability :as mut]
    [ir.passes.purity :as purity]))
 
 (defn pure-op? [op] (contains? purity/pure-ops op))
@@ -94,45 +95,86 @@
   (let [refs (ir/refs inst f)]
     (every? (fn [r] (not (contains? loop-set (ir/block-of r f)))) refs)))
 
-(defn collect-hoistable [f loop-set]
+(defn collect-hoistable [f loop-set var-facts]
   "Fixed-point invariance marking. Returns set of InstIds in loop-set
-   whose op is pure-op AND all refs are loop-invariant. An Inst's refs
-   are loop-invariant if every ref is either outside loop-set OR was
-   marked in a previous iteration. Iterates to fixed point because
-   marking one Inst can satisfy another's refs."
+   whose op is pure-op OR a total-pure-call, and all refs are loop-invariant.
+   An Inst's refs are loop-invariant if every ref is either outside loop-set
+   OR was marked in a previous iteration. Iterates to fixed point because
+   marking one Inst can satisfy another's refs.
+
+   Note: total-pure-call? will check for calls to known-pure builtins that
+   NEVER throw, preventing speculation. Calls to trapping functions (nth/get/
+   first) are excluded."
   (loop [invariant #{}]
     (let [new-invariant
           (->> (range (count (:insts @f)))
                (filter (fn [nid]
-                         (and (not (invariant nid))
-                              (not= :invalid (ir/op nid f))
-                              (loop-set (ir/block-of nid f))
-                              (pure-op? (ir/op nid f))
-                              (not= :block-arg (ir/op nid f))
-                              (every? (fn [r]
-                                        (or (invariant r)
-                                            (not (loop-set (ir/block-of r f)))))
-                                      (ir/refs nid f)))))
+                         (let [op (ir/op nid f)]
+                           (and (not (invariant nid))
+                                (not= :invalid op)
+                                (loop-set (ir/block-of nid f))
+                                (not= :block-arg op)
+                                (or (and (pure-op? op)
+                                         (every? (fn [r]
+                                                   (or (invariant r)
+                                                       (not (loop-set (ir/block-of r f)))))
+                                                 (ir/refs nid f)))
+                                    (and (= op :call)
+                                         (purity/total-pure-call? f nid var-facts)
+                                         ;; For calls, callee LoadVar can be in-loop (we'll hoist it).
+                                         ;; Check that all other refs are invariant.
+                                         (let [refs (ir/refs nid f)]
+                                           (if (pos? (count refs))
+                                             (let [callee-nid (first refs)]
+                                               (every? (fn [r]
+                                                         (or (= r callee-nid) ;; skip the callee ref
+                                                             (invariant r)
+                                                             (not (loop-set (ir/block-of r f)))))
+                                                       refs))
+                                             true))))))))
                (into invariant))]
       (if (= invariant new-invariant)
         invariant
         (recur new-invariant)))))
 
-(defn hoist-one! [f nid pre-header]
+(defn hoist-one! [f nid pre-header loop-set]
   "Clone Inst nid into pre-header, redirect all uses to the clone,
    remove the original from its block. Returns the new InstId (the clone
    in the pre-header).
 
+   Special case: if nid is a :call to a total-pure builtin, also hoist its
+   callee LoadVar to the pre-header (if it's in a loop block), so the call's
+   callee remains a direct load-var rather than becoming a block-arg.
+
    After this, nid is marked :invalid and all uses flow through the clone.
    The clone is positioned in the pre-header."
-  (let [op        (ir/op nid f)
-        refs      (ir/refs nid f)
-        aux       (ir/aux nid f)
-        clone     (ir/add-inst f pre-header op refs aux)
-        from-block (ir/block-of nid f)]
-    (ir/replace-all-uses! f nid clone)
-    (ir/remove-inst! f from-block nid)
-    clone))
+  (let [op   (ir/op nid f)
+        refs (ir/refs nid f)
+        aux  (ir/aux nid f)]
+    ;; If this is a call, hoist the callee LoadVar first (if it's in the loop)
+    (let [refs-to-use
+          (if (and (= op :call) (pos? (count refs)))
+            (let [callee-nid (first refs)
+                  callee-op  (ir/op callee-nid f)]
+              (if (and (= callee-op :load-var)
+                       (loop-set (ir/block-of callee-nid f)))
+                ;; Hoist the callee LoadVar to pre-header and update the call's refs
+                (let [callee-refs   (ir/refs callee-nid f)
+                      callee-aux    (ir/aux callee-nid f)
+                      callee-clone  (ir/add-inst f pre-header callee-op callee-refs callee-aux)
+                      callee-block  (ir/block-of callee-nid f)]
+                  (ir/replace-all-uses! f callee-nid callee-clone)
+                  (ir/remove-inst! f callee-block callee-nid)
+                  ;; Return the new refs with the cloned callee at the front
+                  (vec (concat [callee-clone] (rest refs))))
+                refs))
+            refs)]
+      ;; Now hoist the instruction itself with possibly-updated refs
+      (let [clone      (ir/add-inst f pre-header op refs-to-use aux)
+            from-block (ir/block-of nid f)]
+        (ir/replace-all-uses! f nid clone)
+        (ir/remove-inst! f from-block nid)
+        clone))))
 
 ;; --- threading hoisted values through the loop header ----------------
 
@@ -252,12 +294,13 @@
   "Run LICM on a single loop identified by back-edge."
   (let [header     (nth back-edge 1)
         loop-set   (loop-blocks f back-edge)
-        pre-header (unique-pre-header f header loop-set)]
+        pre-header (unique-pre-header f header loop-set)
+        var-facts  (mut/analyze-var-stability f)]
     (when pre-header
-      (let [hoistable      (collect-hoistable f loop-set)
+      (let [hoistable      (collect-hoistable f loop-set var-facts)
             ;; Hoist each in deterministic order, collecting [orig → clone] pairs.
             hoisted-pairs  (mapv (fn [orig]
-                                   [orig (hoist-one! f orig pre-header)])
+                                   [orig (hoist-one! f orig pre-header loop-set)])
                                  (sort hoistable))]
         (when (seq hoisted-pairs)
           (thread-hoisted-through-header!
