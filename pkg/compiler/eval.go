@@ -6,7 +6,6 @@
 package compiler
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -150,7 +149,9 @@ func loadPrecompiledBundle() error {
 		bytecode.SetDecodeStatsEnabled(true)
 		defer bytecode.SetDecodeStatsEnabled(false)
 	}
-	unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(rt.CoreCompiledLGB), resolve)
+	// Bytes entry: the embedded core is already a []byte, so decode keeps it
+	// resident and defers per-chunk source-map materialization off the hot path.
+	unit, err := bytecode.DecodeToExecUnitBytes(rt.CoreCompiledLGB, resolve)
 	if err != nil {
 		return err
 	}

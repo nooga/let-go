@@ -236,6 +236,7 @@ func (c *CodeChunk) AppendChunk(o *CodeChunk) {
 	}
 	// Merge source maps with IP offset
 	if o.sourceMap != nil {
+		o.sourceMap.materialize() // realize a lazy map before reading its entries
 		if c.sourceMap == nil {
 			c.sourceMap = NewSourceMap()
 		}
@@ -278,6 +279,13 @@ func (c *CodeChunk) ReserveSourceMap(n int) {
 	next := NewSourceMapWithCapacity(n)
 	next.entries = append(next.entries, c.sourceMap.entries...)
 	c.sourceMap = next
+}
+
+// SetSourceMap replaces the chunk's source map. Used by the decoder to inject a
+// lazily-materialized map (whose entries are decoded on first Lookup) so bundle
+// load skips per-chunk source-map allocation for the common no-error path.
+func (c *CodeChunk) SetSourceMap(sm *SourceMap) {
+	c.sourceMap = sm
 }
 
 // LookupSource finds the source location for a given instruction pointer.
