@@ -445,6 +445,41 @@
                            u' aux-refs)
                    u')))))))
 
+(defn- drop-indices [v idxs]
+  "Return v without the elements at the positions in the set `idxs`."
+  (vec (map second
+            (filter (fn [pair] (not (contains? idxs (first pair))))
+                    (map-indexed vector v)))))
+
+(defn drop-block-params! [f bid dead-idxs]
+  "Remove the block params of `bid` at the positions in `dead-idxs`, AND drop the
+   correspondingly-positioned edge-args on every in-edge that targets `bid`. Keeps
+   param/edge-arg arity aligned (validate.lg's check-branch-arg-arity-for-target!).
+   No-op when dead-idxs is empty. Invalidates the uses cache once (set-aux! on the
+   rewritten terminators does not, and a following DCE sweep must see fresh uses).
+
+   NOT interned into the blanket `ir` namespace — new passes require it EXPLICITLY
+   from ir.data."
+  (when (seq dead-idxs)
+    (let [ds (set dead-idxs)]
+      (swap! f update-in [:blocks bid :params] (fn [ps] (drop-indices ps ds)))
+      (doseq [sid (blocks f)]
+        (let [term (block-term sid f)]
+          (when term
+            (let [o (op term f) a (aux term f)]
+              (cond
+                (= o :branch)
+                (when (= bid (:target a))
+                  (set-aux! f term (assoc a :args (drop-indices (:args a) ds))))
+                (= o :branch-if)
+                (let [tt (:true-target a) ft (:false-target a)
+                      tt' (if (= bid (:target tt))
+                            (assoc tt :args (drop-indices (:args tt) ds)) tt)
+                      ft' (if (= bid (:target ft))
+                            (assoc ft :args (drop-indices (:args ft) ds)) ft)]
+                  (set-aux! f term (assoc a :true-target tt' :false-target ft'))))))))
+      (invalidate-uses-state! f))))
+
 (defn- rewrite-refs [refs old new]
   (vec (map (fn [r] (if (= r old) new r)) refs)))
 
