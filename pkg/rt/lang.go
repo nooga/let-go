@@ -5383,6 +5383,50 @@ func installLangNS() {
 		return vm.NewMap(kvs), nil
 	})
 
+	// find-var: (find-var 'ns/name) -> the interned var in that namespace, or
+	// nil if the namespace or the name is not found. integrant's default
+	// init-key resolves a component fn from a qualified keyword via
+	// (some-> (find-var sym) var-get).
+	findVar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		sym, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("find-var expected a symbol")
+		}
+		nsV, nameV := sym.Namespaced()
+		nsSym, ok1 := nsV.(vm.Symbol)
+		nameSym, ok2 := nameV.(vm.Symbol)
+		if !ok1 || !ok2 {
+			return vm.NIL, fmt.Errorf("find-var expects a fully-qualified symbol: %s", sym)
+		}
+		nsMu.RLock()
+		targetNS := nsRegistry[resolveNSAlias(string(nsSym))]
+		nsMu.RUnlock()
+		if targetNS == nil {
+			return vm.NIL, nil
+		}
+		if v := targetNS.LookupLocal(nameSym); v != nil {
+			return v, nil
+		}
+		return vm.NIL, nil
+	})
+
+	// get-method: (get-method multifn dispatch-val) -> the method fn that value
+	// would select (exact match, else the default method), or nil. integrant's
+	// can-expand-key? uses it to test whether a key has an expand-key method.
+	getMethod, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		mf, ok := vs[0].(*vm.MultiFn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("get-method expected a multimethod")
+		}
+		return mf.GetMethod(vs[1]), nil
+	})
+
 	// lazy-seq* creates a LazySeq from a thunk function
 	lazySeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -6605,6 +6649,8 @@ func installLangNS() {
 	ns.Def("the-ns", theNs)
 	ns.Def("ns-name", nsName)
 	ns.Def("ns-publics", nsPublics)
+	ns.Def("find-var", findVar)
+	ns.Def("get-method", getMethod)
 
 	ns.Def("peek", peek)
 	ns.Def("pop", pop)
