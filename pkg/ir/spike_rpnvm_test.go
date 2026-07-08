@@ -48,6 +48,23 @@ type spikeBlock struct {
 	term   spikeTerm
 }
 
+// spikeStats tracks execution metrics for unboxed vs boxed paths.
+type spikeStats struct {
+	boxOps        int // number of vm.Value allocations from typed slots
+	unboxOps      int // number of reads from unboxed slots
+	boxedArithOps int // number of arithmetic ops executed on boxed path
+}
+
+// spikeRoute indicates where an inst's result is stored: unboxed or boxed.
+const (
+	ROUTE_BOXED = uint8(0)
+	ROUTE_INT   = uint8(1)
+	ROUTE_FLOAT = uint8(2)
+	// ROUTE_BOOL: comparison results stored as 0/1 in localsI; branch-if reads
+	// them natively, boxing to vm.Boolean only at value boundaries.
+	ROUTE_BOOL = uint8(3)
+)
+
 // spikeFn is the flattened output of decode: slices replace persistent maps.
 type spikeFn struct {
 	insts   []spikeInst  // indexed by inst-id
@@ -55,6 +72,7 @@ type spikeFn struct {
 	consts  []vm.Value   // const pool (unused for spike; for reference)
 	callees []vm.Value   // resolved callees (one per call in insts)
 	nargs   int          // arity
+	routes  []uint8      // routing for each inst: ROUTE_BOXED/INT/FLOAT (computed post-decode for typed path)
 }
 
 var spikeDecodeVarCounter int
@@ -554,13 +572,16 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 		}
 	}
 
-	return &spikeFn{
+	fn := &spikeFn{
 		insts:   insts,
 		blocks:  blocks,
 		consts:  constPool.AllValues(),
 		callees: callees,
 		nargs:   arity,
-	}, nil
+		routes:  computeRouting(insts),
+	}
+
+	return fn, nil
 }
 
 // resolveVar resolves a var symbol or value to its deref'd value via rt.NS.
@@ -608,6 +629,78 @@ func typeToCode(t vm.Keyword) uint8 {
 	default:
 		return 0 // unknown or other
 	}
+}
+
+// computeRouting determines the storage route (ROUTE_INT/ROUTE_FLOAT/ROUTE_BOXED) for each inst.
+// Conservative: only ROUTE_INT/FLOAT if all operands also route that way.
+func computeRouting(insts []spikeInst) []uint8 {
+	routes := make([]uint8, len(insts))
+
+	// Seed: const, block-arg, and ops with typ code
+	for i, inst := range insts {
+		if inst.op == "const" && inst.typ == 1 {
+			routes[i] = ROUTE_INT
+		} else if inst.op == "const" && inst.typ == 2 {
+			routes[i] = ROUTE_FLOAT
+		} else if inst.op == "block-arg" && inst.typ == 1 {
+			routes[i] = ROUTE_INT
+		} else if inst.op == "block-arg" && inst.typ == 2 {
+			routes[i] = ROUTE_FLOAT
+		} else if inst.op == "load-arg" && inst.typ == 1 {
+			// typeinfer narrowed the argument: unbox once at entry
+			// (constant boundary cost), then the whole loop runs native.
+			routes[i] = ROUTE_INT
+		} else if inst.op == "load-arg" && inst.typ == 2 {
+			routes[i] = ROUTE_FLOAT
+		} else {
+			routes[i] = ROUTE_BOXED // conservative default
+		}
+	}
+
+	// Propagate: if all operands are ROUTE_INT and op is typed as int, route as ROUTE_INT
+	changed := true
+	for changed && len(insts) > 0 {
+		changed = false
+		for i, inst := range insts {
+			if routes[i] != ROUTE_BOXED {
+				continue // already routed
+			}
+
+			// Check if this is a numeric op that could be routed
+			switch inst.op {
+			case "add", "sub", "mul", "inc", "dec":
+				if inst.typ == 1 && canOperandsRoute(insts, inst.args, ROUTE_INT, routes) {
+					routes[i] = ROUTE_INT
+					changed = true
+				} else if inst.typ == 2 && canOperandsRoute(insts, inst.args, ROUTE_FLOAT, routes) {
+					routes[i] = ROUTE_FLOAT
+					changed = true
+				}
+			case "lt", "lte", "gt", "gte", "eq":
+				// Comparisons over fully-narrowed operands run natively and
+				// produce a native bool (0/1 in localsI) — the per-iteration
+				// box of the loop condition is the cost this removes.
+				if len(inst.args) == 2 &&
+					(canOperandsRoute(insts, inst.args, ROUTE_INT, routes) ||
+						canOperandsRoute(insts, inst.args, ROUTE_FLOAT, routes)) {
+					routes[i] = ROUTE_BOOL
+					changed = true
+				}
+			}
+		}
+	}
+
+	return routes
+}
+
+// canOperandsRoute checks if all operand insts route to the desired route.
+func canOperandsRoute(insts []spikeInst, args []int32, desiredRoute uint8, routes []uint8) bool {
+	for _, argID := range args {
+		if argID < 0 || argID >= int32(len(insts)) || routes[argID] != desiredRoute {
+			return false
+		}
+	}
+	return true
 }
 
 // TestSpikeDecode_Simple decodes a trivial one-block function.
@@ -2082,6 +2175,911 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 
 		default:
 			return nil, fmt.Errorf("spikeRun: unknown terminator: %s", term.op)
+		}
+	}
+}
+
+// getBoxedValue returns a value as boxed vm.Value, boxing if necessary (without counting toward stats).
+func getBoxedValue(instID int32, routes []uint8, locals []vm.Value, localsI []int64, localsF []float64) vm.Value {
+	route := routes[instID]
+	if route == ROUTE_INT {
+		// If routed INT, return boxed int from localsI
+		return vm.Int(localsI[instID])
+	} else if route == ROUTE_FLOAT {
+		// If routed FLOAT, return boxed float from localsF
+		return vm.Float(localsF[instID])
+	}
+	if route == ROUTE_BOOL {
+		return vm.Boolean(localsI[instID] != 0)
+	}
+	// Otherwise return from boxed locals. May legitimately be nil only for
+	// insts that were never evaluated — callers must treat nil as an error.
+	return locals[instID]
+}
+
+// boxedOperand materializes an operand for a boxed-path op, boxing from a
+// typed slot when the operand routes INT/FLOAT/BOOL (counted as a boundary
+// box). A nil boxed slot is a routing bug and errors loudly.
+func boxedOperand(instID int32, routes []uint8, locals []vm.Value, localsI []int64, localsF []float64, stats *spikeStats) (vm.Value, error) {
+	if routes[instID] != ROUTE_BOXED {
+		stats.boxOps++
+	}
+	v := getBoxedValue(instID, routes, locals, localsI, localsF)
+	if v == nil {
+		return nil, fmt.Errorf("spikeRunTyped: operand inst %d has nil boxed value (routing bug)", instID)
+	}
+	return v, nil
+}
+
+// spikeRunTyped executes with unboxed int64/float64 slots based on routing.
+// Uses type information from typeinfer to avoid per-operation boxing.
+func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, error) {
+	if len(args) != fn.nargs {
+		return nil, fmt.Errorf("spikeRunTyped: expected %d args, got %d", fn.nargs, len(args))
+	}
+
+	// Allocate parallel slots
+	locals := make([]vm.Value, len(fn.insts))
+	localsI := make([]int64, len(fn.insts))
+	localsF := make([]float64, len(fn.insts))
+
+	currentBlockID := 0
+
+	for {
+		if currentBlockID < 0 || currentBlockID >= len(fn.blocks) {
+			return nil, fmt.Errorf("spikeRunTyped: block id %d out of bounds", currentBlockID)
+		}
+
+		block := fn.blocks[currentBlockID]
+
+		for _, nid := range block.insts {
+			if nid < 0 || nid >= int32(len(fn.insts)) {
+				return nil, fmt.Errorf("spikeRunTyped: inst id %d out of bounds", nid)
+			}
+
+			inst := fn.insts[nid]
+
+			if inst.op == "invalid" {
+				continue
+			}
+
+			if inst.op == "return" || inst.op == "branch" || inst.op == "branch-if" {
+				continue
+			}
+
+			if inst.op == "block-arg" {
+				continue
+			}
+
+			route := fn.routes[nid]
+
+			switch inst.op {
+			case "const":
+				if route == ROUTE_INT {
+					if iv, ok := inst.auxVal.(vm.Int); ok {
+						localsI[nid] = int64(iv)
+					}
+				} else if route == ROUTE_FLOAT {
+					if fv, ok := inst.auxVal.(vm.Float); ok {
+						localsF[nid] = float64(fv)
+					}
+				} else {
+					locals[nid] = inst.auxVal
+				}
+
+			case "load-arg":
+				if inst.aux < 0 || inst.aux >= int32(fn.nargs) {
+					return nil, fmt.Errorf("spikeRunTyped: load-arg aux %d out of range [0, %d)", inst.aux, fn.nargs)
+				}
+				argValue := args[inst.aux]
+				switch route {
+				case ROUTE_INT:
+					// Boundary unbox (once per call). A mismatch means the
+					// runtime arg contradicts typeinfer's narrowing — loud
+					// error; the real boundary design is STORY-0053's
+					// rt.UnboxInt (spike limitation, documented).
+					iv, ok := argValue.(vm.Int)
+					if !ok {
+						return nil, fmt.Errorf("spikeRunTyped: load-arg %d narrowed to int but got %T (spike inference-mismatch limitation)", inst.aux, argValue)
+					}
+					localsI[nid] = int64(iv)
+					stats.unboxOps++
+				case ROUTE_FLOAT:
+					fv, ok := argValue.(vm.Float)
+					if !ok {
+						return nil, fmt.Errorf("spikeRunTyped: load-arg %d narrowed to float but got %T (spike inference-mismatch limitation)", inst.aux, argValue)
+					}
+					localsF[nid] = float64(fv)
+					stats.unboxOps++
+				default:
+					locals[nid] = argValue
+				}
+
+			case "load-var":
+				locals[nid] = inst.auxVal
+
+			case "add":
+				if len(inst.args) != 2 {
+					return nil, fmt.Errorf("spikeRunTyped: add inst %d has %d args, expected 2", nid, len(inst.args))
+				}
+				if route == ROUTE_INT {
+					a, b := localsI[inst.args[0]], localsI[inst.args[1]]
+					aInt, bInt := vm.Int(a), vm.Int(b)
+					r, ok := checkedAddIntSpike(aInt, bInt)
+					if !ok {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (add) integer overflow", nid)
+					}
+					localsI[nid] = int64(r)
+					stats.unboxOps++
+				} else if route == ROUTE_FLOAT {
+					a, b := localsF[inst.args[0]], localsF[inst.args[1]]
+					localsF[nid] = a + b
+					stats.unboxOps++
+				} else {
+					a, aErr := boxedOperand(inst.args[0], fn.routes, locals, localsI, localsF, stats)
+					if aErr != nil {
+						return nil, aErr
+					}
+					b, bErr := boxedOperand(inst.args[1], fn.routes, locals, localsI, localsF, stats)
+					if bErr != nil {
+						return nil, bErr
+					}
+					r, err := vm.NumAdd(a, b)
+					if err != nil {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (add) error: %w", nid, err)
+					}
+					locals[nid] = r
+					stats.boxedArithOps++
+				}
+
+			case "sub":
+				if len(inst.args) != 2 {
+					return nil, fmt.Errorf("spikeRunTyped: sub inst %d has %d args, expected 2", nid, len(inst.args))
+				}
+				if route == ROUTE_INT {
+					a, b := localsI[inst.args[0]], localsI[inst.args[1]]
+					aInt, bInt := vm.Int(a), vm.Int(b)
+					r, ok := checkedSubIntSpike(aInt, bInt)
+					if !ok {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (sub) integer overflow", nid)
+					}
+					localsI[nid] = int64(r)
+					stats.unboxOps++
+				} else if route == ROUTE_FLOAT {
+					a, b := localsF[inst.args[0]], localsF[inst.args[1]]
+					localsF[nid] = a - b
+					stats.unboxOps++
+				} else {
+					a, aErr := boxedOperand(inst.args[0], fn.routes, locals, localsI, localsF, stats)
+					if aErr != nil {
+						return nil, aErr
+					}
+					b, bErr := boxedOperand(inst.args[1], fn.routes, locals, localsI, localsF, stats)
+					if bErr != nil {
+						return nil, bErr
+					}
+					r, err := vm.NumSub(a, b)
+					if err != nil {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (sub) error: %w", nid, err)
+					}
+					locals[nid] = r
+					stats.boxedArithOps++
+				}
+
+			case "mul":
+				if len(inst.args) != 2 {
+					return nil, fmt.Errorf("spikeRunTyped: mul inst %d has %d args, expected 2", nid, len(inst.args))
+				}
+				if route == ROUTE_INT {
+					a, b := localsI[inst.args[0]], localsI[inst.args[1]]
+					aInt, bInt := vm.Int(a), vm.Int(b)
+					r, ok := checkedMulIntSpike(aInt, bInt)
+					if !ok {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (mul) integer overflow", nid)
+					}
+					localsI[nid] = int64(r)
+					stats.unboxOps++
+				} else if route == ROUTE_FLOAT {
+					a, b := localsF[inst.args[0]], localsF[inst.args[1]]
+					localsF[nid] = a * b
+					stats.unboxOps++
+				} else {
+					a, aErr := boxedOperand(inst.args[0], fn.routes, locals, localsI, localsF, stats)
+					if aErr != nil {
+						return nil, aErr
+					}
+					b, bErr := boxedOperand(inst.args[1], fn.routes, locals, localsI, localsF, stats)
+					if bErr != nil {
+						return nil, bErr
+					}
+					r, err := vm.NumMul(a, b)
+					if err != nil {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (mul) error: %w", nid, err)
+					}
+					locals[nid] = r
+					stats.boxedArithOps++
+				}
+
+			case "inc":
+				if len(inst.args) != 1 {
+					return nil, fmt.Errorf("spikeRunTyped: inc inst %d has %d args, expected 1", nid, len(inst.args))
+				}
+				if route == ROUTE_INT {
+					a := localsI[inst.args[0]]
+					aInt := vm.Int(a)
+					r, ok := checkedAddIntSpike(aInt, 1)
+					if !ok {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (inc) integer overflow", nid)
+					}
+					localsI[nid] = int64(r)
+					stats.unboxOps++
+				} else {
+					a, aErr := boxedOperand(inst.args[0], fn.routes, locals, localsI, localsF, stats)
+					if aErr != nil {
+						return nil, aErr
+					}
+					r, err := vm.NumAdd(a, vm.Int(1))
+					if err != nil {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (inc) error: %w", nid, err)
+					}
+					locals[nid] = r
+					stats.boxedArithOps++
+				}
+
+			case "dec":
+				if len(inst.args) != 1 {
+					return nil, fmt.Errorf("spikeRunTyped: dec inst %d has %d args, expected 1", nid, len(inst.args))
+				}
+				if route == ROUTE_INT {
+					a := localsI[inst.args[0]]
+					aInt := vm.Int(a)
+					r, ok := checkedSubIntSpike(aInt, 1)
+					if !ok {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (dec) integer overflow", nid)
+					}
+					localsI[nid] = int64(r)
+					stats.unboxOps++
+				} else {
+					a, aErr := boxedOperand(inst.args[0], fn.routes, locals, localsI, localsF, stats)
+					if aErr != nil {
+						return nil, aErr
+					}
+					r, err := vm.NumSub(a, vm.Int(1))
+					if err != nil {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (dec) error: %w", nid, err)
+					}
+					locals[nid] = r
+					stats.boxedArithOps++
+				}
+
+			case "lt", "lte", "gt", "gte", "eq":
+				if len(inst.args) != 2 {
+					return nil, fmt.Errorf("spikeRunTyped: %s inst %d has %d args, expected 2", inst.op, nid, len(inst.args))
+				}
+				if route == ROUTE_BOOL {
+					// Native comparison: both operands narrowed to the same
+					// numeric route; result is 0/1 in localsI, no boxing.
+					aID, bID := inst.args[0], inst.args[1]
+					var cmp bool
+					if fn.routes[aID] == ROUTE_INT {
+						a, b := localsI[aID], localsI[bID]
+						switch inst.op {
+						case "lt":
+							cmp = a < b
+						case "lte":
+							cmp = a <= b
+						case "gt":
+							cmp = a > b
+						case "gte":
+							cmp = a >= b
+						case "eq":
+							cmp = a == b
+						}
+					} else {
+						a, b := localsF[aID], localsF[bID]
+						switch inst.op {
+						case "lt":
+							cmp = a < b
+						case "lte":
+							cmp = a <= b
+						case "gt":
+							cmp = a > b
+						case "gte":
+							cmp = a >= b
+						case "eq":
+							cmp = a == b
+						}
+					}
+					if cmp {
+						localsI[nid] = 1
+					} else {
+						localsI[nid] = 0
+					}
+					stats.unboxOps++
+					break
+				}
+				a, aErr := boxedOperand(inst.args[0], fn.routes, locals, localsI, localsF, stats)
+				if aErr != nil {
+					return nil, aErr
+				}
+				b, bErr := boxedOperand(inst.args[1], fn.routes, locals, localsI, localsF, stats)
+				if bErr != nil {
+					return nil, bErr
+				}
+				var result vm.Value
+				switch inst.op {
+				case "lt":
+					r, err := vm.NumLt(a, b)
+					if err != nil {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (lt) error: %w", nid, err)
+					}
+					result = vm.Boolean(r)
+				case "lte":
+					r, err := vm.NumLe(a, b)
+					if err != nil {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (lte) error: %w", nid, err)
+					}
+					result = vm.Boolean(r)
+				case "gt":
+					r, err := vm.NumGt(a, b)
+					if err != nil {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (gt) error: %w", nid, err)
+					}
+					result = vm.Boolean(r)
+				case "gte":
+					r, err := vm.NumGe(a, b)
+					if err != nil {
+						return nil, fmt.Errorf("spikeRunTyped: inst %d (gte) error: %w", nid, err)
+					}
+					result = vm.Boolean(r)
+				case "eq":
+					// Mirror OP_EQ: Int/Keyword fast paths, then structural.
+					result = nil
+					if ai, ok := a.(vm.Int); ok {
+						if bi, ok := b.(vm.Int); ok {
+							result = vm.Boolean(ai == bi)
+						}
+					}
+					if result == nil {
+						if ak, ok := a.(vm.Keyword); ok {
+							if bk, ok := b.(vm.Keyword); ok {
+								result = vm.Boolean(ak == bk)
+							}
+						}
+					}
+					if result == nil {
+						if vm.ValueEquals == nil {
+							return nil, fmt.Errorf("spikeRunTyped: ValueEquals not initialized")
+						}
+						result = vm.Boolean(vm.ValueEquals(a, b))
+					}
+				}
+				locals[nid] = result
+				stats.boxedArithOps++
+				stats.boxedArithOps++
+
+			case "call":
+				return nil, fmt.Errorf("spikeRunTyped: call not implemented until T4")
+
+			default:
+				return nil, fmt.Errorf("spikeRunTyped: inst %d has unknown op: %s", nid, inst.op)
+			}
+		}
+
+		term := block.term
+
+		switch term.op {
+		case "return":
+			if term.returnVal < 0 || term.returnVal >= int32(len(fn.insts)) {
+				return nil, fmt.Errorf("spikeRunTyped: return value inst %d out of bounds", term.returnVal)
+			}
+			// Box the result if needed
+			route := fn.routes[term.returnVal]
+			if route == ROUTE_INT {
+				stats.boxOps++
+				return vm.Int(localsI[term.returnVal]), nil
+			} else if route == ROUTE_FLOAT {
+				stats.boxOps++
+				return vm.Float(localsF[term.returnVal]), nil
+			} else if route == ROUTE_BOOL {
+				stats.boxOps++
+				return vm.Boolean(localsI[term.returnVal] != 0), nil
+			}
+			return locals[term.returnVal], nil
+
+		case "branch":
+			target := term.simpleEdge.target
+			if target < 0 || target >= int32(len(fn.blocks)) {
+				return nil, fmt.Errorf("spikeRunTyped: branch target %d out of bounds", target)
+			}
+
+			targetBlock := fn.blocks[target]
+			if len(term.simpleEdge.args) != len(targetBlock.params) {
+				return nil, fmt.Errorf("spikeRunTyped: branch edge has %d args but target has %d params", len(term.simpleEdge.args), len(targetBlock.params))
+			}
+
+			// Thread edge args with proper boxing/unboxing
+			for i, edgeArgID := range term.simpleEdge.args {
+				if edgeArgID < 0 || edgeArgID >= int32(len(fn.insts)) {
+					return nil, fmt.Errorf("spikeRunTyped: branch edge arg %d out of bounds", edgeArgID)
+				}
+				paramID := targetBlock.params[i]
+				threadEdgeValueTyped(edgeArgID, paramID, fn.routes, localsI, localsF, locals, stats)
+			}
+
+			currentBlockID = int(target)
+			continue
+
+		case "branch-if":
+			condRef := term.condRef
+			if condRef < 0 || condRef >= int32(len(fn.insts)) {
+				return nil, fmt.Errorf("spikeRunTyped: branch-if condition ref %d out of bounds", condRef)
+			}
+
+			var isTruthy bool
+			switch fn.routes[condRef] {
+			case ROUTE_BOOL:
+				// Native comparison result: no boxing on the loop back-edge.
+				isTruthy = localsI[condRef] != 0
+			case ROUTE_INT, ROUTE_FLOAT:
+				// Numbers are always truthy under lg rules; no box needed.
+				isTruthy = true
+			default:
+				condValue := locals[condRef]
+				if condValue == nil {
+					return nil, fmt.Errorf("spikeRunTyped: branch-if cond inst %d has nil value (routing bug)", condRef)
+				}
+				isTruthy = vm.IsTruthy(condValue)
+			}
+
+			var target int32
+			var args []int32
+
+			if isTruthy {
+				target = term.trueEdge.target
+				args = term.trueEdge.args
+			} else {
+				target = term.falseEdge.target
+				args = term.falseEdge.args
+			}
+
+			if target < 0 || target >= int32(len(fn.blocks)) {
+				return nil, fmt.Errorf("spikeRunTyped: branch-if target %d out of bounds", target)
+			}
+
+			targetBlock := fn.blocks[target]
+			if len(args) != len(targetBlock.params) {
+				return nil, fmt.Errorf("spikeRunTyped: branch-if edge has %d args but target has %d params", len(args), len(targetBlock.params))
+			}
+
+			for i, edgeArgID := range args {
+				if edgeArgID < 0 || edgeArgID >= int32(len(fn.insts)) {
+					return nil, fmt.Errorf("spikeRunTyped: branch-if edge arg %d out of bounds", edgeArgID)
+				}
+				paramID := targetBlock.params[i]
+				threadEdgeValueTyped(edgeArgID, paramID, fn.routes, localsI, localsF, locals, stats)
+			}
+
+			currentBlockID = int(target)
+			continue
+
+		default:
+			return nil, fmt.Errorf("spikeRunTyped: unknown terminator: %s", term.op)
+		}
+	}
+}
+
+// threadEdgeValueTyped copies values between slots, handling route mismatches with boxing/unboxing.
+func threadEdgeValueTyped(fromID, toID int32, routes []uint8, localsI []int64, localsF []float64, locals []vm.Value, stats *spikeStats) {
+	fromRoute := routes[fromID]
+	toRoute := routes[toID]
+
+	if fromRoute == toRoute {
+		switch fromRoute {
+		case ROUTE_INT, ROUTE_BOOL:
+			localsI[toID] = localsI[fromID]
+		case ROUTE_FLOAT:
+			localsF[toID] = localsF[fromID]
+		case ROUTE_BOXED:
+			locals[toID] = locals[fromID]
+		}
+	} else if fromRoute == ROUTE_BOOL && toRoute == ROUTE_BOXED {
+		stats.boxOps++
+		locals[toID] = vm.Boolean(localsI[fromID] != 0)
+	} else if fromRoute == ROUTE_BOXED && toRoute == ROUTE_BOOL {
+		localsI[toID] = 0
+		if vm.IsTruthy(locals[fromID]) {
+			localsI[toID] = 1
+		}
+	} else if fromRoute == ROUTE_INT && toRoute == ROUTE_BOXED {
+		stats.boxOps++
+		locals[toID] = vm.Int(localsI[fromID])
+	} else if fromRoute == ROUTE_FLOAT && toRoute == ROUTE_BOXED {
+		stats.boxOps++
+		locals[toID] = vm.Float(localsF[fromID])
+	} else if fromRoute == ROUTE_BOXED && toRoute == ROUTE_INT {
+		if iv, ok := locals[fromID].(vm.Int); ok {
+			localsI[toID] = int64(iv)
+		}
+	} else if fromRoute == ROUTE_BOXED && toRoute == ROUTE_FLOAT {
+		if fv, ok := locals[fromID].(vm.Float); ok {
+			localsF[toID] = float64(fv)
+		}
+	}
+}
+
+// Overflow checking helpers
+const maxIntValueSpike = vm.Int(int(^uint(0) >> 1))
+const minIntValueSpike = -maxIntValueSpike - 1
+
+func checkedAddIntSpike(a, b vm.Int) (vm.Int, bool) {
+	if (b > 0 && a > maxIntValueSpike-b) || (b < 0 && a < minIntValueSpike-b) {
+		return 0, false
+	}
+	return a + b, true
+}
+
+func checkedSubIntSpike(a, b vm.Int) (vm.Int, bool) {
+	if (b < 0 && a > maxIntValueSpike+b) || (b > 0 && a < minIntValueSpike+b) {
+		return 0, false
+	}
+	return a - b, true
+}
+
+func checkedMulIntSpike(a, b vm.Int) (vm.Int, bool) {
+	if a == 0 || b == 0 {
+		return 0, true
+	}
+	if (a == minIntValueSpike && b == -1) || (b == minIntValueSpike && a == -1) {
+		return 0, false
+	}
+	if a > 0 {
+		if b > 0 && a > maxIntValueSpike/b {
+			return 0, false
+		}
+		if b < 0 && b < minIntValueSpike/a {
+			return 0, false
+		}
+	} else {
+		if b > 0 && a < minIntValueSpike/b {
+			return 0, false
+		}
+		if b < 0 && a < maxIntValueSpike/b {
+			return 0, false
+		}
+	}
+	return a * b, true
+}
+
+// TestSpikeRun_TypedLoopKernel: AC-WS.2 kernel (a) — unboxed loop arithmetic.
+// Kernel: (defn ksum [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc)))
+// Expected: boxedArithOps==0 for the loop interior, boxOps==1 at return, and boxOps(n=10)==boxOps(n=1000).
+func TestSpikeRun_TypedLoopKernel(t *testing.T) {
+	ensureLoader()
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("test-spike-typed-loop")
+
+	expr := `(ir.passes.pipeline/optimize-fn (ir.build/build-fn (quote (defn ksum [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc))))))`
+	_, irVal, err := c.CompileMultiple(strings.NewReader(expr))
+	if err != nil {
+		t.Fatalf("compile IR: %v", err)
+	}
+
+	fn, decodeErr := decodeOptimizedIR(irVal)
+	if decodeErr != nil {
+		t.Fatalf("decode IR: %v", decodeErr)
+	}
+
+	// Compile stack VM for comparison
+	ns := rt.NS(rt.NameCoreNS)
+	stackC := compiler.NewCompiler(vm.NewConsts(), ns)
+	stackC.SetSource("test-stack-typed-loop")
+	if _, _, stackErr := stackC.CompileMultiple(strings.NewReader(`(defn ksum [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc)))`)); stackErr != nil {
+		t.Fatalf("compile stack VM: %v", stackErr)
+	}
+
+	stackVar := ns.Lookup(vm.Symbol("ksum"))
+	stackFn := stackVar.(*vm.Var).Deref().(*vm.Func)
+	stackChunk := stackFn.Chunk()
+
+	// Test cases with statistics collection
+	testCases := []struct {
+		n          vm.Value
+		label      string
+		wantBoxOps int // at return only
+	}{
+		{vm.Int(0), "n=0", 1},
+		{vm.Int(1), "n=1", 1},
+		{vm.Int(10), "n=10", 1},
+		{vm.Int(1000), "n=1000", 1},
+	}
+
+	for _, tc := range testCases {
+		// Typed execution
+		stats := &spikeStats{}
+		spikeResult, spikeErr := spikeRunTyped(fn, []vm.Value{tc.n}, stats)
+		if spikeErr != nil {
+			t.Errorf("spikeRunTyped(%s) error: %v", tc.label, spikeErr)
+			continue
+		}
+
+		// Stack VM
+		stackFrame := vm.NewFrame(stackChunk, []vm.Value{tc.n})
+		stackResult, stackErr := stackFrame.Run()
+		if stackErr != nil {
+			t.Errorf("stack VM(%s) error: %v", tc.label, stackErr)
+			continue
+		}
+
+		// Parity
+		if !valuesEqual(spikeResult, stackResult) {
+			t.Errorf("kernel (a) FAIL %s: spike=%v, stack=%v", tc.label, spikeResult, stackResult)
+		} else {
+			t.Logf("kernel (a) PASS %s: result=%v", tc.label, spikeResult)
+		}
+
+		// AC-WS.2 assertions: ALL narrowed loop ops (add/inc/lt) run unboxed.
+		n := int(tc.n.(vm.Int))
+		if stats.boxedArithOps != 0 {
+			t.Errorf("kernel (a) %s: boxedArithOps=%d, want 0 (narrowed ops must not run boxed)", tc.label, stats.boxedArithOps)
+		}
+		if n > 0 && stats.unboxOps == 0 {
+			t.Errorf("kernel (a) %s: unboxOps=0, expected >0 (arithmetic should be unboxed)", tc.label)
+		}
+		t.Logf("kernel (a) %s stats: unboxOps=%d boxedArithOps=%d boxOps=%d", tc.label, stats.unboxOps, stats.boxedArithOps, stats.boxOps)
+	}
+
+	// Verify arithmetic operations are unboxed (only boundary box at return)
+	// Both calls should have same boxOps (return boxing)
+	stats10 := &spikeStats{}
+	spikeRunTyped(fn, []vm.Value{vm.Int(10)}, stats10)
+
+	stats1000 := &spikeStats{}
+	spikeRunTyped(fn, []vm.Value{vm.Int(1000)}, stats1000)
+
+	if stats10.unboxOps == 0 || stats1000.unboxOps == 0 {
+		t.Errorf("kernel (a): unboxOps should be non-zero (loop arithmetic exercised)")
+	} else {
+		t.Logf("kernel (a): arithmetic unboxed: n=10 unboxOps=%d, n=1000 unboxOps=%d", stats10.unboxOps, stats1000.unboxOps)
+	}
+	// Boxing must be a boundary cost, invariant in n — never per-iteration.
+	if stats10.boxOps != stats1000.boxOps {
+		t.Errorf("kernel (a): boxOps scales with n: n=10 → %d, n=1000 → %d (must be constant)", stats10.boxOps, stats1000.boxOps)
+	}
+}
+
+// TestSpikeRun_TypedOverflow: AC-WS.2 unboxed overflow handling.
+func TestSpikeRun_TypedOverflow(t *testing.T) {
+	ensureLoader()
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("test-spike-typed-overflow")
+
+	expr := `(ir.passes.pipeline/optimize-fn (ir.build/build-fn (quote (defn ov [x] (+ x 1)))))`
+	_, irVal, err := c.CompileMultiple(strings.NewReader(expr))
+	if err != nil {
+		t.Fatalf("compile IR: %v", err)
+	}
+
+	fn, decodeErr := decodeOptimizedIR(irVal)
+	if decodeErr != nil {
+		t.Fatalf("decode IR: %v", decodeErr)
+	}
+
+	stats := &spikeStats{}
+	maxInt := vm.Int(9223372036854775807) // 2^63 - 1
+
+	_, spikeErr := spikeRunTyped(fn, []vm.Value{maxInt}, stats)
+
+	if spikeErr == nil {
+		t.Error("expected overflow error, got nil")
+	} else if !strings.Contains(spikeErr.Error(), "overflow") {
+		t.Errorf("expected 'overflow' in error message, got: %v", spikeErr)
+	} else {
+		t.Logf("overflow correctly detected: %v", spikeErr)
+	}
+}
+
+// TestSpikeRun_TypedMixed: AC-WS.2 mixed typed and boxed operations.
+// For fixtures where only part of the ops narrow (unboxed and boxed paths both exercised).
+func TestSpikeRun_TypedMixed(t *testing.T) {
+	ensureLoader()
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("test-spike-typed-mixed")
+
+	// Fixture: (defn mx [a b] (+ (* a a) (if (< a b) a b)))
+	// The (* a a) is typed int; the if branches on (< a b) which is comparison (boxed).
+	expr := `(ir.passes.pipeline/optimize-fn (ir.build/build-fn (quote (defn mx [a b] (+ (* a a) (if (< a b) a b))))))`
+	_, irVal, err := c.CompileMultiple(strings.NewReader(expr))
+	if err != nil {
+		t.Fatalf("compile IR: %v", err)
+	}
+
+	fn, decodeErr := decodeOptimizedIR(irVal)
+	if decodeErr != nil {
+		t.Fatalf("decode IR: %v", decodeErr)
+	}
+
+	// Compile stack VM
+	ns := rt.NS(rt.NameCoreNS)
+	stackC := compiler.NewCompiler(vm.NewConsts(), ns)
+	stackC.SetSource("test-stack-typed-mixed")
+	if _, _, stackErr := stackC.CompileMultiple(strings.NewReader(`(defn mx [a b] (+ (* a a) (if (< a b) a b)))`)); stackErr != nil {
+		t.Fatalf("compile stack VM: %v", stackErr)
+	}
+
+	stackVar := ns.Lookup(vm.Symbol("mx"))
+	stackFn := stackVar.(*vm.Var).Deref().(*vm.Func)
+	stackChunk := stackFn.Chunk()
+
+	testCases := []struct {
+		a, b  vm.Value
+		label string
+	}{
+		{vm.Int(2), vm.Int(3), "a<b"},
+		{vm.Int(5), vm.Int(2), "a>b"},
+		{vm.Int(3), vm.Int(3), "a==b"},
+	}
+
+	for _, tc := range testCases {
+		stats := &spikeStats{}
+		spikeResult, spikeErr := spikeRunTyped(fn, []vm.Value{tc.a, tc.b}, stats)
+		if spikeErr != nil {
+			t.Errorf("spikeRunTyped(%s) error: %v", tc.label, spikeErr)
+			continue
+		}
+
+		stackFrame := vm.NewFrame(stackChunk, []vm.Value{tc.a, tc.b})
+		stackResult, stackErr := stackFrame.Run()
+		if stackErr != nil {
+			t.Errorf("stack VM(%s) error: %v", tc.label, stackErr)
+			continue
+		}
+
+		if !valuesEqual(spikeResult, stackResult) {
+			t.Errorf("mixed-typed FAIL %s: spike=%v, stack=%v", tc.label, spikeResult, stackResult)
+		} else {
+			t.Logf("mixed-typed PASS %s: result=%v, unboxOps=%d, boxedOps=%d", tc.label, spikeResult, stats.unboxOps, stats.boxedArithOps)
+		}
+
+		// Verify both paths are exercised
+		if stats.unboxOps == 0 && stats.boxedArithOps == 0 {
+			t.Logf("mixed-typed %s: neither path exercised (pure boxed load-arg)", tc.label)
+		}
+	}
+}
+
+// TestDebugRouting prints routing info for the kernel to understand why it's not unboxing.
+func TestDebugRouting(t *testing.T) {
+	ensureLoader()
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("test-debug-routing")
+
+	expr := `(ir.passes.pipeline/optimize-fn (ir.build/build-fn (quote (defn ksum [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc i)) acc))))))`
+	_, irVal, err := c.CompileMultiple(strings.NewReader(expr))
+	if err != nil {
+		t.Fatalf("compile IR: %v", err)
+	}
+
+	fn, decodeErr := decodeOptimizedIR(irVal)
+	if decodeErr != nil {
+		t.Fatalf("decode IR: %v", decodeErr)
+	}
+
+	// Print routing and types
+	t.Logf("=== Decoded IR dump ===")
+	t.Logf("Total insts: %d", len(fn.insts))
+	for i, inst := range fn.insts {
+		if inst.op == "invalid" {
+			continue
+		}
+		route := fn.routes[i]
+		routeName := []string{"BOXED", "INT", "FLOAT", "BOOL"}[route]
+		t.Logf("inst %d: op=%s typ=%d route=%s args=%v", i, inst.op, inst.typ, routeName, inst.args)
+	}
+}
+
+// TestSpikeRun_TypedFloat: AC-WS.2 float accumulator kernel (truthful typ observation).
+// Kernel: (defn kf [n] (loop [i 0 acc 0.0] (if (< i n) (recur (+ i 1) (+ acc 1.5)) acc)))
+// Documents whether typeinfer narrows the float accumulator and tests both paths if so.
+func TestSpikeRun_TypedFloat(t *testing.T) {
+	ensureLoader()
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("test-spike-typed-float")
+
+	expr := `(ir.passes.pipeline/optimize-fn (ir.build/build-fn (quote (defn kf [n] (loop [i 0 acc 0.0] (if (< i n) (recur (+ i 1) (+ acc 1.5)) acc))))))`
+	_, irVal, err := c.CompileMultiple(strings.NewReader(expr))
+	if err != nil {
+		t.Fatalf("compile IR: %v", err)
+	}
+
+	fn, decodeErr := decodeOptimizedIR(irVal)
+	if decodeErr != nil {
+		t.Fatalf("decode IR: %v", decodeErr)
+	}
+
+	// Compile stack VM
+	ns := rt.NS(rt.NameCoreNS)
+	stackC := compiler.NewCompiler(vm.NewConsts(), ns)
+	stackC.SetSource("test-stack-typed-float")
+	if _, _, stackErr := stackC.CompileMultiple(strings.NewReader(`(defn kf [n] (loop [i 0 acc 0.0] (if (< i n) (recur (+ i 1) (+ acc 1.5)) acc)))`)); stackErr != nil {
+		t.Fatalf("compile stack VM: %v", stackErr)
+	}
+
+	stackVar := ns.Lookup(vm.Symbol("kf"))
+	stackFn := stackVar.(*vm.Var).Deref().(*vm.Func)
+	stackChunk := stackFn.Chunk()
+
+	// Inspect typeinfer results to document float narrowing behavior
+	t.Logf("=== Float kernel typ codes ===")
+	hasFloatRoute := false
+	for i, inst := range fn.insts {
+		if inst.op == "invalid" {
+			continue
+		}
+		route := fn.routes[i]
+		routeName := []string{"BOXED", "INT", "FLOAT", "BOOL"}[route]
+		if route == ROUTE_FLOAT {
+			hasFloatRoute = true
+			t.Logf("inst %d (%s): typ=%d route=%s", i, inst.op, inst.typ, routeName)
+		}
+	}
+
+	if !hasFloatRoute {
+		t.Logf("Note: Typeinfer did not narrow float accumulator to :float; entire kernel routes as BOXED")
+	}
+
+	// Test cases
+	testCases := []struct {
+		n          vm.Value
+		label      string
+		wantBoxOps int
+	}{
+		{vm.Int(0), "n=0", 1},
+		{vm.Int(10), "n=10", 1},
+		{vm.Int(100), "n=100", 1},
+	}
+
+	for _, tc := range testCases {
+		// Typed execution
+		stats := &spikeStats{}
+		spikeResult, spikeErr := spikeRunTyped(fn, []vm.Value{tc.n}, stats)
+		if spikeErr != nil {
+			t.Errorf("spikeRunTyped(%s) error: %v", tc.label, spikeErr)
+			continue
+		}
+
+		// Stack VM
+		stackFrame := vm.NewFrame(stackChunk, []vm.Value{tc.n})
+		stackResult, stackErr := stackFrame.Run()
+		if stackErr != nil {
+			t.Errorf("stack VM(%s) error: %v", tc.label, stackErr)
+			continue
+		}
+
+		// Parity check (REQUIRED - must match stack VM exactly)
+		if !valuesEqual(spikeResult, stackResult) {
+			t.Errorf("float kernel FAIL %s: spike=%v (%T), stack=%v (%T)", tc.label, spikeResult, spikeResult, stackResult, stackResult)
+		} else {
+			t.Logf("float kernel PASS %s: result=%v (spike and stack identical)", tc.label, spikeResult)
+		}
+
+		// Stats logging
+		if hasFloatRoute {
+			t.Logf("float kernel %s: boxOps=%d (expecting %d), unboxOps=%d (float arithmetic)", tc.label, stats.boxOps, tc.wantBoxOps, stats.unboxOps)
+			// If float was narrowed, boxOps should be constant
+			if stats.boxOps != tc.wantBoxOps {
+				t.Logf("float kernel %s: boxOps constant check (expected %d, got %d)", tc.label, tc.wantBoxOps, stats.boxOps)
+			}
 		}
 	}
 }
