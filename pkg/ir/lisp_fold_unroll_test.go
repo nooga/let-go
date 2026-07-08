@@ -148,3 +148,94 @@ func TestSpecializeFoldAllUnrolls(t *testing.T) {
 	}
 	assertValidatesVal(t, spec, "specialize-all")
 }
+
+// ── T5: wire specialize+unroll into inline-pass (+ *max-unroll* cap) ──
+
+// inlineFoldDump builds a caller + stubs in a fresh ns, runs inline-with under
+// an optional *max-unroll* binding, and returns the dump. cap<=0 means default.
+func inlineFoldDump(t *testing.T, cap int, callerSrc string, stubs map[string]string) string {
+	t.Helper()
+	passVarCounter++
+	nsName := fmt.Sprintf("foldwire%d", passVarCounter)
+	ns := rt.NS(nsName)
+	regEntries := make([]string, 0, len(stubs))
+	build := func(src string) vm.Value {
+		consts := vm.NewConsts()
+		c := compiler.NewCompiler(consts, ns)
+		c.SetSource("foldwire-build")
+		_, res, err := c.CompileMultiple(strings.NewReader(fmt.Sprintf("(ir.build/build-fn (quote %s))", src)))
+		if err != nil {
+			t.Fatalf("build %q: %v", src, err)
+		}
+		return res
+	}
+	for name, src := range stubs {
+		res := build(src)
+		vn := fmt.Sprintf("*stub-%s*", name)
+		ns.Def(vn, res)
+		ns.Def(name, res)
+		regEntries = append(regEntries, fmt.Sprintf("'%s/%s %s", nsName, name, vn))
+	}
+	caller := build(callerSrc)
+	ns.Def("*caller-func*", caller)
+	regMap := fmt.Sprintf("(hash-map %s)", strings.Join(regEntries, " "))
+	var body string
+	if cap > 0 {
+		body = fmt.Sprintf(`(binding [ir.passes.inline/*max-unroll* %d] (ir.passes.inline/inline-with *caller-func* %s))`, cap, regMap)
+	} else {
+		body = fmt.Sprintf(`(ir.passes.inline/inline-with *caller-func* %s)`, regMap)
+	}
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, ns)
+	c.SetSource("foldwire-inline")
+	if _, _, err := c.CompileMultiple(strings.NewReader(fmt.Sprintf("(do %s *caller-func*)", body))); err != nil {
+		t.Fatalf("inline-with: %v", err)
+	}
+	return lispDump(t, caller)
+}
+
+func TestUnrollWiredIntoInlineAny(t *testing.T) {
+	ensureLoader()
+	dump := inlineFoldDump(t, 0,
+		`(defn rule [input] (anyc input r0 r1 r2))`,
+		map[string]string{"anyc": anycSrc, "r0": `(defn r0 [x] x)`, "r1": `(defn r1 [x] x)`, "r2": `(defn r2 [x] x)`})
+	// Unrolled any(N=3) => 3 short-circuit branch-ifs in the caller.
+	if n := strings.Count(dump, "BranchIf"); n != 3 {
+		t.Fatalf("expected 3 BranchIf (unrolled any), got %d:\n%s", n, dump)
+	}
+	// The loop mechanics must be gone (specialized away, not inlined as a loop).
+	for _, loopism := range []string{"empty?", "first", "rest"} {
+		if strings.Contains(dump, loopism) {
+			t.Fatalf("loop mechanic %q should be gone after unroll:\n%s", loopism, dump)
+		}
+	}
+}
+
+func TestUnrollWiredIntoInlineAll(t *testing.T) {
+	ensureLoader()
+	dump := inlineFoldDump(t, 0,
+		`(defn rule [input] (allc input r0 r1))`,
+		map[string]string{"allc": allcSrc, "r0": `(defn r0 [x] x)`, "r1": `(defn r1 [x] x)`})
+	if n := strings.Count(dump, "BranchIf"); n != 2 {
+		t.Fatalf("expected 2 BranchIf (unrolled all), got %d:\n%s", n, dump)
+	}
+	for _, loopism := range []string{"empty?", "first", "rest"} {
+		if strings.Contains(dump, loopism) {
+			t.Fatalf("loop mechanic %q should be gone after unroll:\n%s", loopism, dump)
+		}
+	}
+}
+
+func TestUnrollRespectsMaxCap(t *testing.T) {
+	ensureLoader()
+	// *max-unroll* = 2, but N = 3 -> over cap -> left as a runtime call, NOT unrolled.
+	dump := inlineFoldDump(t, 2,
+		`(defn rule [input] (anyc input r0 r1 r2))`,
+		map[string]string{"anyc": anycSrc, "r0": `(defn r0 [x] x)`, "r1": `(defn r1 [x] x)`, "r2": `(defn r2 [x] x)`})
+	if n := strings.Count(dump, "BranchIf"); n != 0 {
+		t.Fatalf("over-cap fold must NOT be unrolled (expected 0 BranchIf), got %d:\n%s", n, dump)
+	}
+	if !strings.Contains(dump, "Call") {
+		t.Fatalf("over-cap fold should remain a runtime call:\n%s", dump)
+	}
+}

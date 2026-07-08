@@ -24,6 +24,11 @@
 ;; so it stays opt-in. The AOT combinator harness binds this true to measure.
 (def ^:dynamic *enable-inline* false)
 
+;; Cap on fold-over-rest unrolling (ITER-0034): a combinator call with more than
+;; this many flat rest operands is left as a runtime call (with a logged skip,
+;; never silently truncated) rather than unrolled into an oversized branch chain.
+(def ^:dynamic *max-unroll* 32)
+
 (defn- inst-count [f]
   "Count total instructions across all blocks in function f."
   (reduce + 0 (map (fn [bid] (count (ir/block-insts bid f))) (ir/blocks f))))
@@ -561,6 +566,14 @@
                                      (:rest-index desc) (:input-pos desc) n)]
     (build/build-fn form)))
 
+(defn- fold-rest-operand-count [f call-nid desc]
+  "Number of flat rest operands N at a fold-over-rest call: total call operands
+   minus the combinator's fixed-arg count. nil when the call carries fewer
+   operands than the fixed args (shape mismatch)."
+  (let [nargs (count (rest (ir/refs call-nid f)))
+        n     (- nargs (:rest-index desc))]
+    (when (>= n 0) n)))
+
 (defn- inline-pass [f registry]
   "Single pass: inline eligible callees within function f.
    Returns true if any inlining occurred, false otherwise."
@@ -569,15 +582,34 @@
             call-nid (vec (ir/block-insts bid f))
             :when (#{:call :invoke} (ir/op call-nid f))]
       (if-let [g (resolve-callee f call-nid registry)]
-        (when (inline-eligible? g)
-          (if (single-block? g)
-            (do (splice-call! f call-nid g)
-                (reset! inlined true))
-            ;; Multi-block: only tail-position calls (Component 1a). A false
-            ;; return (non-tail / entry has params) leaves the call untouched
-            ;; for Component 1b.
-            (when (splice-multiblock-tail! f call-nid g)
-              (reset! inlined true))))
+        (let [desc (fold-over-rest? g)
+              n    (when desc (fold-rest-operand-count f call-nid desc))]
+          (cond
+            ;; Component 2 (ITER-0034): a fold-over-rest combinator call with N
+            ;; known flat rest operands within the cap — specialize to the
+            ;; unrolled fixed-arity fn and inline it (reuses the Component-1a
+            ;; tail splice), so each element application becomes a direct call.
+            (and desc n (>= n 1) (<= n *max-unroll*))
+            (when (splice-multiblock-tail! f call-nid (specialize-fold desc n))
+              (reset! inlined true))
+
+            ;; Over the cap: leave it a runtime call, but log — never silently
+            ;; truncate the unroll.
+            (and desc n (> n *max-unroll*))
+            (println (str "inline: fold-over-rest " (:fn-name desc) " call has "
+                          n " operands > *max-unroll* " *max-unroll*
+                          "; left as a runtime call"))
+
+            ;; Ordinary eligible callee.
+            (inline-eligible? g)
+            (if (single-block? g)
+              (do (splice-call! f call-nid g)
+                  (reset! inlined true))
+              ;; Multi-block: only tail-position calls (Component 1a). A false
+              ;; return (non-tail / entry has params) leaves the call untouched
+              ;; for Component 1b.
+              (when (splice-multiblock-tail! f call-nid g)
+                (reset! inlined true)))))
         ;; Higher-order devirt: callee is a locally-constructed closure literal.
         (when-let [cc (closure-callee f call-nid)]
           (let [inner (:inner cc)]
