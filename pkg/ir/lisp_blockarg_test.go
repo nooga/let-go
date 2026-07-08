@@ -107,3 +107,59 @@ func TestPureCallThroughBlockArg(t *testing.T) {
 		t.Fatalf("expected a block-arg'd callee in the fixture, got %v\nIR:\n%s", res, lispDump(t, f))
 	}
 }
+
+// classifyFirstBlockArgExpr classifies the first :block-arg in f (":none" if none).
+const classifyFirstBlockArgExpr = `(let [f %s` + firstBlockArg + `]
+  (if (nil? ba) :none (ir.passes.blockarg/classify-block-arg f ba)))`
+
+// TestClassifyBlockArg (AC-RS.1): each block-arg classifies into exactly one
+// strategy — rematerialize (single-value cheap source), slot (single-value
+// :load-var source), thread (genuine merge). Pure classification, no lowering change.
+func TestClassifyBlockArg(t *testing.T) {
+	ensureLoader()
+	cases := []struct{ name, src, want string }{
+		{"rematerialize", `(defn f [x] (if (< x 0) x x))`, ":rematerialize"}, // block-arg over x (:load-arg)
+		{"slot", `(defn f [b] (if b count count))`, ":slot"},                 // block-arg over #'count (:load-var)
+		{"thread", `(defn f [x] (if (< x 0) (- x) x))`, ":thread"},           // genuine merge
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			f := buildLispIR(t, c.src)
+			got := lispEvalOn(t, f, classifyFirstBlockArgExpr)
+			if got != c.want {
+				t.Fatalf("classify = %s, want %s\nIR:\n%s", got, c.want, lispDump(t, f))
+			}
+		})
+	}
+}
+
+// TestClassifyCensus (AC-RS.3 / AC-PO-RS.1): the classification is total over the
+// corpus (every block-arg classified into exactly one bucket), and the aggregate
+// distribution is logged — the measurement of the block-arg population (spurious
+// single-value rematerialize+slot vs genuine-merge thread) that quantifies the
+// epic's premise and is the fork datum for STORY-0073.
+func TestClassifyCensus(t *testing.T) {
+	ensureLoader()
+	var remat, slot, thread, total int
+	for _, e := range pipelineCorpus {
+		f, err := tryBuildLispIR(e.src)
+		if err != nil {
+			continue
+		}
+		r := lispInt(t, lispEvalReturn(t, f, `(:rematerialize (ir.passes.blockarg/classify-census %s))`))
+		s := lispInt(t, lispEvalReturn(t, f, `(:slot (ir.passes.blockarg/classify-census %s))`))
+		th := lispInt(t, lispEvalReturn(t, f, `(:thread (ir.passes.blockarg/classify-census %s))`))
+		ba := lispInt(t, lispEvalReturn(t, f, `(count (ir.passes.blockarg/block-args-of %s))`))
+		if r+s+th != ba {
+			t.Fatalf("%s: classification not total: %d+%d+%d != %d block-args", e.name, r, s, th, ba)
+		}
+		remat, slot, thread, total = remat+r, slot+s, thread+th, total+ba
+	}
+	spurious := remat + slot
+	t.Logf("block-arg census over pipelineCorpus: %d block-args = %d spurious single-value (%d rematerialize + %d slot) + %d genuine merge (thread)",
+		total, spurious, remat, slot, thread)
+	if total == 0 {
+		t.Skip("corpus produced no block-args")
+	}
+}

@@ -1,0 +1,45 @@
+;; Block-arg classification — the strategy that would resolve each block-arg's
+;; value across its block boundary. Pure decision logic + census: it measures the
+;; block-arg population (how many are trivial single-value copies vs genuine
+;; merges) and produces the fork datum for later slot lowering. Changes nothing.
+
+(ns ir.passes.blockarg
+  (:require
+   [ir.data]))
+
+;; Ref-free loads whose value is recomputable anywhere, so a cross-block use can
+;; be rematerialized rather than stored. :load-var is deliberately excluded — a
+;; mutable var root must be materialized once (matches lower.lg's cross-block gate).
+(def ^:private rematerializable-ops #{:const :load-arg :load-closed})
+
+(defn classify-block-arg [f nid]
+  "Classify a :block-arg by how its value would cross the block boundary:
+     :rematerialize — single-value, cheap-load source (recompute at the use site)
+     :slot          — single-value, :load-var or non-cheap source (durable storage)
+     :thread        — genuine merge (distinct reaching values); the block-arg is
+                      the channel
+   Uses resolve-single-source to see through single-value block-args. Pure."
+  (let [src (ir/resolve-single-source f nid)]
+    (cond
+      (= src nid)                                    :thread
+      (contains? rematerializable-ops (ir/op src f)) :rematerialize
+      :else                                          :slot)))
+
+(defn block-args-of [f]
+  "Every :block-arg InstId in f."
+  (let [acc (atom [])]
+    (doseq [bid (ir/blocks f)]
+      (doseq [nid (ir/block-insts bid f)]
+        (when (= :block-arg (ir/op nid f))
+          (swap! acc conj nid))))
+    @acc))
+
+(defn classify-census [f]
+  "Strategy -> count over every block-arg of f. The :rematerialize and :slot
+   buckets are the spurious single-value block-args (trivial copies); :thread is
+   the genuine merges."
+  (reduce (fn [m nid]
+            (let [k (classify-block-arg f nid)]
+              (assoc m k (inc (get m k)))))
+          {:rematerialize 0 :thread 0 :slot 0}
+          (block-args-of f)))
