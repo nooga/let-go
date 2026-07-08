@@ -618,7 +618,107 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 		routes:        computeRouting(insts),
 	}
 
+	compactDeadParams(fn)
+	if err := validateLiveInvariants(fn); err != nil {
+		return nil, err
+	}
 	return fn, nil
+}
+
+// compactDeadParams drops tombstoned block params AND the corresponding
+// edge-arg positions on every in-edge. DCE marks a dead block-arg :invalid
+// but leaves it in the block's params, and in-edges still thread a value
+// into it — a per-iteration write nothing reads. Removing the position at
+// decode keeps arity aligned and keeps tombstones out of the VM entirely.
+func compactDeadParams(fn *spikeFn) {
+	for bid := range fn.blocks {
+		b := &fn.blocks[bid]
+		var dead []int
+		for i, p := range b.params {
+			if p >= 0 && p < int32(len(fn.insts)) && fn.insts[p].opc == spikeOpInvalid {
+				dead = append(dead, i)
+			}
+		}
+		if len(dead) == 0 {
+			continue
+		}
+		keep := func(vals []int32) []int32 {
+			out := vals[:0]
+			di := 0
+			for i, v := range vals {
+				if di < len(dead) && i == dead[di] {
+					di++
+					continue
+				}
+				out = append(out, v)
+			}
+			return out
+		}
+		b.params = keep(b.params)
+		for sid := range fn.blocks {
+			t := &fn.blocks[sid].term
+			for _, e := range []*spikeEdge{&t.simpleEdge, &t.trueEdge, &t.falseEdge} {
+				if e.target == int32(bid) && len(e.args) > 0 {
+					e.args = keep(e.args)
+				}
+			}
+		}
+	}
+}
+
+// validateLiveInvariants enforces at DECODE time that tombstones and
+// terminators never reach the interpreters: block inst lists contain only
+// live, executable, in-range insts (block-args are filtered out too — their
+// locals are written by incoming edges, they never execute); no live
+// ref/edge-arg/param/return points at a tombstone. This removes every
+// per-iteration guard from the interpreter hot loops — an :invalid marker
+// reaching the VM is a decode bug, not a runtime case to skip.
+func validateLiveInvariants(fn *spikeFn) error {
+	tomb := func(nid int32) bool {
+		return nid < 0 || nid >= int32(len(fn.insts)) || fn.insts[nid].opc == spikeOpInvalid
+	}
+	for bid := range fn.blocks {
+		b := &fn.blocks[bid]
+		live := b.insts[:0]
+		for _, nid := range b.insts {
+			if nid < 0 || nid >= int32(len(fn.insts)) {
+				return fmt.Errorf("decode: block %d lists out-of-range inst %d", bid, nid)
+			}
+			switch fn.insts[nid].opc {
+			case spikeOpInvalid:
+				return fmt.Errorf("decode: block %d lists tombstone inst %d (:invalid must never reach the VM)", bid, nid)
+			case spikeOpReturn, spikeOpBranch, spikeOpBranchIf:
+				// Terminators execute via block-term, never in the body.
+				continue
+			case spikeOpBlockArg:
+				// Placeholders; written by incoming edges, never executed.
+				continue
+			}
+			for _, ref := range fn.insts[nid].args {
+				if tomb(ref) {
+					return fmt.Errorf("decode: inst %d references tombstone/out-of-range inst %d", nid, ref)
+				}
+			}
+			live = append(live, nid)
+		}
+		b.insts = live
+		for _, p := range b.params {
+			if tomb(p) {
+				return fmt.Errorf("decode: block %d param references tombstone inst %d", bid, p)
+			}
+		}
+		for _, e := range []spikeEdge{b.term.simpleEdge, b.term.trueEdge, b.term.falseEdge} {
+			for _, a := range e.args {
+				if tomb(a) {
+					return fmt.Errorf("decode: block %d edge arg references tombstone inst %d", bid, a)
+				}
+			}
+		}
+		if b.term.opc == spikeOpReturn && tomb(b.term.returnVal) {
+			return fmt.Errorf("decode: block %d returns tombstone inst %d", bid, b.term.returnVal)
+		}
+	}
+	return nil
 }
 
 // resolveVar resolves a var symbol or value to its deref'd value via rt.NS.
@@ -2241,28 +2341,11 @@ func spikeRun(fn *spikeFn, args []vm.Value) (vm.Value, error) {
 		block := fn.blocks[currentBlockID]
 
 		// Execute all insts in the current block (in order)
+		// Block lists are decode-validated: live, executable insts only
+		// (no tombstones, terminators, or block-args — see
+		// validateLiveInvariants). No per-iteration guards needed.
 		for _, nid := range block.insts {
-			if nid < 0 || nid >= int32(len(fn.insts)) {
-				return nil, fmt.Errorf("spikeRun: inst id %d out of bounds", nid)
-			}
-
 			inst := fn.insts[nid]
-
-			// Skip invalid insts (tombstones from DCE)
-			if inst.opc == spikeOpInvalid {
-				continue
-			}
-
-			// Skip terminator insts (they're handled by the terminator execution below)
-			// Terminator ops are: return, branch, branch-if
-			if inst.opc == spikeOpReturn || inst.opc == spikeOpBranch || inst.opc == spikeOpBranchIf {
-				continue
-			}
-
-			// Skip block-arg insts (they don't compute anything, just hold values from edges)
-			if inst.opc == spikeOpBlockArg {
-				continue
-			}
 
 			var result vm.Value
 			var err error
@@ -2591,25 +2674,10 @@ func spikeRunTyped(fn *spikeFn, args []vm.Value, stats *spikeStats) (vm.Value, e
 
 		block := fn.blocks[currentBlockID]
 
+		// Block lists are decode-validated: live, executable insts only
+		// (see validateLiveInvariants). No per-iteration guards needed.
 		for _, nid := range block.insts {
-			if nid < 0 || nid >= int32(len(fn.insts)) {
-				return nil, fmt.Errorf("spikeRunTyped: inst id %d out of bounds", nid)
-			}
-
 			inst := fn.insts[nid]
-
-			if inst.opc == spikeOpInvalid {
-				continue
-			}
-
-			if inst.opc == spikeOpReturn || inst.opc == spikeOpBranch || inst.opc == spikeOpBranchIf {
-				continue
-			}
-
-			if inst.opc == spikeOpBlockArg {
-				continue
-			}
-
 			route := fn.routes[nid]
 
 			switch inst.opc {
