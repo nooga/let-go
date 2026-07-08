@@ -454,7 +454,9 @@
   (and (= :call (ir/op nid f))
        (let [refs (ir/refs nid f)]
          (when (pos? (count refs))
-           (let [callee-nid (first refs)]
+           ;; see through single-source block-args so an opaque parameter callee
+           ;; (a trivial copy of a :load-var) is still recognized
+           (let [callee-nid (ir/resolve-single-source f (first refs))]
              (and (= :load-var (ir/op callee-nid f))
                   (mut/stable-load-var? var-facts (ir/aux callee-nid f))
                   (let [aux (ir/aux callee-nid f)
@@ -479,7 +481,9 @@
   (and (= :call (ir/op nid f))
        (let [refs (ir/refs nid f)]
          (when (pos? (count refs))
-           (let [callee-nid (first refs)]
+           ;; see through single-source block-args so an opaque parameter callee
+           ;; (a trivial copy of a :load-var) is still recognized
+           (let [callee-nid (ir/resolve-single-source f (first refs))]
              (and (= :load-var (ir/op callee-nid f))
                   (mut/stable-load-var? var-facts (ir/aux callee-nid f))
                   (let [aux (ir/aux callee-nid f)
