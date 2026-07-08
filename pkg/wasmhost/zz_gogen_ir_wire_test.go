@@ -26,6 +26,7 @@ import (
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/inline"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/lambda_lift"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/licm"
+	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/liveness"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/mutability"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/pipeline"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/trace"

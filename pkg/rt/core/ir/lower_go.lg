@@ -14,6 +14,7 @@
    [graph]
    [ir.data]
    [ir.ops :as ops]
+   [ir.passes.liveness :as liveness]
    [ir.passes.mutability :as mut]
    [ir.structurize :as st]))
 
@@ -505,7 +506,7 @@
          (pos? (count (nth uses nid))))))
 
 ;; live? — is nid's VALUE actually read by emitted Go? Reads the backward
-;; read-set computed by live-nids and cached on f by lower-body. The IR `uses`
+;; read-set computed by liveness/reachable-nids and cached on f by lower-body. The IR `uses`
 ;; table over-reports: build threads some argument subexpressions twice, leaving
 ;; dead duplicate insts with non-empty (stale) use lists. live? is the truth for
 ;; lowering decisions (declare/assign/route-to-_). Falls back to used? when the
@@ -2592,48 +2593,6 @@
             {}
             nids)))
 
-(defn- live-nids [f]
-  ;; Backward read-set: the nids whose VALUE is actually read by emitted Go.
-  ;; Roots: refs of value-reading terminators (:return / :branch-if cond /
-  ;; :tail-call args) and refs of every :call inst (calls always emit for their
-  ;; side effects, so their callee+args are read). Propagation to a fixpoint: a
-  ;; live instruction's refs are read; a live block-param's incoming branch-args
-  ;; are read. Dead duplicate subexpressions — which build threads twice and the
-  ;; ir/uses table still marks "used" — are reachable from nothing and stay out,
-  ;; so lowering routes their side-effecting calls to `_` and never declares the
-  ;; pure ones.
-  (let [live (atom #{})
-        seed (fn [nid] (swap! live conj nid))]
-    (doseq [bid (ir/blocks f)]
-      (let [term (ir/block-term bid f)]
-        (when term
-          (let [op (ir/op term f)]
-            (when (or (= op :return) (= op :branch-if) (= op :tail-call))
-              (doseq [r (ir/refs term f)] (seed r))))))
-      (doseq [nid (ir/block-insts bid f)]
-        (when (= :call (ir/op nid f))
-          (doseq [r (ir/refs nid f)] (seed r)))))
-    (loop []
-      (let [before (count @live)]
-        (doseq [bid (ir/blocks f)]
-          (doseq [nid (ir/block-insts bid f)]
-            (when (contains? @live nid)
-              (doseq [r (ir/refs nid f)] (seed r))))
-          (let [term (ir/block-term bid f)]
-            (when term
-              (doseq [bt (oos-branch-targets term f)]
-                (let [tgt    (ir/branch-target-target bt)
-                      params (ir/block-params tgt f)
-                      args   (ir/branch-target-args bt)]
-                  (loop [i 0]
-                    (when (< i (count params))
-                      (when (and (< i (count args))
-                                 (contains? @live (nth params i)))
-                        (seed (nth args i)))
-                      (recur (inc i)))))))))
-        (when (> (count @live) before) (recur))))
-    @live))
-
 (defn- oos-param-incoming-args [f b i]
   ;; Every argument feeding param index i of block b, across predecessor edges.
   (let [acc (atom [])]
@@ -2898,7 +2857,7 @@
    (swap! f assoc :const-params (const-param-map f))
    (swap! f assoc :gensym-renames (gensym-renumber-map f))
    (swap! f assoc :coalesce (coalesce-map f))
-   (swap! f assoc :live (live-nids f))
+   (swap! f assoc :live (liveness/reachable-nids f))
    ;; Single-use computed edge-args to inline (needs :live + uses cache above).
    (swap! f assoc :inline-args (compute-inline-args f))
    (binding [*call-err-used* (atom false)
