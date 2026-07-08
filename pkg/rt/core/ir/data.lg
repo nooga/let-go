@@ -183,6 +183,73 @@
 (defn cond-target-true     [ct] (:true-target ct))
 (defn cond-target-false    [ct] (:false-target ct))
 
+;; --- single-source block-arg resolution (copy-propagation through block-args) ---
+;; A block-arg whose every incoming edge carries the SAME value is a trivial copy
+;; of that value. resolve-single-source sees through such block-args (transitively)
+;; so analyses like callee resolution are not blinded by an opaque parameter. Pure
+;; structural query — mutates nothing.
+
+(defn- ss-term-targets [f term]
+  (when term
+    (let [o (op term f) a (aux term f)]
+      (cond
+        (= o :branch)    [a]
+        (= o :branch-if) [(cond-target-true a) (cond-target-false a)]
+        :else            []))))
+
+(defn- ss-param-index [params nid]
+  (loop [i 0]
+    (cond
+      (>= i (count params)) nil
+      (= (nth params i) nid) i
+      :else                  (recur (inc i)))))
+
+(defn- ss-incoming [f bid idx]
+  "InstIds feeding param index idx of block bid across all predecessor edges."
+  (let [acc (atom [])]
+    (doseq [p (block-preds bid f)]
+      (doseq [bt (ss-term-targets f (block-term p f))]
+        (when (and bt (= (branch-target-target bt) bid))
+          (let [args (branch-target-args bt)]
+            (when (< idx (count args))
+              (swap! acc conj (nth args idx)))))))
+    @acc))
+
+(defn- ss-equivalent?
+  "True when every incoming source denotes the same value as the representative
+   `rep`: either literally the same InstId, or a ref-free op (`:load-var`/
+   `:const`/`:load-arg`/`:load-closed`, whose value is fully determined by op+aux
+   — unlike ops with operands) with the same op and aux. Ref-free equivalents can
+   be resolved to a representative soundly because they can be recomputed anywhere."
+  [f srcs]
+  (let [rep (first srcs)]
+    (every? (fn [s]
+              (or (= s rep)
+                  (and (empty? (refs s f))
+                       (empty? (refs rep f))
+                       (= (op s f) (op rep f))
+                       (= (aux s f) (aux rep f)))))
+            srcs)))
+
+(defn resolve-single-source
+  "Resolve nid through block-args whose every incoming edge denotes the SAME value
+   — the same InstId, or ref-free equivalents (all `:load-var` of one var, etc.).
+   Such a block-arg is a trivial copy; this returns the underlying InstId (applied
+   transitively), or nid when nid is a genuine merge (distinct values). The result
+   carries the underlying op/aux for analyses like callee resolution. Does not
+   mutate the IR."
+  ([f nid] (resolve-single-source f nid #{}))
+  ([f nid seen]
+   (if (or (contains? seen nid) (not= :block-arg (op nid f)))
+     nid
+     (let [bid    (block-of nid f)
+           params (block-params bid f)
+           idx    (ss-param-index params nid)
+           srcs   (when idx (ss-incoming f bid idx))]
+       (if (and srcs (seq srcs) (ss-equivalent? f srcs))
+         (recur f (first srcs) (conj seen nid))
+         nid)))))
+
 ;; --- bitset shim (Phase B) ------------------------------------------
 ;;
 ;; A bitset is a vector of int64 words. Bit k (0-indexed) lives in
@@ -566,6 +633,7 @@
                fn-load-arg fn-load-arg-type
                branch-target-target branch-target-args
                cond-target-true cond-target-false
+               resolve-single-source
                add-block add-inst add-terminator!
                add-block-param! add-block-arg-front!
                add-pred! add-source-info!
