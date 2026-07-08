@@ -411,6 +411,118 @@
           (ir/add-pred! f entry-nb b)
           true)))))
 
+;; ───────────────────────────────────────────────────────────────────────────
+;; Component 2 (ITER-0034 / STORY-0035): fold-over-rest specialization + unroll.
+;;
+;; Recognizes the variadic fold-over-rest combinator idiom — a loop over the
+;; rest-arg seq that consumes (first v)/(rest v), terminates on (empty? v), and
+;; applies each element as a callee to a fixed arg (i.e. ((first v) input)). At a
+;; call with N known flat rest operands, a later step specializes to fixed arity
+;; and unrolls the loop into a straight-line short-circuit branch chain, so each
+;; element call becomes a direct rule-to-rule call. Design:
+;; docs/superpowers/specs/2026-06-28-multiblock-inliner-and-loop-unroll-design.md §5.
+;; ───────────────────────────────────────────────────────────────────────────
+
+(defn- call-of-var-on?
+  "True if nid is a :call whose head (refs[0]) is a :load-var naming `vname`
+   (short name, e.g. \"empty?\") applied to exactly one operand `arg-nid`."
+  [f nid vname arg-nid]
+  (and (= :call (ir/op nid f))
+       (let [rf (ir/refs nid f)]
+         (and (= 2 (count rf))
+              (= arg-nid (nth rf 1))
+              (let [h (call-head-var f nid)]
+                (and h (= vname (name h))))))))
+
+(defn- recurs-to?
+  "True if block bid ends in a :branch back to header hdr AND contains a
+   (rest v) call over its own threaded loop var (block-param 0) — the loop's
+   recur edge over the rest seq. The loop var is re-received as a block-arg in
+   every block, so it has a distinct nid per block; read it locally."
+  [f bid hdr]
+  (let [term   (ir/block-term bid f)
+        params (ir/block-params bid f)]
+    (and term
+         (seq params)
+         (= :branch (ir/op term f))
+         (= hdr (ir/branch-target-target (ir/aux term f)))
+         (boolean (some (fn [nid] (call-of-var-on? f nid "rest" (nth params 0)))
+                        (ir/block-insts bid f))))))
+
+(defn- const-in-block
+  "First :const inst nid in block bid, or nil."
+  [f bid]
+  (some (fn [nid] (when (= :const (ir/op nid f)) nid))
+        (ir/block-insts bid f)))
+
+(defn fold-over-rest? [f]
+  "Recognize the fold-over-rest combinator idiom in variadic function f.
+   Returns a descriptor map or nil. The descriptor carries every nid/bid a
+   later specialize+unroll step needs:
+     {:kind :any|:all :arity A :rest-index (dec A)
+      :header H :loop-var LV :input-arg P
+      :first-nid <(first LV) call> :pred-nid <((first LV) P) call>
+      :step-bid B :short-circuit-bid SB :short-circuit-val C
+      :terminal-bid TB :terminal-val C :recur-bid RB}
+   Structural: keyed on empty?/first/rest consumption of the rest-arg loop var,
+   not on the combinator's name. :any short-circuits on a truthy element result,
+   :all short-circuits on a falsey one."
+  (when (ir/fn-variadic? f)
+    (let [arity      (ir/fn-arity f)
+          rest-index (dec arity)
+          entry      (first (ir/blocks f))
+          eterm      (ir/block-term entry f)]
+      (when (and eterm (= :branch (ir/op eterm f)))
+        (let [ebt   (ir/aux eterm f)
+              hdr   (ir/branch-target-target ebt)
+              eargs (ir/branch-target-args ebt)]
+          ;; loop var (branch arg 0) must be initialized to the rest load-arg.
+          (when (and (seq eargs)
+                     (= :load-arg (ir/op (nth eargs 0) f))
+                     (= rest-index (ir/aux (nth eargs 0) f)))
+            (let [hparams (ir/block-params hdr f)
+                  hterm   (ir/block-term hdr f)]
+              (when (and (seq hparams) hterm (= :branch-if (ir/op hterm f)))
+                (let [lv   (nth hparams 0)
+                      ecnd (nth (ir/refs hterm f) 0)]
+                  ;; header cond must be (empty? lv).
+                  (when (call-of-var-on? f ecnd "empty?" lv)
+                    (let [haux   (ir/aux hterm f)
+                          term-b (ir/branch-target-target (ir/cond-target-true haux))   ;; empty -> terminal
+                          step-b (ir/branch-target-target (ir/cond-target-false haux))  ;; else -> step
+                          sterm  (ir/block-term step-b f)]
+                      (when (and sterm (= :branch-if (ir/op sterm f))
+                                 (seq (ir/block-params step-b f)))
+                        (let [step-lv (nth (ir/block-params step-b f) 0)  ;; loop var re-received in step block
+                              pcnd    (nth (ir/refs sterm f) 0)]
+                          (when (= :call (ir/op pcnd f))
+                            (let [prefs (ir/refs pcnd f)]
+                              (when (= 2 (count prefs))
+                                (let [first-nid (nth prefs 0)    ;; head = (first v) = element
+                                      input-arg (nth prefs 1)]   ;; operand = fixed input load-arg
+                                  (when (and (call-of-var-on? f first-nid "first" step-lv)
+                                             (= :load-arg (ir/op input-arg f)))
+                                    (let [saux  (ir/aux sterm f)
+                                          tb    (ir/branch-target-target (ir/cond-target-true saux))
+                                          fb    (ir/branch-target-target (ir/cond-target-false saux))
+                                          t-rec (recurs-to? f tb hdr)
+                                          f-rec (recurs-to? f fb hdr)
+                                          kind  (cond (and f-rec (not t-rec)) :any
+                                                      (and t-rec (not f-rec)) :all
+                                                      :else nil)]
+                                      (when kind
+                                        (let [recur-bid (if (= kind :any) fb tb)
+                                              sc-bid    (if (= kind :any) tb fb)]
+                                          {:kind kind :arity arity :rest-index rest-index
+                                           :header hdr :loop-var lv :input-arg input-arg
+                                           :first-nid first-nid :pred-nid pcnd
+                                           :step-bid step-b
+                                           :short-circuit-bid sc-bid
+                                           :short-circuit-val (const-in-block f sc-bid)
+                                           :terminal-bid term-b
+                                           :terminal-val (const-in-block f term-b)
+                                           :recur-bid recur-bid})))))))))))))))))))))
+
 (defn- inline-pass [f registry]
   "Single pass: inline eligible callees within function f.
    Returns true if any inlining occurred, false otherwise."
