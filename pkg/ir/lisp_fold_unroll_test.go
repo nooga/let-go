@@ -239,3 +239,88 @@ func TestUnrollRespectsMaxCap(t *testing.T) {
 		t.Fatalf("over-cap fold should remain a runtime call:\n%s", dump)
 	}
 }
+
+// ── E1: lowered-Go cross-surface proof (AC-FR.1 integration / AC-PO-FR.1) ──
+
+// sliceFunc returns the body of `func <name>(` .. up to the next top-level
+// `func ` in rendered Go (or end), for per-function assertions.
+func sliceFunc(src, name string) string {
+	start := strings.Index(src, "func "+name+"(")
+	if start < 0 {
+		return ""
+	}
+	rest := src[start+len("func "+name+"("):]
+	if i := strings.Index(rest, "\nfunc "); i >= 0 {
+		return rest[:i]
+	}
+	return rest
+}
+
+// lowerFoldNs lowers a namespace defining recursive rules r0..r(n-1), the anyc
+// combinator, and a `parse` rule that applies anyc to those rules, with inline
+// enabled (unroll on). Returns the rendered Go.
+func lowerFoldNs(t *testing.T, n int) string {
+	t.Helper()
+	return lowerFoldNsMode(t, n, true)
+}
+
+// lowerFoldNsMode is lowerFoldNs with an explicit unroll toggle (*enable-inline*).
+func lowerFoldNsMode(t *testing.T, n int, unroll bool) string {
+	t.Helper()
+	var rules, forms strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&rules, `(eval (quote (defn r%d [x] (if (< x 0) x (r%d (- x 1))))))`+"\n", i, i)
+		fmt.Fprintf(&forms, `(quote (defn r%d [x] (if (< x 0) x (r%d (- x 1)))))`+"\n", i, i)
+	}
+	rulesArgs := ""
+	for i := 0; i < n; i++ {
+		rulesArgs += fmt.Sprintf(" r%d", i)
+	}
+	v := runLispExpr(t, fmt.Sprintf(`(do (create-ns (quote ysx))
+	     (binding [*ns* (the-ns (quote ysx))]
+	       %s
+	       (eval (quote (defn anyc [input & fs] (loop [v fs] (if (empty? v) false (if ((first v) input) true (recur (rest v))))))))
+	       (eval (quote (defn parse [input] (anyc input%s)))))
+	     (binding [ir.passes.inline/*enable-inline* %t]
+	       (ir.passes.pipeline/lower-ns-to-go "ysx" (quote ysx)
+	         [%s
+	          (quote (defn anyc [input & fs] (loop [v fs] (if (empty? v) false (if ((first v) input) true (recur (rest v)))))))
+	          (quote (defn parse [input] (anyc input%s)))])))`,
+		rules.String(), rulesArgs, unroll, forms.String(), rulesArgs))
+	s, ok := v.Unbox().(string)
+	if !ok {
+		t.Fatalf("expected rendered Go string, got %T", v.Unbox())
+	}
+	return s
+}
+
+func TestUnrollLoweredGoEliminatesLoop(t *testing.T) {
+	ensureLoader()
+	src := lowerFoldNs(t, 3)
+	parse := sliceFunc(src, "Parse")
+	if parse == "" {
+		t.Fatalf("Parse did not lower:\n%s", src)
+	}
+	// AC-FR.1 / AC-PO-FR.1 (achieved): in the caller the fold loop is unrolled
+	// away — no seq iteration (first/rest/empty?) and no per-node closure alloc.
+	for _, loopism := range []string{"corefns.First", "corefns.Rest", "empty_QMARK", "BoxNativeFn"} {
+		if strings.Contains(parse, loopism) {
+			t.Fatalf("unrolled Parse must not contain %q (loop/closure-alloc eliminated):\n%s", loopism, parse)
+		}
+	}
+	// The unrolled short-circuit chain: N truthiness tests over the N elements.
+	if got := strings.Count(parse, "IsTruthy"); got != 3 {
+		t.Fatalf("expected 3 short-circuit tests in unrolled Parse, got %d:\n%s", got, parse)
+	}
+	// KNOWN GAP (follow-up): element applications still lower to rt.InvokeValueEC
+	// rather than direct RN(...) calls, because the multi-block tail splice routes
+	// operands through block-args and validate.lg forbids threading a :load-var
+	// cross-block — so the direct-call devirt (which keys on load-var heads) can't
+	// fire. Full "direct rule-to-rule calls" (design §5.3) is deferred to a
+	// block-arg-aware devirt follow-up; the profiler (ITER-0035) quantifies whether
+	// the residual dispatch matters vs the loop version. This assertion documents
+	// current reality so a future devirt fix flips it deliberately.
+	if got := strings.Count(parse, "InvokeValueEC"); got != 3 {
+		t.Fatalf("expected 3 element dispatches (devirt gap documented), got %d:\n%s", got, parse)
+	}
+}
