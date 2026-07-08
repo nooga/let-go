@@ -1,0 +1,47 @@
+;; clojure.lang.PersistentQueue must be a real FIFO persistent queue, not a
+;; load-only marker. weavejester/dependency's topo-sort (no-comparator path)
+;; seeds a worklist with (into clojure.lang.PersistentQueue/EMPTY leaves) and
+;; drains it with peek/pop.
+(ns test.persistent-queue-test
+  (:require [test :refer :all]))
+
+(def q (into clojure.lang.PersistentQueue/EMPTY [1 2 3]))
+
+(deftest queue-fifo
+  (testing "into seeds a queue and peek reads the front (FIFO)"
+    (is (= 1 (peek q)))
+    (is (= 2 (peek (pop q))))
+    (is (= 3 (peek (pop (pop q))))))
+  (testing "count / seq / empty?"
+    (is (= 3 (count q)))
+    (is (= '(1 2 3) (seq q)))
+    (is (empty? clojure.lang.PersistentQueue/EMPTY))
+    (is (not (empty? q))))
+  (testing "conj appends to the rear, front unchanged"
+    (is (= 1 (peek (conj q 4))))
+    (is (= 4 (count (conj q 4)))))
+  (testing "pop of the last element yields the empty queue"
+    (is (empty? (pop (pop (pop q))))))
+  (testing "instance? recognizes a real queue, not a vector"
+    (is (instance? clojure.lang.PersistentQueue q))
+    (is (not (instance? clojure.lang.PersistentQueue [1 2 3]))))
+  (testing "type resolves through QueueType"
+    (is (= (type q) clojure.lang.PersistentQueue)))
+  (testing "a queue is = to any sequential collection with the same elements"
+    (is (= q '(1 2 3)))
+    (is (= '(1 2 3) q))
+    (is (= q [1 2 3]))
+    (is (= [1 2 3] q))
+    (is (= q (into clojure.lang.PersistentQueue/EMPTY [1 2 3])))
+    (is (not (= q [1 2])))
+    (is (not (= q [3 2 1])))
+    (is (not (= q {:a 1})))))
+
+;; Drain the queue front-to-back, exactly as Kahn's algorithm does.
+(deftest queue-drain-order
+  (testing "peek/pop drain preserves insertion order"
+    (is (= [1 2 3]
+           (loop [c q, out []]
+             (if-let [x (peek c)]
+               (recur (pop c) (conj out x))
+               out))))))

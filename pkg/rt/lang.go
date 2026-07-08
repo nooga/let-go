@@ -1158,7 +1158,7 @@ func isSequentialType(v vm.Value) bool {
 		return false
 	}
 	switch v.(type) {
-	case vm.ArrayVector, vm.PersistentVector, *vm.PersistentVector, *vm.List, *vm.Cons, *vm.LazySeq:
+	case vm.ArrayVector, vm.PersistentVector, *vm.PersistentVector, *vm.List, *vm.Cons, *vm.LazySeq, *vm.PersistentQueue:
 		return true
 	case *vm.PersistentMap, vm.Map, *vm.PersistentSet, vm.Set, *vm.SortedMap, *vm.SortedSet:
 		return false
@@ -4245,6 +4245,8 @@ func installLangNS() {
 				return vm.NIL, nil
 			}
 			return v.First(), nil
+		case *vm.PersistentQueue:
+			return v.Peek(), nil
 		default:
 			return vm.NIL, fmt.Errorf("peek not supported on %s", vs[0].Type())
 		}
@@ -4284,6 +4286,8 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("can't pop empty seq")
 			}
 			return s.More(), nil
+		case *vm.PersistentQueue:
+			return vs[0].(*vm.PersistentQueue).Pop(), nil
 		default:
 			return vm.NIL, fmt.Errorf("pop expected Seq or Vec")
 		}
@@ -8048,6 +8052,10 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("clojure.lang.Atom", vm.AtomType)
 	ns.Def("clojure.lang.PersistentHashSet", vm.SetType)
 	ns.Def("clojure.lang.IPending", vm.PromiseType)
+	// A real queue type: (type q) and (instance? clojure.lang.PersistentQueue q)
+	// both resolve through QueueType, like the other concrete clojure.lang.*
+	// classes above. Interface-marker ancestry is wired in directTypeParents.
+	ns.Def("clojure.lang.PersistentQueue", vm.QueueType)
 
 	for _, name := range []string{
 		"clojure.lang.Associative",
@@ -8057,10 +8065,6 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		"clojure.lang.IPersistentCollection",
 		"clojure.lang.IReduce",
 		"clojure.lang.IEditableCollection",
-		// Bare in (instance? clojure.lang.PersistentQueue x).
-		// Leaf marker only — no type reports it as an ancestor, so queue? is
-		// always false (load-only; real PersistentQueue is out of scope).
-		"clojure.lang.PersistentQueue",
 	} {
 		ns.Def(name, vm.Symbol(name))
 	}
@@ -8122,14 +8126,11 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("->clojure.lang.MapEntry", create)
 	ns.Def("clojure.lang.MapEntry.", create)
 
-	// clojure.lang.PersistentQueue/EMPTY. let-go has no
-	// real PersistentQueue, so this is a load-only stub: it must merely resolve
-	// as a var at compile time (medley derefs it only at runtime inside `queue`).
-	// Bind it to a non-collection marker symbol rather than vm.EmptyList — that
-	// way medley's `(queue coll)` = `(into (queue) coll)` FAILS LOUDLY with
-	// "conj expected Collection" instead of silently returning a reversed list
-	// (a plausible-but-wrong FIFO). queue?/queue stay degraded by design.
-	DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.Symbol("clojure.lang.PersistentQueue/EMPTY"))
+	// clojure.lang.PersistentQueue/EMPTY — the canonical empty queue. let-go now
+	// has a real vm.PersistentQueue, so (into EMPTY coll) / conj / peek / pop
+	// behave as a proper FIFO (unblocks weavejester/dependency's topo-sort and
+	// medley's queue/queue?).
+	DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.EmptyPersistentQueue)
 
 	// (java.util.ArrayList.) / (java.util.ArrayList. n).
 	// medley's partition-between / sliding build a mutable ArrayList on their
