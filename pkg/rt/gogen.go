@@ -26,6 +26,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -335,12 +336,36 @@ func cIntLit(v vm.Value) (vm.Value, error) {
 func cFloatLit(v vm.Value) (vm.Value, error) {
 	switch x := v.(type) {
 	case vm.Float:
-		return box(&ast.BasicLit{Kind: token.FLOAT, Value: strconv.FormatFloat(float64(x), 'g', -1, 64)}), nil
+		f := float64(x)
+		// NaN and ±Inf have NO Go literal form — strconv.FormatFloat yields the
+		// bare tokens "NaN" / "+Inf" / "-Inf", which are not valid Go and won't
+		// compile. Emit the math-package call instead; a File that contains such
+		// a call gets the "math" import wired in by ir.lower-go's ensure step
+		// (via gogen/references-pkg? + gogen/add-file-import).
+		if math.IsNaN(f) {
+			return box(mathCallExpr("NaN")), nil
+		}
+		if math.IsInf(f, 1) {
+			return box(mathCallExpr("Inf", &ast.BasicLit{Kind: token.INT, Value: "1"})), nil
+		}
+		if math.IsInf(f, -1) {
+			return box(mathCallExpr("Inf", &ast.BasicLit{Kind: token.INT, Value: "-1"})), nil
+		}
+		return box(&ast.BasicLit{Kind: token.FLOAT, Value: strconv.FormatFloat(f, 'g', -1, 64)}), nil
 	case vm.Int:
 		// Allow Int → float literal coercion for ergonomics: (float-lit 0) emits "0.0".
 		return box(&ast.BasicLit{Kind: token.FLOAT, Value: strconv.FormatFloat(float64(int64(x)), 'g', -1, 64) + ".0"}), nil
 	}
 	return vm.NIL, fmt.Errorf("gogen/float-lit: expected number, got %s", v.Type().Name())
+}
+
+// mathCallExpr builds a `math.<name>(args...)` call expression for the
+// non-finite float literals (NaN, ±Inf) that have no Go literal form.
+func mathCallExpr(name string, args ...ast.Expr) ast.Expr {
+	return &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: ast.NewIdent("math"), Sel: ast.NewIdent(name)},
+		Args: args,
+	}
 }
 
 func cStringLit(v vm.Value) (vm.Value, error) {
@@ -1688,6 +1713,147 @@ func cFile(pkgV, importsV, declsV vm.Value) (vm.Value, error) {
 	}), nil
 }
 
+// --- go-ast read / COW bindings (for import management in lg) ---------
+//
+// gogen constructors are write-only (build nodes). These add the read + COW
+// operations lg needs to manage imports for the package calls gogen itself
+// introduces (math.NaN / math.Inf for non-finite float literals), without
+// mutating any shared node.
+
+// cReferencesPkg reports whether `node` references package `pkg` via a
+// `pkg.<name>` selector anywhere in its subtree. Read-only: walks the boxed
+// AST, mutates nothing.
+func cReferencesPkg(nodeV, pkgV vm.Value) (vm.Value, error) {
+	n, err := unboxNode(nodeV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	pkg, err := asString(pkgV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if n == nil {
+		return vm.FALSE, nil
+	}
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		if sel, ok := x.(*ast.SelectorExpr); ok {
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == pkg {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	if found {
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+// cFileImportPaths returns the import paths (unquoted) of a *ast.File as a
+// vector of strings. Read-only.
+func cFileImportPaths(fileV vm.Value) (vm.Value, error) {
+	n, err := unboxNode(fileV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	f, ok := n.(*ast.File)
+	if !ok {
+		return vm.NIL, fmt.Errorf("gogen/file-import-paths: expected *ast.File, got %T", n)
+	}
+	var out []vm.Value
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.IMPORT {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			is, ok := sp.(*ast.ImportSpec)
+			if !ok || is.Path == nil {
+				continue
+			}
+			p, uerr := strconv.Unquote(is.Path.Value)
+			if uerr != nil {
+				p = is.Path.Value
+			}
+			out = append(out, vm.String(p))
+		}
+	}
+	return vm.NewArrayVector(out), nil
+}
+
+// cAddFileImport returns a NEW *ast.File with `path` added to its import block.
+// Copy-on-write: the input File and every node it shares are left unmutated —
+// only the File header and the import GenDecl are shallow-copied. Idempotent:
+// if `path` is already imported, an equivalent (structurally-copied) File is
+// returned unchanged.
+func cAddFileImport(fileV, pathV vm.Value) (vm.Value, error) {
+	n, err := unboxNode(fileV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	f, ok := n.(*ast.File)
+	if !ok {
+		return vm.NIL, fmt.Errorf("gogen/add-file-import: expected *ast.File, got %T", n)
+	}
+	path, err := asString(pathV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	quoted := strconv.Quote(path)
+	newDecls := make([]ast.Decl, len(f.Decls))
+	copy(newDecls, f.Decls)
+	importIdx := -1
+	for i, d := range newDecls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.IMPORT {
+			continue
+		}
+		importIdx = i
+		for _, sp := range gd.Specs {
+			if is, ok := sp.(*ast.ImportSpec); ok && is.Path != nil && is.Path.Value == quoted {
+				nf := *f
+				nf.Decls = newDecls
+				return box(&nf), nil // already imported
+			}
+		}
+		break
+	}
+	newSpec := &ast.ImportSpec{Path: &ast.BasicLit{Kind: token.STRING, Value: quoted}}
+	if importIdx >= 0 {
+		old := newDecls[importIdx].(*ast.GenDecl)
+		ngd := *old
+		ngd.Specs = append(append([]ast.Spec{}, old.Specs...), newSpec)
+		newDecls[importIdx] = &ngd
+	} else {
+		newDecls = append([]ast.Decl{&ast.GenDecl{Tok: token.IMPORT, Specs: []ast.Spec{newSpec}}}, newDecls...)
+	}
+	nf := *f
+	nf.Decls = newDecls
+	return box(&nf), nil
+}
+
+// cEnsureGenImports returns a File that imports every package gogen itself may
+// have introduced but the caller could not have declared — currently only
+// "math" (for math.NaN()/math.Inf() from non-finite float literals). Thin glue
+// over the read (references-pkg?) + COW (add-file-import) bindings; native so
+// it resolves in the AOT lowering path without ir.lower-go taking a namespace
+// require on the gogen macro layer (see nooga/let-go#425: self-contain gogen).
+func cEnsureGenImports(fileV vm.Value) (vm.Value, error) {
+	ref, err := cReferencesPkg(fileV, vm.String("math"))
+	if err != nil {
+		return vm.NIL, err
+	}
+	if ref == vm.TRUE {
+		return cAddFileImport(fileV, vm.String("math"))
+	}
+	return fileV, nil
+}
+
 // --- render: the one and only output fn ------------------------------
 
 var goFset = token.NewFileSet()
@@ -1870,6 +2036,10 @@ func installGogenNS() {
 		mk(wrap3Named("multi-assign", cMultiAssign)),
 		mk(wrap3Named("var-decl", cVarDecl)),
 		mk(wrap3Named("file", cFile)),
+		mk(wrap2Named("references-pkg?", cReferencesPkg)),
+		mk(wrap1Named("file-import-paths", cFileImportPaths)),
+		mk(wrap2Named("add-file-import", cAddFileImport)),
+		mk(wrap1Named("ensure-gen-imports", cEnsureGenImports)),
 		mk(wrap3Named("func-lit", cFuncLit)),
 		mk(wrap3Named("switch-stmt", cSwitchStmt)),
 		mk(wrap3Named("type-switch-stmt", cTypeSwitchStmt)),

@@ -1,0 +1,46 @@
+;; Tests for gogen's non-finite float emission (math.NaN/math.Inf) and the
+;; go-ast read/COW import bindings that wire the `math` import in.
+(ns test.gogen-math-import-test
+  (:require
+   [gogen]
+   [test :refer :all]))
+
+(defn- float-fn [ret-lit]
+  ;; A one-decl File: func F() float64 { return <ret-lit> }
+  (gogen/file "p" []
+    [(gogen/func-decl "F" [] [(gogen/result (gogen/type "float64"))]
+       [(gogen/return-stmt [ret-lit])])]))
+
+(deftest float-lit-nonfinite-test
+  (testing "non-finite floats have no Go literal form -> math.* calls"
+    (is (= "math.NaN()"    (gogen/render (gogen/float-lit (/ 0.0 0.0)))))
+    (is (= "math.Inf(1)"   (gogen/render (gogen/float-lit (/ 1.0 0.0)))))
+    (is (= "math.Inf(-1)"  (gogen/render (gogen/float-lit (/ -1.0 0.0))))))
+  (testing "finite floats unchanged"
+    (is (= "3.14" (gogen/render (gogen/float-lit 3.14))))
+    (is (= "0.5"  (gogen/render (gogen/float-lit 0.5))))))
+
+(deftest references-pkg-test
+  (testing "references-pkg? detects a pkg.X selector, read-only"
+    (let [f (float-fn (gogen/float-lit (/ 0.0 0.0)))]
+      (is (= true  (gogen/references-pkg? f "math")))
+      (is (= false (gogen/references-pkg? f "fmt"))))))
+
+(deftest add-file-import-cow-test
+  (testing "add-file-import is copy-on-write and idempotent"
+    (let [f0 (float-fn (gogen/float-lit (/ 0.0 0.0)))
+          f1 (gogen/add-file-import f0 "math")]
+      (is (= [] (gogen/file-import-paths f0)))        ; original unmutated (COW)
+      (is (= ["math"] (gogen/file-import-paths f1)))
+      (is (= ["math"] (gogen/file-import-paths (gogen/add-file-import f1 "math")))))))
+
+(deftest ensure-gen-imports-test
+  (testing "ensure-gen-imports adds math when a non-finite literal is present"
+    (let [f (gogen/ensure-gen-imports (float-fn (gogen/float-lit (/ 0.0 0.0))))
+          out (gogen/render f)]
+      (is (= ["math"] (gogen/file-import-paths f)))
+      (is (>= (index-of out "import \"math\"") 0))
+      (is (>= (index-of out "math.NaN()") 0))))
+  (testing "ensure-gen-imports is a no-op without a non-finite literal"
+    (let [f (gogen/ensure-gen-imports (float-fn (gogen/float-lit 1.5)))]
+      (is (= [] (gogen/file-import-paths f))))))

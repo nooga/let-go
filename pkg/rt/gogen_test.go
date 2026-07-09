@@ -6,6 +6,7 @@
 package rt
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -79,6 +80,78 @@ func TestFloatLit(t *testing.T) {
 	got := render(t, node)
 	if got != "3.14" {
 		t.Errorf("got %q, want %q", got, "3.14")
+	}
+}
+
+// Non-finite floats have no Go literal form, so float-lit must emit the
+// math-package call (which gogen/file auto-imports).
+func TestFloatLitNonFinite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   float64
+		want string
+	}{
+		{"NaN", math.NaN(), "math.NaN()"},
+		{"+Inf", math.Inf(1), "math.Inf(1)"},
+		{"-Inf", math.Inf(-1), "math.Inf(-1)"},
+	} {
+		got := render(t, must(t)(cFloatLit(vm.Float(tc.in))))
+		if got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestReferencesPkg(t *testing.T) {
+	nan := must(t)(cFloatLit(vm.Float(math.NaN()))) // math.NaN()
+	if got := must(t)(cReferencesPkg(nan, vm.String("math"))); got != vm.TRUE {
+		t.Errorf("references math?: got %v, want TRUE", got)
+	}
+	if got := must(t)(cReferencesPkg(nan, vm.String("fmt"))); got != vm.FALSE {
+		t.Errorf("references fmt?: got %v, want FALSE", got)
+	}
+}
+
+// add-file-import is copy-on-write and idempotent; the input File must not be
+// mutated.
+func TestAddFileImportCOW(t *testing.T) {
+	fmtImp := must(t)(cImportSpec(vm.String("fmt")))
+	nan := must(t)(cFloatLit(vm.Float(math.NaN())))
+	fn := must(t)(cFuncDecl(vm.String("F"), vm.NIL,
+		vm.NewArrayVector([]vm.Value{must(t)(cResult(must(t)(cType(vm.String("float64")))))}),
+		vm.NewArrayVector([]vm.Value{must(t)(cReturn(vm.NewArrayVector([]vm.Value{nan})))})))
+	file := must(t)(cFile(vm.String("p"),
+		vm.NewArrayVector([]vm.Value{fmtImp}),
+		vm.NewArrayVector([]vm.Value{fn})))
+
+	pathsOf := func(f vm.Value) []string {
+		v := must(t)(cFileImportPaths(f)).(vm.ArrayVector)
+		out := make([]string, len(v))
+		for i, s := range v {
+			out[i] = string(s.(vm.String))
+		}
+		return out
+	}
+	if got := strings.Join(pathsOf(file), ","); got != "fmt" {
+		t.Fatalf("initial imports: got %q, want fmt", got)
+	}
+	added := must(t)(cAddFileImport(file, vm.String("math")))
+	if got := strings.Join(pathsOf(added), ","); got != "fmt,math" {
+		t.Errorf("after add: got %q, want fmt,math", got)
+	}
+	// COW: original unchanged.
+	if got := strings.Join(pathsOf(file), ","); got != "fmt" {
+		t.Errorf("COW violated — original mutated to %q", got)
+	}
+	// Idempotent.
+	twice := must(t)(cAddFileImport(added, vm.String("math")))
+	if got := strings.Join(pathsOf(twice), ","); got != "fmt,math" {
+		t.Errorf("idempotent add: got %q, want fmt,math", got)
+	}
+	// Rendered output compiles-shaped: has the import and the call.
+	out := render(t, added)
+	if !strings.Contains(out, `"math"`) || !strings.Contains(out, "math.NaN()") {
+		t.Errorf("rendered output missing math import or call:\n%s", out)
 	}
 }
 

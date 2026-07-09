@@ -3641,7 +3641,10 @@
         ;; carriers) with a nil :decl — skip those when collecting decls.
         decls   (filterv some? (mapv (fn [result] (:decl result)) results))
         import-nodes (mapv import-spec-node imports)]
-    (gogen/file pkg import-nodes decls)))
+    ;; gogen may emit math.NaN()/math.Inf() for non-finite float literals; those
+    ;; need the `math` import, which the caller can't know about. Let gogen wire
+    ;; it in (COW) from the assembled File.
+    (gogen/ensure-gen-imports (gogen/file pkg import-nodes decls))))
 
 (defn lower [f mode]
   (if (nil? f)
