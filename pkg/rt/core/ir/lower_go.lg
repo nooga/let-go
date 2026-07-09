@@ -2618,13 +2618,34 @@
   ;; Lattice for constant-param analysis: :top (no info yet) ⊐ [const-value] ⊐ :bot
   ;; (provably not a single constant). meet moves DOWN only, so the fixpoint is
   ;; monotone and terminates.
+(defn- cp-const=
+  ;; NaN-tolerant equality for lattice values (:top, :bot, or [const-value]).
+  ;; Identical to = EXCEPT that two singleton [float-NaN] values are treated as
+  ;; equal. A float NaN is never = to itself (NaN != NaN), so without this the
+  ;; optimistic const-param fixpoint never converges on a block-param that
+  ;; provably holds a NaN constant: (not= [NaN] [NaN]) stays true forever, so
+  ;; `changed` never clears and const-param-map spins (infinite loop). A NaN
+  ;; float folds in via e.g. (/ 0.0 0.0) once it is typed :float and const-folded.
+  ;;
+  ;; The exception is SCOPED TO :float on purpose: self-inequality is only a
+  ;; sound "these are the same constant" signal for float NaN. Any other value
+  ;; that happened to be non-self-equal must NOT be silently collapsed here.
+  [a b]
+  (or (= a b)
+      (and (vector? a) (vector? b)
+           (= 1 (count a)) (= 1 (count b))
+           (let [x (nth a 0)
+                 y (nth b 0)]
+             (and (float? x) (float? y)
+                  (not (= x x)) (not (= y y)))))))
+
 (defn- cp-meet [a b]
   (cond
     (= a :top) b
     (= b :top) a
     (= a :bot) :bot
     (= b :bot) :bot
-    (= a b)    a       ; [c] meet [c]
+    (cp-const= a b) a  ; [c] meet [c]
     :else      :bot))  ; [c] meet [d], c != d
 
 (defn- cp-value [f known a p]
@@ -2664,7 +2685,7 @@
                              :bot
                              (reduce cp-meet :top
                                      (map (fn [a] (cp-value f @known a p)) args)))]
-                  (when (not= newv (get @known p))
+                  (when (not (cp-const= newv (get @known p)))
                     (swap! known assoc p newv)
                     (reset! changed true)))
                 (recur (inc i))))))
