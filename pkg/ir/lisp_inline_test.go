@@ -7,8 +7,13 @@
 package ir_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/rt"
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 func TestInlineEligibilityUsesMutabilityAndSize(t *testing.T) {
@@ -30,6 +35,76 @@ func TestInlineEligibilityUsesMutabilityAndSize(t *testing.T) {
 		`(defn bad [x] (set! some-v x))`)
 	if got := strings.TrimSpace(lispEval(t, `(ir.passes.inline/inline-eligible? %s)`, mut)); got != "false" {
 		t.Fatalf("var-root-rebinding fn must be ineligible, got %s", got)
+	}
+}
+
+func TestInlineEligibilityRejectsSelfRecursive(t *testing.T) {
+	ensureLoader()
+
+	// A self-recursive defn must be INELIGIBLE for inlining: splicing it into
+	// itself grows IR size every round (max-inline-rounds bounds the round count,
+	// not the size), so it must be rejected up front.
+	//
+	// The self-call `(fact ...)` builds to a :load-var whose aux is a *Var*
+	// object (build.lg), not a symbol. self-recursive? must normalize the aux to
+	// a symbol (mirroring call-head-var) before comparing it to the fn name — a
+	// raw Var-vs-symbol compare never matches, so the fn would be wrongly judged
+	// non-recursive and marked inlineable.
+	selfRec := buildLispIRWith(t,
+		map[string]string{"fact": "(fn* [n] n)"},
+		`(defn fact [n] (if (< n 2) n (* n (fact (dec n)))))`)
+	if got := strings.TrimSpace(lispEval(t, `(ir.passes.inline/inline-eligible? %s)`, selfRec)); got != "false" {
+		t.Fatalf("self-recursive fn must be ineligible for inlining, got %s", got)
+	}
+}
+
+func TestInlineWithLeavesSelfRecursiveCallUnspliced(t *testing.T) {
+	ensureLoader()
+	// End-to-end guard: a caller invoking a self-recursive helper must keep the
+	// call — inline-with only splices inline-eligible? callees, and a
+	// self-recursive fn is ineligible. Before the self-recursive? Var
+	// normalization fix, the helper was wrongly eligible and would splice into
+	// itself, growing IR every round.
+	passVarCounter++
+	nsName := fmt.Sprintf("selfrectest%d", passVarCounter)
+	ns := rt.NS(nsName)
+
+	eval := func(label, expr string) vm.Value {
+		consts := vm.NewConsts()
+		c := compiler.NewCompiler(consts, ns)
+		c.SetSource(label)
+		_, res, err := c.CompileMultiple(strings.NewReader(expr))
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		return res
+	}
+	build := func(label, src string) vm.Value {
+		return eval(label, fmt.Sprintf("(ir.build/build-fn (quote %s))", src))
+	}
+
+	// Pre-define `fact` as a plain fn value so the self-reference in its body
+	// resolves at build time; then build the real self-recursive IR.
+	eval("selfrec-stub", `(def fact (fn* [n] n))`)
+	fact := build("selfrec-callee", `(defn fact [n] (if (< n 2) n (* n (fact (dec n)))))`)
+	ns.Def("*fact*", fact)
+
+	caller := build("selfrec-caller", `(defn caller [m] (fact m))`)
+	ns.Def("*caller*", caller)
+
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, ns)
+	c.SetSource("selfrec-inline-with")
+	inlineExpr := fmt.Sprintf(
+		`(do (ir.passes.inline/inline-with *caller* (hash-map '%s/fact *fact*)) *caller*)`,
+		nsName)
+	_, result, err := c.CompileMultiple(strings.NewReader(inlineExpr))
+	if err != nil {
+		t.Fatalf("inline-with: %v", err)
+	}
+	dump := lispDump(t, result)
+	if !(strings.Contains(dump, "Call") || strings.Contains(dump, "Invoke")) {
+		t.Fatalf("self-recursive callee must NOT be spliced (call should survive):\n%s", dump)
 	}
 }
 

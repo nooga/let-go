@@ -43,13 +43,22 @@
         (ir/blocks f)))
 
 (defn- self-recursive? [f]
-  "True if f calls itself (either directly or via invoke)."
-  (let [nm (ir/fn-name f)]
+  "True if f references its own name via a :load-var (a direct or invoke
+   self-call). A :load-var's aux may be a Var object (a normal defn built via
+   build.lg) or a symbol (lambda-lift / qualified external refs); it MUST be
+   normalized to a symbol before comparison, exactly like call-head-var does.
+   Comparing the raw Var to the name symbol never matches, so a self-recursive
+   defn would be wrongly judged non-recursive and marked inlineable — splicing
+   it into itself then grows IR size every round (max-inline-rounds bounds the
+   round count, not the size). Names are compared unqualified, matching the
+   original intent (nm was normalized with (symbol (str nm)))."
+  (let [nm (name (symbol (str (ir/fn-name f))))]
     (boolean
       (some (fn [bid]
               (some (fn [nid]
-                      (and (#{:call :invoke :load-var} (ir/op nid f))
-                           (= (ir/aux nid f) (symbol (str nm)))))
+                      (and (= :load-var (ir/op nid f))
+                           (when-let [s (try (symbol (ir/aux nid f)) (catch e nil))]
+                             (= nm (name s)))))
                     (ir/block-insts bid f)))
             (ir/blocks f)))))
 
