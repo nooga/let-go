@@ -108,8 +108,11 @@ __LG_HOST_EVAL_BODY__
 // wasmHostEvalSnippet is spliced into wasmMainTmpl at __LG_HOST_EVAL_BODY__ when
 // -w-host-eval is set. After the program's main chunk runs, it installs an
 // internal _lgEval hook — compile + run a string in the loaded image, returning
-// a stringified value (FormatError on failure) — signals readiness, then parks
-// so the runtime stays callable.
+// a stringified value (FormatError on failure) — plus a streamed _lgRequest
+// hook backed by pkg/wasmhost. The JS host wraps _lgRequest as the public
+// LetGoHost.request(req) API and keeps LetGoHost.eval(code) as a compatibility
+// helper. After wiring the hooks, the runtime signals readiness and parks so it
+// stays callable.
 //
 // _lgEval is the internal hook (like _lgKey / _lgEmit); lg-host-core.js wraps it
 // as the public LetGoHost.eval(code), calling it directly on the main thread or
@@ -117,24 +120,47 @@ __LG_HOST_EVAL_BODY__
 // both boot modes. The host installs _lgRuntimeReady; calling it resolves the
 // LetGoHost.eval ready gate (main thread) or posts the ready message (worker),
 // closing the race where a client could call eval before the runtime is up.
-// Structured data returns out-of-band via (js/emit ...).
-const wasmHostEvalSnippet = `	hostEval := js.FuncOf(func(this js.Value, args []js.Value) any {
-		if len(args) < 1 {
-			return "error: eval expects one string argument"
-		}
-		chunk, cerr := ctx.Compile(args[0].String())
+// Structured request responses return as JSON frame strings emitted through the
+// JS _lgRequestFrame callback.
+const wasmHostEvalSnippet = `	host := wasmhost.New(consts)
+	wasmhost.NewResolver(ctx)
+	evalCode := func(code string) (string, error) {
+		chunk, cerr := ctx.Compile(code)
 		if cerr != nil {
-			return vm.FormatError(cerr)
+			return "", cerr
 		}
 		frame := vm.NewFrame(chunk, nil)
 		result, rerr := frame.RunProtected()
 		vm.ReleaseFrame(frame)
 		if rerr != nil {
-			return vm.FormatError(rerr)
+			return "", rerr
 		}
-		return result.String()
+		return result.String(), nil
+	}
+	hostEval := js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) < 1 {
+			return "error: eval expects one string argument"
+		}
+		result, err := evalCode(args[0].String())
+		if err != nil {
+			return vm.FormatError(err)
+		}
+		return result
+	})
+	hostRequestFn := js.FuncOf(func(this js.Value, args []js.Value) any {
+		if len(args) < 1 {
+			return ` + "`" + `{"ok":false,"error":{"code":"bad-request","message":"request expects one JSON string argument"}}` + "`" + `
+		}
+		emitFrame := js.Global().Get("_lgRequestFrame")
+		host.HandleJSON(args[0].String(), func(frame string) {
+			if emitFrame.Type() == js.TypeFunction {
+				emitFrame.Invoke(frame)
+			}
+		})
+		return ` + "`" + `{"ok":true}` + "`" + `
 	})
 	js.Global().Set("_lgEval", hostEval)
+	js.Global().Set("_lgRequest", hostRequestFn)
 	if ready := js.Global().Get("_lgRuntimeReady"); ready.Type() == js.TypeFunction {
 		ready.Invoke()
 	}
@@ -147,7 +173,7 @@ const wasmHostEvalSnippet = `	hostEval := js.FuncOf(func(this js.Value, args []j
 func RenderMain(storeID string, hostEval bool) string {
 	s := strings.ReplaceAll(wasmMainTmpl, "__LG_STORAGE_ID__", strconv.Quote(storeID))
 	if hostEval {
-		s = strings.ReplaceAll(s, "__LG_HOST_EVAL_IMPORTS__", "\t\"syscall/js\"")
+		s = strings.ReplaceAll(s, "__LG_HOST_EVAL_IMPORTS__", "\t\"syscall/js\"\n\t\"github.com/nooga/let-go/pkg/wasmhost\"")
 		s = strings.ReplaceAll(s, "__LG_HOST_EVAL_BODY__", wasmHostEvalSnippet)
 	} else {
 		s = strings.ReplaceAll(s, "__LG_HOST_EVAL_IMPORTS__\n", "")

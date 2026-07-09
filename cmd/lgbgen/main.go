@@ -960,6 +960,9 @@ func runGoTarget(outDir, codeDir string) {
 //     BenchmarkIRCompile (and any -tags gogen_ir test there) dispatches the
 //     overridden native passes instead of bytecode. A _test.go file is only
 //     compiled into the test build, so it never affects `go build`.
+//   - pkg/wasmhost/zz_gogen_ir_wire_test.go → the pkg/wasmhost TEST binary, so
+//     host-eval/inspector probes can assert that required IR passes resolve to
+//     NativeFn under -tags gogen_ir instead of silently falling back to Fn.
 //
 // All carry a "Code generated … DO NOT EDIT." banner and are kept in
 // lockstep with runGoTarget's output; the import set tracks the generated
@@ -991,6 +994,7 @@ func writeGogenWireup(pkgNames []string, codeDir string) {
 		{"lg_gogen_ir.go", "main", "gogen_ir"},
 		{filepath.Join("cmd", "lgbgen", "main_gogen_ir.go"), "main", "bootstrap && gogen_ir"},
 		{filepath.Join("pkg", "ir", "zz_gogen_ir_wire_test.go"), "ir_test", "gogen_ir"},
+		{filepath.Join("pkg", "wasmhost", "zz_gogen_ir_wire_test.go"), "wasmhost", "gogen_ir"},
 	}
 	for _, f := range files {
 		// codeDir defaults to "" (repo root); a caller lowering into a throwaway

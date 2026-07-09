@@ -92,9 +92,10 @@ const (
 	// IR compile benchmark measured under both VM variants, plus the
 	// calibration anchor. This is deliberately tiny (~1 min) — the pkg/vm
 	// micro-benchmark fleet is only run under -full.
-	suitePackage = "github.com/nooga/let-go/test"
-	suiteFilter  = "^BenchmarkClojureTestSuite$"
-	anchorFilter = "^BenchmarkRatchetAnchor$"
+	suitePackage     = "github.com/nooga/let-go/test"
+	suiteFilter      = "^BenchmarkClojureTestSuite$"
+	suiteTotalFilter = "^BenchmarkClojureTestSuiteCompileAndRun$"
+	anchorFilter     = "^BenchmarkRatchetAnchor$"
 
 	// IR-compile throughput: the IR-optimizing compile path (build →
 	// optimize-fn → bytecode) over a fixed corpus, measured under both VM
@@ -716,6 +717,10 @@ func buildJobs(packages, tags string, full, manual bool, filterRE *regexp.Regexp
 		if err != nil {
 			return nil, "", fmt.Errorf("suite filter: %w", err)
 		}
+		suiteTotalRE, err := regexp.Compile(suiteTotalFilter)
+		if err != nil {
+			return nil, "", fmt.Errorf("suite total filter: %w", err)
+		}
 		irCompileRE, err := regexp.Compile(irCompileFilter)
 		if err != nil {
 			return nil, "", fmt.Errorf("ir-compile filter: %w", err)
@@ -729,11 +734,14 @@ func buildJobs(packages, tags string, full, manual bool, filterRE *regexp.Regexp
 			{pkg: suitePackage, tags: "", filter: suiteRE, variant: "bytecode", count: 1},
 			{pkg: suitePackage, tags: "", filter: suiteRE, variant: "ir_bytecode", count: 1, env: []string{"LG_SUITE_IR=1"}},
 			{pkg: suitePackage, tags: "gogen_ir", filter: suiteRE, variant: "aot_native", count: 1, env: []string{"LG_SUITE_IR=1"}},
+			{pkg: suitePackage, tags: "", filter: suiteTotalRE, variant: "total_bytecode", count: 1},
+			{pkg: suitePackage, tags: "", filter: suiteTotalRE, variant: "total_ir_bytecode", count: 1, env: []string{"LG_SUITE_IR=1"}},
+			{pkg: suitePackage, tags: "gogen_ir", filter: suiteTotalRE, variant: "total_aot_native", count: 1, env: []string{"LG_SUITE_IR=1"}},
 			{pkg: irCompilePackage, tags: "", filter: irCompileRE, variant: "bytecode"},
 			{pkg: irCompilePackage, tags: "gogen_ir", filter: irCompileRE, variant: "gogen_ir"},
 			{pkg: initPackage, tags: "", filter: initRE, variant: "bytecode"},
 		}
-		return jobs, "full profile (vm fleet + jank ×3 + ir-compile ×2 + startup-init)", nil
+		return jobs, "full profile (vm fleet + jank exec ×3 + jank total ×3 + ir-compile ×2 + startup-init)", nil
 	default:
 		anchorRE, err := regexp.Compile(anchorFilter)
 		if err != nil {
@@ -742,6 +750,10 @@ func buildJobs(packages, tags string, full, manual bool, filterRE *regexp.Regexp
 		suiteRE, err := regexp.Compile(suiteFilter)
 		if err != nil {
 			return nil, "", fmt.Errorf("suite filter: %w", err)
+		}
+		suiteTotalRE, err := regexp.Compile(suiteTotalFilter)
+		if err != nil {
+			return nil, "", fmt.Errorf("suite total filter: %w", err)
 		}
 		irCompileRE, err := regexp.Compile(irCompileFilter)
 		if err != nil {
@@ -756,11 +768,14 @@ func buildJobs(packages, tags string, full, manual bool, filterRE *regexp.Regexp
 			{pkg: suitePackage, tags: "", filter: suiteRE, variant: "bytecode", count: 1},
 			{pkg: suitePackage, tags: "", filter: suiteRE, variant: "ir_bytecode", count: 1, env: []string{"LG_SUITE_IR=1"}},
 			{pkg: suitePackage, tags: "gogen_ir", filter: suiteRE, variant: "aot_native", count: 1, env: []string{"LG_SUITE_IR=1"}},
+			{pkg: suitePackage, tags: "", filter: suiteTotalRE, variant: "total_bytecode", count: 1},
+			{pkg: suitePackage, tags: "", filter: suiteTotalRE, variant: "total_ir_bytecode", count: 1, env: []string{"LG_SUITE_IR=1"}},
+			{pkg: suitePackage, tags: "gogen_ir", filter: suiteTotalRE, variant: "total_aot_native", count: 1, env: []string{"LG_SUITE_IR=1"}},
 			{pkg: irCompilePackage, tags: "", filter: irCompileRE, variant: "bytecode"},
 			{pkg: irCompilePackage, tags: "gogen_ir", filter: irCompileRE, variant: "gogen_ir"},
 			{pkg: initPackage, tags: "", filter: initRE, variant: "bytecode"},
 		}
-		return jobs, "fast gate (jank ×3 + ir-compile ×2 + startup-init + anchor)", nil
+		return jobs, "fast gate (jank exec ×3 + jank total ×3 + ir-compile ×2 + startup-init + anchor)", nil
 	}
 }
 

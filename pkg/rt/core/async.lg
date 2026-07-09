@@ -1,3 +1,17 @@
 ;; async — channel-based concurrency (like clojure.core.async)
 ;; Most functions are registered natively in Go. This file adds macros.
+;; async is a HYBRID namespace (native defs + this bundled source): its
+;; chunk is executed eagerly at boot (compiler.loadPrecompiledBundle), so
+;; these macros are visible via qualified symbols without a (require ...),
+;; exactly like the native defs.
 (ns async)
+
+(defmacro thread
+  "Executes body in another thread of control, returning immediately.
+   Returns a channel that receives the body's result, then closes
+   (clojure.core.async/thread parity). In let-go every go block is a real
+   goroutine — there is no bounded dispatch pool to protect — so thread is
+   the same machinery as go under the core.async-parity name; blocking ops
+   are safe in either."
+  [& forms]
+  `(go* (fn* [] ~@forms)))

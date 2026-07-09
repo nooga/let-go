@@ -34,11 +34,9 @@ func evalMedley(expr string) (vm.Value, error) {
 // reaches on its :clj / :default reader-conditional branches; without the
 // alias the namespace fails to compile with "Can't resolve ...".
 func TestMedleyCompat(t *testing.T) {
-	// clojure.lang.PersistentQueue marker + EMPTY stub.
-	// The marker resolves so (instance? clojure.lang.PersistentQueue x)
-	// compiles; nothing carries the marker as an ancestor, so it is false
-	// (load-only semantics — queue?/queue are degraded).
-	t.Run("PersistentQueue marker instance? is false", func(t *testing.T) {
+	// clojure.lang.PersistentQueue is now a real FIFO queue (vm.PersistentQueue).
+	// A plain vector is not a queue, so instance? is still false for it.
+	t.Run("PersistentQueue instance? is false for a vector", func(t *testing.T) {
 		v, err := evalMedley(`(instance? clojure.lang.PersistentQueue [1 2])`)
 		assert.NoError(t, err)
 		assert.Equal(t, vm.FALSE, v)
@@ -49,12 +47,19 @@ func TestMedleyCompat(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	// EMPTY is a load-only stub bound to a non-collection marker symbol, so
-	// medley's (queue coll) = (into (queue) coll) must FAIL LOUDLY rather than
-	// silently return a reversed list. Conjing onto it errors at runtime.
-	t.Run("PersistentQueue/EMPTY fails loudly when conj'd", func(t *testing.T) {
-		_, err := evalMedley(`(into clojure.lang.PersistentQueue/EMPTY [1 2 3])`)
-		assert.Error(t, err)
+	// EMPTY is now a real empty queue: medley's (queue coll) = (into (queue) coll)
+	// produces a proper FIFO — peek reads the front, and the value reports the
+	// clojure.lang.PersistentQueue marker so medley's queue? is true.
+	t.Run("PersistentQueue/EMPTY conj builds a real FIFO queue", func(t *testing.T) {
+		v, err := evalMedley(`(peek (into clojure.lang.PersistentQueue/EMPTY [1 2 3]))`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.Int(1), v)
+	})
+
+	t.Run("PersistentQueue instance? is true for a real queue", func(t *testing.T) {
+		v, err := evalMedley(`(instance? clojure.lang.PersistentQueue (into clojure.lang.PersistentQueue/EMPTY [1]))`)
+		assert.NoError(t, err)
+		assert.Equal(t, vm.TRUE, v)
 	})
 
 	// (java.util.ArrayList.) / (java.util.ArrayList. n). medley's

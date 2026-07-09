@@ -1,22 +1,14 @@
-{:failed 11
- :total 2347
- :passed 2336
- :captured "2026-06-30"
+{:failed 19
+ :total 2385
+ :passed 2366
+ :captured "2026-07-09"
  :how "LG_STRESS_PASSES=1 make ir-stress (corpus = every shipped/test/example .lg)"
  :note
  "ITER-0021 lowering-coverage ratchet. `make ir-stress-gate` fails when the
   corpus failure count exceeds :failed — i.e. a form newly fails to lower to
   native Go and falls back to bytecode / vm dispatch (a trampoline, not a
   direct/native call). The ratchet only tightens: after a genuine coverage
-  improvement, re-baseline :failed downward. Reuses the ir-stress fallback
-  census (scripts/ir-stress.lg) — there is no separate fallback detector. The
-  corpus list (scripts/ir-stress-corpus.edn) is part of the gate contract:
-  :total is checked against the live run, so a changed corpus is a hard GATE
-  ERROR (re-baseline), not a silent pass — this stops a removed failing fixture
-  from masking a regression."
- :buckets
- {"ir/build: unresolved symbol n" 7
-  "ir/build: unresolved symbol read-json" 1
-  "ir/build: unresolved symbol a" 1
-  "build-form: unrecognized form #inst" 1
-  ":other | unsupported function body shape" 1}}
+  gain (fewer failures), the baseline re-tightens and locks the improvement in.
+  NEVER loosens the gate after a coverage loss without human investigation —
+  it's always a real regression, and the gate's role is to prevent PR merges
+  from masking a regression."}

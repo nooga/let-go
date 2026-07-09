@@ -499,6 +499,15 @@ func directTypeParents(tag vm.Value) *vm.PersistentSet {
 		result = setConj(result, cljSeqable)
 		result = setConj(result, cljIPersistentCollection)
 		result = setConj(result, cljIReduce)
+	case vm.QueueType:
+		// PersistentQueue is a counted, seqable persistent collection. instance?
+		// against clojure.lang.PersistentQueue itself resolves through QueueType
+		// (bound as the concrete class); these markers cover the interface
+		// ancestors so isa?/ancestors and (instance? clojure.lang.Seqable q) work.
+		result = setConj(result, vm.AnyType)
+		result = setConj(result, cljCounted)
+		result = setConj(result, cljSeqable)
+		result = setConj(result, cljIPersistentCollection)
 	case vm.RangeType, vm.RepeatType, vm.IterateType, vm.TypedArrayType:
 		result = setConj(result, vm.AnyType)
 		result = setConj(result, cljSeqable)

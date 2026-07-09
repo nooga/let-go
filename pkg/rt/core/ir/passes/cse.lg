@@ -27,13 +27,21 @@
   [(ir/op nid f) (vec (ir/refs nid f)) (ir/aux nid f)])
 
 (defn- cse-eligible? [op nid f var-facts]
-  ;; Value-pure ops come from purity/pure-ops (the canonical set, shared
-  ;; with DCE and LICM — no local copy to drift). :call and the
-  ;; terminators (:branch/:branch-if/:return) are excluded by omission.
-  ;; :load-var is eligible only when mutability proves the Var stable.
+  ;; CSE deduplicates any value-pure Inst: those whose evaluation yields
+  ;; the same value every time. This includes:
+  ;; - pure-ops (static set): :const, :add, :lt, etc. (never calls).
+  ;; - :load-var that is stable (mutability-proven not reassigned).
+  ;; - :call to a known-pure builtin via a stable var (pure-call?).
+  ;;
+  ;; CSE never crosses control-flow boundaries, so hoisting a pure call
+  ;; is safe even if the call is speculative (it will execute iff before).
+  ;; Trapping calls (nth/quot) are CSE-eligible per pure-ops membership,
+  ;; matching the existing behavior.
   (or (contains? purity/pure-ops op)
       (and (= op :load-var)
-           (mut/stable-load-var? var-facts (ir/aux nid f)))))
+           (mut/stable-load-var? var-facts (ir/aux nid f)))
+      (and (= op :call)
+           (purity/pure-call? f nid var-facts))))
 
 (defn cse [f]
   "Per-block CSE: hash eligible Insts by (op, refs, aux); subsequent

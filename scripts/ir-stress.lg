@@ -61,6 +61,7 @@
 (require 'ir.lattice)
 (require 'ir.build)
 (require 'ir.lower-go)
+(require 'ir.coverage)
 
 (defn- usage-and-exit [msg]
   (println (str "ir-stress: " msg))
@@ -244,66 +245,6 @@
         n (min 60 (count m))]
     (subs m 0 n)))
 
-(defn classify-error [err-str]
-  "Classify error into a bucket keyword.
-
-   IMPORTANT: build.lg wraps unresolved-symbol errors as
-   'ir/build: unresolved symbol X' — including special-form heads like
-   set!/var/def/trace when build-list doesn't recognize them and they
-   fall through to build-call → build-symbol. So we must check the
-   special-form patterns BEFORE the generic 'unresolved symbol' regex,
-   otherwise set!/var/def/trace failures get pooled into a single
-   :unresolved-symbol bucket and the real cause is hidden.
-
-   For genuinely-unresolved symbols (not special forms), bucket by the
-   symbol name itself so we see one row per missing dep instead of
-   one giant pile."
-  (let [;; Scrub process-specific noise before truncating. Pointer addresses
-        ;; (e.g. `<fn defn 0x2a9abf0be030>`) inside error strings push the
-        ;; subs 0 100 cutoff to a different character on each run, so two
-        ;; engines emit different `:other | ...` buckets even when the
-        ;; semantic content is identical. Normalize the address to a
-        ;; fixed marker so truncation lands at a stable spot.
-        raw (str err-str)
-        m   (clojure.string/replace raw #"0x[0-9a-fA-F]{6,}" "0xXXX")
-        truncated (if (> (count m) 100) (str (subs m 0 100) "...") m)]
-    (cond
-      ;; Special-form heads first — these surface as 'unresolved symbol X'
-      ;; because build-list has no case for them and falls into build-call.
-      (re-find #"unresolved symbol set!" m)    :missing-form/set!
-      (re-find #"unresolved symbol var$" m)    :missing-form/var
-      (re-find #"unresolved symbol var " m)    :missing-form/var
-      (re-find #"unresolved symbol def$" m)    :missing-form/def
-      (re-find #"unresolved symbol def " m)    :missing-form/def
-      (re-find #"unresolved symbol try" m)     :missing-form/try
-      (re-find #"unresolved symbol trace" m)   :missing-form/trace
-
-      ;; Genuinely-unresolved symbol: bucket by the symbol name.
-      (re-find #"unresolved symbol" m)
-      (let [match (re-find #"unresolved symbol ([^\s,)]+)" m)]
-        (if match
-          (keyword "unresolved" (second match))
-          :unresolved-symbol))
-      (re-find #"Can't resolve" m)
-      (let [match (re-find #"Can't resolve ([^\s,)]+)" m)]
-        (if match
-          (keyword "unresolved" (second match))
-          :unresolved-symbol))
-
-      ;; Destructuring issues
-      (re-find #"destructur" m)  :destructure-rejection
-
-      ;; Build-form errors with structural cause.
-      (re-find #"no :term" m)              :validate/no-term
-      (re-find #"cross-block ref" m)       :validate/cross-block-ref
-      (re-find #"is not a valid i" m)      :gogen/bad-identifier
-      (re-find #"nth index must be an integer" m) :gogen/nth-non-int
-      (re-find #"nested closure" m)        :lower-go/nested-closure
-      (re-find #"unrecognized form" m)     :build/unrecognized-form
-
-      ;; Everything else: store the actual error message
-      :else (str ":other | " truncated))))
-
 (def per-fixture-timeout-ms
   (let [v (System/getenv "LG_STRESS_TIMEOUT_MS")]
     (if (and v (not= v "")) (parse-int v) 5000)))
@@ -402,14 +343,14 @@
           ;; buckets as build-side throws (e.g. :gogen/bad-identifier rather
           ;; than a long unique 'fallback | ...' string per defn).
           (and (map? result) (= :fallback (:status result)))
-          (classify-error (or (:reason result) "no-reason"))
+          (ir.coverage/classify-error (or (:reason result) "no-reason"))
           ;; Multi-arity template: succeed if every arity lowered
           (and (map? result) (= :multi-fn-template (:kind result)))
           (if (every? (fn [e] (some? (:fn e))) (:fns result))
             :ok
             :multi-arity-partial-fallback)
           :else :ok)))
-    (catch e (classify-error e))))
+    (catch e (ir.coverage/classify-error e))))
 
 (defn trace-one-defn [form]
   "Drill into one defn: time each pipeline stage and capture the per-pass
@@ -554,7 +495,7 @@
                          (binding [*ir-compile* true]
                            (eval form))
                          :ok
-                         (catch e (classify-error e)))))
+                         (catch e (ir.coverage/classify-error e)))))
         t0 (System/nanoTime)
         result (try-with-timeout thunk per-fixture-timeout-ms)
         t1 (System/nanoTime)

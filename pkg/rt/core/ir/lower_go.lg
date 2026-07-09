@@ -4,8 +4,8 @@
 ;;   - single optimized function
 ;;   - strict mode: unsupported ops/shapes throw
 ;;   - bridge mode: unsupported functions fall back at whole-function granularity
-;;   - supported ops: const, load-arg, block-arg, add/sub/mul, lt/lte/gt/gte/eq,
-;;     inc/dec, return, branch, branch-if, tail-call
+;;   - supported ops: const, load-arg, block-arg, add/sub/mul, bitwise int ops,
+;;     lt/lte/gt/gte/eq, inc/dec, return, branch, branch-if, tail-call
 ;;   - control flow lowers from block-parameter SSA to mutable locals plus labels/gotos
 
 (ns ir.lower-go
@@ -14,6 +14,7 @@
    [graph]
    [ir.data]
    [ir.ops :as ops]
+   [ir.passes.liveness :as liveness]
    [ir.passes.mutability :as mut]
    [ir.structurize :as st]))
 
@@ -21,6 +22,13 @@
   {:add  "+"
    :sub  "-"
    :mul  "*"
+   :bit-and "&"
+   :bit-or  "|"
+   :bit-xor "^"
+   :bit-and-not "&^"
+   :bit-shift-left "<<"
+   :bit-shift-right ">>"
+   :unsigned-bit-shift-right ">>"
    :quot "/"
    :div  "/"
    :lt   "<"
@@ -140,6 +148,25 @@
       (gogen/field-sel (gogen/ident "rt") "InternVar")
       [(gogen/string-lit vns) (gogen/string-lit vn)])))
 
+(declare *native-imports-used*)
+
+(defn- raw-inf-nan-expr [v]
+  ;; ##Inf/##-Inf/##NaN have no Go literal form (gogen/float-lit would
+  ;; render a bare `Inf`/`NaN` identifier); reconstruct the raw float64
+  ;; via math.Inf/math.NaN and record the math import like any other
+  ;; native package use. NaN detection must be (not (= v v)): not= is
+  ;; not (complement =) for NaN operands (both return false).
+  (when *native-imports-used*
+    (swap! *native-imports-used* conj "math"))
+  (if (not (= v v))
+    (gogen/call (gogen/field-sel (gogen/ident "math") "NaN") [])
+    (gogen/call (gogen/field-sel (gogen/ident "math") "Inf")
+                [(gogen/int-lit (if (= v ##Inf) 1 -1))])))
+
+(defn- non-finite? [v]
+  (and (float? v)
+       (or (= v ##Inf) (= v ##-Inf) (not (= v v)))))
+
 (defn- const-expr [aux t]
   (cond
     ;; var? MUST come first: a *vm.Var's Type() delegates to its VALUE's type,
@@ -154,6 +181,9 @@
     (char? aux)       (gogen/call (gogen/field-sel (gogen/ident "vm") "Char")
                                   [(gogen/char-lit aux)])
     (keyword? aux)    nil
+    ;; Non-finite floats can't be float literals; emit the raw float64
+    ;; math reconstruction in typed contexts.
+    (non-finite? aux) (raw-inf-nan-expr aux)
     (or (= t :float) (= t [:const :float 0.0])) (gogen/float-lit aux)
     ;; int? not integer?: a BigInt has no native Go int form (see boxed-value-expr).
     ;; It is typed :any (vm.Value) by classify-const so it routes through the boxed
@@ -247,6 +277,10 @@
     (= spec "vm.Char")  (gogen/type-assert raw (gogen/type "vm.Char"))
     :else               raw))
 
+(defn- inf-nan-expr [v]
+  ;; Boxed variant of raw-inf-nan-expr: vm.Float(math.Inf(1)) etc.
+  (vm-call "Float" [(raw-inf-nan-expr v)]))
+
 (defn- boxed-value-expr [v]
   (cond
     ;; var? MUST come first: a *vm.Var's Type() delegates to its VALUE's type,
@@ -264,6 +298,8 @@
     ;; runtime-constructor path below, like the other non-fixnum numerics.
     (int? v)        (vm-call "Int" [(gogen/int-lit v)])
     (bigint? v)     (vm-call "MustBigIntFromString" [(gogen/string-lit (str v))])  ; (str 12N) -> "12"
+    ;; Non-finite floats can't be float literals; math-reconstruct them.
+    (non-finite? v) (inf-nan-expr v)
     (float? v)      (vm-call "Float" [(gogen/float-lit v)])
     (string? v)     (vm-call "String" [(gogen/string-lit v)])
     (char? v)       (vm-call "Char" [(gogen/char-lit v)])
@@ -438,6 +474,7 @@
       (= op :try)   ; try-assign-stmts materialises the result into a local
       (= op :inc)
       (= op :dec)
+      (= op :bit-not)
       (= op :dot)   ; (. obj field) materialised into a local: vN := obj.field
       (= op :def)   ; def-assign-stmts materialises the interned var into a local
       (contains? binary-op op)))
@@ -497,7 +534,7 @@
          (pos? (count (nth uses nid))))))
 
 ;; live? — is nid's VALUE actually read by emitted Go? Reads the backward
-;; read-set computed by live-nids and cached on f by lower-body. The IR `uses`
+;; read-set computed by liveness/reachable-nids and cached on f by lower-body. The IR `uses`
 ;; table over-reports: build threads some argument subexpressions twice, leaving
 ;; dead duplicate insts with non-empty (stale) use lists. live? is the truth for
 ;; lowering decisions (declare/assign/route-to-_). Falls back to used? when the
@@ -597,7 +634,7 @@
           (when memo (swap! memo assoc nid r))
           r)))))
 
-(defn- closure-info
+(defn closure-info
   "Resolve the closure a value refers to: {:template <aux> :captures [nid …]}
    or nil. Walks make-closure/push-closed and follows block-parameter lineage
    so closures threaded through a loop header still resolve (captures on
@@ -756,7 +793,9 @@
             s0           (go-type-spec (ir/type-of (nth refs 0) f))
             s1           (go-type-spec (ir/type-of (nth refs 1) f))
             order-op?    (#{"<" "<=" ">" ">="} op-str)
-            arith-op?    (#{"+" "-" "*" "/"} op-str)
+            arith-op?    (#{"+" "-" "*" "/" "&" "|" "^" "&^" "<<" ">>"} op-str)
+            bitwise-op?  (contains? #{:bit-and :bit-or :bit-xor :bit-and-not
+                                      :bit-shift-left :bit-shift-right :unsigned-bit-shift-right} op)
             any-vm?      (or (= "vm.Value" s0) (= "vm.Value" s1))
             ;; quot ("/") lowers to native Go `/` ONLY for int/int — Go integer
             ;; division truncates toward zero exactly like clojure.core/quot.
@@ -776,13 +815,16 @@
                               (not (and (= "int" s0) (= "int" s1))))
             div-rt?      (and (= op :div)
                               (not (and (= "float64" s0) (= "float64" s1))))
+            bitwise-rt?  (and bitwise-op?
+                              (or (not (= "int" s0))
+                                  (not (= "int" s1))))
             ;; rt.LtValue/AddValue/... polymorphic helpers — used when any
             ;; operand is vm.Value (so we don't bail the whole defn), or when
             ;; quot/div need the runtime divide (above). Each helper mirrors the
             ;; bytecode VM's OP_<X>: vm.Int fast path then vm.Num<X> fallback for
             ;; ordering; always-delegate to vm.Num<X> for arithmetic (keeps
             ;; overflow / BigInt / Ratio promotion semantics in one place).
-            vm-helper    (when (or any-vm? quot-rt? div-rt?)
+            vm-helper    (when (or any-vm? quot-rt? div-rt? bitwise-rt?)
                            (cond
                              (= op-str "<")  "LtValue"
                              (= op-str "<=") "LeValue"
@@ -791,6 +833,13 @@
                              (= op-str "+")  "AddValue"
                              (= op-str "-")  "SubValue"
                              (= op-str "*")  "MulValue"
+                             (= op :bit-and) "BitAndValue"
+                             (= op :bit-or)  "BitOrValue"
+                             (= op :bit-xor) "BitXorValue"
+                             (= op :bit-and-not) "BitAndNotValue"
+                             (= op :bit-shift-left) "BitShiftLeftValue"
+                             (= op :bit-shift-right) "BitShiftRightValue"
+                             (= op :unsigned-bit-shift-right) "UnsignedBitShiftRightValue"
                              (= op :quot)    "QuotValue"
                              (= op :div)     "DivValue"
                              ;; = on a vm.Value operand: Clojure value-equality,
@@ -831,14 +880,21 @@
 
           ;; Native Go binary path: both operands typed compatibly.
           (and lhs-expr rhs-expr)
-          (let [raw-binary (gogen/binary op-str lhs-expr rhs-expr)]
+          (let [raw-binary (cond
+                             (= op :unsigned-bit-shift-right)
+                             (gogen/call (gogen/ident "int")
+                               [(gogen/binary ">>"
+                                  (gogen/call (gogen/ident "uint") [lhs-expr])
+                                  (gogen/call (gogen/ident "uint") [rhs-expr]))])
+                             :else
+                             (gogen/binary op-str lhs-expr rhs-expr))]
             (if (and (comparison-op? op-str) (= "vm.Value" result-spec))
               (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [raw-binary])
               raw-binary))
 
           :else nil))
 
-      (or (= op :inc) (= op :dec))
+      (or (= op :inc) (= op :dec) (= op :bit-not))
       (let [lhs-id   (nth refs 0)
             lhs-spec (go-type-spec (ir/type-of lhs-id f))]
         (if (= "vm.Value" lhs-spec)
@@ -846,11 +902,19 @@
             (when lhs
               (gogen/call
                 (gogen/field-sel (gogen/ident "rt")
-                  (if (= op :inc) "AddValue" "SubValue"))
-                [lhs (vm-call "Int" [(gogen/int-lit 1)])])))
+                  (cond
+                    (= op :inc) "AddValue"
+                    (= op :dec) "SubValue"
+                    :else "BitNotValue"))
+                (if (= op :bit-not)
+                  [lhs]
+                  [lhs (vm-call "Int" [(gogen/int-lit 1)])]))))
           (let [lhs (value-expr f closed-exprs lhs-id)]
             (when lhs
-              (gogen/binary (if (= op :inc) "+" "-") lhs (gogen/int-lit 1))))))
+              (cond
+                (= op :inc) (gogen/binary "+" lhs (gogen/int-lit 1))
+                (= op :dec) (gogen/binary "-" lhs (gogen/int-lit 1))
+                :else       (gogen/unary "^" lhs))))))
 
       ;; (. obj field) -> Go struct field selector obj.field. The field name
       ;; is munged (go-name) to the same valid Go identifier the struct decl
@@ -927,7 +991,7 @@
 (defn- pure-inline-op? [op]
   ;; Pure, value-producing ops whose RHS may be inlined into an edge copy.
   ;; Excludes :call (effectful / error-propagating) and :block-arg.
-  (or (= op :inc) (= op :dec) (contains? binary-op op)))
+  (or (= op :inc) (= op :dec) (= op :bit-not) (contains? binary-op op)))
 
 (defn- n-uses [f nid]
   (let [u (ir/uses f)]
@@ -2141,7 +2205,7 @@
           (when rhs
             [(gogen/assign "=" (value-ident f nid) rhs)]))
         [])
-      (or (= op :inc) (= op :dec))
+      (or (= op :inc) (= op :dec) (= op :bit-not))
       (if (live? f nid)
         (let [rhs (inst-rhs f closed-exprs nid)]
           (when rhs
@@ -2287,11 +2351,10 @@
                                       (not= op :eq)
                                       (or (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))
                                           (= "vm.Value" (go-type-spec (ir/type-of (nth refs 1) f)))))
-                                 ;; inc/dec over vm.Value also delegates to
-                                 ;; rt.AddValue/SubValue so unknown numeric
-                                 ;; values do not emit invalid native Go
-                                 ;; arithmetic.
-                                 (and (or (= op :inc) (= op :dec))
+                                 ;; inc/dec/bit-not over vm.Value also delegate
+                                 ;; to rt helpers so unknown values do not emit
+                                 ;; invalid native Go arithmetic/bitwise ops.
+                                 (and (or (= op :inc) (= op :dec) (= op :bit-not))
                                       (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))))))
                          (ir/block-insts (first blocks) f))
                    true
@@ -2558,48 +2621,6 @@
             {}
             nids)))
 
-(defn- live-nids [f]
-  ;; Backward read-set: the nids whose VALUE is actually read by emitted Go.
-  ;; Roots: refs of value-reading terminators (:return / :branch-if cond /
-  ;; :tail-call args) and refs of every :call inst (calls always emit for their
-  ;; side effects, so their callee+args are read). Propagation to a fixpoint: a
-  ;; live instruction's refs are read; a live block-param's incoming branch-args
-  ;; are read. Dead duplicate subexpressions — which build threads twice and the
-  ;; ir/uses table still marks "used" — are reachable from nothing and stay out,
-  ;; so lowering routes their side-effecting calls to `_` and never declares the
-  ;; pure ones.
-  (let [live (atom #{})
-        seed (fn [nid] (swap! live conj nid))]
-    (doseq [bid (ir/blocks f)]
-      (let [term (ir/block-term bid f)]
-        (when term
-          (let [op (ir/op term f)]
-            (when (or (= op :return) (= op :branch-if) (= op :tail-call))
-              (doseq [r (ir/refs term f)] (seed r))))))
-      (doseq [nid (ir/block-insts bid f)]
-        (when (= :call (ir/op nid f))
-          (doseq [r (ir/refs nid f)] (seed r)))))
-    (loop []
-      (let [before (count @live)]
-        (doseq [bid (ir/blocks f)]
-          (doseq [nid (ir/block-insts bid f)]
-            (when (contains? @live nid)
-              (doseq [r (ir/refs nid f)] (seed r))))
-          (let [term (ir/block-term bid f)]
-            (when term
-              (doseq [bt (oos-branch-targets term f)]
-                (let [tgt    (ir/branch-target-target bt)
-                      params (ir/block-params tgt f)
-                      args   (ir/branch-target-args bt)]
-                  (loop [i 0]
-                    (when (< i (count params))
-                      (when (and (< i (count args))
-                                 (contains? @live (nth params i)))
-                        (seed (nth args i)))
-                      (recur (inc i)))))))))
-        (when (> (count @live) before) (recur))))
-    @live))
-
 (defn- oos-param-incoming-args [f b i]
   ;; Every argument feeding param index i of block b, across predecessor edges.
   (let [acc (atom [])]
@@ -2625,13 +2646,34 @@
   ;; Lattice for constant-param analysis: :top (no info yet) ⊐ [const-value] ⊐ :bot
   ;; (provably not a single constant). meet moves DOWN only, so the fixpoint is
   ;; monotone and terminates.
+(defn- cp-const=
+  ;; NaN-tolerant equality for lattice values (:top, :bot, or [const-value]).
+  ;; Identical to = EXCEPT that two singleton [float-NaN] values are treated as
+  ;; equal. A float NaN is never = to itself (NaN != NaN), so without this the
+  ;; optimistic const-param fixpoint never converges on a block-param that
+  ;; provably holds a NaN constant: (not= [NaN] [NaN]) stays true forever, so
+  ;; `changed` never clears and const-param-map spins (infinite loop). A NaN
+  ;; float folds in via e.g. (/ 0.0 0.0) once it is typed :float and const-folded.
+  ;;
+  ;; The exception is SCOPED TO :float on purpose: self-inequality is only a
+  ;; sound "these are the same constant" signal for float NaN. Any other value
+  ;; that happened to be non-self-equal must NOT be silently collapsed here.
+  [a b]
+  (or (= a b)
+      (and (vector? a) (vector? b)
+           (= 1 (count a)) (= 1 (count b))
+           (let [x (nth a 0)
+                 y (nth b 0)]
+             (and (float? x) (float? y)
+                  (not (= x x)) (not (= y y)))))))
+
 (defn- cp-meet [a b]
   (cond
     (= a :top) b
     (= b :top) a
     (= a :bot) :bot
     (= b :bot) :bot
-    (= a b)    a       ; [c] meet [c]
+    (cp-const= a b) a  ; [c] meet [c]
     :else      :bot))  ; [c] meet [d], c != d
 
 (defn- cp-value [f known a p]
@@ -2671,7 +2713,7 @@
                              :bot
                              (reduce cp-meet :top
                                      (map (fn [a] (cp-value f @known a p)) args)))]
-                  (when (not= newv (get @known p))
+                  (when (not (cp-const= newv (get @known p)))
                     (swap! known assoc p newv)
                     (reset! changed true)))
                 (recur (inc i))))))
@@ -2864,7 +2906,7 @@
    (swap! f assoc :const-params (const-param-map f))
    (swap! f assoc :gensym-renames (gensym-renumber-map f))
    (swap! f assoc :coalesce (coalesce-map f))
-   (swap! f assoc :live (live-nids f))
+   (swap! f assoc :live (liveness/reachable-nids f))
    ;; Single-use computed edge-args to inline (needs :live + uses cache above).
    (swap! f assoc :inline-args (compute-inline-args f))
    (binding [*call-err-used* (atom false)

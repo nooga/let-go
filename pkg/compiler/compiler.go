@@ -655,6 +655,20 @@ func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
 			return vm.OP_SUB
 		case "*":
 			return vm.OP_MUL
+		case "bit-and":
+			return vm.OP_BIT_AND
+		case "bit-or":
+			return vm.OP_BIT_OR
+		case "bit-xor":
+			return vm.OP_BIT_XOR
+		case "bit-and-not":
+			return vm.OP_BIT_AND_NOT
+		case "bit-shift-left":
+			return vm.OP_BIT_SHIFT_LEFT
+		case "bit-shift-right":
+			return vm.OP_BIT_SHIFT_RIGHT
+		case "unsigned-bit-shift-right":
+			return vm.OP_UNSIGNED_BIT_SHIFT_RIGHT
 		case "<":
 			return vm.OP_LT
 		case "<=":
@@ -672,6 +686,8 @@ func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
 			return vm.OP_INC
 		case "dec":
 			return vm.OP_DEC
+		case "bit-not":
+			return vm.OP_BIT_NOT
 		}
 	}
 	return 0
@@ -859,22 +875,23 @@ func tryCompiler(c *Context, form vm.Value) error {
 						return NewCompileError("catch requires a binding symbol")
 					}
 					// Clojure-compatible form: (catch ClassSym bind-sym body...)
-					// vs let-go's bare (catch bind-sym body...).
-					// Disambiguate by counting forms: Clojure requires a body,
-					// so the class form has 3+ tokens after `catch`. If we see
-					// at least 3 tokens and the first two are both symbols,
-					// drop the leading class symbol (catch is catch-all here).
+					// vs let-go's bare (catch bind-sym body...). A binding is
+					// always a simple unqualified symbol, so a qualified/dotted
+					// first token can only be a class name — that disambiguates
+					// even with an empty catch body, e.g.
+					// (catch java.io.FileNotFoundException _). For a simple class
+					// name, fall back to the token count: the Clojure form needs
+					// class + binding + body (3+ tokens, first two symbols).
 					restCount := 0
 					for s := rest; s != nil; s = s.Next() {
 						restCount++
 					}
-					if restCount >= 3 {
-						first := rest.First()
-						afterRest := rest.Next()
-						if _, isSym := first.(vm.Symbol); isSym {
-							if _, secondIsSym := afterRest.First().(vm.Symbol); secondIsSym {
-								rest = afterRest
-							}
+					if restCount >= 2 {
+						firstSym, firstIsSym := rest.First().(vm.Symbol)
+						_, secondIsSym := rest.Next().First().(vm.Symbol)
+						qualified := firstIsSym && strings.ContainsAny(string(firstSym), "./")
+						if firstIsSym && secondIsSym && (qualified || restCount >= 3) {
+							rest = rest.Next() // drop the leading class symbol
 						}
 					}
 					bindSym, ok := rest.First().(vm.Symbol)

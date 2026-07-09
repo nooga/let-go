@@ -31,7 +31,20 @@
 (deftest condp-test
   (testing "condp"
     (is (= :one (condp = 1 1 :one 2 :two :default)))
-    (is (= :default (condp = 3 1 :one 2 :two :default)))))
+    (is (= :default (condp = 3 1 :one 2 :two :default))))
+
+  (testing "condp calls pred as (pred test-val expr), like Clojure"
+    ;; Asymmetric predicates expose the argument order.
+    (is (= :num (condp (fn [f x] (f x)) 5
+                  number? :num
+                  :other)))
+    (is (= :str (condp (fn [f x] (f x)) "s"
+                  number? :num
+                  string? :str
+                  :other)))
+    (is (= :small (condp > 3
+                    10 :small
+                    :big)))))
 
 (deftest case-test
   (testing "case"

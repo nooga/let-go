@@ -122,6 +122,18 @@ func (m *MultiFn) Methods() *PersistentMap {
 	return m.methods
 }
 
+// GetMethod returns the method fn that dispatch value dv would select — the
+// exact match, else the default method, else NIL. Mirrors invokeIn's method
+// selection (let-go multimethods dispatch on exact value + default, not the
+// isa? hierarchy). Backs the core get-method fn.
+func (m *MultiFn) GetMethod(dv Value) Value {
+	method := m.methods.ValueAt(dv)
+	if method == NIL {
+		method = m.methods.ValueAt(m.defaultVal)
+	}
+	return method
+}
+
 // FreezeNative marks this MultiFn as the captured baseline for generated
 // native dispatch arms. Done once, in place, at namespace-load completion
 // (rt.ApplyGoOverrides) — the var still points at this exact pointer, and any

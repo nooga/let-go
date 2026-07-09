@@ -2,6 +2,7 @@ package test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,9 +28,70 @@ func TestMain(m *testing.M) {
 		panic("build lg: " + err.Error() + "\n" + string(out))
 	}
 	repoRoot, _ = filepath.Abs("..")
+	patched := applyJankMapOrderPatch()
 	code := m.Run()
+	if patched {
+		// Leave the submodule worktree as we found it — the patch is a
+		// test-time overlay, not a checkout the run should persist.
+		revertJankMapOrderPatch()
+	}
 	os.RemoveAll(tmp)
 	os.Exit(code)
+}
+
+// applyJankMapOrderPatch overlays :lg reader-conditional branches onto the
+// vendored jank suite (test/clojure-test-suite) so let-go's legitimately
+// unordered maps don't fail the cons/cycle/mapcat fixtures, which baked in the
+// JVM's accidental HashMap iteration order via their :default branch. The
+// pinned submodule (jank-lang@41290a61) predates these branches; they were
+// since accepted upstream (clojure-test-suite#927), but bumping the pin pulls
+// ~140 files of unrelated suite drift, so until a deliberate suite upgrade we
+// apply the small delta (test/patches/lg-map-order.patch) at test time and
+// revert it in TestMain so the worktree is left clean.
+//
+// Returns true only when THIS call applied the patch (so TestMain knows to
+// revert it). Idempotent and best-effort: returns false if the submodule is
+// absent, the patch is already applied, or upstream has since moved the
+// fixtures.
+func applyJankMapOrderPatch() bool {
+	const sub = "clojure-test-suite"
+	if _, err := os.Stat(filepath.Join(sub, "test", "clojure", "core_test", "cons.cljc")); err != nil {
+		return false // submodule not initialized; TestClojureTestSuite skips itself
+	}
+	patch, err := filepath.Abs(filepath.Join("patches", "lg-map-order.patch"))
+	if err != nil {
+		return false
+	}
+	// Already applied? A reverse-check succeeds only when the :lg branches
+	// are present, so treat that as "nothing to do" — and don't revert state
+	// we didn't create.
+	if exec.Command("git", "-C", sub, "apply", "--reverse", "--check", patch).Run() == nil {
+		return false
+	}
+	// Applies cleanly against the current (base) fixtures?
+	if err := exec.Command("git", "-C", sub, "apply", "--check", patch).Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "note: jank map-order patch does not apply cleanly (upstream moved?); running unpatched")
+		return false
+	}
+	if out, err := exec.Command("git", "-C", sub, "apply", patch).CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "note: failed to apply jank map-order patch: %v\n%s", err, out)
+		return false
+	}
+	return true
+}
+
+// revertJankMapOrderPatch undoes applyJankMapOrderPatch's overlay so a test run
+// never leaves the vendored submodule with a dirty worktree. Best-effort: a
+// failure here is a note, not a test failure.
+func revertJankMapOrderPatch() {
+	const sub = "clojure-test-suite"
+	patch, err := filepath.Abs(filepath.Join("patches", "lg-map-order.patch"))
+	if err != nil {
+		return
+	}
+	if out, err := exec.Command("git", "-C", sub, "apply", "--reverse", patch).CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "note: failed to revert jank map-order patch: %v\n%s", err, out)
+	}
 }
 
 // runRatchet runs scripts/fanout-ratchet.lg with args from repo root; returns

@@ -1,0 +1,11 @@
+;; Pre-require `gogen` so the wasm bundler compiles it into program.lgb. At
+;; runtime (browser wasm) there is no filesystem, so the resolver's source-load
+;; path (os.Stat) panics; a namespace only loads if already bundled/embedded.
+;; `gogen` is source-only (pkg/rt/gogen/gogen.lg, not in the core bundle), so
+;; without this its require panics and the "Lowered Go" pane fails. Its
+;; Go-native fns (gogen/render, …) live in pkg/rt/gogen.go (package rt) and are
+;; already linked. ir.* are embedded-as-source (loaded on demand) — deliberately
+;; NOT bundled here (see #356), so we don't shadow them with precompiled copies.
+(require 'gogen)
+
+(println "let-go browser inspector runtime ready")

@@ -159,18 +159,29 @@ func TestSuiteJobsPinCountToOne(t *testing.T) {
 			t.Fatalf("buildJobs(full=%v): %v", full, err)
 		}
 		suite := map[string]captureJob{}
+		total := map[string]captureJob{}
 		for _, j := range jobs {
 			if j.pkg == suitePackage {
 				if j.count != 1 {
 					t.Errorf("full=%v: suite job [%s] count = %d, want 1", full, j.variant, j.count)
 				}
-				suite[j.variant] = j
+				switch j.filter.String() {
+				case suiteFilter:
+					suite[j.variant] = j
+				case suiteTotalFilter:
+					total[j.variant] = j
+				default:
+					t.Errorf("full=%v: unexpected suite filter %q for variant %q", full, j.filter.String(), j.variant)
+				}
 			} else if j.count != 0 {
 				t.Errorf("full=%v: non-suite job %s [%s] count = %d, want 0 (use CLI default)", full, j.pkg, j.variant, j.count)
 			}
 		}
 		if len(suite) != 3 {
 			t.Fatalf("full=%v: expected 3 suite variants (bytecode, ir_bytecode, aot_native), got %d: %v", full, len(suite), keysOf(suite))
+		}
+		if len(total) != 3 {
+			t.Fatalf("full=%v: expected 3 total-suite variants (total_bytecode, total_ir_bytecode, total_aot_native), got %d: %v", full, len(total), keysOf(total))
 		}
 		// bytecode: no IR toggle, untagged.
 		if j := suite["bytecode"]; len(j.env) != 0 || j.tags != "" {
@@ -183,6 +194,15 @@ func TestSuiteJobsPinCountToOne(t *testing.T) {
 		// aot_native: IR on AND gogen_ir tag (passes dispatch to native Go).
 		if j := suite["aot_native"]; !hasEnv(j.env, "LG_SUITE_IR=1") || j.tags != "gogen_ir" {
 			t.Errorf("full=%v: aot_native want LG_SUITE_IR=1 + -tags gogen_ir, got env=%v tags=%q", full, j.env, j.tags)
+		}
+		if j := total["total_bytecode"]; len(j.env) != 0 || j.tags != "" {
+			t.Errorf("full=%v: total_bytecode want no env/tags, got env=%v tags=%q", full, j.env, j.tags)
+		}
+		if j := total["total_ir_bytecode"]; !hasEnv(j.env, "LG_SUITE_IR=1") || j.tags != "" {
+			t.Errorf("full=%v: total_ir_bytecode want LG_SUITE_IR=1 + untagged, got env=%v tags=%q", full, j.env, j.tags)
+		}
+		if j := total["total_aot_native"]; !hasEnv(j.env, "LG_SUITE_IR=1") || j.tags != "gogen_ir" {
+			t.Errorf("full=%v: total_aot_native want LG_SUITE_IR=1 + -tags gogen_ir, got env=%v tags=%q", full, j.env, j.tags)
 		}
 	}
 }

@@ -1,0 +1,43 @@
+;; Regression test for non-finite float literal lowering.
+;;
+;; Root cause: const emission rendered every float with
+;; gogen/float-lit, but ##Inf/##-Inf/##NaN have no Go literal form, so
+;; the emitted source contained a bare `Inf`/`NaN` identifier and the
+;; generated package failed to compile ("undefined: Inf"). The fix
+;; reconstructs non-finite floats via math.Inf(1)/math.Inf(-1)/
+;; math.NaN() in both the boxed and raw typed-const paths, recording
+;; the math import. Detection uses (not (= v v)) for NaN because not=
+;; is not (complement =) for NaN operands.
+
+(ns test.gogen-inf-literal-test
+  (:require
+   [ir.passes.pipeline :as pipeline]
+   [clojure.string :as str]
+   [test :refer :all]))
+
+(defn- lower-inf-src []
+  (create-ns 'inflit)
+  (binding [pipeline/*target* :go]
+    (pipeline/lower-ns-to-go "inflit" 'inflit
+      ;; fn names must not contain Inf/NaN: the no-bare-identifier
+      ;; check below scans the emitted Go, where they would appear
+      ;; as (legitimate) parts of the Go func names.
+      '[(defn top-val [] ##NaN)
+        (defn call-hi [f] (f 1 ##Inf))
+        (defn call-lo [f] (f 1 ##-Inf))])))
+
+(deftest non-finite-float-consts-lower-via-math
+  (let [src (lower-inf-src)]
+    (testing "##Inf / ##-Inf / ##NaN reconstruct through math calls"
+      (is (string? src))
+      (is (str/includes? src "math.Inf(1)"))
+      (is (str/includes? src "math.Inf(-1)"))
+      (is (str/includes? src "math.NaN()"))
+      (is (str/includes? src "\"math\"")))
+
+    (testing "no bare Inf/NaN identifier survives in emitted Go"
+      (let [scrubbed (-> src
+                         (str/replace "math.Inf" "")
+                         (str/replace "math.NaN" ""))]
+        (is (not (str/includes? scrubbed "Inf")))
+        (is (not (str/includes? scrubbed "NaN")))))))

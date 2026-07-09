@@ -134,8 +134,8 @@
     (is (= :default (nth (mapcat (fn [x] [x]) []) 0 :default)))
     (is (= :caught (try (nth (mapcat (fn [x] [x]) []) 0) (catch e :caught)))))
 
-  (testing "nth on seqable non-indexed collection"
-    (is (= [:b 2] (nth (array-map :a 1 :b 2 :c 3) 1))))
+  (testing "nth on seqable non-indexed collection (maps are unordered)"
+    (is (contains? #{[:a 1] [:b 2] [:c 3]} (vec (nth (array-map :a 1 :b 2 :c 3) 1)))))
 
   (testing "nth on string"
     (is (= \e (nth "hello" 1)))))

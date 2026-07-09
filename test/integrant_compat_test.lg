@@ -1,0 +1,36 @@
+;; Runtime behavior of the fns integrant needs beyond bare resolution:
+;; find-var (default init-key resolves a component fn from a qualified keyword)
+;; and get-method (can-expand-key? / expand).
+(ns test.integrant-compat-test
+  (:require [test :refer :all]))
+
+(def my-var 42)
+(defn my-fn [x] (* x 2))
+
+(deftest find-var-resolves-vars
+  (testing "find-var returns the interned var; var-get reads its value"
+    (is (= 42 (var-get (find-var 'test.integrant-compat-test/my-var))))
+    (is (= 20 ((var-get (find-var 'test.integrant-compat-test/my-fn)) 10))))
+  (testing "find-var returns nil for an unknown name or namespace"
+    (is (nil? (find-var 'test.integrant-compat-test/nope)))
+    (is (nil? (find-var 'no.such.namespace/x)))))
+
+(defmulti mm identity)
+(defmethod mm :a [_] :method-a)
+(defmethod mm :default [_] :fallback)
+
+(deftest get-method-lookup
+  (testing "get-method returns the method registered for a dispatch value"
+    (is (some? (get-method mm :a)))
+    (is (= :method-a ((get-method mm :a) :a))))
+  (testing "get-method falls back to the :default method"
+    (is (some? (get-method mm :absent)))
+    (is (= :fallback ((get-method mm :absent) :absent)))))
+
+(defmulti no-default identity)
+(defmethod no-default :x [_] :x-method)
+
+(deftest get-method-no-default
+  (testing "get-method returns nil when nothing matches and there is no default"
+    (is (nil? (get-method no-default :y)))
+    (is (some? (get-method no-default :x)))))

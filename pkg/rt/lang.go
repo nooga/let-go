@@ -402,6 +402,19 @@ func AllNSes() map[string]*vm.Namespace {
 	return result
 }
 
+// RemoveNS drops a namespace from the registry so a subsequent require/def
+// materializes a FRESH Namespace (and fresh Vars). Test-isolation helper:
+// vars are interned process-globally, so anything attached to them (e.g.
+// watches added by a test) survives re-running a suite in the same process
+// unless its namespaces are removed between runs.
+func RemoveNS(name string) {
+	canonical := resolveNSAlias(name)
+	nsMu.Lock()
+	delete(nsRegistry, canonical)
+	delete(nsNeedsLoad, canonical)
+	nsMu.Unlock()
+}
+
 func FuzzyNamespacedSymbolLookup(currentNS *vm.Namespace, s vm.Symbol) []vm.Symbol {
 	sns := s.Namespace()
 	var ns *vm.Namespace
@@ -470,6 +483,15 @@ func MarkNSNeedsLoad(name string) {
 	nsMu.Lock()
 	defer nsMu.Unlock()
 	nsNeedsLoad[name] = true
+}
+
+// ClearNSNeedsLoad removes the needs-load flag — used after a namespace's
+// precompiled chunk has been executed eagerly (hybrid native+bundled
+// namespaces; see compiler.loadPrecompiledBundle).
+func ClearNSNeedsLoad(name string) {
+	nsMu.Lock()
+	defer nsMu.Unlock()
+	delete(nsNeedsLoad, name)
 }
 
 // LookupNS returns a namespace if it exists, nil otherwise. Does not create.
@@ -1158,7 +1180,7 @@ func isSequentialType(v vm.Value) bool {
 		return false
 	}
 	switch v.(type) {
-	case vm.ArrayVector, vm.PersistentVector, *vm.PersistentVector, *vm.List, *vm.Cons, *vm.LazySeq:
+	case vm.ArrayVector, vm.PersistentVector, *vm.PersistentVector, *vm.List, *vm.Cons, *vm.LazySeq, *vm.PersistentQueue:
 		return true
 	case *vm.PersistentMap, vm.Map, *vm.PersistentSet, vm.Set, *vm.SortedMap, *vm.SortedSet:
 		return false
@@ -2481,21 +2503,64 @@ func installLangNS() {
 		return b.Chunk().(vm.Value), nil
 	})
 
+	// rangeInt coerces a range bound: Int passes through; anything
+	// else is a graceful error (a raw .(vm.Int) assertion panics).
+	rangeInt := func(v vm.Value, what string) (vm.Int, error) {
+		if n, ok := v.(vm.Int); ok {
+			return n, nil
+		}
+		return 0, fmt.Errorf("range %s must be an integer, got %s",
+			what, v.Type().Name())
+	}
 	rangef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			// Infinite range: (range) -> lazy seq 0, 1, 2, ...
 			return vm.NewInfiniteRange(0, 1), nil
 		}
-		if len(vs) == 1 {
-			return vm.NewRange(0, vs[0].(vm.Int), 1), nil
+		if len(vs) > 3 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		if len(vs) == 2 {
-			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), 1), nil
+		var start, end, step vm.Int
+		step = 1
+		var err error
+		var endArg vm.Value
+		switch len(vs) {
+		case 1:
+			endArg = vs[0]
+		case 2:
+			endArg = vs[1]
+			if start, err = rangeInt(vs[0], "start"); err != nil {
+				return vm.NIL, err
+			}
+		case 3:
+			endArg = vs[1]
+			if start, err = rangeInt(vs[0], "start"); err != nil {
+				return vm.NIL, err
+			}
+			if step, err = rangeInt(vs[2], "step"); err != nil {
+				return vm.NIL, err
+			}
 		}
-		if len(vs) == 3 {
-			return vm.NewRange(vs[0].(vm.Int), vs[1].(vm.Int), vs[2].(vm.Int)), nil
+		// A float end still yields integers, like the JVM: infinite
+		// for ##Inf toward the step, else every int short of the end
+		// ((range 2 5.29) => 2 3 4 5).
+		if f, ok := endArg.(vm.Float); ok {
+			if math.IsInf(float64(f), 0) {
+				if (f > 0 && step > 0) || (f < 0 && step < 0) {
+					return vm.NewInfiniteRange(int(start), int(step)), nil
+				}
+				return vm.NewRange(0, 0, 1), nil
+			}
+			if step > 0 {
+				endArg = vm.Int(math.Ceil(float64(f)))
+			} else {
+				endArg = vm.Int(math.Floor(float64(f)))
+			}
 		}
-		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		if end, err = rangeInt(endArg, "end"); err != nil {
+			return vm.NIL, err
+		}
+		return vm.NewRange(start, end, step), nil
 	})
 
 	keyword, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -2751,6 +2816,13 @@ func installLangNS() {
 		if vs[0] == vm.NIL {
 			return vm.NIL, nil
 		}
+		// ArrayVector fast path: index the flat slice directly, no seq alloc.
+		if av, ok := vs[0].(vm.ArrayVector); ok {
+			if len(av) == 0 {
+				return vm.NIL, nil
+			}
+			return av[0], nil
+		}
 		if seq, ok := vs[0].(vm.Seq); ok {
 			return seq.First(), nil
 		}
@@ -2770,6 +2842,13 @@ func installLangNS() {
 		}
 		if vs[0] == vm.NIL {
 			return vm.NIL, nil
+		}
+		// ArrayVector fast path: index the flat slice directly, no seq alloc.
+		if av, ok := vs[0].(vm.ArrayVector); ok {
+			if len(av) < 2 {
+				return vm.NIL, nil
+			}
+			return av[1], nil
 		}
 		seq, err := seqOf(vs[0])
 		if err != nil {
@@ -2792,6 +2871,14 @@ func installLangNS() {
 		if vs[0] == vm.NIL {
 			return vm.NIL, nil
 		}
+		// ArrayVector fast path: step in with one alloc instead of Seq()+Next().
+		if av, ok := vs[0].(vm.ArrayVector); ok {
+			n := av.SeqFrom(1)
+			if n == nil {
+				return vm.NIL, nil
+			}
+			return n, nil
+		}
 		seq, err := seqOf(vs[0])
 		if err != nil {
 			return vm.NIL, fmt.Errorf("next expected Seq")
@@ -2812,6 +2899,14 @@ func installLangNS() {
 		}
 		if vs[0] == vm.NIL {
 			return vm.EmptyList, nil
+		}
+		// ArrayVector fast path: step in with one alloc instead of Seq()+More().
+		if av, ok := vs[0].(vm.ArrayVector); ok {
+			n := av.SeqFrom(1)
+			if n == nil {
+				return vm.EmptyList, nil
+			}
+			return n, nil
 		}
 		s, err := seqOf(vs[0])
 		if err != nil {
@@ -3121,6 +3216,32 @@ func installLangNS() {
 				}
 			}
 		}
+		// ArrayVector fast path: flat slice with O(1) indexing — reduce by
+		// direct index with zero seq/chunk allocation instead of via seqOf.
+		if av, ok := vs[sidx].(vm.ArrayVector); ok {
+			var acc vm.Value
+			i := 0
+			if len(vs) == 3 {
+				acc = vs[1]
+			} else {
+				acc = av[0]
+				i = 1
+			}
+			fargs := []vm.Value{nil, nil}
+			for ; i < len(av); i++ {
+				fargs[0] = acc
+				fargs[1] = av[i]
+				res, err := ec.Invoke(mfn, fargs)
+				if err != nil {
+					return vm.NIL, err
+				}
+				if r, ok := res.(*vm.Reduced); ok {
+					return r.Deref(), nil
+				}
+				acc = res
+			}
+			return acc, nil
+		}
 		seq, err := seqOf(vs[sidx])
 		if err != nil {
 			return vm.NIL, fmt.Errorf("reduce expected Seq")
@@ -3145,6 +3266,10 @@ func installLangNS() {
 			acc = seq.First()
 			seq = seq.Next()
 		}
+		// Reused two-arg buffer (same pattern as `some`'s fargs): avoids a
+		// fresh []vm.Value per element — the single largest allocation site
+		// in seq-based reduce.
+		fargs := []vm.Value{nil, nil}
 		for seq != nil {
 			// Chunked fast path: when the source exposes a chunk, walk via
 			// Nth in a tight inner loop and advance one chunk at a time. This
@@ -3154,7 +3279,9 @@ func installLangNS() {
 				c := cs.ChunkedFirst()
 				n := c.ChunkCount()
 				for i := 0; i < n; i++ {
-					acc, err = ec.Invoke(mfn, []vm.Value{acc, c.Nth(i)})
+					fargs[0] = acc
+					fargs[1] = c.Nth(i)
+					acc, err = ec.Invoke(mfn, fargs)
 					if err != nil {
 						return vm.NIL, err
 					}
@@ -3165,7 +3292,9 @@ func installLangNS() {
 				seq = cs.ChunkedNext()
 				continue
 			}
-			acc, err = ec.Invoke(mfn, []vm.Value{acc, seq.First()})
+			fargs[0] = acc
+			fargs[1] = seq.First()
+			acc, err = ec.Invoke(mfn, fargs)
 			if err != nil {
 				return vm.NIL, err
 			}
@@ -3453,9 +3582,23 @@ func installLangNS() {
 	})
 
 	concat, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		var ret []vm.Value
+		// Pre-size for the ArrayVector args (flat slices with known length)
+		// so their direct appends below don't regrow ret.
+		presize := 0
+		for i := range vs {
+			if av, ok := vs[i].(vm.ArrayVector); ok {
+				presize += len(av)
+			}
+		}
+		ret := make([]vm.Value, 0, presize)
 		for i := range vs {
 			if vs[i] == vm.NIL {
+				continue
+			}
+			// ArrayVector fast path: bulk-append the flat slice — no seq,
+			// no chunk, no per-element successor allocation.
+			if av, ok := vs[i].(vm.ArrayVector); ok {
+				ret = append(ret, av...)
 				continue
 			}
 			vseq, err := seqOf(vs[i])
@@ -3753,16 +3896,20 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf(">! expected Chan")
 		}
-		// Select on the registry context so a put parked on a full/unread
+		// putWithPolicy (async.go) honors dropping/sliding buffers, returns
+		// false on a closed channel (core.async parity — no panic), and
+		// selects on the registry context so a put parked on a full/unread
 		// channel — e.g. inside a (go ...) block — is released by a
 		// CancelAll/Drain on shutdown instead of leaking the goroutine.
 		// Cancellation returns nil (the put did not complete).
-		select {
-		case ch <- vs[1]:
-			return vm.TRUE, nil
-		case <-ec.Context().Done():
+		accepted, cancelled := putWithPolicy(ec.Context(), ch, vs[1])
+		if cancelled {
 			return vm.NIL, nil
 		}
+		if accepted {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
 	})
 
 	changet := vm.NewCtxNativeFn("<!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
@@ -3898,10 +4045,14 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("sort expected a Collection")
 			}
 		}
-		temp := make([]vm.Value, coll.RawCount())
+		// Stop at the end of the seq as well as at RawCount: a
+		// String's RawCount is bytes but its Seq yields runes, so
+		// multibyte content overran the seq (nil deref).
+		n := coll.RawCount()
+		temp := make([]vm.Value, 0, n)
 		seq := coll.(vm.Sequable).Seq()
-		for i := range temp {
-			temp[i] = seq.First()
+		for i := 0; i < n && !vm.SeqIsEmpty(seq); i++ {
+			temp = append(temp, seq.First())
 			seq = seq.Next()
 		}
 		var err error
@@ -4245,6 +4396,8 @@ func installLangNS() {
 				return vm.NIL, nil
 			}
 			return v.First(), nil
+		case *vm.PersistentQueue:
+			return v.Peek(), nil
 		default:
 			return vm.NIL, fmt.Errorf("peek not supported on %s", vs[0].Type())
 		}
@@ -4284,6 +4437,8 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("can't pop empty seq")
 			}
 			return s.More(), nil
+		case *vm.PersistentQueue:
+			return vs[0].(*vm.PersistentQueue).Pop(), nil
 		default:
 			return vm.NIL, fmt.Errorf("pop expected Seq or Vec")
 		}
@@ -4654,16 +4809,13 @@ func installLangNS() {
 		case *vm.PersistentMap, vm.Map, *vm.SortedMap:
 			return vm.NIL, fmt.Errorf("shuffle not supported on map")
 		}
-		// Collect into slice
+		// Collect into slice. forceSeq realizes lazy seqs first, so
+		// an empty lazy seq yields [] rather than [nil].
 		s, err := seqOf(vs[0])
 		if err != nil {
 			return vm.NIL, err
 		}
-		var vals []vm.Value
-		for s != nil {
-			vals = append(vals, s.First())
-			s = s.Next()
-		}
+		vals := appendSeqValues(nil, forceSeq(s))
 		// Fisher-Yates shuffle
 		rngShuffle(len(vals), func(i, j int) {
 			vals[i], vals[j] = vals[j], vals[i]
@@ -5208,13 +5360,23 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("re-seq expected String")
 		}
-		all := re.FindAllString(string(s), -1)
+		// Like Clojure (and re-find above): a groupless pattern yields
+		// the match string, capture groups yield [full g1 g2 ...].
+		all := re.FindAllStringSubmatch(string(s), -1)
 		if all == nil {
 			return vm.EmptyList, nil
 		}
 		vals := make([]vm.Value, len(all))
-		for i, m := range all {
-			vals[i] = vm.String(m)
+		for i, matches := range all {
+			if len(matches) == 1 {
+				vals[i] = vm.String(matches[0])
+				continue
+			}
+			groups := make(vm.ArrayVector, len(matches))
+			for j, m := range matches {
+				groups[j] = vm.String(m)
+			}
+			vals[i] = groups
 		}
 		return vm.ListType.Box(vals)
 	})
@@ -5381,6 +5543,50 @@ func installLangNS() {
 			kvs = append(kvs, sym, v)
 		}
 		return vm.NewMap(kvs), nil
+	})
+
+	// find-var: (find-var 'ns/name) -> the interned var in that namespace, or
+	// nil if the namespace or the name is not found. integrant's default
+	// init-key resolves a component fn from a qualified keyword via
+	// (some-> (find-var sym) var-get).
+	findVar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		sym, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("find-var expected a symbol")
+		}
+		nsV, nameV := sym.Namespaced()
+		nsSym, ok1 := nsV.(vm.Symbol)
+		nameSym, ok2 := nameV.(vm.Symbol)
+		if !ok1 || !ok2 {
+			return vm.NIL, fmt.Errorf("find-var expects a fully-qualified symbol: %s", sym)
+		}
+		nsMu.RLock()
+		targetNS := nsRegistry[resolveNSAlias(string(nsSym))]
+		nsMu.RUnlock()
+		if targetNS == nil {
+			return vm.NIL, nil
+		}
+		if v := targetNS.LookupLocal(nameSym); v != nil {
+			return v, nil
+		}
+		return vm.NIL, nil
+	})
+
+	// get-method: (get-method multifn dispatch-val) -> the method fn that value
+	// would select (exact match, else the default method), or nil. integrant's
+	// can-expand-key? uses it to test whether a key has an expand-key method.
+	getMethod, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		mf, ok := vs[0].(*vm.MultiFn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("get-method expected a multimethod")
+		}
+		return mf.GetMethod(vs[1]), nil
 	})
 
 	// lazy-seq* creates a LazySeq from a thunk function
@@ -6605,6 +6811,8 @@ func installLangNS() {
 	ns.Def("the-ns", theNs)
 	ns.Def("ns-name", nsName)
 	ns.Def("ns-publics", nsPublics)
+	ns.Def("find-var", findVar)
+	ns.Def("get-method", getMethod)
 
 	ns.Def("peek", peek)
 	ns.Def("pop", pop)
@@ -7510,7 +7718,7 @@ func installLangNS() {
 	ns.Def("base64url-encode", b64urlencodef)
 
 	// base64url-decode — (base64url-decode s) → byte-array. Inverse of
-	// base64url-encode; decodes the URL-safe, unpadded alphabet only.
+	// base64url-encode; decodes URL-safe base64 with or without padding.
 	b64urldecodef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -7519,7 +7727,7 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("base64url-decode expects String")
 		}
-		data, derr := base64.RawURLEncoding.DecodeString(string(s))
+		data, derr := decodeBase64URL(string(s))
 		if derr != nil {
 			return vm.NIL, fmt.Errorf("base64url-decode: %w", derr)
 		}
@@ -8048,6 +8256,10 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("clojure.lang.Atom", vm.AtomType)
 	ns.Def("clojure.lang.PersistentHashSet", vm.SetType)
 	ns.Def("clojure.lang.IPending", vm.PromiseType)
+	// A real queue type: (type q) and (instance? clojure.lang.PersistentQueue q)
+	// both resolve through QueueType, like the other concrete clojure.lang.*
+	// classes above. Interface-marker ancestry is wired in directTypeParents.
+	ns.Def("clojure.lang.PersistentQueue", vm.QueueType)
 
 	for _, name := range []string{
 		"clojure.lang.Associative",
@@ -8057,10 +8269,6 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		"clojure.lang.IPersistentCollection",
 		"clojure.lang.IReduce",
 		"clojure.lang.IEditableCollection",
-		// Bare in (instance? clojure.lang.PersistentQueue x).
-		// Leaf marker only — no type reports it as an ancestor, so queue? is
-		// always false (load-only; real PersistentQueue is out of scope).
-		"clojure.lang.PersistentQueue",
 	} {
 		ns.Def(name, vm.Symbol(name))
 	}
@@ -8122,14 +8330,11 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("->clojure.lang.MapEntry", create)
 	ns.Def("clojure.lang.MapEntry.", create)
 
-	// clojure.lang.PersistentQueue/EMPTY. let-go has no
-	// real PersistentQueue, so this is a load-only stub: it must merely resolve
-	// as a var at compile time (medley derefs it only at runtime inside `queue`).
-	// Bind it to a non-collection marker symbol rather than vm.EmptyList — that
-	// way medley's `(queue coll)` = `(into (queue) coll)` FAILS LOUDLY with
-	// "conj expected Collection" instead of silently returning a reversed list
-	// (a plausible-but-wrong FIFO). queue?/queue stay degraded by design.
-	DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.Symbol("clojure.lang.PersistentQueue/EMPTY"))
+	// clojure.lang.PersistentQueue/EMPTY — the canonical empty queue. let-go now
+	// has a real vm.PersistentQueue, so (into EMPTY coll) / conj / peek / pop
+	// behave as a proper FIFO (unblocks weavejester/dependency's topo-sort and
+	// medley's queue/queue?).
+	DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.EmptyPersistentQueue)
 
 	// (java.util.ArrayList.) / (java.util.ArrayList. n).
 	// medley's partition-between / sliding build a mutable ArrayList on their

@@ -50,16 +50,24 @@ const (
 
 	// Specialized arithmetic/comparison opcodes (binary, stack: [a b] -> [result])
 	// These inline the common int64 fast path and fall back to generic NumXxx for other types.
-	OP_ADD  // + (2 args)
-	OP_SUB  // - (2 args)
-	OP_MUL  // * (2 args)
-	OP_LT   // < (2 args)
-	OP_LTE  // <= (2 args)
-	OP_GT   // > (2 args)
-	OP_GTE  // >= (2 args)
-	OP_EQ   // = (2 args)
-	OP_INC  // inc (1 arg)
-	OP_DEC  // dec (1 arg)
+	OP_ADD // + (2 args)
+	OP_SUB // - (2 args)
+	OP_MUL // * (2 args)
+	OP_BIT_AND
+	OP_BIT_OR
+	OP_BIT_XOR
+	OP_BIT_AND_NOT
+	OP_BIT_SHIFT_LEFT
+	OP_BIT_SHIFT_RIGHT
+	OP_UNSIGNED_BIT_SHIFT_RIGHT
+	OP_LT  // < (2 args)
+	OP_LTE // <= (2 args)
+	OP_GT  // > (2 args)
+	OP_GTE // >= (2 args)
+	OP_EQ  // = (2 args)
+	OP_INC // inc (1 arg)
+	OP_DEC // dec (1 arg)
+	OP_BIT_NOT
 	OP_QUOT // quot — integer quotient, truncated toward zero (2 args)
 	OP_DIV  // / — true division; int/int yields a Ratio (or Int when exact), any float yields Float (2 args)
 )
@@ -96,6 +104,13 @@ func OpcodeToString(op int32) string {
 		"ADD",
 		"SUB",
 		"MUL",
+		"BIT_AND",
+		"BIT_OR",
+		"BIT_XOR",
+		"BIT_AND_NOT",
+		"BIT_SHIFT_LEFT",
+		"BIT_SHIFT_RIGHT",
+		"UNSIGNED_BIT_SHIFT_RIGHT",
 		"LT",
 		"LTE",
 		"GT",
@@ -103,6 +118,7 @@ func OpcodeToString(op int32) string {
 		"EQ",
 		"INC",
 		"DEC",
+		"BIT_NOT",
 		"QUOT",
 		"DIV",
 	}
@@ -220,6 +236,7 @@ func (c *CodeChunk) AppendChunk(o *CodeChunk) {
 	}
 	// Merge source maps with IP offset
 	if o.sourceMap != nil {
+		o.sourceMap.materialize() // realize a lazy map before reading its entries
 		if c.sourceMap == nil {
 			c.sourceMap = NewSourceMap()
 		}
@@ -262,6 +279,13 @@ func (c *CodeChunk) ReserveSourceMap(n int) {
 	next := NewSourceMapWithCapacity(n)
 	next.entries = append(next.entries, c.sourceMap.entries...)
 	c.sourceMap = next
+}
+
+// SetSourceMap replaces the chunk's source map. Used by the decoder to inject a
+// lazily-materialized map (whose entries are decoded on first Lookup) so bundle
+// load skips per-chunk source-map allocation for the common no-error path.
+func (c *CodeChunk) SetSourceMap(sm *SourceMap) {
+	c.sourceMap = sm
 }
 
 // LookupSource finds the source location for a given instruction pointer.
@@ -691,9 +715,12 @@ func (f *Frame) Run() (Value, error) {
 					ff := fn.(*Func)
 					// Package variadic args for direct frame reuse
 					if ff.isVariadric {
+						if len(a) < ff.arity-1 {
+							return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", ff, ff.arity-1, len(a)))
+						}
 						sargs := a[0 : ff.arity-1]
 						rest := a[ff.arity-1:]
-						restlist, boxErr := ListType.Box(rest)
+						restlist, boxErr := boxRest(rest)
 						if boxErr != nil {
 							return NIL, boxErr
 						}
@@ -749,6 +776,17 @@ func (f *Frame) Run() (Value, error) {
 					return out, nil
 				} else {
 					ff := fn.(*Func)
+					// Package the (nil) rest binding for variadic
+					// functions, exactly like the arity > 0 path above;
+					// without it the reused frame runs LOAD_ARG against
+					// zero args.
+					var a []Value
+					if ff.isVariadric {
+						if ff.arity > 1 {
+							return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got 0", ff, ff.arity-1))
+						}
+						a = []Value{NIL}
+					}
 					f.code = ff.chunk
 					f.consts = f.code.consts
 					f.constsc = f.code.consts.count()
@@ -757,8 +795,8 @@ func (f *Frame) Run() (Value, error) {
 					if len(f.stack) < f.code.maxStack {
 						f.stack = make([]Value, f.code.maxStack)
 					}
-					f.argc = 0
-					f.args = nil
+					f.args = a
+					f.argc = len(a)
 					continue
 				}
 			}
@@ -1088,6 +1126,153 @@ func (f *Frame) Run() (Value, error) {
 			f.sp--
 			f.ip++
 
+		case OP_BIT_AND:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			ai, ok := a.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-and expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-and expected Int")
+			}
+			bi, ok := b.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-and expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-and expected Int")
+			}
+			f.stack[f.sp-2] = MakeInt(int(ai) & int(bi))
+			f.sp--
+			f.ip++
+
+		case OP_BIT_OR:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			ai, ok := a.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-or expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-or expected Int")
+			}
+			bi, ok := b.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-or expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-or expected Int")
+			}
+			f.stack[f.sp-2] = MakeInt(int(ai) | int(bi))
+			f.sp--
+			f.ip++
+
+		case OP_BIT_XOR:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			ai, ok := a.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-xor expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-xor expected Int")
+			}
+			bi, ok := b.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-xor expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-xor expected Int")
+			}
+			f.stack[f.sp-2] = MakeInt(int(ai) ^ int(bi))
+			f.sp--
+			f.ip++
+
+		case OP_BIT_AND_NOT:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			ai, ok := a.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-and-not expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-and-not expected Int")
+			}
+			bi, ok := b.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-and-not expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-and-not expected Int")
+			}
+			f.stack[f.sp-2] = MakeInt(int(ai) &^ int(bi))
+			f.sp--
+			f.ip++
+
+		case OP_BIT_SHIFT_LEFT:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			ai, ok := a.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-shift-left expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-shift-left expected Int")
+			}
+			bi, ok := b.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-shift-left expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-shift-left expected Int")
+			}
+			f.stack[f.sp-2] = MakeInt(int(ai) << uint(bi))
+			f.sp--
+			f.ip++
+
+		case OP_BIT_SHIFT_RIGHT:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			ai, ok := a.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-shift-right expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-shift-right expected Int")
+			}
+			bi, ok := b.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-shift-right expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-shift-right expected Int")
+			}
+			f.stack[f.sp-2] = MakeInt(int(ai) >> uint(bi))
+			f.sp--
+			f.ip++
+
+		case OP_UNSIGNED_BIT_SHIFT_RIGHT:
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			ai, ok := a.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("unsigned-bit-shift-right expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
+			}
+			bi, ok := b.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("unsigned-bit-shift-right expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
+			}
+			f.stack[f.sp-2] = MakeInt(int(uint(ai) >> uint(bi)))
+			f.sp--
+			f.ip++
+
 		case OP_QUOT:
 			b := f.stack[f.sp-1]
 			a := f.stack[f.sp-2]
@@ -1134,6 +1319,18 @@ func (f *Frame) Run() (Value, error) {
 			}
 			f.stack[f.sp-2] = r
 			f.sp--
+			f.ip++
+
+		case OP_BIT_NOT:
+			a := f.stack[f.sp-1]
+			ai, ok := a.(Int)
+			if !ok {
+				if f.handleError(fmt.Errorf("bit-not expected Int")) {
+					continue
+				}
+				return NIL, fmt.Errorf("bit-not expected Int")
+			}
+			f.stack[f.sp-1] = MakeInt(^int(ai))
 			f.ip++
 
 		case OP_LT:
