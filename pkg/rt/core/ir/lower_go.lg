@@ -148,6 +148,25 @@
       (gogen/field-sel (gogen/ident "rt") "InternVar")
       [(gogen/string-lit vns) (gogen/string-lit vn)])))
 
+(declare *native-imports-used*)
+
+(defn- raw-inf-nan-expr [v]
+  ;; ##Inf/##-Inf/##NaN have no Go literal form (gogen/float-lit would
+  ;; render a bare `Inf`/`NaN` identifier); reconstruct the raw float64
+  ;; via math.Inf/math.NaN and record the math import like any other
+  ;; native package use. NaN detection must be (not (= v v)): not= is
+  ;; not (complement =) for NaN operands (both return false).
+  (when *native-imports-used*
+    (swap! *native-imports-used* conj "math"))
+  (if (not (= v v))
+    (gogen/call (gogen/field-sel (gogen/ident "math") "NaN") [])
+    (gogen/call (gogen/field-sel (gogen/ident "math") "Inf")
+                [(gogen/int-lit (if (= v ##Inf) 1 -1))])))
+
+(defn- non-finite? [v]
+  (and (float? v)
+       (or (= v ##Inf) (= v ##-Inf) (not (= v v)))))
+
 (defn- const-expr [aux t]
   (cond
     ;; var? MUST come first: a *vm.Var's Type() delegates to its VALUE's type,
@@ -162,6 +181,9 @@
     (char? aux)       (gogen/call (gogen/field-sel (gogen/ident "vm") "Char")
                                   [(gogen/char-lit aux)])
     (keyword? aux)    nil
+    ;; Non-finite floats can't be float literals; emit the raw float64
+    ;; math reconstruction in typed contexts.
+    (non-finite? aux) (raw-inf-nan-expr aux)
     (or (= t :float) (= t [:const :float 0.0])) (gogen/float-lit aux)
     ;; int? not integer?: a BigInt has no native Go int form (see boxed-value-expr).
     ;; It is typed :any (vm.Value) by classify-const so it routes through the boxed
@@ -255,6 +277,10 @@
     (= spec "vm.Char")  (gogen/type-assert raw (gogen/type "vm.Char"))
     :else               raw))
 
+(defn- inf-nan-expr [v]
+  ;; Boxed variant of raw-inf-nan-expr: vm.Float(math.Inf(1)) etc.
+  (vm-call "Float" [(raw-inf-nan-expr v)]))
+
 (defn- boxed-value-expr [v]
   (cond
     ;; var? MUST come first: a *vm.Var's Type() delegates to its VALUE's type,
@@ -272,6 +298,8 @@
     ;; runtime-constructor path below, like the other non-fixnum numerics.
     (int? v)        (vm-call "Int" [(gogen/int-lit v)])
     (bigint? v)     (vm-call "MustBigIntFromString" [(gogen/string-lit (str v))])  ; (str 12N) -> "12"
+    ;; Non-finite floats can't be float literals; math-reconstruct them.
+    (non-finite? v) (inf-nan-expr v)
     (float? v)      (vm-call "Float" [(gogen/float-lit v)])
     (string? v)     (vm-call "String" [(gogen/string-lit v)])
     (char? v)       (vm-call "Char" [(gogen/char-lit v)])
