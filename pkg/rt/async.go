@@ -697,6 +697,12 @@ func installAsyncNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("offer! expected Chan")
 		}
+		if vs[1] == vm.NIL {
+			// core.async: nil values are not allowed on channels (same as >!).
+			// Keeping the channel nil-free is what makes poll!'s value-or-nil
+			// contract unambiguous.
+			return vm.NIL, fmt.Errorf("offer! can't put nil on chan")
+		}
 		switch policyOf(ch) {
 		case bufDropping, bufSliding:
 			if accepted, _ := putWithPolicy(context.Background(), ch, vs[1]); accepted {

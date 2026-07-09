@@ -142,6 +142,14 @@
       ;; when the value can't be delivered immediately.
       (is (nil? (async/offer! c :val))))))
 
+(deftest offer-rejects-nil
+  (testing "offer! rejects nil — core.async: nil values are not allowed"
+    ;; let-go has no thrown? — use try/catch directly.
+    (let [c (async/chan 1)]
+      (is (= :threw (try (async/offer! c nil) :no-throw (catch _ :threw))))
+      ;; the rejected put must not enqueue anything — channel stays empty
+      (is (nil? (async/poll! c))))))
+
 (deftest mult-tap-test
   (testing "mult broadcasts to taps"
     (let [src (async/chan 10)
