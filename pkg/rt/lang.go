@@ -5545,6 +5545,14 @@ func installLangNS() {
 		return vm.NewMap(kvs), nil
 	})
 
+	// enumeration-seq: only reached by integrant's JVM-only classpath scanners
+	// (resources/load-hierarchy/load-annotations). let-go has no java.util
+	// Enumeration, so this is a compile-only stub — it lets those :clj defns
+	// load, and fails loudly if actually called.
+	enumerationSeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.NIL, fmt.Errorf("enumeration-seq is not supported under let-go (no java.util.Enumeration)")
+	})
+
 	// find-var: (find-var 'ns/name) -> the interned var in that namespace, or
 	// nil if the namespace or the name is not found. integrant's default
 	// init-key resolves a component fn from a qualified keyword via
@@ -6811,6 +6819,7 @@ func installLangNS() {
 	ns.Def("the-ns", theNs)
 	ns.Def("ns-name", nsName)
 	ns.Def("ns-publics", nsPublics)
+	ns.Def("enumeration-seq", enumerationSeq)
 	ns.Def("find-var", findVar)
 	ns.Def("get-method", getMethod)
 
