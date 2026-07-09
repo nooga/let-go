@@ -8,6 +8,7 @@ package rt
 import (
 	"bytes"
 	"fmt"
+	"os"
 
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/vm"
@@ -67,8 +68,15 @@ func (bytecodeNSLoader) Load(name string) *vm.Namespace {
 		return nil // not in the bundle; source loading is disabled
 	}
 	f := vm.NewFrame(chunk, nil)
-	_, _ = f.RunProtected()
+	_, err := f.RunProtected()
 	vm.ReleaseFrame(f)
+	if err != nil {
+		// NSLoader has no error channel; report and return nil so the registry
+		// marks the namespace for retry instead of caching a half-initialized
+		// one. Mirrors the resolver's execPrecompiled.
+		fmt.Fprintf(os.Stderr, "error: failed to load precompiled namespace %s: %s\n", name, err)
+		return nil
+	}
 	return NS(name)
 }
 
