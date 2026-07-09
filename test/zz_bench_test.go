@@ -251,6 +251,22 @@ func runSuiteOnce(b *testing.B, files []string, counters *benchCounters) {
 	origLoader := rt.GetNSLoader()
 	defer rt.SetNSLoader(origLoader)
 
+	// Iteration isolation: vars are interned in the process-global ns
+	// registry, so state attached to them (e.g. add_watch.cljc's var
+	// watches — including one that throws) leaks into the next iteration
+	// and fails its fresh (is (empty? @state)) assertions. Snapshot the
+	// registry and drop every namespace this iteration creates, so each
+	// run sees fresh Namespaces/Vars — the same contract a fresh process
+	// gives the suite.
+	preexisting := rt.AllNSes()
+	defer func() {
+		for name := range rt.AllNSes() {
+			if _, ok := preexisting[name]; !ok {
+				rt.RemoveNS(name)
+			}
+		}
+	}()
+
 	c := vm.NewConsts()
 	coreNS := rt.NS(rt.NameCoreNS)
 	loaderCtx := compiler.NewCompiler(c, coreNS)
