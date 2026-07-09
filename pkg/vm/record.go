@@ -210,6 +210,24 @@ func (r *Record) ValueAtOr(key Value, notFound Value) Value {
 	return r.extra.ValueAtOr(key, notFound)
 }
 
+// ValueAtKeyword is a box-free fast path for keyword-based record access.
+func (r *Record) ValueAtKeyword(k Keyword) Value {
+	return r.ValueAtKeywordOr(k, NIL)
+}
+
+func (r *Record) ValueAtKeywordOr(k Keyword, notFound Value) Value {
+	if idx, ok := r.rtype.fieldIdx[k]; ok {
+		v := r.fields[idx]
+		if v == nil {
+			return notFound
+		}
+		return v
+	}
+	// r.extra is a concrete *PersistentMap (record.go:46), which implements the
+	// box-free path directly — no interface assertion needed.
+	return r.extra.ValueAtKeywordOr(k, notFound)
+}
+
 // --- Associative ---
 
 func (r *Record) Assoc(key Value, val Value) Associative {

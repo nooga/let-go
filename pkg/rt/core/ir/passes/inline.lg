@@ -1,0 +1,648 @@
+;; Automatic inlining of small, side-effect-free functions.
+;;
+;; Eligibility is determined automatically: a callee is inlineable iff it does
+;; not rebind var roots, is not self-recursive, and contains <= 40 instructions.
+;; Users cannot opt-in or opt-out via annotations.
+
+(ns ir.passes.inline
+  (:require
+   [ir.build :as build]
+   [ir.data]
+   [ir.lower-go :as lower-go]
+   [ir.passes.mutability :as mut]))
+
+(def ^:private max-inline-insts 40)
+(def ^:private max-inline-rounds 64)
+
+;; Per-compile-unit callee registry (symbol -> Function atom) threaded by the
+;; lowering driver. When non-empty, optimize-fn runs inline-with using it.
+;; Empty by default so the bytecode path (which binds nothing) is unaffected.
+(def ^:dynamic *inline-registry* {})
+
+;; Master switch for the inline pass. Default OFF: inlining supersedes the
+;; #345 direct-call path and still has rough edges (deftype-devirt codegen),
+;; so it stays opt-in. The AOT combinator harness binds this true to measure.
+(def ^:dynamic *enable-inline* false)
+
+;; Cap on fold-over-rest unrolling (ITER-0034): a combinator call with more than
+;; this many flat rest operands is left as a runtime call (with a logged skip,
+;; never silently truncated) rather than unrolled into an oversized branch chain.
+(def ^:dynamic *max-unroll* 32)
+
+(defn- inst-count [f]
+  "Count total instructions across all blocks in function f."
+  (reduce + 0 (map (fn [bid] (count (ir/block-insts bid f))) (ir/blocks f))))
+
+(defn first-call-nid [f]
+  "Find the first :call or :invoke instruction nid in f; nil if not found."
+  (some (fn [bid]
+          (some (fn [nid]
+                  (when (#{:call :invoke} (ir/op nid f))
+                    nid))
+                (ir/block-insts bid f)))
+        (ir/blocks f)))
+
+(defn- self-recursive? [f]
+  "True if f references its own name via a :load-var (a direct or invoke
+   self-call). A :load-var's aux may be a Var object (a normal defn built via
+   build.lg) or a symbol (lambda-lift / qualified external refs); it MUST be
+   normalized to a symbol before comparison, exactly like call-head-var does.
+   Comparing the raw Var to the name symbol never matches, so a self-recursive
+   defn would be wrongly judged non-recursive and marked inlineable — splicing
+   it into itself then grows IR size every round (max-inline-rounds bounds the
+   round count, not the size). Names are compared unqualified, matching the
+   original intent (nm was normalized with (symbol (str nm)))."
+  (let [nm (name (symbol (str (ir/fn-name f))))]
+    (boolean
+      (some (fn [bid]
+              (some (fn [nid]
+                      (and (= :load-var (ir/op nid f))
+                           (when-let [s (try (symbol (ir/aux nid f)) (catch e nil))]
+                             (= nm (name s)))))
+                    (ir/block-insts bid f)))
+            (ir/blocks f)))))
+
+(defn inline-eligible? [callee-f]
+  "True when callee-f is eligible for inlining:
+   - does not rebind var roots (checked via mutability analysis)
+   - is not self-recursive
+   - contains <= max-inline-insts instructions"
+  (and (not (mut/rebinds-var-roots? callee-f))
+       (not (self-recursive? callee-f))
+       (<= (inst-count callee-f) max-inline-insts)))
+
+(defn call-head-var [f call-nid]
+  "If the call's head (refs[0]) is a :load-var, return its aux normalized to a symbol; else nil.
+   The aux may be either a Var object (from build.lg) or a symbol (from lambda-lift or
+   qualified external refs). Both are normalized to symbols for registry lookup."
+  (let [head (nth (ir/refs call-nid f) 0)]
+    (when (= :load-var (ir/op head f))
+      (let [aux (ir/aux head f)]
+        ;; Try to convert to symbol; Var objects convert via (symbol var),
+        ;; symbols pass through unchanged. Catches malformed aux gracefully.
+        (try (symbol aux) (catch e nil))))))
+
+(defn- unwrap-name* [f nid]
+  "If nid is a (:call or :invoke) whose head is a :load-var naming name*,
+   return the fn operand nid (refs[2]); else return nid unchanged.
+   Used to see through name* wrappers during inline resolution."
+  (if (#{:call :invoke} (ir/op nid f))
+    (let [refs (ir/refs nid f)]
+      (if (and (>= (count refs) 3)
+               (= :load-var (ir/op (nth refs 0) f)))
+        (let [head-sym (call-head-var f nid)]
+          (if (and head-sym (= (name head-sym) "name*"))
+            (nth refs 2)  ; Return the fn operand at refs[2]
+            nid))
+        nid))
+    nid))
+
+(defn resolve-callee [f call-nid registry]
+  "Resolve a statically-known callee from a call instruction.
+   registry maps symbol -> Function atom (lifted siblings + same-ns defns).
+   Returns the Function atom if the call head is a :load-var naming a registered
+   symbol; else nil.
+
+   Also unwraps name* wrappers: if the head (refs[0]) is itself a call to name*,
+   unwraps it to the fn operand before resolution."
+  (let [refs (ir/refs call-nid f)
+        head-nid (nth refs 0)
+        ;; Try to unwrap the head if it's a name* call
+        unwrapped-head (unwrap-name* f head-nid)]
+    ;; First try with the original head
+    (if-let [v (call-head-var f call-nid)]
+      (get registry v)
+      ;; If the head was wrapped by name*, try resolving the unwrapped version
+      (when-not (= head-nid unwrapped-head)
+        (when (= :load-var (ir/op unwrapped-head f))
+          (let [aux (ir/aux unwrapped-head f)]
+            (when-let [sym (try (symbol aux) (catch e nil))]
+              (get registry sym))))))))
+
+(defn- single-block? [g]
+  "True if function g has exactly one block."
+  (= 1 (count (ir/blocks g))))
+
+(defn- splice-call! [f call-nid callee-f]
+  "For a single-block callee: clone the callee's insts into the caller's block,
+   mapping :load-arg i -> i-th call operand, remapping inner nids, replacing
+   the call result's uses with the cloned return value, then removing the call.
+
+   Precondition: single-block?(callee-f) must be true."
+  (when (single-block? callee-f)
+    (let [;; Get the call's operands (args to pass to callee)
+          args (vec (rest (ir/refs call-nid f)))
+          ;; Block containing the call
+          bid  (ir/block-of call-nid f)
+          ;; Map callee nid -> caller nid as we clone
+          m (atom {})]
+      ;; Clone each inst from the callee's only block, except :return
+      (doseq [cnid (ir/block-insts (first (ir/blocks callee-f)) callee-f)]
+        (let [op (ir/op cnid callee-f)]
+          (cond
+            ;; :load-arg i maps directly to the i-th call operand
+            (= op :load-arg)
+            (swap! m assoc cnid (nth args (ir/aux cnid callee-f)))
+            ;; :return is skipped; we'll use its operand value separately
+            (= op :return) nil
+            ;; All other ops: clone and remap refs through the accumulator map
+            :else
+            (let [;; Remap each ref through the map; if not found, use original
+                  new-refs (mapv (fn [r] (get @m r r)) (ir/refs cnid callee-f))
+                  ;; Add to caller's block
+                  nn (ir/add-inst f bid op new-refs (ir/aux cnid callee-f))]
+              ;; Record the mapping for future refs
+              (swap! m assoc cnid nn)))))
+
+      ;; Get the return terminator and its value
+      (let [term (ir/block-term (first (ir/blocks callee-f)) callee-f)]
+        (when (= :return (ir/op term callee-f))
+          ;; The return operand (remapped through m) is the value to substitute
+          (let [retv (get @m (nth (ir/refs term callee-f) 0))]
+            ;; Replace all uses of the call result with the return value
+            (when retv (ir/replace-all-uses! f call-nid retv))
+            ;; Remove the call instruction
+            (ir/remove-inst! f bid call-nid)))))))
+
+(defn- closure-callee
+  "If call-nid's callee (refs[0]) is a locally-constructed closure whose template
+   is a single inner Function, return {:inner <Function> :captures [nid…]}; else
+   nil. Reuses lower-go/closure-info to walk make-closure/push-closed lineage.
+   This is the higher-order devirt path: after named-defn inlining exposes a
+   combinator's closure as a known literal, its immediate application is spliced
+   inline instead of dispatched via rt.InvokeValueEC."
+  [f call-nid]
+  (let [head (nth (ir/refs call-nid f) 0)
+        info (lower-go/closure-info f head)]
+    (when info
+      (let [tmpl (:template info)]
+        (when (and (map? tmpl) (= :fn-template (:kind tmpl)))
+          {:inner (:fn tmpl) :captures (:captures info)})))))
+
+(defn- splice-closure!
+  "Splice a single-block closure `inner` into the call site: map the inner fn's
+   :load-arg i -> the call's i-th operand and :load-closed j -> captures[j], clone
+   the remaining insts, and replace the call result with the inner's return value.
+   Returns true if it spliced. Precondition enforced: single-block? inner."
+  [f call-nid inner captures]
+  (when (single-block? inner)
+    (let [args (vec (rest (ir/refs call-nid f)))
+          bid  (ir/block-of call-nid f)
+          m    (atom {})]
+      (doseq [cnid (ir/block-insts (first (ir/blocks inner)) inner)]
+        (let [op (ir/op cnid inner)]
+          (cond
+            (= op :load-arg)
+            (swap! m assoc cnid (nth args (ir/aux cnid inner)))
+            (= op :load-closed)
+            (swap! m assoc cnid (nth captures (ir/aux cnid inner)))
+            (= op :return) nil
+            :else
+            (let [new-refs (mapv (fn [r] (get @m r r)) (ir/refs cnid inner))
+                  nn (ir/add-inst f bid op new-refs (ir/aux cnid inner))]
+              (swap! m assoc cnid nn)))))
+      (let [term (ir/block-term (first (ir/blocks inner)) inner)]
+        (when (= :return (ir/op term inner))
+          (let [retv (get @m (nth (ir/refs term inner) 0))]
+            (when retv (ir/replace-all-uses! f call-nid retv))
+            (ir/remove-inst! f bid call-nid)
+            true))))))
+
+(defn- tail-call-of-block? [f bid call-nid]
+  "True when block bid's terminator is a :return whose value is call-nid,
+   AND call-nid's ONLY use is that return. Tail position with a single use is
+   what makes multi-block inlining safe: there is no live-across value and no
+   continuation, so the callee's blocks can splice in and its :returns simply
+   become the caller's :returns (Component 1a; general position is 1b)."
+  (let [term (ir/block-term bid f)]
+    (and term
+         (= :return (ir/op term f))
+         (let [rrefs (ir/refs term f)]
+           (and (seq rrefs) (= call-nid (nth rrefs 0))))
+         (= 1 (ir/uses-count (nth (ir/uses f) call-nid))))))
+
+(defn- remap-branch-target [bt block-map nid-map]
+  "Rebuild a BranchTarget for the cloned CFG: :target through block-map,
+   :args through nid-map (unmapped ids pass through unchanged)."
+  (ir/new-branch-target
+    (get block-map (ir/branch-target-target bt))
+    (mapv (fn [a] (get nid-map a a)) (ir/branch-target-args bt))))
+
+(defn- splice-multiblock-tail! [f call-nid callee-f]
+  "Inline a MULTI-BLOCK callee whose call is in TAIL position (result feeds the
+   caller block's :return, sole use). Clones the callee's blocks into f, routes
+   the call operands in via the cloned entry's block-args, remaps intra-callee
+   refs and terminators, and rewires the callee's :returns to BECOME the caller's
+   :returns. Returns true if it inlined, false if the preconditions don't hold.
+
+   Preconditions: tail-call-of-block?, and the callee entry has no pre-existing
+   params (a plain build-fn entry whose args are :load-arg insts). Otherwise
+   returns false and the call is left for a later component."
+  (let [b            (ir/block-of call-nid f)
+        callee-blocks (ir/blocks callee-f)
+        entry-cb     (first callee-blocks)]
+    (if-not (and (tail-call-of-block? f b call-nid)
+                 (empty? (ir/block-params entry-cb callee-f)))
+      false
+      (let [args      (vec (rest (ir/refs call-nid f)))
+            ;; 1. Allocate one fresh caller block per callee block.
+            block-map (reduce (fn [m cb] (assoc m cb (ir/add-block f)))
+                              {} callee-blocks)
+            entry-nb  (get block-map entry-cb)
+            ;; 2. Entry block-args: one per call operand, registered as params.
+            ;;    Callee :load-arg i is routed to arg-ba[i].
+            arg-ba    (reduce (fn [m i]
+                                (let [ba (ir/add-inst f entry-nb :block-arg [] i)]
+                                  (ir/add-block-param! f entry-nb ba)
+                                  (assoc m i ba)))
+                              {} (range (count args)))
+            nid-map   (atom {})     ;; callee nid -> caller nid (or routed value)
+            clones    (atom [])]    ;; [callee-nid caller-nid] to remap in pass B
+        ;; 3. Pass A — clone body insts (skip :load-arg -> route to entry arg).
+        (doseq [cb callee-blocks
+                cnid (ir/block-insts cb callee-f)]
+          (let [op (ir/op cnid callee-f)]
+            (if (= op :load-arg)
+              (swap! nid-map assoc cnid (get arg-ba (ir/aux cnid callee-f)))
+              (let [nn (ir/add-inst f (get block-map cb) op
+                                    (ir/refs cnid callee-f) (ir/aux cnid callee-f))]
+                (swap! nid-map assoc cnid nn)
+                (swap! clones conj [cnid nn])
+                (when (= op :block-arg)
+                  (ir/add-block-param! f (get block-map cb) nn))))))
+        ;; 4. Pass B — remap cloned insts' refs through the completed nid-map.
+        (doseq [[cnid nn] @clones]
+          (ir/set-refs! f nn (mapv (fn [r] (get @nid-map r r))
+                                   (ir/refs cnid callee-f))))
+        ;; 5. Pass C — rebuild each cloned block's terminator + register preds.
+        ;;    Skip dead blocks (nil :term — build can leave unreachable join
+        ;;    blocks); their clones stay predless and validate ignores them.
+        (doseq [cb callee-blocks
+                :let [term (ir/block-term cb callee-f)]
+                :when term]
+          (let [nb   (get block-map cb)
+                top  (ir/op term callee-f)]
+            (cond
+              (= top :return)
+              (ir/add-terminator! f nb :return
+                [(get @nid-map (nth (ir/refs term callee-f) 0))] nil)
+
+              (= top :branch)
+              (let [nbt (remap-branch-target (ir/aux term callee-f) block-map @nid-map)]
+                (ir/add-terminator! f nb :branch [] nbt)
+                (ir/add-pred! f (ir/branch-target-target nbt) nb))
+
+              (= top :branch-if)
+              (let [aux (ir/aux term callee-f)
+                    tt  (remap-branch-target (ir/cond-target-true aux) block-map @nid-map)
+                    ft  (remap-branch-target (ir/cond-target-false aux) block-map @nid-map)
+                    cnd (get @nid-map (nth (ir/refs term callee-f) 0))]
+                (ir/add-terminator! f nb :branch-if [cnd] (ir/new-cond-target tt ft))
+                (ir/add-pred! f (ir/branch-target-target tt) nb)
+                (ir/add-pred! f (ir/branch-target-target ft) nb))
+
+              :else
+              ;; Defensive: any other terminator (e.g. :tail-call — no block
+              ;; targets) clones with refs remapped and aux carried verbatim.
+              (ir/add-terminator! f nb top
+                (mapv (fn [r] (get @nid-map r r)) (ir/refs term callee-f))
+                (ir/aux term callee-f)))))
+        ;; 6. Entry wiring — convert caller block B's :return terminator IN PLACE
+        ;;    into a :branch into the cloned entry, passing the call operands as
+        ;;    block-args, then drop the now-dead call. Converting in place (vs
+        ;;    add-terminator!) avoids orphaning the old return inst.
+        (let [ret-term (ir/block-term b f)]
+          (ir/replace-op! f ret-term :branch)
+          (ir/set-aux!    f ret-term (ir/new-branch-target entry-nb args))
+          (ir/set-refs!   f ret-term []))
+        (ir/add-pred! f entry-nb b)
+        (ir/remove-inst! f b call-nid)
+        true))))
+
+(defn- block-inst-index [f bid nid]
+  "Position of nid in block bid's :insts vector (count if absent)."
+  (let [insts (vec (ir/block-insts bid f))]
+    (loop [i 0]
+      (if (or (>= i (count insts)) (= (nth insts i) nid)) i (recur (inc i))))))
+
+(defn- term-target-blocks [f term]
+  "Successor block ids of a terminator inst (empty for :return / others)."
+  (let [top (ir/op term f) aux (ir/aux term f)]
+    (cond
+      (= top :branch)    [(ir/branch-target-target aux)]
+      (= top :branch-if) [(ir/branch-target-target (ir/cond-target-true aux))
+                          (ir/branch-target-target (ir/cond-target-false aux))]
+      :else [])))
+
+(defn- splice-closure-general!
+  "Splice a MULTI-BLOCK closure `inner` at a GENERAL-POSITION (non-tail) call.
+   Splits the caller block at call-nid — post-call insts + terminator move to a
+   fresh continuation block that receives the closure result as a block-param —
+   clones inner's blocks in (routing :load-arg->call operands, :load-closed->
+   captures), and rewires inner's :returns to branch into the continuation.
+   Returns true, or false if the callee entry has pre-existing params."
+  [f call-nid inner captures]
+  (let [b        (ir/block-of call-nid f)
+        cblocks  (ir/blocks inner)
+        entry-cb (first cblocks)]
+    (if-not (empty? (ir/block-params entry-cb inner))
+      false
+      (let [args    (vec (rest (ir/refs call-nid f)))
+            ;; --- split b at call-nid: post-call insts + term -> cont ---
+            b-insts (vec (ir/block-insts b f))
+            idx     (block-inst-index f b call-nid)
+            post    (subvec b-insts (min (inc idx) (count b-insts)))
+            cont    (ir/add-block f)
+            ret-ba  (ir/add-inst f cont :block-arg [] 0)]
+        (ir/add-block-param! f cont ret-ba)
+        (doseq [nid post] (ir/move-inst! f nid cont))
+        (let [bterm (ir/block-term b f)]
+          (when bterm
+            (let [targets (term-target-blocks f bterm)]
+              (ir/reparent-terminator! f b cont)
+              (doseq [t targets] (ir/replace-block-pred! f t b cont)))))
+        ;; The closure result flows through cont's block-param.
+        (ir/replace-all-uses! f call-nid ret-ba)
+        (ir/remove-inst! f b call-nid)
+        ;; --- clone inner's blocks (mirrors splice-multiblock-tail!) ---
+        (let [block-map (reduce (fn [m cb] (assoc m cb (ir/add-block f))) {} cblocks)
+              entry-nb  (get block-map entry-cb)
+              arg-ba    (reduce (fn [m i]
+                                  (let [ba (ir/add-inst f entry-nb :block-arg [] i)]
+                                    (ir/add-block-param! f entry-nb ba)
+                                    (assoc m i ba)))
+                                {} (range (count args)))
+              nid-map (atom {})
+              clones  (atom [])]
+          (doseq [cb cblocks
+                  cnid (ir/block-insts cb inner)]
+            (let [op (ir/op cnid inner)]
+              (cond
+                (= op :load-arg)
+                (swap! nid-map assoc cnid (get arg-ba (ir/aux cnid inner)))
+                (= op :load-closed)
+                (swap! nid-map assoc cnid (nth captures (ir/aux cnid inner)))
+                :else
+                (let [nn (ir/add-inst f (get block-map cb) op
+                                      (ir/refs cnid inner) (ir/aux cnid inner))]
+                  (swap! nid-map assoc cnid nn)
+                  (swap! clones conj [cnid nn])
+                  (when (= op :block-arg)
+                    (ir/add-block-param! f (get block-map cb) nn))))))
+          (doseq [[cnid nn] @clones]
+            (ir/set-refs! f nn (mapv (fn [r] (get @nid-map r r))
+                                     (ir/refs cnid inner))))
+          (doseq [cb cblocks
+                  :let [term (ir/block-term cb inner)]
+                  :when term]
+            (let [nb  (get block-map cb)
+                  top (ir/op term inner)]
+              (cond
+                (= top :return)
+                (let [retv (get @nid-map (nth (ir/refs term inner) 0))]
+                  (ir/add-terminator! f nb :branch [] (ir/new-branch-target cont [retv]))
+                  (ir/add-pred! f cont nb))
+
+                (= top :branch)
+                (let [nbt (remap-branch-target (ir/aux term inner) block-map @nid-map)]
+                  (ir/add-terminator! f nb :branch [] nbt)
+                  (ir/add-pred! f (ir/branch-target-target nbt) nb))
+
+                (= top :branch-if)
+                (let [aux (ir/aux term inner)
+                      tt  (remap-branch-target (ir/cond-target-true aux) block-map @nid-map)
+                      ft  (remap-branch-target (ir/cond-target-false aux) block-map @nid-map)
+                      cnd (get @nid-map (nth (ir/refs term inner) 0))]
+                  (ir/add-terminator! f nb :branch-if [cnd] (ir/new-cond-target tt ft))
+                  (ir/add-pred! f (ir/branch-target-target tt) nb)
+                  (ir/add-pred! f (ir/branch-target-target ft) nb))
+
+                :else
+                (ir/add-terminator! f nb top
+                  (mapv (fn [r] (get @nid-map r r)) (ir/refs term inner))
+                  (ir/aux term inner)))))
+          ;; --- wire b -> cloned entry with the call operands ---
+          (ir/add-terminator! f b :branch [] (ir/new-branch-target entry-nb args))
+          (ir/add-pred! f entry-nb b)
+          true)))))
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; Component 2 (ITER-0034 / STORY-0035): fold-over-rest specialization + unroll.
+;;
+;; Recognizes the variadic fold-over-rest combinator idiom — a loop over the
+;; rest-arg seq that consumes (first v)/(rest v), terminates on (empty? v), and
+;; applies each element as a callee to a fixed arg (i.e. ((first v) input)). At a
+;; call with N known flat rest operands, a later step specializes to fixed arity
+;; and unrolls the loop into a straight-line short-circuit branch chain, so each
+;; element call becomes a direct rule-to-rule call. Design:
+;; docs/superpowers/specs/2026-06-28-multiblock-inliner-and-loop-unroll-design.md §5.
+;; ───────────────────────────────────────────────────────────────────────────
+
+(defn- call-of-var-on?
+  "True if nid is a :call whose head (refs[0]) is a :load-var naming `vname`
+   (short name, e.g. \"empty?\") applied to exactly one operand `arg-nid`."
+  [f nid vname arg-nid]
+  (and (= :call (ir/op nid f))
+       (let [rf (ir/refs nid f)]
+         (and (= 2 (count rf))
+              (= arg-nid (nth rf 1))
+              (let [h (call-head-var f nid)]
+                (and h (= vname (name h))))))))
+
+(defn- recurs-to?
+  "True if block bid ends in a :branch back to header hdr AND contains a
+   (rest v) call over its own threaded loop var (block-param 0) — the loop's
+   recur edge over the rest seq. The loop var is re-received as a block-arg in
+   every block, so it has a distinct nid per block; read it locally."
+  [f bid hdr]
+  (let [term   (ir/block-term bid f)
+        params (ir/block-params bid f)]
+    (and term
+         (seq params)
+         (= :branch (ir/op term f))
+         (= hdr (ir/branch-target-target (ir/aux term f)))
+         (boolean (some (fn [nid] (call-of-var-on? f nid "rest" (nth params 0)))
+                        (ir/block-insts bid f))))))
+
+(defn- const-in-block
+  "First :const inst nid in block bid, or nil."
+  [f bid]
+  (some (fn [nid] (when (= :const (ir/op nid f)) nid))
+        (ir/block-insts bid f)))
+
+(defn fold-over-rest? [f]
+  "Recognize the fold-over-rest combinator idiom in variadic function f.
+   Returns a descriptor map or nil. The descriptor carries every nid/bid a
+   later specialize+unroll step needs:
+     {:kind :any|:all :arity A :rest-index (dec A)
+      :header H :loop-var LV :input-arg P
+      :first-nid <(first LV) call> :pred-nid <((first LV) P) call>
+      :step-bid B :short-circuit-bid SB :short-circuit-val C
+      :terminal-bid TB :terminal-val C :recur-bid RB}
+   Structural: keyed on empty?/first/rest consumption of the rest-arg loop var,
+   not on the combinator's name. :any short-circuits on a truthy element result,
+   :all short-circuits on a falsey one."
+  (when (ir/fn-variadic? f)
+    (let [arity      (ir/fn-arity f)
+          rest-index (dec arity)
+          entry      (first (ir/blocks f))
+          eterm      (ir/block-term entry f)]
+      (when (and eterm (= :branch (ir/op eterm f)))
+        (let [ebt   (ir/aux eterm f)
+              hdr   (ir/branch-target-target ebt)
+              eargs (ir/branch-target-args ebt)]
+          ;; loop var (branch arg 0) must be initialized to the rest load-arg.
+          (when (and (seq eargs)
+                     (= :load-arg (ir/op (nth eargs 0) f))
+                     (= rest-index (ir/aux (nth eargs 0) f)))
+            (let [hparams (ir/block-params hdr f)
+                  hterm   (ir/block-term hdr f)]
+              (when (and (seq hparams) hterm (= :branch-if (ir/op hterm f)))
+                (let [lv   (nth hparams 0)
+                      ecnd (nth (ir/refs hterm f) 0)]
+                  ;; header cond must be (empty? lv).
+                  (when (call-of-var-on? f ecnd "empty?" lv)
+                    (let [haux   (ir/aux hterm f)
+                          term-b (ir/branch-target-target (ir/cond-target-true haux))   ;; empty -> terminal
+                          step-b (ir/branch-target-target (ir/cond-target-false haux))  ;; else -> step
+                          sterm  (ir/block-term step-b f)]
+                      (when (and sterm (= :branch-if (ir/op sterm f))
+                                 (seq (ir/block-params step-b f)))
+                        (let [step-lv (nth (ir/block-params step-b f) 0)  ;; loop var re-received in step block
+                              pcnd    (nth (ir/refs sterm f) 0)]
+                          (when (= :call (ir/op pcnd f))
+                            (let [prefs (ir/refs pcnd f)]
+                              (when (= 2 (count prefs))
+                                (let [first-nid (nth prefs 0)    ;; head = (first v) = element
+                                      input-arg (nth prefs 1)]   ;; operand = fixed input load-arg
+                                  (when (and (call-of-var-on? f first-nid "first" step-lv)
+                                             (= :load-arg (ir/op input-arg f)))
+                                    (let [saux  (ir/aux sterm f)
+                                          tb    (ir/branch-target-target (ir/cond-target-true saux))
+                                          fb    (ir/branch-target-target (ir/cond-target-false saux))
+                                          t-rec (recurs-to? f tb hdr)
+                                          f-rec (recurs-to? f fb hdr)
+                                          kind  (cond (and f-rec (not t-rec)) :any
+                                                      (and t-rec (not f-rec)) :all
+                                                      :else nil)]
+                                      (when kind
+                                        (let [recur-bid (if (= kind :any) fb tb)
+                                              sc-bid    (if (= kind :any) tb fb)]
+                                          {:kind kind :arity arity :rest-index rest-index
+                                           :fn-name (ir/fn-name f)
+                                           :header hdr :loop-var lv
+                                           :input-arg input-arg
+                                           :input-pos (ir/aux input-arg f)
+                                           :first-nid first-nid :pred-nid pcnd
+                                           :step-bid step-b
+                                           :short-circuit-bid sc-bid
+                                           :short-circuit-val (const-in-block f sc-bid)
+                                           :terminal-bid term-b
+                                           :terminal-val (const-in-block f term-b)
+                                           :recur-bid recur-bid})))))))))))))))))))))
+
+(defn- unrolled-fold-form
+  "Synthesize a (defn name [p0..p(num-fixed-1) e0..e(n-1)] <unrolled if-chain>)
+   form for a fold-over-rest combinator. Each element ei is applied to the fixed
+   param at input-pos: (ei p<input-pos>). :any short-circuits true on a truthy
+   element result (base false); :all short-circuits false on a falsey result
+   (base true). The chain is a RIGHT fold of `if`, so build-fn emits a straight-
+   line, loop-free CFG (branch-if symmetry + block-args handled by the builder)."
+  [name-sym kind num-fixed input-pos n]
+  (let [fixed  (mapv (fn [i] (symbol (str "p" i))) (range num-fixed))
+        elems  (mapv (fn [i] (symbol (str "e" i))) (range n))
+        params (vec (concat fixed elems))
+        input  (nth fixed input-pos)
+        base   (if (= kind :any) false true)
+        body   (reduce (fn [acc i]
+                         (let [call (list (nth elems i) input)]
+                           (if (= kind :any)
+                             (list 'if call true acc)
+                             (list 'if call acc false))))
+                       base
+                       (reverse (range n)))]
+    (list 'defn name-sym params body)))
+
+(defn specialize-fold [desc n]
+  "Build the unrolled specialized IR Function for a recognized fold-over-rest
+   combinator (desc from fold-over-rest?) applied to n known rest operands. The
+   specialized fn's params are the combinator's fixed args followed by n element
+   params, and its body is the unrolled short-circuit if-chain — so each element
+   application becomes a direct call once the operands are routed in by inlining.
+   Deterministic name derived from the source fn (no gensym)."
+  (let [name-sym (symbol (str (:fn-name desc) "$" (name (:kind desc)) "$" n))
+        form     (unrolled-fold-form name-sym (:kind desc)
+                                     (:rest-index desc) (:input-pos desc) n)]
+    (build/build-fn form)))
+
+(defn- fold-rest-operand-count [f call-nid desc]
+  "Number of flat rest operands N at a fold-over-rest call: total call operands
+   minus the combinator's fixed-arg count. nil when the call carries fewer
+   operands than the fixed args (shape mismatch)."
+  (let [nargs (count (rest (ir/refs call-nid f)))
+        n     (- nargs (:rest-index desc))]
+    (when (>= n 0) n)))
+
+(defn- inline-pass [f registry]
+  "Single pass: inline eligible callees within function f.
+   Returns true if any inlining occurred, false otherwise."
+  (let [inlined (atom false)]
+    (doseq [bid (ir/blocks f)
+            call-nid (vec (ir/block-insts bid f))
+            :when (#{:call :invoke} (ir/op call-nid f))]
+      (if-let [g (resolve-callee f call-nid registry)]
+        (let [desc (fold-over-rest? g)
+              n    (when desc (fold-rest-operand-count f call-nid desc))]
+          (cond
+            ;; Component 2 (ITER-0034): a fold-over-rest combinator call with N
+            ;; known flat rest operands within the cap — specialize to the
+            ;; unrolled fixed-arity fn and inline it (reuses the Component-1a
+            ;; tail splice), so each element application becomes a direct call.
+            (and desc n (>= n 1) (<= n *max-unroll*))
+            (when (splice-multiblock-tail! f call-nid (specialize-fold desc n))
+              (reset! inlined true))
+
+            ;; Over the cap: leave it a runtime call, but log — never silently
+            ;; truncate the unroll.
+            (and desc n (> n *max-unroll*))
+            (println (str "inline: fold-over-rest " (:fn-name desc) " call has "
+                          n " operands > *max-unroll* " *max-unroll*
+                          "; left as a runtime call"))
+
+            ;; Ordinary eligible callee.
+            (inline-eligible? g)
+            (if (single-block? g)
+              (do (splice-call! f call-nid g)
+                  (reset! inlined true))
+              ;; Multi-block: only tail-position calls (Component 1a). A false
+              ;; return (non-tail / entry has params) leaves the call untouched
+              ;; for Component 1b.
+              (when (splice-multiblock-tail! f call-nid g)
+                (reset! inlined true)))))
+        ;; Higher-order devirt: callee is a locally-constructed closure literal.
+        (when-let [cc (closure-callee f call-nid)]
+          (let [inner (:inner cc)]
+            (when (inline-eligible? inner)
+              (if (single-block? inner)
+                (when (splice-closure! f call-nid inner (:captures cc))
+                  (reset! inlined true))
+                (when (splice-closure-general! f call-nid inner (:captures cc))
+                  (reset! inlined true))))))))
+    @inlined))
+
+(defn inline-with [f registry]
+  "Inline eligible callees within function f using the registry to resolve them.
+   registry maps symbol -> Function atom (lifted siblings and same-ns defns).
+   Iteratively inlines callees until no more inlining occurs, to handle cases
+   where inlining creates new inlinable calls. Iterations are bounded by
+   max-inline-rounds to prevent infinite loops from mutually-recursive functions.
+   Returns the modified function f."
+  (loop [i 0]
+    (when (and (< i max-inline-rounds) (inline-pass f registry))
+      (recur (inc i))))
+  f)
+
+(defn inline [f]
+  "Placeholder: inline eligible callees within function f.
+   Currently returns f unchanged; actual inlining logic added in later phases."
+  f)

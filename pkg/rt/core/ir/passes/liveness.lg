@@ -1,0 +1,204 @@
+;; Liveness analysis — per-block backward dataflow over InstIds.
+;;
+;; Computes, for every block, the set of values live-in (available and needed
+;; at block entry) and live-out (needed by some successor). This is analysis
+;; metadata over the block-based IR: it reads structure only and mutates nothing.
+;;
+;; Block-arg convention (load-bearing): a block's parameters are INPUTS to the
+;; block — their values arrive via predecessor edge-args — NOT block-local
+;; definitions. So a parameter used in its block IS live-in to that block, which
+;; is what makes the predecessor's edge-arg live. Only inst results are the
+;; block-local definitions. When a predecessor's live-out is computed, a
+;; successor's live-in is mapped back across the edge: a value that is the
+;; successor's parameter becomes its edge-arg; any other live-in value passes
+;; through.
+;;
+;;   reads[B]    = inst-refs(B) ∪ (terminator-refs(B) − edge-args(B))
+;;   results[B]  = inst-results(B)                          ; NOT params
+;;   live-in[B]  = (reads[B] ∪ live-out[B]) − results[B]
+;;   live-out[B] = ⋃ over targets t of
+;;                   {v ∈ live-in[t] : v ∉ params(t)} ∪ {arg[i] : param[i] ∈ live-in[t]}
+
+(ns ir.passes.liveness
+  (:require
+   [ir.data]))
+
+;; --- structural signature (content-based memo key; never object identity) ---
+
+(defn- block-signature [f bid]
+  "A stable fingerprint of block bid: its param InstIds, each inst's op+refs,
+   and the terminator's op+refs. Two structurally identical blocks share it;
+   structurally different blocks do not."
+  (let [params (vec (ir/block-params bid f))
+        insts  (mapv (fn [nid] [(ir/op nid f) (vec (ir/refs nid f))])
+                     (ir/block-insts bid f))
+        term   (ir/block-term bid f)
+        tsig   (if term [(ir/op term f) (vec (ir/refs term f)) (ir/aux term f)] nil)]
+    [params insts tsig]))
+
+(defn- fn-signature [f]
+  "Structural signature of the whole function — the memo key. Content-based:
+   collisions require two functions to be block-for-block structurally identical,
+   in which case their liveness is identical anyway."
+  (mapv (fn [bid] (block-signature f bid)) (vec (ir/blocks f))))
+
+(def ^:private liveness-memo (atom {}))
+
+(defn reset-liveness-cache! []
+  "Clear the memo. For testing determinism (force recomputation) and to bound
+   memory across large compilations."
+  (reset! liveness-memo {}))
+
+;; --- set helpers (ordered, no clojure.set dependency) ---
+
+(defn- set-minus [s1 s2]
+  "Elements of s1 not in s2."
+  (reduce (fn [acc e] (if (contains? s2 e) acc (conj acc e))) #{} s1))
+
+(defn- into-set [s coll]
+  (reduce conj s coll))
+
+;; --- per-block gen/kill ---
+
+(defn- branch-targets-of [f bid]
+  "Branch-target structures of block bid's terminator (empty if none/return)."
+  (let [term (ir/block-term bid f)]
+    (if-not term
+      []
+      (let [op  (ir/op term f)
+            aux (ir/aux term f)]
+        (cond
+          (= op :branch)    [aux]
+          (= op :branch-if) [(ir/cond-target-true aux) (ir/cond-target-false aux)]
+          :else             [])))))
+
+(defn- edge-args-of [f bid]
+  "All InstIds this block passes as edge-args on its terminator (to any target).
+   These are terminator refs that must NOT be double-counted as ordinary uses."
+  (reduce (fn [acc bt] (into-set acc (ir/branch-target-args bt)))
+          #{}
+          (branch-targets-of f bid)))
+
+(defn- block-results [f bid]
+  "results[B] = block-local definitions = insts of B that are NOT block-args.
+   Parameters are materialized as :block-arg insts but are INPUTS to the block
+   (their values arrive via predecessor edge-args), so they are excluded here —
+   a used parameter is therefore live-in to its own block, which is what makes
+   the predecessor's edge-arg live."
+  (set (filter (fn [nid] (not (= :block-arg (ir/op nid f))))
+               (ir/block-insts bid f))))
+
+(defn- block-uses [f bid]
+  "use[B] = refs of all non-terminator insts, plus terminator refs that are NOT
+   edge-args (the branch condition, the returned value). Parameters used here are
+   included (they are live-in to their own block)."
+  (let [inst-refs (reduce (fn [acc nid] (into-set acc (ir/refs nid f)))
+                          #{}
+                          (ir/block-insts bid f))
+        term      (ir/block-term bid f)]
+    (if-not term
+      inst-refs
+      (into-set inst-refs (set-minus (set (ir/refs term f))
+                                     (edge-args-of f bid))))))
+
+;; --- fixpoint ---
+
+(defn- succ-contribution [f bid live-in]
+  "Contribution of block bid's successors to its live-out:
+   for each target t, (live-in[t] − params[t]) plus each edge-arg whose target
+   parameter is live-in to t."
+  (reduce
+    (fn [acc bt]
+      (let [tgt     (ir/branch-target-target bt)
+            args    (vec (ir/branch-target-args bt))
+            params  (vec (ir/block-params tgt f))
+            tgt-in  (get live-in tgt #{})
+            pset    (set params)
+            ;; (live-in[t] − params[t])
+            acc1    (into-set acc (set-minus tgt-in pset))]
+        ;; edge-args feeding live params
+        (loop [i 0 a acc1]
+          (if (or (>= i (count params)) (>= i (count args)))
+            a
+            (recur (inc i)
+                   (if (contains? tgt-in (nth params i))
+                     (conj a (nth args i))
+                     a))))))
+    #{}
+    (branch-targets-of f bid)))
+
+(defn compute-liveness [f]
+  "Return {block-id → {:live-in <set of InstId> :live-out <set of InstId>}} for f.
+   Backward dataflow to a fixpoint; memoized per function by structural signature."
+  (let [sig (fn-signature f)]
+    (if-let [cached (get @liveness-memo sig)]
+      cached
+      (let [block-ids (vec (ir/blocks f))
+            uses (reduce (fn [m bid] (assoc m bid (block-uses f bid))) {} block-ids)
+            results (reduce (fn [m bid] (assoc m bid (block-results f bid))) {} block-ids)
+            empty-map (reduce (fn [m bid] (assoc m bid #{})) {} block-ids)]
+        (loop [live-in empty-map
+               live-out empty-map]
+          (let [new-out (reduce (fn [m bid]
+                                  (assoc m bid (succ-contribution f bid live-in)))
+                                {} block-ids)
+                new-in  (reduce (fn [m bid]
+                                  (assoc m bid
+                                         (set-minus (into-set (get uses bid) (get new-out bid))
+                                                    (get results bid))))
+                                {} block-ids)]
+            (if (and (= live-in new-in) (= live-out new-out))
+              (let [result (reduce (fn [m bid]
+                                     (assoc m bid {:live-in (get new-in bid)
+                                                   :live-out (get new-out bid)}))
+                                   {} block-ids)]
+                (swap! liveness-memo assoc sig result)
+                result)
+              (recur new-in new-out))))))))
+
+;; --- whole-function reachability (the DCE read-set for lowering) ---
+;;
+;; reachable-nids answers a coarser question than compute-liveness: which nids'
+;; VALUES are actually read by emitted code. Roots are the refs of value-reading
+;; terminators (:return / :branch-if condition / :tail-call) and of every :call
+;; inst (calls always emit for their side effects, so their operands are read).
+;; The set is closed to a fixpoint: a reachable inst's refs are reachable, and a
+;; reachable block-param's incoming edge-args are reachable — the SAME block-arg
+;; threading rule compute-liveness uses (branch-targets-of). Dead duplicate
+;; subexpressions (built twice, marked "used" by the uses table but reachable
+;; from nothing) stay out, so lowering routes their side-effecting calls to `_`
+;; and never declares the pure ones.
+
+(defn reachable-nids [f]
+  "The set of InstIds whose value is read by emitted code — the lowering DCE
+   read-set. Backward reachability from output roots through refs and block-arg
+   edges."
+  (let [reached (atom #{})
+        seed    (fn [nid] (swap! reached conj nid))]
+    (doseq [bid (ir/blocks f)]
+      (let [term (ir/block-term bid f)]
+        (when term
+          (let [op (ir/op term f)]
+            (when (or (= op :return) (= op :branch-if) (= op :tail-call))
+              (doseq [r (ir/refs term f)] (seed r))))))
+      (doseq [nid (ir/block-insts bid f)]
+        (when (= :call (ir/op nid f))
+          (doseq [r (ir/refs nid f)] (seed r)))))
+    (loop []
+      (let [before (count @reached)]
+        (doseq [bid (ir/blocks f)]
+          (doseq [nid (ir/block-insts bid f)]
+            (when (contains? @reached nid)
+              (doseq [r (ir/refs nid f)] (seed r))))
+          (doseq [bt (branch-targets-of f bid)]
+            (let [tgt    (ir/branch-target-target bt)
+                  params (vec (ir/block-params tgt f))
+                  args   (vec (ir/branch-target-args bt))]
+              (loop [i 0]
+                (when (< i (count params))
+                  (when (and (< i (count args))
+                             (contains? @reached (nth params i)))
+                    (seed (nth args i)))
+                  (recur (inc i)))))))
+        (when (> (count @reached) before) (recur))))
+    @reached))

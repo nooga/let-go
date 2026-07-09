@@ -1,6 +1,7 @@
 (ns test.async-ns-test
-  (:require [test :refer :all]
-            [async :refer :all]))
+  (:require
+   [async :refer :all]
+   [test :refer :all]))
 
 (deftest async-chan-basic
   (testing "create and use channel"
@@ -135,9 +136,19 @@
       (is (nil? (async/poll! c))))))
 
 (deftest offer-full-channel
-  (testing "offer! returns false when full"
+  (testing "offer! returns nil when it can't complete"
     (let [c (async/chan)] ;; unbuffered
-      (is (= false (async/offer! c :val))))))
+      ;; core.async: offer! yields nil (logical false), not the boolean false,
+      ;; when the value can't be delivered immediately.
+      (is (nil? (async/offer! c :val))))))
+
+(deftest offer-rejects-nil
+  (testing "offer! rejects nil — core.async: nil values are not allowed"
+    ;; let-go has no thrown? — use try/catch directly.
+    (let [c (async/chan 1)]
+      (is (= :threw (try (async/offer! c nil) :no-throw (catch _ :threw))))
+      ;; the rejected put must not enqueue anything — channel stays empty
+      (is (nil? (async/poll! c))))))
 
 (deftest mult-tap-test
   (testing "mult broadcasts to taps"

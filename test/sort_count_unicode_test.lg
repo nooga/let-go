@@ -1,0 +1,28 @@
+(ns test.sort-count-unicode-test
+  (:require [test :refer :all]))
+
+;; sort collected into a RawCount-sized buffer, but a String's
+;; RawCount is bytes while its seq yields runes, so any multibyte
+;; character crashed with a nil dereference.
+(deftest sort-multibyte-string
+  (testing "sorting strings with multibyte runes"
+    (is (= '(\a \c \f \é) (sort "café")))
+    (is (= '(\` \a \c \f) (sort "caf`")))
+    (is (= '(\日 \本) (sort "日本"))))
+
+  (testing "plain collections still sort"
+    (is (= '(1 2 3) (sort [3 1 2])))
+    (is (= '(\a \b \c) (sort "cba")))))
+
+;; Cons counted an unrealized lazy tail as an element, so
+;; (count (cons x <empty lazy seq>)) returned 2 and partition-by
+;; dropped groups after single-element runs.
+(deftest cons-count-lazy-tail
+  (testing "count forces the lazy tail"
+    (is (= 1 (count (cons 1 (filter odd? [2 4])))))
+    (is (= 2 (count (cons 1 (filter odd? [3 4])))))
+    (is (= 3 (count (cons 1 [2 3])))))
+
+  (testing "partition-by keeps groups after single runs"
+    (is (= '((1 1) (2) (1)) (partition-by identity '(1 1 2 1))))
+    (is (= '((1 1) (2) (1)) (partition-by identity [1 1 2 1])))))

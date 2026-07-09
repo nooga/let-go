@@ -1,6 +1,7 @@
 ;; for comprehension tests
 (ns test.for-test
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 (deftest basic-for
   (testing "basic for comprehension"
@@ -35,8 +36,8 @@
 
 (deftest for-destructuring
   (testing "destructuring in for"
-    (is (= '([:a 1] [:b 2])
-           (for [[k v] {:a 1 :b 2}] [k v])))))
+    (is (= #{[:a 1] [:b 2]}
+           (set (for [[k v] {:a 1 :b 2}] [k v]))))))
 
 (deftest for-nested-three-way
   (testing "three-level nesting"

@@ -352,11 +352,13 @@
         (bump-stack-sp! l 1)
         (bump-max-stack! l))
 
-      (:add :sub :mul :quot :lt :lte :gt :gte :eq)
+      (:add :sub :mul :bit-and :bit-or :bit-xor :bit-and-not
+        :bit-shift-left :bit-shift-right :unsigned-bit-shift-right
+        :quot :lt :lte :gt :gte :eq)
       (do (emit! l nid op)
           (bump-stack-sp! l -1))  ; 2→1
 
-      (:inc :dec)
+      (:inc :dec :bit-not)
       (emit! l nid op)  ; 1→1, no SP change
 
       :call

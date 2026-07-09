@@ -16,21 +16,61 @@
 ;; code keeps the analysis testable and easy to read.
 
 (ns ir.passes.constfold
-  (:require [ir.data]
-            [ir.passes :refer [defpass]]))
+  (:require
+   [ir.data]
+   [ir.passes :refer [defpass]]))
 
 ;; --- op tables --------------------------------------------------------
 
 (def ^:private binop-fn
-  "Map IR op-kw → Lisp arithmetic fn for primitive fold."
-  {:add + :sub - :mul * :lt < :lte <= :gt > :gte >= :eq =})
+  "Map IR op-kw → primitive constant-folder fn.
+   Return the folded value, or nil when this operand mix should stay as IR."
+  {:add  (fn [a b] (+ a b))
+   :sub  (fn [a b] (- a b))
+   :mul  (fn [a b] (* a b))
+   :bit-and (fn [a b]
+              (when (and (integer? a) (integer? b))
+                (bit-and a b)))
+   :bit-or (fn [a b]
+             (when (and (integer? a) (integer? b))
+               (bit-or a b)))
+   :bit-xor (fn [a b]
+              (when (and (integer? a) (integer? b))
+                (bit-xor a b)))
+   :bit-and-not (fn [a b]
+                  (when (and (integer? a) (integer? b))
+                    (bit-and-not a b)))
+   :bit-shift-left (fn [a b]
+                     (when (and (integer? a) (integer? b))
+                       (bit-shift-left a b)))
+   :bit-shift-right (fn [a b]
+                      (when (and (integer? a) (integer? b))
+                        (bit-shift-right a b)))
+   :unsigned-bit-shift-right (fn [a b]
+                               (when (and (integer? a) (integer? b))
+                                 (unsigned-bit-shift-right a b)))
+   :quot (fn [a b]
+           (when (and (integer? a) (integer? b))
+             (quot a b)))
+   :div  (fn [a b]
+           (when (and (float? a) (float? b))
+             (/ a b)))
+   :lt   (fn [a b] (< a b))
+   :lte  (fn [a b] (<= a b))
+   :gt   (fn [a b] (> a b))
+   :gte  (fn [a b] (>= a b))
+   :eq   (fn [a b] (= a b))})
 
 (def ^:private unary-fn
-  {:inc inc :dec dec})
+  {:inc inc
+   :dec dec
+   :bit-not (fn [a]
+              (when (integer? a)
+                (bit-not a)))})
 
 (def ^:private commutative
   "Ops whose operand order doesn't affect the result — Const canonicalises right."
-  #{:add :mul :eq})
+  #{:add :mul :eq :bit-and :bit-or :bit-xor})
 
 ;; --- helpers ----------------------------------------------------------
 
@@ -50,18 +90,20 @@
       ;; Binary op with two Const operands.
       (and (binop-fn op) (= n 2)
            (const? (nth refs 0) f) (const? (nth refs 1) f))
-        (try
-          {:replace-with {:op :const :refs []
-                          :aux ((binop-fn op)
-                                (const-val (nth refs 0) f)
-                                (const-val (nth refs 1) f))}}
-          (catch _ nil))  ; overflow / divide-by-zero — leave the Inst alone
+      (try
+        (let [folded ((binop-fn op)
+                      (const-val (nth refs 0) f)
+                      (const-val (nth refs 1) f))]
+          (when-not (nil? folded)
+            {:replace-with {:op :const :refs []
+                            :aux folded}}))
+        (catch _ nil))  ; overflow / divide-by-zero — leave the Inst alone
       ;; Unary op with one Const operand.
       (and (unary-fn op) (= n 1) (const? (nth refs 0) f))
-        (try
-          {:replace-with {:op :const :refs []
-                          :aux ((unary-fn op) (const-val (nth refs 0) f))}}
-          (catch _ nil)))))
+      (try
+        {:replace-with {:op :const :refs []
+                        :aux ((unary-fn op) (const-val (nth refs 0) f))}}
+        (catch _ nil)))))
 
 (defn- try-identity [nid f]
   "Strategy 2: algebraic identities — (+ x 0), (* x 1), (* x 0), (- x 0)."
@@ -82,6 +124,22 @@
                  (one? v0)                  {:replace-uses r1}
                  (or (zero? v0) (zero? v1)) {:replace-with {:op :const :refs [] :aux 0}}
                  :else nil)
+          :bit-or (cond
+                    (zero? v1) {:replace-uses r0}
+                    (zero? v0) {:replace-uses r1}
+                    :else nil)
+          :bit-xor (cond
+                     (zero? v1) {:replace-uses r0}
+                     (zero? v0) {:replace-uses r1}
+                     :else nil)
+          :bit-and (cond
+                     (= -1 v1) {:replace-uses r0}
+                     (= -1 v0) {:replace-uses r1}
+                     :else nil)
+          :bit-and-not (when (zero? v1) {:replace-uses r0})
+          :bit-shift-left (when (zero? v1) {:replace-uses r0})
+          :bit-shift-right (when (zero? v1) {:replace-uses r0})
+          :unsigned-bit-shift-right (when (zero? v1) {:replace-uses r0})
           nil)))))
 
 (defn- try-canonicalize [nid f]
@@ -99,14 +157,14 @@
   "Side-effecting: applies one of the three action shapes."
   (cond
     (:replace-with action)
-      (let [{:keys [op refs aux]} (:replace-with action)]
-        (ir/replace-op! f nid op)
-        (ir/set-refs!   f nid refs)
-        (ir/set-aux!    f nid aux))
+    (let [{:keys [op refs aux]} (:replace-with action)]
+      (ir/replace-op! f nid op)
+      (ir/set-refs!   f nid refs)
+      (ir/set-aux!    f nid aux))
     (:replace-uses action)
-      (ir/replace-all-uses! f nid (:replace-uses action))
+    (ir/replace-all-uses! f nid (:replace-uses action))
     (:swap-refs action)
-      (ir/set-refs! f nid (:swap-refs action))))
+    (ir/set-refs! f nid (:swap-refs action))))
 
 (defpass constfold
   "Constant-fold, algebraic-identity-rewrite, and commutative-canonicalise.

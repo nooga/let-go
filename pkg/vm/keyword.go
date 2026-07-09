@@ -66,6 +66,12 @@ func (l Keyword) Invoke(pargs []Value) (Value, error) {
 		}
 		return NIL, nil
 	}
+	if kl, ok := as.(KeywordLookup); ok {
+		if vl == 1 {
+			return kl.ValueAtKeyword(l), nil
+		}
+		return kl.ValueAtKeywordOr(l, pargs[1]), nil
+	}
 	if vl == 1 {
 		return as.ValueAt(l), nil
 	}

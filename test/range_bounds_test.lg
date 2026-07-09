@@ -1,0 +1,39 @@
+(ns test.range-bounds-test
+  (:require [test :refer :all]))
+
+;; range must never panic on non-Int bounds: floats coerce like the
+;; JVM (integers short of the end), ##Inf makes an infinite range,
+;; and anything else is a catchable error.
+
+(deftest range-integer-args
+  (testing "plain integer ranges are unchanged"
+    (is (= '(0 1 2) (range 3)))
+    (is (= '(2 3 4) (range 2 5)))
+    (is (= '(5 3) (range 5 1 -2)))))
+
+(deftest range-infinite-end
+  (testing "##Inf end makes an infinite range"
+    (is (= '(1 2 3) (take 3 (range 1 ##Inf))))
+    (is (= '(0 1 2) (take 3 (range 0 ##Inf)))))
+
+  (testing "##-Inf end with negative step descends forever"
+    (is (= '(5 4 3) (take 3 (range 5 ##-Inf -1)))))
+
+  (testing "infinite end against the step is empty"
+    (is (= '() (range 1 ##-Inf)))
+    (is (= '() (range 1 ##Inf -1)))))
+
+(deftest range-float-end
+  (testing "finite float end yields integers short of it"
+    (is (= '(2 3 4 5) (range 2 5.29)))
+    (is (= '(2 3 4 5) (range 2 6.0)))
+    (is (= '(0 1 2) (range 2.5))))
+
+  (testing "float end with negative step"
+    (is (= '(5 4 3 2) (range 5 1.5 -1)))))
+
+(deftest range-bad-bounds-error
+  (testing "non-integer start/step is an error, not a panic"
+    (is (= :caught (try (range 1.5 3) (catch e :caught))))
+    (is (= :caught (try (range 1 5 0.5) (catch e :caught))))
+    (is (= :caught (try (range "a") (catch e :caught))))))

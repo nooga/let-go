@@ -70,20 +70,31 @@ func (c *Cons) Seq() Seq {
 	return c
 }
 
-func (c *Cons) Count() Value {
-	n := 1
-	for s := c.more; s != nil && s != EmptyList; s = s.Next() {
+// consTailCount walks the tail, realizing lazy links so an
+// unrealized empty lazy tail isn't counted as an element:
+// previously (count (cons 1 <empty lazy seq>)) returned 2.
+func consTailCount(tail Seq) int {
+	n := 0
+	s := tail
+	for {
+		if ls, ok := s.(*LazySeq); ok {
+			s = ls.seq()
+			continue
+		}
+		if SeqIsEmpty(s) {
+			return n
+		}
 		n++
+		s = s.Next()
 	}
-	return Int(n)
+}
+
+func (c *Cons) Count() Value {
+	return Int(1 + consTailCount(c.more))
 }
 
 func (c *Cons) RawCount() int {
-	n := 1
-	for s := c.more; s != nil && s != EmptyList; s = s.Next() {
-		n++
-	}
-	return n
+	return 1 + consTailCount(c.more)
 }
 
 func (c *Cons) Empty() Collection {

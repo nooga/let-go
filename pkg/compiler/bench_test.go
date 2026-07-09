@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 
@@ -81,7 +80,7 @@ func BenchmarkInitFromLGB(b *testing.B) {
 		return v.(*vm.Var)
 	}
 	for i := 0; i < b.N; i++ {
-		unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(rt.CoreCompiledLGB), resolve)
+		unit, err := bytecode.DecodeToExecUnitBytes(rt.CoreCompiledLGB, resolve)
 		if err != nil {
 			b.Fatal(err)
 		}

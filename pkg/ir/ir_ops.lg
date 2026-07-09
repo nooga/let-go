@@ -64,6 +64,13 @@
     ["Add"        2  1 true  false OP_ADD             false "Add"        ""]
     ["Sub"        2  1 true  false OP_SUB             false "Sub"        ""]
     ["Mul"        2  1 true  false OP_MUL             false "Mul"        ""]
+    ["BitAnd"     2  1 true  false OP_BIT_AND         false "BitAnd"     "clojure.core/bit-and — integer bitwise and"]
+    ["BitOr"      2  1 true  false OP_BIT_OR          false "BitOr"      "clojure.core/bit-or — integer bitwise or"]
+    ["BitXor"     2  1 true  false OP_BIT_XOR         false "BitXor"     "clojure.core/bit-xor — integer bitwise xor"]
+    ["BitAndNot"  2  1 true  false OP_BIT_AND_NOT     false "BitAndNot"  "clojure.core/bit-and-not — integer bit clear (&^)"]
+    ["BitShiftLeft" 2 1 true false OP_BIT_SHIFT_LEFT  false "BitShiftLeft" "clojure.core/bit-shift-left — integer left shift"]
+    ["BitShiftRight" 2 1 true false OP_BIT_SHIFT_RIGHT false "BitShiftRight" "clojure.core/bit-shift-right — integer arithmetic right shift"]
+    ["UnsignedBitShiftRight" 2 1 true false OP_UNSIGNED_BIT_SHIFT_RIGHT false "UnsignedBitShiftRight" "clojure.core/unsigned-bit-shift-right — integer logical right shift"]
     ["Quot"       2  1 true  false OP_QUOT            false "Quot"       "clojure.core/quot — integer quotient truncated toward zero. int/int lowers to native Go `/` (which truncates identically); any float/ratio/boxed operand lowers via rt.QuotValue (native float `/` does NOT truncate)"]
     ["Div"        2  1 true  false OP_DIV             false "Div"        "clojure.core// — true division. float/float lowers to native Go `/`; any other operand mix (int/int -> Ratio, mixed -> Float) lowers via rt.DivValue. Distinguished from Quot by op-kw in lower-go (both render Go `/`)"]
     ["Lt"         2  1 true  false OP_LT              false "Lt"         ""]
@@ -73,6 +80,7 @@
     ["Eq"         2  1 true  false OP_EQ              false "Eq"         ""]
     ["Inc"        1  1 true  false OP_INC             false "Inc"        ""]
     ["Dec"        1  1 true  false OP_DEC             false "Dec"        ""]
+    ["BitNot"     1  1 true  false OP_BIT_NOT         false "BitNot"     "clojure.core/bit-not — integer bitwise complement"]
 
     ["Pop"        1  0 false false nil                false "Pop"        "discard top stack value; no result (OP_POP)"]
 

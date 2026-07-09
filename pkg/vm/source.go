@@ -6,6 +6,7 @@
 package vm
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sync"
 )
@@ -34,8 +35,113 @@ func (s *SourceInfo) String() string {
 }
 
 // SourceMap maps bytecode IP offsets to source locations.
+//
+// It can be built eagerly (Add/Reserve) or lazily: NewLazySourceMap holds a
+// decode closure that is run at most once, on the first Lookup/Entries. Bundle
+// load decodes every chunk's source map, yet source maps are only read on an
+// error or stack-trace — so deferring the decode removes that allocation from
+// the hot startup path entirely for the common (no-error) case.
 type SourceMap struct {
 	entries []sourceMapEntry
+	once    sync.Once
+	// Lazy sources (at most one set). A closure form (lazy) for general callers,
+	// and a raw-bytes form (raw/rawStrings/rawCount) for the decoder — the raw
+	// form allocates only this struct at load (raw is a zero-copy sub-slice of the
+	// resident bundle, rawStrings is the shared string table), so a bundle chunk's
+	// source map costs ONE allocation instead of two (struct + entries array).
+	lazy       func() []SourceMapEntry
+	raw        []byte
+	rawStrings []string
+	rawCount   int
+}
+
+// NewLazySourceMap returns a SourceMap whose entries are produced by `decode`
+// on first access. `decode` runs at most once (memoized); it must be safe to
+// call from any goroutine that first touches the map.
+func NewLazySourceMap(decode func() []SourceMapEntry) *SourceMap {
+	return &SourceMap{lazy: decode}
+}
+
+// NewLazySourceMapRaw returns a SourceMap that decodes `count` entries from the
+// raw LGB source-map bytes on first access. Each entry is 6 unsigned LEB128
+// varints: startIP, file(index into strings), line, col, endLine, endColumn.
+// `raw` may alias the bundle buffer (read-only) and `strings` the module string
+// table — both are retained, not copied.
+func NewLazySourceMapRaw(raw []byte, strings []string, count int) *SourceMap {
+	return &SourceMap{raw: raw, rawStrings: strings, rawCount: count}
+}
+
+// materialize realizes a lazy map exactly once. No-op for eagerly-built maps.
+func (sm *SourceMap) materialize() {
+	if sm.lazy == nil && sm.raw == nil {
+		return
+	}
+	sm.once.Do(func() {
+		switch {
+		case sm.raw != nil:
+			sm.entries = decodeRawSourceMap(sm.raw, sm.rawCount, sm.rawStrings)
+		case sm.lazy != nil:
+			decoded := sm.lazy()
+			if len(decoded) > 0 {
+				ents := make([]sourceMapEntry, len(decoded))
+				for i, e := range decoded {
+					ents[i] = sourceMapEntry{startIP: e.StartIP, info: e.Info}
+				}
+				sm.entries = ents
+			}
+		}
+		sm.lazy = nil
+		sm.raw = nil
+		sm.rawStrings = nil
+	})
+}
+
+// decodeRawSourceMap parses the captured LGB source-map byte span. Runs only on
+// first Lookup (off the startup hot path). The bytes were length-validated at
+// load, so a short read is treated as end-of-entries.
+func decodeRawSourceMap(raw []byte, count int, strings []string) []sourceMapEntry {
+	ents := make([]sourceMapEntry, 0, count)
+	pos := 0
+	readU := func() (int, bool) {
+		if pos >= len(raw) {
+			return 0, false
+		}
+		v, n := binary.Uvarint(raw[pos:])
+		if n <= 0 {
+			return 0, false
+		}
+		pos += n
+		return int(v), true
+	}
+	for j := 0; j < count; j++ {
+		startIP, ok := readU()
+		if !ok {
+			break
+		}
+		fileIdx, ok1 := readU()
+		line, ok2 := readU()
+		col, ok3 := readU()
+		eline, ok4 := readU()
+		ecol, ok5 := readU()
+		if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 {
+			break
+		}
+		file := ""
+		if fileIdx >= 0 && fileIdx < len(strings) {
+			file = strings[fileIdx]
+		}
+		ents = append(ents, sourceMapEntry{
+			startIP: startIP,
+			info: SourceInfo{
+				File:      file,
+				Line:      line,
+				Column:    col,
+				EndLine:   eline,
+				EndColumn: ecol,
+			},
+		})
+	}
+	return ents
 }
 
 type sourceMapEntry struct {
@@ -82,6 +188,7 @@ func (sm *SourceMap) Entries() []SourceMapEntry {
 	if sm == nil {
 		return nil
 	}
+	sm.materialize()
 	out := make([]SourceMapEntry, len(sm.entries))
 	for i, e := range sm.entries {
 		out[i] = SourceMapEntry{StartIP: e.startIP, Info: e.info}
@@ -92,7 +199,11 @@ func (sm *SourceMap) Entries() []SourceMapEntry {
 // Lookup finds the SourceInfo for a given instruction pointer.
 // Uses the last entry whose startIP <= ip.
 func (sm *SourceMap) Lookup(ip int) *SourceInfo {
-	if sm == nil || len(sm.entries) == 0 {
+	if sm == nil {
+		return nil
+	}
+	sm.materialize()
+	if len(sm.entries) == 0 {
 		return nil
 	}
 	var best *sourceMapEntry

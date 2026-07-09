@@ -266,6 +266,44 @@ func TestLowerGoStrictDivIntIntRoutesThroughDivValue(t *testing.T) {
 	}
 }
 
+func TestLowerGoStrictBitwiseIntLowersNative(t *testing.T) {
+	ensureLoader()
+
+	cases := []struct {
+		name   string
+		src    string
+		argtys string
+		want   string
+	}{
+		{name: "bit-and", src: `(defn band [x y] (bit-and x y))`, argtys: "[:int :int]", want: "&"},
+		{name: "bit-or", src: `(defn bor [x y] (bit-or x y))`, argtys: "[:int :int]", want: "|"},
+		{name: "bit-xor", src: `(defn bxor [x y] (bit-xor x y))`, argtys: "[:int :int]", want: "^"},
+		{name: "bit-not", src: `(defn bnot [x] (bit-not x))`, argtys: "[:int]", want: "^"},
+		{name: "bit-shift-left", src: `(defn bshl [x y] (bit-shift-left x y))`, argtys: "[:int :int]", want: "<<"},
+		{name: "bit-shift-right", src: `(defn bshr [x y] (bit-shift-right x y))`, argtys: "[:int :int]", want: ">>"},
+		{name: "unsigned-bit-shift-right", src: `(defn bushr [x y] (unsigned-bit-shift-right x y))`, argtys: "[:int :int]", want: ">>"},
+		{name: "bit-and-not", src: `(defn bandnot [x y] (bit-and-not x y))`, argtys: "[:int :int]", want: "&^"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := buildLispIR(t, tc.src)
+			seedArgTypes(t, fn, tc.argtys)
+			optimizeLispIR(t, fn)
+			result := lowerGo(t, fn, ":strict")
+
+			if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+				t.Fatalf("expected :lowered status, got %v (reason=%v)",
+					got, result.ValueAt(vm.Keyword("reason")))
+			}
+			rendered := bindAndRenderGoDecl(t, result)
+			if !strings.Contains(rendered, tc.want) {
+				t.Fatalf("expected %s to lower to native Go op %q, got:\n%s", tc.name, tc.want, rendered)
+			}
+		})
+	}
+}
+
 func TestLowerGoFileRendersFullGoFile(t *testing.T) {
 	ensureLoader()
 

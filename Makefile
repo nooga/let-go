@@ -16,7 +16,12 @@ endif
 # Prefer - to _ for make var names (won't conflict with env vars):
 LG := lg
 LG-PROFILE ?= lg-profile
-GOLANGCI-LINT := github.com/golangci/golangci-lint/cmd/golangci-lint
+GOLANGCI-LINT := github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+GOLANGCI-LINT-VERSION ?= v2.12.2
+GOLANGCI-LINT-VERSION-NO-V := $(patsubst v%,%,$(GOLANGCI-LINT-VERSION))
+GOLANGCI-LINT-BIN := $(CURDIR)/.cache/local/bin/golangci-lint
+GOLANGCI-LINT-CACHE := $(CURDIR)/.cache/local/golangci-lint
+GOLANGCI-LINT-GOENV := GOPATH=$(CURDIR)/.cache/local/go GOBIN=$(CURDIR)/.cache/local/bin GOMODCACHE=$(CURDIR)/.cache/local/go/pkg/mod GOCACHE=$(CURDIR)/.cache/local/cache/go-build
 REPORT-SCRIPT := scripts/clojure_compat_report.sh
 
 # Resource caps for test invocations. GOMEMLIMIT bounds the Go heap
@@ -196,7 +201,7 @@ bench-ratchet-full-update: lowered $(GO)
 
 clean-lowered:
 	$(RM) -r pkg/rt/core_go_lowered
-	$(RM) lg_gogen_ir.go lg_gogen_accel.go cmd/lgbgen/main_gogen_ir.go cmd/lgbgen/main_gogen_accel.go pkg/ir/zz_gogen_ir_wire_test.go pkg/ir/zz_gogen_accel_wire_test.go pkg/rt/generated.provenance
+	$(RM) lg_gogen_ir.go lg_gogen_accel.go cmd/lgbgen/main_gogen_ir.go cmd/lgbgen/main_gogen_accel.go pkg/ir/zz_gogen_ir_wire_test.go pkg/ir/zz_gogen_accel_wire_test.go pkg/wasmhost/zz_gogen_ir_wire_test.go pkg/rt/generated.provenance
 	@echo "Cleaned lowered Go tree and wireup files"
 
 clean: clean-lowered
@@ -209,11 +214,13 @@ ifneq (,$(wildcard .cache))
 endif
 
 lint: install-golangci-lint
-	golangci-lint run
+	GOLANGCI_LINT_CACHE=$(GOLANGCI-LINT-CACHE) $(GOLANGCI-LINT-BIN) run
 
 install-golangci-lint: $(GO)
-	which golangci-lint || \
-	  GO111MODULE=off go get -u $(GO111MODULE-LINT)
+	@mkdir -p $(dir $(GOLANGCI-LINT-BIN)) $(GOLANGCI-LINT-CACHE)
+	@if ! test -x $(GOLANGCI-LINT-BIN) || ! $(GOLANGCI-LINT-BIN) --version | grep -q 'version $(GOLANGCI-LINT-VERSION-NO-V)'; then \
+	  $(GOLANGCI-LINT-GOENV) $(GO) install $(GOLANGCI-LINT)@$(GOLANGCI-LINT-VERSION); \
+	fi
 
 # Register the local git merge drivers for the generated artifacts (see
 # .gitattributes). Merge drivers live in .git/config, which is not shared, so
@@ -353,3 +360,8 @@ ratchets-update: build lowered $(GO)
 
 # PHONY targets are for ones that have conflicting files/dirs present:
 .PHONY: test clean clean-lowered ir-stress-gate
+
+# Build the browser-inspector example (delegates to its own Makefile).
+.PHONY: browser-inspector
+browser-inspector:
+	$(MAKE) -C examples/browser-inspector build

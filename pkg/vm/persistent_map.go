@@ -42,6 +42,7 @@ var PersistentMapType *thePersistentMapType = &thePersistentMapType{}
 // hmapNode is the internal node interface for the HAMT.
 type hmapNode interface {
 	find(shift uint, hash uint32, key Value) (Value, bool)
+	findKeyword(shift uint, hash uint32, k Keyword) (Value, bool)
 	assoc(shift uint, hash uint32, key Value, val Value, addedLeaf *bool) hmapNode
 	dissoc(shift uint, hash uint32, key Value) hmapNode
 	nodeSeq() []MapEntry
@@ -152,6 +153,25 @@ func (n *hmapBitmapNode) find(shift uint, hash uint32, key Value) (Value, bool) 
 		return valOrNode.(hmapNode).find(shift+hmapShift, hash, key)
 	}
 	if valueEquiv(key, keyOrNil.(Value)) {
+		return valOrNode.(Value), true
+	}
+	return nil, false
+}
+
+func (n *hmapBitmapNode) findKeyword(shift uint, hash uint32, k Keyword) (Value, bool) {
+	bit := hmapBitpos(hash, shift)
+	if n.bitmap&bit == 0 {
+		return nil, false
+	}
+	idx := hmapIndex(n.bitmap, bit)
+	keyOrNil := n.array[2*idx]
+	valOrNode := n.array[2*idx+1]
+	if keyOrNil == nil {
+		return valOrNode.(hmapNode).findKeyword(shift+hmapShift, hash, k)
+	}
+	// Box-free compare: a keyword only ever equals a keyword with the same
+	// string; non-keyword stored keys (incl. hash collisions) never match.
+	if sk, ok := keyOrNil.(Keyword); ok && sk == k {
 		return valOrNode.(Value), true
 	}
 	return nil, false
@@ -447,6 +467,16 @@ func (n *hmapCollisionNode) find(shift uint, hash uint32, key Value) (Value, boo
 	return n.array[idx+1].(Value), true
 }
 
+func (n *hmapCollisionNode) findKeyword(shift uint, hash uint32, k Keyword) (Value, bool) {
+	// same linear scan as find(), comparing keys typed:
+	for i := 0; i < len(n.array); i += 2 {
+		if sk, ok := n.array[i].(Keyword); ok && sk == k {
+			return n.array[i+1].(Value), true
+		}
+	}
+	return nil, false
+}
+
 func (n *hmapCollisionNode) assoc(shift uint, hash uint32, key Value, val Value, addedLeaf *bool) hmapNode {
 	if hash == n.hash {
 		// Same hash bucket
@@ -537,7 +567,6 @@ type PersistentMap struct {
 	count    int
 	root     hmapNode
 	meta     Value
-	order    []Value
 	_hash    uint32
 	_hasHash bool
 }
@@ -577,7 +606,11 @@ func NewPersistentMap(kvs []Value) *PersistentMap {
 	return m
 }
 
-// NewArrayMap creates a PersistentMap that preserves insertion order for seq.
+// NewArrayMap creates a PersistentMap from an alternating key-value slice.
+// Orderless by design: Clojure map order is an emergent array-map
+// implementation detail (dropped past 8 entries), not a guarantee — let-go
+// treats maps as unordered (cf. Go/Abseil map-iteration randomization).
+// Order-dependent suite tests get :lg reader-cond branches.
 func NewArrayMap(kvs []Value) *PersistentMap {
 	if len(kvs) == 0 {
 		return EmptyPersistentMap
@@ -585,9 +618,25 @@ func NewArrayMap(kvs []Value) *PersistentMap {
 	if len(kvs)%2 != 0 {
 		return EmptyPersistentMap
 	}
-	m := &PersistentMap{order: make([]Value, 0, len(kvs)/2)}
+	// Build on a transient to avoid a HAMT-node clone per pair (every map
+	// literal flows through here).
+	//
+	// The Assoc/Persistent errors are provably unreachable: both fail only via
+	// TransientMap.ensureEditable(), which errors on use-after-persistent or
+	// cross-goroutine use. This transient is freshly created, single-owner,
+	// mutated only in this loop, and persisted exactly once at the end — so
+	// neither condition can hold. A non-nil error therefore means that
+	// invariant was broken; fail loud rather than return a half-built map.
+	t := NewTransientMap(EmptyPersistentMap)
 	for i := 0; i < len(kvs); i += 2 {
-		m = m.Assoc(kvs[i], kvs[i+1]).(*PersistentMap)
+		var err error
+		if t, err = t.Assoc(kvs[i], kvs[i+1]); err != nil {
+			panic("NewArrayMap: transient Assoc failed: " + err.Error())
+		}
+	}
+	m, err := t.Persistent()
+	if err != nil {
+		panic("NewArrayMap: transient Persistent failed: " + err.Error())
 	}
 	return m
 }
@@ -703,14 +752,7 @@ func (m *PersistentMap) Assoc(key Value, val Value) Associative {
 	if addedLeaf {
 		newCount++
 	}
-	var newOrder []Value
-	if m.order != nil {
-		newOrder = append([]Value(nil), m.order...)
-		if addedLeaf {
-			newOrder = append(newOrder, key)
-		}
-	}
-	return &PersistentMap{count: newCount, root: newRoot, meta: m.meta, order: newOrder}
+	return &PersistentMap{count: newCount, root: newRoot, meta: m.meta}
 }
 
 func (m *PersistentMap) Dissoc(key Value) Associative {
@@ -723,21 +765,9 @@ func (m *PersistentMap) Dissoc(key Value) Associative {
 		return m
 	}
 	if newRoot == nil {
-		if m.order != nil {
-			return &PersistentMap{count: 0, root: nil, meta: m.meta, order: []Value{}}
-		}
 		return &PersistentMap{count: 0, root: nil, meta: m.meta}
 	}
-	var newOrder []Value
-	if m.order != nil {
-		newOrder = make([]Value, 0, len(m.order)-1)
-		for _, k := range m.order {
-			if !valueEquiv(k, key) {
-				newOrder = append(newOrder, k)
-			}
-		}
-	}
-	return &PersistentMap{count: m.count - 1, root: newRoot, meta: m.meta, order: newOrder}
+	return &PersistentMap{count: m.count - 1, root: newRoot, meta: m.meta}
 }
 
 // --- Lookup interface ---
@@ -752,6 +782,21 @@ func (m *PersistentMap) ValueAtOr(key Value, dflt Value) Value {
 	}
 	hash := hashValue(key)
 	val, ok := m.root.find(0, hash, key)
+	if !ok {
+		return dflt
+	}
+	return val
+}
+
+func (m *PersistentMap) ValueAtKeyword(k Keyword) Value {
+	return m.ValueAtKeywordOr(k, NIL)
+}
+
+func (m *PersistentMap) ValueAtKeywordOr(k Keyword, dflt Value) Value {
+	if m.root == nil {
+		return dflt
+	}
+	val, ok := m.root.findKeyword(0, k.Hash(), k)
 	if !ok {
 		return dflt
 	}
@@ -800,15 +845,6 @@ func (m *PersistentMap) Seq() Seq {
 func (m *PersistentMap) entries() []Value {
 	if m.root == nil {
 		return nil
-	}
-	if m.order != nil {
-		result := make([]Value, 0, m.count)
-		for _, k := range m.order {
-			if v, ok := m.root.find(0, hashValue(k), k); ok {
-				result = append(result, MapEntry{Key: k, Value: v})
-			}
-		}
-		return result
 	}
 	mes := m.root.nodeSeq()
 	result := make([]Value, len(mes))

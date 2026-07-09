@@ -1,0 +1,43 @@
+(ns test.tail-call-variadic-test
+  (:require [test :refer :all]))
+
+;; A zero-arg call in tail position (like core apply's `(f)` branch for an
+;; empty arg seq) must still package the empty rest list for variadic
+;; functions. Previously the reused frame ran LOAD_ARG against zero args and
+;; failed with "argument lookup out of bounds".
+(deftest apply-variadic-empty-args
+  (testing "(apply f []) on a variadic-only fn"
+    (let [f (fn [& xs] (count xs))]
+      (is (= 0 (apply f [])))
+      (is (= 0 (apply f nil)))
+      (is (= 0 (apply f (list))))
+      (is (= 2 (apply f [1 2])))))
+
+  (testing "empty rest binds like a direct zero-arg call"
+    (let [f (fn [& xs] xs)]
+      (is (= (f) (apply f [])))))
+
+  (testing "empty rest binds nil, like Clojure"
+    (let [f (fn [& xs] xs)
+          g (fn [a & xs] xs)]
+      (is (nil? (f)))
+      (is (nil? (apply f [])))
+      (is (nil? (g 1)))
+      (is (= :none (if (f) :some :none)))))
+
+  (testing "multi-arity fn with empty args still selects zero arity"
+    (let [f (fn ([] :zero) ([x] x))]
+      (is (= :zero (apply f [])))
+      (is (= :zero (apply f nil))))))
+
+(deftest tail-call-variadic-no-args
+  (testing "variadic fn invoked with no args from tail position"
+    (let [f (fn [& xs] (count xs))
+          call0 (fn [g] (g))]
+      (is (= 0 (call0 f)))))
+
+  (testing "fixed+variadic fn with too few args errors instead of crashing"
+    (let [g (fn [a & xs] [a xs])
+          call0 (fn [h] (h))]
+      (is (= :caught (try (call0 g) (catch e :caught))))
+      (is (= :caught (try (apply g []) (catch e :caught)))))))

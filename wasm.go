@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/bytecode"
@@ -89,6 +90,12 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
+	if err := prepareWasmBuildDirs(tmpDir); err != nil {
+		return err
+	}
+	goEnv := wasmBuildEnv(tmpDir)
+	goTool := goToolPath()
+	buildTags := strings.TrimSpace(os.Getenv("LG_WASM_BUILD_TAGS"))
 
 	// 3. Write generated source files
 	if err := os.WriteFile(filepath.Join(tmpDir, "program.lgb"), lgbBuf.Bytes(), 0644); err != nil {
@@ -97,37 +104,45 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(wasmassets.RenderMain(storeID, hostEval)), 0644); err != nil {
 		return err
 	}
+	if wasmassets.HasBuildTag(buildTags, "gogen_ir") {
+		srcDir, err := findLetGoModuleDir()
+		if err != nil {
+			return fmt.Errorf("gogen_ir wasm build requires local let-go source for wireup: %w", err)
+		}
+		if err := wasmassets.WriteGogenIRWireup(tmpDir, srcDir); err != nil {
+			return err
+		}
+	}
 
 	// 4. Write go.mod
-	goMod, err := generateWasmGoMod(tmpDir)
+	goMod, goSum, err := generateWasmModuleFiles(tmpDir)
 	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
 		return err
 	}
-
-	// 5. Resolve dependencies
-	fmt.Println("resolving dependencies...")
-	tidy := exec.Command("go", "mod", "tidy")
-	tidy.Dir = tmpDir
-	tidy.Stderr = os.Stderr
-	if err := tidy.Run(); err != nil {
-		return fmt.Errorf("go mod tidy: %w", err)
+	if len(goSum) > 0 {
+		if err := os.WriteFile(filepath.Join(tmpDir, "go.sum"), goSum, 0644); err != nil {
+			return err
+		}
 	}
 
-	// 6. Build WASM binary to temp dir
+	// 5. Build WASM binary to temp dir. We intentionally skip `go mod tidy`:
+	// the generated app imports only runtime packages, while tidy also walks
+	// test-only deps from the replaced local module and can spuriously pull
+	// network-only packages that the wasm build itself does not need.
 	fmt.Println("building wasm...")
 	wasmPath := filepath.Join(tmpDir, "app.wasm")
-	build := exec.Command("go", "build", "-o", wasmPath, ".")
+	build := exec.Command(goTool, wasmassets.GoBuildArgs(wasmPath, buildTags)...)
 	build.Dir = tmpDir
-	build.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	build.Env = append(goEnv, "GOOS=js", "GOARCH=wasm")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		return fmt.Errorf("go build wasm: %w", err)
 	}
 
-	// 7. Read the WASM binary. Inline mode gzip+base64s it into the page;
+	// 6. Read the WASM binary. Inline mode gzip+base64s it into the page;
 	// external mode ships it as a separate file the loader fetches + streams.
 	wasmData, err := os.ReadFile(wasmPath)
 	if err != nil {
@@ -143,13 +158,13 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		wasmB64 = base64.StdEncoding.EncodeToString(gzBuf.Bytes())
 	}
 
-	// 8. Read wasm_exec.js
+	// 7. Read wasm_exec.js
 	wasmExecJS, err := readWasmExecJS()
 	if err != nil {
 		return err
 	}
 
-	// 9. Build the HTML. shell=false emits the core glue only (no xterm shell
+	// 8. Build the HTML. shell=false emits the core glue only (no xterm shell
 	// / CDN tags). externalWasm=true emits the streaming loader and an empty
 	// inline payload (the wasm ships as main.wasm, written below).
 	var html string
@@ -163,7 +178,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		html = wasmassets.AssembleHTML(string(wasmExecJS), wasmB64, shell, externalWasm, hostEval)
 	}
 
-	// 10. Write output
+	// 9. Write output
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
@@ -180,7 +195,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		}
 	}
 
-	// 11. Write coi-serviceworker.js for cross-origin isolation on hosted servers
+	// 10. Write coi-serviceworker.js for cross-origin isolation on hosted servers
 	if err := os.WriteFile(filepath.Join(outDir, "coi-serviceworker.js"), []byte(coiServiceWorkerJS), 0644); err != nil {
 		return err
 	}
@@ -190,33 +205,88 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	return nil
 }
 
-func generateWasmGoMod(tmpDir string) (string, error) {
+func prepareWasmBuildDirs(tmpDir string) error {
+	for _, dir := range []string{
+		filepath.Join(tmpDir, ".gocache"),
+		filepath.Join(tmpDir, ".gotmp"),
+	} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func wasmBuildEnv(tmpDir string) []string {
+	return append(os.Environ(),
+		"GOCACHE="+filepath.Join(tmpDir, ".gocache"),
+		"GOTMPDIR="+filepath.Join(tmpDir, ".gotmp"),
+	)
+}
+
+func goToolPath() string {
+	if goroot := runtime.GOROOT(); goroot != "" {
+		if path := filepath.Join(goroot, "bin", "go"); fileExists(path) {
+			return path
+		}
+	}
+	return "go"
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func generateWasmModuleFiles(tmpDir string) (string, []byte, error) {
 	v := version
 	if v != "dev" && v != "" && v[0] >= '0' && v[0] <= '9' {
-		return fmt.Sprintf("module lg-wasm-app\n\ngo 1.26\n\nrequire github.com/nooga/let-go v%s\n", v), nil
+		return fmt.Sprintf("module lg-wasm-app\n\ngo 1.26\n\nrequire github.com/nooga/let-go v%s\n", v), nil, nil
 	}
 	// Dev build — try local source first
 	srcDir, err := findLetGoModuleDir()
 	if err == nil {
-		return fmt.Sprintf("module lg-wasm-app\n\ngo 1.26\n\nrequire github.com/nooga/let-go v0.0.0\n\nreplace github.com/nooga/let-go => %s\n", srcDir), nil
+		goMod, goSum, err := localWasmModuleFiles(srcDir)
+		if err != nil {
+			return "", nil, err
+		}
+		return goMod, goSum, nil
 	}
 	// No local source — resolve latest version from module proxy
 	goMod := "module lg-wasm-app\n\ngo 1.26\n"
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	get := exec.Command("go", "get", "github.com/nooga/let-go@latest")
+	get := exec.Command(goToolPath(), "get", "github.com/nooga/let-go@latest")
 	get.Dir = tmpDir
 	get.Stderr = os.Stderr
 	if err := get.Run(); err != nil {
-		return "", fmt.Errorf("resolving let-go module: %w (set LETGO_SRC for local source)", err)
+		return "", nil, fmt.Errorf("resolving let-go module: %w (set LETGO_SRC for local source)", err)
 	}
 	// go get wrote the go.mod with the resolved version — read it back
 	data, err := os.ReadFile(filepath.Join(tmpDir, "go.mod"))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return string(data), nil
+	sum, _ := os.ReadFile(filepath.Join(tmpDir, "go.sum"))
+	return string(data), sum, nil
+}
+
+func localWasmModuleFiles(srcDir string) (string, []byte, error) {
+	modPath := filepath.Join(srcDir, "go.mod")
+	modData, err := os.ReadFile(modPath)
+	if err != nil {
+		return "", nil, err
+	}
+	modText := string(modData)
+	modText = strings.Replace(modText, "module github.com/nooga/let-go", "module lg-wasm-app", 1)
+	modText = strings.TrimRight(modText, "\n") + "\n\nrequire github.com/nooga/let-go v0.0.0\n"
+	modText = strings.TrimRight(modText, "\n") + fmt.Sprintf("\n\nreplace github.com/nooga/let-go => %s\n", srcDir)
+	sumData, err := os.ReadFile(filepath.Join(srcDir, "go.sum"))
+	if err != nil && !os.IsNotExist(err) {
+		return "", nil, err
+	}
+	return modText, sumData, nil
 }
 
 func findLetGoModuleDir() (string, error) {
@@ -252,7 +322,10 @@ func mustGetwd() string {
 func readWasmExecJS() ([]byte, error) {
 	goroot := os.Getenv("GOROOT")
 	if goroot == "" {
-		out, err := exec.Command("go", "env", "GOROOT").Output()
+		goroot = runtime.GOROOT()
+	}
+	if goroot == "" {
+		out, err := exec.Command(goToolPath(), "env", "GOROOT").Output()
 		if err != nil {
 			return nil, fmt.Errorf("cannot find GOROOT: %w", err)
 		}

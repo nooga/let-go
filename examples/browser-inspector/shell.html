@@ -1,0 +1,1048 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>let-go browser inspector</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: #101316;
+      color: #e7ecef;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    #status {
+      display: none;
+    }
+    #inspector-app {
+      min-height: 100vh;
+      padding: 20px;
+      background:
+        radial-gradient(circle at top left, rgba(252, 163, 17, 0.14), transparent 28%),
+        linear-gradient(180deg, #11161b 0%, #0c1014 100%);
+    }
+    .inspector-shell {
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+    .hero {
+      margin-bottom: 16px;
+    }
+    .hero h1 {
+      font-size: 30px;
+      line-height: 1.1;
+      margin: 0 0 6px;
+    }
+    .hero p {
+      margin: 0;
+      color: #9eb0bc;
+    }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      margin: 14px 0 18px;
+      flex-wrap: wrap;
+    }
+    .toolbar-group {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .toggles {
+      margin: 0 0 18px;
+      padding: 12px 14px;
+      border: 1px solid #28313a;
+      border-radius: 14px;
+      background: rgba(9, 12, 16, 0.88);
+    }
+    .toggles legend {
+      padding: 0 6px;
+      color: #9eb0bc;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .toggle-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px 14px;
+    }
+    .toggle-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #d7e3ea;
+      font-size: 13px;
+    }
+    .toggle-option input {
+      accent-color: #fca311;
+    }
+    .toolbar button {
+      background: #fca311;
+      color: #101316;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .toolbar button.secondary {
+      background: #25313b;
+      color: #d7e3ea;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(360px, 1.05fr) minmax(420px, 1fr);
+      gap: 16px;
+    }
+    .panel {
+      border: 1px solid #28313a;
+      border-radius: 14px;
+      background: rgba(9, 12, 16, 0.88);
+      backdrop-filter: blur(6px);
+      overflow: hidden;
+    }
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-bottom: 1px solid #1b2229;
+      color: #9eb0bc;
+    }
+    textarea {
+      width: 100%;
+      min-height: 420px;
+      border: 0;
+      resize: vertical;
+      padding: 16px;
+      background: #0b0f13;
+      color: #eef4f6;
+      font: 13px/1.55 ui-monospace, "SF Mono", Menlo, monospace;
+      outline: none;
+    }
+    .result-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+    .artifact {
+      border: 1px solid #1f2931;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #0b0f13;
+    }
+    .artifact header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid #1a2229;
+      font-size: 12px;
+      color: #9eb0bc;
+    }
+    .artifact pre {
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #eaf0f4;
+      font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    .artifact .empty-state {
+      color: #6f7e88;
+    }
+    .status-ok { color: #7bd389; }
+    .status-unavailable { color: #f9c74f; }
+    .status-error { color: #ff7b72; }
+    .status-idle { color: #6f7e88; }
+    .meta {
+      margin-top: 12px;
+      color: #9eb0bc;
+      font-size: 12px;
+    }
+    .cell-list {
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+    }
+    .nb-halo { height: 12px; position: relative; }
+    .nb-halo-add {
+      position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 50%;
+      border: 1px solid #28313a;
+      background: #11161b;
+      color: #9eb0bc;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.12s ease;
+      font-size: 15px; line-height: 1;
+    }
+    .nb-halo:hover .nb-halo-add,
+    .nb-halo-add:focus-visible { opacity: 1; }
+    .nb-halo-add:hover { border-color: #fca311; color: #fca311; }
+    .nb-cell {
+      border: 1px solid #1b2229;
+      border-radius: 10px;
+      background: #0e1216;
+      overflow: hidden;
+      transition: border-color 0.12s ease, box-shadow 0.12s ease;
+    }
+    .nb-cell.active {
+      border-color: #fca311;
+      box-shadow: 0 0 0 1px rgba(252, 163, 17, 0.35);
+    }
+    .nb-cell-body { display: flex; align-items: stretch; }
+    .nb-gutter {
+      display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+      padding: 10px 8px; min-width: 54px;
+      color: #5c6b76;
+      font: 11px/1.3 ui-monospace, "SF Mono", Menlo, monospace;
+      user-select: none;
+    }
+    .nb-index { color: #6f8391; }
+    .cell-run-status { text-transform: uppercase; font-size: 10px; letter-spacing: .03em; color: #9eb0bc; }
+    .cell-run-status.status-ok { color: #4ec9b0; }
+    .cell-run-status.status-error { color: #f0616d; }
+    .cell-run-status.status-running { color: #fca311; }
+    .nb-editor {
+      flex: 1;
+      background: transparent;
+      border: 0;
+      color: #e9eef2;
+      font: 13px/1.55 ui-monospace, "SF Mono", Menlo, monospace;
+      padding: 10px 8px;
+      resize: none;
+      outline: none;
+      overflow: hidden;
+      min-height: 22px;
+    }
+    .nb-cell-tools {
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 8px;
+      opacity: 0;
+      transition: opacity 0.12s ease;
+    }
+    .nb-cell:hover .nb-cell-tools,
+    .nb-cell.active .nb-cell-tools { opacity: 1; }
+    .nb-run, .nb-del {
+      border: 1px solid #28313a;
+      background: #11161b;
+      color: #cdd9e1;
+      border-radius: 6px;
+      cursor: pointer;
+      font: 11px/1 ui-monospace, "SF Mono", Menlo, monospace;
+      padding: 5px 8px;
+    }
+    .nb-run:hover { border-color: #fca311; color: #fca311; }
+    .nb-del:hover { border-color: #f0616d; color: #f0616d; }
+    .cell-editor-tools {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-top: 1px solid #1b2229;
+      border-bottom: 1px solid #1b2229;
+      background: rgba(15, 20, 25, 0.9);
+      color: #9eb0bc;
+      font-size: 12px;
+    }
+    .cell-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .cell-actions button {
+      background: #25313b;
+      color: #d7e3ea;
+      border: 0;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .cell-actions button.danger {
+      background: #4a2326;
+      color: #ffd7d4;
+    }
+    .cell-caption {
+      padding: 12px 14px 0;
+      color: #9eb0bc;
+      font-size: 12px;
+    }
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      textarea {
+        min-height: 320px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="status">loading...</div>
+  <div id="inspector-app">
+    <div class="inspector-shell">
+      <div class="hero">
+        <h1>Let-Go Explorer</h1>
+        <p>Notebook-style preview over <code>LetGoHost.request(...)</code> with one shared evaluation session.</p>
+      </div>
+
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <button id="inspect-all-btn">Inspect Active Cell</button>
+          <button id="eval-btn" class="secondary">Eval Active</button>
+          <button id="compile-btn" class="secondary">Compile Active</button>
+          <button id="disassemble-btn" class="secondary">Disassemble Active</button>
+        </div>
+        <div class="toolbar-group">
+          <button id="add-cell-btn" class="secondary">Add Cell</button>
+          <button id="clear-session-btn" class="secondary">Clear Session</button>
+        </div>
+      </div>
+
+      <fieldset class="toggles">
+        <legend>Analysis</legend>
+        <div class="toggle-grid">
+          <label class="toggle-option" for="toggle-bytecode">
+            <input id="toggle-bytecode" type="checkbox" checked>
+            <span>Bytecode</span>
+          </label>
+          <label class="toggle-option" for="toggle-ir">
+            <input id="toggle-ir" type="checkbox">
+            <span>IR</span>
+          </label>
+          <label class="toggle-option" for="toggle-optimized-bytecode">
+            <input id="toggle-optimized-bytecode" type="checkbox">
+            <span>Optimized Bytecode</span>
+          </label>
+          <label class="toggle-option" for="toggle-lowered-go">
+            <input id="toggle-lowered-go" type="checkbox">
+            <span>Lowered Go</span>
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="layout">
+        <section class="panel">
+          <h2>Notebook Cells</h2>
+          <div class="cell-caption" id="cell-caption">Each top-level form is its own cell. Hover between cells for <strong>+</strong> to insert; click a cell to bind the inspector on the right. ⌘/Ctrl+Enter runs a cell.</div>
+          <div class="cell-list" id="cell-list"></div>
+        </section>
+
+        <section class="panel">
+          <h2 id="artifact-panel-title">Artifacts</h2>
+          <div class="result-grid">
+            <section class="artifact" id="artifact-result">
+              <header>
+                <strong>Result</strong>
+                <span class="status-idle" data-artifact-status="result">idle</span>
+              </header>
+              <pre data-artifact-body="result" class="empty-state">Run Inspect All to populate this pane.</pre>
+            </section>
+
+            <section class="artifact" id="artifact-stdout">
+              <header>
+                <strong>Stdout</strong>
+                <span class="status-idle" data-artifact-status="stdout">idle</span>
+              </header>
+              <pre data-artifact-body="stdout" class="empty-state">No stdout emitted yet.</pre>
+            </section>
+
+            <section class="artifact" id="artifact-stderr">
+              <header>
+                <strong>Stderr</strong>
+                <span class="status-idle" data-artifact-status="stderr">idle</span>
+              </header>
+              <pre data-artifact-body="stderr" class="empty-state">No stderr emitted yet.</pre>
+            </section>
+
+            <section class="artifact" id="artifact-bytecode">
+              <header>
+                <strong>Bytecode</strong>
+                <span class="status-idle" data-artifact-status="bytecode">idle</span>
+              </header>
+              <pre data-artifact-body="bytecode" class="empty-state">Bytecode disassembly will appear here.</pre>
+            </section>
+
+            <section class="artifact" id="artifact-ir">
+              <header>
+                <strong>IR</strong>
+                <span class="status-idle" data-artifact-status="ir">idle</span>
+              </header>
+              <pre data-artifact-body="ir" class="empty-state">Enable IR analysis to request this pane.</pre>
+            </section>
+
+            <section class="artifact" id="artifact-optimized-bytecode">
+              <header>
+                <strong>Optimized Bytecode</strong>
+                <span class="status-idle" data-artifact-status="optimizedBytecode">idle</span>
+              </header>
+              <pre data-artifact-body="optimizedBytecode" class="empty-state">Enable optimized bytecode analysis to request this pane.</pre>
+            </section>
+
+            <section class="artifact" id="artifact-lowered-go">
+              <header>
+                <strong>Lowered Go</strong>
+                <span class="status-idle" data-artifact-status="loweredGo">idle</span>
+              </header>
+              <pre data-artifact-body="loweredGo" class="empty-state">Enable lowered Go analysis to request this pane.</pre>
+            </section>
+          </div>
+        </section>
+      </div>
+
+      <div class="meta" id="meta"></div>
+    </div>
+  </div>
+
+  <script>
+__LG_HOST_JS_BODY_PLACEHOLDER__
+  </script>
+
+  <script>
+  (() => {
+    const metaEl = document.getElementById('meta');
+    const cellListEl = document.getElementById('cell-list');
+    const cellCaptionEl = document.getElementById('cell-caption');
+    const artifactPanelTitleEl = document.getElementById('artifact-panel-title');
+    const orderedArtifacts = ['result', 'stdout', 'stderr', 'bytecode', 'ir', 'optimizedBytecode', 'loweredGo'];
+    const toggleEls = {
+      bytecode: document.getElementById('toggle-bytecode'),
+      ir: document.getElementById('toggle-ir'),
+      optimizedBytecode: document.getElementById('toggle-optimized-bytecode'),
+      loweredGo: document.getElementById('toggle-lowered-go')
+    };
+    let lastOp = 'eval';
+    let activeRun = 0;
+    let reanalyzeTimer = null;
+    let nextCellID = 1;
+    let activeCellID = null;
+    let session = `browser-inspector-${Date.now()}`;
+    const REANALYZE_DEBOUNCE_MS = 250;
+    const defaultCellSource = `(defn sum3 [x]
+  (+ x 1 2))
+
+(sum3 4)`;
+    const defaultArtifactText = {
+      result: 'Run Inspect Active Cell to populate this pane.',
+      stdout: 'No stdout emitted yet.',
+      stderr: 'No stderr emitted yet.',
+      bytecode: 'Bytecode disassembly will appear here.',
+      ir: 'Enable IR analysis to request this pane.',
+      optimizedBytecode: 'Enable optimized bytecode analysis to request this pane.',
+      loweredGo: 'Enable lowered Go analysis to request this pane.'
+    };
+    const artifactTemplates = {
+      text(name, payload) {
+        if (typeof payload !== 'string') {
+          return null;
+        }
+        return { status: 'ok', text: payload };
+      },
+      bytecode(name, payload) {
+        if (!payload) {
+          return { status: 'idle', text: `${artifactDefs[name].label} is unavailable for this response.` };
+        }
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        const text = rows.length === 0
+          ? '(no bytecode rows)'
+          : rows.map((row) => {
+              const args = Array.isArray(row.args) && row.args.length > 0 ? ` ${row.args.join(', ')}` : '';
+              const resolved = row.resolved === undefined ? '' : ` ; ${JSON.stringify(row.resolved)}`;
+              return `${String(row.offset).padStart(4, ' ')}  ${row.op}${args}${resolved}`;
+            }).join('\n');
+        return { status: payload.status || 'ok', text };
+      },
+      bytecodeRows(name, payload) {
+        if (!Array.isArray(payload)) {
+          return null;
+        }
+        return artifactTemplates.bytecode(name, { rows: payload });
+      },
+      lines(name, payload) {
+        if (!Array.isArray(payload)) {
+          return null;
+        }
+        return {
+          status: 'ok',
+          text: payload.map((item) => typeof item === 'string' ? item : JSON.stringify(item)).join('\n')
+        };
+      },
+      json(name, payload) {
+        if (!payload) {
+          return { status: 'idle', text: `${artifactDefs[name].label} is unavailable for this response.` };
+        }
+        return { status: payload.status || 'ok', text: JSON.stringify(payload, null, 2) };
+      }
+    };
+    const artifactDefs = {
+      result: { label: 'Result' },
+      stdout: { label: 'Stdout' },
+      stderr: { label: 'Stderr' },
+      bytecode: { label: 'Bytecode', inspectField: 'bytecode', frameArtifact: 'bytecode', template: 'bytecodeRows' },
+      ir: { label: 'IR', inspectField: 'ir', frameArtifact: 'ir', template: 'text' },
+      optimizedBytecode: {
+        label: 'Optimized Bytecode',
+        inspectField: 'optimized_bytecode',
+        frameArtifact: 'optimized_bytecode',
+        template: 'bytecodeRows'
+      },
+      loweredGo: { label: 'Lowered Go', inspectField: 'lowered_go', frameArtifact: 'lowered_go', template: 'text' }
+    };
+    const artifactByFrameName = Object.fromEntries(
+      Object.entries(artifactDefs)
+        .filter(([, def]) => typeof def.frameArtifact === 'string')
+        .map(([name, def]) => [def.frameArtifact, name])
+    );
+    const artifactSlots = Object.fromEntries(orderedArtifacts.map((name) => [
+      name,
+      {
+        status: document.querySelector(`[data-artifact-status="${name}"]`),
+        body: document.querySelector(`[data-artifact-body="${name}"]`)
+      }
+    ]));
+
+    function blankArtifactState(name) {
+      return { status: 'idle', content: defaultArtifactText[name] || '' };
+    }
+
+    function makeArtifactState() {
+      return Object.fromEntries(orderedArtifacts.map((name) => [name, blankArtifactState(name)]));
+    }
+
+    function createCell(source = '') {
+      const id = nextCellID++;
+      return {
+        id,
+        title: `Cell ${id}`,
+        source,
+        lastOp: 'eval',
+        lastMeta: '',
+        runStatus: 'idle',
+        artifacts: makeArtifactState()
+      };
+    }
+
+    // Split the seed program into one cell per top-level form (Jupyter-style).
+    const seedForms = splitTopLevelForms(defaultCellSource);
+    const cells = (seedForms.length ? seedForms : ['']).map((form) => createCell(form));
+    activeCellID = cells[0].id;
+
+    function stripAnsi(text) {
+      // Host diagnostics (e.g. compiler errors) carry ANSI SGR color codes.
+      // The panes render plain text, so strip them or the user sees literal
+      // `[1;31m…[0m` junk instead of a clean message.
+      return typeof text === 'string' ? text.replace(/\x1b\[[0-9;]*m/g, '') : text;
+    }
+
+    function setArtifactState(name, status, content) {
+      const slot = artifactSlots[name];
+      if (!slot) return;
+      slot.status.className = `status-${status}`;
+      slot.status.textContent = status;
+      slot.body.textContent = content;
+      slot.body.classList.toggle('empty-state', status === 'idle');
+    }
+
+    function appendArtifactText(name, text, status = 'ok') {
+      const slot = artifactSlots[name];
+      if (!slot || text === '') return;
+      slot.status.className = `status-${status}`;
+      slot.status.textContent = status;
+      const prior = slot.body.classList.contains('empty-state') ? '' : slot.body.textContent;
+      slot.body.textContent = prior ? `${prior}${text}` : text;
+      slot.body.classList.remove('empty-state');
+    }
+
+    function appendArtifactSection(name, formIndex, status, content) {
+      const slot = artifactSlots[name];
+      if (!slot) return;
+      slot.status.className = `status-${status}`;
+      slot.status.textContent = status;
+      const prior = slot.body.classList.contains('empty-state') ? '' : slot.body.textContent;
+      const header = formIndex > 1 ? `Form ${formIndex}\n` : '';
+      const section = header ? `${header}${content}` : content;
+      slot.body.textContent = prior ? `${prior}\n\n${section}` : section;
+      slot.body.classList.remove('empty-state');
+    }
+
+    function getCell(id = activeCellID) {
+      return cells.find((cell) => cell.id === id) || null;
+    }
+
+    function getActiveCell() {
+      return getCell(activeCellID);
+    }
+
+    function setCellArtifactState(cell, name, status, content) {
+      content = stripAnsi(content);
+      cell.artifacts[name] = { status, content };
+      if (cell.id === activeCellID) {
+        setArtifactState(name, status, content);
+      }
+    }
+
+    function appendCellArtifactText(cell, name, text, status = 'ok') {
+      if (!text) return;
+      const priorState = cell.artifacts[name] || blankArtifactState(name);
+      const prior = priorState.status === 'idle' ? '' : priorState.content;
+      setCellArtifactState(cell, name, status, prior ? `${prior}${text}` : text);
+    }
+
+    function appendCellArtifactSection(cell, name, formIndex, status, content) {
+      const priorState = cell.artifacts[name] || blankArtifactState(name);
+      const prior = priorState.status === 'idle' ? '' : priorState.content;
+      const header = formIndex > 1 ? `Form ${formIndex}\n` : '';
+      const section = header ? `${header}${content}` : content;
+      setCellArtifactState(cell, name, status, prior ? `${prior}\n\n${section}` : section);
+    }
+
+    function renderActiveCellArtifacts() {
+      const cell = getActiveCell();
+      if (!cell) return;
+      orderedArtifacts.forEach((name) => {
+        const state = cell.artifacts[name] || blankArtifactState(name);
+        setArtifactState(name, state.status, state.content);
+      });
+      metaEl.textContent = cell.lastMeta || `session=${session} ${cell.title.toLowerCase()} idle`;
+      artifactPanelTitleEl.textContent = `${cell.title} Artifacts`;
+      cellCaptionEl.textContent = `${cell.title} artifacts stay visible until this cell is rerun or the session is cleared.`;
+    }
+
+    // Split a source string into top-level forms, honoring balanced
+    // ()/[]/{} delimiters, "..." strings, \char literals, and ;-line comments.
+    // Used to auto-split a pasted/loaded program into one cell per form.
+    function splitTopLevelForms(src) {
+      const forms = [];
+      let depth = 0, start = -1, i = 0;
+      const n = src.length;
+      const flush = (end) => { if (start !== -1) { forms.push(src.slice(start, end)); start = -1; } };
+      while (i < n) {
+        const ch = src[i];
+        if (ch === ';') { if (depth === 0) flush(i); while (i < n && src[i] !== '\n') i++; continue; }
+        if (ch === '"') {
+          if (start === -1) start = i;
+          i++;
+          while (i < n && src[i] !== '"') { if (src[i] === '\\') i++; i++; }
+          i++;
+          if (depth === 0) flush(i);
+          continue;
+        }
+        if (ch === '\\') { if (start === -1) start = i; i += 2; continue; }
+        if (ch === '(' || ch === '[' || ch === '{') { if (start === -1) start = i; depth++; i++; continue; }
+        if (ch === ')' || ch === ']' || ch === '}') { depth = Math.max(0, depth - 1); i++; if (depth === 0) flush(i); continue; }
+        if (/\s/.test(ch)) { if (depth === 0) flush(i); i++; continue; }
+        if (start === -1) start = i;
+        i++;
+      }
+      flush(n);
+      return forms.map((f) => f.trim()).filter((f) => f.length > 0);
+    }
+
+    function autosize(ta) {
+      ta.style.height = 'auto';
+      ta.style.height = Math.max(ta.scrollHeight, 22) + 'px';
+    }
+
+    function makeHalo(index) {
+      const halo = document.createElement('div');
+      halo.className = 'nb-halo';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'nb-halo-add';
+      btn.title = 'Insert a cell here';
+      btn.textContent = '+';
+      btn.addEventListener('click', (e) => { e.stopPropagation(); insertCellAt(index); });
+      halo.appendChild(btn);
+      return halo;
+    }
+
+    // Structural render: rebuilds the stacked cell editors + insert halos.
+    // Called only on add/delete/split — NOT on selection or typing (which
+    // would destroy the textarea the user is editing).
+    function renderCellList() {
+      cellListEl.innerHTML = '';
+      cellListEl.appendChild(makeHalo(0));
+      cells.forEach((cell, index) => {
+        const wrap = document.createElement('div');
+        wrap.className = `nb-cell${cell.id === activeCellID ? ' active' : ''}`;
+        wrap.dataset.cellId = String(cell.id);
+
+        const gutter = document.createElement('div');
+        gutter.className = 'nb-gutter';
+        gutter.innerHTML = `<span class="nb-index">[${index + 1}]</span>` +
+          `<span class="cell-run-status status-${cell.runStatus}" data-run-status>${cell.runStatus}</span>`;
+
+        const editor = document.createElement('textarea');
+        editor.className = 'nb-editor';
+        editor.value = cell.source;
+        editor.spellcheck = false;
+        editor.rows = 1;
+        editor.addEventListener('focus', () => setActiveCell(cell.id));
+        editor.addEventListener('input', () => { cell.source = editor.value; autosize(editor); });
+        editor.addEventListener('paste', () => { setTimeout(() => splitCellIfMultiForm(cell, editor), 0); });
+        editor.addEventListener('keydown', (e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); setActiveCell(cell.id); send(lastOp); }
+        });
+
+        const tools = document.createElement('div');
+        tools.className = 'nb-cell-tools';
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button'; runBtn.className = 'nb-run'; runBtn.textContent = 'Run';
+        runBtn.title = 'Run this cell (⌘/Ctrl+Enter)';
+        runBtn.addEventListener('click', (e) => { e.stopPropagation(); setActiveCell(cell.id); send(lastOp); });
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button'; delBtn.className = 'nb-del'; delBtn.textContent = '✕';
+        delBtn.title = 'Delete this cell';
+        delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteCell(cell.id); });
+        tools.appendChild(runBtn); tools.appendChild(delBtn);
+
+        const body = document.createElement('div');
+        body.className = 'nb-cell-body';
+        body.appendChild(gutter);
+        body.appendChild(editor);
+        body.appendChild(tools);
+        wrap.appendChild(body);
+        cellListEl.appendChild(wrap);
+        cellListEl.appendChild(makeHalo(index + 1));
+        requestAnimationFrame(() => autosize(editor));
+      });
+    }
+
+    function renderActiveCell() {
+      renderCellList();
+      renderActiveCellArtifacts();
+    }
+
+    // Lightweight status update for one cell's gutter (no DOM rebuild).
+    function updateCellStatus(cell) {
+      const wrap = cellListEl.querySelector(`.nb-cell[data-cell-id="${cell.id}"]`);
+      if (!wrap) return;
+      const badge = wrap.querySelector('[data-run-status]');
+      if (badge) { badge.textContent = cell.runStatus; badge.className = `cell-run-status status-${cell.runStatus}`; }
+    }
+
+    // Selection only: toggle the active highlight + rebind the right pane.
+    // Does NOT rebuild editors, so it is safe to call on focus/click.
+    function setActiveCell(id) {
+      if (!getCell(id)) return;
+      activeCellID = id;
+      cellListEl.querySelectorAll('.nb-cell').forEach((el) => {
+        el.classList.toggle('active', el.dataset.cellId === String(id));
+      });
+      renderActiveCellArtifacts();
+    }
+
+    function insertCellAt(index) {
+      const cell = createCell('');
+      cells.splice(Math.max(0, Math.min(index, cells.length)), 0, cell);
+      activeCellID = cell.id;
+      renderActiveCell();
+    }
+
+    function addCell() { insertCellAt(cells.length); }
+
+    function deleteCell(id) {
+      const index = cells.findIndex((cell) => cell.id === id);
+      if (index === -1) return;
+      if (cells.length === 1) {
+        cells[0].source = '';
+        cells[0].lastMeta = '';
+        cells[0].runStatus = 'idle';
+        cells[0].artifacts = makeArtifactState();
+        activeCellID = cells[0].id;
+        renderActiveCell();
+        return;
+      }
+      cells.splice(index, 1);
+      if (activeCellID === id) activeCellID = cells[Math.max(0, index - 1)].id;
+      renderActiveCell();
+    }
+
+    function deleteActiveCell() { deleteCell(activeCellID); }
+
+    // If a cell's source now holds >1 top-level form (e.g. after a paste),
+    // keep the first form and spill the rest into freshly inserted cells.
+    function splitCellIfMultiForm(cell, editor) {
+      cell.source = editor.value;
+      const forms = splitTopLevelForms(cell.source);
+      if (forms.length <= 1) { autosize(editor); return; }
+      const index = cells.findIndex((c) => c.id === cell.id);
+      cell.source = forms[0];
+      const spill = forms.slice(1).map((f) => createCell(f));
+      cells.splice(index + 1, 0, ...spill);
+      activeCellID = cell.id;
+      renderActiveCell();
+    }
+
+    function clearSessionState() {
+      session = `browser-inspector-${Date.now()}`;
+      activeRun += 1;
+      cells.forEach((cell) => {
+        cell.lastOp = 'eval';
+        cell.lastMeta = '';
+        cell.runStatus = 'idle';
+        cell.artifacts = makeArtifactState();
+      });
+      renderActiveCell();
+    }
+
+    function artifactKeyToInspectField(name) {
+      return artifactDefs[name] && artifactDefs[name].inspectField ? artifactDefs[name].inspectField : name;
+    }
+
+    function selectedInspectOptions() {
+      return {
+        bytecode: !!toggleEls.bytecode.checked,
+        ir: !!toggleEls.ir.checked,
+        optimized_bytecode: !!toggleEls.optimizedBytecode.checked,
+        lowered_go: !!toggleEls.loweredGo.checked
+      };
+    }
+
+    function requestedArtifactNames(inspect) {
+      return orderedArtifacts.filter((name) => name !== 'result' && !!inspect[artifactKeyToInspectField(name)]);
+    }
+
+    function setPreset(op) {
+      if (op === 'inspect-all') {
+        Object.values(toggleEls).forEach((el) => { el.checked = true; });
+        return;
+      }
+      if (op === 'compile' || op === 'disassemble') {
+        toggleEls.bytecode.checked = true;
+      }
+    }
+
+    function resetCellArtifacts(cell, op, inspect) {
+      const requested = new Set(requestedArtifactNames(inspect));
+      orderedArtifacts.forEach((name) => {
+        const label = artifactDefs[name] ? artifactDefs[name].label : name;
+        if (name === 'result') {
+          setCellArtifactState(cell, name, 'idle', `${label} not requested yet for ${op}.`);
+          return;
+        }
+        if (name === 'stdout' || name === 'stderr') {
+          setCellArtifactState(cell, name, 'idle', `No ${label.toLowerCase()} emitted yet for ${op}.`);
+          return;
+        }
+        if (requested.has(name)) {
+          setCellArtifactState(cell, name, 'idle', `${label} requested for ${op}. Awaiting response frames.`);
+          return;
+        }
+        setCellArtifactState(cell, name, 'idle', `${label} disabled. Enable it in Analysis to request this pane.`);
+      });
+    }
+
+    function formatNamedArtifact(name, payload) {
+      const def = artifactDefs[name];
+      if (!def || !def.template) {
+        return artifactTemplates.json(name, payload);
+      }
+      const template = artifactTemplates[def.template];
+      if (template) {
+        const rendered = template(name, payload);
+        if (rendered) {
+          return rendered;
+        }
+      }
+      {
+        const rendered = artifactTemplates.lines(name, payload);
+        if (rendered) {
+          return rendered;
+        }
+      }
+      return artifactTemplates.json(name, payload);
+    }
+
+    function inspectFor(op) {
+      setPreset(op);
+      return selectedInspectOptions();
+    }
+
+    function renderFrame(cell, frame) {
+      if (!frame || typeof frame !== 'object') return;
+      if (frame.kind === 'progress') {
+        cell.lastMeta = `session=${frame.session || session} op=${frame.op || 'eval'} form=${frame.form_index || '?'} stage=${frame.stage || 'progress'}`;
+        if (cell.id === activeCellID) {
+          metaEl.textContent = cell.lastMeta;
+        }
+        return;
+      }
+      if (frame.kind === 'artifact') {
+        const name = artifactByFrameName[frame.artifact];
+        if (name) {
+          const rendered = formatNamedArtifact(name, frame.content);
+          if (rendered) {
+            appendCellArtifactSection(cell, name, frame.form_index || 0, rendered.status, rendered.text);
+          }
+        }
+        return;
+      }
+      if (frame.kind === 'value') {
+        setCellArtifactState(cell, 'result', 'ok', frame.value === undefined ? 'nil' : String(frame.value));
+        return;
+      }
+      if (frame.kind === 'out') {
+        appendCellArtifactText(cell, 'stdout', frame.text || '', 'ok');
+        return;
+      }
+      if (frame.kind === 'note') {
+        // Benign per-form skip (e.g. a non-inspectable form). Append the note
+        // but do NOT flag the pane as an error: keep 'ok' if another form
+        // already produced content, otherwise show a neutral 'idle' badge.
+        const artifactName = artifactByFrameName[frame.artifact];
+        if (artifactName) {
+          const prior = cell.artifacts[artifactName] || blankArtifactState(artifactName);
+          const status = prior.status === 'ok' ? 'ok' : 'idle';
+          appendCellArtifactSection(cell, artifactName, frame.form_index || 0, status, frame.text || '');
+        }
+        return;
+      }
+      if (frame.kind === 'err') {
+        const artifactName = artifactByFrameName[frame.artifact];
+        if (artifactName) {
+          appendCellArtifactSection(cell, artifactName, frame.form_index || 0, 'error', frame.text || `${artifactDefs[artifactName].label} extraction failed.`);
+          return;
+        }
+        appendCellArtifactText(cell, 'stderr', frame.text || 'request failed', 'error');
+        setCellArtifactState(cell, 'result', 'error', frame.text || 'request failed');
+        return;
+      }
+      if (frame.kind === 'status') {
+        const statusText = Array.isArray(frame.status) ? frame.status.join(' ') : 'done';
+        cell.lastMeta = `session=${frame.session || session} op=${frame.op || 'eval'} status=${statusText}`;
+        cell.runStatus = Array.isArray(frame.status) && frame.status.includes('error') ? 'error' : 'ok';
+        updateCellStatus(cell);
+        if (cell.id === activeCellID) {
+          metaEl.textContent = cell.lastMeta;
+        }
+      }
+    }
+
+    function scheduleReanalysis() {
+      if (reanalyzeTimer !== null) {
+        clearTimeout(reanalyzeTimer);
+      }
+      reanalyzeTimer = setTimeout(() => {
+        reanalyzeTimer = null;
+        send(lastOp);
+      }, REANALYZE_DEBOUNCE_MS);
+    }
+
+    async function send(op) {
+      const cell = getActiveCell();
+      if (!cell) return;
+      // An empty/whitespace cell is a no-op, not an error: running it would
+      // surface the host's "eval requires code" as a red error badge.
+      if (!cell.source || !cell.source.trim()) {
+        cell.runStatus = 'idle';
+        updateCellStatus(cell);
+        cell.lastMeta = `${cell.title} is empty — nothing to run.`;
+        if (cell.id === activeCellID) metaEl.textContent = cell.lastMeta;
+        return;
+      }
+      lastOp = op;
+      cell.lastOp = op;
+      cell.runStatus = 'running';
+      updateCellStatus(cell);
+      const runID = ++activeRun;
+      cell.lastMeta = `Running ${op} for ${cell.title}...`;
+      metaEl.textContent = cell.lastMeta;
+      const inspect = inspectFor(op);
+      const requested = new Set(requestedArtifactNames(inspect));
+      const received = new Set();
+      resetCellArtifacts(cell, op, inspect);
+      try {
+        const resp = await window.LetGoHost.request({
+          id: `${op}-${Date.now()}`,
+          session,
+          op: 'eval',
+          inspect,
+          code: cell.source
+        }, (frame) => {
+          if (runID !== activeRun) return;
+          if (frame && (frame.kind === 'artifact' || frame.kind === 'err' || frame.kind === 'note')) {
+            const name = artifactByFrameName[frame.artifact];
+            if (name) {
+              received.add(name);
+            }
+          }
+          renderFrame(cell, frame);
+        });
+        if (runID !== activeRun) return;
+        const frames = Array.isArray(resp && resp.frames) ? resp.frames : [];
+        frames.forEach((frame) => {
+          if (!frame || typeof frame !== 'object') return;
+          if (frame.kind === 'artifact' || frame.kind === 'err' || frame.kind === 'note') {
+            const name = artifactByFrameName[frame.artifact];
+            if (name && !received.has(name)) {
+              received.add(name);
+              renderFrame(cell, frame);
+            }
+            return;
+          }
+          renderFrame(cell, frame);
+        });
+        const finalStatus = frames.filter((frame) => frame && frame.kind === 'status').at(-1);
+        if (!finalStatus) {
+          cell.lastMeta = 'request finished without status frame';
+          cell.runStatus = 'ok';
+          if (cell.id === activeCellID) {
+            metaEl.textContent = cell.lastMeta;
+          }
+        } else if (Array.isArray(finalStatus.status) && finalStatus.status.includes('error')) {
+          cell.lastMeta = `session=${finalStatus.session || session} op=${finalStatus.op || 'eval'} status=${finalStatus.status.join(' ')}`;
+          cell.runStatus = 'error';
+          if (cell.id === activeCellID) {
+            metaEl.textContent = cell.lastMeta;
+          }
+        }
+        requested.forEach((name) => {
+          if (!received.has(name)) {
+            const label = artifactDefs[name] ? artifactDefs[name].label : name;
+            setCellArtifactState(cell, name, 'unavailable', `${label} was requested, but the runtime did not emit that artifact.`);
+          }
+        });
+        if (!frames.some((frame) => frame && frame.kind === 'value')) {
+          setCellArtifactState(cell, 'result', 'idle', 'No value frame emitted.');
+        }
+        updateCellStatus(cell);
+      } catch (err) {
+        if (runID !== activeRun) return;
+        cell.lastMeta = 'request failed';
+        cell.runStatus = 'error';
+        metaEl.textContent = cell.lastMeta;
+        setCellArtifactState(cell, 'result', 'error', err && err.message ? err.message : String(err));
+        updateCellStatus(cell);
+      }
+    }
+
+    document.getElementById('inspect-all-btn').addEventListener('click', () => send('inspect-all'));
+    document.getElementById('eval-btn').addEventListener('click', () => send('eval'));
+    document.getElementById('compile-btn').addEventListener('click', () => send('compile'));
+    document.getElementById('disassemble-btn').addEventListener('click', () => send('disassemble'));
+    document.getElementById('add-cell-btn').addEventListener('click', addCell);
+    document.getElementById('clear-session-btn').addEventListener('click', clearSessionState);
+    toggleEls.bytecode.addEventListener('change', () => send(lastOp));
+    toggleEls.ir.addEventListener('change', () => send(lastOp));
+    toggleEls.optimizedBytecode.addEventListener('change', () => send(lastOp));
+    toggleEls.loweredGo.addEventListener('change', () => send(lastOp));
+
+    renderActiveCell();
+    send('eval');
+  })();
+  </script>
+</body>
+</html>

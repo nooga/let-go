@@ -44,6 +44,30 @@ func DecodeToExecUnitWithParent(r io.Reader, resolve VarResolver, parent *vm.Con
 		resolve: resolve,
 		stats:   decoderStats(),
 	}
+	return d.decodeExec(parent)
+}
+
+// DecodeToExecUnitBytes is like DecodeToExecUnit but decodes from an in-memory
+// buffer. The buffer stays resident, so per-chunk source maps are captured
+// zero-copy and decoded lazily (on first error/stack-trace lookup) instead of
+// eagerly at load — removing the dominant startup heap churn. Prefer this for the
+// embedded core bundle, which is already a []byte.
+func DecodeToExecUnitBytes(data []byte, resolve VarResolver) (*ExecUnit, error) {
+	return DecodeToExecUnitBytesWithParent(data, resolve, nil)
+}
+
+// DecodeToExecUnitBytesWithParent is DecodeToExecUnitBytes with an optional
+// parent const pool (see DecodeToExecUnitWithParent).
+func DecodeToExecUnitBytesWithParent(data []byte, resolve VarResolver, parent *vm.Consts) (*ExecUnit, error) {
+	d := &decoder{
+		r:       NewReaderBytes(data),
+		resolve: resolve,
+		stats:   decoderStats(),
+	}
+	return d.decodeExec(parent)
+}
+
+func (d *decoder) decodeExec(parent *vm.Consts) (*ExecUnit, error) {
 	defer recordDecodeStats(d.stats)
 
 	version, flags, err := d.readHeader()
@@ -464,40 +488,61 @@ func (d *decoder) readLiveChunks(sharedConsts *vm.Consts) error {
 			return fmt.Errorf("reading source_map count: %w", err)
 		}
 		if smCount > 0 {
-			chunk.ReserveSourceMap(int(smCount))
-		}
-		for j := 0; j < int(smCount); j++ {
-			startIP, err := d.r.ReadVarint()
-			if err != nil {
-				return err
+			if d.r.HasBackingData() {
+				// Deferred path: capture the source-map section's raw bytes
+				// (zero-copy — the backing buffer stays resident) and decode them
+				// on first Lookup. Skips per-chunk entries allocation at load.
+				// Each entry is 6 varints: startIP, file(string ref), line, col,
+				// eline, ecol.
+				start := d.r.Offset()
+				for j := 0; j < int(smCount); j++ {
+					for k := 0; k < 6; k++ {
+						if _, err := d.r.ReadVarint(); err != nil {
+							return fmt.Errorf("skipping source_map entry: %w", err)
+						}
+					}
+				}
+				// Closure-free lazy map: allocates only the SourceMap struct at
+				// load (raw is a zero-copy slice of the resident bundle, strings
+				// is shared) — decoding is deferred to first Lookup.
+				raw := d.r.Slice(start, d.r.Offset())
+				chunk.SetSourceMap(vm.NewLazySourceMapRaw(raw, d.strings, int(smCount)))
+			} else {
+				chunk.ReserveSourceMap(int(smCount))
+				for j := 0; j < int(smCount); j++ {
+					startIP, err := d.r.ReadVarint()
+					if err != nil {
+						return err
+					}
+					file, err := d.readStringRef()
+					if err != nil {
+						return err
+					}
+					line, err := d.r.ReadVarint()
+					if err != nil {
+						return err
+					}
+					col, err := d.r.ReadVarint()
+					if err != nil {
+						return err
+					}
+					eline, err := d.r.ReadVarint()
+					if err != nil {
+						return err
+					}
+					ecol, err := d.r.ReadVarint()
+					if err != nil {
+						return err
+					}
+					chunk.AddSourceInfoAt(int(startIP), vm.SourceInfo{
+						File:      file,
+						Line:      int(line),
+						Column:    int(col),
+						EndLine:   int(eline),
+						EndColumn: int(ecol),
+					})
+				}
 			}
-			file, err := d.readStringRef()
-			if err != nil {
-				return err
-			}
-			line, err := d.r.ReadVarint()
-			if err != nil {
-				return err
-			}
-			col, err := d.r.ReadVarint()
-			if err != nil {
-				return err
-			}
-			eline, err := d.r.ReadVarint()
-			if err != nil {
-				return err
-			}
-			ecol, err := d.r.ReadVarint()
-			if err != nil {
-				return err
-			}
-			chunk.AddSourceInfoAt(int(startIP), vm.SourceInfo{
-				File:      file,
-				Line:      int(line),
-				Column:    int(col),
-				EndLine:   int(eline),
-				EndColumn: int(ecol),
-			})
 		}
 		d.chunks[i] = chunk
 	}

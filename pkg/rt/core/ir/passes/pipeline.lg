@@ -21,6 +21,7 @@
   (:require
    [graph :as g]
    [ir.build]
+   [ir.data]
    [ir.lattice :as lat]
    [ir.lower :as lower]
    [ir.lower-go :as lower-go]
@@ -28,6 +29,8 @@
    [ir.passes.cse :refer [cse]]
    [ir.passes.dce :refer [dce]]
    [ir.passes.infer-arg-types :refer [infer-arg-types]]
+   [ir.passes.inline]
+   [ir.passes.lambda-lift]
    [ir.passes.licm :refer [licm]]
    [ir.passes.typeinfer :refer [typeinfer]]
    [ir.validate :refer [validate-fn!]]))
@@ -39,8 +42,28 @@
     (lat/flush-state-types! state2 f)
     f))
 
-(defn optimize-fn [f]
-  (validate-fn! f "build")
+;; Runtime per-ns defn IR cache: when compile-form compiles a defn
+;; under *ir-compile* with *enable-inline* bound, its built IR Function is
+;; stashed here (keyed ns-name -> fn-name -> ir-fn) BEFORE optimization, so
+;; later defns in the same ns can seed the inline registry from previously
+;; defined siblings — the runtime analogue of the AOT path's
+;; build-inline-registry seeding in lower-ns-to-go. Zero cost when the flags
+;; are off (never consulted, never populated). Entries are the LIVE atoms:
+;; optimize-fn mutates them after stashing, so later readers see the
+;; optimized IR — the fold recognizer is structural and tolerates that.
+(def *runtime-defn-ir-cache* (atom {}))
+
+(defn- seed-inline-registry-from-cache [ns-name]
+  "Registry of previously-compiled same-ns single-arity defns, mirroring
+   build-inline-registry's shape: each fn name mapped (bare and ns-qualified)
+   to its built IR Function."
+  (reduce
+    (fn [m [fn-name ir-fn]]
+      (assoc m (symbol (str ns-name "/" fn-name)) ir-fn
+               (symbol fn-name) ir-fn))
+    {} (get @*runtime-defn-ir-cache* ns-name {})))
+
+(defn- optimize-fn-tail [f]
   (run-typeinfra-epoch f) (validate-fn! f "infer-arg-types")
   (constfold f)        (validate-fn! f "constfold-1")
   (cse f)              (validate-fn! f "cse")
@@ -49,6 +72,76 @@
   (constfold f)        (validate-fn! f "constfold-3")
   (dce f)              (validate-fn! f "dce")
   (run-typeinfra-epoch f)
+  f)
+
+(defn optimize-fn [f]
+  (validate-fn! f "build")
+  (when (and ir.passes.inline/*enable-inline*
+             (seq ir.passes.inline/*inline-registry*))
+    (ir.passes.inline/inline-with f ir.passes.inline/*inline-registry*)
+    (validate-fn! f "inline"))
+  (optimize-fn-tail f))
+
+;; Vars realized by realize-specialized-fold!, keyed "ns/name". Ownership
+;; ledger: only vars recorded here may be reused as specializations — a
+;; pre-existing user var that happens to share the deterministic name is
+;; neither trusted nor clobbered (the call is left as the plain loop).
+(def *realized-folds* (atom {}))
+
+(defn- realize-specialized-fold! [spec-name desc n]
+  "Compile the unrolled specialization for a fold-over-rest combinator and
+   intern it under spec-name in *ns*. The deterministic name is the reuse key
+   across call sites, but only for vars THIS fn created (*realized-folds*).
+   Returns the var, or nil when a foreign var owns the name.
+   Staleness note: like all compile-time specialization, a realized var
+   persists across combinator redefinition — mirrors inlining semantics."
+  (let [k (str (ns-name *ns*) "/" spec-name)]
+    (if-let [v (get @*realized-folds* k)]
+      v
+      (if (some? (resolve spec-name))
+        nil
+        (let [spec-ir (ir.passes.inline/specialize-fold desc n)
+              chunk   (lower/lower (optimize-fn spec-ir))
+              arity   (+ (:rest-index desc) n)
+              v       (intern *ns* spec-name (chunk->fn arity false chunk))]
+          (swap! *realized-folds* assoc k v)
+          v)))))
+
+(defn- fold-outline! [f registry]
+  "Rewrite each fold-over-rest combinator call in f to call an unrolled
+   fixed-arity specialization interned as a same-ns sibling. This is the
+   bytecode-path counterpart of the AOT splice: outlining (rather than
+   splicing) keeps f free of the cross-block direct refs the stack lowering
+   rejects, while still eliminating the per-element seq walk
+   (empty?/first/rest + rest-seq boxing) that dominates the combinator loop
+   on the VM. The call site keeps its flat operands; only the callee var
+   changes, so dispatch drops from variadic to fixed-arity. Returns f."
+  (doseq [bid (ir/blocks f)
+          call-nid (vec (ir/block-insts bid f))
+          :when (= :call (ir/op call-nid f))]
+    (when-let [g (ir.passes.inline/resolve-callee f call-nid registry)]
+      (when-let [desc (ir.passes.inline/fold-over-rest? g)]
+        (let [nargs (count (rest (ir/refs call-nid f)))
+              n     (- nargs (:rest-index desc))]
+          (cond
+            (and (>= n 1) (<= n ir.passes.inline/*max-unroll*))
+            (let [head-nid (nth (ir/refs call-nid f) 0)]
+              ;; Only rewrite a :load-var head this call solely owns —
+              ;; mutating a shared head would redirect other uses too.
+              (when (and (= :load-var (ir/op head-nid f))
+                         (= 1 (ir.data/uses-count (nth (ir.data/uses f) head-nid))))
+                (let [spec-name (symbol (str (:fn-name desc) "$" (name (:kind desc)) "$" n))]
+                  (if-let [spec-var (realize-specialized-fold! spec-name desc n)]
+                    (ir.data/set-aux! f head-nid spec-var)
+                    (println (str "inline: fold-over-rest specialization name "
+                                  spec-name " already owned by a foreign var; "
+                                  "call left as the loop"))))))
+
+            (> n ir.passes.inline/*max-unroll*)
+            (println (str "inline: fold-over-rest " (:fn-name desc) " call has "
+                          n " operands > *max-unroll* " ir.passes.inline/*max-unroll*
+                          "; left as a runtime call"))))))
+    nil)
   f)
 
 (declare expand-all)
@@ -410,6 +503,21 @@
 ;; When set to :go, compile-form* routes through ir.lower-go instead of ir.lower.
 ;; Set this before calling compile-form to generate Go-lowered output.
 
+;; Lowering strategy registry — one entry per backend. A strategy takes the
+;; optimized interim IR (`ir-fn`) and returns the backend's NATIVE lowered
+;; value: :bytecode -> a CodeChunk; :go -> {:status :lowered :decl …}. This is
+;; the single seam compile-form* dispatches through and the composite fans out.
+(def lowerings
+  {:bytecode (fn [ir-fn] (lower/lower ir-fn))
+   :go       (fn [ir-fn] (lower-go/lower ir-fn :bridge))})
+
+;; Composite: run every registered lowering strategy against ONE shared
+;; interim IR. The emitter (Spec 2) uses this so the IR pane and both lowering
+;; panes are projections of the same IR (no second build/optimize, no
+;; gensym-nondeterminism divergence).
+(defn lower-fn-all [ir-fn]
+  (into {} (map (fn [[k s]] [k (s ir-fn)]) lowerings)))
+
 (defn- compile-form* [form]
   "Drives (defn NAME [args] body...) through expand → build → optimize → lower.
    Body forms are macroexpanded; defn and the args vector are passed through
@@ -470,11 +578,52 @@
         (let [args-vec   first-form
               body-forms (map expand-all (drop (if has-doc? 4 3) form))
               expanded   (apply list 'defn name-sym args-vec body-forms)
-              ir-fn      (-> expanded ir.build/build-fn optimize-fn)
-              _          (swap! ir-fn assoc :private? private?)]
+              built      (ir.build/build-fn expanded)
+              ;; Carry visibility onto the built fn so #371's export naming
+              ;; (public → PascalCase, private → unexported) survives lambda-lift
+              ;; + optimize into lower-go. merge-def-meta preserves it to :main.
+              _          (swap! built assoc :private? private?)
+              ;; Stash the built IR (pre-optimize) so later same-ns defns can
+              ;; seed the inline registry from this one. Opt-in: only when
+              ;; *enable-inline* is bound true.
+              _          (when ir.passes.inline/*enable-inline*
+                           (swap! *runtime-defn-ir-cache*
+                                  assoc-in [(str (ns-name *ns*)) (str name-sym)] built))]
+          ;; Target-specific orchestration (lambda-lift for :go, fold-outline for
+          ;; :bytecode) wraps the actual lowering — but the lowering itself is
+          ;; DELEGATED to the `lowerings` strategy registry via *target* (#387's
+          ;; single seam). So both features coexist: the registry is the one place
+          ;; a target's IR→native lowering happens, and the orchestration around
+          ;; it stays target-specific where it must be.
           (if go-target?
-            (lower-go/lower ir-fn :bridge)
-            (lower/lower ir-fn)))
+            ;; Wire lambda-lift: thread lifted siblings through compile pipeline
+            (let [{:keys [main lifted]} (ir.passes.lambda-lift/lambda-lift built)
+                  lower1 (fn [g] (let [r ((lowerings :go) (optimize-fn g))]
+                                   (if (= :lowered (:status r)) {:fn (:decl r)} r)))]
+              (if (empty? lifted)
+                ;; No lifted siblings: return single-decl result unchanged
+                ((lowerings :go) (optimize-fn main))
+                ;; Has lifted siblings: return multi-fn-template for flatten path
+                {:kind :multi-fn-template
+                 :fns (into [(lower1 main)] (mapv lower1 lifted))}))
+            ;; Bytecode path: no lambda-lift. When inlining is enabled,
+            ;; fold-over-rest combinator calls are OUTLINED to unrolled
+            ;; fixed-arity siblings (never spliced — the AOT splice creates
+            ;; cross-block direct refs the stack lowering rejects). The
+            ;; registry of candidate combinators comes from previously
+            ;; compiled same-ns defns and is passed to fold-outline! as a
+            ;; local — *inline-registry* itself is NOT bound here, so on the
+            ;; default path optimize-fn's splicing inliner cannot fire. A
+            ;; caller that explicitly binds a registry opts into splicing
+            ;; (and into the stack lowering's cross-block rejection risk).
+            (do
+              (when ir.passes.inline/*enable-inline*
+                (let [registry (if (empty? ir.passes.inline/*inline-registry*)
+                                 (seed-inline-registry-from-cache (str (ns-name *ns*)))
+                                 ir.passes.inline/*inline-registry*)]
+                  (when (seq registry)
+                    (fold-outline! built registry))))
+              ((lowerings :bytecode) (optimize-fn built)))))
         ;; Multi-arity: build each arity separately, combine
         (let [arities   (drop (if has-doc? 3 2) form)]
           (if go-target?
@@ -491,7 +640,7 @@
                                              ;; (not a dynamic var) so it survives native lowering.
                                              _          (swap! ir-fn assoc :multi-arity? true
                                                           :private? private?)
-                                             result     (lower-go/lower ir-fn :bridge)]
+                                             result     ((lowerings :go) ir-fn)]
                                          (if (= :lowered (:status result))
                                            ;; Keep :fn (the decl) for existing consumers
                                            ;; (lower-defn-forms flatten, lower-template-closure-expr)
@@ -510,19 +659,28 @@
                                     (let [args-vec   (first arity-form)
                                           body-forms (map expand-all (rest arity-form))
                                           expanded   (apply list 'defn name-sym args-vec body-forms)
-                                          chunk      (-> expanded
-                                                         ir.build/build-fn
-                                                         optimize-fn
-                                                         lower/lower)]
+                                          ir-fn      (-> expanded ir.build/build-fn optimize-fn)
+                                          chunk      ((lowerings :bytecode) ir-fn)]
                                       (chunk->fn (count args-vec) false chunk)))
                                   arities)]
               (make-multi-arity (apply list fn-vals)))))))))
 
 (defn compile-form [form & caller-ns]
-  (if (seq caller-ns)
-    (binding [*ns* (first caller-ns)]
-      (compile-form* form))
-    (compile-form* form)))
+  (let [result (if (seq caller-ns)
+                 (binding [*ns* (first caller-ns)]
+                   (compile-form* form))
+                 (compile-form* form))]
+    ;; A :multi-fn-template is a SUCCESSFUL lowering that emits several decls
+    ;; (a main fn + its lambda-lifted siblings). compile-form* returns it with
+    ;; no :status because the internal flatten path (lower-ns-to-go) keys off
+    ;; :kind. Public callers — the gogen tests and the lowering-coverage gate —
+    ;; check :status, so surface it as :lowered here; otherwise a form that
+    ;; lowered via lambda-lift reads as unlowered (:status nil).
+    (if (and (map? result)
+             (= :multi-fn-template (:kind result))
+             (nil? (:status result)))
+      (assoc result :status :lowered)
+      result)))
 
   ;; --- Go bootstrap generation -------------------------------------------
 
@@ -937,6 +1095,34 @@
                           (if (:reason result) (str ": " (:reason result)) "")))
             (recur (rest remaining) out)))))))
 
+(defn- single-arity-defn-form? [form]
+  "True for (defn name [params...] body...) — the shape inline can splice."
+  (and (seq? form)
+       (= 'defn (first form))
+       (symbol? (second form))
+       (vector? (nth form 2 nil))))
+
+(defn- build-inline-registry
+  "Build the per-namespace inline callee registry: each single-arity defn in
+   `forms` mapped (both bare and ns-qualified symbol) to its built IR Function,
+   so a same-ns call resolves and its body can be spliced. Bodies are expanded
+   the same way compile-form* expands them, so macros (and/or/…) match. Must be
+   called with *ns* bound to the target namespace."
+  [ns-name forms]
+  (reduce
+    (fn [m form]
+      (if (single-arity-defn-form? form)
+        (let [nm       (second form)
+              args     (nth form 2)
+              body     (drop 3 form)
+              expanded (apply list 'defn nm args (map expand-all body))
+              built    (try (ir.build/build-fn expanded) (catch _e nil))]
+          (if built
+            (assoc m (symbol (str ns-name "/" nm)) built nm built)
+            m))
+        m))
+    {} forms))
+
 (defn lower-ns-to-go [pkg-name ns-name forms]
   "Process a namespace's forms through the Go-lowering pipeline and return
    rendered Go source for a package. pkg-name is the Go package name string,
@@ -979,6 +1165,10 @@
         rt-import   {:path "github.com/nooga/let-go/pkg/rt" :alias "rt"}
         _cache-rst  (reset! *deftype-method-ir-cache* {})]
     (binding [*ns* (the-ns ns-name)
+              ir.passes.inline/*inline-registry* (if ir.passes.inline/*enable-inline*
+                                                   (binding [*ns* (the-ns ns-name)]
+                                                     (build-inline-registry ns-name defn-forms0))
+                                                   {})
               ir.passes.typeinfer/*typeinfer-budget-ms* nil
               ir.passes.typeinfer/*deftype-ctor-types* (when (seq ctor-types) ctor-types)
               lower-go/*deftype-ctors* (when (seq ctors) ctors)

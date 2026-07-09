@@ -37,6 +37,115 @@ type Pub struct {
 
 func init() { RegisterInstaller(installAsyncNS) }
 
+// --- Buffer policies (core.async buffer / dropping-buffer / sliding-buffer) ---
+//
+// vm.Chan is a raw Go channel, which cannot express drop-on-full semantics
+// itself, so the policy lives beside the channel (chanPolicy) and is honored
+// by every put path (>! in lang.go, offer! here). Per clojure.core.async:
+//   (buffer n)          — fixed: puts park when full
+//   (dropping-buffer n) — puts always complete; when full the NEW val is
+//                         dropped (no transfer)
+//   (sliding-buffer n)  — puts always complete; when full the OLDEST
+//                         buffered val is dropped
+// Buffer constructors return a marker [:policy n] that (chan buf) consumes.
+
+const (
+	bufFixed    = 0
+	bufDropping = 1
+	bufSliding  = 2
+)
+
+// chanPolicy maps channels created with a dropping/sliding buffer to their
+// policy. Fixed/plain channels are absent (zero-lookup default). Entries are
+// removed on close!.
+var chanPolicy sync.Map // vm.Chan → int
+
+func policyOf(ch vm.Chan) int {
+	if p, ok := chanPolicy.Load(ch); ok {
+		return p.(int)
+	}
+	return bufFixed
+}
+
+func bufMarker(policy vm.Keyword, n vm.Int) vm.Value {
+	return vm.NewArrayVector([]vm.Value{vm.Keyword("buffer"), policy, n})
+}
+
+// asBufMarker recognizes the [:buffer :policy n] marker vectors produced by
+// buffer/dropping-buffer/sliding-buffer.
+func asBufMarker(v vm.Value) (policy int, n int, ok bool) {
+	vec, isVec := v.(vm.ArrayVector)
+	if !isVec || len(vec) != 3 {
+		return 0, 0, false
+	}
+	if kw, isKw := vec[0].(vm.Keyword); !isKw || kw != vm.Keyword("buffer") {
+		return 0, 0, false
+	}
+	size, isInt := vec[2].(vm.Int)
+	if !isInt {
+		return 0, 0, false
+	}
+	switch vec[1] {
+	case vm.Keyword("fixed"):
+		return bufFixed, int(size), true
+	case vm.Keyword("dropping"):
+		return bufDropping, int(size), true
+	case vm.Keyword("sliding"):
+		return bufSliding, int(size), true
+	}
+	return 0, 0, false
+}
+
+// putWithPolicy sends v on ch honoring its buffer policy. Returns
+// (accepted, cancelled). Parity with core.async: a put on a CLOSED channel
+// returns accepted=false instead of panicking (>!! "returns true unless the
+// channel is already closed"); dropping/sliding puts always complete.
+func putWithPolicy(ctx context.Context, ch vm.Chan, v vm.Value) (accepted bool, cancelled bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			// send on closed channel → put returns false (core.async parity)
+			accepted, cancelled = false, false
+		}
+	}()
+	switch policyOf(ch) {
+	case bufDropping:
+		select {
+		case ch <- v:
+		default: // full → drop the NEW value, put still "completes"
+		}
+		return true, false
+	case bufSliding:
+		for {
+			select {
+			case ch <- v:
+				return true, false
+			default:
+			}
+			// full → evict the OLDEST, then retry the send (bounded spin:
+			// each lap either sends or evicts; contention only with other
+			// producers on the same channel)
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- v:
+				return true, false
+			case <-ctx.Done():
+				return false, true
+			default: // raced with another producer; loop
+			}
+		}
+	default:
+		select {
+		case ch <- v:
+			return true, false
+		case <-ctx.Done():
+			return false, true
+		}
+	}
+}
+
 // PromiseChan implements clojure.core.async's promise-chan: a channel
 // that caches the FIRST value put to it and replays that value to every
 // taker, forever. Subsequent puts are dropped; closing without a value
@@ -161,20 +270,67 @@ func installAsyncNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("close! expected Chan")
 		}
-		close(ch)
+		chanPolicy.Delete(ch)
+		func() {
+			// core.async close! is a no-op on an already-closed channel
+			defer func() { _ = recover() }()
+			close(ch)
+		}()
 		return vm.NIL, nil
 	})
 
-	// chan with optional buffer size: (chan) or (chan n)
+	// chan: (chan) unbuffered, (chan n) fixed buffer, (chan (buffer n)) /
+	// (chan (dropping-buffer n)) / (chan (sliding-buffer n)) per core.async.
 	chanBuf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			return make(vm.Chan), nil
 		}
+		if n, ok := vs[0].(vm.Int); ok {
+			return make(vm.Chan, int(n)), nil
+		}
+		if policy, n, ok := asBufMarker(vs[0]); ok {
+			if n < 1 {
+				return vm.NIL, fmt.Errorf("chan buffer size must be >= 1")
+			}
+			ch := make(vm.Chan, n)
+			if policy != bufFixed {
+				chanPolicy.Store(ch, policy)
+			}
+			return ch, nil
+		}
+		return vm.NIL, fmt.Errorf("chan expected Int size or buffer marker")
+	})
+
+	// Buffer constructors (markers consumed by chan; see asBufMarker)
+	fixedBuf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("buffer expects 1 arg (n)")
+		}
 		n, ok := vs[0].(vm.Int)
 		if !ok {
-			return vm.NIL, fmt.Errorf("chan expected Int buffer size")
+			return vm.NIL, fmt.Errorf("buffer expected Int size")
 		}
-		return make(vm.Chan, int(n)), nil
+		return bufMarker(vm.Keyword("fixed"), n), nil
+	})
+	droppingBuf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("dropping-buffer expects 1 arg (n)")
+		}
+		n, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("dropping-buffer expected Int size")
+		}
+		return bufMarker(vm.Keyword("dropping"), n), nil
+	})
+	slidingBuf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("sliding-buffer expects 1 arg (n)")
+		}
+		n, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("sliding-buffer expected Int size")
+		}
+		return bufMarker(vm.Keyword("sliding"), n), nil
 	})
 
 	// timeout — returns a channel that closes after n milliseconds
@@ -530,7 +686,9 @@ func installAsyncNS() {
 		return vm.NewArrayVector([]vm.Value{result, port}), nil
 	})
 
-	// offer! — non-blocking put, returns true if accepted, false if not
+	// offer! — non-blocking put: true if accepted, nil if not (core.async
+	// returns nil, not false, when the offer can't complete). On dropping/
+	// sliding channels a put can always complete immediately.
 	offerf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("offer! expects 2 args")
@@ -539,11 +697,36 @@ func installAsyncNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("offer! expected Chan")
 		}
-		select {
-		case ch <- vs[1]:
-			return vm.TRUE, nil
+		if vs[1] == vm.NIL {
+			// core.async: nil values are not allowed on channels (same as >!).
+			// Keeping the channel nil-free is what makes poll!'s value-or-nil
+			// contract unambiguous.
+			return vm.NIL, fmt.Errorf("offer! can't put nil on chan")
+		}
+		switch policyOf(ch) {
+		case bufDropping, bufSliding:
+			if accepted, _ := putWithPolicy(context.Background(), ch, vs[1]); accepted {
+				return vm.TRUE, nil
+			}
+			return vm.NIL, nil // closed
 		default:
-			return vm.FALSE, nil
+			ok := func() (ok bool) {
+				defer func() {
+					if recover() != nil {
+						ok = false // offer on closed channel → nil, not panic
+					}
+				}()
+				select {
+				case ch <- vs[1]:
+					return true
+				default:
+					return false
+				}
+			}()
+			if ok {
+				return vm.TRUE, nil
+			}
+			return vm.NIL, nil
 		}
 	})
 
@@ -937,8 +1120,15 @@ func installAsyncNS() {
 	ns.Def("onto-chan!", ontoChan)
 	ns.Def("to-chan!", toChan)
 	ns.Def("alts!", altsf)
+	// alts!! — blocking variant. In let-go all channel ops block the calling
+	// goroutine (there is no separate parking machinery), so like >!!/<!!
+	// below it is the same fn under the core.async-parity name.
+	ns.Def("alts!!", altsf)
 	ns.Def("offer!", offerf)
 	ns.Def("poll!", pollf)
+	ns.Def("buffer", fixedBuf)
+	ns.Def("dropping-buffer", droppingBuf)
+	ns.Def("sliding-buffer", slidingBuf)
 	ns.Def("promise-chan", promiseChan)
 	ns.Def("mult", multf)
 	ns.Def("tap", tapf)

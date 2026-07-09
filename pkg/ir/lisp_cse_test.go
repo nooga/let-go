@@ -83,8 +83,10 @@ func TestLispCSEMergesStableLoadVar(t *testing.T) {
 	validateIR(t, fn, "test-cse-load-var")
 	dump := lispDump(t, fn)
 
-	if !strings.Contains(dump, "Call v1 v0 ; 1") || !strings.Contains(dump, "Return v4") {
-		t.Fatalf("expected calls to use the surviving LoadVar without changing call structure\n--- dump ---\n%s", dump)
+	// With CSE handling pure calls, both the LoadVar and the Call are deduplicated.
+	// The second call's result is redirected to the first call's result.
+	if !strings.Contains(dump, "Call v1 v0 ; 1") || !strings.Contains(dump, "Return v2") {
+		t.Fatalf("expected both LoadVar and pure Call to be CSE'd, returning first call result\n--- dump ---\n%s", dump)
 	}
 	if strings.Contains(dump, "Call v3 v0 ; 1") {
 		t.Fatalf("expected duplicate LoadVar use to be rewritten to the first LoadVar\n--- dump ---\n%s", dump)
