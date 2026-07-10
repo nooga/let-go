@@ -156,6 +156,30 @@ perf-snapshot: lowered $(GO)
 lowered: $(GO)
 	@go run -tags bootstrap ./cmd/lgbgen --target=go >/dev/null
 
+# Self-hosting (3b + 4): re-lower the whole core with the NATIVE compiler and
+# verify the fixpoint. `lowered` (3a) bootstraps the tree from source with the
+# interpreted passes; here we build lgbgen -tags "bootstrap gogen_ir" so the
+# lowering pipeline runs on THAT tree's native passes, re-lower everything
+# (including the passes themselves), and byte-compare against the committed
+# tree. Byte-identical = the native compiler reproduces its own output, so the
+# passes are correct native code AND fast enough to self-host (bench-ratchet
+# IRCompile: native ~16% faster than bytecode). A diff means a pass changed and
+# the tree is stale relative to source — re-run `make lowered` (3a) first.
+.PHONY: check-selfhost
+check-selfhost: lowered $(GO)
+	@echo ">> 3b: build native-passes lgbgen (-tags 'bootstrap gogen_ir')"
+	@go build -tags "bootstrap gogen_ir" -o .selfhost-lgbgen ./cmd/lgbgen
+	@echo ">> 3b: re-lower the whole core with the NATIVE compiler"
+	@tmp=$$(mktemp -d); ./.selfhost-lgbgen --target=go "$$tmp" >/dev/null; \
+	echo ">> 4: fixpoint — native re-lowering vs the committed tree"; \
+	if diff -rq "$$tmp" pkg/rt/core_go_lowered >/dev/null 2>&1; then \
+		echo "OK: native self-hosting fixpoint holds (byte-identical)."; rc=0; \
+	else \
+		echo "FAIL: native re-lowering differs — a pass changed; run 'make lowered' first:"; \
+		diff -rq "$$tmp" pkg/rt/core_go_lowered 2>&1 | head; rc=1; \
+	fi; \
+	rm -rf "$$tmp" .selfhost-lgbgen; exit $$rc
+
 # Differential self-AOT execution gate: build let-go twice (bytecode + the
 # -tags gogen_ir native), run each test/gold-aot/*.lg fixture under both, and
 # diff the last output line. A new cross-engine divergence fails; the
