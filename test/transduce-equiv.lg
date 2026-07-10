@@ -1,0 +1,45 @@
+;; transduce ≡ lazy-seq equivalence over a fixed corpus.
+;; For each (xform, lazy-form) pair and each input collection, the transducer
+;; result must equal the eager vec of the lazy-seq result. Throws on mismatch.
+(ns test.transduce-equiv)
+
+(def inputs
+  [[]                       ; empty
+   [1]                      ; single
+   [1 2 3 4 5]              ; vector, many
+   (list 10 20 30)          ; list
+   (range 6)                ; lazy seq
+   (map inc [0 1 2 3])])    ; already-lazy input
+
+(def inc2 (fn [x] (* 2 x)))
+(def odd? (fn [x] (= 1 (mod x 2))))
+
+;; Each case: [label transducer  lazy-fn] where
+;;   transducer result = (into [] transducer coll)
+;;   lazy result       = (vec (lazy-fn coll))
+(def cases
+  [["map"          (map inc2)                 (fn [c] (map inc2 c))]
+   ["filter"       (filter odd?)              (fn [c] (filter odd? c))]
+   ["remove"       (remove odd?)              (fn [c] (remove odd? c))]
+   ["keep"         (keep (fn [x] (when (odd? x) x)))
+                   (fn [c] (keep (fn [x] (when (odd? x) x)) c))]
+   ["map|filter"   (comp (map inc2) (filter odd?))
+                   (fn [c] (filter odd? (map inc2 c)))]
+   ["filter|map"   (comp (filter odd?) (map inc2))
+                   (fn [c] (map inc2 (filter odd? c)))]])
+
+(def n
+  (reduce
+    (fn [acc [label xform lazyfn]]
+      (reduce
+        (fn [a coll]
+          (let [via-xf   (into [] xform coll)
+                via-lazy (vec (lazyfn coll))]
+            (when (not (= via-xf via-lazy))
+              (throw (str "transduce-equiv MISMATCH [" label "] on " (pr-str coll)
+                          ": xform=" (pr-str via-xf) " lazy=" (pr-str via-lazy))))
+            (inc a)))
+        acc inputs))
+    0 cases))
+
+(println (str "transduce-equiv: " n " cases OK"))

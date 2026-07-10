@@ -1496,8 +1496,9 @@
 
 (def not-any? (comp not some))
 
-(defn remove [pred coll]
-  (filter (complement pred) coll))
+(defn remove
+  ([pred] (filter (fn [x] (not (pred x)))))
+  ([pred coll] (filter (complement pred) coll)))
 
 (defn drop-last
   ([coll] (drop-last 1 coll))
