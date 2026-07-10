@@ -512,6 +512,12 @@ func main() {
 			os.Exit(1)
 		}
 		nsChunks[ns.name] = chunk
+		// Self-hosting (3b): if a Go-lowered native override is queued for this
+		// namespace (only under -tags gogen_ir), apply it now so the lowering
+		// pipeline runs on the NATIVE passes instead of the bytecode we just
+		// compiled. Output is byte-identical (same pass logic); execution is
+		// native. A no-op without gogen_ir (the override maps are empty).
+		rt.ApplyGoOverrides(rt.LookupNS(ns.name))
 		if targetGo || targetBoth {
 			fmt.Printf("  compiled %-20s (%d bytecode + lowering to Go)\n", ns.name, len(chunk.Code())*4)
 		} else {
