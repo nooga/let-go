@@ -63,16 +63,32 @@
                (symbol fn-name) ir-fn))
     {} (get @*runtime-defn-ir-cache* ns-name {})))
 
+;; Declarative pass list: each entry is [pass-fn validate-label]. A nil label
+;; runs the pass without a validate step after it (matching the original
+;; hardcoded order, where the trailing typeinfra epoch had no validate call).
+;; This list is the seam the fusion-placement permutation harness manipulates;
+;; the default order below is byte-identical to the pre-refactor sequence.
+(def default-pass-list
+  [[run-typeinfra-epoch "infer-arg-types"]
+   [constfold           "constfold-1"]
+   [cse                 "cse"]
+   [constfold           "constfold-2"]
+   [licm                "licm"]
+   [constfold           "constfold-3"]
+   [dce                 "dce"]
+   [run-typeinfra-epoch nil]])
+
+(defn- run-pass-list [f pass-list]
+  (reduce (fn [g entry]
+            (let [pass  (nth entry 0)
+                  label (nth entry 1)]
+              (pass g)
+              (when label (validate-fn! g label))
+              g))
+          f pass-list))
+
 (defn- optimize-fn-tail [f]
-  (run-typeinfra-epoch f) (validate-fn! f "infer-arg-types")
-  (constfold f)        (validate-fn! f "constfold-1")
-  (cse f)              (validate-fn! f "cse")
-  (constfold f)        (validate-fn! f "constfold-2")
-  (licm f)             (validate-fn! f "licm")
-  (constfold f)        (validate-fn! f "constfold-3")
-  (dce f)              (validate-fn! f "dce")
-  (run-typeinfra-epoch f)
-  f)
+  (run-pass-list f default-pass-list))
 
 (defn optimize-fn [f]
   (validate-fn! f "build")
