@@ -102,7 +102,18 @@
 (defn current-locals-flat [ctx]
   "Flatten the locals scope stack into a single sym→InstId map.
    Inner scopes shadow outer."
-  (reduce merge {} (get @ctx :locals)))
+  ;; Hot path (~950K calls / ~290MB in a full lowering pass): merge every
+  ;; scope into ONE transient map instead of `reduce merge`, which allocated a
+  ;; fresh persistent map per scope via conj. Left→right fold preserves the
+  ;; inner-shadows-outer contract (inner scopes sit later in the stack); the
+  ;; nil guard mirrors merge's (if b … a) skip of empty scopes.
+  (persistent!
+    (reduce (fn [acc scope]
+              (if scope
+                (reduce-kv (fn [a k v] (assoc! a k v)) acc scope)
+                acc))
+            (transient {})
+            (get @ctx :locals))))
 (defn- binding-syms [sym]
   (cond
     (symbol? sym) #{sym}

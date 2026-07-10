@@ -1487,10 +1487,11 @@
 
 (defn every?
   [pred coll]
-  (cond
-    (nil? (seq coll)) true
-    (pred (first coll)) (recur pred (next coll))
-    :else false))
+  ;; Route through reduce, which has a zero-alloc ArrayVector fast path — the
+  ;; recursive seq/first/next walk allocated a seq node per element (hot in the
+  ;; IR passes: dce, typeinfer). `reduced` short-circuits on the first failure;
+  ;; empty/nil coll yields the init `true`, matching the old (nil? (seq coll)).
+  (reduce (fn [_ x] (if (pred x) true (reduced false))) true coll))
 
 (def not-every? (comp not every?))
 
