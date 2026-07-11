@@ -336,3 +336,123 @@ func TestFusionMatchReduceFilter(t *testing.T) {
 
 	t.Logf("✓ match-chain recognized (reduce + 0 (filter odd? coll))")
 }
+
+// TestFusionRewrite: fuse! rewrites (reduce + 0 (map inc coll)) → (transduce (map inc) + 0 coll)
+// in-place and preserves IR validity.
+func TestFusionRewrite(t *testing.T) {
+	ensureLoader()
+
+	f := buildLispIR(t, `(defn f [coll] (reduce + 0 (map inc coll)))`)
+
+	// Store f in a var for Lisp evaluation
+	passVarCounter++
+	varNameF := fmt.Sprintf("*test-fn-%d*", passVarCounter)
+	coreNS := rt.NS(rt.NameCoreNS)
+	coreNS.Def(varNameF, f)
+
+	// Find the reduce call (aux = 3 for reduce)
+	findConsumerExpr := `(let [bs (ir/blocks ` + varNameF + `)]
+		  (first (filter (fn [nid] (and (= :call (ir/op nid ` + varNameF + `))
+		                                  (= 3 (ir/aux nid ` + varNameF + `))))
+		                  (ir/block-insts (first bs) ` + varNameF + `))))`
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, coreNS)
+	c.SetSource("find-consumer-rewrite")
+	_, consumerNidVal, err := c.CompileMultiple(strings.NewReader(findConsumerExpr))
+	if err != nil {
+		t.Fatalf("find consumer nid: %v", err)
+	}
+	if consumerNidVal == vm.NIL {
+		t.Fatalf("fixture produced no reduce call (arity 3)")
+	}
+
+	passVarCounter++
+	varNameConsumer := fmt.Sprintf("*consumer-%d*", passVarCounter)
+	coreNS.Def(varNameConsumer, consumerNidVal)
+
+	// Call match-chain on the consumer
+	matchExpr := `(ir.passes.fusion/match-chain ` + varNameF + ` ` + varNameConsumer + `)`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("test-match-chain-rewrite")
+	_, matchVal, err := c.CompileMultiple(strings.NewReader(matchExpr))
+	if err != nil {
+		t.Fatalf("eval match-chain: %v", err)
+	}
+	if matchVal == vm.NIL {
+		t.Fatalf("match-chain returned nil for (reduce + 0 (map inc coll))")
+	}
+
+	passVarCounter++
+	varNameMatch := fmt.Sprintf("*match-%d*", passVarCounter)
+	coreNS.Def(varNameMatch, matchVal)
+
+	// Call fuse! on the match
+	fuseExpr := `(ir.passes.fusion/fuse! ` + varNameF + ` ` + varNameMatch + `)`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("test-fuse")
+	_, fuseResult, err := c.CompileMultiple(strings.NewReader(fuseExpr))
+	if err != nil {
+		t.Fatalf("eval fuse!: %v", err)
+	}
+	if fuseResult == vm.NIL {
+		t.Fatalf("fuse! returned nil")
+	}
+
+	// Assert 1: consumer should now be a transduce call with aux=4
+	checkConsumerExpr := `(and (= :call (ir/op ` + varNameConsumer + ` ` + varNameF + `))
+	                            (= 4 (ir/aux ` + varNameConsumer + ` ` + varNameF + `)))`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("check-consumer")
+	_, checkConsumerResult, err := c.CompileMultiple(strings.NewReader(checkConsumerExpr))
+	if err != nil {
+		t.Fatalf("check consumer: %v", err)
+	}
+	if checkConsumerResult != vm.TRUE {
+		t.Fatalf("consumer should be a :call with aux=4 (transduce arity), got aux=%d", int(checkConsumerResult.(vm.Int)))
+	}
+
+	// Assert 2: producer should now have aux=1
+	producerNidExpr := `(` + varNameMatch + ` :producer)`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("get-producer")
+	_, producerNidVal, err := c.CompileMultiple(strings.NewReader(producerNidExpr))
+	if err != nil {
+		t.Fatalf("get producer nid: %v", err)
+	}
+
+	passVarCounter++
+	varNameProducer := fmt.Sprintf("*producer-%d*", passVarCounter)
+	coreNS.Def(varNameProducer, producerNidVal)
+
+	checkProducerExpr := `(and (= :call (ir/op ` + varNameProducer + ` ` + varNameF + `))
+	                            (= 1 (ir/aux ` + varNameProducer + ` ` + varNameF + `)))`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("check-producer")
+	_, checkProducerResult, err := c.CompileMultiple(strings.NewReader(checkProducerExpr))
+	if err != nil {
+		t.Fatalf("check producer: %v", err)
+	}
+	if checkProducerResult != vm.TRUE {
+		t.Fatalf("producer should have aux=1 (arity-1 xform)")
+	}
+
+	// Assert 3: validate-fn! should not throw
+	validateExpr := `(ir.validate/validate-fn! ` + varNameF + ` "fusion-rewrite")`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("validate-after-fusion")
+	_, validateResult, err := c.CompileMultiple(strings.NewReader(validateExpr))
+	if err != nil {
+		t.Fatalf("validate-fn! threw: %v", err)
+	}
+	if validateResult == vm.NIL {
+		t.Fatalf("validate-fn! returned nil (should return f)")
+	}
+
+	t.Logf("✓ fuse! rewrote (reduce + 0 (map inc coll)) correctly and passed validation")
+}

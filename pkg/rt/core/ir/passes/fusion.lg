@@ -50,3 +50,18 @@
              :producer coll-arg :producer-kind prod-head
              :g (nth refs 1) :init (nth refs 2)
              :xform-fn (nth prod-refs 1) :coll (nth prod-refs 2)}))))))
+
+(defn fuse! [f match]
+  "Rewrite (reduce g init (map f coll)) -> (transduce (map f) g init coll), in place.
+   Reuses the producer as the arity-1 xform (SSA order preserved), inserts a
+   transduce load-var before the consumer, mutates the consumer. dce cleans up later.
+   Returns f."
+  (let [{:keys [consumer producer g init xform-fn coll]} match
+        prod-lv (nth (ir/refs producer f) 0)]
+    (ir.data/set-refs! f producer [prod-lv xform-fn])
+    (ir.data/set-aux! f producer 1)
+    (let [tx-lv (ir.data/add-inst-before! f consumer :load-var [] (resolve 'clojure.core/transduce))]
+      (ir.data/set-refs! f consumer [tx-lv producer g init coll])
+      (ir.data/set-aux! f consumer 4))
+    (ir.data/invalidate-uses! f)
+    f))
