@@ -82,16 +82,19 @@
       :else false)))
 
 (defn safe-to-fuse? [f match var-facts]
-  "True only when fusion is provably behavior-preserving: producer result used
-   exactly once (by the consumer) => non-escape (with match-chain's same-block);
-   callback pure (required for chunked/short-circuit correctness).
+  "True only when fusion is provably behavior-preserving: producer's callee
+   (map/filter/etc) is a stable load-var (not with-redefs'd/alter-var-root'd);
+   producer result used exactly once (by the consumer) => non-escape
+   (with match-chain's same-block); callback pure (required for chunked/short-circuit correctness).
 
-   The producer can be any map/filter/etc; its purity isn't checked separately
-   because fusion eliminates the intermediate lazy seq (single use + match-chain's
-   same-block guarantee ensure non-escape). Only the callback purity matters:
-   if the callback is pure, then chunking is unobservable."
+   The producer's callee must be stable because fusion reuses its :load-var in place.
+   The callback purity is required for chunking: if the callback is pure, then
+   chunking is unobservable."
   (let [{:keys [producer consumer xform-fn]} match]
     (and
+      ;; Producer callee (map/filter/etc) must be a STABLE load-var — not
+      ;; with-redefs'd/alter-var-root'd — since we reuse its :load-var in place.
+      (mut/stable-load-var? var-facts (ir/aux (nth (ir/refs producer f) 0) f))
       ;; Producer used exactly once, by consumer (non-escape guarantee)
       (let [bs (nth (ir/uses f) producer)]
         (and (= 1 (ir/uses-count bs)) (= consumer (ir/uses-first bs))))

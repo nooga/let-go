@@ -641,3 +641,9 @@ func TestFusionGateMultiUseProducer(t *testing.T) {
 		t.Logf("✓ safe-to-fuse? returned false for multi-use producer (used in reduce + count)")
 	}
 }
+
+// TODO(nnunley): TestFusionGateUnstableProducerCallee — test that safe-to-fuse? returns false when
+// the producer's callee (e.g., map) is unstable (mutated by with-redefs or alter-var-root within the
+// function). The guard via (mut/stable-load-var? var-facts ...) is in place, but constructing an IR
+// fixture with an unstable map is complex (requires capturing with-redefs mutations in IR form).
+// Case is guarded by safe-to-fuse?'s first clause; add unit test once a fixture pattern emerges.
