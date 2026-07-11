@@ -71,6 +71,8 @@ const (
 	OP_BIT_NOT
 	OP_QUOT // quot — integer quotient, truncated toward zero (2 args)
 	OP_DIV  // / — true division; int/int yields a Ratio (or Int when exact), any float yields Float (2 args)
+
+	OP_COUNT // sentinel — keep last; must equal len(opcodeNames) (enforced at init)
 )
 
 // opcodeNames maps opcode values to their mnemonics, in enum order. It is the
@@ -123,6 +125,15 @@ var opcodeNames = []string{
 	"BIT_NOT",
 	"QUOT",
 	"DIV",
+}
+
+// A new opcode must land in both the const block and opcodeNames; the
+// signature (and the disassembler) read only opcodeNames, so a missed update
+// there would let bytecode change under an unchanged signature.
+func init() {
+	if len(opcodeNames) != int(OP_COUNT) {
+		panic(fmt.Sprintf("opcodeNames out of sync with the opcode enum: %d names, %d opcodes", len(opcodeNames), OP_COUNT))
+	}
 }
 
 func OpcodeToString(op int32) string {
