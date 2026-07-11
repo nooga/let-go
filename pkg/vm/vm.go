@@ -7,6 +7,7 @@ package vm
 
 import (
 	"fmt"
+	"hash/fnv"
 	"sync"
 )
 
@@ -72,60 +73,79 @@ const (
 	OP_DIV  // / — true division; int/int yields a Ratio (or Int when exact), any float yields Float (2 args)
 )
 
+// opcodeNames maps opcode values to their mnemonics, in enum order. It is the
+// canonical inventory of the opcode set: OpcodeToString indexes it and
+// OpcodeSetSignature hashes it, so it must stay in sync with the const block
+// above (same count, same order).
+var opcodeNames = []string{
+	"NOOP",
+	"LOAD_CONST",
+	"LOAD_ARG",
+	"INVOKE",
+	"RETURN",
+	"BRANCH_T",
+	"BRANCH_F",
+	"JUMP",
+	"POP",
+	"POP_N",
+	"DUP_NTH",
+	"SET_VAR",
+	"LOAD_VAR",
+	"MAKE_CLOSURE",
+	"LOAD_CLOSEDOVER",
+	"PUSH_CLOSEDOVER",
+	"RECUR",
+	"RECUR_FN",
+	"TRACE_ENABLE",
+	"TRACE_DISABLE",
+	"MAKE_MULTI_ARITY",
+	"TAIL_CALL",
+	"TRY_PUSH",
+	"TRY_POP",
+	"THROW",
+	"ADD",
+	"SUB",
+	"MUL",
+	"BIT_AND",
+	"BIT_OR",
+	"BIT_XOR",
+	"BIT_AND_NOT",
+	"BIT_SHIFT_LEFT",
+	"BIT_SHIFT_RIGHT",
+	"UNSIGNED_BIT_SHIFT_RIGHT",
+	"LT",
+	"LTE",
+	"GT",
+	"GTE",
+	"EQ",
+	"INC",
+	"DEC",
+	"BIT_NOT",
+	"QUOT",
+	"DIV",
+}
+
 func OpcodeToString(op int32) string {
 	inst := op & 0xff
 	sp := (op >> 16) & 0xffff
-	ops := []string{
-		"NOOP",
-		"LOAD_CONST",
-		"LOAD_ARG",
-		"INVOKE",
-		"RETURN",
-		"BRANCH_T",
-		"BRANCH_F",
-		"JUMP",
-		"POP",
-		"POP_N",
-		"DUP_NTH",
-		"SET_VAR",
-		"LOAD_VAR",
-		"MAKE_CLOSURE",
-		"LOAD_CLOSEDOVER",
-		"PUSH_CLOSEDOVER",
-		"RECUR",
-		"RECUR_FN",
-		"TRACE_ENABLE",
-		"TRACE_DISABLE",
-		"MAKE_MULTI_ARITY",
-		"TAIL_CALL",
-		"TRY_PUSH",
-		"TRY_POP",
-		"THROW",
-		"ADD",
-		"SUB",
-		"MUL",
-		"BIT_AND",
-		"BIT_OR",
-		"BIT_XOR",
-		"BIT_AND_NOT",
-		"BIT_SHIFT_LEFT",
-		"BIT_SHIFT_RIGHT",
-		"UNSIGNED_BIT_SHIFT_RIGHT",
-		"LT",
-		"LTE",
-		"GT",
-		"GTE",
-		"EQ",
-		"INC",
-		"DEC",
-		"BIT_NOT",
-		"QUOT",
-		"DIV",
-	}
-	if int(inst) < len(ops) {
-		return fmt.Sprintf("%d/%-16s", sp, ops[inst])
+	if int(inst) < len(opcodeNames) {
+		return fmt.Sprintf("%d/%-16s", sp, opcodeNames[inst])
 	}
 	return "???"
+}
+
+// OpcodeSetSignature identifies this VM's opcode set: the opcode count and an
+// FNV-64a hash of the mnemonics joined in enum order. Bytecode bundles embed
+// it at encode time (bytecode.CapOpcodeSet) so a decoder on a VM with a
+// different opcode enum — opcodes inserted, removed, or reordered — can reject
+// the bundle instead of executing shifted opcodes.
+func OpcodeSetSignature() (count int, hash uint64) {
+	h := fnv.New64a()
+	for _, name := range opcodeNames {
+		h.Write([]byte(name))
+		h.Write([]byte{0})
+	}
+	return len(opcodeNames), h.Sum64()
 }
 
 // CodeChunk holds bytecode and provides facilities for reading and writing it

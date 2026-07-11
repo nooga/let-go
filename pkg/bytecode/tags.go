@@ -13,6 +13,17 @@ const (
 	FlagLocalVars    uint16 = 1 << 2 // per-chunk local-variable debug tables follow the NS table (v2+)
 )
 
+// Capability bits (valid when FlagCapabilities is set).
+const (
+	// CapOpcodeSet: the capability mask is followed by the producer's opcode-set
+	// signature (varint opcode count + uint64 FNV-64a hash of the mnemonics in
+	// enum order). The decoder rejects the bundle when the signature differs
+	// from the running VM's, so an opcode-enum change between the tree that
+	// compiled a bundle and the tree running it fails with a clear message
+	// instead of decoding shifted opcodes into undefined behavior.
+	CapOpcodeSet uint32 = 1 << 0
+)
+
 // Tag byte layout: 0bVV_TTTTTT
 //
 //	VV     = 2-bit tag version

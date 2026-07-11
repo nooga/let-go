@@ -1111,7 +1111,7 @@ func TestUnsupportedCapabilityMask(t *testing.T) {
 	w.WriteBytes(Magic[:])
 	w.WriteUint16(2)
 	w.WriteUint16(FlagCapabilities)
-	w.WriteUint32(0x00000001) // bit 0 set (CapVarintOps, not supported yet)
+	w.WriteUint32(0x00000002) // bit 1 set — no such capability defined
 	w.Flush()
 
 	_, err := Decode(&buf)

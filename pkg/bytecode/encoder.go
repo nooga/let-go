@@ -278,13 +278,16 @@ func (b *ModuleBuilder) SetNSEntry(name string, chunk *vm.CodeChunk) {
 // Build creates the Module.
 func (b *ModuleBuilder) Build() *Module {
 	m := &Module{
-		Version:    FormatVersion,
-		Flags:      0,
-		Strings:    b.strings,
-		Chunks:     b.chunks,
-		Consts:     b.consts,
-		ConstsBase: b.constsBase,
-		NSTable:    b.nsTable,
+		Version: FormatVersion,
+		// Every new bundle records the producer's opcode-set signature so a
+		// mismatched runtime rejects it at decode (see CapOpcodeSet).
+		Flags:        FlagCapabilities,
+		Capabilities: CapOpcodeSet,
+		Strings:      b.strings,
+		Chunks:       b.chunks,
+		Consts:       b.consts,
+		ConstsBase:   b.constsBase,
+		NSTable:      b.nsTable,
 	}
 	if b.constsBase > 0 {
 		m.Flags |= FlagConstsBase
@@ -325,6 +328,15 @@ func (e *encoder) writeHeader(m *Module) error {
 	if m.Flags&FlagCapabilities != 0 {
 		if err := e.w.WriteUint32(m.Capabilities); err != nil {
 			return err
+		}
+		if m.Capabilities&CapOpcodeSet != 0 {
+			count, hash := vm.OpcodeSetSignature()
+			if err := e.w.WriteVarint(uint64(count)); err != nil {
+				return err
+			}
+			if err := e.w.WriteUint64(hash); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

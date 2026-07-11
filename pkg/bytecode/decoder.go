@@ -152,17 +152,44 @@ func (d *decoder) decodeToExecUnitV1(parent *vm.Consts) (*ExecUnit, error) {
 	return unit, nil
 }
 
-func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
-	if d.flags&FlagCapabilities != 0 {
-		caps, err := d.r.ReadUint32()
+// readCapabilities reads and validates the capability mask (and each set
+// capability's payload) that follows the header when FlagCapabilities is set.
+// Shared by the module and exec-unit v2 decode paths.
+func (d *decoder) readCapabilities() error {
+	if d.flags&FlagCapabilities == 0 {
+		return nil
+	}
+	caps, err := d.r.ReadUint32()
+	if err != nil {
+		return fmt.Errorf("reading capability mask: %w", err)
+	}
+	const supportedCaps = CapOpcodeSet
+	if caps&^supportedCaps != 0 {
+		return fmt.Errorf("unsupported capability mask 0x%08x (supported: 0x%08x)", caps, supportedCaps)
+	}
+	if caps&CapOpcodeSet != 0 {
+		bundleCount, err := d.r.ReadVarint()
 		if err != nil {
-			return nil, fmt.Errorf("reading capability mask: %w", err)
+			return fmt.Errorf("reading opcode-set count: %w", err)
 		}
-		const supportedCaps uint32 = 0 // no optional features in v2.0
-		if caps&^supportedCaps != 0 {
-			return nil, fmt.Errorf("unsupported capability mask 0x%08x (supported: 0x%08x)", caps, supportedCaps)
+		bundleHash, err := d.r.ReadUint64()
+		if err != nil {
+			return fmt.Errorf("reading opcode-set hash: %w", err)
 		}
-		d.moduleCaps = caps
+		count, hash := vm.OpcodeSetSignature()
+		if int(bundleCount) != count || bundleHash != hash {
+			return fmt.Errorf(
+				"opcode set mismatch: bundle compiled with %d opcodes (signature %016x), runtime has %d (%016x) — recompile the bundle with a matching lg",
+				bundleCount, bundleHash, count, hash)
+		}
+	}
+	d.moduleCaps = caps
+	return nil
+}
+
+func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
+	if err := d.readCapabilities(); err != nil {
+		return nil, err
 	}
 
 	strings, err := d.readStringTable()
@@ -325,17 +352,8 @@ func (d *decoder) readModuleV1() (*Module, error) {
 }
 
 func (d *decoder) readModuleV2() (*Module, error) {
-	// If capability flag is set, read and validate the mask
-	if d.flags&FlagCapabilities != 0 {
-		caps, err := d.r.ReadUint32()
-		if err != nil {
-			return nil, fmt.Errorf("reading capability mask: %w", err)
-		}
-		const supportedCaps uint32 = 0 // no optional features in v2.0
-		if caps&^supportedCaps != 0 {
-			return nil, fmt.Errorf("unsupported capability mask 0x%08x (supported: 0x%08x)", caps, supportedCaps)
-		}
-		d.moduleCaps = caps
+	if err := d.readCapabilities(); err != nil {
+		return nil, err
 	}
 
 	strings, err := d.readStringTable()
