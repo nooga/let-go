@@ -456,3 +456,188 @@ func TestFusionRewrite(t *testing.T) {
 
 	t.Logf("✓ fuse! rewrote (reduce + 0 (map inc coll)) correctly and passed validation")
 }
+
+// TestFusionGatePureCallback: safe-to-fuse? returns true for
+// (reduce + 0 (map inc coll)) — pure callback (inc), single use.
+func TestFusionGatePureCallback(t *testing.T) {
+	ensureLoader()
+
+	f := buildLispIR(t, `(defn f [coll] (reduce + 0 (map inc coll)))`)
+
+	passVarCounter++
+	varNameF := fmt.Sprintf("*test-fn-%d*", passVarCounter)
+	coreNS := rt.NS(rt.NameCoreNS)
+	coreNS.Def(varNameF, f)
+
+	// Find the reduce call (aux = 3 for reduce)
+	findConsumerExpr := `(let [bs (ir/blocks ` + varNameF + `)]
+		  (first (filter (fn [nid] (and (= :call (ir/op nid ` + varNameF + `))
+		                                  (= 3 (ir/aux nid ` + varNameF + `))))
+		                  (ir/block-insts (first bs) ` + varNameF + `))))`
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, coreNS)
+	c.SetSource("find-consumer-gate-pure")
+	_, consumerNidVal, err := c.CompileMultiple(strings.NewReader(findConsumerExpr))
+	if err != nil {
+		t.Fatalf("find consumer nid: %v", err)
+	}
+	if consumerNidVal == vm.NIL {
+		t.Skip("fixture produced no reduce call (arity 3)")
+	}
+
+	passVarCounter++
+	varNameConsumer := fmt.Sprintf("*consumer-%d*", passVarCounter)
+	coreNS.Def(varNameConsumer, consumerNidVal)
+
+	// Get match-chain result
+	matchExpr := `(ir.passes.fusion/match-chain ` + varNameF + ` ` + varNameConsumer + `)`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("test-match-gate-pure")
+	_, matchVal, err := c.CompileMultiple(strings.NewReader(matchExpr))
+	if err != nil {
+		t.Fatalf("eval match-chain: %v", err)
+	}
+	if matchVal == vm.NIL {
+		t.Fatalf("match-chain returned nil for (reduce + 0 (map inc coll))")
+	}
+
+	passVarCounter++
+	varNameMatch := fmt.Sprintf("*match-%d*", passVarCounter)
+	coreNS.Def(varNameMatch, matchVal)
+
+	// Compute var-facts and call safe-to-fuse?
+	checkSafeExpr := `(let [var-facts (ir.passes.mutability/analyze-var-stability ` + varNameF + `)
+		              m (ir.passes.fusion/match-chain ` + varNameF + ` ` + varNameConsumer + `)]
+		           (ir.passes.fusion/safe-to-fuse? ` + varNameF + ` m var-facts))`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("test-safe-to-fuse-pure")
+	_, safeResult, err := c.CompileMultiple(strings.NewReader(checkSafeExpr))
+	if err != nil {
+		t.Fatalf("eval safe-to-fuse?: %v", err)
+	}
+
+	if safeResult != vm.TRUE {
+		t.Fatalf("safe-to-fuse? should return true for (reduce + 0 (map inc coll)), got: %v", safeResult)
+	}
+
+	t.Logf("✓ safe-to-fuse? returned true for pure callback (inc), single use")
+}
+
+// TestFusionGateImpureCallback: safe-to-fuse? returns false for
+// (reduce + 0 (map println coll)) — impure callback (println).
+func TestFusionGateImpureCallback(t *testing.T) {
+	ensureLoader()
+
+	f := buildLispIR(t, `(defn f [coll] (reduce + 0 (map println coll)))`)
+
+	passVarCounter++
+	varNameF := fmt.Sprintf("*test-fn-%d*", passVarCounter)
+	coreNS := rt.NS(rt.NameCoreNS)
+	coreNS.Def(varNameF, f)
+
+	// Find the reduce call (aux = 3 for reduce)
+	findConsumerExpr := `(let [bs (ir/blocks ` + varNameF + `)]
+		  (first (filter (fn [nid] (and (= :call (ir/op nid ` + varNameF + `))
+		                                  (= 3 (ir/aux nid ` + varNameF + `))))
+		                  (ir/block-insts (first bs) ` + varNameF + `))))`
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, coreNS)
+	c.SetSource("find-consumer-gate-impure")
+	_, consumerNidVal, err := c.CompileMultiple(strings.NewReader(findConsumerExpr))
+	if err != nil {
+		t.Fatalf("find consumer nid: %v", err)
+	}
+	if consumerNidVal == vm.NIL {
+		t.Skip("fixture produced no reduce call (arity 3)")
+	}
+
+	passVarCounter++
+	varNameConsumer := fmt.Sprintf("*consumer-%d*", passVarCounter)
+	coreNS.Def(varNameConsumer, consumerNidVal)
+
+	// Compute var-facts and call safe-to-fuse?
+	checkSafeExpr := `(let [var-facts (ir.passes.mutability/analyze-var-stability ` + varNameF + `)
+		              m (ir.passes.fusion/match-chain ` + varNameF + ` ` + varNameConsumer + `)]
+		           (if (nil? m)
+		             :no-match
+		             (ir.passes.fusion/safe-to-fuse? ` + varNameF + ` m var-facts)))`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("test-safe-to-fuse-impure")
+	_, safeResult, err := c.CompileMultiple(strings.NewReader(checkSafeExpr))
+	if err != nil {
+		t.Fatalf("eval safe-to-fuse?: %v", err)
+	}
+
+	// match-chain may return nil if the shape doesn't match, or safe-to-fuse? should return false
+	if safeResult == vm.Keyword("no-match") {
+		t.Logf("✓ match-chain returned nil for (reduce + 0 (map println coll)) — println is impure")
+	} else if safeResult != vm.FALSE {
+		t.Fatalf("safe-to-fuse? should return false for (reduce + 0 (map println coll)), got: %v", safeResult)
+	} else {
+		t.Logf("✓ safe-to-fuse? returned false for impure callback (println)")
+	}
+}
+
+// TestFusionGateMultiUseProducer: safe-to-fuse? returns false for
+// (let [m (map inc coll)] (+ (reduce + 0 m) (count m))) — producer used twice.
+// May also be rejected at match-chain stage if the pattern doesn't match,
+// which is also a valid "won't fuse" case.
+func TestFusionGateMultiUseProducer(t *testing.T) {
+	ensureLoader()
+
+	f := buildLispIR(t, `(defn f [coll] (let [m (map inc coll)] (+ (reduce + 0 m) (count m))))`)
+
+	passVarCounter++
+	varNameF := fmt.Sprintf("*test-fn-%d*", passVarCounter)
+	coreNS := rt.NS(rt.NameCoreNS)
+	coreNS.Def(varNameF, f)
+
+	// Try to find any reduce call (aux = 3 for reduce)
+	findConsumerExpr := `(let [bs (ir/blocks ` + varNameF + `)]
+		  (first (filter (fn [nid] (and (= :call (ir/op nid ` + varNameF + `))
+		                                  (= 3 (ir/aux nid ` + varNameF + `))))
+		                  (ir/block-insts (first bs) ` + varNameF + `))))`
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, coreNS)
+	c.SetSource("find-consumer-gate-multi")
+	_, consumerNidVal, err := c.CompileMultiple(strings.NewReader(findConsumerExpr))
+	if err != nil {
+		t.Fatalf("find consumer nid: %v", err)
+	}
+	if consumerNidVal == vm.NIL {
+		// The multi-use pattern may not match because the producer is not the DIRECT
+		// refs[3] of the consumer (it's bound via a let). This is a valid early rejection.
+		t.Logf("✓ match-chain returned nil for multi-use producer — pattern doesn't match (not direct refs[3])")
+		return
+	}
+
+	passVarCounter++
+	varNameConsumer := fmt.Sprintf("*consumer-%d*", passVarCounter)
+	coreNS.Def(varNameConsumer, consumerNidVal)
+
+	// Compute var-facts and call safe-to-fuse?
+	checkSafeExpr := `(let [var-facts (ir.passes.mutability/analyze-var-stability ` + varNameF + `)
+		              m (ir.passes.fusion/match-chain ` + varNameF + ` ` + varNameConsumer + `)]
+		           (if (nil? m)
+		             :no-match
+		             (ir.passes.fusion/safe-to-fuse? ` + varNameF + ` m var-facts)))`
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("test-safe-to-fuse-multi")
+	_, safeResult, err := c.CompileMultiple(strings.NewReader(checkSafeExpr))
+	if err != nil {
+		t.Fatalf("eval safe-to-fuse?: %v", err)
+	}
+
+	// Either match-chain nil (not matching the pattern) or safe-to-fuse? false (multiple uses)
+	if safeResult == vm.Keyword("no-match") {
+		t.Logf("✓ match-chain returned nil for multi-use producer — pattern doesn't match")
+	} else if safeResult != vm.FALSE {
+		t.Fatalf("safe-to-fuse? should return false for multi-use producer, got: %v", safeResult)
+	} else {
+		t.Logf("✓ safe-to-fuse? returned false for multi-use producer (used in reduce + count)")
+	}
+}

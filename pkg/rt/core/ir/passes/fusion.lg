@@ -12,7 +12,9 @@
 (ns ir.passes.fusion
   (:require
    [ir.data]
-   [ir.passes.inline :as inline]))
+   [ir.passes.inline :as inline]
+   [ir.passes.mutability :as mut]
+   [ir.passes.purity :as purity]))
 
 (def ^:dynamic *enable-fusion* false)
 
@@ -65,3 +67,33 @@
       (ir.data/set-aux! f consumer 4))
     (ir.data/invalidate-uses! f)
     f))
+
+(defn- callback-pure? [f xform-fn-nid var-facts]
+  "The producer callback must be side-effect-free. Either a :load-var to a
+   known/registered pure fn, or a :call whose head is a total-pure builtin.
+   Conservative: unknown op -> false."
+  (let [op (ir/op xform-fn-nid f)]
+    (cond
+      (= :load-var op)
+      (let [v (try (symbol (ir/aux xform-fn-nid f)) (catch e nil))]
+        (and v (or (contains? purity/pure-builtins [(namespace v) (name v)])
+                   (purity/user-pure-fn? (namespace v) (name v)))))
+      (= :call op) (purity/pure-call? f xform-fn-nid var-facts)
+      :else false)))
+
+(defn safe-to-fuse? [f match var-facts]
+  "True only when fusion is provably behavior-preserving: producer result used
+   exactly once (by the consumer) => non-escape (with match-chain's same-block);
+   callback pure (required for chunked/short-circuit correctness).
+
+   The producer can be any map/filter/etc; its purity isn't checked separately
+   because fusion eliminates the intermediate lazy seq (single use + match-chain's
+   same-block guarantee ensure non-escape). Only the callback purity matters:
+   if the callback is pure, then chunking is unobservable."
+  (let [{:keys [producer consumer xform-fn]} match]
+    (and
+      ;; Producer used exactly once, by consumer (non-escape guarantee)
+      (let [bs (nth (ir/uses f) producer)]
+        (and (= 1 (ir/uses-count bs)) (= consumer (ir/uses-first bs))))
+      ;; Callback (xform-fn) is pure (required for chunked/short-circuit correctness)
+      (callback-pure? f xform-fn var-facts))))
