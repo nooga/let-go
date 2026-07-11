@@ -1,0 +1,52 @@
+;; Loop fusion (deforestation): recognize and later deforest
+;; (reduce g init (map f coll)) → transducer form.
+;;
+;; v1 recognizes the shape only: consumer is reduce, producer is map/filter/remove/keep,
+;; both in the same block, producer is the direct refs[3] of the consumer.
+;; No rewrite, no safety gate. Runs after Task 2; gate placement (Task 5) controls
+;; actual pipeline integration via *enable-fusion*.
+;;
+;; Benefits both bytecode and lowered-Go backends by eliminating intermediate
+;; LazySeq allocations and churn.
+
+(ns ir.passes.fusion
+  (:require
+   [ir.data]
+   [ir.passes.inline :as inline]))
+
+(def ^:dynamic *enable-fusion* false)
+
+(def ^:private consumer-heads
+  "Map supported consumer op names to the required arity when fusable."
+  {"reduce" 3})
+
+(def ^:private producer-heads
+  "Set of supported producer op names (map, filter, remove, keep)."
+  #{"map" "filter" "remove" "keep"})
+
+(defn- core-head [f nid]
+  "Callee symbol of a :call nid if it resolves to a clojure.core fn, else nil.
+   Returns the bare name (e.g., 'reduce', 'map') if found, nil otherwise."
+  (when (= :call (ir/op nid f))
+    (let [v (inline/call-head-var f nid)]
+      (when (and v (= "clojure.core" (namespace v)))
+        (name v)))))
+
+(defn match-chain [f nid]
+  "Return a fusion match map for (reduce g init (map|filter|remove|keep f coll))
+   rooted at consumer nid, or nil. Recognition only — no safety gate, no rewrite.
+   v1: producer must be the DIRECT refs[3] call in the SAME block."
+  (let [head (core-head f nid)]
+    (when (and head (contains? consumer-heads head)
+               (= (consumer-heads head) (ir/aux nid f)))
+      (let [refs      (ir/refs nid f)
+            coll-arg  (nth refs 3)
+            prod-head (core-head f coll-arg)]
+        (when (and prod-head (contains? producer-heads prod-head)
+                   (= 2 (ir/aux coll-arg f))
+                   (= (ir/block-of coll-arg f) (ir/block-of nid f)))
+          (let [prod-refs (ir/refs coll-arg f)]
+            {:consumer nid :consumer-kind head
+             :producer coll-arg :producer-kind prod-head
+             :g (nth refs 1) :init (nth refs 2)
+             :xform-fn (nth prod-refs 1) :coll (nth prod-refs 2)}))))))
