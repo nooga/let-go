@@ -16,7 +16,15 @@
    [ir.passes.mutability :as mut]
    [ir.passes.purity :as purity]))
 
-(def ^:dynamic *enable-fusion* false)
+;; Enabled by default at the current placement (in default-pass-list right
+;; after `cse`, pipeline.lg). Measured 2026-07-11 across the full corpus:
+;; ~20% fewer allocations on ClojureTestSuite (aot_native 14.16M -> 11.33M;
+;; bytecode 8.53M -> 6.79M) and ~14-22% on IRCompile, with gogen-parity
+;; PARITY (both backends), full `go test` green, and no ir-stress regression.
+;; The exhaustive permutation-harness placement sweep (spec Section A.1) is a
+;; deferred optimization — this after-cse placement is the spec's starting
+;; hypothesis and already banks a large, correctness-verified win.
+(def ^:dynamic *enable-fusion* true)
 
 (def ^:private consumer-heads
   "Map supported consumer op names to the required arity when fusable."
