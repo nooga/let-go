@@ -313,10 +313,12 @@
     :else (throw (str "reduce-kv: unsupported coll type: " (type coll)))))
 
 (defmacro time [& body]
-  (let [then   (gensym "time__")
-        val    (gensym)
-        now    (list 'let-go.core/now)  ; now is an lg-ism in let-go.core
-        report (list 'core/println "Elapsed:" (list '.Sub now then))]
+  (let [then    (gensym "time__")
+        val     (gensym)
+        now     (list 'let-go.core/now)  ; now is an lg-ism in let-go.core
+        elapsed (list '.Sub now then)
+        msecs   (list '/ (list 'core/double elapsed) 1000000.0)
+        report  (list 'core/prn (list 'core/str "Elapsed time: " msecs " msecs"))]
     (list 'let (vector then now val (cons 'do body))
           report
           val)))

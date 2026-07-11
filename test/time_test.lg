@@ -1,0 +1,16 @@
+;; `time` should report elapsed wall-clock time in milliseconds, formatted
+;; like Clojure's `(time expr)`: "Elapsed time: <msecs> msecs" (quoted,
+;; since it's printed with prn). Previously it printed the raw
+;; time.Duration as an unformatted integer nanosecond count.
+(ns test.time-test
+  (:require [test :refer :all]))
+
+(deftest time-returns-body-value
+  (testing "time returns the value of its body"
+    (is (= 42 (time 42)))
+    (is (= 3 (time (+ 1 2))))))
+
+(deftest time-reports-elapsed-msecs
+  (testing "time prints \"Elapsed time: <msecs> msecs\""
+    (let [out (with-out-str (time (+ 1 2)))]
+      (is (re-matches #"\"Elapsed time: \d+(\.\d+)? msecs\"\n" out)))))
