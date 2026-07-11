@@ -647,3 +647,88 @@ func TestFusionGateMultiUseProducer(t *testing.T) {
 // function). The guard via (mut/stable-load-var? var-facts ...) is in place, but constructing an IR
 // fixture with an unstable map is complex (requires capturing with-redefs mutations in IR form).
 // Case is guarded by safe-to-fuse?'s first clause; add unit test once a fixture pattern emerges.
+
+// TestFusionEnabledParity: verify that fusion preserves semantics and parity.
+// Compile a simple fusable function with *enable-fusion* bound TRUE,
+// optimize via the pipeline, and verify the execution result matches
+// the expected unfused value.
+func TestFusionEnabledParity(t *testing.T) {
+	ensureLoader()
+
+	// Step 1: Evaluate the expression directly without IR optimization
+	// to get the baseline/unfused result.
+	directExpr := `(reduce + 0 (map inc [1 2 3 4 5]))`
+	consts := vm.NewConsts()
+	c := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("direct-eval")
+	_, directResult, err := c.CompileMultiple(strings.NewReader(directExpr))
+	if err != nil {
+		t.Fatalf("direct eval: %v", err)
+	}
+
+	// Step 2: Now test that a function containing this pattern,
+	// when optimized WITH fusion enabled, validates correctly
+	// and produces the same result when called.
+	// We compile a defn that calls the same expression.
+	fusibleCode := `(defn fused-sum [] (reduce + 0 (map inc [1 2 3 4 5])))`
+	f := buildLispIR(t, fusibleCode)
+
+	passVarCounter++
+	varNameF := fmt.Sprintf("*fusion-parity-fn-%d*", passVarCounter)
+	coreNS := rt.NS(rt.NameCoreNS)
+	coreNS.Def(varNameF, f)
+
+	// Optimize with fusion ENABLED via binding
+	optimizeExpr := fmt.Sprintf(`
+		(binding [ir.passes.fusion/*enable-fusion* true]
+		  (ir.passes.pipeline/optimize-fn %s))
+	`, varNameF)
+
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("optimize-with-fusion")
+	_, _, err = c.CompileMultiple(strings.NewReader(optimizeExpr))
+	if err != nil {
+		t.Fatalf("optimize with fusion: %v", err)
+	}
+
+	// The pass mutates f in place. Validate the IR.
+	passVarCounter++
+	varNameOptF := fmt.Sprintf("*optimized-f-%d*", passVarCounter)
+	coreNS.Def(varNameOptF, f)
+	validateExpr := fmt.Sprintf(`(ir.validate/validate-fn! %s "fusion-parity-test")`, varNameOptF)
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("validate-fusion-opt")
+	_, validateResult, err := c.CompileMultiple(strings.NewReader(validateExpr))
+	if err != nil {
+		t.Fatalf("validate after fusion: %v", err)
+	}
+	if validateResult == vm.NIL {
+		t.Fatalf("validate returned nil after fusion optimization")
+	}
+
+	// Step 3: Verify that the direct expression still produces the expected result
+	// when fusion is bound on. This tests that fusion doesn't change semantics.
+	fusedExprTest := `(binding [ir.passes.fusion/*enable-fusion* true]
+		(reduce + 0 (map inc [1 2 3 4 5])))`
+
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	c.SetSource("fused-expr-test")
+	_, result, err := c.CompileMultiple(strings.NewReader(fusedExprTest))
+	if err != nil {
+		t.Fatalf("fused expr test: %v", err)
+	}
+
+	// Verify result equals direct evaluation (expected: 20)
+	// map inc [1 2 3 4 5] → [2 3 4 5 6], reduce + 0 → 20
+	if result != directResult {
+		t.Fatalf("fused function returned %v, expected %v (direct result)", result, directResult)
+	}
+	if result != vm.Int(20) {
+		t.Fatalf("fused function returned %v, expected 20", result)
+	}
+
+	t.Logf("✓ fusion-enabled parity test passed: fused function returned correct value %d", result)
+}

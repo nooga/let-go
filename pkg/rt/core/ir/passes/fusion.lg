@@ -100,3 +100,18 @@
         (and (= 1 (ir/uses-count bs)) (= consumer (ir/uses-first bs))))
       ;; Callback (xform-fn) is pure (required for chunked/short-circuit correctness)
       (callback-pure? f xform-fn var-facts))))
+
+(defn fusion [f]
+  "Loop fusion pass (deforestation): when *enable-fusion* is true, find and
+   fuse fusable (reduce g init (map|filter|remove|keep f coll)) patterns into
+   transducer form. Gated by *enable-fusion*, so it's a no-op by default.
+
+   Iterates a snapshot of insts per block to tolerate fuse! structural mutation."
+  (when *enable-fusion*
+    (let [var-facts (mut/analyze-var-stability f)]
+      (doseq [bid (ir/blocks f)]
+        (doseq [nid (vec (ir/block-insts bid f))]
+          (when-let [m (match-chain f nid)]
+            (when (safe-to-fuse? f m var-facts)
+              (fuse! f m)))))))
+  f)
