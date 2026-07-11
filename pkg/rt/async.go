@@ -37,6 +37,119 @@ type Pub struct {
 
 func init() { RegisterInstaller(installAsyncNS) }
 
+// --- Shared timeout daemon ---
+//
+// All (timeout ms) channels are closed by ONE long-lived goroutine instead of
+// a goroutine per call. A per-call goroutine is cheap on stock Go but not
+// free: each (timeout ms) paid a goroutine spawn, its stack, and a timer. On
+// runtimes with heap-allocated fixed-size goroutine stacks (TinyGo), a
+// timeout-per-frame animation loop turns that into a large allocation plus a
+// GC cycle per frame. The daemon makes timeout calls allocation-free apart
+// from the channel and a queue entry.
+//
+// The daemon runs in the root scope and exits on scope cancellation, closing
+// every pending timeout channel (same observable behavior as the old per-call
+// select on ctx.Done). timerRunning lets the next timeout call restart it in
+// the scope's next context generation after a CancelAll/Drain.
+
+type timerEntry struct {
+	deadline time.Time
+	ch       vm.Chan
+}
+
+var (
+	timerMu      sync.Mutex
+	timerQueue   []timerEntry
+	timerKick    = make(chan struct{}, 1)
+	timerRunning bool
+)
+
+// timeoutChan returns a channel that the timer daemon closes after ms.
+func timeoutChan(ms int) vm.Chan {
+	ch := make(vm.Chan)
+	if ms <= 0 {
+		close(ch)
+		return ch
+	}
+	deadline := time.Now().Add(time.Duration(ms) * time.Millisecond)
+	timerMu.Lock()
+	timerQueue = append(timerQueue, timerEntry{deadline: deadline, ch: ch})
+	start := !timerRunning
+	if start {
+		timerRunning = true
+	}
+	timerMu.Unlock()
+	if start {
+		vm.Goroutines.Go(timerDaemon)
+	} else {
+		select {
+		case timerKick <- struct{}{}:
+		default:
+		}
+	}
+	return ch
+}
+
+func timerDaemon(ctx context.Context) {
+	for {
+		timerMu.Lock()
+		now := time.Now()
+		var due []vm.Chan
+		keep := timerQueue[:0]
+		var next time.Time
+		for _, e := range timerQueue {
+			if !e.deadline.After(now) {
+				due = append(due, e.ch)
+			} else {
+				keep = append(keep, e)
+				if next.IsZero() || e.deadline.Before(next) {
+					next = e.deadline
+				}
+			}
+		}
+		timerQueue = keep
+		timerMu.Unlock()
+		for _, ch := range due {
+			close(ch)
+		}
+
+		if next.IsZero() {
+			// Idle: park until a new timeout arrives or the scope cancels.
+			select {
+			case <-timerKick:
+				continue
+			case <-ctx.Done():
+				timerDaemonStop()
+				return
+			}
+		}
+		t := time.NewTimer(time.Until(next))
+		select {
+		case <-t.C:
+		case <-timerKick: // an earlier deadline may have been queued
+		case <-ctx.Done():
+			t.Stop()
+			timerDaemonStop()
+			return
+		}
+		t.Stop()
+	}
+}
+
+// timerDaemonStop closes every pending timeout channel (scope cancellation
+// unblocks their takers, matching the old per-goroutine ctx.Done behavior)
+// and marks the daemon restartable.
+func timerDaemonStop() {
+	timerMu.Lock()
+	pending := timerQueue
+	timerQueue = nil
+	timerRunning = false
+	timerMu.Unlock()
+	for _, e := range pending {
+		close(e.ch)
+	}
+}
+
 // --- Buffer policies (core.async buffer / dropping-buffer / sliding-buffer) ---
 //
 // vm.Chan is a raw Go channel, which cannot express drop-on-full semantics
@@ -342,17 +455,7 @@ func installAsyncNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("timeout expected Int milliseconds")
 		}
-		ch := make(vm.Chan)
-		vm.Goroutines.Go(func(ctx context.Context) {
-			t := time.NewTimer(time.Duration(int(ms)) * time.Millisecond)
-			defer t.Stop()
-			select {
-			case <-t.C:
-			case <-ctx.Done():
-			}
-			close(ch)
-		})
-		return ch, nil
+		return timeoutChan(int(ms)), nil
 	})
 
 	// pipe — take from src, put on dst, close dst when src closes
