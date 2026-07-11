@@ -1,0 +1,32 @@
+;; Fusion semantic equivalence tests.
+;; Verifies that (reduce g init (producer coll)) expressions evaluate
+;; to expected results (the pass rewrites them, but the values must not change).
+;; Fusion is ON by default (*enable-fusion* true), so these identities pin the
+;; default (fused) pipeline to the same values as the unfused forms.
+(ns test.fusion-semantics)
+
+(def checks
+  [[(reduce + 0 (map inc [1 2 3 4]))            14]
+   [(reduce + 0 (filter odd? [1 2 3 4 5]))       9]
+   [(reduce + 0 (remove odd? [1 2 3 4 5]))       6]
+   [(reduce conj [] (map inc (range 5)))    [1 2 3 4 5]]
+   [(into [] (map inc [1 2 3]))                [2 3 4]]
+
+   ;; reduced/early-exit must terminate and unwrap through fused chains over
+   ;; infinite and lazy sources — the fused (transduce xform (completing g) ...)
+   ;; form has to preserve reduce's short-circuit semantics exactly.
+   [(reduce (fn [a x] (if (>= a 100) (reduced a) (+ a x))) 0 (map inc (range)))
+    105]
+   [(reduce (fn [a x] (if (>= a 100) (reduced a) (+ a x))) 0 (filter odd? (map inc (range))))
+    100]
+   [(reduce (fn [a x] (if (>= a 3) (reduced a) (+ a x))) 0 (remove even? (range)))
+    4]])
+
+(def n
+  (reduce (fn [a [got want]]
+            (when (not (= got want))
+              (throw (str "fusion-semantics MISMATCH: got " (pr-str got) " want " (pr-str want))))
+            (inc a))
+          0 checks))
+
+(println (str "fusion-semantics: " n " identities OK"))

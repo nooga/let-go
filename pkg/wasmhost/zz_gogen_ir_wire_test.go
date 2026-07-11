@@ -25,6 +25,7 @@ import (
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/constfold"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/cse"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/dce"
+	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/fusion"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/infer_arg_types"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/inline"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/lambda_lift"

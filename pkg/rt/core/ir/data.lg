@@ -369,6 +369,25 @@
     (invalidate-uses-state! f)
     nid))
 
+(defn add-inst-before! [f target-nid op-kw refs aux]
+  "Create a new Inst and INSERT IT immediately BEFORE target-nid in its block.
+   Like add-inst, but splices into the block's :insts list at the position
+   of target-nid rather than appending. Returns the new InstId.
+   The flat :insts array is append-only (new nid = count). If target-nid is
+   not found in the block, appends the new inst instead (fallback)."
+  (let [bid (block-of target-nid f)
+        nid (count (:insts @f))]
+    (swap! f update :insts conj
+           [op-kw (vec refs) aux bid [] :unknown])
+    (swap! f update-in [:blocks bid :insts]
+           (fn [insts]
+             (let [i (first (keep-indexed (fn [ix x] (when (= x target-nid) ix)) insts))]
+               (if i
+                 (vec (concat (subvec insts 0 i) [nid] (subvec insts i)))
+                 (conj insts nid)))))
+    (invalidate-uses-state! f)
+    nid))
+
 (defn add-pred! [f bid pred-bid]
   (swap! f update-in [:blocks bid :preds] conj pred-bid))
 
@@ -669,7 +688,7 @@
                branch-target-target branch-target-args
                cond-target-true cond-target-false
                resolve-single-source
-               add-block add-inst add-terminator!
+               add-block add-inst add-inst-before! add-terminator!
                add-block-param! add-block-arg-front!
                add-pred! add-source-info!
                replace-op! set-refs! set-aux! set-type!

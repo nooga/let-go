@@ -1,0 +1,181 @@
+;; Loop fusion (deforestation): recognize and later deforest
+;; (reduce g init (map f coll)) → transducer form.
+;;
+;; v1 recognizes the shape only: consumer is reduce, producer is map/filter/remove/keep,
+;; both in the same block, producer is the direct refs[3] of the consumer.
+;; No rewrite, no safety gate. Runs after Task 2; gate placement (Task 5) controls
+;; actual pipeline integration via *enable-fusion*.
+;;
+;; Benefits both bytecode and lowered-Go backends by eliminating intermediate
+;; LazySeq allocations and churn.
+
+(ns ir.passes.fusion
+  (:require
+   [ir.data]
+   [ir.passes.inline :as inline]
+   [ir.passes.mutability :as mut]
+   [ir.passes.purity :as purity]))
+
+;; Enabled by default at the current placement (in default-pass-list right
+;; after `cse`, pipeline.lg). Measured 2026-07-11 across the full corpus:
+;; ~20% fewer allocations on ClojureTestSuite (aot_native 14.16M -> 11.33M;
+;; bytecode 8.53M -> 6.79M) and ~14-22% on IRCompile, with gogen-parity
+;; PARITY (both backends), full `go test` green, and no ir-stress regression.
+;; The exhaustive permutation-harness placement sweep (spec Section A.1) is a
+;; deferred optimization — this after-cse placement is the spec's starting
+;; hypothesis and already banks a large, correctness-verified win.
+(def ^:dynamic *enable-fusion* true)
+
+(def ^:private consumer-heads
+  "Consumer op name -> {:arity required-arity :coll-idx collection-arg index}."
+  {"reduce" {:arity 3 :coll-idx 3}
+   "into"   {:arity 2 :coll-idx 2}})
+
+(def ^:private producer-heads
+  "Set of supported producer op names (map, filter, remove, keep)."
+  #{"map" "filter" "remove" "keep"})
+
+(defn- core-head [f nid]
+  "Callee symbol of a :call nid if it resolves to a clojure.core fn, else nil.
+   Returns the bare name (e.g., 'reduce', 'map') if found, nil otherwise."
+  (when (= :call (ir/op nid f))
+    (let [v (inline/call-head-var f nid)]
+      (when (and v (= "clojure.core" (namespace v)))
+        (name v)))))
+
+(defn match-chain [f nid]
+  "Walk inward from the consumer's collection arg, collecting a chain of
+   same-block arity-2 producers (outermost-first). The first non-producer arg
+   is the leaf coll. nil if no producer found."
+  (let [head (core-head f nid)
+        spec (get consumer-heads head)]
+    (when (and spec (= (:arity spec) (ir/aux nid f)))
+      (let [refs (ir/refs nid f)
+            blk  (ir/block-of nid f)]
+        (loop [cur    (nth refs (:coll-idx spec))
+               stages []]
+          (let [ph (core-head f cur)]
+            (if (and ph (contains? producer-heads ph)
+                     (= 2 (ir/aux cur f))
+                     (= blk (ir/block-of cur f)))
+              (recur (nth (ir/refs cur f) 2) (conj stages cur))
+              (when (seq stages)
+                {:consumer nid :consumer-kind head
+                 :stages stages
+                 ;; back-compat aliases (outermost stage) — keep v1 tests green
+                 :producer (nth stages 0) :producer-kind (core-head f (nth stages 0)) :xform-fn (nth (ir/refs (nth stages 0) f) 1)
+                 :to   (when (= "into" head) (nth refs 1))
+                 :g    (when (= "reduce" head) (nth refs 1))
+                 :init (when (= "reduce" head) (nth refs 2))
+                 :coll cur}))))))))
+
+(defn- rewrite-stages! [f stages]
+  "Each producer stage -> its arity-1 xform in place (drop coll arg)."
+  (doseq [stage stages]
+    (let [refs     (ir/refs stage f)
+          prod-lv  (nth refs 0)
+          xform-fn (nth refs 1)]
+      (ir.data/set-refs! f stage [prod-lv xform-fn])
+      (ir.data/set-aux! f stage 1))))
+
+(defn- build-xform! [f consumer kept]
+  "xform nid for kept (outermost-first). n=1 -> bare producer; n>=2 -> a
+   synthesized comp call (innermost-first via reverse)."
+  (if (= 1 (count kept))
+    (nth kept 0)
+    (let [comp-lv (ir.data/add-inst-before! f consumer :load-var []
+                                            (resolve 'clojure.core/comp))]
+      (ir.data/add-inst-before! f consumer :call
+                                (into [comp-lv] (reverse kept)) (count kept)))))
+
+(defn fuse! [f match]
+  "Rewrite the (already-validated) chain in place.
+
+   The reduce consumer becomes (transduce xform (completing g) init coll),
+   not (transduce xform g init coll): reduce's contract is a 2-arity step fn,
+   while transduce additionally calls the 1-arity completion — and its
+   completion path does not unwrap a `reduced` produced by an early-exiting g.
+   Wrapping in `completing` (identity completion) keeps the fused form
+   observably identical to the unfused reduce, including reduced/early-exit
+   over infinite sources."
+  (let [{:keys [consumer consumer-kind stages to g init coll]} match]
+    (rewrite-stages! f stages)
+    (let [xform (build-xform! f consumer stages)]
+      (if (= "into" consumer-kind)
+        (let [into-lv (nth (ir/refs consumer f) 0)]
+          (ir.data/set-refs! f consumer [into-lv to xform coll])
+          (ir.data/set-aux! f consumer 3))
+        (let [tx-lv (ir.data/add-inst-before! f consumer :load-var []
+                                              (resolve 'clojure.core/transduce))
+              completing-lv (ir.data/add-inst-before! f consumer :load-var []
+                                                      (resolve 'clojure.core/completing))
+              g-completed (ir.data/add-inst-before! f consumer :call
+                                                    [completing-lv g] 1)]
+          (ir.data/set-refs! f consumer [tx-lv xform g-completed init coll])
+          (ir.data/set-aux! f consumer 4))))
+    (ir.data/invalidate-uses! f)
+    f))
+
+(defn- callback-pure? [f xform-fn-nid var-facts]
+  "The producer callback must be side-effect-free. Either a :load-var to a
+   known/registered pure fn, or a :call whose head is a total-pure builtin.
+   Conservative: unknown op -> false."
+  (let [op (ir/op xform-fn-nid f)]
+    (cond
+      (= :load-var op)
+      (let [v (try (symbol (ir/aux xform-fn-nid f)) (catch e nil))]
+        (and v (or (contains? purity/pure-builtins [(namespace v) (name v)])
+                   (purity/user-pure-fn? (namespace v) (name v)))))
+      (= :call op) (purity/pure-call? f xform-fn-nid var-facts)
+      :else false)))
+
+(defn- stage-safe? [f stage user var-facts]
+  "One producer stage is safe: stable producer load-var, used exactly once by
+   `user`, and pure callback."
+  (let [refs (ir/refs stage f)]
+    (and
+      (mut/stable-load-var? var-facts (ir/aux (nth refs 0) f))
+      (let [bs (nth (ir/uses f) stage)]
+        (and (= 1 (ir/uses-count bs)) (= user (ir/uses-first bs))))
+      (callback-pure? f (nth refs 1) var-facts))))
+
+(defn qualifying-count [f match var-facts]
+  "Count of outer stages (from stages[0] inward) passing the gate, stopping at
+   the first failure. stages[0]'s user is the consumer; stages[i>0]'s user is
+   stages[i-1]."
+  (let [{:keys [consumer stages]} match]
+    (loop [i 0]
+      (if (>= i (count stages))
+        i
+        (let [user (if (= i 0) consumer (nth stages (dec i)))]
+          (if (stage-safe? f (nth stages i) user var-facts)
+            (recur (inc i))
+            i))))))
+
+(defn- trim-match [match k]
+  "Keep the outer k stages; the first dropped stage (if any) becomes the leaf
+   coll (its lazy result is consumed as-is)."
+  (let [stages (:stages match)]
+    (if (= k (count stages))
+      match
+      (assoc match
+             :stages (subvec stages 0 k)
+             :coll   (nth stages k)))))
+
+(defn fusion [f]
+  "Loop fusion pass (deforestation): when *enable-fusion* is true, find and
+   fuse fusable (reduce g init (map|filter|remove|keep f coll)) patterns into
+   transducer form. Maximal-suffix partial: fuse the outer k stages where k is
+   the count of stages passing the gate, stopping at the first failure.
+   Gated by *enable-fusion*, which defaults to true (bind it false to opt out).
+
+   Iterates a snapshot of insts per block to tolerate fuse! structural mutation."
+  (when *enable-fusion*
+    (let [var-facts (mut/analyze-var-stability f)]
+      (doseq [bid (ir/blocks f)]
+        (doseq [nid (vec (ir/block-insts bid f))]
+          (when-let [m (match-chain f nid)]
+            (let [k (qualifying-count f m var-facts)]
+              (when (pos? k)
+                (fuse! f (trim-match m k)))))))))
+  f)
