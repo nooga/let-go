@@ -15,9 +15,21 @@ package vm
 // records bytes+count keyed by the top few .lg frames (chunk+ip), which
 // resolve to file:line via the chunk source maps at dump time.
 //
-// Enable with LG_ALLOC_ATTR=1. Attribution assumes a single VM goroutine:
-// the pmapv builtin drops to 1 worker while enabled. Zero overhead when
-// disabled beyond a predictable branch per instrumented site.
+// Enable with LG_ALLOC_ATTR=1. Zero overhead when disabled beyond a
+// predictable branch per instrumented site.
+//
+// Concurrency: the shadow stack is a single process-global guarded by
+// attrMu, so concurrent access is memory-SAFE (no data race), but it is a
+// single logical stack, so attribution is only ACCURATE when one goroutine
+// interprets .lg at a time. The pmapv builtin drops to 1 worker while
+// enabled to preserve that. NOTE: in-VM concurrency already exists beyond
+// pmapv — `future*` (lang.go) and core.async `go`/`thread` blocks run .lg
+// bodies on goroutines via vm.Goroutines.Go, and are NOT serialized under
+// the flag. Under LG_ALLOC_ATTR those interleave their frames onto this one
+// stack, garbling attribution for concurrent workloads (still safe, just
+// inaccurate). Accurate concurrent attribution needs a goroutine-local
+// stack; the tool's primary use — profiling the single-threaded lowering
+// pipeline (lgbgen --target=go) plus serialized pmapv — is unaffected.
 
 import (
 	"fmt"
