@@ -7,6 +7,7 @@
 package rt
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -311,5 +312,37 @@ func TestGoBlockParkedInPutIsDrainable(t *testing.T) {
 	}
 	if got := vm.Goroutines.Live(); got != 0 {
 		t.Fatalf("expected 0 live after drain, got %d", got)
+	}
+}
+
+// TestTimeoutSurvivesCancelAll covers the generation race: a timeout created
+// right after CancelAll must keep its deadline, even when the previous
+// generation's daemon has not yet noticed its cancellation and still owns the
+// queue. Before the per-entry generation check, the stopping daemon closed
+// such a timeout immediately.
+func TestTimeoutSurvivesCancelAll(t *testing.T) {
+	prev := runtime.GOMAXPROCS(1) // widen the CancelAll→daemon-stop race window
+	defer runtime.GOMAXPROCS(prev)
+
+	oldGen := timeoutChan(5000) // parks the daemon on a long deadline
+	vm.Goroutines.CancelAll()
+	fresh := timeoutChan(200) // new generation, enqueued before the old daemon stops
+
+	select {
+	case <-oldGen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pre-CancelAll timeout should close promptly on cancellation")
+	}
+
+	select {
+	case <-fresh:
+		t.Fatal("post-CancelAll timeout closed early — it belongs to the fresh generation")
+	case <-time.After(80 * time.Millisecond):
+	}
+
+	select {
+	case <-fresh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("post-CancelAll timeout never closed at its deadline")
 	}
 }

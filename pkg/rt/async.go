@@ -47,14 +47,28 @@ func init() { RegisterInstaller(installAsyncNS) }
 // GC cycle per frame. The daemon makes timeout calls allocation-free apart
 // from the channel and a queue entry.
 //
-// The daemon runs in the root scope and exits on scope cancellation, closing
-// every pending timeout channel (same observable behavior as the old per-call
-// select on ctx.Done). timerRunning lets the next timeout call restart it in
-// the scope's next context generation after a CancelAll/Drain.
+// The daemon runs in the root scope and exits on scope cancellation. Each
+// entry carries the Done channel of the scope context that was current when
+// its timeout was created, preserving the old per-call semantics: a timeout
+// closes early only when ITS OWN context generation is cancelled. A stopping
+// daemon therefore closes just the entries whose context is done and hands
+// any survivors — timeouts created after a CancelAll installed a fresh
+// generation — to a respawned daemon in that new generation.
 
 type timerEntry struct {
 	deadline time.Time
 	ch       vm.Chan
+	done     <-chan struct{} // Done of the scope context at creation time
+}
+
+// cancelled reports whether the entry's own context generation is done.
+func (e *timerEntry) cancelled() bool {
+	select {
+	case <-e.done:
+		return true
+	default:
+		return false
+	}
 }
 
 var (
@@ -71,9 +85,13 @@ func timeoutChan(ms int) vm.Chan {
 		close(ch)
 		return ch
 	}
-	deadline := time.Now().Add(time.Duration(ms) * time.Millisecond)
+	entry := timerEntry{
+		deadline: time.Now().Add(time.Duration(ms) * time.Millisecond),
+		ch:       ch,
+		done:     vm.Goroutines.Context().Done(),
+	}
 	timerMu.Lock()
-	timerQueue = append(timerQueue, timerEntry{deadline: deadline, ch: ch})
+	timerQueue = append(timerQueue, entry)
 	start := !timerRunning
 	if start {
 		timerRunning = true
@@ -98,7 +116,7 @@ func timerDaemon(ctx context.Context) {
 		keep := timerQueue[:0]
 		var next time.Time
 		for _, e := range timerQueue {
-			if !e.deadline.After(now) {
+			if !e.deadline.After(now) || e.cancelled() {
 				due = append(due, e.ch)
 			} else {
 				keep = append(keep, e)
@@ -136,17 +154,39 @@ func timerDaemon(ctx context.Context) {
 	}
 }
 
-// timerDaemonStop closes every pending timeout channel (scope cancellation
-// unblocks their takers, matching the old per-goroutine ctx.Done behavior)
-// and marks the daemon restartable.
+// timerDaemonStop runs when the daemon's own context generation is cancelled.
+// It closes the entries belonging to cancelled generations (unblocking their
+// takers, matching the old per-goroutine ctx.Done behavior) but NOT entries
+// created after a CancelAll installed a fresh generation — those keep their
+// deadlines under a respawned daemon. Without the split, a timeout created in
+// the race window between CancelAll and the old daemon noticing would be
+// closed immediately by a cancellation that predates it.
 func timerDaemonStop() {
 	timerMu.Lock()
-	pending := timerQueue
-	timerQueue = nil
-	timerRunning = false
+	var closeNow []vm.Chan
+	keep := timerQueue[:0]
+	for _, e := range timerQueue {
+		if e.cancelled() {
+			closeNow = append(closeNow, e.ch)
+		} else {
+			keep = append(keep, e)
+		}
+	}
+	timerQueue = keep
+	respawn := len(keep) > 0
+	if !respawn {
+		timerRunning = false
+	}
 	timerMu.Unlock()
-	for _, e := range pending {
-		close(e.ch)
+	for _, ch := range closeNow {
+		close(ch)
+	}
+	if respawn {
+		// Survivors belong to a newer generation; serve them from a fresh
+		// daemon spawned under the current scope context. If yet another
+		// CancelAll raced in, the new daemon's first pass closes the newly
+		// cancelled entries via the per-entry check.
+		vm.Goroutines.Go(timerDaemon)
 	}
 }
 
