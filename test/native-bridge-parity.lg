@@ -1,0 +1,139 @@
+;; Native bridge parity: the //lg:native generated primitives (name, subs,
+;; nth, deref, str, get, conj, reduce, clojure.string/upper-case) must behave
+;; identically whether dispatched through the native fast path (gogen_ir
+;; direct calls / NativeFn adapters) or the bytecode trampoline.
+(ns test.native-bridge-parity-test
+  (:require [test :refer :all]
+            [rt]
+            [clojure.string :as cs]))
+
+(deftest string-prims
+  (testing "upper-case via the native bridge"
+    (is (= "ABC" (cs/upper-case "abc")))
+    (is (= "HELLO WORLD" (cs/upper-case "hello world"))))
+  (testing "upper-case var root is the native adapter after require"
+    ;; RegisterGeneratedPrimitives runs at init, BEFORE clojure.string's
+    ;; source loads; the post-load reapply must restore the native adapter
+    ;; over string.lg's bootstrap closure.
+    (is (= "let-go.lang.NativeFn" (str (type cs/upper-case)))))
+  (testing "subs arities and boundaries"
+    (is (= "bc"  (subs "abcd" 1 3)))
+    (is (= "bcd" (subs "abcd" 1)))
+    (is (= "" (subs "abc" 3)))
+    (is (= "a" (subs "abc" 0 1)))
+    (is (= "abc" (subs "abc" 0 3)))))
+
+(deftest name-prim
+  (testing "name over keyword/symbol/string"
+    (is (= "foo" (name :foo)))
+    (is (= "foo" (name 'foo)))
+    (is (= "hello" (name "hello")))))
+
+(deftest nth-prim
+  (testing "2-arity over vectors"
+    (is (= 20 (nth [10 20 30] 1)))
+    (is (= 10 (nth [10 20 30] 0)))
+    (is (= 30 (nth [10 20 30] 2))))
+  (testing "3-arity default"
+    (is (= :none (nth [10 20 30] 9 :none)))
+    (is (= 20 (nth [10 20 30] 1 :default)))
+    (is (= :missing (nth "abcd" 99 :missing))))
+  (testing "strings yield characters"
+    (is (= \b (nth "abcd" 1)))
+    (is (= \a (nth "abcd" 0))))
+  (testing "sequences"
+    (is (= 2 (nth (list 1 2 3) 1)))
+    (is (= 1 (nth (list 1 2 3) 0)))))
+
+(deftest deref-prim
+  (testing "1-arity over atom and delay"
+    (is (= 5 (deref (atom 5))))
+    (is (= 5 @(atom 5)))
+    (is (= :dv (deref (delay :dv)))))
+  (testing "3-arity blocking form (timeout hit / value delivered)"
+    (is (= :timeout (let [p (promise)] (deref p 1 :timeout))))
+    (is (= :val (let [p (promise)] (deliver p :val) (deref p 10 :timeout))))))
+
+(deftest get-prim
+  (testing "2- and 3-arity over map/vector/set/nil"
+    (is (= 1 (get {:a 1} :a)))
+    (is (nil? (get {:a 1} :b)))
+    (is (= :dflt (get {:a 1} :b :dflt)))
+    (is (= 20 (get [10 20 30] 1)))
+    (is (= :x (get #{:x :y} :x)))
+    (is (nil? (get #{:x} :z)))
+    (is (nil? (get nil :k)))
+    (is (= :dflt (get nil :k :dflt)))))
+
+(deftest conj-prim
+  (testing "all collection kinds, multi-arg, nil coll"
+    (is (= [1 2 3] (conj [1] 2 3)))
+    (is (= '(2 1) (conj '(1) 2)))
+    (is (= #{1 2} (conj #{1} 2)))
+    (is (= {:a 1 :b 2} (conj {:a 1} [:b 2])))
+    (is (= '(1) (conj nil 1)))))
+
+(deftest reduce-prim
+  (testing "init / no-init / empty coll"
+    (is (= 6 (reduce + [1 2 3])))
+    (is (= 16 (reduce + 10 [1 2 3])))
+    (is (= 0 (reduce + [])))                    ; empty, no init -> (f)
+    (is (= 10 (reduce + 10 [])))                ; empty with init -> init
+    (is (= 7 (reduce (fn [a x] (throw "must not be called")) 7 []))))
+  (testing "reduced early-exit, incl. over an infinite lazy source"
+    (is (= :early (reduce (fn [a x] (reduced :early)) 0 [1 2 3])))
+    (is (= 105 (reduce (fn [a x] (if (>= a 100) (reduced a) (+ a x)))
+                       0 (map inc (range)))))))
+
+(deftest str-prim
+  (testing "variadic, nil elision, value rendering"
+    (is (= "" (str)))
+    (is (= "" (str nil)))
+    (is (= "a1:ks" (str \a nil 1 :k 's)))
+    (is (= "12" (str 1 2)))))
+
+(deftest redefinition-guard
+  ;; A with-redefs in the CALLER's dynamic extent must be
+  ;; observed by lowered helpers that direct-call native primitives — e.g.
+  ;; group-by's lowered Go body calls rt.Reduce3/rt.Get3/rt.Conj directly.
+  ;; Native call sites are gated on rt.NativePrimsIntact(): any override
+  ;; steers them onto the var-dispatch trampoline until the root is restored.
+  (testing "native primitive roots are intact in the steady state"
+    (is (= true (rt/native-prims-intact?))))
+  (testing "with-redefs of reduce is observed across a lowered fn boundary"
+    (let [calls (atom 0)
+          original reduce]
+      (with-redefs [reduce (fn [& args]
+                             (swap! calls inc)
+                             (apply original args))]
+        (is (= false (rt/native-prims-intact?)))
+        (is (= {:a [:a :a] :b [:b]} (group-by identity [:a :b :a])))
+        (is (= 1 @calls)))
+      ;; with-redefs unwound: canonical root restored, fast path resumes
+      (is (= true (rt/native-prims-intact?)))
+      (is (= 6 (reduce + [1 2 3])))))
+  (testing "redef is observed through same-ns callers (stable var identity)"
+    ;; capitalize was compiled during the ns load, BEFORE the post-load
+    ;; adapter reapply; the reapply must mutate the existing var's root, not
+    ;; replace the var, or capitalize is stranded on a stale var object.
+    (with-redefs [cs/upper-case (fn [x] "X")]
+      (is (= "Xb" (cs/capitalize "ab"))))
+    (is (= "Ab" (cs/capitalize "ab")))))
+
+(deftest error-paths
+  (testing "native fast path and trampoline throw alike"
+    (is (= :caught (try (nth [1 2] 9) (catch e :caught))))
+    (is (= :caught (try (nth '(1 2) 9) (catch e :caught))))
+    (is (= :caught (try (subs "abc" 9) (catch e :caught))))
+    (is (= :caught (try (subs "abc" 2 9) (catch e :caught))))
+    (is (= :caught (try (deref 42) (catch e :caught))))
+    (is (= :caught (try (name 42) (catch e :caught)))))
+  (testing "conj error paths"
+    (is (= :caught (try (conj 42 1) (catch e :caught))))
+    (is (= :caught (try (conj "str" 1) (catch e :caught)))))
+  (testing "reduce error paths"
+    (is (= :caught (try (reduce + 0 42) (catch e :caught))))
+    (is (= :caught (try (reduce 42 0 [1 2 3]) (catch e :caught))))
+    ;; a throwing reducing fn propagates through the native path
+    (is (= :caught (try (reduce (fn [a x] (throw "boom")) 0 [1 2 3])
+                        (catch e :caught))))))
