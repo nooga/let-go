@@ -1,0 +1,23 @@
+;; let-go.core — lg-specific extras that are NOT part of the portable Clojure
+;; surface (clojure ∪ bb). Auto-refer'd alongside clojure.core by RegisterNS, so
+;; unqualified use keeps resolving while clojure.core stays a faithful Clojure
+;; surface. Go-defined extras (gt/lt/ge/le, now, base64-*, …) are Def'd into this
+;; namespace in pkg/rt/lang.go; this file holds the .lg-defined ones.
+;; See openspec/changes/purify-clojure-core.
+(ns let-go.core)
+
+(defn spy [s x] (println s x) x)
+
+(defn str-join
+  ([coll] (apply str coll))
+  ([sep coll] (apply str (interpose sep coll))))
+
+(defn contains-val? [coll val]
+  (some #(= val %) (vals coll)))
+
+;; range? is a type predicate but lives here (not let-go.types) because
+;; let-go.types is kept Go-only so clojure.core can import it during bootstrap
+;; without a load-order cycle (core.lg's `range` is defined later than its ns
+;; form). range? is auto-refer'd like the rest of let-go.core.
+(defn range?
+  [x] (= (type x) (type (range 1))))

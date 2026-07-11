@@ -16,7 +16,10 @@ import (
 func evalStr(t *testing.T, s string) vm.Value {
 	t.Helper()
 	cp := vm.NewConsts()
-	ns := rt.NS(rt.NameCoreNS)
+	// Eval in a user namespace (auto-refers clojure.core AND let-go.core), not
+	// core itself — user-facing builtins like base64-* live in let-go.core, which
+	// core does not refer. This mirrors how real user code resolves them.
+	ns := rt.NS("user")
 	ctx := NewCompiler(cp, ns)
 	ch, _, err := ctx.CompileMultiple(strings.NewReader(s))
 	if err != nil {

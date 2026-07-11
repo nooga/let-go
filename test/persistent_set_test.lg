@@ -1,6 +1,8 @@
 ;; PersistentSet tests
 (ns test.persistent-set-test
-  (:require [test :refer :all]))
+  (:require
+   [clojure.set :refer [difference intersection]]
+   [test :refer :all]))
 
 (deftest set-conj-disj
   (testing "conj adds element"

@@ -68,6 +68,32 @@ func SetCoreNamespace(ns *Namespace) {
 	coreNamespacePtr = ns
 }
 
+// lgBaselineNamespaces are the lg-specific extra namespaces (let-go.core,
+// let-go.types, …) auto-refer'd alongside clojure.core. Like clojure.core each
+// is a lowest-priority resolution baseline: an explicit refer shadows it. Set by
+// rt init via AddBaselineNamespace.
+var lgBaselineNamespaces []*Namespace
+
+// AddBaselineNamespace registers ns as an auto-refer'd resolution baseline.
+func AddBaselineNamespace(ns *Namespace) {
+	lgBaselineNamespaces = append(lgBaselineNamespaces, ns)
+}
+
+// isBaselineNS reports whether ns is an auto-refer'd resolution baseline
+// (clojure.core or an lg-baseline like let-go.core/types) — deferred behind
+// explicit refers in Lookup.
+func isBaselineNS(ns *Namespace) bool {
+	if coreNamespacePtr != nil && ns == coreNamespacePtr {
+		return true
+	}
+	for _, b := range lgBaselineNamespaces {
+		if ns == b {
+			return true
+		}
+	}
+	return false
+}
+
 // --- brief single-op locked accessors -------------------------------------
 // Each takes its own lock for exactly one map op and returns a copy/pointer,
 // never a live map reference, so callers never iterate an unguarded map.
@@ -229,6 +255,33 @@ func (n *Namespace) LookupLocal(symbol Symbol) *Var {
 	return n.localVar(symbol)
 }
 
+// lookupViaRefers searches for a symbol in the namespace's refers, honoring
+// :all/:only filters and baseline-namespace precedence. Returns nil if not found.
+// Baseline namespaces (clojure.core, let-go.core, etc.) are lowest-priority:
+// explicit refers shadow them. Private vars are always hidden.
+func (n *Namespace) lookupViaRefers(sym Symbol) *Var {
+	var baselineHit *Var
+	for _, ref := range n.refersSnapshot() {
+		v := ref.ns.localVar(sym)
+		if v == nil || v.isPrivate {
+			continue
+		}
+		isBaseline := isBaselineNS(ref.ns)
+		// Baseline namespaces are always the full auto-refer :all; explicit
+		// refers honor :refer [syms] — an :only refer contributes a symbol
+		// only when it is listed.
+		if !isBaseline && !ref.all && (ref.only == nil || !ref.only[sym]) {
+			continue
+		}
+		if isBaseline {
+			baselineHit = v
+			continue
+		}
+		return v
+	}
+	return baselineHit
+}
+
 // DefStub interns an UNBOUND var (no root) without triggering the
 // warn-on-shadow check. Intended for bundle decoders that pre-populate var
 // references before the namespace's own chunk runs (which Defs the ones that
@@ -275,38 +328,16 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 		if v := n.localVar(sym); v != nil {
 			return v
 		}
-		// Unqualified miss: search refers. Snapshot first so we follow each
-		// refer's target via its own lock, never holding n's lock across.
+		// Unqualified miss: search refers via the baseline-aware helper.
 		//
 		// Precedence (Clojure semantics): an explicit refer — (:require [lib
-		// :refer :all]) or :refer [syms], and (use lib) — SHADOWS the
-		// clojure.core auto-refer that RegisterNS installs into every ns. So we
-		// treat the core refer as a lowest-priority baseline: return the first
-		// matching explicit refer, honoring :all / :only, and only fall back to
-		// core if no explicit refer provides the symbol.
-		var coreHit *Var
-		for _, ref := range n.refersSnapshot() {
-			v := ref.ns.localVar(sym)
-			if v == nil || v.isPrivate {
-				continue
-			}
-			isCore := coreNamespacePtr != nil && ref.ns == coreNamespacePtr
-			// The clojure.core refer is always the full auto-refer :all
-			// baseline: an explicit (:require [clojure.core :refer [...]]) is
-			// additive, never restrictive (core is trimmed via :refer-clojure
-			// :exclude, not here). For every OTHER refer, honor :refer [syms] —
-			// an :only refer contributes a symbol only when it is listed.
-			if !isCore && !ref.all && (ref.only == nil || !ref.only[sym]) {
-				continue
-			}
-			if isCore {
-				coreHit = v
-				continue
-			}
+		// :refer :all]) or :refer [syms], and (use lib) — SHADOWS the auto-refer
+		// baseline namespaces (clojure.core and let-go.core) that RegisterNS
+		// installs into every ns. lookupViaRefers returns the first matching
+		// explicit refer (honoring :all / :only) and falls back to a baseline
+		// hit only when no explicit refer provides the symbol.
+		if v := n.lookupViaRefers(sym); v != nil {
 			return v
-		}
-		if coreHit != nil {
-			return coreHit
 		}
 		return NIL
 	}
@@ -322,6 +353,10 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 				n.cacheAlias(sns, loaded)
 				v = target.localVar(sym)
 			}
+		}
+		// If direct lookup missed, try target's refers (follows target's `:refer`s)
+		if v == nil {
+			v = target.lookupViaRefers(sym)
 		}
 		if v == nil || v.isPrivate {
 			return NIL

@@ -9,7 +9,7 @@
 (defn- pprint-seq [s open close indent]
   (let [items (vec s)]
     (if (<= (count (pr-str s)) 40)
-      (str open (str-join " " (map pr-str items)) close)
+      (str open (apply str (interpose " " (map pr-str items))) close)
       (let [inner-indent (+ indent 1)
             formatted (map #(pprint-str % inner-indent) items)]
         (str open (first formatted)

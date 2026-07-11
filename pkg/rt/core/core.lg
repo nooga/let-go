@@ -10,7 +10,12 @@
 ;
 
 ; let-go core library
-(ns core)
+(ns core
+  ;; clojure.core imports the lg-specific type predicates it uses internally
+  ;; (integer?/rational?/seqable? use array?/bigint?). let-go.types is Go-only so
+  ;; this bootstrap require has no load-order cycle. See purify-clojure-core.
+  (:require
+   [let-go.types :refer [array? bigint?]]))
 
 (def fn (fn* [& body] (cons 'fn* body)))
 (set-macro! (var fn))
@@ -74,13 +79,11 @@
     b
     (cons (first a) (concat-list (next a) b))))
 
-(def > gt)
-(def < lt)
-
-(def >= ge)
-(def <= le)
-
-(def parse-long parse-int)
+;; >, <, >=, <= are native primitives Def'd in clojure.core (pkg/rt/lang.go).
+;; Their lg-ism aliases gt/lt/ge/le live in let-go.core, not clojure.core.
+;; (purify-clojure-core ②)
+;; parse-long is a native primitive in clojure.core (pkg/rt/lang.go); parse-int
+;; is its lg-ism spelling in let-go.core.
 
 (declare odd?)
 (declare dec)
@@ -176,8 +179,8 @@
   (if (number? x)
     (== 0 x)
     (throw (str "zero? requires a number, got " x))))
-(defn pos? [x] (gt x 0))
-(defn neg? [x] (lt x 0))
+(defn pos? [x] (> x 0))
+(defn neg? [x] (< x 0))
 (defn even? [x]
   (when-not (integer? x)
     (throw (str "even? requires an integer, got " x)))
@@ -312,7 +315,7 @@
 (defmacro time [& body]
   (let [then   (gensym "time__")
         val    (gensym)
-        now    (list 'core/now)
+        now    (list 'let-go.core/now)  ; now is an lg-ism in let-go.core
         report (list 'core/println "Elapsed:" (list '.Sub now then))]
     (list 'let (vector then now val (cons 'do body))
           report
@@ -340,7 +343,7 @@
       initial
       forms)))
 
-(defn spy [s x] (println s x) x)
+;; spy → let-go.core (pkg/rt/core/let-go/core.lg)
 
 ;; map — with 1 arg returns a transducer, otherwise delegates to Go-native map*
 (defn map
@@ -1207,31 +1210,8 @@
      ([a b c] (f (if (nil? a) x a) (if (nil? b) y b) (if (nil? c) z c)))
      ([a b c & ds] (apply f (if (nil? a) x a) (if (nil? b) y b) (if (nil? c) z c) ds)))))
 
-;; set difference
-(defn difference
-  ([s1] s1)
-  ([s1 s2]
-   (if (< (count s1) (count s2))
-     (reduce (fn [result item]
-               (if (contains? s2 item)
-                 (disj result item)
-                 result))
-             s1 s1)
-     (reduce disj s1 s2)))
-  ([s1 s2 & sets]
-   (reduce difference s1 (conj sets s2))))
-
-;; set intersection
-(defn intersection
-  ([s1] s1)
-  ([s1 s2]
-   (if (< (count s2) (count s1))
-     (recur s2 s1)
-     (reduce (fn [result item]
-               (if (contains? s2 item)
-                 result
-                 (disj result item)))
-             s1 (seq s1)))))
+;; `difference` and `intersection` live in clojure.set (pkg/rt/core/set.lg),
+;; their canonical Clojure home — not clojure.core. (purify-clojure-core ①)
 
 (defn take-while
   ([pred]
@@ -1940,8 +1920,7 @@
 (defn seqable? [coll]
   (or (nil? coll) (coll? coll) (string? coll) (array? coll) (seq? coll)))
 
-(defn contains-val? [coll val]
-  (some #(= val %) (vals coll)))
+;; contains-val? → let-go.core (pkg/rt/core/let-go/core.lg)
 
 ;; mapv/filterv are EAGER (like Clojure's reduce/transduce-based versions):
 ;; the callback must run inside the caller's extent so dynamic bindings are
@@ -1958,8 +1937,7 @@
 (defn filterv [pred coll]
   (persistent! (reduce (fn [acc x] (if (pred x) (conj! acc x) acc)) (transient []) coll)))
 
-(defn range?
-  [x] (= (type x) (type (range 1))))
+;; range? → let-go.core (pkg/rt/core/let-go/core.lg)
 
 (defn bounded-count [n coll]
   (if (counted? coll)
@@ -1974,9 +1952,7 @@
   ([keyfn comp coll]
    (sort (fn [a b] (comp (keyfn a) (keyfn b))) coll)))
 
-(defn str-join
-  ([coll] (apply str coll))
-  ([sep coll] (apply str (interpose sep coll))))
+;; str-join → let-go.core (pkg/rt/core/let-go/core.lg)
 
 ;; --- Records ---
 

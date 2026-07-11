@@ -36,6 +36,7 @@ import (
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/typeinfer"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/structurize"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/validate"
+	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/let_go/core"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/pprint"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/test"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/walk"

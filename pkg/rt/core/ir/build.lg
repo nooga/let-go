@@ -20,6 +20,7 @@
 ;; the Lisp data layer's atom-backed implementations.
 (ns ir.build
   (:require
+   [clojure.set :as set]
    [ir.data]))
 
 ;; --- builder context -----------------------------------------------------
@@ -201,13 +202,13 @@
           (if-not multi?
             (let [args-vec   (first rest-forms)
                   body       (rest rest-forms)
-                  inner-known (difference known-locals (shadow-for args-vec))]
+                  inner-known (set/difference known-locals (shadow-for args-vec))]
               (into #{} (mapcat #(captures-of % inner-known) body)))
             (into #{} (mapcat (fn [arity-form]
                                 (let [args-vec    (first arity-form)
                                       body        (rest arity-form)
-                                      inner-known (difference known-locals
-                                                              (shadow-for args-vec))]
+                                      inner-known (set/difference known-locals
+                                                    (shadow-for args-vec))]
                                   (mapcat #(captures-of % inner-known) body)))
                               rest-forms))))
         (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
@@ -215,14 +216,14 @@
               pairs    (partition 2 bindings)
               [used let-bound-set]
               (reduce (fn [[caps shadowed] [sym init]]
-                        (let [locs (difference known-locals shadowed)]
+                        (let [locs (set/difference known-locals shadowed)]
                           [(into caps (captures-of init locs))
                            (into shadowed (binding-syms sym))]))
                       [#{} #{}]
                       pairs)
               new-locals    (into known-locals let-bound-set)
               body-captures (into #{} (mapcat #(captures-of % new-locals) body))]
-          (into used (difference body-captures let-bound-set)))
+          (into used (set/difference body-captures let-bound-set)))
         (= head 'try)
         ;; try guards a body; (catch e …) binds e in the handler body only;
         ;; (finally …) binds nothing. Mirror build-try's split so captures
@@ -231,8 +232,8 @@
         (let [[body-forms catch-clause finally-clause] (parse-try (rest form))
               body-caps (mapcat #(captures-of % known-locals) body-forms)
               catch-caps (if catch-clause
-                           (mapcat #(captures-of % (difference known-locals
-                                                               #{(:binding catch-clause)}))
+                           (mapcat #(captures-of % (set/difference known-locals
+                                                     #{(:binding catch-clause)}))
                                    (:body catch-clause))
                            [])
               fin-caps (if finally-clause

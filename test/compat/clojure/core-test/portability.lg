@@ -1,5 +1,10 @@
 (ns clojure.core-test.portability
-  (:require [test :refer :all]))
+  (:require
+   ;; big-int? is an lg structural predicate living in let-go.types (auto-refer'd
+   ;; as a baseline). Import it explicitly so the suite-local re-export below has
+   ;; a definite source rather than relying on ambient resolution.
+   [let-go.types :refer [big-int?]]
+   [test :refer :all]))
 
 ;; when-var-exists: In let-go we don't have compile-time resolve,
 ;; so we just always emit the body. Tests for missing vars will fail
@@ -24,8 +29,8 @@
 (def min-double Double/MIN_VALUE)
 (def all-ones-int -1)
 
-;; Re-export let-go's native BigInt predicate under the suite-local helper name.
-(def big-int? clojure.core/big-int?)
+;; big-int? is provided by the explicit let-go.types :refer in the ns form above;
+;; suite files that (:refer [big-int?]) from this namespace pick it up there.
 
 ;; Re-export let-go's native lazy-seq? predicate. Upstream's lazy_seq.cljc
 ;; and repeatedly.cljc tests assert that a (lazy-seq ...) form returns

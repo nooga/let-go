@@ -106,6 +106,26 @@ func evalInit() {
 	if err != nil {
 		panic("core.lg compilation failed: " + err.Error())
 	}
+	// Bundle-path parity (purify-clojure-core ②): the lg baseline namespaces
+	// (let-go.core, …) are auto-refer'd into every namespace but never explicitly
+	// required, so the on-demand loader never runs their bodies. Without this,
+	// their .lg-defined lg-isms (str-join, spy, range?, …) stay unbound and
+	// unqualified use fails to resolve under -tags bootstrap — even though it
+	// works on the bundle path (see loadPrecompiledBundle's eager chunk-run).
+	// Compile their embedded source eagerly, right after core. Go-only baselines
+	// (let-go.types, whose predicates are Def'd in Go) have no source and are
+	// skipped, keeping unqualified imports working without code changes.
+	for _, name := range rt.LgBaselineNSNames() {
+		src, ok := rt.EmbeddedSource(name)
+		if !ok {
+			continue
+		}
+		bc := NewCompiler(consts, rt.NS(name))
+		bc.SetSource("<embedded:" + name + ">")
+		if _, _, berr := bc.CompileMultiple(strings.NewReader(src)); berr != nil {
+			panic(name + " compilation failed: " + berr.Error())
+		}
+	}
 	postCoreInit()
 }
 
@@ -178,8 +198,27 @@ func loadPrecompiledBundle() error {
 	// the loader even though the namespace already exists in the registry.
 	if unit.NSChunks != nil {
 		precompiledNS = unit.NSChunks
+		// The lg baseline namespaces (let-go.core, let-go.types) hold lg-specific
+		// extras and are auto-refer'd into every namespace (RegisterNS) but never
+		// explicitly required. On-demand loading only fires through
+		// LookupOrRegisterNS (qualified refs / require), which refer-resolution
+		// bypasses — so their .lg chunks would never run and the .lg-defined vars
+		// would stay unbound stubs. Run them eagerly right after core, whose
+		// definitions they depend on. (purify-clojure-core ②)
+		baselineNS := map[string]bool{}
+		for _, name := range rt.LgBaselineNSNames() {
+			baselineNS[name] = true
+			if ch := precompiledNS[name]; ch != nil {
+				lf := vm.NewFrame(ch, nil)
+				_, lerr := lf.RunProtected()
+				vm.ReleaseFrame(lf)
+				if lerr != nil {
+					return lerr
+				}
+			}
+		}
 		for name := range precompiledNS {
-			if name != "core" {
+			if name != "core" && !baselineNS[name] {
 				rt.MarkNSNeedsLoad(name)
 			}
 		}
