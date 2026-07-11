@@ -708,7 +708,87 @@ func TestFusionEnabledParity(t *testing.T) {
 		t.Fatalf("validate returned nil after fusion optimization")
 	}
 
-	// Step 3: Verify that the direct expression still produces the expected result
+	// Step 3: PROVE FUSION FIRED by inspecting optimized IR structure.
+	// After optimization with *enable-fusion* true, the IR should contain:
+	// - A :call with aux=4 (transduce arity)
+	// - A :call with aux=1 (arity-1 producer xform)
+	// Without these, fusion did NOT fire (which would be a real bug).
+
+	verifyFusionFiredExpr := `(let [bid (first (ir/blocks ` + varNameOptF + `))
+	                     insts (vec (ir/block-insts bid ` + varNameOptF + `))
+	                     has-transduce (some (fn [nid] (and (= :call (ir/op nid ` + varNameOptF + `))
+	                                                         (= 4 (ir/aux nid ` + varNameOptF + `))))
+	                                         insts)
+	                     has-arity1 (some (fn [nid] (and (= :call (ir/op nid ` + varNameOptF + `))
+	                                                      (= 1 (ir/aux nid ` + varNameOptF + `))))
+	                                      insts)]
+	                 (if (and has-transduce has-arity1) :fusion-fired :fusion-did-not-fire))`
+
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("verify-fusion-fired")
+	_, fusionFiredResult, err := c.CompileMultiple(strings.NewReader(verifyFusionFiredExpr))
+	if err != nil {
+		t.Fatalf("verify fusion fired: %v", err)
+	}
+	if fusionFiredResult != vm.Keyword("fusion-fired") {
+		t.Fatalf("fusion did NOT fire through full optimize pipeline: expected :call aux=4 (transduce) and aux=1 (arity-1 xform), got: %v", fusionFiredResult)
+	}
+
+	// Step 3b: CONTROL TEST — With fusion DISABLED, verify the original shape remains.
+	// Recompile the same function but with *enable-fusion* false.
+	fusibleCodeControl := `(defn fused-sum-control [] (reduce + 0 (map inc [1 2 3 4 5])))`
+	fControl := buildLispIR(t, fusibleCodeControl)
+
+	passVarCounter++
+	varNameFControl := fmt.Sprintf("*fusion-control-fn-%d*", passVarCounter)
+	coreNS.Def(varNameFControl, fControl)
+
+	// Optimize with fusion DISABLED via binding
+	optimizeExprControl := fmt.Sprintf(`
+		(binding [ir.passes.fusion/*enable-fusion* false]
+		  (ir.passes.pipeline/optimize-fn %s))
+	`, varNameFControl)
+
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("optimize-without-fusion")
+	_, _, err = c.CompileMultiple(strings.NewReader(optimizeExprControl))
+	if err != nil {
+		t.Fatalf("optimize without fusion: %v", err)
+	}
+
+	passVarCounter++
+	varNameOptFControl := fmt.Sprintf("*optimized-f-control-%d*", passVarCounter)
+	coreNS.Def(varNameOptFControl, fControl)
+
+	// Verify the unfused IR: should have :call aux=3 (reduce), :call aux=2 (map),
+	// and NO :call aux=4 (transduce).
+	verifyNoFusionExpr := `(let [bid (first (ir/blocks ` + varNameOptFControl + `))
+	                     insts (vec (ir/block-insts bid ` + varNameOptFControl + `))
+	                     has-reduce (some (fn [nid] (and (= :call (ir/op nid ` + varNameOptFControl + `))
+	                                                      (= 3 (ir/aux nid ` + varNameOptFControl + `))))
+	                                      insts)
+	                     has-map (some (fn [nid] (and (= :call (ir/op nid ` + varNameOptFControl + `))
+	                                                   (= 2 (ir/aux nid ` + varNameOptFControl + `))))
+	                                   insts)
+	                     has-transduce (some (fn [nid] (and (= :call (ir/op nid ` + varNameOptFControl + `))
+	                                                         (= 4 (ir/aux nid ` + varNameOptFControl + `))))
+	                                         insts)]
+	                 (if (and has-reduce has-map (not has-transduce)) :no-fusion :fusion-present))`
+
+	consts = vm.NewConsts()
+	c = compiler.NewCompiler(consts, coreNS)
+	c.SetSource("verify-no-fusion")
+	_, noFusionResult, err := c.CompileMultiple(strings.NewReader(verifyNoFusionExpr))
+	if err != nil {
+		t.Fatalf("verify no fusion: %v", err)
+	}
+	if noFusionResult != vm.Keyword("no-fusion") {
+		t.Fatalf("fusion control test failed: with *enable-fusion*=false, IR should have original shape (:call aux=3 reduce, aux=2 map, no aux=4 transduce), got: %v", noFusionResult)
+	}
+
+	// Step 4: Verify that the direct expression still produces the expected result
 	// when fusion is bound on. This tests that fusion doesn't change semantics.
 	fusedExprTest := `(binding [ir.passes.fusion/*enable-fusion* true]
 		(reduce + 0 (map inc [1 2 3 4 5])))`
@@ -730,5 +810,5 @@ func TestFusionEnabledParity(t *testing.T) {
 		t.Fatalf("fused function returned %v, expected 20", result)
 	}
 
-	t.Logf("✓ fusion-enabled parity test passed: fused function returned correct value %d", result)
+	t.Logf("✓ fusion-enabled parity test: proved fusion fired (transduce+arity1 present), control shows no-fusion path correct, runtime semantics preserved")
 }
