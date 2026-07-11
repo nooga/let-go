@@ -20,48 +20,56 @@
    For genuinely-unresolved symbols (not special forms), bucket by the
    symbol name itself so we see one row per missing dep instead of
    one giant pile."
-  (let [;; Scrub process-specific noise before truncating. Pointer addresses
-        ;; (e.g. `<fn defn 0x2a9abf0be030>`) inside error strings push the
-        ;; subs 0 100 cutoff to a different character on each run, so two
-        ;; engines emit different `:other | ...` buckets even when the
-        ;; semantic content is identical. Normalize the address to a
-        ;; fixed marker so truncation lands at a stable spot.
-        raw (str err-str)
-        m   (string/replace raw #"0x[0-9a-fA-F]{6,}" "0xXXX")
-        truncated (if (> (count m) 100) (str (subs m 0 100) "...") m)]
-    (cond
-      ;; Special-form heads first — these surface as 'unresolved symbol X'
-      ;; because build-list has no case for them and falls into build-call.
-      (re-find #"unresolved symbol set!" m)    :missing-form/set!
-      (re-find #"unresolved symbol var$" m)    :missing-form/var
-      (re-find #"unresolved symbol var " m)    :missing-form/var
-      (re-find #"unresolved symbol def$" m)    :missing-form/def
-      (re-find #"unresolved symbol def " m)    :missing-form/def
-      (re-find #"unresolved symbol try" m)     :missing-form/try
-      (re-find #"unresolved symbol trace" m)   :missing-form/trace
+  (cond
+    ;; Idempotent: an already-classified bucket (a keyword like
+    ;; :validate/cross-block-ref, or an `:other | …` string produced by a
+    ;; prior classify-error pass) must pass through unchanged, so re-running
+    ;; the classifier over stored buckets doesn't double-wrap them.
+    (keyword? err-str) err-str
+    (and (string? err-str) (string/starts-with? err-str ":")) err-str
+    :else
+    (let [;; Scrub process-specific noise before truncating. Pointer addresses
+          ;; (e.g. `<fn defn 0x2a9abf0be030>`) inside error strings push the
+          ;; subs 0 100 cutoff to a different character on each run, so two
+          ;; engines emit different `:other | ...` buckets even when the
+          ;; semantic content is identical. Normalize the address to a
+          ;; fixed marker so truncation lands at a stable spot.
+          raw (str err-str)
+          m   (string/replace raw #"0x[0-9a-fA-F]{6,}" "0xXXX")
+          truncated (if (> (count m) 100) (str (subs m 0 100) "...") m)]
+      (cond
+        ;; Special-form heads first — these surface as 'unresolved symbol X'
+        ;; because build-list has no case for them and falls into build-call.
+        (re-find #"unresolved symbol set!" m)    :missing-form/set!
+        (re-find #"unresolved symbol var$" m)    :missing-form/var
+        (re-find #"unresolved symbol var " m)    :missing-form/var
+        (re-find #"unresolved symbol def$" m)    :missing-form/def
+        (re-find #"unresolved symbol def " m)    :missing-form/def
+        (re-find #"unresolved symbol try" m)     :missing-form/try
+        (re-find #"unresolved symbol trace" m)   :missing-form/trace
 
-      ;; Genuinely-unresolved symbol: bucket by the symbol name.
-      (re-find #"unresolved symbol" m)
-      (let [match (re-find #"unresolved symbol ([^\s,)]+)" m)]
-        (if match
-          (keyword "unresolved" (second match))
-          :unresolved-symbol))
-      (re-find #"Can't resolve" m)
-      (let [match (re-find #"Can't resolve ([^\s,)]+)" m)]
-        (if match
-          (keyword "unresolved" (second match))
-          :unresolved-symbol))
+        ;; Genuinely-unresolved symbol: bucket by the symbol name.
+        (re-find #"unresolved symbol" m)
+        (let [match (re-find #"unresolved symbol ([^\s,)]+)" m)]
+          (if match
+            (keyword "unresolved" (second match))
+            :unresolved-symbol))
+        (re-find #"Can't resolve" m)
+        (let [match (re-find #"Can't resolve ([^\s,)]+)" m)]
+          (if match
+            (keyword "unresolved" (second match))
+            :unresolved-symbol))
 
-      ;; Destructuring issues
-      (re-find #"destructur" m)  :destructure-rejection
+        ;; Destructuring issues
+        (re-find #"destructur" m)  :destructure-rejection
 
-      ;; Build-form errors with structural cause.
-      (re-find #"no :term" m)              :validate/no-term
-      (re-find #"cross-block ref" m)       :validate/cross-block-ref
-      (re-find #"is not a valid i" m)      :gogen/bad-identifier
-      (re-find #"nth index must be an integer" m) :gogen/nth-non-int
-      (re-find #"nested closure" m)        :lower-go/nested-closure
-      (re-find #"unrecognized form" m)     :build/unrecognized-form
+        ;; Build-form errors with structural cause.
+        (re-find #"no :term" m)              :validate/no-term
+        (re-find #"cross-block ref" m)       :validate/cross-block-ref
+        (re-find #"is not a valid i" m)      :gogen/bad-identifier
+        (re-find #"nth index must be an integer" m) :gogen/nth-non-int
+        (re-find #"nested closure" m)        :lower-go/nested-closure
+        (re-find #"unrecognized form" m)     :build/unrecognized-form
 
-      ;; Everything else: store the actual error message
-      :else (str ":other | " truncated))))
+        ;; Everything else: store the actual error message
+        :else (str ":other | " truncated)))))

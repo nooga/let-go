@@ -1,17 +1,9 @@
 {:failed 20
- :total 2397
- :passed 2377
- :captured "2026-07-10"
+ :total 2398
+ :passed 2378
+ :captured "2026-07-11"
  :how "LG_STRESS_PASSES=1 make ir-stress (corpus = every shipped/test/example .lg)"
  :note
- "ITER-0021 lowering-coverage ratchet. `make ir-stress-gate` fails when the
-  corpus failure count exceeds :failed — i.e. a form newly fails to lower to
-  native Go and falls back to bytecode / vm dispatch (a trampoline, not a
-  direct/native call). The ratchet only tightens: after a genuine coverage
-  gain (fewer failures), the baseline re-tightens and locks the improvement in.
-  NEVER loosens the gate after a coverage loss without human investigation —
-  it's always a real regression, and the gate's role is to prevent PR merges
-  from masking a regression.
-
-  Corpus is discovered from every shipped/test/example .lg, so upstream growth
-  moves :total. :failed stays 20 in already-known bucket classes; no new mode."}
+ "ITER-0021 lowering-coverage ratchet. `make ir-stress-gate` fails when the\n  corpus failure count exceeds :failed — i.e. a form newly fails to lower to\n  native Go and falls back to bytecode / vm dispatch (a trampoline, not a\n  direct/native call). The ratchet only tightens: after a genuine coverage\n  gain (fewer failures), the baseline re-tightens and locks the improvement in.\n  NEVER loosens the gate after a coverage loss without human investigation —\n  it's always a real regression, and the gate's role is to prevent PR merges\n  from masking a regression.\n\n  Corpus is discovered from every shipped/test/example .lg, so upstream growth\n  moves :total. :failed stays 20 in already-known bucket classes; no new mode."
+ :buckets
+ {":unresolved/a" 1, ":validate/cross-block-ref" 8, ":unresolved/_" 1, ":build/unrecognized-form" 1, ":unresolved/n" 7, ":other | unsupported function body shape" 1, ":unresolved/read-json" 1}}

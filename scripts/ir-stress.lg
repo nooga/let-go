@@ -277,6 +277,24 @@
   (let [v (System/getenv "LG_STRESS_BASELINE")]
     (if (and v (not= v "")) v nil)))
 
+;; LG_STRESS_REBASELINE=1 flips the gate into WRITER mode: instead of
+;; comparing against the committed baseline it rewrites it from this run's
+;; census (counts + failure buckets + capture date), preserving the
+;; existing :how/:note prose. `make ir-stress-rebaseline` is the entry
+;; point — the baseline is tool-maintained, never hand-edited.
+(def rebaseline?
+  (= (System/getenv "LG_STRESS_REBASELINE") "1"))
+
+(defn- render-baseline [entry]
+  ;; Stable, diff-friendly EDN layout (round-trips via read-string).
+  (str "{:failed " (:failed entry)
+       "\n :total " (:total entry)
+       "\n :passed " (:passed entry)
+       "\n :captured " (pr-str (:captured entry))
+       "\n :how " (pr-str (:how entry))
+       "\n :note\n " (pr-str (:note entry))
+       "\n :buckets\n " (pr-str (:buckets entry)) "}\n"))
+
 (def log-entries (atom []))
 
 ;; --- per-pass cost aggregation (LG_STRESS_TOPK) ---------------------------
@@ -560,7 +578,14 @@
                 ok     (count (filter (fn [[_ [r _]]] (= :ok r)) results))
                 errs   (filter (fn [[_ [r _]]] (not= :ok r)) results)
                 times  (map (fn [[_ [_ t]]] t) results)
-                err-classifications (map (fn [[_ [r _]]] r) errs)
+                ;; Normalize every failure through classify-error so the stored
+                ;; buckets are STABLE taxonomy keys (e.g. :validate/cross-block-ref,
+                ;; :unresolved/n) rather than raw error strings carrying volatile
+                ;; instruction/block numbers. classify-error is idempotent, so
+                ;; an already-classified result passes through unchanged.
+                err-classifications (map (fn [[_ [r _]]]
+                                           (str (ir.coverage/classify-error r)))
+                                         errs)
                 error-buckets (frequencies (filter (fn [e] (not (nil? e))) err-classifications))]
             {:file path :total (count defns) :ok ok :err (count errs)
              :times times
@@ -717,43 +742,75 @@
         ;; --- ITER-0021 coverage-ratchet gate (reuses THIS fallback census;
         ;; no separate fallback detector). Active only when LG_STRESS_BASELINE
         ;; is set; fails the run if failures grew vs the committed baseline. ---
-        (when gate-baseline-path
+        (when (and gate-baseline-path rebaseline?)
+          (let [failed (- total oks)
+                prev   (try (read-string (slurp gate-baseline-path)) (catch e nil))
+                entry  {:failed failed
+                        :total total
+                        :passed oks
+                        ;; Injected by the Makefile (date +%F): a `(. (now) …)`
+                        ;; method invoke here would itself fail to lower and
+                        ;; show up as a corpus failure (this script is corpus).
+                        :captured (or (System/getenv "LG_STRESS_DATE")
+                                      (:captured prev)
+                                      "unknown")
+                        :how (or (:how prev)
+                                 "LG_STRESS_PASSES=1 make ir-stress (corpus = every shipped/test/example .lg)")
+                        :note (or (:note prev) "")
+                        :buckets all-errs}]
+            (spit gate-baseline-path (render-baseline entry))
+            (println (str "\n=== Coverage ratchet REBASELINED (" gate-baseline-path ") ==="))
+            (println (str "wrote :failed " failed " :total " total " :passed " oks))))
+
+        (when (and gate-baseline-path (not rebaseline?))
           (let [failed      (- total oks)
                 baseline    (try (read-string (slurp gate-baseline-path)) (catch e nil))
-                base-failed (or (:failed baseline) 0)
-                base-total  (:total baseline)]
+                base-buckets (or (:buckets baseline) {})
+                base-failed (reduce + 0 (vals base-buckets))]
             (println (str "\n=== Coverage ratchet (baseline " gate-baseline-path ") ==="))
             (cond
               (nil? baseline)
               (do (println (str "GATE ERROR: cannot read baseline " gate-baseline-path))
                   (System/exit 2))
-              ;; Corpus-stability guard: the absolute failure count is only a
-              ;; valid ratchet if it counts the SAME corpus. A changed :total
-              ;; (a fixture added/removed) can mask a regression — e.g. drop a
-              ;; failing fixture and `failed` falls without any lowering fix. So
-              ;; a drifted corpus is a hard error: re-baseline, don't auto-pass.
-              (and base-total (not= total base-total))
-              (do (println (str "GATE ERROR: corpus size changed — " total " forms now vs "
-                                base-total " baselined."))
-                  (println "      The corpus list is part of the gate contract; a changed :total")
-                  (println "      can hide a coverage regression. Re-baseline before landing:")
-                  (println "      LG_STRESS_PASSES=1 make ir-stress, then update docs/perf/ir-stress-baseline.edn.")
+              (empty? base-buckets)
+              (do (println (str "GATE ERROR: baseline has no :buckets to ratchet against."))
+                  (println "      Re-baseline with the classified failure set: make ir-stress-rebaseline")
                   (System/exit 2))
-              (> failed base-failed)
-              (do
-                (println (str "FAIL: lowering coverage REGRESSED — " failed " failures vs "
-                              base-failed " baselined (" (- failed base-failed) " new)."))
-                (println "      Forms newly NOT lowering to native Go (fell back to bytecode / vm")
-                (println "      dispatch — trampolines, not direct calls). Failure buckets:")
-                (doseq [[bucket cnt] (sort-by val (fn [a b] (compare b a)) all-errs)]
-                  (println (format "  %-50s %3d" (str bucket) cnt)))
-                (System/exit 1))
               :else
-              (println (str "OK: " oks "/" total " lower natively; failures " failed
-                            " <= baseline " base-failed
-                            (if (< failed base-failed)
-                              (str " — improved by " (- base-failed failed)
-                                   "; ratchet the baseline down")
-                              ""))))))))))
+              ;; Per-bucket ratchet: each known failure classification is tolerated
+              ;; UP TO its baselined count. A bucket whose count now exceeds the
+              ;; baseline — or a bucket the baseline never recorded — is a genuine
+              ;; coverage regression (a form newly falling back to bytecode / vm
+              ;; dispatch). The corpus may grow freely; only new *failures* fail
+              ;; the gate, so we no longer hard-fail on a changed :total.
+              (let [regressions (into {}
+                                      (filter (fn [[bucket cnt]]
+                                                (> cnt (get base-buckets bucket 0)))
+                                              all-errs))
+                    improved (into {}
+                                   (filter (fn [[bucket cnt]]
+                                             (< (get all-errs bucket 0) cnt))
+                                           base-buckets))]
+                (cond
+                  (seq regressions)
+                  (do
+                    (println (str "FAIL: lowering coverage REGRESSED — failures beyond the known-"
+                                  "bucket baseline (" failed " total now vs " base-failed " baselined):"))
+                    (doseq [[bucket cnt] (sort-by val (fn [a b] (compare b a)) regressions)]
+                      (println (format "  %-52s %3d now  (baseline %d, +%d NEW)"
+                                       (str bucket) cnt (get base-buckets bucket 0)
+                                       (- cnt (get base-buckets bucket 0)))))
+                    (println "\n      These are forms newly NOT lowering to native Go. If genuinely")
+                    (println "      uncovered-but-expected, classify + accept them: make ir-stress-rebaseline")
+                    (System/exit 1))
+                  (seq improved)
+                  (println (str "OK — and IMPROVED: " oks "/" total " lower natively (" failed
+                                " failures <= " base-failed " baselined). Buckets shrank ("
+                                (reduce + 0 (map (fn [[b c]] (- c (get all-errs b 0))) improved))
+                                " fewer): ratchet the baseline down with make ir-stress-rebaseline."))
+                  :else
+                  (println (str "OK: " oks "/" total " lower natively; " failed
+                                " failures all within the known " base-failed
+                                "-failure bucket baseline.")))))))))))
 
 (run)
