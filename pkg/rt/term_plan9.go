@@ -10,15 +10,40 @@ package rt
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// Plan 9 has no termios/ioctl. raw-mode/size/pty are stubbed; the ANSI output
-// functions route through *out* (WriteToOut) like native (rio won't render
-// escapes, but they're harmless). If you need real terminal control on plan9,
-// wire in /dev/cons here.
+// Plan 9 terminal support. Input is real: raw-mode! holds /dev/consctl open with
+// "rawon" (Plan 9 has no termios; consctl controls the console), and read-key /
+// key-pending? read through a queuedKeySource (keysource_queued.go) — a
+// background goroutine feeding a byte queue, because Plan 9 lacks the Unix
+// poll(2)/FIONREAD non-blocking peek. The ANSI output functions route through
+// *out* (WriteToOut) like native. size reads $COLS/$LINES (fallback 80x24); real
+// window geometry (/dev/wctl pixels) is a deferred follow-up. open-pty/set-size
+// stay unsupported. mouse decoding is native-only.
+
+// consctl holds /dev/consctl open while the terminal is in raw mode. Plan 9
+// reverts to cooked mode as soon as this fd closes, so raw-mode! keeps it open
+// and restore-mode! writes "rawoff" then closes it. Guarded by consctlMu.
+var (
+	consctl   *os.File
+	consctlMu sync.Mutex
+)
+
+// envInt reads an integer environment variable, returning def when it is unset
+// or unparseable.
+func envInt(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
 
 func init() { RegisterInstaller(installTermNS) }
 
@@ -32,23 +57,97 @@ func installTermNS() {
 	ns := vm.NewNamespace("term")
 	ns.Refer(CoreNS, "", true)
 
-	stubTrue, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return vm.TRUE, nil
-	})
-	stubFalse, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return vm.FALSE, nil
-	})
 	stubNil, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NIL, nil
 	})
 
-	ns.Def("raw-mode!", stubTrue)
-	ns.Def("restore-mode!", stubTrue)
-	ns.Def("read-key", stubNil)
-	ns.Def("key-pending?", stubFalse)
+	// Bind the plan9 key source (background stdin reader + queue) at the *keys*
+	// root — the input dual of the os.Stdout *out* default in iort.go. read-key
+	// and key-pending? consult the bound source, so api.WithKeySource / (binding
+	// [*keys* …]) transparently overrides it for tests and embedders.
+	CoreNS.Lookup("*keys*").(*vm.Var).SetRoot(vm.NewBoxed(NewQueuedKeySource(os.Stdin)))
 
+	// raw-mode! — enter raw mode by opening /dev/consctl and writing "rawon",
+	// holding the fd (Plan 9 reverts to cooked mode when it closes). Only the
+	// 0-arg global form is supported; xsofy never passes a handle. Returns nil
+	// (not an error) when there's no console — mirrors native's not-a-TTY path.
+	rawMode, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 0 {
+			return vm.NIL, fmt.Errorf("raw-mode!: per-handle raw mode not supported on plan9")
+		}
+		consctlMu.Lock()
+		defer consctlMu.Unlock()
+		if consctl != nil {
+			return vm.TRUE, nil // already raw
+		}
+		f, err := os.OpenFile("/dev/consctl", os.O_WRONLY, 0)
+		if err != nil {
+			return vm.NIL, nil // no console (e.g. piped stdin)
+		}
+		if _, err := f.WriteString("rawon"); err != nil {
+			f.Close()
+			return vm.NIL, nil
+		}
+		consctl = f
+		return vm.TRUE, nil
+	})
+	ns.Def("raw-mode!", rawMode)
+
+	// restore-mode! — write "rawoff" and close /dev/consctl, reverting to cooked
+	// mode. Idempotent: a no-op (nil) when raw mode was never entered.
+	restoreMode, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		consctlMu.Lock()
+		defer consctlMu.Unlock()
+		if consctl == nil {
+			return vm.NIL, nil
+		}
+		_, _ = consctl.WriteString("rawoff")
+		err := consctl.Close()
+		consctl = nil
+		if err != nil {
+			return vm.NIL, fmt.Errorf("restore-mode!: %w", err)
+		}
+		return vm.TRUE, nil
+	})
+	ns.Def("restore-mode!", restoreMode)
+
+	// read-key — read one keypress through the *keys* source. Returns single
+	// chars, or escape sequences like "\x1b[A" for arrows; "" is the
+	// end-of-input nil contract. Ctx-aware so api.WithKeySource is honored.
+	// Mouse-report decoding is native-only — plan9 has no mouse path.
+	readKey := vm.NewCtxNativeFn("read-key", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		s, err := boundKeySource(ec).ReadKey()
+		if err != nil {
+			return vm.NIL, err
+		}
+		if s == "" {
+			return vm.NIL, nil
+		}
+		return vm.String(s), nil
+	})
+	ns.Def("read-key", readKey)
+
+	// key-pending? — true if a key is buffered and ready, without consuming it.
+	// Plan 9 has no poll/FIONREAD, so the bound source answers from its
+	// background-reader queue. Non-blocking; eof-blind so the
+	// (when (key-pending?) (read-key)) idiom doesn't busy-spin at end-of-input.
+	keyPendingFn := vm.NewCtxNativeFn("key-pending?", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if boundKeySource(ec).KeyPending() {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+	ns.Def("key-pending?", keyPendingFn)
+
+	// size — [cols rows] from $COLS/$LINES, falling back to 80x24. Real Plan 9
+	// window geometry lives in /dev/wctl (pixels) and is rarely surfaced as env
+	// vars under rio/drawterm, so this usually returns the fallback — safe,
+	// since callers diff term/size per tick and simply see "no resize".
 	sizeFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return vm.NewPersistentVector([]vm.Value{vm.MakeInt(80), vm.MakeInt(24)}), nil
+		return vm.NewPersistentVector([]vm.Value{
+			vm.MakeInt(envInt("COLS", 80)),
+			vm.MakeInt(envInt("LINES", 24)),
+		}), nil
 	})
 	ns.Def("size", sizeFn)
 
