@@ -35,6 +35,9 @@ func installTermNS() {
 	stubTrue, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.TRUE, nil
 	})
+	stubFalse, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.FALSE, nil
+	})
 	stubNil, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NIL, nil
 	})
@@ -42,6 +45,7 @@ func installTermNS() {
 	ns.Def("raw-mode!", stubTrue)
 	ns.Def("restore-mode!", stubTrue)
 	ns.Def("read-key", stubNil)
+	ns.Def("key-pending?", stubFalse)
 
 	sizeFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NewPersistentVector([]vm.Value{vm.MakeInt(80), vm.MakeInt(24)}), nil
