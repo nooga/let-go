@@ -116,12 +116,20 @@ func (l *Regex) FindStringSubmatch(s string) []string {
 	return l.re.FindStringSubmatch(s)
 }
 
+func (l *Regex) FindStringSubmatchIndex(s string) []int {
+	return l.re.FindStringSubmatchIndex(s)
+}
+
 func (l *Regex) FindAllString(s string, n int) []string {
 	return l.re.FindAllString(s, n)
 }
 
 func (l *Regex) FindAllStringSubmatch(s string, n int) [][]string {
 	return l.re.FindAllStringSubmatch(s, n)
+}
+
+func (l *Regex) FindAllStringSubmatchIndex(s string, n int) [][]int {
+	return l.re.FindAllStringSubmatchIndex(s, n)
 }
 
 func (l *Regex) Split(s string, n int) []string {

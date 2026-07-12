@@ -19,12 +19,21 @@
 (deftest re-find-test
   (testing "re-find finds first match"
     (is (= "123" (re-find #"\d+" "abc123def")))
-    (is (nil? (re-find #"\d+" "abcdef")))))
+    (is (nil? (re-find #"\d+" "abcdef"))))
+
+  (testing "re-find distinguishes unmatched and empty capture groups"
+    (is (= ["--verbose" "--verbose" nil]
+           (re-find #"^(--[^ =]+)(?:[ =](.*))?" "--verbose")))
+    (is (= ["b" ""] (re-find #"(a*)b" "b")))))
 
 (deftest re-matches-test
   (testing "re-matches requires full string match"
     (is (= "123" (re-matches #"\d+" "123")))
-    (is (nil? (re-matches #"\d+" "abc123")))))
+    (is (nil? (re-matches #"\d+" "abc123"))))
+
+  (testing "re-matches distinguishes unmatched and empty capture groups"
+    (is (= ["b" nil] (re-matches #"(a)?b" "b")))
+    (is (= ["b" ""] (re-matches #"(a*)b" "b")))))
 
 (deftest re-seq-test
   (testing "re-seq finds all matches"

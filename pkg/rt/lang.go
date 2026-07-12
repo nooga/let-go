@@ -5381,6 +5381,26 @@ func installLangNS() {
 		return vm.String(string(s.(vm.String)) + "\n"), nil
 	})
 
+	regexSubmatchVector := func(s string, indices []int) vm.ArrayVector {
+		result := make(vm.ArrayVector, len(indices)/2)
+		for i := range result {
+			start, end := indices[2*i], indices[2*i+1]
+			if start < 0 {
+				result[i] = vm.NIL
+				continue
+			}
+			result[i] = vm.String(s[start:end])
+		}
+		return result
+	}
+
+	regexSubmatchValue := func(s string, indices []int) vm.Value {
+		if len(indices) == 2 {
+			return vm.String(s[indices[0]:indices[1]])
+		}
+		return regexSubmatchVector(s, indices)
+	}
+
 	// re-find: find first match of regex in string
 	reFind, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
@@ -5394,18 +5414,11 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("re-find expected String")
 		}
-		matches := re.FindStringSubmatch(string(s))
-		if matches == nil {
+		indices := re.FindStringSubmatchIndex(string(s))
+		if indices == nil {
 			return vm.NIL, nil
 		}
-		if len(matches) == 1 {
-			return vm.String(matches[0]), nil
-		}
-		result := make(vm.ArrayVector, len(matches))
-		for i, m := range matches {
-			result[i] = vm.String(m)
-		}
-		return result, nil
+		return regexSubmatchValue(string(s), indices), nil
 	})
 
 	// re-matches: match entire string against regex
@@ -5421,18 +5434,11 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("re-matches expected String")
 		}
-		matches := re.FindStringSubmatch(string(s))
-		if matches == nil || matches[0] != string(s) {
+		indices := re.FindStringSubmatchIndex(string(s))
+		if indices == nil || indices[0] != 0 || indices[1] != len(s) {
 			return vm.NIL, nil
 		}
-		if len(matches) == 1 {
-			return vm.String(matches[0]), nil
-		}
-		result := make(vm.ArrayVector, len(matches))
-		for i, m := range matches {
-			result[i] = vm.String(m)
-		}
-		return result, nil
+		return regexSubmatchValue(string(s), indices), nil
 	})
 
 	// re-seq: return lazy seq of all matches
@@ -5450,21 +5456,13 @@ func installLangNS() {
 		}
 		// Like Clojure (and re-find above): a groupless pattern yields
 		// the match string, capture groups yield [full g1 g2 ...].
-		all := re.FindAllStringSubmatch(string(s), -1)
+		all := re.FindAllStringSubmatchIndex(string(s), -1)
 		if all == nil {
-			return vm.EmptyList, nil
+			return vm.NIL, nil
 		}
 		vals := make([]vm.Value, len(all))
-		for i, matches := range all {
-			if len(matches) == 1 {
-				vals[i] = vm.String(matches[0])
-				continue
-			}
-			groups := make(vm.ArrayVector, len(matches))
-			for j, m := range matches {
-				groups[j] = vm.String(m)
-			}
-			vals[i] = groups
+		for i, indices := range all {
+			vals[i] = regexSubmatchValue(string(s), indices)
 		}
 		return vm.ListType.Box(vals)
 	})
@@ -6292,17 +6290,13 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("re-groups expected String")
 		}
-		all := re.FindAllStringSubmatch(string(s), -1)
+		all := re.FindAllStringSubmatchIndex(string(s), -1)
 		if all == nil {
 			return vm.NIL, nil
 		}
 		result := make([]vm.Value, len(all))
-		for i, match := range all {
-			group := make(vm.ArrayVector, len(match))
-			for j, m := range match {
-				group[j] = vm.String(m)
-			}
-			result[i] = group
+		for i, indices := range all {
+			result[i] = regexSubmatchVector(string(s), indices)
 		}
 		return vm.NewArrayVector(result), nil
 	})
