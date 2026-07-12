@@ -8527,6 +8527,18 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// medley's queue/queue?).
 	DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.EmptyPersistentQueue)
 
+	// (Exception. message) appears in JVM-oriented source even when the path is
+	// not exercised under let-go. Resolve the constructor so the namespace can
+	// compile, but fail loudly rather than returning a fake Java exception.
+	exceptionCtorStub, err := vm.NativeFnType.Wrap(func([]vm.Value) (vm.Value, error) {
+		return vm.NIL, fmt.Errorf("Exception. is unavailable under let-go")
+	})
+	if err != nil {
+		panic(err)
+	}
+	ns.Def("Exception.", exceptionCtorStub)
+	ns.Def("->Exception", exceptionCtorStub)
+
 	// (java.util.ArrayList.) / (java.util.ArrayList. n).
 	// medley's partition-between / sliding build a mutable ArrayList on their
 	// :clj branch. let-go has no mutable ArrayList, so this is a load-only ctor
