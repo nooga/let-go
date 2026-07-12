@@ -147,10 +147,33 @@ func SnapshotBindings() BindingSnapshot {
 // ec.Child() instead (see docs/design/exec-context-threading.md).
 func RunWithBindings(snap BindingSnapshot, fn func() (Value, error)) (Value, error) {
 	saved := globalBindingStack.snapshot()
-	globalBindingStack.installSnapshot(snap)
+	rootInstallSnapshot(saved, snap)
 	out, err := fn()
-	globalBindingStack.installSnapshot(saved)
+	rootInstallSnapshot(snap, saved)
 	return out, err
+}
+
+// rootInstallSnapshot swaps the ROOT binding stack from `from` to `to` and
+// keeps each affected var's rootBindDepth consistent (installSnapshot bypasses
+// push/pop). To preserve "never Root() while a settled binding exists", it
+// bumps gaining vars BEFORE the swap and drops losing vars AFTER it.
+func rootInstallSnapshot(from, to BindingSnapshot) {
+	for v, vals := range to {
+		if d := int32(len(vals) - len(from[v])); d > 0 {
+			v.rootBindDepth.Add(d)
+		}
+	}
+	globalBindingStack.installSnapshot(to)
+	for v, vals := range to {
+		if d := int32(len(vals) - len(from[v])); d < 0 {
+			v.rootBindDepth.Add(d)
+		}
+	}
+	for v, vals := range from {
+		if _, ok := to[v]; !ok {
+			v.rootBindDepth.Add(int32(-len(vals)))
+		}
+	}
 }
 
 func (v *Var) notifyWatches(oldVal, newVal Value) error {

@@ -42,3 +42,26 @@ func TestRootBindDepthGate(t *testing.T) {
 		t.Fatalf("previously-bound deref = %v, want 1 (root)", got)
 	}
 }
+
+func TestRunWithBindingsCounterConsistent(t *testing.T) {
+	v := NewVar(nil, "t", "y")
+	v.SetRoot(Int(10))
+	v.SetDynamic()
+
+	snap := BindingSnapshot{v: {Int(99)}}
+	_, _ = RunWithBindings(snap, func() (Value, error) {
+		if got := v.Deref(); got != Int(99) {
+			t.Errorf("inside RunWithBindings deref = %v, want 99", got)
+		}
+		if d := v.rootBindDepth.Load(); d != 1 {
+			t.Errorf("inside RunWithBindings depth = %d, want 1", d)
+		}
+		return NIL, nil
+	})
+	if got := v.Deref(); got != Int(10) {
+		t.Errorf("after RunWithBindings deref = %v, want 10 (root)", got)
+	}
+	if d := v.rootBindDepth.Load(); d != 0 {
+		t.Errorf("after RunWithBindings depth = %d, want 0", d)
+	}
+}
