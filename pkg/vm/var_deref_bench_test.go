@@ -124,6 +124,19 @@ func BenchmarkVarDerefDistinctParallel(b *testing.B) {
 	})
 }
 
+// BenchmarkVarDerefChildContext measures deref against an isolated child
+// context (the per-goroutine path), which the root-context benchmarks don't
+// cover. The binding lives in the child's own stack.
+func BenchmarkVarDerefChildContext(b *testing.B) {
+	v := newRootVar()
+	v.SetDynamic()
+	ec := RootExecContext.Child()
+	ec.pushBinding(v, Int(7))
+	for i := 0; i < b.N; i++ {
+		derefSink = ec.deref(v)
+	}
+}
+
 // BenchmarkBindingPushPop measures one full binding extent (the (binding […])
 // write path). Copy-on-write makes reads lock-free at the cost of allocating a
 // fresh map per push/pop, so this is the side of the trade that gets more
