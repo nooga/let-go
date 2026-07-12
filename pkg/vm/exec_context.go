@@ -126,10 +126,14 @@ func (ec *ExecContext) orRoot() *ExecContext {
 
 // --- dynamic-var resolution (ec owns the binding state) ---------------------
 
-// deref returns v's current value in this context: the top dynamic binding if
-// any, else v's root.
 func (ec *ExecContext) deref(v *Var) Value {
 	ec = ec.orRoot()
+	if ec == RootExecContext {
+		return v.derefRoot()
+	}
+	// Child context: an isolated, per-goroutine stack — uncontended, so walk it
+	// directly. rootBindDepth tracks only ROOT bindings, so child bindings are
+	// gated by isDynamic (set at declaration or on any bind) as before.
 	if v.isDynamic.Load() {
 		if val, ok := ec.bindings.current(v); ok {
 			return val
@@ -140,11 +144,25 @@ func (ec *ExecContext) deref(v *Var) Value {
 
 func (ec *ExecContext) pushBinding(v *Var, val Value) {
 	v.isDynamic.Store(true)
-	ec.orRoot().bindings.push(v, val)
+	root := ec.orRoot()
+	if root == RootExecContext {
+		// Increment BEFORE the push: a reader that sees depth>0 then walks will
+		// either find the binding or (racing this in-progress push) fall through
+		// to Root(). It never sees depth==0 while a settled root binding exists.
+		v.rootBindDepth.Add(1)
+	}
+	root.bindings.push(v, val)
 }
 
 func (ec *ExecContext) popBinding(v *Var) {
-	ec.orRoot().bindings.pop(v)
+	root := ec.orRoot()
+	root.bindings.pop(v)
+	if root == RootExecContext {
+		// Decrement AFTER the pop: depth stays >0 while the binding is still
+		// walkable, so a concurrent reader never sees depth==0 with the binding
+		// still present.
+		v.rootBindDepth.Add(-1)
+	}
 }
 
 func (ec *ExecContext) hasBinding(v *Var) bool {

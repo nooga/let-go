@@ -29,9 +29,17 @@ type Var struct {
 	// so the dynamic flag is read on the hot deref path while being set by a
 	// concurrent bind. A plain bool here is a data race.
 	isDynamic atomic.Bool
-	isPrivate bool
-	mu        sync.Mutex // guards meta + watches
-	watches   map[Value]Fn
+	// rootBindDepth counts this var's live bindings in the ROOT (process-global)
+	// context. The deref hot path reads it — a per-var field, so distinct vars
+	// don't share a cache line. Zero means no root binding exists, so deref
+	// returns the root directly and never touches the shared binding stack.
+	// Maintained by every root-stack mutation: pushBinding/popBinding and
+	// RunWithBindings. Child-context bindings live in isolated per-goroutine
+	// stacks and never touch this.
+	rootBindDepth atomic.Int32
+	isPrivate     bool
+	mu            sync.Mutex // guards meta + watches
+	watches       map[Value]Fn
 }
 
 // valPtr boxes a Value for storage in an atomic.Pointer[Value].
@@ -74,12 +82,27 @@ func (v *Var) SetRoot(val Value) *Var {
 	return v
 }
 
+// derefRoot resolves v against the ROOT (process-global) context. It is the
+// single shared root-resolution path — Var.Deref (host/lowered callers) and
+// ExecContext.deref's root branch both call it, so the two can never diverge.
+// The rootBindDepth==0 fast path is a single per-var atomic load with no
+// shared-structure access.
+func (v *Var) derefRoot() Value {
+	if v.rootBindDepth.Load() == 0 {
+		return v.Root()
+	}
+	if val, ok := globalBindingStack.current(v); ok {
+		return val
+	}
+	return v.Root()
+}
+
 // Deref returns the current value in the root execution context: the dynamic
 // top binding if one is active, else the root. Host and lowered callers that
 // hold no ExecContext resolve here; the interpreter resolves against its
-// frame's context (which is the root context unless a child was installed).
+// frame's context via ExecContext.deref (which shares derefRoot for the root).
 func (v *Var) Deref() Value {
-	return RootExecContext.deref(v)
+	return v.derefRoot()
 }
 
 // Root returns the var's root binding directly, bypassing any current
