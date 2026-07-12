@@ -74,14 +74,12 @@ Sources, in order of discovery:
 
 ### 3. The wall-clock typeinfer budget (root cause of the remaining non-determinism)
 
-`typeinfer` bails when it exceeds `*typeinfer-budget-ms*` (2000 ms), returning a
-**sound partial** result (a lower bound in the type lattice). Under parallel
-load, N workers contend for CPU, so a given typeinfer call gets less wall-time,
-hits the budget sooner, and bails with *less* type information. A call that
-qualified for direct native (`corefns.X`) dispatch sequentially falls back to
-generic dispatch in parallel — so even the *imports* differ run-to-run.
-
-**A time-based budget is inherently non-deterministic under variable CPU load.**
+`typeinfer` bails when it exceeds `*typeinfer-max-drains*` (default 2,000,000), returning a
+**sound partial** result (a lower bound in the type lattice). The drain-count budget is
+machine-independent and deterministic — the codegen path (which uses the lowered tree)
+must run to fixpoint (unbounded *typeinfer-max-drains*) to ensure deterministic output
+independent of concurrent load. This PR replaces the prior wall-clock budget with the
+deterministic drain-count mechanism, eliminating the nondeterminism.
 This is the one source the per-site fixes can't reach.
 
 ## Proposed fix: a mergeable type-discovery cache
