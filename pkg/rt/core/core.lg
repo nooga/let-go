@@ -840,7 +840,17 @@
     `(def ~(def-meta-name name doc attr) (fn ~@forms))))
 
 (defn ^:private fn-expand [bindings body]
-  (let [amp-idx (loop [i 0 bs (seq bindings)]
+  (let [conditions (when (and (next body) (map? (first body))) (first body))
+        body (if conditions (next body) body)
+        result-sym (symbol "%")
+        body (if (:post conditions)
+               (list (cons 'clojure.core/let
+                           (cons (vector result-sym (cons 'do body))
+                                 (concat (map #(list 'clojure.core/assert %) (:post conditions))
+                                         (list result-sym)))))
+               body)
+        body (concat (map #(list 'clojure.core/assert %) (:pre conditions)) body)
+        amp-idx (loop [i 0 bs (seq bindings)]
                   (if bs
                     (if (= (first bs) '&) i (recur (inc i) (next bs)))
                     -1))

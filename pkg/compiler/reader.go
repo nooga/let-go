@@ -50,6 +50,7 @@ type LispReader struct {
 	lastCol    int
 	lastRune   rune
 	maxPercent int
+	inShortFn  bool
 	r          *bufio.Reader
 
 	Tokens     []Token
@@ -293,7 +294,7 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 		r.closeToken(TokenSpecial)
 		return vm.FALSE, nil
 	}
-	if ss[0] == '%' {
+	if r.inShortFn && ss[0] == '%' {
 		var n int
 		var err error
 		if ss == "%" {
@@ -1040,7 +1041,14 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 		// -2 because '#' and '(' were consumed
 		r.column-2, 0)
 	var ret []vm.Value
+	previousMaxPercent := r.maxPercent
+	previousInShortFn := r.inShortFn
 	r.maxPercent = 0
+	r.inShortFn = true
+	defer func() {
+		r.maxPercent = previousMaxPercent
+		r.inShortFn = previousInShortFn
+	}()
 	for {
 		ch2, err := r.eatWhitespace()
 		if err != nil {
@@ -1062,7 +1070,6 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 	for i := 1; i <= r.maxPercent; i++ {
 		percents = append(percents, vm.Symbol(fmt.Sprintf("%%%d", i)))
 	}
-	r.maxPercent = 0
 	body, err := vm.ListType.Box(ret)
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)

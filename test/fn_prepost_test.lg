@@ -1,0 +1,56 @@
+(ns test.fn-prepost-test
+  (:require [test :refer :all]))
+
+(deftest preconditions
+  (testing "passing and failing preconditions"
+    (let [positive (fn [x] {:pre [(pos? x)]} x)]
+      (is (= 3 (positive 3)))
+      (is (= :caught (try (positive 0) (catch e :caught)))))))
+
+(deftest postconditions
+  (testing "postconditions receive the function result as %"
+    (let [positive-result (fn [x] {:post [(pos? %)]} x)]
+      (is (= 3 (positive-result 3)))
+      (is (= :caught (try (positive-result 0) (catch e :caught)))))))
+
+(deftest postconditions-evaluate-body-once
+  (testing "the body result is bound once before postconditions run"
+    (let [calls (atom 0)
+          f (fn []
+              {:post [(= % 1)]}
+              (swap! calls inc))]
+      (is (= 1 (f)))
+      (is (= 1 @calls)))))
+
+(deftest generated-condition-forms-are-hygienic
+  (testing "locals named after generated core forms do not capture them"
+    (is (= :caught
+           (try ((fn [assert x] {:post [(pos? %)]} x) identity 0)
+                (catch e :caught))))
+    (is (= 1 ((fn [let x] {:post [(pos? %)]} x) identity 1)))))
+
+(deftest explicit-percent-one-remains-a-user-local
+  (testing "%1 stays distinct from the postcondition result binding %"
+    (is (= 0 ((fn [%1] {:post [(= %1 5)]} 0) 5)))))
+
+(deftest conditions-see-destructured-locals
+  (testing "conditions run inside parameter destructuring"
+    (let [f (fn [{:keys [x]}]
+              {:pre [(pos? x)]
+               :post [(= % x)]}
+              x)]
+      (is (= 4 (f {:x 4})))
+      (is (= :caught (try (f {:x 0}) (catch e :caught)))))))
+
+(deftest multi-arity-conditions
+  (testing "each arity expands its own condition map"
+    (let [f (fn
+              ([x] {:post [(= % x)]} x)
+              ([x y] {:pre [(pos? y)] :post [(= % (+ x y))]} (+ x y)))]
+      (is (= 2 (f 2)))
+      (is (= 5 (f 2 3)))
+      (is (= :caught (try (f 2 0) (catch e :caught)))))))
+
+(deftest ordinary-functions-are-unchanged
+  (testing "a leading non-condition body keeps its existing behavior"
+    (is (= 3 ((fn [x] (inc x)) 2)))))

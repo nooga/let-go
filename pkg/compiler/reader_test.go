@@ -25,6 +25,8 @@ func TestReaderBasic(t *testing.T) {
 		"false":                      vm.FALSE,
 		"nil":                        vm.NIL,
 		"foo":                        vm.Symbol("foo"),
+		"%":                          vm.Symbol("%"),
+		"%1":                         vm.Symbol("%1"),
 		"()":                         vm.EmptyList,
 		"(    )":                     vm.EmptyList,
 		"(1 2)":                      vm.EmptyList.Cons(vm.Int(2)).Cons(vm.Int(1)),
