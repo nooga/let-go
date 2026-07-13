@@ -242,7 +242,7 @@ func main() {
 		if mode == "snapshot" {
 			writeSnapshot(*baselinePath, current)
 		} else {
-			writeOrCheck(*baselinePath, current, "update", *budget, *force, *format)
+			writeOrCheck(*baselinePath, current, "update", *budget, *force, *format, nil)
 		}
 		return
 	}
@@ -333,7 +333,7 @@ func main() {
 	if mode == "snapshot" {
 		writeSnapshot(*baselinePath, current)
 	} else {
-		writeOrCheck(*baselinePath, current, mode, effBudget, *force, *format)
+		writeOrCheck(*baselinePath, current, mode, effBudget, *force, *format, jobs)
 	}
 }
 
@@ -355,8 +355,11 @@ func writeSnapshot(path string, current MachineBaseline) {
 	fmt.Printf("\nwrote snapshot → %s (%d benchmarks for %s)\n", path, len(current.Benchmarks), key)
 }
 
-// writeOrCheck dispatches the post-aggregate action.
-func writeOrCheck(baselinePath string, current MachineBaseline, mode string, budget float64, force bool, format string) {
+// writeOrCheck dispatches the post-aggregate action. jobs is the capture
+// scope of THIS run (nil when aggregating from a pre-recorded .jsonl, where
+// the scope is unknown); check reporting uses it to suppress out-of-scope
+// baseline entries instead of listing them as MISSING.
+func writeOrCheck(baselinePath string, current MachineBaseline, mode string, budget float64, force bool, format string, jobs []captureJob) {
 	switch mode {
 	case "show":
 		switch format {
@@ -417,7 +420,7 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 		// Timing gate: ns/op and ratio_to_anchor are CPU-dependent, so gate
 		// them ONLY against this machine's own profile.
 		if prof, ok := baseline.Machines[key]; ok {
-			if e := compareAndReport(prof, current, budget, format); e != 0 {
+			if e := compareAndReport(prof, current, budget, format, jobs); e != 0 {
 				exit = e
 			}
 		} else {
@@ -1409,9 +1412,46 @@ func printBaseline(b MachineBaseline) {
 // non-zero exit code when any benchmark exceeded the regression budget.
 // format is "text" (default ANSI terminal) or "markdown" (a single
 // GitHub/Slack-friendly table).
-func compareAndReport(baseline, current MachineBaseline, budget float64, format string) int {
+// jobsSelect reports whether fullName (Package + "." + Name, where Name may
+// carry "/sub" segments and a " [variant]" suffix) is selected by any of this
+// run's capture jobs. Check reporting uses it to distinguish a benchmark that
+// is in scope but absent from the run (deleted/renamed — a real MISSING
+// signal) from a baseline entry outside the active profile's scope (e.g. the
+// pkg/vm micro fleet when running the fast gate), which was never going to be
+// measured and must not be reported row-by-row.
+func jobsSelect(jobs []captureJob, fullName string) bool {
+	for _, j := range jobs {
+		rest, ok := strings.CutPrefix(fullName, j.pkg+".")
+		if !ok {
+			continue
+		}
+		// Variant label must agree: variant jobs stamp " [v]" onto the name;
+		// the variant-free anchor job records no label.
+		if j.variant != "" {
+			r2, ok := strings.CutSuffix(rest, " ["+j.variant+"]")
+			if !ok {
+				continue
+			}
+			rest = r2
+		} else if strings.Contains(rest, " [") {
+			continue
+		}
+		// go test -bench matches per slash-segment and the job filters are
+		// family-anchored, so match the family segment only.
+		family := rest
+		if i := strings.IndexByte(family, '/'); i >= 0 {
+			family = family[:i]
+		}
+		if j.filter.MatchString(family) {
+			return true
+		}
+	}
+	return false
+}
+
+func compareAndReport(baseline, current MachineBaseline, budget float64, format string, jobs []captureJob) int {
 	if format == "markdown" {
-		return compareAndReportMarkdown(baseline, current, budget)
+		return compareAndReportMarkdown(baseline, current, budget, jobs)
 	}
 	fmt.Println()
 	if baseline.Machine.CPUModel != current.Machine.CPUModel ||
@@ -1452,8 +1492,16 @@ func compareAndReport(baseline, current MachineBaseline, budget float64, format 
 		present             bool
 	}
 	var drifts []drift
+	outOfScope := 0
 	for name, base := range baseline.Benchmarks {
 		cur, ok := current.Benchmarks[name]
+		// A baseline entry the active profile never selects (e.g. the full
+		// pkg/vm fleet while running the fast gate) is out of scope, not
+		// missing — count it once, don't report it row-by-row.
+		if !ok && len(jobs) > 0 && !jobsSelect(jobs, name) {
+			outOfScope++
+			continue
+		}
 		d := drift{
 			name:      name,
 			baseRatio: base.RatioToAnchor,
@@ -1511,6 +1559,9 @@ func compareAndReport(baseline, current MachineBaseline, budget float64, format 
 	fmt.Println()
 	fmt.Printf("summary: %d regression(s) > %.1f%% budget, %d missing, %d new\n",
 		regressions, budget*100, missing, newCount)
+	if outOfScope > 0 {
+		fmt.Printf("(%d baseline benchmark(s) outside this profile's scope — not run, not compared)\n", outOfScope)
+	}
 	if regressions > 0 {
 		return 1
 	}
@@ -1577,7 +1628,7 @@ func formatWall(ns float64) string {
 //
 // The output is also Slack-friendly when wrapped in a code block, since
 // Slack renders the pipes monospace.
-func compareAndReportMarkdown(baseline, current MachineBaseline, budget float64) int {
+func compareAndReportMarkdown(baseline, current MachineBaseline, budget float64, jobs []captureJob) int {
 	type row struct {
 		name          string
 		baseR, curR   float64
@@ -1591,12 +1642,20 @@ func compareAndReportMarkdown(baseline, current MachineBaseline, budget float64)
 	regressions := 0
 	missing := 0
 	newCount := 0
+	outOfScope := 0
 
 	for name, base := range baseline.Benchmarks {
 		seen[name] = true
 		r := row{name: name, baseR: base.RatioToAnchor, baseNs: base.NSPerOp, bestSinceSHA: base.BestSinceSHA}
 		cur, ok := current.Benchmarks[name]
 		if !ok {
+			// Outside the active profile's scope → never run; count once
+			// instead of emitting a MISSING row per benchmark. (nil jobs =
+			// scope unknown, e.g. aggregate-from-file → classic MISSING.)
+			if len(jobs) > 0 && !jobsSelect(jobs, name) {
+				outOfScope++
+				continue
+			}
 			r.status = "MISSING"
 			missing++
 			rows = append(rows, r)
@@ -1635,6 +1694,9 @@ func compareAndReportMarkdown(baseline, current MachineBaseline, budget float64)
 	fmt.Println()
 	fmt.Printf("**bench-ratchet** — %d regression(s) > %.1f%% budget, %d missing, %d new\n\n",
 		regressions, budget*100, missing, newCount)
+	if outOfScope > 0 {
+		fmt.Printf("_%d baseline benchmark(s) outside this profile's scope — not run, not compared._\n\n", outOfScope)
+	}
 	fmt.Printf("- baseline: `%s` / `%s` / `%s`\n",
 		baseline.Machine.CPUModel, baseline.Machine.GoVersion, baseline.Machine.OS+"-"+baseline.Machine.Arch)
 	fmt.Printf("- current:  `%s` / `%s` / `%s`\n",

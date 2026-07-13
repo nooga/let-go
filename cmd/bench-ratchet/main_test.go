@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/perfdata"
@@ -273,4 +274,44 @@ func keysOf(m map[string]captureJob) []string {
 		ks = append(ks, k)
 	}
 	return ks
+}
+
+// TestJobsSelectScope pins the check-report scope predicate: baseline entries
+// the active profile never selects are "out of scope" (skipped, counted once),
+// while in-scope-but-absent entries stay MISSING. Guards the fast-gate report
+// from drowning in MISSING rows for the full-profile pkg/vm fleet.
+func TestJobsSelectScope(t *testing.T) {
+	anchorRE := regexp.MustCompile(`^BenchmarkRatchetAnchor$`)
+	suiteRE := regexp.MustCompile(`^BenchmarkClojureTestSuite$`)
+	irRE := regexp.MustCompile(`^BenchmarkIRCompile$`)
+	jobs := []captureJob{
+		{pkg: "github.com/nooga/let-go/pkg/vm", filter: anchorRE},
+		{pkg: "github.com/nooga/let-go/test", filter: suiteRE, variant: "bytecode"},
+		{pkg: "github.com/nooga/let-go/pkg/ir", filter: irRE, variant: "gogen_ir"},
+	}
+	cases := []struct {
+		name string
+		want bool
+	}{
+		// anchor: variant-free job matches variant-free entry
+		{"github.com/nooga/let-go/pkg/vm.BenchmarkRatchetAnchor", true},
+		// full-fleet vm micro: same pkg, family not in any filter → out of scope
+		{"github.com/nooga/let-go/pkg/vm.BenchmarkVectorCreation/PersistentVector", false},
+		// suite under the selected variant, in scope
+		{"github.com/nooga/let-go/test.BenchmarkClojureTestSuite [bytecode]", true},
+		// suite under a variant this run doesn't measure → out of scope
+		{"github.com/nooga/let-go/test.BenchmarkClojureTestSuite [aot_native]", false},
+		// variant job must not claim the variant-free spelling
+		{"github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile", false},
+		{"github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile [gogen_ir]", true},
+		// sub-benchmark matches on the family segment
+		{"github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile/warm [gogen_ir]", true},
+		// unrelated package
+		{"github.com/nooga/let-go/pkg/compiler.BenchmarkInitFromLGB [bytecode]", false},
+	}
+	for _, c := range cases {
+		if got := jobsSelect(jobs, c.name); got != c.want {
+			t.Errorf("jobsSelect(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
 }
