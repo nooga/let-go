@@ -369,37 +369,36 @@
   ;; seq? not list? — macros frequently return Cons cells (from `cons`)
   ;; which aren't list? but ARE seq?. Build-form will likewise need to
   ;; accept seq? not list? if we want to feed it Cons-shaped output.
-  (cond
-    ;; The empty list () is a self-evaluating literal, NOT a call. Without this
-    ;; guard the (seq? form) branch reconstructs it as (apply list (expand-all
-    ;; (first ())) (map expand-all (rest ()))) = (apply list nil) = (nil) — a
-    ;; one-element (nil) list the IR builder then lowers as a call to a nil head
-    ;; (rt.InvokeValueEC(ec, vm.NIL, …)). Surfaced once clojure.core was
-    ;; Go-lowered: (defn reverse [coll] (reduce conj () coll)).
-    (and (seq? form) (empty? form))
+  (-copy-form-source!
     form
+    (cond
+      ;; The empty list () is a self-evaluating literal, NOT a call. Without this
+      ;; guard the seq branch reconstructs it as (nil), which the IR builder
+      ;; then lowers as a call to a nil head.
+      (and (seq? form) (empty? form))
+      form
 
-    (seq? form)
-    (let [head (first form)]
-      (if (contains? build-known-heads head)
-        (apply list head (doall (map expand-all (rest form))))
-        (let [expanded (expand-fully form)]
-          (if (seq? expanded)
-            (if (= 'quote (first expanded))
-              expanded
-              ;; Expand the head too: in an immediately-invoked fn expression
-              ;; ((fn [x] ...) args), the head is itself a form that must be
-              ;; expanded (fn -> fn*). Leaving it raw makes the IR builder
-              ;; misread the IIFE as a call and fail to resolve the inner
-              ;; fn's body symbols. For a symbol head, expand-all is identity.
-              (apply list (expand-all (first expanded))
-                     (doall (map expand-all (rest expanded)))))
-            (expand-all expanded)))))
-    (vector? form)
-    (vec (doall (map expand-all form)))
-    (map? form)
-    (into {} (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
-    :else form))
+      (seq? form)
+      (let [head (first form)]
+        (if (contains? build-known-heads head)
+          (apply list head (doall (map expand-all (rest form))))
+          (let [expanded (expand-fully form)]
+            (if (seq? expanded)
+              (if (= 'quote (first expanded))
+                expanded
+                ;; Expand the head too: in an immediately-invoked fn expression
+                ;; ((fn [x] ...) args), the head is itself a form that must be
+                ;; expanded (fn -> fn*). Leaving it raw makes the IR builder
+                ;; misread the IIFE as a call and fail to resolve the inner
+                ;; fn's body symbols. For a symbol head, expand-all is identity.
+                (apply list (expand-all (first expanded))
+                       (doall (map expand-all (rest expanded)))))
+              (expand-all expanded)))))
+      (vector? form)
+      (vec (doall (map expand-all form)))
+      (map? form)
+      (into {} (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
+      :else form)))
 
 ;; --- canonical enumeration of a namespace's lowerable fn-units -------------
 ;; A `defn` is itself a macro: it expands to `(def NAME (fn ...))`. So the set

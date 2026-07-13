@@ -345,6 +345,16 @@
       initial
       forms)))
 
+(defmacro .. [initial & forms]
+  (reduce
+    (fn [target member-form]
+      (if (seq? member-form)
+        (cons (symbol (str "." (first member-form)))
+              (cons target (next member-form)))
+        (list (symbol (str "." member-form)) target)))
+    initial
+    forms))
+
 ;; spy → let-go.core (pkg/rt/core/let-go/core.lg)
 
 ;; map — with 1 arg returns a transducer, otherwise delegates to Go-native map*
