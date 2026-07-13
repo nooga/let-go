@@ -584,6 +584,14 @@
    (loop [c xs w []]
      (if (>= (count c) n)
        (recur (drop step c) (conj w (vec (take n c))))
+       w)))
+  ([n step pad xs]
+   (loop [c xs w []]
+     (if (seq c)
+       (let [p (vec (take n c))]
+         (if (= (count p) n)
+           (recur (drop step c) (conj w p))
+           (conj w (vec (take n (concat p pad))))))
        w))))
 
 ;; binding macro — pushes dynamic bindings, runs body, pops on exit.

@@ -10,6 +10,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
@@ -879,9 +880,10 @@ func tryCompiler(c *Context, form vm.Value) error {
 					// always a simple unqualified symbol, so a qualified/dotted
 					// first token can only be a class name — that disambiguates
 					// even with an empty catch body, e.g.
-					// (catch java.io.FileNotFoundException _). For a simple class
-					// name, fall back to the token count: the Clojure form needs
-					// class + binding + body (3+ tokens, first two symbols).
+					// (catch java.io.FileNotFoundException _). An uppercase simple
+					// symbol is also class-shaped, which handles empty-body forms
+					// such as (catch Throwable _). Otherwise, fall back to token
+					// count: the Clojure form needs class + binding + body.
 					restCount := 0
 					for s := rest; s != nil; s = s.Next() {
 						restCount++
@@ -890,7 +892,14 @@ func tryCompiler(c *Context, form vm.Value) error {
 						firstSym, firstIsSym := rest.First().(vm.Symbol)
 						_, secondIsSym := rest.Next().First().(vm.Symbol)
 						qualified := firstIsSym && strings.ContainsAny(string(firstSym), "./")
-						if firstIsSym && secondIsSym && (qualified || restCount >= 3) {
+						upperSimple := false
+						if firstIsSym && !qualified {
+							for _, r := range string(firstSym) {
+								upperSimple = unicode.IsUpper(r)
+								break
+							}
+						}
+						if firstIsSym && secondIsSym && (qualified || upperSimple || restCount >= 3) {
 							rest = rest.Next() // drop the leading class symbol
 						}
 					}

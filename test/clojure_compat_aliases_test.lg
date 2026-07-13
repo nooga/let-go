@@ -20,6 +20,9 @@
                          {:ctor :string
                           :args xs}))
 
+(defn exception-constructor-reference []
+  (Exception. "boom"))
+
 (deftest clojure-class-aliases-test
   (testing "JVM-style class vars point at let-go runtime types"
     (is (= java.lang.Long (type 1)))
@@ -71,6 +74,12 @@
     (is (= "new: no constructor var ->MissingCompatCtor for MissingCompatCtor"
            (try
              (new MissingCompatCtor)
+             :no-error
+             (catch e (ex-message e))))))
+  (testing "compile-only Exception constructor fails loudly when called"
+    (is (= "the Exception. constructor is unavailable under let-go"
+           (try
+             (exception-constructor-reference)
              :no-error
              (catch e (ex-message e)))))))
 

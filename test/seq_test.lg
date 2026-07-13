@@ -82,9 +82,19 @@
     (is (= '(1 2) (concat (mapcat (fn [x] [x]) []) [1 2])))))
 
 (deftest partition-test
-  (testing "partition"
+  (testing "partition without padding"
     (is (= 2 (count (partition 2 [1 2 3 4]))))
-    (is (= 2 (count (partition 2 [1 2 3 4 5]))))))
+    (is (= 2 (count (partition 2 [1 2 3 4 5]))))
+    (is (= [[1 2] [3 4]] (partition 2 2 [1 2 3 4 5]))))
+
+  (testing "partition pads the final incomplete group"
+    (is (= [[1 2 3] [4 nil nil]]
+           (partition 3 3 (repeat nil) [1 2 3 4])))
+    (is (= [[1 2 9]] (partition 3 3 [9] [1 2])))
+    (is (= [[1 2]] (partition 3 3 [] [1 2])))
+    (is (= [[1 2 3] [5 9 8]]
+           (partition 3 4 [9 8] [1 2 3 4 5])))
+    (is (= [] (partition 3 3 [9 8] [])))))
 
 (deftest reverse-test
   (testing "reverse"
