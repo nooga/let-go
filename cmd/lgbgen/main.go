@@ -871,7 +871,7 @@ func runGoTarget(outDir, codeDir string) {
 				fmt.Fprintf(os.Stderr, "%s: read error: %v\n", ns.name, err)
 				os.Exit(1)
 			}
-			if isDefnOnly(form) || isMultimethodForm(form) {
+			if isDefnOnly(form) || isMultimethodForm(form) || isTypeDeclForm(form) {
 				defnForms = append(defnForms, form)
 			}
 		}
@@ -1135,6 +1135,32 @@ func isMultimethodForm(form vm.Value) bool {
 		return false
 	}
 	return string(sym) == "defmulti" || string(sym) == "defmethod"
+}
+
+// isTypeDeclForm returns true for (defprotocol ...) / (deftype ...) forms.
+// They are forwarded to the Go-lowering pipeline so lower-ns-to-go can
+// capture them, emit native decls (interface / struct + constructor +
+// receiver methods), and bind the deftype-ctor + protocol-method registries
+// that let the namespace's own defns type (->T ...) as [:dtype T], lower the
+// constructor to a native call, and devirtualize protocol-method calls on a
+// known-concrete receiver to a direct recv.Method(ec, ...) call. Without
+// this forwarding the registries bind to nil and every such call silently
+// takes the boxed rt.CachedVarFn trampoline (the T9 gap: the .lg capture
+// machinery existed but the driver starved it of the decl forms).
+func isTypeDeclForm(form vm.Value) bool {
+	list, ok := form.(vm.Sequable)
+	if !ok {
+		return false
+	}
+	seq := list.Seq()
+	if seq == nil {
+		return false
+	}
+	sym, ok := seq.First().(vm.Symbol)
+	if !ok {
+		return false
+	}
+	return string(sym) == "defprotocol" || string(sym) == "deftype"
 }
 
 // isSingleArityDefn reports whether a defn/defn- form has exactly one arity.
