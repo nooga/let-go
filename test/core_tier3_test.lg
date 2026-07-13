@@ -77,4 +77,7 @@
     (let [result (re-groups (re-pattern "\\d+") "123 456")]
       (is (= 2 (count result)))
       (is (= ["123"] (first result)))
-      (is (= ["456"] (second result))))))
+      (is (= ["456"] (second result)))))
+  (testing "re-groups distinguishes unmatched and empty capture groups"
+    (is (= [["b" nil]] (re-groups (re-pattern "(a)?b") "b")))
+    (is (= [["b" ""]] (re-groups (re-pattern "(a*)b") "b")))))

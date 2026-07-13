@@ -30,6 +30,13 @@ func BenchmarkVectorCreation(b *testing.B) {
 	}
 }
 
+// benchVecSink prevents the compiler from dead-code-eliminating the
+// benchmarked ValueAt calls: storing the result to a package-level var is an
+// observable side effect it must keep. Without a sink the whole access loop
+// can be optimized away (giving a fictional sub-nanosecond time that then
+// reads as a huge "regression" the moment devirtualization stops firing).
+var benchVecSink Value
+
 // Benchmark random access performance
 func BenchmarkVectorAccess(b *testing.B) {
 	benchSizes := []int{10, 100, 1000, 10000}
@@ -44,21 +51,25 @@ func BenchmarkVectorAccess(b *testing.B) {
 		arrayVec := NewArrayVector(values).(Lookup)
 		persistentVec := NewPersistentVector(values).(Lookup)
 
+		// Box the keys ONCE, outside the timed loop. Passing Int(n) at the call
+		// site boxes it into the Value interface argument every iteration, and
+		// for n > 255 that escapes and allocates — which measures Int boxing,
+		// not vector access. Hoisting isolates the access cost.
+		k0, kMid, kLast := Value(Int(0)), Value(Int(size/2)), Value(Int(size-1))
+
 		b.Run("ArrayVector/"+strconv.Itoa(size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				// Access elements at different positions
-				arrayVec.ValueAt(Int(0))        // First
-				arrayVec.ValueAt(Int(size / 2)) // Middle
-				arrayVec.ValueAt(Int(size - 1)) // Last
+				benchVecSink = arrayVec.ValueAt(k0)    // First
+				benchVecSink = arrayVec.ValueAt(kMid)  // Middle
+				benchVecSink = arrayVec.ValueAt(kLast) // Last
 			}
 		})
 
 		b.Run("PersistentVector/"+strconv.Itoa(size), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				// Access elements at different positions
-				persistentVec.ValueAt(Int(0))        // First
-				persistentVec.ValueAt(Int(size / 2)) // Middle
-				persistentVec.ValueAt(Int(size - 1)) // Last
+				benchVecSink = persistentVec.ValueAt(k0)
+				benchVecSink = persistentVec.ValueAt(kMid)
+				benchVecSink = persistentVec.ValueAt(kLast)
 			}
 		})
 	}

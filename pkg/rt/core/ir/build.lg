@@ -143,9 +143,13 @@
         (cond
           (and (seq? head) (= (first head) 'catch))
           (let [parts     (vec (rest head))
-                class?    (and (>= (count parts) 3)
-                               (symbol? (nth parts 0))
-                               (symbol? (nth parts 1)))
+                first-sym (nth parts 0 nil)
+                class?    (and (>= (count parts) 2)
+                               (symbol? first-sym)
+                               (symbol? (nth parts 1))
+                               (or (>= (count parts) 3)
+                                   (re-find #"[./]" (str first-sym))
+                                   (re-find #"^\p{Lu}" (str first-sym))))
                 binding   (if class? (nth parts 1) (nth parts 0))
                 cbody     (if class? (vec (drop 2 parts)) (vec (drop 1 parts)))]
             (recur (rest fs) body {:binding binding :body cbody} finally-clause))
