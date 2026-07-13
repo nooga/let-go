@@ -8,6 +8,7 @@
 package rt
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -311,27 +312,32 @@ func installTermNS() {
 	ns.Def("char-width", charWidth)
 
 	// flush — sync the active *out* binding, mirroring native term.go (#308).
+	//
 	// Plan 9 has no fsync on a console/pipe: Sync there fails with "bad arg in
-	// system call", and flushing such an fd is a no-op. Swallow that for a
-	// file-backed *out* (on Plan 9 that's the console/pipe). A non-file-backed
-	// embedder writer's Sync goes through Flush() and still surfaces its own
-	// errors. Native swallows the specific errnos (ENOTTY/EBADF/EINVAL); Plan 9
-	// errors are strings, not errno constants, so we can't errno-match and
-	// swallow all file-backed sync errors instead.
+	// system call" (EINVAL), and flushing such an fd is a no-op. xsofy calls
+	// flush every frame, so for the default console/pipe stdout (the hot path)
+	// we skip the syscall entirely — an early no-op — rather than issuing a
+	// failing Fwstat per frame. Whether stdout is a real (syncable) file is
+	// decided once here. A regular-file or buffered-writer *out* still gets a
+	// real Sync with its errors surfaced; only the EINVAL a console-backed
+	// *out* would raise is swallowed.
+	stdoutSyncable := false
+	if fi, e := os.Stdout.Stat(); e == nil {
+		stdoutSyncable = fi.Mode().IsRegular()
+	}
 	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-		var (
-			err        error
-			fileBacked bool
-		)
-		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
+		h := resolveIOHandleVar(ec, "*out*")
+		if (h == nil || h.File() == os.Stdout) && !stdoutSyncable {
+			return vm.NIL, nil // console/pipe stdout: no fsync, no syscall
+		}
+		var err error
+		if h != nil {
 			err = h.Sync()
-			fileBacked = h.File() != nil
 		} else {
 			err = os.Stdout.Sync()
-			fileBacked = true
 		}
-		if fileBacked {
-			err = nil
+		if errors.Is(err, syscall.EINVAL) {
+			err = nil // a non-stdout console-backed *out* — fsync is a no-op
 		}
 		return vm.NIL, err
 	})
