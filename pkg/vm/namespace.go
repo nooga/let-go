@@ -445,11 +445,17 @@ func (n *Namespace) ReferList(ns *Namespace, symbols []Symbol) {
 // short name for different libs, or (historically) cross-namespace alias-table
 // contamination during dependency loading. Rather than letting the last writer
 // silently win, warn so the conflict is visible. Re-aliasing to the SAME target
-// (idempotent ns reload) and first-time aliasing are silent.
+// (idempotent ns reload) and first-time aliasing are silent. Sameness is by
+// NAME, not pointer: a reload that re-creates the namespace object (e.g. the
+// jank suite benchmark re-running the whole corpus per iteration) is still the
+// idempotent case — pointer comparison made it warn "already points to X,
+// being repointed to X", and since `go test` merges the test binary's stderr
+// into its stdout, that spam landed between a benchmark's name and its
+// metrics line, making benchfmt drop the suite [bytecode] results entirely.
 func (n *Namespace) Alias(alias Symbol, target *Namespace) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if prev, ok := n.aliases[alias]; ok && prev != nil && target != nil && prev != target {
+	if prev, ok := n.aliases[alias]; ok && prev != nil && target != nil && prev.Name() != target.Name() {
 		fmt.Fprintf(os.Stderr,
 			"WARNING: alias %s in namespace %s already points to %s, being repointed to %s\n",
 			string(alias), n.name, string(prev.Name()), string(target.Name()))
