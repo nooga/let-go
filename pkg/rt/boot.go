@@ -47,12 +47,34 @@ func LoadCore() error {
 	}
 	if unit.NSChunks != nil {
 		precompiledCoreNS = unit.NSChunks
+		// The lg baseline namespaces (let-go.core, let-go.types) are auto-refer'd
+		// into every namespace but never explicitly required, so on-demand
+		// loading never fires for them. Replay them eagerly — right after core,
+		// whose definitions they depend on — or their .lg-defined vars stay nil
+		// stubs. Mirrors loadPrecompiledBundle in pkg/compiler/eval.go.
+		baseline := map[string]bool{}
+		for _, name := range LgBaselineNSNames() {
+			baseline[name] = true
+			if c := precompiledCoreNS[name]; c != nil {
+				f := vm.NewFrame(c, nil)
+				_, err := f.RunProtected()
+				vm.ReleaseFrame(f)
+				if err != nil {
+					return fmt.Errorf("replay %s: %w", name, err)
+				}
+			}
+		}
 		for name := range precompiledCoreNS {
-			if name != NameCoreNS {
+			if name != NameCoreNS && !baseline[name] {
 				MarkNSNeedsLoad(name)
 			}
 		}
 	}
+	// Unlike loadPrecompiledBundle, hybrid namespaces (native fns + a bundled
+	// lg chunk, e.g. async) are NOT replayed eagerly here. Safe today because
+	// async's bundled content is macro-only and macros are fully expanded
+	// before a .lgb exists; a future hybrid that bundles runtime fns would
+	// need the eager replay too.
 	return nil
 }
 
