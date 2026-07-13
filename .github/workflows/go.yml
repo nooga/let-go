@@ -95,6 +95,27 @@ jobs:
           LETGO_RUN_LOWERING_DETERMINISM: "1"
         run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering'
 
+  # Cross-build guard for the wasip1 (WASI) target. The REPL and interactive
+  # terminal are build-tagged off wasip1 (routed to lg_repl_stub.go); without
+  # this gate, a change that pulls chzyer/readline or x/sys/unix terminal code
+  # back into the wasip1 link would break the module and only surface
+  # downstream. Keeps the "let-go builds as a GOOS=wasip1 module" guarantee
+  # honest. Build-only: the committed bytecode bundle is enough to link, no
+  # regeneration or wasm runtime needed.
+  wasip1-build:
+    name: wasip1-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build for GOOS=wasip1
+        run: GOOS=wasip1 GOARCH=wasm go build -v -o /tmp/lg-wasip1.wasm .
+
   # Differential gold check against a LIVE Clojure. The everyday `build` job is
   # clojure-free (it compares let-go to the committed test/gold/*.out goldens);
   # this job re-derives those goldens from real Clojure and fails if they drift.
