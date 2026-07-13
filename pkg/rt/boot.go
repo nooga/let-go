@@ -71,10 +71,17 @@ func (bytecodeNSLoader) Load(name string) *vm.Namespace {
 	_, err := f.RunProtected()
 	vm.ReleaseFrame(f)
 	if err != nil {
-		// NSLoader has no error channel; report and return nil so the registry
-		// marks the namespace for retry instead of caching a half-initialized
-		// one. Mirrors the resolver's execPrecompiled.
+		// NSLoader has no error channel: report, restore the needs-load marker,
+		// and return nil. The namespace was pre-registered as a placeholder
+		// during bytecode decoding, so without the restored marker the registry
+		// would find the placeholder and treat the load as a success — caching a
+		// half-initialized namespace. The marker is what makes RequireNS report
+		// this failure and a later require retry the load. (The registry itself
+		// can't restore it: a loader returning nil with a pre-existing namespace
+		// also happens on legitimate native+lazy namespaces like gogen, where
+		// the pre-existing namespace IS the result.)
 		fmt.Fprintf(os.Stderr, "error: failed to load precompiled namespace %s: %s\n", name, err)
+		MarkNSNeedsLoad(name)
 		return nil
 	}
 	return NS(name)
