@@ -1105,6 +1105,50 @@ func TestBlockParamsCarrySourceName(t *testing.T) {
 	}
 }
 
+func TestLowerGoReturnHintPreservesUserSourceSpan(t *testing.T) {
+	ensureLoader()
+
+	const sourceName = "return-hint-source.lg"
+	const source = "\n\n(ir.build/build-fn '(defn hinted ^String []\n  (+ 1 2)))"
+	c := compiler.NewCompiler(vm.NewConsts(), rt.NS(rt.NameCoreNS))
+	c.SetSource(sourceName)
+	_, fn, err := c.CompileMultiple(strings.NewReader(source))
+	if err != nil {
+		t.Fatalf("build hinted function: %v", err)
+	}
+
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status, got %v", got)
+	}
+
+	passVarCounter++
+	varName := fmt.Sprintf("*hint-source-fn-%d*", passVarCounter)
+	rt.NS(rt.NameCoreNS).Def(varName, fn)
+	infos := runLispExpr(t, fmt.Sprintf(`
+	  (vec (mapcat (fn [b]
+	                 (mapcat (fn [nid] (ir/source-infos nid %s))
+	                         (ir/block-insts b %s)))
+	               (ir/blocks %s)))`, varName, varName, varName))
+
+	found := false
+	for _, value := range infos.Unbox().([]vm.Value) {
+		boxed, ok := value.(*vm.Boxed)
+		if !ok {
+			continue
+		}
+		si, ok := boxed.Unbox().(vm.SourceInfo)
+		if ok && si.File == sourceName && si.Line == 3 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("lowered hinted function lost source span %s:4", sourceName)
+	}
+}
+
 func TestLowerGoCoalescesLineageByName(t *testing.T) {
 	ensureLoader()
 	fn := buildLispIR(t, `(defn sum [n] (loop [i 0 acc 0] (if (= i n) acc (recur (+ i 1) (+ acc i)))))`)
