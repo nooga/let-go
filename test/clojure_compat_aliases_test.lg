@@ -76,12 +76,10 @@
              (new MissingCompatCtor)
              :no-error
              (catch e (ex-message e))))))
-  (testing "compile-only Exception constructor fails loudly when called"
-    (is (= "the Exception. constructor is unavailable under let-go"
-           (try
-             (exception-constructor-reference)
-             :no-error
-             (catch e (ex-message e)))))))
+  (testing "Exception constructor is real: it builds a catchable Throwable"
+    (let [e (exception-constructor-reference)]
+      (is (instance? Throwable e))
+      (is (= "boom" (ex-message e))))))
 
 (deftest clojure-compat-ref-agent-placeholders-test
   (testing "ref compatibility is atom-backed"

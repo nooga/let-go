@@ -155,7 +155,10 @@ func errorToValue(err error) Value {
 		data = data.Assoc(Keyword("trace"), traceList).(*PersistentMap)
 	}
 
-	return NewExInfo(msg, data, nil)
+	// Runtime errors are java.lang.Exception, not ExceptionInfo: typed
+	// catch dispatch and instance? must distinguish them from ex-info
+	// values. The :trace data is kept so ex-data still exposes the stack.
+	return &ExInfo{message: msg, data: data, class: ClassException}
 }
 
 // ErrorToValue is the exported entry point used by gogen_ir-lowered Go code to

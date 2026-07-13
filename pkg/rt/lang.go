@@ -5825,7 +5825,11 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("wrong number of arguments")
 		}
 		if ei, ok := vs[0].(*vm.ExInfo); ok {
-			return ei.Data(), nil
+			// Class-tagged exceptions carry no data map; a nil
+			// *PersistentMap must surface as NIL, not a typed nil.
+			if d := ei.Data(); d != nil {
+				return d, nil
+			}
 		}
 		return vm.NIL, nil
 	})
@@ -6536,7 +6540,16 @@ func installLangNS() {
 		}
 		// We accept type objects (e.g. IntType) and check if the value's type matches
 		if t, ok := vs[0].(vm.ValueType); ok {
-			return vm.Boolean(vs[1].Type() == t), nil
+			if vs[1].Type() == t {
+				return vm.TRUE, nil
+			}
+			// Walk registered ancestry so subclass values answer true for
+			// parent classes, e.g. (instance? Throwable (Exception. "m")).
+			// Types with no registered parents keep exact-match semantics.
+			if anc := directTypeAncestors(vs[1].Type()); anc != nil {
+				return anc.Contains(t), nil
+			}
+			return vm.FALSE, nil
 		}
 		// Clojure-compat interface markers (e.g. clojure.lang.IEditableCollection)
 		// are registered as plain symbols by installClojureCompatAliases. Answer
@@ -8521,17 +8534,8 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// medley's queue/queue?).
 	DefNSBare("clojure.lang.PersistentQueue").Def("EMPTY", vm.EmptyPersistentQueue)
 
-	// (Exception. message) appears in JVM-oriented source even when the path is
-	// not exercised under let-go. Resolve the constructor so the namespace can
-	// compile, but fail loudly rather than returning a fake Java exception.
-	exceptionCtorStub, err := vm.NativeFnType.Wrap(func([]vm.Value) (vm.Value, error) {
-		return vm.NIL, fmt.Errorf("the Exception. constructor is unavailable under let-go")
-	})
-	if err != nil {
-		panic(err)
-	}
-	ns.Def("Exception.", exceptionCtorStub)
-	ns.Def("->Exception", exceptionCtorStub)
+	// The compile-only Exception. stub (#451) is superseded by the real
+	// java.lang.* constructors registered in installExceptionClasses below.
 
 	// (java.util.ArrayList.) / (java.util.ArrayList. n).
 	// medley's partition-between / sliding build a mutable ArrayList on their
@@ -8566,13 +8570,11 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	}
 	DefNSBare("clojure.lang.RT").Def("baseLoader", baseLoaderStub)
 
-	// bare Throwable in (instance? Throwable ex). Registered
-	// as a symbol marker; ExInfoType reports it as an ancestor (see hierarchy.go),
-	// so (instance? Throwable ex) is true for let-go ex-info values and false for
-	// everything else. Paired with ExInfo.InvokeMethod (getMessage/getCause), this
-	// makes medley's ex-message/ex-cause genuinely work on ex-info while still
-	// returning nil for all other types (medley's documented fallback).
-	ns.Def("Throwable", vm.Symbol("Throwable"))
+	// java.lang.* exception classes, bare aliases, and constructors.
+	// Throwable is the class value vm.ClassThrowable (it was a bare symbol
+	// marker before the hierarchy existed); (instance? Throwable ex) now
+	// resolves through the ValueType-ancestor branch of instance?.
+	installExceptionClasses(ns)
 
 	// java.util.UUID statics. java.util.UUID is already a
 	// bare class alias to vm.UUIDType above; a same-named DefNSBare namespace for
