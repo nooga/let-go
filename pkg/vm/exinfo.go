@@ -9,16 +9,38 @@ type ExInfo struct {
 	data    *PersistentMap
 	cause   error
 	meta    Value
+	class   *ExceptionClass
 }
 
 func NewExInfo(message string, data *PersistentMap, cause error) *ExInfo {
 	return &ExInfo{message: message, data: data, cause: cause}
 }
 
-func (e *ExInfo) Type() ValueType { return ExInfoType }
-func (e *ExInfo) Unbox() any      { return e }
+// NewExInfoWithClass builds an exception value tagged with a java.lang.*
+// class (constructed via Exception. and friends, or a wrapped Go runtime
+// error). Tagged values carry no data map; ex-data returns nil for them.
+func NewExInfoWithClass(class *ExceptionClass, message string, cause error) *ExInfo {
+	return &ExInfo{message: message, cause: cause, class: class}
+}
+
+func (e *ExInfo) Type() ValueType {
+	if e.class != nil {
+		return e.class
+	}
+	return ExInfoType
+}
+func (e *ExInfo) Unbox() any { return e }
 func (e *ExInfo) String() string {
-	return fmt.Sprintf("#error {:message %q, :data %s}", e.message, e.data.String())
+	switch {
+	case e.class != nil && e.data == nil:
+		return fmt.Sprintf("#error {:type %s, :message %q}", e.class.Name(), e.message)
+	case e.class != nil:
+		return fmt.Sprintf("#error {:type %s, :message %q, :data %s}", e.class.Name(), e.message, e.data.String())
+	case e.data == nil:
+		return fmt.Sprintf("#error {:message %q}", e.message)
+	default:
+		return fmt.Sprintf("#error {:message %q, :data %s}", e.message, e.data.String())
+	}
 }
 func (e *ExInfo) Error() string        { return e.message }
 func (e *ExInfo) Message() string      { return e.message }

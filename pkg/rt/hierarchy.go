@@ -33,10 +33,6 @@ var (
 	cljIPersistentCollection = vm.Symbol("clojure.lang.IPersistentCollection")
 	cljIReduce               = vm.Symbol("clojure.lang.IReduce")
 	cljIEditableCollection   = vm.Symbol("clojure.lang.IEditableCollection")
-	// Throwable is registered bare (not under clojure.lang) by
-	// installClojureCompatAliases; ExInfo reports it as an ancestor so medley's
-	// ex-message/ex-cause (guarded by (instance? Throwable ex)) work on ex-info.
-	cljThrowable = vm.Symbol("Throwable")
 )
 
 func emptyHierarchy() *vm.PersistentMap {
@@ -517,11 +513,12 @@ func directTypeParents(tag vm.Value) *vm.PersistentSet {
 	case vm.PromiseType:
 		result = setConj(result, vm.AnyType)
 	case vm.ExInfoType:
-		// ex-info values are let-go's equivalent of Clojure's ExceptionInfo,
-		// which IS-A Throwable. Reporting the Throwable marker lets medley's
-		// (instance? Throwable ex) guard pass so ex-message/ex-cause work.
+		// ex-info values are Clojure's ExceptionInfo, which IS-A
+		// RuntimeException; the rest of the chain (Exception, Throwable)
+		// follows from directTypeAncestors walking the class parents. This
+		// keeps medley's (instance? Throwable ex) guard passing.
 		result = setConj(result, vm.AnyType)
-		result = setConj(result, cljThrowable)
+		result = setConj(result, vm.ClassRuntimeException)
 	default:
 		if _, ok := vt.(*vm.RecordType); ok {
 			result = setConj(result, vm.AnyType)
@@ -532,6 +529,14 @@ func directTypeParents(tag vm.Value) *vm.PersistentSet {
 			result = setConj(result, cljIReduce)
 		} else if _, ok := vt.(*vm.DType); ok {
 			result = setConj(result, vm.AnyType)
+		} else if ec, ok := vt.(*vm.ExceptionClass); ok {
+			// Exception classes chain through their parent up to
+			// java.lang.Throwable, which roots at AnyType.
+			if p := ec.Parent(); p != nil {
+				result = setConj(result, p)
+			} else {
+				result = setConj(result, vm.AnyType)
+			}
 		}
 	}
 	return result

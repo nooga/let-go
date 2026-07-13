@@ -1,0 +1,91 @@
+;; java.lang.* exception classes: hierarchy, constructors, instance?,
+;; and runtime-error tagging.
+(ns test.exception-classes-test
+  (:require
+   [clojure.string]
+   [test :refer :all]))
+
+(deftest exception-constructors
+  (testing "constructed exceptions carry class, message, and no data"
+    (let [e (Exception. "boom")]
+      (is (= java.lang.Exception (type e)))
+      (is (= "boom" (ex-message e)))
+      (is (= "boom" (.getMessage e)))
+      (is (nil? (ex-data e)))))
+
+  (testing "zero-arity and qualified constructor spellings"
+    (is (= java.lang.IllegalStateException (type (IllegalStateException.))))
+    (is (= java.lang.Exception (type (java.lang.Exception. "q"))))
+    (is (= "" (ex-message (RuntimeException.)))))
+
+  (testing "message and cause arity"
+    (let [inner (ex-info "inner" {:k 1})
+          outer (RuntimeException. "outer" inner)]
+      (is (= "outer" (ex-message outer)))
+      (is (= inner (ex-cause outer)))
+      (is (= {:k 1} (ex-data (ex-cause outer))))))
+
+  (testing "constructed exceptions print without crashing"
+    (is (string? (pr-str (Exception. "p"))))))
+
+(deftest exception-hierarchy
+  (testing "instance? walks the class hierarchy"
+    (let [e (IllegalArgumentException. "bad")]
+      (is (instance? IllegalArgumentException e))
+      (is (instance? RuntimeException e))
+      (is (instance? Exception e))
+      (is (instance? Throwable e))
+      (is (not (instance? Error e)))
+      (is (not (instance? ExceptionInfo e)))))
+
+  (testing "NumberFormatException extends IllegalArgumentException"
+    (is (instance? IllegalArgumentException (NumberFormatException. "n"))))
+
+  (testing "bare and qualified names resolve to the same class"
+    (is (= Exception java.lang.Exception))
+    (is (= Throwable java.lang.Throwable))
+    (is (= IOException java.io.IOException)))
+
+  (testing "instance? is false for non-exception values"
+    (is (not (instance? Throwable "str")))
+    (is (not (instance? Exception 42)))))
+
+(deftest ex-info-classification
+  (testing "ex-info values are ExceptionInfo under RuntimeException"
+    (let [e (ex-info "x" {:a 1})]
+      (is (instance? ExceptionInfo e))
+      (is (instance? clojure.lang.ExceptionInfo e))
+      (is (instance? RuntimeException e))
+      (is (instance? Throwable e))
+      (is (= "let-go.lang.ExceptionInfo" (str (type e)))))))
+
+(deftest assert-throws-assertion-error
+  (testing "assert failures are AssertionError"
+    (let [e (try (assert false) (catch e e))]
+      (is (instance? AssertionError e))
+      (is (instance? Throwable e))
+      (is (not (instance? Exception e)))
+      (is (clojure.string/includes? (ex-message e) "Assert failed"))))
+
+  (testing "assert with message keeps the message"
+    (let [e (try (assert false "custom words") (catch e e))]
+      (is (instance? AssertionError e))
+      (is (clojure.string/includes? (ex-message e) "custom words")))))
+
+;; Caller-namespace shadowing must not capture assert's constructor.
+(def ->AssertionError (fn [_] :captured))
+
+(deftest assert-hygienic-against-shadowing
+  (testing "assert throws the real AssertionError despite a local ->AssertionError"
+    (let [e (try (assert false) (catch e e))]
+      (is (instance? java.lang.AssertionError e))
+      (is (not= :captured e)))))
+
+(deftest runtime-error-classification
+  (testing "VM runtime errors are tagged java.lang.Exception"
+    (let [e (try (/ 1 0) (catch e e))]
+      (is (= java.lang.Exception (type e)))
+      (is (instance? Exception e))
+      (is (instance? Throwable e))
+      (is (not (instance? ExceptionInfo e)))
+      (is (string? (ex-message e))))))

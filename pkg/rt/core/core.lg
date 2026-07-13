@@ -1877,15 +1877,18 @@
 ;; how Clojure treats anything that didn't go through (tagged-literal …).
 (defn tagged-literal? [_] false)
 
+;; ->AssertionError (not AssertionError.) so syntax-quote qualifies it to
+;; core/->AssertionError: hygienic against caller shadowing, and the dotted
+;; spelling would qualify into an unresolvable ->core/AssertionError.
 (defmacro assert
   ([x]
    `(when *assert*
       (when-not ~x
-        (throw (str "Assert failed: " '~x)))))
+        (throw (->AssertionError (str "Assert failed: " '~x))))))
   ([x message]
    `(when *assert*
       (when-not ~x
-        (throw (str "Assert failed: " ~message "\n" '~x))))))
+        (throw (->AssertionError (str "Assert failed: " ~message "\n" '~x)))))))
 
 ;; flatten is defined below after sequential? is available
 
