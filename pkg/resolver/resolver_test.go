@@ -1,7 +1,9 @@
 package resolver
 
 import (
+	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,6 +19,45 @@ func TestParseSearchPaths(t *testing.T) {
 	want := []string{"a", "b", "c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ParseSearchPaths() = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoadReturnsCompileErrorWithoutPrinting(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "broken.lg")
+	source := "(ns broken)\n(def broken-value\n  (fn []\n    (let [:tag 1] 1)))\n"
+	if err := os.WriteFile(file, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := compiler.NewCompiler(vm.NewConsts(), rt.CoreNS)
+	resolver := NewNSResolver(ctx, []string{dir})
+	readEnd, writeEnd, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
+	}
+	originalStderr := os.Stderr
+	defer func() {
+		os.Stderr = originalStderr
+		_ = writeEnd.Close()
+		_ = readEnd.Close()
+	}()
+	os.Stderr = writeEnd
+
+	_, err := resolver.LoadWithError("broken")
+	if closeErr := writeEnd.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	os.Stderr = originalStderr
+	printed, readErr := io.ReadAll(readEnd)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if err == nil || !strings.Contains(err.Error(), "let binding name must be a symbol") {
+		t.Fatalf("Load error = %v, want original compile chain", err)
+	}
+	if len(printed) != 0 {
+		t.Fatalf("resolver printed an error it should propagate: %s", printed)
 	}
 }
 

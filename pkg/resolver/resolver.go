@@ -116,16 +116,16 @@ func (r *NSResolver) DiscoverDepsEdn(dir string) {
 	}
 }
 
-func (r *NSResolver) loadFile(path string) *vm.Namespace {
+func (r *NSResolver) loadFile(path string) (*vm.Namespace, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer f.Close()
 	return r.loadSource(path, f, true)
 }
 
-func (r *NSResolver) loadSource(sourceName string, reader io.Reader, recordChunk bool) *vm.Namespace {
+func (r *NSResolver) loadSource(sourceName string, reader io.Reader, recordChunk bool) (*vm.Namespace, error) {
 	ons := r.ctx.CurrentNS()
 	// Restore the requiring namespace on EVERY exit path. CurrentNS is a
 	// process-wide var that the compile below repoints (via the scratch ns and
@@ -154,15 +154,14 @@ func (r *NSResolver) loadSource(sourceName string, reader io.Reader, recordChunk
 	chunk, _, err := freshCtx.CompileMultiple(reader)
 	nns := freshCtx.CurrentNS()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to load %s: %s\n", sourceName, err)
-		return nil
+		return nil, err
 	}
 	if recordChunk && chunk != nil && nns != nil {
 		name := nns.Name()
 		r.LoadedChunks[name] = chunk
 		r.LoadOrder = append(r.LoadOrder, name)
 	}
-	return nns
+	return nns, nil
 }
 
 func (r *NSResolver) SetPath(path []string) {
@@ -170,13 +169,18 @@ func (r *NSResolver) SetPath(path []string) {
 }
 
 func (r *NSResolver) Load(name string) *vm.Namespace {
+	ns, _ := r.LoadWithError(name)
+	return ns
+}
+
+func (r *NSResolver) LoadWithError(name string) (*vm.Namespace, error) {
 	if r.cloading[name] {
-		return nil
+		return nil, nil
 	}
 	blocks := stdstrings.Split(name, ".")
 	// Try embedded namespaces first
-	if embedded := r.loadEmbedded(name); embedded != nil {
-		return embedded
+	if embedded, err := r.loadEmbedded(name); err != nil || embedded != nil {
+		return embedded, err
 	}
 	// Build candidate paths: try .lg, .cljc, then .clj extensions,
 	// and hyphen vs underscore variants for each path segment.
@@ -200,15 +204,18 @@ func (r *NSResolver) Load(name string) *vm.Namespace {
 			cp := path.Join(dir, candidate)
 			if _, err := os.Stat(cp); err == nil {
 				r.cloading[name] = true
-				lns := r.loadFile(cp)
+				lns, err := r.loadFile(cp)
 				delete(r.cloading, name)
+				if err != nil {
+					return nil, err
+				}
 				// gogen_ir: drain Go-native overrides (no-op untagged).
 				rt.ApplyGoOverrides(lns)
-				return lns
+				return lns, nil
 			}
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // forceSourceNS reports whether namespace `name` is listed in the
@@ -231,7 +238,7 @@ func forceSourceNS(name string) bool {
 }
 
 // loadEmbedded loads bundled namespaces from embedded sources
-func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
+func (r *NSResolver) loadEmbedded(name string) (*vm.Namespace, error) {
 	// Try precompiled bytecode first — unless this ns is pinned to source
 	// loading via LG_FORCE_SOURCE_NS (dev loop; see forceSourceNS).
 	if !forceSourceNS(name) {
@@ -248,22 +255,25 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 		// nil so the require reports term unavailable. Must be a non-registering
 		// lookup; rt.NS would re-register a placeholder and re-enter the loader
 		// (infinite recursion → "call stack exhausted").
-		return rt.LookupNS("term")
+		return rt.LookupNS("term"), nil
 	}
 	src, ok := rt.EmbeddedSource(name)
 	if !ok || src == "" {
-		return nil
+		return nil, nil
 	}
 	r.cloading[name] = true
 	defer delete(r.cloading, name)
-	ns := r.loadSource("<embedded:"+name+">", stdstrings.NewReader(src), false)
+	ns, err := r.loadSource("<embedded:"+name+">", stdstrings.NewReader(src), false)
+	if err != nil {
+		return nil, err
+	}
 	// gogen_ir: drain Go-native overrides for this namespace (no-op untagged).
 	rt.ApplyGoOverrides(ns)
-	return ns
+	return ns, nil
 }
 
 // execPrecompiled executes a precompiled namespace chunk.
-func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) *vm.Namespace {
+func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) (*vm.Namespace, error) {
 	r.cloading[name] = true
 	defer delete(r.cloading, name)
 
@@ -272,9 +282,8 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) *vm.Names
 	result, err := f.RunProtected()
 	vm.ReleaseFrame(f)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: failed to load precompiled namespace %s: %s\n", name, err)
 		r.ctx.SetCurrentNS(ons)
-		return nil
+		return nil, fmt.Errorf("failed to load precompiled namespace %s: %w", name, err)
 	}
 	_ = result
 	nns := r.ctx.CurrentNS()
@@ -282,7 +291,7 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) *vm.Names
 	// gogen_ir: drain Go-native overrides registered by the lowered
 	// package for this namespace (no-op on untagged builds).
 	rt.ApplyGoOverrides(nns)
-	return nns
+	return nns, nil
 }
 
 func init() {

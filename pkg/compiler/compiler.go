@@ -524,6 +524,9 @@ func (c *Context) compileForm(o vm.Value) error {
 					vals = append(vals, s.First())
 				}
 				realized, _ := vm.ListType.Box(vals)
+				if info := vm.FormSource.Get(o); info != nil {
+					vm.FormSource.Set(realized, *info)
+				}
 				return c.compileForm(realized)
 			}
 			n := c.constant(o)
@@ -1285,7 +1288,7 @@ func compileBindings(c *Context, binds []vm.Value, opName string) (int, error) {
 			}
 		}
 		if name.Type() != vm.SymbolType {
-			return 0, NewCompileError(fmt.Sprintf("%s binding name must be a symbol: %v", opName, name))
+			return 0, c.compileError(fmt.Sprintf("%s binding name must be a symbol: %v", opName, name))
 		}
 		if i+1 >= len(binds) {
 			return 0, NewCompileError(fmt.Sprintf("%s bindings must have even number of forms", opName))
@@ -1405,7 +1408,7 @@ func quoteCompiler(c *Context, form vm.Value) error {
 	return nil
 }
 
-func fnFormCompiler(c *Context, args vm.ArrayVector, bodyf vm.Seq) error {
+func fnFormCompiler(c *Context, sourceForm vm.Value, args vm.ArrayVector, bodyf vm.Seq) error {
 	fc, err := c.enterFn(args)
 	if err != nil {
 		return NewCompileError("compiling fn args").Wrap(err)
@@ -1432,7 +1435,7 @@ func fnFormCompiler(c *Context, args vm.ArrayVector, bodyf vm.Seq) error {
 		}
 		err := fc.compileForm(body[i])
 		if err != nil {
-			return NewCompileError("compiling fn body").Wrap(err)
+			return compileErrorAt("compiling fn body", sourceForm).Wrap(err)
 		}
 		if i < l-1 {
 			fc.emit(vm.OP_POP)
@@ -1455,7 +1458,7 @@ func fnCompiler(c *Context, form vm.Value) error {
 		if body == nil {
 			body = vm.EmptyList
 		}
-		return fnFormCompiler(c, args, body)
+		return fnFormCompiler(c, form, args, body)
 	} else if _, ok := f.First().(vm.Seq); ok {
 		// we have (fn* ([] ...))
 		i := 0
@@ -1466,7 +1469,7 @@ func fnCompiler(c *Context, form vm.Value) error {
 			if ebody == nil {
 				ebody = vm.EmptyList
 			}
-			err := fnFormCompiler(c, args, ebody)
+			err := fnFormCompiler(c, form, args, ebody)
 			if err != nil {
 				return err
 			}
@@ -1898,7 +1901,7 @@ func defCompiler(c *Context, form vm.Value) error {
 	}
 	err := c.compileForm(val)
 	if err != nil {
-		return NewCompileError("compiling def value").Wrap(err)
+		return compileErrorAt("compiling def value", form).Wrap(err)
 	}
 	c.emit(vm.OP_SET_VAR)
 	c.decSP(1)

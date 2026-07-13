@@ -90,6 +90,8 @@ func (r *CompileError) Source() *vm.SourceInfo {
 	return r.source
 }
 
+func (r *CompileError) Message() string { return r.message }
+
 // InnermostSource walks the error chain and returns the deepest source info found.
 func (r *CompileError) InnermostSource() *vm.SourceInfo {
 	if r.source != nil {

@@ -13,8 +13,9 @@ import (
 // compileErrorLike is satisfied by compiler.CompileError without importing it.
 type compileErrorLike interface {
 	error
-	InnermostMessage() string
-	InnermostSource() *SourceInfo
+	Message() string
+	Source() *SourceInfo
+	GetCause() error
 }
 
 // FormatError produces a user-friendly error display with source snippets,
@@ -29,9 +30,10 @@ func FormatError(err error) string {
 
 	// Collect frames from the error chain
 	type frame struct {
-		msg    string
-		source *SourceInfo
-		fnName string
+		msg     string
+		source  *SourceInfo
+		fnName  string
+		compile bool
 	}
 
 	var frames []frame
@@ -53,6 +55,9 @@ func FormatError(err error) string {
 			goStack = e.GoStack()
 			frames = append(frames, frame{msg: e.Error()})
 			current = nil
+		case compileErrorLike:
+			frames = append(frames, frame{msg: e.Message(), source: e.Source(), compile: true})
+			current = e.GetCause()
 		default:
 			frames = append(frames, frame{msg: current.Error()})
 			current = nil
@@ -63,17 +68,31 @@ func FormatError(err error) string {
 		return err.Error()
 	}
 
-	// Root cause is the last frame
-	root := frames[len(frames)-1]
-
-	// Error header
-	fmt.Fprintf(&b, ansiBoldRed+"error:"+ansiReset+" %s\n", root.msg)
-
-	// Source snippet for the deepest frame that has source info
-	for i := len(frames) - 1; i >= 0; i-- {
-		if frames[i].source != nil {
-			writeSnippet(&b, frames[i].source)
-			break
+	compileFrames := make([]frame, 0, len(frames))
+	for _, frame := range frames {
+		if frame.compile {
+			compileFrames = append(compileFrames, frame)
+		}
+	}
+	if len(compileFrames) > 0 {
+		for i, frame := range compileFrames {
+			if i == 0 {
+				fmt.Fprintf(&b, ansiBoldRed+"error:"+ansiReset+" %s\n", frame.msg)
+			} else {
+				fmt.Fprintf(&b, "caused by: %s\n", frame.msg)
+			}
+			if frame.source != nil {
+				writeSnippet(&b, frame.source)
+			}
+		}
+	} else {
+		root := frames[len(frames)-1]
+		fmt.Fprintf(&b, ansiBoldRed+"error:"+ansiReset+" %s\n", root.msg)
+		for i := len(frames) - 1; i >= 0; i-- {
+			if frames[i].source != nil {
+				writeSnippet(&b, frames[i].source)
+				break
+			}
 		}
 	}
 
@@ -143,12 +162,31 @@ func letGoStackFrames(stack string) string {
 
 func formatCompileError(ce compileErrorLike) string {
 	var b strings.Builder
-	msg := ce.InnermostMessage()
-	src := ce.InnermostSource()
+	type compileFrame struct {
+		message string
+		source  *SourceInfo
+	}
+	frames := make([]compileFrame, 0, 4)
+	var current error = ce
+	for current != nil {
+		if detail, ok := current.(compileErrorLike); ok {
+			frames = append(frames, compileFrame{message: detail.Message(), source: detail.Source()})
+			current = detail.GetCause()
+			continue
+		}
+		frames = append(frames, compileFrame{message: current.Error()})
+		break
+	}
 
-	fmt.Fprintf(&b, ansiBoldRed+"error:"+ansiReset+" %s\n", msg)
-	if src != nil {
-		writeSnippet(&b, src)
+	for i, frame := range frames {
+		if i == 0 {
+			fmt.Fprintf(&b, ansiBoldRed+"error:"+ansiReset+" %s\n", frame.message)
+		} else {
+			fmt.Fprintf(&b, "caused by: %s\n", frame.message)
+		}
+		if frame.source != nil {
+			writeSnippet(&b, frame.source)
+		}
 	}
 	return b.String()
 }

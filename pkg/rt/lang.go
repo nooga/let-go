@@ -328,7 +328,14 @@ type NSLoader interface {
 	Load(string) *vm.Namespace
 }
 
+// NSLoaderWithError optionally preserves loader failures for RequireNS while
+// NSLoader retains its original Go API for embedders.
+type NSLoaderWithError interface {
+	LoadWithError(string) (*vm.Namespace, error)
+}
+
 var nsLoader NSLoader
+var nsLoadErrors = map[string]error{}
 
 func SetNSLoader(loader NSLoader) {
 	nsLoader = loader
@@ -441,8 +448,6 @@ func NS(name string) *vm.Namespace {
 	return LookupOrRegisterNS(resolveNSAlias(name))
 }
 
-// RequireNS loads/materializes a namespace and reports an error when a loader
-// is configured but the namespace could not be loaded.
 // RequireNS loads/materializes a namespace and reports an error if a loader
 // is configured but the namespace could not be loaded. Returns nil namespace
 // on error (no half-initialized placeholder is leaked).
@@ -452,6 +457,7 @@ func RequireNS(name string) (*vm.Namespace, error) {
 
 	nsMu.RLock()
 	needsLoad := nsNeedsLoad[canonical]
+	loadErr := nsLoadErrors[canonical]
 	nsMu.RUnlock()
 
 	if nsLoader != nil && needsLoad {
@@ -459,7 +465,11 @@ func RequireNS(name string) (*vm.Namespace, error) {
 		// Back out the placeholder registration so retry is clean.
 		nsMu.Lock()
 		delete(nsRegistry, canonical)
+		delete(nsLoadErrors, canonical)
 		nsMu.Unlock()
+		if loadErr != nil {
+			return nil, loadErr
+		}
 		return nil, fmt.Errorf("unable to load namespace %s", name)
 	}
 	return ns, nil
@@ -567,7 +577,20 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 		delete(nsNeedsLoad, name)
 		nsMu.Unlock()
 
-		loadedNS := nsLoader.Load(name)
+		var loadedNS *vm.Namespace
+		var loadErr error
+		if loader, ok := nsLoader.(NSLoaderWithError); ok {
+			loadedNS, loadErr = loader.LoadWithError(name)
+		} else {
+			loadedNS = nsLoader.Load(name)
+		}
+		nsMu.Lock()
+		if loadErr == nil {
+			delete(nsLoadErrors, name)
+		} else {
+			nsLoadErrors[name] = loadErr
+		}
+		nsMu.Unlock()
 		if loadedNS != nil {
 			nsMu.Lock()
 			nsRegistry[name] = loadedNS
@@ -577,6 +600,11 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 			// (e.g. clojure.string/upper-case) — restore them.
 			reapplyGeneratedPrimitives(name, loadedNS)
 			return loadedNS
+		}
+		if loadErr != nil {
+			nsMu.Lock()
+			nsNeedsLoad[name] = true
+			nsMu.Unlock()
 		}
 
 		// Loader returned nil. Check if in-ns side-effected the registry.
