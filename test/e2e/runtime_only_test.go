@@ -163,6 +163,54 @@ func TestRuntimeOnly(t *testing.T) {
 		}
 	})
 
+	t.Run("bundle embeds resources", func(t *testing.T) {
+		resDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(resDir, "msg.txt"), []byte("embedded-resource"), runtimeOnlyTestFilePerm); err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		lg := filepath.Join(dir, "app.lg")
+		app := filepath.Join(dir, "app")
+		src := `(println (io/slurp (io/resource "msg.txt")))`
+		if err := os.WriteFile(lg, []byte(src), runtimeOnlyTestFilePerm); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command(full, "-b", app, "-resource-paths", resDir, "-bundle-base", runtime, lg).CombinedOutput(); err != nil {
+			t.Fatalf("bundle with resources: %v\n%s", err, out)
+		}
+		// Run from a clean cwd with no resource files around — only the
+		// embedded copy can satisfy io/resource.
+		cmd := exec.Command(app)
+		cmd.Dir = t.TempDir()
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run bundle: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "embedded-resource") {
+			t.Fatalf("want embedded resource contents, got: %q", out)
+		}
+	})
+
+	t.Run("reads resources from LG_RESOURCE_PATHS", func(t *testing.T) {
+		resDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(resDir, "msg.txt"), []byte("env-resource"), runtimeOnlyTestFilePerm); err != nil {
+			t.Fatal(err)
+		}
+		// The resource read is guarded to runtime: -c executes top-level forms
+		// at compile time, and the compile step deliberately gets no resource
+		// roots, so a pass proves lg-runtime's own env wiring served the read.
+		lgb := compileLGB(t, `(when-not *compiling-aot* (println (io/slurp (io/resource "msg.txt"))))`)
+		cmd := exec.Command(runtime, lgb)
+		cmd.Env = append(os.Environ(), "LG_RESOURCE_PATHS="+resDir)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "env-resource") {
+			t.Fatalf("want resource contents via LG_RESOURCE_PATHS, got: %q", out)
+		}
+	})
+
 	t.Run("rejects source", func(t *testing.T) {
 		lg := filepath.Join(t.TempDir(), "app.lg")
 		if err := os.WriteFile(lg, []byte(`(println :should-never-run)`), runtimeOnlyTestFilePerm); err != nil {
