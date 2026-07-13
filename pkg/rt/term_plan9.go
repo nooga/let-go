@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"syscall"
 	"unicode/utf8"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -45,6 +46,17 @@ func envInt(name string, def int) int {
 	return def
 }
 
+// stdinIsConsole reports whether fd 0 is the window's console (/dev/cons). Plan
+// 9 keeps /dev/cons and /dev/consctl present in the namespace even when stdin is
+// redirected, so opening consctl always succeeds — checking the actual path of
+// fd 0 is how we tell a real interactive console from `lg <somepipe`, and it
+// keeps raw-mode! from flipping a console we aren't reading. It's the plan9
+// analogue of native's "is stdin a TTY" gate.
+func stdinIsConsole() bool {
+	p, err := syscall.Fd2path(0)
+	return err == nil && p == "/dev/cons"
+}
+
 func init() { RegisterInstaller(installTermNS) }
 
 func installTermNS() {
@@ -70,10 +82,14 @@ func installTermNS() {
 	// raw-mode! — enter raw mode by opening /dev/consctl and writing "rawon",
 	// holding the fd (Plan 9 reverts to cooked mode when it closes). Only the
 	// 0-arg global form is supported; xsofy never passes a handle. Returns nil
-	// (not an error) when there's no console — mirrors native's not-a-TTY path.
+	// (not an error) when stdin isn't the console — mirrors native's not-a-TTY
+	// path, and avoids raw-moding a console we aren't reading (piped stdin).
 	rawMode, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 0 {
 			return vm.NIL, fmt.Errorf("raw-mode!: per-handle raw mode not supported on plan9")
+		}
+		if !stdinIsConsole() {
+			return vm.NIL, nil // stdin redirected — consctl would flip the wrong console
 		}
 		consctlMu.Lock()
 		defer consctlMu.Unlock()
@@ -82,7 +98,7 @@ func installTermNS() {
 		}
 		f, err := os.OpenFile("/dev/consctl", os.O_WRONLY, 0)
 		if err != nil {
-			return vm.NIL, nil // no console (e.g. piped stdin)
+			return vm.NIL, nil // no console control available
 		}
 		if _, err := f.WriteString("rawon"); err != nil {
 			f.Close()
@@ -153,7 +169,12 @@ func installTermNS() {
 
 	ns.Def("set-size", stubNil)
 
+	// tty? — true when fd 0 is the window console (/dev/cons), the same gate
+	// raw-mode! uses. The native arity takes a handle; plan9 answers for stdin.
 	ttyPred, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if stdinIsConsole() {
+			return vm.TRUE, nil
+		}
 		return vm.FALSE, nil
 	})
 	ns.Def("tty?", ttyPred)
