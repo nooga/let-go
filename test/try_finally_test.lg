@@ -1,0 +1,68 @@
+;; finally semantics on abnormal exits. Two bugs fixed:
+;; 1. (try (throw x) (finally f)) with no catch swallowed the exception
+;;    (thrown value became the try's result).
+;; 2. a throw from inside a catch body skipped the finally entirely.
+(ns test.try-finally-test
+  (:require
+   [test :refer :all]))
+
+(deftest finally-normal-paths
+  (testing "finally runs on normal completion and its result is discarded"
+    (let [log (atom [])
+          r (try :val (finally (swap! log conj :f) :ignored))]
+      (is (= :val r))
+      (is (= [:f] @log))))
+
+  (testing "finally runs when the catch handles the exception"
+    (let [log (atom [])
+          r (try (throw "b") (catch e :caught) (finally (swap! log conj :f)))]
+      (is (= :caught r))
+      (is (= [:f] @log)))))
+
+(deftest finally-only-try-propagates
+  (testing "try/finally without catch reruns finally then rethrows"
+    (let [log (atom [])
+          r (try
+              (try (throw "boom") (finally (swap! log conj :f)))
+              (catch e (str "outer " e)))]
+      (is (= "outer boom" r))
+      (is (= [:f] @log)))))
+
+(deftest catch-body-throw-runs-finally
+  (testing "a throw from the catch body runs finally, then propagates the new exception"
+    (let [log (atom [])
+          r (try
+              (try (throw "first")
+                   (catch e (throw (str e "-second")))
+                   (finally (swap! log conj :f)))
+              (catch e (str "outer " e)))]
+      (is (= "outer first-second" r))
+      (is (= [:f] @log)))))
+
+(deftest throw-from-finally-replaces
+  (testing "a throw from finally replaces the in-flight exception"
+    (is (= "outer replacement"
+           (try
+             (try (throw "original") (finally (throw "replacement")))
+             (catch e (str "outer " e)))))))
+
+;; The finally block must compile exactly once: a dual-copy (inlined)
+;; emission would expand macros in the finally twice.
+(def expansion-count (atom 0))
+(defmacro counting-noop [] (swap! expansion-count inc) nil)
+
+(deftest finally-macro-expands-once
+  (testing "a macro inside finally expands a single time"
+    (try 1 (finally (counting-noop)))
+    (is (= 1 @expansion-count))))
+
+(deftest nested-finally-each-runs-once
+  (testing "nested tries each run their own finally exactly once on unwind"
+    (let [log (atom [])
+          r (try
+              (try
+                (try (throw "x") (finally (swap! log conj :inner)))
+                (finally (swap! log conj :mid)))
+              (catch e :done))]
+      (is (= :done r))
+      (is (= [:inner :mid] @log)))))
