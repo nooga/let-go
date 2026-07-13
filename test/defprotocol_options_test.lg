@@ -1,0 +1,26 @@
+(ns test.defprotocol-options-test
+  (:require [test :refer [deftest is testing]]))
+
+(defprotocol MetadataProtocol
+  :extend-via-metadata true
+  (metadata-op [this]))
+
+(deftest accepts-leading-option-pairs
+  (testing "protocol options do not enter the signature sequence"
+    (is (some? (var MetadataProtocol)))
+    (is (some? (var metadata-op)))
+    (is (= true (:extend-via-metadata (meta (var MetadataProtocol)))))))
+
+(deftest rejects-an-option-without-a-value
+  (testing "an incomplete option pair fails during macro expansion"
+    (let [err (try
+                (eval '(defprotocol MissingOptionValue :extend-via-metadata))
+                (catch e e))]
+      (is (some? err)))))
+
+(deftest rejects-a-non-symbol-method-name
+  (testing "a malformed signature fails during macro expansion"
+    (let [err (try
+                (eval '(defprotocol InvalidSignature (:not-a-symbol [this])))
+                (catch e e))]
+      (is (some? err)))))

@@ -2228,13 +2228,28 @@
 (defmacro defprotocol [name & sigs]
   (let [doc          (if (string? (first sigs)) (first sigs) nil)
         sigs         (if (string? (first sigs)) (next sigs) sigs)
-        method-names (map first sigs)
+        parsed       (loop [options {}
+                            remaining sigs]
+                       (if (keyword? (first remaining))
+                         (if (nil? (next remaining))
+                           (throw (str "defprotocol option " (first remaining)
+                                       " requires a value"))
+                           (recur (assoc options (first remaining) (second remaining))
+                                  (next (next remaining))))
+                         [options remaining]))
+        options      (first parsed)
+        sigs         (mapv (fn [sig]
+                             (if (and (seq? sig) (symbol? (first sig)))
+                               sig
+                               (throw (str "defprotocol signature must start with a symbol: " sig))))
+                           (second parsed))
+        method-names (mapv first sigs)
         ;; Quote method names so they don't get resolved as vars
-        quoted-names (map (fn [m] (list 'quote m)) method-names)
-        proto-def    (list 'def (def-meta-name name doc nil)
+        quoted-names (mapv (fn [m] (list 'quote m)) method-names)
+        proto-def    (list 'def (def-meta-name name doc options)
                            (cons 'defprotocol* (cons (str name) quoted-names)))
         ;; For each method, create a protocol-dispatching fn var
-        method-defs  (map (fn [sig]
+        method-defs  (mapv (fn [sig]
                             (let [mname (first sig)
                                   mdoc  (first (next (next sig)))]
                               (list 'def (def-meta-name mname (if (string? mdoc) mdoc nil) nil)
