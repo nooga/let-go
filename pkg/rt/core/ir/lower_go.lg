@@ -473,15 +473,10 @@
     :else                    []))
 
 (defn- local-carrying-op? [op]
-  (or (= op :block-arg)
-      (= op :call)
-      (= op :try)   ; try-assign-stmts materialises the result into a local
-      (= op :inc)
-      (= op :dec)
-      (= op :bit-not)
-      (= op :dot)   ; (. obj field) materialised into a local: vN := obj.field
-      (= op :def)   ; def-assign-stmts materialises the interned var into a local
-      (contains? binary-op op)))
+  ;; Catalog-driven: the `local-carry?` column in pkg/ir/ir_ops.lg is the
+  ;; single source of truth (true for :block-arg :call :try :inc :dec
+  ;; :bit-not :dot :def and the binary arith/cmp/bit ops incl :quot/:div).
+  (ir/op-local-carrying? op))
 
 ;; A :load-var is normally re-emitted inline as ec.Deref(rt.LookupVar(...)) at
 ;; each use. That is unsafe for a var the same function set!s: a root mutated

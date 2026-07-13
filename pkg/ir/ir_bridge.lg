@@ -297,6 +297,10 @@
     :args [OpKw]
     :body "return vm.Boolean(arg0.IsPure()), nil"}
 
+   {:name "op-local-carrying?" :lisp-name "ir/op-local-carrying?"
+    :args [OpKw]
+    :body "return vm.Boolean(arg0.LocalCarrying()), nil"}
+
    {:name "op-cheap-load?" :lisp-name "ir/op-cheap-load?"
     :args [OpKw]
     :body "return vm.Boolean(ir.IsCheapMaterializeOp(arg0)), nil"}

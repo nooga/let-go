@@ -69,52 +69,53 @@ const (
 
 // opInfo describes an Op's structural metadata.
 type opInfo struct {
-	name       string
-	stackIn    int  // -1 = variable (decoded from Aux/arity)
-	stackOut   int  // 0 or 1
-	pure       bool // safe to CSE, fold, hoist
-	terminator bool // ends a basic block
+	name          string
+	stackIn       int  // -1 = variable (decoded from Aux/arity)
+	stackOut      int  // 0 or 1
+	pure          bool // safe to CSE, fold, hoist
+	terminator    bool // ends a basic block
+	localCarrying bool // lowering materialises the result into a Go local
 }
 
 var opTable = [...]opInfo{
-	OpInvalid:               {"INVALID", 0, 0, false, false},
-	OpConst:                 {"Const", 0, 1, true, false},
-	OpLoadArg:               {"LoadArg", 0, 1, true, false},
-	OpLoadVar:               {"LoadVar", 0, 1, false, false},
-	OpLoadClosed:            {"LoadClosed", 0, 1, true, false},
-	OpBlockArg:              {"BlockArg", 0, 1, true, false},
-	OpSetVar:                {"SetVar", 2, 1, false, false},
-	OpCall:                  {"Call", -1, 1, false, false},
-	OpTailCall:              {"TailCall", -1, 1, false, true},
-	OpAdd:                   {"Add", 2, 1, true, false},
-	OpSub:                   {"Sub", 2, 1, true, false},
-	OpMul:                   {"Mul", 2, 1, true, false},
-	OpBitAnd:                {"BitAnd", 2, 1, true, false},
-	OpBitOr:                 {"BitOr", 2, 1, true, false},
-	OpBitXor:                {"BitXor", 2, 1, true, false},
-	OpBitAndNot:             {"BitAndNot", 2, 1, true, false},
-	OpBitShiftLeft:          {"BitShiftLeft", 2, 1, true, false},
-	OpBitShiftRight:         {"BitShiftRight", 2, 1, true, false},
-	OpUnsignedBitShiftRight: {"UnsignedBitShiftRight", 2, 1, true, false},
-	OpQuot:                  {"Quot", 2, 1, true, false},
-	OpDiv:                   {"Div", 2, 1, true, false},
-	OpLt:                    {"Lt", 2, 1, true, false},
-	OpLte:                   {"Lte", 2, 1, true, false},
-	OpGt:                    {"Gt", 2, 1, true, false},
-	OpGte:                   {"Gte", 2, 1, true, false},
-	OpEq:                    {"Eq", 2, 1, true, false},
-	OpInc:                   {"Inc", 1, 1, true, false},
-	OpDec:                   {"Dec", 1, 1, true, false},
-	OpBitNot:                {"BitNot", 1, 1, true, false},
-	OpPop:                   {"Pop", 1, 0, false, false},
-	OpReturn:                {"Return", 1, 0, false, true},
-	OpBranch:                {"Branch", 0, 0, false, true},
-	OpBranchIf:              {"BranchIf", 1, 0, false, true},
-	OpMakeClosure:           {"MakeClosure", 1, 1, false, false},
-	OpPushClosed:            {"PushClosed", 2, 1, false, false},
-	OpTry:                   {"Try", -1, 1, false, false},
-	OpDot:                   {"Dot", 1, 1, false, false},
-	OpDef:                   {"Def", -1, 1, false, false},
+	OpInvalid:               {"INVALID", 0, 0, false, false, false},
+	OpConst:                 {"Const", 0, 1, true, false, false},
+	OpLoadArg:               {"LoadArg", 0, 1, true, false, false},
+	OpLoadVar:               {"LoadVar", 0, 1, false, false, false},
+	OpLoadClosed:            {"LoadClosed", 0, 1, true, false, false},
+	OpBlockArg:              {"BlockArg", 0, 1, true, false, true},
+	OpSetVar:                {"SetVar", 2, 1, false, false, false},
+	OpCall:                  {"Call", -1, 1, false, false, true},
+	OpTailCall:              {"TailCall", -1, 1, false, true, false},
+	OpAdd:                   {"Add", 2, 1, true, false, true},
+	OpSub:                   {"Sub", 2, 1, true, false, true},
+	OpMul:                   {"Mul", 2, 1, true, false, true},
+	OpBitAnd:                {"BitAnd", 2, 1, true, false, true},
+	OpBitOr:                 {"BitOr", 2, 1, true, false, true},
+	OpBitXor:                {"BitXor", 2, 1, true, false, true},
+	OpBitAndNot:             {"BitAndNot", 2, 1, true, false, true},
+	OpBitShiftLeft:          {"BitShiftLeft", 2, 1, true, false, true},
+	OpBitShiftRight:         {"BitShiftRight", 2, 1, true, false, true},
+	OpUnsignedBitShiftRight: {"UnsignedBitShiftRight", 2, 1, true, false, true},
+	OpQuot:                  {"Quot", 2, 1, true, false, true},
+	OpDiv:                   {"Div", 2, 1, true, false, true},
+	OpLt:                    {"Lt", 2, 1, true, false, true},
+	OpLte:                   {"Lte", 2, 1, true, false, true},
+	OpGt:                    {"Gt", 2, 1, true, false, true},
+	OpGte:                   {"Gte", 2, 1, true, false, true},
+	OpEq:                    {"Eq", 2, 1, true, false, true},
+	OpInc:                   {"Inc", 1, 1, true, false, true},
+	OpDec:                   {"Dec", 1, 1, true, false, true},
+	OpBitNot:                {"BitNot", 1, 1, true, false, true},
+	OpPop:                   {"Pop", 1, 0, false, false, false},
+	OpReturn:                {"Return", 1, 0, false, true, false},
+	OpBranch:                {"Branch", 0, 0, false, true, false},
+	OpBranchIf:              {"BranchIf", 1, 0, false, true, false},
+	OpMakeClosure:           {"MakeClosure", 1, 1, false, false, false},
+	OpPushClosed:            {"PushClosed", 2, 1, false, false, false},
+	OpTry:                   {"Try", -1, 1, false, false, true},
+	OpDot:                   {"Dot", 1, 1, false, false, true},
+	OpDef:                   {"Def", -1, 1, false, false, true},
 }
 
 // String returns the op's display name (or "Op?" for an unknown op).
@@ -147,6 +148,14 @@ func (op Op) StackOut() int {
 		return opTable[op].stackOut
 	}
 	return 0
+}
+
+// LocalCarrying reports whether lowering materialises op's result into a Go local.
+func (op Op) LocalCarrying() bool {
+	if int(op) < len(opTable) {
+		return opTable[op].localCarrying
+	}
+	return false
 }
 
 func isCheapMaterializeOp(op Op) bool {

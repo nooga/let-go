@@ -62,6 +62,21 @@ func installIRBridgeBuiltins() {
 		return vm.Boolean(arg0.IsPure()), nil
 	})
 	ns.Def("op-pure?", fn_op_pure_Fn)
+	fn_op_local_carrying_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("ir/op-local-carrying?: expected (OpKw), got %d args", len(vs))
+		}
+		arg0Kw, ok0 := vs[0].(vm.Keyword)
+		if !ok0 {
+			return vm.NIL, fmt.Errorf("ir/op-local-carrying?: arg 0 must be Keyword, got %s", vs[0].Type().Name())
+		}
+		arg0, okOp0 := ir.OpByKeyword(string(arg0Kw))
+		if !okOp0 {
+			return vm.NIL, fmt.Errorf("ir/op-local-carrying?: unknown op %s", string(arg0Kw))
+		}
+		return vm.Boolean(arg0.LocalCarrying()), nil
+	})
+	ns.Def("op-local-carrying?", fn_op_local_carrying_Fn)
 	fn_op_cheap_load_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("ir/op-cheap-load?: expected (OpKw), got %d args", len(vs))

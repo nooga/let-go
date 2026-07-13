@@ -33,6 +33,9 @@
 ;;   bytecode    — corresponding vm.OP_XXX symbol, or nil if none
 ;;   cheap?      — true for ops materialize re-emits on demand
 ;;                  (Const/LoadArg/LoadVar/LoadClosed)
+;;   local-carry?— true when the op's result is materialised into a Go
+;;                  local by lowering (lower_go's local-carrying-op?).
+;;                  A static fact about the op, like pure?/terminator?.
 ;;   display     — string for opTable.name (usually = name; OpInvalid
 ;;                  uses "INVALID" for diagnostic clarity)
 ;;   comment     — trailing line comment on the const decl + opTable row
@@ -41,57 +44,57 @@
 ;; breaks every file that references Op<X> constants.
 
 (def ops
-  ;;  name         stk-in stk-out  pure?  term?  bytecode           cheap?  display      comment
-  '[["Invalid"    0  0 false false nil                false "INVALID"    ""]
+  ;;  name         stk-in stk-out  pure?  term?  bytecode           cheap?  local-carry? display      comment
+  '[["Invalid"    0  0 false false nil                false false "INVALID"    ""]
 
     ;; --- Values ---
-    ["Const"      0  1 true  false OP_LOAD_CONST      true  "Const"      ".Aux = vm.Value (the constant; lowered as OP_LOAD_CONST with interned index)"]
-    ["LoadArg"    0  1 true  false OP_LOAD_ARG        true  "LoadArg"    ".Aux = int (arg index)"]
-    ["LoadVar"    0  1 false false OP_LOAD_VAR        true  "LoadVar"    ".Aux = *vm.Var; var roots are mutable"]
-    ["LoadClosed" 0  1 true  false OP_LOAD_CLOSEDOVER true  "LoadClosed" ".Aux = int (closed-over index)"]
+    ["Const"      0  1 true  false OP_LOAD_CONST      true  false "Const"      ".Aux = vm.Value (the constant; lowered as OP_LOAD_CONST with interned index)"]
+    ["LoadArg"    0  1 true  false OP_LOAD_ARG        true  false "LoadArg"    ".Aux = int (arg index)"]
+    ["LoadVar"    0  1 false false OP_LOAD_VAR        true  false "LoadVar"    ".Aux = *vm.Var; var roots are mutable"]
+    ["LoadClosed" 0  1 true  false OP_LOAD_CLOSEDOVER true  false "LoadClosed" ".Aux = int (closed-over index)"]
 
     ;; Block parameter — value flowing in from a predecessor's
     ;; branch-with-args. No Refs; (block-id, param-index) is implicit
     ;; via position in Block.Params.
-    ["BlockArg"   0  1 true  false nil                false "BlockArg"   "block parameter"]
+    ["BlockArg"   0  1 true  false nil                false true  "BlockArg"   "block parameter"]
 
     ;; --- Side-effecting ---
-    ["SetVar"     2  1 false false OP_SET_VAR         false "SetVar"     ".Refs[0] = var (Const aux=*vm.Var), .Refs[1] = value; pushes var back"]
-    ["Call"      -1  1 false false OP_INVOKE          false "Call"       ".Refs[0] = fn, .Refs[1:] = args; .Aux = arity int"]
-    ["TailCall"  -1  1 false true  OP_TAIL_CALL       false "TailCall"   "tail call ends a block"]
+    ["SetVar"     2  1 false false OP_SET_VAR         false false "SetVar"     ".Refs[0] = var (Const aux=*vm.Var), .Refs[1] = value; pushes var back"]
+    ["Call"      -1  1 false false OP_INVOKE          false true  "Call"       ".Refs[0] = fn, .Refs[1:] = args; .Aux = arity int"]
+    ["TailCall"  -1  1 false true  OP_TAIL_CALL       false false "TailCall"   "tail call ends a block"]
 
-    ;; --- Pure arithmetic / comparison ---
-    ["Add"        2  1 true  false OP_ADD             false "Add"        ""]
-    ["Sub"        2  1 true  false OP_SUB             false "Sub"        ""]
-    ["Mul"        2  1 true  false OP_MUL             false "Mul"        ""]
-    ["BitAnd"     2  1 true  false OP_BIT_AND         false "BitAnd"     "clojure.core/bit-and — integer bitwise and"]
-    ["BitOr"      2  1 true  false OP_BIT_OR          false "BitOr"      "clojure.core/bit-or — integer bitwise or"]
-    ["BitXor"     2  1 true  false OP_BIT_XOR         false "BitXor"     "clojure.core/bit-xor — integer bitwise xor"]
-    ["BitAndNot"  2  1 true  false OP_BIT_AND_NOT     false "BitAndNot"  "clojure.core/bit-and-not — integer bit clear (&^)"]
-    ["BitShiftLeft" 2 1 true false OP_BIT_SHIFT_LEFT  false "BitShiftLeft" "clojure.core/bit-shift-left — integer left shift"]
-    ["BitShiftRight" 2 1 true false OP_BIT_SHIFT_RIGHT false "BitShiftRight" "clojure.core/bit-shift-right — integer arithmetic right shift"]
-    ["UnsignedBitShiftRight" 2 1 true false OP_UNSIGNED_BIT_SHIFT_RIGHT false "UnsignedBitShiftRight" "clojure.core/unsigned-bit-shift-right — integer logical right shift"]
-    ["Quot"       2  1 true  false OP_QUOT            false "Quot"       "clojure.core/quot — integer quotient truncated toward zero. int/int lowers to native Go `/` (which truncates identically); any float/ratio/boxed operand lowers via rt.QuotValue (native float `/` does NOT truncate)"]
-    ["Div"        2  1 true  false OP_DIV             false "Div"        "clojure.core// — true division. float/float lowers to native Go `/`; any other operand mix (int/int -> Ratio, mixed -> Float) lowers via rt.DivValue. Distinguished from Quot by op-kw in lower-go (both render Go `/`)"]
-    ["Lt"         2  1 true  false OP_LT              false "Lt"         ""]
-    ["Lte"        2  1 true  false OP_LTE             false "Lte"        ""]
-    ["Gt"         2  1 true  false OP_GT              false "Gt"         ""]
-    ["Gte"        2  1 true  false OP_GTE             false "Gte"        ""]
-    ["Eq"         2  1 true  false OP_EQ              false "Eq"         ""]
-    ["Inc"        1  1 true  false OP_INC             false "Inc"        ""]
-    ["Dec"        1  1 true  false OP_DEC             false "Dec"        ""]
-    ["BitNot"     1  1 true  false OP_BIT_NOT         false "BitNot"     "clojure.core/bit-not — integer bitwise complement"]
+    ;; --- Pure arithmetic / comparison (results materialised into locals) ---
+    ["Add"        2  1 true  false OP_ADD             false true  "Add"        ""]
+    ["Sub"        2  1 true  false OP_SUB             false true  "Sub"        ""]
+    ["Mul"        2  1 true  false OP_MUL             false true  "Mul"        ""]
+    ["BitAnd"     2  1 true  false OP_BIT_AND         false true  "BitAnd"     "clojure.core/bit-and — integer bitwise and"]
+    ["BitOr"      2  1 true  false OP_BIT_OR          false true  "BitOr"      "clojure.core/bit-or — integer bitwise or"]
+    ["BitXor"     2  1 true  false OP_BIT_XOR         false true  "BitXor"     "clojure.core/bit-xor — integer bitwise xor"]
+    ["BitAndNot"  2  1 true  false OP_BIT_AND_NOT     false true  "BitAndNot"  "clojure.core/bit-and-not — integer bit clear (&^)"]
+    ["BitShiftLeft" 2 1 true false OP_BIT_SHIFT_LEFT  false true  "BitShiftLeft" "clojure.core/bit-shift-left — integer left shift"]
+    ["BitShiftRight" 2 1 true false OP_BIT_SHIFT_RIGHT false true  "BitShiftRight" "clojure.core/bit-shift-right — integer arithmetic right shift"]
+    ["UnsignedBitShiftRight" 2 1 true false OP_UNSIGNED_BIT_SHIFT_RIGHT false true  "UnsignedBitShiftRight" "clojure.core/unsigned-bit-shift-right — integer logical right shift"]
+    ["Quot"       2  1 true  false OP_QUOT            false true  "Quot"       "clojure.core/quot — integer quotient truncated toward zero. int/int lowers to native Go `/` (which truncates identically); any float/ratio/boxed operand lowers via rt.QuotValue (native float `/` does NOT truncate)"]
+    ["Div"        2  1 true  false OP_DIV             false true  "Div"        "clojure.core// — true division. float/float lowers to native Go `/`; any other operand mix (int/int -> Ratio, mixed -> Float) lowers via rt.DivValue. Distinguished from Quot by op-kw in lower-go (both render Go `/`)"]
+    ["Lt"         2  1 true  false OP_LT              false true  "Lt"         ""]
+    ["Lte"        2  1 true  false OP_LTE             false true  "Lte"        ""]
+    ["Gt"         2  1 true  false OP_GT              false true  "Gt"         ""]
+    ["Gte"        2  1 true  false OP_GTE             false true  "Gte"        ""]
+    ["Eq"         2  1 true  false OP_EQ              false true  "Eq"         ""]
+    ["Inc"        1  1 true  false OP_INC             false true  "Inc"        ""]
+    ["Dec"        1  1 true  false OP_DEC             false true  "Dec"        ""]
+    ["BitNot"     1  1 true  false OP_BIT_NOT         false true  "BitNot"     "clojure.core/bit-not — integer bitwise complement"]
 
-    ["Pop"        1  0 false false nil                false "Pop"        "discard top stack value; no result (OP_POP)"]
+    ["Pop"        1  0 false false nil                false false "Pop"        "discard top stack value; no result (OP_POP)"]
 
     ;; --- Terminators ---
-    ["Return"     1  0 false true  OP_RETURN          false "Return"     ".Refs[0] = value"]
-    ["Branch"     0  0 false true  OP_JUMP            false "Branch"     "unconditional; .Aux = *BranchTarget"]
-    ["BranchIf"   1  0 false true  OP_BRANCH_FALSE    false "BranchIf"   ".Refs[0] = cond; .Aux = struct{True,False *BranchTarget}"]
+    ["Return"     1  0 false true  OP_RETURN          false false "Return"     ".Refs[0] = value"]
+    ["Branch"     0  0 false true  OP_JUMP            false false "Branch"     "unconditional; .Aux = *BranchTarget"]
+    ["BranchIf"   1  0 false true  OP_BRANCH_FALSE    false false "BranchIf"   ".Refs[0] = cond; .Aux = struct{True,False *BranchTarget}"]
 
     ;; --- Closures ---
-    ["MakeClosure" 1  1 false false OP_MAKE_CLOSURE    false "MakeClosure" ".Refs[0] = *Func value (the func to wrap as a closure)"]
-    ["PushClosed"  2  1 false false OP_PUSH_CLOSEDOVER false "PushClosed"  ".Refs[0] = closure, .Refs[1] = value to attach"]
+    ["MakeClosure" 1  1 false false OP_MAKE_CLOSURE    false false "MakeClosure" ".Refs[0] = *Func value (the func to wrap as a closure)"]
+    ["PushClosed"  2  1 false false OP_PUSH_CLOSEDOVER false false "PushClosed"  ".Refs[0] = closure, .Refs[1] = value to attach"]
 
     ;; --- Exception handling (gogen_ir self-AOT) ---
     ;; A guarded region whose body/handler/finally are inner fn* closures.
@@ -100,13 +103,13 @@
     ;; as straight-line Go by lower_go's try-assign-stmts. No bytecode op (the
     ;; bytecode VM compiles try natively via OP_TRY_PUSH/POP); this op exists
     ;; only on the IR→Go lowering path.
-    ["Try"       -1  1 false false nil                false "Try"        ".Refs[0] = body closure; then optional handler closure (binds the caught value), then optional finally closure; .Aux = {:has-handler bool :has-finally bool}"]
+    ["Try"       -1  1 false false nil                false true  "Try"        ".Refs[0] = body closure; then optional handler closure (binds the caught value), then optional finally closure; .Aux = {:has-handler bool :has-finally bool}"]
 
     ;; Struct field selector for native deftype lowering: (. obj field)
     ;; lowers to Go `obj.field`. Aux = field symbol, Refs[0] = obj. No
     ;; bytecode op (the bytecode path accesses deftype fields via runtime
     ;; DType dispatch); this op exists only on the IR→Go lowering path.
-    ["Dot"        1  1 false false nil                false "Dot"        ".Refs[0] = obj; .Aux = field symbol; Go struct field selector obj.field (gogen_ir path only)"]
+    ["Dot"        1  1 false false nil                false true  "Dot"        ".Refs[0] = obj; .Aux = field symbol; Go struct field selector obj.field (gogen_ir path only)"]
 
     ;; (def NAME [val]) — interns NAME in the current ns and returns the var;
     ;; the 2-ref form also sets its root. Like SetVar (no dedicated opcode: the
@@ -114,7 +117,7 @@
     ;; the bytecode defCompiler does), EXCEPT gogen must INTERN the var at
     ;; runtime (rt.InternVar) rather than look it up. .Refs[0] = var (Const
     ;; aux=*vm.Var), optional .Refs[1] = value. stack-in -1: 1 or 2 refs.
-    ["Def"       -1  1 false false nil                false "Def"        ".Refs[0] = var (Const aux=*vm.Var), optional .Refs[1] = value; interns + returns the var (2-ref also sets root)"]])
+    ["Def"       -1  1 false false nil                false true  "Def"        ".Refs[0] = var (Const aux=*vm.Var), optional .Refs[1] = value; interns + returns the var (2-ref also sets root)"]])
 
 (g/check-spec ops)
 
@@ -149,7 +152,7 @@
   (let [rows (map-indexed
                (fn [i row]
                  (let [name    (op-const-name row)
-                       comment (nth row 8)]
+                       comment (nth row 9)]
                    (if (= i 0)
                      [name 'Op 'iota comment]
                      [name '_ '_ comment])))
@@ -160,11 +163,12 @@
   (g/gquote
     (doc "opInfo describes an Op's structural metadata."
       (type-decl opInfo
-                 (struct [name       string ""]
-                         [stackIn    int    "-1 = variable (decoded from Aux/arity)"]
-                         [stackOut   int    "0 or 1"]
-                         [pure       bool   "safe to CSE, fold, hoist"]
-                         [terminator bool   "ends a basic block"])))))
+                 (struct [name          string ""]
+                         [stackIn       int    "-1 = variable (decoded from Aux/arity)"]
+                         [stackOut      int    "0 or 1"]
+                         [pure          bool   "safe to CSE, fold, hoist"]
+                         [terminator    bool   "ends a basic block"]
+                         [localCarrying bool   "lowering materialises the result into a Go local"])))))
 
 (defn emit-op-table []
   ;; var opTable = [...]opInfo{
@@ -173,7 +177,7 @@
   ;; }
   (let [kvs (map
               (fn [row]
-                (let [[_ stack-in stack-out pure? term? _bytecode _cheap? display _] row
+                (let [[_ stack-in stack-out pure? term? _bytecode _cheap? local-carry? display _] row
                       name (op-const-name row)]
                   (g/gquote
                     (kv ~name (composite nil
@@ -181,7 +185,8 @@
                                 ~stack-in
                                 ~stack-out
                                 ~pure?
-                                ~term?)))))
+                                ~term?
+                                ~local-carry?)))))
               ops)]
     (g/gquote
       (var-decl opTable
@@ -214,7 +219,13 @@
        (method [(op Op)] StackOut [] int
          (if (< (cast int op) (call len opTable))
              [(return (field (index opTable op) stackOut))])
-         (return 0))))])
+         (return 0))))
+   (g/gquote
+     (doc "LocalCarrying reports whether lowering materialises op's result into a Go local."
+       (method [(op Op)] LocalCarrying [] bool
+         (if (< (cast int op) (call len opTable))
+             [(return (field (index opTable op) localCarrying))])
+         (return false))))])
 
 ;; --- switch builders ------------------------------------------------
 ;;
