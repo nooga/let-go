@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"unicode/utf8"
@@ -36,13 +37,21 @@ var (
 	consctlMu sync.Mutex
 )
 
-// envInt reads an integer environment variable, returning def when it is unset
-// or unparseable.
-func envInt(name string, def int) int {
-	if v := os.Getenv(name); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
+// readEnvInt reads /env/<name> as a live file and parses it as an int, returning
+// def when the file is missing or unparseable. Plan 9's environment is a
+// filesystem, so reading the file each call picks up updates that os.Getenv's
+// startup snapshot misses: alacritty9 (and drawterm hosts) rewrite /env/COLS and
+// /env/LINES on every window resize, so the live read is what lets term/size
+// track the real terminal size instead of a stale startup value.
+func readEnvInt(name string, def int) int {
+	b, err := os.ReadFile("/env/" + name)
+	if err != nil {
+		return def
+	}
+	// /env values can carry a trailing NUL (Plan 9 stores them NUL-terminated)
+	// and/or a newline; trim before parsing.
+	if n, err := strconv.Atoi(strings.TrimRight(string(b), "\x00\n\r\t ")); err == nil {
+		return n
 	}
 	return def
 }
@@ -156,14 +165,17 @@ func installTermNS() {
 	})
 	ns.Def("key-pending?", keyPendingFn)
 
-	// size — [cols rows] from $COLS/$LINES, falling back to 80x24. Real Plan 9
-	// window geometry lives in /dev/wctl (pixels) and is rarely surfaced as env
-	// vars under rio/drawterm, so this usually returns the fallback — safe,
-	// since callers diff term/size per tick and simply see "no resize".
+	// size — [cols rows] read live from /env/COLS and /env/LINES (80x24 fallback).
+	// alacritty9 and drawterm hosts publish the terminal size there and rewrite
+	// it on every resize; reading the files each call (not os.Getenv, which
+	// snapshots at process start) makes term/size track the current window, so
+	// callers that diff size per tick actually see resizes. A bare rio console
+	// leaves the vars unset and gets the 80x24 fallback. (Real per-window pixel
+	// geometry via /dev/wctl is a separate, larger follow-up.)
 	sizeFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NewPersistentVector([]vm.Value{
-			vm.MakeInt(envInt("COLS", 80)),
-			vm.MakeInt(envInt("LINES", 24)),
+			vm.MakeInt(readEnvInt("COLS", 80)),
+			vm.MakeInt(readEnvInt("LINES", 24)),
 		}), nil
 	})
 	ns.Def("size", sizeFn)
