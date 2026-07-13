@@ -10,6 +10,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/nooga/let-go/pkg/rt"
@@ -844,6 +845,30 @@ func traceCompiler(c *Context, form vm.Value) error {
 	return nil
 }
 
+// caughtSymCounter feeds freshCaughtSym. Atomic because the stdlib
+// determinism test compiles concurrently.
+var caughtSymCounter atomic.Int64
+
+// freshCaughtSym returns a binding symbol for a desugared catch handler that
+// cannot collide with user bindings or with an enclosing try's own handler.
+// The trailing tab makes the name unforgeable: the reader cannot produce a
+// symbol containing whitespace, so no user source can shadow or reference it.
+func freshCaughtSym() vm.Symbol {
+	return vm.Symbol(fmt.Sprintf("__lg-caught-%d\t", caughtSymCounter.Add(1)))
+}
+
+func makeList(items ...vm.Value) (vm.Value, error) {
+	return vm.ListType.Box(items)
+}
+
+func mustQuote(v vm.Value) vm.Value {
+	q, err := makeList(vm.Symbol("quote"), v)
+	if err != nil {
+		panic(err) // two-element list construction cannot fail
+	}
+	return q
+}
+
 func tryCompiler(c *Context, form vm.Value) error {
 	// Parse: (try body... (catch sym catch-body...) (finally finally-body...))
 	nxt := form.(*vm.List).Next()
@@ -857,11 +882,17 @@ func tryCompiler(c *Context, form vm.Value) error {
 		allForms = append(allForms, s.First())
 	}
 
-	// Separate body, catch, and finally forms
+	// Separate body, catch clauses, and finally forms
+	type catchClause struct {
+		class   vm.Symbol // "" for let-go's bare (catch bind-sym body...)
+		binding vm.Symbol
+		body    []vm.Value
+	}
 	var bodyForms []vm.Value
 	var catchSym vm.Symbol
 	var catchForms []vm.Value
 	var finallyForms []vm.Value
+	var catchClauses []catchClause
 	hasCatch := false
 
 	for _, f := range allForms {
@@ -877,18 +908,15 @@ func tryCompiler(c *Context, form vm.Value) error {
 					}
 					// Clojure-compatible form: (catch ClassSym bind-sym body...)
 					// vs let-go's bare (catch bind-sym body...). A binding is
-					// always a simple unqualified symbol, so a qualified/dotted
-					// first token can only be a class name — that disambiguates
-					// even with an empty catch body, e.g.
-					// (catch java.io.FileNotFoundException _). An uppercase simple
-					// symbol is also class-shaped, which handles empty-body forms
-					// such as (catch Throwable _). Otherwise, fall back to token
-					// count: the Clojure form needs class + binding + body.
-					restCount := 0
-					for s := rest; s != nil; s = s.Next() {
-						restCount++
-					}
-					if restCount >= 2 {
+					// always a simple unqualified symbol, so a class-shaped
+					// first token — qualified/dotted, or an uppercase simple
+					// symbol — followed by a symbol marks a typed clause.
+					// There is deliberately NO token-count fallback: under
+					// class dispatch it would misread the bare
+					// (catch e foo bar) as a typed clause on binding e.
+					// JVM class names are never lowercase-simple.
+					classSym := vm.Symbol("")
+					if rest.Next() != nil {
 						firstSym, firstIsSym := rest.First().(vm.Symbol)
 						_, secondIsSym := rest.Next().First().(vm.Symbol)
 						qualified := firstIsSym && strings.ContainsAny(string(firstSym), "./")
@@ -899,7 +927,8 @@ func tryCompiler(c *Context, form vm.Value) error {
 								break
 							}
 						}
-						if firstIsSym && secondIsSym && (qualified || upperSimple || restCount >= 3) {
+						if firstIsSym && secondIsSym && (qualified || upperSimple) {
+							classSym = firstSym
 							rest = rest.Next() // drop the leading class symbol
 						}
 					}
@@ -907,10 +936,15 @@ func tryCompiler(c *Context, form vm.Value) error {
 					if !ok {
 						return NewCompileError("catch requires a binding symbol")
 					}
-					catchSym = bindSym
+					var clauseBody []vm.Value
 					for cb := rest.Next(); cb != nil; cb = cb.Next() {
-						catchForms = append(catchForms, cb.First())
+						clauseBody = append(clauseBody, cb.First())
 					}
+					catchClauses = append(catchClauses, catchClause{
+						class:   classSym,
+						binding: bindSym,
+						body:    clauseBody,
+					})
 					continue
 				}
 				if sym == "finally" {
@@ -922,6 +956,55 @@ func tryCompiler(c *Context, form vm.Value) error {
 			}
 		}
 		bodyForms = append(bodyForms, f)
+	}
+
+	if len(catchClauses) == 1 && catchClauses[0].class == "" {
+		// let-go's native bare catch compiles directly as the handler.
+		catchSym = catchClauses[0].binding
+		catchForms = catchClauses[0].body
+	} else if len(catchClauses) > 0 {
+		// Desugar typed and/or multiple clauses into a single handler that
+		// dispatches on exception class in source order and rethrows when
+		// nothing matches (the IR builder's parse-try generates the same
+		// form — keep them in lockstep):
+		//
+		//   (catch <caught>
+		//     (if (core/instance? Class1 <caught>) (let* [b1 <caught>] body1...)
+		//       ... (core/throw <caught>)))
+		//
+		// core/-qualified so a user shadowing instance? or throw cannot
+		// capture the dispatch. A bare clause tests as always-true, making
+		// any later clauses dead, like Clojure's ordered catch clauses.
+		caught := freshCaughtSym()
+		acc, err := makeList(vm.Symbol("core/throw"), caught)
+		if err != nil {
+			return NewCompileError("building catch dispatch").Wrap(err)
+		}
+		for i := len(catchClauses) - 1; i >= 0; i-- {
+			cl := catchClauses[i]
+			armParts := append([]vm.Value{vm.Symbol("let*"), vm.ArrayVector{cl.binding, caught}}, cl.body...)
+			arm, err := makeList(armParts...)
+			if err != nil {
+				return NewCompileError("building catch dispatch").Wrap(err)
+			}
+			if cl.class == "" {
+				acc = arm
+				continue
+			}
+			// catch-matches? resolves the class at dispatch time (a JVM-only
+			// class let-go does not model never matches, rather than failing
+			// compilation) and gives Throwable its catch-everything role.
+			test, err := makeList(vm.Symbol("core/catch-matches?"), mustQuote(cl.class), caught)
+			if err != nil {
+				return NewCompileError("building catch dispatch").Wrap(err)
+			}
+			acc, err = makeList(vm.Symbol("if"), test, arm, acc)
+			if err != nil {
+				return NewCompileError("building catch dispatch").Wrap(err)
+			}
+		}
+		catchSym = caught
+		catchForms = []vm.Value{acc}
 	}
 
 	if !hasCatch && len(finallyForms) == 0 {

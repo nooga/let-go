@@ -11,23 +11,34 @@
     (is (= :ok (try (throw "boom") (catch e :ok))))))
 
 (deftest catch-with-class-symbol
-  (testing "Clojure-style (catch Class e body) is accepted as catch-all"
+  (testing "(catch Throwable e body) catches anything thrown, strings included"
     (is (= :ok (try (throw "boom") (catch Throwable e :ok))))
-    (is (= :ok (try (throw "boom") (catch Exception e :ok))))
-    (is (= :ok (try (throw "boom") (catch java.lang.RuntimeException e :ok)))))
+    (is (= :ok (try (throw (ex-info "x" {})) (catch Throwable e :ok)))))
+
+  (testing "other classes dispatch by type: a thrown string is not an Exception"
+    (is (= :ok (try (throw (Exception. "boom")) (catch Exception e :ok))))
+    (is (= :ok (try (throw (ex-info "x" {})) (catch java.lang.RuntimeException e :ok))))
+    (is (= :outer
+           (try
+             (try (throw "boom") (catch Exception e :inner))
+             (catch e :outer)))))
 
   (testing "binding symbol is still bound to the thrown value"
     (is (= "boom" (try (throw "boom") (catch Throwable e (str e)))))))
 
 (deftest catch-empty-body
-  (testing "simple class + binding with an empty body catches and returns nil"
+  (testing "class + binding with an empty body catches and returns nil"
     (is (nil? (try (throw "boom") (catch Throwable _))))
-    (is (nil? (try (throw "boom") (catch Exception _)))))
-  (testing "a qualified class + binding with an empty body catches and returns nil"
-    ;; (catch java.io.FileNotFoundException _) — no body. A binding is always a
-    ;; simple symbol, so the dotted first token is unambiguously the class.
-    ;; weavejester/integrant's try-require uses exactly this form.
-    (is (nil? (try (throw "boom") (catch java.io.FileNotFoundException _))))
+    (is (nil? (try (throw (Exception. "boom")) (catch Exception _)))))
+  (testing "a qualified class let-go does not model never matches"
+    ;; (catch java.io.FileNotFoundException _) — no body, dotted class.
+    ;; weavejester's integrant uses this form. It must COMPILE (the class
+    ;; resolves at dispatch time), and since let-go does not model the
+    ;; class, the clause never matches and the throw propagates.
+    (is (= :outer
+           (try
+             (try (throw "boom") (catch java.io.FileNotFoundException _))
+             (catch e :outer))))
     (is (= 1 (try 1 (catch java.io.FileNotFoundException _)))))
   (testing "the bare one-body-form still returns that form, not nil"
     (is (= :ok (try (throw "boom") (catch e :ok))))))

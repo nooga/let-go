@@ -36,6 +36,50 @@ func installExceptionClasses(ns *vm.Namespace) {
 
 	ns.Def("ExceptionInfo", vm.ExInfoType)
 	ns.Def("clojure.lang.ExceptionInfo", vm.ExInfoType)
+
+	// catch-matches? [class-symbol caught] backs typed catch dispatch. Both
+	// compilers desugar (catch SomeClass e ...) into a test through it, so
+	// the semantics live in one place:
+	//   - the symbol resolves at dispatch time; a JVM-only class let-go does
+	//     not model yields a clause that never matches, instead of failing
+	//     the whole namespace at compile time;
+	//   - Throwable matches ANY thrown value: let-go permits throwing plain
+	//     values (strings), and (catch Throwable e ...) is the conventional
+	//     catch-everything. instance? itself stays honest — a thrown string
+	//     is not (instance? Throwable s);
+	//   - any other class matches by type identity or registered ancestry,
+	//     like instance?.
+	catchMatches, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("catch-matches? expects 2 args")
+		}
+		sym, ok := vs[0].(vm.Symbol)
+		if !ok {
+			return vm.FALSE, nil
+		}
+		v, lok := ns.Lookup(sym).(*vm.Var)
+		if !lok {
+			return vm.FALSE, nil
+		}
+		class, cok := v.Deref().(vm.ValueType)
+		if !cok {
+			return vm.FALSE, nil
+		}
+		if class == vm.ValueType(vm.ClassThrowable) {
+			return vm.TRUE, nil
+		}
+		if vs[1].Type() == class {
+			return vm.TRUE, nil
+		}
+		if anc := directTypeAncestors(vs[1].Type()); anc != nil {
+			return anc.Contains(class), nil
+		}
+		return vm.FALSE, nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	ns.Def("catch-matches?", catchMatches)
 }
 
 func exceptionConstructor(class *vm.ExceptionClass) vm.Value {

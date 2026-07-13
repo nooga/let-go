@@ -128,35 +128,84 @@
                     (into #{} (concat keys-syms strs-syms as-sym other-syms)))
     :else #{}))
 
+(defn- catch-clause-parts [parts]
+  "Split one catch clause's tokens into {:class <sym|nil> :binding <sym>
+   :body [forms]}. A clause is typed only when its first token is
+   class-shaped — qualified/dotted, or an uppercase simple symbol — and a
+   symbol follows. There is deliberately NO token-count fallback: under
+   class dispatch it would misread let-go's bare (catch e foo bar) as a
+   typed clause on binding e. Mirrors the bytecode compiler's tryCompiler."
+  (let [first-sym (nth parts 0 nil)
+        class?    (and (>= (count parts) 2)
+                       (symbol? first-sym)
+                       (symbol? (nth parts 1))
+                       (or (re-find #"[./]" (str first-sym))
+                           (re-find #"^\p{Lu}" (str first-sym))))]
+    (if class?
+      {:class first-sym :binding (nth parts 1) :body (vec (drop 2 parts))}
+      {:class nil :binding first-sym :body (vec (drop 1 parts))})))
+
+(defn- desugar-catch-clauses [clauses]
+  "Collapse the catch clauses into ONE bare clause {:binding :body}. A single
+   bare clause passes through (let-go's native form). Typed and/or multiple
+   clauses become a class dispatch in source order that rethrows when nothing
+   matches, generated EXACTLY like the bytecode compiler's tryCompiler:
+
+     (if (core/instance? Class1 caught) (let* [b1 caught] body1…)
+       … (core/throw caught))
+
+   core/-qualified so user shadowing cannot capture the dispatch. A bare
+   clause tests as always-true, so later clauses are dead."
+  (if (and (= 1 (count clauses)) (nil? (:class (first clauses))))
+    (first clauses)
+    ;; The trailing tab makes the handler symbol unforgeable: the reader
+    ;; cannot produce a symbol containing whitespace, so no user source can
+    ;; shadow it (mirrors the bytecode compiler's freshCaughtSym).
+    (let [caught (symbol (str (gensym "__lg-caught-") "\t"))]
+      {:binding caught
+       :body [(reduce
+               (fn [acc clause]
+                 (let [arm (apply list 'let*
+                                  [(:binding clause) caught]
+                                  (:body clause))]
+                   (if (nil? (:class clause))
+                     arm
+                     ;; catch-matches? resolves the class at dispatch time
+                     ;; (an unmodeled JVM class never matches, rather than
+                     ;; failing compilation) and gives Throwable its
+                     ;; catch-everything role.
+                     (list 'if
+                           (list 'core/catch-matches?
+                                 (list 'quote (:class clause))
+                                 caught)
+                           arm
+                           acc))))
+               (list 'core/throw caught)
+               (reverse clauses))]})))
+
 (defn- parse-try [forms]
   "Split the subforms of a (try …) into [body-forms catch-clause finally-clause].
    body-forms     = vector of forms that run in the guarded region
    catch-clause   = nil | {:binding <sym> :body (forms)}
    finally-clause = nil | {:body (forms)}
-   Catch shape follows the bytecode compiler: a leading class symbol in
-   (catch Class e body…) is dropped (catch-all), so (catch e …) and
-   (catch Class e …) both bind e."
-  (loop [fs forms body [] catch-clause nil finally-clause nil]
+   Typed and multiple catch clauses are desugared here into one bare clause
+   (see desugar-catch-clauses), so downstream build-try and captures-of only
+   ever see the single-clause shape."
+  (loop [fs forms body [] clauses [] finally-clause nil]
     (if (empty? fs)
-      [body catch-clause finally-clause]
+      [body
+       (when (seq clauses) (desugar-catch-clauses clauses))
+       finally-clause]
       (let [head (first fs)]
         (cond
           (and (seq? head) (= (first head) 'catch))
-          (let [parts     (vec (rest head))
-                first-sym (nth parts 0 nil)
-                class?    (and (>= (count parts) 2)
-                               (symbol? first-sym)
-                               (symbol? (nth parts 1))
-                               (or (>= (count parts) 3)
-                                   (re-find #"[./]" (str first-sym))
-                                   (re-find #"^\p{Lu}" (str first-sym))))
-                binding   (if class? (nth parts 1) (nth parts 0))
-                cbody     (if class? (vec (drop 2 parts)) (vec (drop 1 parts)))]
-            (recur (rest fs) body {:binding binding :body cbody} finally-clause))
+          (recur (rest fs) body
+                 (conj clauses (catch-clause-parts (vec (rest head))))
+                 finally-clause)
           (and (seq? head) (= (first head) 'finally))
-          (recur (rest fs) body catch-clause {:body (vec (rest head))})
+          (recur (rest fs) body clauses {:body (vec (rest head))})
           :else
-          (recur (rest fs) (conj body head) catch-clause finally-clause))))))
+          (recur (rest fs) (conj body head) clauses finally-clause))))))
 
 (defn captures-of [form known-locals]
   "Return the SET of symbols `form` references that are bound in
