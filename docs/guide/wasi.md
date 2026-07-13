@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-07-12
+last-verified: 2026-07-13
 human-verified:
 ---
 
@@ -41,28 +41,28 @@ $ wasmtime lg.wasm -e '(bit-shift-left 1 62)'
 4611686018427387904
 ```
 
-## Toolchain: size vs. fidelity
+## TinyGo
 
-The same 3-tag gating also lets TinyGo (`-target=wasi`, itself `GOOS=wasip1`)
-build the module, and TinyGo produces a much smaller artifact — at the cost of
-numeric fidelity, since its wasm `int` is 32-bit. let-go traps on overflow
-rather than wrapping, so the break is loud, not silently corrupting.
+This guide covers the standard Go toolchain. TinyGo's `-target=wasi` is also
+`GOOS=wasip1`, so the gating here applies, but building let-go under TinyGo needs
+additional reflect shims (boxing and method dispatch) that are not part of this
+build — without them, stock TinyGo 0.41.1 traps at initialization with
+`unimplemented: (reflect.Type).Method()` before running any code. TinyGo support
+is tracked separately.
 
-| Toolchain | Module size | 64-bit `int` |
-|---|---|---|
-| standard Go | ~24 MB | faithful (10^18, 2^62 exact) |
-| TinyGo `-target=wasi` | ~9 MB | 32-bit; `(* 1e9 1e9)` overflows |
-
-Pick the standard-Go build when numeric correctness matters (the general case
-for a Clojure dialect); reach for TinyGo only where you can accept 32-bit ints
-in exchange for the smaller module.
+When that enablement is in place, TinyGo trades the ~24 MB standard-Go module
+for a much smaller one (~9 MB), but its wasm `int` is 32-bit, so 64-bit
+arithmetic overflows (let-go traps on overflow rather than wrapping — loud, not
+silently corrupting). Use the standard-Go build when numeric correctness matters,
+which is the general case for a Clojure dialect.
 
 ## Limits
 
 wasip1 is compute + stdio only. Specifically:
 
 - **No `term` namespace.** The interactive terminal is excluded, so there is no
-  `term` ns under wasip1. Fine for headless eval and embedding; a TUI-over-wasi
+  `term` ns under wasip1; requiring it reports `unable to load namespace term`
+  rather than failing hard. Fine for headless eval and embedding; a TUI-over-wasi
   would need a headless `term` stub (future work).
 - **No sockets, no threads.** The wasip1 preview is single-threaded with no
   network. Compute and stdio only.
