@@ -23,29 +23,29 @@ const (
 	runtimeOnlyTestFilePerm = runtimeOnlyUserRead | runtimeOnlyUserWrite | runtimeOnlyGroupRead | runtimeOnlyOtherRead
 )
 
-// buildLGRuntimeOnly builds the runtime-only lg binary (-tags runtime_only)
-// into a temp dir and returns its path.
-func buildLGRuntimeOnly(t *testing.T) string {
+// buildLGRuntime builds the runtime-only binary (cmd/lg-runtime) into a temp
+// dir and returns its path.
+func buildLGRuntime(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "lg-runtime")
-	cmd := exec.Command("go", "build", "-tags", "runtime_only", "-o", bin, ".")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/lg-runtime")
 	cmd.Dir = repoRoot(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build lg (runtime_only): %v\n%s", err, out)
+		t.Fatalf("build lg-runtime: %v\n%s", err, out)
 	}
 	return bin
 }
 
-// TestRuntimeOnlyDepGraph is the mechanical check behind the runtime_only
-// trust claim: the tagged build's dependency graph must contain neither the
-// compiler nor the resolver. If an import creeps back in (e.g. via pkg/rt),
-// this fails before anyone inspects a binary.
+// TestRuntimeOnlyDepGraph is the mechanical check behind the runtime-only
+// claim: cmd/lg-runtime's dependency graph must contain neither the compiler
+// nor the resolver. If an import creeps back in (e.g. via pkg/rt), this fails
+// before anyone inspects a binary.
 func TestRuntimeOnlyDepGraph(t *testing.T) {
-	cmd := exec.Command("go", "list", "-deps", "-tags", "runtime_only", ".")
+	cmd := exec.Command("go", "list", "-deps", "./cmd/lg-runtime")
 	cmd.Dir = repoRoot(t)
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("go list -deps -tags runtime_only: %v", err)
+		t.Fatalf("go list -deps ./cmd/lg-runtime: %v", err)
 	}
 	deps := string(out)
 	if !strings.Contains(deps, "github.com/nooga/let-go/pkg/vm") {
@@ -56,17 +56,19 @@ func TestRuntimeOnlyDepGraph(t *testing.T) {
 		"github.com/nooga/let-go/pkg/resolver",
 	} {
 		if strings.Contains(deps, banned) {
-			t.Errorf("runtime_only dep graph must not contain %s", banned)
+			t.Errorf("cmd/lg-runtime dep graph must not contain %s", banned)
 		}
 	}
 }
 
 // TestRuntimeOnly covers the runtime-only binary end to end: it runs
-// precompiled .lgb (plain and bundle-format), and it rejects source rather
-// than compiling it — there is no path to source in this build.
+// precompiled .lgb (plain and bundle-format) with the full CLI lifecycle
+// (user args, baseline namespaces), runs as the base of a standalone bundle,
+// and rejects source rather than compiling it — there is no path to source
+// in this build.
 func TestRuntimeOnly(t *testing.T) {
 	full := buildLG(t)
-	runtime := buildLGRuntimeOnly(t)
+	runtime := buildLGRuntime(t)
 
 	// compileLGB compiles src (a .lg body) to a .lgb with the full binary and
 	// returns the .lgb path.
@@ -84,17 +86,21 @@ func TestRuntimeOnly(t *testing.T) {
 		return lgb
 	}
 
-	run := func(t *testing.T, args ...string) (int, string) {
+	runBin := func(t *testing.T, bin string, args ...string) (int, string) {
 		t.Helper()
-		out, err := exec.Command(runtime, args...).CombinedOutput()
+		out, err := exec.Command(bin, args...).CombinedOutput()
 		if err != nil {
 			var ee *exec.ExitError
 			if !errors.As(err, &ee) {
-				t.Fatalf("run lg-runtime %v: %v\n%s", args, err, out)
+				t.Fatalf("run %s %v: %v\n%s", bin, args, err, out)
 			}
 			return ee.ExitCode(), string(out)
 		}
 		return 0, string(out)
+	}
+	run := func(t *testing.T, args ...string) (int, string) {
+		t.Helper()
+		return runBin(t, runtime, args...)
 	}
 
 	t.Run("runs precompiled program", func(t *testing.T) {
@@ -115,6 +121,48 @@ func TestRuntimeOnly(t *testing.T) {
 		}
 	})
 
+	t.Run("publishes command-line args", func(t *testing.T) {
+		lgb := compileLGB(t, `(prn *command-line-args*)`)
+		code, out := run(t, lgb, "one", "two")
+		if code != 0 || !strings.Contains(out, `("one" "two")`) {
+			t.Fatalf(`want ("one" "two"), got %d:%s`, code, out)
+		}
+		// And nil when there are none — same contract as the full lg.
+		code, out = run(t, lgb)
+		if code != 0 || !strings.Contains(out, "nil") {
+			t.Fatalf("want nil for no args, got %d:%s", code, out)
+		}
+	})
+
+	t.Run("baseline namespace fns are loaded", func(t *testing.T) {
+		// str-join lives in let-go.core, which is auto-refer'd but never
+		// required — it only works if LoadCore replays the baselines eagerly.
+		lgb := compileLGB(t, `(println (str-join "," ["a" "b" "c"]))`)
+		code, out := run(t, lgb)
+		if code != 0 || !strings.Contains(out, "a,b,c") {
+			t.Fatalf("want a,b,c, got %d:\n%s", code, out)
+		}
+	})
+
+	t.Run("runs as standalone bundle base", func(t *testing.T) {
+		dir := t.TempDir()
+		lg := filepath.Join(dir, "app.lg")
+		app := filepath.Join(dir, "app")
+		src := `
+(ns app.main (:require [string]))
+(println (string/upper-case "bundled") *command-line-args*)`
+		if err := os.WriteFile(lg, []byte(src), runtimeOnlyTestFilePerm); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command(full, "-b", app, "-bundle-base", runtime, lg).CombinedOutput(); err != nil {
+			t.Fatalf("bundle with lg-runtime base: %v\n%s", err, out)
+		}
+		code, out := runBin(t, app, "x", "y")
+		if code != 0 || !strings.Contains(out, "BUNDLED (x y)") {
+			t.Fatalf("want BUNDLED (x y), got %d:%s", code, out)
+		}
+	})
+
 	t.Run("rejects source", func(t *testing.T) {
 		lg := filepath.Join(t.TempDir(), "app.lg")
 		if err := os.WriteFile(lg, []byte(`(println :should-never-run)`), runtimeOnlyTestFilePerm); err != nil {
@@ -129,9 +177,10 @@ func TestRuntimeOnly(t *testing.T) {
 		}
 	})
 
-	t.Run("boots with no program", func(t *testing.T) {
-		if code, out := run(t); code != 0 {
-			t.Fatalf("want exit 0 for bare boot, got %d:\n%s", code, out)
+	t.Run("usage on no program", func(t *testing.T) {
+		code, out := run(t)
+		if code != 2 || !strings.Contains(out, "usage:") {
+			t.Fatalf("want usage and exit 2, got %d:\n%s", code, out)
 		}
 	})
 }

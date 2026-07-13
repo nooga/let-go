@@ -21,7 +21,7 @@ var precompiledCoreNS map[string]*vm.CodeChunk
 // core main chunk (which defines all of core), then register the remaining
 // namespace chunks for on-demand loading. It imports only bytecode + vm and
 // touches no compiler code, so it can boot a build where pkg/compiler is not
-// linked (see the runtime_only build). It mirrors the boot fast-path in
+// linked (see cmd/lg-runtime). It mirrors the boot fast-path in
 // pkg/compiler/eval.go (loadPrecompiledBundle), minus the compiler-side pieces
 // (the global const pool for further compilation, and postCoreInit's eval
 // builtins) that a runtime-only build deliberately omits.
