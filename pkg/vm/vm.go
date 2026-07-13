@@ -1108,7 +1108,7 @@ func (f *Frame) Run() (Value, error) {
 			f.ip += 2
 
 		// --- Specialized fast-path opcodes ---
-		// These avoid NativeFn.Invoke, interface boxing, and recoverThrownPanic.
+		// These avoid NativeFn.Invoke, interface boxing, and RecoverPanic.
 		// The compiler emits these for known binary calls to core arithmetic/comparison.
 
 		case OP_ADD:

@@ -67,6 +67,15 @@ func runForm(ctx *compiler.Context, in string) (vm.Value, error) {
 	return val, err
 }
 
+func printResult(value vm.Value) error {
+	rendered, err := vm.SafeString(value)
+	if err != nil {
+		return err
+	}
+	fmt.Println(rendered)
+	return nil
+}
+
 func runFile(ctx *compiler.Context, filename string) error {
 	ctx.SetSource(filename)
 	f, err := os.Open(filename)
@@ -533,11 +542,12 @@ func runMain() int {
 	if expr != "" {
 		context.SetSource("EXPR")
 		val, err := runForm(context, expr)
+		if err == nil {
+			err = printResult(val)
+		}
 		if err != nil {
 			fmt.Print(vm.FormatError(err))
 			runFailed = true
-		} else {
-			fmt.Println(val)
 		}
 		ranSomething = true
 	}

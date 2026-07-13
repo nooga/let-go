@@ -168,7 +168,7 @@ func errorToValue(err error) Value {
 func ErrorToValue(err error) Value { return errorToValue(err) }
 
 // thrownPanic is used to propagate errors through native Go code (map, filter, sort).
-// It's caught by recoverThrownPanic in Func/Closure.Invoke.
+// It's caught by RecoverPanic at VM and top-level host boundaries.
 type thrownPanic struct {
 	err error
 }
@@ -190,11 +190,11 @@ func (e *GoPanicError) Error() string { return fmt.Sprintf("%v", e.value) }
 // GoStack returns the raw Go stack trace captured when the panic was recovered.
 func (e *GoPanicError) GoStack() string { return string(e.stack) }
 
-// recoverThrownPanic catches a thrownPanic and converts it back to an error return.
+// RecoverPanic catches a thrownPanic and converts it back to an error return.
 // It also catches arbitrary Go panics and converts them to ExecutionErrors so that
 // they produce let-go errors instead of crashing with Go stack traces.
-// Call as: defer recoverThrownPanic(&err) at the top of Invoke methods.
-func recoverThrownPanic(errp *error) {
+// Call directly as a deferred function: defer RecoverPanic(&err).
+func RecoverPanic(errp *error) {
 	if r := recover(); r != nil {
 		if tp, ok := r.(*thrownPanic); ok {
 			*errp = tp.err
@@ -211,6 +211,14 @@ func recoverThrownPanic(errp *error) {
 			*errp = &GoPanicError{value: r, stack: stack}
 		}
 	}
+}
+
+// SafeString renders a value across the same panic-to-error boundary used by
+// VM invocation. Printing can realize lazy values, so top-level callers must
+// not call Value.String directly.
+func SafeString(value Value) (result string, err error) {
+	defer RecoverPanic(&err)
+	return value.String(), nil
 }
 
 // innermostMessage extracts the deepest error message from a chain.

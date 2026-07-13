@@ -244,7 +244,7 @@ func (l *NativeFn) HasCtx() bool { return l.ctxProxy != nil }
 
 // invokeCtx runs the context-aware entry point with panic recovery.
 func (l *NativeFn) invokeCtx(ec *ExecContext, args []Value) (ret Value, err error) {
-	defer recoverThrownPanic(&err)
+	defer RecoverPanic(&err)
 	return l.ctxProxy(ec, args)
 }
 
@@ -271,7 +271,7 @@ func (l *NativeFn) Arity() int {
 }
 
 func (l *NativeFn) Invoke(args []Value) (ret Value, err error) {
-	defer recoverThrownPanic(&err)
+	defer RecoverPanic(&err)
 	return l.proxy(args)
 }
 

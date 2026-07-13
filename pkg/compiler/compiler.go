@@ -83,7 +83,8 @@ func (c *Context) SetCurrentNS(ns *vm.Namespace) {
 	rt.CurrentNS.SetRoot(ns)
 }
 
-func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
+func (c *Context) Compile(s string) (chunk *vm.CodeChunk, err error) {
+	defer vm.RecoverPanic(&err)
 	vm.SourceRegistry.Register(c.source, s)
 	r := NewLispReader(strings.NewReader(s), c.source)
 	o, err := r.Read()
@@ -102,7 +103,8 @@ func (c *Context) Compile(s string) (*vm.CodeChunk, error) {
 	return c.chunk, nil
 }
 
-func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, error) {
+func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, result vm.Value, err error) {
+	defer vm.RecoverPanic(&err)
 	// Buffer source for error display
 	srcBytes, err := io.ReadAll(reader)
 	if err != nil {
@@ -112,7 +114,7 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 	vm.SourceRegistry.Register(c.source, src)
 	r := NewLispReader(strings.NewReader(src), c.source)
 	chunk := vm.NewCodeChunk(c.consts)
-	var result vm.Value = vm.NIL
+	result = vm.NIL
 	compiledForms := 0
 	var evalTopForm func(o vm.Value) error
 	evalTopForm = func(o vm.Value) error {

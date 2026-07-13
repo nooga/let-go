@@ -122,7 +122,9 @@ func letGoStackFrames(stack string) string {
 	shown := 0
 	for i := 0; i+1 < len(lines) && shown < 8; i++ {
 		fn := strings.TrimSpace(lines[i])
-		if !strings.Contains(fn, repo) || strings.Contains(fn, "recoverThrownPanic") {
+		if !strings.Contains(fn, repo) ||
+			strings.Contains(fn, "recoverThrownPanic") ||
+			strings.Contains(fn, "RecoverPanic") {
 			continue
 		}
 		loc := strings.TrimSpace(lines[i+1])

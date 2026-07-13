@@ -164,10 +164,11 @@ func repl(ctx *compiler.Context) {
 
 		ctx.SetSource("REPL")
 		val, err := runForm(ctx, line)
+		if err == nil {
+			err = printResult(val)
+		}
 		if err != nil {
 			fmt.Print(vm.FormatError(err))
-		} else {
-			fmt.Println(val.String())
 		}
 	}
 }
