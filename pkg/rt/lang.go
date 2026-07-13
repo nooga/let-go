@@ -8525,7 +8525,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// not exercised under let-go. Resolve the constructor so the namespace can
 	// compile, but fail loudly rather than returning a fake Java exception.
 	exceptionCtorStub, err := vm.NativeFnType.Wrap(func([]vm.Value) (vm.Value, error) {
-		return vm.NIL, fmt.Errorf("Exception. is unavailable under let-go")
+		return vm.NIL, fmt.Errorf("the Exception. constructor is unavailable under let-go")
 	})
 	if err != nil {
 		panic(err)
