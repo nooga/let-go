@@ -8,8 +8,7 @@ human-verified:
 
 let-go builds to a standalone WASI module with the standard Go toolchain — no
 TinyGo, no build tags beyond the target. The result runs under any wasip1 host
-(wasmtime, wazero, …) as a headless compute + stdio runtime, with full 64-bit
-integer fidelity.
+(wasmtime, wazero, …) as a headless runtime with full 64-bit integer fidelity.
 
 ## Build
 
@@ -43,29 +42,27 @@ $ wasmtime lg.wasm -e '(bit-shift-left 1 62)'
 
 ## TinyGo
 
-This guide covers the standard Go toolchain. TinyGo's `-target=wasi` is also
-`GOOS=wasip1`, so the gating here applies, but building let-go under TinyGo needs
-additional reflect shims (boxing and method dispatch) that are not part of this
-build — without them, stock TinyGo 0.41.1 traps at initialization with
-`unimplemented: (reflect.Type).Method()` before running any code. TinyGo support
-is tracked separately.
+This guide covers the standard Go toolchain, which is what builds let-go as a
+wasip1 module. TinyGo's `-target=wasi` is also `GOOS=wasip1`, but it does not
+build let-go as-is: stock TinyGo 0.41.1 traps at initialization with
+`unimplemented: (reflect.Type).Method()` before running any code, because the
+runtime's reflect-based boxing isn't available there. So the build here is the
+standard-Go one.
 
-When that enablement is in place, TinyGo trades the ~24 MB standard-Go module
-for a much smaller one (~9 MB), but its wasm `int` is 32-bit, so 64-bit
-arithmetic overflows (let-go traps on overflow rather than wrapping — loud, not
-silently corrupting). Use the standard-Go build when numeric correctness matters,
-which is the general case for a Clojure dialect.
+## Capabilities
 
-## Limits
-
-wasip1 is compute + stdio only. Specifically:
+The module has no ambient authority; a wasip1 host grants what it needs.
 
 - **No `term` namespace.** The interactive terminal is excluded, so there is no
   `term` ns under wasip1; requiring it reports `unable to load namespace term`
-  rather than failing hard. Fine for headless eval and embedding; a TUI-over-wasi
-  would need a headless `term` stub (future work).
+  rather than failing hard. A TUI-over-wasi would need a headless `term` stub
+  (future work).
+- **Filesystem is host-controlled.** Nothing is reachable by default, but the
+  host can preopen directories — e.g. `wasmtime --dir=/tmp lg.wasm …` — and
+  `slurp` and other file operations then see them. This is the WASI capability
+  model: opt-in, host-granted, no ambient filesystem.
 - **No sockets, no threads.** The wasip1 preview is single-threaded with no
-  network. Compute and stdio only.
+  network.
 
 For loading the module from a Go host rather than a CLI runtime, see
 [embedding in Go](embedding-in-go.md); for the I/O seams the host binds, see
