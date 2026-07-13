@@ -964,19 +964,38 @@ func tryCompiler(c *Context, form vm.Value) error {
 		}
 	}
 
-	// Normal completion: pop handler, jump over catch
+	// Layout (see exHandler/handleError in pkg/vm for the runtime side):
+	//
+	//   TRY_PUSH catchOff finOff       ; either offset 0 means "absent"
+	//     <body>
+	//   TRY_POP                        ; normal completion retires the handler
+	//   JUMP finally (or after)
+	//   catch:                         ; only when hasCatch
+	//     <bind, catch body>
+	//   TRY_POP                        ; only when a finally follows: the
+	//                                  ; handler outlives catch entry so a
+	//                                  ; throw from the catch body routes
+	//                                  ; through the finally
+	//   finally:                       ; single copy, shared by both paths
+	//     <finally forms>
+	//   FINALLY_END finallyOff         ; abnormal entry: rethrow the pending
+	//   after:                         ; error; normal entry: no-op
+	//
+	// The normal path enters the finally with the try/catch result on the
+	// stack; an abnormal entry (handleError) cuts the stack to savedSP and
+	// pushes a placeholder so both paths run the finally at the same depth.
+	// FINALLY_END carries the finally address so it can tell its own
+	// abnormally-entered handler from an outer one that is also mid-finally.
+	hasFinally := len(finallyForms) > 0
+
+	// Normal completion: pop handler, jump to the finally (or the end)
 	c.emit(vm.OP_TRY_POP)
 	jumpOverCatchAddr := c.currentAddress()
 	c.emitWithArg(vm.OP_JUMP, 0) // placeholder
 
-	// Catch block starts here
+	// Catch block starts here. The VM restored SP to savedSP and pushed the
+	// thrown value, so the runtime SP matches the static sp (savedSP+1).
 	catchAddr := c.currentAddress()
-
-	// At this point, the VM has pushed the thrown value on the stack
-	// and restored SP to savedSP before pushing, so sp == savedSP+1.
-	// We need to account for that in our SP tracking.
-	// The body left SP at savedSP+1 (body result), but the VM restored to savedSP
-	// and pushed the thrown value, so the net SP is the same.
 
 	if hasCatch {
 		// Bind the thrown value as a local
@@ -1004,25 +1023,28 @@ func tryCompiler(c *Context, form vm.Value) error {
 		c.emitWithArg(vm.OP_POP_N, 1)
 		c.decSP(1)
 		c.popLocals()
+
+		if hasFinally {
+			// The handler survived catch entry (handleError keeps it when a
+			// finally exists); retire it now that the catch completed, then
+			// fall through into the finally.
+			c.emit(vm.OP_TRY_POP)
+		}
 	}
-	// else: no catch, the thrown value is already on stack as the result
 
-	// Patch jump-over-catch
-	afterCatch := c.currentAddress()
-	c.chunk.Update32(jumpOverCatchAddr+1, int32(afterCatch-jumpOverCatchAddr))
+	// catchOffset stays 0 (sentinel: no catch) for a finally-only try, so a
+	// throw in the body routes to the finally instead of swallowing the error.
+	if hasCatch {
+		c.chunk.Update32(tryPushAddr+1, int32(catchAddr-tryPushAddr))
+	}
 
-	// Patch TRY_PUSH catchOffset (relative to TRY_PUSH instruction)
-	c.chunk.Update32(tryPushAddr+1, int32(catchAddr-tryPushAddr))
-
-	// Finally block (if present)
-	if len(finallyForms) > 0 {
+	if hasFinally {
 		finallyAddr := c.currentAddress()
-		// Patch TRY_PUSH finallyOffset
 		c.chunk.Update32(tryPushAddr+2, int32(finallyAddr-tryPushAddr))
+		c.chunk.Update32(jumpOverCatchAddr+1, int32(finallyAddr-jumpOverCatchAddr))
 
 		for i, ff := range finallyForms {
-			err := c.compileForm(ff)
-			if err != nil {
+			if err := c.compileForm(ff); err != nil {
 				return err
 			}
 			if i < len(finallyForms)-1 {
@@ -1030,9 +1052,16 @@ func tryCompiler(c *Context, form vm.Value) error {
 				c.decSP(1)
 			}
 		}
-		// Discard finally result, keep try/catch result
+		// Discard the finally result, keep the try/catch result (or the
+		// abnormal-entry placeholder).
 		c.emit(vm.OP_POP)
 		c.decSP(1)
+
+		finallyEndAddr := c.currentAddress()
+		c.emitWithArg(vm.OP_FINALLY_END, finallyAddr-finallyEndAddr)
+	} else {
+		afterAddr := c.currentAddress()
+		c.chunk.Update32(jumpOverCatchAddr+1, int32(afterAddr-jumpOverCatchAddr))
 	}
 
 	c.tailPosition = tc

@@ -72,6 +72,8 @@ const (
 	OP_QUOT // quot — integer quotient, truncated toward zero (2 args)
 	OP_DIV  // / — true division; int/int yields a Ratio (or Int when exact), any float yields Float (2 args)
 
+	OP_FINALLY_END // end of a finally block (finallyOffset int32, negative): rethrow the pending error after an abnormal entry
+
 	OP_COUNT // sentinel — keep last; must equal len(opcodeNames) (enforced at init)
 )
 
@@ -125,6 +127,7 @@ var opcodeNames = []string{
 	"BIT_NOT",
 	"QUOT",
 	"DIV",
+	"FINALLY_END",
 }
 
 // A new opcode must land in both the const block and opcodeNames; the
@@ -233,7 +236,7 @@ func (c *CodeChunk) Debug() {
 			arg3, _ := c.Get32(i + 3)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2, arg3)
 			i += 4
-		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY, OP_TAIL_CALL:
+		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY, OP_TAIL_CALL, OP_FINALLY_END:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 2
@@ -360,9 +363,10 @@ func (c *CodeChunk) GetSourceMap() *SourceMap { return c.sourceMap }
 func (c *CodeChunk) Consts() *Consts { return c.consts }
 
 type exHandler struct {
-	catchIP   int // absolute IP of catch block
-	finallyIP int // absolute IP of finally block (-1 if none)
-	savedSP   int // stack depth to restore
+	catchIP   int   // absolute IP of catch block (-1 if none, or already consumed)
+	finallyIP int   // absolute IP of the abnormal-path finally block (-1 if none)
+	savedSP   int   // stack depth to restore
+	pending   error // in-flight error while the abnormal finally runs (nil otherwise)
 }
 
 // Frame is a single interpreter context
@@ -549,14 +553,47 @@ func (f *Frame) stackDbg() {
 
 // handleError checks if there's an active try/catch handler and dispatches to it.
 // Returns true if the error was handled (caller should continue the dispatch loop).
+//
+// Handler protocol (see tryCompiler for the emitted layout):
+//   - An armed catch (catchIP >= 0) receives the error value. Entering it
+//     consumes the catch; the handler stays on the stack when a finally
+//     exists so a throw from the catch body still routes through it.
+//   - With no armed catch but a finally, control enters the abnormal-path
+//     finally copy with the error parked in pending; OP_RETHROW at its end
+//     re-dispatches the parked error.
+//   - A throw escaping an abnormal finally (pending != nil) replaces the
+//     in-flight error: the handler is discarded and unwinding continues
+//     with the new error.
 func (f *Frame) handleError(err error) bool {
-	if len(f.handlers) > 0 {
-		h := f.handlers[len(f.handlers)-1]
+	for len(f.handlers) > 0 {
+		h := &f.handlers[len(f.handlers)-1]
+		if h.pending != nil {
+			f.handlers = f.handlers[:len(f.handlers)-1]
+			continue
+		}
+		if h.catchIP >= 0 {
+			catchIP := h.catchIP
+			savedSP := h.savedSP
+			h.catchIP = -1
+			if h.finallyIP < 0 {
+				f.handlers = f.handlers[:len(f.handlers)-1]
+			}
+			f.sp = savedSP
+			f.push(errorToValue(err))
+			f.ip = catchIP
+			return true
+		}
+		if h.finallyIP >= 0 {
+			h.pending = err
+			f.sp = h.savedSP
+			// The finally block is shared with the normal path, which enters
+			// it with the try/catch result on the stack. Push a placeholder
+			// so locals inside the finally resolve to the same slots.
+			f.push(NIL)
+			f.ip = h.finallyIP
+			return true
+		}
 		f.handlers = f.handlers[:len(f.handlers)-1]
-		f.sp = h.savedSP
-		f.push(errorToValue(err))
-		f.ip = h.catchIP
-		return true
 	}
 	return false
 }
@@ -667,12 +704,7 @@ func (f *Frame) Run() (Value, error) {
 				if err != nil {
 					srcInfo := f.code.LookupSource(f.ip)
 					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
-					if len(f.handlers) > 0 {
-						h := f.handlers[len(f.handlers)-1]
-						f.handlers = f.handlers[:len(f.handlers)-1]
-						f.sp = h.savedSP
-						f.push(errorToValue(wrapped))
-						f.ip = h.catchIP
+					if f.handleError(wrapped) {
 						continue
 					}
 					return NIL, wrapped
@@ -694,12 +726,7 @@ func (f *Frame) Run() (Value, error) {
 				if err != nil {
 					srcInfo := f.code.LookupSource(f.ip)
 					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
-					if len(f.handlers) > 0 {
-						h := f.handlers[len(f.handlers)-1]
-						f.handlers = f.handlers[:len(f.handlers)-1]
-						f.sp = h.savedSP
-						f.push(errorToValue(wrapped))
-						f.ip = h.catchIP
+					if f.handleError(wrapped) {
 						continue
 					}
 					return NIL, wrapped
@@ -732,12 +759,7 @@ func (f *Frame) Run() (Value, error) {
 					if err != nil {
 						srcInfo := f.code.LookupSource(f.ip)
 						wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
-						if len(f.handlers) > 0 {
-							h := f.handlers[len(f.handlers)-1]
-							f.handlers = f.handlers[:len(f.handlers)-1]
-							f.sp = h.savedSP
-							f.push(errorToValue(wrapped))
-							f.ip = h.catchIP
+						if f.handleError(wrapped) {
 							continue
 						}
 						return NIL, wrapped
@@ -796,12 +818,7 @@ func (f *Frame) Run() (Value, error) {
 					if err != nil {
 						srcInfo := f.code.LookupSource(f.ip)
 						wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
-						if len(f.handlers) > 0 {
-							h := f.handlers[len(f.handlers)-1]
-							f.handlers = f.handlers[:len(f.handlers)-1]
-							f.sp = h.savedSP
-							f.push(errorToValue(wrapped))
-							f.ip = h.catchIP
+						if f.handleError(wrapped) {
 							continue
 						}
 						return NIL, wrapped
@@ -1039,7 +1056,12 @@ func (f *Frame) Run() (Value, error) {
 		case OP_TRY_PUSH:
 			catchOffset := f.code.code[f.ip+1]
 			finallyOffset := f.code.code[f.ip+2]
-			catchIP := f.ip + int(catchOffset)
+			// Offset 0 is a sentinel for "absent": a finally-only try has no
+			// catch block, and a throw must route to the finally, then rethrow.
+			catchIP := -1
+			if catchOffset != 0 {
+				catchIP = f.ip + int(catchOffset)
+			}
 			finallyIP := -1
 			if finallyOffset != 0 {
 				finallyIP = f.ip + int(finallyOffset)
@@ -1060,15 +1082,30 @@ func (f *Frame) Run() (Value, error) {
 		case OP_THROW:
 			v, _ := f.pop()
 			thrown := NewThrownError(v)
-			if len(f.handlers) > 0 {
-				h := f.handlers[len(f.handlers)-1]
-				f.handlers = f.handlers[:len(f.handlers)-1]
-				f.sp = h.savedSP
-				f.push(v)
-				f.ip = h.catchIP
+			if f.handleError(thrown) {
 				continue
 			}
 			return NIL, thrown
+
+		case OP_FINALLY_END:
+			// End of a finally block. On a normal entry this is a no-op; the
+			// handler was already retired by TRY_POP. After an abnormal entry
+			// the try's own handler is still on top with the error parked in
+			// pending (handleError keeps it), so resume unwinding with it.
+			// Ownership is checked by finally address: an OUTER handler may
+			// also carry a pending error while this try runs normally inside
+			// that handler's finally, and it must not be resumed from here.
+			if n := len(f.handlers); n > 0 {
+				h := f.handlers[n-1]
+				if h.pending != nil && h.finallyIP == f.ip+int(f.code.code[f.ip+1]) {
+					f.handlers = f.handlers[:n-1]
+					if f.handleError(h.pending) {
+						continue
+					}
+					return NIL, h.pending
+				}
+			}
+			f.ip += 2
 
 		// --- Specialized fast-path opcodes ---
 		// These avoid NativeFn.Invoke, interface boxing, and recoverThrownPanic.
