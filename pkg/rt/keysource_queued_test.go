@@ -6,6 +6,7 @@
 package rt
 
 import (
+	"errors"
 	"io"
 	"reflect"
 	"testing"
@@ -35,6 +36,15 @@ func (c *chunkReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// testGrace is a short inter-byte grace so timing-dependent cases resolve fast.
+const testGrace = 15 * time.Millisecond
+
+// newSource builds a queued source over r with the test grace. Constructs the
+// unexported type directly (same package) so tests can shorten the grace.
+func newSource(r io.Reader) *queuedKeySource {
+	return &queuedKeySource{r: r, notify: make(chan struct{}, 1), grace: testGrace}
+}
+
 // feed returns a queued source over the given chunks, delivered in order then
 // EOF. All chunks are queued up front, so ReadKey sees end-of-input after the
 // last one.
@@ -44,7 +54,7 @@ func feed(chunks ...[]byte) KeySource {
 		ch <- c
 	}
 	close(ch)
-	return NewQueuedKeySource(&chunkReader{ch: ch})
+	return newSource(&chunkReader{ch: ch})
 }
 
 // readAll drains keys until the EOF nil contract ("") and returns the tokens.
@@ -105,31 +115,101 @@ func TestQueuedKeySourceTokenizes(t *testing.T) {
 	}
 }
 
-// TestQueuedKeySourceStitchesWhileBlocked drives the wait-for-more path
-// deterministically: the partial CSI arrives while ReadKey is already parked, so
-// ReadKey must wait for the completing byte and stitch, not emit "\x1b[".
-func TestQueuedKeySourceStitchesWhileBlocked(t *testing.T) {
-	ch := make(chan []byte) // unbuffered: each send blocks until the reader takes it
-	ks := NewQueuedKeySource(&chunkReader{ch: ch})
+// TestQueuedKeySourceStitchesAcrossReads drives the wait-for-more path
+// deterministically: an arrow arrives byte-by-byte over an open channel — the
+// worst case the review called out (ESC, then [, then A as separate reads).
+// ReadKey must stitch it into one token, not emit ESC early and split the rest.
+func TestQueuedKeySourceStitchesAcrossReads(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		chunks []string
+		want   string
+	}{
+		{"esc bracket A separately", []string{"\x1b", "[", "A"}, "\x1b[A"},
+		{"esc then bracket-A", []string{"\x1b", "[A"}, "\x1b[A"},
+		{"esc-bracket then A", []string{"\x1b[", "A"}, "\x1b[A"},
+		{"utf8 byte by byte", []string{"\xe2", "\x8c", "\x98"}, "⌘"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := make(chan []byte) // unbuffered: each send blocks until read
+			ks := newSource(&chunkReader{ch: ch})
+			res := make(chan string, 1)
+			go func() {
+				k, _ := ks.ReadKey()
+				res <- k
+			}()
+			for _, c := range tc.chunks {
+				ch <- []byte(c) // each byte arrives within the inter-byte grace
+			}
+			select {
+			case got := <-res:
+				if got != tc.want {
+					t.Errorf("stitched token = %q, want %q", got, tc.want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("ReadKey did not return after the sequence completed")
+			}
+			close(ch)
+		})
+	}
+}
+
+// TestQueuedKeySourceBareEscEmitsAfterGrace: a lone ESC with no completing byte
+// (channel stays open, so no EOF short-circuit) must resolve to the Escape key
+// once the inter-byte grace expires — not hang, and not split.
+func TestQueuedKeySourceBareEscEmitsAfterGrace(t *testing.T) {
+	ch := make(chan []byte, 1)
+	ks := newSource(&chunkReader{ch: ch})
+	ch <- []byte("\x1b") // no close — reader blocks after this, done stays false
 
 	res := make(chan string, 1)
 	go func() {
 		k, _ := ks.ReadKey()
 		res <- k
 	}()
-
-	ch <- []byte("\x1b[") // reader appends; ReadKey wakes, sees keyNeedMore, waits
-	ch <- []byte("A")     // completes the sequence; ReadKey stitches and returns
-
 	select {
 	case got := <-res:
-		if got != "\x1b[A" {
-			t.Errorf("stitched token = %q, want %q", got, "\x1b[A")
+		if got != "\x1b" {
+			t.Errorf("bare ESC = %q, want %q", got, "\x1b")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("ReadKey did not return after the sequence completed")
+		t.Fatal("bare ESC never resolved — likely parked waiting for more bytes")
 	}
 	close(ch)
+}
+
+// TestQueuedKeySourceReaderErrorPropagates: a non-EOF reader error must surface
+// through ReadKey's error return after buffered bytes drain, not be swallowed as
+// a clean EOF.
+func TestQueuedKeySourceReaderErrorPropagates(t *testing.T) {
+	wantErr := errors.New("console read failed")
+	ks := newSource(&errAfterReader{data: []byte("ab"), err: wantErr})
+
+	// The bytes that arrived before the error still tokenize.
+	for _, want := range []string{"a", "b"} {
+		if k, err := ks.ReadKey(); k != want || err != nil {
+			t.Fatalf("ReadKey = (%q, %v), want (%q, nil)", k, err, want)
+		}
+	}
+	// Then the retained error surfaces.
+	if k, err := ks.ReadKey(); k != "" || err != wantErr {
+		t.Fatalf("ReadKey at error = (%q, %v), want (\"\", %v)", k, err, wantErr)
+	}
+}
+
+// errAfterReader yields data once, then returns err on the next read.
+type errAfterReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *errAfterReader) Read(p []byte) (int, error) {
+	if !r.done {
+		r.done = true
+		return copy(p, r.data), nil
+	}
+	return 0, r.err
 }
 
 // TestQueuedKeySourceKeyPending verifies the non-blocking, eof-blind peek:

@@ -8,6 +8,7 @@ package rt
 import (
 	"io"
 	"sync"
+	"time"
 )
 
 // queuedKeySource is a KeySource for hosts without a non-blocking input peek: a
@@ -26,12 +27,24 @@ import (
 // bytes stolen from the source that replaced it.
 type queuedKeySource struct {
 	mu      sync.Mutex
-	cond    *sync.Cond
 	r       io.Reader
-	buf     []byte // read but not yet tokenized out
-	eof     bool
-	started bool
+	buf     []byte        // read but not yet tokenized out
+	err     error         // sticky reader error; nil for a clean EOF
+	done    bool          // reader finished (EOF or error) — no more bytes coming
+	started bool          // reader goroutine launched
+	notify  chan struct{} // buffered(1) wakeup; reader signals on append/done
+	grace   time.Duration // inter-byte wait for stitching a split escape sequence
 }
+
+// escGrace bounds how long ReadKey waits for the rest of an incomplete escape
+// (or UTF-8) sequence before emitting what it has. It's the classic terminal
+// "ESC delay": long enough to stitch a sequence split across reads on a slow
+// transport (drawterm/9P), short enough that a bare Escape key still registers
+// promptly. Only an incomplete front token pays it — a complete key returns with
+// zero added latency. Without it, distinguishing a bare ESC from the start of a
+// split arrow is impossible on a host with no FIONREAD peek (a lone ESC would
+// either be emitted too eagerly, breaking split arrows, or waited on forever).
+const escGrace = 40 * time.Millisecond
 
 // NewQueuedKeySource returns a KeySource that reads keys from r via a background
 // goroutine and a buffered queue, so KeyPending is non-blocking on platforms
@@ -39,9 +52,7 @@ type queuedKeySource struct {
 // first ReadKey/KeyPending, so binding this at *keys* without ever consulting it
 // (e.g. when api.WithKeySource overrides it) reads nothing.
 func NewQueuedKeySource(r io.Reader) KeySource {
-	s := &queuedKeySource{r: r}
-	s.cond = sync.NewCond(&s.mu)
-	return s
+	return &queuedKeySource{r: r, notify: make(chan struct{}, 1), grace: escGrace}
 }
 
 // queuedReadChunkSize matches native's readChunkSize: a blocking Read returns as
@@ -58,9 +69,21 @@ func (s *queuedKeySource) start() {
 	go s.readLoop()
 }
 
+// signal wakes a waiting ReadKey without blocking; the buffered channel
+// coalesces bursts, and ReadKey re-checks the buffer under the lock after each
+// wake, so a dropped (already-pending) signal is never a missed update.
+func (s *queuedKeySource) signal() {
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
+}
+
 // readLoop blocks on r.Read WITHOUT holding the lock, then locks only to append
-// the chunk and wake a waiter. Runs until EOF or a read error, which it records
-// as eof so a parked ReadKey unblocks with the nil contract.
+// the chunk and wake a waiter. On a read error it retains the error (draining
+// any bytes that came with it) and stops; io.EOF is a clean end, recorded as a
+// nil error so ReadKey returns the "" contract. A (0, nil) read is not EOF (the
+// io.Reader contract) — it loops and reads again.
 func (s *queuedKeySource) readLoop() {
 	chunk := make([]byte, queuedReadChunkSize)
 	for {
@@ -69,55 +92,95 @@ func (s *queuedKeySource) readLoop() {
 		if n > 0 {
 			s.buf = append(s.buf, chunk[:n]...)
 		}
-		if err != nil || n == 0 {
-			s.eof = true
-			s.cond.Broadcast()
+		if err != nil {
+			if err != io.EOF {
+				s.err = err
+			}
+			s.done = true
 			s.mu.Unlock()
+			s.signal()
 			return
 		}
-		s.cond.Broadcast()
 		s.mu.Unlock()
+		if n > 0 {
+			s.signal()
+		}
 	}
 }
 
-// ReadKey blocks until a whole key token is available (or EOF), tokenizing one
-// key per call off the shared buffer via scanKey. "" signals end-of-input (the
-// read-key nil contract). Blocking here matches native (which blocks in poll);
-// callers stay responsive by gating on KeyPending first.
+// ReadKey blocks until a whole key token is available (or the reader ends),
+// tokenizing one key per call off the shared buffer via scanKey. It returns ""
+// with a nil error at a clean EOF (the read-key nil contract), or "" with the
+// retained error if the reader failed. Blocking here matches native (which
+// blocks in poll); callers stay responsive by gating on KeyPending first.
 func (s *queuedKeySource) ReadKey() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.start()
-	for len(s.buf) == 0 && !s.eof {
-		s.cond.Wait()
+
+	for len(s.buf) == 0 && !s.done {
+		s.waitLocked(0) // no deadline: block until data or reader end
 	}
 	if len(s.buf) == 0 {
-		return "", nil // EOF
+		return "", s.err // clean EOF (err nil) or a real reader failure
 	}
+
+	var deadline time.Time // set on the first incomplete front token
 	for {
 		status, n := scanKey(s.buf)
-		if status == keyNeedMore && n > 1 && !s.eof {
-			// A multi-byte token (CSI/SS3/UTF-8) split across reader chunks —
-			// short reads are normal over a network transport like 9P/drawterm.
-			// Wait for one more append, then re-scan to stitch it, rather than
-			// emitting a broken partial that would desync every following key.
-			// Bounded: each wait adds bytes (progress) or hits eof (then emit
-			// best-effort below). A lone ESC (scanKey → keyNeedMore, 1) is
-			// deliberately NOT waited on — it is the Escape key, emitted now
-			// rather than parked until the next keypress.
-			before := len(s.buf)
-			for len(s.buf) == before && !s.eof {
-				s.cond.Wait()
-			}
-			continue
+		if status == keyReady || s.done {
+			// Complete token, or the reader ended so no completion is coming —
+			// emit best-effort (a lone ESC at EOF is the Escape key; a truncated
+			// sequence surfaces rather than hangs).
+			return s.take(n), nil
 		}
-		tok := string(s.buf[:n])
-		s.buf = s.buf[n:]
-		if len(s.buf) == 0 {
-			s.buf = nil // release the backing array once drained
+		// keyNeedMore and the reader is still live: a front token split across
+		// reads. Wait for more bytes up to the grace period, then re-scan; if the
+		// grace expires with no completion, emit what we have. This is what makes
+		// a bare ESC vs. a split arrow decidable without a FIONREAD peek. The
+		// grace is inter-byte — each byte that arrives resets it — so a sequence
+		// dribbling in over a slow transport keeps stitching, while a truly bare
+		// ESC (nothing more within one grace window) emits as the Escape key.
+		if deadline.IsZero() {
+			deadline = time.Now().Add(s.grace)
 		}
-		return tok, nil
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return s.take(n), nil
+		}
+		before := len(s.buf)
+		s.waitLocked(remaining)
+		if len(s.buf) > before {
+			deadline = time.Time{} // new bytes — restart the inter-byte window
+		}
 	}
+}
+
+// take slices the front n bytes off the buffer as a token, releasing the backing
+// array once drained. Called with s.mu held.
+func (s *queuedKeySource) take(n int) string {
+	tok := string(s.buf[:n])
+	s.buf = s.buf[n:]
+	if len(s.buf) == 0 {
+		s.buf = nil
+	}
+	return tok
+}
+
+// waitLocked releases the lock, waits for a reader wake (or the timeout, if
+// nonzero), and re-acquires it — the condition-variable wait, done over a
+// channel so it can be time-bounded. Called with s.mu held; returns holding it.
+func (s *queuedKeySource) waitLocked(timeout time.Duration) {
+	s.mu.Unlock()
+	if timeout > 0 {
+		select {
+		case <-s.notify:
+		case <-time.After(timeout):
+		}
+	} else {
+		<-s.notify
+	}
+	s.mu.Lock()
 }
 
 // KeyPending reports whether a key is buffered and ready, without consuming it.
