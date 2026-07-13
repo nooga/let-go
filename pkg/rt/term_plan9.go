@@ -310,12 +310,30 @@ func installTermNS() {
 	})
 	ns.Def("char-width", charWidth)
 
-	// flush — sync the active *out* binding (see term.go for rationale).
+	// flush — sync the active *out* binding, mirroring native term.go (#308).
+	// Plan 9 has no fsync on a console/pipe: Sync there fails with "bad arg in
+	// system call", and flushing such an fd is a no-op. Swallow that for a
+	// file-backed *out* (on Plan 9 that's the console/pipe). A non-file-backed
+	// embedder writer's Sync goes through Flush() and still surfaces its own
+	// errors. Native swallows the specific errnos (ENOTTY/EBADF/EINVAL); Plan 9
+	// errors are strings, not errno constants, so we can't errno-match and
+	// swallow all file-backed sync errors instead.
 	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		var (
+			err        error
+			fileBacked bool
+		)
 		if h := resolveIOHandleVar(ec, "*out*"); h != nil {
-			return vm.NIL, h.Sync()
+			err = h.Sync()
+			fileBacked = h.File() != nil
+		} else {
+			err = os.Stdout.Sync()
+			fileBacked = true
 		}
-		return vm.NIL, os.Stdout.Sync()
+		if fileBacked {
+			err = nil
+		}
+		return vm.NIL, err
 	})
 	ns.Def("flush", flushFn)
 
