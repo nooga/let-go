@@ -241,8 +241,14 @@ func (r *NSResolver) loadEmbedded(name string) *vm.Namespace {
 	}
 
 	if name == "term" {
-		// term is a pure Go namespace, already registered in init()
-		return rt.NS("term")
+		// term is a pure-Go namespace installed at init() on platforms that
+		// have an installTermNS (see pkg/rt/term*.go). When it isn't installed —
+		// e.g. wasip1, where the interactive terminal is build-tagged out —
+		// there is nothing to load: return the registered ns if present, else
+		// nil so the require reports term unavailable. Must be a non-registering
+		// lookup; rt.NS would re-register a placeholder and re-enter the loader
+		// (infinite recursion → "call stack exhausted").
+		return rt.LookupNS("term")
 	}
 	src, ok := rt.EmbeddedSource(name)
 	if !ok || src == "" {

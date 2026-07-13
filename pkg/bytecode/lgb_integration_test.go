@@ -269,3 +269,33 @@ func TestLGBParity(t *testing.T) {
 		(prn #inst "2024-01-01T00:00:00.123456789Z")
 	`)
 }
+
+// TestRequireUnregisteredTermReportsUnavailable guards the wasip1 regression
+// from nooga/let-go#466: gating pkg/rt/term.go off wasip1 leaves no
+// installTermNS, so `term` is never registered. loadEmbedded's term special
+// case must report it unavailable via a non-registering lookup; the previous
+// rt.NS("term") re-registered a placeholder and re-entered the loader,
+// recursing until the wasm stack was exhausted. Simulated here by removing the
+// natively-installed term ns and requiring it — expect a clean error, not a
+// stack overflow.
+func TestRequireUnregisteredTermReportsUnavailable(t *testing.T) {
+	consts := vm.NewConsts()
+	ctx := compiler.NewCompiler(consts, rt.NS("user"))
+	rt.SetNSLoader(resolver.NewNSResolver(ctx, []string{"."}))
+	ctx.SetSource("<test>")
+
+	// Drop the natively-installed term ns to mimic a platform without an
+	// installTermNS (e.g. wasip1), then restore it so other tests are unaffected.
+	saved := rt.LookupNS("term")
+	rt.RemoveNS("term")
+	defer func() {
+		if saved != nil {
+			rt.RegisterNS(saved)
+		}
+	}()
+
+	_, _, err := ctx.CompileMultiple(strings.NewReader("(require 'term)"))
+	if err == nil {
+		t.Fatal("requiring an unregistered term ns should error, got nil (regressed to the recursive loader path?)")
+	}
+}
