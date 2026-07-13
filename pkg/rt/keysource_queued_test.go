@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -252,4 +253,19 @@ func eventually(cond func() bool) bool {
 		time.Sleep(time.Millisecond)
 	}
 	return cond()
+}
+
+// TestQueuedKeySourceGraceEnvOverride: NewQueuedKeySource honors
+// LETGO_ESC_GRACE_MS when it holds a positive integer, and falls back to the
+// default for empty/invalid values. Reads the unexported grace directly (same
+// package) since it isn't otherwise observable.
+func TestQueuedKeySourceGraceEnvOverride(t *testing.T) {
+	t.Setenv("LETGO_ESC_GRACE_MS", "120")
+	if g := NewQueuedKeySource(strings.NewReader("")).(*queuedKeySource).grace; g != 120*time.Millisecond {
+		t.Fatalf("grace = %v, want 120ms", g)
+	}
+	t.Setenv("LETGO_ESC_GRACE_MS", "nonsense")
+	if g := NewQueuedKeySource(strings.NewReader("")).(*queuedKeySource).grace; g != escGrace {
+		t.Fatalf("invalid override: grace = %v, want default %v", g, escGrace)
+	}
 }

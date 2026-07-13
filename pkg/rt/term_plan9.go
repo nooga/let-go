@@ -64,7 +64,16 @@ func readEnvInt(name string, def int) int {
 // analogue of native's "is stdin a TTY" gate.
 func stdinIsConsole() bool {
 	p, err := syscall.Fd2path(0)
-	return err == nil && p == "/dev/cons"
+	if err != nil {
+		return false
+	}
+	// The cons device is /dev/cons in a normal namespace, but it can surface
+	// under another path: 9front reports the raw device path #c/cons when /dev
+	// isn't bound over the cons device, and a console reached through a different
+	// mount carries that mount's prefix (…/dev/cons). Match those forms rather
+	// than one hard-coded string, while still rejecting the pipe (#|/data) and
+	// redirected-file stdins this gate exists to catch.
+	return p == "#c/cons" || strings.HasSuffix(p, "/dev/cons")
 }
 
 func init() { RegisterInstaller(installTermNS) }

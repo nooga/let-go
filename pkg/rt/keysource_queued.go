@@ -7,6 +7,8 @@ package rt
 
 import (
 	"io"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -36,15 +38,33 @@ type queuedKeySource struct {
 	grace   time.Duration // inter-byte wait for stitching a split escape sequence
 }
 
-// escGrace bounds how long ReadKey waits for the rest of an incomplete escape
-// (or UTF-8) sequence before emitting what it has. It's the classic terminal
-// "ESC delay": long enough to stitch a sequence split across reads on a slow
-// transport (drawterm/9P), short enough that a bare Escape key still registers
-// promptly. Only an incomplete front token pays it — a complete key returns with
-// zero added latency. Without it, distinguishing a bare ESC from the start of a
-// split arrow is impossible on a host with no FIONREAD peek (a lone ESC would
-// either be emitted too eagerly, breaking split arrows, or waited on forever).
+// escGrace is the default bound on how long ReadKey waits for the rest of an
+// incomplete escape (or UTF-8) sequence before emitting what it has. It's the
+// classic terminal "ESC delay": long enough to stitch a sequence split across
+// reads on a slow transport (drawterm/9P), short enough that a bare Escape key
+// still registers promptly. Only an incomplete front token pays it — a complete
+// key returns with zero added latency. Without it, distinguishing a bare ESC
+// from the start of a split arrow is impossible on a host with no FIONREAD peek
+// (a lone ESC would either be emitted too eagerly, breaking split arrows, or
+// waited on forever).
 const escGrace = 40 * time.Millisecond
+
+// escGraceEnv overrides escGrace, in milliseconds, for slow/high-latency
+// transports — drawterm over a WAN link, where the 40ms default can lapse
+// mid-sequence and split an arrow into a stray ESC + [A. Read once per source at
+// construction.
+const escGraceEnv = "LETGO_ESC_GRACE_MS"
+
+// resolveGrace returns the inter-byte escape grace, honoring escGraceEnv when it
+// holds a positive integer and falling back to escGrace otherwise.
+func resolveGrace() time.Duration {
+	if v := os.Getenv(escGraceEnv); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return escGrace
+}
 
 // NewQueuedKeySource returns a KeySource that reads keys from r via a background
 // goroutine and a buffered queue, so KeyPending is non-blocking on platforms
@@ -52,7 +72,7 @@ const escGrace = 40 * time.Millisecond
 // first ReadKey/KeyPending, so binding this at *keys* without ever consulting it
 // (e.g. when api.WithKeySource overrides it) reads nothing.
 func NewQueuedKeySource(r io.Reader) KeySource {
-	return &queuedKeySource{r: r, notify: make(chan struct{}, 1), grace: escGrace}
+	return &queuedKeySource{r: r, notify: make(chan struct{}, 1), grace: resolveGrace()}
 }
 
 // queuedReadChunkSize matches native's readChunkSize: a blocking Read returns as
