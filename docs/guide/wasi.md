@@ -42,12 +42,9 @@ $ wasmtime lg.wasm -e '(bit-shift-left 1 62)'
 
 ## TinyGo
 
-This guide covers the standard Go toolchain, which is what builds let-go as a
-wasip1 module. TinyGo's `-target=wasi` is also `GOOS=wasip1`, but it does not
-build let-go as-is: stock TinyGo 0.41.1 traps at initialization with
-`unimplemented: (reflect.Type).Method()` before running any code, because the
-runtime's reflect-based boxing isn't available there. So the build here is the
-standard-Go one.
+This guide is the standard-Go build. TinyGo's `-target=wasi` is also `GOOS=wasip1`
+but doesn't build let-go as-is today — see [let-go under TinyGo](tinygo.md) for
+the known blocker.
 
 ## Capabilities
 
