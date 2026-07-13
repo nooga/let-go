@@ -6,11 +6,9 @@
 package rt
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 
-	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
@@ -28,21 +26,11 @@ var precompiledCoreNS map[string]*vm.CodeChunk
 // (the global const pool for further compilation, and postCoreInit's eval
 // builtins) that a runtime-only build deliberately omits.
 func LoadCore() error {
-	resolve := func(nsName, name string) *vm.Var {
-		n := DefNSBare(nsName)
-		if v := n.LookupLocal(vm.Symbol(name)); v != nil {
-			return v
-		}
-		return n.DefStub(name)
-	}
-	unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(CoreCompiledLGB), resolve)
+	unit, err := DecodeExecUnit(CoreCompiledLGB)
 	if err != nil {
 		return fmt.Errorf("decode core bundle: %w", err)
 	}
-	f := vm.NewFrame(unit.MainChunk, nil)
-	_, err = f.RunProtected()
-	vm.ReleaseFrame(f)
-	if err != nil {
+	if err := runChunk(unit.MainChunk); err != nil {
 		return fmt.Errorf("replay core: %w", err)
 	}
 	if unit.NSChunks != nil {
@@ -56,10 +44,7 @@ func LoadCore() error {
 		for _, name := range LgBaselineNSNames() {
 			baseline[name] = true
 			if c := precompiledCoreNS[name]; c != nil {
-				f := vm.NewFrame(c, nil)
-				_, err := f.RunProtected()
-				vm.ReleaseFrame(f)
-				if err != nil {
+				if err := runChunk(c); err != nil {
 					return fmt.Errorf("replay %s: %w", name, err)
 				}
 			}
@@ -89,10 +74,7 @@ func (bytecodeNSLoader) Load(name string) *vm.Namespace {
 	if chunk == nil {
 		return nil // not in the bundle; source loading is disabled
 	}
-	f := vm.NewFrame(chunk, nil)
-	_, err := f.RunProtected()
-	vm.ReleaseFrame(f)
-	if err != nil {
+	if err := runChunk(chunk); err != nil {
 		// NSLoader has no error channel: report, restore the needs-load marker,
 		// and return nil. The namespace was pre-registered as a placeholder
 		// during bytecode decoding, so without the restored marker the registry

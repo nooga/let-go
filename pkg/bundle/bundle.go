@@ -161,6 +161,33 @@ func payloadFitsFile(lgbSize, resSize, idSize uint64, trailerLen, total int64) b
 	return uint64(trailerLen) <= avail
 }
 
+// ReadBundledSelf checks whether the current executable carries an appended
+// payload, trying os.Executable, os.Args[0], and /proc/self/exe in turn.
+// Returns nil, nil, "" when the running binary is not a bundle. Shared by
+// every entry point that can run as a standalone bundle (lg, lg-runtime).
+func ReadBundledSelf() (lgb []byte, res []byte, storeID string) {
+	candidates := make([]string, 0, 3)
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		candidates = append(candidates, exe)
+	}
+	if len(os.Args) > 0 && os.Args[0] != "" {
+		candidates = append(candidates, os.Args[0])
+	}
+	candidates = append(candidates, "/proc/self/exe")
+
+	seen := map[string]bool{}
+	for _, path := range candidates {
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		if data, resData, sid := ReadBundled(path); data != nil {
+			return data, resData, sid
+		}
+	}
+	return nil, nil, ""
+}
+
 // ReadBundled extracts the appended payload from the file at path. It
 // recognizes the v3 (store-id-carrying), v2 (resource-carrying), and legacy
 // trailers; res is nil for legacy bundles and storeID is "" for any bundle
