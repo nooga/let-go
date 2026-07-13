@@ -1,0 +1,101 @@
+;; Typed catch dispatch: multiple (catch Class e ...) clauses select by
+;; exception class, first match wins, unmatched exceptions rethrow.
+;; Before this change the class symbol was discarded and multiple catch
+;; clauses concatenated their bodies.
+(ns test.catch-dispatch-test
+  (:require
+   [test :refer :all]))
+
+(deftest first-matching-clause-wins
+  (testing "the multi-clause concatenation bug: first match is picked"
+    (is (= :first
+           (try (throw (ex-info "a" {}))
+                (catch ExceptionInfo e :first)
+                (catch e :second)))))
+
+  (testing "clauses dispatch in source order"
+    (is (= :runtime
+           (try (throw (IllegalStateException. "s"))
+                (catch ArithmeticException e :arith)
+                (catch RuntimeException e :runtime)
+                (catch Throwable e :throwable))))))
+
+(deftest class-hierarchy-dispatch
+  (testing "a parent class clause catches subclass values"
+    (is (= :caught
+           (try (throw (NumberFormatException. "n"))
+                (catch IllegalArgumentException e :caught))))
+    (is (= :caught
+           (try (throw (ex-info "x" {}))
+                (catch RuntimeException e :caught)))))
+
+  (testing "runtime errors are Exception, not ExceptionInfo"
+    (is (= :exception
+           (try (/ 1 0)
+                (catch ExceptionInfo e :ex-info)
+                (catch Exception e :exception)))))
+
+  (testing "the caught binding sees the exception value"
+    (is (= "boom"
+           (try (throw (Exception. "boom"))
+                (catch ArithmeticException e :wrong)
+                (catch Exception e (ex-message e)))))))
+
+(deftest bare-clause-is-catch-all
+  (testing "a bare final clause catches anything"
+    (is (= :fallback
+           (try (throw "just-a-string")
+                (catch ExceptionInfo e :ex-info)
+                (catch e :fallback))))))
+
+(deftest throwable-matches-any-thrown-value
+  (testing "(catch Throwable e ...) catches non-exception values too"
+    (is (= "just-a-string"
+           (try (throw "just-a-string")
+                (catch ExceptionInfo e :ex-info)
+                (catch Throwable e e))))))
+
+(deftest unknown-class-never-matches
+  (testing "a class let-go does not model compiles but never matches"
+    (is (= :fallback
+           (try (throw (Exception. "x"))
+                (catch java.io.FileNotFoundException e :fnf)
+                (catch e :fallback))))))
+
+(deftest no-match-rethrows
+  (testing "an unmatched exception propagates with identity preserved"
+    (let [original (ex-info "keep" {:id 42})
+          caught (try
+                   (try (throw original)
+                        (catch ArithmeticException e :wrong))
+                   (catch e e))]
+      (is (identical? original caught))))
+
+  (testing "no match plus finally: finally runs, exception propagates"
+    (let [log (atom [])
+          r (try
+              (try (throw (IllegalArgumentException. "bad"))
+                   (catch ArithmeticException e :wrong)
+                   (finally (swap! log conj :f)))
+              (catch IllegalArgumentException e :outer))]
+      (is (= :outer r))
+      (is (= [:f] @log)))))
+
+(deftest clause-bindings-are-scoped
+  (testing "each clause's binding is visible only in its own body"
+    (is (= "m1"
+           (try (throw (Exception. "m1"))
+                (catch ExceptionInfo info (ex-data info))
+                (catch Exception ex (ex-message ex)))))))
+
+(deftest handler-symbol-is-hygienic
+  (testing "a user binding named like the generated handler is not shadowed"
+    (is (= :outer
+           (let [__lg-caught-1 :outer]
+             (try (throw (Exception. "x"))
+                  (catch Exception e __lg-caught-1)))))))
+
+(deftest single-bare-clause-unchanged
+  (testing "let-go's native single bare catch still works"
+    (is (= :native (try (throw "x") (catch e :native))))
+    (is (= "x" (try (throw "x") (catch e e))))))
