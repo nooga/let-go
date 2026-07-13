@@ -3,14 +3,25 @@
 ;; Each op's per-op behavior facets (lower-stmts, infer) are co-located on a
 ;; single op-type (a deftype implementing IROp), instead of scattered across
 ;; cond/case arms in lower_go.lg + typeinfer.lg. op-registry maps the op
-;; keyword to its op-type instance; the dispatch sites consult it first and
-;; fall back to their existing cond for ops not yet reified.
+;; keyword to its op-type instance; the dispatch sites consult the catalog's
+;; facet columns (pkg/ir/ir_ops.lg: infer?/lower?) first and fall back to
+;; their existing cond for ops not yet reified.
+;;
+;; Catalog coherence: the facet columns are the closed member set. The
+;; check at the end of this file throws at load time (bundle compile /
+;; binary boot) if the columns and op-registry drift, and infer-op/lower-op
+;; throw — never silently nil — when asked for a facet'd op they have no
+;; devirtualized arm for. Adding an op facet is a red build until all three
+;; agree: catalog column, op-registry entry, dispatch arm.
 ;;
 ;; Leaf namespace: requires ONLY ir.data + ir.lattice (must stay below
 ;; typeinfer/lower-go in the load order, else the require graph cycles).
+;; ir.data is required un-aliased: it interns the ir/* accessors AND the
+;; Go bridge primitives (ir/op-infer-facet?, ir/op-kws, ...) into the
+;; native `ir` namespace, which is what ir/ resolves to here.
 (ns ir.ops
   (:require
-   [ir.data :as ir]
+   [ir.data]
    [ir.lattice :as lat]))
 
 (defprotocol IROp
@@ -19,6 +30,102 @@
   ;; typeinfer facet: result type for this inst (mirrors infer-one's arm).
   (op-infer [this inst f state]))
 
+;; --- shared type rules (moved from typeinfer.lg's infer-one arms) ------
+
+(defn- ref-types [inst f state]
+  (map (fn [r] (lat/state-type state r)) (ir/refs inst f)))
+
+(defn- numeric-type? [t]
+  (or (= t :int)
+      (= t :float)
+      (= t :number)
+      (= t [:const :int 0])
+      (= t [:const :float 0.0])))
+
+(defn- numeric-op-type [types]
+  ;; Caller passes types pulled from ir/type-of (canonical post-storage),
+  ;; so we don't need to re-normalize.
+  (cond
+    (some #(= :bottom %) types)
+    :bottom
+    (every? numeric-type? types)
+    ;; Numeric contagion, matching the let-go/Clojure runtime: a float operand
+    ;; makes the result a float — (+ 1 2.0) => 3.0 (Float), (+ 1 2) => 3 (Int).
+    ;; So a CONCRETE float operand forces :float even mixed with ints or with an
+    ;; ambiguous :number (number+float is float whichever the number turns out
+    ;; to be). Only when no concrete float is present and some operand is the
+    ;; ambiguous {int,float} :number do we stay :number; all-int stays :int.
+    ;; (Previously int+float wrongly yielded :number, which has no native Go
+    ;; type and crashed strict lower-go with "unsupported result type".)
+    (cond
+      (some #(or (= % :float) (= % [:const :float 0.0])) types) :float
+      (some #(= :number %) types) :number
+      :else :int)
+    :else
+    :unknown))
+
+(defn- quot-op-type [types]
+  ;; clojure.core/quot is NOT plain numeric contagion. int/int yields an int
+  ;; (native Go `/` truncates toward zero exactly like quot), so keep it native
+  ;; and precisely typed. ANY other operand mix (float, ratio, :number,
+  ;; :unknown, vm.Value) must be computed by rt.QuotValue at runtime — native
+  ;; float `/` does NOT truncate and a native int/float `/` isn't valid Go — so
+  ;; the result is boxed; type it :unknown (-> vm.Value) so lower-go routes it
+  ;; through the helper instead of emitting a wrong native division.
+  (cond
+    (some #(= :bottom %) types)                            :bottom
+    (every? #(or (= % :int) (= % [:const :int 0])) types)  :int
+    :else                                                  :unknown))
+
+(defn- div-op-type [types]
+  ;; clojure.core// is value-dependent: int/int -> Ratio (or Int when exact),
+  ;; any float -> Float (IEEE division). Only all-float operands give a result
+  ;; with a native Go type (:float -> float64, lowered to native `/`); every
+  ;; other mix (int/int Ratio, mixed Float) is boxed and computed by rt.DivValue
+  ;; at runtime, so type it :unknown (-> vm.Value).
+  (cond
+    (some #(= :bottom %) types)                                 :bottom
+    (every? #(or (= % :float) (= % [:const :float 0.0])) types) :float
+    :else                                                       :unknown))
+
+(defn- bitwise-op-type [types]
+  (cond
+    (some #(= :bottom %) types) :bottom
+    (every? #(or (= % :int) (= % [:const :int 0])) types) :int
+    :else :unknown))
+
+;; --- per-layer lower-facet implementations ------------------------------
+;;
+;; Some lower facets need ir.lower-go internals (gogen emission helpers,
+;; value-ident, box-as-value, ...). Those bodies STAY in ir.lower-go —
+;; keeping this namespace a leaf — and register here when ir.lower-go
+;; loads; the op-type delegates. The catalog's lower? column still owns
+;; membership, and an unregistered impl throws naming the op.
+
+(def lower-impls (atom {}))
+
+(defn register-lower-impl! [op-kw impl]
+  (swap! lower-impls assoc op-kw impl))
+
+(defn- delegated-lower [op-kw f closed-exprs nid]
+  (let [impl (get (deref lower-impls) op-kw)]
+    (when (nil? impl)
+      (throw (str "ir.ops: op " op-kw " has the lower? facet but no "
+                  "registered impl — ir.lower-go must load (and call "
+                  "register-lower-impl!) before lowering")))
+    (impl f closed-exprs nid)))
+
+;; --- op-types -----------------------------------------------------------
+;;
+;; Ops with only the infer facet reified implement op-lower-stmts as a
+;; throw: lower-inst-stmts gates on the catalog's lower? column, so
+;; reaching that throw means the catalog and this file drifted.
+
+(defn- no-lower-facet [op-kw]
+  (throw (str "ir.ops: op " op-kw " has no reified lower facet — "
+              "lower-inst-stmts must not dispatch here (check the lower? "
+              "column in pkg/ir/ir_ops.lg)")))
+
 (deftype ConstOp []
   IROp
   ;; Consts emit no statement; the value is inlined at uses by value-expr.
@@ -26,9 +133,121 @@
   ;; Type comes from the constant value itself.
   (op-infer [this inst f state] (lat/classify-const (ir/aux inst f))))
 
-;; op-keyword -> op-type instance. Only reified ops appear here; everything
-;; else returns nil from op-type-for and falls back to legacy dispatch.
-(def op-registry {:const (->ConstOp)})
+(deftype LoadArgOp []
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :load-arg))
+  ;; Seed sources, in priority order:
+  ;;   1. Type already stored on the load-arg inst (e.g. by the
+  ;;      infer-arg-types backward pass) — strongest signal because it
+  ;;      reflects what callers actually pass.
+  ;;   2. fn-arg-types metadata, if explicitly populated.
+  ;;   3. :unknown.
+  (op-infer [this inst f state]
+    (let [stored    (lat/state-type state inst)
+          arg-types (ir/fn-arg-types f)
+          idx       (ir/aux inst f)]
+      (cond
+        (and (not= stored :unknown)
+             (not= stored :bottom))
+        (lat/normalize-type stored)
+        (and (vector? arg-types)
+             (< (int idx) (count arg-types)))
+        (lat/normalize-type (nth arg-types (int idx)))
+        :else
+        :unknown))))
+
+(deftype LoadOpaqueOp []
+  ;; :load-var / :load-closed — the loaded value's type is not tracked.
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :load-var))
+  (op-infer [this inst f state] :unknown))
+
+(deftype BlockArgOp []
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :block-arg))
+  ;; Block params are joined from predecessor edge args by the fixpoint
+  ;; driver; the inst's stored state is the current join.
+  (op-infer [this inst f state]
+    (lat/normalize-type (lat/state-type state inst))))
+
+(deftype TerminatorOp []
+  ;; :return / :branch / :branch-if produce no value. (:tail-call is NOT
+  ;; here: it infers :unknown via the default, preserving infer-one's
+  ;; historical terminator-ops set.)
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :terminator))
+  (op-infer [this inst f state] :nil))
+
+(deftype CmpOp []
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :cmp))
+  (op-infer [this inst f state] :bool))
+
+(deftype NumericOp []
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :numeric))
+  (op-infer [this inst f state] (numeric-op-type (ref-types inst f state))))
+
+(deftype BitwiseOp []
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :bitwise))
+  (op-infer [this inst f state] (bitwise-op-type (ref-types inst f state))))
+
+(deftype QuotOp []
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :quot))
+  (op-infer [this inst f state] (quot-op-type (ref-types inst f state))))
+
+(deftype DivOp []
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :div))
+  (op-infer [this inst f state] (div-op-type (ref-types inst f state))))
+
+(deftype TryOp []
+  ;; :try — the op whose eight scattered dispatch sites motivated this
+  ;; catalog (openspec: catalog-driven-op-dispatch). Its lowering
+  ;; (try-assign-stmts) needs ir.lower-go internals, so the body lives
+  ;; there and registers via register-lower-impl!.
+  IROp
+  (op-lower-stmts [this f closed-exprs nid]
+    (delegated-lower :try f closed-exprs nid))
+  ;; No infer facet (infer? column is false): typeinfer's default :unknown
+  ;; applies; this body is unreachable via the catalog gate.
+  (op-infer [this inst f state] :unknown))
+
+;; op-keyword -> op-type instance. Membership MUST match the catalog's
+;; facet columns (checked below at load time). Ops without any reified
+;; facet do not appear here and fall back to legacy dispatch.
+(def op-registry
+  {:const       (->ConstOp)
+   :load-arg    (->LoadArgOp)
+   :load-var    (->LoadOpaqueOp)
+   :load-closed (->LoadOpaqueOp)
+   :block-arg   (->BlockArgOp)
+   :return      (->TerminatorOp)
+   :branch      (->TerminatorOp)
+   :branch-if   (->TerminatorOp)
+   :lt          (->CmpOp)
+   :lte         (->CmpOp)
+   :gt          (->CmpOp)
+   :gte         (->CmpOp)
+   :eq          (->CmpOp)
+   :add         (->NumericOp)
+   :sub         (->NumericOp)
+   :mul         (->NumericOp)
+   :inc         (->NumericOp)
+   :dec         (->NumericOp)
+   :bit-and     (->BitwiseOp)
+   :bit-or      (->BitwiseOp)
+   :bit-xor     (->BitwiseOp)
+   :bit-and-not (->BitwiseOp)
+   :bit-shift-left           (->BitwiseOp)
+   :bit-shift-right          (->BitwiseOp)
+   :unsigned-bit-shift-right (->BitwiseOp)
+   :bit-not     (->BitwiseOp)
+   :quot        (->QuotOp)
+   :div         (->DivOp)
+   :try         (->TryOp)})
 
 (defn op-type-for [op-kw]
   (get op-registry op-kw))
@@ -37,14 +256,70 @@
 ;; arm constructs the concrete op-type inline: typeinfer types (->ConstOp) as
 ;; [:dtype ConstOp], so under gogen_ir the protocol call lowers to a DIRECT
 ;; native method call (recv.OpInfer / recv.OpLowerStmts) instead of boxed var
-;; dispatch. Callers gate on (op-type-for op) first, so the :else arms are
-;; unreachable in practice (defensive nil).
+;; dispatch. Callers gate on the catalog facet columns (ir/op-infer-facet?,
+;; ir/op-lower-facet?), so the :else arms fire only on catalog/bridge drift —
+;; they throw, naming the op, instead of silently returning nil.
 (defn infer-op [op inst f state]
   (cond
-    (= op :const) (op-infer (->ConstOp) inst f state)
-    :else nil))
+    (= op :const)       (op-infer (->ConstOp) inst f state)
+    (= op :block-arg)   (op-infer (->BlockArgOp) inst f state)
+    (= op :load-arg)    (op-infer (->LoadArgOp) inst f state)
+    (= op :eq)          (op-infer (->CmpOp) inst f state)
+    (= op :lt)          (op-infer (->CmpOp) inst f state)
+    (= op :lte)         (op-infer (->CmpOp) inst f state)
+    (= op :gt)          (op-infer (->CmpOp) inst f state)
+    (= op :gte)         (op-infer (->CmpOp) inst f state)
+    (= op :add)         (op-infer (->NumericOp) inst f state)
+    (= op :sub)         (op-infer (->NumericOp) inst f state)
+    (= op :mul)         (op-infer (->NumericOp) inst f state)
+    (= op :inc)         (op-infer (->NumericOp) inst f state)
+    (= op :dec)         (op-infer (->NumericOp) inst f state)
+    (= op :load-var)    (op-infer (->LoadOpaqueOp) inst f state)
+    (= op :load-closed) (op-infer (->LoadOpaqueOp) inst f state)
+    (= op :return)      (op-infer (->TerminatorOp) inst f state)
+    (= op :branch)      (op-infer (->TerminatorOp) inst f state)
+    (= op :branch-if)   (op-infer (->TerminatorOp) inst f state)
+    (= op :bit-and)     (op-infer (->BitwiseOp) inst f state)
+    (= op :bit-or)      (op-infer (->BitwiseOp) inst f state)
+    (= op :bit-xor)     (op-infer (->BitwiseOp) inst f state)
+    (= op :bit-and-not) (op-infer (->BitwiseOp) inst f state)
+    (= op :bit-shift-left)           (op-infer (->BitwiseOp) inst f state)
+    (= op :bit-shift-right)          (op-infer (->BitwiseOp) inst f state)
+    (= op :unsigned-bit-shift-right) (op-infer (->BitwiseOp) inst f state)
+    (= op :bit-not)     (op-infer (->BitwiseOp) inst f state)
+    (= op :quot)        (op-infer (->QuotOp) inst f state)
+    (= op :div)         (op-infer (->DivOp) inst f state)
+    :else (throw (str "ir.ops/infer-op: op " op " has the infer? facet in "
+                      "pkg/ir/ir_ops.lg but no devirtualized arm here — add "
+                      "the arm and the op-registry entry"))))
 
 (defn lower-op [op f closed-exprs nid]
   (cond
     (= op :const) (op-lower-stmts (->ConstOp) f closed-exprs nid)
-    :else nil))
+    (= op :try)   (op-lower-stmts (->TryOp) f closed-exprs nid)
+    :else (throw (str "ir.ops/lower-op: op " op " has the lower? facet in "
+                      "pkg/ir/ir_ops.lg but no devirtualized arm here — add "
+                      "the arm and the op-registry entry"))))
+
+;; --- catalog coherence (exhaustiveness) --------------------------------
+;;
+;; The catalog's facet columns are the single source of truth for which
+;; ops are reified. This check runs at namespace load — i.e. at bundle
+;; compile (`make generate`) and at binary boot — so catalog/registry
+;; drift is a red build naming the op, never a silent nil at dispatch.
+(def ^:private catalog-coherent?
+  (let [facet-kws  (set (filter (fn [k] (or (ir/op-infer-facet? k)
+                                            (ir/op-lower-facet? k)))
+                                (ir/op-kws)))
+        registered (set (keys op-registry))]
+    (if (= facet-kws registered)
+      true
+      (let [missing (vec (filter (fn [k] (not (contains? registered k))) facet-kws))
+            extra   (vec (filter (fn [k] (not (contains? facet-kws k))) registered))]
+        (throw (str "ir.ops: catalog/registry drift —"
+                    (if (seq missing)
+                      (str " facet'd ops in pkg/ir/ir_ops.lg missing from op-registry: " missing)
+                      "")
+                    (if (seq extra)
+                      (str " op-registry entries without a facet column in pkg/ir/ir_ops.lg: " extra)
+                      "")))))))

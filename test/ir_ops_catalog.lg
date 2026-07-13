@@ -1,0 +1,100 @@
+;; Catalog-driven op dispatch (openspec: catalog-driven-op-dispatch §2/§4).
+;;
+;; The facet columns in pkg/ir/ir_ops.lg (infer?/lower?) are the closed
+;; member set for ir.ops' reified op-types. These tests pin the coherence
+;; contract from three sides:
+;;   1. catalog facet columns == op-registry membership
+;;   2. every infer-facet op actually dispatches through its op-type
+;;   3. facetless ops still infer through the legacy path (no regression)
+;;
+;; The same coherence is enforced at load time by ir.ops itself (a drifted
+;; registry throws during `make generate` / binary boot); this test makes
+;; the contract visible and runnable via the ordinary test suite.
+;; NB: ir.data is required UN-aliased — it interns both the data accessors
+;; (ir/new-fn, ir/add-inst, ...) and the Go bridge primitives
+;; (ir/op-infer-facet?, ir/op-kws, ...) into the native `ir` namespace;
+;; aliasing ir.data as `ir` would shadow the primitives.
+(ns test.ir-ops-catalog
+  (:require
+   [ir.data]
+   [ir.lattice :as lat]
+   [ir.ops :as ops]
+   [ir.passes.typeinfer :as ti]
+   [test :refer :all]))
+
+(deftest catalog-facet-columns-match-registry
+  (testing "ops with a reified facet in the catalog are exactly the op-registry keys"
+    (let [facet-kws  (set (filter (fn [k] (or (ir/op-infer-facet? k)
+                                              (ir/op-lower-facet? k)))
+                                  (ir/op-kws)))
+          registered (set (keys ops/op-registry))]
+      (is (= facet-kws registered)))))
+
+(deftest catalog-enumerates-all-ops
+  (testing "ir/op-kws covers the whole catalog, kebab-cased, invalid first"
+    (let [kws (ir/op-kws)]
+      (is (= :invalid (first kws)))
+      (is (contains? (set kws) :unsigned-bit-shift-right))
+      (is (contains? (set kws) :branch-if))
+      (is (> (count kws) 30)))))
+
+(deftest infer-facet-column-gates-dispatch
+  (testing "infer? column is true exactly for the reified infer arms"
+    (is (ir/op-infer-facet? :const))
+    (is (ir/op-infer-facet? :add))
+    (is (ir/op-infer-facet? :eq))
+    (is (ir/op-infer-facet? :block-arg))
+    ;; :call stays legacy (typeinfer-coupled); :tail-call and :try are facetless.
+    (is (not (ir/op-infer-facet? :call)))
+    (is (not (ir/op-infer-facet? :tail-call)))
+    (is (not (ir/op-infer-facet? :try)))))
+
+(deftest lower-facet-column-gates-dispatch
+  (testing "lower? column is true exactly for the reified lower facets"
+    (is (ir/op-lower-facet? :const))
+    (is (ir/op-lower-facet? :try))
+    (is (not (ir/op-lower-facet? :add)))
+    (is (not (ir/op-lower-facet? :call)))))
+
+(deftest try-lower-impl-registered
+  (testing ":try's lower facet is registered by ir.lower-go (per-layer impl)"
+    ;; Loading ir.lower-go must have registered try-assign-stmts; TryOp
+    ;; throws (naming :try) if lowering runs before registration.
+    (require 'ir.lower-go)
+    (is (some? (get (deref ops/lower-impls) :try)))))
+
+;; --- reified infer rules behave like the legacy arms ------------------
+
+(defn- infer-two-const-op
+  "Build ret = (op c1 c2) in a 1-block fn, run typeinfer, return ret's type."
+  [op c1 c2]
+  (let [f  (ir/new-fn "t" 0 false)
+        a  (ir/add-inst f 0 :const [] c1)
+        b  (ir/add-inst f 0 :const [] c2)
+        r  (ir/add-inst f 0 op [a b] nil)]
+    (ti/typeinfer f)
+    (ir/type-of r f)))
+
+(deftest reified-numeric-infer
+  (testing "NumericOp: int contagion rules survive the move"
+    (is (= :int   (infer-two-const-op :add 1 2)))
+    (is (= :float (infer-two-const-op :add 1 2.5)))
+    (is (= :float (infer-two-const-op :mul 1.5 2.5)))))
+
+(deftest reified-comparison-infer
+  (testing "CmpOp: comparisons infer :bool"
+    (is (= :bool (infer-two-const-op :lt 1 2)))
+    (is (= :bool (infer-two-const-op :eq 1 2)))))
+
+(deftest reified-quot-div-infer
+  (testing "QuotOp/DivOp: int/int quot stays :int; int/int div is boxed"
+    (is (= :int (infer-two-const-op :quot 7 2)))
+    (is (= :unknown (infer-two-const-op :div 7 2)))
+    (is (= :float (infer-two-const-op :div 7.0 2.0)))))
+
+(deftest reified-bitwise-infer
+  (testing "BitwiseOp: all-int operands infer :int"
+    (is (= :int (infer-two-const-op :bit-and 6 3)))
+    (is (= :int (infer-two-const-op :bit-shift-left 1 4)))))
+
+(println "ir_ops_catalog tests defined")

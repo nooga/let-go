@@ -2293,6 +2293,12 @@
                (gogen/assign "=" target bodyV)])]
         [(gogen/block-stmt stmts)]))))
 
+;; Register :try's lower facet with the op catalog machinery. The body
+;; (try-assign-stmts) needs this namespace's emission helpers, so it stays
+;; here; ir.ops/TryOp delegates through this registration. The catalog's
+;; lower? column (pkg/ir/ir_ops.lg) routes :try to ops/lower-op.
+(ops/register-lower-impl! :try try-assign-stmts)
+
 (defn- def-assign-stmts [f closed-exprs nid]
   "Lower a :def op (def NAME [val]) to straight-line Go. Refs[0] is the var (a
    Const whose aux is the *vm.Var); optional Refs[1] is the value; the :def's own
@@ -2347,7 +2353,10 @@
       (= op :load-closed) []
       (and (= op :const) (any-fn-template? aux))
       []
-      (and (= op :const) (some? (ops/op-type-for op)))
+      ;; Reified lower facets: the catalog's lower? column
+      ;; (pkg/ir/ir_ops.lg) names the members; ops/lower-op throws —
+      ;; never silently nil — on catalog/bridge drift.
+      (ir/op-lower-facet? op)
       (ops/lower-op op f closed-exprs nid)
       (= op :const)
       []
@@ -2374,8 +2383,8 @@
         [])
       (= op :call)
       (call-assign-stmts f closed-exprs nid)
-      (= op :try)
-      (try-assign-stmts f closed-exprs nid)
+      ;; (:try is handled by the catalog-gated ops/lower-op arm above:
+      ;; TryOp delegates back to try-assign-stmts via register-lower-impl!.)
       (= op :def)
       (def-assign-stmts f closed-exprs nid)
       (= op :set-var)

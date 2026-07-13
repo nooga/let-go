@@ -19,6 +19,7 @@
 
 (ns ir-ops-gen
   (:require
+   [clojure.string :as string]
    [gogen :as g]))
 
 ;; --- the op catalog -------------------------------------------------
@@ -36,6 +37,13 @@
 ;;   local-carry?— true when the op's result is materialised into a Go
 ;;                  local by lowering (lower_go's local-carrying-op?).
 ;;                  A static fact about the op, like pure?/terminator?.
+;;   infer?      — the op's typeinfer facet is reified on an ir.ops
+;;                  op-type (ir.ops/op-registry). infer-one dispatches
+;;                  through ops/infer-op for these; the rest keep their
+;;                  legacy cond arms (:call) or default to :unknown.
+;;   lower?      — the op's lower-go facet is reified on an ir.ops
+;;                  op-type; lower-inst-stmts dispatches through
+;;                  ops/lower-op for these.
 ;;   display     — string for opTable.name (usually = name; OpInvalid
 ;;                  uses "INVALID" for diagnostic clarity)
 ;;   comment     — trailing line comment on the const decl + opTable row
@@ -44,57 +52,57 @@
 ;; breaks every file that references Op<X> constants.
 
 (def ops
-  ;;  name         stk-in stk-out  pure?  term?  bytecode           cheap?  local-carry? display      comment
-  '[["Invalid"    0  0 false false nil                false false "INVALID"    ""]
+  ;;  name         stk-in stk-out  pure?  term?  bytecode           cheap?  local-carry? infer? lower? display      comment
+  '[["Invalid"    0  0 false false nil                false false false false "INVALID"    ""]
 
     ;; --- Values ---
-    ["Const"      0  1 true  false OP_LOAD_CONST      true  false "Const"      ".Aux = vm.Value (the constant; lowered as OP_LOAD_CONST with interned index)"]
-    ["LoadArg"    0  1 true  false OP_LOAD_ARG        true  false "LoadArg"    ".Aux = int (arg index)"]
-    ["LoadVar"    0  1 false false OP_LOAD_VAR        true  false "LoadVar"    ".Aux = *vm.Var; var roots are mutable"]
-    ["LoadClosed" 0  1 true  false OP_LOAD_CLOSEDOVER true  false "LoadClosed" ".Aux = int (closed-over index)"]
+    ["Const"      0  1 true  false OP_LOAD_CONST      true  false true  true  "Const"      ".Aux = vm.Value (the constant; lowered as OP_LOAD_CONST with interned index)"]
+    ["LoadArg"    0  1 true  false OP_LOAD_ARG        true  false true  false "LoadArg"    ".Aux = int (arg index)"]
+    ["LoadVar"    0  1 false false OP_LOAD_VAR        true  false true  false "LoadVar"    ".Aux = *vm.Var; var roots are mutable"]
+    ["LoadClosed" 0  1 true  false OP_LOAD_CLOSEDOVER true  false true  false "LoadClosed" ".Aux = int (closed-over index)"]
 
     ;; Block parameter — value flowing in from a predecessor's
     ;; branch-with-args. No Refs; (block-id, param-index) is implicit
     ;; via position in Block.Params.
-    ["BlockArg"   0  1 true  false nil                false true  "BlockArg"   "block parameter"]
+    ["BlockArg"   0  1 true  false nil                false true  true  false "BlockArg"   "block parameter"]
 
     ;; --- Side-effecting ---
-    ["SetVar"     2  1 false false OP_SET_VAR         false false "SetVar"     ".Refs[0] = var (Const aux=*vm.Var), .Refs[1] = value; pushes var back"]
-    ["Call"      -1  1 false false OP_INVOKE          false true  "Call"       ".Refs[0] = fn, .Refs[1:] = args; .Aux = arity int"]
-    ["TailCall"  -1  1 false true  OP_TAIL_CALL       false false "TailCall"   "tail call ends a block"]
+    ["SetVar"     2  1 false false OP_SET_VAR         false false false false "SetVar"     ".Refs[0] = var (Const aux=*vm.Var), .Refs[1] = value; pushes var back"]
+    ["Call"      -1  1 false false OP_INVOKE          false true  false false "Call"       ".Refs[0] = fn, .Refs[1:] = args; .Aux = arity int. infer? stays false: the :call arm (call-dtype/call-core-type) is typeinfer-coupled, not yet reified"]
+    ["TailCall"  -1  1 false true  OP_TAIL_CALL       false false false false "TailCall"   "tail call ends a block. NOT in typeinfer's terminator-ops set (infers :unknown via default), so infer? is false"]
 
     ;; --- Pure arithmetic / comparison (results materialised into locals) ---
-    ["Add"        2  1 true  false OP_ADD             false true  "Add"        ""]
-    ["Sub"        2  1 true  false OP_SUB             false true  "Sub"        ""]
-    ["Mul"        2  1 true  false OP_MUL             false true  "Mul"        ""]
-    ["BitAnd"     2  1 true  false OP_BIT_AND         false true  "BitAnd"     "clojure.core/bit-and — integer bitwise and"]
-    ["BitOr"      2  1 true  false OP_BIT_OR          false true  "BitOr"      "clojure.core/bit-or — integer bitwise or"]
-    ["BitXor"     2  1 true  false OP_BIT_XOR         false true  "BitXor"     "clojure.core/bit-xor — integer bitwise xor"]
-    ["BitAndNot"  2  1 true  false OP_BIT_AND_NOT     false true  "BitAndNot"  "clojure.core/bit-and-not — integer bit clear (&^)"]
-    ["BitShiftLeft" 2 1 true false OP_BIT_SHIFT_LEFT  false true  "BitShiftLeft" "clojure.core/bit-shift-left — integer left shift"]
-    ["BitShiftRight" 2 1 true false OP_BIT_SHIFT_RIGHT false true  "BitShiftRight" "clojure.core/bit-shift-right — integer arithmetic right shift"]
-    ["UnsignedBitShiftRight" 2 1 true false OP_UNSIGNED_BIT_SHIFT_RIGHT false true  "UnsignedBitShiftRight" "clojure.core/unsigned-bit-shift-right — integer logical right shift"]
-    ["Quot"       2  1 true  false OP_QUOT            false true  "Quot"       "clojure.core/quot — integer quotient truncated toward zero. int/int lowers to native Go `/` (which truncates identically); any float/ratio/boxed operand lowers via rt.QuotValue (native float `/` does NOT truncate)"]
-    ["Div"        2  1 true  false OP_DIV             false true  "Div"        "clojure.core// — true division. float/float lowers to native Go `/`; any other operand mix (int/int -> Ratio, mixed -> Float) lowers via rt.DivValue. Distinguished from Quot by op-kw in lower-go (both render Go `/`)"]
-    ["Lt"         2  1 true  false OP_LT              false true  "Lt"         ""]
-    ["Lte"        2  1 true  false OP_LTE             false true  "Lte"        ""]
-    ["Gt"         2  1 true  false OP_GT              false true  "Gt"         ""]
-    ["Gte"        2  1 true  false OP_GTE             false true  "Gte"        ""]
-    ["Eq"         2  1 true  false OP_EQ              false true  "Eq"         ""]
-    ["Inc"        1  1 true  false OP_INC             false true  "Inc"        ""]
-    ["Dec"        1  1 true  false OP_DEC             false true  "Dec"        ""]
-    ["BitNot"     1  1 true  false OP_BIT_NOT         false true  "BitNot"     "clojure.core/bit-not — integer bitwise complement"]
+    ["Add"        2  1 true  false OP_ADD             false true  true  false "Add"        ""]
+    ["Sub"        2  1 true  false OP_SUB             false true  true  false "Sub"        ""]
+    ["Mul"        2  1 true  false OP_MUL             false true  true  false "Mul"        ""]
+    ["BitAnd"     2  1 true  false OP_BIT_AND         false true  true  false "BitAnd"     "clojure.core/bit-and — integer bitwise and"]
+    ["BitOr"      2  1 true  false OP_BIT_OR          false true  true  false "BitOr"      "clojure.core/bit-or — integer bitwise or"]
+    ["BitXor"     2  1 true  false OP_BIT_XOR         false true  true  false "BitXor"     "clojure.core/bit-xor — integer bitwise xor"]
+    ["BitAndNot"  2  1 true  false OP_BIT_AND_NOT     false true  true  false "BitAndNot"  "clojure.core/bit-and-not — integer bit clear (&^)"]
+    ["BitShiftLeft" 2 1 true false OP_BIT_SHIFT_LEFT  false true  true  false "BitShiftLeft" "clojure.core/bit-shift-left — integer left shift"]
+    ["BitShiftRight" 2 1 true false OP_BIT_SHIFT_RIGHT false true  true  false "BitShiftRight" "clojure.core/bit-shift-right — integer arithmetic right shift"]
+    ["UnsignedBitShiftRight" 2 1 true false OP_UNSIGNED_BIT_SHIFT_RIGHT false true  true  false "UnsignedBitShiftRight" "clojure.core/unsigned-bit-shift-right — integer logical right shift"]
+    ["Quot"       2  1 true  false OP_QUOT            false true  true  false "Quot"       "clojure.core/quot — integer quotient truncated toward zero. int/int lowers to native Go `/` (which truncates identically); any float/ratio/boxed operand lowers via rt.QuotValue (native float `/` does NOT truncate)"]
+    ["Div"        2  1 true  false OP_DIV             false true  true  false "Div"        "clojure.core// — true division. float/float lowers to native Go `/`; any other operand mix (int/int -> Ratio, mixed -> Float) lowers via rt.DivValue. Distinguished from Quot by op-kw in lower-go (both render Go `/`)"]
+    ["Lt"         2  1 true  false OP_LT              false true  true  false "Lt"         ""]
+    ["Lte"        2  1 true  false OP_LTE             false true  true  false "Lte"        ""]
+    ["Gt"         2  1 true  false OP_GT              false true  true  false "Gt"         ""]
+    ["Gte"        2  1 true  false OP_GTE             false true  true  false "Gte"        ""]
+    ["Eq"         2  1 true  false OP_EQ              false true  true  false "Eq"         ""]
+    ["Inc"        1  1 true  false OP_INC             false true  true  false "Inc"        ""]
+    ["Dec"        1  1 true  false OP_DEC             false true  true  false "Dec"        ""]
+    ["BitNot"     1  1 true  false OP_BIT_NOT         false true  true  false "BitNot"     "clojure.core/bit-not — integer bitwise complement"]
 
-    ["Pop"        1  0 false false nil                false false "Pop"        "discard top stack value; no result (OP_POP)"]
+    ["Pop"        1  0 false false nil                false false false false "Pop"        "discard top stack value; no result (OP_POP)"]
 
     ;; --- Terminators ---
-    ["Return"     1  0 false true  OP_RETURN          false false "Return"     ".Refs[0] = value"]
-    ["Branch"     0  0 false true  OP_JUMP            false false "Branch"     "unconditional; .Aux = *BranchTarget"]
-    ["BranchIf"   1  0 false true  OP_BRANCH_FALSE    false false "BranchIf"   ".Refs[0] = cond; .Aux = struct{True,False *BranchTarget}"]
+    ["Return"     1  0 false true  OP_RETURN          false false true  false "Return"     ".Refs[0] = value"]
+    ["Branch"     0  0 false true  OP_JUMP            false false true  false "Branch"     "unconditional; .Aux = *BranchTarget"]
+    ["BranchIf"   1  0 false true  OP_BRANCH_FALSE    false false true  false "BranchIf"   ".Refs[0] = cond; .Aux = struct{True,False *BranchTarget}"]
 
     ;; --- Closures ---
-    ["MakeClosure" 1  1 false false OP_MAKE_CLOSURE    false false "MakeClosure" ".Refs[0] = *Func value (the func to wrap as a closure)"]
-    ["PushClosed"  2  1 false false OP_PUSH_CLOSEDOVER false false "PushClosed"  ".Refs[0] = closure, .Refs[1] = value to attach"]
+    ["MakeClosure" 1  1 false false OP_MAKE_CLOSURE    false false false false "MakeClosure" ".Refs[0] = *Func value (the func to wrap as a closure)"]
+    ["PushClosed"  2  1 false false OP_PUSH_CLOSEDOVER false false false false "PushClosed"  ".Refs[0] = closure, .Refs[1] = value to attach"]
 
     ;; --- Exception handling (gogen_ir self-AOT) ---
     ;; A guarded region whose body/handler/finally are inner fn* closures.
@@ -103,13 +111,13 @@
     ;; as straight-line Go by lower_go's try-assign-stmts. No bytecode op (the
     ;; bytecode VM compiles try natively via OP_TRY_PUSH/POP); this op exists
     ;; only on the IR→Go lowering path.
-    ["Try"       -1  1 false false nil                false true  "Try"        ".Refs[0] = body closure; then optional handler closure (binds the caught value), then optional finally closure; .Aux = {:has-handler bool :has-finally bool}"]
+    ["Try"       -1  1 false false nil                false true  false true  "Try"        ".Refs[0] = body closure; then optional handler closure (binds the caught value), then optional finally closure; .Aux = {:has-handler bool :has-finally bool}. lower? -> TryOp delegates to try-assign-stmts (registered by ir.lower-go)"]
 
     ;; Struct field selector for native deftype lowering: (. obj field)
     ;; lowers to Go `obj.field`. Aux = field symbol, Refs[0] = obj. No
     ;; bytecode op (the bytecode path accesses deftype fields via runtime
     ;; DType dispatch); this op exists only on the IR→Go lowering path.
-    ["Dot"        1  1 false false nil                false true  "Dot"        ".Refs[0] = obj; .Aux = field symbol; Go struct field selector obj.field (gogen_ir path only)"]
+    ["Dot"        1  1 false false nil                false true  false false "Dot"        ".Refs[0] = obj; .Aux = field symbol; Go struct field selector obj.field (gogen_ir path only)"]
 
     ;; (def NAME [val]) — interns NAME in the current ns and returns the var;
     ;; the 2-ref form also sets its root. Like SetVar (no dedicated opcode: the
@@ -117,7 +125,7 @@
     ;; the bytecode defCompiler does), EXCEPT gogen must INTERN the var at
     ;; runtime (rt.InternVar) rather than look it up. .Refs[0] = var (Const
     ;; aux=*vm.Var), optional .Refs[1] = value. stack-in -1: 1 or 2 refs.
-    ["Def"       -1  1 false false nil                false true  "Def"        ".Refs[0] = var (Const aux=*vm.Var), optional .Refs[1] = value; interns + returns the var (2-ref also sets root)"]])
+    ["Def"       -1  1 false false nil                false true  false false "Def"        ".Refs[0] = var (Const aux=*vm.Var), optional .Refs[1] = value; interns + returns the var (2-ref also sets root)"]])
 
 (g/check-spec ops)
 
@@ -137,6 +145,21 @@
 (defn- has-bytecode? [row]
   (some? (op-bytecode row)))
 
+(defn- op-keyword-name [row]
+  ;; CamelCase op name -> the kebab-case keyword string the .lg pipeline
+  ;; uses ("LoadArg" -> "load-arg"). Must agree with the keywords ir.build
+  ;; emits; OpByKeyword's dash/case-insensitive match makes them mutually
+  ;; consistent by construction.
+  (string/join
+    (map-indexed
+      (fn [i ch]
+        (let [c  (str ch)
+              lc (string/lower-case c)]
+          (if (and (pos? i) (not= c lc))
+            (str "-" lc)
+            lc)))
+      (seq (str (nth row 0))))))
+
 ;; --- emit pieces ----------------------------------------------------
 
 (defn emit-type-decl []
@@ -152,7 +175,7 @@
   (let [rows (map-indexed
                (fn [i row]
                  (let [name    (op-const-name row)
-                       comment (nth row 9)]
+                       comment (nth row 11)]
                    (if (= i 0)
                      [name 'Op 'iota comment]
                      [name '_ '_ comment])))
@@ -168,7 +191,9 @@
                          [stackOut      int    "0 or 1"]
                          [pure          bool   "safe to CSE, fold, hoist"]
                          [terminator    bool   "ends a basic block"]
-                         [localCarrying bool   "lowering materialises the result into a Go local"])))))
+                         [localCarrying bool   "lowering materialises the result into a Go local"]
+                         [inferFacet    bool   "typeinfer facet reified on an ir.ops op-type"]
+                         [lowerFacet    bool   "lower-go facet reified on an ir.ops op-type"])))))
 
 (defn emit-op-table []
   ;; var opTable = [...]opInfo{
@@ -177,7 +202,7 @@
   ;; }
   (let [kvs (map
               (fn [row]
-                (let [[_ stack-in stack-out pure? term? _bytecode _cheap? local-carry? display _] row
+                (let [[_ stack-in stack-out pure? term? _bytecode _cheap? local-carry? infer? lower? display _] row
                       name (op-const-name row)]
                   (g/gquote
                     (kv ~name (composite nil
@@ -186,7 +211,9 @@
                                 ~stack-out
                                 ~pure?
                                 ~term?
-                                ~local-carry?)))))
+                                ~local-carry?
+                                ~infer?
+                                ~lower?)))))
               ops)]
     (g/gquote
       (var-decl opTable
@@ -225,6 +252,18 @@
        (method [(op Op)] LocalCarrying [] bool
          (if (< (cast int op) (call len opTable))
              [(return (field (index opTable op) localCarrying))])
+         (return false))))
+   (g/gquote
+     (doc "InferFacet reports whether op's typeinfer facet is reified on an ir.ops op-type."
+       (method [(op Op)] InferFacet [] bool
+         (if (< (cast int op) (call len opTable))
+             [(return (field (index opTable op) inferFacet))])
+         (return false))))
+   (g/gquote
+     (doc "LowerFacet reports whether op's lower-go facet is reified on an ir.ops op-type."
+       (method [(op Op)] LowerFacet [] bool
+         (if (< (cast int op) (call len opTable))
+             [(return (field (index opTable op) lowerFacet))])
          (return false))))])
 
 ;; --- switch builders ------------------------------------------------
@@ -279,6 +318,23 @@
       (func bytecodeToIROp [(op int32)] [Op]
         ~switch-stmt))))
 
+(defn emit-op-keywords-fn []
+  ;; var opKeywordNames = []string{"invalid", "const", ...}
+  ;; func OpKeywords() []string { return opKeywordNames }
+  ;;
+  ;; The full catalog as kebab-case keyword strings, in iota order. Feeds
+  ;; the ir/op-kws bridge so .lg-side exhaustiveness checks can enumerate
+  ;; the closed op set without a hand-maintained list.
+  [(g/gquote
+     (var-decl opKeywordNames
+               nil
+               (composite-multi (type "[]string")
+                 ~@(map (fn [row] (g/gquote ~(op-keyword-name row))) ops))))
+   (g/gquote
+     (doc "OpKeywords returns every catalogued op as its kebab-case keyword name, in Op order."
+       (func OpKeywords [] [(type "[]string")]
+         (return opKeywordNames))))])
+
 ;; --- assemble + emit -------------------------------------------------
 
 (println (g/render (emit-type-decl)))
@@ -298,3 +354,6 @@
 (println)
 (println (g/render (emit-bytecode-to-ir-fn)))
 (println)
+(doseq [d (emit-op-keywords-fn)]
+  (println (g/render d))
+  (println))

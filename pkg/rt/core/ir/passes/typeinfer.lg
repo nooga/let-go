@@ -132,58 +132,9 @@
 
             :else nil))))))
 
-(defn- numeric-type? [t]
-  (or (= t :int)
-      (= t :float)
-      (= t :number)
-      (= t [:const :int 0])
-      (= t [:const :float 0.0])))
-
-(defn- numeric-op-type [types]
-  ;; Caller passes types pulled from ir/type-of (canonical post-storage),
-  ;; so we don't need to re-normalize.
-  (cond
-    (some #(= :bottom %) types)
-    :bottom
-    (every? numeric-type? types)
-    ;; Numeric contagion, matching the let-go/Clojure runtime: a float operand
-    ;; makes the result a float — (+ 1 2.0) => 3.0 (Float), (+ 1 2) => 3 (Int).
-    ;; So a CONCRETE float operand forces :float even mixed with ints or with an
-    ;; ambiguous :number (number+float is float whichever the number turns out
-    ;; to be). Only when no concrete float is present and some operand is the
-    ;; ambiguous {int,float} :number do we stay :number; all-int stays :int.
-    ;; (Previously int+float wrongly yielded :number, which has no native Go
-    ;; type and crashed strict lower-go with "unsupported result type".)
-    (cond
-      (some #(or (= % :float) (= % [:const :float 0.0])) types) :float
-      (some #(= :number %) types) :number
-      :else :int)
-    :else
-    :unknown))
-
-(defn- quot-op-type [types]
-  ;; clojure.core/quot is NOT plain numeric contagion. int/int yields an int
-  ;; (native Go `/` truncates toward zero exactly like quot), so keep it native
-  ;; and precisely typed. ANY other operand mix (float, ratio, :number,
-  ;; :unknown, vm.Value) must be computed by rt.QuotValue at runtime — native
-  ;; float `/` does NOT truncate and a native int/float `/` isn't valid Go — so
-  ;; the result is boxed; type it :unknown (-> vm.Value) so lower-go routes it
-  ;; through the helper instead of emitting a wrong native division.
-  (cond
-    (some #(= :bottom %) types)                            :bottom
-    (every? #(or (= % :int) (= % [:const :int 0])) types)  :int
-    :else                                                  :unknown))
-
-(defn- div-op-type [types]
-  ;; clojure.core// is value-dependent: int/int -> Ratio (or Int when exact),
-  ;; any float -> Float (IEEE division). Only all-float operands give a result
-  ;; with a native Go type (:float -> float64, lowered to native `/`); every
-  ;; other mix (int/int Ratio, mixed Float) is boxed and computed by rt.DivValue
-  ;; at runtime, so type it :unknown (-> vm.Value).
-  (cond
-    (some #(= :bottom %) types)                                :bottom
-    (every? #(or (= % :float) (= % [:const :float 0.0])) types) :float
-    :else                                                       :unknown))
+;; numeric-type? / numeric-op-type / quot-op-type / div-op-type moved to
+;; ir.ops: the reified op-types' infer facets (NumericOp/QuotOp/DivOp)
+;; consume them there.
 
 (defn- truthy-type? [t]
   (let [t (normalize-type t)]
@@ -233,8 +184,6 @@
       :else t)))
 
 ;; --- CFG helpers -----------------------------------------------------
-
-(def terminator-ops #{:branch :branch-if :return})
 
 (defn- refine-edge-arg-type [pred-bid target-bid arg-id arg-type f]
   (let [term (ir/block-term pred-bid f)]
@@ -295,66 +244,25 @@
                 preds))
       :bottom)))
 
-(defn- arg-seed [inst f state]
-  ;; Seed sources, in priority order:
-  ;;   1. Type already stored on the load-arg inst (e.g. by the
-  ;;      infer-arg-types backward pass) — strongest signal because it
-  ;;      reflects what callers actually pass.
-  ;;   2. fn-arg-types metadata, if explicitly populated.
-  ;;   3. :unknown.
-  (let [stored    (state-type state inst)
-        arg-types (ir/fn-arg-types f)
-        idx       (ir/aux inst f)]
-    (cond
-      (and (not= stored :unknown)
-           (not= stored :bottom))
-      (normalize-type stored)
-      (and (vector? arg-types)
-           (< (int idx) (count arg-types)))
-      (normalize-type (nth arg-types (int idx)))
-      :else
-      :unknown)))
-
 ;; --- Op-based inference ----------------------------------------------
-
-(def comparison-ops #{:lt :lte :gt :gte :eq})
-(def numeric-ops #{:add :sub :mul :inc :dec})
-(def bitwise-binary-ops
-  #{:bit-and :bit-or :bit-xor :bit-and-not
-    :bit-shift-left :bit-shift-right :unsigned-bit-shift-right})
-(def bitwise-unary-ops #{:bit-not})
-
-(defn- bitwise-op-type [types]
-  (cond
-    (some #(= :bottom %) types) :bottom
-    (every? #(or (= % :int) (= % [:const :int 0])) types) :int
-    :else :unknown))
+;;
+;; Per-op infer rules live on ir.ops op-types (arg-seed became LoadArgOp,
+;; the comparison/numeric/bitwise/quot/div arms became CmpOp/NumericOp/
+;; BitwiseOp/QuotOp/DivOp, ...). The catalog's infer? column
+;; (pkg/ir/ir_ops.lg) names the members; ops/infer-op throws — never
+;; silently nil — if the catalog and its dispatch drift.
 
 (defn infer-one [inst f state]
-  (let [op   (ir/op inst f)
-        refs (ir/refs inst f)
-        ot   (ops/op-type-for op)]
+  (let [op (ir/op inst f)]
     (cond
-      (some? ot)                (ops/infer-op op inst f state)
-      (= op :load-arg)         (arg-seed inst f state)
-      (= op :load-var)         :unknown
-      (= op :load-closed)      :unknown
-      (= op :call)             (or (call-dtype inst f)
-                                   (call-core-type inst f state)
-                                   :unknown)
-      (= op :block-arg)        (normalize-type (state-type state inst))
-      (contains? terminator-ops op) :nil
-      (contains? comparison-ops op) :bool
-      (= op :quot)
-      (quot-op-type (map (fn [r] (state-type state r)) refs))
-      (= op :div)
-      (div-op-type (map (fn [r] (state-type state r)) refs))
-      (contains? bitwise-binary-ops op)
-      (bitwise-op-type (map (fn [r] (state-type state r)) refs))
-      (contains? bitwise-unary-ops op)
-      (bitwise-op-type (map (fn [r] (state-type state r)) refs))
-      (contains? numeric-ops op)
-      (numeric-op-type (map (fn [r] (state-type state r)) refs))
+      (ir/op-infer-facet? op) (ops/infer-op op inst f state)
+      ;; :call is typeinfer-coupled (call-dtype / call-core-type below) and
+      ;; not yet reified — the one remaining legacy arm.
+      (= op :call)            (or (call-dtype inst f)
+                                  (call-core-type inst f state)
+                                  :unknown)
+      ;; Facetless ops (:set-var, :tail-call, :pop, closures, :try, :dot,
+      ;; :def) — no type information tracked.
       :else :unknown)))
 
 ;; --- fixpoint driver -------------------------------------------------

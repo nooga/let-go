@@ -77,6 +77,48 @@ func installIRBridgeBuiltins() {
 		return vm.Boolean(arg0.LocalCarrying()), nil
 	})
 	ns.Def("op-local-carrying?", fn_op_local_carrying_Fn)
+	fn_op_infer_facet_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("ir/op-infer-facet?: expected (OpKw), got %d args", len(vs))
+		}
+		arg0Kw, ok0 := vs[0].(vm.Keyword)
+		if !ok0 {
+			return vm.NIL, fmt.Errorf("ir/op-infer-facet?: arg 0 must be Keyword, got %s", vs[0].Type().Name())
+		}
+		arg0, okOp0 := ir.OpByKeyword(string(arg0Kw))
+		if !okOp0 {
+			return vm.NIL, fmt.Errorf("ir/op-infer-facet?: unknown op %s", string(arg0Kw))
+		}
+		return vm.Boolean(arg0.InferFacet()), nil
+	})
+	ns.Def("op-infer-facet?", fn_op_infer_facet_Fn)
+	fn_op_lower_facet_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("ir/op-lower-facet?: expected (OpKw), got %d args", len(vs))
+		}
+		arg0Kw, ok0 := vs[0].(vm.Keyword)
+		if !ok0 {
+			return vm.NIL, fmt.Errorf("ir/op-lower-facet?: arg 0 must be Keyword, got %s", vs[0].Type().Name())
+		}
+		arg0, okOp0 := ir.OpByKeyword(string(arg0Kw))
+		if !okOp0 {
+			return vm.NIL, fmt.Errorf("ir/op-lower-facet?: unknown op %s", string(arg0Kw))
+		}
+		return vm.Boolean(arg0.LowerFacet()), nil
+	})
+	ns.Def("op-lower-facet?", fn_op_lower_facet_Fn)
+	fn_op_kws_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 0 {
+			return vm.NIL, fmt.Errorf("ir/op-kws: expected (), got %d args", len(vs))
+		}
+		kws := ir.OpKeywords()
+		out := make([]vm.Value, 0, len(kws))
+		for _, k := range kws {
+			out = append(out, vm.Keyword(k))
+		}
+		return vm.NewArrayVector(out), nil
+	})
+	ns.Def("op-kws", fn_op_kws_Fn)
 	fn_op_cheap_load_Fn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("ir/op-cheap-load?: expected (OpKw), got %d args", len(vs))

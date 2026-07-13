@@ -301,6 +301,24 @@
     :args [OpKw]
     :body "return vm.Boolean(arg0.LocalCarrying()), nil"}
 
+   {:name "op-infer-facet?" :lisp-name "ir/op-infer-facet?"
+    :args [OpKw]
+    :body "return vm.Boolean(arg0.InferFacet()), nil"}
+
+   {:name "op-lower-facet?" :lisp-name "ir/op-lower-facet?"
+    :args [OpKw]
+    :body "return vm.Boolean(arg0.LowerFacet()), nil"}
+
+   ;; Every catalogued op as a vector of kebab-case keywords, in Op order.
+   ;; Lets .lg-side exhaustiveness checks (ir.ops) enumerate the closed op
+   ;; set from the catalog instead of a hand-maintained list.
+   {:name "op-kws" :lisp-name "ir/op-kws"
+    :args []
+    :body "kws := ir.OpKeywords()
+             out := make([]vm.Value, 0, len(kws))
+             for _, k := range kws { out = append(out, vm.Keyword(k)) }
+             return vm.NewArrayVector(out), nil"}
+
    {:name "op-cheap-load?" :lisp-name "ir/op-cheap-load?"
     :args [OpKw]
     :body "return vm.Boolean(ir.IsCheapMaterializeOp(arg0)), nil"}
