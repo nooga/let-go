@@ -80,7 +80,10 @@ func NewQueuedKeySource(r io.Reader) KeySource {
 // keystroke — it just collects held-key bursts in fewer reads.
 const queuedReadChunkSize = 256
 
-// start launches the background reader once. Called with s.mu held.
+// start launches the reader goroutine once. The caller must hold s.mu: start
+// flips s.started, so the guard against a double launch relies on the lock. The
+// goroutine it spawns (readLoop) then does its own finer-grained locking and
+// does not hold s.mu while blocked on Read.
 func (s *queuedKeySource) start() {
 	if s.started {
 		return
@@ -139,7 +142,7 @@ func (s *queuedKeySource) ReadKey() (string, error) {
 	s.start()
 
 	for len(s.buf) == 0 && !s.done {
-		s.waitLocked(0) // no deadline: block until data or reader end
+		s.condWait(0) // no deadline: block until data or reader end
 	}
 	if len(s.buf) == 0 {
 		return "", s.err // clean EOF (err nil) or a real reader failure
@@ -169,7 +172,7 @@ func (s *queuedKeySource) ReadKey() (string, error) {
 			return s.take(n), nil
 		}
 		before := len(s.buf)
-		s.waitLocked(remaining)
+		s.condWait(remaining)
 		if len(s.buf) > before {
 			deadline = time.Time{} // new bytes — restart the inter-byte window
 		}
@@ -187,10 +190,12 @@ func (s *queuedKeySource) take(n int) string {
 	return tok
 }
 
-// waitLocked releases the lock, waits for a reader wake (or the timeout, if
-// nonzero), and re-acquires it — the condition-variable wait, done over a
-// channel so it can be time-bounded. Called with s.mu held; returns holding it.
-func (s *queuedKeySource) waitLocked(timeout time.Duration) {
+// condWait releases s.mu, waits for a reader wake (or the timeout, if nonzero),
+// then re-acquires it — a condition-variable wait done over a channel so it can
+// be time-bounded. Named for the sync.Cond.Wait pattern: the lock is dropped for
+// the duration of the wait, not held across it. Call with s.mu held; returns
+// holding it.
+func (s *queuedKeySource) condWait(timeout time.Duration) {
 	s.mu.Unlock()
 	if timeout > 0 {
 		select {
