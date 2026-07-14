@@ -8607,6 +8607,10 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// let-go already models regexes as vm.RegexType, so aliasing the JVM class to
 	// it makes m/regexp? genuinely work.
 	ns.Def("java.util.regex.Pattern", vm.RegexType)
+
+	// Mutable JVM collection shims (see host_hashmap.go / host_arraydeque.go).
+	installHostHashMap(ns)
+	installHostArrayDeque(ns)
 }
 
 func longCompatValue(v int64) vm.Value {
