@@ -8607,6 +8607,8 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// let-go already models regexes as vm.RegexType, so aliasing the JVM class to
 	// it makes m/regexp? genuinely work.
 	ns.Def("java.util.regex.Pattern", vm.RegexType)
+
+	installJVMStatics(ns)
 }
 
 func longCompatValue(v int64) vm.Value {
