@@ -1591,6 +1591,13 @@ func invokeMethodFallback(rec vm.Value, name vm.Symbol, args []vm.Value, origina
 			return fn.Invoke(append([]vm.Value{rec}, args...))
 		}
 	}
+	// Generic JVM collection-interface interop (.valAt/.iterator/.assoc/.cons/
+	// .nth/.count/.hashCode/.longValue) on any let-go collection — see
+	// host_interop.go. Placed before the name→fn fallbacks because `.cons`
+	// (append) must not resolve to core `cons` (prepend).
+	if v, handled, err := hostCollectionMethod(rec, name, args); handled || err != nil {
+		return v, err
+	}
 	if isCompatChecker(rec) && len(args) == 1 {
 		switch name {
 		case "isLong":
