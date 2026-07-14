@@ -8609,6 +8609,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	ns.Def("java.util.regex.Pattern", vm.RegexType)
 
 	installJVMStatics(ns)
+	installJVMStubs(ns)
 }
 
 func longCompatValue(v int64) vm.Value {
