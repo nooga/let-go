@@ -73,7 +73,7 @@ func installJVMStatics(ns *vm.Namespace) {
 			before := m.(*vm.PersistentMap).RawCount()
 			m = m.Assoc(k, arr.Get(i+1))
 			if m.(*vm.PersistentMap).RawCount() == before {
-				return vm.NIL, fmt.Errorf("Duplicate key: %s", k)
+				return vm.NIL, fmt.Errorf("duplicate key: %s", k)
 			}
 		}
 		return m, nil
