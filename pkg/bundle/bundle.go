@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/nooga/let-go/pkg/rt"
 )
@@ -162,8 +163,8 @@ func payloadFitsFile(lgbSize, resSize, idSize uint64, trailerLen, total int64) b
 }
 
 // ReadBundledSelf checks whether the current executable carries an appended
-// payload, trying os.Executable, os.Args[0], and /proc/self/exe in turn.
-// Returns nil, nil, "" when the running binary is not a bundle. Shared by
+// payload, trying os.Executable, os.Args[0], and (on Linux) /proc/self/exe in
+// turn. Returns nil, nil, "" when the running binary is not a bundle. Shared by
 // every entry point that can run as a standalone bundle (lg, lg-runtime).
 func ReadBundledSelf() (lgb []byte, res []byte, storeID string) {
 	candidates := make([]string, 0, 3)
@@ -173,7 +174,13 @@ func ReadBundledSelf() (lgb []byte, res []byte, storeID string) {
 	if len(os.Args) > 0 && os.Args[0] != "" {
 		candidates = append(candidates, os.Args[0])
 	}
-	candidates = append(candidates, "/proc/self/exe")
+	// /proc/self/exe only names the running binary on Linux; it's the fallback
+	// for a binary unlinked while running, where os.Executable's path is stale.
+	// Off Linux it can't refer to this executable, so appending it would read
+	// an unrelated (potentially attacker-planted) file as our own payload.
+	if runtime.GOOS == "linux" {
+		candidates = append(candidates, "/proc/self/exe")
+	}
 
 	seen := map[string]bool{}
 	for _, path := range candidates {
