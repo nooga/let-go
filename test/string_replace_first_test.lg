@@ -17,3 +17,17 @@
     (is (= "Smith John" (str/replace-first "John Smith" #"(\w+)\s(\w+)" "$2 $1"))))
   (testing "returns the string unchanged when the pattern does not match"
     (is (= "abc" (str/replace-first "abc" #"[0-9]" "X")))))
+
+(deftest positive-lookahead-regex-match
+  (testing "terminal positive lookahead constrains without consuming"
+    (is (= "insert into" (str/replace "insert-into" #"(\w)-(?=\w)" "$1 ")))
+    (is (= "a b c" (str/replace "a-b-c" #"(\w)-(?=\w)" "$1 ")))
+    (is (= "<a->b" (str/replace "a-b" #"(\w)-(?=\w)" "<$0>")))
+    (is (= "a b c"
+           (str/replace "a-b-c" #"(\w)-(?=\w)"
+                        (fn [[_ letter]] (str letter " ")))))
+    (is (= "-leading trailing-"
+           (str/replace "-leading trailing-" #"(\w)-(?=\w)" "$1 ")))
+    (is (= ["a-" "a"] (re-find #"(\w)-(?=\w)" "a-b")))
+    (is (= '(["a-" "a"] ["b-" "b"])
+           (re-seq #"(\w)-(?=\w)" "a-b-c")))))

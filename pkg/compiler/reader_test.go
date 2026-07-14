@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 	"github.com/stretchr/testify/assert"
 )
@@ -53,6 +54,35 @@ func TestReaderBasic(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, e, o)
 	}
+}
+
+func TestReaderKeywordInternalColons(t *testing.T) {
+	valid := map[string]vm.Keyword{
+		`:/`:        vm.Keyword(`/`),
+		`:.:.`:      vm.Keyword(`.:.`),
+		`:a:b`:      vm.Keyword(`a:b`),
+		`:a:b/c`:    vm.Keyword(`a:b/c`),
+		`:foo/:bar`: vm.Keyword(`foo/:bar`),
+	}
+	for input, want := range valid {
+		r := NewLispReader(strings.NewReader(input), "keyword-colons.lg")
+		got, err := r.Read()
+		assert.NoError(t, err, input)
+		assert.Equal(t, want, got, input)
+	}
+
+	for _, input := range []string{`:a:`, `:a::b`, `:a:/b`} {
+		r := NewLispReader(strings.NewReader(input), "keyword-colons.lg")
+		_, err := r.Read()
+		assert.Error(t, err, input)
+	}
+
+	current := rt.CurrentNS.Deref().(*vm.Namespace)
+	current.Alias(vm.Symbol("keyword-colon-alias"), vm.NewNamespace("keyword-target"))
+	r := NewLispReader(strings.NewReader(`::keyword-colon-alias/:bar`), "keyword-colons.lg")
+	got, err := r.Read()
+	assert.NoError(t, err)
+	assert.Equal(t, vm.Keyword(`keyword-target/:bar`), got)
 }
 
 func TestReaderSkipsLeadingNoValueForms(t *testing.T) {

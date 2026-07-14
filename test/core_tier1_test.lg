@@ -180,6 +180,34 @@
     (is (nil? (nthnext [1 2] 5)))
     (is (nil? (nthnext nil nil)))))
 
+(deftest partition-all-test
+  (testing "one-arity returns a transducer and flushes the final short group"
+    (is (= [[1 2] [3 4] [5]]
+           (into [] (partition-all 2) [1 2 3 4 5]))))
+  (testing "two-arity partitions the final short group"
+    (is (= '((1 2) (3 4) (5))
+           (partition-all 2 [1 2 3 4 5]))))
+  (testing "three-arity supports overlapping and gapped steps"
+    (is (= '((1 2 3) (3 4 5) (5))
+           (partition-all 3 2 [1 2 3 4 5])))
+    (is (= '((1 2) (4 5))
+           (partition-all 2 3 [1 2 3 4 5]))))
+  (testing "empty input is empty and realization is lazy"
+    (is (= '() (partition-all 2 nil)))
+    (let [seen (atom 0)
+          xs   (map (fn [x] (swap! seen inc) x) [1 2 3])
+          parts (partition-all 2 xs)]
+      (is (= 0 @seen))
+      (is (= '(1 2) (first parts)))
+      (is (pos? @seen)))))
+
+(deftest remove-transducer-test
+  (testing "one-arity remove returns a transducer"
+    (is (= [2 4]
+           (into [] (remove odd?) [1 2 3 4]))))
+  (testing "two-arity remove remains lazy sequence removal"
+    (is (= '(2 4) (remove odd? [1 2 3 4])))))
+
 ;; --- cycle + take ---
 
 (deftest cycle-with-take

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 type theRegexType struct {
@@ -34,7 +35,9 @@ var RegexType *theRegexType = &theRegexType{}
 
 // Regex is boxed int
 type Regex struct {
-	re *regexp.Regexp
+	re             *regexp.Regexp
+	pattern        string
+	lookaheadGroup int
 }
 
 // Type implements Value
@@ -46,16 +49,22 @@ func (l *Regex) Unbox() any {
 }
 
 func (l *Regex) String() string {
-	return fmt.Sprintf("#%q", l.re)
+	return fmt.Sprintf("#%q", l.Pattern())
 }
 
 func (l *Regex) ReplaceAll(s string, replacement string) string {
+	if l.lookaheadGroup > 0 {
+		return l.replaceLookahead(s, replacement, false)
+	}
 	return l.re.ReplaceAllString(s, replacement)
 }
 
 // ReplaceFirst replaces only the first match, expanding $-group references in
 // the replacement (as ReplaceAll does), matching clojure.string/replace-first.
 func (l *Regex) ReplaceFirst(s string, replacement string) string {
+	if l.lookaheadGroup > 0 {
+		return l.replaceLookahead(s, replacement, true)
+	}
 	loc := l.re.FindStringSubmatchIndex(s)
 	if loc == nil {
 		return s
@@ -80,6 +89,9 @@ func (l *Regex) ReplaceFirstFunc(s string, f func(groups []string, present []boo
 }
 
 func (l *Regex) replaceFunc(s string, f func(groups []string, present []bool) (string, error), first bool) (string, error) {
+	if l.lookaheadGroup > 0 {
+		return l.replaceLookaheadFunc(s, f, first)
+	}
 	n := -1
 	if first {
 		n = 1
@@ -113,38 +125,232 @@ func (l *Regex) replaceFunc(s string, f func(groups []string, present []bool) (s
 }
 
 func (l *Regex) FindStringSubmatch(s string) []string {
+	if l.lookaheadGroup > 0 {
+		matches := l.lookaheadMatches(s, 1)
+		if len(matches) == 0 {
+			return nil
+		}
+		return stringsFromMatch(s, matches[0].visible)
+	}
 	return l.re.FindStringSubmatch(s)
 }
 
 func (l *Regex) FindStringSubmatchIndex(s string) []int {
+	if l.lookaheadGroup > 0 {
+		matches := l.lookaheadMatches(s, 1)
+		if len(matches) == 0 {
+			return nil
+		}
+		return matches[0].visible
+	}
 	return l.re.FindStringSubmatchIndex(s)
 }
 
 func (l *Regex) FindAllString(s string, n int) []string {
+	if l.lookaheadGroup > 0 {
+		matches := l.lookaheadMatches(s, n)
+		if len(matches) == 0 {
+			return nil
+		}
+		result := make([]string, len(matches))
+		for i, match := range matches {
+			result[i] = s[match.visible[0]:match.visible[1]]
+		}
+		return result
+	}
 	return l.re.FindAllString(s, n)
 }
 
 func (l *Regex) FindAllStringSubmatch(s string, n int) [][]string {
+	if l.lookaheadGroup > 0 {
+		matches := l.lookaheadMatches(s, n)
+		if len(matches) == 0 {
+			return nil
+		}
+		result := make([][]string, len(matches))
+		for i, match := range matches {
+			result[i] = stringsFromMatch(s, match.visible)
+		}
+		return result
+	}
 	return l.re.FindAllStringSubmatch(s, n)
 }
 
 func (l *Regex) FindAllStringSubmatchIndex(s string, n int) [][]int {
+	if l.lookaheadGroup > 0 {
+		matches := l.lookaheadMatches(s, n)
+		if len(matches) == 0 {
+			return nil
+		}
+		result := make([][]int, len(matches))
+		for i, match := range matches {
+			result[i] = match.visible
+		}
+		return result
+	}
 	return l.re.FindAllStringSubmatchIndex(s, n)
 }
 
 func (l *Regex) Split(s string, n int) []string {
+	if l.lookaheadGroup > 0 {
+		if n == 0 {
+			return nil
+		}
+		matchLimit := -1
+		if n > 0 {
+			matchLimit = n - 1
+		}
+		matches := l.lookaheadMatches(s, matchLimit)
+		result := make([]string, 0, len(matches)+1)
+		last := 0
+		for _, match := range matches {
+			result = append(result, s[last:match.visible[0]])
+			last = match.visible[1]
+		}
+		return append(result, s[last:])
+	}
 	return l.re.Split(s, n)
 }
 
 // Pattern returns the regex pattern string.
-func (l *Regex) Pattern() string { return l.re.String() }
+func (l *Regex) Pattern() string {
+	if l.pattern != "" {
+		return l.pattern
+	}
+	return l.re.String()
+}
 
 func NewRegex(s string) (Value, error) {
 	re, err := regexp.Compile(s)
-	if err != nil {
+	if err == nil {
+		return &Regex{re: re, pattern: s}, nil
+	}
+
+	prefix, assertion, ok := terminalPositiveLookahead(s)
+	if !ok {
 		return NIL, err
 	}
-	return &Regex{
-		re: re,
-	}, nil
+	assertionRE, assertionErr := regexp.Compile(assertion)
+	if assertionErr != nil || assertionRE.NumSubexp() != 0 {
+		return NIL, err
+	}
+	const groupName = "__let_go_terminal_lookahead"
+	re, fallbackErr := regexp.Compile(prefix + "(?P<" + groupName + ">" + assertion + ")")
+	if fallbackErr != nil {
+		return NIL, err
+	}
+	return &Regex{re: re, pattern: s, lookaheadGroup: re.SubexpIndex(groupName)}, nil
+}
+
+type lookaheadMatch struct {
+	raw     []int
+	visible []int
+}
+
+func terminalPositiveLookahead(pattern string) (string, string, bool) {
+	if !strings.HasSuffix(pattern, ")") {
+		return "", "", false
+	}
+	start := strings.LastIndex(pattern, "(?=")
+	if start < 0 || start+3 == len(pattern)-1 {
+		return "", "", false
+	}
+	return pattern[:start], pattern[start+3 : len(pattern)-1], true
+}
+
+func (l *Regex) lookaheadMatches(s string, n int) []lookaheadMatch {
+	if n == 0 {
+		return nil
+	}
+	result := make([]lookaheadMatch, 0)
+	for offset := 0; offset <= len(s) && (n < 0 || len(result) < n); {
+		raw := l.re.FindStringSubmatchIndex(s[offset:])
+		if raw == nil {
+			break
+		}
+		for i, index := range raw {
+			if index >= 0 {
+				raw[i] = index + offset
+			}
+		}
+		assertionStart := raw[2*l.lookaheadGroup]
+		visible := make([]int, 0, len(raw)-2)
+		visible = append(visible, raw[:2*l.lookaheadGroup]...)
+		visible = append(visible, raw[2*l.lookaheadGroup+2:]...)
+		visible[1] = assertionStart
+		result = append(result, lookaheadMatch{raw: raw, visible: visible})
+
+		next := assertionStart
+		if next <= offset {
+			if offset == len(s) {
+				next = offset + 1
+			} else {
+				_, width := utf8.DecodeRuneInString(s[offset:])
+				next = offset + width
+			}
+		}
+		offset = next
+	}
+	return result
+}
+
+func stringsFromMatch(s string, indices []int) []string {
+	groups := make([]string, len(indices)/2)
+	for i := range groups {
+		if indices[2*i] >= 0 {
+			groups[i] = s[indices[2*i]:indices[2*i+1]]
+		}
+	}
+	return groups
+}
+
+func (l *Regex) replaceLookahead(s, replacement string, first bool) string {
+	limit := -1
+	if first {
+		limit = 1
+	}
+	matches := l.lookaheadMatches(s, limit)
+	if len(matches) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, match := range matches {
+		b.WriteString(s[last:match.visible[0]])
+		expandIndices := append([]int(nil), match.raw...)
+		expandIndices[1] = match.visible[1]
+		b.Write(l.re.ExpandString(nil, replacement, s, expandIndices))
+		last = match.visible[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+func (l *Regex) replaceLookaheadFunc(s string, f func(groups []string, present []bool) (string, error), first bool) (string, error) {
+	limit := -1
+	if first {
+		limit = 1
+	}
+	matches := l.lookaheadMatches(s, limit)
+	if len(matches) == 0 {
+		return s, nil
+	}
+	var b strings.Builder
+	last := 0
+	for _, match := range matches {
+		b.WriteString(s[last:match.visible[0]])
+		groups := stringsFromMatch(s, match.visible)
+		present := make([]bool, len(groups))
+		for i := range present {
+			present[i] = match.visible[2*i] >= 0
+		}
+		replacement, err := f(groups, present)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(replacement)
+		last = match.visible[1]
+	}
+	b.WriteString(s[last:])
+	return b.String(), nil
 }

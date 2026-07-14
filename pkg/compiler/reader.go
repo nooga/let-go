@@ -239,6 +239,28 @@ func (r *LispReader) ReadSkipNoValue() (vm.Value, error) {
 	}
 }
 
+func hasInvalidKeywordColonPart(s string, allowLeading bool) bool {
+	if allowLeading && strings.HasPrefix(s, ":") {
+		s = strings.TrimPrefix(s, ":")
+	}
+	if s == "" || strings.HasPrefix(s, ":") || strings.HasSuffix(s, ":") {
+		return true
+	}
+	return strings.Contains(s, "::")
+}
+
+func hasInvalidKeywordColon(s string) bool {
+	if s == "/" {
+		return false
+	}
+	parts := strings.SplitN(s, "/", 2)
+	if len(parts) == 1 {
+		return hasInvalidKeywordColonPart(parts[0], false)
+	}
+	return hasInvalidKeywordColonPart(parts[0], false) ||
+		hasInvalidKeywordColonPart(parts[1], true)
+}
+
 func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 	s, ok := t.(vm.Symbol)
 	if !ok {
@@ -258,7 +280,8 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 				parts := strings.SplitN(onom, "/", 2)
 				alias := parts[0]
 				name := parts[1]
-				if alias == "" || name == "" || strings.ContainsAny(name, ":/") {
+				if alias == "" || name == "" || strings.Contains(name, "/") ||
+					hasInvalidKeywordColonPart(alias, false) || hasInvalidKeywordColonPart(name, true) {
 					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
 				}
 				// Look up alias in current namespace
@@ -270,13 +293,13 @@ func interpretToken(r *LispReader, t vm.Value) (vm.Value, error) {
 				nom = resolved.Name() + "/" + name
 			} else {
 				// ::foo — resolve to current namespace
-				if strings.ContainsAny(onom, ":") {
+				if hasInvalidKeywordColon(onom) {
 					return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
 				}
 				nom = rt.CurrentNS.Deref().(*vm.Namespace).Name() + "/" + onom
 			}
 		}
-		if strings.ContainsAny(nom, ":") {
+		if hasInvalidKeywordColon(nom) {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid token: %s", ss))
 		}
 		r.closeToken(TokenKeyword)

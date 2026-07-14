@@ -2622,6 +2622,34 @@
         (recur (next s) (dec i))
         (seq s)))))
 
+(defn partition-all
+  "Returns lazy partitions of n items, advancing step items each time. The
+   final partition may contain fewer than n items."
+  ([n]
+   (fn [rf]
+     (let [buffer (atom [])]
+       (fn
+         ([] (rf))
+         ([result]
+          (let [items @buffer
+                result (if (seq items) (rf result items) result)]
+            (reset! buffer [])
+            (rf (unreduced result))))
+         ([result input]
+          (let [items (swap! buffer conj input)]
+            (if (= n (count items))
+              (do
+                (reset! buffer [])
+                (rf result items))
+              result)))))))
+  ([n coll]
+   (partition-all n n coll))
+  ([n step coll]
+   (lazy-seq
+     (when-let [s (seq coll)]
+       (cons (take n s)
+             (partition-all n step (nthnext s step)))))))
+
 ;; --- Tier 2 functions ---
 
 ;; future macro — runs body in a goroutine, returns a promise

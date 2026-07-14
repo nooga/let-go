@@ -5263,16 +5263,23 @@ func installLangNS() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("extend-type* expected map of implementations")
 		}
-		// vs[1] is the type to extend — either a ValueType or nil
+		// vs[1] is the type to extend — nil, a concrete ValueType, or a
+		// reusable TypeUnion descriptor for a compatibility interface.
 		if vs[1] == vm.NIL {
 			protocol.ExtendNil(implMap)
-		} else {
-			vt, ok := vs[1].(vm.ValueType)
-			if !ok {
-				return vm.NIL, fmt.Errorf("extend-type* expected a type, got %s", vs[1].Type().Name())
-			}
-			protocol.Extend(vt, implMap)
+			return vm.NIL, nil
 		}
+		if union, ok := vs[1].(*vm.TypeUnion); ok {
+			for _, valueType := range union.Types() {
+				protocol.Extend(valueType, implMap)
+			}
+			return vm.NIL, nil
+		}
+		vt, ok := vs[1].(vm.ValueType)
+		if !ok {
+			return vm.NIL, fmt.Errorf("extend-type* expected a type, got %s", vs[1].Type().Name())
+		}
+		protocol.Extend(vt, implMap)
 		return vm.NIL, nil
 	})
 
@@ -5802,15 +5809,17 @@ func installLangNS() {
 			return vm.NIL, nil
 		}
 		m, ok := vs[0].(vm.IMeta)
-		if !ok {
-			// Non-IMeta values pass through unchanged. This is load-bearing:
-			// let-go compiles value-position type hints (e.g. `^long x`) into
-			// runtime with-meta calls, so erroring here would break every
-			// hinted scalar. Reference types (deftype/reify instances,
-			// protocols, collections) ARE IMeta and carry metadata for real.
-			return vs[0], nil
+		if ok {
+			return m.WithMeta(vs[1]), nil
 		}
-		return m.WithMeta(vs[1]), nil
+		fn, ok := vs[0].(vm.Fn)
+		if ok {
+			return vm.NewMetaFn(fn, vs[1]), nil
+		}
+		// Other non-IMeta values pass through unchanged. This is
+		// load-bearing: value-position type hints compile to runtime
+		// with-meta calls, so hinted scalars must remain valid.
+		return vs[0], nil
 	})
 
 	metaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -6566,7 +6575,7 @@ func installLangNS() {
 		// fn? returns true only for actual functions, not all IFn implementors
 		// (keywords, maps, sets, vectors are invokable but are not fn?)
 		switch vs[0].(type) {
-		case *vm.NativeFn, *vm.Func, *vm.Closure, *vm.MultiArityFn, *vm.MultiFn:
+		case *vm.NativeFn, *vm.Func, *vm.Closure, *vm.MultiArityFn, *vm.MultiFn, *vm.MetaFn:
 			return vm.TRUE, nil
 		default:
 			return vm.FALSE, nil
@@ -6599,6 +6608,9 @@ func installLangNS() {
 				return anc.Contains(t), nil
 			}
 			return vm.FALSE, nil
+		}
+		if union, ok := vs[0].(*vm.TypeUnion); ok {
+			return vm.Boolean(union.Contains(vs[1].Type())), nil
 		}
 		// Clojure-compat interface markers (e.g. clojure.lang.IEditableCollection)
 		// are registered as plain symbols by installClojureCompatAliases. Answer
@@ -8550,6 +8562,19 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// both resolve through QueueType, like the other concrete clojure.lang.*
 	// classes above. Interface-marker ancestry is wired in directTypeParents.
 	ns.Def("clojure.lang.PersistentQueue", vm.QueueType)
+	ns.Def("clojure.lang.Keyword", vm.KeywordType)
+	ns.Def("clojure.lang.Symbol", vm.SymbolType)
+	ns.Def("clojure.lang.IPersistentVector", vm.NewTypeUnion(
+		"clojure.lang.IPersistentVector",
+		vm.ArrayVectorType,
+		vm.PersistentVectorType,
+	))
+	ns.Def("clojure.lang.IPersistentMap", vm.NewTypeUnion(
+		"clojure.lang.IPersistentMap",
+		vm.MapType,
+		vm.PersistentMapType,
+		vm.SortedMapType,
+	))
 
 	for _, name := range []string{
 		"clojure.lang.Associative",

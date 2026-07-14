@@ -1,0 +1,17 @@
+(ns test.fn-metadata-test
+  (:require
+   [test :refer :all]))
+
+(def ^:dynamic *fn-meta-marker* :root)
+
+(deftest function-metadata-test
+  (testing "functions retain metadata and remain invokable"
+    (let [f (with-meta (constantly :value) {:wrapper :present})]
+      (is (= {:wrapper :present} (meta f)))
+      (is (= :value (f)))
+      (is (fn? f))))
+  (testing "metadata wrappers preserve the caller's dynamic context"
+    (let [f (with-meta (fn [] *fn-meta-marker*) {:wrapped true})]
+      (is (= :bound
+             (binding [*fn-meta-marker* :bound]
+               (f)))))))

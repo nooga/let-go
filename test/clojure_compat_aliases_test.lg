@@ -10,6 +10,19 @@
 (defrecord CompatImpl [] CompatInterface
   (compat-method [this x] x))
 
+(defprotocol CompatInlineValue
+  (compat-sqlize [this]))
+
+(extend-protocol CompatInlineValue
+  clojure.lang.Keyword
+  (compat-sqlize [x] [:keyword x])
+  clojure.lang.Symbol
+  (compat-sqlize [x] [:symbol x])
+  clojure.lang.IPersistentVector
+  (compat-sqlize [x] [:vector x])
+  clojure.lang.IPersistentMap
+  (compat-sqlize [x] [:map x]))
+
 (register-constructor! 'CompatCtor
                        (fn [& xs]
                          {:ctor :symbol
@@ -24,7 +37,7 @@
   (Exception. "boom"))
 
 (deftest clojure-class-aliases-test
-  (testing "JVM-style class vars point at let-go runtime types"
+  (testing "JVM-style class vars point at let-go runtime type descriptors"
     (is (= java.lang.Long (type 1)))
     (is (= java.lang.Double (type 1.0)))
     (is (= java.lang.Boolean (type true)))
@@ -34,7 +47,22 @@
     (is (= clojure.lang.Ratio (type 1/2)))
     (is (= clojure.lang.Atom (type (atom nil))))
     (is (= clojure.lang.IPending (type (promise))))
-    (is (= clojure.lang.PersistentHashSet (type #{})))))
+    (is (= clojure.lang.PersistentHashSet (type #{})))
+    (is (= clojure.lang.Keyword (type :keyword)))
+    (is (= clojure.lang.Symbol (type 'symbol)))
+    (is (instance? clojure.lang.IPersistentVector []))
+    (is (instance? clojure.lang.IPersistentVector (with-meta [] {})))
+    (is (instance? clojure.lang.IPersistentMap {}))
+    (is (instance? clojure.lang.IPersistentMap (with-meta {} {})))))
+
+(deftest clojure-collection-class-protocol-dispatch-test
+  (testing "JVM collection class aliases support protocol extension"
+    (is (= [:keyword :k] (compat-sqlize :k)))
+    (is (= [:symbol 's] (compat-sqlize 's)))
+    (is (= [:vector [1]] (compat-sqlize [1])))
+    (is (= [:vector [1]] (compat-sqlize (with-meta [1] {}))))
+    (is (= [:map {:k 1}] (compat-sqlize {:k 1})))
+    (is (= [:map {:k 1}] (compat-sqlize (with-meta {:k 1} {}))))))
 
 (deftest clojure-static-constant-aliases-test
   (testing "JVM-style static constant namespaces are available"

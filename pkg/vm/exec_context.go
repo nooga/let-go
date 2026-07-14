@@ -201,6 +201,8 @@ func (ec *ExecContext) SetBinding(v *Var, val Value) bool { return ec.setBinding
 func (ec *ExecContext) Invoke(fn Fn, args []Value) (Value, error) {
 	ec = ec.orRoot()
 	switch f := fn.(type) {
+	case *MetaFn:
+		return ec.Invoke(f.Wrapped(), args)
 	case *Func:
 		return f.invokeIn(ec, args)
 	case *Closure:
