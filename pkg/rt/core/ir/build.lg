@@ -164,24 +164,24 @@
     (let [caught (symbol (str (gensym "__lg-caught-") "\t"))]
       {:binding caught
        :body [(reduce
-               (fn [acc clause]
-                 (let [arm (apply list 'let*
-                                  [(:binding clause) caught]
-                                  (:body clause))]
-                   (if (nil? (:class clause))
-                     arm
-                     ;; catch-matches? resolves the class at dispatch time
-                     ;; (an unmodeled JVM class never matches, rather than
-                     ;; failing compilation) and gives Throwable its
-                     ;; catch-everything role.
-                     (list 'if
-                           (list 'core/catch-matches?
-                                 (list 'quote (:class clause))
-                                 caught)
-                           arm
-                           acc))))
-               (list 'core/throw caught)
-               (reverse clauses))]})))
+                (fn [acc clause]
+                  (let [arm (apply list 'let*
+                                   [(:binding clause) caught]
+                                   (:body clause))]
+                    (if (nil? (:class clause))
+                      arm
+                      ;; catch-matches? resolves the class at dispatch time
+                      ;; (an unmodeled JVM class never matches, rather than
+                      ;; failing compilation) and gives Throwable its
+                      ;; catch-everything role.
+                      (list 'if
+                            (list 'core/catch-matches?
+                                  (list 'quote (:class clause))
+                                  caught)
+                            arm
+                            acc))))
+                (list 'core/throw caught)
+                (reverse clauses))]})))
 
 (defn- parse-try [forms]
   "Split the subforms of a (try …) into [body-forms catch-clause finally-clause].
@@ -357,6 +357,10 @@
               (decimal? form)  (add-inst! ctx (ctx-block ctx) :const [] form)
               (ratio?   form)  (add-inst! ctx (ctx-block ctx) :const [] form)
               (uuid?    form)  (add-inst! ctx (ctx-block ctx) :const [] form)
+              ;; Regex literals arrive pre-compiled from the reader (like the
+              ;; tagged literals above) and carry as plain consts.
+              (instance? java.util.regex.Pattern form)
+              (add-inst! ctx (ctx-block ctx) :const [] form)
               (symbol?  form)  (build-symbol form ctx)
               (vector?  form)  (build-vector form ctx)
               (map?     form)  (build-map form ctx)

@@ -51,7 +51,12 @@ func PrecompiledNSChunk(name string) *vm.CodeChunk {
 
 func Eval(src string) (vm.Value, error) {
 	ns := rt.NS(rt.NameCoreNS)
-	compiler := NewCompiler(consts, ns)
+	// A per-eval CHILD pool: constants this eval introduces live exactly as
+	// long as the chunks/functions that reference them, instead of rooting
+	// the process-global pool forever. Shared constants still dedupe against
+	// the global parent; a long-lived host calling Eval in a loop no longer
+	// leaks one pool entry per transient constant (e.g. regex literals).
+	compiler := NewCompiler(vm.NewChildConsts(consts), ns)
 
 	_, out, err := compiler.CompileMultiple(strings.NewReader(src))
 	if err != nil {

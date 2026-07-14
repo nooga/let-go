@@ -66,6 +66,18 @@ func NewDebugCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
 	return c
 }
 
+// ChildForEval returns a fresh compilation context for one transient
+// top-level evaluation (a REPL input, a host Eval call): same namespace and
+// debug mode, but with a CHILD constant pool layered on this context's pool.
+// Constants the eval introduces are then reachable only through the chunks
+// and functions that use them — transient evals become collectible instead
+// of rooting the session pool forever.
+func (c *Context) ChildForEval() *Context {
+	child := NewCompiler(vm.NewChildConsts(c.consts), c.CurrentNS())
+	child.debug = c.debug
+	return child
+}
+
 func (c *Context) SetSource(source string) *Context {
 	c.source = source
 	return c
@@ -362,7 +374,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.chunk.AddSourceInfo(*info)
 	}
 	switch o.Type() {
-	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType:
+	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType, vm.RegexType:
 		n := c.constant(o)
 		c.emitWithArg(vm.OP_LOAD_CONST, n)
 		c.incSP(1)

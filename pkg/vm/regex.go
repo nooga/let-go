@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -33,6 +34,12 @@ func (t *theRegexType) Box(bare any) (Value, error) {
 var RegexType *theRegexType = &theRegexType{}
 
 // Regex is boxed int
+//
+// A Regex may be shared freely across goroutines/ExecContexts: regex literals
+// compile once at read time into constants visible to all threads, which is
+// safe because every method below is a read-only matching API (Go's regexp is
+// goroutine-safe except mutating config like Longest). Never add a mutating
+// configuration method here without copy-on-write (regexp.Copy).
 type Regex struct {
 	re *regexp.Regexp
 }
@@ -147,4 +154,20 @@ func NewRegex(s string) (Value, error) {
 	return &Regex{
 		re: re,
 	}, nil
+}
+
+// MustRegexFromReadable reconstructs a Regex from its readable #"..." form
+// (String()'s output: '#' followed by a Go-quoted pattern). Generated code
+// uses it to rebuild read-time-compiled regex literal constants; the pattern
+// was validated at read time, so failure here indicates a codegen bug.
+func MustRegexFromReadable(s string) *Regex {
+	pat, err := strconv.Unquote(s[1:])
+	if err != nil {
+		panic(fmt.Sprintf("MustRegexFromReadable: bad readable form %s: %v", s, err))
+	}
+	v, err := NewRegex(pat)
+	if err != nil {
+		panic(fmt.Sprintf("MustRegexFromReadable: %s: %v", s, err))
+	}
+	return v.(*Regex)
 }
