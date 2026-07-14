@@ -1,0 +1,83 @@
+//go:build bootstrap
+
+package main
+
+import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestWriteFileAtomicallyPreservesDestinationOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "core_compiled.lgb")
+	if err := os.WriteFile(path, []byte("original"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := errors.New("encode failed")
+	_, err := writeFileAtomically(path, func(w io.Writer) error {
+		if _, err := io.WriteString(w, "partial"); err != nil {
+			return err
+		}
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("writeFileAtomically() error = %v, want %v", err, wantErr)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("destination = %q after failed write, want original", got)
+	}
+	assertNoAtomicTemps(t, dir)
+}
+
+func TestWriteFileAtomicallyReplacesDestination(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "core_compiled.lgb")
+	if err := os.WriteFile(path, []byte("old"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	size, err := writeFileAtomically(path, func(w io.Writer) error {
+		_, err := io.WriteString(w, "replacement")
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != int64(len("replacement")) {
+		t.Fatalf("size = %d, want %d", size, len("replacement"))
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "replacement" {
+		t.Fatalf("destination = %q, want replacement", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMode := info.Mode().Perm(); gotMode != 0o640 {
+		t.Fatalf("destination mode = %o, want 640", gotMode)
+	}
+	assertNoAtomicTemps(t, dir)
+}
+
+func assertNoAtomicTemps(t *testing.T, dir string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, ".core_compiled.lgb.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files left behind: %v", matches)
+	}
+}
