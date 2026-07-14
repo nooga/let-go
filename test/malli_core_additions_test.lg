@@ -58,6 +58,12 @@
     (is (false? *unchecked-math*))
     (is (= true (binding [*unchecked-math* true] *unchecked-math*)))))
 
+(deftest warn-on-reflection-var
+  (testing "*warn-on-reflection* is a dynamic var defaulting to false"
+    (is (false? *warn-on-reflection*))
+    (is (= true (binding [*warn-on-reflection* true] *warn-on-reflection*)))
+    (is (string? (:doc (meta (var *warn-on-reflection*)))))))
+
 ;; --- bytes? (native) -----------------------------------------------------
 (deftest bytes-pred
   (testing "bytes? is true only for byte arrays"

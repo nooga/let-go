@@ -7,6 +7,7 @@
 package ir_test
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"strings"
@@ -1435,6 +1436,98 @@ func TestLowerGoCallDefaultStaysInvokeValue(t *testing.T) {
 	got := string(v.(vm.String))
 	if !strings.Contains(got, "InvokeValue") {
 		t.Fatalf("expected InvokeValue when *lowered-registry* is empty:\n%s", got)
+	}
+}
+
+func TestLowerGoWarnsWhenKnownDirectCandidateFallsBack(t *testing.T) {
+	ensureLoader()
+	runLispExpr(t, `(defn warning-callee [x] x)`)
+
+	const sourceName = "lower-warning-source.lg"
+	const source = "\n\n(ir.build/build-fn '(defn warning-caller [y]\n  (warning-callee y)))"
+	c := compiler.NewCompiler(vm.NewConsts(), rt.CoreNS).SetSource(sourceName)
+	_, fn, err := c.CompileMultiple(strings.NewReader(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	optimizeLispIR(t, fn)
+
+	lowerGoNS := rt.NS("ir.lower-go")
+	registryVar := lowerGoNS.LookupLocal(vm.Symbol("*lowered-registry*"))
+	registryKey := vm.NewPersistentVector([]vm.Value{
+		vm.Symbol("core"), vm.String("warning-callee"), vm.Int(1),
+	})
+	registryEntry := vm.NewPersistentMap([]vm.Value{
+		vm.Keyword("go-name"), vm.String("warningCallee"),
+		vm.Keyword("arity"), vm.Int(1),
+		vm.Keyword("needs-error?"), vm.FALSE,
+		vm.Keyword("param-specs"), vm.NewPersistentVector([]vm.Value{vm.String("unsupported.Type")}),
+		vm.Keyword("result-spec"), vm.String("vm.Value"),
+		vm.Keyword("native?"), vm.FALSE,
+		vm.Keyword("go-pkg"), vm.NIL,
+	})
+	oldRegistry := registryVar.Root()
+	registryVar.SetRoot(vm.NewPersistentMap([]vm.Value{registryKey, registryEntry}))
+	defer registryVar.SetRoot(oldRegistry)
+
+	warnVar := rt.CoreNS.LookupLocal(vm.Symbol("*warn-on-reflection*"))
+	oldWarning := warnVar.Root()
+	warnVar.SetRoot(vm.TRUE)
+	defer warnVar.SetRoot(oldWarning)
+	var output bytes.Buffer
+	restore := rt.SetReflectionWarningWriter(&output)
+	defer restore()
+	rt.ResetReflectionWarnings()
+
+	first := lowerGo(t, fn, ":bridge")
+	second := lowerGo(t, fn, ":bridge")
+	for _, result := range []*vm.PersistentMap{first, second} {
+		rendered := bindAndRenderGoDecl(t, result)
+		if !strings.Contains(rendered, "InvokeValueEC") {
+			t.Fatalf("expected fallback trampoline:\n%s", rendered)
+		}
+	}
+	got := output.String()
+	if count := strings.Count(got, "reflection warning"); count != 1 {
+		t.Fatalf("warning count = %d, want once for the fallback site:\n%s", count, got)
+	}
+	if !strings.Contains(got, sourceName+":4:") || !strings.Contains(got, "direct-native-fallback") {
+		t.Fatalf("warning lost lowering source/kind:\n%s", got)
+	}
+
+	output.Reset()
+	rt.ResetReflectionWarnings()
+	directEntry := registryEntry.Assoc(
+		vm.Keyword("param-specs"),
+		vm.NewPersistentVector([]vm.Value{vm.String("vm.Value")}),
+	).(vm.Value)
+	registryVar.SetRoot(vm.NewPersistentMap([]vm.Value{registryKey, directEntry}))
+	direct := lowerGo(t, fn, ":bridge")
+	if rendered := bindAndRenderGoDecl(t, direct); strings.Contains(rendered, "InvokeValueEC") {
+		t.Fatalf("supported candidate did not lower directly:\n%s", rendered)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("successfully direct-lowered call warned: %s", output.String())
+	}
+}
+
+func TestLowerGoDoesNotWarnForUnrelatedGenericCall(t *testing.T) {
+	ensureLoader()
+	fn := buildLispIR(t, `(defn generic-caller [f x] (f x))`)
+	optimizeLispIR(t, fn)
+
+	warnVar := rt.CoreNS.LookupLocal(vm.Symbol("*warn-on-reflection*"))
+	oldWarning := warnVar.Root()
+	warnVar.SetRoot(vm.TRUE)
+	defer warnVar.SetRoot(oldWarning)
+	var output bytes.Buffer
+	restore := rt.SetReflectionWarningWriter(&output)
+	defer restore()
+	rt.ResetReflectionWarnings()
+
+	lowerGo(t, fn, ":bridge")
+	if output.Len() != 0 {
+		t.Fatalf("unrelated generic IFn dispatch warned: %s", output.String())
 	}
 }
 

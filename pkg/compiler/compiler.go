@@ -341,6 +341,22 @@ func compileErrorAt(msg string, form vm.Value) *CompileError {
 	return NewCompileErrorWithSource(msg, info)
 }
 
+func hostTargetStaticallyKnown(target vm.Value) bool {
+	if target.Type() != vm.ListType {
+		return target.Type() != vm.SymbolType
+	}
+	seq, ok := target.(vm.Seq)
+	if !ok || seq == nil {
+		return false
+	}
+	head, ok := seq.First().(vm.Symbol)
+	if !ok {
+		return false
+	}
+	name := string(head)
+	return name == "with-meta" || strings.HasPrefix(name, "->") || strings.HasSuffix(name, ".")
+}
+
 // compileError creates a CompileError with source info from the current form context.
 func (c *Context) compileError(msg string) *CompileError {
 	// Try the current form, then walk up the form stack via parent list
@@ -584,6 +600,13 @@ func (c *Context) compileForm(o vm.Value) error {
 					vm.FormSource.Set(newform, *info)
 				}
 				return c.compileForm(newform)
+			}
+
+			if fnsym == "." {
+				args := lst.Next()
+				if args != nil && !hostTargetStaticallyKnown(args.First()) {
+					rt.EmitReflectionWarningForForm(o, "host-interop", "host target type is not statically known; using dynamic member dispatch")
+				}
 			}
 
 			// Locals shadow macros: skip macro expansion if name is bound in the
