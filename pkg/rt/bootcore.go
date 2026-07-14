@@ -1,10 +1,12 @@
-//go:build !bootstrap
-
 /*
  * Copyright (c) 2026 let-go contributors
  * SPDX-License-Identifier: MIT
  */
 
+// This file carries no bootstrap build constraint on purpose: BootCore must
+// exist in every build so a downstream caller compiles, and under -tags
+// bootstrap the embedded core (CoreCompiledLGB) is empty, making the len==0
+// guard return the documented error instead of an undefined-symbol failure.
 package rt
 
 import (
@@ -33,6 +35,14 @@ func BootCore() (*vm.ExecContext, error) {
 	if len(CoreCompiledLGB) == 0 {
 		return nil, fmt.Errorf("BootCore: embedded core is empty (built -tags bootstrap?)")
 	}
+
+	// Each eager chunk below runs its (ns …) form. runChunk frames carry no
+	// ExecContext, so in-ns falls through to CurrentNS.SetRoot — mutating the
+	// global *ns* root. Left unrestored, the returned context would deref a
+	// *ns* pointing at whichever chunk ran last; restore the pre-boot root so
+	// lowered code sees a stable namespace.
+	savedNS := CurrentNS.Deref()
+	defer CurrentNS.SetRoot(savedNS)
 
 	// Namespaces present before decode are native-backed (installers ran at
 	// package init); a bundle chunk for one of them is a hybrid ns whose chunk
@@ -77,13 +87,14 @@ func BootCore() (*vm.ExecContext, error) {
 
 	// Hybrid namespaces (native fns + bundled lg source, e.g. async) are reachable
 	// via qualified symbols without a require, so their chunks must run eagerly
-	// too or the lg-defined vars stay nil stubs.
+	// too or the lg-defined vars stay nil stubs. Iterate NSOrder (chunk/dependency
+	// order), not the NSChunks map, so execution order is deterministic.
 	if unit.NSChunks != nil {
-		for name, ch := range unit.NSChunks {
+		for _, name := range unit.NSOrder {
 			if name == "core" || baseline[name] || !preexisting[name] {
 				continue
 			}
-			if err := runChunk(ch); err != nil {
+			if err := runChunk(unit.NSChunks[name]); err != nil {
 				return nil, fmt.Errorf("BootCore: run hybrid %s: %w", name, err)
 			}
 		}

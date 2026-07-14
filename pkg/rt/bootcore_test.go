@@ -36,3 +36,18 @@ func TestBootCoreBindsLgDefinedCore(t *testing.T) {
 		t.Fatalf("invoke frequencies after BootCore: %v", err)
 	}
 }
+
+// The eager chunk loops mutate the global *ns* root (in-ns with no ExecContext
+// falls through to CurrentNS.SetRoot). Without a restore, the returned context
+// would deref *ns* pointing at whichever hybrid chunk iterated last — a value
+// that used to vary with map order between runs. BootCore must leave *ns* at
+// its pre-boot root.
+func TestBootCoreRestoresCurrentNS(t *testing.T) {
+	before := CurrentNS.Deref()
+	if _, err := BootCore(); err != nil {
+		t.Fatalf("BootCore: %v", err)
+	}
+	if after := CurrentNS.Deref(); after != before {
+		t.Fatalf("*ns* not restored: before=%v after=%v", before, after)
+	}
+}
