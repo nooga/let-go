@@ -27,7 +27,7 @@ func loudStub(what string) vm.Value {
 // theHostDateStubType is the ValueType for the java.time chainStub.
 type theHostDateStubType struct{}
 
-func (t *theHostDateStubType) String() string    { return t.Name() }
+func (t *theHostDateStubType) String() string     { return t.Name() }
 func (t *theHostDateStubType) Type() vm.ValueType { return vm.TypeType }
 func (t *theHostDateStubType) Unbox() any         { return nil }
 func (t *theHostDateStubType) Name() string       { return "java.time.stub" }
