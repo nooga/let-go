@@ -334,17 +334,26 @@ func installTermNS() {
 
 	// flush — sync the active *out* binding, mirroring native term.go (#308).
 	//
-	// Plan 9 has no fsync on a console/pipe: Sync there fails with "bad arg in
-	// system call" (EINVAL), and flushing such an fd is a no-op. xsofy calls
-	// flush every frame, so for the default console/pipe stdout (the hot path)
-	// we skip the syscall entirely — an early no-op — rather than issuing a
-	// failing Fwstat per frame. Whether stdout is a real (syncable) file is
-	// decided once here. A regular-file or buffered-writer *out* still gets a
-	// real Sync with its errors surfaced; only the EINVAL a console-backed
-	// *out* would raise is swallowed.
+	// Plan 9 has no fsync on a console/pipe/device: Sync there fails — the local
+	// console reports EINVAL ("bad arg in system call"), while /dev/stdout over
+	// drawterm reports EPERM ("permission denied") — and flushing such an fd is a
+	// no-op either way. xsofy calls flush every frame, so for a console/pipe/
+	// device stdout (the hot path) we skip the syscall entirely — an early no-op
+	// — rather than issue a failing Fwstat per frame.
+	//
+	// os.Stdout.Stat().IsRegular() can't make this call on Plan 9: a console
+	// Stats as "regular" through Go's FileMode (Plan 9 has no device-type bits),
+	// so IsRegular misclassifies the console as a syncable file and the flush
+	// then really Syncs it and errors. Classify by the fd's namespace path
+	// instead — a real file is syncable; the console (/dev/cons, /dev/stdout) and
+	// any #-prefixed device/pipe are not. A genuine regular-file or
+	// buffered-writer *out* still gets a real Sync with its errors surfaced; the
+	// EINVAL/EPERM a console-backed *out* raises (e.g. a rebound handle that slips
+	// past the fast path) is swallowed below.
 	stdoutSyncable := false
-	if fi, e := os.Stdout.Stat(); e == nil {
-		stdoutSyncable = fi.Mode().IsRegular()
+	if p, e := syscall.Fd2path(int(os.Stdout.Fd())); e == nil {
+		stdoutSyncable = !strings.HasPrefix(p, "#") &&
+			p != "/dev/cons" && p != "/dev/stdout"
 	}
 	flushFn := vm.NewCtxNativeFn("flush", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		h := resolveIOHandleVar(ec, "*out*")
@@ -357,8 +366,8 @@ func installTermNS() {
 		} else {
 			err = os.Stdout.Sync()
 		}
-		if errors.Is(err, syscall.EINVAL) {
-			err = nil // a non-stdout console-backed *out* — fsync is a no-op
+		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.EPERM) {
+			err = nil // console/device-backed *out* — fsync is a meaningless no-op
 		}
 		return vm.NIL, err
 	})
