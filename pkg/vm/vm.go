@@ -364,7 +364,7 @@ func (c *CodeChunk) Consts() *Consts { return c.consts }
 
 type exHandler struct {
 	catchIP   int   // absolute IP of catch block (-1 if none, or already consumed)
-	finallyIP int   // absolute IP of the abnormal-path finally block (-1 if none)
+	finallyIP int   // absolute IP of the shared finally block, entered by the abnormal path (-1 if none)
 	savedSP   int   // stack depth to restore
 	pending   error // in-flight error while the abnormal finally runs (nil otherwise)
 }
@@ -558,8 +558,8 @@ func (f *Frame) stackDbg() {
 //   - An armed catch (catchIP >= 0) receives the error value. Entering it
 //     consumes the catch; the handler stays on the stack when a finally
 //     exists so a throw from the catch body still routes through it.
-//   - With no armed catch but a finally, control enters the abnormal-path
-//     finally copy with the error parked in pending; OP_RETHROW at its end
+//   - With no armed catch but a finally, control enters the shared finally
+//     block with the error parked in pending; OP_FINALLY_END at its end
 //     re-dispatches the parked error.
 //   - A throw escaping an abnormal finally (pending != nil) replaces the
 //     in-flight error: the handler is discarded and unwinding continues
