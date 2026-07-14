@@ -16,7 +16,7 @@ import (
 // lives in the compat layer rather than in pkg/vm beside the real collections.
 type theHostHashMapType struct{}
 
-func (t *theHostHashMapType) String() string    { return t.Name() }
+func (t *theHostHashMapType) String() string     { return t.Name() }
 func (t *theHostHashMapType) Type() vm.ValueType { return vm.TypeType }
 func (t *theHostHashMapType) Unbox() any         { return nil }
 func (t *theHostHashMapType) Name() string       { return "java.util.HashMap" }

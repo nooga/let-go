@@ -16,7 +16,7 @@ import (
 // it lives in the compat layer rather than in pkg/vm.
 type theHostArrayDequeType struct{}
 
-func (t *theHostArrayDequeType) String() string    { return t.Name() }
+func (t *theHostArrayDequeType) String() string     { return t.Name() }
 func (t *theHostArrayDequeType) Type() vm.ValueType { return vm.TypeType }
 func (t *theHostArrayDequeType) Unbox() any         { return nil }
 func (t *theHostArrayDequeType) Name() string       { return "java.util.ArrayDeque" }
