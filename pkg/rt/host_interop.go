@@ -56,7 +56,7 @@ func hostHashOf(v vm.Value) vm.Int {
 // theHostIteratorType is the ValueType for seqIterator values.
 type theHostIteratorType struct{}
 
-func (t *theHostIteratorType) String() string    { return t.Name() }
+func (t *theHostIteratorType) String() string     { return t.Name() }
 func (t *theHostIteratorType) Type() vm.ValueType { return vm.TypeType }
 func (t *theHostIteratorType) Unbox() any         { return nil }
 func (t *theHostIteratorType) Name() string       { return "java.util.Iterator" }
