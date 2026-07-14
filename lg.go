@@ -153,11 +153,11 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 		maps.Copy(nsChunks, nsRes.LoadedChunks)
 		nsChunks[mainNS] = chunk
 		nsOrder := append(nsRes.LoadOrder, mainNS)
-		if err := bytecode.EncodeBundleOrdered(&lgbBuf, ctx.Consts(), nsChunks, nsOrder); err != nil {
+		if err := bytecode.EncodeBundleOrderedCompressed(&lgbBuf, ctx.Consts(), nsChunks, nsOrder, compressBundle); err != nil {
 			return err
 		}
 	} else {
-		if err := bytecode.EncodeCompilation(&lgbBuf, ctx.Consts(), chunk); err != nil {
+		if err := bytecode.EncodeCompilationCompressed(&lgbBuf, ctx.Consts(), chunk, compressBundle); err != nil {
 			return err
 		}
 	}
@@ -242,9 +242,9 @@ func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ds
 		maps.Copy(nsChunks, nsRes.LoadedChunks)
 		nsChunks[mainNS] = chunk
 		nsOrder := append(nsRes.LoadOrder, mainNS)
-		return bytecode.EncodeBundleOrdered(out, ctx.Consts(), nsChunks, nsOrder)
+		return bytecode.EncodeBundleOrderedCompressed(out, ctx.Consts(), nsChunks, nsOrder, compressBundle)
 	}
-	return bytecode.EncodeCompilation(out, ctx.Consts(), chunk)
+	return bytecode.EncodeCompilationCompressed(out, ctx.Consts(), chunk, compressBundle)
 }
 
 var nreplServer *nrepl.NreplServer
@@ -272,6 +272,7 @@ var debug bool
 var showVersion bool
 var compileOutput string
 var bundleOutput string
+var compressBundle bool
 var bundleBase string
 var wasmOutput string
 var wasmShell string
@@ -291,6 +292,7 @@ func init() {
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.StringVar(&compileOutput, "c", "", "compile .lg file to .lgb bytecode (specify output path)")
 	flag.StringVar(&bundleOutput, "b", "", "bundle .lg file into a standalone executable (specify output path)")
+	flag.BoolVar(&compressBundle, "z", false, "with -c/-b: DEFLATE-compress the bundle body (smaller .lgb / standalone binary; transparently inflated at load)")
 	flag.StringVar(&bundleBase, "bundle-base", "", "path to target-platform lg binary for cross-OS bundling (defaults to current executable)")
 	flag.StringVar(&wasmOutput, "w", "", "build .lg file into a WASM web app (specify output directory)")
 	flag.StringVar(&wasmShell, "w-shell", "xterm", "shell for -w: 'xterm' (default), 'none' (emit core only; client supplies its own shell via window.LetGoHost), or a path to a custom HTML template containing __LG_HOST_JS_BODY_PLACEHOLDER__")

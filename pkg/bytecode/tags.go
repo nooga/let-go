@@ -3,15 +3,41 @@ package bytecode
 // Magic bytes identifying an LGB file.
 var Magic = [4]byte{'L', 'G', 'B', 0x01}
 
-// FormatVersion is the current serialization format version.
-const FormatVersion uint16 = 2
+// FormatVersion is the newest serialization format version. Version 3 adds
+// the compressed-body framing. Plain bundles continue to use version 2 so
+// compression remains opt-in and their encoding stays byte-identical.
+const FormatVersion uint16 = 3
+
+const uncompressedFormatVersion uint16 = 2
 
 // Module flags.
 const (
 	FlagConstsBase   uint16 = 1 << 0 // ConstsBase field is present in consts section
 	FlagCapabilities uint16 = 1 << 1 // Capability mask follows the header
 	FlagLocalVars    uint16 = 1 << 2 // per-chunk local-variable debug tables follow the NS table (v2+)
+	// FlagCompressed: the module body (everything after the header + capability
+	// section) is a single compressed stream, prefixed by its declared
+	// uncompressed size and a codec byte. The magic, version, flags, and
+	// capability payload — including the opcode-set signature — stay plaintext,
+	// so a version/opcode mismatch is still rejected before any inflate.
+	// Compression is opt-in at compile time
+	// (lg -c -z / lg -b -z); a bundle without this bit decodes byte-identically
+	// to before.
+	FlagCompressed uint16 = 1 << 3
 )
+
+// Compression codecs (the uncompressed byte after the declared body size).
+// Kept as a value, not a second flag bit, so a future codec (e.g. zstd) slots
+// in without spending flag space or breaking the framing.
+const (
+	compressionNone  byte = 0 // reserved; a compressed bundle never writes this
+	compressionFlate byte = 1 // compress/flate (raw DEFLATE) — stdlib, TinyGo/wasip1-safe
+)
+
+// Keep a corrupt or adversarial bundle from making the byte-backed decode path
+// allocate without bound. This is intentionally well above current production
+// bundles while still providing a deterministic failure before an OOM.
+const maxUncompressedBundleBodySize uint64 = 256 << 20
 
 // Capability bits (valid when FlagCapabilities is set).
 const (

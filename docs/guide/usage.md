@@ -24,10 +24,16 @@ lg -r myfile.lg                   # run file, then REPL
 ```bash
 lg -c app.lgb app.lg              # compile to bytecode
 lg app.lgb                        # run bytecode
+lg -c app.lgb -z app.lg           # compile with a compressed bytecode body
 
 lg -b myapp app.lg                # bundle into a self-contained binary
+lg -b myapp -z app.lg             # bundle with compressed bytecode
 ./myapp                           # runs anywhere, no lg needed
 ```
+
+`-z` is opt-in and applies to `-c` and `-b`. The header remains plaintext for
+early compatibility checks; the bytecode body is compressed with DEFLATE and
+inflated transparently by `lg` and `lg-runtime`.
 
 The standalone binary is a copy of `lg` with your bytecode appended — copy it to
 another machine and it runs.
