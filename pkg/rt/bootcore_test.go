@@ -1,9 +1,9 @@
+//go:build !bootstrap
+
 /*
  * Copyright (c) 2026 let-go contributors
  * SPDX-License-Identifier: MIT
  */
-
-//go:build !bootstrap
 
 package rt
 
