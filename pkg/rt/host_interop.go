@@ -105,6 +105,14 @@ func hostCollectionMethod(rec vm.Value, name vm.Symbol, args []vm.Value) (vm.Val
 	if rec == nil {
 		return vm.NIL, false, nil
 	}
+	// Scope this shim to real collection types. vm.String satisfies Counted/
+	// Indexed/Collection but with byte semantics (String.Count is len in bytes),
+	// while core count/nth are rune-based — and java.lang.String isn't
+	// clojure.lang.Counted anyway. Letting strings fall through keeps
+	// (.count "café") = 4 (core), not 5 (bytes). Same carve-out indexed? uses.
+	if _, ok := rec.(vm.String); ok {
+		return vm.NIL, false, nil
+	}
 	switch string(name) {
 	case "valAt": // clojure.lang.ILookup
 		if l, ok := rec.(vm.Lookup); ok {

@@ -60,4 +60,11 @@ func TestCollectionInterop(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, vm.FALSE, v)
 	})
+	// Strings are not real collections here: the shim must not shadow core's
+	// rune-based count/nth with String's byte-based Counted/Indexed.
+	t.Run("strings keep core rune semantics", func(t *testing.T) {
+		v, err := evalInterop(`[(.count "café") (.count "é") (= (.nth "café" 3) \é)]`)
+		assert.NoError(t, err)
+		assert.Equal(t, "[4 1 true]", v.String())
+	})
 }
