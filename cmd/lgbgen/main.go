@@ -1097,31 +1097,10 @@ func writeGogenWireup(pkgNames []string, codeDir string) {
 // silently drop their native lowering and fall back to bytecode. Callers
 // must additionally gate on isSingleArityDefn — see its note on why
 // multi-arity forms cannot lower to a single Go function.
-func isDefnOnly(form vm.Value) bool {
-	list, ok := form.(vm.Sequable)
-	if !ok {
-		return false
-	}
-	seq := list.Seq()
-	if seq == nil {
-		return false
-	}
-	head := seq.First()
-	sym, ok := head.(vm.Symbol)
-	if !ok {
-		return false
-	}
-	return string(sym) == "defn" || string(sym) == "defn-"
-}
-
-// isMultimethodForm returns true for (defmulti ...) / (defmethod ...) forms.
-// They are forwarded to the Go-lowering pipeline (alongside defn forms) so
-// lower-ns-to-go can capture the dispatcher, lower type-dispatched methods to
-// native Go funcs, and devirtualize matching call sites to a `switch v.(type)`
-// (with a runtime-vm.MultiFn default arm). The pipeline filters them by
-// decl-kind; non-type-dispatched multimethods conservatively stay on the
-// runtime path.
-func isMultimethodForm(form vm.Value) bool {
+// formHeadIs reports whether form is a list whose head symbol equals any of
+// the given names. It is the shared shape behind the isDefnOnly /
+// isMultimethodForm / isTypeDeclForm form-triage predicates.
+func formHeadIs(form vm.Value, names ...string) bool {
 	list, ok := form.(vm.Sequable)
 	if !ok {
 		return false
@@ -1134,7 +1113,27 @@ func isMultimethodForm(form vm.Value) bool {
 	if !ok {
 		return false
 	}
-	return string(sym) == "defmulti" || string(sym) == "defmethod"
+	for _, n := range names {
+		if string(sym) == n {
+			return true
+		}
+	}
+	return false
+}
+
+func isDefnOnly(form vm.Value) bool {
+	return formHeadIs(form, "defn", "defn-")
+}
+
+// isMultimethodForm returns true for (defmulti ...) / (defmethod ...) forms.
+// They are forwarded to the Go-lowering pipeline (alongside defn forms) so
+// lower-ns-to-go can capture the dispatcher, lower type-dispatched methods to
+// native Go funcs, and devirtualize matching call sites to a `switch v.(type)`
+// (with a runtime-vm.MultiFn default arm). The pipeline filters them by
+// decl-kind; non-type-dispatched multimethods conservatively stay on the
+// runtime path.
+func isMultimethodForm(form vm.Value) bool {
+	return formHeadIs(form, "defmulti", "defmethod")
 }
 
 // isTypeDeclForm returns true for (defprotocol ...) / (deftype ...) forms.
@@ -1148,19 +1147,7 @@ func isMultimethodForm(form vm.Value) bool {
 // takes the boxed rt.CachedVarFn trampoline (the T9 gap: the .lg capture
 // machinery existed but the driver starved it of the decl forms).
 func isTypeDeclForm(form vm.Value) bool {
-	list, ok := form.(vm.Sequable)
-	if !ok {
-		return false
-	}
-	seq := list.Seq()
-	if seq == nil {
-		return false
-	}
-	sym, ok := seq.First().(vm.Symbol)
-	if !ok {
-		return false
-	}
-	return string(sym) == "defprotocol" || string(sym) == "deftype"
+	return formHeadIs(form, "defprotocol", "deftype")
 }
 
 // isSingleArityDefn reports whether a defn/defn- form has exactly one arity.
