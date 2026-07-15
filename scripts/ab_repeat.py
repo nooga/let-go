@@ -33,22 +33,32 @@ Integrity (drives the exit code, so a broken measurement can't read as clean):
 import argparse, json, os, statistics, subprocess, sys
 
 
-def snapshot(worktree, profile, out, timeout):
+def snapshot(worktree, profile, out, timeout, label):
     """Run one bench-ratchet snapshot in a worktree.
+
+    label is a human tag ("base cycle 3/7") so a failed `go run` or an
+    unexpected bench-ratchet JSON shape surfaces as one triage line instead
+    of a raw traceback. The failure still exits nonzero — a missing sample is
+    a harness-integrity failure, not a perf verdict — just legibly.
 
     Returns (ratios, samples, meta):
       ratios  {family: ratio_to_anchor}
       samples {family: [ratio_to_anchor, ...]}   raw per-sample distribution
       meta    {anchor_ns, cpu_model, go_version, num_cpu, arch, sha}
     """
-    subprocess.run(
-        ["go", "run", "./cmd/bench-ratchet", "-profile", profile,
-         "-timeout", timeout, "-baseline", out, "snapshot"],
-        cwd=worktree, check=True,
-    )
-    with open(out) as f:
-        d = json.load(f)
-    (_, m), = d["machines"].items()
+    try:
+        subprocess.run(
+            ["go", "run", "./cmd/bench-ratchet", "-profile", profile,
+             "-timeout", timeout, "-baseline", out, "snapshot"],
+            cwd=worktree, check=True,
+        )
+        with open(out) as f:
+            d = json.load(f)
+        (_, m), = d["machines"].items()
+    except (subprocess.CalledProcessError, OSError,
+            json.JSONDecodeError, KeyError, ValueError) as e:
+        print(f"::error::{label} failed: {type(e).__name__}: {e}", flush=True)
+        raise
     ratios = {k: e["ratio_to_anchor"] for k, e in m["benchmarks"].items()}
     samples = {k: [s.get("ratio_to_anchor") for s in e.get("samples", [])]
                for k, e in m["benchmarks"].items()}
@@ -105,7 +115,8 @@ def main():
 
         def do_base():
             r, s, meta = snapshot(args.base, args.profile,
-                                  f"{args.out}/base_{i}.json", args.timeout)
+                                  f"{args.out}/base_{i}.json", args.timeout,
+                                  f"base cycle {i}/{args.n}")
             machines["base"] = machines["base"] or meta
             for fam, v in r.items():
                 base_seen.setdefault(fam, []).append(v)
@@ -114,7 +125,8 @@ def main():
 
         def do_head():
             r, s, meta = snapshot(args.head, args.profile,
-                                  f"{args.out}/head_{i}.json", args.timeout)
+                                  f"{args.out}/head_{i}.json", args.timeout,
+                                  f"head cycle {i}/{args.n}")
             machines["head"] = machines["head"] or meta
             for fam, v in r.items():
                 head_seen.setdefault(fam, []).append(v)
