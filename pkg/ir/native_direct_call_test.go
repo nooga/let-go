@@ -57,8 +57,15 @@ func TestNativeModuleSeedsCrossNsDirectCall(t *testing.T) {
 	if !strings.Contains(rendered, "corefns.Seq(") {
 		t.Fatalf("expected cross-ns native direct call corefns.Seq(...):\n--- go ---\n%s", rendered)
 	}
-	if strings.Contains(rendered, "InvokeValue") || strings.Contains(rendered, "CachedVarFn") {
-		t.Fatalf("expected a direct call, but found a trampoline:\n--- go ---\n%s", rendered)
+	// A native call site is root-guarded: the static call runs while the
+	// primitive var roots are intact, with the var-dispatch trampoline as the
+	// else-branch so with-redefs/alter-var-root in a caller's dynamic extent
+	// stays observable. Both branches must be present.
+	if !strings.Contains(rendered, "rt.NativePrimsIntact()") {
+		t.Fatalf("expected the native direct call to be root-guarded:\n--- go ---\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "InvokeValue") {
+		t.Fatalf("expected a trampoline fallback branch beside the direct call:\n--- go ---\n%s", rendered)
 	}
 }
 

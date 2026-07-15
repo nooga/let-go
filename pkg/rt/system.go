@@ -77,6 +77,38 @@ func installSystemNS() {
 		return systemProperties(), nil
 	}))
 
+	// System/arraycopy(src sPos dst dPos len) — element copy between arrays.
+	// malli.impl.util/-eager-entry-parser builds entry arrays with it.
+	ns.Def("arraycopy", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 5 {
+			return vm.NIL, fmt.Errorf("System/arraycopy expects 5 args")
+		}
+		src, ok1 := vs[0].(*vm.TypedArray)
+		dst, ok2 := vs[2].(*vm.TypedArray)
+		sPos, ok3 := vs[1].(vm.Int)
+		dPos, ok4 := vs[3].(vm.Int)
+		n, ok5 := vs[4].(vm.Int)
+		if !(ok1 && ok2 && ok3 && ok4 && ok5) {
+			return vm.NIL, fmt.Errorf("System/arraycopy: unsupported arg types")
+		}
+		if sPos < 0 || dPos < 0 || n < 0 ||
+			int(sPos)+int(n) > src.Len() || int(dPos)+int(n) > dst.Len() {
+			return vm.NIL, fmt.Errorf("System/arraycopy: index out of bounds")
+		}
+		// Read all source elements first so an overlapping same-array copy is
+		// correct (mirrors java.lang.System.arraycopy).
+		buf := make([]vm.Value, int(n))
+		for i := 0; i < int(n); i++ {
+			buf[i] = src.Get(int(sPos) + i)
+		}
+		for i := 0; i < int(n); i++ {
+			if err := dst.Set(int(dPos)+i, buf[i]); err != nil {
+				return vm.NIL, err
+			}
+		}
+		return vm.NIL, nil
+	}))
+
 	// System/getenv — (System/getenv name) → string or nil
 	ns.Def("getenv", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {

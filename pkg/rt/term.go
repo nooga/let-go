@@ -1,4 +1,4 @@
-//go:build !js && !plan9
+//go:build !js && !plan9 && !wasip1
 
 /*
  * Copyright (c) 2021-2026 Marcin Gasperowicz <xnooga@gmail.com>

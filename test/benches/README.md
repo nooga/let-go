@@ -31,6 +31,32 @@ The IR-on number depends on the loop/recur lowering fix in this branch
 (see the parent commit); before it, `pegbench-ir.lg` crashed. The remaining
 VM→JVM gap is the lowered-Go target (tracked separately).
 
+## ysbench — YamlStar parse benchmark (ITER-0035 gate)
+
+The real-corpus counterpart to pegbench: times `(yamlstar.parser/parse
+"foo: 42")` against yamlstar's actual grammar (212 `def`-closure rules).
+Needs a [yamlstar](https://github.com/yaml/yamlstar) checkout; skips
+cleanly without one.
+
+| file | what | run |
+|------|------|-----|
+| `ysbench.lg` | one mode (`interp` or `ir`), prints ms-per-call | `LG_SOURCE_PATHS=$HOME/development/yamlstar/core/src ./lg test/benches/ysbench.lg ir` |
+| `ysbench.sh` | EPIC-013 acceptance gate: runs both modes, requires `ir` ≥1.10× faster (`LG_YSBENCH_MIN_SPEEDUP`) | `./test/benches/ysbench.sh` |
+
+### Recorded numbers (2026-07-13, Apple Silicon)
+
+| mode | ms/call |
+|------|--------:|
+| interpreted VM bytecode | 36.4 |
+| `*ir-compile*` + `ir.passes.inline` enabled | 34.1 |
+
+Speedup 1.07× — the gate currently **fails**. The inline/specialize passes
+(EPIC-013 ITER-0031..0034) don't reach this corpus yet: the runtime inline
+registry seeds only from same-namespace `defn` siblings, while yamlstar's
+grammar rules are top-level `def` closures calling combinators from another
+namespace (`prelude`). The parse stays dispatch-bound in the combinator
+tree walk. Issue #352 stays open on making this gate pass.
+
 ## repro/ — loop-lowering miscompile fixtures
 
 Minimal reproductions of the four `ir.lower` / one `ir.build` defects fixed

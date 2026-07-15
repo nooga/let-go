@@ -1,0 +1,17 @@
+;; #195: a top-level (do ...) is evaluated subform-by-subform (Clojure's
+;; Compiler.eval special case), so an earlier subform's compile-time effect —
+;; here (require 'topdo-helper) loading a namespace from disk — is visible
+;; when a later subform compiles. These asserts must stay TOP-LEVEL forms:
+;; inside a fn body (or any non-top-level position) a do is a single compiled
+;; unit, in let-go and Clojure alike.
+(do (require 'topdo-helper)
+    (assert (= :hi (topdo-helper/hello))))
+
+;; Nested top-level do splices recursively.
+(do (do (require 'topdo-helper))
+    (assert (= :hi (topdo-helper/hello))))
+
+;; Value semantics are unchanged.
+(assert (= 3 (do 1 2 3)))
+(assert (nil? (do)))
+(do (assert true) (assert (= 1 1)))

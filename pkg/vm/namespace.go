@@ -68,6 +68,16 @@ func SetCoreNamespace(ns *Namespace) {
 	coreNamespacePtr = ns
 }
 
+// suppressShadowWarn silences the warn-on-core-shadow message in Def. It is
+// toggled around the generated-primitive registration (RegisterGeneratedPrimitives),
+// which intentionally re-Defs native versions of core primitives over their
+// bootstrap closures — a deliberate replacement, not a user shadow to warn about.
+var suppressShadowWarn bool
+
+// SetSuppressShadowWarn toggles the warn-on-core-shadow message. Set true only
+// around trusted internal re-registration (init-time), and reset to false after.
+func SetSuppressShadowWarn(v bool) { suppressShadowWarn = v }
+
 // lgBaselineNamespaces are the lg-specific extra namespaces (let-go.core,
 // let-go.types, …) auto-refer'd alongside clojure.core. Like clojure.core each
 // is a lowest-priority resolution baseline: an explicit refer shadows it. Set by
@@ -223,7 +233,7 @@ func (n *Namespace) Def(name string, val Value) *Var {
 	// auto-refered :all, so it does warn on shadow. The check reads core's
 	// and this ns's maps via brief accessors (no lock held across the write
 	// below); the warning itself is best-effort so a benign TOCTOU is fine.
-	if coreNamespacePtr != nil && n != coreNamespacePtr && !n.excludedLocked(s) {
+	if coreNamespacePtr != nil && n != coreNamespacePtr && !n.excludedLocked(s) && !suppressShadowWarn {
 		if isShadowingCoreRefer(n, s) {
 			if existing := coreNamespacePtr.localVar(s); existing != nil && !existing.isPrivate {
 				// Only warn the first time we shadow in this ns; subsequent
@@ -245,6 +255,10 @@ func (n *Namespace) Def(name string, val Value) *Var {
 		f.SetName(name)
 	}
 	n.mu.Lock()
+	// A re-def replaces the Var object; a guarded native-primitive root
+	// (see Var.GuardRoot) must carry over so the deviation counter still
+	// tracks the name, not the dropped object.
+	va.adoptGuard(n.registry[s])
 	n.registry[s] = va
 	n.mu.Unlock()
 	return va

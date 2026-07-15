@@ -1408,28 +1408,24 @@
 ;; --- entry point ---------------------------------------------------------
 
 (defn parse-defn-args-body [form]
-  (let [x2 (nth form 2 nil)
-        x3 (nth form 3 nil)
-        x4 (nth form 4 nil)]
-    (cond
-      (string? x2)
-      (if (map? x3)
-        [x4 (drop 5 form)]
-        [x3 (drop 4 form)])
-      (map? x2)
-      [x3 (drop 4 form)]
-      :else
-      [x2 (drop 3 form)])))
+  "Split a defn form past its header — (defn name docstring? attr-map?
+   arglist-or-first-clause rest...) — into [args-vec body-forms]. The
+   attr-map position ({:added \"1.0\"} etc.) is metadata the bytecode
+   compiler attaches to the var; lowering skips it. Mirrors the header
+   walk in core.lg's defn/defmacro macros — keep the three in step."
+  (let [forms (drop 2 form)
+        forms (if (string? (first forms)) (next forms) forms)
+        forms (if (map? (first forms)) (next forms) forms)]
+    [(first forms) (rest forms)]))
 
 (defn build-fn [defn-form]
   "Build an IR Function from a (defn name [args] body...) or
    multi-arity (defn name ([args] body...) ([args2] body2...)) form.
-   Handles optional docstring. Returns a boxed *ir.Function."
+   Handles optional docstring and attr-map. Returns a boxed *ir.Function."
   (let [name-sym   (nth defn-form 1)
-        maybe-doc  (nth defn-form 2)
-        has-doc?   (string? maybe-doc)
-        args-vec   (if has-doc? (nth defn-form 3) maybe-doc)
-        body-forms (drop (if has-doc? 4 3) defn-form)
+        parsed     (parse-defn-args-body defn-form)
+        args-vec   (nth parsed 0)
+        body-forms (nth parsed 1)
         multi?     (list? args-vec)]
     (if-not multi?
       ;; Single-arity path. Expand destructured args before building.

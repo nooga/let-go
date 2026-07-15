@@ -364,6 +364,14 @@ func init() {
 	installLangNS()
 	installNativeDirectNS()
 	registerBuiltinsModule()
+
+	// Generated primitives intentionally re-Def native versions over the
+	// bootstrap closures — silence the warn-on-core-shadow noise for this
+	// trusted init-time replacement (it otherwise prints to stderr on every
+	// startup and pollutes program output).
+	vm.SetSuppressShadowWarn(true)
+	RegisterGeneratedPrimitives()
+	vm.SetSuppressShadowWarn(false)
 	// walk namespace is embedded via WalkSrc and will be loaded on demand
 }
 
@@ -564,6 +572,10 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 			nsMu.Lock()
 			nsRegistry[name] = loadedNS
 			nsMu.Unlock()
+			// The load re-ran the namespace's bootstrap Lisp defs, which
+			// overwrite any generated native adapters Def'd at init
+			// (e.g. clojure.string/upper-case) — restore them.
+			reapplyGeneratedPrimitives(name, loadedNS)
 			return loadedNS
 		}
 
@@ -1590,6 +1602,13 @@ func invokeMethodFallback(rec vm.Value, name vm.Symbol, args []vm.Value, origina
 		if fn, ok := lookupHostMethod(rec.Type(), name); ok {
 			return fn.Invoke(append([]vm.Value{rec}, args...))
 		}
+	}
+	// Generic JVM collection-interface interop (.valAt/.iterator/.assoc/.cons/
+	// .nth/.count/.hashCode/.longValue) on any let-go collection — see
+	// host_interop.go. Placed before the name→fn fallbacks because `.cons`
+	// (append) must not resolve to core `cons` (prepend).
+	if v, handled, err := hostCollectionMethod(rec, name, args); handled || err != nil {
+		return v, err
 	}
 	if isCompatChecker(rec) && len(args) == 1 {
 		switch name {
@@ -4623,17 +4642,6 @@ func installLangNS() {
 		return vm.String(strings.TrimRight(string(s), " \t\n\r")), nil
 	})
 
-	upperCase, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		s, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("upper-case expected String")
-		}
-		return vm.String(strings.ToUpper(string(s))), nil
-	})
-
 	lowerCase, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -4643,6 +4651,19 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("lower-case expected String")
 		}
 		return vm.String(strings.ToLower(string(s))), nil
+	})
+
+	// Bootstrap closure for upper-case; will be replaced at runtime by
+	// RegisterGeneratedPrimitives to use the native UpperCase function.
+	upperCase, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("upper-case expected String")
+		}
+		return vm.String(strings.ToUpper(string(s))), nil
 	})
 
 	startsWith, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -6890,8 +6911,9 @@ func installLangNS() {
 	ns.Def("trim", trimf)
 	ns.Def("triml", trimlf)
 	ns.Def("trimr", trimrf)
-	ns.Def("upper-case", upperCase)
+	// upper-case is registered into clojure.string by RegisterGeneratedPrimitives
 	ns.Def("lower-case", lowerCase)
+	ns.Def("upper-case", upperCase)
 	ns.Def("starts-with?", startsWith)
 	ns.Def("ends-with?", endsWith)
 	ns.Def("includes?", includesStr)
@@ -8607,6 +8629,10 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// let-go already models regexes as vm.RegexType, so aliasing the JVM class to
 	// it makes m/regexp? genuinely work.
 	ns.Def("java.util.regex.Pattern", vm.RegexType)
+
+	installJVMStatics(ns)
+	installCoreCompatFns(ns)
+	installJVMStubs(ns)
 
 	// Mutable JVM collection shims (see host_hashmap.go / host_arraydeque.go).
 	installHostHashMap(ns)

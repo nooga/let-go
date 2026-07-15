@@ -142,6 +142,10 @@
 (gen-go   "scripts/gen/ir_bridge_generated.head" "pkg/ir/ir_bridge.lg" "pkg/rt/ir_bridge_generated.go")
 (gen-lisp "pkg/ir/ir_data.lg" "pkg/rt/core/ir/data/generated.lg")
 
+;; Invoke cmd/lginterop -primitives to generate the primitive registrar.
+;; Scans pkg/rt for //lg:native-annotated functions and generates adapters + registrations.
+(run! go-bin "run" "./cmd/lginterop" "-primitives" "pkg/rt" "-go-pkg" "github.com/nooga/let-go/pkg/rt" "-primitives-out" "pkg/rt/zz_primitives_generated.go")
+
 ;; One core compile emits BOTH the .lgb bundle and the gogen_ir Go tree.
 ;; Hermetic generation (clearing the stale lowered-tree before regen) is
 ;; handled inside lgbgen's runGoTarget, so every entry point — `make generate`

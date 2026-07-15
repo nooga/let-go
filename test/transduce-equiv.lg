@@ -13,6 +13,8 @@
 
 (def inc2 (fn [x] (* 2 x)))
 (def odd? (fn [x] (= 1 (mod x 2))))
+(def even? (fn [x] (= 0 (mod x 2))))
+(def gt2? (fn [x] (> x 2)))
 
 ;; Each case: [label transducer  lazy-fn] where
 ;;   transducer result = (into [] transducer coll)
@@ -23,10 +25,34 @@
    ["remove"       (remove odd?)              (fn [c] (remove odd? c))]
    ["keep"         (keep (fn [x] (when (odd? x) x)))
                    (fn [c] (keep (fn [x] (when (odd? x) x)) c))]
+
+   ;; Two-stage non-commuting chains (filter even? ∘ map inc)
    ["map|filter"   (comp (map inc2) (filter odd?))
                    (fn [c] (filter odd? (map inc2 c)))]
    ["filter|map"   (comp (filter odd?) (map inc2))
-                   (fn [c] (map inc2 (filter odd? c)))]])
+                   (fn [c] (map inc2 (filter odd? c)))]
+   ["filter-even-map-inc"  (comp (map inc) (filter even?))
+                           (fn [c] (filter even? (map inc c)))]
+
+   ;; Three-stage chains (test v2 multi-stage support)
+   ["map|filter|map"       (comp (map inc2) (filter odd?) (map inc))
+                           (fn [c] (map inc (filter odd? (map inc2 c))))]
+   ["filter|map|filter"    (comp (filter even?) (map inc) (filter gt2?))
+                           (fn [c] (filter gt2? (map inc (filter even? c))))]
+   ["map|remove|keep"      (comp (map inc) (remove odd?) (keep (fn [x] (when (> x 2) x))))
+                           (fn [c] (keep (fn [x] (when (> x 2) x)) (remove odd? (map inc c))))]
+
+   ;; into single-stage (already covered by transducer tests but explicit for clarity)
+   ["into-map"     (map inc2)
+                   (fn [c] (map inc2 c))]
+   ["into-filter"  (filter even?)
+                   (fn [c] (filter even? c))]
+
+   ;; into with chained producers (multi-stage via into)
+   ["into-map-filter"  (comp (map inc) (filter even?))
+                       (fn [c] (filter even? (map inc c)))]
+   ["into-filter-map"  (comp (filter even?) (map inc))
+                       (fn [c] (map inc (filter even? c)))]])
 
 (def n
   (reduce

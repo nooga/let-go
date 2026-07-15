@@ -1212,6 +1212,25 @@
   ([m k f x y z & more]
    (assoc m k (apply f (get m k) x y z more))))
 
+(defn update-keys
+  "Given a map m and a function f of 1-argument, returns a new map where the
+  keys of m are the result of applying f to the keys of m, mapped to the
+  corresponding values of m. If f maps two distinct keys to the same key, the
+  value from the later key (in reduce-kv order) wins."
+  [m f]
+  (with-meta
+    (persistent! (reduce-kv (fn [acc k v] (assoc! acc (f k) v)) (transient {}) m))
+    (meta m)))
+
+(defn update-vals
+  "Given a map m and a function f of 1-argument, returns a new map where the
+  keys of m are mapped to the result of applying f to the corresponding
+  values of m."
+  [m f]
+  (with-meta
+    (persistent! (reduce-kv (fn [acc k v] (assoc! acc k (f v))) (transient m) m))
+    (meta m)))
+
 (defn fnil
   ([f x]
    (fn
