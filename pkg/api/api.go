@@ -225,7 +225,10 @@ func (l *LetGo) Run(expr string) (vm.Value, error) {
 		}
 	}
 
-	c, err := l.c.Compile(expr)
+	// Compile through a per-Run transient child context: an embedder calling
+	// Run in a loop must not grow the session pool by one entry per call
+	// (see compiler.NewTransientCompiler).
+	c, err := l.c.ChildForEval().Compile(expr)
 	if err != nil {
 		return vm.NIL, err
 	}

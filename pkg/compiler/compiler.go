@@ -66,15 +66,27 @@ func NewDebugCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
 	return c
 }
 
+// NewTransientCompiler returns a compiler for ONE transient evaluation (a
+// REPL/nREPL input, load-string, eval, a pod or host request): constants the
+// evaluation introduces intern into a CHILD pool layered on parent, so they
+// stay reachable only through the chunks and functions that use them and are
+// collected with them — instead of rooting the parent pool forever, one
+// entry per eval, unbounded in a long-lived session.
+//
+// Every transient-eval site must build its compiler here; a bare NewCompiler
+// call is reserved for pools that SHOULD live as long as the process (boot,
+// require/ns loading, build tools). Grep for NewCompiler( to audit.
+func NewTransientCompiler(parent *vm.Consts, ns *vm.Namespace) *Context {
+	return NewCompiler(vm.NewChildConsts(parent), ns)
+}
+
 // ChildForEval returns a fresh compilation context for one transient
-// top-level evaluation (a REPL input, a host Eval call): same namespace and
-// debug mode, but with a CHILD constant pool layered on this context's pool.
-// Constants the eval introduces are then reachable only through the chunks
-// and functions that use them — transient evals become collectible instead
-// of rooting the session pool forever.
+// top-level evaluation layered on this context's pool: same namespace and
+// debug mode, child constant pool (see NewTransientCompiler).
 func (c *Context) ChildForEval() *Context {
-	child := NewCompiler(vm.NewChildConsts(c.consts), c.CurrentNS())
+	child := NewTransientCompiler(c.consts, c.CurrentNS())
 	child.debug = c.debug
+	child.source = c.source
 	return child
 }
 

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
@@ -81,4 +82,45 @@ func TestRegexLiteralIdentityEquality(t *testing.T) {
 	if !vm.IsTruthy(v) {
 		t.Fatal("a regex must equal itself")
 	}
+}
+
+// The remaining transient eval paths must not root the process-global pool
+// either (review finding on #496): each compiles through a per-evaluation
+// child pool via NewTransientCompiler. One probe per path; the assertion is
+// the same as TestRegexLiteralReEvalDoesNotGrowConstPool's.
+func assertNoGlobalPoolGrowth(t *testing.T, label string, evalOnce func(i int)) {
+	t.Helper()
+	evalOnce(-1) // warmup: first use may legitimately intern shared constants
+	before := len(consts.AllValues())
+	for i := 0; i < 100; i++ {
+		evalOnce(i)
+	}
+	if growth := len(consts.AllValues()) - before; growth != 0 {
+		t.Fatalf("%s: global const pool grew by %d entries across 100 evaluations — transient constants are rooting the global pool", label, growth)
+	}
+}
+
+func TestLoadStringDoesNotGrowConstPool(t *testing.T) {
+	assertNoGlobalPoolGrowth(t, "load-string", func(i int) {
+		if _, err := Eval(`(load-string "(re-find #\"x\" \"xyz\")")`); err != nil {
+			t.Fatalf("eval %d: %v", i, err)
+		}
+	})
+}
+
+func TestNativeEvalDoesNotGrowConstPool(t *testing.T) {
+	assertNoGlobalPoolGrowth(t, "eval", func(i int) {
+		if _, err := Eval(`(eval (read-string "(re-find #\"x\" \"xyz\")"))`); err != nil {
+			t.Fatalf("eval %d: %v", i, err)
+		}
+	})
+}
+
+func TestEvalInNSDoesNotGrowConstPool(t *testing.T) {
+	ns := rt.NS(rt.NameCoreNS)
+	assertNoGlobalPoolGrowth(t, "EvalInNS (pods)", func(i int) {
+		if _, err := evalInNSChild(`(re-find #"x" "xyz")`, ns); err != nil {
+			t.Fatalf("eval %d: %v", i, err)
+		}
+	})
 }
