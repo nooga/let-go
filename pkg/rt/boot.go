@@ -17,49 +17,26 @@ import (
 // LoadCore, consumed by the bytecode-only NSLoader.
 var precompiledCoreNS map[string]*vm.CodeChunk
 
-// LoadCore boots the runtime from the embedded core .lgb: decode it, replay the
-// core main chunk (which defines all of core), then register the remaining
-// namespace chunks for on-demand loading. It imports only bytecode + vm and
-// touches no compiler code, so it can boot a build where pkg/compiler is not
-// linked (see cmd/lg-runtime). It mirrors the boot fast-path in
-// pkg/compiler/eval.go (loadPrecompiledBundle), minus the compiler-side pieces
-// (the global const pool for further compilation, and postCoreInit's eval
-// builtins) that a runtime-only build deliberately omits.
+// LoadCore boots the runtime from the embedded core .lgb: decode it, replay
+// core + the lg baseline namespaces, then register the remaining namespace
+// chunks for on-demand loading via bytecodeNSLoader. It touches no compiler
+// code, so it can boot a build where pkg/compiler is not linked (see
+// cmd/lg-runtime).
+//
+// Hybrid namespaces (native fns + a bundled lg chunk, e.g. async) are left for
+// the on-demand loader — EagerHybrids is false — safe today because async's
+// bundled content is macro-only and macros are fully expanded before a .lgb
+// exists. LoadCore's whole reason for existing over BootCore is that it
+// installs a namespace loader (UseBytecodeNSLoader), so it doesn't need the
+// eager pass; a future hybrid bundling runtime fns would flip this to true.
 func LoadCore() error {
-	unit, err := DecodeExecUnit(CoreCompiledLGB)
+	unit, err := LoadCoreBundle(CoreLoadOptions{EagerHybrids: false})
 	if err != nil {
-		return fmt.Errorf("decode core bundle: %w", err)
+		return err
 	}
-	if err := runChunk(unit.MainChunk); err != nil {
-		return fmt.Errorf("replay core: %w", err)
-	}
-	if unit.NSChunks != nil {
-		precompiledCoreNS = unit.NSChunks
-		// The lg baseline namespaces (let-go.core, let-go.types) are auto-refer'd
-		// into every namespace but never explicitly required, so on-demand
-		// loading never fires for them. Replay them eagerly — right after core,
-		// whose definitions they depend on — or their .lg-defined vars stay nil
-		// stubs. Mirrors loadPrecompiledBundle in pkg/compiler/eval.go.
-		baseline := map[string]bool{}
-		for _, name := range LgBaselineNSNames() {
-			baseline[name] = true
-			if c := precompiledCoreNS[name]; c != nil {
-				if err := runChunk(c); err != nil {
-					return fmt.Errorf("replay %s: %w", name, err)
-				}
-			}
-		}
-		for name := range precompiledCoreNS {
-			if name != NameCoreNS && !baseline[name] {
-				MarkNSNeedsLoad(name)
-			}
-		}
-	}
-	// Unlike loadPrecompiledBundle, hybrid namespaces (native fns + a bundled
-	// lg chunk, e.g. async) are NOT replayed eagerly here. Safe today because
-	// async's bundled content is macro-only and macros are fully expanded
-	// before a .lgb exists; a future hybrid that bundles runtime fns would
-	// need the eager replay too.
+	// Retain the chunk map so bytecodeNSLoader can replay a namespace on
+	// (require ...).
+	precompiledCoreNS = unit.NSChunks
 	return nil
 }
 
