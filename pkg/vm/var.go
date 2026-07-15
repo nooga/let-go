@@ -45,6 +45,10 @@ type Var struct {
 	// so the dynamic flag is read on the hot deref path while being set by a
 	// concurrent bind. A plain bool here is a data race.
 	isDynamic atomic.Bool
+	// rootBind is this var's ROOT-context binding chain (Phase 2). Head = current
+	// binding; nil = unbound. Per-var, so deref reads the head in O(1) with no
+	// shared-structure access. Nesting lives in next; readers touch only the head.
+	rootBind  atomic.Pointer[rootBindFrame]
 	isPrivate bool
 	mu        sync.Mutex // guards meta + watches
 	watches   map[Value]Fn
@@ -156,12 +160,22 @@ func sameRootIdentity(a, b Value) bool {
 	return a == b
 }
 
+// derefRoot resolves v against the ROOT (process-global) context. It is the
+// single shared root-resolution path — Var.Deref (host/lowered callers) and
+// ExecContext.deref's root branch both call it, so the two can never diverge.
+func (v *Var) derefRoot() Value {
+	if val, ok := rootDerefHead(v); ok {
+		return val
+	}
+	return v.Root()
+}
+
 // Deref returns the current value in the root execution context: the dynamic
 // top binding if one is active, else the root. Host and lowered callers that
 // hold no ExecContext resolve here; the interpreter resolves against its
-// frame's context (which is the root context unless a child was installed).
+// frame's context via ExecContext.deref (which shares derefRoot for the root).
 func (v *Var) Deref() Value {
-	return RootExecContext.deref(v)
+	return v.derefRoot()
 }
 
 // Root returns the var's root binding directly, bypassing any current
@@ -196,7 +210,7 @@ func (v *Var) PopBinding() {
 // SnapshotBindings captures the root context's dynamic bindings — the
 // explicit-propagation primitive a goroutine spawn hands to its child.
 func SnapshotBindings() BindingSnapshot {
-	return globalBindingStack.snapshot()
+	return rootSnapshot()
 }
 
 // RunWithBindings runs fn with snap installed as the root context's dynamic
@@ -205,10 +219,10 @@ func SnapshotBindings() BindingSnapshot {
 // child ExecContext; true per-goroutine isolation comes from running fn under
 // ec.Child() instead (see docs/design/exec-context-threading.md).
 func RunWithBindings(snap BindingSnapshot, fn func() (Value, error)) (Value, error) {
-	saved := globalBindingStack.snapshot()
-	globalBindingStack.installSnapshot(snap)
+	saved := rootSnapshot()
+	rootInstall(snap)
 	out, err := fn()
-	globalBindingStack.installSnapshot(saved)
+	rootInstall(saved)
 	return out, err
 }
 

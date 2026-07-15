@@ -124,6 +124,19 @@ func BenchmarkVarDerefDistinctParallel(b *testing.B) {
 	})
 }
 
+// BenchmarkVarDerefChildContext measures deref against an isolated child
+// context (the per-goroutine path), which the root-context benchmarks don't
+// cover. The binding lives in the child's own stack.
+func BenchmarkVarDerefChildContext(b *testing.B) {
+	v := newRootVar()
+	v.SetDynamic()
+	ec := RootExecContext.Child()
+	ec.pushBinding(v, Int(7))
+	for i := 0; i < b.N; i++ {
+		derefSink = ec.deref(v)
+	}
+}
+
 // BenchmarkBindingPushPop measures one full binding extent (the (binding […])
 // write path). Copy-on-write makes reads lock-free at the cost of allocating a
 // fresh map per push/pop, so this is the side of the trade that gets more
@@ -154,6 +167,33 @@ func bindDepth(b *testing.B, depth int) (vars []*Var, miss *Var) {
 	miss = newRootVar()
 	miss.SetDynamic() // declared dynamic, never bound → deref walks the whole stack and misses
 	return vars, miss
+}
+
+// BenchmarkVarDerefBoundDepth: deref a bound var while N OTHER dynamic vars are
+// also bound. Phase 1 was O(N) (shared-chain walk); Phase 2 must be flat.
+func BenchmarkVarDerefBoundDepth(b *testing.B) {
+	for _, n := range []int{0, 1, 4, 16, 64} {
+		b.Run(fmt.Sprintf("others=%d", n), func(b *testing.B) {
+			target := newRootVar()
+			target.SetDynamic()
+			target.PushBinding(Int(7))
+			others := make([]*Var, n)
+			for i := range others {
+				others[i] = newRootVar()
+				others[i].SetDynamic()
+				others[i].PushBinding(Int(int64(i)))
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				derefSink = target.Deref()
+			}
+			b.StopTimer()
+			target.PopBinding()
+			for _, o := range others {
+				o.PopBinding()
+			}
+		})
+	}
 }
 
 // BenchmarkVarDerefDepth measures deref cost as a function of how many unrelated
