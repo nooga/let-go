@@ -7,6 +7,7 @@ package rt
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -29,12 +30,19 @@ var hostHashMapType = &theHostHashMapType{}
 
 // hostHashMap is a mutable map backing (java.util.HashMap.). malli.registry's
 // fast-registry builds one with (doto (HashMap. n f) (.putAll m)) and reads it
-// with (.get fm type) — so only putAll and get are exercised. Backed by an
-// immutable let-go map that putAll replaces wholesale (fast-registry fills the
-// map exactly once, then only reads).
-type hostHashMap struct{ m vm.Value }
+// with (.get fm type) — so only putAll and get are exercised. The backing map is
+// an immutable let-go map held in an atomic.Value: putAll accumulates into a new
+// map and swaps it in, get reads the current one. atomic.Value keeps the
+// write/read pair safe (let-go futures run on goroutines) rather than relying on
+// callers happening to build-once-then-read. Every stored value is a
+// *vm.PersistentMap, so atomic.Value's same-concrete-type rule holds.
+type hostHashMap struct{ m atomic.Value }
 
-func newHostHashMap() *hostHashMap { return &hostHashMap{m: vm.EmptyPersistentMap} }
+func newHostHashMap() *hostHashMap {
+	h := &hostHashMap{}
+	h.m.Store(vm.EmptyPersistentMap)
+	return h
+}
 
 func (h *hostHashMap) Type() vm.ValueType { return hostHashMapType }
 func (h *hostHashMap) Unbox() any         { return h }
@@ -44,26 +52,29 @@ func (h *hostHashMap) InvokeMethod(name vm.Symbol, args []vm.Value) (vm.Value, e
 	switch string(name) {
 	case "putAll":
 		if len(args) == 1 {
-			// Merge the source's entries into the backing map (Java putAll
-			// accumulates and copies — repeated calls must not lose earlier keys,
-			// and we must not alias a caller's mutable source).
-			acc, ok := h.m.(vm.Associative)
+			// Java putAll(Map) copies the source's entries or throws — it must not
+			// silently succeed with an unchanged map. A source we can't enumerate
+			// (not Sequable — e.g. another java.util.HashMap) is a hard error, not
+			// a no-op, so the data loss is never silent.
+			sq, ok := args[0].(vm.Sequable)
+			if !ok {
+				return vm.NIL, fmt.Errorf("java.util.HashMap.putAll: source %s is not enumerable", args[0].Type().Name())
+			}
+			acc, ok := h.m.Load().(vm.Associative)
 			if !ok {
 				acc = vm.EmptyPersistentMap
 			}
-			if sq, ok := args[0].(vm.Sequable); ok {
-				for s := sq.Seq(); !vm.SeqIsEmpty(s); s = s.Next() {
-					if k, v, ok := vm.MapEntryKV(s.First()); ok {
-						acc = acc.Assoc(k, v)
-					}
+			for s := sq.Seq(); !vm.SeqIsEmpty(s); s = s.Next() {
+				if k, v, ok := vm.MapEntryKV(s.First()); ok {
+					acc = acc.Assoc(k, v)
 				}
 			}
-			h.m = acc
+			h.m.Store(acc)
 			return vm.NIL, nil
 		}
 	case "get":
 		if len(args) == 1 {
-			if l, ok := h.m.(vm.Lookup); ok {
+			if l, ok := h.m.Load().(vm.Lookup); ok {
 				return l.ValueAt(args[0]), nil
 			}
 			return vm.NIL, nil

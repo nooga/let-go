@@ -40,4 +40,11 @@ func TestHostHashMap(t *testing.T) {
 	c, _ := h.InvokeMethod(vm.Symbol("get"), []vm.Value{vm.Keyword("c")})
 	assert.Equal(t, vm.Int(1), a)
 	assert.Equal(t, vm.Int(3), c)
+
+	// putAll of a non-enumerable source errors loudly (no silent data loss),
+	// and leaves the map unchanged.
+	_, err = h.InvokeMethod(vm.Symbol("putAll"), []vm.Value{vm.Int(7)})
+	assert.Error(t, err)
+	stillA, _ := h.InvokeMethod(vm.Symbol("get"), []vm.Value{vm.Keyword("a")})
+	assert.Equal(t, vm.Int(1), stillA)
 }
