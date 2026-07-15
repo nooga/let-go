@@ -120,11 +120,13 @@ func installJVMStatics(ns *vm.Namespace) {
 		if !ok {
 			return vm.NIL, fmt.Errorf("parseLong expects a string")
 		}
-		n, err := strconv.ParseInt(string(s), 10, 64)
+		// strconv.Atoi (returns int) + MakeInt matches let-go's own parse-long
+		// and avoids an int64->int conversion (CodeQL "incorrect conversion").
+		n, err := strconv.Atoi(string(s))
 		if err != nil {
 			return vm.NIL, err
 		}
-		return vm.Int(n), nil
+		return vm.MakeInt(n), nil
 	})
 	parseFloat := mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		s, ok := vs[0].(vm.String)
