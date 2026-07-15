@@ -335,6 +335,37 @@
        (func OpKeywords [] [(type "[]string")]
          (return opKeywordNames))))])
 
+(defn emit-op-by-keyword-fn []
+  ;; func opByKeywordExact(name string) (Op, bool) {
+  ;;     switch name {
+  ;;     case "const": return OpConst, true
+  ;;     ...
+  ;;     }
+  ;;     return OpInvalid, false
+  ;; }
+  ;;
+  ;; The zero-alloc fast path behind OpByKeyword (op_lookup.go). Inputs
+  ;; arrive as canonical kebab-case keywords — the exact form ir.build
+  ;; emits and OpKeywords returns — so an exact string switch hits every
+  ;; time. Go compiles a string switch to a length-bucketed binary search
+  ;; (sub-linear) with no per-call allocation, versus the old ReplaceAll +
+  ;; O(n) EqualFold scan. OpByKeyword keeps that scan as a defensive
+  ;; fallback for the (unused-in-practice) non-canonical case, so behaviour
+  ;; is preserved exactly.
+  (let [case-clauses (mapv
+                       (fn [row]
+                         (gogen/case-clause
+                           [(g/gquote ~(op-keyword-name row))]
+                           [(g/gquote (return ~(op-const-name row) true))]))
+                       ops)
+        default-clause (gogen/case-clause
+                         nil
+                         [(g/gquote (return OpInvalid false))])
+        switch-stmt (gogen/switch-stmt nil (g/gquote name) (conj case-clauses default-clause))]
+    (g/gquote
+      (func opByKeywordExact [(name string)] [Op bool]
+        ~switch-stmt))))
+
 ;; --- assemble + emit -------------------------------------------------
 
 (println (g/render (emit-type-decl)))
@@ -357,3 +388,5 @@
 (doseq [d (emit-op-keywords-fn)]
   (println (g/render d))
   (println))
+(println (g/render (emit-op-by-keyword-fn)))
+(println)

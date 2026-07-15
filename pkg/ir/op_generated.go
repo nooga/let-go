@@ -331,3 +331,86 @@ var opKeywordNames = []string{"invalid", "const", "load-arg", "load-var", "load-
 
 // OpKeywords returns every catalogued op as its kebab-case keyword name, in Op order.
 func OpKeywords() []string { return opKeywordNames }
+
+func opByKeywordExact(name string) (Op, bool) {
+	switch name {
+	case "invalid":
+		return OpInvalid, true
+	case "const":
+		return OpConst, true
+	case "load-arg":
+		return OpLoadArg, true
+	case "load-var":
+		return OpLoadVar, true
+	case "load-closed":
+		return OpLoadClosed, true
+	case "block-arg":
+		return OpBlockArg, true
+	case "set-var":
+		return OpSetVar, true
+	case "call":
+		return OpCall, true
+	case "tail-call":
+		return OpTailCall, true
+	case "add":
+		return OpAdd, true
+	case "sub":
+		return OpSub, true
+	case "mul":
+		return OpMul, true
+	case "bit-and":
+		return OpBitAnd, true
+	case "bit-or":
+		return OpBitOr, true
+	case "bit-xor":
+		return OpBitXor, true
+	case "bit-and-not":
+		return OpBitAndNot, true
+	case "bit-shift-left":
+		return OpBitShiftLeft, true
+	case "bit-shift-right":
+		return OpBitShiftRight, true
+	case "unsigned-bit-shift-right":
+		return OpUnsignedBitShiftRight, true
+	case "quot":
+		return OpQuot, true
+	case "div":
+		return OpDiv, true
+	case "lt":
+		return OpLt, true
+	case "lte":
+		return OpLte, true
+	case "gt":
+		return OpGt, true
+	case "gte":
+		return OpGte, true
+	case "eq":
+		return OpEq, true
+	case "inc":
+		return OpInc, true
+	case "dec":
+		return OpDec, true
+	case "bit-not":
+		return OpBitNot, true
+	case "pop":
+		return OpPop, true
+	case "return":
+		return OpReturn, true
+	case "branch":
+		return OpBranch, true
+	case "branch-if":
+		return OpBranchIf, true
+	case "make-closure":
+		return OpMakeClosure, true
+	case "push-closed":
+		return OpPushClosed, true
+	case "try":
+		return OpTry, true
+	case "dot":
+		return OpDot, true
+	case "def":
+		return OpDef, true
+	default:
+		return OpInvalid, false
+	}
+}
