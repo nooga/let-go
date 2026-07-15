@@ -130,129 +130,46 @@ func evalInit() {
 }
 
 func loadPrecompiledBundle() error {
-	// Namespaces that exist BEFORE decode are native-backed (installers run
-	// at package init). If the bundle also carries a chunk for one of them
-	// — a HYBRID namespace like async (native fns + lg-source macros) —
-	// lazy loading is broken for it: qualified symbol resolution finds the
-	// already-registered ns and its decoded nil stubs without ever
-	// triggering the loader. Those chunks must run eagerly (below).
-	preexisting := map[string]bool{}
-	for name := range rt.AllNSes() {
-		preexisting[name] = true
-	}
-
-	resolve := func(nsName, name string) *vm.Var {
-		// Use DefNSBare to create minimal namespaces without triggering
-		// the loader. This ensures vars have a home namespace but the
-		// actual loading (executing precompiled chunks) happens on demand.
-		n := rt.DefNSBare(nsName)
-		// Use LookupLocal to check only the namespace's own registry,
-		// not refers. This matches how the compiler creates vars via
-		// LookupOrAdd (which also skips refers).
-		v := n.LookupLocal(vm.Symbol(name))
-		if v == nil {
-			// Use DefStub to avoid spurious warn-on-shadow warnings during
-			// bundle decoding (the chunk will properly Def the value later).
-			if decodeTagStats {
-				bytecode.NoteDecodeVarRefMiss(true)
-			}
-			return n.DefStub(name)
-		}
-		if decodeTagStats {
-			bytecode.NoteDecodeVarRefHit()
-		}
-		return v
-	}
-	t0 := time.Now()
+	// The decode + replay of core, the lg baseline namespaces, and the eager
+	// hybrid pass all live in the compiler-free spine rt.LoadCoreBundle (#506),
+	// shared with rt.LoadCore and rt.BootCore. EagerHybrids is true here for the
+	// same reason it is in BootCore: api.NewContext returns straight to user
+	// code, so hybrid vars reachable via qualified symbols (which bypass the
+	// on-demand loader) must be bound before then. The spine also folds in the
+	// *ns* save/restore and NSOrder-deterministic hybrid order that used to be
+	// BootCore-only.
+	//
+	// Decode diagnostics (LG_DECODE_TAG_STATS, #356) still work: the var-ref
+	// hit/miss counting now lives in rt.LGBVarResolver (self-gating), so the
+	// enable/reset/print wrapper here drives it across the shared decode, and
+	// the OnPhase hook restores the decode-bundle / run-core-chunk bootMarks.
 	if decodeTagStats {
 		bytecode.ResetDecodeStats()
 		bytecode.SetDecodeStatsEnabled(true)
 		defer bytecode.SetDecodeStatsEnabled(false)
 	}
-	// Bytes entry: the embedded core is already a []byte, so decode keeps it
-	// resident and defers per-chunk source-map materialization off the hot path.
-	unit, err := bytecode.DecodeToExecUnitBytes(rt.CoreCompiledLGB, resolve)
+	unit, err := rt.LoadCoreBundle(rt.CoreLoadOptions{
+		EagerHybrids: true,
+		OnPhase:      func(phase string, since time.Time) { bootMark(phase, since) },
+	})
 	if err != nil {
 		return err
 	}
-	bootMark("decode-bundle", t0)
 	if decodeTagStats {
 		fmt.Fprint(os.Stderr, bytecode.SnapshotDecodeStats().Summary())
 	}
 
-	// Use the decoded const pool as the global pool
+	// Compiler-side leftovers the runtime spine deliberately omits: the decoded
+	// const pool becomes the global pool for further compilation, and the chunk
+	// map is what the resolver+compiler NSLoader replays a namespace from.
 	consts = unit.Consts
+	precompiledNS = unit.NSChunks
 
-	// Execute core's main chunk to replay all def/defn/defmacro definitions
-	t1 := time.Now()
-	f := vm.NewFrame(unit.MainChunk, nil)
-	_, err = f.RunProtected()
-	vm.ReleaseFrame(f)
-	if err != nil {
-		return err
-	}
-	bootMark("run-core-chunk", t1)
-
-	// Store remaining namespace chunks for on-demand loading by the resolver.
-	// Mark non-core namespaces as needing load so LookupOrRegisterNS triggers
-	// the loader even though the namespace already exists in the registry.
-	if unit.NSChunks != nil {
-		precompiledNS = unit.NSChunks
-		// The lg baseline namespaces (let-go.core, let-go.types) hold lg-specific
-		// extras and are auto-refer'd into every namespace (RegisterNS) but never
-		// explicitly required. On-demand loading only fires through
-		// LookupOrRegisterNS (qualified refs / require), which refer-resolution
-		// bypasses — so their .lg chunks would never run and the .lg-defined vars
-		// would stay unbound stubs. Run them eagerly right after core, whose
-		// definitions they depend on. (purify-clojure-core ②)
-		baselineNS := map[string]bool{}
-		for _, name := range rt.LgBaselineNSNames() {
-			baselineNS[name] = true
-			if ch := precompiledNS[name]; ch != nil {
-				lf := vm.NewFrame(ch, nil)
-				_, lerr := lf.RunProtected()
-				vm.ReleaseFrame(lf)
-				if lerr != nil {
-					return lerr
-				}
-			}
-		}
-		for name := range precompiledNS {
-			if name != "core" && !baselineNS[name] {
-				rt.MarkNSNeedsLoad(name)
-			}
-		}
-		// Eagerly execute chunks of hybrid namespaces (native + bundled lg
-		// source): their vars are reachable via qualified symbols without a
-		// (require ...), so lazy loading would leave the bundle-defined
-		// vars as nil stubs. The loader isn't configured yet at this point
-		// (api.NewContext sets it later), so run the chunk directly, the
-		// same way the core main chunk runs above. Note: a hybrid chunk
-		// that :requires another lazy bundled ns would load it too early
-		// here — fine for today's hybrids (async: macros over core only).
-		for name, ch := range precompiledNS {
-			if name == "core" || !preexisting[name] || ch == nil {
-				continue
-			}
-			f := vm.NewFrame(ch, nil)
-			_, err := f.RunProtected()
-			vm.ReleaseFrame(f)
-			if err != nil {
-				return err
-			}
-			rt.ClearNSNeedsLoad(name)
-			// The chunk's bootstrap defs overwrite any generated native
-			// adapters registered at init — restore them, same as the
-			// on-demand loader path does after a lazy load.
-			rt.ReapplyGeneratedPrimitives(name)
-		}
-	}
-
-	// Source-only namespaces (precompiled bundle deliberately skips them
+	// Source-only namespaces (the precompiled bundle deliberately skips them
 	// because their precompiled stubs would intern nil into dependent
-	// namespaces — see cmd/lgbgen/main.go). Their vars may already exist
-	// as stubs in the registry from bundle decoding's VarRef pass; mark
-	// them NeedsLoad so (require 'name) re-loads from source.
+	// namespaces — see cmd/lgbgen/main.go). Their vars may already exist as
+	// stubs from bundle decoding's VarRef pass; mark them NeedsLoad so
+	// (require 'name) re-loads from source.
 	for _, name := range []string{"ir.data"} {
 		rt.MarkNSNeedsLoad(name)
 	}
