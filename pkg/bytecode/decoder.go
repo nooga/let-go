@@ -77,7 +77,21 @@ func (d *decoder) decodeExec(parent *vm.Consts) (*ExecUnit, error) {
 	d.flags = flags
 
 	if version == 1 {
-		return d.decodeToExecUnitV1(parent)
+		// v1 predates capabilities, so like a capability-less v2 bundle it
+		// implicitly carries the pre-removal opcode set; resolve the migration
+		// here and remap after decode, keeping the frozen v1 path untouched.
+		preCount, preHash := preRemovalSignature()
+		if err := d.resolveOpcodeSet(preCount, preHash); err != nil {
+			return nil, err
+		}
+		unit, err := d.decodeToExecUnitV1(parent)
+		if err != nil {
+			return nil, err
+		}
+		if d.remapFunc != nil {
+			d.remapFunc(d.chunks)
+		}
+		return unit, nil
 	}
 	if version == 2 {
 		return d.decodeToExecUnitV2(parent)
@@ -300,7 +314,25 @@ func DecodeWithResolver(r io.Reader, resolve VarResolver) (*Module, error) {
 	}
 	d.flags = flags
 	if version == 1 {
-		return d.readModuleV1()
+		// Same implicit pre-removal signature handling as the exec-unit v1
+		// path above. The raw ChunkData code is re-synced from the remapped
+		// live chunks so a re-encode of a decoded v1 module cannot smuggle
+		// unmigrated opcodes under a current signature.
+		preCount, preHash := preRemovalSignature()
+		if err := d.resolveOpcodeSet(preCount, preHash); err != nil {
+			return nil, err
+		}
+		m, err := d.readModuleV1()
+		if err != nil {
+			return nil, err
+		}
+		if d.remapFunc != nil {
+			d.remapFunc(d.chunks)
+			for i, cd := range m.Chunks {
+				cd.Code = d.chunks[i].Code()
+			}
+		}
+		return m, nil
 	}
 	if version == 2 {
 		return d.readModuleV2()

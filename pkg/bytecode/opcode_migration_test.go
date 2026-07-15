@@ -142,6 +142,61 @@ func TestLegacyBundleDecodeWithMigration(t *testing.T) {
 	}
 }
 
+// TestV1DecodeAppliesOpcodeMigration pins the v1 migration gap found in
+// review: v1 bundles predate both capabilities and the TRACE-opcode removal,
+// so they implicitly carry the pre-removal opcode set — exactly like a
+// capability-less v2 bundle — and both frozen v1 decode paths must apply the
+// same remap the v2 paths get. Without it, a legacy ADD (25) decodes
+// untouched and the current VM executes it as OP_MUL.
+func TestV1DecodeAppliesOpcodeMigration(t *testing.T) {
+	// Hand-crafted v1 module with one chunk of pre-removal opcodes:
+	// TRACE_ENABLE (18) and ADD (25), both stride 1.
+	buildV1 := func() *bytes.Buffer {
+		var buf bytes.Buffer
+		w := NewWriter(&buf)
+		w.WriteBytes(Magic[:])
+		w.WriteUint16(1) // version 1
+		w.WriteUint16(0) // flags (v1: no capabilities)
+		w.WriteVarint(0) // 0 strings
+		w.WriteVarint(1) // 1 chunk
+		w.WriteVarint(2) // max_stack
+		w.WriteVarint(2) // code_len
+		w.WriteInt32(18) // v2 TRACE_ENABLE — must become OP_NOOP
+		w.WriteInt32(25) // legacy ADD — same number as current OP_MUL; must remap to OP_ADD
+		w.WriteVarint(0) // 0 source-map entries
+		w.WriteVarint(0) // 0 consts
+		w.WriteVarint(0) // empty NS table
+		w.Flush()
+		return &buf
+	}
+	want := []int32{vm.OP_NOOP, vm.OP_ADD}
+
+	t.Run("module path", func(t *testing.T) {
+		m, err := Decode(buildV1())
+		if err != nil {
+			t.Fatalf("v1 Decode: %v", err)
+		}
+		if len(m.Chunks) != 1 {
+			t.Fatalf("expected 1 chunk, got %d", len(m.Chunks))
+		}
+		got := m.Chunks[0].Code
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("v1 module chunk not migrated: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("exec-unit path", func(t *testing.T) {
+		unit, err := DecodeToExecUnitBytes(buildV1().Bytes(), nil)
+		if err != nil {
+			t.Fatalf("v1 DecodeToExecUnitBytes: %v", err)
+		}
+		got := unit.MainChunk.Code()
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("v1 exec-unit chunk not migrated: got %v, want %v", got, want)
+		}
+	})
+}
+
 // TestMismatchedSignatureWithoutMigration verifies that a bundle with an
 // unrecognized opcode-set signature is rejected.
 func TestMismatchedSignatureWithoutMigration(t *testing.T) {
