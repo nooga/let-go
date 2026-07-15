@@ -1603,6 +1603,13 @@ func invokeMethodFallback(rec vm.Value, name vm.Symbol, args []vm.Value, origina
 			return fn.Invoke(append([]vm.Value{rec}, args...))
 		}
 	}
+	// Generic JVM collection-interface interop (.valAt/.iterator/.assoc/.cons/
+	// .nth/.count/.hashCode/.longValue) on any let-go collection — see
+	// host_interop.go. Placed before the name→fn fallbacks because `.cons`
+	// (append) must not resolve to core `cons` (prepend).
+	if v, handled, err := hostCollectionMethod(rec, name, args); handled || err != nil {
+		return v, err
+	}
 	if isCompatChecker(rec) && len(args) == 1 {
 		switch name {
 		case "isLong":
@@ -8622,6 +8629,14 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// let-go already models regexes as vm.RegexType, so aliasing the JVM class to
 	// it makes m/regexp? genuinely work.
 	ns.Def("java.util.regex.Pattern", vm.RegexType)
+
+	installJVMStatics(ns)
+	installCoreCompatFns(ns)
+	installJVMStubs(ns)
+
+	// Mutable JVM collection shims (see host_hashmap.go / host_arraydeque.go).
+	installHostHashMap(ns)
+	installHostArrayDeque(ns)
 }
 
 func longCompatValue(v int64) vm.Value {

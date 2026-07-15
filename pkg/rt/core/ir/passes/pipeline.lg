@@ -32,6 +32,7 @@
    [ir.passes.infer-arg-types :refer [infer-arg-types]]
    [ir.passes.inline]
    [ir.passes.lambda-lift]
+   [ir.passes.legalize :refer [legalize-fn!]]
    [ir.passes.licm :refer [licm]]
    [ir.passes.typeinfer :refer [typeinfer]]
    [ir.validate :refer [validate-fn!]]))
@@ -92,7 +93,32 @@
 (defn- optimize-fn-tail [f]
   (run-pass-list f default-pass-list))
 
+;; default-pass-list minus the typeinfra epochs. Used for lambda-lifted
+;; siblings: a sibling is only ever invoked BOXED through its interned var
+;; (higher-order use — the main body passes it to some/map/…), so a typed
+;; signature buys nothing at the boundary — and it actively breaks the
+;; registration invariant: a typed sibling fails override-uniform-value?, is
+;; silently skipped by override-entries, and the main's
+;; rt.LookupVar(<ns>, "<name>__liftedN") nil-derefs at runtime (the sibling
+;; var has NO bytecode fallback — lambda-lift runs only on the :go path).
+;; Skipping type inference keeps every inst :unknown → the whole body lowers
+;; through the boxed vm.Value path → uniform ABI by construction.
+(def uniform-pass-list
+  (vec (filter (fn [entry] (not= run-typeinfra-epoch (nth entry 0)))
+               default-pass-list)))
+
+(defn- optimize-fn-uniform [f]
+  (legalize-fn! f)
+  (validate-fn! f "build")
+  (run-pass-list f uniform-pass-list))
+
 (defn optimize-fn [f]
+  ;; Repair any cross-block direct refs build.lg emitted for shapes its
+  ;; construction-time threading missed (e.g. the :try lowering) BEFORE the
+  ;; build-validation gate — otherwise a legal-semantics fn is rejected and
+  ;; forced onto a bytecode trampoline. On-demand: a fn with no cross-block
+  ;; refs is untouched. See ir.passes.legalize.
+  (legalize-fn! f)
   (validate-fn! f "build")
   (when (and ir.passes.inline/*enable-inline*
              (seq ir.passes.inline/*inline-registry*))
@@ -616,14 +642,43 @@
           (if go-target?
             ;; Wire lambda-lift: thread lifted siblings through compile pipeline
             (let [{:keys [main lifted]} (ir.passes.lambda-lift/lambda-lift built)
-                  lower1 (fn [g] (let [r ((lowerings :go) (optimize-fn g))]
-                                   (if (= :lowered (:status r)) {:fn (:decl r)} r)))]
+                  ;; Every member of the lambda-lift template — the main AND its
+                  ;; lifted siblings — carries its FULL result (:fn-name,
+                  ;; :override-eligible?, :needs-error?, :go-name, :arity) so the
+                  ;; flatten registers each as a native override in the package
+                  ;; init() and each is visible to the direct-call registry.
+                  ;; Siblings MUST register: the main body's
+                  ;; rt.LookupVar(<ns>, "<name>__liftedN") nil-derefs at runtime
+                  ;; against an unregistered var. The main registering makes it
+                  ;; direct-callable like any single-arity lowered fn — without
+                  ;; it, intra-ns callers trampoline through rt.CachedVarFn to
+                  ;; bytecode even though the native decl sits in the same
+                  ;; package (self-trampolining). The :lifted? marker keeps each
+                  ;; a single-arity entry — these are NOT multi-arity arms.
+                  entryize (fn [r] (if (= :lowered (:status r))
+                                     {:fn (:decl r) :result r :lifted? true}
+                                     r))]
               (if (empty? lifted)
                 ;; No lifted siblings: return single-decl result unchanged
                 ((lowerings :go) (optimize-fn main))
-                ;; Has lifted siblings: return multi-fn-template for flatten path
-                {:kind :multi-fn-template
-                 :fns (into [(lower1 main)] (mapv lower1 lifted))}))
+                ;; Has lifted siblings: lower the main normally and each sibling
+                ;; through the uniform-ABI pipeline (optimize-fn-uniform), then
+                ;; GUARD: every sibling must have lowered AND be registrable
+                ;; (:override-eligible?). If any is not — variadic, or a typed
+                ;; signature that slipped through (e.g. an intrinsically-typed
+                ;; const return) — the WHOLE form falls back to bytecode: a
+                ;; native main whose body LookupVars an unregistered sibling is
+                ;; a guaranteed runtime nil-deref, never a valid emission.
+                (let [main-r (entryize ((lowerings :go) (optimize-fn main)))
+                      sib-rs (mapv (fn [g] ((lowerings :go) (optimize-fn-uniform g)))
+                                   lifted)]
+                  (if (every? (fn [r] (and (= :lowered (:status r))
+                                           (:override-eligible? r)))
+                              sib-rs)
+                    {:kind :multi-fn-template
+                     :fns (into [main-r] (mapv entryize sib-rs))}
+                    {:status :fallback :decl nil
+                     :reason "lambda-lift: sibling not override-eligible"}))))
             ;; Bytecode path: no lambda-lift. When inlining is enabled,
             ;; fold-over-rest combinator calls are OUTLINED to unrolled
             ;; fixed-arity siblings (never spliced — the AOT splice creates
@@ -1092,6 +1147,12 @@
           ;; (defensive) fall back to the decl-only shape.
           (let [flat (reduce (fn [acc entry]
                                (cond
+                                 ;; Lambda-lifted sibling: a single-arity native
+                                 ;; fn. Carry its full result so override-entries
+                                 ;; registers its var, but do NOT tag :multi-arity?
+                                 ;; (it is not a multi-arity arm).
+                                 (:lifted? entry)
+                                 (conj acc (:result entry))
                                  (:result entry)
                                  (conj acc (assoc (:result entry) :multi-arity? true))
                                  (:fn entry)

@@ -24,11 +24,19 @@ import (
 // the var's home namespace is materialized bare (no loader trigger) and the
 // name is interned as a stub if not yet defined. The single resolver behind
 // every .lgb decode site.
+//
+// It records var-ref hit/miss decode stats (LG_DECODE_TAG_STATS). The Note
+// calls self-gate on bytecode.decodeStatsEnabled, so they're a no-op unless a
+// caller has enabled stats around the decode; folding them in here — rather
+// than a decode-site-specific resolver — makes the counter available at every
+// canonical decode site, not just core boot where it started (#356).
 func LGBVarResolver(nsName, name string) *vm.Var {
 	n := DefNSBare(nsName)
 	if v := n.LookupLocal(vm.Symbol(name)); v != nil {
+		bytecode.NoteDecodeVarRefHit()
 		return v
 	}
+	bytecode.NoteDecodeVarRefMiss(true)
 	return n.DefStub(name)
 }
 

@@ -29,6 +29,7 @@ import (
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/infer_arg_types"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/inline"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/lambda_lift"
+	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/legalize"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/licm"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/liveness"
 	_ "github.com/nooga/let-go/pkg/rt/core_go_lowered/ir/passes/mutability"

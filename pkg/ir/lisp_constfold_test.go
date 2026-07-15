@@ -50,7 +50,7 @@ func ensureLoader() {
 			"ir.passes.mutability", "ir.passes.cse",
 			"ir.passes.typeinfer", "ir.passes.infer-arg-types",
 			"ir.passes.licm", "ir.passes.lambda-lift", "ir.passes.inline", "ir.passes.fusion",
-			"ir.passes.liveness", "ir.passes.blockarg", "ir.passes.cleanup", "ir.passes.pipeline", "ir.dump", "ir.dominance", "ir.lower-go"} {
+			"ir.passes.liveness", "ir.passes.blockarg", "ir.passes.cleanup", "ir.passes.legalize", "ir.passes.pipeline", "ir.dump", "ir.dominance", "ir.lower-go"} {
 			if res.Load(ns) == nil {
 				panic("namespace failed to load: " + ns)
 			}
