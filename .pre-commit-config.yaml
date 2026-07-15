@@ -27,6 +27,17 @@ repos:
 
   - repo: local
     hooks:
+      # Fail fast on an accidentally-staged compiled executable (e.g. a stray
+      # `go build` output). Magic-byte based (Mach-O / ELF / PE), so it ignores
+      # the repo's legitimate binary assets — the LGB core bundle and images.
+      # No type filter: it must inspect every staged file's leading bytes.
+      - id: forbid-compiled-binaries
+        name: forbid committing compiled executables
+        description: Reject staged Mach-O / ELF / PE binaries before they bloat history
+        entry: python3 scripts/reject_compiled_binaries.py
+        language: system
+        stages: [pre-commit]
+
       # Auto-fix formatting before linters run. gofmt ships with Go.
       # goimports is fetched on demand via `go run ...@latest` so contributors
       # don't need a separate install; the module cache makes subsequent runs

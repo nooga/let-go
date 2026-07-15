@@ -89,40 +89,11 @@ func runLGB(filename string) error {
 	if err != nil {
 		return err
 	}
-	resolve := func(nsName, name string) *vm.Var {
-		n := rt.DefNSBare(nsName)
-		v := n.LookupLocal(vm.Symbol(name))
-		if v == nil {
-			return n.DefStub(name)
-		}
-		return v
-	}
-	unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(data), resolve)
+	unit, err := rt.DecodeExecUnit(data)
 	if err != nil {
 		return fmt.Errorf("decoding %s: %w", filename, err)
 	}
-
-	// For bundles with multiple namespaces, execute each NS chunk in
-	// dependency order (NSOrder). Skip the main chunk — it runs last.
-	if len(unit.NSOrder) > 0 {
-		for _, name := range unit.NSOrder {
-			chunk := unit.NSChunks[name]
-			if chunk == nil || chunk == unit.MainChunk {
-				continue
-			}
-			f := vm.NewFrame(chunk, nil)
-			_, err := f.RunProtected()
-			vm.ReleaseFrame(f)
-			if err != nil {
-				return fmt.Errorf("loading namespace %s: %w", name, err)
-			}
-		}
-	}
-
-	f := vm.NewFrame(unit.MainChunk, nil)
-	_, err = f.RunProtected()
-	vm.ReleaseFrame(f)
-	return err
+	return rt.RunExecUnit(unit)
 }
 
 // runScript dispatches a positional script to the .lgb loader or the source
@@ -133,33 +104,6 @@ func runScript(ctx *compiler.Context, script string) error {
 		return runLGB(script)
 	}
 	return runFile(ctx, script)
-}
-
-// checkBundledLGB checks if the current executable has an appended payload.
-// Returns the LGB bytecode, the gzipped resource archive (for a v2/v3 bundle),
-// and the baked storage store id (v3 only). The latter two are empty for a
-// legacy bundle or one built without them.
-func checkBundledLGB() (lgb []byte, res []byte, storeID string) {
-	candidates := make([]string, 0, 3)
-	if exe, err := os.Executable(); err == nil && exe != "" {
-		candidates = append(candidates, exe)
-	}
-	if len(os.Args) > 0 && os.Args[0] != "" {
-		candidates = append(candidates, os.Args[0])
-	}
-	candidates = append(candidates, "/proc/self/exe")
-
-	seen := map[string]bool{}
-	for _, path := range candidates {
-		if path == "" || seen[path] {
-			continue
-		}
-		seen[path] = true
-		if data, resData, sid := bundle.ReadBundled(path); data != nil {
-			return data, resData, sid
-		}
-	}
-	return nil, nil, ""
 }
 
 // bundleBinary creates a standalone executable by copying the lg binary
@@ -405,43 +349,10 @@ func buildResourcePaths() []string {
 	return resolver.ParseSearchPaths(raw)
 }
 
-// commandLineArgsValue converts the user's CLI args — the positionals after
-// the script — into the value of core/*command-line-args*: nil when there are
-// none, else a seq of strings.
-func commandLineArgsValue(args []string) vm.Value {
-	if len(args) == 0 {
-		return vm.NIL
-	}
-	vs := make([]vm.Value, len(args))
-	for i, a := range args {
-		vs[i] = vm.String(a)
-	}
-	return vm.NewList(vs)
-}
-
-// setCommandLineArgs publishes the user's CLI args to core/*command-line-args*.
-// lg is the only layer that knows authoritatively where the script ends and
-// the user's args begin, so it computes them once and every consumer reads the
-// var instead of slicing os/args by hand.
-func setCommandLineArgs(args []string) {
-	rt.CoreNS.Lookup("*command-line-args*").(*vm.Var).SetRoot(commandLineArgsValue(args))
-}
-
 func storageIDForScript(script string) string {
 	cwd, _ := os.Getwd()
 	exe, _ := os.Executable()
 	return rt.StorageIDFrom(storageID, script, cwd, exe)
-}
-
-func installPersistentStorage(storeID string) {
-	store, err := rt.NewDefaultFileStorage(storeID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: storage disabled: %v\n", err)
-		return
-	}
-	if v := rt.LookupCoreVar("*storage*"); v != nil {
-		v.SetRoot(vm.NewBoxed(store))
-	}
 }
 
 func initCompiler(debug bool) *compiler.Context {
@@ -473,7 +384,7 @@ func runMain() int {
 
 	// Check for appended LGB payload before anything else.
 	// If found, we're a standalone binary — run it directly.
-	if lgbData, resData, bakedStoreID := checkBundledLGB(); lgbData != nil {
+	if lgbData, resData, bakedStoreID := bundle.ReadBundledSelf(); lgbData != nil {
 		// Set up resolver so embedded namespaces (string, set, etc.) can load
 		ctx := initCompiler(false)
 		nsResolver := resolver.NewNSResolver(ctx, buildSearchPaths())
@@ -482,14 +393,14 @@ func runMain() int {
 
 		// A bundle skips flag parsing, so every arg after the program name is a
 		// user arg. Set this before any chunk runs — top-level forms read it.
-		setCommandLineArgs(os.Args[1:])
+		rt.SetCommandLineArgs(os.Args[1:])
 		// Prefer the store id baked into the bundle at build time. Fall back to
 		// the exe basename for bundles built before the v3 trailer carried one.
 		bundleStoreID := bakedStoreID
 		if bundleStoreID == "" {
 			bundleStoreID = storageIDForScript("")
 		}
-		installPersistentStorage(bundleStoreID)
+		rt.InstallPersistentStorage(bundleStoreID)
 
 		// Resources are self-contained in a bundle: serve io/resource from the
 		// embedded archive only, ignoring the filesystem and -resource-paths.
@@ -502,37 +413,12 @@ func runMain() int {
 			rt.SetResourceProvider(rt.NewEmbeddedResourceProvider(files))
 		}
 
-		resolve := func(nsName, name string) *vm.Var {
-			n := rt.DefNSBare(nsName)
-			v := n.LookupLocal(vm.Symbol(name))
-			if v == nil {
-				return n.DefStub(name)
-			}
-			return v
-		}
-		unit, err := bytecode.DecodeToExecUnit(bytes.NewReader(lgbData), resolve)
+		unit, err := rt.DecodeExecUnit(lgbData)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
-		// Execute namespace chunks in dependency order before main
-		for _, name := range unit.NSOrder {
-			chunk := unit.NSChunks[name]
-			if chunk == nil || chunk == unit.MainChunk {
-				continue
-			}
-			f := vm.NewFrame(chunk, nil)
-			_, err := f.RunProtected()
-			vm.ReleaseFrame(f)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: loading namespace %s: %v\n", name, err)
-				return 1
-			}
-		}
-		f := vm.NewFrame(unit.MainChunk, nil)
-		_, err = f.RunProtected()
-		vm.ReleaseFrame(f)
-		if err != nil {
+		if err := rt.RunExecUnit(unit); err != nil {
 			fmt.Fprint(os.Stderr, vm.FormatError(err))
 			return 1
 		}
@@ -562,12 +448,12 @@ func runMain() int {
 	if len(files) >= 1 {
 		userArgs = files[1:]
 	}
-	setCommandLineArgs(userArgs)
+	rt.SetCommandLineArgs(userArgs)
 	scriptForStorage := ""
 	if len(files) >= 1 {
 		scriptForStorage = files[0]
 	}
-	installPersistentStorage(storageIDForScript(scriptForStorage))
+	rt.InstallPersistentStorage(storageIDForScript(scriptForStorage))
 
 	// Dev/run resources: serve io/resource from the -resource-paths roots on
 	// the filesystem. (In a bundled binary this branch is never reached — the

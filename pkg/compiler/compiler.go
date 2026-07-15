@@ -114,13 +114,23 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 	chunk := vm.NewCodeChunk(c.consts)
 	var result vm.Value = vm.NIL
 	compiledForms := 0
-	for {
-		o, err := r.Read()
-		if err != nil {
-			if isErrorEOF(err) {
-				break
+	var evalTopForm func(o vm.Value) error
+	evalTopForm = func(o vm.Value) error {
+		// Clojure's Compiler.eval special-cases a top-level (do ...): each
+		// subform is compiled AND evaluated in turn, so an earlier subform's
+		// compile-time effect (a require loading a namespace, an in-ns, an
+		// intern) is visible when a later subform compiles. This is what
+		// makes (do (require 'x) (x/f)) work at the REPL (#195). An empty
+		// (do) falls through to compileForm and evaluates to nil.
+		if lst, ok := o.(*vm.List); ok && lst.Next() != nil {
+			if first, isSym := lst.First().(vm.Symbol); isSym && first == "do" {
+				for s := lst.Next(); s != nil; s = s.Next() {
+					if err := evalTopForm(s.First()); err != nil {
+						return err
+					}
+				}
+				return nil
 			}
-			return nil, result, err
 		}
 		if compiledForms > 0 {
 			chunk.Append(vm.OP_POP)
@@ -128,10 +138,10 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 		formchunk := vm.NewCodeChunk(c.consts)
 		c.chunk = formchunk
 		c.resetSP()
-		err = c.compileForm(o)
+		err := c.compileForm(o)
 		c.chunk.SetMaxStack(c.spMax)
 		if err != nil {
-			return nil, result, err
+			return err
 		}
 		chunk.AppendChunk(formchunk)
 
@@ -145,9 +155,22 @@ func (c *Context) CompileMultiple(reader io.Reader) (*vm.CodeChunk, vm.Value, er
 		result, err = f.RunProtected()
 		vm.ReleaseFrame(f)
 		if err != nil {
-			return nil, result, err
+			return err
 		}
 		compiledForms++
+		return nil
+	}
+	for {
+		o, err := r.Read()
+		if err != nil {
+			if isErrorEOF(err) {
+				break
+			}
+			return nil, result, err
+		}
+		if err := evalTopForm(o); err != nil {
+			return nil, result, err
+		}
 	}
 
 	c.chunk = chunk

@@ -182,11 +182,10 @@ func (l ArrayVector) SeqFrom(i int) Seq {
 	return &ArrayVectorSeq{vec: l, i: i}
 }
 
-// ArrayVectorSeq is a lightweight seq view over an ArrayVector.
-// The embedded chunk lets ChunkedFirst return a pointer into this
-// already-heap-allocated seq node instead of allocating a fresh *ArrayChunk
-// per chunk — so chunk-walking a (typically tiny, single-chunk) vector costs
-// no extra allocation beyond the seq node itself.
+// ArrayVectorSeq is a lightweight seq view over an ArrayVector. ChunkedFirst
+// hands back a fresh *ArrayChunk window over the immutable backing array (the
+// slice is shared, not copied) — a distinct chunk value, so the seq node itself
+// is never mutated and stays safe to share across goroutines.
 //
 // Chunk sizes GROW geometrically from 1 (1, 2, 4, 8, … clamped to length)
 // rather than a fixed 32 quantum. The size-1 head chunk keeps `first`/short-
@@ -197,7 +196,6 @@ type ArrayVectorSeq struct {
 	vec      ArrayVector
 	i        int
 	chunkLen int // intended size of THIS chunk; 0 == 1, doubles per ChunkedNext
-	chunk    ArrayChunk
 }
 
 // curChunkLen is the intended chunk quantum at this position (min 1). A seq
@@ -251,22 +249,20 @@ func (s *ArrayVectorSeq) Next() Seq {
 	return &ArrayVectorSeq{vec: s.vec, i: s.i + 1}
 }
 
-// ChunkedFirst returns up to a nodeCap-wide (32) window over the backing
-// array starting at the current position. No copy — ArrayChunk shares the
-// backing slice; ArrayVector is immutable so aliasing is safe.
+// ChunkedFirst returns a fresh chunk window over [i, i+curChunkLen) of the
+// immutable backing array (clamped to the end). It must be a distinct
+// *ArrayChunk — NOT this seq node and NOT a field on it: an ArrayVectorSeq is a
+// persistent value shared freely across goroutines, so writing a scratch field
+// here would race concurrent calls on the same node (TestArrayVectorSeqChunked
+// FirstRace), and returning s itself would make the chunk also a Seq and
+// pollute chunk-vs-seq interface dispatch. The one small ArrayChunk descriptor
+// allocated here (the backing slice is shared, not copied) is the cost of both.
 func (s *ArrayVectorSeq) ChunkedFirst() IChunk {
-	// Clamp to length: the trailing chunk spans only the real remainder, never
-	// the full quantum — so ChunkCount() reports the actual size and consumers
-	// don't over-allocate/over-realize past the vector's end.
 	end := s.i + s.curChunkLen()
 	if end > len(s.vec) {
 		end = len(s.vec)
 	}
-	// Populate the embedded chunk and hand back a pointer into this seq node
-	// (no per-chunk heap allocation). The chunk is a read-only window over the
-	// immutable backing array, so sharing it with the consumer is safe.
-	s.chunk = ArrayChunk{vs: []Value(s.vec), off: s.i, end: end}
-	return &s.chunk
+	return &ArrayChunk{vs: []Value(s.vec), off: s.i, end: end}
 }
 
 // ChunkedNext advances past this chunk and DOUBLES the quantum, returning the

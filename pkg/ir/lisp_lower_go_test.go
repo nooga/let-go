@@ -326,6 +326,31 @@ func TestLowerGoFileRendersFullGoFile(t *testing.T) {
 	}
 }
 
+// Regression: distinct-imports replaced a prior unaliased import with its
+// aliased duplicate via (pop out), which removes whatever import is LAST —
+// dropping an unrelated interleaved import and keeping the same path twice.
+// The dedup must replace by index of the prior same-path entry.
+func TestLowerGoFileDedupesInterleavedAliasedImports(t *testing.T) {
+	ensureLoader()
+
+	file := runLispExpr(t, `(ir.lower-go/file "main"
+	  [{:imports [{:path "example.com/a"}
+	              {:path "example.com/b"}
+	              {:path "example.com/a" :alias "a"}]
+	    :decl nil}])`)
+	rendered := bindAndRenderGoFile(t, file)
+
+	if !strings.Contains(rendered, `"example.com/b"`) {
+		t.Fatalf("interleaved import example.com/b was dropped by dedup\n--- go ---\n%s", rendered)
+	}
+	if got := strings.Count(rendered, `"example.com/a"`); got != 1 {
+		t.Fatalf("expected exactly 1 import of example.com/a, got %d\n--- go ---\n%s", got, rendered)
+	}
+	if !strings.Contains(rendered, `a "example.com/a"`) {
+		t.Fatalf("expected the aliased form of example.com/a to win\n--- go ---\n%s", rendered)
+	}
+}
+
 func TestLowerGoStrictBranchLowersToIfStmt(t *testing.T) {
 	ensureLoader()
 
@@ -1357,12 +1382,19 @@ func TestLowerNsToGoLiftsIntraNsCall(t *testing.T) {
 // cached-var IFn dispatch — it no longer pays a per-call rt.LookupVar at the
 // call site. (count, formerly used here, is now a native-direct call into
 // corefns.Count, so it no longer exercises the cached-var fallback.)
+// Cross-ns cached-var dispatch: a call to a non-native fn in another namespace
+// lifts to shared rt.CachedVarFn IFn dispatch. Uses a user-defined fn (uxns/uxfn)
+// rather than a core primitive — core primitives like str/deref are now //lg:
+// native and direct-link, so they no longer exercise this path; a user fn always
+// does.
 func TestLowerNsToGoLiftsCrossNsCall(t *testing.T) {
 	ensureLoader()
+	runLispExpr(t, `(create-ns (quote uxns))`)
+	runLispExpr(t, `(intern (quote uxns) (quote uxfn) (fn* [x] x))`)
 	runLispExpr(t, `(create-ns (quote directtest2))`)
 	v := runLispExpr(t,
 		`(ir.passes.pipeline/lower-ns-to-go "directtest2" (quote directtest2)
-		   [(quote (defn caller2 [y] (str y)))])`)
+		   [(quote (defn caller2 [y] (uxns/uxfn y)))])`)
 	src := string(v.(vm.String))
 	f := parseLoweredGo(t, src)
 	caller, ok := findFunc(f, func(n string) bool { return n == "Caller2" })
@@ -1370,10 +1402,10 @@ func TestLowerNsToGoLiftsCrossNsCall(t *testing.T) {
 		t.Fatalf("no Caller2 in:\n%s", src)
 	}
 	if _, ok := findIFnDispatch(caller.Body); !ok {
-		t.Fatalf("expected cross-ns str to lift to cached-var IFn dispatch:\n%s", src)
+		t.Fatalf("expected cross-ns call to lift to cached-var IFn dispatch:\n%s", src)
 	}
-	if callsLookupVarNamed(caller, "str") {
-		t.Fatalf("caller2 must not do a per-call rt.LookupVar for str:\n%s", src)
+	if callsLookupVarNamed(caller, "uxfn") {
+		t.Fatalf("caller2 must not do a per-call rt.LookupVar for uxfn:\n%s", src)
 	}
 }
 
@@ -1387,15 +1419,17 @@ func TestLowerNsToGoLiftsCrossNsCall(t *testing.T) {
 // Assertions are structural (go/ast), not regex over rendered text.
 func TestLowerGoCrossNsEmitsCachedVar(t *testing.T) {
 	ensureLoader()
+	runLispExpr(t, `(create-ns (quote uxns))`)
+	runLispExpr(t, `(intern (quote uxns) (quote uxfn) (fn* [x] x))`)
 	runLispExpr(t, `(create-ns (quote crossnsvar))`)
 	v := runLispExpr(t,
 		`(ir.passes.pipeline/lower-ns-to-go "crossnsvar" (quote crossnsvar)
-		   [(quote (defn caller3 [y] (str y)))])`)
+		   [(quote (defn caller3 [y] (uxns/uxfn y)))])`)
 	src := string(v.(vm.String))
 	f := parseLoweredGo(t, src)
 
 	isStrVar := func(n string) bool {
-		return strings.HasPrefix(n, "__v_") && strings.HasSuffix(n, "str")
+		return strings.HasPrefix(n, "__v_") && strings.HasSuffix(n, "uxfn")
 	}
 
 	// 1. package-level cached *vm.Var decl for str.
@@ -1435,10 +1469,12 @@ func TestLowerGoCrossNsEmitsCachedVar(t *testing.T) {
 // rt.LookupVar at the call site.
 func TestLowerGoCrossNsCallLiftsToIFn(t *testing.T) {
 	ensureLoader()
+	runLispExpr(t, `(create-ns (quote uxns))`)
+	runLispExpr(t, `(intern (quote uxns) (quote uxfn) (fn* [x] x))`)
 	runLispExpr(t, `(create-ns (quote crossnsifn))`)
 	v := runLispExpr(t,
 		`(ir.passes.pipeline/lower-ns-to-go "crossnsifn" (quote crossnsifn)
-		   [(quote (defn caller4 [y] (str y)))])`)
+		   [(quote (defn caller4 [y] (uxns/uxfn y)))])`)
 	src := string(v.(vm.String))
 	f := parseLoweredGo(t, src)
 
@@ -1453,11 +1489,11 @@ func TestLowerGoCrossNsCallLiftsToIFn(t *testing.T) {
 	if d.nargs != 1 {
 		t.Fatalf("Invoke got %d args, want 1", d.nargs)
 	}
-	if !strings.HasSuffix(d.varName, "str") {
-		t.Fatalf("dispatch var %q does not target str", d.varName)
+	if !strings.HasSuffix(d.varName, "uxfn") {
+		t.Fatalf("dispatch var %q does not target uxfn", d.varName)
 	}
-	if d.nsArg != "clojure.core" || d.nameArg != "str" {
-		t.Fatalf("CachedVarFn resolves (%q,%q), want (clojure.core,str)", d.nsArg, d.nameArg)
+	if d.nsArg != "uxns" || d.nameArg != "uxfn" {
+		t.Fatalf("CachedVarFn resolves (%q,%q), want (uxns,uxfn)", d.nsArg, d.nameArg)
 	}
 	// The call site must NOT do a per-call rt.LookupVar for str anymore.
 	if callsLookupVarNamed(caller, "str") {
@@ -1496,31 +1532,27 @@ func TestLowerGoNonVarCallStaysTrampoline(t *testing.T) {
 // interface, and protocol-based derefables (IDerefProtocol/iderefAdapter) have
 // no Go Deref() method, so a type-assert would panic. This pins that the
 // optimized cached-var dispatch is used and no IDeref assertion is emitted.
-func TestLowerGoDerefUsesCachedVarDispatch(t *testing.T) {
+// deref is now a //lg: native primitive (pkg/rt/native_prims.go), so a call to
+// it direct-links to rt.Deref rather than going through cached-var IFn dispatch.
+// (The cached-var cross-ns mechanism is still exercised by the cross-ns tests
+// below, which call a user-defined fn that is never native.)
+func TestLowerGoDerefDirectLinks(t *testing.T) {
 	ensureLoader()
 	runLispExpr(t, `(create-ns (quote derefns))`)
 	v := runLispExpr(t,
 		`(ir.passes.pipeline/lower-ns-to-go "derefns" (quote derefns)
 		   [(quote (defn dr [a] (deref a)))])`)
 	src := string(v.(vm.String))
-	f := parseLoweredGo(t, src)
 
-	caller, ok := findFunc(f, func(n string) bool { return n == "Dr" })
+	if !strings.Contains(src, "rt.Deref(") {
+		t.Fatalf("expected deref to direct-link to rt.Deref, got:\n%s", src)
+	}
+	caller, ok := findFunc(parseLoweredGo(t, src), func(n string) bool { return n == "Dr" })
 	if !ok {
 		t.Fatalf("no Dr in:\n%s", src)
 	}
-	d, ok := findIFnDispatch(caller.Body)
-	if !ok {
-		t.Fatalf("expected deref to lower to cached-var IFn dispatch:\n%s", src)
-	}
-	if !strings.HasSuffix(d.varName, "deref") {
-		t.Fatalf("dispatch var %q does not target deref", d.varName)
-	}
 	if callsLookupVarNamed(caller, "deref") {
 		t.Fatalf("dr must not do a per-call rt.LookupVar for deref:\n%s", src)
-	}
-	if assertsType(caller.Body, "vm.IDeref") {
-		t.Fatalf("deref must NOT lower to a direct .(vm.IDeref) assertion:\n%s", src)
 	}
 }
 

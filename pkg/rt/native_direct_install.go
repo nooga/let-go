@@ -60,6 +60,12 @@ func installNativeDirectNS() {
 		return descriptorToLisp(d), nil
 	})
 	ns.Def("native-direct", lookup)
+
+	intact, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		_ = vs
+		return vm.Boolean(NativePrimsIntact()), nil
+	})
+	ns.Def("native-prims-intact?", intact)
 }
 
 func nativeModulesToLisp() vm.Value {
@@ -100,5 +106,9 @@ func descriptorToLisp(d *NativeDirectFn) vm.Value {
 	out = out.Assoc(vm.Keyword("param-specs"), vm.NewPersistentVector(specs)).(*vm.PersistentMap)
 	out = out.Assoc(vm.Keyword("result-spec"), vm.String(d.ResultSpec)).(*vm.PersistentMap)
 	out = out.Assoc(vm.Keyword("needs-error?"), vm.Boolean(d.NeedsError)).(*vm.PersistentMap)
+	out = out.Assoc(vm.Keyword("needs-ec?"), vm.Boolean(d.NeedsEC)).(*vm.PersistentMap)
+	if d.LgName != "" {
+		out = out.Assoc(vm.Keyword("lg-name"), vm.String(d.LgName)).(*vm.PersistentMap)
+	}
 	return out
 }

@@ -1467,12 +1467,15 @@
               (let [go-pkg (:go-pkg mod)]
                 (reduce-kv
                   (fn [acc3 fn-name desc]
-                    (let [base {:go-name      (:go-ident desc)
-                                :needs-error? (:needs-error? desc)
-                                :result-spec  (:result-spec desc)
-                                :native?      true
-                                :go-pkg       go-pkg
-                                :variadic?    false}]
+                    (let [;; Use :lg-name from descriptor if present, else fall back to fn-name
+                          real-name (or (:lg-name desc) fn-name)
+                          base      {:go-name      (:go-ident desc)
+                                     :needs-error? (:needs-error? desc)
+                                     :needs-ec?    (:needs-ec? desc)
+                                     :result-spec  (:result-spec desc)
+                                     :native?      true
+                                     :go-pkg       go-pkg
+                                     :variadic?    false}]
                       (if (:variadic? desc)
                         ;; Expand the variadic fn into fixed-arity keys.
                         (let [specs    (vec (:param-specs desc))
@@ -1482,7 +1485,7 @@
                               elem-sp  (if (pos? nspecs) (peek specs) "vm.Value")]
                           (reduce
                             (fn [a k]
-                              (assoc a (registry-key ns-sym fn-name k)
+                              (assoc a (registry-key ns-sym real-name k)
                                      (assoc base
                                             :arity       k
                                             :param-specs (into fixed-sp (vec (repeat (- k min-ar) elem-sp))))))
@@ -1490,7 +1493,7 @@
                             (range min-ar (+ min-ar max-variadic-extra 1))))
                         ;; Fixed arity: one entry under its declared arity.
                         (assoc acc3
-                               (registry-key ns-sym fn-name (:arity desc))
+                               (registry-key ns-sym real-name (:arity desc))
                                (assoc base
                                       :arity       (:arity desc)
                                       :param-specs (vec (:param-specs desc)))))))
@@ -1579,8 +1582,20 @@
       ;; interface-typed, i.e. src-spec vm.Value; a proven-mismatched
       ;; scalar (concrete Go type) still bails below.
       (and (= src-spec "vm.Value") (contains? scalar-guard-specs target-type))
-      (let [[assert-spec conv] (get scalar-guard-specs target-type)]
-        {:guard {:boxed boxed :assert-spec assert-spec :conv conv}})
+      (let [[assert-spec conv] (get scalar-guard-specs target-type)
+            ;; box-as-value emits a CONCRETE literal (e.g. vm.Int(0)) for a
+            ;; :const operand whose type typeinfer widened to a vm.Value kind
+            ;; (:number / [:union ...] / :any). Go's comma-ok type assert is
+            ;; legal only on an interface, so widen a const's boxed form to
+            ;; vm.Value first; the assert then matches (native fast path) or
+            ;; falls to the trampoline (genuine mismatch), preserving the
+            ;; bytecode path's dynamic semantics. Non-const boxed exprs are
+            ;; already vm.Value-typed and pass through unchanged (output stays
+            ;; byte-identical for the non-native-primitive guard sites).
+            guard-boxed (if (= :const (ir/op rid f))
+                          (vm-call "Value" [boxed])
+                          boxed)]
+        {:guard {:boxed guard-boxed :assert-spec assert-spec :conv conv}})
       ;; Proven-mismatched scalars etc.: fall back to the trampoline.
       :else nil)))
 
@@ -1658,8 +1673,9 @@
                          (:go-name entry))
                        (gogen/ident (:go-name entry)))
         ;; A direct call to another LOWERED let-go fn (intra- OR cross-ns) passes
-        ;; ec as its first arg; native Go-module fns (:native?) are context-free.
-        call-args (if (:native? entry)
+        ;; ec as its first arg. Native Go-module fns (:native?) are context-free
+        ;; UNLESS :needs-ec? is true, in which case they also take ec first.
+        call-args (if (and (:native? entry) (not (:needs-ec? entry)))
                     arg-exprs
                     (into [(gogen/ident "ec")] arg-exprs))
         raw-call (gogen/call callee-ident call-args)]
@@ -1742,8 +1758,21 @@
                                      (gogen/call (gogen/ident (:conv g))
                                                  [(gogen/ident (tmp-name i))])
                                      (:expr d)))
-                                 descs))]
-            (if (empty? guard-idx)
+                                 descs))
+                ;; A native-module callee bypasses its Var entirely, so the
+                ;; static call is only taken while the primitive var roots are
+                ;; untouched (rt.NativePrimsIntact): with-redefs /
+                ;; alter-var-root in a CALLER's dynamic extent must be
+                ;; observed even across lowered function boundaries, and the
+                ;; trampoline branch re-reads the var root per call. Lowered
+                ;; let-go siblings (non-:native?) keep the unguarded direct
+                ;; call.
+                root-guard (when (:native? entry)
+                             (gogen/call (gogen/field-sel
+                                           (gogen/ident "rt")
+                                           "NativePrimsIntact")
+                                         []))]
+            (if (and (empty? guard-idx) (nil? root-guard))
               ;; No guards: today's flat emission, byte-identical.
               (typed-call-result-stmts f nid target entry arg-exprs)
               ;; Guarded: build the fallback FIRST, then the static
@@ -1752,7 +1781,11 @@
               ;; unused function-scoped var decls (Go compile error).
               (let [fallback (trampoline-call-stmts f closed-exprs nid
                                                     target refs)]
-                (when fallback
+                (if (nil? fallback)
+                  ;; No trampoline branch can be built: only the flat,
+                  ;; unguarded form remains (pre-root-guard behavior).
+                  (when (empty? guard-idx)
+                    (typed-call-result-stmts f nid target entry arg-exprs))
                   (let [then (typed-call-result-stmts f nid target
                                                       entry arg-exprs)]
                     (when then
@@ -1772,12 +1805,18 @@
                                            (:boxed g)
                                            (gogen/type (:assert-spec g)))])))
                                   guard-idx)
+                            type-cond
+                            (when (seq guard-idx)
+                              (reduce (fn [a i]
+                                        (gogen/binary
+                                          "&&" a (gogen/ident (ok-name i))))
+                                      (gogen/ident (ok-name (first guard-idx)))
+                                      (rest guard-idx)))
                             cond-e
-                            (reduce (fn [a i]
-                                      (gogen/binary
-                                        "&&" a (gogen/ident (ok-name i))))
-                                    (gogen/ident (ok-name (first guard-idx)))
-                                    (rest guard-idx))]
+                            (cond
+                              (nil? root-guard) type-cond
+                              (nil? type-cond)  root-guard
+                              :else (gogen/binary "&&" root-guard type-cond))]
                         (conj asserts
                               (gogen/if-stmt nil cond-e
                                              then fallback))))))))))]
@@ -3621,14 +3660,31 @@
       (gogen/import-spec path))))
 
 (defn- distinct-imports [entries]
-  (loop [remaining entries seen #{} out []]
+  ;; Dedupe by import PATH. When multiple entries share a path, prefer the one
+  ;; with an alias (e.g., rt "…/pkg/rt") over entries without an alias. This
+  ;; prevents duplicate imports like:
+  ;;   import (
+  ;;     rt "github.com/…/pkg/rt"        // aliased (base import)
+  ;;     "github.com/…/pkg/rt"           // unaliased (from native direct-call)
+  ;;   )
+  ;; The aliased version is kept; the unaliased duplicate is dropped.
+  ;; `seen` maps path -> index into `out` so an in-place upgrade replaces the
+  ;; PRIOR same-path entry, not whatever happens to be last in `out` (an
+  ;; interleaved unrelated import must never be dropped).
+  (loop [remaining entries seen {} out []]
     (if (empty? remaining)
       out
       (let [entry (first remaining)
-            key   [(:path entry) (:alias entry)]]
-        (if (contains? seen key)
-          (recur (rest remaining) seen out)
-          (recur (rest remaining) (conj seen key) (conj out entry)))))))
+            path  (:path entry)
+            prior-idx (get seen path)]
+        (if (some? prior-idx)
+          ;; Path already seen. Keep the prior entry if it has an alias
+          ;; (prefer aliased over unaliased); otherwise upgrade in place.
+          (if (some? (:alias (nth out prior-idx)))
+            (recur (rest remaining) seen out)
+            (recur (rest remaining) seen (assoc out prior-idx entry)))
+          ;; Path not yet seen; record its index and append.
+          (recur (rest remaining) (assoc seen path (count out)) (conj out entry)))))))
 
 (defn file [pkg lowered-results]
   (let [results (vec lowered-results)

@@ -56,11 +56,17 @@
 (defn- rewrite-site! [f cand sibling-name]
   "Capture-free: the fn-template :const becomes a :load-var of the sibling.
    Keeping the same nid means all consumers (the name*/applier Call args)
-   keep referencing it with no further rewrite."
+   keep referencing it with no further rewrite.
+
+   The sibling var is interned into the SAME namespace as the outer fn (the
+   *ns* bound by the compile pipeline). Qualify the :load-var symbol with that
+   ns so lowering resolves rt.LookupVar(<ns>, name) against the real home ns —
+   NOT the \"core\" default that load-var-deref-expr applies to bare symbols,
+   which dangles at runtime for any non-core ns."
   (let [nid (:template-const cand)]
     (ir/replace-op! f nid :load-var)
     (ir/set-refs!   f nid [])
-    (ir/set-aux!    f nid (symbol sibling-name))))
+    (ir/set-aux!    f nid (symbol (str (ns-name *ns*)) sibling-name))))
 
 (defn lambda-lift [f]
   "Hoist inner fn literals to top-level siblings. Returns {:main f :lifted [...]}.
@@ -69,7 +75,16 @@
     (if (empty? cands)
       {:main f :lifted []}
       (let [outer (str (ir/fn-name f))
-            free  (filter (fn [c] (empty? (:captures c))) cands)
+            ;; Lift only capture-free NON-VARIADIC inners. A lifted sibling
+            ;; lives behind an interned var (the main body LookupVars it), and
+            ;; the override registration that interns it cannot adapt a
+            ;; variadic signature (override-uniform-value? excludes variadic).
+            ;; A variadic inner stays an inline fn-template — lower-fn-lit
+            ;; emits it as a plain Go func-lit, the pre-lambda-lift path.
+            free  (filter (fn [c] (and (empty? (:captures c))
+                                       (let [inner (:inner c)]
+                                         (and inner (not (ir/fn-variadic? inner))))))
+                          cands)
             lifted (vec (map-indexed
                           (fn [i c]
                             (let [g (lift-sibling f outer i c)]
