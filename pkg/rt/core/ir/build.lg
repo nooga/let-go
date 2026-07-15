@@ -1273,9 +1273,34 @@
           (nil? n)    (recur (drop 2 b) out)
           :else       (recur (drop 2 b) (conj out n v)))))))
 
+;; A type-hinted param — `^double a` — reaches here reified as the form
+;; (with-meta a {:tag (quote double)}). Bind the symbol and carry the tag out to
+;; :arg-types so the param lowers to a native Go type (#357). Clojure's model:
+;; the hint is a declaration, callers coerce at the boundary (coerce-arg-to-type).
+(defn- hinted-arg? [x]
+  (and (seq? x) (= 'with-meta (first x)) (symbol? (second x))))
+
+(defn- hinted-sym [x] (second x))
+
+(defn- hinted-tag [x]
+  (let [m (nth x 2 nil)
+        m (if (and (seq? m) (= 'quote (first m))) (second m) m)
+        t (when (map? m) (get m :tag))]
+    (if (and (seq? t) (= 'quote (first t))) (second t) t)))
+
+;; Numeric hint -> lattice type. double/float -> :float, long/int -> :int.
+;; Class hints (e.g. ^Foo) fall through to nil (no native numeric type).
+(defn- tag->arg-type [t]
+  (let [n (when t (name t))]
+    (cond
+      (contains? #{"double" "float"} n) :float
+      (contains? #{"long" "int"} n)     :int
+      :else                              nil)))
+
 (defn- expand-fn-args [args-vec body-forms]
   "Detect & rest and destructuring patterns in args-vec.
-   Returns nil if nothing to expand, or {:flat-args [...] :body (...) :variadic? bool}."
+   Returns nil if nothing to expand, or
+   {:flat-args [...] :body (...) :variadic? bool :arg-tags [tag-or-nil ...]}."
   (let [amp-pos   (loop [i 0 remaining args-vec]
                     (if (empty? remaining)
                       -1
@@ -1287,12 +1312,21 @@
         rest-sym   (when variadic? (nth args-vec (inc amp-pos) nil))
         has-destructure? (some (fn [x] (not (symbol? x))) fixed-args)]
     (when (or variadic? has-destructure?)
-      (let [result (loop [remaining fixed-args flat-args [] let-binds []]
+      (let [result (loop [remaining fixed-args flat-args [] let-binds [] arg-tags []]
                      (if (empty? remaining)
-                       {:flat-args flat-args :let-binds let-binds}
+                       {:flat-args flat-args :let-binds let-binds :arg-tags arg-tags}
                        (let [x (first remaining)]
-                         (if (symbol? x)
-                           (recur (rest remaining) (conj flat-args x) let-binds)
+                         (cond
+                           (symbol? x)
+                           (recur (rest remaining) (conj flat-args x) let-binds (conj arg-tags nil))
+
+                           (hinted-arg? x)
+                           (recur (rest remaining)
+                                  (conj flat-args (hinted-sym x))
+                                  let-binds
+                                  (conj arg-tags (hinted-tag x)))
+
+                           :else
                            (let [gs (gensym "p__")
                                  binds (cond
                                          (vector? x) (expand-vector-pattern gs x)
@@ -1300,16 +1334,21 @@
                                          :else (throw (str "unsupported arg pattern: " (pr-str x))))]
                              (recur (rest remaining)
                                     (conj flat-args gs)
-                                    (into let-binds binds)))))))
+                                    (into let-binds binds)
+                                    (conj arg-tags nil)))))))
             final-flat-args (if variadic?
                               (conj (:flat-args result) rest-sym)
                               (:flat-args result))
+            final-arg-tags  (if variadic?
+                              (conj (:arg-tags result) nil)
+                              (:arg-tags result))
             body (if (seq (:let-binds result))
                    (list (apply list 'let* (vec (:let-binds result)) body-forms))
                    body-forms)]
         {:flat-args final-flat-args
          :body body
-         :variadic? variadic?}))))
+         :variadic? variadic?
+         :arg-tags final-arg-tags}))))
 
 (defn- return-hinted-arity-vector? [form]
   (and (seq? form)
@@ -1469,6 +1508,14 @@
             (ir/add-terminator! f final-blk :return
                                 [last-val]
                                 nil)))
+        ;; Route numeric param hints (^double/^long) into :arg-types so the param
+        ;; lowers to a native Go type instead of vm.Value (#357). infer-arg-types
+        ;; leaves an explicitly-typed param alone, so the hint is authoritative.
+        (when-let [tags (and expanded (:arg-tags expanded))]
+          (when (some some? tags)
+            (swap! f assoc :arg-types
+                   (mapv (fn [t] (or (tag->arg-type t) :unknown))
+                         (take arity tags)))))
         f)
       ;; Multi-arity path: preserve each arity as a nested template
       ;; with a shared capture layout. The outer function (arity 0)

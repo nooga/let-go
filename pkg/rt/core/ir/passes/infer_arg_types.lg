@@ -80,10 +80,19 @@
        (if (seq remaining)
          (let [nid (first remaining)]
            (if (= :load-arg (ir/op nid f))
-             (let [inferred (infer-one-load-arg f nid)
-                   s' (if (not= :unknown inferred)
-                        (lat/join-inst-type! s nid inferred)
-                        s)]
+             ;; An explicit numeric hint (^double/^long routed to :arg-types by
+             ;; build-fn) is authoritative — don't let the op-based backward pass
+             ;; override it with :int (#357). Skip inference for hinted params.
+             (let [idx        (ir/aux nid f)
+                   arg-types  (ir/fn-arg-types f)
+                   explicit   (when (and (vector? arg-types)
+                                         (< (int idx) (count arg-types)))
+                                (nth arg-types (int idx)))
+                   hinted?    (and explicit (not= explicit :unknown))
+                   inferred   (when-not hinted? (infer-one-load-arg f nid))
+                   s'         (if (and inferred (not= :unknown inferred))
+                                (lat/join-inst-type! s nid inferred)
+                                s)]
                (recur (rest remaining) s'))
              (recur (rest remaining) s)))
          s)))))

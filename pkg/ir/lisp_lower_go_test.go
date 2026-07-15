@@ -240,6 +240,60 @@ func TestLowerGoStrictMixedIntFloatEqUsesEqValueNotNativeEq(t *testing.T) {
 	}
 }
 
+// #357: a ^double param hint routes to :arg-types so the param lowers to a
+// native float64 — without any explicit seedArgTypes. Before this, the AOT
+// arg-pattern matcher threw "unsupported arg pattern" on a :tag-annotated param,
+// and op-based backward inference typed a float-used param :int (float64 + int,
+// which doesn't compile — and truncates coordinates if it did).
+func TestLowerGoDoubleHintLowersToFloat64Param(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn addf [^double a] (+ a 1.5))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status for a ^double-hinted param, got %v (reason=%v)",
+			got, result.ValueAt(vm.Keyword("reason")))
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "arg0 float64") {
+		t.Fatalf("expected ^double param to lower to a native float64 param, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "vm.Value") {
+		t.Fatalf("expected no boxing for a ^double-hinted param, got:\n%s", rendered)
+	}
+}
+
+// #357: multi-arity hint routing. The AOT :go path rebuilds each arity as a
+// single-arity defn through build-fn (pipeline lower-ns-to-go), so ^double hints
+// flow to every arity — each lowers to its own native float64-param func
+// (Scale_1 / Scale_2). Drives the ns-lowering seam, not build-fn directly:
+// build-fn's own multi-arity path produces the :multi-fn-template CLOSURE, a
+// different (boxed) representation the AOT path doesn't use.
+func TestLowerNsMultiArityDoubleHintLowersToFloat64Params(t *testing.T) {
+	ensureLoader()
+
+	v := runLispExpr(t, `(ir.passes.pipeline/lower-ns-to-go "scalepkg" (quote core)
+	  (quote [(defn scale
+	            ([^double a] (* a 2.0))
+	            ([^double a ^double b] (+ (* a 2.0) b)))]))`)
+	s, ok := v.(vm.String)
+	if !ok {
+		t.Fatalf("expected rendered Go string, got %T: %v", v, v)
+	}
+	rendered := string(s)
+
+	for _, want := range []string{
+		"Scale_1(ec *vm.ExecContext, arg0 float64)",
+		"Scale_2(ec *vm.ExecContext, arg0 float64, arg1 float64)",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("multi-arity ^double hint missing %q:\n--- rendered Go ---\n%s", want, rendered)
+		}
+	}
+}
+
 // Regression for PR #235 review (robustness): a genuinely ambiguous :number
 // result — e.g. (+ x x) where x is only known to be {int,float} — has no native
 // Go type, so go-type-spec must give it a lowering target (vm.Value) instead of
