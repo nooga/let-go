@@ -1,0 +1,7 @@
+;; Helper namespace for top_level_do_test.lg (#195): loaded from disk via
+;; require so the requiring file exercises compile-after-require resolution.
+;; (Embedded clojure.* namespaces resolve at compile time without require and
+;; would mask the bug.)
+(ns topdo-helper)
+
+(defn hello [] :hi)

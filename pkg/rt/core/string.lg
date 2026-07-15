@@ -4,9 +4,7 @@
 ;; Native builtins (trim, upper-case, etc.) are defined in core via Go.
 ;; This namespace re-exports them under the string/ prefix.
 (ns string
-  (:refer-clojure :exclude [replace reverse upper-case subs lower-case
-                            index-of last-index-of trim triml trimr
-                            starts-with? ends-with? includes? split]))
+  (:refer-clojure :exclude [ends-with? includes? index-of last-index-of lower-case replace reverse split starts-with? subs trim triml trimr upper-case]))
 
 (defn join
   ([coll] (apply str coll))
@@ -17,6 +15,19 @@
 
 (defn replace-first [s match replacement]
   (str-replace-first s match replacement))
+
+;;; Define upper-case early so it's available for capitalize.
+;;; The bootstrap closure will be replaced at runtime by RegisterGeneratedPrimitives
+;;; to use the native UpperCase implementation.
+(defn upper-case [s]
+  (when (nil? s)
+    (throw "upper-case expected non-nil"))
+  (core/upper-case (str s)))
+
+(defn lower-case [s]
+  (when (nil? s)
+    (throw "lower-case expected non-nil"))
+  (core/lower-case (str s)))
 
 (defn- whitespace-char? [c]
   (or (= c \space)
@@ -64,15 +75,6 @@
 (def trim core/trim)
 (def triml core/triml)
 (def trimr core/trimr)
-(defn upper-case [s]
-  (when (nil? s)
-    (throw "upper-case expected non-nil"))
-  (core/upper-case (str s)))
-
-(defn lower-case [s]
-  (when (nil? s)
-    (throw "lower-case expected non-nil"))
-  (core/lower-case (str s)))
 
 (defn starts-with? [s substr]
   (when (nil? s)

@@ -38,7 +38,19 @@ func main() {
 	packagesFlag := flag.String("packages", "", "comma-separated list of packages (overrides deps.edn :gointerop)")
 	smartFlag := flag.Bool("smart", false, "generate explicit wrappers with type-specific unboxing/boxing")
 	skeletonFlag := flag.Bool("skeleton", false, "generate let-go skeleton files with defn- stubs for hand customization")
+	primitivesDir := flag.String("primitives", "", "directory containing //lg:-annotated Go sources (generates zz_primitives_generated.go)")
+	primitivesOut := flag.String("primitives-out", "pkg/rt/zz_primitives_generated.go", "output file for generated primitives")
+	goPkg := flag.String("go-pkg", "", "Go import path of the scanned sources (used with -primitives)")
 	flag.Parse()
+
+	// Handle -primitives mode (separate from the external interop path)
+	if *primitivesDir != "" {
+		if err := generatePrimitives(*primitivesDir, *primitivesOut, *goPkg); err != nil {
+			fmt.Fprintf(os.Stderr, "lginterop: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	var entries []interopEntry
 	if *packagesFlag != "" {
@@ -86,6 +98,94 @@ func main() {
 	}
 
 	fmt.Printf("lginterop: generated %d/%d package(s) in %s\n", okCount, len(entries), *out)
+}
+
+// --- primitives generation (-primitives mode) --------------------------------
+
+func generatePrimitives(srcDir, outPath, goPkg string) error {
+	// Walk srcDir and scan all .go files for //lg:native directives
+	var allSpecs []primSpec
+
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("read directory %s: %w", srcDir, err)
+	}
+
+	for _, entry := range entries {
+		// Skip test files and generated output: an //lg:native annotation in
+		// a _test.go or zz_ file would emit an unconditional reference to a
+		// symbol the normal build doesn't compile.
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") ||
+			strings.HasSuffix(entry.Name(), "_test.go") ||
+			strings.HasPrefix(entry.Name(), "zz_") {
+			continue
+		}
+
+		fpath := filepath.Join(srcDir, entry.Name())
+		src, err := os.ReadFile(fpath)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", fpath, err)
+		}
+
+		// Files under a build constraint may reference symbols absent from
+		// other targets; the registrar compiles unconditionally, so skip them.
+		if hasBuildConstraint(src) {
+			continue
+		}
+
+		specs, err := scanSource(fpath, src)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", fpath, err)
+		}
+		allSpecs = append(allSpecs, specs...)
+	}
+
+	if len(allSpecs) == 0 {
+		fmt.Printf("lginterop: no //lg:native directives found in %s; generating empty stub\n", srcDir)
+		// Fall through to generate an empty RegisterGeneratedPrimitives() stub
+	}
+
+	// Set GoPkg on all specs
+	for i := range allSpecs {
+		if goPkg != "" {
+			allSpecs[i].GoPkg = goPkg
+		} else if allSpecs[i].GoPkg == "" {
+			// Fallback default
+			allSpecs[i].GoPkg = "github.com/nooga/let-go/pkg/rt/builtins"
+		}
+	}
+
+	// Generate the file
+	output := emitFile(allSpecs)
+
+	// Format with gofmt
+	formatted, err := gofmtCode(output)
+	if err != nil {
+		return fmt.Errorf("gofmt: %w", err)
+	}
+
+	// Write the output file
+	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(outPath), err)
+	}
+
+	if err := os.WriteFile(outPath, []byte(formatted), 0644); err != nil {
+		return fmt.Errorf("write %s: %w", outPath, err)
+	}
+
+	fmt.Printf("lginterop: generated primitives → %s (%d specs)\n", outPath, len(allSpecs))
+	return nil
+}
+
+// gofmtCode formats Go source code using the gofmt command.
+func gofmtCode(src string) (string, error) {
+	cmd := exec.Command("gofmt")
+	cmd.Stdin = strings.NewReader(src)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gofmt failed: %w", err)
+	}
+	return string(output), nil
 }
 
 // --- repo root & lg binary discovery --------------------------------------

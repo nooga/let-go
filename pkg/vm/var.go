@@ -8,9 +8,25 @@ package vm
 import (
 	"fmt"
 	"maps"
+	"reflect"
 	"sync"
 	"sync/atomic"
 )
+
+// guardedRootDeviations counts guarded vars (native-primitive roots, see
+// GuardRoot) whose root currently differs from its canonical value. Lowered
+// Go code consults GuardedRootsIntact() before taking a baked direct call to
+// a native primitive; any active override (with-redefs / alter-var-root /
+// re-def) flips the counter non-zero and every native direct-call site falls
+// back to the var-dispatch trampoline, which observes the override. When the
+// override is restored (with-redefs unwinding sets the original root value
+// back), the counter returns to zero and the direct fast path resumes.
+var guardedRootDeviations atomic.Int64
+
+// GuardedRootsIntact reports that no guarded native-primitive var root is
+// currently overridden. One atomic load — cheap enough for emitted per-call
+// guards in the lowered tree.
+func GuardedRootsIntact() bool { return guardedRootDeviations.Load() == 0 }
 
 type Var struct {
 	// root is atomic so Deref — by far the hottest var operation — is
@@ -29,9 +45,18 @@ type Var struct {
 	// so the dynamic flag is read on the hot deref path while being set by a
 	// concurrent bind. A plain bool here is a data race.
 	isDynamic atomic.Bool
+	// rootBind is this var's ROOT-context binding chain (Phase 2). Head = current
+	// binding; nil = unbound. Per-var, so deref reads the head in O(1) with no
+	// shared-structure access. Nesting lives in next; readers touch only the head.
+	rootBind  atomic.Pointer[rootBindFrame]
 	isPrivate bool
 	mu        sync.Mutex // guards meta + watches
 	watches   map[Value]Fn
+	// guardExpected, when non-nil, holds the canonical root of a guarded
+	// native-primitive var (see GuardRoot). guardDeviated tracks whether the
+	// current root differs from it, mirrored into guardedRootDeviations.
+	guardExpected atomic.Pointer[Value]
+	guardDeviated atomic.Bool
 }
 
 // valPtr boxes a Value for storage in an atomic.Pointer[Value].
@@ -71,15 +96,86 @@ func NewVar(nsref *Namespace, ns string, name string) *Var {
 
 func (v *Var) SetRoot(val Value) *Var {
 	v.root.Store(valPtr(val))
+	v.updateGuard(val)
 	return v
+}
+
+// GuardRoot marks the var's CURRENT root as the canonical value of a native
+// primitive. Any later root mutation to a different value (with-redefs,
+// alter-var-root, re-def) bumps the global deviation counter, steering
+// lowered direct-call sites onto the trampoline until the root is restored.
+func (v *Var) GuardRoot() {
+	cur := v.Root()
+	v.guardExpected.Store(valPtr(cur))
+	if v.guardDeviated.Swap(false) {
+		guardedRootDeviations.Add(-1)
+	}
+}
+
+// adoptGuard transfers guard state from an older Var replaced in a namespace
+// registry by a re-def (Namespace.Def creates a fresh Var). The new var
+// inherits the canonical root and is immediately re-evaluated against it.
+func (v *Var) adoptGuard(old *Var) {
+	if old == nil {
+		return
+	}
+	p := old.guardExpected.Load()
+	if p == nil {
+		return
+	}
+	v.guardExpected.Store(p)
+	// The replaced var no longer participates; drop its deviation, then
+	// account for the new var's root against the canonical value.
+	if old.guardDeviated.Swap(false) {
+		guardedRootDeviations.Add(-1)
+	}
+	v.updateGuard(v.Root())
+}
+
+// updateGuard re-evaluates a guarded var's deviation state after a root
+// mutation. No-op for unguarded vars (one atomic load).
+func (v *Var) updateGuard(newVal Value) {
+	p := v.guardExpected.Load()
+	if p == nil {
+		return
+	}
+	if sameRootIdentity(*p, newVal) {
+		if v.guardDeviated.Swap(false) {
+			guardedRootDeviations.Add(-1)
+		}
+	} else if !v.guardDeviated.Swap(true) {
+		guardedRootDeviations.Add(1)
+	}
+}
+
+// sameRootIdentity reports whether two root values are the same object.
+// Interface == would panic on uncomparable dynamic types (funcs, maps), so
+// gate on comparability; native adapters are *NativeFn pointers, for which
+// this is exact pointer identity.
+func sameRootIdentity(a, b Value) bool {
+	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
+	if ta == nil || tb == nil || ta != tb || !ta.Comparable() {
+		return ta == nil && tb == nil
+	}
+	return a == b
+}
+
+// derefRoot resolves v against the ROOT (process-global) context. It is the
+// single shared root-resolution path — Var.Deref (host/lowered callers) and
+// ExecContext.deref's root branch both call it, so the two can never diverge.
+func (v *Var) derefRoot() Value {
+	if val, ok := rootDerefHead(v); ok {
+		return val
+	}
+	return v.Root()
 }
 
 // Deref returns the current value in the root execution context: the dynamic
 // top binding if one is active, else the root. Host and lowered callers that
 // hold no ExecContext resolve here; the interpreter resolves against its
-// frame's context (which is the root context unless a child was installed).
+// frame's context via ExecContext.deref (which shares derefRoot for the root).
 func (v *Var) Deref() Value {
-	return RootExecContext.deref(v)
+	return v.derefRoot()
 }
 
 // Root returns the var's root binding directly, bypassing any current
@@ -114,7 +210,7 @@ func (v *Var) PopBinding() {
 // SnapshotBindings captures the root context's dynamic bindings — the
 // explicit-propagation primitive a goroutine spawn hands to its child.
 func SnapshotBindings() BindingSnapshot {
-	return globalBindingStack.snapshot()
+	return rootSnapshot()
 }
 
 // RunWithBindings runs fn with snap installed as the root context's dynamic
@@ -123,10 +219,10 @@ func SnapshotBindings() BindingSnapshot {
 // child ExecContext; true per-goroutine isolation comes from running fn under
 // ec.Child() instead (see docs/design/exec-context-threading.md).
 func RunWithBindings(snap BindingSnapshot, fn func() (Value, error)) (Value, error) {
-	saved := globalBindingStack.snapshot()
-	globalBindingStack.installSnapshot(snap)
+	saved := rootSnapshot()
+	rootInstall(snap)
 	out, err := fn()
-	globalBindingStack.installSnapshot(saved)
+	rootInstall(saved)
 	return out, err
 }
 
@@ -158,6 +254,7 @@ func (v *Var) AlterRootArgs(fn Fn, args []Value) (Value, error) {
 		return NIL, err
 	}
 	v.root.Store(valPtr(result))
+	v.updateGuard(result)
 	if err := v.notifyWatches(old, result); err != nil {
 		return NIL, err
 	}

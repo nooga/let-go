@@ -1,0 +1,38 @@
+;; YamlStar parse benchmark — EPIC-013 / ITER-0035 (issue #352).
+;; Times (yamlstar.parser/parse "foo: 42") against the real yamlstar
+;; grammar (212 def-closure rules), the corpus pegbench.lg only mirrors
+;; synthetically. Interpreted baseline recorded at ~36 ms/call.
+;;
+;; Needs the yamlstar sources on the load path:
+;;   LG_SOURCE_PATHS=$HOME/development/yamlstar/core/src ./lg test/benches/ysbench.lg [mode]
+;; mode: "interp" (default) = plain VM bytecode
+;;       "ir"               = *ir-compile* + ir.passes.inline enabled
+;; Run both and compare with ysbench.sh (the ITER-0035 gate).
+
+(def mode (or (first *command-line-args*) "interp"))
+
+(require 'ir.passes.pipeline)
+(when (= mode "ir")
+  (set! *ir-compile* true)
+  (alter-var-root #'ir.passes.inline/*enable-inline* (constantly true)))
+
+(def t-load-start (System/nanoTime))
+(require 'yamlstar.parser)
+(def t-load-end (System/nanoTime))
+
+(def input "foo: 42")
+(def warmup 3)
+(def reps 20)
+
+(def t-cold-start (System/nanoTime))
+(yamlstar.parser/parse input)
+(def t-cold-end (System/nanoTime))
+
+(dotimes [_ warmup] (yamlstar.parser/parse input))
+(let [t0 (System/nanoTime)]
+  (dotimes [_ reps] (yamlstar.parser/parse input))
+  (let [ms (/ (- (System/nanoTime) t0) 1000000.0 reps)]
+    (println "mode:" mode)
+    (println "load-ms:" (/ (- t-load-end t-load-start) 1000000.0))
+    (println "cold-ms:" (/ (- t-cold-end t-cold-start) 1000000.0))
+    (println "ms-per-call:" ms)))

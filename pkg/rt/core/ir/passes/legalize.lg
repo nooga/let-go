@@ -1,0 +1,166 @@
+;; Copyright (c) 2026 Norman Nunley, Jr
+;; SPDX-License-Identifier: MIT
+;;
+;; ir.passes.legalize — repair cross-block direct references by threading
+;; the referenced value through fresh block-args (SSA legalization).
+;;
+;; build.lg's construction-time threading (build-if/build-loop/build-args)
+;; prevents cross-block refs for the shapes it knows, but a few complex
+;; shapes (notably the :try lowering in `try-assign-stmts`) still emit an
+;; Inst whose ref points at a value defined in another block. The validator
+;; (ir.validate/check-no-cross-block-refs!) rejects that, which today forces
+;; the whole fn to fall back off the native-lowering path onto a bytecode
+;; trampoline. This pass legalizes such refs on demand — ONLY the refs the
+;; validator would reject — so no unused "passenger" block-args are ever
+;; introduced (the failure mode that sank the GVN pass this was salvaged
+;; from: cross-block GVN, commit "feat(ir): cross-block GVN via
+;; value-threading"; the value-numbering half is dropped, the threading
+;; primitive kept).
+;;
+;; Runs after build, before validate. Correct when the def-block dominates
+;; the use-block (true for any value legitimately computed-before-used on
+;; every path — i.e. any ref a correct build could have emitted).
+
+(ns ir.passes.legalize)
+
+;; --- detection: non-throwing enumeration of illegal cross-block refs ----
+;; Mirrors ir.validate/check-no-cross-block-refs! EXACTLY (same exemptions)
+;; but collects instead of throwing on the first hit.
+
+(defn- cross-block-refs [f]
+  "Seq of {:inst nid :ref v :use-block ub} for every Inst.refs entry that
+   points at a non-cheap, non-block-arg value defined in another block."
+  (let [insts (:insts @f)]
+    (reduce
+      (fn [acc [i ins]]
+        (let [op (nth ins 0)]
+          (if (= op :invalid)
+            acc
+            (let [use-block (nth ins 3)]
+              (reduce
+                (fn [a r]
+                  (let [referent  (nth insts r)
+                        ref-op    (nth referent 0)
+                        def-block (nth referent 3)]
+                    (if (and (not= def-block use-block)
+                             (not= :block-arg ref-op)
+                             ;; :load-var is cheap but mutable — must be threaded.
+                             (not (and (ir/op-cheap-load? ref-op)
+                                       (not= ref-op :load-var))))
+                      (conj a {:inst i :ref r :use-block use-block})
+                      a)))
+                acc
+                (nth ins 1))))))
+      []
+      (map-indexed vector insts))))
+
+;; --- threading primitive (salvaged from the stranded GVN pass) ----------
+
+(defn- compute-needs [f v use-block]
+  "BFS backwards from use-block toward v's def-block: the set of blocks
+   that need a fresh param to carry v. The :branch-if symmetric-args
+   invariant (tt.args == ft.args) requires BOTH successors of any visited
+   branch-if pred to be in the set, so they are added too."
+  (let [def-block (ir/block-of v f)]
+    (loop [needs    #{use-block}
+           frontier [use-block]]
+      (if (empty? frontier)
+        needs
+        (let [t          (peek frontier)
+              rest-front (pop frontier)
+              preds      (ir/block-preds t f)
+              add-preds  (remove (fn [p] (or (= p def-block) (contains? needs p))) preds)
+              add-siblings
+              (->> preds
+                   (mapcat (fn [p]
+                             (let [term (ir/block-term p f)]
+                               (if (or (nil? term) (not= :branch-if (ir/op term f)))
+                                 []
+                                 (let [aux    (ir/aux term f)
+                                       tt-bid (ir/branch-target-target (ir/cond-target-true aux))
+                                       ft-bid (ir/branch-target-target (ir/cond-target-false aux))]
+                                   [tt-bid ft-bid])))))
+                   (remove (fn [b] (or (= b def-block) (contains? needs b))))
+                   distinct
+                   vec)
+              additions (vec (distinct (concat add-preds add-siblings)))]
+          (recur (into needs additions)
+                 (vec (concat rest-front additions))))))))
+
+(defn- extend-pred-all-args! [f pred-bid value]
+  "Append `value` to every BranchTarget.args on pred's terminator. :branch
+   has one target; :branch-if has tt+ft (append to both — preserves the
+   symmetric invariant)."
+  (let [term (ir/block-term pred-bid f)]
+    (when-not (nil? term)
+      (let [op  (ir/op term f)
+            aux (ir/aux term f)]
+        (cond
+          (= op :branch)
+          (let [new-args (conj (vec (ir/branch-target-args aux)) value)
+                new-bt   (ir/new-branch-target (ir/branch-target-target aux) new-args)]
+            (ir/set-aux! f term new-bt))
+          (= op :branch-if)
+          (let [tt      (ir/cond-target-true aux)
+                ft      (ir/cond-target-false aux)
+                tt-args (conj (vec (ir/branch-target-args tt)) value)
+                ft-args (conj (vec (ir/branch-target-args ft)) value)
+                new-tt  (ir/new-branch-target (ir/branch-target-target tt) tt-args)
+                new-ft  (ir/new-branch-target (ir/branch-target-target ft) ft-args)]
+            (ir/set-aux! f term (ir/new-cond-target new-tt new-ft))))))))
+
+(defn- thread-value-to [f v use-block]
+  "Make v accessible in use-block by allocating fresh BlockArgs on every
+   block of the def→use frontier and extending every pred's
+   BranchTarget.args. Returns the InstId usable in use-block."
+  (if (= use-block (ir/block-of v f))
+    v
+    (let [def-block (ir/block-of v f)
+          needs     (compute-needs f v use-block)
+          ;; Phase 1: one fresh :block-arg per block in needs.
+          new-args  (reduce (fn [acc b]
+                              (let [pos (count (ir/block-params b f))
+                                    nid (ir/add-block-arg-front! f b pos)]
+                                (ir/add-block-param! f b nid)
+                                (assoc acc b nid)))
+                            {}
+                            needs)
+          ;; Phase 2: extend each distinct pred once (branch-if updates both
+          ;; targets in one call). Each pred passes v if it is the def-block,
+          ;; else its own fresh block-arg.
+          all-preds (->> needs
+                         (mapcat (fn [b] (ir/block-preds b f)))
+                         distinct
+                         vec)]
+      (doseq [pred-bid all-preds]
+        (let [value (if (= pred-bid def-block)
+                      v
+                      (get new-args pred-bid))]
+          (when-not (nil? value)
+            (extend-pred-all-args! f pred-bid value))))
+      (get new-args use-block))))
+
+;; --- driver -------------------------------------------------------------
+
+(defn legalize-fn! [f]
+  "Rewrite every illegal cross-block ref to reference a freshly-threaded
+   block-arg in the using block. Returns f. Idempotent: a fn with no
+   cross-block refs is unchanged. Loops so that any ref exposed while
+   threading is caught (converges in one round for dominating values)."
+  (loop [guard 0]
+    (let [bad (cross-block-refs f)]
+      (if (empty? bad)
+        f
+        (do
+          (when (> guard 1000)
+            (throw "legalize-fn!: did not converge (non-dominating cross-block ref?)"))
+          ;; Thread once per (value, use-block); reuse the block-arg for every
+          ;; inst in that block that references the value.
+          (doseq [[[v use-block] entries]
+                  (group-by (fn [e] [(:ref e) (:use-block e)]) bad)]
+            (let [new-id (thread-value-to f v use-block)]
+              (doseq [e entries]
+                (let [nid  (:inst e)
+                      refs (vec (map (fn [r] (if (= r v) new-id r)) (ir/refs nid f)))]
+                  (ir/set-refs! f nid refs)))))
+          (recur (inc guard)))))))

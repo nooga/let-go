@@ -49,12 +49,15 @@ func NewExecContext() *ExecContext {
 // A nil receiver seeds from the root context.
 func (ec *ExecContext) Child() *ExecContext {
 	src := ec
-	if src == nil {
-		src = RootExecContext
-	}
 	c := NewExecContext()
-	c.bindings.installSnapshot(src.bindings.snapshot())
-	c.scope = src.scope
+	if src == nil || src == RootExecContext {
+		c.bindings.installSnapshot(rootSnapshot())
+	} else {
+		c.bindings.installSnapshot(src.bindings.snapshot())
+	}
+	if src != nil {
+		c.scope = src.scope
+	}
 	return c
 }
 
@@ -98,11 +101,10 @@ func OpenChildEC(ec *ExecContext) *Scope {
 // suitable for passing to NewExecContextFrom to isolate a child context.
 // A nil receiver uses the root context.
 func (ec *ExecContext) BindingSnapshot() BindingSnapshot {
-	src := ec
-	if src == nil {
-		src = RootExecContext
+	if ec == nil || ec == RootExecContext {
+		return rootSnapshot()
 	}
-	return src.bindings.snapshot()
+	return ec.bindings.snapshot()
 }
 
 // NewExecContextFrom returns a fresh context whose binding stack is seeded from
@@ -126,10 +128,14 @@ func (ec *ExecContext) orRoot() *ExecContext {
 
 // --- dynamic-var resolution (ec owns the binding state) ---------------------
 
-// deref returns v's current value in this context: the top dynamic binding if
-// any, else v's root.
 func (ec *ExecContext) deref(v *Var) Value {
 	ec = ec.orRoot()
+	if ec == RootExecContext {
+		return v.derefRoot()
+	}
+	// Child context: an isolated, per-goroutine stack — uncontended, so walk it
+	// directly. Child bindings are gated by isDynamic (set at declaration or on
+	// any bind) as before.
 	if v.isDynamic.Load() {
 		if val, ok := ec.bindings.current(v); ok {
 			return val
@@ -140,22 +146,40 @@ func (ec *ExecContext) deref(v *Var) Value {
 
 func (ec *ExecContext) pushBinding(v *Var, val Value) {
 	v.isDynamic.Store(true)
-	ec.orRoot().bindings.push(v, val)
+	root := ec.orRoot()
+	if root == RootExecContext {
+		rootPush(v, val)
+		return
+	}
+	root.bindings.push(v, val)
 }
 
 func (ec *ExecContext) popBinding(v *Var) {
-	ec.orRoot().bindings.pop(v)
+	root := ec.orRoot()
+	if root == RootExecContext {
+		rootPop(v)
+		return
+	}
+	root.bindings.pop(v)
 }
 
 func (ec *ExecContext) hasBinding(v *Var) bool {
-	return ec.orRoot().bindings.hasBinding(v)
+	root := ec.orRoot()
+	if root == RootExecContext {
+		return rootHasBinding(v)
+	}
+	return root.bindings.hasBinding(v)
 }
 
 // setBinding mutates v's top dynamic binding in this context (Clojure's
 // thread-local set!), returning false if v has no active binding here. Callers
 // fall back to mutating the root for the no-binding case.
 func (ec *ExecContext) setBinding(v *Var, val Value) bool {
-	return ec.orRoot().bindings.setCurrent(v, val)
+	root := ec.orRoot()
+	if root == RootExecContext {
+		return rootSetCurrent(v, val)
+	}
+	return root.bindings.setCurrent(v, val)
 }
 
 // Exported entry points for runtime builtins (pkg/rt) that resolve dynamic

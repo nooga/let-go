@@ -48,6 +48,16 @@ var sourceSpecs = []struct {
 }{
 	{"pkg/rt/core", ".lg"},
 	{"cmd/lgbgen", ".go"},
+	{"cmd/lginterop", ".go"},
+	{"pkg/rt/builtins", ".go"},
+}
+
+// sourceFiles are single-file generator inputs that live outside the swept
+// roots. pkg/rt/native_prims.go carries the //lg:native annotations that
+// cmd/lginterop -primitives compiles into zz_primitives_generated.go, so an
+// annotation edit there must trip staleness like any other source edit.
+var sourceFiles = []string{
+	"pkg/rt/native_prims.go",
 }
 
 // generatedMarker matches the conventional line that flags a Go file as
@@ -93,6 +103,9 @@ func SourceFiles(repoRoot string) ([]string, error) {
 	var files []string
 	for _, spec := range sourceSpecs {
 		root := filepath.Join(repoRoot, spec.dir)
+		if _, err := os.Stat(root); err != nil {
+			return nil, fmt.Errorf("stat %s: %w", spec.dir, err)
+		}
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -119,6 +132,12 @@ func SourceFiles(repoRoot string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("walk %s: %w", spec.dir, err)
 		}
+	}
+	for _, rel := range sourceFiles {
+		if _, err := os.Stat(filepath.Join(repoRoot, rel)); err != nil {
+			return nil, fmt.Errorf("stat %s: %w", rel, err)
+		}
+		files = append(files, rel)
 	}
 	sort.Strings(files)
 	return files, nil

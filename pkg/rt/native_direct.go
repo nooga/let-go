@@ -45,11 +45,13 @@ import "sync"
 // they're representable here so future extensions can opt in.
 type NativeDirectFn struct {
 	GoIdent    string   // exported Go identifier, e.g. "Seq"
+	LgName     string   // let-go name without arity suffix (e.g. "nth" for both nth@2 and nth@3); used for registry key
 	Arity      int      // fixed arity; -1 for variadic
 	Variadic   bool     // true → final ParamSpec is the rest slice element type
 	ParamSpecs []string // Go type strings, e.g. []string{"vm.Value"}
 	ResultSpec string   // Go type of single result, e.g. "vm.Value"
 	NeedsError bool     // result tuple is (ResultSpec, error)
+	NeedsEC    bool     // true → the Go fn takes *vm.ExecContext as its first param
 }
 
 // NativeModule is one Go package's contribution to one let-go
@@ -85,6 +87,7 @@ func RegisterNativeModule(m *NativeModule) {
 		fn := fn
 		nativeFnIndex[m.Namespace][name] = &fn
 	}
+	guardModuleVars(m)
 }
 
 // LookupNativeDirect returns the descriptor for (ns, name) or nil if no

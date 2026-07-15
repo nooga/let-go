@@ -57,6 +57,8 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Version requirements, range matching (`let-go.semver`) | `guide/semver.md` |
 | `io/resource`, `-resource-paths` / `-source-paths` resolution | `guide/resources-and-source-paths.md` |
 | Embedding let-go in a Go program | `guide/embedding-in-go.md` |
+| Running as a WASI (`GOOS=wasip1`) module | `guide/wasi.md` |
+| let-go under TinyGo (status: not currently supported) | `guide/tinygo.md` |
 | nREPL server + editor setup | `guide/nrepl.md` |
 | Clojure compatibility: namespace table + differences | `guide/clojure-compatibility.md` |
 | Running, compiling, WASM, project mgmt (lgx) | `guide/usage.md` |

@@ -3,7 +3,12 @@ package resolver
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/rt"
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 func TestParseSearchPaths(t *testing.T) {
@@ -58,5 +63,35 @@ func TestForceSourceNS(t *testing.T) {
 		if got := forceSourceNS(c.name); got != c.want {
 			t.Errorf("forceSourceNS(%q) with LG_FORCE_SOURCE_NS=%q = %v, want %v", c.name, c.env, got, c.want)
 		}
+	}
+}
+
+// TestRequireUnregisteredTermReportsUnavailable guards the wasip1 regression
+// from nooga/let-go#466: gating pkg/rt/term.go off wasip1 leaves no
+// installTermNS, so `term` is never registered. loadEmbedded's term special
+// case must report it unavailable via a non-registering lookup; the previous
+// rt.NS("term") re-registered a placeholder and re-entered the loader,
+// recursing until the wasm stack was exhausted. Simulated here by removing the
+// natively-installed term ns and requiring it — expect a clean error, not a
+// stack overflow.
+func TestRequireUnregisteredTermReportsUnavailable(t *testing.T) {
+	consts := vm.NewConsts()
+	ctx := compiler.NewCompiler(consts, rt.NS("user"))
+	rt.SetNSLoader(NewNSResolver(ctx, []string{"."}))
+	ctx.SetSource("<test>")
+
+	// Drop the natively-installed term ns to mimic a platform without an
+	// installTermNS (e.g. wasip1), then restore it so other tests are unaffected.
+	saved := rt.LookupNS("term")
+	rt.RemoveNS("term")
+	defer func() {
+		if saved != nil {
+			rt.RegisterNS(saved)
+		}
+	}()
+
+	_, _, err := ctx.CompileMultiple(strings.NewReader("(require 'term)"))
+	if err == nil {
+		t.Fatal("requiring an unregistered term ns should error, got nil (regressed to the recursive loader path?)")
 	}
 }

@@ -241,6 +241,10 @@ func loadPrecompiledBundle() error {
 				return err
 			}
 			rt.ClearNSNeedsLoad(name)
+			// The chunk's bootstrap defs overwrite any generated native
+			// adapters registered at init — restore them, same as the
+			// on-demand loader path does after a lazy load.
+			rt.ReapplyGeneratedPrimitives(name)
 		}
 	}
 

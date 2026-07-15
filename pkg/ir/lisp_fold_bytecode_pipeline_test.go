@@ -99,14 +99,11 @@ func TestUnrollBytecodePipelineFires(t *testing.T) {
 		t.Logf("parity OK x=%d: %v", x, loopRes)
 	}
 
-	// Op profile: the unrolled caller must execute well under half the ops
-	// of the loop caller on a full scan (measured reference is ~3.1x fewer).
-	opsLoop := profiledOps(t, nsName, "(call-loop 2)")
-	opsUnroll := profiledOps(t, nsName, "(call-unroll 2)")
-	t.Logf("full-scan ops: loop=%d unroll=%d ratio=%.2fx", opsLoop, opsUnroll, float64(opsLoop)/float64(opsUnroll))
-	if opsUnroll*2 >= opsLoop {
-		t.Fatalf("unroll did NOT fire through the pipeline: ops(unroll)=%d vs ops(loop)=%d (want < 0.5x)", opsUnroll, opsLoop)
-	}
+	// Hand-unrolled nested-if baseline, compiled with the flags off: the
+	// build-stable yardstick for the specialization's op profile.
+	runInNs(t, nsName,
+		"(defn call-hand [x] (if (rt0 x) true (if (rf0 x) true (if (rf1 x) true (if (rf2 x) true (if (rf3 x) true (if (rf4 x) true (if (rf5 x) true (if (rf6 x) true false)))))))))")
+	assertUnrolled(t, nsName, "loopc$any$8", 8, "(call-loop 2)", "(call-unroll 2)", "(call-hand 2)")
 }
 
 // TestUnrollBytecodePipelineAll: same proof for the :all-shaped combinator.
@@ -116,8 +113,11 @@ func TestUnrollBytecodePipelineAll(t *testing.T) {
 	nsName := "bcunrollall"
 
 	// Rules all true for x!=0; rule 0 false for x=99 exercises early exit.
+	// The filler prefix must differ from the special rule's name — a shared
+	// "at" prefix would make defRules emit its own at0 and clobber the
+	// early-exit rule.
 	runInNs(t, nsName, "(defn at0 [x] (not= x 99))")
-	args := " at0" + defRules(t, nsName, "at", "(not= x 0)", N-1)
+	args := " at0" + defRules(t, nsName, "af", "(not= x 0)", N-1)
 
 	runInNs(t, nsName, loopAllSrc)
 	runInNs(t, nsName, fmt.Sprintf("(defn call-loop [x] (allc x%s))", args))
@@ -135,11 +135,42 @@ func TestUnrollBytecodePipelineAll(t *testing.T) {
 		}
 	}
 
-	opsLoop := profiledOps(t, nsName, "(call-loop 1)")
-	opsUnroll := profiledOps(t, nsName, "(call-unroll 1)")
-	t.Logf("full-scan ops: loop=%d unroll=%d ratio=%.2fx", opsLoop, opsUnroll, float64(opsLoop)/float64(opsUnroll))
-	if opsUnroll*2 >= opsLoop {
-		t.Fatalf("all-shape unroll did NOT fire: ops(unroll)=%d vs ops(loop)=%d", opsUnroll, opsLoop)
+	runInNs(t, nsName,
+		"(defn call-hand [x] (if (at0 x) (if (af0 x) (if (af1 x) (if (af2 x) (if (af3 x) (if (af4 x) (if (af5 x) (if (af6 x) true false) false) false) false) false) false) false) false))")
+	assertUnrolled(t, nsName, "allc$all$8", 8, "(call-loop 1)", "(call-unroll 1)", "(call-hand 1)")
+}
+
+// assertUnrolled verifies the outlined specialization fired and that its op
+// profile is in hand-written territory. The former assertion compared the
+// unrolled caller against the loop combinator at a fixed 2x ratio, but the
+// loop baseline's VM-op cost is build-dependent: under -tags gogen_ir the
+// per-element seq walk (empty?/first/rest) dispatches to native Go and
+// executes zero VM ops, shrinking the baseline — and it keeps shrinking as
+// more core fns go native. The unrolled path's cost IS build-stable (it
+// executes only user bytecode and native builtins on both builds), so assert
+// (a) the callee var was rewritten to the interned specialization, (b) the
+// unrolled caller strictly beats the loop build, and (c) it stays within an
+// additive budget of a hand-unrolled nested-if baseline compiled with the
+// flags off. The budget models what outlining adds over hand-written code —
+// one extra fixed-arity call hop carrying the n+1 flat operands (measured
+// ~37 ops at n=8) — so it is 6*(n+1); a specialization that kept any
+// per-element seq walk would blow past it (the walk alone costs ~10 ops per
+// element).
+func assertUnrolled(t *testing.T, nsName, specName string, n int, loopProg, unrollProg, handProg string) {
+	t.Helper()
+	if v := runInNs(t, nsName, fmt.Sprintf("(some? (resolve (quote %s)))", specName)); v != vm.TRUE {
+		t.Fatalf("specialization %s was not interned — unroll did not fire", specName)
+	}
+	opsLoop := profiledOps(t, nsName, loopProg)
+	opsUnroll := profiledOps(t, nsName, unrollProg)
+	opsHand := profiledOps(t, nsName, handProg)
+	budget := opsHand + uint64(6*(n+1))
+	t.Logf("full-scan ops: loop=%d unroll=%d hand=%d budget=%d", opsLoop, opsUnroll, opsHand, budget)
+	if opsUnroll >= opsLoop {
+		t.Fatalf("unrolled caller is no cheaper than the loop: ops(unroll)=%d vs ops(loop)=%d", opsUnroll, opsLoop)
+	}
+	if opsUnroll > budget {
+		t.Fatalf("unrolled caller not in hand-written territory: ops(unroll)=%d > ops(hand)=%d + outlining budget %d", opsUnroll, opsHand, 6*(n+1))
 	}
 }
 

@@ -1,0 +1,24 @@
+;; Tests for update-keys / update-vals (clojure.core, added 1.11)
+(ns test.update-keys-vals-test
+  (:require
+   [test :refer :all]))
+
+(deftest update-keys-test
+  (testing "transforms keys, keeps values"
+    (is (= {"a" 1 "b" 2} (update-keys {:a 1 :b 2} name))))
+  (testing "empty map"
+    (is (= {} (update-keys {} name))))
+  (testing "collision: keys mapped to the same result collapse to one entry"
+    (let [collapsed (update-keys {1 :a 2 :b} (fn [_] 0))]
+      (is (= 1 (count collapsed)))
+      (is (contains? #{:a :b} (get collapsed 0)))))
+  (testing "preserves metadata"
+    (is (= {:x 1} (meta (update-keys (with-meta {:a 1} {:x 1}) name))))))
+
+(deftest update-vals-test
+  (testing "transforms values, keeps keys"
+    (is (= {:a 2 :b 3} (update-vals {:a 1 :b 2} inc))))
+  (testing "empty map"
+    (is (= {} (update-vals {} inc))))
+  (testing "preserves metadata"
+    (is (= {:x 1} (meta (update-vals (with-meta {:a 1} {:x 1}) inc))))))
