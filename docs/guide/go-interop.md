@@ -19,7 +19,7 @@ One Go package is already wrapped this way: **xxh3**.
    `cmd/lginterop`:
 
    ```
-   go run ./cmd/lginterop -packages github.com/zeebo/xxh3 -out pkg/rt
+   go run ./cmd/lginterop -packages github.com/zeebo/xxh3 -opaque-structs -out pkg/rt
    ```
 
    The tool scans the package with `go/types` and emits an installer that
@@ -232,11 +232,11 @@ namespace:
 go run ./cmd/lginterop -packages <import-path>[,<import-path>...] -out pkg/rt
 ```
 
-> **Status:** this mode is currently broken on `main` — `scripts/lginterop.lg`
-> predates gogen's form-based API and fails to compile (`gogen/parse-stmts`
-> no longer exists). Tracked in
-> [#535](https://github.com/nooga/let-go/issues/535); the flags below
-> describe the intended behavior.
+The generated file starts with a header recording the exact invocation —
+including flags — so regenerating from the header's own command
+round-trips byte-identically. An e2e golden test
+(`test/e2e/lginterop_regen_test.go`) holds `interop_xxh3.go` to that
+round trip.
 
 | Flag | Meaning |
 |---|---|
@@ -245,6 +245,7 @@ go run ./cmd/lginterop -packages <import-path>[,<import-path>...] -out pkg/rt
 | `-out` | output directory for the generated Go files (default `.lg-interop`; use `pkg/rt` for in-tree namespaces) |
 | `-smart` | generate explicit wrappers with type-specific unboxing/boxing instead of `vm.MustBox` |
 | `-skeleton` | also emit a `<alias>_skeleton.lg` of `defn-` stubs to hand-customize into a veneer |
+| `-opaque-structs` | skip `vm.RegisterStruct`: struct types stay `vm.Boxed` and dispatch methods reflectively, instead of flattening to field-only Records — required when the API is used through methods (xxh3's `Hasher` and its `.WriteString`/`.Sum64`) |
 
 **Primitives mode** — scan `//lg:`-annotated Go sources and generate the
 internal-primitive registrar:
