@@ -1,0 +1,17 @@
+(ns test.return-type-hint-ir-test
+  (:require [ir.build :as ir-build]
+            [ir.data :as ir]
+            [test :refer [deftest is testing]]))
+
+(deftest ir-builder-accepts-a-hinted-arity-vector
+  (testing "direct IR defn parsing sees the vector inside reader metadata"
+    (let [f (ir-build/build-fn '(defn ir-hinted ^String [] "ir"))]
+      (is (= 0 (ir/fn-arity f))))))
+
+(deftest ir-builder-accepts-hinted-multi-arity-clauses
+  (testing "each IR arity unwraps its own return metadata"
+    (let [f (ir-build/build-fn
+              '(defn ir-hinted-multi
+                 (^String [] "empty")
+                 (^String [value] (str value))))]
+      (is (= 0 (ir/fn-arity f))))))

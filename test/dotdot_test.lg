@@ -1,0 +1,19 @@
+(ns test.dotdot-test
+  (:require [test :refer [deftest is testing]]))
+
+(defrecord DotConstructor [value])
+
+(deftest chains-member-calls
+  (testing "each member form receives the prior result"
+    (is (= "azc" (.. "abc"
+                     (replace "b" "x")
+                     (replace "x" "z"))))))
+
+(deftest expands-to-member-shorthand-without-constructor-recursion
+  (testing "the expansion names only symbols present in the source operation"
+    (let [expanded (macroexpand '(.. "abc" (replace "b" "x")))]
+      (is (= '.replace (first expanded))))))
+
+(deftest preserves-real-constructor-shorthand
+  (testing "a class-shaped symbol ending in dot still uses its positional constructor"
+    (is (= 7 (:value (DotConstructor. 7))))))

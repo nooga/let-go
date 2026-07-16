@@ -1311,6 +1311,16 @@
          :body body
          :variadic? variadic?}))))
 
+(defn- return-hinted-arity-vector? [form]
+  (and (seq? form)
+       (= 'with-meta (first form))
+       (vector? (second form))))
+
+(defn- unwrap-arity-vector [form]
+  (if (return-hinted-arity-vector? form)
+    (second form)
+    form))
+
 (defn- build-inner-fn-template [name-sym args-vec body-forms capture-syms variadic?]
   (let [inner     (ir/new-fn (str name-sym) (count args-vec) variadic?)
         entry     (ir/entry-block inner)
@@ -1377,10 +1387,13 @@
         has-name?  (symbol? maybe-name)
         name-sym   (if has-name? maybe-name "fn*")
         rest-forms (if has-name? raw-rest (cons maybe-name raw-rest))
-        multi?     (and (seq rest-forms) (list? (first rest-forms)))]
+        first-form (first rest-forms)
+        multi?     (and (seq rest-forms)
+                        (list? first-form)
+                        (not (return-hinted-arity-vector? first-form)))]
     (if-not multi?
       ;; Single-arity path
-      (let [args-vec   (first rest-forms)
+      (let [args-vec   (unwrap-arity-vector first-form)
             body-forms (rest rest-forms)]
         (build-single-fn* name-sym args-vec body-forms ctx))
       ;; Multi-arity path: preserve each arity as a nested template with
@@ -1388,7 +1401,7 @@
       ;; args before computing captures so free-vars sees only symbols.
       (let [arities   rest-forms
             expanded-forms (mapv (fn [arity-form]
-                                   (let [args-vec   (first arity-form)
+                                   (let [args-vec   (unwrap-arity-vector (first arity-form))
                                          body-forms (rest arity-form)
                                          e          (expand-fn-args args-vec body-forms)]
                                      (if e
@@ -1428,9 +1441,11 @@
    Handles optional docstring and attr-map. Returns a boxed *ir.Function."
   (let [name-sym   (nth defn-form 1)
         parsed     (parse-defn-args-body defn-form)
-        args-vec   (nth parsed 0)
+        raw-args   (nth parsed 0)
+        args-vec   (unwrap-arity-vector raw-args)
         body-forms (nth parsed 1)
-        multi?     (list? args-vec)]
+        multi?     (and (list? raw-args)
+                        (not (return-hinted-arity-vector? raw-args)))]
     (if-not multi?
       ;; Single-arity path. Expand destructured args before building.
       (let [expanded   (expand-fn-args args-vec body-forms)
@@ -1463,7 +1478,7 @@
             ctx        (new-context f)
             arities    (cons args-vec body-forms)
             expanded-forms (mapv (fn [arity-form]
-                                   (let [arg-vec   (first arity-form)
+                                   (let [arg-vec   (unwrap-arity-vector (first arity-form))
                                          body-forms (rest arity-form)
                                          e          (expand-fn-args arg-vec body-forms)]
                                      (if e

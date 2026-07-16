@@ -8024,6 +8024,21 @@ func installLangNS() {
 	})
 	ns.Def("bound?", boundQ)
 
+	// -copy-form-source! carries reader source metadata across macro and IR
+	// rewrites which necessarily allocate a fresh list. It is intentionally a
+	// core implementation detail: ordinary metadata cannot represent the
+	// side-table spans retained by FormSource.
+	copyFormSource, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("-copy-form-source! expects 2 args")
+		}
+		if info := vm.FormSource.Get(vs[0]); info != nil {
+			vm.FormSource.Set(vs[1], *info)
+		}
+		return vs[1], nil
+	})
+	ns.Def("-copy-form-source!", copyFormSource)
+
 	// macroexpand — expand a macro form once
 	macroexpandf := vm.NewCtxNativeFn("macroexpand", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -8101,7 +8116,11 @@ func installLangNS() {
 		if !ok {
 			return form, nil
 		}
-		return ec.Invoke(macroFn, args)
+		expanded, err := ec.Invoke(macroFn, args)
+		if info := vm.FormSource.Get(form); err == nil && info != nil {
+			vm.FormSource.Set(expanded, *info)
+		}
+		return expanded, err
 	})
 	ns.Def("macroexpand", macroexpandf)
 

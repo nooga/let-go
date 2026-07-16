@@ -1,0 +1,17 @@
+(ns test.return-type-hint-test
+  (:require [test :refer [deftest is testing]]))
+
+(defn hinted-single ^String [] "single")
+
+(defn hinted-multi
+  (^String [] "empty")
+  (^String [^Object value] (str value)))
+
+(deftest accepts-a-return-hint-before-a-single-arity-vector
+  (testing "reader metadata on the argument vector does not change fn shape"
+    (is (= "single" (hinted-single)))))
+
+(deftest accepts-return-hints-on-multi-arity-clauses
+  (testing "each hinted arity remains independently callable"
+    (is (= "empty" (hinted-multi)))
+    (is (= "42" (hinted-multi 42)))))

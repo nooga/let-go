@@ -573,16 +573,26 @@ func (c *Context) compileForm(o vm.Value) error {
 
 			// (Name. args...) — record/type constructor shorthand.
 			// Rewrites to (->Name args...) which defrecord defines.
-			if len(fnsym) > 1 && fnsym[len(fnsym)-1] == '.' {
-				ctor := vm.Symbol("->" + string(fnsym[:len(fnsym)-1]))
+			if len(fnsym) > 1 &&
+				fnsym[len(fnsym)-1] == '.' &&
+				fnsym[0] != '.' &&
+				!strings.HasPrefix(string(fnsym), "->") {
+				stem := string(fnsym[:len(fnsym)-1])
+				ctor := vm.Symbol("->" + stem)
 				args := lst.Next()
+				var rewritten vm.Value
 				if args == nil {
-					return c.compileForm(vm.EmptyList.Cons(ctor))
+					rewritten = vm.EmptyList.Cons(ctor)
+				} else {
+					rewritten = args.Cons(ctor)
 				}
-				return c.compileForm(args.Cons(ctor))
+				if info := vm.FormSource.Get(o); info != nil {
+					vm.FormSource.Set(rewritten, *info)
+				}
+				return c.compileForm(rewritten)
 			}
 
-			if fnsym[0] == '.' && len(fnsym) > 1 {
+			if len(fnsym) > 1 && fnsym[0] == '.' && fnsym[1] != '.' {
 				newform := lst.Next()
 				if newform == nil {
 					return NewCompileError("Malformed member expression, expecting (.member target ...)")
@@ -597,6 +607,9 @@ func (c *Context) compileForm(o vm.Value) error {
 					newform = vm.EmptyList.Cons(member).Cons(instance).Cons(vm.Symbol("."))
 				} else {
 					newform = nxt.Cons(member).Cons(instance).Cons(vm.Symbol("."))
+				}
+				if info := vm.FormSource.Get(o); info != nil {
+					vm.FormSource.Set(newform, *info)
 				}
 				return c.compileForm(newform)
 			}
@@ -622,6 +635,9 @@ func (c *Context) compileForm(o vm.Value) error {
 				newform, err := fvar.(*vm.Var).Deref().(vm.Fn).Invoke(argvec)
 				if err != nil {
 					return NewCompileError(fmt.Sprintf("Executing macro %s (%s) failed", fvar, fvar.(*vm.Var).Deref())).Wrap(err)
+				}
+				if info := vm.FormSource.Get(o); info != nil {
+					vm.FormSource.Set(newform, *info)
 				}
 				return c.compileForm(newform)
 			}

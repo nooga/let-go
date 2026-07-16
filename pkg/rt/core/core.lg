@@ -345,6 +345,16 @@
       initial
       forms)))
 
+(defmacro .. [initial & forms]
+  (reduce
+    (fn [target member-form]
+      (if (seq? member-form)
+        (cons (symbol (str "." (first member-form)))
+              (cons target (next member-form)))
+        (list (symbol (str "." member-form)) target)))
+    initial
+    forms))
+
 ;; spy → let-go.core (pkg/rt/core/let-go/core.lg)
 
 ;; map — with 1 arg returns a transducer, otherwise delegates to Go-native map*
@@ -884,6 +894,13 @@
           `(~clean (let* ~nbs ~@body)))
         `(~bindings ~@body)))))
 
+(defn- unwrap-fn-arity-vector [form]
+  (if (and (seq? form)
+           (= 'with-meta (first form))
+           (vector? (second form)))
+    (second form)
+    form))
+
 (defn- name-fn-arity [name self arity]
   (let [bindings (first arity)
         body (next arity)]
@@ -897,21 +914,25 @@
       (let [name (first forms)
             forms (next forms)
             forms (if (string? (first forms)) (next forms) forms)
+            first-form (unwrap-fn-arity-vector (first forms))
             self (gensym "self__")]
-        (if (vector? (first forms))
-          (let [arity (fn-expand (first forms) (next forms))]
+        (if (vector? first-form)
+          (let [arity (fn-expand first-form (next forms))]
             `(let [~self (atom nil)]
                (reset! ~self (fn* ~(name-fn-arity name self arity)))
                (deref ~self)))
           `(let [~self (atom nil)]
-             (reset! ~self (fn* ~@(map #(name-fn-arity name self (fn-expand (first %) (next %))) forms)))
+             (reset! ~self (fn* ~@(map #(name-fn-arity name self
+                                                       (fn-expand (unwrap-fn-arity-vector (first %))
+                                                                  (next %)))
+                                             forms)))
              (deref ~self))))
 
-      (vector? (first forms))
-      (cons 'fn* (fn-expand (first forms) (next forms)))
+      (vector? (unwrap-fn-arity-vector (first forms)))
+      (cons 'fn* (fn-expand (unwrap-fn-arity-vector (first forms)) (next forms)))
 
       (list? (first forms))
-      `(fn* ~@(map #(fn-expand (first %) (next %)) forms))
+      `(fn* ~@(map #(fn-expand (unwrap-fn-arity-vector (first %)) (next %)) forms))
 
       :else
       nil))) ;; throw here
@@ -945,7 +966,7 @@
         attr       (if (map? (first forms)) (first forms) nil)
         forms      (if (map? (first forms)) (next forms) forms)
         def-name   (def-meta-name name doc attr)
-        first-form (first forms)
+        first-form (unwrap-fn-arity-vector (first forms))
         single?    (vector? first-form)
         args       (when single? first-form)
         variadic?  (when single? (boolean (some (fn [a] (= a '&)) args)))
@@ -2235,13 +2256,28 @@
 (defmacro defprotocol [name & sigs]
   (let [doc          (if (string? (first sigs)) (first sigs) nil)
         sigs         (if (string? (first sigs)) (next sigs) sigs)
-        method-names (map first sigs)
+        parsed       (loop [options {}
+                            remaining sigs]
+                       (if (keyword? (first remaining))
+                         (if (nil? (next remaining))
+                           (throw (str "defprotocol option " (first remaining)
+                                       " requires a value"))
+                           (recur (assoc options (first remaining) (second remaining))
+                                  (next (next remaining))))
+                         [options remaining]))
+        options      (first parsed)
+        sigs         (mapv (fn [sig]
+                             (if (and (seq? sig) (symbol? (first sig)))
+                               sig
+                               (throw (str "defprotocol signature must start with a symbol: " sig))))
+                           (second parsed))
+        method-names (mapv first sigs)
         ;; Quote method names so they don't get resolved as vars
-        quoted-names (map (fn [m] (list 'quote m)) method-names)
-        proto-def    (list 'def (def-meta-name name doc nil)
+        quoted-names (mapv (fn [m] (list 'quote m)) method-names)
+        proto-def    (list 'def (def-meta-name name doc options)
                            (cons 'defprotocol* (cons (str name) quoted-names)))
         ;; For each method, create a protocol-dispatching fn var
-        method-defs  (map (fn [sig]
+        method-defs  (mapv (fn [sig]
                             (let [mname (first sig)
                                   mdoc  (first (next (next sig)))]
                               (list 'def (def-meta-name mname (if (string? mdoc) mdoc nil) nil)
