@@ -6,8 +6,13 @@
 package rt
 
 import (
+	"bytes"
+	"go/ast"
+	"go/format"
+	"go/token"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -506,6 +511,41 @@ func TestFile(t *testing.T) {
 
 // --- determinism ----------------------------------------------------
 
+// TestRenderFsetIsPositionIndependent proves that rendering is a pure function
+// of AST structure: two structurally identical ASTs whose token positions were
+// stamped with DIFFERENT gap patterns (as concurrent allocPos interleaving would
+// produce) must render to identical bytes after renderFset densifies them.
+func TestRenderFsetIsPositionIndependent(t *testing.T) {
+	// mk builds `var x = 1 + 2` where the three idents/lits get positions
+	// spread by `gap`, simulating a given concurrent interleaving.
+	mk := func(gap token.Pos) ast.Node {
+		p := func(i int) token.Pos { return 1 + token.Pos(i)*gap }
+		return &ast.GenDecl{
+			TokPos: p(0), Tok: token.VAR,
+			Specs: []ast.Spec{&ast.ValueSpec{
+				Names: []*ast.Ident{{NamePos: p(1), Name: "x"}},
+				Values: []ast.Expr{&ast.BinaryExpr{
+					X:     &ast.BasicLit{ValuePos: p(2), Kind: token.INT, Value: "1"},
+					OpPos: p(3), Op: token.ADD,
+					Y: &ast.BasicLit{ValuePos: p(4), Kind: token.INT, Value: "2"},
+				}},
+			}},
+		}
+	}
+	render := func(n ast.Node) string {
+		var buf bytes.Buffer
+		if err := format.Node(&buf, renderFset(n), n); err != nil {
+			t.Fatalf("format: %v", err)
+		}
+		return buf.String()
+	}
+	tight := render(mk(1))  // contiguous positions
+	gappy := render(mk(37)) // large gaps (different interleaving)
+	if tight != gappy {
+		t.Fatalf("render not position-independent:\ntight=%q\ngappy=%q", tight, gappy)
+	}
+}
+
 // TestRenderIsDeterministic builds a complex AST and renders it many
 // times; if any output differs from the first, the renderer has a
 // nondeterminism bug (probably Go-map iteration).
@@ -560,6 +600,48 @@ func TestRenderIsDeterministic(t *testing.T) {
 		if got != first {
 			t.Fatalf("render %d differs from first:\nfirst:\n%s\nlater:\n%s", i, first, got)
 		}
+	}
+}
+
+// TestRenderFilePositionIndependent verifies that *ast.File nodes are
+// correctly handled by renderFset. Two structurally-identical Files with
+// DIFFERENT position gap patterns must render to identical bytes.
+func TestRenderFilePositionIndependent(t *testing.T) {
+	// mkFile builds a file with a simple package declaration and one decl,
+	// with positions spread by `gap` to simulate concurrent interleaving.
+	mkFile := func(gap token.Pos) ast.Node {
+		p := func(i int) token.Pos { return 1 + token.Pos(i)*gap }
+		return &ast.File{
+			Package: p(0),
+			Name:    &ast.Ident{NamePos: p(1), Name: "main"},
+			Decls: []ast.Decl{
+				&ast.GenDecl{
+					TokPos: p(2), Tok: token.VAR,
+					Specs: []ast.Spec{
+						&ast.ValueSpec{
+							Names: []*ast.Ident{{NamePos: p(3), Name: "x"}},
+							Values: []ast.Expr{
+								&ast.BasicLit{ValuePos: p(4), Kind: token.INT, Value: "42"},
+							},
+						},
+					},
+				},
+			},
+			FileStart: p(5),
+			FileEnd:   p(6),
+		}
+	}
+	renderToString := func(n ast.Node) string {
+		var buf bytes.Buffer
+		if err := format.Node(&buf, renderFset(n), n); err != nil {
+			t.Fatalf("format: %v", err)
+		}
+		return buf.String()
+	}
+	tight := renderToString(mkFile(1))   // contiguous positions
+	gappy := renderToString(mkFile(101)) // large gaps (different interleaving)
+	if tight != gappy {
+		t.Fatalf("File render not position-independent:\ntight=%q\ngappy=%q", tight, gappy)
 	}
 }
 
@@ -624,5 +706,39 @@ func TestGogenIdentAccessors(t *testing.T) {
 	errMsg := err.Error()
 	if !strings.Contains(errMsg, "String") && !strings.Contains(errMsg, "*ast.Ident") {
 		t.Errorf("cIdentName error should mention type issue, got: %v", err)
+	}
+}
+
+// TestAllocPosConcurrentUniqueness pins the review fix on #446: allocPos is
+// called from concurrent lowering goroutines, and the previous unsynchronized
+// goPosNext read-increment could lose updates and hand two AST nodes the same
+// position — which renderFset's densify cannot disambiguate. Run it hot from
+// many goroutines (fails under -race without the mutex) and assert every
+// claimed position is unique.
+func TestAllocPosConcurrentUniqueness(t *testing.T) {
+	const goroutines = 16
+	const perG = 1000
+	var wg sync.WaitGroup
+	results := make([][]token.Pos, goroutines)
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			out := make([]token.Pos, perG)
+			for i := range out {
+				out[i] = allocPos()
+			}
+			results[g] = out
+		}(g)
+	}
+	wg.Wait()
+	seen := make(map[token.Pos]bool, goroutines*perG)
+	for _, out := range results {
+		for _, p := range out {
+			if seen[p] {
+				t.Fatalf("allocPos handed out duplicate position %d under concurrency", p)
+			}
+			seen[p] = true
+		}
 	}
 }

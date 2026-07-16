@@ -121,8 +121,13 @@ $(LG-PROFILE): $(GO) $(ROOT-GO-FILES) pkg/**/* pkg/rt/core_compiled.lgb
 	which go
 	go build -tags lg_profile -ldflags="-s -w -X main.commit=$(COMMIT)" -o $@ .
 
+# -short skips the heavyweight e2e tests that each shell out to a full core
+# lowering (TestLoweringDeterminism ~150s, TestGogenAOTDiff, TestDeftypeSkeletonNativeLowering).
+# They are testing.Short()-gated and run full in dedicated CI jobs
+# (.github/workflows/go.yml "Expensive lowering e2e" + the gogen-diff job), so
+# the local `make test` loop stays fast without losing CI coverage.
 test: pkg/**/* pkg/rt/core_compiled.lgb $(GO)
-	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -count=1 -v ./test/...
+	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -short -count=1 -v ./test/...
 
 clojure-compat-report: $(GO)
 	@$(REPORT-SCRIPT)
@@ -282,9 +287,9 @@ check-generated-manifest: $(GO)
 #
 #   * core_go_lowered/ (+ the gogen_ir wireup files) is NOT committed — it is
 #     a build artifact, regenerated on demand and gitignored. Its self-lower
-#     trips the wall-clock *typeinfer-budget-ms*, so the bytes are not
-#     reproducible and committing it would churn. Here it is regenerated fresh,
-#     then gated behaviorally: it must compile under -tags gogen_ir AND
+#     uses *typeinfer-max-drains* (a deterministic drain-count, not wall-clock),
+#     ensuring the bytes are reproducible across processes. Here it is regenerated
+#     fresh, then gated behaviorally: it must compile under -tags gogen_ir AND
 #     dispatch natively (dce -> NativeFn). gogen_ir consumers (this gate, the
 #     parity job, any -tags gogen_ir build) regenerate it first; the untagged
 #     build and the shipped bytecode binary never need it.

@@ -39,8 +39,8 @@ case "$MODE" in
     --jank-only)  RUN_JANK=1; RUN_LOWERGO=0; RUN_IRCOMPILE=0; RUN_DEFTYPE=0 ;;
     # ir-compile only: the IR-optimizing bytecode path (binds *ir-compile*),
     # which runs the native passes under -tags gogen_ir and is byte-stable
-    # across engines — unlike lower-go, whose AOT run trips the wall-clock
-    # *typeinfer-budget-ms* and flakes. This is the CI-safe parity gate.
+    # across engines — unlike lower-go, whose AOT run is deterministic via
+    # *typeinfer-max-drains* drain-count guard. This is the CI-safe parity gate.
     --ir-compile) RUN_JANK=0; RUN_LOWERGO=0; RUN_IRCOMPILE=1; RUN_DEFTYPE=0 ;;
     --full)       RUN_JANK=1; RUN_LOWERGO=1; RUN_IRCOMPILE=1; RUN_DEFTYPE=1 ;;
     default)      RUN_JANK=1; RUN_LOWERGO=1; RUN_IRCOMPILE=0; RUN_DEFTYPE=1 ;;

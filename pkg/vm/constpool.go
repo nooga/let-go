@@ -89,9 +89,13 @@ func (c *Consts) Reserve(n int) {
 func (c *Consts) Intern(v Value) int {
 	h := constHash(v)
 
-	// Check parent first
+	// Check parent first. Only indices minted BEFORE this child was created
+	// (idx < base) are usable: the child owns the index space from base up,
+	// so a parent entry added after child creation would collide with a
+	// child index and resolve to the wrong value. Refusing the hit means the
+	// value is re-interned in the child — slight duplication, never aliasing.
 	if c.parent != nil {
-		if idx, ok := c.parent.lookup(h, v); ok {
+		if idx, ok := c.parent.lookup(h, v); ok && idx < c.base {
 			return idx
 		}
 	}
@@ -122,7 +126,10 @@ func (c *Consts) get(i int) Value {
 	if i >= c.base {
 		return c.consts[i-c.base]
 	}
-	return c.parent.consts[i]
+	// Recurse: the parent may itself be a layered child (e.g. an eval child
+	// over a bundle-decoded pool), so indices below base resolve through the
+	// same layering rather than assuming a flat root.
+	return c.parent.get(i)
 }
 
 func (c *Consts) count() int {
@@ -227,6 +234,13 @@ func constHash(v Value) uint32 {
 	case *RecordType:
 		return hashUint64(uint64(uintptr(unsafe.Pointer(x))))
 	case *Regex:
+		// Pointer identity, like *Func: Clojure regex equality is identity
+		// ((= #"x" #"x") is false), so distinct literal occurrences must
+		// stay distinct constants. Transient evals don't leak through this:
+		// they intern into per-eval CHILD pools whose lifetime is their
+		// chunk's (see NewChildConsts callers), so a re-evaluated literal's
+		// constant is collected with its chunk instead of rooting the
+		// process-global pool.
 		return hashUint64(uint64(uintptr(unsafe.Pointer(x))))
 	case *Atom:
 		return hashUint64(uint64(uintptr(unsafe.Pointer(x))))

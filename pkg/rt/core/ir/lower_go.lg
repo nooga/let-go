@@ -312,6 +312,10 @@
     (ratio? v)      (vm-call "MustRatioFromString" [(gogen/string-lit (str v))])       ; (str 1/2)  -> "1/2"
     ;; UUID's String() is `#uuid "X"`; pass the bare canonical X to ParseUUID.
     (uuid? v)       (vm-call "ParseUUID" [(gogen/string-lit (let [s (str v)] (subs s 7 (dec (count s)))))])
+    ;; A read-time-compiled regex literal reconstructs from its readable
+    ;; #"..." form (Go-quoted, so it round-trips any pattern bytes).
+    (instance? java.util.regex.Pattern v)
+    (vm-call "MustRegexFromReadable" [(gogen/string-lit (str v))])
     (list? v)       (boxed-list-expr v)
     (vector? v)     (boxed-vector-expr v)
     (map? v)        (boxed-map-expr v)

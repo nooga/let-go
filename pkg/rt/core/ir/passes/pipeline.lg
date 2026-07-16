@@ -1261,7 +1261,7 @@
                                                    (binding [*ns* (the-ns ns-name)]
                                                      (build-inline-registry ns-name defn-forms0))
                                                    {})
-              ir.passes.typeinfer/*typeinfer-budget-ms* nil
+              ir.passes.typeinfer/*typeinfer-max-drains* nil
               ir.passes.typeinfer/*deftype-ctor-types* (when (seq ctor-types) ctor-types)
               lower-go/*deftype-ctors* (when (seq ctors) ctors)
               lower-go/*protocol-methods* (when (seq protocol-method-set) protocol-method-set)
@@ -1514,7 +1514,7 @@
    call resolves to `pkg.Conj(ec,…)`. :refs are the cross-ns callees it references
    (same-ns calls filtered — those resolve intra-package with no import)."
   (binding [*ns* (the-ns ns-sym)
-            ir.passes.typeinfer/*typeinfer-budget-ms* nil
+            ir.passes.typeinfer/*typeinfer-max-drains* nil
             ;; Same pure map bound in lower-ns-to-go so the registry's :go-name and
             ;; the emitted decl agree on a collision-resolved export name.
             lower-go/*export-name-overrides* (lower-go/build-export-name-map forms)]
