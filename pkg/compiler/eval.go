@@ -49,9 +49,24 @@ func PrecompiledNSChunk(name string) *vm.CodeChunk {
 	return precompiledNS[name]
 }
 
+// evalInNSChild is the namespace-aware eval behind rt.SetEvalInNS (pod
+// client-side code). Pod evals are transient, so it compiles through a
+// per-call transient compiler; named rather than inline so the const-pool
+// regression test can probe this exact path.
+func evalInNSChild(code string, ns *vm.Namespace) (vm.Value, error) {
+	c := NewTransientCompiler(consts, ns)
+	_, out, err := c.CompileMultiple(strings.NewReader(code))
+	return out, err
+}
+
 func Eval(src string) (vm.Value, error) {
 	ns := rt.NS(rt.NameCoreNS)
-	compiler := NewCompiler(consts, ns)
+	// A per-eval CHILD pool: constants this eval introduces live exactly as
+	// long as the chunks/functions that reference them, instead of rooting
+	// the process-global pool forever. Shared constants still dedupe against
+	// the global parent; a long-lived host calling Eval in a loop no longer
+	// leaks one pool entry per transient constant (e.g. regex literals).
+	compiler := NewTransientCompiler(consts, ns)
 
 	_, out, err := compiler.CompileMultiple(strings.NewReader(src))
 	if err != nil {
@@ -246,7 +261,10 @@ func postCoreInit() {
 		if !ok {
 			return vm.NIL, nil
 		}
-		c := NewCompiler(consts, rt.NS(rt.NameCoreNS))
+		// Per-call transient compiler, like Eval: constants the loaded code
+		// introduces (e.g. regex literals) die with its chunks instead of
+		// rooting the process-global pool on every call.
+		c := NewTransientCompiler(consts, rt.NS(rt.NameCoreNS))
 		_, out, err := c.CompileMultiple(strings.NewReader(string(s)))
 		if err != nil {
 			return vm.NIL, err
@@ -262,7 +280,9 @@ func postCoreInit() {
 			return vm.NIL, nil
 		}
 		ns := rt.CurrentNS.Deref().(*vm.Namespace)
-		c := NewCompiler(consts, ns)
+		// Per-call transient compiler (see Eval): a form passed to eval interns
+		// its constants into a pool owned by this one chunk, not the global pool.
+		c := NewTransientCompiler(consts, ns)
 		c.source = "<eval>"
 		c.chunk = vm.NewCodeChunk(c.consts)
 		c.resetSP()
@@ -307,12 +327,8 @@ func postCoreInit() {
 		return ReadString(s)
 	})
 
-	// Wire up namespace-aware eval for pod client-side code
-	rt.SetEvalInNS(func(code string, ns *vm.Namespace) (vm.Value, error) {
-		c := NewCompiler(consts, ns)
-		_, out, err := c.CompileMultiple(strings.NewReader(code))
-		return out, err
-	})
+	// Wire up namespace-aware eval for pod client-side code.
+	rt.SetEvalInNS(evalInNSChild)
 
 	// test, walk, etc. are demand-loaded via resolver when required
 

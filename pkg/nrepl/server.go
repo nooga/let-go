@@ -266,8 +266,12 @@ func (n *NreplServer) handleEval(conn net.Conn, msg map[string]any) {
 		defer outVar.PopBinding()
 	}
 
-	// Eval
-	_, val, err := n.ctx.CompileMultiple(strings.NewReader(code))
+	// Eval into a per-input CHILD const pool layered on the session pool
+	// (mirrors the terminal REPL): constants this eval introduces stay
+	// reachable only through the chunks that use them, so a long-lived
+	// session doesn't grow its pool per eval. Namespace continuity rides
+	// the process-global CurrentNS, unaffected by the child context.
+	_, val, err := n.ctx.ChildForEval().CompileMultiple(strings.NewReader(code))
 
 	// Send stdout if any
 	if outBuf.Len() > 0 {

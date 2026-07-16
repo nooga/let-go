@@ -66,6 +66,39 @@ func NewDebugCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
 	return c
 }
 
+// NewTransientCompiler returns a compiler for ONE transient evaluation (a
+// REPL/nREPL input, load-string, eval, a pod or host request): constants the
+// evaluation introduces intern into a CHILD pool layered on parent, so they
+// stay reachable only through the chunks and functions that use them and are
+// collected with them — instead of rooting the parent pool forever, one
+// entry per eval, unbounded in a long-lived session.
+//
+// Every transient-eval site must build its compiler here; a bare NewCompiler
+// call is reserved for pools that SHOULD live as long as the process (boot,
+// require/ns loading, build tools). Grep for NewCompiler( to audit.
+func NewTransientCompiler(parent *vm.Consts, ns *vm.Namespace) *Context {
+	return NewCompiler(vm.NewChildConsts(parent), ns)
+}
+
+// ChildForEval returns a fresh compilation context for one transient
+// top-level evaluation layered on this context's pool: same namespace and
+// debug mode, child constant pool (see NewTransientCompiler).
+//
+// Field semantics: debug and source are COPIED (user setting + error-report
+// label); the namespace is inherited through the process-global CurrentNS
+// (continuity across evals); everything else (chunk, locals, stack state) is
+// freshly initialized — each eval is independent. Repeated calls produce
+// SIBLING children of this context's pool, not a nested chain: each transient
+// eval's constants live exactly as long as its own chunks, and siblings
+// cannot alias each other's index space (Intern only reuses parent indices
+// below the child's base).
+func (c *Context) ChildForEval() *Context {
+	child := NewTransientCompiler(c.consts, c.CurrentNS())
+	child.debug = c.debug
+	child.source = c.source
+	return child
+}
+
 func (c *Context) SetSource(source string) *Context {
 	c.source = source
 	return c
@@ -362,7 +395,7 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.chunk.AddSourceInfo(*info)
 	}
 	switch o.Type() {
-	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType:
+	case vm.IntType, vm.FloatType, vm.StringType, vm.NilType, vm.BooleanType, vm.KeywordType, vm.CharType, vm.VoidType, vm.FuncType, vm.NativeFnType, vm.BigIntType, vm.RatioType, vm.BigDecimalType, vm.UUIDType, vm.InstantType, vm.RegexType:
 		n := c.constant(o)
 		c.emitWithArg(vm.OP_LOAD_CONST, n)
 		c.incSP(1)

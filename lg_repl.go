@@ -162,8 +162,14 @@ func repl(ctx *compiler.Context) {
 			continue
 		}
 
-		ctx.SetSource("REPL")
-		val, err := runForm(ctx, line)
+		// Each input compiles into a CHILD const pool layered on the session
+		// pool: constants a form introduces stay reachable only through the
+		// chunks/functions that use them, so transient evals are collectible
+		// and a long session doesn't grow the pool per input. The namespace
+		// rides the process-global CurrentNS, so continuity is unaffected.
+		inputCtx := ctx.ChildForEval()
+		inputCtx.SetSource("REPL")
+		val, err := runForm(inputCtx, line)
 		if err != nil {
 			fmt.Print(vm.FormatError(err))
 		} else {
