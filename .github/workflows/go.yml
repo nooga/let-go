@@ -95,6 +95,25 @@ jobs:
           LETGO_RUN_LOWERING_DETERMINISM: "1"
         run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering'
 
+  # Race-detector pass over the packages that hold cross-goroutine state:
+  # the VM's shared runtime structures and the rt layer. Motivated by #464 —
+  # the #463 ArrayVectorSeq.ChunkedFirst data race shipped because no CI job
+  # ran the race detector. A separate job so the race-runtime multiplier
+  # (~5-20x) stays out of the primary test gate; -short skips the long
+  # e2e/determinism harnesses. The scoped run completes in well under a
+  # minute of wall clock locally.
+  race:
+    name: race
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Race-detector tests (pkg/vm, pkg/rt)
+        run: go test -race -short -count=1 -timeout 300s ./pkg/vm/... ./pkg/rt/...
+
   # Cross-build guard for the wasip1 (WASI) target. The REPL and interactive
   # terminal are build-tagged off wasip1 (routed to lg_repl_stub.go); without
   # this gate, a change that pulls chzyer/readline or x/sys/unix terminal code
