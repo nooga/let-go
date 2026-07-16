@@ -124,3 +124,14 @@ func TestEvalInNSDoesNotGrowConstPool(t *testing.T) {
 		}
 	})
 }
+
+// Nested transient evals (eval inside eval) create SIBLING child pools of the
+// global pool — each level's constants retained only by its own chunks. Pins
+// that layering ambiguity can't quietly root the global pool either.
+func TestNestedEvalDoesNotGrowConstPool(t *testing.T) {
+	assertNoGlobalPoolGrowth(t, "nested eval", func(i int) {
+		if _, err := Eval(`(eval (read-string "(eval (read-string \"(re-find #\\\"x\\\" \\\"xyz\\\")\"))"))`); err != nil {
+			t.Fatalf("eval %d: %v", i, err)
+		}
+	})
+}

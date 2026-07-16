@@ -83,6 +83,15 @@ func NewTransientCompiler(parent *vm.Consts, ns *vm.Namespace) *Context {
 // ChildForEval returns a fresh compilation context for one transient
 // top-level evaluation layered on this context's pool: same namespace and
 // debug mode, child constant pool (see NewTransientCompiler).
+//
+// Field semantics: debug and source are COPIED (user setting + error-report
+// label); the namespace is inherited through the process-global CurrentNS
+// (continuity across evals); everything else (chunk, locals, stack state) is
+// freshly initialized — each eval is independent. Repeated calls produce
+// SIBLING children of this context's pool, not a nested chain: each transient
+// eval's constants live exactly as long as its own chunks, and siblings
+// cannot alias each other's index space (Intern only reuses parent indices
+// below the child's base).
 func (c *Context) ChildForEval() *Context {
 	child := NewTransientCompiler(c.consts, c.CurrentNS())
 	child.debug = c.debug
