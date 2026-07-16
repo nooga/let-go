@@ -146,6 +146,10 @@ func (ec *ExecContext) deref(v *Var) Value {
 
 func (ec *ExecContext) pushBinding(v *Var, val Value) {
 	v.isDynamic.Store(true)
+	// Arm the *lg-trace* gate on every binding push, before either push
+	// path: (binding [*lg-trace* true] ...) must arm whether the binding
+	// lands on the root context or a scoped one.
+	armTraceIfTruthy(v, val)
 	root := ec.orRoot()
 	if root == RootExecContext {
 		rootPush(v, val)
