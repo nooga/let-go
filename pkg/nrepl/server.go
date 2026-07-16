@@ -288,9 +288,29 @@ func (n *NreplServer) handleEval(conn net.Conn, msg map[string]any) {
 			"root-ex": "let-go.lang.Error",
 		})
 	} else {
+		// Render across the panic-to-error boundary: forcing a lazy value while
+		// printing can throw, and an unrecovered panic here would take down the
+		// whole nREPL server, not just this eval (same hazard this PR fixes for
+		// the CLI REPL via SafeString).
 		valStr := "nil"
 		if val != nil {
-			valStr = val.String()
+			rendered, rerr := vm.SafeString(val)
+			if rerr != nil {
+				respond(conn, map[string]any{
+					"id":      id,
+					"session": sessID,
+					"err":     vm.FormatError(rerr) + "\n",
+					"ex":      "let-go.lang.Error",
+					"root-ex": "let-go.lang.Error",
+				})
+				respond(conn, map[string]any{
+					"id":      id,
+					"session": sessID,
+					"status":  []string{"done"},
+				})
+				return
+			}
+			valStr = rendered
 		}
 		respond(conn, map[string]any{
 			"id":      id,
