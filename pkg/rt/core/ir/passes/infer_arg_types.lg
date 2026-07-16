@@ -32,6 +32,40 @@
     (contains? int-constraint-ops user-op) :int
     :else                                  :unknown))
 
+;; Numeric lattice types a ^double/^long hint validly stands in for: a hint
+;; declares the param numeric, and these agree with that. Const-tagged numerics
+;; ([:const :int 0]) count too.
+(defn- numeric-type? [t]
+  (or (contains? #{:int :float :number} t)
+      (and (vector? t) (= :const (first t)) (contains? #{:int :float} (second t)))))
+
+;; A proven concrete type that is neither numeric nor a don't-know type.
+;; :unknown/:any/:bottom all lower to vm.Value, so a numeric hint over them is
+;; fine — the hint is strictly more specific. Only a concrete NON-numeric type
+;; (:string, :bool, :char, a collection kind, …) actually contradicts the hint.
+(defn- concrete-non-numeric? [t]
+  (and (not (contains? #{:unknown :any :bottom} t))
+       (not (numeric-type? t))))
+
+;; Guard on the authoritative-hint override (#357). A numeric param hint wins
+;; over op-based inference, which is correct when inference is silent (:unknown)
+;; or agrees (numeric). But if the backward pass proved the param is used as a
+;; concrete non-numeric value, the hint misdescribes the body — keeping it would
+;; emit a native numeric param the code then misuses. Fail loud instead of
+;; silently miscompiling (#530 review).
+;;
+;; Unreachable today: infer-one-load-arg yields only :int or :unknown (see
+;; int-constraint-ops), so concrete-non-numeric? never holds. This is a tripwire
+;; for when arg inference grows concrete non-numeric param types — the
+;; contradiction that would introduce surfaces here instead of downstream.
+(defn- assert-hint-agrees-with-inference! [f idx hint inferred]
+  (when (concrete-non-numeric? inferred)
+    (throw (ex-info (str (ir/fn-name f) ": numeric param hint on arg " idx
+                         " (" (pr-str hint) ") contradicts its inferred type "
+                         (pr-str inferred) " — the param is used as a non-numeric value")
+                    {:pass :infer-arg-types :fn (ir/fn-name f)
+                     :arg idx :hint hint :inferred inferred}))))
+
 (defn- join-types [a b]
   "Conservative join: if either side is :unknown, return the other.
    If both agree, return that. If they disagree, fall back to :unknown
@@ -82,15 +116,20 @@
            (if (= :load-arg (ir/op nid f))
              ;; An explicit numeric hint (^double/^long routed to :arg-types by
              ;; build-fn) is authoritative — don't let the op-based backward pass
-             ;; override it with :int (#357). Skip inference for hinted params.
+             ;; override it with :int (#357). We still compute the inferred type
+             ;; for a hinted param, but only to assert the hint doesn't mask a
+             ;; concrete non-numeric contradiction (#530 review); the hint's value
+             ;; is left in place. Unhinted params join their inference as before.
              (let [idx        (ir/aux nid f)
                    arg-types  (ir/fn-arg-types f)
                    explicit   (when (and (vector? arg-types)
                                          (< (int idx) (count arg-types)))
                                 (nth arg-types (int idx)))
                    hinted?    (and explicit (not= explicit :unknown))
-                   inferred   (when-not hinted? (infer-one-load-arg f nid))
-                   s'         (if (and inferred (not= :unknown inferred))
+                   inferred   (infer-one-load-arg f nid)
+                   _          (when hinted?
+                                (assert-hint-agrees-with-inference! f idx explicit inferred))
+                   s'         (if (and (not hinted?) (not= :unknown inferred))
                                 (lat/join-inst-type! s nid inferred)
                                 s)]
                (recur (rest remaining) s'))

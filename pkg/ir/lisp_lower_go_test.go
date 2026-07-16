@@ -267,6 +267,32 @@ func TestLowerGoDoubleHintLowersToFloat64Param(t *testing.T) {
 	}
 }
 
+// #530 review: the authoritative-hint guard (assert-hint-agrees-with-inference!)
+// must stay inert when op-based inference AGREES with a numeric hint or is silent.
+// A ^double param used in arithmetic infers :int through the backward pass, which
+// is numeric and so no contradiction — the param keeps its float64 hint and lowers
+// natively, no throw. (The guard fires only on a concrete NON-numeric inferred
+// type, which the current numeric-only inference can't produce; this is the
+// negative case proving it doesn't over-fire on the motivating escape-style code.)
+func TestLowerGoNumericHintGuardInertWhenInferenceAgrees(t *testing.T) {
+	ensureLoader()
+
+	// `cx` is ^double but used in `< cx 4.0` and `+ cx 1.0`, which the backward
+	// pass constrains to :int — numeric, so the guard leaves the hint alone.
+	fn := buildLispIR(t, `(defn step [^double cx] (if (< cx 4.0) (+ cx 1.0) cx))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status (guard must not fire on a numeric-agreeing hint), got %v (reason=%v)",
+			got, result.ValueAt(vm.Keyword("reason")))
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "arg0 float64") {
+		t.Fatalf("expected the ^double hint to survive inference and lower to float64, got:\n%s", rendered)
+	}
+}
+
 // #357: multi-arity hint routing. The AOT :go path rebuilds each arity as a
 // single-arity defn through build-fn (pipeline lower-ns-to-go), so ^double hints
 // flow to every arity — each lowers to its own native float64-param func
