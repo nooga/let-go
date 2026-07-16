@@ -1289,9 +1289,14 @@
     (if (and (seq? t) (= 'quote (first t))) (second t) t)))
 
 ;; Numeric hint -> lattice type. double/float -> :float, long/int -> :int.
-;; Class hints (e.g. ^Foo) fall through to nil (no native numeric type).
+;; A recognized hint that isn't numeric (a class hint like ^String) returns nil:
+;; it has no native param type, so the param stays vm.Value. The routing site
+;; warns rather than dropping it silently (#530 review) — see the routing site.
 (defn- tag->arg-type [t]
-  (let [n (when t (name t))]
+  ;; Only a Named tag (symbol/keyword/string) has a name. A non-Named shape
+  ;; (e.g. ^{:tag [long]}) has no native param type -> nil (warn + box at the
+  ;; routing site) rather than throwing on (name t).
+  (let [n (when (or (symbol? t) (keyword? t) (string? t)) (name t))]
     (cond
       (contains? #{"double" "float"} n) :float
       (contains? #{"long" "int"} n)     :int
@@ -1511,10 +1516,24 @@
         ;; Route numeric param hints (^double/^long) into :arg-types so the param
         ;; lowers to a native Go type instead of vm.Value (#357). infer-arg-types
         ;; leaves an explicitly-typed param alone, so the hint is authoritative.
+        ;; A recognized but non-numeric hint (^String, a class) has no native param
+        ;; type — leave it vm.Value, but warn rather than drop it silently (#530
+        ;; review), so a mistaken or unsupported hint surfaces at build time.
+        ;; build-fn runs several times across the pipeline (collect/inline/emit),
+        ;; so this warning can repeat for one fn; it's diagnostic, not a bug.
         (when-let [tags (and expanded (:arg-tags expanded))]
           (when (some some? tags)
             (swap! f assoc :arg-types
-                   (mapv (fn [t] (or (tag->arg-type t) :unknown))
+                   (mapv (fn [t]
+                           (if (nil? t)
+                             :unknown
+                             (or (tag->arg-type t)
+                                 (do (println (str "WARNING: " name-sym
+                                                   ": ignoring unsupported param type hint ^"
+                                                   (pr-str t)
+                                                   " (only ^double/^float/^long/^int lower to a"
+                                                   " native param; left as vm.Value)"))
+                                     :unknown))))
                          (take arity tags)))))
         f)
       ;; Multi-arity path: preserve each arity as a nested template

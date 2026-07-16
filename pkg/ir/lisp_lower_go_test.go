@@ -9,6 +9,8 @@ package ir_test
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -291,6 +293,56 @@ func TestLowerNsMultiArityDoubleHintLowersToFloat64Params(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("multi-arity ^double hint missing %q:\n--- rendered Go ---\n%s", want, rendered)
 		}
+	}
+}
+
+// captureLetGoOut runs fn with let-go's *out* rebound to a pipe and returns what
+// it wrote. let-go's println (the lowering's WARNING emitter) resolves *out*
+// dynamically via WriteToOut, and its root IOHandle captured os.Stdout at init —
+// so swapping os.Stdout doesn't intercept it; rebinding the *out* var does.
+func captureLetGoOut(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	ns := rt.NS(rt.NameCoreNS)
+	ns.Def("*out*", vm.NewBoxed(rt.NewIOHandle(w)))
+	defer ns.Def("*out*", vm.NewBoxed(rt.NewIOHandle(os.Stdout)))
+	fn()
+	w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
+// #530 review: a recognized but non-numeric hint (^String, a class) has no native
+// param type. It must not crash and must not mis-route to a numeric param — it
+// stays vm.Value (boxed); and build-fn must WARN rather than drop the hint
+// silently (the actual subject of the review).
+func TestLowerGoNonNumericHintStaysBoxed(t *testing.T) {
+	ensureLoader()
+
+	var fn vm.Value
+	out := captureLetGoOut(t, func() {
+		fn = buildLispIR(t, `(defn takes-str [^String s] s)`)
+	})
+	if !strings.Contains(out, "ignoring unsupported param type hint ^String") {
+		t.Fatalf("expected a warning for the non-numeric ^String hint; stdout:\n%s", out)
+	}
+
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status for a ^String-hinted param, got %v (reason=%v)",
+			got, result.ValueAt(vm.Keyword("reason")))
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "arg0 vm.Value") {
+		t.Fatalf("expected non-numeric ^String hint to leave the param boxed (vm.Value), got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "arg0 float64") || strings.Contains(rendered, "arg0 int") {
+		t.Fatalf("non-numeric hint must not mis-route to a native numeric param, got:\n%s", rendered)
 	}
 }
 
