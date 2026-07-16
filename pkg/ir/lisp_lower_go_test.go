@@ -346,6 +346,50 @@ func TestLowerGoNonNumericHintStaysBoxed(t *testing.T) {
 	}
 }
 
+// #357: a ^long hint lowers to a native int param (the :int branch of the
+// hint→arg-type map, the peer of the ^double/:float case above).
+func TestLowerGoLongHintLowersToIntParam(t *testing.T) {
+	ensureLoader()
+
+	fn := buildLispIR(t, `(defn addl [^long a] (+ a 1))`)
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered status for a ^long-hinted param, got %v (reason=%v)",
+			got, result.ValueAt(vm.Keyword("reason")))
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "arg0 int") {
+		t.Fatalf("expected ^long param to lower to a native int param, got:\n%s", rendered)
+	}
+}
+
+// #530 review follow-up: a non-Named tag shape (^{:tag [long]}) has no name, so
+// tag->arg-type's guard must let it warn-and-box rather than throw on (name t).
+func TestLowerGoNonNamedHintWarnsAndBoxes(t *testing.T) {
+	ensureLoader()
+
+	var fn vm.Value
+	out := captureLetGoOut(t, func() {
+		fn = buildLispIR(t, `(defn tv [^{:tag [long]} x] x)`)
+	})
+	if !strings.Contains(out, "ignoring unsupported param type hint") {
+		t.Fatalf("expected a warning for a non-Named tag shape; stdout:\n%s", out)
+	}
+
+	optimizeLispIR(t, fn)
+	result := lowerGo(t, fn, ":strict")
+	if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+		t.Fatalf("expected :lowered (not a throw) for a non-Named tag, got %v (reason=%v)",
+			got, result.ValueAt(vm.Keyword("reason")))
+	}
+	rendered := bindAndRenderGoDecl(t, result)
+	if !strings.Contains(rendered, "arg0 vm.Value") {
+		t.Fatalf("expected non-Named tag to leave the param boxed, got:\n%s", rendered)
+	}
+}
+
 // Regression for PR #235 review (robustness): a genuinely ambiguous :number
 // result — e.g. (+ x x) where x is only known to be {int,float} — has no native
 // Go type, so go-type-spec must give it a lowering target (vm.Value) instead of
