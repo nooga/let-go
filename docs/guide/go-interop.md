@@ -56,6 +56,20 @@ One Go package is already wrapped this way: **xxh3**.
 Keep this split in mind: **generation gets you the raw surface; the library
 you'd actually want to use is a `.lg` file.**
 
+One load-order asymmetry to know: the generated `xxh3` namespace is
+registered natively at startup, so `(xxh3/HashString "abc")` works with no
+`require` — but the `.lg` veneer loads on demand, so `(hash/xxh3-64-str …)`
+needs `(require 'hash)` first:
+
+```clojure
+(require 'hash)
+(hash/xxh3-64-str "abc")            ; => 8696274497037089104
+(= (hash/xxh3-64-str "abc")
+   (let [h (xxh3/New)]
+     (.WriteString h "abc")
+     (.Sum64 h)))                   ; => true
+```
+
 Mechanically, `cmd/lginterop` is a two-stage pipeline: the Go binary scans the
 target package and extracts its exports, then drives `scripts/lginterop.lg`
 (via the `lg` binary) to render the Go source. You don't need to know that to
@@ -218,6 +232,12 @@ namespace:
 go run ./cmd/lginterop -packages <import-path>[,<import-path>...] -out pkg/rt
 ```
 
+> **Status:** this mode is currently broken on `main` — `scripts/lginterop.lg`
+> predates gogen's form-based API and fails to compile (`gogen/parse-stmts`
+> no longer exists). Tracked in
+> [#535](https://github.com/nooga/let-go/issues/535); the flags below
+> describe the intended behavior.
+
 | Flag | Meaning |
 |---|---|
 | `-packages` | comma-separated Go import paths to wrap (overrides `deps.edn` `:gointerop`) |
@@ -287,7 +307,18 @@ why the modes are separate rather than one flag:
   (`pkg/rt/native_prims_lifecycle.go`), while explicit user redefinition —
   which happens after loading — is left alone.
 
-None of that applies to an external wrapper like `xxh3`: nothing in
-bootstrap competes with its names, and reflective dispatch is a fine cost at
-that boundary. See `pkg/rt/native_prims.go` for live examples of the
-directive format.
+Of these, only the **bootstrap lifecycle** is inherently a stdlib problem —
+it exists because core namespaces have competing `.lg` bootstrap definitions
+for the same names, which no external wrapper has. The other two are not
+principled privileges of the stdlib: an external package on a hot path
+deserves typed adapters and direct-call metadata just as much, and the
+`-smart` flag is the (currently vestigial) seam where external mode was
+meant to grow them. The two modes should converge on one emitter with the
+lifecycle machinery applied only where dual `.lg`+native definitions exist;
+#531 tracks that consolidation. See `pkg/rt/native_prims.go` for live
+examples of the directive format.
+
+Note that you rarely run primitives mode by hand: `make generate` invokes it
+(via `scripts/generate.lg`) alongside the bundle and lowered-tree
+regeneration, so annotating a function and running `make generate` is the
+whole workflow.
