@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-06-19
+last-verified: 2026-07-13
 human-verified:
 ---
 
@@ -53,3 +53,27 @@ with no known failures, compile skips, panic skips, or runtime skips.
 - Base integer `+`/`-`/`*`/`inc`/`dec` throw on overflow; use `+'`/`-'`/`*'`/`inc'`/`dec'` for BigInt-promoting exact math
 - Regex is Go flavor (`re2`), not Java regex
 - `letfn` uses atoms internally for forward references
+
+## Compiler compatibility vars
+
+`*warn-on-reflection*` is dynamic and defaults to `false`, but “reflection”
+means a missed static-dispatch opportunity in let-go rather than JVM method
+reflection. When enabled, compilation or IR/Go lowering warns once per source
+site for:
+
+- host member dispatch whose target type is not statically known; and
+- a known direct/native candidate that cannot be lowered and reaches the
+  generic `InvokeValueEC` trampoline.
+
+Ordinary higher-order IFn calls, protocol dispatch, known host targets, and
+successfully direct/native-lowered calls stay silent. A concrete receiver
+shape (a literal, a fresh constructor call) can resolve host warnings.
+**Known phase-1 limitation:** type hints (`^String s`) are NOT yet consulted —
+the compiler does not attach `:tag` metadata to fn params or locals, so a
+hinted receiver still warns; expect the host warning on most interop whose
+receiver is a plain symbol. Direct/native warnings need a supported call
+signature or native registration.
+
+`*unchecked-math*` is also dynamic and settable for source compatibility.
+let-go's numeric tower has no JVM-style unchecked primitive compilation mode,
+so changing this var currently has no code-generation effect.

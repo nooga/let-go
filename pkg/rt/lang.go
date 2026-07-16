@@ -6680,6 +6680,18 @@ func installLangNS() {
 	CurrentNS = ns.Def("*ns*", ns)
 	ns.Def("*compiling-aot*", vm.FALSE)
 	ns.Def("*in-wasm*", vm.FALSE)
+	uncheckedMath := ns.Def("*unchecked-math*", vm.FALSE)
+	uncheckedMath.SetDynamic()
+	uncheckedMath.SetMeta(vm.NewPersistentMap([]vm.Value{
+		vm.Keyword("dynamic"), vm.TRUE,
+		vm.Keyword("doc"), vm.String("Compatibility var for Clojure's unchecked arithmetic mode; accepted but has no code-generation effect."),
+	}))
+	warnOnReflection := ns.Def("*warn-on-reflection*", vm.FALSE)
+	warnOnReflection.SetDynamic()
+	warnOnReflection.SetMeta(vm.NewPersistentMap([]vm.Value{
+		vm.Keyword("dynamic"), vm.TRUE,
+		vm.Keyword("doc"), vm.String("Warns once per source site when let-go misses a known static host/direct/native dispatch path; this is not JVM reflection."),
+	}))
 	// The user's command-line arguments — the positionals after the script —
 	// as a seq of strings, or nil when there are none. Set by lg at startup
 	// (see commandLineArgsValue in lg.go); os/args remains the full process
@@ -8066,6 +8078,17 @@ func installLangNS() {
 		return vs[1], nil
 	})
 	ns.Def("-copy-form-source!", copyFormSource)
+
+	warnReflection := vm.NewCtxNativeFn("-warn-reflection!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("-warn-reflection! expects source, kind, and reason")
+		}
+		kind := strings.TrimPrefix(vs[1].String(), ":")
+		reason := strings.Trim(vs[2].String(), "\"")
+		emitReflectionWarningValue(ec, vs[0], kind, reason)
+		return vm.NIL, nil
+	})
+	ns.Def("-warn-reflection!", warnReflection)
 
 	// macroexpand — expand a macro form once
 	macroexpandf := vm.NewCtxNativeFn("macroexpand", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {

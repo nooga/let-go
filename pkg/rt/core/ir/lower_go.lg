@@ -1454,7 +1454,7 @@
    the existing fixed-arity emit path unchanged — param-specs = the fixed specs
    plus the rest-element spec repeated (- k min). Calls beyond +8 args stay on
    the trampoline. Entries are keyed under the INTERNAL ns symbol
-   (internal-ns-sym), matching how lookup-direct-callable derives call-ns, so
+   (internal-ns-sym), matching how lookup-direct-candidate derives call-ns, so
    both qualified (clojure.core/seq) and referred-core (bare seq) calls resolve
    via resolve-call-entry."
   [native-modules]
@@ -1822,7 +1822,7 @@
                                              then fallback))))))))))]
     (when stmts
       ;; Record the callee's Go import only now that emission has actually
-      ;; produced statements. Doing it in lookup-direct-callable (before
+      ;; produced statements. Doing it in direct-callable-entry (before
       ;; coercion) leaks an unused package import whenever an arg can't be
       ;; coerced and the call falls back to cached-var dispatch — an unused
       ;; import makes the emitted Go uncompilable.
@@ -1835,44 +1835,46 @@
 ;; alter-var-root / intern mutate the root of an ordinary var at runtime, and
 ;; the override is observed through the var — so a baked direct call
 ;; (corefns.Count, a lowered sibling's Go func) would ignore it. Under this
-;; flag lookup-direct-callable returns nil so every call falls back to the
+;; flag lookup-direct-candidate returns nil so every call falls back to the
 ;; cached-var / InvokeValue trampoline, which re-reads the root each call.
 (def ^:dynamic *direct-calls-disabled?* false)
 
-(defn- lookup-direct-callable
-  "Direct-call hit. Returns the registry entry when the callee is a :load-var
-   resolving (via resolve-call-entry) to a fn in *lowered-registry* — a same-ns
-   lowered sibling, a cross-ns lowered sibling (:go-pkg set, ec-passing), or a
-   native module fn (:native?, context-free) — whose param/result specs are all
-   coercion-supported. The callee's Go import is NOT recorded here: lookup
-   precedes coercion, and a typed param the caller can't satisfy makes
-   emit-typed-direct-call fall back to the trampoline, so recording the import
-   at lookup time would leak an unused import. emit-typed-direct-call records it
-   only once emission succeeds.
-
-   Returns nil if any condition fails; the caller falls back to the trampoline
-   (cached-var IFn dispatch) when nil."
+(defn- lookup-direct-candidate
+  "Return the registry entry for a known load-var call before checking whether
+   its signature can be emitted directly. nil means ordinary dynamic IFn call."
   [f callee-nid arg-count]
   (when (and (not *direct-calls-disabled?*)
-             ;; O(1) emptiness check — (seq m) on a map materializes EVERY
-             ;; entry (nodeSeq), and this runs per call site being lowered.
-             (pos? (count *lowered-registry*)) (= :load-var (ir/op callee-nid f)))
+             ;; O(1) emptiness check — seq on a map materializes every entry.
+             (pos? (count *lowered-registry*))
+             (= :load-var (ir/op callee-nid f)))
     (let [sym     (symbol (ir/aux callee-nid f))
           sns     (namespace sym)
           call-ns (when sns (internal-ns-sym sns))
-          ;; Unqualified calls resolve through the ns being lowered (*ns*),
-          ;; mirroring Clojure: the current ns's own intern shadows the
-          ;; referred core. resolve-call-entry does exact-key gets only —
-          ;; never a scan over (keys *lowered-registry*).
-          cur-ns  (internal-ns-sym (str (ns-name *ns*)))
-          entry   (resolve-call-entry *lowered-registry* cur-ns call-ns (name sym) arg-count)]
-      (when (and entry
-                 (not (:variadic? entry))
-                 ;; Param + result types must be coercion-supported;
-                 ;; complex types fall through to the trampoline.
-                 (every? supported-coercion-type? (or (:param-specs entry) []))
-                 (supported-coercion-type? (:result-spec entry)))
-        entry))))
+          cur-ns  (internal-ns-sym (str (ns-name *ns*)))]
+      (resolve-call-entry *lowered-registry* cur-ns call-ns (name sym) arg-count))))
+
+(defn- direct-callable-entry
+  "Filter a lookup-direct-candidate hit down to a directly-emittable one:
+   a same-ns lowered sibling, a cross-ns lowered sibling (:go-pkg set,
+   ec-passing), or a native module fn (:native?, context-free) — whose
+   param/result specs are all coercion-supported. Takes the already-resolved
+   candidate so the perf-sensitive call path does one registry lookup, not
+   two. The callee's Go import is NOT recorded here: filtering precedes
+   coercion, and a typed param the caller can't satisfy makes
+   emit-typed-direct-call fall back to the trampoline, so recording the
+   import here would leak an unused import. emit-typed-direct-call records
+   it only once emission succeeds.
+
+   Returns nil if any condition fails; the caller falls back to the
+   trampoline (cached-var IFn dispatch) when nil."
+  [entry]
+  (when (and entry
+             (not (:variadic? entry))
+             ;; Param + result types must be coercion-supported;
+             ;; complex types fall through to the trampoline.
+             (every? supported-coercion-type? (or (:param-specs entry) []))
+             (supported-coercion-type? (:result-spec entry)))
+    entry))
 
 ;; Deftype constructor registry: map {constructor-name -> exported struct name},
 ;; e.g. {"->Square" "Square"}. Bound during the :go pass so a call (->Square 3)
@@ -2153,11 +2155,17 @@
           target    (if (live? f nid)
                       (value-ident f nid)
                       (gogen/ident "_"))
-          entry     (lookup-direct-callable f (first refs) arg-count)
+          candidate (lookup-direct-candidate f (first refs) arg-count)
+          entry     (direct-callable-entry candidate)
           direct    (when entry (emit-typed-direct-call f closed-exprs nid target refs entry))]
-      (if direct
-        direct
-        (trampoline-call-stmts f closed-exprs nid target refs)))))
+      (or direct
+          (do
+            (when candidate
+              (-warn-reflection!
+                (ir/source-infos nid f)
+                :direct-native-fallback
+                "known direct/native candidate could not be lowered; using runtime dispatch"))
+            (trampoline-call-stmts f closed-exprs nid target refs))))))
 
 (defn- try-assign-stmts [f closed-exprs nid]
   "Lower a :try op (guarded region) to straight-line Go.

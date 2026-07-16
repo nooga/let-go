@@ -220,7 +220,20 @@
 ;; *unchecked-math*: a JVM compiler knob toggling unchecked arithmetic for
 ;; the +/-/* family. let-go has no such compile mode, so this is an honest
 ;; no-op dynamic var (default false), present so code that `set!`s it loads.
-(def ^:dynamic *unchecked-math* false)
+(def ^:dynamic *unchecked-math*
+  "Compatibility var for Clojure's unchecked arithmetic mode. let-go accepts
+   and dynamically binds the value, but it has no code-generation effect."
+  false)
+
+;; Unlike Clojure's JVM reflection warning, this reports let-go call sites
+;; that miss an available static host/direct/native dispatch path and fall
+;; back to dynamic dispatch. Warnings are compile/lowering-time diagnostics;
+;; enabling this var never changes execution.
+(def ^:dynamic *warn-on-reflection*
+  "When truthy, warn once per source site when let-go misses a known static
+   host/direct/native dispatch path. This is not JVM reflection: diagnostics
+   occur during compilation or IR/Go lowering and never change execution."
+  false)
 
 ;; hash-combine: mixes two hash codes into one, order-sensitive. The faithful
 ;; clojure.core/hash-combine (clojure.lang.Util/hashCombine) — takes two ints,
