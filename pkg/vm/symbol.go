@@ -50,6 +50,17 @@ func (l Symbol) String() string {
 	return string(l)
 }
 
+func splitNamespaced(s string) (ns string, name string, hasNS bool) {
+	if s == "/" {
+		return "", s, false
+	}
+	i := strings.IndexByte(s, '/')
+	if i < 0 {
+		return "", s, false
+	}
+	return s[:i], s[i+1:], true
+}
+
 // NamespacedRaw splits "ns/name" WITHOUT allocating: IndexByte finds the
 // separator and the two parts are substrings (which share the receiver's
 // string backing — no new allocation), returned as raw Symbols rather than
@@ -57,15 +68,8 @@ func (l Symbol) String() string {
 // for the bare "/" symbol. This is the hot path — it does NOT touch the
 // lookup-stats mutex; the boxing Namespaced() below carries that.
 func (l Symbol) NamespacedRaw() (ns Symbol, name Symbol, hasNS bool) {
-	s := string(l)
-	if s == "/" {
-		return "", l, false
-	}
-	i := strings.IndexByte(s, '/')
-	if i < 0 {
-		return "", l, false
-	}
-	return Symbol(s[:i]), Symbol(s[i+1:]), true
+	nsString, nameString, hasNS := splitNamespaced(string(l))
+	return Symbol(nsString), Symbol(nameString), hasNS
 }
 
 func (l Symbol) Namespaced() (Value, Value) {
