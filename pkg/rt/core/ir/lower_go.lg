@@ -788,6 +788,8 @@
 
 (def ^:private comparison-op? #{"==" "!=" "<" "<=" ">" ">="})
 
+(defn- float64-cast [expr] (gogen/call (gogen/ident "float64") [expr]))
+
 (defn- inst-rhs [f closed-exprs nid]
   (let [op   (ir/op nid f)
         refs (ir/refs nid f)]
@@ -884,14 +886,24 @@
 
           ;; Native Go binary path: both operands typed compatibly.
           (and lhs-expr rhs-expr)
-          (let [raw-binary (cond
+          ;; Mixed concrete int/float64: typeinfer promotes such an op to :float
+          ;; (matching the numeric tower), but Go rejects `int <op> float64` — and
+          ;; an untyped float constant against an int operand is a hard compile
+          ;; error ("0.0625 truncated to int"). Widen the int side to float64 so
+          ;; the native op runs in float, same as the VM's int→float promotion.
+          ;; Only int/float64 reach here mixed: quot ("/") is native for int/int
+          ;; only, div for float/float only, and bitwise/shift ops for int/int
+          ;; only — every other mix already routes through a vm-helper. (#534)
+          (let [l (if (and (= "int" s0) (= "float64" s1)) (float64-cast lhs-expr) lhs-expr)
+                r (if (and (= "float64" s0) (= "int" s1)) (float64-cast rhs-expr) rhs-expr)
+                raw-binary (cond
                              (= op :unsigned-bit-shift-right)
                              (gogen/call (gogen/ident "int")
                                [(gogen/binary ">>"
-                                  (gogen/call (gogen/ident "uint") [lhs-expr])
-                                  (gogen/call (gogen/ident "uint") [rhs-expr]))])
+                                  (gogen/call (gogen/ident "uint") [l])
+                                  (gogen/call (gogen/ident "uint") [r]))])
                              :else
-                             (gogen/binary op-str lhs-expr rhs-expr))]
+                             (gogen/binary op-str l r))]
             (if (and (comparison-op? op-str) (= "vm.Value" result-spec))
               (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [raw-binary])
               raw-binary))
