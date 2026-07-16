@@ -79,84 +79,129 @@
 (defn generic? [ex]
   (seq (ex-type-params ex)))
 
-;; --- unboxing / boxing snippets ------------------------------------------
+;; --- unboxing / boxing (gogen AST nodes) ----------------------------------
+;;
+;; Wrapper bodies are constructed directly as go/ast nodes via the gogen
+;; constructors — lginterop is a gogen-based lowering to Go, not a string
+;; templater (the old string+parse-stmts path died with the form-based
+;; gogen refactor; see #535).
 
-(defn unbox-snippet [idx type-str]
-  "Returns a Go code string that unboxes vs[idx] into arg[idx]."
-  (cond
-    (= type-str "string")
-      (str "arg" idx "Str, ok" idx " := vs[" idx "].(vm.String)\n"
-           "if !ok" idx " {\n"
-           "  return vm.NIL, fmt.Errorf(\"arg " idx " must be String, got %s\", vs[" idx "].Type().Name())\n"
-           "}\n"
-           "arg" idx " := string(arg" idx "Str)\n")
-    (= type-str "float64")
-      (str "arg" idx ", _ := vm.ToFloat(vs[" idx "])\n")
-    (= type-str "float32")
-      (str "arg" idx "Raw, _ := vm.ToFloat(vs[" idx "])\n"
-           "arg" idx " := float32(arg" idx "Raw)\n")
-    (= type-str "int")
-      (str "arg" idx ", _ := vm.ToInt(vs[" idx "])\n")
-    (or (= type-str "int8") (= type-str "int16") (= type-str "int32") (= type-str "int64"))
-      (str "arg" idx "Raw, _ := vm.ToInt(vs[" idx "])\n"
-           "arg" idx " := " type-str "(arg" idx "Raw)\n")
-    (or (= type-str "uint") (= type-str "uint8") (= type-str "uint16") (= type-str "uint32") (= type-str "uint64"))
-      (str "arg" idx "Raw, _ := vm.ToInt(vs[" idx "])\n"
-           "arg" idx " := " type-str "(arg" idx "Raw)\n")
-    (= type-str "bool")
-      (str "arg" idx " := vm.IsTruthy(vs[" idx "])\n")
-    (= type-str "interface {}")
-      (str "arg" idx " := vs[" idx "]\n")
-    :else
-      (str "arg" idx " := vs[" idx "]\n")))
+(defn- g-vs [idx]
+  "vs[idx]"
+  (gogen/index (gogen/ident "vs") (gogen/int-lit idx)))
+
+(defn- g-vm [name] (gogen/field-sel (gogen/ident "vm") name))
+
+(defn- g-errorf [fmt-str args]
+  "fmt.Errorf(fmt-str, args...)"
+  (gogen/call (gogen/field-sel (gogen/ident "fmt") "Errorf")
+              (vec (cons (gogen/string-lit fmt-str) args))))
+
+(defn- g-return-err [err-expr]
+  "return vm.NIL, <err-expr>"
+  (gogen/return-stmt [(g-vm "NIL") err-expr]))
+
+(defn- g-len-vs []
+  (gogen/call (gogen/ident "len") [(gogen/ident "vs")]))
+
+(defn unbox-stmts [idx type-str]
+  "Statements that unbox vs[idx] into arg<idx> of the given Go type."
+  (let [arg (gogen/ident (str "arg" idx))
+        raw (gogen/ident (str "arg" idx "Raw"))
+        blank (gogen/ident "_")
+        via (fn [conv cast-type]
+              ;; argNRaw, _ := vm.ToX(vs[N]); argN := T(argNRaw)
+              [(gogen/multi-assign ":=" [raw blank]
+                                   [(gogen/call (g-vm conv) [(g-vs idx)])])
+               (gogen/assign ":=" arg (gogen/cast (gogen/type cast-type) raw))])]
+    (cond
+      (= type-str "string")
+      (let [s (gogen/ident (str "arg" idx "Str"))
+            ok (gogen/ident (str "ok" idx))]
+        [(gogen/multi-assign ":=" [s ok]
+                             [(gogen/type-assert (g-vs idx) (gogen/type "vm.String"))])
+         (gogen/if-stmt nil (gogen/unary "!" ok)
+           [(g-return-err
+              (g-errorf (str "arg " idx " must be String, got %s")
+                        [(gogen/call
+                           (gogen/field-sel
+                             (gogen/call (gogen/field-sel (g-vs idx) "Type") [])
+                             "Name") [])]))]
+           nil)
+         (gogen/assign ":=" arg (gogen/cast (gogen/type "string") s))])
+      (= type-str "float64")
+      [(gogen/multi-assign ":=" [arg blank]
+                           [(gogen/call (g-vm "ToFloat") [(g-vs idx)])])]
+      (= type-str "float32")
+      (via "ToFloat" "float32")
+      (= type-str "int")
+      [(gogen/multi-assign ":=" [arg blank]
+                           [(gogen/call (g-vm "ToInt") [(g-vs idx)])])]
+      (or (= type-str "int8") (= type-str "int16") (= type-str "int32") (= type-str "int64")
+          (= type-str "uint") (= type-str "uint8") (= type-str "uint16") (= type-str "uint32") (= type-str "uint64"))
+      (via "ToInt" type-str)
+      (= type-str "bool")
+      [(gogen/assign ":=" arg (gogen/call (g-vm "IsTruthy") [(g-vs idx)]))]
+      :else ;; interface {} and anything opaque: pass the boxed value through
+      [(gogen/assign ":=" arg (g-vs idx))])))
 
 (defn box-expr [var type-str]
-  "Returns a Go expression string that boxes a Go value into vm.Value."
-  (cond
-    (= type-str "string") (str "vm.String(" var ")")
-    (= type-str "float64") (str "vm.Float(" var ")")
-    (= type-str "float32") (str "vm.Float(float64(" var "))")
-    (= type-str "int") (str "vm.Int(" var ")")
-    (or (= type-str "int8") (= type-str "int16") (= type-str "int32") (= type-str "int64"))
-      (str "vm.Int(int64(" var "))")
-    (or (= type-str "uint") (= type-str "uint8") (= type-str "uint16") (= type-str "uint32") (= type-str "uint64"))
-      (str "vm.Int(int64(" var "))")
-    (= type-str "bool") (str "vm.Boolean(" var ")")
-    :else var))
+  "Expression node boxing Go value `var` (an identifier name) into vm.Value."
+  (let [v (gogen/ident var)]
+    (cond
+      (= type-str "string")  (gogen/call (g-vm "String") [v])
+      (= type-str "float64") (gogen/call (g-vm "Float") [v])
+      (= type-str "float32") (gogen/call (g-vm "Float")
+                                         [(gogen/cast (gogen/type "float64") v)])
+      (= type-str "int")     (gogen/call (g-vm "Int") [v])
+      (or (= type-str "int8") (= type-str "int16") (= type-str "int32") (= type-str "int64")
+          (= type-str "uint") (= type-str "uint8") (= type-str "uint16") (= type-str "uint32") (= type-str "uint64"))
+      (gogen/call (g-vm "Int") [(gogen/cast (gogen/type "int64") v)])
+      (= type-str "bool")    (gogen/call (g-vm "Boolean") [v])
+      :else v)))
 
 ;; --- wrapper body generation ---------------------------------------------
 
 (defn build-wrapper-body [go-alias qname name params results variadic?]
-  "Returns a vector of gogen statement nodes (via parse-stmts)."
+  "Returns a vector of gogen statement nodes for a smart wrapper body."
   (let [arity (count params)
         arity-check (if variadic?
-                      (str "if len(vs) < " (dec arity) " {\n"
-                           "  return vm.NIL, fmt.Errorf(\"" qname ": expected at least " (dec arity) " args, got %d\", len(vs))\n"
-                           "}\n")
-                      (str "if len(vs) != " arity " {\n"
-                           "  return vm.NIL, fmt.Errorf(\"" qname ": expected " arity " args, got %d\", len(vs))\n"
-                           "}\n"))
-        unboxes (apply str (map-indexed unbox-snippet params))
-        call-args (apply str (interpose ", " (map #(str "arg" %) (range (count params)))))
-        call (str go-alias "." name "(" call-args ")")
+                      (gogen/if-stmt nil
+                        (gogen/binary "<" (g-len-vs) (gogen/int-lit (dec arity)))
+                        [(g-return-err
+                           (g-errorf (str qname ": expected at least " (dec arity) " args, got %d")
+                                     [(g-len-vs)]))]
+                        nil)
+                      (gogen/if-stmt nil
+                        (gogen/binary "!=" (g-len-vs) (gogen/int-lit arity))
+                        [(g-return-err
+                           (g-errorf (str qname ": expected " arity " args, got %d")
+                                     [(g-len-vs)]))]
+                        nil))
+        unboxes (mapcat identity (map-indexed unbox-stmts params))
+        call (gogen/call (gogen/field-sel (gogen/ident go-alias) name)
+                         (mapv #(gogen/ident (str "arg" %)) (range (count params))))
+        g-nil (gogen/ident "nil")
         ret (cond
               (empty? results)
-                (str call "\nreturn vm.NIL, nil\n")
+              [(gogen/expr-stmt call)
+               (gogen/return-stmt [(g-vm "NIL") g-nil])]
               (= 1 (count results))
-                (let [r (first results)]
-                  (str "result := " call "\nreturn " (box-expr "result" r) ", nil\n"))
+              [(gogen/assign ":=" (gogen/ident "result") call)
+               (gogen/return-stmt [(box-expr "result" (first results)) g-nil])]
               :else
-                (let [r0 (first results)
-                      r1 (second results)]
-                  (if (= r1 "error")
-                    (str "result, err := " call "\n"
-                         "if err != nil {\n"
-                         "  return vm.NIL, err\n"
-                         "}\n"
-                         "return " (box-expr "result" r0) ", nil\n")
-                    (str "result0, result1 := " call "\n"
-                         "return " (box-expr "result0" r0) ", " (box-expr "result1" r1) "\n"))))]
-    (gogen/parse-stmts (str arity-check unboxes "\n" ret))))
+              (let [r0 (first results)
+                    r1 (second results)]
+                (if (= r1 "error")
+                  [(gogen/multi-assign ":=" [(gogen/ident "result") (gogen/ident "err")] [call])
+                   (gogen/if-stmt nil
+                     (gogen/binary "!=" (gogen/ident "err") g-nil)
+                     [(g-return-err (gogen/ident "err"))]
+                     nil)
+                   (gogen/return-stmt [(box-expr "result" r0) g-nil])]
+                  [(gogen/multi-assign ":=" [(gogen/ident "result0") (gogen/ident "result1")] [call])
+                   (gogen/return-stmt [(box-expr "result0" r0) (box-expr "result1" r1)])])))]
+    (vec (concat [arity-check] unboxes ret))))
 
 ;; --- AST builders --------------------------------------------------------
 
@@ -168,47 +213,50 @@
      (gogen/result (gogen/type "error"))]
     (build-wrapper-body go-alias qname name params results variadic?)))
 
-(defn build-install-stmt [go-alias ex smart?]
+(defn build-install-stmt [go-alias ex smart? opaque-structs?]
   "Returns a gogen statement node (or nil) for registering one export
    on the local `ns` (a *vm.Namespace).  Generic funcs/types are skipped
    in Go output because they require explicit instantiation."
   (case (ex-kind ex)
     :func
-      (when (not (generic? ex))
-        (if (and smart? (smartable? ex))
-          (gogen/expr-stmt
-            (gogen/call (gogen/field-sel (gogen/ident "ns") "Def")
-              [(gogen/string-lit (ex-name ex))
-               (gogen/call (gogen/field-sel (gogen/ident "vm") "MustBox")
-                 [(gogen/ident (str "wrap" go-alias (ex-name ex)))])]))
-          (gogen/expr-stmt
-            (gogen/call (gogen/field-sel (gogen/ident "ns") "Def")
-              [(gogen/string-lit (ex-name ex))
-               (gogen/call (gogen/field-sel (gogen/ident "vm") "MustBox")
-                 [(gogen/field-sel (gogen/ident go-alias) (ex-name ex))])]))))
-    :type
-      (when (and (ex-struct? ex) (not (generic? ex)))
+    (when (not (generic? ex))
+      (if (and smart? (smartable? ex))
         (gogen/expr-stmt
-          (gogen/call
-            (gogen/index (gogen/field-sel (gogen/ident "vm") "RegisterStruct")
-                     (gogen/field-sel (gogen/ident go-alias) (ex-name ex)))
-            [(gogen/string-lit (str go-alias "/" (ex-name ex)))])))
-    (:const :var)
+          (gogen/call (gogen/field-sel (gogen/ident "ns") "Def")
+            [(gogen/string-lit (ex-name ex))
+             (gogen/call (gogen/field-sel (gogen/ident "vm") "MustBox")
+               [(gogen/ident (str "wrap" go-alias (ex-name ex)))])]))
+        (gogen/expr-stmt
+          (gogen/call (gogen/field-sel (gogen/ident "ns") "Def")
+            [(gogen/string-lit (ex-name ex))
+             (gogen/call (gogen/field-sel (gogen/ident "vm") "MustBox")
+               [(gogen/field-sel (gogen/ident go-alias) (ex-name ex))])]))))
+    :type
+    (when (and (ex-struct? ex) (not (generic? ex)) (not opaque-structs?))
       (gogen/expr-stmt
-        (gogen/call (gogen/field-sel (gogen/ident "ns") "Def")
-          [(gogen/string-lit (ex-name ex))
-           (gogen/call (gogen/field-sel (gogen/ident "vm") "MustBox")
-             [(gogen/field-sel (gogen/ident go-alias) (ex-name ex))])]))
+        (gogen/call
+          (gogen/index (gogen/field-sel (gogen/ident "vm") "RegisterStruct")
+            (gogen/field-sel (gogen/ident go-alias) (ex-name ex)))
+          [(gogen/string-lit (str go-alias "/" (ex-name ex)))])))
+    (:const :var)
+    (gogen/expr-stmt
+      (gogen/call (gogen/field-sel (gogen/ident "ns") "Def")
+        [(gogen/string-lit (ex-name ex))
+         (gogen/call (gogen/field-sel (gogen/ident "vm") "MustBox")
+           [(gogen/field-sel (gogen/ident go-alias) (ex-name ex))])]))
     nil))
 
-(defn build-install-fn [go-alias exports smart?]
+(defn install-fn-name [go-alias]
+  (str "install" (pascal-case go-alias) "NS"))
+
+(defn build-install-fn [go-alias exports smart? opaque-structs?]
   "Returns a gogen/func-decl AST node for the install function.
    The emitted function takes no arguments: it constructs a fresh
    *vm.Namespace named after the alias, defines every export on it,
    and registers it via rt.RegisterNS — matching the existing built-in
-   namespace install pattern in pkg/rt."
+   namespace install pattern in pkg/rt (async.go, bencode.go, ...)."
   (let [def-stmts (mapcat (fn [ex]
-                            (let [stmt (build-install-stmt go-alias ex smart?)]
+                            (let [stmt (build-install-stmt go-alias ex smart? opaque-structs?)]
                               (if stmt [stmt] [])))
                           exports)
         ns-init (gogen/assign ":="
@@ -218,12 +266,22 @@
         register (gogen/expr-stmt
                    (gogen/call (gogen/ident "RegisterNS")
                      [(gogen/ident "ns")]))]
-    (gogen/func-decl (str "Install" (pascal-case go-alias))
+    (gogen/func-decl (install-fn-name go-alias)
       []
       []
       (concat [ns-init] def-stmts [register]))))
 
-(defn build-file [pkg-name go-alias exports smart?]
+(defn build-init-fn [go-alias]
+  "func init() { RegisterInstaller(install<Alias>NS) } — defers namespace
+   construction to rt's installer machinery instead of running at import."
+  (gogen/func-decl "init"
+    []
+    []
+    [(gogen/expr-stmt
+       (gogen/call (gogen/ident "RegisterInstaller")
+         [(gogen/ident (install-fn-name go-alias))]))]))
+
+(defn build-file [pkg-name go-alias exports smart? opaque-structs?]
   "Returns a gogen/file AST node for the complete generated file."
   (let [wrapper-fns (if smart?
                       (filter identity
@@ -237,7 +295,7 @@
                                    (ex-variadic? ex))))
                           exports))
                       [])
-        install-fn (build-install-fn go-alias exports smart?)
+        install-fn (build-install-fn go-alias exports smart? opaque-structs?)
         has-smart? (not (empty? wrapper-fns))
         has-structs? (some (fn [ex] (and (= (ex-kind ex) :type) (ex-struct? ex) (not (generic? ex)))) exports)
         has-pkg-refs? (some (fn [ex]
@@ -253,11 +311,22 @@
                    (when has-pkg-refs? (gogen/import-spec pkg-name go-alias))])]
     (gogen/file "rt"
       imports
-      (concat wrapper-fns [install-fn]))))
+      (concat [(build-init-fn go-alias)] wrapper-fns [install-fn]))))
 
 ;; --- public driver -------------------------------------------------------
 
-(defn generate [pkg-name alias exports out-path smart?]
-  "Generate a Go interop file for the given package exports."
-  (let [go-alias (go-alias-from-pkg alias)]
-    (spit out-path (gogen/render (build-file pkg-name go-alias exports smart?)))))
+(defn generate [pkg-name alias exports out-path smart? opaque-structs?]
+  "Generate a Go interop file for the given package exports.
+   opaque-structs? skips vm.RegisterStruct emission so struct types stay
+   vm.Boxed and dispatch their methods reflectively instead of being
+   flattened to field-only Records."
+  (let [go-alias (go-alias-from-pkg alias)
+        ;; The header records the exact invocation (including flags), so
+        ;; regenerating from the header's own command round-trips.
+        header (str "// Code generated by `lginterop -packages " pkg-name
+                    (if smart? " -smart" "")
+                    (if opaque-structs? " -opaque-structs" "")
+                    "`. DO NOT EDIT.\n")]
+    (spit out-path
+          (str header
+               (gogen/render (build-file pkg-name go-alias exports smart? opaque-structs?))))))
