@@ -16,6 +16,7 @@ import (
 	"math/big"
 	"math/rand/v2"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,8 +87,9 @@ func valuePtr(v vm.Value) (uintptr, bool) {
 			return 0, false
 		}
 		return setPtr(x), true
-	case *vm.PersistentVector:
-		return uintptr(unsafe.Pointer(x)), true
+	case vm.PersistentVector:
+		key := x.IdentityKey()
+		return key, key != 0
 	case *vm.PersistentMap:
 		return uintptr(unsafe.Pointer(x)), true
 	case *vm.PersistentSet:
@@ -106,23 +108,59 @@ func valuePtr(v vm.Value) (uintptr, bool) {
 	return 0, false
 }
 
-// mapPtr / setPtr read the runtime hmap header pointer out of a Go map via
-// an unsafe interface-header read. The value is used purely as an identity
-// key for memoization and is never dereferenced.
+// mapPtr / setPtr return the opaque runtime identity of a Go map. The value is
+// used only for identity comparisons and memoization; it is never dereferenced.
 func mapPtr(m vm.Map) uintptr {
-	type ifaceHeader struct {
-		_   uintptr
-		ptr unsafe.Pointer
-	}
-	return uintptr((*ifaceHeader)(unsafe.Pointer(&m)).ptr)
+	return reflect.ValueOf(m).Pointer()
 }
 
 func setPtr(s vm.Set) uintptr {
-	type ifaceHeader struct {
-		_   uintptr
-		ptr unsafe.Pointer
+	return reflect.ValueOf(s).Pointer()
+}
+
+type arrayVectorIdentity struct {
+	data uintptr
+	len  int
+	cap  int
+}
+
+func arrayVectorIdentityOf(v vm.ArrayVector) arrayVectorIdentity {
+	return arrayVectorIdentity{
+		data: uintptr(unsafe.Pointer(unsafe.SliceData(v))),
+		len:  len(v),
+		cap:  cap(v),
 	}
-	return uintptr((*ifaceHeader)(unsafe.Pointer(&s)).ptr)
+}
+
+// identicalValue compares Go representations without falling back to deep
+// equality. Comparable values retain Go's == behavior; slice- and map-backed
+// runtime values use their complete representation identity.
+func identicalValue(a, b vm.Value) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if reflect.TypeOf(a) != reflect.TypeOf(b) {
+		return false
+	}
+
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if av.Comparable() && bv.Comparable() {
+		return a == b
+	}
+
+	switch left := a.(type) {
+	case vm.ArrayVector:
+		return arrayVectorIdentityOf(left) == arrayVectorIdentityOf(b.(vm.ArrayVector))
+	case vm.PersistentVector:
+		return left.SameIdentity(b.(vm.PersistentVector))
+	case vm.Map:
+		return mapPtr(left) == mapPtr(b.(vm.Map))
+	case vm.Set:
+		return setPtr(left) == setPtr(b.(vm.Set))
+	default:
+		return false
+	}
 }
 
 // identityEqShortCircuit decides equality without descending when the two
@@ -6666,7 +6704,7 @@ func installLangNS() {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		return vm.Boolean(vs[0] == vs[1]), nil
+		return vm.Boolean(identicalValue(vs[0], vs[1])), nil
 	})
 
 	// any? — returns true for everything (every value satisfies any?)

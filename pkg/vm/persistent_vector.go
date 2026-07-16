@@ -45,12 +45,39 @@ var PersistentVectorType *thePersistentVectorType = &thePersistentVectorType{}
 
 // PersistentVector is a persistent vector implementation using a bit-partitioned trie
 type PersistentVector struct {
-	count   int
-	shift   uint
-	root    *vnode
-	tail    []Value // Last node is stored separately for efficiency
-	tailOff int
-	meta    Value
+	count    int
+	shift    uint
+	root     *vnode
+	tail     []Value // Last node is stored separately for efficiency
+	tailOff  int
+	meta     Value
+	identity *persistentVectorIdentity
+}
+
+// persistentVectorIdentity is deliberately non-zero-sized so separately
+// allocated tokens cannot share an address. PersistentVector copies retain the
+// pointer; every operation that creates a logically new vector replaces it.
+type persistentVectorIdentity struct {
+	_ byte
+}
+
+func newPersistentVectorIdentity() *persistentVectorIdentity {
+	return &persistentVectorIdentity{}
+}
+
+// IdentityKey returns an opaque key for the vector's private identity token.
+// A zero-value PersistentVector has no token and returns zero.
+func (v PersistentVector) IdentityKey() uintptr {
+	if v.identity == nil {
+		return 0
+	}
+	return reflect.ValueOf(v.identity).Pointer()
+}
+
+// SameIdentity reports whether two PersistentVector values are copies of the
+// same logical vector. The token itself remains private to the vm package.
+func (v PersistentVector) SameIdentity(other PersistentVector) bool {
+	return v.identity != nil && v.identity == other.identity
 }
 
 // Hash implements Hashable. Computed from elements.
@@ -69,6 +96,7 @@ func (v PersistentVector) Meta() Value {
 // WithMeta implements IMeta.
 func (v PersistentVector) WithMeta(m Value) Value {
 	v.meta = m
+	v.identity = newPersistentVectorIdentity()
 	return v
 }
 
@@ -279,12 +307,13 @@ func (v PersistentVector) RawCount() int {
 // Empty implements Collection
 func (v PersistentVector) Empty() Collection {
 	return PersistentVector{
-		count:   0,
-		shift:   shift,
-		root:    newNode(),
-		tail:    make([]Value, 0, nodeCap),
-		tailOff: 0,
-		meta:    v.meta,
+		count:    0,
+		shift:    shift,
+		root:     newNode(),
+		tail:     make([]Value, 0, nodeCap),
+		tailOff:  0,
+		meta:     v.meta,
+		identity: newPersistentVectorIdentity(),
 	}
 }
 
@@ -293,12 +322,13 @@ func (v PersistentVector) Conj(val Value) Collection {
 	// Special case for empty vector
 	if v.count == 0 {
 		return PersistentVector{
-			count:   1,
-			shift:   shift,
-			root:    newNode(),
-			tail:    []Value{val},
-			tailOff: 0,
-			meta:    v.meta,
+			count:    1,
+			shift:    shift,
+			root:     newNode(),
+			tail:     []Value{val},
+			tailOff:  0,
+			meta:     v.meta,
+			identity: newPersistentVectorIdentity(),
 		}
 	}
 
@@ -308,12 +338,13 @@ func (v PersistentVector) Conj(val Value) Collection {
 		copy(newTail, v.tail)
 		newTail[len(v.tail)] = val
 		return PersistentVector{
-			count:   v.count + 1,
-			shift:   v.shift,
-			root:    v.root,
-			tail:    newTail,
-			tailOff: v.tailOff,
-			meta:    v.meta,
+			count:    v.count + 1,
+			shift:    v.shift,
+			root:     v.root,
+			tail:     newTail,
+			tailOff:  v.tailOff,
+			meta:     v.meta,
+			identity: newPersistentVectorIdentity(),
 		}
 	}
 
@@ -329,12 +360,13 @@ func (v PersistentVector) Conj(val Value) Collection {
 		newRoot.array = append(newRoot.array, newPath(v.shift, v.tail))
 		newShift += shift
 		return PersistentVector{
-			count:   v.count + 1,
-			shift:   newShift,
-			root:    newRoot,
-			tail:    newTail,
-			tailOff: v.count,
-			meta:    v.meta,
+			count:    v.count + 1,
+			shift:    newShift,
+			root:     newRoot,
+			tail:     newTail,
+			tailOff:  v.count,
+			meta:     v.meta,
+			identity: newPersistentVectorIdentity(),
 		}
 	}
 
@@ -342,12 +374,13 @@ func (v PersistentVector) Conj(val Value) Collection {
 	newRoot := pushTail(v.shift, v.root, v.tailOff, v.tail)
 
 	return PersistentVector{
-		count:   v.count + 1,
-		shift:   newShift,
-		root:    newRoot,
-		tail:    newTail,
-		tailOff: v.count,
-		meta:    v.meta,
+		count:    v.count + 1,
+		shift:    newShift,
+		root:     newRoot,
+		tail:     newTail,
+		tailOff:  v.count,
+		meta:     v.meta,
+		identity: newPersistentVectorIdentity(),
 	}
 }
 
@@ -412,12 +445,13 @@ func (v PersistentVector) Pop() PersistentVector {
 		newTail := make([]Value, len(v.tail)-1)
 		copy(newTail, v.tail[:len(v.tail)-1])
 		return PersistentVector{
-			count:   v.count - 1,
-			shift:   v.shift,
-			root:    v.root,
-			tail:    newTail,
-			tailOff: v.tailOff,
-			meta:    v.meta,
+			count:    v.count - 1,
+			shift:    v.shift,
+			root:     v.root,
+			tail:     newTail,
+			tailOff:  v.tailOff,
+			meta:     v.meta,
+			identity: newPersistentVectorIdentity(),
 		}
 	}
 	// The tail holds 0 or 1 elements, so the new tail is pulled from the
@@ -442,12 +476,13 @@ func (v PersistentVector) Pop() PersistentVector {
 		newShift -= shift
 	}
 	return PersistentVector{
-		count:   v.count - 1,
-		shift:   newShift,
-		root:    newRoot,
-		tail:    newTail,
-		tailOff: (v.count - 1) - len(newTail),
-		meta:    v.meta,
+		count:    v.count - 1,
+		shift:    newShift,
+		root:     newRoot,
+		tail:     newTail,
+		tailOff:  (v.count - 1) - len(newTail),
+		meta:     v.meta,
+		identity: newPersistentVectorIdentity(),
 	}
 }
 
@@ -570,22 +605,24 @@ func (v PersistentVector) Assoc(key Value, val Value) Associative {
 		copy(newTail, v.tail)
 		newTail[int(idx)-v.tailOff] = val
 		return PersistentVector{
-			count:   v.count,
-			shift:   v.shift,
-			root:    v.root,
-			tail:    newTail,
-			tailOff: v.tailOff,
-			meta:    v.meta,
+			count:    v.count,
+			shift:    v.shift,
+			root:     v.root,
+			tail:     newTail,
+			tailOff:  v.tailOff,
+			meta:     v.meta,
+			identity: newPersistentVectorIdentity(),
 		}
 	}
 
 	return PersistentVector{
-		count:   v.count,
-		shift:   v.shift,
-		root:    v.doAssoc(v.root, v.shift, int(idx), val),
-		tail:    v.tail,
-		tailOff: v.tailOff,
-		meta:    v.meta,
+		count:    v.count,
+		shift:    v.shift,
+		root:     v.doAssoc(v.root, v.shift, int(idx), val),
+		tail:     v.tail,
+		tailOff:  v.tailOff,
+		meta:     v.meta,
+		identity: newPersistentVectorIdentity(),
 	}
 }
 
@@ -631,11 +668,12 @@ func (v PersistentVector) Invoke(args []Value) (Value, error) {
 func NewPersistentVector(values []Value) Value {
 	if len(values) == 0 {
 		return PersistentVector{
-			count:   0,
-			shift:   shift,
-			root:    newNode(),
-			tail:    make([]Value, 0, nodeCap),
-			tailOff: 0,
+			count:    0,
+			shift:    shift,
+			root:     newNode(),
+			tail:     make([]Value, 0, nodeCap),
+			tailOff:  0,
+			identity: newPersistentVectorIdentity(),
 		}
 	}
 
@@ -650,11 +688,12 @@ func NewPersistentVector(values []Value) Value {
 	// If we only have tail elements
 	if treeSize == 0 {
 		return PersistentVector{
-			count:   len(values),
-			shift:   shift,
-			root:    newNode(),
-			tail:    tail,
-			tailOff: 0,
+			count:    len(values),
+			shift:    shift,
+			root:     newNode(),
+			tail:     tail,
+			tailOff:  0,
+			identity: newPersistentVectorIdentity(),
 		}
 	}
 
@@ -696,11 +735,12 @@ func NewPersistentVector(values []Value) Value {
 	}
 
 	return PersistentVector{
-		count:   len(values),
-		shift:   treeShift,
-		root:    root,
-		tail:    tail,
-		tailOff: treeSize,
+		count:    len(values),
+		shift:    treeShift,
+		root:     root,
+		tail:     tail,
+		tailOff:  treeSize,
+		identity: newPersistentVectorIdentity(),
 	}
 }
 
