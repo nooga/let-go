@@ -1,3 +1,5 @@
+//go:build !js
+
 /*
  * Copyright (c) 2026 let-go contributors
  * SPDX-License-Identifier: MIT
@@ -11,9 +13,11 @@
  *   (net/read! conn max-bytes)    → byte-array, nil on clean EOF.
  *   (net/close! conn)             → nil.
  *
- * Portable (no build tag) — plain TCP. The Boxed conn also carries a
- * lazily-created bencode.Decoder so the bencode namespace (net.go's sibling
- * bencode.go) can frame messages over the same buffered stream.
+ * Native only — js/wasm gets a stub (net_wasm.go), because Go's GOOS=js net
+ * stack is an in-process fake that would connect to nothing. Plain TCP here.
+ * The Boxed conn also carries a lazily-created bencode.Decoder so the bencode
+ * namespace (net.go's sibling bencode.go) can frame messages over the same
+ * buffered stream.
  */
 
 package rt

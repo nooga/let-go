@@ -28,10 +28,29 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"syscall"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+// deprecatedAlias wraps fn so the first call in a process prints a one-time
+// notice steering callers to newName, then delegates. Used to keep the
+// pre-bang unix verbs (send/recv/close) working while the bang names
+// (write!/read!/close!) become canonical — matching the net namespace and the
+// Clojure side-effect convention (nooga/let-go#526). sync.Once keeps the
+// warn-once flag race-free under the -race CI.
+func deprecatedAlias(oldName, newName string, fn vm.Value) vm.Value {
+	inner := fn.(vm.Fn)
+	var once sync.Once
+	wrapped, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		once.Do(func() {
+			_ = WriteToErr(nil, fmt.Sprintf("unix/%s is deprecated; use unix/%s\n", oldName, newName))
+		})
+		return inner.Invoke(vs)
+	})
+	return wrapped
+}
 
 func init() { RegisterInstaller(installUnixNS) }
 
@@ -246,9 +265,14 @@ func installUnixNS() {
 	ns.Def("listen", listenFn)
 	ns.Def("accept", acceptFn)
 	ns.Def("connect", connectFn)
-	ns.Def("send", sendFn)
-	ns.Def("recv", recvFn)
-	ns.Def("close", closeFn)
+	// Canonical bang names for the side-effecting ops (#526); send/recv/close
+	// stay as deprecated aliases for one or more releases.
+	ns.Def("write!", sendFn)
+	ns.Def("read!", recvFn)
+	ns.Def("close!", closeFn)
+	ns.Def("send", deprecatedAlias("send", "write!", sendFn))
+	ns.Def("recv", deprecatedAlias("recv", "read!", recvFn))
+	ns.Def("close", deprecatedAlias("close", "close!", closeFn))
 	ns.Def("fd", fdFn)
 	RegisterNS(ns)
 }

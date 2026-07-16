@@ -24,7 +24,12 @@ func installUnixNS() {
 	}
 
 	ns := vm.NewNamespace("unix")
-	for _, name := range []string{"listen", "accept", "connect", "send", "recv", "close", "fd"} {
+	for _, name := range []string{
+		"listen", "accept", "connect",
+		"write!", "read!", "close!", // canonical bang names (#526)
+		"send", "recv", "close", // deprecated aliases, kept for parity with Linux
+		"fd",
+	} {
 		ns.Def(name, unsupported(name))
 	}
 	RegisterNS(ns)

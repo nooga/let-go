@@ -1,10 +1,14 @@
+//go:build !js
+
 /*
  * Copyright (c) 2026 let-go contributors
  * SPDX-License-Identifier: MIT
  */
 
 /*
- * bencode namespace — message framing over a net conn.
+ * bencode namespace — message framing over a net conn. Native only; js/wasm
+ * gets a stub (bencode_wasm.go) since it frames over a net conn, which the
+ * browser doesn't have.
  *
  *   (bencode/write! conn value)       → nil. Encodes one bencode value.
  *   (bencode/read! conn)              → decoded value, nil on clean EOF. Blocks.
