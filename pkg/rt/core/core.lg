@@ -1418,7 +1418,7 @@
   ([n f] (take n (repeatedly f))))
 
 (defn run! [proc coll]
-  (reduce #(do (proc %2) nil) nil coll)
+  (reduce #(proc %2) nil coll)
   nil)
 
 (defn random-sample

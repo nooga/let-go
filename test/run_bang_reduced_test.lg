@@ -1,0 +1,17 @@
+(ns test.run-bang-reduced-test
+  (:require [test :refer :all]))
+
+(deftest run-bang-stops-when-procedure-returns-reduced
+  (let [visits (atom [])
+        result (run! (fn [x]
+                       (swap! visits conj x)
+                       (reduced :done))
+                     [:first :second])]
+    (is (nil? result))
+    (is (= [:first] @visits))))
+
+(deftest run-bang-traverses-ordinary-input
+  (let [visits (atom [])
+        result (run! #(swap! visits conj %) [1 2 3])]
+    (is (nil? result))
+    (is (= [1 2 3] @visits))))
