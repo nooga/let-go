@@ -28,69 +28,168 @@ func TestMain(m *testing.M) {
 		panic("build lg: " + err.Error() + "\n" + string(out))
 	}
 	repoRoot, _ = filepath.Abs("..")
-	patched := applyJankMapOrderPatch()
+	appliedPatches := applyJankPatches()
 	code := m.Run()
-	if patched {
-		// Leave the submodule worktree as we found it — the patch is a
-		// test-time overlay, not a checkout the run should persist.
-		revertJankMapOrderPatch()
-	}
+	// Leave the submodule worktree as we found it — these are test-time
+	// overlays, not checkout changes the run should persist.
+	revertJankPatches(appliedPatches)
 	os.RemoveAll(tmp)
 	os.Exit(code)
 }
 
-// applyJankMapOrderPatch overlays :lg reader-conditional branches onto the
-// vendored jank suite (test/clojure-test-suite) so let-go's legitimately
-// unordered maps don't fail the cons/cycle/mapcat fixtures, which baked in the
-// JVM's accidental HashMap iteration order via their :default branch. The
-// pinned submodule (jank-lang@41290a61) predates these branches; they were
-// since accepted upstream (clojure-test-suite#927), but bumping the pin pulls
-// ~140 files of unrelated suite drift, so until a deliberate suite upgrade we
-// apply the small delta (test/patches/lg-map-order.patch) at test time and
-// revert it in TestMain so the worktree is left clean.
-//
-// Returns true only when THIS call applied the patch (so TestMain knows to
-// revert it). Idempotent and best-effort: returns false if the submodule is
-// absent, the patch is already applied, or upstream has since moved the
-// fixtures.
-func applyJankMapOrderPatch() bool {
+func TestPatchOverlayApplyIdempotentAndRevert(t *testing.T) {
+	repo := t.TempDir()
+	fixture := filepath.Join(repo, "fixture.txt")
+	patch := filepath.Join(t.TempDir(), "fixture.patch")
+
+	if err := os.WriteFile(fixture, []byte("before\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	patchBody := "diff --git a/fixture.txt b/fixture.txt\n" +
+		"--- a/fixture.txt\n" +
+		"+++ b/fixture.txt\n" +
+		"@@ -1 +1 @@\n" +
+		"-before\n" +
+		"+after\n"
+	if err := os.WriteFile(patch, []byte(patchBody), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if !applyPatchOverlay(repo, patch) {
+		t.Fatal("first application returned false")
+	}
+	if applyPatchOverlay(repo, patch) {
+		t.Fatal("second application returned true")
+	}
+	got, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "after\n" {
+		t.Fatalf("after apply: got %q, want %q", got, "after\\n")
+	}
+
+	revertPatchOverlay(repo, patch)
+	got, err = os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "before\n" {
+		t.Fatalf("after revert: got %q, want %q", got, "before\\n")
+	}
+}
+
+func TestJankUnicodeScalarPatch(t *testing.T) {
+	repo := t.TempDir()
+	fixture := filepath.Join(repo, "test", "clojure", "core_test", "char.cljc")
+	if err := os.MkdirAll(filepath.Dir(fixture), 0755); err != nil {
+		t.Fatal(err)
+	}
+	base := `(ns clojure.core-test.char
+  (:require [clojure.test :as t :refer [are deftest is testing]]
+            [clojure.core-test.portability #?(:cljs :refer-macros :default :refer) [when-var-exists] :as p]))
+
+(when-var-exists char
+ (deftest test-char
+   (are [expected x] (= expected (char x))
+     ;; Assumes ASCII / Unicode
+     \space 32
+     \@     64
+     \A     65
+     \A     \A)
+   (testing "unicode"
+     (testing "2 byte characters are valid"
+       (is (= \¡ (char 161))))
+     (testing "3 byte characters are valid"
+       (is (= \ষ (char 2487))))
+     (testing "4+ byte characters throw"
+       (is #?(:jank    (= (first "𐅦") (char 65895))
+              ;; this seems to be an off by one error
+              :lpy     (= (first "𐅧") (char 65895))
+              :cljs    (= \ŧ (char 65895))
+              :default (p/thrown? (char 65895))))))
+
+   #?(:cljs nil :default (is (p/thrown? (char -1))))
+   (is (p/thrown? (char nil)))))
+`
+	if err := os.WriteFile(fixture, []byte(base), 0644); err != nil {
+		t.Fatal(err)
+	}
+	patch, err := filepath.Abs(filepath.Join("patches", "lg-char-unicode-scalar.patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applyPatchOverlay(repo, patch) {
+		t.Fatal("Unicode scalar patch did not apply to the pinned fixture")
+	}
+	got, err := os.ReadFile(fixture)
+	if os.IsNotExist(err) {
+		t.Skip("clojure-test-suite submodule is not initialized")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got, []byte(`:lg      (= (first "𐅧") (char 65895))`)) {
+		t.Fatal("patched fixture lacks the let-go Unicode scalar expectation")
+	}
+}
+
+// applyJankPatches overlays accepted or pending :lg fixture corrections onto
+// the pinned jank suite without pulling unrelated upstream suite drift.
+func applyJankPatches() []string {
 	const sub = "clojure-test-suite"
 	if _, err := os.Stat(filepath.Join(sub, "test", "clojure", "core_test", "cons.cljc")); err != nil {
-		return false // submodule not initialized; TestClojureTestSuite skips itself
+		return nil // submodule not initialized; TestClojureTestSuite skips itself
 	}
-	patch, err := filepath.Abs(filepath.Join("patches", "lg-map-order.patch"))
-	if err != nil {
-		return false
+	patchNames := []string{
+		"lg-char-unicode-scalar.patch",
 	}
+	applied := make([]string, 0, len(patchNames))
+	for _, name := range patchNames {
+		patch, err := filepath.Abs(filepath.Join("patches", name))
+		if err != nil {
+			continue
+		}
+		if applyPatchOverlay(sub, patch) {
+			applied = append(applied, patch)
+		}
+	}
+	return applied
+}
+
+// applyPatchOverlay returns true only when this call applied patch. It is
+// idempotent and best-effort so a moved upstream fixture cannot break all tests.
+func applyPatchOverlay(repo, patch string) bool {
 	// Already applied? A reverse-check succeeds only when the :lg branches
 	// are present, so treat that as "nothing to do" — and don't revert state
 	// we didn't create.
-	if exec.Command("git", "-C", sub, "apply", "--reverse", "--check", patch).Run() == nil {
+	if exec.Command("git", "-C", repo, "apply", "--reverse", "--check", patch).Run() == nil {
 		return false
 	}
 	// Applies cleanly against the current (base) fixtures?
-	if err := exec.Command("git", "-C", sub, "apply", "--check", patch).Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "note: jank map-order patch does not apply cleanly (upstream moved?); running unpatched")
+	if err := exec.Command("git", "-C", repo, "apply", "--check", patch).Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "note: jank patch %s does not apply cleanly (upstream moved?); running unpatched\n", filepath.Base(patch))
 		return false
 	}
-	if out, err := exec.Command("git", "-C", sub, "apply", patch).CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "note: failed to apply jank map-order patch: %v\n%s", err, out)
+	if out, err := exec.Command("git", "-C", repo, "apply", patch).CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "note: failed to apply jank patch %s: %v\n%s", filepath.Base(patch), err, out)
 		return false
 	}
 	return true
 }
 
-// revertJankMapOrderPatch undoes applyJankMapOrderPatch's overlay so a test run
-// never leaves the vendored submodule with a dirty worktree. Best-effort: a
-// failure here is a note, not a test failure.
-func revertJankMapOrderPatch() {
+func revertJankPatches(applied []string) {
 	const sub = "clojure-test-suite"
-	patch, err := filepath.Abs(filepath.Join("patches", "lg-map-order.patch"))
-	if err != nil {
-		return
+	for i := len(applied) - 1; i >= 0; i-- {
+		revertPatchOverlay(sub, applied[i])
 	}
-	if out, err := exec.Command("git", "-C", sub, "apply", "--reverse", patch).CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "note: failed to revert jank map-order patch: %v\n%s", err, out)
+}
+
+// revertPatchOverlay is best-effort: cleanup failures are reported without
+// masking the test result.
+func revertPatchOverlay(repo, patch string) {
+	if out, err := exec.Command("git", "-C", repo, "apply", "--reverse", patch).CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "note: failed to revert jank patch %s: %v\n%s", filepath.Base(patch), err, out)
 	}
 }
 
