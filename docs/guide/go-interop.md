@@ -72,9 +72,9 @@ needs `(require 'hash)` first:
 
 Mechanically, `cmd/lginterop` is a two-stage pipeline: the Go binary scans the
 target package and extracts its exports, then drives `scripts/lginterop.lg`
-(via the `lg` binary) to render the Go source. You don't need to know that to
-use it, but it explains why the tool wants to run from the repo root with a
-built `lg`.
+(via the `lg` binary, which the tool builds itself) to render the Go source.
+You don't need to know that to use it, but it explains why the tool wants to
+run from the repo root.
 
 Related docs: [Embedding let-go in Go](embedding-in-go.md) covers the host
 side (running let-go inside your own Go program), which is the other way to
@@ -221,8 +221,12 @@ A contributed `database/sql` wrapper would be three small pieces:
 
 ## Reference: `cmd/lginterop`
 
-Run from the repo root with a built `lg` binary on hand (`go build -o lg .`;
-see [Usage](usage.md) for building and running `lg` generally). The tool has
+Run from the repo root. The tool (re)builds a fresh `./lg` itself on every
+run, so no pre-built binary is needed (see [Usage](usage.md) for building and
+running `lg` generally). Aliases must be unique across a run — two packages
+resolving to the same alias would write the same `interop_<alias>.go`, so the
+tool refuses up front. Set `LGINTEROP_KEEP_SCRIPT=1` to keep the intermediate
+`.lg` driver script for inspection instead of cleaning it up. The tool has
 two modes:
 
 **External-package mode** — scan a Go package and generate an interop
