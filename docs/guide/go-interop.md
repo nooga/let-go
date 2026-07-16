@@ -227,8 +227,7 @@ go run ./cmd/lginterop -packages <import-path>[,<import-path>...] -out pkg/rt
 | `-skeleton` | also emit a `<alias>_skeleton.lg` of `defn-` stubs to hand-customize into a veneer |
 
 **Primitives mode** — scan `//lg:`-annotated Go sources and generate the
-internal-primitive registrar (see `pkg/rt/native_prims.go` for the directive
-format):
+internal-primitive registrar:
 
 ```
 go run ./cmd/lginterop -primitives <dir> -go-pkg <import-path>
@@ -239,3 +238,56 @@ go run ./cmd/lginterop -primitives <dir> -go-pkg <import-path>
 | `-primitives` | directory containing `//lg:native`-annotated Go sources |
 | `-primitives-out` | output file (default `pkg/rt/zz_primitives_generated.go`) |
 | `-go-pkg` | Go import path of the scanned sources |
+
+### How primitives mode works, and why it's a separate mode
+
+Primitives mode points the other way: external-package mode wraps *someone
+else's* Go package into a new namespace for let-go code to call; primitives
+mode implements *let-go's own standard library* in Go — the native backing
+for names like `clojure.core/name` or `clojure.string/upper-case`. A
+primitive is an ordinary named Go function with a **typed signature**,
+annotated with comment directives that carry everything registration needs:
+
+```go
+// Mirrors clojure.core/name — `(name x)`.
+//
+//lg:native
+//lg:name name
+func Name(v vm.Value) (string, error) { ... }
+```
+
+| Directive | Meaning |
+|---|---|
+| `//lg:native` | marks the function as a primitive (required) |
+| `//lg:name <sym>` | the let-go symbol (default: kebab-cased Go name) |
+| `//lg:ns <ns>` | target namespace (default `clojure.core`) |
+| `//lg:private` | register private — dropped from `ns-publics` |
+
+The scanner reads the signature itself: a leading `*vm.ExecContext` parameter
+threads the caller's context, a trailing `error` result becomes a let-go
+throw, a variadic final parameter becomes rest-args, and several functions
+sharing one `//lg:name` become a multi-arity definition.
+
+The generated registrar differs from external-mode output in kind, which is
+why the modes are separate rather than one flag:
+
+- **Typed adapters, no reflection.** External mode leans on `vm.MustBox`
+  (reflective call and boxing at every invocation — fine for wrapping an
+  arbitrary package's surface). Primitives are the hot path of the language,
+  so the generator emits a hand-shaped adapter per function with
+  compile-time unbox/box conversions.
+- **Direct-call metadata.** Each (namespace, Go package) group registers a
+  `NativeModule`, which the AOT lowering uses to compile call sites into
+  direct Go calls — guarded by `rt.NativePrimsIntact()` so `with-redefs` /
+  `alter-var-root` still win (lowered code falls back to var dispatch when a
+  guarded root has been overridden).
+- **Bootstrap lifecycle.** Core namespaces load `.lg` bootstrap definitions
+  on demand, which would clobber the native adapters; the registrar records
+  every generated binding and re-applies it after a namespace load completes
+  (`pkg/rt/native_prims_lifecycle.go`), while explicit user redefinition —
+  which happens after loading — is left alone.
+
+None of that applies to an external wrapper like `xxh3`: nothing in
+bootstrap competes with its names, and reflective dispatch is a fine cost at
+that boundary. See `pkg/rt/native_prims.go` for live examples of the
+directive format.
