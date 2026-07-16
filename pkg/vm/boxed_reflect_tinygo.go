@@ -16,6 +16,7 @@
 package vm
 
 import (
+	"fmt"
 	"reflect"
 	"time"
 )
@@ -39,4 +40,19 @@ func reflectMethods(t reflect.Type) map[Symbol]*NativeFn {
 		return map[Symbol]*NativeFn{Symbol("Sub"): sub.(*NativeFn)}
 	}
 	return nil
+}
+
+// methodLookupError explains a failed InvokeMethod. Under TinyGo we cannot
+// enumerate a type's methods (reflect.Type.Method is unimplemented), so a type
+// that actually has methods reaches here with an empty table. NumMethod is
+// implemented, so we can still tell "has methods we can't reflect" apart from
+// "genuinely no methods" and report the former honestly instead of claiming the
+// value has no methods at all.
+func methodLookupError(bt *aBoxedType, name Symbol) error {
+	if bt.typ.NumMethod() > 0 {
+		return fmt.Errorf("method %s on %v is unavailable under TinyGo: reflect.Type.Method "+
+			"is unimplemented, so boxed Go methods must be hand-shimmed in "+
+			"boxed_reflect_tinygo.go", name, bt)
+	}
+	return fmt.Errorf("%v doesn't have any methods", bt)
 }

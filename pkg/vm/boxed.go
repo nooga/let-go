@@ -67,14 +67,16 @@ func (n *Boxed) Hash() uint32 {
 }
 
 func (n *Boxed) InvokeMethod(methodName Symbol, args []Value) (Value, error) {
-	if n.typ.methods == nil {
-		return NIL, fmt.Errorf("%v doesn't have any methods", n.typ)
+	if n.typ.methods != nil {
+		if method, ok := n.typ.methods[methodName]; ok {
+			return method.Invoke(append([]Value{n}, args...))
+		}
 	}
-	method, ok := n.typ.methods[methodName]
-	if !ok {
-		return NIL, fmt.Errorf("method %s not found in %v", methodName, n.typ)
-	}
-	return method.Invoke(append([]Value{n}, args...))
+	// methodLookupError is build-tagged: the !tinygo path can trust that a
+	// missing method means the type genuinely lacks it; the tinygo path can't,
+	// because reflect.Type.Method is unimplemented there, so it says so instead
+	// of claiming the type has no methods.
+	return NIL, methodLookupError(n.typ, methodName)
 }
 
 func (n *Boxed) ValueAt(key Value) Value {

@@ -29,3 +29,13 @@ func reflectMethods(t reflect.Type) map[Symbol]*NativeFn {
 	}
 	return out
 }
+
+// methodLookupError explains a failed InvokeMethod. On stock Go, reflect sees
+// the full method set, so a type with no methods truly has none and a missing
+// name is a genuine typo.
+func methodLookupError(bt *aBoxedType, name Symbol) error {
+	if bt.typ.NumMethod() == 0 {
+		return fmt.Errorf("%v doesn't have any methods", bt)
+	}
+	return fmt.Errorf("method %s not found in %v", name, bt)
+}
