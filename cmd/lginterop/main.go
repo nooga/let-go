@@ -92,6 +92,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Output filenames derive from the alias; two entries sharing one would
+	// silently clobber each other's interop_<alias>.go. Refuse up front.
+	seenAlias := map[string]string{}
+	for _, ent := range entries {
+		alias := ent.alias
+		if alias == "" {
+			alias = defaultAlias(ent.pkg)
+		}
+		if prev, dup := seenAlias[alias]; dup {
+			fmt.Fprintf(os.Stderr, "lginterop: alias %q used by both %s and %s — outputs would collide; set a distinct alias\n", alias, prev, ent.pkg)
+			os.Exit(1)
+		}
+		seenAlias[alias] = ent.pkg
+	}
+
 	okCount := 0
 	for _, ent := range entries {
 		if err := generatePackage(repoRoot, lgBin, ent, *out, *skeletonFlag); err != nil {
@@ -210,14 +225,28 @@ func findRepoRoot() (string, error) {
 }
 
 func ensureLgBinary(repoRoot string) (string, error) {
+	// Always build (incremental, so cheap when nothing changed): a stat
+	// fast-path silently reuses a STALE ./lg, which regenerates interop
+	// files with old emitter behavior — the drift class the round-trip
+	// golden test exists to catch. Building into a unique temp name and
+	// renaming keeps concurrent invocations safe (parallel test packages
+	// each rename a complete binary; last rename wins) without locking.
 	lgPath := filepath.Join(repoRoot, "lg")
-	if _, err := os.Stat(lgPath); err == nil {
-		return lgPath, nil
+	tmp, err := os.CreateTemp(repoRoot, "lg-build-*")
+	if err != nil {
+		return "", fmt.Errorf("build lg binary: %w", err)
 	}
-	cmd := exec.Command("go", "build", "-o", "lg", ".")
+	tmpPath := tmp.Name()
+	tmp.Close()
+	cmd := exec.Command("go", "build", "-o", tmpPath, ".")
 	cmd.Dir = repoRoot
 	if output, err := cmd.CombinedOutput(); err != nil {
+		os.Remove(tmpPath)
 		return "", fmt.Errorf("build lg binary: %w\n%s", err, output)
+	}
+	if err := os.Rename(tmpPath, lgPath); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("build lg binary: %w", err)
 	}
 	return lgPath, nil
 }
@@ -390,8 +419,11 @@ func generatePackage(repoRoot, lgBin string, ent interopEntry, outDir string, sk
 	if err != nil {
 		return fmt.Errorf("write script: %w", err)
 	}
-	// DEBUG: keep temp script for inspection
-	// defer os.Remove(scriptPath)
+	if os.Getenv("LGINTEROP_KEEP_SCRIPT") != "" {
+		fmt.Printf("lginterop: keeping temp script %s\n", scriptPath)
+	} else {
+		defer os.Remove(scriptPath)
+	}
 
 	cmd := exec.Command(lgBin, "-source-paths", filepath.Join(repoRoot, "scripts"), scriptPath)
 	cmd.Dir = repoRoot
