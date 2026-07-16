@@ -91,8 +91,8 @@ jobs:
       # ~60-120s on CI, ~200s on a contended local machine. It runs here under a
       # generous ceiling instead of inflating every package's budget.
       - name: Expensive lowering e2e (determinism, deftype skeleton)
-        env:
-          LETGO_RUN_LOWERING_DETERMINISM: "1"
+        # No -short here so the testing.Short()-gated heavyweight e2e tests run
+        # full; the fast `make test` loop passes -short to skip them.
         run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering'
 
   # Cross-build guard for the wasip1 (WASI) target. The REPL and interactive

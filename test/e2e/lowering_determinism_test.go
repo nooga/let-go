@@ -13,68 +13,77 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"sync"
+	"strings"
 	"testing"
 )
 
-const runLoweringDeterminismEnv = "LETGO_RUN_LOWERING_DETERMINISM"
-
-// TestLoweringDeterminism verifies that the gogen_ir lowering process is
-// deterministic: two runs of lgbgen produce identical byte-for-byte output.
+// TestLoweringDeterminism verifies that cold and hot lowering are byte-identical
+// and that typeinfer never bails on core.
 //
-// This is a property test that commits to the determinism invariant. The
-// lowering encodes inferred types and generated code into Go source files,
-// so any non-determinism in token positions, type inference, or code generation
-// would produce different bytes across runs. This test guards against regressions.
+// This test compares lgbgen built with -tags bootstrap (cold, interpreted IR)
+// against lgbgen built with -tags "bootstrap gogen_ir" (hot, native-optimized IR).
+// The lowering encodes inferred types and generated code into Go source files,
+// and for self-hosting to hold, both backends must produce identical output.
 //
-// Skipped under testing.Short() and unless LETGO_RUN_LOWERING_DETERMINISM=1,
-// since the current harness is expensive and the exact cross-mode contract is
-// still being reconsidered. CI opts in from the dedicated slow e2e lane.
+// The test also asserts that typeinfer never hit its work-unit guard
+// (*typeinfer-max-drains*) during either pass. A bail would mean partial types
+// (degraded, though still deterministic) lowering — the cap exists only as a
+// backstop for pathological inputs, never for real core. The formerly
+// standalone never-bails-on-core assertion is folded here since both passes
+// already lower the full stdlib.
+//
+// This is the validation gate that Tasks 1 (position densify) and 2 (work-unit
+// typeinfer guard) make byte-identical possible. If it fails, residual
+// nondeterminism remains and must be fixed before proceeding.
+//
+// Skipped under testing.Short(); runs by default otherwise.
 func TestLoweringDeterminism(t *testing.T) {
 	if testing.Short() {
-		t.Skip("lowering determinism harness runs lgbgen twice; run via `make test` or `go test ./test/e2e/`")
-	}
-	if os.Getenv(runLoweringDeterminismEnv) != "1" {
-		t.Skipf("set %s=1 to run this slow lowering harness", runLoweringDeterminismEnv)
+		t.Skip("lowering determinism harness runs lgbgen twice; run via `go test ./test/e2e/`")
 	}
 
 	root := repoRoot(t)
 
-	// Build lgbgen once and invoke the binary twice. `go run` would recompile
-	// the tool on every call, and that compile dominates the wall clock for a
-	// two-run test; building once keeps the harness inside the package test
-	// timeout.
-	bin := buildLgbgen(t, root)
+	cold := buildLgbgenTags(t, root, "bootstrap")
 
-	// Each run is fully output-isolated (its own --target tree and --code-dir
-	// wireup under a private temp dir), so the two share no state and run
-	// CONCURRENTLY — roughly halving wall clock vs sequential. Errors are
-	// collected and reported from the test goroutine (t.Fatalf is unsafe from
-	// a spawned goroutine).
+	// Materialize the gogen_ir wireup + native lowered tree in the checkout
+	// before building hot (same artifacts `make lowered` produces; they are
+	// gitignored and regenerated on demand). In a clean checkout they don't
+	// exist, `-tags gogen_ir` selects no additional files, and "hot" compiles
+	// identically to "cold" — the gate would compare cold against itself.
+	materializeNativeLowering(t, root, cold)
+
+	hot := buildLgbgenTags(t, root, "bootstrap gogen_ir")
+	assertNativeLoweringLinked(t, root)
+
 	base := t.TempDir()
-	dirs := make([]string, 2)
-	errs := make([]error, 2)
-	var wg sync.WaitGroup
-	for i, label := range []string{"run1", "run2"} {
-		wg.Add(1)
-		go func(i int, label string) {
-			defer wg.Done()
-			dirs[i], errs[i] = generateLoweredTree(root, bin, filepath.Join(base, label))
-		}(i, label)
+	// The work-unit typeinfer guard (*typeinfer-max-drains*) is a defensive
+	// backstop that must NEVER fire on real core — a bail would silently degrade
+	// inferred types. Both passes run the full pipeline over the whole stdlib, so
+	// asserting the bail line is absent here folds the former standalone
+	// never-bails-on-core test onto lowerings the gate already performs.
+	const bailMsg = "typeinfer: hit *typeinfer-max-drains*"
+
+	coldDir, coldOut, err := generateLoweredTree(root, cold, filepath.Join(base, "cold"))
+	if err != nil {
+		t.Fatalf("cold lgbgen: %v", err)
 	}
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("lgbgen run %d: %v", i+1, err)
-		}
+	if strings.Contains(coldOut, bailMsg) {
+		t.Fatalf("typeinfer bailed during COLD lowering — *typeinfer-max-drains* cap hit on real core (should never happen). Raise the cap or investigate. saw: %q", bailMsg)
+	}
+	hotDir, hotOut, err := generateLoweredTree(root, hot, filepath.Join(base, "hot"))
+	if err != nil {
+		t.Fatalf("hot lgbgen: %v", err)
+	}
+	if strings.Contains(hotOut, bailMsg) {
+		t.Fatalf("typeinfer bailed during HOT lowering — *typeinfer-max-drains* cap hit on real core. saw: %q", bailMsg)
 	}
 
-	// Compare all generated files recursively.
-	diffs := compareDirectories(t, dirs[0], dirs[1])
+	diffs := compareDirectories(t, coldDir, hotDir)
 	if len(diffs) > 0 {
-		t.Errorf("Lowering is non-deterministic: %d files differ between runs", len(diffs))
-		for _, diff := range diffs[:min(len(diffs), 5)] {
-			t.Logf("  DIFF: %s", diff)
+		t.Errorf("cold vs hot lowering not byte-identical: %d files differ", len(diffs))
+		for _, d := range diffs[:min(len(diffs), 5)] {
+			t.Logf("  DIFF: %s", d)
 		}
 		if len(diffs) > 5 {
 			t.Logf("  ... and %d more", len(diffs)-5)
@@ -83,24 +92,63 @@ func TestLoweringDeterminism(t *testing.T) {
 	}
 }
 
-// buildLgbgen compiles the bootstrap lgbgen tool once into a temp path so the
-// determinism harness can invoke the binary twice without paying the Go
-// compile on each run.
-func buildLgbgen(t *testing.T, repoRoot string) string {
+// buildLgbgenTags compiles an lgbgen binary with the specified tags into a
+// temp path. Tags are space-separated (e.g., "bootstrap" or "bootstrap gogen_ir").
+func buildLgbgenTags(t *testing.T, repoRoot, tags string) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "lgbgen")
-
-	cmd := exec.Command("go", "build", "-tags", "bootstrap", "-o", bin, "./cmd/lgbgen")
+	cmd := exec.Command("go", "build", "-tags", tags, "-o", bin, "./cmd/lgbgen")
 	cmd.Dir = repoRoot
-
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("build lgbgen: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("build lgbgen (-tags %q): %v\nstderr:\n%s", tags, err, stderr.String())
 	}
-
 	return bin
+}
+
+// materializeNativeLowering runs the cold lgbgen against the checkout's
+// DEFAULT output locations (equivalent to `make lowered`): it writes the
+// native lowered tree and the //go:build gogen_ir wireup files that the hot
+// build needs to actually differ from cold. Both are gitignored on-demand
+// artifacts, so this mutates no tracked state.
+func materializeNativeLowering(t *testing.T, repoRoot, coldBin string) {
+	t.Helper()
+	cmd := exec.Command(coldBin, "--target=go")
+	cmd.Dir = repoRoot
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("materialize native lowering (--target=go): %v\nstderr:\n%s", err, stderr.String())
+	}
+	// Same bail assertion as the cold/hot passes: a bail here would embed
+	// degraded native passes in the hot binary. The cold pass would bail
+	// identically and catch it, but fail at the source with the diagnostics.
+	if strings.Contains(stdout.String(), "typeinfer: hit *typeinfer-max-drains*") {
+		t.Fatalf("typeinfer bailed while materializing the native lowering:\n%s", stdout.String())
+	}
+}
+
+// assertNativeLoweringLinked fails unless the gogen_ir-tagged lgbgen build
+// actually depends on the native lowered tree. Without this assertion a
+// missing wireup makes hot == cold and the byte-identity comparison vacuous.
+func assertNativeLoweringLinked(t *testing.T, repoRoot string) {
+	t.Helper()
+	cmd := exec.Command("go", "list", "-deps", "-tags", "bootstrap gogen_ir", "./cmd/lgbgen")
+	cmd.Dir = repoRoot
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("go list -deps (hot tags): %v\nstderr:\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "core_go_lowered") {
+		t.Fatalf("hot lgbgen build does not link the native lowered tree " +
+			"(no core_go_lowered package in go list -deps): the gogen_ir wireup " +
+			"is missing, so the hot binary would be identical to cold and this " +
+			"gate would pass without exercising the native self-hosting path")
+	}
 }
 
 // generateLoweredTree runs lgbgen with the lowered tree (--target=go) and the
@@ -108,28 +156,26 @@ func buildLgbgen(t *testing.T, repoRoot string) string {
 // the run from the real checkout: it never rewrites the tracked
 // pkg/rt/core_go_lowered tree OR the wireup files (lg_gogen_ir.go, …) that
 // `go test ./...` builds elsewhere (e.g. TestGogenAOTDiff's -tags gogen_ir
-// build). The full isolation is also what lets two runs execute concurrently.
+// build). The full isolation is also what lets two runs execute independently.
 //
-// Takes no *testing.T because it is called from goroutines, where t.Fatalf is
-// unsafe; it returns the lowered-tree dir and an error instead.
-func generateLoweredTree(repoRoot, bin, runDir string) (string, error) {
+// Returns the lowered-tree dir, stdout (typeinfer diagnostics), and an error.
+func generateLoweredTree(repoRoot, bin, runDir string) (string, string, error) {
 	outDir := filepath.Join(runDir, "tree")
 	codeDir := filepath.Join(runDir, "code")
-
 	// cmd.Dir is the repo root so lgbgen can read the .lg sources, but the
 	// lowered tree and wireup both go to absolute temp dirs under runDir.
 	cmd := exec.Command(bin, "--target=go", "--code-dir", codeDir, outDir)
 	cmd.Dir = repoRoot
-
-	// Capture stderr (timing summary / warnings) for the failure message.
-	var stderr bytes.Buffer
+	// Capture stdout (typeinfer diagnostics — e.g. the drain-cap bail line) and
+	// stderr (timing summary / warnings). stdout is small diagnostic text; the
+	// lowered tree itself is written to files under outDir, not to stdout.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%v\nstderr:\n%s", err, stderr.String())
+		return "", "", fmt.Errorf("%v\nstderr:\n%s", err, stderr.String())
 	}
-
-	return outDir, nil
+	return outDir, stdout.String(), nil
 }
 
 // compareDirectories recursively compares two directory trees and returns

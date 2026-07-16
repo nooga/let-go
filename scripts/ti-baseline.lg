@@ -14,7 +14,7 @@
 (def user-args (vec (drop 2 (seq os/args))))
 (def corpus-dir (str (nth user-args 0) "/"))
 (def files (vec (drop 1 user-args)))
-(def CAP 50)   ; ms per-fn typeinfer budget
+(def CAP 50000)   ; drain-count per-fn typeinfer budget (default: 2,000,000)
 
 (defn read-all [path]
   (try (read-string (str "(do " (slurp path) ")")) (catch e nil)))
@@ -61,12 +61,12 @@
 (def jobs (deref acc))
 (prn {:total-jobs (count jobs)})
 
-;; Timed + profiled pass: capped budget, *ti-counters* bound, per-fn time so a
+;; Timed + profiled pass: capped drain count, *ti-counters* bound, per-fn time so a
 ;; slow fixture is visible. Report total ms + the join/normalize profile.
 (def counters (atom {}))
 (def slow (atom []))
 (def total-ns (atom 0))
-(binding [ir.passes.typeinfer/*typeinfer-budget-ms* CAP
+(binding [ir.passes.typeinfer/*typeinfer-max-drains* CAP
           ir.lattice/*ti-counters* counters]
   (doseq [pair jobs]
     (let [ns-sym (nth pair 0) nm (nth pair 1) exp (nth pair 2)]

@@ -434,7 +434,15 @@ func readRegex(r *LispReader, _ rune) (vm.Value, error) {
 		}
 		if ch == '"' {
 			r.closeToken(TokenString)
-			return vm.ListType.Box([]vm.Value{vm.Symbol("re-pattern"), vm.String(s.String())})
+			// Compile the pattern at read time (as Clojure does): the literal
+			// becomes a constant, so evaluating it in a hot path never pays
+			// regexp.Compile again. Dynamic (re-pattern s) still compiles per
+			// call — caching there is the user's choice, not the runtime's.
+			re, rerr := vm.NewRegex(s.String())
+			if rerr != nil {
+				return vm.NIL, NewReaderError(r, "invalid regex literal").Wrap(rerr)
+			}
+			return re, nil
 		}
 		s.WriteRune(ch)
 	}

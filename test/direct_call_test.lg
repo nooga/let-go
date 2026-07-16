@@ -282,25 +282,21 @@
 
 ;; --- determinism: codegen output must not depend on the typeinfer budget ---
 ;;
-;; *typeinfer-budget-ms* bounds the monotone worklist fixpoint by WALL-CLOCK
-;; time. When the clock is hit, typeinfer returns a PARTIAL result whose
-;; contents depend on how far it drained before the deadline — i.e. on machine
-;; load and scheduling, not on program content. Because the Go-lowering path
-;; encodes inferred types into the rendered source, a time-bounded partial
-;; fixpoint makes the generated tree non-deterministic across processes (the
-;; 4th hash/time-order axis behind the flaky core_go_lowered regen). It also
-;; DROPS forms entirely under starvation (a :bottom-heavy partial trips a
-;; downstream pass → the form throws → it's filtered out → undefined: build
-;; errors). The codegen path must therefore run typeinfer to FIXPOINT,
-;; independent of whatever budget the caller has bound.
+;; *typeinfer-max-drains* bounds the monotone worklist fixpoint by DRAIN-COUNT
+;; (machine-independent, unlike the former wall-clock budget). When the cap is hit,
+;; typeinfer returns a PARTIAL result whose contents would depend on the number of
+;; drains — BUT the codegen path must therefore run typeinfer to FIXPOINT,
+;; independent of whatever guard the caller has bound, ensuring deterministic output.
+;; The codegen path MUST bind *typeinfer-max-drains* to nil (unbounded) to ensure
+;; the generated tree is invariant across all processes.
 
 (defn- compile-ns-budget
-  "compile-ns, but run under an explicit *typeinfer-budget-ms* binding."
+  "compile-ns, but run under an explicit *typeinfer-max-drains* binding."
   [budget forms]
   (when-not (find-ns ns-sym) (create-ns ns-sym))
   (binding [*ns* (find-ns ns-sym)]
     (doseq [f forms] (eval f)))
-  (binding [ti/*typeinfer-budget-ms* budget]
+  (binding [ti/*typeinfer-max-drains* budget]
     (pipeline/lower-ns-to-go "scratch" ns-sym forms)))
 
 (deftest codegen-output-invariant-to-typeinfer-budget
@@ -315,7 +311,7 @@
           full    (str (compile-ns-budget nil forms))] ;; fixpoint
       ;; Goal (b): consistent outputs — byte-identical regardless of budget.
       (is (= full starved)
-          (str "rendered Go must be invariant to *typeinfer-budget-ms*;\n"
+          (str "rendered Go must be invariant to *typeinfer-max-drains*;\n"
                "starved (len " (count starved) ") != full (len " (count full) ")"))
       ;; Goal (a): entry points must not disappear under budget pressure.
       (is (str/includes? starved "func BudgetCountdown(")
