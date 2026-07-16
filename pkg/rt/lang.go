@@ -7353,10 +7353,13 @@ func installLangNS() {
 		case vm.Int:
 			return vm.NewBigDecimalFromInt64(int64(v)), nil
 		case vm.Float:
-			return vm.NewBigDecimalFromFloat64(float64(v)), nil
-		case *vm.BigInt:
-			f, _ := new(big.Float).SetPrec(vm.BigDecimalPrecConst).SetInt(v.Val()).Float64()
+			f := float64(v)
+			if math.IsInf(f, 0) || math.IsNaN(f) {
+				return vm.NIL, fmt.Errorf("cannot coerce non-finite float to bigdec")
+			}
 			return vm.NewBigDecimalFromFloat64(f), nil
+		case *vm.BigInt:
+			return vm.NewBigDecimalFromBigInt(v.Val()), nil
 		case *vm.Ratio:
 			f, _ := v.Val().Float64()
 			return vm.NewBigDecimalFromFloat64(f), nil

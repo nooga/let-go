@@ -35,7 +35,14 @@ const bigDecimalPrec = 128 // bits of precision
 const BigDecimalPrecConst = bigDecimalPrec
 
 func NewBigDecimal(v *big.Float) *BigDecimal {
-	return &BigDecimal{val: v}
+	return &BigDecimal{val: canonicalBigDecimal(v)}
+}
+
+func canonicalBigDecimal(v *big.Float) *big.Float {
+	if v.Sign() != 0 {
+		return v
+	}
+	return new(big.Float).SetPrec(v.Prec()).SetMode(v.Mode()).SetInt64(0)
 }
 
 func NewBigDecimalFromString(s string) (*BigDecimal, bool) {
@@ -43,7 +50,7 @@ func NewBigDecimalFromString(s string) (*BigDecimal, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return &BigDecimal{val: v}, true
+	return NewBigDecimal(v), true
 }
 
 // MustBigDecimalFromString builds a BigDecimal from a string, panicking on an
@@ -60,11 +67,19 @@ func MustBigDecimalFromString(s string) *BigDecimal {
 }
 
 func NewBigDecimalFromFloat64(f float64) *BigDecimal {
-	return &BigDecimal{val: new(big.Float).SetPrec(bigDecimalPrec).SetFloat64(f)}
+	return NewBigDecimal(new(big.Float).SetPrec(bigDecimalPrec).SetFloat64(f))
 }
 
 func NewBigDecimalFromInt64(n int64) *BigDecimal {
-	return &BigDecimal{val: new(big.Float).SetPrec(bigDecimalPrec).SetInt64(n)}
+	return NewBigDecimal(new(big.Float).SetPrec(bigDecimalPrec).SetInt64(n))
+}
+
+func NewBigDecimalFromBigInt(n *big.Int) *BigDecimal {
+	prec := uint(bigDecimalPrec)
+	if bitLen := uint(n.BitLen()); bitLen > prec {
+		prec = bitLen
+	}
+	return NewBigDecimal(new(big.Float).SetPrec(prec).SetInt(n))
 }
 
 func (b *BigDecimal) Val() *big.Float { return b.val }
@@ -94,6 +109,9 @@ func (b *BigDecimal) Hash() uint32 {
 	f, _ := b.val.Float64()
 	if math.IsNaN(f) {
 		return 0
+	}
+	if f == 0 {
+		f = 0
 	}
 	return hashUint64(*(*uint64)(unsafe.Pointer(&f)))
 }
