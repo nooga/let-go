@@ -1,3 +1,5 @@
+//go:build glplat
+
 /*
  * glplat native backend — GLFW + OpenGL (macOS CoreProfile)
  *
