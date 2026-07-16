@@ -139,14 +139,15 @@ func identicalValue(a, b vm.Value) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	if reflect.TypeOf(a) != reflect.TypeOf(b) {
-		return false
-	}
-
 	av := reflect.ValueOf(a)
 	bv := reflect.ValueOf(b)
 	if av.Comparable() && bv.Comparable() {
+		// Interface == on distinct dynamic types is false without comparing
+		// values, so no separate type check is needed on this path.
 		return a == b
+	}
+	if av.Type() != bv.Type() {
+		return false
 	}
 
 	switch left := a.(type) {
