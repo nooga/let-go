@@ -1389,6 +1389,13 @@ func nthInSeq(s vm.Seq, n int) (vm.Value, bool) {
 	return vm.NIL, false
 }
 
+func emptyLazySeq() vm.Seq {
+	thunk, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
+		return vm.NIL, nil
+	})
+	return vm.NewLazySeq(thunk.(vm.Fn))
+}
+
 func mapLazy1(f vm.Fn, s vm.Seq) vm.Seq {
 	if s == nil {
 		return nil
@@ -3246,7 +3253,7 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("map expected Sequable")
 			}
 			if s == nil || s == vm.EmptyList {
-				return vm.EmptyList, nil
+				return emptyLazySeq(), nil
 			}
 			return mapLazy1(mfn, s), nil
 		}
@@ -3259,7 +3266,7 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("map expected Sequable collection")
 			}
 			if s == nil || s == vm.EmptyList {
-				return vm.EmptyList, nil
+				return emptyLazySeq(), nil
 			}
 			seqs[i] = s
 		}

@@ -1,0 +1,83 @@
+(ns test.lazy-sequence-contract
+  (:require
+   [test :refer :all]))
+
+(defn lazy-seq-value? [x]
+  (try
+    (realized? x)
+    true
+    (catch e false)))
+
+(defn counted-from [counter n]
+  (lazy-seq
+    (swap! counter inc)
+    (cons n (counted-from counter (inc n)))))
+
+(deftest empty-sequence-producing-operations-remain-lazy
+  (testing "zero-arity concat is an unrealized empty lazy seq"
+    (let [result (concat)]
+      (is (lazy-seq-value? result))
+      (is (not (realized? result)))
+      (is (= '() result))
+      (is (nil? (seq result)))))
+
+  (testing "drop remains lazy when its input is empty or exhausted"
+    (let [empty-result (drop 1 [])
+          exhausted-result (drop 3 [1 2])]
+      (is (lazy-seq-value? empty-result))
+      (is (not (realized? empty-result)))
+      (is (lazy-seq-value? exhausted-result))
+      (is (not (realized? exhausted-result)))
+      (is (= '() empty-result))
+      (is (= '() exhausted-result))
+      (is (nil? (seq empty-result)))
+      (is (nil? (seq exhausted-result)))))
+
+  (testing "map remains lazy when any input is empty"
+    (let [single (map inc [])
+          multiple (map + [1] [])]
+      (is (lazy-seq-value? single))
+      (is (not (realized? single)))
+      (is (lazy-seq-value? multiple))
+      (is (not (realized? multiple)))
+      (is (= '() single))
+      (is (= '() multiple))
+      (is (nil? (seq single)))
+      (is (nil? (seq multiple))))))
+
+(deftest drop-defers-source-realization
+  (let [counter (atom 0)
+        result (drop 2 (counted-from counter 0))]
+    (is (lazy-seq-value? result))
+    (is (not (realized? result)))
+    (is (= 0 @counter))
+    (is (= 2 (first result)))
+    (is (= 3 @counter))))
+
+(deftest partition-is-lazy-for-every-arity
+  (let [two-arity (partition 2 [0 1 2 3])
+        three-arity (partition 2 1 [0 1 2])
+        four-arity (partition 3 3 [9] [0 1])]
+    (is (lazy-seq-value? two-arity))
+    (is (not (realized? two-arity)))
+    (is (lazy-seq-value? three-arity))
+    (is (not (realized? three-arity)))
+    (is (lazy-seq-value? four-arity))
+    (is (not (realized? four-arity)))
+    (is (= '((0 1) (2 3)) two-arity))
+    (is (= '((0 1) (1 2)) three-arity))
+    (is (= '((0 1 9)) four-arity))))
+
+(deftest partition-supports-empty-and-infinite-inputs
+  (let [empty-result (partition 2 [])
+        counter (atom 0)
+        infinite-result (partition 2 (counted-from counter 0))]
+    (is (lazy-seq-value? empty-result))
+    (is (not (realized? empty-result)))
+    (is (= '() empty-result))
+    (is (nil? (seq empty-result)))
+    (is (lazy-seq-value? infinite-result))
+    (is (not (realized? infinite-result)))
+    (is (= 0 @counter))
+    (is (= '(0 1) (first infinite-result)))
+    (is (= 2 @counter))))

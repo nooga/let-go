@@ -395,7 +395,7 @@
             (lazy-cat-seqs (rest s))))))))
 
 (defn concat
-  ([] ())
+  ([] (lazy-seq nil))
   ([x] (lazy-seq (seq x)))
   ([x y] (lazy-cat-seqs (list x y)))
   ([x y & zs] (lazy-cat-seqs (cons x (cons y zs)))))
@@ -590,13 +590,12 @@
               (rf result input)
               result)))))))
   ([n xs]
-   (if (nil? xs)
-     '()
-     (let [step (fn [n xs]
-                  (if (> n 0)
-                    (recur (dec n) (next xs))
-                    xs))]
-       (step n xs)))))
+   (lazy-seq
+     (loop [remaining n
+            s (seq xs)]
+       (if (and (pos? remaining) s)
+         (recur (dec remaining) (next s))
+         s)))))
 
 (defn split-at [n coll]
   [(take n coll) (drop n coll)])
@@ -604,18 +603,18 @@
 (defn partition
   ([n xs] (partition n n xs))
   ([n step xs]
-   (loop [c xs w []]
-     (if (>= (count c) n)
-       (recur (drop step c) (conj w (vec (take n c))))
-       w)))
+   (lazy-seq
+     (when-let [s (seq xs)]
+       (let [p (take n s)]
+         (when (= n (count p))
+           (cons p (partition n step (drop step s))))))))
   ([n step pad xs]
-   (loop [c xs w []]
-     (if (seq c)
-       (let [p (vec (take n c))]
-         (if (= (count p) n)
-           (recur (drop step c) (conj w p))
-           (conj w (vec (take n (concat p pad))))))
-       w))))
+   (lazy-seq
+     (when-let [s (seq xs)]
+       (let [p (take n s)]
+         (if (= n (count p))
+           (cons p (partition n step pad (drop step s)))
+           (cons (take n (concat p pad)) nil)))))))
 
 ;; binding macro — pushes dynamic bindings, runs body, pops on exit.
 ;; (binding [*x* 1 *y* 2] body...)

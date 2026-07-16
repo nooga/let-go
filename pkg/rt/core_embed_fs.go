@@ -15,7 +15,7 @@ import (
 // inside pkg/rt/core. Each new `.lg` is picked up automatically — no
 // per-file `//go:embed` stub and no entry in pkg/resolver/resolver.go's
 // embeddedSources map are required.
-// embed-cache-bust: transient-map reduce-kv support
+// embed-cache-bust: lazy sequence result contracts
 //
 //go:embed all:core
 var coreFS embed.FS
