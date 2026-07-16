@@ -28,9 +28,9 @@ import (
 // The test also asserts that typeinfer never hit its work-unit guard
 // (*typeinfer-max-drains*) during either pass. A bail would mean partial types
 // (degraded, though still deterministic) lowering — the cap exists only as a
-// backstop for pathological inputs, never for real core. This assertion was
-// previously standalone in TestTypeinferNeverBailsOnCore; it is folded here
-// since both passes already lower the full stdlib.
+// backstop for pathological inputs, never for real core. The formerly
+// standalone never-bails-on-core assertion is folded here since both passes
+// already lower the full stdlib.
 //
 // This is the validation gate that Tasks 1 (position densify) and 2 (work-unit
 // typeinfer guard) make byte-identical possible. If it fails, residual
@@ -61,7 +61,7 @@ func TestLoweringDeterminism(t *testing.T) {
 	// backstop that must NEVER fire on real core — a bail would silently degrade
 	// inferred types. Both passes run the full pipeline over the whole stdlib, so
 	// asserting the bail line is absent here folds the former standalone
-	// TestTypeinferNeverBailsOnCore onto lowerings the gate already performs.
+	// never-bails-on-core test onto lowerings the gate already performs.
 	const bailMsg = "typeinfer: hit *typeinfer-max-drains*"
 
 	coldDir, coldOut, err := generateLoweredTree(root, cold, filepath.Join(base, "cold"))
@@ -116,10 +116,17 @@ func materializeNativeLowering(t *testing.T, repoRoot, coldBin string) {
 	t.Helper()
 	cmd := exec.Command(coldBin, "--target=go")
 	cmd.Dir = repoRoot
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("materialize native lowering (--target=go): %v\nstderr:\n%s", err, stderr.String())
+	}
+	// Same bail assertion as the cold/hot passes: a bail here would embed
+	// degraded native passes in the hot binary. The cold pass would bail
+	// identically and catch it, but fail at the source with the diagnostics.
+	if strings.Contains(stdout.String(), "typeinfer: hit *typeinfer-max-drains*") {
+		t.Fatalf("typeinfer bailed while materializing the native lowering:\n%s", stdout.String())
 	}
 }
 

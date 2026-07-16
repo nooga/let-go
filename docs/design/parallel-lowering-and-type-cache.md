@@ -153,3 +153,12 @@ budget-vs-load non-determinism: lowering decisions become a function of the
    measure convergence on `core`.
 4. If it converges cheaply, wire lowering to read it, drop the wall-clock
    budget, and turn on `pmapv` lowering for the speedup — now reproducible.
+
+   Caveat for this step: `renderFset` (pkg/rt/gogen.go) rewrites token
+   positions **in place** under a "each AST is rendered exactly once"
+   contract that nothing currently enforces — safe under today's sequential
+   `mapv` lowering, but if `pmapv` lowering ever shares AST nodes across
+   goroutines (cached templates, memoized fragments), concurrent renders
+   would race on the position rewrite. Before turning on `pmapv` here,
+   either verify no AST node is reachable from two lowering units, or make
+   `renderFset` copy-on-render.
