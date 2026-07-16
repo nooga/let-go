@@ -39,9 +39,6 @@ const (
 	OP_RECUR    // loop recurse RECUR (offset int32, argc int32)
 	OP_RECUR_FN // function recurse REF (argc int32)
 
-	OP_TRACE_ENABLE  // enable tracing
-	OP_TRACE_DISABLE // disable tracing
-
 	OP_MAKE_MULTI_ARITY // make multi-arity function (n int32)
 	OP_TAIL_CALL        // like OP_INVOKE but re-uses the frame
 
@@ -100,8 +97,6 @@ var opcodeNames = []string{
 	"PUSH_CLOSEDOVER",
 	"RECUR",
 	"RECUR_FN",
-	"TRACE_ENABLE",
-	"TRACE_DISABLE",
 	"MAKE_MULTI_ARITY",
 	"TAIL_CALL",
 	"TRY_PUSH",
@@ -148,18 +143,25 @@ func OpcodeToString(op int32) string {
 	return "???"
 }
 
+// ComputeSignatureForNames computes an opcode-set signature for a given list
+// of opcode names. Used by the bytecode migration system to compute signatures
+// for older opcode sets.
+func ComputeSignatureForNames(names []string) (count int, hash uint64) {
+	h := fnv.New64a()
+	for _, name := range names {
+		h.Write([]byte(name))
+		h.Write([]byte{0})
+	}
+	return len(names), h.Sum64()
+}
+
 // OpcodeSetSignature identifies this VM's opcode set: the opcode count and an
 // FNV-64a hash of the mnemonics joined in enum order. Bytecode bundles embed
 // it at encode time (bytecode.CapOpcodeSet) so a decoder on a VM with a
 // different opcode enum — opcodes inserted, removed, or reordered — can reject
 // the bundle instead of executing shifted opcodes.
 func OpcodeSetSignature() (count int, hash uint64) {
-	h := fnv.New64a()
-	for _, name := range opcodeNames {
-		h.Write([]byte(name))
-		h.Write([]byte{0})
-	}
-	return len(opcodeNames), h.Sum64()
+	return ComputeSignatureForNames(opcodeNames)
 }
 
 // CodeChunk holds bytecode and provides facilities for reading and writing it
@@ -621,6 +623,16 @@ func (f *Frame) Run() (Value, error) {
 		attrPushFrame(f)
 		defer attrPopFrame()
 	}
+	// Dynamically-scoped tracing (*lg-trace*). Coarse gate first: TraceArmed is
+	// false until *lg-trace* is first set truthy, so the precise per-frame Deref
+	// only runs once tracing has been used. When *lg-trace* resolves truthy in
+	// this frame's context, trace this frame — and, because the binding
+	// propagates down the shared stack, every frame it calls.
+	if TraceArmed.Load() {
+		if tv := TraceVar.Load(); tv != nil && IsTruthy(f.ec.deref(tv)) {
+			f.debug = true
+		}
+	}
 	if f.debug {
 		fmt.Print("run", f.args, "\n")
 		f.code.Debug()
@@ -644,16 +656,6 @@ func (f *Frame) Run() (Value, error) {
 		switch inst & 0xff {
 		case OP_NOOP:
 			f.ip++
-
-		case OP_TRACE_ENABLE:
-			fmt.Print("# tracing frame, args: ", f.args, "\n")
-			f.code.Debug()
-			f.debug = true
-			f.ip += 1
-
-		case OP_TRACE_DISABLE:
-			f.debug = false
-			f.ip += 1
 
 		case OP_LOAD_CONST:
 			idx := f.code.code[f.ip+1]
@@ -939,6 +941,9 @@ func (f *Frame) Run() (Value, error) {
 			if !f.ec.setBinding(varrd, val) {
 				varrd.SetRoot(val)
 			}
+			// Arm frame tracing when *lg-trace* is set truthy (pointer-compared;
+			// no-op for every other var).
+			armTraceIfTruthy(varrd, val)
 			err = f.push(varr)
 			if err != nil {
 				return NIL, NewExecutionError("SET_VAR push var failed").Wrap(err)
