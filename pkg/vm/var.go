@@ -255,6 +255,11 @@ func (v *Var) AlterRootArgs(fn Fn, args []Value) (Value, error) {
 	}
 	v.root.Store(valPtr(result))
 	v.updateGuard(result)
+	// alter-var-root (and with-redefs, which is built on it) is a root
+	// mutation path for *lg-trace* just like binding/set! — arm the trace
+	// gate here too, or (alter-var-root #'*lg-trace* (constantly true))
+	// silently never traces.
+	armTraceIfTruthy(v, result)
 	if err := v.notifyWatches(old, result); err != nil {
 		return NIL, err
 	}

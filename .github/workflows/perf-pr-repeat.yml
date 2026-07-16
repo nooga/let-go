@@ -1,0 +1,140 @@
+name: Perf PR (repeat A/B)
+
+# INFORMATIONAL shadow check — a variance-reduced same-runner A/B. A single-shot
+# base-vs-head A/B on shared CI runners is too heavy-tailed to gate on (~1 in 4
+# runs blows a memory-bound cluster to 25-40% while the register-only anchor
+# stays flat; nooga/let-go#445). This runs N INTERLEAVED base/head snapshots
+# across two pre-built worktrees and reports the per-family median-of-N delta and
+# whether any family WOULD gate at each candidate budget. Interleaving (ABBA)
+# also cancels slow time-separation drift.
+#
+# It never fails the PR on a perf verdict — the job's exit code reflects only
+# harness integrity (a flaky / non-comparable measurement). The point of this
+# phase is to collect the false-positive and provenance data needed to calibrate
+# a real gate before enforcing one, per the review on #445. Runs alongside the
+# single-shot perf-pr.yml (separate `perf-repeat` label) so the two can be
+# compared during the shadow phase.
+
+# Opt-in via the `perf-repeat` label (same-repo PRs run the workflow from the PR
+# branch, so this need not live on the default branch). workflow_dispatch is kept
+# for the eventual upstream form, where it will sit on main.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - 'pkg/**'
+      - 'cmd/**'
+      - 'scripts/ab_repeat.py'
+      - '.github/workflows/perf-pr-repeat.yml'
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to benchmark'
+        required: true
+      n:
+        description: 'repeat count (interleaved cycles)'
+        default: '7'
+      budgets:
+        description: 'candidate budgets % to report would-gate for (comma-separated)'
+        default: '6,8,10'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-pr-repeat-${{ github.event.pull_request.number || github.event.inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'perf-repeat')
+    runs-on: ubuntu-latest
+    # N=7 × pr-fast (count 3 × 500ms) is 14 snapshots plus two `make lowered`
+    # builds. Measured ~49 min on a quiet EPYC 9V74 draw; the cap leaves headroom
+    # for a noisier runner, where the memory-bound families (and so the whole
+    # suite) run slower. Right-size from observed runtime during the shadow phase.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve base and head
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          PR_FROM_INPUT: ${{ github.event.inputs.pr }}
+          BASE_FROM_EVENT: ${{ github.event.pull_request.base.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            PR="$PR_FROM_INPUT"
+            [[ "$PR" =~ ^[0-9]+$ ]] || { echo "pr must be numeric" >&2; exit 1; }
+            base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .base.ref)"
+          else
+            PR="$PR_FROM_EVENT"
+            base_ref="$BASE_FROM_EVENT"
+          fi
+          git fetch --no-tags origin "$base_ref" "refs/pull/${PR}/head:pr-head"
+          head_sha="$(git rev-parse pr-head)"
+          base_sha="$(git merge-base "origin/${base_ref}" pr-head)"
+          echo "base=${base_sha}" >> "$GITHUB_OUTPUT"
+          echo "head=${head_sha}" >> "$GITHUB_OUTPUT"
+          echo "Base (merge-base): ${base_sha}"
+          echo "Head:              ${head_sha}"
+
+      - name: Build base and head worktrees
+        env:
+          BASE: ${{ steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+        run: |
+          set -euo pipefail
+          git worktree add --force ../wt-base "$BASE"
+          git worktree add --force ../wt-head "$HEAD"
+          # lowered (gogen_ir) tree must exist in each worktree before bench.
+          ( cd ../wt-base && git submodule update --init --recursive && make lowered )
+          ( cd ../wt-head && git submodule update --init --recursive && make lowered )
+
+      - name: Interleaved repeat A/B
+        env:
+          N: ${{ github.event.inputs.n || '7' }}
+          BUDGETS: ${{ github.event.inputs.budgets || '6,8,10' }}
+        run: |
+          set -euo pipefail
+          # The driver exits nonzero only on an integrity failure (a family seen
+          # on some cycles but not all N — the halves aren't comparable). That is
+          # a real problem worth a red job; it is NOT a perf gate. Capture the
+          # code so the summary still posts and the artifacts still upload.
+          rc=0
+          python3 scripts/ab_repeat.py \
+            --base ../wt-base --head ../wt-head \
+            --n "$N" --budgets "$BUDGETS" --confirm-k 2 \
+            --out "${RUNNER_TEMP}/ab-out" | tee "${RUNNER_TEMP}/ab-report.txt" || rc=$?
+          {
+            echo '## Repeat A/B (variance-reduced) — informational shadow check'
+            echo
+            echo '```'
+            cat "${RUNNER_TEMP}/ab-report.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      # Retain the full evidence trail (every base/head snapshot with raw samples,
+      # cycle order, provenance, aggregate) so the shadow-phase false-positive and
+      # power analysis can run offline. always() so an integrity failure above
+      # still preserves the data that explains it.
+      - name: Upload snapshots and aggregate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-pr-repeat
+          path: ${{ runner.temp }}/ab-out/
+          if-no-files-found: warn

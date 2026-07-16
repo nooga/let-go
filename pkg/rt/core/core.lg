@@ -1873,6 +1873,13 @@
 
 (def ^:dynamic *assert* true)
 
+;; When truthy, the VM prints a per-instruction stack + opcode trace for the
+;; current frame and every frame it calls. Dynamically scoped:
+;;   (binding [*lg-trace* true] (my-fn))   ; traces my-fn and its callees
+;; Replaces the removed `trace` special form. Off by default; the trace check
+;; is gated so it costs nothing until *lg-trace* is first set truthy.
+(def ^:dynamic *lg-trace* false)
+
 ;; --- print/read tuning dynamic vars (stubs; not yet honored by writers) ---
 
 (def ^:dynamic *print-level* nil)

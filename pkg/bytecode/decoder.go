@@ -77,7 +77,21 @@ func (d *decoder) decodeExec(parent *vm.Consts) (*ExecUnit, error) {
 	d.flags = flags
 
 	if version == 1 {
-		return d.decodeToExecUnitV1(parent)
+		// v1 predates capabilities, so like a capability-less v2 bundle it
+		// implicitly carries the pre-removal opcode set; resolve the migration
+		// here and remap after decode, keeping the frozen v1 path untouched.
+		preCount, preHash := preRemovalSignature()
+		if err := d.resolveOpcodeSet(preCount, preHash); err != nil {
+			return nil, err
+		}
+		unit, err := d.decodeToExecUnitV1(parent)
+		if err != nil {
+			return nil, err
+		}
+		if d.remapFunc != nil {
+			d.remapFunc(d.chunks)
+		}
+		return unit, nil
 	}
 	if version == 2 {
 		return d.decodeToExecUnitV2(parent)
@@ -154,10 +168,32 @@ func (d *decoder) decodeToExecUnitV1(parent *vm.Consts) (*ExecUnit, error) {
 
 // readCapabilities reads and validates the capability mask (and each set
 // capability's payload) that follows the header when FlagCapabilities is set.
-// Shared by the module and exec-unit v2 decode paths.
+// For opcode-set signature changes, it may record a migration function to
+// apply after chunks are decoded. Shared by the module and exec-unit v2
+// decode paths.
+// resolveOpcodeSet compares a bundle's opcode-set signature against the
+// runtime's and, on mismatch, records the registered migration remap for the
+// chunk-decode pass — or errors when no migration can bridge the gap.
+func (d *decoder) resolveOpcodeSet(bundleCount int, bundleHash uint64) error {
+	runtimeCount, runtimeHash := vm.OpcodeSetSignature()
+	if bundleCount == runtimeCount && bundleHash == runtimeHash {
+		return nil
+	}
+	d.remapFunc = lookupMigration(bundleCount, bundleHash)
+	if d.remapFunc == nil {
+		return fmt.Errorf(
+			"opcode set mismatch: bundle compiled with %d opcodes (signature %016x), runtime has %d (%016x) — recompile the bundle with a matching lg",
+			bundleCount, bundleHash, runtimeCount, runtimeHash)
+	}
+	return nil
+}
+
 func (d *decoder) readCapabilities() error {
 	if d.flags&FlagCapabilities == 0 {
-		return nil
+		// Pre-capability bundles (v1/v2 before #443) implicitly have the
+		// pre-removal signature. Check if migration is needed.
+		preCount, preHash := preRemovalSignature()
+		return d.resolveOpcodeSet(preCount, preHash)
 	}
 	caps, err := d.r.ReadUint32()
 	if err != nil {
@@ -176,11 +212,8 @@ func (d *decoder) readCapabilities() error {
 		if err != nil {
 			return fmt.Errorf("reading opcode-set hash: %w", err)
 		}
-		count, hash := vm.OpcodeSetSignature()
-		if int(bundleCount) != count || bundleHash != hash {
-			return fmt.Errorf(
-				"opcode set mismatch: bundle compiled with %d opcodes (signature %016x), runtime has %d (%016x) — recompile the bundle with a matching lg",
-				bundleCount, bundleHash, count, hash)
+		if err := d.resolveOpcodeSet(int(bundleCount), bundleHash); err != nil {
+			return err
 		}
 	}
 	d.moduleCaps = caps
@@ -207,6 +240,11 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 
 	if err := d.readLiveChunks(sharedConsts); err != nil {
 		return nil, err
+	}
+
+	// Apply opcode migration if the bundle's signature doesn't match the runtime.
+	if d.remapFunc != nil {
+		d.remapFunc(d.chunks)
 	}
 
 	if err := d.readConstsV2Into(sharedConsts); err != nil {
@@ -276,7 +314,25 @@ func DecodeWithResolver(r io.Reader, resolve VarResolver) (*Module, error) {
 	}
 	d.flags = flags
 	if version == 1 {
-		return d.readModuleV1()
+		// Same implicit pre-removal signature handling as the exec-unit v1
+		// path above. The raw ChunkData code is re-synced from the remapped
+		// live chunks so a re-encode of a decoded v1 module cannot smuggle
+		// unmigrated opcodes under a current signature.
+		preCount, preHash := preRemovalSignature()
+		if err := d.resolveOpcodeSet(preCount, preHash); err != nil {
+			return nil, err
+		}
+		m, err := d.readModuleV1()
+		if err != nil {
+			return nil, err
+		}
+		if d.remapFunc != nil {
+			d.remapFunc(d.chunks)
+			for i, cd := range m.Chunks {
+				cd.Code = d.chunks[i].Code()
+			}
+		}
+		return m, nil
 	}
 	if version == 2 {
 		return d.readModuleV2()
@@ -293,6 +349,7 @@ type decoder struct {
 	chunks     []*vm.CodeChunk
 	moduleCaps uint32 // populated when FlagCapabilities is set in v2
 	stats      *DecodeStats
+	remapFunc  func([]*vm.CodeChunk) // migration to apply after chunks are decoded, or nil
 }
 
 // readModuleV1 is the frozen v1 decode path. Do not modify.
@@ -386,6 +443,11 @@ func (d *decoder) readModuleV2() (*Module, error) {
 			}
 		}
 		d.chunks[i] = chunk
+	}
+
+	// Apply opcode migration if the bundle's signature doesn't match the runtime.
+	if d.remapFunc != nil {
+		d.remapFunc(d.chunks)
 	}
 
 	consts, err := d.readConstsV2()
