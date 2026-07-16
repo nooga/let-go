@@ -97,6 +97,10 @@ func (e MapEntry) ValueAtOr(k Value, dflt Value) Value {
 		return dflt
 	}
 }
+func (e MapEntry) Contains(k Value) Boolean {
+	idx, ok := k.(Int)
+	return Boolean(ok && idx >= 0 && idx < 2)
+}
 func (e MapEntry) Equals(other Value) bool {
 	return ArrayVector{e.Key, e.Value}.Equals(other)
 }

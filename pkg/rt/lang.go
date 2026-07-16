@@ -7711,9 +7711,6 @@ func installLangNS() {
 		if serr != nil {
 			return vm.NIL, serr
 		}
-		if s == nil {
-			return vm.NIL, fmt.Errorf("cannot create array from %s", vs[0].Type().Name())
-		}
 		var vals []vm.Value
 		for ; s != nil; s = s.Next() {
 			vals = append(vals, s.First())

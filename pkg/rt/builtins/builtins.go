@@ -75,17 +75,23 @@ func Contains(coll, k vm.Value) (vm.Value, error) {
 	if s, ok := coll.(vm.Keyed); ok {
 		return s.Contains(k), nil
 	}
-	if idx, ok := k.(vm.Int); ok {
-		i := int(idx)
-		if c, ok := coll.(vm.Counted); ok {
-			return vm.Boolean(i >= 0 && i < c.RawCount()), nil
-		}
-	}
 	if s, ok := coll.(vm.String); ok {
 		if idx, ok := k.(vm.Int); ok {
 			return vm.Boolean(int(idx) >= 0 && int(idx) < len([]rune(string(s)))), nil
 		}
 		return vm.NIL, fmt.Errorf("contains? on a string requires an integer key, got %s", k.Type().Name())
 	}
-	return vm.FALSE, nil
+	if _, isSeq := coll.(vm.Seq); isSeq {
+		return vm.NIL, fmt.Errorf("contains? not supported on %s", coll.Type().Name())
+	}
+	indexed, ok := coll.(vm.Indexed)
+	if !ok {
+		return vm.NIL, fmt.Errorf("contains? not supported on %s", coll.Type().Name())
+	}
+	idx, ok := k.(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("contains? on an indexed value requires an integer key, got %s", k.Type().Name())
+	}
+	i := int(idx)
+	return vm.Boolean(i >= 0 && i < indexed.RawCount()), nil
 }
