@@ -60,25 +60,108 @@ func (l *Regex) String() string {
 	return fmt.Sprintf("#%q", l.Pattern())
 }
 
-func (l *Regex) ReplaceAll(s string, replacement string) string {
-	if l.lookaheadGroup > 0 {
-		return l.replaceLookahead(s, replacement, false)
+func (l *Regex) ReplaceAll(s string, replacement string) (string, error) {
+	if err := l.validateReplacement(replacement); err != nil {
+		return "", err
 	}
-	return l.re.ReplaceAllString(s, replacement)
+	if l.lookaheadGroup > 0 {
+		return l.replaceLookahead(s, replacement, false), nil
+	}
+	return l.re.ReplaceAllString(s, replacement), nil
 }
 
 // ReplaceFirst replaces only the first match, expanding $-group references in
 // the replacement (as ReplaceAll does), matching clojure.string/replace-first.
-func (l *Regex) ReplaceFirst(s string, replacement string) string {
+func (l *Regex) ReplaceFirst(s string, replacement string) (string, error) {
+	if err := l.validateReplacement(replacement); err != nil {
+		return "", err
+	}
 	if l.lookaheadGroup > 0 {
-		return l.replaceLookahead(s, replacement, true)
+		return l.replaceLookahead(s, replacement, true), nil
 	}
 	loc := l.re.FindStringSubmatchIndex(s)
 	if loc == nil {
-		return s
+		return s, nil
 	}
 	out := l.re.ExpandString([]byte(s[:loc[0]]), replacement, s, loc)
-	return string(out) + s[loc[1]:]
+	return string(out) + s[loc[1]:], nil
+}
+
+// visibleGroupCount is the number of capture groups the USER's pattern has:
+// the synthetic group a lookahead fallback appends is an implementation
+// detail and not addressable from a replacement template.
+func (l *Regex) visibleGroupCount() int {
+	n := l.re.NumSubexp()
+	if l.lookaheadGroup > 0 {
+		n--
+	}
+	return n
+}
+
+func isExpandNameByte(c byte) bool {
+	return c == '_' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9'
+}
+
+// validateReplacement checks every $-group reference in a replacement
+// template against the pattern's capture groups, so a nonexistent reference
+// fails loud — Clojure (java.util.regex) throws for a group that doesn't
+// exist, while Go's Expand silently substitutes "", which turns a template
+// typo into a plausible-looking wrong answer. References are parsed exactly
+// as Go's Expand parses them ($$ literal; ${name} or $name with the longest
+// run of letters, digits, and underscores; an all-digit name is a group
+// index), so anything this rejects is precisely what expansion would have
+// silently emptied.
+func (l *Regex) validateReplacement(template string) error {
+	names := l.re.SubexpNames()
+	for i := 0; i < len(template); {
+		if template[i] != '$' {
+			i++
+			continue
+		}
+		i++
+		if i < len(template) && template[i] == '$' { // $$ → literal $
+			i++
+			continue
+		}
+		braced := i < len(template) && template[i] == '{'
+		if braced {
+			i++
+		}
+		start := i
+		for i < len(template) && isExpandNameByte(template[i]) {
+			i++
+		}
+		name := template[start:i]
+		if braced {
+			if i >= len(template) || template[i] != '}' {
+				continue // malformed ${...}: Expand emits it literally
+			}
+			i++
+		}
+		if name == "" {
+			continue // bare $ before a non-name byte: Expand emits it literally
+		}
+		if idx, err := strconv.Atoi(name); err == nil {
+			if idx > l.visibleGroupCount() { // $0 is the whole match
+				return fmt.Errorf("no group %d in regex #%q", idx, l.Pattern())
+			}
+			continue
+		}
+		found := false
+		for gi, gn := range names {
+			// gi != lookaheadGroup also holds trivially when no lookahead
+			// group exists (lookaheadGroup 0 = the whole-match slot, whose
+			// name is always "" and name here never is).
+			if gn == name && gi != l.lookaheadGroup {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("no group named %q in regex #%q", name, l.Pattern())
+		}
+	}
+	return nil
 }
 
 // ReplaceAllFunc replaces every non-overlapping match using f, matching
@@ -393,8 +476,9 @@ func (l *Regex) replaceLookahead(s, replacement string, first bool) string {
 		// Expand against the VISIBLE indices (synthetic lookahead group
 		// removed): template group numbers then mean the ORIGINAL pattern's
 		// groups, and a reference to the synthetic group's slot is out of
-		// range (empty, like any other nonexistent group) instead of leaking
-		// the assertion's matched text into the replacement.
+		// range — rejected up front by validateReplacement, like any other
+		// nonexistent group — instead of leaking the assertion's matched
+		// text into the replacement.
 		b.Write(l.re.ExpandString(nil, replacement, s, match.visible))
 		last = match.visible[1]
 	}

@@ -4278,7 +4278,11 @@ func installLangNS() {
 		case vm.String:
 			return vm.String(strings.ReplaceAll(string(s), string(vs[1].(vm.String)), string(r))), nil
 		case *vm.Regex:
-			return vm.String(vs[1].(*vm.Regex).ReplaceAll(string(s), string(r))), nil
+			out, err := vs[1].(*vm.Regex).ReplaceAll(string(s), string(r))
+			if err != nil {
+				return vm.NIL, err
+			}
+			return vm.String(out), nil
 		default:
 			return vm.NIL, fmt.Errorf("str-replace expected String or Regex")
 		}
@@ -4315,7 +4319,11 @@ func installLangNS() {
 		case vm.String:
 			return vm.String(strings.Replace(string(s), string(vs[1].(vm.String)), string(r), 1)), nil
 		case *vm.Regex:
-			return vm.String(vs[1].(*vm.Regex).ReplaceFirst(string(s), string(r))), nil
+			out, err := vs[1].(*vm.Regex).ReplaceFirst(string(s), string(r))
+			if err != nil {
+				return vm.NIL, err
+			}
+			return vm.String(out), nil
 		default:
 			return vm.NIL, fmt.Errorf("str-replace-first expected String or Regex")
 		}

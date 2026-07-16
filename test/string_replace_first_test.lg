@@ -43,8 +43,19 @@
   (testing "(?m) ^ anchors at line starts only"
     (is (= '("a-" "b-")
            (map first (re-seq #"(?m)^(\w)-(?=\w)" "a-b\nb-c")))))
-  (testing "the synthetic lookahead group does not leak into $n replacement"
-    ;; #"(a)(?=b)" has ONE user group; $2 must expand empty (out of range,
-    ;; matching non-lookahead patterns), never to the assertion's text.
-    (is (= "b" (str/replace "ab" #"(a)(?=b)" "$2")))
-    (is (= "[a]b" (str/replace "ab" #"(a)(?=b)" "[$1]")))))
+  (testing "a nonexistent $n group reference fails loud (Clojure parity)"
+    ;; #"(a)(?=b)" has ONE user group: the lookahead is an assertion, not a
+    ;; group, and its synthetic implementation group is not addressable. Java
+    ;; throws IndexOutOfBoundsException for $2; silent empty expansion would
+    ;; produce a plausible-looking wrong answer.
+    (is (= :threw (try (str/replace "ab" #"(a)(?=b)" "$2")
+                       (catch Exception _ :threw))))
+    (is (= :threw (try (str/replace "ab" #"(a)b" "$2")
+                       (catch Exception _ :threw))))
+    (is (= :threw (try (str/replace-first "ab" #"(a)b" "$2")
+                       (catch Exception _ :threw))))
+    (is (= :threw (try (str/replace "ab" #"(?P<x>a)b" "${y}")
+                       (catch Exception _ :threw))))
+    (is (= "[a]b" (str/replace "ab" #"(a)(?=b)" "[$1]")))
+    (is (= "Xb" (str/replace "ab" #"(?P<x>a)" "X")))
+    (is (= "$b" (str/replace "ab" #"(a)" "$$")))))
