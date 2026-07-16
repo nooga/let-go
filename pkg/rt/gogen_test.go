@@ -12,6 +12,7 @@ import (
 	"go/token"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -705,5 +706,39 @@ func TestGogenIdentAccessors(t *testing.T) {
 	errMsg := err.Error()
 	if !strings.Contains(errMsg, "String") && !strings.Contains(errMsg, "*ast.Ident") {
 		t.Errorf("cIdentName error should mention type issue, got: %v", err)
+	}
+}
+
+// TestAllocPosConcurrentUniqueness pins the review fix on #446: allocPos is
+// called from concurrent lowering goroutines, and the previous unsynchronized
+// goPosNext read-increment could lose updates and hand two AST nodes the same
+// position — which renderFset's densify cannot disambiguate. Run it hot from
+// many goroutines (fails under -race without the mutex) and assert every
+// claimed position is unique.
+func TestAllocPosConcurrentUniqueness(t *testing.T) {
+	const goroutines = 16
+	const perG = 1000
+	var wg sync.WaitGroup
+	results := make([][]token.Pos, goroutines)
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			out := make([]token.Pos, perG)
+			for i := range out {
+				out[i] = allocPos()
+			}
+			results[g] = out
+		}(g)
+	}
+	wg.Wait()
+	seen := make(map[token.Pos]bool, goroutines*perG)
+	for _, out := range results {
+		for _, p := range out {
+			if seen[p] {
+				t.Fatalf("allocPos handed out duplicate position %d under concurrency", p)
+			}
+			seen[p] = true
+		}
 	}
 }

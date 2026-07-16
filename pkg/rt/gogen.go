@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -1870,6 +1871,12 @@ var goFset = token.NewFileSet()
 var (
 	goSynthFile = goFset.AddFile("gogen.synthetic.go", -1, 1<<28)
 	goPosNext   = 1 // next byte offset to hand out (1-based)
+	// goPosMu serializes allocPos: concurrent lowering goroutines share
+	// goPosNext, and an unsynchronized read-increment can hand two nodes the
+	// same position (a lost update), which renderFset's collect/remap cannot
+	// disambiguate. The lock also keeps AddLine calls monotonic, which the
+	// line-table comment on allocPos relies on.
+	goPosMu sync.Mutex
 )
 
 // allocPos returns a fresh token.Pos on a new synthetic line. Used by
@@ -1883,6 +1890,8 @@ var (
 // duplicate or out-of-order offsets, so repeated calls past the high
 // water mark remain safe.
 func allocPos() token.Pos {
+	goPosMu.Lock()
+	defer goPosMu.Unlock()
 	p := token.Pos(goPosNext)
 	goSynthFile.AddLine(goPosNext)
 	goPosNext++

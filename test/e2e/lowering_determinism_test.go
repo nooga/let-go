@@ -45,7 +45,16 @@ func TestLoweringDeterminism(t *testing.T) {
 	root := repoRoot(t)
 
 	cold := buildLgbgenTags(t, root, "bootstrap")
+
+	// Materialize the gogen_ir wireup + native lowered tree in the checkout
+	// before building hot (same artifacts `make lowered` produces; they are
+	// gitignored and regenerated on demand). In a clean checkout they don't
+	// exist, `-tags gogen_ir` selects no additional files, and "hot" compiles
+	// identically to "cold" — the gate would compare cold against itself.
+	materializeNativeLowering(t, root, cold)
+
 	hot := buildLgbgenTags(t, root, "bootstrap gogen_ir")
+	assertNativeLoweringLinked(t, root)
 
 	base := t.TempDir()
 	// The work-unit typeinfer guard (*typeinfer-max-drains*) is a defensive
@@ -96,6 +105,43 @@ func buildLgbgenTags(t *testing.T, repoRoot, tags string) string {
 		t.Fatalf("build lgbgen (-tags %q): %v\nstderr:\n%s", tags, err, stderr.String())
 	}
 	return bin
+}
+
+// materializeNativeLowering runs the cold lgbgen against the checkout's
+// DEFAULT output locations (equivalent to `make lowered`): it writes the
+// native lowered tree and the //go:build gogen_ir wireup files that the hot
+// build needs to actually differ from cold. Both are gitignored on-demand
+// artifacts, so this mutates no tracked state.
+func materializeNativeLowering(t *testing.T, repoRoot, coldBin string) {
+	t.Helper()
+	cmd := exec.Command(coldBin, "--target=go")
+	cmd.Dir = repoRoot
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("materialize native lowering (--target=go): %v\nstderr:\n%s", err, stderr.String())
+	}
+}
+
+// assertNativeLoweringLinked fails unless the gogen_ir-tagged lgbgen build
+// actually depends on the native lowered tree. Without this assertion a
+// missing wireup makes hot == cold and the byte-identity comparison vacuous.
+func assertNativeLoweringLinked(t *testing.T, repoRoot string) {
+	t.Helper()
+	cmd := exec.Command("go", "list", "-deps", "-tags", "bootstrap gogen_ir", "./cmd/lgbgen")
+	cmd.Dir = repoRoot
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("go list -deps (hot tags): %v\nstderr:\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "core_go_lowered") {
+		t.Fatalf("hot lgbgen build does not link the native lowered tree " +
+			"(no core_go_lowered package in go list -deps): the gogen_ir wireup " +
+			"is missing, so the hot binary would be identical to cold and this " +
+			"gate would pass without exercising the native self-hosting path")
+	}
 }
 
 // generateLoweredTree runs lgbgen with the lowered tree (--target=go) and the

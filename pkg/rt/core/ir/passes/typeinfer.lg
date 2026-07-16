@@ -527,19 +527,8 @@
             s state
             tick 0]
        (cond
-         ;; Deterministic work-unit guard: bail after a drain-count cap.
-         ;; Unlike the former wall-clock budget, drain counts are
-         ;; machine-independent, making the lowered output deterministic.
-         (and *typeinfer-max-drains* (> tick *typeinfer-max-drains*))
-         (do
-           (println "typeinfer: hit *typeinfer-max-drains*"
-                    (or *typeinfer-max-drains* "<nil>")
-                    "— bailing with partial result")
-           (when lat/*ti-counters*
-             (swap! lat/*ti-counters* assoc
-                    :drain-ms (int (/ (- (System/nanoTime) start-ns) 1000000))
-                    :drains tick))
-           s)
+         ;; Normal exit first: a queue that empties exactly at the cap is a
+         ;; completed pass, not a bail.
          (empty? queue)
          (do
            (when lat/*ti-counters*
@@ -547,6 +536,21 @@
                     assoc
                     :drain-ms
                     (int (/ (- (System/nanoTime) start-ns) 1000000))
+                    :drains tick))
+           s)
+         ;; Deterministic work-unit guard: bail after a drain-count cap.
+         ;; Unlike the former wall-clock budget, drain counts are
+         ;; machine-independent, making the lowered output deterministic.
+         ;; tick counts COMPLETED drains, so >= means a cap of N performs
+         ;; exactly N drains (and a cap of 0 performs none).
+         (and *typeinfer-max-drains* (>= tick *typeinfer-max-drains*))
+         (do
+           (println "typeinfer: hit *typeinfer-max-drains*"
+                    (or *typeinfer-max-drains* "<nil>")
+                    "— bailing with partial result")
+           (when lat/*ti-counters*
+             (swap! lat/*ti-counters* assoc
+                    :drain-ms (int (/ (- (System/nanoTime) start-ns) 1000000))
                     :drains tick))
            s)
          :else
