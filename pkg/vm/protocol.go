@@ -12,6 +12,7 @@ type Protocol struct {
 	name    string
 	methods []Symbol                     // method names
 	impls   map[ValueType]*PersistentMap // type → {method-name → fn}
+	direct  map[ValueType]bool           // types extended EXACTLY (not via a TypeUnion fan-out)
 	nilImpl *PersistentMap               // implementation for nil
 	meta    Value                        // IMeta support
 }
@@ -21,6 +22,7 @@ func NewProtocol(name string, methods []Symbol) *Protocol {
 		name:    name,
 		methods: methods,
 		impls:   make(map[ValueType]*PersistentMap),
+		direct:  make(map[ValueType]bool),
 	}
 }
 
@@ -46,9 +48,25 @@ func (p *Protocol) WithMeta(m Value) Value {
 	return &cp
 }
 
-// Extend adds implementations for a type.
-// implMap is a PersistentMap of {method-keyword → fn}.
+// Extend adds implementations for a type extended EXACTLY (extend-type on a
+// concrete type). Exact extensions always win: they overwrite a prior
+// TypeUnion-sourced implementation and are never overwritten by a later one —
+// Clojure's exact-type-over-interface dispatch precedence, independent of
+// registration order. implMap is a PersistentMap of {method-keyword → fn}.
 func (p *Protocol) Extend(vt ValueType, implMap *PersistentMap) {
+	p.impls[vt] = implMap
+	p.direct[vt] = true
+}
+
+// ExtendViaUnion adds implementations for one member of a TypeUnion
+// (a compatibility interface like clojure.lang.IPersistentVector fanning out
+// to its concrete vm types). It never clobbers an exact Extend on the same
+// type; unions overwrite only other unions (last union wins, matching
+// Clojure's unspecified interface-vs-interface order).
+func (p *Protocol) ExtendViaUnion(vt ValueType, implMap *PersistentMap) {
+	if p.direct[vt] {
+		return
+	}
 	p.impls[vt] = implMap
 }
 

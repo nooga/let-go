@@ -124,3 +124,16 @@
       (is (= 3 @a))
       (is (nil? (agent-error a)))
       (is (= true (await-for 1 a))))))
+
+(defprotocol PrecedenceConcreteFirst (pcf-tag [x]))
+(extend-type (type [1]) PrecedenceConcreteFirst (pcf-tag [_] :concrete))
+(extend-type clojure.lang.IPersistentVector PrecedenceConcreteFirst (pcf-tag [_] :interface))
+
+(defprotocol PrecedenceInterfaceFirst (pif-tag [x]))
+(extend-type clojure.lang.IPersistentVector PrecedenceInterfaceFirst (pif-tag [_] :interface))
+(extend-type (type [1]) PrecedenceInterfaceFirst (pif-tag [_] :concrete))
+
+(deftest exact-type-beats-interface-dispatch-test
+  (testing "an exact extend-type wins over a TypeUnion interface, in BOTH registration orders (Clojure: class beats interface)"
+    (is (= :concrete (pcf-tag [1])))
+    (is (= :concrete (pif-tag [1])))))

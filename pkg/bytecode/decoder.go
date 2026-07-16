@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"regexp"
 	"sort"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -1001,11 +1000,14 @@ func (d *decoder) readValue() (vm.Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		re, err := regexp.Compile(pattern)
+		// Reconstruct via vm.NewRegex, not raw regexp.Compile: NewRegex carries
+		// the terminal-lookahead compatibility fallback, so a pattern that
+		// compiled at read time round-trips through the bundle instead of
+		// failing with "invalid or unsupported Perl syntax".
+		v, err := vm.NewRegex(pattern)
 		if err != nil {
 			return nil, fmt.Errorf("recompiling regex %q: %w", pattern, err)
 		}
-		v, _ := vm.RegexType.Box(re)
 		return v, nil
 	case TagAtom:
 		val, err := d.readValue()
@@ -1366,11 +1368,14 @@ func (d *decoder) readValueV2() (vm.Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		re, err := regexp.Compile(pattern)
+		// Reconstruct via vm.NewRegex, not raw regexp.Compile: NewRegex carries
+		// the terminal-lookahead compatibility fallback, so a pattern that
+		// compiled at read time round-trips through the bundle instead of
+		// failing with "invalid or unsupported Perl syntax".
+		v, err := vm.NewRegex(pattern)
 		if err != nil {
 			return nil, fmt.Errorf("recompiling regex %q: %w", pattern, err)
 		}
-		v, _ := vm.RegexType.Box(re)
 		return v, nil
 	case TagIDAtom:
 		val, err := d.readValueV2()

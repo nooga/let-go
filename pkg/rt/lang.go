@@ -5270,8 +5270,10 @@ func installLangNS() {
 			return vm.NIL, nil
 		}
 		if union, ok := vs[1].(*vm.TypeUnion); ok {
+			// Union fan-out must not clobber an exact extend-type on a member
+			// (Clojure: exact type beats interface, regardless of order).
 			for _, valueType := range union.Types() {
-				protocol.Extend(valueType, implMap)
+				protocol.ExtendViaUnion(valueType, implMap)
 			}
 			return vm.NIL, nil
 		}

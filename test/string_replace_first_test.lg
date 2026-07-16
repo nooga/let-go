@@ -1,7 +1,8 @@
 ;; clojure.string/replace-first: first-occurrence replacement, String and Regex.
 (ns test.string-replace-first-test
-  (:require [string :as str]
-            [test :refer :all]))
+  (:require
+   [string :as str]
+   [test :refer :all]))
 
 (deftest replace-first-string-match
   (testing "replaces only the FIRST literal occurrence"
@@ -31,3 +32,19 @@
     (is (= ["a-" "a"] (re-find #"(\w)-(?=\w)" "a-b")))
     (is (= '(["a-" "a"] ["b-" "b"])
            (re-seq #"(\w)-(?=\w)" "a-b-c")))))
+
+(deftest lookahead-anchor-and-group-semantics
+  (testing "^ anchors to the true string start, not every resume point"
+    ;; Java: one empty match at position 0. The slice-based resume used to
+    ;; re-anchor ^ at each offset and yield ("" "").
+    (is (= '("") (re-seq #"^(?=a)" "aa")))
+    (is (= ["ab" "a"] (re-find #"^(a)b(?=c)" "abc")))
+    (is (nil? (re-find #"^(?=b)" "ab"))))
+  (testing "(?m) ^ anchors at line starts only"
+    (is (= '("a-" "b-")
+           (map first (re-seq #"(?m)^(\w)-(?=\w)" "a-b\nb-c")))))
+  (testing "the synthetic lookahead group does not leak into $n replacement"
+    ;; #"(a)(?=b)" has ONE user group; $2 must expand empty (out of range,
+    ;; matching non-lookahead patterns), never to the assertion's text.
+    (is (= "b" (str/replace "ab" #"(a)(?=b)" "$2")))
+    (is (= "[a]b" (str/replace "ab" #"(a)(?=b)" "[$1]")))))

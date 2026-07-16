@@ -38,6 +38,7 @@ type Regex struct {
 	re             *regexp.Regexp
 	pattern        string
 	lookaheadGroup int
+	startAnchor    anchorKind // leading-anchor class of the lookahead fallback pattern
 }
 
 // Type implements Value
@@ -239,7 +240,48 @@ func NewRegex(s string) (Value, error) {
 	if fallbackErr != nil {
 		return NIL, err
 	}
-	return &Regex{re: re, pattern: s, lookaheadGroup: re.SubexpIndex(groupName)}, nil
+	return &Regex{
+		re:             re,
+		pattern:        s,
+		lookaheadGroup: re.SubexpIndex(groupName),
+		startAnchor:    startAnchorKind(prefix),
+	}, nil
+}
+
+// startAnchorKind classifies the fallback pattern's leading anchor so
+// lookaheadMatches can preserve its semantics across resumed searches.
+// Go's regexp has no "match at offset with left context" API — resumed
+// searches slice the input, which turns the slice start into a fresh
+// text start and lets `^` match at every resume point. Classifying the
+// anchor up front lets the iterator constrain resume positions instead.
+type anchorKind int
+
+const (
+	anchorNone anchorKind = iota // no leading ^/\A: every offset is a valid resume point
+	anchorText                   // ^ or \A without (?m): only position 0 can match
+	anchorLine                   // (?m)^: only line starts can match
+)
+
+func startAnchorKind(prefix string) anchorKind {
+	multiline := strings.Contains(prefix, "(?m")
+	rest := prefix
+	for strings.HasPrefix(rest, "(?") { // skip leading flag groups like (?m) / (?is)
+		end := strings.IndexByte(rest, ')')
+		if end < 0 || strings.ContainsAny(rest[2:end], ":<P=!") {
+			break // a real group, not a bare flag setter
+		}
+		rest = rest[end+1:]
+	}
+	switch {
+	case strings.HasPrefix(rest, `\A`):
+		return anchorText
+	case strings.HasPrefix(rest, "^") && multiline:
+		return anchorLine
+	case strings.HasPrefix(rest, "^"):
+		return anchorText
+	default:
+		return anchorNone
+	}
 }
 
 type lookaheadMatch struct {
@@ -264,6 +306,30 @@ func (l *Regex) lookaheadMatches(s string, n int) []lookaheadMatch {
 	}
 	result := make([]lookaheadMatch, 0)
 	for offset := 0; offset <= len(s) && (n < 0 || len(result) < n); {
+		// Resumed searches slice the input, which would let a leading `^`
+		// re-anchor at every resume point (Java: ^ matches only at the true
+		// string start, or line starts under (?m)). Constrain resume
+		// positions per the pattern's classified anchor instead; slicing at
+		// a REAL text/line start keeps `^` semantics exact. (`\b` at a
+		// resume boundary still sees a fresh text start — a known limitation
+		// of Go's offset-less matching API.)
+		switch l.startAnchor {
+		case anchorText:
+			if offset > 0 {
+				return result
+			}
+		case anchorLine:
+			for offset > 0 && offset <= len(s) && s[offset-1] != '\n' {
+				_, width := utf8.DecodeRuneInString(s[offset:])
+				if width == 0 {
+					return result
+				}
+				offset += width
+			}
+			if offset > len(s) {
+				return result
+			}
+		}
 		raw := l.re.FindStringSubmatchIndex(s[offset:])
 		if raw == nil {
 			break
@@ -317,9 +383,12 @@ func (l *Regex) replaceLookahead(s, replacement string, first bool) string {
 	last := 0
 	for _, match := range matches {
 		b.WriteString(s[last:match.visible[0]])
-		expandIndices := append([]int(nil), match.raw...)
-		expandIndices[1] = match.visible[1]
-		b.Write(l.re.ExpandString(nil, replacement, s, expandIndices))
+		// Expand against the VISIBLE indices (synthetic lookahead group
+		// removed): template group numbers then mean the ORIGINAL pattern's
+		// groups, and a reference to the synthetic group's slot is out of
+		// range (empty, like any other nonexistent group) instead of leaking
+		// the assertion's matched text into the replacement.
+		b.Write(l.re.ExpandString(nil, replacement, s, match.visible))
 		last = match.visible[1]
 	}
 	b.WriteString(s[last:])

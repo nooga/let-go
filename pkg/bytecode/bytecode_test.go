@@ -734,6 +734,31 @@ func TestRegexRoundtrip(t *testing.T) {
 	}
 }
 
+// A terminal-lookahead pattern only compiles through vm.NewRegex's
+// compatibility fallback — raw regexp.Compile rejects it. The decoder must
+// reconstruct through the same path or the bundle round-trip fails with
+// "invalid or unsupported Perl syntax" (review finding on #494).
+func TestRegexLookaheadRoundtrip(t *testing.T) {
+	const pat = `(\w)-(?=\w)`
+	v, err := vm.NewRegex(pat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := roundtripValue(t, v)
+	gotRe, ok := got.(*vm.Regex)
+	if !ok {
+		t.Fatalf("expected *Regex, got %T", got)
+	}
+	if gotRe.Pattern() != pat {
+		t.Errorf("pattern: got %q, want %q", gotRe.Pattern(), pat)
+	}
+	// The decoded regex must MATCH with lookahead semantics (visible match
+	// excludes the assertion), not just carry the pattern string.
+	if m := gotRe.FindStringSubmatch("a-b"); len(m) == 0 || m[0] != "a-" {
+		t.Errorf("decoded lookahead match: got %v, want visible match %q", m, "a-")
+	}
+}
+
 // --- Atom roundtrip ---
 
 func TestAtomRoundtrip(t *testing.T) {
