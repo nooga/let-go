@@ -33,7 +33,7 @@
 
 (defn parse-bailed-fns [timing-text]
   "extract sorted, deduped function names from typeinfer bail lines.
-   lines: 'typeinfer: hit *typeinfer-budget-ms* 5000 — bailing with partial result on <NAME>'
+   lines: 'typeinfer: hit *typeinfer-max-drains* <count> — bailing with partial result on <name>'
    returns sorted vector of unique names"
   ;; The fn name is a single whitespace-free token (e.g.
   ;; thread-hoisted-through-header!, <unnamed>); capture it directly. Do NOT

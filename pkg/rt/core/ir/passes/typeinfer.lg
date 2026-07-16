@@ -483,11 +483,15 @@
   ;; In-place flag flip (see enqueue-entry!) — NOT disj!, which clones.
   (assoc! queued entry false))
 
-;; Per-call wall-clock budget. Defensive guard against pathological
-;; inputs. Bail cleanly with the current partial result — every assigned
-;; type is sound (monotone-store), lower-go's rt.<Op>Value helper path
-;; handles :any operands correctly. Bind to nil for unbounded execution.
-(def ^:dynamic *typeinfer-budget-ms* 2000)
+;; Per-call work-unit guard: bail after this many worklist drains. A drain
+;; count is machine-independent, so — unlike the former wall-clock budget —
+;; the bail point (if it ever fires) is DETERMINISTIC: lowered output is a
+;; pure function of the source, not of timing. Set far above real core (the
+;; no-bail assertion in TestLoweringDeterminism) so it never fires there; a backstop
+;; for pathological inputs only. Bail is sound — every assigned type is
+;; monotone and lower-go's rt.<Op>Value path handles :any operands. Bind to
+;; nil for unbounded execution.
+(def ^:dynamic *typeinfer-max-drains* 2000000)
 
 (defn- initial-work-queue [f]
   (let [items (concat
@@ -515,13 +519,7 @@
   ([f state]
    (let [deps (build-deps f)
          [queue0 queued0] (initial-work-queue f)
-         start-ns (System/nanoTime)
-         budget-ns (when *typeinfer-budget-ms*
-                     (* *typeinfer-budget-ms* 1000000))
-         budget-exceeded?
-         (fn []
-           (and budget-ns
-                (> (- (System/nanoTime) start-ns) budget-ns)))]
+         start-ns (System/nanoTime)]
      ;; queued0 is a transient entry→in-queue? map closed over by the loop —
      ;; enqueue-entry! and the pop below mutate it in place, so it is not
      ;; threaded.
@@ -529,28 +527,34 @@
             s state
             tick 0]
        (cond
-         ;; Check the wall-clock budget only every 128 drains — calling
-         ;; System/nanoTime each iteration is needless overhead; the lattice is
-         ;; monotone so a slightly late bail is harmless (restores the pre-#235
-         ;; 128:1 throttle).
-         (and (zero? (rem tick 128)) (budget-exceeded?))
-         (do
-           (println "typeinfer: hit *typeinfer-budget-ms*"
-                    (or *typeinfer-budget-ms* "<nil>")
-                    "— bailing with partial result")
-           (when lat/*ti-counters*
-             (swap! lat/*ti-counters*
-                    assoc
-                    :drain-ms
-                    (int (/ (- (System/nanoTime) start-ns) 1000000))))
-           s)
+         ;; Normal exit first: a queue that empties exactly at the cap is a
+         ;; completed pass, not a bail.
          (empty? queue)
          (do
            (when lat/*ti-counters*
              (swap! lat/*ti-counters*
                     assoc
                     :drain-ms
-                    (int (/ (- (System/nanoTime) start-ns) 1000000))))
+                    (int (/ (- (System/nanoTime) start-ns) 1000000))
+                    :drains tick))
+           s)
+         ;; Deterministic work-unit guard: bail after a drain-count cap.
+         ;; Unlike the former wall-clock budget, drain counts are
+         ;; machine-independent, making the lowered output deterministic.
+         ;; tick counts COMPLETED drains, so >= means a cap of N performs
+         ;; exactly N drains (and a cap of 0 performs none).
+         (and *typeinfer-max-drains* (>= tick *typeinfer-max-drains*))
+         (do
+           ;; The trailing "on <name>" is load-bearing: turnaround-ratchet.lg's
+           ;; parse-bailed-fns attributes bails per function from this line.
+           (println "typeinfer: hit *typeinfer-max-drains*"
+                    (or *typeinfer-max-drains* "<nil>")
+                    "— bailing with partial result on"
+                    (or (ir/fn-name f) "<unnamed>"))
+           (when lat/*ti-counters*
+             (swap! lat/*ti-counters* assoc
+                    :drain-ms (int (/ (- (System/nanoTime) start-ns) 1000000))
+                    :drains tick))
            s)
          :else
          ;; Drain LIFO via peek/pop (O(1) on a vector). The previous

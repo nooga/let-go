@@ -21,11 +21,6 @@ type compileErrorLike interface {
 // FormatError produces a user-friendly error display with source snippets,
 // inspired by Rust/Elm-style error reporting.
 func FormatError(err error) string {
-	// Handle compile errors
-	if ce, ok := err.(compileErrorLike); ok {
-		return formatCompileError(ce)
-	}
-
 	var b strings.Builder
 
 	// Collect frames from the error chain
@@ -68,14 +63,20 @@ func FormatError(err error) string {
 		return err.Error()
 	}
 
-	compileFrames := make([]frame, 0, len(frames))
-	for _, frame := range frames {
-		if frame.compile {
-			compileFrames = append(compileFrames, frame)
+	// One renderer for compile-error chains, whether the CompileError is the
+	// top-level error or nested as a cause (formerly two near-duplicate paths:
+	// an early-return formatCompileError plus this loop — consolidated so they
+	// can't drift). Frames render in chain order: root first, then each cause,
+	// with a snippet wherever the frame carries source info.
+	hasCompile := false
+	for _, f := range frames {
+		if f.compile {
+			hasCompile = true
+			break
 		}
 	}
-	if len(compileFrames) > 0 {
-		for i, frame := range compileFrames {
+	if hasCompile {
+		for i, frame := range frames {
 			if i == 0 {
 				fmt.Fprintf(&b, ansiBoldRed+"error:"+ansiReset+" %s\n", frame.msg)
 			} else {
@@ -158,37 +159,6 @@ func letGoStackFrames(stack string) string {
 		i++ // consume the location line
 	}
 	return out.String()
-}
-
-func formatCompileError(ce compileErrorLike) string {
-	var b strings.Builder
-	type compileFrame struct {
-		message string
-		source  *SourceInfo
-	}
-	frames := make([]compileFrame, 0, 4)
-	var current error = ce
-	for current != nil {
-		if detail, ok := current.(compileErrorLike); ok {
-			frames = append(frames, compileFrame{message: detail.Message(), source: detail.Source()})
-			current = detail.GetCause()
-			continue
-		}
-		frames = append(frames, compileFrame{message: current.Error()})
-		break
-	}
-
-	for i, frame := range frames {
-		if i == 0 {
-			fmt.Fprintf(&b, ansiBoldRed+"error:"+ansiReset+" %s\n", frame.message)
-		} else {
-			fmt.Fprintf(&b, "caused by: %s\n", frame.message)
-		}
-		if frame.source != nil {
-			writeSnippet(&b, frame.source)
-		}
-	}
-	return b.String()
 }
 
 func writeSnippet(b *strings.Builder, info *SourceInfo) {

@@ -28,8 +28,10 @@ import (
 	"go/token"
 	"math"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -1869,6 +1871,12 @@ var goFset = token.NewFileSet()
 var (
 	goSynthFile = goFset.AddFile("gogen.synthetic.go", -1, 1<<28)
 	goPosNext   = 1 // next byte offset to hand out (1-based)
+	// goPosMu serializes allocPos: concurrent lowering goroutines share
+	// goPosNext, and an unsynchronized read-increment can hand two nodes the
+	// same position (a lost update), which renderFset's collect/remap cannot
+	// disambiguate. The lock also keeps AddLine calls monotonic, which the
+	// line-table comment on allocPos relies on.
+	goPosMu sync.Mutex
 )
 
 // allocPos returns a fresh token.Pos on a new synthetic line. Used by
@@ -1882,6 +1890,8 @@ var (
 // duplicate or out-of-order offsets, so repeated calls past the high
 // water mark remain safe.
 func allocPos() token.Pos {
+	goPosMu.Lock()
+	defer goPosMu.Unlock()
 	p := token.Pos(goPosNext)
 	goSynthFile.AddLine(goPosNext)
 	goPosNext++
@@ -1949,6 +1959,165 @@ func stripPositions(n ast.Node) {
 	})
 }
 
+// eachPosField calls fn with a pointer to every settable token.Pos field on x.
+// It is the single source of truth for which position fields renderFset reads
+// and rewrites, so collect and remap can never drift out of sync. The switch
+// covers the node types the gogen emitter can produce; an AST type absent
+// here simply keeps its zero/sparse positions, which renders deterministically
+// (go/printer falls back to layout rules) — omissions degrade formatting, not
+// determinism.
+func eachPosField(x ast.Node, fn func(*token.Pos)) {
+	switch v := x.(type) {
+	case *ast.Ident:
+		fn(&v.NamePos)
+	case *ast.BasicLit:
+		fn(&v.ValuePos)
+	case *ast.CompositeLit:
+		fn(&v.Lbrace)
+		fn(&v.Rbrace)
+	case *ast.KeyValueExpr:
+		fn(&v.Colon)
+	case *ast.ParenExpr:
+		fn(&v.Lparen)
+		fn(&v.Rparen)
+	case *ast.StarExpr:
+		fn(&v.Star)
+	case *ast.UnaryExpr:
+		fn(&v.OpPos)
+	case *ast.BinaryExpr:
+		fn(&v.OpPos)
+	case *ast.CallExpr:
+		fn(&v.Lparen)
+		fn(&v.Ellipsis)
+		fn(&v.Rparen)
+	case *ast.IndexExpr:
+		fn(&v.Lbrack)
+		fn(&v.Rbrack)
+	case *ast.SliceExpr:
+		fn(&v.Lbrack)
+		fn(&v.Rbrack)
+	case *ast.TypeAssertExpr:
+		fn(&v.Lparen)
+		fn(&v.Rparen)
+	case *ast.Ellipsis:
+		fn(&v.Ellipsis)
+	case *ast.ArrayType:
+		fn(&v.Lbrack)
+	case *ast.MapType:
+		fn(&v.Map)
+	case *ast.ChanType:
+		fn(&v.Begin)
+		fn(&v.Arrow)
+	case *ast.StructType:
+		fn(&v.Struct)
+	case *ast.InterfaceType:
+		fn(&v.Interface)
+	case *ast.FuncType:
+		fn(&v.Func)
+	case *ast.FieldList:
+		fn(&v.Opening)
+		fn(&v.Closing)
+	case *ast.GenDecl:
+		fn(&v.TokPos)
+		fn(&v.Lparen)
+		fn(&v.Rparen)
+	case *ast.Comment:
+		fn(&v.Slash)
+	case *ast.File:
+		fn(&v.Package)
+		fn(&v.FileStart)
+		fn(&v.FileEnd)
+	case *ast.BlockStmt:
+		fn(&v.Lbrace)
+		fn(&v.Rbrace)
+	case *ast.ReturnStmt:
+		fn(&v.Return)
+	case *ast.BranchStmt:
+		fn(&v.TokPos)
+	case *ast.AssignStmt:
+		fn(&v.TokPos)
+	case *ast.IfStmt:
+		fn(&v.If)
+	case *ast.ForStmt:
+		fn(&v.For)
+	case *ast.RangeStmt:
+		fn(&v.For)
+	case *ast.SwitchStmt:
+		fn(&v.Switch)
+	case *ast.TypeSwitchStmt:
+		fn(&v.Switch)
+	case *ast.CaseClause:
+		fn(&v.Case)
+		fn(&v.Colon)
+	case *ast.SelectStmt:
+		fn(&v.Select)
+	case *ast.CommClause:
+		fn(&v.Case)
+		fn(&v.Colon)
+	case *ast.GoStmt:
+		fn(&v.Go)
+	case *ast.DeferStmt:
+		fn(&v.Defer)
+	case *ast.SendStmt:
+		fn(&v.Arrow)
+	case *ast.IncDecStmt:
+		fn(&v.TokPos)
+	case *ast.LabeledStmt:
+		fn(&v.Colon)
+	case *ast.EmptyStmt:
+		fn(&v.Semicolon)
+	}
+}
+
+// renderFset returns a fresh FileSet in which every position reachable from n
+// has been renumbered to a dense, gap-free sequence in sorted order. allocPos()
+// hands adjacent nodes consecutive positions, but under concurrent lowering
+// other goroutines' allocPos calls interleave, leaving gaps that go/format
+// renders as spurious blank lines — making identical ASTs render differently
+// run-to-run. Densing positions per file at render time makes the rendered text
+// a pure function of the AST, independent of build concurrency. Mutates n in
+// place (each AST is rendered exactly once).
+func renderFset(n ast.Node) *token.FileSet {
+	seen := map[token.Pos]struct{}{}
+	ast.Inspect(n, func(x ast.Node) bool {
+		if x != nil {
+			eachPosField(x, func(p *token.Pos) {
+				if *p != token.NoPos {
+					seen[*p] = struct{}{}
+				}
+			})
+		}
+		return true
+	})
+	if len(seen) == 0 {
+		return goFset
+	}
+	sorted := make([]token.Pos, 0, len(seen))
+	for p := range seen {
+		sorted = append(sorted, p)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	fset := token.NewFileSet()
+	f := fset.AddFile("gogen.render.go", -1, 1<<28)
+	remap := make(map[token.Pos]token.Pos, len(sorted))
+	for i, old := range sorted {
+		off := i + 1
+		f.AddLine(off)
+		remap[old] = token.Pos(off)
+	}
+	ast.Inspect(n, func(x ast.Node) bool {
+		if x != nil {
+			eachPosField(x, func(p *token.Pos) {
+				if np, ok := remap[*p]; ok {
+					*p = np
+				}
+			})
+		}
+		return true
+	})
+	return fset
+}
+
 func cRender(v vm.Value) (result vm.Value, retErr error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1964,7 +2133,7 @@ func cRender(v vm.Value) (result vm.Value, retErr error) {
 		return vm.String(""), nil
 	}
 	var buf bytes.Buffer
-	if err := format.Node(&buf, goFset, n); err != nil {
+	if err := format.Node(&buf, renderFset(n), n); err != nil {
 		return vm.NIL, fmt.Errorf("gogen/render: format: %w", err)
 	}
 	return vm.String(buf.String()), nil

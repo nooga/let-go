@@ -139,7 +139,9 @@ func (h *Host) handleEval(req Request, emit func(string)) {
 		)
 		func() {
 			ns := rt.NS(sess.NS)
-			c := compiler.NewCompiler(h.consts, ns)
+			// Per-request transient compiler: the host is long-lived, request
+			// evals must not root its pool (see compiler.NewTransientCompiler).
+			c := compiler.NewTransientCompiler(h.consts, ns)
 			c.SetSource("<host-request>")
 			outVar := rt.LookupCoreVar("*out*")
 			if outVar != nil {
@@ -455,7 +457,8 @@ func (h *Host) evalInNS(nsName, source string) (vm.Value, error) {
 	if ns == nil {
 		ns = rt.NS("user")
 	}
-	c := compiler.NewCompiler(h.consts, ns)
+	// Per-inspect transient compiler — same rationale as <host-request>.
+	c := compiler.NewTransientCompiler(h.consts, ns)
 	c.SetSource("<host-inspect>")
 	_, result, err := c.CompileMultiple(strings.NewReader(source))
 	return result, err

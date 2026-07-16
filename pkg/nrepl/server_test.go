@@ -6,10 +6,15 @@
 package nrepl
 
 import (
+	"io"
 	"net"
 	"os"
 	"strconv"
 	"testing"
+
+	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/rt"
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 // With -p 0 the OS picks a free ephemeral port. The server must report the
@@ -61,5 +66,36 @@ func TestStartFixedPort(t *testing.T) {
 
 	if n.Port() != want {
 		t.Errorf("Port() = %d, want %d", n.Port(), want)
+	}
+}
+
+// A long-lived nREPL session must not grow its const pool per eval: handleEval
+// compiles each input through a per-input child pool (ChildForEval), so
+// transient constants (e.g. regex literals) stay collectible (review finding
+// on #496).
+func TestSessionEvalDoesNotGrowConstPool(t *testing.T) {
+	consts := vm.NewConsts()
+	ctx := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	n := NewNreplServer(ctx)
+
+	server, client := net.Pipe()
+	defer server.Close()
+	go func() { _, _ = io.Copy(io.Discard, client) }() // drain responses
+	defer client.Close()
+
+	evalOnce := func() {
+		n.handleEval(server, map[string]any{
+			"id":      "1",
+			"session": "s",
+			"code":    `(re-find #"x" "xyz")`,
+		})
+	}
+	evalOnce() // warmup: first eval may intern shared constants
+	before := len(consts.AllValues())
+	for i := 0; i < 100; i++ {
+		evalOnce()
+	}
+	if growth := len(consts.AllValues()) - before; growth != 0 {
+		t.Fatalf("session const pool grew by %d entries across 100 evals — per-input child pools are not in effect", growth)
 	}
 }

@@ -283,7 +283,12 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) (*vm.Name
 	vm.ReleaseFrame(f)
 	if err != nil {
 		r.ctx.SetCurrentNS(ons)
-		return nil, fmt.Errorf("failed to load precompiled namespace %s: %w", name, err)
+		// Wrap with vm.ExecutionError, not fmt.Errorf: FormatError walks the
+		// cause chain by concrete type (GetCause), so a %w-wrapped
+		// ExecutionError/ThrownError from RunProtected would render as one
+		// flat line — losing the source snippet and stack this PR restores.
+		return nil, vm.NewExecutionError(
+			fmt.Sprintf("failed to load precompiled namespace %s", name)).Wrap(err)
 	}
 	_ = result
 	nns := r.ctx.CurrentNS()
