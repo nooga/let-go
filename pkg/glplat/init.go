@@ -1,3 +1,9 @@
+// The native GLFW/OpenGL backend is opt-in: build with -tags glplat.
+// Without the tag no backend registers and the pure-Go API returns
+// "no backend registered" errors, so plain `go build ./...`, headless CI,
+// and the GOOS=js wasm target never need cgo/GLFW.
+//go:build glplat
+
 package glplat
 
 import (
