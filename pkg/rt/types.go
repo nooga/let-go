@@ -21,7 +21,7 @@ type ShellResult struct {
 
 // HTTPRequest is the struct behind ring-style HTTP request maps.
 type HTTPRequest struct {
-	RequestMethod string   `letgo:"request-method"`
+	RequestMethod vm.Value `letgo:"request-method"`
 	Scheme        string   `letgo:"scheme"`
 	URI           string   `letgo:"uri"`
 	Path          string   `letgo:"path"`

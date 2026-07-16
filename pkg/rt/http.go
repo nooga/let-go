@@ -46,15 +46,11 @@ type Handler struct {
 	fn vm.Fn
 }
 
-func methodToLG(scheme string) vm.Keyword {
-	return map[string]vm.Keyword{
-		"GET":     vm.Keyword("get"),
-		"POST":    vm.Keyword("post"),
-		"PUT":     vm.Keyword("put"),
-		"DELETE":  vm.Keyword("delete"),
-		"HEAD":    vm.Keyword("head"),
-		"OPTIONS": vm.Keyword("options"),
-	}[scheme]
+// methodToLG maps an HTTP method to a lowercase keyword, Ring-style
+// (:get, :post, …). Extension methods (PATCH, etc.) pass through lowercased
+// rather than falling back to an empty keyword.
+func methodToLG(method string) vm.Keyword {
+	return vm.Keyword(strings.ToLower(method))
 }
 
 func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
@@ -88,7 +84,7 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	req := httpRequestMapping.StructToRecord(HTTPRequest{
-		RequestMethod: string(methodToLG(request.Method)),
+		RequestMethod: methodToLG(request.Method),
 		Scheme:        scheme,
 		URI:           url.RequestURI(),
 		Path:          url.Path,
