@@ -205,11 +205,37 @@ A contributed `database/sql` wrapper would be three small pieces:
 | `ScanRow` out-param shim | same generated file, emitted by the lg-based gogen emitter | ~20 lines, generated |
 | `db` veneer: `query`, `exec!`, `with-db` | `pkg/rt/core/db.lg` (or a userland `.lg` library) | ~1 screen |
 
-## Is anyone doing DB work with let-go yet?
+## Reference: `cmd/lginterop`
 
-Not that is visible in-tree or in the compat corpora: xxh3 is the only
-lginterop-wrapped package on `main`, and the HoneySQL compat work (#494)
-stops at `format` — generating SQL strings, not executing them. A
-`database/sql` wrapper along the lines above would be the first, and the
-`[sql-string & params]` shape means HoneySQL output feeds it with a single
-`apply`.
+Run from the repo root with a built `lg` binary on hand (`go build -o lg .`;
+see [Usage](usage.md) for building and running `lg` generally). The tool has
+two modes:
+
+**External-package mode** — scan a Go package and generate an interop
+namespace:
+
+```
+go run ./cmd/lginterop -packages <import-path>[,<import-path>...] -out pkg/rt
+```
+
+| Flag | Meaning |
+|---|---|
+| `-packages` | comma-separated Go import paths to wrap (overrides `deps.edn` `:gointerop`) |
+| `-dir` | directory containing a `deps.edn` whose `:gointerop` key lists packages (default `.`) |
+| `-out` | output directory for the generated Go files (default `.lg-interop`; use `pkg/rt` for in-tree namespaces) |
+| `-smart` | generate explicit wrappers with type-specific unboxing/boxing instead of `vm.MustBox` |
+| `-skeleton` | also emit a `<alias>_skeleton.lg` of `defn-` stubs to hand-customize into a veneer |
+
+**Primitives mode** — scan `//lg:`-annotated Go sources and generate the
+internal-primitive registrar (see `pkg/rt/native_prims.go` for the directive
+format):
+
+```
+go run ./cmd/lginterop -primitives <dir> -go-pkg <import-path>
+```
+
+| Flag | Meaning |
+|---|---|
+| `-primitives` | directory containing `//lg:native`-annotated Go sources |
+| `-primitives-out` | output file (default `pkg/rt/zz_primitives_generated.go`) |
+| `-go-pkg` | Go import path of the scanned sources |
