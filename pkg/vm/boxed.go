@@ -8,6 +8,8 @@ package vm
 import (
 	"fmt"
 	"reflect"
+	"sync"
+	"sync/atomic"
 )
 
 type aBoxedType struct {
@@ -28,10 +30,13 @@ func (t *aBoxedType) Box(value any) (Value, error) {
 }
 
 type Boxed struct {
-	value  any
-	typ    *aBoxedType
-	hash   uint32
-	hashed bool
+	value any
+	typ   *aBoxedType
+	// hash caches the String-based hash lazily. It packs the "computed" flag
+	// into bit 32 so a legitimate hash of 0 still reads as cached: 0 means
+	// uncomputed, otherwise the low 32 bits hold the hash. Atomic so
+	// concurrent Hash() callers don't race (both compute the same value).
+	hash atomic.Uint64
 }
 
 // Type implements Value
@@ -53,11 +58,12 @@ func (n *Boxed) String() string {
 // identical to the old computeHash fallback, so map/set semantics are
 // unchanged — only the repeated Sprintf is eliminated.
 func (n *Boxed) Hash() uint32 {
-	if !n.hashed {
-		n.hash = hashString(n.String())
-		n.hashed = true
+	if packed := n.hash.Load(); packed != 0 {
+		return uint32(packed)
 	}
-	return n.hash
+	h := hashString(n.String())
+	n.hash.Store(uint64(1)<<32 | uint64(h))
+	return h
 }
 
 func (n *Boxed) InvokeMethod(methodName Symbol, args []Value) (Value, error) {
@@ -87,8 +93,14 @@ func (n *Boxed) ValueAtOr(key Value, dflt Value) Value {
 	return v
 }
 
-// BoxedType is the type of NilValues
-var BoxedTypes map[string]*aBoxedType = map[string]*aBoxedType{}
+// BoxedType is the type of NilValues. Guarded by boxedTypesMu: boxing values
+// from multiple goroutines (e.g. parallel lowering) otherwise races on this
+// shared map, which is a runtime panic for concurrent writes, not just a
+// detector warning.
+var (
+	boxedTypesMu sync.RWMutex
+	BoxedTypes   map[string]*aBoxedType = map[string]*aBoxedType{}
+)
 
 func valueType(value any) *aBoxedType {
 	reflected := reflect.TypeOf(value)
@@ -97,10 +109,16 @@ func valueType(value any) *aBoxedType {
 	// distinct pointer types would collide on the empty key and the first
 	// boxed pointer would shadow every subsequent one.
 	key := reflected.String()
+
+	boxedTypesMu.RLock()
 	t, ok := BoxedTypes[key]
+	boxedTypesMu.RUnlock()
 	if ok {
 		return t
 	}
+
+	// Build the method table outside the write lock — reflection is the
+	// expensive part and needs no mutual exclusion.
 	t = &aBoxedType{
 		typ:     reflected,
 		methods: nil,
@@ -122,6 +140,15 @@ func valueType(value any) *aBoxedType {
 			}
 			t.methods[Symbol(m.Name)] = mef
 		}
+	}
+
+	// Recheck under the write lock: a concurrent caller may have inserted the
+	// same key while we built our table. First writer wins so every caller
+	// shares one *aBoxedType per type.
+	boxedTypesMu.Lock()
+	defer boxedTypesMu.Unlock()
+	if existing, ok := BoxedTypes[key]; ok {
+		return existing
 	}
 	BoxedTypes[key] = t
 	return t

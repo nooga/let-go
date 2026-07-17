@@ -141,13 +141,6 @@ func installNetNS() {
 		return vm.NIL, nil
 	})
 
-	// Warm vm.NewBoxed's type cache for *netConn now, while installers run
-	// single-threaded. The cache (vm.BoxedTypes) is an unsynchronized map, so
-	// the first boxing of a not-yet-seen type must not race; after this, every
-	// net/dial only reads the cache. (The map itself is shared by all Boxed
-	// types across the VM — a broader fix belongs in pkg/vm, not here.)
-	_ = vm.NewBoxed(&netConn{})
-
 	ns := vm.NewNamespace("net")
 	ns.Def("dial", dialFn)
 	ns.Def("write!", writeFn)
