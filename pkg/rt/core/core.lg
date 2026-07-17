@@ -937,7 +937,7 @@
              (reset! ~self (fn* ~@(map #(name-fn-arity name self
                                                        (fn-expand (unwrap-fn-arity-vector (first %))
                                                                   (next %)))
-                                             forms)))
+                                    forms)))
              (deref ~self))))
 
       (vector? (unwrap-fn-arity-vector (first forms)))
@@ -1648,7 +1648,10 @@
   ([n coll]
    (lazy-seq
      (when-let [s (seq coll)]
-       (cons (first s) (take-nth n (drop n s)))))))
+       ;; force the step arithmetic on realization so a non-numeric step
+       ;; throws, matching Clojure's eager drop on IDrop collections
+       (let [rest (if (pos? n) (drop n s) s)]
+         (cons (first s) (take-nth n rest)))))))
 
 (defn interpose
   ([sep]
@@ -2290,11 +2293,11 @@
                            (cons 'defprotocol* (cons (str name) quoted-names)))
         ;; For each method, create a protocol-dispatching fn var
         method-defs  (mapv (fn [sig]
-                            (let [mname (first sig)
-                                  mdoc  (first (next (next sig)))]
-                              (list 'def (def-meta-name mname (if (string? mdoc) mdoc nil) nil)
-                                    (list 'make-protocol-fn name (list 'quote mname)))))
-                          sigs)
+                             (let [mname (first sig)
+                                   mdoc  (first (next (next sig)))]
+                               (list 'def (def-meta-name mname (if (string? mdoc) mdoc nil) nil)
+                                     (list 'make-protocol-fn name (list 'quote mname)))))
+                       sigs)
         ;; Also bind a class-name alias <munged-ns>.<name> so Clojure code
         ;; that references the protocol's generated Java class name (e.g.
         ;; in (instance? clojure.core_test.ancestors.TestAncestorsProtocol x))
