@@ -55,3 +55,14 @@ wasmtime on every PR, so the target can't silently regress.
   transport and some process introspection are unavailable on native builds.
 - **Native macOS does not link** (tinygo-org/tinygo#4794 — Darwin syscalls route
   through libSystem assembly TinyGo can't link). Linux is the native target.
+- **Concurrency yes, parallelism no; `alts!` excepted.** wasm has no threads —
+  `runtime.NumCPU()` and `GOMAXPROCS` are both 1 — so goroutines interleave on a
+  single thread instead of running in parallel (this holds for the stock-Go wasm
+  build too). The cooperative channel surface runs faithfully on native Go
+  channels: `go*`, `>!`/`<!`, `chan` and its buffers, `timeout`, `pipe`, and
+  `promise-chan`. The one hole is `alts!`/`alts!!`, which use `reflect.Select` —
+  unimplemented in TinyGo (see the reflect limitation above), so a call panics
+  rather than erroring at the call site. Parallel *throughput* also doesn't carry
+  over: `pmapv` and other `NumCPU`-fanned work see a single worker and run
+  sequentially — same results, no speedup. Use the standard-Go native build when
+  `alts!` or real parallelism matter.
