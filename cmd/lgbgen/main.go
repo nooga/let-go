@@ -976,13 +976,23 @@ func runGoTarget(outDir, codeDir string) {
 // installGeneratedTree moves the staged generation into the real output dir:
 // the completeness sentinel is invalidated first, previously-generated
 // (bannered) files in realDir are removed — same orphan-cleanup contract as
-// before staging existed — then every staged file is renamed into place and a
-// fresh sentinel is written last. Rename is cheap and same-filesystem
+// before staging existed — then every staged file is renamed into place and
+// the sentinel is installed last. Rename is cheap and same-filesystem
 // (sibling dirs), so the tree is only ever inconsistent for the duration of
 // this loop — and that window is positively detectable via the sentinel
 // (genmanifest.CheckTreeManifest).
+//
+// The manifest is computed from the STAGE dir, not the real dir: it must list
+// exactly what this generation wrote. The real dir legitimately hosts
+// co-tenant packages other tools install next to the generated tree (e.g.
+// scripts/gogen-trampoline.lg lowers test/gogen fixtures into it so their
+// module imports resolve); snapshotting those into the manifest would make
+// the sentinel assert ownership of files whose lifecycle it doesn't control.
 func installGeneratedTree(stageDir, realDir string) error {
 	if err := os.Remove(filepath.Join(realDir, genmanifest.TreeManifestName)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := genmanifest.WriteTreeManifest(stageDir); err != nil {
 		return err
 	}
 	cleanGoOutputDir(realDir)
@@ -997,6 +1007,9 @@ func installGeneratedTree(stageDir, realDir string) error {
 		if err != nil {
 			return err
 		}
+		if rel == genmanifest.TreeManifestName {
+			return nil // installed last, below
+		}
 		dst := filepath.Join(realDir, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 			return err
@@ -1005,7 +1018,9 @@ func installGeneratedTree(stageDir, realDir string) error {
 	}); err != nil {
 		return err
 	}
-	return genmanifest.WriteTreeManifest(realDir)
+	return os.Rename(
+		filepath.Join(stageDir, genmanifest.TreeManifestName),
+		filepath.Join(realDir, genmanifest.TreeManifestName))
 }
 
 // writeGogenWireup emits the //go:build gogen_ir blank-import files that

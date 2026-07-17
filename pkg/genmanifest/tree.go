@@ -90,9 +90,12 @@ func WriteTreeManifest(dir string) error {
 }
 
 // CheckTreeManifest verifies the generated tree at dir against its sentinel
-// manifest: the sentinel must exist, every listed file must be present with
-// matching contents, and no unlisted files may have appeared. A nil error
-// means the tree is exactly the one a successful generation wrote.
+// manifest: the sentinel must exist and every listed file must be present
+// with matching contents. A nil error means everything the last successful
+// generation wrote is intact. Unlisted files are deliberately tolerated: the
+// tree hosts co-tenant packages installed by other tools (e.g. the
+// gogen-trampoline fixture lowerer), whose lifecycle the sentinel doesn't
+// own — flagging them would make the check fail on every parity run.
 func CheckTreeManifest(dir string) error {
 	f, err := os.Open(filepath.Join(dir, TreeManifestName))
 	if os.IsNotExist(err) {
@@ -121,28 +124,16 @@ func CheckTreeManifest(dir string) error {
 		return err
 	}
 
-	have, err := treeFiles(dir)
-	if err != nil {
-		return err
-	}
-	haveSet := map[string]bool{}
-	for _, rel := range have {
-		haveSet[rel] = true
-		sum, ok := want[rel]
-		if !ok {
-			return fmt.Errorf("unlisted file %s in %s (stray or partial regeneration)", rel, dir)
-		}
+	for rel, sum := range want {
 		got, err := hashFile(filepath.Join(dir, rel))
+		if os.IsNotExist(err) {
+			return fmt.Errorf("missing file %s in %s (torn tree)", rel, dir)
+		}
 		if err != nil {
 			return err
 		}
 		if got != sum {
 			return fmt.Errorf("checksum mismatch for %s in %s", rel, dir)
-		}
-	}
-	for rel := range want {
-		if !haveSet[rel] {
-			return fmt.Errorf("missing file %s in %s (torn tree)", rel, dir)
 		}
 	}
 	return nil

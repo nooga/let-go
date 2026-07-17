@@ -191,6 +191,10 @@ pkg/rt/.core_compiled.lgb.committed
 # the untagged build and shipped bytecode binary never need them.
 pkg/rt/generated.provenance
 pkg/rt/core_go_lowered/
+# Staging sibling that --target=go generates into before the atomic swap into
+# core_go_lowered/. A successful install renames it away; ignore any residue
+# from an interrupted run so it never gets committed.
+pkg/rt/core_go_lowered.stage/
 /lg_gogen_ir.go
 /cmd/lgbgen/main_gogen_ir.go
 /pkg/ir/zz_gogen_ir_wire_test.go
