@@ -855,15 +855,11 @@
                              (= op :unsigned-bit-shift-right) "UnsignedBitShiftRightValue"
                              (= op :quot)    "QuotValue"
                              (= op :div)     "DivValue"
-                             ;; = routed here for a vm.Value operand OR two
-                             ;; concrete-but-different numeric types (eq-cross-type?):
-                             ;; Clojure value-equality, NOT Go ==. Go's == panics on
-                             ;; non-comparable dynamic types (vectors/maps/seqs) and
-                             ;; compares by identity, not value — and (= 1 1.0) must
-                             ;; be false, which a widened native float == would break.
-                             ;; rt.EqValue -> vm.ValueEquals. (Same-type concrete
-                             ;; scalars keep native == below: neither any-vm? nor
-                             ;; eq-cross-type? fires.)
+                             ;; = routed here for a vm.Value operand (Go's ==
+                             ;; panics on non-comparable dynamic types and
+                             ;; compares identity, not value) OR two concrete-
+                             ;; but-different numeric types — see eq-cross-type?
+                             ;; above. rt.EqValue -> vm.ValueEquals.
                              (= op :eq)      "EqValue"
                              :else           nil))
             ;; Mixed operand types (only meaningful when NOT routing
@@ -901,13 +897,10 @@
           ;; an untyped float constant against an int operand is a hard compile
           ;; error ("0.0625 truncated to int"). Widen the int side to float64 so
           ;; the native op runs in float, same as the VM's int→float promotion.
-          ;; Only int/float64 arithmetic and ordering reach here mixed: quot ("/")
-          ;; is native for int/int only, div for float/float only, bitwise/shift
-          ;; ops for int/int only, and a cross-type `=` routes to rt.EqValue (Go
-          ;; float == would violate Clojure's category-sensitive =) — every other
-          ;; mix already routes through a vm-helper. Widening the int side is
-          ;; sound for +,-,*,<,<=,>,>= (all numeric), where (< 1 0.5) == (< 1.0
-          ;; 0.5); it would NOT be sound for =, which is why that case is gone. (#534)
+          ;; Only int/float64 arithmetic and ordering reach here mixed — sound to
+          ;; widen since (< 1 0.5) == (< 1.0 0.5). quot is native for int/int
+          ;; only, div for float/float only, bitwise/shift for int/int only, and
+          ;; cross-type `=` routes to rt.EqValue (see eq-cross-type? above). (#534)
           (let [l (if (and (= "int" s0) (= "float64" s1)) (float64-cast lhs-expr) lhs-expr)
                 r (if (and (= "float64" s0) (= "int" s1)) (float64-cast rhs-expr) rhs-expr)
                 raw-binary (cond
