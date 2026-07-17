@@ -1,0 +1,21 @@
+;; Regression test for https://github.com/nooga/let-go/issues/529:
+;; a require alias literally named `core` must resolve through the aliased
+;; namespace. The compiler used to short-circuit every `core/*` symbol to the
+;; global core namespace before consulting the current ns's alias table, so
+;; (:require [lib :as core]) compiled to "Can't resolve core/x in this context"
+;; for any lib var. Clojure semantics: aliases win over the auto-referred core.
+;;
+;; `string` is a convenient probe: `join` does NOT exist in core (proves the
+;; alias is consulted at all), and `reverse` exists in BOTH (proves the alias
+;; shadows core rather than merely falling back).
+
+(ns tmp.alias-named-core-test
+  (:require
+   [string :as core]
+   [test :refer :all]))
+
+(deftest alias-named-core-resolves
+  (testing "an alias named `core` resolves vars absent from clojure.core"
+    (is (= "a,b" (core/join "," ["a" "b"]))))
+  (testing "an alias named `core` shadows clojure.core for shared names"
+    (is (= "ba" (core/reverse "ab")))))

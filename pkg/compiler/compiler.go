@@ -421,20 +421,15 @@ func (c *Context) compileForm(o vm.Value) error {
 		symVal := o.(vm.Symbol)
 		// If qualified like ns/sym
 		if sns, inner := symVal.Namespaced(); sns != vm.NIL {
-			// Resolve core/* via global core ns so (ns ...) expansion works before refers
-			if string(sns.(vm.Symbol)) == rt.NameCoreNS {
-				target := rt.NS(rt.NameCoreNS)
-				v := target.Lookup(inner.(vm.Symbol))
-				if v == vm.NIL {
-					return c.compileError(fmt.Sprintf("Can't resolve %s in this context", symVal))
-				}
-				varn := c.constant(v)
-				c.emitWithArg(vm.OP_LOAD_VAR, varn)
-				c.incSP(1)
-				return nil
-			}
-			// Non-core qualified: honor aliases and refers in current ns
+			// Honor aliases and refers in current ns first — an alias literally
+			// named `core` must shadow the auto-referred core ns (issue #529).
 			v := c.CurrentNS().Lookup(symVal)
+			if v == vm.NIL && string(sns.(vm.Symbol)) == rt.NameCoreNS {
+				// Fallback: resolve core/* via the global core ns so (ns ...)
+				// expansion works before refers, and so macroexpansions may
+				// reference private core vars qualified.
+				v = rt.NS(rt.NameCoreNS).Lookup(inner.(vm.Symbol))
+			}
 			if v == vm.NIL {
 				if hc, ok := rt.LookupHostClass(string(symVal)); ok {
 					n := c.constant(hc)
