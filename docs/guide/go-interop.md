@@ -1,7 +1,8 @@
 ---
 status: active
 last-verified: 2026-07-16
-human-verified:
+human-verified: true
+reviewer: nnunley@gmail.com
 ---
 
 # Wrapping Go packages for let-go (worked example: `database/sql`)
