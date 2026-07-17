@@ -1,0 +1,7 @@
+;; Build a persistent map with 10000 entries — AOT fixture (same workload as ../persistent-map.clj)
+(ns bench.persistent-map)
+
+(defn run []
+  (reduce (fn [m i] (assoc m i (* i i)))
+          {}
+          (range 10000)))

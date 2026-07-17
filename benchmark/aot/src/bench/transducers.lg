@@ -1,0 +1,9 @@
+;; Transducer pipeline — no intermediate collections — AOT fixture (same workload as ../transducers.clj)
+(ns bench.transducers)
+
+(defn run []
+  (transduce
+    (comp (map #(* % %))
+          (filter even?))
+    + 0
+    (range 100000)))

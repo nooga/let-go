@@ -1,3 +1,4 @@
+;; Takeuchi function — AOT fixture (same workload as ../tak.clj)
 (ns bench.tak)
 
 (defn tak [x y z]
@@ -5,5 +6,4 @@
     (tak (tak (dec x) y z) (tak (dec y) z x) (tak (dec z) x y))
     z))
 
-(defn -main []
-  (tak 30 22 12))
+(defn run [] (tak 30 22 12))

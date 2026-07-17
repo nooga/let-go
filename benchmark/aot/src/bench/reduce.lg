@@ -1,0 +1,5 @@
+;; Reduce over a large range — AOT fixture (same workload as ../reduce.clj)
+(ns bench.reduce)
+
+(defn run []
+  (reduce + 0 (range 1000000)))

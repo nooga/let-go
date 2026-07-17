@@ -1,0 +1,8 @@
+;; Map + filter + take pipeline over lazy seqs — AOT fixture (same workload as ../map-filter.clj)
+(ns bench.map-filter)
+
+(defn run []
+  (reduce + 0
+    (take 100
+      (filter even?
+        (map #(* % %) (range 10000))))))

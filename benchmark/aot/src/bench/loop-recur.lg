@@ -1,0 +1,15 @@
+;; Tight loop with tail-call recursion — AOT fixture (same workload as ../loop-recur.clj)
+;;
+;; The loop lives in its own defn: lowered it becomes a fully typed native
+;; (func(ec) int), which the emitter does not register as an override on its
+;; own; `run` wraps it with a boxed signature so the override registers and
+;; dispatches into the native loop via an intra-ns direct call.
+(ns bench.loop-recur)
+
+(defn sum-loop []
+  (loop [i 0 acc 0]
+    (if (< i 1000000)
+      (recur (inc i) (+ acc i))
+      acc)))
+
+(defn run [] (sum-loop))

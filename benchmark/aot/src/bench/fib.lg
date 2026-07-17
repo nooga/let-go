@@ -1,0 +1,9 @@
+;; Tree-recursive fibonacci — AOT fixture (same workload as ../fib.clj)
+(ns bench.fib)
+
+(defn fib [n]
+  (if (<= n 1)
+    n
+    (+ (fib (- n 1)) (fib (- n 2)))))
+
+(defn run [] (fib 35))

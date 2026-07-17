@@ -1,0 +1,127 @@
+;; benchmark/aot/build.lg — lower every benchmark fixture under
+;; benchmark/aot/src/bench/*.lg to native Go and build ONE tagged binary
+;; (benchmark/letgo-aot) with all lowered packages wired in. The VM-vs-AOT
+;; comparison in benchmark/run.sh then runs the SAME driver + fixture through
+;; the plain binary (bytecode dispatch) and this one (native dispatch).
+;;
+;; Mechanism mirrors scripts/gogen-trampoline.lg: each fixture's defn forms are
+;; lowered (ir.passes.pipeline/lower-ns-to-go) into pkg/rt/core_go_lowered/;
+;; a single wireup file blank-imports the lowered packages under the lg_bench
+;; build tag so their init() registers Go-native overrides; `require`ing the
+;; fixture in the tagged binary drains those overrides, clobbering the bytecode
+;; vars with native fns. After the build both the wireup and the lowered bench
+;; tree are removed — nothing generated is left in the repo.
+;;
+;; Fixture contract: (ns bench.<name>) + defns only, with a 0-arg `run`.
+;; After building, every fixture's `run` is verified to dispatch native; a
+;; silent fallback to bytecode fails the build.
+;;
+;; Usage: ./benchmark/letgo benchmark/aot/build.lg [--go <path>] [--out <path>]
+
+(require 'ir.passes.pipeline)
+(require 'string)
+
+(defn flag [argv name default]
+  (loop [xs argv]
+    (cond
+      (empty? xs)         default
+      (= (first xs) name) (second xs)
+      :else               (recur (rest xs)))))
+
+(def argv   *command-line-args*)
+(def go-bin (flag argv "--go" "go"))
+(def out    (flag argv "--out" "benchmark/letgo-aot"))
+
+(defn die [msg] (println "aot-build ERROR:" msg) (os/exit 2))
+(defn trim-tail [s] (or (re-find #"[\s\S]*\S" s) s))
+
+(defn sh! [& cmd]
+  (let [r (apply os/sh cmd)]
+    (when (not= 0 (:exit r))
+      (println (:err r)) (println (:out r))
+      (die (str "command failed: " (string/join " " cmd))))
+    (:out r)))
+
+(def fixtures
+  (let [r (os/sh "sh" "-c" "ls benchmark/aot/src/bench/*.lg 2>/dev/null")]
+    (vec (filter (fn [s] (> (count s) 0))
+                 (string/split (str (:out r)) #"\n")))))
+
+(defn- lowerable? [form]
+  (and (seq? form)
+       (symbol? (first form))
+       (contains? #{"defn" "defn-" "deftype" "defprotocol"} (str (first form)))))
+
+(defn- ns-form? [form] (and (seq? form) (= 'ns (first form))))
+
+(defn- nsname->pkg [ns-name]
+  (string/replace (last (string/split (str ns-name) #"\.")) "-" "_"))
+
+(defn- nsname->reldir [ns-name]
+  (string/replace (string/replace (str ns-name) "-" "_") "." "/"))
+
+;; Lower one fixture into pkg/rt/core_go_lowered/<reldir>/<pkg>.go.
+(defn lower-fixture! [fixture]
+  (let [forms   (read-string (str "[" (slurp fixture) "]"))
+        ns-decl (first (filter ns-form? forms))
+        ns-name (when ns-decl (second ns-decl))]
+    (when (nil? ns-name) (die (str "no (ns ...) form in " fixture)))
+    (doseq [form forms] (eval form))
+    (let [pkg     (nsname->pkg ns-name)
+          reldir  (nsname->reldir ns-name)
+          go-src  (ir.passes.pipeline/lower-ns-to-go pkg ns-name (vec (filter lowerable? forms)))
+          pkg-dir (str "pkg/rt/core_go_lowered/" reldir)]
+      (os/sh "mkdir" "-p" pkg-dir)
+      (spit (str pkg-dir "/" pkg ".go") go-src)
+      {:ns ns-name :reldir reldir})))
+
+(def WIREUP "zz_lg_bench_gen.go")
+
+(defn cleanup []
+  (os/sh "rm" "-f" WIREUP)
+  (os/sh "rm" "-rf" "pkg/rt/core_go_lowered/bench"))
+
+(when (empty? fixtures) (die "no fixtures (benchmark/aot/src/bench/*.lg)"))
+(println "aot-build: lowering" (count fixtures) "fixtures ...")
+
+;; Everything past the first lower-fixture! lives in ONE top-level form:
+;; evaling a fixture's (ns ...) switches *ns*, so any later top-level form
+;; would compile in the wrong namespace (same structure as gogen-trampoline).
+(let [lowered (mapv (fn [fixture]
+                      (let [r (try (lower-fixture! fixture)
+                                   (catch e (do (cleanup)
+                                                (die (str fixture ": lowering failed: " e)))))]
+                        (println "  lowered" (:ns r))
+                        r))
+                    fixtures)]
+  ;; One wireup importing every lowered bench package under the lg_bench tag.
+  (spit WIREUP
+        (str "//go:build lg_bench\n\n"
+             "package main\n\n"
+             "import (\n"
+             (string/join ""
+               (map (fn [{:keys [reldir]}]
+                      (str "\t_ \"github.com/nooga/let-go/pkg/rt/core_go_lowered/" reldir "\"\n"))
+                    lowered))
+             ")\n"))
+
+  (println "aot-build: building" out "...")
+  (let [br (os/sh go-bin "build" "-tags" "lg_bench" "-o" out ".")]
+    (when (not= 0 (:exit br))
+      (println (:err br))
+      (cleanup)
+      (die "tagged build failed")))
+
+  ;; Verify every fixture dispatches native in the tagged binary.
+  (doseq [{:keys [ns]} lowered]
+    (let [driver (str "(require '" ns ")\n(println \"FNREPR\" (str " ns "/run))\n")
+          tmp    (trim-tail (str (:out (os/sh "mktemp"))))]
+      (spit tmp driver)
+      (let [o (sh! (str "./" out) "-source-paths" "benchmark/aot/src" tmp)]
+        (os/sh "rm" "-f" tmp)
+        (when-not (re-find #"native-fn" (str o))
+          (cleanup)
+          (die (str ns "/run did NOT lower to a native fn — refusing to benchmark a silent bytecode fallback"))))))
+
+  (cleanup)
+  (println "aot-build: OK —" out "(all" (count lowered) "fixtures dispatch native)"))
