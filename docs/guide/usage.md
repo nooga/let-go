@@ -32,6 +32,28 @@ lg -b myapp app.lg                # bundle into a self-contained binary
 The standalone binary is a copy of `lg` with your bytecode appended — copy it to
 another machine and it runs.
 
+## Compiler-free deployment: lg-runtime
+
+`lg-runtime` executes precompiled `.lgb` bytecode with no reader, compiler, or
+resolver linked in. The guarantee is structural — the binary never links
+`pkg/compiler` or `pkg/resolver` — so the deployed artifact has no `eval`,
+`load-string`, `read-string`, or dynamic source `require`: it runs only
+bytecode compiled ahead of time by a toolchain you trust.
+
+```bash
+go build -o lg-runtime ./cmd/lg-runtime      # build the runtime-only binary
+
+lg -c app.lgb app.lg                         # compile on your machine
+lg-runtime app.lgb a b                       # run it, compiler-free
+
+lg -b myapp -bundle-base lg-runtime app.lg   # standalone AND compiler-free
+./myapp
+```
+
+With `-bundle-base`, the standalone binary appends your bytecode to
+`lg-runtime` instead of the full `lg`, so the shipped executable cannot
+evaluate anything beyond what you compiled.
+
 ## WASM web apps
 
 ```bash

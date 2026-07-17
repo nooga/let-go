@@ -68,11 +68,16 @@ site for:
 Ordinary higher-order IFn calls, protocol dispatch, known host targets, and
 successfully direct/native-lowered calls stay silent. A concrete receiver
 shape (a literal, a fresh constructor call) can resolve host warnings.
-**Known phase-1 limitation:** type hints (`^String s`) are NOT yet consulted —
-the compiler does not attach `:tag` metadata to fn params or locals, so a
-hinted receiver still warns; expect the host warning on most interop whose
-receiver is a plain symbol. Direct/native warnings need a supported call
-signature or native registration.
+**Known phase-1 limitation:** *dispatch* type hints (`^String s`) are NOT yet
+consulted — the compiler does not attach `:tag` metadata to fn params or
+locals, so a hinted receiver still warns; expect the host warning on most
+interop whose receiver is a plain symbol. Direct/native warnings need a
+supported call signature or native registration.
+
+This is separate from *numeric* parameter hints (`^double x`, `^long n`),
+which ARE honored: the AOT native-Go lowering pipeline uses them to run
+arithmetic on unboxed Go `float64`/`int64`. Numeric hints have no effect on
+host-member dispatch or on the plain bytecode path.
 
 `*unchecked-math*` is also dynamic and settable for source compatibility.
 let-go's numeric tower has no JVM-style unchecked primitive compilation mode,

@@ -61,6 +61,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Running as a WASI (`GOOS=wasip1`) module | `guide/wasi.md` |
 | let-go under TinyGo (status: not currently supported) | `guide/tinygo.md` |
 | nREPL server + editor setup | `guide/nrepl.md` |
+| TCP client + bencode framing (`net`, `bencode`) | `guide/net.md` |
 | Clojure compatibility: namespace table + differences | `guide/clojure-compatibility.md` |
 | Running, compiling, WASM, project mgmt (lgx) | `guide/usage.md` |
 | IR fixup / link pass | `design/els2023-ir-fixup-audit.md` |
