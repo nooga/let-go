@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/nooga/let-go/pkg/genmanifest"
 )
 
 // Differential self-AOT execution harness.
@@ -103,10 +105,18 @@ func TestGogenAOTDiff(t *testing.T) {
 		t.Skip("differential self-AOT harness builds let-go twice; run via `make gogen-diff`")
 	}
 
+	root := repoRoot(t)
+
+	// The -tags gogen_ir build below imports the gitignored generated tree.
+	// Validate it against its completeness sentinel first, so a torn or
+	// missing tree fails with an actionable message instead of a wall of
+	// "no required module provides package .../core_go_lowered/..." errors.
+	if err := genmanifest.CheckTreeManifest(filepath.Join(root, "pkg/rt/core_go_lowered")); err != nil {
+		t.Fatalf("generated lowered tree is not valid: %v\nrun `make generate` (or `make lowered`) and retry", err)
+	}
+
 	bc := buildLGTags(t, "")
 	aot := buildLGTags(t, "gogen_ir")
-
-	root := repoRoot(t)
 	goldAOTDir := filepath.Join(root, "test/gold-aot")
 	aotXfailFile := filepath.Join(root, "test/gogen_aot_xfail.txt")
 

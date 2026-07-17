@@ -15,6 +15,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -790,20 +791,27 @@ func runGoTarget(outDir, codeDir string) {
 		os.Exit(1)
 	}
 
-	// Hermetic generation: clear the output dir first so orphaned packages
-	// from a previous run (a renamed/removed namespace, or another branch's
-	// output left on disk) can't survive into this run. Such strays are
-	// gitignored — invisible to `jj`/`git status` — yet they break the
-	// `go build -tags gogen_ir ./...` step (a stray package with stale or
-	// invalid Go fails the build). The dir is fully recreated below.
+	// Generate into a staging sibling and swap into place only on success.
+	// Lowering takes minutes (typeinfer), and the old clean-then-write-in-place
+	// flow left the real tree half-deleted for that whole window — a killed or
+	// crashed run broke every subsequent `go build -tags gogen_ir` until the
+	// next full regeneration. Staging starts empty, so hermeticity (no orphaned
+	// packages from a renamed/removed namespace) comes for free; the real dir
+	// is cleaned of previously-generated files at swap time.
 	//
 	// This lives here, not in scripts/generate.lg, because runGoTarget is the
 	// single point where both `--target=go` and `--target=both` converge, so
 	// every caller (make generate, make lowered, make check-generated) gets
-	// the clean.
-	cleanGoOutputDir(outDir)
+	// the same crash-safety.
+	realOutDir := outDir
+	outDir = realOutDir + ".stage"
+	if err := os.RemoveAll(outDir); err != nil {
+		fmt.Fprintf(os.Stderr, "clear staging dir %s: %v\n", outDir, err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(outDir)
 	if err := os.MkdirAll(outDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "create output dir %s: %v\n", outDir, err)
+		fmt.Fprintf(os.Stderr, "create staging dir %s: %v\n", outDir, err)
 		os.Exit(1)
 	}
 
@@ -947,14 +955,57 @@ func runGoTarget(outDir, codeDir string) {
 		// distinct paths.
 		generated = append(generated, filepath.ToSlash(spec.relDir))
 	}
-	// Emit the //go:build gogen_ir blank-import wireup files from exactly
-	// the set we just wrote — so namespaces that were skipped or failed to
-	// lower are never imported (which would break the tagged build).
-	writeGogenWireup(generated, codeDir)
 	if len(failed) > 0 {
+		// Bail before touching the real tree or the wireup files — a failed
+		// run leaves the previous consistent generation fully intact.
 		fmt.Fprintf(os.Stderr, "lgbgen: %d namespace(s) failed: %v\n", len(failed), failed)
 		os.Exit(1)
 	}
+	// Success: install the staged tree (fast per-file renames — the exposed
+	// window shrinks from the whole lowering to milliseconds), then emit the
+	// //go:build gogen_ir blank-import wireup files from exactly the set we
+	// just installed — so namespaces that were skipped are never imported
+	// (which would break the tagged build).
+	if err := installGeneratedTree(outDir, realOutDir); err != nil {
+		fmt.Fprintf(os.Stderr, "lgbgen: install lowered tree into %s: %v\n", realOutDir, err)
+		os.Exit(1)
+	}
+	writeGogenWireup(generated, codeDir)
+}
+
+// installGeneratedTree moves the staged generation into the real output dir:
+// the completeness sentinel is invalidated first, previously-generated
+// (bannered) files in realDir are removed — same orphan-cleanup contract as
+// before staging existed — then every staged file is renamed into place and a
+// fresh sentinel is written last. Rename is cheap and same-filesystem
+// (sibling dirs), so the tree is only ever inconsistent for the duration of
+// this loop — and that window is positively detectable via the sentinel
+// (genmanifest.CheckTreeManifest).
+func installGeneratedTree(stageDir, realDir string) error {
+	if err := os.Remove(filepath.Join(realDir, genmanifest.TreeManifestName)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	cleanGoOutputDir(realDir)
+	if err := filepath.WalkDir(stageDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(stageDir, path)
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(realDir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			return err
+		}
+		return os.Rename(path, dst)
+	}); err != nil {
+		return err
+	}
+	return genmanifest.WriteTreeManifest(realDir)
 }
 
 // writeGogenWireup emits the //go:build gogen_ir blank-import files that
