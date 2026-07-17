@@ -26,7 +26,7 @@ var timeType = reflect.TypeOf(time.Time{})
 func reflectMethods(t reflect.Type) map[Symbol]*NativeFn {
 	if t == timeType {
 		// (.Sub a b) — method value semantics: receiver is the first arg.
-		sub, _ := NativeFnType.Wrap(func(vs []Value) (Value, error) {
+		sub, err := NativeFnType.Wrap(func(vs []Value) (Value, error) {
 			a, ok := vs[0].Unbox().(time.Time)
 			if !ok {
 				return NIL, NewTypeError(vs[0], "is not a time for .Sub on", NativeFnType)
@@ -37,6 +37,11 @@ func reflectMethods(t reflect.Type) map[Symbol]*NativeFn {
 			}
 			return Int(int64(a.Sub(b))), nil // Duration is int64 ns, matching the reflect path
 		})
+		// Fail loud: a discarded error would install a nil method that only
+		// blows up at call time, off in the tinygo build.
+		if err != nil {
+			panic(fmt.Errorf("reflectMethods: wrapping time.Sub: %w", err))
+		}
 		return map[Symbol]*NativeFn{Symbol("Sub"): sub.(*NativeFn)}
 	}
 	return nil

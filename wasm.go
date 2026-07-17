@@ -25,6 +25,11 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+// tinyGoStackSizeRe matches a tinygo -stack-size value (a byte count or a
+// K/M/G-suffixed size, e.g. 1MB, 64KB, 16384). Used only to warn on a typo in
+// LETGO_TINYGO_STACK so it's attributed to the env var, not an opaque tinygo error.
+var tinyGoStackSizeRe = regexp.MustCompile(`(?i)^\d+(\.\d+)?[kmg]?b?$`)
+
 // The generated main.go template and its -w-host-eval splice live in
 // pkg/rt/wasm (RenderMain), alongside the HTML/JS build assets.
 //
@@ -145,6 +150,9 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		// which manifested as the "3-minute hang". Override via LETGO_TINYGO_STACK
 		// for sweeping. See docs-xsofy/tiny-let-go-the-stack-overflow-hunt.md.
 		stack := os.Getenv("LETGO_TINYGO_STACK")
+		if stack != "" && !tinyGoStackSizeRe.MatchString(stack) {
+			fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_STACK=%q is not a valid size (e.g. 1MB, 64KB); passing to tinygo as-is\n", stack)
+		}
 		if stack == "" {
 			stack = "1MB"
 		}
@@ -152,6 +160,9 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		// unreachable). Override with LETGO_TINYGO_PANIC=print while debugging so
 		// the panic message reaches the console instead of a silent trap.
 		panicMode := os.Getenv("LETGO_TINYGO_PANIC")
+		if panicMode != "" && panicMode != "trap" && panicMode != "print" {
+			fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_PANIC=%q is not trap|print; passing to tinygo as-is\n", panicMode)
+		}
 		if panicMode == "" {
 			panicMode = "trap"
 		}
@@ -159,6 +170,11 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 			"-target=wasm", "-no-debug", "-opt=z", "-panic=" + panicMode,
 			"-stack-size=" + stack}
 		if gc := os.Getenv("LETGO_TINYGO_GC"); gc != "" {
+			switch gc {
+			case "none", "leaking", "conservative", "precise":
+			default:
+				fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_GC=%q is not a known tinygo gc (none|leaking|conservative|precise); passing as-is\n", gc)
+			}
 			tgArgs = append(tgArgs, "-gc="+gc)
 		}
 		tgArgs = append(tgArgs, "-o", wasmPath, ".")

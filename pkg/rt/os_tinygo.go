@@ -23,7 +23,10 @@ import (
 func init() { RegisterInstaller(installOsNS) }
 
 func installOsNS() {
-	exitFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// mustWrap (not a discarded error): a failed Wrap here would otherwise Def a
+	// nil fn and surface as a confusing "nil is not a function" at call time,
+	// far from the cause. Fail loud at namespace init instead.
+	exitFn := mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("os/exit expects 1 arg")
 		}
@@ -35,13 +38,23 @@ func installOsNS() {
 		return vm.NIL, nil
 	})
 
-	getenvStub, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return vm.String(""), nil
+	// Real os.Getenv, not a blind "". TinyGo's WASI/native targets support it, so
+	// env-based config (e.g. xsofy's seed boot-param) actually works there; the
+	// wasm target has no environ and os.Getenv returns "", same as the old stub.
+	getenvFn := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/getenv expects 1 arg")
+		}
+		name, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/getenv expected String")
+		}
+		return vm.String(os.Getenv(string(name))), nil
 	})
 
 	ns := vm.NewNamespace("os")
 	ns.Def("exit", exitFn)
-	ns.Def("getenv", getenvStub)
+	ns.Def("getenv", getenvFn)
 	ns.Def("args", vm.NewPersistentVector(nil))
 	RegisterNS(ns)
 }
