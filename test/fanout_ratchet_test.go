@@ -79,49 +79,8 @@ func TestPatchOverlayApplyIdempotentAndRevert(t *testing.T) {
 	}
 }
 
-func TestJankUnicodeScalarPatch(t *testing.T) {
-	repo := t.TempDir()
-	fixture := filepath.Join(repo, "test", "clojure", "core_test", "char.cljc")
-	if err := os.MkdirAll(filepath.Dir(fixture), 0755); err != nil {
-		t.Fatal(err)
-	}
-	base := `(ns clojure.core-test.char
-  (:require [clojure.test :as t :refer [are deftest is testing]]
-            [clojure.core-test.portability #?(:cljs :refer-macros :default :refer) [when-var-exists] :as p]))
-
-(when-var-exists char
- (deftest test-char
-   (are [expected x] (= expected (char x))
-     ;; Assumes ASCII / Unicode
-     \space 32
-     \@     64
-     \A     65
-     \A     \A)
-   (testing "unicode"
-     (testing "2 byte characters are valid"
-       (is (= \¡ (char 161))))
-     (testing "3 byte characters are valid"
-       (is (= \ষ (char 2487))))
-     (testing "4+ byte characters throw"
-       (is #?(:jank    (= (first "𐅦") (char 65895))
-              ;; this seems to be an off by one error
-              :lpy     (= (first "𐅧") (char 65895))
-              :cljs    (= \ŧ (char 65895))
-              :default (p/thrown? (char 65895))))))
-
-   #?(:cljs nil :default (is (p/thrown? (char -1))))
-   (is (p/thrown? (char nil)))))
-`
-	if err := os.WriteFile(fixture, []byte(base), 0644); err != nil {
-		t.Fatal(err)
-	}
-	patch, err := filepath.Abs(filepath.Join("patches", "lg-char-unicode-scalar.patch"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !applyPatchOverlay(repo, patch) {
-		t.Fatal("Unicode scalar patch did not apply to the pinned fixture")
-	}
+func TestJankSuiteCoversLetGoUnicodeScalar(t *testing.T) {
+	fixture := filepath.Join("clojure-test-suite", "test", "clojure", "core_test", "char.cljc")
 	got, err := os.ReadFile(fixture)
 	if os.IsNotExist(err) {
 		t.Skip("clojure-test-suite submodule is not initialized")
