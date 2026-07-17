@@ -16,7 +16,6 @@ import (
 	"math/big"
 	"math/rand/v2"
 	"os"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,9 +86,8 @@ func valuePtr(v vm.Value) (uintptr, bool) {
 			return 0, false
 		}
 		return setPtr(x), true
-	case vm.PersistentVector:
-		key := x.IdentityKey()
-		return key, key != 0
+	case *vm.PersistentVector:
+		return uintptr(unsafe.Pointer(x)), true
 	case *vm.PersistentMap:
 		return uintptr(unsafe.Pointer(x)), true
 	case *vm.PersistentSet:
@@ -108,60 +106,23 @@ func valuePtr(v vm.Value) (uintptr, bool) {
 	return 0, false
 }
 
-// mapPtr / setPtr return the opaque runtime identity of a Go map. The value is
-// used only for identity comparisons and memoization; it is never dereferenced.
+// mapPtr / setPtr read the runtime hmap header pointer out of a Go map via
+// an unsafe interface-header read. The value is used purely as an identity
+// key for memoization and is never dereferenced.
 func mapPtr(m vm.Map) uintptr {
-	return reflect.ValueOf(m).Pointer()
+	type ifaceHeader struct {
+		_   uintptr
+		ptr unsafe.Pointer
+	}
+	return uintptr((*ifaceHeader)(unsafe.Pointer(&m)).ptr)
 }
 
 func setPtr(s vm.Set) uintptr {
-	return reflect.ValueOf(s).Pointer()
-}
-
-type arrayVectorIdentity struct {
-	data uintptr
-	len  int
-	cap  int
-}
-
-func arrayVectorIdentityOf(v vm.ArrayVector) arrayVectorIdentity {
-	return arrayVectorIdentity{
-		data: uintptr(unsafe.Pointer(unsafe.SliceData(v))),
-		len:  len(v),
-		cap:  cap(v),
+	type ifaceHeader struct {
+		_   uintptr
+		ptr unsafe.Pointer
 	}
-}
-
-// identicalValue compares Go representations without falling back to deep
-// equality. Comparable values retain Go's == behavior; slice- and map-backed
-// runtime values use their complete representation identity.
-func identicalValue(a, b vm.Value) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	av := reflect.ValueOf(a)
-	bv := reflect.ValueOf(b)
-	if av.Comparable() && bv.Comparable() {
-		// Interface == on distinct dynamic types is false without comparing
-		// values, so no separate type check is needed on this path.
-		return a == b
-	}
-	if av.Type() != bv.Type() {
-		return false
-	}
-
-	switch left := a.(type) {
-	case vm.ArrayVector:
-		return arrayVectorIdentityOf(left) == arrayVectorIdentityOf(b.(vm.ArrayVector))
-	case vm.PersistentVector:
-		return left.SameIdentity(b.(vm.PersistentVector))
-	case vm.Map:
-		return mapPtr(left) == mapPtr(b.(vm.Map))
-	case vm.Set:
-		return setPtr(left) == setPtr(b.(vm.Set))
-	default:
-		return false
-	}
+	return uintptr((*ifaceHeader)(unsafe.Pointer(&s)).ptr)
 }
 
 // identityEqShortCircuit decides equality without descending when the two
@@ -1426,13 +1387,6 @@ func nthInSeq(s vm.Seq, n int) (vm.Value, bool) {
 		s = s.Next()
 	}
 	return vm.NIL, false
-}
-
-func emptyLazySeq() vm.Seq {
-	thunk, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
-		return vm.NIL, nil
-	})
-	return vm.NewLazySeq(thunk.(vm.Fn))
 }
 
 func mapLazy1(f vm.Fn, s vm.Seq) vm.Seq {
@@ -3292,7 +3246,7 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("map expected Sequable")
 			}
 			if s == nil || s == vm.EmptyList {
-				return emptyLazySeq(), nil
+				return vm.EmptyList, nil
 			}
 			return mapLazy1(mfn, s), nil
 		}
@@ -3305,7 +3259,7 @@ func installLangNS() {
 				return vm.NIL, fmt.Errorf("map expected Sequable collection")
 			}
 			if s == nil || s == vm.EmptyList {
-				return emptyLazySeq(), nil
+				return vm.EmptyList, nil
 			}
 			seqs[i] = s
 		}
@@ -6705,7 +6659,7 @@ func installLangNS() {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
-		return vm.Boolean(identicalValue(vs[0], vs[1])), nil
+		return vm.Boolean(vs[0] == vs[1]), nil
 	})
 
 	// any? — returns true for everything (every value satisfies any?)
@@ -7354,13 +7308,10 @@ func installLangNS() {
 		case vm.Int:
 			return vm.NewBigDecimalFromInt64(int64(v)), nil
 		case vm.Float:
-			f := float64(v)
-			if math.IsInf(f, 0) || math.IsNaN(f) {
-				return vm.NIL, fmt.Errorf("cannot coerce non-finite float to bigdec")
-			}
-			return vm.NewBigDecimalFromFloat64(f), nil
+			return vm.NewBigDecimalFromFloat64(float64(v)), nil
 		case *vm.BigInt:
-			return vm.NewBigDecimalFromBigInt(v.Val()), nil
+			f, _ := new(big.Float).SetPrec(vm.BigDecimalPrecConst).SetInt(v.Val()).Float64()
+			return vm.NewBigDecimalFromFloat64(f), nil
 		case *vm.Ratio:
 			f, _ := v.Val().Float64()
 			return vm.NewBigDecimalFromFloat64(f), nil
@@ -7711,6 +7662,9 @@ func installLangNS() {
 		s, serr := seqOf(vs[0])
 		if serr != nil {
 			return vm.NIL, serr
+		}
+		if s == nil {
+			return vm.NIL, fmt.Errorf("cannot create array from %s", vs[0].Type().Name())
 		}
 		var vals []vm.Value
 		for ; s != nil; s = s.Next() {

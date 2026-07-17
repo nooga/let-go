@@ -395,7 +395,7 @@
             (lazy-cat-seqs (rest s))))))))
 
 (defn concat
-  ([] (lazy-seq nil))
+  ([] ())
   ([x] (lazy-seq (seq x)))
   ([x y] (lazy-cat-seqs (list x y)))
   ([x y & zs] (lazy-cat-seqs (cons x (cons y zs)))))
@@ -590,12 +590,13 @@
               (rf result input)
               result)))))))
   ([n xs]
-   (lazy-seq
-     (loop [remaining n
-            s (seq xs)]
-       (if (and (pos? remaining) s)
-         (recur (dec remaining) (next s))
-         s)))))
+   (if (nil? xs)
+     '()
+     (let [step (fn [n xs]
+                  (if (> n 0)
+                    (recur (dec n) (next xs))
+                    xs))]
+       (step n xs)))))
 
 (defn split-at [n coll]
   [(take n coll) (drop n coll)])
@@ -603,18 +604,18 @@
 (defn partition
   ([n xs] (partition n n xs))
   ([n step xs]
-   (lazy-seq
-     (when-let [s (seq xs)]
-       (let [p (take n s)]
-         (when (= n (count p))
-           (cons p (partition n step (drop step s))))))))
+   (loop [c xs w []]
+     (if (>= (count c) n)
+       (recur (drop step c) (conj w (vec (take n c))))
+       w)))
   ([n step pad xs]
-   (lazy-seq
-     (when-let [s (seq xs)]
-       (let [p (take n s)]
-         (if (= n (count p))
-           (cons p (partition n step pad (drop step s)))
-           (cons (take n (concat p pad)) nil)))))))
+   (loop [c xs w []]
+     (if (seq c)
+       (let [p (vec (take n c))]
+         (if (= (count p) n)
+           (recur (drop step c) (conj w p))
+           (conj w (vec (take n (concat p pad))))))
+       w))))
 
 ;; binding macro — pushes dynamic bindings, runs body, pops on exit.
 ;; (binding [*x* 1 *y* 2] body...)
@@ -937,7 +938,7 @@
              (reset! ~self (fn* ~@(map #(name-fn-arity name self
                                                        (fn-expand (unwrap-fn-arity-vector (first %))
                                                                   (next %)))
-                                    forms)))
+                                             forms)))
              (deref ~self))))
 
       (vector? (unwrap-fn-arity-vector (first forms)))
@@ -1418,7 +1419,7 @@
   ([n f] (take n (repeatedly f))))
 
 (defn run! [proc coll]
-  (reduce #(proc %2) nil coll)
+  (reduce #(do (proc %2) nil) nil coll)
   nil)
 
 (defn random-sample
@@ -1648,10 +1649,7 @@
   ([n coll]
    (lazy-seq
      (when-let [s (seq coll)]
-       ;; force the step arithmetic on realization so a non-numeric step
-       ;; throws, matching Clojure's eager drop on IDrop collections
-       (let [rest (if (pos? n) (drop n s) s)]
-         (cons (first s) (take-nth n rest)))))))
+       (cons (first s) (take-nth n (drop n s)))))))
 
 (defn interpose
   ([sep]
@@ -2293,11 +2291,11 @@
                            (cons 'defprotocol* (cons (str name) quoted-names)))
         ;; For each method, create a protocol-dispatching fn var
         method-defs  (mapv (fn [sig]
-                             (let [mname (first sig)
-                                   mdoc  (first (next (next sig)))]
-                               (list 'def (def-meta-name mname (if (string? mdoc) mdoc nil) nil)
-                                     (list 'make-protocol-fn name (list 'quote mname)))))
-                       sigs)
+                            (let [mname (first sig)
+                                  mdoc  (first (next (next sig)))]
+                              (list 'def (def-meta-name mname (if (string? mdoc) mdoc nil) nil)
+                                    (list 'make-protocol-fn name (list 'quote mname)))))
+                          sigs)
         ;; Also bind a class-name alias <munged-ns>.<name> so Clojure code
         ;; that references the protocol's generated Java class name (e.g.
         ;; in (instance? clojure.core_test.ancestors.TestAncestorsProtocol x))

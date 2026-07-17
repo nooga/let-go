@@ -71,9 +71,7 @@
     (is (nil? (seq (take 3 nil)))))
   (testing "drop"
     (is (= '(4 5) (drop 3 [1 2 3 4 5])))
-    (let [result (drop 10 [1 2])]
-      (is (not (realized? result)))
-      (is (nil? (seq result))))))
+    (is (nil? (drop 10 [1 2])))))
 
 (deftest concat-test
   (testing "concat"

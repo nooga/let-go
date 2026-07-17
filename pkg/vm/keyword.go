@@ -8,6 +8,7 @@ package vm
 import (
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 type theKeywordType struct {
@@ -77,28 +78,26 @@ func (l Keyword) Invoke(pargs []Value) (Value, error) {
 	return as.ValueAtOr(l, pargs[1]), nil
 }
 
-func (l Keyword) NamespacedRaw() (ns Keyword, name Keyword, hasNS bool) {
-	nsString, nameString, hasNS := splitNamespaced(string(l))
-	return Keyword(nsString), Keyword(nameString), hasNS
-}
-
 func (l Keyword) Namespaced() (Value, Value) {
-	ns, name, hasNS := l.NamespacedRaw()
-	if !hasNS {
-		return NIL, Symbol(name)
+	x := strings.Split(string(l), "/")
+	if len(x) == 2 {
+		return Symbol(x[0]), Symbol(x[1])
 	}
-	return Symbol(ns), Symbol(name)
+	return NIL, Symbol(x[0])
 }
 
 func (l Keyword) Name() Value {
-	_, name, _ := l.NamespacedRaw()
-	return String(name)
+	_, n := l.Namespaced()
+	if n == NIL {
+		return NIL
+	}
+	return String(n.(Symbol))
 }
 
 func (l Keyword) Namespace() Value {
-	ns, _, hasNS := l.NamespacedRaw()
-	if !hasNS {
+	n, _ := l.Namespaced()
+	if n == NIL {
 		return NIL
 	}
-	return String(ns)
+	return String(n.(Symbol))
 }
