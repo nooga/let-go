@@ -17,7 +17,11 @@ import (
 // emitter through subprocesses (`go run ./cmd/lginterop` → lg → the .lg
 // script), and the Go test cache only tracks files the test binary itself
 // opens — so an edit to scripts/lginterop.lg returns a stale cached pass.
-// Reading the inputs here makes the cache key on their content.
+// Reading the inputs here makes the cache key on their content. This covers
+// the high-churn emitter surface (the script + the driver's Go sources),
+// not the full subprocess input closure: lg's own VM/compiler/gogen sources
+// and the embedded core bundle are not keyed, so a codegen-affecting change
+// there can still hit a stale cached pass locally (CI runs cold-cache).
 func trackInputs(t *testing.T, patterns ...string) {
 	t.Helper()
 	for _, pat := range patterns {
