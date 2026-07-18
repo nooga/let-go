@@ -445,6 +445,9 @@
   ;; Grow the types side table so index nid is addressable, then return the
   ;; transient. Same shape as ensure-si!; typeinfer's flush walks nids in
   ;; order, so this appends ~1 slot amortized.
+  ;; NB the discarded conj! return is deliberate: let-go's TransientVector
+  ;; mutates in place and returns the same pointer, unlike Clojure-proper
+  ;; transients where the return value must be threaded.
   (let [tys (:types @f)]
     (loop []
       (when (<= (count tys) nid)
