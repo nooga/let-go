@@ -141,6 +141,23 @@ func mixFinishLen(h uint32, length uint32) uint32 {
 // valueEquiv tests if two Values are equivalent for map key purposes.
 // Uses hash as a fast negative check, then structural comparison.
 func valueEquiv(a, b Value) bool {
+	// Typed fast paths for the two dominant map-key types, ahead of the
+	// double isComparable type-switch below. Both are exact reductions of
+	// the general path: a keyword only ever equals a keyword with the same
+	// string (the == identity check plus the hash-negative and Equals
+	// fallbacks all collapse to that), and NumEq on two Ints is ==. A
+	// non-Int b deliberately falls through — Int×Float/BigInt equivalence
+	// belongs to the NumEq path. Neither type can be NIL or EmptyList, so
+	// hoisting past that check is safe.
+	if ak, ok := a.(Keyword); ok {
+		bk, ok := b.(Keyword)
+		return ok && ak == bk
+	}
+	if ai, ok := a.(Int); ok {
+		if bi, ok := b.(Int); ok {
+			return ai == bi
+		}
+	}
 	if (a == NIL && b == EmptyList) || (a == EmptyList && b == NIL) {
 		return true
 	}
