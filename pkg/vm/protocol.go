@@ -80,15 +80,7 @@ func (p *Protocol) Lookup(methodName Symbol, target Value) (Fn, bool) {
 	key := Keyword(methodName)
 
 	if target == NIL {
-		if p.nilImpl != nil {
-			v := p.nilImpl.ValueAt(key)
-			if v != NIL {
-				if fn, ok := v.(Fn); ok {
-					return fn, true
-				}
-			}
-		}
-		return nil, false
+		return p.lookupIn(p.nilImpl, key)
 	}
 
 	vt := target.Type()
@@ -106,12 +98,18 @@ func (p *Protocol) Lookup(methodName Symbol, target Value) (Fn, bool) {
 	return nil, false
 }
 
-// lookupIn pulls a method fn out of one type's impl map, if present.
-func (p *Protocol) lookupIn(implMap *PersistentMap, key Value) (Fn, bool) {
+// lookupIn pulls a method fn out of one type's impl map, if present. It
+// takes the key as a bare Keyword and goes through ValueAtKeywordOr's
+// box-free typed lookup: the boxed ValueAt path converted the keyword to a
+// Value (a string-kind interface conversion, i.e. one heap alloc) on every
+// protocol-method call — twice when the AnyType fallback was consulted.
+// Impl-map keys are keywords by construction (see Extend), so the typed
+// compare matches exactly what the boxed path did.
+func (p *Protocol) lookupIn(implMap *PersistentMap, key Keyword) (Fn, bool) {
 	if implMap == nil {
 		return nil, false
 	}
-	v := implMap.ValueAt(key)
+	v := implMap.ValueAtKeywordOr(key, NIL)
 	if v == NIL {
 		return nil, false
 	}
