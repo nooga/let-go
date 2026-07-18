@@ -126,13 +126,15 @@ jobs:
           snapshot_tmp="${RUNNER_TEMP}/${snapshot_name}"
           raw_tmp="${RUNNER_TEMP}/${snapshot_name%.json}.jsonl"
 
-          # -count 4 matches bench-ratchet's warmup-discarding median sampling
-          # (#561): rep 1 is discarded, leaving a median of 3. A count of 3
-          # would reduce to an average of 2 there; under pre-#561 mean
-          # aggregation it's simply one more sample. Safe in either merge order.
+          # -count 3: a count-4 ubuntu leg measured 103.9 min end to end
+          # (pkg/vm bench alone ~97 min), past timeout-minutes: 90 — every
+          # timeline leg would die at the kill. Count 3 keeps the leg in the
+          # measured ~65-min envelope. Note for the #561 sampling rework:
+          # count 3 lands in reduceSamples' discard-warmup-then-average-of-2
+          # branch there; the estimator question lives on that PR.
           go run ./cmd/bench-ratchet \
             -full \
-            -count 4 \
+            -count 3 \
             -benchtime 2s \
             -timeout 30m \
             -out "${raw_tmp}" \
