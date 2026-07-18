@@ -456,6 +456,10 @@
   ;; In-place positional update — no inst-tuple copy, no :insts spine copy,
   ;; no swap! (mirrors add-source-info!; this was typeinfer's #1 cost: the
   ;; flush paid ~94µs per interpreted swap!+assoc-in write).
+  ;; Contract: this bypasses the Function atom — no CAS, and atom watches
+  ;; will NOT fire. Safe because compilation is single-threaded per Function
+  ;; (the same assumption :source-info's add-source-info! already relies on);
+  ;; concurrent mutation of one Function was never supported.
   (assoc! (ensure-types! f nid) nid t))
 
 (defn cond-target-set-true! [ct bt]
