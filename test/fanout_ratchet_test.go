@@ -102,6 +102,7 @@ func applyJankPatches() []string {
 	}
 	patchNames := []string{
 		"lg-char-unicode-scalar.patch",
+		"lg-map-order.patch",
 	}
 	applied := make([]string, 0, len(patchNames))
 	for _, name := range patchNames {
