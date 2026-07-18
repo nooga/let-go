@@ -8,6 +8,7 @@ package vm
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // LazySeq delays computation of a sequence until first/next is called.
@@ -18,6 +19,13 @@ type LazySeq struct {
 	sv  Value // intermediate value from fn
 	err error // error from thunk realization (propagated on access)
 	mu  sync.Mutex
+	// done is set (with release semantics, under mu) only after realization
+	// completes without error: fn and sv are consumed and s holds its final
+	// value (possibly nil for an empty resolution). After that no field is
+	// ever written again, so readers that observe done via the acquire load
+	// in seq()/sval() may read s without taking mu. Error realizations never
+	// set done — the error re-raise path stays behind the mutex.
+	done atomic.Bool
 }
 
 func NewLazySeq(fn Fn) *LazySeq {
@@ -28,6 +36,9 @@ func NewLazySeq(fn Fn) *LazySeq {
 }
 
 func (l *LazySeq) IsRealized() bool {
+	if l.done.Load() {
+		return true
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.fn == nil
@@ -36,6 +47,13 @@ func (l *LazySeq) IsRealized() bool {
 // sval realizes the thunk and returns the raw value without converting to seq.
 // Used for unwrapping nested LazySeqs without locking issues.
 func (l *LazySeq) sval() Value {
+	if l.done.Load() {
+		// Fully realized: sv was consumed by seq(), s is final.
+		if l.s != nil {
+			return l.s
+		}
+		return nil
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// Re-raise stored error on repeated access, mirroring seq().
@@ -64,6 +82,13 @@ func (l *LazySeq) sval() Value {
 
 // seq realizes the lazy seq if not already done
 func (l *LazySeq) seq() Seq {
+	// Lock-free fast path: this is the per-element cost of walking an
+	// already-realized lazy chain (First/Next both land here via Resolve),
+	// so it must not take the mutex.
+	if l.done.Load() {
+		return l.s
+	}
+
 	l.sval() // ensure thunk is called (may panic with thrownPanic)
 
 	l.mu.Lock()
@@ -75,6 +100,9 @@ func (l *LazySeq) seq() Seq {
 	}
 
 	if l.s != nil {
+		// A racing realizer finished while we waited on the lock (or
+		// between the fast-path check and Lock); s is final.
+		l.done.Store(true)
 		return l.s
 	}
 
@@ -115,6 +143,9 @@ func (l *LazySeq) seq() Seq {
 		}
 	}
 
+	// Realization complete without error (the error paths panic above);
+	// publish for the lock-free fast path.
+	l.done.Store(true)
 	return l.s
 }
 
