@@ -124,3 +124,47 @@ func TestLazySeqConcurrentErrorRealization(t *testing.T) {
 		t.Fatalf("post-race access caught %v, want %v", err, wantErr)
 	}
 }
+
+// The other error branch: a thunk that realizes to a non-seq, non-Sequable
+// value sets err inside seq() (not sval()) — that path must also cache and
+// re-raise on every access and never be bypassed by the realized fast path.
+func TestLazySeqConcurrentNonSeqRealization(t *testing.T) {
+	ls := NewLazySeq(thunkOf(func() Value { return Int(42) }))
+
+	catchOne := func() error {
+		var caught error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					if tp, ok := r.(*thrownPanic); ok {
+						caught = tp.err
+					} else {
+						t.Errorf("unexpected panic value %v", r)
+					}
+				}
+			}()
+			ls.First()
+		}()
+		return caught
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = catchOne()
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err == nil {
+			t.Fatalf("goroutine %d: non-seq realization did not raise", i)
+		}
+	}
+	// Repeated sequential access must still re-raise, not fast-path past it.
+	if err := catchOne(); err == nil {
+		t.Fatal("post-race access did not re-raise")
+	}
+}
