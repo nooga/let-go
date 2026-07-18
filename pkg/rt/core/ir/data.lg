@@ -142,6 +142,10 @@
 ;; Inst layout: positional vector [op refs aux block source-infos type].
 ;; Indices 0..5; access via `nth` rather than keyword-as-fn to skip
 ;; the Keyword.Invoke + hashUnencodedChars hot path.
+;; NB slot 5 holds only the construction-time :unknown — inferred types live
+;; in the :types side table (see new-fn / set-type!); slot 5 is type-of's
+;; fallback for nids the table doesn't cover. Slot 4 (source-infos) is
+;; likewise superseded by the :source-info side table.
 (defn op       [nid f] (nth (nth (:insts @f) nid) 0))
 (defn refs     [nid f] (nth (nth (:insts @f) nid) 1))
 (defn aux      [nid f] (nth (nth (:insts @f) nid) 2))
@@ -545,6 +549,14 @@
     (let [src-sis (source-infos nid f)]
       (when (seq src-sis)
         (assoc! (ensure-si! f new-id) new-id src-sis)))
+    ;; Same for the inferred type: it lives in the :types side table now, and
+    ;; the copied tuple only carries the construction-time :unknown in slot 5.
+    ;; Without this carry a clone of a typed inst would silently read :unknown
+    ;; (conservative de-optimization, not a miscompile — but a perf trap).
+    (let [tys (:types @f)
+          src-t (when (< nid (count tys)) (nth tys nid))]
+      (when (some? src-t)
+        (assoc! (ensure-types! f new-id) new-id src-t)))
     (invalidate-uses-state! f)
     new-id))
 
