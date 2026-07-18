@@ -63,6 +63,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | nREPL server + editor setup | `guide/nrepl.md` |
 | Clojure compatibility: namespace table + differences | `guide/clojure-compatibility.md` |
 | Running, compiling, WASM, project mgmt (lgx) | `guide/usage.md` |
+| IR pipeline dynamic vars (knobs + per-compile state) | `design/ir-dynamic-vars.md` |
 | IR fixup / link pass | `design/els2023-ir-fixup-audit.md` |
 | Parallel IR lowering + determinism | `design/parallel-lowering-and-type-cache.md` |
 | Runtime I/O, host decoupling | `design/runtime-io-host-decoupling.md` |
