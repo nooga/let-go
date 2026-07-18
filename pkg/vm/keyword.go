@@ -46,7 +46,7 @@ func (l Keyword) Unbox() any {
 }
 
 func (l Keyword) String() string {
-	return fmt.Sprintf(":%s", string(l))
+	return ":" + string(l)
 }
 
 func (l Keyword) Arity() int {

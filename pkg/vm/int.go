@@ -6,8 +6,8 @@
 package vm
 
 import (
-	"fmt"
 	"reflect"
+	"strconv"
 )
 
 type theIntType struct {
@@ -64,5 +64,5 @@ func (l Int) Unbox() any {
 }
 
 func (l Int) String() string {
-	return fmt.Sprintf("%d", int(l))
+	return strconv.Itoa(int(l))
 }
