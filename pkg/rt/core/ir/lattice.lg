@@ -433,11 +433,17 @@
   (let [s     @state
         facts (:inst-facts s)
         tch   (:touched s)
-        insts (:insts @f)
+        fv    @f
+        insts (:insts fv)
+        ;; types side table (see ir.data new-fn) — read it first, tuple slot 5
+        ;; is the construction-time fallback, mirroring ir/type-of.
+        tys   (:types fv)
+        tn    (count tys)
         n     (count insts)]
     (loop [i 0]
       (if (< i n)
-        (let [raw-type (nth (nth insts i) 5)
+        (let [side     (when (< i tn) (nth tys i))
+              raw-type (if (nil? side) (nth (nth insts i) 5) side)
               seeded   (if (or (nil? raw-type) (= raw-type :unknown)) :bottom raw-type)]
           (conj! facts (fact-from-type seeded))
           (conj! tch false)

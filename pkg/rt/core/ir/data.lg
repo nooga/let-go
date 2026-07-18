@@ -95,6 +95,14 @@
          ;; IR mutator by volume) used to copy the whole 6-element inst tuple +
          ;; the :insts spine per call; the side table is mutated in place.
          :source-info (transient [])
+         ;; Inferred types live OFF the inst tuple too, same shape as
+         ;; :source-info. set-type! was the top typeinfer cost: the epoch
+         ;; flush wrote every inferred type via swap! + assoc-in (both
+         ;; interpreted) — ~94µs/write at 3.5k insts, more than the whole
+         ;; worklist drain. Tuple slot 5 keeps the construction-time
+         ;; :unknown and acts as the read fallback for nids the table
+         ;; doesn't cover.
+         :types     (transient [])
          :blocks    [{:id 0 :params [] :insts [] :preds [] :term nil}]
          :uses-cache nil
          :uses-dirty? true}))
@@ -140,8 +148,15 @@
 (defn block-of [nid f] (nth (nth (:insts @f) nid) 3))
 
 (defn type-of [nid f]
-  (let [t (nth (nth (:insts @f) nid) 5)]
-    (if (nil? t) :unknown t)))
+  ;; Side table first (where set-type! writes), tuple slot 5 as fallback
+  ;; (construction-time default). A nil in either place reads as :unknown.
+  (let [s   @f
+        tys (:types s)
+        side (when (< nid (count tys)) (nth tys nid))]
+    (if (nil? side)
+      (let [t (nth (nth (:insts s) nid) 5)]
+        (if (nil? t) :unknown t))
+      side)))
 
 (defn source-infos [nid f]
   ;; Positional read from the side table (see new-fn). Bounds-checked: a nid
@@ -422,8 +437,22 @@
 (defn set-aux! [f nid aux-val]
   (swap! f assoc-in [:insts nid 2] aux-val))
 
+(defn- ensure-types! [f nid]
+  ;; Grow the types side table so index nid is addressable, then return the
+  ;; transient. Same shape as ensure-si!; typeinfer's flush walks nids in
+  ;; order, so this appends ~1 slot amortized.
+  (let [tys (:types @f)]
+    (loop []
+      (when (<= (count tys) nid)
+        (conj! tys nil)
+        (recur)))
+    tys))
+
 (defn set-type! [f nid t]
-  (swap! f assoc-in [:insts nid 5] t))
+  ;; In-place positional update — no inst-tuple copy, no :insts spine copy,
+  ;; no swap! (mirrors add-source-info!; this was typeinfer's #1 cost: the
+  ;; flush paid ~94µs per interpreted swap!+assoc-in write).
+  (assoc! (ensure-types! f nid) nid t))
 
 (defn cond-target-set-true! [ct bt]
   (assoc ct :true-target bt))
