@@ -9,6 +9,14 @@ import (
 const maxIntValue = Int(int(^uint(0) >> 1))
 const minIntValue = -maxIntValue - 1
 
+// mulGuard bounds checkedMulInt's divide-free fast path: when both operands
+// fit in half the platform int width, their product cannot overflow, so the
+// division-based checks are skipped. Half-width (not a fixed int32 range)
+// keeps the bound correct on 32-bit-int builds as well as 64-bit.
+const intBits = 32 << (^uint(0) >> 63)
+const mulGuardMax = Int(1)<<(intBits/2-1) - 1
+const mulGuardMin = -mulGuardMax - 1
+
 func checkedAddInt(a, b Int) (Int, bool) {
 	if (b > 0 && a > maxIntValue-b) || (b < 0 && a < minIntValue-b) {
 		return 0, false
@@ -24,6 +32,13 @@ func checkedSubInt(a, b Int) (Int, bool) {
 }
 
 func checkedMulInt(a, b Int) (Int, bool) {
+	// Fast path: both operands within half the int width — the product
+	// cannot overflow (extremes: (-2^31)^2 = 2^62 on 64-bit int). The
+	// signed divides below (~20-40 cycles guarding a ~3-cycle multiply)
+	// run only for wide operands.
+	if a >= mulGuardMin && a <= mulGuardMax && b >= mulGuardMin && b <= mulGuardMax {
+		return a * b, true
+	}
 	if a == 0 || b == 0 {
 		return 0, true
 	}
