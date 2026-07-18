@@ -407,13 +407,33 @@ func (n *hmapBitmapNode) assocTransient(edit *atomic.Bool, shift uint, hash uint
 	*addedLeaf = true
 	nEntries := bits.OnesCount32(n.bitmap)
 	editable := n.ensureEditable(edit)
-	// Need to grow the array
-	newArray := make([]any, 2*(nEntries+1))
-	copy(newArray, editable.array[:2*idx])
-	newArray[2*idx] = key
-	newArray[2*idx+1] = val
-	copy(newArray[2*(idx+1):], editable.array[2*idx:2*nEntries])
-	editable.array = newArray
+	need := 2 * (nEntries + 1)
+	if cap(editable.array) >= need {
+		// Use the growth reserve (ensureEditable over-allocates): shift the
+		// tail right in place and insert. copy is overlap-safe, and every
+		// slot in [0, need) is written or preserved, so stale values beyond
+		// the old length are never observed.
+		arr := editable.array[:need]
+		copy(arr[2*(idx+1):], arr[2*idx:2*nEntries])
+		arr[2*idx] = key
+		arr[2*idx+1] = val
+		editable.array = arr
+	} else {
+		// Reserve exhausted — reallocate with headroom so allocations (and
+		// their full-array copies) amortize across a batch of inserts.
+		// Note the in-place branch above still shifts the tail on every
+		// insert, so slot copying stays O(tail) per insert (bounded by the
+		// 32-entry node fan-out); what this removes is the per-insert
+		// allocation and full-array copy. A bitmap node holds at most 32
+		// entries (64 slots), so cap the reserve there: no unbounded spare
+		// capacity rides along into the persisted map.
+		newArray := make([]any, need, min(2*need, 64))
+		copy(newArray, editable.array[:2*idx])
+		newArray[2*idx] = key
+		newArray[2*idx+1] = val
+		copy(newArray[2*(idx+1):], editable.array[2*idx:2*nEntries])
+		editable.array = newArray
+	}
 	editable.bitmap = n.bitmap | bit
 	return editable
 }
