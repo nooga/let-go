@@ -126,9 +126,13 @@ jobs:
           snapshot_tmp="${RUNNER_TEMP}/${snapshot_name}"
           raw_tmp="${RUNNER_TEMP}/${snapshot_name%.json}.jsonl"
 
+          # -count 4 matches bench-ratchet's warmup-discarding median sampling
+          # (#561): rep 1 is discarded, leaving a median of 3. A count of 3
+          # would reduce to an average of 2 there; under pre-#561 mean
+          # aggregation it's simply one more sample. Safe in either merge order.
           go run ./cmd/bench-ratchet \
             -full \
-            -count 3 \
+            -count 4 \
             -benchtime 2s \
             -timeout 30m \
             -out "${raw_tmp}" \
