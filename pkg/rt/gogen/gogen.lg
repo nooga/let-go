@@ -1,5 +1,13 @@
 ;; gogen — Way 3 prototype, refactored to use go/ast directly.
 ;;
+;; Self-contained via embedding (nooga/let-go#425): this file is embedded into
+;; the binary by pkg/rt/gogen_src.go (//go:embed) and served to the resolver by
+;; rt.EmbeddedSource as an *auxiliary* embedded namespace — deliberately NOT
+;; under pkg/rt/core/, so gogen (the AOT Go-emitter) stays out of the core
+;; lowering universe (EmbeddedNSNames) and can't perturb the interpreted-vs-
+;; native lowering fixpoint. Was previously an external classpath dir, which
+;; broke `lg-compile` from the wrong cwd / with older binaries.
+;;
 ;; Architecture:
 ;;   user code: (gquote (func ...))
 ;;     ↓ macro expansion (compile time, Clojure)

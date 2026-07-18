@@ -85,11 +85,12 @@ pkg/rt/core_go_lowered/ir/lower_go/lower_go.go: $(CORE-LG-FILES) $(LGBGEN-SOURCE
 # scripts/generate.lg: the three Go-gen files (op_generated.go,
 # ir_bridge_generated.go, ir/data/generated.lg), the core_compiled.lgb bundle,
 # and the lowered-Go tree. Requires ./lg, so it builds first. The orchestrator
-# uses os/sh + os/exec* to run ./lg on the pkg/rt/gogen sources and to run
+# uses os/sh + os/exec* to run ./lg on the IR-gen specs (which require the
+# embedded gogen macros, #425) and to run
 # `go run -tags bootstrap ./cmd/lgbgen [--target=go]` for the bundle/lowered
 # tree. (Replaces the former generate-ir-{ops,bridge,data}.sh shell scripts.)
 generate: build
-	./lg scripts/generate.lg --go "$$(command -v go)" --lg ./lg --source-paths pkg/rt/gogen
+	./lg scripts/generate.lg --go "$$(command -v go)" --lg ./lg
 
 # Short commit for `-X main.commit` so SHA-pin require-letgo checks can fire on
 # `make` builds. Release builds get this from goreleaser; a bare `make` build

@@ -14,7 +14,6 @@
 ;;
 ;;     --go <path>            go compiler          (default "go")
 ;;     --lg <path>            lg binary            (default "./lg")
-;;     --source-paths <dir>   gogen lib require root (default "pkg/rt/gogen")
 ;;
 ;; Bootstrap note: this script runs ON ./lg (built from the bundle) and shells
 ;; out to `<go> run -tags bootstrap ./cmd/lgbgen` for the bundle and lowered
@@ -41,7 +40,6 @@
 (def argv      os/args)
 (def go-bin    (flag argv "--go" "go"))
 (def lg-bin    (flag argv "--lg" "./lg"))
-(def src-paths (flag argv "--source-paths" "pkg/rt/gogen"))
 
 (defn die [msg]
   (println "generate.lg ERROR:" msg)
@@ -133,11 +131,12 @@
         (println "provenance: lg" dir ":" pv "->" cur-version)))))
 
 ;; --- run ---
-(println "generate.lg: go =" go-bin "| lg =" lg-bin "| source-paths =" src-paths)
+(println "generate.lg: go =" go-bin "| lg =" lg-bin)
 (surface-drift (read-prior))
 
-;; The IR-generation specs live with the IR (pkg/ir); src-paths is the require
-;; root for the gogen macro library (pkg/rt/gogen) the specs depend on.
+;; The IR-generation specs live with the IR (pkg/ir) and `(require 'gogen)` for
+;; the emitter macros. gogen now ships as embedded core source (#425), so it
+;; resolves in-process off the running ./lg with no external source path.
 (gen-go   "scripts/gen/op_generated.head"        "pkg/ir/ir_ops.lg"    "pkg/ir/op_generated.go")
 (gen-go   "scripts/gen/ir_bridge_generated.head" "pkg/ir/ir_bridge.lg" "pkg/rt/ir_bridge_generated.go")
 (gen-lisp "pkg/ir/ir_data.lg" "pkg/rt/core/ir/data/generated.lg")
