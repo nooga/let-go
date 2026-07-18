@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 type LookupStats struct {
@@ -50,8 +51,13 @@ func writeLookupCounts(b *strings.Builder, prefix string, m map[string]uint64) {
 }
 
 var (
-	lookupStatsMu      sync.Mutex
-	lookupStatsEnabled bool
+	lookupStatsMu sync.Mutex
+	// lookupStatsEnabled is atomic so the noters can bail without taking
+	// lookupStatsMu — they sit on Namespace.Lookup and Symbol.Namespaced,
+	// where an always-taken global mutex is a cross-goroutine serialization
+	// point paid even with stats off (the production case). The mutex still
+	// guards the stats maps themselves.
+	lookupStatsEnabled atomic.Bool
 	lookupStatsGlobal  = LookupStats{
 		NamespacedBySym: map[string]uint64{},
 		LookupByNS:      map[string]uint64{},
@@ -60,9 +66,7 @@ var (
 )
 
 func SetLookupStatsEnabled(enabled bool) {
-	lookupStatsMu.Lock()
-	lookupStatsEnabled = enabled
-	lookupStatsMu.Unlock()
+	lookupStatsEnabled.Store(enabled)
 }
 
 func ResetLookupStats() {
@@ -98,8 +102,17 @@ func SnapshotLookupStats() LookupStats {
 }
 
 func noteNamespaced(sym string) {
+	if !lookupStatsEnabled.Load() {
+		return
+	}
 	lookupStatsMu.Lock()
-	if lookupStatsEnabled {
+	// Re-check under the lock so the maps mutate only while enabled is
+	// observed true. Note SetLookupStatsEnabled(false) is no longer a
+	// recording barrier: a noter already past the fast-path check may
+	// record one final sample after Set returns. (The previous
+	// always-locked version quiesced synchronously; no current caller
+	// relies on that.)
+	if lookupStatsEnabled.Load() {
 		lookupStatsGlobal.NamespacedCalls++
 		lookupStatsGlobal.NamespacedBySym[sym]++
 	}
@@ -107,8 +120,11 @@ func noteNamespaced(sym string) {
 }
 
 func noteLookup(ns, sym string) {
+	if !lookupStatsEnabled.Load() {
+		return
+	}
 	lookupStatsMu.Lock()
-	if lookupStatsEnabled {
+	if lookupStatsEnabled.Load() {
 		lookupStatsGlobal.LookupCalls++
 		lookupStatsGlobal.LookupByNS[ns]++
 		lookupStatsGlobal.LookupByNSSym[ns+"::"+sym]++
