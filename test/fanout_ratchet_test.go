@@ -28,6 +28,7 @@ func TestMain(m *testing.M) {
 		panic("build lg: " + err.Error() + "\n" + string(out))
 	}
 	repoRoot, _ = filepath.Abs("..")
+	syncJankSubmodule()
 	appliedPatches := applyJankPatches()
 	code := m.Run()
 	// Leave the submodule worktree as we found it — these are test-time
@@ -90,6 +91,37 @@ func TestJankSuiteCoversLetGoUnicodeScalar(t *testing.T) {
 	}
 	if !bytes.Contains(got, []byte(`:lg      (= (first "𐅧") (char 65895))`)) {
 		t.Fatal("patched fixture lacks the let-go Unicode scalar expectation")
+	}
+}
+
+// syncJankSubmodule brings the clojure-test-suite working tree to the commit
+// the parent repo pins in its gitlink, before the compat suite runs. jj does
+// not update git submodules on checkout, so a jj working copy can sit at an
+// older suite revision than the gitlink records — producing compat failures
+// that do not reproduce on CI (which runs `git submodule update --init`).
+// Self-heal so the local pre-push gate matches CI. Best-effort: never fail the
+// run here; a still-drifted suite fails loudly on its own assertions, which
+// beats a silent stale pass. jj ignores the submodule, so checking out a
+// different SHA in its worktree creates no jj snapshot churn.
+func syncJankSubmodule() {
+	const path = "test/clojure-test-suite"
+	// `git submodule status <path>` leading char: ' ' in sync, '+' the checkout
+	// differs from the pin, '-' uninitialized, 'U' merge conflicts. Run from the
+	// repo root (tests run in test/).
+	out, err := exec.Command("git", "-C", "..", "submodule", "status", path).CombinedOutput()
+	if err != nil || len(out) == 0 {
+		return // not a git checkout / submodule absent — suite skips itself elsewhere
+	}
+	switch out[0] {
+	case ' ':
+		return // already at the pinned SHA — the common fast path
+	case '-':
+		return // uninitialized — applyJankPatches' os.Stat skip handles it
+	}
+	pinned := strings.TrimLeft(strings.Fields(string(out))[0], "+-U ")
+	fmt.Fprintf(os.Stderr, "note: %s drifted from pin %.12s; running `git submodule update --init`\n", path, pinned)
+	if o, err := exec.Command("git", "-C", "..", "submodule", "update", "--init", path).CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "note: submodule sync failed (%v); running against the drifted checkout\n%s", err, o)
 	}
 }
 
