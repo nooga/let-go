@@ -60,10 +60,11 @@ On runtime benchmarks, the VM is competitive on short-lived data work —
 map/filter (11.3ms) comes in 1.7× ahead of Babashka, and persistent maps
 (22.2ms) run neck and neck with it — while AOT lowering turns the call-heavy
 numeric cases around entirely: fib(35) drops from 2.42s to 0.11s and tak from
-2.40s to 94ms, an order of magnitude ahead of Babashka and roughly 2× ahead
-of warm JVM compute. Babashka still leads reduction/transducer workloads,
-and the warm JVM outruns the bytecode VM on long compute runs — though no
-longer the AOT build.
+2.40s to 94ms, an order of magnitude ahead of Babashka. Fully-warmed HotSpot
+still holds the raw-compute crown (steady-state JVM fib(35) is ~76ms to AOT's
+~99ms, measured in-process) but pays ~360ms of startup first, so on one-shot
+runs let-go AOT delivers the result ~5× sooner. Babashka still leads
+reduction/transducer workloads.
 
 Full per-benchmark numbers and methodology:
 [benchmark/results.md](benchmark/results.md).
