@@ -55,3 +55,16 @@ Clojure JVM times include full JVM startup (~350-500ms) which dominates short be
 | tak | 2.397s ± 0.022s (1.0x) | **93.7ms ± 0.6ms** (0.0x) | 1.908s ± 0.037s (0.8x) | 0.613s ± 0.046s (0.3x) |
 | transducers | 46.5ms ± 0.9ms (1.0x) | 43.0ms ± 1.0ms (0.9x) | **20.3ms ± 0.5ms** (0.4x) | 0.373s ± 0.011s (8.0x) |
 
+### Reading the AOT column
+
+The AOT numbers mix two mechanisms:
+
+- **Lowered to native code** — fib, tak, loop-recur. The hot code compiles to
+  native Go over unboxed ints (direct recursion, plain loops); only the leaves
+  box. This is where the 20-26x comes from.
+- **Trampolined** — reduce, map-filter, persistent-map, transducers. The entry
+  point compiles, but the hot operations still run through the same boxed
+  runtime the VM uses, so these rows track the VM around parity (0.9-1.0x
+  here) — the reduce row's 1.7x is that wrapper's overhead, not an AOT
+  regression. Lowering doesn't reach these bodies yet.
+
