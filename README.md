@@ -57,12 +57,13 @@ let-go stays compact and quick to launch: a small native binary, fastest startup
 in this run, low RSS, and no JVM dependency.
 
 On runtime benchmarks, the VM is competitive on short-lived data work —
-map/filter (11.3ms) and persistent maps (22.2ms) run neck and neck with
-Babashka — while AOT lowering turns the call-heavy numeric cases around
-entirely: fib(35) drops from 2.42s to 0.11s and tak from 2.40s to 94ms,
-an order of magnitude ahead of both Babashka and warm JVM wall-clock.
-Babashka still leads reduction/transducer workloads, and the JVM dominates
-long compute runs once HotSpot warms up.
+map/filter (11.3ms) comes in 1.7× ahead of Babashka, and persistent maps
+(22.2ms) run neck and neck with it — while AOT lowering turns the call-heavy
+numeric cases around entirely: fib(35) drops from 2.42s to 0.11s and tak from
+2.40s to 94ms, an order of magnitude ahead of Babashka and roughly 2× ahead
+of warm JVM compute. Babashka still leads reduction/transducer workloads,
+and the warm JVM outruns the bytecode VM on long compute runs — though no
+longer the AOT build.
 
 Full per-benchmark numbers and methodology:
 [benchmark/results.md](benchmark/results.md).
