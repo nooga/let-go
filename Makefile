@@ -375,6 +375,36 @@ ir-stress-gate: build
 	  LG_STRESS_BASELINE=docs/perf/ir-stress-baseline.edn \
 	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
 
+# Bytecode-path census. Same corpus, but lowers through ir.lower (the backend
+# `(set! *ir-compile* true)` actually drives at runtime) instead of lower_go.
+# The lower-go ratchet is NOT a proxy for this: the two backends fail on
+# different things — lower.lg materializes by stack position, lower_go.lg works
+# off structurize's control tree, which lower.lg doesn't use — so a form can
+# lower natively to Go and still fail to bytecode. Separate baseline file so
+# the two ratchets can't overwrite each other.
+ir-stress-bytecode: build
+	LG_STRESS_PASSES=$${LG_STRESS_PASSES:-1} \
+	  LG_STRESS_TIMEOUT_MS=$${LG_STRESS_TIMEOUT_MS:-15000} \
+	  LG_STRESS_BACKEND=lower \
+	  LG_STRESS_LOG=$${LG_STRESS_LOG:-/tmp/ir-stress-bytecode.log} \
+	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
+
+ir-stress-bytecode-gate: build
+	LG_STRESS_PASSES=1 \
+	  LG_STRESS_TIMEOUT_MS=$${LG_STRESS_TIMEOUT_MS:-15000} \
+	  LG_STRESS_BACKEND=lower \
+	  LG_STRESS_BASELINE=docs/perf/ir-stress-bytecode-baseline.edn \
+	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
+
+ir-stress-bytecode-rebaseline: build
+	LG_STRESS_PASSES=1 \
+	  LG_STRESS_TIMEOUT_MS=$${LG_STRESS_TIMEOUT_MS:-15000} \
+	  LG_STRESS_BACKEND=lower \
+	  LG_STRESS_BASELINE=docs/perf/ir-stress-bytecode-baseline.edn \
+	  LG_STRESS_REBASELINE=1 \
+	  LG_STRESS_DATE=$$(date +%F) \
+	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
+
 # Rewrite the committed coverage baseline from a fresh census (tool-maintained;
 # never hand-edit the EDN). Run after an intentional corpus or coverage change,
 # review the diff, and commit it with the change that caused it.

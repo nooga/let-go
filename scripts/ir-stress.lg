@@ -93,15 +93,35 @@
 (when (and (not corpus-mode?) (< (count user-args) 3))
   (usage-and-exit "expected at least 3 args (mode + per-mode args)"))
 
+;; Which lowering path the corpus census exercises. Default :lower-go — the
+;; AOT/native path the coverage ratchet has always measured.
+;;
+;; LG_STRESS_BACKEND=ir-compile switches the census to the BYTECODE path,
+;; i.e. what `(set! *ir-compile* true)` actually drives at runtime. That path
+;; had no census and no gate: a form that stops lowering to bytecode moves
+;; nothing in the lower-go numbers, because the two backends fail on
+;; different things (lower.lg's stack-position materialize vs lower_go.lg's
+;; structured control flow). Give it its own baseline file via
+;; LG_STRESS_BASELINE so the two ratchets don't overwrite each other.
+(def corpus-backend
+  (let [v (System/getenv "LG_STRESS_BACKEND")]
+    (cond
+      (or (nil? v) (= v "") (= v "lower-go")) :lower-go
+      (= v "lower")                           :lower
+      (= v "ir-compile")                      :ir-compile
+      :else (usage-and-exit
+              (str "LG_STRESS_BACKEND must be 'lower-go', 'lower', or 'ir-compile', got: " v)))))
+
 (def measurement-mode
   (if corpus-mode?
-    :lower-go
+    corpus-backend
     (let [m (nth user-args 0)]
       (cond
         (= m "lower-go")   :lower-go
+        (= m "lower")      :lower
         (= m "ir-compile") :ir-compile
         (= m "trace")      :trace
-        :else (usage-and-exit (str "<mode> must be 'corpus', 'ir-compile', 'lower-go', or 'trace', got: " m))))))
+        :else (usage-and-exit (str "<mode> must be 'corpus', 'ir-compile', 'lower', 'lower-go', or 'trace', got: " m))))))
 (def raw-dir (if corpus-mode? "." (nth user-args 1)))
 (def corpus-dir
   (let [n (count raw-dir)]
@@ -370,6 +390,39 @@
           :else :ok)))
     (catch e (ir.coverage/classify-error e))))
 
+(defn try-lower-bytecode [form]
+  "Run form through the BYTECODE lowering path: build IR + lower to a chunk
+   via ir.lower (*target* :bytecode). The exact analog of try-lower-go, for
+   the backend `(set! *ir-compile* true)` actually drives at runtime.
+   Returns :ok | error-classification. Does NOT eval/intern.
+
+   This is the path that had no census. The lower-go ratchet cannot stand in
+   for it: the two backends fail on different things — lower.lg materializes
+   values by stack position and throws 'not on stack for materialize', while
+   lower_go.lg works off the structured control tree from structurize (which
+   lower.lg does not use at all). A form can lower natively to Go and still
+   fail to lower to bytecode, and until now that failure was invisible.
+
+   The first census (2026-07-19) put the gap at 713/2432 failures — 70%
+   coverage on the bytecode path against 99.5% on lower-go. The dominant
+   bucket is :lower/not-on-stack/*, and it is self-inflicted. The IR is
+   indexed RPN: :insts is a vector indexed by InstId and every operand is
+   already an InstId in :refs. Lowering discards that index and reconstructs
+   a STACK DEPTH instead (value-stack-pos + DUP_NTH n). Depth is fragile —
+   it shifts as the stack moves, and a value defined in another block or
+   displaced by an earlier operand's materialization has no computable depth
+   at all — whereas the index was stable and already in hand. Honouring the
+   index the IR already carries is what dissolves this class. See EPIC-016
+   (#575's gate) and EPIC-017 (#574)."
+  (try
+    (binding [ir.passes.pipeline/*target* :bytecode]
+      ;; Shape classification (incl. the fail-loud :else that keeps an unknown
+      ;; compile-form status from silently scoring as coverage) lives in
+      ;; ir.coverage so it is unit-testable and shared — see
+      ;; classify-bytecode-result. This is the load-bearing half of the census.
+      (ir.coverage/classify-bytecode-result (ir.passes.pipeline/compile-form form)))
+    (catch e (ir.coverage/classify-error e))))
+
 (defn trace-one-defn [form]
   "Drill into one defn: time each pipeline stage and capture the per-pass
    trace from ir.passes.trace/optimize-fn-traced. Returns a map:
@@ -502,20 +555,37 @@
 (defn try-ir-timed [form]
   "Per-fixture measurement, dispatched by measurement-mode.
    :ir-compile  — eval via *ir-compile* (xsofy: measures user-load behavior)
+   :lower       — build IR + lower to BYTECODE via ir.lower, no eval
    :lower-go    — lower IR to Go via :bridge mode (ir-stack: AOT pass rate)
    Wrapped in per-fixture-timeout-ms; runaway fixtures return :stress/timeout.
    On timeout, if LG_STRESS_AUTOTRACE=1, re-run with a longer timeout under
    trace-one-defn to capture per-pass cost and accumulate into pass-totals.
    Returns [result-key time-ms]."
-  (let [thunk (if (= measurement-mode :lower-go)
-                (fn [] (try-lower-go form))
-                (fn [] (try
-                         (binding [*ir-compile* true]
-                           (eval form))
-                         :ok
-                         (catch e (ir.coverage/classify-error e)))))
+  (let [thunk (cond
+                (= measurement-mode :lower-go) (fn [] (try-lower-go form))
+                (= measurement-mode :lower)    (fn [] (try-lower-bytecode form))
+                :else
+                ;; *ir-compile*/*ir-compile-strict* are bound OUTSIDE this thunk
+                ;; (around try-with-timeout, below) — NOT here. try-with-timeout
+                ;; runs the thunk via future*, which seeds its child ctx from a
+                ;; snapshot of the spawning ctx's bindings. A binding installed
+                ;; inside the thunk lands after eval has macroexpanded the defn
+                ;; through the root ctx at *ir-compile*=false, so the silent
+                ;; downgrade returns :ok and the census scores a coverage
+                ;; FAILURE as a pass. Binding outside is what the child eval
+                ;; actually inherits. (Verified: inside-future => :ok, outside
+                ;; => :threw on the unlowerable probe.)
+                (fn [] (try (eval form)
+                            :ok
+                            (catch e (ir.coverage/classify-error e)))))
         t0 (System/nanoTime)
-        result (try-with-timeout thunk per-fixture-timeout-ms)
+        ;; See the note above: the strict binding must wrap the future* spawn,
+        ;; not sit inside the thunk. :lower/:lower-go don't eval, so they need
+        ;; no binding.
+        result (if (or (= measurement-mode :lower-go) (= measurement-mode :lower))
+                 (try-with-timeout thunk per-fixture-timeout-ms)
+                 (binding [*ir-compile* true *ir-compile-strict* true]
+                   (try-with-timeout thunk per-fixture-timeout-ms)))
         t1 (System/nanoTime)
         ms (double (/ (- t1 t0) 1000000.0))]
     (when (and (= result :stress/timeout) autotrace-on?

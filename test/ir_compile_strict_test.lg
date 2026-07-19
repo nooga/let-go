@@ -1,0 +1,111 @@
+;; *ir-compile-strict* — make a failed IR compile loud instead of silent.
+;;
+;; The defn macro's fallback to the bytecode compiler is deliberate: without
+;; it a single unlowerable defn aborts a whole corpus. But by default the
+;; fallback is also SILENT, so a coverage loss is indistinguishable from a
+;; success — you pay the full IR compile cost, run bytecode anyway, and
+;; nothing says so. *ir-compile-verbose* reports it without failing, so no
+;; test or CI gate can hang off it.
+;;
+;; Strict mode is the gateable form: the fallback throws, naming the defn.
+;; It catches what *strict-structured?* cannot — that var is scoped to
+;; structured-control-flow drift in the GO backend and never observes a
+;; bytecode-path lowering failure.
+(ns test.ir-compile-strict-test
+  (:require
+   [ir.coverage :as coverage]
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+;; A shape that does not lower on the bytecode path today: an `if` inside a
+;; recur argument. Chosen because it fails in `lower.lg`'s stack-position
+;; materialize ("value %N not on stack"), which is exactly the class the
+;; lower-go coverage ratchet cannot see.
+(def unlowerable-form
+  '(defn strict-probe-fn [n]
+     (loop [i 0 acc 0]
+       (if (>= i n)
+         acc
+         (recur (inc i) (if (even? i) (+ acc i) (- acc 1)))))))
+
+(deftest ir-compile-falls-back-silently-by-default
+  (testing "default: the defn compiles, having quietly used bytecode"
+    ;; No throw, and the fn works — it just isn't IR-compiled. This is the
+    ;; blind spot strict mode closes, pinned here so a change in the default
+    ;; is a deliberate decision rather than a surprise.
+    (is (= :ok (binding [*ir-compile* true]
+                 (do (eval unlowerable-form) :ok))))))
+
+(deftest ir-compile-strict-throws-on-fallback
+  (testing "strict: a defn that cannot IR-compile throws instead"
+    (is (= :threw
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (try (eval unlowerable-form) :no-throw
+                  (catch _ :threw))))))
+  (testing "the throw names the defn that failed"
+    (let [msg (binding [*ir-compile* true *ir-compile-strict* true]
+                (try (eval unlowerable-form) ""
+                     (catch e (str e))))]
+      (is (>= (index-of msg "strict-probe-fn") 0))
+      (is (>= (index-of msg "ir-compile-strict") 0)))))
+
+(deftest ir-compile-strict-through-future
+  ;; The bytecode census runs each eval inside try-with-timeout, i.e. under
+  ;; future*. future* seeds its child ctx from a snapshot of the spawning ctx's
+  ;; bindings, so WHERE *ir-compile-strict* is bound relative to the future*
+  ;; spawn decides whether the child eval observes it. This pins that so
+  ;; scripts/ir-stress.lg cannot silently regress to binding inside the thunk,
+  ;; which scores coverage FAILURES as :ok.
+  (testing "binding INSIDE the future thunk does not take — the trap"
+    (is (= :ok
+           (deref (future* (fn [] (try (binding [*ir-compile* true *ir-compile-strict* true]
+                                         (eval unlowerable-form))
+                                       :ok (catch _ :threw))))))))
+  (testing "binding AROUND the future* spawn is observed by the child eval — the fix"
+    (is (= :threw
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (deref (future* (fn [] (try (eval unlowerable-form) :ok (catch _ :threw))))))))))
+
+(deftest ir-compile-strict-is-quiet-on-success
+  (testing "a form that DOES lower is unaffected by strict mode"
+    (is (= :ok
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (try (eval '(defn strict-ok-fn [n] (+ n 1))) :ok
+                  (catch _ :threw))))))
+  (testing "and the strictly-compiled fn still works"
+    ;; eval'd call too: the var is interned at eval time, so a direct call
+    ;; would not resolve when this file is compiled.
+    (binding [*ir-compile* true *ir-compile-strict* true]
+      (eval '(defn strict-ok-fn2 [n] (* n 3))))
+    (is (= 9 (eval '(strict-ok-fn2 3))))))
+
+(deftest ir-compile-strict-defaults-off
+  (testing "strict mode is opt-in — shipping code keeps the hybrid fallback"
+    (is (= false *ir-compile-strict*))))
+
+;; The bytecode census (try-lower-bytecode -> classify-bytecode-result) must be
+;; fail-loud in the same way strict mode is: an UNKNOWN compile-form result
+;; shape must classify as a failure, never silently score as coverage. Without
+;; this the census reintroduces exactly the silent-fallback blind spot the PR
+;; exists to close — a future compile-form status variant would be counted as a
+;; pass and the ratchet would lock the overcount in.
+(deftest bytecode-census-classifies-known-success-shapes
+  (testing "a {:status :lowered} status map is a pass"
+    (is (= :ok (coverage/classify-bytecode-result {:status :lowered}))))
+  (testing "a native non-map success value (*CodeChunk / *MultiArityFn) is a pass"
+    ;; 42 stands in for the native value compile-form returns on the bytecode
+    ;; target; the classifier scores any non-map, non-string value :ok.
+    (is (= :ok (coverage/classify-bytecode-result 42)))))
+
+(deftest bytecode-census-classifies-failure-channels
+  (testing "compile-form's String error channel classifies, not :ok"
+    (is (not= :ok (coverage/classify-bytecode-result "ir/lower: value %7 not on stack"))))
+  (testing "a {:status :fallback} map classifies via its :reason"
+    (is (not= :ok (coverage/classify-bytecode-result {:status :fallback :reason "no-reason"})))))
+
+(deftest bytecode-census-scores-unknown-shape-loud
+  (testing "an UNKNOWN status map is classified LOUD, never scored as coverage (#580)"
+    (let [bucket (coverage/classify-bytecode-result {:status :some-future-variant})]
+      (is (not= :ok bucket))
+      (is (string? bucket))
+      (is (some? (re-find #"census/unexpected-result-shape" bucket))))))
