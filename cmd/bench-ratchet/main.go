@@ -291,6 +291,16 @@ func main() {
 		}
 	}
 
+	// The reduction needs at least 3 reps for a true median (count >= 4 gets
+	// warmup-discard + median, count 3 a plain median-of-3). Below that it
+	// degenerates to a single sample; runs that accept the tradeoff for
+	// wall-clock reasons still work, but the degradation must never be silent.
+	if effCount < 3 && mode != "show" {
+		fmt.Fprintf(os.Stderr, "bench-ratchet: WARNING: -count %d cannot form a median; "+
+			"use -count >= 3 (>= 4 adds a discarded warmup rep). Results are more outlier-sensitive.\n",
+			effCount)
+	}
+
 	if *outPath == "" {
 		*outPath = defaultRunPath()
 	}
@@ -940,12 +950,21 @@ func captureOnePackage(pkg string, count int, benchtime, timeout, tags string, f
 // is taken. Median, not mean: a single contention spike or GC pause
 // skews an average straight into the stored baseline, which is how a
 // concurrently-running pass once manufactured six phantom regressions.
-// With one rep (legacy captures, -count 1) the value passes through.
+//
+// Exactly three reps take the plain median of all three: the median
+// already rejects the systematically-slow cold rep, whereas discarding
+// it first would leave two samples and force a mean — the estimator
+// this function exists to avoid. This keeps -count 3 callers (the
+// perf-timeline ubuntu leg, whose measured budget can't fit count 4,
+// see #573) on a true median. With one rep (legacy captures, -count 1)
+// the value passes through.
 func reduceSamples(vals []float64) float64 {
 	if len(vals) == 0 {
 		return 0
 	}
-	if len(vals) > 1 {
+	// n==2 still discards the cold rep (a single warm sample beats a mean
+	// that averages the cold rep in).
+	if len(vals) > 3 || len(vals) == 2 {
 		vals = vals[1:]
 	}
 	s := append([]float64(nil), vals...)
@@ -959,8 +978,8 @@ func reduceSamples(vals []float64) float64 {
 
 // aggregateFromFile reads a .jsonl of StreamRecord lines and returns
 // a Baseline computed from them. Same-named records (multiple -count
-// repetitions, in capture order) reduce via reduceSamples: first rep
-// discarded as warmup, median of the remainder.
+// repetitions, in capture order) reduce via reduceSamples: median, with
+// the first rep discarded as warmup when enough reps allow it.
 func aggregateFromFile(path string) (MachineBaseline, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1705,6 +1724,17 @@ func compareAndReportMarkdown(baseline, current MachineBaseline, budget float64,
 		anchorDrift := (current.Anchor.NSPerOp - baseline.Anchor.NSPerOp) / baseline.Anchor.NSPerOp
 		fmt.Printf("- anchor: baseline `%.3f ns/op`, current `%.3f ns/op` (`%+.1f%%`)\n\n",
 			baseline.Anchor.NSPerOp, current.Anchor.NSPerOp, anchorDrift*100)
+		// The markdown reports (perf-pr.yml / perf-wasm.yml) are exactly the
+		// surface the phantom-regression incident is meant to expose, so the
+		// same >15% anchor-drift warning the text path emits must render here —
+		// otherwise a polluted capture publishes a trustworthy-looking verdict.
+		if anchorDrift < -0.15 || anchorDrift > 0.15 {
+			fmt.Printf("> **⚠️ anchor moved %+.1f%% on the same machine class — normalized.**\n", anchorDrift*100)
+			fmt.Printf("> The ratios below are scaled by this factor and are **not trustworthy** —\n")
+			fmt.Printf("> likely a polluted capture (CPU scheduling / thermal / concurrent load) on\n")
+			fmt.Printf("> one side. Re-run on a quiet machine; if the drift persists, recapture the\n")
+			fmt.Printf("> baseline (`bench-ratchet update -force`) from a clean checkout.\n\n")
+		}
 	} else {
 		fmt.Println()
 	}

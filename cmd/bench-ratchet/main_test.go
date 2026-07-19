@@ -76,6 +76,7 @@ func TestReduceSamplesWarmupAndMedian(t *testing.T) {
 		{"empty", nil, 0},
 		{"single passes through", []float64{7}, 7},
 		{"two drops warmup", []float64{100, 40}, 40},
+		{"three takes plain median, cold rep rejected", []float64{100, 40, 60}, 60},
 		{"odd median after warmup", []float64{100, 60, 40, 50}, 50},
 		{"even median after warmup", []float64{100, 10, 20, 30, 40}, 25},
 		{"warmup spike ignored", []float64{9999, 10, 11, 12}, 11},
