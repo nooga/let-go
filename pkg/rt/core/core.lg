@@ -972,6 +972,24 @@
 ;; fallback events for testing/analysis.
 (def ^:dynamic *ir-compile-fallback-log* (atom []))
 
+;; When true, a defn that cannot be IR-compiled THROWS instead of quietly
+;; falling back to the bytecode compiler.
+;;
+;; The hybrid fallback is deliberate and stays the default: without it a
+;; single unlowerable defn aborts a whole corpus, turning *ir-compile* into
+;; an all-or-nothing switch. But "falls back" and "falls back SILENTLY" are
+;; separable, and only the first is a feature. With the default settings a
+;; coverage loss is indistinguishable from success — you pay the full IR
+;; compile cost, run bytecode anyway, and nothing says so. *ir-compile-verbose*
+;; reports it but does not fail, so nothing in CI can gate on it.
+;;
+;; Turn this on when you are measuring coverage rather than shipping code:
+;; corpus censuses, pipeline development, and any test asserting that a form
+;; really lowers. Note this catches what *strict-structured?* cannot — that
+;; var is scoped to structured-control-flow drift in the GO backend, and
+;; never sees a bytecode-path lowering failure.
+(def ^:dynamic *ir-compile-strict* false)
+
 (defmacro defn [name & forms]
   (let [doc        (if (string? (first forms)) (first forms) nil)
         forms      (if (string? (first forms)) (next forms) forms)
@@ -1012,6 +1030,12 @@
                     (let [error-msg (str e)]
                       (println (str "ir-compile: defn " name " fell back to direct compile: " error-msg))
                       (swap! *ir-compile-fallback-log* conj [name error-msg])))
+                  ;; Strict mode: refuse the silent downgrade. Rethrow with the
+                  ;; defn named, so a coverage loss is a failure you can gate on
+                  ;; rather than a bytecode-speed function that looks compiled.
+                  (when *ir-compile-strict*
+                    (throw (str "ir-compile-strict: defn " name
+                                " failed to IR-compile: " e)))
                   nil)))
             ;; Fallback: standard bytecode compile (same as *ir-compile* off).
             `(def ~def-name (fn ~@forms))))

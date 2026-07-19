@@ -63,6 +63,25 @@
         ;; Destructuring issues
         (re-find #"destructur" m)  :destructure-rejection
 
+        ;; Bytecode-lowering (ir.lower) structural failures. These carry an
+        ;; instruction index in the message — "value %42 not on stack" — so
+        ;; without folding, every distinct %N becomes its own bucket and a
+        ;; census over the corpus produces 130+ single-count rows instead of a
+        ;; diagnosis.
+        ;; Bucket by the CONSUMER op, which is the part that identifies the
+        ;; shape that failed to lower.
+        (re-find #"not on stack for materialize" m)
+        (let [match (re-find #"op=:([a-z-]+)" m)]
+          (if match
+            (keyword "lower/not-on-stack" (second match))
+            :lower/not-on-stack))
+
+        (re-find #"unsupported op for lowering" m)
+        (let [match (re-find #"unsupported op for lowering: :([a-z-]+)" m)]
+          (if match
+            (keyword "lower/unsupported-op" (second match))
+            :lower/unsupported-op))
+
         ;; Build-form errors with structural cause.
         (re-find #"no :term" m)              :validate/no-term
         (re-find #"cross-block ref" m)       :validate/cross-block-ref
@@ -73,3 +92,33 @@
 
         ;; Everything else: store the actual error message
         :else (str ":other | " truncated)))))
+
+(defn classify-bytecode-result [result]
+  "Classify a `*target* :bytecode` compile-form result into :ok or a
+   coverage-failure bucket, fail-loud: score :ok ONLY for shapes we can name as
+   a success; classify everything else rather than silently counting it as
+   coverage. This mirrors the *ir-compile-strict* posture — a silent downgrade
+   must not read as a pass — and is the load-bearing half of the bytecode
+   census (#580). Used by scripts/ir-stress.lg's try-lower-bytecode.
+
+   Success shapes on the bytecode path:
+     - a non-map native value — a *CodeChunk (single-arity) or a *MultiArityFn
+       (multi-arity via make-multi-arity). A failed arity throws out of
+       chunk->fn, so no partial-arity shape can escape here (this path has no
+       :multi-fn-template result — that only arises under :go).
+     - a {:status :lowered} status map.
+   Failure channels:
+     - a String — compile-form's error channel;
+     - a {:status :fallback} map — classify its :reason;
+     - ANY OTHER map — an unknown compile-form status variant; classified LOUD."
+  (cond
+    (string? result)
+    (classify-error result)
+    (not (map? result))
+    :ok
+    (= :lowered (:status result))
+    :ok
+    (= :fallback (:status result))
+    (classify-error (or (:reason result) "no-reason"))
+    :else
+    (classify-error (str ":census/unexpected-result-shape " (pr-str result)))))

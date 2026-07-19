@@ -14,7 +14,8 @@ go run . scripts/ir-stress.lg <mode> <args>...
 
 | mode | args | what it does |
 |---|---|---|
-| `ir-compile` | `<dir> <file>...` | `(binding [*ir-compile* true] (eval form))` per defn. Measures what users hit at load time. |
+| `ir-compile` | `<dir> <file>...` | `(binding [*ir-compile* true *ir-compile-strict* true] (eval form))` per defn. Measures what users hit at load time. Strict mode is required here: the `defn` fallback is otherwise silent, so a downgrade to bytecode would score as a pass. |
+| `lower`      | `<dir> <file>...` | Build IR + lower to **bytecode** via `ir.lower`, no eval. The analog of `lower-go` for the backend `*ir-compile*` actually drives. |
 | `lower-go`   | `<dir> <file>...` | Build IR + lower to Go in `:bridge` mode, no eval. Safe against the live pipeline; this is the AOT pass-rate signal. |
 | `trace`      | `<dir> <file> <defn-name>` | Drill into ONE defn. Prints per-stage ms (expand / build / optimize / lower) and the per-pass timing table from `ir.passes.trace`. |
 
@@ -30,6 +31,7 @@ are relative to that root.
 | `LG_STRESS_LOG` | path | append one TSV row per defn: `file<TAB>defn<TAB>bucket<TAB>ms`. Buckets include `:ok` and the `classify-error` keys (e.g. `:missing-form/set!`, `:gogen/nth-non-int`, `:stress/timeout`). A single `grep` over the log answers "what's the gap?". |
 | `LG_STRESS_AUTOTRACE` | `1` | on each `:stress/timeout`, re-run that defn under `trace-one-defn` with a 4× timeout. Embeds a one-line "expand=A build=B optimize=C lower=D ms" summary inline, and feeds per-pass cost into the top-K aggregator. Doubles cost for slow defns. Currently effective only in `lower-go` mode. |
 | `LG_STRESS_TOPK` | `1` | at run end, print: (a) cumulative ms per pass across all auto-traced defns; (b) one row per traced defn naming its single worst pass. Requires `LG_STRESS_AUTOTRACE=1` to populate. |
+| `LG_STRESS_BACKEND` | `lower-go` (default), `lower`, `ir-compile` | which lowering path `corpus` mode measures. `lower-go` = IR→Go (the historical ratchet). `lower` = IR→**bytecode** via `ir.lower`, the path `*ir-compile*` drives at runtime. Give each its own `LG_STRESS_BASELINE` file. |
 
 ## Common recipes
 
@@ -72,6 +74,8 @@ useful buckets:
 | `:gogen/nth-non-int` | a gogen helper hit `nth` with a non-int (typically a nil `(ir/op nil f)`) |
 | `:gogen/bad-identifier` | gogen Go-name munging rejected a Lisp identifier |
 | `:lower-go/nested-closure` | by-design lower-go fallback for closure-in-closure body shapes |
+| `:lower/not-on-stack/<op>` | bytecode lowering could not find a value at a computable stack position when emitting `<op>`. `lower.lg` addresses values by stack depth, so a value produced in another block — or displaced by an earlier operand's materialization — is unreachable. The dominant bytecode-path failure. |
+| `:lower/unsupported-op/<op>` | the bytecode lowerer has no emission case for `<op>` at all (e.g. `:try`, `:div`). |
 | `:build/unrecognized-form` | build saw a form shape it doesn't know how to handle |
 | `:destructure-rejection` | destructuring pattern unsupported |
 
