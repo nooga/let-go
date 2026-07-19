@@ -1,0 +1,147 @@
+;; Lowering quality gate: the IR path must not emit a worse instruction
+;; sequence than the plain bytecode compiler for the same source.
+;;
+;; The IR pipeline is an OPTIMIZING pipeline, so "compiles correctly" is not
+;; the bar — it has to pay for itself. Measured 2026-07-19 on main, `fib` was
+;; 24 instructions via IR vs 18 via the plain compiler (+33%) and ran ~13.5%
+;; SLOWER, because materialize! copied every operand to the top of the stack
+;; with DUP_NTH instead of consuming values in place, leaving the originals
+;; below as junk. Each surplus DUP_NTH is pure shuffle: the copy is consumed
+;; by the very next op while the original goes dead, so the pair is a no-op
+;; with a cost.
+;;
+;; These tests pin the shape of the emitted code, not just its result. A
+;; regression here means the pipeline started spending instructions again.
+(ns test.ir-lower-stack-discipline-test
+  (:require
+   [disasm :as d]
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+(defn- ops-of [f]
+  "Opcode keywords of f's chunk, in order."
+  (map first (d/disassemble-resolved f)))
+
+(defn- count-op [f op]
+  (count (filter (fn [o] (= o op)) (ops-of f))))
+
+;; --- fixtures: identical source, both compile paths --------------------
+
+(defn fib-bc [n]
+  (if (< n 2) n (+ (fib-bc (- n 1)) (fib-bc (- n 2)))))
+
+(defn sumloop-bc [n]
+  (loop [i 0 acc 0] (if (>= i n) acc (recur (inc i) (+ acc i)))))
+
+;; #613 regression: a var loaded into a local BEFORE a set! of the SAME var must
+;; observe the pre-set! value. build-set! emits the set! target as a Var-valued
+;; :const (not a :load-var), so set-var-target-keys must recognize that shape —
+;; else the load is treated as an ordinary re-emittable var and reads the
+;; post-set! value. Runs inside a (binding …) so set! has a thread binding.
+(def ^:dynamic *snap-v* 1)
+
+(defn snapshot-probe-bc []
+  (let [x *snap-v*]
+    (set! *snap-v* 2)
+    [x x]))
+
+;; #579 (mparrett): the mutator can be a CALLEE, not just a same-fn set!. A var
+;; loaded before a call that set!s it must snapshot the PRE-call root; re-emitting
+;; the load after the call reads the mutated root. This exercised two holes: the
+;; re-emit itself (lower.lg) AND CSE merging the two *xmv* loads across the call
+;; (cse.lg). Both compilers must agree with the plain-compiler baseline [1 2].
+(def ^:dynamic *xmv* 1)
+
+(defn mutate-xmv! [] (set! *xmv* 2) 100)
+
+(defn xcall-probe-bc []
+  (let [x *xmv*] (mutate-xmv!) [x *xmv*]))
+
+(set! *ir-compile* true)
+
+(defn fib-ir [n]
+  (if (< n 2) n (+ (fib-ir (- n 1)) (fib-ir (- n 2)))))
+
+(defn sumloop-ir [n]
+  (loop [i 0 acc 0] (if (>= i n) acc (recur (inc i) (+ acc i)))))
+
+(defn snapshot-probe-ir []
+  (let [x *snap-v*]
+    (set! *snap-v* 2)
+    [x x]))
+
+(defn xcall-probe-ir []
+  (let [x *xmv*] (mutate-xmv!) [x *xmv*]))
+
+(set! *ir-compile* false)
+
+;; --- behavior first: the optimization must not change results ----------
+
+(deftest ir-lowering-preserves-semantics
+  (testing "both paths compute the same values"
+    (is (= (fib-bc 15) (fib-ir 15)))
+    (is (= (sumloop-bc 1000) (sumloop-ir 1000)))))
+
+;; --- the gate ----------------------------------------------------------
+
+;; --- the ratchet -------------------------------------------------------
+;;
+;; These pin what lowering emits TODAY so a regression is caught, and record
+;; the TARGET the pipeline is aiming at. They are upper bounds, not equalities:
+;; an improvement makes them pass with room to spare, at which point tighten
+;; the numbers here in the same commit (same discipline as ir-stress-gate and
+;; bench-ratchet — the ratchet only tightens).
+;;
+;; Current vs target, measured 2026-07-19:
+;;
+;;   fib      plain 18 insts / 0 DUP_NTH   IR 23 / 4    target 18 / 0
+;;   sumloop  plain 16 insts / 0 DUP_NTH   IR 18 / 8    target 16 / 0
+;;
+;; sumloop is the sharper case: 18 instructions of which 8 are shuffle, i.e.
+;; the loop body spends nearly half its instruction budget rearranging the
+;; stack rather than computing.
+;;
+;; The residue is emission ORDER, not the var handling fixed here: the call
+;; argument is computed before the callee is loaded, so the argument must be
+;; copied above the callee and its original is stranded below as junk (the
+;; trailing RECUR is that junk's cleanup). Scheduling operand materialization
+;; in consumer order — callee, then args left to right — is what closes the
+;; remaining gap. Tracked as EPIC-018 (issue #575, STORY-0072/0073: per-edge
+;; stack maps and block-arg erasure).
+
+(deftest ir-lowering-shuffle-ratchet
+  (testing "fib: surplus stack shuffle does not grow"
+    (is (<= (count-op fib-ir :DUP_NTH) 4))      ; target 0
+    (is (<= (count (ops-of fib-ir)) 23)))       ; target 18 (plain compiler)
+  (testing "loop/recur: surplus stack shuffle does not grow"
+    (is (<= (count-op sumloop-ir :DUP_NTH) 8))  ; target 0
+    (is (<= (count (ops-of sumloop-ir)) 18))))  ; target 16 (plain compiler)
+
+(deftest ir-lowering-var-loads-match-plain-compiler
+  (testing "an ordinary (non-set!) var is re-emitted per use, not copied"
+    ;; The plain compiler emits one LOAD_VAR per call site and lets the VM
+    ;; snapshot the root at each load. The IR path now does the same instead
+    ;; of materializing once and copying with DUP_NTH — which also stopped
+    ;; the value from crossing blocks, retiring the :validate/cross-block-ref
+    ;; failure bucket (ir-stress: 20 -> 11 native-lowering failures).
+    (is (= (count-op fib-bc :LOAD_VAR) (count-op fib-ir :LOAD_VAR)))))
+
+(deftest ir-lowering-set-var-snapshot-matches-plain-compiler
+  (testing "a var loaded before a set! of the same var snapshots the pre-set! value (#613)"
+    ;; Both must return [1 1] — x captures *snap-v*=1 BEFORE (set! *snap-v* 2).
+    ;; Before the set-var-target-keys fix the IR path returned [2 2]: it treated
+    ;; the load as an ordinary var, re-emitting it after the set!.
+    (is (= [1 1] (binding [*snap-v* 1] (snapshot-probe-bc))))
+    (is (= [1 1] (binding [*snap-v* 1] (snapshot-probe-ir))))
+    (is (= (binding [*snap-v* 1] (snapshot-probe-bc))
+           (binding [*snap-v* 1] (snapshot-probe-ir))))))
+
+(deftest ir-lowering-load-across-mutating-call-matches-plain-compiler
+  (testing "a var loaded before a call that set!s it snapshots the pre-call root (#579)"
+    ;; x captures *xmv*=1 BEFORE (mutate-xmv!) sets it to 2; the trailing *xmv*
+    ;; reads the post-call root 2 → [1 2]. Before the fix the IR path returned
+    ;; [1 1] (CSE merged both loads, then materialized the pre-call value once).
+    (is (= [1 2] (binding [*xmv* 1] (xcall-probe-bc))))
+    (is (= [1 2] (binding [*xmv* 1] (xcall-probe-ir))))
+    (is (= (binding [*xmv* 1] (xcall-probe-bc))
+           (binding [*xmv* 1] (xcall-probe-ir))))))

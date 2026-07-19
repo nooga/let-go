@@ -252,6 +252,146 @@
         (contains-after? refs i (nth refs i)) false
         :else (recur (inc i))))))
 
+;; --- set!-target vars ------------------------------------------------
+;;
+;; A :load-var may be re-emitted at each use (one LOAD_VAR, no junk) exactly
+;; as the plain bytecode compiler does — it emits a fresh LOAD_VAR per use and
+;; the VM snapshots the root when the load executes. That is unsafe only for a
+;; var this same function set!s: two loads straddling the set! would read
+;; different roots, where a single materialized load holds the pre-set! value.
+;; So materialize-once is restricted to set!-TARGET vars, mirroring
+;; lower_go.lg's load-var-snapshot? rule. A blanket exclusion of every
+;; :load-var (the pre-2026-07-19 behavior) forced a DUP_NTH copy per extra use
+;; of ordinary vars, which is how self-recursive fns like fib lowered to 33%
+;; more instructions than the compiler this pipeline is meant to beat.
+
+(defn- var-key-of-symbol [aux]
+  (let [sym (symbol aux)]
+    (str (or (namespace sym) "core") "/" (name sym))))
+
+(defn- var-key-of-var-value [v]
+  ;; A *vm.Var value stringifies as "#'ns/name"; strip the #' and re-key.
+  (let [sym (symbol (subs (str v) 2))]
+    (str (or (namespace sym) "core") "/" (name sym))))
+
+(defn- var-key-of-ref [f ref]
+  ;; The var a set!'s TARGET operand denotes. build-set! emits that target as a
+  ;; Var-valued :const (aux = the *vm.Var), NOT a :load-var — so matching only
+  ;; :load-var here (the pre-fix behavior) never recognized a real set!, and the
+  ;; snapshot protection below silently did nothing. Mirror lower_go.lg's
+  ;; var-key-of-ref: accept both a :load-var (aux symbol) and a Var-valued
+  ;; :const, so the bytecode + Go lowerers agree on which loads are set! targets.
+  (let [op (ir/op ref f)]
+    (cond
+      (= :load-var op) (var-key-of-symbol (ir/aux ref f))
+      (= :const op)    (let [v (ir/aux ref f)] (when (var? v) (var-key-of-var-value v)))
+      :else nil)))
+
+(defn- set-var-target-keys [l]
+  "Var keys this fn set!s, computed once and cached on the lowering state."
+  (let [cached (:set-var-keys @l)]
+    (if (some? cached)
+      cached
+      (let [f    (f-of l)
+            keys (reduce
+                   (fn [acc bid]
+                     (reduce (fn [a nid]
+                               (if (= :set-var (ir/op nid f))
+                                 (let [refs (ir/refs nid f)
+                                       k    (when (pos? (count refs))
+                                              (var-key-of-ref f (nth refs 0)))]
+                                   (if k (conj a k) a))
+                                 a))
+                             acc (ir/block-insts bid f)))
+                   #{} (ir/blocks f))]
+        (swap! l assoc :set-var-keys keys)
+        keys))))
+
+(defn- load-var-snapshot? [l nid]
+  "True for a :load-var whose var this fn set!s — the one case that must be
+   materialized once rather than re-emitted per use."
+  (let [f (f-of l)]
+    (and (= :load-var (ir/op nid f))
+         (contains? (set-var-target-keys l) (var-key-of-symbol (ir/aux nid f))))))
+
+;; --- vars live across an effect --------------------------------------
+;;
+;; Re-emitting a :load-var at each use matches the plain compiler ONLY while
+;; the var's root can't change between the load and that use. A same-fn set!
+;; is caught above; a CALL is the other mutator — the callee may set! the var
+;; (or def/redefine it). The plain compiler snapshots the root at the def site
+;; (it stores let-bound values into locals BEFORE any following call), so a use
+;; after a mutating call must read the pre-call root. Re-emitting reads the
+;; POST-call root instead — `(let [x mv] (mutate!) x)` returned the mutated
+;; value. So a load live across an effectful op is body-emitted at its def and
+;; DUP_NTH-copied per use, exactly as the pre-2026-07-19 blanket rule did, but
+;; now only for the loads that actually straddle an effect — fib/sumloop callee
+;; loads sit adjacent to their own invoke with nothing between, so they keep
+;; the cheap re-emit.
+
+(def ^:private ir-effectful-ops
+  ;; Ops that can change a var's root between a load and a later use. Pure
+  ;; arith/const/closure/load ops cannot, so re-emit stays sound across them.
+  #{:call :tail-call :set-var :def})
+
+(defn- block-index-map [insts]
+  "nid -> position within a block's inst vector."
+  (let [m (atom {})]
+    (loop [i 0]
+      (when (< i (count insts))
+        (swap! m assoc (nth insts i) i)
+        (recur (inc i))))
+    @m))
+
+(defn- effect-strictly-between? [insts f lo hi]
+  "True if any inst at index j with lo < j < hi is effectful. The consuming op
+   at hi is EXCLUDED: a load feeding its own call is not live ACROSS that call."
+  (loop [j (inc lo)]
+    (cond
+      (>= j hi) false
+      (contains? ir-effectful-ops (ir/op (nth insts j) f)) true
+      :else (recur (inc j)))))
+
+(defn- callee-only-use? [f nid uid]
+  "True when nid is used by uid ONLY as the callee (ref 0) of a call. Such a
+   load re-resolves at call time rather than being snapshotted as a value, so it
+   is outside the value-load semantics this crossing check guards."
+  (and (contains? #{:call :tail-call} (ir/op uid f))
+       (let [refs (ir/refs uid f)]
+         (and (pos? (count refs))
+              (= nid (first refs))
+              (not (some (fn [r] (= r nid)) (rest refs)))))))
+
+(defn- load-var-crosses-effect? [l nid]
+  "True when a :load-var is live across an effectful op and must therefore be
+   materialized once rather than re-emitted. Conservative: any cross-block use
+   forces materialize (the effect could sit on the intervening path); a
+   same-block use forces it only when an effectful inst lies strictly between
+   the def and the use."
+  (let [f (f-of l)]
+    (and (= :load-var (ir/op nid f))
+         (let [dblk  (ir/block-of nid f)
+               insts (vec (ir/block-insts dblk f))
+               idx   (block-index-map insts)
+               di    (get idx nid)
+               uses  (:uses @l)
+               us    (when (< nid (count uses)) (nth uses nid))]
+           (if (or (nil? di) (nil? us) (ir/uses-empty? us))
+             false
+             (let [crosses (atom false)]
+               (ir/uses-for-each
+                 us
+                 (fn [uid]
+                   (when (and (not @crosses)
+                              (not (callee-only-use? f nid uid)))
+                     (if (not= (ir/block-of uid f) dblk)
+                       (reset! crosses true)
+                       (let [ui (get idx uid)]
+                         (when (and ui (> ui di)
+                                    (effect-strictly-between? insts f di ui))
+                           (reset! crosses true)))))))
+               @crosses))))))
+
 (defn- should-body-emit-cheap? [l nid]
   "Decide whether a cheap-load Inst should be body-emitted at its
    def site (vs. deferred to materialize at use site).
@@ -627,10 +767,13 @@
           ;; Deferred cond (emitted after branch-target args).
           (and deferred-cond (= nid deferred-cond)) nil
           ;; Cheap-load deferral: skip body emission when not body-emit-cheap.
-          ;; :load-var excluded — mutable var root must be materialized once, not
-          ;; re-emitted (a re-emitted rt.LookupVar would read a post-set! value, P1).
+          ;; Only set!-TARGET :load-vars are excluded — those must be
+          ;; materialized once so two loads can't straddle the set! and read
+          ;; different roots (P1). Ordinary var loads re-emit per use, matching
+          ;; the plain compiler, instead of costing a DUP_NTH copy each.
           (and (ir/op-cheap-load? op)
-               (not= op :load-var)
+               (not (load-var-snapshot? l nid))
+               (not (load-var-crosses-effect? l nid))
                (not (should-body-emit-cheap? l nid)))
           nil
           :else (emit-inst! l nid))))

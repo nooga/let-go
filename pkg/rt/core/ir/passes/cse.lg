@@ -26,6 +26,22 @@
    same key compute the same value."
   [(ir/op nid f) (vec (ir/refs nid f)) (ir/aux nid f)])
 
+(defn- var-root-barrier? [op nid f var-facts]
+  "True for an Inst that can change a var's ROOT: a direct :set-var/:def, or a
+   :call that isn't a proven pure-call (the callee may set! any var). A stable
+   :load-var recorded in `seen` before such a barrier must NOT be reused by an
+   identical load AFTER it — the plain compiler would observe the post-barrier
+   root, so merging them collapses two distinct values into one. Only
+   :load-var congruences are dropped; pure-op values (e.g. :add of fixed SSA
+   nodes) are immutable and stay valid across the barrier."
+  (or (= op :set-var)
+      (= op :def)
+      (and (= op :call)
+           (not (purity/pure-call? f nid var-facts)))))
+
+(defn- drop-load-var-keys [seen]
+  (into {} (filter (fn [kv] (not= :load-var (first (first kv)))) seen)))
+
 (defn- cse-eligible? [op nid f var-facts]
   ;; CSE deduplicates any value-pure Inst: those whose evaluation yields
   ;; the same value every time. This includes:
@@ -53,10 +69,15 @@
       ;; CSE state, the analysis equivalent of one iteration scope.
       (let [seen (atom {})]
         (doseq [nid (vec (ir/block-insts bid f))
-                :let [op (ir/op nid f)]
-                :when (cse-eligible? op nid f var-facts)
-                :let [k (inst-key nid f)]]
-          (if-let [prior (@seen k)]
-            (ir/replace-all-uses! f nid prior)
-            (swap! seen assoc k nid))))))
+                :let [op (ir/op nid f)]]
+          ;; A var-root barrier invalidates any earlier stable :load-var so a
+          ;; following identical load reads the post-barrier root, not a merged
+          ;; pre-barrier value.
+          (when (var-root-barrier? op nid f var-facts)
+            (swap! seen drop-load-var-keys))
+          (when (cse-eligible? op nid f var-facts)
+            (let [k (inst-key nid f)]
+              (if-let [prior (@seen k)]
+                (ir/replace-all-uses! f nid prior)
+                (swap! seen assoc k nid))))))))
   f)

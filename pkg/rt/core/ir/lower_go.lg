@@ -527,6 +527,73 @@
   (and (= :load-var (ir/op nid f))
        (contains? (set-var-target-keys f) (var-key-of-symbol (ir/aux nid f)))))
 
+;; The same-fn set! guard above is not the only mutator: a CALL can run a callee
+;; that set!s (or defs) the loaded var, so a re-emitted deref after the call
+;; reads the mutated root while the bytecode VM snapshots at the load. A load
+;; live across an effectful op is therefore materialised into the one-time
+;; snapshot local too. Mirrors lower.lg's load-var-crosses-effect?; callee loads
+;; sit adjacent to their invoke with only arithmetic between, so they keep the
+;; inline re-emit. (A shared home for this rule across both backends is a sound
+;; follow-up — kept per-backend here to close the divergence now.)
+(def ^:private ir-effectful-ops #{:call :tail-call :set-var :def})
+
+(defn- block-index-map [insts]
+  (let [m (atom {})]
+    (loop [i 0]
+      (when (< i (count insts))
+        (swap! m assoc (nth insts i) i)
+        (recur (inc i))))
+    @m))
+
+(defn- effect-strictly-between? [f insts lo hi]
+  (loop [j (inc lo)]
+    (cond
+      (>= j hi) false
+      (contains? ir-effectful-ops (ir/op (nth insts j) f)) true
+      :else (recur (inc j)))))
+
+(defn- callee-only-use? [f nid uid]
+  "True when nid is used by uid ONLY as the callee (ref 0) of a call. Such a
+   load is re-resolved at call time (CachedVarFn / re-emit), not rendered into a
+   value local, so materialising it across an effect would leave a dead local
+   and doesn't reflect the value-load semantics this snapshot guards."
+  (and (contains? #{:call :tail-call} (ir/op uid f))
+       (let [refs (ir/refs uid f)]
+         (and (pos? (count refs))
+              (= nid (first refs))
+              (not (some (fn [r] (= r nid)) (rest refs)))))))
+
+(defn- load-var-crosses-effect? [f nid]
+  (and (= :load-var (ir/op nid f))
+       (let [dblk  (ir/block-of nid f)
+             insts (vec (ir/block-insts dblk f))
+             idx   (block-index-map insts)
+             di    (get idx nid)
+             uses  (ir/uses f)
+             us    (when (< nid (count uses)) (nth uses nid))]
+         (if (or (nil? di) (nil? us) (ir/uses-empty? us))
+           false
+           (let [crosses (atom false)]
+             (ir/uses-for-each
+               us
+               (fn [uid]
+                 (when (and (not @crosses)
+                            (not (callee-only-use? f nid uid)))
+                   (if (not= (ir/block-of uid f) dblk)
+                     (reset! crosses true)
+                     (let [ui (get idx uid)]
+                       (when (and ui (> ui di)
+                                  (effect-strictly-between? f insts di ui))
+                         (reset! crosses true)))))))
+             @crosses)))))
+
+(defn- load-var-materialize? [f nid]
+  "A :load-var that must be snapshotted into a one-time local rather than
+   re-emitted inline: either a same-fn set! target or a load live across an
+   effectful op."
+  (or (load-var-snapshot? f nid)
+      (load-var-crosses-effect? f nid)))
+
 (defn- used? [f nid]
   (let [uses (ir/uses f)]
     (and (< nid (count uses))
@@ -758,7 +825,7 @@
           ;; later set! to the same var cannot change the value this use observes
           ;; (the snapshot `vN = ec.Deref(...)` is emitted by lower-inst-stmts via
           ;; inst-rhs). Otherwise (no set! in the fn) re-emit the deref inline.
-          (if (load-var-snapshot? f nid)
+          (if (load-var-materialize? f nid)
             (when (and (live? f nid) (infer-go-type t))
               (value-ident f nid))
             (load-var-deref-expr aux))
@@ -966,8 +1033,9 @@
               insts  (filter (fn [nid]
                                (let [op (ir/op nid f)]
                                  (and (or (local-carrying-op? op)
-                                          ;; materialised var snapshot in a set!-fn
-                                          (load-var-snapshot? f nid))
+                                          ;; materialised var snapshot: a set!-fn
+                                          ;; target or a load live across an effect
+                                          (load-var-materialize? f nid))
                                       (not= op :block-arg)
                                       (live? f nid)
                                       (not (closure-value? f nid))
@@ -2345,7 +2413,7 @@
       ;; uses read the snapshot, not a value a subsequent set! may have changed.
       ;; Without a set! the var is re-emitted inline at uses (no statement here).
       (= op :load-var)
-      (if (and (load-var-snapshot? f nid) (live? f nid))
+      (if (and (load-var-materialize? f nid) (live? f nid))
         (let [rhs (inst-rhs f closed-exprs nid)]
           (when rhs
             [(gogen/assign "=" (value-ident f nid) rhs)]))
