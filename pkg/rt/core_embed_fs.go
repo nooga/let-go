@@ -26,8 +26,27 @@ var coreFS embed.FS
 // source is invisible to the self-hosting bootstrap (lgbgen). gogen is the case
 // (nooga/let-go#425) — it self-contains as embedded source but is the AOT
 // Go-emitter, not core content, and enrolling it in core/ perturbs the
-// interpreted-vs-native lowering fixpoint. Populated from *_src.go init().
+// interpreted-vs-native lowering fixpoint.
+//
+// Concurrency: a bare map with no lock, safe ONLY because it is written
+// exclusively from init() (via registerEmbeddedSource), which happens-before
+// every resolver read through EmbeddedSource. Do NOT add a runtime
+// RegisterEmbeddedSource entry point — a write racing a resolver read would be a
+// data race. Keep all registration in init().
 var auxEmbeddedSources = map[string]string{}
+
+// registerEmbeddedSource records an auxiliary embedded namespace source. Call it
+// ONLY from init() (see auxEmbeddedSources for the race invariant). An empty
+// source means the //go:embed directive that feeds it never populated — a broken
+// build — so fail loudly and name the namespace here, rather than let it surface
+// downstream as an obscure "Can't resolve <ns>/..." through the resolver's
+// fallback chain.
+func registerEmbeddedSource(name, src string) {
+	if src == "" {
+		panic("rt: embedded source for namespace " + name + " is empty (//go:embed failed?)")
+	}
+	auxEmbeddedSources[name] = src
+}
 
 // EmbeddedSource returns the source of an embedded namespace by its
 // dotted ns name. Auxiliary sources (auxEmbeddedSources) are checked first,

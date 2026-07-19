@@ -25,4 +25,4 @@ import _ "embed"
 //go:embed gogen/gogen.lg
 var gogenSrc string
 
-func init() { auxEmbeddedSources["gogen"] = gogenSrc }
+func init() { registerEmbeddedSource("gogen", gogenSrc) }
