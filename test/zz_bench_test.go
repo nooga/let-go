@@ -89,6 +89,7 @@ import (
 // runs natively, is routing forms through *ir-compile* no worse than the
 // direct bytecode compiler on realistic jank-sized code?
 func BenchmarkClojureTestSuiteCompileAndRun(b *testing.B) {
+	ensureJankSuite()
 	compiler.SetMatchCljConditional(true)
 	defer compiler.SetMatchCljConditional(false)
 
@@ -146,6 +147,7 @@ func BenchmarkClojureTestSuiteCompileAndRun(b *testing.B) {
 }
 
 func BenchmarkClojureTestSuite(b *testing.B) {
+	ensureJankSuite()
 	compiler.SetMatchCljConditional(true)
 	defer compiler.SetMatchCljConditional(false)
 

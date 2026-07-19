@@ -67,6 +67,7 @@ func (s *suiteCounters) summary() string {
 // Each .cljc file is compiled and executed through let-go with compat shims.
 // Files that fail to compile (e.g. missing builtins) are reported as skipped.
 func TestClojureTestSuite(t *testing.T) {
+	ensureJankSuite()
 	compiler.SetMatchCljConditional(true)
 	defer compiler.SetMatchCljConditional(false)
 

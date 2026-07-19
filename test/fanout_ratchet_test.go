@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -28,12 +29,10 @@ func TestMain(m *testing.M) {
 		panic("build lg: " + err.Error() + "\n" + string(out))
 	}
 	repoRoot, _ = filepath.Abs("..")
-	syncJankSubmodule()
-	appliedPatches := applyJankPatches()
 	code := m.Run()
 	// Leave the submodule worktree as we found it — these are test-time
 	// overlays, not checkout changes the run should persist.
-	revertJankPatches(appliedPatches)
+	revertJankPatches(jankPatches)
 	os.RemoveAll(tmp)
 	os.Exit(code)
 }
@@ -81,6 +80,7 @@ func TestPatchOverlayApplyIdempotentAndRevert(t *testing.T) {
 }
 
 func TestJankSuiteCoversLetGoUnicodeScalar(t *testing.T) {
+	ensureJankSuite()
 	fixture := filepath.Join("clojure-test-suite", "test", "clojure", "core_test", "char.cljc")
 	got, err := os.ReadFile(fixture)
 	if os.IsNotExist(err) {
@@ -92,6 +92,26 @@ func TestJankSuiteCoversLetGoUnicodeScalar(t *testing.T) {
 	if !bytes.Contains(got, []byte(`:lg      (= (first "𐅧") (char 65895))`)) {
 		t.Fatal("patched fixture lacks the let-go Unicode scalar expectation")
 	}
+}
+
+// jankSuiteSetup gates suite preparation so it happens once, and only when a
+// test or benchmark that actually reads the suite runs. TestMain must not do
+// this eagerly: it executes before the -run filter applies, so an eager sync
+// would move the submodule checkout for every `go test ./test` invocation,
+// including runs that never touch the suite.
+var (
+	jankSuiteSetup sync.Once
+	jankPatches    []string
+)
+
+// ensureJankSuite syncs the submodule to its pinned SHA and overlays the :lg
+// fixture patches. Call it at the top of anything that reads clojure-test-suite.
+// Patches are reverted by TestMain after the run.
+func ensureJankSuite() {
+	jankSuiteSetup.Do(func() {
+		syncJankSubmodule()
+		jankPatches = applyJankPatches()
+	})
 }
 
 // syncJankSubmodule brings the clojure-test-suite working tree to the commit
@@ -118,8 +138,16 @@ func syncJankSubmodule() {
 	case '-':
 		return // uninitialized — applyJankPatches' os.Stat skip handles it
 	}
-	pinned := strings.TrimLeft(strings.Fields(string(out))[0], "+-U ")
-	fmt.Fprintf(os.Stderr, "note: %s drifted from pin %.12s; running `git submodule update --init`\n", path, pinned)
+	// The SHA `git submodule status` prints for a '+' entry is the CURRENT
+	// checkout, not the pin; the pin is the gitlink recorded in the index.
+	checkout := strings.TrimLeft(strings.Fields(string(out))[0], "+-U ")
+	pin := "?"
+	if idx, err := exec.Command("git", "-C", "..", "ls-files", "-s", path).Output(); err == nil {
+		if f := strings.Fields(string(idx)); len(f) >= 2 {
+			pin = f[1]
+		}
+	}
+	fmt.Fprintf(os.Stderr, "note: %s checkout %.12s differs from pin %.12s; running `git submodule update --init`\n", path, checkout, pin)
 	if o, err := exec.Command("git", "-C", "..", "submodule", "update", "--init", path).CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "note: submodule sync failed (%v); running against the drifted checkout\n%s", err, o)
 	}
