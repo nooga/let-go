@@ -3,9 +3,10 @@
 ;; identically whether dispatched through the native fast path (gogen_ir
 ;; direct calls / NativeFn adapters) or the bytecode trampoline.
 (ns test.native-bridge-parity-test
-  (:require [test :refer :all]
-            [rt]
-            [clojure.string :as cs]))
+  (:require
+   [clojure.string :as cs]
+   [rt]
+   [test :refer :all]))
 
 (deftest string-prims
   (testing "upper-case via the native bridge"
@@ -119,6 +120,51 @@
     (with-redefs [cs/upper-case (fn [x] "X")]
       (is (= "Xb" (cs/capitalize "ab"))))
     (is (= "Ab" (cs/capitalize "ab")))))
+
+(deftest redefinition-guard-self-scoped
+  ;; Companion to redefinition-guard above, covering the OTHER direction.
+  ;;
+  ;; redefinition-guard proves a redef in a CALLER's extent is observed by a
+  ;; separate lowered callee (group-by's baked rt.Reduce3). This one covers a
+  ;; function that redefines a primitive WITHIN ITSELF and then calls it — the
+  ;; case pkg/ir/native_direct_call_test.go's TestWithRedefsDisablesNativeDirect
+  ;; guards statically, by asserting no baked corefns.Count is emitted at all.
+  ;;
+  ;; The two guards are not equivalent. The static one bans the native call
+  ;; from the source; this one asserts the OBSERVABLE property — the redefined
+  ;; root is what runs. If the runtime guard (rt.NativePrimsIntact, a deviation
+  ;; counter over guarded roots) covers the self-scoped case as it does the
+  ;; cross-boundary one, then the static ban is stricter than the behaviour
+  ;; requires, and lower_go's *direct-calls-disabled?* could stop rejecting
+  ;; :native? candidates — which today costs every native call in ANY
+  ;; var-root-mutating function (ir.direct's evaluator loses nth/get/count/
+  ;; assoc! to it, one ec.Invoke plus a []vm.Value allocation per call).
+  ;;
+  ;; This test must hold either way: it pins behaviour, not emission strategy.
+  (testing "a fn that redefines count inside itself observes its own redef"
+    (let [probe (fn [xs] (with-redefs [count (fn [_] 42)] (count xs)))]
+      (is (= 42 (probe [1 2 3])))
+      ;; root restored on unwind
+      (is (= 3 (count [1 2 3])))))
+  (testing "the guard is tripped for the duration of the self-scoped redef"
+    (let [inside (atom nil)
+          probe  (fn [xs]
+                   (with-redefs [count (fn [_] 42)]
+                     (reset! inside (rt/native-prims-intact?))
+                     (count xs)))]
+      (is (= 42 (probe [1 2 3])))
+      (is (= false @inside))
+      (is (= true (rt/native-prims-intact?)))))
+  (testing "a redef of one primitive does not corrupt another"
+    (let [probe (fn [xs] (with-redefs [count (fn [_] 42)] [(count xs) (nth xs 0)]))]
+      (is (= [42 1] (probe [1 2 3])))))
+  (testing "nested self-scoped redefs unwind in order"
+    (let [probe (fn [xs]
+                  (with-redefs [count (fn [_] 1)]
+                    (with-redefs [count (fn [_] 2)]
+                      (count xs))))]
+      (is (= 2 (probe [1 2 3])))
+      (is (= 3 (count [1 2 3]))))))
 
 (deftest error-paths
   (testing "native fast path and trampoline throw alike"

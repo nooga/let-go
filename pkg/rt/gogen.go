@@ -1722,6 +1722,50 @@ func cFile(pkgV, importsV, declsV vm.Value) (vm.Value, error) {
 // introduces (math.NaN / math.Inf for non-finite float literals), without
 // mutating any shared node.
 
+// cCallTargets returns every call target in `node`'s subtree, in source order,
+// as strings: "pkg.Name" for a selector call (rt.NativePrimsIntact,
+// builtins.Nth), ".Name" for a method call on a non-ident receiver, and "Name"
+// for a bare identifier call.
+//
+// Query tooling for the lowered output. Without it, "did this function get a
+// native direct call or a trampoline?" gets answered by regex over rendered
+// text, which is fragile and silently wrong when the emission shape differs
+// from the pattern being matched (e.g. the uncached
+// rt.InvokeValueEC(ec, ec.Deref(rt.LookupVar(...))) form matches neither
+// "CachedVarFn" nor "NativePrimsIntact", so a grep-based count reports zero of
+// both and reads as "no calls"). Walking the AST answers the question the
+// lowerer actually decided, not the one a pattern happens to spell.
+//
+// Read-only: mutates nothing.
+func cCallTargets(nodeV vm.Value) (vm.Value, error) {
+	n, err := unboxNode(nodeV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if n == nil {
+		return vm.NewArrayVector(nil), nil
+	}
+	var out []vm.Value
+	ast.Inspect(n, func(x ast.Node) bool {
+		call, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch f := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			if id, ok := f.X.(*ast.Ident); ok {
+				out = append(out, vm.String(id.Name+"."+f.Sel.Name))
+			} else {
+				out = append(out, vm.String("."+f.Sel.Name))
+			}
+		case *ast.Ident:
+			out = append(out, vm.String(f.Name))
+		}
+		return true
+	})
+	return vm.NewArrayVector(out), nil
+}
+
 // cReferencesPkg reports whether `node` references package `pkg` via a
 // `pkg.<name>` selector anywhere in its subtree. Read-only: walks the boxed
 // AST, mutates nothing.
@@ -2206,6 +2250,7 @@ func installGogenNS() {
 		mk(wrap3Named("var-decl", cVarDecl)),
 		mk(wrap3Named("file", cFile)),
 		mk(wrap2Named("references-pkg?", cReferencesPkg)),
+		mk(wrap1Named("call-targets", cCallTargets)),
 		mk(wrap1Named("file-import-paths", cFileImportPaths)),
 		mk(wrap2Named("add-file-import", cAddFileImport)),
 		mk(wrap1Named("ensure-gen-imports", cEnsureGenImports)),

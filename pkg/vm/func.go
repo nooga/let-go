@@ -110,13 +110,23 @@ func (l *Func) invokeIn(ec *ExecContext, pargs []Value) (result Value, err error
 		if len(args) < l.arity-1 {
 			return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", l, l.arity-1, len(args)))
 		}
-		sargs := args[0 : l.arity-1]
 		rest := args[l.arity-1:]
 		restlist, boxErr := boxRest(rest)
 		if boxErr != nil {
 			return NIL, boxErr
 		}
-		args = append(sargs, restlist)
+		// Build a FRESH slice; do not append into args' backing array.
+		// `append(args[0:l.arity-1], restlist)` reuses the caller's array
+		// (the reslice keeps its capacity), so the packed rest-list is
+		// written over the caller's element l.arity-1 — for a plain
+		// (fn [& as]) that is args[0]. A Go caller reusing one []Value
+		// across invocations then sees its arguments silently replaced by
+		// the previous call's rest-list: correct on the first call, garbage
+		// on the second.
+		packed := make([]Value, l.arity)
+		copy(packed, args[:l.arity-1])
+		packed[l.arity-1] = restlist
+		args = packed
 	} else if len(args) != l.arity {
 		return NIL, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", l, l.arity, len(args)))
 	}
@@ -212,13 +222,17 @@ func (l *Closure) invokeIn(ec *ExecContext, pargs []Value) (result Value, err er
 			if len(args) < f.arity-1 {
 				return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", l, f.arity-1, len(args)))
 			}
-			sargs := args[0 : f.arity-1]
 			rest := args[f.arity-1:]
 			restlist, boxErr := boxRest(rest)
 			if boxErr != nil {
 				return NIL, boxErr
 			}
-			args = append(sargs, restlist)
+			// Fresh slice — see Func.invokeIn for why appending into the
+			// caller's backing array corrupts the caller's arguments.
+			packed := make([]Value, f.arity)
+			copy(packed, args[:f.arity-1])
+			packed[f.arity-1] = restlist
+			args = packed
 		} else if len(args) != f.arity {
 			return NIL, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", l, f.arity, len(args)))
 		}
@@ -348,6 +362,12 @@ func MakeMultiArity(fns []Value) (*MultiArityFn, error) {
 			ma.arity = a
 		}
 		if rest, ok := f.(*Func); ok && rest.isVariadric {
+			ma.rest = rest
+		} else if rest, ok := f.(*NativeFn); ok && rest.isVariadric {
+			// A wrapped callable declaring a variadic tail (ir.direct's
+			// invokers via NewArityNativeFn). Without this arm it would be
+			// filed as a FIXED arity in ma.fns, so (f a b c) past the
+			// declared minimum would find no match instead of the rest-arm.
 			ma.rest = rest
 		} else if rest, ok := f.(*Closure); ok {
 			if ff, ok := rest.fn.(*Func); ok && ff.isVariadric {

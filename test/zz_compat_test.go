@@ -102,6 +102,33 @@ func TestClojureTestSuite(t *testing.T) {
 		t.Fatal("failed to compile portability shim:", err)
 	}
 
+	// Mirror the bench's mode selection (zz_bench_test.go): LG_SUITE_IR routes
+	// every test-file fn body through the IR pipeline. The bench reports only
+	// aggregate counters and sends per-assertion output to /dev/null, so an
+	// IR-only failure shows up there as "fail=4" with no way to see WHICH
+	// assertions broke. Honoring the same env var here gets named per-file
+	// subtests and the assertion text, which is what makes an IR regression
+	// diagnosable rather than merely countable.
+	if suiteIRMode() {
+		irCtx := compiler.NewCompiler(c, coreNS)
+		if _, _, err := irCtx.CompileMultiple(strings.NewReader(
+			"(require 'ir.passes.pipeline)\n(set! *ir-compile* true)",
+		)); err != nil {
+			t.Fatal("enable *ir-compile*:", err)
+		}
+		defer func() {
+			// *ir-compile* is a process-global: if this reset fails silently the
+			// flag stays ON and leaks into every later test in the package
+			// (TestRunner's .lg suite included), corrupting unrelated results
+			// while still looking clean. Report it rather than discarding it.
+			reset := compiler.NewCompiler(c, coreNS)
+			if _, _, err := reset.CompileMultiple(strings.NewReader("(set! *ir-compile* false)")); err != nil {
+				t.Errorf("failed to reset *ir-compile* — later tests in this package "+
+					"may run with IR compilation still enabled: %v", err)
+			}
+		}()
+	}
+
 	var files []string
 	for _, dir := range []string{"core_test", "string_test"} {
 		matches, err := filepath.Glob(filepath.Join(suiteRoot, dir, "*.cljc"))

@@ -6,6 +6,7 @@ package rt
 
 import (
 	"fmt"
+
 	"github.com/nooga/let-go/pkg/vm"
 )
 
@@ -233,24 +234,332 @@ func _adapt_Reduce3_arity3(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) 
 	return r, nil
 }
 
+func _adapt_Symbol(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
+	}
+	a0 := vs[0]
+	r, err := Symbol(a0)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Assoc(vs []vm.Value) (vm.Value, error) {
+	switch len(vs) {
+	case 3:
+		return _adapt_Assoc_arity3(vs)
+	case 5:
+		return _adapt_Assoc5_arity5(vs)
+	}
+	return vm.NIL, fmt.Errorf("wrong number of args (%d)", len(vs))
+}
+
+func _adapt_Assoc_arity3(vs []vm.Value) (vm.Value, error) {
+	a0 := vs[0]
+	a1 := vs[1]
+	a2 := vs[2]
+	r, err := Assoc(a0, a1, a2)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Assoc5_arity5(vs []vm.Value) (vm.Value, error) {
+	a0 := vs[0]
+	a1 := vs[1]
+	a2 := vs[2]
+	a3 := vs[3]
+	a4 := vs[4]
+	r, err := Assoc5(a0, a1, a2, a3, a4)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_AssocBang(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 3", len(vs))
+	}
+	a0 := vs[0]
+	a1 := vs[1]
+	a2 := vs[2]
+	r, err := AssocBang(a0, a1, a2)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Swap(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	switch len(vs) {
+	case 2:
+		return _adapt_Swap_arity2(ec, vs)
+	case 3:
+		return _adapt_Swap3_arity3(ec, vs)
+	case 4:
+		return _adapt_Swap4_arity4(ec, vs)
+	case 5:
+		return _adapt_Swap5_arity5(ec, vs)
+	}
+	return vm.NIL, fmt.Errorf("wrong number of args (%d)", len(vs))
+}
+
+func _adapt_Swap_arity2(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	a0 := vs[0]
+	a1 := vs[1]
+	r, err := Swap(ec, a0, a1)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Swap3_arity3(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	a0 := vs[0]
+	a1 := vs[1]
+	a2 := vs[2]
+	r, err := Swap3(ec, a0, a1, a2)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Swap4_arity4(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	a0 := vs[0]
+	a1 := vs[1]
+	a2 := vs[2]
+	a3 := vs[3]
+	r, err := Swap4(ec, a0, a1, a2, a3)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Swap5_arity5(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	a0 := vs[0]
+	a1 := vs[1]
+	a2 := vs[2]
+	a3 := vs[3]
+	a4 := vs[4]
+	r, err := Swap5(ec, a0, a1, a2, a3, a4)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_NotEq(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
+	}
+	a0 := vs[0]
+	a1 := vs[1]
+	r, err := NotEq(a0, a1)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_IsMap(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
+	}
+	a0 := vs[0]
+	r, err := IsMap(a0)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Atom(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
+	}
+	a0 := vs[0]
+	r, err := Atom(a0)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Reset(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
+	}
+	a0 := vs[0]
+	a1 := vs[1]
+	r, err := Reset(a0, a1)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Namespace(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
+	}
+	a0 := vs[0]
+	r, err := Namespace(a0)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_PushBinding(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
+	}
+	a0 := vs[0]
+	a1 := vs[1]
+	r, err := PushBinding(ec, a0, a1)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_PopBinding(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
+	}
+	a0 := vs[0]
+	r, err := PopBinding(ec, a0)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_ReFind(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
+	}
+	a0 := vs[0]
+	a1 := vs[1]
+	r, err := ReFind(a0, a1)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Some(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
+	}
+	a0 := vs[0]
+	a1 := vs[1]
+	r, err := Some(ec, a0, a1)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Int(vs []vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
+	}
+	a0 := vs[0]
+	r, err := Int(a0)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Range1(vs []vm.Value) (vm.Value, error) {
+	switch len(vs) {
+	case 1:
+		return _adapt_Range1_arity1(vs)
+	case 2:
+		return _adapt_Range2_arity2(vs)
+	case 3:
+		return _adapt_Range3_arity3(vs)
+	}
+	return vm.NIL, fmt.Errorf("wrong number of args (%d)", len(vs))
+}
+
+func _adapt_Range1_arity1(vs []vm.Value) (vm.Value, error) {
+	a0 := vs[0]
+	r, err := Range1(a0)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Range2_arity2(vs []vm.Value) (vm.Value, error) {
+	a0 := vs[0]
+	a1 := vs[1]
+	r, err := Range2(a0, a1)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_Range3_arity3(vs []vm.Value) (vm.Value, error) {
+	a0 := vs[0]
+	a1 := vs[1]
+	a2 := vs[2]
+	r, err := Range3(a0, a1, a2)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
 func RegisterGeneratedPrimitives() {
 	RegisterNativeModule(&NativeModule{
 		GoPkg:     "github.com/nooga/let-go/pkg/rt",
 		Namespace: "clojure.core",
 		Fns: map[string]NativeDirectFn{
-			"name":     {GoIdent: "Name", LgName: "name", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "string", NeedsError: true},
-			"subs@2":   {GoIdent: "Subs", LgName: "subs", Arity: 2, ParamSpecs: []string{"string", "int"}, ResultSpec: "string", NeedsError: true},
-			"subs@3":   {GoIdent: "Subs3", LgName: "subs", Arity: 3, ParamSpecs: []string{"string", "int", "int"}, ResultSpec: "string", NeedsError: true},
-			"nth@2":    {GoIdent: "Nth", LgName: "nth", Arity: 2, ParamSpecs: []string{"vm.Value", "int"}, ResultSpec: "vm.Value", NeedsError: true},
-			"nth@3":    {GoIdent: "Nth3", LgName: "nth", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"deref@1":  {GoIdent: "Deref", LgName: "deref", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"deref@3":  {GoIdent: "Deref3", LgName: "deref", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"str":      {GoIdent: "Str", LgName: "str", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "string", NeedsError: true},
-			"get@2":    {GoIdent: "Get", LgName: "get", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"get@3":    {GoIdent: "Get3", LgName: "get", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"conj":     {GoIdent: "Conj", LgName: "conj", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
-			"reduce@2": {GoIdent: "Reduce", LgName: "reduce", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"reduce@3": {GoIdent: "Reduce3", LgName: "reduce", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"name":          {GoIdent: "Name", LgName: "name", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "string", NeedsError: true},
+			"subs@2":        {GoIdent: "Subs", LgName: "subs", Arity: 2, ParamSpecs: []string{"string", "int"}, ResultSpec: "string", NeedsError: true},
+			"subs@3":        {GoIdent: "Subs3", LgName: "subs", Arity: 3, ParamSpecs: []string{"string", "int", "int"}, ResultSpec: "string", NeedsError: true},
+			"nth@2":         {GoIdent: "Nth", LgName: "nth", Arity: 2, ParamSpecs: []string{"vm.Value", "int"}, ResultSpec: "vm.Value", NeedsError: true},
+			"nth@3":         {GoIdent: "Nth3", LgName: "nth", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"deref@1":       {GoIdent: "Deref", LgName: "deref", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"deref@3":       {GoIdent: "Deref3", LgName: "deref", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"str":           {GoIdent: "Str", LgName: "str", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "string", NeedsError: true},
+			"get@2":         {GoIdent: "Get", LgName: "get", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"get@3":         {GoIdent: "Get3", LgName: "get", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"conj":          {GoIdent: "Conj", LgName: "conj", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"reduce@2":      {GoIdent: "Reduce", LgName: "reduce", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"reduce@3":      {GoIdent: "Reduce3", LgName: "reduce", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"symbol":        {GoIdent: "Symbol", LgName: "symbol", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"assoc@3":       {GoIdent: "Assoc", LgName: "assoc", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"assoc@5":       {GoIdent: "Assoc5", LgName: "assoc", Arity: 5, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"assoc!":        {GoIdent: "AssocBang", LgName: "assoc!", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"swap!@2":       {GoIdent: "Swap", LgName: "swap!", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"swap!@3":       {GoIdent: "Swap3", LgName: "swap!", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"swap!@4":       {GoIdent: "Swap4", LgName: "swap!", Arity: 4, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"swap!@5":       {GoIdent: "Swap5", LgName: "swap!", Arity: 5, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"not=":          {GoIdent: "NotEq", LgName: "not=", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"map?":          {GoIdent: "IsMap", LgName: "map?", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"atom":          {GoIdent: "Atom", LgName: "atom", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"reset!":        {GoIdent: "Reset", LgName: "reset!", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"namespace":     {GoIdent: "Namespace", LgName: "namespace", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"push-binding!": {GoIdent: "PushBinding", LgName: "push-binding!", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"pop-binding!":  {GoIdent: "PopBinding", LgName: "pop-binding!", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"re-find":       {GoIdent: "ReFind", LgName: "re-find", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"some":          {GoIdent: "Some", LgName: "some", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"int":           {GoIdent: "Int", LgName: "int", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"range@1":       {GoIdent: "Range1", LgName: "range", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"range@2":       {GoIdent: "Range2", LgName: "range", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"range@3":       {GoIdent: "Range3", LgName: "range", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
 		},
 	})
 	// Bind adapters into namespace
@@ -270,6 +579,32 @@ func RegisterGeneratedPrimitives() {
 		fn6, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Conj(vs) })
 		defGeneratedPrimitive(ns, "clojure.core", "conj", fn6)
 		defGeneratedPrimitive(ns, "clojure.core", "reduce", vm.NewCtxNativeFn("reduce", _adapt_Reduce))
+		fn8, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Symbol(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "symbol", fn8)
+		fn9, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Assoc(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "assoc", fn9)
+		fn10, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_AssocBang(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "assoc!", fn10)
+		defGeneratedPrimitive(ns, "clojure.core", "swap!", vm.NewCtxNativeFn("swap!", _adapt_Swap))
+		fn12, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_NotEq(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "not=", fn12)
+		fn13, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_IsMap(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "map?", fn13)
+		fn14, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Atom(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "atom", fn14)
+		fn15, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Reset(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "reset!", fn15)
+		fn16, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Namespace(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "namespace", fn16)
+		defGeneratedPrimitive(ns, "clojure.core", "push-binding!", vm.NewCtxNativeFn("push-binding!", _adapt_PushBinding))
+		defGeneratedPrimitive(ns, "clojure.core", "pop-binding!", vm.NewCtxNativeFn("pop-binding!", _adapt_PopBinding))
+		fn19, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_ReFind(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "re-find", fn19)
+		defGeneratedPrimitive(ns, "clojure.core", "some", vm.NewCtxNativeFn("some", _adapt_Some))
+		fn21, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Int(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "int", fn21)
+		fn22, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Range1(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "range", fn22)
 	}
 	RegisterNativeModule(&NativeModule{
 		GoPkg:     "github.com/nooga/let-go/pkg/rt",

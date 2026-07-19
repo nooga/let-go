@@ -183,6 +183,22 @@ func NewCtxNativeFn(name string, fn func(ec *ExecContext, args []Value) (Value, 
 	return n
 }
 
+// NewArityNativeFn builds a context-aware native that DECLARES a fixed arity
+// (or a variadic minimum) rather than the -1/variadic default NewCtxNativeFn
+// uses. The declared arity is what MakeMultiArity dispatches on: an arm whose
+// Arity() is -1 and isVariadric is true is indistinguishable from a rest-arm,
+// so a wrapper built the ordinary way collapses every arm of a multi-arity fn
+// into ma.rest and leaves ma.fns empty. Callers that wrap an opaque callable
+// (ir.direct's invokers) use this to keep the arity visible to dispatch.
+func NewArityNativeFn(name string, arity int, variadic bool, fn func(ec *ExecContext, args []Value) (Value, error)) *NativeFn {
+	n := &NativeFn{name: name, arity: arity, isVariadric: variadic, ctxProxy: fn}
+	n.proxy = func(args []Value) (Value, error) { return fn(RootExecContext, args) }
+	return n
+}
+
+// IsVariadic reports whether this native declares a variadic tail.
+func (l *NativeFn) IsVariadic() bool { return l.isVariadric }
+
 func (l *NativeFn) SetName(n string) { l.name = n }
 
 func (l *NativeFn) Type() ValueType { return NativeFnType }
