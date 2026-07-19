@@ -1,0 +1,4879 @@
+{
+  "version": 2,
+  "machines": {
+    "amd64/AMD EPYC 9V74 80-Core Processor": {
+      "captured_at": "2026-07-19T16:56:32Z",
+      "captured_at_sha": "4b5a01953bf2",
+      "machine": {
+        "os": "linux",
+        "arch": "amd64",
+        "num_cpu": 4,
+        "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+        "go_version": "go1.26.5"
+      },
+      "anchor": {
+        "name": "BenchmarkRatchetAnchor",
+        "package": "github.com/nooga/let-go/pkg/vm",
+        "ns_per_op": 1.4110000000000003,
+        "iterations": 1000000000,
+        "samples": [
+          {
+            "iterations": 1000000000,
+            "ns_per_op": 1.4150000000000003,
+            "bytes_per_op": 0,
+            "allocs_per_op": 0,
+            "captured_at": "2026-07-19T15:40:35Z"
+          },
+          {
+            "iterations": 1000000000,
+            "ns_per_op": 1.4090000000000003,
+            "bytes_per_op": 0,
+            "allocs_per_op": 0,
+            "captured_at": "2026-07-19T15:40:35Z"
+          },
+          {
+            "iterations": 1000000000,
+            "ns_per_op": 1.4090000000000003,
+            "bytes_per_op": 0,
+            "allocs_per_op": 0,
+            "captured_at": "2026-07-19T15:40:35Z"
+          }
+        ]
+      },
+      "benchmarks": {
+        "github.com/nooga/let-go/pkg/compiler.BenchmarkInitFromLGB [bytecode]": {
+          "ns_per_op": 2052063,
+          "allocs_per_op": 7262,
+          "bytes_per_op": 766709,
+          "ratio_to_anchor": 1454332.3883770374,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1191,
+              "ns_per_op": 2018237,
+              "bytes_per_op": 766714,
+              "allocs_per_op": 7262,
+              "ratio_to_anchor": 1430359.3196314669,
+              "captured_at": "2026-07-19T16:56:24Z"
+            },
+            {
+              "iterations": 1215,
+              "ns_per_op": 2095485.0000000002,
+              "bytes_per_op": 766708,
+              "allocs_per_op": 7262,
+              "ratio_to_anchor": 1485106.307583274,
+              "captured_at": "2026-07-19T16:56:24Z"
+            },
+            {
+              "iterations": 1179,
+              "ns_per_op": 2042467,
+              "bytes_per_op": 766706,
+              "allocs_per_op": 7262,
+              "ratio_to_anchor": 1447531.5379163711,
+              "captured_at": "2026-07-19T16:56:24Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile [bytecode]": {
+          "ns_per_op": 28121357.333333332,
+          "allocs_per_op": 106887,
+          "bytes_per_op": 5251290,
+          "ratio_to_anchor": 19930090.243326243,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 88,
+              "ns_per_op": 27972977.000000004,
+              "bytes_per_op": 5264246,
+              "allocs_per_op": 106891,
+              "ratio_to_anchor": 19824930.54571226,
+              "captured_at": "2026-07-19T16:55:59Z"
+            },
+            {
+              "iterations": 86,
+              "ns_per_op": 27954404.000000004,
+              "bytes_per_op": 5243970,
+              "allocs_per_op": 106886,
+              "ratio_to_anchor": 19811767.54075124,
+              "captured_at": "2026-07-19T16:55:59Z"
+            },
+            {
+              "iterations": 88,
+              "ns_per_op": 28436691,
+              "bytes_per_op": 5245654,
+              "allocs_per_op": 106886,
+              "ratio_to_anchor": 20153572.643515233,
+              "captured_at": "2026-07-19T16:55:59Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile [gogen_ir]": {
+          "ns_per_op": 22347875.333333336,
+          "allocs_per_op": 166851,
+          "bytes_per_op": 6620925,
+          "ratio_to_anchor": 15838324.120009448,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 100,
+              "ns_per_op": 22693221.000000004,
+              "bytes_per_op": 6622880,
+              "allocs_per_op": 166853,
+              "ratio_to_anchor": 16083076.541459957,
+              "captured_at": "2026-07-19T16:56:10Z"
+            },
+            {
+              "iterations": 100,
+              "ns_per_op": 22059336.000000004,
+              "bytes_per_op": 6605022,
+              "allocs_per_op": 166849,
+              "ratio_to_anchor": 15633831.325301204,
+              "captured_at": "2026-07-19T16:56:10Z"
+            },
+            {
+              "iterations": 100,
+              "ns_per_op": 22291069,
+              "bytes_per_op": 6634875,
+              "allocs_per_op": 166851,
+              "ratio_to_anchor": 15798064.493267184,
+              "captured_at": "2026-07-19T16:56:10Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkBindingPushPop": {
+          "ns_per_op": 81.61,
+          "allocs_per_op": 1,
+          "bytes_per_op": 24,
+          "ratio_to_anchor": 57.83841247342309,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 28368069,
+              "ns_per_op": 81.65,
+              "bytes_per_op": 24,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 57.866761162296235,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 29196410,
+              "ns_per_op": 81.69,
+              "bytes_per_op": 24,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 57.89510985116937,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 28818582,
+              "ns_per_op": 81.49,
+              "bytes_per_op": 24,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 57.75336640680367,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkConj/ArrayVector": {
+          "ns_per_op": 16664.333333333332,
+          "allocs_per_op": 216,
+          "bytes_per_op": 34536,
+          "ratio_to_anchor": 11810.300023623904,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 142692,
+              "ns_per_op": 16826,
+              "bytes_per_op": 34536,
+              "allocs_per_op": 216,
+              "ratio_to_anchor": 11924.875974486178,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 145994,
+              "ns_per_op": 16589,
+              "bytes_per_op": 34536,
+              "allocs_per_op": 216,
+              "ratio_to_anchor": 11756.909992912826,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 143870,
+              "ns_per_op": 16578,
+              "bytes_per_op": 34536,
+              "allocs_per_op": 216,
+              "ratio_to_anchor": 11749.114103472712,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkConj/List": {
+          "ns_per_op": 3529.6666666666665,
+          "allocs_per_op": 100,
+          "bytes_per_op": 6400,
+          "ratio_to_anchor": 2501.535553980628,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 695700,
+              "ns_per_op": 3535,
+              "bytes_per_op": 6400,
+              "allocs_per_op": 100,
+              "ratio_to_anchor": 2505.3153791637133,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 683510,
+              "ns_per_op": 3511.0000000000005,
+              "bytes_per_op": 6400,
+              "allocs_per_op": 100,
+              "ratio_to_anchor": 2488.3061658398296,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 641968,
+              "ns_per_op": 3543,
+              "bytes_per_op": 6400,
+              "allocs_per_op": 100,
+              "ratio_to_anchor": 2510.985116938341,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkConj/Map": {
+          "ns_per_op": 302200.3333333333,
+          "allocs_per_op": 659,
+          "bytes_per_op": 315136,
+          "ratio_to_anchor": 214174.5806756437,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 7496,
+              "ns_per_op": 302590.00000000006,
+              "bytes_per_op": 315136,
+              "allocs_per_op": 659,
+              "ratio_to_anchor": 214450.74415308292,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 7438,
+              "ns_per_op": 302286,
+              "bytes_per_op": 315136,
+              "allocs_per_op": 659,
+              "ratio_to_anchor": 214235.29411764702,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 7389,
+              "ns_per_op": 301725.00000000006,
+              "bytes_per_op": 315136,
+              "allocs_per_op": 659,
+              "ratio_to_anchor": 213837.70375620128,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkConsCreation/ListCons": {
+          "ns_per_op": 0.41113333333333335,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.29137727380108663,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.4129,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.29262934089298365,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.4136,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.2931254429482636,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.4069,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.2883770375620127,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkConsCreation/NewCons": {
+          "ns_per_op": 0.35263333333333335,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.24991731632411998,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.35250000000000004,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.24982282069454287,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.3528,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.2500354358610914,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.3526000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.24989369241672574,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkDepsTransientMapPersistentSet64x16": {
+          "ns_per_op": 302040.6666666667,
+          "allocs_per_op": 7637,
+          "bytes_per_op": 458229,
+          "ratio_to_anchor": 214061.4221592251,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 7548,
+              "ns_per_op": 302072,
+              "bytes_per_op": 458233,
+              "allocs_per_op": 7637,
+              "ratio_to_anchor": 214083.62863217574,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 7623,
+              "ns_per_op": 301633.00000000006,
+              "bytes_per_op": 458222,
+              "allocs_per_op": 7638,
+              "ratio_to_anchor": 213772.50177179306,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 7548,
+              "ns_per_op": 302417,
+              "bytes_per_op": 458234,
+              "allocs_per_op": 7637,
+              "ratio_to_anchor": 214328.13607370656,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkDepsTransientMapTransientSet64x16": {
+          "ns_per_op": 189058,
+          "allocs_per_op": 4501,
+          "bytes_per_op": 274183,
+          "ratio_to_anchor": 133988.6605244507,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 12696,
+              "ns_per_op": 189386.00000000003,
+              "bytes_per_op": 274184,
+              "allocs_per_op": 4501,
+              "ratio_to_anchor": 134221.1197732105,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 12690,
+              "ns_per_op": 189606,
+              "bytes_per_op": 274182,
+              "allocs_per_op": 4501,
+              "ratio_to_anchor": 134377.03756201273,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 12687,
+              "ns_per_op": 188182,
+              "bytes_per_op": 274184,
+              "allocs_per_op": 4501,
+              "ratio_to_anchor": 133367.82423812896,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkDepsTransientMapVector64x16": {
+          "ns_per_op": 48072,
+          "allocs_per_op": 1650,
+          "bytes_per_op": 61997,
+          "ratio_to_anchor": 34069.45428773919,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 50492,
+              "ns_per_op": 48100.00000000001,
+              "bytes_per_op": 61997,
+              "allocs_per_op": 1650,
+              "ratio_to_anchor": 34089.29836995039,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 50534,
+              "ns_per_op": 47781,
+              "bytes_per_op": 61997,
+              "allocs_per_op": 1650,
+              "ratio_to_anchor": 33863.2175761871,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 50212,
+              "ns_per_op": 48335.00000000001,
+              "bytes_per_op": 61997,
+              "allocs_per_op": 1650,
+              "ratio_to_anchor": 34255.84691708008,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkFrameAlloc/3Args": {
+          "ns_per_op": 90.64,
+          "allocs_per_op": 2,
+          "bytes_per_op": 224,
+          "ratio_to_anchor": 64.23812898653436,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 26475594,
+              "ns_per_op": 90.63,
+              "bytes_per_op": 224,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 64.23104181431607,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 26617396,
+              "ns_per_op": 90.40000000000002,
+              "bytes_per_op": 224,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 64.06803685329554,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 25725420,
+              "ns_per_op": 90.89,
+              "bytes_per_op": 224,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 64.41530829199148,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkFrameAlloc/NoArgs": {
+          "ns_per_op": 89.42666666666666,
+          "allocs_per_op": 2,
+          "bytes_per_op": 224,
+          "ratio_to_anchor": 63.378218757382456,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 26926332,
+              "ns_per_op": 89.46,
+              "bytes_per_op": 224,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 63.40184266477674,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 27071402,
+              "ns_per_op": 88.94,
+              "bytes_per_op": 224,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 63.03330970942593,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 25408554,
+              "ns_per_op": 89.88,
+              "bytes_per_op": 224,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 63.69950389794471,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkFrameDispatch": {
+          "ns_per_op": 840.2000000000002,
+          "allocs_per_op": 2,
+          "bytes_per_op": 416,
+          "ratio_to_anchor": 595.4642097802977,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 2865658,
+              "ns_per_op": 841.9000000000001,
+              "bytes_per_op": 416,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 596.6690290574061,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 2869431,
+              "ns_per_op": 839,
+              "bytes_per_op": 416,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 594.6137491141034,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 2880027,
+              "ns_per_op": 839.7,
+              "bytes_per_op": 416,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 595.1098511693833,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkFuncInvoke/Closure": {
+          "ns_per_op": 34.92666666666667,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 24.75313016772974,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 68666876,
+              "ns_per_op": 34.92,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 24.748405386250884,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 68892030,
+              "ns_per_op": 34.9,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 24.73423104181431,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 68823495,
+              "ns_per_op": 34.96,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 24.77675407512402,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkFuncInvoke/Direct": {
+          "ns_per_op": 33.57666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 23.796361918261272,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 71688015,
+              "ns_per_op": 33.51,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 23.74911410347271,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 71515752,
+              "ns_per_op": 33.57,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 23.79163713678242,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 71073926,
+              "ns_per_op": 33.65,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 23.8483345145287,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkFuncInvoke/Native": {
+          "ns_per_op": 9.277,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 6.574769666902904,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 254101291,
+              "ns_per_op": 9.471,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.712260807937632,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 262163587,
+              "ns_per_op": 9.148,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.483345145287029,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 261931917,
+              "ns_per_op": 9.212,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.528703047484052,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkIsTruthy/false": {
+          "ns_per_op": 4.226333333333334,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 2.9952752185211433,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 569363468,
+              "ns_per_op": 4.224,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 2.9936215450035433,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 563839136,
+              "ns_per_op": 4.23,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 2.9978738483345144,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 570099657,
+              "ns_per_op": 4.225,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 2.9943302622253714,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkIsTruthy/int": {
+          "ns_per_op": 1.058,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7498228206945428,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkIsTruthy/nil": {
+          "ns_per_op": 1.4113333333333336,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 1.0002362390739428,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4090000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9985825655563431,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4090000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9985825655563431,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4160000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 1.0035435861091424,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkIsTruthy/string": {
+          "ns_per_op": 1.0563333333333333,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7486416253248286,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkIsTruthy/true": {
+          "ns_per_op": 4.225666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 2.994802740373257,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 570219111,
+              "ns_per_op": 4.228,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 2.996456413890857,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 567159600,
+              "ns_per_op": 4.222,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 2.992204110559886,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 568978731,
+              "ns_per_op": 4.227,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 2.995747696669029,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkKeywordInvoke": {
+          "ns_per_op": 17.663333333333334,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 12.518308528230568,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 135970444,
+              "ns_per_op": 17.65,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 12.508858965272854,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 135662952,
+              "ns_per_op": 17.67,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 12.523033309709424,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 135816416,
+              "ns_per_op": 17.67,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 12.523033309709424,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkLargeVectorAppend/ArrayVector": {
+          "ns_per_op": 2123421.666666667,
+          "allocs_per_op": 31864,
+          "bytes_per_op": 4006552,
+          "ratio_to_anchor": 1504905.5043704228,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1113,
+              "ns_per_op": 2131578.0000000005,
+              "bytes_per_op": 4006552,
+              "allocs_per_op": 31864,
+              "ratio_to_anchor": 1510686.03827073,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1128,
+              "ns_per_op": 2127413.0000000005,
+              "bytes_per_op": 4006552,
+              "allocs_per_op": 31864,
+              "ratio_to_anchor": 1507734.2310418144,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1118,
+              "ns_per_op": 2111274,
+              "bytes_per_op": 4006553,
+              "allocs_per_op": 31864,
+              "ratio_to_anchor": 1496296.2437987241,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkLargeVectorAppend/PersistentVector": {
+          "ns_per_op": 2144784,
+          "allocs_per_op": 31868,
+          "bytes_per_op": 4009410,
+          "ratio_to_anchor": 1520045.3579021967,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1102,
+              "ns_per_op": 2142585.0000000005,
+              "bytes_per_op": 4009409,
+              "allocs_per_op": 31868,
+              "ratio_to_anchor": 1518486.8887313963,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1128,
+              "ns_per_op": 2144224,
+              "bytes_per_op": 4009411,
+              "allocs_per_op": 31868,
+              "ratio_to_anchor": 1519648.476257973,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1135,
+              "ns_per_op": 2147543,
+              "bytes_per_op": 4009410,
+              "allocs_per_op": 31868,
+              "ratio_to_anchor": 1522000.7087172216,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkLazySeqRealize/Realize/01000": {
+          "ns_per_op": 168650,
+          "allocs_per_op": 4747,
+          "bytes_per_op": 222064,
+          "ratio_to_anchor": 119525.15946137489,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 14230,
+              "ns_per_op": 168964.00000000003,
+              "bytes_per_op": 222064,
+              "allocs_per_op": 4747,
+              "ratio_to_anchor": 119747.69666902906,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 14218,
+              "ns_per_op": 168409,
+              "bytes_per_op": 222065,
+              "allocs_per_op": 4747,
+              "ratio_to_anchor": 119354.35861091422,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 14172,
+              "ns_per_op": 168577.00000000003,
+              "bytes_per_op": 222064,
+              "allocs_per_op": 4747,
+              "ratio_to_anchor": 119473.42310418143,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkLazySeqRealize/Realize/10": {
+          "ns_per_op": 1733.3333333333333,
+          "allocs_per_op": 43,
+          "bytes_per_op": 2272,
+          "ratio_to_anchor": 1228.4431845027166,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1381969,
+              "ns_per_op": 1740,
+              "bytes_per_op": 2272,
+              "allocs_per_op": 43,
+              "ratio_to_anchor": 1233.1679659815732,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1382334,
+              "ns_per_op": 1727.0000000000002,
+              "bytes_per_op": 2272,
+              "allocs_per_op": 43,
+              "ratio_to_anchor": 1223.954642097803,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1376632,
+              "ns_per_op": 1733.0000000000002,
+              "bytes_per_op": 2272,
+              "allocs_per_op": 43,
+              "ratio_to_anchor": 1228.206945428774,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkLazySeqRealize/Realize/100": {
+          "ns_per_op": 16183,
+          "allocs_per_op": 403,
+          "bytes_per_op": 21712,
+          "ratio_to_anchor": 11469.17080085046,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 147531,
+              "ns_per_op": 16183,
+              "bytes_per_op": 21712,
+              "allocs_per_op": 403,
+              "ratio_to_anchor": 11469.17080085046,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 147672,
+              "ns_per_op": 16149,
+              "bytes_per_op": 21712,
+              "allocs_per_op": 403,
+              "ratio_to_anchor": 11445.07441530829,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 150764,
+              "ns_per_op": 16217,
+              "bytes_per_op": 21712,
+              "allocs_per_op": 403,
+              "ratio_to_anchor": 11493.267186392628,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/GoMap-Assoc/01000": {
+          "ns_per_op": 114039.66666666667,
+          "allocs_per_op": 20,
+          "bytes_per_op": 159992,
+          "ratio_to_anchor": 80821.8757382471,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 20988,
+              "ns_per_op": 114313,
+              "bytes_per_op": 159992,
+              "allocs_per_op": 20,
+              "ratio_to_anchor": 81015.59177888022,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 20977,
+              "ns_per_op": 114248.00000000001,
+              "bytes_per_op": 159992,
+              "allocs_per_op": 20,
+              "ratio_to_anchor": 80969.52515946137,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 21133,
+              "ns_per_op": 113558.00000000001,
+              "bytes_per_op": 159992,
+              "allocs_per_op": 20,
+              "ratio_to_anchor": 80480.51027639971,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/GoMap-Assoc/10": {
+          "ns_per_op": 712.7333333333335,
+          "allocs_per_op": 3,
+          "bytes_per_op": 616,
+          "ratio_to_anchor": 505.1263879045594,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 3377590,
+              "ns_per_op": 712.2,
+              "bytes_per_op": 616,
+              "allocs_per_op": 3,
+              "ratio_to_anchor": 504.74840538625085,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3325120,
+              "ns_per_op": 715.1,
+              "bytes_per_op": 616,
+              "allocs_per_op": 3,
+              "ratio_to_anchor": 506.80368532955345,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3375826,
+              "ns_per_op": 710.9000000000001,
+              "bytes_per_op": 616,
+              "allocs_per_op": 3,
+              "ratio_to_anchor": 503.8270729978738,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/GoMap-Assoc/100": {
+          "ns_per_op": 7888.666666666667,
+          "allocs_per_op": 9,
+          "bytes_per_op": 9032,
+          "ratio_to_anchor": 5590.833923931017,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 297198,
+              "ns_per_op": 7880.000000000001,
+              "bytes_per_op": 9032,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 5584.691708008504,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 302752,
+              "ns_per_op": 7899,
+              "bytes_per_op": 9032,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 5598.157335223245,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 294980,
+              "ns_per_op": 7887.000000000001,
+              "bytes_per_op": 9032,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 5589.652728561304,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/GoMap-Lookup/01000": {
+          "ns_per_op": 16.843333333333334,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 11.937160406331206,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 146231919,
+              "ns_per_op": 16.87,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 11.956059532246632,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 144722684,
+              "ns_per_op": 16.83,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 11.927710843373491,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 142108512,
+              "ns_per_op": 16.83,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 11.927710843373491,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/GoMap-Lookup/10": {
+          "ns_per_op": 16.773333333333337,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 11.887550200803213,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 141124676,
+              "ns_per_op": 17.230000000000004,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 12.21119773210489,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 138726901,
+              "ns_per_op": 16.560000000000002,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 11.736357193479801,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 141385100,
+              "ns_per_op": 16.530000000000005,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 11.715095676824948,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/GoMap-Lookup/100": {
+          "ns_per_op": 16.706666666666667,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 11.840302386014645,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 139864334,
+              "ns_per_op": 16.74,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 11.863926293408927,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 142886137,
+              "ns_per_op": 16.530000000000005,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 11.715095676824948,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 143179094,
+              "ns_per_op": 16.85,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 11.941885187810062,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/HAMT-Assoc/01000": {
+          "ns_per_op": 570.1,
+          "allocs_per_op": 6,
+          "bytes_per_op": 2065,
+          "ratio_to_anchor": 404.03968816442233,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 4222438,
+              "ns_per_op": 566.5,
+              "bytes_per_op": 2065,
+              "allocs_per_op": 6,
+              "ratio_to_anchor": 401.48830616583973,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 4224870,
+              "ns_per_op": 568.9,
+              "bytes_per_op": 2065,
+              "allocs_per_op": 6,
+              "ratio_to_anchor": 403.1892274982281,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 4223436,
+              "ns_per_op": 574.9,
+              "bytes_per_op": 2065,
+              "allocs_per_op": 6,
+              "ratio_to_anchor": 407.44153082919905,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/HAMT-Assoc/10": {
+          "ns_per_op": 185.73333333333335,
+          "allocs_per_op": 4,
+          "bytes_per_op": 321,
+          "ratio_to_anchor": 131.63241200094495,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 12992968,
+              "ns_per_op": 185.2,
+              "bytes_per_op": 321,
+              "allocs_per_op": 4,
+              "ratio_to_anchor": 131.2544294826364,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 13048936,
+              "ns_per_op": 184.8,
+              "bytes_per_op": 321,
+              "allocs_per_op": 4,
+              "ratio_to_anchor": 130.97094259390502,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 12725976,
+              "ns_per_op": 187.20000000000002,
+              "bytes_per_op": 321,
+              "allocs_per_op": 4,
+              "ratio_to_anchor": 132.67186392629338,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/HAMT-Assoc/100": {
+          "ns_per_op": 399.6000000000001,
+          "allocs_per_op": 6,
+          "bytes_per_op": 1233,
+          "ratio_to_anchor": 283.2034018426648,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 6087742,
+              "ns_per_op": 397.20000000000005,
+              "bytes_per_op": 1233,
+              "allocs_per_op": 6,
+              "ratio_to_anchor": 281.50248051027637,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 6097041,
+              "ns_per_op": 402.8,
+              "bytes_per_op": 1233,
+              "allocs_per_op": 6,
+              "ratio_to_anchor": 285.4712969525159,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 6010924,
+              "ns_per_op": 398.80000000000007,
+              "bytes_per_op": 1233,
+              "allocs_per_op": 6,
+              "ratio_to_anchor": 282.636428065202,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/HAMT-Dissoc/01000": {
+          "ns_per_op": 549.8666666666668,
+          "allocs_per_op": 5,
+          "bytes_per_op": 2064,
+          "ratio_to_anchor": 389.69997637609265,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 4286950,
+              "ns_per_op": 555.1000000000001,
+              "bytes_per_op": 2064,
+              "allocs_per_op": 5,
+              "ratio_to_anchor": 393.40892983699507,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 4355960,
+              "ns_per_op": 552.9000000000001,
+              "bytes_per_op": 2064,
+              "allocs_per_op": 5,
+              "ratio_to_anchor": 391.84975194897237,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 4532581,
+              "ns_per_op": 541.6,
+              "bytes_per_op": 2064,
+              "allocs_per_op": 5,
+              "ratio_to_anchor": 383.84124734231034,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/HAMT-Dissoc/10": {
+          "ns_per_op": 156.76666666666668,
+          "allocs_per_op": 3,
+          "bytes_per_op": 288,
+          "ratio_to_anchor": 111.10323647531301,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 15469074,
+              "ns_per_op": 156.20000000000002,
+              "bytes_per_op": 288,
+              "allocs_per_op": 3,
+              "ratio_to_anchor": 110.7016300496102,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 15386973,
+              "ns_per_op": 157.6,
+              "bytes_per_op": 288,
+              "allocs_per_op": 3,
+              "ratio_to_anchor": 111.69383416017007,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 15391491,
+              "ns_per_op": 156.5,
+              "bytes_per_op": 288,
+              "allocs_per_op": 3,
+              "ratio_to_anchor": 110.91424521615873,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/HAMT-Dissoc/100": {
+          "ns_per_op": 365.00000000000006,
+          "allocs_per_op": 5,
+          "bytes_per_op": 1200,
+          "ratio_to_anchor": 258.681785967399,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 6576075,
+              "ns_per_op": 362.00000000000006,
+              "bytes_per_op": 1200,
+              "allocs_per_op": 5,
+              "ratio_to_anchor": 256.5556343019135,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 6649713,
+              "ns_per_op": 364.30000000000007,
+              "bytes_per_op": 1200,
+              "allocs_per_op": 5,
+              "ratio_to_anchor": 258.1856839121191,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 6576963,
+              "ns_per_op": 368.7,
+              "bytes_per_op": 1200,
+              "allocs_per_op": 5,
+              "ratio_to_anchor": 261.3040396881644,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/HAMT-Lookup/01000": {
+          "ns_per_op": 36.38333333333333,
+          "allocs_per_op": 1,
+          "bytes_per_op": 8,
+          "ratio_to_anchor": 25.785494920859904,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 55776468,
+              "ns_per_op": 36.29,
+              "bytes_per_op": 8,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 25.719347980155913,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 61244576,
+              "ns_per_op": 36.63,
+              "bytes_per_op": 8,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 25.960311835577603,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 63312336,
+              "ns_per_op": 36.230000000000004,
+              "bytes_per_op": 8,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 25.676824946846207,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/HAMT-Lookup/10": {
+          "ns_per_op": 24.826666666666668,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 17.595086227261987,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 96579938,
+              "ns_per_op": 24.830000000000002,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 17.597448618001415,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 96494968,
+              "ns_per_op": 24.830000000000002,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 17.597448618001415,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 96593598,
+              "ns_per_op": 24.820000000000004,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 17.59036144578313,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMapAssoc/HAMT-Lookup/100": {
+          "ns_per_op": 25.23,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 17.88093550673281,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 95092798,
+              "ns_per_op": 25.23,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 17.88093550673281,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 94940452,
+              "ns_per_op": 25.22,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 17.873848334514523,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 94337504,
+              "ns_per_op": 25.24,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 17.888022678951096,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMultiArity/1Arg": {
+          "ns_per_op": 40.026666666666664,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 28.367587999055036,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 57653568,
+              "ns_per_op": 40.08,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 28.40538625088589,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 60021646,
+              "ns_per_op": 40.05,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 28.384124734231033,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 60050132,
+              "ns_per_op": 39.95,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 28.31325301204819,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkMultiArity/2Args": {
+          "ns_per_op": 40.04,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 28.377037562012752,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 57154015,
+              "ns_per_op": 40.02,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 28.362863217576184,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 60006030,
+              "ns_per_op": 40.07,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 28.398299078667605,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 59866918,
+              "ns_per_op": 40.03,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 28.369950389794468,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkNsWorkload/d16/balanced": {
+          "ns_per_op": 102.86666666666667,
+          "allocs_per_op": 1,
+          "bytes_per_op": 32,
+          "ratio_to_anchor": 72.90337821875737,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 21641018,
+              "ns_per_op": 103.00000000000001,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 72.9978738483345,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 20185513,
+              "ns_per_op": 103.10000000000001,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 73.06874557051735,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 22429297,
+              "ns_per_op": 102.50000000000001,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 72.64351523742026,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkNsWorkload/d16/read-only": {
+          "ns_per_op": 249.9,
+          "allocs_per_op": 1,
+          "bytes_per_op": 31,
+          "ratio_to_anchor": 177.10843373493972,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 9076736,
+              "ns_per_op": 249.30000000000004,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 176.68320340184266,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 9440650,
+              "ns_per_op": 250.00000000000003,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 177.1793054571226,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 9367748,
+              "ns_per_op": 250.4,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 177.46279234585398,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkNsWorkload/d16/write-heavy": {
+          "ns_per_op": 105.05333333333333,
+          "allocs_per_op": 1,
+          "bytes_per_op": 31,
+          "ratio_to_anchor": 74.45310654382233,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 24410181,
+              "ns_per_op": 98.06,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 69.49681077250176,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 24275778,
+              "ns_per_op": 116.2,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 82.35294117647058,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 21530540,
+              "ns_per_op": 100.9,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 71.50956768249468,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkNsWorkload/d32/balanced": {
+          "ns_per_op": 112,
+          "allocs_per_op": 1,
+          "bytes_per_op": 32,
+          "ratio_to_anchor": 79.37632884479092,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 22310544,
+              "ns_per_op": 115.20000000000002,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 81.6442239546421,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 23186610,
+              "ns_per_op": 102.60000000000001,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 72.71438695960312,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 19609904,
+              "ns_per_op": 118.20000000000002,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 83.77037562012757,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkNsWorkload/d32/read-only": {
+          "ns_per_op": 250.13333333333335,
+          "allocs_per_op": 1,
+          "bytes_per_op": 31,
+          "ratio_to_anchor": 177.27380108669973,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 9565594,
+              "ns_per_op": 250.1,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 177.2501771793054,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 9493911,
+              "ns_per_op": 250.4,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 177.46279234585398,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 8900095,
+              "ns_per_op": 249.90000000000003,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 177.10843373493975,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkNsWorkload/d32/write-heavy": {
+          "ns_per_op": 97.72666666666667,
+          "allocs_per_op": 1,
+          "bytes_per_op": 32,
+          "ratio_to_anchor": 69.26057169855893,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 24643317,
+              "ns_per_op": 98.21000000000001,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 69.60311835577603,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 22616076,
+              "ns_per_op": 97.59000000000002,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 69.16371367824239,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 21676491,
+              "ns_per_op": 97.38,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 69.01488306165838,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkNsWorkload/d8/balanced": {
+          "ns_per_op": 109.26666666666667,
+          "allocs_per_op": 1,
+          "bytes_per_op": 31,
+          "ratio_to_anchor": 77.4391684384597,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 20890794,
+              "ns_per_op": 121.5,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 86.10914245216158,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 20770226,
+              "ns_per_op": 103.5,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 73.35223245924875,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 22208864,
+              "ns_per_op": 102.80000000000001,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 72.8561304039688,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkNsWorkload/d8/read-only": {
+          "ns_per_op": 255.86666666666667,
+          "allocs_per_op": 1,
+          "bytes_per_op": 31,
+          "ratio_to_anchor": 181.3371131585164,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 9561034,
+              "ns_per_op": 264.00000000000006,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 187.1013465627215,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 9127658,
+              "ns_per_op": 249.70000000000002,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 176.96669029057404,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 8899417,
+              "ns_per_op": 253.9,
+              "bytes_per_op": 31,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 179.9433026222537,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkNsWorkload/d8/write-heavy": {
+          "ns_per_op": 101.58333333333336,
+          "allocs_per_op": 1,
+          "bytes_per_op": 32,
+          "ratio_to_anchor": 71.99385778407749,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 24200052,
+              "ns_per_op": 109.10000000000001,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 77.3210489014883,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 24414782,
+              "ns_per_op": 98.29000000000002,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 69.65981573352232,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 21614701,
+              "ns_per_op": 97.36,
+              "bytes_per_op": 32,
+              "allocs_per_op": 1,
+              "ratio_to_anchor": 69.00070871722181,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkPersistentMapAssocInsertBatch1K": {
+          "ns_per_op": 678410,
+          "allocs_per_op": 10189,
+          "bytes_per_op": 1817192,
+          "ratio_to_anchor": 480800.8504606661,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 3492,
+              "ns_per_op": 678486.0000000001,
+              "bytes_per_op": 1817191,
+              "allocs_per_op": 10189,
+              "ratio_to_anchor": 480854.71296952514,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3613,
+              "ns_per_op": 678594,
+              "bytes_per_op": 1817195,
+              "allocs_per_op": 10189,
+              "ratio_to_anchor": 480931.25442948256,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3598,
+              "ns_per_op": 678150.0000000001,
+              "bytes_per_op": 1817190,
+              "allocs_per_op": 10189,
+              "ratio_to_anchor": 480616.58398299076,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkPersistentMapAssocOverwrite1K": {
+          "ns_per_op": 726.8333333333334,
+          "allocs_per_op": 8,
+          "bytes_per_op": 2107,
+          "ratio_to_anchor": 515.1193007323411,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 3272305,
+              "ns_per_op": 730.2000000000002,
+              "bytes_per_op": 2107,
+              "allocs_per_op": 8,
+              "ratio_to_anchor": 517.5053153791638,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3304305,
+              "ns_per_op": 725.4,
+              "bytes_per_op": 2107,
+              "allocs_per_op": 8,
+              "ratio_to_anchor": 514.1034727143868,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3310416,
+              "ns_per_op": 724.9000000000001,
+              "bytes_per_op": 2107,
+              "allocs_per_op": 8,
+              "ratio_to_anchor": 513.7491141034727,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkPersistentMapAssocOverwriteBatch1K": {
+          "ns_per_op": 782766,
+          "allocs_per_op": 8538,
+          "bytes_per_op": 2158127,
+          "ratio_to_anchor": 554759.7448618,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 3093,
+              "ns_per_op": 786979,
+              "bytes_per_op": 2158128,
+              "allocs_per_op": 8539,
+              "ratio_to_anchor": 557745.5705173635,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 2974,
+              "ns_per_op": 781468,
+              "bytes_per_op": 2158095,
+              "allocs_per_op": 8538,
+              "ratio_to_anchor": 553839.8299078667,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3210,
+              "ns_per_op": 779851,
+              "bytes_per_op": 2158159,
+              "allocs_per_op": 8539,
+              "ratio_to_anchor": 552693.8341601699,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkRecordToStructFastPath": {
+          "ns_per_op": 21.033333333333335,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 14.90668556579258,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 100000000,
+              "ns_per_op": 21.140000000000004,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 14.982282069454287,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 100000000,
+              "ns_per_op": 20.8,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 14.7413182140326,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 100000000,
+              "ns_per_op": 21.160000000000004,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 14.996456413890858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkRecordToStructSlowPath": {
+          "ns_per_op": 33.16666666666667,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 23.5057878573116,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 71918557,
+              "ns_per_op": 33.18000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 23.51523742026931,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 72761708,
+              "ns_per_op": 33.42,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 23.685329553508147,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 72394125,
+              "ns_per_op": 32.900000000000006,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 23.316796598157335,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkSeqIteration/ArrayVector/01000": {
+          "ns_per_op": 32187,
+          "allocs_per_op": 1000,
+          "bytes_per_op": 48000,
+          "ratio_to_anchor": 22811.481218993616,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 75030,
+              "ns_per_op": 32239,
+              "bytes_per_op": 48000,
+              "allocs_per_op": 1000,
+              "ratio_to_anchor": 22848.3345145287,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 75519,
+              "ns_per_op": 32367.000000000004,
+              "bytes_per_op": 48000,
+              "allocs_per_op": 1000,
+              "ratio_to_anchor": 22939.05031892275,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 74833,
+              "ns_per_op": 31955,
+              "bytes_per_op": 48000,
+              "allocs_per_op": 1000,
+              "ratio_to_anchor": 22647.05882352941,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkSeqIteration/ArrayVector/10": {
+          "ns_per_op": 322.1666666666667,
+          "allocs_per_op": 10,
+          "bytes_per_op": 480,
+          "ratio_to_anchor": 228.3250649657453,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 7342826,
+              "ns_per_op": 322.1000000000001,
+              "bytes_per_op": 480,
+              "allocs_per_op": 10,
+              "ratio_to_anchor": 228.2778171509568,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 7461748,
+              "ns_per_op": 321.8,
+              "bytes_per_op": 480,
+              "allocs_per_op": 10,
+              "ratio_to_anchor": 228.0652019844082,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 7476788,
+              "ns_per_op": 322.6,
+              "bytes_per_op": 480,
+              "allocs_per_op": 10,
+              "ratio_to_anchor": 228.632175761871,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkSeqIteration/ArrayVector/100": {
+          "ns_per_op": 3242.3333333333335,
+          "allocs_per_op": 100,
+          "bytes_per_op": 4800,
+          "ratio_to_anchor": 2297.8974722419084,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 718603,
+              "ns_per_op": 3237,
+              "bytes_per_op": 4800,
+              "allocs_per_op": 100,
+              "ratio_to_anchor": 2294.117647058823,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 730304,
+              "ns_per_op": 3235.0000000000005,
+              "bytes_per_op": 4800,
+              "allocs_per_op": 100,
+              "ratio_to_anchor": 2292.7002126151665,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 701948,
+              "ns_per_op": 3255,
+              "bytes_per_op": 4800,
+              "allocs_per_op": 100,
+              "ratio_to_anchor": 2306.874557051736,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkSeqIteration/List/01000": {
+          "ns_per_op": 4252.333333333333,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 3013.7018662886835,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 563509,
+              "ns_per_op": 4254,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 3014.8830616583978,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 564049,
+              "ns_per_op": 4253.000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 3014.1743444365698,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 564393,
+              "ns_per_op": 4250,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 3012.048192771084,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkSeqIteration/List/10": {
+          "ns_per_op": 43.57,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 30.87880935506732,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 55270395,
+              "ns_per_op": 43.550000000000004,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 30.864635010630757,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 55381698,
+              "ns_per_op": 43.81000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 31.048901488306168,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 55441544,
+              "ns_per_op": 43.35,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 30.722891566265055,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkSeqIteration/List/100": {
+          "ns_per_op": 424.1000000000001,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 300.5669737774628,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 5659892,
+              "ns_per_op": 424.1,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 300.56697377746275,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 5669977,
+              "ns_per_op": 423.5,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 300.14174344436566,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 5670187,
+              "ns_per_op": 424.70000000000005,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 300.99220411055984,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkSeqIteration/PersistentVector/01000": {
+          "ns_per_op": 41837.333333333336,
+          "allocs_per_op": 1001,
+          "bytes_per_op": 48080,
+          "ratio_to_anchor": 29650.83864871249,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 57820,
+              "ns_per_op": 41434,
+              "bytes_per_op": 48080,
+              "allocs_per_op": 1001,
+              "ratio_to_anchor": 29364.989369241666,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 57656,
+              "ns_per_op": 41722.00000000001,
+              "bytes_per_op": 48080,
+              "allocs_per_op": 1001,
+              "ratio_to_anchor": 29569.09992912828,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 56947,
+              "ns_per_op": 42356.00000000001,
+              "bytes_per_op": 48080,
+              "allocs_per_op": 1001,
+              "ratio_to_anchor": 30018.42664776754,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkSeqIteration/PersistentVector/10": {
+          "ns_per_op": 433.4333333333334,
+          "allocs_per_op": 11,
+          "bytes_per_op": 560,
+          "ratio_to_anchor": 307.181667847862,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 5603116,
+              "ns_per_op": 434.2,
+              "bytes_per_op": 560,
+              "allocs_per_op": 11,
+              "ratio_to_anchor": 307.7250177179305,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 5530537,
+              "ns_per_op": 433.20000000000005,
+              "bytes_per_op": 560,
+              "allocs_per_op": 11,
+              "ratio_to_anchor": 307.016300496102,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 5515893,
+              "ns_per_op": 432.90000000000003,
+              "bytes_per_op": 560,
+              "allocs_per_op": 11,
+              "ratio_to_anchor": 306.8036853295535,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkSeqIteration/PersistentVector/100": {
+          "ns_per_op": 4207.333333333333,
+          "allocs_per_op": 101,
+          "bytes_per_op": 4880,
+          "ratio_to_anchor": 2981.809591306401,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 569809,
+              "ns_per_op": 4209,
+              "bytes_per_op": 4880,
+              "allocs_per_op": 101,
+              "ratio_to_anchor": 2982.9907866761155,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 553551,
+              "ns_per_op": 4199,
+              "bytes_per_op": 4880,
+              "allocs_per_op": 101,
+              "ratio_to_anchor": 2975.903614457831,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 544098,
+              "ns_per_op": 4214.000000000001,
+              "bytes_per_op": 4880,
+              "allocs_per_op": 101,
+              "ratio_to_anchor": 2986.5343727852587,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkStackOps/Push": {
+          "ns_per_op": 1.062,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7526576895818567,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.062,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7526576895818567,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.062,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7526576895818567,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.062,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7526576895818567,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkStackOps/PushPop": {
+          "ns_per_op": 1.411666666666667,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 1.0004724781478858,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4090000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9985825655563431,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4090000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9985825655563431,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4170000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 1.004252303330971,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkStructToRecord": {
+          "ns_per_op": 135.6,
+          "allocs_per_op": 4,
+          "bytes_per_op": 160,
+          "ratio_to_anchor": 96.10205527994329,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 17718966,
+              "ns_per_op": 135.2,
+              "bytes_per_op": 160,
+              "allocs_per_op": 4,
+              "ratio_to_anchor": 95.81856839121188,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 16033498,
+              "ns_per_op": 137,
+              "bytes_per_op": 160,
+              "allocs_per_op": 4,
+              "ratio_to_anchor": 97.09425939050317,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 17819424,
+              "ns_per_op": 134.6,
+              "bytes_per_op": 160,
+              "allocs_per_op": 4,
+              "ratio_to_anchor": 95.3933380581148,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkTransientMapAssocInsertBatch1K": {
+          "ns_per_op": 257185.00000000003,
+          "allocs_per_op": 5930,
+          "bytes_per_op": 372856,
+          "ratio_to_anchor": 182271.4386959603,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 8475,
+              "ns_per_op": 256884.00000000003,
+              "bytes_per_op": 372843,
+              "allocs_per_op": 5931,
+              "ratio_to_anchor": 182058.11481218992,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 9097,
+              "ns_per_op": 257811.00000000003,
+              "bytes_per_op": 372864,
+              "allocs_per_op": 5930,
+              "ratio_to_anchor": 182715.09567682495,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 9451,
+              "ns_per_op": 256860.00000000003,
+              "bytes_per_op": 372861,
+              "allocs_per_op": 5930,
+              "ratio_to_anchor": 182041.10559886604,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkTransientMapAssocOverwrite1K": {
+          "ns_per_op": 762.7000000000002,
+          "allocs_per_op": 9,
+          "bytes_per_op": 2139,
+          "ratio_to_anchor": 540.5386250885897,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 3093814,
+              "ns_per_op": 766,
+              "bytes_per_op": 2139,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 542.8773919206236,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3120546,
+              "ns_per_op": 751.4,
+              "bytes_per_op": 2139,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 532.5301204819276,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3083032,
+              "ns_per_op": 770.7,
+              "bytes_per_op": 2139,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 546.2083628632175,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkTransientMapAssocOverwriteBatch1K": {
+          "ns_per_op": 752333.6666666666,
+          "allocs_per_op": 7517,
+          "bytes_per_op": 2109111,
+          "ratio_to_anchor": 533191.8261280415,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 3150,
+              "ns_per_op": 755311,
+              "bytes_per_op": 2109088,
+              "allocs_per_op": 7517,
+              "ratio_to_anchor": 535301.9135364988,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3355,
+              "ns_per_op": 753009,
+              "bytes_per_op": 2109137,
+              "allocs_per_op": 7518,
+              "ratio_to_anchor": 533670.4464918496,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3235,
+              "ns_per_op": 748681.0000000001,
+              "bytes_per_op": 2109108,
+              "allocs_per_op": 7518,
+              "ratio_to_anchor": 530603.1183557761,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefBound": {
+          "ns_per_op": 1.0573333333333332,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.749350342546657,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefBoundDepth/others=0": {
+          "ns_per_op": 1.0596666666666668,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7510040160642569,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.063,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7533664068036852,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.059,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7505315379163712,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefBoundDepth/others=1": {
+          "ns_per_op": 1.0570000000000002,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7491141034727143,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefBoundDepth/others=16": {
+          "ns_per_op": 1.0613333333333332,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.752185211433971,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.068,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7569099929128277,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.059,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7505315379163712,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefBoundDepth/others=4": {
+          "ns_per_op": 1.0566666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7488778643987714,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefBoundDepth/others=64": {
+          "ns_per_op": 1.0566666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7488778643987714,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefBoundParallel": {
+          "ns_per_op": 0.5305333333333334,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.37599811008740847,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.5301,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.37569099929128275,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.5305,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.3759744861800141,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.531,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.3763288447909284,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefChildContext": {
+          "ns_per_op": 2.4806666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 1.7580911882825416,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 969388621,
+              "ns_per_op": 2.479,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 1.7569099929128276,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 963783814,
+              "ns_per_op": 2.481,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 1.7583274273564844,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 966122386,
+              "ns_per_op": 2.482,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 1.7590361445783131,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d1/head": {
+          "ns_per_op": 1.0573333333333332,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.749350342546657,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.059,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7505315379163712,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d1/miss": {
+          "ns_per_op": 1.408666666666667,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.9983463264824002,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4100000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9992912827781715,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4080000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9978738483345144,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4080000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9978738483345144,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d1/tail": {
+          "ns_per_op": 1.0573333333333335,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7493503425466572,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.059,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7505315379163712,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d16/head": {
+          "ns_per_op": 1.0583333333333333,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7500590597684856,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.062,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7526576895818567,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d16/miss": {
+          "ns_per_op": 1.4110000000000003,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 1,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4090000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9985825655563431,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4100000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9992912827781715,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4140000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 1.0021261516654854,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d16/tail": {
+          "ns_per_op": 1.0566666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7488778643987714,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d4/head": {
+          "ns_per_op": 1.0566666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7488778643987714,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d4/miss": {
+          "ns_per_op": 1.4280000000000002,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 1.0120481927710843,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4090000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9985825655563431,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4660000000000002,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 1.038979447200567,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4090000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9985825655563431,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d4/tail": {
+          "ns_per_op": 1.0566666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7488778643987714,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d64/head": {
+          "ns_per_op": 1.0563333333333333,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7486416253248286,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.057,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7491141034727142,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d64/miss": {
+          "ns_per_op": 1.4103333333333337,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.9995275218521144,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4110000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 1,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4100000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9992912827781715,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.4100000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.9992912827781715,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDepth/d64/tail": {
+          "ns_per_op": 1.0566666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7488778643987714,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefDistinctParallel": {
+          "ns_per_op": 0.5319333333333334,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.3769903141979683,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.5352000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.3793054571226081,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.5303,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.37583274273564843,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.5303,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.37583274273564843,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefPreviouslyBound": {
+          "ns_per_op": 1.058,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7498228206945428,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.06,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7512402551381998,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.056,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7484053862508858,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefPreviouslyBoundParallel": {
+          "ns_per_op": 0.7068333333333334,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.5009449562957713,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.7069,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.5009922041105598,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.7067000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.5008504606661942,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.7069,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.5009922041105598,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefRoot": {
+          "ns_per_op": 1.1173333333333333,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.7918733758563665,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.234,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.874557051736357,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.058,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7498228206945428,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 1.06,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.7512402551381998,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVarDerefRootParallel": {
+          "ns_per_op": 0.7068666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 0.5009685802031655,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.7068,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.5009213323883769,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.7071,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.5011339475549255,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000000,
+              "ns_per_op": 0.7067000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 0.5008504606661942,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVariadicInvoke/1Arg": {
+          "ns_per_op": 129.23333333333335,
+          "allocs_per_op": 2,
+          "bytes_per_op": 88,
+          "ratio_to_anchor": 91.58988896763525,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 16527400,
+              "ns_per_op": 130.1,
+              "bytes_per_op": 88,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 92.20411055988659,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 16481626,
+              "ns_per_op": 125.60000000000001,
+              "bytes_per_op": 88,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 89.0148830616584,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 16920590,
+              "ns_per_op": 132.00000000000003,
+              "bytes_per_op": 88,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 93.55067328136074,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVariadicInvoke/5Args": {
+          "ns_per_op": 313.00000000000006,
+          "allocs_per_op": 6,
+          "bytes_per_op": 344,
+          "ratio_to_anchor": 221.8284904323175,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 7447598,
+              "ns_per_op": 304.6000000000001,
+              "bytes_per_op": 344,
+              "allocs_per_op": 6,
+              "ratio_to_anchor": 215.8752657689582,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 7723130,
+              "ns_per_op": 311.30000000000007,
+              "bytes_per_op": 344,
+              "allocs_per_op": 6,
+              "ratio_to_anchor": 220.62367115520908,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 7890526,
+              "ns_per_op": 323.1,
+              "bytes_per_op": 344,
+              "allocs_per_op": 6,
+              "ratio_to_anchor": 228.98653437278523,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAccess/ArrayVector/10": {
+          "ns_per_op": 9.165999999999999,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 6.496102055279941,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 261475128,
+              "ns_per_op": 9.158,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.490432317505314,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 261593310,
+              "ns_per_op": 9.175,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.502480510276399,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 262144335,
+              "ns_per_op": 9.165,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.495393338058113,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAccess/ArrayVector/100": {
+          "ns_per_op": 9.175666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 6.502952988424284,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 261724262,
+              "ns_per_op": 9.208,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.525868178596739,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 262243348,
+              "ns_per_op": 9.158,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.490432317505314,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 261456699,
+              "ns_per_op": 9.161,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.4925584691708,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAccess/ArrayVector/1000": {
+          "ns_per_op": 9.179,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 6.505315379163712,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 262168882,
+              "ns_per_op": 9.183,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.5081502480510265,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 261577566,
+              "ns_per_op": 9.172,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.500354358610913,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 261441886,
+              "ns_per_op": 9.182,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.507441530829198,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAccess/ArrayVector/10000": {
+          "ns_per_op": 9.172666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 6.500826836758798,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 261893949,
+              "ns_per_op": 9.176,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.503189227498227,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 261740335,
+              "ns_per_op": 9.167,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.49681077250177,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 261912048,
+              "ns_per_op": 9.175,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 6.502480510276399,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAccess/PersistentVector/10": {
+          "ns_per_op": 28.419999999999998,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 20.141743444365694,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 84280486,
+              "ns_per_op": 28.42,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 20.141743444365694,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 84304976,
+              "ns_per_op": 28.41,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 20.13465627214741,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 84280114,
+              "ns_per_op": 28.43,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 20.14883061658398,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAccess/PersistentVector/100": {
+          "ns_per_op": 31.810000000000002,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 22.54429482636428,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 75471177,
+              "ns_per_op": 31.790000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 22.53012048192771,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 75306187,
+              "ns_per_op": 31.84,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 22.565556343019132,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 75009690,
+              "ns_per_op": 31.8,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 22.53720765414599,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAccess/PersistentVector/1000": {
+          "ns_per_op": 31.816666666666666,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 22.54901960784313,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 75130477,
+              "ns_per_op": 31.790000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 22.53012048192771,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 75112273,
+              "ns_per_op": 31.8,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 22.53720765414599,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 75356688,
+              "ns_per_op": 31.860000000000003,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 22.579730687455704,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAccess/PersistentVector/10000": {
+          "ns_per_op": 34.400000000000006,
+          "allocs_per_op": 0,
+          "bytes_per_op": 0,
+          "ratio_to_anchor": 24.379872430900072,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 69241695,
+              "ns_per_op": 34.400000000000006,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 24.379872430900072,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 69711506,
+              "ns_per_op": 34.39000000000001,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 24.372785258681787,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 69795343,
+              "ns_per_op": 34.410000000000004,
+              "bytes_per_op": 0,
+              "allocs_per_op": 0,
+              "ratio_to_anchor": 24.386959603118353,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAssoc/ArrayVector/10": {
+          "ns_per_op": 1296,
+          "allocs_per_op": 11,
+          "bytes_per_op": 656,
+          "ratio_to_anchor": 918.4975194897235,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1893585,
+              "ns_per_op": 1311,
+              "bytes_per_op": 656,
+              "allocs_per_op": 11,
+              "ratio_to_anchor": 929.1282778171508,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1866561,
+              "ns_per_op": 1303,
+              "bytes_per_op": 656,
+              "allocs_per_op": 11,
+              "ratio_to_anchor": 923.4585400425228,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1865612,
+              "ns_per_op": 1274,
+              "bytes_per_op": 656,
+              "allocs_per_op": 11,
+              "ratio_to_anchor": 902.9057406094967,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAssoc/ArrayVector/100": {
+          "ns_per_op": 2352.3333333333335,
+          "allocs_per_op": 11,
+          "bytes_per_op": 5552,
+          "ratio_to_anchor": 1667.139144814552,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 978735,
+              "ns_per_op": 2297,
+              "bytes_per_op": 5552,
+              "allocs_per_op": 11,
+              "ratio_to_anchor": 1627.9234585400422,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1000000,
+              "ns_per_op": 2333,
+              "bytes_per_op": 5552,
+              "allocs_per_op": 11,
+              "ratio_to_anchor": 1653.437278525868,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 961320,
+              "ns_per_op": 2427,
+              "bytes_per_op": 5552,
+              "allocs_per_op": 11,
+              "ratio_to_anchor": 1720.0566973777459,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAssoc/ArrayVector/1000": {
+          "ns_per_op": 9803.666666666666,
+          "allocs_per_op": 14,
+          "bytes_per_op": 49344,
+          "ratio_to_anchor": 6948.027403732575,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 239407,
+              "ns_per_op": 9824.000000000002,
+              "bytes_per_op": 49344,
+              "allocs_per_op": 14,
+              "ratio_to_anchor": 6962.43798724309,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 245974,
+              "ns_per_op": 9786,
+              "bytes_per_op": 49344,
+              "allocs_per_op": 14,
+              "ratio_to_anchor": 6935.5067328136065,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 257096,
+              "ns_per_op": 9801,
+              "bytes_per_op": 49344,
+              "allocs_per_op": 14,
+              "ratio_to_anchor": 6946.137491141033,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAssoc/ArrayVector/10000": {
+          "ns_per_op": 194816.33333333334,
+          "allocs_per_op": 13,
+          "bytes_per_op": 491714,
+          "ratio_to_anchor": 138069.69052681312,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 12765,
+              "ns_per_op": 193559.00000000003,
+              "bytes_per_op": 491714,
+              "allocs_per_op": 13,
+              "ratio_to_anchor": 137178.59673990076,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 12258,
+              "ns_per_op": 194551,
+              "bytes_per_op": 491714,
+              "allocs_per_op": 13,
+              "ratio_to_anchor": 137881.64422395462,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 12571,
+              "ns_per_op": 196339.00000000003,
+              "bytes_per_op": 491714,
+              "allocs_per_op": 13,
+              "ratio_to_anchor": 139148.830616584,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAssoc/PersistentVector/10": {
+          "ns_per_op": 1278.3333333333335,
+          "allocs_per_op": 8,
+          "bytes_per_op": 752,
+          "ratio_to_anchor": 905.9768485707535,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1947585,
+              "ns_per_op": 1265.0000000000002,
+              "bytes_per_op": 752,
+              "allocs_per_op": 8,
+              "ratio_to_anchor": 896.5272856130404,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1969971,
+              "ns_per_op": 1259.0000000000002,
+              "bytes_per_op": 752,
+              "allocs_per_op": 8,
+              "ratio_to_anchor": 892.2749822820695,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1828884,
+              "ns_per_op": 1311,
+              "bytes_per_op": 752,
+              "allocs_per_op": 8,
+              "ratio_to_anchor": 929.1282778171508,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAssoc/PersistentVector/100": {
+          "ns_per_op": 2002,
+          "allocs_per_op": 14,
+          "bytes_per_op": 1552,
+          "ratio_to_anchor": 1418.8518781006376,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1000000,
+              "ns_per_op": 2022.0000000000002,
+              "bytes_per_op": 1552,
+              "allocs_per_op": 14,
+              "ratio_to_anchor": 1433.0262225372076,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1208500,
+              "ns_per_op": 1983.0000000000002,
+              "bytes_per_op": 1552,
+              "allocs_per_op": 14,
+              "ratio_to_anchor": 1405.3862508858965,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1206358,
+              "ns_per_op": 2001,
+              "bytes_per_op": 1552,
+              "allocs_per_op": 14,
+              "ratio_to_anchor": 1418.143160878809,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAssoc/PersistentVector/1000": {
+          "ns_per_op": 2392,
+          "allocs_per_op": 16,
+          "bytes_per_op": 2560,
+          "ratio_to_anchor": 1695.251594613749,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 947748,
+              "ns_per_op": 2436,
+              "bytes_per_op": 2560,
+              "allocs_per_op": 16,
+              "ratio_to_anchor": 1726.4351523742023,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 926686,
+              "ns_per_op": 2435,
+              "bytes_per_op": 2560,
+              "allocs_per_op": 16,
+              "ratio_to_anchor": 1725.7264351523738,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 963538,
+              "ns_per_op": 2305,
+              "bytes_per_op": 2560,
+              "allocs_per_op": 16,
+              "ratio_to_anchor": 1633.5931963146702,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorAssoc/PersistentVector/10000": {
+          "ns_per_op": 2864.3333333333335,
+          "allocs_per_op": 21,
+          "bytes_per_op": 3056,
+          "ratio_to_anchor": 2030.002362390739,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 831027,
+              "ns_per_op": 2846.0000000000005,
+              "bytes_per_op": 3056,
+              "allocs_per_op": 21,
+              "ratio_to_anchor": 2017.0092133238838,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 832098,
+              "ns_per_op": 2866,
+              "bytes_per_op": 3056,
+              "allocs_per_op": 21,
+              "ratio_to_anchor": 2031.1835577604531,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 831170,
+              "ns_per_op": 2881,
+              "bytes_per_op": 3056,
+              "allocs_per_op": 21,
+              "ratio_to_anchor": 2041.8143160878806,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorConj/ArrayVector/10": {
+          "ns_per_op": 2574.6666666666665,
+          "allocs_per_op": 20,
+          "bytes_per_op": 1120,
+          "ratio_to_anchor": 1824.7106071344197,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 916154,
+              "ns_per_op": 2537,
+              "bytes_per_op": 1120,
+              "allocs_per_op": 20,
+              "ratio_to_anchor": 1798.01559177888,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 963091,
+              "ns_per_op": 2607,
+              "bytes_per_op": 1120,
+              "allocs_per_op": 20,
+              "ratio_to_anchor": 1847.6257973068741,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 893433,
+              "ns_per_op": 2580.0000000000005,
+              "bytes_per_op": 1120,
+              "allocs_per_op": 20,
+              "ratio_to_anchor": 1828.4904323175053,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorConj/ArrayVector/100": {
+          "ns_per_op": 21623.666666666668,
+          "allocs_per_op": 215,
+          "bytes_per_op": 34512,
+          "ratio_to_anchor": 15325.064965745332,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 105350,
+              "ns_per_op": 21644,
+              "bytes_per_op": 34512,
+              "allocs_per_op": 215,
+              "ratio_to_anchor": 15339.475549255843,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 107870,
+              "ns_per_op": 21754.000000000004,
+              "bytes_per_op": 34512,
+              "allocs_per_op": 215,
+              "ratio_to_anchor": 15417.43444365698,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 108770,
+              "ns_per_op": 21473.000000000004,
+              "bytes_per_op": 34512,
+              "allocs_per_op": 215,
+              "ratio_to_anchor": 15218.284904323174,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorConj/ArrayVector/1000": {
+          "ns_per_op": 210286,
+          "allocs_per_op": 2899,
+          "bytes_per_op": 391907,
+          "ratio_to_anchor": 149033.3097094259,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 10000,
+              "ns_per_op": 213711,
+              "bytes_per_op": 391907,
+              "allocs_per_op": 2899,
+              "ratio_to_anchor": 151460.6661941885,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 10000,
+              "ns_per_op": 210102.00000000003,
+              "bytes_per_op": 391907,
+              "allocs_per_op": 2899,
+              "ratio_to_anchor": 148902.90574060948,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 10000,
+              "ns_per_op": 207045.00000000003,
+              "bytes_per_op": 391907,
+              "allocs_per_op": 2899,
+              "ratio_to_anchor": 146736.3571934798,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorConj/PersistentVector/10": {
+          "ns_per_op": 3285.3333333333335,
+          "allocs_per_op": 22,
+          "bytes_per_op": 2216,
+          "ratio_to_anchor": 2328.372312780534,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 756714,
+              "ns_per_op": 3182,
+              "bytes_per_op": 2216,
+              "allocs_per_op": 22,
+              "ratio_to_anchor": 2255.138199858256,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 701978,
+              "ns_per_op": 3264,
+              "bytes_per_op": 2216,
+              "allocs_per_op": 22,
+              "ratio_to_anchor": 2313.2530120481924,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 703362,
+              "ns_per_op": 3410.0000000000005,
+              "bytes_per_op": 2216,
+              "allocs_per_op": 22,
+              "ratio_to_anchor": 2416.7257264351524,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorConj/PersistentVector/100": {
+          "ns_per_op": 22731.666666666668,
+          "allocs_per_op": 216,
+          "bytes_per_op": 36264,
+          "ratio_to_anchor": 16110.323647531299,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 104383,
+              "ns_per_op": 22634,
+              "bytes_per_op": 36264,
+              "allocs_per_op": 216,
+              "ratio_to_anchor": 16041.10559886605,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 105925,
+              "ns_per_op": 22750,
+              "bytes_per_op": 36264,
+              "allocs_per_op": 216,
+              "ratio_to_anchor": 16123.316796598154,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 105588,
+              "ns_per_op": 22811.000000000004,
+              "bytes_per_op": 36264,
+              "allocs_per_op": 216,
+              "ratio_to_anchor": 16166.548547129694,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorConj/PersistentVector/1000": {
+          "ns_per_op": 209842,
+          "allocs_per_op": 2900,
+          "bytes_per_op": 393659,
+          "ratio_to_anchor": 148718.63926293407,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 10000,
+              "ns_per_op": 207963,
+              "bytes_per_op": 393659,
+              "allocs_per_op": 2900,
+              "ratio_to_anchor": 147386.95960311833,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 10000,
+              "ns_per_op": 210133.00000000003,
+              "bytes_per_op": 393659,
+              "allocs_per_op": 2900,
+              "ratio_to_anchor": 148924.87597448617,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 10000,
+              "ns_per_op": 211430,
+              "bytes_per_op": 393659,
+              "allocs_per_op": 2900,
+              "ratio_to_anchor": 149844.0822111977,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorCreation/ArrayVector/10": {
+          "ns_per_op": 90.74000000000001,
+          "allocs_per_op": 2,
+          "bytes_per_op": 184,
+          "ratio_to_anchor": 64.30900070871722,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 25197598,
+              "ns_per_op": 91.2,
+              "bytes_per_op": 184,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 64.63501063075832,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 26538768,
+              "ns_per_op": 90.84000000000002,
+              "bytes_per_op": 184,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 64.37987243090006,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 26453749,
+              "ns_per_op": 90.18000000000002,
+              "bytes_per_op": 184,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 63.91211906449327,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorCreation/ArrayVector/100": {
+          "ns_per_op": 335.53333333333336,
+          "allocs_per_op": 2,
+          "bytes_per_op": 1816,
+          "ratio_to_anchor": 237.7982518308528,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 7547946,
+              "ns_per_op": 335.6000000000001,
+              "bytes_per_op": 1816,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 237.8454996456414,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 7208877,
+              "ns_per_op": 337,
+              "bytes_per_op": 1816,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 238.83770375620122,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 6800361,
+              "ns_per_op": 334,
+              "bytes_per_op": 1816,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 236.71155209071577,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorCreation/ArrayVector/1000": {
+          "ns_per_op": 2889.3333333333335,
+          "allocs_per_op": 2,
+          "bytes_per_op": 16408,
+          "ratio_to_anchor": 2047.7202929364514,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 853240,
+              "ns_per_op": 2898,
+              "bytes_per_op": 16408,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 2053.8625088589647,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 822799,
+              "ns_per_op": 2861,
+              "bytes_per_op": 16408,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 2027.6399716513108,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 806484,
+              "ns_per_op": 2909,
+              "bytes_per_op": 16408,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 2061.6583982990783,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorCreation/ArrayVector/10000": {
+          "ns_per_op": 79197,
+          "allocs_per_op": 2,
+          "bytes_per_op": 163865,
+          "ratio_to_anchor": 56128.27781715095,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 30024,
+              "ns_per_op": 79308,
+              "bytes_per_op": 163865,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 56206.945428773906,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 30722,
+              "ns_per_op": 79461,
+              "bytes_per_op": 163865,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 56315.37916371367,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 30403,
+              "ns_per_op": 78822,
+              "bytes_per_op": 163865,
+              "allocs_per_op": 2,
+              "ratio_to_anchor": 55862.508858965266,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorCreation/PersistentVector/10": {
+          "ns_per_op": 281.53333333333336,
+          "allocs_per_op": 4,
+          "bytes_per_op": 776,
+          "ratio_to_anchor": 199.52752185211432,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 8568548,
+              "ns_per_op": 281.6,
+              "bytes_per_op": 776,
+              "allocs_per_op": 4,
+              "ratio_to_anchor": 199.57476966690288,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 8544854,
+              "ns_per_op": 281.3,
+              "bytes_per_op": 776,
+              "allocs_per_op": 4,
+              "ratio_to_anchor": 199.36215450035434,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 8589788,
+              "ns_per_op": 281.7,
+              "bytes_per_op": 776,
+              "allocs_per_op": 4,
+              "ratio_to_anchor": 199.6456413890857,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorCreation/PersistentVector/100": {
+          "ns_per_op": 780.2999999999998,
+          "allocs_per_op": 10,
+          "bytes_per_op": 1824,
+          "ratio_to_anchor": 553.0120481927709,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 3082317,
+              "ns_per_op": 779.8000000000001,
+              "bytes_per_op": 1824,
+              "allocs_per_op": 10,
+              "ratio_to_anchor": 552.6576895818567,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3104179,
+              "ns_per_op": 780.3,
+              "bytes_per_op": 1824,
+              "allocs_per_op": 10,
+              "ratio_to_anchor": 553.012048192771,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 3109714,
+              "ns_per_op": 780.8,
+              "bytes_per_op": 1824,
+              "allocs_per_op": 10,
+              "ratio_to_anchor": 553.3664068036852,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorCreation/PersistentVector/1000": {
+          "ns_per_op": 7005.666666666667,
+          "allocs_per_op": 67,
+          "bytes_per_op": 17616,
+          "ratio_to_anchor": 4965.03661705646,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 339033,
+              "ns_per_op": 6986.000000000001,
+              "bytes_per_op": 17616,
+              "allocs_per_op": 67,
+              "ratio_to_anchor": 4951.098511693834,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 349150,
+              "ns_per_op": 7012.000000000001,
+              "bytes_per_op": 17616,
+              "allocs_per_op": 67,
+              "ratio_to_anchor": 4969.525159461375,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 345192,
+              "ns_per_op": 7019,
+              "bytes_per_op": 17616,
+              "allocs_per_op": 67,
+              "ratio_to_anchor": 4974.486180014173,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorCreation/PersistentVector/10000": {
+          "ns_per_op": 79021.66666666667,
+          "allocs_per_op": 650,
+          "bytes_per_op": 175752,
+          "ratio_to_anchor": 56004.01606425702,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 30592,
+              "ns_per_op": 78989,
+              "bytes_per_op": 175752,
+              "allocs_per_op": 650,
+              "ratio_to_anchor": 55980.86463501062,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 29809,
+              "ns_per_op": 78893,
+              "bytes_per_op": 175752,
+              "allocs_per_op": 650,
+              "ratio_to_anchor": 55912.82778171509,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 30874,
+              "ns_per_op": 79183,
+              "bytes_per_op": 175752,
+              "allocs_per_op": 650,
+              "ratio_to_anchor": 56118.35577604535,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorSeq/ArrayVector/10": {
+          "ns_per_op": 827.1333333333333,
+          "allocs_per_op": 9,
+          "bytes_per_op": 432,
+          "ratio_to_anchor": 586.2036380817386,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 2877982,
+              "ns_per_op": 842.4000000000001,
+              "bytes_per_op": 432,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 597.0233876683203,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 2874639,
+              "ns_per_op": 824.9000000000001,
+              "bytes_per_op": 432,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 584.6208362863217,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 2898294,
+              "ns_per_op": 814.1,
+              "bytes_per_op": 432,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 576.966690290574,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorSeq/ArrayVector/100": {
+          "ns_per_op": 4722,
+          "allocs_per_op": 99,
+          "bytes_per_op": 4752,
+          "ratio_to_anchor": 3346.562721474131,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 476838,
+              "ns_per_op": 4727.000000000001,
+              "bytes_per_op": 4752,
+              "allocs_per_op": 99,
+              "ratio_to_anchor": 3350.1063075832744,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 502878,
+              "ns_per_op": 4748,
+              "bytes_per_op": 4752,
+              "allocs_per_op": 99,
+              "ratio_to_anchor": 3364.989369241672,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 459811,
+              "ns_per_op": 4691.000000000001,
+              "bytes_per_op": 4752,
+              "allocs_per_op": 99,
+              "ratio_to_anchor": 3324.592487597449,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorSeq/ArrayVector/1000": {
+          "ns_per_op": 36957,
+          "allocs_per_op": 999,
+          "bytes_per_op": 47952,
+          "ratio_to_anchor": 26192.062367115515,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 65415,
+              "ns_per_op": 36976,
+              "bytes_per_op": 47952,
+              "allocs_per_op": 999,
+              "ratio_to_anchor": 26205.527994330256,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 65596,
+              "ns_per_op": 36964,
+              "bytes_per_op": 47952,
+              "allocs_per_op": 999,
+              "ratio_to_anchor": 26197.023387668316,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 64248,
+              "ns_per_op": 36931,
+              "bytes_per_op": 47952,
+              "allocs_per_op": 999,
+              "ratio_to_anchor": 26173.635719347974,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorSeq/PersistentVector/10": {
+          "ns_per_op": 890.4000000000001,
+          "allocs_per_op": 9,
+          "bytes_per_op": 432,
+          "ratio_to_anchor": 631.0418143160879,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 2643926,
+              "ns_per_op": 905.9000000000001,
+              "bytes_per_op": 432,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 642.0269312544294,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 2732413,
+              "ns_per_op": 876.6000000000001,
+              "bytes_per_op": 432,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 621.2615166548547,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 2709667,
+              "ns_per_op": 888.7,
+              "bytes_per_op": 432,
+              "allocs_per_op": 9,
+              "ratio_to_anchor": 629.8369950389794,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorSeq/PersistentVector/100": {
+          "ns_per_op": 5876,
+          "allocs_per_op": 99,
+          "bytes_per_op": 4752,
+          "ratio_to_anchor": 4164.422395464209,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 420214,
+              "ns_per_op": 5873,
+              "bytes_per_op": 4752,
+              "allocs_per_op": 99,
+              "ratio_to_anchor": 4162.2962437987235,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 395732,
+              "ns_per_op": 5900,
+              "bytes_per_op": 4752,
+              "allocs_per_op": 99,
+              "ratio_to_anchor": 4181.4316087880925,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 387807,
+              "ns_per_op": 5855.000000000001,
+              "bytes_per_op": 4752,
+              "allocs_per_op": 99,
+              "ratio_to_anchor": 4149.539333805811,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorSeq/PersistentVector/1000": {
+          "ns_per_op": 46452.333333333336,
+          "allocs_per_op": 999,
+          "bytes_per_op": 47952,
+          "ratio_to_anchor": 32921.56862745098,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 51496,
+              "ns_per_op": 46522.00000000001,
+              "bytes_per_op": 47952,
+              "allocs_per_op": 999,
+              "ratio_to_anchor": 32970.942593905034,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 50973,
+              "ns_per_op": 46384,
+              "bytes_per_op": 47952,
+              "allocs_per_op": 999,
+              "ratio_to_anchor": 32873.13961729269,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 51510,
+              "ns_per_op": 46451,
+              "bytes_per_op": 47952,
+              "allocs_per_op": 999,
+              "ratio_to_anchor": 32920.623671155205,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorVersioning/ArrayVector": {
+          "ns_per_op": 2055414.3333333333,
+          "allocs_per_op": 801,
+          "bytes_per_op": 4942023,
+          "ratio_to_anchor": 1456707.5360264585,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1272,
+              "ns_per_op": 2023933.0000000002,
+              "bytes_per_op": 4942022,
+              "allocs_per_op": 801,
+              "ratio_to_anchor": 1434396.172927002,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1232,
+              "ns_per_op": 2058178,
+              "bytes_per_op": 4942022,
+              "allocs_per_op": 801,
+              "ratio_to_anchor": 1458666.1941885184,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 1114,
+              "ns_per_op": 2084132.0000000002,
+              "bytes_per_op": 4942025,
+              "allocs_per_op": 801,
+              "ratio_to_anchor": 1477060.2409638553,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/pkg/vm.BenchmarkVectorVersioning/PersistentVector": {
+          "ns_per_op": 55249,
+          "allocs_per_op": 666,
+          "bytes_per_op": 133608,
+          "ratio_to_anchor": 39155.91778880226,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 43405,
+              "ns_per_op": 55376.00000000001,
+              "bytes_per_op": 133608,
+              "allocs_per_op": 666,
+              "ratio_to_anchor": 39245.92487597449,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 43371,
+              "ns_per_op": 55096,
+              "bytes_per_op": 133608,
+              "allocs_per_op": 666,
+              "ratio_to_anchor": 39047.4840538625,
+              "captured_at": "2026-07-19T15:40:35Z"
+            },
+            {
+              "iterations": 43852,
+              "ns_per_op": 55275,
+              "bytes_per_op": 133608,
+              "allocs_per_op": 666,
+              "ratio_to_anchor": 39174.3444365698,
+              "captured_at": "2026-07-19T15:40:35Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/test.BenchmarkClojureTestSuite [aot_native]": {
+          "ns_per_op": 488218020.00000006,
+          "allocs_per_op": 11238813,
+          "bytes_per_op": 578743616,
+          "ratio_to_anchor": 346008518.78100634,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1,
+              "ns_per_op": 488218020.00000006,
+              "bytes_per_op": 578743616,
+              "allocs_per_op": 11238813,
+              "ratio_to_anchor": 346008518.78100634,
+              "captured_at": "2026-07-19T16:55:28Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/test.BenchmarkClojureTestSuite [ir_bytecode]": {
+          "ns_per_op": 538122342.0000001,
+          "allocs_per_op": 11249775,
+          "bytes_per_op": 579430176,
+          "ratio_to_anchor": 381376571.22608083,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1,
+              "ns_per_op": 538122342.0000001,
+              "bytes_per_op": 579430176,
+              "allocs_per_op": 11249775,
+              "ratio_to_anchor": 381376571.22608083,
+              "captured_at": "2026-07-19T16:55:21Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun [total_aot_native]": {
+          "ns_per_op": 5003920468,
+          "allocs_per_op": 11257324,
+          "bytes_per_op": 579483544,
+          "ratio_to_anchor": 3546364612.331679,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1,
+              "ns_per_op": 5003920468,
+              "bytes_per_op": 579483544,
+              "allocs_per_op": 11257324,
+              "ratio_to_anchor": 3546364612.331679,
+              "captured_at": "2026-07-19T16:55:53Z"
+            }
+          ]
+        },
+        "github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun [total_ir_bytecode]": {
+          "ns_per_op": 4850949122,
+          "allocs_per_op": 11236501,
+          "bytes_per_op": 578548608,
+          "ratio_to_anchor": 3437951184.9751945,
+          "best_since_sha": "4b5a01953bf2",
+          "best_since_at": "2026-07-19T16:56:32Z",
+          "samples": [
+            {
+              "iterations": 1,
+              "ns_per_op": 4850949122,
+              "bytes_per_op": 578548608,
+              "allocs_per_op": 11236501,
+              "ratio_to_anchor": 3437951184.9751945,
+              "captured_at": "2026-07-19T16:55:47Z"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
