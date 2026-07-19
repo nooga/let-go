@@ -10,7 +10,7 @@
 Greetings loafers! _(λ-gophers haha, get it?)_
 
 let-go is a Clojure dialect with a bytecode compiler and stack VM, written in Go.
-A single ~12MB binary, ~8ms cold start, no JVM. It passes the
+A single ~13MB binary, ~10ms cold start, no JVM. It passes the
 [jank-lang test suite](https://github.com/jank-lang/clojure-test-suite).
 
 I started this in 2021 as an elaborate joke: an excuse to write Clojure while
@@ -42,25 +42,27 @@ Non-goals: drop-in JVM Clojure replacement; linter/formatter for Clojure-at-larg
 
 ## Benchmarks
 
-let-go vs Babashka, Joker, [go-joker](https://github.com/rcarmo/go-joker),
-[gloat](https://github.com/gloathub/gloat), and Clojure JVM. All benchmark
-files are valid Clojure that runs unmodified. Apple M1 Pro.
+let-go (bytecode VM), let-go AOT (the same code IR-lowered to native Go),
+Babashka, and Clojure JVM. All benchmark files are valid Clojure that runs
+unmodified; the VM and AOT legs run the identical program — only dispatch
+differs. Apple M1 Pro.
 
-|                 | let-go     | babashka | joker | go-joker | gloat | clojure JVM |
-| --------------- | ---------- | -------- | ----- | -------- | ----- | ----------- |
-| **Binary size** | **12MB**   | 68MB     | 26MB  | 32MB     | 26MB  | 304MB (JDK) |
-| **Startup**     | **8.2ms**  | 17.7ms   | 11.5ms | 12.5ms   | 14.7ms | 360ms       |
-| **Idle memory** | **14.7MB** | 27.0MB   | 21.6MB | 23.7MB   | 22.9MB | 98.0MB      |
+|                 | let-go     | let-go AOT | babashka | clojure JVM |
+| --------------- | ---------- | ---------- | -------- | ----------- |
+| **Binary size** | **13MB**   | 18MB       | 68MB     | 304MB (JDK) |
+| **Startup**     | 11.1ms     | **10.7ms** | 20.4ms   | 364ms       |
+| **Idle memory** | **15.2MB** | 15.2MB     | 27.0MB   | 97.7MB      |
 
 let-go stays compact and quick to launch: a small native binary, fastest startup
 in this run, low RSS, and no JVM dependency.
 
-On runtime benchmarks, let-go is competitive on short-lived data work like
-map/filter (7.2ms) and persistent maps (20.2ms), and it is still much faster
-than upstream Joker on numeric/tree-walk-heavy cases. go-joker's WASM JIT leads
-hot loops and reduction/transducer workloads; Babashka is ahead on several
-algorithmic cases; and the JVM dominates long compute runs once HotSpot warms
-up.
+On runtime benchmarks, the VM is competitive on short-lived data work —
+map/filter (11.3ms) and persistent maps (22.2ms) run neck and neck with
+Babashka — while AOT lowering turns the call-heavy numeric cases around
+entirely: fib(35) drops from 2.42s to 0.11s and tak from 2.40s to 94ms,
+an order of magnitude ahead of both Babashka and warm JVM wall-clock.
+Babashka still leads reduction/transducer workloads, and the JVM dominates
+long compute runs once HotSpot warms up.
 
 Full per-benchmark numbers and methodology:
 [benchmark/results.md](benchmark/results.md).

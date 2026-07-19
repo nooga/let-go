@@ -30,28 +30,28 @@ Clojure JVM times include full JVM startup (~350-500ms) which dominates short be
 
 | Runtime | Time |
 |---|---|
-| let-go | 9.1ms ± 1.2ms (1.0x) |
-| **let-go AOT** | **8.7ms ± 0.8ms** (1.0x) |
-| babashka | 20.9ms ± 1.9ms (2.3x) |
-| clojure JVM | 0.362s ± 0.018s (39.8x) |
+| let-go | 11.1ms ± 0.8ms (1.0x) |
+| **let-go AOT** | **10.7ms ± 1.1ms** (1.0x) |
+| babashka | 20.4ms ± 1.3ms (1.8x) |
+| clojure JVM | 0.364s ± 0.010s (32.8x) |
 
 ### Peak Memory Usage (RSS)
 
 | Workload | let-go | let-go AOT | babashka | clojure JVM |
 |---|---|---|---|---|
-| startup (nil) | **15.0MB** (1.0x) | 15.2MB (1.0x) | 27.0MB (1.8x) | 103.4MB (6.9x) |
-| fib(35) | 16.0MB (1.0x) | **15.6MB** (1.0x) | 77.4MB (4.8x) | 121.8MB (7.6x) |
-| reduce 1M | **21.0MB** (1.0x) | 22.0MB (1.0x) | 59.2MB (2.8x) | 121.9MB (5.8x) |
+| startup (nil) | **15.2MB** (1.0x) | **15.2MB** (1.0x) | 27.0MB (1.8x) | 97.7MB (6.4x) |
+| fib(35) | 15.6MB (1.0x) | **15.5MB** (1.0x) | 77.4MB (5.0x) | 119.0MB (7.6x) |
+| reduce 1M | 21.7MB (1.0x) | **21.4MB** (1.0x) | 59.2MB (2.7x) | 116.8MB (5.4x) |
 
 ### Performance
 
 | Benchmark | let-go | let-go AOT | babashka | clojure JVM |
 |---|---|---|---|---|
-| fib | 2.424s ± 0.028s (1.0x) | **0.113s ± 0.001s** (0.0x) | 1.935s ± 0.021s (0.8x) | 0.603s ± 0.018s (0.2x) |
-| loop-recur | 70.9ms ± 0.9ms (1.0x) | **10.6ms ± 0.8ms** (0.1x) | 69.0ms ± 1.9ms (1.0x) | 0.501s ± 0.015s (7.1x) |
-| map-filter | **10.7ms ± 1.7ms** (1.0x) | 12.4ms ± 1.7ms (1.2x) | 22.7ms ± 3.6ms (2.1x) | 0.398s ± 0.015s (37.1x) |
-| persistent-map | **23.0ms ± 1.3ms** (1.0x) | 24.0ms ± 1.1ms (1.0x) | 29.3ms ± 6.1ms (1.3x) | 0.534s ± 0.017s (23.2x) |
-| reduce | 41.0ms ± 1.5ms (1.0x) | 68.2ms ± 3.5ms (1.7x) | **37.6ms ± 2.3ms** (0.9x) | 0.376s ± 0.022s (9.2x) |
-| tak | 2.432s ± 0.025s (1.0x) | **94.4ms ± 1.1ms** (0.0x) | 1.939s ± 0.022s (0.8x) | 0.649s ± 0.011s (0.3x) |
-| transducers | 60.9ms ± 21.3ms (1.0x) | 49.4ms ± 1.6ms (0.8x) | **30.8ms ± 2.4ms** (0.5x) | 0.431s ± 0.014s (7.1x) |
+| fib | 2.416s ± 0.012s (1.0x) | **0.110s ± 0.001s** (0.0x) | 1.943s ± 0.049s (0.8x) | 0.567s ± 0.005s (0.2x) |
+| loop-recur | 68.8ms ± 1.0ms (1.0x) | **10.7ms ± 0.9ms** (0.2x) | 64.4ms ± 1.3ms (0.9x) | 0.475s ± 0.004s (6.9x) |
+| map-filter | 11.3ms ± 0.8ms (1.0x) | **10.4ms ± 0.7ms** (0.9x) | 19.2ms ± 0.9ms (1.7x) | 0.387s ± 0.011s (34.3x) |
+| persistent-map | 22.2ms ± 0.7ms (1.0x) | 22.7ms ± 1.4ms (1.0x) | **21.7ms ± 1.2ms** (1.0x) | 0.517s ± 0.011s (23.3x) |
+| reduce | 39.3ms ± 1.1ms (1.0x) | 66.6ms ± 1.3ms (1.7x) | **36.0ms ± 1.0ms** (0.9x) | 0.390s ± 0.015s (9.9x) |
+| tak | 2.397s ± 0.022s (1.0x) | **93.7ms ± 0.6ms** (0.0x) | 1.908s ± 0.037s (0.8x) | 0.613s ± 0.046s (0.3x) |
+| transducers | 46.5ms ± 0.9ms (1.0x) | 43.0ms ± 1.0ms (0.9x) | **20.3ms ± 0.5ms** (0.4x) | 0.373s ± 0.011s (8.0x) |
 
