@@ -43,7 +43,13 @@ jobs:
         # explorer then shows both an amd64 and an Apple-M line per benchmark.
         os: [ubuntu-latest, macos-14]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    # The macos-14 leg needs more headroom: at count 3 the ubuntu leg fits
+    # in 61-83 min, but no macos leg has ever finished under 90 — every one
+    # since the leg landed (#363) died at the kill, so perf-data has zero
+    # arm64 snapshots. 150 is a provisional ceiling until the first
+    # completed leg measures the real envelope; right-size from data then.
+    # Evidence + discussion: #573.
+    timeout-minutes: ${{ matrix.os == 'macos-14' && 150 || 90 }}
     concurrency:
       # Per-OS FIFO queue: legs of the same OS stay serialized (snapshot
       # commits land in commit order), but the two OSes never wait on each
