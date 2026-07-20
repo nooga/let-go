@@ -23,7 +23,22 @@ import (
 
 var timeType = reflect.TypeOf(time.Time{})
 
+// extraBoxedMethods holds hand-shimmed method tables registered by other
+// packages, which can't be special-cased here without import cycles — e.g.
+// pkg/rt's *LGWriter. Populated at init time, read-only afterwards.
+var extraBoxedMethods = map[reflect.Type]map[Symbol]*NativeFn{}
+
+// RegisterBoxedMethods installs a hand-shimmed method table for t. TinyGo
+// can't reflect method tables (reflect.Type.Method is unimplemented), so any
+// boxed type whose methods let-go code calls via `.` needs an entry.
+func RegisterBoxedMethods(t reflect.Type, ms map[Symbol]*NativeFn) {
+	extraBoxedMethods[t] = ms
+}
+
 func reflectMethods(t reflect.Type) map[Symbol]*NativeFn {
+	if ms, ok := extraBoxedMethods[t]; ok {
+		return ms
+	}
 	if t == timeType {
 		// (.Sub a b) — method value semantics: receiver is the first arg.
 		sub, err := NativeFnType.Wrap(func(vs []Value) (Value, error) {

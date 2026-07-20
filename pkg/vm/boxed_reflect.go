@@ -39,3 +39,8 @@ func methodLookupError(bt *aBoxedType, name Symbol) error {
 	}
 	return fmt.Errorf("method %s not found in %v", name, bt)
 }
+
+// RegisterBoxedMethods is a no-op on reflect-capable builds: the full method
+// table comes from reflection. The TinyGo build (boxed_reflect_tinygo.go)
+// consults this registry because reflect.Type.Method is unimplemented there.
+func RegisterBoxedMethods(t reflect.Type, ms map[Symbol]*NativeFn) {}
