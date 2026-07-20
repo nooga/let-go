@@ -15,7 +15,7 @@ on:
 # runs never coalesce or cancel each other and every merge keeps its own
 # per-commit CI signal.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:

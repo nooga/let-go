@@ -30,7 +30,7 @@ on:
 # Cancel the superseded analysis when a PR branch is pushed again; push and
 # scheduled runs get a unique group (run_id) so they never affect each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
