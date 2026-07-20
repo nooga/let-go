@@ -241,7 +241,12 @@ func fileExists(path string) bool {
 func generateWasmModuleFiles(tmpDir string) (string, []byte, error) {
 	v := version
 	if v != "dev" && v != "" && v[0] >= '0' && v[0] <= '9' {
-		return fmt.Sprintf("module lg-wasm-app\n\ngo 1.26\n\nrequire github.com/nooga/let-go v%s\n", v), nil, nil
+		// Released binary: pin the require to this exact version. We can't
+		// return a nil go.sum (go build rejects a module with unresolved
+		// sums), so resolve it from the proxy the same way the no-source path
+		// below does. `go get` on the single require writes go.sum without the
+		// `go mod tidy` that the build step deliberately avoids.
+		return resolveWasmModuleFiles(tmpDir, "github.com/nooga/let-go@v"+v)
 	}
 	// Dev build — try local source first
 	srcDir, err := findLetGoModuleDir()
@@ -253,11 +258,19 @@ func generateWasmModuleFiles(tmpDir string) (string, []byte, error) {
 		return goMod, goSum, nil
 	}
 	// No local source — resolve latest version from module proxy
+	return resolveWasmModuleFiles(tmpDir, "github.com/nooga/let-go@latest")
+}
+
+// resolveWasmModuleFiles scaffolds a minimal module in tmpDir and resolves the
+// let-go require named by modRef via `go get`, returning the resulting go.mod
+// and go.sum. Used for both released binaries (pinned version) and dev builds
+// with no local source tree (@latest).
+func resolveWasmModuleFiles(tmpDir, modRef string) (string, []byte, error) {
 	goMod := "module lg-wasm-app\n\ngo 1.26\n"
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
 		return "", nil, err
 	}
-	get := exec.Command(goToolPath(), "get", "github.com/nooga/let-go@latest")
+	get := exec.Command(goToolPath(), "get", modRef)
 	get.Dir = tmpDir
 	get.Stderr = os.Stderr
 	if err := get.Run(); err != nil {
