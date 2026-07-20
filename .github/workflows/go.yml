@@ -8,6 +8,16 @@ on:
   # Manual trigger for the gold-differential job (re-derive goldens vs live Clojure).
   workflow_dispatch:
 
+# Cancel the superseded run when a PR branch is pushed again: ~7% of Go PR
+# runs get a successor within 10 minutes (rebases/force-pushes) and the
+# stale run otherwise burns its full ~11 runner-minutes to completion. For
+# push/dispatch events the run_id makes the group unique, so main-branch
+# runs never coalesce or cancel each other and every merge keeps its own
+# per-commit CI signal.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: lint
