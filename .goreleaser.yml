@@ -4,7 +4,13 @@ project_name: let-go
 
 before:
   hooks:
-    - go mod tidy
+    # -e: pkg/wasmhost's gogen_ir-tagged test file blank-imports
+    # pkg/rt/core_go_lowered/..., a gitignored tree only materialized by
+    # `make` targets under -tags gogen_ir (see docs/regenerating-generated-artifacts.md).
+    # It doesn't exist in a fresh checkout, so tidy's build-tag-agnostic
+    # import scan can't resolve it and errors; -e reports that but still
+    # tidies the real dependencies and exits 0.
+    - go mod tidy -e
     - go generate ./pkg/rt/
     # -short skips the expensive lowering harnesses (determinism, AOT diff,
     # deftype skeleton); those are gated in CI on every push to main, so this
