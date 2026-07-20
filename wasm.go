@@ -166,8 +166,18 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		if panicMode == "" {
 			panicMode = "trap"
 		}
+		// -opt=z is the size-lean default; LETGO_TINYGO_OPT=2 trades bundle
+		// size for speed (tinygo accepts 0|1|2|s|z).
+		optLevel := os.Getenv("LETGO_TINYGO_OPT")
+		switch optLevel {
+		case "":
+			optLevel = "z"
+		case "0", "1", "2", "s", "z":
+		default:
+			fmt.Fprintf(os.Stderr, "warning: LETGO_TINYGO_OPT=%q is not a known tinygo -opt level (0|1|2|s|z); passing as-is\n", optLevel)
+		}
 		tgArgs := []string{"build",
-			"-target=wasm", "-no-debug", "-opt=z", "-panic=" + panicMode,
+			"-target=wasm", "-no-debug", "-opt=" + optLevel, "-panic=" + panicMode,
 			"-stack-size=" + stack}
 		if gc := os.Getenv("LETGO_TINYGO_GC"); gc != "" {
 			switch gc {
