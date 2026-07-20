@@ -46,9 +46,10 @@ jobs:
     # The macos-14 leg needs more headroom: at count 3 the ubuntu leg fits
     # in 61-83 min, but no macos leg has ever finished under 90 — every one
     # since the leg landed (#363) died at the kill, so perf-data has zero
-    # arm64 snapshots. 150 is a provisional ceiling until the first
-    # completed leg measures the real envelope; right-size from data then.
-    # Evidence + discussion: #573.
+    # arm64 snapshots. Measured envelope: a completed fork probe leg ran
+    # 120 min end to end (118.6 min in the capture step) at count 3, so
+    # 150 gives ~25% headroom — proportionally more than ubuntu's 90 over
+    # its 83-min worst case. Evidence + discussion: #573.
     timeout-minutes: ${{ matrix.os == 'macos-14' && 150 || 90 }}
     concurrency:
       # Per-OS FIFO queue: legs of the same OS stay serialized (snapshot
