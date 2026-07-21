@@ -6,13 +6,8 @@
 package rt
 
 import (
-	_ "embed"
-
 	"github.com/nooga/let-go/pkg/vm"
 )
-
-//go:embed core/test.lg
-var TestSrc string
 
 // nolint
 func installTestNS() {

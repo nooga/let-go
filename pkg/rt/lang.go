@@ -418,7 +418,7 @@ func init() {
 	vm.SetSuppressShadowWarn(true)
 	RegisterGeneratedPrimitives()
 	vm.SetSuppressShadowWarn(false)
-	// walk namespace is embedded via WalkSrc and will be loaded on demand
+	// walk namespace is embedded via coreFS and will be loaded on demand
 }
 
 // registerBuiltinsModule registers pkg/rt/builtins as a native direct-call
