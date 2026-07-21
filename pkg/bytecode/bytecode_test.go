@@ -1146,6 +1146,9 @@ func TestUnsupportedCapabilityMask(t *testing.T) {
 	if !strings.Contains(err.Error(), "unsupported capability mask") {
 		t.Fatalf("expected 'unsupported capability mask' in error, got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "recompile it with a matching lg") {
+		t.Fatalf("expected the recompile hint in error, got: %v", err)
+	}
 }
 
 func TestSupportedCapabilityMask(t *testing.T) {
