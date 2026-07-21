@@ -195,6 +195,7 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 		compiledForms++
 		return nil
 	}
+	sawVoid := false
 	for {
 		o, err := r.Read()
 		if err != nil {
@@ -203,9 +204,22 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 			}
 			return nil, result, err
 		}
+		// Comments, #_ discards, and empty reader conditionals read as the
+		// VOID sentinel. Compiling them would emit a dead LOAD_CONST/POP pair
+		// per occurrence (and let a trailing comment clobber the last value),
+		// so skip them here like every other read loop does.
+		if o.Type() == vm.VoidType {
+			sawVoid = true
+			continue
+		}
 		if err := evalTopForm(o); err != nil {
 			return nil, result, err
 		}
+	}
+	// Input that held only no-value forms still evaluates to VOID (not nil),
+	// so the REPL keeps echoing nothing for a comment-only line.
+	if compiledForms == 0 && sawVoid {
+		result = vm.VOID
 	}
 
 	c.chunk = chunk
