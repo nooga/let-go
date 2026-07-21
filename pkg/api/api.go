@@ -237,3 +237,24 @@ func (l *LetGo) Run(expr string) (vm.Value, error) {
 	vm.ReleaseFrame(frame)
 	return result, err
 }
+
+// IsIncomplete reports whether err, as returned by Run, means the input
+// ended in the middle of an open form (e.g. "(defn foo [x]") rather than
+// being wrong. Interactive frontends use it to decide between reading
+// more lines and reporting the error:
+//
+//	v, err := lg.Run(buffer)
+//	if err != nil {
+//		if api.IsIncomplete(err) {
+//			continue // prompt for another line, re-Run the whole buffer
+//		}
+//		report(err)
+//	}
+//
+// Empty and whitespace-only input also read as incomplete, which a REPL
+// loop treats the same way: keep prompting. A hard syntax error such as
+// an unmatched delimiter ("(]") is not incomplete — more input can never
+// complete it — and should be reported immediately.
+func IsIncomplete(err error) bool {
+	return compiler.IsErrorEOF(err)
+}
