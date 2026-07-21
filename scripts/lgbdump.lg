@@ -1,0 +1,75 @@
+;; scripts/lgbdump.lg — canonical text dump of a .lgb bundle, for diffing.
+;;
+;;     ./lg scripts/lgbdump.lg <bundle.lgb>
+;;
+;; Diff two bundles by diffing two dumps:
+;;
+;;     diff -u <(./lg scripts/lgbdump.lg old.lgb) <(./lg scripts/lgbdump.lg new.lgb)
+;;
+;; Builds on disasm/decode-bundle (decodes without executing) and
+;; disassemble-resolved (LOAD_CONST/LOAD_VAR rows carry the referenced
+;; identifier, so const-pool index shifts don't drown a diff). Output is
+;; deterministic: namespaces sorted by name, no addresses or pool order.
+;;
+;; Named functions from the shared const pool are dumped under their name;
+;; anonymous ones under a bare "fn anon" label (a pool index would shift on
+;; any insertion, making identical fns diff as different).
+
+(ns lgbdump
+  (:require [disasm]))
+
+;; A resolved LOAD_CONST/LOAD_VAR row is [op pool-idx identifier]. The pool
+;; index shifts whenever any earlier const is added or removed, which turns a
+;; one-fn change into a whole-bundle diff — so for diffing, keep only the
+;; identifier. Unresolved rows keep their index (it's all we have).
+(defn scrub-row [row]
+  (if (and (>= (count row) 3)
+           (or (= :LOAD_CONST (first row)) (= :LOAD_VAR (first row))))
+    (vector (first row) (nth row 2))
+    row))
+
+;; Top-level comments and #_ discards compile to a LOAD_CONST-VOID/POP pair
+;; (dead code; being removed by #600). Rendering each pair would make "added
+;; a comment" look like bytecode churn, so suppress them and print one count
+;; line per chunk instead — the count still diffs when it changes.
+(defn void-load? [row]
+  (and (= :LOAD_CONST (first row))
+       (let [x (nth row (dec (count row)))]
+         (and (vector? x) (= :opaque (first x)) (= "VOID" (second x))))))
+
+(defn dump-chunk [label chunk]
+  (println (str "== " label " =="))
+  (loop [rows (seq (disasm/disassemble-resolved chunk)) skipped 0]
+    (if (nil? rows)
+      (when (> skipped 0)
+        (println (str ";; " skipped " no-value pairs suppressed")))
+      (let [row (first rows)
+            nxt (next rows)]
+        (if (and (void-load? row) nxt (= :POP (first (first nxt))))
+          (recur (next nxt) (inc skipped))
+          (do (println (pr-str (scrub-row row)))
+              (recur nxt skipped)))))))
+
+(defn dump-bundle [path]
+  (let [b (disasm/decode-bundle path)
+        nss (sort-by (fn [m] (get m :ns)) (get b :namespaces))]
+    (println (str ";; lgbdump: " (count nss) " namespaces, "
+                  (count (get b :consts)) " consts"))
+    (dump-chunk "main" (get b :main))
+    (doseq [m nss]
+      (dump-chunk (str "ns " (get m :ns)) (get m :chunk)))
+    ;; Nested fns live in the bundle-wide shared const pool: raw values give
+    ;; the chunks, the projected view gives stable [:fn name] labels.
+    (let [raw (disasm/constants (get b :main))
+          proj (get b :consts)]
+      (doseq [i (range (count raw))]
+        (let [p (nth proj i)]
+          (when (and (vector? p) (= :fn (first p)))
+            (dump-chunk (str "fn " (if (> (count p) 1) (second p) "anon"))
+                        (nth raw i))))))))
+
+(let [path (first *command-line-args*)]
+  (if (nil? path)
+    (do (println "usage: lg scripts/lgbdump.lg <bundle.lgb>")
+        (os/exit 2))
+    (dump-bundle path)))
