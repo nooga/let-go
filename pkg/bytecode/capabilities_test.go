@@ -32,6 +32,20 @@ func TestUnsupportedCapabilityErrorNamedMinVersion(t *testing.T) {
 	}
 }
 
+func TestUnsupportedCapabilityErrorMaskIsUnsupportedSubset(t *testing.T) {
+	// A bundle asking for a supported bit (CapOpcodeSet) AND an unknown bit
+	// must report only the unsupported subset in the "unsupported" mask —
+	// not the full requested mask.
+	err := UnsupportedCapabilityError(CapOpcodeSet | 0x2)
+	msg := err.Error()
+	if !strings.Contains(msg, "unsupported capabilities: unknown bit 1 (0x2) (mask 0x00000002)") {
+		t.Fatalf("unsupported section should describe only bit 1 with mask 0x2, got: %s", msg)
+	}
+	if strings.Contains(msg, "mask 0x00000003") {
+		t.Fatalf("unsupported mask must not include the supported bit, got: %s", msg)
+	}
+}
+
 func TestFormatVersionReport(t *testing.T) {
 	got := FormatVersionReport("lg", "1.99.0 (deadbee)")
 	for _, want := range []string{

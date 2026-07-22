@@ -99,7 +99,7 @@ func UnsupportedCapabilityError(caps uint32) error {
 	unsupported := caps &^ SupportedCapabilities
 	msg := fmt.Sprintf(
 		"unsupported capabilities: %s (mask 0x%08x); runtime supports: %s (mask 0x%08x)",
-		DescribeCapabilities(unsupported), caps,
+		DescribeCapabilities(unsupported), unsupported,
 		DescribeCapabilities(SupportedCapabilities), SupportedCapabilities)
 	if min := MinVersionForCapabilities(unsupported); min != "" {
 		msg += fmt.Sprintf("; needs lg >= v%s", min)
