@@ -385,9 +385,51 @@ type Frame struct {
 	debug       bool
 	handlers    []exHandler  // exception handler stack (nil when unused)
 	ec          *ExecContext // per-execution context (dynamic bindings); nil = none installed
+	arena       *frameArena  // call-tree freelist; nil ⇒ global mutex pool
+	ownedArena  frameArena   // nested-frame batch when this is a top-level root
 }
 
-// Frame reuse via a mutex-guarded LIFO.
+// frameArena is a lock-free LIFO freelist checked out by one top-level invoke
+// and shared with every nested bytecode frame in that call tree. Concurrent
+// top-level invokes each check out their own arena, so there is no
+// cross-goroutine sharing and no mutex on the hot nested-call path.
+//
+// This removes global frame-pool mutex traffic from recursive OP_INVOKE. It
+// does not eliminate the Go-recursive Frame.Run; that remains
+// tracked by #464.
+type frameArena struct {
+	seed *Frame
+	free []*Frame
+}
+
+func (a *frameArena) get() *Frame {
+	if a.seed != nil {
+		f := a.seed
+		a.seed = nil
+		return f
+	}
+	n := len(a.free)
+	if n == 0 {
+		return &Frame{}
+	}
+	f := a.free[n-1]
+	a.free[n-1] = nil
+	a.free = a.free[:n-1]
+	return f
+}
+
+func (a *frameArena) put(f *Frame) {
+	if &f.ownedArena == a {
+		a.seed = f
+		return
+	}
+	if len(a.free) < framePoolCap {
+		a.free = append(a.free, f)
+	}
+}
+
+// Frame reuse via a mutex-guarded LIFO — fallback for NewFrame callers that
+// are not inside an invoke tree (tests, one-shot eval, host entry points).
 //
 // We previously used sync.Pool, but profiling fib(30) showed ~25% of
 // CPU went to pool overhead (sync.(*Pool).Get/Put/pin) because the
@@ -396,6 +438,10 @@ type Frame struct {
 // Get/Put for the common single-goroutine case, and still safe under
 // multi-goroutine workloads (per the async/go macro).
 //
+// Hot bytecode recursion checks this pool out once: Func/Closure.invokeIn
+// threads a frameArena through nested bytecode calls and returns the batch when
+// the top-level invocation completes.
+//
 // The stack is capped at framePoolCap entries — beyond that, frames
 // returned to the pool are dropped and left for GC. This bounds the
 // memory let-go keeps live and matches sync.Pool's eventual-GC behavior.
@@ -403,9 +449,55 @@ type Frame struct {
 const framePoolCap = 256
 
 var (
-	framePoolMu    sync.Mutex
-	framePoolStack []*Frame // LIFO; pop from end
+	framePoolMu        sync.Mutex
+	framePoolStack     []*Frame // standalone NewFrame callers
+	frameArenaRoots    []*Frame // roots retaining their nested-frame batches
+	frameArenaRetained int
 )
+
+// acquireFrameArena checks out a root and its nested-frame batch for one call
+// tree. Keeping the batch embedded in the root preserves nested reuse across
+// top-level calls without an extra arena allocation or per-nested-call locks.
+func acquireFrameArena() *frameArena {
+	framePoolMu.Lock()
+	var root *Frame
+	if n := len(frameArenaRoots); n > 0 {
+		root = frameArenaRoots[n-1]
+		frameArenaRoots[n-1] = nil
+		frameArenaRoots = frameArenaRoots[:n-1]
+		frameArenaRetained -= 1 + len(root.ownedArena.free)
+	} else {
+		root = &Frame{}
+	}
+	framePoolMu.Unlock()
+	arena := &root.ownedArena
+	arena.seed = root
+	return arena
+}
+
+// releaseFrameArena returns the root with its nested-frame batch. Arena-owned
+// frames have a separate global retention cap from standalone NewFrame callers,
+// so neither cache can starve the other and total retained memory stays bounded.
+func releaseFrameArena(arena *frameArena) {
+	framePoolMu.Lock()
+	if arena.seed == nil || len(frameArenaRoots) >= framePoolCap || frameArenaRetained >= framePoolCap {
+		arena.seed = nil
+		clear(arena.free)
+		arena.free = arena.free[:0]
+		framePoolMu.Unlock()
+		return
+	}
+	room := framePoolCap - frameArenaRetained - 1
+	if room < len(arena.free) {
+		clear(arena.free[room:])
+		arena.free = arena.free[:room]
+	}
+	root := arena.seed
+	arena.seed = nil
+	frameArenaRetained += 1 + len(arena.free)
+	frameArenaRoots = append(frameArenaRoots, root)
+	framePoolMu.Unlock()
+}
 
 func acquireFrame() *Frame {
 	framePoolMu.Lock()
@@ -430,8 +522,7 @@ func releaseFrame(f *Frame) {
 	framePoolMu.Unlock()
 }
 
-func NewFrame(code *CodeChunk, args []Value) *Frame {
-	f := acquireFrame()
+func initFrame(f *Frame, code *CodeChunk, args []Value, arena *frameArena) {
 	needed := max(code.maxStack, 4)
 	if cap(f.stack) >= needed {
 		f.stack = f.stack[:needed]
@@ -448,21 +539,47 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 	f.sp = 0
 	f.debug = false
 	f.ec = nil
+	f.arena = arena
 	if f.handlers != nil {
 		f.handlers = f.handlers[:0]
 	}
+}
+
+func newFrameIn(arena *frameArena, code *CodeChunk, args []Value) *Frame {
+	var f *Frame
+	if arena != nil {
+		f = arena.get()
+	} else {
+		f = acquireFrame()
+	}
+	initFrame(f, code, args, arena)
 	return f
 }
 
-// ReleaseFrame returns a frame to the pool.
-// We don't clear stack slots — they'll be overwritten on reuse.
-// We only nil out the large reference fields to avoid pinning code/const objects.
-func ReleaseFrame(f *Frame) {
+func NewFrame(code *CodeChunk, args []Value) *Frame {
+	return newFrameIn(nil, code, args)
+}
+
+func clearFrameRefs(f *Frame) {
 	f.args = nil
 	f.closedOvers = nil
 	f.consts = nil
 	f.code = nil
 	f.handlers = nil
+	f.ec = nil
+	f.arena = nil
+}
+
+// ReleaseFrame returns a frame to its arena (lock-free) or the global pool.
+// We don't clear stack slots — they'll be overwritten on reuse.
+// We only nil out the large reference fields to avoid pinning code/const objects.
+func ReleaseFrame(f *Frame) {
+	if a := f.arena; a != nil {
+		clearFrameRefs(f)
+		a.put(f)
+		return
+	}
+	clearFrameRefs(f)
 	releaseFrame(f)
 }
 
@@ -702,7 +819,7 @@ func (f *Frame) Run() (Value, error) {
 				if err != nil {
 					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 				}
-				out, err = f.ec.Invoke(fn, a)
+				out, err = invokeWithArena(f.ec, f.arena, fn, a)
 				if err != nil {
 					srcInfo := f.code.LookupSource(f.ip)
 					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
@@ -724,7 +841,7 @@ func (f *Frame) Run() (Value, error) {
 				if !ok {
 					return NIL, NewTypeError(fraw, "is not a function", nil)
 				}
-				out, err = f.ec.Invoke(fn, nil)
+				out, err = invokeWithArena(f.ec, f.arena, fn, nil)
 				if err != nil {
 					srcInfo := f.code.LookupSource(f.ip)
 					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)

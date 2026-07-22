@@ -103,8 +103,15 @@ func (l *Func) Invoke(pargs []Value) (result Value, err error) {
 
 // invokeIn runs the function with the given ExecContext active in its frame,
 // so dynamic bindings propagate into the call. Invoke is invokeIn against the
-// root context.
+// root context. Top-level entry checks out a call-tree arena so nested
+// bytecode calls can reuse frames without the global pool mutex.
 func (l *Func) invokeIn(ec *ExecContext, pargs []Value) (result Value, err error) {
+	arena := acquireFrameArena()
+	defer releaseFrameArena(arena)
+	return l.invokeInArena(ec, arena, pargs)
+}
+
+func (l *Func) invokeInArena(ec *ExecContext, arena *frameArena, pargs []Value) (result Value, err error) {
 	args := pargs
 	if l.isVariadric {
 		if len(args) < l.arity-1 {
@@ -120,7 +127,7 @@ func (l *Func) invokeIn(ec *ExecContext, pargs []Value) (result Value, err error
 	} else if len(args) != l.arity {
 		return NIL, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", l, l.arity, len(args)))
 	}
-	f := NewFrame(l.chunk, args)
+	f := newFrameIn(arena, l.chunk, args)
 	f.ec = ec
 	result, err = f.Run()
 	ReleaseFrame(f)
@@ -206,6 +213,12 @@ func (l *Closure) Invoke(pargs []Value) (result Value, err error) {
 // so dynamic bindings propagate into the call. Invoke delegates to invokeIn
 // against the root context.
 func (l *Closure) invokeIn(ec *ExecContext, pargs []Value) (result Value, err error) {
+	arena := acquireFrameArena()
+	defer releaseFrameArena(arena)
+	return l.invokeInArena(ec, arena, pargs)
+}
+
+func (l *Closure) invokeInArena(ec *ExecContext, arena *frameArena, pargs []Value) (result Value, err error) {
 	if f, ok := l.fn.(*Func); ok {
 		args := pargs
 		if f.isVariadric {
@@ -222,7 +235,7 @@ func (l *Closure) invokeIn(ec *ExecContext, pargs []Value) (result Value, err er
 		} else if len(args) != f.arity {
 			return NIL, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", l, f.arity, len(args)))
 		}
-		frame := NewFrame(f.chunk, args)
+		frame := newFrameIn(arena, f.chunk, args)
 		frame.closedOvers = l.closedOvers
 		frame.ec = ec
 		result, err = frame.Run()
@@ -246,9 +259,9 @@ func (l *Closure) invokeIn(ec *ExecContext, pargs []Value) (result Value, err er
 				closedOvers: l.closedOvers,
 				fn:          f,
 			}
-			return subClosure.invokeIn(ec, pargs)
+			return subClosure.invokeInArena(ec, arena, pargs)
 		}
-		return ec.Invoke(variant, pargs)
+		return invokeWithArena(ec, arena, variant, pargs)
 	}
 
 	return NIL, NewExecutionError("unsupported closure function type")
@@ -314,14 +327,42 @@ func (l *MultiArityFn) Invoke(pargs []Value) (Value, error) {
 // so dynamic bindings propagate into the selected variant's call. Invoke delegates
 // to invokeIn against the root context.
 func (l *MultiArityFn) invokeIn(ec *ExecContext, pargs []Value) (Value, error) {
+	arena := acquireFrameArena()
+	defer releaseFrameArena(arena)
+	return l.invokeInArena(ec, arena, pargs)
+}
+
+func (l *MultiArityFn) invokeInArena(ec *ExecContext, arena *frameArena, pargs []Value) (Value, error) {
 	le := len(pargs)
 	if f, ok := l.fns[le]; ok {
-		return ec.Invoke(f, pargs)
+		return invokeWithArena(ec, arena, f, pargs)
 	}
 	if l.rest != nil && le >= l.rest.Arity() {
-		return ec.Invoke(l.rest, pargs)
+		return invokeWithArena(ec, arena, l.rest, pargs)
 	}
 	return NIL, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", l, le))
+}
+
+// invokeWithArena is the nested-call entry used by bytecode calls: it keeps the
+// call-tree frameArena so recursive bytecode frames reuse without the global
+// pool mutex. Non-frame callees (natives, protocols, …) fall through to
+// ec.Invoke.
+func invokeWithArena(ec *ExecContext, arena *frameArena, fn Fn, args []Value) (Value, error) {
+	if arena == nil {
+		return ec.orRoot().Invoke(fn, args)
+	}
+	switch f := fn.(type) {
+	case *MetaFn:
+		return invokeWithArena(ec, arena, f.Wrapped(), args)
+	case *Func:
+		return f.invokeInArena(ec, arena, args)
+	case *Closure:
+		return f.invokeInArena(ec, arena, args)
+	case *MultiArityFn:
+		return f.invokeInArena(ec, arena, args)
+	default:
+		return ec.orRoot().Invoke(fn, args)
+	}
 }
 
 func (l *MultiArityFn) String() string {
