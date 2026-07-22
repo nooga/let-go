@@ -728,20 +728,22 @@ func (c *Context) compileForm(o vm.Value) error {
 		// Non-tail self-call: invoke the enclosing defn's chunk directly.
 		// Tail self-calls keep LOAD_VAR + OP_TAIL_CALL (already frame-reusing).
 		if !tp && fn.Type() == vm.SymbolType && c.canCallSelf(fn.(vm.Symbol), argc) {
-			// Keep the defining Var on the stack so CALL_SELF can verify that
-			// its current binding still selects this chunk. Redefinition and
-			// with-redefs must fall back to ordinary invocation semantics.
-			c.emitWithArg(vm.OP_LOAD_CONST, c.constant(c.selfVar))
-			c.incSP(1)
 			for a := lst.Next(); a != nil; a = a.Next() {
 				err := c.compileForm(a.First())
 				if err != nil {
 					return NewCompileError("compiling arguments " + a.First().String()).Wrap(err)
 				}
 			}
+			// CALL_SELF carries both argc and the defining Var's constant index;
+			// the runtime guard can therefore avoid a separate LOAD_CONST opcode.
 			c.emitWithArg(vm.OP_CALL_SELF, argc)
-			// self Var + argc args -> 1 result
-			c.decSP(argc)
+			c.chunk.Append32(c.constant(c.selfVar))
+			// argc args -> 1 result
+			if argc == 0 {
+				c.incSP(1)
+			} else {
+				c.decSP(argc - 1)
+			}
 			c.tailPosition = tp
 			return nil
 		}

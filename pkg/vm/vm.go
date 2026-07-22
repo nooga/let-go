@@ -72,8 +72,8 @@ const (
 	OP_FINALLY_END // end of a finally block (finallyOffset int32, negative): rethrow the pending error after an abnormal entry
 
 	// OP_CALL_SELF invokes the currently executing chunk as a nested call
-	// (argc int32) when the defining Var below the args still selects that
-	// chunk; redefinitions fall back to ordinary invocation. The compiler
+	// (argc int32, defining Var const index int32) when that Var still selects
+	// the chunk; redefinitions fall back to ordinary invocation. The compiler
 	// emits this for non-tail self-calls inside a top-level defn body.
 	OP_CALL_SELF
 
@@ -245,7 +245,12 @@ func (c *CodeChunk) Debug() {
 			arg3, _ := c.Get32(i + 3)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2, arg3)
 			i += 4
-		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY, OP_TAIL_CALL, OP_FINALLY_END, OP_CALL_SELF:
+		case OP_CALL_SELF:
+			arg, _ := c.Get32(i + 1)
+			arg2, _ := c.Get32(i + 2)
+			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2)
+			i += 3
+		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY, OP_TAIL_CALL, OP_FINALLY_END:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 2
@@ -625,25 +630,25 @@ func (f *Frame) RunProtected() (result Value, err error) {
 	return f.Run()
 }
 
-// selfCallTargetsChunk reports whether the Var's current callable selects the
-// chunk already running in this frame for arity. This is the guard that keeps
+// selfCallTarget reports whether value selects the chunk already running in
+// this frame for arity and returns that direct function. This is the guard that keeps
 // CALL_SELF compatible with re-def, alter-var-root, with-redefs, and dynamic
 // bindings: an override falls back to the ordinary ExecContext invocation.
-func selfCallTargetsChunk(fn Fn, arity int, code *CodeChunk) bool {
+func selfCallTarget(value Value, arity int, code *CodeChunk) (Fn, bool) {
 	for {
-		switch target := fn.(type) {
+		switch target := value.(type) {
 		case *MetaFn:
-			fn = target.Wrapped()
+			value = target.Wrapped()
 		case *Func:
-			return !target.isVariadric && target.arity == arity && target.chunk == code
+			return target, !target.isVariadric && target.arity == arity && target.chunk == code
 		case *MultiArityFn:
 			variant, ok := target.fns[arity]
 			if !ok {
-				return false
+				return nil, false
 			}
-			fn = variant
+			value = variant
 		default:
-			return false
+			return nil, false
 		}
 	}
 }
@@ -772,25 +777,31 @@ func (f *Frame) Run() (Value, error) {
 
 		case OP_CALL_SELF:
 			// Guarded nested call of the currently executing chunk. The defining
-			// Var sits below the args; if its current binding still selects this
-			// chunk, skip generic dispatch. Otherwise preserve normal Var call
-			// semantics by invoking the current binding through the ExecContext.
+			// Var's constant index is encoded after argc; if its current binding
+			// still selects this chunk, skip generic dispatch. Otherwise preserve
+			// normal Var call semantics through the ExecContext.
 			arity := int(f.code.code[f.ip+1])
-			selfRaw, err := f.nth(arity)
-			if err != nil {
-				return NIL, NewExecutionError("call-self loading Var failed").Wrap(err)
+			selfIdx := int(f.code.code[f.ip+2])
+			if selfIdx < 0 || selfIdx >= f.constsc {
+				return NIL, NewExecutionError("call-self Var lookup out of bounds")
 			}
-			selfVar, ok := selfRaw.(*Var)
+			selfVar, ok := f.consts.get(selfIdx).(*Var)
 			if !ok {
 				return NIL, NewExecutionError("call-self expected defining Var")
 			}
 			calleeRaw := f.ec.deref(selfVar)
-			fn, ok := AsFn(calleeRaw)
-			if !ok {
-				return NIL, NewTypeError(calleeRaw, "is not a function", nil)
+			fn, direct := selfCallTarget(calleeRaw, arity, f.code)
+			if !direct {
+				fn, ok = AsFn(calleeRaw)
+				if !ok {
+					return NIL, NewTypeError(calleeRaw, "is not a function", nil)
+				}
 			}
 
-			var rawArgs []Value
+			var (
+				rawArgs []Value
+				err     error
+			)
 			if arity > 0 {
 				rawArgs, err = f.mult(0, arity)
 				if err != nil {
@@ -799,15 +810,12 @@ func (f *Frame) Run() (Value, error) {
 			}
 
 			var out Value
-			if selfCallTargetsChunk(fn, arity, f.code) {
-				// Copy off the caller stack so the child frame does not retain
-				// the caller's stack backing array (see vm-performance-optimization.md).
-				var args []Value
-				if arity > 0 {
-					args = make([]Value, arity)
-					copy(args, rawArgs)
-				}
-				child := NewFrame(f.code, args)
+			if direct {
+				// The child runs synchronously and ReleaseFrame clears args before
+				// the caller resumes, so borrowing the caller-stack slice cannot
+				// extend its lifetime. This matches the existing OP_INVOKE path and
+				// avoids one allocation per recursive call.
+				child := NewFrame(f.code, rawArgs)
 				child.ec = f.ec
 				out, err = child.Run()
 				ReleaseFrame(child)
@@ -822,13 +830,13 @@ func (f *Frame) Run() (Value, error) {
 				}
 				return NIL, wrapped
 			}
-			if err := f.drop(arity + 1); err != nil {
+			if err := f.drop(arity); err != nil {
 				return NIL, NewExecutionError("call-self cleaning stack after call").Wrap(err)
 			}
 			if err := f.push(out); err != nil {
 				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
 			}
-			f.ip += 2
+			f.ip += 3
 
 		case OP_TAIL_CALL:
 			arity := f.code.code[f.ip+1]

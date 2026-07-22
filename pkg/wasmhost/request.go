@@ -385,12 +385,14 @@ func opcodeStride(op int32) int {
 	switch op & 0xff {
 	case vm.OP_TRY_PUSH:
 		return 3
+	case vm.OP_CALL_SELF:
+		return 3
 	case vm.OP_RECUR:
 		return 4
 	case vm.OP_LOAD_ARG, vm.OP_BRANCH_TRUE, vm.OP_BRANCH_FALSE, vm.OP_JUMP,
 		vm.OP_POP_N, vm.OP_DUP_NTH, vm.OP_INVOKE, vm.OP_LOAD_CLOSEDOVER,
 		vm.OP_RECUR_FN, vm.OP_MAKE_MULTI_ARITY, vm.OP_TAIL_CALL,
-		vm.OP_LOAD_CONST, vm.OP_LOAD_VAR, vm.OP_FINALLY_END, vm.OP_CALL_SELF:
+		vm.OP_LOAD_CONST, vm.OP_LOAD_VAR, vm.OP_FINALLY_END:
 		return 2
 	default:
 		return 1
