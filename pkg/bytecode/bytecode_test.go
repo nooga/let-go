@@ -1143,11 +1143,16 @@ func TestUnsupportedCapabilityMask(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported capability mask")
 	}
-	if !strings.Contains(err.Error(), "unsupported capability mask") {
-		t.Fatalf("expected 'unsupported capability mask' in error, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "recompile it with a matching lg") {
-		t.Fatalf("expected the recompile hint in error, got: %v", err)
+	msg := err.Error()
+	for _, want := range []string{
+		"unsupported capabilities",
+		"unknown bit 1",
+		"CapOpcodeSet",
+		"recompile the bundle with a matching lg",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected %q in error, got: %v", want, err)
+		}
 	}
 }
 
