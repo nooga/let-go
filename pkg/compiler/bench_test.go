@@ -47,7 +47,11 @@ func benchExec(b *testing.B, src string) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		f := vm.NewFrame(chunk, nil)
-		f.Run()
+		_, runErr := f.Run()
+		vm.ReleaseFrame(f)
+		if runErr != nil {
+			b.Fatal(runErr)
+		}
 	}
 }
 
