@@ -43,7 +43,17 @@ func (n *NS) Def(name string, value any) error {
 // (:refer-clojure :exclude [name]). The definition is silent and
 // unqualified references in the namespace resolve to it instead of the
 // core var.
+//
+// Boxing happens before any namespace mutation: if value is unboxable the
+// namespace is left untouched, so a failed call is a true no-op rather than
+// leaving name excluded-but-undefined (which would silently strip the
+// unqualified clojure.core/<name> resolution).
 func (n *NS) DefShadowing(name string, value any) error {
+	val, err := vm.BoxValue(reflect.ValueOf(value))
+	if err != nil {
+		return err
+	}
 	n.ns.Exclude(name)
-	return n.Def(name, value)
+	n.ns.Def(name, val)
+	return nil
 }

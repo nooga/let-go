@@ -52,6 +52,25 @@ func TestNSDefShadowing(t *testing.T) {
 	assert.Equal(t, "(1 3)", v.String())
 }
 
+// TestNSDefShadowingFailureLeavesNamespaceUntouched pins the atomicity
+// fix: when the value is unboxable, DefShadowing returns an error before
+// mutating the namespace, so the name is not left excluded-but-undefined.
+// An unqualified reference must still resolve to clojure.core.
+func TestNSDefShadowingFailureLeavesNamespaceUntouched(t *testing.T) {
+	lg, err := api.NewLetGo("nsshadow-fail-test")
+	assert.NoError(t, err)
+
+	ns := lg.NS("nsshadow-fail-test")
+	// nil is unboxable: DefShadowing must fail before Exclude runs.
+	assert.Error(t, ns.DefShadowing("filter", nil))
+
+	// The failed call was a no-op: unqualified `filter` still resolves to
+	// clojure.core's lazy-seq filter rather than to nothing.
+	v, err := lg.Run("(filter odd? [1 2 3])")
+	assert.NoError(t, err)
+	assert.Equal(t, "(1 3)", v.String())
+}
+
 // TestNSCreatesNamespace pins resolve-or-create: NS on a name that was
 // never mentioned before returns a usable handle rather than nil.
 func TestNSCreatesNamespace(t *testing.T) {
