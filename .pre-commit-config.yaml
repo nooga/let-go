@@ -96,7 +96,7 @@ repos:
       - id: go-test
         name: go test ./... -skip TestClojureTestSuite
         description: Run Go test suite excluding the slow Clojure compat suite (mirrors CI test step)
-        entry: go test -timeout 60s ./... -skip TestClojureTestSuite
+        entry: go test -short -timeout 60s ./... -skip TestClojureTestSuite
         language: system
         types: [go]
         pass_filenames: false
