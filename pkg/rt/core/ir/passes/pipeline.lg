@@ -1513,31 +1513,51 @@
    are their own callable name — no `LG_` forwarding wrapper), so a cross-package
    call resolves to `pkg.Conj(ec,…)`. :refs are the cross-ns callees it references
    (same-ns calls filtered — those resolve intra-package with no import)."
-  (binding [*ns* (the-ns ns-sym)
-            ir.passes.typeinfer/*typeinfer-max-drains* nil
-            ;; Same pure map bound in lower-ns-to-go so the registry's :go-name and
-            ;; the emitted decl agree on a collision-resolved export name.
-            lower-go/*export-name-overrides* (lower-go/build-export-name-map forms)]
-    (let [cross   (atom {})
-          results (binding [lower-go/*cross-ns-vars-used* cross]
-                    (lower-defn-forms (order-defn-forms forms)))
-          exports (reduce
-                    (fn [m r]
-                      (let [base (when (:decl r)
-                                   (lower-go/registry-entry-from-result r ns-sym pkg-name))]
-                        (if base
-                          (into m (map (fn [kv]
-                                         [(key kv) (assoc (val kv)
-                                                          :go-pkg  import-path)])
-                                       base))
-                          m)))
-                    {} results)
-          ns-str  (str ns-sym)
-          refs    (reduce (fn [s kv]
-                            (let [k (key kv)]      ; k = [ns-str name-str]
-                              (if (= (first k) ns-str) s (conj s k))))
-                          #{} @cross)]
-      {:exports exports :refs refs})))
+  ;; Derive this ns's OWN deftype/protocol registries (mirrors lower-ns-to-go)
+  ;; and bind them BEFORE lowering computes :needs-error?, so the cross-package
+  ;; effect recorded here matches lower-ns-to-go's emitted signature. Without
+  ;; them, call-error-free? cannot see the ns's protocol methods, so a fn that
+  ;; devirtualizes protocol dispatch (1-value) is recorded as error-producing
+  ;; (2-value) — a cross-package disagreement that miscompiles the caller
+  ;; (`v, callErr = OneValueFn(...)` against a `(vm.Value)` signature).
+  (let [decl-form?  (fn [form]
+                      (and (seq? form)
+                           (contains? #{'defprotocol 'deftype 'defmulti 'defmethod} (first form))))
+        decl-forms  (filterv decl-form? forms)
+        captures    (mapv (fn [form] (binding [*target* :go] (compile-form* form))) decl-forms)
+        protocols   (filterv (fn [c] (= :defprotocol (:decl-kind c))) captures)
+        deftypes    (filterv (fn [c] (= :deftype (:decl-kind c))) captures)
+        protocol-method-set (into #{} (mapcat (fn [p] (map (fn [m] (str (first m))) (:methods p))) protocols))
+        ctors       (into {} (map (fn [dt] [(str "->" (:name dt)) (lower-go/go-export-name (:name dt))]) deftypes))]
+    (binding [*ns* (the-ns ns-sym)
+              ir.passes.typeinfer/*typeinfer-max-drains* nil
+              ;; Same pure map bound in lower-ns-to-go so the registry's :go-name and
+              ;; the emitted decl agree on a collision-resolved export name.
+              lower-go/*export-name-overrides* (lower-go/build-export-name-map forms)
+              lower-go/*deftype-ctors* (when (seq ctors) ctors)
+              lower-go/*protocol-methods* (when (seq protocol-method-set) protocol-method-set)
+              lower-go/*protocol-method-sigs* (let [s (protocol-method-sigs deftypes)]
+                                                (when (seq s) s))]
+      (let [cross   (atom {})
+            results (binding [lower-go/*cross-ns-vars-used* cross]
+                      (lower-defn-forms (order-defn-forms forms)))
+            exports (reduce
+                      (fn [m r]
+                        (let [base (when (:decl r)
+                                     (lower-go/registry-entry-from-result r ns-sym pkg-name))]
+                          (if base
+                            (into m (map (fn [kv]
+                                           [(key kv) (assoc (val kv)
+                                                            :go-pkg  import-path)])
+                                         base))
+                            m)))
+                      {} results)
+            ns-str  (str ns-sym)
+            refs    (reduce (fn [s kv]
+                              (let [k (key kv)]      ; k = [ns-str name-str]
+                                (if (= (first k) ns-str) s (conj s k))))
+                            #{} @cross)]
+        {:exports exports :refs refs}))))
 
 (defn- cross-pkg-owners [global-reg]
   "Internal-ns symbols that OWN at least one cross-package export — i.e. the
