@@ -191,9 +191,11 @@ pkg/rt/.core_compiled.lgb.committed
 # the untagged build and shipped bytecode binary never need them.
 pkg/rt/generated.provenance
 pkg/rt/core_go_lowered/
-# Staging sibling that --target=go generates into before the atomic swap into
-# core_go_lowered/. A successful install renames it away; ignore any residue
-# from an interrupted run so it never gets committed.
+# Legacy in-tree staging residue. --target=go now generates into an OS tempdir
+# (out of the module tree) and COPIES into core_go_lowered/, so no in-tree
+# staging dir is created and `go test/build ./...` can never compile a
+# half-written residue from a hard-killed run. This entry only ignores residue
+# from older checkouts / an interrupted pre-fix run so it never gets committed.
 pkg/rt/core_go_lowered.stage/
 /lg_gogen_ir.go
 /cmd/lgbgen/main_gogen_ir.go
