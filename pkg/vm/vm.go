@@ -72,9 +72,9 @@ const (
 	OP_FINALLY_END // end of a finally block (finallyOffset int32, negative): rethrow the pending error after an abnormal entry
 
 	// OP_CALL_SELF invokes the currently executing chunk as a nested call
-	// (argc int32). Unlike OP_INVOKE it does not load a callee from the
-	// stack — args only. The compiler emits this for non-tail self-calls
-	// inside a top-level defn body (see compiler.canCallSelf).
+	// (argc int32) when the defining Var below the args still selects that
+	// chunk; redefinitions fall back to ordinary invocation. The compiler
+	// emits this for non-tail self-calls inside a top-level defn body.
 	OP_CALL_SELF
 
 	OP_COUNT // sentinel — keep last; must equal len(opcodeNames) (enforced at init)
@@ -625,6 +625,29 @@ func (f *Frame) RunProtected() (result Value, err error) {
 	return f.Run()
 }
 
+// selfCallTargetsChunk reports whether the Var's current callable selects the
+// chunk already running in this frame for arity. This is the guard that keeps
+// CALL_SELF compatible with re-def, alter-var-root, with-redefs, and dynamic
+// bindings: an override falls back to the ordinary ExecContext invocation.
+func selfCallTargetsChunk(fn Fn, arity int, code *CodeChunk) bool {
+	for {
+		switch target := fn.(type) {
+		case *MetaFn:
+			fn = target.Wrapped()
+		case *Func:
+			return !target.isVariadric && target.arity == arity && target.chunk == code
+		case *MultiArityFn:
+			variant, ok := target.fns[arity]
+			if !ok {
+				return false
+			}
+			fn = variant
+		default:
+			return false
+		}
+	}
+}
+
 func (f *Frame) Run() (Value, error) {
 	if allocAttrEnabled {
 		attrPushFrame(f)
@@ -748,35 +771,59 @@ func (f *Frame) Run() (Value, error) {
 			f.ip += 2
 
 		case OP_CALL_SELF:
-			// Nested call of the currently executing chunk. No callee on the
-			// stack — skips AsFn / ec.Invoke / arity re-check. Still allocates
-			// a child Frame (same as Func.invokeIn); this is not TCO.
+			// Guarded nested call of the currently executing chunk. The defining
+			// Var sits below the args; if its current binding still selects this
+			// chunk, skip generic dispatch. Otherwise preserve normal Var call
+			// semantics by invoking the current binding through the ExecContext.
 			arity := int(f.code.code[f.ip+1])
-			var args []Value
+			selfRaw, err := f.nth(arity)
+			if err != nil {
+				return NIL, NewExecutionError("call-self loading Var failed").Wrap(err)
+			}
+			selfVar, ok := selfRaw.(*Var)
+			if !ok {
+				return NIL, NewExecutionError("call-self expected defining Var")
+			}
+			calleeRaw := f.ec.deref(selfVar)
+			fn, ok := AsFn(calleeRaw)
+			if !ok {
+				return NIL, NewTypeError(calleeRaw, "is not a function", nil)
+			}
+
+			var rawArgs []Value
 			if arity > 0 {
-				raw, err := f.mult(0, arity)
+				rawArgs, err = f.mult(0, arity)
 				if err != nil {
 					return NIL, NewExecutionError("call-self popping arguments failed").Wrap(err)
 				}
+			}
+
+			var out Value
+			if selfCallTargetsChunk(fn, arity, f.code) {
 				// Copy off the caller stack so the child frame does not retain
 				// the caller's stack backing array (see vm-performance-optimization.md).
-				args = make([]Value, arity)
-				copy(args, raw)
-				if err := f.drop(arity); err != nil {
-					return NIL, NewExecutionError("call-self cleaning stack after call").Wrap(err)
+				var args []Value
+				if arity > 0 {
+					args = make([]Value, arity)
+					copy(args, rawArgs)
 				}
+				child := NewFrame(f.code, args)
+				child.ec = f.ec
+				out, err = child.Run()
+				ReleaseFrame(child)
+			} else {
+				out, err = f.ec.Invoke(fn, rawArgs)
 			}
-			child := NewFrame(f.code, args)
-			child.ec = f.ec
-			out, err := child.Run()
-			ReleaseFrame(child)
 			if err != nil {
 				srcInfo := f.code.LookupSource(f.ip)
-				wrapped := NewExecutionError("calling self").WithSource(srcInfo).Wrap(err)
+				wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
 				if f.handleError(wrapped) {
 					continue
 				}
 				return NIL, wrapped
+			}
+			if err := f.drop(arity + 1); err != nil {
+				return NIL, NewExecutionError("call-self cleaning stack after call").Wrap(err)
 			}
 			if err := f.push(out); err != nil {
 				return NIL, NewExecutionError("pushing return value failed").Wrap(err)

@@ -19,6 +19,45 @@ func TestCallSelf_FibCorrectness(t *testing.T) {
 	assert.Equal(t, 55, out.Unbox())
 }
 
+func TestCallSelf_ObservesRedefinedVar(t *testing.T) {
+	_, err := Eval(`(defn call-self-redef [n]
+		(if (= n 0)
+			0
+			(do
+				(def call-self-redef (fn [_] 99))
+				(+ 1 (call-self-redef 0)))))`)
+	require.NoError(t, err)
+
+	out, err := Eval(`(call-self-redef 1)`)
+	require.NoError(t, err)
+	assert.Equal(t, 100, out.Unbox(), "self-call must invoke the Var's replacement root")
+}
+
+func TestCallSelf_NotEmittedForLexicallyNestedDefn(t *testing.T) {
+	_, err := Eval(`(let [captured 42]
+		(defn call-self-capturing [n]
+			(if (= n 0)
+				(+ 1 (call-self-capturing 1))
+				captured)))`)
+	require.NoError(t, err)
+
+	out, err := Eval(`(call-self-capturing 0)`)
+	require.NoError(t, err)
+	assert.Equal(t, 43, out.Unbox())
+}
+
+func TestCallSelf_NotEmittedForFunctionNestedInDefInitializer(t *testing.T) {
+	_, err := Eval(`(def call-self-container
+		[(fn [n]
+			(if (= n 0)
+				10
+				(+ 1 (call-self-container 0))))])`)
+	require.NoError(t, err)
+
+	_, err = Eval(`((first call-self-container) 1)`)
+	require.Error(t, err, "call must resolve call-self-container through its vector root")
+}
+
 func TestCallSelf_EmittedForNonTailSelfRecursion(t *testing.T) {
 	_, err := Eval(`(defn call-self-fib2 [n]
 		(if (< n 2) n (+ (call-self-fib2 (- n 1)) (call-self-fib2 (- n 2)))))`)

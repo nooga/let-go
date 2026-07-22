@@ -45,8 +45,14 @@ type Context struct {
 	tailPosition    bool
 	debug           bool
 	defName         string
-	currentForm     vm.Value // tracks the form being compiled for error source info
-	currentList     vm.Value // tracks the enclosing list form for error source info
+	// directDefVar is set only while compiling a direct, lexical-scope-free
+	// (def name (fn ...)) initializer. enterFn copies it to selfVar so
+	// OP_CALL_SELF is never inferred merely from a matching defName.
+	directDefVar *vm.Var
+	selfVar      *vm.Var
+	selfName     string
+	currentForm  vm.Value // tracks the form being compiled for error source info
+	currentList  vm.Value // tracks the enclosing list form for error source info
 }
 
 func NewCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
@@ -263,6 +269,10 @@ func (c *Context) enterFn(args []vm.Value) (*Context, error) {
 		closedOversSeq: []vm.Symbol{},
 		isFunction:     true,
 		tailPosition:   true,
+	}
+	if c.directDefVar != nil {
+		fc.selfVar = c.directDefVar
+		fc.selfName = c.defName
 	}
 
 	for i := range args {
@@ -718,6 +728,11 @@ func (c *Context) compileForm(o vm.Value) error {
 		// Non-tail self-call: invoke the enclosing defn's chunk directly.
 		// Tail self-calls keep LOAD_VAR + OP_TAIL_CALL (already frame-reusing).
 		if !tp && fn.Type() == vm.SymbolType && c.canCallSelf(fn.(vm.Symbol), argc) {
+			// Keep the defining Var on the stack so CALL_SELF can verify that
+			// its current binding still selects this chunk. Redefinition and
+			// with-redefs must fall back to ordinary invocation semantics.
+			c.emitWithArg(vm.OP_LOAD_CONST, c.constant(c.selfVar))
+			c.incSP(1)
 			for a := lst.Next(); a != nil; a = a.Next() {
 				err := c.compileForm(a.First())
 				if err != nil {
@@ -725,12 +740,8 @@ func (c *Context) compileForm(o vm.Value) error {
 				}
 			}
 			c.emitWithArg(vm.OP_CALL_SELF, argc)
-			// argc args -> 1 result (no fn slot on the stack)
-			if argc == 0 {
-				c.incSP(1)
-			} else {
-				c.decSP(argc - 1)
-			}
+			// self Var + argc args -> 1 result
+			c.decSP(argc)
 			c.tailPosition = tp
 			return nil
 		}
@@ -761,12 +772,10 @@ func (c *Context) compileForm(o vm.Value) error {
 }
 
 // canCallSelf reports whether a non-tail call of sym can be emitted as
-// OP_CALL_SELF: the symbol names the enclosing top-level def, the current
-// context is that def's non-closure non-variadic fn body, and argc matches
+// OP_CALL_SELF: the symbol names the direct top-level def initializer recorded
+// on this fn context, the body is non-closure/non-variadic, and argc matches
 // this chunk's arity. Multi-arity bodies that call a *different* arity
-// (argc != argCount) fall through to LOAD_VAR + INVOKE. Nested lambdas that
-// mention the outer def name also fall through — defName lives only on the
-// immediate parent Context that is compiling (def name (fn* …)).
+// (argc != argCount) fall through to LOAD_VAR + INVOKE.
 func (c *Context) canCallSelf(sym vm.Symbol, argc int) bool {
 	if sym.Namespace() != vm.NIL {
 		return false
@@ -780,10 +789,10 @@ func (c *Context) canCallSelf(sym vm.Symbol, argc int) bool {
 	if argc != c.argCount {
 		return false
 	}
-	if c.parent == nil || c.parent.defName == "" {
+	if c.selfVar == nil || c.selfName == "" {
 		return false
 	}
-	return string(sym) == c.parent.defName
+	return string(sym) == c.selfName
 }
 
 // tryFastOpcode returns a specialized opcode for known core builtins,
@@ -1930,6 +1939,33 @@ func metaValueAt(meta vm.Value, key vm.Value) vm.Value {
 	return vm.NIL
 }
 
+// directFnDefValue reports whether v is the direct function initializer of a
+// def. The marker is intentionally based on the outermost form: a function
+// nested in a vector, let, do, or other initializer is not the value named by
+// the Var and must not be treated as its self target.
+func directFnDefValue(v vm.Value) bool {
+	seq, ok := v.(vm.Seq)
+	if !ok || seq == nil {
+		return false
+	}
+	sym, ok := seq.First().(vm.Symbol)
+	if !ok {
+		return false
+	}
+	ns, name, hasNS := sym.NamespacedRaw()
+	if name != "fn" && name != "fn*" {
+		return false
+	}
+	return !hasNS || ns == "core" || ns == "clojure.core"
+}
+
+// selfCallDefScopeSafe limits CALL_SELF to genuinely top-level defs. A def
+// compiled inside a function or lexical scope may close over a binding that is
+// discovered only after an earlier recursive call has been emitted.
+func (c *Context) selfCallDefScopeSafe() bool {
+	return c.parent == nil && !c.isFunction && len(c.locals) == 0
+}
+
 func defCompiler(c *Context, form vm.Value) error {
 	tc := c.tailPosition
 	c.tailPosition = false
@@ -1969,8 +2005,18 @@ func defCompiler(c *Context, form vm.Value) error {
 	if doc != vm.NIL {
 		meta = assocMeta(meta, vm.Keyword("doc"), doc)
 	}
+	previousDefName := c.defName
+	previousDirectDefVar := c.directDefVar
 	c.defName = sym.String()
+	c.directDefVar = nil
+	defer func() {
+		c.defName = previousDefName
+		c.directDefVar = previousDirectDefVar
+	}()
 	varr := c.CurrentNS().LookupOrAdd(sym.(vm.Symbol))
+	if directFnDefValue(val) && c.selfCallDefScopeSafe() {
+		c.directDefVar = varr.(*vm.Var)
+	}
 	if meta != vm.NIL {
 		v := varr.(*vm.Var)
 		v.SetMeta(meta)
@@ -1991,7 +2037,6 @@ func defCompiler(c *Context, form vm.Value) error {
 		// or a value a later (def x v) will provide. The var itself is the
 		// expression result, already on the stack from OP_LOAD_CONST above.
 		c.tailPosition = tc
-		c.defName = ""
 		return nil
 	}
 	err := c.compileForm(val)
@@ -2001,7 +2046,6 @@ func defCompiler(c *Context, form vm.Value) error {
 	c.emit(vm.OP_SET_VAR)
 	c.decSP(1)
 	c.tailPosition = tc
-	c.defName = ""
 	return nil
 }
 
