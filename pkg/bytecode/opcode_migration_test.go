@@ -94,6 +94,28 @@ func TestMigrationRegistryLookup(t *testing.T) {
 	}
 }
 
+// TestPreCallSelfIdentityMigration registers an identity remap for the
+// CapOpcodeSet signature from immediately before OP_CALL_SELF was appended.
+func TestPreCallSelfIdentityMigration(t *testing.T) {
+	csCount, csHash := vm.ComputeSignatureForNames(preCallSelfOpcodeNames)
+	runtimeCount, runtimeHash := vm.OpcodeSetSignature()
+	if csCount == runtimeCount && csHash == runtimeHash {
+		t.Fatal("pre-CALL_SELF signature should differ from runtime (CALL_SELF should be present)")
+	}
+	remap := lookupMigration(csCount, csHash)
+	if remap == nil {
+		t.Fatal("migration registry should have an identity entry for the pre-CALL_SELF signature")
+	}
+	chunk := vm.NewCodeChunk(vm.NewConsts())
+	chunk.Append(vm.OP_ADD)
+	before := append([]int32(nil), chunk.Code()...)
+	remap([]*vm.CodeChunk{chunk})
+	got := chunk.Code()
+	if len(got) != len(before) || got[0] != before[0] {
+		t.Errorf("identity remap must leave code unchanged: got %v, want %v", got, before)
+	}
+}
+
 // TestLegacyBundleDecodeWithMigration encodes and decodes a v2 bundle, verifying
 // that the migration is applied when the runtime's signature differs from the
 // pre-removal signature.

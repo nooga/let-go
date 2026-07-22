@@ -65,6 +65,58 @@ var v2PreRemovalOpcodeNames = []string{
 	"DIV",
 }
 
+// preCallSelfOpcodeNames is the frozen opcode-name list from immediately
+// before OP_CALL_SELF was appended. CapOpcodeSet bundles compiled against
+// that set keep the same numeric opcodes (pure suffix append), so the
+// registered remap is a no-op — it only exists so decode accepts the old
+// signature.
+var preCallSelfOpcodeNames = []string{
+	"NOOP",
+	"LOAD_CONST",
+	"LOAD_ARG",
+	"INVOKE",
+	"RETURN",
+	"BRANCH_T",
+	"BRANCH_F",
+	"JUMP",
+	"POP",
+	"POP_N",
+	"DUP_NTH",
+	"SET_VAR",
+	"LOAD_VAR",
+	"MAKE_CLOSURE",
+	"LOAD_CLOSEDOVER",
+	"PUSH_CLOSEDOVER",
+	"RECUR",
+	"RECUR_FN",
+	"MAKE_MULTI_ARITY",
+	"TAIL_CALL",
+	"TRY_PUSH",
+	"TRY_POP",
+	"THROW",
+	"ADD",
+	"SUB",
+	"MUL",
+	"BIT_AND",
+	"BIT_OR",
+	"BIT_XOR",
+	"BIT_AND_NOT",
+	"BIT_SHIFT_LEFT",
+	"BIT_SHIFT_RIGHT",
+	"UNSIGNED_BIT_SHIFT_RIGHT",
+	"LT",
+	"LTE",
+	"GT",
+	"GTE",
+	"EQ",
+	"INC",
+	"DEC",
+	"BIT_NOT",
+	"QUOT",
+	"DIV",
+	"FINALLY_END",
+}
+
 // preRemovalSignature computes the opcode-set signature that would have been
 // produced by the VM when TRACE_ENABLE and TRACE_DISABLE were still in the
 // opcode list. Used to identify old bundles that need migration.
@@ -155,7 +207,17 @@ func init() {
 	// The registry key is [count, hash]. We use a generic key type
 	// ([2]interface{}) to support the signature tuple.
 	migrationRegistry[[2]interface{}{preCount, preHash}] = remapLegacyChunks
+
+	// OP_CALL_SELF was a pure suffix append: numeric opcodes unchanged.
+	// Register an identity remap so CapOpcodeSet bundles from the
+	// pre-CALL_SELF signature still load.
+	csCount, csHash := vm.ComputeSignatureForNames(preCallSelfOpcodeNames)
+	migrationRegistry[[2]interface{}{csCount, csHash}] = remapIdentityChunks
 }
+
+// remapIdentityChunks is the migration for pure suffix-append opcode-set
+// changes: instruction encodings are already valid under the new numbering.
+func remapIdentityChunks(_ []*vm.CodeChunk) {}
 
 // lookupMigration returns the remap function for a signature, or nil if not found.
 func lookupMigration(count int, hash uint64) remapFunc {

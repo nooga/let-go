@@ -71,6 +71,12 @@ const (
 
 	OP_FINALLY_END // end of a finally block (finallyOffset int32, negative): rethrow the pending error after an abnormal entry
 
+	// OP_CALL_SELF invokes the currently executing chunk as a nested call
+	// (argc int32). Unlike OP_INVOKE it does not load a callee from the
+	// stack — args only. The compiler emits this for non-tail self-calls
+	// inside a top-level defn body (see compiler.canCallSelf).
+	OP_CALL_SELF
+
 	OP_COUNT // sentinel — keep last; must equal len(opcodeNames) (enforced at init)
 )
 
@@ -123,6 +129,7 @@ var opcodeNames = []string{
 	"QUOT",
 	"DIV",
 	"FINALLY_END",
+	"CALL_SELF",
 }
 
 // A new opcode must land in both the const block and opcodeNames; the
@@ -238,7 +245,7 @@ func (c *CodeChunk) Debug() {
 			arg3, _ := c.Get32(i + 3)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg, arg2, arg3)
 			i += 4
-		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY, OP_TAIL_CALL, OP_FINALLY_END:
+		case OP_LOAD_ARG, OP_BRANCH_TRUE, OP_BRANCH_FALSE, OP_JUMP, OP_POP_N, OP_DUP_NTH, OP_INVOKE, OP_LOAD_CLOSEDOVER, OP_RECUR_FN, OP_MAKE_MULTI_ARITY, OP_TAIL_CALL, OP_FINALLY_END, OP_CALL_SELF:
 			arg, _ := c.Get32(i + 1)
 			fmt.Println("  ", i, ":", OpcodeToString(op), arg)
 			i += 2
@@ -736,6 +743,42 @@ func (f *Frame) Run() (Value, error) {
 			}
 			err := f.push(out)
 			if err != nil {
+				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
+			}
+			f.ip += 2
+
+		case OP_CALL_SELF:
+			// Nested call of the currently executing chunk. No callee on the
+			// stack — skips AsFn / ec.Invoke / arity re-check. Still allocates
+			// a child Frame (same as Func.invokeIn); this is not TCO.
+			arity := int(f.code.code[f.ip+1])
+			var args []Value
+			if arity > 0 {
+				raw, err := f.mult(0, arity)
+				if err != nil {
+					return NIL, NewExecutionError("call-self popping arguments failed").Wrap(err)
+				}
+				// Copy off the caller stack so the child frame does not retain
+				// the caller's stack backing array (see vm-performance-optimization.md).
+				args = make([]Value, arity)
+				copy(args, raw)
+				if err := f.drop(arity); err != nil {
+					return NIL, NewExecutionError("call-self cleaning stack after call").Wrap(err)
+				}
+			}
+			child := NewFrame(f.code, args)
+			child.ec = f.ec
+			out, err := child.Run()
+			ReleaseFrame(child)
+			if err != nil {
+				srcInfo := f.code.LookupSource(f.ip)
+				wrapped := NewExecutionError("calling self").WithSource(srcInfo).Wrap(err)
+				if f.handleError(wrapped) {
+					continue
+				}
+				return NIL, wrapped
+			}
+			if err := f.push(out); err != nil {
 				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
 			}
 			f.ip += 2

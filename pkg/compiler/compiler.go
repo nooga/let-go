@@ -715,6 +715,26 @@ func (c *Context) compileForm(o vm.Value) error {
 			}
 		}
 
+		// Non-tail self-call: invoke the enclosing defn's chunk directly.
+		// Tail self-calls keep LOAD_VAR + OP_TAIL_CALL (already frame-reusing).
+		if !tp && fn.Type() == vm.SymbolType && c.canCallSelf(fn.(vm.Symbol), argc) {
+			for a := lst.Next(); a != nil; a = a.Next() {
+				err := c.compileForm(a.First())
+				if err != nil {
+					return NewCompileError("compiling arguments " + a.First().String()).Wrap(err)
+				}
+			}
+			c.emitWithArg(vm.OP_CALL_SELF, argc)
+			// argc args -> 1 result (no fn slot on the stack)
+			if argc == 0 {
+				c.incSP(1)
+			} else {
+				c.decSP(argc - 1)
+			}
+			c.tailPosition = tp
+			return nil
+		}
+
 		// treat as function invocation if this is not a special form
 		err := c.compileForm(fn)
 		if err != nil {
@@ -738,6 +758,32 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.tailPosition = tp
 	}
 	return nil
+}
+
+// canCallSelf reports whether a non-tail call of sym can be emitted as
+// OP_CALL_SELF: the symbol names the enclosing top-level def, the current
+// context is that def's non-closure non-variadic fn body, and argc matches
+// this chunk's arity. Multi-arity bodies that call a *different* arity
+// (argc != argCount) fall through to LOAD_VAR + INVOKE. Nested lambdas that
+// mention the outer def name also fall through — defName lives only on the
+// immediate parent Context that is compiling (def name (fn* …)).
+func (c *Context) canCallSelf(sym vm.Symbol, argc int) bool {
+	if sym.Namespace() != vm.NIL {
+		return false
+	}
+	if c.symbolLookup(sym) != nil {
+		return false // local binding shadows the def name
+	}
+	if !c.isFunction || c.isClosure || c.variadric {
+		return false
+	}
+	if argc != c.argCount {
+		return false
+	}
+	if c.parent == nil || c.parent.defName == "" {
+		return false
+	}
+	return string(sym) == c.parent.defName
 }
 
 // tryFastOpcode returns a specialized opcode for known core builtins,
