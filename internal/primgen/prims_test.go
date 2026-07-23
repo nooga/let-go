@@ -41,7 +41,7 @@ func TestEmitAdapterAndRegistrar(t *testing.T) {
 		NeedsError: true,
 		Package:    "builtins",
 	}
-	output := emitFile([]primSpec{spec})
+	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt")
 
 	// Check for adapter function
 	if !strings.Contains(output, "func _adapt_UpperCase") {
@@ -110,7 +110,7 @@ func TestEmitFileDeterministic(t *testing.T) {
 	}
 
 	canonical := func() string {
-		out, err := gofmtCode(emitFile(specs))
+		out, err := gofmtCode(emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt"))
 		if err != nil {
 			t.Fatalf("gofmt generated primitives: %v", err)
 		}
@@ -162,7 +162,7 @@ func TestECEmission(t *testing.T) {
 		NeedsEC:    true,
 		Package:    "builtins",
 	}
-	output := emitFile([]primSpec{spec})
+	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt")
 
 	// Check that the ec-aware adapter has the correct signature
 	// func _adapt_Seq(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error)
@@ -219,7 +219,7 @@ func TestMultiArity(t *testing.T) {
 		Package:    "builtins",
 	}
 
-	output := emitFile([]primSpec{spec1, spec2})
+	output := emitFile([]primSpec{spec1, spec2}, "rt", "github.com/nooga/let-go/pkg/rt")
 
 	// Check for dispatch adapter with len(vs) switch
 	if !strings.Contains(output, "switch len(vs)") {
@@ -263,7 +263,7 @@ func TestGeneratedCodeParses(t *testing.T) {
 		NeedsError: true,
 		Package:    "builtins",
 	}
-	output := emitFile([]primSpec{spec})
+	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt")
 
 	fset := token.NewFileSet()
 	if _, err := parser.ParseFile(fset, "gen.go", output, 0); err != nil {
@@ -298,7 +298,7 @@ func TestMultiArityEC(t *testing.T) {
 		Package:    "builtins",
 	}
 
-	output := emitFile([]primSpec{spec1, spec2})
+	output := emitFile([]primSpec{spec1, spec2}, "rt", "github.com/nooga/let-go/pkg/rt")
 
 	// Check that dispatch adapter is ec-aware (signature includes ec *vm.ExecContext)
 	if !strings.Contains(output, "func _adapt_Foo(ec *vm.ExecContext, vs []vm.Value)") {
@@ -346,6 +346,21 @@ func TestMultiArityEC(t *testing.T) {
 func TestScanSourceParseErrorPropagates(t *testing.T) {
 	if _, err := scanSource("x.go", []byte("package m\nfunc {")); err == nil {
 		t.Fatal("expected parse error, got nil — a parse failure must not read as 'no primitives'")
+	}
+}
+
+func TestEmitFileUsesTargetPackageName(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt/corefns", Package: "corefns",
+		GoIdent: "Seq", Ns: "clojure.core", LgName: "seq",
+		Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns")
+	if !strings.Contains(out, "package corefns") {
+		t.Fatalf("expected `package corefns` header, got:\n%s", out)
+	}
+	if strings.Contains(out, "package rt\n") {
+		t.Fatalf("must not emit hardcoded package rt")
 	}
 }
 

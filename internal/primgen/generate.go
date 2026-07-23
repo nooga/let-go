@@ -101,7 +101,13 @@ func Generate(srcDir, outPath, goPkg string) error {
 		}
 	}
 
-	output := emitFile(allSpecs)
+	// Derive the target package name and path for emitFile
+	targetPkgPath := goPkg
+	if targetPkgPath == "" {
+		targetPkgPath = "github.com/nooga/let-go/pkg/rt/builtins"
+	}
+	pkgName := targetPkgPath[strings.LastIndex(targetPkgPath, "/")+1:]
+	output := emitFile(allSpecs, pkgName, targetPkgPath)
 
 	formatted, err := gofmtCode(output)
 	if err != nil {
