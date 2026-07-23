@@ -33,6 +33,24 @@ func NewIOHandle(f *os.File) *IOHandle {
 	return &IOHandle{name: f.Name(), file: f, writer: f, reader: f}
 }
 
+// stdStreamWriter defers to the CURRENT value of a std-stream package
+// variable (os.Stdout / os.Stderr) at every write. The *out*/*err* handles
+// live for the whole process, but tests silence output by swapping the
+// package variable (the documented mechanism in BenchmarkClojureTestSuite);
+// capturing the *os.File value at install time made those swaps no-ops, and
+// the suite's prints then landed between go test's benchmark name and its
+// metrics line, breaking benchfmt parsing in cmd/bench-ratchet.
+type stdStreamWriter struct{ cur func() *os.File }
+
+func (w stdStreamWriter) Write(p []byte) (int, error) { return w.cur().Write(p) }
+
+// newStdStreamHandle builds the boot-time handle for a std stream: writes
+// re-read the package variable via cur; file keeps the ORIGINAL *os.File so
+// Fd()/Sync() (term raw mode) still target the real descriptor.
+func newStdStreamHandle(orig *os.File, cur func() *os.File) *IOHandle {
+	return &IOHandle{name: orig.Name(), file: orig, writer: stdStreamWriter{cur}}
+}
+
 // NewWriterHandle wraps an arbitrary io.Writer. No reads.
 func NewWriterHandle(name string, w io.Writer) *IOHandle {
 	return &IOHandle{name: name, writer: w}
@@ -320,9 +338,11 @@ func installIOBuiltins(ns *vm.Namespace) {
 		return vm.NIL, os.MkdirAll(string(path), 0755)
 	})
 
-	// *in*, *out*, *err* — stdin, stdout, stderr as IOHandle
-	stdoutHandle := vm.NewBoxed(NewIOHandle(os.Stdout))
-	stderrHandle := vm.NewBoxed(NewIOHandle(os.Stderr))
+	// *in*, *out*, *err* — stdin, stdout, stderr as IOHandle. Writers defer
+	// to the CURRENT os.Stdout/os.Stderr per write (see stdStreamWriter) so
+	// test-time swaps of the package variables still silence lg output.
+	stdoutHandle := vm.NewBoxed(newStdStreamHandle(os.Stdout, func() *os.File { return os.Stdout }))
+	stderrHandle := vm.NewBoxed(newStdStreamHandle(os.Stderr, func() *os.File { return os.Stderr }))
 
 	ns.Def("open", openf)
 	ns.Def("close!", closef)
