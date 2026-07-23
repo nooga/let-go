@@ -34,6 +34,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/nooga/let-go/internal/primgen"
 )
 
 func main() {
@@ -68,13 +70,26 @@ func main() {
 		return
 	}
 
-	defNames := collectNsDefNames(f) // fn-var name -> lg name
+	defNames := collectNsDefNames(f)             // fn-var name -> lg name (last wins)
+	allNames := collectNsDefAllNames(f)          // fn-var name -> every lg name
+	lookupNames := lookupNamesInPackage(*pkgDir) // lg-names fetched via .Lookup("…")
+	// lg-names a pre-existing //lg:native decl already owns (native_prims.go etc.),
+	// excluding the file we're hoisting into. A candidate colliding with one is a
+	// redundant second registration; hoisting it would emit a duplicate.
+	existingNative, err := primgen.ScanNativeNames(*pkgDir, filepath.Base(*file))
+	if err != nil {
+		die("scan existing //lg:native names: %v", err)
+	}
+	// lg-names a stdlib .lg source redefines — shadowed at load and not covered
+	// by the eager core reapply, so hoisting+guarding them would deviate.
+	lgRedefined := lgRedefinedNames(filepath.Join(*pkgDir, "core"))
 
 	sites := findNativeFnSites(f)
 
 	var safe []*site
 	skipCap := map[string][]string{} // var -> captured names
 	var skipNoName []string
+	var skipMulti []string
 	for _, s := range sites {
 		if onlyRe != nil {
 			lg := defNames[s.varName]
@@ -87,6 +102,31 @@ func main() {
 			skipNoName = append(skipNoName, s.varName)
 			continue
 		}
+		if len(allNames[s.varName]) > 1 {
+			// Registered under multiple names — hoisting to one //lg:name would
+			// silently drop the others from clojure.core. Leave it in place.
+			skipMulti = append(skipMulti, fmt.Sprintf("%s (%s)", s.varName, strings.Join(allNames[s.varName], "/")))
+			continue
+		}
+		if lookupNames[lg] {
+			// Fetched by lg-name via `.Lookup("<lg>")` somewhere in the package
+			// (possibly another file) at init time, before the generated
+			// registrar runs — hoisting would leave that lookup nil.
+			skipMulti = append(skipMulti, fmt.Sprintf("%s (Lookup %q)", s.varName, lg))
+			continue
+		}
+		if existingNative[lg] {
+			// Name already owned by a pre-existing //lg:native decl — hoisting
+			// this redundant registration would emit a duplicate in the registrar.
+			skipMulti = append(skipMulti, fmt.Sprintf("%s (dup of //lg:native %q)", s.varName, lg))
+			continue
+		}
+		if lgRedefined[lg] {
+			// Shadowed by a stdlib .lg (defn %q) at load; the eager core reapply
+			// skips it, so a guarded native here deviates permanently.
+			skipMulti = append(skipMulti, fmt.Sprintf("%s (redefined in .lg %q)", s.varName, lg))
+			continue
+		}
 		s.lgName = lg
 		captured := freeVars(s.lit, pkgNames)
 		if len(captured) > 0 {
@@ -95,8 +135,24 @@ func main() {
 		}
 		safe = append(safe, s)
 	}
+	if len(skipMulti) > 0 {
+		sort.Strings(skipMulti)
+		fmt.Printf("-- skipped: registered under multiple lg-names (would drop names) --\n  %s\n\n", strings.Join(skipMulti, ", "))
+	}
+
+	// Demote any safe var still referenced by code that survives the rewrite.
+	// The rewrite removes only the var's own `X, err := …Wrap(…)` assignment and
+	// its single `ns.Def("name", X)` registration; a var referenced anywhere else
+	// — a second registration (`lgCore.Def("gt", gt)`), a helper, or a skipped
+	// site's closure body — would become an undefined identifier. freeVars flags
+	// captures WITHIN a hoisted closure; this flags uses OF the var by others.
+	safe, skipRef := demoteSurvivingRefs(f, safe)
 
 	report(fset, safe, skipCap, skipNoName, defNames)
+	if len(skipRef) > 0 {
+		sort.Strings(skipRef)
+		fmt.Printf("-- skipped: still referenced by surviving code (2nd registration / helper / captured by a skip) --\n  %s\n\n", strings.Join(skipRef, ", "))
+	}
 
 	if *apply {
 		if err := rewrite(*file, fset, f, safe, defNames); err != nil {
@@ -152,6 +208,88 @@ func findNativeFnSites(f *ast.File) []*site {
 	return out
 }
 
+// demoteSurvivingRefs returns the subset of safe whose local var is referenced
+// ONLY by its own assignment target and the single `ns.Def("name", X)` call the
+// rewrite cuts, plus the names it demoted. A var referenced by any surviving
+// identifier (a second registration, a helper, or a skipped closure body) is
+// not hoistable — removing its local would leave that reference undefined.
+func demoteSurvivingRefs(f *ast.File, safe []*site) (kept []*site, demoted []string) {
+	byVar := map[string]*site{}
+	for _, s := range safe {
+		byVar[s.varName] = s
+	}
+	// Identifiers the rewrite removes: each safe assign's target and the arg of
+	// the single ns.Def(name, X) it cuts. Every OTHER occurrence survives.
+	accounted := map[*ast.Ident]bool{}
+	for _, s := range safe {
+		if id, ok := s.assign.Lhs[0].(*ast.Ident); ok {
+			accounted[id] = true
+		}
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 2 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Def" {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "ns" {
+			return true
+		}
+		if arg, ok := call.Args[1].(*ast.Ident); ok && byVar[arg.Name] != nil {
+			accounted[arg] = true
+		}
+		return true
+	})
+	survives := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok || byVar[id.Name] == nil || accounted[id] {
+			return true
+		}
+		survives[id.Name] = true
+		return true
+	})
+
+	// A primitive is also un-hoistable if surviving code fetches it BY LG-NAME
+	// via `ns.Lookup("name")` — for post-registration mutation (`.SetMacro()`)
+	// or to alias it under another name. installLangNS runs before the generated
+	// registrar, so such a lookup would hit an unregistered var. These references
+	// are string literals, invisible to the identifier scan above.
+	byLg := map[string]*site{}
+	for _, s := range safe {
+		byLg[s.lgName] = s
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Lookup" {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		if name, err := strconv.Unquote(lit.Value); err == nil && byLg[name] != nil {
+			survives[byLg[name].varName] = true
+		}
+		return true
+	})
+	for _, s := range safe {
+		if survives[s.varName] {
+			demoted = append(demoted, s.varName)
+			continue
+		}
+		kept = append(kept, s)
+	}
+	return kept, demoted
+}
+
 // classifyBoxer returns ("Wrap"|"WrapNoErr"|"NewCtxNativeFn", isCtx) or ("",_).
 func classifyBoxer(fun ast.Expr) (string, bool) {
 	sel, ok := fun.(*ast.SelectorExpr)
@@ -170,6 +308,40 @@ func classifyBoxer(fun ast.Expr) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// collectNsDefAllNames maps a registered fn-var to EVERY clojure name it is
+// Def'd under. A var registered under several names (`ns.Def("int", intf)`,
+// `ns.Def("byte", intf)`, `ns.Def("short", intf)`) can't be hoisted to a single
+// //lg:native decl without dropping names, so the caller skips multi-name vars.
+func collectNsDefAllNames(f *ast.File) map[string][]string {
+	out := map[string][]string{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 2 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Def" {
+			return true
+		}
+		if nsID, ok := sel.X.(*ast.Ident); !ok || nsID.Name != "ns" {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		valID, ok := call.Args[1].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if name, err := strconv.Unquote(lit.Value); err == nil {
+			out[valID.Name] = append(out[valID.Name], name)
+		}
+		return true
+	})
+	return out
 }
 
 // collectNsDefNames maps a registered fn-var to its clojure name from
@@ -331,6 +503,76 @@ var universe = strSet(
 
 // --- package-level name collection ---------------------------------------
 
+// lookupNamesInPackage collects every string literal passed to a `.Lookup("…")`
+// call across all non-test .go files in dir. A primitive named by any of these
+// lgRedefinedNames collects every name defined by a (def…)/(defn…)/(defmacro…)
+// form in the stdlib .lg sources under dir/core. A primitive whose lg-name is
+// redefined in core.lg is shadowed by that bootstrap definition at load; the
+// eager core-namespace load does NOT reapply the native root over it (see
+// coreload.go, which skips NameCoreNS), so a hoisted+guarded native there would
+// deviate permanently (native-prims-intact? => false). On main these primitives
+// were hand-registered but unguarded, so the .lg definition silently won — the
+// behavior-preserving choice is to leave them un-hoisted.
+func lgRedefinedNames(coreDir string) map[string]bool {
+	names := map[string]bool{}
+	re := regexp.MustCompile(`\(def(?:n|macro)?-?\s+([^\s()]+)`)
+	entries, err := os.ReadDir(coreDir)
+	if err != nil {
+		return names
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".lg") {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(coreDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+			names[m[1]] = true
+		}
+	}
+	return names
+}
+
+// is fetched by lg-name at init time — possibly from ANOTHER file (host_core_fns
+// aliases `class` to `ns.Lookup("type")`) before the generated registrar runs —
+// so it must not be hoisted. Best-effort union across files.
+func lookupNamesInPackage(dir string) map[string]bool {
+	names := map[string]bool{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return names
+	}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
+		if err != nil {
+			continue
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 1 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Lookup" {
+				return true
+			}
+			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if name, err := strconv.Unquote(lit.Value); err == nil {
+					names[name] = true
+				}
+			}
+			return true
+		})
+	}
+	return names
+}
+
 func packageLevelNames(dir string) (map[string]bool, error) {
 	names := map[string]bool{}
 	entries, err := os.ReadDir(dir)
@@ -464,11 +706,14 @@ func renderResults(fset *token.FileSet, results *ast.FieldList) string {
 }
 
 func hoistName(varName string) string {
-	// plus -> corePlus, excludeInCurrentNs -> coreExcludeInCurrentNs
+	// plus -> CorePlus, excludeInCurrentNs -> CoreExcludeInCurrentNs.
+	// EXPORTED (capital C): the gogen_ir lowered tree lives in sibling packages
+	// that direct-call these primitives as `rt.Core…`, so an unexported name
+	// would be invisible there (undefined: rt.corePlus).
 	if varName == "" {
-		return "coreFn"
+		return "CoreFn"
 	}
-	return "core" + strings.ToUpper(varName[:1]) + varName[1:]
+	return "Core" + strings.ToUpper(varName[:1]) + varName[1:]
 }
 
 // --- rewrite (apply) ------------------------------------------------------
@@ -509,6 +754,60 @@ func rewrite(path string, fset *token.FileSet, f *ast.File, safe []*site, defNam
 		return true
 	})
 
+	// Cut `if err != nil { … }` guards left dead by the removal. An `err` local
+	// is typically threaded through every Wrap assignment in a block — each with
+	// its own `if err != nil { panic(err) }`, plus a trailing consolidated
+	// `if err != nil { panic("… failed") }`. Once every assignment that DECLARES
+	// that err (via `:=`) is cut and no surviving `:=` redeclares it, the name is
+	// undefined and all its guards are dead. Work per block: a name declared only
+	// by cut assigns (and by no surviving `:=`) is orphaned, so cut every
+	// `if <name> != nil {…}` guard in that block. Scoped this way, a guard whose
+	// err still has a live declaration is never touched.
+	safeAssigns := map[*ast.AssignStmt]bool{}
+	for _, s := range safe {
+		safeAssigns[s.assign] = true
+	}
+	declaredNames := func(as *ast.AssignStmt) []string {
+		if as.Tok != token.DEFINE {
+			return nil
+		}
+		var ns []string
+		for _, l := range as.Lhs {
+			if id, ok := l.(*ast.Ident); ok && id.Name != "_" {
+				ns = append(ns, id.Name)
+			}
+		}
+		return ns
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		cutDecl, surviveDecl := map[string]bool{}, map[string]bool{}
+		for _, st := range blk.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok {
+				continue
+			}
+			names := declaredNames(as)
+			target := surviveDecl
+			if safeAssigns[as] {
+				target = cutDecl
+			}
+			for _, nm := range names {
+				target[nm] = true
+			}
+		}
+		for _, st := range blk.List {
+			name := errGuardName(st)
+			if name != "" && cutDecl[name] && !surviveDecl[name] {
+				cuts = append(cuts, span{lineStart(src, fset.Position(st.Pos()).Offset), lineEnd(src, fset.Position(st.End()).Offset)})
+			}
+		}
+		return true
+	})
+
 	sort.Slice(cuts, func(i, j int) bool { return cuts[i].start > cuts[j].start })
 	out := append([]byte(nil), src...)
 	for _, c := range cuts {
@@ -529,6 +828,28 @@ func rewrite(path string, fset *token.FileSet, f *ast.File, safe []*site, defNam
 		formatted = out
 	}
 	return os.WriteFile(path, formatted, 0644)
+}
+
+// errGuardName returns the identifier name X for a statement of the exact shape
+// `if X != nil { … }` (no init/else), or "" otherwise. The caller decides
+// whether X is orphaned before cutting, so this only classifies the shape.
+func errGuardName(s ast.Stmt) string {
+	ifs, ok := s.(*ast.IfStmt)
+	if !ok || ifs.Init != nil || ifs.Else != nil {
+		return ""
+	}
+	bin, ok := ifs.Cond.(*ast.BinaryExpr)
+	if !ok || bin.Op != token.NEQ {
+		return ""
+	}
+	x, ok := bin.X.(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	if y, ok := bin.Y.(*ast.Ident); !ok || y.Name != "nil" {
+		return ""
+	}
+	return x.Name
 }
 
 func lineStart(src []byte, off int) int {
