@@ -7,11 +7,21 @@
 package rt
 
 import (
+	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+// regPrimDebug, when LG_REGPRIM_DEBUG is set, logs every generated-primitive
+// registration (name, requested ns, resolved canonical ns, whether it landed
+// in the canonical ns). It is the per-primitive trace used to root-cause a
+// batch of newly hoisted //lg:native primitives without bisecting the whole
+// set: grep the run for `landed-canonical=false`.
+var regPrimDebug = os.Getenv("LG_REGPRIM_DEBUG") != ""
 
 // Generated-primitive binding lifecycle.
 //
@@ -85,6 +95,14 @@ func defGeneratedPrimitive(ns *vm.Namespace, nsName, name string, v vm.Value) {
 	// boundaries.
 	setPrimitiveRoot(ns, name, v).GuardRoot()
 	canonical := resolveNSAlias(nsName)
+	if regPrimDebug {
+		landed := false
+		if cns := LookupNS(canonical); cns != nil {
+			landed = cns.LookupLocal(vm.Symbol(name)) != nil
+		}
+		fmt.Fprintf(os.Stderr, "[REGPRIM] %s/%s requested-ns=%s canonical=%s landed-canonical=%v\n",
+			nsName, name, nsName, canonical, landed)
+	}
 	genPrimMu.Lock()
 	m := genPrimBindings[canonical]
 	if m == nil {
@@ -93,6 +111,67 @@ func defGeneratedPrimitive(ns *vm.Namespace, nsName, name string, v vm.Value) {
 	}
 	m[name] = v
 	genPrimMu.Unlock()
+}
+
+// AuditGeneratedPrimitives verifies that every recorded generated primitive is
+// actually bound in its canonical namespace, and returns one human-readable
+// line per primitive that is NOT — including where the name IS bound instead,
+// if anywhere. It never panics and never stops at the first problem: it is the
+// non-terminating diagnostic run around the bootstrap core.lg compile, so a
+// batch of newly hoisted //lg:native primitives surfaces ALL its registration
+// failures at once (`+ registered under "clojure.core", not canonical "core"`)
+// rather than the compile dying on the first `Can't resolve X`. Empty slice =
+// every generated primitive resolves in its canonical namespace.
+func AuditGeneratedPrimitives() []string {
+	type binding struct {
+		ns, name string
+	}
+	genPrimMu.RLock()
+	bindings := make([]binding, 0, len(genPrimBindings))
+	for nsName, m := range genPrimBindings {
+		for name := range m {
+			bindings = append(bindings, binding{nsName, name})
+		}
+	}
+	genPrimMu.RUnlock()
+
+	var problems []string
+	for _, b := range bindings {
+		ns := LookupNS(b.ns)
+		if ns == nil {
+			problems = append(problems, fmt.Sprintf("%s/%s: canonical namespace does not exist", b.ns, b.name))
+			continue
+		}
+		if v := ns.LookupLocal(vm.Symbol(b.name)); v == nil || !v.IsBound() {
+			problems = append(problems, fmt.Sprintf("%s/%s: not bound in canonical ns%s", b.ns, b.name, whereNameBound(b.name, resolveNSAlias(b.ns))))
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// whereNameBound scans the namespace registry for any namespace OTHER than
+// exclude that has name bound, returning a " (found bound in: …)" suffix so a
+// misregistered primitive points straight at the namespace it landed in (the
+// exact signature of the alias-resolution bug: bound in "clojure.core", absent
+// from canonical "core"). Empty string when the name is bound nowhere else.
+func whereNameBound(name, exclude string) string {
+	nsMu.RLock()
+	defer nsMu.RUnlock()
+	var found []string
+	for k, ns := range nsRegistry {
+		if k == exclude {
+			continue
+		}
+		if v := ns.LookupLocal(vm.Symbol(name)); v != nil && v.IsBound() {
+			found = append(found, k)
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	sort.Strings(found)
+	return " (found bound in: " + strings.Join(found, ", ") + ")"
 }
 
 // ReapplyGeneratedPrimitives restores the recorded native adapters on a

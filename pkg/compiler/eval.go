@@ -119,7 +119,17 @@ func evalInit() {
 	c.SetSource("<embedded:core>")
 	_, _, err := c.CompileMultiple(strings.NewReader(rt.CoreSrc))
 	if err != nil {
-		panic("core.lg compilation failed: " + err.Error())
+		// A bootstrap resolve failure ("Can't resolve X") usually means a
+		// generated //lg:native primitive registered into the wrong namespace.
+		// Attach the non-terminating registration audit so ALL misregistered
+		// primitives are reported at once (with where each actually landed),
+		// instead of re-running to discover them one panic at a time.
+		msg := "core.lg compilation failed: " + err.Error()
+		if audit := rt.AuditGeneratedPrimitives(); len(audit) > 0 {
+			msg += fmt.Sprintf("\n\ngenerated-primitive audit (%d not resolvable in canonical ns):\n  %s",
+				len(audit), strings.Join(audit, "\n  "))
+		}
+		panic(msg)
 	}
 	// Bundle-path parity (purify-clojure-core ②): the lg baseline namespaces
 	// (let-go.core, …) are auto-refer'd into every namespace but never explicitly
