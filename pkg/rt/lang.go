@@ -686,6 +686,16 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 }
 
 func LookupOrRegisterNSNoLoad(name string) *vm.Namespace {
+	// Resolve the alias BEFORE touching the registry, as the loading callers do.
+	// Without this, LookupOrRegisterNSNoLoad("clojure.core") registers a DISTINCT
+	// "clojure.core" namespace instead of returning the canonical "core" — so the
+	// generated primitive registrar (RegisterGeneratedPrimitives, which calls this
+	// with "clojure.core"/"clojure.string"/…) Defs into the wrong namespace,
+	// invisible to core.lg's own bootstrap compile. Hand-registered primitives
+	// hid this by also Def'ing into the canonical ns via installLangNS; a primitive
+	// hoisted to //lg:native has ONLY the generated registration, so it must land
+	// in the canonical namespace to resolve.
+	name = resolveNSAlias(name)
 	nsMu.RLock()
 	e := nsRegistry[name]
 	nsMu.RUnlock()
