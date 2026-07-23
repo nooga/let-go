@@ -69,7 +69,19 @@ build-profile: $(LG-PROFILE)
 CORE-LG-FILES := $(shell find pkg/rt/core -name '*.lg' -type f 2>/dev/null)
 LGBGEN-SOURCES := $(shell find cmd/lgbgen -name '*.go' -type f 2>/dev/null)
 ROOT-GO-FILES := $(shell find . -maxdepth 1 -name '*.go' -type f 2>/dev/null)
-pkg/rt/core_compiled.lgb: $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
+
+# Primitive registrar. lgprimgen scans pkg/rt's //lg:native-annotated Go sources
+# and emits this file. It is a PURE go/ast codegen tool (no pkg/compiler / pkg/rt
+# import), so it MUST run before the lgbgen bootstrap that consumes it: when a
+# primitive is hoisted out of installLangNS into a //lg:native decl, the bootstrap
+# runtime cannot boot until this file carries its registration. A runtime-coupled
+# generator here would depend on the very artifact it produces. Making the bundle
+# depend on it breaks that cycle.
+PRIMGEN-SOURCES := $(shell find pkg/rt -maxdepth 1 -name '*.go' -type f -not -name 'zz_*' -not -name '*_test.go' 2>/dev/null) $(shell find cmd/lgprimgen internal/primgen -name '*.go' -type f 2>/dev/null)
+pkg/rt/zz_primitives_generated.go: $(PRIMGEN-SOURCES) $(GO)
+	go run ./cmd/lgprimgen -primitives pkg/rt -go-pkg github.com/nooga/let-go/pkg/rt -primitives-out pkg/rt/zz_primitives_generated.go
+
+pkg/rt/core_compiled.lgb: pkg/rt/zz_primitives_generated.go $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
 	go run -tags bootstrap ./cmd/lgbgen
 
 # Lowered-Go target. The -tags gogen_ir build path links these generated
@@ -78,7 +90,7 @@ pkg/rt/core_compiled.lgb: $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
 # the two engines silently disagree (parity-full diverges on bucket
 # hashes even when pass/fail counts match). lower_go.go is the timestamp
 # anchor for the whole tree — every regen rewrites it.
-pkg/rt/core_go_lowered/ir/lower_go/lower_go.go: $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
+pkg/rt/core_go_lowered/ir/lower_go/lower_go.go: pkg/rt/zz_primitives_generated.go $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
 	go run -tags bootstrap ./cmd/lgbgen --target=go
 
 # Regenerate every committed code-gen artifact via the let-go orchestrator

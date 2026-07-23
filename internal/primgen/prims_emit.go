@@ -1,4 +1,4 @@
-package main
+package primgen
 
 import (
 	"fmt"
@@ -488,11 +488,11 @@ func generateAritySpecificAdapter(spec *primSpec, arity int, pkgAliasMap map[str
 			fmt.Fprintf(&b, "%s", varName)
 		}
 
-		// Add variadic arguments: pass remaining vs elements
+		// Add variadic arguments: pass remaining vs elements, then close the call.
 		if len(spec.ParamSpecs) > 0 {
-			fmt.Fprintf(&b, ", vs[%d:]...\n", len(spec.ParamSpecs))
+			fmt.Fprintf(&b, ", vs[%d:]...)\n", len(spec.ParamSpecs))
 		} else {
-			b.WriteString("vs...\n")
+			b.WriteString("vs...)\n")
 		}
 	} else {
 		// Non-variadic: standard parameter coercion
