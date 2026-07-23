@@ -1934,6 +1934,9 @@ func defCompiler(c *Context, form vm.Value) error {
 		c.defName = ""
 		return nil
 	}
+	if rewritten := c.maybeIRCompileDefFnArg(sym.(vm.Symbol), val); rewritten != nil {
+		val = rewritten
+	}
 	err := c.compileForm(val)
 	if err != nil {
 		return compileErrorAt("compiling def value", form).Wrap(err)
@@ -1943,6 +1946,88 @@ func defCompiler(c *Context, form vm.Value) error {
 	c.tailPosition = tc
 	c.defName = ""
 	return nil
+}
+
+// maybeIRCompileDefFnArg is the runtime seam for name*-wrapped fn defs:
+// when *ir-compile* is on and a TOP-LEVEL `(def NAME (name* ... (fn ...) ...))`
+// is being compiled, route the inner fn form through the Lisp IR pipeline
+// (ir.passes.pipeline/compile-def-fn-value) and substitute the compiled Fn
+// value as an embedded constant — the same def-value shape the defn macro
+// produces via chunk->fn. The defn macro can't cover these: `def` is a
+// special form, so grammar-style rule defs never reach the macro layer and
+// their bodies otherwise always compile via the plain bytecode compiler.
+// Returns the rewritten value form, or nil to compile the original
+// (any failure falls back silently, mirroring the defn macro's hybrid path).
+func (c *Context) maybeIRCompileDefFnArg(name vm.Symbol, val vm.Value) vm.Value {
+	// Top-level defs only: an inner fn compiled through the pipeline cannot
+	// capture enclosing locals.
+	if len(c.locals) != 0 {
+		return nil
+	}
+	icv, ok := c.CurrentNS().Lookup(vm.Symbol("clojure.core/*ir-compile*")).(*vm.Var)
+	if !ok || !vm.IsTruthy(icv.Deref()) {
+		return nil
+	}
+	lst, ok := val.(*vm.List)
+	if !ok {
+		return nil
+	}
+	headSym, ok := lst.First().(vm.Symbol)
+	if !ok {
+		return nil
+	}
+	_, headName, hasNS := headSym.NamespacedRaw()
+	if !hasNS {
+		headName = headSym
+	}
+	if headName != vm.Symbol("name*") {
+		return nil
+	}
+	elems, ok := lst.Unbox().([]vm.Value)
+	if !ok {
+		return nil
+	}
+	fnIdx := -1
+	for i := 1; i < len(elems); i++ {
+		el, isList := elems[i].(*vm.List)
+		if !isList {
+			continue
+		}
+		h, isSym := el.First().(vm.Symbol)
+		if !isSym || (h != "fn" && h != "fn*") {
+			continue
+		}
+		if fnIdx != -1 {
+			return nil // more than one fn argument: ambiguous, leave alone
+		}
+		fnIdx = i
+	}
+	if fnIdx == -1 {
+		return nil
+	}
+	hv, ok := c.CurrentNS().Lookup(vm.Symbol("ir.passes.pipeline/compile-def-fn-value")).(*vm.Var)
+	if !ok {
+		return nil
+	}
+	hfn, ok := hv.Deref().(vm.Fn)
+	if !ok {
+		return nil
+	}
+	compiled, err := hfn.Invoke([]vm.Value{elems[fnIdx], c.CurrentNS(), name})
+	if err != nil || compiled == vm.NIL {
+		return nil
+	}
+	newElems := make([]vm.Value, len(elems))
+	copy(newElems, elems)
+	newElems[fnIdx] = compiled
+	rewritten, berr := vm.ListType.Box(newElems)
+	if berr != nil {
+		return nil
+	}
+	if info := vm.FormSource.Get(val); info != nil {
+		vm.FormSource.Set(rewritten, *info)
+	}
+	return rewritten
 }
 
 func setBangCompiler(c *Context, form vm.Value) error {

@@ -428,6 +428,17 @@
              arg0.Append32(arg2)
              return vm.NIL, nil"}
 
+   ;; Emit n OP_POPs — drop the top n stack slots. Used by the branch
+   ;; pass-through fast path to clear dead extras above the args without
+   ;; DUP shuffling. NOTE: vm.OP_POP_N is NOT "pop n" — it preserves the
+   ;; top value and drops n beneath it (a squash op) — hence plain POPs.
+   {:name "chunk-emit-pop-n" :lisp-name "ir/chunk-emit-pop-n"
+    :args [Self Int Int]
+    :body "for i := 0; i < int(arg2); i++ {
+               arg0.Append(vm.OP_POP | int32((arg1-i)<<16))
+             }
+             return vm.NIL, nil"}
+
    ;; Emit the 4-word OP_RECUR sequence (for loop back-edges with
    ;; stack cleanup). Returns the IP of the placeholder offset slot.
    {:name "chunk-emit-recur" :lisp-name "ir/chunk-emit-recur"
