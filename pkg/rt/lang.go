@@ -2570,17 +2570,6 @@ func installLangNS() {
 	// AsChunkedSeq, so they resolve through LazySeq wrappers). chunk-cons
 	// builds a ChunkedCons; chunk-buffer / chunk-append / chunk are the
 	// mutable builder API. chunked-seq? answers the type predicate.
-	asChunked := func(v vm.Value, op string) (vm.IChunkedSeq, error) {
-		s, err := seqOf(v)
-		if err != nil {
-			return nil, fmt.Errorf("%s: not a sequence", op)
-		}
-		cs, ok := vm.AsChunkedSeq(s)
-		if !ok {
-			return nil, fmt.Errorf("%s: not a chunked seq", op)
-		}
-		return cs, nil
-	}
 
 	chunkFirst, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -7688,83 +7677,6 @@ func installLangNS() {
 	// --- Array operations ---
 
 	// Helper: build a typed array from size or seq
-	buildArray := func(kind vm.ArrayKind, vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 || len(vs) > 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		// (x-array n) or (x-array n init)
-		if n, ok := vs[0].(vm.Int); ok {
-			size := int(n)
-			if size < 0 {
-				return vm.NIL, fmt.Errorf("negative array size: %d", size)
-			}
-			var arr *vm.TypedArray
-			switch kind {
-			case vm.ArrayByte:
-				arr = vm.NewByteArray(size)
-			case vm.ArrayInt:
-				arr = vm.NewIntArray(size)
-			case vm.ArrayFloat:
-				arr = vm.NewFloatArray(size)
-			case vm.ArrayObject:
-				arr = vm.NewObjectArray(size)
-			}
-			if len(vs) == 2 {
-				for i := range size {
-					if err := arr.Set(i, vs[1]); err != nil {
-						return vm.NIL, err
-					}
-				}
-			}
-			return arr, nil
-		}
-		// (x-array coll)
-		s, serr := seqOf(vs[0])
-		if serr != nil {
-			return vm.NIL, serr
-		}
-		var vals []vm.Value
-		for ; s != nil; s = s.Next() {
-			vals = append(vals, s.First())
-		}
-		var arr *vm.TypedArray
-		switch kind {
-		case vm.ArrayByte:
-			data := make([]byte, len(vals))
-			for i, v := range vals {
-				n, ok := v.(vm.Int)
-				if !ok {
-					return vm.NIL, fmt.Errorf("byte-array element must be Int, got %s", v.Type().Name())
-				}
-				data[i] = byte(n)
-			}
-			arr = vm.NewByteArrayFrom(data)
-		case vm.ArrayInt:
-			data := make([]int64, len(vals))
-			for i, v := range vals {
-				switch n := v.(type) {
-				case vm.Int:
-					data[i] = int64(n)
-				default:
-					return vm.NIL, fmt.Errorf("int-array element must be Int, got %s", v.Type().Name())
-				}
-			}
-			arr = vm.NewIntArrayFrom(data)
-		case vm.ArrayFloat:
-			data := make([]float64, len(vals))
-			for i, v := range vals {
-				f, ok := vm.ToFloat(v)
-				if !ok {
-					return vm.NIL, fmt.Errorf("double-array element must be numeric, got %s", v.Type().Name())
-				}
-				data[i] = f
-			}
-			arr = vm.NewFloatArrayFrom(data)
-		case vm.ArrayObject:
-			arr = vm.NewObjectArrayFrom(vals)
-		}
-		return arr, nil
-	}
 
 	byteArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return buildArray(vm.ArrayByte, vs)
@@ -8885,4 +8797,96 @@ func strValue(v vm.Value) string {
 		return strings.TrimSuffix(s, "M")
 	}
 	return v.String()
+}
+
+// --- lifted native helpers (see cmd/hoist-natives -helpers) ---
+
+func asChunked(v vm.Value, op string) (vm.IChunkedSeq, error) {
+	s, err := seqOf(v)
+	if err != nil {
+		return nil, fmt.Errorf("%s: not a sequence", op)
+	}
+	cs, ok := vm.AsChunkedSeq(s)
+	if !ok {
+		return nil, fmt.Errorf("%s: not a chunked seq", op)
+	}
+	return cs, nil
+}
+
+func buildArray(kind vm.ArrayKind, vs []vm.Value) (vm.Value, error) {
+	if len(vs) == 0 || len(vs) > 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+
+	if n, ok := vs[0].(vm.Int); ok {
+		size := int(n)
+		if size < 0 {
+			return vm.NIL, fmt.Errorf("negative array size: %d", size)
+		}
+		var arr *vm.TypedArray
+		switch kind {
+		case vm.ArrayByte:
+			arr = vm.NewByteArray(size)
+		case vm.ArrayInt:
+			arr = vm.NewIntArray(size)
+		case vm.ArrayFloat:
+			arr = vm.NewFloatArray(size)
+		case vm.ArrayObject:
+			arr = vm.NewObjectArray(size)
+		}
+		if len(vs) == 2 {
+			for i := range size {
+				if err := arr.Set(i, vs[1]); err != nil {
+					return vm.NIL, err
+				}
+			}
+		}
+		return arr, nil
+	}
+
+	s, serr := seqOf(vs[0])
+	if serr != nil {
+		return vm.NIL, serr
+	}
+	var vals []vm.Value
+	for ; s != nil; s = s.Next() {
+		vals = append(vals, s.First())
+	}
+	var arr *vm.TypedArray
+	switch kind {
+	case vm.ArrayByte:
+		data := make([]byte, len(vals))
+		for i, v := range vals {
+			n, ok := v.(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("byte-array element must be Int, got %s", v.Type().Name())
+			}
+			data[i] = byte(n)
+		}
+		arr = vm.NewByteArrayFrom(data)
+	case vm.ArrayInt:
+		data := make([]int64, len(vals))
+		for i, v := range vals {
+			switch n := v.(type) {
+			case vm.Int:
+				data[i] = int64(n)
+			default:
+				return vm.NIL, fmt.Errorf("int-array element must be Int, got %s", v.Type().Name())
+			}
+		}
+		arr = vm.NewIntArrayFrom(data)
+	case vm.ArrayFloat:
+		data := make([]float64, len(vals))
+		for i, v := range vals {
+			f, ok := vm.ToFloat(v)
+			if !ok {
+				return vm.NIL, fmt.Errorf("double-array element must be numeric, got %s", v.Type().Name())
+			}
+			data[i] = f
+		}
+		arr = vm.NewFloatArrayFrom(data)
+	case vm.ArrayObject:
+		arr = vm.NewObjectArrayFrom(vals)
+	}
+	return arr, nil
 }
