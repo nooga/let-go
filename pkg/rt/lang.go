@@ -703,6 +703,18 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 }
 
 func LookupOrRegisterNSNoLoad(name string) *vm.Namespace {
+	// Resolve the alias BEFORE touching the registry, as the loading callers do.
+	// Without this, LookupOrRegisterNSNoLoad("clojure.core") registers a DISTINCT
+	// "clojure.core" namespace instead of returning the canonical "core" — so the
+	// generated primitive registrar (RegisterGeneratedPrimitives, which calls this
+	// with "clojure.core"/"clojure.string"/…) Defs into the wrong namespace,
+	// invisible to core.lg's own bootstrap compile. Hand-registered primitives
+	// hid this by also Def'ing into the canonical ns via installLangNS; a primitive
+	// hoisted to //lg:native has ONLY the generated registration, so it must land
+	// in the canonical namespace to resolve.
+	canonical := resolveNSAlias(name)
+	aliased := canonical != name
+	name = canonical
 	nsMu.RLock()
 	e := nsRegistry[name]
 	nsMu.RUnlock()
@@ -722,6 +734,17 @@ func LookupOrRegisterNSNoLoad(name string) *vm.Namespace {
 	nsMu.Lock()
 	nsRegistry[name] = ns
 	nsMu.Unlock()
+
+	// If we just PRE-CREATED a canonical ns from an alias (e.g. clojure.string →
+	// string) to home a generated native, its .lg source has NOT run — only the
+	// native being registered now exists. Flag it needs-load so a later
+	// (require 'clojure.string) still executes the .lg defns (join, split, …)
+	// instead of short-circuiting on this native-only ns in LookupOrRegisterNS.
+	// Core is exempt: it is installed eagerly (installLangNS) before any generated
+	// registrar runs, so it never reaches this newly-created branch.
+	if aliased {
+		MarkNSNeedsLoad(name)
+	}
 
 	return ns
 }
