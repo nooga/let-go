@@ -124,7 +124,12 @@ func main() {
 	for i := range m.Chunks {
 		m.Chunks[i].LocalVars = nil
 	}
+	// Clear the flag too, or the encoder still writes a zero-count varint per
+	// chunk and the ablation under-reports the section by chunks bytes.
+	savedFlags := m.Flags
+	m.Flags &^= bytecode.FlagLocalVars
 	noLV := encodedLen(m)
+	m.Flags = savedFlags
 	for i := range m.Chunks {
 		m.Chunks[i].LocalVars = saveLV[i]
 	}
