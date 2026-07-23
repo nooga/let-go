@@ -67,14 +67,16 @@ func (n *Boxed) Hash() uint32 {
 }
 
 func (n *Boxed) InvokeMethod(methodName Symbol, args []Value) (Value, error) {
-	if n.typ.methods == nil {
-		return NIL, fmt.Errorf("%v doesn't have any methods", n.typ)
+	if n.typ.methods != nil {
+		if method, ok := n.typ.methods[methodName]; ok {
+			return method.Invoke(append([]Value{n}, args...))
+		}
 	}
-	method, ok := n.typ.methods[methodName]
-	if !ok {
-		return NIL, fmt.Errorf("method %s not found in %v", methodName, n.typ)
-	}
-	return method.Invoke(append([]Value{n}, args...))
+	// methodLookupError is build-tagged: the !tinygo path can trust that a
+	// missing method means the type genuinely lacks it; the tinygo path can't,
+	// because reflect.Type.Method is unimplemented there, so it says so instead
+	// of claiming the type has no methods.
+	return NIL, methodLookupError(n.typ, methodName)
 }
 
 func (n *Boxed) ValueAt(key Value) Value {
@@ -121,25 +123,7 @@ func valueType(value any) *aBoxedType {
 	// expensive part and needs no mutual exclusion.
 	t = &aBoxedType{
 		typ:     reflected,
-		methods: nil,
-	}
-	methodc := reflected.NumMethod()
-	if methodc > 0 {
-		t.methods = map[Symbol]*NativeFn{}
-		for i := range methodc {
-			m := reflected.Method(i)
-			me, err := NativeFnType.Box(m.Func.Interface())
-			if err != nil {
-				fmt.Println(reflected.Name(), "boxing method failed", err)
-				continue
-			}
-			mef, ok := me.(*NativeFn)
-			if !ok {
-				fmt.Println(reflected.Name(), "boxed method is not a native fn")
-				continue
-			}
-			t.methods[Symbol(m.Name)] = mef
-		}
+		methods: reflectMethods(reflected),
 	}
 
 	// Recheck under the write lock: a concurrent caller may have inserted the

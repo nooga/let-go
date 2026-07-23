@@ -15,7 +15,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -369,11 +368,11 @@ func installIoNS() {
 		} else {
 			urlStr = rawURL.String()
 		}
-		resp, err := http.Get(urlStr)
+		body, err := slurpURL(urlStr)
 		if err != nil {
 			return vm.NIL, err
 		}
-		return vm.NewBoxed(newLGReader(resp.Body, resp.Body)), nil
+		return vm.NewBoxed(newLGReader(body, body)), nil
 	})
 	ReadableProto.Extend(urlMapping.RecType, protoImplMap("make-reader", urlReaderImpl))
 

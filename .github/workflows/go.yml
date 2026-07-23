@@ -145,6 +145,37 @@ jobs:
       - name: Build for GOOS=wasip1
         run: GOOS=wasip1 GOARCH=wasm go build -v -o /tmp/lg-wasip1.wasm .
 
+  # Cross-build-and-run guard for the TinyGo WASI target. TinyGo does not
+  # implement reflect.Type.Method / reflect.Value.Call, so let-go's boxing path
+  # is build-tagged (boxed_reflect_tinygo.go, native_func_tinygo.go) to hand-shim
+  # what it needs. That regression is a RUNTIME trap at namespace-install time,
+  # not a build error — so unlike wasip1-build this job must execute the module,
+  # not just link it. `-v` runs the full core boot (LoadCore -> installLangNS,
+  # which exercises the reflect shim) and exits 0, so it's a complete smoke test.
+  tinygo-wasi-build:
+    name: tinygo-wasi-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install TinyGo
+        run: |
+          wget -q https://github.com/tinygo-org/tinygo/releases/download/v0.41.1/tinygo_0.41.1_amd64.deb
+          sudo dpkg -i tinygo_0.41.1_amd64.deb
+      - name: Install wasmtime
+        run: |
+          curl -sSf https://wasmtime.dev/install.sh | bash
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Build runtime-only for TinyGo WASI
+        run: tinygo build -target=wasi -o /tmp/lg-ro-tinygo.wasm ./cmd/lg-runtime
+      - name: Boot past the reflect shim (must not trap)
+        run: wasmtime run /tmp/lg-ro-tinygo.wasm -v
+
   # Differential gold check against a LIVE Clojure. The everyday `build` job is
   # clojure-free (it compares let-go to the committed test/gold/*.out goldens);
   # this job re-derives those goldens from real Clojure and fails if they drift.

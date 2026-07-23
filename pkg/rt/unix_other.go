@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux || tinygo
 
 /*
  * Copyright (c) 2026 Marcin Gasperowicz <xnooga@gmail.com>
