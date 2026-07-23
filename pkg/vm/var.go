@@ -28,6 +28,11 @@ var guardedRootDeviations atomic.Int64
 // guards in the lowered tree.
 func GuardedRootsIntact() bool { return guardedRootDeviations.Load() == 0 }
 
+// GuardDeviated reports whether this guarded var's current root differs from the
+// canonical root captured by GuardRoot. Diagnostic use: identify which native
+// primitive an intact-check failure attributes to.
+func (v *Var) GuardDeviated() bool { return v.guardDeviated.Load() }
+
 type Var struct {
 	// root is atomic so Deref — by far the hottest var operation — is
 	// lock-free. Dynamic (thread-local) bindings no longer live on the Var;

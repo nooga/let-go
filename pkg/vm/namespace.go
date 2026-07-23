@@ -518,6 +518,17 @@ func (n *Namespace) PublicVars() map[Symbol]*Var {
 	return out
 }
 
+// AllVars snapshots every interned var (public and private). Diagnostic use.
+func (n *Namespace) AllVars() map[Symbol]*Var {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make(map[Symbol]*Var, len(n.registry))
+	for k, v := range n.registry {
+		out[k] = v
+	}
+	return out
+}
+
 func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
 	ret := []Symbol{}
 	for _, r := range ns.refersSnapshot() {

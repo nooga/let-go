@@ -45,7 +45,45 @@ var (
 // emitted for native-module callees consult this before taking the baked
 // direct call; on false they fall back to the var-dispatch trampoline so the
 // override is observed across lowered function boundaries.
-func NativePrimsIntact() bool { return vm.GuardedRootsIntact() }
+func NativePrimsIntact() bool {
+	if vm.GuardedRootsIntact() {
+		return true
+	}
+	// Off the fast path (a root deviated): under LG_GUARD_DEBUG, name the
+	// offending native primitive(s) — the diagnostic that pinpoints which
+	// hoisted primitive is being shadowed instead of a bare intact=false.
+	if guardDebug {
+		fmt.Fprintf(os.Stderr, "[GUARD] deviated: %v\n", deviatedGuardedVars())
+	}
+	return false
+}
+
+var guardDebug = os.Getenv("LG_GUARD_DEBUG") != ""
+
+// deviatedGuardedVars lists every interned var whose guarded root has deviated
+// from its canonical native root, "<ns>/<name>". Diagnostic only.
+func deviatedGuardedVars() []string {
+	nsMu.RLock()
+	names := make([]string, 0, len(nsRegistry))
+	for k := range nsRegistry {
+		names = append(names, k)
+	}
+	nsMu.RUnlock()
+	var dev []string
+	for _, nsName := range names {
+		ns := LookupNS(nsName)
+		if ns == nil {
+			continue
+		}
+		for sym, v := range ns.AllVars() {
+			if v.GuardDeviated() {
+				dev = append(dev, nsName+"/"+string(sym))
+			}
+		}
+	}
+	sort.Strings(dev)
+	return dev
+}
 
 // guardModuleVars marks the CURRENT root of every var a native module
 // direct-calls (corefns seq/first/…, builtins vector/cons/…) as canonical,
