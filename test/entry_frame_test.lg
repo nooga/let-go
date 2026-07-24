@@ -1,0 +1,58 @@
+;; Tests for ir.passes.entry-frame (#425 Item 1).
+
+(ns test.entry-frame-test
+  (:require
+   [clojure.string :as str]
+   [clojure.test :refer [deftest testing is]]
+   [ir.passes.entry-frame :as ef]))
+
+(deftest find-program-entry-shapes
+  (testing "variadic -main"
+    (let [e (ef/find-program-entry '[(defn -main [& args] 1)])]
+      (is (= "-main" (:name e)))
+      (is (= :variadic (:arity-shape e)))
+      (is (false? (:private? e)))
+      (is (= "Main" (ef/entry-go-name e)))))
+  (testing "vector main"
+    (let [e (ef/find-program-entry '[(defn main [argv] 1)])]
+      (is (= "main" (:name e)))
+      (is (= :vector (:arity-shape e)))
+      (is (= "Main" (ef/entry-go-name e)))))
+  (testing "empty -main"
+    (let [e (ef/find-program-entry '[(defn -main [] 1)])]
+      (is (= :none (:arity-shape e)))))
+  (testing "private defn- main"
+    (let [e (ef/find-program-entry '[(defn- main [] 1)])]
+      (is (true? (:private? e)))
+      (is (= "main" (ef/entry-go-name e)))))
+  (testing "-main preferred over main"
+    (let [e (ef/find-program-entry '[(defn main [] 1) (defn -main [& a] 2)])]
+      (is (= "-main" (:name e))))))
+
+(deftest analyze-and-emit-direct
+  (let [raw (ef/find-program-entry '[(defn -main [& args] 1)])
+        e   (ef/analyze-entry raw "func Main(ec *vm.ExecContext, args ...vm.Value) (vm.Value, error) {\n")
+        src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})]
+    (is (true? (:lowered? e)))
+    (is (= "Main" (:call-name e)))
+    (is (str/includes? src "prog.Main(ec, argv...)"))
+    (is (str/includes? src "rt.BootCore()"))
+    (is (str/includes? src "rt.LoadProgramNamespaces(unit)"))
+    (is (str/includes? (ef/entry-summary-line 2 e) "Main ✓"))))
+
+(deftest emit-private-bridge
+  (let [raw (ef/find-program-entry '[(defn- main [] 1)])
+        e   (ef/analyze-entry raw "func main(ec *vm.ExecContext) (vm.Value, error) {\n")
+        br  (ef/emit-entry-bridge-go "priv" e)]
+    (is (true? (:private? e)))
+    (is (= "NativeMain" (:call-name e)))
+    (is (str/includes? br "func NativeMain("))
+    (is (str/includes? br "return main(ec)"))))
+
+(deftest emit-vm-fallback-when-not-lowered
+  (let [raw (ef/find-program-entry '[(defn -main [& args] 1)])
+        e   (ef/analyze-entry raw "package fib\n")
+        src (ef/emit-entry-frame-go {:entry e})]
+    (is (false? (:lowered? e)))
+    (is (str/includes? src "rt.InvokeProgramEntry"))
+    (is (str/includes? (ef/entry-summary-line 0 e) "not lowered"))))

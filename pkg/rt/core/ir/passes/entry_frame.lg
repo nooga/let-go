@@ -1,0 +1,315 @@
+;; AOT native-entry frame generator (#425 Item 1).
+;;
+;; Projects lowering facts the compiler already holds — whether a recognized
+;; main/-main form lowered, its Go name/arity shape, which packages to
+;; blank-import — into a package-main Go file. gloat (or any orchestrator)
+;; keeps go.mod / `go build` / program.lgb placement; we own the frame.
+;;
+;; Entry recognition:
+;;   - name: main or -main (including defn- / ^:private)
+;;   - arity: [& args] | [argv] | []  (frame adapts os.Args)
+;;   - lowered?: direct call into the lowered Go entry; else VM MainChunk fallback
+;;
+;; Private entries get a same-package NativeMain bridge so package main can
+;; call across the package boundary.
+
+(ns ir.passes.entry-frame
+  (:require
+   [clojure.string]
+   [ir.lower-go :as lower-go]))
+
+(def ^:private entry-names #{"main" "-main"})
+
+(defn- entry-name? [nm]
+  (contains? entry-names (str nm)))
+
+(defn- skip-defn-preamble [xs]
+  "After defn/defn- and name: skip optional docstring + attr-map, return the
+   rest starting at the binding vector (or first arity list for multi-arity)."
+  (cond
+    (empty? xs) xs
+    (string? (first xs)) (skip-defn-preamble (rest xs))
+    (map? (first xs))    (skip-defn-preamble (rest xs))
+    :else                xs))
+
+(defn- index-of-amp [bvec]
+  (loop [i 0]
+    (cond
+      (>= i (count bvec)) -1
+      (= '& (nth bvec i)) i
+      :else (recur (inc i)))))
+
+(defn- arity-shape-of [bvec]
+  "Classify a single-arity binding vector for the entry frame.
+   :variadic — [& args] (or [fixed… & rest], treated as variadic call)
+   :vector   — [argv] (one arg; frame builds a string vector from os.Args)
+   :none     — []
+   nil       — unsupported / multi-fixed without &"
+  (when (vector? bvec)
+    (let [n   (count bvec)
+          amp (index-of-amp bvec)]
+      (cond
+        (>= amp 0)  :variadic
+        (zero? n)   :none
+        (= n 1)     :vector
+        :else       nil))))
+
+(defn- parse-entry-form [form]
+  "If form is a recognized program entry, return
+   {:name :private? :arity-shape :binding :form}, else nil."
+  (when (and (seq? form)
+             (symbol? (first form))
+             (or (= 'defn (first form)) (= 'defn- (first form)))
+             (symbol? (second form))
+             (entry-name? (second form)))
+    (let [head     (first form)
+          nm       (second form)
+          private? (or (= 'defn- head) (boolean (:private (meta nm))))
+          body     (skip-defn-preamble (nnext form))
+          bvec     (when (vector? (first body)) (first body))
+          shape    (arity-shape-of bvec)]
+      (when (and bvec shape)
+        {:name        (str nm)
+         :private?    private?
+         :arity-shape shape
+         :binding     bvec
+         :form        form}))))
+
+(defn find-program-entry
+  "Scan forms (one namespace) for a recognized main/-main entry. Prefers
+   -main when both are present (Clojure convention). Returns the entry map
+   or nil."
+  [forms]
+  (let [found (keep parse-entry-form forms)]
+    (or (first (filter (fn [e] (= "-main" (:name e))) found))
+        (first found))))
+
+(defn- private-go-name
+  "Unexported Go ident for a private entry — mirrors lower-go/go-name using
+   the public go-name-munge-map (go-name itself is defn- in older bundles)."
+  [s]
+  (let [munge-map lower-go/go-name-munge-map
+        munged (apply str
+                      (map (fn [ch]
+                             (or (get munge-map ch)
+                                 (let [c (int ch)]
+                                   (if (or (and (>= c 97) (<= c 122))
+                                           (and (>= c 65) (<= c 90))
+                                           (and (>= c 48) (<= c 57))
+                                           (= c 95))
+                                     (str ch)
+                                     (format "_U%04X_" c)))))
+                           (str s)))]
+    ;; Reserved-word collision is vanishingly unlikely for main/_main; keep
+    ;; the simple form. lower-go/go-name adds a trailing _ for reserved words.
+    munged))
+
+(defn entry-go-name
+  "Go identifier the lowered entry is emitted under. Public → PascalCase
+   (main/-main both → Main); private → unexported munge (main → main,
+   -main → _main)."
+  [entry]
+  (if (:private? entry)
+    (private-go-name (:name entry))
+    (lower-go/go-export-name (:name entry))))
+
+(defn- go-src-has-func? [go-src go-name]
+  (and (string? go-src)
+       (clojure.string/includes? go-src (str "func " go-name "("))))
+
+(defn- go-func-needs-error? [go-src go-name]
+  "True when the lowered func's result list includes error. Defaults to true
+   (safer for call sites) when the signature line can't be parsed."
+  (if-not (string? go-src)
+    true
+    (let [needle (str "func " go-name "(")
+	idx    (clojure.string/index-of go-src needle)]
+      (if (or (nil? idx) (neg? idx))
+        true
+        (let [line (first (clojure.string/split (subs go-src idx) #"\n"))
+              after-params (let [c (clojure.string/index-of line ")")]
+                             (when (and c (not (neg? c)))
+                               (clojure.string/trim (subs line (inc c)))))]
+          (or (nil? after-params)
+              (clojure.string/includes? after-params "error")))))))
+
+(defn analyze-entry
+  "Combine a discovered entry with the emitted Go for its namespace.
+   Returns entry assoc'd with :go-name, :lowered?, :needs-error?, :call-name
+   (the name package main should invoke — NativeMain when private)."
+  [entry go-src]
+  (let [gname (entry-go-name entry)
+        ok?   (go-src-has-func? go-src gname)]
+    (assoc entry
+           :go-name      gname
+           :lowered?     ok?
+           :needs-error? (go-func-needs-error? go-src gname)
+           :call-name    (if (:private? entry) "NativeMain" gname))))
+
+(defn- go-string-lit [s]
+  (str "\"" (clojure.string/replace
+              (clojure.string/replace s "\\" "\\\\")
+              "\"" "\\\"") "\""))
+
+(defn- emit-argv-setup [arity-shape]
+  (case arity-shape
+    :none
+    "\trt.SetCommandLineArgs(os.Args[1:])\n"
+
+    :variadic
+    (str "\trt.SetCommandLineArgs(os.Args[1:])\n"
+         "\targv := make([]vm.Value, len(os.Args)-1)\n"
+         "\tfor i, a := range os.Args[1:] {\n"
+         "\t\targv[i] = vm.String(a)\n"
+         "\t}\n")
+
+    :vector
+    (str "\trt.SetCommandLineArgs(os.Args[1:])\n"
+         "\targvItems := make([]vm.Value, len(os.Args)-1)\n"
+         "\tfor i, a := range os.Args[1:] {\n"
+         "\t\targvItems[i] = vm.String(a)\n"
+         "\t}\n"
+         "\targv := vm.NewArrayVector(argvItems)\n")))
+
+(defn- emit-direct-call [pkg-alias call-name arity-shape needs-error?]
+  (let [recv (str pkg-alias "." call-name)
+        args (case arity-shape
+               :none     "ec"
+               :variadic "ec, argv..."
+               :vector   "ec, argv")]
+    (if needs-error?
+      (str "\tif _, err := " recv "(" args "); err != nil {\n"
+           "\t\tfmt.Fprint(os.Stderr, vm.FormatError(err))\n"
+           "\t\tos.Exit(1)\n"
+           "\t}\n")
+      (str "\t" recv "(" args ")\n"))))
+
+(defn- emit-vm-fallback [entry]
+  "VM fallback when the entry did not lower: invoke the main/-main Var on
+   the installed namespace. LoadProgramNamespaces has already replayed every
+   NSOrder chunk (including MainChunk when it is one of them), so a bare
+   RunProgramMainChunk would no-op for the common single-ns case — look the
+   entry Var up and Invoke it instead."
+  (let [var-name (if entry (:name entry) "-main")]
+    (str "\trt.SetCommandLineArgs(os.Args[1:])\n"
+         "\targv := make([]vm.Value, len(os.Args)-1)\n"
+         "\tfor i, a := range os.Args[1:] {\n"
+         "\t\targv[i] = vm.String(a)\n"
+         "\t}\n"
+         "\tif err := rt.InvokeProgramEntry(ec, " (go-string-lit var-name) ", argv); err != nil {\n"
+         "\t\tfmt.Fprint(os.Stderr, vm.FormatError(err))\n"
+         "\t\tos.Exit(1)\n"
+         "\t}\n")))
+
+(defn emit-entry-bridge-go
+  "Go source for a same-package NativeMain forwarding wrapper. pkg-name is
+   the Go package clause identifier (leaf segment). Nil when no bridge needed."
+  [pkg-name entry]
+  (when (and entry (:lowered? entry) (:private? entry))
+    (let [gname (:go-name entry)
+          shape (:arity-shape entry)
+          params (case shape
+                   :none     "ec *vm.ExecContext"
+                   :variadic "ec *vm.ExecContext, args ...vm.Value"
+                   :vector   "ec *vm.ExecContext, arg0 vm.Value")
+          call-args (case shape
+                      :none     "ec"
+                      :variadic "ec, args..."
+                      :vector   "ec, arg0")
+          result-sig (if (:needs-error? entry)
+                       "(vm.Value, error)"
+                       "vm.Value")]
+      (str "// Code generated by lg-compile (#425 native-entry bridge). DO NOT EDIT.\n\n"
+           "package " pkg-name "\n\n"
+           "import \"github.com/nooga/let-go/pkg/vm\"\n\n"
+           "// NativeMain is the cross-package reachability surface for a\n"
+           "// private (defn- main …) / ^:private entry. package main calls\n"
+           "// this; the lowered entry itself stays unexported.\n"
+           "func NativeMain(" params ") " result-sig " {\n"
+           "\treturn " gname "(" call-args ")\n"
+           "}\n"))))
+
+(defn emit-entry-frame-go
+  "Generate package-main Go source for the AOT native-entry frame.
+
+   opts:
+     :entry          — analyze-entry result (required for direct entry; when
+                       nil or :lowered? false, emits VM MainChunk fallback)
+     :entry-import   — Go import path of the entry package
+     :entry-alias    — import alias (default \"prog\")
+     :blank-imports  — other lowered package import paths (for init() overrides)
+     :lgb-file       — embed filename (default \"program.lgb\")"
+  [opts]
+  (let [entry         (:entry opts)
+        entry-import  (:entry-import opts)
+        entry-alias   (or (:entry-alias opts) "prog")
+        blanks        (or (:blank-imports opts) [])
+        lgb           (or (:lgb-file opts) "program.lgb")
+        lowered?      (boolean (and entry (:lowered? entry)))
+        call-name     (when lowered? (:call-name entry))
+        shape         (when entry (:arity-shape entry))
+        needs-error?  (if entry (:needs-error? entry) true)
+        import-lines
+        (vec
+          (concat
+            ["\t_ \"embed\""
+             "\t\"fmt\""
+             "\t\"os\""
+             ""]
+            (when (and lowered? entry-import)
+              [(str "\t" entry-alias " " (go-string-lit entry-import))])
+            (mapv (fn [p] (str "\t_ " (go-string-lit p)))
+                  (filter (fn [p] (not= p entry-import)) blanks))
+            [""
+             "\t\"github.com/nooga/let-go/pkg/rt\""
+             "\t\"github.com/nooga/let-go/pkg/vm\""]))
+        boot
+        (str "\tec, err := rt.BootCore()\n"
+             "\tif err != nil {\n"
+             "\t\tfmt.Fprintf(os.Stderr, \"BootCore: %v\\n\", err)\n"
+             "\t\tos.Exit(1)\n"
+             "\t}\n"
+             (if lowered? "" "\t_ = ec\n")
+             "\n"
+             "\tunit, err := rt.DecodeExecUnit(programLGB)\n"
+             "\tif err != nil {\n"
+             "\t\tfmt.Fprintf(os.Stderr, \"decode program.lgb: %v\\n\", err)\n"
+             "\t\tos.Exit(1)\n"
+             "\t}\n"
+             "\tif err := rt.LoadProgramNamespaces(unit); err != nil {\n"
+             "\t\tfmt.Fprintf(os.Stderr, \"%v\\n\", err)\n"
+             "\t\tos.Exit(1)\n"
+             "\t}\n"
+             "\n")
+        entry-body
+        (if lowered?
+          (str (emit-argv-setup shape)
+               "\n"
+               (emit-direct-call entry-alias call-name shape needs-error?))
+          (emit-vm-fallback entry))]
+    (str "// Code generated by lg-compile (#425 native-entry frame). DO NOT EDIT.\n"
+         "// native entry: "
+         (if lowered?
+           (str (:name entry) " → " entry-alias "." call-name
+                " (" (name shape) ")")
+           "none (VM MainChunk fallback)")
+         "\n\n"
+         "package main\n\n"
+         "import (\n"
+         (clojure.string/join "\n" import-lines)
+         "\n)\n\n"
+         "//go:embed " lgb "\n"
+         "var programLGB []byte\n\n"
+         "func main() {\n"
+         boot
+         entry-body
+         "}\n")))
+
+(defn entry-summary-line
+  "Item 3 one-liner: 'N fns lowered; native entry: Main ✓' / 'none'."
+  [n-lowered entry]
+  (let [label (cond
+                (nil? entry)                    "none"
+                (not (:lowered? entry))         (str (:name entry) " (not lowered)")
+                :else                           (str (:call-name entry) " ✓"))]
+    (str n-lowered " fns lowered; native entry: " label)))

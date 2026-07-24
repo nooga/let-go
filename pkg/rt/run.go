@@ -47,18 +47,102 @@ func DecodeExecUnit(data []byte) (*bytecode.ExecUnit, error) {
 }
 
 // RunExecUnit replays a decoded unit: namespace chunks in dependency order
-// first, then the main chunk.
+// first, then the main chunk (when it is not already one of those namespaces).
 func RunExecUnit(unit *bytecode.ExecUnit) error {
+	if err := LoadProgramNamespaces(unit); err != nil {
+		return err
+	}
+	return RunProgramMainChunk(unit)
+}
+
+// LoadProgramNamespaces replays every namespace chunk in unit.NSOrder, draining
+// ApplyGoOverrides after each so gogen_ir NativeFn overrides land on the Vars
+// the bytecode just installed. This is the program-half of an AOT native-entry
+// frame (#425): BootCore already owns core boot+reapply; the generated main.go
+// owns only this load, then either calls the lowered entry directly or falls
+// back to RunProgramMainChunk.
+//
+// Unlike the historical RunExecUnit loop, this does NOT skip MainChunk —
+// for a single-ns program the ns chunk IS MainChunk, and the native entry
+// still needs those Vars (non-lowered callees, override targets) installed
+// before the direct Go call. RunProgramMainChunk then no-ops when MainChunk
+// was already covered here.
+func LoadProgramNamespaces(unit *bytecode.ExecUnit) error {
+	if unit == nil {
+		return fmt.Errorf("LoadProgramNamespaces: nil ExecUnit")
+	}
 	for _, name := range unit.NSOrder {
 		chunk := unit.NSChunks[name]
-		if chunk == nil || chunk == unit.MainChunk {
+		if chunk == nil {
 			continue
 		}
 		if err := runChunk(chunk); err != nil {
 			return fmt.Errorf("loading namespace %s: %w", name, err)
 		}
+		if ns := LookupNS(name); ns != nil {
+			ApplyGoOverrides(ns)
+		}
 	}
-	return runChunk(unit.MainChunk)
+	return nil
+}
+
+// RunProgramMainChunk runs unit.MainChunk on the VM when it was not already
+// replayed by LoadProgramNamespaces (i.e. when MainChunk is not one of the
+// NSOrder namespaces). The AOT native-entry VM-fallback path (#425 Finding 2)
+// uses this after LoadProgramNamespaces when the recognized main/-main form
+// did not lower.
+func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
+	if unit == nil {
+		return fmt.Errorf("RunProgramMainChunk: nil ExecUnit")
+	}
+	if unit.MainChunk == nil {
+		return nil
+	}
+	for _, name := range unit.NSOrder {
+		if unit.NSChunks[name] == unit.MainChunk {
+			// Already loaded (and override-drained) by LoadProgramNamespaces.
+			return nil
+		}
+	}
+	if err := runChunk(unit.MainChunk); err != nil {
+		return err
+	}
+	return nil
+}
+
+// InvokeProgramEntry looks up name ("-main" or "main") across loaded
+// namespaces and Invokes it with args. Used by the #425 native-entry
+// VM-fallback frame after LoadProgramNamespaces has installed defs — a bare
+// MainChunk re-run would no-op for single-ns programs whose MainChunk is the
+// ns chunk itself.
+func InvokeProgramEntry(ec *vm.ExecContext, name string, args []vm.Value) error {
+	if ec == nil {
+		return fmt.Errorf("InvokeProgramEntry: nil ExecContext")
+	}
+	sym := vm.Symbol(name)
+	var v *vm.Var
+	if cur, ok := CurrentNS.Deref().(*vm.Namespace); ok && cur != nil {
+		v = cur.LookupLocal(sym)
+	}
+	if v == nil {
+		nsMu.RLock()
+		for _, ns := range nsRegistry {
+			if cand := ns.LookupLocal(sym); cand != nil {
+				v = cand
+				break
+			}
+		}
+		nsMu.RUnlock()
+	}
+	if v == nil {
+		return fmt.Errorf("InvokeProgramEntry: %s not found", name)
+	}
+	fn, ok := v.Deref().(vm.Fn)
+	if !ok {
+		return fmt.Errorf("InvokeProgramEntry: %s is not callable", name)
+	}
+	_, err := ec.Invoke(fn, args)
+	return err
 }
 
 func runChunk(c *vm.CodeChunk) error {

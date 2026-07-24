@@ -17,6 +17,12 @@
 ;; collect-all/emit-all pass and emits direct pkg.Fn(ec,…) calls + imports +
 ;; exported wrappers), then writes each returned Go package to disk. Variadic /
 ;; non-coercible fns aren't :direct-callable?, so they stay on the trampoline.
+;;
+;; When a recognized program entry (main / -main, including defn-) is present,
+;; also emits <out-dir>/main.go — the #425 native-entry frame (BootCore → load
+;; program.lgb NS chunks with override drain → direct native entry or VM
+;; MainChunk fallback). The orchestrator must place program.lgb beside main.go
+;; before `go build` (gloat / a thin build script; lg-compile does not own that).
 
 (require 'ir.data)
 (require 'ir.passes.pipeline)
@@ -26,6 +32,11 @@
 (require 'ir.lower-go)
 (require 'clojure.string)
 (require 'gogen)
+
+;; entry-frame is a new ns (#425). Require it; the resolver finds it under
+;; pkg/rt/core when LG_SOURCE_PATHS includes that tree (or after core regen
+;; embeds it). lg-compile is normally run from the let-go checkout root.
+(require 'ir.passes.entry-frame)
 
 ;; Evaluating a file's (ns ..) form switches the GLOBAL current ns; capture this
 ;; script's ns so we can restore it after loading (else later top-level defs in
@@ -119,6 +130,12 @@
        (:nsn s)))
     @out))
 
+(defn count-lowered-funcs [go-src]
+  "Rough count of top-level `func Name(` decls (excludes __gogen_wrap / init)."
+  (if-not (string? go-src)
+    0
+    (count (re-seq #"\nfunc [A-Za-z_][A-Za-z0-9_]*\(" (str "\n" go-src)))))
+
 ;; Everything below runs in ONE top-level form so it is COMPILED in this script's
 ;; ns (all symbols resolve) BEFORE the runtime (ns ..)/eval calls switch the
 ;; global current ns.
@@ -137,7 +154,8 @@
                       {:path path :forms forms :ns-sym ns-sym :lf lf
                        :pkg pkg :reldir reldir
                        :nsn (if ns-sym ns-sym (symbol nsstr))
-                       :go-pkg (str import-prefix "/" reldir)}))
+                       :go-pkg (str import-prefix "/" reldir)
+                       :entry (ir.passes.entry-frame/find-program-entry forms)}))
                   files)
       ;; --- load every ns first, in dependency order, evaluating ONLY
       ;;     definitional forms, so cross-ns refers resolve when
@@ -150,7 +168,10 @@
       ;; --- whole-program cross-package lowering (collect-all then emit-all) ---
       gospecs (mapv (fn [s] [(:pkg s) (:nsn s) (:lf s) (:go-pkg s)]) specs)
       results (binding [ir.passes.pipeline/*target* :go]
-                (ir.passes.pipeline/lower-all-ns-to-go gospecs))]
+                (ir.passes.pipeline/lower-all-ns-to-go gospecs))
+      ;; Prefer -main's owning ns when several inputs declare an entry.
+      entry-spec (or (first (filter (fn [s] (and (:entry s) (= "-main" (:name (:entry s))))) specs))
+                     (first (filter :entry specs)))]
   ;; --- write each emitted package to disk ---
   (doseq [pair (map-indexed vector specs)]
     (let [i  (first pair)
@@ -165,4 +186,34 @@
                            (println (str (:path s) " -> " out)))
         :else            (println (str "EMIT-FAIL " (:path s) " pkg=" (:pkg s)
                                        " returned " (clojure.core/type go))))))
+  ;; --- #425 native-entry frame (main.go + optional private bridge) ---
+  (when entry-spec
+    (let [ei       (first (keep-indexed (fn [i s] (when (= s entry-spec) i)) specs))
+          go-src   (nth results ei)
+          entry    (ir.passes.entry-frame/analyze-entry (:entry entry-spec) go-src)
+          blanks   (vec (keep (fn [pair]
+                                (let [s (nth specs (first pair))
+                                      g (second pair)]
+                                  (when (string? g) (:go-pkg s))))
+                              (map-indexed vector results)))
+          n-funcs  (reduce + (map count-lowered-funcs results))
+          frame    (ir.passes.entry-frame/emit-entry-frame-go
+                     {:entry entry
+                      :entry-import (:go-pkg entry-spec)
+                      :blank-imports blanks})
+          main-out (str out-dir "/main.go")
+          bridge   (ir.passes.entry-frame/emit-entry-bridge-go (:pkg entry-spec) entry)]
+      (mkdir out-dir)
+      (spit main-out frame)
+      (println (str "native-entry frame -> " main-out))
+      (when bridge
+        (let [bdir (str out-dir "/" (:reldir entry-spec))
+              bout (str bdir "/native_entry.go")]
+          (mkdir bdir)
+          (spit bout bridge)
+          (println (str "native-entry bridge -> " bout))))
+      (println (ir.passes.entry-frame/entry-summary-line n-funcs entry))))
+  (when-not entry-spec
+    (let [n-funcs (reduce + (map count-lowered-funcs results))]
+      (println (ir.passes.entry-frame/entry-summary-line n-funcs nil))))
   (println "done."))
