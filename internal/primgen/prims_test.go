@@ -411,3 +411,26 @@ func TestOwnModeEmitsBinding(t *testing.T) {
 		t.Fatal("own mode must emit var binding")
 	}
 }
+
+func TestInitFormRtUsesInstaller(t *testing.T) {
+	specs := []primSpec{{GoPkg: "github.com/nooga/let-go/pkg/rt", Package: "rt",
+		GoIdent: "CorePlus", Ns: "clojure.core", LgName: "+", Arity: -1, Variadic: true,
+		ResultSpec: "vm.Value", NeedsError: true}}
+	out := emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true)
+	if !strings.Contains(out, "func init() {\n\tRegisterInstaller(RegisterGeneratedPrimitives)\n}") {
+		t.Fatalf("rt target must self-register via the installer queue:\n%s", out)
+	}
+	if !strings.Contains(out, "vm.SetSuppressShadowWarn(true)") {
+		t.Fatal("own-mode registrar must suppress the core-shadow warning")
+	}
+}
+
+func TestInitFormExternalCallsDirectly(t *testing.T) {
+	specs := []primSpec{{GoPkg: "github.com/nooga/let-go/pkg/rt/corefns", Package: "corefns",
+		GoIdent: "Seq", Ns: "clojure.core", LgName: "seq", Arity: 1,
+		ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true}}
+	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns", false)
+	if !strings.Contains(out, "func init() {\n\tRegisterGeneratedPrimitives()\n}") {
+		t.Fatalf("non-rt target must self-register with a direct call:\n%s", out)
+	}
+}

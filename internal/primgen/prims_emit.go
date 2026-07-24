@@ -99,6 +99,10 @@ import (
 
 	// Generate RegisterGeneratedPrimitives function
 	b.WriteString("func RegisterGeneratedPrimitives() {\n")
+	if ownMode {
+		b.WriteString("\tvm.SetSuppressShadowWarn(true)\n")
+		b.WriteString("\tdefer vm.SetSuppressShadowWarn(false)\n")
+	}
 
 	// Register each module in deterministic key order — Go map iteration is
 	// randomized, so sort the (Ns|GoPkg) keys to keep regeneration byte-stable.
@@ -115,6 +119,14 @@ import (
 	}
 
 	b.WriteString("}\n")
+
+	// Emit init() function for self-registration
+	const rtPkgPath = "github.com/nooga/let-go/pkg/rt"
+	if targetPkgPath == rtPkgPath {
+		b.WriteString("\nfunc init() {\n\tRegisterInstaller(RegisterGeneratedPrimitives)\n}\n")
+	} else {
+		b.WriteString("\nfunc init() {\n\tRegisterGeneratedPrimitives()\n}\n")
+	}
 
 	return b.String()
 }
