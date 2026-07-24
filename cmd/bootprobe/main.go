@@ -37,7 +37,11 @@ import (
 func medianOf(xs []float64) float64 {
 	s := append([]float64(nil), xs...)
 	sort.Float64s(s)
-	return s[len(s)/2]
+	mid := len(s) / 2
+	if len(s)%2 == 0 {
+		return (s[mid-1] + s[mid]) / 2
+	}
+	return s[mid]
 }
 
 func startProfile(path string) func() {
