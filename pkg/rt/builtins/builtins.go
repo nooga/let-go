@@ -67,6 +67,8 @@ func Cons(elem, coll vm.Value) (vm.Value, error) {
 	return vm.NewCons(elem, seq), nil
 }
 
+// lg:native
+// lg:name contains?
 // Contains mirrors clojure.core/contains? — `(contains? coll k)`.
 func Contains(coll, k vm.Value) (vm.Value, error) {
 	if coll == vm.NIL {
@@ -94,4 +96,212 @@ func Contains(coll, k vm.Value) (vm.Value, error) {
 	}
 	i := int(idx)
 	return vm.Boolean(i >= 0 && i < indexed.RawCount()), nil
+}
+
+// lg:native
+// HashSet mirrors clojure.core/hash-set — `(hash-set & xs)`.
+func HashSet(args ...vm.Value) (vm.Value, error) {
+	return vm.NewSet(args), nil
+}
+
+// lg:native
+// lg:name array-map
+// ArrayMap mirrors clojure.core/array-map — `(array-map & kvs)`.
+func ArrayMap(args ...vm.Value) (vm.Value, error) {
+	if len(args)%2 != 0 {
+		return vm.NIL, fmt.Errorf("array-map requires an even number of arguments, got %d", len(args))
+	}
+	return vm.NewArrayMap(args), nil
+}
+
+// lg:native
+// Vec mirrors clojure.core/vec — `(vec coll)`.
+func Vec(coll vm.Value) (vm.Value, error) {
+	if coll == vm.NIL || coll == vm.EmptyList {
+		return vm.ArrayVector{}, nil
+	}
+	// Empty string → empty vector
+	if s, ok := coll.(vm.String); ok && len(string(s)) == 0 {
+		return vm.ArrayVector{}, nil
+	}
+	if v, ok := coll.(vm.ArrayVector); ok {
+		return v, nil
+	}
+	if a, ok := coll.(*vm.TypedArray); ok && a.Kind() == vm.ArrayObject {
+		return vm.ArrayVector(a.Unbox().([]vm.Value)), nil
+	}
+	seq, err := seqOf(coll)
+	if err != nil {
+		return vm.NIL, err
+	}
+	// Realize lazy seqs to check emptiness
+	if ls, ok := seq.(*vm.LazySeq); ok {
+		seq = ls.Seq()
+	}
+	if seq == nil || seq == vm.EmptyList {
+		return vm.ArrayVector{}, nil
+	}
+	ret := []vm.Value{}
+	for seq != nil {
+		ret = append(ret, seq.First())
+		seq = seq.Next()
+	}
+	return vm.NewArrayVector(ret), nil
+}
+
+// lg:native
+// Nth mirrors clojure.core/nth — `(nth coll i)`.
+// Takes vm.Value arguments and handles type conversion internally,
+// avoiding the type-coercion bottleneck of the primitive rt.Nth.
+func Nth(coll, i vm.Value) (vm.Value, error) {
+	// (nth nil i) => nil, matching rt.Nth / clojure.core/nth — nil is an empty
+	// coll for nth. An empty list is out of bounds, like an empty vector.
+	if coll == vm.NIL {
+		return vm.NIL, nil
+	}
+	if coll == vm.EmptyList {
+		return vm.NIL, fmt.Errorf("nth: index out of bounds")
+	}
+
+	// Convert index to int
+	var idx int
+	switch iv := i.(type) {
+	case vm.Int:
+		idx = int(iv)
+	default:
+		return vm.NIL, fmt.Errorf("nth: index must be numeric, got %s", i.Type().Name())
+	}
+
+	// Negative index
+	if idx < 0 {
+		return vm.NIL, fmt.Errorf("nth: negative index %d", idx)
+	}
+
+	// Handle strings
+	if s, ok := coll.(vm.String); ok {
+		runes := []rune(string(s))
+		if idx >= len(runes) {
+			return vm.NIL, fmt.Errorf("nth: index %d out of bounds for string", idx)
+		}
+		return vm.Char(runes[idx]), nil
+	}
+
+	// Handle indexed collections (vectors, arrays)
+	if indexed, ok := coll.(vm.Indexed); ok {
+		count := indexed.RawCount()
+		if idx >= count {
+			return vm.NIL, fmt.Errorf("nth: index %d out of bounds", idx)
+		}
+		return indexed.Nth(idx), nil
+	}
+
+	// Handle sequences. Realize a lazy seq at the head and each step (mirrors
+	// rt.forceSeq): an EMPTY lazy seq is non-nil until forced, so First() on it
+	// would wrongly yield nil instead of an out-of-bounds error.
+	seq, err := seqOf(coll)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("nth: cannot get sequence from %s", coll.Type().Name())
+	}
+	if ls, ok := seq.(*vm.LazySeq); ok {
+		seq = ls.Seq()
+	}
+	if seq == nil {
+		return vm.NIL, fmt.Errorf("nth: index %d out of bounds", idx)
+	}
+	for j := 0; j < idx; j++ {
+		seq = seq.Next()
+		if ls, ok := seq.(*vm.LazySeq); ok {
+			seq = ls.Seq()
+		}
+		if seq == nil {
+			return vm.NIL, fmt.Errorf("nth: index %d out of bounds", idx)
+		}
+	}
+	return seq.First(), nil
+}
+
+// lg:native
+// lg:name nth
+// Nth3 mirrors clojure.core/nth — `(nth coll i notFound)`.
+// Takes vm.Value arguments and handles type conversion internally.
+func Nth3(coll, i, notFound vm.Value) (vm.Value, error) {
+	// Handle nil/empty collection
+	if coll == vm.NIL || coll == vm.EmptyList {
+		return notFound, nil
+	}
+
+	// Convert index to int. A non-numeric index is an ERROR, not a not-found:
+	// canonical nth coerces the index to int, and (nth coll bad not-found) still
+	// throws on a bad index type — not-found is only for out-of-bounds.
+	var idx int
+	switch iv := i.(type) {
+	case vm.Int:
+		idx = int(iv)
+	default:
+		return vm.NIL, fmt.Errorf("nth: index must be numeric, got %s", i.Type().Name())
+	}
+
+	// Negative index
+	if idx < 0 {
+		return notFound, nil
+	}
+
+	// Handle strings
+	if s, ok := coll.(vm.String); ok {
+		runes := []rune(string(s))
+		if idx >= len(runes) {
+			return notFound, nil
+		}
+		return vm.Char(runes[idx]), nil
+	}
+
+	// Handle indexed collections (vectors, arrays)
+	if indexed, ok := coll.(vm.Indexed); ok {
+		count := indexed.RawCount()
+		if idx >= count {
+			return notFound, nil
+		}
+		return indexed.Nth(idx), nil
+	}
+
+	// Handle sequences. Realize a lazy seq at the head and each step so an EMPTY
+	// lazy seq falls through to notFound instead of yielding a nil First().
+	seq, err := seqOf(coll)
+	if err != nil {
+		return notFound, nil
+	}
+	if ls, ok := seq.(*vm.LazySeq); ok {
+		seq = ls.Seq()
+	}
+	if seq == nil {
+		return notFound, nil
+	}
+	for j := 0; j < idx; j++ {
+		seq = seq.Next()
+		if ls, ok := seq.(*vm.LazySeq); ok {
+			seq = ls.Seq()
+		}
+		if seq == nil {
+			return notFound, nil
+		}
+	}
+	return seq.First(), nil
+}
+
+// lg:native
+// lg:name seq?
+// IsSeq mirrors clojure.core/seq? — true only for values that are actually
+// vm.Seq. The explicit negative cases come first because several collection
+// types satisfy vm.Seq structurally while Clojure reports seq? false for them.
+// Single source of truth: rt's ns.Def("seq?") delegates here.
+func IsSeq(v vm.Value) (vm.Value, error) {
+	switch v.(type) {
+	case *vm.Nil, vm.String, *vm.TypedArray,
+		vm.ArrayVector, *vm.PersistentVector,
+		*vm.PersistentMap, *vm.PersistentSet,
+		*vm.SortedSet, *vm.SortedMap:
+		return vm.FALSE, nil
+	}
+	_, ok := v.(vm.Seq)
+	return vm.Boolean(ok), nil
 }

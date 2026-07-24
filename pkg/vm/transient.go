@@ -194,6 +194,21 @@ type TransientVector struct {
 	array []Value
 }
 
+// NewTransientVectorOfNils returns an editable transient vector of n NIL
+// slots in a single allocation. Callers that need an indexed scratch table
+// (ir.direct's per-call value array) would otherwise build it as
+// (vec (repeat n nil)) — a lazy seq walked element by element — which costs
+// one cons per slot before the transient copy even starts.
+func NewTransientVectorOfNils(n int) *TransientVector {
+	array := make([]Value, n)
+	for i := range array {
+		array[i] = NIL
+	}
+	t := &TransientVector{array: array}
+	t.edit.Store(true)
+	return t
+}
+
 func NewTransientVector(v []Value) *TransientVector {
 	t := &TransientVector{
 		array: make([]Value, len(v)),

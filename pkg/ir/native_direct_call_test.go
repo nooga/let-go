@@ -124,12 +124,35 @@ func TestBuildCallEvaluatesCalleeFirst(t *testing.T) {
 	}
 }
 
-// TestWithRedefsDisablesNativeDirect guards the Var override seam: a body that
-// rebinds a core var via with-redefs must NOT lower calls to that var into a
-// baked native-direct call (corefns.Count), because with-redefs mutates the
-// var root at runtime and the native call would ignore it. The call must fall
-// back to the cached-var / InvokeValue trampoline, which re-reads the root.
-func TestWithRedefsDisablesNativeDirect(t *testing.T) {
+// TestWithRedefsNativeDirectStaysGuarded guards the Var override seam: a body
+// that rebinds a core var via with-redefs may still lower calls to that var
+// into a native-direct call, but ONLY as a guarded pair —
+//
+//	if rt.NativePrimsIntact() { corefns.Count(...) } else { <trampoline> }
+//
+// rt.NativePrimsIntact is vm.GuardedRootsIntact, a global deviation counter
+// over the roots native modules direct-call. A with-redefs / alter-var-root /
+// intern on any of those roots trips it, so the guard takes its trampoline
+// branch and the override is observed. The counter records THAT a guarded root
+// changed, not who changed it, so this holds whether the redef happens in a
+// caller's dynamic extent or inside this very function.
+//
+// This is the AOT contract: lowered code calls natives directly, while a
+// superficial override stays observable through the guard.
+//
+// The test previously asserted the STRICTER property that no native call was
+// emitted at all. That banned the whole guarded-pair mechanism whenever a
+// function could rebind var roots, and since the flag is whole-function, ONE
+// alter-var-root disabled every native call in that function — ir.direct's
+// evaluator lost nth/get/count/assoc! to it, paying an ec.Invoke plus a
+// []vm.Value allocation per call. The behavioural guarantee is pinned by
+// test/native-bridge-parity.lg (redefinition-guard, which proves a BAKED
+// rt.Reduce3 in group-by observes a redef, and redefinition-guard-self-scoped).
+//
+// Unguarded bakings are a different matter and must still stand down; see
+// TestWithRedefsDisablesListIntrinsic, where the list intrinsic emits
+// vm.EmptyList.Cons(...) with no runtime recheck at all.
+func TestWithRedefsNativeDirectStaysGuarded(t *testing.T) {
 	ensureLoader()
 	rendered := runLispString(t,
 		`(do (create-ns (quote withredefseedns))
@@ -137,8 +160,11 @@ func TestWithRedefsDisablesNativeDirect(t *testing.T) {
 		     (ir.passes.pipeline/lower-ns-to-go "withredefseedns" (quote withredefseedns)
 		       [(quote (defn probe [x] (with-redefs [count (fn [_] 42)] (count x))))]))`)
 
-	if strings.Contains(rendered, "corefns.Count(") {
-		t.Fatalf("with-redefs over count must disable native-direct; found baked corefns.Count(...):\n--- go ---\n%s", rendered)
+	// A baked native call is allowed, but never unguarded.
+	if strings.Contains(rendered, "corefns.Count(") &&
+		!strings.Contains(rendered, "rt.NativePrimsIntact()") {
+		t.Fatalf("baked corefns.Count(...) emitted WITHOUT an rt.NativePrimsIntact() guard; "+
+			"a with-redefs on count would be ignored:\n--- go ---\n%s", rendered)
 	}
 	// And the call must still happen — through the var-mediated cached-var
 	// trampoline, which re-reads count's root each call so the redef is seen.

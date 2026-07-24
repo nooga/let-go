@@ -409,7 +409,6 @@ func init() {
 	// alphabetically so every file has registered first.
 	installLangNS()
 	installNativeDirectNS()
-	registerBuiltinsModule()
 
 	// Generated primitives intentionally re-Def native versions over the
 	// bootstrap closures — silence the warn-on-core-shadow noise for this
@@ -418,6 +417,11 @@ func init() {
 	vm.SetSuppressShadowWarn(true)
 	RegisterGeneratedPrimitives()
 	vm.SetSuppressShadowWarn(false)
+
+	// Register builtins AFTER primitives so that builtin versions (with better
+	// signatures) override the generated primitive versions. This is the EPIC-012
+	// seam: hot clojure.core functions migrate from primitives to builtins.
+	registerBuiltinsModule()
 	// walk namespace is embedded via coreFS and will be loaded on demand
 }
 
@@ -442,6 +446,19 @@ func registerBuiltinsModule() {
 			"not":       {GoIdent: "Not", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
 			"cons":      {GoIdent: "Cons", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
 			"contains?": {GoIdent: "Contains", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"seq?":      {GoIdent: "IsSeq", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			// Second hot batch, measured from the AOT-lowered ir tree: these were
+			// the top remaining CachedVarFn trampolines with no direct path at all
+			// (vec 127, hash-set 130, array-map 122 call sites).
+			"vec":       {GoIdent: "Vec", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"hash-set":  {GoIdent: "HashSet", Arity: 0, Variadic: true, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"array-map": {GoIdent: "ArrayMap", Arity: 0, Variadic: true, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			// Third hot batch: nth with vm.Value index parameter (avoiding type-coercion
+			// bottleneck of the typed primitive). These are the index-access callsites
+			// that currently fall back to trampolines due to proven numeric index types.
+			// Registered with LgName: "nth" so the registry lookup finds them by name+arity.
+			"nth@2": {GoIdent: "Nth", Arity: 2, LgName: "nth", ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"nth@3": {GoIdent: "Nth3", Arity: 3, LgName: "nth", ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
 		},
 	})
 }
@@ -2655,15 +2672,6 @@ func installLangNS() {
 		return b.Chunk().(vm.Value), nil
 	})
 
-	// rangeInt coerces a range bound: Int passes through; anything
-	// else is a graceful error (a raw .(vm.Int) assertion panics).
-	rangeInt := func(v vm.Value, what string) (vm.Int, error) {
-		if n, ok := v.(vm.Int); ok {
-			return n, nil
-		}
-		return 0, fmt.Errorf("range %s must be an integer, got %s",
-			what, v.Type().Name())
-	}
 	rangef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) == 0 {
 			// Infinite range: (range) -> lazy seq 0, 1, 2, ...
@@ -5493,26 +5501,6 @@ func installLangNS() {
 		return vm.String(string(s.(vm.String)) + "\n"), nil
 	})
 
-	regexSubmatchVector := func(s string, indices []int) vm.ArrayVector {
-		result := make(vm.ArrayVector, len(indices)/2)
-		for i := range result {
-			start, end := indices[2*i], indices[2*i+1]
-			if start < 0 {
-				result[i] = vm.NIL
-				continue
-			}
-			result[i] = vm.String(s[start:end])
-		}
-		return result
-	}
-
-	regexSubmatchValue := func(s string, indices []int) vm.Value {
-		if len(indices) == 2 {
-			return vm.String(s[indices[0]:indices[1]])
-		}
-		return regexSubmatchVector(s, indices)
-	}
-
 	// re-find: find first match of regex in string
 	reFind, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
@@ -8295,6 +8283,59 @@ func installLangNS() {
 		return vm.MakeMultiArity(fns)
 	})
 	ns.Def("make-multi-arity", makeMultiArityFn)
+
+	// with-arity — (with-arity f arity variadic?) wraps callable f in a native
+	// that DECLARES the given arity. ir.direct's invokers are necessarily
+	// (fn [& as] …) — the only shape able to receive an arbitrary call — which
+	// reports Arity() -1/variadic and so reads to MakeMultiArity as a rest-arm.
+	// Every arm of a multi-arity fn then collapses into ma.rest, leaving ma.fns
+	// empty and dispatch broken. Re-declaring the arity here keeps the shape
+	// the dispatcher needs without constraining how f is built.
+	withArityFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 3 {
+			return vm.NIL, fmt.Errorf("with-arity expects 3 args (fn arity variadic?)")
+		}
+		target, ok := vs[0].(vm.Fn)
+		if !ok {
+			return vm.NIL, fmt.Errorf("with-arity expects a fn, got %s", vs[0].Type().Name())
+		}
+		arity, ok := vs[1].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("with-arity expects an int arity, got %s", vs[1].Type().Name())
+		}
+		name := ""
+		if named, ok := vs[0].(fmt.Stringer); ok {
+			name = named.String()
+		}
+		return vm.NewArityNativeFn(name, int(arity), vm.IsTruthy(vs[2]),
+			func(ec *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+				return ec.Invoke(target, args)
+			}), nil
+	})
+	ns.Def("with-arity", withArityFn)
+
+	// alloc-slots — (alloc-slots n) returns a transient vector of n nils.
+	//
+	// The obvious spelling, (transient (vec (repeat n nil))), routes through a
+	// LAZY seq: `repeat` yields a cons per element, `vec` walks it, and the
+	// transient then copies. In ir.direct's evaluator that runs once per CALL
+	// to size the value table, making (*Repeat).Next one of the largest single
+	// allocation sites in the interpreter (~8% of all objects on fib). A
+	// sized make([]Value, n) does the same job with one allocation.
+	allocSlotsFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("alloc-slots expects 1 arg (count)")
+		}
+		n, ok := vs[0].(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("alloc-slots expects an int, got %s", vs[0].Type().Name())
+		}
+		if n < 0 {
+			return vm.NIL, fmt.Errorf("alloc-slots expects a non-negative count, got %d", int(n))
+		}
+		return vm.NewTransientVectorOfNils(int(n)), nil
+	})
+	ns.Def("alloc-slots", allocSlotsFn)
 
 	// sleep — sleep for n milliseconds
 	sleepf := vm.NewCtxNativeFn("sleep", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
