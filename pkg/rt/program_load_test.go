@@ -6,6 +6,7 @@
 package rt
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/bytecode"
@@ -96,4 +97,80 @@ func TestRunProgramMainChunkNoopWhenAlreadyLoaded(t *testing.T) {
 	if err := RunProgramMainChunk(unit); err != nil {
 		t.Fatalf("RunProgramMainChunk: %v", err)
 	}
+}
+
+// mkLogChunk builds a chunk that invokes logFn with a single label arg, so a
+// replay leaves an observable, ordered trace of which chunks ran.
+func mkLogChunk(logFn vm.Value, label vm.Value) *vm.CodeChunk {
+	consts := vm.NewConsts()
+	fnIdx := consts.Intern(logFn)
+	argIdx := consts.Intern(label)
+	chunk := vm.NewCodeChunk(consts)
+	chunk.Append(vm.OP_LOAD_CONST)
+	chunk.Append32(fnIdx)
+	chunk.Append(vm.OP_LOAD_CONST)
+	chunk.Append32(argIdx)
+	chunk.Append(vm.OP_INVOKE)
+	chunk.Append32(1)
+	chunk.Append(vm.OP_RETURN)
+	chunk.SetMaxStack(2)
+	return chunk
+}
+
+func valStrings(vs []vm.Value) []string {
+	out := make([]string, len(vs))
+	for i, v := range vs {
+		out[i] = string(v.(vm.String))
+	}
+	return out
+}
+
+// TestRunExecUnitReplayOrderAndMainOnce pins the observable contract of
+// RunExecUnit after the #425 refactor onto LoadProgramNamespaces +
+// RunProgramMainChunk: every NSOrder chunk runs in order, and the main chunk
+// runs exactly once — whether it is a distinct chunk (runs last) or aliases a
+// namespace chunk (runs in place, not a second time).
+func TestRunExecUnitReplayOrderAndMainOnce(t *testing.T) {
+	var log []vm.Value
+	logFn, err := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
+		log = append(log, args[0])
+		return vm.NIL, nil
+	})
+	if err != nil {
+		t.Fatalf("wrap native: %v", err)
+	}
+
+	nsA := mkLogChunk(logFn, vm.String("A"))
+	nsB := mkLogChunk(logFn, vm.String("B"))
+
+	t.Run("separate main chunk runs last", func(t *testing.T) {
+		log = nil
+		unit := &bytecode.ExecUnit{
+			NSOrder:   []string{"nsA", "nsB"},
+			NSChunks:  map[string]*vm.CodeChunk{"nsA": nsA, "nsB": nsB},
+			MainChunk: mkLogChunk(logFn, vm.String("main")),
+		}
+		if err := RunExecUnit(unit); err != nil {
+			t.Fatalf("RunExecUnit: %v", err)
+		}
+		if got, want := valStrings(log), []string{"A", "B", "main"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("main aliasing a namespace chunk runs exactly once", func(t *testing.T) {
+		log = nil
+		unit := &bytecode.ExecUnit{
+			NSOrder:   []string{"nsA", "nsB"},
+			NSChunks:  map[string]*vm.CodeChunk{"nsA": nsA, "nsB": nsB},
+			MainChunk: nsB, // MainChunk IS the last ns chunk
+		}
+		if err := RunExecUnit(unit); err != nil {
+			t.Fatalf("RunExecUnit: %v", err)
+		}
+		// nsB must not run a second time as "the main chunk".
+		if got, want := valStrings(log), []string{"A", "B"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v (main chunk double-ran)", got, want)
+		}
+	})
 }

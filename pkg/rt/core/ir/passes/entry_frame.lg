@@ -84,33 +84,14 @@
     (or (first (filter (fn [e] (= "-main" (:name e))) found))
         (first found))))
 
-(defn- private-go-name
-  "Unexported Go ident for a private entry — mirrors lower-go/go-name using
-   the public go-name-munge-map (go-name itself is defn- in older bundles)."
-  [s]
-  (let [munge-map lower-go/go-name-munge-map
-        munged (apply str
-                      (map (fn [ch]
-                             (or (get munge-map ch)
-                                 (let [c (int ch)]
-                                   (if (or (and (>= c 97) (<= c 122))
-                                           (and (>= c 65) (<= c 90))
-                                           (and (>= c 48) (<= c 57))
-                                           (= c 95))
-                                     (str ch)
-                                     (format "_U%04X_" c)))))
-                           (str s)))]
-    ;; Reserved-word collision is vanishingly unlikely for main/_main; keep
-    ;; the simple form. lower-go/go-name adds a trailing _ for reserved words.
-    munged))
-
 (defn entry-go-name
   "Go identifier the lowered entry is emitted under. Public → PascalCase
    (main/-main both → Main); private → unexported munge (main → main,
-   -main → _main)."
+   -main → _main), via lower-go/go-name so the munge (incl. reserved-word
+   handling) stays single-sourced with the lowered emitter."
   [entry]
   (if (:private? entry)
-    (private-go-name (:name entry))
+    (lower-go/go-name (:name entry))
     (lower-go/go-export-name (:name entry))))
 
 (defn- go-src-has-func? [go-src go-name]
@@ -123,7 +104,7 @@
   (if-not (string? go-src)
     true
     (let [needle (str "func " go-name "(")
-	idx    (clojure.string/index-of go-src needle)]
+          idx    (clojure.string/index-of go-src needle)]
       (if (or (nil? idx) (neg? idx))
         true
         (let [line (first (clojure.string/split (subs go-src idx) #"\n"))
@@ -185,17 +166,34 @@
       (str "\t" recv "(" args ")\n"))))
 
 (defn- emit-vm-fallback [entry]
-  "VM fallback when the entry did not lower: invoke the main/-main Var on
-   the installed namespace. LoadProgramNamespaces has already replayed every
-   NSOrder chunk (including MainChunk when it is one of them), so a bare
-   RunProgramMainChunk would no-op for the common single-ns case — look the
-   entry Var up and Invoke it instead."
-  (let [var-name (if entry (:name entry) "-main")]
+  "VM fallback when the entry did not lower: look up the main/-main Var on the
+   installed namespace and Invoke it. LoadProgramNamespaces has already replayed
+   every NSOrder chunk (including MainChunk when it is one of them), so a bare
+   RunProgramMainChunk would no-op for the common single-ns case — look the entry
+   Var up and Invoke it instead. The argv is shaped to the entry's arity so the
+   Invoke matches: :variadic spreads os.Args, :vector passes one string vector,
+   :none passes nothing."
+  (let [var-name (if entry (:name entry) "-main")
+        shape    (if entry (:arity-shape entry) :variadic)
+        argv-setup
+        (case shape
+          :none
+          "\targv := []vm.Value{}\n"
+
+          :vector
+          (str "\targvItems := make([]vm.Value, len(os.Args)-1)\n"
+               "\tfor i, a := range os.Args[1:] {\n"
+               "\t\targvItems[i] = vm.String(a)\n"
+               "\t}\n"
+               "\targv := []vm.Value{vm.NewArrayVector(argvItems)}\n")
+
+          ;; :variadic (and the nil-entry default)
+          (str "\targv := make([]vm.Value, len(os.Args)-1)\n"
+               "\tfor i, a := range os.Args[1:] {\n"
+               "\t\targv[i] = vm.String(a)\n"
+               "\t}\n"))]
     (str "\trt.SetCommandLineArgs(os.Args[1:])\n"
-         "\targv := make([]vm.Value, len(os.Args)-1)\n"
-         "\tfor i, a := range os.Args[1:] {\n"
-         "\t\targv[i] = vm.String(a)\n"
-         "\t}\n"
+         argv-setup
          "\tif err := rt.InvokeProgramEntry(ec, " (go-string-lit var-name) ", argv); err != nil {\n"
          "\t\tfmt.Fprint(os.Stderr, vm.FormatError(err))\n"
          "\t\tos.Exit(1)\n"
@@ -258,8 +256,12 @@
              ""]
             (when (and lowered? entry-import)
               [(str "\t" entry-alias " " (go-string-lit entry-import))])
+            ;; Drop entry-import from the blank list only when it is already
+            ;; the aliased import above (lowered?). When the entry did NOT
+            ;; lower, keep it blank-imported so any sibling fns it lowered
+            ;; still register their init() overrides.
             (mapv (fn [p] (str "\t_ " (go-string-lit p)))
-                  (filter (fn [p] (not= p entry-import)) blanks))
+                  (filter (fn [p] (not (and lowered? (= p entry-import)))) blanks))
             [""
              "\t\"github.com/nooga/let-go/pkg/rt\""
              "\t\"github.com/nooga/let-go/pkg/vm\""]))
@@ -269,7 +271,6 @@
              "\t\tfmt.Fprintf(os.Stderr, \"BootCore: %v\\n\", err)\n"
              "\t\tos.Exit(1)\n"
              "\t}\n"
-             (if lowered? "" "\t_ = ec\n")
              "\n"
              "\tunit, err := rt.DecodeExecUnit(programLGB)\n"
              "\tif err != nil {\n"

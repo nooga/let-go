@@ -439,8 +439,9 @@
 
 (defn go-name [s]
   "Unexported Go identifier for s (dash→underscore munge). Public so the
-   #425 entry-frame generator can name a private (defn- main …) without
-   reimplementing the munge; public fns use go-export-name instead."
+   #425 entry-frame generator (ir.passes.entry-frame) can name a private
+   (defn- main …) through this same munge instead of reimplementing it;
+   public fns use go-export-name instead."
   (let [munged (apply str (map (fn [ch] (munge-char go-name-munge-map ch)) s))]
     (if (contains? go-reserved-words munged)
       (str munged "_")

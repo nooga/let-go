@@ -131,10 +131,16 @@
     @out))
 
 (defn count-lowered-funcs [go-src]
-  "Rough count of top-level `func Name(` decls (excludes __gogen_wrap / init)."
+  "Rough count of top-level lowered `func Name(` decls — excludes the generated
+   __gogen* wrappers and init() so the summary reflects real lowered fns."
   (if-not (string? go-src)
     0
-    (count (re-seq #"\nfunc [A-Za-z_][A-Za-z0-9_]*\(" (str "\n" go-src)))))
+    (count (filter (fn [decl]
+                     ;; decl is "\nfunc NAME(" — strip "\nfunc " (6) + trailing "(".
+                     (let [nm (subs decl 6 (dec (count decl)))]
+                       (and (not (clojure.string/starts-with? nm "__gogen"))
+                            (not= nm "init"))))
+                   (re-seq #"\nfunc [A-Za-z_][A-Za-z0-9_]*\(" (str "\n" go-src))))))
 
 ;; Everything below runs in ONE top-level form so it is COMPILED in this script's
 ;; ns (all symbols resolve) BEFORE the runtime (ns ..)/eval calls switch the

@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/vm"
@@ -104,10 +105,7 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 			return nil
 		}
 	}
-	if err := runChunk(unit.MainChunk); err != nil {
-		return err
-	}
-	return nil
+	return runChunk(unit.MainChunk)
 }
 
 // InvokeProgramEntry looks up name ("-main" or "main") across loaded
@@ -125,9 +123,18 @@ func InvokeProgramEntry(ec *vm.ExecContext, name string, args []vm.Value) error 
 		v = cur.LookupLocal(sym)
 	}
 	if v == nil {
+		// CurrentNS (the last ns replayed) is the authoritative pick; the
+		// registry sweep is only a fallback. Iterate in sorted name order so a
+		// program that somehow defines the entry in more than one namespace
+		// resolves deterministically rather than by map-iteration order.
 		nsMu.RLock()
-		for _, ns := range nsRegistry {
-			if cand := ns.LookupLocal(sym); cand != nil {
+		names := make([]string, 0, len(nsRegistry))
+		for nm := range nsRegistry {
+			names = append(names, nm)
+		}
+		sort.Strings(names)
+		for _, nm := range names {
+			if cand := nsRegistry[nm].LookupLocal(sym); cand != nil {
 				v = cand
 				break
 			}
