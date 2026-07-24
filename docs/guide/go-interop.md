@@ -20,7 +20,7 @@ One Go package is already wrapped this way: **xxh3**.
    `cmd/lginterop`:
 
    ```
-   go run ./cmd/lginterop -packages github.com/zeebo/xxh3 -opaque-structs -out pkg/rt
+   go run ./cmd/lginterop -packages github.com/zeebo/xxh3 -opaque-structs -build-tags '!tinygo' -out pkg/rt
    ```
 
    The tool scans the package with `go/types` and emits an installer that
@@ -251,6 +251,7 @@ round trip.
 | `-smart` | generate explicit wrappers with type-specific unboxing/boxing instead of `vm.MustBox` |
 | `-skeleton` | also emit a `<alias>_skeleton.lg` of `defn-` stubs to hand-customize into a veneer |
 | `-opaque-structs` | skip `vm.RegisterStruct`: struct types stay `vm.Boxed` and dispatch methods reflectively, instead of flattening to field-only Records — required when the API is used through methods (xxh3's `Hasher` and its `.WriteString`/`.Sum64`) |
+| `-build-tags` | emit `//go:build <constraint>` as the first line of each generated file (recorded in the header so regeneration round-trips). Used for xxh3 as `'!tinygo'`: the reflect-boxed bindings can't run under TinyGo |
 
 **Primitives mode** — scan `//lg:`-annotated Go sources and generate the
 internal-primitive registrar:
