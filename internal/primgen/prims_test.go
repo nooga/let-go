@@ -41,7 +41,7 @@ func TestEmitAdapterAndRegistrar(t *testing.T) {
 		NeedsError: true,
 		Package:    "builtins",
 	}
-	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt")
+	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	// Check for adapter function
 	if !strings.Contains(output, "func _adapt_UpperCase") {
@@ -110,7 +110,7 @@ func TestEmitFileDeterministic(t *testing.T) {
 	}
 
 	canonical := func() string {
-		out, err := gofmtCode(emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt"))
+		out, err := gofmtCode(emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true))
 		if err != nil {
 			t.Fatalf("gofmt generated primitives: %v", err)
 		}
@@ -162,7 +162,7 @@ func TestECEmission(t *testing.T) {
 		NeedsEC:    true,
 		Package:    "builtins",
 	}
-	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt")
+	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	// Check that the ec-aware adapter has the correct signature
 	// func _adapt_Seq(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error)
@@ -219,7 +219,7 @@ func TestMultiArity(t *testing.T) {
 		Package:    "builtins",
 	}
 
-	output := emitFile([]primSpec{spec1, spec2}, "rt", "github.com/nooga/let-go/pkg/rt")
+	output := emitFile([]primSpec{spec1, spec2}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	// Check for dispatch adapter with len(vs) switch
 	if !strings.Contains(output, "switch len(vs)") {
@@ -263,7 +263,7 @@ func TestGeneratedCodeParses(t *testing.T) {
 		NeedsError: true,
 		Package:    "builtins",
 	}
-	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt")
+	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	fset := token.NewFileSet()
 	if _, err := parser.ParseFile(fset, "gen.go", output, 0); err != nil {
@@ -298,7 +298,7 @@ func TestMultiArityEC(t *testing.T) {
 		Package:    "builtins",
 	}
 
-	output := emitFile([]primSpec{spec1, spec2}, "rt", "github.com/nooga/let-go/pkg/rt")
+	output := emitFile([]primSpec{spec1, spec2}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	// Check that dispatch adapter is ec-aware (signature includes ec *vm.ExecContext)
 	if !strings.Contains(output, "func _adapt_Foo(ec *vm.ExecContext, vs []vm.Value)") {
@@ -355,7 +355,7 @@ func TestEmitFileUsesTargetPackageName(t *testing.T) {
 		GoIdent: "Seq", Ns: "clojure.core", LgName: "seq",
 		Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true,
 	}}
-	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns")
+	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns", false)
 	if !strings.Contains(out, "package corefns") {
 		t.Fatalf("expected `package corefns` header, got:\n%s", out)
 	}
@@ -379,5 +379,35 @@ func TestHasBuildConstraint(t *testing.T) {
 		if got := hasBuildConstraint([]byte(tc.src)); got != tc.want {
 			t.Errorf("%s: hasBuildConstraint = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestContributeModeEmitsMetadataOnly(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt/corefns", Package: "corefns",
+		GoIdent: "Seq", Ns: "clojure.core", LgName: "seq",
+		Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns", false) // contribute
+	if !strings.Contains(out, "RegisterNativeModule(") {
+		t.Fatal("contribute mode must still register module metadata")
+	}
+	if strings.Contains(out, "defGeneratedPrimitive(") {
+		t.Fatal("contribute mode must NOT emit var binding")
+	}
+	if strings.Contains(out, "_adapt_Seq") {
+		t.Fatal("contribute mode must NOT emit adapters (binding-only)")
+	}
+}
+
+func TestOwnModeEmitsBinding(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt", Package: "rt",
+		GoIdent: "CorePlus", Ns: "clojure.core", LgName: "+",
+		Arity: -1, Variadic: true, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true) // own
+	if !strings.Contains(out, "defGeneratedPrimitive(") {
+		t.Fatal("own mode must emit var binding")
 	}
 }

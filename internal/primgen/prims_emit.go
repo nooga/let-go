@@ -14,7 +14,9 @@ func isSamePackage(goPkg, targetPkgPath string) bool {
 // emitFile generates the Go code for a set of primitive specs.
 // It returns the formatted Go source code as a string.
 // If specs is empty, it emits a valid stub with a no-op RegisterGeneratedPrimitives().
-func emitFile(specs []primSpec, pkgName, targetPkgPath string) string {
+// ownMode determines whether to emit adapters and var bindings (own) or just
+// register metadata (contribute).
+func emitFile(specs []primSpec, pkgName, targetPkgPath string, ownMode bool) string {
 	if len(specs) == 0 {
 		// Empty stub: emit valid package with no-op registrar
 		return fmt.Sprintf(`/*
@@ -78,15 +80,18 @@ import (
 	lgNameGroups := groupSpecsByLgName(specs)
 
 	// Generate adapter functions for each group (one per group, not per spec)
-	for _, group := range lgNameGroups {
-		if len(group) == 1 {
-			// Single-arity: generate simple adapter
-			b.WriteString(generateAdapter(&group[0], pkgAliasMap, targetPkgPath))
-		} else {
-			// Multi-arity: generate dispatch adapter (possibly ec-aware)
-			b.WriteString(generateDispatchAdapter(group, pkgAliasMap, targetPkgPath))
+	// Only if ownMode — contribute mode skips this entirely
+	if ownMode {
+		for _, group := range lgNameGroups {
+			if len(group) == 1 {
+				// Single-arity: generate simple adapter
+				b.WriteString(generateAdapter(&group[0], pkgAliasMap, targetPkgPath))
+			} else {
+				// Multi-arity: generate dispatch adapter (possibly ec-aware)
+				b.WriteString(generateDispatchAdapter(group, pkgAliasMap, targetPkgPath))
+			}
+			b.WriteString("\n\n")
 		}
-		b.WriteString("\n\n")
 	}
 
 	// Group specs by (Ns, GoPkg) to create NativeModule registrations
@@ -105,7 +110,7 @@ import (
 	for _, k := range moduleKeys {
 		specs := moduleMap[k]
 		if len(specs) > 0 {
-			b.WriteString(generateModuleRegistration(specs, pkgAliasMap, lgNameGroups, targetPkgPath))
+			b.WriteString(generateModuleRegistration(specs, pkgAliasMap, lgNameGroups, targetPkgPath, ownMode))
 		}
 	}
 
@@ -624,7 +629,9 @@ func generateResultBoxing(resultSpec string) string {
 }
 
 // generateModuleRegistration creates the RegisterNativeModule call for a group of specs.
-func generateModuleRegistration(specs []primSpec, pkgAliasMap map[string]string, lgNameGroups [][]primSpec, targetPkgPath string) string {
+// If ownMode is false (contribute mode), only emits RegisterNativeModule metadata.
+// If ownMode is true (own mode), also emits var bindings into the namespace.
+func generateModuleRegistration(specs []primSpec, pkgAliasMap map[string]string, lgNameGroups [][]primSpec, targetPkgPath string, ownMode bool) string {
 	if len(specs) == 0 {
 		return ""
 	}
@@ -680,52 +687,54 @@ func generateModuleRegistration(specs []primSpec, pkgAliasMap map[string]string,
 	b.WriteString("\t\t},\n")
 	b.WriteString("\t})\n")
 
-	// Bind functions into the namespace at runtime
-	// Group specs by LgName to identify multi-arity vs single-arity
-	lgNameBindMap := make(map[string][]primSpec)
-	orderBind := []string{} // Track order of first appearance
-	for _, spec := range specs {
-		key := spec.LgName
-		if lgNameBindMap[key] == nil {
-			orderBind = append(orderBind, key)
+	// Bind functions into the namespace at runtime (own mode only)
+	if ownMode {
+		// Group specs by LgName to identify multi-arity vs single-arity
+		lgNameBindMap := make(map[string][]primSpec)
+		orderBind := []string{} // Track order of first appearance
+		for _, spec := range specs {
+			key := spec.LgName
+			if lgNameBindMap[key] == nil {
+				orderBind = append(orderBind, key)
+			}
+			lgNameBindMap[key] = append(lgNameBindMap[key], spec)
 		}
-		lgNameBindMap[key] = append(lgNameBindMap[key], spec)
-	}
 
-	// Emit namespace bindings. Use the NoLoad variant: this runs during rt
-	// init (RegisterGeneratedPrimitives), and we only need to get-or-create the
-	// target ns to Def adapters into it — NOT trigger its source load. Under the
-	// precompiled bundle the ns is already loaded so it made no difference, but
-	// in source-stdlib bootstrap the loading variant forced a premature compile
-	// of the ns before the compiler was ready, corrupting it (e.g. `string`'s
-	// `join` never interned → `s/join` failed to resolve). The real source load
-	// happens later, when user code actually requires the ns.
-	fmt.Fprintf(&b, "\t// Bind adapters into namespace\n")
-	fmt.Fprintf(&b, "\tif ns := LookupOrRegisterNSNoLoad(%q); ns != nil {\n", ns)
-	for i, lgName := range orderBind {
-		group := lgNameBindMap[lgName]
-		// Check if this group needs EC
-		groupNeedsEC := false
-		for _, spec := range group {
-			if spec.NeedsEC {
-				groupNeedsEC = true
-				break
+		// Emit namespace bindings. Use the NoLoad variant: this runs during rt
+		// init (RegisterGeneratedPrimitives), and we only need to get-or-create the
+		// target ns to Def adapters into it — NOT trigger its source load. Under the
+		// precompiled bundle the ns is already loaded so it made no difference, but
+		// in source-stdlib bootstrap the loading variant forced a premature compile
+		// of the ns before the compiler was ready, corrupting it (e.g. `string`'s
+		// `join` never interned → `s/join` failed to resolve). The real source load
+		// happens later, when user code actually requires the ns.
+		fmt.Fprintf(&b, "\t// Bind adapters into namespace\n")
+		fmt.Fprintf(&b, "\tif ns := LookupOrRegisterNSNoLoad(%q); ns != nil {\n", ns)
+		for i, lgName := range orderBind {
+			group := lgNameBindMap[lgName]
+			// Check if this group needs EC
+			groupNeedsEC := false
+			for _, spec := range group {
+				if spec.NeedsEC {
+					groupNeedsEC = true
+					break
+				}
+			}
+
+			// defGeneratedPrimitive (not a bare ns.Def) records the binding so
+			// the runtime can reapply it after the namespace's on-demand source
+			// load re-Defs bootstrap closures over the native adapter.
+			if groupNeedsEC {
+				// EC-aware: register via vm.NewCtxNativeFn directly (don't wrap with NativeFnType)
+				fmt.Fprintf(&b, "\t\tdefGeneratedPrimitive(ns, %q, %q, vm.NewCtxNativeFn(%q, _adapt_%s))\n", ns, lgName, lgName, group[0].GoIdent)
+			} else {
+				// Non-EC: wrap with NativeFnType
+				fmt.Fprintf(&b, "\t\tfn%d, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_%s(vs) })\n", i, group[0].GoIdent)
+				fmt.Fprintf(&b, "\t\tdefGeneratedPrimitive(ns, %q, %q, fn%d)\n", ns, lgName, i)
 			}
 		}
-
-		// defGeneratedPrimitive (not a bare ns.Def) records the binding so
-		// the runtime can reapply it after the namespace's on-demand source
-		// load re-Defs bootstrap closures over the native adapter.
-		if groupNeedsEC {
-			// EC-aware: register via vm.NewCtxNativeFn directly (don't wrap with NativeFnType)
-			fmt.Fprintf(&b, "\t\tdefGeneratedPrimitive(ns, %q, %q, vm.NewCtxNativeFn(%q, _adapt_%s))\n", ns, lgName, lgName, group[0].GoIdent)
-		} else {
-			// Non-EC: wrap with NativeFnType
-			fmt.Fprintf(&b, "\t\tfn%d, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_%s(vs) })\n", i, group[0].GoIdent)
-			fmt.Fprintf(&b, "\t\tdefGeneratedPrimitive(ns, %q, %q, fn%d)\n", ns, lgName, i)
-		}
+		b.WriteString("\t}\n")
 	}
-	b.WriteString("\t}\n")
 
 	return b.String()
 }

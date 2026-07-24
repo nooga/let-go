@@ -6,6 +6,8 @@ import (
 	"go/build/constraint"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -237,4 +239,30 @@ func typeString(expr ast.Expr) string {
 		return "[...]" + typeString(e.Elt)
 	}
 	return "unknown"
+}
+
+// hasBindMarker reports whether any non-test, non-generated .go file in dir
+// carries a package-level //lg:bind directive, selecting own mode (the
+// registrar also binds vars, not just registers direct-call metadata).
+func hasBindMarker(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") ||
+			strings.HasSuffix(e.Name(), "_test.go") || strings.HasPrefix(e.Name(), "zz_") {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(src), "\n") {
+			if strings.TrimSpace(line) == "//lg:bind" {
+				return true
+			}
+		}
+	}
+	return false
 }
