@@ -2738,6 +2738,8 @@ func _adapt_Int(vs []vm.Value) (vm.Value, error) {
 }
 
 func RegisterGeneratedPrimitives() {
+	vm.SetSuppressShadowWarn(true)
+	defer vm.SetSuppressShadowWarn(false)
 	RegisterNativeModule(&NativeModule{
 		GoPkg:     "github.com/nooga/let-go/pkg/rt",
 		Namespace: "clojure.core",
@@ -3465,4 +3467,8 @@ func RegisterGeneratedPrimitives() {
 		fn0, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_UpperCase(vs) })
 		defGeneratedPrimitive(ns, "clojure.string", "upper-case", fn0)
 	}
+}
+
+func init() {
+	RegisterInstaller(RegisterGeneratedPrimitives)
 }
