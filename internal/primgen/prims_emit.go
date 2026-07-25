@@ -6,6 +6,19 @@ import (
 	"strings"
 )
 
+const rtPkgPath = "github.com/nooga/let-go/pkg/rt"
+
+// rtQualifier returns the selector prefix for pkg/rt runtime symbols in the
+// generated file: "" when the file IS package rt (same-package, unqualified),
+// "rt." otherwise (the file imports pkg/rt and references rt.RegisterNativeModule
+// etc.).
+func rtQualifier(targetPkgPath string) string {
+	if targetPkgPath == rtPkgPath {
+		return ""
+	}
+	return "rt."
+}
+
 // isSamePackage returns true if the given GoPkg is the same as the target package
 func isSamePackage(goPkg, targetPkgPath string) bool {
 	return goPkg == targetPkgPath
@@ -59,22 +72,39 @@ func RegisterGeneratedPrimitives() {
 
 package %s
 
-import (
-	"fmt"
-	"github.com/nooga/let-go/pkg/vm"
 `, pkgName)
 
-	// Add imports for scanned packages (excluding same-package). Emission order
-	// here is irrelevant: the final file is run through gofmt (main.go), which
-	// canonicalizes the import block. Registration STATEMENT order below is NOT
-	// touched by gofmt, so that path sorts its keys explicitly.
-	for goPkg := range pkgAliasMap {
-		if !isSamePackage(goPkg, targetPkgPath) {
-			fmt.Fprintf(&b, "\t%q\n", goPkg)
+	var imports []string
+	var internalImports []string
+
+	if ownMode {
+		// Only own mode emits adapters, which use fmt + vm + the scanned func
+		// packages. Contribute mode records string metadata only.
+		imports = append(imports, `"fmt"`)
+		internalImports = append(internalImports, `"github.com/nooga/let-go/pkg/vm"`)
+		for goPkg := range pkgAliasMap {
+			if !isSamePackage(goPkg, targetPkgPath) {
+				internalImports = append(internalImports, fmt.Sprintf("%q", goPkg))
+			}
 		}
 	}
+	if rtQualifier(targetPkgPath) != "" {
+		internalImports = append(internalImports, fmt.Sprintf("%q", rtPkgPath))
+	}
 
-	b.WriteString(")\n\n")
+	// Combine imports with a blank line between stdlib and internal
+	allImports := append(imports, internalImports...)
+	if len(allImports) > 0 {
+		b.WriteString("import (\n")
+		for i, imp := range allImports {
+			// Add blank line between stdlib imports (fmt) and internal imports
+			if i == len(imports) && len(imports) > 0 && len(internalImports) > 0 {
+				b.WriteString("\n")
+			}
+			fmt.Fprintf(&b, "\t%s\n", imp)
+		}
+		b.WriteString(")\n\n")
+	}
 
 	// Group specs by (Ns, LgName) to handle multi-arity
 	lgNameGroups := groupSpecsByLgName(specs)
@@ -121,7 +151,6 @@ import (
 	b.WriteString("}\n")
 
 	// Emit init() function for self-registration
-	const rtPkgPath = "github.com/nooga/let-go/pkg/rt"
 	if targetPkgPath == rtPkgPath {
 		b.WriteString("\nfunc init() {\n\tRegisterInstaller(RegisterGeneratedPrimitives)\n}\n")
 	} else {
@@ -654,10 +683,11 @@ func generateModuleRegistration(specs []primSpec, pkgAliasMap map[string]string,
 	ns := specs[0].Ns
 	goPkg := specs[0].GoPkg
 
-	fmt.Fprintf(&b, "\tRegisterNativeModule(&NativeModule{\n")
+	rtq := rtQualifier(targetPkgPath)
+	fmt.Fprintf(&b, "\t%sRegisterNativeModule(&%sNativeModule{\n", rtq, rtq)
 	fmt.Fprintf(&b, "\t\tGoPkg:     %q,\n", goPkg)
 	fmt.Fprintf(&b, "\t\tNamespace: %q,\n", ns)
-	fmt.Fprintf(&b, "\t\tFns: map[string]NativeDirectFn{\n")
+	fmt.Fprintf(&b, "\t\tFns: map[string]%sNativeDirectFn{\n", rtq)
 
 	// Group specs by (Ns, LgName) to emit one entry per arity per LgName
 	lgNameMap := make(map[string][]primSpec)

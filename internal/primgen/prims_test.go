@@ -434,3 +434,50 @@ func TestInitFormExternalCallsDirectly(t *testing.T) {
 		t.Fatalf("non-rt target must self-register with a direct call:\n%s", out)
 	}
 }
+
+func TestExternalContributeQualifiesRtAndImportsRtOnly(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt/corefns", Package: "corefns",
+		GoIdent: "Seq", Ns: "clojure.core", LgName: "seq",
+		Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns", false)
+	for _, want := range []string{
+		`"github.com/nooga/let-go/pkg/rt"`, // rt import present
+		"rt.RegisterNativeModule(&rt.NativeModule{",
+		"map[string]rt.NativeDirectFn{",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("external contribute output missing %q:\n%s", want, out)
+		}
+	}
+	// contribute mode emits no adapters → fmt/vm are unused → must NOT be imported
+	for _, bad := range []string{`"fmt"`, `"github.com/nooga/let-go/pkg/vm"`} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("external contribute output must not import unused %q:\n%s", bad, out)
+		}
+	}
+}
+
+func TestRtTargetStaysUnqualified(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt", Package: "rt",
+		GoIdent: "CorePlus", Ns: "clojure.core", LgName: "+",
+		Arity: -1, Variadic: true, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true)
+	if !strings.Contains(out, "RegisterNativeModule(&NativeModule{") {
+		t.Fatal("rt target must emit unqualified RegisterNativeModule")
+	}
+	// rt target must not import its own package (check import block, not GoPkg field)
+	importEnd := strings.Index(out, "\nfunc")
+	if importEnd > 0 {
+		importSection := out[:importEnd]
+		if strings.Contains(importSection, `"github.com/nooga/let-go/pkg/rt"`) {
+			t.Fatal("rt target must not import its own package")
+		}
+	}
+	if !strings.Contains(out, `"github.com/nooga/let-go/pkg/vm"`) {
+		t.Fatal("rt own-mode uses vm (adapters + SetSuppressShadowWarn) and must import it")
+	}
+}
