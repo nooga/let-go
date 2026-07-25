@@ -81,7 +81,11 @@ PRIMGEN-SOURCES := $(shell find pkg/rt -maxdepth 1 -name '*.go' -type f -not -na
 pkg/rt/zz_primitives_generated.go: $(PRIMGEN-SOURCES) $(GO)
 	go run ./cmd/lgprimgen -primitives pkg/rt -go-pkg github.com/nooga/let-go/pkg/rt -primitives-out pkg/rt/zz_primitives_generated.go
 
-pkg/rt/core_compiled.lgb: pkg/rt/zz_primitives_generated.go $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
+COREFNS-SOURCES := $(shell find pkg/rt/corefns -maxdepth 1 -name '*.go' -type f -not -name 'zz_*' -not -name '*_test.go' 2>/dev/null) $(shell find cmd/lgprimgen internal/primgen -name '*.go' -type f 2>/dev/null)
+pkg/rt/corefns/zz_primitives_generated.go: $(COREFNS-SOURCES) $(GO)
+	go run ./cmd/lgprimgen -primitives pkg/rt/corefns -go-pkg github.com/nooga/let-go/pkg/rt/corefns -primitives-out pkg/rt/corefns/zz_primitives_generated.go
+
+pkg/rt/core_compiled.lgb: pkg/rt/zz_primitives_generated.go pkg/rt/corefns/zz_primitives_generated.go $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
 	go run -tags bootstrap ./cmd/lgbgen
 
 # Lowered-Go target. The -tags gogen_ir build path links these generated
@@ -90,7 +94,7 @@ pkg/rt/core_compiled.lgb: pkg/rt/zz_primitives_generated.go $(CORE-LG-FILES) $(L
 # the two engines silently disagree (parity-full diverges on bucket
 # hashes even when pass/fail counts match). lower_go.go is the timestamp
 # anchor for the whole tree — every regen rewrites it.
-pkg/rt/core_go_lowered/ir/lower_go/lower_go.go: pkg/rt/zz_primitives_generated.go $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
+pkg/rt/core_go_lowered/ir/lower_go/lower_go.go: pkg/rt/zz_primitives_generated.go pkg/rt/corefns/zz_primitives_generated.go $(CORE-LG-FILES) $(LGBGEN-SOURCES) $(GO)
 	go run -tags bootstrap ./cmd/lgbgen --target=go
 
 # Regenerate every committed code-gen artifact via the let-go orchestrator
