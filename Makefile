@@ -5,7 +5,12 @@
 ifneq (,$(or $(if $(shell which go),,1),$(GO-VERSION)))
 R := https://github.com/makeplus/makes
 M := .cache/makes
-$(shell [ -d '$M' ] || git clone -q $R '$M')
+# Pin makeplus/makes so a HEAD change there can't break `make` with no change
+# in this repo. Same rationale as the Clojure toolchain pin in go.yml
+# (unpinned makeplus install → setup-clojure). Bump MAKES-SHA after verifying
+# the new tip; delete .cache/makes first so the next `make` reclones.
+MAKES-SHA := 7f28494955c20e5a87ca82ae351464842a7236de
+$(shell [ -d '$M' ] || (git clone -q $R '$M' && git -C '$M' -c advice.detachedHead=false checkout -q $(MAKES-SHA)))
 include $M/init.mk
 # override default Go version with: `make ... GO-VERSION=1.x.y`
 GO-VERSION ?= 1.26.3
