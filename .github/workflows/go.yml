@@ -100,10 +100,15 @@ jobs:
       # compiles the whole stdlib twice concurrently and is the slow one:
       # ~60-120s on CI, ~200s on a contended local machine. It runs here under a
       # generous ceiling instead of inflating every package's budget.
-      - name: Expensive lowering e2e (determinism, deftype skeleton)
+      # TestLginteropXxh3RoundTrip joins them: it is -short-gated too (it builds
+      # lg), so it matched no lane and went unrun — long enough to go red on main
+      # unnoticed. It regenerates interop_xxh3.go and byte-compares, which is what
+      # now enforces the //go:build !tinygo constraint since the hand-tag guard
+      # (TestInteropXxh3KeepsTinygoBuildTag) was retired.
+      - name: Expensive lowering e2e (determinism, deftype skeleton, lginterop round-trip)
         # No -short here so the testing.Short()-gated heavyweight e2e tests run
         # full; the fast `make test` loop passes -short to skip them.
-        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering'
+        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering|TestLginteropXxh3RoundTrip'
 
   # Race-detector pass over the packages that hold cross-goroutine state:
   # the VM's shared runtime structures and the rt layer. Motivated by #464 —
