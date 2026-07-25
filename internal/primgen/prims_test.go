@@ -3,6 +3,8 @@ package primgen
 import (
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -479,5 +481,46 @@ func TestRtTargetStaysUnqualified(t *testing.T) {
 	}
 	if !strings.Contains(out, `"github.com/nooga/let-go/pkg/vm"`) {
 		t.Fatal("rt own-mode uses vm (adapters + SetSuppressShadowWarn) and must import it")
+	}
+}
+
+// TestGeneratePreservesSourcePackageName guards against deriving the emitted
+// package clause from the -go-pkg import-path basename. Go allows a package
+// clause to differ from the final path component (e.g. ".../primitives/v2"
+// declaring `package primitives`); the basename would emit `package v2` and
+// the directory would fail to compile ("found packages primitives and v2").
+func TestGeneratePreservesSourcePackageName(t *testing.T) {
+	dir := t.TempDir()
+	// A real scanned spec (bare //lg:native + //lg:ns / //lg:name — the scanner
+	// matches `line == "lg:native"` exactly), so this exercises the spec-based
+	// package-name path (primSpec.Package), not the empty-stub readPackageName
+	// fallback.
+	src := `package primitives
+
+import "github.com/nooga/let-go/pkg/vm"
+
+//lg:native
+//lg:ns clojure.core
+//lg:name noop
+func Noop(v vm.Value) (vm.Value, error) { return v, nil }
+`
+	if err := os.WriteFile(filepath.Join(dir, "prims.go"), []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "zz_primitives_generated.go")
+	// Import path ends in /v2, but the source declares `package primitives`.
+	if err := Generate(dir, out, "example.com/primitives/v2"); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "package primitives") {
+		t.Fatalf("expected `package primitives` from the source clause, got:\n%s", got)
+	}
+	if strings.Contains(got, "package v2") {
+		t.Fatalf("must not derive `package v2` from the import-path basename:\n%s", got)
 	}
 }
