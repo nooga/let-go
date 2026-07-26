@@ -223,3 +223,72 @@ func ReadDepManifest(repoRoot string) ([]HashedEdge, error) {
 	}
 	return out, sc.Err()
 }
+
+// StaleOutputs returns the outputs whose current input/generator file hashes no
+// longer match the committed manifest (including outputs entirely absent from
+// it). Sorted, deduplicated.
+func StaleOutputs(repoRoot string) ([]string, error) {
+	recorded, err := ReadDepManifest(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	recByOutput := map[string]map[string]string{} // output -> input -> sum
+	for _, he := range recorded {
+		if recByOutput[he.Output] == nil {
+			recByOutput[he.Output] = map[string]string{}
+		}
+		recByOutput[he.Output][he.Input] = he.Sum
+	}
+	current, err := Edges(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	staleSet := map[string]bool{}
+	for _, e := range current {
+		rec, ok := recByOutput[e.Output][e.Input]
+		if !ok {
+			staleSet[e.Output] = true
+			continue
+		}
+		sum, herr := hashFile(filepath.Join(repoRoot, e.Input))
+		if herr != nil {
+			return nil, herr
+		}
+		if sum != rec {
+			staleSet[e.Output] = true
+		}
+	}
+	// An input removed since the manifest was written also dirties the output.
+	curByOutput := map[string]map[string]bool{}
+	for _, e := range current {
+		if curByOutput[e.Output] == nil {
+			curByOutput[e.Output] = map[string]bool{}
+		}
+		curByOutput[e.Output][e.Input] = true
+	}
+	for _, he := range recorded {
+		if !curByOutput[he.Output][he.Input] {
+			staleSet[he.Output] = true
+		}
+	}
+	var out []string
+	for o := range staleSet {
+		out = append(out, o)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// CheckDepManifest returns nil when the manifest matches the current sources,
+// else an error naming the first stale output and a changed input.
+func CheckDepManifest(repoRoot string) error {
+	stale, err := StaleOutputs(repoRoot)
+	if err != nil {
+		return err
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	return fmt.Errorf("dependency manifest stale for %d output(s): %s\n%s",
+		len(stale), strings.Join(stale, ", "), Remediation)
+}
