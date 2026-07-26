@@ -62,7 +62,8 @@ var sourceFiles = []string{
 
 // generatedMarker matches the conventional line that flags a Go file as
 // machine-generated (https://pkg.go.dev/cmd/go#hdr-Generate_Go_files).
-var generatedMarker = regexp.MustCompile(`^// Code generated .* DO NOT EDIT\.$`)
+// Recognizes both line comments (// Code generated...) and block comment lines (* Code generated...).
+var generatedMarker = regexp.MustCompile(`(?:^//|^\s*\*)\s+Code generated .* DO NOT EDIT\.`)
 
 // isGenerated reports whether a Go file carries the standard
 // generated-code marker before its package clause.
