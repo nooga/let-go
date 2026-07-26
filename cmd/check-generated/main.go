@@ -27,6 +27,8 @@ import (
 )
 
 func main() {
+	writeManifest := flag.Bool("write-manifest", false, "write pkg/rt/generated.manifest and exit")
+	staleList := flag.Bool("stale", false, "print stale generated outputs (one per line) and exit")
 	writeCanonical := flag.Bool("write", false,
 		"recompute the source digest and rewrite the canonical manifest, then exit")
 	outPath := flag.String("o", "",
@@ -37,6 +39,28 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "check-generated: %v\n", err)
 		os.Exit(2)
+	}
+
+	// Manifest write mode: write the dependency manifest and exit.
+	if *writeManifest {
+		if err := genmanifest.WriteDepManifest(root); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Stale outputs mode: print stale generated outputs and exit.
+	if *staleList {
+		stale, err := genmanifest.StaleOutputs(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		for _, s := range stale {
+			fmt.Println(s)
+		}
+		return
 	}
 
 	// Regenerate modes: recompute the digest from the sources on disk and
