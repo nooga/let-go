@@ -270,19 +270,19 @@ install-hooks:
 
 # Fast local staleness probe: compares the recorded source digest against the
 # sources on disk. Used by scripts/pre-commit, which needs an answer in
-# milliseconds rather than a full regeneration. NOT a prerequisite of
-# check-generated: the digest attests to a moment in HISTORY ("a bundle was
-# generated when the sources hashed to X"), which a rebase invalidates by
-# construction — it rewrites history while leaving both artifacts and digest
-# untouched. The content gate below asserts the property we actually want,
-# about the CURRENT tree, and no rebase can falsify it.
+# milliseconds rather than a full regeneration, and by the build job in CI.
+#
+# No longer a prerequisite of check-generated. As a prerequisite it aborted the
+# content gate — the check that actually binds sources to artifacts — on a
+# proxy's verdict, so a stale digest hid the answer you wanted. The two run
+# independently now. This does not change whether a stale digest fails CI: it
+# still does, here and in TestGeneratedArtifactsAreFresh.
 check-generated-manifest: $(GO)
 	@go run ./cmd/check-generated
 
-# Every generated artifact that is COMMITTED. The content gate stashes these,
-# regenerates, and cmp's, giving a direct sources -> artifact binding. Keep this
-# list in step with scripts/generate.lg; core_go_lowered/ is deliberately absent
-# (gitignored build artifact — it gets the behavioral gate instead).
+# Committed generated artifacts that the content gate compares. Keep in step
+# with scripts/generate.lg. core_go_lowered/ is absent because it is gitignored
+# (a build artifact) and gets the behavioral gate instead.
 GENERATED-TRACKED := \
   pkg/rt/core_compiled.lgb \
   pkg/ir/op_generated.go \
@@ -290,22 +290,27 @@ GENERATED-TRACKED := \
   pkg/rt/zz_primitives_generated.go \
   pkg/rt/core/ir/data/generated.lg
 
+# Committed, generated, and deliberately NOT compared. lgbgen's writeBundle
+# refreshes this on every regeneration, so `make generate` — and therefore this
+# gate — rewrites it as a side effect. The gate stashes and restores it so a
+# check-* target does not mutate a tracked file. Its own staleness is covered by
+# check-generated-manifest and by TestGeneratedArtifactsAreFresh.
+GENERATED-DIGEST := pkg/rt/generated.sums
+
 # Single gate for every generated artifact. One target to remember, and it
 # treats the two artifacts by their actual nature. VCS-agnostic by design:
 # it shells out to no `git` (this repo is used with jj, whose secondary
 # workspaces have no .git, so a `git diff` gate breaks there).
 #
 #   * Every artifact in GENERATED-TRACKED is byte-deterministic, so they get a
-#     CONTENT gate: stash the committed bytes, regenerate via the one pipeline
-#     that produces them (scripts/generate.lg, through `make generate`), and
-#     `cmp`. A difference means the committed artifact was stale. Survives a
-#     fresh checkout (an mtime `find -newer` check silently passes after any VCS
-#     checkout — in fact the old check-lowered-fresh pointed at a path that no
-#     longer exists and had been a silent no-op). Regenerating through `make
-#     generate` rather than lgbgen alone is what widened this gate from the
-#     bundle to all five: lgbgen emits only the .lgb + lowered tree, so the
-#     op/ir_bridge/primitives/ir-data artifacts were never content-verified —
-#     zz_primitives_generated.go had in fact drifted from its generator.
+#     CONTENT gate: stash the committed bytes, regenerate, and `cmp`. A
+#     difference means the committed artifact was stale. Survives a fresh
+#     checkout, unlike an mtime `find -newer` check.
+#
+#     Regenerating through `make generate` rather than lgbgen alone is what
+#     widened this from the bundle to all five. lgbgen emits only the .lgb and
+#     the lowered tree, so op/ir_bridge/primitives/ir-data were never verified —
+#     and zz_primitives_generated.go had drifted from its generator.
 #
 #   * core_go_lowered/ (+ the gogen_ir wireup files) is NOT committed — it is
 #     a build artifact, regenerated on demand and gitignored. Its self-lower
@@ -320,9 +325,16 @@ GENERATED-TRACKED := \
 # `make check-generated` (or `make generate` to refresh, then commit).
 check-generated: $(GO)
 	@echo ">> stash committed artifacts, regenerate all of them, compare"
-	@stash=$$(mktemp -d); \
-	for f in $(GENERATED-TRACKED); do cp "$$f" "$$stash/$$(echo $$f | tr / _)"; done; \
-	$(MAKE) --no-print-directory generate >/dev/null || { rm -rf "$$stash"; exit 1; }; \
+	@stash=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$stash"' EXIT HUP INT TERM; \
+	for f in $(GENERATED-TRACKED) $(GENERATED-DIGEST); do \
+		cp "$$f" "$$stash/$$(echo $$f | tr / _)" || exit 1; \
+	done; \
+	if ! $(MAKE) --no-print-directory generate >"$$stash/generate.log" 2>&1; then \
+		cat "$$stash/generate.log"; \
+		exit 1; \
+	fi; \
+	cp "$$stash/$$(echo $(GENERATED-DIGEST) | tr / _)" $(GENERATED-DIGEST); \
 	echo ">> verify lockstep (content-based, VCS-agnostic)"; \
 	fail=0; \
 	for f in $(GENERATED-TRACKED); do \
@@ -333,7 +345,6 @@ check-generated: $(GO)
 			fail=1; \
 		fi; \
 	done; \
-	rm -rf "$$stash"; \
 	if [ $$fail -ne 0 ]; then \
 		echo "ERROR: committed generated artifacts are stale."; \
 		echo "       Run 'make generate' and commit the result."; \
