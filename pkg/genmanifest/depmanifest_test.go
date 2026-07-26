@@ -1,6 +1,8 @@
 package genmanifest
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -50,5 +52,36 @@ func TestEdgesExcludeGeneratedAndTestInputs(t *testing.T) {
 				t.Errorf("registrar input sweep must exclude _test.go: %s", e.Input)
 			}
 		}
+	}
+}
+
+func TestDepManifestRoundTrip(t *testing.T) {
+	root, err := FindRepoRoot(".")
+	if err != nil {
+		t.Fatalf("repo root: %v", err)
+	}
+	if err := WriteDepManifest(root); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := ReadDepManifest(root)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("manifest has no edges")
+	}
+	for _, he := range got {
+		if len(he.Sum) != 64 { // hex sha256
+			t.Errorf("edge %v: bad sha %q", he.Edge, he.Sum)
+		}
+	}
+	// Deterministic: a second write is byte-identical.
+	before, _ := os.ReadFile(filepath.Join(root, DepManifestRelPath))
+	if err := WriteDepManifest(root); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(root, DepManifestRelPath))
+	if string(before) != string(after) {
+		t.Error("manifest is not deterministic across writes")
 	}
 }
