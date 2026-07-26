@@ -62,13 +62,20 @@ package rt
 
 import (
 	"fmt"
+
 	"github.com/nooga/let-go/pkg/vm"
 `)
 
+	// The blank line above separates stdlib from external imports. It has to be
+	// emitted here: main.go runs the file through gofmt, and gofmt PRESERVES
+	// existing grouping rather than introducing it — only goimports inserts that
+	// separator, and it is a linter here, not part of generation. Without the
+	// blank line every regeneration produced a file the goimports linter would
+	// rewrite, so the committed copy (hand-grouped) and generator output drifted.
+	//
 	// Add imports for scanned packages (excluding same-package). Emission order
-	// here is irrelevant: the final file is run through gofmt (main.go), which
-	// canonicalizes the import block. Registration STATEMENT order below is NOT
-	// touched by gofmt, so that path sorts its keys explicitly.
+	// within the group is irrelevant — gofmt sorts it. Registration STATEMENT
+	// order below is NOT touched by gofmt, so that path sorts its keys explicitly.
 	for goPkg := range pkgAliasMap {
 		if !isSamePackage(goPkg) {
 			fmt.Fprintf(&b, "\t%q\n", goPkg)
