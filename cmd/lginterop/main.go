@@ -38,6 +38,7 @@ func main() {
 	packagesFlag := flag.String("packages", "", "comma-separated list of packages (overrides deps.edn :gointerop)")
 	smartFlag := flag.Bool("smart", false, "generate explicit wrappers with type-specific unboxing/boxing")
 	opaqueFlag := flag.Bool("opaque-structs", false, "skip vm.RegisterStruct: struct types stay boxed and dispatch methods reflectively")
+	buildTagsFlag := flag.String("build-tags", "", "emit //go:build <constraint> as the first line of each generated file (e.g. '!tinygo')")
 	skeletonFlag := flag.Bool("skeleton", false, "generate let-go skeleton files with defn- stubs for hand customization")
 	primitivesDir := flag.String("primitives", "", "directory containing //lg:-annotated Go sources (generates zz_primitives_generated.go)")
 	primitivesOut := flag.String("primitives-out", "pkg/rt/zz_primitives_generated.go", "output file for generated primitives")
@@ -56,7 +57,9 @@ func main() {
 	var entries []interopEntry
 	if *packagesFlag != "" {
 		for pkg := range strings.SplitSeq(*packagesFlag, ",") {
-			entries = append(entries, interopEntry{pkg: strings.TrimSpace(pkg), smart: *smartFlag, opaque: *opaqueFlag})
+			entries = append(entries, interopEntry{
+				pkg: strings.TrimSpace(pkg), smart: *smartFlag, opaque: *opaqueFlag, buildTags: *buildTagsFlag,
+			})
 		}
 	} else {
 		var err error
@@ -67,6 +70,7 @@ func main() {
 		}
 		for i := range entries {
 			entries[i].opaque = *opaqueFlag
+			entries[i].buildTags = *buildTagsFlag
 		}
 	}
 
@@ -353,10 +357,11 @@ func parseInteropItem(item vm.Value) interopEntry {
 }
 
 type interopEntry struct {
-	pkg    string
-	alias  string
-	smart  bool
-	opaque bool // skip vm.RegisterStruct: structs stay Boxed, methods dispatch reflectively
+	pkg       string
+	alias     string
+	smart     bool
+	opaque    bool   // skip vm.RegisterStruct: structs stay Boxed, methods dispatch reflectively
+	buildTags string // emitted as //go:build <constraint> when non-empty
 }
 
 type export struct {
@@ -415,7 +420,7 @@ func generatePackage(repoRoot, lgBin string, ent interopEntry, outDir string, sk
 	outPath := filepath.Join(outDir, fileName)
 
 	// Write the Lisp script that drives gogen codegen.
-	scriptPath, err := writeGenScript(repoRoot, pkgName, alias, exports, outPath, ent.smart, ent.opaque)
+	scriptPath, err := writeGenScript(repoRoot, pkgName, alias, exports, outPath, ent.smart, ent.opaque, ent.buildTags)
 	if err != nil {
 		return fmt.Errorf("write script: %w", err)
 	}
@@ -452,7 +457,7 @@ func generatePackage(repoRoot, lgBin string, ent interopEntry, outDir string, sk
 
 // --- Lisp script generation -----------------------------------------------
 
-func writeGenScript(repoRoot, pkgName, alias string, exports []export, outPath string, smart, opaque bool) (string, error) {
+func writeGenScript(repoRoot, pkgName, alias string, exports []export, outPath string, smart, opaque bool, buildTags string) (string, error) {
 	macroPath := filepath.Join(repoRoot, "scripts", "lginterop.lg")
 	macroLib, err := os.ReadFile(macroPath)
 	if err != nil {
@@ -465,9 +470,9 @@ func writeGenScript(repoRoot, pkgName, alias string, exports []export, outPath s
 	b.WriteString("(def exports ")
 	b.WriteString(serializeExports(exports))
 	b.WriteString(")\n")
-	fmt.Fprintf(&b, "(lginterop/generate %s %s exports %s %s %s)\n",
+	fmt.Fprintf(&b, "(lginterop/generate %s %s exports %s %s %s %s)\n",
 		strconv.Quote(pkgName), strconv.Quote(alias), strconv.Quote(outPath),
-		strconv.FormatBool(smart), strconv.FormatBool(opaque))
+		strconv.FormatBool(smart), strconv.FormatBool(opaque), strconv.Quote(buildTags))
 
 	tmpFile, err := os.CreateTemp("", "lginterop-*.lg")
 	if err != nil {

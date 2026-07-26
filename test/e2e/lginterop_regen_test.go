@@ -60,7 +60,8 @@ func TestLginteropXxh3RoundTrip(t *testing.T) {
 
 	// Flags must match the committed file's generated-by header.
 	cmd := exec.Command("go", "run", "./cmd/lginterop",
-		"-packages", "github.com/zeebo/xxh3", "-opaque-structs", "-out", outDir)
+		"-packages", "github.com/zeebo/xxh3", "-opaque-structs",
+		"-build-tags", "!tinygo", "-out", outDir)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("lginterop failed: %v\n%s", err, out)
@@ -77,7 +78,7 @@ func TestLginteropXxh3RoundTrip(t *testing.T) {
 	if string(got) != string(want) {
 		t.Errorf("regenerated interop_xxh3.go differs from committed file; "+
 			"if the emitter change is intentional, regenerate and commit:\n"+
-			"  go run ./cmd/lginterop -packages github.com/zeebo/xxh3 -opaque-structs -out pkg/rt\n"+
+			"  go run ./cmd/lginterop -packages github.com/zeebo/xxh3 -opaque-structs -build-tags '!tinygo' -out pkg/rt\n"+
 			"got %d bytes, want %d bytes", len(got), len(want))
 	}
 }
