@@ -55,11 +55,42 @@ func TestEdgesExcludeGeneratedAndTestInputs(t *testing.T) {
 	}
 }
 
-func TestDepManifestRoundTrip(t *testing.T) {
-	root, err := FindRepoRoot(".")
+// isolatedRepoCopy builds a tempdir holding exactly the input files the
+// dependency manifest reads — every edge's input, at its real relative path —
+// so the write-path tests exercise WriteDepManifest/StaleOutputs against a
+// private tree instead of rewriting the tracked pkg/rt/generated.manifest
+// (which would invalidate generated.sums and fail TestGeneratedArtifactsAreFresh
+// when the package runs). Only inputs are needed: WriteDepManifest hashes edge
+// inputs, never outputs.
+func isolatedRepoCopy(t *testing.T) string {
+	t.Helper()
+	realRoot, err := FindRepoRoot(".")
 	if err != nil {
 		t.Fatalf("repo root: %v", err)
 	}
+	edges, err := Edges(realRoot)
+	if err != nil {
+		t.Fatalf("edges: %v", err)
+	}
+	dst := t.TempDir()
+	for _, e := range edges {
+		data, err := os.ReadFile(filepath.Join(realRoot, e.Input))
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Input, err)
+		}
+		out := filepath.Join(dst, e.Input)
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(out, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dst
+}
+
+func TestDepManifestRoundTrip(t *testing.T) {
+	root := isolatedRepoCopy(t)
 	if err := WriteDepManifest(root); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -87,10 +118,7 @@ func TestDepManifestRoundTrip(t *testing.T) {
 }
 
 func TestStaleOutputsDetectsChangedInput(t *testing.T) {
-	root, err := FindRepoRoot(".")
-	if err != nil {
-		t.Fatalf("repo root: %v", err)
-	}
+	root := isolatedRepoCopy(t)
 	if err := WriteDepManifest(root); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -102,11 +130,11 @@ func TestStaleOutputsDetectsChangedInput(t *testing.T) {
 	if len(stale) != 0 {
 		t.Fatalf("expected nothing stale right after write, got %v", stale)
 	}
-	// Mutate one .lg input, restore after: only the bundle+lowered go stale,
-	// NOT the registrar (a .lg edit must not dirty the Go-annotation output).
+	// Mutate one .lg input (in the isolated copy): only the bundle+lowered go
+	// stale, NOT the registrar (a .lg edit must not dirty the Go-annotation
+	// output).
 	lg := filepath.Join(root, "pkg/rt/core/core.lg")
 	orig, _ := os.ReadFile(lg)
-	defer os.WriteFile(lg, orig, 0644)
 	if err := os.WriteFile(lg, append(append([]byte{}, orig...), []byte("\n;; probe\n")...), 0644); err != nil {
 		t.Fatal(err)
 	}

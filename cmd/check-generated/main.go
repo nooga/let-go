@@ -60,6 +60,13 @@ func main() {
 		for _, s := range stale {
 			fmt.Println(s)
 		}
+		// Exit non-zero when anything is stale so a Makefile/CI gate can rely
+		// on the exit code rather than on whether stdout is empty — an errored
+		// computation (handled above) and a genuine "nothing stale" would
+		// otherwise be indistinguishable to the caller.
+		if len(stale) > 0 {
+			os.Exit(1)
+		}
 		return
 	}
 

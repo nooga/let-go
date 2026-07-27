@@ -149,3 +149,17 @@ func TestSourceFilesExcludesGeneratedGo(t *testing.T) {
 		t.Errorf("generated gogen_ir wireup leaked into source set: %v", files)
 	}
 }
+
+// TestDependencyManifestFresh is the safety net for the dependency manifest:
+// it fails if the manifest no longer matches the current sources, indicating
+// that a source has been edited without running `make generate` to refresh
+// the manifest.
+func TestDependencyManifestFresh(t *testing.T) {
+	root, err := genmanifest.FindRepoRoot(".")
+	if err != nil {
+		t.Fatalf("repo root: %v", err)
+	}
+	if err := genmanifest.CheckDepManifest(root); err != nil {
+		t.Fatalf("dependency manifest stale — run `make generate`: %v", err)
+	}
+}
