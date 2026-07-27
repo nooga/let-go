@@ -804,16 +804,21 @@ func runGoTarget(outDir, codeDir string) {
 	// every caller (make generate, make lowered, make check-generated) gets
 	// the same crash-safety.
 	realOutDir := outDir
-	outDir = realOutDir + ".stage"
-	if err := os.RemoveAll(outDir); err != nil {
-		fmt.Fprintf(os.Stderr, "clear staging dir %s: %v\n", outDir, err)
+	// Stage into an OS tempdir OUT OF THE MODULE TREE, then copy into the real
+	// dir on success (installGeneratedTree). Out-of-tree so a hard-killed run
+	// (SIGKILL bypasses the `defer os.RemoveAll` below) can never leave a
+	// half-written staging dir inside the module that a later `go test`/`go
+	// build ./...` then fails to compile (`undefined: builtins.*`, because the
+	// staged tree references natives from a different generation). Copy — not
+	// rename — because the tempdir may be on a different filesystem than the
+	// repo; the sentinel written last still makes a torn copy detectable.
+	stageDir, err := os.MkdirTemp("", "lgbgen-lowered-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create staging tempdir: %v\n", err)
 		os.Exit(1)
 	}
+	outDir = stageDir
 	defer os.RemoveAll(outDir)
-	if err := os.MkdirAll(outDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "create staging dir %s: %v\n", outDir, err)
-		os.Exit(1)
-	}
 
 	embeddedNS, err := discoverEmbeddedNS()
 	if err != nil {
@@ -961,7 +966,7 @@ func runGoTarget(outDir, codeDir string) {
 		fmt.Fprintf(os.Stderr, "lgbgen: %d namespace(s) failed: %v\n", len(failed), failed)
 		os.Exit(1)
 	}
-	// Success: install the staged tree (fast per-file renames — the exposed
+	// Success: install the staged tree (fast per-file copies — the exposed
 	// window shrinks from the whole lowering to milliseconds), then emit the
 	// //go:build gogen_ir blank-import wireup files from exactly the set we
 	// just installed — so namespaces that were skipped are never imported
@@ -976,10 +981,11 @@ func runGoTarget(outDir, codeDir string) {
 // installGeneratedTree moves the staged generation into the real output dir:
 // the completeness sentinel is invalidated first, previously-generated
 // (bannered) files in realDir are removed — same orphan-cleanup contract as
-// before staging existed — then every staged file is renamed into place and
-// the sentinel is installed last. Rename is cheap and same-filesystem
-// (sibling dirs), so the tree is only ever inconsistent for the duration of
-// this loop — and that window is positively detectable via the sentinel
+// before staging existed — then every staged file is COPIED into place and
+// the sentinel is installed last. The staging tempdir may be on a different
+// filesystem than the module tree, so copy (not rename) is used to avoid EXDEV;
+// copies are still fast, so the tree is only ever inconsistent for the duration
+// of this loop — and that window is positively detectable via the sentinel
 // (genmanifest.CheckTreeManifest).
 //
 // The manifest is computed from the STAGE dir, not the real dir: it must list
@@ -1014,13 +1020,30 @@ func installGeneratedTree(stageDir, realDir string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 			return err
 		}
-		return os.Rename(path, dst)
+		return copyFile(path, dst)
 	}); err != nil {
 		return err
 	}
-	return os.Rename(
+	// Sentinel copied LAST, so a torn copy (crash mid-loop) leaves the tree
+	// without a valid manifest and CheckTreeManifest reports it.
+	return copyFile(
 		filepath.Join(stageDir, genmanifest.TreeManifestName),
 		filepath.Join(realDir, genmanifest.TreeManifestName))
+}
+
+// copyFile copies src to dst, preserving the source's permission bits. Used
+// by installGeneratedTree because the staging tempdir may sit on a different
+// filesystem than the repo, where os.Rename would fail with EXDEV.
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, info.Mode().Perm())
 }
 
 // writeGogenWireup emits the //go:build gogen_ir blank-import files that
