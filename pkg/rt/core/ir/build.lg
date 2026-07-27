@@ -1221,16 +1221,27 @@
       ;; Function-level recur: emit :recur-fn.
       (let [arg-syms (get @ctx :fn-arg-syms)]
         (if arg-syms
-          (let [arg-ids (mapv (fn [a] (build-form a ctx)) (rest form))
-                cur     (ctx-block ctx)]
-            ;; :recur-fn refs are just the new arg values (self-recursive,
-            ;; no fn ref needed) — which is exactly why this is NOT :tail-call.
-            ;; :tail-call is a call: Refs[0] is a callee and the bytecode
-            ;; lowering emits OP_TAIL_CALL, which resolves that callee off the
-            ;; stack. Emitting it here handed OP_TAIL_CALL a callee-less stack
-            ;; and it read an argument instead (nooga/let-go#638).
-            (ir/add-terminator! f cur :recur-fn arg-ids (count arg-ids))
-            TERMINATED)
+          (let [recur-args (rest form)]
+            ;; Arity has to match the enclosing fn. OP_RECUR_FN restarts the
+            ;; frame with whatever count it is handed, so a mismatch rebinds
+            ;; the wrong params and the call spins instead of failing — the
+            ;; non-IR compiler rejects this at compile time, and the two paths
+            ;; must agree. Checked before building the args so a rejected form
+            ;; leaves no half-built blocks behind.
+            (when (not= (count recur-args) (count arg-syms))
+              (throw (str "ir/build: recur argument count must match function "
+                          "argument count (got " (count recur-args)
+                          ", need " (count arg-syms) ")")))
+            (let [arg-ids (mapv (fn [a] (build-form a ctx)) recur-args)
+                  cur     (ctx-block ctx)]
+              ;; :recur-fn refs are just the new arg values (self-recursive,
+              ;; no fn ref needed) — which is exactly why this is NOT :tail-call.
+              ;; :tail-call is a call: Refs[0] is a callee and the bytecode
+              ;; lowering emits OP_TAIL_CALL, which resolves that callee off the
+              ;; stack. Emitting it here handed OP_TAIL_CALL a callee-less stack
+              ;; and it read an argument instead (nooga/let-go#638).
+              (ir/add-terminator! f cur :recur-fn arg-ids (count arg-ids))
+              TERMINATED))
           (throw "recur outside of loop or function"))))))
 
 ;; --- destructuring helpers ------------------------------------------------

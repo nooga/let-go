@@ -145,3 +145,44 @@
 (deftest ir-compile-fn-level-recur-deep
   (testing "the back-edge is a jump, so depth is unbounded"
     (is (= 499999500000 (ir-fnrecur-3 0 0 1000000)))))
+
+;; --- function-level recur: arity mismatch --------------------------------
+;; build-recur emitted :recur-fn with whatever argument count it was handed.
+;; OP_RECUR_FN accepts that count and restarts the frame, so `(defn f [x]
+;; (recur))` compiled clean and then spun forever instead of failing. The
+;; bytecode compiler has always rejected it ("recur argument count must match
+;; function argument count"); the IR path has to agree.
+;;
+;; These assert through *ir-compile-strict* on purpose. Under the default
+;; fallback a rejected form is re-compiled by the bytecode compiler, which
+;; throws for its own reasons — so a default-mode assertion would stay green
+;; even if the IR check were removed, and would prove it by hanging. Strict
+;; mode fails at the IR builder, which is the thing under test.
+(def fnrecur-under-arity '(defn fnrecur-under-probe [x] (recur)))
+(def fnrecur-over-arity  '(defn fnrecur-over-probe [x] (recur 1 2)))
+
+(deftest ir-compile-fn-recur-arity-mismatch-rejected
+  (testing "too few recur args are rejected at the IR builder"
+    (is (= :threw
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (try (eval fnrecur-under-arity) :no-throw (catch _ :threw))))))
+  (testing "too many recur args are rejected at the IR builder"
+    (is (= :threw
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (try (eval fnrecur-over-arity) :no-throw (catch _ :threw)))))))
+
+(deftest ir-compile-fn-recur-arity-mismatch-names-the-counts
+  (testing "the throw identifies the arity mismatch, not some later failure"
+    (let [msg (binding [*ir-compile* true *ir-compile-strict* true]
+                (try (eval fnrecur-under-arity) "" (catch e (str e))))]
+      (is (>= (index-of msg "recur argument count") 0))
+      (is (>= (index-of msg "got 0") 0))
+      (is (>= (index-of msg "need 1") 0)))))
+
+(deftest ir-compile-fn-recur-matching-arity-still-compiles
+  (testing "a correct-arity function-level recur is unaffected by the check"
+    (is (= :ok
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (try (eval '(defn fnrecur-ok-probe [n] (if (< n 0) :done (recur (dec n)))))
+                  :ok (catch _ :threw)))))
+    (is (= :done (eval '(fnrecur-ok-probe 3))))))
