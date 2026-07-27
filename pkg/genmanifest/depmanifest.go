@@ -84,7 +84,9 @@ var outputSpecs = []outputSpec{
 }
 
 // sweepFiles returns repo-relative paths under root/s.dir with extension s.ext,
-// skipping directories, _test.go, and (for input sweeps) generated files.
+// skipping directories, _test.go, and — when skipGenerated is set — generated
+// files (both input and generator sweeps set it, so transient generated .go
+// artifacts never enter the manifest).
 func sweepFiles(repoRoot string, s sweep, skipGenerated bool) ([]string, error) {
 	var out []string
 	base := filepath.Join(repoRoot, s.dir)
@@ -149,7 +151,11 @@ func Edges(repoRoot string) ([]Edge, error) {
 			add(spec.output, f, "input")
 		}
 		for _, s := range spec.genSweeps {
-			files, err := sweepFiles(repoRoot, s, false)
+			// Skip generated .go too: a generator dir can hold a transient,
+			// gitignored generated file (e.g. cmd/lgbgen/main_gogen_ir.go from a
+			// prior `-tags gogen_ir` build) that is absent in a clean CI checkout.
+			// Including it would make the front-gate staleness check fail there.
+			files, err := sweepFiles(repoRoot, s, true)
 			if err != nil {
 				return nil, err
 			}

@@ -21,10 +21,7 @@ package genmanifest
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -144,31 +141,12 @@ func SourceFiles(repoRoot string) ([]string, error) {
 	return files, nil
 }
 
-// Compute returns the content digest of every generator-input file.
-// The digest folds in each file's relative path and bytes, so renames,
-// edits, additions, and deletions all change the result.
+// Compute returns the content digest of the dependency manifest, which
+// transitively covers every generator input and generator source. The
+// manifest-based digest is the authority: it is written deterministically
+// by WriteDepManifest and consulted by every staleness check.
 func Compute(repoRoot string) (string, error) {
-	files, err := SourceFiles(repoRoot)
-	if err != nil {
-		return "", err
-	}
-	h := sha256.New()
-	for _, rel := range files {
-		f, err := os.Open(filepath.Join(repoRoot, rel))
-		if err != nil {
-			return "", err
-		}
-		// Path first (length-prefixed so path/content can't collide),
-		// then bytes, then a separator.
-		fmt.Fprintf(h, "%d:%s\n", len(rel), rel)
-		if _, err := io.Copy(h, f); err != nil {
-			f.Close()
-			return "", err
-		}
-		f.Close()
-		h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hashFile(filepath.Join(repoRoot, DepManifestRelPath))
 }
 
 // Read returns the digest recorded in the committed manifest. A missing
