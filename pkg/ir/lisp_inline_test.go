@@ -301,3 +301,39 @@ func TestDevirtualizesMultiBlockClosureCall(t *testing.T) {
 		t.Fatalf("multi-block capturing closure call should be devirtualized (no InvokeValueEC/BoxNativeFn):\n%s", src)
 	}
 }
+
+// TestInlineRejectsFunctionLevelRecurCallee pins the second spelling of
+// self-recursion. self-recursive? only spots a :load-var of the callee's own
+// name; a function-level `recur` re-enters through the terminator instead, so
+// without has-recur-fn? the callee looks inlineable.
+//
+// Splicing it is a miscompile, and the arity-mismatched case shows why: the
+// cloned :recur-fn rebinds parameter slots BY INDEX, so a 1-arg callee inlined
+// into a 2-arg caller writes the caller's a0 while the loop body reads a1. The
+// counter never advances and Usec2 spins forever. Guarded, the call survives as
+// a call (nooga/let-go#638).
+func TestInlineRejectsFunctionLevelRecurCallee(t *testing.T) {
+	ensureLoader()
+	v := runLispExpr(t, `(do (create-ns (quote inlinerecurz))
+	     (binding [*ns* (the-ns (quote inlinerecurz))]
+	       (eval (quote (defn cnt [n] (if (< n 0) 0 (recur (dec n))))))
+	       (eval (quote (defn usec2 [p q] (cnt q)))))
+	     (binding [ir.passes.inline/*enable-inline* true]
+	       (ir.passes.pipeline/lower-ns-to-go "inlinerecurz" (quote inlinerecurz)
+	         [(quote (defn cnt [n] (if (< n 0) 0 (recur (dec n)))))
+	          (quote (defn usec2 [p q] (cnt q)))])))`)
+	rendered, ok := v.Unbox().(string)
+	if !ok {
+		t.Fatalf("expected rendered Go string, got %T", v.Unbox())
+	}
+	// Definition plus a surviving call site.
+	if got := strings.Count(rendered, "Cnt("); got != 2 {
+		t.Errorf("expected Cnt to appear twice (definition + un-inlined call), got %d:\n%s",
+			got, rendered)
+	}
+	// The back-edge must stay inside Cnt: Usec2 gets no loop of its own.
+	usec := rendered[strings.Index(rendered, "func Usec2("):]
+	if strings.Contains(usec, "func_entry") {
+		t.Errorf("recur back-edge was spliced into the caller:\n%s", usec)
+	}
+}

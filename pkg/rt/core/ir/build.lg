@@ -1193,7 +1193,7 @@
   (build-loop form ctx))
 
 (defn build-recur [form ctx]
-  "recur emits Branch back to the current loop header, or :tail-call for
+  "recur emits Branch back to the current loop header, or :recur-fn for
    function-level recursion.
 
    Subtle: ctx-block must be re-read AFTER building the recur args, not
@@ -1218,14 +1218,18 @@
         (ir/add-terminator! f cur :branch [] bt)
         (ir/add-pred! f header cur)
         TERMINATED)
-      ;; Function-level recur: emit :tail-call.
+      ;; Function-level recur: emit :recur-fn.
       (let [arg-syms (get @ctx :fn-arg-syms)]
         (if arg-syms
           (let [arg-ids (mapv (fn [a] (build-form a ctx)) (rest form))
                 cur     (ctx-block ctx)]
-            ;; :tail-call refs are just the new arg values (self-recursive,
-            ;; no fn ref needed).
-            (ir/add-terminator! f cur :tail-call arg-ids (count arg-ids))
+            ;; :recur-fn refs are just the new arg values (self-recursive,
+            ;; no fn ref needed) — which is exactly why this is NOT :tail-call.
+            ;; :tail-call is a call: Refs[0] is a callee and the bytecode
+            ;; lowering emits OP_TAIL_CALL, which resolves that callee off the
+            ;; stack. Emitting it here handed OP_TAIL_CALL a callee-less stack
+            ;; and it read an argument instead (nooga/let-go#638).
+            (ir/add-terminator! f cur :recur-fn arg-ids (count arg-ids))
             TERMINATED)
           (throw "recur outside of loop or function"))))))
 
@@ -1407,7 +1411,7 @@
   (let [inner     (ir/new-fn (str name-sym) (count args-vec) variadic?)
         entry     (ir/entry-block inner)
         inner-ctx (new-context inner)]
-    ;; Stash arg symbols so build-recur can emit :tail-call at function level.
+    ;; Stash arg symbols so build-recur can emit :recur-fn at function level.
     (reset! inner-ctx (assoc @inner-ctx :fn-arg-syms (vec args-vec)))
     (loop [i 0]
       (when (< i (count args-vec))
@@ -1538,7 +1542,7 @@
             f          (ir/new-fn (str name-sym) arity variadic?)
             entry-blk  (ir/entry-block f)
             ctx        (new-context f)]
-        ;; Stash arg symbols so build-recur can emit :tail-call at function level.
+        ;; Stash arg symbols so build-recur can emit :recur-fn at function level.
         (reset! ctx (assoc @ctx :fn-arg-syms (vec flat-args)))
         (loop [i 0]
           (when (< i arity)

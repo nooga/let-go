@@ -125,7 +125,18 @@
     ;; the bytecode defCompiler does), EXCEPT gogen must INTERN the var at
     ;; runtime (rt.InternVar) rather than look it up. .Refs[0] = var (Const
     ;; aux=*vm.Var), optional .Refs[1] = value. stack-in -1: 1 or 2 refs.
-    ["Def"       -1  1 false false nil                false true  false false "Def"        ".Refs[0] = var (Const aux=*vm.Var), optional .Refs[1] = value; interns + returns the var (2-ref also sets root)"]])
+    ["Def"       -1  1 false false nil                false true  false false "Def"        ".Refs[0] = var (Const aux=*vm.Var), optional .Refs[1] = value; interns + returns the var (2-ref also sets root)"]
+
+    ;; Function-level `recur`: rebind this function's parameters and
+    ;; re-enter it. Distinct from TailCall, which is a CALL — it carries a
+    ;; callee in Refs[0] and can dispatch anywhere. RecurFn carries only the
+    ;; replacement arguments and statically re-enters the executing function,
+    ;; which is why it maps to OP_RECUR_FN (pops argc args, resets ip/sp) and
+    ;; not OP_TAIL_CALL (resolves a callee via f.nth(argc), which a
+    ;; callee-less terminator does not supply). infer? is false for the same
+    ;; reason as TailCall: it infers :unknown via the default rather than
+    ;; joining typeinfer's terminator-ops set.
+    ["RecurFn"   -1  0 false true  OP_RECUR_FN        false false false false "RecurFn"    "function-level recur back-edge; .Refs = replacement args (no callee), .Aux = argc int"]])
 
 (g/check-spec ops)
 

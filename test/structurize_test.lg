@@ -50,6 +50,13 @@
                          (if (> y 100) :big (if (> y 10) :med :small))))
    '(defn loop-if [n] (loop [i 0 t 0]
                         (if (< i n) (recur (inc i) (if (even? i) (+ t i) t)) t)))
+   ;; Function-level recur (no enclosing loop*) — its own terminator
+   ;; (:recur-fn), so it needs its own corpus row. The corpus covered only the
+   ;; loop* spelling, which is how a structurize arm that matched the old
+   ;; terminator kept passing while every function-level recur silently
+   ;; dropped to the goto+label emitter (#638).
+   '(defn fnrecur [i n] (if (< i n) (recur (inc i) n) i))
+   '(defn fnrecur-let [i n] (let [j (inc i)] (if (< j n) (recur j n) j)))
    ;; lambda-bearing: the OUTER fn's control flow must structure cleanly.
    ;; (each nested fn is a separate IR Function, structurized independently)
    '(defn adder [x] (fn [y] (+ x y)))
