@@ -124,7 +124,13 @@
     ;; of materializing once and copying with DUP_NTH — which also stopped
     ;; the value from crossing blocks, retiring the :validate/cross-block-ref
     ;; failure bucket (ir-stress: 20 -> 11 native-lowering failures).
-    (is (= (count-op fib-bc :LOAD_VAR) (count-op fib-ir :LOAD_VAR)))))
+    ;;
+    ;; OP_CALL_SELF replaces the callee var load on the plain path: the chunk
+    ;; is already running, so there is nothing to look up. Count it as the
+    ;; load it stands in for, or this gate reads the saved lookup as a
+    ;; regression in the IR path.
+    (is (= (+ (count-op fib-bc :LOAD_VAR) (count-op fib-bc :CALL_SELF))
+           (count-op fib-ir :LOAD_VAR)))))
 
 (deftest ir-lowering-set-var-snapshot-matches-plain-compiler
   (testing "a var loaded before a set! of the same var snapshots the pre-set! value (#613)"
