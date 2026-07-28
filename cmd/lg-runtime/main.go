@@ -29,6 +29,7 @@ import (
 
 	"github.com/nooga/let-go/pkg/buildmeta"
 	"github.com/nooga/let-go/pkg/bundle"
+	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 
@@ -142,7 +143,7 @@ func runMain() int {
 
 	flag.Parse()
 	if showVersion {
-		fmt.Printf("lg-runtime %s\n", versionString())
+		fmt.Print(bytecode.FormatVersionReport("lg-runtime", versionString()))
 		return 0
 	}
 	args := flag.Args()

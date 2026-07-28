@@ -198,11 +198,8 @@ func (d *decoder) readCapabilities() error {
 	if err != nil {
 		return fmt.Errorf("reading capability mask: %w", err)
 	}
-	const supportedCaps = CapOpcodeSet
-	if caps&^supportedCaps != 0 {
-		return fmt.Errorf(
-			"unsupported capability mask 0x%08x (supported: 0x%08x) — bundle was produced by a newer lg than this runtime; recompile it with a matching lg or run it on a newer runtime",
-			caps, supportedCaps)
+	if caps&^SupportedCapabilities != 0 {
+		return UnsupportedCapabilityError(caps)
 	}
 	if caps&CapOpcodeSet != 0 {
 		bundleCount, err := d.r.ReadVarint()

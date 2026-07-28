@@ -437,7 +437,7 @@ func runMain() int {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("lg %s\n", versionString())
+		fmt.Print(bytecode.FormatVersionReport("lg", versionString()))
 		return 0
 	}
 

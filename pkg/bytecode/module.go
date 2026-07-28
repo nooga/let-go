@@ -8,7 +8,7 @@ type Module struct {
 	Flags   uint16
 	// Capabilities is an optional feature mask. If FlagCapabilities is set in Flags,
 	// a uint32 capability mask follows the header. Bits indicate optional features
-	// the decoder must support. Currently no capability bits are defined (all reserved).
+	// the decoder must support; see KnownCapabilities / CapOpcodeSet.
 	Capabilities uint32
 	Strings      []string
 	Chunks       []*ChunkData
