@@ -1,4 +1,4 @@
-package main
+package primgen
 
 import (
 	"go/parser"

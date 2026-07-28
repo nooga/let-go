@@ -1,4 +1,4 @@
-package main
+package primgen
 
 import (
 	"bytes"
@@ -90,7 +90,7 @@ func scanSource(path string, src []byte) ([]primSpec, error) {
 		// Determine lg name (default: kebab-cased GoIdent)
 		lgName := name
 		if lgName == "" {
-			lgName = kebabCase(goIdent)
+			lgName = KebabCase(goIdent)
 		}
 
 		// Parse parameters

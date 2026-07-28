@@ -16,8 +16,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 
+	"github.com/nooga/let-go/internal/primgen"
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -45,9 +45,12 @@ func main() {
 	goPkg := flag.String("go-pkg", "", "Go import path of the scanned sources (used with -primitives)")
 	flag.Parse()
 
-	// Handle -primitives mode (separate from the external interop path)
+	// Handle -primitives mode (separate from the external interop path).
+	// Delegates to the runtime-free primgen package — prefer the standalone
+	// cmd/lgprimgen binary, which does not import pkg/compiler and so can run
+	// mid-migration when the runtime this binary boots cannot.
 	if *primitivesDir != "" {
-		if err := generatePrimitives(*primitivesDir, *primitivesOut, *goPkg); err != nil {
+		if err := primgen.Generate(*primitivesDir, *primitivesOut, *goPkg); err != nil {
 			fmt.Fprintf(os.Stderr, "lginterop: %v\n", err)
 			os.Exit(1)
 		}
@@ -121,94 +124,6 @@ func main() {
 	}
 
 	fmt.Printf("lginterop: generated %d/%d package(s) in %s\n", okCount, len(entries), *out)
-}
-
-// --- primitives generation (-primitives mode) --------------------------------
-
-func generatePrimitives(srcDir, outPath, goPkg string) error {
-	// Walk srcDir and scan all .go files for //lg:native directives
-	var allSpecs []primSpec
-
-	entries, err := os.ReadDir(srcDir)
-	if err != nil {
-		return fmt.Errorf("read directory %s: %w", srcDir, err)
-	}
-
-	for _, entry := range entries {
-		// Skip test files and generated output: an //lg:native annotation in
-		// a _test.go or zz_ file would emit an unconditional reference to a
-		// symbol the normal build doesn't compile.
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") ||
-			strings.HasSuffix(entry.Name(), "_test.go") ||
-			strings.HasPrefix(entry.Name(), "zz_") {
-			continue
-		}
-
-		fpath := filepath.Join(srcDir, entry.Name())
-		src, err := os.ReadFile(fpath)
-		if err != nil {
-			return fmt.Errorf("read %s: %w", fpath, err)
-		}
-
-		// Files under a build constraint may reference symbols absent from
-		// other targets; the registrar compiles unconditionally, so skip them.
-		if hasBuildConstraint(src) {
-			continue
-		}
-
-		specs, err := scanSource(fpath, src)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", fpath, err)
-		}
-		allSpecs = append(allSpecs, specs...)
-	}
-
-	if len(allSpecs) == 0 {
-		fmt.Printf("lginterop: no //lg:native directives found in %s; generating empty stub\n", srcDir)
-		// Fall through to generate an empty RegisterGeneratedPrimitives() stub
-	}
-
-	// Set GoPkg on all specs
-	for i := range allSpecs {
-		if goPkg != "" {
-			allSpecs[i].GoPkg = goPkg
-		} else if allSpecs[i].GoPkg == "" {
-			// Fallback default
-			allSpecs[i].GoPkg = "github.com/nooga/let-go/pkg/rt/builtins"
-		}
-	}
-
-	// Generate the file
-	output := emitFile(allSpecs)
-
-	// Format with gofmt
-	formatted, err := gofmtCode(output)
-	if err != nil {
-		return fmt.Errorf("gofmt: %w", err)
-	}
-
-	// Write the output file
-	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", filepath.Dir(outPath), err)
-	}
-
-	if err := os.WriteFile(outPath, []byte(formatted), 0644); err != nil {
-		return fmt.Errorf("write %s: %w", outPath, err)
-	}
-
-	fmt.Printf("lginterop: generated primitives → %s (%d specs)\n", outPath, len(allSpecs))
-	return nil
-}
-
-// gofmtCode formats Go source code using the gofmt command.
-func gofmtCode(src string) (string, error) {
-	cmd := exec.Command("gofmt")
-	cmd.Stdin = strings.NewReader(src)
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("gofmt failed: %w", err)
-	}
-	return string(output), nil
 }
 
 // --- repo root & lg binary discovery --------------------------------------
@@ -697,7 +612,7 @@ func buildSkeleton(alias string, exports []export, smart bool) string {
 			}
 
 			if smart {
-				fmt.Fprintf(b, "(defn- %s\n", kebabCase(ex.name))
+				fmt.Fprintf(b, "(defn- %s\n", primgen.KebabCase(ex.name))
 				fmt.Fprintf(b, "  \"Wrapper for %s. Customize as needed.\"\n", qname)
 				if variadic {
 					fmt.Fprintf(b, "  [& args]\n")
@@ -710,7 +625,7 @@ func buildSkeleton(alias string, exports []export, smart bool) string {
 					fmt.Fprintf(b, "  (%s %s))\n\n", qname, strings.Join(argNames, " "))
 				}
 			} else {
-				fmt.Fprintf(b, "(defn- %s\n", kebabCase(ex.name))
+				fmt.Fprintf(b, "(defn- %s\n", primgen.KebabCase(ex.name))
 				fmt.Fprintf(b, "  \"Wrapper for %s. Customize as needed.\"\n", qname)
 				if variadic {
 					fmt.Fprintf(b, "  [& args]\n")
@@ -730,31 +645,13 @@ func buildSkeleton(alias string, exports []export, smart bool) string {
 			}
 		case *types.Const:
 			fmt.Fprintf(b, ";; Constant: %s\n", qname)
-			fmt.Fprintf(b, ";; (def %s %s)\n\n", kebabCase(ex.name), qname)
+			fmt.Fprintf(b, ";; (def %s %s)\n\n", primgen.KebabCase(ex.name), qname)
 		case *types.Var:
 			fmt.Fprintf(b, ";; Variable: %s\n", qname)
-			fmt.Fprintf(b, ";; (def %s %s)\n\n", kebabCase(ex.name), qname)
+			fmt.Fprintf(b, ";; (def %s %s)\n\n", primgen.KebabCase(ex.name), qname)
 		}
 	}
 
-	return b.String()
-}
-
-func kebabCase(s string) string {
-	var b strings.Builder
-	for i, r := range s {
-		if i > 0 {
-			prev := rune(s[i-1])
-			if unicode.IsUpper(r) {
-				if unicode.IsLower(prev) {
-					b.WriteByte('-')
-				} else if i+1 < len(s) && unicode.IsLower(rune(s[i+1])) {
-					b.WriteByte('-')
-				}
-			}
-		}
-		b.WriteRune(unicode.ToLower(r))
-	}
 	return b.String()
 }
 

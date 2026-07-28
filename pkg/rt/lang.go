@@ -703,6 +703,18 @@ func LookupOrRegisterNS(name string) *vm.Namespace {
 }
 
 func LookupOrRegisterNSNoLoad(name string) *vm.Namespace {
+	// Resolve the alias BEFORE touching the registry, as the loading callers do.
+	// Without this, LookupOrRegisterNSNoLoad("clojure.core") registers a DISTINCT
+	// "clojure.core" namespace instead of returning the canonical "core" — so the
+	// generated primitive registrar (RegisterGeneratedPrimitives, which calls this
+	// with "clojure.core"/"clojure.string"/…) Defs into the wrong namespace,
+	// invisible to core.lg's own bootstrap compile. Hand-registered primitives
+	// hid this by also Def'ing into the canonical ns via installLangNS; a primitive
+	// hoisted to //lg:native has ONLY the generated registration, so it must land
+	// in the canonical namespace to resolve.
+	canonical := resolveNSAlias(name)
+	aliased := canonical != name
+	name = canonical
 	nsMu.RLock()
 	e := nsRegistry[name]
 	nsMu.RUnlock()
@@ -722,6 +734,17 @@ func LookupOrRegisterNSNoLoad(name string) *vm.Namespace {
 	nsMu.Lock()
 	nsRegistry[name] = ns
 	nsMu.Unlock()
+
+	// If we just PRE-CREATED a canonical ns from an alias (e.g. clojure.string →
+	// string) to home a generated native, its .lg source has NOT run — only the
+	// native being registered now exists. Flag it needs-load so a later
+	// (require 'clojure.string) still executes the .lg defns (join, split, …)
+	// instead of short-circuiting on this native-only ns in LookupOrRegisterNS.
+	// Core is exempt: it is installed eagerly (installLangNS) before any generated
+	// registrar runs, so it never reaches this newly-created branch.
+	if aliased {
+		MarkNSNeedsLoad(name)
+	}
 
 	return ns
 }
@@ -1885,133 +1908,9 @@ func setRandSeed(seed int64) {
 }
 
 func installLangNS() {
-	plus, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 {
-			return vm.MakeInt(0), nil
-		}
-		if len(vs) == 1 {
-			return vs[0], nil
-		}
-		acc := vs[0]
-		for i := 1; i < len(vs); i++ {
-			var err error
-			acc, err = vm.NumAdd(acc, vs[i])
-			if err != nil {
-				return vm.NIL, err
-			}
-		}
-		return acc, nil
-	})
-
-	mul, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 {
-			return vm.MakeInt(1), nil
-		}
-		if len(vs) == 1 {
-			return vs[0], nil
-		}
-		acc := vs[0]
-		for i := 1; i < len(vs); i++ {
-			var err error
-			acc, err = vm.NumMul(acc, vs[i])
-			if err != nil {
-				return vm.NIL, err
-			}
-		}
-		return acc, nil
-	})
-
-	sub, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if len(vs) == 1 {
-			return vm.NumNeg(vs[0])
-		}
-		acc := vs[0]
-		for i := 1; i < len(vs); i++ {
-			var err error
-			acc, err = vm.NumSub(acc, vs[i])
-			if err != nil {
-				return vm.NIL, err
-			}
-		}
-		return acc, nil
-	})
-
-	div, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if len(vs) == 1 {
-			return vm.NumDiv(vm.MakeInt(1), vs[0])
-		}
-		acc := vs[0]
-		for i := 1; i < len(vs); i++ {
-			var err error
-			acc, err = vm.NumDiv(acc, vs[i])
-			if err != nil {
-				return vm.NIL, err
-			}
-		}
-		return acc, nil
-	})
 
 	// Apostrophe arithmetic: identical to + - * but promotes to BigInt on
 	// int64 overflow instead of wrapping silently.
-	plusP, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 {
-			return vm.MakeInt(0), nil
-		}
-		if len(vs) == 1 {
-			return vs[0], nil
-		}
-		acc := vs[0]
-		for i := 1; i < len(vs); i++ {
-			var err error
-			acc, err = vm.NumAddP(acc, vs[i])
-			if err != nil {
-				return vm.NIL, err
-			}
-		}
-		return acc, nil
-	})
-
-	mulP, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 {
-			return vm.MakeInt(1), nil
-		}
-		if len(vs) == 1 {
-			return vs[0], nil
-		}
-		acc := vs[0]
-		for i := 1; i < len(vs); i++ {
-			var err error
-			acc, err = vm.NumMulP(acc, vs[i])
-			if err != nil {
-				return vm.NIL, err
-			}
-		}
-		return acc, nil
-	})
-
-	subP, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if len(vs) == 1 {
-			return vm.NumNegP(vs[0])
-		}
-		acc := vs[0]
-		for i := 1; i < len(vs); i++ {
-			var err error
-			acc, err = vm.NumSubP(acc, vs[i])
-			if err != nil {
-				return vm.NIL, err
-			}
-		}
-		return acc, nil
-	})
 
 	// unchecked-* family — silent wrap on int64 overflow.
 	//
@@ -2027,257 +1926,6 @@ func installLangNS() {
 	// Float and BigInt inputs are coerced to int64 (matching Clojure's
 	// long-arithmetic semantics). Use `+`/`-`/`*` for checked arithmetic,
 	// or `+'`/`-'`/`*'` for BigInt-promoting arithmetic.
-
-	uncheckedAdd, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		a, ok := vm.ToInt(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[0].Type().Name())
-		}
-		b, ok := vm.ToInt(vs[1])
-		if !ok {
-			return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[1].Type().Name())
-		}
-		return vm.MakeInt(int(int64(a) + int64(b))), nil
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedSubtract, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		a, ok := vm.ToInt(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[0].Type().Name())
-		}
-		b, ok := vm.ToInt(vs[1])
-		if !ok {
-			return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[1].Type().Name())
-		}
-		return vm.MakeInt(int(int64(a) - int64(b))), nil
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedMultiply, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		a, ok := vm.ToInt(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[0].Type().Name())
-		}
-		b, ok := vm.ToInt(vs[1])
-		if !ok {
-			return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[1].Type().Name())
-		}
-		return vm.MakeInt(int(int64(a) * int64(b))), nil
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedNegate, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		a, ok := vm.ToInt(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("unchecked-negate expected integer, got %s", vs[0].Type().Name())
-		}
-		// Note: -Long/MIN_VALUE wraps to Long/MIN_VALUE in 2's-complement int64.
-		// This matches Clojure's unchecked-negate behavior.
-		return vm.MakeInt(int(-int64(a))), nil
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedDivideInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		a, ok := vm.ToInt(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[0].Type().Name())
-		}
-		b, ok := vm.ToInt(vs[1])
-		if !ok {
-			return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[1].Type().Name())
-		}
-		if b == 0 {
-			return vm.NIL, fmt.Errorf("divide by zero")
-		}
-		// Note: Long/MIN_VALUE / -1 overflows in 2's-complement and throws.
-		// This matches Clojure's unchecked-divide-int (and JVM IDIV) behavior.
-		if int64(a) == math.MinInt64 && int64(b) == -1 {
-			return vm.NIL, fmt.Errorf("integer overflow")
-		}
-		return vm.MakeInt(int(int64(a) / int64(b))), nil
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedLong, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			return v, nil
-		case *vm.BigInt:
-			// Low-64 of two's-complement representation, matching Clojure JVM.
-			// big.Int doesn't expose two's-complement directly; mask with 2^64,
-			// then reinterpret the low-64 bits as signed int64.
-			mask := new(big.Int).Lsh(big.NewInt(1), 64)
-			lo := new(big.Int).Mod(v.Val(), mask)
-			return vm.MakeInt(int(int64(lo.Uint64()))), nil
-		case vm.Float:
-			return vm.MakeInt(int(int64(float64(v)))), nil
-		default:
-			return vm.NIL, fmt.Errorf("unchecked-long expected integer or float, got %s", vs[0].Type().Name())
-		}
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedInt, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			return vm.MakeInt(int(int32(int64(v)))), nil
-		case *vm.BigInt:
-			// Low-32 of two's-complement representation, matching Clojure JVM.
-			// Mask with 2^64, take low-32 bits as int32, then sign-extend.
-			mask := new(big.Int).Lsh(big.NewInt(1), 64)
-			lo := new(big.Int).Mod(v.Val(), mask)
-			return vm.MakeInt(int(int32(lo.Uint64()))), nil
-		case vm.Float:
-			return vm.MakeInt(int(int32(float64(v)))), nil
-		default:
-			return vm.NIL, fmt.Errorf("unchecked-int expected integer or float, got %s", vs[0].Type().Name())
-		}
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedShort, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			return vm.MakeInt(int(int16(int64(v)))), nil
-		case *vm.BigInt:
-			// Low-16 of two's-complement representation, matching Clojure JVM.
-			mask := new(big.Int).Lsh(big.NewInt(1), 64)
-			lo := new(big.Int).Mod(v.Val(), mask)
-			return vm.MakeInt(int(int16(lo.Uint64()))), nil
-		case vm.Float:
-			return vm.MakeInt(int(int16(float64(v)))), nil
-		default:
-			return vm.NIL, fmt.Errorf("unchecked-short expected integer or float, got %s", vs[0].Type().Name())
-		}
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedByte, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			return vm.MakeInt(int(int8(int64(v)))), nil
-		case *vm.BigInt:
-			// Low-8 of two's-complement representation, matching Clojure JVM.
-			mask := new(big.Int).Lsh(big.NewInt(1), 64)
-			lo := new(big.Int).Mod(v.Val(), mask)
-			return vm.MakeInt(int(int8(lo.Uint64()))), nil
-		case vm.Float:
-			return vm.MakeInt(int(int8(float64(v)))), nil
-		default:
-			return vm.NIL, fmt.Errorf("unchecked-byte expected integer or float, got %s", vs[0].Type().Name())
-		}
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedChar, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			return vm.Char(rune(uint16(int64(v)))), nil
-		case *vm.BigInt:
-			// Low-16 of two's-complement representation, then uint16 → Char (rune).
-			mask := new(big.Int).Lsh(big.NewInt(1), 64)
-			lo := new(big.Int).Mod(v.Val(), mask)
-			return vm.Char(rune(uint16(lo.Uint64()))), nil
-		case vm.Float:
-			return vm.Char(rune(uint16(int64(float64(v))))), nil
-		default:
-			return vm.NIL, fmt.Errorf("unchecked-char expected integer or float, got %s", vs[0].Type().Name())
-		}
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedDouble, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			return vm.Float(float64(int64(v))), nil
-		case *vm.BigInt:
-			// Convert BigInt to float64 via big.Float (handles overflow → ±Inf).
-			f, _ := new(big.Float).SetInt(v.Val()).Float64()
-			return vm.Float(f), nil
-		case vm.Float:
-			return v, nil
-		default:
-			return vm.NIL, fmt.Errorf("unchecked-double expected numeric, got %s", vs[0].Type().Name())
-		}
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	uncheckedFloat, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			// Cast through float32 to introduce float32-precision loss + overflow → ±Inf.
-			return vm.Float(float64(float32(int64(v)))), nil
-		case *vm.BigInt:
-			f, _ := new(big.Float).SetInt(v.Val()).Float64()
-			return vm.Float(float64(float32(f))), nil
-		case vm.Float:
-			return vm.Float(float64(float32(float64(v)))), nil
-		default:
-			return vm.NIL, fmt.Errorf("unchecked-float expected numeric, got %s", vs[0].Type().Name())
-		}
-	})
-	if err != nil {
-		panic(err)
-	}
 
 	equals, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		length := len(vs)
@@ -2383,127 +2031,14 @@ func installLangNS() {
 		return vm.TRUE, nil
 	})
 
-	mod, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return vm.NumMod(vs[0], vs[1])
-	})
-
-	abs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return vm.NumAbs(vs[0])
-	})
-
 	// and/or are now short-circuiting macros defined in core.lg
 
 	// Body delegates to pkg/rt/builtins (the single source shared with the AOT
 	// direct-call target registered in registerBuiltinsModule); the wrapper only
 	// enforces interpreter arity.
-	not, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return builtins.Not(vs[0])
-	})
 
-	complement, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		f, ok := vm.AsFn(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("complement expected Fn")
-		}
-		// The returned fn resolves f in ITS caller's context at call time, so
-		// (complement f) used inside an eager HOF still sees live bindings.
-		wrapped := vm.NewCtxNativeFn("complemented-fn", func(cec *vm.ExecContext, args []vm.Value) (vm.Value, error) {
-			v, err := cec.Invoke(f, args)
-			if err != nil {
-				return vm.NIL, err
-			}
-			return vm.Boolean(!vm.IsTruthy(v)), nil
-		})
-		return wrapped, nil
-	})
-
-	setMacro, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		m := vs[0].(*vm.Var)
-		m.SetMacro()
-		return m, nil
-	})
-
-	gensym, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		prefix := "G__"
-		if len(vs) == 1 {
-			arg, ok := vs[0].(vm.String)
-			if !ok {
-				return vm.NIL, fmt.Errorf("gensym expected String")
-			}
-			prefix = string(arg)
-		}
-		return vm.Symbol(fmt.Sprintf("%s%d", prefix, nextID())), nil
-	})
-
-	vector, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return builtins.Vector(vs...)
-	})
 	list, _ := vm.NativeFnType.WrapNoErr(vm.NewList)
-	hashMap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs)%2 != 0 {
-			return vm.NIL, fmt.Errorf("hash-map requires an even number of arguments, got %d", len(vs))
-		}
-		return vm.NewMap(vs), nil
-	})
-	arrayMap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs)%2 != 0 {
-			return vm.NIL, fmt.Errorf("array-map requires an even number of arguments, got %d", len(vs))
-		}
-		return vm.NewArrayMap(vs), nil
-	})
 	hashSet, _ := vm.NativeFnType.WrapNoErr(vm.NewSet)
-
-	sortedMap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs)%2 != 0 {
-			return vm.NIL, fmt.Errorf("sorted-map requires even number of arguments, got %d", len(vs))
-		}
-		return vm.NewSortedMap(nil, vs), nil
-	})
-
-	sortedSet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return vm.NewSortedSet(nil, vs), nil
-	})
-
-	sortedMapBy, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("sorted-map-by requires a comparator")
-		}
-		comp, ok := vm.AsFn(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("sorted-map-by first arg must be a function")
-		}
-		kvs := vs[1:]
-		if len(kvs)%2 != 0 {
-			return vm.NIL, fmt.Errorf("sorted-map-by requires even number of key-value arguments")
-		}
-		return vm.NewSortedMap(fnComparator(comp), kvs), nil
-	})
-
-	sortedSetBy, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("sorted-set-by requires a comparator")
-		}
-		comp, ok := vm.AsFn(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("sorted-set-by first arg must be a function")
-		}
-		return vm.NewSortedSet(fnComparator(comp), vs[1:]), nil
-	})
 
 	vec, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -2546,311 +2081,6 @@ func installLangNS() {
 	// chunk-first / chunk-rest / chunk-next dispatch on IChunkedSeq (via
 	// AsChunkedSeq, so they resolve through LazySeq wrappers). chunk-cons
 	// builds a ChunkedCons; chunk-buffer / chunk-append / chunk are the
-	// mutable builder API. chunked-seq? answers the type predicate.
-	asChunked := func(v vm.Value, op string) (vm.IChunkedSeq, error) {
-		s, err := seqOf(v)
-		if err != nil {
-			return nil, fmt.Errorf("%s: not a sequence", op)
-		}
-		cs, ok := vm.AsChunkedSeq(s)
-		if !ok {
-			return nil, fmt.Errorf("%s: not a chunked seq", op)
-		}
-		return cs, nil
-	}
-
-	chunkFirst, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("chunk-first: wrong number of arguments %d", len(vs))
-		}
-		cs, err := asChunked(vs[0], "chunk-first")
-		if err != nil {
-			return vm.NIL, err
-		}
-		return cs.ChunkedFirst().(vm.Value), nil
-	})
-
-	chunkRest, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("chunk-rest: wrong number of arguments %d", len(vs))
-		}
-		cs, err := asChunked(vs[0], "chunk-rest")
-		if err != nil {
-			return vm.NIL, err
-		}
-		m := cs.ChunkedMore()
-		if m == nil {
-			return vm.EmptyList, nil
-		}
-		return m.(vm.Value), nil
-	})
-
-	chunkNext, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("chunk-next: wrong number of arguments %d", len(vs))
-		}
-		cs, err := asChunked(vs[0], "chunk-next")
-		if err != nil {
-			return vm.NIL, err
-		}
-		n := cs.ChunkedNext()
-		if n == nil {
-			return vm.NIL, nil
-		}
-		return n.(vm.Value), nil
-	})
-
-	chunkConsF, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("chunk-cons: wrong number of arguments %d", len(vs))
-		}
-		chunk, ok := vs[0].(vm.IChunk)
-		if !ok {
-			return vm.NIL, fmt.Errorf("chunk-cons: first arg must be a chunk")
-		}
-		var tail vm.Seq
-		if vs[1] != vm.NIL {
-			s, err := seqOf(vs[1])
-			if err != nil {
-				return vm.NIL, fmt.Errorf("chunk-cons: second arg must be a seq or nil")
-			}
-			tail = s
-		}
-		out := vm.ConsChunk(chunk, tail)
-		if out == nil {
-			return vm.EmptyList, nil
-		}
-		return out.(vm.Value), nil
-	})
-
-	chunkedSeqP, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("chunked-seq?: wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
-			return vm.FALSE, nil
-		}
-		s, err := seqOf(vs[0])
-		if err != nil || s == nil {
-			return vm.FALSE, nil
-		}
-		_, ok := vm.AsChunkedSeq(s)
-		return vm.Boolean(ok), nil
-	})
-
-	chunkBufferF, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("chunk-buffer: wrong number of arguments %d", len(vs))
-		}
-		n, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("chunk-buffer: arg must be Int")
-		}
-		return vm.NewChunkBuffer(int(n)), nil
-	})
-
-	chunkAppendF, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("chunk-append: wrong number of arguments %d", len(vs))
-		}
-		b, ok := vs[0].(*vm.ChunkBuffer)
-		if !ok {
-			return vm.NIL, fmt.Errorf("chunk-append: first arg must be a chunk-buffer")
-		}
-		b.Append(vs[1])
-		return b, nil
-	})
-
-	chunkF, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("chunk: wrong number of arguments %d", len(vs))
-		}
-		b, ok := vs[0].(*vm.ChunkBuffer)
-		if !ok {
-			return vm.NIL, fmt.Errorf("chunk: arg must be a chunk-buffer")
-		}
-		return b.Chunk().(vm.Value), nil
-	})
-
-	rangef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 {
-			// Infinite range: (range) -> lazy seq 0, 1, 2, ...
-			return vm.NewInfiniteRange(0, 1), nil
-		}
-		if len(vs) > 3 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		var start, end, step vm.Int
-		step = 1
-		var err error
-		var endArg vm.Value
-		switch len(vs) {
-		case 1:
-			endArg = vs[0]
-		case 2:
-			endArg = vs[1]
-			if start, err = rangeInt(vs[0], "start"); err != nil {
-				return vm.NIL, err
-			}
-		case 3:
-			endArg = vs[1]
-			if start, err = rangeInt(vs[0], "start"); err != nil {
-				return vm.NIL, err
-			}
-			if step, err = rangeInt(vs[2], "step"); err != nil {
-				return vm.NIL, err
-			}
-		}
-		// A float end still yields integers, like the JVM: infinite
-		// for ##Inf toward the step, else every int short of the end
-		// ((range 2 5.29) => 2 3 4 5).
-		if f, ok := endArg.(vm.Float); ok {
-			if math.IsInf(float64(f), 0) {
-				if (f > 0 && step > 0) || (f < 0 && step < 0) {
-					return vm.NewInfiniteRange(int(start), int(step)), nil
-				}
-				return vm.NewRange(0, 0, 1), nil
-			}
-			if step > 0 {
-				endArg = vm.Int(math.Ceil(float64(f)))
-			} else {
-				endArg = vm.Int(math.Floor(float64(f)))
-			}
-		}
-		if end, err = rangeInt(endArg, "end"); err != nil {
-			return vm.NIL, err
-		}
-		return vm.NewRange(start, end, step), nil
-	})
-
-	keyword, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 || len(vs) > 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if len(vs) == 2 {
-			// (keyword ns name) — both must be strings (or nil ns)
-			var nsStr, nameStr string
-			if vs[0] != vm.NIL {
-				switch n := vs[0].(type) {
-				case vm.String:
-					nsStr = string(n)
-				default:
-					return vm.NIL, fmt.Errorf("keyword namespace must be a string, got %s", vs[0].Type())
-				}
-			}
-			switch n := vs[1].(type) {
-			case vm.String:
-				nameStr = string(n)
-			default:
-				return vm.NIL, fmt.Errorf("keyword name must be a string, got %s", vs[1].Type())
-			}
-			if nsStr == "" && vs[0] == vm.NIL {
-				return vm.Keyword(nameStr), nil
-			}
-			return vm.Keyword(nsStr + "/" + nameStr), nil
-		}
-		if vs[0] == vm.NIL {
-			return vm.NIL, nil
-		}
-		if k, ok := vs[0].(vm.Keyword); ok {
-			return k, nil
-		}
-		if k, ok := vs[0].(vm.Symbol); ok {
-			return vm.Keyword(k), nil
-		}
-		if k, ok := vs[0].(vm.String); ok {
-			return vm.Keyword(k), nil
-		}
-		return vm.NIL, fmt.Errorf("keyword expects keyword, symbol, or string, got %s", vs[0].Type())
-	})
-
-	// symbol(name) or symbol(ns, name)
-	symbolf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 || len(vs) > 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		toStr := func(v vm.Value) (string, bool) {
-			switch s := v.(type) {
-			case vm.String:
-				return string(s), true
-			case vm.Symbol:
-				return string(s), true
-			case vm.Keyword:
-				return string(s), true
-			default:
-				return "", false
-			}
-		}
-		if len(vs) == 1 {
-			if vs[0] == vm.NIL {
-				return vm.NIL, fmt.Errorf("symbol expected String, Symbol, Keyword, or Var")
-			}
-			if v, ok := vs[0].(*vm.Var); ok {
-				return vm.Symbol(externalNSName(v.NS()) + "/" + v.VarName()), nil
-			}
-			if s, ok := toStr(vs[0]); ok {
-				return vm.Symbol(s), nil
-			}
-			return vm.NIL, fmt.Errorf("symbol expected String or Symbol")
-		}
-		nsStr := ""
-		if vs[0] != vm.NIL {
-			ns, ok := vs[0].(vm.String)
-			if !ok {
-				return vm.NIL, fmt.Errorf("symbol expected String namespace")
-			}
-			nsStr = string(ns)
-		}
-		name, ok := vs[1].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("symbol expected String name")
-		}
-		nameStr := string(name)
-		if nsStr == "" && vs[0] == vm.NIL {
-			return vm.Symbol(nameStr), nil
-		}
-		return vm.Symbol(nsStr + "/" + nameStr), nil
-	})
-
-	assoc, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 3 || len(vs)%2 == 0 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		coll, ok := vs[0].(vm.Associative)
-		if !ok {
-			return vm.NIL, fmt.Errorf("assoc expected Associative")
-		}
-		ret := coll
-		for i := 1; i < len(vs); i += 2 {
-			ret = ret.Assoc(vs[i], vs[i+1])
-			if ret == vm.NIL {
-				return vm.NIL, fmt.Errorf("assoc failed for key %s", vs[i].String())
-			}
-		}
-		return ret, nil
-	})
-
-	dissoc, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments 0")
-		}
-		if len(vs) == 1 {
-			return vs[0], nil
-		}
-		coll, ok := vs[0].(vm.Associative)
-		if !ok {
-			return vm.NIL, fmt.Errorf("dissoc expected Associative")
-		}
-		ret := coll
-		for i := 1; i < len(vs); i++ {
-			ret = ret.Dissoc(vs[i])
-			if vs[0] != vm.NIL && ret == vm.NIL {
-				return vm.NIL, fmt.Errorf("dissoc failed for key %s", vs[i].String())
-			}
-		}
-		return ret, nil
-	})
-
 	update := vm.NewCtxNativeFn("update", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -2881,13 +2111,6 @@ func installLangNS() {
 			return vm.NIL, err
 		}
 		return colla.Assoc(key, v), nil
-	})
-
-	cons, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return builtins.Cons(vs[0], vs[1])
 	})
 
 	conj, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -2929,46 +2152,6 @@ func installLangNS() {
 		return seq, nil
 	})
 
-	disj, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
-			return vm.NIL, nil
-		}
-		if len(vs) == 1 {
-			return vs[0], nil
-		}
-		switch s := vs[0].(type) {
-		case *vm.PersistentSet:
-			result := s
-			for _, v := range vs[1:] {
-				result = result.Disj(v)
-			}
-			return result, nil
-		case *vm.SortedSet:
-			result := s
-			for _, v := range vs[1:] {
-				result = result.Disj(v)
-			}
-			return result, nil
-		case vm.Set:
-			for _, v := range vs[1:] {
-				s = s.Disj(v)
-			}
-			return s, nil
-		default:
-			return vm.NIL, fmt.Errorf("disj expected Set")
-		}
-	})
-
-	contains, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return builtins.Contains(vs[0], vs[1])
-	})
-
 	first, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -2994,34 +2177,6 @@ func installLangNS() {
 			return s.First(), nil
 		}
 		return vm.NIL, fmt.Errorf("first expected Seq")
-	})
-
-	second, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
-			return vm.NIL, nil
-		}
-		// ArrayVector fast path: index the flat slice directly, no seq alloc.
-		if av, ok := vs[0].(vm.ArrayVector); ok {
-			if len(av) < 2 {
-				return vm.NIL, nil
-			}
-			return av[1], nil
-		}
-		seq, err := seqOf(vs[0])
-		if err != nil {
-			return vm.NIL, fmt.Errorf("second expected Seq")
-		}
-		if seq == nil {
-			return vm.NIL, nil
-		}
-		n := seq.Next()
-		if n == nil {
-			return vm.NIL, nil
-		}
-		return n.First(), nil
 	})
 
 	next, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -3127,14 +2282,6 @@ func installLangNS() {
 		return vm.Boolean(ok), nil
 	})
 
-	isList, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		_, ok := vs[0].(*vm.List)
-		return vm.Boolean(ok), nil
-	})
-
 	isColl, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -3145,26 +2292,6 @@ func installLangNS() {
 		}
 		_, ok := vs[0].(vm.Collection)
 		return vm.Boolean(ok), nil
-	})
-
-	empty, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL || vs[0].Type() == vm.StringType {
-			return vm.NIL, nil
-		}
-		if _, ok := vs[0].(*vm.InfiniteRange); ok {
-			return vm.EmptyList, nil
-		}
-		if _, ok := vs[0].(*vm.Record); ok {
-			return vm.NIL, fmt.Errorf("empty is not supported on records")
-		}
-		coll, ok := vs[0].(vm.Collection)
-		if !ok {
-			return vm.NIL, nil
-		}
-		return coll.Empty(), nil
 	})
 
 	get, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -3185,26 +2312,6 @@ func installLangNS() {
 			return as.ValueAt(key), nil
 		}
 		return as.ValueAtOr(key, vs[2]), nil
-	})
-
-	keyf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if e, ok := vs[0].(vm.MapEntry); ok {
-			return e.Key, nil
-		}
-		return vm.NIL, fmt.Errorf("key expects map entry")
-	})
-
-	valf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if e, ok := vs[0].(vm.MapEntry); ok {
-			return e.Value, nil
-		}
-		return vm.NIL, fmt.Errorf("val expects map entry")
 	})
 
 	// nth: indexed access that works on any sequential type.
@@ -3262,23 +2369,6 @@ func installLangNS() {
 			return vm.NIL, fmt.Errorf("nth index out of bounds")
 		}
 		return notFound, nil
-	})
-
-	count, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
-			return vm.MakeInt(0), nil
-		}
-		if s, ok := vs[0].(vm.String); ok {
-			return vm.MakeInt(len([]rune(string(s)))), nil
-		}
-		seq, ok := vs[0].(vm.Counted)
-		if !ok {
-			return vm.NIL, fmt.Errorf("count expected Counted")
-		}
-		return seq.Count(), nil
 	})
 
 	// map builtin: always lazy. Clojure semantics require laziness on all
@@ -3612,138 +2702,17 @@ func installLangNS() {
 		return nns, nil
 	})
 
-	excludeInCurrentNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		cns := CurrentNS.Deref().(*vm.Namespace)
-		for _, v := range vs {
-			sym, ok := v.(vm.Symbol)
-			if !ok {
-				return vm.NIL, fmt.Errorf("exclude-in-current-ns expected Symbol, got %s", v.Type().Name())
-			}
-			cns.Exclude(string(sym))
-		}
-		return vm.NIL, nil
-	})
-
-	use, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		cns := CurrentNS.Deref().(*vm.Namespace)
-		for i := range vs {
-			s, ok := vs[i].(vm.Symbol)
-			if !ok {
-				return vm.NIL, fmt.Errorf("use expected Symbol")
-			}
-			cns.Refer(NS(string(s)), "", true)
-		}
-		return vm.NIL, nil
-	})
-
-	aliasf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		al, ok := vs[0].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("alias expected Symbol")
-		}
-		nsSym, ok := vs[1].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("alias expected Symbol")
-		}
-		cns := CurrentNS.Deref().(*vm.Namespace)
-		target := NS(string(nsSym))
-		cns.Alias(al, target)
-		return vm.NIL, nil
-	})
-
-	referList, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		nsSym, ok := vs[0].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("refer-list expected ns Symbol")
-		}
-		arr, ok := vs[1].(vm.ArrayVector)
-		if !ok {
-			return vm.NIL, fmt.Errorf("refer-list expected vector of Symbols")
-		}
-		syms := make([]vm.Symbol, 0, len(arr))
-		for i := range arr {
-			if s, ok := arr[i].(vm.Symbol); ok {
-				syms = append(syms, s)
-			}
-		}
-		cns := CurrentNS.Deref().(*vm.Namespace)
-		target := NS(string(nsSym))
-		// Convert []vm.Symbol to []vm.Symbol type alias in vm
-		vmSyms := make([]vm.Symbol, len(syms))
-		copy(vmSyms, syms)
-		cns.ReferList(target, vmSyms)
-		return vm.NIL, nil
-	})
-
 	// removed resolve-var helper (prefer compile-time resolution)
 
 	now, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.NewBoxed(time.Now()), nil
 	})
 
-	methodInvoke, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		name, ok := vs[1].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("method-invoke expected Symbol")
-		}
-		rec, ok := vs[0].(vm.Receiver)
-		if !ok {
-			return invokeMethodFallback(vs[0], name, vs[2:], fmt.Errorf("method-invoke expected Receiver"))
-		}
-		result, err := rec.InvokeMethod(name, vs[2:])
-		if err == nil {
-			return result, nil
-		}
-		return invokeMethodFallback(rec, name, vs[2:], err)
-	})
-
 	// (register-host-method! Type 'name (fn [rec & args] ...)) — register a
 	// handler for `.name` dot-forms on values of Type (the host-method seam).
-	registerHostMethod, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("register-host-method! expected 3 arguments, got %d", len(vs))
-		}
-		t, ok := vs[0].(vm.ValueType)
-		if !ok {
-			return vm.NIL, fmt.Errorf("register-host-method! expected a type, got %s", vs[0].Type().Name())
-		}
-		name, ok := vs[1].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("register-host-method! expected a Symbol method name")
-		}
-		fn, ok := vs[2].(vm.Fn)
-		if !ok {
-			return vm.NIL, fmt.Errorf("register-host-method! expected a fn")
-		}
-		RegisterHostMethod(t, name, fn)
-		return vm.NIL, nil
-	})
 
 	// (register-host-class! "java.util.Map" value) — make a bare class symbol
 	// resolve to value (typically a let-go type) when used as a value.
-	registerHostClass, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("register-host-class! expected 2 arguments, got %d", len(vs))
-		}
-		name, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("register-host-class! expected a String class name")
-		}
-		RegisterHostClass(string(name), vs[1])
-		return vm.NIL, nil
-	})
 
 	deref, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		switch len(vs) {
@@ -3770,73 +2739,7 @@ func installLangNS() {
 		}
 	})
 
-	concat, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		// Pre-size for the ArrayVector args (flat slices with known length)
-		// so their direct appends below don't regrow ret.
-		presize := 0
-		for i := range vs {
-			if av, ok := vs[i].(vm.ArrayVector); ok {
-				presize += len(av)
-			}
-		}
-		ret := make([]vm.Value, 0, presize)
-		for i := range vs {
-			if vs[i] == vm.NIL {
-				continue
-			}
-			// ArrayVector fast path: bulk-append the flat slice — no seq,
-			// no chunk, no per-element successor allocation.
-			if av, ok := vs[i].(vm.ArrayVector); ok {
-				ret = append(ret, av...)
-				continue
-			}
-			vseq, err := seqOf(vs[i])
-			if err != nil {
-				return vm.NIL, fmt.Errorf("concat expected Seq")
-			}
-			ret = appendSeqValues(ret, forceSeq(vseq))
-		}
-		r, err := vm.ListType.Box(ret)
-		if err != nil {
-			return vm.NIL, fmt.Errorf("concat failed: %w", err)
-		}
-		return r, nil
-	})
-
 	// slurp (reintroduced)
-	slurp, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		filename, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("slurp expected String")
-		}
-		data, err := os.ReadFile(string(filename))
-		if err != nil {
-			return vm.NIL, fmt.Errorf("slurp failed: %w", err)
-		}
-		return vm.String(data), nil
-	})
-
-	spit, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		filename, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("spit expected String")
-		}
-		contents, ok := asBytes(vs[1])
-		if !ok {
-			return vm.NIL, fmt.Errorf("spit expected String or byte-array")
-		}
-		err := os.WriteFile(string(filename), contents, 0644)
-		if err != nil {
-			return vm.NIL, fmt.Errorf("spit failed: %w", err)
-		}
-		return vm.NIL, nil
-	})
 
 	name, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -3867,37 +2770,6 @@ func installLangNS() {
 		return named.Namespace(), nil
 	})
 
-	atom, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if (len(vs)-1)%2 != 0 {
-			return vm.NIL, fmt.Errorf("atom options must be key/value pairs")
-		}
-		var meta vm.Value
-		var validator vm.Fn
-		for i := 1; i < len(vs); i += 2 {
-			switch vs[i] {
-			case vm.Keyword("meta"):
-				if vs[i+1] != vm.NIL && !isMapType(vs[i+1]) {
-					return vm.NIL, fmt.Errorf("atom :meta must be nil or map")
-				}
-				meta = vs[i+1]
-			case vm.Keyword("validator"):
-				if vs[i+1] == vm.NIL {
-					validator = nil
-					continue
-				}
-				fn, ok := vm.AsFn(vs[i+1])
-				if !ok {
-					return vm.NIL, fmt.Errorf("atom :validator must be nil or function")
-				}
-				validator = fn
-			}
-		}
-		return vm.NewAtomWithMetaValidator(vs[0], meta, validator)
-	})
-
 	// (swap! a fn)
 	swap := vm.NewCtxNativeFn("swap!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 {
@@ -3915,35 +2787,8 @@ func installLangNS() {
 	})
 
 	// (reset! a fn)
-	reset, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		at, ok := vs[0].(*vm.Atom)
-		if !ok {
-			return vm.NIL, fmt.Errorf("reset expected Atom")
-		}
-		return at.Reset(vs[1])
-	})
 
 	// (compare-and-set! a old new): set to new iff current is identical to old.
-	compareAndSet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("compare-and-set! expected 3 arguments, got %d", len(vs))
-		}
-		at, ok := vs[0].(*vm.Atom)
-		if !ok {
-			return vm.NIL, fmt.Errorf("compare-and-set! expected Atom")
-		}
-		swapped, err := at.CompareAndSet(vs[1], vs[2])
-		if err != nil {
-			return vm.NIL, err
-		}
-		if swapped {
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
-	})
 
 	// swap-vals!: like swap! but returns [old new]
 	swapVals := vm.NewCtxNativeFn("swap-vals!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
@@ -3967,20 +2812,6 @@ func installLangNS() {
 	})
 
 	// reset-vals!: like reset! but returns [old new]
-	resetVals, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		at, ok := vs[0].(*vm.Atom)
-		if !ok {
-			return vm.NIL, fmt.Errorf("reset-vals! expected Atom")
-		}
-		old := at.Deref()
-		if _, err := at.Reset(vs[1]); err != nil {
-			return vm.NIL, err
-		}
-		return vm.ArrayVector{old, vs[1]}, nil
-	})
 
 	gof := vm.NewCtxNativeFn("go*", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
@@ -4017,13 +2848,6 @@ func installLangNS() {
 		return ret, nil
 	})
 
-	chanf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 0 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return make(vm.Chan), nil
-	})
-
 	scopeOpen := vm.NewCtxNativeFn("scope-open", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 0 {
 			return vm.NIL, fmt.Errorf("scope-open expects 0 arguments")
@@ -4031,43 +2855,6 @@ func installLangNS() {
 		// Open a child of this execution's scope and install it on ec for the
 		// with-scope body's dynamic extent; scope-close! restores the prior one.
 		return vm.OpenChildEC(ec), nil
-	})
-
-	scopeClose, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("scope-close! expects 2 arguments (scope timeout-ms)")
-		}
-		s, ok := vs[0].(*vm.Scope)
-		if !ok {
-			return vm.NIL, fmt.Errorf("scope-close! expected a scope")
-		}
-		ms, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("scope-close! expected an integer timeout-ms")
-		}
-		vm.CloseScoped(s, time.Duration(int64(ms))*time.Millisecond)
-		return vm.NIL, nil
-	})
-
-	scopeLive, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("scope-live expects 1 argument")
-		}
-		s, ok := vs[0].(*vm.Scope)
-		if !ok {
-			return vm.NIL, fmt.Errorf("scope-live expected a scope")
-		}
-		return vm.Int(s.LiveTree()), nil
-	})
-
-	scopeQmark, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("scope? expects 1 argument")
-		}
-		if _, ok := vs[0].(*vm.Scope); ok {
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
 	})
 
 	chanput := vm.NewCtxNativeFn(">!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
@@ -4156,52 +2943,6 @@ func installLangNS() {
 			return vm.NIL, nil // Clojure returns nil for unparseable
 		}
 		return vm.MakeInt(i), nil
-	})
-
-	max, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		m := vs[0]
-		if isNaNValue(m) {
-			return m, nil
-		}
-		for i := 1; i < len(vs); i++ {
-			if isNaNValue(vs[i]) {
-				return vs[i], nil
-			}
-			gt, err := vm.NumGt(vs[i], m)
-			if err != nil {
-				return vm.NIL, err
-			}
-			if gt {
-				m = vs[i]
-			}
-		}
-		return m, nil
-	})
-
-	min, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		m := vs[0]
-		if isNaNValue(m) {
-			return m, nil
-		}
-		for i := 1; i < len(vs); i++ {
-			if isNaNValue(vs[i]) {
-				return vs[i], nil
-			}
-			lt, err := vm.NumLt(vs[i], m)
-			if err != nil {
-				return vm.NIL, err
-			}
-			if lt {
-				m = vs[i]
-			}
-		}
-		return m, nil
 	})
 
 	// compareValues delegates to the vm package's DefaultCompare
@@ -4301,47 +3042,6 @@ func installLangNS() {
 		return ret, nil
 	})
 
-	strReplace, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		s, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("str-replace expected String")
-		}
-		// Function replacement (clojure.string/replace semantics).
-		if fn, isFn := vs[2].(vm.Fn); isFn {
-			switch m := vs[1].(type) {
-			case *vm.Regex:
-				out, err := m.ReplaceAllFunc(string(s), strReplaceCallback(fn))
-				if err != nil {
-					return vm.NIL, err
-				}
-				return vm.String(out), nil
-			case vm.String:
-				return literalReplaceFn(string(m), string(s), fn, false)
-			default:
-				return vm.NIL, fmt.Errorf("str-replace expected String or Regex")
-			}
-		}
-		r, ok := vs[2].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("str-replace expected String")
-		}
-		switch vs[1].(type) {
-		case vm.String:
-			return vm.String(strings.ReplaceAll(string(s), string(vs[1].(vm.String)), string(r))), nil
-		case *vm.Regex:
-			out, err := vs[1].(*vm.Regex).ReplaceAll(string(s), string(r))
-			if err != nil {
-				return vm.NIL, err
-			}
-			return vm.String(out), nil
-		default:
-			return vm.NIL, fmt.Errorf("str-replace expected String or Regex")
-		}
-	})
-
 	strReplaceFirst, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -4428,274 +3128,6 @@ func installLangNS() {
 		default:
 			return vm.NIL, fmt.Errorf("%s can't be coerced to int", vs[0])
 		}
-	})
-
-	longf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		const minInt64 = float64(-9223372036854775808)
-		const maxInt64 = float64(9223372036854775807)
-		coerce := func(f float64) (vm.Value, error) {
-			if f < minInt64 || f > maxInt64 {
-				return vm.NIL, fmt.Errorf("%s can't be coerced to long", vs[0])
-			}
-			return vm.Int(int64(math.Trunc(f))), nil
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			return v, nil
-		case vm.Float:
-			return coerce(float64(v))
-		case vm.Char:
-			return vm.Int(int(v)), nil
-		case *vm.BigInt:
-			if !v.Val().IsInt64() {
-				return vm.NIL, fmt.Errorf("%s can't be coerced to long", vs[0])
-			}
-			return vm.Int(v.Val().Int64()), nil
-		case *vm.BigDecimal:
-			f, _ := v.Val().Float64()
-			return coerce(f)
-		case *vm.Ratio:
-			f, _ := v.Val().Float64()
-			return coerce(f)
-		case vm.Boolean:
-			if bool(v) {
-				return vm.MakeInt(1), nil
-			}
-			return vm.MakeInt(0), nil
-		default:
-			return vm.NIL, fmt.Errorf("%s can't be coerced to long", vs[0])
-		}
-	})
-
-	floatf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		f, ok := vm.ToFloat(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("%s can't be coerced to float", vs[0])
-		}
-		if math.IsInf(f, 0) {
-			return vm.NIL, fmt.Errorf("%s can't be coerced to float", vs[0])
-		}
-		f32 := float32(f)
-		if math.IsInf(float64(f32), 0) {
-			return vm.NIL, fmt.Errorf("%s can't be coerced to float", vs[0])
-		}
-		return vm.Float32(float64(f32)), nil
-	})
-
-	doublef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		f, ok := vm.ToFloat(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("%s can't be coerced to double", vs[0])
-		}
-		return vm.Float(f), nil
-	})
-
-	isNumber, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return vm.Boolean(vm.IsNumber(vs[0])), nil
-	})
-
-	isFloat, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch vs[0].(type) {
-		case vm.Float, vm.Float32:
-			return vm.TRUE, nil
-		}
-		ok := false
-		return vm.Boolean(ok), nil
-	})
-
-	isInt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		_, ok := vs[0].(vm.Int)
-		return vm.Boolean(ok), nil
-	})
-
-	char, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments")
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			if int(v) < 0 || int(v) > 0x10FFFF {
-				return vm.NIL, fmt.Errorf("value out of range for char: %d", v)
-			}
-			return vm.Char(rune(v)), nil
-		case vm.Char:
-			return v, nil
-		case vm.String:
-			runes := []rune(string(v))
-			if len(runes) == 1 {
-				return vm.Char(runes[0]), nil
-			}
-			return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
-		case *vm.BigInt:
-			n := v.Unbox().(*big.Int).Int64()
-			if n < 0 || n > 0x10FFFF {
-				return vm.NIL, fmt.Errorf("value out of range for char: %d", n)
-			}
-			return vm.Char(rune(n)), nil
-		default:
-			return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
-		}
-	})
-
-	regex, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		// (re-pattern p) on an already-compiled regex returns it unchanged,
-		// matching Clojure where re-pattern accepts a Pattern, not only a String.
-		if r, ok := vs[0].(*vm.Regex); ok {
-			return r, nil
-		}
-		if s, ok := vs[0].(vm.String); ok {
-			return vm.NewRegex(string(s))
-		}
-		return vm.NIL, fmt.Errorf("regex expected String")
-	})
-
-	peek, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
-			return vm.NIL, nil
-		}
-		switch v := vs[0].(type) {
-		case vm.ArrayVector:
-			if len(v) == 0 {
-				return vm.NIL, nil
-			}
-			return v[len(v)-1], nil
-		case vm.PersistentVector:
-			if v.RawCount() == 0 {
-				return vm.NIL, nil
-			}
-			return v.ValueAt(vm.Int(v.RawCount() - 1)), nil
-		case *vm.List:
-			if v == vm.EmptyList {
-				return vm.NIL, nil
-			}
-			return v.First(), nil
-		case *vm.PersistentQueue:
-			return v.Peek(), nil
-		default:
-			return vm.NIL, fmt.Errorf("peek not supported on %s", vs[0].Type())
-		}
-	})
-
-	pop, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
-			return vm.NIL, nil
-		}
-		switch vs[0].(type) {
-		case vm.PersistentVector:
-			v := vs[0].(vm.PersistentVector)
-			if v.RawCount() < 1 {
-				return vm.NIL, fmt.Errorf("can't pop empty vector")
-			}
-			// O(1)-amortized structural pop (was O(n) Unbox()+rebuild).
-			return v.Pop(), nil
-		case vm.ArrayVector:
-			v := vs[0].(vm.ArrayVector)
-			if v.RawCount() < 1 {
-				return vm.NIL, fmt.Errorf("can't pop empty vector")
-			}
-			return vm.ArrayVector(v[0 : len(v)-1]), nil
-		case vm.Seq:
-			s := vs[0].(vm.Seq)
-			// pop drops the first element and returns the rest. Use More (not
-			// Next): More yields the empty list () for a one-element seq,
-			// whereas Next returns nil there — which would wrongly read as
-			// "empty" and error. Only an already-empty seq is illegal to pop.
-			if s == vm.EmptyList {
-				return vm.NIL, fmt.Errorf("can't pop empty seq")
-			}
-			if c, ok := vs[0].(vm.Counted); ok && c.RawCount() == 0 {
-				return vm.NIL, fmt.Errorf("can't pop empty seq")
-			}
-			return s.More(), nil
-		case *vm.PersistentQueue:
-			return vs[0].(*vm.PersistentQueue).Pop(), nil
-		default:
-			return vm.NIL, fmt.Errorf("pop expected Seq or Vec")
-		}
-	})
-
-	iterate, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		f, ok := vm.AsFn(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("iterate expected a function")
-		}
-		return vm.NewIterate(f, vs[1]), nil
-	})
-
-	repeat, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 || len(vs) > 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if len(vs) == 1 {
-			return vm.NewRepeat(vs[0], -1), nil
-		}
-		if _, ok := vs[0].(vm.Boolean); ok {
-			return vm.NIL, fmt.Errorf("repeat expected an Int")
-		}
-		ni, ok := vm.ToInt(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("repeat expected an Int")
-		}
-		n := vm.Int(ni)
-		if int(n) <= 0 {
-			return vm.EmptyList, nil
-		}
-		return vm.NewRepeat(vs[1], int(n)), nil
-	})
-
-	refer, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 || len(vs) > 3 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		cns := CurrentNS.Deref().(*vm.Namespace)
-		s, ok := vs[0].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("refer expected Symbol")
-		}
-		alias := ""
-		if len(vs) > 1 {
-			if str, ok := vs[1].(vm.String); ok {
-				alias = string(str)
-			}
-		}
-		all := true
-		if len(vs) > 2 {
-			if b, ok := vs[2].(vm.Boolean); ok {
-				all = bool(b)
-			}
-		}
-		cns.Refer(NS(string(s)), alias, all)
-		return vm.NIL, nil
 	})
 
 	// String utility builtins (for string namespace)
@@ -4867,90 +3299,11 @@ func installLangNS() {
 	})
 
 	// format: sprintf-style string formatting
-	formatf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		fmtStr, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("format expected String")
-		}
-		fmts := string(fmtStr)
-		args := make([]any, len(vs)-1)
-		// Scan format string to determine which args need float promotion
-		vi := 0
-		for fi := 0; fi < len(fmts) && vi < len(args); fi++ {
-			if fmts[fi] != '%' {
-				continue
-			}
-			fi++ // skip %
-			if fi >= len(fmts) {
-				break
-			}
-			if fmts[fi] == '%' {
-				continue // %% literal
-			}
-			// Skip flags, width, precision
-			for fi < len(fmts) && (fmts[fi] == '-' || fmts[fi] == '+' || fmts[fi] == ' ' || fmts[fi] == '0' || fmts[fi] == '#' || (fmts[fi] >= '0' && fmts[fi] <= '9') || fmts[fi] == '.') {
-				fi++
-			}
-			if fi >= len(fmts) {
-				break
-			}
-			verb := fmts[fi]
-			switch v := vs[vi+1].(type) {
-			case vm.Int:
-				if verb == 'f' || verb == 'e' || verb == 'g' || verb == 'E' || verb == 'G' {
-					args[vi] = float64(v)
-				} else {
-					args[vi] = int(v)
-				}
-			case vm.Float:
-				args[vi] = float64(v)
-			case vm.String:
-				args[vi] = string(v)
-			case vm.Boolean:
-				args[vi] = bool(v)
-			default:
-				args[vi] = vs[vi+1].Unbox()
-			}
-			vi++
-		}
-		return vm.String(fmt.Sprintf(string(fmtStr), args...)), nil
-	})
 
 	// rand: returns a random float between 0 (inclusive) and 1 (exclusive)
 	// or between 0 and n
-	randf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 {
-			return vm.Float(rngFloat64()), nil
-		}
-		if len(vs) == 1 {
-			if n, ok := vs[0].(vm.Int); ok {
-				return vm.Float(rngFloat64() * float64(n)), nil
-			}
-			if n, ok := vs[0].(vm.Float); ok {
-				return vm.Float(rngFloat64() * float64(n)), nil
-			}
-			return vm.NIL, fmt.Errorf("rand expected number")
-		}
-		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-	})
 
 	// rand-int: returns a random integer between 0 (inclusive) and n (exclusive)
-	randInt, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		n, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("rand-int expected Int")
-		}
-		if int(n) <= 0 {
-			return vm.MakeInt(0), nil
-		}
-		return vm.MakeInt(rngIntn(int(n))), nil
-	})
 
 	// random-uuid: generate a random UUID v4
 	randomUUID, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -4967,490 +3320,59 @@ func installLangNS() {
 	})
 
 	// rand-nth: returns a random element from a collection
-	randNth, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
-			return vm.NIL, nil
-		}
-		coll, ok := vs[0].(vm.Collection)
-		if !ok {
-			return vm.NIL, fmt.Errorf("rand-nth expected Collection")
-		}
-		n := coll.RawCount()
-		if n == 0 {
-			return vm.NIL, fmt.Errorf("rand-nth called on empty collection")
-		}
-		idx := rngIntn(n)
-		if l, ok := vs[0].(vm.Lookup); ok {
-			return l.ValueAt(vm.Int(idx)), nil
-		}
-		// Fallback: iterate
-		s, _ := seqOf(vs[0])
-		for range idx {
-			s = s.Next()
-		}
-		return s.First(), nil
-	})
 
 	// shuffle: returns a random permutation of a collection as a vector
-	shuffle, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
-			return vm.NIL, fmt.Errorf("shuffle not supported on nil")
-		}
-		switch vs[0].(type) {
-		case vm.String:
-			return vm.NIL, fmt.Errorf("shuffle not supported on string")
-		case *vm.PersistentMap, vm.Map, *vm.SortedMap:
-			return vm.NIL, fmt.Errorf("shuffle not supported on map")
-		}
-		// Collect into slice. forceSeq realizes lazy seqs first, so
-		// an empty lazy seq yields [] rather than [nil].
-		s, err := seqOf(vs[0])
-		if err != nil {
-			return vm.NIL, err
-		}
-		vals := appendSeqValues(nil, forceSeq(s))
-		// Fisher-Yates shuffle
-		rngShuffle(len(vals), func(i, j int) {
-			vals[i], vals[j] = vals[j], vals[i]
-		})
-		return vm.NewArrayVector(vals), nil
-	})
 
 	// set-rand-seed!: seed the shared RNG so rand / rand-int / rand-nth /
 	// shuffle / math/random produce a reproducible sequence. Returns nil. The
 	// bang marks the process-wide mutation. For tests, benchmarks, and bug
 	// repros — NOT a gameplay-determinism mechanism (use explicit state for
 	// that). Reproducible only when rand calls happen in a deterministic order.
-	setRandSeedFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		n, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("set-rand-seed! expected Int")
-		}
-		setRandSeed(int64(n))
-		return vm.NIL, nil
-	})
 
 	// transient: create a transient (mutable) version of a persistent collection
-	transientf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case *vm.PersistentMap:
-			return vm.NewTransientMap(v), nil
-		case *vm.PersistentSet:
-			return vm.NewTransientSet(v), nil
-		case vm.ArrayVector:
-			return vm.NewTransientVector([]vm.Value(v)), nil
-		case vm.PersistentVector:
-			vals := v.Unbox().([]vm.Value)
-			return vm.NewTransientVector(vals), nil
-		default:
-			return vm.NIL, fmt.Errorf("transient not supported on %s", vs[0].Type().Name())
-		}
-	})
 
 	// persistent!: freeze a transient back to a persistent collection
-	persistentf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case *vm.TransientMap:
-			return v.Persistent()
-		case *vm.TransientVector:
-			return v.Persistent()
-		case *vm.TransientSet:
-			return v.Persistent()
-		default:
-			return vm.NIL, fmt.Errorf("persistent! not supported on %s", vs[0].Type().Name())
-		}
-	})
 
 	// conj!: mutating conj on a transient
-	conjBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 {
-			return vm.NewTransientVector(nil), nil
-		}
-		if len(vs) == 1 {
-			return vs[0], nil
-		}
-		switch t := vs[0].(type) {
-		case *vm.TransientMap:
-			var err error
-			for i := 1; i < len(vs); i++ {
-				t, err = t.Conj(vs[i])
-				if err != nil {
-					return vm.NIL, err
-				}
-			}
-			return t, nil
-		case *vm.TransientVector:
-			var err error
-			for i := 1; i < len(vs); i++ {
-				t, err = t.Conj(vs[i])
-				if err != nil {
-					return vm.NIL, err
-				}
-			}
-			return t, nil
-		case *vm.TransientSet:
-			var err error
-			for i := 1; i < len(vs); i++ {
-				t, err = t.Conj(vs[i])
-				if err != nil {
-					return vm.NIL, err
-				}
-			}
-			return t, nil
-		default:
-			return vm.NIL, fmt.Errorf("conj! not supported on %s", vs[0].Type().Name())
-		}
-	})
 
 	// assoc!: mutating assoc on a transient
-	assocBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch t := vs[0].(type) {
-		case *vm.TransientMap:
-			var err error
-			for i := 1; i < len(vs); i += 2 {
-				val := vm.Value(vm.NIL)
-				if i+1 < len(vs) {
-					val = vs[i+1]
-				}
-				t, err = t.Assoc(vs[i], val)
-				if err != nil {
-					return vm.NIL, err
-				}
-			}
-			return t, nil
-		case *vm.TransientVector:
-			var err error
-			for i := 1; i < len(vs); i += 2 {
-				val := vm.Value(vm.NIL)
-				if i+1 < len(vs) {
-					val = vs[i+1]
-				}
-				t, err = t.Assoc(vs[i], val)
-				if err != nil {
-					return vm.NIL, err
-				}
-			}
-			return t, nil
-		default:
-			return vm.NIL, fmt.Errorf("assoc! not supported on %s", vs[0].Type().Name())
-		}
-	})
 
 	// disj!: mutating disj on a transient set
-	disjBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		t, ok := vs[0].(*vm.TransientSet)
-		if !ok {
-			return vm.NIL, fmt.Errorf("disj! expected TransientSet")
-		}
-		var err error
-		for i := 1; i < len(vs); i++ {
-			t, err = t.Disj(vs[i])
-			if err != nil {
-				return vm.NIL, err
-			}
-		}
-		return t, nil
-	})
 
 	// dissoc!: mutating dissoc on a transient map
-	dissocBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		t, ok := vs[0].(*vm.TransientMap)
-		if !ok {
-			return vm.NIL, fmt.Errorf("dissoc! expected TransientMap")
-		}
-		var err error
-		for i := 1; i < len(vs); i++ {
-			t, err = t.Dissoc(vs[i])
-			if err != nil {
-				return vm.NIL, err
-			}
-		}
-		return t, nil
-	})
 
 	// make-record-type: create a RecordType with name and field keywords
-	makeRecordType, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		name, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("make-record-type expected String name")
-		}
-		fields := make([]vm.Keyword, len(vs)-1)
-		for i := 1; i < len(vs); i++ {
-			kw, ok := vs[i].(vm.Keyword)
-			if !ok {
-				return vm.NIL, fmt.Errorf("make-record-type expected Keyword fields")
-			}
-			fields[i-1] = kw
-		}
-		return vm.NewRecordType(string(name), fields), nil
-	})
 
 	// make-record: create a Record from a RecordType and a map
-	makeRecord, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		rt, ok := vs[0].(*vm.RecordType)
-		if !ok {
-			return vm.NIL, fmt.Errorf("make-record expected RecordType")
-		}
-		m, ok := vs[1].(*vm.PersistentMap)
-		if !ok {
-			return vm.NIL, fmt.Errorf("make-record expected Map")
-		}
-		return vm.NewRecord(rt, m), nil
-	})
 
 	// record?: check if a value is a Record
-	isRecord, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		_, ok := vs[0].(*vm.Record)
-		return vm.Boolean(ok), nil
-	})
 
 	// make-deftype: create a DType (deftype class) with a name and field symbols.
-	makeDType, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		name, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("make-deftype expected String name")
-		}
-		fields := make([]vm.Symbol, len(vs)-1)
-		for i := 1; i < len(vs); i++ {
-			sym, ok := vs[i].(vm.Symbol)
-			if !ok {
-				return vm.NIL, fmt.Errorf("make-deftype expected Symbol fields")
-			}
-			fields[i-1] = sym
-		}
-		return vm.NewDType(string(name), fields), nil
-	})
 
 	// make-deftype-instance: construct an instance of a DType from positional field values.
-	makeDTypeInstance, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		dt, ok := vs[0].(*vm.DType)
-		if !ok {
-			return vm.NIL, fmt.Errorf("make-deftype-instance expected DType, got %s", vs[0].Type().Name())
-		}
-		// Copy to avoid aliasing the VM's args slice (which may be reused).
-		fields := make([]vm.Value, len(vs)-1)
-		copy(fields, vs[1:])
-		return vm.NewDTypeInstance(dt, fields), nil
-	})
 
 	// set-field!: mutate a deftype instance field in place (backs ^:mutable).
 	// (set-field! instance 'field-name value) -> value
-	setField, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("set-field! expected 3 arguments, got %d", len(vs))
-		}
-		inst, ok := vs[0].(*vm.DTypeInstance)
-		if !ok {
-			return vm.NIL, fmt.Errorf("set-field! expected a deftype instance, got %s", vs[0].Type().Name())
-		}
-		name, ok := vs[1].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("set-field! expected a Symbol field name")
-		}
-		if err := inst.SetField(name, vs[2]); err != nil {
-			return vm.NIL, err
-		}
-		return vs[2], nil
-	})
 
 	// defprotocol*: create a protocol (called by defprotocol macro)
-	defProtocol, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		name, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("defprotocol* expected String name")
-		}
-		methods := make([]vm.Symbol, len(vs)-1)
-		for i := 1; i < len(vs); i++ {
-			s, ok := vs[i].(vm.Symbol)
-			if !ok {
-				return vm.NIL, fmt.Errorf("defprotocol* expected Symbol method names")
-			}
-			methods[i-1] = s
-		}
-		return vm.NewProtocol(string(name), methods), nil
-	})
 
 	// extend-type*: extend a protocol for a type (called by extend-type macro)
-	extendType, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		protocol, ok := vs[0].(*vm.Protocol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("extend-type* expected Protocol")
-		}
-		implMap, ok := vs[2].(*vm.PersistentMap)
-		if !ok {
-			return vm.NIL, fmt.Errorf("extend-type* expected map of implementations")
-		}
-		// vs[1] is the type to extend — nil, a concrete ValueType, or a
-		// reusable TypeUnion descriptor for a compatibility interface.
-		if vs[1] == vm.NIL {
-			protocol.ExtendNil(implMap)
-			return vm.NIL, nil
-		}
-		if union, ok := vs[1].(*vm.TypeUnion); ok {
-			// Union fan-out must not clobber an exact extend-type on a member
-			// (Clojure: exact type beats interface, regardless of order).
-			for _, valueType := range union.Types() {
-				protocol.ExtendViaUnion(valueType, implMap)
-			}
-			return vm.NIL, nil
-		}
-		vt, ok := vs[1].(vm.ValueType)
-		if !ok {
-			return vm.NIL, fmt.Errorf("extend-type* expected a type, got %s", vs[1].Type().Name())
-		}
-		protocol.Extend(vt, implMap)
-		return vm.NIL, nil
-	})
 
 	// make-protocol-fn: create a ProtocolFn for dispatch
-	makeProtocolFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		protocol, ok := vs[0].(*vm.Protocol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("make-protocol-fn expected Protocol")
-		}
-		methodName, ok := vs[1].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("make-protocol-fn expected Symbol")
-		}
-		return vm.NewProtocolFn(protocol, methodName), nil
-	})
 
 	// -set-invokable-protocol!: wire the VM's "invokable value" support to the
 	// IFn protocol + its -invoke fn (called once from core after defining IFn).
 	// Thereafter any value whose type satisfies IFn can be called like a fn.
-	setInvokableProtocol, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("-set-invokable-protocol! expects 2 args")
-		}
-		protocol, ok := vs[0].(*vm.Protocol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("-set-invokable-protocol! expected a Protocol")
-		}
-		invokeFn, ok := vs[1].(vm.Fn)
-		if !ok {
-			return vm.NIL, fmt.Errorf("-set-invokable-protocol! expected the -invoke fn")
-		}
-		vm.IFnProtocol = protocol
-		vm.IFnInvoke = invokeFn
-		return vm.NIL, nil
-	})
 
 	// -set-deref-protocol!: wire the VM's "derefable value" support to the
 	// IDeref protocol + its -deref fn (called once from core after defining
 	// IDeref). Thereafter any value whose type satisfies IDeref works with @/deref.
-	setDerefProtocol, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("-set-deref-protocol! expects 2 args")
-		}
-		protocol, ok := vs[0].(*vm.Protocol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("-set-deref-protocol! expected a Protocol")
-		}
-		derefFn, ok := vs[1].(vm.Fn)
-		if !ok {
-			return vm.NIL, fmt.Errorf("-set-deref-protocol! expected the -deref fn")
-		}
-		vm.IDerefProtocol = protocol
-		vm.IDerefDeref = derefFn
-		return vm.NIL, nil
-	})
 
 	// satisfies?: check if a value's type implements a protocol
-	satisfies, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		protocol, ok := vs[0].(*vm.Protocol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("satisfies? expected Protocol")
-		}
-		return vm.Boolean(protocol.Satisfies(vs[1])), nil
-	})
 
 	// defmulti*: create a multimethod (called by defmulti macro)
-	defMulti, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 || len(vs) > 3 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		name, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("defmulti* expected String name")
-		}
-		dispatchFn, ok := vs[1].(vm.Fn)
-		if !ok {
-			return vm.NIL, fmt.Errorf("defmulti* expected Fn")
-		}
-		var defaultVal vm.Value = vm.Keyword("default")
-		if len(vs) == 3 {
-			defaultVal = vs[2]
-		}
-		return vm.NewMultiFn(string(name), dispatchFn, defaultVal), nil
-	})
 
 	// defmethod*: add a method to a multimethod (called by defmethod macro)
-	defMethod, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		mf, ok := vs[0].(*vm.MultiFn)
-		if !ok {
-			return vm.NIL, fmt.Errorf("defmethod* expected MultiFn")
-		}
-		dispatchVal := vs[1]
-		method, ok := vs[2].(vm.Fn)
-		if !ok {
-			return vm.NIL, fmt.Errorf("defmethod* expected Fn")
-		}
-		return mf.AddMethod(dispatchVal, method), nil
-	})
 
 	// methods: return the method map of a multimethod
 	methods, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -5465,9 +3387,6 @@ func installLangNS() {
 	})
 
 	// pr-str: print readably to string (with quotes on strings)
-	prStr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return prThroughToString(vs, true)
-	})
 
 	// prn: print readably + newline through *out*
 	prn := vm.NewCtxNativeFn("prn", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
@@ -5479,213 +3398,25 @@ func installLangNS() {
 	})
 
 	// prn-str: print readably + newline to string
-	prnStr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		s, err := prThroughToString(vs, true)
-		if err != nil {
-			return vm.NIL, err
-		}
-		return vm.String(string(s.(vm.String)) + "\n"), nil
-	})
 
 	// print-str: print human-readably to string (no quotes on strings)
-	printStr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return prThroughToString(vs, false)
-	})
 
 	// println-str: print human-readably + newline to string
-	printlnStr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		s, err := prThroughToString(vs, false)
-		if err != nil {
-			return vm.NIL, err
-		}
-		return vm.String(string(s.(vm.String)) + "\n"), nil
-	})
 
 	// re-find: find first match of regex in string
-	reFind, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		re, ok := vs[0].(*vm.Regex)
-		if !ok {
-			return vm.NIL, fmt.Errorf("re-find expected Regex")
-		}
-		s, ok := vs[1].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("re-find expected String")
-		}
-		indices := re.FindStringSubmatchIndex(string(s))
-		if indices == nil {
-			return vm.NIL, nil
-		}
-		return regexSubmatchValue(string(s), indices), nil
-	})
 
 	// re-matches: match entire string against regex
-	reMatches, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		re, ok := vs[0].(*vm.Regex)
-		if !ok {
-			return vm.NIL, fmt.Errorf("re-matches expected Regex")
-		}
-		s, ok := vs[1].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("re-matches expected String")
-		}
-		indices := re.FindStringSubmatchIndex(string(s))
-		if indices == nil || indices[0] != 0 || indices[1] != len(s) {
-			return vm.NIL, nil
-		}
-		return regexSubmatchValue(string(s), indices), nil
-	})
 
 	// re-seq: return lazy seq of all matches
-	reSeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		re, ok := vs[0].(*vm.Regex)
-		if !ok {
-			return vm.NIL, fmt.Errorf("re-seq expected Regex")
-		}
-		s, ok := vs[1].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("re-seq expected String")
-		}
-		// Like Clojure (and re-find above): a groupless pattern yields
-		// the match string, capture groups yield [full g1 g2 ...].
-		all := re.FindAllStringSubmatchIndex(string(s), -1)
-		if all == nil {
-			return vm.NIL, nil
-		}
-		vals := make([]vm.Value, len(all))
-		for i, indices := range all {
-			vals[i] = regexSubmatchValue(string(s), indices)
-		}
-		return vm.ListType.Box(vals)
-	})
 
 	// require loads a namespace by name (like Clojure's require function for REPL use)
 	// Supports: (require 'foo), (require '[foo :as f]), (require '[foo :refer [a b]])
-	requiref, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		cns := CurrentNS.Deref().(*vm.Namespace)
-		for _, v := range vs {
-			switch arg := v.(type) {
-			case vm.Symbol:
-				if _, err := RequireNS(string(arg)); err != nil {
-					return vm.NIL, err
-				}
-			case vm.ArrayVector:
-				// Vector form: [ns-name :as alias] or [ns-name :refer [syms...]]
-				if arg.RawCount() < 1 {
-					return vm.NIL, fmt.Errorf("require: empty vector")
-				}
-				nsName, ok := arg.ValueAt(vm.Int(0)).(vm.Symbol)
-				if !ok {
-					return vm.NIL, fmt.Errorf("require: first element must be a symbol")
-				}
-				target, err := RequireNS(string(nsName))
-				if err != nil {
-					return vm.NIL, err
-				}
-				// Parse options
-				for i := 1; i < arg.RawCount()-1; i += 2 {
-					opt := arg.ValueAt(vm.Int(int64(i)))
-					val := arg.ValueAt(vm.Int(int64(i + 1)))
-					switch opt {
-					case vm.Keyword("as"):
-						if alias, ok := val.(vm.Symbol); ok {
-							cns.Alias(alias, target)
-						}
-					case vm.Keyword("refer"):
-						if val == vm.Keyword("all") {
-							cns.Refer(target, "", true)
-						} else if vec, ok := val.(vm.ArrayVector); ok {
-							syms := make([]vm.Symbol, vec.RawCount())
-							for j := 0; j < vec.RawCount(); j++ {
-								syms[j] = vec.ValueAt(vm.Int(int64(j))).(vm.Symbol)
-							}
-							cns.ReferList(target, syms)
-						}
-					}
-				}
-			default:
-				return vm.NIL, fmt.Errorf("require expected Symbol or Vector, got %s", v.Type().Name())
-			}
-		}
-		return vm.NIL, nil
-	})
 
 	// find-ns returns the namespace with the given name, or nil
-	findNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		s, ok := vs[0].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("find-ns expected Symbol")
-		}
-		nsMu.RLock()
-		ns := nsRegistry[string(s)]
-		nsMu.RUnlock()
-		if ns == nil {
-			return vm.NIL, nil
-		}
-		return ns, nil
-	})
-
-	resolvef, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		sym, ok := vs[0].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("resolve expected Symbol")
-		}
-		cns := CurrentNS.Deref().(*vm.Namespace)
-		if v := cns.Lookup(sym); v != vm.NIL {
-			return v, nil
-		}
-		return vm.NIL, nil
-	})
-	if err != nil {
-		panic(err)
-	}
 
 	// all-ns returns a list of all loaded namespaces
-	allNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		nsMu.RLock()
-		var nss []vm.Value
-		for _, ns := range nsRegistry {
-			nss = append(nss, ns)
-		}
-		nsMu.RUnlock()
-		return vm.NewList(nss), nil
-	})
 
 	// the-ns returns the namespace for a symbol, throwing if not found
-	theNs, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		s, ok := vs[0].(vm.Symbol)
-		if !ok {
-			// If already a namespace, return it
-			if ns, ok := vs[0].(*vm.Namespace); ok {
-				return ns, nil
-			}
-			return vm.NIL, fmt.Errorf("the-ns expected Symbol or Namespace")
-		}
-		nsMu.RLock()
-		ns := nsRegistry[string(s)]
-		nsMu.RUnlock()
-		if ns == nil {
-			return vm.NIL, fmt.Errorf("no namespace: %s found", s)
-		}
-		return ns, nil
-	})
 
 	// ns-name returns the name of a namespace as a symbol
 	nsName, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -5702,98 +3433,22 @@ func installLangNS() {
 	// ns-publics returns a map of symbol -> Var for the public (non-private)
 	// interned vars of a namespace, given either the namespace or a symbol
 	// naming it (matching Clojure, which passes its arg through the-ns).
-	nsPublics, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		var ns *vm.Namespace
-		switch a := vs[0].(type) {
-		case *vm.Namespace:
-			ns = a
-		case vm.Symbol:
-			// resolveNSAlias canonicalizes the Clojure-facing names the rest of
-			// the runtime accepts (clojure.core -> core, clojure.string ->
-			// string, …); non-aliases pass through unchanged.
-			nsMu.RLock()
-			ns = nsRegistry[resolveNSAlias(string(a))]
-			nsMu.RUnlock()
-			if ns == nil {
-				return vm.NIL, fmt.Errorf("no namespace: %s found", a)
-			}
-		default:
-			return vm.NIL, fmt.Errorf("ns-publics expected Symbol or Namespace")
-		}
-		pubs := ns.PublicVars()
-		kvs := make([]vm.Value, 0, len(pubs)*2)
-		for sym, v := range pubs {
-			kvs = append(kvs, sym, v)
-		}
-		return vm.NewMap(kvs), nil
-	})
 
 	// find-var: (find-var 'ns/name) -> the interned var in that namespace, or
 	// nil if the namespace or the name is not found. integrant's default
 	// init-key resolves a component fn from a qualified keyword via
 	// (some-> (find-var sym) var-get).
-	findVar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		sym, ok := vs[0].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("find-var expected a symbol")
-		}
-		nsV, nameV := sym.Namespaced()
-		nsSym, ok1 := nsV.(vm.Symbol)
-		nameSym, ok2 := nameV.(vm.Symbol)
-		if !ok1 || !ok2 {
-			return vm.NIL, fmt.Errorf("find-var expects a fully-qualified symbol: %s", sym)
-		}
-		nsMu.RLock()
-		targetNS := nsRegistry[resolveNSAlias(string(nsSym))]
-		nsMu.RUnlock()
-		if targetNS == nil {
-			return vm.NIL, nil
-		}
-		if v := targetNS.LookupLocal(nameSym); v != nil {
-			return v, nil
-		}
-		return vm.NIL, nil
-	})
 
 	// get-method: (get-method multifn dispatch-val) -> the method fn that value
 	// would select (exact match, else the default method), or nil. integrant's
 	// can-expand-key? uses it to test whether a key has an expand-key method.
-	getMethod, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		mf, ok := vs[0].(*vm.MultiFn)
-		if !ok {
-			return vm.NIL, fmt.Errorf("get-method expected a multimethod")
-		}
-		return mf.GetMethod(vs[1]), nil
-	})
 
 	// enumeration-seq: only reached by integrant's JVM-only classpath scanners
 	// (resources/load-hierarchy/load-annotations). let-go has no java.util
 	// Enumeration, so this is a compile-only stub — it lets those :clj defns
 	// load, and fails loudly if actually called.
-	enumerationSeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return vm.NIL, fmt.Errorf("enumeration-seq is not supported under let-go (no java.util.Enumeration)")
-	})
 
 	// lazy-seq* creates a LazySeq from a thunk function
-	lazySeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("lazy-seq* expected 1 argument, got %d", len(vs))
-		}
-		fn, ok := vs[0].(vm.Fn)
-		if !ok {
-			return vm.NIL, fmt.Errorf("lazy-seq* expected a function")
-		}
-		return vm.NewLazySeq(fn), nil
-	})
 
 	// push-binding!/pop-binding! resolve against the *active* ExecContext
 	// (ec.Invoke routes it in), so a `binding` form inside an isolated child
@@ -5845,27 +3500,6 @@ func installLangNS() {
 		return wrapped, nil
 	})
 
-	withMeta, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if vs[0] == vm.NIL {
-			return vm.NIL, nil
-		}
-		m, ok := vs[0].(vm.IMeta)
-		if ok {
-			return m.WithMeta(vs[1]), nil
-		}
-		fn, ok := vs[0].(vm.Fn)
-		if ok {
-			return vm.NewMetaFn(fn, vs[1]), nil
-		}
-		// Other non-IMeta values pass through unchanged. This is
-		// load-bearing: value-position type hints compile to runtime
-		// with-meta calls, so hinted scalars must remain valid.
-		return vs[0], nil
-	})
-
 	metaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -5881,75 +3515,14 @@ func installLangNS() {
 	})
 
 	// throw
-	throwf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return vm.NIL, vm.NewThrownError(vs[0])
-	})
 
 	// ex-info
-	exInfo, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 || len(vs) > 3 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		msg, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("ex-info expected String message")
-		}
-		data, ok := vs[1].(*vm.PersistentMap)
-		if !ok {
-			return vm.NIL, fmt.Errorf("ex-info expected Map data")
-		}
-		var cause error
-		if len(vs) == 3 {
-			if ei, ok := vs[2].(*vm.ExInfo); ok {
-				cause = ei
-			}
-		}
-		return vm.NewExInfo(string(msg), data, cause), nil
-	})
 
 	// ex-message
-	exMessage, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments")
-		}
-		if ei, ok := vs[0].(*vm.ExInfo); ok {
-			return vm.String(ei.Message()), nil
-		}
-		return vm.NIL, nil
-	})
 
 	// ex-data
-	exData, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments")
-		}
-		if ei, ok := vs[0].(*vm.ExInfo); ok {
-			// Class-tagged exceptions carry no data map; a nil
-			// *PersistentMap must surface as NIL, not a typed nil.
-			if d := ei.Data(); d != nil {
-				return d, nil
-			}
-		}
-		return vm.NIL, nil
-	})
 
 	// ex-cause
-	exCause, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments")
-		}
-		if ei, ok := vs[0].(*vm.ExInfo); ok {
-			if c := ei.Cause(); c != nil {
-				if cev, ok := c.(*vm.ExInfo); ok {
-					return cev, nil
-				}
-			}
-		}
-		return vm.NIL, nil
-	})
 
 	// transformer-seq* — (transformer-seq* xform coll) → lazy seq
 	// Lazily pulls elements from coll through the transducer xform.
@@ -6059,73 +3632,16 @@ func installLangNS() {
 	})
 
 	// delay — (delay body) is a macro in core.lg, but we need delay* as the constructor
-	delayStar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("delay* expects 1 arg (thunk fn)")
-		}
-		fn, ok := vs[0].(vm.Fn)
-		if !ok {
-			return vm.NIL, fmt.Errorf("delay* expected Fn")
-		}
-		return vm.NewDelay(fn), nil
-	})
 
 	// force — deref a delay (or return value if not a delay)
-	force, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("force expects 1 arg")
-		}
-		if d, ok := vs[0].(*vm.Delay); ok {
-			return d.Force()
-		}
-		return vs[0], nil
-	})
 
 	// delay? — test if value is a Delay
-	isDelay, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		_, ok := vs[0].(*vm.Delay)
-		return vm.Boolean(ok), nil
-	})
 
 	// realized? — test if a Delay, Promise, Future, or LazySeq has been realized
-	isRealized, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if d, ok := vs[0].(*vm.Delay); ok {
-			return vm.Boolean(d.IsRealized()), nil
-		}
-		if p, ok := vs[0].(*vm.Promise); ok {
-			return vm.Boolean(p.IsRealized()), nil
-		}
-		if s, ok := vs[0].(*vm.LazySeq); ok {
-			return vm.Boolean(s.IsRealized()), nil
-		}
-		return vm.NIL, fmt.Errorf("realized? expected delay, promise, future, or lazy seq")
-	})
 
 	// volatile! — create a volatile mutable box
-	volatilef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("volatile! expects 1 arg")
-		}
-		return vm.NewVolatile(vs[0]), nil
-	})
 
 	// vreset! — set volatile value
-	vreset, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("vreset! expects 2 args")
-		}
-		v, ok := vs[0].(*vm.Volatile)
-		if !ok {
-			return vm.NIL, fmt.Errorf("vreset! expected Volatile")
-		}
-		return v.Reset(vs[1]), nil
-	})
 
 	// vswap! — apply fn to volatile value: (vswap! vol f args...)
 	vswap := vm.NewCtxNativeFn("vswap!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
@@ -6151,20 +3667,8 @@ func installLangNS() {
 	})
 
 	// reduced — wrap a value to signal early termination
-	reducedf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("reduced expects 1 arg")
-		}
-		return vm.NewReduced(vs[0]), nil
-	})
 
 	// reduced? — test if value is Reduced
-	isReducedf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		return vm.Boolean(vm.IsReduced(vs[0])), nil
-	})
 
 	// compare — generic comparison: -1, 0, 1
 	comparef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -6207,222 +3711,11 @@ func installLangNS() {
 
 	// --- Bitwise ops ---
 
-	bitAnd, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-and expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-and expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-and expected Int")
-		}
-		return vm.MakeInt(int(a) & int(b)), nil
-	})
-
-	bitOr, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-or expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-or expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-or expected Int")
-		}
-		return vm.MakeInt(int(a) | int(b)), nil
-	})
-
-	bitXor, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-xor expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-xor expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-xor expected Int")
-		}
-		return vm.MakeInt(int(a) ^ int(b)), nil
-	})
-
-	bitNot, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("bit-not expects 1 arg")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-not expected Int")
-		}
-		return vm.MakeInt(^int(a)), nil
-	})
-
-	bitShiftLeft, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-shift-left expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-shift-left expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-shift-left expected Int")
-		}
-		return vm.MakeInt(int(a) << uint(b)), nil
-	})
-
-	bitShiftRight, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-shift-right expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-shift-right expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-shift-right expected Int")
-		}
-		return vm.MakeInt(int(a) >> uint(b)), nil
-	})
-
-	unsignedBitShiftRight, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
-		}
-		return vm.MakeInt(int(uint(a) >> uint(b))), nil
-	})
-
-	bitTest, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-test expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-test expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-test expected Int")
-		}
-		return vm.Boolean(int(a)&(1<<uint(b)) != 0), nil
-	})
-
-	bitSet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-set expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-set expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-set expected Int")
-		}
-		return vm.MakeInt(int(a) | (1 << uint(b))), nil
-	})
-
-	bitClear, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-clear expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-clear expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-clear expected Int")
-		}
-		return vm.MakeInt(int(a) &^ (1 << uint(b))), nil
-	})
-
-	bitAndNot, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-and-not expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-and-not expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-and-not expected Int")
-		}
-		return vm.MakeInt(int(a) &^ int(b)), nil
-	})
-
-	bitFlip, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("bit-flip expects 2 args")
-		}
-		a, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-flip expected Int")
-		}
-		b, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bit-flip expected Int")
-		}
-		return vm.MakeInt(int(a) ^ (1 << uint(b))), nil
-	})
-
 	// re-groups — find all submatch groups: (re-groups regex str) → vector of [match group1 group2 ...]
-	reGroups, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("re-groups expects 2 args")
-		}
-		re, ok := vs[0].(*vm.Regex)
-		if !ok {
-			return vm.NIL, fmt.Errorf("re-groups expected Regex")
-		}
-		s, ok := vs[1].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("re-groups expected String")
-		}
-		all := re.FindAllStringSubmatchIndex(string(s), -1)
-		if all == nil {
-			return vm.NIL, nil
-		}
-		result := make([]vm.Value, len(all))
-		for i, indices := range all {
-			result[i] = regexSubmatchVector(string(s), indices)
-		}
-		return vm.NewArrayVector(result), nil
-	})
 
 	// promise — create a promise
-	promisef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return vm.NewPromise(), nil
-	})
 
 	// deliver — deliver a value to a promise
-	deliver, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("deliver expects 2 args")
-		}
-		p, ok := vs[0].(*vm.Promise)
-		if !ok {
-			return vm.NIL, fmt.Errorf("deliver expected Promise")
-		}
-		return p.Deliver(vs[1]), nil
-	})
 
 	// future — run body in a goroutine, return a promise that delivers the result
 	// (future* thunk) — internal, macro wraps body
@@ -6453,84 +3746,10 @@ func installLangNS() {
 	})
 
 	// add-tap / remove-tap / tap> — debug tap queue (synchronous)
-	addTap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("add-tap expects 1 arg")
-		}
-		fn, ok := vm.AsFn(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("add-tap expected Fn")
-		}
-		tapsMu.Lock()
-		taps = append(taps, fn)
-		tapsMu.Unlock()
-		return vm.NIL, nil
-	})
-
-	removeTap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("remove-tap expects 1 arg")
-		}
-		tapsMu.Lock()
-		for i, t := range taps {
-			if t == vs[0] {
-				taps = append(taps[:i], taps[i+1:]...)
-				break
-			}
-		}
-		tapsMu.Unlock()
-		return vm.NIL, nil
-	})
-
-	tapBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("tap> expects 1 arg")
-		}
-		tapsMu.Lock()
-		snap := make([]vm.Fn, len(taps))
-		copy(snap, taps)
-		tapsMu.Unlock()
-		for _, t := range snap {
-			_, _ = t.Invoke([]vm.Value{vs[0]})
-		}
-		return vm.TRUE, nil
-	})
 
 	// add-watch — (add-watch atom-or-var key fn)
-	addWatch, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("add-watch expects 3 args")
-		}
-		fn, ok := vm.AsFn(vs[2])
-		if !ok {
-			return vm.NIL, fmt.Errorf("add-watch expected Fn")
-		}
-		switch ref := vs[0].(type) {
-		case *vm.Atom:
-			ref.AddWatch(vs[1], fn)
-		case *vm.Var:
-			ref.AddWatch(vs[1], fn)
-		default:
-			return vm.NIL, fmt.Errorf("add-watch expected Atom or Var")
-		}
-		return vs[0], nil
-	})
 
 	// remove-watch — (remove-watch atom-or-var key)
-	removeWatch, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("remove-watch expects 2 args")
-		}
-		switch ref := vs[0].(type) {
-		case *vm.Atom:
-			ref.RemoveWatch(vs[1])
-		case *vm.Var:
-			ref.RemoveWatch(vs[1])
-		default:
-			return vm.NIL, fmt.Errorf("remove-watch expected Atom or Var")
-		}
-		return vs[0], nil
-	})
 
 	// alter-meta! — (alter-meta! ref f & args)
 	alterMeta := vm.NewCtxNativeFn("alter-meta!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
@@ -6552,64 +3771,7 @@ func installLangNS() {
 		}
 	})
 
-	getValidator, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("get-validator expects 1 arg")
-		}
-		a, ok := vs[0].(*vm.Atom)
-		if !ok {
-			return vm.NIL, fmt.Errorf("get-validator expected Atom")
-		}
-		return a.Validator(), nil
-	})
-
 	// subvec — (subvec v start) or (subvec v start end)
-	subvecf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 || len(vs) > 3 {
-			return vm.NIL, fmt.Errorf("subvec expects 2-3 args")
-		}
-		s, ok := vm.ToInt(vs[1])
-		if !ok {
-			return vm.NIL, fmt.Errorf("subvec expected Int start")
-		}
-
-		switch v := vs[0].(type) {
-		case vm.ArrayVector:
-			end := len(v)
-			if len(vs) == 3 {
-				e, ok := vm.ToInt(vs[2])
-				if !ok {
-					return vm.NIL, fmt.Errorf("subvec expected Int end")
-				}
-				end = e
-			}
-			if s < 0 || end > len(v) || s > end {
-				return vm.NIL, fmt.Errorf("subvec: index out of bounds")
-			}
-			result := make([]vm.Value, end-s)
-			copy(result, v[s:end])
-			return vm.NewArrayVector(result), nil
-		case vm.PersistentVector:
-			end := int(v.Count().(vm.Int))
-			if len(vs) == 3 {
-				e, ok := vm.ToInt(vs[2])
-				if !ok {
-					return vm.NIL, fmt.Errorf("subvec expected Int end")
-				}
-				end = e
-			}
-			if s < 0 || end > int(v.Count().(vm.Int)) || s > end {
-				return vm.NIL, fmt.Errorf("subvec: index out of bounds")
-			}
-			result := make([]vm.Value, end-s)
-			for i := s; i < end; i++ {
-				result[i-s] = v.ValueAt(vm.Int(i))
-			}
-			return vm.NewArrayVector(result), nil
-		default:
-			return vm.NIL, fmt.Errorf("subvec expected vector")
-		}
-	})
 
 	// fn? — test if value is callable
 	isFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -6627,108 +3789,18 @@ func installLangNS() {
 	})
 
 	// double? — true only for float64 values; float? accepts float32 and float64.
-	isDouble, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		_, ok := vs[0].(vm.Float)
-		return vm.Boolean(ok), nil
-	})
 
 	// instance? — type check (simplified: checks if type name matches)
-	instancep, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		// We accept type objects (e.g. IntType) and check if the value's type matches
-		if t, ok := vs[0].(vm.ValueType); ok {
-			if vs[1].Type() == t {
-				return vm.TRUE, nil
-			}
-			// Walk registered ancestry so subclass values answer true for
-			// parent classes, e.g. (instance? Throwable (Exception. "m")).
-			// Types with no registered parents keep exact-match semantics.
-			if anc := directTypeAncestors(vs[1].Type()); anc != nil {
-				return anc.Contains(t), nil
-			}
-			return vm.FALSE, nil
-		}
-		if union, ok := vs[0].(*vm.TypeUnion); ok {
-			return vm.Boolean(union.Contains(vs[1].Type())), nil
-		}
-		// Clojure-compat interface markers (e.g. clojure.lang.IEditableCollection)
-		// are registered as plain symbols by installClojureCompatAliases. Answer
-		// instance? for them via the type→interface hierarchy so libraries that
-		// branch on (instance? clojure.lang.IEditableCollection coll) — like
-		// medley — observe the JVM-equivalent answer.
-		if marker, ok := vs[0].(vm.Symbol); ok {
-			if anc := directTypeAncestors(vs[1].Type()); anc != nil {
-				return vm.Boolean(anc.Contains(marker) == vm.TRUE), nil
-			}
-		}
-		// A protocol behaves like an interface: (instance? SomeProtocol x) is a
-		// membership test, matching Clojure where defprotocol generates a host
-		// interface.
-		if p, ok := vs[0].(*vm.Protocol); ok {
-			return vm.Boolean(p.Satisfies(vs[1])), nil
-		}
-		return vm.FALSE, nil
-	})
 
 	// ifn? — true if value implements Fn (invokable: functions, keywords, maps, sets, vectors)
-	isIFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		switch vs[0].(type) {
-		case vm.Fn, vm.Keyword, vm.Symbol, *vm.PersistentMap, *vm.PersistentSet,
-			vm.ArrayVector, vm.PersistentVector, *vm.SortedMap, *vm.SortedSet, *vm.Promise:
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
-	})
 
 	// identical? — reference/value identity
-	identical, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return vm.Boolean(identicalValue(vs[0], vs[1])), nil
-	})
 
 	// any? — returns true for everything (every value satisfies any?)
-	anyp, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return vm.TRUE, nil
-	})
 
 	// unreduced — unwrap Reduced, or return value as-is
-	unreduced, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("unreduced expects 1 arg")
-		}
-		if r, ok := vs[0].(*vm.Reduced); ok {
-			return r.Deref(), nil
-		}
-		return vs[0], nil
-	})
 
 	// ensure-reduced — if already Reduced, return as-is; otherwise wrap
-	ensureReduced, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("ensure-reduced expects 1 arg")
-		}
-		if _, ok := vs[0].(*vm.Reduced); ok {
-			return vs[0], nil
-		}
-		return vm.NewReduced(vs[0]), nil
-	})
-
-	if err != nil {
-		panic("lang NS init failed")
-	}
 
 	ns := vm.NewNamespace(NameCoreNS)
 
@@ -6840,25 +3912,6 @@ func installLangNS() {
 	(ns.Lookup("ns").(*vm.Var)).SetMacro()
 
 	// primitive fns
-	ns.Def("+", plus)
-	ns.Def("*", mul)
-	ns.Def("-", sub)
-	ns.Def("/", div)
-	ns.Def("+'", plusP)
-	ns.Def("*'", mulP)
-	ns.Def("-'", subP)
-	ns.Def("unchecked-add", uncheckedAdd)
-	ns.Def("unchecked-subtract", uncheckedSubtract)
-	ns.Def("unchecked-multiply", uncheckedMultiply)
-	ns.Def("unchecked-negate", uncheckedNegate)
-	ns.Def("unchecked-divide-int", uncheckedDivideInt)
-	ns.Def("unchecked-long", uncheckedLong)
-	ns.Def("unchecked-int", uncheckedInt)
-	ns.Def("unchecked-short", uncheckedShort)
-	ns.Def("unchecked-byte", uncheckedByte)
-	ns.Def("unchecked-char", uncheckedChar)
-	ns.Def("unchecked-double", uncheckedDouble)
-	ns.Def("unchecked-float", uncheckedFloat)
 
 	ns.Def("=", equals)
 	ns.Def("not=", notEq)
@@ -6869,78 +3922,38 @@ func installLangNS() {
 	ns.Def("<", lt)
 	ns.Def(">=", ge)
 	ns.Def("<=", le)
-	ns.Def("mod", mod)
-	ns.Def("abs", abs)
 
 	// and/or are now macros in core.lg (short-circuiting)
 	// ns.Def("and", and)
 	// ns.Def("or", or)
-	ns.Def("not", not)
-	ns.Def("complement", complement)
 
-	ns.Def("set-macro!", setMacro)
-	ns.Def("gensym", gensym)
 	ns.Def("in-ns", inNs)
-	ns.Def("exclude-in-current-ns", excludeInCurrentNs)
-	ns.Def("use", use)
-	ns.Def("alias", aliasf)
 	ns.Def("name", name)
 	ns.Def("namespace", namespace)
 
-	ns.Def("vector", vector)
 	ns.Def("vec", vec)
-	ns.Def("hash-map", hashMap)
-	ns.Def("array-map", arrayMap)
 	ns.Def("list", list)
-	ns.Def("range", rangef)
-	ns.Def("keyword", keyword)
-	ns.Def("symbol", symbolf)
 	ns.Def("hash-set", hashSet)
-	ns.Def("sorted-map", sortedMap)
-	ns.Def("sorted-set", sortedSet)
-	ns.Def("sorted-map-by", sortedMapBy)
-	ns.Def("sorted-set-by", sortedSetBy)
 
 	ns.Def("seq", seq)
 	ns.Def("seq?", isSeq)
-	ns.Def("list?", isList)
 
 	// basic predicates needed during early core bootstrap
 	ns.Def("coll?", isColl)
 
-	ns.Def("empty", empty)
-
-	ns.Def("assoc", assoc)
-	ns.Def("dissoc", dissoc)
 	ns.Def("update", update)
-	ns.Def("cons", cons)
 	ns.Def("conj", conj)
-	ns.Def("disj", disj)
 	ns.Def("first", first)
-	ns.Def("second", second)
 	ns.Def("next", next)
 	ns.Def("rest", rest)
 	ns.Def("get", get)
-	ns.Def("key", keyf)
-	ns.Def("val", valf)
 	ns.Def("nth", nthf)
-	ns.Def("count", count)
-	ns.Def("contains?", contains)
 
 	ns.Def("map*", mapf)
 	ns.Def("mapv", mapv)
 	parMapV := vm.NewCtxNativeFn("pmapv", parallelMapV)
 	ns.Def("pmapv", parMapV)
-	ns.Def("chunk-first", chunkFirst)
-	ns.Def("chunk-rest", chunkRest)
-	ns.Def("chunk-next", chunkNext)
-	ns.Def("chunk-cons", chunkConsF)
-	ns.Def("chunked-seq?", chunkedSeqP)
-	ns.Def("chunk-buffer", chunkBufferF)
-	ns.Def("chunk-append", chunkAppendF)
-	ns.Def("chunk", chunkF)
 	ns.Def("reduce", reduce)
-	ns.Def("concat*", concat)
 	ns.Def("some", some)
 
 	ns.Def("println", printlnf)
@@ -6949,61 +3962,34 @@ func installLangNS() {
 
 	ns.Def("apply*", apply)
 	ns.Def("deref", deref)
-	ns.Def("register-host-method!", registerHostMethod)
-	ns.Def("register-host-class!", registerHostClass)
 
-	ns.Def("atom", atom)
-	ns.Def("reset!", reset)
 	ns.Def("swap!", swap)
-	ns.Def("compare-and-set!", compareAndSet)
 	ns.Def("swap-vals!", swapVals)
-	ns.Def("reset-vals!", resetVals)
 
 	// now/lines are lg-isms → let-go.core (see the lgCore block below).
-	ns.Def("slurp", slurp)
-	ns.Def("spit", spit)
 
 	// parse-int is an lg-ism → let-go.core; parse-long is the Clojure name.
 	ns.Def("parse-long", parseInt)
-	ns.Def("max", max)
-	ns.Def("min", min)
 
 	ns.Def("compare", comparef)
 	ns.Def("sort", sort)
 
-	ns.Def(".", methodInvoke)
-
 	// async
 	ns.Def("go*", gof)
-	ns.Def("chan", chanf)
 	ns.Def(">!", chanput)
 	ns.Def("<!", changet)
 	ns.Def(">!!", chanput)
 	ns.Def("<!!", changet)
 	ns.Def("scope-open", scopeOpen)
-	ns.Def("scope-close!", scopeClose)
-	ns.Def("scope-live", scopeLive)
-	ns.Def("scope?", scopeQmark)
 
 	ns.Def("int", intf)
-	ns.Def("long", longf)
 	ns.Def("byte", intf)
 	ns.Def("short", intf)
-	ns.Def("float", floatf)
-	ns.Def("double", doublef)
-	ns.Def("number?", isNumber)
-	ns.Def("float?", isFloat)
-	ns.Def("int?", isInt)
-	ns.Def("char", char)
 
 	ns.Def("str", str)
 	ns.Def("split", split)
-	ns.Def("str-replace", strReplace)
 	// str-replace-first is an lg-ism → let-go.core (lgCore block below).
-	ns.Def("re-pattern", regex)
 	// namespace utilities
-	ns.Def("refer-list", referList)
-	ns.Def("refer", refer)
 	ns.Def("trim", trimf)
 	ns.Def("triml", trimlf)
 	ns.Def("trimr", trimrf)
@@ -7014,32 +4000,8 @@ func installLangNS() {
 	ns.Def("ends-with?", endsWith)
 	ns.Def("includes?", includesStr)
 	ns.Def("subs", subs)
-	ns.Def("format", formatf)
-	ns.Def("rand", randf)
 	ns.Def("random-uuid", randomUUID)
-	ns.Def("rand-int", randInt)
-	ns.Def("rand-nth", randNth)
-	ns.Def("shuffle", shuffle)
-	ns.Def("set-rand-seed!", setRandSeedFn)
-	ns.Def("transient", transientf)
-	ns.Def("persistent!", persistentf)
-	ns.Def("conj!", conjBang)
-	ns.Def("assoc!", assocBang)
-	ns.Def("disj!", disjBang)
-	ns.Def("dissoc!", dissocBang)
-	ns.Def("make-record-type", makeRecordType)
-	ns.Def("make-record", makeRecord)
-	ns.Def("record?", isRecord)
-	ns.Def("make-deftype", makeDType)
-	ns.Def("make-deftype-instance", makeDTypeInstance)
-	ns.Def("set-field!", setField)
-	ns.Def("defprotocol*", defProtocol)
-	ns.Def("-set-invokable-protocol!", setInvokableProtocol)
-	ns.Def("-set-deref-protocol!", setDerefProtocol)
 	installHierarchyBuiltins(ns)
-	ns.Def("make-protocol-fn", makeProtocolFn)
-	ns.Def("extend-type*", extendType)
-	ns.Def("satisfies?", satisfies)
 
 	// Comparable: the extensible ordering protocol (Clojure-compat). compare,
 	// sort, and sorted-set all funnel through vm.DefaultCompare, so wiring the
@@ -7073,86 +4035,18 @@ func installLangNS() {
 	}
 	ns.Def("Comparable", comparableProto)
 	ns.Def("compare-to", vm.NewProtocolFn(comparableProto, "compare-to"))
-	ns.Def("defmulti*", defMulti)
-	ns.Def("defmethod*", defMethod)
 	ns.Def("methods", methods)
 	ns.Def("-print-method-default", printMethodDefault)
-	ns.Def("pr-str", prStr)
 	ns.Def("prn", prn)
-	ns.Def("prn-str", prnStr)
-	ns.Def("print-str", printStr)
-	ns.Def("println-str", printlnStr)
-	ns.Def("re-find", reFind)
-	ns.Def("re-matches", reMatches)
-	ns.Def("re-seq", reSeq)
-	ns.Def("require", requiref)
-	ns.Def("find-ns", findNs)
-	ns.Def("resolve", resolvef)
-	ns.Def("all-ns", allNs)
-	ns.Def("the-ns", theNs)
 	ns.Def("ns-name", nsName)
-	ns.Def("ns-publics", nsPublics)
-	ns.Def("find-var", findVar)
-	ns.Def("get-method", getMethod)
-	ns.Def("enumeration-seq", enumerationSeq)
 
-	ns.Def("peek", peek)
-	ns.Def("pop", pop)
-
-	ns.Def("iterate", iterate)
-	ns.Def("repeat", repeat)
-	ns.Def("lazy-seq*", lazySeq)
-
-	ns.Def("with-meta", withMeta)
 	ns.Def("meta", metaf)
 	ns.Def("push-binding!", pushBinding)
 	ns.Def("pop-binding!", popBinding)
 	ns.Def("bound-fn*", boundFnStar)
 
-	ns.Def("throw", throwf)
-	ns.Def("ex-info", exInfo)
-	ns.Def("ex-message", exMessage)
-	ns.Def("ex-data", exData)
-	ns.Def("ex-cause", exCause)
-
-	ns.Def("delay*", delayStar)
-	ns.Def("force", force)
-	ns.Def("delay?", isDelay)
-	ns.Def("realized?", isRealized)
-	ns.Def("volatile!", volatilef)
-	ns.Def("vreset!", vreset)
 	ns.Def("vswap!", vswap)
 	// bigint — coerce to BigInt
-	bigintf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("bigint expects 1 arg")
-		}
-		switch v := vs[0].(type) {
-		case vm.Int:
-			return vm.NewBigIntFromInt64(int64(v)), nil
-		case vm.Float:
-			f := float64(v)
-			if math.IsNaN(f) || math.IsInf(f, 0) {
-				return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0])
-			}
-			decimal := strconv.FormatFloat(f, 'g', -1, 64)
-			i, _, err := new(big.Float).SetPrec(4096).SetMode(big.ToZero).Parse(decimal, 10)
-			if err != nil || i == nil {
-				return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0])
-			}
-			bi, _ := i.Int(nil)
-			return vm.NewBigInt(bi), nil
-		case *vm.BigInt:
-			return v, nil
-		case vm.String:
-			bi, ok := vm.NewBigIntFromString(string(v))
-			if !ok {
-				return vm.NIL, fmt.Errorf("cannot parse bigint: %s", v)
-			}
-			return bi, nil
-		}
-		return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0].Type().Name())
-	})
 
 	// bigint?/big-int? — test if value is BigInt. Clojure core does not expose
 	// a BigInt-specific predicate; big-int? is useful for compatibility suites.
@@ -7163,426 +4057,63 @@ func installLangNS() {
 		return vm.Boolean(vm.IsBigInt(vs[0])), nil
 	})
 
-	ns.Def("bigint", bigintf)
 	// bigint?/big-int? are lg-isms → let-go.types (lgTypes block below).
 
 	// ratio? — test if value is Ratio
-	isRatio, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		return vm.Boolean(vm.IsRatio(vs[0])), nil
-	})
-	ns.Def("ratio?", isRatio)
 
 	// decimal? — test if value is BigDecimal
-	isDecimal, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		return vm.Boolean(vm.IsBigDecimal(vs[0])), nil
-	})
-	ns.Def("decimal?", isDecimal)
 
 	// sorted? — test if value is a sorted collection
-	isSorted, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		switch vs[0].(type) {
-		case *vm.SortedMap, *vm.SortedSet:
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
-	})
-	ns.Def("sorted?", isSorted)
 
 	// map? — test if value is a map (hash or sorted)
-	isMap, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		switch vs[0].(type) {
-		case *vm.PersistentMap, *vm.SortedMap:
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
-	})
-	ns.Def("map?", isMap)
 
 	// set? — test if value is a set (hash or sorted)
-	isSet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		switch vs[0].(type) {
-		case *vm.PersistentSet, *vm.SortedSet:
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
-	})
-	ns.Def("set?", isSet)
 
 	// map-entry? — test if value is a key/value pair from a map
-	isMapEntry, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		if _, ok := vs[0].(vm.MapEntry); ok {
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
-	})
-	ns.Def("map-entry?", isMapEntry)
 
 	// lazy-seq? — test if value is a thunk-backed lazy seq. LazySeq.Type()
 	// reports ListType for print/seq compatibility, so user-side type
 	// checks can't reach the underlying Go type; this predicate does.
-	isLazySeq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		if _, ok := vs[0].(*vm.LazySeq); ok {
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
-	})
-	ns.Def("lazy-seq?", isLazySeq)
 
 	// reversible? — test if value supports rseq
-	isReversible, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		switch vs[0].(type) {
-		case vm.ArrayVector, vm.PersistentVector, *vm.SortedMap, *vm.SortedSet:
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
-	})
-	ns.Def("reversible?", isReversible)
 
 	// rseq — reverse seq for sorted collections and vectors
-	rseqf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments")
-		}
-		switch v := vs[0].(type) {
-		case *vm.SortedMap:
-			s := v.RSeq()
-			if s == vm.EmptyList {
-				return vm.NIL, nil
-			}
-			return s, nil
-		case *vm.SortedSet:
-			s := v.RSeq()
-			if s == vm.EmptyList {
-				return vm.NIL, nil
-			}
-			return s, nil
-		case vm.ArrayVector:
-			n := len(v)
-			if n == 0 {
-				return vm.NIL, nil
-			}
-			var s vm.Seq = vm.EmptyList
-			for i := range n {
-				s = vm.NewCons(v[i], s)
-			}
-			return s, nil
-		case vm.PersistentVector:
-			n := v.RawCount()
-			if n == 0 {
-				return vm.NIL, nil
-			}
-			var s vm.Seq = vm.EmptyList
-			for i := range n {
-				s = vm.NewCons(v.ValueAt(vm.MakeInt(i)), s)
-			}
-			return s, nil
-		}
-		return vm.NIL, fmt.Errorf("rseq not supported on: %s", vs[0].Type())
-	})
-	ns.Def("rseq", rseqf)
 
 	// numerator — return numerator of a Ratio
-	numeratorf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments")
-		}
-		if r, ok := vs[0].(*vm.Ratio); ok {
-			num := r.Val().Num()
-			return vm.MaybeDowngrade(new(big.Int).Set(num)), nil
-		}
-		return vm.NIL, fmt.Errorf("numerator expects a Ratio")
-	})
-	ns.Def("numerator", numeratorf)
 
 	// denominator — return denominator of a Ratio
-	denominatorf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments")
-		}
-		if r, ok := vs[0].(*vm.Ratio); ok {
-			den := r.Val().Denom()
-			return vm.MaybeDowngrade(new(big.Int).Set(den)), nil
-		}
-		return vm.NIL, fmt.Errorf("denominator expects a Ratio")
-	})
-	ns.Def("denominator", denominatorf)
 
 	// bigdec — coerce to BigDecimal
-	bigdecf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments")
-		}
-		switch v := vs[0].(type) {
-		case *vm.BigDecimal:
-			return v, nil
-		case vm.Int:
-			return vm.NewBigDecimalFromInt64(int64(v)), nil
-		case vm.Float:
-			f := float64(v)
-			if math.IsInf(f, 0) || math.IsNaN(f) {
-				return vm.NIL, fmt.Errorf("cannot coerce non-finite float to bigdec")
-			}
-			return vm.NewBigDecimalFromFloat64(f), nil
-		case *vm.BigInt:
-			return vm.NewBigDecimalFromBigInt(v.Val()), nil
-		case *vm.Ratio:
-			f, _ := v.Val().Float64()
-			return vm.NewBigDecimalFromFloat64(f), nil
-		case vm.String:
-			bd, ok := vm.NewBigDecimalFromString(string(v))
-			if !ok {
-				return vm.NIL, fmt.Errorf("cannot parse bigdec: %s", v)
-			}
-			return bd, nil
-		}
-		return vm.NIL, fmt.Errorf("cannot coerce %s to bigdec", vs[0].Type().Name())
-	})
-	ns.Def("bigdec", bigdecf)
-
-	roundBigdec, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("round-bigdec expects precision, rounding mode, and value")
-		}
-		precision, ok := vm.ToInt(vs[0])
-		if !ok {
-			return vm.NIL, fmt.Errorf("round-bigdec expected integer precision")
-		}
-		var modeName string
-		switch m := vs[1].(type) {
-		case vm.Keyword:
-			modeName = string(m)
-		case vm.Symbol:
-			modeName = string(m)
-		case vm.String:
-			modeName = string(m)
-		default:
-			return vm.NIL, fmt.Errorf("round-bigdec expected rounding mode")
-		}
-		modeName = strings.TrimPrefix(strings.ToLower(modeName), ":")
-		bd, ok := vs[2].(*vm.BigDecimal)
-		if !ok {
-			return vs[2], nil
-		}
-		return roundBigDecimalValue(bd, precision, modeName)
-	})
-	ns.Def("round-bigdec", roundBigdec)
 
 	// rationalize — convert to Ratio
-	rationalizef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments")
-		}
-		switch v := vs[0].(type) {
-		case *vm.Ratio:
-			return v, nil
-		case vm.Int:
-			return vm.MaybeSimplifyRatio(big.NewRat(int64(v), 1)), nil
-		case *vm.BigInt:
-			return vm.MaybeSimplifyRatio(new(big.Rat).SetInt(v.Val())), nil
-		case vm.Float:
-			f := float64(v)
-			if math.IsInf(f, 0) || math.IsNaN(f) {
-				return vm.NIL, fmt.Errorf("cannot rationalize %s", vs[0].Type().Name())
-			}
-			if r, ok := new(big.Rat).SetString(strconv.FormatFloat(f, 'f', -1, 64)); ok {
-				return vm.MaybeSimplifyRatio(r), nil
-			}
-			return vm.NIL, fmt.Errorf("cannot rationalize %s", vs[0].Type().Name())
-		case *vm.BigDecimal:
-			if r, ok := new(big.Rat).SetString(v.Val().Text('f', -1)); ok {
-				return vm.MaybeSimplifyRatio(r), nil
-			}
-			return vm.NIL, fmt.Errorf("cannot rationalize %s", vs[0].Type().Name())
-		}
-		return vm.NIL, fmt.Errorf("cannot rationalize %s", vs[0].Type().Name())
-	})
-	ns.Def("rationalize", rationalizef)
 
 	ns.Def("transformer-seq*", transformerSeq)
 	ns.Def("compare", comparef)
 	ns.Def("fn?", isFn)
-	ns.Def("ifn?", isIFn)
-	ns.Def("double?", isDouble)
-	ns.Def("instance?", instancep)
-	ns.Def("identical?", identical)
-	ns.Def("any?", anyp)
-	ns.Def("bit-and", bitAnd)
-	ns.Def("bit-or", bitOr)
-	ns.Def("bit-xor", bitXor)
-	ns.Def("bit-not", bitNot)
-	ns.Def("bit-shift-left", bitShiftLeft)
-	ns.Def("bit-shift-right", bitShiftRight)
-	ns.Def("unsigned-bit-shift-right", unsignedBitShiftRight)
-	ns.Def("bit-test", bitTest)
-	ns.Def("bit-set", bitSet)
-	ns.Def("bit-clear", bitClear)
-	ns.Def("bit-and-not", bitAndNot)
-	ns.Def("bit-flip", bitFlip)
-	ns.Def("re-groups", reGroups)
-	ns.Def("promise", promisef)
-	ns.Def("deliver", deliver)
 	ns.Def("future*", futureStar)
-	ns.Def("add-tap", addTap)
-	ns.Def("remove-tap", removeTap)
-	ns.Def("tap>", tapBang)
-	ns.Def("add-watch", addWatch)
-	ns.Def("remove-watch", removeWatch)
 	ns.Def("alter-meta!", alterMeta)
-	ns.Def("get-validator", getValidator)
-	ns.Def("subvec", subvecf)
 	ns.Def("print", printf)
 	ns.Def("pr", prf)
-	ns.Def("reduced", reducedf)
-	ns.Def("reduced?", isReducedf)
-	ns.Def("unreduced", unreduced)
-	ns.Def("ensure-reduced", ensureReduced)
 
 	// quot — integer division (truncated toward zero)
-	quotf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return vm.NumQuot(vs[0], vs[1])
-	})
-	ns.Def("quot", quotf)
 
 	// rem — remainder of truncated division (sign follows dividend)
-	remf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return vm.NumRem(vs[0], vs[1])
-	})
-	ns.Def("rem", remf)
 
 	// hash — returns the hash code of a value
-	hashf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		return vm.MakeInt(int(vm.HashValue(vs[0]))), nil
-	})
-	ns.Def("hash", hashf)
 
 	// parse-double — parse string to float
-	parseDouble, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		s, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("parse-double expected String")
-		}
-		f, err := strconv.ParseFloat(string(s), 64)
-		if err != nil {
-			return vm.NIL, nil // Clojure returns nil for unparseable
-		}
-		return vm.Float(f), nil
-	})
-	ns.Def("parse-double", parseDouble)
 
 	// parse-boolean — parse "true"/"false" to boolean
-	parseBool, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		s, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("parse-boolean expected String")
-		}
-		switch string(s) {
-		case "true":
-			return vm.TRUE, nil
-		case "false":
-			return vm.FALSE, nil
-		}
-		return vm.NIL, nil
-	})
-	ns.Def("parse-boolean", parseBool)
 
 	// NaN? — test if value is NaN
-	isNaN, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		switch v := vs[0].(type) {
-		case vm.Float:
-			return vm.Boolean(math.IsNaN(float64(v))), nil
-		case vm.Float32:
-			return vm.Boolean(math.IsNaN(float64(v))), nil
-		case vm.Int, *vm.BigInt, *vm.Ratio, *vm.BigDecimal:
-			return vm.FALSE, nil
-		default:
-			return vm.NIL, fmt.Errorf("NaN? requires a number, got %s", vs[0].Type().Name())
-		}
-	})
-	ns.Def("NaN?", isNaN)
 
 	// infinite? — test if value is +/-Inf
-	isInfinite, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		if f, ok := vs[0].(vm.Float); ok {
-			return vm.Boolean(math.IsInf(float64(f), 0)), nil
-		}
-		return vm.FALSE, nil
-	})
-	ns.Def("infinite?", isInfinite)
 
 	// boolean? — test if value is boolean
-	isBool, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		_, ok := vs[0].(vm.Boolean)
-		return vm.Boolean(ok), nil
-	})
-	ns.Def("boolean?", isBool)
 
 	// char? — test if value is char
-	isChar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		_, ok := vs[0].(vm.Char)
-		return vm.Boolean(ok), nil
-	})
-	ns.Def("char?", isChar)
 
 	// var? — test if value is a var
-	isVar, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		_, ok := vs[0].(*vm.Var)
-		return vm.Boolean(ok), nil
-	})
-	ns.Def("var?", isVar)
 
 	// string/index-of — find first rune index of substring/char
 	indexOf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -7665,88 +4196,6 @@ func installLangNS() {
 	// --- Array operations ---
 
 	// Helper: build a typed array from size or seq
-	buildArray := func(kind vm.ArrayKind, vs []vm.Value) (vm.Value, error) {
-		if len(vs) == 0 || len(vs) > 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		// (x-array n) or (x-array n init)
-		if n, ok := vs[0].(vm.Int); ok {
-			size := int(n)
-			if size < 0 {
-				return vm.NIL, fmt.Errorf("negative array size: %d", size)
-			}
-			var arr *vm.TypedArray
-			switch kind {
-			case vm.ArrayByte:
-				arr = vm.NewByteArray(size)
-			case vm.ArrayInt:
-				arr = vm.NewIntArray(size)
-			case vm.ArrayFloat:
-				arr = vm.NewFloatArray(size)
-			case vm.ArrayObject:
-				arr = vm.NewObjectArray(size)
-			}
-			if len(vs) == 2 {
-				for i := range size {
-					if err := arr.Set(i, vs[1]); err != nil {
-						return vm.NIL, err
-					}
-				}
-			}
-			return arr, nil
-		}
-		// (x-array coll)
-		s, serr := seqOf(vs[0])
-		if serr != nil {
-			return vm.NIL, serr
-		}
-		var vals []vm.Value
-		for ; s != nil; s = s.Next() {
-			vals = append(vals, s.First())
-		}
-		var arr *vm.TypedArray
-		switch kind {
-		case vm.ArrayByte:
-			data := make([]byte, len(vals))
-			for i, v := range vals {
-				n, ok := v.(vm.Int)
-				if !ok {
-					return vm.NIL, fmt.Errorf("byte-array element must be Int, got %s", v.Type().Name())
-				}
-				data[i] = byte(n)
-			}
-			arr = vm.NewByteArrayFrom(data)
-		case vm.ArrayInt:
-			data := make([]int64, len(vals))
-			for i, v := range vals {
-				switch n := v.(type) {
-				case vm.Int:
-					data[i] = int64(n)
-				default:
-					return vm.NIL, fmt.Errorf("int-array element must be Int, got %s", v.Type().Name())
-				}
-			}
-			arr = vm.NewIntArrayFrom(data)
-		case vm.ArrayFloat:
-			data := make([]float64, len(vals))
-			for i, v := range vals {
-				f, ok := vm.ToFloat(v)
-				if !ok {
-					return vm.NIL, fmt.Errorf("double-array element must be numeric, got %s", v.Type().Name())
-				}
-				data[i] = f
-			}
-			arr = vm.NewFloatArrayFrom(data)
-		case vm.ArrayObject:
-			arr = vm.NewObjectArrayFrom(vals)
-		}
-		return arr, nil
-	}
-
-	byteArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return buildArray(vm.ArrayByte, vs)
-	})
-	ns.Def("byte-array", byteArrayf)
 
 	intArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
 		return buildArray(vm.ArrayInt, vs)
@@ -7760,131 +4209,15 @@ func installLangNS() {
 	ns.Def("double-array", doubleArrayf)
 	ns.Def("float-array", doubleArrayf)
 
-	objectArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		return buildArray(vm.ArrayObject, vs)
-	})
-	ns.Def("object-array", objectArrayf)
-
 	// make-array — (make-array type size)
-	makeArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("make-array expects 2 args (type, size)")
-		}
-		size, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("make-array size must be Int")
-		}
-		n := int(size)
-		if n < 0 {
-			return vm.NIL, fmt.Errorf("negative array size: %d", n)
-		}
-		switch t := vs[0].(type) {
-		case vm.Keyword:
-			switch string(t) {
-			case "byte":
-				return vm.NewByteArray(n), nil
-			case "int", "long":
-				return vm.NewIntArray(n), nil
-			case "double", "float":
-				return vm.NewFloatArray(n), nil
-			case "object":
-				return vm.NewObjectArray(n), nil
-			}
-			return vm.NIL, fmt.Errorf("unknown array type: %s", t)
-		default:
-			// Default to object-array
-			return vm.NewObjectArray(n), nil
-		}
-	})
-	ns.Def("make-array", makeArrayf)
 
 	// aget — (aget arr idx) or (aget arr idx idx2 ...)
-	agetf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		arr, ok := vs[0].(*vm.TypedArray)
-		if !ok {
-			return vm.NIL, fmt.Errorf("aget expects array, got %s", vs[0].Type().Name())
-		}
-		idx, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("aget index must be Int")
-		}
-		i := int(idx)
-		if i < 0 || i >= arr.Len() {
-			return vm.NIL, fmt.Errorf("array index %d out of bounds for length %d", i, arr.Len())
-		}
-		val := arr.Get(i)
-		// Support nested access: (aget arr i j k ...)
-		for _, extra := range vs[2:] {
-			inner, ok := val.(*vm.TypedArray)
-			if !ok {
-				return vm.NIL, fmt.Errorf("aget nested: expected array, got %s", val.Type().Name())
-			}
-			idx, ok := extra.(vm.Int)
-			if !ok {
-				return vm.NIL, fmt.Errorf("aget index must be Int")
-			}
-			j := int(idx)
-			if j < 0 || j >= inner.Len() {
-				return vm.NIL, fmt.Errorf("array index %d out of bounds for length %d", j, inner.Len())
-			}
-			val = inner.Get(j)
-		}
-		return val, nil
-	})
-	ns.Def("aget", agetf)
 
 	// aset — (aset arr idx val)
-	asetf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		arr, ok := vs[0].(*vm.TypedArray)
-		if !ok {
-			return vm.NIL, fmt.Errorf("aset expects array, got %s", vs[0].Type().Name())
-		}
-		idx, ok := vs[1].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("aset index must be Int")
-		}
-		i := int(idx)
-		if i < 0 || i >= arr.Len() {
-			return vm.NIL, fmt.Errorf("array index %d out of bounds for length %d", i, arr.Len())
-		}
-		if err := arr.Set(i, vs[2]); err != nil {
-			return vm.NIL, err
-		}
-		return vs[2], nil
-	})
-	ns.Def("aset", asetf)
 
 	// alength — (alength arr)
-	alengthf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		arr, ok := vs[0].(*vm.TypedArray)
-		if !ok {
-			return vm.NIL, fmt.Errorf("alength expects array, got %s", vs[0].Type().Name())
-		}
-		return vm.MakeInt(arr.Len()), nil
-	})
-	ns.Def("alength", alengthf)
 
 	// aclone — (aclone arr)
-	aclonef, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		arr, ok := vs[0].(*vm.TypedArray)
-		if !ok {
-			return vm.NIL, fmt.Errorf("aclone expects array, got %s", vs[0].Type().Name())
-		}
-		return arr.Clone(), nil
-	})
-	ns.Def("aclone", aclonef)
 
 	// to-array — (to-array coll) creates object-array from seq
 	toArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -7934,22 +4267,6 @@ func installLangNS() {
 	ns.Def("into-array", intoArrayf)
 
 	// bytes — coerce string to byte-array
-	bytesf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		switch v := vs[0].(type) {
-		case vm.String:
-			data := []byte(string(v))
-			return vm.NewByteArrayFrom(data), nil
-		case *vm.TypedArray:
-			if v.Kind() == vm.ArrayByte {
-				return v, nil
-			}
-		}
-		return vm.NIL, fmt.Errorf("bytes expects String or byte-array, got %s", vs[0].Type().Name())
-	})
-	ns.Def("bytes", bytesf)
 
 	// base64-encode — (base64-encode x) → standard padded base64 String. x is a
 	// String or byte-array; pairs with the byte-array sinks and read-bytes.
@@ -8030,16 +4347,6 @@ func installLangNS() {
 	ns.Def("longs", intsf)
 
 	// doubles — coerce seq to double-array
-	doublesf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
-		}
-		if a, ok := vs[0].(*vm.TypedArray); ok && a.Kind() == vm.ArrayFloat {
-			return a, nil
-		}
-		return buildArray(vm.ArrayFloat, vs)
-	})
-	ns.Def("doubles", doublesf)
 
 	// array? — type predicate
 	isArrayf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -8054,14 +4361,6 @@ func installLangNS() {
 	// bytes?: true iff the value is a byte-kind TypedArray (backing []byte).
 	// array? doesn't distinguish element kind, and a TypedArray's Kind() is
 	// not reachable from .lg, so this lives in Go alongside array?.
-	bytesP, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		a, ok := vs[0].(*vm.TypedArray)
-		return vm.Boolean(ok && a.Kind() == vm.ArrayByte), nil
-	})
-	ns.Def("bytes?", bytesP)
 
 	// alter-var-root — alter a var's root binding via (f root & args).
 	// Reads/writes the root, bypassing any current dynamic binding.
@@ -8089,51 +4388,16 @@ func installLangNS() {
 	ns.Def("alter-var-root", alterVarRoot)
 
 	// var-get — get the value of a Var
-	varGet, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("var-get expects 1 arg")
-		}
-		v, ok := vs[0].(*vm.Var)
-		if !ok {
-			return vm.NIL, fmt.Errorf("var-get expects a Var")
-		}
-		return v.Deref(), nil
-	})
-	ns.Def("var-get", varGet)
 
 	// bound? — true when the var has a bound value: a root binding or an active
 	// dynamic binding (matching Clojure). Distinguishes a forward-declared/
 	// compiler-interned var from one that has actually been set, which `defonce`
 	// relies on.
-	boundQ, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("bound? expects 1 arg")
-		}
-		v, ok := vs[0].(*vm.Var)
-		if !ok {
-			return vm.NIL, fmt.Errorf("bound? expects a Var")
-		}
-		if v.IsBound() {
-			return vm.TRUE, nil
-		}
-		return vm.FALSE, nil
-	})
-	ns.Def("bound?", boundQ)
 
 	// -copy-form-source! carries reader source metadata across macro and IR
 	// rewrites which necessarily allocate a fresh list. It is intentionally a
 	// core implementation detail: ordinary metadata cannot represent the
 	// side-table spans retained by FormSource.
-	copyFormSource, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("-copy-form-source! expects 2 args")
-		}
-		if info := vm.FormSource.Get(vs[0]); info != nil {
-			vm.FormSource.Set(vs[1], *info)
-		}
-		return vs[1], nil
-	})
-	ns.Def("-copy-form-source!", copyFormSource)
 
 	warnReflection := vm.NewCtxNativeFn("-warn-reflection!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 3 {
@@ -8239,50 +4503,10 @@ func installLangNS() {
 	// arity and variadic flag. Used by the IR-compile path of the defn
 	// macro so the embedded function value flows back into the standard
 	// compile pipeline as a constant.
-	chunkToFnFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 3 {
-			return vm.NIL, fmt.Errorf("chunk->fn expects (arity variadic? chunk), got %d args", len(vs))
-		}
-		arityV, ok := vs[0].(vm.Int)
-		if !ok {
-			return vm.NIL, fmt.Errorf("chunk->fn: arity must be Int, got %s", vs[0].Type().Name())
-		}
-		variadic := false
-		if b, ok := vs[1].(vm.Boolean); ok {
-			variadic = bool(b)
-		} else if vs[1] != vm.NIL {
-			return vm.NIL, fmt.Errorf("chunk->fn: variadic? must be Boolean or nil, got %s", vs[1].Type().Name())
-		}
-		boxed, ok := vs[2].(*vm.Boxed)
-		if !ok {
-			return vm.NIL, fmt.Errorf("chunk->fn: third arg must be boxed CodeChunk, got %s", vs[2].Type().Name())
-		}
-		chunk, ok := boxed.Unbox().(*vm.CodeChunk)
-		if !ok {
-			return vm.NIL, fmt.Errorf("chunk->fn: boxed value is not a CodeChunk")
-		}
-		return vm.MakeFunc(int(arityV), variadic, chunk), nil
-	})
-	ns.Def("chunk->fn", chunkToFnFn)
 
 	// make-multi-arity — combine a list of *Func/*Closure values into a
 	// *MultiArityFn. Used by the IR pipeline to assemble multi-arity
 	// functions at compile time.
-	makeMultiArityFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("make-multi-arity expects 1 arg (list of functions)")
-		}
-		list, ok := vs[0].(*vm.List)
-		if !ok {
-			return vm.NIL, fmt.Errorf("make-multi-arity expects a list, got %s", vs[0].Type().Name())
-		}
-		var fns []vm.Value
-		for e := vm.Seq(list); e != nil; e = e.Next() {
-			fns = append(fns, e.First())
-		}
-		return vm.MakeMultiArity(fns)
-	})
-	ns.Def("make-multi-arity", makeMultiArityFn)
 
 	// with-arity — (with-arity f arity variadic?) wraps callable f in a native
 	// that DECLARES the given arity. ir.direct's invokers are necessarily
@@ -8367,89 +4591,15 @@ func installLangNS() {
 	ns.Def("sleep", sleepf)
 
 	// intern — intern a var in a namespace
-	internf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 || len(vs) > 3 {
-			return vm.NIL, fmt.Errorf("intern expects 2 or 3 args")
-		}
-		var targetNS *vm.Namespace
-		switch n := vs[0].(type) {
-		case vm.Symbol:
-			targetNS = nsRegistry[resolveNSAlias(string(n))]
-		case *vm.Namespace:
-			targetNS = n
-		default:
-			return vm.NIL, fmt.Errorf("intern expects a namespace or symbol")
-		}
-		if targetNS == nil {
-			return vm.NIL, fmt.Errorf("namespace not found")
-		}
-		sym, ok := vs[1].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("intern expects a symbol name")
-		}
-		if len(vs) == 2 {
-			if existing := targetNS.LookupLocal(sym); existing != nil {
-				return existing, nil
-			}
-			return targetNS.Def(string(sym), vm.NIL), nil
-		}
-		// 3-arg form. If the Var already exists, UPDATE its root in
-		// place; otherwise create a fresh Var. This matters when
-		// other compiled code holds a captured Var pointer in its
-		// const pool — recreating the Var would leave those pointers
-		// referencing the old nil-rooted Var (the chicken-and-egg
-		// problem from Phase F's data-layer rollout).
-		if existing := targetNS.LookupLocal(sym); existing != nil {
-			existing.SetRoot(vs[2])
-			return existing, nil
-		}
-		v := targetNS.Def(string(sym), vs[2])
-		return v, nil
-	})
-	ns.Def("intern", internf)
 
 	// apply-def-meta! — apply def metadata (and the :dynamic / :private flags it
 	// implies) to a Var, mirroring the bytecode defCompiler. Used by the IR
 	// build-def lowering, which interns the var at build time and so must apply
 	// its meta then, just as defCompiler does at compile time.
-	applyDefMetaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 2 {
-			return vm.NIL, fmt.Errorf("apply-def-meta! expects 2 args")
-		}
-		v, ok := vs[0].(*vm.Var)
-		if !ok {
-			return vm.NIL, fmt.Errorf("apply-def-meta! expects a Var")
-		}
-		ApplyVarMeta(v, vs[1])
-		return v, nil
-	})
-	ns.Def("apply-def-meta!", applyDefMetaf)
 
 	// create-ns — create or return existing namespace
-	createNsf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("create-ns expects 1 arg")
-		}
-		sym, ok := vs[0].(vm.Symbol)
-		if !ok {
-			return vm.NIL, fmt.Errorf("create-ns expects a symbol")
-		}
-		return NS(string(sym)), nil
-	})
-	ns.Def("create-ns", createNsf)
 
 	// pop! — pop from a transient vector
-	popBang, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("pop! expects 1 arg")
-		}
-		tv, ok := vs[0].(*vm.TransientVector)
-		if !ok {
-			return vm.NIL, fmt.Errorf("pop! expects a transient vector")
-		}
-		return tv.Pop()
-	})
-	ns.Def("pop!", popBang)
 
 	// with-out-str* — capture *out* output as string. Binding-based capture
 	// (no process-global os.Stdout swap). Rebinds *out* to a bytes.Buffer-
@@ -8493,55 +4643,12 @@ func installLangNS() {
 	ns.Def("with-out-str*", withOutStrf)
 
 	// uuid? — type predicate for UUID
-	isUUID, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		_, ok := vs[0].(*vm.UUID)
-		return vm.Boolean(ok), nil
-	})
-	ns.Def("uuid?", isUUID)
 
 	// inst? — type predicate for Instant
-	isInst, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.FALSE, nil
-		}
-		_, ok := vs[0].(*vm.Instant)
-		return vm.Boolean(ok), nil
-	})
-	ns.Def("inst?", isInst)
 
 	// parse-uuid — parse a string into a UUID
-	parseUUID, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("parse-uuid expects 1 arg")
-		}
-		s, ok := vs[0].(vm.String)
-		if !ok {
-			return vm.NIL, fmt.Errorf("parse-uuid expects a string, got %s", vs[0].Type().Name())
-		}
-		u := vm.ParseUUID(string(s))
-		if u == nil {
-			return vm.NIL, nil
-		}
-		return u, nil
-	})
-	ns.Def("parse-uuid", parseUUID)
 
 	// == — numeric equality across numeric categories.
-	numericEq, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 2 {
-			return vm.TRUE, nil
-		}
-		for i := 1; i < len(vs); i++ {
-			if !vm.NumEquivalent(vs[0], vs[i]) {
-				return vm.FALSE, nil
-			}
-		}
-		return vm.TRUE, nil
-	})
-	ns.Def("==", numericEq)
 
 	// IR namespace primitives — declared in pkg/ir/ir_bridge.lg,
 	// generated into pkg/rt/ir_bridge_generated.go via 'make generate-ir-bridge'.
@@ -8862,4 +4969,4187 @@ func strValue(v vm.Value) string {
 		return strings.TrimSuffix(s, "M")
 	}
 	return v.String()
+}
+
+// --- lifted native helpers (see cmd/hoist-natives -helpers) ---
+
+func asChunked(v vm.Value, op string) (vm.IChunkedSeq, error) {
+	s, err := seqOf(v)
+	if err != nil {
+		return nil, fmt.Errorf("%s: not a sequence", op)
+	}
+	cs, ok := vm.AsChunkedSeq(s)
+	if !ok {
+		return nil, fmt.Errorf("%s: not a chunked seq", op)
+	}
+	return cs, nil
+}
+
+func buildArray(kind vm.ArrayKind, vs []vm.Value) (vm.Value, error) {
+	if len(vs) == 0 || len(vs) > 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+
+	if n, ok := vs[0].(vm.Int); ok {
+		size := int(n)
+		if size < 0 {
+			return vm.NIL, fmt.Errorf("negative array size: %d", size)
+		}
+		var arr *vm.TypedArray
+		switch kind {
+		case vm.ArrayByte:
+			arr = vm.NewByteArray(size)
+		case vm.ArrayInt:
+			arr = vm.NewIntArray(size)
+		case vm.ArrayFloat:
+			arr = vm.NewFloatArray(size)
+		case vm.ArrayObject:
+			arr = vm.NewObjectArray(size)
+		}
+		if len(vs) == 2 {
+			for i := range size {
+				if err := arr.Set(i, vs[1]); err != nil {
+					return vm.NIL, err
+				}
+			}
+		}
+		return arr, nil
+	}
+
+	s, serr := seqOf(vs[0])
+	if serr != nil {
+		return vm.NIL, serr
+	}
+	var vals []vm.Value
+	for ; s != nil; s = s.Next() {
+		vals = append(vals, s.First())
+	}
+	var arr *vm.TypedArray
+	switch kind {
+	case vm.ArrayByte:
+		data := make([]byte, len(vals))
+		for i, v := range vals {
+			n, ok := v.(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("byte-array element must be Int, got %s", v.Type().Name())
+			}
+			data[i] = byte(n)
+		}
+		arr = vm.NewByteArrayFrom(data)
+	case vm.ArrayInt:
+		data := make([]int64, len(vals))
+		for i, v := range vals {
+			switch n := v.(type) {
+			case vm.Int:
+				data[i] = int64(n)
+			default:
+				return vm.NIL, fmt.Errorf("int-array element must be Int, got %s", v.Type().Name())
+			}
+		}
+		arr = vm.NewIntArrayFrom(data)
+	case vm.ArrayFloat:
+		data := make([]float64, len(vals))
+		for i, v := range vals {
+			f, ok := vm.ToFloat(v)
+			if !ok {
+				return vm.NIL, fmt.Errorf("double-array element must be numeric, got %s", v.Type().Name())
+			}
+			data[i] = f
+		}
+		arr = vm.NewFloatArrayFrom(data)
+	case vm.ArrayObject:
+		arr = vm.NewObjectArrayFrom(vals)
+	}
+	return arr, nil
+}
+
+// --- hoisted native primitives (see cmd/hoist-natives) ---
+
+//lg:native
+//lg:name +
+func CorePlus(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) == 0 {
+		return vm.MakeInt(0), nil
+	}
+	if len(vs) == 1 {
+		return vs[0], nil
+	}
+	acc := vs[0]
+	for i := 1; i < len(vs); i++ {
+		var err error
+		acc, err = vm.NumAdd(acc, vs[i])
+		if err != nil {
+			return vm.NIL, err
+		}
+	}
+	return acc, nil
+}
+
+//lg:native
+//lg:name *
+func CoreMul(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) == 0 {
+		return vm.MakeInt(1), nil
+	}
+	if len(vs) == 1 {
+		return vs[0], nil
+	}
+	acc := vs[0]
+	for i := 1; i < len(vs); i++ {
+		var err error
+		acc, err = vm.NumMul(acc, vs[i])
+		if err != nil {
+			return vm.NIL, err
+		}
+	}
+	return acc, nil
+}
+
+//lg:native
+//lg:name -
+func CoreSub(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if len(vs) == 1 {
+		return vm.NumNeg(vs[0])
+	}
+	acc := vs[0]
+	for i := 1; i < len(vs); i++ {
+		var err error
+		acc, err = vm.NumSub(acc, vs[i])
+		if err != nil {
+			return vm.NIL, err
+		}
+	}
+	return acc, nil
+}
+
+//lg:native
+//lg:name /
+func CoreDiv(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if len(vs) == 1 {
+		return vm.NumDiv(vm.MakeInt(1), vs[0])
+	}
+	acc := vs[0]
+	for i := 1; i < len(vs); i++ {
+		var err error
+		acc, err = vm.NumDiv(acc, vs[i])
+		if err != nil {
+			return vm.NIL, err
+		}
+	}
+	return acc, nil
+}
+
+//lg:native
+//lg:name +'
+func CorePlusP(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) == 0 {
+		return vm.MakeInt(0), nil
+	}
+	if len(vs) == 1 {
+		return vs[0], nil
+	}
+	acc := vs[0]
+	for i := 1; i < len(vs); i++ {
+		var err error
+		acc, err = vm.NumAddP(acc, vs[i])
+		if err != nil {
+			return vm.NIL, err
+		}
+	}
+	return acc, nil
+}
+
+//lg:native
+//lg:name *'
+func CoreMulP(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) == 0 {
+		return vm.MakeInt(1), nil
+	}
+	if len(vs) == 1 {
+		return vs[0], nil
+	}
+	acc := vs[0]
+	for i := 1; i < len(vs); i++ {
+		var err error
+		acc, err = vm.NumMulP(acc, vs[i])
+		if err != nil {
+			return vm.NIL, err
+		}
+	}
+	return acc, nil
+}
+
+//lg:native
+//lg:name -'
+func CoreSubP(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if len(vs) == 1 {
+		return vm.NumNegP(vs[0])
+	}
+	acc := vs[0]
+	for i := 1; i < len(vs); i++ {
+		var err error
+		acc, err = vm.NumSubP(acc, vs[i])
+		if err != nil {
+			return vm.NIL, err
+		}
+	}
+	return acc, nil
+}
+
+//lg:native
+//lg:name unchecked-add
+func CoreUncheckedAdd(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	a, ok := vm.ToInt(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[0].Type().Name())
+	}
+	b, ok := vm.ToInt(vs[1])
+	if !ok {
+		return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[1].Type().Name())
+	}
+	return vm.MakeInt(int(int64(a) + int64(b))), nil
+}
+
+//lg:native
+//lg:name unchecked-subtract
+func CoreUncheckedSubtract(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	a, ok := vm.ToInt(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[0].Type().Name())
+	}
+	b, ok := vm.ToInt(vs[1])
+	if !ok {
+		return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[1].Type().Name())
+	}
+	return vm.MakeInt(int(int64(a) - int64(b))), nil
+}
+
+//lg:native
+//lg:name unchecked-multiply
+func CoreUncheckedMultiply(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	a, ok := vm.ToInt(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[0].Type().Name())
+	}
+	b, ok := vm.ToInt(vs[1])
+	if !ok {
+		return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[1].Type().Name())
+	}
+	return vm.MakeInt(int(int64(a) * int64(b))), nil
+}
+
+//lg:native
+//lg:name unchecked-negate
+func CoreUncheckedNegate(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	a, ok := vm.ToInt(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("unchecked-negate expected integer, got %s", vs[0].Type().Name())
+	}
+
+	return vm.MakeInt(int(-int64(a))), nil
+}
+
+//lg:native
+//lg:name unchecked-divide-int
+func CoreUncheckedDivideInt(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	a, ok := vm.ToInt(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[0].Type().Name())
+	}
+	b, ok := vm.ToInt(vs[1])
+	if !ok {
+		return vm.NIL, fmt.Errorf("unchecked-divide-int expected integer, got %s", vs[1].Type().Name())
+	}
+	if b == 0 {
+		return vm.NIL, fmt.Errorf("divide by zero")
+	}
+
+	if int64(a) == math.MinInt64 && int64(b) == -1 {
+		return vm.NIL, fmt.Errorf("integer overflow")
+	}
+	return vm.MakeInt(int(int64(a) / int64(b))), nil
+}
+
+//lg:native
+//lg:name unchecked-long
+func CoreUncheckedLong(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+		return v, nil
+	case *vm.BigInt:
+
+		mask := new(big.Int).Lsh(big.NewInt(1), 64)
+		lo := new(big.Int).Mod(v.Val(), mask)
+		return vm.MakeInt(int(int64(lo.Uint64()))), nil
+	case vm.Float:
+		return vm.MakeInt(int(int64(float64(v)))), nil
+	default:
+		return vm.NIL, fmt.Errorf("unchecked-long expected integer or float, got %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name unchecked-int
+func CoreUncheckedInt(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+		return vm.MakeInt(int(int32(int64(v)))), nil
+	case *vm.BigInt:
+
+		mask := new(big.Int).Lsh(big.NewInt(1), 64)
+		lo := new(big.Int).Mod(v.Val(), mask)
+		return vm.MakeInt(int(int32(lo.Uint64()))), nil
+	case vm.Float:
+		return vm.MakeInt(int(int32(float64(v)))), nil
+	default:
+		return vm.NIL, fmt.Errorf("unchecked-int expected integer or float, got %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name unchecked-short
+func CoreUncheckedShort(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+		return vm.MakeInt(int(int16(int64(v)))), nil
+	case *vm.BigInt:
+
+		mask := new(big.Int).Lsh(big.NewInt(1), 64)
+		lo := new(big.Int).Mod(v.Val(), mask)
+		return vm.MakeInt(int(int16(lo.Uint64()))), nil
+	case vm.Float:
+		return vm.MakeInt(int(int16(float64(v)))), nil
+	default:
+		return vm.NIL, fmt.Errorf("unchecked-short expected integer or float, got %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name unchecked-byte
+func CoreUncheckedByte(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+		return vm.MakeInt(int(int8(int64(v)))), nil
+	case *vm.BigInt:
+
+		mask := new(big.Int).Lsh(big.NewInt(1), 64)
+		lo := new(big.Int).Mod(v.Val(), mask)
+		return vm.MakeInt(int(int8(lo.Uint64()))), nil
+	case vm.Float:
+		return vm.MakeInt(int(int8(float64(v)))), nil
+	default:
+		return vm.NIL, fmt.Errorf("unchecked-byte expected integer or float, got %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name unchecked-char
+func CoreUncheckedChar(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+		return vm.Char(rune(uint16(int64(v)))), nil
+	case *vm.BigInt:
+
+		mask := new(big.Int).Lsh(big.NewInt(1), 64)
+		lo := new(big.Int).Mod(v.Val(), mask)
+		return vm.Char(rune(uint16(lo.Uint64()))), nil
+	case vm.Float:
+		return vm.Char(rune(uint16(int64(float64(v))))), nil
+	default:
+		return vm.NIL, fmt.Errorf("unchecked-char expected integer or float, got %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name unchecked-double
+func CoreUncheckedDouble(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+		return vm.Float(float64(int64(v))), nil
+	case *vm.BigInt:
+
+		f, _ := new(big.Float).SetInt(v.Val()).Float64()
+		return vm.Float(f), nil
+	case vm.Float:
+		return v, nil
+	default:
+		return vm.NIL, fmt.Errorf("unchecked-double expected numeric, got %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name unchecked-float
+func CoreUncheckedFloat(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+
+		return vm.Float(float64(float32(int64(v)))), nil
+	case *vm.BigInt:
+		f, _ := new(big.Float).SetInt(v.Val()).Float64()
+		return vm.Float(float64(float32(f))), nil
+	case vm.Float:
+		return vm.Float(float64(float32(float64(v)))), nil
+	default:
+		return vm.NIL, fmt.Errorf("unchecked-float expected numeric, got %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name mod
+func CoreMod(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return vm.NumMod(vs[0], vs[1])
+}
+
+//lg:native
+//lg:name abs
+func CoreAbs(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return vm.NumAbs(vs[0])
+}
+
+//lg:native
+//lg:name not
+func CoreNot(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return builtins.Not(vs[0])
+}
+
+//lg:native
+//lg:name complement
+func CoreComplement(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	f, ok := vm.AsFn(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("complement expected Fn")
+	}
+
+	wrapped := vm.NewCtxNativeFn("complemented-fn", func(cec *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+		v, err := cec.Invoke(f, args)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.Boolean(!vm.IsTruthy(v)), nil
+	})
+	return wrapped, nil
+}
+
+//lg:native
+//lg:name set-macro!
+func CoreSetMacro(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	m := vs[0].(*vm.Var)
+	m.SetMacro()
+	return m, nil
+}
+
+//lg:native
+//lg:name gensym
+func CoreGensym(vs ...vm.Value) (vm.Value, error) {
+	prefix := "G__"
+	if len(vs) == 1 {
+		arg, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("gensym expected String")
+		}
+		prefix = string(arg)
+	}
+	return vm.Symbol(fmt.Sprintf("%s%d", prefix, nextID())), nil
+}
+
+//lg:native
+//lg:name vector
+func CoreVector(vs ...vm.Value) (vm.Value, error) {
+	return builtins.Vector(vs...)
+}
+
+//lg:native
+//lg:name hash-map
+func CoreHashMap(vs ...vm.Value) (vm.Value, error) {
+	if len(vs)%2 != 0 {
+		return vm.NIL, fmt.Errorf("hash-map requires an even number of arguments, got %d", len(vs))
+	}
+	return vm.NewMap(vs), nil
+}
+
+//lg:native
+//lg:name array-map
+func CoreArrayMap(vs ...vm.Value) (vm.Value, error) {
+	if len(vs)%2 != 0 {
+		return vm.NIL, fmt.Errorf("array-map requires an even number of arguments, got %d", len(vs))
+	}
+	return vm.NewArrayMap(vs), nil
+}
+
+//lg:native
+//lg:name sorted-map
+func CoreSortedMap(vs ...vm.Value) (vm.Value, error) {
+	if len(vs)%2 != 0 {
+		return vm.NIL, fmt.Errorf("sorted-map requires even number of arguments, got %d", len(vs))
+	}
+	return vm.NewSortedMap(nil, vs), nil
+}
+
+//lg:native
+//lg:name sorted-set
+func CoreSortedSet(vs ...vm.Value) (vm.Value, error) {
+	return vm.NewSortedSet(nil, vs), nil
+}
+
+//lg:native
+//lg:name sorted-map-by
+func CoreSortedMapBy(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("sorted-map-by requires a comparator")
+	}
+	comp, ok := vm.AsFn(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("sorted-map-by first arg must be a function")
+	}
+	kvs := vs[1:]
+	if len(kvs)%2 != 0 {
+		return vm.NIL, fmt.Errorf("sorted-map-by requires even number of key-value arguments")
+	}
+	return vm.NewSortedMap(fnComparator(comp), kvs), nil
+}
+
+//lg:native
+//lg:name sorted-set-by
+func CoreSortedSetBy(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("sorted-set-by requires a comparator")
+	}
+	comp, ok := vm.AsFn(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("sorted-set-by first arg must be a function")
+	}
+	return vm.NewSortedSet(fnComparator(comp), vs[1:]), nil
+}
+
+//lg:native
+//lg:name chunk-first
+func CoreChunkFirst(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("chunk-first: wrong number of arguments %d", len(vs))
+	}
+	cs, err := asChunked(vs[0], "chunk-first")
+	if err != nil {
+		return vm.NIL, err
+	}
+	return cs.ChunkedFirst().(vm.Value), nil
+}
+
+//lg:native
+//lg:name chunk-rest
+func CoreChunkRest(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("chunk-rest: wrong number of arguments %d", len(vs))
+	}
+	cs, err := asChunked(vs[0], "chunk-rest")
+	if err != nil {
+		return vm.NIL, err
+	}
+	m := cs.ChunkedMore()
+	if m == nil {
+		return vm.EmptyList, nil
+	}
+	return m.(vm.Value), nil
+}
+
+//lg:native
+//lg:name chunk-next
+func CoreChunkNext(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("chunk-next: wrong number of arguments %d", len(vs))
+	}
+	cs, err := asChunked(vs[0], "chunk-next")
+	if err != nil {
+		return vm.NIL, err
+	}
+	n := cs.ChunkedNext()
+	if n == nil {
+		return vm.NIL, nil
+	}
+	return n.(vm.Value), nil
+}
+
+//lg:native
+//lg:name chunk-cons
+func CoreChunkConsF(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("chunk-cons: wrong number of arguments %d", len(vs))
+	}
+	chunk, ok := vs[0].(vm.IChunk)
+	if !ok {
+		return vm.NIL, fmt.Errorf("chunk-cons: first arg must be a chunk")
+	}
+	var tail vm.Seq
+	if vs[1] != vm.NIL {
+		s, err := seqOf(vs[1])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("chunk-cons: second arg must be a seq or nil")
+		}
+		tail = s
+	}
+	out := vm.ConsChunk(chunk, tail)
+	if out == nil {
+		return vm.EmptyList, nil
+	}
+	return out.(vm.Value), nil
+}
+
+//lg:native
+//lg:name chunked-seq?
+func CoreChunkedSeqP(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("chunked-seq?: wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL {
+		return vm.FALSE, nil
+	}
+	s, err := seqOf(vs[0])
+	if err != nil || s == nil {
+		return vm.FALSE, nil
+	}
+	_, ok := vm.AsChunkedSeq(s)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name chunk-buffer
+func CoreChunkBufferF(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("chunk-buffer: wrong number of arguments %d", len(vs))
+	}
+	n, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("chunk-buffer: arg must be Int")
+	}
+	return vm.NewChunkBuffer(int(n)), nil
+}
+
+//lg:native
+//lg:name chunk-append
+func CoreChunkAppendF(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("chunk-append: wrong number of arguments %d", len(vs))
+	}
+	b, ok := vs[0].(*vm.ChunkBuffer)
+	if !ok {
+		return vm.NIL, fmt.Errorf("chunk-append: first arg must be a chunk-buffer")
+	}
+	b.Append(vs[1])
+	return b, nil
+}
+
+//lg:native
+//lg:name chunk
+func CoreChunkF(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("chunk: wrong number of arguments %d", len(vs))
+	}
+	b, ok := vs[0].(*vm.ChunkBuffer)
+	if !ok {
+		return vm.NIL, fmt.Errorf("chunk: arg must be a chunk-buffer")
+	}
+	return b.Chunk().(vm.Value), nil
+}
+
+//lg:native
+//lg:name range
+func CoreRangef(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) == 0 {
+
+		return vm.NewInfiniteRange(0, 1), nil
+	}
+	if len(vs) > 3 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	var start, end, step vm.Int
+	step = 1
+	var err error
+	var endArg vm.Value
+	switch len(vs) {
+	case 1:
+		endArg = vs[0]
+	case 2:
+		endArg = vs[1]
+		if start, err = rangeInt(vs[0], "start"); err != nil {
+			return vm.NIL, err
+		}
+	case 3:
+		endArg = vs[1]
+		if start, err = rangeInt(vs[0], "start"); err != nil {
+			return vm.NIL, err
+		}
+		if step, err = rangeInt(vs[2], "step"); err != nil {
+			return vm.NIL, err
+		}
+	}
+
+	if f, ok := endArg.(vm.Float); ok {
+		if math.IsInf(float64(f), 0) {
+			if (f > 0 && step > 0) || (f < 0 && step < 0) {
+				return vm.NewInfiniteRange(int(start), int(step)), nil
+			}
+			return vm.NewRange(0, 0, 1), nil
+		}
+		if step > 0 {
+			endArg = vm.Int(math.Ceil(float64(f)))
+		} else {
+			endArg = vm.Int(math.Floor(float64(f)))
+		}
+	}
+	if end, err = rangeInt(endArg, "end"); err != nil {
+		return vm.NIL, err
+	}
+	return vm.NewRange(start, end, step), nil
+}
+
+//lg:native
+//lg:name keyword
+func CoreKeyword(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 || len(vs) > 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if len(vs) == 2 {
+		// (keyword ns name) — both must be strings (or nil ns)
+		var nsStr, nameStr string
+		if vs[0] != vm.NIL {
+			switch n := vs[0].(type) {
+			case vm.String:
+				nsStr = string(n)
+			default:
+				return vm.NIL, fmt.Errorf("keyword namespace must be a string, got %s", vs[0].Type())
+			}
+		}
+		switch n := vs[1].(type) {
+		case vm.String:
+			nameStr = string(n)
+		default:
+			return vm.NIL, fmt.Errorf("keyword name must be a string, got %s", vs[1].Type())
+		}
+		if nsStr == "" && vs[0] == vm.NIL {
+			return vm.Keyword(nameStr), nil
+		}
+		return vm.Keyword(nsStr + "/" + nameStr), nil
+	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, nil
+	}
+	if k, ok := vs[0].(vm.Keyword); ok {
+		return k, nil
+	}
+	if k, ok := vs[0].(vm.Symbol); ok {
+		return vm.Keyword(k), nil
+	}
+	if k, ok := vs[0].(vm.String); ok {
+		return vm.Keyword(k), nil
+	}
+	return vm.NIL, fmt.Errorf("keyword expects keyword, symbol, or string, got %s", vs[0].Type())
+}
+
+//lg:native
+//lg:name symbol
+func CoreSymbolf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 || len(vs) > 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	toStr := func(v vm.Value) (string, bool) {
+		switch s := v.(type) {
+		case vm.String:
+			return string(s), true
+		case vm.Symbol:
+			return string(s), true
+		case vm.Keyword:
+			return string(s), true
+		default:
+			return "", false
+		}
+	}
+	if len(vs) == 1 {
+		if vs[0] == vm.NIL {
+			return vm.NIL, fmt.Errorf("symbol expected String, Symbol, Keyword, or Var")
+		}
+		if v, ok := vs[0].(*vm.Var); ok {
+			return vm.Symbol(externalNSName(v.NS()) + "/" + v.VarName()), nil
+		}
+		if s, ok := toStr(vs[0]); ok {
+			return vm.Symbol(s), nil
+		}
+		return vm.NIL, fmt.Errorf("symbol expected String or Symbol")
+	}
+	nsStr := ""
+	if vs[0] != vm.NIL {
+		ns, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("symbol expected String namespace")
+		}
+		nsStr = string(ns)
+	}
+	name, ok := vs[1].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("symbol expected String name")
+	}
+	nameStr := string(name)
+	if nsStr == "" && vs[0] == vm.NIL {
+		return vm.Symbol(nameStr), nil
+	}
+	return vm.Symbol(nsStr + "/" + nameStr), nil
+}
+
+//lg:native
+//lg:name assoc
+func CoreAssoc(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 3 || len(vs)%2 == 0 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	coll, ok := vs[0].(vm.Associative)
+	if !ok {
+		return vm.NIL, fmt.Errorf("assoc expected Associative")
+	}
+	ret := coll
+	for i := 1; i < len(vs); i += 2 {
+		ret = ret.Assoc(vs[i], vs[i+1])
+		if ret == vm.NIL {
+			return vm.NIL, fmt.Errorf("assoc failed for key %s", vs[i].String())
+		}
+	}
+	return ret, nil
+}
+
+//lg:native
+//lg:name dissoc
+func CoreDissoc(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) == 0 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments 0")
+	}
+	if len(vs) == 1 {
+		return vs[0], nil
+	}
+	coll, ok := vs[0].(vm.Associative)
+	if !ok {
+		return vm.NIL, fmt.Errorf("dissoc expected Associative")
+	}
+	ret := coll
+	for i := 1; i < len(vs); i++ {
+		ret = ret.Dissoc(vs[i])
+		if vs[0] != vm.NIL && ret == vm.NIL {
+			return vm.NIL, fmt.Errorf("dissoc failed for key %s", vs[i].String())
+		}
+	}
+	return ret, nil
+}
+
+//lg:native
+//lg:name cons
+func CoreCons(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return builtins.Cons(vs[0], vs[1])
+}
+
+//lg:native
+//lg:name disj
+func CoreDisj(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, nil
+	}
+	if len(vs) == 1 {
+		return vs[0], nil
+	}
+	switch s := vs[0].(type) {
+	case *vm.PersistentSet:
+		result := s
+		for _, v := range vs[1:] {
+			result = result.Disj(v)
+		}
+		return result, nil
+	case *vm.SortedSet:
+		result := s
+		for _, v := range vs[1:] {
+			result = result.Disj(v)
+		}
+		return result, nil
+	case vm.Set:
+		for _, v := range vs[1:] {
+			s = s.Disj(v)
+		}
+		return s, nil
+	default:
+		return vm.NIL, fmt.Errorf("disj expected Set")
+	}
+}
+
+//lg:native
+//lg:name contains?
+func CoreContains(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return builtins.Contains(vs[0], vs[1])
+}
+
+//lg:native
+//lg:name second
+func CoreSecond(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, nil
+	}
+
+	if av, ok := vs[0].(vm.ArrayVector); ok {
+		if len(av) < 2 {
+			return vm.NIL, nil
+		}
+		return av[1], nil
+	}
+	seq, err := seqOf(vs[0])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("second expected Seq")
+	}
+	if seq == nil {
+		return vm.NIL, nil
+	}
+	n := seq.Next()
+	if n == nil {
+		return vm.NIL, nil
+	}
+	return n.First(), nil
+}
+
+//lg:native
+//lg:name list?
+func CoreIsList(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	_, ok := vs[0].(*vm.List)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name empty
+func CoreEmpty(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL || vs[0].Type() == vm.StringType {
+		return vm.NIL, nil
+	}
+	if _, ok := vs[0].(*vm.InfiniteRange); ok {
+		return vm.EmptyList, nil
+	}
+	if _, ok := vs[0].(*vm.Record); ok {
+		return vm.NIL, fmt.Errorf("empty is not supported on records")
+	}
+	coll, ok := vs[0].(vm.Collection)
+	if !ok {
+		return vm.NIL, nil
+	}
+	return coll.Empty(), nil
+}
+
+//lg:native
+//lg:name key
+func CoreKeyf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if e, ok := vs[0].(vm.MapEntry); ok {
+		return e.Key, nil
+	}
+	return vm.NIL, fmt.Errorf("key expects map entry")
+}
+
+//lg:native
+//lg:name val
+func CoreValf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if e, ok := vs[0].(vm.MapEntry); ok {
+		return e.Value, nil
+	}
+	return vm.NIL, fmt.Errorf("val expects map entry")
+}
+
+//lg:native
+//lg:name count
+func CoreCount(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL {
+		return vm.MakeInt(0), nil
+	}
+	if s, ok := vs[0].(vm.String); ok {
+		return vm.MakeInt(len([]rune(string(s)))), nil
+	}
+	seq, ok := vs[0].(vm.Counted)
+	if !ok {
+		return vm.NIL, fmt.Errorf("count expected Counted")
+	}
+	return seq.Count(), nil
+}
+
+//lg:native
+//lg:name exclude-in-current-ns
+func CoreExcludeInCurrentNs(vs ...vm.Value) (vm.Value, error) {
+	cns := CurrentNS.Deref().(*vm.Namespace)
+	for _, v := range vs {
+		sym, ok := v.(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("exclude-in-current-ns expected Symbol, got %s", v.Type().Name())
+		}
+		cns.Exclude(string(sym))
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name use
+func CoreUse(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	cns := CurrentNS.Deref().(*vm.Namespace)
+	for i := range vs {
+		s, ok := vs[i].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("use expected Symbol")
+		}
+		cns.Refer(NS(string(s)), "", true)
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name alias
+func CoreAliasf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	al, ok := vs[0].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("alias expected Symbol")
+	}
+	nsSym, ok := vs[1].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("alias expected Symbol")
+	}
+	cns := CurrentNS.Deref().(*vm.Namespace)
+	target := NS(string(nsSym))
+	cns.Alias(al, target)
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name refer-list
+func CoreReferList(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	nsSym, ok := vs[0].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("refer-list expected ns Symbol")
+	}
+	arr, ok := vs[1].(vm.ArrayVector)
+	if !ok {
+		return vm.NIL, fmt.Errorf("refer-list expected vector of Symbols")
+	}
+	syms := make([]vm.Symbol, 0, len(arr))
+	for i := range arr {
+		if s, ok := arr[i].(vm.Symbol); ok {
+			syms = append(syms, s)
+		}
+	}
+	cns := CurrentNS.Deref().(*vm.Namespace)
+	target := NS(string(nsSym))
+
+	vmSyms := make([]vm.Symbol, len(syms))
+	copy(vmSyms, syms)
+	cns.ReferList(target, vmSyms)
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name .
+func CoreMethodInvoke(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	name, ok := vs[1].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("method-invoke expected Symbol")
+	}
+	rec, ok := vs[0].(vm.Receiver)
+	if !ok {
+		return invokeMethodFallback(vs[0], name, vs[2:], fmt.Errorf("method-invoke expected Receiver"))
+	}
+	result, err := rec.InvokeMethod(name, vs[2:])
+	if err == nil {
+		return result, nil
+	}
+	return invokeMethodFallback(rec, name, vs[2:], err)
+}
+
+//lg:native
+//lg:name register-host-method!
+func CoreRegisterHostMethod(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("register-host-method! expected 3 arguments, got %d", len(vs))
+	}
+	t, ok := vs[0].(vm.ValueType)
+	if !ok {
+		return vm.NIL, fmt.Errorf("register-host-method! expected a type, got %s", vs[0].Type().Name())
+	}
+	name, ok := vs[1].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("register-host-method! expected a Symbol method name")
+	}
+	fn, ok := vs[2].(vm.Fn)
+	if !ok {
+		return vm.NIL, fmt.Errorf("register-host-method! expected a fn")
+	}
+	RegisterHostMethod(t, name, fn)
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name register-host-class!
+func CoreRegisterHostClass(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("register-host-class! expected 2 arguments, got %d", len(vs))
+	}
+	name, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("register-host-class! expected a String class name")
+	}
+	RegisterHostClass(string(name), vs[1])
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name concat*
+func CoreConcat(vs ...vm.Value) (vm.Value, error) {
+
+	presize := 0
+	for i := range vs {
+		if av, ok := vs[i].(vm.ArrayVector); ok {
+			presize += len(av)
+		}
+	}
+	ret := make([]vm.Value, 0, presize)
+	for i := range vs {
+		if vs[i] == vm.NIL {
+			continue
+		}
+
+		if av, ok := vs[i].(vm.ArrayVector); ok {
+			ret = append(ret, av...)
+			continue
+		}
+		vseq, err := seqOf(vs[i])
+		if err != nil {
+			return vm.NIL, fmt.Errorf("concat expected Seq")
+		}
+		ret = appendSeqValues(ret, forceSeq(vseq))
+	}
+	r, err := vm.ListType.Box(ret)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("concat failed: %w", err)
+	}
+	return r, nil
+}
+
+//lg:native
+//lg:name slurp
+func CoreSlurp(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	filename, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("slurp expected String")
+	}
+	data, err := os.ReadFile(string(filename))
+	if err != nil {
+		return vm.NIL, fmt.Errorf("slurp failed: %w", err)
+	}
+	return vm.String(data), nil
+}
+
+//lg:native
+//lg:name spit
+func CoreSpit(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	filename, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("spit expected String")
+	}
+	contents, ok := asBytes(vs[1])
+	if !ok {
+		return vm.NIL, fmt.Errorf("spit expected String or byte-array")
+	}
+	err := os.WriteFile(string(filename), contents, 0644)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("spit failed: %w", err)
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name atom
+func CoreAtom(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if (len(vs)-1)%2 != 0 {
+		return vm.NIL, fmt.Errorf("atom options must be key/value pairs")
+	}
+	var meta vm.Value
+	var validator vm.Fn
+	for i := 1; i < len(vs); i += 2 {
+		switch vs[i] {
+		case vm.Keyword("meta"):
+			if vs[i+1] != vm.NIL && !isMapType(vs[i+1]) {
+				return vm.NIL, fmt.Errorf("atom :meta must be nil or map")
+			}
+			meta = vs[i+1]
+		case vm.Keyword("validator"):
+			if vs[i+1] == vm.NIL {
+				validator = nil
+				continue
+			}
+			fn, ok := vm.AsFn(vs[i+1])
+			if !ok {
+				return vm.NIL, fmt.Errorf("atom :validator must be nil or function")
+			}
+			validator = fn
+		}
+	}
+	return vm.NewAtomWithMetaValidator(vs[0], meta, validator)
+}
+
+//lg:native
+//lg:name reset!
+func CoreReset(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	at, ok := vs[0].(*vm.Atom)
+	if !ok {
+		return vm.NIL, fmt.Errorf("reset expected Atom")
+	}
+	return at.Reset(vs[1])
+}
+
+//lg:native
+//lg:name compare-and-set!
+func CoreCompareAndSet(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("compare-and-set! expected 3 arguments, got %d", len(vs))
+	}
+	at, ok := vs[0].(*vm.Atom)
+	if !ok {
+		return vm.NIL, fmt.Errorf("compare-and-set! expected Atom")
+	}
+	swapped, err := at.CompareAndSet(vs[1], vs[2])
+	if err != nil {
+		return vm.NIL, err
+	}
+	if swapped {
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name reset-vals!
+func CoreResetVals(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	at, ok := vs[0].(*vm.Atom)
+	if !ok {
+		return vm.NIL, fmt.Errorf("reset-vals! expected Atom")
+	}
+	old := at.Deref()
+	if _, err := at.Reset(vs[1]); err != nil {
+		return vm.NIL, err
+	}
+	return vm.ArrayVector{old, vs[1]}, nil
+}
+
+//lg:native
+//lg:name chan
+func CoreChanf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 0 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return make(vm.Chan), nil
+}
+
+//lg:native
+//lg:name scope-close!
+func CoreScopeClose(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("scope-close! expects 2 arguments (scope timeout-ms)")
+	}
+	s, ok := vs[0].(*vm.Scope)
+	if !ok {
+		return vm.NIL, fmt.Errorf("scope-close! expected a scope")
+	}
+	ms, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("scope-close! expected an integer timeout-ms")
+	}
+	vm.CloseScoped(s, time.Duration(int64(ms))*time.Millisecond)
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name scope-live
+func CoreScopeLive(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("scope-live expects 1 argument")
+	}
+	s, ok := vs[0].(*vm.Scope)
+	if !ok {
+		return vm.NIL, fmt.Errorf("scope-live expected a scope")
+	}
+	return vm.Int(s.LiveTree()), nil
+}
+
+//lg:native
+//lg:name scope?
+func CoreScopeQmark(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("scope? expects 1 argument")
+	}
+	if _, ok := vs[0].(*vm.Scope); ok {
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name max
+func CoreMax(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	m := vs[0]
+	if isNaNValue(m) {
+		return m, nil
+	}
+	for i := 1; i < len(vs); i++ {
+		if isNaNValue(vs[i]) {
+			return vs[i], nil
+		}
+		gt, err := vm.NumGt(vs[i], m)
+		if err != nil {
+			return vm.NIL, err
+		}
+		if gt {
+			m = vs[i]
+		}
+	}
+	return m, nil
+}
+
+//lg:native
+//lg:name min
+func CoreMin(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	m := vs[0]
+	if isNaNValue(m) {
+		return m, nil
+	}
+	for i := 1; i < len(vs); i++ {
+		if isNaNValue(vs[i]) {
+			return vs[i], nil
+		}
+		lt, err := vm.NumLt(vs[i], m)
+		if err != nil {
+			return vm.NIL, err
+		}
+		if lt {
+			m = vs[i]
+		}
+	}
+	return m, nil
+}
+
+//lg:native
+//lg:name str-replace
+func CoreStrReplace(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	s, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("str-replace expected String")
+	}
+
+	if fn, isFn := vs[2].(vm.Fn); isFn {
+		switch m := vs[1].(type) {
+		case *vm.Regex:
+			out, err := m.ReplaceAllFunc(string(s), strReplaceCallback(fn))
+			if err != nil {
+				return vm.NIL, err
+			}
+			return vm.String(out), nil
+		case vm.String:
+			return literalReplaceFn(string(m), string(s), fn, false)
+		default:
+			return vm.NIL, fmt.Errorf("str-replace expected String or Regex")
+		}
+	}
+	r, ok := vs[2].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("str-replace expected String")
+	}
+	switch vs[1].(type) {
+	case vm.String:
+		return vm.String(strings.ReplaceAll(string(s), string(vs[1].(vm.String)), string(r))), nil
+	case *vm.Regex:
+		out, err := vs[1].(*vm.Regex).ReplaceAll(string(s), string(r))
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(out), nil
+	default:
+		return vm.NIL, fmt.Errorf("str-replace expected String or Regex")
+	}
+}
+
+//lg:native
+//lg:name long
+func CoreLongf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	const minInt64 = float64(-9223372036854775808)
+	const maxInt64 = float64(9223372036854775807)
+	coerce := func(f float64) (vm.Value, error) {
+		if f < minInt64 || f > maxInt64 {
+			return vm.NIL, fmt.Errorf("%s can't be coerced to long", vs[0])
+		}
+		return vm.Int(int64(math.Trunc(f))), nil
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+		return v, nil
+	case vm.Float:
+		return coerce(float64(v))
+	case vm.Char:
+		return vm.Int(int(v)), nil
+	case *vm.BigInt:
+		if !v.Val().IsInt64() {
+			return vm.NIL, fmt.Errorf("%s can't be coerced to long", vs[0])
+		}
+		return vm.Int(v.Val().Int64()), nil
+	case *vm.BigDecimal:
+		f, _ := v.Val().Float64()
+		return coerce(f)
+	case *vm.Ratio:
+		f, _ := v.Val().Float64()
+		return coerce(f)
+	case vm.Boolean:
+		if bool(v) {
+			return vm.MakeInt(1), nil
+		}
+		return vm.MakeInt(0), nil
+	default:
+		return vm.NIL, fmt.Errorf("%s can't be coerced to long", vs[0])
+	}
+}
+
+//lg:native
+//lg:name float
+func CoreFloatf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	f, ok := vm.ToFloat(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("%s can't be coerced to float", vs[0])
+	}
+	if math.IsInf(f, 0) {
+		return vm.NIL, fmt.Errorf("%s can't be coerced to float", vs[0])
+	}
+	f32 := float32(f)
+	if math.IsInf(float64(f32), 0) {
+		return vm.NIL, fmt.Errorf("%s can't be coerced to float", vs[0])
+	}
+	return vm.Float32(float64(f32)), nil
+}
+
+//lg:native
+//lg:name double
+func CoreDoublef(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	f, ok := vm.ToFloat(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("%s can't be coerced to double", vs[0])
+	}
+	return vm.Float(f), nil
+}
+
+//lg:native
+//lg:name number?
+func CoreIsNumber(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return vm.Boolean(vm.IsNumber(vs[0])), nil
+}
+
+//lg:native
+//lg:name float?
+func CoreIsFloat(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch vs[0].(type) {
+	case vm.Float, vm.Float32:
+		return vm.TRUE, nil
+	}
+	ok := false
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name int?
+func CoreIsInt(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	_, ok := vs[0].(vm.Int)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name char
+func CoreChar(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments")
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+		if int(v) < 0 || int(v) > 0x10FFFF {
+			return vm.NIL, fmt.Errorf("value out of range for char: %d", v)
+		}
+		return vm.Char(rune(v)), nil
+	case vm.Char:
+		return v, nil
+	case vm.String:
+		runes := []rune(string(v))
+		if len(runes) == 1 {
+			return vm.Char(runes[0]), nil
+		}
+		return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
+	case *vm.BigInt:
+		n := v.Unbox().(*big.Int).Int64()
+		if n < 0 || n > 0x10FFFF {
+			return vm.NIL, fmt.Errorf("value out of range for char: %d", n)
+		}
+		return vm.Char(rune(n)), nil
+	default:
+		return vm.NIL, fmt.Errorf("%s can't be coerced to char", vs[0])
+	}
+}
+
+//lg:native
+//lg:name re-pattern
+func CoreRegex(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+
+	if r, ok := vs[0].(*vm.Regex); ok {
+		return r, nil
+	}
+	if s, ok := vs[0].(vm.String); ok {
+		return vm.NewRegex(string(s))
+	}
+	return vm.NIL, fmt.Errorf("regex expected String")
+}
+
+//lg:native
+//lg:name peek
+func CorePeek(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, nil
+	}
+	switch v := vs[0].(type) {
+	case vm.ArrayVector:
+		if len(v) == 0 {
+			return vm.NIL, nil
+		}
+		return v[len(v)-1], nil
+	case vm.PersistentVector:
+		if v.RawCount() == 0 {
+			return vm.NIL, nil
+		}
+		return v.ValueAt(vm.Int(v.RawCount() - 1)), nil
+	case *vm.List:
+		if v == vm.EmptyList {
+			return vm.NIL, nil
+		}
+		return v.First(), nil
+	case *vm.PersistentQueue:
+		return v.Peek(), nil
+	default:
+		return vm.NIL, fmt.Errorf("peek not supported on %s", vs[0].Type())
+	}
+}
+
+//lg:native
+//lg:name pop
+func CorePop(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, nil
+	}
+	switch vs[0].(type) {
+	case vm.PersistentVector:
+		v := vs[0].(vm.PersistentVector)
+		if v.RawCount() < 1 {
+			return vm.NIL, fmt.Errorf("can't pop empty vector")
+		}
+
+		return v.Pop(), nil
+	case vm.ArrayVector:
+		v := vs[0].(vm.ArrayVector)
+		if v.RawCount() < 1 {
+			return vm.NIL, fmt.Errorf("can't pop empty vector")
+		}
+		return vm.ArrayVector(v[0 : len(v)-1]), nil
+	case vm.Seq:
+		s := vs[0].(vm.Seq)
+
+		if s == vm.EmptyList {
+			return vm.NIL, fmt.Errorf("can't pop empty seq")
+		}
+		if c, ok := vs[0].(vm.Counted); ok && c.RawCount() == 0 {
+			return vm.NIL, fmt.Errorf("can't pop empty seq")
+		}
+		return s.More(), nil
+	case *vm.PersistentQueue:
+		return vs[0].(*vm.PersistentQueue).Pop(), nil
+	default:
+		return vm.NIL, fmt.Errorf("pop expected Seq or Vec")
+	}
+}
+
+//lg:native
+//lg:name iterate
+func CoreIterate(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	f, ok := vm.AsFn(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("iterate expected a function")
+	}
+	return vm.NewIterate(f, vs[1]), nil
+}
+
+//lg:native
+//lg:name repeat
+func CoreRepeat(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 || len(vs) > 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if len(vs) == 1 {
+		return vm.NewRepeat(vs[0], -1), nil
+	}
+	if _, ok := vs[0].(vm.Boolean); ok {
+		return vm.NIL, fmt.Errorf("repeat expected an Int")
+	}
+	ni, ok := vm.ToInt(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("repeat expected an Int")
+	}
+	n := vm.Int(ni)
+	if int(n) <= 0 {
+		return vm.EmptyList, nil
+	}
+	return vm.NewRepeat(vs[1], int(n)), nil
+}
+
+//lg:native
+//lg:name refer
+func CoreRefer(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 || len(vs) > 3 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	cns := CurrentNS.Deref().(*vm.Namespace)
+	s, ok := vs[0].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("refer expected Symbol")
+	}
+	alias := ""
+	if len(vs) > 1 {
+		if str, ok := vs[1].(vm.String); ok {
+			alias = string(str)
+		}
+	}
+	all := true
+	if len(vs) > 2 {
+		if b, ok := vs[2].(vm.Boolean); ok {
+			all = bool(b)
+		}
+	}
+	cns.Refer(NS(string(s)), alias, all)
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name format
+func CoreFormatf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	fmtStr, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("format expected String")
+	}
+	fmts := string(fmtStr)
+	args := make([]any, len(vs)-1)
+
+	vi := 0
+	for fi := 0; fi < len(fmts) && vi < len(args); fi++ {
+		if fmts[fi] != '%' {
+			continue
+		}
+		fi++
+		if fi >= len(fmts) {
+			break
+		}
+		if fmts[fi] == '%' {
+			continue
+		}
+
+		for fi < len(fmts) && (fmts[fi] == '-' || fmts[fi] == '+' || fmts[fi] == ' ' || fmts[fi] == '0' || fmts[fi] == '#' || (fmts[fi] >= '0' && fmts[fi] <= '9') || fmts[fi] == '.') {
+			fi++
+		}
+		if fi >= len(fmts) {
+			break
+		}
+		verb := fmts[fi]
+		switch v := vs[vi+1].(type) {
+		case vm.Int:
+			if verb == 'f' || verb == 'e' || verb == 'g' || verb == 'E' || verb == 'G' {
+				args[vi] = float64(v)
+			} else {
+				args[vi] = int(v)
+			}
+		case vm.Float:
+			args[vi] = float64(v)
+		case vm.String:
+			args[vi] = string(v)
+		case vm.Boolean:
+			args[vi] = bool(v)
+		default:
+			args[vi] = vs[vi+1].Unbox()
+		}
+		vi++
+	}
+	return vm.String(fmt.Sprintf(string(fmtStr), args...)), nil
+}
+
+//lg:native
+//lg:name rand
+func CoreRandf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) == 0 {
+		return vm.Float(rngFloat64()), nil
+	}
+	if len(vs) == 1 {
+		if n, ok := vs[0].(vm.Int); ok {
+			return vm.Float(rngFloat64() * float64(n)), nil
+		}
+		if n, ok := vs[0].(vm.Float); ok {
+			return vm.Float(rngFloat64() * float64(n)), nil
+		}
+		return vm.NIL, fmt.Errorf("rand expected number")
+	}
+	return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+}
+
+//lg:native
+//lg:name rand-int
+func CoreRandInt(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	n, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("rand-int expected Int")
+	}
+	if int(n) <= 0 {
+		return vm.MakeInt(0), nil
+	}
+	return vm.MakeInt(rngIntn(int(n))), nil
+}
+
+//lg:native
+//lg:name rand-nth
+func CoreRandNth(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, nil
+	}
+	coll, ok := vs[0].(vm.Collection)
+	if !ok {
+		return vm.NIL, fmt.Errorf("rand-nth expected Collection")
+	}
+	n := coll.RawCount()
+	if n == 0 {
+		return vm.NIL, fmt.Errorf("rand-nth called on empty collection")
+	}
+	idx := rngIntn(n)
+	if l, ok := vs[0].(vm.Lookup); ok {
+		return l.ValueAt(vm.Int(idx)), nil
+	}
+
+	s, _ := seqOf(vs[0])
+	for range idx {
+		s = s.Next()
+	}
+	return s.First(), nil
+}
+
+//lg:native
+//lg:name shuffle
+func CoreShuffle(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, fmt.Errorf("shuffle not supported on nil")
+	}
+	switch vs[0].(type) {
+	case vm.String:
+		return vm.NIL, fmt.Errorf("shuffle not supported on string")
+	case *vm.PersistentMap, vm.Map, *vm.SortedMap:
+		return vm.NIL, fmt.Errorf("shuffle not supported on map")
+	}
+
+	s, err := seqOf(vs[0])
+	if err != nil {
+		return vm.NIL, err
+	}
+	vals := appendSeqValues(nil, forceSeq(s))
+
+	rngShuffle(len(vals), func(i, j int) {
+		vals[i], vals[j] = vals[j], vals[i]
+	})
+	return vm.NewArrayVector(vals), nil
+}
+
+//lg:native
+//lg:name set-rand-seed!
+func CoreSetRandSeedFn(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	n, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("set-rand-seed! expected Int")
+	}
+	setRandSeed(int64(n))
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name transient
+func CoreTransientf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case *vm.PersistentMap:
+		return vm.NewTransientMap(v), nil
+	case *vm.PersistentSet:
+		return vm.NewTransientSet(v), nil
+	case vm.ArrayVector:
+		return vm.NewTransientVector([]vm.Value(v)), nil
+	case vm.PersistentVector:
+		vals := v.Unbox().([]vm.Value)
+		return vm.NewTransientVector(vals), nil
+	default:
+		return vm.NIL, fmt.Errorf("transient not supported on %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name persistent!
+func CorePersistentf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case *vm.TransientMap:
+		return v.Persistent()
+	case *vm.TransientVector:
+		return v.Persistent()
+	case *vm.TransientSet:
+		return v.Persistent()
+	default:
+		return vm.NIL, fmt.Errorf("persistent! not supported on %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name conj!
+func CoreConjBang(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) == 0 {
+		return vm.NewTransientVector(nil), nil
+	}
+	if len(vs) == 1 {
+		return vs[0], nil
+	}
+	switch t := vs[0].(type) {
+	case *vm.TransientMap:
+		var err error
+		for i := 1; i < len(vs); i++ {
+			t, err = t.Conj(vs[i])
+			if err != nil {
+				return vm.NIL, err
+			}
+		}
+		return t, nil
+	case *vm.TransientVector:
+		var err error
+		for i := 1; i < len(vs); i++ {
+			t, err = t.Conj(vs[i])
+			if err != nil {
+				return vm.NIL, err
+			}
+		}
+		return t, nil
+	case *vm.TransientSet:
+		var err error
+		for i := 1; i < len(vs); i++ {
+			t, err = t.Conj(vs[i])
+			if err != nil {
+				return vm.NIL, err
+			}
+		}
+		return t, nil
+	default:
+		return vm.NIL, fmt.Errorf("conj! not supported on %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name assoc!
+func CoreAssocBang(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch t := vs[0].(type) {
+	case *vm.TransientMap:
+		var err error
+		for i := 1; i < len(vs); i += 2 {
+			val := vm.Value(vm.NIL)
+			if i+1 < len(vs) {
+				val = vs[i+1]
+			}
+			t, err = t.Assoc(vs[i], val)
+			if err != nil {
+				return vm.NIL, err
+			}
+		}
+		return t, nil
+	case *vm.TransientVector:
+		var err error
+		for i := 1; i < len(vs); i += 2 {
+			val := vm.Value(vm.NIL)
+			if i+1 < len(vs) {
+				val = vs[i+1]
+			}
+			t, err = t.Assoc(vs[i], val)
+			if err != nil {
+				return vm.NIL, err
+			}
+		}
+		return t, nil
+	default:
+		return vm.NIL, fmt.Errorf("assoc! not supported on %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name disj!
+func CoreDisjBang(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	t, ok := vs[0].(*vm.TransientSet)
+	if !ok {
+		return vm.NIL, fmt.Errorf("disj! expected TransientSet")
+	}
+	var err error
+	for i := 1; i < len(vs); i++ {
+		t, err = t.Disj(vs[i])
+		if err != nil {
+			return vm.NIL, err
+		}
+	}
+	return t, nil
+}
+
+//lg:native
+//lg:name dissoc!
+func CoreDissocBang(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	t, ok := vs[0].(*vm.TransientMap)
+	if !ok {
+		return vm.NIL, fmt.Errorf("dissoc! expected TransientMap")
+	}
+	var err error
+	for i := 1; i < len(vs); i++ {
+		t, err = t.Dissoc(vs[i])
+		if err != nil {
+			return vm.NIL, err
+		}
+	}
+	return t, nil
+}
+
+//lg:native
+//lg:name make-record-type
+func CoreMakeRecordType(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	name, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("make-record-type expected String name")
+	}
+	fields := make([]vm.Keyword, len(vs)-1)
+	for i := 1; i < len(vs); i++ {
+		kw, ok := vs[i].(vm.Keyword)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-record-type expected Keyword fields")
+		}
+		fields[i-1] = kw
+	}
+	return vm.NewRecordType(string(name), fields), nil
+}
+
+//lg:native
+//lg:name make-record
+func CoreMakeRecord(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	rt, ok := vs[0].(*vm.RecordType)
+	if !ok {
+		return vm.NIL, fmt.Errorf("make-record expected RecordType")
+	}
+	m, ok := vs[1].(*vm.PersistentMap)
+	if !ok {
+		return vm.NIL, fmt.Errorf("make-record expected Map")
+	}
+	return vm.NewRecord(rt, m), nil
+}
+
+//lg:native
+//lg:name record?
+func CoreIsRecord(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	_, ok := vs[0].(*vm.Record)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name make-deftype
+func CoreMakeDType(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	name, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("make-deftype expected String name")
+	}
+	fields := make([]vm.Symbol, len(vs)-1)
+	for i := 1; i < len(vs); i++ {
+		sym, ok := vs[i].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("make-deftype expected Symbol fields")
+		}
+		fields[i-1] = sym
+	}
+	return vm.NewDType(string(name), fields), nil
+}
+
+//lg:native
+//lg:name make-deftype-instance
+func CoreMakeDTypeInstance(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	dt, ok := vs[0].(*vm.DType)
+	if !ok {
+		return vm.NIL, fmt.Errorf("make-deftype-instance expected DType, got %s", vs[0].Type().Name())
+	}
+
+	fields := make([]vm.Value, len(vs)-1)
+	copy(fields, vs[1:])
+	return vm.NewDTypeInstance(dt, fields), nil
+}
+
+//lg:native
+//lg:name set-field!
+func CoreSetField(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("set-field! expected 3 arguments, got %d", len(vs))
+	}
+	inst, ok := vs[0].(*vm.DTypeInstance)
+	if !ok {
+		return vm.NIL, fmt.Errorf("set-field! expected a deftype instance, got %s", vs[0].Type().Name())
+	}
+	name, ok := vs[1].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("set-field! expected a Symbol field name")
+	}
+	if err := inst.SetField(name, vs[2]); err != nil {
+		return vm.NIL, err
+	}
+	return vs[2], nil
+}
+
+//lg:native
+//lg:name defprotocol*
+func CoreDefProtocol(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	name, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("defprotocol* expected String name")
+	}
+	methods := make([]vm.Symbol, len(vs)-1)
+	for i := 1; i < len(vs); i++ {
+		s, ok := vs[i].(vm.Symbol)
+		if !ok {
+			return vm.NIL, fmt.Errorf("defprotocol* expected Symbol method names")
+		}
+		methods[i-1] = s
+	}
+	return vm.NewProtocol(string(name), methods), nil
+}
+
+//lg:native
+//lg:name extend-type*
+func CoreExtendType(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	protocol, ok := vs[0].(*vm.Protocol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("extend-type* expected Protocol")
+	}
+	implMap, ok := vs[2].(*vm.PersistentMap)
+	if !ok {
+		return vm.NIL, fmt.Errorf("extend-type* expected map of implementations")
+	}
+
+	if vs[1] == vm.NIL {
+		protocol.ExtendNil(implMap)
+		return vm.NIL, nil
+	}
+	if union, ok := vs[1].(*vm.TypeUnion); ok {
+
+		for _, valueType := range union.Types() {
+			protocol.ExtendViaUnion(valueType, implMap)
+		}
+		return vm.NIL, nil
+	}
+	vt, ok := vs[1].(vm.ValueType)
+	if !ok {
+		return vm.NIL, fmt.Errorf("extend-type* expected a type, got %s", vs[1].Type().Name())
+	}
+	protocol.Extend(vt, implMap)
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name make-protocol-fn
+func CoreMakeProtocolFn(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	protocol, ok := vs[0].(*vm.Protocol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("make-protocol-fn expected Protocol")
+	}
+	methodName, ok := vs[1].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("make-protocol-fn expected Symbol")
+	}
+	return vm.NewProtocolFn(protocol, methodName), nil
+}
+
+//lg:native
+//lg:name -set-invokable-protocol!
+func CoreSetInvokableProtocol(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("-set-invokable-protocol! expects 2 args")
+	}
+	protocol, ok := vs[0].(*vm.Protocol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("-set-invokable-protocol! expected a Protocol")
+	}
+	invokeFn, ok := vs[1].(vm.Fn)
+	if !ok {
+		return vm.NIL, fmt.Errorf("-set-invokable-protocol! expected the -invoke fn")
+	}
+	vm.IFnProtocol = protocol
+	vm.IFnInvoke = invokeFn
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name -set-deref-protocol!
+func CoreSetDerefProtocol(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("-set-deref-protocol! expects 2 args")
+	}
+	protocol, ok := vs[0].(*vm.Protocol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("-set-deref-protocol! expected a Protocol")
+	}
+	derefFn, ok := vs[1].(vm.Fn)
+	if !ok {
+		return vm.NIL, fmt.Errorf("-set-deref-protocol! expected the -deref fn")
+	}
+	vm.IDerefProtocol = protocol
+	vm.IDerefDeref = derefFn
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name satisfies?
+func CoreSatisfies(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	protocol, ok := vs[0].(*vm.Protocol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("satisfies? expected Protocol")
+	}
+	return vm.Boolean(protocol.Satisfies(vs[1])), nil
+}
+
+//lg:native
+//lg:name defmulti*
+func CoreDefMulti(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 || len(vs) > 3 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	name, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("defmulti* expected String name")
+	}
+	dispatchFn, ok := vs[1].(vm.Fn)
+	if !ok {
+		return vm.NIL, fmt.Errorf("defmulti* expected Fn")
+	}
+	var defaultVal vm.Value = vm.Keyword("default")
+	if len(vs) == 3 {
+		defaultVal = vs[2]
+	}
+	return vm.NewMultiFn(string(name), dispatchFn, defaultVal), nil
+}
+
+//lg:native
+//lg:name defmethod*
+func CoreDefMethod(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	mf, ok := vs[0].(*vm.MultiFn)
+	if !ok {
+		return vm.NIL, fmt.Errorf("defmethod* expected MultiFn")
+	}
+	dispatchVal := vs[1]
+	method, ok := vs[2].(vm.Fn)
+	if !ok {
+		return vm.NIL, fmt.Errorf("defmethod* expected Fn")
+	}
+	return mf.AddMethod(dispatchVal, method), nil
+}
+
+//lg:native
+//lg:name pr-str
+func CorePrStr(vs ...vm.Value) (vm.Value, error) {
+	return prThroughToString(vs, true)
+}
+
+//lg:native
+//lg:name prn-str
+func CorePrnStr(vs ...vm.Value) (vm.Value, error) {
+	s, err := prThroughToString(vs, true)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return vm.String(string(s.(vm.String)) + "\n"), nil
+}
+
+//lg:native
+//lg:name print-str
+func CorePrintStr(vs ...vm.Value) (vm.Value, error) {
+	return prThroughToString(vs, false)
+}
+
+//lg:native
+//lg:name println-str
+func CorePrintlnStr(vs ...vm.Value) (vm.Value, error) {
+	s, err := prThroughToString(vs, false)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return vm.String(string(s.(vm.String)) + "\n"), nil
+}
+
+//lg:native
+//lg:name re-find
+func CoreReFind(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	re, ok := vs[0].(*vm.Regex)
+	if !ok {
+		return vm.NIL, fmt.Errorf("re-find expected Regex")
+	}
+	s, ok := vs[1].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("re-find expected String")
+	}
+	indices := re.FindStringSubmatchIndex(string(s))
+	if indices == nil {
+		return vm.NIL, nil
+	}
+	return regexSubmatchValue(string(s), indices), nil
+}
+
+//lg:native
+//lg:name re-matches
+func CoreReMatches(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	re, ok := vs[0].(*vm.Regex)
+	if !ok {
+		return vm.NIL, fmt.Errorf("re-matches expected Regex")
+	}
+	s, ok := vs[1].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("re-matches expected String")
+	}
+	indices := re.FindStringSubmatchIndex(string(s))
+	if indices == nil || indices[0] != 0 || indices[1] != len(s) {
+		return vm.NIL, nil
+	}
+	return regexSubmatchValue(string(s), indices), nil
+}
+
+//lg:native
+//lg:name re-seq
+func CoreReSeq(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	re, ok := vs[0].(*vm.Regex)
+	if !ok {
+		return vm.NIL, fmt.Errorf("re-seq expected Regex")
+	}
+	s, ok := vs[1].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("re-seq expected String")
+	}
+
+	all := re.FindAllStringSubmatchIndex(string(s), -1)
+	if all == nil {
+		return vm.NIL, nil
+	}
+	vals := make([]vm.Value, len(all))
+	for i, indices := range all {
+		vals[i] = regexSubmatchValue(string(s), indices)
+	}
+	return vm.ListType.Box(vals)
+}
+
+//lg:native
+//lg:name require
+func CoreRequiref(vs ...vm.Value) (vm.Value, error) {
+	cns := CurrentNS.Deref().(*vm.Namespace)
+	for _, v := range vs {
+		switch arg := v.(type) {
+		case vm.Symbol:
+			if _, err := RequireNS(string(arg)); err != nil {
+				return vm.NIL, err
+			}
+		case vm.ArrayVector:
+
+			if arg.RawCount() < 1 {
+				return vm.NIL, fmt.Errorf("require: empty vector")
+			}
+			nsName, ok := arg.ValueAt(vm.Int(0)).(vm.Symbol)
+			if !ok {
+				return vm.NIL, fmt.Errorf("require: first element must be a symbol")
+			}
+			target, err := RequireNS(string(nsName))
+			if err != nil {
+				return vm.NIL, err
+			}
+
+			for i := 1; i < arg.RawCount()-1; i += 2 {
+				opt := arg.ValueAt(vm.Int(int64(i)))
+				val := arg.ValueAt(vm.Int(int64(i + 1)))
+				switch opt {
+				case vm.Keyword("as"):
+					if alias, ok := val.(vm.Symbol); ok {
+						cns.Alias(alias, target)
+					}
+				case vm.Keyword("refer"):
+					if val == vm.Keyword("all") {
+						cns.Refer(target, "", true)
+					} else if vec, ok := val.(vm.ArrayVector); ok {
+						syms := make([]vm.Symbol, vec.RawCount())
+						for j := 0; j < vec.RawCount(); j++ {
+							syms[j] = vec.ValueAt(vm.Int(int64(j))).(vm.Symbol)
+						}
+						cns.ReferList(target, syms)
+					}
+				}
+			}
+		default:
+			return vm.NIL, fmt.Errorf("require expected Symbol or Vector, got %s", v.Type().Name())
+		}
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name find-ns
+func CoreFindNs(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	s, ok := vs[0].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("find-ns expected Symbol")
+	}
+	nsMu.RLock()
+	ns := nsRegistry[string(s)]
+	nsMu.RUnlock()
+	if ns == nil {
+		return vm.NIL, nil
+	}
+	return ns, nil
+}
+
+//lg:native
+//lg:name resolve
+func CoreResolvef(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	sym, ok := vs[0].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("resolve expected Symbol")
+	}
+	cns := CurrentNS.Deref().(*vm.Namespace)
+	if v := cns.Lookup(sym); v != vm.NIL {
+		return v, nil
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name all-ns
+func CoreAllNs(vs ...vm.Value) (vm.Value, error) {
+	nsMu.RLock()
+	var nss []vm.Value
+	for _, ns := range nsRegistry {
+		nss = append(nss, ns)
+	}
+	nsMu.RUnlock()
+	return vm.NewList(nss), nil
+}
+
+//lg:native
+//lg:name the-ns
+func CoreTheNs(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	s, ok := vs[0].(vm.Symbol)
+	if !ok {
+
+		if ns, ok := vs[0].(*vm.Namespace); ok {
+			return ns, nil
+		}
+		return vm.NIL, fmt.Errorf("the-ns expected Symbol or Namespace")
+	}
+	nsMu.RLock()
+	ns := nsRegistry[string(s)]
+	nsMu.RUnlock()
+	if ns == nil {
+		return vm.NIL, fmt.Errorf("no namespace: %s found", s)
+	}
+	return ns, nil
+}
+
+//lg:native
+//lg:name ns-publics
+func CoreNsPublics(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	var ns *vm.Namespace
+	switch a := vs[0].(type) {
+	case *vm.Namespace:
+		ns = a
+	case vm.Symbol:
+
+		nsMu.RLock()
+		ns = nsRegistry[resolveNSAlias(string(a))]
+		nsMu.RUnlock()
+		if ns == nil {
+			return vm.NIL, fmt.Errorf("no namespace: %s found", a)
+		}
+	default:
+		return vm.NIL, fmt.Errorf("ns-publics expected Symbol or Namespace")
+	}
+	pubs := ns.PublicVars()
+	kvs := make([]vm.Value, 0, len(pubs)*2)
+	for sym, v := range pubs {
+		kvs = append(kvs, sym, v)
+	}
+	return vm.NewMap(kvs), nil
+}
+
+//lg:native
+//lg:name find-var
+func CoreFindVar(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	sym, ok := vs[0].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("find-var expected a symbol")
+	}
+	nsV, nameV := sym.Namespaced()
+	nsSym, ok1 := nsV.(vm.Symbol)
+	nameSym, ok2 := nameV.(vm.Symbol)
+	if !ok1 || !ok2 {
+		return vm.NIL, fmt.Errorf("find-var expects a fully-qualified symbol: %s", sym)
+	}
+	nsMu.RLock()
+	targetNS := nsRegistry[resolveNSAlias(string(nsSym))]
+	nsMu.RUnlock()
+	if targetNS == nil {
+		return vm.NIL, nil
+	}
+	if v := targetNS.LookupLocal(nameSym); v != nil {
+		return v, nil
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name get-method
+func CoreGetMethod(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	mf, ok := vs[0].(*vm.MultiFn)
+	if !ok {
+		return vm.NIL, fmt.Errorf("get-method expected a multimethod")
+	}
+	return mf.GetMethod(vs[1]), nil
+}
+
+//lg:native
+//lg:name enumeration-seq
+func CoreEnumerationSeq(vs ...vm.Value) (vm.Value, error) {
+	return vm.NIL, fmt.Errorf("enumeration-seq is not supported under let-go (no java.util.Enumeration)")
+}
+
+//lg:native
+//lg:name lazy-seq*
+func CoreLazySeq(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("lazy-seq* expected 1 argument, got %d", len(vs))
+	}
+	fn, ok := vs[0].(vm.Fn)
+	if !ok {
+		return vm.NIL, fmt.Errorf("lazy-seq* expected a function")
+	}
+	return vm.NewLazySeq(fn), nil
+}
+
+//lg:native
+//lg:name with-meta
+func CoreWithMeta(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, nil
+	}
+	m, ok := vs[0].(vm.IMeta)
+	if ok {
+		return m.WithMeta(vs[1]), nil
+	}
+	fn, ok := vs[0].(vm.Fn)
+	if ok {
+		return vm.NewMetaFn(fn, vs[1]), nil
+	}
+
+	return vs[0], nil
+}
+
+//lg:native
+//lg:name throw
+func CoreThrowf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return vm.NIL, vm.NewThrownError(vs[0])
+}
+
+//lg:native
+//lg:name ex-info
+func CoreExInfo(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 || len(vs) > 3 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	msg, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("ex-info expected String message")
+	}
+	data, ok := vs[1].(*vm.PersistentMap)
+	if !ok {
+		return vm.NIL, fmt.Errorf("ex-info expected Map data")
+	}
+	var cause error
+	if len(vs) == 3 {
+		if ei, ok := vs[2].(*vm.ExInfo); ok {
+			cause = ei
+		}
+	}
+	return vm.NewExInfo(string(msg), data, cause), nil
+}
+
+//lg:native
+//lg:name ex-message
+func CoreExMessage(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments")
+	}
+	if ei, ok := vs[0].(*vm.ExInfo); ok {
+		return vm.String(ei.Message()), nil
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name ex-data
+func CoreExData(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments")
+	}
+	if ei, ok := vs[0].(*vm.ExInfo); ok {
+
+		if d := ei.Data(); d != nil {
+			return d, nil
+		}
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name ex-cause
+func CoreExCause(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments")
+	}
+	if ei, ok := vs[0].(*vm.ExInfo); ok {
+		if c := ei.Cause(); c != nil {
+			if cev, ok := c.(*vm.ExInfo); ok {
+				return cev, nil
+			}
+		}
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name delay*
+func CoreDelayStar(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("delay* expects 1 arg (thunk fn)")
+	}
+	fn, ok := vs[0].(vm.Fn)
+	if !ok {
+		return vm.NIL, fmt.Errorf("delay* expected Fn")
+	}
+	return vm.NewDelay(fn), nil
+}
+
+//lg:native
+//lg:name force
+func CoreForce(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("force expects 1 arg")
+	}
+	if d, ok := vs[0].(*vm.Delay); ok {
+		return d.Force()
+	}
+	return vs[0], nil
+}
+
+//lg:native
+//lg:name delay?
+func CoreIsDelay(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	_, ok := vs[0].(*vm.Delay)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name realized?
+func CoreIsRealized(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if d, ok := vs[0].(*vm.Delay); ok {
+		return vm.Boolean(d.IsRealized()), nil
+	}
+	if p, ok := vs[0].(*vm.Promise); ok {
+		return vm.Boolean(p.IsRealized()), nil
+	}
+	if s, ok := vs[0].(*vm.LazySeq); ok {
+		return vm.Boolean(s.IsRealized()), nil
+	}
+	return vm.NIL, fmt.Errorf("realized? expected delay, promise, future, or lazy seq")
+}
+
+//lg:native
+//lg:name volatile!
+func CoreVolatilef(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("volatile! expects 1 arg")
+	}
+	return vm.NewVolatile(vs[0]), nil
+}
+
+//lg:native
+//lg:name vreset!
+func CoreVreset(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("vreset! expects 2 args")
+	}
+	v, ok := vs[0].(*vm.Volatile)
+	if !ok {
+		return vm.NIL, fmt.Errorf("vreset! expected Volatile")
+	}
+	return v.Reset(vs[1]), nil
+}
+
+//lg:native
+//lg:name reduced
+func CoreReducedf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("reduced expects 1 arg")
+	}
+	return vm.NewReduced(vs[0]), nil
+}
+
+//lg:native
+//lg:name reduced?
+func CoreIsReducedf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	return vm.Boolean(vm.IsReduced(vs[0])), nil
+}
+
+//lg:native
+//lg:name bit-and
+func CoreBitAnd(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-and expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-and expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-and expected Int")
+	}
+	return vm.MakeInt(int(a) & int(b)), nil
+}
+
+//lg:native
+//lg:name bit-or
+func CoreBitOr(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-or expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-or expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-or expected Int")
+	}
+	return vm.MakeInt(int(a) | int(b)), nil
+}
+
+//lg:native
+//lg:name bit-xor
+func CoreBitXor(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-xor expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-xor expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-xor expected Int")
+	}
+	return vm.MakeInt(int(a) ^ int(b)), nil
+}
+
+//lg:native
+//lg:name bit-not
+func CoreBitNot(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("bit-not expects 1 arg")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-not expected Int")
+	}
+	return vm.MakeInt(^int(a)), nil
+}
+
+//lg:native
+//lg:name bit-shift-left
+func CoreBitShiftLeft(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-shift-left expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-shift-left expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-shift-left expected Int")
+	}
+	return vm.MakeInt(int(a) << uint(b)), nil
+}
+
+//lg:native
+//lg:name bit-shift-right
+func CoreBitShiftRight(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-shift-right expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-shift-right expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-shift-right expected Int")
+	}
+	return vm.MakeInt(int(a) >> uint(b)), nil
+}
+
+//lg:native
+//lg:name unsigned-bit-shift-right
+func CoreUnsignedBitShiftRight(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
+	}
+	return vm.MakeInt(int(uint(a) >> uint(b))), nil
+}
+
+//lg:native
+//lg:name bit-test
+func CoreBitTest(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-test expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-test expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-test expected Int")
+	}
+	return vm.Boolean(int(a)&(1<<uint(b)) != 0), nil
+}
+
+//lg:native
+//lg:name bit-set
+func CoreBitSet(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-set expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-set expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-set expected Int")
+	}
+	return vm.MakeInt(int(a) | (1 << uint(b))), nil
+}
+
+//lg:native
+//lg:name bit-clear
+func CoreBitClear(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-clear expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-clear expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-clear expected Int")
+	}
+	return vm.MakeInt(int(a) &^ (1 << uint(b))), nil
+}
+
+//lg:native
+//lg:name bit-and-not
+func CoreBitAndNot(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-and-not expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-and-not expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-and-not expected Int")
+	}
+	return vm.MakeInt(int(a) &^ int(b)), nil
+}
+
+//lg:native
+//lg:name bit-flip
+func CoreBitFlip(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("bit-flip expects 2 args")
+	}
+	a, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-flip expected Int")
+	}
+	b, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bit-flip expected Int")
+	}
+	return vm.MakeInt(int(a) ^ (1 << uint(b))), nil
+}
+
+//lg:native
+//lg:name re-groups
+func CoreReGroups(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("re-groups expects 2 args")
+	}
+	re, ok := vs[0].(*vm.Regex)
+	if !ok {
+		return vm.NIL, fmt.Errorf("re-groups expected Regex")
+	}
+	s, ok := vs[1].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("re-groups expected String")
+	}
+	all := re.FindAllStringSubmatchIndex(string(s), -1)
+	if all == nil {
+		return vm.NIL, nil
+	}
+	result := make([]vm.Value, len(all))
+	for i, indices := range all {
+		result[i] = regexSubmatchVector(string(s), indices)
+	}
+	return vm.NewArrayVector(result), nil
+}
+
+//lg:native
+//lg:name promise
+func CorePromisef(vs ...vm.Value) (vm.Value, error) {
+	return vm.NewPromise(), nil
+}
+
+//lg:native
+//lg:name deliver
+func CoreDeliver(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("deliver expects 2 args")
+	}
+	p, ok := vs[0].(*vm.Promise)
+	if !ok {
+		return vm.NIL, fmt.Errorf("deliver expected Promise")
+	}
+	return p.Deliver(vs[1]), nil
+}
+
+//lg:native
+//lg:name add-tap
+func CoreAddTap(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("add-tap expects 1 arg")
+	}
+	fn, ok := vm.AsFn(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("add-tap expected Fn")
+	}
+	tapsMu.Lock()
+	taps = append(taps, fn)
+	tapsMu.Unlock()
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name remove-tap
+func CoreRemoveTap(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("remove-tap expects 1 arg")
+	}
+	tapsMu.Lock()
+	for i, t := range taps {
+		if t == vs[0] {
+			taps = append(taps[:i], taps[i+1:]...)
+			break
+		}
+	}
+	tapsMu.Unlock()
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name tap>
+func CoreTapBang(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("tap> expects 1 arg")
+	}
+	tapsMu.Lock()
+	snap := make([]vm.Fn, len(taps))
+	copy(snap, taps)
+	tapsMu.Unlock()
+	for _, t := range snap {
+		_, _ = t.Invoke([]vm.Value{vs[0]})
+	}
+	return vm.TRUE, nil
+}
+
+//lg:native
+//lg:name add-watch
+func CoreAddWatch(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("add-watch expects 3 args")
+	}
+	fn, ok := vm.AsFn(vs[2])
+	if !ok {
+		return vm.NIL, fmt.Errorf("add-watch expected Fn")
+	}
+	switch ref := vs[0].(type) {
+	case *vm.Atom:
+		ref.AddWatch(vs[1], fn)
+	case *vm.Var:
+		ref.AddWatch(vs[1], fn)
+	default:
+		return vm.NIL, fmt.Errorf("add-watch expected Atom or Var")
+	}
+	return vs[0], nil
+}
+
+//lg:native
+//lg:name remove-watch
+func CoreRemoveWatch(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("remove-watch expects 2 args")
+	}
+	switch ref := vs[0].(type) {
+	case *vm.Atom:
+		ref.RemoveWatch(vs[1])
+	case *vm.Var:
+		ref.RemoveWatch(vs[1])
+	default:
+		return vm.NIL, fmt.Errorf("remove-watch expected Atom or Var")
+	}
+	return vs[0], nil
+}
+
+//lg:native
+//lg:name get-validator
+func CoreGetValidator(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("get-validator expects 1 arg")
+	}
+	a, ok := vs[0].(*vm.Atom)
+	if !ok {
+		return vm.NIL, fmt.Errorf("get-validator expected Atom")
+	}
+	return a.Validator(), nil
+}
+
+//lg:native
+//lg:name subvec
+func CoreSubvecf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 || len(vs) > 3 {
+		return vm.NIL, fmt.Errorf("subvec expects 2-3 args")
+	}
+	s, ok := vm.ToInt(vs[1])
+	if !ok {
+		return vm.NIL, fmt.Errorf("subvec expected Int start")
+	}
+
+	switch v := vs[0].(type) {
+	case vm.ArrayVector:
+		end := len(v)
+		if len(vs) == 3 {
+			e, ok := vm.ToInt(vs[2])
+			if !ok {
+				return vm.NIL, fmt.Errorf("subvec expected Int end")
+			}
+			end = e
+		}
+		if s < 0 || end > len(v) || s > end {
+			return vm.NIL, fmt.Errorf("subvec: index out of bounds")
+		}
+		result := make([]vm.Value, end-s)
+		copy(result, v[s:end])
+		return vm.NewArrayVector(result), nil
+	case vm.PersistentVector:
+		end := int(v.Count().(vm.Int))
+		if len(vs) == 3 {
+			e, ok := vm.ToInt(vs[2])
+			if !ok {
+				return vm.NIL, fmt.Errorf("subvec expected Int end")
+			}
+			end = e
+		}
+		if s < 0 || end > int(v.Count().(vm.Int)) || s > end {
+			return vm.NIL, fmt.Errorf("subvec: index out of bounds")
+		}
+		result := make([]vm.Value, end-s)
+		for i := s; i < end; i++ {
+			result[i-s] = v.ValueAt(vm.Int(i))
+		}
+		return vm.NewArrayVector(result), nil
+	default:
+		return vm.NIL, fmt.Errorf("subvec expected vector")
+	}
+}
+
+//lg:native
+//lg:name double?
+func CoreIsDouble(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	_, ok := vs[0].(vm.Float)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name instance?
+func CoreInstancep(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+
+	if t, ok := vs[0].(vm.ValueType); ok {
+		if vs[1].Type() == t {
+			return vm.TRUE, nil
+		}
+
+		if anc := directTypeAncestors(vs[1].Type()); anc != nil {
+			return anc.Contains(t), nil
+		}
+		return vm.FALSE, nil
+	}
+	if union, ok := vs[0].(*vm.TypeUnion); ok {
+		return vm.Boolean(union.Contains(vs[1].Type())), nil
+	}
+
+	if marker, ok := vs[0].(vm.Symbol); ok {
+		if anc := directTypeAncestors(vs[1].Type()); anc != nil {
+			return vm.Boolean(anc.Contains(marker) == vm.TRUE), nil
+		}
+	}
+
+	if p, ok := vs[0].(*vm.Protocol); ok {
+		return vm.Boolean(p.Satisfies(vs[1])), nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name ifn?
+func CoreIsIFn(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	switch vs[0].(type) {
+	case vm.Fn, vm.Keyword, vm.Symbol, *vm.PersistentMap, *vm.PersistentSet,
+		vm.ArrayVector, vm.PersistentVector, *vm.SortedMap, *vm.SortedSet, *vm.Promise:
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name identical?
+func CoreIdentical(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return vm.Boolean(identicalValue(vs[0], vs[1])), nil
+}
+
+//lg:native
+//lg:name any?
+func CoreAnyp(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return vm.TRUE, nil
+}
+
+//lg:native
+//lg:name unreduced
+func CoreUnreduced(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("unreduced expects 1 arg")
+	}
+	if r, ok := vs[0].(*vm.Reduced); ok {
+		return r.Deref(), nil
+	}
+	return vs[0], nil
+}
+
+//lg:native
+//lg:name ensure-reduced
+func CoreEnsureReduced(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("ensure-reduced expects 1 arg")
+	}
+	if _, ok := vs[0].(*vm.Reduced); ok {
+		return vs[0], nil
+	}
+	return vm.NewReduced(vs[0]), nil
+}
+
+//lg:native
+//lg:name bigint
+func CoreBigintf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("bigint expects 1 arg")
+	}
+	switch v := vs[0].(type) {
+	case vm.Int:
+		return vm.NewBigIntFromInt64(int64(v)), nil
+	case vm.Float:
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0])
+		}
+		decimal := strconv.FormatFloat(f, 'g', -1, 64)
+		i, _, err := new(big.Float).SetPrec(4096).SetMode(big.ToZero).Parse(decimal, 10)
+		if err != nil || i == nil {
+			return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0])
+		}
+		bi, _ := i.Int(nil)
+		return vm.NewBigInt(bi), nil
+	case *vm.BigInt:
+		return v, nil
+	case vm.String:
+		bi, ok := vm.NewBigIntFromString(string(v))
+		if !ok {
+			return vm.NIL, fmt.Errorf("cannot parse bigint: %s", v)
+		}
+		return bi, nil
+	}
+	return vm.NIL, fmt.Errorf("cannot coerce %s to bigint", vs[0].Type().Name())
+}
+
+//lg:native
+//lg:name ratio?
+func CoreIsRatio(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	return vm.Boolean(vm.IsRatio(vs[0])), nil
+}
+
+//lg:native
+//lg:name decimal?
+func CoreIsDecimal(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	return vm.Boolean(vm.IsBigDecimal(vs[0])), nil
+}
+
+//lg:native
+//lg:name sorted?
+func CoreIsSorted(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	switch vs[0].(type) {
+	case *vm.SortedMap, *vm.SortedSet:
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name map?
+func CoreIsMap(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	switch vs[0].(type) {
+	case *vm.PersistentMap, *vm.SortedMap:
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name set?
+func CoreIsSet(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	switch vs[0].(type) {
+	case *vm.PersistentSet, *vm.SortedSet:
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name map-entry?
+func CoreIsMapEntry(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	if _, ok := vs[0].(vm.MapEntry); ok {
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name lazy-seq?
+func CoreIsLazySeq(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	if _, ok := vs[0].(*vm.LazySeq); ok {
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name reversible?
+func CoreIsReversible(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	switch vs[0].(type) {
+	case vm.ArrayVector, vm.PersistentVector, *vm.SortedMap, *vm.SortedSet:
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name rseq
+func CoreRseqf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments")
+	}
+	switch v := vs[0].(type) {
+	case *vm.SortedMap:
+		s := v.RSeq()
+		if s == vm.EmptyList {
+			return vm.NIL, nil
+		}
+		return s, nil
+	case *vm.SortedSet:
+		s := v.RSeq()
+		if s == vm.EmptyList {
+			return vm.NIL, nil
+		}
+		return s, nil
+	case vm.ArrayVector:
+		n := len(v)
+		if n == 0 {
+			return vm.NIL, nil
+		}
+		var s vm.Seq = vm.EmptyList
+		for i := range n {
+			s = vm.NewCons(v[i], s)
+		}
+		return s, nil
+	case vm.PersistentVector:
+		n := v.RawCount()
+		if n == 0 {
+			return vm.NIL, nil
+		}
+		var s vm.Seq = vm.EmptyList
+		for i := range n {
+			s = vm.NewCons(v.ValueAt(vm.MakeInt(i)), s)
+		}
+		return s, nil
+	}
+	return vm.NIL, fmt.Errorf("rseq not supported on: %s", vs[0].Type())
+}
+
+//lg:native
+//lg:name numerator
+func CoreNumeratorf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments")
+	}
+	if r, ok := vs[0].(*vm.Ratio); ok {
+		num := r.Val().Num()
+		return vm.MaybeDowngrade(new(big.Int).Set(num)), nil
+	}
+	return vm.NIL, fmt.Errorf("numerator expects a Ratio")
+}
+
+//lg:native
+//lg:name denominator
+func CoreDenominatorf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments")
+	}
+	if r, ok := vs[0].(*vm.Ratio); ok {
+		den := r.Val().Denom()
+		return vm.MaybeDowngrade(new(big.Int).Set(den)), nil
+	}
+	return vm.NIL, fmt.Errorf("denominator expects a Ratio")
+}
+
+//lg:native
+//lg:name bigdec
+func CoreBigdecf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments")
+	}
+	switch v := vs[0].(type) {
+	case *vm.BigDecimal:
+		return v, nil
+	case vm.Int:
+		return vm.NewBigDecimalFromInt64(int64(v)), nil
+	case vm.Float:
+		f := float64(v)
+		if math.IsInf(f, 0) || math.IsNaN(f) {
+			return vm.NIL, fmt.Errorf("cannot coerce non-finite float to bigdec")
+		}
+		return vm.NewBigDecimalFromFloat64(f), nil
+	case *vm.BigInt:
+		return vm.NewBigDecimalFromBigInt(v.Val()), nil
+	case *vm.Ratio:
+		f, _ := v.Val().Float64()
+		return vm.NewBigDecimalFromFloat64(f), nil
+	case vm.String:
+		bd, ok := vm.NewBigDecimalFromString(string(v))
+		if !ok {
+			return vm.NIL, fmt.Errorf("cannot parse bigdec: %s", v)
+		}
+		return bd, nil
+	}
+	return vm.NIL, fmt.Errorf("cannot coerce %s to bigdec", vs[0].Type().Name())
+}
+
+//lg:native
+//lg:name round-bigdec
+func CoreRoundBigdec(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("round-bigdec expects precision, rounding mode, and value")
+	}
+	precision, ok := vm.ToInt(vs[0])
+	if !ok {
+		return vm.NIL, fmt.Errorf("round-bigdec expected integer precision")
+	}
+	var modeName string
+	switch m := vs[1].(type) {
+	case vm.Keyword:
+		modeName = string(m)
+	case vm.Symbol:
+		modeName = string(m)
+	case vm.String:
+		modeName = string(m)
+	default:
+		return vm.NIL, fmt.Errorf("round-bigdec expected rounding mode")
+	}
+	modeName = strings.TrimPrefix(strings.ToLower(modeName), ":")
+	bd, ok := vs[2].(*vm.BigDecimal)
+	if !ok {
+		return vs[2], nil
+	}
+	return roundBigDecimalValue(bd, precision, modeName)
+}
+
+//lg:native
+//lg:name rationalize
+func CoreRationalizef(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments")
+	}
+	switch v := vs[0].(type) {
+	case *vm.Ratio:
+		return v, nil
+	case vm.Int:
+		return vm.MaybeSimplifyRatio(big.NewRat(int64(v), 1)), nil
+	case *vm.BigInt:
+		return vm.MaybeSimplifyRatio(new(big.Rat).SetInt(v.Val())), nil
+	case vm.Float:
+		f := float64(v)
+		if math.IsInf(f, 0) || math.IsNaN(f) {
+			return vm.NIL, fmt.Errorf("cannot rationalize %s", vs[0].Type().Name())
+		}
+		if r, ok := new(big.Rat).SetString(strconv.FormatFloat(f, 'f', -1, 64)); ok {
+			return vm.MaybeSimplifyRatio(r), nil
+		}
+		return vm.NIL, fmt.Errorf("cannot rationalize %s", vs[0].Type().Name())
+	case *vm.BigDecimal:
+		if r, ok := new(big.Rat).SetString(v.Val().Text('f', -1)); ok {
+			return vm.MaybeSimplifyRatio(r), nil
+		}
+		return vm.NIL, fmt.Errorf("cannot rationalize %s", vs[0].Type().Name())
+	}
+	return vm.NIL, fmt.Errorf("cannot rationalize %s", vs[0].Type().Name())
+}
+
+//lg:native
+//lg:name quot
+func CoreQuotf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return vm.NumQuot(vs[0], vs[1])
+}
+
+//lg:native
+//lg:name rem
+func CoreRemf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return vm.NumRem(vs[0], vs[1])
+}
+
+//lg:native
+//lg:name hash
+func CoreHashf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	return vm.MakeInt(int(vm.HashValue(vs[0]))), nil
+}
+
+//lg:native
+//lg:name parse-double
+func CoreParseDouble(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	s, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("parse-double expected String")
+	}
+	f, err := strconv.ParseFloat(string(s), 64)
+	if err != nil {
+		return vm.NIL, nil
+	}
+	return vm.Float(f), nil
+}
+
+//lg:native
+//lg:name parse-boolean
+func CoreParseBool(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	s, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("parse-boolean expected String")
+	}
+	switch string(s) {
+	case "true":
+		return vm.TRUE, nil
+	case "false":
+		return vm.FALSE, nil
+	}
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name NaN?
+func CoreIsNaN(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	switch v := vs[0].(type) {
+	case vm.Float:
+		return vm.Boolean(math.IsNaN(float64(v))), nil
+	case vm.Float32:
+		return vm.Boolean(math.IsNaN(float64(v))), nil
+	case vm.Int, *vm.BigInt, *vm.Ratio, *vm.BigDecimal:
+		return vm.FALSE, nil
+	default:
+		return vm.NIL, fmt.Errorf("NaN? requires a number, got %s", vs[0].Type().Name())
+	}
+}
+
+//lg:native
+//lg:name infinite?
+func CoreIsInfinite(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	if f, ok := vs[0].(vm.Float); ok {
+		return vm.Boolean(math.IsInf(float64(f), 0)), nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name boolean?
+func CoreIsBool(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	_, ok := vs[0].(vm.Boolean)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name char?
+func CoreIsChar(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	_, ok := vs[0].(vm.Char)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name var?
+func CoreIsVar(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	_, ok := vs[0].(*vm.Var)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name byte-array
+func CoreByteArrayf(vs ...vm.Value) (vm.Value, error) {
+	return buildArray(vm.ArrayByte, vs)
+}
+
+//lg:native
+//lg:name object-array
+func CoreObjectArrayf(vs ...vm.Value) (vm.Value, error) {
+	return buildArray(vm.ArrayObject, vs)
+}
+
+//lg:native
+//lg:name make-array
+func CoreMakeArrayf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("make-array expects 2 args (type, size)")
+	}
+	size, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("make-array size must be Int")
+	}
+	n := int(size)
+	if n < 0 {
+		return vm.NIL, fmt.Errorf("negative array size: %d", n)
+	}
+	switch t := vs[0].(type) {
+	case vm.Keyword:
+		switch string(t) {
+		case "byte":
+			return vm.NewByteArray(n), nil
+		case "int", "long":
+			return vm.NewIntArray(n), nil
+		case "double", "float":
+			return vm.NewFloatArray(n), nil
+		case "object":
+			return vm.NewObjectArray(n), nil
+		}
+		return vm.NIL, fmt.Errorf("unknown array type: %s", t)
+	default:
+
+		return vm.NewObjectArray(n), nil
+	}
+}
+
+//lg:native
+//lg:name aget
+func CoreAgetf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	arr, ok := vs[0].(*vm.TypedArray)
+	if !ok {
+		return vm.NIL, fmt.Errorf("aget expects array, got %s", vs[0].Type().Name())
+	}
+	idx, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("aget index must be Int")
+	}
+	i := int(idx)
+	if i < 0 || i >= arr.Len() {
+		return vm.NIL, fmt.Errorf("array index %d out of bounds for length %d", i, arr.Len())
+	}
+	val := arr.Get(i)
+
+	for _, extra := range vs[2:] {
+		inner, ok := val.(*vm.TypedArray)
+		if !ok {
+			return vm.NIL, fmt.Errorf("aget nested: expected array, got %s", val.Type().Name())
+		}
+		idx, ok := extra.(vm.Int)
+		if !ok {
+			return vm.NIL, fmt.Errorf("aget index must be Int")
+		}
+		j := int(idx)
+		if j < 0 || j >= inner.Len() {
+			return vm.NIL, fmt.Errorf("array index %d out of bounds for length %d", j, inner.Len())
+		}
+		val = inner.Get(j)
+	}
+	return val, nil
+}
+
+//lg:native
+//lg:name aset
+func CoreAsetf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	arr, ok := vs[0].(*vm.TypedArray)
+	if !ok {
+		return vm.NIL, fmt.Errorf("aset expects array, got %s", vs[0].Type().Name())
+	}
+	idx, ok := vs[1].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("aset index must be Int")
+	}
+	i := int(idx)
+	if i < 0 || i >= arr.Len() {
+		return vm.NIL, fmt.Errorf("array index %d out of bounds for length %d", i, arr.Len())
+	}
+	if err := arr.Set(i, vs[2]); err != nil {
+		return vm.NIL, err
+	}
+	return vs[2], nil
+}
+
+//lg:native
+//lg:name alength
+func CoreAlengthf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	arr, ok := vs[0].(*vm.TypedArray)
+	if !ok {
+		return vm.NIL, fmt.Errorf("alength expects array, got %s", vs[0].Type().Name())
+	}
+	return vm.MakeInt(arr.Len()), nil
+}
+
+//lg:native
+//lg:name aclone
+func CoreAclonef(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	arr, ok := vs[0].(*vm.TypedArray)
+	if !ok {
+		return vm.NIL, fmt.Errorf("aclone expects array, got %s", vs[0].Type().Name())
+	}
+	return arr.Clone(), nil
+}
+
+//lg:native
+//lg:name bytes
+func CoreBytesf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	switch v := vs[0].(type) {
+	case vm.String:
+		data := []byte(string(v))
+		return vm.NewByteArrayFrom(data), nil
+	case *vm.TypedArray:
+		if v.Kind() == vm.ArrayByte {
+			return v, nil
+		}
+	}
+	return vm.NIL, fmt.Errorf("bytes expects String or byte-array, got %s", vs[0].Type().Name())
+}
+
+//lg:native
+//lg:name doubles
+func CoreDoublesf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if a, ok := vs[0].(*vm.TypedArray); ok && a.Kind() == vm.ArrayFloat {
+		return a, nil
+	}
+	return buildArray(vm.ArrayFloat, vs)
+}
+
+//lg:native
+//lg:name bytes?
+func CoreBytesP(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	a, ok := vs[0].(*vm.TypedArray)
+	return vm.Boolean(ok && a.Kind() == vm.ArrayByte), nil
+}
+
+//lg:native
+//lg:name var-get
+func CoreVarGet(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("var-get expects 1 arg")
+	}
+	v, ok := vs[0].(*vm.Var)
+	if !ok {
+		return vm.NIL, fmt.Errorf("var-get expects a Var")
+	}
+	return v.Deref(), nil
+}
+
+//lg:native
+//lg:name bound?
+func CoreBoundQ(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("bound? expects 1 arg")
+	}
+	v, ok := vs[0].(*vm.Var)
+	if !ok {
+		return vm.NIL, fmt.Errorf("bound? expects a Var")
+	}
+	if v.IsBound() {
+		return vm.TRUE, nil
+	}
+	return vm.FALSE, nil
+}
+
+//lg:native
+//lg:name -copy-form-source!
+func CoreCopyFormSource(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("-copy-form-source! expects 2 args")
+	}
+	if info := vm.FormSource.Get(vs[0]); info != nil {
+		vm.FormSource.Set(vs[1], *info)
+	}
+	return vs[1], nil
+}
+
+//lg:native
+//lg:name chunk->fn
+func CoreChunkToFnFn(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 3 {
+		return vm.NIL, fmt.Errorf("chunk->fn expects (arity variadic? chunk), got %d args", len(vs))
+	}
+	arityV, ok := vs[0].(vm.Int)
+	if !ok {
+		return vm.NIL, fmt.Errorf("chunk->fn: arity must be Int, got %s", vs[0].Type().Name())
+	}
+	variadic := false
+	if b, ok := vs[1].(vm.Boolean); ok {
+		variadic = bool(b)
+	} else if vs[1] != vm.NIL {
+		return vm.NIL, fmt.Errorf("chunk->fn: variadic? must be Boolean or nil, got %s", vs[1].Type().Name())
+	}
+	boxed, ok := vs[2].(*vm.Boxed)
+	if !ok {
+		return vm.NIL, fmt.Errorf("chunk->fn: third arg must be boxed CodeChunk, got %s", vs[2].Type().Name())
+	}
+	chunk, ok := boxed.Unbox().(*vm.CodeChunk)
+	if !ok {
+		return vm.NIL, fmt.Errorf("chunk->fn: boxed value is not a CodeChunk")
+	}
+	return vm.MakeFunc(int(arityV), variadic, chunk), nil
+}
+
+//lg:native
+//lg:name make-multi-arity
+func CoreMakeMultiArityFn(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("make-multi-arity expects 1 arg (list of functions)")
+	}
+	list, ok := vs[0].(*vm.List)
+	if !ok {
+		return vm.NIL, fmt.Errorf("make-multi-arity expects a list, got %s", vs[0].Type().Name())
+	}
+	var fns []vm.Value
+	for e := vm.Seq(list); e != nil; e = e.Next() {
+		fns = append(fns, e.First())
+	}
+	return vm.MakeMultiArity(fns)
+}
+
+//lg:native
+//lg:name intern
+func CoreInternf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 || len(vs) > 3 {
+		return vm.NIL, fmt.Errorf("intern expects 2 or 3 args")
+	}
+	var targetNS *vm.Namespace
+	switch n := vs[0].(type) {
+	case vm.Symbol:
+		targetNS = nsRegistry[resolveNSAlias(string(n))]
+	case *vm.Namespace:
+		targetNS = n
+	default:
+		return vm.NIL, fmt.Errorf("intern expects a namespace or symbol")
+	}
+	if targetNS == nil {
+		return vm.NIL, fmt.Errorf("namespace not found")
+	}
+	sym, ok := vs[1].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("intern expects a symbol name")
+	}
+	if len(vs) == 2 {
+		if existing := targetNS.LookupLocal(sym); existing != nil {
+			return existing, nil
+		}
+		return targetNS.Def(string(sym), vm.NIL), nil
+	}
+
+	if existing := targetNS.LookupLocal(sym); existing != nil {
+		existing.SetRoot(vs[2])
+		return existing, nil
+	}
+	v := targetNS.Def(string(sym), vs[2])
+	return v, nil
+}
+
+//lg:native
+//lg:name apply-def-meta!
+func CoreApplyDefMetaf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("apply-def-meta! expects 2 args")
+	}
+	v, ok := vs[0].(*vm.Var)
+	if !ok {
+		return vm.NIL, fmt.Errorf("apply-def-meta! expects a Var")
+	}
+	ApplyVarMeta(v, vs[1])
+	return v, nil
+}
+
+//lg:native
+//lg:name create-ns
+func CoreCreateNsf(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("create-ns expects 1 arg")
+	}
+	sym, ok := vs[0].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("create-ns expects a symbol")
+	}
+	return NS(string(sym)), nil
+}
+
+//lg:native
+//lg:name pop!
+func CorePopBang(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("pop! expects 1 arg")
+	}
+	tv, ok := vs[0].(*vm.TransientVector)
+	if !ok {
+		return vm.NIL, fmt.Errorf("pop! expects a transient vector")
+	}
+	return tv.Pop()
+}
+
+//lg:native
+//lg:name uuid?
+func CoreIsUUID(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	_, ok := vs[0].(*vm.UUID)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name inst?
+func CoreIsInst(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.FALSE, nil
+	}
+	_, ok := vs[0].(*vm.Instant)
+	return vm.Boolean(ok), nil
+}
+
+//lg:native
+//lg:name parse-uuid
+func CoreParseUUID(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("parse-uuid expects 1 arg")
+	}
+	s, ok := vs[0].(vm.String)
+	if !ok {
+		return vm.NIL, fmt.Errorf("parse-uuid expects a string, got %s", vs[0].Type().Name())
+	}
+	u := vm.ParseUUID(string(s))
+	if u == nil {
+		return vm.NIL, nil
+	}
+	return u, nil
+}
+
+//lg:native
+//lg:name ==
+func CoreNumericEq(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) < 2 {
+		return vm.TRUE, nil
+	}
+	for i := 1; i < len(vs); i++ {
+		if !vm.NumEquivalent(vs[0], vs[i]) {
+			return vm.FALSE, nil
+		}
+	}
+	return vm.TRUE, nil
 }

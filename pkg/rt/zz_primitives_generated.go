@@ -6,9 +6,2450 @@ package rt
 
 import (
 	"fmt"
-
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+func _adapt_CorePlus(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePlus(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMul(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMul(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSub(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSub(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDiv(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDiv(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePlusP(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePlusP(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMulP(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMulP(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSubP(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSubP(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedAdd(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedAdd(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedSubtract(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedSubtract(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedMultiply(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedMultiply(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedNegate(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedNegate(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedDivideInt(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedDivideInt(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedLong(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedLong(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedInt(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedInt(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedShort(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedShort(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedByte(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedByte(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedChar(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedChar(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedDouble(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedDouble(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUncheckedFloat(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUncheckedFloat(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMod(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMod(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAbs(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAbs(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreNot(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreNot(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreComplement(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreComplement(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSetMacro(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSetMacro(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreGensym(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreGensym(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreVector(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreVector(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreHashMap(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreHashMap(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreArrayMap(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreArrayMap(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSortedMap(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSortedMap(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSortedSet(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSortedSet(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSortedMapBy(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSortedMapBy(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSortedSetBy(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSortedSetBy(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChunkFirst(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChunkFirst(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChunkRest(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChunkRest(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChunkNext(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChunkNext(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChunkConsF(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChunkConsF(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChunkedSeqP(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChunkedSeqP(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChunkBufferF(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChunkBufferF(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChunkAppendF(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChunkAppendF(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChunkF(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChunkF(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRangef(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRangef(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreKeyword(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreKeyword(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSymbolf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSymbolf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAssoc(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAssoc(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDissoc(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDissoc(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreCons(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreCons(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDisj(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDisj(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreContains(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreContains(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSecond(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSecond(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsList(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsList(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreEmpty(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreEmpty(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreKeyf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreKeyf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreValf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreValf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreCount(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreCount(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreExcludeInCurrentNs(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreExcludeInCurrentNs(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUse(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUse(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAliasf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAliasf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreReferList(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreReferList(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMethodInvoke(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMethodInvoke(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRegisterHostMethod(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRegisterHostMethod(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRegisterHostClass(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRegisterHostClass(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreConcat(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreConcat(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSlurp(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSlurp(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSpit(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSpit(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAtom(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAtom(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreReset(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreReset(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreCompareAndSet(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreCompareAndSet(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreResetVals(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreResetVals(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChanf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChanf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreScopeClose(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreScopeClose(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreScopeLive(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreScopeLive(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreScopeQmark(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreScopeQmark(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMax(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMax(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMin(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMin(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreStrReplace(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreStrReplace(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreLongf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreLongf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreFloatf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreFloatf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDoublef(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDoublef(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsNumber(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsNumber(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsFloat(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsFloat(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsInt(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsInt(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChar(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChar(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRegex(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRegex(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePeek(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePeek(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePop(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePop(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIterate(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIterate(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRepeat(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRepeat(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRefer(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRefer(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreFormatf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreFormatf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRandf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRandf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRandInt(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRandInt(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRandNth(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRandNth(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreShuffle(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreShuffle(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSetRandSeedFn(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSetRandSeedFn(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreTransientf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreTransientf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePersistentf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePersistentf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreConjBang(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreConjBang(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAssocBang(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAssocBang(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDisjBang(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDisjBang(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDissocBang(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDissocBang(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMakeRecordType(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMakeRecordType(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMakeRecord(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMakeRecord(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsRecord(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsRecord(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMakeDType(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMakeDType(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMakeDTypeInstance(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMakeDTypeInstance(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSetField(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSetField(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDefProtocol(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDefProtocol(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreExtendType(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreExtendType(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMakeProtocolFn(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMakeProtocolFn(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSetInvokableProtocol(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSetInvokableProtocol(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSetDerefProtocol(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSetDerefProtocol(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSatisfies(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSatisfies(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDefMulti(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDefMulti(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDefMethod(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDefMethod(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePrStr(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePrStr(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePrnStr(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePrnStr(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePrintStr(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePrintStr(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePrintlnStr(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePrintlnStr(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreReFind(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreReFind(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreReMatches(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreReMatches(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreReSeq(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreReSeq(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRequiref(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRequiref(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreFindNs(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreFindNs(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreResolvef(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreResolvef(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAllNs(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAllNs(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreTheNs(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreTheNs(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreNsPublics(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreNsPublics(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreFindVar(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreFindVar(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreGetMethod(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreGetMethod(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreEnumerationSeq(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreEnumerationSeq(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreLazySeq(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreLazySeq(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreWithMeta(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreWithMeta(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreThrowf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreThrowf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreExInfo(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreExInfo(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreExMessage(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreExMessage(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreExData(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreExData(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreExCause(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreExCause(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDelayStar(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDelayStar(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreForce(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreForce(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsDelay(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsDelay(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsRealized(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsRealized(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreVolatilef(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreVolatilef(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreVreset(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreVreset(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreReducedf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreReducedf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsReducedf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsReducedf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitAnd(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitAnd(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitOr(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitOr(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitXor(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitXor(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitNot(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitNot(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitShiftLeft(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitShiftLeft(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitShiftRight(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitShiftRight(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUnsignedBitShiftRight(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUnsignedBitShiftRight(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitTest(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitTest(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitSet(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitSet(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitClear(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitClear(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitAndNot(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitAndNot(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBitFlip(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBitFlip(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreReGroups(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreReGroups(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePromisef(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePromisef(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDeliver(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDeliver(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAddTap(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAddTap(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRemoveTap(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRemoveTap(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreTapBang(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreTapBang(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAddWatch(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAddWatch(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRemoveWatch(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRemoveWatch(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreGetValidator(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreGetValidator(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreSubvecf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreSubvecf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsDouble(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsDouble(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreInstancep(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreInstancep(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsIFn(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsIFn(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIdentical(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIdentical(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAnyp(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAnyp(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreUnreduced(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreUnreduced(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreEnsureReduced(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreEnsureReduced(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBigintf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBigintf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsRatio(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsRatio(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsDecimal(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsDecimal(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsSorted(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsSorted(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsMap(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsMap(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsSet(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsSet(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsMapEntry(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsMapEntry(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsLazySeq(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsLazySeq(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsReversible(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsReversible(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRseqf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRseqf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreNumeratorf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreNumeratorf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDenominatorf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDenominatorf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBigdecf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBigdecf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRoundBigdec(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRoundBigdec(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRationalizef(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRationalizef(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreQuotf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreQuotf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreRemf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreRemf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreHashf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreHashf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreParseDouble(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreParseDouble(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreParseBool(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreParseBool(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsNaN(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsNaN(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsInfinite(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsInfinite(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsBool(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsBool(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsChar(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsChar(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsVar(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsVar(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreByteArrayf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreByteArrayf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreObjectArrayf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreObjectArrayf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMakeArrayf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMakeArrayf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAgetf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAgetf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAsetf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAsetf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAlengthf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAlengthf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreAclonef(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreAclonef(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBytesf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBytesf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreDoublesf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreDoublesf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBytesP(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBytesP(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreVarGet(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreVarGet(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreBoundQ(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreBoundQ(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreCopyFormSource(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreCopyFormSource(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreChunkToFnFn(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreChunkToFnFn(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreMakeMultiArityFn(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreMakeMultiArityFn(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreInternf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreInternf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreApplyDefMetaf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreApplyDefMetaf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreCreateNsf(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreCreateNsf(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CorePopBang(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CorePopBang(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsUUID(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsUUID(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreIsInst(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreIsInst(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreParseUUID(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreParseUUID(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
+
+func _adapt_CoreNumericEq(vs []vm.Value) (vm.Value, error) {
+	if len(vs) < 0 {
+		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected at least 0", len(vs))
+	}
+	r, err := CoreNumericEq(vs...)
+	if err != nil {
+		return vm.NIL, err
+	}
+	return r, nil
+}
 
 func _adapt_Name(vs []vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
@@ -234,176 +2675,6 @@ func _adapt_Reduce3_arity3(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) 
 	return r, nil
 }
 
-func _adapt_Symbol(vs []vm.Value) (vm.Value, error) {
-	if len(vs) != 1 {
-		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
-	}
-	a0 := vs[0]
-	r, err := Symbol(a0)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Assoc(vs []vm.Value) (vm.Value, error) {
-	switch len(vs) {
-	case 3:
-		return _adapt_Assoc_arity3(vs)
-	case 5:
-		return _adapt_Assoc5_arity5(vs)
-	}
-	return vm.NIL, fmt.Errorf("wrong number of args (%d)", len(vs))
-}
-
-func _adapt_Assoc_arity3(vs []vm.Value) (vm.Value, error) {
-	a0 := vs[0]
-	a1 := vs[1]
-	a2 := vs[2]
-	r, err := Assoc(a0, a1, a2)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Assoc5_arity5(vs []vm.Value) (vm.Value, error) {
-	a0 := vs[0]
-	a1 := vs[1]
-	a2 := vs[2]
-	a3 := vs[3]
-	a4 := vs[4]
-	r, err := Assoc5(a0, a1, a2, a3, a4)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_AssocBang(vs []vm.Value) (vm.Value, error) {
-	if len(vs) != 3 {
-		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 3", len(vs))
-	}
-	a0 := vs[0]
-	a1 := vs[1]
-	a2 := vs[2]
-	r, err := AssocBang(a0, a1, a2)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Swap(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-	switch len(vs) {
-	case 2:
-		return _adapt_Swap_arity2(ec, vs)
-	case 3:
-		return _adapt_Swap3_arity3(ec, vs)
-	case 4:
-		return _adapt_Swap4_arity4(ec, vs)
-	case 5:
-		return _adapt_Swap5_arity5(ec, vs)
-	}
-	return vm.NIL, fmt.Errorf("wrong number of args (%d)", len(vs))
-}
-
-func _adapt_Swap_arity2(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-	a0 := vs[0]
-	a1 := vs[1]
-	r, err := Swap(ec, a0, a1)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Swap3_arity3(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-	a0 := vs[0]
-	a1 := vs[1]
-	a2 := vs[2]
-	r, err := Swap3(ec, a0, a1, a2)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Swap4_arity4(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-	a0 := vs[0]
-	a1 := vs[1]
-	a2 := vs[2]
-	a3 := vs[3]
-	r, err := Swap4(ec, a0, a1, a2, a3)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Swap5_arity5(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
-	a0 := vs[0]
-	a1 := vs[1]
-	a2 := vs[2]
-	a3 := vs[3]
-	a4 := vs[4]
-	r, err := Swap5(ec, a0, a1, a2, a3, a4)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_NotEq(vs []vm.Value) (vm.Value, error) {
-	if len(vs) != 2 {
-		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
-	}
-	a0 := vs[0]
-	a1 := vs[1]
-	r, err := NotEq(a0, a1)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_IsMap(vs []vm.Value) (vm.Value, error) {
-	if len(vs) != 1 {
-		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
-	}
-	a0 := vs[0]
-	r, err := IsMap(a0)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Atom(vs []vm.Value) (vm.Value, error) {
-	if len(vs) != 1 {
-		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
-	}
-	a0 := vs[0]
-	r, err := Atom(a0)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Reset(vs []vm.Value) (vm.Value, error) {
-	if len(vs) != 2 {
-		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
-	}
-	a0 := vs[0]
-	a1 := vs[1]
-	r, err := Reset(a0, a1)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
 func _adapt_Namespace(vs []vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 1", len(vs))
@@ -441,19 +2712,6 @@ func _adapt_PopBinding(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 	return r, nil
 }
 
-func _adapt_ReFind(vs []vm.Value) (vm.Value, error) {
-	if len(vs) != 2 {
-		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
-	}
-	a0 := vs[0]
-	a1 := vs[1]
-	r, err := ReFind(a0, a1)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
 func _adapt_Some(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of args (%d), expected 2", len(vs))
@@ -479,132 +2737,721 @@ func _adapt_Int(vs []vm.Value) (vm.Value, error) {
 	return r, nil
 }
 
-func _adapt_Range1(vs []vm.Value) (vm.Value, error) {
-	switch len(vs) {
-	case 1:
-		return _adapt_Range1_arity1(vs)
-	case 2:
-		return _adapt_Range2_arity2(vs)
-	case 3:
-		return _adapt_Range3_arity3(vs)
-	}
-	return vm.NIL, fmt.Errorf("wrong number of args (%d)", len(vs))
-}
-
-func _adapt_Range1_arity1(vs []vm.Value) (vm.Value, error) {
-	a0 := vs[0]
-	r, err := Range1(a0)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Range2_arity2(vs []vm.Value) (vm.Value, error) {
-	a0 := vs[0]
-	a1 := vs[1]
-	r, err := Range2(a0, a1)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
-func _adapt_Range3_arity3(vs []vm.Value) (vm.Value, error) {
-	a0 := vs[0]
-	a1 := vs[1]
-	a2 := vs[2]
-	r, err := Range3(a0, a1, a2)
-	if err != nil {
-		return vm.NIL, err
-	}
-	return r, nil
-}
-
 func RegisterGeneratedPrimitives() {
 	RegisterNativeModule(&NativeModule{
 		GoPkg:     "github.com/nooga/let-go/pkg/rt",
 		Namespace: "clojure.core",
 		Fns: map[string]NativeDirectFn{
-			"name":          {GoIdent: "Name", LgName: "name", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "string", NeedsError: true},
-			"subs@2":        {GoIdent: "Subs", LgName: "subs", Arity: 2, ParamSpecs: []string{"string", "int"}, ResultSpec: "string", NeedsError: true},
-			"subs@3":        {GoIdent: "Subs3", LgName: "subs", Arity: 3, ParamSpecs: []string{"string", "int", "int"}, ResultSpec: "string", NeedsError: true},
-			"nth@2":         {GoIdent: "Nth", LgName: "nth", Arity: 2, ParamSpecs: []string{"vm.Value", "int"}, ResultSpec: "vm.Value", NeedsError: true},
-			"nth@3":         {GoIdent: "Nth3", LgName: "nth", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"deref@1":       {GoIdent: "Deref", LgName: "deref", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"deref@3":       {GoIdent: "Deref3", LgName: "deref", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"str":           {GoIdent: "Str", LgName: "str", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "string", NeedsError: true},
-			"get@2":         {GoIdent: "Get", LgName: "get", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"get@3":         {GoIdent: "Get3", LgName: "get", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"conj":          {GoIdent: "Conj", LgName: "conj", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
-			"reduce@2":      {GoIdent: "Reduce", LgName: "reduce", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"reduce@3":      {GoIdent: "Reduce3", LgName: "reduce", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"symbol":        {GoIdent: "Symbol", LgName: "symbol", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"assoc@3":       {GoIdent: "Assoc", LgName: "assoc", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"assoc@5":       {GoIdent: "Assoc5", LgName: "assoc", Arity: 5, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"assoc!":        {GoIdent: "AssocBang", LgName: "assoc!", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"swap!@2":       {GoIdent: "Swap", LgName: "swap!", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"swap!@3":       {GoIdent: "Swap3", LgName: "swap!", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"swap!@4":       {GoIdent: "Swap4", LgName: "swap!", Arity: 4, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"swap!@5":       {GoIdent: "Swap5", LgName: "swap!", Arity: 5, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"not=":          {GoIdent: "NotEq", LgName: "not=", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"map?":          {GoIdent: "IsMap", LgName: "map?", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"atom":          {GoIdent: "Atom", LgName: "atom", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"reset!":        {GoIdent: "Reset", LgName: "reset!", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"namespace":     {GoIdent: "Namespace", LgName: "namespace", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"push-binding!": {GoIdent: "PushBinding", LgName: "push-binding!", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"pop-binding!":  {GoIdent: "PopBinding", LgName: "pop-binding!", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"re-find":       {GoIdent: "ReFind", LgName: "re-find", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"some":          {GoIdent: "Some", LgName: "some", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
-			"int":           {GoIdent: "Int", LgName: "int", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"range@1":       {GoIdent: "Range1", LgName: "range", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"range@2":       {GoIdent: "Range2", LgName: "range", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"range@3":       {GoIdent: "Range3", LgName: "range", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"+":                        {GoIdent: "CorePlus", LgName: "+", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"*":                        {GoIdent: "CoreMul", LgName: "*", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"-":                        {GoIdent: "CoreSub", LgName: "-", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"/":                        {GoIdent: "CoreDiv", LgName: "/", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"+'":                       {GoIdent: "CorePlusP", LgName: "+'", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"*'":                       {GoIdent: "CoreMulP", LgName: "*'", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"-'":                       {GoIdent: "CoreSubP", LgName: "-'", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-add":            {GoIdent: "CoreUncheckedAdd", LgName: "unchecked-add", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-subtract":       {GoIdent: "CoreUncheckedSubtract", LgName: "unchecked-subtract", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-multiply":       {GoIdent: "CoreUncheckedMultiply", LgName: "unchecked-multiply", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-negate":         {GoIdent: "CoreUncheckedNegate", LgName: "unchecked-negate", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-divide-int":     {GoIdent: "CoreUncheckedDivideInt", LgName: "unchecked-divide-int", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-long":           {GoIdent: "CoreUncheckedLong", LgName: "unchecked-long", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-int":            {GoIdent: "CoreUncheckedInt", LgName: "unchecked-int", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-short":          {GoIdent: "CoreUncheckedShort", LgName: "unchecked-short", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-byte":           {GoIdent: "CoreUncheckedByte", LgName: "unchecked-byte", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-char":           {GoIdent: "CoreUncheckedChar", LgName: "unchecked-char", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-double":         {GoIdent: "CoreUncheckedDouble", LgName: "unchecked-double", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unchecked-float":          {GoIdent: "CoreUncheckedFloat", LgName: "unchecked-float", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"mod":                      {GoIdent: "CoreMod", LgName: "mod", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"abs":                      {GoIdent: "CoreAbs", LgName: "abs", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"not":                      {GoIdent: "CoreNot", LgName: "not", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"complement":               {GoIdent: "CoreComplement", LgName: "complement", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"set-macro!":               {GoIdent: "CoreSetMacro", LgName: "set-macro!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"gensym":                   {GoIdent: "CoreGensym", LgName: "gensym", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"vector":                   {GoIdent: "CoreVector", LgName: "vector", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"hash-map":                 {GoIdent: "CoreHashMap", LgName: "hash-map", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"array-map":                {GoIdent: "CoreArrayMap", LgName: "array-map", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"sorted-map":               {GoIdent: "CoreSortedMap", LgName: "sorted-map", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"sorted-set":               {GoIdent: "CoreSortedSet", LgName: "sorted-set", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"sorted-map-by":            {GoIdent: "CoreSortedMapBy", LgName: "sorted-map-by", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"sorted-set-by":            {GoIdent: "CoreSortedSetBy", LgName: "sorted-set-by", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chunk-first":              {GoIdent: "CoreChunkFirst", LgName: "chunk-first", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chunk-rest":               {GoIdent: "CoreChunkRest", LgName: "chunk-rest", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chunk-next":               {GoIdent: "CoreChunkNext", LgName: "chunk-next", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chunk-cons":               {GoIdent: "CoreChunkConsF", LgName: "chunk-cons", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chunked-seq?":             {GoIdent: "CoreChunkedSeqP", LgName: "chunked-seq?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chunk-buffer":             {GoIdent: "CoreChunkBufferF", LgName: "chunk-buffer", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chunk-append":             {GoIdent: "CoreChunkAppendF", LgName: "chunk-append", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chunk":                    {GoIdent: "CoreChunkF", LgName: "chunk", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"range":                    {GoIdent: "CoreRangef", LgName: "range", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"keyword":                  {GoIdent: "CoreKeyword", LgName: "keyword", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"symbol":                   {GoIdent: "CoreSymbolf", LgName: "symbol", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"assoc":                    {GoIdent: "CoreAssoc", LgName: "assoc", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"dissoc":                   {GoIdent: "CoreDissoc", LgName: "dissoc", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"cons":                     {GoIdent: "CoreCons", LgName: "cons", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"disj":                     {GoIdent: "CoreDisj", LgName: "disj", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"contains?":                {GoIdent: "CoreContains", LgName: "contains?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"second":                   {GoIdent: "CoreSecond", LgName: "second", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"list?":                    {GoIdent: "CoreIsList", LgName: "list?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"empty":                    {GoIdent: "CoreEmpty", LgName: "empty", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"key":                      {GoIdent: "CoreKeyf", LgName: "key", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"val":                      {GoIdent: "CoreValf", LgName: "val", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"count":                    {GoIdent: "CoreCount", LgName: "count", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"exclude-in-current-ns":    {GoIdent: "CoreExcludeInCurrentNs", LgName: "exclude-in-current-ns", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"use":                      {GoIdent: "CoreUse", LgName: "use", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"alias":                    {GoIdent: "CoreAliasf", LgName: "alias", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"refer-list":               {GoIdent: "CoreReferList", LgName: "refer-list", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			".":                        {GoIdent: "CoreMethodInvoke", LgName: ".", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"register-host-method!":    {GoIdent: "CoreRegisterHostMethod", LgName: "register-host-method!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"register-host-class!":     {GoIdent: "CoreRegisterHostClass", LgName: "register-host-class!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"concat*":                  {GoIdent: "CoreConcat", LgName: "concat*", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"slurp":                    {GoIdent: "CoreSlurp", LgName: "slurp", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"spit":                     {GoIdent: "CoreSpit", LgName: "spit", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"atom":                     {GoIdent: "CoreAtom", LgName: "atom", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"reset!":                   {GoIdent: "CoreReset", LgName: "reset!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"compare-and-set!":         {GoIdent: "CoreCompareAndSet", LgName: "compare-and-set!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"reset-vals!":              {GoIdent: "CoreResetVals", LgName: "reset-vals!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chan":                     {GoIdent: "CoreChanf", LgName: "chan", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"scope-close!":             {GoIdent: "CoreScopeClose", LgName: "scope-close!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"scope-live":               {GoIdent: "CoreScopeLive", LgName: "scope-live", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"scope?":                   {GoIdent: "CoreScopeQmark", LgName: "scope?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"max":                      {GoIdent: "CoreMax", LgName: "max", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"min":                      {GoIdent: "CoreMin", LgName: "min", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"str-replace":              {GoIdent: "CoreStrReplace", LgName: "str-replace", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"long":                     {GoIdent: "CoreLongf", LgName: "long", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"float":                    {GoIdent: "CoreFloatf", LgName: "float", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"double":                   {GoIdent: "CoreDoublef", LgName: "double", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"number?":                  {GoIdent: "CoreIsNumber", LgName: "number?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"float?":                   {GoIdent: "CoreIsFloat", LgName: "float?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"int?":                     {GoIdent: "CoreIsInt", LgName: "int?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"char":                     {GoIdent: "CoreChar", LgName: "char", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"re-pattern":               {GoIdent: "CoreRegex", LgName: "re-pattern", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"peek":                     {GoIdent: "CorePeek", LgName: "peek", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"pop":                      {GoIdent: "CorePop", LgName: "pop", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"iterate":                  {GoIdent: "CoreIterate", LgName: "iterate", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"repeat":                   {GoIdent: "CoreRepeat", LgName: "repeat", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"refer":                    {GoIdent: "CoreRefer", LgName: "refer", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"format":                   {GoIdent: "CoreFormatf", LgName: "format", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"rand":                     {GoIdent: "CoreRandf", LgName: "rand", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"rand-int":                 {GoIdent: "CoreRandInt", LgName: "rand-int", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"rand-nth":                 {GoIdent: "CoreRandNth", LgName: "rand-nth", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"shuffle":                  {GoIdent: "CoreShuffle", LgName: "shuffle", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"set-rand-seed!":           {GoIdent: "CoreSetRandSeedFn", LgName: "set-rand-seed!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"transient":                {GoIdent: "CoreTransientf", LgName: "transient", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"persistent!":              {GoIdent: "CorePersistentf", LgName: "persistent!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"conj!":                    {GoIdent: "CoreConjBang", LgName: "conj!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"assoc!":                   {GoIdent: "CoreAssocBang", LgName: "assoc!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"disj!":                    {GoIdent: "CoreDisjBang", LgName: "disj!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"dissoc!":                  {GoIdent: "CoreDissocBang", LgName: "dissoc!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"make-record-type":         {GoIdent: "CoreMakeRecordType", LgName: "make-record-type", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"make-record":              {GoIdent: "CoreMakeRecord", LgName: "make-record", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"record?":                  {GoIdent: "CoreIsRecord", LgName: "record?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"make-deftype":             {GoIdent: "CoreMakeDType", LgName: "make-deftype", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"make-deftype-instance":    {GoIdent: "CoreMakeDTypeInstance", LgName: "make-deftype-instance", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"set-field!":               {GoIdent: "CoreSetField", LgName: "set-field!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"defprotocol*":             {GoIdent: "CoreDefProtocol", LgName: "defprotocol*", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"extend-type*":             {GoIdent: "CoreExtendType", LgName: "extend-type*", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"make-protocol-fn":         {GoIdent: "CoreMakeProtocolFn", LgName: "make-protocol-fn", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"-set-invokable-protocol!": {GoIdent: "CoreSetInvokableProtocol", LgName: "-set-invokable-protocol!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"-set-deref-protocol!":     {GoIdent: "CoreSetDerefProtocol", LgName: "-set-deref-protocol!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"satisfies?":               {GoIdent: "CoreSatisfies", LgName: "satisfies?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"defmulti*":                {GoIdent: "CoreDefMulti", LgName: "defmulti*", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"defmethod*":               {GoIdent: "CoreDefMethod", LgName: "defmethod*", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"pr-str":                   {GoIdent: "CorePrStr", LgName: "pr-str", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"prn-str":                  {GoIdent: "CorePrnStr", LgName: "prn-str", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"print-str":                {GoIdent: "CorePrintStr", LgName: "print-str", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"println-str":              {GoIdent: "CorePrintlnStr", LgName: "println-str", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"re-find":                  {GoIdent: "CoreReFind", LgName: "re-find", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"re-matches":               {GoIdent: "CoreReMatches", LgName: "re-matches", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"re-seq":                   {GoIdent: "CoreReSeq", LgName: "re-seq", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"require":                  {GoIdent: "CoreRequiref", LgName: "require", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"find-ns":                  {GoIdent: "CoreFindNs", LgName: "find-ns", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"resolve":                  {GoIdent: "CoreResolvef", LgName: "resolve", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"all-ns":                   {GoIdent: "CoreAllNs", LgName: "all-ns", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"the-ns":                   {GoIdent: "CoreTheNs", LgName: "the-ns", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"ns-publics":               {GoIdent: "CoreNsPublics", LgName: "ns-publics", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"find-var":                 {GoIdent: "CoreFindVar", LgName: "find-var", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"get-method":               {GoIdent: "CoreGetMethod", LgName: "get-method", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"enumeration-seq":          {GoIdent: "CoreEnumerationSeq", LgName: "enumeration-seq", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"lazy-seq*":                {GoIdent: "CoreLazySeq", LgName: "lazy-seq*", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"with-meta":                {GoIdent: "CoreWithMeta", LgName: "with-meta", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"throw":                    {GoIdent: "CoreThrowf", LgName: "throw", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"ex-info":                  {GoIdent: "CoreExInfo", LgName: "ex-info", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"ex-message":               {GoIdent: "CoreExMessage", LgName: "ex-message", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"ex-data":                  {GoIdent: "CoreExData", LgName: "ex-data", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"ex-cause":                 {GoIdent: "CoreExCause", LgName: "ex-cause", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"delay*":                   {GoIdent: "CoreDelayStar", LgName: "delay*", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"force":                    {GoIdent: "CoreForce", LgName: "force", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"delay?":                   {GoIdent: "CoreIsDelay", LgName: "delay?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"realized?":                {GoIdent: "CoreIsRealized", LgName: "realized?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"volatile!":                {GoIdent: "CoreVolatilef", LgName: "volatile!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"vreset!":                  {GoIdent: "CoreVreset", LgName: "vreset!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"reduced":                  {GoIdent: "CoreReducedf", LgName: "reduced", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"reduced?":                 {GoIdent: "CoreIsReducedf", LgName: "reduced?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-and":                  {GoIdent: "CoreBitAnd", LgName: "bit-and", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-or":                   {GoIdent: "CoreBitOr", LgName: "bit-or", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-xor":                  {GoIdent: "CoreBitXor", LgName: "bit-xor", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-not":                  {GoIdent: "CoreBitNot", LgName: "bit-not", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-shift-left":           {GoIdent: "CoreBitShiftLeft", LgName: "bit-shift-left", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-shift-right":          {GoIdent: "CoreBitShiftRight", LgName: "bit-shift-right", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unsigned-bit-shift-right": {GoIdent: "CoreUnsignedBitShiftRight", LgName: "unsigned-bit-shift-right", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-test":                 {GoIdent: "CoreBitTest", LgName: "bit-test", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-set":                  {GoIdent: "CoreBitSet", LgName: "bit-set", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-clear":                {GoIdent: "CoreBitClear", LgName: "bit-clear", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-and-not":              {GoIdent: "CoreBitAndNot", LgName: "bit-and-not", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bit-flip":                 {GoIdent: "CoreBitFlip", LgName: "bit-flip", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"re-groups":                {GoIdent: "CoreReGroups", LgName: "re-groups", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"promise":                  {GoIdent: "CorePromisef", LgName: "promise", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"deliver":                  {GoIdent: "CoreDeliver", LgName: "deliver", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"add-tap":                  {GoIdent: "CoreAddTap", LgName: "add-tap", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"remove-tap":               {GoIdent: "CoreRemoveTap", LgName: "remove-tap", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"tap>":                     {GoIdent: "CoreTapBang", LgName: "tap>", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"add-watch":                {GoIdent: "CoreAddWatch", LgName: "add-watch", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"remove-watch":             {GoIdent: "CoreRemoveWatch", LgName: "remove-watch", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"get-validator":            {GoIdent: "CoreGetValidator", LgName: "get-validator", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"subvec":                   {GoIdent: "CoreSubvecf", LgName: "subvec", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"double?":                  {GoIdent: "CoreIsDouble", LgName: "double?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"instance?":                {GoIdent: "CoreInstancep", LgName: "instance?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"ifn?":                     {GoIdent: "CoreIsIFn", LgName: "ifn?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"identical?":               {GoIdent: "CoreIdentical", LgName: "identical?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"any?":                     {GoIdent: "CoreAnyp", LgName: "any?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"unreduced":                {GoIdent: "CoreUnreduced", LgName: "unreduced", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"ensure-reduced":           {GoIdent: "CoreEnsureReduced", LgName: "ensure-reduced", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bigint":                   {GoIdent: "CoreBigintf", LgName: "bigint", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"ratio?":                   {GoIdent: "CoreIsRatio", LgName: "ratio?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"decimal?":                 {GoIdent: "CoreIsDecimal", LgName: "decimal?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"sorted?":                  {GoIdent: "CoreIsSorted", LgName: "sorted?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"map?":                     {GoIdent: "CoreIsMap", LgName: "map?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"set?":                     {GoIdent: "CoreIsSet", LgName: "set?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"map-entry?":               {GoIdent: "CoreIsMapEntry", LgName: "map-entry?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"lazy-seq?":                {GoIdent: "CoreIsLazySeq", LgName: "lazy-seq?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"reversible?":              {GoIdent: "CoreIsReversible", LgName: "reversible?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"rseq":                     {GoIdent: "CoreRseqf", LgName: "rseq", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"numerator":                {GoIdent: "CoreNumeratorf", LgName: "numerator", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"denominator":              {GoIdent: "CoreDenominatorf", LgName: "denominator", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bigdec":                   {GoIdent: "CoreBigdecf", LgName: "bigdec", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"round-bigdec":             {GoIdent: "CoreRoundBigdec", LgName: "round-bigdec", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"rationalize":              {GoIdent: "CoreRationalizef", LgName: "rationalize", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"quot":                     {GoIdent: "CoreQuotf", LgName: "quot", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"rem":                      {GoIdent: "CoreRemf", LgName: "rem", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"hash":                     {GoIdent: "CoreHashf", LgName: "hash", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"parse-double":             {GoIdent: "CoreParseDouble", LgName: "parse-double", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"parse-boolean":            {GoIdent: "CoreParseBool", LgName: "parse-boolean", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"NaN?":                     {GoIdent: "CoreIsNaN", LgName: "NaN?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"infinite?":                {GoIdent: "CoreIsInfinite", LgName: "infinite?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"boolean?":                 {GoIdent: "CoreIsBool", LgName: "boolean?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"char?":                    {GoIdent: "CoreIsChar", LgName: "char?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"var?":                     {GoIdent: "CoreIsVar", LgName: "var?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"byte-array":               {GoIdent: "CoreByteArrayf", LgName: "byte-array", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"object-array":             {GoIdent: "CoreObjectArrayf", LgName: "object-array", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"make-array":               {GoIdent: "CoreMakeArrayf", LgName: "make-array", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"aget":                     {GoIdent: "CoreAgetf", LgName: "aget", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"aset":                     {GoIdent: "CoreAsetf", LgName: "aset", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"alength":                  {GoIdent: "CoreAlengthf", LgName: "alength", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"aclone":                   {GoIdent: "CoreAclonef", LgName: "aclone", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bytes":                    {GoIdent: "CoreBytesf", LgName: "bytes", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"doubles":                  {GoIdent: "CoreDoublesf", LgName: "doubles", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bytes?":                   {GoIdent: "CoreBytesP", LgName: "bytes?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"var-get":                  {GoIdent: "CoreVarGet", LgName: "var-get", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"bound?":                   {GoIdent: "CoreBoundQ", LgName: "bound?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"-copy-form-source!":       {GoIdent: "CoreCopyFormSource", LgName: "-copy-form-source!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"chunk->fn":                {GoIdent: "CoreChunkToFnFn", LgName: "chunk->fn", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"make-multi-arity":         {GoIdent: "CoreMakeMultiArityFn", LgName: "make-multi-arity", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"intern":                   {GoIdent: "CoreInternf", LgName: "intern", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"apply-def-meta!":          {GoIdent: "CoreApplyDefMetaf", LgName: "apply-def-meta!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"create-ns":                {GoIdent: "CoreCreateNsf", LgName: "create-ns", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"pop!":                     {GoIdent: "CorePopBang", LgName: "pop!", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"uuid?":                    {GoIdent: "CoreIsUUID", LgName: "uuid?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"inst?":                    {GoIdent: "CoreIsInst", LgName: "inst?", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"parse-uuid":               {GoIdent: "CoreParseUUID", LgName: "parse-uuid", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"==":                       {GoIdent: "CoreNumericEq", LgName: "==", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"name":                     {GoIdent: "Name", LgName: "name", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "string", NeedsError: true},
+			"subs@2":                   {GoIdent: "Subs", LgName: "subs", Arity: 2, ParamSpecs: []string{"string", "int"}, ResultSpec: "string", NeedsError: true},
+			"subs@3":                   {GoIdent: "Subs3", LgName: "subs", Arity: 3, ParamSpecs: []string{"string", "int", "int"}, ResultSpec: "string", NeedsError: true},
+			"nth@2":                    {GoIdent: "Nth", LgName: "nth", Arity: 2, ParamSpecs: []string{"vm.Value", "int"}, ResultSpec: "vm.Value", NeedsError: true},
+			"nth@3":                    {GoIdent: "Nth3", LgName: "nth", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"deref@1":                  {GoIdent: "Deref", LgName: "deref", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"deref@3":                  {GoIdent: "Deref3", LgName: "deref", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"str":                      {GoIdent: "Str", LgName: "str", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "string", NeedsError: true},
+			"get@2":                    {GoIdent: "Get", LgName: "get", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"get@3":                    {GoIdent: "Get3", LgName: "get", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"conj":                     {GoIdent: "Conj", LgName: "conj", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
+			"reduce@2":                 {GoIdent: "Reduce", LgName: "reduce", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"reduce@3":                 {GoIdent: "Reduce3", LgName: "reduce", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"namespace":                {GoIdent: "Namespace", LgName: "namespace", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"push-binding!":            {GoIdent: "PushBinding", LgName: "push-binding!", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"pop-binding!":             {GoIdent: "PopBinding", LgName: "pop-binding!", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"some":                     {GoIdent: "Some", LgName: "some", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true, NeedsEC: true},
+			"int":                      {GoIdent: "Int", LgName: "int", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
 		},
 	})
 	// Bind adapters into namespace
 	if ns := LookupOrRegisterNSNoLoad("clojure.core"); ns != nil {
-		fn0, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Name(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "name", fn0)
-		fn1, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Subs(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "subs", fn1)
-		fn2, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Nth(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "nth", fn2)
-		fn3, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Deref(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "deref", fn3)
-		fn4, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Str(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "str", fn4)
-		fn5, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Get(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "get", fn5)
-		fn6, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Conj(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "conj", fn6)
+		fn0, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePlus(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "+", fn0)
+		fn1, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMul(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "*", fn1)
+		fn2, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSub(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "-", fn2)
+		fn3, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDiv(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "/", fn3)
+		fn4, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePlusP(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "+'", fn4)
+		fn5, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMulP(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "*'", fn5)
+		fn6, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSubP(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "-'", fn6)
+		fn7, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedAdd(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-add", fn7)
+		fn8, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedSubtract(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-subtract", fn8)
+		fn9, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedMultiply(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-multiply", fn9)
+		fn10, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedNegate(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-negate", fn10)
+		fn11, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedDivideInt(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-divide-int", fn11)
+		fn12, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedLong(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-long", fn12)
+		fn13, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedInt(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-int", fn13)
+		fn14, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedShort(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-short", fn14)
+		fn15, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedByte(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-byte", fn15)
+		fn16, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedChar(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-char", fn16)
+		fn17, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedDouble(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-double", fn17)
+		fn18, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUncheckedFloat(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unchecked-float", fn18)
+		fn19, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMod(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "mod", fn19)
+		fn20, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAbs(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "abs", fn20)
+		fn21, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreNot(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "not", fn21)
+		fn22, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreComplement(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "complement", fn22)
+		fn23, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSetMacro(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "set-macro!", fn23)
+		fn24, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreGensym(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "gensym", fn24)
+		fn25, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreVector(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "vector", fn25)
+		fn26, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreHashMap(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "hash-map", fn26)
+		fn27, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreArrayMap(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "array-map", fn27)
+		fn28, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSortedMap(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "sorted-map", fn28)
+		fn29, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSortedSet(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "sorted-set", fn29)
+		fn30, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSortedMapBy(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "sorted-map-by", fn30)
+		fn31, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSortedSetBy(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "sorted-set-by", fn31)
+		fn32, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChunkFirst(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chunk-first", fn32)
+		fn33, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChunkRest(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chunk-rest", fn33)
+		fn34, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChunkNext(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chunk-next", fn34)
+		fn35, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChunkConsF(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chunk-cons", fn35)
+		fn36, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChunkedSeqP(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chunked-seq?", fn36)
+		fn37, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChunkBufferF(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chunk-buffer", fn37)
+		fn38, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChunkAppendF(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chunk-append", fn38)
+		fn39, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChunkF(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chunk", fn39)
+		fn40, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRangef(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "range", fn40)
+		fn41, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreKeyword(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "keyword", fn41)
+		fn42, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSymbolf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "symbol", fn42)
+		fn43, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAssoc(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "assoc", fn43)
+		fn44, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDissoc(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "dissoc", fn44)
+		fn45, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreCons(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "cons", fn45)
+		fn46, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDisj(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "disj", fn46)
+		fn47, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreContains(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "contains?", fn47)
+		fn48, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSecond(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "second", fn48)
+		fn49, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsList(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "list?", fn49)
+		fn50, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreEmpty(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "empty", fn50)
+		fn51, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreKeyf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "key", fn51)
+		fn52, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreValf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "val", fn52)
+		fn53, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreCount(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "count", fn53)
+		fn54, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreExcludeInCurrentNs(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "exclude-in-current-ns", fn54)
+		fn55, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUse(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "use", fn55)
+		fn56, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAliasf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "alias", fn56)
+		fn57, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreReferList(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "refer-list", fn57)
+		fn58, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMethodInvoke(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", ".", fn58)
+		fn59, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRegisterHostMethod(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "register-host-method!", fn59)
+		fn60, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRegisterHostClass(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "register-host-class!", fn60)
+		fn61, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreConcat(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "concat*", fn61)
+		fn62, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSlurp(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "slurp", fn62)
+		fn63, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSpit(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "spit", fn63)
+		fn64, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAtom(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "atom", fn64)
+		fn65, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreReset(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "reset!", fn65)
+		fn66, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreCompareAndSet(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "compare-and-set!", fn66)
+		fn67, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreResetVals(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "reset-vals!", fn67)
+		fn68, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChanf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chan", fn68)
+		fn69, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreScopeClose(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "scope-close!", fn69)
+		fn70, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreScopeLive(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "scope-live", fn70)
+		fn71, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreScopeQmark(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "scope?", fn71)
+		fn72, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMax(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "max", fn72)
+		fn73, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMin(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "min", fn73)
+		fn74, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreStrReplace(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "str-replace", fn74)
+		fn75, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreLongf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "long", fn75)
+		fn76, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreFloatf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "float", fn76)
+		fn77, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDoublef(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "double", fn77)
+		fn78, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsNumber(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "number?", fn78)
+		fn79, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsFloat(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "float?", fn79)
+		fn80, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsInt(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "int?", fn80)
+		fn81, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChar(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "char", fn81)
+		fn82, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRegex(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "re-pattern", fn82)
+		fn83, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePeek(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "peek", fn83)
+		fn84, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePop(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "pop", fn84)
+		fn85, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIterate(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "iterate", fn85)
+		fn86, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRepeat(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "repeat", fn86)
+		fn87, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRefer(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "refer", fn87)
+		fn88, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreFormatf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "format", fn88)
+		fn89, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRandf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "rand", fn89)
+		fn90, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRandInt(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "rand-int", fn90)
+		fn91, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRandNth(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "rand-nth", fn91)
+		fn92, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreShuffle(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "shuffle", fn92)
+		fn93, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSetRandSeedFn(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "set-rand-seed!", fn93)
+		fn94, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreTransientf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "transient", fn94)
+		fn95, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePersistentf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "persistent!", fn95)
+		fn96, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreConjBang(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "conj!", fn96)
+		fn97, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAssocBang(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "assoc!", fn97)
+		fn98, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDisjBang(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "disj!", fn98)
+		fn99, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDissocBang(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "dissoc!", fn99)
+		fn100, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMakeRecordType(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "make-record-type", fn100)
+		fn101, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMakeRecord(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "make-record", fn101)
+		fn102, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsRecord(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "record?", fn102)
+		fn103, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMakeDType(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "make-deftype", fn103)
+		fn104, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMakeDTypeInstance(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "make-deftype-instance", fn104)
+		fn105, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSetField(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "set-field!", fn105)
+		fn106, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDefProtocol(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "defprotocol*", fn106)
+		fn107, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreExtendType(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "extend-type*", fn107)
+		fn108, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMakeProtocolFn(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "make-protocol-fn", fn108)
+		fn109, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSetInvokableProtocol(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "-set-invokable-protocol!", fn109)
+		fn110, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSetDerefProtocol(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "-set-deref-protocol!", fn110)
+		fn111, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSatisfies(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "satisfies?", fn111)
+		fn112, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDefMulti(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "defmulti*", fn112)
+		fn113, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDefMethod(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "defmethod*", fn113)
+		fn114, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePrStr(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "pr-str", fn114)
+		fn115, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePrnStr(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "prn-str", fn115)
+		fn116, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePrintStr(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "print-str", fn116)
+		fn117, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePrintlnStr(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "println-str", fn117)
+		fn118, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreReFind(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "re-find", fn118)
+		fn119, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreReMatches(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "re-matches", fn119)
+		fn120, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreReSeq(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "re-seq", fn120)
+		fn121, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRequiref(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "require", fn121)
+		fn122, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreFindNs(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "find-ns", fn122)
+		fn123, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreResolvef(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "resolve", fn123)
+		fn124, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAllNs(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "all-ns", fn124)
+		fn125, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreTheNs(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "the-ns", fn125)
+		fn126, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreNsPublics(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "ns-publics", fn126)
+		fn127, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreFindVar(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "find-var", fn127)
+		fn128, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreGetMethod(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "get-method", fn128)
+		fn129, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreEnumerationSeq(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "enumeration-seq", fn129)
+		fn130, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreLazySeq(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "lazy-seq*", fn130)
+		fn131, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreWithMeta(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "with-meta", fn131)
+		fn132, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreThrowf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "throw", fn132)
+		fn133, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreExInfo(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "ex-info", fn133)
+		fn134, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreExMessage(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "ex-message", fn134)
+		fn135, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreExData(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "ex-data", fn135)
+		fn136, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreExCause(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "ex-cause", fn136)
+		fn137, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDelayStar(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "delay*", fn137)
+		fn138, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreForce(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "force", fn138)
+		fn139, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsDelay(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "delay?", fn139)
+		fn140, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsRealized(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "realized?", fn140)
+		fn141, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreVolatilef(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "volatile!", fn141)
+		fn142, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreVreset(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "vreset!", fn142)
+		fn143, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreReducedf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "reduced", fn143)
+		fn144, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsReducedf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "reduced?", fn144)
+		fn145, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitAnd(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-and", fn145)
+		fn146, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitOr(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-or", fn146)
+		fn147, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitXor(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-xor", fn147)
+		fn148, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitNot(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-not", fn148)
+		fn149, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitShiftLeft(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-shift-left", fn149)
+		fn150, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitShiftRight(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-shift-right", fn150)
+		fn151, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUnsignedBitShiftRight(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unsigned-bit-shift-right", fn151)
+		fn152, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitTest(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-test", fn152)
+		fn153, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitSet(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-set", fn153)
+		fn154, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitClear(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-clear", fn154)
+		fn155, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitAndNot(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-and-not", fn155)
+		fn156, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBitFlip(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bit-flip", fn156)
+		fn157, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreReGroups(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "re-groups", fn157)
+		fn158, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePromisef(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "promise", fn158)
+		fn159, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDeliver(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "deliver", fn159)
+		fn160, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAddTap(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "add-tap", fn160)
+		fn161, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRemoveTap(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "remove-tap", fn161)
+		fn162, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreTapBang(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "tap>", fn162)
+		fn163, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAddWatch(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "add-watch", fn163)
+		fn164, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRemoveWatch(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "remove-watch", fn164)
+		fn165, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreGetValidator(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "get-validator", fn165)
+		fn166, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreSubvecf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "subvec", fn166)
+		fn167, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsDouble(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "double?", fn167)
+		fn168, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreInstancep(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "instance?", fn168)
+		fn169, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsIFn(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "ifn?", fn169)
+		fn170, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIdentical(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "identical?", fn170)
+		fn171, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAnyp(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "any?", fn171)
+		fn172, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreUnreduced(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "unreduced", fn172)
+		fn173, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreEnsureReduced(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "ensure-reduced", fn173)
+		fn174, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBigintf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bigint", fn174)
+		fn175, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsRatio(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "ratio?", fn175)
+		fn176, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsDecimal(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "decimal?", fn176)
+		fn177, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsSorted(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "sorted?", fn177)
+		fn178, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsMap(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "map?", fn178)
+		fn179, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsSet(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "set?", fn179)
+		fn180, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsMapEntry(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "map-entry?", fn180)
+		fn181, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsLazySeq(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "lazy-seq?", fn181)
+		fn182, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsReversible(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "reversible?", fn182)
+		fn183, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRseqf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "rseq", fn183)
+		fn184, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreNumeratorf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "numerator", fn184)
+		fn185, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDenominatorf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "denominator", fn185)
+		fn186, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBigdecf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bigdec", fn186)
+		fn187, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRoundBigdec(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "round-bigdec", fn187)
+		fn188, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRationalizef(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "rationalize", fn188)
+		fn189, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreQuotf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "quot", fn189)
+		fn190, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreRemf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "rem", fn190)
+		fn191, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreHashf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "hash", fn191)
+		fn192, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreParseDouble(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "parse-double", fn192)
+		fn193, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreParseBool(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "parse-boolean", fn193)
+		fn194, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsNaN(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "NaN?", fn194)
+		fn195, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsInfinite(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "infinite?", fn195)
+		fn196, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsBool(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "boolean?", fn196)
+		fn197, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsChar(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "char?", fn197)
+		fn198, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsVar(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "var?", fn198)
+		fn199, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreByteArrayf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "byte-array", fn199)
+		fn200, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreObjectArrayf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "object-array", fn200)
+		fn201, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMakeArrayf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "make-array", fn201)
+		fn202, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAgetf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "aget", fn202)
+		fn203, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAsetf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "aset", fn203)
+		fn204, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAlengthf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "alength", fn204)
+		fn205, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreAclonef(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "aclone", fn205)
+		fn206, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBytesf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bytes", fn206)
+		fn207, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreDoublesf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "doubles", fn207)
+		fn208, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBytesP(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bytes?", fn208)
+		fn209, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreVarGet(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "var-get", fn209)
+		fn210, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreBoundQ(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "bound?", fn210)
+		fn211, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreCopyFormSource(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "-copy-form-source!", fn211)
+		fn212, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreChunkToFnFn(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "chunk->fn", fn212)
+		fn213, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreMakeMultiArityFn(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "make-multi-arity", fn213)
+		fn214, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreInternf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "intern", fn214)
+		fn215, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreApplyDefMetaf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "apply-def-meta!", fn215)
+		fn216, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreCreateNsf(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "create-ns", fn216)
+		fn217, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CorePopBang(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "pop!", fn217)
+		fn218, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsUUID(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "uuid?", fn218)
+		fn219, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreIsInst(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "inst?", fn219)
+		fn220, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreParseUUID(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "parse-uuid", fn220)
+		fn221, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_CoreNumericEq(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "==", fn221)
+		fn222, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Name(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "name", fn222)
+		fn223, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Subs(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "subs", fn223)
+		fn224, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Nth(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "nth", fn224)
+		fn225, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Deref(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "deref", fn225)
+		fn226, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Str(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "str", fn226)
+		fn227, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Get(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "get", fn227)
+		fn228, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Conj(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "conj", fn228)
 		defGeneratedPrimitive(ns, "clojure.core", "reduce", vm.NewCtxNativeFn("reduce", _adapt_Reduce))
-		fn8, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Symbol(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "symbol", fn8)
-		fn9, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Assoc(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "assoc", fn9)
-		fn10, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_AssocBang(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "assoc!", fn10)
-		defGeneratedPrimitive(ns, "clojure.core", "swap!", vm.NewCtxNativeFn("swap!", _adapt_Swap))
-		fn12, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_NotEq(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "not=", fn12)
-		fn13, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_IsMap(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "map?", fn13)
-		fn14, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Atom(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "atom", fn14)
-		fn15, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Reset(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "reset!", fn15)
-		fn16, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Namespace(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "namespace", fn16)
+		fn230, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Namespace(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "namespace", fn230)
 		defGeneratedPrimitive(ns, "clojure.core", "push-binding!", vm.NewCtxNativeFn("push-binding!", _adapt_PushBinding))
 		defGeneratedPrimitive(ns, "clojure.core", "pop-binding!", vm.NewCtxNativeFn("pop-binding!", _adapt_PopBinding))
-		fn19, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_ReFind(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "re-find", fn19)
 		defGeneratedPrimitive(ns, "clojure.core", "some", vm.NewCtxNativeFn("some", _adapt_Some))
-		fn21, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Int(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "int", fn21)
-		fn22, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Range1(vs) })
-		defGeneratedPrimitive(ns, "clojure.core", "range", fn22)
+		fn234, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) { return _adapt_Int(vs) })
+		defGeneratedPrimitive(ns, "clojure.core", "int", fn234)
 	}
 	RegisterNativeModule(&NativeModule{
 		GoPkg:     "github.com/nooga/let-go/pkg/rt",
