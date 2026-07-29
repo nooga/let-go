@@ -385,6 +385,9 @@ type Frame struct {
 	debug       bool
 	handlers    []exHandler  // exception handler stack (nil when unused)
 	ec          *ExecContext // per-execution context (dynamic bindings); nil = none installed
+	// chain is maintained only on the root frame of a Run: the suspended
+	// parents of the frame currently executing.
+	chain []*Frame
 }
 
 // Frame reuse via a mutex-guarded LIFO.
@@ -464,6 +467,55 @@ func ReleaseFrame(f *Frame) {
 	f.code = nil
 	f.handlers = nil
 	releaseFrame(f)
+}
+
+// childFrameFor builds a frame for a callee the dispatch loop can descend
+// into directly — a *Func, or a *Closure wrapping one. It returns (nil, nil)
+// for everything else (natives, multi-arity, multimethods, protocols), which
+// the caller routes through ec.Invoke as before.
+//
+// Arity checking and variadic packing mirror Func.invokeIn / Closure.invokeIn.
+// args may alias the caller's operand stack: the parent frame is suspended
+// underneath the child and never writes above its own sp while the child
+// runs, which is the same aliasing the nested-Run path relies on today.
+func childFrameFor(fn Fn, args []Value, ec *ExecContext) (*Frame, error) {
+	var base *Func
+	var closedOvers []Value
+	switch t := fn.(type) {
+	case *Func:
+		base = t
+	case *Closure:
+		inner, ok := t.fn.(*Func)
+		if !ok {
+			return nil, nil
+		}
+		base = inner
+		closedOvers = t.closedOvers
+	default:
+		return nil, nil
+	}
+	a := args
+	if base.isVariadric {
+		if len(a) < base.arity-1 {
+			return nil, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", base, base.arity-1, len(a)))
+		}
+		restlist, boxErr := boxRest(a[base.arity-1:])
+		if boxErr != nil {
+			return nil, boxErr
+		}
+		// Fresh slice — appending into the caller's backing array corrupts
+		// the caller's arguments (see Func.invokeIn).
+		packed := make([]Value, base.arity)
+		copy(packed, a[:base.arity-1])
+		packed[base.arity-1] = restlist
+		a = packed
+	} else if len(a) != base.arity {
+		return nil, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", base, base.arity, len(a)))
+	}
+	child := NewFrame(base.chunk, a)
+	child.closedOvers = closedOvers
+	child.ec = ec
+	return child, nil
 }
 
 func NewDebugFrame(code *CodeChunk, args []Value) *Frame {
@@ -618,7 +670,52 @@ func (f *Frame) RunProtected() (result Value, err error) {
 	return f.Run()
 }
 
+// wrapCallSite attributes err to the call currently under f.ip. The callee is
+// still on f's operand stack (the call opcodes peek rather than pop), so the
+// name is recoverable without extra bookkeeping.
+func wrapCallSite(f *Frame, err error) error {
+	srcInfo := f.code.LookupSource(f.ip)
+	name := "fn"
+	arity := int(f.code.code[f.ip+1])
+	if fraw, e := f.nth(arity); e == nil {
+		if fn, ok := AsFn(fraw); ok {
+			name = fnName(fn)
+		}
+	}
+	return NewExecutionError(fmt.Sprintf("calling %s", name)).WithSource(srcInfo).Wrap(err)
+}
+
+// Run executes this frame to completion. runLoop descends into let-go callees
+// within its own dispatch loop, so the Go stack stays flat; Run re-enters it
+// only to resume after an error has been routed to a handler further out.
 func (f *Frame) Run() (Value, error) {
+	f.chain = nil
+	cur := f
+	for {
+		v, err := cur.runLoop(f)
+		if err == nil {
+			return v, nil
+		}
+		// The erroring frame already declined the error inside runLoop. Walk
+		// out through its suspended parents offering it to each.
+		handled := false
+		for len(f.chain) > 0 {
+			parent := f.chain[len(f.chain)-1]
+			f.chain = f.chain[:len(f.chain)-1]
+			err = wrapCallSite(parent, err)
+			if parent.handleError(err) {
+				cur = parent
+				handled = true
+				break
+			}
+		}
+		if !handled {
+			return NIL, err
+		}
+	}
+}
+
+func (f *Frame) runLoop(root *Frame) (Value, error) {
 	if allocAttrEnabled {
 		attrPushFrame(f)
 		defer attrPopFrame()
@@ -684,7 +781,26 @@ func (f *Frame) Run() (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("return failed").Wrap(err)
 			}
-			return v, nil
+			if len(root.chain) == 0 {
+				return v, nil
+			}
+			parent := root.chain[len(root.chain)-1]
+			root.chain = root.chain[:len(root.chain)-1]
+			if f != root {
+				ReleaseFrame(f)
+			}
+			f = parent
+			if op := f.code.code[f.ip] & 0xff; op != OP_INVOKE && op != OP_TAIL_CALL {
+				panic(fmt.Sprintf("PROBE: parent ip %d holds %s, not a call opcode", f.ip, OpcodeToString(f.code.code[f.ip])))
+			}
+			callArity := int(f.code.code[f.ip+1])
+			if e := f.drop(callArity + 1); e != nil {
+				return NIL, NewExecutionError("cleaning stack after call").Wrap(e)
+			}
+			if e := f.push(v); e != nil {
+				return NIL, NewExecutionError("pushing return value failed").Wrap(e)
+			}
+			f.ip += 2
 
 		case OP_INVOKE:
 			arity := f.code.code[f.ip+1]
@@ -702,6 +818,21 @@ func (f *Frame) Run() (Value, error) {
 				if err != nil {
 					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 				}
+				// PROBE: direct let-go callee — descend in this loop.
+				child, cerr := childFrameFor(fn, a, f.ec)
+				if cerr != nil {
+					srcInfo := f.code.LookupSource(f.ip)
+					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(cerr)
+					if f.handleError(wrapped) {
+						continue
+					}
+					return NIL, wrapped
+				}
+				if child != nil {
+					root.chain = append(root.chain, f)
+					f = child
+					continue
+				}
 				out, err = f.ec.Invoke(fn, a)
 				if err != nil {
 					srcInfo := f.code.LookupSource(f.ip)
@@ -716,13 +847,32 @@ func (f *Frame) Run() (Value, error) {
 					return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
 				}
 			} else {
-				fraw, err := f.pop()
+				// PROBE: peek rather than pop, so the callee slot is still
+				// there for the uniform drop(arity+1) on return.
+				fraw, err := f.nth(0)
 				if err != nil {
 					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
 				}
 				fn, ok := AsFn(fraw)
 				if !ok {
 					return NIL, NewTypeError(fraw, "is not a function", nil)
+				}
+				child, cerr := childFrameFor(fn, nil, f.ec)
+				if cerr != nil {
+					srcInfo := f.code.LookupSource(f.ip)
+					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(cerr)
+					if f.handleError(wrapped) {
+						continue
+					}
+					return NIL, wrapped
+				}
+				if child != nil {
+					root.chain = append(root.chain, f)
+					f = child
+					continue
+				}
+				if _, perr := f.pop(); perr != nil {
+					return NIL, NewExecutionError("invoke instruction failed").Wrap(perr)
 				}
 				out, err = f.ec.Invoke(fn, nil)
 				if err != nil {
@@ -757,6 +907,18 @@ func (f *Frame) Run() (Value, error) {
 					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 				}
 				if _, ok := fn.(*Func); !ok {
+					// PROBE: a *Closure tail call can't reuse this frame (the
+					// closedOvers differ), but it can descend in-loop instead
+					// of recursing. Not constant-space — that's #620's job —
+					// but heap-bounded rather than Go-stack-bounded. The
+					// compiler still emits OP_RETURN after OP_TAIL_CALL, so
+					// the ordinary return path lands on it and returns.
+					child, cerr := childFrameFor(fn, a, f.ec)
+					if cerr == nil && child != nil {
+						root.chain = append(root.chain, f)
+						f = child
+						continue
+					}
 					out, err = f.ec.Invoke(fn, a)
 					if err != nil {
 						srcInfo := f.code.LookupSource(f.ip)
@@ -766,10 +928,17 @@ func (f *Frame) Run() (Value, error) {
 						}
 						return NIL, wrapped
 					}
-					// TAIL_CALL is terminal: builtin's result is this
-					// frame's result. (The compiler still emits RETURN
-					// after TAIL_CALL but it's now dead code.)
-					return out, nil
+					// TAIL_CALL is terminal: the builtin's result is this
+					// frame's result. Land it on the compiler-emitted RETURN
+					// so the chain pop stays in one place.
+					if e := f.drop(int(arity) + 1); e != nil {
+						return NIL, NewExecutionError("cleaning stack after call").Wrap(e)
+					}
+					if e := f.push(out); e != nil {
+						return NIL, NewExecutionError("pushing return value failed").Wrap(e)
+					}
+					f.ip += 2
+					continue
 				} else {
 					ff := fn.(*Func)
 					// Package variadic args for direct frame reuse
@@ -825,9 +994,12 @@ func (f *Frame) Run() (Value, error) {
 						}
 						return NIL, wrapped
 					}
-					// TAIL_CALL is terminal: builtin's result is this
-					// frame's result.
-					return out, nil
+					// TAIL_CALL is terminal — same as above.
+					if e := f.push(out); e != nil {
+						return NIL, NewExecutionError("pushing return value failed").Wrap(e)
+					}
+					f.ip += 2
+					continue
 				} else {
 					ff := fn.(*Func)
 					// Package the (nil) rest binding for variadic
