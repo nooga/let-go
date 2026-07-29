@@ -385,9 +385,9 @@ type Frame struct {
 	debug       bool
 	handlers    []exHandler  // exception handler stack (nil when unused)
 	ec          *ExecContext // per-execution context (dynamic bindings); nil = none installed
-	// chain is maintained only on the root frame of a Run: the suspended
-	// parents of the frame currently executing.
-	chain []*Frame
+	parent      *Frame       // suspended caller while the dispatch loop runs this frame
+	prevOp      uint8        // opcode profiler state, preserved while this frame is suspended
+	profileOn   bool         // profiler gate sampled at frame entry
 }
 
 // Frame reuse via a mutex-guarded LIFO.
@@ -451,6 +451,9 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 	f.sp = 0
 	f.debug = false
 	f.ec = nil
+	f.parent = nil
+	f.prevOp = 0
+	f.profileOn = false
 	if f.handlers != nil {
 		f.handlers = f.handlers[:0]
 	}
@@ -466,13 +469,16 @@ func ReleaseFrame(f *Frame) {
 	f.consts = nil
 	f.code = nil
 	f.handlers = nil
+	f.ec = nil
+	f.parent = nil
 	releaseFrame(f)
 }
 
-// childFrameFor builds a frame for a callee the dispatch loop can descend
-// into directly — a *Func, or a *Closure wrapping one. It returns (nil, nil)
-// for everything else (natives, multi-arity, multimethods, protocols), which
-// the caller routes through ec.Invoke as before.
+// childFrameFor builds a frame for a bytecode callee the dispatch loop can
+// descend into directly. It unwraps metadata, selects multi-arity variants,
+// and preserves closure captures before preparing the concrete *Func frame.
+// It returns (nil, nil) for natives, multimethods, protocols, and other
+// callables that must continue through ec.Invoke.
 //
 // Arity checking and variadic packing mirror Func.invokeIn / Closure.invokeIn.
 // args may alias the caller's operand stack: the parent frame is suspended
@@ -481,18 +487,32 @@ func ReleaseFrame(f *Frame) {
 func childFrameFor(fn Fn, args []Value, ec *ExecContext) (*Frame, error) {
 	var base *Func
 	var closedOvers []Value
-	switch t := fn.(type) {
-	case *Func:
-		base = t
-	case *Closure:
-		inner, ok := t.fn.(*Func)
-		if !ok {
+	for {
+		switch t := fn.(type) {
+		case *MetaFn:
+			fn = t.Wrapped()
+		case *MultiArityFn:
+			le := len(args)
+			if variant, ok := t.fns[le]; ok {
+				fn = variant
+				continue
+			}
+			if t.rest != nil && le >= t.rest.Arity() {
+				fn = t.rest
+				continue
+			}
+			return nil, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", t, le))
+		case *Closure:
+			closedOvers = t.closedOvers
+			fn = t.fn
+		case *Func:
+			base = t
+		default:
 			return nil, nil
 		}
-		base = inner
-		closedOvers = t.closedOvers
-	default:
-		return nil, nil
+		if base != nil {
+			break
+		}
 	}
 	a := args
 	if base.isVariadric {
@@ -685,40 +705,14 @@ func wrapCallSite(f *Frame, err error) error {
 	return NewExecutionError(fmt.Sprintf("calling %s", name)).WithSource(srcInfo).Wrap(err)
 }
 
-// Run executes this frame to completion. runLoop descends into let-go callees
-// within its own dispatch loop, so the Go stack stays flat; Run re-enters it
-// only to resume after an error has been routed to a handler further out.
-func (f *Frame) Run() (Value, error) {
-	f.chain = nil
-	cur := f
-	for {
-		v, err := cur.runLoop(f)
-		if err == nil {
-			return v, nil
-		}
-		// The erroring frame already declined the error inside runLoop. Walk
-		// out through its suspended parents offering it to each.
-		handled := false
-		for len(f.chain) > 0 {
-			parent := f.chain[len(f.chain)-1]
-			f.chain = f.chain[:len(f.chain)-1]
-			err = wrapCallSite(parent, err)
-			if parent.handleError(err) {
-				cur = parent
-				handled = true
-				break
-			}
-		}
-		if !handled {
-			return NIL, err
-		}
-	}
+type frameRunState struct {
+	root    *Frame
+	current *Frame
 }
 
-func (f *Frame) runLoop(root *Frame) (Value, error) {
+func enterFrame(f *Frame) {
 	if allocAttrEnabled {
 		attrPushFrame(f)
-		defer attrPopFrame()
 	}
 	// Dynamically-scoped tracing (*lg-trace*). Coarse gate first: TraceArmed is
 	// false until *lg-trace* is first set truthy, so the precise per-frame Deref
@@ -734,21 +728,110 @@ func (f *Frame) runLoop(root *Frame) (Value, error) {
 		fmt.Print("run", f.args, "\n")
 		f.code.Debug()
 	}
-	// Profiler state: previous opcode byte (0 at frame entry). Only
-	// touched when ProfilingEnabled — the load is a single atomic
-	// branch per opcode, well-predicted in the disabled case.
-	var prevOp uint8
-	profileOn := ProfilingEnabled.Load()
+	// Profiler state belongs to the logical frame so suspending a parent and
+	// running a child neither joins their opcode pairs nor loses the parent's
+	// previous opcode when it resumes.
+	f.prevOp = 0
+	f.profileOn = ProfilingEnabled.Load()
+}
+
+func leaveFrame(_ *Frame) {
+	if allocAttrEnabled {
+		attrPopFrame()
+	}
+}
+
+// releaseFailedFrames drops the current failed frame and each unhandled
+// suspended parent. The root is owned by Run's caller and is never pooled here.
+// It returns the first parent whose handler accepts err, or nil if none does.
+func releaseFailedFrames(state *frameRunState, err error) (*Frame, error) {
+	failed := state.current
+	parent := failed.parent
+	failed.parent = nil
+	if failed != state.root {
+		ReleaseFrame(failed)
+	}
+	for parent != nil {
+		next := parent.parent
+		err = wrapCallSite(parent, err)
+		if parent.handleError(err) {
+			state.current = parent
+			return parent, err
+		}
+		leaveFrame(parent)
+		parent.parent = nil
+		if parent != state.root {
+			ReleaseFrame(parent)
+		}
+		parent = next
+	}
+	return nil, err
+}
+
+func releasePanickedFrames(state *frameRunState) {
+	failed := state.current
+	parent := failed.parent
+	failed.parent = nil
+	if failed != state.root {
+		ReleaseFrame(failed)
+	}
+	for parent != nil {
+		next := parent.parent
+		leaveFrame(parent)
+		parent.parent = nil
+		if parent != state.root {
+			ReleaseFrame(parent)
+		}
+		parent = next
+	}
+}
+
+// Run executes this frame to completion. runLoop descends into bytecode
+// callees within one dispatch loop, keeping the Go stack flat. A parent link
+// on each live frame carries the suspended call chain without a retained slice.
+func (f *Frame) Run() (result Value, resultErr error) {
+	f.parent = nil
+	state := frameRunState{root: f, current: f}
+	entering := true
+	defer func() {
+		if r := recover(); r != nil {
+			// runLoop's defer already left the current frame. Balance and release
+			// every suspended child-owned frame before preserving the panic.
+			releasePanickedFrames(&state)
+			panic(r)
+		}
+	}()
+	for {
+		result, resultErr = state.current.runLoop(&state, entering)
+		entering = false
+		if resultErr == nil {
+			return result, nil
+		}
+		var resumed *Frame
+		resumed, resultErr = releaseFailedFrames(&state, resultErr)
+		if resumed == nil {
+			return NIL, resultErr
+		}
+	}
+}
+
+func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
+	if entering {
+		enterFrame(f)
+	}
+	// f changes as the loop descends and returns. On a final return or error,
+	// leave whichever logical frame is current; suspended parents remain active.
+	defer func() { leaveFrame(f) }()
 	for {
 		inst := f.code.code[f.ip]
 		if f.debug {
 			f.stackDbg()
 			fmt.Println("#", f.ip, OpcodeToString(inst))
 		}
-		if profileOn {
+		if f.profileOn {
 			currOp := uint8(inst & 0xff)
-			RecordOpcode(prevOp, currOp)
-			prevOp = currOp
+			RecordOpcode(f.prevOp, currOp)
+			f.prevOp = currOp
 		}
 		switch inst & 0xff {
 		case OP_NOOP:
@@ -781,15 +864,16 @@ func (f *Frame) runLoop(root *Frame) (Value, error) {
 			if err != nil {
 				return NIL, NewExecutionError("return failed").Wrap(err)
 			}
-			if len(root.chain) == 0 {
+			if f.parent == nil {
 				return v, nil
 			}
-			parent := root.chain[len(root.chain)-1]
-			root.chain = root.chain[:len(root.chain)-1]
-			if f != root {
-				ReleaseFrame(f)
-			}
+			child := f
+			parent := child.parent
+			child.parent = nil
+			leaveFrame(child)
+			ReleaseFrame(child)
 			f = parent
+			state.current = f
 			if op := f.code.code[f.ip] & 0xff; op != OP_INVOKE && op != OP_TAIL_CALL {
 				panic(fmt.Sprintf("PROBE: parent ip %d holds %s, not a call opcode", f.ip, OpcodeToString(f.code.code[f.ip])))
 			}
@@ -829,8 +913,10 @@ func (f *Frame) runLoop(root *Frame) (Value, error) {
 					return NIL, wrapped
 				}
 				if child != nil {
-					root.chain = append(root.chain, f)
+					child.parent = f
 					f = child
+					state.current = f
+					enterFrame(f)
 					continue
 				}
 				out, err = f.ec.Invoke(fn, a)
@@ -867,8 +953,10 @@ func (f *Frame) runLoop(root *Frame) (Value, error) {
 					return NIL, wrapped
 				}
 				if child != nil {
-					root.chain = append(root.chain, f)
+					child.parent = f
 					f = child
+					state.current = f
+					enterFrame(f)
 					continue
 				}
 				if _, perr := f.pop(); perr != nil {
@@ -915,8 +1003,10 @@ func (f *Frame) runLoop(root *Frame) (Value, error) {
 					// the ordinary return path lands on it and returns.
 					child, cerr := childFrameFor(fn, a, f.ec)
 					if cerr == nil && child != nil {
-						root.chain = append(root.chain, f)
+						child.parent = f
 						f = child
+						state.current = f
+						enterFrame(f)
 						continue
 					}
 					out, err = f.ec.Invoke(fn, a)
