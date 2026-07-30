@@ -375,6 +375,7 @@ type exHandler struct {
 type Frame struct {
 	stack       []Value
 	args        []Value
+	argbuf      []Value // frame-owned arguments used by same-frame tail replacement
 	closedOvers []Value
 	argc        int
 	consts      *Consts
@@ -442,6 +443,7 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 		f.stack = make([]Value, needed)
 	}
 	f.args = args
+	f.argbuf = f.argbuf[:0]
 	f.argc = len(args)
 	f.closedOvers = nil
 	f.consts = code.consts
@@ -465,6 +467,8 @@ func NewFrame(code *CodeChunk, args []Value) *Frame {
 // We only nil out the large reference fields to avoid pinning code/const objects.
 func ReleaseFrame(f *Frame) {
 	f.args = nil
+	clear(f.argbuf)
+	f.argbuf = nil
 	f.closedOvers = nil
 	f.consts = nil
 	f.code = nil
@@ -474,68 +478,44 @@ func ReleaseFrame(f *Frame) {
 	releaseFrame(f)
 }
 
-// childFrameFor builds a frame for a bytecode callee the dispatch loop can
-// descend into directly. It unwraps metadata, selects multi-arity variants,
-// and preserves closure captures before preparing the concrete *Func frame.
-// It returns (nil, nil) for natives, multimethods, protocols, and other
-// callables that must continue through ec.Invoke.
-//
-// Arity checking and variadic packing mirror Func.invokeIn / Closure.invokeIn.
-// args may alias the caller's operand stack: the parent frame is suspended
-// underneath the child and never writes above its own sp while the child
-// runs, which is the same aliasing the nested-Run path relies on today.
-func childFrameFor(fn Fn, args []Value, ec *ExecContext) (*Frame, error) {
-	var base *Func
-	var closedOvers []Value
-	for {
-		switch t := fn.(type) {
-		case *MetaFn:
-			fn = t.Wrapped()
-		case *MultiArityFn:
-			le := len(args)
-			if variant, ok := t.fns[le]; ok {
-				fn = variant
-				continue
-			}
-			if t.rest != nil && le >= t.rest.Arity() {
-				fn = t.rest
-				continue
-			}
-			return nil, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", t, le))
-		case *Closure:
-			closedOvers = t.closedOvers
-			fn = t.fn
-		case *Func:
-			base = t
-		default:
-			return nil, nil
-		}
-		if base != nil {
-			break
-		}
-	}
-	a := args
-	if base.isVariadric {
-		if len(a) < base.arity-1 {
-			return nil, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", base, base.arity-1, len(a)))
-		}
-		restlist, boxErr := boxRest(a[base.arity-1:])
-		if boxErr != nil {
-			return nil, boxErr
-		}
-		// Fresh slice — appending into the caller's backing array corrupts
-		// the caller's arguments (see Func.invokeIn).
-		packed := make([]Value, base.arity)
-		copy(packed, a[:base.arity-1])
-		packed[base.arity-1] = restlist
-		a = packed
-	} else if len(a) != base.arity {
-		return nil, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", base, base.arity, len(a)))
-	}
-	child := NewFrame(base.chunk, a)
-	child.closedOvers = closedOvers
+// newFrameForBytecodeCall is the non-tail transition for a prepared bytecode
+// target. Fixed-arity target.args may borrow the suspended parent's operand
+// stack; that is safe for a child frame because the parent does not resume
+// until the child has completed.
+func newFrameForBytecodeCall(target bytecodeCallTarget, ec *ExecContext) *Frame {
+	child := NewFrame(target.fn.chunk, target.args)
+	child.closedOvers = target.closedOvers
 	child.ec = ec
-	return child, nil
+	return child
+}
+
+// installBytecodeCall is the same-frame transition used by the existing
+// direct-*Func tail-call path. target.args may be a window into f.stack, so
+// copy it into the frame-owned buffer before resetting or reusing that stack.
+func installBytecodeCall(f *Frame, target bytecodeCallTarget) {
+	argc := len(target.args)
+	if cap(f.argbuf) < argc {
+		f.argbuf = make([]Value, argc)
+	} else {
+		clear(f.argbuf)
+		f.argbuf = f.argbuf[:argc]
+	}
+	copy(f.argbuf, target.args)
+
+	f.args = f.argbuf
+	f.argc = argc
+	f.closedOvers = target.closedOvers
+	f.code = target.fn.chunk
+	f.consts = f.code.consts
+	f.constsc = f.code.consts.count()
+	f.ip = 0
+	f.sp = 0
+	needed := max(f.code.maxStack, 4)
+	if cap(f.stack) < needed {
+		f.stack = make([]Value, needed)
+	} else {
+		f.stack = f.stack[:needed]
+	}
 }
 
 func NewDebugFrame(code *CodeChunk, args []Value) *Frame {
@@ -690,17 +670,46 @@ func (f *Frame) RunProtected() (result Value, err error) {
 	return f.Run()
 }
 
+// suspendedCallArity validates the continuation stored in a suspended parent.
+// Returning an error here is preferable to either panicking or trusting corrupt
+// bytecode and silently dropping an arbitrary number of operand-stack values.
+func suspendedCallArity(f *Frame) (int, *ExecutionError) {
+	if f == nil || f.code == nil {
+		return 0, NewExecutionError("invalid suspended call: missing frame code")
+	}
+	if f.ip < 0 || f.ip >= len(f.code.code) {
+		return 0, NewExecutionError(fmt.Sprintf("invalid suspended call: instruction pointer %d is out of bounds", f.ip))
+	}
+	if f.ip+1 >= len(f.code.code) {
+		return 0, NewExecutionError(fmt.Sprintf("invalid suspended call at %d: missing arity operand", f.ip))
+	}
+	if f.sp < 0 || f.sp > len(f.stack) {
+		return 0, NewExecutionError(fmt.Sprintf("invalid suspended call at %d: stack depth %d is out of bounds", f.ip, f.sp))
+	}
+	op := f.code.code[f.ip] & 0xff
+	if op != OP_INVOKE && op != OP_TAIL_CALL {
+		return 0, NewExecutionError(fmt.Sprintf("invalid suspended call at %d: found %s", f.ip, OpcodeToString(f.code.code[f.ip])))
+	}
+	arity := int(f.code.code[f.ip+1])
+	if arity < 0 || arity+1 > f.sp {
+		return 0, NewExecutionError(fmt.Sprintf("invalid suspended call at %d: arity %d exceeds stack depth %d", f.ip, arity, f.sp))
+	}
+	return arity, nil
+}
+
 // wrapCallSite attributes err to the call currently under f.ip. The callee is
 // still on f's operand stack (the call opcodes peek rather than pop), so the
 // name is recoverable without extra bookkeeping.
 func wrapCallSite(f *Frame, err error) error {
+	arity, siteErr := suspendedCallArity(f)
+	if siteErr != nil {
+		return NewExecutionError(siteErr.message).Wrap(err)
+	}
 	srcInfo := f.code.LookupSource(f.ip)
 	name := "fn"
-	arity := int(f.code.code[f.ip+1])
-	if fraw, e := f.nth(arity); e == nil {
-		if fn, ok := AsFn(fraw); ok {
-			name = fnName(fn)
-		}
+	calleeIndex := f.sp - 1 - arity
+	if fn, ok := AsFn(f.stack[calleeIndex]); ok {
+		name = fnName(fn)
 	}
 	return NewExecutionError(fmt.Sprintf("calling %s", name)).WithSource(srcInfo).Wrap(err)
 }
@@ -728,9 +737,9 @@ func enterFrame(f *Frame) {
 		fmt.Print("run", f.args, "\n")
 		f.code.Debug()
 	}
-	// Profiler state belongs to the logical frame so suspending a parent and
-	// running a child neither joins their opcode pairs nor loses the parent's
-	// previous opcode when it resumes.
+	// The newly entered frame starts a fresh opcode-pair sequence at zero.
+	// Suspended parents retain prevOp on their own Frame, so resuming records
+	// the next parent-local pair; cross-frame pairs are intentionally omitted.
 	f.prevOp = 0
 	f.profileOn = ProfilingEnabled.Load()
 }
@@ -874,10 +883,13 @@ func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
 			ReleaseFrame(child)
 			f = parent
 			state.current = f
-			if op := f.code.code[f.ip] & 0xff; op != OP_INVOKE && op != OP_TAIL_CALL {
-				panic(fmt.Sprintf("PROBE: parent ip %d holds %s, not a call opcode", f.ip, OpcodeToString(f.code.code[f.ip])))
+			callArity, callErr := suspendedCallArity(f)
+			if callErr != nil {
+				if f.handleError(callErr) {
+					continue
+				}
+				return NIL, callErr
 			}
-			callArity := int(f.code.code[f.ip+1])
 			if e := f.drop(callArity + 1); e != nil {
 				return NIL, NewExecutionError("cleaning stack after call").Wrap(e)
 			}
@@ -902,8 +914,7 @@ func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
 				if err != nil {
 					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 				}
-				// PROBE: direct let-go callee — descend in this loop.
-				child, cerr := childFrameFor(fn, a, f.ec)
+				target, direct, cerr := resolveBytecodeCall(fn, a)
 				if cerr != nil {
 					srcInfo := f.code.LookupSource(f.ip)
 					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(cerr)
@@ -912,7 +923,8 @@ func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
 					}
 					return NIL, wrapped
 				}
-				if child != nil {
+				if direct {
+					child := newFrameForBytecodeCall(target, f.ec)
 					child.parent = f
 					f = child
 					state.current = f
@@ -933,8 +945,8 @@ func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
 					return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
 				}
 			} else {
-				// PROBE: peek rather than pop, so the callee slot is still
-				// there for the uniform drop(arity+1) on return.
+				// Peek rather than pop, so the callee slot remains for the
+				// uniform drop(arity+1) when a descended child returns.
 				fraw, err := f.nth(0)
 				if err != nil {
 					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
@@ -943,7 +955,7 @@ func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
 				if !ok {
 					return NIL, NewTypeError(fraw, "is not a function", nil)
 				}
-				child, cerr := childFrameFor(fn, nil, f.ec)
+				target, direct, cerr := resolveBytecodeCall(fn, nil)
 				if cerr != nil {
 					srcInfo := f.code.LookupSource(f.ip)
 					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(cerr)
@@ -952,7 +964,8 @@ func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
 					}
 					return NIL, wrapped
 				}
-				if child != nil {
+				if direct {
+					child := newFrameForBytecodeCall(target, f.ec)
 					child.parent = f
 					f = child
 					state.current = f
@@ -980,142 +993,69 @@ func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
 
 		case OP_TAIL_CALL:
 			arity := f.code.code[f.ip+1]
-			var out Value
+			// Keep the callee on the operand stack when descending so the
+			// return path can use one drop(arity+1) protocol for every arity.
+			fraw, err := f.nth(int(arity))
+			if err != nil {
+				return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
+			}
+			fn, ok := AsFn(fraw)
+			if !ok {
+				return NIL, NewTypeError(fraw, "is not a function", nil)
+			}
+			var a []Value
 			if arity > 0 {
-				fraw, err := f.nth(int(arity))
-				if err != nil {
-					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
-				}
-				fn, ok := AsFn(fraw)
-				if !ok {
-					return NIL, NewTypeError(fraw, "is not a function", nil)
-				}
-				a, err := f.mult(0, int(arity))
+				a, err = f.mult(0, int(arity))
 				if err != nil {
 					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
 				}
-				if _, ok := fn.(*Func); !ok {
-					// PROBE: a *Closure tail call can't reuse this frame (the
-					// closedOvers differ), but it can descend in-loop instead
-					// of recursing. Not constant-space — that's #620's job —
-					// but heap-bounded rather than Go-stack-bounded. The
-					// compiler still emits OP_RETURN after OP_TAIL_CALL, so
-					// the ordinary return path lands on it and returns.
-					child, cerr := childFrameFor(fn, a, f.ec)
-					if cerr == nil && child != nil {
-						child.parent = f
-						f = child
-						state.current = f
-						enterFrame(f)
-						continue
-					}
-					out, err = f.ec.Invoke(fn, a)
-					if err != nil {
-						srcInfo := f.code.LookupSource(f.ip)
-						wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
-						if f.handleError(wrapped) {
-							continue
-						}
-						return NIL, wrapped
-					}
-					// TAIL_CALL is terminal: the builtin's result is this
-					// frame's result. Land it on the compiler-emitted RETURN
-					// so the chain pop stays in one place.
-					if e := f.drop(int(arity) + 1); e != nil {
-						return NIL, NewExecutionError("cleaning stack after call").Wrap(e)
-					}
-					if e := f.push(out); e != nil {
-						return NIL, NewExecutionError("pushing return value failed").Wrap(e)
-					}
-					f.ip += 2
-					continue
-				} else {
-					ff := fn.(*Func)
-					// Package variadic args for direct frame reuse
-					if ff.isVariadric {
-						if len(a) < ff.arity-1 {
-							return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", ff, ff.arity-1, len(a)))
-						}
-						sargs := a[0 : ff.arity-1]
-						rest := a[ff.arity-1:]
-						restlist, boxErr := boxRest(rest)
-						if boxErr != nil {
-							return NIL, boxErr
-						}
-						a = append(sargs, restlist)
-					}
-					f.code = ff.chunk
-					f.consts = f.code.consts
-					f.constsc = f.code.consts.count()
-					f.ip = 0
-					f.sp = 0
-					if len(f.stack) < f.code.maxStack {
-						f.stack = make([]Value, f.code.maxStack)
-						f.args = a
-						f.argc = len(a)
-					} else {
-						la := len(a)
-						if la <= f.argc {
-							copy(f.args, a)
-						} else {
-							f.args = make([]Value, la)
-							copy(f.args, a)
-						}
-						f.argc = len(a)
-					}
-					continue
-				}
-			} else {
-				fraw, err := f.pop()
-				if err != nil {
-					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
-				}
-				fn, ok := AsFn(fraw)
-				if !ok {
-					return NIL, NewTypeError(fraw, "is not a function", nil)
-				}
-				if _, ok := fn.(*Func); !ok {
-					out, err = f.ec.Invoke(fn, nil)
-					if err != nil {
-						srcInfo := f.code.LookupSource(f.ip)
-						wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
-						if f.handleError(wrapped) {
-							continue
-						}
-						return NIL, wrapped
-					}
-					// TAIL_CALL is terminal — same as above.
-					if e := f.push(out); e != nil {
-						return NIL, NewExecutionError("pushing return value failed").Wrap(e)
-					}
-					f.ip += 2
-					continue
-				} else {
-					ff := fn.(*Func)
-					// Package the (nil) rest binding for variadic
-					// functions, exactly like the arity > 0 path above;
-					// without it the reused frame runs LOAD_ARG against
-					// zero args.
-					var a []Value
-					if ff.isVariadric {
-						if ff.arity > 1 {
-							return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got 0", ff, ff.arity-1))
-						}
-						a = []Value{NIL}
-					}
-					f.code = ff.chunk
-					f.consts = f.code.consts
-					f.constsc = f.code.consts.count()
-					f.ip = 0
-					f.sp = 0
-					if len(f.stack) < f.code.maxStack {
-						f.stack = make([]Value, f.code.maxStack)
-					}
-					f.args = a
-					f.argc = len(a)
-					continue
-				}
 			}
+
+			target, direct, resolveErr := resolveBytecodeCall(fn, a)
+			if resolveErr != nil {
+				srcInfo := f.code.LookupSource(f.ip)
+				wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(resolveErr)
+				if f.handleError(wrapped) {
+					continue
+				}
+				return NIL, wrapped
+			}
+			if direct {
+				if _, reuse := fn.(*Func); reuse {
+					installBytecodeCall(f, target)
+					continue
+				}
+				// Closure, multi-arity, and metadata-wrapped bytecode
+				// callees descend without re-entering Frame.Run. #620 will
+				// move these targets onto the same-frame transition.
+				child := newFrameForBytecodeCall(target, f.ec)
+				child.parent = f
+				f = child
+				state.current = f
+				enterFrame(f)
+				continue
+			}
+
+			out, err := f.ec.Invoke(fn, a)
+			if err != nil {
+				srcInfo := f.code.LookupSource(f.ip)
+				wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
+				if f.handleError(wrapped) {
+					continue
+				}
+				return NIL, wrapped
+			}
+			// A native/non-bytecode tail call is terminal. Land its result
+			// on the compiler-emitted RETURN so frame-chain unwind remains
+			// centralized in OP_RETURN.
+			if e := f.drop(int(arity) + 1); e != nil {
+				return NIL, NewExecutionError("cleaning stack after call").Wrap(e)
+			}
+			if e := f.push(out); e != nil {
+				return NIL, NewExecutionError("pushing return value failed").Wrap(e)
+			}
+			f.ip += 2
+			continue
 
 		case OP_BRANCH_TRUE:
 			offset := f.code.code[f.ip+1]
