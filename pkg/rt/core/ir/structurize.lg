@@ -211,6 +211,14 @@
       (= op :return)    [:return b]
       (= op :recur-fn)  [:tail b]
 
+      ;; build.lg no longer emits :tail-call — function-level recur is
+      ;; :recur-fn now. Without this arm a stray one would land in the
+      ;; :else fallback below and degrade to an unstructured :goto, which
+      ;; is a silent miscompile risk rather than a visible regression.
+      (= op :tail-call)
+      (throw (str "ir/structurize: unexpected :tail-call terminator in block "
+                  b " — build.lg emits :recur-fn for function-level recur"))
+
       (= op :branch)
       (let [edge (ir/aux term f)]
         [:seq b edge (edge->node f ctx edge stop)])

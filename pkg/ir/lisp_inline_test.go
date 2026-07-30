@@ -332,7 +332,11 @@ func TestInlineRejectsFunctionLevelRecurCallee(t *testing.T) {
 			got, rendered)
 	}
 	// The back-edge must stay inside Cnt: Usec2 gets no loop of its own.
-	usec := rendered[strings.Index(rendered, "func Usec2("):]
+	at := strings.Index(rendered, "func Usec2(")
+	if at < 0 {
+		t.Fatalf("no func Usec2( in rendered output:\n%s", rendered)
+	}
+	usec := rendered[at:]
 	if strings.Contains(usec, "func_entry") {
 		t.Errorf("recur back-edge was spliced into the caller:\n%s", usec)
 	}

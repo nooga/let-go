@@ -103,6 +103,9 @@
   (if (< n 0) (+ (* 100 a) (* 10 b) c) (recur b c a (dec n))))
 ;; recur in the OTHER arm, so the back-edge is not the fall-through branch.
 (defn ir-fnrecur-else [i n] (if (>= i n) i (recur (inc i) n)))
+;; Variadic: the back-edge has to rebind the packed rest slot, not just the
+;; fixed params. recur passes the rest as one seq, so the arity is 2 here.
+(defn ir-fnrecur-var [n & xs] (if (< n 0) (apply + xs) (recur (dec n) (cons n xs))))
 
 (set! *ir-compile* false)
 
@@ -114,6 +117,7 @@
 (defn bc-fnrecur-rot [a b c n]
   (if (< n 0) (+ (* 100 a) (* 10 b) c) (recur b c a (dec n))))
 (defn bc-fnrecur-else [i n] (if (>= i n) i (recur (inc i) n)))
+(defn bc-fnrecur-var [n & xs] (if (< n 0) (apply + xs) (recur (dec n) (cons n xs))))
 
 (deftest ir-compile-fn-level-recur-arities
   (testing "a taken function-level recur runs and matches the bytecode backend"
@@ -141,6 +145,16 @@
   (testing "the back-edge works from either arm of the if"
     (is (= (bc-fnrecur-else 0 4) (ir-fnrecur-else 0 4)))
     (is (= 4 (ir-fnrecur-else 0 4)))))
+
+(deftest ir-compile-fn-level-recur-variadic
+  (testing "a variadic function-level recur rebinds the packed rest slot"
+    (is (= (bc-fnrecur-var 3) (ir-fnrecur-var 3)))
+    (is (= (bc-fnrecur-var 2 10) (ir-fnrecur-var 2 10)))
+    (is (= 6 (ir-fnrecur-var 3)))
+    (is (= 13 (ir-fnrecur-var 2 10))))
+  (testing "an untaken variadic back-edge still returns"
+    (is (= (bc-fnrecur-var -1) (ir-fnrecur-var -1)))
+    (is (= 0 (ir-fnrecur-var -1)))))
 
 (deftest ir-compile-fn-level-recur-deep
   (testing "the back-edge is a jump, so depth is unbounded"
