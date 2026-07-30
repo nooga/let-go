@@ -79,3 +79,42 @@ func TestTypedParamStillSkipsOverride(t *testing.T) {
 		t.Fatalf("typed-PARAM fn registered an override; the wrapper cannot soundly unbox args[i]:\n%s", src)
 	}
 }
+
+// Multi-arity sibling of TestTypedReturnRegistersBoxedOverride. Both arities of
+// `choose` return bool, so before #554's multi-arity arm the whole fn was
+// disqualified from override registration (multi-arity-override-groups required
+// every arity to be uniformly vm.Value) and emitted no init() at all — the two
+// native helpers were unreachable from a dynamic call.
+func TestTypedReturnRegistersMultiArityOverride(t *testing.T) {
+	ensureLoader()
+
+	v := runLispExpr(t, `(do (create-ns (quote tmulti))
+      (ir.passes.pipeline/lower-ns-to-go "tmulti" (quote tmulti)
+        [(quote (defn choose ([x] (= x 1)) ([x y] (= x y))))]))`)
+	s, ok := v.(vm.String)
+	if !ok {
+		t.Fatalf("expected rendered Go source string, got %T", v)
+	}
+	src := string(s)
+
+	// Precondition: both arities lowered with typed bool returns.
+	for _, want := range []string{"func Choose_1(", "func Choose_2("} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("expected %s in the lowered output:\n%s", want, src)
+		}
+	}
+	if !regexp.MustCompile(`func Choose_1\([^)]*\) bool`).MatchString(src) {
+		t.Fatalf("expected Choose_1 to return a typed bool:\n%s", src)
+	}
+
+	// The fix: one combined adapter registered under the bare name, with each
+	// typed arm boxed independently.
+	if !regexp.MustCompile(`"choose":\s*__gogen_wrap`).MatchString(src) {
+		t.Fatalf("multi-arity typed-return fn is NOT registered (#554):\n%s", src)
+	}
+	for _, want := range []string{"vm.Boolean(Choose_1(ec, args[0]))", "vm.Boolean(Choose_2(ec, args[0], args[1]))"} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("expected each arm boxed — missing %q:\n%s", want, src)
+		}
+	}
+}

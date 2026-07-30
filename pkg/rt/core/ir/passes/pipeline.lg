@@ -963,7 +963,8 @@
    __gogen_wrap/NewCtxNativeFn) so the dynamic var path stays multi-arity AND is
    context-aware — the caller's ec is threaded into each helper (a
    MakeNativeMultiArity value can't, being built at package load with no ec).
-   Only used when every arity is override-eligible (uniform vm.Value)."
+   Every arity is adaptable: uniform vm.Value, or a typed return this boxes
+   per-arm (#554)."
   (let [fn-name  (:fn-name (first arities))
         args-id  (gogen/ident "args")
         len-call (gogen/call (gogen/ident "len") [args-id])
@@ -976,9 +977,17 @@
                                    (range arity))
                 inner-call   (gogen/call (gogen/ident go-name)
                                          (into [(gogen/ident "ec")] arg-exprs))
-                ret-stmt     (if needs-error?
-                               (gogen/return-stmt [inner-call])
-                               (gogen/return-stmt [inner-call (gogen/ident "nil")]))]
+                ;; Each arm boxes independently: arities are admitted per-arm,
+                ;; so one may return vm.Value while another returns a typed
+                ;; primitive that needs lifting (#554).
+                ret-stmt     (cond
+                               (:override-boxable-return? r)
+                               (gogen/return-stmt
+                                 [(box-return-expr (:result-spec r) inner-call)
+                                  (gogen/ident "nil")])
+                               needs-error? (gogen/return-stmt [inner-call])
+                               :else (gogen/return-stmt
+                                       [inner-call (gogen/ident "nil")]))]
             (gogen/case-clause [(gogen/int-lit arity)] [ret-stmt])))
         cases    (mapv arm->case arities)
         msg      (str fn-name ": wrong number of arguments %d")
@@ -1077,21 +1086,26 @@
 (defn- multi-arity-override-groups [valid-results]
   "Group the multi-arity per-arity results by bare :fn-name for ONE combined
    override adapter each. Only emit the override when EVERY arity is
-   :override-eligible? (uniform vm.Value) — a typed arity can't be called with
-   boxed args[i] from the dynamic dispatch adapter. When any arity is typed the
-   whole fn's dynamic (var) path stays on bytecode; the per-arity STATIC direct
-   calls still go native (registry-entry-from-result gates on the broader
-   :direct-callable?, coercing typed args at the call site). Returns a sorted vec
-   of [fn-name (sorted-by-arity results)] pairs for deterministic emission."
+   adaptable — uniform vm.Value, or (#554) uniform vm.Value params with a
+   boxable typed return, which the wrapper lifts per-arm. A typed-PARAM arity
+   still disqualifies the whole fn: it can't be called with boxed args[i] from
+   the dynamic dispatch adapter. In that case the fn's dynamic (var) path stays
+   on bytecode; the per-arity STATIC direct calls still go native
+   (registry-entry-from-result gates on the broader :direct-callable?, coercing
+   typed args at the call site). Returns a sorted vec of
+   [fn-name (sorted-by-arity results)] pairs for deterministic emission."
   (let [by-name (reduce (fn [m r]
                           (if (:multi-arity? r)
                             (update m (:fn-name r) (fnil conj []) r)
                             m))
-                        {} valid-results)]
+                        {} valid-results)
+        adaptable? (fn [r] (or (:override-eligible? r)
+                               (and (:override-boxable-return? r)
+                                    (not (:needs-error? r)))))]
     (vec
       (keep (fn [nm]
               (let [arities (sort-by :arity (get by-name nm))]
-                (when (every? :override-eligible? arities)
+                (when (every? adaptable? arities)
                   [nm arities])))
             (sort (keys by-name))))))
 
