@@ -84,6 +84,9 @@
            ;; minus 1 below the target's params; OP_RECUR/clean BRANCH
            ;; leave 0). Used to compute true runtime SP for max-stack.
            :block-junk (vec (repeat n-blocks 0))
+           ;; Exact junk each pred reported per target (nil = none yet);
+           ;; disagreement aborts lowering — see record-block-junk!.
+           :block-junk-seen {}
            :current-block 0})))
 
 ;; Field accessors that read the atom — keep call sites tidy.
@@ -126,11 +129,25 @@
   (get (:block-junk @l) bid 0))
 
 (defn- record-block-junk! [l bid junk]
-  "Record (or raise) junk-below for block bid. Multiple predecessors may
-   set this; take the max."
-  (let [cur (block-junk-of l bid)]
-    (when (> junk cur)
-      (swap! l update :block-junk assoc bid junk))))
+  "Record junk-below for block bid. Every fall-through predecessor must
+   agree: junk is baked into the target's OP_RECUR drop counts, so a
+   path entering with different junk over- or under-drops the runtime
+   stack (observed as `slice bounds out of range` underflows). The old
+   take-the-max rule was harmless only while mismatching shapes could
+   not lower at all; the deferral/RPO fixes let them lower, so a
+   disagreement now aborts this fn's lowering (the defn hybrid falls
+   back to the plain bytecode compiler, exactly as before). RECUR-edge
+   preds do not report: they rebuild the target's stack to junk 0, the
+   same silent normalization main's back-edges have always relied on."
+  (let [seen (:block-junk-seen @l)
+        cur  (get seen bid)]
+    (if (nil? cur)
+      (do (swap! l update :block-junk-seen assoc bid junk)
+          (when (pos? junk)
+            (swap! l update :block-junk assoc bid junk)))
+      (when (not= cur junk)
+        (throw (str "ir/lower: junk-below mismatch for block " bid
+                    " (" cur " vs " junk "); unsupported shape"))))))
 
 (defn- bump-max-stack! [l]
   "If current runtime SP (= lower-sp + current block's junk-below)
@@ -571,6 +588,11 @@
                 ;; branch-if's leftovers) leaks `junk` slots per
                 ;; iteration until the frame stack overflows.
                 ignore (+ (- drop-count argc) cur-junk)
+                ;; RECUR rebuilds the target's stack from scratch: junk 0.
+                ;; Register that as this pred's exact junk report so a
+                ;; mismatch with another pred's nonzero junk is caught
+                ;; (→ fallback) instead of silently over-dropping.
+                _      (record-block-junk! l target 0)
                 off-ip (ir/chunk-emit-recur (chunk-of l) cur-sp argc ignore)]
             (record-source-info! l nid)
             (add-patch! l {:src-ip (dec off-ip)
@@ -615,9 +637,10 @@
                        :offset-slot 1
                        :negate? false})
         (bump-stack-sp! l -1)  ; cond popped
-        ;; If true-target is the immediately-following block, fall through.
+        ;; If true-target is the next block in EMISSION order (RPO, not
+        ;; id order), fall through; otherwise jump explicitly.
         (let [my-block (ir/block-of nid f)
-              next-block-id (inc my-block)]
+              next-block-id (get (:next-of @l) my-block -1)]
           (when (not= tt-target next-block-id)
             (let [arg-ip2 (emit-placeholder! l nid :branch)]
               (add-patch! l {:src-ip (dec arg-ip2)
@@ -724,20 +747,38 @@
 
 (defn- deferrable-branch-if-cond? [l term cond-ref]
   "True iff cond-ref is safe to defer past the body walk: it has
-   exactly one use (use-count==1) and that user is the branch-if
-   terminator itself. build-if always produces such conds; only
-   hand-built IR could violate this."
+   exactly one use (use-count==1), that user is the branch-if
+   terminator itself, AND it is not also one of the terminator's
+   branch-target args. The last condition matters because the use
+   bitset counts USERS, not uses: a value that is both the cond and
+   a branch arg (e.g. `(let [v (f x)] (when v ...) v)` threads v as
+   the join's block-arg) still reads as one user, but the terminator
+   materializes the branch args BEFORE the deferred cond — asking for
+   a value whose emission was skipped. For non-cheap ops (:call) that
+   is an ir/lower throw and the whole fn silently falls back to the
+   plain bytecode compiler."
   ;; cond-ref is typed as native int (InstId) by gogen; :branch-if
   ;; always has exactly one ref so cond-ref is never nil here.
-  (and (= 1 (use-count-of l cond-ref))
-       ;; use-count==1 → bitset has exactly one user-id; read via
-       ;; ir/uses-first (bitsets are vec-of-int64-words, so raw
-       ;; `first`/`count` would return a word and the word-count).
-       (let [uses (:uses @l)
-             us   (when (< cond-ref (count uses)) (nth uses cond-ref))]
-         (and us
-              (not (ir/uses-empty? us))
-              (= term (ir/uses-first us))))))
+  (and
+    ;; A :block-arg cond must NOT defer: deferral means "emit at the
+    ;; terminator", but emitting a :block-arg emits nothing (its value
+    ;; sits at a param slot) — BRANCH_F would then pop whatever is on
+    ;; top (usually a just-materialized branch arg) as the cond. The
+    ;; normal path DUPs it from its slot correctly.
+    (not= :block-arg (ir/op cond-ref (f-of l)))
+    (= 1 (use-count-of l cond-ref))
+    ;; use-count==1 → bitset has exactly one user-id; read via
+    ;; ir/uses-first (bitsets are vec-of-int64-words, so raw
+    ;; `first`/`count` would return a word and the word-count).
+    (let [uses (:uses @l)
+          us   (when (< cond-ref (count uses)) (nth uses cond-ref))]
+      (and us
+           (not (ir/uses-empty? us))
+           (= term (ir/uses-first us))))
+    ;; Not a branch arg of its own terminator (targets are symmetric
+    ;; by validate-fn!, so checking the true side suffices).
+    (let [tt (ir/cond-target-true (ir/aux term (f-of l)))]
+      (not (some (fn [a] (= a cond-ref)) (ir/branch-target-args tt))))))
 
 (defn- lower-block! [l bid]
   (swap! l assoc :current-block bid)
@@ -848,6 +889,50 @@
                         (+ src-ip (:offset-slot p))
                         offset))))
 
+;; --- emission order --------------------------------------------------
+
+(defn- block-succs [f bid]
+  (let [term (ir/block-term bid f)]
+    (if (or (nil? term) (zero? term))
+      []
+      (let [op  (ir/op term f)
+            aux (ir/aux term f)]
+        (cond
+          (= op :branch)
+          [(ir/branch-target-target aux)]
+          (= op :branch-if)
+          [(ir/branch-target-target (ir/cond-target-true aux))
+           (ir/branch-target-target (ir/cond-target-false aux))]
+          :else [])))))
+
+(defn- rpo-block-order [f]
+  "Reverse-postorder over the CFG from the entry block. Emission MUST
+   follow an order where every non-back edge points forward: a block's
+   junk-below (values a pred's BRANCH_F leaves beneath its params) is
+   recorded by the pred's lowering, so lowering a block before one of
+   its preds bakes in a stale junk count — its RECUR under-drops and
+   every later slot reference shifts (miscompile, e.g. a loop whose
+   cond is an `and`: build-loop gives the body a LOWER id than the
+   cond-chain blocks). Raw id order only worked for CFGs where preds
+   happen to have lower ids. Back-edge preds are exempt: OP_RECUR
+   rebuilds the stack, junk 0. Successors are visited highest-id-first
+   so the order coincides with id order whenever id order was already
+   valid (keeps existing output byte-stable). Unreachable blocks are
+   appended in id order so block-ips stays total."
+  (let [n     (count (ir/blocks f))
+        state (atom {:visited #{} :post []})]
+    ((fn dfs [b]
+       (when-not (contains? (:visited @state) b)
+         (swap! state update :visited conj b)
+         (doseq [s (reverse (sort (distinct (block-succs f b))))]
+           (dfs s))
+         (swap! state update :post conj b)))
+     0)
+    (let [order (vec (reverse (:post @state)))
+          seen  (set order)]
+      (vec (concat order
+                   (filter (fn [b] (not (contains? seen b))) (range n)))))))
+
 ;; --- entry point -----------------------------------------------------
 
 (defn lower [f]
@@ -858,12 +943,16 @@
     (throw "ir/lower: nil function"))
   (let [l (new-lowerer f)]
     (check-cross-block! f (:uses @l))
-    (let [n-blocks (count (ir/blocks f))]
-      (loop [bid 0]
-        (when (< bid n-blocks)
-          (set-block-ip! l bid (ir/chunk-length (chunk-of l)))
-          (lower-block! l bid)
-          (recur (inc bid)))))
+    (let [order   (rpo-block-order f)
+          next-of (loop [i 0 acc {}]
+                    (if (>= i (dec (count order)))
+                      acc
+                      (recur (inc i)
+                             (assoc acc (nth order i) (nth order (inc i))))))]
+      (swap! l assoc :next-of next-of)
+      (doseq [bid order]
+        (set-block-ip! l bid (ir/chunk-length (chunk-of l)))
+        (lower-block! l bid)))
     (patch-branches! l)
     ;; Conservative max-stack guard: bump by the max number of params
     ;; across all blocks. The block-junk tracking above handles the

@@ -1,0 +1,69 @@
+;; Test: block-arg cond deferral fix (#625 fix 3)
+;;
+;; The block-arg cond deferral fix ensures that if a condition is also a
+;; block-arg (a value flowing in from a predecessor as a phi/parameter), it
+;; cannot be deferred. Deferring a block-arg means "emit at the terminator",
+;; but block-args have no emission (their value sits at a param slot). BRANCH_F
+;; would then pop whatever is on top (usually a just-materialized branch arg)
+;; as the cond, leading to wrong results.
+;;
+;; The test constructs an if whose condition is a block argument: a value
+;; produced in a predecessor and passed to the current block as a parameter.
+(ns test.ir-blockarg-cond-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+;; Bytecode path: condition flows in as block argument
+(defn blockarg-cond-bytecode [n initial-flag]
+  (loop [i 0 flag initial-flag]
+    (if (>= i n)
+      :done
+      (let [next-flag (if flag (< i 5) false)]
+        (recur (inc i) next-flag)))))
+
+;; IR-compile path: should match bytecode
+(set! *ir-compile* true)
+
+(defn blockarg-cond-ir [n initial-flag]
+  (loop [i 0 flag initial-flag]
+    (if (>= i n)
+      :done
+      (let [next-flag (if flag (< i 5) false)]
+        (recur (inc i) next-flag)))))
+
+(set! *ir-compile* false)
+
+;; Additional shape: more complex block-arg flow
+(defn blockarg-cond-complex-bytecode [n]
+  (loop [i 0 flag true]
+    (if flag
+      (if (< i n)
+        (recur (inc i) (> i 3))
+        :outer-done)
+      :inner-done)))
+
+(set! *ir-compile* true)
+
+(defn blockarg-cond-complex-ir [n]
+  (loop [i 0 flag true]
+    (if flag
+      (if (< i n)
+        (recur (inc i) (> i 3))
+        :outer-done)
+      :inner-done)))
+
+(set! *ir-compile* false)
+
+(deftest ir-blockarg-cond-parity
+  (testing "block-arg cond under *ir-compile* (condition flows as phi parameter)"
+    (is (= (blockarg-cond-bytecode 10 true) (blockarg-cond-ir 10 true)))
+    (is (= :done (blockarg-cond-ir 10 true)))
+    (is (= (blockarg-cond-bytecode 10 false) (blockarg-cond-ir 10 false)))
+    (is (= :done (blockarg-cond-ir 10 false)))
+    (is (= (blockarg-cond-bytecode 100 true) (blockarg-cond-ir 100 true))))
+  (testing "block-arg cond with nested if"
+    (is (= (blockarg-cond-complex-bytecode 10) (blockarg-cond-complex-ir 10)))
+    ;; flag starts true, becomes false after i=1, then returns :inner-done
+    (is (= :inner-done (blockarg-cond-complex-ir 10)))
+    (is (= (blockarg-cond-complex-bytecode 100) (blockarg-cond-complex-ir 100)))))
