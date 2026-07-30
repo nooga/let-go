@@ -761,6 +761,26 @@
       (assoc result :status :lowered)
       result)))
 
+(defn compile-def-fn-value [fn-form the-ns def-name]
+  "Runtime seam for name*-wrapped rule defs (the Go defCompiler hook).
+   Compiles a bare `(fn ...)`/`(fn* ...)` form that appears as an argument
+   inside a top-level `(def NAME (name* ... (fn ...) ...))` through the IR
+   pipeline, returning the compiled Fn VALUE — the hook substitutes it as a
+   constant in place of the fn form, exactly like the defn macro's
+   chunk->fn embedding. Single-arity only; throws on any other shape or on
+   any pipeline failure, and the hook then falls back to the plain
+   bytecode compile of the original form."
+  (let [tail     (rest fn-form)
+        tail     (if (symbol? (first tail)) (rest tail) tail)
+        args-vec (first tail)]
+    (if (vector? args-vec)
+      (let [variadic? (boolean (some (fn [a] (= a '&)) args-vec))
+            arity     (if variadic? (- (count args-vec) 1) (count args-vec))
+            defn-form (apply list 'defn (symbol def-name) args-vec (rest tail))
+            chunk     (compile-form defn-form the-ns)]
+        (chunk->fn arity variadic? chunk))
+      (throw "compile-def-fn-value: multi-arity fn form unsupported"))))
+
   ;; --- Go bootstrap generation -------------------------------------------
 
 (defn- go-name-for [name-sym]

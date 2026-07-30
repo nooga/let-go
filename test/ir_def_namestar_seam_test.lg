@@ -1,0 +1,63 @@
+;; The def+name* IR-compile seam (#647) — maybeIRCompileDefFnArg in the Go
+;; compiler. `defn` is a macro and already routes its body through the IR path,
+;; but `def` is a special form, so grammar-style rule defs shaped
+;; `(def NAME (name* ... (fn ...) ...))` never reach the defn macro's IR hook.
+;; This seam is the def-side equivalent: when *ir-compile* is on and a TOP-LEVEL
+;; def value is a name*-wrapped single fn, it routes that fn through
+;; ir.passes.pipeline/compile-def-fn-value and substitutes the compiled Fn as
+;; the def value's fn slot — parity-preserving with the plain bytecode compile.
+;;
+;; Because the seam is parity-preserving, a black-box "the fn still works"
+;; assertion cannot prove the seam fired rather than the ordinary compiler. The
+;; non-vacuous proof is the strict census point (#580): a name*-wrapped fn that
+;; compile-def-fn-value CANNOT lower — a multi-arity fn — must, under
+;; *ir-compile-strict*, throw from the seam, naming both ir-compile-strict and
+;; the underlying "multi-arity" refusal. Without the seam that same def compiles
+;; silently (name* is an ordinary call), so the throw can only come from the
+;; seam having run compile-def-fn-value.
+(ns test.ir-def-namestar-seam-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+;; Runtime stub for the grammar `name*` head. In a real corpus name* is a
+;; grammar macro; here it only needs to hand back the fn argument so the def
+;; value resolves at eval time. A fixed (tag fn meta) shape keeps the fn at a
+;; known position; the seam locates it structurally regardless of position.
+;; Compiled at file-load time with *ir-compile* off, so it takes the plain path.
+(defn name* [tag f meta] f)
+
+(deftest seam-happy-path-produces-a-working-fn
+  (testing "a name*-wrapped single-arity fn def IR-compiles and still works"
+    (binding [*ir-compile* true]
+      (eval '(def seam-inc-rule (name* :tag (fn [x] (inc x)) :meta))))
+    (is (= 6 (eval '(seam-inc-rule 5))))))
+
+(deftest seam-strict-throws-on-unlowerable-shape
+  ;; THE non-vacuous signal: a multi-arity fn is refused by
+  ;; compile-def-fn-value, so under strict the seam must surface the miss. A
+  ;; silent compile here would mean the seam never ran.
+  (testing "strict: a name*-wrapped MULTI-ARITY fn throws from the seam"
+    (is (= :threw
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (try (eval '(def seam-bad-rule
+                           (name* :t (fn ([x] x) ([x y] x)) :m)))
+                  :no-throw
+                  (catch _ :threw))))))
+  (testing "the throw names ir-compile-strict and the multi-arity refusal"
+    (let [msg (binding [*ir-compile* true *ir-compile-strict* true]
+                (try (eval '(def seam-bad-rule2
+                              (name* :t (fn ([x] x) ([x y] x)) :m)))
+                     ""
+                     (catch e (str e))))]
+      (is (>= (index-of msg "ir-compile-strict") 0))
+      (is (>= (index-of msg "multi-arity") 0)))))
+
+(deftest seam-falls-back-silently-without-strict
+  ;; Same unlowerable shape, strict OFF: the hybrid fallback keeps it compiling
+  ;; (name* returns the fn, the bytecode path runs it). Pins that strict is the
+  ;; only thing that makes the miss loud — the shipping default stays hybrid.
+  (testing "default: the multi-arity name* def compiles and the fn works"
+    (binding [*ir-compile* true]
+      (eval '(def seam-fallback-rule (name* :t (fn ([x] x) ([x y] x)) :m))))
+    (is (= 7 (eval '(seam-fallback-rule 7))))))

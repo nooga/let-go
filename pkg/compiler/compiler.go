@@ -1959,6 +1959,13 @@ func defCompiler(c *Context, form vm.Value) error {
 		c.defName = ""
 		return nil
 	}
+	rewritten, irErr := c.maybeIRCompileDefFnArg(sym.(vm.Symbol), val)
+	if irErr != nil {
+		return compileErrorAt("ir-compile-strict def value", form).Wrap(irErr)
+	}
+	if rewritten != nil {
+		val = rewritten
+	}
 	err := c.compileForm(val)
 	if err != nil {
 		return compileErrorAt("compiling def value", form).Wrap(err)
@@ -1968,6 +1975,120 @@ func defCompiler(c *Context, form vm.Value) error {
 	c.tailPosition = tc
 	c.defName = ""
 	return nil
+}
+
+// maybeIRCompileDefFnArg is the runtime seam for name*-wrapped fn defs:
+// when *ir-compile* is on and a TOP-LEVEL `(def NAME (name* ... (fn ...) ...))`
+// is being compiled, route the inner fn form through the Lisp IR pipeline
+// (ir.passes.pipeline/compile-def-fn-value) and substitute the compiled Fn
+// value as an embedded constant — the same def-value shape the defn macro
+// produces via chunk->fn. The defn macro can't cover these: `def` is a
+// special form, so grammar-style rule defs never reach the macro layer and
+// their bodies otherwise always compile via the plain bytecode compiler.
+// Returns the rewritten value form, or nil to compile the original. A
+// matched-but-unlowerable form falls back silently to bytecode unless
+// *ir-compile-strict* (#580) is on, in which case it returns an error so the
+// bytecode-path census can see the miss — mirroring the defn macro's hybrid
+// path (core.lg).
+func (c *Context) maybeIRCompileDefFnArg(name vm.Symbol, val vm.Value) (vm.Value, error) {
+	// Top-level defs only: an inner fn compiled through the pipeline cannot
+	// capture enclosing locals.
+	if len(c.locals) != 0 {
+		return nil, nil
+	}
+	icv, ok := c.CurrentNS().Lookup(vm.Symbol("clojure.core/*ir-compile*")).(*vm.Var)
+	if !ok || !vm.IsTruthy(icv.Deref()) {
+		return nil, nil
+	}
+	// Under *ir-compile-strict* (#580) a matched-but-unlowerable form must NOT
+	// fall back to bytecode silently — that is exactly the class of hole the
+	// bytecode-path census exists to surface. The "not a name*-fn-def" checks
+	// below stay silent (the seam simply doesn't apply); only a shape that
+	// SHOULD lower but can't becomes an error when strict is on.
+	strict := false
+	if scv, ok := c.CurrentNS().Lookup(vm.Symbol("clojure.core/*ir-compile-strict*")).(*vm.Var); ok {
+		strict = vm.IsTruthy(scv.Deref())
+	}
+	lst, ok := val.(*vm.List)
+	if !ok {
+		return nil, nil
+	}
+	headSym, ok := lst.First().(vm.Symbol)
+	if !ok {
+		return nil, nil
+	}
+	_, headName, hasNS := headSym.NamespacedRaw()
+	if !hasNS {
+		headName = headSym
+	}
+	if headName != vm.Symbol("name*") {
+		return nil, nil
+	}
+	elems, ok := lst.Unbox().([]vm.Value)
+	if !ok {
+		return nil, nil
+	}
+	fnIdx := -1
+	for i := 1; i < len(elems); i++ {
+		el, isList := elems[i].(*vm.List)
+		if !isList {
+			continue
+		}
+		h, isSym := el.First().(vm.Symbol)
+		if !isSym || (h != "fn" && h != "fn*") {
+			continue
+		}
+		if fnIdx != -1 {
+			return nil, nil // more than one fn argument: ambiguous, leave alone
+		}
+		fnIdx = i
+	}
+	if fnIdx == -1 {
+		return nil, nil
+	}
+	// From here the form IS a name*-wrapped single-fn def that should lower;
+	// a failure is a real IR-compile miss, so honor strict.
+	hv, ok := c.CurrentNS().Lookup(vm.Symbol("ir.passes.pipeline/compile-def-fn-value")).(*vm.Var)
+	if !ok {
+		if strict {
+			return nil, fmt.Errorf("ir-compile-strict: ir.passes.pipeline/compile-def-fn-value unavailable for (def %v (name* …))", name)
+		}
+		return nil, nil
+	}
+	hfn, ok := hv.Deref().(vm.Fn)
+	if !ok {
+		if strict {
+			return nil, fmt.Errorf("ir-compile-strict: compile-def-fn-value is not callable")
+		}
+		return nil, nil
+	}
+	compiled, err := hfn.Invoke([]vm.Value{elems[fnIdx], c.CurrentNS(), name})
+	if err != nil {
+		if strict {
+			return nil, fmt.Errorf("ir-compile-strict: IR compile of (def %v (name* (fn …))) failed: %w", name, err)
+		}
+		return nil, nil
+	}
+	if compiled == vm.NIL {
+		if strict {
+			return nil, fmt.Errorf("ir-compile-strict: IR compile of (def %v (name* (fn …))) produced nil", name)
+		}
+		return nil, nil
+	}
+	newElems := make([]vm.Value, len(elems))
+	copy(newElems, elems)
+	newElems[fnIdx] = compiled
+	rewritten, berr := vm.ListType.Box(newElems)
+	if berr != nil {
+		if strict {
+			return nil, fmt.Errorf("ir-compile-strict: reboxing (def %v …) failed: %w", name, berr)
+		}
+		return nil, nil
+	}
+	if info := vm.FormSource.Get(val); info != nil {
+		vm.FormSource.Set(rewritten, *info)
+	}
+	return rewritten, nil
 }
 
 func setBangCompiler(c *Context, form vm.Value) error {
