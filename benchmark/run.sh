@@ -39,6 +39,56 @@ echo "Building let-go (AOT)..."
 
 LETGO="$SCRIPT_DIR/letgo"
 LETGO_AOT="$SCRIPT_DIR/letgo-aot"
+
+# --- Pinned-release baseline leg ---
+#
+# The VM and AOT legs are both built from the working tree, so a regression in
+# shared runtime code moves BOTH and the comparison between them reports parity.
+# A binary built from a pinned release is the fixed reference that makes such a
+# regression visible at all. (A 1.75x reduce regression sat on main undetected
+# because every leg carried it.)
+#
+# Set BASELINE_REF=none to skip. The ref is pinned deliberately rather than
+# derived from the newest tag: `git tag --sort=-v:refname` puts the stale v2.0.x
+# line on top, which is not the latest release.
+BASELINE_REF="${BASELINE_REF:-$(cat "$SCRIPT_DIR/BASELINE_REF" 2>/dev/null || echo none)}"
+BASELINE=""
+BASELINE_SIZE=""
+
+# Build <ref> into a SHA-keyed cache and echo the binary path. Built in a
+# DETACHED WORKTREE, never in-tree: make's regeneration rules are timestamp
+# driven, so building an old ref over the current tree can pair a stale
+# core_compiled.lgb with freshly compiled Go. Those binaries mismeasure by
+# ~1.8x and do it consistently, which reads as a real regression.
+build_baseline() {
+    local ref="$1" sha cache wt rc=0
+    sha="$(git -C "$PROJECT_DIR" rev-parse --verify --quiet "${ref}^{commit}" 2>/dev/null)" || return 1
+    [ -n "$sha" ] || return 1
+    cache="$SCRIPT_DIR/.baseline/$sha"
+    if [ -x "$cache/lg" ]; then echo "$cache/lg"; return 0; fi
+    wt="$(mktemp -d)/letgo-baseline"
+    # A worktree registration outlives its directory, so clear any stale one first.
+    git -C "$PROJECT_DIR" worktree prune 2>/dev/null || true
+    git -C "$PROJECT_DIR" worktree add --detach -q "$wt" "$sha" 2>/dev/null || return 1
+    mkdir -p "$cache"
+    ( cd "$wt" && go build -ldflags="-s -w" -o "$cache/lg" . ) 2>/dev/null || rc=1
+    git -C "$PROJECT_DIR" worktree remove --force "$wt" 2>/dev/null || true
+    rm -rf "$(dirname "$wt")"
+    git -C "$PROJECT_DIR" worktree prune 2>/dev/null || true
+    [ "$rc" -eq 0 ] && [ -x "$cache/lg" ] || { rm -rf "$cache"; return 1; }
+    echo "$cache/lg"
+}
+
+if [ "$BASELINE_REF" != "none" ]; then
+    echo "Building let-go baseline ($BASELINE_REF)..."
+    if BASELINE="$(build_baseline "$BASELINE_REF")"; then
+        BASELINE_SIZE=$(ls -lh "$BASELINE" | awk '{print $5}')
+    else
+        BASELINE=""
+        echo "  WARNING: could not build baseline $BASELINE_REF — continuing without it." >&2
+        echo "  Regressions in shared runtime code will NOT be visible in this run." >&2
+    fi
+fi
 AOT_SRC="$SCRIPT_DIR/aot/src"
 BB="$(which bb 2>/dev/null || true)"
 CLJ="$(which clj 2>/dev/null || true)"
@@ -69,6 +119,9 @@ fi
 # Per-benchmark commands for the two let-go legs (identical driver + fixture).
 lg_vm_cmd()  { echo "$LETGO -source-paths $AOT_SRC $SCRIPT_DIR/aot/drivers/$1.lg"; }
 lg_aot_cmd() { echo "$LETGO_AOT -source-paths $AOT_SRC $SCRIPT_DIR/aot/drivers/$1.lg"; }
+# Baseline runs the IDENTICAL driver + fixture as the VM leg — only the binary
+# differs, which is what makes the delta attributable to our own changes.
+lg_base_cmd() { echo "$BASELINE -source-paths $AOT_SRC $SCRIPT_DIR/aot/drivers/$1.lg"; }
 
 # --- Gather system info ---
 
@@ -104,6 +157,7 @@ echo ""
 echo "=== Environment ==="
 echo "System: $(uname -ms), $CPU_INFO"
 echo "let-go VM: $LETGO_SIZE binary | let-go AOT: $LETGO_AOT_SIZE binary"
+[ -n "$BASELINE" ] && echo "baseline: $BASELINE_REF ($BASELINE_SIZE binary)"
 [ -n "$BB" ] && echo "babashka: $BB_VERSION ($BB_SIZE binary)"
 [ -n "$CLJ" ] && echo "clojure: $CLJ_VERSION"
 [ -n "$CLJ" ] && echo "JDK: $JDK_VERSION ($JDK_SIZE)"
@@ -117,6 +171,7 @@ STARTUP_JSON="/tmp/bench_startup.json"
 STARTUP_ARGS=(--warmup "$WARMUP" --runs "$RUNS" --export-json "$STARTUP_JSON")
 STARTUP_ARGS+=("-n" "let-go" "$LETGO -e nil")
 STARTUP_ARGS+=("-n" "let-go AOT" "$LETGO_AOT -e nil")
+[ -n "$BASELINE" ] && STARTUP_ARGS+=("-n" "baseline $BASELINE_REF" "$BASELINE -e nil")
 [ -n "$BB" ] && STARTUP_ARGS+=("-n" "babashka" "bb -e nil")
 [ -n "$CLJ" ] && STARTUP_ARGS+=("-n" "clojure" "clj -M -e nil")
 hyperfine "${STARTUP_ARGS[@]}" 2>&1
@@ -182,11 +237,57 @@ for bench in "${BENCHMARKS[@]}"; do
     JSON="/tmp/bench_${name}.json"
     CMDS=("-n" "let-go" "$(lg_vm_cmd "$name")")
     CMDS+=("-n" "let-go AOT" "$(lg_aot_cmd "$name")")
+    [ -n "$BASELINE" ] && CMDS+=("-n" "baseline $BASELINE_REF" "$(lg_base_cmd "$name")")
     [ -n "$BB" ] && CMDS+=("-n" "babashka" "bb $bench")
     [ -n "$CLJ" ] && CMDS+=("-n" "clojure" "clj -M -e '(load-file \"$bench\")'")
 
     hyperfine --warmup "$WARMUP" --runs "$RUNS" --export-json "$JSON" "${CMDS[@]}" 2>&1
 done
+
+# --- Regression check against the pinned baseline ---
+#
+# This is the part that catches a regression in shared runtime code. Comparing
+# the VM leg to the AOT leg cannot: both are built from the working tree, so a
+# shared regression moves both and the ratio between them stays flat.
+REGRESSION_FOUND=0
+if [ -n "$BASELINE" ]; then
+    echo ""
+    echo "=== Regression check vs $BASELINE_REF ==="
+    THRESHOLD="${REGRESSION_THRESHOLD:-1.10}"
+    for bench in "${BENCHMARKS[@]}"; do
+        name="$(basename "$bench" .clj)"
+        JSON="/tmp/bench_${name}.json"
+        [ -f "$JSON" ] || continue
+        python3 -c "
+import json, sys
+d = json.load(open('$JSON'))
+# Median, not mean: a single scheduling hiccup skews the mean badly on a busy
+# machine, and the check should not cry wolf over one outlier run.
+by = {r['command'].strip(): r for r in d['results']}
+cur, base = by.get('let-go'), by.get('baseline $BASELINE_REF')
+if cur is None or base is None or not base.get('median'):
+    sys.exit(0)
+c, b = cur['median'], base['median']
+ratio = c / b
+# Relative spread on either leg; a noisy run gets reported, not asserted on.
+noise = max(cur['stddev'] / cur['mean'], base['stddev'] / base['mean']) if cur['mean'] and base['mean'] else 0
+if noise > 0.20:
+    print(f'  {\"$name\":<16} {c*1000:8.1f} ms vs {b*1000:8.1f} ms   {ratio:.2f}x  NOISY (sigma {noise*100:.0f}% — rerun on an idle machine)')
+    sys.exit(0)
+mark = 'REGRESSION' if ratio > $THRESHOLD else ('faster' if ratio < 0.95 else 'ok')
+print(f'  {\"$name\":<16} {c*1000:8.1f} ms vs {b*1000:8.1f} ms   {ratio:.2f}x  {mark}')
+sys.exit(3 if ratio > $THRESHOLD else 0)
+" || REGRESSION_FOUND=1
+    done
+    if [ "$REGRESSION_FOUND" -eq 1 ]; then
+        echo ""
+        echo "  !! At least one workload is >${THRESHOLD}x slower than $BASELINE_REF."
+        echo "     Bisect with: git checkout -q -- . && git clean -xqfd && make build"
+        echo "     The -x matters — make's regeneration is timestamp-driven, and a stale"
+        echo "     core bundle paired with fresh Go mismeasures consistently enough to"
+        echo "     look like a real regression."
+    fi
+fi
 
 # --- Generate results.md ---
 
@@ -194,6 +295,7 @@ if [ "$FILTER_MODE" -eq 1 ]; then
     echo ""
     echo "=== Done (filter mode — results.md not updated) ==="
     rm -f "$SCRIPT_DIR/letgo" "$SCRIPT_DIR/letgo-aot"
+    [ "$REGRESSION_FOUND" -eq 1 ] && [ -n "${BASELINE_STRICT:-}" ] && exit 1
     exit 0
 fi
 
@@ -216,7 +318,12 @@ as overrides, so the same \`(bench.<name>/run)\` call dispatches to compiled Go.
 includes binary startup and namespace load for both legs. babashka and Clojure JVM run the
 plain \`.clj\` scripts, which contain the same workloads as the fixtures.
 
-Clojure JVM times include full JVM startup (~350-500ms) which dominates short benchmarks.
+${BASELINE:+**baseline $BASELINE_REF** is a binary built from that pinned release, running the same
+driver + fixture as the VM leg. It exists because the VM and AOT legs are both built from
+the working tree: a regression in shared runtime code moves both, so the VM-vs-AOT ratio
+stays flat and hides it. The baseline is the fixed reference that makes it visible.
+
+}Clojure JVM times include full JVM startup (~350-500ms) which dominates short benchmarks.
 
 **System:** $(uname -ms), $CPU_INFO
 
@@ -317,8 +424,13 @@ cat >> "$RESULTS_FILE" << EOF
 EOF
 
 {
-echo "| Benchmark | let-go | let-go AOT | babashka | clojure JVM |"
-echo "|---|---|---|---|---|"
+if [ -n "$BASELINE" ]; then
+    echo "| Benchmark | let-go | let-go AOT | baseline $BASELINE_REF | babashka | clojure JVM |"
+    echo "|---|---|---|---|---|---|"
+else
+    echo "| Benchmark | let-go | let-go AOT | babashka | clojure JVM |"
+    echo "|---|---|---|---|---|"
+fi
 
 for bench in "${BENCHMARKS[@]}"; do
     name="$(basename "$bench" .clj)"
@@ -340,6 +452,7 @@ for r in d['results']:
     elif cmd == 'let-go AOT': results['aot'] = (fmt(r['mean'], r['stddev']), r['mean'])
     elif cmd == 'babashka': results['bb'] = (fmt(r['mean'], r['stddev']), r['mean'])
     elif cmd == 'clojure': results['clj'] = (fmt(r['mean'], r['stddev']), r['mean'])
+    elif cmd == 'baseline $BASELINE_REF': results['base'] = (fmt(r['mean'], r['stddev']), r['mean'])
 
 best = min(v[1] for v in results.values())
 lg_mean = results.get('letgo', (None, 1.0))[1]
@@ -354,7 +467,8 @@ def cell(key):
         return f'**{s}**{tag}'
     return f'{s}{tag}'
 
-print('| $name | ' + cell('letgo') + ' | ' + cell('aot') + ' | ' + cell('bb') + ' | ' + cell('clj') + ' |')
+cols = ['letgo', 'aot'] + (['base'] if '$BASELINE' else []) + ['bb', 'clj']
+print('| $name | ' + ' | '.join(cell(c) for c in cols) + ' |')
 "
 done
 } >> "$RESULTS_FILE"
@@ -369,3 +483,9 @@ cat "$RESULTS_FILE"
 
 # Cleanup
 rm -f "$SCRIPT_DIR/letgo" "$SCRIPT_DIR/letgo-aot"
+
+# BASELINE_STRICT=1 turns the regression check into a gate (for CI).
+if [ "$REGRESSION_FOUND" -eq 1 ] && [ -n "${BASELINE_STRICT:-}" ]; then
+    echo "BASELINE_STRICT set and a regression was found — exiting 1." >&2
+    exit 1
+fi
