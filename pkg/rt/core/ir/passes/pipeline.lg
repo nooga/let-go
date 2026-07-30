@@ -635,10 +635,20 @@
               _          (swap! built assoc :private? private?)
               ;; Stash the built IR (pre-optimize) so later same-ns defns can
               ;; seed the inline registry from this one. Opt-in: only when
-              ;; *enable-inline* is bound true.
+              ;; *enable-inline* is bound true. Retention is single-ns: the
+              ;; registry seeds same-ns only, so entries for other (already
+              ;; loaded) namespaces are dead weight — retaining them across a
+              ;; whole corpus load measurably raises live heap and GC mark
+              ;; cost per cycle. A require mid-file switches the cache to the
+              ;; dependency's ns and back, which at worst drops seed entries
+              ;; for defns that preceded the require (requires normally come
+              ;; first, and a lost seed only forfeits an inline opportunity).
               _          (when ir.passes.inline/*enable-inline*
-                           (swap! *runtime-defn-ir-cache*
-                                  assoc-in [(str (ns-name *ns*)) (str name-sym)] built))]
+                           (let [ns-str (str (ns-name *ns*))]
+                             (swap! *runtime-defn-ir-cache*
+                                    (fn [c]
+                                      {ns-str (assoc (get c ns-str {})
+                                                     (str name-sym) built)}))))]
           ;; Target-specific orchestration (lambda-lift for :go, fold-outline for
           ;; :bytecode) wraps the actual lowering — but the lowering itself is
           ;; DELEGATED to the `lowerings` strategy registry via *target* (#387's

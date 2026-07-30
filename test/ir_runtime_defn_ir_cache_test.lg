@@ -1,0 +1,51 @@
+;; *runtime-defn-ir-cache* single-ns retention (#650).
+;;
+;; When *enable-inline* is on, the IR pipeline stashes each defn's built
+;; (pre-optimize) IR so a later same-ns defn can seed its inline registry from
+;; it. The registry only ever seeds SAME-ns, so entries for other, already-loaded
+;; namespaces are dead weight — across a whole-corpus load they raise live heap
+;; and per-cycle GC mark cost for no benefit.
+;;
+;; The retention change makes each seed REPLACE the cache with a single-key map
+;; {current-ns {...}} instead of assoc-in-ing into an ever-growing multi-ns map.
+;; Two invariants pin that: same-ns defns still accumulate (the assoc within the
+;; ns is preserved), and the first seed in a new ns evicts every prior ns. The
+;; eviction assertion is the load-bearing one — the pre-change `assoc-in` code
+;; kept the foreign entry, so it would fail here.
+(ns test.ir-runtime-defn-ir-cache-test
+  (:require
+   [ir.passes.pipeline]
+   [ir.passes.inline]
+   [test :refer :all]))
+
+(def cache ir.passes.pipeline/*runtime-defn-ir-cache*)
+
+(deftest cache-accumulates-within-one-ns
+  (testing "same-ns defns both retained under a single top-level key"
+    (reset! cache {})
+    (binding [*ir-compile* true ir.passes.inline/*enable-inline* true]
+      (eval '(defn cache-fn-a [x] (inc x)))
+      (eval '(defn cache-fn-b [x] (dec x))))
+    (let [c @cache]
+      ;; exactly one ns retained (the current one) — never a growing multi-ns map
+      (is (= 1 (count c)))
+      ;; and the second defn did not evict the first within that ns
+      (let [entries (val (first c))]
+        (is (contains? entries "cache-fn-a"))
+        (is (contains? entries "cache-fn-b"))))))
+
+(deftest cache-evicts-prior-ns-on-next-seed
+  (testing "seeding in the current ns drops entries stashed for any other ns"
+    ;; Pre-seed a stale entry for a DIFFERENT ns, then compile one defn in the
+    ;; current ns. The retention change replaces the whole map with
+    ;; {current-ns ...}, so the foreign entry must be gone — that eviction is
+    ;; the memory win. The pre-change assoc-in would keep it (count would be 2).
+    (reset! cache {"some.other.ns" {"stale" :junk}})
+    (binding [*ir-compile* true ir.passes.inline/*enable-inline* true]
+      (eval '(defn cache-fn-c [x] (inc x))))
+    (let [c @cache]
+      (is (= 1 (count c)))
+      (is (not (contains? c "some.other.ns")))
+      (is (contains? (val (first c)) "cache-fn-c"))))
+  ;; leave the shared atom clean for tests that run after this file
+  (reset! cache {}))
