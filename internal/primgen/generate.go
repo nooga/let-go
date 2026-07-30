@@ -5,9 +5,12 @@
  */
 
 // Package primgen scans //lg:-annotated Go sources and emits the
-// zz_primitives_generated.go registrar. It is deliberately a PURE source →
-// source code generator: it depends only on go/ast + text templates and does
-// NOT import the let-go runtime (pkg/compiler / pkg/rt).
+// zz_primitives_generated.go registrar. It is deliberately a runtime-free
+// source → source code generator that does NOT import the let-go runtime
+// (pkg/compiler / pkg/rt) and shells out to nothing: it scans annotated
+// signatures with go/ast (prims_scan.go), builds the registrar by string
+// concatenation (prims_emit.go), and canonicalizes it in-process with
+// go/format (generate.go).
 //
 // This independence is the whole point. The registrar it emits is what lets the
 // NEXT-generation runtime boot; a generator that booted the current runtime
@@ -19,8 +22,8 @@ package primgen
 
 import (
 	"fmt"
+	"go/format"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -103,9 +106,9 @@ func Generate(srcDir, outPath, goPkg string) error {
 
 	output := emitFile(allSpecs)
 
-	formatted, err := gofmtCode(output)
+	formatted, err := formatGo(output)
 	if err != nil {
-		return fmt.Errorf("gofmt: %w", err)
+		return fmt.Errorf("format: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
@@ -157,20 +160,17 @@ func ScanNativeNames(dir, excludeBase string) (map[string]bool, error) {
 	return names, nil
 }
 
-// gofmtCode formats Go source code using the gofmt command. On failure it
-// surfaces gofmt's stderr (which carries the <line>:<col>: syntax-error
-// location) and dumps the unformatted source to a temp file, so a bad emitted
-// registrar is diagnosable instead of a bare "exit status 2".
-func gofmtCode(src string) (string, error) {
-	cmd := exec.Command("gofmt")
-	cmd.Stdin = strings.NewReader(src)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+// formatGo canonically formats generated Go source in-process. go/format is
+// gofmt's own parser+printer, so the output is byte-identical to `gofmt` with no
+// external binary and no PATH dependency. On a parse failure it dumps the
+// unformatted source to a temp file so a bad emitted registrar is diagnosable
+// (go/format's error already carries the <line>:<col> location).
+func formatGo(src string) (string, error) {
+	formatted, err := format.Source([]byte(src))
 	if err != nil {
 		dump := filepath.Join(os.TempDir(), "lgprimgen-unformatted.go")
 		_ = os.WriteFile(dump, []byte(src), 0644)
-		return "", fmt.Errorf("gofmt failed: %w\n%s(unformatted source written to %s)", err, stderr.String(), dump)
+		return "", fmt.Errorf("format generated source: %w (unformatted source written to %s)", err, dump)
 	}
-	return string(output), nil
+	return string(formatted), nil
 }

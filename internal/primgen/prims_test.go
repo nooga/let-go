@@ -110,9 +110,9 @@ func TestEmitFileDeterministic(t *testing.T) {
 	}
 
 	canonical := func() string {
-		out, err := gofmtCode(emitFile(specs))
+		out, err := formatGo(emitFile(specs))
 		if err != nil {
-			t.Fatalf("gofmt generated primitives: %v", err)
+			t.Fatalf("format generated primitives: %v", err)
 		}
 		return out
 	}
