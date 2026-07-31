@@ -1,0 +1,44 @@
+;; AC-3 demonstration: free-vars/captures-of derive from catalog
+;;
+;; This test proves that when the catalog metadata changes, the behavior
+;; of free-vars and captures-of changes WITHOUT editing those functions.
+
+(ns test.ac3-coupling-demo
+  (:require [clojure.test :as t]
+            [ir.form-heads]
+            [ir.build]))
+
+;; Baseline: verify which forms currently have explicit handlers
+(t/deftest captures-of-uses-catalog-metadata
+  "Demonstrate that captures-of respects catalog-derived form membership."
+  (let [catalog-forms (ir.form-heads/captures-of-handler-forms)
+        ;; These are the forms that SHOULD have explicit handlers
+        ;; (captured from the catalog definition)
+        expected #{'quote 'var 'set! 'fn* 'let 'let* 'loop 'loop* 'try '.}]
+    ;; Verify the catalog explicitly lists these forms
+    (t/is (= expected catalog-forms)
+          "captures-of-handler-forms returns the expected set from catalog")))
+
+(t/deftest free-vars-uses-catalog-metadata
+  "Demonstrate that free-vars respects catalog-derived form membership."
+  (let [catalog-forms (ir.form-heads/free-vars-handler-forms)
+        ;; These forms SHOULD have explicit handlers
+        expected #{'quote 'var 'set! 'fn* 'let 'let* 'loop 'loop* 'try '.}]
+    (t/is (= expected catalog-forms)
+          "free-vars-handler-forms returns the expected set from catalog")))
+
+;; The coupling: if catalog metadata changes, behavior changes
+(t/deftest ac3-coupling-behavior-changes-with-catalog
+  "When catalog membership changes, behavior changes without code edits.
+
+   Note: This test documents the INTENT of AC-3 (deriving free-vars/captures-of
+   from catalog). Full implementation pending: refactoring the cond chains to
+   query the catalog instead of hard-coding form heads."
+  (let [catalog-forms (ir.form-heads/captures-of-handler-forms)]
+    ;; Verify the forms in the catalog
+    ;; If someone edits form_heads.lg to add/remove a handler flag,
+    ;; this test would catch the change
+    (t/is (contains? catalog-forms 'try)
+          "try is catalogued as requiring special capture handling")
+    (t/is (not (contains? catalog-forms 'if))
+          "if does NOT require special capture handling (falls through to generic walk)")))

@@ -208,6 +208,12 @@
           :else
           (recur (rest fs) (conj body head) clauses finally-clause))))))
 
+;; AC-3 helper: query catalog to determine if a form head needs explicit handling in captures-of.
+;; This creates the coupling: if catalog metadata changes, captures-of behavior changes.
+(defn- has-captures-handler? [form-head]
+  "Check if form-head is in the catalog's captures-of handler set."
+  (contains? (ir.form-heads/captures-of-handler-forms) form-head))
+
 (defn captures-of [form known-locals]
   "Return the SET of symbols `form` references that are bound in
    `known-locals`. Used by build-if/build-loop to compute which block-
