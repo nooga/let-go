@@ -1722,6 +1722,20 @@
 (defn- register-typed-call-temp! [name go-type]
   (when *typed-call-temps* (swap! *typed-call-temps* conj [name go-type])))
 
+(defn- typed-result-assign
+  "Assign a typed call's result to the call node's temp, boxing only when that
+   temp is a vm.Value. Every typed result used to be boxed here unconditionally,
+   which was right while a lowered callee's result could only ever land in a
+   vm.Value temp. With declared return types (#599) the temp can itself be
+   natively typed — `(+ (fib …) (fib …))` gives both call nodes an :int temp —
+   and boxing into it emits `arg__4 = vm.Int(tr8)` against a `var arg__4 int`,
+   which is a Go type error. A nil/:unknown temp spec never matches, so anything
+   we cannot type still takes the boxing path."
+  [f nid target res-expr result-spec]
+  (if (= (go-type-spec (ir/type-of nid f)) result-spec)
+    (gogen/assign "=" target res-expr)
+    (gogen/assign "=" target (box-result-from-type res-expr result-spec))))
+
 (defn- emit-call-stmts [f assign-target invoke-expr]
   "Build the [assign err-check] statement pair shared by both call paths.
    assign-target is either a gogen ident (used? case) or '_'; invoke-expr
@@ -1770,11 +1784,11 @@
       ;; assign + err-check path.
       (and (= result-spec "vm.Value") (:needs-error? entry))
       (emit-call-stmts f target raw-call)
-      ;; Typed result + no error: result := <call>; target = vm.<Box>(result)
+      ;; Typed result + no error: target = <call>, boxed only if the temp is
+      ;; a vm.Value (see typed-result-assign).
       (and (not (:needs-error? entry))
            (not= result-spec "vm.Value"))
-      (let [boxed (box-result-from-type raw-call result-spec)]
-        [(gogen/assign "=" target boxed)])
+      [(typed-result-assign f nid target raw-call result-spec)]
       ;; Typed result + error: tr<nid>, te<nid> = <call>; if err return;
       ;; target = vm.<Box>(tr<nid>). The intermediate result+err vars are
       ;; FUNCTION-scoped (registered via register-typed-call-temp! and
@@ -1801,8 +1815,7 @@
                                      (gogen/binary "!=" err-id (gogen/ident "nil"))
                                      [(gogen/return-stmt [zero-expr err-id])]
                                      nil)
-            boxed (box-result-from-type res-id result-spec)
-            box-assign (gogen/assign "=" target boxed)]
+            box-assign (typed-result-assign f nid target res-id result-spec)]
         [assign err-check box-assign])
       ;; vm.Value result, no error: target = <call>
       (= result-spec "vm.Value")

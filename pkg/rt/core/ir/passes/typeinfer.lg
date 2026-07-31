@@ -62,6 +62,40 @@
                   tsym  (get *deftype-ctor-types* vname)]
               (when tsym [:dtype tsym]))))))))
 
+;; Bind to a map {fn-name-string -> lattice-type} around a typeinfer call so a
+;; SELF-recursive call to a fn with a declared return type — `(defn f ^long [n]
+;; …)` — is typed from that declaration. Without it the self-call is :unknown,
+;; which poisons the whole numeric chain: fib's `(+ (fib …) (fib …))` sees two
+;; unknown operands, stays boxed, and the fn's own return type never resolves
+;; either (#599). Same shape and cost profile as *deftype-ctor-types* — nil
+;; disables it.
+;;
+;; SELF-calls only, deliberately. A non-recursive fn's return type already falls
+;; out of its body, so the declaration adds nothing there; and seeding calls to
+;; OTHER fns means a declaration the callee's body contradicts corrupts the
+;; caller — `(defn liar ^long [n] "s")` lowers honestly to `string`, but a
+;; caller seeded with :int emits `v2 = vm.String(Liar(…))` into an `int` temp.
+;; Restricted to self-calls, an inconsistent hint can only produce a type the
+;; declaring fn's own body already joins, so the fallout stays local and shows
+;; up as that fn declining to type its return.
+;;
+;; Trusting the declaration otherwise mirrors #357's treatment of param hints:
+;; the hint is authoritative and the boundary coerces.
+(def ^:dynamic *declared-return-types* nil)
+
+(defn- call-declared-type
+  "If a :call inst is a SELF-call to the fn being inferred and that fn declared
+   a return type, return it; otherwise nil."
+  [inst f]
+  (when *declared-return-types*
+    (let [refs (ir/refs inst f)]
+      (when (seq refs)
+        (let [callee (first refs)]
+          (when (= :load-var (ir/op callee f))
+            (let [callee-name (name (symbol (ir/aux callee f)))]
+              (when (= callee-name (str (ir/fn-name f)))
+                (get *declared-return-types* callee-name)))))))))
+
 (defn- load-var-ns+name [nid f]
   (when (= :load-var (ir/op nid f))
     (let [sym (symbol (ir/aux nid f))]
@@ -258,7 +292,10 @@
       (ir/op-infer-facet? op) (ops/infer-op op inst f state)
       ;; :call is typeinfer-coupled (call-dtype / call-core-type below) and
       ;; not yet reified — the one remaining legacy arm.
-      (= op :call)            (or (call-dtype inst f)
+      ;; call-declared-type first: an explicit ^long/^double on the callee is a
+      ;; declaration, so it outranks the structural guesses below.
+      (= op :call)            (or (call-declared-type inst f)
+                                  (call-dtype inst f)
                                   (call-core-type inst f state)
                                   :unknown)
       ;; Facetless ops (:set-var, :tail-call, :recur-fn, :pop, closures, :try,

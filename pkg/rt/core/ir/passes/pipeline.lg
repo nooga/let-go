@@ -1269,6 +1269,16 @@
         ;; protocol-method calls on a known-concrete receiver to recv.M().
         protocol-method-set (into #{} (mapcat (fn [p] (map (fn [m] (str (first m))) (:methods p))) protocols))
         ctor-types  (into {} (map (fn [dt] [(str "->" (:name dt)) (:name dt)]) deftypes))
+        ;; Declared return types for this namespace's own defns, so a call to a
+        ;; hinted sibling (self-recursion included) types from the declaration
+        ;; instead of collapsing to :unknown (#599).
+        ret-types   (into {} (keep (fn [form]
+                                     (when (and (seq? form)
+                                                (contains? #{'defn 'defn-} (first form))
+                                                (symbol? (nth form 1 nil)))
+                                       (when-let [t (ir.build/declared-return-type form)]
+                                         [(str (unwrap-name (nth form 1))) t])))
+                                   defn-forms0))
         ctors       (into {} (map (fn [dt] [(str "->" (:name dt)) (lower-go/go-export-name (:name dt))]) deftypes))
         vm-import   {:path "github.com/nooga/let-go/pkg/vm" :alias "vm"}
         rt-import   {:path "github.com/nooga/let-go/pkg/rt" :alias "rt"}
@@ -1280,6 +1290,7 @@
                                                    {})
               ir.passes.typeinfer/*typeinfer-max-drains* nil
               ir.passes.typeinfer/*deftype-ctor-types* (when (seq ctor-types) ctor-types)
+              ir.passes.typeinfer/*declared-return-types* (when (seq ret-types) ret-types)
               lower-go/*deftype-ctors* (when (seq ctors) ctors)
               lower-go/*protocol-methods* (when (seq protocol-method-set) protocol-method-set)
               ;; Resolve non-injective PascalCase export collisions deterministically;
