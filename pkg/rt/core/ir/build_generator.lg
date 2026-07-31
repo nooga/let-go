@@ -3,8 +3,6 @@
 ;; Produces pkg/rt/core/ir/build_generated.lg (same ir.build namespace).
 ;; This keeps the generated dispatcher in-namespace, avoiding cross-ns cycles.
 
-;; lgbgen:skip
-
 (ns ir.build-generator
   (:require [ir.form-heads]))
 
@@ -14,7 +12,6 @@
   (let [heads ir.form-heads/form-heads-catalog]
     (str ";; Generated form-heads dispatcher (from pkg/rt/core/ir/build_generator.lg)\n"
          ";; DO NOT EDIT — run `make generate` to regenerate.\n"
-         ";; lgbgen:skip — generated into ir.build namespace from catalog.\n"
          "\n"
          "(ns ir.build)\n"
          "\n"

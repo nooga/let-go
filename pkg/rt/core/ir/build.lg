@@ -713,6 +713,29 @@
         ctor (symbol (str "->" (subs hn 0 (dec (count hn)))))]
     (cons ctor (rest form))))
 
+;; Form-heads dispatcher: generated cond chain from the catalog.
+;; Replaces build-list's hardcoded cond; semantically identical.
+;; Each form head matches to its handler; all others fall through to build-call.
+(defn form-heads-dispatcher [form ctx]
+  (let [head (first form)]
+    (cond
+      (empty? form)   (add-inst! ctx (ctx-block ctx) :const [] form)
+      (= head 'if)   (build-if form ctx)
+      (= head 'do)   (build-do form ctx)
+      (= head 'loop)   (build-loop form ctx)
+      (= head 'loop*)   (build-loop* form ctx)
+      (= head 'recur)   (build-recur form ctx)
+      (= head 'try)   (build-try form ctx)
+      (= head 'let)   (build-let form ctx)
+      (= head 'let*)   (build-let* form ctx)
+      (= head 'fn*)   (build-fn* form ctx)
+      (= head 'var)   (build-var form ctx)
+      (= head 'set!)   (build-set! form ctx)
+      (= head 'def)   (build-def form ctx)
+      (= head 'quote)   (build-quote form ctx)
+      (= head '.)   (build-dot form ctx)
+      :else           (build-call form ctx))))
+
 (defn build-list [form ctx]
   ;; Dispatch on form head using the generated dispatcher from the form-heads catalog.
   ;; The dispatcher (form-heads-dispatcher) handles all 14 special forms and falls
