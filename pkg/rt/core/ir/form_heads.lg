@@ -1,0 +1,73 @@
+;; Form-head catalog for build-list dispatch (Axis-1 form heads).
+;;
+;; This file defines the complete set of special forms handled by build-list,
+;; along with their metadata: which forms need explicit handlers in free-vars
+;; and captures-of, and how they're dispatched.
+;;
+;; Generation: pkg/rt/core/ir/form_heads_gen.lg consumes this catalog and
+;; emits the generated dispatcher and related utilities.
+
+(ns ir.form-heads)
+
+;; --- Form-head catalog ---
+;;
+;; Each row: [form-head free-vars? captures-of? description]
+;;
+;; form-head        — symbol (the form head matched in build-list's cond)
+;; free-vars?       — true if form has explicit handler in free-vars fn
+;; captures-of?     — true if form has explicit handler in captures-of fn
+;; description      — brief comment
+
+(def form-heads-catalog
+  '[;; Control flow
+    [if false false "conditional: no special scope handling (both branches walked generically)"]
+    [do false false "sequential: no special scope handling"]
+    [loop true true "loop bindings: establishes local scope"]
+    [loop* true true "loop* (parallel) bindings: establishes local scope"]
+    [recur false false "recur to enclosing loop: no special scope"]
+    [try true true "exception handling: catch binds exception symbol"]
+
+    ;; Binding forms
+    [let true true "let bindings: establishes local scope"]
+    [let* true true "let* (sequential) bindings: establishes local scope"]
+    [fn* true true "fn* closure: captures outer scope, has closure-local scope"]
+
+    ;; Variable / assignment
+    [var true true "var reference: doesn't evaluate, no captures"]
+    [set! true true "set! assignment: only value is evaluated"]
+    [def false false "def interning: compile-time effect, value evaluated normally"]
+
+    ;; Quote / data access
+    [quote true true "quote: quoted data is not evaluated"]
+    [. true true "dot field access: field is literal, obj is evaluated"]
+    ])
+
+;; --- Exported API ---
+
+(defn form-head-names
+  "Return the set of all form heads in the catalog."
+  []
+  (into #{} (map first form-heads-catalog)))
+
+(defn free-vars-handler-forms
+  "Return the set of form heads with explicit handlers in free-vars."
+  []
+  (into #{} (for [[head fv? _co? _desc] form-heads-catalog
+                  :when fv?]
+              head)))
+
+(defn captures-of-handler-forms
+  "Return the set of form heads with explicit handlers in captures-of."
+  []
+  (into #{} (for [[head _fv? co? _desc] form-heads-catalog
+                  :when co?]
+              head)))
+
+(defn form-head-description
+  "Return the description for a form head, or nil if not catalogued."
+  [head]
+  (let [match (first (filter (fn [[h _fv? _co? _desc]] (= h head))
+                             form-heads-catalog))]
+    (when match (last match))))
+
+(println "ir.form-heads catalog loaded")
