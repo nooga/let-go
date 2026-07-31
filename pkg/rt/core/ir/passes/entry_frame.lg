@@ -260,8 +260,15 @@
             ;; the aliased import above (lowered?). When the entry did NOT
             ;; lower, keep it blank-imported so any sibling fns it lowered
             ;; still register their init() overrides.
+            ;;
+            ;; distinct because callers collect one :go-pkg per lowered spec,
+            ;; and several specs share a package whenever a namespace spans
+            ;; multiple files (or an input is passed twice). Go rejects a
+            ;; repeated import, so the dedup belongs here at the emission
+            ;; site rather than in any one caller.
             (mapv (fn [p] (str "\t_ " (go-string-lit p)))
-                  (filter (fn [p] (not (and lowered? (= p entry-import)))) blanks))
+                  (distinct
+                    (filter (fn [p] (not (and lowered? (= p entry-import)))) blanks)))
             [""
              "\t\"github.com/nooga/let-go/pkg/rt\""
              "\t\"github.com/nooga/let-go/pkg/vm\""]))

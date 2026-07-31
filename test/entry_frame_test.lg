@@ -83,3 +83,29 @@
     (is (false? (:lowered? e)))
     (is (str/includes? src "_ \"aotmod/fib\""))
     (is (str/includes? src "_ \"aotmod/lib\""))))
+
+(defn- count-import-lines [src needle]
+  (count (filter (fn [l] (str/includes? l needle)) (str/split src #"\n"))))
+
+(deftest blank-imports-are-deduplicated
+  ;; Callers collect one :go-pkg per lowered spec, so a namespace spanning
+  ;; several files hands the same package back more than once. Go rejects a
+  ;; repeated import, so the frame has to emit each one once.
+  (testing "a package repeated in :blank-imports is imported once"
+    (let [raw (ef/find-program-entry '[(defn -main [& a] 1)])
+          e   (ef/analyze-entry raw "func Main(ec *vm.ExecContext, args ...vm.Value) (vm.Value, error) {\n")
+          src (ef/emit-entry-frame-go {:entry e
+                                       :entry-import "aotmod/fib"
+                                       :blank-imports ["aotmod/lib" "aotmod/lib" "aotmod/util"]})]
+      (is (true? (:lowered? e)))
+      (is (= 1 (count-import-lines src "_ \"aotmod/lib\"")))
+      (is (= 1 (count-import-lines src "_ \"aotmod/util\"")))))
+  (testing "a repeated entry-import that is kept (not lowered) is still imported once"
+    (let [raw (ef/find-program-entry '[(defn -main [& a] 1)])
+          e   (ef/analyze-entry raw "package fib\n")
+          src (ef/emit-entry-frame-go {:entry e
+                                       :entry-import "aotmod/fib"
+                                       :blank-imports ["aotmod/fib" "aotmod/fib" "aotmod/lib"]})]
+      (is (false? (:lowered? e)))
+      (is (= 1 (count-import-lines src "_ \"aotmod/fib\"")))
+      (is (= 1 (count-import-lines src "_ \"aotmod/lib\""))))))
