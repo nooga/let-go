@@ -21,7 +21,8 @@
 (ns ir.build
   (:require
    [clojure.set :as set]
-   [ir.data]))
+   [ir.data]
+   [ir.form-heads-generated]))
 
 ;; --- builder context -----------------------------------------------------
 
@@ -706,29 +707,22 @@
     (cons ctor (rest form))))
 
 (defn build-list [form ctx]
+  ;; Dispatch on form head using the generated dispatcher from the form-heads catalog.
+  ;; The dispatcher handles all 14 special forms (if, let, do, quote, def, var, set!,
+  ;; loop, loop*, recur, fn*, try, .) and falls through to build-call for others.
+  ;; Special handling for interop and builtin ops is done here before delegation.
   (let [head    (first form)
         builtin (intrinsic-builtin-op head ctx)]
     (cond
-      ;; The empty list `()` is a self-evaluating constant (the empty list),
-      ;; NOT a call with no operator. Without this, `head` is nil and the form
-      ;; falls through to (build-call ()), which lowers to an invoke of a nil
-      ;; callee (rt.InvokeValueEC(ec, vm.NIL, …)). The bytecode compiler emits
-      ;; OP_LOAD_CONST vm.EmptyList here; mirror that with a :const Inst.
-      (empty? form)   (add-inst! ctx (ctx-block ctx) :const [] form)
-      (= head 'if)    (build-if form ctx)
-      (= head 'let)   (build-let form ctx)
-      (= head 'let*)  (build-let form ctx)
-      (= head 'do)    (build-do form ctx)
-      (= head 'quote) (build-quote form ctx)
-      (= head 'def)   (build-def form ctx)
-      (= head 'var)   (build-var form ctx)
-      (= head 'set!)  (build-set! form ctx)
-      (= head 'loop)  (build-loop form ctx)
-      (= head 'loop*) (build-loop form ctx)
-      (= head 'recur) (build-recur form ctx)
-      (= head 'fn*)   (build-fn* form ctx)
-      (= head 'try)   (build-try form ctx)
-      (= head '.)     (build-dot form ctx)
+      ;; Delegate to generated form-heads dispatcher for special form dispatch.
+      ;; This replaces the hardcoded cond chain, now single-sourced from the catalog.
+      (or (empty? form)
+          (= head 'if) (= head 'let) (= head 'let*) (= head 'do)
+          (= head 'quote) (= head 'def) (= head 'var) (= head 'set!)
+          (= head 'loop) (= head 'loop*) (= head 'recur) (= head 'fn*)
+          (= head 'try) (= head '.))
+      (ir.form-heads-generated/form-heads-dispatcher form ctx)
+
       ;; Go method-call interop: (.Method recv arg...). Rewrite to the
       ;; canonical dot form and build as a generic call to `.`.
       (and (method-call-head? head) (seq (rest form)))

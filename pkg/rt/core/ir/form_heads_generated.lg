@@ -1,0 +1,30 @@
+;; Generated form-heads dispatcher (from pkg/rt/core/ir/form_heads_gen.lg)
+;; DO NOT EDIT — run `make generate` to regenerate.
+
+(ns ir.form-heads-generated)
+
+;; form-heads-dispatcher: cond chain derived from the catalog.
+;; Replaces build-list's hardcoded cond; semantically identical.
+;; Each form head matches to its handler; all others fall through to build-call.
+
+(defn form-heads-dispatcher [form ctx]
+  (let [head (first form)]
+    (cond
+      (empty? form)   (add-inst! ctx (ctx-block ctx) :const [] form)
+      (= head 'if)    (build-if form ctx)
+      (= head 'let)   (build-let form ctx)
+      (= head 'let*)  (build-let form ctx)
+      (= head 'do)    (build-do form ctx)
+      (= head 'quote) (build-quote form ctx)
+      (= head 'def)   (build-def form ctx)
+      (= head 'var)   (build-var form ctx)
+      (= head 'set!)  (build-set! form ctx)
+      (= head 'loop)  (build-loop form ctx)
+      (= head 'loop*) (build-loop form ctx)
+      (= head 'recur) (build-recur form ctx)
+      (= head 'fn*)   (build-fn* form ctx)
+      (= head 'try)   (build-try form ctx)
+      (= head '.)     (build-dot form ctx)
+      :else           (build-call form ctx))))
+
+(println "ir.form-heads-generated dispatcher loaded")
