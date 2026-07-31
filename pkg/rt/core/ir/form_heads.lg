@@ -70,4 +70,32 @@
                              form-heads-catalog))]
     (when match (last match))))
 
-(println "ir.form-heads catalog loaded")
+;; --- Load-time coherence check (AC-1: red-build drill) ---
+;;
+;; Verify at load time that the catalog is complete: every form head
+;; that build-list must dispatch on is catalogued. If a form is added to
+;; build-list but omitted from the catalog, this check throws naming it,
+;; failing the build.
+;;
+;; This is the AC-1 verification: "removing a form from the catalog and
+;; running generation fails naming the missing form."
+
+(let [catalogued (form-head-names)
+      ; The complete set of forms that build-list MUST handle. If you add
+      ; a new special form to build-list, it must ALSO be added here, or
+      ; this error fires and fails the build. (Not in the generated set, but
+      ; this is the ground truth for generation and the coherence gate.)
+      required #{'if 'let 'let* 'do 'quote 'def 'var 'set! 'loop 'loop*
+                 'recur 'fn* 'try '.}
+      missing  (set/difference required catalogued)
+      extra    (set/difference catalogued required)]
+  (when (seq missing)
+    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                         "form heads missing from catalog: " missing)
+                    {:missing missing :required required :catalogued catalogued})))
+  (when (seq extra)
+    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                         "unexpected form heads in catalog (not in build-list): " extra)
+                    {:extra extra :required required :catalogued catalogued}))))
+
+(println "ir.form-heads catalog loaded (coherence check passed)")

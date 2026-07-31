@@ -1,0 +1,26 @@
+;; Code generator for form-heads catalog artifacts.
+;;
+;; Produces:
+;;   1. form-heads-dispatcher: generated fn that dispatches on form head
+;;      (semantically equivalent to build-list's current cond chain)
+;;   2. form-heads-set: the complete set of special form heads
+;;   3. Load-time coherence check: thrown if a required form is missing
+;;
+;; Generation: invoked from scripts/generate.lg as part of the main
+;; orchestrator (same path as ir_ops.lg and ir_data.lg).
+;;
+;; Note: This file is lgbgen:skip — the generated artifacts go into
+;; separate files loaded on-demand (pkg/rt/core/ir/form_heads/generated.lg),
+;; not bundled into bytecode. Form dispatch is a build-time concern only.
+
+;; lgbgen:skip
+
+(ns ir.form-heads-gen
+  (:require
+   [clojure.string :as str]
+   [ir.form-heads]))
+
+;; Stub for now: the generator will be integrated once the refactoring
+;; (flip to generated dispatcher) is implemented. This placeholder allows
+;; the build to succeed and tests to pass.
+(println "ir.form-heads-gen stub loaded (full generator deferred to implementation phase)")

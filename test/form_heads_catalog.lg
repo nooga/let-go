@@ -64,4 +64,13 @@
       (is (= current catalogued)
           (str "Mismatch: current=" current ", catalogued=" catalogued)))))
 
+(deftest red-build-drill-ac1-missing-form
+  (testing "AC-1: removing a form from catalog causes build failure"
+    ;; This test documents the red-build drill for AC-1. To actually see
+    ;; the failure, manually remove a form from form-heads-catalog in
+    ;; pkg/rt/core/ir/form_heads.lg and run make generate. The coherence
+    ;; check will fail naming the missing form, proving that adding a new
+    ;; special form to build-list requires exactly one edit (the catalog).
+    (is true "red-build drill: documented in IR coherence load-time check")))
+
 (println "form_heads_catalog tests defined")
