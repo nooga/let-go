@@ -2576,31 +2576,47 @@
               (ir/block-insts (first blocks) f)) true
         :else (recur (rest blocks))))))
 
-(defn- function-needs-rt? [f]
+;; Public for AC-3 test gates: per-op verification of conditional cases.
+;; Tests call this directly on single instructions to verify var-conditional and
+;; function-template distinctions are preserved.
+(defn op-contributes-rt? [nid f]
+  "Whether an op at nid contributes to function-needs-rt?.
+   Encapsulates exact conditions from scattered conditionals:
+   - :call unconditionally
+   - :try unconditionally (emits rt.InvokeValueEC in try-assign-stmts)
+   - :load-var unconditionally
+   - :const only if (var? aux) — var-conditional case
+   - any op if (any-fn-template? aux) — function-template case
+   - binary ops with vm.Value operands unconditionally
+   - inc/dec/bit-not over vm.Value unconditionally"
+  (let [op   (ir/op nid f)
+        aux  (ir/aux nid f)
+        refs (ir/refs nid f)]
+    (or (= op :call)
+        (= op :try)
+        (= op :load-var)
+        ;; (var x) / set! var operand -> rt.LookupVar (var-conditional case)
+        (and (= op :const) (var? aux))
+        ;; any op with fn-template aux needs rt (function-template case)
+        (any-fn-template? aux)
+        ;; Binary op with any vm.Value operand
+        ;; lowers to rt.<Op>Value helper call.
+        (and (contains? binary-op op)
+             (not= op :eq)
+             (or (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))
+                 (= "vm.Value" (go-type-spec (ir/type-of (nth refs 1) f)))))
+        ;; inc/dec/bit-not over vm.Value also delegate to rt helpers
+        ;; so unknown values do not emit invalid native Go arithmetic/bitwise ops.
+        (and (or (= op :inc) (= op :dec) (= op :bit-not))
+             (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))))))
+
+;; Public: used by ir.passes.pipeline for signature derivation.
+;; Refactored to fold per-op contributions instead of scattered conditionals.
+(defn function-needs-rt? [f]
   (let [local? (loop [blocks (ir/blocks f)]
                  (cond
                    (empty? blocks) false
-                   (some (fn [nid]
-                           (let [op   (ir/op nid f)
-                                 aux  (ir/aux nid f)
-                                 refs (ir/refs nid f)]
-                             (or (= op :call)
-                                 (= op :try)  ; try-assign-stmts emits rt.InvokeValueEC
-                                 (= op :load-var)
-                                 ;; (var x) / set! var operand -> rt.LookupVar
-                                 (and (= op :const) (var? aux))
-                                 (any-fn-template? aux)
-                                 ;; Binary op with any vm.Value operand
-                                 ;; lowers to rt.<Op>Value helper call.
-                                 (and (contains? binary-op op)
-                                      (not= op :eq)
-                                      (or (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))
-                                          (= "vm.Value" (go-type-spec (ir/type-of (nth refs 1) f)))))
-                                 ;; inc/dec/bit-not over vm.Value also delegate
-                                 ;; to rt helpers so unknown values do not emit
-                                 ;; invalid native Go arithmetic/bitwise ops.
-                                 (and (or (= op :inc) (= op :dec) (= op :bit-not))
-                                      (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))))))
+                   (some (fn [nid] (op-contributes-rt? nid f))
                          (ir/block-insts (first blocks) f))
                    true
                    :else (recur (rest blocks))))]
