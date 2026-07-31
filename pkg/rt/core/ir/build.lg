@@ -311,8 +311,9 @@
 
 ;; --- form dispatch -------------------------------------------------------
 
-(declare build-list build-symbol build-if build-let build-do build-quote
-         build-var build-set! build-def build-loop build-recur build-fn*
+(declare form-heads-dispatcher
+         build-list build-symbol build-if build-let build-let* build-do build-quote
+         build-var build-set! build-def build-loop build-loop* build-recur build-fn*
          build-vector build-map build-call build-try build-dot)
 
 ;; Sentinel returned by recur / any form whose current-block is already
@@ -927,6 +928,11 @@
           (bind-local! ctx sym val)))
       result)))
 
+(defn build-let* [form ctx]
+  "let* (sequential bindings) uses the same lowering as let. The dispatcher
+   aliases both to the same handler."
+  (build-let form ctx))
+
 (defn build-if [form ctx]
   "if emits BranchIf with then/else BranchTargets and a join block.
    Non-cheap captures (values that cannot be re-emitted at use site)
@@ -1148,6 +1154,11 @@
                       (update :loop-headers (fn [s] (pop (or s []))))
                       (update :loop-capture-syms-stack (fn [s] (pop (or s []))))))
       result)))
+
+(defn build-loop* [form ctx]
+  "loop* (parallel bindings) uses the same lowering as loop. The dispatcher
+   aliases both to the same handler."
+  (build-loop form ctx))
 
 (defn build-recur [form ctx]
   "recur emits Branch back to the current loop header, or :tail-call for
