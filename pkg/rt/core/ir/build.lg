@@ -1355,12 +1355,16 @@
          :variadic? variadic?
          :arg-tags final-arg-tags}))))
 
-(defn- return-hinted-arity-vector? [form]
+;; Public because the lowering pipeline needs the same test: the reader
+;; reifies `(defn f ^long [n] …)` as `(defn f (with-meta [n] {:tag …}) …)`,
+;; so every place that distinguishes single- from multi-arity by `vector?`
+;; has to know this shape is still one arity. See #598.
+(defn return-hinted-arity-vector? [form]
   (and (seq? form)
        (= 'with-meta (first form))
        (vector? (second form))))
 
-(defn- unwrap-arity-vector [form]
+(defn unwrap-arity-vector [form]
   (if (return-hinted-arity-vector? form)
     (second form)
     form))
