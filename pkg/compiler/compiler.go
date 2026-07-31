@@ -1978,8 +1978,9 @@ func defCompiler(c *Context, form vm.Value) error {
 }
 
 // maybeIRCompileDefFnArg is the runtime seam for name*-wrapped fn defs:
-// when *ir-compile* is on and a TOP-LEVEL `(def NAME (name* ... (fn ...) ...))`
-// is being compiled, route the inner fn form through the Lisp IR pipeline
+// when *ir-compile* is on and a TOP-LEVEL
+// `(def NAME (name* ... (fn [args] ...) ...))` is being compiled, route the
+// anonymous inner fn form through the Lisp IR pipeline
 // (ir.passes.pipeline/compile-def-fn-value) and substitute the compiled Fn
 // value as an embedded constant — the same def-value shape the defn macro
 // produces via chunk->fn. The defn macro can't cover these: `def` is a
@@ -2045,6 +2046,17 @@ func (c *Context) maybeIRCompileDefFnArg(name vm.Symbol, val vm.Value) (vm.Value
 	}
 	if fnIdx == -1 {
 		return nil, nil
+	}
+	// Named fn forms have a lexical self-binding: `(fn self [...] (self ...))`.
+	// The defn-shaped IR helper cannot preserve that binding (renaming it to the
+	// outer def would turn lexical recursion into mutable Var lookup), so named
+	// forms are deliberately outside this seam and stay on the ordinary compiler
+	// even under strict mode.
+	fnForm := elems[fnIdx].(*vm.List)
+	if fnTail := fnForm.Next(); fnTail != nil {
+		if _, named := fnTail.First().(vm.Symbol); named {
+			return nil, nil
+		}
 	}
 	// From here the form IS a name*-wrapped single-fn def that should lower;
 	// a failure is a real IR-compile miss, so honor strict.

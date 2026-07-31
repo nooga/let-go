@@ -33,6 +33,26 @@
       (eval '(def seam-inc-rule (name* :tag (fn [x] (inc x)) :meta))))
     (is (= 6 (eval '(seam-inc-rule 5))))))
 
+(deftest seam-preserves-named-fn-self-binding
+  (testing "named fn recursion stays on the ordinary compiler under strict mode"
+    ;; A named fn's self symbol is lexical, not an alias for the outer Var. The
+    ;; IR seam deliberately excludes this shape until it can preserve that
+    ;; distinction; strict mode must not turn the exclusion into a regression.
+    (binding [*ir-compile* true *ir-compile-strict* true]
+      (eval '(def seam-factorial-rule
+               (name* :t
+                      (fn self [n]
+                        (if (= n 0) 1 (* n (self (- n 1)))))
+                      :m))))
+    (is (= 120 (eval '(seam-factorial-rule 5))))))
+
+(deftest seam-accepts-a-return-hinted-arity-vector
+  (testing "strict IR compilation recognizes ^long [args] as one arity"
+    (binding [*ir-compile* true *ir-compile-strict* true]
+      (eval '(def seam-hinted-rule
+               (name* :t (fn ^long [^long n] (+ n 1)) :m))))
+    (is (= 6 (eval '(seam-hinted-rule 5))))))
+
 (deftest seam-strict-throws-on-unlowerable-shape
   ;; THE non-vacuous signal: a multi-arity fn is refused by
   ;; compile-def-fn-value, so under strict the seam must surface the miss. A
