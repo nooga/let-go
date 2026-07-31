@@ -1,3 +1,5 @@
+//go:build !tinygo && !lg_no_http
+
 package rt
 
 import (
