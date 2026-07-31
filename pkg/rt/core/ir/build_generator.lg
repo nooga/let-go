@@ -1,0 +1,40 @@
+;; Generator for form-heads dispatcher — emits into ir.build namespace.
+;;
+;; Produces pkg/rt/core/ir/build_generated.lg (same ir.build namespace).
+;; This keeps the generated dispatcher in-namespace, avoiding cross-ns cycles.
+
+;; lgbgen:skip
+
+(ns ir.build-generator
+  (:require [ir.form-heads]))
+
+;; Build the generated dispatcher source.
+;; Returns a single string: the complete build_generated.lg file to emit.
+(defn emit-dispatcher-file []
+  (let [heads (ir.form-heads/form-heads-catalog)]
+    (str ";; Generated form-heads dispatcher (from pkg/rt/core/ir/build_generator.lg)\n"
+         ";; DO NOT EDIT — run `make generate` to regenerate.\n"
+         ";; Emitted into ir.build namespace; replaces the hardcoded form-head cond chain.\n"
+         "\n"
+         "(ns ir.build)\n"
+         "\n"
+         ";; form-heads-dispatcher: generated cond chain from the catalog.\n"
+         ";; Semantically identical to build-list's current hardcoded dispatch.\n"
+         ";; Single-sourced from form-heads-catalog (no duplicate form-head sets).\n"
+         "\n"
+         "(defn form-heads-dispatcher [form ctx]\n"
+         "  (let [head (first form)]\n"
+         "    (cond\n"
+         "      (empty? form)   (add-inst! ctx (ctx-block ctx) :const [] form)\n"
+         (apply str
+                (for [[h _fv? _co? _desc] heads]
+                  (let [handler-name (str "build-" (name h))
+                        head-sym (if (= h '.) "'." (str "'" (name h)))]
+                    (format "      (= head %s)   (%s form ctx)\n" head-sym handler-name))))
+         "      :else           (build-call form ctx))))\n"
+         "\n"
+         "(println \"form-heads-dispatcher (generated from catalog) loaded\")\n")))
+
+;; Return the generated file content.
+;; The gen-lisp function in scripts/generate.lg will spit this to pkg/rt/core/ir/build_generated.lg
+(emit-dispatcher-file)

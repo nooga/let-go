@@ -707,29 +707,19 @@
     (cons ctor (rest form))))
 
 (defn build-list [form ctx]
+  ;; Dispatch on form head using the generated dispatcher from the form-heads catalog.
+  ;; The dispatcher (form-heads-dispatcher) handles all 14 special forms and falls
+  ;; through to build-call for others. This consolidates form-head dispatch into
+  ;; a single source (the catalog), replacing the previous hardcoded cond chain.
   (let [head    (first form)
         builtin (intrinsic-builtin-op head ctx)]
     (cond
-      ;; The empty list `()` is a self-evaluating constant (the empty list),
-      ;; NOT a call with no operator. Without this, `head` is nil and the form
-      ;; falls through to (build-call ()), which lowers to an invoke of a nil
-      ;; callee (rt.InvokeValueEC(ec, vm.NIL, …)). The bytecode compiler emits
-      ;; OP_LOAD_CONST vm.EmptyList here; mirror that with a :const Inst.
-      (empty? form)   (add-inst! ctx (ctx-block ctx) :const [] form)
-      (= head 'if)    (build-if form ctx)
-      (= head 'let)   (build-let form ctx)
-      (= head 'let*)  (build-let form ctx)
-      (= head 'do)    (build-do form ctx)
-      (= head 'quote) (build-quote form ctx)
-      (= head 'def)   (build-def form ctx)
-      (= head 'var)   (build-var form ctx)
-      (= head 'set!)  (build-set! form ctx)
-      (= head 'loop)  (build-loop form ctx)
-      (= head 'loop*) (build-loop form ctx)
-      (= head 'recur) (build-recur form ctx)
-      (= head 'fn*)   (build-fn* form ctx)
-      (= head 'try)   (build-try form ctx)
-      (= head '.)     (build-dot form ctx)
+      ;; Delegate to generated form-heads dispatcher for all special forms.
+      ;; (form-heads-dispatcher is emitted from the catalog into this namespace
+      ;; during `make generate`, semantically identical to the hardcoded cond.)
+      (or (empty? form) (contains? (ir.form-heads/form-head-names) head))
+      (form-heads-dispatcher form ctx)
+
       ;; Go method-call interop: (.Method recv arg...). Rewrite to the
       ;; canonical dot form and build as a generic call to `.`.
       (and (method-call-head? head) (seq (rest form)))
