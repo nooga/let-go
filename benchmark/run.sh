@@ -14,12 +14,34 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Benchmark names become part of command strings passed to hyperfine, which
+# executes them through a shell. Keep them to the identifier alphabet used by
+# the checked-in fixtures before constructing any command or generated-code
+# input from them.
+validate_benchmark_name() {
+    local name="$1"
+    if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+        echo "Unsafe benchmark name: $name" >&2
+        return 1
+    fi
+}
+
+benchmark_name() {
+    local name
+    name="$(basename "$1" .clj)"
+    validate_benchmark_name "$name" || return 1
+    printf '%s\n' "$name"
+}
+
 # Filter mode: positional args select which perf benches to run.
 # In filter mode, startup/memory are skipped and results.md is NOT regenerated;
 # results are printed only. Use this for iterating on a single bench.
 FILTER_BENCHES=("$@")
 FILTER_MODE=0
 [ ${#FILTER_BENCHES[@]} -gt 0 ] && FILTER_MODE=1
+for want in "${FILTER_BENCHES[@]}"; do
+    validate_benchmark_name "$want"
+done
 
 if [ "$FILTER_MODE" -eq 1 ]; then
     WARMUP=10
@@ -93,8 +115,11 @@ AOT_SRC="$SCRIPT_DIR/aot/src"
 BB="$(which bb 2>/dev/null || true)"
 CLJ="$(which clj 2>/dev/null || true)"
 
-# Collect benchmark files (apply filter if any positional args were passed)
-ALL_BENCHMARKS=($(ls "$SCRIPT_DIR"/*.clj 2>/dev/null | sort))
+# Collect benchmark files (apply filter if any positional args were passed).
+# A nullglob avoids parsing ls output and preserves each filename as one value.
+shopt -s nullglob
+ALL_BENCHMARKS=("$SCRIPT_DIR"/*.clj)
+shopt -u nullglob
 BENCHMARKS=()
 if [ "$FILTER_MODE" -eq 1 ]; then
     for want in "${FILTER_BENCHES[@]}"; do
@@ -110,6 +135,10 @@ if [ "$FILTER_MODE" -eq 1 ]; then
 else
     BENCHMARKS=("${ALL_BENCHMARKS[@]}")
 fi
+
+for bench in "${BENCHMARKS[@]}"; do
+    benchmark_name "$bench" >/dev/null
+done
 
 if [ ${#BENCHMARKS[@]} -eq 0 ]; then
     echo "No benchmark files found in $SCRIPT_DIR"
@@ -230,7 +259,7 @@ echo ""
 echo "=== Performance Benchmarks ==="
 
 for bench in "${BENCHMARKS[@]}"; do
-    name="$(basename "$bench" .clj)"
+    name="$(benchmark_name "$bench")"
     echo ""
     echo "--- $name ---"
 
@@ -254,17 +283,25 @@ if [ -n "$BASELINE" ]; then
     echo ""
     echo "=== Regression check vs $BASELINE_REF ==="
     THRESHOLD="${REGRESSION_THRESHOLD:-1.10}"
+    if [[ ! "$THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        echo "Invalid REGRESSION_THRESHOLD: $THRESHOLD" >&2
+        exit 1
+    fi
     for bench in "${BENCHMARKS[@]}"; do
-        name="$(basename "$bench" .clj)"
+        name="$(benchmark_name "$bench")"
         JSON="/tmp/bench_${name}.json"
         [ -f "$JSON" ] || continue
-        python3 -c "
+        if ! python3 - "$JSON" "$BASELINE_REF" "$name" "$THRESHOLD" <<'PY'
 import json, sys
-d = json.load(open('$JSON'))
+
+json_path, baseline_ref, name, threshold_text = sys.argv[1:]
+threshold = float(threshold_text)
+with open(json_path) as f:
+    d = json.load(f)
 # Median, not mean: a single scheduling hiccup skews the mean badly on a busy
 # machine, and the check should not cry wolf over one outlier run.
 by = {r['command'].strip(): r for r in d['results']}
-cur, base = by.get('let-go'), by.get('baseline $BASELINE_REF')
+cur, base = by.get('let-go'), by.get(f'baseline {baseline_ref}')
 if cur is None or base is None or not base.get('median'):
     sys.exit(0)
 c, b = cur['median'], base['median']
@@ -272,12 +309,15 @@ ratio = c / b
 # Relative spread on either leg; a noisy run gets reported, not asserted on.
 noise = max(cur['stddev'] / cur['mean'], base['stddev'] / base['mean']) if cur['mean'] and base['mean'] else 0
 if noise > 0.20:
-    print(f'  {\"$name\":<16} {c*1000:8.1f} ms vs {b*1000:8.1f} ms   {ratio:.2f}x  NOISY (sigma {noise*100:.0f}% — rerun on an idle machine)')
+    print(f'  {name:<16} {c*1000:8.1f} ms vs {b*1000:8.1f} ms   {ratio:.2f}x  NOISY (sigma {noise*100:.0f}% — rerun on an idle machine)')
     sys.exit(0)
-mark = 'REGRESSION' if ratio > $THRESHOLD else ('faster' if ratio < 0.95 else 'ok')
-print(f'  {\"$name\":<16} {c*1000:8.1f} ms vs {b*1000:8.1f} ms   {ratio:.2f}x  {mark}')
-sys.exit(3 if ratio > $THRESHOLD else 0)
-" || REGRESSION_FOUND=1
+mark = 'REGRESSION' if ratio > threshold else ('faster' if ratio < 0.95 else 'ok')
+print(f'  {name:<16} {c*1000:8.1f} ms vs {b*1000:8.1f} ms   {ratio:.2f}x  {mark}')
+sys.exit(3 if ratio > threshold else 0)
+PY
+        then
+            REGRESSION_FOUND=1
+        fi
     done
     if [ "$REGRESSION_FOUND" -eq 1 ]; then
         echo ""
@@ -433,11 +473,14 @@ else
 fi
 
 for bench in "${BENCHMARKS[@]}"; do
-    name="$(basename "$bench" .clj)"
+    name="$(benchmark_name "$bench")"
     JSON="/tmp/bench_${name}.json"
-    python3 -c "
+    python3 - "$JSON" "$BASELINE_REF" "$BASELINE" "$name" <<'PY'
 import json
-with open('$JSON') as f:
+import sys
+
+json_path, baseline_ref, baseline, name = sys.argv[1:]
+with open(json_path) as f:
     d = json.load(f)
 
 def fmt(mean, stddev):
@@ -452,7 +495,7 @@ for r in d['results']:
     elif cmd == 'let-go AOT': results['aot'] = (fmt(r['mean'], r['stddev']), r['mean'])
     elif cmd == 'babashka': results['bb'] = (fmt(r['mean'], r['stddev']), r['mean'])
     elif cmd == 'clojure': results['clj'] = (fmt(r['mean'], r['stddev']), r['mean'])
-    elif cmd == 'baseline $BASELINE_REF': results['base'] = (fmt(r['mean'], r['stddev']), r['mean'])
+    elif cmd == f'baseline {baseline_ref}': results['base'] = (fmt(r['mean'], r['stddev']), r['mean'])
 
 best = min(v[1] for v in results.values())
 lg_mean = results.get('letgo', (None, 1.0))[1]
@@ -467,9 +510,9 @@ def cell(key):
         return f'**{s}**{tag}'
     return f'{s}{tag}'
 
-cols = ['letgo', 'aot'] + (['base'] if '$BASELINE' else []) + ['bb', 'clj']
-print('| $name | ' + ' | '.join(cell(c) for c in cols) + ' |')
-"
+cols = ['letgo', 'aot'] + (['base'] if baseline else []) + ['bb', 'clj']
+print(f'| {name} | ' + ' | '.join(cell(c) for c in cols) + ' |')
+PY
 done
 } >> "$RESULTS_FILE"
 
