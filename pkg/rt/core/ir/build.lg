@@ -208,12 +208,6 @@
           :else
           (recur (rest fs) (conj body head) clauses finally-clause))))))
 
-;; AC-3 helper: query catalog to determine if a form head needs explicit handling in captures-of.
-;; This creates the coupling: if catalog metadata changes, captures-of behavior changes.
-(defn- has-captures-handler? [form-head]
-  "Check if form-head is in the catalog's captures-of handler set."
-  (contains? (ir.form-heads/captures-of-handler-forms) form-head))
-
 (defn captures-of [form known-locals]
   "Return the SET of symbols `form` references that are bound in
    `known-locals`. Used by build-if/build-loop to compute which block-
@@ -238,15 +232,15 @@
     (or (list? form) (seq? form))
     (let [head (first form)]
       ;; Dispatch based on form head. Special forms with explicit handlers are
-      ;; gated by the catalog (via has-captures-handler?). Editing the catalog
-      ;; changes which forms get special handling — this IS the AC-3 coupling.
+      ;; gated by the catalog (via ir.form-heads/has-captures-handler?). Editing
+      ;; the catalog changes which forms get special handling — this IS the AC-3 coupling.
       (cond
         (= head 'quote) #{}
         (= head 'var)   #{}
-        (and (= head 'set!) (has-captures-handler? head))
+        (and (= head 'set!) (ir.form-heads/has-captures-handler? head))
         (let [[_ _sym val] form]
           (captures-of val known-locals))
-        (and (= head 'fn*) (has-captures-handler? head))
+        (and (= head 'fn*) (ir.form-heads/has-captures-handler? head))
         ;; fn* captures its free vars via push-closed in the current
         ;; block. If those captured InstIds live in a different block
         ;; (e.g. the entry block's LoadArgs), the closure-emit creates
@@ -276,7 +270,7 @@
                                   (mapcat #(captures-of % inner-known) body)))
                               rest-forms))))
         (and (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
-             (has-captures-handler? head))
+             (ir.form-heads/has-captures-handler? head))
         (let [[_ bindings & body] form
               pairs    (partition 2 bindings)
               [used let-bound-set]
@@ -289,7 +283,7 @@
               new-locals    (into known-locals let-bound-set)
               body-captures (into #{} (mapcat #(captures-of % new-locals) body))]
           (into used (set/difference body-captures let-bound-set)))
-        (and (= head 'try) (has-captures-handler? head))
+        (and (= head 'try) (ir.form-heads/has-captures-handler? head))
         ;; try guards a body; (catch e …) binds e in the handler body only;
         ;; (finally …) binds nothing. Mirror build-try's split so captures
         ;; (used for cross-block threading) don't treat catch/e/finally as
@@ -305,7 +299,7 @@
                          (mapcat #(captures-of % known-locals) (:body finally-clause))
                          [])]
           (into #{} (concat body-caps catch-caps fin-caps)))
-        (and (= head '.) (has-captures-handler? head))
+        (and (= head '.) (ir.form-heads/has-captures-handler? head))
         ;; (. obj field): only obj carries captures; field is literal.
         (let [[_ obj _field] form] (captures-of obj known-locals))
         :else
@@ -417,9 +411,9 @@
       (cond
         (= head 'quote) #{}
         (= head 'var)   #{}
-        (and (= head 'set!) (contains? (ir.form-heads/free-vars-handler-forms) head))
+        (and (= head 'set!) (ir.form-heads/has-free-vars-handler? head))
         (let [[_ _sym val] form] (free-vars val bound))
-        (and (= head 'fn*) (contains? (ir.form-heads/free-vars-handler-forms) head))
+        (and (= head 'fn*) (ir.form-heads/has-free-vars-handler? head))
         (let [[_ maybe-name & raw-rest] form
               has-name?  (symbol? maybe-name)
               name-sym   (if has-name? maybe-name nil)
@@ -441,7 +435,7 @@
                                   (mapcat #(free-vars % arg-set) body)))
                               rest-forms))))
         (and (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
-             (contains? (ir.form-heads/free-vars-handler-forms) head))
+             (ir.form-heads/has-free-vars-handler? head))
         (let [[_ bindings & body] form
               pairs    (partition 2 bindings)
               [used new-bound]
@@ -451,7 +445,7 @@
                       [#{} bound]
                       pairs)]
           (into used (mapcat #(free-vars % new-bound) body)))
-        (and (= head 'try) (contains? (ir.form-heads/free-vars-handler-forms) head))
+        (and (= head 'try) (ir.form-heads/has-free-vars-handler? head))
         (let [[body-forms catch-clause finally-clause] (parse-try (rest form))
               body-fv (mapcat #(free-vars % bound) body-forms)
               catch-fv (if catch-clause
@@ -462,7 +456,7 @@
                        (mapcat #(free-vars % bound) (:body finally-clause))
                        [])]
           (into #{} (concat body-fv catch-fv fin-fv)))
-        (and (= head '.) (contains? (ir.form-heads/free-vars-handler-forms) head))
+        (and (= head '.) (ir.form-heads/has-free-vars-handler? head))
         ;; (. obj field): field is a literal symbol, not a var; only obj.
         (let [[_ obj _field] form] (free-vars obj bound))
         :else

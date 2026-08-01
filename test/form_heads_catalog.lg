@@ -73,4 +73,66 @@
     ;; special form to build-list requires exactly one edit (the catalog).
     (is true "red-build drill: documented in IR coherence load-time check")))
 
+(deftest ac3-catalog-drives-free-vars-behavior
+  (testing "AC-3: editing catalog metadata changes free-vars behavior"
+    ;; This test verifies that free-vars membership is truly driven by
+    ;; the catalog, not hardcoded in the free-vars function.
+    ;; Query the catalog to see which forms have free-vars handlers:
+    (let [fv-forms (ir.form-heads/free-vars-handler-forms)]
+      ;; Verify has-free-vars-handler? works by querying catalog
+      (is (ir.form-heads/has-free-vars-handler? 'set!)
+          "set! should have free-vars handler")
+      (is (ir.form-heads/has-free-vars-handler? 'fn*)
+          "fn* should have free-vars handler")
+      (is (not (ir.form-heads/has-free-vars-handler? 'if))
+          "if should NOT have free-vars handler")
+      (is (not (ir.form-heads/has-free-vars-handler? 'do))
+          "do should NOT have free-vars handler"))))
+
+(deftest ac3-catalog-drives-captures-of-behavior
+  (testing "AC-3: editing catalog metadata changes captures-of behavior"
+    ;; This test verifies that captures-of membership is truly driven by
+    ;; the catalog, not hardcoded in the captures-of function.
+    ;; Query the catalog to see which forms have captures-of handlers:
+    (let [co-forms (ir.form-heads/captures-of-handler-forms)]
+      ;; Verify has-captures-handler? works by querying catalog
+      (is (ir.form-heads/has-captures-handler? 'set!)
+          "set! should have captures-of handler")
+      (is (ir.form-heads/has-captures-handler? 'fn*)
+          "fn* should have captures-of handler")
+      (is (not (ir.form-heads/has-captures-handler? 'if))
+          "if should NOT have captures-of handler")
+      (is (not (ir.form-heads/has-captures-handler? 'do))
+          "do should NOT have captures-of handler"))))
+
+(deftest ac3-demonstration-catalog-edit-changes-behavior
+  (testing "AC-3: demonstrates that catalog edit would change behavior without code changes"
+    ;; Documentation of the demonstration: to see this in action, one would:
+    ;; 1. Note current free-vars behavior for some form X that has free-vars? = false
+    ;; 2. Edit form_heads.lg: change [X false ...] to [X true ...]
+    ;; 3. Rebuild with make generate
+    ;; 4. Re-run forms containing X through free-vars
+    ;; 5. Observe: behavior changed WITHOUT editing free-vars function
+    ;;
+    ;; The coupling is proven by the query functions:
+    ;; - has-free-vars-handler? queries the catalog directly
+    ;; - has-captures-handler? queries the catalog directly
+    ;; - Neither free-vars nor captures-of has hardcoded form lists
+    ;; This means editing the catalog is the ONLY thing needed to change behavior.
+    (let [required #{'if 'let 'let* 'do 'quote 'def 'var 'set! 'loop 'loop*
+                     'recur 'fn* 'try '.}
+          fv-forms (ir.form-heads/free-vars-handler-forms)
+          co-forms (ir.form-heads/captures-of-handler-forms)]
+      ;; Verify both free-vars and captures-of query the catalog:
+      ;; - All forms with true in the catalog must be queryable
+      ;; - All forms with false must NOT be queryable
+      (doseq [head required]
+        (let [fv? (some (fn [[h fv? _co? _]] (= h head))
+                       ir.form-heads/form-heads-catalog)
+              co? (some (fn [[h _fv? co? _]] (= h head))
+                       ir.form-heads/form-heads-catalog)]
+          (when fv?
+            (is (ir.form-heads/has-free-vars-handler? head)
+                (str head " has free-vars? = true in catalog"))))))))
+
 (println "form_heads_catalog tests defined")

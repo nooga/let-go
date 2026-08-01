@@ -110,6 +110,19 @@
       (get (handlers-fn) head)
       (get form-head-handlers head)))) ; fallback to symbols if atom not set
 
+(defn has-free-vars-handler?
+  "Query the catalog: does this form head have an explicit handler in free-vars?
+   Used to gate free-vars behavior. Editing the catalog changes free-vars behavior."
+  [form-head]
+  (contains? (free-vars-handler-forms) form-head))
+
+(defn has-captures-handler?
+  "Query the catalog: does this form head have an explicit handler in captures-of?
+   Used to gate captures-of behavior. Editing the catalog changes captures-of behavior.
+   Note: This helper lives in form_heads.lg and is imported into build.lg for AC-3 coupling."
+  [form-head]
+  (contains? (captures-of-handler-forms) form-head))
+
 ;; --- Load-time coherence check (AC-1: bidirectional validation) ---
 ;;
 ;; Verify at load time that:
