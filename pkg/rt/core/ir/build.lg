@@ -237,12 +237,16 @@
     (if (known-locals form) #{form} #{})
     (or (list? form) (seq? form))
     (let [head (first form)]
+      ;; Dispatch based on form head. Special forms with explicit handlers are
+      ;; gated by the catalog (via has-captures-handler?). Editing the catalog
+      ;; changes which forms get special handling — this IS the AC-3 coupling.
       (cond
         (= head 'quote) #{}
         (= head 'var)   #{}
-        (= head 'set!)  (let [[_ _sym val] form]
-                          (captures-of val known-locals))
-        (= head 'fn*)
+        (and (= head 'set!) (has-captures-handler? head))
+        (let [[_ _sym val] form]
+          (captures-of val known-locals))
+        (and (= head 'fn*) (has-captures-handler? head))
         ;; fn* captures its free vars via push-closed in the current
         ;; block. If those captured InstIds live in a different block
         ;; (e.g. the entry block's LoadArgs), the closure-emit creates
@@ -271,7 +275,8 @@
                                                     (shadow-for args-vec))]
                                   (mapcat #(captures-of % inner-known) body)))
                               rest-forms))))
-        (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
+        (and (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
+             (has-captures-handler? head))
         (let [[_ bindings & body] form
               pairs    (partition 2 bindings)
               [used let-bound-set]
@@ -284,7 +289,7 @@
               new-locals    (into known-locals let-bound-set)
               body-captures (into #{} (mapcat #(captures-of % new-locals) body))]
           (into used (set/difference body-captures let-bound-set)))
-        (= head 'try)
+        (and (= head 'try) (has-captures-handler? head))
         ;; try guards a body; (catch e …) binds e in the handler body only;
         ;; (finally …) binds nothing. Mirror build-try's split so captures
         ;; (used for cross-block threading) don't treat catch/e/finally as
@@ -300,7 +305,7 @@
                          (mapcat #(captures-of % known-locals) (:body finally-clause))
                          [])]
           (into #{} (concat body-caps catch-caps fin-caps)))
-        (= head '.)
+        (and (= head '.) (has-captures-handler? head))
         ;; (. obj field): only obj carries captures; field is literal.
         (let [[_ obj _field] form] (captures-of obj known-locals))
         :else
@@ -406,11 +411,15 @@
     (if (bound form) #{} #{form})
     (or (list? form) (seq? form))
     (let [head (first form)]
+      ;; Dispatch based on form head. Special forms are gated by the catalog.
+      ;; Editing the catalog's free-vars? metadata changes which forms get
+      ;; special handling — this IS the AC-3 coupling.
       (cond
         (= head 'quote) #{}
         (= head 'var)   #{}
-        (= head 'set!)  (let [[_ _sym val] form] (free-vars val bound))
-        (= head 'fn*)
+        (and (= head 'set!) (contains? (ir.form-heads/free-vars-handler-forms) head))
+        (let [[_ _sym val] form] (free-vars val bound))
+        (and (= head 'fn*) (contains? (ir.form-heads/free-vars-handler-forms) head))
         (let [[_ maybe-name & raw-rest] form
               has-name?  (symbol? maybe-name)
               name-sym   (if has-name? maybe-name nil)
@@ -431,7 +440,8 @@
                                                  (into #{} args-vec))]
                                   (mapcat #(free-vars % arg-set) body)))
                               rest-forms))))
-        (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
+        (and (or (= head 'let) (= head 'let*) (= head 'loop) (= head 'loop*))
+             (contains? (ir.form-heads/free-vars-handler-forms) head))
         (let [[_ bindings & body] form
               pairs    (partition 2 bindings)
               [used new-bound]
@@ -441,7 +451,7 @@
                       [#{} bound]
                       pairs)]
           (into used (mapcat #(free-vars % new-bound) body)))
-        (= head 'try)
+        (and (= head 'try) (contains? (ir.form-heads/free-vars-handler-forms) head))
         (let [[body-forms catch-clause finally-clause] (parse-try (rest form))
               body-fv (mapcat #(free-vars % bound) body-forms)
               catch-fv (if catch-clause
@@ -452,7 +462,7 @@
                        (mapcat #(free-vars % bound) (:body finally-clause))
                        [])]
           (into #{} (concat body-fv catch-fv fin-fv)))
-        (= head '.)
+        (and (= head '.) (contains? (ir.form-heads/free-vars-handler-forms) head))
         ;; (. obj field): field is a literal symbol, not a var; only obj.
         (let [[_ obj _field] form] (free-vars obj bound))
         :else
@@ -713,28 +723,23 @@
         ctor (symbol (str "->" (subs hn 0 (dec (count hn)))))]
     (cons ctor (rest form))))
 
-;; Form-heads dispatcher: generated cond chain from the catalog.
-;; Replaces build-list's hardcoded cond; semantically identical.
-;; Each form head matches to its handler; all others fall through to build-call.
+;; Form-heads dispatcher: data-driven lookup from the catalog handler map.
+;; Replaces hardcoded cond chain. Adding a form = edit catalog + handler map.
+;; Each form head maps to its handler function; unknown heads fall through to build-call.
 (defn form-heads-dispatcher [form ctx]
-  (let [head (first form)]
-    (cond
-      (empty? form)   (add-inst! ctx (ctx-block ctx) :const [] form)
-      (= head 'if)   (build-if form ctx)
-      (= head 'do)   (build-do form ctx)
-      (= head 'loop)   (build-loop form ctx)
-      (= head 'loop*)   (build-loop* form ctx)
-      (= head 'recur)   (build-recur form ctx)
-      (= head 'try)   (build-try form ctx)
-      (= head 'let)   (build-let form ctx)
-      (= head 'let*)   (build-let* form ctx)
-      (= head 'fn*)   (build-fn* form ctx)
-      (= head 'var)   (build-var form ctx)
-      (= head 'set!)   (build-set! form ctx)
-      (= head 'def)   (build-def form ctx)
-      (= head 'quote)   (build-quote form ctx)
-      (= head '.)   (build-dot form ctx)
-      :else           (build-call form ctx))))
+  (cond
+    (empty? form)
+    (add-inst! ctx (ctx-block ctx) :const [] form)
+
+    ;; Look up handler for this form head in the catalog's handler map.
+    ;; The handler function is fetched via form-head-handler (which resolves
+    ;; the function from the handlers-fn thunk). If found, invoke it.
+    :else
+    (let [head (first form)
+          handler-fn (ir.form-heads/form-head-handler head)]
+      (if handler-fn
+        (handler-fn form ctx)
+        (build-call form ctx)))))
 
 (defn build-list [form ctx]
   ;; Dispatch on form head using the generated dispatcher from the form-heads catalog.
@@ -1601,3 +1606,25 @@
             final-blk  (ctx-block ctx)]
         (ir/add-terminator! f final-blk :return [closure-id] nil)
         f))))
+
+;; --- Initialize handler function map (AC-1 data-driven dispatch) ---
+;; Now that all build-* functions are defined, create the actual handler map
+;; mapping form heads to function objects. This makes form-heads-dispatcher
+;; truly data-driven: adding a form = edit catalog + edit this map.
+
+(reset! ir.form-heads/form-head-handlers-fn
+        (fn []
+          {'if       build-if
+           'do       build-do
+           'loop     build-loop
+           'loop*    build-loop*
+           'recur    build-recur
+           'try      build-try
+           'let      build-let
+           'let*     build-let*
+           'fn*      build-fn*
+           'var      build-var
+           'set!     build-set!
+           'def      build-def
+           'quote    build-quote
+           '.        build-dot}))

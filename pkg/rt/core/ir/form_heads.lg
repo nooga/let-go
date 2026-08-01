@@ -43,6 +43,32 @@
     [. true true "dot field access: field is literal, obj is evaluated"]
     ])
 
+;; --- Handler map (data-driven dispatch) ---
+;;
+;; Maps each form head to its handler function. This enables true data-driven
+;; dispatch: adding a form = edit the catalog + bind its handler here.
+;;
+;; IMPORTANT: Every form in form-heads-catalog MUST have a corresponding entry here.
+;; Missing handlers fail the bidirectional coherence check.
+
+(def form-head-handlers
+  "Map form heads to their handler functions. Used by form-heads-dispatcher.
+   Keys must match form-heads-catalog entries exactly."
+  '{if       build-if
+    do       build-do
+    loop     build-loop
+    loop*    build-loop*
+    recur    build-recur
+    try      build-try
+    let      build-let
+    let*     build-let*
+    fn*      build-fn*
+    var      build-var
+    set!     build-set!
+    def      build-def
+    quote    build-quote
+    .        build-dot})
+
 ;; --- Exported API ---
 
 (defn form-head-names
@@ -71,32 +97,60 @@
                              form-heads-catalog))]
     (when match (last match))))
 
-;; --- Load-time coherence check (AC-1: red-build drill) ---
+(def form-head-handlers-fn
+  "Thunk that returns the actual handler functions.
+   This is set by build.lg after all handlers are defined."
+  (atom nil))
+
+(defn form-head-handler
+  "Return the handler function for a form head, or nil if not bound."
+  [head]
+  (let [handlers-fn @form-head-handlers-fn]
+    (if handlers-fn
+      (get (handlers-fn) head)
+      (get form-head-handlers head)))) ; fallback to symbols if atom not set
+
+;; --- Load-time coherence check (AC-1: bidirectional validation) ---
 ;;
-;; Verify at load time that the catalog is complete: every form head
-;; that build-list must dispatch on is catalogued. If a form is added to
-;; build-list but omitted from the catalog, this check throws naming it,
-;; failing the build.
+;; Verify at load time that:
+;; 1. Catalog is complete: every form head that build-list handles is catalogued
+;; 2. Handlers are complete: every catalogued form has a handler binding
 ;;
-;; This is the AC-1 verification: "removing a form from the catalog and
-;; running generation fails naming the missing form."
+;; Missing either = build failure naming the form. This is the true AC-1
+;; gate: adding a form = edit catalog + edit handler map, nothing else.
 
 (let [catalogued (form-head-names)
-      ; The complete set of forms that build-list MUST handle. If you add
-      ; a new special form to build-list, it must ALSO be added here, or
-      ; this error fires and fails the build. (Not in the generated set, but
-      ; this is the ground truth for generation and the coherence gate.)
-      required #{'if 'let 'let* 'do 'quote 'def 'var 'set! 'loop 'loop*
-                 'recur 'fn* 'try '.}
-      missing  (set/difference required catalogued)
-      extra    (set/difference catalogued required)]
-  (when (seq missing)
-    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
-                         "form heads missing from catalog: " missing)
-                    {:missing missing :required required :catalogued catalogued})))
-  (when (seq extra)
-    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
-                         "unexpected form heads in catalog (not in build-list): " extra)
-                    {:extra extra :required required :catalogued catalogued}))))
+      handlers   (set (keys form-head-handlers))
+      ; The complete set of forms that build-list MUST handle.
+      required   #{'if 'let 'let* 'do 'quote 'def 'var 'set! 'loop 'loop*
+                   'recur 'fn* 'try '.}
 
-(println "ir.form-heads catalog loaded (coherence check passed)")
+      ; Catalog direction: every required form must be catalogued
+      missing-from-catalog (set/difference required catalogued)
+      extra-in-catalog     (set/difference catalogued required)
+
+      ; Handler direction: every catalogued form must have a handler
+      missing-from-handlers (set/difference catalogued handlers)
+      extra-in-handlers     (set/difference handlers catalogued)]
+
+  (when (seq missing-from-catalog)
+    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                         "form heads missing from catalog: " missing-from-catalog)
+                    {:missing missing-from-catalog :required required})))
+
+  (when (seq extra-in-catalog)
+    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                         "unexpected form heads in catalog (not in build-list): " extra-in-catalog)
+                    {:extra extra-in-catalog :required required})))
+
+  (when (seq missing-from-handlers)
+    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                         "form heads missing from handler map: " missing-from-handlers)
+                    {:missing missing-from-handlers :catalogued catalogued})))
+
+  (when (seq extra-in-handlers)
+    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                         "unexpected form heads in handler map (not in catalog): " extra-in-handlers)
+                    {:extra extra-in-handlers :catalogued catalogued}))))
+
+(println "ir.form-heads catalog loaded (bidirectional coherence check passed)")
