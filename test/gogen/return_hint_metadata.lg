@@ -1,0 +1,25 @@
+;; Native-lowering oracle for reader metadata on the idiomatic return-hint
+;; position. The same behavior is pinned against live JVM Clojure by
+;; test/gold/return_hint_metadata.cljc. The trampoline runs `run` under both the
+;; bytecode VM and generated Go, and also verifies that `run` dispatches to the
+;; native override rather than silently falling back to bytecode.
+(ns examples.return-hint-metadata)
+
+(def return-hinted-source "(defn hinted ^long [^long n] n)")
+
+(defn reader-metadata []
+  (let [arity (nth (read-string return-hinted-source) 2)]
+    ;; JVM Clojure attaches reader metadata directly. let-go preserves the
+    ;; reader form as (with-meta value metadata), so normalize both shapes.
+    (if (vector? arity)
+      [(meta arity) (meta (first arity))]
+      (let [arg        (first (second arity))
+            arity-meta (nth arity 2)
+            arg-meta   (nth arg 2)]
+        [(assoc arity-meta :tag (second (:tag arity-meta)))
+         (assoc arg-meta :tag (second (:tag arg-meta)))]))))
+
+(defn hinted ^long [^long n] n)
+
+(defn run ^Object []
+  [(hinted 7) (reader-metadata)])

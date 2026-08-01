@@ -43,6 +43,8 @@ import (
 //     transducer application, with-out-str) when the binding lives in a child
 //     ExecContext (inside a future). A context-free Fn.Invoke at any of those
 //     sites resolves the var against the root context and breaks every scenario.
+//   - return_hint_metadata.cljc: reader metadata on the idiomatic
+//     (defn f ^long [^long n] ...) spelling, plus execution of the hinted fn.
 //
 // The scripts deliberately stay inside the subset where let-go and Clojure
 // agree. let-go is intentionally MORE PERMISSIVE than Clojure in two spots the
@@ -54,6 +56,7 @@ const (
 	dynvarThreadsScript   = "test/gold/dynvar_threads.cljc"
 	nsThreadsScript       = "test/gold/ns_threads.cljc"
 	dynvarCallbacksScript = "test/gold/dynvar_callbacks.cljc"
+	returnHintMetaScript  = "test/gold/return_hint_metadata.cljc"
 )
 
 // rederiveGoldEnv, when set to "1", makes the gold tests re-derive their .out
@@ -63,6 +66,9 @@ const rederiveGoldEnv = "LETGO_GOLD_REDERIVE"
 func TestGoldDynvarThreadsMatchesClojure(t *testing.T)   { checkGold(t, dynvarThreadsScript) }
 func TestGoldNsThreadsMatchesClojure(t *testing.T)       { checkGold(t, nsThreadsScript) }
 func TestGoldDynvarCallbacksMatchesClojure(t *testing.T) { checkGold(t, dynvarCallbacksScript) }
+func TestGoldReturnHintMetadataMatchesClojure(t *testing.T) {
+	checkGold(t, returnHintMetaScript)
+}
 
 // goldPath maps a .cljc script to its committed expected-output file:
 // test/gold/foo.cljc -> test/gold/foo.out.
