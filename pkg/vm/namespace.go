@@ -421,10 +421,20 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 	return NIL
 }
 
+// Refer installs a refer entry for ns into this namespace. An explicit
+// refer — :all here, or a later ReferList call — is how Clojure lets you
+// undo a prior ns-unmap: it clears the `unmapped` tombstone for any symbol
+// the refer newly brings into scope, so (resolve sym) sees it again. ns's
+// PublicVars snapshot is read BEFORE n's own lock is taken, honoring the
+// no-nested-namespace-locks invariant above.
 func (n *Namespace) Refer(ns *Namespace, alias string, all bool) {
 	nom := ns.Name()
 	if alias != "" {
 		nom = alias
+	}
+	var pub map[Symbol]*Var
+	if all {
+		pub = ns.PublicVars()
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -433,9 +443,13 @@ func (n *Namespace) Refer(ns *Namespace, alias string, all bool) {
 		ns:   ns,
 		only: nil,
 	}
+	for sym := range pub {
+		delete(n.unmapped, sym)
+	}
 }
 
-// ReferList refers only selected symbols from the given namespace into this namespace.
+// ReferList refers only selected symbols from the given namespace into this
+// namespace. Clears any `unmapped` tombstone on those symbols — see Refer.
 func (n *Namespace) ReferList(ns *Namespace, symbols []Symbol) {
 	set := make(map[Symbol]bool, len(symbols))
 	for _, s := range symbols {
@@ -447,6 +461,9 @@ func (n *Namespace) ReferList(ns *Namespace, symbols []Symbol) {
 		ns:   ns,
 		all:  false,
 		only: set,
+	}
+	for _, s := range symbols {
+		delete(n.unmapped, s)
 	}
 }
 
@@ -614,7 +631,9 @@ func (n *Namespace) ReferredVars() map[Symbol]*Var {
 // :exclude for a name while still relying on it resolving to clojure.core's
 // version until their own same-named def further down the file runs. A
 // later (def name ...) still works fine here regardless: Lookup checks the
-// local registry before ever consulting refers.
+// local registry before ever consulting refers. The tombstone isn't
+// permanent: Refer/ReferList clear it for any symbol they newly bring back
+// into scope, so an explicit re-refer restores visibility just like Clojure.
 func (n *Namespace) Unmap(name Symbol) {
 	n.mu.Lock()
 	delete(n.registry, name)

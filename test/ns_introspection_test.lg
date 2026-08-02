@@ -28,7 +28,16 @@
     (is (some? (resolve 'map)))
     (ns-unmap 'test.ns-introspection-test 'map)
     (is (nil? (resolve 'map)))
-    (is (not (contains? (ns-refers 'test.ns-introspection-test) 'map)))))
+    (is (not (contains? (ns-refers 'test.ns-introspection-test) 'map))))
+  (testing "an explicit refer-list (:only) restores a previously ns-unmap'd symbol"
+    (refer-list 'clojure.core ['map])
+    (is (some? (resolve 'map)))
+    (is (contains? (ns-refers 'test.ns-introspection-test) 'map)))
+  (testing "ns-unmap followed by an explicit :refer :all also restores visibility"
+    (ns-unmap 'test.ns-introspection-test 'map)
+    (is (nil? (resolve 'map)))
+    (refer 'clojure.core "" true)
+    (is (some? (resolve 'map)))))
 
 (defn- threw? [thunk]
   ;; let-go has no thrown? — use try/catch directly.
