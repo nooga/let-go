@@ -40,7 +40,12 @@
     (is (= "~~~" (cl-format false "~3~"))))
   (testing "~p pluralizes based on the consumed argument"
     (is (= "1 cat" (cl-format false "~a cat~p" 1 1)))
-    (is (= "3 cats" (cl-format false "~a cat~p" 3 3)))))
+    (is (= "3 cats" (cl-format false "~a cat~p" 3 3))))
+  (testing "~& is a fresh-line: no-op when already at the start of a line"
+    (is (= "x\ny" (cl-format false "x\n~&y")))
+    (is (= "x\ny" (cl-format false "x~&y")))
+    (testing "at the very start of output, output is already considered fresh"
+      (is (= "x" (cl-format false "~&x"))))))
 
 (deftest cl-format-iteration-test
   (testing "~{...~} iterates a list argument, consuming it as a whole"
@@ -51,10 +56,14 @@
     (is (= "" (cl-format false "~{~a ~}" (list))))))
 
 (deftest cl-format-conditional-test
-  (testing "~[...~] selects a clause by integer index, last clause as default"
+  (testing "~[...~] selects a clause by integer index"
     (is (= "zero" (cl-format false "~[zero~;one~;many~]" 0)))
-    (is (= "one" (cl-format false "~[zero~;one~;many~]" 1)))
-    (is (= "many" (cl-format false "~[zero~;one~;many~]" 5))))
+    (is (= "one" (cl-format false "~[zero~;one~;many~]" 1))))
+  (testing "~[...~] with plain ~; separators emits nothing for an out-of-range index"
+    (is (= "" (cl-format false "~[zero~;one~;many~]" 5))))
+  (testing "~:; before the last clause marks it as an explicit default for any out-of-range index"
+    (is (= "many" (cl-format false "~[zero~;one~:;many~]" 5)))
+    (is (= "zero" (cl-format false "~[zero~;one~:;many~]" 0))))
   (testing "~:[...~] is a boolean else/then conditional"
     (is (= "yes" (cl-format false "~:[no~;yes~]" true)))
     (is (= "no" (cl-format false "~:[no~;yes~]" false))))

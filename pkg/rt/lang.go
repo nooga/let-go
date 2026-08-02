@@ -7720,6 +7720,9 @@ func CoreRemoveNs(vs ...vm.Value) (vm.Value, error) {
 	if !ok {
 		return vm.NIL, fmt.Errorf("remove-ns expected Symbol")
 	}
+	if resolveNSAlias(string(sym)) == "core" {
+		return vm.NIL, fmt.Errorf("cannot remove clojure.core namespace")
+	}
 	RemoveNS(string(sym))
 	return vm.NIL, nil
 }
