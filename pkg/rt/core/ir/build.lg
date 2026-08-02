@@ -1633,21 +1633,26 @@
 ;; This is the critical AC-1 gate: if a handler is missing here, the check
 ;; fails immediately, not silently during lowering.
 
-(let [catalogued (ir.form-heads/form-head-names)
-      handlers   (set (keys (@ir.form-heads/form-head-handlers-fn)))
-      ; Missing from handlers: forms in catalog but not in map
-      missing-from-handlers (set/difference catalogued handlers)
-      ; Extra in handlers: forms in map but not in catalog
-      extra-in-handlers     (set/difference handlers catalogued)]
+(defn assert-form-head-coherence! []
+  "Verify handler map matches catalog. Called at load time.
+   Throws ex-info if handlers missing or extra."
+  (let [catalogued (ir.form-heads/form-head-names)
+        handlers   (set (keys (@ir.form-heads/form-head-handlers-fn)))
+        ; Missing from handlers: forms in catalog but not in map
+        missing-from-handlers (set/difference catalogued handlers)
+        ; Extra in handlers: forms in map but not in catalog
+        extra-in-handlers     (set/difference handlers catalogued)]
 
-  (when (seq missing-from-handlers)
-    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
-                         "form heads missing from handler map: " missing-from-handlers)
-                    {:missing missing-from-handlers :catalogued catalogued})))
+    (when (seq missing-from-handlers)
+      (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                           "form heads missing from handler map: " missing-from-handlers)
+                      {:missing missing-from-handlers :catalogued catalogued})))
 
-  (when (seq extra-in-handlers)
-    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
-                         "unexpected form heads in handler map (not in catalog): " extra-in-handlers)
-                    {:extra extra-in-handlers :catalogued catalogued}))))
+    (when (seq extra-in-handlers)
+      (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                           "unexpected form heads in handler map (not in catalog): " extra-in-handlers)
+                      {:extra extra-in-handlers :catalogued catalogued}))))
+  (println "ir.form-heads catalog loaded (bidirectional coherence check passed)"))
 
-(println "ir.form-heads catalog loaded (bidirectional coherence check passed)")
+;; Call at load time to catch steady-state errors
+(assert-form-head-coherence!)
