@@ -14,7 +14,7 @@
   (let [catalog-forms (ir.form-heads/captures-of-handler-forms)
         ;; These are the forms that SHOULD have explicit handlers
         ;; (captured from the catalog definition)
-        expected #{'var 'set! 'fn* 'let 'let* 'loop 'loop* 'try '.}]
+        expected #{'quote 'var 'set! 'fn* 'let 'let* 'loop 'loop* 'try '.}]
     ;; Verify the catalog explicitly lists these forms
     (t/is (= expected catalog-forms)
           "captures-of-handler-forms returns the expected set from catalog")))

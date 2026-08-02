@@ -1622,3 +1622,28 @@
            'def      build-def
            'quote    build-quote
            '.        build-dot}))
+
+;; --- Handler coherence check (AC-1: dispatch reads validated handlers) ---
+;; Validate that the handler map we just set matches the catalog, ensuring
+;; the coherence check validates the SAME handlers dispatch uses.
+;; This is the critical AC-1 gate: if a handler is missing here, the check
+;; fails immediately, not silently during lowering.
+
+(let [catalogued (ir.form-heads/form-head-names)
+      handlers   (set (keys (@ir.form-heads/form-head-handlers-fn)))
+      ; Missing from handlers: forms in catalog but not in map
+      missing-from-handlers (set/difference catalogued handlers)
+      ; Extra in handlers: forms in map but not in catalog
+      extra-in-handlers     (set/difference handlers catalogued)]
+
+  (when (seq missing-from-handlers)
+    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                         "form heads missing from handler map: " missing-from-handlers)
+                    {:missing missing-from-handlers :catalogued catalogued})))
+
+  (when (seq extra-in-handlers)
+    (throw (ex-info (str "ir.form-heads coherence check FAILED: "
+                         "unexpected form heads in handler map (not in catalog): " extra-in-handlers)
+                    {:extra extra-in-handlers :catalogued catalogued}))))
+
+(println "ir.form-heads catalog loaded (bidirectional coherence check passed)")

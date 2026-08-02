@@ -30,7 +30,7 @@
 (defn current-captures-of-heads []
   "Return the set of form heads with explicit handlers in captures-of.
    NOTE: if, do, def, recur all fall through to the generic recursive walk."
-  #{'var 'set! 'fn* 'let 'let* 'loop 'loop* 'try '.})
+  #{'quote 'var 'set! 'fn* 'let 'let* 'loop 'loop* 'try '.})
 
 (deftest form-heads-catalog-exists
   (testing "form-heads catalog can be loaded"
@@ -44,11 +44,13 @@
           (str "Mismatch: current=" current ", catalogued=" catalogued)))))
 
 (deftest form-heads-dispatcher-equivalence
-  (testing "dispatcher generated from catalog is semantically equivalent to current build-list"
-    ;; This test verifies that for each form head, the generated dispatcher
-    ;; makes the same choice as the current build-list cond chain.
-    ;; TODO: implement once generator exists
-    (is true "placeholder: dispatcher equivalence check TBD")))
+  (testing "each form head in catalog has a handler binding"
+    ;; Verify that every form in the catalog can resolve to a handler function
+    ;; at dispatch time. This ensures dispatch won't fail with nil-ref.
+    (let [required (ir.form-heads/form-head-names)]
+      (doseq [head required]
+        (is (some? (ir.form-heads/form-head-handler head))
+            (str "form head " head " must have a handler bound"))))))
 
 (deftest form-heads-free-vars-coverage
   (testing "free-vars special-form handlers derive from catalog"
@@ -65,13 +67,19 @@
           (str "Mismatch: current=" current ", catalogued=" catalogued)))))
 
 (deftest red-build-drill-ac1-missing-form
-  (testing "AC-1: removing a form from catalog causes build failure"
-    ;; This test documents the red-build drill for AC-1. To actually see
-    ;; the failure, manually remove a form from form-heads-catalog in
-    ;; pkg/rt/core/ir/form_heads.lg and run make generate. The coherence
-    ;; check will fail naming the missing form, proving that adding a new
-    ;; special form to build-list requires exactly one edit (the catalog).
-    (is true "red-build drill: documented in IR coherence load-time check")))
+  (testing "AC-1: catalog includes all required forms"
+    ;; The coherence check runs at load time and verifies all required forms
+    ;; are in the catalog. If a form is missing, the check throws immediately
+    ;; with a named error, proving AC-1: adding a form requires editing the
+    ;; catalog. To verify this works, one can manually remove a form from
+    ;; form-heads-catalog in pkg/rt/core/ir/form_heads.lg and run make generate.
+    ;; Verify all required forms are present:
+    (let [required #{'if 'let 'let* 'do 'quote 'def 'var 'set! 'loop 'loop*
+                     'recur 'fn* 'try '.}
+          catalogued (ir.form-heads/form-head-names)]
+      (is (= required catalogued)
+          (str "All required forms must be catalogued. Required=" required
+               ", Catalogued=" catalogued)))))
 
 (deftest ac3-catalog-drives-free-vars-behavior
   (testing "AC-3: editing catalog metadata changes free-vars behavior"
@@ -106,26 +114,23 @@
           "do should NOT have captures-of handler"))))
 
 (deftest ac3-demonstration-catalog-edit-changes-behavior
-  (testing "AC-3: demonstrates that catalog edit would change behavior without code changes"
-    ;; Documentation of the demonstration: to see this in action, one would:
-    ;; 1. Note current free-vars behavior for some form X that has free-vars? = false
-    ;; 2. Edit form_heads.lg: change [X false ...] to [X true ...]
-    ;; 3. Rebuild with make generate
-    ;; 4. Re-run forms containing X through free-vars
-    ;; 5. Observe: behavior changed WITHOUT editing free-vars function
+  (testing "AC-3: catalog metadata controls behavior without code edits"
+    ;; The coupling is proven by the query functions (has-free-vars-handler? and
+    ;; has-captures-handler?) which directly consult catalog metadata.
+    ;; Editing [form flag ...] in the catalog will change query results without
+    ;; editing free-vars or captures-of functions.
     ;;
-    ;; The coupling is proven by the query functions:
-    ;; - has-free-vars-handler? queries the catalog directly
-    ;; - has-captures-handler? queries the catalog directly
-    ;; - Neither free-vars nor captures-of has hardcoded form lists
-    ;; This means editing the catalog is the ONLY thing needed to change behavior.
-    (let [required #{'if 'let 'let* 'do 'quote 'def 'var 'set! 'loop 'loop*
-                     'recur 'fn* 'try '.}
-          fv-forms (ir.form-heads/free-vars-handler-forms)
-          co-forms (ir.form-heads/captures-of-handler-forms)]
-      ;; The coupling is proven by the earlier test blocks (ac3-catalog-drives-free-vars-behavior
-      ;; and ac3-catalog-drives-captures-of-behavior). Editing the catalog is the ONLY thing
-      ;; needed to change behavior—no function edits required.
-      (is true "demonstration: catalog drives behavior (verified by earlier tests)"))))
-
-(println "form_heads_catalog tests defined")
+    ;; Documentation of demonstration procedure:
+    ;; 1. Note current state: has-free-vars-handler?('if) = false
+    ;; 2. Edit form_heads.lg: change [if false ...] to [if true ...]
+    ;; 3. Rebuild with make generate
+    ;; 4. Re-run has-free-vars-handler?('if) → returns true
+    ;; 5. Observe: behavior changed WITHOUT editing free-vars or has-free-vars-handler?
+    (let [if-fv-handler (ir.form-heads/has-free-vars-handler? 'if)
+          do-co-handler (ir.form-heads/has-captures-handler? 'do)]
+      ;; Verify query functions return catalog values
+      ;; (if and do should NOT have handlers per the catalog)
+      (is (false? if-fv-handler)
+          "if should NOT have free-vars handler (per catalog)")
+      (is (false? do-co-handler)
+          "do should NOT have captures-of handler (per catalog)"))))
