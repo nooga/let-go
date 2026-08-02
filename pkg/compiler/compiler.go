@@ -1923,6 +1923,17 @@ func defCompiler(c *Context, form vm.Value) error {
 	if doc != vm.NIL {
 		meta = assocMeta(meta, vm.Keyword("doc"), doc)
 	}
+	// :file/:line/:column, mirroring Clojure's def-time metadata — sourced
+	// from the ORIGINAL (pre-expansion) form, since macroexpansion propagates
+	// FormSource onto the expanded form it compiles from (see
+	// expandMacro/lang.go's macroexpand-1 native). A raw `(def x v)` typed
+	// directly carries its own FormSource the same way. Forms without a
+	// recorded source (e.g. synthesized by other macros) simply add no info.
+	if info := vm.FormSource.Get(form); info != nil {
+		meta = assocMeta(meta, vm.Keyword("line"), vm.MakeInt(info.Line+1))
+		meta = assocMeta(meta, vm.Keyword("column"), vm.MakeInt(info.Column+1))
+		meta = assocMeta(meta, vm.Keyword("file"), vm.String(info.File))
+	}
 	c.defName = sym.String()
 	varr := c.CurrentNS().LookupOrAdd(sym.(vm.Symbol))
 	if meta != vm.NIL {

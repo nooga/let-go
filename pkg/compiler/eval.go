@@ -340,6 +340,10 @@ func postCoreInit() {
 	// Wire up namespace-aware eval for pod client-side code.
 	rt.SetEvalInNS(evalInNSChild)
 
+	// clojure.repl/raw-source: the one native primitive clojure.repl.lg
+	// needs (reader access) to implement source-fn/source in .lg.
+	registerReplSupport()
+
 	// test, walk, etc. are demand-loaded via resolver when required
 
 	// gogen_ir: the core bundle has now replayed every clojure.core

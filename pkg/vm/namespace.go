@@ -529,6 +529,73 @@ func (n *Namespace) AllVars() map[Symbol]*Var {
 	return out
 }
 
+// AliasesSnapshot copies the namespace's alias table (short-name -> target
+// namespace, as installed by `:as`/`alias`). Backs the ns-aliases core fn.
+func (n *Namespace) AliasesSnapshot() map[Symbol]*Namespace {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make(map[Symbol]*Namespace, len(n.aliases))
+	for k, v := range n.aliases {
+		out[k] = v
+	}
+	return out
+}
+
+// ReferredVars snapshots every var visible in this namespace via refer —
+// baseline auto-refers (clojure.core, let-go.core, …) plus explicit
+// (:require ... :refer) / (use ...) refers — keyed by unqualified symbol.
+// Mirrors lookupViaRefers's precedence: an explicit refer for a symbol
+// shadows a baseline hit for that same symbol. Backs the ns-refers core fn.
+// Vars this namespace interns itself are NOT included here — those belong to
+// AllVars/PublicVars (ns-interns/ns-publics); ns-map (the union) overlays
+// AllVars on top of this result to reproduce that shadowing.
+func (n *Namespace) ReferredVars() map[Symbol]*Var {
+	out := make(map[Symbol]*Var)
+	if coreNamespacePtr != nil && coreNamespacePtr != n {
+		for k, v := range coreNamespacePtr.PublicVars() {
+			out[k] = v
+		}
+	}
+	for _, b := range lgBaselineNamespaces {
+		if b == n {
+			continue
+		}
+		for k, v := range b.PublicVars() {
+			out[k] = v
+		}
+	}
+	for _, ref := range n.refersSnapshot() {
+		if isBaselineNS(ref.ns) {
+			// Already contributed above at baseline priority; an explicit
+			// refer of a baseline namespace (rare) adds nothing new.
+			continue
+		}
+		if ref.all {
+			for k, v := range ref.ns.PublicVars() {
+				out[k] = v
+			}
+			continue
+		}
+		for sym := range ref.only {
+			if v := ref.ns.localVar(sym); v != nil && !v.isPrivate {
+				out[sym] = v
+			}
+		}
+	}
+	return out
+}
+
+// Unmap removes a single LOCALLY INTERNED symbol from this namespace's
+// registry. Backs the ns-unmap core fn. Scope note: this only removes a
+// var this namespace itself defined — a symbol visible purely through a
+// refer (see ReferredVars) has no registry entry to remove, matching how
+// refers are resolved dynamically rather than copied into the registry.
+func (n *Namespace) Unmap(name Symbol) {
+	n.mu.Lock()
+	delete(n.registry, name)
+	n.mu.Unlock()
+}
+
 func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
 	ret := []Symbol{}
 	for _, r := range ns.refersSnapshot() {

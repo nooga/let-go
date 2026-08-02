@@ -1,0 +1,127 @@
+;; lgbgen:skip — stays off the precompiled-bundle path so its own vars keep
+;; live :doc/:arglists/:file metadata (Var meta does not currently survive
+;; the .lgb round-trip — see docs/design notes on the bundle metadata gap);
+;; loaded from source on demand, same as check.lg/data.lg/zip.lg.
+
+;; clojure.repl — REPL-convenience introspection, a close analog of
+;; Clojure's clojure.repl: dir/dir-fn, apropos, doc, find-doc, source/
+;; source-fn. Scoped to what browsing and finding public vars and source
+;; text needs; pst, root-cause, set-break-handler!, stack-element-str and
+;; thread-stopper (stack-trace/REPL-signal utilities) are not implemented.
+(ns clojure.repl
+  (:require [string :as str]))
+
+;; --- dir --------------------------------------------------------------
+
+(defn dir-fn
+  "Returns a sorted seq of symbols naming public vars in the namespace
+  named by ns-sym."
+  [ns-sym]
+  (->> ns-sym the-ns ns-publics keys (map name) sort (map symbol)))
+
+(defmacro dir
+  "Prints a sorted directory of public vars in the namespace named by
+  nsname."
+  [nsname]
+  `(doseq [s# (dir-fn '~nsname)] (println s#)))
+
+;; --- apropos ------------------------------------------------------------
+
+(defn apropos
+  "Given a regex or stringable thing, returns a sorted seq of fully
+  qualified symbols naming public vars in all currently loaded namespaces
+  whose name matches str-or-pattern."
+  [str-or-pattern]
+  (let [matches? (if (instance? java.util.regex.Pattern str-or-pattern)
+                   (fn [s] (re-find str-or-pattern s))
+                   (fn [s] (str/includes? s (str str-or-pattern))))]
+    (sort
+     (mapcat (fn [ns]
+               (let [nm (str (ns-name ns))]
+                 (->> (ns-publics ns)
+                      keys
+                      (map name)
+                      (filter matches?)
+                      (map #(symbol nm %)))))
+             (all-ns)))))
+
+;; --- doc ------------------------------------------------------------
+
+;; Public (not defn-): doc's syntax-quoted expansion auto-qualifies this
+;; call as clojure.repl/print-doc-entry regardless of the caller's
+;; namespace, and a private var's fully-qualified form only resolves from
+;; WITHIN its own namespace — so a private print-doc-entry would only work
+;; when doc happened to be invoked while *ns* was clojure.repl itself.
+(defn print-doc-entry
+  "Renders one doc entry: a header line, :arglists (if any), then the
+  docstring indented two spaces (or a placeholder if there is none)."
+  [qualified-name m]
+  (println "-------------------------")
+  (println qualified-name)
+  (when-let [al (:arglists m)]
+    (println (pr-str al)))
+  (if-let [d (:doc m)]
+    (println (str "  " d))
+    (println "  No docstring.")))
+
+(defmacro doc
+  "Prints documentation for a var given its (possibly qualified) symbol,
+  or for a namespace given its symbol. Special forms handled directly by
+  the compiler (if, def, fn*, let*, ...) have no var to look up and are
+  not covered."
+  [name]
+  `(let [n# (quote ~name)]
+     (if-let [ns# (find-ns n#)]
+       (do (println "-------------------------")
+           (println (ns-name ns#))
+           (if-let [d# (:doc (meta ns#))]
+             (println (str "  " d#))
+             (println "  No docstring.")))
+       (if-let [v# (resolve n#)]
+         ;; (str v#) renders "#'ns/name"; drop the reader-syntax prefix for
+         ;; the plain qualified-name header Clojure's doc shows.
+         (print-doc-entry (subs (str v#) 2) (meta v#))
+         (println (str "Nothing found for: " n#))))))
+
+(defn find-doc
+  "Prints documentation for every var whose name or docstring matches
+  re-string-or-pattern, across every currently loaded namespace."
+  [re-string-or-pattern]
+  (let [re (if (instance? java.util.regex.Pattern re-string-or-pattern)
+             re-string-or-pattern
+             (re-pattern re-string-or-pattern))]
+    (doseq [ns (sort-by #(str (ns-name %)) (all-ns))]
+      (doseq [[sym v] (sort-by (comp name key) (ns-interns ns))]
+        (let [m (meta v)
+              d (:doc m)]
+          (when (or (re-find re (name sym))
+                    (and d (re-find re d)))
+            (print-doc-entry (str (ns-name ns) "/" (name sym)) m)))))))
+
+;; --- source ------------------------------------------------------------
+;;
+;; source-fn reads the definition's raw text straight back out of the
+;; file it came from: defCompiler stashes :file/:line/:column (1-based) on
+;; every var's meta, and `raw-source` (a native primitive this namespace
+;; is pre-populated with — see pkg/compiler/repl_support.go) repositions a
+;; fresh reader at that point in the registered source text and reads
+;; exactly one form. Only works for vars whose defining file's source text
+;; is still registered (see vm.SourceRegistry) — true for anything compiled
+;; from a real file/string in this process, including this namespace itself
+;; and clojure.pprint (both lgbgen:skip, so always source-loaded), but NOT
+;; for a var baked into the precompiled core bundle (a pre-existing,
+;; separate limitation — see the lgbgen:skip note above).
+(defn source-fn
+  "Returns a string of the source code for the given (unevaluated) symbol,
+  if it can find it. Returns nil if it can't."
+  [x]
+  (when-let [v (resolve x)]
+    (let [m (meta v)
+          file (:file m) line (:line m) col (:column m)]
+      (when (and file line col)
+        (raw-source file (dec line) (dec col))))))
+
+(defmacro source
+  "Prints the source code for the given symbol, if it can find it."
+  [n]
+  `(println (or (source-fn (quote ~n)) "Source not found")))
