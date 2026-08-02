@@ -878,7 +878,11 @@
         first-form (unwrap (first forms))]
     (if (vector? first-form)
       (list first-form)
-      (map #(unwrap (first %)) forms))))
+      ;; apply list, not bare map: :arglists becomes a def-time bytecode
+      ;; CONSTANT (see defCompiler's apply-def-meta! emission), and the
+      ;; encoder can't serialize a lazy seq — apply forces it into a real
+      ;; List before it ever reaches the const pool.
+      (apply list (map #(unwrap (first %)) forms)))))
 
 (defmacro defn- [name & forms]
   (let [doc   (if (string? (first forms)) (first forms) nil)

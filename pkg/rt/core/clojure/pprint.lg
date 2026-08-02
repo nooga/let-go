@@ -1,7 +1,6 @@
-;; lgbgen:skip — stays off the precompiled-bundle path so its own vars keep
-;; live :doc/:arglists/:file metadata (Var meta does not currently survive
-;; the .lgb round-trip — see the same note in clojure/repl.lg); loaded from
-;; source on demand, same as check.lg/data.lg/zip.lg.
+;; lgbgen:skip — kept off the precompiled-bundle path so clojure.repl/source-fn
+;; can still show these functions' real source text (see the same note in
+;; clojure/repl.lg — Var metadata itself now survives the .lgb round-trip).
 
 ;; clojure.pprint — pretty-printing plus a constrained cl-format.
 ;;

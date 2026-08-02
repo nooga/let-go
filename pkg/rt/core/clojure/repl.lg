@@ -1,7 +1,12 @@
-;; lgbgen:skip — stays off the precompiled-bundle path so its own vars keep
-;; live :doc/:arglists/:file metadata (Var meta does not currently survive
-;; the .lgb round-trip — see docs/design notes on the bundle metadata gap);
-;; loaded from source on demand, same as check.lg/data.lg/zip.lg.
+;; lgbgen:skip — Var metadata now survives the .lgb round-trip (defCompiler
+;; emits a runtime apply-def-meta! call, mirroring how set-macro! already
+;; does this for :macro), so that is no longer why this stays off the bundle.
+;; It stays off for a second, still-real reason: source/source-fn need the
+;; ACTUAL SOURCE TEXT of the def, which vm.SourceRegistry only has for
+;; namespaces compiled from a real file — bundling clojure.repl would make
+;; clojure.repl/source-fn (and dir's use of it) unable to show ITS OWN
+;; functions' source. Loaded from source on demand, same as
+;; check.lg/data.lg/zip.lg.
 
 ;; clojure.repl — REPL-convenience introspection, a close analog of
 ;; Clojure's clojure.repl: dir/dir-fn, apropos, doc, find-doc, source/
