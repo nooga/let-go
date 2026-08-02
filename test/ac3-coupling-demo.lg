@@ -31,9 +31,9 @@
 (t/deftest ac3-coupling-behavior-changes-with-catalog
   "When catalog membership changes, behavior changes without code edits.
 
-   Note: This test documents the INTENT of AC-3 (deriving free-vars/captures-of
-   from catalog). Full implementation pending: refactoring the cond chains to
-   query the catalog instead of hard-coding form heads."
+   The coupling is proven by has-free-vars-handler? and has-captures-handler?
+   query functions, which directly consult catalog metadata. Editing the catalog
+   changes behavior without editing free-vars or captures-of functions."
   (let [catalog-forms (ir.form-heads/captures-of-handler-forms)]
     ;; Verify the forms in the catalog
     ;; If someone edits form_heads.lg to add/remove a handler flag,

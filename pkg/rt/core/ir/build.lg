@@ -235,8 +235,10 @@
       ;; gated by the catalog (via ir.form-heads/has-captures-handler?). Editing
       ;; the catalog changes which forms get special handling — this IS the AC-3 coupling.
       (cond
-        (= head 'quote) #{}
-        (= head 'var)   #{}
+        (and (= head 'quote) (ir.form-heads/has-captures-handler? head))
+        #{}
+        (and (= head 'var) (ir.form-heads/has-captures-handler? head))
+        #{}
         (and (= head 'set!) (ir.form-heads/has-captures-handler? head))
         (let [[_ _sym val] form]
           (captures-of val known-locals))
@@ -409,8 +411,10 @@
       ;; Editing the catalog's free-vars? metadata changes which forms get
       ;; special handling — this IS the AC-3 coupling.
       (cond
-        (= head 'quote) #{}
-        (= head 'var)   #{}
+        (and (= head 'quote) (ir.form-heads/has-free-vars-handler? head))
+        #{}
+        (and (= head 'var) (ir.form-heads/has-free-vars-handler? head))
+        #{}
         (and (= head 'set!) (ir.form-heads/has-free-vars-handler? head))
         (let [[_ _sym val] form] (free-vars val bound))
         (and (= head 'fn*) (ir.form-heads/has-free-vars-handler? head))
@@ -736,16 +740,16 @@
         (build-call form ctx)))))
 
 (defn build-list [form ctx]
-  ;; Dispatch on form head using the generated dispatcher from the form-heads catalog.
-  ;; The dispatcher (form-heads-dispatcher) handles all 14 special forms and falls
-  ;; through to build-call for others. This consolidates form-head dispatch into
+  ;; Dispatch on form head using the data-driven dispatcher from the form-heads catalog.
+  ;; The dispatcher (form-heads-dispatcher) handles all 14 special forms via catalog lookup
+  ;; and falls through to build-call for others. This consolidates form-head dispatch into
   ;; a single source (the catalog), replacing the previous hardcoded cond chain.
   (let [head    (first form)
         builtin (intrinsic-builtin-op head ctx)]
     (cond
-      ;; Delegate to generated form-heads dispatcher for all special forms.
-      ;; (form-heads-dispatcher is emitted from the catalog into this namespace
-      ;; during `make generate`, semantically identical to the hardcoded cond.)
+      ;; Delegate to data-driven form-heads dispatcher for all special forms.
+      ;; (form-heads-dispatcher looks up the handler in the catalog's handler map;
+      ;; semantically equivalent to the previous hardcoded cond chain.)
       (or (empty? form) (contains? (ir.form-heads/form-head-names) head))
       (form-heads-dispatcher form ctx)
 
