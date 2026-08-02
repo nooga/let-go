@@ -1,0 +1,42 @@
+;; Regression test for duplicate test registration.
+;;
+;; register-test! is called by every deftest evaluation. Re-evaluating a
+;; deftest — the editor flow, where you tweak a test and send it to the
+;; REPL again — used to append the same var to *registered-tests* a second
+;; time, so a later run-tests ran and counted that one test twice.
+;;
+;; Harness note: the registry assertions run inside a binding of
+;; *registered-tests* rather than calling clear-registered-tests!, which
+;; would wipe the registry the enclosing TestRunner is iterating over.
+
+(ns test.register-test-dedupe-test
+  (:require [test :refer :all]))
+
+(def probe-one (fn [] :one))
+(def probe-two (fn [] :two))
+
+(defn- registered-count [f]
+  (binding [test/*registered-tests* {}]
+    (f)
+    (count (get test/*registered-tests* *ns* []))))
+
+(deftest re-registering-the-same-var-is-a-no-op
+  (let [n (registered-count (fn []
+                              (register-test! (var probe-one))
+                              (register-test! (var probe-one))
+                              (register-test! (var probe-one))))]
+    (is (= 1 n))))
+
+(deftest distinct-vars-still-register-separately
+  (let [n (registered-count (fn []
+                              (register-test! (var probe-one))
+                              (register-test! (var probe-two))))]
+    (is (= 2 n))))
+
+(deftest registration-order-is-preserved
+  (let [vs (binding [test/*registered-tests* {}]
+             (register-test! (var probe-one))
+             (register-test! (var probe-two))
+             (register-test! (var probe-one))
+             (get test/*registered-tests* *ns* []))]
+    (is (= [(var probe-one) (var probe-two)] vs))))
