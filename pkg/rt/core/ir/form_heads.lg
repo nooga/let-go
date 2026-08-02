@@ -53,19 +53,29 @@
   []
   (into #{} (map first form-heads-catalog)))
 
-(defn free-vars-handler-forms
-  "Return the set of form heads with explicit handlers in free-vars."
-  []
+;; Precomputed sets for hot-path queries (AC-3 coupling optimization).
+;; Built once at load time, avoiding per-call set construction in free-vars/captures-of.
+(def ^:private precomputed-free-vars-handlers
+  "Set of form heads with explicit handlers in free-vars (precomputed at load time)."
   (into #{} (for [[head fv? _co? _desc] form-heads-catalog
                   :when fv?]
               head)))
 
-(defn captures-of-handler-forms
-  "Return the set of form heads with explicit handlers in captures-of."
-  []
+(def ^:private precomputed-captures-of-handlers
+  "Set of form heads with explicit handlers in captures-of (precomputed at load time)."
   (into #{} (for [[head _fv? co? _desc] form-heads-catalog
                   :when co?]
               head)))
+
+(defn free-vars-handler-forms
+  "Return the set of form heads with explicit handlers in free-vars."
+  []
+  precomputed-free-vars-handlers)
+
+(defn captures-of-handler-forms
+  "Return the set of form heads with explicit handlers in captures-of."
+  []
+  precomputed-captures-of-handlers)
 
 (defn form-head-description
   "Return the description for a form head, or nil if not catalogued."
