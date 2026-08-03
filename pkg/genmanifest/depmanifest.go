@@ -90,11 +90,15 @@ var outputSpecs = []outputSpec{
 func sweepFiles(repoRoot string, s sweep, skipGenerated bool) ([]string, error) {
 	var out []string
 	base := filepath.Join(repoRoot, s.dir)
+	// Verify the sweep root exists before walking, matching the behavior of
+	// explicit input files (which error on missing files).
+	if _, err := os.Stat(base); err != nil {
+		return nil, fmt.Errorf("sweep directory for %q missing: %s: %w", s.dir, base, err)
+	}
 	err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
+			// WalkDir only errors on the root path after Stat succeeds if there's a
+			// permissions issue; a missing file within the walk is not an error.
 			return err
 		}
 		if d.IsDir() || !strings.HasSuffix(path, s.ext) {
