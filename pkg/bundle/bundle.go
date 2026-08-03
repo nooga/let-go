@@ -390,7 +390,7 @@ func collectResourceDir(dir, rootReal, relPrefix string, files map[string][]byte
 		if !info.Mode().IsRegular() {
 			continue // FIFO, device, socket
 		}
-		if exclude != nil && os.SameFile(info, exclude) {
+		if exclude != nil && sameFile(info, exclude) {
 			continue // never embed the bundle's own output file
 		}
 		if _, exists := files[key]; exists {

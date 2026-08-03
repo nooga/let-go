@@ -23,6 +23,8 @@ package primgen
 import (
 	"fmt"
 	"go/format"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,7 +106,39 @@ func Generate(srcDir, outPath, goPkg string) error {
 		}
 	}
 
-	output := emitFile(allSpecs)
+	// Derive the emitted package clause from the parsed SOURCE, not the -go-pkg
+	// import-path basename. Go does not require the package clause to match the
+	// final path component: a versioned module path like ".../primitives/v2"
+	// commonly declares `package primitives`, so the basename would emit
+	// `package v2` and fail to compile ("found packages primitives and v2").
+	// scanSource records each spec's source package name; require agreement.
+	srcPkgName := ""
+	for i := range allSpecs {
+		if allSpecs[i].Package == "" {
+			continue
+		}
+		if srcPkgName == "" {
+			srcPkgName = allSpecs[i].Package
+		} else if allSpecs[i].Package != srcPkgName {
+			return fmt.Errorf("conflicting source package names in %s: %q vs %q",
+				srcDir, srcPkgName, allSpecs[i].Package)
+		}
+	}
+	if srcPkgName == "" {
+		// Empty-stub case (no //lg:native specs): read the package clause
+		// directly so the stub still declares the correct package.
+		srcPkgName, err = readPackageName(srcDir)
+		if err != nil {
+			return fmt.Errorf("determine package name for %s: %w", srcDir, err)
+		}
+	}
+
+	targetPkgPath := goPkg
+	if targetPkgPath == "" {
+		targetPkgPath = "github.com/nooga/let-go/pkg/rt/builtins"
+	}
+	ownMode := hasBindMarker(srcDir)
+	output := emitFile(allSpecs, srcPkgName, targetPkgPath, ownMode)
 
 	formatted, err := formatGo(output)
 	if err != nil {
@@ -120,6 +154,41 @@ func Generate(srcDir, outPath, goPkg string) error {
 
 	fmt.Printf("lgprimgen: generated primitives → %s (%d specs)\n", outPath, len(allSpecs))
 	return nil
+}
+
+// readPackageName returns the Go package name declared by the first eligible
+// (non-test, non-generated, unconstrained) .go file in dir. Used for the
+// empty-stub case, where no //lg:native spec carries the source package name,
+// so the emitted stub still declares the directory's real package.
+func readPackageName(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") ||
+			strings.HasSuffix(entry.Name(), "_test.go") ||
+			strings.HasPrefix(entry.Name(), "zz_") {
+			continue
+		}
+		fpath := filepath.Join(dir, entry.Name())
+		src, err := os.ReadFile(fpath)
+		if err != nil {
+			return "", err
+		}
+		if hasBuildConstraint(src) {
+			continue
+		}
+		f, err := parser.ParseFile(fset, fpath, src, parser.PackageClauseOnly)
+		if err != nil {
+			return "", err
+		}
+		if f.Name != nil && f.Name.Name != "" {
+			return f.Name.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no eligible .go file with a package clause in %s", dir)
 }
 
 // ScanNativeNames returns the set of let-go names already claimed by //lg:native

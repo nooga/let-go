@@ -616,7 +616,14 @@
           has-doc?    (string? maybe-doc)
           first-form  (if has-doc? (nth form 3) maybe-doc)
           go-target?  (= *target* :go)]
-      (if (vector? first-form)
+      ;; A return-hinted arity vector is still ONE arity. `^long [n]` reads as
+      ;; the list (with-meta [n] {:tag …}), which fails `vector?` and used to
+      ;; fall through to the multi-arity arm, where `with-meta` was taken for an
+      ;; args vector and threw — caught per-fn and demoted to a warning, so the
+      ;; fn silently vanished from the lowered package (#598). args-vec keeps
+      ;; the hinted form: ir.build/build-fn unwraps it and reads the :tag.
+      (if (or (vector? first-form)
+              (ir.build/return-hinted-arity-vector? first-form))
         ;; Single arity
         (let [args-vec   first-form
               body-forms (map expand-all (drop (if has-doc? 4 3) form))
@@ -781,6 +788,11 @@
                           maybe-doc)]
       (cond
         (vector? args-or-arity) [name-str (count args-or-arity)]
+        ;; Before the (list? …) arm: a return-hinted vector is a list, but it
+        ;; is one arity, and calling it :multi would let a hinted defn dedupe
+        ;; against an unhinted same-name one of the same real arity (#598).
+        (ir.build/return-hinted-arity-vector? args-or-arity)
+        [name-str (count (ir.build/unwrap-arity-vector args-or-arity))]
         (list? args-or-arity)   [name-str :multi]
         :else                   nil))))
 
@@ -1188,11 +1200,16 @@
             (recur (rest remaining) out)))))))
 
 (defn- single-arity-defn-form? [form]
-  "True for (defn name [params...] body...) — the shape inline can splice."
+  "True for (defn name [params...] body...) — the shape inline can splice.
+   A return-hinted `^long [params...]` counts: it reads as a with-meta list
+   but is still one arity, and excluding it left hinted fns permanently
+   un-spliceable (#598)."
   (and (seq? form)
        (= 'defn (first form))
        (symbol? (second form))
-       (vector? (nth form 2 nil))))
+       (let [a (nth form 2 nil)]
+         (or (vector? a)
+             (ir.build/return-hinted-arity-vector? a)))))
 
 (defn- build-inline-registry
   "Build the per-namespace inline callee registry: each single-arity defn in

@@ -410,18 +410,12 @@ func init() {
 	installLangNS()
 	installNativeDirectNS()
 
-	// Generated primitives intentionally re-Def native versions over the
-	// bootstrap closures — silence the warn-on-core-shadow noise for this
-	// trusted init-time replacement (it otherwise prints to stderr on every
-	// startup and pollutes program output).
-	vm.SetSuppressShadowWarn(true)
-	RegisterGeneratedPrimitives()
-	vm.SetSuppressShadowWarn(false)
-
-	// Register builtins AFTER primitives so that builtin versions (with better
-	// signatures) override the generated primitive versions. This is the EPIC-012
-	// seam: hot clojure.core functions migrate from primitives to builtins.
-	registerBuiltinsModule()
+	// Generated primitives now self-register via the installer queue (see
+	// zz_primitives_generated.go's init → RegisterInstaller), drained last by
+	// zz_run_installers.go. registerBuiltinsModule() runs there too, AFTER the
+	// drain, so builtin versions still override the generated primitives
+	// (EPIC-012 seam). Shadow-warn suppression moved into the generated
+	// RegisterGeneratedPrimitives body.
 	// walk namespace is embedded via coreFS and will be loaded on demand
 }
 
