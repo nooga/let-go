@@ -112,9 +112,9 @@ func TestEmitFileDeterministic(t *testing.T) {
 	}
 
 	canonical := func() string {
-		out, err := gofmtCode(emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true))
+		out, err := formatGo(emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true))
 		if err != nil {
-			t.Fatalf("gofmt generated primitives: %v", err)
+			t.Fatalf("format generated primitives: %v", err)
 		}
 		return out
 	}

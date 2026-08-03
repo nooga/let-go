@@ -143,8 +143,9 @@
 
 ;; Invoke cmd/lgprimgen to generate the primitive registrar.
 ;; Scans pkg/rt for //lg:native-annotated functions and generates adapters +
-;; registrations. lgprimgen is a PURE go/ast codegen tool that does NOT import
-;; the runtime (pkg/compiler / pkg/rt) — so it runs even mid-migration, when
+;; registrations. lgprimgen is a runtime-free codegen tool (go/ast scan, string
+;; emit, in-process go/format) that does NOT import the runtime (pkg/compiler /
+;; pkg/rt) — so it runs even mid-migration, when
 ;; primitives have been moved out of installLangNS but the registrar that
 ;; replaces them has not been generated yet and the runtime cannot boot. Using
 ;; the runtime-coupled cmd/lginterop here would make this step depend on the
