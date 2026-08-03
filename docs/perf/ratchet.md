@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-06-30
+last-verified: 2026-08-03
 authoritative-for:
   - benchmark-ratchet
 human-verified:
@@ -121,9 +121,39 @@ Finer control on either phase:
 go run ./cmd/bench-ratchet -budget 0.10 check                # 10% budget
 go run ./cmd/bench-ratchet -filter '^BenchmarkIR' check      # subset
 go run ./cmd/bench-ratchet -count 3 -benchtime 2s update     # rigorous
-go run ./cmd/bench-ratchet -baseline docs/perf/historical/v1.8.0.json check
-                                                             # vs v1.8.0
+go run ./cmd/bench-ratchet -baseline docs/perf/historical/v1.12.2.json check
+                                                             # vs v1.12.2
 ```
+
+### Seeding from CI
+
+The active baseline is seeded from CI timeline snapshots via the `seed-baseline`
+command. This generates a dual-anchor baseline (§ [Dual-Anchor Baseline
+Architecture](#dual-anchor-baseline-architecture)) by merging release-point and
+incremental measurements:
+
+```sh
+# Fetch the perf-data branch containing timeline snapshots
+git fetch origin perf-data
+
+# Seed the baseline from release v1.12.2 and the newest coherent SHA
+bench-ratchet -perf-data-dir <perf-data-root>/timeline \
+  -release-sha 9c9a3d636c4e \
+  -baseline docs/perf/baseline.json \
+  seed-baseline
+```
+
+The command:
+- Scans the timeline directory for snapshot files named `TIMESTAMP-SHORTSHA-MACHINE.json`
+- Identifies the release-anchor SHA (v1.12.2 at 9c9a3d636c4e) and reads snapshots for all machine tiers
+- Identifies the newest coherent SHA (all target machine tiers present) and reads its snapshots
+- Merges samples from both into a single baseline where:
+  - `captured_at_sha` points to the incremental (newest)
+  - Benchmark `samples` arrays contain measurements from both release and incremental
+  - The baseline is reproducible across runs (idempotent)
+
+This approach makes the baseline auditable (provenance is in git history), CI-sourced
+(no local machine capture noise), and aligned with the release cadence.
 
 ## Streaming visibility
 
@@ -257,14 +287,40 @@ The anchor's absolute `ns_per_op` between baseline and current is
 printed at the top of every `check` report. If it has drifted a lot,
 the ratio comparison is on shakier ground.
 
-## The baseline starts at v1.8.0
+## Dual-Anchor Baseline Architecture
 
-The active `docs/perf/baseline.json` is initialized as a copy of
-`docs/perf/historical/v1.8.0.json`. This means `make bench-ratchet`
-asks "how does the current code compare to the v1.8.0 release?",
-not "to whatever main looked like yesterday." A regression bar
-anchored to a release is meaningful; one anchored to yesterday's
-main just tracks noise.
+The active `docs/perf/baseline.json` uses a dual-anchor system that provides
+both stable release-point reference comparisons and continuous drift tracking:
+
+- **Release anchors** (stable reference): Baseline entries are seeded from
+  the most recent release (v1.12.2 at commit 9c9a3d636c4e), providing a
+  durable "are we better/worse than the last release?" comparison point.
+  These measurements are captured once at release time and archived in the
+  baseline's sample history.
+
+- **Per-merged-SHA incrementals** (drift tracking): The baseline also includes
+  the newest coherent snapshot (all target machine tiers) from the CI timeline,
+  feeding real-time drift monitoring between releases. The `captured_at_sha`
+  field points to this incremental entry, representing the "current" state
+  for ratchet comparisons.
+
+The two anchor classes coexist in the same `baseline.json` via the `samples`
+field: benchmark measurements from both the release and the incremental are
+retained and indexed by `captured_at_sha` and timestamp, enabling reviewers to
+track both inter-release change and intra-release drift simultaneously.
+
+The `bench-ratchet seed-baseline` command (§ [Seeding from CI](#seeding-from-ci))
+merges timeline snapshots from the perf-data branch to populate both classes at
+once, making the baseline reproducible, auditable, and independent of local
+machine captures.
+
+## The baseline starts at v1.12.2
+
+The active `docs/perf/baseline.json` is initialized by seeding from
+`docs/perf/historical/v1.12.2.json` via the CI timeline. This means `make
+bench-ratchet` asks "how does the current code compare to the v1.12.2 release?",
+not "to whatever main looked like yesterday." A regression bar anchored to a
+release is meaningful; one anchored to yesterday's main just tracks noise.
 
 Two consequences:
 

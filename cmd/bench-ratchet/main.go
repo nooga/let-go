@@ -150,6 +150,15 @@ type BenchmarkEntry = perfdata.BenchmarkEntry
 type BenchmarkSample = perfdata.BenchmarkSample
 type StreamRecord = perfdata.StreamRecord
 
+// timelineFile represents a parsed timeline snapshot filename.
+// Timeline format: TIMESTAMP-SHORTSHA-MACHINE.json
+type timelineFile struct {
+	path      string
+	sha       string
+	machine   string
+	timestamp string
+}
+
 // Result is the in-memory parse of one benchmark line.
 type Result struct {
 	Package     string
@@ -184,6 +193,8 @@ func main() {
 		full         = flag.Bool("full", false, "run the FULL benchmark profile: pkg/vm fleet under -tags plus jank + IR compile under both VM variants. Slow (~25 min) — for mainline profiling and manual deep-dives.")
 		profile      = flag.String("profile", "", "named benchmark profile (e.g. 'pr-fast'). Mutually exclusive with -packages/-filter/-full. Sets the job list plus default count/benchtime/budget; explicit flags still override.")
 		wasm         = flag.Bool("wasm", false, "run benchmarks under GOOS=js/wasm via the go_js_wasm_exec shim (Node), reporting the machine as js/wasm. Forces -tags off (the wasm bundle ships the bytecode VM, not the lowered-Go path). Slower and noisier than native; for the wasm A/B gate.")
+		perfDataDir  = flag.String("perf-data-dir", "", "seed-baseline only: directory containing perf-data timeline snapshots (e.g., /path/to/perf-data/timeline)")
+		releaseSHA   = flag.String("release-sha", "", "seed-baseline only: release commit SHA (e.g., 9c9a3d636c4e) for release-anchor baseline entries")
 	)
 	flag.Parse()
 
@@ -204,9 +215,9 @@ func main() {
 		mode = flag.Arg(0)
 	}
 	switch mode {
-	case "check", "update", "show", "capture", "aggregate", "snapshot", "machine-key":
+	case "check", "update", "show", "capture", "aggregate", "snapshot", "machine-key", "seed-baseline":
 	default:
-		die("unknown mode %q (want check / update / show / capture / aggregate / snapshot / machine-key)", mode)
+		die("unknown mode %q (want check / update / show / capture / aggregate / snapshot / machine-key / seed-baseline)", mode)
 	}
 
 	// machine-key: print the canonical machine token ("<arch>-<cpumodel>",
@@ -218,6 +229,22 @@ func main() {
 	// exact "<arch>/<CPUModel>" partition the timeline groups snapshots by.
 	if mode == "machine-key" {
 		fmt.Println(machineKey())
+		return
+	}
+
+	// seed-baseline: merge perf-data timeline snapshots into a dual-anchor
+	// baseline. Requires -perf-data-dir (path to timeline directory) and
+	// -release-sha (release commit, e.g. 9c9a3d636c4e). Seeds release-anchor
+	// entries at the release SHA and per-merged-SHA incremental entries at the
+	// newest coherent SHA (all target machine tiers present).
+	if mode == "seed-baseline" {
+		if *perfDataDir == "" {
+			die("seed-baseline requires -perf-data-dir <path>")
+		}
+		if *releaseSHA == "" {
+			die("seed-baseline requires -release-sha <sha>")
+		}
+		seedBaseline(*baselinePath, *perfDataDir, *releaseSHA)
 		return
 	}
 
@@ -1827,6 +1854,187 @@ func formatWallMD(ns float64) string {
 	default:
 		return fmt.Sprintf("%.3g s", ns/1_000_000_000)
 	}
+}
+
+// seedBaseline merges perf-data timeline snapshots into a dual-anchor baseline.
+// Release-anchor entries are seeded from the release SHA; per-merged-SHA
+// incremental entries are seeded from the newest coherent SHA with complete
+// machine coverage. Both classes coexist in the final baseline.json.
+func seedBaseline(baselinePath, perfDataDir, releaseSHA string) {
+	// Read timeline snapshots from perfDataDir
+	baselineFiles, err := filepath.Glob(filepath.Join(perfDataDir, "*.json"))
+	if err != nil {
+		die("list timeline files: %v", err)
+	}
+	if len(baselineFiles) == 0 {
+		die("no timeline snapshots found in %s", perfDataDir)
+	}
+
+	// Parse filenames to extract SHAs and machine info.
+	// Timeline format: TIMESTAMP-SHORTSHA-MACHINE.json
+	var files []timelineFile
+	shaSet := make(map[string]bool)
+
+	for _, f := range baselineFiles {
+		base := filepath.Base(f)
+		// Expected format: 20260720T221533Z-9c9a3d636c4e-arm64-apple-m1-virtual.json
+		parts := strings.Split(base, "-")
+		if len(parts) < 3 {
+			continue // skip malformed files
+		}
+		ts := parts[0]  // 20260720T221533Z
+		sha := parts[1] // 9c9a3d636c4e (shortened)
+		machine := strings.TrimSuffix(strings.Join(parts[2:], "-"), ".json")
+		shaSet[sha] = true
+		files = append(files, timelineFile{
+			path:      f,
+			sha:       sha,
+			machine:   machine,
+			timestamp: ts,
+		})
+	}
+
+	// Find which SHAs have complete coverage (both target machine tiers).
+	// Count unique machines per SHA.
+	machinesPerSHA := make(map[string]map[string]bool)
+	for _, f := range files {
+		if machinesPerSHA[f.sha] == nil {
+			machinesPerSHA[f.sha] = make(map[string]bool)
+		}
+		machinesPerSHA[f.sha][f.machine] = true
+	}
+
+	// Identify coherent SHAs (have snapshots for both major machine classes).
+	// For now, assume we need at least 2 different machine profiles.
+	var coherentSHAs []string
+	for sha, machines := range machinesPerSHA {
+		if len(machines) >= 2 {
+			coherentSHAs = append(coherentSHAs, sha)
+		}
+	}
+
+	if len(coherentSHAs) == 0 {
+		die("no SHAs with complete machine coverage found in %s", perfDataDir)
+	}
+
+	// Sort coherent SHAs by timestamp descending to find the newest.
+	sort.Slice(coherentSHAs, func(i, j int) bool {
+		// Find the most recent timestamp for each SHA
+		timeI, timeJ := "", ""
+		for _, f := range files {
+			if f.sha == coherentSHAs[i] && (timeI == "" || f.timestamp > timeI) {
+				timeI = f.timestamp
+			}
+			if f.sha == coherentSHAs[j] && (timeJ == "" || f.timestamp > timeJ) {
+				timeJ = f.timestamp
+			}
+		}
+		return timeI > timeJ // descending (newest first)
+	})
+
+	newestCoherentSHA := coherentSHAs[0]
+
+	// Read baseline files for the release SHA (release-anchor class).
+	fmt.Printf("bench-ratchet: seed-baseline from %s\n", perfDataDir)
+	fmt.Printf("  release-anchor SHA: %s\n", releaseSHA)
+	fmt.Printf("  incremental SHA: %s\n", newestCoherentSHA)
+
+	releaseBaselines := readTimelinesForSHA(files, releaseSHA)
+	incrementalBaselines := readTimelinesForSHA(files, newestCoherentSHA)
+
+	if len(releaseBaselines) == 0 {
+		die("no snapshots found for release SHA %s", releaseSHA)
+	}
+	if len(incrementalBaselines) == 0 {
+		die("no snapshots found for newest coherent SHA %s", newestCoherentSHA)
+	}
+
+	// Merge all baselines into one with both anchor classes.
+	// Strategy: Use incremental (newest) as primary, but merge samples and
+	// benchmarks to show both release-anchor and drift-tracking history.
+	merged := Baseline{
+		Version:  schemaVersion,
+		Machines: make(map[string]MachineBaseline),
+	}
+
+	// Build a map of baselines by machine key for easy lookup.
+	releaseByMachine := make(map[string]MachineBaseline)
+	for _, mb := range releaseBaselines {
+		key := perfdata.MachineKey(mb.Machine)
+		releaseByMachine[key] = mb
+	}
+
+	// For each incremental entry, merge with corresponding release entry.
+	for _, incMB := range incrementalBaselines {
+		key := perfdata.MachineKey(incMB.Machine)
+		mb := incMB // Start with incremental as primary
+
+		// If we have a release anchor for this machine, merge samples and benchmarks.
+		if relMB, ok := releaseByMachine[key]; ok {
+			// Merge anchor samples: incremental primary + release samples.
+			mb.Anchor.Samples = append(mb.Anchor.Samples, relMB.Anchor.Samples...)
+
+			// Merge benchmarks: for each benchmark, combine samples from both.
+			for benchName, relEntry := range relMB.Benchmarks {
+				if incEntry, ok := mb.Benchmarks[benchName]; ok {
+					// Benchmark in both: merge samples, keep incremental as primary.
+					incEntry.Samples = append(incEntry.Samples, relEntry.Samples...)
+					mb.Benchmarks[benchName] = incEntry
+				} else {
+					// Benchmark only in release: include it for reference.
+					mb.Benchmarks[benchName] = relEntry
+				}
+			}
+		}
+
+		mb.CapturedAt = mb.Anchor.Samples[0].CapturedAt
+		merged.Machines[key] = mb
+	}
+
+	// Write the merged baseline.
+	if err := writeBaseline(baselinePath, merged); err != nil {
+		die("write baseline: %v", err)
+	}
+	fmt.Printf("  wrote baseline → %s (%d machine profiles)\n",
+		baselinePath, len(merged.Machines))
+}
+
+// readTimelinesForSHA reads all timeline baseline files for a specific SHA.
+func readTimelinesForSHA(files []timelineFile, sha string) []MachineBaseline {
+	var results []MachineBaseline
+	seen := make(map[string]bool) // Track which machines we've already seen for this SHA
+
+	for _, f := range files {
+		if f.sha != sha {
+			continue
+		}
+		// Skip duplicates (prefer the most recent one).
+		if seen[f.machine] {
+			continue
+		}
+		seen[f.machine] = true
+
+		// Read the baseline file.
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			die("read timeline snapshot %s: %v", f.path, err)
+		}
+
+		var baseline Baseline
+		if err := json.Unmarshal(data, &baseline); err != nil {
+			die("parse timeline snapshot %s: %v", f.path, err)
+		}
+
+		// Extract the single machine baseline from the snapshot.
+		if len(baseline.Machines) == 0 {
+			continue
+		}
+		for _, mb := range baseline.Machines {
+			results = append(results, mb)
+		}
+	}
+
+	return results
 }
 
 func die(format string, args ...any) {
