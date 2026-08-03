@@ -20,13 +20,15 @@ package corefns
 import (
 	"fmt"
 
-	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
 
 // Seq returns a seq of coll, or nil for empty/nil colls. Mirrors the
 // closure body previously inlined in pkg/rt/lang.go around the `seq`
 // registration.
+//
+//lg:native
+//lg:ns clojure.core
 func Seq(v vm.Value) (vm.Value, error) {
 	if v == vm.NIL {
 		return vm.NIL, nil
@@ -81,6 +83,9 @@ func seqOf(v vm.Value) (vm.Seq, error) {
 }
 
 // First mirrors the clojure.core/first builtin (pkg/rt/lang.go).
+//
+//lg:native
+//lg:ns clojure.core
 func First(v vm.Value) (vm.Value, error) {
 	if v == vm.NIL {
 		return vm.NIL, nil
@@ -99,6 +104,9 @@ func First(v vm.Value) (vm.Value, error) {
 }
 
 // Second mirrors the clojure.core/second builtin (pkg/rt/lang.go).
+//
+//lg:native
+//lg:ns clojure.core
 func Second(v vm.Value) (vm.Value, error) {
 	if v == vm.NIL {
 		return vm.NIL, nil
@@ -118,6 +126,9 @@ func Second(v vm.Value) (vm.Value, error) {
 }
 
 // Next mirrors the clojure.core/next builtin (pkg/rt/lang.go).
+//
+//lg:native
+//lg:ns clojure.core
 func Next(v vm.Value) (vm.Value, error) {
 	if v == vm.NIL {
 		return vm.NIL, nil
@@ -137,6 +148,9 @@ func Next(v vm.Value) (vm.Value, error) {
 }
 
 // Rest mirrors the clojure.core/rest builtin (pkg/rt/lang.go).
+//
+//lg:native
+//lg:ns clojure.core
 func Rest(v vm.Value) (vm.Value, error) {
 	if v == vm.NIL {
 		return vm.EmptyList, nil
@@ -152,6 +166,9 @@ func Rest(v vm.Value) (vm.Value, error) {
 }
 
 // Count mirrors the clojure.core/count builtin (pkg/rt/lang.go).
+//
+//lg:native
+//lg:ns clojure.core
 func Count(v vm.Value) (vm.Value, error) {
 	if v == vm.NIL {
 		return vm.MakeInt(0), nil
@@ -164,55 +181,4 @@ func Count(v vm.Value) (vm.Value, error) {
 		return vm.NIL, fmt.Errorf("count expected Counted")
 	}
 	return seq.Count(), nil
-}
-
-func init() {
-	rt.RegisterNativeModule(&rt.NativeModule{
-		GoPkg:     "github.com/nooga/let-go/pkg/rt/corefns",
-		Namespace: "clojure.core",
-		Fns: map[string]rt.NativeDirectFn{
-			"seq": {
-				GoIdent:    "Seq",
-				Arity:      1,
-				ParamSpecs: []string{"vm.Value"},
-				ResultSpec: "vm.Value",
-				NeedsError: true,
-			},
-			"first": {
-				GoIdent:    "First",
-				Arity:      1,
-				ParamSpecs: []string{"vm.Value"},
-				ResultSpec: "vm.Value",
-				NeedsError: true,
-			},
-			"second": {
-				GoIdent:    "Second",
-				Arity:      1,
-				ParamSpecs: []string{"vm.Value"},
-				ResultSpec: "vm.Value",
-				NeedsError: true,
-			},
-			"next": {
-				GoIdent:    "Next",
-				Arity:      1,
-				ParamSpecs: []string{"vm.Value"},
-				ResultSpec: "vm.Value",
-				NeedsError: true,
-			},
-			"rest": {
-				GoIdent:    "Rest",
-				Arity:      1,
-				ParamSpecs: []string{"vm.Value"},
-				ResultSpec: "vm.Value",
-				NeedsError: true,
-			},
-			"count": {
-				GoIdent:    "Count",
-				Arity:      1,
-				ParamSpecs: []string{"vm.Value"},
-				ResultSpec: "vm.Value",
-				NeedsError: true,
-			},
-		},
-	})
 }

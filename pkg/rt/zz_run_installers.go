@@ -18,4 +18,10 @@ package rt
 
 func init() {
 	runInstallers()
+	// Builtins register AFTER the installer drain so builtin versions (better
+	// signatures) override the generated primitives for overlapping names
+	// (vector, cons, contains?, array-map, nth). This preserves the EPIC-012
+	// seam ordering now that the core primitive registrar self-registers via
+	// the installer queue (drained just above) instead of an explicit call.
+	registerBuiltinsModule()
 }

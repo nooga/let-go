@@ -3,6 +3,8 @@ package primgen
 import (
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,7 +43,7 @@ func TestEmitAdapterAndRegistrar(t *testing.T) {
 		NeedsError: true,
 		Package:    "builtins",
 	}
-	output := emitFile([]primSpec{spec})
+	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	// Check for adapter function
 	if !strings.Contains(output, "func _adapt_UpperCase") {
@@ -110,7 +112,7 @@ func TestEmitFileDeterministic(t *testing.T) {
 	}
 
 	canonical := func() string {
-		out, err := gofmtCode(emitFile(specs))
+		out, err := gofmtCode(emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true))
 		if err != nil {
 			t.Fatalf("gofmt generated primitives: %v", err)
 		}
@@ -162,7 +164,7 @@ func TestECEmission(t *testing.T) {
 		NeedsEC:    true,
 		Package:    "builtins",
 	}
-	output := emitFile([]primSpec{spec})
+	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	// Check that the ec-aware adapter has the correct signature
 	// func _adapt_Seq(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error)
@@ -219,7 +221,7 @@ func TestMultiArity(t *testing.T) {
 		Package:    "builtins",
 	}
 
-	output := emitFile([]primSpec{spec1, spec2})
+	output := emitFile([]primSpec{spec1, spec2}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	// Check for dispatch adapter with len(vs) switch
 	if !strings.Contains(output, "switch len(vs)") {
@@ -263,7 +265,7 @@ func TestGeneratedCodeParses(t *testing.T) {
 		NeedsError: true,
 		Package:    "builtins",
 	}
-	output := emitFile([]primSpec{spec})
+	output := emitFile([]primSpec{spec}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	fset := token.NewFileSet()
 	if _, err := parser.ParseFile(fset, "gen.go", output, 0); err != nil {
@@ -298,7 +300,7 @@ func TestMultiArityEC(t *testing.T) {
 		Package:    "builtins",
 	}
 
-	output := emitFile([]primSpec{spec1, spec2})
+	output := emitFile([]primSpec{spec1, spec2}, "rt", "github.com/nooga/let-go/pkg/rt", true)
 
 	// Check that dispatch adapter is ec-aware (signature includes ec *vm.ExecContext)
 	if !strings.Contains(output, "func _adapt_Foo(ec *vm.ExecContext, vs []vm.Value)") {
@@ -349,6 +351,21 @@ func TestScanSourceParseErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestEmitFileUsesTargetPackageName(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt/corefns", Package: "corefns",
+		GoIdent: "Seq", Ns: "clojure.core", LgName: "seq",
+		Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns", false)
+	if !strings.Contains(out, "package corefns") {
+		t.Fatalf("expected `package corefns` header, got:\n%s", out)
+	}
+	if strings.Contains(out, "package rt\n") {
+		t.Fatalf("must not emit hardcoded package rt")
+	}
+}
+
 func TestHasBuildConstraint(t *testing.T) {
 	cases := []struct {
 		name string
@@ -364,5 +381,146 @@ func TestHasBuildConstraint(t *testing.T) {
 		if got := hasBuildConstraint([]byte(tc.src)); got != tc.want {
 			t.Errorf("%s: hasBuildConstraint = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestContributeModeEmitsMetadataOnly(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt/corefns", Package: "corefns",
+		GoIdent: "Seq", Ns: "clojure.core", LgName: "seq",
+		Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns", false) // contribute
+	if !strings.Contains(out, "RegisterNativeModule(") {
+		t.Fatal("contribute mode must still register module metadata")
+	}
+	if strings.Contains(out, "defGeneratedPrimitive(") {
+		t.Fatal("contribute mode must NOT emit var binding")
+	}
+	if strings.Contains(out, "_adapt_Seq") {
+		t.Fatal("contribute mode must NOT emit adapters (binding-only)")
+	}
+}
+
+func TestOwnModeEmitsBinding(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt", Package: "rt",
+		GoIdent: "CorePlus", Ns: "clojure.core", LgName: "+",
+		Arity: -1, Variadic: true, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true) // own
+	if !strings.Contains(out, "defGeneratedPrimitive(") {
+		t.Fatal("own mode must emit var binding")
+	}
+}
+
+func TestInitFormRtUsesInstaller(t *testing.T) {
+	specs := []primSpec{{GoPkg: "github.com/nooga/let-go/pkg/rt", Package: "rt",
+		GoIdent: "CorePlus", Ns: "clojure.core", LgName: "+", Arity: -1, Variadic: true,
+		ResultSpec: "vm.Value", NeedsError: true}}
+	out := emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true)
+	if !strings.Contains(out, "func init() {\n\tRegisterInstaller(RegisterGeneratedPrimitives)\n}") {
+		t.Fatalf("rt target must self-register via the installer queue:\n%s", out)
+	}
+	if !strings.Contains(out, "vm.SetSuppressShadowWarn(true)") {
+		t.Fatal("own-mode registrar must suppress the core-shadow warning")
+	}
+}
+
+func TestInitFormExternalCallsDirectly(t *testing.T) {
+	specs := []primSpec{{GoPkg: "github.com/nooga/let-go/pkg/rt/corefns", Package: "corefns",
+		GoIdent: "Seq", Ns: "clojure.core", LgName: "seq", Arity: 1,
+		ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true}}
+	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns", false)
+	if !strings.Contains(out, "func init() {\n\tRegisterGeneratedPrimitives()\n}") {
+		t.Fatalf("non-rt target must self-register with a direct call:\n%s", out)
+	}
+}
+
+func TestExternalContributeQualifiesRtAndImportsRtOnly(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt/corefns", Package: "corefns",
+		GoIdent: "Seq", Ns: "clojure.core", LgName: "seq",
+		Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "corefns", "github.com/nooga/let-go/pkg/rt/corefns", false)
+	for _, want := range []string{
+		`"github.com/nooga/let-go/pkg/rt"`, // rt import present
+		"rt.RegisterNativeModule(&rt.NativeModule{",
+		"map[string]rt.NativeDirectFn{",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("external contribute output missing %q:\n%s", want, out)
+		}
+	}
+	// contribute mode emits no adapters → fmt/vm are unused → must NOT be imported
+	for _, bad := range []string{`"fmt"`, `"github.com/nooga/let-go/pkg/vm"`} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("external contribute output must not import unused %q:\n%s", bad, out)
+		}
+	}
+}
+
+func TestRtTargetStaysUnqualified(t *testing.T) {
+	specs := []primSpec{{
+		GoPkg: "github.com/nooga/let-go/pkg/rt", Package: "rt",
+		GoIdent: "CorePlus", Ns: "clojure.core", LgName: "+",
+		Arity: -1, Variadic: true, ResultSpec: "vm.Value", NeedsError: true,
+	}}
+	out := emitFile(specs, "rt", "github.com/nooga/let-go/pkg/rt", true)
+	if !strings.Contains(out, "RegisterNativeModule(&NativeModule{") {
+		t.Fatal("rt target must emit unqualified RegisterNativeModule")
+	}
+	// rt target must not import its own package (check import block, not GoPkg field)
+	importEnd := strings.Index(out, "\nfunc")
+	if importEnd > 0 {
+		importSection := out[:importEnd]
+		if strings.Contains(importSection, `"github.com/nooga/let-go/pkg/rt"`) {
+			t.Fatal("rt target must not import its own package")
+		}
+	}
+	if !strings.Contains(out, `"github.com/nooga/let-go/pkg/vm"`) {
+		t.Fatal("rt own-mode uses vm (adapters + SetSuppressShadowWarn) and must import it")
+	}
+}
+
+// TestGeneratePreservesSourcePackageName guards against deriving the emitted
+// package clause from the -go-pkg import-path basename. Go allows a package
+// clause to differ from the final path component (e.g. ".../primitives/v2"
+// declaring `package primitives`); the basename would emit `package v2` and
+// the directory would fail to compile ("found packages primitives and v2").
+func TestGeneratePreservesSourcePackageName(t *testing.T) {
+	dir := t.TempDir()
+	// A real scanned spec (bare //lg:native + //lg:ns / //lg:name — the scanner
+	// matches `line == "lg:native"` exactly), so this exercises the spec-based
+	// package-name path (primSpec.Package), not the empty-stub readPackageName
+	// fallback.
+	src := `package primitives
+
+import "github.com/nooga/let-go/pkg/vm"
+
+//lg:native
+//lg:ns clojure.core
+//lg:name noop
+func Noop(v vm.Value) (vm.Value, error) { return v, nil }
+`
+	if err := os.WriteFile(filepath.Join(dir, "prims.go"), []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "zz_primitives_generated.go")
+	// Import path ends in /v2, but the source declares `package primitives`.
+	if err := Generate(dir, out, "example.com/primitives/v2"); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "package primitives") {
+		t.Fatalf("expected `package primitives` from the source clause, got:\n%s", got)
+	}
+	if strings.Contains(got, "package v2") {
+		t.Fatalf("must not derive `package v2` from the import-path basename:\n%s", got)
 	}
 }
