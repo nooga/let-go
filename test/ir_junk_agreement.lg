@@ -1,4 +1,4 @@
-;; Test: block-junk-agreement underflow fix (#625 fix 1)
+;; Test: block-junk-agreement underflow fix
 ;;
 ;; The block-junk-agreement fix requires that all fall-through predecessors
 ;; reaching a block agree on the junk count. Before the fix, mismatched junk
@@ -7,8 +7,7 @@
 ;; block that have different stack effects, and verifies both that:
 ;;
 ;; 1. The result is correct (parity with bytecode)
-;; 2. Under strict mode on main@upstream, the IR compiler detects disagreement
-;;    and falls back (which was reported silently, now can be caught)
+;; 2. The IR compiler correctly handles stack-effect disagreement
 (ns test.ir-junk-agreement-test
   (:require
    [ir.passes.pipeline]
