@@ -302,7 +302,7 @@ gates against the incremental (newest) snapshot for real-time drift tracking:
 
 - **arm64/Apple M1 (Virtual)**: Deliberately excluded (per #651) because CI
   runner noise (27.2% of entries) is too high for reliable ratcheting; reverts
-  to deterministic-only gating at `main.go:427`.
+  to deterministic-only gating at `main.go:452-459`.
 
 The `captured_at_sha` field in each machine entry points to the incremental SHA,
 representing the "current" state for `make bench-ratchet check` comparisons.
