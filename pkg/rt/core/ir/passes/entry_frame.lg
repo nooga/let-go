@@ -85,22 +85,36 @@
         (first found))))
 
 (defn entry-go-name
-  "Go identifier the lowered entry is emitted under. Public → PascalCase
+  "Pre-collision Go identifier estimate for an entry. Public → PascalCase
    (main/-main both → Main); private → unexported munge (main → main,
    -main → _main), via lower-go/go-name so the munge (incl. reserved-word
-   handling) stays single-sourced with the lowered emitter."
+   handling) stays single-sourced with the lowered emitter.
+
+   Does NOT consult *export-name-overrides*, so a colliding public -main
+   (emitted as Main__main) is NOT visible here. Prefer analyze-entry with a
+   :fn lowering record for the actual collision-resolved name."
   [entry]
   (if (:private? entry)
     (lower-go/go-name (:name entry))
     (lower-go/go-export-name (:name entry))))
 
+(defn lookup-entry-fn
+  "Find the lowering record for entry in a lower-ns-to-go-result :fns vector.
+   Matches on source name (:fn-name). Returns nil when the entry did not lower."
+  [fns entry]
+  (when (and fns entry)
+    (first (filter (fn [r] (= (:name entry) (:fn-name r))) fns))))
+
 (defn- go-src-has-func? [go-src go-name]
+  "Compat text scan: true when rendered Go contains `func <go-name>(`.
+   Not used on the lg-compile critical path — prefer a :fn lowering record."
   (and (string? go-src)
        (clojure.string/includes? go-src (str "func " go-name "("))))
 
 (defn- go-func-needs-error? [go-src go-name]
-  "True when the lowered func's result list includes error. Defaults to true
-   (safer for call sites) when the signature line can't be parsed."
+  "Compat text scan: true when the lowered func's result list includes error.
+   Defaults to true (safer for call sites) when the signature line can't be
+   parsed. Not used on the lg-compile critical path."
   (if-not (string? go-src)
     true
     (let [needle (str "func " go-name "(")
@@ -114,10 +128,27 @@
           (or (nil? after-params)
               (clojure.string/includes? after-params "error")))))))
 
-(defn analyze-entry
-  "Combine a discovered entry with the emitted Go for its namespace.
-   Returns entry assoc'd with :go-name, :lowered?, :needs-error?, :call-name
-   (the name package main should invoke — NativeMain when private)."
+(defn- analyze-entry-from-fn
+  "Preferred path: consume a lower-ns-to-go-result :fns record (or nil)."
+  [entry fn-rec]
+  (if fn-rec
+    (let [gname (:go-name fn-rec)]
+      (assoc entry
+             :go-name      gname
+             :lowered?     true
+             :needs-error? (boolean (:needs-error? fn-rec))
+             :call-name    (if (:private? entry) "NativeMain" gname)))
+    (let [gname (entry-go-name entry)]
+      (assoc entry
+             :go-name      gname
+             :lowered?     false
+             :needs-error? true
+             :call-name    (if (:private? entry) "NativeMain" gname)))))
+
+(defn- analyze-entry-from-go-src
+  "Compat fallback: recover lowered? / needs-error? by scanning rendered Go.
+   Vulnerable to collision-resolved names (main/-main both estimate as Main)
+   and formatting changes — keep only for callers holding source alone."
   [entry go-src]
   (let [gname (entry-go-name entry)
         ok?   (go-src-has-func? go-src gname)]
@@ -126,6 +157,28 @@
            :lowered?     ok?
            :needs-error? (go-func-needs-error? go-src gname)
            :call-name    (if (:private? entry) "NativeMain" gname))))
+
+(defn analyze-entry
+  "Combine a discovered entry with lowering facts. Returns entry assoc'd with
+   :go-name, :lowered?, :needs-error?, :call-name (NativeMain when private).
+
+   Preferred:
+     (analyze-entry entry {:fn fn-record})
+   where fn-record is one element of (:fns (lower-ns-to-go-result …)) — or
+   nil / omitted-via-lookup when the entry did not lower. When the :fn key is
+   present it is authoritative; rendered source is not consulted.
+
+   Compat:
+     (analyze-entry entry {:go-src s})
+     (analyze-entry entry go-src-string)
+   recover facts by scanning rendered Go. Do not use on the lg-compile
+   critical path (#657)."
+  ([entry src-or-opts]
+   (if (map? src-or-opts)
+     (if (contains? src-or-opts :fn)
+       (analyze-entry-from-fn entry (:fn src-or-opts))
+       (analyze-entry-from-go-src entry (:go-src src-or-opts)))
+     (analyze-entry-from-go-src entry src-or-opts))))
 
 (defn- go-string-lit [s]
   (str "\"" (clojure.string/replace

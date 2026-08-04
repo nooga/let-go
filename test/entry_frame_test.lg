@@ -1,10 +1,11 @@
-;; Tests for ir.passes.entry-frame (#425 Item 1).
+;; Tests for ir.passes.entry-frame (#425 Item 1 / #657).
 
 (ns test.entry-frame-test
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest testing is]]
-   [ir.passes.entry-frame :as ef]))
+   [ir.passes.entry-frame :as ef]
+   [ir.lower-go :as lower-go]))
 
 (deftest find-program-entry-shapes
   (testing "variadic -main"
@@ -31,7 +32,8 @@
 
 (deftest analyze-and-emit-direct
   (let [raw (ef/find-program-entry '[(defn -main [& args] 1)])
-        e   (ef/analyze-entry raw "func Main(ec *vm.ExecContext, args ...vm.Value) (vm.Value, error) {\n")
+        e   (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
+                                        :needs-error? true :arity 1}})
         src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})]
     (is (true? (:lowered? e)))
     (is (= "Main" (:call-name e)))
@@ -42,7 +44,8 @@
 
 (deftest emit-private-bridge
   (let [raw (ef/find-program-entry '[(defn- main [] 1)])
-        e   (ef/analyze-entry raw "func main(ec *vm.ExecContext) (vm.Value, error) {\n")
+        e   (ef/analyze-entry raw {:fn {:fn-name "main" :go-name "main"
+                                        :needs-error? true :arity 0}})
         br  (ef/emit-entry-bridge-go "priv" e)]
     (is (true? (:private? e)))
     (is (= "NativeMain" (:call-name e)))
@@ -51,7 +54,7 @@
 
 (deftest emit-vm-fallback-when-not-lowered
   (let [raw (ef/find-program-entry '[(defn -main [& args] 1)])
-        e   (ef/analyze-entry raw "package fib\n")
+        e   (ef/analyze-entry raw {:fn nil})
         src (ef/emit-entry-frame-go {:entry e})]
     (is (false? (:lowered? e)))
     (is (str/includes? src "rt.InvokeProgramEntry"))
@@ -60,14 +63,14 @@
 (deftest vm-fallback-matches-arity-shape
   (testing "empty [] entry invokes with no args (no os.Args spread)"
     (let [raw (ef/find-program-entry '[(defn -main [] 1)])
-          e   (ef/analyze-entry raw "package fib\n")
+          e   (ef/analyze-entry raw {:fn nil})
           src (ef/emit-entry-frame-go {:entry e})]
       (is (= :none (:arity-shape e)))
       (is (str/includes? src "argv := []vm.Value{}"))
       (is (not (str/includes? src "vm.String(a)")))))
   (testing "[argv] entry invokes with a single string vector"
     (let [raw (ef/find-program-entry '[(defn -main [argv] 1)])
-          e   (ef/analyze-entry raw "package fib\n")
+          e   (ef/analyze-entry raw {:fn nil})
           src (ef/emit-entry-frame-go {:entry e})]
       (is (= :vector (:arity-shape e)))
       (is (str/includes? src "argv := []vm.Value{vm.NewArrayVector(argvItems)}")))))
@@ -76,7 +79,7 @@
   ;; When the entry ns did not lower its entry but lowered sibling fns, the
   ;; entry package must stay blank-imported so those init() overrides register.
   (let [raw (ef/find-program-entry '[(defn -main [& a] 1)])
-        e   (ef/analyze-entry raw "package fib\n")
+        e   (ef/analyze-entry raw {:fn nil})
         src (ef/emit-entry-frame-go {:entry e
                                      :entry-import "aotmod/fib"
                                      :blank-imports ["aotmod/fib" "aotmod/lib"]})]
@@ -93,7 +96,8 @@
   ;; repeated import, so the frame has to emit each one once.
   (testing "a package repeated in :blank-imports is imported once"
     (let [raw (ef/find-program-entry '[(defn -main [& a] 1)])
-          e   (ef/analyze-entry raw "func Main(ec *vm.ExecContext, args ...vm.Value) (vm.Value, error) {\n")
+          e   (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
+                                          :needs-error? true}})
           src (ef/emit-entry-frame-go {:entry e
                                        :entry-import "aotmod/fib"
                                        :blank-imports ["aotmod/lib" "aotmod/lib" "aotmod/util"]})]
@@ -102,10 +106,79 @@
       (is (= 1 (count-import-lines src "_ \"aotmod/util\"")))))
   (testing "a repeated entry-import that is kept (not lowered) is still imported once"
     (let [raw (ef/find-program-entry '[(defn -main [& a] 1)])
-          e   (ef/analyze-entry raw "package fib\n")
+          e   (ef/analyze-entry raw {:fn nil})
           src (ef/emit-entry-frame-go {:entry e
                                        :entry-import "aotmod/fib"
                                        :blank-imports ["aotmod/fib" "aotmod/fib" "aotmod/lib"]})]
       (is (false? (:lowered? e)))
       (is (= 1 (count-import-lines src "_ \"aotmod/fib\"")))
       (is (= 1 (count-import-lines src "_ \"aotmod/lib\""))))))
+
+;; --- #657: lowering metadata is the source of truth ---
+
+(deftest main-dashmain-collision-calls-resolved-name
+  ;; Both main and -main munge to Main; the lowerer's collision map emits
+  ;; -main as Main__main. The frame must call that, not the plain Main that
+  ;; belongs to `main` — otherwise we silently invoke the wrong entry.
+  (testing "export-name map resolves -main to Main__main when main claims Main"
+    (let [forms '[(defn main [] 1) (defn -main [] 2)]
+          m     (lower-go/build-export-name-map forms)]
+      (is (= "Main" (get m "main")))
+      (is (= "Main__main" (get m "-main")))))
+  (testing "frame calls Main__main for the preferred -main entry"
+    (let [raw (ef/find-program-entry '[(defn main [] 1) (defn -main [] 2)])
+          e   (ef/analyze-entry raw {:fn {:fn-name "-main"
+                                          :go-name "Main__main"
+                                          :needs-error? true
+                                          :arity 0}})
+          src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/app"})]
+      (is (= "-main" (:name e)))
+      (is (= "Main__main" (:go-name e)))
+      (is (= "Main__main" (:call-name e)))
+      (is (str/includes? src "prog.Main__main(ec)"))
+      (is (not (str/includes? src "prog.Main(ec)")))
+      (is (str/includes? (ef/entry-summary-line 2 e) "Main__main ✓"))))
+  (testing "identical-arity collision still invokes the intended function"
+    ;; Same arity, distinct source names — the collision-resolved go-name is
+    ;; what the call site must use. A text scan for `func Main(` would pick
+    ;; the wrong one (or the first match).
+    (let [raw (ef/find-program-entry '[(defn main [argv] :a) (defn -main [argv] :b)])
+          e   (ef/analyze-entry raw {:fn {:fn-name "-main"
+                                          :go-name "Main__main"
+                                          :needs-error? false
+                                          :arity 1}})
+          src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/app"})]
+      (is (= :vector (:arity-shape e)))
+      (is (str/includes? src "prog.Main__main(ec, argv)"))
+      (is (not (str/includes? src "prog.Main(ec, argv)"))))))
+
+(deftest metadata-not-text-distinguishes-lowered
+  (testing ":fn record wins over misleading rendered source"
+    (let [raw (ef/find-program-entry '[(defn -main [] 1)])
+          ;; Text claims no func; metadata says it lowered as Main__main
+          ;; with a single-value result.
+          e   (ef/analyze-entry raw {:fn {:fn-name "-main"
+                                          :go-name "Main__main"
+                                          :needs-error? false}
+                                     :go-src "package app\n"})]
+      (is (true? (:lowered? e)))
+      (is (= "Main__main" (:go-name e)))
+      (is (false? (:needs-error? e)))))
+  (testing "nil :fn means not lowered even when text would match Main"
+    (let [raw (ef/find-program-entry '[(defn -main [] 1)])
+          e   (ef/analyze-entry raw {:fn nil
+                                     :go-src "func Main(ec *vm.ExecContext) (vm.Value, error) {\n"})]
+      (is (false? (:lowered? e)))))
+  (testing "lookup-entry-fn selects by source name from :fns"
+    (let [fns [{:fn-name "main" :go-name "Main" :needs-error? true}
+               {:fn-name "-main" :go-name "Main__main" :needs-error? false}]
+          e   (ef/find-program-entry '[(defn main [] 1) (defn -main [] 2)])
+          rec (ef/lookup-entry-fn fns e)]
+      (is (= "-main" (:fn-name rec)))
+      (is (= "Main__main" (:go-name rec)))))
+  (testing "compat go-src arity still recovers via text scan"
+    (let [raw (ef/find-program-entry '[(defn -main [& args] 1)])
+          e   (ef/analyze-entry raw "func Main(ec *vm.ExecContext, args ...vm.Value) (vm.Value, error) {\n")]
+      (is (true? (:lowered? e)))
+      (is (= "Main" (:go-name e)))
+      (is (true? (:needs-error? e))))))

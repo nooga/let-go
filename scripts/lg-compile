@@ -172,9 +172,11 @@
               (doseq [f (:forms s)]
                 (when (definitional? f) (eval f))))
       ;; --- whole-program cross-package lowering (collect-all then emit-all) ---
+      ;; Use the result API so the entry frame can consume collision-resolved
+      ;; :go-name / :needs-error? from the lowerer rather than scanning text (#657).
       gospecs (mapv (fn [s] [(:pkg s) (:nsn s) (:lf s) (:go-pkg s)]) specs)
       results (binding [ir.passes.pipeline/*target* :go]
-                (ir.passes.pipeline/lower-all-ns-to-go gospecs))
+                (ir.passes.pipeline/lower-all-ns-to-go-result gospecs))
       ;; Prefer -main's owning ns when several inputs declare an entry.
       entry-spec (or (first (filter (fn [s] (and (:entry s) (= "-main" (:name (:entry s))))) specs))
                      (first (filter :entry specs)))]
@@ -182,7 +184,8 @@
   (doseq [pair (map-indexed vector specs)]
     (let [i  (first pair)
           s  (second pair)
-          go (nth results i)]
+          r  (nth results i)
+          go (when r (:source r))]
       (cond
         (empty? (:lf s)) (println (str (:path s) ": no lowerable defns — skipped"))
         (string? go)     (let [dir (str out-dir "/" (:reldir s))
@@ -191,18 +194,21 @@
                            (spit out go)
                            (println (str (:path s) " -> " out)))
         :else            (println (str "EMIT-FAIL " (:path s) " pkg=" (:pkg s)
-                                       " returned " (clojure.core/type go))))))
+                                       " returned " (clojure.core/type r))))))
   ;; --- #425 native-entry frame (main.go + optional private bridge) ---
   (when entry-spec
     (let [ei       (first (keep-indexed (fn [i s] (when (= s entry-spec) i)) specs))
-          go-src   (nth results ei)
-          entry    (ir.passes.entry-frame/analyze-entry (:entry entry-spec) go-src)
+          result   (nth results ei)
+          fn-rec   (ir.passes.entry-frame/lookup-entry-fn
+                     (when result (:fns result))
+                     (:entry entry-spec))
+          entry    (ir.passes.entry-frame/analyze-entry (:entry entry-spec) {:fn fn-rec})
           blanks   (vec (keep (fn [pair]
                                 (let [s (nth specs (first pair))
-                                      g (second pair)]
-                                  (when (string? g) (:go-pkg s))))
+                                      r (second pair)]
+                                  (when (and r (string? (:source r))) (:go-pkg s))))
                               (map-indexed vector results)))
-          n-funcs  (reduce + (map count-lowered-funcs results))
+          n-funcs  (reduce + (map (fn [r] (count-lowered-funcs (when r (:source r)))) results))
           frame    (ir.passes.entry-frame/emit-entry-frame-go
                      {:entry entry
                       :entry-import (:go-pkg entry-spec)
@@ -220,6 +226,6 @@
           (println (str "native-entry bridge -> " bout))))
       (println (ir.passes.entry-frame/entry-summary-line n-funcs entry))))
   (when-not entry-spec
-    (let [n-funcs (reduce + (map count-lowered-funcs results))]
+    (let [n-funcs (reduce + (map (fn [r] (count-lowered-funcs (when r (:source r)))) results))]
       (println (ir.passes.entry-frame/entry-summary-line n-funcs nil))))
   (println "done."))
