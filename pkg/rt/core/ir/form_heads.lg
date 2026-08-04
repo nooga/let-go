@@ -1,0 +1,128 @@
+;; Form-head catalog for build-list dispatch (Axis-1 form heads).
+;;
+;; This file defines the complete set of special forms handled by build-list,
+;; along with their metadata: which forms need explicit handlers in free-vars
+;; and captures-of, and how they're dispatched.
+;;
+;; The single source of truth for handler bindings is form-head-handlers-fn
+;; (set by build.lg after all handlers are defined). This catalog provides
+;; the metadata (which forms need special scope handling) that drives AC-3
+;; coupling and load-time coherence validation.
+
+(ns ir.form-heads
+  (:require [clojure.set :as set]))
+
+;; --- Form-head catalog ---
+;;
+;; Each row: [form-head free-vars? captures-of? description]
+;;
+;; form-head        — symbol (the form head matched in build-list's cond)
+;; free-vars?       — true if form has explicit handler in free-vars fn
+;; captures-of?     — true if form has explicit handler in captures-of fn
+;; description      — brief comment
+
+(def form-heads-catalog
+  '[;; Control flow
+    [if false false "conditional: no special scope handling (both branches walked generically)"]
+    [do false false "sequential: no special scope handling"]
+    [loop true true "loop bindings: establishes local scope"]
+    [loop* true true "loop* (parallel) bindings: establishes local scope"]
+    [recur false false "recur to enclosing loop: no special scope"]
+    [try true true "exception handling: catch binds exception symbol"]
+
+    ;; Binding forms
+    [let true true "let bindings: establishes local scope"]
+    [let* true true "let* (sequential) bindings: establishes local scope"]
+    [fn* true true "fn* closure: captures outer scope, has closure-local scope"]
+
+    ;; Variable / assignment
+    [var true true "var reference: accesses variable, special scope handling"]
+    [set! true true "set! assignment: only value is evaluated"]
+    [def false false "def interning: compile-time effect, value evaluated normally"]
+
+    ;; Quote / data access
+    [quote true true "quote: quoted data is not evaluated, special scope handling"]
+    [. true true "dot field access: field is literal, obj is evaluated"]
+    ])
+
+
+;; --- Exported API ---
+
+(defn form-head-names
+  "Return the set of all form heads in the catalog."
+  []
+  (into #{} (map first form-heads-catalog)))
+
+;; Precomputed sets for hot-path queries (AC-3 coupling optimization).
+;; Built once at load time, avoiding per-call set construction in free-vars/captures-of.
+(def ^:private precomputed-free-vars-handlers
+  "Set of form heads with explicit handlers in free-vars (precomputed at load time)."
+  (into #{} (for [[head fv? _co? _desc] form-heads-catalog
+                  :when fv?]
+              head)))
+
+(def ^:private precomputed-captures-of-handlers
+  "Set of form heads with explicit handlers in captures-of (precomputed at load time)."
+  (into #{} (for [[head _fv? co? _desc] form-heads-catalog
+                  :when co?]
+              head)))
+
+(defn free-vars-handler-forms
+  "Return the set of form heads with explicit handlers in free-vars."
+  []
+  precomputed-free-vars-handlers)
+
+(defn captures-of-handler-forms
+  "Return the set of form heads with explicit handlers in captures-of."
+  []
+  precomputed-captures-of-handlers)
+
+(defn form-head-description
+  "Return the description for a form head, or nil if not catalogued."
+  [head]
+  (let [match (first (filter (fn [[h _fv? _co? _desc]] (= h head))
+                             form-heads-catalog))]
+    (when match (last match))))
+
+(def form-head-handlers-fn
+  "Thunk that returns the actual handler functions.
+   This is set by build.lg after all handlers are defined."
+  (atom nil))
+
+(defn form-head-handler
+  "Return the handler function for a form head, or nil if not bound.
+   The handler map is set by build.lg after all handlers are defined."
+  [head]
+  (let [handlers-fn @form-head-handlers-fn]
+    (if handlers-fn
+      (get (handlers-fn) head)
+      nil)))
+
+(defn has-free-vars-handler?
+  "Query the catalog: does this form head have an explicit handler in free-vars?
+   Used to gate free-vars behavior. Editing the catalog changes free-vars behavior."
+  [form-head]
+  (contains? (free-vars-handler-forms) form-head))
+
+(defn has-captures-handler?
+  "Query the catalog: does this form head have an explicit handler in captures-of?
+   Used to gate captures-of behavior. Editing the catalog changes captures-of behavior.
+   Note: This helper lives in form_heads.lg and is imported into build.lg for AC-3 coupling."
+  [form-head]
+  (contains? (captures-of-handler-forms) form-head))
+
+;; --- Load-time catalog validation (AC-1: catalog completeness) ---
+;;
+;; Verify at load time that the catalog is self-consistent and well-formed.
+;; The catalog itself is the single source of truth for which forms build-list
+;; must handle. Handler completeness is validated in build.lg after
+;; form-head-handlers-fn is set, ensuring dispatch uses the same handlers.
+
+(let [catalogued (form-head-names)]
+
+  ;; Catalog must be non-empty (sanity check)
+  (when (empty? catalogued)
+    (throw (ex-info "ir.form-heads: form-heads-catalog is empty"
+                    {:catalogued catalogued}))))
+
+(println "ir.form-heads catalog loaded (catalog validation passed)")

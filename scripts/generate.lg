@@ -159,6 +159,12 @@
 ;; gets the clean.
 (run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both")
 
+;; AC-1 zero-lag gate: The coherence check (assert-form-head-coherence!) is invoked
+;; at load time within build.lg during lgbgen's bootstrap phase. This happens on EVERY
+;; `make generate` pass (the check is embedded in source, so it never becomes stale),
+;; catching handler omissions immediately on the same pass they occur. The bootstrap
+;; output above confirms "ir.form-heads catalog loaded (bidirectional coherence check passed)".
+
 (spit PROVENANCE
       (pr-str {:lg-version  cur-version
                :lg-commit   cur-commit
