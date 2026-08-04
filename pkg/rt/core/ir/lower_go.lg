@@ -2580,15 +2580,7 @@
 ;; Tests call this directly on single instructions to verify var-conditional and
 ;; function-template distinctions are preserved.
 (defn op-contributes-rt? [nid f]
-  "Whether an op at nid contributes to function-needs-rt?.
-   Encapsulates exact conditions from scattered conditionals:
-   - :call unconditionally
-   - :try unconditionally (emits rt.InvokeValueEC in try-assign-stmts)
-   - :load-var unconditionally
-   - :const only if (var? aux) — var-conditional case
-   - any op if (any-fn-template? aux) — function-template case
-   - binary ops with vm.Value operands unconditionally
-   - inc/dec/bit-not over vm.Value unconditionally"
+  "Whether an op at nid contributes to function-needs-rt?."
   (let [op   (ir/op nid f)
         aux  (ir/aux nid f)
         refs (ir/refs nid f)]
@@ -2610,9 +2602,8 @@
         (and (or (= op :inc) (= op :dec) (= op :bit-not))
              (= "vm.Value" (go-type-spec (ir/type-of (nth refs 0) f)))))))
 
-;; Public: used by ir.passes.pipeline for signature derivation.
 ;; Refactored to fold per-op contributions instead of scattered conditionals.
-(defn function-needs-rt? [f]
+(defn- function-needs-rt? [f]
   (let [local? (loop [blocks (ir/blocks f)]
                  (cond
                    (empty? blocks) false
