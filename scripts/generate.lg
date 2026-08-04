@@ -166,6 +166,12 @@
   (run! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt" "-go-pkg" "github.com/nooga/let-go/pkg/rt" "-primitives-out" "pkg/rt/zz_primitives_generated.go")
   (println "generate.lg: registrars fresh — skipped"))
 
+;; Separate corefns registrar generation stage. The corefns namespace has its
+;; own //lg:native-annotated functions that are scanned and generated independently.
+(if (stale? "pkg/rt/corefns/zz_primitives_generated.go")
+  (run! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt/corefns" "-go-pkg" "github.com/nooga/let-go/pkg/rt/corefns" "-primitives-out" "pkg/rt/corefns/zz_primitives_generated.go")
+  (println "generate.lg: corefns registrar fresh — skipped"))
+
 ;; One core compile emits BOTH the .lgb bundle and the gogen_ir Go tree.
 ;; Hermetic generation (clearing the stale lowered-tree before regen) is
 ;; handled inside lgbgen's runGoTarget, so every entry point — `make generate`
@@ -184,6 +190,11 @@
 ;; `make generate` pass (the check is embedded in source, so it never becomes stale),
 ;; catching handler omissions immediately on the same pass they occur. The bootstrap
 ;; output above confirms "ir.form-heads catalog loaded (bidirectional coherence check passed)".
+
+;; Immediately after writing the manifest, refresh the canonical digest so
+;; generated.sums records the new manifest hash. This ensures
+;; TestGeneratedArtifactsAreFresh stays green after any source edit.
+(run! go-bin "run" "./cmd/check-generated" "-write")
 
 (spit PROVENANCE
       (pr-str {:lg-version  cur-version

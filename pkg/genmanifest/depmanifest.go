@@ -281,6 +281,30 @@ func StaleOutputs(repoRoot string) ([]string, error) {
 			staleSet[he.Output] = true
 		}
 	}
+	// Check output existence: missing or incomplete outputs are considered stale.
+	// Regular files must exist; directories must exist and contain at least one file.
+	// This catches the case where a clean checkout has gitignored outputs missing.
+	for _, e := range current {
+		outPath := filepath.Join(repoRoot, e.Output)
+		if strings.HasSuffix(e.Output, "/") {
+			// Directory output: verify it exists and contains files
+			info, err := os.Stat(outPath)
+			if err != nil || !info.IsDir() {
+				staleSet[e.Output] = true
+				continue
+			}
+			// Check if directory has any files (not just empty)
+			entries, err := os.ReadDir(outPath)
+			if err != nil || len(entries) == 0 {
+				staleSet[e.Output] = true
+			}
+		} else {
+			// Regular file output: verify it exists
+			if _, err := os.Stat(outPath); err != nil {
+				staleSet[e.Output] = true
+			}
+		}
+	}
 	var out []string
 	for o := range staleSet {
 		out = append(out, o)

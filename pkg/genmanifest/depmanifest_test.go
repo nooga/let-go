@@ -3,6 +3,7 @@ package genmanifest
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,7 +62,8 @@ func TestEdgesExcludeGeneratedAndTestInputs(t *testing.T) {
 // private tree instead of rewriting the tracked pkg/rt/generated.manifest
 // (which would invalidate generated.sums and fail TestGeneratedArtifactsAreFresh
 // when the package runs). Only inputs are needed: WriteDepManifest hashes edge
-// inputs, never outputs.
+// inputs, never outputs. Placeholder outputs are created so output-existence
+// checks pass during staleness tests.
 func isolatedRepoCopy(t *testing.T) string {
 	t.Helper()
 	realRoot, err := FindRepoRoot(".")
@@ -73,6 +75,7 @@ func isolatedRepoCopy(t *testing.T) string {
 		t.Fatalf("edges: %v", err)
 	}
 	dst := t.TempDir()
+	// Copy all input files
 	for _, e := range edges {
 		data, err := os.ReadFile(filepath.Join(realRoot, e.Input))
 		if err != nil {
@@ -84,6 +87,31 @@ func isolatedRepoCopy(t *testing.T) string {
 		}
 		if err := os.WriteFile(out, data, 0o644); err != nil {
 			t.Fatal(err)
+		}
+	}
+	// Create placeholder outputs so output-existence checks pass
+	outputs := map[string]bool{}
+	for _, e := range edges {
+		outputs[e.Output] = true
+	}
+	for out := range outputs {
+		outPath := filepath.Join(dst, out)
+		if strings.HasSuffix(out, "/") {
+			// Directory output: create the directory with a placeholder file
+			if err := os.MkdirAll(outPath, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(outPath, ".placeholder"), []byte(""), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			// Regular file output: create a placeholder file
+			if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(outPath, []byte(""), 0o644); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	return dst
@@ -151,5 +179,57 @@ func TestStaleOutputsDetectsChangedInput(t *testing.T) {
 	}
 	if set["pkg/rt/zz_primitives_generated.go"] {
 		t.Error("a .lg edit must NOT mark the Go registrar stale")
+	}
+}
+
+func TestMissingOutputDetected(t *testing.T) {
+	root := isolatedRepoCopy(t)
+	if err := WriteDepManifest(root); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Fresh manifest → nothing stale.
+	stale, err := StaleOutputs(root)
+	if err != nil {
+		t.Fatalf("stale: %v", err)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("expected nothing stale right after write, got %v", stale)
+	}
+	// Remove a file output and verify it's detected as stale
+	if err := os.Remove(filepath.Join(root, "pkg/rt/zz_primitives_generated.go")); err != nil {
+		t.Fatal(err)
+	}
+	stale, err = StaleOutputs(root)
+	if err != nil {
+		t.Fatalf("stale after removal: %v", err)
+	}
+	found := false
+	for _, s := range stale {
+		if s == "pkg/rt/zz_primitives_generated.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("missing file output should be detected as stale")
+	}
+	// Remove a directory output and verify it's detected as stale
+	dirOut := filepath.Join(root, "pkg/rt/core_go_lowered")
+	if err := os.RemoveAll(dirOut); err != nil {
+		t.Fatal(err)
+	}
+	stale, err = StaleOutputs(root)
+	if err != nil {
+		t.Fatalf("stale after dir removal: %v", err)
+	}
+	found = false
+	for _, s := range stale {
+		if s == "pkg/rt/core_go_lowered/" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("missing directory output should be detected as stale")
 	}
 }
