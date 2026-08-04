@@ -861,12 +861,35 @@
       name
       (list 'with-meta sym meta))))
 
+;; fn-arglists: the :arglists metadata Clojure attaches to defn/defmacro vars
+;; — a seq of param vectors, one per arity — read straight off the
+;; (unevaluated) arity forms a defn/defn- macro invocation was handed. Inlines
+;; its own arity-vector unwrap (rather than calling the later-defined
+;; unwrap-fn-arity-vector) because defn- calls this DURING its own
+;; macroexpansion, and unwrap-fn-arity-vector's own definition further below
+;; is itself a (defn- ...) — a genuine bootstrap ordering cycle otherwise.
+(defn ^:private fn-arglists [forms]
+  (let [unwrap (fn [form]
+                 (if (and (seq? form)
+                          (= 'with-meta (first form))
+                          (vector? (second form)))
+                   (second form)
+                   form))
+        first-form (unwrap (first forms))]
+    (if (vector? first-form)
+      (list first-form)
+      ;; apply list, not bare map: :arglists becomes a def-time bytecode
+      ;; CONSTANT (see defCompiler's apply-def-meta! emission), and the
+      ;; encoder can't serialize a lazy seq — apply forces it into a real
+      ;; List before it ever reaches the const pool.
+      (apply list (map #(unwrap (first %)) forms)))))
+
 (defmacro defn- [name & forms]
   (let [doc   (if (string? (first forms)) (first forms) nil)
         forms (if (string? (first forms)) (next forms) forms)
         attr  (if (map? (first forms)) (first forms) nil)
         forms (if (map? (first forms)) (next forms) forms)
-        attr  (assoc (if (nil? attr) {} attr) :private true)]
+        attr  (assoc (if (nil? attr) {} attr) :private true :arglists (fn-arglists forms))]
     `(def ~(def-meta-name name doc attr) (fn ~@forms))))
 
 (defn ^:private fn-expand [bindings body]
@@ -995,6 +1018,7 @@
         forms      (if (string? (first forms)) (next forms) forms)
         attr       (if (map? (first forms)) (first forms) nil)
         forms      (if (map? (first forms)) (next forms) forms)
+        attr       (assoc (if (nil? attr) {} attr) :arglists (fn-arglists forms))
         def-name   (def-meta-name name doc attr)
         first-form (unwrap-fn-arity-vector (first forms))
         single?    (vector? first-form)

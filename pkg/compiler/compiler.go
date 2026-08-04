@@ -1871,19 +1871,6 @@ func assocMeta(meta vm.Value, key vm.Value, val vm.Value) vm.Value {
 	return vm.NewPersistentMap([]vm.Value{key, val})
 }
 
-func metaValueAt(meta vm.Value, key vm.Value) vm.Value {
-	if meta == nil || meta == vm.NIL {
-		return vm.NIL
-	}
-	if m, ok := meta.(*vm.PersistentMap); ok {
-		return m.ValueAt(key)
-	}
-	if m, ok := meta.(vm.Map); ok {
-		return m.ValueAt(key)
-	}
-	return vm.NIL
-}
-
 func defCompiler(c *Context, form vm.Value) error {
 	tc := c.tailPosition
 	c.tailPosition = false
@@ -1923,20 +1910,44 @@ func defCompiler(c *Context, form vm.Value) error {
 	if doc != vm.NIL {
 		meta = assocMeta(meta, vm.Keyword("doc"), doc)
 	}
+	// :file/:line/:column, mirroring Clojure's def-time metadata — sourced
+	// from the ORIGINAL (pre-expansion) form, since macroexpansion propagates
+	// FormSource onto the expanded form it compiles from (see
+	// expandMacro/lang.go's macroexpand-1 native). A raw `(def x v)` typed
+	// directly carries its own FormSource the same way. Forms without a
+	// recorded source (e.g. synthesized by other macros) simply add no info.
+	if info := vm.FormSource.Get(form); info != nil {
+		meta = assocMeta(meta, vm.Keyword("line"), vm.MakeInt(info.Line+1))
+		meta = assocMeta(meta, vm.Keyword("column"), vm.MakeInt(info.Column+1))
+		meta = assocMeta(meta, vm.Keyword("file"), vm.String(info.File))
+	}
 	c.defName = sym.String()
 	varr := c.CurrentNS().LookupOrAdd(sym.(vm.Symbol))
 	if meta != vm.NIL {
-		v := varr.(*vm.Var)
-		v.SetMeta(meta)
-		if vm.IsTruthy(metaValueAt(meta, vm.Keyword("dynamic"))) {
-			v.SetDynamic()
-		}
-		if vm.IsTruthy(metaValueAt(meta, vm.Keyword("private"))) {
-			v.SetPrivate()
-		}
+		// Apply immediately: source-loaded/eval'd code compiles and runs this
+		// chunk in the same process on the same Var object, so this alone is
+		// enough there. It is NOT enough for an AOT bundle (lgbgen compiles
+		// core.lg in one process; the shipped binary decodes the resulting
+		// .lgb in another, against a brand-new stub Var — see DefStub) — the
+		// OP_INVOKE of apply-def-meta! emitted below reproduces this call
+		// when the chunk's bytecode actually runs there, mirroring how
+		// set-macro! already survives the same round-trip for :macro.
+		rt.ApplyVarMeta(varr.(*vm.Var), meta)
 	}
 	c.emitWithArg(vm.OP_LOAD_CONST, c.constant(varr))
 	c.incSP(1)
+	if meta != vm.NIL {
+		c.emitWithArg(vm.OP_LOAD_CONST, c.constant(rt.CoreNS.Lookup("apply-def-meta!")))
+		c.incSP(1)
+		c.emitWithArg(vm.OP_LOAD_CONST, c.constant(varr))
+		c.incSP(1)
+		c.emitWithArg(vm.OP_LOAD_CONST, c.constant(meta))
+		c.incSP(1)
+		c.emitWithArg(vm.OP_INVOKE, 2)
+		c.decSP(2)
+		c.emit(vm.OP_POP)
+		c.decSP(1)
+	}
 	if l == 1 {
 		// No-init form (def x): intern the var but leave its root binding
 		// UNAFFECTED, matching Clojure ("If init is not supplied, the root

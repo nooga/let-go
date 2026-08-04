@@ -236,6 +236,15 @@ func (r *sourceRegistry) Register(name string, src string) {
 	r.mu.Unlock()
 }
 
+// Text returns the full registered source text for a file, if known.
+// Used by clojure.repl/source to slice out a var's definition text.
+func (r *sourceRegistry) Text(file string) (string, bool) {
+	r.mu.RLock()
+	src, ok := r.sources[file]
+	r.mu.RUnlock()
+	return src, ok
+}
+
 // GetLine returns the line at the given 0-based index for the named file.
 func (r *sourceRegistry) GetLine(file string, line int) string {
 	r.mu.RLock()

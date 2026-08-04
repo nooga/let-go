@@ -56,6 +56,7 @@ type Namespace struct {
 	refers   map[Symbol]*Refer
 	aliases  map[Symbol]*Namespace
 	excludes map[Symbol]bool // names excluded from clojure.core auto-refer
+	unmapped map[Symbol]bool // names explicitly ns-unmap'd — hidden from refers too
 }
 
 // coreNamespacePtr is set by the rt package after clojure.core is registered.
@@ -151,6 +152,13 @@ func (n *Namespace) excludedLocked(s Symbol) bool {
 	return n.excludes[s]
 }
 
+// unmappedLocked reports whether the symbol was explicitly ns-unmap'd.
+func (n *Namespace) unmappedLocked(s Symbol) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.unmapped[s]
+}
+
 // cacheAlias rewrites an alias to its freshly-resolved target. Extracted from
 // Lookup so the write is a single guarded op rather than inline under a read.
 func (n *Namespace) cacheAlias(s Symbol, target *Namespace) {
@@ -186,6 +194,7 @@ func NewNamespace(name string) *Namespace {
 		refers:   map[Symbol]*Refer{},
 		aliases:  map[Symbol]*Namespace{},
 		excludes: map[Symbol]bool{},
+		unmapped: map[Symbol]bool{},
 	}
 }
 
@@ -233,7 +242,7 @@ func (n *Namespace) Def(name string, val Value) *Var {
 	// auto-refered :all, so it does warn on shadow. The check reads core's
 	// and this ns's maps via brief accessors (no lock held across the write
 	// below); the warning itself is best-effort so a benign TOCTOU is fine.
-	if coreNamespacePtr != nil && n != coreNamespacePtr && !n.excludedLocked(s) && !suppressShadowWarn {
+	if coreNamespacePtr != nil && n != coreNamespacePtr && !n.excludedLocked(s) && !n.unmappedLocked(s) && !suppressShadowWarn {
 		if isShadowingCoreRefer(n, s) {
 			if existing := coreNamespacePtr.localVar(s); existing != nil && !existing.isPrivate {
 				// Only warn the first time we shadow in this ns; subsequent
@@ -274,6 +283,9 @@ func (n *Namespace) LookupLocal(symbol Symbol) *Var {
 // Baseline namespaces (clojure.core, let-go.core, etc.) are lowest-priority:
 // explicit refers shadow them. Private vars are always hidden.
 func (n *Namespace) lookupViaRefers(sym Symbol) *Var {
+	if n.unmappedLocked(sym) {
+		return nil
+	}
 	var baselineHit *Var
 	for _, ref := range n.refersSnapshot() {
 		v := ref.ns.localVar(sym)
@@ -409,10 +421,20 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 	return NIL
 }
 
+// Refer installs a refer entry for ns into this namespace. An explicit
+// refer — :all here, or a later ReferList call — is how Clojure lets you
+// undo a prior ns-unmap: it clears the `unmapped` tombstone for any symbol
+// the refer newly brings into scope, so (resolve sym) sees it again. ns's
+// PublicVars snapshot is read BEFORE n's own lock is taken, honoring the
+// no-nested-namespace-locks invariant above.
 func (n *Namespace) Refer(ns *Namespace, alias string, all bool) {
 	nom := ns.Name()
 	if alias != "" {
 		nom = alias
+	}
+	var pub map[Symbol]*Var
+	if all {
+		pub = ns.PublicVars()
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -421,9 +443,13 @@ func (n *Namespace) Refer(ns *Namespace, alias string, all bool) {
 		ns:   ns,
 		only: nil,
 	}
+	for sym := range pub {
+		delete(n.unmapped, sym)
+	}
 }
 
-// ReferList refers only selected symbols from the given namespace into this namespace.
+// ReferList refers only selected symbols from the given namespace into this
+// namespace. Clears any `unmapped` tombstone on those symbols — see Refer.
 func (n *Namespace) ReferList(ns *Namespace, symbols []Symbol) {
 	set := make(map[Symbol]bool, len(symbols))
 	for _, s := range symbols {
@@ -435,6 +461,9 @@ func (n *Namespace) ReferList(ns *Namespace, symbols []Symbol) {
 		ns:   ns,
 		all:  false,
 		only: set,
+	}
+	for _, s := range symbols {
+		delete(n.unmapped, s)
 	}
 }
 
@@ -527,6 +556,89 @@ func (n *Namespace) AllVars() map[Symbol]*Var {
 		out[k] = v
 	}
 	return out
+}
+
+// AliasesSnapshot copies the namespace's alias table (short-name -> target
+// namespace, as installed by `:as`/`alias`). Backs the ns-aliases core fn.
+func (n *Namespace) AliasesSnapshot() map[Symbol]*Namespace {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make(map[Symbol]*Namespace, len(n.aliases))
+	for k, v := range n.aliases {
+		out[k] = v
+	}
+	return out
+}
+
+// ReferredVars snapshots every var visible in this namespace via refer —
+// baseline auto-refers (clojure.core, let-go.core, …) plus explicit
+// (:require ... :refer) / (use ...) refers — keyed by unqualified symbol.
+// Mirrors lookupViaRefers's precedence: an explicit refer for a symbol
+// shadows a baseline hit for that same symbol. Backs the ns-refers core fn.
+// Vars this namespace interns itself are NOT included here — those belong to
+// AllVars/PublicVars (ns-interns/ns-publics); ns-map (the union) overlays
+// AllVars on top of this result to reproduce that shadowing.
+func (n *Namespace) ReferredVars() map[Symbol]*Var {
+	out := make(map[Symbol]*Var)
+	if coreNamespacePtr != nil && coreNamespacePtr != n {
+		for k, v := range coreNamespacePtr.PublicVars() {
+			out[k] = v
+		}
+	}
+	for _, b := range lgBaselineNamespaces {
+		if b == n {
+			continue
+		}
+		for k, v := range b.PublicVars() {
+			out[k] = v
+		}
+	}
+	for _, ref := range n.refersSnapshot() {
+		if isBaselineNS(ref.ns) {
+			// Already contributed above at baseline priority; an explicit
+			// refer of a baseline namespace (rare) adds nothing new.
+			continue
+		}
+		if ref.all {
+			for k, v := range ref.ns.PublicVars() {
+				out[k] = v
+			}
+			continue
+		}
+		for sym := range ref.only {
+			if v := ref.ns.localVar(sym); v != nil && !v.isPrivate {
+				out[sym] = v
+			}
+		}
+	}
+	n.mu.RLock()
+	for sym := range n.unmapped {
+		delete(out, sym)
+	}
+	n.mu.RUnlock()
+	return out
+}
+
+// Unmap removes a symbol's mapping from this namespace, whether it is a
+// locally interned var or one only visible via refer. Backs the ns-unmap
+// core fn. Clojure semantics: after ns-unmap, the symbol resolves to
+// nothing in this namespace until re-interned or re-referred — so beyond
+// deleting any local registry entry, the symbol is recorded in `unmapped`,
+// which lookupViaRefers and ReferredVars both honor to hide it from refers
+// too. This is deliberately a separate set from `excludes` (:refer-clojure
+// :exclude): that one only suppresses the warn-on-shadow message and must
+// NOT block refer resolution — some core namespaces (e.g. string.lg) declare
+// :exclude for a name while still relying on it resolving to clojure.core's
+// version until their own same-named def further down the file runs. A
+// later (def name ...) still works fine here regardless: Lookup checks the
+// local registry before ever consulting refers. The tombstone isn't
+// permanent: Refer/ReferList clear it for any symbol they newly bring back
+// into scope, so an explicit re-refer restores visibility just like Clojure.
+func (n *Namespace) Unmap(name Symbol) {
+	n.mu.Lock()
+	delete(n.registry, name)
+	n.unmapped[name] = true
+	n.mu.Unlock()
 }
 
 func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {

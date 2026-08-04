@@ -1,0 +1,65 @@
+;; clojure.repl feature tests — dir/apropos/doc/find-doc/source
+(ns test.clojure-repl-test
+  (:require [test :refer :all]
+            [string]
+            [clojure.repl :refer :all]))
+
+(defn repl-test-pub-fn
+  "A docstring for testing doc/find-doc."
+  [a b]
+  (+ a b))
+
+(defn- repl-test-priv-fn [x] x)
+
+(deftest dir-fn-test
+  (testing "dir-fn returns a sorted seq of symbols for public vars only"
+    (let [syms (dir-fn 'test.clojure-repl-test)]
+      (is (some #{'repl-test-pub-fn} syms))
+      (is (not (some #{'repl-test-priv-fn} syms)))
+      (is (= (sort syms) syms))))
+  (testing "dir prints one symbol per line"
+    (let [out (with-out-str (dir test.clojure-repl-test))]
+      (is (string/includes? out "repl-test-pub-fn"))
+      (is (not (string/includes? out "repl-test-priv-fn"))))))
+
+(deftest apropos-test
+  (testing "apropos matches a plain string against public var names, fully qualified"
+    (let [hits (apropos "repl-test-pub-fn")]
+      (is (some #{'test.clojure-repl-test/repl-test-pub-fn} hits))))
+  (testing "apropos matches a regex pattern"
+    (let [hits (apropos #"^repl-test-pub-fn$")]
+      (is (some #{'test.clojure-repl-test/repl-test-pub-fn} hits))))
+  (testing "apropos does not surface private vars"
+    (is (not (some #{'test.clojure-repl-test/repl-test-priv-fn} (apropos "repl-test-priv-fn"))))))
+
+(deftest doc-test
+  (testing "doc on a var prints its qualified name, arglists and docstring"
+    (let [out (with-out-str (doc repl-test-pub-fn))]
+      (is (string/includes? out "test.clojure-repl-test/repl-test-pub-fn"))
+      (is (string/includes? out "[a b]"))
+      (is (string/includes? out "A docstring for testing doc/find-doc."))))
+  (testing "doc on an unresolvable symbol says so instead of erroring"
+    (let [out (with-out-str (doc this-symbol-does-not-exist-anywhere))]
+      (is (string/includes? out "Nothing found"))))
+  (testing "doc on a loaded namespace prints its name"
+    (let [out (with-out-str (doc test.clojure-repl-test))]
+      (is (string/includes? out "test.clojure-repl-test")))))
+
+(deftest find-doc-test
+  (testing "find-doc finds a var whose docstring matches the pattern"
+    (let [out (with-out-str (find-doc "docstring for testing doc/find-doc"))]
+      (is (string/includes? out "test.clojure-repl-test/repl-test-pub-fn")))))
+
+(deftest source-test
+  (testing "source-fn returns the exact definition text for a var in this file"
+    (let [src (source-fn 'repl-test-pub-fn)]
+      (is (some? src))
+      (is (string/includes? src "defn repl-test-pub-fn"))
+      (is (string/includes? src "(+ a b)"))))
+  (testing "source-fn returns nil for a var with no recorded source position"
+    (is (nil? (source-fn 'no-such-var-at-all))))
+  (testing "source macro prints the source or a not-found message"
+    (let [out (with-out-str (source repl-test-pub-fn))]
+      (is (string/includes? out "defn repl-test-pub-fn")))
+    (let [out (with-out-str (source no-such-var-at-all))]
+      (is (string/includes? out "Source not found")))))
