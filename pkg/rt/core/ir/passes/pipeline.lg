@@ -34,8 +34,13 @@
    [ir.passes.lambda-lift]
    [ir.passes.legalize :refer [legalize-fn!]]
    [ir.passes.licm :refer [licm]]
+   [ir.passes.liveness :as lv]
    [ir.passes.typeinfer :refer [typeinfer]]
    [ir.validate :refer [validate-fn!]]))
+
+;; Module-load injection: wire ir.passes.liveness/reachable-nids into lower-go's atom.
+;; Bare require + resolve defers reference resolution to runtime, handling bootstrap module-load order.
+(lower-go/set-reachable-nids-fn! (resolve 'ir.passes.liveness/reachable-nids))
 
 (defn- run-typeinfra-epoch [f]
   (let [state0 (lat/seed-state-from-inst-types! (lat/new-typeinfra-state f) f)
