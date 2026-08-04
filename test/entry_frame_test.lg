@@ -39,6 +39,7 @@
     (is (= "Main" (:call-name e)))
     (is (str/includes? src "prog.Main(ec, argv...)"))
     (is (str/includes? src "rt.BootCore()"))
+    (is (str/includes? src "defer rt.ShutdownAllPods()"))
     (is (str/includes? src "rt.LoadProgramNamespaces(unit)"))
     (is (str/includes? (ef/entry-summary-line 2 e) "Main ✓"))))
 
@@ -54,23 +55,24 @@
 
 (deftest emit-vm-fallback-when-not-lowered
   (let [raw (ef/find-program-entry '[(defn -main [& args] 1)])
-        e   (ef/analyze-entry raw {:fn nil})
+        e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "app")
         src (ef/emit-entry-frame-go {:entry e})]
     (is (false? (:lowered? e)))
-    (is (str/includes? src "rt.InvokeProgramEntry"))
+    (is (str/includes? src "rt.InvokeProgramEntry(ec, \"app\", \"-main\", argv)"))
     (is (str/includes? (ef/entry-summary-line 0 e) "not lowered"))))
 
 (deftest vm-fallback-matches-arity-shape
   (testing "empty [] entry invokes with no args (no os.Args spread)"
     (let [raw (ef/find-program-entry '[(defn -main [] 1)])
-          e   (ef/analyze-entry raw {:fn nil})
+          e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "app")
           src (ef/emit-entry-frame-go {:entry e})]
       (is (= :none (:arity-shape e)))
       (is (str/includes? src "argv := []vm.Value{}"))
-      (is (not (str/includes? src "vm.String(a)")))))
+      ;; Boxed argv construction is absent; SetCommandLineArgs is in boot.
+      (is (not (str/includes? src "argv[i] = vm.String(a)")))))
   (testing "[argv] entry invokes with a single string vector"
     (let [raw (ef/find-program-entry '[(defn -main [argv] 1)])
-          e   (ef/analyze-entry raw {:fn nil})
+          e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "app")
           src (ef/emit-entry-frame-go {:entry e})]
       (is (= :vector (:arity-shape e)))
       (is (str/includes? src "argv := []vm.Value{vm.NewArrayVector(argvItems)}")))))
@@ -79,7 +81,7 @@
   ;; When the entry ns did not lower its entry but lowered sibling fns, the
   ;; entry package must stay blank-imported so those init() overrides register.
   (let [raw (ef/find-program-entry '[(defn -main [& a] 1)])
-        e   (ef/analyze-entry raw {:fn nil})
+        e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "fib")
         src (ef/emit-entry-frame-go {:entry e
                                      :entry-import "aotmod/fib"
                                      :blank-imports ["aotmod/fib" "aotmod/lib"]})]
@@ -106,13 +108,76 @@
       (is (= 1 (count-import-lines src "_ \"aotmod/util\"")))))
   (testing "a repeated entry-import that is kept (not lowered) is still imported once"
     (let [raw (ef/find-program-entry '[(defn -main [& a] 1)])
-          e   (ef/analyze-entry raw {:fn nil})
+          e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "fib")
           src (ef/emit-entry-frame-go {:entry e
                                        :entry-import "aotmod/fib"
                                        :blank-imports ["aotmod/fib" "aotmod/fib" "aotmod/lib"]})]
       (is (false? (:lowered? e)))
       (is (= 1 (count-import-lines src "_ \"aotmod/fib\"")))
       (is (= 1 (count-import-lines src "_ \"aotmod/lib\""))))))
+
+;; --- Phase 3: arity rejection, args order, ns-qualified fallback ---
+
+(defn- index-of-substr [s needle]
+  (let [idx (str/index-of s needle)]
+    (if (nil? idx) -1 idx)))
+
+(deftest unsupported-entry-arities-are-rejected
+  (testing "[& args] remains supported"
+    (let [e (ef/find-program-entry '[(defn -main [& args] 1)])]
+      (is (= :variadic (:arity-shape e)))
+      (is (nil? (ef/entry-arity-error e)))))
+  (testing "[first & rest] is unsupported with a clear diagnostic"
+    (let [e (ef/find-program-entry '[(defn -main [first & rest] 1)])]
+      (is (= :unsupported (:arity-shape e)))
+      (is (str/includes? (ef/entry-arity-error e) "unsupported arity"))
+      (is (str/includes? (ef/entry-arity-error e) "[first & rest]"))))
+  (testing "multi-fixed without & is unsupported"
+    (let [e (ef/find-program-entry '[(defn main [a b] 1)])]
+      (is (= :unsupported (:arity-shape e)))
+      (is (some? (ef/entry-arity-error e)))))
+  (testing "public and private [] / [argv] / [& args] remain valid"
+    (doseq [[forms shape] [['[(defn -main [] 1)] :none]
+                           ['[(defn main [argv] 1)] :vector]
+                           ['[(defn -main [& a] 1)] :variadic]
+                           ['[(defn- main [] 1)] :none]]]
+      (let [e (ef/find-program-entry forms)]
+        (is (= shape (:arity-shape e)))
+        (is (nil? (ef/entry-arity-error e)))))))
+
+(deftest command-line-args-published-before-namespace-load
+  ;; Top-level namespace code must observe the real argv. The frame publishes
+  ;; SetCommandLineArgs immediately after BootCore, before Decode/Load.
+  (let [raw (ef/find-program-entry '[(defn -main [] 1)])
+        e   (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
+                                        :needs-error? true}})
+        src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/app"})
+        boot-i (index-of-substr src "rt.BootCore()")
+        args-i (index-of-substr src "rt.SetCommandLineArgs(os.Args[1:])")
+        load-i (index-of-substr src "rt.LoadProgramNamespaces(unit)")]
+    (is (>= boot-i 0))
+    (is (>= args-i 0))
+    (is (>= load-i 0))
+    (is (< boot-i args-i))
+    (is (< args-i load-i))
+    ;; Direct path must not re-publish args after load.
+    (is (= 1 (count (re-seq #"SetCommandLineArgs" src))))))
+
+(deftest vm-fallback-is-namespace-qualified
+  (testing "fallback call passes the owning namespace, not a bare name"
+    (let [raw (ef/find-program-entry '[(defn -main [] 1)])
+          e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "winner")
+          src (ef/emit-entry-frame-go {:entry e})]
+      (is (str/includes? src "rt.InvokeProgramEntry(ec, \"winner\", \"-main\", argv)"))
+      ;; No legacy 3-arg form.
+      (is (not (str/includes? src "InvokeProgramEntry(ec, \"-main\"")))))
+  (testing "competing namespaces cannot redirect via omitted ns"
+    ;; Two conceptual owners — the frame embeds the selected one explicitly.
+    (let [raw (ef/find-program-entry '[(defn -main [] 1)])
+          e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "app.b")
+          src (ef/emit-entry-frame-go {:entry e})]
+      (is (str/includes? src "\"app.b\""))
+      (is (not (str/includes? src "\"app.a\""))))))
 
 ;; --- #657: lowering metadata is the source of truth ---
 

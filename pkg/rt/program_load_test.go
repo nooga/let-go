@@ -125,6 +125,63 @@ func valStrings(vs []vm.Value) []string {
 	return out
 }
 
+// TestInvokeProgramEntryUsesSelectedNamespace pins the #425 VM-fallback
+// contract: the compiler-selected namespace owns the entry lookup. A competing
+// -main in another namespace must not steal the call via CurrentNS or a
+// registry sweep.
+func TestInvokeProgramEntryUsesSelectedNamespace(t *testing.T) {
+	const (
+		nsWant  = "entryns.want"
+		nsOther = "entryns.other"
+	)
+	for _, name := range []string{nsWant, nsOther} {
+		nsMu.Lock()
+		delete(nsRegistry, name)
+		nsMu.Unlock()
+		_ = DefNSBare(name)
+	}
+
+	var got string
+	wantFn, err := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
+		got = "want"
+		return vm.NIL, nil
+	})
+	if err != nil {
+		t.Fatalf("wrap want: %v", err)
+	}
+	otherFn, err := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
+		got = "other"
+		return vm.NIL, nil
+	})
+	if err != nil {
+		t.Fatalf("wrap other: %v", err)
+	}
+	LookupNS(nsWant).Def("-main", wantFn)
+	LookupNS(nsOther).Def("-main", otherFn)
+
+	savedNS := CurrentNS.Deref()
+	defer CurrentNS.SetRoot(savedNS)
+	// Point CurrentNS at the competing namespace — the old global search would
+	// prefer this. The selected-namespace path must ignore it.
+	CurrentNS.SetRoot(LookupNS(nsOther))
+
+	ec := vm.NewExecContext()
+	got = ""
+	if err := InvokeProgramEntry(ec, nsWant, "-main", nil); err != nil {
+		t.Fatalf("InvokeProgramEntry: %v", err)
+	}
+	if got != "want" {
+		t.Fatalf("invoked %q, want selected namespace's -main", got)
+	}
+
+	if err := InvokeProgramEntry(ec, "", "-main", nil); err == nil {
+		t.Fatal("empty namespace: expected error")
+	}
+	if err := InvokeProgramEntry(ec, "entryns.missing", "-main", nil); err == nil {
+		t.Fatal("missing namespace: expected error")
+	}
+}
+
 // TestRunExecUnitReplayOrderAndMainOnce pins the observable contract of
 // RunExecUnit after the #425 refactor onto LoadProgramNamespaces +
 // RunProgramMainChunk: every NSOrder chunk runs in order, and the main chunk

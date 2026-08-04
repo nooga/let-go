@@ -15,7 +15,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"sort"
 
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/vm"
@@ -108,45 +107,33 @@ func RunProgramMainChunk(unit *bytecode.ExecUnit) error {
 	return runChunk(unit.MainChunk)
 }
 
-// InvokeProgramEntry looks up name ("-main" or "main") across loaded
-// namespaces and Invokes it with args. Used by the #425 native-entry
+// InvokeProgramEntry looks up name ("-main" or "main") in the given
+// namespace and Invokes it with args. Used by the #425 native-entry
 // VM-fallback frame after LoadProgramNamespaces has installed defs — a bare
 // MainChunk re-run would no-op for single-ns programs whose MainChunk is the
 // ns chunk itself.
-func InvokeProgramEntry(ec *vm.ExecContext, name string, args []vm.Value) error {
+//
+// namespace must be the source namespace that owns the selected entry. The
+// compiler already chose that namespace; searching CurrentNS or the global
+// registry would let a competing entry in another namespace steal the call.
+func InvokeProgramEntry(ec *vm.ExecContext, namespace, name string, args []vm.Value) error {
 	if ec == nil {
 		return fmt.Errorf("InvokeProgramEntry: nil ExecContext")
 	}
-	sym := vm.Symbol(name)
-	var v *vm.Var
-	if cur, ok := CurrentNS.Deref().(*vm.Namespace); ok && cur != nil {
-		v = cur.LookupLocal(sym)
+	if namespace == "" {
+		return fmt.Errorf("InvokeProgramEntry: empty namespace")
 	}
-	if v == nil {
-		// CurrentNS (the last ns replayed) is the authoritative pick; the
-		// registry sweep is only a fallback. Iterate in sorted name order so a
-		// program that somehow defines the entry in more than one namespace
-		// resolves deterministically rather than by map-iteration order.
-		nsMu.RLock()
-		names := make([]string, 0, len(nsRegistry))
-		for nm := range nsRegistry {
-			names = append(names, nm)
-		}
-		sort.Strings(names)
-		for _, nm := range names {
-			if cand := nsRegistry[nm].LookupLocal(sym); cand != nil {
-				v = cand
-				break
-			}
-		}
-		nsMu.RUnlock()
+	ns := LookupNS(namespace)
+	if ns == nil {
+		return fmt.Errorf("InvokeProgramEntry: namespace %s not found", namespace)
 	}
+	v := ns.LookupLocal(vm.Symbol(name))
 	if v == nil {
-		return fmt.Errorf("InvokeProgramEntry: %s not found", name)
+		return fmt.Errorf("InvokeProgramEntry: %s/%s not found", namespace, name)
 	}
 	fn, ok := v.Deref().(vm.Fn)
 	if !ok {
-		return fmt.Errorf("InvokeProgramEntry: %s is not callable", name)
+		return fmt.Errorf("InvokeProgramEntry: %s/%s is not callable", namespace, name)
 	}
 	_, err := ec.Invoke(fn, args)
 	return err

@@ -7,8 +7,15 @@
 ;;
 ;; Entry recognition:
 ;;   - name: main or -main (including defn- / ^:private)
-;;   - arity: [& args] | [argv] | []  (frame adapts os.Args)
-;;   - lowered?: direct call into the lowered Go entry; else VM MainChunk fallback
+;;   - arity: exactly [], [argv], or [& args] (#425). [fixed & rest] and
+;;     other shapes fail generation with a source-level diagnostic.
+;;   - lowered?: direct call into the lowered Go entry; else namespace-
+;;     qualified VM InvokeProgramEntry fallback
+;;
+;; Lifecycle (standalone frame ownership):
+;;   - Publishes *command-line-args* immediately after BootCore, before
+;;     namespace replay, so top-level forms see the real argv.
+;;   - Owns defer rt.ShutdownAllPods() (same contract as lg / lg-runtime).
 ;;
 ;; Private entries get a same-package NativeMain bridge so package main can
 ;; call across the package boundary.
@@ -41,22 +48,28 @@
 
 (defn- arity-shape-of [bvec]
   "Classify a single-arity binding vector for the entry frame.
-   :variadic — [& args] (or [fixed… & rest], treated as variadic call)
-   :vector   — [argv] (one arg; frame builds a string vector from os.Args)
-   :none     — []
-   nil       — unsupported / multi-fixed without &"
+   :variadic    — [& args] only (& must be the first parameter)
+   :vector      — [argv] (one arg; frame builds a string vector from os.Args)
+   :none        — []
+   :unsupported — [fixed & rest], multi-fixed without &, or other shapes
+   nil          — not a binding vector"
   (when (vector? bvec)
     (let [n   (count bvec)
           amp (index-of-amp bvec)]
       (cond
-        (>= amp 0)  :variadic
-        (zero? n)   :none
-        (= n 1)     :vector
-        :else       nil))))
+        ;; [& args] — & in position 0. [fixed & rest] is NOT accepted: the
+        ;; lowered Go signature takes a fixed param + rest slice, and a single
+        ;; argv... expansion cannot supply both (#425 / #628).
+        (= amp 0)                  :variadic
+        (and (neg? amp) (zero? n)) :none
+        (and (neg? amp) (= n 1))   :vector
+        :else                      :unsupported))))
 
 (defn- parse-entry-form [form]
-  "If form is a recognized program entry, return
-   {:name :private? :arity-shape :binding :form}, else nil."
+  "If form is a defn/defn- of main/-main, return
+   {:name :private? :arity-shape :binding :form}, else nil.
+   :arity-shape may be :unsupported — callers must check entry-arity-error
+   before emitting a frame."
   (when (and (seq? form)
              (symbol? (first form))
              (or (= 'defn (first form)) (= 'defn- (first form)))
@@ -75,10 +88,19 @@
          :binding     bvec
          :form        form}))))
 
+(defn entry-arity-error
+  "Nil when entry has a supported arity; otherwise a clear diagnostic string
+   suitable for lg-compile stderr. Supported shapes: [], [argv], [& args]."
+  [entry]
+  (when (and entry (= :unsupported (:arity-shape entry)))
+    (str "native-entry: " (:name entry) " has unsupported arity "
+         (pr-str (:binding entry))
+         "; supported shapes are [], [argv], and [& args] (#425)")))
+
 (defn find-program-entry
   "Scan forms (one namespace) for a recognized main/-main entry. Prefers
    -main when both are present (Clojure convention). Returns the entry map
-   or nil."
+   (including :unsupported arity shapes) or nil."
   [forms]
   (let [found (keep parse-entry-form forms)]
     (or (first (filter (fn [e] (= "-main" (:name e))) found))
@@ -186,20 +208,19 @@
               "\"" "\\\"") "\""))
 
 (defn- emit-argv-setup [arity-shape]
+  "Build boxed argv for the direct native call. *command-line-args* is already
+   published in the boot sequence; this only constructs the call argument."
   (case arity-shape
-    :none
-    "\trt.SetCommandLineArgs(os.Args[1:])\n"
+    :none nil
 
     :variadic
-    (str "\trt.SetCommandLineArgs(os.Args[1:])\n"
-         "\targv := make([]vm.Value, len(os.Args)-1)\n"
+    (str "\targv := make([]vm.Value, len(os.Args)-1)\n"
          "\tfor i, a := range os.Args[1:] {\n"
          "\t\targv[i] = vm.String(a)\n"
          "\t}\n")
 
     :vector
-    (str "\trt.SetCommandLineArgs(os.Args[1:])\n"
-         "\targvItems := make([]vm.Value, len(os.Args)-1)\n"
+    (str "\targvItems := make([]vm.Value, len(os.Args)-1)\n"
          "\tfor i, a := range os.Args[1:] {\n"
          "\t\targvItems[i] = vm.String(a)\n"
          "\t}\n"
@@ -219,14 +240,15 @@
       (str "\t" recv "(" args ")\n"))))
 
 (defn- emit-vm-fallback [entry]
-  "VM fallback when the entry did not lower: look up the main/-main Var on the
-   installed namespace and Invoke it. LoadProgramNamespaces has already replayed
-   every NSOrder chunk (including MainChunk when it is one of them), so a bare
-   RunProgramMainChunk would no-op for the common single-ns case — look the entry
-   Var up and Invoke it instead. The argv is shaped to the entry's arity so the
-   Invoke matches: :variadic spreads os.Args, :vector passes one string vector,
-   :none passes nothing."
+  "VM fallback when the entry did not lower: Invoke the selected namespace's
+   main/-main Var. LoadProgramNamespaces has already replayed every NSOrder
+   chunk (including MainChunk when it is one of them), so a bare
+   RunProgramMainChunk would no-op for the common single-ns case. The argv is
+   shaped to the entry's arity: :variadic spreads os.Args, :vector passes one
+   string vector, :none passes nothing. Requires (:ns entry) — the source
+   namespace that owns the selected entry."
   (let [var-name (if entry (:name entry) "-main")
+        ns-name  (if entry (:ns entry) "")
         shape    (if entry (:arity-shape entry) :variadic)
         argv-setup
         (case shape
@@ -245,9 +267,10 @@
                "\tfor i, a := range os.Args[1:] {\n"
                "\t\targv[i] = vm.String(a)\n"
                "\t}\n"))]
-    (str "\trt.SetCommandLineArgs(os.Args[1:])\n"
-         argv-setup
-         "\tif err := rt.InvokeProgramEntry(ec, " (go-string-lit var-name) ", argv); err != nil {\n"
+    (str argv-setup
+         "\tif err := rt.InvokeProgramEntry(ec, "
+         (go-string-lit ns-name) ", " (go-string-lit var-name)
+         ", argv); err != nil {\n"
          "\t\tfmt.Fprint(os.Stderr, vm.FormatError(err))\n"
          "\t\tos.Exit(1)\n"
          "\t}\n")))
@@ -326,11 +349,16 @@
              "\t\"github.com/nooga/let-go/pkg/rt\""
              "\t\"github.com/nooga/let-go/pkg/vm\""]))
         boot
+        ;; Order is load-bearing: publish *command-line-args* before namespace
+        ;; replay so top-level forms see the real argv; own ShutdownAllPods
+        ;; like lg / lg-runtime so pods opened during boot/load are cleaned up.
         (str "\tec, err := rt.BootCore()\n"
              "\tif err != nil {\n"
              "\t\tfmt.Fprintf(os.Stderr, \"BootCore: %v\\n\", err)\n"
              "\t\tos.Exit(1)\n"
              "\t}\n"
+             "\tdefer rt.ShutdownAllPods()\n"
+             "\trt.SetCommandLineArgs(os.Args[1:])\n"
              "\n"
              "\tunit, err := rt.DecodeExecUnit(programLGB)\n"
              "\tif err != nil {\n"
@@ -344,8 +372,8 @@
              "\n")
         entry-body
         (if lowered?
-          (str (emit-argv-setup shape)
-               "\n"
+          (str (when-let [setup (emit-argv-setup shape)]
+                 (str setup "\n"))
                (emit-direct-call entry-alias call-name shape needs-error?))
           (emit-vm-fallback entry))]
     (str "// Code generated by lg-compile (#425 native-entry frame). DO NOT EDIT.\n"

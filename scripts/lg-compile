@@ -180,6 +180,12 @@
       ;; Prefer -main's owning ns when several inputs declare an entry.
       entry-spec (or (first (filter (fn [s] (and (:entry s) (= "-main" (:name (:entry s))))) specs))
                      (first (filter :entry specs)))]
+  ;; Reject unsupported entry arities before writing anything — [fixed & rest]
+  ;; etc. must fail generation with a clear diagnostic, not emit a bad frame.
+  (when-let [err (ir.passes.entry-frame/entry-arity-error
+                   (when entry-spec (:entry entry-spec)))]
+    (println err)
+    (os/exit 1))
   ;; --- write each emitted package to disk ---
   (doseq [pair (map-indexed vector specs)]
     (let [i  (first pair)
@@ -202,7 +208,11 @@
           fn-rec   (ir.passes.entry-frame/lookup-entry-fn
                      (when result (:fns result))
                      (:entry entry-spec))
-          entry    (ir.passes.entry-frame/analyze-entry (:entry entry-spec) {:fn fn-rec})
+          ;; Stamp the owning source namespace so VM fallback resolves
+          ;; LookupNS(ns).LookupLocal(name) rather than scanning the registry.
+          entry    (assoc (ir.passes.entry-frame/analyze-entry
+                            (:entry entry-spec) {:fn fn-rec})
+                          :ns (str (:nsn entry-spec)))
           blanks   (vec (keep (fn [pair]
                                 (let [s (nth specs (first pair))
                                       r (second pair)]
