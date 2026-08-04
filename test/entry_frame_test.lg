@@ -5,6 +5,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest testing is]]
    [ir.passes.entry-frame :as ef]
+   [ir.passes.pipeline :as pipeline]
    [ir.lower-go :as lower-go]))
 
 (deftest find-program-entry-shapes
@@ -28,7 +29,19 @@
       (is (= "main" (ef/entry-go-name e)))))
   (testing "-main preferred over main"
     (let [e (ef/find-program-entry '[(defn main [] 1) (defn -main [& a] 2)])]
-      (is (= "-main" (:name e))))))
+      (is (= "-main" (:name e)))))
+  (testing "return-hinted arity vector `(defn -main ^long [] …)`"
+    (let [e (ef/find-program-entry '[(defn -main ^long [] 7)])]
+      (is (some? e) "must recognize return-hinted arity (#598 spelling)")
+      (is (= "-main" (:name e)))
+      (is (= :none (:arity-shape e)))
+      (is (nil? (ef/entry-arity-error e)))))
+  (testing "return hint on the name `(defn ^long -main [] …)`"
+    (let [e (ef/find-program-entry '[(defn ^long -main [] 7)])]
+      (is (some? e) "must unwrap with-meta name")
+      (is (= "-main" (:name e)))
+      (is (= :none (:arity-shape e)))
+      (is (nil? (ef/entry-arity-error e))))))
 
 (deftest analyze-and-emit-direct
   (let [raw (ef/find-program-entry '[(defn -main [& args] 1)])
@@ -180,6 +193,42 @@
       (is (not (str/includes? src "\"app.a\""))))))
 
 ;; --- #657: lowering metadata is the source of truth ---
+
+(def ^:private result-ns 'test.entry-frame-result-scratch)
+
+(defn- lower-result [forms]
+  "Drive lower-ns-to-go-result on forms after eval'ing them into a scratch ns
+   so sibling/self refs resolve (same precondition as direct_call_test)."
+  (when-not (find-ns result-ns) (create-ns result-ns))
+  (binding [*ns* (find-ns result-ns)]
+    (doseq [f forms] (eval f)))
+  (pipeline/lower-ns-to-go-result "appscratch" result-ns forms))
+
+(deftest lower-ns-to-go-result-contract
+  ;; Direct contract on the Phase 1 result map — not a synthetic :fn injected
+  ;; into analyze-entry. Proves shape, collision-resolved go-name, and the
+  ;; string wrapper's equality with (:source result).
+  (let [forms '[(defn main [] 1) (defn -main [] 2)]
+        r     (lower-result forms)
+        fns   (:fns r)
+        dash  (first (filter (fn [f] (= "-main" (:fn-name f))) fns))
+        main  (first (filter (fn [f] (= "main" (:fn-name f))) fns))]
+    (testing "promised result keys"
+      (is (string? (:source r)))
+      (is (pos? (count (:source r))))
+      (is (= (str result-ns) (:ns r)))
+      (is (= "appscratch" (:pkg r)))
+      (is (vector? fns)))
+    (testing "collision record uses Main__main for -main"
+      (is (some? dash))
+      (is (= "Main__main" (:go-name dash)))
+      (is (= "Main" (:go-name main)))
+      (is (contains? dash :needs-error?))
+      (is (contains? dash :arity)))
+    (testing "lower-ns-to-go equals (:source (lower-ns-to-go-result …))"
+      ;; Forms already eval'd by lower-result above.
+      (is (= (:source r)
+             (pipeline/lower-ns-to-go "appscratch" result-ns forms))))))
 
 (deftest main-dashmain-collision-calls-resolved-name
   ;; Both main and -main munge to Main; the lowerer's collision map emits

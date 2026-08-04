@@ -23,6 +23,7 @@
 (ns ir.passes.entry-frame
   (:require
    [clojure.string]
+   [ir.build :as ir.build]
    [ir.lower-go :as lower-go]))
 
 (def ^:private entry-names #{"main" "-main"})
@@ -30,9 +31,31 @@
 (defn- entry-name? [nm]
   (contains? entry-names (str nm)))
 
+(defn- unwrap-name [raw-name]
+  "Strip (with-meta sym {...}) from a defn name position — same unwrap as
+   ir.passes.pipeline/unwrap-name. Needed for `(defn ^long -main …)` / 
+   `(defn ^:private -main …)` reader shapes."
+  (if (and (seq? raw-name) (= 'with-meta (first raw-name)))
+    (second raw-name)
+    raw-name))
+
+(defn- name-private? [raw-name]
+  "True when the defn NAME carries ^:private — either as symbol meta or as
+   the :private key on a (with-meta sym {...}) wrapper. Matches
+   ir.passes.pipeline/private-name?."
+  (cond
+    (and (seq? raw-name) (= 'with-meta (first raw-name)) (>= (count raw-name) 3))
+    (let [m (nth raw-name 2)]
+      (boolean (and (map? m) (get m :private))))
+    (symbol? raw-name)
+    (boolean (:private (meta raw-name)))
+    :else false))
+
 (defn- skip-defn-preamble [xs]
   "After defn/defn- and name: skip optional docstring + attr-map, return the
-   rest starting at the binding vector (or first arity list for multi-arity)."
+   rest starting at the binding vector (or first arity list for multi-arity).
+   A return-hinted `^long […]` reads as (with-meta […] …) — a seq, not a map —
+   so it is left alone here and unwrapped by parse-entry-form."
   (cond
     (empty? xs) xs
     (string? (first xs)) (skip-defn-preamble (rest xs))
@@ -69,24 +92,31 @@
   "If form is a defn/defn- of main/-main, return
    {:name :private? :arity-shape :binding :form}, else nil.
    :arity-shape may be :unsupported — callers must check entry-arity-error
-   before emitting a frame."
+   before emitting a frame.
+
+   Reuses ir.build's return-hinted arity unwrap (#598) so spellings like
+   `(defn -main ^long [] …)` and `(defn ^long -main [] …)` are recognized
+   the same way the lowering pipeline sees them."
   (when (and (seq? form)
              (symbol? (first form))
-             (or (= 'defn (first form)) (= 'defn- (first form)))
-             (symbol? (second form))
-             (entry-name? (second form)))
+             (or (= 'defn (first form)) (= 'defn- (first form))))
     (let [head     (first form)
-          nm       (second form)
-          private? (or (= 'defn- head) (boolean (:private (meta nm))))
-          body     (skip-defn-preamble (nnext form))
-          bvec     (when (vector? (first body)) (first body))
-          shape    (arity-shape-of bvec)]
-      (when (and bvec shape)
-        {:name        (str nm)
-         :private?    private?
-         :arity-shape shape
-         :binding     bvec
-         :form        form}))))
+          raw-name (second form)
+          nm       (unwrap-name raw-name)]
+      (when (and (symbol? nm) (entry-name? nm))
+        (let [private? (or (= 'defn- head) (name-private? raw-name))
+              body     (skip-defn-preamble (nnext form))
+              raw-bvec (first body)
+              bvec     (when (or (vector? raw-bvec)
+                                 (ir.build/return-hinted-arity-vector? raw-bvec))
+                         (ir.build/unwrap-arity-vector raw-bvec))
+              shape    (arity-shape-of bvec)]
+          (when (and bvec shape)
+            {:name        (str nm)
+             :private?    private?
+             :arity-shape shape
+             :binding     bvec
+             :form        form}))))))
 
 (defn entry-arity-error
   "Nil when entry has a supported arity; otherwise a clear diagnostic string
