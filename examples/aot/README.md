@@ -7,18 +7,21 @@ cross-package calls).
 Driver:
 
 ```
-./lg scripts/lg-compile <out-dir> <import-prefix> <file.lg>...
+./lg scripts/lg-compile [--entry-frame] <out-dir> <import-prefix> <file.lg>...
 ```
 
 It lowers each single-arity `defn`/`defmulti`/`defmethod` to a native Go func,
 emits one Go package per namespace (canonical `gogen/ns->go-pkg` naming: leaf
 segment + nested dir), and wires direct `pkg.Fn(ec, …)` calls between the
 lowered packages. Variadic / non-coercible fns stay on runtime trampolines.
+Pass `--entry-frame` to also emit a standalone `main.go` native-entry frame
+(#425); without it, only packages are written (Gloat / other orchestrators
+own their own frames).
 
 | Directory | What it is |
 |---|---|
 | `cross-package/` | Minimal two-namespace demo (`lib` + `app`) exercising a direct cross-package call. The smallest reproducible AOT example. |
-| `native-entry/`  | #425 native-entry frame: lowers `fib` + `-main`, emits `main.go`, builds a standalone binary (~16× vs VM on fib(34)). |
+| `native-entry/`  | #425 native-entry frame: `lg-compile --entry-frame` lowers `fib` + `-main`, emits `main.go`, builds a standalone binary (~16× vs VM on fib(34)). |
 | `ys-on-let-go/`  | The YS-on-let-go shim: a small YAMLScript-style stdlib plus example programs. See its own `README.md`. |
 | `yamlstar/`      | Diagnostics for AOT-compiling the real YamlStar Clojure pipeline (`ys-coverage.lg` — per-file lowerability tally; `ys-lower-report.lg` — per-fn lower/fallback report). |
 

@@ -1,10 +1,13 @@
 # Native-entry frame demo (#425 Item 1)
 
-Proves the AOT native-entry path end-to-end: `lg-compile` lowers `fib` +
-`-main`, emits a `main.go` frame keyed off the recognized entry, the build
-script places `program.lgb` beside it, and `go build` produces a binary that
-boots via `rt.BootCore`, loads the program namespaces (with override drain),
-then enters natively at `prog.Main`.
+Proves the AOT native-entry path end-to-end: `lg-compile --entry-frame`
+lowers `fib` + `-main`, emits a `main.go` frame keyed off the recognized
+entry, the build script places `program.lgb` beside it, and `go build`
+produces a binary that boots via `rt.BootCore`, loads the program namespaces
+(with override drain), then enters natively at `prog.Main`.
+
+Frame emission is opt-in (`--entry-frame`) so package-only callers such as
+Gloat keep historical behavior and own their own executable templates.
 
 ```
 ./examples/aot/native-entry/build.sh

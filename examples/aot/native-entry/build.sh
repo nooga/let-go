@@ -19,11 +19,12 @@ mkdir -p "$OUT"
 rm -f "$OUT"/main.go "$OUT"/program.lgb "$OUT"/fib.native
 rm -rf "$OUT/fib"
 
-echo "==> lg-compile (emits fib.go + main.go native-entry frame)"
+echo "==> lg-compile --entry-frame (emits fib.go + main.go native-entry frame)"
 # LG_SOURCE_PATHS lets a pre-regen lg see the new entry-frame ns from disk;
-# a lg built from this tree embeds it already.
-( cd "$ROOT" && LG_SOURCE_PATHS="${LG_SOURCE_PATHS:-pkg/rt/core}" "$LG" scripts/lg-compile "$OUT" "$PREFIX" \
-    examples/aot/native-entry/fib.lg )
+# a lg built from this tree embeds it already. --entry-frame is opt-in so
+# package-only callers (e.g. Gloat) keep historical behavior.
+( cd "$ROOT" && LG_SOURCE_PATHS="${LG_SOURCE_PATHS:-pkg/rt/core}" "$LG" scripts/lg-compile \
+    --entry-frame "$OUT" "$PREFIX" examples/aot/native-entry/fib.lg )
 
 echo "==> lg -c program.lgb"
 ( cd "$ROOT" && "$LG" -c "$OUT/program.lgb" examples/aot/native-entry/fib.lg )
