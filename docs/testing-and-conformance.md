@@ -2,8 +2,9 @@
 status: active
 last-verified: 2026-06-05
 authoritative-for:
-  - clojure-test-api-design
   - conformance-strategy
+superseded-by:
+  - clojure-test-conformance.md (on clojure-test-api-design — the clojure.test / clojure.test.tap layer is specified there)
 human-verified:
 ---
 
