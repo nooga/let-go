@@ -14,7 +14,6 @@
    [graph]
    [ir.data]
    [ir.ops :as ops]
-   [ir.passes.liveness :as liveness]
    [ir.passes.mutability :as mut]
    [ir.structurize :as st]))
 
@@ -47,6 +46,13 @@
 (declare go-export-name)
 (declare param-inferred-type)
 (declare param-go-spec)
+
+;; Injected function references for cross-namespace resolution workaround (PR #232).
+;; ir.passes.pipeline sets these at module load time.
+(def ^:private reachable-nids-fn (atom nil))
+
+(defn set-reachable-nids-fn! [f]
+  (reset! reachable-nids-fn f))
 
 ;; --- closure-local arg naming -----------------------------------------------
 ;; A lowered fn names its parameters arg0/arg1/… and (for recur-fn fns) its
@@ -1096,8 +1102,21 @@
 
 (declare inlined-arg?)
 
+(defn- scoped-blocks [f]
+  ;; All blocks EXCEPT those absorbed by a [:switch] fold. A switch's
+  ;; intermediate test blocks are folded into one n-way node, so their threaded
+  ;; discriminant copies must not be declared as locals or kept live (else a
+  ;; dead `var g` survives → Go "declared and not used"). When no fold occurred
+  ;; (`:absorbed-blocks` absent/empty), returns `(ir/blocks f)` verbatim, so the
+  ;; non-switch path is bit-identical to before.
+  (let [absorbed (:absorbed-blocks (deref f))]
+    (if (or (nil? absorbed) (empty? absorbed))
+      (ir/blocks f)
+      (filterv (fn [b] (not (contains? absorbed b))) (ir/blocks f)))))
+
 (defn- collect-local-ids [f]
-  (let [block-ids (ir/blocks f)]
+  (let [block-ids (scoped-blocks f)
+        absorbed-insts (or (:absorbed-insts (deref f)) #{})]
     (loop [bs block-ids out []]
       (if (empty? bs)
         out
@@ -1105,6 +1124,7 @@
               params (filter (fn [nid] (and (live? f nid)
                                             (not (const-param-of f nid))
                                             (not (closure-value? f nid))
+                                            (not (contains? absorbed-insts nid))
                                             (infer-go-type (ir/type-of nid f))))
                              (ir/block-params bid f))
               insts  (filter (fn [nid]
@@ -1118,6 +1138,7 @@
                                       (not (closure-value? f nid))
                                       ;; inlined edge-args carry no local
                                       (not (inlined-arg? f nid))
+                                      (not (contains? absorbed-insts nid))
                                       (infer-go-type (ir/type-of nid f)))))
                              (ir/block-insts bid f))]
           (recur (rest bs) (into out (concat params insts))))))))
@@ -1328,6 +1349,13 @@
                                              q))
                                          pending)]
                       (recur pending* (conj out save)))))))))))))
+
+(defn- rewrite-branch-target-args [bt subst]
+  ;; Apply absorbed-arg-subst mapping to a branch-target's args.
+  ;; Map each arg-nid through the substitution; unmapped nids pass through unchanged.
+  (let [args (ir/branch-target-args bt)
+        rewritten-args (mapv (fn [arg-nid] (get subst arg-nid arg-nid)) args)]
+    {:target (ir/branch-target-target bt) :args rewritten-args}))
 
 (defn- emit-assignments-for-target [f closed-exprs bt]
   (let [params (ir/block-params (ir/branch-target-target bt) f)
@@ -2779,10 +2807,15 @@
   ;; no liveness engine.
 
 (defn- oos-all-nids [f]
-  (let [acc (atom [])]
-    (doseq [bid (ir/blocks f)]
-      (doseq [p (ir/block-params bid f)] (swap! acc conj p))
-      (doseq [nid (ir/block-insts bid f)] (swap! acc conj nid)))
+  (let [acc (atom [])
+        absorbed-insts (or (:absorbed-insts (deref f)) #{})]
+    (doseq [bid (scoped-blocks f)]
+      (doseq [p (ir/block-params bid f)]
+        (when (not (contains? absorbed-insts p))
+          (swap! acc conj p)))
+      (doseq [nid (ir/block-insts bid f)]
+        (when (not (contains? absorbed-insts nid))
+          (swap! acc conj nid))))
     (distinct @acc)))
 
 (declare oos-branch-targets)
@@ -2803,7 +2836,7 @@
   ;;      interference. Marking the name unsafe versions both onto distinct
   ;;      locals (`<name>_<nid>`), restoring Indexed-RPN value identity.
   (let [unsafe (atom #{})]
-    (doseq [bid (ir/blocks f)
+    (doseq [bid (scoped-blocks f)
             nid (ir/block-insts bid f)]
       (let [seen (atom {})]
         (doseq [r (ir/refs nid f)]
@@ -2817,7 +2850,7 @@
     ;; Only :branch/:branch-if terminators carry branch-target args, so the
     ;; map + scan are built only for blocks that can actually clobber; the common
     ;; leaf :return/:tail blocks (whose oos-branch-targets is empty) are skipped.
-    (doseq [bid (ir/blocks f)]
+    (doseq [bid (scoped-blocks f)]
       (let [term    (ir/block-term bid f)
             targets (when term (oos-branch-targets term f))]
         (when (seq targets)
@@ -2844,7 +2877,7 @@
   ;; unread (the closure would read a zero value). Keeping captured names
   ;; versioned makes the copy real and preserves the capture.
   (let [acc (atom #{})]
-    (doseq [bid (ir/blocks f)
+    (doseq [bid (scoped-blocks f)
             nid (ir/block-insts bid f)]
       (when (= :load-closed (ir/op nid f))
         (let [s (source-name-of f nid)]
@@ -3116,7 +3149,12 @@
    Returns a vector of statements or nil to force whole-function fallback."
   ;; Inlined edge-args carry no statement — their expression is emitted directly
   ;; into the back-edge copy by emit-assignments-for-target.
-  (let [insts (filter (fn [nid] (not (inlined-arg? f nid))) (ir/block-insts bid f))]
+  ;; Absorbed insts (absorbed into a switch chain) carry no statement — their
+  ;; control flow and condition tests are embedded in the switch node.
+  (let [absorbed-insts (or (:absorbed-insts (deref f)) #{})
+        insts (filter (fn [nid] (and (not (inlined-arg? f nid))
+                                      (not (contains? absorbed-insts nid))))
+                      (ir/block-insts bid f))]
     (loop [remaining insts out []]
       (if (empty? remaining)
         out
@@ -3203,6 +3241,45 @@
                       (vec (concat inst-stmts if-stmt cont-stmts))
                       (vec (concat inst-stmts if-stmt)))))))))
 
+        ;; keyword-dispatch chain folded by structurize → Go string `switch`
+        ;; (sub-linear). Node: [:switch bid disc [[kw tt then]…] last-et default
+        ;; cont]. `vm.KeywordName` makes the tag safe for a non-keyword
+        ;; discriminant (→ sentinel → default), reproducing `cond` semantics.
+        :switch
+        (let [[bid disc arms last-et default-node cont-node] args
+              subst (or (:absorbed-arg-subst (deref f)) {})]
+          (when-let [inst-stmts (block-inst-stmts f closed-exprs bid)]
+            (let [g-expr (value-expr f closed-exprs disc)
+                  arm-clauses
+                  (loop [remaining arms out []]
+                    (if (empty? remaining)
+                      out
+                      (let [arm (first remaining)
+                            kw (nth arm 0)
+                            tt (nth arm 1)
+                            then-node (nth arm 2)
+                            tt-rewritten (rewrite-branch-target-args tt subst)
+                            ts (lower-tree f closed-exprs then-node)]
+                        (if (nil? ts)
+                          nil
+                          (recur (rest remaining)
+                                 (conj out
+                                       (gogen/case-clause
+                                         [(gogen/string-lit (name kw))]
+                                         (vec (concat (emit-assignments-for-target f closed-exprs tt-rewritten) ts)))))))))
+                  default-ts (lower-tree f closed-exprs default-node)
+                  last-et-rewritten (rewrite-branch-target-args last-et subst)]
+              (when (and g-expr arm-clauses default-ts)
+                (let [default-clause
+                      (gogen/case-clause nil
+                        (vec (concat (emit-assignments-for-target f closed-exprs last-et-rewritten) default-ts)))
+                      tag (vm-call "KeywordName" [g-expr])
+                      sw-stmt [(gogen/switch-stmt nil tag (conj arm-clauses default-clause))]
+                      cont-stmts (lower-tree f closed-exprs cont-node)]
+                  (if cont-stmts
+                    (vec (concat inst-stmts sw-stmt cont-stmts))
+                    (vec (concat inst-stmts sw-stmt))))))))
+
         :loop
         (let [[h body-node cont-node] args]
           (when-let [body-stmts (lower-tree f closed-exprs body-node)]
@@ -3234,17 +3311,6 @@
 (defn- lower-body
   ([f] (lower-body f nil))
   ([f closed-exprs]
-   ;; Per-fn lowering caches. param-sources + closure-memo back the
-   ;; block-parameter-lineage closure resolution (closure-value? is queried per
-   ;; param/edge); the rest back read-set gating, coalescing and const-params.
-   (swap! f assoc :param-sources (compute-param-sources f))
-   (swap! f assoc :closure-memo (atom {}))
-   (swap! f assoc :const-params (const-param-map f))
-   (swap! f assoc :gensym-renames (gensym-renumber-map f))
-   (swap! f assoc :coalesce (coalesce-map f))
-   (swap! f assoc :live (liveness/reachable-nids f))
-   ;; Single-use computed edge-args to inline (needs :live + uses cache above).
-   (swap! f assoc :inline-args (compute-inline-args f))
    (binding [*call-err-used* (atom false)
              *typed-call-temps* (atom [])]
      (let [needs-error?     (function-needs-error? f)
@@ -3257,6 +3323,25 @@
            ;; the tree-walk cannot lower a block. A nil body => a block failed to
            ;; lower => the whole fn bails (caller falls back to bytecode).
            st-result        (st/structurize f)
+           _                (swap! f assoc :absorbed-blocks (:absorbed-blocks st-result))
+           _                (swap! f assoc :absorbed-insts (:absorbed-insts st-result))
+           _                (swap! f assoc :absorbed-arg-subst (:absorbed-arg-subst st-result))
+           ;; Scoped-blocks filtering (used by gensym-renumber-map) depends on
+           ;; :absorbed-blocks being set first, so precompute :coalesce and
+           ;; :gensym-renames immediately after structurize.
+           _                (swap! f assoc :param-sources (compute-param-sources f))
+           _                (swap! f assoc :closure-memo (atom {}))
+           _                (swap! f assoc :const-params (const-param-map f))
+           _                (swap! f assoc :gensym-renames (gensym-renumber-map f))
+           _                (swap! f assoc :coalesce (coalesce-map f))
+           _                (when (nil? (:live f))
+                              ;; Injected function reference (set by ir.passes.pipeline at module load).
+                              ;; Nil-guard fallback for bootstrap contexts where pipeline hasn't run yet.
+                              (if-let [reachable-nids-fn @reachable-nids-fn]
+                                (swap! f assoc :live (reachable-nids-fn f))
+                                nil))
+           ;; Single-use computed edge-args to inline (needs :live + uses cache above).
+           _                (swap! f assoc :inline-args (compute-inline-args f))
            structured-body  (when (zero? (:fallbacks st-result))
                               (lower-tree f closed-exprs (:tree st-result)))
            ;; Strict mode: refuse the goto-CFG drift path outright. A fn that

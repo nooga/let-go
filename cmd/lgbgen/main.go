@@ -1017,6 +1017,7 @@ func runGoTarget(outDir, codeDir string) {
 		goSrc, ok := goSrcVal.(vm.String)
 		if !ok {
 			fmt.Fprintf(os.Stderr, "%s: Go lowering failed (no source)\n", spec.nsName)
+			fmt.Fprintf(os.Stderr, "  actual value: %#v (type %T)\n", goSrcVal, goSrcVal)
 			failed = append(failed, spec.nsName)
 			continue
 		}
