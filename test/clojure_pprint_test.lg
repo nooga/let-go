@@ -1,0 +1,99 @@
+;; clojure.pprint feature tests — pprint/pprint-str delegation, cl-format, print-table
+(ns test.clojure-pprint-test
+  (:require [test :refer :all]
+            [string]
+            [clojure.pprint :refer :all]))
+
+(deftest pprint-delegation-test
+  (testing "pprint-str renders a value (delegates to the pprint namespace)"
+    (is (= "42" (pprint-str 42)))
+    (is (string/includes? (pprint-str {:a 1}) ":a")))
+  (testing "pprint prints via println"
+    (is (= "42\n" (with-out-str (pprint 42))))))
+
+(deftest cl-format-aesthetic-test
+  (testing "~a renders via str, consuming one arg per directive"
+    (is (= "1 and 2" (cl-format false "~a and ~a" 1 2))))
+  (testing "~s renders via pr-str (readable form)"
+    (is (= "\"hi\"" (cl-format false "~s" "hi"))))
+  (testing "directive letters are case-insensitive"
+    (is (= (cl-format false "~a" 1) (cl-format false "~A" 1))))
+  (testing "mincol pads on the right by default, on the left with @"
+    (is (= "hi        " (cl-format false "~10a" "hi")))
+    (is (= "        hi" (cl-format false "~10@a" "hi")))))
+
+(deftest cl-format-numeric-test
+  (testing "~d ~b ~o ~x render integers in the given radix"
+    (is (= "42" (cl-format false "~d" 42)))
+    (is (= "101" (cl-format false "~b" 5)))
+    (is (= "10" (cl-format false "~o" 8)))
+    (is (= "ff" (cl-format false "~x" 255))))
+  (testing "~:d groups digits with commas"
+    (is (= "1,234,567" (cl-format false "~:d" 1234567)))
+    (is (= "-1,234,567" (cl-format false "~:d" -1234567))))
+  (testing "numeric directives left-pad (right-justify), honoring a padchar param"
+    (is (= "00042" (cl-format false "~5,'0d" 42)))))
+
+(deftest cl-format-misc-directives-test
+  (testing "~% emits newline(s), ~~ emits literal tilde(s)"
+    (is (= "a\nb" (cl-format false "a~%b")))
+    (is (= "~~~" (cl-format false "~3~"))))
+  (testing "~p pluralizes based on the consumed argument"
+    (is (= "1 cat" (cl-format false "~a cat~p" 1 1)))
+    (is (= "3 cats" (cl-format false "~a cat~p" 3 3))))
+  (testing "~& is a fresh-line: no-op when already at the start of a line"
+    (is (= "x\ny" (cl-format false "x\n~&y")))
+    (is (= "x\ny" (cl-format false "x~&y")))
+    (testing "at the very start of output, output is already considered fresh"
+      (is (= "x" (cl-format false "~&x"))))))
+
+(deftest cl-format-iteration-test
+  (testing "~{...~} iterates a list argument, consuming it as a whole"
+    (is (= "1 2 3 " (cl-format false "~{~a ~}" (list 1 2 3)))))
+  (testing "~^ inside ~{...~} suppresses the trailing separator on the last element"
+    (is (= "1, 2, 3" (cl-format false "~{~a~^, ~}" (list 1 2 3)))))
+  (testing "~{...~} on an empty list produces no output"
+    (is (= "" (cl-format false "~{~a ~}" (list))))))
+
+(deftest cl-format-conditional-test
+  (testing "~[...~] selects a clause by integer index"
+    (is (= "zero" (cl-format false "~[zero~;one~;many~]" 0)))
+    (is (= "one" (cl-format false "~[zero~;one~;many~]" 1))))
+  (testing "~[...~] with plain ~; separators emits nothing for an out-of-range index"
+    (is (= "" (cl-format false "~[zero~;one~;many~]" 5))))
+  (testing "~:; before the last clause marks it as an explicit default for any out-of-range index"
+    (is (= "many" (cl-format false "~[zero~;one~:;many~]" 5)))
+    (is (= "zero" (cl-format false "~[zero~;one~:;many~]" 0))))
+  (testing "~:[...~] is a boolean else/then conditional"
+    (is (= "yes" (cl-format false "~:[no~;yes~]" true)))
+    (is (= "no" (cl-format false "~:[no~;yes~]" false))))
+  (testing "~@[...~] renders its clause only when the argument is truthy"
+    (is (= "x=5!" (cl-format false "x=~@[~a~]!" 5)))
+    (is (= "x=!" (cl-format false "x=~@[~a~]!" nil)))))
+
+(deftest cl-format-justify-test
+  (testing "~<...~> pads its rendered content to a column width"
+    (is (= "hi        " (cl-format false "~10<~a~>" "hi")))))
+
+(deftest cl-format-dest-test
+  (testing "dest true prints to stdout and returns nil"
+    (is (= "hello world\n" (with-out-str (cl-format true "hello ~a~%" "world"))))))
+
+(deftest print-table-test
+  (testing "print-table renders a header, separator and one row per map, in key order"
+    (let [out (with-out-str
+                (print-table [:name :age] [{:name "Alice" :age 30}
+                                            {:name "Bob" :age 25}]))
+          ;; trim the trailing newline from the last println first — split
+          ;; does not drop a trailing empty piece.
+          lines (string/split (string/trim out) #"\n")]
+      (is (= 4 (count lines)))
+      (is (string/includes? (nth lines 0) ":name"))
+      (is (string/includes? (nth lines 0) ":age"))
+      (is (string/includes? (nth lines 2) "Alice"))
+      (is (string/includes? (nth lines 3) "Bob"))))
+  (testing "print-table with no explicit keys infers them from the first row"
+    (let [out (with-out-str (print-table [{:x 1}]))]
+      (is (string/includes? out ":x"))))
+  (testing "print-table on an empty collection prints nothing"
+    (is (= "" (with-out-str (print-table []))))))

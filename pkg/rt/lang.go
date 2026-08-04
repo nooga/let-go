@@ -343,7 +343,6 @@ var nsAliases = map[string]string{
 	"clojure.edn":    "edn",
 	"clojure.zip":    "zip",
 	"clojure.data":   "data",
-	"clojure.pprint": "pprint",
 }
 
 // resolveNSAlias returns the canonical name for a namespace.
@@ -410,18 +409,12 @@ func init() {
 	installLangNS()
 	installNativeDirectNS()
 
-	// Generated primitives intentionally re-Def native versions over the
-	// bootstrap closures — silence the warn-on-core-shadow noise for this
-	// trusted init-time replacement (it otherwise prints to stderr on every
-	// startup and pollutes program output).
-	vm.SetSuppressShadowWarn(true)
-	RegisterGeneratedPrimitives()
-	vm.SetSuppressShadowWarn(false)
-
-	// Register builtins AFTER primitives so that builtin versions (with better
-	// signatures) override the generated primitive versions. This is the EPIC-012
-	// seam: hot clojure.core functions migrate from primitives to builtins.
-	registerBuiltinsModule()
+	// Generated primitives now self-register via the installer queue (see
+	// zz_primitives_generated.go's init → RegisterInstaller), drained last by
+	// zz_run_installers.go. registerBuiltinsModule() runs there too, AFTER the
+	// drain, so builtin versions still override the generated primitives
+	// (EPIC-012 seam). Shadow-warn suppression moved into the generated
+	// RegisterGeneratedPrimitives body.
 	// walk namespace is embedded via coreFS and will be loaded on demand
 }
 
@@ -7516,6 +7509,27 @@ func CoreRequiref(vs ...vm.Value) (vm.Value, error) {
 	return vm.NIL, nil
 }
 
+// resolveNSArg resolves a Symbol-or-Namespace argument (the common shape for
+// ns-publics/ns-interns/ns-refers/ns-map/ns-aliases/ns-unmap) to a
+// *vm.Namespace, applying resolveNSAlias so 'clojure.core-style aliases
+// resolve to their canonical namespace (e.g. "core").
+func resolveNSArg(v vm.Value) (*vm.Namespace, error) {
+	switch a := v.(type) {
+	case *vm.Namespace:
+		return a, nil
+	case vm.Symbol:
+		nsMu.RLock()
+		ns := nsRegistry[resolveNSAlias(string(a))]
+		nsMu.RUnlock()
+		if ns == nil {
+			return nil, fmt.Errorf("no namespace: %s found", a)
+		}
+		return ns, nil
+	default:
+		return nil, fmt.Errorf("expected Symbol or Namespace, got %s", v.Type().Name())
+	}
+}
+
 //lg:native
 //lg:name find-ns
 func CoreFindNs(vs ...vm.Value) (vm.Value, error) {
@@ -7527,7 +7541,7 @@ func CoreFindNs(vs ...vm.Value) (vm.Value, error) {
 		return vm.NIL, fmt.Errorf("find-ns expected Symbol")
 	}
 	nsMu.RLock()
-	ns := nsRegistry[string(s)]
+	ns := nsRegistry[resolveNSAlias(string(s))]
 	nsMu.RUnlock()
 	if ns == nil {
 		return vm.NIL, nil
@@ -7570,19 +7584,9 @@ func CoreTheNs(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	s, ok := vs[0].(vm.Symbol)
-	if !ok {
-
-		if ns, ok := vs[0].(*vm.Namespace); ok {
-			return ns, nil
-		}
-		return vm.NIL, fmt.Errorf("the-ns expected Symbol or Namespace")
-	}
-	nsMu.RLock()
-	ns := nsRegistry[string(s)]
-	nsMu.RUnlock()
-	if ns == nil {
-		return vm.NIL, fmt.Errorf("no namespace: %s found", s)
+	ns, err := resolveNSArg(vs[0])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("the-ns: %w", err)
 	}
 	return ns, nil
 }
@@ -7593,20 +7597,9 @@ func CoreNsPublics(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	var ns *vm.Namespace
-	switch a := vs[0].(type) {
-	case *vm.Namespace:
-		ns = a
-	case vm.Symbol:
-
-		nsMu.RLock()
-		ns = nsRegistry[resolveNSAlias(string(a))]
-		nsMu.RUnlock()
-		if ns == nil {
-			return vm.NIL, fmt.Errorf("no namespace: %s found", a)
-		}
-	default:
-		return vm.NIL, fmt.Errorf("ns-publics expected Symbol or Namespace")
+	ns, err := resolveNSArg(vs[0])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("ns-publics: %w", err)
 	}
 	pubs := ns.PublicVars()
 	kvs := make([]vm.Value, 0, len(pubs)*2)
@@ -7614,6 +7607,118 @@ func CoreNsPublics(vs ...vm.Value) (vm.Value, error) {
 		kvs = append(kvs, sym, v)
 	}
 	return vm.NewMap(kvs), nil
+}
+
+//lg:native
+//lg:name ns-interns
+func CoreNsInterns(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	ns, err := resolveNSArg(vs[0])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("ns-interns: %w", err)
+	}
+	all := ns.AllVars()
+	kvs := make([]vm.Value, 0, len(all)*2)
+	for sym, v := range all {
+		kvs = append(kvs, sym, v)
+	}
+	return vm.NewMap(kvs), nil
+}
+
+//lg:native
+//lg:name ns-refers
+func CoreNsRefers(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	ns, err := resolveNSArg(vs[0])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("ns-refers: %w", err)
+	}
+	refs := ns.ReferredVars()
+	kvs := make([]vm.Value, 0, len(refs)*2)
+	for sym, v := range refs {
+		kvs = append(kvs, sym, v)
+	}
+	return vm.NewMap(kvs), nil
+}
+
+//lg:native
+//lg:name ns-map
+func CoreNsMap(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	ns, err := resolveNSArg(vs[0])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("ns-map: %w", err)
+	}
+	// Union of refers and own interns, own interns winning — a local def
+	// shadows a same-named refer, matching Namespace.Lookup's precedence.
+	merged := ns.ReferredVars()
+	for sym, v := range ns.AllVars() {
+		merged[sym] = v
+	}
+	kvs := make([]vm.Value, 0, len(merged)*2)
+	for sym, v := range merged {
+		kvs = append(kvs, sym, v)
+	}
+	return vm.NewMap(kvs), nil
+}
+
+//lg:native
+//lg:name ns-aliases
+func CoreNsAliases(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	ns, err := resolveNSArg(vs[0])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("ns-aliases: %w", err)
+	}
+	aliases := ns.AliasesSnapshot()
+	kvs := make([]vm.Value, 0, len(aliases)*2)
+	for sym, target := range aliases {
+		kvs = append(kvs, sym, target)
+	}
+	return vm.NewMap(kvs), nil
+}
+
+//lg:native
+//lg:name ns-unmap
+func CoreNsUnmap(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	ns, err := resolveNSArg(vs[0])
+	if err != nil {
+		return vm.NIL, fmt.Errorf("ns-unmap: %w", err)
+	}
+	sym, ok := vs[1].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("ns-unmap expected Symbol as second argument")
+	}
+	ns.Unmap(sym)
+	return vm.NIL, nil
+}
+
+//lg:native
+//lg:name remove-ns
+func CoreRemoveNs(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 1 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	sym, ok := vs[0].(vm.Symbol)
+	if !ok {
+		return vm.NIL, fmt.Errorf("remove-ns expected Symbol")
+	}
+	if resolveNSAlias(string(sym)) == "core" {
+		return vm.NIL, fmt.Errorf("cannot remove clojure.core namespace")
+	}
+	RemoveNS(string(sym))
+	return vm.NIL, nil
 }
 
 //lg:native

@@ -1,0 +1,56 @@
+;; Namespace introspection feature tests — ns-refers, ns-aliases, ns-unmap,
+;; remove-ns.
+(ns test.ns-introspection-test
+  (:require [test :refer :all]))
+
+(deftest ns-refers-test
+  (testing "ns-refers includes baseline auto-referred core vars"
+    (is (contains? (ns-refers 'test.ns-introspection-test) 'map)))
+  (testing "ns-refers does not include this namespace's own interns"
+    (is (not (contains? (ns-refers 'test.ns-introspection-test) 'ns-refers-test)))))
+
+(deftest ns-aliases-test
+  (testing "ns-aliases reflects a :require :as alias"
+    (create-ns 'test.ns-introspection-target)
+    (alias 'nsi-alias 'test.ns-introspection-target)
+    (is (= (the-ns 'test.ns-introspection-target)
+           (get (ns-aliases 'test.ns-introspection-test) 'nsi-alias)))))
+
+(deftest ns-unmap-interned-test
+  (testing "ns-unmap removes a locally interned var's mapping"
+    (def unmap-me 42)
+    (is (= 42 unmap-me))
+    (ns-unmap 'test.ns-introspection-test 'unmap-me)
+    (is (nil? (resolve 'unmap-me)))))
+
+(deftest ns-unmap-referred-test
+  (testing "ns-unmap also removes a symbol only visible via refer, not just local interns"
+    (is (some? (resolve 'map)))
+    (ns-unmap 'test.ns-introspection-test 'map)
+    (is (nil? (resolve 'map)))
+    (is (not (contains? (ns-refers 'test.ns-introspection-test) 'map))))
+  (testing "an explicit refer-list (:only) restores a previously ns-unmap'd symbol"
+    (refer-list 'clojure.core ['map])
+    (is (some? (resolve 'map)))
+    (is (contains? (ns-refers 'test.ns-introspection-test) 'map)))
+  (testing "ns-unmap followed by an explicit :refer :all also restores visibility"
+    (ns-unmap 'test.ns-introspection-test 'map)
+    (is (nil? (resolve 'map)))
+    (refer 'clojure.core "" true)
+    (is (some? (resolve 'map)))))
+
+(defn- threw? [thunk]
+  ;; let-go has no thrown? — use try/catch directly.
+  (try (thunk) false
+       (catch _e true)))
+
+(deftest remove-ns-guards-core-test
+  (testing "remove-ns rejects removing clojure.core, by either its clojure-facing or canonical name"
+    (is (threw? (fn [] (remove-ns 'clojure.core))))
+    (is (threw? (fn [] (remove-ns 'core))))
+    (is (some? (find-ns 'clojure.core))))
+  (testing "remove-ns works on an ordinary namespace"
+    (create-ns 'test.ns-introspection-throwaway)
+    (is (some? (find-ns 'test.ns-introspection-throwaway)))
+    (remove-ns 'test.ns-introspection-throwaway)
+    (is (nil? (find-ns 'test.ns-introspection-throwaway)))))

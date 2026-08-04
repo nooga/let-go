@@ -143,8 +143,9 @@
 
 ;; Invoke cmd/lgprimgen to generate the primitive registrar.
 ;; Scans pkg/rt for //lg:native-annotated functions and generates adapters +
-;; registrations. lgprimgen is a PURE go/ast codegen tool that does NOT import
-;; the runtime (pkg/compiler / pkg/rt) — so it runs even mid-migration, when
+;; registrations. lgprimgen is a runtime-free codegen tool (go/ast scan, string
+;; emit, in-process go/format) that does NOT import the runtime (pkg/compiler /
+;; pkg/rt) — so it runs even mid-migration, when
 ;; primitives have been moved out of installLangNS but the registrar that
 ;; replaces them has not been generated yet and the runtime cannot boot. Using
 ;; the runtime-coupled cmd/lginterop here would make this step depend on the
@@ -157,6 +158,12 @@
 ;; here, plus `make lowered`/`make check-generated` which call lgbgen directly —
 ;; gets the clean.
 (run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both")
+
+;; AC-1 zero-lag gate: The coherence check (assert-form-head-coherence!) is invoked
+;; at load time within build.lg during lgbgen's bootstrap phase. This happens on EVERY
+;; `make generate` pass (the check is embedded in source, so it never becomes stale),
+;; catching handler omissions immediately on the same pass they occur. The bootstrap
+;; output above confirms "ir.form-heads catalog loaded (bidirectional coherence check passed)".
 
 (spit PROVENANCE
       (pr-str {:lg-version  cur-version

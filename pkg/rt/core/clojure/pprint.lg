@@ -1,0 +1,348 @@
+;; lgbgen:skip — kept off the precompiled-bundle path so clojure.repl/source-fn
+;; can still show these functions' real source text (see the same note in
+;; clojure/repl.lg — Var metadata itself now survives the .lgb round-trip).
+
+;; clojure.pprint — pretty-printing plus a constrained cl-format.
+;;
+;; pprint/pprint-str delegate to the existing `pprint` namespace (a simple
+;; recursive indenter, unchanged here). The new work is cl-format: a
+;; Common-Lisp-style FORMAT string interpreter, and print-table built on it.
+;;
+;; cl-format directive coverage: ~A ~S (aesthetic/readable, with column
+;; padding params), ~D ~B ~O ~X (integer radices, with padding and comma
+;; grouping), ~% ~& ~~ (newline/fresh-line/tilde literal), ~P (pluralize),
+;; ~^ (early exit), ~{...~} (iteration), ~[...~] / ~:[...~] / ~@[...~]
+;; (case / boolean / truthy-conditional), and ~<...~> (column justification
+;; of its rendered content). NOT implemented: ~R (English/arbitrary-radix
+;; number names), nested ~; fill segments inside ~<...~> (treated as a
+;; single clause), and the dynamic `v`/`#` parameter forms (only literal
+;; integer/'char params are supported).
+(ns clojure.pprint
+  (:require [pprint :as basic-pprint]
+            [string :as str]))
+
+(def pprint
+  "Pretty-print form. Delegates to the pprint namespace's simple indenter."
+  basic-pprint/pprint)
+
+(def pprint-str
+  "Returns the pretty-printed string form of x."
+  basic-pprint/pprint-str)
+
+;; --- cl-format: parsing --------------------------------------------------
+
+(defn- cl-digit-char? [c]
+  (and (>= (int c) (int \0)) (<= (int c) (int \9))))
+
+;; parse-one-param reads a single format-directive parameter at s[i]: a
+;; 'c literal character, an optional-sign integer, or (if neither) an
+;; omitted param (nil). Returns [value next-i].
+(defn- parse-one-param [s i]
+  (let [n (count s)]
+    (cond
+      (and (< i n) (= (nth s i) \'))
+      [(nth s (inc i)) (+ i 2)]
+
+      (and (< i n) (or (cl-digit-char? (nth s i)) (= (nth s i) \-)))
+      (let [neg? (= (nth s i) \-)
+            start (if neg? (inc i) i)
+            end (loop [j start]
+                  (if (and (< j n) (cl-digit-char? (nth s j)))
+                    (recur (inc j))
+                    j))]
+        [(* (if neg? -1 1) (Integer/parseInt (subs s start end))) end])
+
+      :else
+      [nil i])))
+
+;; parse-params reads a comma-separated parameter list (any of which may be
+;; omitted, e.g. "10,,,'*") up to the first char that isn't part of one.
+(defn- parse-params [s i]
+  (loop [params [] i i]
+    (let [[v i2] (parse-one-param s i)
+          params (conj params v)]
+      (if (and (< i2 (count s)) (= (nth s i2) \,))
+        (recur params (inc i2))
+        [params i2]))))
+
+;; parse-modifiers reads the (up to two, either order) : and @ flags that
+;; precede a directive character.
+(defn- parse-modifiers [s i]
+  (loop [colon? false at? false i i]
+    (cond
+      (and (< i (count s)) (= (nth s i) \:)) (recur true at? (inc i))
+      (and (< i (count s)) (= (nth s i) \@)) (recur colon? true (inc i))
+      :else [colon? at? i])))
+
+(defn- closer-for [ch]
+  (case ch \{ \} \< \> \[ \] nil))
+
+;; Directive letters are case-insensitive in CL FORMAT (~a and ~A are the
+;; same directive) — block openers ({ < [) aren't letters, so this is a
+;; no-op for them.
+(defn- upcase-char [c]
+  (nth (str/upper-case (str c)) 0))
+
+(declare parse-clauses)
+
+;; parse-segment parses literal text and directives from s starting at i,
+;; until end-of-string or (when close is non-nil) a bare ~close or a ~;
+;; clause separator — returning [nodes next-i stopped-char-or-nil].
+(defn- parse-segment [s i close]
+  (let [n (count s)]
+    (loop [nodes [] i i lit-start i]
+      (cond
+        (>= i n)
+        [(if (> i lit-start) (conj nodes {:t :lit :s (subs s lit-start i)}) nodes) i nil false]
+
+        (not= (nth s i) \~)
+        (recur nodes (inc i) lit-start)
+
+        :else
+        (let [nodes (if (> i lit-start) (conj nodes {:t :lit :s (subs s lit-start i)}) nodes)
+              [params i2] (parse-params s (inc i))
+              [colon? at? i2] (parse-modifiers s i2)
+              raw-ch (nth s i2)
+              ch (if (contains? #{\{ \} \< \> \[ \] \;} raw-ch) raw-ch (upcase-char raw-ch))
+              i2 (inc i2)]
+          (cond
+            (and close (= ch close))
+            [nodes i2 ch colon?]
+
+            (and close (= ch \;))
+            [nodes i2 ch colon?]
+
+            (contains? #{\{ \< \[} ch)
+            (let [close2 (closer-for ch)
+                  [clauses i3 default-last?] (parse-clauses s i2 close2)]
+              (recur (conj nodes {:t :block :ch ch :params params :colon? colon? :at? at?
+                                  :clauses clauses :default-last? default-last?})
+                     i3 i3))
+
+            :else
+            (recur (conj nodes {:t :dir :ch ch :params params :colon? colon? :at? at?}) i2 i2)))))))
+
+;; parse-clauses collects ~;-separated clause bodies up to the matching
+;; close directive (or end-of-string, for a malformed/unterminated block).
+;; Also returns whether the separator introducing the LAST clause was
+;; colon-modified (~:;) — CL FORMAT's marker that the final clause of a
+;; ~[...~] is the default, used regardless of (or absence of) an index match.
+(defn- parse-clauses [s i close]
+  (loop [clauses [] i i last-colon? false]
+    (let [[nodes i2 stopped stop-colon?] (parse-segment s i close)]
+      (if (or (nil? stopped) (= stopped close))
+        [(conj clauses nodes) i2 last-colon?]
+        (recur (conj clauses nodes) i2 stop-colon?)))))
+
+(defn- parse-format [s]
+  (first (parse-segment s 0 nil)))
+
+;; --- cl-format: column padding & radix rendering -------------------------
+
+;; cl-pad pads s to at least mincol columns (rounding up in colinc-sized
+;; steps beyond an initial minpad), using padchar, on the left when left?
+;; (right-justifying s) and on the right otherwise. nil params default to
+;; mincol 0, colinc 1, minpad 0, padchar \space, matching CL FORMAT.
+(defn- cl-pad [s mincol colinc minpad padchar left?]
+  (let [mincol (or mincol 0)
+        colinc (let [c (or colinc 1)] (if (zero? c) 1 c))
+        minpad (or minpad 0)
+        padchar (or padchar \space)
+        len0 (+ (count s) minpad)
+        total-len (if (>= len0 mincol)
+                    len0
+                    (+ len0 (* colinc (quot (+ (- mincol len0) colinc -1) colinc))))
+        pad-n (max 0 (- total-len (count s)))
+        padding (apply str (repeat pad-n padchar))]
+    (if left?
+      (str padding s)
+      (str s padding))))
+
+(defn- render-uint [v base]
+  (let [digits "0123456789abcdefghijklmnopqrstuvwxyz"]
+    (loop [v v acc '()]
+      (if (zero? v)
+        (if (seq acc) (apply str acc) "0")
+        (recur (quot v base) (cons (nth digits (mod v base)) acc))))))
+
+(defn- group-commas [s]
+  (let [neg? (str/starts-with? s "-")
+        digits (if neg? (subs s 1) s)
+        n (count digits)]
+    (loop [i n groups '()]
+      (if (<= i 0)
+        (str (if neg? "-" "") (str/join "," groups))
+        (recur (max 0 (- i 3)) (cons (subs digits (max 0 (- i 3)) i) groups))))))
+
+;; render-radix formats integer v in the given base with optional [mincol
+;; padchar] column params, :-modifier comma-grouping (base 10 only, matching
+;; CL ~D:) and @-modifier forcing an explicit + sign on non-negative values.
+(defn- render-radix [v base mincol padchar colon? at?]
+  (let [neg? (< v 0)
+        digits (render-uint (if neg? (- v) v) base)
+        digits (if (and colon? (= base 10)) (group-commas digits) digits)
+        s (str (cond neg? "-" at? "+" :else "") digits)]
+    ;; Numeric directives always pad on the LEFT (right-justifying the
+    ;; number) — unlike ~A/~S, @ here means "force an explicit sign", not
+    ;; "reverse the padding side".
+    (cl-pad s mincol 1 0 padchar true)))
+
+;; --- cl-format: evaluation ------------------------------------------------
+;;
+;; State threaded through evaluation is {:args seq :last last-consumed-val},
+;; so ~:P can re-pluralize the most recently consumed argument without
+;; consuming another one.
+
+(defn- take-cl-arg [st]
+  (let [args (:args st)]
+    (if (seq args)
+      (let [v (first args)]
+        [v (assoc st :args (rest args) :last v)])
+      [nil st])))
+
+(declare render-nodes)
+
+(defn- render-directive [node st]
+  (let [ch (:ch node)
+        params (:params node)
+        p0 (nth params 0 nil) p1 (nth params 1 nil)
+        p2 (nth params 2 nil) p3 (nth params 3 nil)
+        at? (:at? node) colon? (:colon? node)]
+    (case ch
+      \A (let [[v st] (take-cl-arg st)] [(cl-pad (str v) p0 p1 p2 p3 at?) st false])
+      \S (let [[v st] (take-cl-arg st)] [(cl-pad (pr-str v) p0 p1 p2 p3 at?) st false])
+      \D (let [[v st] (take-cl-arg st)] [(render-radix v 10 p0 p1 colon? at?) st false])
+      \B (let [[v st] (take-cl-arg st)] [(render-radix v 2 p0 p1 colon? at?) st false])
+      \O (let [[v st] (take-cl-arg st)] [(render-radix v 8 p0 p1 colon? at?) st false])
+      \X (let [[v st] (take-cl-arg st)] [(render-radix v 16 p0 p1 colon? at?) st false])
+      \% [(apply str (repeat (or p0 1) \newline)) st false]
+      ;; Fresh-line: like ~% but skips the first of the n newlines when
+      ;; output is already at the start of a line (tracked via :at-bol? —
+      ;; see track-bol / render-nodes).
+      \& (let [reqd (or p0 1)
+               n (if (:at-bol? st) (max 0 (dec reqd)) reqd)]
+           [(apply str (repeat n \newline)) st false])
+      \~ [(apply str (repeat (or p0 1) \~)) st false]
+      \P (let [[v st] (if colon? [(:last st) st] (take-cl-arg st))
+               plural? (not= v 1)]
+           [(if at? (if plural? "ies" "y") (if plural? "s" "")) st false])
+      \^ (let [stop? (not (seq (:args st)))] ["" st stop?])
+      ["" st false])))
+
+(defn- render-block [node st]
+  (let [ch (:ch node)
+        clauses (:clauses node)
+        params (:params node)]
+    (case ch
+      \{
+      (if (:at? node)
+        ;; ~@{...~} iterates the OUTER remaining args directly.
+        (loop [st st out []]
+          (let [before (count (:args st))]
+            (if (zero? before)
+              [(apply str out) st false]
+              (let [[piece st2 stop?] (render-nodes (first clauses) st)]
+                ;; Guard against a body that doesn't consume any args — a
+                ;; malformed format string would otherwise loop forever.
+                (if (or stop? (>= (count (:args st2)) before))
+                  [(apply str (conj out piece)) st2 false]
+                  (recur st2 (conj out piece)))))))
+        ;; ~{...~} consumes one arg — a seq — and iterates over IT.
+        (let [[v st-outer] (take-cl-arg st)]
+          (loop [inner {:args (seq v) :last nil :at-bol? (:at-bol? st-outer)} out []]
+            (let [before (count (:args inner))]
+              (if (zero? before)
+                [(apply str out) st-outer false]
+                (let [[piece inner2 stop?] (render-nodes (first clauses) inner)]
+                  (if (or stop? (>= (count (:args inner2)) before))
+                    [(apply str (conj out piece)) st-outer false]
+                    (recur inner2 (conj out piece)))))))))
+
+      \[
+      (cond
+        (:at? node)
+        (let [[v st2] (take-cl-arg st)]
+          (if v
+            (render-nodes (first clauses) st)
+            ["" st2 false]))
+
+        (:colon? node)
+        (let [[v st2] (take-cl-arg st)
+              else-clause (nth clauses 0 [])
+              then-clause (nth clauses 1 [])]
+          (render-nodes (if v then-clause else-clause) st2))
+
+        :else
+        (let [[v st2] (take-cl-arg st)
+              n (count clauses)]
+          (if (and (integer? v) (>= v 0) (< v n))
+            (render-nodes (nth clauses v) st2)
+            ;; Out-of-range selector: only fall through to the last clause
+            ;; when it was introduced via ~:; (an explicit default) —
+            ;; otherwise CL FORMAT emits nothing.
+            (if (and (pos? n) (:default-last? node))
+              (render-nodes (nth clauses (dec n)) st2)
+              ["" st2 false]))))
+
+      \<
+      (let [[piece st2 stop?] (render-nodes (first clauses) st)
+            p0 (nth params 0 nil) p1 (nth params 1 nil)
+            p2 (nth params 2 nil) p3 (nth params 3 nil)]
+        [(cl-pad piece p0 p1 p2 p3 (:at? node)) st2 stop?])
+
+      ["" st false])))
+
+;; track-bol updates :at-bol? (are we at the start of a line?) from the last
+;; character of a just-emitted piece of output — used by ~& to decide
+;; whether it needs to emit its first newline. An empty piece leaves the
+;; state untouched (nothing was actually written).
+(defn- track-bol [st piece]
+  (if (pos? (count piece))
+    (assoc st :at-bol? (= (nth piece (dec (count piece))) \newline))
+    st))
+
+(defn- render-nodes [nodes st]
+  (loop [nodes (seq nodes) st st out []]
+    (if (nil? nodes)
+      [(apply str out) st false]
+      (let [node (first nodes)]
+        (case (:t node)
+          :lit (recur (next nodes) (track-bol st (:s node)) (conj out (:s node)))
+          :dir (let [[piece st2 stop?] (render-directive node st)
+                     st2 (track-bol st2 piece)]
+                 (if stop?
+                   [(apply str (conj out piece)) st2 true]
+                   (recur (next nodes) st2 (conj out piece))))
+          :block (let [[piece st2 stop?] (render-block node st)
+                       st2 (track-bol st2 piece)]
+                   (if stop?
+                     [(apply str (conj out piece)) st2 true]
+                     (recur (next nodes) st2 (conj out piece)))))))))
+
+(defn cl-format
+  "A constrained Common-Lisp-style FORMAT. dest is a Writer-position
+  argument, matching clojure.pprint/cl-format: true prints to *out* and
+  returns nil, false or nil returns the formatted string. See the ns
+  docstring above for the supported directive set."
+  [dest fmt & args]
+  (let [nodes (parse-format fmt)
+        [out _ _] (render-nodes nodes {:args (seq args) :last nil :at-bol? true})]
+    (if (true? dest)
+      (do (print out) nil)
+      out)))
+
+;; --- print-table ----------------------------------------------------------
+
+(defn print-table
+  "Prints a collection of maps in a textual table. Column keys default to
+  the keys of the first row; pass an explicit vector of keys as the first
+  argument to control which columns appear and in what order."
+  ([rows] (when (seq rows) (print-table (keys (first rows)) rows)))
+  ([ks rows]
+   (when (seq rows)
+     (let [widths (map (fn [k] (apply max (count (str k)) (map #(count (str (get % k))) rows))) ks)
+           fmt-row (fn [vals] (str "| " (str/join " | " (map (fn [v w] (cl-pad (str v) w 1 0 \space false)) vals widths)) " |"))
+           sep (str "|-" (str/join "-+-" (map (fn [w] (apply str (repeat w \-))) widths)) "-|")]
+       (println (fmt-row ks))
+       (println sep)
+       (doseq [r rows] (println (fmt-row (map #(get r %) ks))))))))

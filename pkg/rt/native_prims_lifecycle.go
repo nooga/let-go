@@ -151,6 +151,16 @@ func defGeneratedPrimitive(ns *vm.Namespace, nsName, name string, v vm.Value) {
 	genPrimMu.Unlock()
 }
 
+// BindGeneratedPrimitive is the exported binding entry point for own-mode
+// registrars generated into OTHER packages (which cannot call the unexported
+// defGeneratedPrimitive). It resolves/creates the target namespace and binds
+// the adapter as the var's guarded canonical root, recording it for reapply.
+// pkg/rt's own generated registrar keeps calling defGeneratedPrimitive directly.
+func BindGeneratedPrimitive(nsName, name string, adapter vm.Value) {
+	ns := LookupOrRegisterNSNoLoad(nsName)
+	defGeneratedPrimitive(ns, nsName, name, adapter)
+}
+
 // AuditGeneratedPrimitives verifies that every recorded generated primitive is
 // actually bound in its canonical namespace, and returns one human-readable
 // line per primitive that is NOT — including where the name IS bound instead,

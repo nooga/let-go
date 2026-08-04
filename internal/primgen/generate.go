@@ -5,9 +5,12 @@
  */
 
 // Package primgen scans //lg:-annotated Go sources and emits the
-// zz_primitives_generated.go registrar. It is deliberately a PURE source →
-// source code generator: it depends only on go/ast + text templates and does
-// NOT import the let-go runtime (pkg/compiler / pkg/rt).
+// zz_primitives_generated.go registrar. It is deliberately a runtime-free
+// source → source code generator that does NOT import the let-go runtime
+// (pkg/compiler / pkg/rt) and shells out to nothing: it scans annotated
+// signatures with go/ast (prims_scan.go), builds the registrar by string
+// concatenation (prims_emit.go), and canonicalizes it in-process with
+// go/format (generate.go).
 //
 // This independence is the whole point. The registrar it emits is what lets the
 // NEXT-generation runtime boot; a generator that booted the current runtime
@@ -19,8 +22,10 @@ package primgen
 
 import (
 	"fmt"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -101,11 +106,43 @@ func Generate(srcDir, outPath, goPkg string) error {
 		}
 	}
 
-	output := emitFile(allSpecs)
+	// Derive the emitted package clause from the parsed SOURCE, not the -go-pkg
+	// import-path basename. Go does not require the package clause to match the
+	// final path component: a versioned module path like ".../primitives/v2"
+	// commonly declares `package primitives`, so the basename would emit
+	// `package v2` and fail to compile ("found packages primitives and v2").
+	// scanSource records each spec's source package name; require agreement.
+	srcPkgName := ""
+	for i := range allSpecs {
+		if allSpecs[i].Package == "" {
+			continue
+		}
+		if srcPkgName == "" {
+			srcPkgName = allSpecs[i].Package
+		} else if allSpecs[i].Package != srcPkgName {
+			return fmt.Errorf("conflicting source package names in %s: %q vs %q",
+				srcDir, srcPkgName, allSpecs[i].Package)
+		}
+	}
+	if srcPkgName == "" {
+		// Empty-stub case (no //lg:native specs): read the package clause
+		// directly so the stub still declares the correct package.
+		srcPkgName, err = readPackageName(srcDir)
+		if err != nil {
+			return fmt.Errorf("determine package name for %s: %w", srcDir, err)
+		}
+	}
 
-	formatted, err := gofmtCode(output)
+	targetPkgPath := goPkg
+	if targetPkgPath == "" {
+		targetPkgPath = "github.com/nooga/let-go/pkg/rt/builtins"
+	}
+	ownMode := hasBindMarker(srcDir)
+	output := emitFile(allSpecs, srcPkgName, targetPkgPath, ownMode)
+
+	formatted, err := formatGo(output)
 	if err != nil {
-		return fmt.Errorf("gofmt: %w", err)
+		return fmt.Errorf("format: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
@@ -117,6 +154,41 @@ func Generate(srcDir, outPath, goPkg string) error {
 
 	fmt.Printf("lgprimgen: generated primitives → %s (%d specs)\n", outPath, len(allSpecs))
 	return nil
+}
+
+// readPackageName returns the Go package name declared by the first eligible
+// (non-test, non-generated, unconstrained) .go file in dir. Used for the
+// empty-stub case, where no //lg:native spec carries the source package name,
+// so the emitted stub still declares the directory's real package.
+func readPackageName(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") ||
+			strings.HasSuffix(entry.Name(), "_test.go") ||
+			strings.HasPrefix(entry.Name(), "zz_") {
+			continue
+		}
+		fpath := filepath.Join(dir, entry.Name())
+		src, err := os.ReadFile(fpath)
+		if err != nil {
+			return "", err
+		}
+		if hasBuildConstraint(src) {
+			continue
+		}
+		f, err := parser.ParseFile(fset, fpath, src, parser.PackageClauseOnly)
+		if err != nil {
+			return "", err
+		}
+		if f.Name != nil && f.Name.Name != "" {
+			return f.Name.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no eligible .go file with a package clause in %s", dir)
 }
 
 // ScanNativeNames returns the set of let-go names already claimed by //lg:native
@@ -157,20 +229,17 @@ func ScanNativeNames(dir, excludeBase string) (map[string]bool, error) {
 	return names, nil
 }
 
-// gofmtCode formats Go source code using the gofmt command. On failure it
-// surfaces gofmt's stderr (which carries the <line>:<col>: syntax-error
-// location) and dumps the unformatted source to a temp file, so a bad emitted
-// registrar is diagnosable instead of a bare "exit status 2".
-func gofmtCode(src string) (string, error) {
-	cmd := exec.Command("gofmt")
-	cmd.Stdin = strings.NewReader(src)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+// formatGo canonically formats generated Go source in-process. go/format is
+// gofmt's own parser+printer, so the output is byte-identical to `gofmt` with no
+// external binary and no PATH dependency. On a parse failure it dumps the
+// unformatted source to a temp file so a bad emitted registrar is diagnosable
+// (go/format's error already carries the <line>:<col> location).
+func formatGo(src string) (string, error) {
+	formatted, err := format.Source([]byte(src))
 	if err != nil {
 		dump := filepath.Join(os.TempDir(), "lgprimgen-unformatted.go")
 		_ = os.WriteFile(dump, []byte(src), 0644)
-		return "", fmt.Errorf("gofmt failed: %w\n%s(unformatted source written to %s)", err, stderr.String(), dump)
+		return "", fmt.Errorf("format generated source: %w (unformatted source written to %s)", err, dump)
 	}
-	return string(output), nil
+	return string(formatted), nil
 }
