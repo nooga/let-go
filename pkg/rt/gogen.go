@@ -681,6 +681,118 @@ func cForStmt(initV, condV, postV, bodyV vm.Value) (vm.Value, error) {
 	}), nil
 }
 
+// defer-stmt: (gogen/defer-stmt call-expr) -> defer call-expr
+func cDeferStmt(callV vm.Value) (vm.Value, error) {
+	e, err := unboxExpr(callV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/defer-stmt: %w", err)
+	}
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return vm.NIL, fmt.Errorf("gogen/defer-stmt: expected *ast.CallExpr, got %T", e)
+	}
+	return box(&ast.DeferStmt{Call: call}), nil
+}
+
+// slice-expr: (gogen/slice-expr recv low high) -> recv[low:high]
+// low and/or high may be nil (os.Args[1:], buf[:n], …).
+func cSliceExpr(recvV, lowV, highV vm.Value) (vm.Value, error) {
+	r, err := unboxExpr(recvV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/slice-expr: recv: %w", err)
+	}
+	se := &ast.SliceExpr{X: r}
+	if lowV != vm.NIL {
+		low, err := unboxExpr(lowV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/slice-expr: low: %w", err)
+		}
+		se.Low = low
+	}
+	if highV != vm.NIL {
+		high, err := unboxExpr(highV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/slice-expr: high: %w", err)
+		}
+		se.High = high
+	}
+	return box(se), nil
+}
+
+// call-variadic: (gogen/call-variadic fn-expr [arg-exprs...])
+// Like call, but sets CallExpr.Ellipsis so the last argument is printed with
+// a trailing `...` (e.g. prog.Main(ec, argv...)).
+func cCallVariadic(fnV, argsV vm.Value) (vm.Value, error) {
+	fn, err := unboxExpr(fnV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	argVals, err := seqToValues(argsV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	if len(argVals) == 0 {
+		return vm.NIL, fmt.Errorf("gogen/call-variadic: need at least one arg to mark with ...")
+	}
+	args := make([]ast.Expr, 0, len(argVals))
+	for i, av := range argVals {
+		e, err := unboxExpr(av)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/call-variadic: arg %d: %w", i, err)
+		}
+		args = append(args, e)
+	}
+	return box(&ast.CallExpr{
+		Fun:      fn,
+		Args:     args,
+		Ellipsis: allocPos(),
+	}), nil
+}
+
+// range-stmt: (gogen/range-stmt key val ":=" xrange [body])
+// key and/or val may be nil. tok is ":=" or "=".
+func cRangeStmt(keyV, valV, tokV, xV, bodyV vm.Value) (vm.Value, error) {
+	tokStr, err := asString(tokV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/range-stmt: tok: %w", err)
+	}
+	tok, err := opTokenOrErr(tokStr)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/range-stmt: tok: %w", err)
+	}
+	x, err := unboxExpr(xV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/range-stmt: xrange: %w", err)
+	}
+	body, err := stmtSlice(bodyV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/range-stmt: body: %w", err)
+	}
+	rs := &ast.RangeStmt{
+		Tok:  tok,
+		X:    x,
+		Body: &ast.BlockStmt{List: body},
+	}
+	if keyV != vm.NIL {
+		key, err := unboxExpr(keyV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/range-stmt: key: %w", err)
+		}
+		rs.Key = key
+	}
+	if valV != vm.NIL {
+		val, err := unboxExpr(valV)
+		if err != nil {
+			return vm.NIL, fmt.Errorf("gogen/range-stmt: val: %w", err)
+		}
+		rs.Value = val
+	}
+	if rs.Key == nil && rs.Value == nil {
+		rs.Tok = token.ILLEGAL
+	}
+	return box(rs), nil
+}
+
 func cExprStmt(v vm.Value) (vm.Value, error) {
 	e, err := unboxExpr(v)
 	if err != nil {
@@ -1594,6 +1706,58 @@ func cWithDoc(declV, commentV vm.Value) (vm.Value, error) {
 	return declV, nil
 }
 
+// with-go-directive: (gogen/with-go-directive decl "go:embed file")
+// Like with-doc, but emits `//go:embed file` with no space after `//` —
+// required for compiler directives. directive must start with "go:".
+func cWithGoDirective(declV, directiveV vm.Value) (vm.Value, error) {
+	if declV == vm.NIL {
+		return vm.NIL, nil
+	}
+	directive, err := asString(directiveV)
+	if err != nil {
+		return vm.NIL, fmt.Errorf("gogen/with-go-directive: directive: %w", err)
+	}
+	if !strings.HasPrefix(directive, "go:") {
+		return vm.NIL, fmt.Errorf("gogen/with-go-directive: directive must start with \"go:\", got %q", directive)
+	}
+	n, err := unboxNode(declV)
+	if err != nil {
+		return vm.NIL, err
+	}
+	startPos := allocPos()
+	declPos := allocPos()
+	group := &ast.CommentGroup{List: []*ast.Comment{{
+		Slash: startPos,
+		Text:  "//" + directive,
+	}}}
+	switch x := n.(type) {
+	case *ast.GenDecl:
+		x.Doc = group
+		x.TokPos = declPos
+		if x.Lparen != token.NoPos {
+			x.Lparen = declPos
+		}
+	case *ast.FuncDecl:
+		x.Doc = group
+		if x.Type != nil {
+			x.Type.Func = declPos
+		}
+		if x.Name != nil && x.Name.NamePos < declPos {
+			x.Name.NamePos = declPos
+		}
+	case *ast.ValueSpec:
+		x.Doc = group
+		for _, nm := range x.Names {
+			if nm.NamePos < declPos {
+				nm.NamePos = declPos
+			}
+		}
+	default:
+		return vm.NIL, fmt.Errorf("gogen/with-go-directive: don't know how to attach directive to %T", n)
+	}
+	return declV, nil
+}
+
 // method-decl: (gogen/method-decl [recv-fields] "Name" [params] [results] [body])
 // -> *ast.FuncDecl with Recv set.
 //
@@ -2242,13 +2406,17 @@ func installGogenNS() {
 		mk(wrap1Named("interface-type", cInterfaceType)),
 		mk(wrap1Named("const-block", cConstBlock)),
 		mk(wrap2Named("with-doc", cWithDoc)),
+		mk(wrap2Named("with-go-directive", cWithGoDirective)),
 		mk(wrap2Named("label-stmt", cLabelStmt)),
+		mk(wrap1Named("defer-stmt", cDeferStmt)),
+		mk(wrap2Named("call-variadic", cCallVariadic)),
 
 		mk(wrap3Named("binary", cBinary)),
 		mk(wrap3Named("assign", cAssign)),
 		mk(wrap3Named("multi-assign", cMultiAssign)),
 		mk(wrap3Named("var-decl", cVarDecl)),
 		mk(wrap3Named("file", cFile)),
+		mk(wrap3Named("slice-expr", cSliceExpr)),
 		mk(wrap2Named("references-pkg?", cReferencesPkg)),
 		mk(wrap1Named("call-targets", cCallTargets)),
 		mk(wrap1Named("file-import-paths", cFileImportPaths)),
@@ -2268,6 +2436,7 @@ func installGogenNS() {
 		mk(wrap4Named("const-spec", cConstSpec)),
 
 		mk(wrap5Named("method-decl", cMethodDecl)),
+		mk(wrap5Named("range-stmt", cRangeStmt)),
 
 		mk("import-spec", makeVariadic("import-spec", cImportSpec), nil),
 	}

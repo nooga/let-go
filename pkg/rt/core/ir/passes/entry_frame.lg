@@ -2,8 +2,9 @@
 ;;
 ;; Projects lowering facts the compiler already holds — whether a recognized
 ;; main/-main form lowered, its Go name/arity shape, which packages to
-;; blank-import — into a package-main Go file. gloat (or any orchestrator)
-;; keeps go.mod / `go build` / program.lgb placement; we own the frame.
+;; blank-import — into a package-main Go file via gogen AST (rendered +
+;; gofmt'd). gloat (or any orchestrator) keeps go.mod / `go build` /
+;; program.lgb placement; we own the frame when `--entry-frame` is set.
 ;;
 ;; Entry recognition:
 ;;   - name: main or -main (including defn- / ^:private)
@@ -23,6 +24,7 @@
 (ns ir.passes.entry-frame
   (:require
    [clojure.string]
+   [gogen]
    [ir.build :as ir.build]
    [ir.lower-go :as lower-go]))
 
@@ -232,78 +234,184 @@
        (analyze-entry-from-go-src entry (:go-src src-or-opts)))
      (analyze-entry-from-go-src entry src-or-opts))))
 
-(defn- go-string-lit [s]
-  (str "\"" (clojure.string/replace
-              (clojure.string/replace s "\\" "\\\\")
-              "\"" "\\\"") "\""))
+(defn- g-id [s] (gogen/ident s))
+(defn- g-sel [pkg name] (gogen/field-sel (g-id pkg) name))
+(defn- g-call [fn args] (gogen/call fn args))
+(defn- g-str [s] (gogen/string-lit s))
+(defn- g-int [n] (gogen/int-lit n))
 
-(defn- emit-argv-setup [arity-shape]
-  "Build boxed argv for the direct native call. *command-line-args* is already
-   published in the boot sequence; this only constructs the call argument."
+(defn- os-args-tail
+  "os.Args[1:]"
+  []
+  (gogen/slice-expr (g-sel "os" "Args") (g-int 1) nil))
+
+(defn- args-len-minus-1
+  "len(os.Args)-1"
+  []
+  (gogen/binary "-" (g-call (g-id "len") [(g-sel "os" "Args")]) (g-int 1)))
+
+(defn- exit-on-err-stmts
+  "Body of `if err != nil { fmt…; os.Exit(1) }` then-branch."
+  [format-msg format-args]
+  [(gogen/expr-stmt
+     (g-call (g-sel "fmt" "Fprintf")
+             (into [(g-sel "os" "Stderr") (g-str format-msg)] format-args)))
+   (gogen/expr-stmt (g-call (g-sel "os" "Exit") [(g-int 1)]))])
+
+(defn- format-error-exit-stmts []
+  [(gogen/expr-stmt
+     (g-call (g-sel "fmt" "Fprint")
+             [(g-sel "os" "Stderr")
+              (g-call (g-sel "vm" "FormatError") [(g-id "err")])]))
+   (gogen/expr-stmt (g-call (g-sel "os" "Exit") [(g-int 1)]))])
+
+(defn- box-args-range-stmts
+  "for i, a := range os.Args[1:] { dst[i] = vm.String(a) }"
+  [dst-ident]
+  [(gogen/range-stmt
+     (g-id "i") (g-id "a") ":=" (os-args-tail)
+     [(gogen/assign "="
+                    (gogen/index (g-id dst-ident) (g-id "i"))
+                    (g-call (g-sel "vm" "String") [(g-id "a")]))])])
+
+(defn- emit-argv-setup-stmts
+  "Build boxed argv for the direct native call. Returns a stmt vector (maybe empty)."
+  [arity-shape]
   (case arity-shape
-    :none nil
+    :none []
 
     :variadic
-    (str "\targv := make([]vm.Value, len(os.Args)-1)\n"
-         "\tfor i, a := range os.Args[1:] {\n"
-         "\t\targv[i] = vm.String(a)\n"
-         "\t}\n")
+    (into [(gogen/multi-assign ":="
+             [(g-id "argv")]
+             [(g-call (g-id "make")
+                      [(gogen/type "[]vm.Value") (args-len-minus-1)])])]
+          (box-args-range-stmts "argv"))
 
     :vector
-    (str "\targvItems := make([]vm.Value, len(os.Args)-1)\n"
-         "\tfor i, a := range os.Args[1:] {\n"
-         "\t\targvItems[i] = vm.String(a)\n"
-         "\t}\n"
-         "\targv := vm.NewArrayVector(argvItems)\n")))
+    (into [(gogen/multi-assign ":="
+             [(g-id "argvItems")]
+             [(g-call (g-id "make")
+                      [(gogen/type "[]vm.Value") (args-len-minus-1)])])]
+          (into (box-args-range-stmts "argvItems")
+                [(gogen/multi-assign ":="
+                   [(g-id "argv")]
+                   [(g-call (g-sel "vm" "NewArrayVector") [(g-id "argvItems")])])]))
 
-(defn- emit-direct-call [pkg-alias call-name arity-shape needs-error?]
-  (let [recv (str pkg-alias "." call-name)
-        args (case arity-shape
-               :none     "ec"
-               :variadic "ec, argv..."
-               :vector   "ec, argv")]
+    []))
+
+(defn- entry-call-expr [pkg-alias call-name arity-shape]
+  (let [fn (g-sel pkg-alias call-name)]
+    (case arity-shape
+      :none     (g-call fn [(g-id "ec")])
+      :variadic (gogen/call-variadic fn [(g-id "ec") (g-id "argv")])
+      :vector   (g-call fn [(g-id "ec") (g-id "argv")])
+      (g-call fn [(g-id "ec")]))))
+
+(defn- emit-direct-call-stmts [pkg-alias call-name arity-shape needs-error?]
+  (let [call (entry-call-expr pkg-alias call-name arity-shape)]
     (if needs-error?
-      (str "\tif _, err := " recv "(" args "); err != nil {\n"
-           "\t\tfmt.Fprint(os.Stderr, vm.FormatError(err))\n"
-           "\t\tos.Exit(1)\n"
-           "\t}\n")
-      (str "\t" recv "(" args ")\n"))))
+      [(gogen/if-stmt
+         (gogen/multi-assign ":=" [(g-id "_") (g-id "err")] [call])
+         (gogen/binary "!=" (g-id "err") (g-id "nil"))
+         (format-error-exit-stmts)
+         nil)]
+      [(gogen/expr-stmt call)])))
 
-(defn- emit-vm-fallback [entry]
-  "VM fallback when the entry did not lower: Invoke the selected namespace's
-   main/-main Var. LoadProgramNamespaces has already replayed every NSOrder
-   chunk (including MainChunk when it is one of them), so a bare
-   RunProgramMainChunk would no-op for the common single-ns case. The argv is
-   shaped to the entry's arity: :variadic spreads os.Args, :vector passes one
-   string vector, :none passes nothing. Requires (:ns entry) — the source
-   namespace that owns the selected entry."
+(defn- emit-vm-fallback-stmts [entry]
+  "VM fallback when the entry did not lower."
   (let [var-name (if entry (:name entry) "-main")
         ns-name  (if entry (:ns entry) "")
         shape    (if entry (:arity-shape entry) :variadic)
-        argv-setup
+        argv-stmts
         (case shape
           :none
-          "\targv := []vm.Value{}\n"
+          [(gogen/multi-assign ":="
+             [(g-id "argv")]
+             [(gogen/composite-lit (gogen/type "[]vm.Value") [])])]
 
           :vector
-          (str "\targvItems := make([]vm.Value, len(os.Args)-1)\n"
-               "\tfor i, a := range os.Args[1:] {\n"
-               "\t\targvItems[i] = vm.String(a)\n"
-               "\t}\n"
-               "\targv := []vm.Value{vm.NewArrayVector(argvItems)}\n")
+          (into [(gogen/multi-assign ":="
+                   [(g-id "argvItems")]
+                   [(g-call (g-id "make")
+                            [(gogen/type "[]vm.Value") (args-len-minus-1)])])]
+                (into (box-args-range-stmts "argvItems")
+                      [(gogen/multi-assign ":="
+                         [(g-id "argv")]
+                         [(gogen/composite-lit
+                            (gogen/type "[]vm.Value")
+                            [(g-call (g-sel "vm" "NewArrayVector")
+                                     [(g-id "argvItems")])])])]))
 
           ;; :variadic (and the nil-entry default)
-          (str "\targv := make([]vm.Value, len(os.Args)-1)\n"
-               "\tfor i, a := range os.Args[1:] {\n"
-               "\t\targv[i] = vm.String(a)\n"
-               "\t}\n"))]
-    (str argv-setup
-         "\tif err := rt.InvokeProgramEntry(ec, "
-         (go-string-lit ns-name) ", " (go-string-lit var-name)
-         ", argv); err != nil {\n"
-         "\t\tfmt.Fprint(os.Stderr, vm.FormatError(err))\n"
-         "\t\tos.Exit(1)\n"
-         "\t}\n")))
+          (into [(gogen/multi-assign ":="
+                   [(g-id "argv")]
+                   [(g-call (g-id "make")
+                            [(gogen/type "[]vm.Value") (args-len-minus-1)])])]
+                (box-args-range-stmts "argv")))]
+    (into argv-stmts
+          [(gogen/if-stmt
+             (gogen/multi-assign ":="
+               [(g-id "err")]
+               [(g-call (g-sel "rt" "InvokeProgramEntry")
+                        [(g-id "ec") (g-str ns-name) (g-str var-name) (g-id "argv")])])
+             (gogen/binary "!=" (g-id "err") (g-id "nil"))
+             (format-error-exit-stmts)
+             nil)])))
+
+(defn- emit-boot-stmts []
+  ;; Order is load-bearing: publish *command-line-args* before namespace
+  ;; replay so top-level forms see the real argv; own ShutdownAllPods
+  ;; like lg / lg-runtime so pods opened during boot/load are cleaned up.
+  [(gogen/multi-assign ":="
+     [(g-id "ec") (g-id "err")]
+     [(g-call (g-sel "rt" "BootCore") [])])
+   (gogen/if-stmt
+     nil
+     (gogen/binary "!=" (g-id "err") (g-id "nil"))
+     (exit-on-err-stmts "BootCore: %v\n" [(g-id "err")])
+     nil)
+   (gogen/defer-stmt (g-call (g-sel "rt" "ShutdownAllPods") []))
+   (gogen/expr-stmt
+     (g-call (g-sel "rt" "SetCommandLineArgs") [(os-args-tail)]))
+   (gogen/multi-assign ":="
+     [(g-id "unit") (g-id "err")]
+     [(g-call (g-sel "rt" "DecodeExecUnit") [(g-id "programLGB")])])
+   (gogen/if-stmt
+     nil
+     (gogen/binary "!=" (g-id "err") (g-id "nil"))
+     (exit-on-err-stmts "decode program.lgb: %v\n" [(g-id "err")])
+     nil)
+   (gogen/if-stmt
+     (gogen/multi-assign ":="
+       [(g-id "err")]
+       [(g-call (g-sel "rt" "LoadProgramNamespaces") [(g-id "unit")])])
+     (gogen/binary "!=" (g-id "err") (g-id "nil"))
+     (exit-on-err-stmts "%v\n" [(g-id "err")])
+     nil)])
+
+(defn- frame-imports [entry-alias entry-import blanks lowered? use-vm?]
+  (vec
+    (concat
+      [(gogen/import-spec "embed" "_")
+       (gogen/import-spec "fmt")
+       (gogen/import-spec "os")]
+      (when (and lowered? entry-import)
+        [(gogen/import-spec entry-import entry-alias)])
+      ;; Drop entry-import from the blank list only when it is already the
+      ;; aliased import above (lowered?). When the entry did NOT lower, keep
+      ;; it blank-imported so sibling fns still register init() overrides.
+      ;; distinct: several specs share a package when a namespace spans files.
+      (mapv (fn [p] (gogen/import-spec p "_"))
+            (distinct
+              (filter (fn [p] (not (and lowered? (= p entry-import)))) blanks)))
+      [(gogen/import-spec "github.com/nooga/let-go/pkg/rt")]
+      (when use-vm?
+        [(gogen/import-spec "github.com/nooga/let-go/pkg/vm")]))))
+
+(defn- prepend-generated-header [comment-lines src]
+  (str (clojure.string/join "\n" (mapv #(str "// " %) comment-lines))
+       "\n\n"
+       src))
 
 (defn emit-entry-bridge-go
   "Go source for a same-package NativeMain forwarding wrapper. pkg-name is
@@ -312,26 +420,33 @@
   (when (and entry (:lowered? entry) (:private? entry))
     (let [gname (:go-name entry)
           shape (:arity-shape entry)
+          ec-param (gogen/param "ec" (gogen/type "*vm.ExecContext"))
           params (case shape
-                   :none     "ec *vm.ExecContext"
-                   :variadic "ec *vm.ExecContext, args ...vm.Value"
-                   :vector   "ec *vm.ExecContext, arg0 vm.Value")
-          call-args (case shape
-                      :none     "ec"
-                      :variadic "ec, args..."
-                      :vector   "ec, arg0")
-          result-sig (if (:needs-error? entry)
-                       "(vm.Value, error)"
-                       "vm.Value")]
-      (str "// Code generated by lg-compile (#425 native-entry bridge). DO NOT EDIT.\n\n"
-           "package " pkg-name "\n\n"
-           "import \"github.com/nooga/let-go/pkg/vm\"\n\n"
-           "// NativeMain is the cross-package reachability surface for a\n"
-           "// private (defn- main …) / ^:private entry. package main calls\n"
-           "// this; the lowered entry itself stays unexported.\n"
-           "func NativeMain(" params ") " result-sig " {\n"
-           "\treturn " gname "(" call-args ")\n"
-           "}\n"))))
+                   :none     [ec-param]
+                   :variadic [ec-param (gogen/variadic-param "args" (gogen/type "vm.Value"))]
+                   :vector   [ec-param (gogen/param "arg0" (gogen/type "vm.Value"))]
+                   [ec-param])
+          call (case shape
+                 :none     (g-call (g-id gname) [(g-id "ec")])
+                 :variadic (gogen/call-variadic (g-id gname) [(g-id "ec") (g-id "args")])
+                 :vector   (g-call (g-id gname) [(g-id "ec") (g-id "arg0")])
+                 (g-call (g-id gname) [(g-id "ec")]))
+          results (if (:needs-error? entry)
+                    [(gogen/result (gogen/type "vm.Value"))
+                     (gogen/result (gogen/type "error"))]
+                    [(gogen/result (gogen/type "vm.Value"))])
+          fn-decl (gogen/with-doc
+                    (gogen/func-decl "NativeMain" params results
+                                     [(gogen/return-stmt [call])])
+                    (str "NativeMain is the cross-package reachability surface for a\n"
+                         "private (defn- main …) / ^:private entry. package main calls\n"
+                         "this; the lowered entry itself stays unexported."))
+          file (gogen/file pkg-name
+                           [(gogen/import-spec "github.com/nooga/let-go/pkg/vm")]
+                           [fn-decl])]
+      (prepend-generated-header
+        ["Code generated by lg-compile (#425 native-entry bridge). DO NOT EDIT."]
+        (gogen/render file)))))
 
 (defn emit-entry-frame-go
   "Generate package-main Go source for the AOT native-entry frame.
@@ -358,77 +473,26 @@
         use-vm?       (or (not lowered?)
                           needs-error?
                           (contains? #{:vector :variadic} shape))
-        import-lines
-        (vec
-          (concat
-            ["\t_ \"embed\""
-             "\t\"fmt\""
-             "\t\"os\""
-             ""]
-            (when (and lowered? entry-import)
-              [(str "\t" entry-alias " " (go-string-lit entry-import))])
-            ;; Drop entry-import from the blank list only when it is already
-            ;; the aliased import above (lowered?). When the entry did NOT
-            ;; lower, keep it blank-imported so any sibling fns it lowered
-            ;; still register their init() overrides.
-            ;;
-            ;; distinct because callers collect one :go-pkg per lowered spec,
-            ;; and several specs share a package whenever a namespace spans
-            ;; multiple files (or an input is passed twice). Go rejects a
-            ;; repeated import, so the dedup belongs here at the emission
-            ;; site rather than in any one caller.
-            (mapv (fn [p] (str "\t_ " (go-string-lit p)))
-                  (distinct
-                    (filter (fn [p] (not (and lowered? (= p entry-import)))) blanks)))
-            [""
-             "\t\"github.com/nooga/let-go/pkg/rt\""]
-            (when use-vm?
-              ["\t\"github.com/nooga/let-go/pkg/vm\""])))
-        boot
-        ;; Order is load-bearing: publish *command-line-args* before namespace
-        ;; replay so top-level forms see the real argv; own ShutdownAllPods
-        ;; like lg / lg-runtime so pods opened during boot/load are cleaned up.
-        (str "\tec, err := rt.BootCore()\n"
-             "\tif err != nil {\n"
-             "\t\tfmt.Fprintf(os.Stderr, \"BootCore: %v\\n\", err)\n"
-             "\t\tos.Exit(1)\n"
-             "\t}\n"
-             "\tdefer rt.ShutdownAllPods()\n"
-             "\trt.SetCommandLineArgs(os.Args[1:])\n"
-             "\n"
-             "\tunit, err := rt.DecodeExecUnit(programLGB)\n"
-             "\tif err != nil {\n"
-             "\t\tfmt.Fprintf(os.Stderr, \"decode program.lgb: %v\\n\", err)\n"
-             "\t\tos.Exit(1)\n"
-             "\t}\n"
-             "\tif err := rt.LoadProgramNamespaces(unit); err != nil {\n"
-             "\t\tfmt.Fprintf(os.Stderr, \"%v\\n\", err)\n"
-             "\t\tos.Exit(1)\n"
-             "\t}\n"
-             "\n")
-        entry-body
-        (if lowered?
-          (str (when-let [setup (emit-argv-setup shape)]
-                 (str setup "\n"))
-               (emit-direct-call entry-alias call-name shape needs-error?))
-          (emit-vm-fallback entry))]
-    (str "// Code generated by lg-compile (#425 native-entry frame). DO NOT EDIT.\n"
-         "// native entry: "
-         (if lowered?
-           (str (:name entry) " → " entry-alias "." call-name
-                " (" (name shape) ")")
-           "none (VM MainChunk fallback)")
-         "\n\n"
-         "package main\n\n"
-         "import (\n"
-         (clojure.string/join "\n" import-lines)
-         "\n)\n\n"
-         "//go:embed " lgb "\n"
-         "var programLGB []byte\n\n"
-         "func main() {\n"
-         boot
-         entry-body
-         "}\n")))
+        imports       (frame-imports entry-alias entry-import blanks lowered? use-vm?)
+        body-stmts    (into (emit-boot-stmts)
+                            (if lowered?
+                              (into (emit-argv-setup-stmts shape)
+                                    (emit-direct-call-stmts
+                                      entry-alias call-name shape needs-error?))
+                              (emit-vm-fallback-stmts entry)))
+        embed-var     (gogen/with-go-directive
+                        (gogen/top-var-decl "programLGB" (gogen/type "[]byte") nil)
+                        (str "go:embed " lgb))
+        main-fn       (gogen/func-decl "main" [] [] body-stmts)
+        file          (gogen/file "main" imports [embed-var main-fn])
+        entry-label   (if lowered?
+                        (str (:name entry) " → " entry-alias "." call-name
+                             " (" (name shape) ")")
+                        "none (VM MainChunk fallback)")]
+    (prepend-generated-header
+      ["Code generated by lg-compile (#425 native-entry frame). DO NOT EDIT."
+       (str "native entry: " entry-label)]
+      (gogen/render file))))
 
 (defn entry-summary-line
   "Item 3 one-liner: 'N fns lowered; native entry: Main ✓' / 'none'."

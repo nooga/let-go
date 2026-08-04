@@ -157,7 +157,7 @@ func TestNativeEntryMatrix(t *testing.T) {
 				// without importing unused pkg/vm.
 				"app.lg": "(ns app)\n(defn -main ^long [] 0)\n",
 			},
-			mainContains:   []string{"\tprog.Main(ec)\n"},
+			mainContains:   []string{"prog.Main(ec)"},
 			mainNotContain: []string{"if _, err := prog.Main(", "github.com/nooga/let-go/pkg/vm"},
 		},
 		{

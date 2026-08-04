@@ -181,7 +181,8 @@
         e   (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
                                         :needs-error? false :arity 0}})
         src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/app"})]
-    (is (str/includes? src "\tprog.Main(ec)\n"))
+    (is (str/includes? src "prog.Main(ec)"))
+    (is (not (str/includes? src "if _, err := prog.Main(")))
     (is (not (str/includes? src "github.com/nooga/let-go/pkg/vm")))))
 
 (deftest vm-fallback-is-namespace-qualified
