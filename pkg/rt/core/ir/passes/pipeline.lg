@@ -773,9 +773,11 @@
   (let [tail     (rest fn-form)
         tail     (if (symbol? (first tail)) (rest tail) tail)
         args-vec (first tail)]
-    (if (vector? args-vec)
-      (let [variadic? (boolean (some (fn [a] (= a '&)) args-vec))
-            arity     (if variadic? (- (count args-vec) 1) (count args-vec))
+    (if (or (vector? args-vec)
+            (ir.build/return-hinted-arity-vector? args-vec))
+      (let [unwrapped (ir.build/unwrap-arity-vector args-vec)
+            variadic? (boolean (some (fn [a] (= a '&)) unwrapped))
+            arity     (if variadic? (- (count unwrapped) 1) (count unwrapped))
             defn-form (apply list 'defn (symbol def-name) args-vec (rest tail))
             chunk     (compile-form defn-form the-ns)]
         (chunk->fn arity variadic? chunk))
