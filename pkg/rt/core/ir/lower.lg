@@ -137,8 +137,9 @@
    not lower at all; the deferral/RPO fixes let them lower, so a
    disagreement now aborts this fn's lowering (the defn hybrid falls
    back to the plain bytecode compiler, exactly as before). RECUR-edge
-   preds do not report: they rebuild the target's stack to junk 0, the
-   same silent normalization main's back-edges have always relied on."
+   preds report zero junk: they rebuild the target's stack from scratch,
+   and registering that zero is recorded so disagreement with another
+   pred's nonzero junk is caught (→ fallback) instead of silently accepted."
   (let [seen (:block-junk-seen @l)
         cur  (get seen bid)]
     (if (nil? cur)

@@ -1,13 +1,14 @@
-;; Test: block-junk-agreement underflow fix
+;; Test: block-junk-agreement parity guard
 ;;
 ;; The block-junk-agreement fix requires that all fall-through predecessors
 ;; reaching a block agree on the junk count. Before the fix, mismatched junk
 ;; was silently accepted (taking the max), causing stack underflows under
 ;; *ir-compile*. This test constructs a shape with multiple paths to the same
-;; block that have different stack effects, and verifies both that:
+;; block that have different stack effects, and verifies parity with bytecode.
 ;;
-;; 1. The result is correct (parity with bytecode)
-;; 2. The IR compiler correctly handles stack-effect disagreement
+;; This is a parity guard that passes unchanged on main and does not exercise
+;; the disagreement/fallback path — it serves as a regression guard, not as
+;; a test of the new disagreement-handling behavior.
 (ns test.ir-junk-agreement-test
   (:require
    [ir.passes.pipeline]
