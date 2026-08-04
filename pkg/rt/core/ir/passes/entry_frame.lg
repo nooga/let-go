@@ -353,6 +353,11 @@
         call-name     (when lowered? (:call-name entry))
         shape         (when entry (:arity-shape entry))
         needs-error?  (if entry (:needs-error? entry) true)
+        ;; Typed no-error [] entries call prog.Main(ec) with no argv boxing
+        ;; and no FormatError — omit the vm import so go build stays clean.
+        use-vm?       (or (not lowered?)
+                          needs-error?
+                          (contains? #{:vector :variadic} shape))
         import-lines
         (vec
           (concat
@@ -376,8 +381,9 @@
                   (distinct
                     (filter (fn [p] (not (and lowered? (= p entry-import)))) blanks)))
             [""
-             "\t\"github.com/nooga/let-go/pkg/rt\""
-             "\t\"github.com/nooga/let-go/pkg/vm\""]))
+             "\t\"github.com/nooga/let-go/pkg/rt\""]
+            (when use-vm?
+              ["\t\"github.com/nooga/let-go/pkg/vm\""])))
         boot
         ;; Order is load-bearing: publish *command-line-args* before namespace
         ;; replay so top-level forms see the real argv; own ShutdownAllPods

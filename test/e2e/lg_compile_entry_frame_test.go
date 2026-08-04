@@ -16,19 +16,24 @@ import (
 // TestLgCompileEntryFrameOptIn pins the #628 ownership contract: frame
 // emission is opt-in via --entry-frame. Without the flag, lg-compile writes
 // only lowered packages (historical behavior for Gloat and other
-// orchestrators). With the flag, exactly one package-main frame is emitted.
-// Package lowering is identical in both modes.
+// orchestrators). With the flag, exactly one package-main frame is emitted,
+// plus a private-entry bridge when applicable. Package lowering is identical
+// in both modes (excluding the intentionally added bridge file).
 func TestLgCompileEntryFrameOptIn(t *testing.T) {
 	bin := buildLG(t)
 	root := repoRoot(t)
 
-	srcDir := t.TempDir()
-	src := filepath.Join(srcDir, "app.lg")
-	if err := os.WriteFile(src, []byte("(ns app)\n(defn -main [] 1)\n"), 0644); err != nil {
-		t.Fatal(err)
+	writeSrc := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		p := filepath.Join(dir, "app.lg")
+		if err := os.WriteFile(p, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return p
 	}
 
-	runCompile := func(t *testing.T, outDir string, entryFrame bool) string {
+	runCompile := func(t *testing.T, outDir, src string, entryFrame bool) string {
 		t.Helper()
 		args := []string{"scripts/lg-compile"}
 		if entryFrame {
@@ -46,59 +51,81 @@ func TestLgCompileEntryFrameOptIn(t *testing.T) {
 	}
 
 	pkgRel := filepath.Join("app", "app.go")
+	bridgeRel := filepath.Join("app", "native_entry.go")
 
-	t.Run("no flag → no main.go", func(t *testing.T) {
+	mustAbsent := func(t *testing.T, path string) {
+		t.Helper()
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s should be absent; err=%v", path, err)
+		}
+	}
+	mustPresent := func(t *testing.T, path string) []byte {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("%s missing: %v", path, err)
+		}
+		return b
+	}
+
+	t.Run("no flag + private entry → no main.go, no bridge", func(t *testing.T) {
+		src := writeSrc(t, "(ns app)\n(defn- -main [] 1)\n")
 		outDir := t.TempDir()
-		log := runCompile(t, outDir, false)
-		if _, err := os.Stat(filepath.Join(outDir, "main.go")); !os.IsNotExist(err) {
-			t.Fatalf("main.go should be absent without --entry-frame; err=%v", err)
-		}
-		if _, err := os.Stat(filepath.Join(outDir, pkgRel)); err != nil {
-			t.Fatalf("expected lowered package %s: %v", pkgRel, err)
-		}
-		if !strings.Contains(log, "fns lowered; native entry:") {
-			t.Fatalf("expected summary line without frame emission; log:\n%s", log)
-		}
-		if strings.Contains(log, "native-entry frame ->") {
-			t.Fatalf("must not report frame emission without --entry-frame; log:\n%s", log)
+		log := runCompile(t, outDir, src, false)
+		mustAbsent(t, filepath.Join(outDir, "main.go"))
+		mustAbsent(t, filepath.Join(outDir, bridgeRel))
+		mustPresent(t, filepath.Join(outDir, pkgRel))
+		if strings.Contains(log, "native-entry frame ->") || strings.Contains(log, "native-entry bridge ->") {
+			t.Fatalf("must not report frame/bridge emission without --entry-frame; log:\n%s", log)
 		}
 	})
 
-	t.Run("flag → exactly one frame", func(t *testing.T) {
+	t.Run("flag + public entry → one main.go, no bridge", func(t *testing.T) {
+		src := writeSrc(t, "(ns app)\n(defn -main [] 1)\n")
 		outDir := t.TempDir()
-		log := runCompile(t, outDir, true)
-		mainPath := filepath.Join(outDir, "main.go")
-		body, err := os.ReadFile(mainPath)
-		if err != nil {
-			t.Fatalf("main.go missing with --entry-frame: %v\n%s", err, log)
-		}
-		src := string(body)
-		if !strings.Contains(src, "package main") {
-			t.Fatalf("frame missing package main:\n%s", src)
-		}
-		if c := strings.Count(src, "func main()"); c != 1 {
+		log := runCompile(t, outDir, src, true)
+		mainBody := string(mustPresent(t, filepath.Join(outDir, "main.go")))
+		mustAbsent(t, filepath.Join(outDir, bridgeRel))
+		if c := strings.Count(mainBody, "func main()"); c != 1 {
 			t.Fatalf("want exactly one func main(), got %d", c)
 		}
 		if !strings.Contains(log, "native-entry frame ->") {
 			t.Fatalf("expected frame emission log; got:\n%s", log)
 		}
+		if strings.Contains(log, "native-entry bridge ->") {
+			t.Fatalf("public entry must not emit a bridge; log:\n%s", log)
+		}
 	})
 
-	t.Run("package lowering identical in both modes", func(t *testing.T) {
+	t.Run("flag + private entry → one main.go, one bridge", func(t *testing.T) {
+		src := writeSrc(t, "(ns app)\n(defn- -main [] 1)\n")
+		outDir := t.TempDir()
+		log := runCompile(t, outDir, src, true)
+		mainBody := string(mustPresent(t, filepath.Join(outDir, "main.go")))
+		bridgeBody := string(mustPresent(t, filepath.Join(outDir, bridgeRel)))
+		if c := strings.Count(mainBody, "func main()"); c != 1 {
+			t.Fatalf("want exactly one func main(), got %d", c)
+		}
+		if c := strings.Count(bridgeBody, "func NativeMain("); c != 1 {
+			t.Fatalf("want exactly one NativeMain, got %d\n%s", c, bridgeBody)
+		}
+		if !strings.Contains(log, "native-entry frame ->") || !strings.Contains(log, "native-entry bridge ->") {
+			t.Fatalf("expected frame + bridge emission logs; got:\n%s", log)
+		}
+	})
+
+	t.Run("package lowering identical excluding bridge", func(t *testing.T) {
+		src := writeSrc(t, "(ns app)\n(defn- -main [] 1)\n")
 		outA := t.TempDir()
 		outB := t.TempDir()
-		runCompile(t, outA, false)
-		runCompile(t, outB, true)
-		a, err := os.ReadFile(filepath.Join(outA, pkgRel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, err := os.ReadFile(filepath.Join(outB, pkgRel))
-		if err != nil {
-			t.Fatal(err)
-		}
+		runCompile(t, outA, src, false)
+		runCompile(t, outB, src, true)
+		a := mustPresent(t, filepath.Join(outA, pkgRel))
+		b := mustPresent(t, filepath.Join(outB, pkgRel))
 		if string(a) != string(b) {
 			t.Fatalf("lowered package differed with/without --entry-frame\n--- no flag ---\n%s\n--- flag ---\n%s", a, b)
 		}
+		mustAbsent(t, filepath.Join(outA, bridgeRel))
+		mustPresent(t, filepath.Join(outB, bridgeRel))
 	})
 }

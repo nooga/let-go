@@ -176,6 +176,14 @@
     ;; Direct path must not re-publish args after load.
     (is (= 1 (count (re-seq #"SetCommandLineArgs" src))))))
 
+(deftest typed-no-error-none-omits-unused-vm-import
+  (let [raw (ef/find-program-entry '[(defn -main [] 0)])
+        e   (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
+                                        :needs-error? false :arity 0}})
+        src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/app"})]
+    (is (str/includes? src "\tprog.Main(ec)\n"))
+    (is (not (str/includes? src "github.com/nooga/let-go/pkg/vm")))))
+
 (deftest vm-fallback-is-namespace-qualified
   (testing "fallback call passes the owning namespace, not a bare name"
     (let [raw (ef/find-program-entry '[(defn -main [] 1)])
