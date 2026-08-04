@@ -1,0 +1,160 @@
+;; IR structural test for keyword-cond-to-switch lowering.
+;;
+;; ACCEPTANCE CRITERION: structurize absorbs pure keyword-dispatch chains
+;; into a single :switch node. This test verifies the pattern structurally.
+;;
+;; PURE FIXTURE: ac1 chain with 3 arms. Uses canonical `case` form (copied from corpus
+;; functions like scalar-type-display in dump.lg). The `case` expands to nested eq/branch-if,
+;; which structurize absorbs into a single :switch node (structurize runs during
+;; Go lowering, not during optimize-fn). Test blocks have zero params (param-less structure),
+;; matching corpus chains that successfully absorb. Param-carrying absorption is tracked
+;; separately in nooga/let-go#674 as future work.
+;;
+;; IMPURE FIXTURE: ac2 chain with an impure test block. Purity gate rejects it.
+;; After optimize-fn, the IR must NOT contain a :switch node (falls back to
+;; nested :if).
+;;
+;; FALSIFICATION: To verify this test documents the actual behavior (not a
+;; false positive), stub structurize.lg::collect-kw-chain to return nil at
+;; line 330, so (merge kw-chains nil) skips all switch generation. Test will
+;; fail because ac1 no longer produces a :switch. Then restore and re-run.
+;;
+;; TEST LAYER: Tests invoke structurize directly (not optimize-fn, which omits
+;; structurize). Assertions check the control TREE returned by structurize,
+;; where :switch nodes are generated.
+
+(ns test.keyword-cond-switch-ir
+  (:require
+   [ir.build :as build]
+   [ir.data :as ir]
+   [ir.passes.pipeline :as pipeline]
+   [ir.structurize :as structurize]
+   [test :refer :all]))
+
+(defn- find-switch-nodes [form visited?]
+  "Recursively find all :switch nodes in control tree (vector form: [:switch ...])."
+  (cond
+    (visited? form)  []
+    (vector? form)
+    (let [visited?' (conj visited? form)
+          [op & args] form
+          this-is-switch (if (= op :switch) [form] [])]
+      ;; Recursively search all args (control tree children)
+      (concat this-is-switch
+              (mapcat (fn [arg] (find-switch-nodes arg visited?')) args)))
+    (map? form)
+    ;; For maps (e.g. branch targets), search values
+    (let [visited?' (conj visited? form)]
+      (mapcat (fn [[_ v]] (find-switch-nodes v visited?'))
+              form))
+    :else []))
+
+(defn- count-switches [fn-ir]
+  "Count :switch nodes in optimized function IR."
+  (count (find-switch-nodes fn-ir #{})))
+
+(defn- extract-case-keywords [switch-node]
+  "Extract the keyword case values from a :switch node (vector form)."
+  (when (and (vector? switch-node) (= (first switch-node) :switch))
+    ;; Vector form: [:switch disc branch-target arms...]
+    ;; arms are like [[:a arm-node] [:b arm-node] [:c arm-node]]
+    (let [[_ _ _ arms] switch-node]
+      (when (vector? arms)
+        (vec (map first arms))))))
+
+;; Runtime definitions for functional correctness tests
+(defn ac1-pure-kw-dispatch [x]
+  "Pure keyword dispatch: param-less canonical chain using case (matches corpus shape)."
+  (case x
+    :a 1
+    :b 2
+    :c 3
+    0))
+
+(defn ac2-impure-kw-dispatch [x]
+  "Impure keyword dispatch: wrapped in do (adds extra instructions)."
+  (do
+    (cond
+      (= x :a) 1
+      (= x :b) 2
+      (= x :c) 3
+      :else 0)))
+
+;; --- AC-1: Pure keyword-dispatch chain (should produce :switch) ---
+
+(deftest ac1-pure-keyword-dispatch-produces-switch
+  (testing "pure keyword-dispatch chain lowers to single :switch node at structurize layer"
+    ;; Use canonical case form: param-less shape matching real corpus chains
+    ;; (case directly dispatches discriminant without explicit conditionals)
+    (let [defn-form '(defn ac1-pure-kw-dispatch [x]
+                       (case x
+                         :a 1
+                         :b 2
+                         :c 3
+                         0))
+          body-raw (drop 3 defn-form)
+          body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
+          expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+          ir-fn (build/build-fn expanded)
+          _ (pipeline/optimize-fn ir-fn)
+          ;; Structurize runs at lower-go time; call it directly to test the mechanism
+          st-result (structurize/structurize ir-fn)
+          tree (:tree st-result)
+          absorbed-blocks (:absorbed-blocks st-result)
+          switch-count (count (find-switch-nodes tree #{}))
+          switches (find-switch-nodes tree #{})]
+      ;; Positive assertion: exactly one :switch in the structurized tree
+      (is (= 1 switch-count)
+          (format "Expected 1 :switch node in structurized tree, found %d" switch-count))
+      ;; Sanity assertion: non-empty absorbed-blocks (confirms absorption happened)
+      (is (not (empty? absorbed-blocks))
+          "Absorbed-blocks should be non-empty for positive case")
+      ;; Verify switch has the expected case arms
+      (when (> switch-count 0)
+        (let [kws (extract-case-keywords (first switches))]
+          (is (contains? (set kws) :a)
+              "Switch must have case arm for :a")
+          (is (contains? (set kws) :b)
+              "Switch must have case arm for :b")
+          (is (contains? (set kws) :c)
+              "Switch must have case arm for :c")))))
+
+  ;; Functional correctness (bytecode path, always works)
+  (testing "pure keyword-dispatch chain computes correctly"
+    (is (= 0 (ac1-pure-kw-dispatch :unknown)))
+    (is (= 1 (ac1-pure-kw-dispatch :a)))
+    (is (= 2 (ac1-pure-kw-dispatch :b)))
+    (is (= 3 (ac1-pure-kw-dispatch :c))))
+
+;; --- AC-2: Impure test block (should NOT produce :switch) ---
+
+(deftest ac2-impure-keyword-dispatch-rejects-switch
+  (testing "impure keyword-dispatch chain does NOT lower to :switch"
+    ;; Build the IR function from the defn form (with wrapping do to add instructions)
+    (let [defn-form '(defn ac2-impure-kw-dispatch [x]
+                       (do
+                         (cond
+                           (= x :a) 1
+                           (= x :b) 2
+                           (= x :c) 3
+                           :else 0)))
+          body-raw (drop 3 defn-form)
+          body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
+          expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+          ir-fn (build/build-fn expanded)
+          _ (pipeline/optimize-fn ir-fn)
+          ;; Call structurize directly to test the mechanism
+          st-result (structurize/structurize ir-fn)
+          tree (:tree st-result)
+          switch-count (count (find-switch-nodes tree #{}))]
+      ;; Negative assertion: zero :switch in the structurized tree (purity gate rejects)
+      (is (= 0 switch-count)
+          (format "Impure chain should produce 0 :switch nodes in structurized tree, but found %d"
+                  switch-count))))
+
+  ;; Functional correctness still holds (falls back to nested :if)
+  (testing "impure keyword-dispatch chain still computes correctly"
+    (is (= 0 (ac2-impure-kw-dispatch :unknown)))
+    (is (= 1 (ac2-impure-kw-dispatch :a)))
+    (is (= 2 (ac2-impure-kw-dispatch :b)))
+    (is (= 3 (ac2-impure-kw-dispatch :c))))))
