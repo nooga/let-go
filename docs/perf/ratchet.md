@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-03
+last-verified: 2026-08-04
 authoritative-for:
   - benchmark-ratchet
 human-verified:
@@ -121,39 +121,40 @@ Finer control on either phase:
 go run ./cmd/bench-ratchet -budget 0.10 check                # 10% budget
 go run ./cmd/bench-ratchet -filter '^BenchmarkIR' check      # subset
 go run ./cmd/bench-ratchet -count 3 -benchtime 2s update     # rigorous
-go run ./cmd/bench-ratchet -baseline docs/perf/historical/v1.12.2.json check
-                                                             # vs v1.12.2
+go run ./cmd/bench-ratchet -baseline docs/perf/historical/v1.8.0.json check
+                                                             # vs v1.8.0
 ```
 
 ### Seeding from CI
 
 The active baseline is seeded from CI timeline snapshots via the `seed-baseline`
-command. This generates a dual-anchor baseline (§ [Dual-Anchor Baseline
-Architecture](#dual-anchor-baseline-architecture)) by merging release-point and
-incremental measurements:
+command. This generates a baseline by selecting the newest amd64 snapshot per
+machine key and merging with any existing local M3 profile:
 
 ```sh
 # Fetch the perf-data branch containing timeline snapshots
 git fetch origin perf-data
 
-# Seed the baseline from release v1.12.2 and the newest coherent SHA
+# Seed the baseline from amd64 profiles (preserving local M3)
 bench-ratchet -perf-data-dir <perf-data-root>/timeline \
-  -release-sha 9c9a3d636c4e \
   -baseline docs/perf/baseline.json \
   seed-baseline
 ```
 
 The command:
 - Scans the timeline directory for snapshot files named `TIMESTAMP-SHORTSHA-MACHINE.json`
-- Identifies the release-anchor SHA (v1.12.2 at 9c9a3d636c4e) and reads snapshots for all machine tiers
-- Identifies the newest coherent SHA (all target machine tiers present) and reads its snapshots
-- Merges samples from both into a single baseline where:
-  - `captured_at_sha` points to the incremental (newest)
-  - Benchmark `samples` arrays contain measurements from both release and incremental
-  - The baseline is reproducible across runs (idempotent)
+- Filters to amd64 machines only (per #651 decision: amd64-only initial seed)
+- Selects the newest snapshot independently per explicit machine key
+- Preserves any existing arm64/Apple M3 profile for local developer gating
+- Excludes the six unstable b.N=1 BenchmarkClojureTestSuite* variants (too noisy to ratchet)
+- Merges into a single baseline where `captured_at_sha` points to the incremental SHA
+
+The `-release-sha` flag is not required for `seed-baseline`; the baseline gates against
+the incremental SHA (newest) for real-time drift tracking. Future work (#597, separate)
+will backfill per-tier v1.8.0 release-reference snapshots.
 
 This approach makes the baseline auditable (provenance is in git history), CI-sourced
-(no local machine capture noise), and aligned with the release cadence.
+(no local machine capture noise), and reproducible across runs (idempotent).
 
 ## Streaming visibility
 
@@ -287,51 +288,40 @@ The anchor's absolute `ns_per_op` between baseline and current is
 printed at the top of every `check` report. If it has drifted a lot,
 the ratio comparison is on shakier ground.
 
-## Dual-Anchor Baseline Architecture
+## Baseline seeding and machine-key selection
 
-The active `docs/perf/baseline.json` uses a dual-anchor system that provides
-both stable release-point reference comparisons and continuous drift tracking:
+The active `docs/perf/baseline.json` is seeded from CI timeline snapshots and
+gates against the incremental (newest) snapshot for real-time drift tracking:
 
-- **Release anchors** (stable reference): Baseline entries are seeded from
-  the most recent release (v1.12.2 at commit 9c9a3d636c4e), providing a
-  durable "are we better/worse than the last release?" comparison point.
-  These measurements are captured once at release time and archived in the
-  baseline's sample history.
+- **amd64 profiles**: Seeded from the newest snapshot per explicit amd64 machine
+  key (e.g. AMD EPYC 7763, 9V74, etc.) to survive runner rotation and provide
+  a coarse gate on amd64 systems where runner noise is <5% within a capture.
 
-- **Per-merged-SHA incrementals** (drift tracking): The baseline also includes
-  the newest coherent snapshot (all target machine tiers) from the CI timeline,
-  feeding real-time drift monitoring between releases. The `captured_at_sha`
-  field points to this incremental entry, representing the "current" state
-  for ratchet comparisons.
+- **arm64/Apple M3**: Preserved from any existing local baseline, allowing M3
+  developers to gate against a machine-specific baseline without CI noise.
 
-The two anchor classes coexist in the same `baseline.json` via the `samples`
-field: benchmark measurements from both the release and the incremental are
-retained and indexed by `captured_at_sha` and timestamp, enabling reviewers to
-track both inter-release change and intra-release drift simultaneously.
+- **arm64/Apple M1 (Virtual)**: Deliberately excluded (per #651) because CI
+  runner noise (27.2% of entries) is too high for reliable ratcheting; reverts
+  to deterministic-only gating at `main.go:427`.
+
+The `captured_at_sha` field in each machine entry points to the incremental SHA,
+representing the "current" state for `make bench-ratchet check` comparisons.
 
 The `bench-ratchet seed-baseline` command (§ [Seeding from CI](#seeding-from-ci))
-merges timeline snapshots from the perf-data branch to populate both classes at
-once, making the baseline reproducible, auditable, and independent of local
-machine captures.
+selects and merges timeline snapshots from the perf-data branch, making the
+baseline reproducible, auditable, and independent of local machine captures.
 
-## The baseline starts at v1.12.2
+## Current baseline: amd64-seeded with M3 fallback
 
-The active `docs/perf/baseline.json` is initialized by seeding from
-`docs/perf/historical/v1.12.2.json` via the CI timeline. This means `make
-bench-ratchet` asks "how does the current code compare to the v1.12.2 release?",
-not "to whatever main looked like yesterday." A regression bar anchored to a
-release is meaningful; one anchored to yesterday's main just tracks noise.
+The active `docs/perf/baseline.json` is seeded from CI timeline snapshots via
+`seed-baseline`, with amd64 as the primary machine tier and the existing local
+M3 profile (arm64/Apple M3) preserved for local developer gating. This means
+`make bench-ratchet` gates against the most recent successful amd64 build in
+CI, providing a durable, reproducible baseline free of local machine noise.
 
-Two consequences:
-
-- Some current benchmarks (e.g. `BenchmarkRatchetAnchor` itself,
-  `BenchmarkIRPipelineCompile`) didn't exist at v1.8.0. They'll be
-  flagged **NEW** in every check, which is informational, not a
-  regression. Once they've matured into "things we want to gate on,"
-  do a deliberate `update` to lift them into the bar.
-- Some v1.8.0 benchmarks may have been renamed or removed. They'll
-  appear as **MISSING**. Same treatment — `update` clears them
-  out of the comparison once you confirm the removal was intentional.
+A future release-reference baseline (#597, separate) will backfill v1.8.0
+reference snapshots for each machine tier to answer "how do we compare to the
+last release?"; that work will coexist with the current drift-tracking baseline.
 
 ## Updating the baseline (the ratchet)
 

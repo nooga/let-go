@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/perfdata"
@@ -317,7 +318,7 @@ func TestJobsSelectScope(t *testing.T) {
 	}
 }
 
-func TestSeedBaselineCreatesValidDualAnchor(t *testing.T) {
+func TestSeedBaselineAmd64OnlyPreservesM3(t *testing.T) {
 	// Create a temporary directory with mock timeline snapshots.
 	tmpDir := t.TempDir()
 	timelineDir := filepath.Join(tmpDir, "timeline")
@@ -325,24 +326,24 @@ func TestSeedBaselineCreatesValidDualAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create mock baselines for two SHAs and two machine types.
-	createMockSnapshot := func(filename string, sha, timestamp, machine string) {
+	// Create mock baselines for amd64 and arm64 machines.
+	createMockSnapshot := func(filename string, sha, timestamp, arch, machine string) {
 		baseline := Baseline{
 			Version: schemaVersion,
 			Machines: map[string]MachineBaseline{
 				perfdata.MachineKey(Machine{
-					OS:        "darwin",
-					Arch:      "arm64",
-					NumCPU:    3,
+					OS:        "linux",
+					Arch:      arch,
+					NumCPU:    16,
 					CPUModel:  machine,
 					GoVersion: "go1.26.4",
 				}): {
 					CapturedAt:    timestamp,
 					CapturedAtSHA: sha,
 					Machine: Machine{
-						OS:        "darwin",
-						Arch:      "arm64",
-						NumCPU:    3,
+						OS:        "linux",
+						Arch:      arch,
+						NumCPU:    16,
 						CPUModel:  machine,
 						GoVersion: "go1.26.4",
 					},
@@ -363,6 +364,14 @@ func TestSeedBaselineCreatesValidDualAnchor(t *testing.T) {
 								{NSPerOp: 100, CapturedAt: timestamp},
 							},
 						},
+						// Unstable benchmark that should be filtered out
+						"github.com/nooga/let-go/test.BenchmarkClojureTestSuite": {
+							NSPerOp:       5000,
+							RatioToAnchor: 3333.0,
+							Samples: []BenchmarkSample{
+								{NSPerOp: 5000, CapturedAt: timestamp},
+							},
+						},
 					},
 				},
 			},
@@ -376,20 +385,66 @@ func TestSeedBaselineCreatesValidDualAnchor(t *testing.T) {
 		}
 	}
 
-	// Create snapshots: release anchor at sha1, incremental at sha2.
-	// Need 2+ machine types per SHA for "complete coverage".
-	createMockSnapshot("20260720T221533Z-9c9a3d636c4e-apple-m1-virtual.json",
-		"9c9a3d636c4e", "2026-07-20T22:15:33Z", "Apple M1 (Virtual)")
-	createMockSnapshot("20260720T221533Z-9c9a3d636c4e-apple-m2-virtual.json",
-		"9c9a3d636c4e", "2026-07-20T22:15:33Z", "Apple M2 (Virtual)")
-	createMockSnapshot("20260801T010134Z-b170a08eef47-apple-m1-virtual.json",
-		"b170a08eef47", "2026-08-01T01:01:34Z", "Apple M1 (Virtual)")
-	createMockSnapshot("20260801T010134Z-b170a08eef47-apple-m2-virtual.json",
-		"b170a08eef47", "2026-08-01T01:01:34Z", "Apple M2 (Virtual)")
+	// Create amd64 snapshots (should be seeded)
+	createMockSnapshot("20260801T010134Z-b170a08eef47-amd64-amd-epyc-7763.json",
+		"b170a08eef47", "2026-08-01T01:01:34Z", "amd64", "AMD EPYC 7763")
+
+	// Create arm64 snapshots (should be ignored per #651)
+	createMockSnapshot("20260801T010134Z-b170a08eef47-arm64-apple-m1-virtual.json",
+		"b170a08eef47", "2026-08-01T01:01:34Z", "arm64", "Apple M1 (Virtual)")
+
+	// Create existing baseline with M3 profile to be preserved
+	existingBaseline := Baseline{
+		Version: schemaVersion,
+		Machines: map[string]MachineBaseline{
+			perfdata.MachineKey(Machine{
+				OS:        "darwin",
+				Arch:      "arm64",
+				NumCPU:    8,
+				CPUModel:  "Apple M3",
+				GoVersion: "go1.26.4",
+			}): {
+				CapturedAt:    "2026-06-01T00:00:00Z",
+				CapturedAtSHA: "oldsha123",
+				Machine: Machine{
+					OS:        "darwin",
+					Arch:      "arm64",
+					NumCPU:    8,
+					CPUModel:  "Apple M3",
+					GoVersion: "go1.26.4",
+				},
+				Anchor: AnchorRecord{
+					Name:       anchorName,
+					Package:    anchorPackage,
+					NSPerOp:    1.2,
+					Iterations: 1000000000,
+					Samples: []BenchmarkSample{
+						{Iterations: 1000000000, NSPerOp: 1.2, CapturedAt: "2026-06-01T00:00:00Z"},
+					},
+				},
+				Benchmarks: map[string]BenchmarkEntry{
+					"test.BenchmarkA": {
+						NSPerOp:       90,
+						RatioToAnchor: 75.0,
+						Samples: []BenchmarkSample{
+							{NSPerOp: 90, CapturedAt: "2026-06-01T00:00:00Z"},
+						},
+					},
+				},
+			},
+		},
+	}
+	existingData, err := json.Marshal(existingBaseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineFile := filepath.Join(tmpDir, "baseline.json")
+	if err := os.WriteFile(baselineFile, existingData, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Run seed-baseline.
-	baselineFile := filepath.Join(tmpDir, "baseline.json")
-	seedBaseline(baselineFile, timelineDir, "9c9a3d636c4e")
+	seedBaseline(baselineFile, timelineDir, "unused-release-sha")
 
 	// Verify the output.
 	data, err := os.ReadFile(baselineFile)
@@ -406,27 +461,42 @@ func TestSeedBaselineCreatesValidDualAnchor(t *testing.T) {
 		t.Errorf("version = %d, want %d", result.Version, schemaVersion)
 	}
 
-	// Verify we have machine profiles (2 from the test data).
+	// Should have 2 machines: amd64 (from perf-data) + M3 (preserved)
 	if len(result.Machines) != 2 {
-		t.Errorf("machines = %d, want 2", len(result.Machines))
+		t.Errorf("machines = %d, want 2 (amd64 + M3)", len(result.Machines))
 	}
 
-	// Verify the machine baseline has merged samples.
-	for _, mb := range result.Machines {
-		// Should have captured_at_sha pointing to incremental.
-		if mb.CapturedAtSHA != "b170a08eef47" {
-			t.Errorf("captured_at_sha = %q, want b170a08eef47", mb.CapturedAtSHA)
+	// Verify amd64 machine is present and unstable benchmark is filtered
+	hasAmd64 := false
+	for key, mb := range result.Machines {
+		if strings.Contains(key, "amd64") || strings.Contains(mb.Machine.CPUModel, "EPYC") {
+			hasAmd64 = true
+			// Verify unstable benchmark is filtered out
+			if _, ok := mb.Benchmarks["github.com/nooga/let-go/test.BenchmarkClojureTestSuite"]; ok {
+				t.Error("unstable BenchmarkClojureTestSuite should be filtered out")
+			}
+			// Verify stable benchmark is kept
+			if _, ok := mb.Benchmarks["test.BenchmarkA"]; !ok {
+				t.Error("stable benchmark test.BenchmarkA should be kept")
+			}
 		}
-		// Should have merged anchor samples (2 total: 1 from incremental + 1 from release).
-		if len(mb.Anchor.Samples) != 2 {
-			t.Errorf("anchor samples = %d, want 2", len(mb.Anchor.Samples))
+	}
+	if !hasAmd64 {
+		t.Error("amd64 machine not found in merged baseline")
+	}
+
+	// Verify M3 profile is preserved
+	hasM3 := false
+	for key, mb := range result.Machines {
+		if strings.Contains(key, "apple-m3") || strings.Contains(mb.Machine.CPUModel, "M3") {
+			hasM3 = true
+			// M3 should retain its old data
+			if mb.CapturedAtSHA != "oldsha123" {
+				t.Errorf("M3 captured_at_sha changed; want oldsha123, got %q", mb.CapturedAtSHA)
+			}
 		}
-		// Should have the benchmark with merged samples.
-		entry, ok := mb.Benchmarks["test.BenchmarkA"]
-		if !ok {
-			t.Error("benchmark test.BenchmarkA not found")
-		} else if len(entry.Samples) != 2 {
-			t.Errorf("benchmark samples = %d, want 2", len(entry.Samples))
-		}
+	}
+	if !hasM3 {
+		t.Error("M3 profile should be preserved")
 	}
 }

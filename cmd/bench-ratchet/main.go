@@ -194,7 +194,6 @@ func main() {
 		profile      = flag.String("profile", "", "named benchmark profile (e.g. 'pr-fast'). Mutually exclusive with -packages/-filter/-full. Sets the job list plus default count/benchtime/budget; explicit flags still override.")
 		wasm         = flag.Bool("wasm", false, "run benchmarks under GOOS=js/wasm via the go_js_wasm_exec shim (Node), reporting the machine as js/wasm. Forces -tags off (the wasm bundle ships the bytecode VM, not the lowered-Go path). Slower and noisier than native; for the wasm A/B gate.")
 		perfDataDir  = flag.String("perf-data-dir", "", "seed-baseline only: directory containing perf-data timeline snapshots (e.g., /path/to/perf-data/timeline)")
-		releaseSHA   = flag.String("release-sha", "", "seed-baseline only: release commit SHA (e.g., 9c9a3d636c4e) for release-anchor baseline entries")
 	)
 	flag.Parse()
 
@@ -232,19 +231,15 @@ func main() {
 		return
 	}
 
-	// seed-baseline: merge perf-data timeline snapshots into a dual-anchor
-	// baseline. Requires -perf-data-dir (path to timeline directory) and
-	// -release-sha (release commit, e.g. 9c9a3d636c4e). Seeds release-anchor
-	// entries at the release SHA and per-merged-SHA incremental entries at the
-	// newest coherent SHA (all target machine tiers present).
+	// seed-baseline: seed the baseline from perf-data timeline snapshots per #651.
+	// Filters to amd64-only (per #651 decision), preserves existing M3 profile,
+	// selects newest snapshot per explicit machine key, and excludes six unstable
+	// b.N=1 BenchmarkClojureTestSuite* variants.
 	if mode == "seed-baseline" {
 		if *perfDataDir == "" {
 			die("seed-baseline requires -perf-data-dir <path>")
 		}
-		if *releaseSHA == "" {
-			die("seed-baseline requires -release-sha <sha>")
-		}
-		seedBaseline(*baselinePath, *perfDataDir, *releaseSHA)
+		seedBaseline(*baselinePath, *perfDataDir, "")
 		return
 	}
 
@@ -1856,11 +1851,11 @@ func formatWallMD(ns float64) string {
 	}
 }
 
-// seedBaseline merges perf-data timeline snapshots into a dual-anchor baseline.
-// Release-anchor entries are seeded from the release SHA; per-merged-SHA
-// incremental entries are seeded from the newest coherent SHA with complete
-// machine coverage. Both classes coexist in the final baseline.json.
-func seedBaseline(baselinePath, perfDataDir, releaseSHA string) {
+// seedBaseline seeds the baseline from perf-data timeline snapshots per #651.
+// Implements decision: amd64-only initial seed, preserve existing M3 profile,
+// select newest snapshot independently per explicit machine key.
+// Excludes the six unstable b.N=1 BenchmarkClojureTestSuite* variants.
+func seedBaseline(baselinePath, perfDataDir, _ string) {
 	// Read timeline snapshots from perfDataDir
 	baselineFiles, err := filepath.Glob(filepath.Join(perfDataDir, "*.json"))
 	if err != nil {
@@ -1873,19 +1868,15 @@ func seedBaseline(baselinePath, perfDataDir, releaseSHA string) {
 	// Parse filenames to extract SHAs and machine info.
 	// Timeline format: TIMESTAMP-SHORTSHA-MACHINE.json
 	var files []timelineFile
-	shaSet := make(map[string]bool)
-
 	for _, f := range baselineFiles {
 		base := filepath.Base(f)
-		// Expected format: 20260720T221533Z-9c9a3d636c4e-arm64-apple-m1-virtual.json
 		parts := strings.Split(base, "-")
 		if len(parts) < 3 {
-			continue // skip malformed files
+			continue
 		}
 		ts := parts[0]  // 20260720T221533Z
 		sha := parts[1] // 9c9a3d636c4e (shortened)
 		machine := strings.TrimSuffix(strings.Join(parts[2:], "-"), ".json")
-		shaSet[sha] = true
 		files = append(files, timelineFile{
 			path:      f,
 			sha:       sha,
@@ -1894,104 +1885,90 @@ func seedBaseline(baselinePath, perfDataDir, releaseSHA string) {
 		})
 	}
 
-	// Find which SHAs have complete coverage (both target machine tiers).
-	// Count unique machines per SHA.
-	machinesPerSHA := make(map[string]map[string]bool)
+	// Filter to amd64 machines only (per #651: amd64-only initial seed)
+	var amd64Files []timelineFile
 	for _, f := range files {
-		if machinesPerSHA[f.sha] == nil {
-			machinesPerSHA[f.sha] = make(map[string]bool)
-		}
-		machinesPerSHA[f.sha][f.machine] = true
-	}
-
-	// Identify coherent SHAs (have snapshots for both major machine classes).
-	// For now, assume we need at least 2 different machine profiles.
-	var coherentSHAs []string
-	for sha, machines := range machinesPerSHA {
-		if len(machines) >= 2 {
-			coherentSHAs = append(coherentSHAs, sha)
+		if strings.HasPrefix(f.machine, "amd64-") {
+			amd64Files = append(amd64Files, f)
 		}
 	}
 
-	if len(coherentSHAs) == 0 {
-		die("no SHAs with complete machine coverage found in %s", perfDataDir)
+	if len(amd64Files) == 0 {
+		die("no amd64 machine snapshots found in %s", perfDataDir)
 	}
 
-	// Sort coherent SHAs by timestamp descending to find the newest.
-	sort.Slice(coherentSHAs, func(i, j int) bool {
-		// Find the most recent timestamp for each SHA
-		timeI, timeJ := "", ""
-		for _, f := range files {
-			if f.sha == coherentSHAs[i] && (timeI == "" || f.timestamp > timeI) {
-				timeI = f.timestamp
-			}
-			if f.sha == coherentSHAs[j] && (timeJ == "" || f.timestamp > timeJ) {
-				timeJ = f.timestamp
+	// Find newest snapshot per explicit machine key (#651 decision).
+	// newestPerKey[machineKey] = (sha, timestamp, path)
+	type snapshotInfo struct {
+		sha       string
+		timestamp string
+		path      string
+	}
+	newestPerKey := make(map[string]snapshotInfo)
+	for _, f := range amd64Files {
+		key := f.machine // Explicit key from filename (e.g. "amd64-amd-epyc-7763")
+		if info, exists := newestPerKey[key]; !exists || f.timestamp > info.timestamp {
+			newestPerKey[key] = snapshotInfo{
+				sha:       f.sha,
+				timestamp: f.timestamp,
+				path:      f.path,
 			}
 		}
-		return timeI > timeJ // descending (newest first)
-	})
+	}
 
-	newestCoherentSHA := coherentSHAs[0]
-
-	// Read baseline files for the release SHA (release-anchor class).
 	fmt.Printf("bench-ratchet: seed-baseline from %s\n", perfDataDir)
-	fmt.Printf("  release-anchor SHA: %s\n", releaseSHA)
-	fmt.Printf("  incremental SHA: %s\n", newestCoherentSHA)
+	fmt.Printf("  amd64 machines: %d profiles\n", len(newestPerKey))
 
-	releaseBaselines := readTimelinesForSHA(files, releaseSHA)
-	incrementalBaselines := readTimelinesForSHA(files, newestCoherentSHA)
-
-	if len(releaseBaselines) == 0 {
-		die("no snapshots found for release SHA %s", releaseSHA)
+	// Read existing baseline to preserve M3 profile
+	var existingBaseline Baseline
+	existingM3 := make(map[string]MachineBaseline) // M3 entries to preserve
+	if data, err := os.ReadFile(baselinePath); err == nil {
+		if err := json.Unmarshal(data, &existingBaseline); err == nil {
+			// Extract M3 entries (arm64/Apple M3 variant)
+			for key, mb := range existingBaseline.Machines {
+				if strings.Contains(key, "apple-m3") || strings.Contains(mb.Machine.CPUModel, "M3") {
+					existingM3[key] = mb
+					fmt.Printf("  preserved M3: %s\n", key)
+				}
+			}
+		}
 	}
-	if len(incrementalBaselines) == 0 {
-		die("no snapshots found for newest coherent SHA %s", newestCoherentSHA)
-	}
 
-	// Merge all baselines into one with both anchor classes.
-	// Strategy: Use incremental (newest) as primary, but merge samples and
-	// benchmarks to show both release-anchor and drift-tracking history.
+	// Read amd64 snapshots and filter out unstable benchmarks
 	merged := Baseline{
 		Version:  schemaVersion,
 		Machines: make(map[string]MachineBaseline),
 	}
 
-	// Build a map of baselines by machine key for easy lookup.
-	releaseByMachine := make(map[string]MachineBaseline)
-	for _, mb := range releaseBaselines {
-		key := perfdata.MachineKey(mb.Machine)
-		releaseByMachine[key] = mb
-	}
-
-	// For each incremental entry, merge with corresponding release entry.
-	for _, incMB := range incrementalBaselines {
-		key := perfdata.MachineKey(incMB.Machine)
-		mb := incMB // Start with incremental as primary
-
-		// If we have a release anchor for this machine, merge samples and benchmarks.
-		if relMB, ok := releaseByMachine[key]; ok {
-			// Merge anchor samples: incremental primary + release samples.
-			mb.Anchor.Samples = append(mb.Anchor.Samples, relMB.Anchor.Samples...)
-
-			// Merge benchmarks: for each benchmark, combine samples from both.
-			for benchName, relEntry := range relMB.Benchmarks {
-				if incEntry, ok := mb.Benchmarks[benchName]; ok {
-					// Benchmark in both: merge samples, keep incremental as primary.
-					incEntry.Samples = append(incEntry.Samples, relEntry.Samples...)
-					mb.Benchmarks[benchName] = incEntry
-				} else {
-					// Benchmark only in release: include it for reference.
-					mb.Benchmarks[benchName] = relEntry
-				}
-			}
+	for machineKey, info := range newestPerKey {
+		data, err := os.ReadFile(info.path)
+		if err != nil {
+			die("read timeline snapshot %s: %v", info.path, err)
 		}
 
-		mb.CapturedAt = mb.Anchor.Samples[0].CapturedAt
+		var baseline Baseline
+		if err := json.Unmarshal(data, &baseline); err != nil {
+			die("parse timeline snapshot %s: %v", info.path, err)
+		}
+
+		if len(baseline.Machines) == 0 {
+			continue
+		}
+
+		for _, mb := range baseline.Machines {
+			// Filter out the six unstable benchmarks (b.N=1 suite variants)
+			mb = filterUnstableBenchmarks(mb)
+			merged.Machines[perfdata.MachineKey(mb.Machine)] = mb
+			fmt.Printf("  added: %s (SHA: %s)\n", machineKey, info.sha)
+		}
+	}
+
+	// Merge with existing M3 profile
+	for key, mb := range existingM3 {
 		merged.Machines[key] = mb
 	}
 
-	// Write the merged baseline.
+	// Write the merged baseline
 	if err := writeBaseline(baselinePath, merged); err != nil {
 		die("write baseline: %v", err)
 	}
@@ -1999,42 +1976,36 @@ func seedBaseline(baselinePath, perfDataDir, releaseSHA string) {
 		baselinePath, len(merged.Machines))
 }
 
-// readTimelinesForSHA reads all timeline baseline files for a specific SHA.
-func readTimelinesForSHA(files []timelineFile, sha string) []MachineBaseline {
-	var results []MachineBaseline
-	seen := make(map[string]bool) // Track which machines we've already seen for this SHA
+// filterUnstableBenchmarks removes the six unstable b.N=1 suite benchmarks.
+// Per #651: BenchmarkClojureTestSuite and BenchmarkClojureTestSuiteCompileAndRun
+// (each under bytecode, ir_bytecode, aot_native variants) are too noisy to ratchet.
+func filterUnstableBenchmarks(mb MachineBaseline) MachineBaseline {
+	if mb.Benchmarks == nil {
+		return mb
+	}
 
-	for _, f := range files {
-		if f.sha != sha {
-			continue
-		}
-		// Skip duplicates (prefer the most recent one).
-		if seen[f.machine] {
-			continue
-		}
-		seen[f.machine] = true
+	unstableNames := map[string]bool{
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuite":              true,
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun": true,
+	}
 
-		// Read the baseline file.
-		data, err := os.ReadFile(f.path)
-		if err != nil {
-			die("read timeline snapshot %s: %v", f.path, err)
+	filtered := make(map[string]BenchmarkEntry)
+	for name, entry := range mb.Benchmarks {
+		// Check if this benchmark is one of the unstable variants
+		isUnstable := false
+		for unstable := range unstableNames {
+			if strings.HasPrefix(name, unstable) {
+				isUnstable = true
+				break
+			}
 		}
-
-		var baseline Baseline
-		if err := json.Unmarshal(data, &baseline); err != nil {
-			die("parse timeline snapshot %s: %v", f.path, err)
-		}
-
-		// Extract the single machine baseline from the snapshot.
-		if len(baseline.Machines) == 0 {
-			continue
-		}
-		for _, mb := range baseline.Machines {
-			results = append(results, mb)
+		if !isUnstable {
+			filtered[name] = entry
 		}
 	}
 
-	return results
+	mb.Benchmarks = filtered
+	return mb
 }
 
 func die(format string, args ...any) {
