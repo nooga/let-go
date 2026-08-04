@@ -732,7 +732,7 @@ func cCallVariadic(fnV, argsV vm.Value) (vm.Value, error) {
 		return vm.NIL, err
 	}
 	if len(argVals) == 0 {
-		return vm.NIL, fmt.Errorf("gogen/call-variadic: need at least one arg to mark with ...")
+		return vm.NIL, fmt.Errorf("gogen/call-variadic: need at least one arg to mark with ellipsis")
 	}
 	args := make([]ast.Expr, 0, len(argVals))
 	for i, av := range argVals {
