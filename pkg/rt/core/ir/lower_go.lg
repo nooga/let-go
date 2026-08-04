@@ -3247,6 +3247,9 @@
         ;; discriminant (→ sentinel → default), reproducing `cond` semantics.
         :switch
         (let [[bid disc arms last-et default-node cont-node] args
+              ;; :absorbed-arg-subst is inert forward-scaffolding for #674 (block arg renaming).
+              ;; Structurize does not yet populate it; this map allows the lowering to consume
+              ;; substitutions once structurize is extended to produce them.
               subst (or (:absorbed-arg-subst (deref f)) {})]
           (when-let [inst-stmts (block-inst-stmts f closed-exprs bid)]
             (let [g-expr (value-expr f closed-exprs disc)

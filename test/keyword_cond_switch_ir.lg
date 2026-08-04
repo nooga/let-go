@@ -124,20 +124,18 @@
     (is (= 0 (ac1-pure-kw-dispatch :unknown)))
     (is (= 1 (ac1-pure-kw-dispatch :a)))
     (is (= 2 (ac1-pure-kw-dispatch :b)))
-    (is (= 3 (ac1-pure-kw-dispatch :c))))
+    (is (= 3 (ac1-pure-kw-dispatch :c)))))
 
 ;; --- AC-2: Impure test block (should NOT produce :switch) ---
 
 (deftest ac2-impure-keyword-dispatch-rejects-switch
   (testing "impure keyword-dispatch chain does NOT lower to :switch"
-    ;; Build the IR function from the defn form (with wrapping do to add instructions)
+    ;; Build the IR function from the defn form (with side-effecting form in test position)
     (let [defn-form '(defn ac2-impure-kw-dispatch [x]
-                       (do
-                         (cond
-                           (= x :a) 1
-                           (= x :b) 2
-                           (= x :c) 3
-                           :else 0)))
+                       (if (= x :a) 1
+                           (do (println "checking-b-side-effect")
+                               (if (= x :b) 2
+                                   (if (= x :c) 3 0)))))
           body-raw (drop 3 defn-form)
           body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
           expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
@@ -157,4 +155,49 @@
     (is (= 0 (ac2-impure-kw-dispatch :unknown)))
     (is (= 1 (ac2-impure-kw-dispatch :a)))
     (is (= 2 (ac2-impure-kw-dispatch :b)))
-    (is (= 3 (ac2-impure-kw-dispatch :c))))))
+    (is (= 3 (ac2-impure-kw-dispatch :c)))))
+
+;; --- Nooga's sidefx-chain repro: verifies side effects are not silently dropped ---
+;; This repro ensures the gate properly rejects blocks with side-effecting instructions
+;; in the test position. Without the fix, println would vanish in the Go switch output.
+
+(defn sidefx-chain [x]
+  (if (= x :a) 1
+      (do (println "checking-b-side-effect")
+          (if (= x :b) 2
+              (if (= x :c) 3 0)))))
+
+(deftest ac3-sidefx-chain-preserves-side-effects
+  (testing "keyword-chain with side-effect in test position preserves side effect"
+    ;; Build the IR function from the repro form
+    (let [defn-form '(defn sidefx-chain [x]
+                       (if (= x :a) 1
+                           (do (println "checking-b-side-effect")
+                               (if (= x :b) 2
+                                   (if (= x :c) 3 0)))))
+          body-raw (drop 3 defn-form)
+          body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
+          expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+          ir-fn (build/build-fn expanded)
+          _ (pipeline/optimize-fn ir-fn)
+          ;; Call structurize directly to test the mechanism
+          st-result (structurize/structurize ir-fn)
+          tree (:tree st-result)
+          switch-count (count (find-switch-nodes tree #{}))]
+      ;; Negative assertion: the side effect should cause rejection of absorption
+      ;; (falls back to nested :if instead of :switch)
+      (is (= 0 switch-count)
+          (format "Sidefx-chain should produce 0 :switch nodes, but found %d"
+                  switch-count))))
+
+  ;; Functional correctness: the side effect MUST still happen
+  (testing "sidefx-chain executes side effect and computes correctly"
+    ;; Capture output to verify println happens
+    (let [output (with-out-str
+                   (is (= 1 (sidefx-chain :a)))
+                   (is (= 2 (sidefx-chain :b)))
+                   (is (= 3 (sidefx-chain :c)))
+                   (is (= 0 (sidefx-chain :unknown))))]
+      ;; Verify side effect ran: println should have produced output
+      (is (not (empty? output))
+          (format "Side effect (println) must execute; output was: %q" output))))

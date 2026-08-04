@@ -264,12 +264,35 @@
                       (and ak (not bk)) [(sz-canonical-disc f b) ak]
                       :else nil)))))))))))
 
+(defn- test-block-pure-eq-only? [f tb]
+  ;; Check that a test block contains ONLY const and :eq instructions, no side effects.
+  ;; A block is safe for absorption iff:
+  ;; 1. It has zero block params
+  ;; 2. All instructions are :const (loading literals)
+  ;; 3. The only non-const instruction is a single :eq comparison
+  ;; 4. The terminator is :branch-if referencing that :eq
+  ;; If any other instructions exist (function calls, side effects, etc.), reject.
+  (when (empty? (ir/block-params tb f))
+    (let [insts (ir/block-insts tb f)
+          term (ir/block-term tb f)
+          eq-insts (filter (fn [i] (= :eq (ir/op i f))) insts)
+          const-insts (filter (fn [i] (= :const (ir/op i f))) insts)
+          other-insts (filter (fn [i]
+                                (let [op (ir/op i f)]
+                                  (and (not= :eq op) (not= :const op))))
+                              insts)]
+      ;; Reject if there are non-const/eq instructions (side effects)
+      ;; or if there are zero or multiple :eq instructions
+      (and (empty? other-insts)
+           (= 1 (count eq-insts))
+           (= :branch-if (ir/op term f))))))
+
 (defn- kw-chain-zero-params-shape? [f chain]
   ;; Maximally conservative gate: chain is absorbable ONLY IF every absorbed
-  ;; test block has ZERO block params. No other checks, no uses-analysis —
-  ;; when in doubt, reject (nested :if fallback is always sound).
+  ;; test block has ZERO block params and contains ONLY const+eq instructions.
+  ;; No other checks, no uses-analysis — when in doubt, reject (nested :if fallback is always sound).
   (every? (fn [tb]
-            (empty? (ir/block-params tb f)))
+            (test-block-pure-eq-only? f tb))
           (:test-blocks chain)))
 
 (defn- collect-kw-chain [f b0]
@@ -383,8 +406,11 @@
             ;; Collect instructions from absorbed test blocks
             (doseq [tb (:test-blocks chain)]
               (swap! (:absorbed-blocks ctx) conj tb)
+              ;; Only mark const and :eq instructions as absorbed, not arbitrary instructions
               (doseq [inst (ir/block-insts tb f)]
-                (swap! (:absorbed-insts ctx) conj inst))
+                (let [op (ir/op inst f)]
+                  (when (or (= :const op) (= :eq op))
+                    (swap! (:absorbed-insts ctx) conj inst))))
               (when-let [term (ir/block-term tb f)]
                 (swap! (:absorbed-insts ctx) conj term)
                 ;; Also add the eq instruction (first ref of branch-if)

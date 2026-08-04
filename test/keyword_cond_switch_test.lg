@@ -3,20 +3,12 @@
 ;; AC-2: Non-keyword discriminants still take the default arm (no false positives)
 (ns test.keyword-cond-switch-test
   (:require
-   [disasm :as d]
    [ir.passes.pipeline]
    [test :refer :all]))
 
-(defn- ops-of [f]
-  "Opcode keywords of f's chunk, in order."
-  (map first (d/disassemble-resolved f)))
-
-(defn- count-op [f op]
-  "Count occurrences of an opcode in f's chunk."
-  (count (filter (fn [o] (= o op)) (ops-of f))))
-
 ;; --- AC-1: Keyword dispatch chain -----------
 (set! *ir-compile* true)
+(set! *target* :go)
 
 (defn ac1-keyword-dispatch [dispatch]
   (if (= dispatch :a) 1
@@ -25,6 +17,7 @@
               0))))
 
 (set! *ir-compile* false)
+(set! *target* :bytecode)
 
 (deftest ac1-keyword-dispatch-chain
   (testing "keyword-dispatch chain compiles correctly"
@@ -35,6 +28,7 @@
 
 ;; --- AC-2: Non-keyword dispatch chain (should NOT use switch) -----------
 (set! *ir-compile* true)
+(set! *target* :go)
 
 (defn ac2-non-keyword-dispatch [x]
   (if (= x :a) 1
@@ -43,6 +37,7 @@
               0))))
 
 (set! *ir-compile* false)
+(set! *target* :bytecode)
 
 (deftest ac2-non-keyword-dispatch-chain
   (testing "non-keyword dispatch chain compiles correctly"
