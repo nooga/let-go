@@ -1,9 +1,14 @@
-;; hash — non-cryptographic hash utilities.
+;; hash — hash utilities, non-cryptographic and cryptographic.
 ;;
-;; Currently exposes 64-bit xxh3 (https://github.com/zeebo/xxh3) via the
-;; raw `xxh3` namespace registered by lginterop.  The user-facing API
-;; lives here so the friendly names (`xxh3-64`, `xxh3-hasher`) and the
-;; stateful-hasher record shape are written in let-go, not Go.
+;; Exposes 64-bit xxh3 (https://github.com/zeebo/xxh3) via the raw `xxh3`
+;; namespace registered by lginterop.  The user-facing API lives here so
+;; the friendly names (`xxh3-64`, `xxh3-hasher`) and the stateful-hasher
+;; record shape are written in let-go, not Go.
+;;
+;; The cryptographic digests `sha1` and `sha256` are defined in Go
+;; (pkg/rt/hash_sha.go) and seeded into this namespace before this file
+;; loads — `(hash/sha1 s)` / `(hash/sha256 s)` return the lowercase hex
+;; digest of the string's bytes, matching `sha1sum` / `sha256sum`.
 (ns hash)
 
 ;; One-shot hashes — keyword bytes or a string in, uint64 out.
