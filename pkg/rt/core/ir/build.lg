@@ -1532,6 +1532,17 @@
         forms (if (map? (first forms)) (next forms) forms)]
     [(first forms) (rest forms)]))
 
+(defn declared-return-type [form]
+  "The lattice type declared by a defn's return hint — `(defn f ^long [n] …)`
+   — or nil when there is no hint, or the hint is not one lowering has a native
+   type for. Reuses the same tag decoding as param hints, so the two positions
+   accept exactly the same set (^long/^int → :int, ^double/^float → :float).
+   Public so the lowering pipeline can seed typeinfer with it (#599); the tag
+   itself lives on the arity vector's metadata, which unwrap-arity-vector drops."
+  (let [raw-args (nth (parse-defn-args-body form) 0)]
+    (when (return-hinted-arity-vector? raw-args)
+      (tag->arg-type (hinted-tag raw-args)))))
+
 (defn build-fn [defn-form]
   "Build an IR Function from a (defn name [args] body...) or
    multi-arity (defn name ([args] body...) ([args2] body2...)) form.
