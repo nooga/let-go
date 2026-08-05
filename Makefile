@@ -166,7 +166,13 @@ $(LG-PROFILE): $(GO) $(ROOT-GO-FILES) pkg/**/* pkg/rt/core_compiled.lgb
 # They are testing.Short()-gated and run full in dedicated CI jobs
 # (.github/workflows/go.yml "Expensive lowering e2e" + the gogen-diff job), so
 # the local `make test` loop stays fast without losing CI coverage.
+
+.PHONY: test-gogen-diff-gate
+test-gogen-diff-gate:
+	@scripts/test-gogen-diff-short.sh
+
 test: pkg/**/* pkg/rt/core_compiled.lgb $(GO)
+	@scripts/test-gogen-diff-short.sh
 	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -short -count=1 -v ./test/...
 
 clojure-compat-report: $(GO)
@@ -234,16 +240,16 @@ check-selfhost: lowered $(GO)
 #   LETGO_AOT_REDERIVE=1 go test -run TestGogenAOTDiff -count=1 ./test/e2e/
 .PHONY: gogen-diff
 gogen-diff: parity-gate-phase1
-	go test -run TestGogenAOTDiff -count=1 -v ./test/e2e/
+	go test -short=false -run TestGogenAOTDiff -count=1 -v ./test/e2e/
 
 # Parity gate: Phase 1 — Tier-1 fixtures (genuine AOT, both backends pass strict mode and agree).
 # This is the baseline gate; all 10 Tier-1 fixtures must remain in parity.
 # Two-sided shrink-only ratchet: new divergence fails, stale allowlist entries fail.
 # Re-seed allowlists (after a reviewed change) with:
-#   LETGO_PARITY_REDERIVE=1 go test -run TestParityGatePhase1 -count=1 ./test/e2e/
+#   LETGO_PARITY_REDERIVE=1 go test -short=false -run TestParityGatePhase1 -count=1 ./test/e2e/
 .PHONY: parity-gate-phase1
 parity-gate-phase1: lowered $(GO)
-	go test -run TestParityGatePhase1 -count=1 -v ./test/e2e/
+	go test -short=false -run TestParityGatePhase1 -count=1 -v ./test/e2e/
 
 # Strict-mode audit: classify all 16 test/gold-aot fixtures under *ir-compile-strict*.
 # Tier 1: both backends pass strict and agree (counts toward parity)

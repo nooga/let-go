@@ -9,7 +9,6 @@ package e2e
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -104,23 +103,22 @@ func TestParityRederiveWritesBothAllowlists(t *testing.T) {
 	if !rederiveParityXfails(t, root, map[string]bool{"z.lg": true, "a.lg": true}) {
 		t.Fatal("rederive mode was not activated")
 	}
+	want := "# Shrink-only allowlist of Tier-1 fixtures that currently DIVERGE\n" +
+		"# between bytecode and -tags gogen_ir engines.\n" +
+		"# Managed by TestParityGatePhase1: re-seed with `LETGO_PARITY_REDERIVE=1 go test -short=false -run TestParityGatePhase1 ./test/e2e`.\n" +
+		"# A new divergence fails CI; a listed fixture that now agrees also fails (shrink-only).\n" +
+		"# When committing an allowlist update, include the specific issue/fix in the reason comment.\n\n" +
+		"a.lg\n" +
+		"z.lg\n"
 	for _, name := range []string{"parity-xfail-bytecode.txt", "parity-xfail-gogen.txt"} {
-		got := readParityXfail(t, filepath.Join(root, "test", name))
-		if len(got) != 2 || !got["a.lg"] || !got["z.lg"] {
-			t.Fatalf("%s = %v; want sorted rederived divergence set", name, got)
+		path := filepath.Join(root, "test", name)
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-}
-
-func TestGogenDiffPresubmitIncludesStrictParityGate(t *testing.T) {
-	cmd := exec.Command("make", "-n", "gogen-diff")
-	cmd.Dir = repoRoot(t)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("dry-run make gogen-diff: %v\n%s", err, out)
-	}
-	if !strings.Contains(string(out), "TestParityGatePhase1") {
-		t.Fatalf("make gogen-diff does not invoke the strict parity gate:\n%s", out)
+		if string(got) != want {
+			t.Fatalf("%s bytes = %q; want byte-exact sorted output %q", name, got, want)
+		}
 	}
 }
 
@@ -305,7 +303,7 @@ func writeParityXfail(t *testing.T, path string, diverged map[string]bool) {
 	var b strings.Builder
 	b.WriteString("# Shrink-only allowlist of Tier-1 fixtures that currently DIVERGE\n")
 	b.WriteString("# between bytecode and -tags gogen_ir engines.\n")
-	b.WriteString("# Managed by TestParityGatePhase1: re-seed with `LETGO_PARITY_REDERIVE=1 go test -run TestParityGatePhase1 ./test/e2e`.\n")
+	b.WriteString("# Managed by TestParityGatePhase1: re-seed with `LETGO_PARITY_REDERIVE=1 go test -short=false -run TestParityGatePhase1 ./test/e2e`.\n")
 	b.WriteString("# A new divergence fails CI; a listed fixture that now agrees also fails (shrink-only).\n")
 	b.WriteString("# When committing an allowlist update, include the specific issue/fix in the reason comment.\n\n")
 	for _, n := range names {
