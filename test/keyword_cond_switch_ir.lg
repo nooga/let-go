@@ -192,12 +192,11 @@
 
   ;; Functional correctness: the side effect MUST still happen
   (testing "sidefx-chain executes side effect and computes correctly"
-    ;; Capture output to verify println happens
-    (let [output (with-out-str
-                   (is (= 1 (sidefx-chain :a)))
-                   (is (= 2 (sidefx-chain :b)))
-                   (is (= 3 (sidefx-chain :c)))
-                   (is (= 0 (sidefx-chain :unknown))))]
-      ;; Verify side effect ran: println should have produced output
-      (is (not (empty? output))
-          (format "Side effect (println) must execute; output was: %q" output))))
+    (is (= 1 (sidefx-chain :a)))
+    (is (= 2 (sidefx-chain :b)))
+    (is (= 3 (sidefx-chain :c)))
+    (is (= 0 (sidefx-chain :unknown)))
+    ;; Capture one side-effecting path without capturing `is` reporter output.
+    (let [output (with-out-str (sidefx-chain :b))]
+      (is (= "checking-b-side-effect\n" output)
+          (format "Expected exact side-effect output; output was: %q" output)))))

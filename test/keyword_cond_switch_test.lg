@@ -7,17 +7,13 @@
    [test :refer :all]))
 
 ;; --- AC-1: Keyword dispatch chain -----------
-(set! *ir-compile* true)
-(set! *target* :go)
-
-(defn ac1-keyword-dispatch [dispatch]
-  (if (= dispatch :a) 1
-      (if (= dispatch :b) 2
-          (if (= dispatch :c) 3
-              0))))
-
-(set! *ir-compile* false)
-(set! *target* :bytecode)
+(binding [*ir-compile* true
+          ir.passes.pipeline/*target* :go]
+  (defn ac1-keyword-dispatch [dispatch]
+    (if (= dispatch :a) 1
+        (if (= dispatch :b) 2
+            (if (= dispatch :c) 3
+                0)))))
 
 (deftest ac1-keyword-dispatch-chain
   (testing "keyword-dispatch chain compiles correctly"
@@ -27,17 +23,13 @@
     (is (= 3 (ac1-keyword-dispatch :c)))))
 
 ;; --- AC-2: Non-keyword dispatch chain (should NOT use switch) -----------
-(set! *ir-compile* true)
-(set! *target* :go)
-
-(defn ac2-non-keyword-dispatch [x]
-  (if (= x :a) 1
-      (if (= x :b) 2
-          (if (= x :c) 3
-              0))))
-
-(set! *ir-compile* false)
-(set! *target* :bytecode)
+(binding [*ir-compile* true
+          ir.passes.pipeline/*target* :go]
+  (defn ac2-non-keyword-dispatch [x]
+    (if (= x :a) 1
+        (if (= x :b) 2
+            (if (= x :c) 3
+                0)))))
 
 (deftest ac2-non-keyword-dispatch-chain
   (testing "non-keyword dispatch chain compiles correctly"

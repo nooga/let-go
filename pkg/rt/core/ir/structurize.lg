@@ -276,7 +276,6 @@
     (let [insts (ir/block-insts tb f)
           term (ir/block-term tb f)
           eq-insts (filter (fn [i] (= :eq (ir/op i f))) insts)
-          const-insts (filter (fn [i] (= :const (ir/op i f))) insts)
           other-insts (filter (fn [i]
                                 (let [op (ir/op i f)]
                                   (and (not= :eq op) (not= :const op))))
