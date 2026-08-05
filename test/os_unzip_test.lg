@@ -1,0 +1,52 @@
+;; os/unzip extracts a zip archive into a destination directory.
+;;
+;; The fixture is embedded as base64 rather than checked in as a binary
+;; blob: `test/` is otherwise all text, and (io/decode :base64 …) returns a
+;; raw byte string that spit writes verbatim. It holds two entries —
+;; `top.txt` and `greeting/hello.txt` — so both a flat entry and a nested
+;; one are covered. The zip-slip and symlink guards are exercised in
+;; pkg/rt/os_unzip_test.go, which can build adversarial archives.
+(ns test.os-unzip-test
+  (:require [test :refer :all]))
+
+(def fixture-b64
+  (str "UEsDBBQACAAAAAAAIVwAAAAAAAAAAAAAAAAHAAkAdG9wLnR4dFVUBQABALlVaXRvcCBsZXZlbApQ"
+       "SwcIz6cu+woAAAAKAAAAUEsDBBQACAAAAAAAIVwAAAAAAAAAAAAAAAASAAkAZ3JlZXRpbmcvaGVs"
+       "bG8udHh0VVQFAAEAuVVpaGVsbG8gZnJvbSBhIHppcApQSwcINYcATBEAAAARAAAAUEsBAhQDFAAI"
+       "AAAAAAAhXM+nLvsKAAAACgAAAAcACQAAAAAAAAAAAKSBAAAAAHRvcC50eHRVVAUAAQC5VWlQSwEC"
+       "FAMUAAgAAAAAACFcNYcATBEAAAARAAAAEgAJAAAAAAAAAAAApIFIAAAAZ3JlZXRpbmcvaGVsbG8u"
+       "dHh0VVQFAAEAuVVpUEsFBgAAAAACAAIAhwAAAKIAAAAAAA=="))
+
+(def zip-path "/tmp/let-go-unzip-test.zip")
+(def dest-dir "/tmp/let-go-unzip-test-out")
+
+(deftest unzip-extracts-archive
+  (spit zip-path (io/decode :base64 fixture-b64))
+
+  (testing "returns the destination directory"
+    (is (= dest-dir (os/unzip zip-path dest-dir))))
+
+  (testing "extracts a top-level entry"
+    (is (= "top level\n" (slurp (str dest-dir "/top.txt")))))
+
+  (testing "extracts a nested entry, creating its parent directory"
+    (is (= "hello from a zip\n" (slurp (str dest-dir "/greeting/hello.txt"))))
+    (is (:dir? (os/stat (str dest-dir "/greeting")))))
+
+  (testing "extracting twice overwrites cleanly"
+    (spit (str dest-dir "/top.txt") "clobbered by the test")
+    (os/unzip zip-path dest-dir)
+    (is (= "top level\n" (slurp (str dest-dir "/top.txt")))))
+
+  (delete-file (str dest-dir "/top.txt"))
+  (delete-file (str dest-dir "/greeting/hello.txt"))
+  (delete-file (str dest-dir "/greeting"))
+  (delete-file dest-dir)
+  (delete-file zip-path))
+
+(deftest unzip-reports-a-missing-archive
+  ;; let-go has no thrown? — use try/catch directly.
+  (testing "a missing archive throws"
+    (is (= :threw (try (os/unzip "/tmp/let-go-no-such-archive.zip" dest-dir)
+                       :no-throw
+                       (catch _ :threw))))))

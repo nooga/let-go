@@ -8,12 +8,15 @@
 package rt
 
 import (
+	"archive/zip"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -262,6 +265,28 @@ func installOsNS() {
 		return vm.Int(port), nil
 	}))
 
+	// os/unzip — (os/unzip zip-path dest-dir) → dest-dir
+	// Extracts a zip archive into dest-dir, creating it if missing and
+	// overwriting existing files. Entries that would land outside dest-dir
+	// are refused (see unzipEntryTarget); symlink entries are skipped.
+	ns.Def("unzip", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("os/unzip expects 2 args")
+		}
+		src, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/unzip expected String path")
+		}
+		dest, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/unzip expected String destination")
+		}
+		if err := unzipTo(string(src), string(dest)); err != nil {
+			return vm.NIL, err
+		}
+		return vs[1], nil
+	}))
+
 	// os/os-name — (os/os-name) → "linux", "darwin", "windows", ...
 	ns.Def("os-name", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.String(runtime.GOOS), nil
@@ -302,6 +327,167 @@ func lineSeparator() string {
 		return "\r\n"
 	}
 	return "\n"
+}
+
+// unzipTo extracts src into dest.
+//
+// Every write goes through an os.Root confined to dest, so an entry can
+// neither escape lexically ("../evil.txt") nor through a symlink that already
+// exists inside dest ("link/x" where dest/link points elsewhere). os.Root
+// enforces containment while it walks each path component, which a
+// check-then-write guard fundamentally cannot: another process sharing dest
+// could swap a validated directory for a symlink in the window between the
+// check and the write.
+//
+// Fidelity is traded for safety besides: symlink entries and other
+// non-regular entries (devices, fifos, sockets) are skipped rather than
+// recreated. Permissions follow the unzip(1) contract — as recorded in the
+// entry, masked by the process umask.
+func unzipTo(src, dest string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	for _, f := range r.File {
+		mode := f.Mode()
+		if mode&os.ModeSymlink != 0 {
+			continue
+		}
+		// Zip names are always slash-separated, whatever the host.
+		name := filepath.Clean(filepath.FromSlash(f.Name))
+		if name == "." {
+			continue
+		}
+		if f.FileInfo().IsDir() {
+			err = unzipDir(root, name, unzipDirPerm(f))
+		} else if mode.IsRegular() {
+			err = unzipFile(root, f, name)
+		} else {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("os/unzip: %s: %w", f.Name, err)
+		}
+	}
+	return nil
+}
+
+// unzipEntryPerm reads the permissions a zip entry records for itself. Zip
+// keeps unix permissions in the high 16 bits of the external attributes; a
+// DOS/FAT-style writer leaves them empty and archive/zip synthesizes 0666,
+// which under a permissive umask would land world-writable files on disk. So
+// distinguish "recorded" from "synthesized" here and let callers pick their
+// own default for the latter.
+func unzipEntryPerm(f *zip.File) (os.FileMode, bool) {
+	if unix := f.ExternalAttrs >> 16; unix != 0 {
+		if perm := os.FileMode(unix).Perm(); perm != 0 {
+			return perm, true
+		}
+	}
+	return 0, false
+}
+
+// unzipFilePerm is the mode to create a file entry with — as recorded (this
+// is what carries the executable bit), else 0644.
+func unzipFilePerm(f *zip.File) os.FileMode {
+	if perm, ok := unzipEntryPerm(f); ok {
+		return perm
+	}
+	return 0o644
+}
+
+// unzipDirPerm is the mode to create a directory entry with. Owner rwx is
+// forced on: a read-only directory entry listed before the files it contains
+// would otherwise make the rest of the archive unextractable.
+func unzipDirPerm(f *zip.File) os.FileMode {
+	if perm, ok := unzipEntryPerm(f); ok {
+		return perm | 0o700
+	}
+	return 0o755
+}
+
+// unzipParents creates name's parent directories inside root.
+func unzipParents(root *os.Root, name string) error {
+	parent := filepath.Dir(name)
+	if parent == "." || parent == string(filepath.Separator) {
+		return nil
+	}
+	return root.MkdirAll(parent, 0o755)
+}
+
+// unzipDir materialises an explicit directory entry. A directory created
+// earlier as some file's implicit parent keeps the 0755 it got then — only a
+// freshly created one carries the entry's recorded mode.
+func unzipDir(root *os.Root, name string, perm os.FileMode) error {
+	if err := unzipParents(root, name); err != nil {
+		return err
+	}
+	err := root.Mkdir(name, perm)
+	if err == nil || !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	// "Already exists" is only benign when what exists is itself a directory.
+	// A plain file (or a symlink) sitting at a directory entry's path is a
+	// genuine conflict — swallowing it would report a successful extraction
+	// while leaving the entry's contents nowhere to go.
+	info, statErr := root.Lstat(name)
+	if statErr != nil {
+		return statErr
+	}
+	if !info.IsDir() {
+		return errors.New("exists and is not a directory")
+	}
+	return nil
+}
+
+// unzipFile writes one regular entry, creating parents as needed.
+func unzipFile(root *os.Root, f *zip.File, name string) error {
+	if err := unzipParents(root, name); err != nil {
+		return err
+	}
+	// Open the entry BEFORE touching the destination: f.Open fails outright
+	// on an unsupported compression method, and destroying a perfectly good
+	// existing file on the way to an error nobody can recover from is worse
+	// than not extracting at all.
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	// Clear whatever is already at the target. Removing rather than
+	// overwriting in place matters twice over: O_CREATE applies its perm
+	// argument only when it creates the file, so an in-place overwrite would
+	// silently keep the old file's mode; and a symlink sitting there would
+	// otherwise be followed (os.Root confines where it may point, but a link
+	// to another path inside dest is legal and would still be written
+	// through).
+	if info, err := root.Lstat(name); err == nil && !info.IsDir() {
+		if err := root.Remove(name); err != nil {
+			return err
+		}
+	}
+
+	out, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, unzipFilePerm(f))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, rc); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func mustWrap(fn func([]vm.Value) (vm.Value, error)) vm.Value {
