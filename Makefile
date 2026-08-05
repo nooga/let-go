@@ -233,7 +233,7 @@ check-selfhost: lowered $(GO)
 # Re-seed the allowlist (after a reviewed change) with:
 #   LETGO_AOT_REDERIVE=1 go test -run TestGogenAOTDiff -count=1 ./test/e2e/
 .PHONY: gogen-diff
-gogen-diff: lowered $(GO)
+gogen-diff: parity-gate-phase1
 	go test -run TestGogenAOTDiff -count=1 -v ./test/e2e/
 
 # Parity gate: Phase 1 — Tier-1 fixtures (genuine AOT, both backends pass strict mode and agree).

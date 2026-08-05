@@ -7,7 +7,9 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -48,6 +50,80 @@ var tier1Fixtures = []string{
 	"var.lg",
 }
 
+func TestClassifyParityResultsSeparatesStrictFailuresFromOutputDivergences(t *testing.T) {
+	results := []ParityResult{
+		{Fixture: "bytecode-strict-fail.lg", BCOutput: "<<runtime-error>>", BCOK: false, AOTOutput: "ok", AOTOK: true},
+		{Fixture: "gogen-strict-fail.lg", BCOutput: "ok", BCOK: true, AOTOutput: "<<runtime-error>>", AOTOK: false},
+		{Fixture: "output-divergence.lg", BCOutput: "bytecode", BCOK: true, AOTOutput: "gogen", AOTOK: true},
+		{Fixture: "agreement.lg", BCOutput: "same", BCOK: true, AOTOutput: "same", AOTOK: true},
+	}
+
+	strictFailures, diverged := classifyParityResults(results)
+	if len(strictFailures) != 2 || !strictFailures["bytecode-strict-fail.lg"] || !strictFailures["gogen-strict-fail.lg"] {
+		t.Fatalf("strict failures = %v; want both execution failures", strictFailures)
+	}
+	if len(diverged) != 1 || !diverged["output-divergence.lg"] {
+		t.Fatalf("output divergences = %v; want only successful-but-different output", diverged)
+	}
+	for name := range strictFailures {
+		if diverged[name] {
+			t.Fatalf("strict failure %s was also classified as allowlistable output divergence", name)
+		}
+	}
+}
+
+func TestStrictFailureRemainsFatalWhenAllowlisted(t *testing.T) {
+	results := []ParityResult{{
+		Fixture: "strict-fail.lg", BCOutput: "<<runtime-error>>", BCOK: false,
+		AOTOutput: "<<runtime-error>>", AOTOK: false,
+	}}
+	allowlisted := map[string]bool{"strict-fail.lg": true}
+
+	errs := validateParityResults(results, allowlisted, allowlisted)
+	foundStrictFailure := false
+	for _, err := range errs {
+		if strings.Contains(err, "STRICT-AOT failure") {
+			foundStrictFailure = true
+		}
+	}
+	if !foundStrictFailure {
+		t.Fatalf("allowlisted strict failure produced errors %v; want unconditional STRICT-AOT failure", errs)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("strict failure was also processed as an allowlist divergence: %v", errs)
+	}
+}
+
+func TestParityRederiveWritesBothAllowlists(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(parityRederiveEnv, "1")
+
+	if !rederiveParityXfails(t, root, map[string]bool{"z.lg": true, "a.lg": true}) {
+		t.Fatal("rederive mode was not activated")
+	}
+	for _, name := range []string{"parity-xfail-bytecode.txt", "parity-xfail-gogen.txt"} {
+		got := readParityXfail(t, filepath.Join(root, "test", name))
+		if len(got) != 2 || !got["a.lg"] || !got["z.lg"] {
+			t.Fatalf("%s = %v; want sorted rederived divergence set", name, got)
+		}
+	}
+}
+
+func TestGogenDiffPresubmitIncludesStrictParityGate(t *testing.T) {
+	cmd := exec.Command("make", "-n", "gogen-diff")
+	cmd.Dir = repoRoot(t)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run make gogen-diff: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "TestParityGatePhase1") {
+		t.Fatalf("make gogen-diff does not invoke the strict parity gate:\n%s", out)
+	}
+}
+
 // Tier-2 fixtures (fail strict mode; excluded from parity coverage).
 // These fixtures are NOT run in the gate — only Tier-1 counts toward parity.
 var tier2Fixtures = []string{
@@ -60,10 +136,56 @@ var tier2Fixtures = []string{
 }
 
 type ParityResult struct {
-	Fixture string
-	Backend string // "bytecode" or "gogen_ir"
-	Output  string
-	Ok      bool
+	Fixture   string
+	BCOutput  string
+	BCOK      bool
+	AOTOutput string
+	AOTOK     bool
+}
+
+const parityRederiveEnv = "LETGO_PARITY_REDERIVE"
+
+func classifyParityResults(results []ParityResult) (strictFailures, diverged map[string]bool) {
+	strictFailures = map[string]bool{}
+	diverged = map[string]bool{}
+	for _, result := range results {
+		if !result.BCOK || !result.AOTOK {
+			strictFailures[result.Fixture] = true
+			continue
+		}
+		if result.BCOutput != result.AOTOutput {
+			diverged[result.Fixture] = true
+		}
+	}
+	return strictFailures, diverged
+}
+
+func validateParityResults(results []ParityResult, bcXfail, aotXfail map[string]bool) []string {
+	strictFailures, diverged := classifyParityResults(results)
+	var errs []string
+	for _, result := range results {
+		if strictFailures[result.Fixture] {
+			errs = append(errs, fmt.Sprintf(
+				"STRICT-AOT failure for Tier-1 fixture %s: bytecode_ok=%v gogen_ir_ok=%v; strict failures cannot be allowlisted",
+				result.Fixture, result.BCOK, result.AOTOK))
+		}
+	}
+	for name := range diverged {
+		if !bcXfail[name] && !aotXfail[name] {
+			errs = append(errs, fmt.Sprintf("NEW backend parity output divergence: %s (not in allowlists)", name))
+		}
+	}
+	for name := range bcXfail {
+		if !strictFailures[name] && !diverged[name] {
+			errs = append(errs, fmt.Sprintf("%s is in test/parity-xfail-bytecode.txt but now AGREES — remove it (shrink-only ratchet)", name))
+		}
+	}
+	for name := range aotXfail {
+		if !strictFailures[name] && !diverged[name] {
+			errs = append(errs, fmt.Sprintf("%s is in test/parity-xfail-gogen.txt but now AGREES — remove it (shrink-only ratchet)", name))
+		}
+	}
+	return errs
 }
 
 func TestParityGatePhase1(t *testing.T) {
@@ -93,60 +215,61 @@ func TestParityGatePhase1(t *testing.T) {
 		wrappedFixtures[name] = wrappedPath
 	}
 
-	// Run tier-1 fixtures on both backends
-	diverged := map[string]bool{}
+	// Run tier-1 fixtures on both backends.
+	results := make([]ParityResult, 0, len(tier1Fixtures))
 	for _, name := range tier1Fixtures {
 		wrappedPath := wrappedFixtures[name]
 		bcOut, bcOk := runFixture(bc, wrappedPath)
 		aotOut, aotOk := runFixture(aot, wrappedPath)
+		results = append(results, ParityResult{
+			Fixture: name, BCOutput: bcOut, BCOK: bcOk, AOTOutput: aotOut, AOTOK: aotOk,
+		})
+	}
 
-		// Both should succeed and agree
-		if !bcOk || !aotOk || bcOut != aotOut {
-			diverged[name] = true
-			t.Logf("DIVERGE %s: bc_ok=%v bc_out=%q aot_ok=%v aot_out=%q",
-				name, bcOk, bcOut, aotOk, aotOut)
-		} else {
-			t.Logf("AGREE %s: output=%q", name, bcOut)
+	strictFailures, diverged := classifyParityResults(results)
+	for _, result := range results {
+		switch {
+		case strictFailures[result.Fixture]:
+			t.Logf("STRICT-AOT FAILURE %s: bytecode_ok=%v gogen_ir_ok=%v",
+				result.Fixture, result.BCOK, result.AOTOK)
+		case diverged[result.Fixture]:
+			t.Logf("OUTPUT DIVERGENCE %s: bytecode=%q gogen_ir=%q",
+				result.Fixture, result.BCOutput, result.AOTOutput)
+		default:
+			t.Logf("AGREE %s: output=%q", result.Fixture, result.BCOutput)
 		}
 	}
 
-	// Load per-backend allowlists
-	bcXfail := readParityXfail(t, filepath.Join(root, "test/parity-xfail-bytecode.txt"))
-	aotXfail := readParityXfail(t, filepath.Join(root, "test/parity-xfail-gogen.txt"))
-
-	// Check for regressions: new divergence not on allowlist
-	for name := range diverged {
-		// Check both allowlists (could be in either backend's xfail)
-		bcAllowed := bcXfail[name]
-		aotAllowed := aotXfail[name]
-		if !bcAllowed && !aotAllowed {
-			t.Errorf("NEW backend parity divergence: %s (not in allowlists).\n"+
-				"  A lowering divergence: the fixture runs differently under bytecode vs -tags gogen_ir.\n"+
-				"  Fix the lowering, or — if triaged — add to test/parity-xfail-{bytecode,gogen}.txt\n"+
-				"  and commit with a detailed reason comment.",
-				name)
-		}
+	rederived := rederiveParityXfails(t, root, diverged)
+	var bcXfail, aotXfail map[string]bool
+	if rederived {
+		t.Logf("re-seeded parity allowlists with %d output divergence(s)", len(diverged))
+		bcXfail, aotXfail = diverged, diverged
+	} else {
+		bcXfail = readParityXfail(t, filepath.Join(root, "test/parity-xfail-bytecode.txt"))
+		aotXfail = readParityXfail(t, filepath.Join(root, "test/parity-xfail-gogen.txt"))
 	}
 
-	// Check for stale allowlist entries: allowlisted fixture now agrees
-	for name := range bcXfail {
-		if !diverged[name] {
-			t.Errorf("%s is in test/parity-xfail-bytecode.txt but now AGREES — remove it (shrink-only ratchet).",
-				name)
-		}
-	}
-	for name := range aotXfail {
-		if !diverged[name] {
-			t.Errorf("%s is in test/parity-xfail-gogen.txt but now AGREES — remove it (shrink-only ratchet).",
-				name)
-		}
+	for _, err := range validateParityResults(results, bcXfail, aotXfail) {
+		t.Error(err)
 	}
 
 	t.Logf("\n=== PHASE-1 GATE SUMMARY ===")
 	t.Logf("Tier-1 fixtures tested: %d", len(tier1Fixtures))
 	t.Logf("Divergences detected:   %d", len(diverged))
+	t.Logf("Strict-AOT failures:    %d", len(strictFailures))
 	t.Logf("Bytecode allowlist:     %d entries", len(bcXfail))
 	t.Logf("Gogen_ir allowlist:     %d entries", len(aotXfail))
+}
+
+func rederiveParityXfails(t *testing.T, root string, diverged map[string]bool) bool {
+	t.Helper()
+	if os.Getenv(parityRederiveEnv) != "1" {
+		return false
+	}
+	writeParityXfail(t, filepath.Join(root, "test/parity-xfail-bytecode.txt"), diverged)
+	writeParityXfail(t, filepath.Join(root, "test/parity-xfail-gogen.txt"), diverged)
+	return true
 }
 
 // readParityXfail loads the per-backend allowlist: one fixture base-name per line,
