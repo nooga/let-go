@@ -69,6 +69,10 @@ GO-TEST-ENV := GOMEMLIMIT=$(GOMEMLIMIT)
 GO-TEST-FLAGS := -timeout $(GO-TEST-TIMEOUT)
 
 
+.PHONY: all default run build
+
+all: build
+
 # Start repl by default:
 default:: run
 
@@ -232,6 +236,24 @@ check-selfhost: lowered $(GO)
 gogen-diff: lowered $(GO)
 	go test -run TestGogenAOTDiff -count=1 -v ./test/e2e/
 
+# Parity gate: Phase 1 — Tier-1 fixtures (genuine AOT, both backends pass strict mode and agree).
+# This is the baseline gate; all 10 Tier-1 fixtures must remain in parity.
+# Two-sided shrink-only ratchet: new divergence fails, stale allowlist entries fail.
+# Re-seed allowlists (after a reviewed change) with:
+#   LETGO_PARITY_REDERIVE=1 go test -run TestParityGatePhase1 -count=1 ./test/e2e/
+.PHONY: parity-gate-phase1
+parity-gate-phase1: lowered $(GO)
+	go test -run TestParityGatePhase1 -count=1 -v ./test/e2e/
+
+# Strict-mode audit: classify all 16 test/gold-aot fixtures under *ir-compile-strict*.
+# Tier 1: both backends pass strict and agree (counts toward parity)
+# Tier 2: bytecode fails strict (would trampoline; excluded from parity)
+# Tier 3: diverges (goes to allowlist as known miscompile)
+# Use this to discover which fixtures can be added to parity coverage as AOT capability expands.
+.PHONY: strict-audit
+strict-audit: lowered $(GO)
+	go test -run TestStrictModeAudit -count=1 -v ./test/e2e/
+
 # Default gate (~1 min): the jank suite under BOTH VM variants (bytecode +
 # gogen_ir-lowered) + the calibration anchor. This is what CI runs.
 bench-ratchet: lowered $(GO)
@@ -263,6 +285,8 @@ bench-ratchet-full: lowered $(GO)
 
 bench-ratchet-full-update: lowered $(GO)
 	go run ./cmd/bench-ratchet -full update
+
+.PHONY: clean-lowered clean distclean
 
 clean-lowered:
 	$(RM) -r pkg/rt/core_go_lowered
