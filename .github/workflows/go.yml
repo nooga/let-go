@@ -150,6 +150,31 @@ jobs:
       - name: Build for GOOS=wasip1
         run: GOOS=wasip1 GOARCH=wasm go build -v -o /tmp/lg-wasip1.wasm .
 
+  # Keeps the lg_no_http lane from rotting. Nothing in the default build
+  # exercises pkg/rt/http_stub.go, so without this a change to http.go's
+  # signatures breaks the tagged build silently.
+  no-http-build:
+    name: no-http-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build runtime-only without net/http
+        run: go build -tags lg_no_http -o /tmp/lg-ro-nohttp ./cmd/lg-runtime
+      - name: Boot it
+        run: /tmp/lg-ro-nohttp -v
+      - name: Assert net/http did not link
+        run: |
+          if go tool nm /tmp/lg-ro-nohttp | grep -qE 'net/http|crypto/tls'; then
+            echo "net/http linked into an lg_no_http build" >&2
+            exit 1
+          fi
+
   # Cross-build-and-run guard for the TinyGo WASI target. TinyGo does not
   # implement reflect.Type.Method / reflect.Value.Call, so let-go's boxing path
   # is build-tagged (boxed_reflect_tinygo.go, native_func_tinygo.go) to hand-shim
