@@ -382,6 +382,63 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			}
 		}
 	}
+	// Reused two-arg buffer, shared by every path below: ec.Invoke does not
+	// retain its argument slice, so one buffer per reduce beats one per
+	// element — the single largest allocation site in a reduce loop.
+	fargs := []vm.Value{nil, nil}
+	// ArrayVector fast path: flat slice with O(1) indexing — reduce by
+	// direct index with zero seq/chunk allocation instead of via seqOf.
+	if av, ok := coll.(vm.ArrayVector); ok {
+		var acc vm.Value
+		i := 0
+		if hasInit {
+			acc = initVal
+		} else {
+			acc = av[0]
+			i = 1
+		}
+		for ; i < len(av); i++ {
+			fargs[0] = acc
+			fargs[1] = av[i]
+			res, err := ec.Invoke(mfn, fargs)
+			if err != nil {
+				return vm.NIL, err
+			}
+			if r, ok := res.(*vm.Reduced); ok {
+				return r.Deref(), nil
+			}
+			acc = res
+		}
+		return acc, nil
+	}
+	// Range fast path: a range is (start, end, step) arithmetic — reduce
+	// by direct iteration with zero seq/chunk allocation. Mirrors the
+	// ArrayVector fast path above.
+	if rng, ok := coll.(*vm.Range); ok {
+		start, end, step := rng.Bounds()
+		var acc vm.Value
+		i := start
+		if hasInit {
+			acc = initVal
+		} else {
+			acc = vm.Int(i)
+			i += step
+		}
+		for (step > 0 && i < end) || (step < 0 && i > end) {
+			fargs[0] = acc
+			fargs[1] = vm.Int(i)
+			res, err := ec.Invoke(mfn, fargs)
+			if err != nil {
+				return vm.NIL, err
+			}
+			if r, ok := res.(*vm.Reduced); ok {
+				return r.Deref(), nil
+			}
+			acc = res
+			i += step
+		}
+		return acc, nil
+	}
 	seq, err := seqOf(coll)
 	if err != nil {
 		return vm.NIL, fmt.Errorf("reduce expected Seq")
@@ -415,7 +472,9 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			c := cs.ChunkedFirst()
 			n := c.ChunkCount()
 			for i := 0; i < n; i++ {
-				acc, err = ec.Invoke(mfn, []vm.Value{acc, c.Nth(i)})
+				fargs[0] = acc
+				fargs[1] = c.Nth(i)
+				acc, err = ec.Invoke(mfn, fargs)
 				if err != nil {
 					return vm.NIL, err
 				}
@@ -426,7 +485,9 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			seq = cs.ChunkedNext()
 			continue
 		}
-		acc, err = ec.Invoke(mfn, []vm.Value{acc, seq.First()})
+		fargs[0] = acc
+		fargs[1] = seq.First()
+		acc, err = ec.Invoke(mfn, fargs)
 		if err != nil {
 			return vm.NIL, err
 		}
