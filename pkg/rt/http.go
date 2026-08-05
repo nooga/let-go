@@ -1,4 +1,4 @@
-//go:build !tinygo
+//go:build !tinygo && !lg_no_http
 
 /*
  * Copyright (c) 2022-2026 Marcin Gasperowicz <xnooga@gmail.com>

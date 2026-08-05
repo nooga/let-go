@@ -1,6 +1,14 @@
 ;; Tests for *ir-compile* path with loop/recur forms
 ;; Covers the bytecode compilation of loop/recur, including direct loops,
 ;; loops inside returned closures, and loops with binding shadowing.
+;;
+;; The second half covers FUNCTION-LEVEL recur — `(defn f [..] .. (recur ..))`
+;; with no enclosing loop*. It has its own terminator (:recur-fn) and its own
+;; opcode (OP_RECUR_FN); before #638 it was emitted as :tail-call/OP_TAIL_CALL,
+;; which resolves a callee this terminator does not carry, so a taken back-edge
+;; read an argument as the callee (arity 3: "Int is not a function") or indexed
+;; below the frame base (arity 1 and 2: index out of range). Each case is
+;; asserted against a bytecode-compiled twin so the two backends have to agree.
 (ns test.ir-compile-loop-test
   (:require
    [ir.passes.pipeline]
@@ -79,3 +87,116 @@
   (testing "nested loop/recur under *ir-compile* true"
     ;; outer: i=0 < 3 → result is the inner loop's value, which runs j to m.
     (is (= 5 (ir-nested-loop 3 5)))))
+
+;; --- function-level recur (#638) -----------------------------------------
+;; Arity matters: OP_TAIL_CALL resolved its callee at f.nth(argc), so the slot
+;; it landed on — and therefore the failure mode — moved with the arity. All
+;; three are pinned.
+
+(set! *ir-compile* true)
+
+(defn ir-fnrecur-1 [n] (if (< n 0) :done (recur (dec n))))
+(defn ir-fnrecur-2 [s n] (if (< n 0) s (recur (inc s) (dec n))))
+(defn ir-fnrecur-3 [i s n] (if (< i n) (recur (inc i) (+ s i) n) s))
+;; Permuted args: the back-edge rebinds slots out of order.
+(defn ir-fnrecur-rot [a b c n]
+  (if (< n 0) (+ (* 100 a) (* 10 b) c) (recur b c a (dec n))))
+;; recur in the OTHER arm, so the back-edge is not the fall-through branch.
+(defn ir-fnrecur-else [i n] (if (>= i n) i (recur (inc i) n)))
+;; Variadic: the back-edge has to rebind the packed rest slot, not just the
+;; fixed params. recur passes the rest as one seq, so the arity is 2 here.
+(defn ir-fnrecur-var [n & xs] (if (< n 0) (apply + xs) (recur (dec n) (cons n xs))))
+
+(set! *ir-compile* false)
+
+;; Bytecode-compiled twins. Same source, plain compiler — the reference the
+;; IR path has to match.
+(defn bc-fnrecur-1 [n] (if (< n 0) :done (recur (dec n))))
+(defn bc-fnrecur-2 [s n] (if (< n 0) s (recur (inc s) (dec n))))
+(defn bc-fnrecur-3 [i s n] (if (< i n) (recur (inc i) (+ s i) n) s))
+(defn bc-fnrecur-rot [a b c n]
+  (if (< n 0) (+ (* 100 a) (* 10 b) c) (recur b c a (dec n))))
+(defn bc-fnrecur-else [i n] (if (>= i n) i (recur (inc i) n)))
+(defn bc-fnrecur-var [n & xs] (if (< n 0) (apply + xs) (recur (dec n) (cons n xs))))
+
+(deftest ir-compile-fn-level-recur-arities
+  (testing "a taken function-level recur runs and matches the bytecode backend"
+    (is (= (bc-fnrecur-1 3) (ir-fnrecur-1 3)))
+    (is (= (bc-fnrecur-2 0 3) (ir-fnrecur-2 0 3)))
+    (is (= (bc-fnrecur-3 0 0 4) (ir-fnrecur-3 0 0 4)))
+    ;; and the values themselves, so a twin that broke the same way still fails
+    (is (= :done (ir-fnrecur-1 3)))
+    (is (= 4 (ir-fnrecur-2 0 3)))
+    (is (= 6 (ir-fnrecur-3 0 0 4)))))
+
+(deftest ir-compile-fn-level-recur-untaken
+  (testing "a function-level recur whose back-edge is never taken still returns"
+    (is (= 0 (ir-fnrecur-3 5 0 5)))
+    (is (= :done (ir-fnrecur-1 -1)))))
+
+(deftest ir-compile-fn-level-recur-permuted-args
+  (testing "a back-edge that permutes its arguments rebinds all slots at once"
+    (is (= (bc-fnrecur-rot 1 2 3 0) (ir-fnrecur-rot 1 2 3 0)))
+    (is (= (bc-fnrecur-rot 1 2 3 1) (ir-fnrecur-rot 1 2 3 1)))
+    (is (= 231 (ir-fnrecur-rot 1 2 3 0)))
+    (is (= 312 (ir-fnrecur-rot 1 2 3 1)))))
+
+(deftest ir-compile-fn-level-recur-else-arm
+  (testing "the back-edge works from either arm of the if"
+    (is (= (bc-fnrecur-else 0 4) (ir-fnrecur-else 0 4)))
+    (is (= 4 (ir-fnrecur-else 0 4)))))
+
+(deftest ir-compile-fn-level-recur-variadic
+  (testing "a variadic function-level recur rebinds the packed rest slot"
+    (is (= (bc-fnrecur-var 3) (ir-fnrecur-var 3)))
+    (is (= (bc-fnrecur-var 2 10) (ir-fnrecur-var 2 10)))
+    (is (= 6 (ir-fnrecur-var 3)))
+    (is (= 13 (ir-fnrecur-var 2 10))))
+  (testing "an untaken variadic back-edge still returns"
+    (is (= (bc-fnrecur-var -1) (ir-fnrecur-var -1)))
+    (is (= 0 (ir-fnrecur-var -1)))))
+
+(deftest ir-compile-fn-level-recur-deep
+  (testing "the back-edge is a jump, so depth is unbounded"
+    (is (= 499999500000 (ir-fnrecur-3 0 0 1000000)))))
+
+;; --- function-level recur: arity mismatch --------------------------------
+;; build-recur emitted :recur-fn with whatever argument count it was handed.
+;; OP_RECUR_FN accepts that count and restarts the frame, so `(defn f [x]
+;; (recur))` compiled clean and then spun forever instead of failing. The
+;; bytecode compiler has always rejected it ("recur argument count must match
+;; function argument count"); the IR path has to agree.
+;;
+;; These assert through *ir-compile-strict* on purpose. Under the default
+;; fallback a rejected form is re-compiled by the bytecode compiler, which
+;; throws for its own reasons — so a default-mode assertion would stay green
+;; even if the IR check were removed, and would prove it by hanging. Strict
+;; mode fails at the IR builder, which is the thing under test.
+(def fnrecur-under-arity '(defn fnrecur-under-probe [x] (recur)))
+(def fnrecur-over-arity  '(defn fnrecur-over-probe [x] (recur 1 2)))
+
+(deftest ir-compile-fn-recur-arity-mismatch-rejected
+  (testing "too few recur args are rejected at the IR builder"
+    (is (= :threw
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (try (eval fnrecur-under-arity) :no-throw (catch _ :threw))))))
+  (testing "too many recur args are rejected at the IR builder"
+    (is (= :threw
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (try (eval fnrecur-over-arity) :no-throw (catch _ :threw)))))))
+
+(deftest ir-compile-fn-recur-arity-mismatch-names-the-counts
+  (testing "the throw identifies the arity mismatch, not some later failure"
+    (let [msg (binding [*ir-compile* true *ir-compile-strict* true]
+                (try (eval fnrecur-under-arity) "" (catch e (str e))))]
+      (is (>= (index-of msg "recur argument count") 0))
+      (is (>= (index-of msg "got 0") 0))
+      (is (>= (index-of msg "need 1") 0)))))
+
+(deftest ir-compile-fn-recur-matching-arity-still-compiles
+  (testing "a correct-arity function-level recur is unaffected by the check"
+    (is (= :ok
+           (binding [*ir-compile* true *ir-compile-strict* true]
+             (try (eval '(defn fnrecur-ok-probe [n] (if (< n 0) :done (recur (dec n)))))
+                  :ok (catch _ :threw)))))
+    (is (= :done (eval '(fnrecur-ok-probe 3))))))

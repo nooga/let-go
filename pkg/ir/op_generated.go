@@ -65,6 +65,7 @@ const (
 	OpTry         // .Refs[0] = body closure; then optional handler closure (binds the caught value), then optional finally closure; .Aux = {:has-handler bool :has-finally bool}. lower? -> TryOp delegates to try-assign-stmts (registered by ir.lower-go)
 	OpDot         // .Refs[0] = obj; .Aux = field symbol; Go struct field selector obj.field (gogen_ir path only)
 	OpDef         // .Refs[0] = var (Const aux=*vm.Var), optional .Refs[1] = value; interns + returns the var (2-ref also sets root)
+	OpRecurFn     // function-level recur back-edge; .Refs = replacement args (no callee), .Aux = argc int
 )
 
 // opInfo describes an Op's structural metadata.
@@ -118,6 +119,7 @@ var opTable = [...]opInfo{
 	OpTry:                   {"Try", -1, 1, false, false, true, false, true},
 	OpDot:                   {"Dot", 1, 1, false, false, true, false, false},
 	OpDef:                   {"Def", -1, 1, false, false, true, false, false},
+	OpRecurFn:               {"RecurFn", -1, 0, false, true, false, false, false},
 }
 
 // String returns the op's display name (or "Op?" for an unknown op).
@@ -251,6 +253,8 @@ func irOpToBytecode(op Op) int32 {
 		return vm.OP_MAKE_CLOSURE
 	case OpPushClosed:
 		return vm.OP_PUSH_CLOSEDOVER
+	case OpRecurFn:
+		return vm.OP_RECUR_FN
 	default:
 		return vm.OP_NOOP
 	}
@@ -322,12 +326,14 @@ func bytecodeToIROp(op int32) Op {
 		return OpMakeClosure
 	case vm.OP_PUSH_CLOSEDOVER:
 		return OpPushClosed
+	case vm.OP_RECUR_FN:
+		return OpRecurFn
 	default:
 		return OpInvalid
 	}
 }
 
-var opKeywordNames = []string{"invalid", "const", "load-arg", "load-var", "load-closed", "block-arg", "set-var", "call", "tail-call", "add", "sub", "mul", "bit-and", "bit-or", "bit-xor", "bit-and-not", "bit-shift-left", "bit-shift-right", "unsigned-bit-shift-right", "quot", "div", "lt", "lte", "gt", "gte", "eq", "inc", "dec", "bit-not", "pop", "return", "branch", "branch-if", "make-closure", "push-closed", "try", "dot", "def"}
+var opKeywordNames = []string{"invalid", "const", "load-arg", "load-var", "load-closed", "block-arg", "set-var", "call", "tail-call", "add", "sub", "mul", "bit-and", "bit-or", "bit-xor", "bit-and-not", "bit-shift-left", "bit-shift-right", "unsigned-bit-shift-right", "quot", "div", "lt", "lte", "gt", "gte", "eq", "inc", "dec", "bit-not", "pop", "return", "branch", "branch-if", "make-closure", "push-closed", "try", "dot", "def", "recur-fn"}
 
 // OpKeywords returns every catalogued op as its kebab-case keyword name, in Op order.
 func OpKeywords() []string { return opKeywordNames }
@@ -410,6 +416,8 @@ func opByKeywordExact(name string) (Op, bool) {
 		return OpDot, true
 	case "def":
 		return OpDef, true
+	case "recur-fn":
+		return OpRecurFn, true
 	default:
 		return OpInvalid, false
 	}

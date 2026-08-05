@@ -14,7 +14,10 @@ package ir_test
 
 import (
 	"regexp"
+	"strings"
 	"testing"
+
+	"github.com/nooga/let-go/pkg/vm"
 )
 
 func TestLowerNsInlinesTypedSibling(t *testing.T) {
@@ -29,7 +32,11 @@ func TestLowerNsInlinesTypedSibling(t *testing.T) {
 		       (ir.passes.pipeline/lower-ns-to-go "typedres" (quote typedres)
 		         [(quote (defn callee [x] (= x 1)))
 		          (quote (defn caller [y] (callee y)))])))`)
-	src := v.String()
+	vs, ok := v.(vm.String)
+	if !ok {
+		t.Fatalf("expected rendered Go source string, got %T", v)
+	}
+	src := string(vs)
 
 	// callee still lowers as its own bool-returning fn (public → PascalCase per #371).
 	if !regexp.MustCompile(`func Callee\(ec \*vm\.ExecContext, [a-z0-9_]+ vm\.Value\) bool`).MatchString(src) {
@@ -42,11 +49,26 @@ func TestLowerNsInlinesTypedSibling(t *testing.T) {
 	if !regexp.MustCompile(`func Caller\(ec[^}]*rt\.EqValue`).MatchString(src) {
 		t.Fatalf("expected Caller to carry callee's inlined body (rt.EqValue):\n%s", src)
 	}
-	// No call or trampoline to Callee: `Callee(` appears only in its own definition.
-	if n := len(regexp.MustCompile(`Callee\(`).FindAllString(src, -1)); n != 1 {
-		t.Fatalf("expected Callee( once (its definition only), got %d — caller did not inline:\n%s", n, src)
+	// No call to Callee from Caller's body — the actual inlining invariant.
+	// Scoped to Caller rather than counting `Callee(` across the file: since
+	// #554 a typed (bool) return also registers a boxed override, so the file
+	// legitimately contains `vm.Boolean(Callee(ec, args[0]))` in the init() map.
+	callerBody := regexp.MustCompile(`(?s)func Caller\(ec.*?\n\}`).FindString(src)
+	if callerBody == "" {
+		t.Fatalf("could not isolate Caller's body:\n%s", src)
+	}
+	if strings.Contains(callerBody, "Callee(") {
+		t.Fatalf("Caller still calls Callee — it did not inline:\n%s", callerBody)
 	}
 	if regexp.MustCompile(`InvokeValue\([^\n]*"callee"|CachedVarFn\([^\n]*"callee"`).MatchString(src) {
 		t.Fatalf("caller must NOT trampoline to callee after inlining:\n%s", src)
+	}
+	// Both fns return bool, so both register a boxed override (#554). Before
+	// that they lowered and then registered nothing, leaving the native code
+	// unreachable from a dynamic call.
+	for _, name := range []string{"callee", "caller"} {
+		if !regexp.MustCompile(`"` + name + `":\s*__gogen_wrap`).MatchString(src) {
+			t.Fatalf("expected %q to register a boxed override (#554):\n%s", name, src)
+		}
 	}
 }

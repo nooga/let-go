@@ -179,7 +179,7 @@
       (let [term (ir/block-term bid f)]
         (when term
           (let [op (ir/op term f)]
-            (when (or (= op :return) (= op :branch-if) (= op :tail-call))
+            (when (or (= op :return) (= op :branch-if) (= op :tail-call) (= op :recur-fn))
               (doseq [r (ir/refs term f)] (seed r))))))
       (doseq [nid (ir/block-insts bid f)]
         (when (= :call (ir/op nid f))

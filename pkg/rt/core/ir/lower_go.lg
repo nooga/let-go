@@ -5,7 +5,7 @@
 ;;   - strict mode: unsupported ops/shapes throw
 ;;   - bridge mode: unsupported functions fall back at whole-function granularity
 ;;   - supported ops: const, load-arg, block-arg, add/sub/mul, bitwise int ops,
-;;     lt/lte/gt/gte/eq, inc/dec, return, branch, branch-if, tail-call
+;;     lt/lte/gt/gte/eq, inc/dec, return, branch, branch-if, recur-fn
 ;;   - control flow lowers from block-parameter SSA to mutable locals plus labels/gotos
 
 (ns ir.lower-go
@@ -40,7 +40,7 @@
 (declare function-needs-error?)
 (declare function-needs-rt?)
 (declare function-needs-vm?)
-(declare function-needs-tail-call?)
+(declare function-needs-recur-fn?)
 (declare return-ref-ids)
 (declare function-return-spec)
 (declare const-param-of)
@@ -49,7 +49,7 @@
 (declare param-go-spec)
 
 ;; --- closure-local arg naming -----------------------------------------------
-;; A lowered fn names its parameters arg0/arg1/… and (for tail-call fns) its
+;; A lowered fn names its parameters arg0/arg1/… and (for recur-fn fns) its
 ;; mutable locals a0/a1/… and rest slot args0. An inline closure (lower-fn-lit)
 ;; is lowered with the SAME scheme, but its captured values (:load-closed) are
 ;; spliced in as the ENCLOSING scope's identifiers (e.g. arg0). A closure
@@ -64,11 +64,11 @@
 (def ^:dynamic *closure-arg-prefix* nil)
 
 (defn- go-arg-name [base i]
-  ;; base is "arg" (immutable Go param) or "a" (tail-call mutable local).
+  ;; base is "arg" (immutable Go param) or "a" (recur-fn mutable local).
   (str (or *closure-arg-prefix* "") base i))
 
 (defn- go-args-name [base]
-  ;; variadic rest slot: "args" (param/rest read) or "args0" (tail-call local).
+  ;; variadic rest slot: "args" (param/rest read) or "args0" (recur-fn local).
   (str (or *closure-arg-prefix* "") base))
 
 (defn- unsupported [mode msg]
@@ -813,11 +813,11 @@
 
           (= op :load-arg)
           (if (and (ir/fn-variadic? f) (= aux (dec (ir/fn-arity f))))
-            (let [rest-var (go-args-name (if (function-needs-tail-call? f) "args0" "args"))]
+            (let [rest-var (go-args-name (if (function-needs-recur-fn? f) "args0" "args"))]
               (gogen/call
                 (gogen/field-sel (gogen/ident "rt") "BoxRestArgs")
                 [(gogen/ident rest-var)]))
-            (gogen/ident (go-arg-name (if (function-needs-tail-call? f) "a" "arg") aux)))
+            (gogen/ident (go-arg-name (if (function-needs-recur-fn? f) "a" "arg") aux)))
 
           (= op :load-var)
           ;; In a function with a set! the var is materialised into a one-time
@@ -1312,13 +1312,13 @@
     (when assigns
       (conj assigns (gogen/goto-stmt (label-name (ir/branch-target-target bt)))))))
 
-(defn- tail-call-arg-expr [f closed-exprs nid i variadic-slot?]
-  "Expression assigned to recur loop-slot i (`a<i>`) at a tail-call back-edge.
+(defn- recur-fn-arg-expr [f closed-exprs nid i variadic-slot?]
+  "Expression assigned to recur loop-slot i (`a<i>`) at a recur-fn back-edge.
    Coerces the arg to the SLOT's type (param-go-spec) instead of unconditionally
    boxing to vm.Value: a native slot (int/float64/…) whose arg already has that
    type gets the raw expr (`a0 = v4`, no box); box/unbox only across a genuine
    vm.Value boundary. The variadic rest slot (args0 []vm.Value) still boxes.
-   Shared by BOTH tail-call emitters (lower-terminator + the structured :tail
+   Shared by BOTH recur-fn emitters (lower-terminator + the structured :tail
    case) so they can't diverge — the divergence that left the back-edge boxing
    an int slot after the loop-local was fixed to int."
   (if variadic-slot?
@@ -1374,7 +1374,7 @@
           (when (and cond-expr true-stmts false-stmts)
             [(gogen/if-stmt nil cond-expr true-stmts false-stmts)])))
 
-      (= op :tail-call)
+      (= op :recur-fn)
       (let [tail-args refs
             fixed-arity (if (ir/fn-variadic? f) (dec (ir/fn-arity f)) (ir/fn-arity f))
             assigns (loop [i 0 remaining tail-args out []]
@@ -1382,7 +1382,7 @@
                         out
                         (let [nid            (first remaining)
                               variadic-slot? (and (ir/fn-variadic? f) (= i fixed-arity))
-                              val-expr       (tail-call-arg-expr f closed-exprs nid i variadic-slot?)
+                              val-expr       (recur-fn-arg-expr f closed-exprs nid i variadic-slot?)
                               lhs (if variadic-slot?
                                     (gogen/ident (go-args-name "args0"))
                                     (gogen/ident (go-arg-name "a" i)))]
@@ -1722,6 +1722,20 @@
 (defn- register-typed-call-temp! [name go-type]
   (when *typed-call-temps* (swap! *typed-call-temps* conj [name go-type])))
 
+(defn- typed-result-assign
+  "Assign a typed call's result to the call node's temp, boxing only when that
+   temp is a vm.Value. Every typed result used to be boxed here unconditionally,
+   which was right while a lowered callee's result could only ever land in a
+   vm.Value temp. With declared return types (#599) the temp can itself be
+   natively typed — `(+ (fib …) (fib …))` gives both call nodes an :int temp —
+   and boxing into it emits `arg__4 = vm.Int(tr8)` against a `var arg__4 int`,
+   which is a Go type error. A nil/:unknown temp spec never matches, so anything
+   we cannot type still takes the boxing path."
+  [f nid target res-expr result-spec]
+  (if (= (go-type-spec (ir/type-of nid f)) result-spec)
+    (gogen/assign "=" target res-expr)
+    (gogen/assign "=" target (box-result-from-type res-expr result-spec))))
+
 (defn- emit-call-stmts [f assign-target invoke-expr]
   "Build the [assign err-check] statement pair shared by both call paths.
    assign-target is either a gogen ident (used? case) or '_'; invoke-expr
@@ -1770,11 +1784,11 @@
       ;; assign + err-check path.
       (and (= result-spec "vm.Value") (:needs-error? entry))
       (emit-call-stmts f target raw-call)
-      ;; Typed result + no error: result := <call>; target = vm.<Box>(result)
+      ;; Typed result + no error: target = <call>, boxed only if the temp is
+      ;; a vm.Value (see typed-result-assign).
       (and (not (:needs-error? entry))
            (not= result-spec "vm.Value"))
-      (let [boxed (box-result-from-type raw-call result-spec)]
-        [(gogen/assign "=" target boxed)])
+      [(typed-result-assign f nid target raw-call result-spec)]
       ;; Typed result + error: tr<nid>, te<nid> = <call>; if err return;
       ;; target = vm.<Box>(tr<nid>). The intermediate result+err vars are
       ;; FUNCTION-scoped (registered via register-typed-call-temp! and
@@ -1801,8 +1815,7 @@
                                      (gogen/binary "!=" err-id (gogen/ident "nil"))
                                      [(gogen/return-stmt [zero-expr err-id])]
                                      nil)
-            boxed (box-result-from-type res-id result-spec)
-            box-assign (gogen/assign "=" target boxed)]
+            box-assign (typed-result-assign f nid target res-id result-spec)]
         [assign err-check box-assign])
       ;; vm.Value result, no error: target = <call>
       (= result-spec "vm.Value")
@@ -2604,7 +2617,7 @@
         (some (fn [nid] (= "vm.Value" (go-type-spec (ir/type-of nid f)))) ret-ids)
         (some function-needs-vm? (nested-template-fns f)))))
 
-(defn- function-needs-tail-call? [f]
+(defn- function-needs-recur-fn? [f]
   ;; Blocks with no terminator (e.g. unreachable dead blocks left by build)
   ;; return nil from block-term; `(ir/op nil f)` would fail. Skip them.
   (loop [blocks (ir/blocks f)]
@@ -2614,16 +2627,16 @@
       (let [term (ir/block-term (first blocks) f)]
         (cond
           (nil? term) (recur (rest blocks))
-          (= :tail-call (ir/op term f)) true
+          (= :recur-fn (ir/op term f)) true
           :else (recur (rest blocks)))))))
 
 (defn- param-inferred-type [f i]
-  "Lattice type inferred for parameter i — for a tail-call fn this IS the
+  "Lattice type inferred for parameter i — for a recur-fn fn this IS the
    loop-carried type, since typeinfer's fixpoint folds every recur back-edge arg
    into the entry LoadArg. Priority: load-arg inst inference > explicit
    fn-arg-types metadata > :unknown. The single source of truth for a param's
    type, shared by params-for (the Go param decl `arg<i>`), arg-local-decls (its
-   mutable tail-call loop-local `a<i>`), and the tail-call back-edge assignment —
+   mutable recur-fn loop-local `a<i>`), and the recur-fn back-edge assignment —
    so the three can never diverge. That divergence was the bug: params-for learned
    to specialize `arg<i>` to a native type (int/float64) from the indexed IR type,
    but the loop-local + back-edge stayed hardcoded vm.Value, producing Go that
@@ -2640,7 +2653,7 @@
   (or (go-type-spec (param-inferred-type f i)) "vm.Value"))
 
 (defn- arg-local-decls [f]
-  "For tail-call fns, declare mutable locals (a0, a1, ...) that shadow the
+  "For recur-fn fns, declare mutable locals (a0, a1, ...) that shadow the
    immutable Go params, plus init assignments (a0 = arg0, ...). Each loop-local
    takes its param's inferred Go type (param-go-spec), NOT a hardcoded vm.Value —
    so `a<i> = arg<i>` and the body's native uses of `a<i>` agree.
@@ -3055,7 +3068,7 @@
         (let [bid (first args)]
           (when-let [inst-stmts (block-inst-stmts f closed-exprs bid)]
             (when-let [term (ir/block-term bid f)]
-              (when (= :tail-call (ir/op term f))
+              (when (= :recur-fn (ir/op term f))
                 (let [tail-args (ir/refs term f)
                       fixed-arity (if (ir/fn-variadic? f) (dec (ir/fn-arity f)) (ir/fn-arity f))
                       assigns (loop [i 0 remaining tail-args out []]
@@ -3063,7 +3076,7 @@
                                   out
                                   (let [nid            (first remaining)
                                         variadic-slot? (and (ir/fn-variadic? f) (= i fixed-arity))
-                                        val-expr       (tail-call-arg-expr f closed-exprs nid i variadic-slot?)
+                                        val-expr       (recur-fn-arg-expr f closed-exprs nid i variadic-slot?)
                                         lhs (if variadic-slot?
                                               (gogen/ident (go-args-name "args0"))
                                               (gogen/ident (go-arg-name "a" i)))]
@@ -3144,7 +3157,7 @@
    (binding [*call-err-used* (atom false)
              *typed-call-temps* (atom [])]
      (let [needs-error?     (function-needs-error? f)
-           needs-tail-call? (function-needs-tail-call? f)
+           needs-recur-fn? (function-needs-recur-fn? f)
            ;; Build the body FIRST (inside the *call-err-used* binding) so we
            ;; know whether it actually references callErr before deciding to
            ;; declare it. Structured path: build.lg emits reducible CFGs, so try
@@ -3201,12 +3214,12 @@
                                 (conj acc (gogen/var-decl nm (gogen/type go-type) nil)))
                               decls1
                               (distinct @*typed-call-temps*))
-               [arg-decls arg-inits] (if needs-tail-call?
+               [arg-decls arg-inits] (if needs-recur-fn?
                                        (arg-local-decls f)
                                        [[] []])
                decls  (into decls1 arg-decls)
                entry-label [(gogen/label-stmt "func_entry" nil)]
-               base (if needs-tail-call?
+               base (if needs-recur-fn?
                       (vec (concat decls arg-inits entry-label))
                       decls)]
            (into base body-stmts)))))))
@@ -3296,6 +3309,30 @@
   ;; they are left to dispatch via bytecode.
   (and (not (ir/fn-variadic? f))
        (= "vm.Value" (function-return-spec f))
+       (every? (fn [s] (= "vm.Value" s)) (function-param-specs f))))
+
+(def ^:private boxable-return-specs
+  ;; Return specs the override wrapper can lift back to vm.Value with a single
+  ;; constructor. Deliberately mirrors box-as-value's type set — anything it
+  ;; can't box must stay off the override path.
+  #{"bool" "int" "float64" "string" "vm.Char"})
+
+(defn- override-boxable-return? [f]
+  ;; True iff a TYPED RETURN is the only thing keeping this fn off the override
+  ;; path: params are already uniformly vm.Value (so args[i] flow straight in,
+  ;; no unboxing needed) and the result is a primitive the wrapper can box.
+  ;;
+  ;; #554: without this, a fn whose body lowers perfectly — the canonical case
+  ;; being a loop that infers an int result, `func SumLoop(ec) int` — registers
+  ;; no override at all, so every dynamic (var) call to it stays on bytecode and
+  ;; the lowered code is dead. Measured at 8.7x on benchmark/gloat/loop-recur.clj.
+  ;;
+  ;; Params are NOT coerced here on purpose. Unboxing an arg requires knowing the
+  ;; runtime value really is that primitive, which the direct-call path proves at
+  ;; the call site (coerce-arg-to-type) but a dynamic override boundary cannot.
+  ;; Typed params therefore remain ineligible; only the return side is lifted.
+  (and (not (ir/fn-variadic? f))
+       (contains? boxable-return-specs (function-return-spec f))
        (every? (fn [s] (= "vm.Value" s)) (function-param-specs f))))
 
 (defn- override-coercible? [f]
@@ -3430,6 +3467,11 @@
        :arity (ir/fn-arity f)
        :needs-error? needs-error?
        :override-eligible? (override-uniform-value? f)
+       ;; Uniform params but a typed RETURN: the wrapper boxes the result and
+       ;; registers anyway (#554). Separate flag so the wrapper emitter knows to
+       ;; wrap, and so :override-eligible? keeps meaning "adaptable with no
+       ;; coercion at all".
+       :override-boxable-return? (override-boxable-return? f)
        ;; :direct-callable? + the actual typed specs feed the direct-call
        ;; REGISTRY (registry-entry-from-result), separate from :override-eligible?
        ;; which feeds the NativeFn override wrapper. A typed sibling (e.g.

@@ -1,4 +1,4 @@
-//go:build !tinygo
+//go:build !tinygo && !lg_no_http
 
 package rt
 
