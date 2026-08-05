@@ -3311,6 +3311,30 @@
        (= "vm.Value" (function-return-spec f))
        (every? (fn [s] (= "vm.Value" s)) (function-param-specs f))))
 
+(def ^:private boxable-return-specs
+  ;; Return specs the override wrapper can lift back to vm.Value with a single
+  ;; constructor. Deliberately mirrors box-as-value's type set — anything it
+  ;; can't box must stay off the override path.
+  #{"bool" "int" "float64" "string" "vm.Char"})
+
+(defn- override-boxable-return? [f]
+  ;; True iff a TYPED RETURN is the only thing keeping this fn off the override
+  ;; path: params are already uniformly vm.Value (so args[i] flow straight in,
+  ;; no unboxing needed) and the result is a primitive the wrapper can box.
+  ;;
+  ;; #554: without this, a fn whose body lowers perfectly — the canonical case
+  ;; being a loop that infers an int result, `func SumLoop(ec) int` — registers
+  ;; no override at all, so every dynamic (var) call to it stays on bytecode and
+  ;; the lowered code is dead. Measured at 8.7x on benchmark/gloat/loop-recur.clj.
+  ;;
+  ;; Params are NOT coerced here on purpose. Unboxing an arg requires knowing the
+  ;; runtime value really is that primitive, which the direct-call path proves at
+  ;; the call site (coerce-arg-to-type) but a dynamic override boundary cannot.
+  ;; Typed params therefore remain ineligible; only the return side is lifted.
+  (and (not (ir/fn-variadic? f))
+       (contains? boxable-return-specs (function-return-spec f))
+       (every? (fn [s] (= "vm.Value" s)) (function-param-specs f))))
+
 (defn- override-coercible? [f]
   ;; True iff the lowered Go signature is a DIRECT-CALL target: non-variadic and
   ;; every param/result spec is one the call site can coerce soundly
@@ -3443,6 +3467,11 @@
        :arity (ir/fn-arity f)
        :needs-error? needs-error?
        :override-eligible? (override-uniform-value? f)
+       ;; Uniform params but a typed RETURN: the wrapper boxes the result and
+       ;; registers anyway (#554). Separate flag so the wrapper emitter knows to
+       ;; wrap, and so :override-eligible? keeps meaning "adaptable with no
+       ;; coercion at all".
+       :override-boxable-return? (override-boxable-return? f)
        ;; :direct-callable? + the actual typed specs feed the direct-call
        ;; REGISTRY (registry-entry-from-result), separate from :override-eligible?
        ;; which feeds the NativeFn override wrapper. A typed sibling (e.g.

@@ -889,10 +889,30 @@
   ;; fns are registered — the strict fixed-arity wrapper can't represent an
   ;; &-rest tail.
 
+(defn- box-return-expr [spec expr]
+  "Lift a typed return expression back to vm.Value with the matching vm
+   constructor. Mirrors lower_go.lg's box-as-value / boxable-return-specs; a
+   spec outside that set returns expr unchanged (the caller gates on
+   :override-boxable-return?, so that case shouldn't arise)."
+  (cond
+    (= spec "bool")    (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [expr])
+    (= spec "int")     (gogen/call (gogen/field-sel (gogen/ident "vm") "Int") [expr])
+    (= spec "float64") (gogen/call (gogen/field-sel (gogen/ident "vm") "Float") [expr])
+    (= spec "string")  (gogen/call (gogen/field-sel (gogen/ident "vm") "String") [expr])
+    ;; vm.Char already implements vm.Value — usable as-is.
+    (= spec "vm.Char") expr
+    :else              expr))
+
 (defn- override-wrapper-fn-lit [entry]
   "Build the per-defn `func(args []vm.Value) (vm.Value, error)` adapter:
    arity-check, then call the generated typed fn, supplying `, nil` when
-   the typed fn doesn't itself return an error."
+   the typed fn doesn't itself return an error.
+
+   When the lowered fn has a TYPED return (:override-boxable-return?, #554) the
+   result is boxed on the way out: `return vm.Int(Foo(ec, args[0])), nil`. That
+   case is always error-free — override-entries only admits a boxable return
+   when :needs-error? is false, because a body that can error carries its result
+   as vm.Value and so never presents a typed return in the first place."
   (let [arity        (:arity entry)
         go-name      (:go-name entry)
         fn-name      (:fn-name entry)
@@ -918,9 +938,17 @@
         ;; caller's context (matching the bytecode path) rather than the root.
         inner-call   (gogen/call (gogen/ident go-name)
                                  (into [(gogen/ident "ec")] arg-exprs))
-        ret-stmt     (if needs-error?
-                       (gogen/return-stmt [inner-call])
-                       (gogen/return-stmt [inner-call (gogen/ident "nil")]))]
+        boxed?       (:override-boxable-return? entry)
+        ret-spec     (:result-spec entry)
+        ret-stmt     (cond
+                       ;; Typed return (#554): box it. Error-free by
+                       ;; construction — see the docstring.
+                       boxed?       (gogen/return-stmt
+                                      [(box-return-expr ret-spec inner-call)
+                                       (gogen/ident "nil")])
+                       needs-error? (gogen/return-stmt [inner-call])
+                       :else        (gogen/return-stmt
+                                      [inner-call (gogen/ident "nil")]))]
     (gogen/func-lit
       [(gogen/param "ec" (gogen/type "*vm.ExecContext"))
        (gogen/param "args" (gogen/type "[]vm.Value"))]
@@ -935,7 +963,8 @@
    __gogen_wrap/NewCtxNativeFn) so the dynamic var path stays multi-arity AND is
    context-aware — the caller's ec is threaded into each helper (a
    MakeNativeMultiArity value can't, being built at package load with no ec).
-   Only used when every arity is override-eligible (uniform vm.Value)."
+   Every arity is adaptable: uniform vm.Value, or a typed return this boxes
+   per-arm (#554)."
   (let [fn-name  (:fn-name (first arities))
         args-id  (gogen/ident "args")
         len-call (gogen/call (gogen/ident "len") [args-id])
@@ -948,9 +977,17 @@
                                    (range arity))
                 inner-call   (gogen/call (gogen/ident go-name)
                                          (into [(gogen/ident "ec")] arg-exprs))
-                ret-stmt     (if needs-error?
-                               (gogen/return-stmt [inner-call])
-                               (gogen/return-stmt [inner-call (gogen/ident "nil")]))]
+                ;; Each arm boxes independently: arities are admitted per-arm,
+                ;; so one may return vm.Value while another returns a typed
+                ;; primitive that needs lifting (#554).
+                ret-stmt     (cond
+                               (:override-boxable-return? r)
+                               (gogen/return-stmt
+                                 [(box-return-expr (:result-spec r) inner-call)
+                                  (gogen/ident "nil")])
+                               needs-error? (gogen/return-stmt [inner-call])
+                               :else (gogen/return-stmt
+                                       [inner-call (gogen/ident "nil")]))]
             (gogen/case-clause [(gogen/int-lit arity)] [ret-stmt])))
         cases    (mapv arm->case arities)
         msg      (str fn-name ": wrong number of arguments %d")
@@ -1031,32 +1068,44 @@
 (defn- override-entries [valid-results]
   "Lowered results eligible for SINGLE-arity override registration: single-arity
    fns (carry :fn-name) whose Go signature is uniformly vm.Value, so the
-   fixed-arity wrapper adapts them without boxing/unboxing. Typed and
-   variadic fns are flagged :override-eligible? false and stay on bytecode.
+   fixed-arity wrapper adapts them without boxing/unboxing — plus (#554) those
+   whose params are uniform but whose RETURN is a boxable primitive, where the
+   wrapper boxes the result on the way out. Typed-PARAM and variadic fns are
+   still excluded and stay on bytecode: unboxing an arg needs a proof about the
+   runtime value that a dynamic override boundary doesn't have.
    Multi-arity arities (:multi-arity?) are EXCLUDED here — they'd each register a
    colliding single-arity wrapper under the same bare :fn-name; the whole fn gets
    one multi-arity override adapter instead (multi-arity-override-groups)."
-  (filterv (fn [r] (and (:fn-name r) (:override-eligible? r) (not (:multi-arity? r))))
+  (filterv (fn [r] (and (:fn-name r)
+                        (or (:override-eligible? r)
+                            (and (:override-boxable-return? r)
+                                 (not (:needs-error? r))))
+                        (not (:multi-arity? r))))
            valid-results))
 
 (defn- multi-arity-override-groups [valid-results]
   "Group the multi-arity per-arity results by bare :fn-name for ONE combined
    override adapter each. Only emit the override when EVERY arity is
-   :override-eligible? (uniform vm.Value) — a typed arity can't be called with
-   boxed args[i] from the dynamic dispatch adapter. When any arity is typed the
-   whole fn's dynamic (var) path stays on bytecode; the per-arity STATIC direct
-   calls still go native (registry-entry-from-result gates on the broader
-   :direct-callable?, coercing typed args at the call site). Returns a sorted vec
-   of [fn-name (sorted-by-arity results)] pairs for deterministic emission."
+   adaptable — uniform vm.Value, or (#554) uniform vm.Value params with a
+   boxable typed return, which the wrapper lifts per-arm. A typed-PARAM arity
+   still disqualifies the whole fn: it can't be called with boxed args[i] from
+   the dynamic dispatch adapter. In that case the fn's dynamic (var) path stays
+   on bytecode; the per-arity STATIC direct calls still go native
+   (registry-entry-from-result gates on the broader :direct-callable?, coercing
+   typed args at the call site). Returns a sorted vec of
+   [fn-name (sorted-by-arity results)] pairs for deterministic emission."
   (let [by-name (reduce (fn [m r]
                           (if (:multi-arity? r)
                             (update m (:fn-name r) (fnil conj []) r)
                             m))
-                        {} valid-results)]
+                        {} valid-results)
+        adaptable? (fn [r] (or (:override-eligible? r)
+                               (and (:override-boxable-return? r)
+                                    (not (:needs-error? r)))))]
     (vec
       (keep (fn [nm]
               (let [arities (sort-by :arity (get by-name nm))]
-                (when (every? :override-eligible? arities)
+                (when (every? adaptable? arities)
                   [nm arities])))
             (sort (keys by-name))))))
 
