@@ -16,8 +16,9 @@ M := .cache/makes
 MAKES-SHA := 7f28494955c20e5a87ca82ae351464842a7236de
 $(shell [ -d '$M' ] || (git clone -q $R '$M' && git -C '$M' -c advice.detachedHead=false checkout -q $(MAKES-SHA)) || rm -rf '$M')
 include $M/init.mk
-# override default Go version with: `make ... GO-VERSION=1.x.y`
-GO-VERSION ?= 1.26.3
+# go.mod's toolchain directive is the single repository-owned Go version pin.
+# Override only for an explicit one-off bootstrap: `make ... GO-VERSION=1.x.y`.
+GO-VERSION ?= $(shell sed -n 's/^toolchain go//p' go.mod)
 include $M/go.mk
 include $M/shell.mk
 endif
