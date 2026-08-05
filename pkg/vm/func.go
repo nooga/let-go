@@ -97,6 +97,76 @@ func boxRest(rest []Value) (Value, error) {
 	return ListType.Box(rest)
 }
 
+// bytecodeCallTarget is the resolved, frame-independent description of a
+// directly executable bytecode call. Frame allocation and same-frame tail
+// replacement are deliberately separate transitions so this resolver can be
+// shared with the constant-space tail-call work in #620.
+type bytecodeCallTarget struct {
+	fn          *Func
+	args        []Value
+	closedOvers []Value
+}
+
+// resolveBytecodeCall unwraps metadata, selects multi-arity variants,
+// preserves closure captures, validates arity, and packs variadic arguments.
+// It returns false for callables that must continue through ExecContext.Invoke.
+//
+// Fixed-arity args may still borrow the caller's operand stack. A transition
+// that reuses that same frame must copy them into frame-owned storage before
+// resetting the operand stack. Variadic packing always returns a fresh slice.
+func resolveBytecodeCall(fn Fn, args []Value) (bytecodeCallTarget, bool, error) {
+	display := fn
+	var closedOvers []Value
+	for {
+		switch t := fn.(type) {
+		case *MetaFn:
+			fn = t.Wrapped()
+		case *MultiArityFn:
+			variant, err := t.variantFor(display, len(args))
+			if err != nil {
+				return bytecodeCallTarget{}, false, err
+			}
+			fn = variant
+		case *Closure:
+			closedOvers = t.closedOvers
+			fn = t.fn
+		case *Func:
+			prepared := args
+			if t.isVariadric {
+				if len(prepared) < t.arity-1 {
+					return bytecodeCallTarget{}, false, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", display, t.arity-1, len(prepared)))
+				}
+				restlist, boxErr := boxRest(prepared[t.arity-1:])
+				if boxErr != nil {
+					return bytecodeCallTarget{}, false, boxErr
+				}
+				// Never append into prepared: it may be a window into the
+				// caller's operand stack or a host-owned argument slice.
+				packed := make([]Value, t.arity)
+				copy(packed, prepared[:t.arity-1])
+				packed[t.arity-1] = restlist
+				prepared = packed
+			} else if len(prepared) != t.arity {
+				return bytecodeCallTarget{}, false, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", display, t.arity, len(prepared)))
+			}
+			return bytecodeCallTarget{
+				fn:          t,
+				args:        prepared,
+				closedOvers: closedOvers,
+			}, true, nil
+		default:
+			return bytecodeCallTarget{}, false, nil
+		}
+	}
+}
+
+func runBytecodeCallTarget(ec *ExecContext, target bytecodeCallTarget) (Value, error) {
+	f := newFrameForBytecodeCall(target, ec)
+	result, err := f.Run()
+	ReleaseFrame(f)
+	return result, err
+}
+
 func (l *Func) Invoke(pargs []Value) (result Value, err error) {
 	return l.invokeIn(RootExecContext, pargs)
 }
@@ -105,36 +175,14 @@ func (l *Func) Invoke(pargs []Value) (result Value, err error) {
 // so dynamic bindings propagate into the call. Invoke is invokeIn against the
 // root context.
 func (l *Func) invokeIn(ec *ExecContext, pargs []Value) (result Value, err error) {
-	args := pargs
-	if l.isVariadric {
-		if len(args) < l.arity-1 {
-			return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", l, l.arity-1, len(args)))
-		}
-		rest := args[l.arity-1:]
-		restlist, boxErr := boxRest(rest)
-		if boxErr != nil {
-			return NIL, boxErr
-		}
-		// Build a FRESH slice; do not append into args' backing array.
-		// `append(args[0:l.arity-1], restlist)` reuses the caller's array
-		// (the reslice keeps its capacity), so the packed rest-list is
-		// written over the caller's element l.arity-1 — for a plain
-		// (fn [& as]) that is args[0]. A Go caller reusing one []Value
-		// across invocations then sees its arguments silently replaced by
-		// the previous call's rest-list: correct on the first call, garbage
-		// on the second.
-		packed := make([]Value, l.arity)
-		copy(packed, args[:l.arity-1])
-		packed[l.arity-1] = restlist
-		args = packed
-	} else if len(args) != l.arity {
-		return NIL, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", l, l.arity, len(args)))
+	target, ok, err := resolveBytecodeCall(l, pargs)
+	if err != nil {
+		return NIL, err
 	}
-	f := NewFrame(l.chunk, args)
-	f.ec = ec
-	result, err = f.Run()
-	ReleaseFrame(f)
-	return result, err
+	if !ok {
+		return NIL, NewExecutionError("unsupported function type")
+	}
+	return runBytecodeCallTarget(ec, target)
 }
 
 func (l *Func) String() string {
@@ -216,51 +264,18 @@ func (l *Closure) Invoke(pargs []Value) (result Value, err error) {
 // so dynamic bindings propagate into the call. Invoke delegates to invokeIn
 // against the root context.
 func (l *Closure) invokeIn(ec *ExecContext, pargs []Value) (result Value, err error) {
-	if f, ok := l.fn.(*Func); ok {
-		args := pargs
-		if f.isVariadric {
-			if len(args) < f.arity-1 {
-				return NIL, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", l, f.arity-1, len(args)))
-			}
-			rest := args[f.arity-1:]
-			restlist, boxErr := boxRest(rest)
-			if boxErr != nil {
-				return NIL, boxErr
-			}
-			// Fresh slice — see Func.invokeIn for why appending into the
-			// caller's backing array corrupts the caller's arguments.
-			packed := make([]Value, f.arity)
-			copy(packed, args[:f.arity-1])
-			packed[f.arity-1] = restlist
-			args = packed
-		} else if len(args) != f.arity {
-			return NIL, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", l, f.arity, len(args)))
-		}
-		frame := NewFrame(f.chunk, args)
-		frame.closedOvers = l.closedOvers
-		frame.ec = ec
-		result, err = frame.Run()
-		ReleaseFrame(frame)
-		return result, err
+	target, ok, err := resolveBytecodeCall(l, pargs)
+	if err != nil {
+		return NIL, err
+	}
+	if ok {
+		return runBytecodeCallTarget(ec, target)
 	}
 
 	if mfn, ok := l.fn.(*MultiArityFn); ok {
-		le := len(pargs)
-		var variant Fn
-		if f, ok := mfn.fns[le]; ok {
-			variant = f
-		} else if mfn.rest != nil && le >= mfn.rest.Arity() {
-			variant = mfn.rest
-		} else {
-			return NIL, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", l, le))
-		}
-
-		if f, ok := variant.(*Func); ok {
-			subClosure := &Closure{
-				closedOvers: l.closedOvers,
-				fn:          f,
-			}
-			return subClosure.invokeIn(ec, pargs)
+		variant, variantErr := mfn.variantFor(l, len(pargs))
+		if variantErr != nil {
+			return NIL, variantErr
 		}
 		return ec.Invoke(variant, pargs)
 	}
@@ -324,18 +339,25 @@ func (l *MultiArityFn) Invoke(pargs []Value) (Value, error) {
 	return l.invokeIn(RootExecContext, pargs)
 }
 
+func (l *MultiArityFn) variantFor(display Fn, arity int) (Fn, error) {
+	if f, ok := l.fns[arity]; ok {
+		return f, nil
+	}
+	if l.rest != nil && arity >= l.rest.Arity() {
+		return l.rest, nil
+	}
+	return nil, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", display, arity))
+}
+
 // invokeIn runs the multi-arity function with the given ExecContext active,
 // so dynamic bindings propagate into the selected variant's call. Invoke delegates
 // to invokeIn against the root context.
 func (l *MultiArityFn) invokeIn(ec *ExecContext, pargs []Value) (Value, error) {
-	le := len(pargs)
-	if f, ok := l.fns[le]; ok {
-		return ec.Invoke(f, pargs)
+	variant, err := l.variantFor(l, len(pargs))
+	if err != nil {
+		return NIL, err
 	}
-	if l.rest != nil && le >= l.rest.Arity() {
-		return ec.Invoke(l.rest, pargs)
-	}
-	return NIL, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", l, le))
+	return ec.Invoke(variant, pargs)
 }
 
 func (l *MultiArityFn) String() string {
