@@ -7,8 +7,11 @@
 package genmanifest_test
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/genmanifest"
@@ -160,6 +163,47 @@ func TestDependencyManifestFresh(t *testing.T) {
 		t.Fatalf("repo root: %v", err)
 	}
 	if err := genmanifest.CheckDepManifest(root); err != nil {
-		t.Fatalf("dependency manifest stale — run `make generate`: %v", err)
+		t.Fatalf("dependency manifest stale — run `make generate`: %v\nchanged edges: %v", err, dependencyManifestDrift(root))
 	}
+}
+
+func dependencyManifestDrift(root string) []string {
+	recorded, err := genmanifest.ReadDepManifest(root)
+	if err != nil {
+		return []string{fmt.Sprintf("read manifest: %v", err)}
+	}
+	current, err := genmanifest.Edges(root)
+	if err != nil {
+		return []string{fmt.Sprintf("resolve current edges: %v", err)}
+	}
+	recordedSums := make(map[genmanifest.Edge]string, len(recorded))
+	for _, edge := range recorded {
+		recordedSums[edge.Edge] = edge.Sum
+	}
+	currentSet := make(map[genmanifest.Edge]bool, len(current))
+	var drift []string
+	for _, edge := range current {
+		currentSet[edge] = true
+		want, ok := recordedSums[edge]
+		if !ok {
+			drift = append(drift, fmt.Sprintf("added %s <- %s (%s)", edge.Output, edge.Input, edge.Kind))
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(edge.Input)))
+		if readErr != nil {
+			drift = append(drift, fmt.Sprintf("read %s: %v", edge.Input, readErr))
+			continue
+		}
+		got := fmt.Sprintf("%x", sha256.Sum256(data))
+		if got != want {
+			drift = append(drift, fmt.Sprintf("changed %s <- %s (%s): %s != %s", edge.Output, edge.Input, edge.Kind, got, want))
+		}
+	}
+	for edge := range recordedSums {
+		if !currentSet[edge] {
+			drift = append(drift, fmt.Sprintf("removed %s <- %s (%s)", edge.Output, edge.Input, edge.Kind))
+		}
+	}
+	sort.Strings(drift)
+	return drift
 }

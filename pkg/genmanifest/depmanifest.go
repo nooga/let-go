@@ -12,10 +12,19 @@ package genmanifest
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
+	"io"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -35,13 +44,239 @@ type sweep struct{ dir, ext string }
 
 // outputSpec declares one generated output and how to find its inputs. A sweep
 // walks dir for *.ext (skipping generated + _test.go for input sweeps); files
-// are explicit paths.
+// are explicit paths; genPackagePattern selects generator inputs via the Go tool.
 type outputSpec struct {
-	output      string
-	inputSweeps []sweep
-	inputFiles  []string
-	genSweeps   []sweep
-	genFiles    []string
+	output            string
+	inputSweeps       []sweep
+	inputFiles        []string
+	genSweeps         []sweep
+	genFiles          []string
+	genPackagePattern string
+	genBuildTags      []string
+}
+
+// goListPackage contains every selected source/native/embed file group from
+// `go list -json`. Files excluded by build constraints are deliberately absent.
+type goListPackage struct {
+	Dir    string
+	Module *struct {
+		Main bool
+		Path string
+	}
+	GoFiles      []string
+	CgoFiles     []string
+	CFiles       []string
+	CXXFiles     []string
+	MFiles       []string
+	HFiles       []string
+	FFiles       []string
+	SFiles       []string
+	SwigFiles    []string
+	SwigCXXFiles []string
+	SysoFiles    []string
+	EmbedFiles   []string
+}
+
+func isEphemeralBackup(path string) bool {
+	lower := strings.ToLower(path)
+	for _, suffix := range []string{"~", ".bak", ".backup", ".orig", ".rej", ".swp", ".tmp"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// goModuleBuildInputs asks the Go tool for the canonical main-module package
+// closure, then records every non-test build source in those package directories.
+// Following imports from all Go variants makes the result a stable superset of
+// the files that can build lgbgen on any host, rather than a Linux-only graph.
+func goModuleBuildInputs(repoRoot, packagePattern string, buildTags ...string) ([]string, error) {
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repository root %q: %w", repoRoot, err)
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repository root symlinks %q: %w", repoRoot, err)
+	}
+	args := []string{"list", "-deps", "-json"}
+	if len(buildTags) != 0 {
+		args = append(args, "-tags", strings.Join(buildTags, ","))
+	}
+	args = append(args, packagePattern)
+
+	goTool := os.Getenv("LETGO_GO")
+	if goTool == "" {
+		goTool, err = exec.LookPath("go")
+		if err != nil {
+			return nil, fmt.Errorf("resolve Go tool: %w", err)
+		}
+	}
+	cmd := exec.Command(goTool, args...)
+	cmd.Dir = root
+	ignoredEnv := map[string]bool{
+		"CGO_ENABLED": true, "GO111MODULE": true, "GOAMD64": true,
+		"GOARCH": true, "GOENV": true, "GOEXPERIMENT": true,
+		"GOFLAGS": true, "GOOS": true, "GOTOOLCHAIN": true, "GOWORK": true,
+	}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !ignoredEnv[strings.ToUpper(key)] {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	// A committed manifest must describe one reference graph on every host.
+	// Linux/amd64 is the CI generation target; explicit values also prevent
+	// ambient workspaces, GOFLAGS, experiments, and user GOENV state from
+	// silently changing the selected package graph.
+	cmd.Env = append(cmd.Env,
+		"GOOS=linux", "GOARCH=amd64", "GOAMD64=v1", "CGO_ENABLED=1",
+		"GO111MODULE=on", "GOWORK=off", "GOFLAGS=", "GOENV=off",
+		"GOEXPERIMENT=", "GOTOOLCHAIN=local",
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%s: %w\n%s%s", strings.Join(cmd.Args, " "), err, stdout.String(), stderr.String())
+	}
+	seen := make(map[string]bool)
+	packageDirs := make(map[string]bool)
+	modulePath := ""
+	addPath := func(absolute string) error {
+		rel, relErr := filepath.Rel(root, absolute)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if relErr == nil {
+				relErr = fmt.Errorf("path is outside repository root")
+			}
+			return fmt.Errorf("normalize generator input %q: %w", absolute, relErr)
+		}
+		seen[filepath.ToSlash(rel)] = true
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	for {
+		var pkg goListPackage
+		err := dec.Decode(&pkg)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode %s output: %w\n%s%s", strings.Join(cmd.Args, " "), err, stdout.String(), stderr.String())
+		}
+		if pkg.Module == nil || !pkg.Module.Main {
+			continue
+		}
+		if modulePath == "" {
+			modulePath = pkg.Module.Path
+		}
+		packageDirs[pkg.Dir] = true
+		selectedGroups := [][]string{
+			pkg.GoFiles, pkg.CgoFiles, pkg.CFiles, pkg.CXXFiles, pkg.MFiles,
+			pkg.HFiles, pkg.FFiles, pkg.SFiles, pkg.SwigFiles,
+			pkg.SwigCXXFiles, pkg.SysoFiles,
+		}
+		for _, files := range selectedGroups {
+			for _, file := range files {
+				if err := addPath(filepath.Join(pkg.Dir, file)); err != nil {
+					return nil, fmt.Errorf("%s: %w\n%s%s", strings.Join(cmd.Args, " "), err, stdout.String(), stderr.String())
+				}
+			}
+		}
+		for _, file := range pkg.EmbedFiles {
+			// Broad all: patterns can see editor backups ignored by version
+			// control. They are not canonical generator sources and must not
+			// make the committed graph depend on local workspace debris.
+			if isEphemeralBackup(file) {
+				continue
+			}
+			if err := addPath(filepath.Join(pkg.Dir, file)); err != nil {
+				return nil, fmt.Errorf("%s: %w\n%s%s", strings.Join(cmd.Args, " "), err, stdout.String(), stderr.String())
+			}
+		}
+	}
+	if modulePath == "" {
+		return nil, fmt.Errorf("%s returned no packages in the main module", strings.Join(cmd.Args, " "))
+	}
+
+	// Expand from the Go-selected seed through imports in every platform/tag
+	// variant, and record all package-local build sources. This deliberately
+	// over-approximates the host build so Darwin/Windows/Linux generators share
+	// one manifest and a newly imported local package is discovered automatically.
+	queue := make([]string, 0, len(packageDirs))
+	for dir := range packageDirs {
+		queue = append(queue, dir)
+	}
+	visited := make(map[string]bool)
+	buildExt := map[string]bool{
+		".go": true, ".c": true, ".cc": true, ".cpp": true, ".cxx": true,
+		".m": true, ".h": true, ".hh": true, ".hpp": true,
+		".f": true, ".for": true, ".f90": true, ".s": true,
+		".swig": true, ".swigcxx": true, ".syso": true,
+	}
+	for len(queue) > 0 {
+		dir := queue[0]
+		queue = queue[1:]
+		if visited[dir] {
+			continue
+		}
+		visited[dir] = true
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			return nil, fmt.Errorf("read generator package directory %s: %w", dir, readErr)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || strings.HasSuffix(entry.Name(), "_test.go") || !buildExt[strings.ToLower(filepath.Ext(entry.Name()))] {
+				continue
+			}
+			absolute := filepath.Join(dir, entry.Name())
+			if strings.HasSuffix(entry.Name(), ".go") {
+				generated, genErr := isGenerated(absolute)
+				if genErr != nil {
+					return nil, genErr
+				}
+				if generated {
+					rel, relErr := filepath.Rel(root, absolute)
+					if relErr != nil {
+						return nil, relErr
+					}
+					// Parse committed generated inputs selected by Go, but ignore
+					// transient generated wireups absent from the canonical graph.
+					if !seen[filepath.ToSlash(rel)] {
+						continue
+					}
+				}
+				parsed, parseErr := parser.ParseFile(token.NewFileSet(), absolute, nil, parser.ImportsOnly)
+				if parseErr != nil {
+					return nil, fmt.Errorf("parse generator dependency imports %s: %w", absolute, parseErr)
+				}
+				for _, imp := range parsed.Imports {
+					importPath, unquoteErr := strconv.Unquote(imp.Path.Value)
+					if unquoteErr != nil {
+						return nil, fmt.Errorf("decode import in %s: %w", absolute, unquoteErr)
+					}
+					if importPath == modulePath || strings.HasPrefix(importPath, modulePath+"/") {
+						relPackage := strings.TrimPrefix(strings.TrimPrefix(importPath, modulePath), "/")
+						importDir := filepath.Join(root, filepath.FromSlash(relPackage))
+						if !visited[importDir] {
+							queue = append(queue, importDir)
+						}
+					}
+				}
+			}
+			if err := addPath(absolute); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	paths := make([]string, 0, len(seen))
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 // outputSpecs is the authoritative edge declaration (see the plan's table).
@@ -57,30 +292,54 @@ var outputSpecs = []outputSpec{
 		genSweeps:   []sweep{{"internal/primgen", ".go"}, {"cmd/lgprimgen", ".go"}},
 	},
 	{
-		output:      "pkg/rt/core_compiled.lgb",
-		inputSweeps: []sweep{{"pkg/rt/core", ".lg"}},
-		genSweeps:   []sweep{{"cmd/lgbgen", ".go"}},
+		output:            "pkg/rt/core_compiled.lgb",
+		inputSweeps:       []sweep{{"pkg/rt/core", ".lg"}},
+		genPackagePattern: "./cmd/lgbgen",
+		genBuildTags:      []string{"bootstrap"},
 	},
 	{
-		output:      "pkg/rt/core_go_lowered/",
-		inputSweeps: []sweep{{"pkg/rt/core", ".lg"}},
-		genSweeps:   []sweep{{"cmd/lgbgen", ".go"}},
+		output:            "pkg/rt/core_go_lowered/",
+		inputSweeps:       []sweep{{"pkg/rt/core", ".lg"}},
+		genPackagePattern: "./cmd/lgbgen",
+		genBuildTags:      []string{"bootstrap"},
 	},
 	{
 		output:     "pkg/ir/op_generated.go",
 		inputFiles: []string{"pkg/ir/ir_ops.lg", "scripts/gen/op_generated.head"},
-		genSweeps:  []sweep{{"cmd/lgbgen", ".go"}},
+		genFiles:   []string{"scripts/generate.lg"},
 	},
 	{
 		output:     "pkg/rt/ir_bridge_generated.go",
 		inputFiles: []string{"pkg/ir/ir_bridge.lg", "scripts/gen/ir_bridge_generated.head"},
-		genSweeps:  []sweep{{"cmd/lgbgen", ".go"}},
+		genFiles:   []string{"scripts/generate.lg"},
 	},
 	{
 		output:     "pkg/rt/core/ir/data/generated.lg",
 		inputFiles: []string{"pkg/ir/ir_data.lg"},
-		genSweeps:  []sweep{{"cmd/lgbgen", ".go"}},
+		genFiles:   []string{"scripts/generate.lg"},
 	},
+}
+
+func isDeclaredOutput(path string) bool {
+	for _, spec := range outputSpecs {
+		if spec.output == path {
+			return true
+		}
+	}
+	return false
+}
+
+func isInsideDeclaredDirectoryOutput(path string) bool {
+	for _, spec := range outputSpecs {
+		if !strings.HasSuffix(spec.output, "/") {
+			continue
+		}
+		dir := strings.TrimSuffix(spec.output, "/")
+		if path == dir || strings.HasPrefix(path, spec.output) {
+			return true
+		}
+	}
+	return false
 }
 
 // sweepFiles returns repo-relative paths under root/s.dir with extension s.ext,
@@ -101,10 +360,17 @@ func sweepFiles(repoRoot string, s sweep, skipGenerated bool) ([]string, error) 
 			// permissions issue; a missing file within the walk is not an error.
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(path, s.ext) {
+		if d.IsDir() {
+			rel, rerr := filepath.Rel(repoRoot, path)
+			if rerr != nil {
+				return rerr
+			}
+			if isInsideDeclaredDirectoryOutput(filepath.ToSlash(rel)) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		if strings.HasSuffix(path, "_test.go") {
+		if !strings.HasSuffix(path, s.ext) || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		if skipGenerated && s.ext == ".go" {
@@ -120,7 +386,8 @@ func sweepFiles(repoRoot string, s sweep, skipGenerated bool) ([]string, error) 
 		if rerr != nil {
 			return rerr
 		}
-		out = append(out, filepath.ToSlash(rel))
+		rel = filepath.ToSlash(rel)
+		out = append(out, rel)
 		return nil
 	})
 	return out, err
@@ -130,6 +397,7 @@ func sweepFiles(repoRoot string, s sweep, skipGenerated bool) ([]string, error) 
 // list (no hashes). Missing explicit input files are an error (a stale spec).
 func Edges(repoRoot string) ([]Edge, error) {
 	seen := map[Edge]bool{}
+	moduleInputs := make(map[string][]string)
 	var edges []Edge
 	add := func(output, input, kind string) {
 		e := Edge{output, input, kind}
@@ -168,7 +436,28 @@ func Edges(repoRoot string) ([]Edge, error) {
 			}
 		}
 		for _, f := range spec.genFiles {
+			if _, err := os.Stat(filepath.Join(repoRoot, f)); err != nil && !isDeclaredOutput(f) {
+				return nil, fmt.Errorf("generator file for %s missing: %s: %w", spec.output, f, err)
+			}
+			// A generated output can itself be a downstream generator input. Keep
+			// that edge when the file is absent so readiness propagates instead of
+			// turning a normal staged regeneration into a query error.
 			add(spec.output, f, "generator")
+		}
+		if spec.genPackagePattern != "" {
+			key := spec.genPackagePattern + "\x00" + strings.Join(spec.genBuildTags, "\x00")
+			files, ok := moduleInputs[key]
+			if !ok {
+				var err error
+				files, err = goModuleBuildInputs(repoRoot, spec.genPackagePattern, spec.genBuildTags...)
+				if err != nil {
+					return nil, fmt.Errorf("resolve generator inputs for %s: %w", spec.output, err)
+				}
+				moduleInputs[key] = files
+			}
+			for _, f := range files {
+				add(spec.output, f, "generator")
+			}
 		}
 	}
 	sort.Slice(edges, func(i, j int) bool {
@@ -190,10 +479,16 @@ type HashedEdge struct {
 }
 
 const depManifestHeader = "# Auto-generated by `make generate`. DO NOT EDIT.\n" +
-	"# <output> <input> <kind> <sha256>   kind in {input, generator}\n"
+	"# query-escaped <output> <input> <kind> <sha256>   kind in {input, generator}\n"
+
+func encodeManifestField(value string) string {
+	return strings.ReplaceAll(url.QueryEscape(value), "%2F", "/")
+}
+
+func decodeManifestField(value string) (string, error) { return url.QueryUnescape(value) }
 
 // WriteDepManifest resolves the edges, hashes each input, and writes the
-// space-separated manifest deterministically.
+// space-separated, query-escaped manifest deterministically.
 func WriteDepManifest(repoRoot string) error {
 	edges, err := Edges(repoRoot)
 	if err != nil {
@@ -206,7 +501,8 @@ func WriteDepManifest(repoRoot string) error {
 		if herr != nil {
 			return fmt.Errorf("hash %s: %w", e.Input, herr)
 		}
-		fmt.Fprintf(&b, "%s %s %s %s\n", e.Output, e.Input, e.Kind, sum)
+		fmt.Fprintf(&b, "%s %s %s %s\n",
+			encodeManifestField(e.Output), encodeManifestField(e.Input), encodeManifestField(e.Kind), sum)
 	}
 	return os.WriteFile(filepath.Join(repoRoot, DepManifestRelPath), []byte(b.String()), 0644)
 }
@@ -229,15 +525,22 @@ func ReadDepManifest(repoRoot string) ([]HashedEdge, error) {
 		if len(parts) != 4 {
 			return nil, fmt.Errorf("malformed manifest line: %q", line)
 		}
-		out = append(out, HashedEdge{Edge{parts[0], parts[1], parts[2]}, parts[3]})
+		fields := make([]string, 3)
+		for i := range fields {
+			fields[i], err = decodeManifestField(parts[i])
+			if err != nil {
+				return nil, fmt.Errorf("decode manifest field %q: %w", parts[i], err)
+			}
+		}
+		out = append(out, HashedEdge{Edge{fields[0], fields[1], fields[2]}, parts[3]})
 	}
 	return out, sc.Err()
 }
 
-// StaleOutputs returns the outputs whose current input/generator file hashes no
-// longer match the committed manifest (including outputs entirely absent from
-// it). Sorted, deduplicated.
-func StaleOutputs(repoRoot string) ([]string, error) {
+// staleOutputs returns outputs whose current input/generator hashes no longer
+// match the committed manifest. When checkReadiness is true, it also includes
+// generated outputs that are absent or incomplete.
+func staleOutputs(repoRoot string, checkReadiness bool) ([]string, error) {
 	recorded, err := ReadDepManifest(repoRoot)
 	if err != nil {
 		return nil, err
@@ -262,6 +565,10 @@ func StaleOutputs(repoRoot string) ([]string, error) {
 		}
 		sum, herr := hashFile(filepath.Join(repoRoot, e.Input))
 		if herr != nil {
+			if os.IsNotExist(herr) && isDeclaredOutput(e.Input) {
+				staleSet[e.Output] = true
+				continue
+			}
 			return nil, herr
 		}
 		if sum != rec {
@@ -281,27 +588,17 @@ func StaleOutputs(repoRoot string) ([]string, error) {
 			staleSet[he.Output] = true
 		}
 	}
-	// Check output existence: missing or incomplete outputs are considered stale.
-	// Regular files must exist; directories must exist and contain at least one file.
-	// This catches the case where a clean checkout has gitignored outputs missing.
-	for _, e := range current {
-		outPath := filepath.Join(repoRoot, e.Output)
-		if strings.HasSuffix(e.Output, "/") {
-			// Directory output: verify it exists and contains files
-			info, err := os.Stat(outPath)
-			if err != nil || !info.IsDir() {
-				staleSet[e.Output] = true
+	if checkReadiness {
+		for _, spec := range outputSpecs {
+			outPath := filepath.Join(repoRoot, spec.output)
+			if spec.output == "pkg/rt/core_go_lowered/" {
+				if err := CheckTreeManifest(outPath); err != nil {
+					staleSet[spec.output] = true
+				}
 				continue
 			}
-			// Check if directory has any files (not just empty)
-			entries, err := os.ReadDir(outPath)
-			if err != nil || len(entries) == 0 {
-				staleSet[e.Output] = true
-			}
-		} else {
-			// Regular file output: verify it exists
 			if _, err := os.Stat(outPath); err != nil {
-				staleSet[e.Output] = true
+				staleSet[spec.output] = true
 			}
 		}
 	}
@@ -313,10 +610,23 @@ func StaleOutputs(repoRoot string) ([]string, error) {
 	return out, nil
 }
 
+// StaleOutputs returns outputs that need regeneration because either their
+// recorded input hashes changed or their generated files are not ready.
+func StaleOutputs(repoRoot string) ([]string, error) {
+	return staleOutputs(repoRoot, true)
+}
+
+// StaleInputOutputs returns outputs whose recorded input hashes are stale,
+// without consulting generated-output state. It is safe to run before a clean
+// checkout has restored gitignored outputs.
+func StaleInputOutputs(repoRoot string) ([]string, error) {
+	return staleOutputs(repoRoot, false)
+}
+
 // CheckDepManifest returns nil when the manifest matches the current sources,
 // else an error naming the first stale output and a changed input.
 func CheckDepManifest(repoRoot string) error {
-	stale, err := StaleOutputs(repoRoot)
+	stale, err := StaleInputOutputs(repoRoot)
 	if err != nil {
 		return err
 	}

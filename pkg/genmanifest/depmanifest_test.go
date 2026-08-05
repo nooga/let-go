@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+func TestManifestFieldRoundTripWhitespaceAndPercent(t *testing.T) {
+	for _, value := range []string{
+		"plain/path.go",
+		"dir with spaces/embed file.txt",
+		"tabs\tand\nnewlines%plus+signs",
+	} {
+		encoded := encodeManifestField(value)
+		if strings.ContainsAny(encoded, " \t\r\n") {
+			t.Fatalf("encoded field still contains whitespace: %q", encoded)
+		}
+		got, err := decodeManifestField(encoded)
+		if err != nil {
+			t.Fatalf("decode %q: %v", encoded, err)
+		}
+		if got != value {
+			t.Fatalf("round trip %q: got %q", value, got)
+		}
+	}
+}
+
 func TestEdgesCoverExpectedOutputs(t *testing.T) {
 	root, err := FindRepoRoot(".")
 	if err != nil {
@@ -52,6 +72,31 @@ func TestEdgesExcludeGeneratedAndTestInputs(t *testing.T) {
 			if len(e.Input) > 8 && e.Input[len(e.Input)-8:] == "_test.go" {
 				t.Errorf("registrar input sweep must exclude _test.go: %s", e.Input)
 			}
+			if strings.HasPrefix(e.Input, "pkg/rt/core_go_lowered/") {
+				t.Errorf("registrar input sweep must exclude generated directory outputs: %s", e.Input)
+			}
+		}
+	}
+}
+
+func TestSweepPrunesDeclaredDirectoryOutputsBeforeOpeningFiles(t *testing.T) {
+	root := t.TempDir()
+	lowered := filepath.Join(root, "pkg", "rt", "core_go_lowered")
+	if err := os.MkdirAll(lowered, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A broken .go symlink makes any attempted isGenerated/read fail. The
+	// declared output directory must be pruned before its files are inspected.
+	if err := os.Symlink("missing.go", filepath.Join(lowered, "unstable.go")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	files, err := sweepFiles(root, sweep{"pkg/rt", ".go"}, true)
+	if err != nil {
+		t.Fatalf("declared output directory was traversed: %v", err)
+	}
+	for _, file := range files {
+		if strings.HasPrefix(file, "pkg/rt/core_go_lowered/") {
+			t.Fatalf("declared output leaked into sweep: %s", file)
 		}
 	}
 }
@@ -70,13 +115,22 @@ func isolatedRepoCopy(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("repo root: %v", err)
 	}
-	edges, err := Edges(realRoot)
+	realEdges, err := Edges(realRoot)
 	if err != nil {
 		t.Fatalf("edges: %v", err)
 	}
 	dst := t.TempDir()
-	// Copy all input files
-	for _, e := range edges {
+	for _, moduleFile := range []string{"go.mod", "go.sum"} {
+		data, err := os.ReadFile(filepath.Join(realRoot, moduleFile))
+		if err != nil {
+			t.Fatalf("read %s: %v", moduleFile, err)
+		}
+		if err := os.WriteFile(filepath.Join(dst, moduleFile), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Copy all input files needed for dynamic dependency discovery.
+	for _, e := range realEdges {
 		data, err := os.ReadFile(filepath.Join(realRoot, e.Input))
 		if err != nil {
 			t.Fatalf("read %s: %v", e.Input, err)
@@ -88,6 +142,10 @@ func isolatedRepoCopy(t *testing.T) string {
 		if err := os.WriteFile(out, data, 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	edges, err := Edges(dst)
+	if err != nil {
+		t.Fatalf("temp edges: %v", err)
 	}
 	// Create placeholder outputs so output-existence checks pass
 	outputs := map[string]bool{}
@@ -105,7 +163,13 @@ func isolatedRepoCopy(t *testing.T) string {
 				t.Fatal(err)
 			}
 		} else {
-			// Regular file output: create a placeholder file
+			// Preserve generated outputs already copied because another edge uses
+			// them as generator inputs.
+			if _, err := os.Stat(outPath); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
 			if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -113,6 +177,9 @@ func isolatedRepoCopy(t *testing.T) string {
 				t.Fatal(err)
 			}
 		}
+	}
+	if err := WriteTreeManifest(filepath.Join(dst, "pkg/rt/core_go_lowered")); err != nil {
+		t.Fatal(err)
 	}
 	return dst
 }
@@ -232,4 +299,43 @@ func TestMissingOutputDetected(t *testing.T) {
 	if !found {
 		t.Error("missing directory output should be detected as stale")
 	}
+}
+
+func TestCheckDepManifestIgnoresMissingOutputs(t *testing.T) {
+	root := isolatedRepoCopy(t)
+	if err := WriteDepManifest(root); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "pkg/rt/core_go_lowered")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "pkg/rt/core_compiled.lgb")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckDepManifest(root); err != nil {
+		t.Fatalf("output state must not make input hashes stale: %v", err)
+	}
+}
+
+func TestStaleOutputsDetectsTornLoweredTree(t *testing.T) {
+	root := isolatedRepoCopy(t)
+	if err := WriteDepManifest(root); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	lowered := filepath.Join(root, "pkg/rt/core_go_lowered")
+	if err := os.Remove(filepath.Join(lowered, ".placeholder")); err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := StaleOutputs(root)
+	if err != nil {
+		t.Fatalf("stale: %v", err)
+	}
+	for _, output := range stale {
+		if output == "pkg/rt/core_go_lowered/" {
+			return
+		}
+	}
+	t.Fatalf("torn lowered tree must be stale, got %v", stale)
 }

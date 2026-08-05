@@ -28,12 +28,21 @@ import (
 
 func main() {
 	writeManifest := flag.Bool("write-manifest", false, "write pkg/rt/generated.manifest and exit")
-	staleList := flag.Bool("stale", false, "print stale generated outputs (one per line) and exit")
+	staleList := flag.Bool("stale", false, "print outputs with stale input hashes (one per line) and exit")
+	needsGeneration := flag.Bool("needs-generation", false,
+		"print outputs with stale inputs or missing/incomplete generated files and exit")
 	writeCanonical := flag.Bool("write", false,
 		"recompute the source digest and rewrite the canonical manifest, then exit")
 	outPath := flag.String("o", "",
 		"recompute the source digest and write the manifest to this path (for the merge driver)")
+	goTool := flag.String("go", "", "Go executable used to resolve generator dependencies")
 	flag.Parse()
+	if *goTool != "" {
+		if err := os.Setenv("LETGO_GO", *goTool); err != nil {
+			fmt.Fprintf(os.Stderr, "check-generated: set Go tool: %v\n", err)
+			os.Exit(2)
+		}
+	}
 
 	root, err := genmanifest.FindRepoRoot(".")
 	if err != nil {
@@ -51,8 +60,13 @@ func main() {
 	}
 
 	// Stale outputs mode: print stale generated outputs and exit.
-	if *staleList {
-		stale, err := genmanifest.StaleOutputs(root)
+	if *staleList || *needsGeneration {
+		var stale []string
+		if *needsGeneration {
+			stale, err = genmanifest.StaleOutputs(root)
+		} else {
+			stale, err = genmanifest.StaleInputOutputs(root)
+		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -60,11 +74,10 @@ func main() {
 		for _, s := range stale {
 			fmt.Println(s)
 		}
-		// Exit non-zero when anything is stale so a Makefile/CI gate can rely
-		// on the exit code rather than on whether stdout is empty — an errored
-		// computation (handled above) and a genuine "nothing stale" would
-		// otherwise be indistinguishable to the caller.
-		if len(stale) > 0 {
+		// -stale is a gate: stale inputs fail it. -needs-generation is a query
+		// consumed by generate.lg: a stale list is a successful result, while a
+		// non-zero exit unambiguously means the query itself failed.
+		if *staleList && len(stale) > 0 {
 			os.Exit(1)
 		}
 		return
