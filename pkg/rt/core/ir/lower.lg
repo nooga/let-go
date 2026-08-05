@@ -526,6 +526,14 @@
       (emit-with-arg! l nid :tail-call (int aux))
       ;; TAIL_CALL is a true terminator; no SP tracking needed past this.
 
+      :recur-fn
+      ;; Function-level recur. lower-block! has materialized the replacement
+      ;; args to the top of the stack, which is what OP_RECUR_FN consumes
+      ;; (mult(0, argc), then ip/sp reset). It is NOT OP_TAIL_CALL: that
+      ;; opcode resolves a callee at f.nth(argc), and this terminator carries
+      ;; no callee.
+      (emit-with-arg! l nid :recur-fn (int aux))
+
       :return
       (emit! l nid :return)
 

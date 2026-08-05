@@ -66,8 +66,13 @@
 (def pure-terminator-ops
   "Terminator ops that are themselves side-effect-free (control flow /
    dataflow only). A block whose terminator is in this set can be
-   pure-block? if all its body Insts are pure."
-  #{:branch :branch-if :return})
+   pure-block? if all its body Insts are pure.
+
+   :recur-fn belongs here for the same reason :branch does — a
+   function-level recur is a back-edge that rebinds args and jumps, with
+   no effect of its own. Omitting it would keep LICM and the other
+   pure-block passes off every recur-fn loop."
+  #{:branch :branch-if :return :recur-fn})
 
 (defn pure-terminator-op?
   [op]

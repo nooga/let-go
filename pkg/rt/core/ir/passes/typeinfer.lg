@@ -261,8 +261,8 @@
       (= op :call)            (or (call-dtype inst f)
                                   (call-core-type inst f state)
                                   :unknown)
-      ;; Facetless ops (:set-var, :tail-call, :pop, closures, :try, :dot,
-      ;; :def) — no type information tracked.
+      ;; Facetless ops (:set-var, :tail-call, :recur-fn, :pop, closures, :try,
+      ;; :dot, :def) — no type information tracked.
       :else :unknown)))
 
 ;; --- fixpoint driver -------------------------------------------------

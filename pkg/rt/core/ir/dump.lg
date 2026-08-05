@@ -24,7 +24,7 @@
    [ir.data]
    [string :as str]))
 
-(def terminator-ops #{:tail-call :return :branch :branch-if})
+(def terminator-ops #{:tail-call :recur-fn :return :branch :branch-if})
 
 (defn op-display-name [op-kw]
   "Convert an ir op keyword (e.g. :branch-if, :load-arg) to its

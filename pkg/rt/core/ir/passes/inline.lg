@@ -62,13 +62,27 @@
                     (ir/block-insts bid f)))
             (ir/blocks f)))))
 
+(defn- has-recur-fn? [f]
+  "True if any block ends in :recur-fn — a function-level `recur` back-edge.
+   self-recursive? cannot see this: a function-level recur re-enters via the
+   terminator, with no :load-var of the fn's own name to spot. Splicing such a
+   callee into a caller would clone the back-edge, which then re-enters the
+   CALLER (nooga/let-go#638)."
+  (boolean
+    (some (fn [bid]
+            (let [term (ir/block-term bid f)]
+              (and term (= :recur-fn (ir/op term f)))))
+          (ir/blocks f))))
+
 (defn inline-eligible? [callee-f]
   "True when callee-f is eligible for inlining:
    - does not rebind var roots (checked via mutability analysis)
-   - is not self-recursive
+   - is not self-recursive, by either spelling: a :load-var self-call
+     (self-recursive?) or a function-level recur (has-recur-fn?)
    - contains <= max-inline-insts instructions"
   (and (not (mut/rebinds-var-roots? callee-f))
        (not (self-recursive? callee-f))
+       (not (has-recur-fn? callee-f))
        (<= (inst-count callee-f) max-inline-insts)))
 
 (defn call-head-var [f call-nid]
@@ -302,8 +316,10 @@
                 (ir/add-pred! f (ir/branch-target-target ft) nb))
 
               :else
-              ;; Defensive: any other terminator (e.g. :tail-call — no block
-              ;; targets) clones with refs remapped and aux carried verbatim.
+              ;; Defensive: any other terminator (e.g. :tail-call/:recur-fn —
+              ;; no block targets) clones with refs remapped and aux carried
+              ;; verbatim. inline-eligible? refuses :recur-fn callees, so a
+              ;; back-edge cannot reach here and re-enter the CALLER.
               (ir/add-terminator! f nb top
                 (mapv (fn [r] (get @nid-map r r)) (ir/refs term callee-f))
                 (ir/aux term callee-f)))))
