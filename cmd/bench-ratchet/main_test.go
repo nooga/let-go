@@ -444,7 +444,7 @@ func TestSeedBaselineAmd64OnlyPreservesM3(t *testing.T) {
 	}
 
 	// Run seed-baseline.
-	seedBaseline(baselineFile, timelineDir, "unused-release-sha")
+	seedBaseline(baselineFile, timelineDir, defaultSeedOptions())
 
 	// Verify the output.
 	data, err := os.ReadFile(baselineFile)

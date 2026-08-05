@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-04
+last-verified: 2026-08-05
 authoritative-for:
   - benchmark-ratchet
 human-verified:
@@ -133,8 +133,8 @@ go run ./cmd/bench-ratchet -baseline docs/perf/historical/v1.8.0.json check
 ### Seeding from CI
 
 The active baseline is seeded from CI timeline snapshots via the `seed-baseline`
-command. This generates a baseline by selecting the newest amd64 snapshot per
-machine key and merging with any existing local M3 profile:
+command. It reduces a WINDOW of recent snapshots per machine key — not the
+newest one — and merges the result with any existing local M3 profile:
 
 ```sh
 # Fetch the perf-data branch containing timeline snapshots
@@ -147,16 +147,49 @@ bench-ratchet -perf-data-dir <perf-data-root>/timeline \
 ```
 
 The command:
-- Scans the timeline directory for snapshot files named `TIMESTAMP-SHORTSHA-MACHINE.json`
-- Filters to amd64 machines only (per #651 decision: amd64-only initial seed)
-- Selects the newest snapshot independently per explicit machine key
+- Scans the timeline directory for snapshot files named `TIMESTAMP-SHORTSHA-MACHINE.json`, reporting any name it cannot parse
+- Filters to one architecture (`-seed-arch`, default amd64 per #651), on the file's CONTENT as well as its name
+- Takes the newest `-seed-window` snapshots (default 5) per machine key
+- Rejects a snapshot whose `ratio_to_anchor` values sit more than `-seed-coherence-tolerance` (default 5%) off the rest of its window
+- Medians each benchmark across the survivors **in ratio space**, deriving `ns_per_op` back from the window's anchor
+- Skips a benchmark present in fewer than half the surviving snapshots, rather than seeding it from one observation
+- Reports `b.N` movement across the window and any exclusion-list entry that matched nothing
 - Preserves any existing arm64/Apple M3 profile for local developer gating
-- Excludes the six unstable b.N=1 BenchmarkClojureTestSuite* variants (too noisy to ratchet)
-- Merges into a single baseline where `captured_at_sha` points to the incremental SHA
+- Excludes the six BenchmarkClojureTestSuite* variants (too noisy to ratchet, per #651)
 
-The `-release-sha` flag is not required for `seed-baseline`; the baseline gates against
-the incremental SHA (newest) for real-time drift tracking. Future work (#597, separate)
-will backfill per-tier v1.8.0 release-reference snapshots.
+`captured_at_sha` names the newest *surviving* snapshot in the window, which is
+the identity of the profile rather than the sole source of its numbers. The seed
+log prints the window size and how many snapshots contributed.
+
+Future work (#597, separate) will backfill per-tier v1.8.0 release-reference
+snapshots.
+
+### Why a window, and why not gate on the anchor
+
+**One snapshot is one CI run, and one CI run is one sample.** Seeded from the
+newest snapshot versus a median of five, on the same corpus (2026-08-05): 22.6%
+of the 758 (tier, benchmark) floors differ by more than the 5% regression
+budget, and 11.3% by more than 10%. Part of that is real code movement across
+the window and part is sampling — but either way, seeding from one snapshot sets
+a fifth of the gate's thresholds from a single observation of it.
+
+**The reduction happens in ratio space** because raw `ns_per_op` carries host
+speed and `ratio_to_anchor` does not. Over the 24 most recent amd64 snapshots,
+anchor deviation from the tier median ranges −22.4%..+3.1% while
+`ratio_to_anchor` holds to a median 0.03% and a worst 1.75%.
+
+**The gate is on ratio coherence, not on anchor drift** — which is the obvious
+design and is wrong. Snapshot `a588a69d2759` (EPYC 9V74) sits 22.4% off its
+window's anchor and is uniformly 22.4% fast in raw `ns/op` across all 162 of its
+benchmarks, agreeing with its window on every ratio to within 0.1%: the host was
+fast and the anchor divided that back out, which is what the anchor is for.
+Gating on anchor deviation would discard it and two more like it, two of which
+are snapshots this baseline is seeded from.
+
+What does need rejecting is the *mixed* capture — anchor caught the slow tail,
+benchmarks did not — where every ratio is uniformly wrong while the raw numbers
+look ordinary. That shows up as a whole-snapshot offset in normalized space,
+well clear of the 1.75% the corpus exhibits.
 
 This approach makes the baseline auditable (provenance is in git history), CI-sourced
 (no local machine capture noise), and reproducible across runs (idempotent).
@@ -298,9 +331,11 @@ the ratio comparison is on shakier ground.
 The active `docs/perf/baseline.json` is seeded from CI timeline snapshots and
 gates against the incremental (newest) snapshot for real-time drift tracking:
 
-- **amd64 profiles**: Seeded from the newest snapshot per explicit amd64 machine
-  key (e.g. AMD EPYC 7763, 9V74, etc.) to survive runner rotation and provide
-  a coarse gate on amd64 systems where runner noise is <5% within a capture.
+- **amd64 profiles**: Seeded from a median over the most recent snapshots per
+  amd64 machine key (e.g. AMD EPYC 7763, 9V74) to survive runner rotation. The
+  gate budget is 5%; no null control has been run on these tiers, so the floor
+  beneath that budget — the gap between two builds that cannot differ — is not
+  yet measured here.
 
 - **arm64/Apple M3**: Preserved from any existing local baseline, allowing M3
   developers to gate against a machine-specific baseline without CI noise.
@@ -313,7 +348,7 @@ The `captured_at_sha` field in each machine entry points to the incremental SHA,
 representing the "current" state for `make bench-ratchet check` comparisons.
 
 The `bench-ratchet seed-baseline` command (§ [Seeding from CI](#seeding-from-ci))
-selects and merges timeline snapshots from the perf-data branch, making the
+reduces a window of timeline snapshots from the perf-data branch, making the
 baseline reproducible, auditable, and independent of local machine captures.
 
 ## Current baseline: amd64-seeded with M3 fallback
@@ -321,8 +356,9 @@ baseline reproducible, auditable, and independent of local machine captures.
 The active `docs/perf/baseline.json` is seeded from CI timeline snapshots via
 `seed-baseline`, with amd64 as the primary machine tier and the existing local
 M3 profile (arm64/Apple M3) preserved for local developer gating. This means
-`make bench-ratchet` gates against the most recent successful amd64 build in
-CI, providing a durable, reproducible baseline free of local machine noise.
+`make bench-ratchet` gates against a median of the most recent successful amd64
+builds in CI, providing a durable, reproducible baseline free of local machine
+noise.
 
 A future release-reference baseline (#597, separate) will backfill v1.8.0
 reference snapshots for each machine tier to answer "how do we compare to the

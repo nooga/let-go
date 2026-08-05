@@ -150,15 +150,6 @@ type BenchmarkEntry = perfdata.BenchmarkEntry
 type BenchmarkSample = perfdata.BenchmarkSample
 type StreamRecord = perfdata.StreamRecord
 
-// timelineFile represents a parsed timeline snapshot filename.
-// Timeline format: TIMESTAMP-SHORTSHA-MACHINE.json
-type timelineFile struct {
-	path      string
-	sha       string
-	machine   string
-	timestamp string
-}
-
 // Result is the in-memory parse of one benchmark line.
 type Result struct {
 	Package     string
@@ -177,23 +168,28 @@ func (r Result) FullName() string {
 
 func main() {
 	var (
-		baselinePath = flag.String("baseline", defaultBaselinePath, "baseline JSON path")
-		budget       = flag.Float64("budget", defaultBudget, "fractional regression tolerated before flagging (0.05 = 5%)")
-		packages     = flag.String("packages", "", "space-separated go packages to bench (default: discover)")
-		count        = flag.Int("count", defaultCount, "go test -count")
-		benchtime    = flag.String("benchtime", defaultBenchtime, "go test -benchtime")
-		filter       = flag.String("filter", "", "regexp filter on benchmark names (default: all)")
-		timeout      = flag.String("timeout", defaultTimeout, "go test -timeout per package")
-		outPath      = flag.String("out", "", "capture .jsonl output path (default: docs/perf/.runs/<sha>-<ts>.jsonl)")
-		inPath       = flag.String("in", "", "aggregate .jsonl input path (default: most recent under docs/perf/.runs/)")
-		force        = flag.Bool("force", false, "with update: bypass the ratchet — replace current-machine timing and rebase global deterministic metrics. Use sparingly for accepted regressions.")
-		shaOverride  = flag.String("sha", "", "override the SHA recorded for this run (default: git rev-parse HEAD of cwd). Use when aggregating a capture from a worktree that differs from cwd.")
-		tags         = flag.String("tags", defaultTags, "go test -tags. Default 'gogen_ir' so the lowered-to-Go VM is compiled into the test binary alongside the bytecode VM. Has no effect on releases that pre-date the lowered-Go work (the build tag matches no files there).")
-		format       = flag.String("format", "text", "report format: text (default, ANSI terminal), markdown (GitHub/Slack-friendly table), json (the raw baseline)")
-		full         = flag.Bool("full", false, "run the FULL benchmark profile: pkg/vm fleet under -tags plus jank + IR compile under both VM variants. Slow (~25 min) — for mainline profiling and manual deep-dives.")
-		profile      = flag.String("profile", "", "named benchmark profile (e.g. 'pr-fast'). Mutually exclusive with -packages/-filter/-full. Sets the job list plus default count/benchtime/budget; explicit flags still override.")
-		wasm         = flag.Bool("wasm", false, "run benchmarks under GOOS=js/wasm via the go_js_wasm_exec shim (Node), reporting the machine as js/wasm. Forces -tags off (the wasm bundle ships the bytecode VM, not the lowered-Go path). Slower and noisier than native; for the wasm A/B gate.")
-		perfDataDir  = flag.String("perf-data-dir", "", "seed-baseline only: directory containing perf-data timeline snapshots (e.g., /path/to/perf-data/timeline)")
+		baselinePath     = flag.String("baseline", defaultBaselinePath, "baseline JSON path")
+		budget           = flag.Float64("budget", defaultBudget, "fractional regression tolerated before flagging (0.05 = 5%)")
+		packages         = flag.String("packages", "", "space-separated go packages to bench (default: discover)")
+		count            = flag.Int("count", defaultCount, "go test -count")
+		benchtime        = flag.String("benchtime", defaultBenchtime, "go test -benchtime")
+		filter           = flag.String("filter", "", "regexp filter on benchmark names (default: all)")
+		timeout          = flag.String("timeout", defaultTimeout, "go test -timeout per package")
+		outPath          = flag.String("out", "", "capture .jsonl output path (default: docs/perf/.runs/<sha>-<ts>.jsonl)")
+		inPath           = flag.String("in", "", "aggregate .jsonl input path (default: most recent under docs/perf/.runs/)")
+		force            = flag.Bool("force", false, "with update: bypass the ratchet — replace current-machine timing and rebase global deterministic metrics. Use sparingly for accepted regressions.")
+		shaOverride      = flag.String("sha", "", "override the SHA recorded for this run (default: git rev-parse HEAD of cwd). Use when aggregating a capture from a worktree that differs from cwd.")
+		tags             = flag.String("tags", defaultTags, "go test -tags. Default 'gogen_ir' so the lowered-to-Go VM is compiled into the test binary alongside the bytecode VM. Has no effect on releases that pre-date the lowered-Go work (the build tag matches no files there).")
+		format           = flag.String("format", "text", "report format: text (default, ANSI terminal), markdown (GitHub/Slack-friendly table), json (the raw baseline)")
+		full             = flag.Bool("full", false, "run the FULL benchmark profile: pkg/vm fleet under -tags plus jank + IR compile under both VM variants. Slow (~25 min) — for mainline profiling and manual deep-dives.")
+		profile          = flag.String("profile", "", "named benchmark profile (e.g. 'pr-fast'). Mutually exclusive with -packages/-filter/-full. Sets the job list plus default count/benchtime/budget; explicit flags still override.")
+		wasm             = flag.Bool("wasm", false, "run benchmarks under GOOS=js/wasm via the go_js_wasm_exec shim (Node), reporting the machine as js/wasm. Forces -tags off (the wasm bundle ships the bytecode VM, not the lowered-Go path). Slower and noisier than native; for the wasm A/B gate.")
+		perfDataDir      = flag.String("perf-data-dir", "", "seed-baseline only: directory containing perf-data timeline snapshots (e.g., /path/to/perf-data/timeline)")
+		seedWindow       = flag.Int("seed-window", defaultSeedWindow, "seed-baseline only: how many recent snapshots per machine key to reduce. One snapshot is one CI run; seeding from a single run pins whatever that run happened to measure.")
+		seedCoherenceTol = flag.Float64("seed-coherence-tolerance", defaultSeedCoherenceTolerance, "seed-baseline only: reject a snapshot whose ratio_to_anchor values sit, in median, further than this fraction off the rest of its window. Catches a mixed capture; deliberately NOT a check on the anchor's absolute drift, which moves without the ratios moving.")
+		seedIterTol      = flag.Float64("seed-iteration-tolerance", defaultSeedIterationTolerance, "seed-baseline only: report a benchmark whose b.N spread across the window exceeds this fraction. Reported, not excluded.")
+		seedMinIters     = flag.Int64("seed-min-iterations", defaultSeedMinIterations, "seed-baseline only: report a benchmark whose median b.N falls below this. Reported, not excluded.")
+		seedArch         = flag.String("seed-arch", defaultSeedArch, "seed-baseline only: architecture to seed from (#651: amd64-only initial seed).")
 	)
 	flag.Parse()
 
@@ -231,15 +227,24 @@ func main() {
 		return
 	}
 
-	// seed-baseline: seed the baseline from perf-data timeline snapshots per #651.
-	// Filters to amd64-only (per #651 decision), preserves existing M3 profile,
-	// selects newest snapshot per explicit machine key, and excludes six unstable
-	// b.N=1 BenchmarkClojureTestSuite* variants.
+	// seed-baseline: derive the baseline from perf-data timeline snapshots per
+	// #651. Filters to one architecture, preserves the existing M3 profile, and
+	// reduces a WINDOW of recent snapshots per machine key rather than trusting
+	// the newest one — see seed.go for why a single snapshot is not a baseline.
 	if mode == "seed-baseline" {
 		if *perfDataDir == "" {
 			die("seed-baseline requires -perf-data-dir <path>")
 		}
-		seedBaseline(*baselinePath, *perfDataDir, "")
+		if *seedWindow < 1 {
+			die("-seed-window must be at least 1")
+		}
+		seedBaseline(*baselinePath, *perfDataDir, seedOptions{
+			window:             *seedWindow,
+			coherenceTolerance: *seedCoherenceTol,
+			iterationTolerance: *seedIterTol,
+			minIterations:      *seedMinIters,
+			archPrefix:         *seedArch,
+		})
 		return
 	}
 
@@ -1895,159 +1900,29 @@ func formatWallMD(ns float64) string {
 	}
 }
 
-// seedBaseline seeds the baseline from perf-data timeline snapshots per #651.
-// Implements decision: amd64-only initial seed, preserve existing M3 profile,
-// select newest snapshot independently per explicit machine key.
-// Excludes the six unstable b.N=1 BenchmarkClojureTestSuite* variants.
-func seedBaseline(baselinePath, perfDataDir, _ string) {
-	// Read timeline snapshots from perfDataDir
-	baselineFiles, err := filepath.Glob(filepath.Join(perfDataDir, "*.json"))
-	if err != nil {
-		die("list timeline files: %v", err)
-	}
-	if len(baselineFiles) == 0 {
-		die("no timeline snapshots found in %s", perfDataDir)
-	}
-
-	// Parse filenames to extract SHAs and machine info.
-	// Timeline format: TIMESTAMP-SHORTSHA-MACHINE.json
-	var files []timelineFile
-	for _, f := range baselineFiles {
-		base := filepath.Base(f)
-		parts := strings.Split(base, "-")
-		if len(parts) < 3 {
-			continue
-		}
-		ts := parts[0]  // 20260720T221533Z
-		sha := parts[1] // 9c9a3d636c4e (shortened)
-		machine := strings.TrimSuffix(strings.Join(parts[2:], "-"), ".json")
-		files = append(files, timelineFile{
-			path:      f,
-			sha:       sha,
-			machine:   machine,
-			timestamp: ts,
-		})
-	}
-
-	// Filter to amd64 machines only (per #651: amd64-only initial seed)
-	var amd64Files []timelineFile
-	for _, f := range files {
-		if strings.HasPrefix(f.machine, "amd64-") {
-			amd64Files = append(amd64Files, f)
-		}
-	}
-
-	if len(amd64Files) == 0 {
-		die("no amd64 machine snapshots found in %s", perfDataDir)
-	}
-
-	// Find newest snapshot per explicit machine key (#651 decision).
-	// newestPerKey[machineKey] = (sha, timestamp, path)
-	type snapshotInfo struct {
-		sha       string
-		timestamp string
-		path      string
-	}
-	newestPerKey := make(map[string]snapshotInfo)
-	for _, f := range amd64Files {
-		key := f.machine // Explicit key from filename (e.g. "amd64-amd-epyc-7763")
-		if info, exists := newestPerKey[key]; !exists || f.timestamp > info.timestamp {
-			newestPerKey[key] = snapshotInfo{
-				sha:       f.sha,
-				timestamp: f.timestamp,
-				path:      f.path,
-			}
-		}
-	}
-
-	fmt.Printf("bench-ratchet: seed-baseline from %s\n", perfDataDir)
-	fmt.Printf("  amd64 machines: %d profiles\n", len(newestPerKey))
-
-	// Read existing baseline to preserve M3 profile
-	var existingBaseline Baseline
-	existingM3 := make(map[string]MachineBaseline) // M3 entries to preserve
-	if data, err := os.ReadFile(baselinePath); err == nil {
-		if err := json.Unmarshal(data, &existingBaseline); err == nil {
-			// Extract M3 entries (arm64/Apple M3 variant)
-			for key, mb := range existingBaseline.Machines {
-				if strings.Contains(key, "apple-m3") || strings.Contains(mb.Machine.CPUModel, "M3") {
-					existingM3[key] = mb
-					fmt.Printf("  preserved M3: %s\n", key)
-				}
-			}
-		}
-	}
-
-	// Read amd64 snapshots and filter out unstable benchmarks
-	merged := Baseline{
-		Version:  schemaVersion,
-		Machines: make(map[string]MachineBaseline),
-	}
-
-	for machineKey, info := range newestPerKey {
-		data, err := os.ReadFile(info.path)
-		if err != nil {
-			die("read timeline snapshot %s: %v", info.path, err)
-		}
-
-		var baseline Baseline
-		if err := json.Unmarshal(data, &baseline); err != nil {
-			die("parse timeline snapshot %s: %v", info.path, err)
-		}
-
-		if len(baseline.Machines) == 0 {
-			continue
-		}
-
-		for _, mb := range baseline.Machines {
-			// Filter out the six unstable benchmarks (b.N=1 suite variants)
-			mb = filterUnstableBenchmarks(mb)
-			merged.Machines[perfdata.MachineKey(mb.Machine)] = mb
-			fmt.Printf("  added: %s (SHA: %s)\n", machineKey, info.sha)
-		}
-	}
-
-	// Merge with existing M3 profile
-	for key, mb := range existingM3 {
-		merged.Machines[key] = mb
-	}
-
-	// Write the merged baseline
-	if err := writeBaseline(baselinePath, merged); err != nil {
-		die("write baseline: %v", err)
-	}
-	fmt.Printf("  wrote baseline → %s (%d machine profiles)\n",
-		baselinePath, len(merged.Machines))
-}
-
-// filterUnstableBenchmarks removes the six unstable b.N=1 suite benchmarks.
-// Per #651: BenchmarkClojureTestSuite and BenchmarkClojureTestSuiteCompileAndRun
-// (each under bytecode, ir_bytecode, aot_native variants) are too noisy to ratchet.
+// filterUnstableBenchmarks drops the known-unstable b.N=1 suite variants from a
+// profile, so `update` writes the same benchmark set that `seed-baseline` does.
+//
+// The exclusion prefixes come from unstableBenchmarks in seed.go rather than a
+// second copy here: the two paths disagreeing about which benchmarks are
+// ratchetable is exactly the failure a duplicated list invites.
 func filterUnstableBenchmarks(mb MachineBaseline) MachineBaseline {
 	if mb.Benchmarks == nil {
 		return mb
 	}
-
-	unstableNames := map[string]bool{
-		"github.com/nooga/let-go/test.BenchmarkClojureTestSuite":              true,
-		"github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun": true,
-	}
-
-	filtered := make(map[string]BenchmarkEntry)
+	filtered := make(map[string]BenchmarkEntry, len(mb.Benchmarks))
 	for name, entry := range mb.Benchmarks {
-		// Check if this benchmark is one of the unstable variants
-		isUnstable := false
-		for unstable := range unstableNames {
-			if strings.HasPrefix(name, unstable) {
-				isUnstable = true
+		unstable := false
+		for _, prefix := range unstableBenchmarks {
+			if strings.HasPrefix(name, prefix) {
+				unstable = true
 				break
 			}
 		}
-		if !isUnstable {
+		if !unstable {
 			filtered[name] = entry
 		}
 	}
-
 	mb.Benchmarks = filtered
 	return mb
 }
