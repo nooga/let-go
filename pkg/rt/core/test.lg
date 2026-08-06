@@ -16,7 +16,11 @@
 (defn register-test! [v]
   (let [n *ns*
         xs (get *registered-tests* n [])]
-    (set! *registered-tests* (assoc *registered-tests* n (conj xs v)))))
+    ;; Register each var once. Re-evaluating a deftest — sending it to the
+    ;; REPL again after an edit — hands us the same var, and appending it
+    ;; a second time would make run-tests run and count that test twice.
+    (when-not (some (fn [x] (= x v)) xs)
+      (set! *registered-tests* (assoc *registered-tests* n (conj xs v))))))
 
 (defmacro deftest [name & body]
   `(do
