@@ -6,7 +6,11 @@
 
 package rt
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nooga/let-go/pkg/vm"
+)
 
 // knownShadowedHandRegistrations is the accepted set of names registered both
 // by hand in installLangNS and by the generated //lg:native registrar. Only
@@ -59,6 +63,31 @@ func TestNoNewShadowedHandRegistrations(t *testing.T) {
 	for _, k := range knownShadowedHandRegistrations {
 		if !seen[k] {
 			t.Errorf("%s is no longer double-registered — drop it from knownShadowedHandRegistrations", k)
+		}
+	}
+}
+
+// TestReRegistrationIsNotAHandShadow pins the distinction the ratchet depends
+// on: only a var that existed BEFORE any generated registration is a hand
+// shadow. The registration state is process-global, so a second registration of
+// the same ns/name — another registrar pass, or simply `go test -count=2`
+// re-running a test that binds a probe primitive — finds the first generated
+// root already interned. Counting that would report a phantom collision whose
+// presence depends on how many times the suite ran.
+func TestReRegistrationIsNotAHandShadow(t *testing.T) {
+	const nsName = "shadow.rereg.probe"
+	ns := DefNSBare(nsName)
+	adapter, err := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) { return vm.NIL, nil })
+	if err != nil {
+		t.Fatalf("wrap: %v", err)
+	}
+
+	defGeneratedPrimitive(ns, nsName, "prim", adapter)
+	defGeneratedPrimitive(ns, nsName, "prim", adapter)
+
+	for _, g := range ShadowedHandRegistrations() {
+		if g == nsName+"/prim" {
+			t.Fatalf("re-registering a generated primitive recorded it as a hand shadow")
 		}
 	}
 }

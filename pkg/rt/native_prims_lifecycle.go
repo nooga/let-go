@@ -167,8 +167,21 @@ var (
 	shadowedHandRegs = map[string]bool{} // "<requested-ns>/<name>"
 )
 
+// recordShadowedHandRegistration notes that a generated primitive is about to
+// take a var some other registration already interned. It runs from
+// defGeneratedPrimitive BEFORE the binding lands in genPrimBindings, so a name
+// already present there was interned by a PREVIOUS generated registration, not
+// by hand. Without that check any re-registration (a second registrar pass, a
+// test binding the same ns/name twice in one process) records its own
+// predecessor as a hand shadow, making the set invocation-count dependent.
 func recordShadowedHandRegistration(ns *vm.Namespace, nsName, name string) {
 	if ns == nil || ns.LookupLocal(vm.Symbol(name)) == nil {
+		return
+	}
+	genPrimMu.RLock()
+	_, alreadyGenerated := genPrimBindings[resolveNSAlias(nsName)][name]
+	genPrimMu.RUnlock()
+	if alreadyGenerated {
 		return
 	}
 	shadowedMu.Lock()
