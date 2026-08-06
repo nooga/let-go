@@ -33,6 +33,15 @@ benchmark_name() {
     printf '%s\n' "$name"
 }
 
+validate_baseline_ref() {
+    local ref="$1"
+    if [[ ! "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/+-]*$ ]] ||
+       { [ "$ref" != "HEAD" ] && ! git check-ref-format --branch "$ref" >/dev/null 2>&1; }; then
+        echo "Unsafe BASELINE_REF: $ref" >&2
+        return 1
+    fi
+}
+
 # Filter mode: positional args select which perf benches to run.
 # In filter mode, startup/memory are skipped and results.md is NOT regenerated;
 # results are printed only. Use this for iterating on a single bench.
@@ -42,6 +51,11 @@ FILTER_MODE=0
 for want in "${FILTER_BENCHES[@]}"; do
     validate_benchmark_name "$want"
 done
+
+# Validate the pinned ref before any build work. This accepts ordinary tags,
+# branches, commit SHAs, HEAD, and the special "none" value used to skip it.
+BASELINE_REF="${BASELINE_REF:-$(cat "$SCRIPT_DIR/BASELINE_REF" 2>/dev/null || echo none)}"
+validate_baseline_ref "$BASELINE_REF"
 
 if [ "$FILTER_MODE" -eq 1 ]; then
     WARMUP=10
@@ -73,7 +87,6 @@ LETGO_AOT="$SCRIPT_DIR/letgo-aot"
 # Set BASELINE_REF=none to skip. The ref is pinned deliberately rather than
 # derived from the newest tag: `git tag --sort=-v:refname` puts the stale v2.0.x
 # line on top, which is not the latest release.
-BASELINE_REF="${BASELINE_REF:-$(cat "$SCRIPT_DIR/BASELINE_REF" 2>/dev/null || echo none)}"
 BASELINE=""
 BASELINE_SIZE=""
 
