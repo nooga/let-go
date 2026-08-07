@@ -150,6 +150,15 @@ type BenchmarkEntry = perfdata.BenchmarkEntry
 type BenchmarkSample = perfdata.BenchmarkSample
 type StreamRecord = perfdata.StreamRecord
 
+// timelineFile represents a parsed timeline snapshot filename.
+// Timeline format: TIMESTAMP-SHORTSHA-MACHINE.json
+type timelineFile struct {
+	path      string
+	sha       string
+	machine   string
+	timestamp string
+}
+
 // Result is the in-memory parse of one benchmark line.
 type Result struct {
 	Package     string
@@ -184,6 +193,7 @@ func main() {
 		full         = flag.Bool("full", false, "run the FULL benchmark profile: pkg/vm fleet under -tags plus jank + IR compile under both VM variants. Slow (~25 min) — for mainline profiling and manual deep-dives.")
 		profile      = flag.String("profile", "", "named benchmark profile (e.g. 'pr-fast'). Mutually exclusive with -packages/-filter/-full. Sets the job list plus default count/benchtime/budget; explicit flags still override.")
 		wasm         = flag.Bool("wasm", false, "run benchmarks under GOOS=js/wasm via the go_js_wasm_exec shim (Node), reporting the machine as js/wasm. Forces -tags off (the wasm bundle ships the bytecode VM, not the lowered-Go path). Slower and noisier than native; for the wasm A/B gate.")
+		perfDataDir  = flag.String("perf-data-dir", "", "seed-baseline only: directory containing perf-data timeline snapshots (e.g., /path/to/perf-data/timeline)")
 	)
 	flag.Parse()
 
@@ -204,9 +214,9 @@ func main() {
 		mode = flag.Arg(0)
 	}
 	switch mode {
-	case "check", "update", "show", "capture", "aggregate", "snapshot", "machine-key":
+	case "check", "update", "show", "capture", "aggregate", "snapshot", "machine-key", "seed-baseline":
 	default:
-		die("unknown mode %q (want check / update / show / capture / aggregate / snapshot / machine-key)", mode)
+		die("unknown mode %q (want check / update / show / capture / aggregate / snapshot / machine-key / seed-baseline)", mode)
 	}
 
 	// machine-key: print the canonical machine token ("<arch>-<cpumodel>",
@@ -218,6 +228,18 @@ func main() {
 	// exact "<arch>/<CPUModel>" partition the timeline groups snapshots by.
 	if mode == "machine-key" {
 		fmt.Println(machineKey())
+		return
+	}
+
+	// seed-baseline: seed the baseline from perf-data timeline snapshots per #651.
+	// Filters to amd64-only (per #651 decision), preserves existing M3 profile,
+	// selects newest snapshot per explicit machine key, and excludes six unstable
+	// b.N=1 BenchmarkClojureTestSuite* variants.
+	if mode == "seed-baseline" {
+		if *perfDataDir == "" {
+			die("seed-baseline requires -perf-data-dir <path>")
+		}
+		seedBaseline(*baselinePath, *perfDataDir, "")
 		return
 	}
 
@@ -1827,6 +1849,163 @@ func formatWallMD(ns float64) string {
 	default:
 		return fmt.Sprintf("%.3g s", ns/1_000_000_000)
 	}
+}
+
+// seedBaseline seeds the baseline from perf-data timeline snapshots per #651.
+// Implements decision: amd64-only initial seed, preserve existing M3 profile,
+// select newest snapshot independently per explicit machine key.
+// Excludes the six unstable b.N=1 BenchmarkClojureTestSuite* variants.
+func seedBaseline(baselinePath, perfDataDir, _ string) {
+	// Read timeline snapshots from perfDataDir
+	baselineFiles, err := filepath.Glob(filepath.Join(perfDataDir, "*.json"))
+	if err != nil {
+		die("list timeline files: %v", err)
+	}
+	if len(baselineFiles) == 0 {
+		die("no timeline snapshots found in %s", perfDataDir)
+	}
+
+	// Parse filenames to extract SHAs and machine info.
+	// Timeline format: TIMESTAMP-SHORTSHA-MACHINE.json
+	var files []timelineFile
+	for _, f := range baselineFiles {
+		base := filepath.Base(f)
+		parts := strings.Split(base, "-")
+		if len(parts) < 3 {
+			continue
+		}
+		ts := parts[0]  // 20260720T221533Z
+		sha := parts[1] // 9c9a3d636c4e (shortened)
+		machine := strings.TrimSuffix(strings.Join(parts[2:], "-"), ".json")
+		files = append(files, timelineFile{
+			path:      f,
+			sha:       sha,
+			machine:   machine,
+			timestamp: ts,
+		})
+	}
+
+	// Filter to amd64 machines only (per #651: amd64-only initial seed)
+	var amd64Files []timelineFile
+	for _, f := range files {
+		if strings.HasPrefix(f.machine, "amd64-") {
+			amd64Files = append(amd64Files, f)
+		}
+	}
+
+	if len(amd64Files) == 0 {
+		die("no amd64 machine snapshots found in %s", perfDataDir)
+	}
+
+	// Find newest snapshot per explicit machine key (#651 decision).
+	// newestPerKey[machineKey] = (sha, timestamp, path)
+	type snapshotInfo struct {
+		sha       string
+		timestamp string
+		path      string
+	}
+	newestPerKey := make(map[string]snapshotInfo)
+	for _, f := range amd64Files {
+		key := f.machine // Explicit key from filename (e.g. "amd64-amd-epyc-7763")
+		if info, exists := newestPerKey[key]; !exists || f.timestamp > info.timestamp {
+			newestPerKey[key] = snapshotInfo{
+				sha:       f.sha,
+				timestamp: f.timestamp,
+				path:      f.path,
+			}
+		}
+	}
+
+	fmt.Printf("bench-ratchet: seed-baseline from %s\n", perfDataDir)
+	fmt.Printf("  amd64 machines: %d profiles\n", len(newestPerKey))
+
+	// Read existing baseline to preserve M3 profile
+	var existingBaseline Baseline
+	existingM3 := make(map[string]MachineBaseline) // M3 entries to preserve
+	if data, err := os.ReadFile(baselinePath); err == nil {
+		if err := json.Unmarshal(data, &existingBaseline); err == nil {
+			// Extract M3 entries (arm64/Apple M3 variant)
+			for key, mb := range existingBaseline.Machines {
+				if strings.Contains(key, "apple-m3") || strings.Contains(mb.Machine.CPUModel, "M3") {
+					existingM3[key] = mb
+					fmt.Printf("  preserved M3: %s\n", key)
+				}
+			}
+		}
+	}
+
+	// Read amd64 snapshots and filter out unstable benchmarks
+	merged := Baseline{
+		Version:  schemaVersion,
+		Machines: make(map[string]MachineBaseline),
+	}
+
+	for machineKey, info := range newestPerKey {
+		data, err := os.ReadFile(info.path)
+		if err != nil {
+			die("read timeline snapshot %s: %v", info.path, err)
+		}
+
+		var baseline Baseline
+		if err := json.Unmarshal(data, &baseline); err != nil {
+			die("parse timeline snapshot %s: %v", info.path, err)
+		}
+
+		if len(baseline.Machines) == 0 {
+			continue
+		}
+
+		for _, mb := range baseline.Machines {
+			// Filter out the six unstable benchmarks (b.N=1 suite variants)
+			mb = filterUnstableBenchmarks(mb)
+			merged.Machines[perfdata.MachineKey(mb.Machine)] = mb
+			fmt.Printf("  added: %s (SHA: %s)\n", machineKey, info.sha)
+		}
+	}
+
+	// Merge with existing M3 profile
+	for key, mb := range existingM3 {
+		merged.Machines[key] = mb
+	}
+
+	// Write the merged baseline
+	if err := writeBaseline(baselinePath, merged); err != nil {
+		die("write baseline: %v", err)
+	}
+	fmt.Printf("  wrote baseline → %s (%d machine profiles)\n",
+		baselinePath, len(merged.Machines))
+}
+
+// filterUnstableBenchmarks removes the six unstable b.N=1 suite benchmarks.
+// Per #651: BenchmarkClojureTestSuite and BenchmarkClojureTestSuiteCompileAndRun
+// (each under bytecode, ir_bytecode, aot_native variants) are too noisy to ratchet.
+func filterUnstableBenchmarks(mb MachineBaseline) MachineBaseline {
+	if mb.Benchmarks == nil {
+		return mb
+	}
+
+	unstableNames := map[string]bool{
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuite":              true,
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun": true,
+	}
+
+	filtered := make(map[string]BenchmarkEntry)
+	for name, entry := range mb.Benchmarks {
+		// Check if this benchmark is one of the unstable variants
+		isUnstable := false
+		for unstable := range unstableNames {
+			if strings.HasPrefix(name, unstable) {
+				isUnstable = true
+				break
+			}
+		}
+		if !isUnstable {
+			filtered[name] = entry
+		}
+	}
+
+	mb.Benchmarks = filtered
+	return mb
 }
 
 func die(format string, args ...any) {

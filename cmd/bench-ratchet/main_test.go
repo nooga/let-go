@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/perfdata"
@@ -314,5 +315,188 @@ func TestJobsSelectScope(t *testing.T) {
 		if got := jobsSelect(jobs, c.name); got != c.want {
 			t.Errorf("jobsSelect(%q) = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestSeedBaselineAmd64OnlyPreservesM3(t *testing.T) {
+	// Create a temporary directory with mock timeline snapshots.
+	tmpDir := t.TempDir()
+	timelineDir := filepath.Join(tmpDir, "timeline")
+	if err := os.MkdirAll(timelineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create mock baselines for amd64 and arm64 machines.
+	createMockSnapshot := func(filename string, sha, timestamp, arch, machine string) {
+		baseline := Baseline{
+			Version: schemaVersion,
+			Machines: map[string]MachineBaseline{
+				perfdata.MachineKey(Machine{
+					OS:        "linux",
+					Arch:      arch,
+					NumCPU:    16,
+					CPUModel:  machine,
+					GoVersion: "go1.26.4",
+				}): {
+					CapturedAt:    timestamp,
+					CapturedAtSHA: sha,
+					Machine: Machine{
+						OS:        "linux",
+						Arch:      arch,
+						NumCPU:    16,
+						CPUModel:  machine,
+						GoVersion: "go1.26.4",
+					},
+					Anchor: AnchorRecord{
+						Name:       anchorName,
+						Package:    anchorPackage,
+						NSPerOp:    1.5,
+						Iterations: 1000000000,
+						Samples: []BenchmarkSample{
+							{Iterations: 1000000000, NSPerOp: 1.5, CapturedAt: timestamp},
+						},
+					},
+					Benchmarks: map[string]BenchmarkEntry{
+						"test.BenchmarkA": {
+							NSPerOp:       100,
+							RatioToAnchor: 66.67,
+							Samples: []BenchmarkSample{
+								{NSPerOp: 100, CapturedAt: timestamp},
+							},
+						},
+						// Unstable benchmark that should be filtered out
+						"github.com/nooga/let-go/test.BenchmarkClojureTestSuite": {
+							NSPerOp:       5000,
+							RatioToAnchor: 3333.0,
+							Samples: []BenchmarkSample{
+								{NSPerOp: 5000, CapturedAt: timestamp},
+							},
+						},
+					},
+				},
+			},
+		}
+		data, err := json.Marshal(baseline)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(timelineDir, filename), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Create amd64 snapshots (should be seeded)
+	createMockSnapshot("20260801T010134Z-b170a08eef47-amd64-amd-epyc-7763.json",
+		"b170a08eef47", "2026-08-01T01:01:34Z", "amd64", "AMD EPYC 7763")
+
+	// Create arm64 snapshots (should be ignored per #651)
+	createMockSnapshot("20260801T010134Z-b170a08eef47-arm64-apple-m1-virtual.json",
+		"b170a08eef47", "2026-08-01T01:01:34Z", "arm64", "Apple M1 (Virtual)")
+
+	// Create existing baseline with M3 profile to be preserved
+	existingBaseline := Baseline{
+		Version: schemaVersion,
+		Machines: map[string]MachineBaseline{
+			perfdata.MachineKey(Machine{
+				OS:        "darwin",
+				Arch:      "arm64",
+				NumCPU:    8,
+				CPUModel:  "Apple M3",
+				GoVersion: "go1.26.4",
+			}): {
+				CapturedAt:    "2026-06-01T00:00:00Z",
+				CapturedAtSHA: "oldsha123",
+				Machine: Machine{
+					OS:        "darwin",
+					Arch:      "arm64",
+					NumCPU:    8,
+					CPUModel:  "Apple M3",
+					GoVersion: "go1.26.4",
+				},
+				Anchor: AnchorRecord{
+					Name:       anchorName,
+					Package:    anchorPackage,
+					NSPerOp:    1.2,
+					Iterations: 1000000000,
+					Samples: []BenchmarkSample{
+						{Iterations: 1000000000, NSPerOp: 1.2, CapturedAt: "2026-06-01T00:00:00Z"},
+					},
+				},
+				Benchmarks: map[string]BenchmarkEntry{
+					"test.BenchmarkA": {
+						NSPerOp:       90,
+						RatioToAnchor: 75.0,
+						Samples: []BenchmarkSample{
+							{NSPerOp: 90, CapturedAt: "2026-06-01T00:00:00Z"},
+						},
+					},
+				},
+			},
+		},
+	}
+	existingData, err := json.Marshal(existingBaseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineFile := filepath.Join(tmpDir, "baseline.json")
+	if err := os.WriteFile(baselineFile, existingData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run seed-baseline.
+	seedBaseline(baselineFile, timelineDir, "unused-release-sha")
+
+	// Verify the output.
+	data, err := os.ReadFile(baselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result Baseline
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify version and structure.
+	if result.Version != schemaVersion {
+		t.Errorf("version = %d, want %d", result.Version, schemaVersion)
+	}
+
+	// Should have 2 machines: amd64 (from perf-data) + M3 (preserved)
+	if len(result.Machines) != 2 {
+		t.Errorf("machines = %d, want 2 (amd64 + M3)", len(result.Machines))
+	}
+
+	// Verify amd64 machine is present and unstable benchmark is filtered
+	hasAmd64 := false
+	for key, mb := range result.Machines {
+		if strings.Contains(key, "amd64") || strings.Contains(mb.Machine.CPUModel, "EPYC") {
+			hasAmd64 = true
+			// Verify unstable benchmark is filtered out
+			if _, ok := mb.Benchmarks["github.com/nooga/let-go/test.BenchmarkClojureTestSuite"]; ok {
+				t.Error("unstable BenchmarkClojureTestSuite should be filtered out")
+			}
+			// Verify stable benchmark is kept
+			if _, ok := mb.Benchmarks["test.BenchmarkA"]; !ok {
+				t.Error("stable benchmark test.BenchmarkA should be kept")
+			}
+		}
+	}
+	if !hasAmd64 {
+		t.Error("amd64 machine not found in merged baseline")
+	}
+
+	// Verify M3 profile is preserved
+	hasM3 := false
+	for key, mb := range result.Machines {
+		if strings.Contains(key, "apple-m3") || strings.Contains(mb.Machine.CPUModel, "M3") {
+			hasM3 = true
+			// M3 should retain its old data
+			if mb.CapturedAtSHA != "oldsha123" {
+				t.Errorf("M3 captured_at_sha changed; want oldsha123, got %q", mb.CapturedAtSHA)
+			}
+		}
+	}
+	if !hasM3 {
+		t.Error("M3 profile should be preserved")
 	}
 }
