@@ -1,0 +1,45 @@
+;; hash/sha1 and hash/sha256 — lowercase hex digests of a string's bytes.
+(ns test.hash-sha-test
+  (:require [test :refer :all]))
+
+(deftest sha1-known-vectors
+  (testing "empty string"
+    (is (= "da39a3ee5e6b4b0d3255bfef95601890afd80709" (hash/sha1 ""))))
+  (testing "abc"
+    (is (= "a9993e364706816aba3e25717850c26c9cd0d89d" (hash/sha1 "abc")))))
+
+(deftest sha256-known-vectors
+  (testing "empty string"
+    (is (= "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+           (hash/sha256 ""))))
+  (testing "abc"
+    (is (= "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+           (hash/sha256 "abc")))))
+
+(deftest sha-hashes-bytes-not-runes
+  ;; A multibyte literal pins byte semantics: these are the digests
+  ;; `sha1sum`/`sha256sum` produce for the UTF-8 encoding (17 bytes, 13 runes).
+  (testing "multibyte string matches the shasum of its UTF-8 bytes"
+    (is (= "a5e7f35caea50aa6f3bc37d2f24a540fc0b3cb32" (hash/sha1 "héllo wörld ✓")))
+    (is (= "c2a59c71097b678dc5af2eb1f98ddc575b63948b0fa6740071a945673aaada4d"
+           (hash/sha256 "héllo wörld ✓")))))
+
+(deftest sha-spit-slurp-roundtrip
+  (testing "digest survives a write/read round-trip through the filesystem"
+    (let [path (str (os/temp-dir) "/let-go-hash-sha-test.bin")
+          content "héllo wörld ✓"]
+      (spit path content)
+      (let [back (slurp path)]
+        (is (= content back))
+        (is (= (hash/sha1 content) (hash/sha1 back)))
+        (is (= (hash/sha256 content) (hash/sha256 back))))
+      (delete-file path))))
+
+(deftest sha-rejects-bad-args
+  ;; let-go has no thrown? — use try/catch directly.
+  (testing "non-string arg throws"
+    (is (= :threw (try (hash/sha1 42) :no-throw (catch _ :threw))))
+    (is (= :threw (try (hash/sha256 42) :no-throw (catch _ :threw)))))
+  (testing "wrong arity throws"
+    (is (= :threw (try (hash/sha1) :no-throw (catch _ :threw))))
+    (is (= :threw (try (hash/sha256 "a" "b") :no-throw (catch _ :threw))))))
