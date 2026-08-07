@@ -1,0 +1,127 @@
+;; Behavior tests for test/run-test-var and the run-test macro — the
+;; single-var entry point editors use for "run the test under the cursor"
+;; (clj-pulse resolves clojure.test/run-test-var, which aliases here).
+;;
+;; The point of run-test-var over `((deref v))` is that it goes through the
+;; same *once-fixtures* / *each-fixtures* composition and the same
+;; namespace switch as run-tests, so one test behaves the way the whole
+;; suite does — while binding the counters so it never disturbs the run it
+;; was called from.
+;;
+;; Harness note: this file's own tests run under the shared TestRunner,
+;; which asserts *test-result* after (run-tests). The probes that must fail
+;; or throw are therefore plain (def name (fn [] ...)) vars rather than
+;; deftests — a registered one would be run by the harness itself.
+
+(ns test.run-test-var-test
+  (:require [test :refer :all]))
+
+;; --- probes -----------------------------------------------------------
+
+(deftest sample-passing
+  (is (= 1 1)))
+
+(def sample-failing (fn [] (is (= 1 2))))
+
+(def sample-throwing (fn [] (throw (ex-info "boom" {}))))
+
+;; Namespace probe: its metadata says it lives in `string`, so run-test-var
+;; must in-ns there before invoking it and come back afterwards.
+(def observed-ns (atom nil))
+
+(def foreign-probe (fn [] (reset! observed-ns (ns-name *ns*))))
+(alter-meta! (var foreign-probe) assoc :ns (find-ns 'string))
+
+(def fixture-events (atom []))
+
+(defn- logging-fixture [before after]
+  (fn [t]
+    (swap! fixture-events conj before)
+    (t)
+    (swap! fixture-events conj after)))
+
+(defn- with-fixtures
+  "Run thunk f with the given :each / :once fixtures installed. Fixtures
+   are global state, so bind them rather than calling use-fixtures —
+   otherwise they leak into every test file that runs after this one."
+  [each once f]
+  (binding [test/*each-fixtures* each
+            test/*once-fixtures* once]
+    (f)))
+
+;; --- counters ---------------------------------------------------------
+
+(deftest run-test-var-counts-a-passing-test
+  (let [c (run-test-var (var sample-passing))]
+    (is (= 1 (:test c)))
+    (is (= 1 (:pass c)))
+    (is (= 0 (:fail c)))
+    (is (= 0 (:error c)))))
+
+(deftest run-test-var-counts-a-failing-assertion
+  ;; The inner run prints "FAIL (= 1 2)" — that is the probe failing on
+  ;; purpose, not this file failing.
+  (let [c (run-test-var (var sample-failing))]
+    (is (= 1 (:test c)))
+    (is (= 1 (:fail c)))
+    (is (= 0 (:error c)))))
+
+(deftest run-test-var-counts-a-throwing-test
+  ;; A thrown body is an :error, and must not propagate to the caller.
+  (let [c (run-test-var (var sample-throwing))]
+    (is (= 1 (:test c)))
+    (is (= 1 (:error c)))
+    (is (= 0 (:pass c)))))
+
+;; --- isolation from the enclosing run ---------------------------------
+
+(deftest a-nested-run-leaves-the-enclosing-run-untouched
+  ;; This test is itself running under run-tests. Running a failing and a
+  ;; throwing test inside it must not touch the suite's tally and must not
+  ;; clear *test-result* — otherwise a nested run could erase an earlier
+  ;; failure and let a broken suite report success.
+  (let [before test/*report-counters*]
+    (run-test-var (var sample-failing))
+    (run-test-var (var sample-throwing))
+    (is (= before test/*report-counters*))
+    (is (= true test/*test-result*))))
+
+;; --- fixtures ---------------------------------------------------------
+
+(deftest run-test-var-applies-once-and-each-fixtures
+  (reset! fixture-events [])
+  (let [c (with-fixtures [(logging-fixture :each-before :each-after)]
+                         [(logging-fixture :once-before :once-after)]
+                         (fn [] (run-test-var (var sample-passing))))]
+    (is (= 1 (:pass c)))
+    (is (= [:once-before :each-before :each-after :once-after] @fixture-events))))
+
+;; --- namespace handling -----------------------------------------------
+
+(deftest run-test-var-runs-in-the-vars-namespace
+  (reset! observed-ns nil)
+  (let [before (ns-name *ns*)]
+    (run-test-var (var foreign-probe))
+    (is (= 'string @observed-ns))
+    (is (= before (ns-name *ns*)))))
+
+(deftest run-test-var-restores-the-namespace-after-a-throw
+  (let [before (ns-name *ns*)]
+    (run-test-var (var sample-throwing))
+    (is (= before (ns-name *ns*)))))
+
+;; --- deftest metadata -------------------------------------------------
+
+(deftest deftest-records-clojure-test-var-metadata
+  (let [m (meta (var sample-passing))]
+    (is (= 'sample-passing (:name m)))
+    (is (= 'test.run-test-var-test (ns-name (:ns m))))
+    ;; :test holds the test fn, as in clojure.test — not a boolean marker.
+    (is (fn? (:test m)))))
+
+;; --- run-test macro ---------------------------------------------------
+
+(deftest run-test-macro-matches-run-test-var
+  (let [via-macro (run-test sample-passing)
+        via-fn (run-test-var (var sample-passing))]
+    (is (= via-fn via-macro))))
