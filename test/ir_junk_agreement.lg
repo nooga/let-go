@@ -1,0 +1,74 @@
+;; Test: block-junk-agreement parity guard
+;;
+;; The block-junk-agreement fix requires that all fall-through predecessors
+;; reaching a block agree on the junk count. Before the fix, mismatched junk
+;; was silently accepted (taking the max), causing stack underflows under
+;; *ir-compile*. This test constructs a shape with multiple paths to the same
+;; block that have different stack effects, and verifies parity with bytecode.
+;;
+;; This is a parity guard that passes unchanged on main and does not exercise
+;; the disagreement/fallback path — it serves as a regression guard, not as
+;; a test of the new disagreement-handling behavior.
+(ns test.ir-junk-agreement-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+;; Bytecode path: loop with conditional that creates complex CFG paths
+(defn junk-bytecode [n]
+  (loop [i 0 sum 0]
+    (let [flag (< i n)]
+      (if flag
+        (recur (inc i) (+ sum (* i 2)))
+        (if (zero? sum) 0 sum)))))
+
+;; IR-compile path: should match bytecode
+(set! *ir-compile* true)
+
+(defn junk-ir [n]
+  (loop [i 0 sum 0]
+    (let [flag (< i n)]
+      (if flag
+        (recur (inc i) (+ sum (* i 2)))
+        (if (zero? sum) 0 sum)))))
+
+(set! *ir-compile* false)
+
+;; Test that uses nested blocks with various stack states
+(defn junk-nested-bytecode [n]
+  (loop [x 0]
+    (let [skip? (>= x 3)]
+      (if skip?
+        (loop [y 0 acc 0]
+          (if (< y n)
+            (recur (inc y) (+ acc y))
+            [x acc]))
+        (recur (inc x))))))
+
+(set! *ir-compile* true)
+
+(defn junk-nested-ir [n]
+  (loop [x 0]
+    (let [skip? (>= x 3)]
+      (if skip?
+        (loop [y 0 acc 0]
+          (if (< y n)
+            (recur (inc y) (+ acc y))
+            [x acc]))
+        (recur (inc x))))))
+
+(set! *ir-compile* false)
+
+(deftest ir-junk-agreement-parity
+  (testing "junk-agreement with conditional creating complex CFG paths"
+    ;; The bytecode and IR paths should produce identical results
+    (is (= (junk-bytecode 100) (junk-ir 100)))
+    (is (= 9900 (junk-ir 100)))  ; 0*2 + 2*2 + 4*2 + ... + 98*2
+    (is (= (junk-bytecode 10) (junk-ir 10)))
+    (is (= 90 (junk-ir 10))))
+  (testing "junk-agreement with nested loops"
+    ;; Inner loop sums 0..n-1, outer loop runs 3 times (x goes 0,1,2,3...)
+    ;; At x=3, skips outer recur and runs inner loop
+    (is (= (junk-nested-bytecode 10) (junk-nested-ir 10)))
+    (is (= [3 45] (junk-nested-ir 10)))  ; x=3, sum=0+1+2+...+9
+    (is (= (junk-nested-bytecode 100) (junk-nested-ir 100)))))

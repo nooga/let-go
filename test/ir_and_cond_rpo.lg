@@ -1,0 +1,92 @@
+;; Test: and-cond loop RPO fix
+;;
+;; The RPO (reverse-postorder) block-order fix ensures blocks are emitted in an
+;; order where every non-back edge points forward. Loops with (and ...) conditions
+;; create a CFG where the old id-order emission was wrong: the (and ...) creates
+;; multiple conditions that must be evaluated in the correct order, and the short-circuit
+;; logic creates a specific CFG structure that requires RPO ordering.
+;;
+;; The test constructs loops with (and ...) and (or ...) conditions that expose
+;; the block-ordering issue.
+(ns test.ir-and-cond-rpo-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+;; Bytecode path: loop with (and ...) condition
+(defn and-loop-bytecode [n]
+  (loop [i 0 s 0]
+    (if (and (< i n) (>= s 0) (not (neg? i)))
+      (recur (inc i) (+ s i))
+      s)))
+
+;; IR-compile path: should match bytecode
+(set! *ir-compile* true)
+
+(defn and-loop-ir [n]
+  (loop [i 0 s 0]
+    (if (and (< i n) (>= s 0) (not (neg? i)))
+      (recur (inc i) (+ s i))
+      s)))
+
+(set! *ir-compile* false)
+
+;; Additional shape: loop with (or ...) condition for short-circuit testing
+(defn or-loop-bytecode [n]
+  (loop [i 0 s 0]
+    (if (or (>= i n) (< s 0))
+      s
+      (recur (inc i) (+ s i)))))
+
+(set! *ir-compile* true)
+
+(defn or-loop-ir [n]
+  (loop [i 0 s 0]
+    (if (or (>= i n) (< s 0))
+      s
+      (recur (inc i) (+ s i)))))
+
+(set! *ir-compile* false)
+
+;; Complex nested conditionals creating complex CFG
+(defn nested-cond-bytecode [n]
+  (loop [i 0 s 0]
+    (if (< i n)
+      (if (even? i)
+        (if (< s 100)
+          (recur (inc i) (+ s i))
+          s)
+        (recur (+ i 2) s))
+      s)))
+
+(set! *ir-compile* true)
+
+(defn nested-cond-ir [n]
+  (loop [i 0 s 0]
+    (if (< i n)
+      (if (even? i)
+        (if (< s 100)
+          (recur (inc i) (+ s i))
+          s)
+        (recur (+ i 2) s))
+      s)))
+
+(set! *ir-compile* false)
+
+(deftest ir-and-cond-rpo-parity
+  (testing "and-cond loop under *ir-compile* with multiple guards"
+    ;; The IR path should emit blocks in RPO order, producing the same result as bytecode
+    (is (= (and-loop-bytecode 5) (and-loop-ir 5)))
+    (is (= 10 (and-loop-ir 5)))  ; 0+1+2+3+4
+    (is (= (and-loop-bytecode 100) (and-loop-ir 100)))
+    (is (= 4950 (and-loop-ir 100))))
+  (testing "or-cond loop with short-circuit"
+    ;; Exit condition using (or ...)
+    (is (= (or-loop-bytecode 10) (or-loop-ir 10)))
+    (is (= 45 (or-loop-ir 10)))  ; 0+1+2+...+9
+    (is (= (or-loop-bytecode 100) (or-loop-ir 100))))
+  (testing "nested conditionals creating complex CFG"
+    ;; Multiple nested ifs create a more complex block structure
+    (is (= (nested-cond-bytecode 20) (nested-cond-ir 20)))
+    ;; Accumulates even numbers until sum >= 100
+    (is (= (nested-cond-bytecode 100) (nested-cond-ir 100)))))
