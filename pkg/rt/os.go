@@ -287,6 +287,63 @@ func installOsNS() {
 		return vs[1], nil
 	}))
 
+	// os/rename — (os/rename old-path new-path) → new-path
+	//
+	// Renames old-path to new-path through rename(2), which is atomic within
+	// a filesystem: a concurrent reader sees either the old state or the new
+	// one, never a half-written file. Writing to a temporary name and
+	// renaming into place is the usual way to publish a file safely.
+	//
+	// A rename across filesystems fails rather than falling back to
+	// copy-then-delete. The fallback is what callers reach for this instead
+	// of, so silently substituting it would remove the only property that
+	// distinguishes it from spit.
+	ns.Def("rename", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("os/rename expects 2 args")
+		}
+		from, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/rename expected String path")
+		}
+		to, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/rename expected String destination")
+		}
+		if err := os.Rename(string(from), string(to)); err != nil {
+			return vm.NIL, err
+		}
+		return vs[1], nil
+	}))
+
+	// os/delete-tree — (os/delete-tree path) → nil
+	//
+	// Removes path and everything beneath it. The recursive form of
+	// delete-file, which removes a single entry and fails on a non-empty
+	// directory.
+	//
+	// Unlike delete-file, removing something already absent succeeds: the
+	// post-state the caller asked for is the one that holds. An empty path
+	// is refused, because it is never a thing a caller means to delete and
+	// RemoveAll treats it as a silent no-op, which hides the unset variable
+	// that produced it.
+	ns.Def("delete-tree", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/delete-tree expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/delete-tree expected String path")
+		}
+		if path == "" {
+			return vm.NIL, fmt.Errorf("os/delete-tree refuses an empty path")
+		}
+		if err := os.RemoveAll(string(path)); err != nil {
+			return vm.NIL, err
+		}
+		return vm.NIL, nil
+	}))
+
 	// os/os-name — (os/os-name) → "linux", "darwin", "windows", ...
 	ns.Def("os-name", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.String(runtime.GOOS), nil
