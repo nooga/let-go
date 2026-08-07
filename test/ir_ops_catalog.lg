@@ -20,6 +20,7 @@
    [ir.lattice :as lat]
    [ir.ops :as ops]
    [ir.passes.typeinfer :as ti]
+   [ir.lower-go :as lower-go]
    [test :refer :all]))
 
 (deftest catalog-facet-columns-match-registry
@@ -96,5 +97,43 @@
   (testing "BitwiseOp: all-int operands infer :int"
     (is (= :int (infer-two-const-op :bit-and 6 3)))
     (is (= :int (infer-two-const-op :bit-shift-left 1 4)))))
+
+;; --- AC-3: per-op contribution conditional cases ------------------
+
+;; Helper to build a minimal function with a specific const auxiliary value
+(defn- build-fn-with-const [aux-val]
+  (let [f (ir/new-fn "test" 0 false)
+        _ (ir/add-inst f 0 :const [] aux-val)]
+    f))
+
+(deftest ac3-var-conditional-case
+  (testing "AC-3: var-conditional — :const with Var aux contributes-rt?, literal does not"
+    (let [;; Get the actual Var object for clojure.core/+
+          var-val #'clojure.core/+
+          fn-var (build-fn-with-const var-val)
+          fn-lit (build-fn-with-const 42)
+          var-nid (first (ir/block-insts (first (ir/blocks fn-var)) fn-var))
+          lit-nid (first (ir/block-insts (first (ir/blocks fn-lit)) fn-lit))]
+      (is (true? (lower-go/op-contributes-rt? var-nid fn-var))
+          "op-contributes-rt? true for :const with Var aux")
+      (is (false? (lower-go/op-contributes-rt? lit-nid fn-lit))
+          "op-contributes-rt? false for :const with literal aux"))))
+
+(deftest ac3-function-template-case
+  (testing "AC-3: function-template — op with fn-template aux contributes-rt?, literal does not"
+    (let [;; Build fn with :const inst carrying :fn-template aux
+          ;; :const doesn't unconditionally contribute, only via fn-template check
+          fn-tpl (let [f (ir/new-fn "test-tpl" 0 false)
+                       ;; Use :const with a function-template auxiliary
+                       ;; Must include :kind :fn-template to be recognized by fn-template?
+                       _ (ir/add-inst f 0 :const [] {:kind :fn-template :fn (fn [] 1)})]
+                   f)
+          fn-lit (build-fn-with-const 42)
+          tpl-nid (first (ir/block-insts (first (ir/blocks fn-tpl)) fn-tpl))
+          lit-nid (first (ir/block-insts (first (ir/blocks fn-lit)) fn-lit))]
+      (is (true? (lower-go/op-contributes-rt? tpl-nid fn-tpl))
+          "op-contributes-rt? true for op with fn-template aux")
+      (is (false? (lower-go/op-contributes-rt? lit-nid fn-lit))
+          "op-contributes-rt? false for op with literal aux"))))
 
 (println "ir_ops_catalog tests defined")
