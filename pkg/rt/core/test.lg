@@ -29,6 +29,12 @@
                   (let [ret# (do ~@body)]
                     (set! *testing-vars* (pop *testing-vars*))
                     ret#)))
+     ;; The same keys Clojure puts on a test var, attached at evaluation
+     ;; time so :ns is the namespace the test was defined in. run-test-var
+     ;; reads :ns to run a single test inside its own namespace, and :test
+     ;; holds the test fn itself — as in clojure.test, where the runner
+     ;; invokes (:test (meta v)).
+     (alter-meta! (var ~name) assoc :ns *ns* :name '~name :test ~name)
      (register-test! (var ~name))))
 
 (defmacro is
@@ -55,47 +61,99 @@
         (println "FAIL" '~form "-" ~msg)
         false))))
 
+(defn compose-fixtures
+  "Compose two fixture fns into one that wraps f around g around the test fn."
+  [f g]
+  (fn [t] (f (fn [] (g t)))))
+
+(defn default-fixture
+  "Fixture that adds nothing: it just calls the test fn."
+  [t]
+  (t))
+
+(defn join-fixtures
+  "Compose a collection of fixture fns into a single fixture fn."
+  [fs]
+  (reduce compose-fixtures default-fixture fs))
+
+(defn- test-var*
+  "Run one test var inside *each-fixtures*, counting a thrown body as an
+   :error instead of letting it escape. Shared by run-tests and
+   run-test-var so a single-var run and a whole-suite run cannot drift.
+   Runs the fn in the var's :test metadata, as clojure.test does, and
+   falls back to the var's value for a plain fn var."
+  [tv]
+  (set! *testing-contexts* [])
+  (try
+    (let [test-fn (or (:test (meta tv)) (deref tv))]
+      ((join-fixtures *each-fixtures*) (fn [] (test-fn))))
+    (catch e
+      (set! *testing-contexts* [])
+      (set! *report-counters* (update *report-counters* :error inc))
+      (set! *test-result* false)
+      (println "ERROR in test:" e))))
+
 (defn run-tests [& nss]
   (set! *report-counters* {:test 0 :pass 0 :fail 0 :error 0})
   (set! *test-result* true)
   (println "Running tests...")
-  (let [compose-fixtures (fn [f g] (fn [t] (f (fn [] (g t)))))
-        default-fixture (fn [t] (t))
-        join-fixtures (fn [fs] (reduce compose-fixtures default-fixture fs))
-        runner (fn [tv]
-                 (set! *testing-contexts* [])
-                 (try
-                   (let [test-fn (deref tv)]
-                     ((join-fixtures *each-fixtures*) (fn [] (test-fn))))
-                   (catch e
-                     (set! *testing-contexts* [])
-                     (set! *report-counters* (update *report-counters* :error inc))
-                     (set! *test-result* false)
-                     (println "ERROR in test:" e))))]
-    ((join-fixtures *once-fixtures*)
-     (fn []
-       (if (seq nss)
-         (doseq [s nss]
-           (let [old-ns *ns*]
-             (in-ns s)
-             (doseq [t (get *registered-tests* *ns* [])]
-               (set! *report-counters* (update *report-counters* :test inc))
-               (runner t))
-             (in-ns (symbol (name old-ns)))))
-         ;; Run every registered ns's tests IN that ns, so runtime name
-         ;; resolution inside a test (resolve, *ns*, aliases) matches the ns
-         ;; the test was defined in — not whatever ns run-tests was called from.
-         ;; Keys are namespace objects, so derive the name via ns-name.
-         (doseq [[s bs] *registered-tests*]
-           (let [old-ns *ns*]
-             (in-ns (ns-name s))
-             (doseq [t bs]
-               (set! *report-counters* (update *report-counters* :test inc))
-               (runner t))
-             (in-ns (ns-name old-ns))))))))
+  ((join-fixtures *once-fixtures*)
+   (fn []
+     (if (seq nss)
+       (doseq [s nss]
+         (let [old-ns *ns*]
+           (in-ns s)
+           (doseq [t (get *registered-tests* *ns* [])]
+             (set! *report-counters* (update *report-counters* :test inc))
+             (test-var* t))
+           (in-ns (symbol (name old-ns)))))
+       ;; Run every registered ns's tests IN that ns, so runtime name
+       ;; resolution inside a test (resolve, *ns*, aliases) matches the ns
+       ;; the test was defined in — not whatever ns run-tests was called from.
+       ;; Keys are namespace objects, so derive the name via ns-name.
+       (doseq [[s bs] *registered-tests*]
+         (let [old-ns *ns*]
+           (in-ns (ns-name s))
+           (doseq [t bs]
+             (set! *report-counters* (update *report-counters* :test inc))
+             (test-var* t))
+           (in-ns (ns-name old-ns)))))))
   (let [c *report-counters*]
     (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
     (set! *test-result* (and (= 0 (:fail c)) (= 0 (:error c))))))
+
+(defn run-test-var
+  "Run a single test var and return the report counters
+   ({:test :pass :fail :error}). The var runs through the same
+   *once-fixtures* / *each-fixtures* composition as run-tests, and inside
+   the namespace it was defined in (:ns of its metadata, which deftest
+   attaches), so one test behaves the way the whole suite does. A thrown
+   test body counts as an :error rather than escaping. This is what editors
+   call to run the test under the cursor; see also the run-test macro.
+
+   The counters are bound, not set, for the duration of the run — as
+   clojure.test does — so running one test from inside another test, or
+   from a REPL in the middle of a suite, cannot overwrite the enclosing
+   run's tally or clear its failure flag."
+  [v]
+  (let [old-ns *ns*]
+    (binding [*report-counters* {:test 1 :pass 0 :fail 0 :error 0}
+              *test-result* true
+              *testing-contexts* []]
+      (in-ns (ns-name (or (:ns (meta v)) *ns*)))
+      (try
+        ((join-fixtures *once-fixtures*) (fn [] (test-var* v)))
+        (finally
+          (in-ns (ns-name old-ns))))
+      (let [c *report-counters*]
+        (println "Finished running test. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
+        c))))
+
+(defmacro run-test
+  "Run the named test and return its report counters:
+   (run-test my-test). Sugar for (run-test-var (var my-test))."
+  [name]
+  `(run-test-var (var ~name)))
 
 (defn testing-contexts-str []
   (str (apply str (interpose " > " *testing-contexts*))))
