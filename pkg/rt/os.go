@@ -318,15 +318,33 @@ func installOsNS() {
 
 	// os/delete-tree — (os/delete-tree path) → nil
 	//
-	// Removes path and everything beneath it. The recursive form of
+	// Removes path and everything beneath it: the recursive form of
 	// delete-file, which removes a single entry and fails on a non-empty
 	// directory.
 	//
-	// Unlike delete-file, removing something already absent succeeds: the
-	// post-state the caller asked for is the one that holds. An empty path
-	// is refused, because it is never a thing a caller means to delete and
-	// RemoveAll treats it as a silent no-op, which hides the unset variable
-	// that produced it.
+	// syscall/rm-rf is the same RemoveAll call and predates this. It lives
+	// in a namespace built for container setup, beside clone, pivot-root
+	// and seccomp, which is not where a caller doing ordinary filesystem
+	// work looks. This is the os-namespace spelling, and it is the one that
+	// carries the guards below.
+	//
+	// Three behaviours worth knowing, all inherited from RemoveAll:
+	//
+	//   - Removing something already absent succeeds. The post-state the
+	//     caller asked for is the one that holds. delete-file errors here.
+	//   - Symlinks are unlinked, never followed, so a link inside the tree
+	//     pointing outside it does not take the target down with it.
+	//   - By the same rule, a path that is *itself* a symlink to a
+	//     directory loses only the link; the directory it names keeps its
+	//     contents. Callers wanting the target gone should canonicalize
+	//     first.
+	//
+	// An empty path is refused: RemoveAll treats "" as a silent no-op,
+	// which hides the unset variable that produced it. The filesystem root
+	// is refused for the same reason and a worse outcome — (str nil) is ""
+	// in lg, so a caller building "$root/$name" with root unset produces
+	// "/name", one level below the root it never meant to touch. RemoveAll
+	// already rejects "." itself.
 	ns.Def("delete-tree", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("os/delete-tree expects 1 arg")
@@ -336,7 +354,12 @@ func installOsNS() {
 			return vm.NIL, fmt.Errorf("os/delete-tree expected String path")
 		}
 		if path == "" {
-			return vm.NIL, fmt.Errorf("os/delete-tree refuses an empty path")
+			return vm.NIL, fmt.Errorf("os/delete-tree expected a non-empty path")
+		}
+		// Dir(p) == p exactly at a volume root: "/" on unix, "C:\" and "\"
+		// on Windows. Cheaper and more portable than matching separators.
+		if cleaned := filepath.Clean(string(path)); filepath.Dir(cleaned) == cleaned {
+			return vm.NIL, fmt.Errorf("os/delete-tree refused the filesystem root %q", cleaned)
 		}
 		if err := os.RemoveAll(string(path)); err != nil {
 			return vm.NIL, err

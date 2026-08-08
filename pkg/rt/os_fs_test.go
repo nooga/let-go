@@ -72,8 +72,10 @@ func TestOsRenameMovesAFile(t *testing.T) {
 	}
 }
 
-// The publish-by-rename pattern is the reason this native exists: the
-// destination must go from old content to new with nothing in between.
+// The publish-by-rename pattern is the reason this native exists. This
+// checks the end state only — a torn intermediate is not observable from
+// here — so it pins that the destination ends up holding the new content
+// with no leftover source.
 func TestOsRenameReplacesAnExistingFile(t *testing.T) {
 	tmp := t.TempDir()
 	staged := filepath.Join(tmp, "staged")
@@ -113,6 +115,9 @@ func TestOsRenameReportsAMissingSource(t *testing.T) {
 
 func TestOsRenameRejectsBadArgs(t *testing.T) {
 	tmp := t.TempDir()
+	if _, err := osFn(t, "rename").Invoke(nil); err == nil {
+		t.Error("rename with no args succeeded, want an error")
+	}
 	if _, err := callOsFn(t, "rename", filepath.Join(tmp, "a")); err == nil {
 		t.Error("rename with 1 arg succeeded, want an error")
 	}
@@ -164,18 +169,63 @@ func TestOsDeleteTreeSucceedsWhenAlreadyAbsent(t *testing.T) {
 	}
 }
 
-func TestOsDeleteTreeLeavesSiblingsAlone(t *testing.T) {
+// The containment property worth pinning: a symlink inside the doomed tree
+// pointing out of it must be unlinked, not followed. Two unrelated sibling
+// directories would prove nothing, since no implementation could conflate
+// them.
+func TestOsDeleteTreeUnlinksSymlinksRatherThanFollowingThem(t *testing.T) {
 	tmp := t.TempDir()
 	doomed := filepath.Join(tmp, "doomed")
-	keep := filepath.Join(tmp, "keep")
+	outside := filepath.Join(tmp, "outside")
 	writeFileAt(t, filepath.Join(doomed, "x.txt"), "x")
-	writeFileAt(t, filepath.Join(keep, "y.txt"), "y")
+	writeFileAt(t, filepath.Join(outside, "keep.txt"), "keep")
+	if err := os.Symlink(outside, filepath.Join(doomed, "escape")); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
 
 	if _, err := callOsFn(t, "delete-tree", doomed); err != nil {
 		t.Fatalf("delete-tree: %v", err)
 	}
-	if body := readFile(t, filepath.Join(keep, "y.txt")); body != "y" {
-		t.Errorf("sibling holds %q, want %q", body, "y")
+	if _, err := os.Stat(doomed); !os.IsNotExist(err) {
+		t.Errorf("doomed tree survived, stat err = %v", err)
+	}
+	if body := readFile(t, filepath.Join(outside, "keep.txt")); body != "keep" {
+		t.Errorf("the symlink was followed out of the tree; outside holds %q", body)
+	}
+}
+
+// The corollary, and the surprising half: when the path itself is a symlink
+// to a directory, only the link goes. Documented on the native because
+// "removes path and everything beneath it" does not lead a caller to expect
+// it.
+func TestOsDeleteTreeOnASymlinkRemovesOnlyTheLink(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "target")
+	writeFileAt(t, filepath.Join(target, "t.txt"), "t")
+	link := filepath.Join(tmp, "linkdir")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+
+	if _, err := callOsFn(t, "delete-tree", link); err != nil {
+		t.Fatalf("delete-tree: %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("link survived, lstat err = %v", err)
+	}
+	if body := readFile(t, filepath.Join(target, "t.txt")); body != "t" {
+		t.Errorf("the link's target lost its contents; holds %q", body)
+	}
+}
+
+// The empty-path guard exists to catch an unset variable. "/" is the same
+// mistake with a worse outcome, and in lg (str nil) is "", so "$root/$name"
+// with root unset yields "/name" rather than "".
+func TestOsDeleteTreeRefusesTheFilesystemRoot(t *testing.T) {
+	for _, p := range []string{"/", "//", "/.."} {
+		if _, err := callOsFn(t, "delete-tree", p); err == nil {
+			t.Errorf("delete-tree(%q) succeeded, want an error", p)
+		}
 	}
 }
 
