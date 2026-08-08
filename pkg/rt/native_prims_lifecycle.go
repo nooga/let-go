@@ -126,6 +126,7 @@ func setPrimitiveRoot(ns *vm.Namespace, name string, v vm.Value) *vm.Var {
 // the binding so it can be reapplied after the namespace's source loads.
 // Called only from the generated RegisterGeneratedPrimitives.
 func defGeneratedPrimitive(ns *vm.Namespace, nsName, name string, v vm.Value) {
+	recordShadowedHandRegistration(ns, nsName, name)
 	// GuardRoot marks the adapter as the var's canonical root: lowered
 	// direct-call sites stay on the native fast path only while the root is
 	// untouched (vm.GuardedRootsIntact), so with-redefs/alter-var-root in a
@@ -149,6 +150,57 @@ func defGeneratedPrimitive(ns *vm.Namespace, nsName, name string, v vm.Value) {
 	}
 	m[name] = v
 	genPrimMu.Unlock()
+}
+
+// Shadowed hand registrations.
+//
+// installLangNS Defs its closures first; the generated registrar drains last
+// and takes the var root, so a name registered in BOTH places runs the
+// generated //lg:native body and the hand-written closure is silently
+// discarded. That is invisible when the two bodies agree and a regression when
+// they don't: `reduce` had accumulated ArrayVector/Range fast paths only in the
+// closure, so the day the generated registration started resolving (the ns
+// alias fix in #639) reduce got 1.75x slower with every test still green.
+// Recorded at initial registration so a test can ratchet the set.
+var (
+	shadowedMu       sync.Mutex
+	shadowedHandRegs = map[string]bool{} // "<requested-ns>/<name>"
+)
+
+// recordShadowedHandRegistration notes that a generated primitive is about to
+// take a var some other registration already interned. It runs from
+// defGeneratedPrimitive BEFORE the binding lands in genPrimBindings, so a name
+// already present there was interned by a PREVIOUS generated registration, not
+// by hand. Without that check any re-registration (a second registrar pass, a
+// test binding the same ns/name twice in one process) records its own
+// predecessor as a hand shadow, making the set invocation-count dependent.
+func recordShadowedHandRegistration(ns *vm.Namespace, nsName, name string) {
+	if ns == nil || ns.LookupLocal(vm.Symbol(name)) == nil {
+		return
+	}
+	genPrimMu.RLock()
+	_, alreadyGenerated := genPrimBindings[resolveNSAlias(nsName)][name]
+	genPrimMu.RUnlock()
+	if alreadyGenerated {
+		return
+	}
+	shadowedMu.Lock()
+	shadowedHandRegs[nsName+"/"+name] = true
+	shadowedMu.Unlock()
+}
+
+// ShadowedHandRegistrations lists "<ns>/<name>" for every generated primitive
+// that landed on top of an existing hand-written registration. Diagnostic:
+// each entry is a duplicate implementation where only the generated one runs.
+func ShadowedHandRegistrations() []string {
+	shadowedMu.Lock()
+	out := make([]string, 0, len(shadowedHandRegs))
+	for k := range shadowedHandRegs {
+		out = append(out, k)
+	}
+	shadowedMu.Unlock()
+	sort.Strings(out)
+	return out
 }
 
 // BindGeneratedPrimitive is the exported binding entry point for own-mode
