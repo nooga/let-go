@@ -367,6 +367,55 @@ func installOsNS() {
 		return vm.NIL, nil
 	}))
 
+	// os/absolute-path — (os/absolute-path path) → "/abs/path"
+	//
+	// Resolves path against the process working directory and cleans it.
+	// Purely lexical: it does not touch the filesystem, so the path need not
+	// exist, and any symlink in it stays a symlink.
+	ns.Def("absolute-path", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/absolute-path expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/absolute-path expected String path")
+		}
+		abs, err := filepath.Abs(string(path))
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(abs), nil
+	}))
+
+	// os/canonical-path — (os/canonical-path path) → "/real/path"
+	//
+	// The absolute path with every symlink resolved, so two names for one
+	// file produce one string. That is what makes it the form to compare or
+	// use as a key, and it is why this reads the filesystem where
+	// absolute-path does not: a symlink can only be followed by looking.
+	//
+	// A path that does not exist is an error rather than a cleaned-up
+	// guess. Callers wanting a name for a file they are about to create
+	// want absolute-path.
+	ns.Def("canonical-path", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/canonical-path expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/canonical-path expected String path")
+		}
+		abs, err := filepath.Abs(string(path))
+		if err != nil {
+			return vm.NIL, err
+		}
+		real, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(real), nil
+	}))
+
 	// os/os-name — (os/os-name) → "linux", "darwin", "windows", ...
 	ns.Def("os-name", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.String(runtime.GOOS), nil
