@@ -130,6 +130,83 @@ func TestOsCanonicalPathReportsAMissingPath(t *testing.T) {
 	}
 }
 
+// Regression: filepath.Abs cleans ".." lexically, against the *link's*
+// parent rather than the target's. Absolutizing first therefore throws away
+// the answer and reports ENOENT for a path the kernel opens fine, so the
+// resolution has to happen before the cleaning.
+//
+// The path is built by concatenation, not filepath.Join — Join cleans too,
+// which would destroy the case before the native ever saw it.
+func TestOsCanonicalPathResolvesDotDotAfterASymlink(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "a"), 0o755); err != nil {
+		t.Fatalf("mkdir a: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "b", "c"), 0o755); err != nil {
+		t.Fatalf("mkdir b/c: %v", err)
+	}
+	// Sits one level above what the link points at, so it is reachable only
+	// if ".." is applied after the link is followed.
+	writeFileAt(t, filepath.Join(tmp, "b", "target.txt"), "x")
+	if err := os.Symlink(filepath.Join(tmp, "b", "c"), filepath.Join(tmp, "a", "link")); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+
+	input := tmp + "/a/link/../target.txt"
+	if _, err := os.Stat(input); err != nil {
+		t.Fatalf("fixture is wrong, the kernel cannot open %s: %v", input, err)
+	}
+
+	got, err := callOsFn(t, "canonical-path", input)
+	if err != nil {
+		t.Fatalf("canonical-path on a path the kernel opens: %v", err)
+	}
+	wantReal, err := filepath.EvalSymlinks(filepath.Join(tmp, "b", "target.txt"))
+	if err != nil {
+		t.Fatalf("evalsymlinks: %v", err)
+	}
+	if want := vm.String(wantReal); got != want {
+		t.Errorf("canonical-path = %v, want %v", got, want)
+	}
+}
+
+// The distinction the two functions exist to draw: absolute-path must leave
+// a symlink alone where canonical-path resolves it.
+func TestOsAbsolutePathLeavesSymlinksUnresolved(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "target.txt")
+	writeFileAt(t, target, "x")
+	link := filepath.Join(tmp, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+
+	abs, err := callOsFn(t, "absolute-path", link)
+	if err != nil {
+		t.Fatalf("absolute-path: %v", err)
+	}
+	if want := vm.String(link); abs != want {
+		t.Errorf("absolute-path = %v, want the link itself %v", abs, want)
+	}
+	canon, err := callOsFn(t, "canonical-path", link)
+	if err != nil {
+		t.Fatalf("canonical-path: %v", err)
+	}
+	if abs == canon {
+		t.Errorf("absolute-path and canonical-path both returned %v; the symlink was resolved by both", abs)
+	}
+}
+
+// Same reasoning as delete-tree's: an empty path is what an unset variable
+// looks like, and filepath.Abs("") quietly answers with the cwd.
+func TestOsPathFnsRefuseAnEmptyPath(t *testing.T) {
+	for _, name := range []string{"absolute-path", "canonical-path"} {
+		if _, err := callOsFn(t, name, ""); err == nil {
+			t.Errorf("os/%s on an empty path succeeded, want an error", name)
+		}
+	}
+}
+
 func TestOsPathFnsRejectBadArgs(t *testing.T) {
 	for _, name := range []string{"absolute-path", "canonical-path"} {
 		if _, err := osFn(t, name).Invoke(nil); err == nil {

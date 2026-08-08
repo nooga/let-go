@@ -20,19 +20,22 @@
   (testing "a path that does not exist still resolves"
     (is (= "/tmp/definitely-not-here" (os/absolute-path "/tmp/definitely-not-here")))))
 
-(deftest canonical-path-resolves-to-one-name
-  (os/delete-tree root)
-  (mkdir root)
-  (spit (str root "/real.txt") "x")
+(deftest canonical-path-makes-a-relative-path-absolute
+  ;; Symlink resolution is covered in pkg/rt/os_paths_test.go, which can
+  ;; create links. What lg can check without them is the half that needs the
+  ;; process cwd: a genuinely relative input has to come back absolute, and
+  ;; equal to what os/cwd reports.
+  (testing "a relative input resolves against the working directory"
+    (let [here (os/canonical-path ".")]
+      (is (= "/" (subs here 0 1)))
+      (is (= (os/canonical-path (os/cwd)) here)))))
 
-  (testing "a relative path becomes absolute"
-    (is (= (os/canonical-path root) (os/canonical-path (str root "/.")))))
-
-  (testing "traversal collapses to the same file"
-    (is (= (os/canonical-path (str root "/real.txt"))
-           (os/canonical-path (str root "/../let-go-os-paths-test/real.txt")))))
-
-  (os/delete-tree root))
+(deftest path-fns-refuse-an-empty-path
+  ;; (str nil) is "" in lg, so this is what an unset variable looks like.
+  ;; filepath.Abs would quietly answer with the cwd.
+  (testing "both refuse rather than resolving to the working directory"
+    (is (= :threw (try (os/absolute-path "") :no-throw (catch _ :threw))))
+    (is (= :threw (try (os/canonical-path "") :no-throw (catch _ :threw))))))
 
 (deftest canonical-path-needs-the-path-to-exist
   ;; let-go has no thrown? — use try/catch directly.
