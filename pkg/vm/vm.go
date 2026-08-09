@@ -744,6 +744,11 @@ func enterFrame(f *Frame) {
 	f.profileOn = ProfilingEnabled.Load()
 }
 
+// MEASUREMENT CONTROL — DO NOT MERGE.
+// This comment is the entire diff. It exists to push a functionally identical
+// build through the repeat A/B lane, so the deltas that come back are the
+// harness's own noise floor rather than any property of a change. Sibling of
+// #706, same base, same lane, same label. See the PR description.
 func leaveFrame(_ *Frame) {
 	if allocAttrEnabled {
 		attrPopFrame()
