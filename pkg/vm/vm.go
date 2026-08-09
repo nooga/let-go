@@ -744,7 +744,11 @@ func enterFrame(f *Frame) {
 	f.profileOn = ProfilingEnabled.Load()
 }
 
-func leaveFrame(_ *Frame) {
+// leaveFrame takes no frame on purpose. attrPopFrame pops the shadow stack by
+// position, so the frame was never read. Restoring the parameter would put a
+// *Frame back into runLoop's deferred call and reintroduce the by-ref capture
+// of f described at that defer.
+func leaveFrame() {
 	if allocAttrEnabled {
 		attrPopFrame()
 	}
@@ -767,7 +771,7 @@ func releaseFailedFrames(state *frameRunState, err error) (*Frame, error) {
 			state.current = parent
 			return parent, err
 		}
-		leaveFrame(parent)
+		leaveFrame()
 		parent.parent = nil
 		if parent != state.root {
 			ReleaseFrame(parent)
@@ -786,7 +790,7 @@ func releasePanickedFrames(state *frameRunState) {
 	}
 	for parent != nil {
 		next := parent.parent
-		leaveFrame(parent)
+		leaveFrame()
 		parent.parent = nil
 		if parent != state.root {
 			ReleaseFrame(parent)
@@ -828,9 +832,12 @@ func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
 	if entering {
 		enterFrame(f)
 	}
-	// f changes as the loop descends and returns. On a final return or error,
-	// leave whichever logical frame is current; suspended parents remain active.
-	defer func() { leaveFrame(f) }()
+	// Balances the enterFrame above on a final return or error; suspended
+	// parents remain active and are released by releaseFailedFrames /
+	// releasePanickedFrames. Deliberately not a closure: capturing f here
+	// would pin the dispatch loop's hottest pointer to memory for an argument
+	// leaveFrame does not take.
+	defer leaveFrame()
 	for {
 		inst := f.code.code[f.ip]
 		if f.debug {
@@ -879,7 +886,7 @@ func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
 			child := f
 			parent := child.parent
 			child.parent = nil
-			leaveFrame(child)
+			leaveFrame()
 			ReleaseFrame(child)
 			f = parent
 			state.current = f
