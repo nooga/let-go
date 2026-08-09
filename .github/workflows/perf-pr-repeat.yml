@@ -123,20 +123,39 @@ jobs:
             --base ../wt-base --head ../wt-head \
             --n "$N" --budgets "$BUDGETS" --confirm-k 2 \
             --out "${RUNNER_TEMP}/ab-out" | tee "${RUNNER_TEMP}/ab-report.txt" || rc=$?
-          # One body, two destinations: the job summary (always) and the PR
-          # comment artifact (consumed by the comment job below).
+          # The report is N ::group:: blocks of per-cycle bench output followed
+          # by the aggregate table. The job summary takes all of it. The PR
+          # comment takes the aggregate only: the per-cycle logs run to ~100
+          # lines, and ::group:: is Actions log-folding syntax that renders as
+          # literal text in a comment body.
+          rpt="${RUNNER_TEMP}/ab-report.txt"
+          last_group="$(grep -n '::endgroup::' "$rpt" | tail -1 | cut -d: -f1 || true)"
+          if [ -n "$last_group" ]; then
+            tail -n +"$((last_group + 1))" "$rpt" > "${RUNNER_TEMP}/ab-summary.txt"
+          else
+            # No groups found — format changed, or the driver died before the
+            # first cycle. Fall back to the whole report rather than post an
+            # empty comment.
+            cp "$rpt" "${RUNNER_TEMP}/ab-summary.txt"
+          fi
           {
             echo '## Repeat A/B (variance-reduced) — informational shadow check'
             echo
             echo '```'
-            cat "${RUNNER_TEMP}/ab-report.txt"
+            cat "$rpt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '## Repeat A/B (variance-reduced) — informational shadow check'
+            echo
+            echo '```'
+            cat "${RUNNER_TEMP}/ab-summary.txt"
             echo '```'
             echo
-            echo "Per-snapshot evidence — raw samples, cycle order, provenance — is in the \`perf-pr-repeat\` artifact on [this run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            echo "Per-cycle logs are in the job summary. Per-snapshot evidence — raw samples, cycle order, provenance — is in the \`perf-pr-repeat\` artifact on [this run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
             echo
             echo '_Informational only. This check never gates the PR — the workflow header says why._'
           } > "${RUNNER_TEMP}/comment.md"
-          cat "${RUNNER_TEMP}/comment.md" >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
       # Retain the full evidence trail (every base/head snapshot with raw samples,
