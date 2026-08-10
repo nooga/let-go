@@ -1,11 +1,9 @@
-//go:build !plan9 && !js && !wasip1
-
 /*
  * Copyright (c) 2021 Marcin Gasperowicz <xnooga@gmail.com>
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package complete
 
 import (
 	"strings"
@@ -16,19 +14,19 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-func testCompleter(t *testing.T) *completer {
+func testCompleter(t *testing.T) *Completer {
 	t.Helper()
 	ns := rt.NS("user")
 	if ns == nil {
 		t.Fatal("user namespace not found")
 	}
-	return &completer{ctx: compiler.NewCompiler(vm.NewConsts(), ns)}
+	return &Completer{Ctx: compiler.NewCompiler(vm.NewConsts(), ns)}
 }
 
 // Tab completion walks the refer graph, which is cyclic (clojure.core requires
 // let-go.types, RegisterNS refers clojure.core back into it). Completing at all
 // is the assertion here — before the visited set this overflowed the stack.
-func TestCompleterDoReturnsUntypedRemainder(t *testing.T) {
+func TestDoReturnsUntypedRemainder(t *testing.T) {
 	c := testCompleter(t)
 
 	line := []rune("(ns-unm")
@@ -56,7 +54,7 @@ func TestCompleterDoReturnsUntypedRemainder(t *testing.T) {
 	}
 }
 
-func TestCompleterDoUnknownNamespace(t *testing.T) {
+func TestDoUnknownNamespace(t *testing.T) {
 	c := testCompleter(t)
 	line := []rune("nosuchns/x")
 	if candidates, _ := c.Do(line, len(line)); len(candidates) != 0 {
