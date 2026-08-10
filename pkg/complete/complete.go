@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021 Marcin Gasperowicz <xnooga@gmail.com>
+ * Copyright (c) 2026 let-go contributors; see CONTRIBUTORS.
  * SPDX-License-Identifier: MIT
  */
 
