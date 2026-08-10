@@ -48,10 +48,19 @@ func (c *completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
 	prefix := string(head[start:])
 
 	symbols := rt.FuzzyNamespacedSymbolLookup(c.ctx.CurrentNS(), vm.Symbol(prefix))
+
+	// readline INSERTS the candidate at the cursor, so a candidate has to be the
+	// part not typed yet — returning whole symbols turns "ns-unm<tab>" into
+	// "ns-unmns-unmap". Candidates come back unqualified (the lookup resolves the
+	// ns segment of the prefix and matches on the name), so the typed part to
+	// strip is the name segment, not the whole word. length is the same segment's
+	// rune count: readline echoes that many runes ahead of each candidate when it
+	// lists them.
+	_, namePrefix, _ := vm.Symbol(prefix).NamespacedRaw()
 	for _, s := range symbols {
-		newLine = append(newLine, []rune(string(s)+" "))
+		newLine = append(newLine, []rune(strings.TrimPrefix(string(s), string(namePrefix))+" "))
 	}
-	length = pos - start
+	length = len([]rune(string(namePrefix)))
 	return
 }
 
