@@ -1,0 +1,81 @@
+;; clojure.data + ir.data — structural comparison of IR Functions, replacing substring
+;; assertions over ir.dump/dump text.
+;;
+;; The dump is derived; a Function is already data. These tests pin that the
+;; projection compares what matters and normalizes what does not, so a
+;; difference reported by diff is a real difference in the function.
+(ns test.ir-diff-test
+  (:require [test :refer :all]
+            [ir]
+            [ir.build]
+            [ir.data]
+            [clojure.data :as data]))
+
+(defn- build [form] (ir.build/build-fn form))
+
+(defn- diff [a b]
+  (data/diff (ir.data/fn->data a) (ir.data/fn->data b)))
+
+(defn- same? [a b]
+  (let [[only-a only-b _] (diff a b)]
+    (and (nil? only-a) (nil? only-b))))
+
+(deftest identical-functions-diff-empty
+  (testing "two builds of the same form are structurally identical"
+    (let [a (build '(fn sum [a b] (+ a b)))
+          b (build '(fn sum [a b] (+ a b)))
+          [only-a only-b both] (diff a b)]
+      (is (nil? only-a))
+      (is (nil? only-b))
+      (is (some? both))
+      (is (same? a b)))))
+
+(deftest a-differing-op-is-isolated
+  (testing "the diff names the one inst that differs, not the whole function"
+    (let [a (build '(fn sum [a b] (+ a b)))
+          b (build '(fn sum [a b] (- a b)))
+          [only-a only-b _] (diff a b)]
+      (is (not (same? a b)))
+      ;; every block-level difference reduces to the op field
+      (is (= [{:op :add}] (->> (:blocks only-a) first :insts (filter some?))))
+      (is (= [{:op :sub}] (->> (:blocks only-b) first :insts (filter some?)))))))
+
+(deftest header-differences-are-reported
+  (testing "name"
+    (let [[only-a only-b _] (diff (build '(fn one [a] a))
+                                          (build '(fn two [a] a)))]
+      (is (= "one" (:name only-a)))
+      (is (= "two" (:name only-b)))))
+  (testing "arity"
+    (let [[only-a only-b _] (diff (build '(fn f [a] a))
+                                          (build '(fn f [a b] a)))]
+      (is (= 1 (:arity only-a)))
+      (is (= 2 (:arity only-b))))))
+
+(deftest the-uses-cache-is-not-a-difference
+  (testing "populating one function's use-graph memo does not make it differ"
+    (let [a (build '(fn sum [a b] (+ a b)))
+          b (build '(fn sum [a b] (+ a b)))]
+      (is (same? a b))
+      (ir/uses a)                      ; fills :uses-cache / clears :uses-dirty?
+      (is (same? a b)
+          "a memo of the use-graph is not part of the function's meaning"))))
+
+(deftest the-projection-carries-no-transient
+  (testing "types are read through ir/type-of, so nothing transient survives"
+    (let [d (ir.data/fn->data (build '(fn sum [a b] (+ a b))))
+          insts (->> (:blocks d) (mapcat :insts))]
+      (is (seq insts))
+      (is (every? (fn [i] (contains? i :type)) insts))
+      (is (not (contains? d :types)))
+      (is (not (contains? d :uses-cache))))))
+
+(deftest insts-project-as-named-fields
+  (testing "a positional [op refs aux block source-infos type] tuple reports as a map"
+    (let [d (ir.data/fn->data (build '(fn f [a] a)))
+          i (->> (:blocks d) (mapcat :insts) first)]
+      (is (contains? i :nid))
+      (is (contains? i :op))
+      (is (contains? i :refs))
+      (is (contains? i :aux))
+      (is (contains? i :type)))))

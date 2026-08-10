@@ -739,6 +739,39 @@
                      (assoc new-id new-bs)
                      (assoc old-id empty-bs))))))))
 
+;; --- structural projection -------------------------------------------
+;;
+;; Keep the Function representation and its projection together. Consumers
+;; should compare this public data view with clojure.data/diff rather than know
+;; about positional inst tuples or cache/side-table fields.
+
+(defn- inst->data [f nid]
+  {:nid  nid
+   :op   (op nid f)
+   :refs (vec (refs nid f))
+   :aux  (aux nid f)
+   :type (type-of nid f)})
+
+(defn- block->data [f bid]
+  {:id     bid
+   :params (vec (block-params bid f))
+   :preds  (vec (block-preds bid f))
+   :insts  (mapv (fn [nid] (inst->data f nid)) (block-insts bid f))
+   :term   (let [t (block-term bid f)]
+             (when t (inst->data f t)))})
+
+(defn fn->data [f]
+  "Project an IR Function into stable, comparable data.
+
+   Derived caches and transient side tables are excluded. Inferred types are
+   read through type-of, and insts are attached to their owning blocks."
+  {:name      (fn-name f)
+   :arity     (fn-arity f)
+   :variadic? (fn-variadic? f)
+   :arg-types (vec (or (fn-arg-types f) []))
+   :entry     (entry-block f)
+   :blocks    (mapv (fn [bid] (block->data f bid)) (blocks f))})
+
 ;; --- export into the `ir` namespace ----------------------------------
 ;;
 ;; The bridge install creates the `ir` namespace at Go init time and
