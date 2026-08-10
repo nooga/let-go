@@ -84,3 +84,45 @@ func TestFuzzySymbolLookup_CyclicRefersTerminate(t *testing.T) {
 		t.Fatalf("want each symbol once across the cycle, got %v", got)
 	}
 }
+
+func TestFuzzySymbolLookup_HonorsReferOnly(t *testing.T) {
+	// (:require [lib :refer [foo]]) should only bring foo into scope, not
+	// every other public symbol lib happens to define.
+	lib := NewNamespace("only-lib")
+	lib.Def("foo", TRUE)
+	lib.Def("fred", TRUE)
+	lib.Def("flip", TRUE)
+
+	user := NewNamespace("only-user")
+	user.ReferList(lib, []Symbol{"foo"})
+
+	got := FuzzySymbolLookup(user, Symbol("f"), true)
+	names := map[Symbol]bool{}
+	for _, s := range got {
+		names[s] = true
+	}
+	if !names["foo"] {
+		t.Fatalf("want foo (explicitly referred) in results, got %v", got)
+	}
+	if names["fred"] || names["flip"] {
+		t.Fatalf("want fred/flip excluded (not in :refer list), got %v", got)
+	}
+}
+
+func TestFuzzySymbolLookup_HonorsUnmap(t *testing.T) {
+	// After (ns-unmap *ns* 'foo), foo should no longer resolve in this
+	// namespace even though it's still referred from lib.
+	lib := NewNamespace("unmap-lib")
+	lib.Def("foo", TRUE)
+
+	user := NewNamespace("unmap-user")
+	user.Refer(lib, "", true) // :refer :all
+	user.Unmap("foo")
+
+	got := FuzzySymbolLookup(user, Symbol("f"), true)
+	for _, s := range got {
+		if s == "foo" {
+			t.Fatalf("want foo excluded after ns-unmap, got %v", got)
+		}
+	}
+}
