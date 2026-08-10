@@ -63,3 +63,24 @@ func TestLookup_QualifiedAliasFollowsTargetRefers(t *testing.T) {
 		t.Fatalf("resolved var value = %v, want TRUE", got)
 	}
 }
+
+func TestFuzzySymbolLookup_CyclicRefersTerminate(t *testing.T) {
+	// The real refer graph is cyclic: clojure.core requires let-go.types, and
+	// RegisterNS auto-refers clojure.core back into it. REPL/nREPL tab
+	// completion walks that graph, so the walk must not recurse forever.
+	a := NewNamespace("cyc-a")
+	b := NewNamespace("cyc-b")
+	a.Refer(b, "", true)
+	b.Refer(a, "", true)
+	a.Def("defer-me", TRUE)
+	b.Def("defcmd", TRUE)
+
+	got := FuzzySymbolLookup(a, Symbol("def"), true)
+	names := map[Symbol]int{}
+	for _, s := range got {
+		names[s]++
+	}
+	if names["defer-me"] != 1 || names["defcmd"] != 1 {
+		t.Fatalf("want each symbol once across the cycle, got %v", got)
+	}
+}

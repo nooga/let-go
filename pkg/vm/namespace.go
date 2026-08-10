@@ -641,10 +641,23 @@ func (n *Namespace) Unmap(name Symbol) {
 	n.mu.Unlock()
 }
 
+// FuzzySymbolLookup collects every symbol visible from ns whose name starts
+// with s, walking refers transitively. The refer graph is cyclic — clojure.core
+// requires let-go.types for array?/bigint?, and RegisterNS auto-refers
+// clojure.core back into it — so the walk needs a visited set; without one the
+// core<->let-go.types edge recurses until the stack blows.
 func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
+	return fuzzySymbolLookup(ns, s, lookupPrivate, map[*Namespace]bool{})
+}
+
+func fuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool, seen map[*Namespace]bool) []Symbol {
 	ret := []Symbol{}
+	if ns == nil || seen[ns] {
+		return ret
+	}
+	seen[ns] = true
 	for _, r := range ns.refersSnapshot() {
-		ret = append(ret, FuzzySymbolLookup(r.ns, s, false)...)
+		ret = append(ret, fuzzySymbolLookup(r.ns, s, false, seen)...)
 	}
 	for k, v := range ns.registrySnapshot() {
 		if strings.HasPrefix(string(k), string(s)) {
