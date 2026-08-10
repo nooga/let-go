@@ -107,7 +107,7 @@
    first) are excluded."
   (loop [invariant #{}]
     (let [new-invariant
-          (->> (range (count (:insts @f)))
+          (->> (range (ir/inst-count f))
                (filter (fn [nid]
                          (let [op (ir/op nid f)]
                            (and (not (invariant nid))

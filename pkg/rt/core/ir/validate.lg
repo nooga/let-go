@@ -51,8 +51,8 @@
         (recur (inc i))))))
 
 (defn- check-blocks-terminated! [f label]
-  (let [blocks (:blocks @f)
-        insts  (:insts @f)]
+  (let [blocks (ir/raw-blocks f)
+        insts  (ir/all-insts f)]
     (loop [i 0]
       (when (< i (count blocks))
         (let [blk     (nth blocks i)
@@ -90,7 +90,7 @@
 
    :invalid Insts (already-removed slots) are skipped — their refs
    are stale by design."
-  (let [insts (:insts @f)]
+  (let [insts (ir/all-insts f)]
     (doseq [[i ins] (map-indexed vector insts)
             :let    [op (nth ins 0)]
             :when   (not= op :invalid)
@@ -125,8 +125,8 @@
   "For every terminator (:branch / :branch-if), verify the BranchTarget.args
    count matches the successor block's params count. Catches stale BranchTargets
    left by thread-block-args after it added new block params."
-  (let [blocks (:blocks @f)
-        insts  (:insts @f)]
+  (let [blocks (ir/raw-blocks f)
+        insts  (ir/all-insts f)]
     (loop [i 0]
       (when (< i (count blocks))
         (let [blk     (nth blocks i)
@@ -149,8 +149,8 @@
    the stack just below the cond. Any pass that breaks this invariant
    (or any hand-built IR that violates it) leaves lower without a
    well-defined layout. Throws naming the offending block."
-  (let [blocks (:blocks @f)
-        insts  (:insts @f)]
+  (let [blocks (ir/raw-blocks f)
+        insts  (ir/all-insts f)]
     (loop [i 0]
       (when (< i (count blocks))
         (let [term-id (:term (nth blocks i))]
@@ -173,7 +173,7 @@
   "Throw if f is malformed. Returns f on success so it composes in -> chains.
 
    `label` names the pass that just ran; appears in every error message."
-  (let [insts (:insts @f)]
+  (let [insts (ir/all-insts f)]
     (check-inst-shapes!              insts label)
     (check-refs-in-range!            insts label)
     (check-blocks-terminated!        f     label)

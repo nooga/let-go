@@ -433,11 +433,10 @@
   (let [s     @state
         facts (:inst-facts s)
         tch   (:touched s)
-        fv    @f
-        insts (:insts fv)
+        insts (ir/all-insts f)
         ;; types side table (see ir.data new-fn) — read it first, tuple slot 5
         ;; is the construction-time fallback, mirroring ir/type-of.
-        tys   (:types fv)
+        tys   (ir/all-types f)
         tn    (count tys)
         n     (count insts)]
     (loop [i 0]
@@ -468,7 +467,7 @@
   ;; changed" contract — seeded-but-unchanged :bottom nodes must not clobber
   ;; the inst's :unknown type.)
   (let [tch (:touched @state)
-        n   (count (:insts @f))]
+        n   (ir/inst-count f)]
     (loop [nid 0]
       (when (< nid n)
         (when (nth tch nid)

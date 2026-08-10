@@ -38,7 +38,7 @@
    :mutated-vars contains Vars written by direct :set-var instructions.
    :unknown-all? means an indirect/global var-mutating call was observed,
    so no LoadVar can be assumed stable."
-  (loop [ids          (range (count (:insts @f)))
+  (loop [ids          (range (ir/inst-count f))
          mutated-vars #{}
          unknown-all? false]
     (if (or unknown-all? (empty? ids))
