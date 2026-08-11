@@ -71,16 +71,31 @@
       (= '& (nth bvec i)) i
       :else (recur (inc i)))))
 
+(defn- arity-list? [form]
+  "True when form is one defn arity — ([params] body…) or (^tag [params] body…)."
+  (and (seq? form)
+       (let [b (first form)]
+         (or (vector? b)
+             (ir.build/return-hinted-arity-vector? b)))))
+
+(defn- unwrap-single-arity-list [body]
+  "Clojure allows (defn name ([params] body…)) — one arity written as a list.
+   When body is exactly that, unwrap so the rest of parse-entry-form sees a
+   normal single-arity binding vector. Without this, (first body) is a list,
+   multi-arity-body? matches, and a valid entry is misreported as multi-arity."
+  (if (and (arity-list? (first body))
+           (nil? (next body)))
+    (first body)
+    body))
+
 (defn- multi-arity-body? [body]
   "True when a defn body is the multi-arity form — ([] …) ([x] …) — rather
    than a single binding vector. Each arity is a seq whose head is a binding
-   vector (or a return-hinted one)."
-  (let [head (first body)]
-    (boolean
-      (and (seq? head)
-           (let [b (first head)]
-             (or (vector? b)
-                 (ir.build/return-hinted-arity-vector? b)))))))
+   vector (or a return-hinted one). Requires at least two arities: a lone
+   arity list is unwrapped by unwrap-single-arity-list first."
+  (boolean
+    (and (arity-list? (first body))
+         (next body))))
 
 (defn- arity-shape-of [bvec]
   "Classify a single-arity binding vector for the entry frame.
@@ -109,7 +124,9 @@
 
    Reuses ir.build's return-hinted arity unwrap (#598) so spellings like
    `(defn -main ^long [] …)` and `(defn ^long -main [] …)` are recognized
-   the same way the lowering pipeline sees them."
+   the same way the lowering pipeline sees them. Also unwraps the single
+   arity-list spelling `(defn -main ([params] …))` — valid Clojure that
+   would otherwise look like multi-arity to (first body)."
   (when (and (seq? form)
              (symbol? (first form))
              (or (= 'defn (first form)) (= 'defn- (first form))))
@@ -118,7 +135,8 @@
           nm       (unwrap-name raw-name)]
       (when (and (symbol? nm) (entry-name? nm))
         (let [private? (or (= 'defn- head) (name-private? raw-name))
-              body     (skip-defn-preamble (nnext form))
+              body     (unwrap-single-arity-list
+                         (skip-defn-preamble (nnext form)))
               raw-bvec (first body)
               bvec     (when (or (vector? raw-bvec)
                                  (ir.build/return-hinted-arity-vector? raw-bvec))

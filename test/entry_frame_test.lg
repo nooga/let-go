@@ -200,6 +200,19 @@
       (is (= :unsupported (:arity-shape e)))
       (is (true? (:private? e)))
       (is (str/includes? (ef/entry-arity-error e) "multi-arity"))))
+  (testing "single-arity list form is not multi-arity"
+    ;; (defn -main ([& args] …)) is valid Clojure — one arity as a list.
+    ;; Without unwrapping, (first body) is that list and the multi-arity
+    ;; path fires with the wrong diagnosis (#692 review).
+    (doseq [[forms shape] [['[(defn -main ([& args] 1))] :variadic]
+                           ['[(defn -main ([] 1))] :none]
+                           ['[(defn main ([argv] 1))] :vector]
+                           ['[(defn -main "doc" ([& a] 1))] :variadic]
+                           ['[(defn -main (^long [] 7))] :none]]]
+      (let [e (ef/find-program-entry forms)]
+        (is (some? e) (str "must recognize list-form entry: " forms))
+        (is (= shape (:arity-shape e)) (str "shape for " forms))
+        (is (nil? (ef/entry-arity-error e)) (str "no error for " forms)))))
   (testing "public and private [] / [argv] / [& args] remain valid"
     (doseq [[forms shape] [['[(defn -main [] 1)] :none]
                            ['[(defn main [argv] 1)] :vector]
