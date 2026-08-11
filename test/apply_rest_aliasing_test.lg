@@ -32,9 +32,13 @@
 ;; --- characterization, not a guard -----------------------------------------
 ;; Public `apply` was never exposed to this bug and still passes against the
 ;; pre-fix code, so these assertions do not guard the fix. They are here to
-;; record why the two spellings differ: for 2+ args `apply` reaches apply*
-;; through list*/spread, which allocates a fresh seq, so the caller's storage
-;; is never the backing array. Only the raw apply* hands it straight through.
+;; record why the two spellings differ: apply* aliases the caller's storage
+;; only when it is handed an ArrayVector (pkg/rt/lang.go), and no `apply` arity
+;; hands it one. The 2-arg arity passes (seq args), a seq view over the vector
+;; (pkg/rt/core/core.lg); the 3+-arg arities pass a list*/spread cons chain.
+;; Both reach apply*'s seq branch, which copies the arguments into a fresh
+;; slice via appendSeqValues. Only the raw apply* hands the vector straight
+;; through.
 ;; If a future change makes `apply` alias its argument, these start failing —
 ;; which is the point of writing them down rather than assuming the coverage.
 
