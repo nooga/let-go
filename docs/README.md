@@ -3,7 +3,7 @@ status: active
 last-verified: 2026-08-11
 authoritative-for:
   - docs-index
-human-verified: 2026-06-20
+human-verified: 2026-08-11
 ---
 
 # let-go docs

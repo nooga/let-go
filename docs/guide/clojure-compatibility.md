@@ -1,7 +1,7 @@
 ---
 status: active
 last-verified: 2026-08-11
-human-verified:
+human-verified: 2026-08-11
 ---
 
 # Clojure compatibility and differences
