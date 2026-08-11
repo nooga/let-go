@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-07-15
+last-verified: 2026-08-11
 human-verified:
 ---
 
@@ -36,6 +36,10 @@ wasmtime on every PR, so the target can't silently regress.
 
 ## Limitations
 
+- **The `os` namespace is minimal.** Only `os/exit`, `os/getenv`, and `os/args`
+  are registered; `os/args` is currently an empty vector. Process execution,
+  filesystem and path operations, and host-information functions require a
+  standard-Go build.
 - **Reflect is partial.** TinyGo does not implement `reflect.Type.Method` or
   `reflect.Value.Call`, which let-go's Go-interop boxing uses. The affected paths
   are shimmed: boxed-method dispatch hand-registers the methods programs reach
