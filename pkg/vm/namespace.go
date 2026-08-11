@@ -648,46 +648,96 @@ func (n *Namespace) Unmap(name Symbol) {
 	n.mu.Unlock()
 }
 
-// FuzzySymbolLookup collects every symbol visible from ns whose name starts
-// with s, walking refers transitively. The refer graph is cyclic — clojure.core
-// requires let-go.types for array?/bigint?, and RegisterNS auto-refers
-// clojure.core back into it — so the walk needs a visited set; without one the
-// core<->let-go.types edge recurses until the stack blows.
-//
-// Two visibility rules mirror lookupViaRefers/ReferredVars: a `:refer [only]`
-// refer only contributes the listed names (not the whole referred namespace),
-// and any symbol ns has explicitly ns-unmap'd is excluded even if a refer
-// would otherwise bring it into scope.
-func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
-	return fuzzySymbolLookup(ns, s, lookupPrivate, map[*Namespace]bool{})
-}
-
-func fuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool, seen map[*Namespace]bool) []Symbol {
-	ret := []Symbol{}
-	if ns == nil || seen[ns] {
-		return ret
-	}
-	seen[ns] = true
-	for _, r := range ns.refersSnapshot() {
-		if r.all {
-			ret = append(ret, fuzzySymbolLookup(r.ns, s, false, seen)...)
-			continue
-		}
-		for sym := range r.only {
-			if !strings.HasPrefix(string(sym), string(s)) {
+// referredSymbolsPrefix mirrors ReferredVars's visibility rules (baseline
+// auto-refers, explicit :refer / :refer [only], private filtering, the
+// ns-unmap tombstone) but filters by prefix as it walks each source
+// namespace's registry under that namespace's own read lock, via
+// registryPrefixSymbols. ReferredVars builds a map of every visible var
+// first and lets the caller filter afterward — fine for ns-refers, but
+// FuzzySymbolLookup calls this on every keystroke of interactive completion,
+// and clojure.core alone has hundreds of public vars that a narrow prefix
+// would otherwise copy and immediately discard. Returns bare symbols (no
+// *Var payload) since that's all a completion candidate list needs.
+func (n *Namespace) referredSymbolsPrefix(prefix Symbol) []Symbol {
+	seen := map[Symbol]bool{}
+	var out []Symbol
+	add := func(syms []Symbol) {
+		for _, s := range syms {
+			if seen[s] {
 				continue
 			}
-			if v := r.ns.localVar(sym); v != nil && !v.isPrivate {
-				ret = append(ret, sym)
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	if coreNamespacePtr != nil && coreNamespacePtr != n {
+		add(coreNamespacePtr.registryPrefixSymbols(prefix, false))
+	}
+	for _, b := range lgBaselineNamespaces {
+		if b == n {
+			continue
+		}
+		add(b.registryPrefixSymbols(prefix, false))
+	}
+	for _, ref := range n.refersSnapshot() {
+		if isBaselineNS(ref.ns) {
+			// Already contributed above at baseline priority; an explicit
+			// refer of a baseline namespace (rare) adds nothing new.
+			continue
+		}
+		if ref.all {
+			add(ref.ns.registryPrefixSymbols(prefix, false))
+			continue
+		}
+		for sym := range ref.only {
+			if seen[sym] || !strings.HasPrefix(string(sym), string(prefix)) {
+				continue
+			}
+			if v := ref.ns.localVar(sym); v != nil && !v.isPrivate {
+				seen[sym] = true
+				out = append(out, sym)
 			}
 		}
 	}
-	ret = append(ret, ns.registryPrefixSymbols(s, lookupPrivate)...)
-	filtered := ret[:0]
-	for _, sym := range ret {
-		if !ns.unmappedLocked(sym) {
+	n.mu.RLock()
+	filtered := out[:0]
+	for _, sym := range out {
+		if !n.unmapped[sym] {
 			filtered = append(filtered, sym)
 		}
 	}
+	n.mu.RUnlock()
 	return filtered
+}
+
+// FuzzySymbolLookup collects every symbol visible from ns whose name starts
+// with s. Visibility matches Lookup: the ns's own registry, then the referred
+// set (baseline auto-refers, explicit :refer / :refer [only], private
+// filtering, and the ns-unmap tombstone — see referredSymbolsPrefix). Refer
+// is not transitive — a cyclic refer graph cannot make this recurse.
+//
+// Locals are merged on top of the referred set so a re-Def after ns-unmap
+// still completes (Lookup checks the registry before refers; the tombstone
+// only hides refer resolution), and a locally-def'd name that shadows a
+// referred one appears once.
+func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
+	if ns == nil {
+		return nil
+	}
+	seen := make(map[Symbol]struct{})
+	var ret []Symbol
+	// Locals first: registry wins over refers, and is not filtered by the
+	// unmapped tombstone (see Unmap's doc comment).
+	for _, sym := range ns.registryPrefixSymbols(s, lookupPrivate) {
+		seen[sym] = struct{}{}
+		ret = append(ret, sym)
+	}
+	for _, sym := range ns.referredSymbolsPrefix(s) {
+		if _, ok := seen[sym]; ok {
+			continue
+		}
+		seen[sym] = struct{}{}
+		ret = append(ret, sym)
+	}
+	return ret
 }

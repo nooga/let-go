@@ -388,6 +388,26 @@ func BenchmarkLazySeqRealize(b *testing.B) {
 	}
 }
 
+// BenchmarkFuzzySymbolLookup_NarrowPrefix simulates interactive completion
+// against a namespace with a clojure.core-sized :refer :all target (300+
+// public vars) and a narrow prefix that only a handful of them match. Guards
+// against FuzzySymbolLookup regressing to copying (and mostly discarding)
+// every referred namespace's entire public registry per call — see
+// referredSymbolsPrefix's doc comment.
+func BenchmarkFuzzySymbolLookup_NarrowPrefix(b *testing.B) {
+	lib := NewNamespace("bench-fuzzy-lib")
+	for i := 0; i < 400; i++ {
+		lib.Def("sym-"+itoa(i), TRUE)
+	}
+	ns := NewNamespace("bench-fuzzy-user")
+	ns.Refer(lib, "", true) // :refer :all
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		FuzzySymbolLookup(ns, Symbol("sym-1"), true)
+	}
+}
+
 func itoa(i int) string {
 	switch {
 	case i < 10:
