@@ -1,0 +1,33 @@
+# Machine-generated case ledger for the engine parity gate.
+# generated-by: TestEngineParityGate (test/e2e/engine_parity_gate_test.go)
+# rederive: LETGO_PARITY_REDERIVE=1 make engine-parity-gate
+# This file is a record AND a contract, not a shrink-only ratchet: it lists
+# every measured case so a commit diff shows exactly what changed. The gate
+# fails on ADDED, REMOVED, or STATUS-CHANGED cases and on any tombstone whose
+# reason is UNEXPLAINED.
+# status: full | partial | diverged | fatal; overlapping facts join with '+'
+# in the canonical order partial+diverged.
+# fallbacks: measured audit fallback site count (0 for full strict parity).
+# reason: distinct measured reasons joined with ' | '; "-" when none.
+# Tombstone reasons come from LETGO_PARITY_TOMBSTONE_REASON="fixture=why;fixture2=why2".
+# removed_at: the revision that removed the fixture (jj change id, else git commit,
+# else "unknown").
+# LETGO_PARITY_LEDGER_CLEANUP=1 during rederive drops tombstones inherited from earlier revisions;
+# it does nothing when the current revision is "unknown".
+
+CASE arith.lg status=full fallbacks=0 reason="-"
+CASE binding.lg status=full fallbacks=0 reason="-"
+CASE closure.lg status=full fallbacks=0 reason="-"
+CASE closure_capture.lg status=full fallbacks=0 reason="-"
+CASE destructure.lg status=full fallbacks=0 reason="-"
+CASE ir_pipeline.lg status=full fallbacks=0 reason="-"
+CASE math_float.lg status=full fallbacks=0 reason="-"
+CASE pipeline_dump_ir.lg status=partial fallbacks=2 reason="ir/lower: junk-below mismatch for block 15 (0 vs 2); unsupported shape"
+CASE quot.lg status=full fallbacks=0 reason="-"
+CASE seq.lg status=full fallbacks=0 reason="-"
+CASE setbang.lg status=full fallbacks=0 reason="-"
+CASE setvar_load_stability.lg status=full fallbacks=0 reason="-"
+CASE setvar_load_straightline.lg status=full fallbacks=0 reason="-"
+CASE tryfinally.lg status=full fallbacks=0 reason="-"
+CASE typed_cross_fn.lg status=full fallbacks=0 reason="-"
+CASE var.lg status=full fallbacks=0 reason="-"

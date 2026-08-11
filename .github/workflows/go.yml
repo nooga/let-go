@@ -281,10 +281,13 @@ jobs:
           echo "${{ steps.clj.outputs.version }}" > .gold-clojure-version
           echo "Goldens verified against Clojure ${{ steps.clj.outputs.version }}."
 
-  # Differential self-AOT execution gate: builds let-go twice (bytecode +
-  # -tags gogen_ir native) and diffs the output of every test/gold-aot/*.lg
-  # fixture across the two engines. A new cross-engine divergence fails the PR;
-  # known divergences are tracked in the shrink-only test/gogen_aot_xfail.txt.
+  # Engine parity gate + differential engine-output check: `make gogen-diff`
+  # first runs the complete-corpus engine parity gate (strict capability and
+  # output census over every test/gold-aot/*.lg fixture, enforcing the committed
+  # case ledger test/parity-ledger.txt plus the shrink-only partial and
+  # divergence baselines), then runs TestGogenAOTDiff, which builds let-go twice
+  # (bytecode + -tags gogen_ir native) and diffs fixture output across the two
+  # engines. A new case, status change, or cross-engine divergence fails the PR.
   gogen-diff:
     name: gogen-diff
     runs-on: ubuntu-latest

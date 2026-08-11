@@ -231,34 +231,47 @@ check-selfhost: lowered $(GO)
 	fi; \
 	rm -rf "$$tmp" .selfhost-lgbgen; exit $$rc
 
-# Differential self-AOT execution gate: build let-go twice (bytecode + the
-# -tags gogen_ir native), run each test/gold-aot/*.lg fixture under both, and
-# diff the last output line. A new cross-engine divergence fails; the
-# shrink-only allowlist test/gogen_aot_xfail.txt tracks known ones. `lowered`
-# keeps the gogen_ir tree fresh so the native build reflects current sources.
-# Re-seed the allowlist (after a reviewed change) with:
-#   LETGO_AOT_REDERIVE=1 go test -run TestGogenAOTDiff -count=1 ./test/e2e/
+# Differential engine-output gate: first run the complete-corpus strict
+# capability/parity census, then retain the existing non-strict differential
+# check. Both mandatory legs force full mode even when GOFLAGS contains -short.
 .PHONY: gogen-diff
-gogen-diff: parity-gate-phase1
+gogen-diff: engine-parity-gate
 	go test -short=false -run TestGogenAOTDiff -count=1 -v ./test/e2e/
 
-# Parity gate: Phase 1 — Tier-1 fixtures (genuine AOT, both backends pass strict mode and agree).
-# This is the baseline gate; all 10 Tier-1 fixtures must remain in parity.
-# Two-sided shrink-only ratchet: new divergence fails, stale allowlist entries fail.
-# Re-seed allowlists (after a reviewed change) with:
-#   LETGO_PARITY_REDERIVE=1 go test -short=false -run TestParityGatePhase1 -count=1 ./test/e2e/
-.PHONY: parity-gate-phase1
-parity-gate-phase1: lowered $(GO)
-	go test -short=false -run TestParityGatePhase1 -count=1 -v ./test/e2e/
+# Complete-corpus engine-output parity and strict-capability gate. The strict
+# wrapper measures whether each fixture can execute with fallback forbidden; it
+# does not prove fixture-source generated-Go or native-entry execution.
+# The gate always logs a deterministic sorted coverage report: per-fixture
+# category plus the measured lowering reason behind every non-full fixture, and
+# a bucket census of distinct reasons. Report content is informational: it never
+# changes classification, ratchets, or rederive. The one exit-status coupling is
+# deliberate — an explicitly requested report write that fails is reported as a
+# test error. Save a copy with:
+#   LETGO_PARITY_REPORT=/tmp/parity-report.txt make engine-parity-gate
+# The gate also enforces the committed case ledger test/parity-ledger.txt: a
+# diffable record of every measured case plus tombstones for removed fixtures.
+# A normal run fails with per-case ADDED / REMOVED / STATUS-CHANGED lines, on a
+# reappearing tombstoned fixture, and on any UNEXPLAINED tombstone.
+# Re-derive the ledger and both neutral shrink-only baselines (written as one
+# rollback-safe set) after a reviewed improvement with:
+#   LETGO_PARITY_REDERIVE=1 make engine-parity-gate
+# Explain fixtures that disappear in the same rederive; unexplained tombstones
+# fail later runs:
+#   LETGO_PARITY_TOMBSTONE_REASON="a.lg=merged into b.lg;c.lg=obsolete" \
+#     LETGO_PARITY_REDERIVE=1 make engine-parity-gate
+# Drop tombstones inherited from earlier revisions (keeping this revision's) with:
+#   LETGO_PARITY_LEDGER_CLEANUP=1 LETGO_PARITY_REDERIVE=1 make engine-parity-gate
+# A revision is the jj change id when available, else the git commit; when the
+# revision cannot be resolved, cleanup is skipped and nothing is dropped.
+.PHONY: engine-parity-gate
+engine-parity-gate: lowered $(GO)
+	go test -short=false -run TestEngineParityGate -count=1 -v ./test/e2e/
 
-# Strict-mode audit: classify all 16 test/gold-aot fixtures under *ir-compile-strict*.
-# Tier 1: both backends pass strict and agree (counts toward parity)
-# Tier 2: bytecode fails strict (would trampoline; excluded from parity)
-# Tier 3: diverges (goes to allowlist as known miscompile)
-# Use this to discover which fixtures can be added to parity coverage as AOT capability expands.
-.PHONY: strict-audit
-strict-audit: lowered $(GO)
-	go test -run TestStrictModeAudit -count=1 -v ./test/e2e/
+# Historical compatibility aliases for existing local automation. The names
+# predate the complete result-driven census; neither denotes a phase-limited or
+# separately curated audit tier.
+.PHONY: parity-gate-phase1 strict-audit
+parity-gate-phase1 strict-audit: engine-parity-gate
 
 # Default gate (~1 min): the jank suite under BOTH VM variants (bytecode +
 # gogen_ir-lowered) + the calibration anchor. This is what CI runs.

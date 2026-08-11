@@ -18,29 +18,26 @@ import (
 	"github.com/nooga/let-go/pkg/genmanifest"
 )
 
-// Differential self-AOT execution harness.
+// Differential engine-output harness.
 //
-// let-go has two execution engines for the same source: the default bytecode
-// VM, and — under `-tags gogen_ir` — the native IR pipeline, where the stdlib
-// + IR passes are pre-lowered to Go (pkg/rt/core_go_lowered/). A program that
-// produces a different result under the two engines is a lowering divergence.
+// let-go has two executions for the same fixture: the default bytecode build
+// and a `-tags gogen_ir` build whose committed core + IR passes are lowered to
+// Go. The tag changes the engine implementation; this harness does not compile
+// the fixture source to Go or prove that fixture code entered a native seam.
 //
-// This test builds let-go twice (bytecode + gogen_ir), runs every
-// test/gold-aot/*.lg fixture under both, and compares the last non-empty stdout
-// line. The bytecode run is the reference (a fixture whose bytecode run fails
-// is a broken fixture, not a divergence).
+// This test builds let-go twice, runs every test/gold-aot/*.lg fixture under
+// both builds, and compares normalized full stdout. The bytecode run is the
+// reference (a fixture whose bytecode run fails is broken, not a divergence).
 //
-// The native tree is not yet fully green (see the gogen_ir pkg/ir suite and the
-// repair plan), so divergences are tracked in a SHRINK-ONLY allowlist,
+// Known engine-output divergences are tracked in a SHRINK-ONLY allowlist,
 // test/gogen_aot_xfail.txt:
 //
 //   - a diverging fixture listed in the allowlist is tolerated (xfail);
-//   - a NEW divergence not in the allowlist FAILS the test (execution regression);
-//   - an allowlisted fixture that now AGREES also FAILS ("remove from xfail") —
-//     the ratchet that forces the list to shrink as lowering bugs are fixed.
+//   - a NEW divergence not in the allowlist FAILS the test;
+//   - an allowlisted fixture that now AGREES also FAILS (remove it).
 //
 // Re-seed the allowlist from the current divergence set with
-// LETGO_AOT_REDERIVE=1 (use after an intentional, reviewed change).
+// LETGO_AOT_REDERIVE=1 after an intentional, reviewed engine change.
 //
 // Gated behind testing.Short(): plain `go test -short ./...` skips the
 // double-build. CI runs it explicitly via `make gogen-diff`.
@@ -50,8 +47,8 @@ import (
 // directory as CWD, not the repo root.
 const aotRedriveEnv = "LETGO_AOT_REDERIVE"
 
-// buildLGTags builds the lg binary with the given build tags ("" = the default
-// bytecode engine; "gogen_ir" = the native IR pipeline). Returns the path.
+// buildLGTags builds lg with the given build tags ("" = default bytecode;
+// "gogen_ir" = generated-core engine variant). It does not AOT-compile fixtures.
 func buildLGTags(t *testing.T, tags string) string {
 	t.Helper()
 	name := "lg-bc"
@@ -102,7 +99,7 @@ func normalizeOutput(s string) string {
 
 func TestGogenAOTDiff(t *testing.T) {
 	if testing.Short() {
-		t.Skip("differential self-AOT harness builds let-go twice; run via `make gogen-diff`")
+		t.Skip("differential engine-output harness builds let-go twice; run via `make gogen-diff`")
 	}
 
 	root := repoRoot(t)
@@ -156,7 +153,7 @@ func TestGogenAOTDiff(t *testing.T) {
 	for name := range diverged {
 		if !allow[name] {
 			t.Errorf("NEW gogen_ir execution divergence: %s (not in %s).\n"+
-				"  A native-lowering regression: the fixture runs differently under -tags gogen_ir.\n"+
+				"  An engine-output regression: the fixture runs differently under -tags gogen_ir.\n"+
 				"  Fix the lowering, or — if the divergence is known/triaged — re-seed the allowlist with\n"+
 				"  `%s=1 go test -run TestGogenAOTDiff .` and commit the updated %s.",
 				name, aotXfailFile, aotRedriveEnv, aotXfailFile)

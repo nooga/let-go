@@ -20,20 +20,22 @@ record_leg() {
 }
 
 case "$*" in
-	*TestParityGatePhase1*) record_leg parity "$@" ;;
+	*TestEngineParityGate*) record_leg parity-audit "$@" ;;
 	*TestGogenAOTDiff*) record_leg gogen-diff "$@" ;;
 esac
 exit 0
 FAKE_GO
 chmod +x "$fake_go"
 
-PATH="$tmp_dir:$PATH" GOFLAGS=-short PARITY_PROBE="$probe_file" \
-	make -s -C "$repo_root" gogen-diff >/dev/null
+for target in gogen-diff parity-gate-phase1 strict-audit; do
+	PATH="$tmp_dir:$PATH" GOFLAGS=-short PARITY_PROBE="$probe_file" \
+		make -s -C "$repo_root" "$target" >/dev/null
+done
 
 expected="$tmp_dir/expected"
-printf 'parity\ngogen-diff\n' >"$expected"
+printf 'parity-audit\ngogen-diff\nparity-audit\nparity-audit\n' >"$expected"
 if ! cmp -s "$expected" "$probe_file"; then
-	echo "gogen-diff must force -short=false for both mandatory test legs" >&2
+	echo "gogen-diff and its parity/audit entry points must force -short=false on every mandatory leg" >&2
 	echo "observed:" >&2
 	sed 's/^/  /' "$probe_file" >&2
 	exit 1
