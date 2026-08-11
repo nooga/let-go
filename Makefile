@@ -422,6 +422,10 @@ install-hooks:
 # Non-mutating front gate: fail before any target has a chance to refresh
 # pkg/rt/generated.sums. This catches the exact drift that a prior go generate
 # or lgbgen invocation would otherwise mask in CI.
+# Both names collide with real filenames (`go build ./cmd/check-generated`
+# produces ./check-generated). Without .PHONY, a stray binary makes make report
+# the target up to date and exit 0 without running the gate.
+.PHONY: check-generated check-generated-manifest
 check-generated-manifest: $(GO)
 	@go run ./cmd/check-generated || { \
 		echo "ERROR: dependency manifest stale or check errored — run 'make generate'."; \
@@ -444,9 +448,11 @@ GENERATED-TRACKED := \
 # treats the two kinds of artifact by their actual nature. VCS-agnostic by
 # design: it shells out to no `git` (this repo is used with jj, whose secondary
 # workspaces have no .git, so a `git diff` gate breaks there). It is also
-# non-mutating on every path — pass, fail, or generator error, the working tree
-# is restored to exactly what the gate found, so no `git checkout` is needed to
-# recover and a failure never strands you with a half-regenerated tree.
+# non-mutating on every path — pass, fail, generator error, or interrupt, the
+# working tree is restored to exactly what the gate found, so no `git checkout`
+# is needed to recover and a failure never strands you with a half-regenerated
+# tree. The EXIT/INT/TERM trap restores from the stash before removing it; a
+# trap that only deleted the stash would destroy the recovery copy on Ctrl-C.
 #
 #   * $(GENERATED-TRACKED) are committed and byte-deterministic, so they get a
 #     CONTENT gate: stash the committed bytes, regenerate, and `cmp`. A
@@ -489,13 +495,12 @@ check-default-deps: $(GO)
 check-generated: $(GO)
 	@echo ">> regenerate every committed artifact through the full 'make generate'"
 	@tmp=$$(mktemp -d) || exit 1; \
-	trap 'rm -rf "$$tmp"' EXIT INT TERM; \
+	trap 'for f in $(GENERATED-TRACKED) pkg/rt/generated.sums; do cp "$$tmp/$$f" "$$f" || exit 1; done; rm -rf "$$tmp"' EXIT INT TERM; \
 	for f in $(GENERATED-TRACKED) pkg/rt/generated.sums; do \
 		mkdir -p "$$tmp/$$(dirname "$$f")" || exit 1; \
 		cp "$$f" "$$tmp/$$f" || exit 1; \
 	done; \
 	if ! $(MAKE) --no-print-directory generate >/dev/null; then \
-		for f in $(GENERATED-TRACKED) pkg/rt/generated.sums; do cp "$$tmp/$$f" "$$f"; done; \
 		echo "ERROR: 'make generate' failed — see the generator output above."; \
 		exit 1; \
 	fi; \
@@ -508,7 +513,6 @@ check-generated: $(GO)
 			rc=1; \
 		fi; \
 	done; \
-	for f in $(GENERATED-TRACKED) pkg/rt/generated.sums; do cp "$$tmp/$$f" "$$f"; done; \
 	if [ $$rc -ne 0 ]; then \
 		echo "       Your working tree was left exactly as the gate found it."; \
 		echo "       Run 'make generate' and commit the regenerated files."; \
