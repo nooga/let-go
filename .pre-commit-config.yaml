@@ -80,6 +80,21 @@ repos:
         always_run: true
         stages: [pre-commit]
 
+      # Guard the single-source Go version pin. go.mod owns it (the Makefile
+      # derives GO-VERSION from it; CI uses `go-version-file: go.mod`), so
+      # mise.toml carries no `go` entry. Absent passes silently; re-adding one
+      # is allowed only while it agrees with go.mod, so the two can never
+      # disagree unnoticed the way Makefile/mise.toml did before #677.
+      # Runs when either file is staged; stdlib-only Python.
+      - id: check-mise-go-sync
+        name: mise.toml Go pin agrees with go.mod
+        description: Reject a mise.toml go entry that disagrees with go.mod's version
+        entry: python3 scripts/check_mise_go_sync.py
+        language: system
+        files: ^(mise\.toml|go\.mod)$
+        pass_filenames: false
+        stages: [pre-commit]
+
       # Frontmatter maintenance for docs/**/*.md: stub on missing,
       # bump `last-verified:` on staged docs. Never touches
       # `human-verified:` or any human-authored field. Stdlib-only

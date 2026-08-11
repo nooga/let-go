@@ -16,8 +16,18 @@ M := .cache/makes
 MAKES-SHA := 7f28494955c20e5a87ca82ae351464842a7236de
 $(shell [ -d '$M' ] || (git clone -q $R '$M' && git -C '$M' -c advice.detachedHead=false checkout -q $(MAKES-SHA)) || rm -rf '$M')
 include $M/init.mk
-# override default Go version with: `make ... GO-VERSION=1.x.y`
-GO-VERSION ?= 1.26.3
+# go.mod is the single repository-owned Go version pin: prefer the toolchain
+# directive; `go mod tidy` erases it when it equals the go directive, so fall
+# back to a full-patch go directive. Anything weaker fails loudly rather than
+# guessing. Override only for an explicit one-off bootstrap:
+# `make ... GO-VERSION=1.x.y`.
+GO-VERSION ?= $(shell sed -n 's/^toolchain go//p' go.mod)
+ifeq ($(strip $(GO-VERSION)),)
+GO-VERSION := $(shell sed -n 's/^go \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$$/\1/p' go.mod)
+endif
+ifeq ($(strip $(GO-VERSION)),)
+$(error cannot derive GO-VERSION: go.mod needs 'toolchain goX.Y.Z' or a full 'go X.Y.Z' directive)
+endif
 include $M/go.mk
 include $M/shell.mk
 endif
