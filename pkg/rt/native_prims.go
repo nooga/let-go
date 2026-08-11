@@ -587,6 +587,14 @@ func Some(ec *vm.ExecContext, pred vm.Value, coll vm.Value) (vm.Value, error) {
 	if ls, ok := seq.(*vm.LazySeq); ok {
 		seq = ls.Resolve()
 	}
+	// Resolve a bytecode predicate once and reuse one frame for the whole
+	// walk: per-element ec.Invoke would pay resolution, frame-pool traffic,
+	// and frame init on every element. Non-bytecode/variadic predicates fall
+	// back to the generic invoke below.
+	pc := ec.PrepareCall(f, 1)
+	if pc != nil {
+		defer pc.Release()
+	}
 	fargs := []vm.Value{nil}
 	for seq != nil {
 		// Chunked fast path: walk whole chunks via Nth to avoid per-element
@@ -595,8 +603,14 @@ func Some(ec *vm.ExecContext, pred vm.Value, coll vm.Value) (vm.Value, error) {
 			c := cs.ChunkedFirst()
 			n := c.ChunkCount()
 			for i := 0; i < n; i++ {
-				fargs[0] = c.Nth(i)
-				v, err := ec.Invoke(f, fargs)
+				var v vm.Value
+				var err error
+				if pc != nil {
+					v, err = pc.Call1(c.Nth(i))
+				} else {
+					fargs[0] = c.Nth(i)
+					v, err = ec.Invoke(f, fargs)
+				}
 				if err != nil {
 					return vm.NIL, err
 				}
@@ -607,8 +621,14 @@ func Some(ec *vm.ExecContext, pred vm.Value, coll vm.Value) (vm.Value, error) {
 			seq = cs.ChunkedNext()
 			continue
 		}
-		fargs[0] = seq.First()
-		v, err := ec.Invoke(f, fargs)
+		var v vm.Value
+		var err error
+		if pc != nil {
+			v, err = pc.Call1(seq.First())
+		} else {
+			fargs[0] = seq.First()
+			v, err = ec.Invoke(f, fargs)
+		}
 		if err != nil {
 			return vm.NIL, err
 		}
