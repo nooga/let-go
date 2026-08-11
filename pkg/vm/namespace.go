@@ -649,44 +649,37 @@ func (n *Namespace) Unmap(name Symbol) {
 }
 
 // FuzzySymbolLookup collects every symbol visible from ns whose name starts
-// with s. Visibility matches lookupViaRefers / ReferredVars: only the ns's own
-// registry and its *direct* refers contribute — refer is not transitive — and
-// a `:refer [only]` refer contributes just the listed names. Symbols ns has
-// ns-unmap'd are excluded even when a refer would otherwise bring them in.
+// with s. Visibility matches Lookup: the ns's own registry, then the referred
+// set from ReferredVars (baseline auto-refers, explicit :refer / :refer [only],
+// private filtering, and the ns-unmap tombstone). Refer is not transitive —
+// ReferredVars only reads each refer target's locals — which is also why a
+// cyclic refer graph cannot make this recurse.
 //
-// Direct-only is also why a cyclic refer graph (clojure.core requires
-// let-go.types; RegisterNS auto-refers clojure.core back into it) cannot make
-// this recurse: each refer contributes the target's locals, never the
-// target's own refers.
+// Locals are merged on top of ReferredVars so a re-Def after ns-unmap still
+// completes (Lookup checks the registry before refers; the tombstone only
+// hides refer resolution), and a locally-def'd name that shadows a referred
+// one appears once.
 func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
 	if ns == nil {
 		return nil
 	}
-	ret := []Symbol{}
-	for _, r := range ns.refersSnapshot() {
-		// Mirror isShadowingCoreRefer: defend against a nil Refer entry.
-		if r == nil || r.ns == nil {
+	seen := make(map[Symbol]struct{})
+	var ret []Symbol
+	// Locals first: registry wins over refers, and is not filtered by the
+	// unmapped tombstone (see Unmap's doc comment).
+	for _, sym := range ns.registryPrefixSymbols(s, lookupPrivate) {
+		seen[sym] = struct{}{}
+		ret = append(ret, sym)
+	}
+	for sym := range ns.ReferredVars() {
+		if _, ok := seen[sym]; ok {
 			continue
 		}
-		if r.all {
-			ret = append(ret, r.ns.registryPrefixSymbols(s, false)...)
+		if !strings.HasPrefix(string(sym), string(s)) {
 			continue
 		}
-		for sym := range r.only {
-			if !strings.HasPrefix(string(sym), string(s)) {
-				continue
-			}
-			if v := r.ns.localVar(sym); v != nil && !v.isPrivate {
-				ret = append(ret, sym)
-			}
-		}
+		seen[sym] = struct{}{}
+		ret = append(ret, sym)
 	}
-	ret = append(ret, ns.registryPrefixSymbols(s, lookupPrivate)...)
-	filtered := ret[:0]
-	for _, sym := range ret {
-		if !ns.unmappedLocked(sym) {
-			filtered = append(filtered, sym)
-		}
-	}
-	return filtered
+	return ret
 }
