@@ -649,28 +649,27 @@ func (n *Namespace) Unmap(name Symbol) {
 }
 
 // FuzzySymbolLookup collects every symbol visible from ns whose name starts
-// with s, walking refers transitively. The refer graph is cyclic — clojure.core
-// requires let-go.types for array?/bigint?, and RegisterNS auto-refers
-// clojure.core back into it — so the walk needs a visited set; without one the
-// core<->let-go.types edge recurses until the stack blows.
+// with s. Visibility matches lookupViaRefers / ReferredVars: only the ns's own
+// registry and its *direct* refers contribute — refer is not transitive — and
+// a `:refer [only]` refer contributes just the listed names. Symbols ns has
+// ns-unmap'd are excluded even when a refer would otherwise bring them in.
 //
-// Two visibility rules mirror lookupViaRefers/ReferredVars: a `:refer [only]`
-// refer only contributes the listed names (not the whole referred namespace),
-// and any symbol ns has explicitly ns-unmap'd is excluded even if a refer
-// would otherwise bring it into scope.
+// Direct-only is also why a cyclic refer graph (clojure.core requires
+// let-go.types; RegisterNS auto-refers clojure.core back into it) cannot make
+// this recurse: each refer contributes the target's locals, never the
+// target's own refers.
 func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
-	return fuzzySymbolLookup(ns, s, lookupPrivate, map[*Namespace]bool{})
-}
-
-func fuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool, seen map[*Namespace]bool) []Symbol {
-	ret := []Symbol{}
-	if ns == nil || seen[ns] {
-		return ret
+	if ns == nil {
+		return nil
 	}
-	seen[ns] = true
+	ret := []Symbol{}
 	for _, r := range ns.refersSnapshot() {
+		// Mirror isShadowingCoreRefer: defend against a nil Refer entry.
+		if r == nil || r.ns == nil {
+			continue
+		}
 		if r.all {
-			ret = append(ret, fuzzySymbolLookup(r.ns, s, false, seen)...)
+			ret = append(ret, r.ns.registryPrefixSymbols(s, false)...)
 			continue
 		}
 		for sym := range r.only {

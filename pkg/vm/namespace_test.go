@@ -66,8 +66,9 @@ func TestLookup_QualifiedAliasFollowsTargetRefers(t *testing.T) {
 
 func TestFuzzySymbolLookup_CyclicRefersTerminate(t *testing.T) {
 	// The real refer graph is cyclic: clojure.core requires let-go.types, and
-	// RegisterNS auto-refers clojure.core back into it. REPL/nREPL tab
-	// completion walks that graph, so the walk must not recurse forever.
+	// RegisterNS auto-refers clojure.core back into it. Completion only reads
+	// each refer's locals (not the target's refers), so the cycle cannot make
+	// the walk recurse — a still sees b's defcmd, and each name once.
 	a := NewNamespace("cyc-a")
 	b := NewNamespace("cyc-b")
 	a.Refer(b, "", true)
@@ -82,6 +83,32 @@ func TestFuzzySymbolLookup_CyclicRefersTerminate(t *testing.T) {
 	}
 	if names["defer-me"] != 1 || names["defcmd"] != 1 {
 		t.Fatalf("want each symbol once across the cycle, got %v", got)
+	}
+}
+
+func TestFuzzySymbolLookup_ReferNotTransitive(t *testing.T) {
+	// Refer visibility is one hop: user → mid does not expose mid's refers.
+	// A transitive walk would surface "cymbal" here.
+	leaf := NewNamespace("leaf")
+	leaf.Def("cymbal", TRUE)
+
+	mid := NewNamespace("mid")
+	mid.Refer(leaf, "", true)
+
+	user := NewNamespace("user-nt")
+	user.Refer(mid, "", true)
+	user.Def("cycle", TRUE)
+
+	got := FuzzySymbolLookup(user, Symbol("c"), true)
+	names := map[Symbol]bool{}
+	for _, s := range got {
+		names[s] = true
+	}
+	if !names["cycle"] {
+		t.Fatalf("want user's own cycle, got %v", got)
+	}
+	if names["cymbal"] {
+		t.Fatalf("want cymbal excluded (mid's refer, not user's), got %v", got)
 	}
 }
 
