@@ -519,14 +519,21 @@ func (n *Namespace) String() string {
 	return fmt.Sprintf("<ns %s>", n.Name())
 }
 
-// registrySnapshot copies the registry so FuzzySymbolLookup can scan it (and
-// recurse into refers) without holding the lock across other-namespace reads.
-func (n *Namespace) registrySnapshot() map[Symbol]*Var {
+// registryPrefixSymbols returns the registry's symbols whose name starts with
+// prefix, filtering under the read lock so FuzzySymbolLookup doesn't have to
+// copy (and then mostly discard) the entire registry on every call.
+func (n *Namespace) registryPrefixSymbols(prefix Symbol, includePrivate bool) []Symbol {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
-	out := make(map[Symbol]*Var, len(n.registry))
+	var out []Symbol
 	for k, v := range n.registry {
-		out[k] = v
+		if !strings.HasPrefix(string(k), string(prefix)) {
+			continue
+		}
+		if v.isPrivate && !includePrivate {
+			continue
+		}
+		out = append(out, k)
 	}
 	return out
 }
@@ -641,18 +648,46 @@ func (n *Namespace) Unmap(name Symbol) {
 	n.mu.Unlock()
 }
 
+// FuzzySymbolLookup collects every symbol visible from ns whose name starts
+// with s, walking refers transitively. The refer graph is cyclic — clojure.core
+// requires let-go.types for array?/bigint?, and RegisterNS auto-refers
+// clojure.core back into it — so the walk needs a visited set; without one the
+// core<->let-go.types edge recurses until the stack blows.
+//
+// Two visibility rules mirror lookupViaRefers/ReferredVars: a `:refer [only]`
+// refer only contributes the listed names (not the whole referred namespace),
+// and any symbol ns has explicitly ns-unmap'd is excluded even if a refer
+// would otherwise bring it into scope.
 func FuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool) []Symbol {
+	return fuzzySymbolLookup(ns, s, lookupPrivate, map[*Namespace]bool{})
+}
+
+func fuzzySymbolLookup(ns *Namespace, s Symbol, lookupPrivate bool, seen map[*Namespace]bool) []Symbol {
 	ret := []Symbol{}
-	for _, r := range ns.refersSnapshot() {
-		ret = append(ret, FuzzySymbolLookup(r.ns, s, false)...)
+	if ns == nil || seen[ns] {
+		return ret
 	}
-	for k, v := range ns.registrySnapshot() {
-		if strings.HasPrefix(string(k), string(s)) {
-			if v.isPrivate && !lookupPrivate {
+	seen[ns] = true
+	for _, r := range ns.refersSnapshot() {
+		if r.all {
+			ret = append(ret, fuzzySymbolLookup(r.ns, s, false, seen)...)
+			continue
+		}
+		for sym := range r.only {
+			if !strings.HasPrefix(string(sym), string(s)) {
 				continue
 			}
-			ret = append(ret, k)
+			if v := r.ns.localVar(sym); v != nil && !v.isPrivate {
+				ret = append(ret, sym)
+			}
 		}
 	}
-	return ret
+	ret = append(ret, ns.registryPrefixSymbols(s, lookupPrivate)...)
+	filtered := ret[:0]
+	for _, sym := range ret {
+		if !ns.unmappedLocked(sym) {
+			filtered = append(filtered, sym)
+		}
+	}
+	return filtered
 }

@@ -63,3 +63,66 @@ func TestLookup_QualifiedAliasFollowsTargetRefers(t *testing.T) {
 		t.Fatalf("resolved var value = %v, want TRUE", got)
 	}
 }
+
+func TestFuzzySymbolLookup_CyclicRefersTerminate(t *testing.T) {
+	// The real refer graph is cyclic: clojure.core requires let-go.types, and
+	// RegisterNS auto-refers clojure.core back into it. REPL/nREPL tab
+	// completion walks that graph, so the walk must not recurse forever.
+	a := NewNamespace("cyc-a")
+	b := NewNamespace("cyc-b")
+	a.Refer(b, "", true)
+	b.Refer(a, "", true)
+	a.Def("defer-me", TRUE)
+	b.Def("defcmd", TRUE)
+
+	got := FuzzySymbolLookup(a, Symbol("def"), true)
+	names := map[Symbol]int{}
+	for _, s := range got {
+		names[s]++
+	}
+	if names["defer-me"] != 1 || names["defcmd"] != 1 {
+		t.Fatalf("want each symbol once across the cycle, got %v", got)
+	}
+}
+
+func TestFuzzySymbolLookup_HonorsReferOnly(t *testing.T) {
+	// (:require [lib :refer [foo]]) should only bring foo into scope, not
+	// every other public symbol lib happens to define.
+	lib := NewNamespace("only-lib")
+	lib.Def("foo", TRUE)
+	lib.Def("fred", TRUE)
+	lib.Def("flip", TRUE)
+
+	user := NewNamespace("only-user")
+	user.ReferList(lib, []Symbol{"foo"})
+
+	got := FuzzySymbolLookup(user, Symbol("f"), true)
+	names := map[Symbol]bool{}
+	for _, s := range got {
+		names[s] = true
+	}
+	if !names["foo"] {
+		t.Fatalf("want foo (explicitly referred) in results, got %v", got)
+	}
+	if names["fred"] || names["flip"] {
+		t.Fatalf("want fred/flip excluded (not in :refer list), got %v", got)
+	}
+}
+
+func TestFuzzySymbolLookup_HonorsUnmap(t *testing.T) {
+	// After (ns-unmap *ns* 'foo), foo should no longer resolve in this
+	// namespace even though it's still referred from lib.
+	lib := NewNamespace("unmap-lib")
+	lib.Def("foo", TRUE)
+
+	user := NewNamespace("unmap-user")
+	user.Refer(lib, "", true) // :refer :all
+	user.Unmap("foo")
+
+	got := FuzzySymbolLookup(user, Symbol("f"), true)
+	for _, s := range got {
+		if s == "foo" {
+			t.Fatalf("want foo excluded after ns-unmap, got %v", got)
+		}
+	}
+}

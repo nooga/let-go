@@ -12,48 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 
 	"github.com/chzyer/readline"
 	"github.com/nooga/let-go/pkg/compiler"
-	"github.com/nooga/let-go/pkg/rt"
+	"github.com/nooga/let-go/pkg/complete"
 	"github.com/nooga/let-go/pkg/vm"
 )
-
-func isCompletionTerminator(r rune) bool {
-	switch r {
-	case '(', ')', '[', ']', '{', '}', '"', '\\', '\'', '@', '`', '~', ';', '#':
-		return true
-	}
-	return unicode.IsSpace(r)
-}
-
-// completer implements readline's AutoCompleter interface.
-// readline passes line as []rune and pos as a rune index; we stay in runes
-// throughout so non-ASCII input and mid-line cursors are handled correctly.
-type completer struct {
-	ctx *compiler.Context
-}
-
-func (c *completer) Do(line []rune, pos int) (newLine [][]rune, length int) {
-	if pos > len(line) {
-		pos = len(line)
-	}
-	head := line[:pos]
-
-	start := pos
-	for start > 0 && !isCompletionTerminator(head[start-1]) {
-		start--
-	}
-	prefix := string(head[start:])
-
-	symbols := rt.FuzzyNamespacedSymbolLookup(c.ctx.CurrentNS(), vm.Symbol(prefix))
-	for _, s := range symbols {
-		newLine = append(newLine, []rune(string(s)+" "))
-	}
-	length = pos - start
-	return
-}
 
 // ANSI color codes for syntax highlighting. ansiReset and ansiBold are
 // declared in lg_ansi.go; the rest are repl-only.
@@ -126,7 +90,7 @@ func repl(ctx *compiler.Context) {
 	config := &readline.Config{
 		Prompt:          prompt,
 		EOFPrompt:       "exit",
-		AutoComplete:    &completer{ctx: ctx},
+		AutoComplete:    &complete.Completer{Ctx: ctx},
 		InterruptPrompt: "^C",
 		HistoryFile:     historyFile(),
 		Painter:         &syntaxHighlighter{},

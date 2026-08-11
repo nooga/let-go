@@ -479,18 +479,24 @@ func RemoveNS(name string) {
 	nsMu.Unlock()
 }
 
-func FuzzyNamespacedSymbolLookup(currentNS *vm.Namespace, s vm.Symbol) []vm.Symbol {
-	sns := s.Namespace()
+// FuzzyNamespacedSymbolLookup fuzzy-matches s (which may be ns-qualified) as
+// a symbol prefix, resolving any ns segment against currentNS. Alongside the
+// matches it returns namePrefix, the unqualified name segment of s that was
+// actually matched against — callers that need to strip the typed prefix
+// from a candidate (e.g. pkg/complete's REPL completer) should use this
+// instead of independently re-splitting s, so the two derivations can't
+// drift apart.
+func FuzzyNamespacedSymbolLookup(currentNS *vm.Namespace, s vm.Symbol) (matches []vm.Symbol, namePrefix vm.Symbol) {
+	sns, name, hasNS := s.NamespacedRaw()
 	var ns *vm.Namespace
-	if sns != vm.NIL {
+	if hasNS {
 		nsMu.RLock()
-		ns = nsRegistry[string(sns.(vm.String))]
+		ns = nsRegistry[string(sns)]
 		nsMu.RUnlock()
 	} else {
 		ns = currentNS
 	}
-	name := s.Name()
-	return vm.FuzzySymbolLookup(ns, vm.Symbol(name.(vm.String)), true)
+	return vm.FuzzySymbolLookup(ns, name, true), name
 }
 
 func NS(name string) *vm.Namespace {

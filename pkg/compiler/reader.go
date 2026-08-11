@@ -1557,6 +1557,17 @@ func isTerminatingMacro(r rune) bool {
 	return r != '#' && r != '\'' && r != '%' && isMacro(r)
 }
 
+// IsTokenBoundary reports whether r ends a symbol token the way the reader's
+// tokenizer does everywhere it scans one (readSymbol, readString escapes,
+// readRegex, etc.): whitespace (isWhitespace treats ',' as whitespace too)
+// or a terminating macro character. Exported so pkg/complete's REPL
+// completer can backscan a line for a completion prefix using the exact same
+// boundary rule as the reader, instead of a hand-rolled approximation that
+// can drift from it.
+func IsTokenBoundary(r rune) bool {
+	return isWhitespace(r) || isTerminatingMacro(r)
+}
+
 func isMacro(r rune) bool {
 	_, ok := macros[r]
 	return ok

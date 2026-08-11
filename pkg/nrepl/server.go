@@ -345,7 +345,7 @@ func (n *NreplServer) handleCompletions(conn net.Conn, msg map[string]any) {
 	var completions []any
 	if prefix != "" {
 		sym := vm.Symbol(prefix)
-		matches := rt.FuzzyNamespacedSymbolLookup(n.ctx.CurrentNS(), sym)
+		matches, _ := rt.FuzzyNamespacedSymbolLookup(n.ctx.CurrentNS(), sym)
 		for _, m := range matches {
 			completions = append(completions, map[string]any{
 				"candidate": string(m),
