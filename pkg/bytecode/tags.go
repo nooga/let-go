@@ -10,11 +10,13 @@ const FormatVersion uint16 = 3
 
 const uncompressedFormatVersion uint16 = 2
 
-// Module flags.
+// Module flags. Bits are positional via iota — never write an explicit shift.
+// Append new flags before flagsEnd; knownFlags is the derived full mask and must
+// not be used as the admitted set for older format versions (see vNFlags below).
 const (
-	FlagConstsBase   uint16 = 1 << 0 // ConstsBase field is present in consts section
-	FlagCapabilities uint16 = 1 << 1 // Capability mask follows the header
-	FlagLocalVars    uint16 = 1 << 2 // per-chunk local-variable debug tables follow the NS table (v2+)
+	FlagConstsBase   uint16 = 1 << iota // ConstsBase field is present in consts section
+	FlagCapabilities                    // Capability mask follows the header
+	FlagLocalVars                       // per-chunk local-variable debug tables follow the NS table (v2+)
 	// FlagCompressed: the module body (everything after the header + capability
 	// section) is a single compressed stream, prefixed by its declared
 	// uncompressed size and a codec byte. The magic, version, flags, and
@@ -23,7 +25,22 @@ const (
 	// Compression is opt-in at compile time
 	// (lg -c -z / lg -b -z); a bundle without this bit decodes byte-identically
 	// to before.
-	FlagCompressed uint16 = 1 << 3
+	FlagCompressed
+
+	flagsEnd // first unused bit; keep last
+)
+
+// knownFlags covers every bit assigned in the block above. It is for layout
+// checks only — readHeader admits flags per format version via vNFlags.
+const knownFlags = flagsEnd - 1
+
+// Per-version admitted flag sets. Appending a flag forces an explicit decision
+// about which versions accept it; using knownFlags as the admitted set would
+// silently widen what older versions accept.
+const (
+	v1Flags uint16 = FlagConstsBase | FlagCapabilities
+	v2Flags uint16 = v1Flags | FlagLocalVars
+	v3Flags uint16 = v2Flags | FlagCompressed
 )
 
 // Compression codecs (the uncompressed byte after the declared body size).

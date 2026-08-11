@@ -208,3 +208,38 @@ func TestCompressedExecUnitBytePath(t *testing.T) {
 		t.Fatalf("byte-backed DecodeToExecUnitBytes: %v", err)
 	}
 }
+
+// TestEncodeNormalizesDownWithoutCompression covers the sharp edge where a
+// decoded v3 module is re-encoded with FlagCompressed cleared: the wire
+// version must drop back to the uncompressed write version so older decoders
+// are not rejected for a plaintext body.
+func TestEncodeNormalizesDownWithoutCompression(t *testing.T) {
+	mc := buildCompressibleModule()
+	mc.Flags |= FlagCompressed
+	var comp bytes.Buffer
+	if err := Encode(&comp, mc); err != nil {
+		t.Fatalf("compressed encode: %v", err)
+	}
+	decoded, err := Decode(bytes.NewReader(comp.Bytes()))
+	if err != nil {
+		t.Fatalf("decode compressed: %v", err)
+	}
+	if decoded.Version != FormatVersion {
+		t.Fatalf("decoded version = %d, want %d", decoded.Version, FormatVersion)
+	}
+
+	decoded.Flags &^= FlagCompressed
+	var plain bytes.Buffer
+	if err := Encode(&plain, decoded); err != nil {
+		t.Fatalf("re-encode without compression: %v", err)
+	}
+	if version := binary.LittleEndian.Uint16(plain.Bytes()[4:6]); version != uncompressedFormatVersion {
+		t.Fatalf("re-encoded version = %d, want %d", version, uncompressedFormatVersion)
+	}
+	if flags := binary.LittleEndian.Uint16(plain.Bytes()[6:8]); flags&FlagCompressed != 0 {
+		t.Fatalf("re-encoded flags still have FlagCompressed: 0x%04x", flags)
+	}
+	if _, err := Decode(bytes.NewReader(plain.Bytes())); err != nil {
+		t.Fatalf("decode re-encoded plain: %v", err)
+	}
+}

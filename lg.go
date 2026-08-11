@@ -437,6 +437,10 @@ func runMain() int {
 	}
 
 	flag.Parse()
+	if compressBundle && compileOutput == "" && bundleOutput == "" {
+		fmt.Fprintln(os.Stderr, "error: -z requires -c or -b")
+		return 2
+	}
 
 	if showVersion {
 		fmt.Print(bytecode.FormatVersionReport("lg", versionString()))

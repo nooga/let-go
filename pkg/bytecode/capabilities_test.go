@@ -51,7 +51,7 @@ func TestFormatVersionReport(t *testing.T) {
 	got := FormatVersionReport("lg", "1.99.0 (deadbee)")
 	for _, want := range []string{
 		"lg 1.99.0 (deadbee)\n",
-		fmt.Sprintf("lgb: format %d\n", FormatVersion),
+		fmt.Sprintf("lgb: format %d (default write), %d (max)\n", uncompressedFormatVersion, FormatVersion),
 		"capabilities: CapOpcodeSet",
 		"opcodes:",
 		"signature",

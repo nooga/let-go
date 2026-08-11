@@ -615,10 +615,12 @@ func (d *decoder) readHeader() (version, flags uint16, err error) {
 	}
 	var supportedFlags uint16
 	switch version {
+	case 1:
+		supportedFlags = v1Flags
 	case 2:
-		supportedFlags = FlagConstsBase | FlagCapabilities | FlagLocalVars
+		supportedFlags = v2Flags
 	case FormatVersion:
-		supportedFlags = FlagConstsBase | FlagCapabilities | FlagLocalVars | FlagCompressed
+		supportedFlags = v3Flags
 	}
 	if supportedFlags != 0 && flags&^supportedFlags != 0 {
 		return 0, 0, fmt.Errorf("unsupported LGB flags 0x%04x for version %d (supported: 0x%04x)", flags&^supportedFlags, version, supportedFlags)

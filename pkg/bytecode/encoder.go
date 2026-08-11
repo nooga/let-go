@@ -68,14 +68,18 @@ func Encode(w io.Writer, m *Module) error {
 	return writeAndCloseCompressedBody(fw, rawBody.Bytes())
 }
 
+// encodeFormatVersion picks the minimum format version that admits every bit
+// set in m.Flags. Clearing FlagCompressed therefore normalizes back to the
+// uncompressed write version instead of emitting a plaintext v3 bundle that
+// older decoders would reject for no reason.
 func encodeFormatVersion(m *Module) (uint16, error) {
-	if m.Flags&FlagCompressed == 0 {
-		return m.Version, nil
+	if m.Flags&^v3Flags != 0 {
+		return 0, fmt.Errorf("unsupported LGB flags 0x%04x", m.Flags&^v3Flags)
 	}
-	if m.Version != uncompressedFormatVersion && m.Version != FormatVersion {
-		return 0, fmt.Errorf("compression is unsupported for LGB version %d", m.Version)
+	if m.Flags&^v2Flags != 0 {
+		return FormatVersion, nil
 	}
-	return FormatVersion, nil
+	return uncompressedFormatVersion, nil
 }
 
 // writeAndCloseCompressedBody always closes the compressor, including after a
