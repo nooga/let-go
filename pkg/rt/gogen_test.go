@@ -709,6 +709,74 @@ func TestGogenIdentAccessors(t *testing.T) {
 	}
 }
 
+func TestDeferStmt(t *testing.T) {
+	call := must(t)(cCall(
+		must(t)(cFieldSel(must(t)(cIdent(vm.String("rt"))), vm.String("ShutdownAllPods"))),
+		vm.NewArrayVector(nil)))
+	got := render(t, must(t)(cDeferStmt(call)))
+	if got != "defer rt.ShutdownAllPods()" {
+		t.Fatalf("got %q", got)
+	}
+	errMust(t, "*ast.CallExpr")(cDeferStmt(must(t)(cIdent(vm.String("x")))))
+}
+
+func TestSliceExpr(t *testing.T) {
+	args := must(t)(cFieldSel(must(t)(cIdent(vm.String("os"))), vm.String("Args")))
+	got := render(t, must(t)(cSliceExpr(args, must(t)(cIntLit(vm.Int(1))), vm.NIL)))
+	if got != "os.Args[1:]" {
+		t.Fatalf("got %q, want os.Args[1:]", got)
+	}
+}
+
+func TestCallVariadic(t *testing.T) {
+	fn := must(t)(cFieldSel(must(t)(cIdent(vm.String("prog"))), vm.String("Main")))
+	got := render(t, must(t)(cCallVariadic(fn, vm.NewArrayVector([]vm.Value{
+		must(t)(cIdent(vm.String("ec"))),
+		must(t)(cIdent(vm.String("argv"))),
+	}))))
+	if got != "prog.Main(ec, argv...)" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRangeStmt(t *testing.T) {
+	x := must(t)(cSliceExpr(
+		must(t)(cFieldSel(must(t)(cIdent(vm.String("os"))), vm.String("Args"))),
+		must(t)(cIntLit(vm.Int(1))),
+		vm.NIL))
+	body := vm.NewArrayVector([]vm.Value{
+		must(t)(cExprStmt(must(t)(cCall(
+			must(t)(cIdent(vm.String("use"))),
+			vm.NewArrayVector([]vm.Value{
+				must(t)(cIdent(vm.String("i"))),
+				must(t)(cIdent(vm.String("a"))),
+			}))))),
+	})
+	got := render(t, must(t)(cRangeStmt(
+		must(t)(cIdent(vm.String("i"))),
+		must(t)(cIdent(vm.String("a"))),
+		vm.String(":="),
+		x,
+		body)))
+	if !strings.Contains(got, "for i, a := range os.Args[1:]") {
+		t.Fatalf("missing range header: %q", got)
+	}
+}
+
+func TestWithGoDirective(t *testing.T) {
+	decl := must(t)(cTopVarDecl(vm.String("programLGB"), must(t)(cType(vm.String("[]byte"))), vm.NIL))
+	decl = must(t)(cWithGoDirective(decl, vm.String("go:embed program.lgb")))
+	file := must(t)(cFile(vm.String("main"), vm.NIL, vm.NewArrayVector([]vm.Value{decl})))
+	got := render(t, file)
+	if !strings.Contains(got, "//go:embed program.lgb\n") {
+		t.Fatalf("directive missing or spaced wrong:\n%s", got)
+	}
+	if strings.Contains(got, "// go:embed") {
+		t.Fatalf("directive must not have space after //:\n%s", got)
+	}
+	errMust(t, "go:")(cWithGoDirective(decl, vm.String("embed program.lgb")))
+}
+
 // TestAllocPosConcurrentUniqueness pins the review fix on #446: allocPos is
 // called from concurrent lowering goroutines, and the previous unsynchronized
 // goPosNext read-increment could lose updates and hand two AST nodes the same

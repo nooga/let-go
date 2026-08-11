@@ -1313,15 +1313,28 @@
         m))
     {} forms))
 
-(defn lower-ns-to-go [pkg-name ns-name forms]
+(defn lower-ns-to-go-result [pkg-name ns-name forms]
   "Process a namespace's forms through the Go-lowering pipeline and return
-   rendered Go source for a package. pkg-name is the Go package name string,
-   ns-name is the namespace symbol (for *ns* binding), and forms is a vector of
-   raw top-level forms: (defn ...) plus optional (defprotocol ...) / (deftype
-   ...) declaration forms. Declaration forms are emitted as a native Go
-   interface / struct+constructor / receiver methods, and the deftype
-   constructor + protocol-method registries are bound so the namespace's own
-   functions devirtualize constructor calls and protocol dispatch."
+   structured metadata alongside the rendered Go source:
+
+     {:source string
+      :ns     string
+      :pkg    string
+      :fns    [{:fn-name :go-name :arity :needs-error?
+                :param-specs :result-spec} …]}
+
+   :fns lists every successfully lowered top-level fn (those that emitted a
+   :decl), keyed by the SOURCE name (:fn-name) with the actual
+   collision-resolved Go identifier in :go-name. Callers that only need the
+   rendered source should keep using lower-ns-to-go.
+
+   pkg-name is the Go package name string, ns-name is the namespace symbol
+   (for *ns* binding), and forms is a vector of raw top-level forms:
+   (defn ...) plus optional (defprotocol ...) / (deftype ...) declaration
+   forms. Declaration forms are emitted as a native Go interface /
+   struct+constructor / receiver methods, and the deftype constructor +
+   protocol-method registries are bound so the namespace's own functions
+   devirtualize constructor calls and protocol dispatch."
   ;; Determinism: the Go-lowering path encodes inferred types into the
   ;; rendered source, so typeinfer MUST run to fixpoint here — a wall-clock
   ;; budget would yield a partial, time-dependent result (non-deterministic
@@ -1608,8 +1621,28 @@
                                       :imports (mapv (fn [p] {:path p}) (sort @native-imports))}]
                                     [])
             all-results (into all-results native-import-results)
-            file-ast (lower-go/file pkg-name all-results)]
-        (gogen/render file-ast)))))
+            file-ast (lower-go/file pkg-name all-results)
+            ;; Per-fn records for downstream consumers (native-entry frame, …).
+            ;; Only entries that actually lowered a named top-level fn — helpers
+            ;; / init / import-only results have no :fn-name and are omitted.
+            fns (mapv (fn [r]
+                        {:fn-name (:fn-name r)
+                         :go-name (:go-name r)
+                         :arity (:arity r)
+                         :needs-error? (:needs-error? r)
+                         :param-specs (vec (:param-specs r))
+                         :result-spec (:result-spec r)})
+                      (filterv :fn-name valid-results))]
+        {:source (gogen/render file-ast)
+         :ns (str ns-name)
+         :pkg pkg-name
+         :fns fns}))))
+
+(defn lower-ns-to-go [pkg-name ns-name forms]
+  "Compatibility wrapper: rendered Go source only. Prefer
+   lower-ns-to-go-result when the caller needs collision-resolved :go-name /
+   :needs-error? / arity metadata (e.g. the #425 native-entry frame)."
+  (:source (lower-ns-to-go-result pkg-name ns-name forms)))
 
 ;; --- EPIC-012 / ITER-0025: whole-program cross-package direct-call collector ---
 
@@ -1716,7 +1749,7 @@
                 m)))
           {} global-reg))
 
-(defn lower-all-ns-to-go [specs]
+(defn lower-all-ns-to-go-result [specs]
   "Whole-program Go lowering with cross-package direct calls (EPIC-012/ITER-0025).
    specs: vector of positional [pkg-name ns-sym forms import-path]. Phase 0 collects the
    global cross-package registry + the set of fns referenced cross-package; phase
@@ -1728,9 +1761,10 @@
    direct calls (or the same trampoline on coercion failure) — it never causes a
    fn that emitted in phase 0 to bail in phase 1 — so every confirmed export's
    wrapper is emitted; `make check-generated`'s compile step is the hard backstop
-   against any residual dangling reference. Returns a vector of Go source strings
-   in spec order; a namespace that fails to lower yields nil at its slot (the Go
-   driver treats nil as a per-ns failure, preserving per-namespace resilience)."
+   against any residual dangling reference. Returns a vector of
+   lower-ns-to-go-result maps in spec order; a namespace that fails to lower
+   yields nil at its slot (the Go driver treats nil as a per-ns failure,
+   preserving per-namespace resilience)."
   (let [collected  (mapv (fn [s]
                            (try
                              (collect-ns-exports (nth s 0) (nth s 1) (nth s 2) (nth s 3))
@@ -1762,8 +1796,14 @@
               (let [caller (lower-go/internal-ns-sym (str (nth s 1)))]
                 (binding [*cross-pkg-registry* (acyclic-registry-for global-reg reach caller)]
                   (try
-                    (lower-ns-to-go (nth s 0) (nth s 1) (nth s 2))
+                    (lower-ns-to-go-result (nth s 0) (nth s 1) (nth s 2))
                     (catch e
                       (println (str "WARNING: Go lowering failed for " (nth s 1) ": " e))
                       nil)))))
             specs))))
+
+(defn lower-all-ns-to-go [specs]
+  "Compatibility wrapper: vector of rendered Go source strings (or nil). Prefer
+   lower-all-ns-to-go-result when the caller needs per-fn lowering metadata."
+  (mapv (fn [r] (when r (:source r)))
+        (lower-all-ns-to-go-result specs)))

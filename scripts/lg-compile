@@ -2,7 +2,7 @@
 ;; DIRECT cross-package calls between them (pkg.Fn(ec, …) instead of runtime
 ;; CachedVarFn trampolines) and the matching Go imports.
 ;;
-;;   ./lg scripts/lg-compile <out-dir> <import-prefix> <file.lg>...
+;;   ./lg scripts/lg-compile [--entry-frame] <out-dir> <import-prefix> <file.lg>...
 ;;
 ;;   <import-prefix>  Go import path of <out-dir> (each package is
 ;;                    <import-prefix>/<reldir>). e.g. for out-dir
@@ -17,6 +17,15 @@
 ;; collect-all/emit-all pass and emits direct pkg.Fn(ec,…) calls + imports +
 ;; exported wrappers), then writes each returned Go package to disk. Variadic /
 ;; non-coercible fns aren't :direct-callable?, so they stay on the trampoline.
+;;
+;; --entry-frame (opt-in): when a recognized program entry (main / -main,
+;; including defn-) is present, also emit <out-dir>/main.go — the #425
+;; native-entry frame (BootCore → load program.lgb NS chunks with override
+;; drain → direct native entry or VM fallback). Without the flag, only
+;; lowered packages are written (historical behavior for external callers
+;; such as Gloat that own their own executable / shared-library frames).
+;; The Item 3 summary line is always printed. The orchestrator must place
+;; program.lgb beside main.go before `go build` when using --entry-frame.
 
 (require 'ir.data)
 (require 'ir.passes.pipeline)
@@ -27,12 +36,19 @@
 (require 'clojure.string)
 (require 'gogen)
 
+;; entry-frame is a new ns (#425). Require it; the resolver finds it under
+;; pkg/rt/core when LG_SOURCE_PATHS includes that tree (or after core regen
+;; embeds it). lg-compile is normally run from the let-go checkout root.
+(require 'ir.passes.entry-frame)
+
 ;; Evaluating a file's (ns ..) form switches the GLOBAL current ns; capture this
 ;; script's ns so we can restore it after loading (else later top-level defs in
 ;; this script resolve against a loaded file's ns and break).
 (def --script-ns *ns*)
 
-(def argv (vec (drop 2 (seq os/args))))
+(def argv0 (vec (drop 2 (seq os/args))))
+(def entry-frame? (boolean (some (fn [a] (= "--entry-frame" a)) argv0)))
+(def argv (vec (filter (fn [a] (not= "--entry-frame" a)) argv0)))
 (def out-dir (nth argv 0))
 (def import-prefix (nth argv 1))
 (def files (vec (drop 2 argv)))
@@ -119,6 +135,18 @@
        (:nsn s)))
     @out))
 
+(defn count-lowered-funcs [go-src]
+  "Rough count of top-level lowered `func Name(` decls — excludes the generated
+   __gogen* wrappers and init() so the summary reflects real lowered fns."
+  (if-not (string? go-src)
+    0
+    (count (filter (fn [decl]
+                     ;; decl is "\nfunc NAME(" — strip "\nfunc " (6) + trailing "(".
+                     (let [nm (subs decl 6 (dec (count decl)))]
+                       (and (not (clojure.string/starts-with? nm "__gogen"))
+                            (not= nm "init"))))
+                   (re-seq #"\nfunc [A-Za-z_][A-Za-z0-9_]*\(" (str "\n" go-src))))))
+
 ;; Everything below runs in ONE top-level form so it is COMPILED in this script's
 ;; ns (all symbols resolve) BEFORE the runtime (ns ..)/eval calls switch the
 ;; global current ns.
@@ -137,7 +165,8 @@
                       {:path path :forms forms :ns-sym ns-sym :lf lf
                        :pkg pkg :reldir reldir
                        :nsn (if ns-sym ns-sym (symbol nsstr))
-                       :go-pkg (str import-prefix "/" reldir)}))
+                       :go-pkg (str import-prefix "/" reldir)
+                       :entry (ir.passes.entry-frame/find-program-entry forms)}))
                   files)
       ;; --- load every ns first, in dependency order, evaluating ONLY
       ;;     definitional forms, so cross-ns refers resolve when
@@ -148,14 +177,28 @@
               (doseq [f (:forms s)]
                 (when (definitional? f) (eval f))))
       ;; --- whole-program cross-package lowering (collect-all then emit-all) ---
+      ;; Use the result API so the entry frame can consume collision-resolved
+      ;; :go-name / :needs-error? from the lowerer rather than scanning text (#657).
       gospecs (mapv (fn [s] [(:pkg s) (:nsn s) (:lf s) (:go-pkg s)]) specs)
       results (binding [ir.passes.pipeline/*target* :go]
-                (ir.passes.pipeline/lower-all-ns-to-go gospecs))]
+                (ir.passes.pipeline/lower-all-ns-to-go-result gospecs))
+      ;; Prefer -main's owning ns when several inputs declare an entry.
+      entry-spec (or (first (filter (fn [s] (and (:entry s) (= "-main" (:name (:entry s))))) specs))
+                     (first (filter :entry specs)))]
+  ;; Reject unsupported entry arities only when we would emit a frame —
+  ;; package-only mode must not fail on shapes Gloat / other orchestrators
+  ;; handle themselves.
+  (when entry-frame?
+    (when-let [err (ir.passes.entry-frame/entry-arity-error
+                     (when entry-spec (:entry entry-spec)))]
+      (println err)
+      (os/exit 1)))
   ;; --- write each emitted package to disk ---
   (doseq [pair (map-indexed vector specs)]
     (let [i  (first pair)
           s  (second pair)
-          go (nth results i)]
+          r  (nth results i)
+          go (when r (:source r))]
       (cond
         (empty? (:lf s)) (println (str (:path s) ": no lowerable defns — skipped"))
         (string? go)     (let [dir (str out-dir "/" (:reldir s))
@@ -164,5 +207,43 @@
                            (spit out go)
                            (println (str (:path s) " -> " out)))
         :else            (println (str "EMIT-FAIL " (:path s) " pkg=" (:pkg s)
-                                       " returned " (clojure.core/type go))))))
+                                       " returned " (clojure.core/type r))))))
+  ;; --- #425 native-entry frame (opt-in via --entry-frame) ---
+  ;; Summary always prints; main.go / native_entry.go only when requested.
+  (let [n-funcs (reduce + (map (fn [r] (count-lowered-funcs (when r (:source r)))) results))]
+    (if-not entry-spec
+      (println (ir.passes.entry-frame/entry-summary-line n-funcs nil))
+      (let [ei     (first (keep-indexed (fn [i s] (when (= s entry-spec) i)) specs))
+            result (nth results ei)
+            fn-rec (ir.passes.entry-frame/lookup-entry-fn
+                     (when result (:fns result))
+                     (:entry entry-spec))
+            ;; Stamp the owning source namespace so VM fallback resolves
+            ;; LookupNS(ns).LookupLocal(name) rather than scanning the registry.
+            entry  (assoc (ir.passes.entry-frame/analyze-entry
+                            (:entry entry-spec) {:fn fn-rec})
+                          :ns (str (:nsn entry-spec)))]
+        (when entry-frame?
+          (let [blanks   (vec (keep (fn [pair]
+                                      (let [s (nth specs (first pair))
+                                            r (second pair)]
+                                        (when (and r (string? (:source r))) (:go-pkg s))))
+                                    (map-indexed vector results)))
+                frame    (ir.passes.entry-frame/emit-entry-frame-go
+                           {:entry entry
+                            :entry-import (:go-pkg entry-spec)
+                            :blank-imports blanks})
+                main-out (str out-dir "/main.go")
+                bridge   (ir.passes.entry-frame/emit-entry-bridge-go
+                           (:pkg entry-spec) entry)]
+            (mkdir out-dir)
+            (spit main-out frame)
+            (println (str "native-entry frame -> " main-out))
+            (when bridge
+              (let [bdir (str out-dir "/" (:reldir entry-spec))
+                    bout (str bdir "/native_entry.go")]
+                (mkdir bdir)
+                (spit bout bridge)
+                (println (str "native-entry bridge -> " bout))))))
+        (println (ir.passes.entry-frame/entry-summary-line n-funcs entry)))))
   (println "done."))
