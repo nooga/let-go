@@ -61,6 +61,13 @@ func (p *PreparedCall) Call1(a Value) (Value, error) {
 	return p.call()
 }
 
+// Call2 invokes the prepared binary callable.
+func (p *PreparedCall) Call2(a, b Value) (Value, error) {
+	p.args[0] = a
+	p.args[1] = b
+	return p.call()
+}
+
 // call resets the owned frame and runs it. The reset must cover code/consts/
 // closedOvers, not just args/ip/sp: a tail call in the callee body rebinds the
 // frame to the tail target via installBytecodeCall, and an error unwind can
