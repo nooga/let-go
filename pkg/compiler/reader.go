@@ -784,7 +784,18 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 	startCol := max(
 		// -2 because '#' and '{' were consumed
 		r.column-2, 0)
-	ret := vm.EmptyList
+	// A set literal reads as a set VALUE, the way map and vector literals read
+	// as maps and vectors. It used to read as the form `(hash-set …)`, which
+	// compiled correctly but made read-string return a constructor call instead
+	// of data:
+	//
+	//	(read-string "#{1}")   ;=> (hash-set 1)   ; before
+	//	(read-string "#{1}")   ;=> #{1}           ; now, and what Clojure returns
+	//
+	// Evaluation is unchanged: compileForm's vm.SetType case emits the same
+	// hash-set invocation and compiles each element, so `#{x (f y)}` still
+	// evaluates its elements.
+	var ret []vm.Value
 	for {
 		ch2, err := r.eatWhitespace()
 		if err != nil {
@@ -802,10 +813,10 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
 		if form.Type() != vm.VoidType {
-			ret = ret.Conj(form).(*vm.List)
+			ret = append(ret, form)
 		}
 	}
-	result := ret.Cons(vm.Symbol("hash-set"))
+	result := vm.NewSet(ret)
 	vm.FormSource.Set(result, vm.SourceInfo{
 		File: r.inputName, Line: startLine, Column: startCol,
 	})

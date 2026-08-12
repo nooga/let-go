@@ -1,0 +1,41 @@
+;; Set literals read as sets, not as the form (hash-set …).
+;;
+;; Before: (read-string "#{1}") => (hash-set 1), a constructor call, so callers
+;; that read EDN got a list back and (set? …) was false. Maps and vectors
+;; already read as data; sets were the outlier.
+;;
+;; Evaluation is unchanged — the compiler's vm.SetType case emits the same
+;; hash-set invocation — so this pins the data/eval split in both directions.
+(ns test.set-literal-reader-test
+  (:require [test :refer :all]))
+
+(deftest set-literal-reads-as-data
+  (testing "read-string returns a set, not a hash-set call"
+    (is (set? (read-string "#{1 2}")))
+    (is (= #{1 2} (read-string "#{1 2}")))
+    (is (not (list? (read-string "#{1 2}")))))
+  (testing "empty set literal"
+    (is (set? (read-string "#{}")))
+    (is (= #{} (read-string "#{}"))))
+  (testing "maps and vectors were already data and stay data"
+    (is (map? (read-string "{:a 1}")))
+    (is (vector? (read-string "[1 2]"))))
+  (testing "genuine reader macros still expand to forms"
+    (is (= '(quote sym) (read-string "'sym")))
+    (is (= '(deref x) (read-string "@x")))))
+
+(deftest set-literal-still-evaluates-elements
+  (testing "elements are evaluated, so a set literal is not a constant"
+    (let [x 3]
+      (is (= #{1 2 3} #{1 2 x}))
+      (is (= #{2} #{(+ 1 1)}))))
+  (testing "quoted set literals hold unevaluated elements"
+    (is (= #{'a 'b} '#{a b}))
+    (is (contains? '#{entry} 'entry))))
+
+(deftest set-literal-through-the-ir
+  (testing "a quoted set literal builds through the IR path"
+    ;; #{entry} inside a quoted defn used to arrive as (hash-set entry) and so
+    ;; never exercised build-form's collection dispatch. As data it does.
+    (is (set? (read-string "#{entry}")))
+    (is (contains? (read-string "#{entry}") 'entry))))

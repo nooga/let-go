@@ -308,6 +308,10 @@
         (into #{} (mapcat #(captures-of % known-locals) form))))
     (vector? form)
     (into #{} (mapcat #(captures-of % known-locals) form))
+    (set? form)
+    ;; Same reasoning as the map case below: a value captured only inside a set
+    ;; literal must be walked, or loop-header threading misses it.
+    (into #{} (mapcat #(captures-of % known-locals) form))
     (map? form)
     ;; Mirror free-vars: a value captured only inside a map literal must be
     ;; walked too, else loop-header threading (build-loop) misses it and emits
@@ -321,7 +325,7 @@
 (declare form-heads-dispatcher
          build-list build-symbol build-if build-let build-let* build-do build-quote
          build-var build-set! build-def build-loop build-loop* build-recur build-fn*
-         build-vector build-map build-call build-try build-dot)
+         build-vector build-set build-map build-call build-try build-dot)
 
 ;; Sentinel returned by recur / any form whose current-block is already
 ;; terminated. Callers must check for this before emitting more code.
@@ -372,6 +376,7 @@
               (add-inst! ctx (ctx-block ctx) :const [] form)
               (symbol?  form)  (build-symbol form ctx)
               (vector?  form)  (build-vector form ctx)
+              (set?     form)  (build-set form ctx)
               (map?     form)  (build-map form ctx)
               (list?    form)  (build-list form ctx)
               ;; pr-str (not str): a BigDecimal's str drops the `M` suffix, so an
@@ -466,6 +471,8 @@
         :else
         (into #{} (mapcat #(free-vars % bound) form))))
     (vector? form)
+    (into #{} (mapcat #(free-vars % bound) form))
+    (set? form)
     (into #{} (mapcat #(free-vars % bound) form))
     (map? form)
     (into #{} (mapcat #(free-vars % bound) (concat (keys form) (vals form))))
@@ -862,6 +869,20 @@
     (add-inst! ctx (ctx-block ctx) :const [] form)
     (let [fn-id   (add-inst! ctx (ctx-block ctx)
                     :load-var [] (resolve 'vector))]
+      (build-call-with-head fn-id (seq form) ctx))))
+
+(defn build-set [form ctx]
+  "#{a b c} → (hash-set a b c). Empty set → Const literal.
+
+   Set literals reach the IR as set VALUES: the reader builds a set rather than
+   the form (hash-set …), so read-string returns data. Elements flow through
+   build-form for the same reason vector elements do — a set literal may hold
+   sub-expressions, and build-args handles cross-block threading. Iteration
+   order is unspecified, which is sound because hash-set is order-independent."
+  (if (zero? (count form))
+    (add-inst! ctx (ctx-block ctx) :const [] form)
+    (let [fn-id (add-inst! ctx (ctx-block ctx)
+                  :load-var [] (resolve 'hash-set))]
       (build-call-with-head fn-id (seq form) ctx))))
 
 (defn is-literal? [v]
