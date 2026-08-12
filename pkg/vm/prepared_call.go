@@ -27,8 +27,14 @@ type PreparedCall struct {
 
 // PrepareCall resolves fn for repeated arity-n invocation. It returns nil for
 // targets that are not plain fixed-arity bytecode callables (variadic, native,
-// protocol, ...); callers fall back to ec.Invoke.
+// protocol, ...), and for arities without a matching CallN method; callers
+// fall back to ec.Invoke.
 func (ec *ExecContext) PrepareCall(fn Fn, arity int) *PreparedCall {
+	// Only arities a CallN entry point can fully populate are prepared —
+	// Call1 is the only one today. Widen this as CallN methods land.
+	if arity != 1 {
+		return nil
+	}
 	args := make([]Value, arity)
 	target, direct, err := resolveBytecodeCall(fn, args)
 	if err != nil || !direct || target.fn.isVariadric {

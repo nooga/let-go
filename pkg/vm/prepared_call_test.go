@@ -156,7 +156,22 @@ func TestPreparedCallRejectsNonBytecodeAndVariadicTargets(t *testing.T) {
 
 	consts := NewConsts()
 	variadic := MakeFunc(1, true, NewCodeChunk(consts))
-	if pc := RootExecContext.PrepareCall(variadic, 2); pc != nil {
+	if pc := RootExecContext.PrepareCall(variadic, 1); pc != nil {
 		t.Fatal("PrepareCall accepted a variadic Func")
+	}
+}
+
+// Arities without a matching CallN method must not prepare: Call1 could not
+// populate their argument slots (arity 0 would panic, arity 2+ would pass Go
+// nil interfaces into bytecode).
+func TestPreparedCallRejectsUnsupportedArities(t *testing.T) {
+	consts := NewConsts()
+	nullary := testConstFn(consts, Int(1))
+	if pc := RootExecContext.PrepareCall(nullary, 0); pc != nil {
+		t.Fatal("PrepareCall accepted arity 0 with no Call0 entry point")
+	}
+	binary := testBytecodeFnReturningArg(consts, 2)
+	if pc := RootExecContext.PrepareCall(binary, 2); pc != nil {
+		t.Fatal("PrepareCall accepted arity 2 with no Call2 entry point")
 	}
 }
