@@ -215,6 +215,16 @@
       (vm-call "NewArrayVector"
                [(gogen/composite-lit (gogen/type "[]vm.Value") elems)]))))
 
+(defn- boxed-set-expr [xs]
+  "#{…} constant → vm.NewSet([]vm.Value{…}). Set literals reach the IR as set
+   VALUES (the reader builds a set so read-string returns data), so a set can
+   appear as a :const aux and needs an emitter here alongside vectors, lists and
+   maps. Element order is unspecified and irrelevant: NewSet re-hashes."
+  (let [elems (mapv boxed-value-expr (seq xs))]
+    (when (every? identity elems)
+      (vm-call "NewSet"
+               [(gogen/composite-lit (gogen/type "[]vm.Value") elems)]))))
+
 (defn- boxed-list-expr [xs]
   (if (zero? (count xs))
     (vm-sel "EmptyList")
@@ -327,6 +337,7 @@
     (vm-call "MustRegexFromReadable" [(gogen/string-lit (str v))])
     (list? v)       (boxed-list-expr v)
     (vector? v)     (boxed-vector-expr v)
+    (set? v)        (boxed-set-expr v)
     (map? v)        (boxed-map-expr v)
     :else nil))
 
@@ -3171,7 +3182,7 @@
   ;; control flow and condition tests are embedded in the switch node.
   (let [absorbed-insts (or (:absorbed-insts (deref f)) #{})
         insts (filter (fn [nid] (and (not (inlined-arg? f nid))
-                                      (not (contains? absorbed-insts nid))))
+                                  (not (contains? absorbed-insts nid))))
                       (ir/block-insts bid f))]
     (loop [remaining insts out []]
       (if (empty? remaining)
@@ -3325,7 +3336,7 @@
                                        [keyword-switch])
                       nonkeyword-clause (gogen/case-clause nil default-stmts)
                       sw-stmt [(gogen/type-switch-stmt kw-tag-name g-expr
-                                [keyword-clause nonkeyword-clause])]
+                                 [keyword-clause nonkeyword-clause])]
                       cont-stmts (lower-tree f closed-exprs cont-node)]
                   (if cont-stmts
                     (vec (concat inst-stmts sw-stmt cont-stmts))
