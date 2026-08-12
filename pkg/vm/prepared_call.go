@@ -31,8 +31,8 @@ type PreparedCall struct {
 // fall back to ec.Invoke.
 func (ec *ExecContext) PrepareCall(fn Fn, arity int) *PreparedCall {
 	// Only arities a CallN entry point can fully populate are prepared —
-	// Call1 is the only one today. Widen this as CallN methods land.
-	if arity != 1 {
+	// Call1 and Call2 today. Widen this as CallN methods land.
+	if arity < 1 || arity > 2 {
 		return nil
 	}
 	args := make([]Value, arity)
