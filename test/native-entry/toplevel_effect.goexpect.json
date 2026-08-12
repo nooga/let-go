@@ -1,0 +1,12 @@
+{
+  "note": "Top-level side effect + VM-backed callee. Pins the main-chunk replay fix: the banner (a top-level form in the program's main chunk) must print EXACTLY ONCE, and the variadic sum-all must resolve — which is only possible if the frame replays the main chunk after LoadProgramNamespaces. add-twice is the lowered defn under test and keeps the same direct-call shape as int_arith.",
+  "namespace": "topleveleffect",
+  "generatedFile": "topleveleffect/topleveleffect.go",
+  "entryFn": "Main",
+  "lispFn": "add-twice",
+  "goFn": "AddTwice",
+  "lowering": "direct",
+  "functionFragment": "func AddTwice(ec *vm.ExecContext, arg0 int, arg1 int) int {\n\tvar arg__1 int\n\tvar v4 int\n\targ__1 = arg0 + arg1\n\tv4 = arg__1 + arg__1\n\treturn v4\n}",
+  "callFragment": "AddTwice(ec, 3, 4)",
+  "semanticWrap": "(__EXPR__) + 1"
+}

@@ -1,0 +1,10 @@
+;; Iteration-1 native-entry fixture: closure over a captured parameter.
+;; adder lowers to a direct Go call returning a boxed native fn that captures
+;; its argument; the returned closure is applied through rt.InvokeValueEC.
+(ns closurecapture)
+
+(defn adder [n]
+  (fn [x] (+ x n)))
+
+(defn -main []
+  (println ((adder 5) 37)))

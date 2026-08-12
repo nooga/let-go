@@ -81,7 +81,10 @@ func TestRunner(t *testing.T) {
 			// run for seconds and assert nothing — run by hand with ./lg;
 			// gogen/ holds native-lowering harness fixtures driven by the
 			// deftype_skeleton_lowering_e2e_test, not bytecode deftests).
-			if info.Name() == "compat" || info.Name() == "clojure-test-suite" || info.Name() == "benches" || info.Name() == "gogen" {
+			// native-entry/ holds AOT gate fixtures (programs with -main, not
+			// deftests) driven by TestNativeEntryASTGate; tools/ holds
+			// test-scoped generators invoked with arguments by e2e tests.
+			if info.Name() == "compat" || info.Name() == "clojure-test-suite" || info.Name() == "benches" || info.Name() == "gogen" || info.Name() == "native-entry" || info.Name() == "tools" {
 				return filepath.SkipDir
 			}
 			return nil

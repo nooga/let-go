@@ -1,0 +1,28 @@
+;; Iteration-1 native-entry fixture: top-level side effect + VM-backed callee.
+;;
+;; This is the falsifier for the main-chunk replay fix. `lg -c` emits a bundle
+;; whose NS table is EMPTY, so a frame that only calls rt.LoadProgramNamespaces
+;; defines nothing: the VM-backed (variadic) sum-all resolves a Nil var and the
+;; binary panics. The frame must also replay the program's main chunk.
+;;
+;; The replay must happen EXACTLY ONCE: the top-level (println "banner") is
+;; part of that chunk, so a frame that replays it twice — or that replays it
+;; once here and again through the NS table when a bundle does carry NS
+;; entries — prints "banner" twice and fails the byte-exact .expect.
+;;
+;; add-twice is the fixture's lowered defn (direct call, same shape as
+;; int_arith); sum-all is deliberately variadic so the binary also exercises
+;; the VM trampoline against vars that only exist because of the replay.
+(ns topleveleffect)
+
+(println "banner")
+
+(defn add-twice [a b]
+  (+ (+ a b) (+ a b)))
+
+(defn sum-all [& xs]
+  (reduce + 0 xs))
+
+(defn -main []
+  (println (add-twice 3 4))
+  (println (sum-all 1 2 3 4)))

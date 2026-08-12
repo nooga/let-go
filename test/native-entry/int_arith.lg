@@ -1,0 +1,10 @@
+;; Iteration-1 native-entry fixture: int-typed arithmetic defn.
+;; add-twice type-infers to unboxed int params/return, so the entry path must
+;; contain a DIRECT Go call `AddTwice(ec, 3, 4)` — no VM trampoline.
+(ns intarith)
+
+(defn add-twice [a b]
+  (+ (+ a b) (+ a b)))
+
+(defn -main []
+  (println (add-twice 3 4)))

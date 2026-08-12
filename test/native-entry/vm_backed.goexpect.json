@@ -1,0 +1,12 @@
+{
+  "note": "Variadic fns are not :direct-callable?, so this fixture stays on the VM trampoline on purpose. It scopes the direct-call evidence: the gate must reject a trampoline where it demands a direct call, and vice versa. It also carries the inverted semantic mutant (dead_native_body_mutant_survives): SumAll is emitted but never called, so wrapping its returned expression must NOT change the program \u2014 still builds, exits 0, prints byte-exact .expect. A surviving mutant here is required evidence that the generated body is dead and ec.Invoke is what runs.",
+  "namespace": "vmbacked",
+  "generatedFile": "vmbacked/vmbacked.go",
+  "entryFn": "Main",
+  "lispFn": "sum-all",
+  "goFn": "SumAll",
+  "lowering": "vm",
+  "functionFragment": "func SumAll(ec *vm.ExecContext, args ...vm.Value) (vm.Value, error) {\n\tvar v4 vm.Value\n\tvar callErr error\n\tif rt.NativePrimsIntact() {\n\t\tv4, callErr = rt.Reduce3(ec, ec.Deref(rt.LookupVar(\"clojure.core\", \"+\")), vm.Int(0), rt.BoxRestArgs(args))\n\t\tif callErr != nil {\n\t\t\treturn nil, callErr\n\t\t}\n\t} else {\n\t\tv4, callErr = ec.Invoke(rt.CachedVarFn(&__v_clojure_core_reduce, \"clojure.core\", \"reduce\"), []vm.Value{ec.Deref(rt.LookupVar(\"clojure.core\", \"+\")), vm.Int(0), rt.BoxRestArgs(args)})\n\t\tif callErr != nil {\n\t\t\treturn nil, callErr\n\t\t}\n\t}\n\treturn v4, nil\n}",
+  "callFragment": "ec.Invoke(rt.CachedVarFn(&__v_vmbacked_sum_all, \"vmbacked\", \"sum-all\"), []vm.Value{vm.Int(1), vm.Int(2), vm.Int(3), vm.Int(4)})",
+  "semanticWrap": "rt.AddValue(__EXPR__, vm.Int(1))"
+}

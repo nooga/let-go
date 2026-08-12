@@ -1,0 +1,12 @@
+;; Iteration-1 native-entry fixture: intentionally VM-backed lowering.
+;; sum-all is variadic, so it is not :direct-callable? — the entry path keeps
+;; the ec.Invoke/CachedVarFn trampoline. This scopes the gate's direct-call
+;; assertion: it proves the gate distinguishes a native direct call from a VM
+;; trampoline instead of accepting either.
+(ns vmbacked)
+
+(defn sum-all [& xs]
+  (reduce + 0 xs))
+
+(defn -main []
+  (println (sum-all 1 2 3 4)))

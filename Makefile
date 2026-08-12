@@ -232,6 +232,32 @@ check-selfhost: lowered $(GO)
 gogen-diff: lowered $(GO)
 	go test -run TestGogenAOTDiff -count=1 -v ./test/e2e/
 
+# Native-entry AST gate: for every fixture in test/native-entry/, lower the
+# fixture through the production path (scripts/lg-compile --entry-frame),
+# assert the generated Go's structure with internal/gofragment + go/ast, build
+# a real binary, and require its stdout to equal the committed <fixture>.expect.
+# Three AST-located mutants (oracle / call site / returned value) must each
+# fail, so a green run cannot be vacuous.
+#
+# The same target also runs TestJankSuiteDirectABIGeneratedGo: the pinned jank
+# `identical?` deftest is lowered to a real Go test package (generated into a
+# temp dir, never into the repo), matched against an inline Go AST oracle (plus
+# its falsifier), executed with `go test`, and killed by an AST-located
+# semantic mutant. It is gated here rather than left
+# incidental. It needs test/clojure-test-suite; that submodule is only
+# materialized in the primary git worktree, so in a jj workspace run
+# `scripts/link-clojure-test-suite.sh <workspace>` first. The harness FAILS
+# loudly (never skips) when the suite is missing.
+#
+# The gate is testing.Short()-gated (it builds and runs binaries), so it must
+# run with -short=false. An ambient GOFLAGS=-short — exported by fast CI lanes
+# and by some local shells — would otherwise turn the whole gate into a silent
+# skip: strip it from GOFLAGS AND pass -short=false explicitly (the later flag
+# wins over anything GOFLAGS injects).
+.PHONY: native-entry-gate
+native-entry-gate: $(GO)
+	GOFLAGS="$(filter-out -short -test.short,$(GOFLAGS))" $(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -run 'TestNativeEntryASTGate|TestJankSuiteDirectABIGeneratedGo' -short=false -count=1 -v ./test/e2e/
+
 # Default gate (~1 min): the jank suite under BOTH VM variants (bytecode +
 # gogen_ir-lowered) + the calibration anchor. This is what CI runs.
 bench-ratchet: lowered $(GO)
