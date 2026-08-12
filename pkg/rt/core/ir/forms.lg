@@ -1,0 +1,26 @@
+;; Compiler-only collection forms preserve source slots through macroexpansion.
+;; Runtime map and set values cannot represent distinct child forms that expand
+;; to equal host values, so IR expansion carries vector-backed children until
+;; ir.build has compiled each slot.
+(ns ir.forms)
+
+(defrecord SetForm [elements])
+(defrecord MapForm [entries])
+
+(defn set-form [elements]
+  (->SetForm (vec elements)))
+
+(defn set-form? [form]
+  (instance? SetForm form))
+
+(defn set-form-elements [form]
+  (:elements form))
+
+(defn map-form [entries]
+  (->MapForm (vec entries)))
+
+(defn map-form? [form]
+  (instance? MapForm form))
+
+(defn map-form-entries [form]
+  (:entries form))

@@ -45,6 +45,10 @@ import (
 //     sites resolves the var against the root context and breaks every scenario.
 //   - return_hint_metadata.cljc: reader metadata on the idiomatic
 //     (defn f ^long [^long n] ...) spelling, plus execution of the hinted fn.
+//   - set_macroexpansion_eval.cljc: distinct set element forms that macroexpand
+//     identically are both evaluated before their runtime values are deduplicated.
+//   - map_macroexpansion_eval.cljc: distinct map key forms that macroexpand
+//     identically retain both key/value evaluation slots until runtime construction.
 //
 // The scripts deliberately stay inside the subset where let-go and Clojure
 // agree. let-go is intentionally MORE PERMISSIVE than Clojure in two spots the
@@ -53,10 +57,12 @@ import (
 // future that opened no binding of its own (Clojure throws; let-go permits it).
 
 const (
-	dynvarThreadsScript   = "test/gold/dynvar_threads.cljc"
-	nsThreadsScript       = "test/gold/ns_threads.cljc"
-	dynvarCallbacksScript = "test/gold/dynvar_callbacks.cljc"
-	returnHintMetaScript  = "test/gold/return_hint_metadata.cljc"
+	dynvarThreadsScript     = "test/gold/dynvar_threads.cljc"
+	nsThreadsScript         = "test/gold/ns_threads.cljc"
+	dynvarCallbacksScript   = "test/gold/dynvar_callbacks.cljc"
+	returnHintMetaScript    = "test/gold/return_hint_metadata.cljc"
+	setMacroexpansionScript = "test/gold/set_macroexpansion_eval.cljc"
+	mapMacroexpansionScript = "test/gold/map_macroexpansion_eval.cljc"
 )
 
 // rederiveGoldEnv, when set to "1", makes the gold tests re-derive their .out
@@ -68,6 +74,12 @@ func TestGoldNsThreadsMatchesClojure(t *testing.T)       { checkGold(t, nsThread
 func TestGoldDynvarCallbacksMatchesClojure(t *testing.T) { checkGold(t, dynvarCallbacksScript) }
 func TestGoldReturnHintMetadataMatchesClojure(t *testing.T) {
 	checkGold(t, returnHintMetaScript)
+}
+func TestGoldSetMacroexpansionEvaluationMatchesClojure(t *testing.T) {
+	checkGold(t, setMacroexpansionScript)
+}
+func TestGoldMapMacroexpansionEvaluationMatchesClojure(t *testing.T) {
+	checkGold(t, mapMacroexpansionScript)
 }
 
 // goldPath maps a .cljc script to its committed expected-output file:
