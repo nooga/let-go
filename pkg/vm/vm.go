@@ -744,7 +744,11 @@ func enterFrame(f *Frame) {
 	f.profileOn = ProfilingEnabled.Load()
 }
 
-func leaveFrame(_ *Frame) {
+// leaveFrame takes no frame on purpose: attribution keeps its own shadow
+// stack, and a parameter here invites passing a frame that may already be
+// back in the pool (OP_RETURN releases the child before state.current is
+// rebound). No parameter, no use-after-release to reason about.
+func leaveFrame() {
 	if allocAttrEnabled {
 		attrPopFrame()
 	}
@@ -767,7 +771,7 @@ func releaseFailedFrames(state *frameRunState, err error) (*Frame, error) {
 			state.current = parent
 			return parent, err
 		}
-		leaveFrame(parent)
+		leaveFrame()
 		parent.parent = nil
 		if parent != state.root {
 			ReleaseFrame(parent)
@@ -786,7 +790,7 @@ func releasePanickedFrames(state *frameRunState) {
 	}
 	for parent != nil {
 		next := parent.parent
-		leaveFrame(parent)
+		leaveFrame()
 		parent.parent = nil
 		if parent != state.root {
 			ReleaseFrame(parent)
@@ -795,7 +799,7 @@ func releasePanickedFrames(state *frameRunState) {
 	}
 }
 
-// Run executes this frame to completion. runLoop descends into bytecode
+// Run executes this frame to completion. The dispatch loop descends into bytecode
 // callees within one dispatch loop, keeping the Go stack flat. A parent link
 // on each live frame carries the suspended call chain without a retained slice.
 func (f *Frame) Run() (result Value, resultErr error) {
@@ -820,7 +824,7 @@ func (f *Frame) Run() (result Value, resultErr error) {
 func runChainProtected(state *frameRunState) (result Value, resultErr error) {
 	defer func() {
 		if r := recover(); r != nil {
-			// runLoop's attr wrapper already left the current frame. Balance and
+			// runLoopAttr already left the current frame. Balance and
 			// release every suspended child-owned frame before preserving the panic.
 			releasePanickedFrames(state)
 			panic(r)
@@ -830,11 +834,22 @@ func runChainProtected(state *frameRunState) (result Value, resultErr error) {
 }
 
 // runChain drives the dispatch loop and the error-resume protocol for the
-// frame chain rooted at state.root.
+// frame chain rooted at state.root. The attribution gate lives here, hoisted
+// out of the loop: a dispatcher function between runChain and the loop would
+// be too big to inline (runLoopInner far exceeds the inlining budget), so it
+// would cost a real call on every host->VM entry and every error-resume
+// iteration. A defer statement inside the bare loop itself would cost
+// deferreturn scaffolding on every VM entry, so the deferring variant stays
+// a separate function.
 func runChain(state *frameRunState) (result Value, resultErr error) {
 	entering := true
+	attr := allocAttrEnabled
 	for {
-		result, resultErr = state.current.runLoop(state, entering)
+		if attr {
+			result, resultErr = state.current.runLoopAttr(state, entering)
+		} else {
+			result, resultErr = state.current.runLoopInner(state, entering)
+		}
 		entering = false
 		if resultErr == nil {
 			return result, nil
@@ -847,23 +862,12 @@ func runChain(state *frameRunState) (result Value, resultErr error) {
 	}
 }
 
-// runLoop dispatches to the attr-tracking wrapper or the bare loop. leaveFrame
-// is a no-op unless allocation attribution is on, and a defer statement inside
-// the dispatch loop itself would cost deferreturn scaffolding on every VM
-// entry, so the deferring variant is a separate function.
-func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
-	if allocAttrEnabled {
-		return f.runLoopAttr(state, entering)
-	}
-	return f.runLoopInner(state, entering)
-}
-
 // runLoopAttr balances attrPopFrame for whichever logical frame is current
-// when the loop unwinds; suspended parents remain active. leaveFrame ignores
-// its argument (attribution keeps its own frame stack), so the wrapper can
-// leave on behalf of the loop without tracking its final frame.
+// when the loop unwinds; suspended parents remain active. Attribution keeps
+// its own frame stack, so the wrapper can leave on behalf of the loop without
+// tracking its final frame.
 func (f *Frame) runLoopAttr(state *frameRunState, entering bool) (Value, error) {
-	defer func() { leaveFrame(state.current) }()
+	defer leaveFrame()
 	return f.runLoopInner(state, entering)
 }
 
@@ -975,7 +979,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			child := f
 			parent := child.parent
 			child.parent = nil
-			leaveFrame(child)
+			leaveFrame()
 			ReleaseFrame(child)
 			f = parent
 			state.current = f
