@@ -801,36 +801,76 @@ func releasePanickedFrames(state *frameRunState) {
 func (f *Frame) Run() (result Value, resultErr error) {
 	f.parent = nil
 	state := frameRunState{root: f, current: f}
-	entering := true
+	// A defer statement in this function would cost deferreturn scaffolding on
+	// every host->VM entry even when never registered (the compiler emits the
+	// return-path walk unconditionally), so the panic-cleanup defer lives in a
+	// separate wrapper taken only when allocation attribution is on. Without
+	// attribution, a Go panic leaks the chain's pooled frames to GC — exactly
+	// what pre-#645 did when a panic skipped runBytecodeCallTarget's
+	// ReleaseFrame; the panic itself is preserved either way.
+	if allocAttrEnabled {
+		return runChainProtected(&state)
+	}
+	return runChain(&state)
+}
+
+// runChainProtected owns the panic-path cleanup that keeps allocation
+// attribution balanced and pooled frames released. Kept out of Run and
+// runChain so their fast paths carry no defer scaffolding.
+func runChainProtected(state *frameRunState) (result Value, resultErr error) {
 	defer func() {
 		if r := recover(); r != nil {
-			// runLoop's defer already left the current frame. Balance and release
-			// every suspended child-owned frame before preserving the panic.
-			releasePanickedFrames(&state)
+			// runLoop's attr wrapper already left the current frame. Balance and
+			// release every suspended child-owned frame before preserving the panic.
+			releasePanickedFrames(state)
 			panic(r)
 		}
 	}()
+	return runChain(state)
+}
+
+// runChain drives the dispatch loop and the error-resume protocol for the
+// frame chain rooted at state.root.
+func runChain(state *frameRunState) (result Value, resultErr error) {
+	entering := true
 	for {
-		result, resultErr = state.current.runLoop(&state, entering)
+		result, resultErr = state.current.runLoop(state, entering)
 		entering = false
 		if resultErr == nil {
 			return result, nil
 		}
 		var resumed *Frame
-		resumed, resultErr = releaseFailedFrames(&state, resultErr)
+		resumed, resultErr = releaseFailedFrames(state, resultErr)
 		if resumed == nil {
 			return NIL, resultErr
 		}
 	}
 }
 
+// runLoop dispatches to the attr-tracking wrapper or the bare loop. leaveFrame
+// is a no-op unless allocation attribution is on, and a defer statement inside
+// the dispatch loop itself would cost deferreturn scaffolding on every VM
+// entry, so the deferring variant is a separate function.
 func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
+	if allocAttrEnabled {
+		return f.runLoopAttr(state, entering)
+	}
+	return f.runLoopInner(state, entering)
+}
+
+// runLoopAttr balances attrPopFrame for whichever logical frame is current
+// when the loop unwinds; suspended parents remain active. leaveFrame ignores
+// its argument (attribution keeps its own frame stack), so the wrapper can
+// leave on behalf of the loop without tracking its final frame.
+func (f *Frame) runLoopAttr(state *frameRunState, entering bool) (Value, error) {
+	defer func() { leaveFrame(state.current) }()
+	return f.runLoopInner(state, entering)
+}
+
+func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error) {
 	if entering {
 		enterFrame(f)
 	}
-	// f changes as the loop descends and returns. On a final return or error,
-	// leave whichever logical frame is current; suspended parents remain active.
-	defer func() { leaveFrame(f) }()
 	for {
 		inst := f.code.code[f.ip]
 		if f.debug {
