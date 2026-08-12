@@ -1,6 +1,6 @@
 ;; Generate a Go test package from one namespace of clojure.test deftests.
 ;; Usage: bin/lg scripts/lg-test-go <tests.lg> <out-dir>
-(require 'ir.passes.pipeline 'clojure.string)
+(require 'ir.forms 'ir.passes.pipeline 'clojure.string)
 
 (defn die [message]
   (println "lg-test-go:" message)
@@ -93,7 +93,7 @@
         (range (count tests))))
 (defn lower-tests []
   (eval (list 'ns target-ns))
-  (doseq [form adapted] (eval form))
+  (doseq [form adapted] (eval (ir.forms/source-form form)))
   (let [result (ir.passes.pipeline/lower-ns-to-go-result "lgtests" target-ns adapted)]
     (eval '(ns user))
     result))

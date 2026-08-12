@@ -189,14 +189,15 @@
 ;; Tools that lower source read it as code, the way the compiler loads it, so a
 ;; macro sees the same forms on every backend. read-string reads data.
 (deftest read-code-string-reads-as-the-compiler-does
-  (testing "a set literal is the call form the compiler evaluates"
-    (is (= '(hash-set 1) (read-code-string "#{1}")))
+  (testing "a set literal is a set to both readers"
+    (is (set? (read-code-string "#{1}")))
+    (is (= #{1} (read-code-string "#{1}")))
     (is (set? (read-string "#{1}"))))
   (testing "collection metadata is a with-meta form, not attached data"
     (is (= '(with-meta [1] {:m true}) (read-code-string "^:m [1]")))
     (is (= {:m true} (meta (read-string "^:m [1]")))))
   (testing "read-all-code-string reads every form"
-    (is (= ['(a) '(hash-set 1)] (read-all-code-string "(a) #{1}")))
+    (is (= ['(a) #{1}] (read-all-code-string "(a) #{1}")))
     (is (= [] (read-all-code-string "  "))))
   (testing "a syntax error is reported, not truncated"
     (is (thrown? Exception (read-all-code-string "(a) (b")))))
