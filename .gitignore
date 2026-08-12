@@ -138,8 +138,10 @@ fabric.properties
 .idea/codestream.xml
 
 # End of https://www.toptal.com/developers/gitignore/api/go,intellij
+# Historic root-level output names. The Makefile now writes into build/, so
+# these only catch an ad-hoc `go build` at the repo root; they stay because a
+# stray one is easy to produce and expensive to commit.
 /letgo
-/let-go
 /lg
 /lg-runtime
 /lg-profile
@@ -173,22 +175,17 @@ AGENTS.md
 /dist/
 
 # Build outputs. `build/` is where generated binaries land; `bin/` holds the
-# promoted current copy of lg and the tooling. Both are directory-scoped so a
-# new binary needs no new ignore entry — the per-binary list below exists for
-# outputs that still land at the repo root, and shrinks as they move.
+# promoted current copy of lg. Both are directory-scoped, so a new binary needs
+# no new ignore entry, and `make clean` removes both.
 /build/
 /bin/
 
-# AOT codegen tool — built ad-hoc, not checked in
-/lgbgen
-/lginterop
-/lgprimgen
-/bench-ratchet
-/perf-page
-# `go build -o check-generated` output. Named after the make target, which is
-# how it evaded this list: every sibling binary above was added by hand when
-# someone noticed it, and this one was not noticed until it was staged.
-/check-generated
+# The per-binary entries that used to live here are gone: the Makefile now
+# writes every binary it produces into build/, and the cmd/* tools are invoked
+# with `go run`. An ad-hoc `go build ./cmd/<tool>` at the repo root is no
+# longer silently ignored — forbid-compiled-binaries rejects it at commit and
+# at push, which is the intended feedback. Build into build/ instead:
+#     go build -o build/lgbgen ./cmd/lgbgen
 
 # bench-ratchet streams per-bench results here on capture; the
 # aggregated baseline is in docs/perf/baseline.json (committed).
