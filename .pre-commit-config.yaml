@@ -31,12 +31,16 @@ repos:
       # `go build` output). Magic-byte based (Mach-O / ELF / PE), so it ignores
       # the repo's legitimate binary assets — the LGB core bundle and images.
       # No type filter: it must inspect every staged file's leading bytes.
+      # stages includes pre-push because a jj working copy is snapshotted by jj
+      # itself: `git commit` never runs, so the pre-commit stage never fires for
+      # a jj-based workflow. pre-push is the only gate those commits pass
+      # through, and it is where prek runs under jj-pre-push.
       - id: forbid-compiled-binaries
         name: forbid committing compiled executables
         description: Reject staged Mach-O / ELF / PE binaries before they bloat history
         entry: python3 scripts/reject_compiled_binaries.py
         language: system
-        stages: [pre-commit]
+        stages: [pre-commit, pre-push]
 
       # Auto-fix formatting before linters run. gofmt ships with Go.
       # goimports is fetched on demand via `go run ...@latest` so contributors

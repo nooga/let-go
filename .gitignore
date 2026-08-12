@@ -172,12 +172,23 @@ AGENTS.md
 # Local goreleaser / cross-build artifacts
 /dist/
 
+# Build outputs. `build/` is where generated binaries land; `bin/` holds the
+# promoted current copy of lg and the tooling. Both are directory-scoped so a
+# new binary needs no new ignore entry — the per-binary list below exists for
+# outputs that still land at the repo root, and shrinks as they move.
+/build/
+/bin/
+
 # AOT codegen tool — built ad-hoc, not checked in
 /lgbgen
 /lginterop
 /lgprimgen
 /bench-ratchet
 /perf-page
+# `go build -o check-generated` output. Named after the make target, which is
+# how it evaded this list: every sibling binary above was added by hand when
+# someone noticed it, and this one was not noticed until it was staged.
+/check-generated
 
 # bench-ratchet streams per-bench results here on capture; the
 # aggregated baseline is in docs/perf/baseline.json (committed).
