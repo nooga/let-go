@@ -21,7 +21,9 @@
 ;; the use-block (true for any value legitimately computed-before-used on
 ;; every path — i.e. any ref a correct build could have emitted).
 
-(ns ir.passes.legalize)
+(ns ir.passes.legalize
+  ;; ir.data supplies the ir/* accessors used throughout this pass.
+  (:require [ir.data]))
 
 ;; --- detection: non-throwing enumeration of illegal cross-block refs ----
 ;; Mirrors ir.validate/check-no-cross-block-refs! EXACTLY (same exemptions)
@@ -30,7 +32,7 @@
 (defn- cross-block-refs [f]
   "Seq of {:inst nid :ref v :use-block ub} for every Inst.refs entry that
    points at a non-cheap, non-block-arg value defined in another block."
-  (let [insts (:insts @f)]
+  (let [insts (ir/all-insts f)]
     (reduce
       (fn [acc [i ins]]
         (let [op (nth ins 0)]

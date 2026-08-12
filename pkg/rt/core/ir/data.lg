@@ -135,6 +135,26 @@
 
 (defn inst-count [f] (count (:insts @f)))
 
+;; The flat inst table and the raw block vector. Both are representation —
+;; every other accessor here is phrased in terms of a nid or a bid — so callers
+;; outside this namespace should prefer op/refs/aux/type-of/block-* and reach
+;; for these only when they genuinely iterate the whole table (validation,
+;; lattice sweeps, worklist passes). They exist so that reaching for the shape
+;; does not mean reaching past the data layer into `(:insts @f)`.
+(defn all-insts [f]
+  "The flat inst table, indexed by nid. Slots removed by a pass read :invalid."
+  (:insts @f))
+
+(defn raw-blocks [f]
+  "The block vector itself, indexed by bid. `blocks` returns the ids."
+  (:blocks @f))
+
+(defn all-types [f]
+  "The inferred-type side table, indexed by nid. `type-of` is the per-nid read
+   and already applies the tuple-slot fallback; this is for a sweep that walks
+   the table itself."
+  (:types @f))
+
 (defn blocks [f]
   "All block IDs in construction order."
   (vec (range (count (:blocks @f)))))
@@ -729,7 +749,7 @@
 (let [target 'ir
       syms   '[new-fn new-branch-target new-cond-target
                fn-name fn-arity fn-variadic? fn-multi-arity? fn-private? fn-arg-types fn-entry fn-consts entry-block
-               inst-count blocks
+               inst-count blocks all-insts raw-blocks all-types
                op refs aux block-of type-of source-infos
                block-params block-preds block-insts block-term
                fn-load-arg fn-load-arg-type
