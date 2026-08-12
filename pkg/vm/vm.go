@@ -914,6 +914,16 @@ func errBitOpType(name string) error {
 	return fmt.Errorf("%s expected Int", name)
 }
 
+// debugTraceInst prints the per-instruction trace when frame tracing is on.
+// Kept out of line so the fmt varargs boxing does not sit at the top of the
+// dispatch loop's hottest block.
+//
+//go:noinline
+func debugTraceInst(f *Frame, inst int32) {
+	f.stackDbg()
+	fmt.Println("#", f.ip, OpcodeToString(inst))
+}
+
 func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error) {
 	if entering {
 		enterFrame(f)
@@ -921,8 +931,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 	for {
 		inst := f.code.code[f.ip]
 		if f.debug {
-			f.stackDbg()
-			fmt.Println("#", f.ip, OpcodeToString(inst))
+			debugTraceInst(f, inst)
 		}
 		if f.profileOn {
 			currOp := uint8(inst & 0xff)
