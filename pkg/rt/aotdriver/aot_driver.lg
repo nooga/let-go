@@ -109,9 +109,10 @@
        (:nsn s)))
     @out))
 
-(defn count-lowered-funcs [go-src]
+(defn count-lowered-funcs
   "Rough count of top-level lowered `func Name(` decls — excludes the generated
    __gogen* wrappers and init() so the summary reflects real lowered fns."
+  [go-src]
   (if-not (string? go-src)
     0
     (count (filter (fn [decl]
