@@ -24,10 +24,15 @@
 
 (require 'lg.aotdriver)
 
+;; EMIT-FAIL is deliberately NOT an exit-code failure: a fn that doesn't lower
+;; stays on the trampoline and the program still runs, so partial lowering is a
+;; normal outcome the orchestrator judges for itself. That is why gloat greps
+;; the EMIT-FAIL line out of stdout rather than reading the exit code, and why
+;; legmacs' `set -e` build keeps going through one. Only an entry-arity error
+;; exits non-zero. `:emit-fails` is in the driver's return map for a Go caller
+;; that wants to decide differently.
 (let [res (lg.aotdriver/main-from-args (vec (drop 2 (seq os/args))))]
   (when (:error res)
     (println (:error res))
     (os/exit 1))
-  (println "done.")
-  (when (pos? (:emit-fails res))
-    (os/exit 1)))
+  (println "done."))
