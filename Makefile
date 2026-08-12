@@ -218,6 +218,14 @@ test-gogen-diff-gate:
 test: pkg/**/* pkg/rt/core_compiled.lgb $(GO)
 	@scripts/test-gogen-diff-short.sh
 	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -short -count=1 -v ./test/...
+	@$(MAKE) --no-print-directory shadow-warning-test
+
+# Shell harness for the warn-on-core-shadow behaviour. It asserts on stderr, so
+# it cannot live in the Go table tests, and nothing ran it until now — which is
+# why its first case sat red without anyone noticing.
+.PHONY: shadow-warning-test
+shadow-warning-test: $(LG)
+	@LG=$(LG) bash test/namespace_shadow_warning_test/run.sh
 
 clojure-compat-report: $(GO)
 	@$(REPORT-SCRIPT)
