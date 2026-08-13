@@ -69,6 +69,10 @@ GO-TEST-ENV := GOMEMLIMIT=$(GOMEMLIMIT)
 GO-TEST-FLAGS := -timeout $(GO-TEST-TIMEOUT)
 
 
+.PHONY: all default run build
+
+all: build
+
 # Start repl by default:
 default:: run
 
@@ -162,7 +166,13 @@ $(LG-PROFILE): $(GO) $(ROOT-GO-FILES) pkg/**/* pkg/rt/core_compiled.lgb
 # They are testing.Short()-gated and run full in dedicated CI jobs
 # (.github/workflows/go.yml "Expensive lowering e2e" + the gogen-diff job), so
 # the local `make test` loop stays fast without losing CI coverage.
+
+.PHONY: test-gogen-diff-gate
+test-gogen-diff-gate:
+	@scripts/test-gogen-diff-short.sh
+
 test: pkg/**/* pkg/rt/core_compiled.lgb $(GO)
+	@scripts/test-gogen-diff-short.sh
 	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -short -count=1 -v ./test/...
 
 clojure-compat-report: $(GO)
@@ -221,16 +231,47 @@ check-selfhost: lowered $(GO)
 	fi; \
 	rm -rf "$$tmp" .selfhost-lgbgen; exit $$rc
 
-# Differential self-AOT execution gate: build let-go twice (bytecode + the
-# -tags gogen_ir native), run each test/gold-aot/*.lg fixture under both, and
-# diff the last output line. A new cross-engine divergence fails; the
-# shrink-only allowlist test/gogen_aot_xfail.txt tracks known ones. `lowered`
-# keeps the gogen_ir tree fresh so the native build reflects current sources.
-# Re-seed the allowlist (after a reviewed change) with:
-#   LETGO_AOT_REDERIVE=1 go test -run TestGogenAOTDiff -count=1 ./test/e2e/
+# Differential engine-output gate: first run the complete-corpus strict
+# capability/parity census, then retain the existing non-strict differential
+# check. Both mandatory legs force full mode even when GOFLAGS contains -short.
 .PHONY: gogen-diff
-gogen-diff: lowered $(GO)
-	go test -run TestGogenAOTDiff -count=1 -v ./test/e2e/
+gogen-diff: engine-parity-gate
+	go test -short=false -run TestGogenAOTDiff -count=1 -v ./test/e2e/
+
+# Complete-corpus engine-output parity and strict-capability gate. The strict
+# wrapper measures whether each fixture can execute with fallback forbidden; it
+# does not prove fixture-source generated-Go or native-entry execution.
+# The gate always logs a deterministic sorted coverage report: per-fixture
+# category plus the measured lowering reason behind every non-full fixture, and
+# a bucket census of distinct reasons. Report content is informational: it never
+# changes classification, ratchets, or rederive. The one exit-status coupling is
+# deliberate — an explicitly requested report write that fails is reported as a
+# test error. Save a copy with:
+#   LETGO_PARITY_REPORT=/tmp/parity-report.txt make engine-parity-gate
+# The gate also enforces the committed case ledger test/parity-ledger.txt: a
+# diffable record of every measured case plus tombstones for removed fixtures.
+# A normal run fails with per-case ADDED / REMOVED / STATUS-CHANGED lines, on a
+# reappearing tombstoned fixture, and on any UNEXPLAINED tombstone.
+# Re-derive the ledger and both neutral shrink-only baselines (written as one
+# rollback-safe set) after a reviewed improvement with:
+#   LETGO_PARITY_REDERIVE=1 make engine-parity-gate
+# Explain fixtures that disappear in the same rederive; unexplained tombstones
+# fail later runs:
+#   LETGO_PARITY_TOMBSTONE_REASON="a.lg=merged into b.lg;c.lg=obsolete" \
+#     LETGO_PARITY_REDERIVE=1 make engine-parity-gate
+# Drop tombstones inherited from earlier revisions (keeping this revision's) with:
+#   LETGO_PARITY_LEDGER_CLEANUP=1 LETGO_PARITY_REDERIVE=1 make engine-parity-gate
+# A revision is the jj change id when available, else the git commit; when the
+# revision cannot be resolved, cleanup is skipped and nothing is dropped.
+.PHONY: engine-parity-gate
+engine-parity-gate: lowered $(GO)
+	go test -short=false -run TestEngineParityGate -count=1 -v ./test/e2e/
+
+# Historical compatibility aliases for existing local automation. The names
+# predate the complete result-driven census; neither denotes a phase-limited or
+# separately curated audit tier.
+.PHONY: parity-gate-phase1 strict-audit
+parity-gate-phase1 strict-audit: engine-parity-gate
 
 # Default gate (~1 min): the jank suite under BOTH VM variants (bytecode +
 # gogen_ir-lowered) + the calibration anchor. This is what CI runs.
@@ -263,6 +304,8 @@ bench-ratchet-full: lowered $(GO)
 
 bench-ratchet-full-update: lowered $(GO)
 	go run ./cmd/bench-ratchet -full update
+
+.PHONY: clean-lowered clean distclean
 
 clean-lowered:
 	$(RM) -r pkg/rt/core_go_lowered
