@@ -1,0 +1,91 @@
+;; clojure.data port — behaviour and the protocol extension point.
+;;
+;; The behaviour cases pin what `diff` already did before it was rewritten onto
+;; EqualityPartition/Diff, so the rewrite is provably behaviour-preserving. The
+;; extension cases are the new contract: a type outside the built-in predicates
+;; can take part, which is what an ir.Function needs in order to diff
+;; structurally instead of reporting itself wholly different.
+(ns test.data-diff-test
+  (:require [test :refer :all]
+            [clojure.data :as data]))
+
+(deftest diff-equal-values
+  (testing "equal values report everything as common"
+    (is (= [nil nil {:a 1}] (data/diff {:a 1} {:a 1})))
+    (is (= [nil nil nil] (data/diff nil nil)))))
+
+(deftest diff-maps
+  (testing "matching keys are subdiffed, unmatched keys reported on their side"
+    (is (= [{:b 2} {:b 3} {:a 1}] (data/diff {:a 1 :b 2} {:a 1 :b 3})))
+    (is (= [{:only-a 1} {:only-b 2} nil]
+           (data/diff {:only-a 1} {:only-b 2}))))
+  (testing "nested maps recurse"
+    (is (= [{:x {:y 1}} {:x {:y 2}} nil]
+           (data/diff {:x {:y 1}} {:x {:y 2}})))))
+
+(deftest diff-sequentials
+  (testing "compared position by position"
+    (is (= [[nil 2 nil] [nil 9 nil] [1 nil 3]] (data/diff [1 2 3] [1 9 3]))))
+  (testing "the shorter side is padded with nil"
+    ;; NOTE a pre-existing divergence from Clojure, unchanged by the protocol
+    ;; rewrite and pinned here so it is visible rather than folklore: upstream
+    ;; returns both as [1 2], because it rebuilds each side from an index map
+    ;; and the padded slot never enters it. let-go's diff-sequential builds
+    ;; fixed-length vectors, so the padded slot survives as a trailing nil.
+    (is (= [nil [nil nil 3] [1 2 nil]] (data/diff [1 2] [1 2 3])))))
+
+(deftest diff-sets
+  (testing "sets are never subdiffed"
+    (is (= [#{1} #{3} #{2}] (data/diff #{1 2} #{2 3})))))
+
+(deftest diff-atoms
+  (testing "unequal atoms are wholly different"
+    (is (= [1 2 nil] (data/diff 1 2)))
+    (is (= ["ab" "cd" nil] (data/diff "ab" "cd"))))
+  (testing "a string is an atom, not a sequential"
+    (is (= :atom (data/equality-partition "abc"))))
+  (testing "values in different partitions do not subdiff"
+    (is (= [{:a 1} [1] nil] (data/diff {:a 1} [1])))))
+
+(deftest diff-nil-against-a-value
+  (testing "nil is an atom, so it never subdiffs against a collection"
+    (is (= [nil {:a 1} nil] (data/diff nil {:a 1})))
+    (is (= [{:a 1} nil nil] (data/diff {:a 1} nil)))))
+
+(deftest equality-partitions
+  (testing "built-in families classify without being enumerated by type"
+    (is (= :map (data/equality-partition {})))
+    (is (= :set (data/equality-partition #{})))
+    (is (= :sequential (data/equality-partition [])))
+    (is (= :sequential (data/equality-partition (list 1))))
+    (is (= :atom (data/equality-partition 1)))
+    (is (= :atom (data/equality-partition nil)))))
+
+;; --- the extension point ---------------------------------------------
+
+(deftype DiffBox [m])
+
+(extend-type DiffBox
+  data/EqualityPartition
+  (equality-partition [_] :map)
+  data/Diff
+  (diff-similar [a b] (data/diff (.-m a) (.-m b))))
+
+(deftest a-foreign-type-can-join-the-diff
+  (testing "a type that projects to data diffs structurally, not wholesale"
+    (is (= [{:b 2} {:b 3} {:a 1}]
+           (data/diff (DiffBox. {:a 1 :b 2}) (DiffBox. {:a 1 :b 3})))))
+  (testing "and it reports the partition it chose"
+    (is (= :map (data/equality-partition (DiffBox. {}))))))
+
+(deftype OpaqueBox [m])
+
+(deftest an-unextended-type-still-behaves-as-an-atom
+  (testing "without an impl the Object default applies"
+    (is (= :atom (data/equality-partition (OpaqueBox. {:a 1}))))
+    (let [x (OpaqueBox. {:a 1})
+          y (OpaqueBox. {:a 2})
+          [only-a only-b both] (data/diff x y)]
+      (is (= x only-a))
+      (is (= y only-b))
+      (is (nil? both)))))

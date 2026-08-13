@@ -62,29 +62,73 @@
 (defn- empty-or-nil [m]
   (if (and (or (map? m) (vector? m) (set? m)) (empty? m)) nil m))
 
-(defn diff [a b]
+;; --- clojure.data protocols ------------------------------------------
+;; These are upstream clojure.data's extension points. A foreign type can
+;; choose an equality partition and implement diff-similar without coupling
+;; generic data comparison to any domain-specific representation.
+
+(defprotocol EqualityPartition
+  "Implementation detail. Types answer with the partition they diff within:
+   :atom, :set, :sequential or :map."
+  (equality-partition [x]))
+
+(defprotocol Diff
+  "Implementation detail. Passed two values of the same equality-partition,
+   returns a [only-in-a only-in-b in-both] triple."
+  (diff-similar [a b]))
+
+;; The universal default. Unlike upstream — where Object answers :atom and the
+;; collection families are reached through their Java interfaces — let-go's
+;; collection families are defined by predicates rather than by a shared
+;; supertype, so the default consults them before falling back to :atom. A new
+;; built-in collection is therefore classified correctly without enumerating
+;; its concrete type, while any type that extends EqualityPartition itself
+;; still takes precedence over this default.
+(extend-type Object
+  EqualityPartition
+  (equality-partition [x]
+    (cond
+      (map? x)                            :map
+      (set? x)                            :set
+      (and (sequential? x) (not (string? x))) :sequential
+      :else                               :atom))
+
+  Diff
+  (diff-similar [a b]
+    (case (equality-partition a)
+      :map        (let [[oa ob both] (diff-map a b)]
+                    [(empty-or-nil oa) (empty-or-nil ob) (empty-or-nil both)])
+      :set        (diff-set a b)
+      :sequential (let [[oa ob both] (diff-sequential a b)]
+                    [(nnil oa) (nnil ob) (nnil both)])
+      (atom-diff a b))))
+
+;; nil is its own dispatch case in let-go's protocol machinery, and upstream
+;; likewise gives it an explicit :atom impl.
+(extend-type nil
+  EqualityPartition
+  (equality-partition [_] :atom)
+
+  Diff
+  (diff-similar [a b] (atom-diff a b)))
+
+(defn diff
+  "Recursively compares a and b, returning a triple of
+   [things-only-in-a things-only-in-b things-in-both].
+   Comparison rules:
+
+     * For equal a and b, return [nil nil a].
+     * Maps are subdiffed where keys match, and any unmatched key is reported
+       only on the side that has it.
+     * Sets are never subdiffed.
+     * Sequentials are compared position by position, shorter ones padded
+       with nil.
+     * Anything else is treated as an atom: equal or wholly different.
+
+   Types extend EqualityPartition and Diff to take part."
+  [a b]
   (if (= a b)
     [nil nil a]
-    (cond
-      (and (nil? a) (nil? b))
-      [nil nil nil]
-
-      (nil? a)
-      [nil b nil]
-
-      (nil? b)
-      [a nil nil]
-
-      (and (map? a) (map? b))
-      (let [[oa ob both] (diff-map a b)]
-        [(empty-or-nil oa) (empty-or-nil ob) (empty-or-nil both)])
-
-      (and (set? a) (set? b))
-      (diff-set a b)
-
-      (and (sequential? a) (sequential? b) (not (string? a)) (not (string? b)))
-      (let [[oa ob both] (diff-sequential a b)]
-        [(nnil oa) (nnil ob) (nnil both)])
-
-      :else
+    (if (= (equality-partition a) (equality-partition b))
+      (diff-similar a b)
       (atom-diff a b))))
