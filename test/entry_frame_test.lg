@@ -56,6 +56,44 @@
     (is (str/includes? src "rt.LoadProgramNamespaces(unit)"))
     (is (str/includes? (ef/entry-summary-line 2 e) "Main ✓"))))
 
+(defn- count-lines-with [src needle]
+  (count (filter (fn [l] (str/includes? l needle)) (str/split src #"\n"))))
+
+(deftest boot-order-replays-program-main-chunk
+  ;; #425 follow-up: `lg -c` bundles carry an EMPTY NS table, so
+  ;; LoadProgramNamespaces alone defines nothing and any VM-backed callee
+  ;; resolves a Nil var and panics. The frame must also replay the program's
+  ;; main chunk — after SetCommandLineArgs (top-level forms see real argv)
+  ;; and after LoadProgramNamespaces (dependency replay order + the early
+  ;; return that keeps top-level side effects running exactly once).
+  (let [raw  (ef/find-program-entry '[(defn -main [] 1)])
+        e    (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
+                                         :needs-error? true :arity 0}})
+        src  (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})
+        i-mc (str/index-of src "rt.RunProgramMainChunk(unit)")]
+    (is (some? i-mc) "frame must replay the program main chunk")
+    (when i-mc
+      (let [i-cl (str/index-of src "rt.SetCommandLineArgs(")
+            i-ns (str/index-of src "rt.LoadProgramNamespaces(unit)")
+            i-en (str/index-of src "prog.Main(ec)")]
+        (is (< i-cl i-ns) "*command-line-args* must be published before replay")
+        (is (< i-ns i-mc) "main-chunk replay must follow LoadProgramNamespaces")
+        (is (< i-mc i-en) "main-chunk replay must precede the entry call")))
+    (is (= 1 (count-lines-with src "rt.RunProgramMainChunk(unit)"))
+        "emit the replay call exactly once")
+    (is (str/includes? src "if err := rt.RunProgramMainChunk(unit); err != nil")
+        "replay uses the existing exit-on-err shape")))
+
+(deftest vm-fallback-frame-also-replays-main-chunk
+  (let [raw (ef/find-program-entry '[(defn -main [& args] 1)])
+        e   (assoc (ef/analyze-entry raw {:fn nil}) :ns "app")
+        src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})]
+    (is (false? (:lowered? e)))
+    (is (< (str/index-of src "rt.LoadProgramNamespaces(unit)")
+           (str/index-of src "rt.RunProgramMainChunk(unit)")))
+    (is (< (str/index-of src "rt.RunProgramMainChunk(unit)")
+           (str/index-of src "rt.InvokeProgramEntry(")))))
+
 (deftest emit-private-bridge
   (let [raw (ef/find-program-entry '[(defn- main [] 1)])
         e   (ef/analyze-entry raw {:fn {:fn-name "main" :go-name "main"

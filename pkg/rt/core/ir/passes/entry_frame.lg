@@ -387,6 +387,21 @@
        [(g-call (g-sel "rt" "LoadProgramNamespaces") [(g-id "unit")])])
      (gogen/binary "!=" (g-id "err") (g-id "nil"))
      (exit-on-err-stmts "%v\n" [(g-id "err")])
+     nil)
+   ;; Replay the program's own main chunk. `lg -c` emits bundles whose NS
+   ;; table is empty, so LoadProgramNamespaces alone defines nothing and any
+   ;; VM-backed callee would resolve to a Nil var. RunProgramMainChunk is
+   ;; idempotent by construction — it returns early when MainChunk is one of
+   ;; the NSOrder chunks LoadProgramNamespaces already replayed — so top-level
+   ;; side effects still run exactly once in both bundle shapes. Must come
+   ;; AFTER LoadProgramNamespaces (dependency replay order) and after
+   ;; SetCommandLineArgs (top-level forms see the real argv).
+   (gogen/if-stmt
+     (gogen/multi-assign ":="
+       [(g-id "err")]
+       [(g-call (g-sel "rt" "RunProgramMainChunk") [(g-id "unit")])])
+     (gogen/binary "!=" (g-id "err") (g-id "nil"))
+     (exit-on-err-stmts "%v\n" [(g-id "err")])
      nil)])
 
 (defn- frame-imports [entry-alias entry-import blanks lowered? use-vm?]

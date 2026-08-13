@@ -1,0 +1,167 @@
+;; Test-scoped generator for the jank direct-ABI gate: turn one macroexpanded,
+;; pinned jank deftest into production lower-ns-to-go input plus a same-package
+;; Go test wrapper, so the lowered code can be executed by a real `go test`.
+;;
+;; Driven by test/e2e/jank_direct_abi_test.go; not a general-purpose script,
+;; which is why it lives under test/tools/ rather than scripts/.
+;;
+;; Usage:
+;;   lg test/tools/jank-go-harness.lg --fixture <file.cljc> --test <deftest-name> \
+;;       --package <go-package-name> --out-dir <dir>
+
+(require 'ir.passes.pipeline 'gogen)
+
+(defn flag [argv name]
+  (loop [xs argv]
+    (cond
+      (empty? xs) nil
+      (= (first xs) name) (second xs)
+      :else (recur (rest xs)))))
+
+(defn die [msg]
+  (println "jank-go-harness ERROR:" msg)
+  (os/exit 2))
+
+(defn target-defs [target form]
+  (let [self (if (and (seq? form)
+                      (= 'def (first form))
+                      (= target (second form)))
+               [form]
+               [])]
+    (if (seq? form)
+      (reduce into self (map (fn [child] (target-defs target child)) form))
+      self)))
+
+(def argv *command-line-args*)
+(def fixture (flag argv "--fixture"))
+(def test-name-str (flag argv "--test"))
+(def package-name (flag argv "--package"))
+(def out-dir (flag argv "--out-dir"))
+
+(when (or (nil? fixture) (nil? test-name-str) (nil? package-name) (nil? out-dir))
+  (die "requires --fixture, --test, --package, and --out-dir"))
+
+(println "jank-go-harness: adapting" test-name-str)
+(def forms (read-all-string (slurp fixture)))
+(println "jank-go-harness: parsed" (count forms))
+(def target (symbol test-name-str))
+
+(defn analyze-forms [forms target]
+  (doseq [form forms] (eval form))
+  (let [expanded (mapv ir.passes.pipeline/expand-all forms)
+        matches (vec (mapcat (fn [form] (target-defs target form)) expanded))]
+    (eval '(ns user))
+    [expanded matches]))
+
+(def analysis (analyze-forms forms target))
+(def expanded (first analysis))
+(def matches (second analysis))
+
+(println "jank-go-harness: expanded" (count matches))
+(when (not= 1 (count matches))
+  (die (str "expanded " test-name-str " definitions: found " (count matches) ", want exactly 1")))
+
+(def definition (first matches))
+(def fn-form (nth definition 2 nil))
+(when (or (not (seq? fn-form))
+          (not= 'fn* (first fn-form))
+          (not (vector? (second fn-form)))
+          (not (empty? (second fn-form))))
+  (die (str test-name-str " must expand to def name (fn* [] body...)")))
+
+(def adapted (apply list 'defn target (second fn-form) (drop 2 fn-form)))
+;; The extracted body is untouched.  The current lowerer drops the assignment
+;; side of namespace `set!` when its RHS is a call (the deftest prologue's
+;; `(set! *testing-vars* (conj ...))` and assertion counter updates).  Seed one
+;; testing-var entry so the exact prologue/epilogue remains balanced, and use
+;; :test=1 solely as the structured marker for this direct runner invocation.
+;; Assertion failures remain authoritative through fail/error, *test-result*,
+;; and the compiled test fn's structured return value.
+(def runner
+  (read-string
+    (str "(defn run-selected-test [] "
+         "(set! clojure.test/*report-counters* {:test 1 :pass 0 :fail 0 :error 0}) "
+         "(set! clojure.test/*test-result* true) "
+         "(set! clojure.test/*testing-vars* [:adapter-test]) "
+         "(set! clojure.test/*testing-contexts* []) "
+         "(let [result (" test-name-str ") "
+         "c clojure.test/*report-counters*] "
+         "(and (> (:test c) 0) (= (:fail c) 0) (= (:error c) 0) "
+         "clojure.test/*test-result* result)))")))
+
+(def ns-name
+  (second (first (filter (fn [form] (and (seq? form) (= 'ns (first form)))) forms))))
+(defn lower-selected [package-name ns-name adapted runner]
+  (eval (list 'ns ns-name))
+  (eval adapted)
+  (eval runner)
+  (let [go-src (ir.passes.pipeline/lower-ns-to-go package-name ns-name [adapted runner])]
+    (eval '(ns user))
+    go-src))
+(def go-src (lower-selected package-name ns-name adapted runner))
+(def go-test-file
+  (gogen/file package-name
+    [(gogen/import-spec "testing")
+     (gogen/import-spec "github.com/nooga/let-go/pkg/rt" "rt")
+     (gogen/import-spec "github.com/nooga/let-go/pkg/vm" "vm")
+     (gogen/import-spec "github.com/nooga/let-go/pkg/rt/core_go_lowered/test" "_")]
+    [(gogen/func-decl "TestPinnedJankIdenticalQmark"
+       [(gogen/param "t" (gogen/type "*testing.T"))]
+       []
+       [(gogen/multi-assign ":="
+          [(gogen/ident "ec") (gogen/ident "err")]
+          [(gogen/call (gogen/field-sel (gogen/ident "rt") "BootCore") [])])
+        (gogen/if-stmt nil
+          (gogen/binary "!=" (gogen/ident "err") (gogen/ident "nil"))
+          [(gogen/expr-stmt
+             (gogen/call (gogen/field-sel (gogen/ident "t") "Fatal")
+               [(gogen/ident "err")]))]
+          nil)
+        (gogen/expr-stmt
+          (gogen/call (gogen/field-sel (gogen/ident "rt") "ApplyGoOverrides")
+            [(gogen/call
+               (gogen/field-sel (gogen/ident "rt") "LookupOrRegisterNS")
+               [(gogen/string-lit "test")])]))
+        (gogen/expr-stmt
+          (gogen/call (gogen/field-sel (gogen/ident "rt") "UseBytecodeNSLoader") []))
+        (gogen/multi-assign "="
+          [(gogen/ident "_") (gogen/ident "err")]
+          [(gogen/call (gogen/field-sel (gogen/ident "rt") "RequireNS")
+             [(gogen/string-lit "test")])])
+        (gogen/if-stmt nil
+          (gogen/binary "!=" (gogen/ident "err") (gogen/ident "nil"))
+          [(gogen/expr-stmt
+             (gogen/call (gogen/field-sel (gogen/ident "t") "Fatal")
+               [(gogen/ident "err")]))]
+          nil)
+        (gogen/expr-stmt
+          (gogen/call (gogen/field-sel (gogen/ident "rt") "ApplyGoOverrides")
+            [(gogen/call
+               (gogen/field-sel (gogen/ident "rt") "LookupOrRegisterNS")
+               [(gogen/string-lit (str ns-name))])]))
+        (gogen/multi-assign ":="
+          [(gogen/ident "got") (gogen/ident "err")]
+          [(gogen/call (gogen/ident "RunSelectedTest") [(gogen/ident "ec")])])
+        (gogen/if-stmt nil
+          (gogen/binary "!=" (gogen/ident "err") (gogen/ident "nil"))
+          [(gogen/expr-stmt
+             (gogen/call (gogen/field-sel (gogen/ident "t") "Fatal")
+               [(gogen/ident "err")]))]
+          nil)
+        (gogen/if-stmt nil
+          (gogen/binary "!="
+            (gogen/ident "got")
+            (gogen/field-sel (gogen/ident "vm") "TRUE"))
+          [(gogen/expr-stmt
+             (gogen/call (gogen/field-sel (gogen/ident "t") "Fatalf")
+               [(gogen/string-lit "structured jank result = %v, want true")
+                (gogen/ident "got")]))]
+          nil)])]))
+(def go-test (gogen/render go-test-file))
+
+(def mkdir-result (os/sh "mkdir" "-p" out-dir))
+(when (not= 0 (:exit mkdir-result))
+  (die (str "mkdir failed: " (:err mkdir-result))))
+(spit (str out-dir "/selected.go") go-src)
+(spit (str out-dir "/selected_test.go") go-test)
+(println "jank-go-harness: emitted" out-dir)

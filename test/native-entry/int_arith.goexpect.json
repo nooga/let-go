@@ -1,0 +1,12 @@
+{
+  "note": "Unboxed int params/return: the entry path calls the lowered Go function directly.",
+  "namespace": "intarith",
+  "generatedFile": "intarith/intarith.go",
+  "entryFn": "Main",
+  "lispFn": "add-twice",
+  "goFn": "AddTwice",
+  "lowering": "direct",
+  "functionFragment": "func AddTwice(ec *vm.ExecContext, arg0 int, arg1 int) int {\n\tvar arg__1 int\n\tvar v4 int\n\targ__1 = arg0 + arg1\n\tv4 = arg__1 + arg__1\n\treturn v4\n}",
+  "callFragment": "AddTwice(ec, 3, 4)",
+  "semanticWrap": "(__EXPR__) + 1"
+}
