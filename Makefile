@@ -45,6 +45,8 @@ LG := $(BUILD-DIR)/lg
 LG-PROFILE ?= $(BUILD-DIR)/lg-profile
 LG-PROMOTED := $(BIN-DIR)/lg
 BOOTPROBE := $(BUILD-DIR)/bootprobe
+BOOTPROBE-SOURCES := $(wildcard cmd/bootprobe/*.go)
+SMOKE-SOURCES := scripts/smoke.lg scripts/smoke-boot.sh
 # Boot budget sits ~2x above the measured median-of-5 ceiling (4.10ms on an
 # idle M3) so it does not flake, while still catching the #663 class.
 SMOKE-BOOT-BUDGET-MS ?= 8
@@ -102,13 +104,13 @@ build: $(LG-PROMOTED)
 # booted fast, and not obviously broken" — NOT "verified correct". Deep
 # correctness is make test / ir-stress-gate / gogen-diff, each ~2 min, which is
 # too slow to run on every promotion.
-$(LG-PROMOTED): $(LG) $(BOOTPROBE)
+$(LG-PROMOTED): $(LG) $(BOOTPROBE) $(SMOKE-SOURCES)
 	@$(MAKE) --no-print-directory smoke
 	@mkdir -p $(BIN-DIR)
 	install -m 0755 $(LG) $@
 	@echo "promoted $(LG) -> $@"
 
-$(BOOTPROBE): $(GO) $(ROOT-GO-FILES) pkg/**/* pkg/rt/core_compiled.lgb
+$(BOOTPROBE): $(GO) $(BOOTPROBE-SOURCES) $(ROOT-GO-FILES) pkg/**/* pkg/rt/core_compiled.lgb
 	@mkdir -p $(BUILD-DIR)
 	go build -o $@ ./cmd/bootprobe
 
