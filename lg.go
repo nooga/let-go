@@ -574,7 +574,7 @@ func runMain() int {
 }
 
 func main() {
-	code := runMain()
+	code := bootMain(runMain)
 	emitRuntimeStats()
 	if code != 0 {
 		os.Exit(code)
