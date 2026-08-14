@@ -11,6 +11,9 @@
 (ns test.ir-tailcall-fusion-test
   (:require
    [disasm :as d]
+   [ir.build]
+   [ir.data :as ir]
+   [ir.lower :as lower]
    [ir.passes.pipeline]
    [test :refer :all]))
 
@@ -88,6 +91,17 @@
 (defn- count-op [f op]
   (count (filter (fn [o] (= o op)) (ops-of f))))
 
+(defn- nids-with-op [f wanted]
+  (filter (fn [nid] (= wanted (ir/op nid f)))
+          (mapcat (fn [bid] (ir/block-insts bid f)) (ir/blocks f))))
+
+(def guarded-tail-source-ir
+  (ir.build/build-fn
+   '(defn guarded-tail-source-ir []
+      (try
+        (identity :ok)
+        (catch _ :caught)))))
+
 (deftest ir-tailcall-fusion-bytecode-shape
   (testing "tail call through a let-bound function"
     ;; Direct self-recursion is lowered through :recur-fn before this pass.
@@ -95,6 +109,23 @@
     ;; exercises this fusion specifically.
     (is (pos? (count-op tail-in-let-ir :TAIL_CALL)))
     (is (zero? (count-op tail-in-let-ir :INVOKE)))))
+
+(deftest ir-tailcall-fusion-try-frame-isolation
+  (testing "the guarded frame owns :try while its body call lives in an inner fn"
+    (let [try-nids      (nids-with-op guarded-tail-source-ir :try)
+          try-nid       (first try-nids)
+          body-ref      (first (ir/refs try-nid guarded-tail-source-ir))
+          body-template (ir/aux body-ref guarded-tail-source-ir)
+          body-fn       (:fn body-template)
+          body-ops      (ops-of (lower/lower body-fn))]
+      (is (= 1 (count try-nids)))
+      (is (= true (:has-handler (ir/aux try-nid guarded-tail-source-ir))))
+      (is (zero? (count (nids-with-op guarded-tail-source-ir :call))))
+      (is (= :const (ir/op body-ref guarded-tail-source-ir)))
+      (is (= :fn-template (:kind body-template)))
+      (is (= 1 (count (nids-with-op body-fn :call))))
+      (is (pos? (count (filter (fn [op] (= :TAIL_CALL op)) body-ops))))
+      (is (zero? (count (filter (fn [op] (= :INVOKE op)) body-ops)))))))
 
 (deftest ir-tailcall-fusion-parity
   (testing "tail-call fusion: simple self-recursion"
