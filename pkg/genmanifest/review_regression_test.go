@@ -113,3 +113,36 @@ func TestGenerateScriptRejectsFailedStalenessQuery(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckRejectsStaleDependencyManifestInputs(t *testing.T) {
+	originalSpecs := outputSpecs
+	outputSpecs = []outputSpec{{
+		output:     "generated.txt",
+		inputFiles: []string{"input.txt"},
+	}}
+	t.Cleanup(func() { outputSpecs = originalSpecs })
+
+	root := t.TempDir()
+	writeFixtureFile(t, root, "input.txt", "original\n")
+	if err := os.MkdirAll(filepath.Join(root, "pkg/rt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteDepManifest(root); err != nil {
+		t.Fatalf("write dependency manifest: %v", err)
+	}
+	digest, err := Compute(root)
+	if err != nil {
+		t.Fatalf("compute generated.sums digest: %v", err)
+	}
+	if err := Write(root, digest); err != nil {
+		t.Fatalf("write generated.sums: %v", err)
+	}
+	if result, err := Check(root); err != nil || !result.Fresh {
+		t.Fatalf("fresh fixture rejected: result=%+v err=%v", result, err)
+	}
+
+	writeFixtureFile(t, root, "input.txt", "changed without regeneration\n")
+	if result, err := Check(root); err == nil {
+		t.Fatalf("stale dependency input accepted: result=%+v", result)
+	}
+}

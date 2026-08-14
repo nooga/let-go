@@ -218,9 +218,12 @@ type CheckResult struct {
 	Computed string
 }
 
-// Check compares the recorded manifest digest against a freshly
-// computed one.
+// Check verifies that the dependency manifest matches its current inputs,
+// then compares the recorded manifest digest against a freshly computed one.
 func Check(repoRoot string) (CheckResult, error) {
+	if err := CheckDepManifest(repoRoot); err != nil {
+		return CheckResult{}, err
+	}
 	recorded, err := Read(repoRoot)
 	if err != nil {
 		return CheckResult{}, err

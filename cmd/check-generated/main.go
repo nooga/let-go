@@ -109,7 +109,7 @@ func main() {
 	res, err := genmanifest.Check(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "check-generated: %v\n", err)
-		os.Exit(2)
+		os.Exit(1)
 	}
 
 	if res.Recorded == "" {
