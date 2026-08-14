@@ -220,8 +220,8 @@
    (shared with core.lg): for/doseq/letfn are not treated as binding forms."
   [fieldset this-sym bound form]
   ;; Dispatches on the collection lattice, mirroring core.lg's -dt-rewrite.
-  ;; Associative arms precede vector? because a map entry IS a vector, and an
-  ;; unrecognised collection throws rather than passing through as an atom.
+  ;; Associative arms precede vector? because a map entry IS a vector. Other
+  ;; non-sequential values pass through as atoms.
   (cond
     (symbol? form)
     (if (and (contains? fieldset form) (not (contains? bound form)))
@@ -235,11 +235,7 @@
     (into #{} (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) (seq form)))
     (vector? form)
     (vec (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) form))
-    (not (seq? form))
-    (if (coll? form)
-      (throw (ex-info "dt-rewrite-field: unhandled collection type in a deftype method body"
-                      {:form form}))
-      form)
+    (not (seq? form)) form
     (empty? form) form
     :else
     (let [h (first form)]
@@ -417,10 +413,6 @@
       ;; build-set unexpanded — bytecode expanded it, native lowering did not.
       (set? form)
       (into #{} (doall (map expand-all (seq form))))
-      ;; Anything else that is still a collection is a traversal gap: fail
-      ;; loudly rather than passing it through unexpanded.
-      (coll? form)
-      (throw (ex-info "expand-all: unhandled collection type" {:form form}))
       :else form)))
 
 ;; --- canonical enumeration of a namespace's lowerable fn-units -------------

@@ -2165,10 +2165,8 @@
   ;; literals began reading as sets rather than as (hash-set ..) lists,
   ;; `#{field}` stopped being rewritten too. The associative arms must come
   ;; BEFORE vector?, because a map entry IS a vector — descending into it as a
-  ;; 2-vector would rewrite the key as if it were a value. Any collection we do
-  ;; not recognise throws rather than falling through as an atom, so the next
-  ;; collection type added to the reader fails loudly here instead of silently
-  ;; skipping rewrite.
+  ;; 2-vector would rewrite the key as if it were a value. Other non-sequential
+  ;; values pass through as atoms.
   (cond
     (symbol? form)
     (if (and (contains? fields form) (not (contains? bound form)))
@@ -2182,11 +2180,7 @@
     (into #{} (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) (seq form)))
     (vector? form)
     (vec (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) form))
-    (not (seq? form))
-    (if (coll? form)
-      (throw (ex-info "-dt-rewrite: unhandled collection type in a deftype method body"
-                      {:form form}))
-      form)
+    (not (seq? form)) form
     (empty? form) form
     :else
     (let [h (first form)]

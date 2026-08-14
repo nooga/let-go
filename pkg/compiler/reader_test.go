@@ -56,6 +56,23 @@ func TestReaderBasic(t *testing.T) {
 	}
 }
 
+func TestReaderSetLiteralRejectsDuplicateForms(t *testing.T) {
+	for _, input := range []string{
+		`#{1 1}`,
+		`#{[1] [1]}`,
+		`#{(gensym) (gensym)}`,
+		`#{(swap! c inc) (swap! c inc)}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			r := NewLispReader(strings.NewReader(input), "<reader>")
+			_, err := r.Read()
+			if assert.Error(t, err) {
+				assert.Contains(t, err.Error(), "Duplicate key:")
+			}
+		})
+	}
+}
+
 func TestReaderKeywordInternalColons(t *testing.T) {
 	valid := map[string]vm.Keyword{
 		`:/`:        vm.Keyword(`/`),

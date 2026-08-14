@@ -780,10 +780,6 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 }
 
 func readSet(r *LispReader, _ rune) (vm.Value, error) {
-	startLine := r.line
-	startCol := max(
-		// -2 because '#' and '{' were consumed
-		r.column-2, 0)
 	// A set literal reads as a set VALUE, the way map and vector literals read
 	// as maps and vectors. It used to read as the form `(hash-set …)`, which
 	// compiled correctly but made read-string return a constructor call instead
@@ -795,7 +791,7 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 	// Evaluation is unchanged: compileForm's vm.SetType case emits the same
 	// hash-set invocation and compiles each element, so `#{x (f y)}` still
 	// evaluates its elements.
-	var ret []vm.Value
+	result := vm.EmptyPersistentSet
 	for {
 		ch2, err := r.eatWhitespace()
 		if err != nil {
@@ -812,14 +808,14 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		if form.Type() != vm.VoidType {
-			ret = append(ret, form)
+		if form.Type() == vm.VoidType {
+			continue
 		}
+		if result.Contains(form) == vm.TRUE {
+			return vm.NIL, NewReaderError(r, fmt.Sprintf("Duplicate key: %s", form))
+		}
+		result = result.Conj(form).(*vm.PersistentSet)
 	}
-	result := vm.NewSet(ret)
-	vm.FormSource.Set(result, vm.SourceInfo{
-		File: r.inputName, Line: startLine, Column: startCol,
-	})
 	return result, nil
 }
 
