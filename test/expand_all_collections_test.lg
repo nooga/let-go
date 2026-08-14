@@ -1,0 +1,33 @@
+;; expand-all must macroexpand inside EVERY collection literal.
+;;
+;; It descended into vectors, maps and seqs but not sets. Before set literals
+;; read as data this was unreachable — a set arrived as a (hash-set ..) list
+;; and took the seq arm — so `#{(when true 1)}` reached build-set unexpanded
+;; only once sets became real values. Bytecode expanded such a form via its own
+;; path while native/gogen lowering did not, so the two engines disagreed.
+
+(ns test.expand-all-collections-test
+  (:require [test :refer :all]
+            [ir.passes.pipeline :as pipeline]))
+
+(defn- flatten-form [form]
+  (cond
+    (map? form) (mapcat (fn [e] (concat (flatten-form (nth e 0)) (flatten-form (nth e 1)))) (seq form))
+    (set? form) (mapcat flatten-form (seq form))
+    (vector? form) (mapcat flatten-form form)
+    (seq? form) (mapcat flatten-form form)
+    :else (list form)))
+
+(defn- expanded? [form]
+  ;; (when true 1) expands to (if true (do 1) nil); unexpanded still has 'when
+  (not (some (fn [x] (= x 'when)) (flatten-form form))))
+
+(deftest expand-all-descends-into-every-collection
+  (testing "vector elements are macroexpanded"
+    (is (expanded? (pipeline/expand-all '[(when true 1)]))))
+  (testing "map values are macroexpanded"
+    (is (expanded? (pipeline/expand-all '{:k (when true 1)}))))
+  (testing "set elements are macroexpanded"
+    (is (expanded? (pipeline/expand-all (conj #{} '(when true 1))))))
+  (testing "seq elements are macroexpanded"
+    (is (expanded? (pipeline/expand-all '((when true 1)))))))

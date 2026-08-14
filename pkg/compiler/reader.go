@@ -950,6 +950,21 @@ func syntaxQuote(r *LispReader, form vm.Value, env *gensymEnv) (vm.Value, error)
 			return vm.NIL, NewReaderError(r, "boxing unquoted vector form")
 		}
 		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("hash-map"), vv})
+	// Sets reach syntaxQuote as real set values since set literals read as
+	// data. Without this arm they fell to the default quote branch, so
+	// `#{~x} yielded #{(unquote x)} — unquote, gensym and namespace
+	// qualification were all skipped inside a syntax-quoted set.
+	case form.Type() == vm.SetType:
+		lform := flattenSet(form)
+		uq, err := expandUnquotes(r, lform, env)
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "expanding unquotes for set")
+		}
+		vv, err := vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("concat*"), uq})
+		if err != nil {
+			return vm.NIL, NewReaderError(r, "boxing unquoted set form")
+		}
+		return vm.ListType.Box([]vm.Value{vm.Symbol("apply"), vm.Symbol("hash-set"), vv})
 	case form.Type() == vm.ListType:
 		uq, err := expandUnquotes(r, form, env)
 		if err != nil {
@@ -981,6 +996,21 @@ func flattenMap(form vm.Value) vm.Value {
 			continue
 		}
 		ret = append(ret, k, v)
+	}
+	return ret
+}
+
+// flattenSet is flattenMap's counterpart for sets: a set contributes its
+// elements directly, where a map contributes alternating k, v. Needed so
+// syntaxQuote can expand unquotes inside `#{...}.
+func flattenSet(form vm.Value) vm.Value {
+	sq, ok := form.(vm.Sequable)
+	if !ok {
+		return vm.ArrayVector{}
+	}
+	ret := vm.ArrayVector{}
+	for s := sq.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+		ret = append(ret, s.First())
 	}
 	return ret
 }

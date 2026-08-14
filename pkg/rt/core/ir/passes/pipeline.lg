@@ -195,8 +195,8 @@
 ;; Binding forms with a clean `[target init ...]` vector (no for/doseq-style
 ;; :let/:when modifiers). Their inits are rewritten in the outer scope; their
 ;; targets shadow field names inside the body. Mirrors core.lg's -dt-let-like.
-;; NB: a *quoted* set literal '#{..} reads as a (hash-set ..) form in let-go,
-;; so build the set explicitly with (set '(...)).
+;; NB: set literals read as set VALUES (not as (hash-set ..) forms); the
+;; explicit (set '(...)) build is kept for symmetry with core.lg's table.
 (def -dt-field-let-like
   (set '(let let* loop loop* when-let when-let* if-let if-let*
           when-some if-some binding with-open with-local-vars dotimes)))
@@ -219,14 +219,27 @@
    / set! handling — the native deftype path is immutable. Known limitation
    (shared with core.lg): for/doseq/letfn are not treated as binding forms."
   [fieldset this-sym bound form]
+  ;; Dispatches on the collection lattice, mirroring core.lg's -dt-rewrite.
+  ;; Associative arms precede vector? because a map entry IS a vector, and an
+  ;; unrecognised collection throws rather than passing through as an atom.
   (cond
     (symbol? form)
     (if (and (contains? fieldset form) (not (contains? bound form)))
       (list '. this-sym form)
       form)
+    (map? form)
+    (into {} (map (fn [e] [(dt-rewrite-field fieldset this-sym bound (nth e 0))
+                           (dt-rewrite-field fieldset this-sym bound (nth e 1))])
+                  (seq form)))
+    (set? form)
+    (into #{} (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) (seq form)))
     (vector? form)
     (vec (map (fn [x] (dt-rewrite-field fieldset this-sym bound x)) form))
-    (not (seq? form)) form
+    (not (seq? form))
+    (if (coll? form)
+      (throw (ex-info "dt-rewrite-field: unhandled collection type in a deftype method body"
+                      {:form form}))
+      form)
     (empty? form) form
     :else
     (let [h (first form)]
@@ -398,6 +411,16 @@
       (vec (doall (map expand-all form)))
       (map? form)
       (into {} (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
+      ;; Sets reach here as real set values. Before set literals read as data
+      ;; they arrived as (hash-set ..) lists and were expanded by the seq arm,
+      ;; so this branch never existed and `#{(when true 1)}` silently reached
+      ;; build-set unexpanded — bytecode expanded it, native lowering did not.
+      (set? form)
+      (into #{} (doall (map expand-all (seq form))))
+      ;; Anything else that is still a collection is a traversal gap: fail
+      ;; loudly rather than passing it through unexpanded.
+      (coll? form)
+      (throw (ex-info "expand-all: unhandled collection type" {:form form}))
       :else form)))
 
 ;; --- canonical enumeration of a namespace's lowerable fn-units -------------
