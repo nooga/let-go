@@ -38,9 +38,17 @@ endif
 # new binary needs no new ignore entry, and `make clean` removes both.
 BUILD-DIR := build
 BIN-DIR := bin
+# $(LG) is the freshly built CANDIDATE. Gates and ratchets below run against it
+# deliberately: they validate the compiler that was just built, not the last
+# copy that happened to pass promotion. $(LG-PROMOTED) is the promoted copy.
 LG := $(BUILD-DIR)/lg
 LG-PROFILE ?= $(BUILD-DIR)/lg-profile
 LG-PROMOTED := $(BIN-DIR)/lg
+BOOTPROBE := $(BUILD-DIR)/bootprobe
+# Boot budget sits ~2x above the measured median-of-5 ceiling (4.10ms on an
+# idle M3) so it does not flake, while still catching the #663 class.
+SMOKE-BOOT-BUDGET-MS ?= 8
+SMOKE-BOOT-SAMPLES ?= 5
 GOLANGCI-LINT := github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 GOLANGCI-LINT-VERSION ?= v2.12.2
 GOLANGCI-LINT-VERSION-NO-V := $(patsubst v%,%,$(GOLANGCI-LINT-VERSION))
@@ -89,9 +97,29 @@ run: $(LG)
 # cannot silently lag build/lg.
 build: $(LG-PROMOTED)
 
-$(LG-PROMOTED): $(LG)
+# Promotion gate. build/lg is the CANDIDATE; bin/lg is the promoted copy.
+# A candidate is promoted only after `smoke` passes, so bin/lg means "booted,
+# booted fast, and not obviously broken" — NOT "verified correct". Deep
+# correctness is make test / ir-stress-gate / gogen-diff, each ~2 min, which is
+# too slow to run on every promotion.
+$(LG-PROMOTED): $(LG) $(BOOTPROBE)
+	@$(MAKE) --no-print-directory smoke
 	@mkdir -p $(BIN-DIR)
 	install -m 0755 $(LG) $@
+	@echo "promoted $(LG) -> $@"
+
+$(BOOTPROBE): $(GO) $(ROOT-GO-FILES) pkg/**/* pkg/rt/core_compiled.lgb
+	@mkdir -p $(BUILD-DIR)
+	go build -o $@ ./cmd/bootprobe
+
+# Fast promotion gate: minimal correctness + a boot-time budget. Seconds, not
+# minutes. Override the budget with: make smoke SMOKE-BOOT-BUDGET-MS=12
+.PHONY: smoke
+smoke: $(LG) $(BOOTPROBE)
+	@echo ">> smoke: correctness"
+	@$(LG) scripts/smoke.lg
+	@echo ">> smoke: boot budget"
+	@./scripts/smoke-boot.sh $(BOOTPROBE) $(SMOKE-BOOT-BUDGET-MS) $(SMOKE-BOOT-SAMPLES)
 
 build-profile: $(LG-PROFILE)
 
@@ -473,13 +501,13 @@ check-generated: check-generated-manifest $(GO)
 #   fanout-ratchet-update  recompute + MIN-merge the baseline (tighten-only)
 #   fanout-ratchet-show    print current metrics, write nothing
 fanout-ratchet: build
-	./lg scripts/fanout-ratchet.lg check --go "$$(command -v go)"
+	$(LG) scripts/fanout-ratchet.lg check --go "$$(command -v go)"
 
 fanout-ratchet-update: build
-	./lg scripts/fanout-ratchet.lg update --go "$$(command -v go)"
+	$(LG) scripts/fanout-ratchet.lg update --go "$$(command -v go)"
 
 fanout-ratchet-show: build
-	./lg scripts/fanout-ratchet.lg show --go "$$(command -v go)"
+	$(LG) scripts/fanout-ratchet.lg show --go "$$(command -v go)"
 
 # IR-stress: lower-go AOT pass-rate over the committed corpus allow-list
 # (scripts/ir-stress-corpus.edn = every shipped + test/example/script .lg minus
@@ -489,7 +517,7 @@ ir-stress: build
 	LG_STRESS_PASSES=$${LG_STRESS_PASSES:-1} \
 	  LG_STRESS_TIMEOUT_MS=$${LG_STRESS_TIMEOUT_MS:-15000} \
 	  LG_STRESS_LOG=$${LG_STRESS_LOG:-/tmp/ir-stress.log} \
-	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
+	  $(LG) scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
 
 # Jank lowering-coverage gate: lower-go AOT pass-rate over the vendored jank
 # Clojure-compat suite (test/clojure-test-suite, a git submodule). Unlike the
@@ -505,7 +533,7 @@ jank-stress: build
 	  LG_STRESS_PASSES=$${LG_STRESS_PASSES:-1} \
 	  LG_STRESS_TIMEOUT_MS=$${LG_STRESS_TIMEOUT_MS:-15000} \
 	  LG_STRESS_LOG=$${LG_STRESS_LOG:-/tmp/jank-lowering.log} \
-	  ./lg scripts/ir-stress.lg lower-go $(JANK_SUITE_DIR) \
+	  $(LG) scripts/ir-stress.lg lower-go $(JANK_SUITE_DIR) \
 	    $$(cd $(JANK_SUITE_DIR) && ls core_test/*.cljc string_test/*.cljc)
 
 # ITER-0021 lowering-coverage ratchet gate. Runs the ir-stress corpus and fails
@@ -516,7 +544,7 @@ ir-stress-gate: build
 	LG_STRESS_PASSES=1 \
 	  LG_STRESS_TIMEOUT_MS=$${LG_STRESS_TIMEOUT_MS:-15000} \
 	  LG_STRESS_BASELINE=docs/perf/ir-stress-baseline.edn \
-	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
+	  $(LG) scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
 
 # Bytecode-path census. Same corpus, but lowers through ir.lower (the backend
 # `(set! *ir-compile* true)` actually drives at runtime) instead of lower_go.
@@ -530,14 +558,14 @@ ir-stress-bytecode: build
 	  LG_STRESS_TIMEOUT_MS=$${LG_STRESS_TIMEOUT_MS:-15000} \
 	  LG_STRESS_BACKEND=lower \
 	  LG_STRESS_LOG=$${LG_STRESS_LOG:-/tmp/ir-stress-bytecode.log} \
-	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
+	  $(LG) scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
 
 ir-stress-bytecode-gate: build
 	LG_STRESS_PASSES=1 \
 	  LG_STRESS_TIMEOUT_MS=$${LG_STRESS_TIMEOUT_MS:-15000} \
 	  LG_STRESS_BACKEND=lower \
 	  LG_STRESS_BASELINE=docs/perf/ir-stress-bytecode-baseline.edn \
-	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
+	  $(LG) scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
 
 ir-stress-bytecode-rebaseline: build
 	LG_STRESS_PASSES=1 \
@@ -546,7 +574,7 @@ ir-stress-bytecode-rebaseline: build
 	  LG_STRESS_BASELINE=docs/perf/ir-stress-bytecode-baseline.edn \
 	  LG_STRESS_REBASELINE=1 \
 	  LG_STRESS_DATE=$$(date +%F) \
-	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
+	  $(LG) scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
 
 # Rewrite the committed coverage baseline from a fresh census (tool-maintained;
 # never hand-edit the EDN). Run after an intentional corpus or coverage change,
@@ -557,7 +585,7 @@ ir-stress-rebaseline: build
 	  LG_STRESS_BASELINE=docs/perf/ir-stress-baseline.edn \
 	  LG_STRESS_REBASELINE=1 \
 	  LG_STRESS_DATE=$$(date +%F) \
-	  ./lg scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
+	  $(LG) scripts/ir-stress.lg corpus scripts/ir-stress-corpus.edn
 
 # Combined speed + size gates. Both ratchets need the gogen_ir lowered tree, and
 # each would otherwise regenerate it (the dominant cost). `ratchets` regenerates
@@ -566,11 +594,11 @@ ir-stress-rebaseline: build
 # `make bench-ratchet fanout-ratchet`. Use this in CI.
 ratchets: build lowered $(GO)
 	go run ./cmd/bench-ratchet check
-	./lg scripts/fanout-ratchet.lg check --go "$$(command -v go)" --no-regen
+	$(LG) scripts/fanout-ratchet.lg check --go "$$(command -v go)" --no-regen
 
 ratchets-update: build lowered $(GO)
 	go run ./cmd/bench-ratchet update
-	./lg scripts/fanout-ratchet.lg update --go "$$(command -v go)" --no-regen
+	$(LG) scripts/fanout-ratchet.lg update --go "$$(command -v go)" --no-regen
 
 # PHONY targets are for ones that have conflicting files/dirs present:
 .PHONY: test clean clean-lowered ir-stress-gate

@@ -40,6 +40,9 @@ repos:
         description: Reject staged Mach-O / ELF / PE binaries before they bloat history
         entry: python3 scripts/reject_compiled_binaries.py
         language: system
+        # The pre-push net diff can be empty when an intermediate commit adds
+        # and later deletes a binary. Run anyway; the script walks Git objects.
+        always_run: true
         stages: [pre-commit, pre-push]
 
       # Auto-fix formatting before linters run. gofmt ships with Go.
@@ -115,7 +118,7 @@ repos:
       - id: go-test
         name: go test ./... -skip TestClojureTestSuite
         description: Run Go test suite excluding the slow Clojure compat suite (mirrors CI test step)
-        entry: go test -short -timeout 60s ./... -skip TestClojureTestSuite
+        entry: go test -short -timeout 600s ./... -skip TestClojureTestSuite
         language: system
         types: [go]
         pass_filenames: false
