@@ -25,8 +25,11 @@
 
 (ns test.keyword-cond-switch-ir
   (:require
+   [clojure.string :as str]
+   [gogen :as g]
    [ir.build :as build]
    [ir.data :as ir]
+   [ir.lower-go :as lower-go]
    [ir.passes.pipeline :as pipeline]
    [ir.structurize :as structurize]
    [test :refer :all]))
@@ -200,3 +203,28 @@
     (let [output (with-out-str (sidefx-chain :b))]
       (is (= "checking-b-side-effect\n" output)
           (format "Expected exact side-effect output; output was: %q" output)))))
+
+;; --- AC-4: Namespaced keyword labels must match vm.KeywordName exactly ---
+
+(deftest ac4-namespaced-keywords-preserve-full-switch-labels
+  (testing "Go switch labels retain keyword namespaces and remain distinct"
+    (let [defn-form '(defn namespaced-kw-dispatch [x]
+                       (case x
+                         :foo/a 1
+                         :bar/a 2
+                         :foo/b 3
+                         0))
+          body-raw (drop 3 defn-form)
+          body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
+          expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+          ir-fn (build/build-fn expanded)
+          _ (pipeline/optimize-fn ir-fn)
+          result (lower-go/lower ir-fn :bridge)
+          src (when (= :lowered (:status result)) (g/render (:decl result)))]
+      (is (= :lowered (:status result))
+          (format "Expected Go lowering, got: %s" result))
+      (is (str/includes? src "case \"foo/a\":") src)
+      (is (str/includes? src "case \"bar/a\":") src)
+      (is (str/includes? src "case \"foo/b\":") src)
+      (is (not (str/includes? src "case \"a\":")) src)
+      (is (not (str/includes? src "case \"b\":")) src))))

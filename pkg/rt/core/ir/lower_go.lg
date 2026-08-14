@@ -3268,7 +3268,9 @@
                           (recur (rest remaining)
                                  (conj out
                                        (gogen/case-clause
-                                         [(gogen/string-lit (name kw))]
+                                         ;; The tag is vm.KeywordName(disc), whose value includes
+                                         ;; the namespace. `name` would collapse :foo/a and :bar/a.
+                                         [(gogen/string-lit (subs (str kw) 1))]
                                          (vec (concat (emit-assignments-for-target f closed-exprs tt-rewritten) ts)))))))))
                   default-ts (lower-tree f closed-exprs default-node)
                   last-et-rewritten (rewrite-branch-target-args last-et subst)]
