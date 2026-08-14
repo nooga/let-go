@@ -359,7 +359,10 @@ func (g *game) Draw(screen *ebiten.Image) {
 }
 
 func (g *game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return g.b.width, g.b.height
+	// Render at device resolution, not logical: the GL backend draws into the
+	// full Retina framebuffer, and matching it is what keeps glyphs crisp.
+	s := ebiten.Monitor().DeviceScaleFactor()
+	return int(float64(g.b.width) * s), int(float64(g.b.height) * s)
 }
 
 func (b *Backend) renderShot(req *shotRequest) error {
@@ -389,7 +392,10 @@ func (b *Backend) renderShot(req *shotRequest) error {
 // Triangles with any vertex at w<=0 (behind the camera) are dropped rather
 // than clipped — crude, but only the 3D path can hit it.
 func (b *Backend) drawBatches(dst *ebiten.Image, batches []batch) {
-	sw, sh := float64(b.width), float64(b.height)
+	// NDC maps to the actual target size: device-scaled for the screen,
+	// logical for screenshot renders.
+	bounds := dst.Bounds()
+	sw, sh := float64(bounds.Dx()), float64(bounds.Dy())
 	opts := &ebiten.DrawTrianglesOptions{
 		ColorScaleMode: ebiten.ColorScaleModeStraightAlpha,
 		Filter:         ebiten.FilterNearest,
