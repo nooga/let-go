@@ -28,14 +28,15 @@ import (
 // source's ReadKey/KeyPending are never called and the reader never starts — no
 // bytes stolen from the source that replaced it.
 type queuedKeySource struct {
-	mu      sync.Mutex
-	r       io.Reader
-	buf     []byte        // read but not yet tokenized out
-	err     error         // sticky reader error; nil for a clean EOF
-	done    bool          // reader finished (EOF or error) — no more bytes coming
-	started bool          // reader goroutine launched
-	notify  chan struct{} // buffered(1) wakeup; reader signals on append/done
-	grace   time.Duration // inter-byte wait for stitching a split escape sequence
+	mu          sync.Mutex
+	r           io.Reader
+	buf         []byte        // read but not yet tokenized out
+	err         error         // sticky reader error; nil for a clean EOF
+	done        bool          // reader finished (EOF or error) — no more bytes coming
+	started     bool          // reader goroutine launched
+	wakePending bool          // coalesced external terminal wake, consumed by ReadKey
+	notify      chan struct{} // buffered(1) condition signal for data/done/wake
+	grace       time.Duration // inter-byte wait for stitching a split escape sequence
 }
 
 // escGrace is the default bound on how long ReadKey waits for the rest of an
@@ -72,6 +73,13 @@ func resolveGrace() time.Duration {
 // first ReadKey/KeyPending, so binding this at *keys* without ever consulting it
 // (e.g. when api.WithKeySource overrides it) reads nothing.
 func NewQueuedKeySource(r io.Reader) KeySource {
+	return newQueuedKeySource(r)
+}
+
+// newQueuedKeySource is the concrete constructor used by platform adapters
+// that need queuedKeySource implementation details without widening the public
+// KeySource interface.
+func newQueuedKeySource(r io.Reader) *queuedKeySource {
 	return &queuedKeySource{r: r, notify: make(chan struct{}, 1), grace: resolveGrace()}
 }
 
@@ -100,6 +108,21 @@ func (s *queuedKeySource) signal() {
 	case s.notify <- struct{}{}:
 	default:
 	}
+}
+
+// wake interrupts a blocked ReadKey without adding bytes to the input queue.
+// A boolean is enough: terminal resize storms may coalesce, and the caller only
+// needs one opportunity to re-read term/size. Reader completion wins over a
+// wake, matching native's EOF/error precedence.
+func (s *queuedKeySource) wake() {
+	s.mu.Lock()
+	if s.done {
+		s.mu.Unlock()
+		return
+	}
+	s.wakePending = true
+	s.mu.Unlock()
+	s.signal()
 }
 
 // readLoop blocks on r.Read WITHOUT holding the lock, then locks only to append
@@ -131,21 +154,24 @@ func (s *queuedKeySource) readLoop() {
 	}
 }
 
-// ReadKey blocks until a whole key token is available (or the reader ends),
-// tokenizing one key per call off the shared buffer via scanKey. It returns ""
-// with a nil error at a clean EOF (the read-key nil contract), or "" with the
-// retained error if the reader failed. Blocking here matches native (which
-// blocks in poll); callers stay responsive by gating on KeyPending first.
+// ReadKey blocks until a whole key token, an external terminal wake, or reader
+// completion is available. It tokenizes one key per call off the shared buffer
+// via scanKey, returns terminalWakeKey for a wake, "" with a nil error at clean
+// EOF, or "" with the retained reader error. Blocking here matches native.
 func (s *queuedKeySource) ReadKey() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.start()
 
-	for len(s.buf) == 0 && !s.done {
+	for len(s.buf) == 0 && !s.wakePending && !s.done {
 		s.condWait(0) // no deadline: block until data or reader end
 	}
 	if len(s.buf) == 0 {
-		return "", s.err // clean EOF (err nil) or a real reader failure
+		if s.done {
+			return "", s.err // clean EOF (err nil) or a real reader failure
+		}
+		s.wakePending = false
+		return terminalWakeKey, nil
 	}
 
 	var deadline time.Time // set on the first incomplete front token
@@ -208,13 +234,13 @@ func (s *queuedKeySource) condWait(timeout time.Duration) {
 	s.mu.Lock()
 }
 
-// KeyPending reports whether a key is buffered and ready, without consuming it.
-// Non-blocking and eof-blind (false once the queue drains at end-of-input),
-// mirroring native's FIONREAD-based rawPending so a per-tick input poll doesn't
-// busy-drain end-of-input forever.
+// KeyPending reports whether a key or external terminal wake is buffered and
+// ready, without consuming it. It is non-blocking and eof-blind (false once the
+// queue drains at end-of-input), mirroring native's rawPending behavior so a
+// per-tick input poll doesn't busy-drain end-of-input forever.
 func (s *queuedKeySource) KeyPending() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.start()
-	return len(s.buf) > 0
+	return len(s.buf) > 0 || (!s.done && s.wakePending)
 }
