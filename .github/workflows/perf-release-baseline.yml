@@ -34,16 +34,46 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Resolve tag
+        id: tag
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+){2}([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release tag: $TAG" >&2
+            exit 1
+          fi
+          printf 'name=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing frozen baseline
+        id: baseline
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          out="docs/perf/historical/${TAG}.json"
+          branch="perf/baseline-${TAG}"
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if [[ -e "$out" ]] || git cat-file -e "origin/main:${out}" 2>/dev/null; then
+            echo "Baseline ${out} is already frozen; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
+            echo "Automation branch ${branch} already exists; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+          printf 'path=%s\n' "$out" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
+        if: steps.baseline.outputs.skip != 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Resolve tag
-        id: tag
-        run: echo "name=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
-
       - name: Generate lowered runtime
+        if: steps.baseline.outputs.skip != 'true'
         run: |
           set -euo pipefail
           # Releases before v1.10.0 predate the lowered-Go tree and have no
@@ -57,27 +87,32 @@ jobs:
           fi
 
       - name: Capture immutable per-release baseline
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          OUT: ${{ steps.baseline.outputs.path }}
         run: |
           set -euo pipefail
           mkdir -p docs/perf/historical
-          out="docs/perf/historical/${{ steps.tag.outputs.name }}.json"
-          # snapshot refuses to overwrite an existing baseline, so a re-run for an
-          # already-frozen tag is a no-op failure — intended (baselines are immutable).
+          # `update` is supported by every backfillable release, including v1.9.0.
+          # The preflight and this assertion preserve snapshot-style immutability.
+          test ! -e "$OUT"
           go run ./cmd/bench-ratchet \
             -full \
             -count 3 \
             -benchtime 2s \
             -timeout 30m \
-            -baseline "$out" \
-            snapshot
-          echo "FROZEN=$out" >> "$GITHUB_ENV"
+            -baseline "$OUT" \
+            update
+          echo "FROZEN=$OUT" >> "$GITHUB_ENV"
 
       - name: Open PR with the frozen baseline
+        if: steps.baseline.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.name }}
         run: |
           set -euo pipefail
-          tag="${{ steps.tag.outputs.name }}"
+          tag="$TAG"
           branch="perf/baseline-${tag}"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
