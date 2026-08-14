@@ -28,7 +28,13 @@ var (
 func main() {
 	// Exit only on failure, as this has always done: a zero code returns from
 	// main normally instead of going through os.Exit.
-	if code := cli.Main(version, commit); code != 0 {
+	//
+	// bootMain is the build-tagged boot seam: identity by default, and under
+	// -tags glplat_ebiten a trampoline that hands the main thread to ebiten,
+	// which demands it, while the lg program runs on a goroutine. It wraps
+	// cli.Main from here rather than living inside pkg/cli so the importable
+	// CLI keeps no graphics dependency.
+	if code := bootMain(func() int { return cli.Main(version, commit) }); code != 0 {
 		os.Exit(code)
 	}
 }
