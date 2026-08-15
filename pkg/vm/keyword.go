@@ -102,12 +102,3 @@ func (l Keyword) Namespace() Value {
 	}
 	return String(ns)
 }
-
-// KeywordName extracts the string value of a keyword for switch case matching.
-// If the value is not a keyword, returns a sentinel value.
-func KeywordName(v Value) string {
-	if k, ok := v.(Keyword); ok {
-		return string(k)
-	}
-	return "\x00not-a-keyword\x00"
-}

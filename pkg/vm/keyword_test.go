@@ -64,34 +64,3 @@ func TestKeywordNamespacedMatchesSymbolSlashSemantics(t *testing.T) {
 		})
 	}
 }
-
-func TestKeywordNameExtractsSwitchCaseValue(t *testing.T) {
-	// KeywordName is used in Go switch lowering to extract case values
-	tests := []struct {
-		name     string
-		value    Value
-		expected string
-	}{
-		{"keyword-plain", Keyword("a"), "a"},
-		{"keyword-namespaced", Keyword("ns/kw"), "ns/kw"},
-		{"string-non-keyword", String("not-a-keyword"), "\x00not-a-keyword\x00"},
-		{"symbol-non-keyword", Symbol("sym"), "\x00not-a-keyword\x00"},
-		{"integer-non-keyword", Int(42), "\x00not-a-keyword\x00"},
-		{"nil-non-keyword", NIL, "\x00not-a-keyword\x00"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := KeywordName(tt.value)
-			if got != tt.expected {
-				t.Errorf("KeywordName(%v) = %q, want %q", tt.value, got, tt.expected)
-			}
-		})
-	}
-
-	// Verify sentinel is distinct and cannot collide with real keywords
-	sentinel := "\x00not-a-keyword\x00"
-	if sentinel == string(Keyword("a")) || sentinel == string(Keyword("")) {
-		t.Errorf("Sentinel should not collide with any valid keyword")
-	}
-}

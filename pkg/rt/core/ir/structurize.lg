@@ -313,8 +313,13 @@
                   e    (ir/branch-target-target et)
                   arms' (conj arms [kw tt (ir/branch-target-target tt)])
                   seen' (conj seen kw)
-                  ek   (sz-eq-kw f e)]
-              (if (and ek (= (nth ek 0) root) (not (contains? seen' (nth ek 1))))
+                  ek   (sz-eq-kw f e)
+                  preds (ir/block-preds e f)]
+              ;; Absorbing e is sound only when the current false edge owns it.
+              ;; A shared predecessor can enter e without executing the switch
+              ;; owner, so folding e away would drop that reachable control path.
+              (if (and ek (= (nth ek 0) root) (not (contains? seen' (nth ek 1)))
+                       (= 1 (count preds)) (= b (first preds)))
                 (recur e arms' seen' (conj tests e))
                 (when (>= (count arms') 3)
                   {:disc root :arms arms' :last-et et

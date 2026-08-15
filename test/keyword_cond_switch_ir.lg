@@ -204,7 +204,7 @@
       (is (= "checking-b-side-effect\n" output)
           (format "Expected exact side-effect output; output was: %q" output)))))
 
-;; --- AC-4: Namespaced keyword labels must match vm.KeywordName exactly ---
+;; --- AC-4: Namespaced keyword labels must match vm.Keyword strings exactly ---
 
 (deftest ac4-namespaced-keywords-preserve-full-switch-labels
   (testing "Go switch labels retain keyword namespaces and remain distinct"
@@ -228,3 +228,109 @@
       (is (str/includes? src "case \"foo/b\":") src)
       (is (not (str/includes? src "case \"a\":")) src)
       (is (not (str/includes? src "case \"b\":")) src))))
+
+
+;; --- AC-5: absorbed blocks must be exclusively owned by the else spine ---
+
+(deftest ac5-shared-predecessor-rejects-switch-absorption
+  (let [defn-form '(defn shared-owner-kw-dispatch [x]
+                     (case x :a 1 :b 2 :c 3 0))
+        body-exp (mapv (fn [b] (pipeline/expand-all b)) (drop 3 defn-form))
+        expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+        ir-fn (build/build-fn expanded)
+        _ (pipeline/optimize-fn ir-fn)
+        before (structurize/structurize ir-fn)
+        absorbed (first (:absorbed-blocks before))
+        old-entry (ir/fn-entry ir-fn)
+        donor (ir/add-block ir-fn)
+        _ (ir/add-terminator! ir-fn donor :branch []
+                              (ir/new-branch-target absorbed []))
+        _ (ir/add-pred! ir-fn absorbed donor)
+        ;; Make the alternate predecessor reachable: a new root chooses either
+        ;; the original chain owner or donor, which enters mid-spine.
+        root (ir/add-block ir-fn)
+        condition (ir/add-inst ir-fn root :load-arg [] 0)
+        _ (ir/add-terminator! ir-fn root :branch-if [condition]
+                              (ir/new-cond-target
+                                (ir/new-branch-target old-entry [])
+                                (ir/new-branch-target donor [])))
+        _ (ir/add-pred! ir-fn old-entry root)
+        _ (ir/add-pred! ir-fn donor root)
+        _ (swap! ir-fn assoc :entry root)
+        after (structurize/structurize ir-fn)]
+    (is (not (nil? absorbed)) "fixture must initially absorb an intermediate test block")
+    (is (= 0 (count (find-switch-nodes (:tree after) #{})))
+        "an intermediate test block with another predecessor is not owned by the chain")))
+
+;; --- AC-6: whole-function fallback must not retain switch-only metadata ---
+
+(deftest ac6-mixed-structurizer-fallback-clears-absorption-metadata
+  (let [defn-form '(defn mixed-fallback-kw-dispatch [x]
+                     (case x :a 1 :b 2 :c 3 0))
+        body-exp (mapv (fn [b] (pipeline/expand-all b)) (drop 3 defn-form))
+        expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+        ir-fn (build/build-fn expanded)
+        _ (pipeline/optimize-fn ir-fn)
+        before (structurize/structurize ir-fn)
+        switch-node (first (find-switch-nodes (:tree before) #{}))
+        default-edge (nth switch-node 4)
+        default-block (ir/branch-target-target default-edge)
+        default-term (ir/block-term default-block ir-fn)
+        live-marker #{-1}
+        _ (ir/replace-op! ir-fn default-term :unsupported-test-terminator)
+        _ (swap! ir-fn assoc :live live-marker)
+        result (lower-go/lower ir-fn :bridge)]
+    (is (= :fallback (:status result)) result)
+    (is (empty? (:absorbed-blocks (deref ir-fn)))
+        "bytecode/goto fallback must restore full CFG block ownership")
+    (is (empty? (:absorbed-insts (deref ir-fn)))
+        "bytecode/goto fallback must restore full CFG instruction ownership")
+    (is (= live-marker (:live (deref ir-fn)))
+        "precomputed Atom metadata must not be overwritten")))
+
+;; --- AC-7: keyword dispatch uses a type guard, never a sentinel ---
+
+(deftest ac7-keyword-switch-has-sentinel-free-type-guard
+  (let [collision (keyword "\u0000not-a-keyword\u0000")
+        case-form (list 'case 'x collision 1 :foo/a 2 :bar/a 3 0)
+        defn-form (list 'defn 'sentinel-free-kw-dispatch '[x] case-form)
+        body-exp (mapv (fn [b] (pipeline/expand-all b)) (drop 3 defn-form))
+        expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+        ir-fn (build/build-fn expanded)
+        _ (pipeline/optimize-fn ir-fn)
+        result (lower-go/lower ir-fn :bridge)
+        src (when (= :lowered (:status result)) (g/render (:decl result)))]
+    (is (= :lowered (:status result)) result)
+    (is (str/includes? src "case vm.Keyword:") src)
+    (is (str/includes? src "switch string(") src)
+    (is (not (str/includes? src "KeywordName")) src)
+    (is (str/includes? src "case \"\\x00not-a-keyword\\x00\":") src)
+    (is (str/includes? src "case \"foo/a\":") src)
+    (is (str/includes? src "case \"bar/a\":") src)))
+
+
+;; --- AC-8: signature rejection must not commit structured metadata ---
+
+(deftest ac8-unsupported-result-clears-structured-candidate-metadata
+  (let [defn-form '(defn unsupported-result-kw-dispatch [x]
+                     (case x :a 1 :b 2 :c 3 0))
+        body-exp (mapv (fn [b] (pipeline/expand-all b)) (drop 3 defn-form))
+        expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+        ir-fn (build/build-fn expanded)
+        _ (pipeline/optimize-fn ir-fn)
+        before (structurize/structurize ir-fn)
+        return-ids (vec (mapcat (fn [bid]
+                                  (let [term (ir/block-term bid ir-fn)]
+                                    (if (and term (= :return (ir/op term ir-fn)))
+                                      (ir/refs term ir-fn)
+                                      [])))
+                                (ir/blocks ir-fn)))
+        _ (ir/set-type! ir-fn (first return-ids) :unsupported-test-type)
+        result (lower-go/lower ir-fn :bridge)]
+    (is (not (empty? (:absorbed-blocks before)))
+        "fixture must offer a structured switch candidate")
+    (is (= :fallback (:status result)) result)
+    (is (empty? (:absorbed-blocks (deref ir-fn))))
+    (is (empty? (:absorbed-insts (deref ir-fn))))
+    (is (nil? (:coalesce (deref ir-fn)))
+        "final signature rejection must discard derived lowering caches")))
