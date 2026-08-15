@@ -46,6 +46,10 @@ func binaryGuardEnv(fromRef, toRef string) []string {
 	)
 }
 
+func binaryGuardToOnlyEnv(toRef string) []string {
+	return append(binaryGuardNoRefEnv(), "PRE_COMMIT_TO_REF="+toRef)
+}
+
 func TestRejectCompiledBinariesChecksIntermediatePushBlobs(t *testing.T) {
 	script, err := filepath.Abs("../scripts/reject_compiled_binaries.py")
 	if err != nil {
@@ -92,6 +96,44 @@ func TestRejectCompiledBinariesChecksIntermediatePushBlobs(t *testing.T) {
 			!strings.Contains(string(out), "accidental-build") {
 			t.Fatalf("guard failed without identifying the ELF blob and path:\n%s", out)
 		}
+	}
+}
+
+func TestRejectCompiledBinariesChecksOrphanHistoryWithoutFromRef(t *testing.T) {
+	script, err := filepath.Abs("../scripts/reject_compiled_binaries.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := t.TempDir()
+	binaryGuardGit(t, repo, "init", "-q")
+	binaryGuardGit(t, repo, "config", "user.name", "Binary Guard Test")
+	binaryGuardGit(t, repo, "config", "user.email", "binary-guard@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("safe\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binaryGuardCommit(t, repo, "root")
+
+	artifact := filepath.Join(repo, "orphan-build")
+	if err := os.WriteFile(artifact, []byte("\x7fELFpayload"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binaryGuardCommit(t, repo, "add accidental executable")
+	if err := os.Remove(artifact); err != nil {
+		t.Fatal(err)
+	}
+	toRef := binaryGuardCommit(t, repo, "delete accidental executable")
+
+	cmd := exec.Command("python3", script)
+	cmd.Dir = repo
+	cmd.Env = binaryGuardToOnlyEnv(toRef)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("pre-push guard accepted orphan history without PRE_COMMIT_FROM_REF\n%s", out)
+	}
+	if !strings.Contains(string(out), "ELF executable") ||
+		!strings.Contains(string(out), "orphan-build") {
+		t.Fatalf("guard failed without identifying the orphan-history blob and path:\n%s", out)
 	}
 }
 

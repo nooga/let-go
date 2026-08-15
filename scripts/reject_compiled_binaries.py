@@ -2,15 +2,19 @@
 """Reject compiled executables from entering git history.
 
 At pre-commit, inspect the filenames supplied by prek against the working tree.
-At pre-push, ignore the net-diff filenames and inspect every blob newly reachable
-from PRE_COMMIT_TO_REF but not PRE_COMMIT_FROM_REF. This catches an executable
-added in one pushed commit and deleted in a later one, and never consults a jj
-working tree that may differ from the pushed ref.
+At pre-push, ignore the net-diff filenames and inspect every newly reachable
+blob. PRE_COMMIT_FROM_REF supplies the existing-history boundary when present;
+if prek omits it for an orphan-history push, scan the full ancestry of
+PRE_COMMIT_TO_REF. This catches an executable added in one pushed commit and
+deleted in a later one, and never consults a jj working tree that may differ
+from the pushed ref.
 """
 import os
 import string
 import subprocess
 import sys
+
+NULL_REF = "0" * 40
 
 EXECUTABLE_MAGICS = {
     b"\x7fELF": "ELF executable",
@@ -171,9 +175,20 @@ def main(argv: list[str]) -> int:
     from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
     to_ref = os.environ.get("PRE_COMMIT_TO_REF")
 
-    if from_ref and to_ref:
+    if from_ref or to_ref:
+        if not to_ref:
+            sys.stderr.write(
+                "reject_compiled_binaries: incomplete pre-push ref context "
+                "(PRE_COMMIT_TO_REF is missing)\n"
+            )
+            return 2
         try:
-            return report(classify_pushed_blobs(from_ref, to_ref), "push")
+            # Some pre-push adapters omit FROM_REF for orphan-history pushes.
+            # Treat that as a new remote ref rather than falling back to the
+            # working-tree pre-commit path and silently bypassing history scan.
+            return report(
+                classify_pushed_blobs(from_ref or NULL_REF, to_ref), "push"
+            )
         except GitInspectionError as exc:
             sys.stderr.write(f"reject_compiled_binaries: {exc}\n")
             return 2
