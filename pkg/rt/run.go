@@ -46,6 +46,50 @@ func DecodeExecUnit(data []byte) (*bytecode.ExecUnit, error) {
 	return bytecode.DecodeToExecUnit(bytes.NewReader(data), LGBVarResolver)
 }
 
+// DecodeExecUnitWithDebug decodes a payload and attaches a verified external
+// debug companion when the payload was produced by bytecode.SplitDebug.
+func DecodeExecUnitWithDebug(data, debugData []byte) (*bytecode.ExecUnit, error) {
+	if len(debugData) == 0 {
+		return DecodeExecUnit(data)
+	}
+	return bytecode.DecodeToExecUnitBytesWithDebug(data, debugData, LGBVarResolver)
+}
+
+// DecodeExecUnitWithDebugFile loads and decodes a companion only when the LGB
+// header says debug information was split. Ordinary artifacts therefore pay
+// no filesystem lookup and ignore stale sidecars.
+func DecodeExecUnitWithDebugFile(data []byte, artifactPath string) (*bytecode.ExecUnit, error) {
+	if !bytecode.HasSplitDebug(data) {
+		return DecodeExecUnit(data)
+	}
+	debugData, err := LoadDebugCompanion(artifactPath)
+	if err != nil {
+		return nil, err
+	}
+	return DecodeExecUnitWithDebug(data, debugData)
+}
+
+// LoadDebugCompanion reads debug information for artifactPath. LG_DEBUG_FILE,
+// when set, selects an explicit file (or disables loading when empty); otherwise
+// the conventional <artifact>.debug sibling is optional.
+func LoadDebugCompanion(artifactPath string) ([]byte, error) {
+	path, explicit := os.LookupEnv("LG_DEBUG_FILE")
+	if explicit && path == "" {
+		return nil, nil
+	}
+	if !explicit {
+		path = artifactPath + bytecode.DebugCompanionSuffix
+	}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return data, nil
+	}
+	if !explicit && os.IsNotExist(err) {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("reading debug companion %s: %w", path, err)
+}
+
 // RunExecUnit replays a decoded unit: namespace chunks in dependency order
 // first, then the main chunk (when it is not already one of those namespaces).
 func RunExecUnit(unit *bytecode.ExecUnit) error {

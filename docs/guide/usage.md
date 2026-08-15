@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-06-19
+last-verified: 2026-08-06
 human-verified:
 ---
 
@@ -37,6 +37,24 @@ inflated transparently by `lg` and `lg-runtime`.
 
 The standalone binary is a copy of `lg` with your bytecode appended — copy it to
 another machine and it runs.
+
+### Split debug information
+
+`-strip` keeps the runtime artifact small without permanently losing its source
+maps or local-variable tables:
+
+```bash
+lg -strip -c app.lgb app.lg       # app.lgb + app.lgb.debug
+lg -strip -b myapp app.lg         # myapp + myapp.debug
+lg -strip -debug-output symbols/app.debug -c app.lgb app.lg
+```
+
+The `.debug` companion is bound to the exact stripped payload by SHA-256. Keep
+it in build artifacts or a symbol store while distributing only the stripped
+`.lgb` or executable. A companion beside the runtime artifact is loaded
+automatically; set `LG_DEBUG_FILE` to load it from another path, or set the
+variable to an empty value to run without debug information. Mismatched
+companions are rejected rather than producing misleading stack traces.
 
 ## Compiler-free deployment: lg-runtime
 

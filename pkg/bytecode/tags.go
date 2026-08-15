@@ -26,6 +26,9 @@ const (
 	// (lg -c -z / lg -b -z); a bundle without this bit decodes byte-identically
 	// to before.
 	FlagCompressed
+	// FlagDebugSplit marks an artifact whose source maps and local-variable
+	// tables live in an external, digest-bound debug companion.
+	FlagDebugSplit
 
 	flagsEnd // first unused bit; keep last
 )
@@ -40,7 +43,7 @@ const knownFlags = flagsEnd - 1
 const (
 	v1Flags uint16 = FlagConstsBase | FlagCapabilities
 	v2Flags uint16 = v1Flags | FlagLocalVars
-	v3Flags uint16 = v2Flags | FlagCompressed
+	v3Flags uint16 = v2Flags | FlagCompressed | FlagDebugSplit
 )
 
 // Compression codecs (the uncompressed byte after the declared body size).
