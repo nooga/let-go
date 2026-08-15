@@ -73,6 +73,49 @@ func TestReaderSetLiteralRejectsDuplicateForms(t *testing.T) {
 	}
 }
 
+func TestReaderSetLiteralSplicesReaderConditionals(t *testing.T) {
+	r := NewLispReader(strings.NewReader(`#{#?@(:default [1 2])}`), "<reader>")
+	got, err := r.Read()
+	if assert.NoError(t, err) {
+		set, ok := got.(*vm.PersistentSet)
+		if assert.True(t, ok, "set literal returned %T", got) {
+			assert.Equal(t, 2, set.RawCount())
+			assert.Equal(t, vm.TRUE, set.Contains(vm.Int(1)))
+			assert.Equal(t, vm.TRUE, set.Contains(vm.Int(2)))
+		}
+	}
+
+	r = NewLispReader(strings.NewReader(`[#{#?@(:default [1 2])} :after]`), "<reader>")
+	got, err = r.Read()
+	if assert.NoError(t, err) {
+		outer, ok := got.(vm.ArrayVector)
+		if assert.True(t, ok, "outer literal returned %T", got) && assert.Len(t, outer, 2) {
+			_, ok := outer[0].(*vm.PersistentSet)
+			assert.True(t, ok, "splicing state leaked past set; first element is %T", outer[0])
+			assert.Equal(t, vm.Keyword("after"), outer[1])
+		}
+	}
+
+	r = NewLispReader(strings.NewReader(`[#{#?@(:cljs [1])} :after]`), "<reader>")
+	got, err = r.Read()
+	if assert.NoError(t, err) {
+		outer, ok := got.(vm.ArrayVector)
+		if assert.True(t, ok, "outer literal returned %T", got) && assert.Len(t, outer, 2) {
+			set, ok := outer[0].(*vm.PersistentSet)
+			if assert.True(t, ok, "no-match splicing state leaked; first element is %T", outer[0]) {
+				assert.Zero(t, set.RawCount())
+			}
+			assert.Equal(t, vm.Keyword("after"), outer[1])
+		}
+	}
+
+	r = NewLispReader(strings.NewReader(`#{1 #?@(:default [1])}`), "<reader>")
+	_, err = r.Read()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "Duplicate key:")
+	}
+}
+
 func TestReaderKeywordInternalColons(t *testing.T) {
 	valid := map[string]vm.Keyword{
 		`:/`:        vm.Keyword(`/`),

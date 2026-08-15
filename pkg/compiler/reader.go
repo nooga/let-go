@@ -791,7 +791,7 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 	// Evaluation is unchanged: compileForm's vm.SetType case emits the same
 	// hash-set invocation and compiles each element, so `#{x (f y)}` still
 	// evaluates its elements.
-	result := vm.EmptyPersistentSet
+	var forms []vm.Value
 	for {
 		ch2, err := r.eatWhitespace()
 		if err != nil {
@@ -808,9 +808,14 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 		if err != nil {
 			return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 		}
-		if form.Type() == vm.VoidType {
-			continue
-		}
+		// Collection readers share appendNonVoid so #?@ elements are spliced
+		// and the reader's one-shot splicing state cannot leak to the enclosing
+		// collection. Duplicate detection must run after that expansion.
+		forms = appendNonVoid(r, forms, form)
+	}
+
+	result := vm.EmptyPersistentSet
+	for _, form := range forms {
 		if result.Contains(form) == vm.TRUE {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("Duplicate key: %s", form))
 		}
