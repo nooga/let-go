@@ -124,11 +124,15 @@ func TestCheckRejectsStaleDependencyManifestInputs(t *testing.T) {
 
 	root := t.TempDir()
 	writeFixtureFile(t, root, "input.txt", "original\n")
+	writeFixtureFile(t, root, "generated.txt", "generated output\n")
 	if err := os.MkdirAll(filepath.Join(root, "pkg/rt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := WriteDepManifest(root); err != nil {
 		t.Fatalf("write dependency manifest: %v", err)
+	}
+	if err := os.Remove(filepath.Join(root, "generated.txt")); err != nil {
+		t.Fatal(err)
 	}
 	digest, err := Compute(root)
 	if err != nil {
@@ -137,6 +141,11 @@ func TestCheckRejectsStaleDependencyManifestInputs(t *testing.T) {
 	if err := Write(root, digest); err != nil {
 		t.Fatalf("write generated.sums: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(root, "generated.txt")); !os.IsNotExist(err) {
+		t.Fatalf("fixture must omit generated output, got err=%v", err)
+	}
+	// Check proves input provenance only; output readiness is the separate
+	// StaleOutputs/-needs-generation contract and must not make clean checkouts fail.
 	if result, err := Check(root); err != nil || !result.Fresh {
 		t.Fatalf("fresh fixture rejected: result=%+v err=%v", result, err)
 	}

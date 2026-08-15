@@ -178,6 +178,9 @@ func dependencyManifestDrift(root string) []string {
 	}
 	recordedSums := make(map[genmanifest.Edge]string, len(recorded))
 	for _, edge := range recorded {
+		if edge.Kind == "output" {
+			continue
+		}
 		recordedSums[edge.Edge] = edge.Sum
 	}
 	currentSet := make(map[genmanifest.Edge]bool, len(current))

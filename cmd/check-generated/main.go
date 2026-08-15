@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-// check-generated exits non-zero when the committed generated artifacts
-// (pkg/rt/core_compiled.lgb + the lowered Go tree) are stale relative to
-// their .lg / lgbgen sources. Content-based, so it is reliable across
-// git/jj checkouts. Used by the Makefile `check-generated` target, by
-// CI, and by the git pre-commit hook (scripts/pre-commit).
+// check-generated's default mode exits non-zero when committed generator-input
+// provenance is stale. It does not compare generated output bytes. The
+// -needs-generation query additionally checks output readiness, while the
+// Makefile's `check-generated` target performs full regeneration comparisons.
+// Content-based input checks are reliable across git/jj checkouts.
 //
 // With -write it instead recomputes the digest and rewrites the canonical
 // manifest (a light refresh — the digest only, no bundle/tree rebuild).
@@ -27,7 +27,8 @@ import (
 )
 
 func main() {
-	writeManifest := flag.Bool("write-manifest", false, "write pkg/rt/generated.manifest and exit")
+	writeManifest := flag.Bool("write-manifest", false,
+		"write input provenance and file-output readiness to pkg/rt/generated.manifest, then exit")
 	staleList := flag.Bool("stale", false, "print outputs with stale input hashes (one per line) and exit")
 	needsGeneration := flag.Bool("needs-generation", false,
 		"print outputs with stale inputs or missing/incomplete generated files and exit")
@@ -125,5 +126,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("check-generated: OK — bundle + lowered tree are in sync with sources.")
+	fmt.Println("check-generated: OK — generator input provenance matches committed manifests.")
 }
