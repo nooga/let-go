@@ -20,10 +20,16 @@ import (
 
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/gomod"
 	"github.com/nooga/let-go/pkg/resolver"
 	wasmassets "github.com/nooga/let-go/pkg/rt/wasm"
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+// wasmModuleName is the module name of the throwaway Go module the WASM build
+// scaffolds around its generated sources. It used to be baked into the module
+// scaffolder; it is passed in now that the AOT native path shares that code.
+const wasmModuleName = "lg-wasm-app"
 
 // tinyGoStackSizeRe matches a tinygo -stack-size value (a byte count or a
 // K/M/G-suffixed size, e.g. 1MB, 64KB, 16384). Used only to warn on a typo in
@@ -100,7 +106,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		return err
 	}
 	goEnv := wasmBuildEnv(tmpDir)
-	goTool := goToolPath()
+	goTool := gomod.GoToolPath()
 	buildTags := strings.TrimSpace(os.Getenv("LG_WASM_BUILD_TAGS"))
 
 	// 3. Write generated source files
@@ -111,7 +117,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		return err
 	}
 	if wasmassets.HasBuildTag(buildTags, "gogen_ir") {
-		srcDir, err := findLetGoModuleDir()
+		srcDir, err := gomod.FindLetGoSourceDir()
 		if err != nil {
 			return fmt.Errorf("gogen_ir wasm build requires local let-go source for wireup: %w", err)
 		}
@@ -121,15 +127,15 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	}
 
 	// 4. Write go.mod
-	goMod, goSum, err := generateWasmModuleFiles(tmpDir)
+	mod, err := gomod.Generate(tmpDir, wasmModuleName, version)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(mod.Mod), 0644); err != nil {
 		return err
 	}
-	if len(goSum) > 0 {
-		if err := os.WriteFile(filepath.Join(tmpDir, "go.sum"), goSum, 0644); err != nil {
+	if len(mod.Sum) > 0 {
+		if err := os.WriteFile(filepath.Join(tmpDir, "go.sum"), mod.Sum, 0644); err != nil {
 			return err
 		}
 	}
@@ -284,114 +290,6 @@ func wasmBuildEnv(tmpDir string) []string {
 	)
 }
 
-func goToolPath() string {
-	if goroot := runtime.GOROOT(); goroot != "" {
-		if path := filepath.Join(goroot, "bin", "go"); fileExists(path) {
-			return path
-		}
-	}
-	return "go"
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func generateWasmModuleFiles(tmpDir string) (string, []byte, error) {
-	v := version
-	if v != "dev" && v != "" && v[0] >= '0' && v[0] <= '9' {
-		// Released binary: pin the require to this exact version. We can't
-		// return a nil go.sum (go build rejects a module with unresolved
-		// sums), so resolve it from the proxy the same way the no-source path
-		// below does. `go get` on the single require writes go.sum without the
-		// `go mod tidy` that the build step deliberately avoids.
-		return resolveWasmModuleFiles(tmpDir, "github.com/nooga/let-go@v"+v)
-	}
-	// Dev build — try local source first
-	srcDir, err := findLetGoModuleDir()
-	if err == nil {
-		goMod, goSum, err := localWasmModuleFiles(srcDir)
-		if err != nil {
-			return "", nil, err
-		}
-		return goMod, goSum, nil
-	}
-	// No local source — resolve latest version from module proxy
-	return resolveWasmModuleFiles(tmpDir, "github.com/nooga/let-go@latest")
-}
-
-// resolveWasmModuleFiles scaffolds a minimal module in tmpDir and resolves the
-// let-go require named by modRef via `go get`, returning the resulting go.mod
-// and go.sum. Used for both released binaries (pinned version) and dev builds
-// with no local source tree (@latest).
-func resolveWasmModuleFiles(tmpDir, modRef string) (string, []byte, error) {
-	goMod := "module lg-wasm-app\n\ngo 1.26\n"
-	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
-		return "", nil, err
-	}
-	get := exec.Command(goToolPath(), "get", modRef)
-	get.Dir = tmpDir
-	get.Stderr = os.Stderr
-	if err := get.Run(); err != nil {
-		return "", nil, fmt.Errorf("resolving let-go module: %w (set LETGO_SRC for local source)", err)
-	}
-	// go get wrote the go.mod with the resolved version — read it back
-	data, err := os.ReadFile(filepath.Join(tmpDir, "go.mod"))
-	if err != nil {
-		return "", nil, err
-	}
-	sum, _ := os.ReadFile(filepath.Join(tmpDir, "go.sum"))
-	return string(data), sum, nil
-}
-
-func localWasmModuleFiles(srcDir string) (string, []byte, error) {
-	modPath := filepath.Join(srcDir, "go.mod")
-	modData, err := os.ReadFile(modPath)
-	if err != nil {
-		return "", nil, err
-	}
-	modText := string(modData)
-	modText = strings.Replace(modText, "module github.com/nooga/let-go", "module lg-wasm-app", 1)
-	modText = strings.TrimRight(modText, "\n") + "\n\nrequire github.com/nooga/let-go v0.0.0\n"
-	modText = strings.TrimRight(modText, "\n") + fmt.Sprintf("\n\nreplace github.com/nooga/let-go => %s\n", srcDir)
-	sumData, err := os.ReadFile(filepath.Join(srcDir, "go.sum"))
-	if err != nil && !os.IsNotExist(err) {
-		return "", nil, err
-	}
-	return modText, sumData, nil
-}
-
-func findLetGoModuleDir() (string, error) {
-	if src := os.Getenv("LETGO_SRC"); src != "" {
-		return src, nil
-	}
-	if dir := findModuleRoot(mustGetwd()); dir != "" {
-		return dir, nil
-	}
-	if exe, err := os.Executable(); err == nil {
-		if dir := findModuleRoot(filepath.Dir(exe)); dir != "" {
-			return dir, nil
-		}
-	}
-	return "", fmt.Errorf("cannot find let-go source tree (dev build); set LETGO_SRC or run from source directory")
-}
-
-func findModuleRoot(start string) string {
-	for d := start; d != "/" && d != "."; d = filepath.Dir(d) {
-		data, err := os.ReadFile(filepath.Join(d, "go.mod"))
-		if err == nil && strings.Contains(string(data), "module github.com/nooga/let-go") {
-			return d
-		}
-	}
-	return ""
-}
-
-func mustGetwd() string {
-	d, _ := os.Getwd()
-	return d
-}
-
 // tinygoFdWriteRe matches TinyGo's WASI fd_write import in its wasm_exec.js.
 // TinyGo routes os.Stdout through this (NOT through globalThis.fs), and it
 // line-buffers into logLine, emitting to console.log only on LF — so under our
@@ -449,7 +347,7 @@ func readWasmExecJS() ([]byte, error) {
 		goroot = runtime.GOROOT()
 	}
 	if goroot == "" {
-		out, err := exec.Command(goToolPath(), "env", "GOROOT").Output()
+		out, err := exec.Command(gomod.GoToolPath(), "env", "GOROOT").Output()
 		if err != nil {
 			return nil, fmt.Errorf("cannot find GOROOT: %w", err)
 		}
