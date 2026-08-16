@@ -376,7 +376,10 @@ install-hooks:
 # pkg/rt/generated.sums. This catches the exact drift that a prior go generate
 # or lgbgen invocation would otherwise mask in CI.
 check-generated-manifest: $(GO)
-	@go run ./cmd/check-generated
+	@go run ./cmd/check-generated -stale || { \
+		echo "ERROR: dependency manifest stale or check errored — run 'make generate'."; \
+		exit 1; \
+	}
 
 # Single gate for every generated artifact. One target to remember, and it
 # treats the two artifacts by their actual nature. VCS-agnostic by design:
