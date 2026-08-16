@@ -21,7 +21,7 @@
 ;; Usage:
 ;;   ./lg scripts/gogen-trampoline.lg                 # all of test/gogen/*.lg
 ;;   ./lg scripts/gogen-trampoline.lg FILE.lg [...]   # specific fixtures
-;;   flags: --go <path> (default "go")  --lg <path> (default "./lg")
+;;   flags: --go <path> (default "go")  --lg <path> (default "build/lg")
 
 (require 'ir.passes.pipeline)
 (require 'string)
@@ -36,7 +36,7 @@
 
 (def argv     *command-line-args*)
 (def go-bin   (flag argv "--go" "go"))
-(def lg-bin   (flag argv "--lg" "./lg"))
+(def lg-bin   (flag argv "--lg" "build/lg"))
 (def fixtures
   (let [given (filter (fn [a] (re-find #"\.lg$" (str a))) argv)]
     (if (seq given)

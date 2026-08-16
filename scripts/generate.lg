@@ -13,7 +13,7 @@
 ;; happens to be on PATH:
 ;;
 ;;     --go <path>            go compiler          (default "go")
-;;     --lg <path>            lg binary            (default "./lg")
+;;     --lg <path>            lg binary            (default "build/lg")
 ;;
 ;; Bootstrap note: this script runs ON ./lg (built from the bundle) and shells
 ;; out to `<go> run -tags bootstrap ./cmd/lgbgen` for the bundle and lowered
@@ -39,7 +39,7 @@
 
 (def argv      os/args)
 (def go-bin    (flag argv "--go" "go"))
-(def lg-bin    (flag argv "--lg" "./lg"))
+(def lg-bin    (flag argv "--lg" "build/lg"))
 
 (defn die [msg]
   (println "generate.lg ERROR:" msg)
