@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-14
+last-verified: 2026-08-16
 authoritative-for:
   - terminal-resize-wake
 human-verified: 2026-08-14
@@ -121,6 +121,7 @@ construction but before the first `ReadKey`, proving that the startup
 correction is not lost.
 
 CI runs the ordinary runtime suite and race detector on supported native
-hosts, while a Plan 9 cross-build covers the build-tagged adapter. Interactive
-acceptance testing resizes a Drawterm-backed terminal while `read-key` is
-blocked and confirms that a Letgo TUI redraws without a keypress.
+hosts. For this change, the Let Go executable and `pkg/rt` test binary were
+manually cross-compiled for `plan9/amd64`. Interactive acceptance testing
+resizes a Drawterm-backed terminal while `read-key` is blocked and confirms
+that a Let Go TUI redraws without a keypress.
