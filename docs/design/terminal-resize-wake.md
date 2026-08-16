@@ -51,9 +51,13 @@ polls that pipe alongside stdin. No behavior changes on Linux or macOS.
 ### Plan 9
 
 The Plan 9 root key source wraps `queuedKeySource` and lazily watches the live
-`/env/WINCH` generation. Terminals publish `COLS` and `LINES` before advancing
-`WINCH`, so a changed generation is the commit signal that new dimensions are
-ready. The watcher then queues an internal wake on the source.
+`/env/WINCH` generation. `WINCH` is an optional producer contract rather than
+a universal Plan 9 terminal facility. The behavior is verified with the
+[Windows `-G` console path in the `dharmatech/drawterm` fork][drawterm-winch]:
+it publishes `COLS` and `LINES` first, then increments `WINCH` as the commit
+signal, and exposes those live files to the guest through `/mnt/term/env`.
+Other terminal integrations interoperate when they provide the same ordering.
+The watcher queues an internal wake after observing a changed generation.
 
 The watcher uses a 100 ms ticker. It is event polling, not a busy loop: the
 goroutine sleeps between reads and reads one small environment file per tick.
@@ -62,6 +66,8 @@ unbounded backlog.
 
 If `WINCH` is absent, the watcher quietly waits for it to appear. Input, EOF,
 and `term/size` retain their previous behavior.
+
+[drawterm-winch]: https://github.com/dharmatech/drawterm/commit/f445a501730a9340bff812f60cc9bf53cb932da2
 
 ## 4. API boundary
 
