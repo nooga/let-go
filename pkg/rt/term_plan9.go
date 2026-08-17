@@ -10,11 +10,13 @@ package rt
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -24,10 +26,11 @@ import (
 // "rawon" (Plan 9 has no termios; consctl controls the console), and read-key /
 // key-pending? read through a queuedKeySource (keysource_queued.go) — a
 // background goroutine feeding a byte queue, because Plan 9 lacks the Unix
-// poll(2)/FIONREAD non-blocking peek. The ANSI output functions route through
-// *out* (WriteToOut) like native. size reads $COLS/$LINES (fallback 80x24); real
-// window geometry (/dev/wctl pixels) is a deferred follow-up. open-pty/set-size
-// stay unsupported. mouse decoding is native-only.
+// poll(2)/FIONREAD non-blocking peek. A lazy /env/WINCH watcher wakes that queue
+// on resize. The ANSI output functions route through *out* (WriteToOut) like
+// native. size reads $COLS/$LINES (fallback 80x24); real window geometry
+// (/dev/wctl pixels) is a deferred follow-up. open-pty/set-size stay unsupported.
+// mouse decoding is native-only.
 
 // consctl holds /dev/consctl open while the terminal is in raw mode. Plan 9
 // reverts to cooked mode as soon as this fd closes, so raw-mode! keeps it open
@@ -37,6 +40,86 @@ var (
 	consctlMu sync.Mutex
 )
 
+// plan9KeySource adds resize wakes to the platform-neutral queued source. It
+// remains the process-lifetime root over os.Stdin; embedders that replace
+// *keys* never call it, so neither its reader nor its watcher starts.
+type plan9KeySource struct {
+	*queuedKeySource
+	winchOnce     sync.Once
+	readWinch     func() (string, bool)
+	winchInterval time.Duration
+	initialWinch  string
+	haveInitial   bool
+}
+
+const plan9WinchPollInterval = 100 * time.Millisecond
+
+func newPlan9KeySource(r io.Reader) *plan9KeySource {
+	return newPlan9KeySourceWithWinch(r, func() (string, bool) {
+		return readEnvValue("WINCH")
+	}, plan9WinchPollInterval)
+}
+
+// newPlan9KeySourceWithWinch keeps the generation reader and interval
+// injectable for the Plan 9 startup-race test. Capturing the baseline here —
+// when the term namespace installs the root source — closes the window between
+// the application's first term/size read and its first blocking ReadKey. The
+// reader and watcher goroutines remain lazy.
+func newPlan9KeySourceWithWinch(r io.Reader, readWinch func() (string, bool), interval time.Duration) *plan9KeySource {
+	initial, haveInitial := readWinch()
+	return &plan9KeySource{
+		queuedKeySource: newQueuedKeySource(r),
+		readWinch:       readWinch,
+		winchInterval:   interval,
+		initialWinch:    initial,
+		haveInitial:     haveInitial,
+	}
+}
+
+func (s *plan9KeySource) startWinchWatcher() {
+	s.winchOnce.Do(func() {
+		go s.watchWinch(s.initialWinch, s.haveInitial)
+	})
+}
+
+func (s *plan9KeySource) watchWinch(last string, haveLast bool) {
+	ticker := time.NewTicker(s.winchInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		next, ok := s.readWinch()
+		if !ok {
+			haveLast = false
+			continue
+		}
+		if !haveLast || next != last {
+			last, haveLast = next, true
+			s.wake()
+		}
+	}
+}
+
+func (s *plan9KeySource) ReadKey() (string, error) {
+	s.startWinchWatcher()
+	return s.queuedKeySource.ReadKey()
+}
+
+func (s *plan9KeySource) KeyPending() bool {
+	s.startWinchWatcher()
+	return s.queuedKeySource.KeyPending()
+}
+
+// readEnvValue reads a live Plan 9 environment file and normalizes its value.
+// The bool is false for a missing or empty value, which lets the WINCH watcher
+// establish a fresh baseline if the file appears later.
+func readEnvValue(name string) (string, bool) {
+	b, err := os.ReadFile("/env/" + name)
+	if err != nil {
+		return "", false
+	}
+	v := strings.TrimRight(string(b), "\x00\n\r\t ")
+	return v, v != ""
+}
+
 // readEnvInt reads /env/<name> as a live file and parses it as an int, returning
 // def when the file is missing or unparseable. Plan 9's environment is a
 // filesystem, so reading the file each call picks up updates that os.Getenv's
@@ -44,13 +127,11 @@ var (
 // /env/LINES on every window resize, so the live read is what lets term/size
 // track the real terminal size instead of a stale startup value.
 func readEnvInt(name string, def int) int {
-	b, err := os.ReadFile("/env/" + name)
-	if err != nil {
+	v, ok := readEnvValue(name)
+	if !ok {
 		return def
 	}
-	// /env values can carry a trailing NUL (Plan 9 stores them NUL-terminated)
-	// and/or a newline; trim before parsing.
-	if n, err := strconv.Atoi(strings.TrimRight(string(b), "\x00\n\r\t ")); err == nil {
+	if n, err := strconv.Atoi(v); err == nil {
 		return n
 	}
 	return def
@@ -96,7 +177,7 @@ func installTermNS() {
 	// root — the input dual of the os.Stdout *out* default in iort.go. read-key
 	// and key-pending? consult the bound source, so api.WithKeySource / (binding
 	// [*keys* …]) transparently overrides it for tests and embedders.
-	CoreNS.Lookup("*keys*").(*vm.Var).SetRoot(vm.NewBoxed(NewQueuedKeySource(os.Stdin)))
+	CoreNS.Lookup("*keys*").(*vm.Var).SetRoot(vm.NewBoxed(newPlan9KeySource(os.Stdin)))
 
 	// raw-mode! — enter raw mode by opening /dev/consctl and writing "rawon",
 	// holding the fd (Plan 9 reverts to cooked mode when it closes). Only the

@@ -1,0 +1,45 @@
+;; Promotion smoke: minimal correctness assertions for a freshly built lg.
+;;
+;; This is deliberately NOT a correctness suite. It asserts that a candidate
+;; binary boots, has a usable core, and is not obviously broken — enough to
+;; justify promoting build/lg to bin/lg. Deep semantics are the job of
+;; `make test`, `make ir-stress-gate` and `make gogen-diff`, which are far too
+;; slow to run on every promotion (~2 min each).
+;;
+;; Exits non-zero on the first failed assertion so the Makefile gate trips.
+
+(ns smoke)
+
+(def ^:private failures (atom 0))
+
+(defn- check [label expected actual]
+  (if (= expected actual)
+    (println (str "  ok   " label))
+    (do (swap! failures inc)
+        (println (str "  FAIL " label
+                      "  expected=" (pr-str expected)
+                      " actual=" (pr-str actual))))))
+
+;; --- reader + collection representation ---------------------------------
+;; Set literals must read as set VALUES, and dedup by element. Regression
+;; cover for the (hash-set ..) -> set representation change.
+(check "set literal reads as a set" true (set? #{1 2}))
+(check "set literal dedups"          3   (count (into #{} [1 2 2 3])))
+(check "set dedups repeats"          1   (count (into #{} [1 1 1])))
+(check "map literal reads as a map"  true (map? {:a 1}))
+(check "vector literal"              [1 2] [1 2])
+
+;; --- core is loaded and callable ----------------------------------------
+(check "core fn resolves"    6   (reduce + [1 2 3]))
+(check "string ns loaded"    "a-b" (clojure.string/join "-" ["a" "b"]))
+(check "seq over a map"      1   (count (seq {:a 1})))
+
+;; NOTE: deliberately minimal. Collection-traversal and syntax-quote
+;; assertions live in the test suite (defrecord_field_scope_test.lg,
+;; special_forms_test.lg, expand_all_collections_test.lg) rather than here —
+;; some of those behaviours are fixed on branches ABOVE this one, and a
+;; promotion gate must assert only what is true at its own base.
+
+(if (pos? @failures)
+  (do (println (str "smoke: " @failures " assertion(s) FAILED")) (System/exit 1))
+  (println "smoke: all correctness assertions passed"))

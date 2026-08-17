@@ -14,14 +14,20 @@
  * an embedder or test can feed synthetic keys.
  *
  * Scope: ReadKey + KeyPending only. Terminal geometry (size / set-size) stays
- * a separate term op, and wake — unblocking a parked ReadKey without a real
- * key — is deferred (see the note in pkg/rt/wasm/lg-host.js); it needs a
- * SAB-level protocol this seam leaves room for but doesn't introduce.
+ * a separate term op. Platform sources may surface an external terminal event
+ * as terminalWakeKey, but wake remains an implementation detail rather than a
+ * method on the public seam; WASM still needs a SAB-level wake protocol.
  */
 
 package rt
 
 import "github.com/nooga/let-go/pkg/vm"
+
+// terminalWakeKey is the synthetic key returned when an external terminal
+// event interrupts a blocked ReadKey. BEL preserves the native SIGWINCH
+// contract introduced in #165: callers treat it as an unknown key, then run
+// their ordinary term/size check on the next loop iteration.
+const terminalWakeKey = "\x07"
 
 // KeySource is a source of keypresses for term/read-key and key-pending?.
 type KeySource interface {

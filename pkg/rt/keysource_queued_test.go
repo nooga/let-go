@@ -244,6 +244,88 @@ func TestQueuedKeySourceKeyPending(t *testing.T) {
 	}
 }
 
+// TestQueuedKeySourceWake verifies the platform-adapter wake contract: a wake
+// interrupts a parked read, surfaces through KeyPending, and is consumed as the
+// same synthetic BEL used by native SIGWINCH handling.
+func TestQueuedKeySourceWake(t *testing.T) {
+	ch := make(chan []byte)
+	ks := newSource(&chunkReader{ch: ch})
+
+	result := make(chan string, 1)
+	go func() {
+		k, _ := ks.ReadKey()
+		result <- k
+	}()
+	ks.wake()
+
+	select {
+	case got := <-result:
+		if got != terminalWakeKey {
+			t.Fatalf("wake key = %q, want %q", got, terminalWakeKey)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wake did not interrupt blocked ReadKey")
+	}
+	close(ch)
+}
+
+func TestQueuedKeySourceWakePendingAndCoalescing(t *testing.T) {
+	ch := make(chan []byte)
+	ks := newSource(&chunkReader{ch: ch})
+
+	ks.wake()
+	ks.wake()
+	ks.wake()
+	if !ks.KeyPending() {
+		t.Fatal("KeyPending false with a queued wake")
+	}
+	if k, err := ks.ReadKey(); k != terminalWakeKey || err != nil {
+		t.Fatalf("ReadKey wake = (%q, %v), want (%q, nil)", k, err, terminalWakeKey)
+	}
+	if ks.KeyPending() {
+		t.Fatal("resize wake burst did not coalesce")
+	}
+	close(ch)
+}
+
+func TestQueuedKeySourcePrefersInputOverWake(t *testing.T) {
+	ch := make(chan []byte, 1)
+	ks := newSource(&chunkReader{ch: ch})
+	ch <- []byte("x")
+	if !eventually(func() bool { return ks.KeyPending() }) {
+		t.Fatal("input never reached queued source")
+	}
+	ks.wake()
+
+	if k, err := ks.ReadKey(); k != "x" || err != nil {
+		t.Fatalf("first ReadKey = (%q, %v), want real input", k, err)
+	}
+	if !ks.KeyPending() {
+		t.Fatal("wake was lost after real input took priority")
+	}
+	if k, err := ks.ReadKey(); k != terminalWakeKey || err != nil {
+		t.Fatalf("second ReadKey = (%q, %v), want pending wake", k, err)
+	}
+	close(ch)
+}
+
+func TestQueuedKeySourceEOFPrecedesWake(t *testing.T) {
+	ch := make(chan []byte)
+	close(ch)
+	ks := newSource(&chunkReader{ch: ch})
+
+	if k, err := ks.ReadKey(); k != "" || err != nil {
+		t.Fatalf("initial EOF = (%q, %v), want (\"\", nil)", k, err)
+	}
+	ks.wake()
+	if ks.KeyPending() {
+		t.Fatal("wake became pending after reader EOF")
+	}
+	if k, err := ks.ReadKey(); k != "" || err != nil {
+		t.Fatalf("EOF after wake = (%q, %v), want (\"\", nil)", k, err)
+	}
+}
+
 func eventually(cond func() bool) bool {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {

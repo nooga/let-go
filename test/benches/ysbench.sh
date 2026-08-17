@@ -16,10 +16,11 @@ if [ ! -d "$YS_SRC/yamlstar" ]; then
   exit 0
 fi
 
-[ -x ./lg ] || go build -o lg .
+LG="${LG:-build/lg}"
+[ -x "$LG" ] || { mkdir -p "$(dirname "$LG")"; go build -o "$LG" .; }
 
 run() {
-  LG_SOURCE_PATHS="$YS_SRC" ./lg test/benches/ysbench.lg "$1" \
+  LG_SOURCE_PATHS="$YS_SRC" "$LG" test/benches/ysbench.lg "$1" \
     | tee /dev/stderr | awk '/^ms-per-call:/{print $2}'
 }
 
