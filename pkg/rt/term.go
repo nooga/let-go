@@ -57,7 +57,7 @@ func setupWinch() {
 			for range sigCh {
 				// One BEL per SIGWINCH. Storms collapse — the read side
 				// drains whatever's pending in a single Read regardless.
-				_, _ = w.Write([]byte{0x07})
+				_, _ = w.Write([]byte{terminalWakeKey[0]})
 			}
 		}()
 	})
@@ -128,7 +128,7 @@ func (s nativeKeySource) ReadKey() (string, error) {
 				return "", nil // EOF / nil contract
 			}
 			if isWinchWake(chunk) {
-				return "\x07", nil // SIGWINCH wake — synthetic, not tokenized
+				return terminalWakeKey, nil // SIGWINCH wake — synthetic, not tokenized
 			}
 			keyBuf = chunk
 		}
@@ -158,7 +158,7 @@ func (s nativeKeySource) ReadKey() (string, error) {
 }
 
 func isWinchWake(b []byte) bool {
-	return len(b) == 1 && b[0] == '\x07'
+	return len(b) == 1 && b[0] == terminalWakeKey[0]
 }
 
 // readRaw does one blocking poll+read, returning raw stdin bytes, nil on EOF,
@@ -236,7 +236,7 @@ func (nativeKeySource) readRaw() ([]byte, error) {
 	}
 
 	// Only the wake fired — return BEL so the loop's term/size diff runs.
-	return []byte{'\x07'}, nil
+	return []byte{terminalWakeKey[0]}, nil
 }
 
 func (s nativeKeySource) KeyPending() bool {
