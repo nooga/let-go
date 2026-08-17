@@ -13,7 +13,7 @@
 ;; happens to be on PATH:
 ;;
 ;;     --go <path>            go compiler          (default "go")
-;;     --lg <path>            lg binary            (default "./lg")
+;;     --lg <path>            lg binary            (default "build/lg")
 ;;
 ;; Bootstrap note: this script runs ON ./lg (built from the bundle) and shells
 ;; out to `<go> run -tags bootstrap ./cmd/lgbgen` for the bundle and lowered
@@ -39,7 +39,7 @@
 
 (def argv      os/args)
 (def go-bin    (flag argv "--go" "go"))
-(def lg-bin    (flag argv "--lg" "./lg"))
+(def lg-bin    (flag argv "--lg" "build/lg"))
 
 (defn die [msg]
   (println "generate.lg ERROR:" msg)
@@ -109,6 +109,16 @@
         (die (str "command failed (exit " code "): " line
                   " — see the child's output above for the underlying error"))))))
 
+;; --- selective regen: consult the committed dependency manifest ---
+;; A stale list is successful query output. A non-zero status means the query
+;; itself failed and must never be mistaken for an empty stale set.
+(defn query-stale! [mode]
+  (let [r (os/sh go-bin "run" "./cmd/check-generated" "-go" go-bin mode)]
+    (when (not= 0 (:exit r))
+      (when (> (count (:err r)) 0) (println (:err r)))
+      (die (str "dependency staleness query failed (exit " (:exit r) ")")))
+    (set (re-seq #"[^\n]+" (:out r)))))
+
 ;; --- provenance ---
 (defn read-prior []
   (let [r (os/sh "cat" PROVENANCE)]
@@ -141,6 +151,13 @@
 (gen-go   "scripts/gen/ir_bridge_generated.head" "pkg/ir/ir_bridge.lg" "pkg/rt/ir_bridge_generated.go")
 (gen-lisp "pkg/ir/ir_data.lg" "pkg/rt/core/ir/data/generated.lg")
 
+;; Query only after the unconditional IR stages above: their outputs are lgbgen
+;; inputs, so the pre-stage stale set is no longer authoritative.
+(def stale-outputs (query-stale! "-needs-generation"))
+
+(defn stale? [& outs]
+  (some stale-outputs outs))
+
 ;; Invoke cmd/lgprimgen to generate the primitive registrar.
 ;; Scans pkg/rt for //lg:native-annotated functions and generates adapters +
 ;; registrations. lgprimgen is a runtime-free codegen tool (go/ast scan, string
@@ -150,20 +167,43 @@
 ;; replaces them has not been generated yet and the runtime cannot boot. Using
 ;; the runtime-coupled cmd/lginterop here would make this step depend on the
 ;; very artifact it produces.
-(run! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt" "-go-pkg" "github.com/nooga/let-go/pkg/rt" "-primitives-out" "pkg/rt/zz_primitives_generated.go")
+(if (stale? "pkg/rt/zz_primitives_generated.go")
+  (run! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt" "-go-pkg" "github.com/nooga/let-go/pkg/rt" "-primitives-out" "pkg/rt/zz_primitives_generated.go")
+  (println "generate.lg: registrars fresh — skipped"))
+
+;; Separate corefns registrar generation stage. The corefns namespace has its
+;; own //lg:native-annotated functions that are scanned and generated independently.
+(if (stale? "pkg/rt/corefns/zz_primitives_generated.go")
+  (run! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt/corefns" "-go-pkg" "github.com/nooga/let-go/pkg/rt/corefns" "-primitives-out" "pkg/rt/corefns/zz_primitives_generated.go")
+  (println "generate.lg: corefns registrar fresh — skipped"))
+
+;; Registrar outputs are themselves lgbgen build inputs. Requery after those
+;; upstream stages too, so a changed registrar propagates to the core compile.
+(def stale-outputs (query-stale! "-needs-generation"))
 
 ;; One core compile emits BOTH the .lgb bundle and the gogen_ir Go tree.
 ;; Hermetic generation (clearing the stale lowered-tree before regen) is
 ;; handled inside lgbgen's runGoTarget, so every entry point — `make generate`
 ;; here, plus `make lowered`/`make check-generated` which call lgbgen directly —
 ;; gets the clean.
-(run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both")
+(if (stale? "pkg/rt/core_compiled.lgb" "pkg/rt/core_go_lowered/")
+  (run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both")
+  (println "generate.lg: bundle + lowered tree fresh — skipped"))
+
+;; Refresh the dependency manifest so the recorded input hashes match the
+;; sources just consumed. generated.sums (the CI roll-up) hashes this file.
+(run! go-bin "run" "./cmd/check-generated" "-go" go-bin "-write-manifest")
 
 ;; AC-1 zero-lag gate: The coherence check (assert-form-head-coherence!) is invoked
 ;; at load time within build.lg during lgbgen's bootstrap phase. This happens on EVERY
 ;; `make generate` pass (the check is embedded in source, so it never becomes stale),
 ;; catching handler omissions immediately on the same pass they occur. The bootstrap
 ;; output above confirms "ir.form-heads catalog loaded (bidirectional coherence check passed)".
+
+;; Immediately after writing the manifest, refresh the canonical digest so
+;; generated.sums records the new manifest hash. This ensures
+;; TestGeneratedArtifactsAreFresh stays green after any source edit.
+(run! go-bin "run" "./cmd/check-generated" "-go" go-bin "-write")
 
 (spit PROVENANCE
       (pr-str {:lg-version  cur-version

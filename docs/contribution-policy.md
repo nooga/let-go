@@ -214,6 +214,33 @@ The default `lg` binary stays lean.
 
 ---
 
+## Build outputs
+
+Compiled binaries never live at the repository root. `make` writes what it
+builds into `build/`, and promotes the current `lg` into `bin/`. Both
+directories are gitignored, and `make clean` removes both.
+
+Build ad-hoc tools the same way:
+
+```
+go build -o build/lgbgen ./cmd/lgbgen        # not: go build ./cmd/lgbgen
+```
+
+A bare `go build ./cmd/<tool>` writes the binary into the current directory
+under the package name, where nothing ignores it. `check-generated` reached a
+working copy exactly that way — a `go build -o check-generated` output named
+after the make target, 3.1 MB of Mach-O, unignored because the per-binary
+ignore list was maintained by noticing.
+
+This is enforced rather than requested. The `forbid-compiled-binaries` hook
+inspects magic bytes (ELF, Mach-O, PE) and refuses a staged executable at
+commit and at push. It runs at both stages because a jj working copy is
+snapshotted by jj itself, so `git commit` never runs and the pre-commit stage
+never fires for a jj-based workflow.
+
+The repository does keep binary assets: the `LGB\x01` core bundle and image
+files. Detection is magic-byte based, so those are not affected.
+
 ## How CI enforces this today
 
 `make check-generated` and `make parity-full` run on every PR via

@@ -2,7 +2,7 @@
 set -e
 cd "$(dirname "$0")/../.."
 
-LG="./lg"
+LG="${LG:-build/lg}"
 DIR="test/namespace_shadow_warning_test"
 fail=0
 
