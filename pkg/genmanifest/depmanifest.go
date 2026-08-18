@@ -552,6 +552,7 @@ func ReadDepManifest(repoRoot string) ([]HashedEdge, error) {
 	}
 	defer f.Close()
 	var out []HashedEdge
+	seen := make(map[Edge]struct{})
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
@@ -569,7 +570,18 @@ func ReadDepManifest(repoRoot string) ([]HashedEdge, error) {
 				return nil, fmt.Errorf("decode manifest field %q: %w", parts[i], err)
 			}
 		}
-		out = append(out, HashedEdge{Edge{fields[0], fields[1], fields[2]}, parts[3]})
+		edge := Edge{fields[0], fields[1], fields[2]}
+		// This file has no merge driver and is one sorted record per line, so a
+		// clean text merge can land both sides' record for the same edge. Every
+		// downstream lookup is map-keyed and keeps whichever record came last,
+		// so the conflict would resolve silently to one side. Refuse instead: no
+		// digest should be taken over a manifest recording two hashes for one input.
+		if _, dup := seen[edge]; dup {
+			return nil, fmt.Errorf("duplicate manifest entry for %s %s %s",
+				edge.Output, edge.Input, edge.Kind)
+		}
+		seen[edge] = struct{}{}
+		out = append(out, HashedEdge{edge, parts[3]})
 	}
 	return out, sc.Err()
 }
