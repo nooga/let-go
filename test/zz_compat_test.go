@@ -80,9 +80,11 @@ func TestClojureTestSuite(t *testing.T) {
 	origLoader := rt.GetNSLoader()
 	defer rt.SetNSLoader(origLoader)
 
-	c := vm.NewConsts()
+	// Loader/shim setup is complete before cases start; each case allocates its
+	// own pool in runCompatTest so leaked workers never write this pool.
+	bootstrapConsts := vm.NewConsts()
 	coreNS := rt.NS(rt.NameCoreNS)
-	loaderCtx := compiler.NewCompiler(c, coreNS)
+	loaderCtx := compiler.NewCompiler(bootstrapConsts, coreNS)
 	rt.SetNSLoader(resolver.NewNSResolver(loaderCtx, []string{
 		"compat",
 		"clojure-test-suite/test",
@@ -90,7 +92,7 @@ func TestClojureTestSuite(t *testing.T) {
 	}))
 
 	// Load portability shim (provides when-var-exists and thrown? macros)
-	portCtx := compiler.NewCompiler(c, coreNS)
+	portCtx := compiler.NewCompiler(bootstrapConsts, coreNS)
 	portCtx.SetSource("compat/clojure/core-test/portability.lg")
 	pf, err := os.Open("compat/clojure/core-test/portability.lg")
 	if err != nil {
@@ -110,7 +112,7 @@ func TestClojureTestSuite(t *testing.T) {
 	// subtests and the assertion text, which is what makes an IR regression
 	// diagnosable rather than merely countable.
 	if suiteIRMode() {
-		irCtx := compiler.NewCompiler(c, coreNS)
+		irCtx := compiler.NewCompiler(bootstrapConsts, coreNS)
 		if _, _, err := irCtx.CompileMultiple(strings.NewReader(
 			"(require 'ir.passes.pipeline)\n(set! *ir-compile* true)",
 		)); err != nil {
@@ -121,7 +123,7 @@ func TestClojureTestSuite(t *testing.T) {
 			// flag stays ON and leaks into every later test in the package
 			// (TestRunner's .lg suite included), corrupting unrelated results
 			// while still looking clean. Report it rather than discarding it.
-			reset := compiler.NewCompiler(c, coreNS)
+			reset := compiler.NewCompiler(bootstrapConsts, coreNS)
 			if _, _, err := reset.CompileMultiple(strings.NewReader("(set! *ir-compile* false)")); err != nil {
 				t.Errorf("failed to reset *ir-compile* — later tests in this package "+
 					"may run with IR compilation still enabled: %v", err)
@@ -150,7 +152,7 @@ func TestClojureTestSuite(t *testing.T) {
 		}
 
 		t.Run(name, func(t *testing.T) {
-			runCompatTest(t, c, file, totals)
+			runCompatTest(t, file, totals)
 		})
 	}
 
@@ -208,7 +210,10 @@ func nsNameFromCompatPath(filename string) string {
 	return parent + "." + strings.ReplaceAll(dir, "_", "-") + "." + strings.ReplaceAll(base, "_", "-")
 }
 
-func runCompatTest(t *testing.T, c *vm.Consts, filename string, totals *suiteCounters) {
+func runCompatTest(t *testing.T, filename string, totals *suiteCounters) {
+	// A timed-out case leaves its worker goroutine running. Keep its constant
+	// pool private so it cannot race the next case's compiler through Consts.
+	c := vm.NewConsts()
 	ch := make(chan compatTestResult, 1)
 	runtime.GC()
 	baseAlloc := currentAlloc()
