@@ -145,6 +145,15 @@ const (
 	TagAtom       byte = TagIDAtom | TagVer0
 )
 
+// Versioned tag variants.
+const (
+	// TagDefMetaPairs stores alternating metadata keys and values using the map
+	// payload shape without eagerly constructing a PersistentMap at decode.
+	// Older v2 readers reject the non-zero tag version instead of silently
+	// treating the compact representation as ordinary metadata.
+	TagDefMetaPairs byte = TagIDMap | TagVer1
+)
+
 // Reserved tag IDs for future standard tags (0x34–0x3F).
 const (
 	TagIDReserved0  byte = 0x34

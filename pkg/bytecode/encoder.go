@@ -354,6 +354,10 @@ func (b *ModuleBuilder) internStringsForValue(v vm.Value) {
 			b.internStringsForValue(s.First())
 			s = s.Next()
 		}
+	case vm.DefMetaPairs:
+		for _, item := range val {
+			b.internStringsForValue(item)
+		}
 	case vm.ArrayVector:
 		for _, item := range val {
 			b.internStringsForValue(item)
@@ -669,6 +673,22 @@ func (e *encoder) writeValue(v vm.Value) error {
 			return err
 		}
 		return e.writeSeqConsts(val)
+	case vm.DefMetaPairs:
+		if len(val)%2 != 0 {
+			return fmt.Errorf("def metadata has odd pair count %d", len(val))
+		}
+		if err := e.w.WriteByte(TagDefMetaPairs); err != nil {
+			return err
+		}
+		if err := e.w.WriteVarint(uint64(len(val) / 2)); err != nil {
+			return err
+		}
+		for _, item := range val {
+			if err := e.writeValue(item); err != nil {
+				return err
+			}
+		}
+		return nil
 	case vm.ArrayVector:
 		if err := e.w.WriteByte(TagVector); err != nil {
 			return err

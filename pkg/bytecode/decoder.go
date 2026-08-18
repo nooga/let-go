@@ -1223,6 +1223,21 @@ func (d *decoder) readVectorBatch() (vm.Value, error) {
 	return items, nil
 }
 
+func (d *decoder) readDefMetaPairs() (vm.Value, error) {
+	count, err := d.r.ReadVarint()
+	if err != nil {
+		return nil, fmt.Errorf("reading def metadata count: %w", err)
+	}
+	pairs := make(vm.DefMetaPairs, int(count)*2)
+	for i := range pairs {
+		pairs[i], err = d.readValueV2()
+		if err != nil {
+			return nil, fmt.Errorf("reading def metadata value[%d]: %w", i, err)
+		}
+	}
+	return pairs, nil
+}
+
 func (d *decoder) readMapBatch() (vm.Value, error) {
 	count, err := d.r.ReadVarint()
 	if err != nil {
@@ -1349,7 +1364,7 @@ func (d *decoder) readValueV2() (vm.Value, error) {
 		d.stats.addTag(tagID)
 	}
 
-	if tagVer != 0 && isKnownTagID(tagID) {
+	if tagVer != 0 && (tagID != TagIDMap || tagVer != 1) && isKnownTagID(tagID) {
 		return nil, fmt.Errorf("unsupported tag version %d for tag ID 0x%02x", tagVer, tagID)
 	}
 
@@ -1494,6 +1509,9 @@ func (d *decoder) readValueV2() (vm.Value, error) {
 	case TagIDVector:
 		return d.readVectorBatch()
 	case TagIDMap:
+		if tagVer == 1 {
+			return d.readDefMetaPairs()
+		}
 		return d.readMapBatch()
 	case TagIDSet:
 		return d.readSetBatch()
