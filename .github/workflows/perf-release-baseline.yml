@@ -1,0 +1,218 @@
+name: Perf Release Baseline
+
+# On every release tag (v*), capture one anchor-normalized perf run, freeze it
+# at docs/perf/historical/<tag>.json, and tighten-merge that same run into the
+# active docs/perf/baseline.json consumed by bench-ratchet. main is protected,
+# so both updates land through one recoverable automation PR.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to freeze a baseline for (e.g. v1.9.0)'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: perf-release-baseline
+  cancel-in-progress: false
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+){2}([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid release tag: $TAG" >&2
+            exit 1
+          fi
+          tag_commit="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "$head_commit" != "$tag_commit" ]]; then
+            echo "checkout ${head_commit} does not resolve exact tag ${TAG} (${tag_commit})" >&2
+            exit 1
+          fi
+          printf 'name=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing frozen baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          out="docs/perf/historical/${TAG}.json"
+          branch="perf/baseline-${TAG}"
+          closed_pr=""
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if git cat-file -e "origin/main:${out}" 2>/dev/null; then
+            echo "Baseline ${out} is already frozen; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+              --base main --head "$branch" --json number --jq '.[0].number // empty')"
+            closed_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state closed \
+              --base main --head "$branch" --json number,mergedAt \
+              --jq '[.[] | select(.mergedAt == null)][0].number // empty')"
+            if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
+              if [[ -n "$open_pr" ]]; then
+                echo "Automation PR #${open_pr} is already open; nothing to do."
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "Deleting stale automation branch ${branch} before recovery."
+                git push origin --delete "$branch"
+                echo "skip=false" >> "$GITHUB_OUTPUT"
+              fi
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          printf 'path=%s\n' "$out" >> "$GITHUB_OUTPUT"
+          printf 'closed_pr=%s\n' "$closed_pr" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        if: steps.baseline.outputs.skip != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Generate lowered runtime
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Releases before v1.10.0 predate the lowered-Go tree and have no
+          # `lowered` target, so an unconditional `make lowered` makes those tags
+          # unbackfillable. Skip when the target is absent: at those releases
+          # `-tags gogen_ir` matches no files and is already a no-op.
+          if make -n lowered >/dev/null 2>&1; then
+            make lowered
+          else
+            echo "no 'lowered' target at this tag; pre-lowered-Go release, skipping"
+          fi
+
+      - name: Capture immutable per-release baseline
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          OUT: ${{ steps.baseline.outputs.path }}
+        run: |
+          set -euo pipefail
+          mkdir -p docs/perf/historical
+          # capture/aggregate are supported by every backfillable release,
+          # including v1.9.0. Capture once so the immutable release snapshot and
+          # active gate baseline consume identical measurements.
+          raw="${RUNNER_TEMP}/release-${{ steps.tag.outputs.name }}.jsonl"
+          capture_log="${RUNNER_TEMP}/release-capture.log"
+          set +e
+          go run ./cmd/bench-ratchet \
+            -full \
+            -count 3 \
+            -benchtime 2s \
+            -timeout 30m \
+            -out "$raw" \
+            capture 2>&1 | tee "$capture_log"
+          capture_rc="${PIPESTATUS[0]}"
+          set -e
+          # capture deliberately preserves partial results and reports individual
+          # package failures as warnings. A frozen `-full` release snapshot must
+          # instead be complete, so make either failure mode fatal here.
+          if (( capture_rc != 0 )) || grep -q 'warn:' "$capture_log"; then
+            echo "Release baseline capture was incomplete; refusing to freeze it." >&2
+            exit 1
+          fi
+          if [[ -e "$OUT" ]]; then
+            # A tag may already carry a manually frozen snapshot. Preserve its
+            # immutable bytes, but still consume this tag's fresh capture in the
+            # active current-main gate below.
+            echo "Tag already contains ${OUT}; preserving it."
+          else
+            go run ./cmd/bench-ratchet -in "$raw" -baseline "$OUT" aggregate
+          fi
+          {
+            echo "CAPTURE_SHA=$(git rev-parse HEAD)"
+            echo "FROZEN=$OUT"
+            echo "RAW_CAPTURE=$raw"
+          } >> "$GITHUB_ENV"
+
+      - name: Prepare publication branch from current main
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          frozen_tmp="${RUNNER_TEMP}/frozen-${TAG}.json"
+          cp "$FROZEN" "$frozen_tmp"
+          branch="perf/baseline-${TAG}"
+          # A full capture is long enough for main to advance. Re-fetch so the
+          # data PR never reverts a baseline/profile that landed meanwhile.
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if git cat-file -e "origin/main:${FROZEN}" 2>/dev/null; then
+            echo "Baseline ${FROZEN} landed during capture; rerun to skip cleanly." >&2
+            exit 1
+          fi
+          git checkout --force -B "$branch" origin/main
+          git submodule update --init --recursive
+          mkdir -p docs/perf/historical
+          cp "$frozen_tmp" "$FROZEN"
+
+      - name: Set up current Go
+        if: steps.baseline.outputs.skip != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tighten active gate from the release capture
+        if: steps.baseline.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Run the current-main tool against current-main baseline schema. This
+          # matters for old tags (v1.9-v1.11 use schema v1) and preserves every
+          # existing machine profile while MIN-merging the release measurement.
+          go run ./cmd/bench-ratchet -in "$RAW_CAPTURE" -sha "$CAPTURE_SHA" \
+            -baseline docs/perf/baseline.json aggregate
+
+      - name: Open PR with the frozen baseline
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          CLOSED_PR: ${{ steps.baseline.outputs.closed_pr }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          tag="$TAG"
+          branch="perf/baseline-${tag}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FROZEN" docs/perf/baseline.json
+          if git diff --cached --quiet; then
+            echo "No baseline changes to commit (already frozen?)."
+            exit 1
+          fi
+          git commit -m "perf: freeze release baseline ${tag}"
+          git push -u origin "$branch"
+          if [[ -n "$CLOSED_PR" ]]; then
+            gh pr reopen "$CLOSED_PR"
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "perf: freeze release baseline ${tag}" \
+              --body "Immutable, anchor-normalized perf baseline captured at \`${tag}\` (\`${FROZEN}\`). The identical capture is tighten-only merged into \`docs/perf/baseline.json\`, so the current ratchet gate consumes the release anchor. Auto-generated by the Perf Release Baseline workflow."
+          fi
