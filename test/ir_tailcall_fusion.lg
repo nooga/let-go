@@ -1,0 +1,154 @@
+;; Test: tail-call fusion parity (#625 fix 4)
+;;
+;; The tail-call fusion fix ensures that :return of a single-use :call lowers
+;; as TAIL_CALL (frame reuse) instead of INVOKE+RETURN. This mirrors the plain
+;; bytecode compiler's tail-position emission and saves a stack frame per call,
+;; mirroring TCO behavior where applicable.
+;;
+;; The test constructs functions with tail calls in various forms and verifies
+;; that the IR-compiled and bytecode-compiled versions produce identical results.
+;; Tail calls are calls that are the last expression in their function.
+(ns test.ir-tailcall-fusion-test
+  (:require
+   [disasm :as d]
+   [ir.build]
+   [ir.data :as ir]
+   [ir.lower :as lower]
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+;; Bytecode path: simple recursive tail call
+(defn countdown-bytecode [n]
+  (if (<= n 0)
+    :done
+    (countdown-bytecode (dec n))))
+
+;; IR-compile path: should match bytecode
+(set! *ir-compile* true)
+(set! *ir-compile-strict* true)
+
+(defn countdown-ir [n]
+  (if (<= n 0)
+    :done
+    (countdown-ir (dec n))))
+
+(set! *ir-compile-strict* false)
+(set! *ir-compile* false)
+
+;; Another shape: tail call in conditional (if true branch is a tail call)
+(defn tail-in-if-bytecode [n]
+  (if (< n 0)
+    :negative
+    (tail-in-if-bytecode (dec n))))  ; tail call in true branch
+
+(set! *ir-compile* true)
+(set! *ir-compile-strict* true)
+
+(defn tail-in-if-ir [n]
+  (if (< n 0)
+    :negative
+    (tail-in-if-ir (dec n))))
+
+(set! *ir-compile-strict* false)
+(set! *ir-compile* false)
+
+;; Accumulator-passing style (APS): tail recursion
+(defn sum-aps-bytecode [n acc]
+  (if (= n 0)
+    acc
+    (sum-aps-bytecode (dec n) (+ acc n))))
+
+(set! *ir-compile* true)
+(set! *ir-compile-strict* true)
+
+(defn sum-aps-ir [n acc]
+  (if (= n 0)
+    acc
+    (sum-aps-ir (dec n) (+ acc n))))
+
+(set! *ir-compile-strict* false)
+(set! *ir-compile* false)
+
+;; Tail call within a let binding
+(defn tail-in-let-bytecode [n]
+  (let [f countdown-bytecode]
+    (f n)))
+
+(set! *ir-compile* true)
+(set! *ir-compile-strict* true)
+
+(defn tail-in-let-ir [n]
+  (let [f countdown-ir]
+    (f n)))
+
+(set! *ir-compile-strict* false)
+(set! *ir-compile* false)
+
+(defn- ops-of [f]
+  "Opcode keywords of f's chunk, in order."
+  (map first (d/disassemble-resolved f)))
+
+(defn- count-op [f op]
+  (count (filter (fn [o] (= o op)) (ops-of f))))
+
+(defn- nids-with-op [f wanted]
+  (filter (fn [nid] (= wanted (ir/op nid f)))
+          (mapcat (fn [bid] (ir/block-insts bid f)) (ir/blocks f))))
+
+(def guarded-tail-source-ir
+  (ir.build/build-fn
+   '(defn guarded-tail-source-ir []
+      (try
+        (identity :ok)
+        (catch _ :caught)))))
+
+(deftest ir-tailcall-fusion-bytecode-shape
+  (testing "tail call through a let-bound function"
+    ;; Direct self-recursion is lowered through :recur-fn before this pass.
+    ;; The let-bound call remains a :call in return position and therefore
+    ;; exercises this fusion specifically.
+    (is (pos? (count-op tail-in-let-ir :TAIL_CALL)))
+    (is (zero? (count-op tail-in-let-ir :INVOKE)))))
+
+(deftest ir-tailcall-fusion-try-frame-isolation
+  (testing "the guarded frame owns :try while its body call lives in an inner fn"
+    (let [try-nids      (nids-with-op guarded-tail-source-ir :try)
+          try-nid       (first try-nids)
+          body-ref      (first (ir/refs try-nid guarded-tail-source-ir))
+          body-template (ir/aux body-ref guarded-tail-source-ir)
+          body-fn       (:fn body-template)
+          body-ops      (ops-of (lower/lower body-fn))]
+      (is (= 1 (count try-nids)))
+      (is (= true (:has-handler (ir/aux try-nid guarded-tail-source-ir))))
+      (is (zero? (count (nids-with-op guarded-tail-source-ir :call))))
+      (is (= :const (ir/op body-ref guarded-tail-source-ir)))
+      (is (= :fn-template (:kind body-template)))
+      (is (= 1 (count (nids-with-op body-fn :call))))
+      (is (pos? (count (filter (fn [op] (= :TAIL_CALL op)) body-ops))))
+      (is (zero? (count (filter (fn [op] (= :INVOKE op)) body-ops)))))))
+
+(deftest ir-tailcall-fusion-parity
+  (testing "tail-call fusion: simple self-recursion"
+    ;; Both compiler paths emit TAIL_CALL for this tail position.
+    ;; They should produce the same result (and not overflow the stack on deep recursion)
+    (is (= (countdown-bytecode 10) (countdown-ir 10)))
+    (is (= :done (countdown-ir 10)))
+    (is (= (countdown-bytecode 50) (countdown-ir 50)))
+    (is (= :done (countdown-ir 50))))
+  (testing "tail-call fusion: tail call in if branch"
+    ;; The true branch of the if is a tail call
+    (is (= (tail-in-if-bytecode 0) (tail-in-if-ir 0)))
+    (is (= (tail-in-if-bytecode -1) (tail-in-if-ir -1)))
+    (is (= :negative (tail-in-if-ir -1))))
+  (testing "tail-call fusion: accumulator-passing style"
+    ;; Classic tail-recursive pattern
+    (is (= (sum-aps-bytecode 10 0) (sum-aps-ir 10 0)))
+    (is (= 55 (sum-aps-ir 10 0)))  ; 1+2+...+10
+    (is (= (sum-aps-bytecode 100 0) (sum-aps-ir 100 0)))
+    (is (= 5050 (sum-aps-ir 100 0)))
+    (is (= (sum-aps-bytecode 1000 0) (sum-aps-ir 1000 0)))
+    (is (= 500500 (sum-aps-ir 1000 0))))
+  (testing "tail-call fusion: tail call within let binding"
+    ;; f is bound to the countdown function, then called in tail position
+    (is (= (tail-in-let-bytecode 10) (tail-in-let-ir 10)))
+    (is (= :done (tail-in-let-ir 10)))))

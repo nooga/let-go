@@ -795,7 +795,32 @@
         (when (= term-op :branch-if)
           (let [cond-ref (first (ir/refs term f))]
             (when (deferrable-branch-if-cond? l term cond-ref)
-              cond-ref)))]
+              cond-ref)))
+        ;; Tail-call fusion: a :return whose value is a single-use :call
+        ;; that is this block's last live inst lowers as TAIL_CALL (frame
+        ;; reuse) instead of INVOKE+RETURN — mirroring the plain bytecode
+        ;; compiler's tail-position emission. Safe w.r.t. try: the IR
+        ;; models try bodies as inner closures referenced by a :try inst,
+        ;; so a fusable :call is never inside a guarded region of this
+        ;; frame.
+        fused-tail-call
+        (when (= term-op :return)
+          (let [r (first (ir/refs term f))]
+            (when (and r
+                       (= :call (ir/op r f))
+                       (= 1 (use-count-of l r))
+                       (let [uses (:uses @l)
+                             us   (when (< r (count uses)) (nth uses r))]
+                         (and us
+                              (not (ir/uses-empty? us))
+                              (= term (ir/uses-first us))))
+                       ;; Must be the last live inst of THIS block so
+                       ;; skipping it in the body walk reorders nothing.
+                       (let [remaining (drop-while (fn [x] (not= x r)) insts)]
+                         (and (seq remaining)
+                              (every? (fn [x] (= :invalid (ir/op x f)))
+                                      (rest remaining)))))
+              r)))]
     ;; Block-args are pre-placed by predecessors. Entry block has none.
     (set-stack-sp! l (count params))
     (loop [i 0]
@@ -816,6 +841,8 @@
           (doseq [r (ir/refs nid f)] (decrement-use! l r))
           ;; Deferred cond (emitted after branch-target args).
           (and deferred-cond (= nid deferred-cond)) nil
+          ;; Tail-call-fused call (emitted as part of the terminator).
+          (and fused-tail-call (= nid fused-tail-call)) nil
           ;; Cheap-load deferral: skip body emission when not body-emit-cheap.
           ;; Only set!-TARGET :load-vars are excluded — those must be
           ;; materialized once so two loads can't straddle the set! and read
@@ -865,6 +892,18 @@
                   (materialize-refs! l term-refs)))))
           ;; 3. Emit BRANCH_FALSE.
           (lower-node! l term))
+        fused-tail-call
+        ;; Fused tail call: put the call's fn+args on top, emit TAIL_CALL
+        ;; argc. The RETURN after it is dead (the VM treats TAIL_CALL as
+        ;; terminal) but kept for parity with the plain compiler's shape.
+        (let [crefs (ir/refs fused-tail-call f)]
+          (if (refs-at-top-last-use? l crefs)
+            (consume-refs-in-place! l crefs)
+            (materialize-refs! l crefs))
+          (decrement-use! l fused-tail-call)
+          (emit-with-arg! l fused-tail-call :tail-call
+                          (int (ir/aux fused-tail-call f)))
+          (emit! l term :return))
         :else
         (let [term-refs (ir/refs term f)]
           ;; Direct Refs (return value, branch's empty refs, call's fn+args).
