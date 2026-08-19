@@ -50,6 +50,31 @@ func (l Symbol) String() string {
 	return string(l)
 }
 
+func (l Symbol) Arity() int {
+	return -1
+}
+
+// Invoke makes symbols callable for collection lookup, like keywords:
+// ('a {'a 1}) → 1, ('a #{'a}) → 'a. Plain Lookup only — symbols have no
+// KeywordLookup-style fast path.
+func (l Symbol) Invoke(pargs []Value) (Value, error) {
+	vl := len(pargs)
+	if vl < 1 || vl > 2 {
+		return NIL, fmt.Errorf("wrong number of arguments %d", vl)
+	}
+	as, ok := pargs[0].(Lookup)
+	if !ok {
+		if vl == 2 {
+			return pargs[1], nil
+		}
+		return NIL, nil
+	}
+	if vl == 1 {
+		return as.ValueAt(l), nil
+	}
+	return as.ValueAtOr(l, pargs[1]), nil
+}
+
 func splitNamespaced(s string) (ns string, name string, hasNS bool) {
 	if s == "/" {
 		return "", s, false
