@@ -18,7 +18,15 @@ type DType struct {
 	typeName string
 	fields   []Symbol
 	fieldIdx map[Symbol]int
+	// toString, when set, overrides instances' string representation —
+	// (reify Object (toString [this] ...)). Consulted by
+	// DTypeInstance.String(), which str, pr-str, and println all route
+	// through.
+	toString Fn
 }
+
+// SetToString installs a toString override for instances of this type.
+func (t *DType) SetToString(fn Fn) { t.toString = fn }
 
 func NewDType(name string, fields []Symbol) *DType {
 	idx := make(map[Symbol]int, len(fields))
@@ -82,6 +90,19 @@ func (d *DTypeInstance) WithMeta(m Value) Value {
 func (d *DTypeInstance) Unbox() any { return d }
 
 func (d *DTypeInstance) String() string {
+	if d.dtype.toString != nil {
+		if r, err := d.dtype.toString.Invoke([]Value{d}); err == nil {
+			// Only a string result is accepted (JVM toString contract).
+			// Rendering arbitrary results would recurse fatally when the
+			// override returns the instance itself (directly or inside a
+			// collection); a throwing or non-string toString cannot
+			// propagate through Stringer, so both fall through to the
+			// default rendering.
+			if s, ok := r.(String); ok {
+				return string(s)
+			}
+		}
+	}
 	b := &strings.Builder{}
 	b.WriteString("#<")
 	b.WriteString(d.dtype.typeName)

@@ -49,9 +49,6 @@
       (is (= "a" (greeting a)))
       (is (= "b" (greeting b))))))
 
-(deftest reify-host-methods-remain-unsupported
-  (testing "Java Object-style method bodies are not protocol implementations"
-    (is (= :caught
-           (try
-             (load-string "(reify Object (toString [this] \"x\"))")
-             (catch e :caught))))))
+(deftest reify-object-method-overrides-supported
+  (testing "reify accepts Object method overrides; toString drives str"
+    (is (= "x" (str (reify Object (toString [this] "x")))))))

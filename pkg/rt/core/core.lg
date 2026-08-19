@@ -2449,7 +2449,25 @@
                               entry   [proto mname (cons 'core/fn fn-tail)]]
                           (recur (next s) proto (conj result entry))))))))]
     (let [entries (parse specs)
-          by-proto (group-by first entries)
+          ;; Object method overrides are not protocol impls: toString wires
+          ;; into the type's string representation (str/pr-str/println all
+          ;; route through it); everything else — hashCode, equals — is
+          ;; accepted and ignored, because instance hash/equality are
+          ;; identity-based (the JVM default) and the runtime has no hook
+          ;; that could surface a user override's errors.
+          object-entries (filter (fn [e] (= 'Object (first e))) entries)
+          proto-entries  (remove (fn [e] (= 'Object (first e))) entries)
+          ;; Only the documented Object methods are accepted — anything
+          ;; else stays a compile-time error so a misspelling isn't
+          ;; silently swallowed.
+          _ (doseq [[_ mname _] object-entries]
+              (when-not (contains? #{'toString 'hashCode 'equals} mname)
+                (throw (str "reify: unsupported Object method " mname
+                            " (only toString, hashCode, equals are accepted)"))))
+          to-string (some (fn [[_ mname fn-form]]
+                            (when (= 'toString mname) fn-form))
+                          object-entries)
+          by-proto (group-by first proto-entries)
           extends (map (fn [[proto-sym methods]]
                          (let [impl-pairs (mapcat (fn [[_ mname fn-form]]
                                                     [(keyword mname) fn-form])
@@ -2460,6 +2478,8 @@
       (cons 'let
             (cons [type-sym (list 'make-deftype (str type-sym))]
                   (concat extends
+                          (when to-string
+                            (list (list '-set-deftype-to-string! type-sym to-string)))
                           (list (list 'make-deftype-instance type-sym))))))))
 
 ;; (extend-protocol Protocol

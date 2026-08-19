@@ -135,7 +135,9 @@ so shared `.cljc` stays JVM-loadable. See
 
 Not a drop-in JVM Clojure. The main gaps: no coordinated STM or async agents
 (`ref`/`agent` are atom-backed aliases), no `clojure.spec`, unchunked lazy seqs,
-no custom `*data-readers*`, no JVM host interop on `deftype`/`reify`, and no
+no custom `*data-readers*`, no JVM host interop on `deftype` (`reify` accepts
+`Object` method overrides — `toString` is wired into printing; `hashCode`/`equals`
+are accepted and ignored), and no
 `subseq`/`rsubseq` range queries. Behavior also differs in places — pragmatic
 numeric tower, always-blocking channels, real-goroutine `go` blocks, and `re2`
 (not Java) regex.

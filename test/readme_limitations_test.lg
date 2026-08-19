@@ -54,10 +54,11 @@
               (readme-value [this] 42))]
       (is (satisfies? ReadmeLimitationProtocol r))
       (is (= 42 (readme-value r)))))
-  (testing "Java-style host method bodies and host interfaces do not"
+  (testing "Java-style host method bodies on deftype and host interfaces do not"
     (is (unsupported? "(deftype ReadmeLimitationToString [x] Object (toString [this] \"x\"))"))
-    (is (unsupported? "(deftype ReadmeLimitationRunnable [] java.lang.Runnable (run [this] nil))"))
-    (is (unsupported? "(reify Object (toString [this] \"x\"))"))))
+    (is (unsupported? "(deftype ReadmeLimitationRunnable [] java.lang.Runnable (run [this] nil))")))
+  (testing "reify accepts Object method overrides (toString wired into str)"
+    (is (= "x" (load-string "(str (reify Object (toString [this] \"x\")))")))))
 
 (deftest spec-not-implemented
   (testing "clojure.spec APIs are not available"

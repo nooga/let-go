@@ -1,0 +1,57 @@
+;; reify accepts Object method overrides. toString is wired into the
+;; value's string representation (str, pr-str, println all route through
+;; it); hashCode/equals are accepted and ignored — instance hash/equality
+;; stay identity-based, the JVM default.
+
+(ns test.reify-object-test
+  (:require [test :refer :all]))
+
+(defprotocol ReifyObjGreet
+  (greet-obj [this]))
+
+(deftest reify-object-tostring
+  (let [r (reify Object (toString [_] "x"))]
+    (testing "str routes through the override"
+      (is (= "x" (str r))))
+    (testing "pr-str routes through the override"
+      (is (= "x" (pr-str r))))
+    (testing "println routes through the override"
+      (is (= "x\n" (with-out-str (println r)))))))
+
+(deftest reify-object-tostring-captures-locals
+  (let [tag "captured"
+        r (reify Object (toString [_] tag))]
+    (is (= "captured" (str r)))))
+
+(deftest reify-object-honeysql-shape
+  (testing "toString + throwing hashCode constructs and stringifies"
+    (let [r (reify Object
+              (toString [_] "u")
+              (hashCode [_] (throw (ex-info "no" {}))))]
+      (is (= "u" (str r))))))
+
+(deftest reify-object-non-string-tostring-falls-back
+  (testing "a toString returning a non-string (even the instance itself)
+            falls back to the default rendering instead of recursing"
+    (let [r (reify Object (toString [this] this))]
+      (is (string? (str r)))
+      (is (not= "" (str r))))
+    (let [k (reify Object (toString [_] :not-a-string))]
+      (is (string? (str k))))))
+
+(deftest reify-object-unknown-method-is-an-error
+  (testing "a misspelled Object method stays a compile-time error"
+    (is (= :caught
+           (try
+             (load-string "(reify Object (bogus [_] 1))")
+             (catch e :caught))))))
+
+(deftest reify-object-mixed-with-protocol
+  (let [r (reify
+            Object
+            (toString [_] "mixed")
+            ReifyObjGreet
+            (greet-obj [_] :hi))]
+    (is (satisfies? ReifyObjGreet r))
+    (is (= :hi (greet-obj r)))
+    (is (= "mixed" (str r)))))
