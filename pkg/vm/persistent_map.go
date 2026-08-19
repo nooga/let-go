@@ -595,13 +595,108 @@ func (n *hmapCollisionNode) findIndex(key Value) int {
 
 // --- PersistentMap ---
 
-// PersistentMap is an immutable hash-array mapped trie (HAMT).
+// arrayMapMaxEntries is the ordered-mode capacity: maps with at most this
+// many entries keep insertion order (Clojure's PersistentArrayMap contract);
+// the next assoc promotes to the HAMT and order becomes unspecified.
+const arrayMapMaxEntries = 8
+
+// PersistentMap is an immutable map with two internal representations
+// behind the single public MapType, mirroring Clojure's
+// PersistentArrayMap/PersistentHashMap split:
+//
+//   - ordered array-map mode: root == nil, entries live in okvs as an
+//     alternating key/value slice in insertion order, count ≤
+//     arrayMapMaxEntries, lookups are a linear scan;
+//   - HAMT mode: root != nil, okvs == nil, iteration order unspecified.
+//
+// Assoc past the threshold promotes to HAMT mode; Dissoc never demotes a
+// non-empty map (matching Clojure). The one deliberate exception: draining
+// a HAMT map to zero entries yields the empty ordered-mode map — an empty
+// map has no order to lose, and rebuilding from it behaves exactly like a
+// fresh {} (Clojure instead stays a hash map there; both orders are within
+// the unspecified small-hash-map contract). Equality and hash are order-
+// and representation-insensitive.
 type PersistentMap struct {
 	count    int
 	root     hmapNode
+	okvs     []Value // ordered mode only; immutable once published
 	meta     Value
 	_hash    uint32
 	_hasHash bool
+}
+
+// ordered reports whether the map is in insertion-ordered array-map mode.
+func (m *PersistentMap) ordered() bool { return m.root == nil }
+
+// okvsIndex linear-scans the ordered entries for key, returning the slice
+// index of the key or -1.
+func (m *PersistentMap) okvsIndex(key Value) int {
+	for i := 0; i < len(m.okvs); i += 2 {
+		if valueEquiv(key, m.okvs[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+// findValue is the mode-agnostic lookup used by set/equality internals.
+func (m *PersistentMap) findValue(key Value) (Value, bool) {
+	if m.ordered() {
+		if i := m.okvsIndex(key); i >= 0 {
+			return m.okvs[i+1], true
+		}
+		return nil, false
+	}
+	return m.root.find(0, hashValue(key), key)
+}
+
+// eachEntry visits every (key, value) pair, short-circuiting when fn
+// returns false. Ordered mode visits in insertion order.
+func (m *PersistentMap) eachEntry(fn func(key, val Value) bool) bool {
+	if m.ordered() {
+		for i := 0; i < len(m.okvs); i += 2 {
+			if !fn(m.okvs[i], m.okvs[i+1]) {
+				return false
+			}
+		}
+		return true
+	}
+	return m.root.each(fn)
+}
+
+// mapEntries returns the entries as MapEntry values — insertion order in
+// ordered mode, node order in HAMT mode.
+func (m *PersistentMap) mapEntries() []MapEntry {
+	if m.ordered() {
+		entries := make([]MapEntry, 0, len(m.okvs)/2)
+		for i := 0; i < len(m.okvs); i += 2 {
+			entries = append(entries, MapEntry{Key: m.okvs[i], Value: m.okvs[i+1]})
+		}
+		return entries
+	}
+	return m.root.nodeSeq()
+}
+
+// promoteWithAssoc builds a HAMT-mode map from the ordered entries plus one
+// extra pair — the 9th-entry promotion.
+func (m *PersistentMap) promoteWithAssoc(key Value, val Value) *PersistentMap {
+	t := NewTransientMap(EmptyPersistentMap)
+	t.forceHAMT()
+	var err error
+	for i := 0; i < len(m.okvs); i += 2 {
+		if t, err = t.Assoc(m.okvs[i], m.okvs[i+1]); err != nil {
+			panic("promoteWithAssoc: transient Assoc failed: " + err.Error())
+		}
+	}
+	if t, err = t.Assoc(key, val); err != nil {
+		panic("promoteWithAssoc: transient Assoc failed: " + err.Error())
+	}
+	p, err := t.Persistent()
+	if err != nil {
+		panic("promoteWithAssoc: transient Persistent failed: " + err.Error())
+	}
+	p.meta = m.meta
+	return p
 }
 
 // Meta implements IMeta.
@@ -640,10 +735,11 @@ func NewPersistentMap(kvs []Value) *PersistentMap {
 }
 
 // NewArrayMap creates a PersistentMap from an alternating key-value slice.
-// Orderless by design: Clojure map order is an emergent array-map
-// implementation detail (dropped past 8 entries), not a guarantee — let-go
-// treats maps as unordered (cf. Go/Abseil map-iteration randomization).
-// Order-dependent suite tests get :lg reader-cond branches.
+// Matches Clojure's array-map contract: up to arrayMapMaxEntries entries the
+// result is in insertion-ordered array-map mode; past that it promotes to
+// the HAMT and iteration order is unspecified. Map literals flow through
+// here (reader constants directly; compiled literals via the array-map
+// call the compiler emits from the read-time map's ordered Seq).
 func NewArrayMap(kvs []Value) *PersistentMap {
 	if len(kvs) == 0 {
 		return EmptyPersistentMap
@@ -770,14 +866,27 @@ func (m *PersistentMap) Assoc(key Value, val Value) Associative {
 	if key == nil {
 		return m
 	}
+	if m.ordered() {
+		if i := m.okvsIndex(key); i >= 0 {
+			if valueEquiv(m.okvs[i+1], val) {
+				return m
+			}
+			kvs := make([]Value, len(m.okvs))
+			copy(kvs, m.okvs)
+			kvs[i+1] = val
+			return &PersistentMap{count: m.count, okvs: kvs, meta: m.meta}
+		}
+		if m.count >= arrayMapMaxEntries {
+			return m.promoteWithAssoc(key, val)
+		}
+		kvs := make([]Value, len(m.okvs), len(m.okvs)+2)
+		copy(kvs, m.okvs)
+		kvs = append(kvs, key, val)
+		return &PersistentMap{count: m.count + 1, okvs: kvs, meta: m.meta}
+	}
 	hash := hashValue(key)
 	addedLeaf := false
-	var newRoot hmapNode
-	if m.root == nil {
-		newRoot = (&hmapBitmapNode{}).assoc(0, hash, key, val, &addedLeaf)
-	} else {
-		newRoot = m.root.assoc(0, hash, key, val, &addedLeaf)
-	}
+	newRoot := m.root.assoc(0, hash, key, val, &addedLeaf)
 	if newRoot == m.root {
 		return m
 	}
@@ -789,8 +898,21 @@ func (m *PersistentMap) Assoc(key Value, val Value) Associative {
 }
 
 func (m *PersistentMap) Dissoc(key Value) Associative {
-	if key == nil || m.root == nil {
+	if key == nil {
 		return m
+	}
+	if m.ordered() {
+		i := m.okvsIndex(key)
+		if i < 0 {
+			return m
+		}
+		if m.count == 1 {
+			return &PersistentMap{count: 0, meta: m.meta}
+		}
+		kvs := make([]Value, 0, len(m.okvs)-2)
+		kvs = append(kvs, m.okvs[:i]...)
+		kvs = append(kvs, m.okvs[i+2:]...)
+		return &PersistentMap{count: m.count - 1, okvs: kvs, meta: m.meta}
 	}
 	hash := hashValue(key)
 	newRoot := m.root.dissoc(0, hash, key)
@@ -798,8 +920,13 @@ func (m *PersistentMap) Dissoc(key Value) Associative {
 		return m
 	}
 	if newRoot == nil {
+		// Drained to empty: land in the empty ordered mode deliberately —
+		// see the type comment. There is no order to preserve at count 0,
+		// and subsequent assocs behave like building from a fresh {}.
 		return &PersistentMap{count: 0, root: nil, meta: m.meta}
 	}
+	// No demotion back to ordered mode while entries remain — matching
+	// Clojure, where a hash map never turns back into an array map.
 	return &PersistentMap{count: m.count - 1, root: newRoot, meta: m.meta}
 }
 
@@ -810,11 +937,10 @@ func (m *PersistentMap) ValueAt(key Value) Value {
 }
 
 func (m *PersistentMap) ValueAtOr(key Value, dflt Value) Value {
-	if key == nil || m.root == nil {
+	if key == nil || m.count == 0 {
 		return dflt
 	}
-	hash := hashValue(key)
-	val, ok := m.root.find(0, hash, key)
+	val, ok := m.findValue(key)
 	if !ok {
 		return dflt
 	}
@@ -826,7 +952,17 @@ func (m *PersistentMap) ValueAtKeyword(k Keyword) Value {
 }
 
 func (m *PersistentMap) ValueAtKeywordOr(k Keyword, dflt Value) Value {
-	if m.root == nil {
+	if m.count == 0 {
+		return dflt
+	}
+	if m.ordered() {
+		// Box-free compare: a keyword only equals a keyword with the
+		// same string, so skip valueEquiv on non-keyword keys.
+		for i := 0; i < len(m.okvs); i += 2 {
+			if sk, ok := m.okvs[i].(Keyword); ok && sk == k {
+				return m.okvs[i+1]
+			}
+		}
 		return dflt
 	}
 	val, ok := m.root.findKeyword(0, k.Hash(), k)
@@ -839,15 +975,11 @@ func (m *PersistentMap) ValueAtKeywordOr(k Keyword, dflt Value) Value {
 // --- Keyed interface ---
 
 func (m *PersistentMap) Contains(key Value) Boolean {
-	if key == nil || m.root == nil {
+	if key == nil || m.count == 0 {
 		return FALSE
 	}
-	hash := hashValue(key)
-	_, ok := m.root.find(0, hash, key)
-	if ok {
-		return TRUE
-	}
-	return FALSE
+	_, ok := m.findValue(key)
+	return Boolean(ok)
 }
 
 // --- Fn interface ---
@@ -876,10 +1008,10 @@ func (m *PersistentMap) Seq() Seq {
 }
 
 func (m *PersistentMap) entries() []Value {
-	if m.root == nil {
+	if m.count == 0 {
 		return nil
 	}
-	mes := m.root.nodeSeq()
+	mes := m.mapEntries()
 	if allocAttrEnabled {
 		recordAllocAttr(akMapEntries, len(mes)*16+24)
 	}
@@ -900,16 +1032,16 @@ func (m *PersistentMap) Equals(other Value) bool {
 	if m.count != o.count {
 		return false
 	}
-	// count equality + the invariant (count == 0 ⟺ root == nil) means both
-	// roots are non-nil past this point.
 	if m.count == 0 {
 		return true
 	}
 	// Walk m in place (no entry-slice materialization — the old nodeSeq()
 	// here dominated lowering allocation): every key in m must exist in o
 	// with an equiv value. Sizes already match, so this is sufficient.
-	return m.root.each(func(k, v Value) bool {
-		ov, found := o.root.find(0, hashValue(k), k)
+	// Mode-agnostic on both sides: ordered and HAMT maps with the same
+	// entries are equal.
+	return m.eachEntry(func(k, v Value) bool {
+		ov, found := o.findValue(k)
 		return found && valueEquiv(v, ov)
 	})
 }

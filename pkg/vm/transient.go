@@ -13,19 +13,63 @@ import (
 // TransientMap is a mutable version of PersistentMap for batch operations.
 // Mutations modify nodes in place instead of path-copying.
 // Call persistent! to freeze back to an immutable PersistentMap.
+//
+// Like its persistent counterpart it has two modes: an insertion-ordered
+// array-map mode (hamt == false, entries in okvs) used while the map stays
+// at or below arrayMapMaxEntries, and the HAMT mode past that. This keeps
+// the into/transduce path order-preserving for small maps, matching
+// Clojure's transient array maps.
 type TransientMap struct {
 	edit  atomic.Bool // true while mutable, false after persistent!
 	root  hmapNode
+	okvs  []Value // ordered mode storage (owned, mutated in place)
+	hamt  bool    // true once promoted (or seeded from a HAMT-mode map)
 	count int
 }
 
 func NewTransientMap(m *PersistentMap) *TransientMap {
-	t := &TransientMap{
-		root:  m.root,
-		count: m.count,
+	t := &TransientMap{count: m.count}
+	if m.ordered() {
+		t.okvs = make([]Value, len(m.okvs), 2*(arrayMapMaxEntries+1))
+		copy(t.okvs, m.okvs)
+	} else {
+		t.root = m.root
+		t.hamt = true
 	}
 	t.edit.Store(true)
 	return t
+}
+
+// forceHAMT switches an ordered transient to the HAMT mode, pushing the
+// ordered entries into the trie.
+func (t *TransientMap) forceHAMT() {
+	if t.hamt {
+		return
+	}
+	for i := 0; i < len(t.okvs); i += 2 {
+		addedLeaf := false
+		key, val := t.okvs[i], t.okvs[i+1]
+		hash := hashValue(key)
+		if t.root == nil {
+			t.root = (&hmapBitmapNode{edit: &t.edit}).assocTransient(&t.edit, 0, hash, key, val, &addedLeaf)
+		} else if bn, ok := t.root.(*hmapBitmapNode); ok {
+			t.root = bn.assocTransient(&t.edit, 0, hash, key, val, &addedLeaf)
+		} else {
+			t.root = t.root.assoc(0, hash, key, val, &addedLeaf)
+		}
+	}
+	t.okvs = nil
+	t.hamt = true
+}
+
+// okvsIndex linear-scans the ordered entries for key.
+func (t *TransientMap) okvsIndex(key Value) int {
+	for i := 0; i < len(t.okvs); i += 2 {
+		if valueEquiv(key, t.okvs[i]) {
+			return i
+		}
+	}
+	return -1
 }
 
 func (t *TransientMap) ensureEditable() error {
@@ -43,6 +87,18 @@ func (t *TransientMap) String() string  { return fmt.Sprintf("<transient-map cou
 func (t *TransientMap) Assoc(key Value, val Value) (*TransientMap, error) {
 	if err := t.ensureEditable(); err != nil {
 		return nil, err
+	}
+	if !t.hamt {
+		if i := t.okvsIndex(key); i >= 0 {
+			t.okvs[i+1] = val
+			return t, nil
+		}
+		if t.count < arrayMapMaxEntries {
+			t.okvs = append(t.okvs, key, val)
+			t.count++
+			return t, nil
+		}
+		t.forceHAMT()
 	}
 	addedLeaf := false
 	hash := hashValue(key)
@@ -63,6 +119,13 @@ func (t *TransientMap) Assoc(key Value, val Value) (*TransientMap, error) {
 func (t *TransientMap) Dissoc(key Value) (*TransientMap, error) {
 	if err := t.ensureEditable(); err != nil {
 		return nil, err
+	}
+	if !t.hamt {
+		if i := t.okvsIndex(key); i >= 0 {
+			t.okvs = append(t.okvs[:i], t.okvs[i+2:]...)
+			t.count--
+		}
+		return t, nil
 	}
 	if t.root == nil {
 		return t, nil
@@ -132,6 +195,11 @@ func (t *TransientMap) Persistent() (*PersistentMap, error) {
 		return nil, err
 	}
 	t.edit.Store(false)
+	if !t.hamt {
+		// Hand the slice off: the transient is frozen, so nothing can
+		// mutate it after this point.
+		return &PersistentMap{count: t.count, okvs: t.okvs}, nil
+	}
 	return &PersistentMap{
 		root:  t.root,
 		count: t.count,
@@ -144,6 +212,12 @@ func (t *TransientMap) ValueAt(key Value) Value {
 }
 
 func (t *TransientMap) ValueAtOr(key Value, notFound Value) Value {
+	if !t.hamt {
+		if i := t.okvsIndex(key); i >= 0 {
+			return t.okvs[i+1]
+		}
+		return notFound
+	}
 	if t.root == nil {
 		return notFound
 	}
@@ -155,7 +229,17 @@ func (t *TransientMap) ValueAtOr(key Value, notFound Value) Value {
 }
 
 func (t *TransientMap) Seq() Seq {
-	if t.count == 0 || t.root == nil {
+	if t.count == 0 {
+		return EmptyList
+	}
+	if !t.hamt {
+		result := make([]Value, 0, t.count)
+		for i := 0; i < len(t.okvs); i += 2 {
+			result = append(result, MapEntry{Key: t.okvs[i], Value: t.okvs[i+1]})
+		}
+		return &MapSeq{entries: result, i: 0}
+	}
+	if t.root == nil {
 		return EmptyList
 	}
 	mes := t.root.nodeSeq()
@@ -170,6 +254,9 @@ func (t *TransientMap) Count() Value  { return MakeInt(t.count) }
 func (t *TransientMap) RawCount() int { return t.count }
 
 func (t *TransientMap) Contains(key Value) Boolean {
+	if !t.hamt {
+		return Boolean(t.okvsIndex(key) >= 0)
+	}
 	if t.root == nil {
 		return FALSE
 	}
@@ -370,12 +457,12 @@ type TransientSet struct {
 var transientSetSentinel = Boolean(true)
 
 func NewTransientSet(s *PersistentSet) *TransientSet {
-	tm := &TransientMap{}
+	var tm *TransientMap
 	if s.impl != nil {
-		tm.root = s.impl.root
-		tm.count = s.impl.count
+		tm = NewTransientMap(s.impl)
+	} else {
+		tm = NewTransientMap(EmptyPersistentMap)
 	}
-	tm.edit.Store(true)
 	t := &TransientSet{tm: tm}
 	t.edit.Store(true)
 	return t
@@ -415,10 +502,11 @@ func (t *TransientSet) Persistent() (*PersistentSet, error) {
 		return nil, err
 	}
 	t.edit.Store(false)
-	t.tm.edit.Store(false)
-	return &PersistentSet{
-		impl: &PersistentMap{root: t.tm.root, count: t.tm.count},
-	}, nil
+	impl, err := t.tm.Persistent()
+	if err != nil {
+		return nil, err
+	}
+	return &PersistentSet{impl: impl}, nil
 }
 
 func (t *TransientSet) ValueAt(key Value) Value {

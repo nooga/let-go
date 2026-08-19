@@ -120,10 +120,10 @@ func (s *PersistentSet) Disj(value Value) *PersistentSet {
 }
 
 func (s *PersistentSet) Contains(value Value) Boolean {
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return FALSE
 	}
-	_, found := s.impl.root.find(0, hashValue(value), value)
+	_, found := s.impl.findValue(value)
 	if found {
 		return TRUE
 	}
@@ -133,10 +133,10 @@ func (s *PersistentSet) Contains(value Value) Boolean {
 // --- Lookup (for get) ---
 
 func (s *PersistentSet) ValueAt(key Value) Value {
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return NIL
 	}
-	_, found := s.impl.root.find(0, hashValue(key), key)
+	_, found := s.impl.findValue(key)
 	if found {
 		return key
 	}
@@ -144,10 +144,10 @@ func (s *PersistentSet) ValueAt(key Value) Value {
 }
 
 func (s *PersistentSet) ValueAtOr(key Value, dflt Value) Value {
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return dflt
 	}
-	_, found := s.impl.root.find(0, hashValue(key), key)
+	_, found := s.impl.findValue(key)
 	if found {
 		return key
 	}
@@ -173,10 +173,10 @@ func (s *PersistentSet) keys() []Value {
 }
 
 func (s *PersistentSet) entries() []Value {
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return nil
 	}
-	mes := s.impl.root.nodeSeq()
+	mes := s.impl.mapEntries()
 	result := make([]Value, len(mes))
 	for i, e := range mes {
 		result[i] = e.Key
@@ -222,10 +222,10 @@ func (s *PersistentSet) Invoke(pargs []Value) (Value, error) {
 	if len(pargs) != 1 {
 		return NIL, fmt.Errorf("wrong number of arguments %d", len(pargs))
 	}
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return NIL, nil
 	}
-	_, found := s.impl.root.find(0, hashValue(pargs[0]), pargs[0])
+	_, found := s.impl.findValue(pargs[0])
 	if found {
 		return pargs[0], nil
 	}
