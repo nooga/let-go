@@ -667,15 +667,47 @@
     (get srcs nid)
     (get (compute-param-sources f) nid)))
 
+(defn- unanimous-closure
+  "Fold a block-parameter's per-source resolutions into the single closure the
+   parameter denotes, or nil when it denotes no one closure.
+
+   A parameter is a compile-time closure value only when EVERY incoming edge
+   agrees on the same closure, because such values carry no runtime local —
+   closure-expr re-materializes them at each use site, and a use site can only
+   materialize one closure. A join whose edges disagree (two different fn
+   literals, or a closure against nil) must therefore resolve to nil so the
+   parameter gets a real local and each edge assigns its own value. Returning
+   the first resolvable source instead silently published one branch's closure
+   as the whole join's value (#766).
+
+   :cycle sources carry no information and are dropped: a loop-carried closure
+   reaches its own header parameter through the back edge, and counting that as
+   disagreement would strip the local-free treatment from exactly the case the
+   lineage walk exists to serve (#266). All-cycle propagates :cycle rather than
+   nil so an enclosing frame can still decide."
+  [results]
+  (let [real (vec (filter (fn [r] (not= r :cycle)) results))]
+    (cond
+      (empty? real)                             :cycle
+      (some (fn [r] (nil? r)) real)             nil
+      (every? (fn [r] (= r (first real))) real) (first real)
+      :else                                     nil)))
+
 (defn- closure-info* [f nid visited]
   ;; The visited-check MUST precede the memo so a nid currently on the recursion
-  ;; stack (cycle) returns nil without being cached half-computed. Resolved
-  ;; results are path-independent (the closure a value denotes is the same
-  ;; however you reach it), so memoizing EVERY nid here — not just the top-level
-  ;; entry in closure-info — collapses the per-param-per-edge re-walk of shared
-  ;; block-arg lineage from O(n^2) to O(n). (#266 lowering-timeout root cause.)
+  ;; stack returns without being cached half-computed. It yields :cycle, not nil:
+  ;; unanimous-closure has to tell "this edge is the back edge of a loop" apart
+  ;; from "this edge is genuinely not a closure", and nil cannot say both.
+  ;;
+  ;; Resolved results are path-independent (the closure a value denotes is the
+  ;; same however you reach it), so memoizing EVERY nid here — not just the
+  ;; top-level entry in closure-info — collapses the per-param-per-edge re-walk
+  ;; of shared block-arg lineage from O(n^2) to O(n). (#266 lowering-timeout
+  ;; root cause.) :cycle is the one exception: it means "still on the stack
+  ;; above me", which is a property of the path, not of the nid, so caching it
+  ;; would leak one walk's stack state into an unrelated walk.
   (if (contains? visited nid)
-    nil
+    :cycle
     (let [memo (:closure-memo (deref f))]
       (if (and memo (contains? (deref memo) nid))
         (get (deref memo) nid)
@@ -693,30 +725,40 @@
                   (= op :push-closed)
                   (when (= 2 (count refs))
                     (let [base (closure-info* f (nth refs 0) visited)]
-                      (when base
-                        (assoc base :captures (conj (:captures base) (nth refs 1))))))
+                      (cond
+                        (= base :cycle) :cycle
+                        base            (assoc base :captures
+                                               (conj (:captures base) (nth refs 1)))
+                        :else           nil)))
 
                   (= op :block-arg)
-                  (some (fn [src] (closure-info* f src (conj visited nid)))
-                        (block-arg-sources f nid))
+                  (unanimous-closure
+                    (mapv (fn [src] (closure-info* f src (conj visited nid)))
+                          (block-arg-sources f nid)))
 
                   :else nil)]
-          (when memo (swap! memo assoc nid r))
+          (when (and memo (not= r :cycle)) (swap! memo assoc nid r))
           r)))))
 
 (defn closure-info
   "Resolve the closure a value refers to: {:template <aux> :captures [nid …]}
    or nil. Walks make-closure/push-closed and follows block-parameter lineage
    so closures threaded through a loop header still resolve (captures on
-   push-closed nodes are preserved across the walk). Memoized per function on f."
+   push-closed nodes are preserved across the walk). Memoized per function on f.
+
+   This is the boundary that normalizes the internal :cycle sentinel to nil:
+   callers ask whether a value denotes one closure, and a value that only ever
+   resolves to itself does not."
   [f nid]
   (if-let [memo (:closure-memo (deref f))]
     (if (contains? @memo nid)
       (get @memo nid)
-      (let [r (closure-info* f nid #{})]
+      (let [raw (closure-info* f nid #{})
+            r   (if (= raw :cycle) nil raw)]
         (swap! memo assoc nid r)
         r))
-    (closure-info* f nid #{})))
+    (let [raw (closure-info* f nid #{})]
+      (if (= raw :cycle) nil raw))))
 
 (defn- nested-template-fns [f]
   (loop [blocks (ir/blocks f) out []]
@@ -1265,16 +1307,23 @@
         (let [pid     (nth params i)
               arg-nid (nth args i)]
           ;; Skip when the param is unused, a const-param (materialized inline at
-          ;; each use), or when either side is a compile-time template/closure
-          ;; value. Closure/template values carry no runtime Go local —
-          ;; closure-expr re-materializes the real closure inline at each USE
-          ;; site — so threading them across an edge would reference a local that
-          ;; was never declared. Checking the ARG too catches templates threaded
-          ;; into DCE-killed (:invalid) params.
+          ;; each use), or when the PARAM is a compile-time template/closure
+          ;; value. Such a param carries no runtime Go local — closure-expr
+          ;; re-materializes the real closure inline at each USE site — so
+          ;; threading it across an edge would reference a local that was never
+          ;; declared.
+          ;;
+          ;; The ARG is deliberately NOT screened. When the param resolves to a
+          ;; real local but this edge's arg is a closure, the closure is exactly
+          ;; what this edge must assign: value-expr materializes it through
+          ;; closure-expr, giving each branch of a join its own rt.BoxNativeFn
+          ;; instead of leaving the branch empty (#766). A template threaded into
+          ;; a DCE-killed param is still skipped, by the live?/const-param tests
+          ;; on the param above; an arg whose closure cannot be lowered yields a
+          ;; nil rhs below, which abandons the whole transfer as before.
           (if (or (not (live? f pid))
                   (const-param-of f pid)
-                  (closure-value? f pid)
-                  (closure-value? f arg-nid))
+                  (closure-value? f pid))
             (recur (inc i) pairs)
             (let [lhs (value-ident f pid)
                   lhs-spec (go-type-spec (ir/type-of pid f))
