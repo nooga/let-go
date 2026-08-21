@@ -8,6 +8,8 @@ package compiler
 import (
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
 	"strings"
 	"sync"
@@ -325,5 +327,265 @@ func TestLegacyReaderKeepsUnknownTagBestEffortBehavior(t *testing.T) {
 	}
 	if got != vm.Int(42) {
 		t.Fatalf("legacy unknown tag result = %v, want 42", got)
+	}
+}
+
+func TestRawGoReaderCapturesLexicallyBalancedFragment(t *testing.T) {
+	registry := NewTaggedReaderRegistry()
+	if err := registry.RegisterRaw("go", ReadRawGoFragment); err != nil {
+		t.Fatal(err)
+	}
+	input := "#go{" + `
+if ready {
+    println("brace } and escaped quote \"")
+    println(` + "`raw { brace }`" + `)
+    r := '}'
+    // comment closes } and opens {
+    /* block { comment } */
+    _ = r
+}
+` + "} 42"
+	reader := NewLispReaderWithTaggedReaders(strings.NewReader(input), "probe.lg", registry)
+	got, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := input[len("#go{") : len(input)-len("} 42")]
+	if got != vm.String(want) {
+		t.Fatalf("raw fragment:\n got %q\nwant %q", got, want)
+	}
+	wrapped := "package probe\nfunc _() {" + string(got.(vm.String)) + "\n}"
+	if _, err := parser.ParseFile(token.NewFileSet(), "expected.go", wrapped, parser.AllErrors); err != nil {
+		t.Fatalf("captured #go fragment did not parse as Go statements: %v", err)
+	}
+	next, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next != vm.Int(42) {
+		t.Fatalf("form after raw fragment = %v, want 42", next)
+	}
+}
+
+func TestRawGoReaderIsAvailableByDefault(t *testing.T) {
+	reader := NewLispReader(strings.NewReader(`#go{if ready { return "}" }}`), "probe.lg")
+	got, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != vm.String(`if ready { return "}" }`) {
+		t.Fatalf("default #go result = %q", got)
+	}
+}
+
+func TestRawGoReaderAllowsWhitespaceBeforeOpeningBrace(t *testing.T) {
+	registry := NewTaggedReaderRegistry()
+	if err := registry.RegisterRaw("go", ReadRawGoFragment); err != nil {
+		t.Fatal(err)
+	}
+	reader := NewLispReaderWithTaggedReaders(strings.NewReader("#go  { return 1 }"), "probe.lg", registry)
+	got, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != vm.String(" return 1 ") {
+		t.Fatalf("raw fragment = %q, want %q", got, " return 1 ")
+	}
+}
+
+func TestRawGoReaderRejectsMissingOrUnterminatedFragment(t *testing.T) {
+	registry := NewTaggedReaderRegistry()
+	if err := registry.RegisterRaw("go", ReadRawGoFragment); err != nil {
+		t.Fatal(err)
+	}
+	// A missing opener on complete input is malformed and must never read as
+	// EOF. Input that ends inside a fragment is incomplete: it wraps io.EOF so a
+	// REPL keeps prompting, the same contract as a truncated tagged literal.
+	for _, tc := range []struct {
+		name, input, want string
+		incomplete        bool
+	}{
+		{"missing opener", "#go [1 2]", "requires an opening {", false},
+		{"unterminated", "#go{if x { println(x) }", "unterminated #go fragment", true},
+		{"unterminated string", "#go{println(\"x)}", "unterminated #go fragment", true},
+		{"unterminated block comment", "#go{/* comment }", "unterminated #go fragment", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := NewLispReaderWithTaggedReaders(strings.NewReader(tc.input), "probe.lg", registry)
+			_, err := reader.Read()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
+			}
+			if got := IsErrorEOF(err); got != tc.incomplete {
+				t.Fatalf("IsErrorEOF(%v) = %v, want %v", err, got, tc.incomplete)
+			}
+		})
+	}
+}
+
+func TestRawGoReaderSkipsUnselectedReaderConditionalBranch(t *testing.T) {
+	registry := NewTaggedReaderRegistry()
+	if err := registry.RegisterRaw("go", ReadRawGoFragment); err != nil {
+		t.Fatal(err)
+	}
+	input := "#?(:clj #go{if ready { println(`brace }`) }} :default 7) 8"
+	reader := NewLispReaderWithTaggedReaders(strings.NewReader(input), "probe.lg", registry)
+	first, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != vm.Int(7) || second != vm.Int(8) {
+		t.Fatalf("forms after skipped #go branch = %v, %v; want 7, 8", first, second)
+	}
+}
+
+func TestExplicitDataGoReaderOverridesDefaultWhileSkippingConditional(t *testing.T) {
+	registry := NewTaggedReaderRegistry()
+	if err := registry.RegisterData("go", func(value vm.Value) (vm.Value, error) { return value, nil }); err != nil {
+		t.Fatal(err)
+	}
+	reader := NewLispReaderWithTaggedReaders(
+		strings.NewReader("#?(:clj #go [1 2] :default 7) #go [3 4]"),
+		"probe.lg",
+		registry,
+	)
+	first, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != vm.Int(7) || second.String() != "[3 4]" {
+		t.Fatalf("explicit data #go results = %v, %v; want 7, [3 4]", first, second)
+	}
+}
+
+// A tagged reader's own failure is a syntax error, never end-of-input. The
+// EOF side of this contract is the #770 review's: a truncated tagged literal
+// (`#need-value`) or a handler that reports EOF IS incomplete input, exactly
+// like an unterminated `(defn`, so a REPL keeps prompting — see
+// TestTaggedReaderRegistryPropagatesHandlerAndPayloadErrors. What must not
+// happen is the converse: a non-EOF handler error, or a malformed payload on
+// complete input, reading as EOF and silently ending a read.
+func TestTaggedReaderErrorsCannotMasqueradeAsCleanEOF(t *testing.T) {
+	registry := NewTaggedReaderRegistry()
+	if err := registry.RegisterData("fail", func(vm.Value) (vm.Value, error) {
+		return vm.NIL, errors.New("handler failed")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRaw("raw", func(input TaggedRawInput) (vm.Value, error) {
+		return vm.NIL, errors.New("raw payload rejected")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{"#fail 1", "#raw{x}", "#go{"} {
+		reader := NewLispReaderWithTaggedReaders(strings.NewReader(input), "probe.lg", registry)
+		_, err := reader.Read()
+		if err == nil {
+			t.Fatalf("%q returned nil error", input)
+		}
+		if input != "#go{" && IsErrorEOF(err) {
+			t.Fatalf("%q was reported as EOF: %v", input, err)
+		}
+	}
+}
+
+func TestBuiltinGoSkipsNonBracePayloadInUnselectedBranch(t *testing.T) {
+	// The built-in #go claims only a {-delimited payload while skipping; any
+	// other payload is skipped like every other unknown tag.
+	reader := NewLispReader(strings.NewReader("#?(:clj #go [1 2] :default 7) 8"), "probe.lg")
+	first, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != vm.Int(7) || second != vm.Int(8) {
+		t.Fatalf("forms after skipped non-brace #go = %v, %v; want 7, 8", first, second)
+	}
+}
+
+func TestTruncatedFragmentInUnselectedBranchIsIncomplete(t *testing.T) {
+	registry := NewTaggedReaderRegistry()
+	if err := registry.RegisterRaw("go", ReadRawGoFragment); err != nil {
+		t.Fatal(err)
+	}
+	input := "#?(:clj #go{if ready { println(1) } :default 7)"
+	_, err := NewLispReaderWithTaggedReaders(strings.NewReader(input), "probe.lg", registry).Read()
+	if err == nil {
+		t.Fatalf("truncated skipped branch %q returned nil error", input)
+	}
+	if !IsErrorEOF(err) {
+		t.Fatalf("truncated skipped branch %q is not incomplete input: %v", input, err)
+	}
+}
+
+func TestRawGoReaderReportsEveryTruncatedPrefixAsIncomplete(t *testing.T) {
+	registry := NewTaggedReaderRegistry()
+	if err := registry.RegisterRaw("go", ReadRawGoFragment); err != nil {
+		t.Fatal(err)
+	}
+	full := `#go{if ready { println("}", ` + "`{`" + `, '\'') /* } */ }}`
+	for cut := len("#go{"); cut < len(full); cut++ {
+		reader := NewLispReaderWithTaggedReaders(strings.NewReader(full[:cut]), "probe.lg", registry)
+		_, err := reader.Read()
+		if err == nil {
+			t.Fatalf("prefix %d/%d unexpectedly parsed: %q", cut, len(full), full[:cut])
+		}
+		if !IsErrorEOF(err) {
+			t.Fatalf("prefix %d/%d is not incomplete input: %v", cut, len(full), err)
+		}
+	}
+}
+
+// A raw payload nested inside a collection of an unselected branch must be
+// consumed by its raw reader, not by the skipper's delimiter counter: Go raw
+// strings, rune literals, and comments can hold delimiters the counter would
+// otherwise treat as Lisp structure.
+func TestSkippedConditionalDispatchesNestedRawTags(t *testing.T) {
+	cases := map[string]string{
+		"nested raw string":   "#?(:clj [#go{s := `))`}] :default 7) 8",
+		"nested rune literal": "#?(:clj [#go{r := ')'}] :default 7) 8",
+		"nested line comment": "#?(:clj [#go{x := 1 // )]\n}] :default 7) 8",
+		"nested in map, rune": "#?(:clj {:k #go{r := '}'}} :default 7) 8",
+	}
+	readers := map[string]func(string) *LispReader{
+		"builtin": func(src string) *LispReader {
+			return NewLispReader(strings.NewReader(src), "probe.lg")
+		},
+		"registered": func(src string) *LispReader {
+			registry := NewTaggedReaderRegistry()
+			if err := registry.RegisterRaw("go", ReadRawGoFragment); err != nil {
+				t.Fatal(err)
+			}
+			return NewLispReaderWithTaggedReaders(strings.NewReader(src), "probe.lg", registry)
+		},
+	}
+	for readerName, newReader := range readers {
+		for name, input := range cases {
+			t.Run(readerName+"/"+name, func(t *testing.T) {
+				reader := newReader(input)
+				first, err := reader.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				second, err := reader.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if first != vm.Int(7) || second != vm.Int(8) {
+					t.Fatalf("forms = %v, %v; want 7, 8", first, second)
+				}
+			})
+		}
 	}
 }
