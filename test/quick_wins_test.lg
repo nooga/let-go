@@ -478,6 +478,25 @@
                               'inst (fn [value] [:inst value])}]
       (is (= [:uuid "custom"] (read-string "#uuid \"custom\"")))
       (is (= [:inst "custom"] (read-string "#inst \"custom\"")))))
+  (testing "a dynamic data reader overrides the default raw #go reader"
+    (binding [*data-readers* {'go (fn [value] [:go value])}]
+      (is (= [:go [1 2]] (read-string "#go [1 2]")))
+      (is (= 7 (read-string "#?(:clj #go [1 2] :default 7)")))))
+  (testing "skipped branches neither validate data handlers nor fall through a #go override"
+    (binding [*data-readers* {'foo 42}]
+      (is (= 7 (read-string "#?(:clj #foo [1] :default 7)"))))
+    (binding [*data-readers* {'go 42}]
+      (is (= 7 (read-string "#?(:clj #go [1] :default 7)")))))
+  (testing "nil entries are absent and fall through to legacy/default readers"
+    (binding [*data-readers* {'foo nil}]
+      (is (= 1 (read-string "#foo 1")))
+      (is (= 7 (read-string "#?(:clj #foo [1] :default 7)"))))
+    (binding [*data-readers* {'go nil}]
+      (is (= "return 1" (read-string "#go{return 1}")))
+      (let [message (try
+                      (read-string "#?(:clj #go [1] :default 7)")
+                      (catch e (ex-message e)))]
+        (is (s/includes? message "#go requires an opening {")))))
   (testing "an alter-var-root registration is visible and can be restored"
     (let [original *data-readers*]
       (try
@@ -489,6 +508,11 @@
                (load-string "#test/root 4")))
         (finally
           (alter-var-root #'*data-readers* (constantly original)))))))
+
+(deftest raw-go-tagged-reader-test
+  (testing "#go preserves balanced Go source as a string"
+    (is (= "if ready { return \"}\" }"
+           #go {if ready {return "}"}}))))
 
 ;; --- run! ---
 

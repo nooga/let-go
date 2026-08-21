@@ -35,7 +35,8 @@ with no known failures, compile skips, panic skips, or runtime skips.
 | `syscall`            | direct Linux syscalls (mount, unshare, mknod, prctl, capset, seccomp, AppArmor)                                                                                                               |
 | `pods`               | Babashka pods over JSON / EDN / transit                                                                                                                                                       |
 
-The reader supports built-in `#uuid` and `#inst` literals plus custom data readers registered as symbol-to-function entries in the dynamic
+The reader supports built-in `#uuid`, `#inst`, and raw `#go{...}` literals plus
+custom data readers registered as symbol-to-function entries in the dynamic
 `*data-readers*` map. Unregistered tags retain let-go's legacy payload behavior.
 See [Custom data readers](custom-data-readers.md).
 
