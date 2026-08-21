@@ -1,7 +1,8 @@
 ;; Tests for quick-win additions: predicates, numeric fns, string fns, etc.
 (ns test.quick-wins-test
-  (:require [test :refer :all]
-            [string :as s]))
+  (:require
+   [string :as s]
+   [test :refer :all]))
 
 ;; --- quot and rem ---
 
@@ -394,7 +395,11 @@
     (is (= :caught (try (round-bigdec 1 :unnecessary (* 1.5M 1.0M))
                         (catch e :caught))))))
 
-;; --- reader tagged literals: #inst, unknown tags ---
+;; --- reader tagged literals: #inst, custom data readers, unknown tags ---
+
+(def ^:dynamic *data-reader-context* :root)
+(defn contextual-data-reader [value]
+  [*data-reader-context* value])
 
 (deftest inst-reader-literal-test
   (testing "#inst reader literal produces an instant value, not a string"
@@ -445,6 +450,46 @@
     (is (uuid? (read-string "#uuid \"550e8400-e29b-41d4-a716-446655440000\"")))
     (is (inst? (read-string "#inst \"2024-01-01T00:00:00Z\"")))))
 
+(deftest custom-data-reader-global-test
+  (testing "a dynamic *data-readers* extension transforms tagged values"
+    (binding [*data-readers*
+              (assoc *data-readers* 'test/wrapped
+                     (fn [value] [:custom value]))]
+      (is (= [:custom {:x 1}]
+             (read-string "#test/wrapped {:x 1}")))
+      (is (= [:custom [1 2]]
+             (load-string "#test/wrapped [1 2]")))
+      (is (= [[:custom :a] [:custom :b]]
+             (read-all-string "#test/wrapped :a #test/wrapped :b")))))
+  (testing "Var-valued readers run in the caller's dynamic context"
+    (binding [*data-readers* {'test/context #'contextual-data-reader}
+              *data-reader-context* :bound]
+      (is (= [:bound 9]
+             (read-string "#test/context 9")))))
+  (testing "*data-readers* rejects non-map lookup collections"
+    (doseq [invalid [[] '() #{}]]
+      (let [message (binding [*data-readers* invalid]
+                      (try
+                        (read-string "#test/missing 1")
+                        (catch e (ex-message e))))]
+        (is (s/includes? message "*data-readers* must be a map")))))
+  (testing "dynamic entries override built-in tagged readers"
+    (binding [*data-readers* {'uuid (fn [value] [:uuid value])
+                              'inst (fn [value] [:inst value])}]
+      (is (= [:uuid "custom"] (read-string "#uuid \"custom\"")))
+      (is (= [:inst "custom"] (read-string "#inst \"custom\"")))))
+  (testing "an alter-var-root registration is visible and can be restored"
+    (let [original *data-readers*]
+      (try
+        (alter-var-root #'*data-readers* assoc 'test/root
+                        (fn [value] [:root value]))
+        (is (= [:root [1 2 3]]
+               (read-string "#test/root [1 2 3]")))
+        (is (= [:root 4]
+               (load-string "#test/root 4")))
+        (finally
+          (alter-var-root #'*data-readers* (constantly original)))))))
+
 ;; --- run! ---
 
 (deftest run-bang-test
@@ -483,22 +528,22 @@
     (let [s "ᚠabc"
           i (s/index-of s "a")]
       (is (= "ᚠ" (subs s 0 i))))
-  (testing "string/index-of — complex Unicode"
-    ;; combining characters: e + combining acute (2 runes) vs precomposed é (1 rune)
-    (is (= 3 (s/index-of "café" "é")))
-    ;; precomposed é is 1 rune — find it in "café"
-    (is (= 3 (s/index-of "café" "é")))
-    ;; emoji with skin-tone modifier (2 runes)
-    (is (= 1 (s/index-of "a👩🏽 b" "👩🏽")))
-    ;; past skin-tone emoji, find the space+b
-    (is (= 4 (s/index-of "a👩🏽 b" "b")))
-    ;; ZWJ family emoji sequence (7 runes)
-    (is (= 9 (s/index-of "a👨‍👩‍👧‍👦 b" "b")))
-    ;; bidi: Arabic in the middle of Latin text
-    (is (= 5 (s/index-of "helloمرحباworld" "مرحبا")))
-    (is (= 10 (s/index-of "helloمرحباworld" "world")))
-    ;; ZWJ sequence itself is findable
-    (is (= 1 (s/index-of "a👨‍👩‍👧‍👦 b" "👨‍👩‍👧‍👦"))))))
+    (testing "string/index-of — complex Unicode"
+      ;; combining characters: e + combining acute (2 runes) vs precomposed é (1 rune)
+      (is (= 3 (s/index-of "café" "é")))
+      ;; precomposed é is 1 rune — find it in "café"
+      (is (= 3 (s/index-of "café" "é")))
+      ;; emoji with skin-tone modifier (2 runes)
+      (is (= 1 (s/index-of "a👩🏽 b" "👩🏽")))
+      ;; past skin-tone emoji, find the space+b
+      (is (= 4 (s/index-of "a👩🏽 b" "b")))
+      ;; ZWJ family emoji sequence (7 runes)
+      (is (= 9 (s/index-of "a👨‍👩‍👧‍👦 b" "b")))
+      ;; bidi: Arabic in the middle of Latin text
+      (is (= 5 (s/index-of "helloمرحباworld" "مرحبا")))
+      (is (= 10 (s/index-of "helloمرحباworld" "world")))
+      ;; ZWJ sequence itself is findable
+      (is (= 1 (s/index-of "a👨‍👩‍👧‍👦 b" "👨‍👩‍👧‍👦"))))))
 
 (deftest string-last-index-of-test
   (testing "string/last-index-of"
@@ -513,15 +558,15 @@
     (is (nil? (s/last-index-of "ᚠabc" "z")))
     ;; from-index is also rune-indexed
     (is (= 0 (s/last-index-of "ᚠabcᚠ" "ᚠ" 0)))))
-  (testing "string/last-index-of — complex Unicode"
-    ;; combining: last occurrence of combining sequence
-    (is (= 10 (s/last-index-of "xcaféycafé" "é")))
-    ;; emoji skin tone
-    (is (= 5 (s/last-index-of "👩🏽 x 👩🏽" "👩🏽")))
-    ;; bidi: Arabic word appears once
-    (is (= 5 (s/last-index-of "helloمرحباworld" "مرحبا")))
-    ;; bidi: from-index caps search in rune space
-    (is (nil? (s/last-index-of "helloمرحباworld" "مرحبا" 6))))
+(testing "string/last-index-of — complex Unicode"
+  ;; combining: last occurrence of combining sequence
+  (is (= 10 (s/last-index-of "xcaféycafé" "é")))
+  ;; emoji skin tone
+  (is (= 5 (s/last-index-of "👩🏽 x 👩🏽" "👩🏽")))
+  ;; bidi: Arabic word appears once
+  (is (= 5 (s/last-index-of "helloمرحباworld" "مرحبا")))
+  ;; bidi: from-index caps search in rune space
+  (is (nil? (s/last-index-of "helloمرحباworld" "مرحبا" 6))))
 
 (deftest string-blank-test
   (testing "string/blank?"

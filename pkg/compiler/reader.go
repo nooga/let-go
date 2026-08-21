@@ -43,15 +43,17 @@ type Token struct {
 }
 
 type LispReader struct {
-	inputName  string
-	pos        int
-	line       int
-	column     int
-	lastCol    int
-	lastRune   rune
-	maxPercent int
-	inShortFn  bool
-	r          *bufio.Reader
+	inputName          string
+	pos                int
+	line               int
+	column             int
+	lastCol            int
+	lastRune           rune
+	maxPercent         int
+	inShortFn          bool
+	r                  *bufio.Reader
+	taggedReaders      *TaggedReaderRegistry
+	dataReaderResolver taggedDataReaderResolver
 
 	Tokens     []Token
 	tokenizing bool
@@ -60,17 +62,33 @@ type LispReader struct {
 
 func NewLispReader(r io.Reader, inputName string) *LispReader {
 	return &LispReader{
-		inputName: inputName,
-		r:         bufio.NewReader(r),
+		inputName:          inputName,
+		r:                  bufio.NewReader(r),
+		dataReaderResolver: rootDataReaderResolver,
 	}
+}
+
+// NewLispReaderWithTaggedReaders returns a reader that dispatches custom tagged
+// literals through registry. Built-in #uuid and #inst literals remain available
+// when they are not overridden.
+func NewLispReaderWithTaggedReaders(r io.Reader, inputName string, registry *TaggedReaderRegistry) *LispReader {
+	return newLispReaderWithResolvers(r, inputName, registry, rootDataReaderResolver)
+}
+
+func newLispReaderWithResolvers(r io.Reader, inputName string, registry *TaggedReaderRegistry, resolver taggedDataReaderResolver) *LispReader {
+	reader := NewLispReader(r, inputName)
+	reader.taggedReaders = registry
+	reader.dataReaderResolver = resolver
+	return reader
 }
 
 func NewLispReaderTokenizing(r io.Reader, inputName string) *LispReader {
 	return &LispReader{
-		inputName:  inputName,
-		r:          bufio.NewReader(r),
-		Tokens:     []Token{},
-		tokenizing: true,
+		inputName:          inputName,
+		r:                  bufio.NewReader(r),
+		dataReaderResolver: rootDataReaderResolver,
+		Tokens:             []Token{},
+		tokenizing:         true,
 	}
 }
 
@@ -1500,20 +1518,78 @@ func isLetter(ch rune) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
 
+func taggedLiteralError(r *LispReader, tag string, err error) error {
+	message := fmt.Sprintf("reading tagged literal #%s", tag)
+	if isErrorEOF(err) {
+		return NewReaderError(r, message+": unexpected EOF").Wrap(err)
+	}
+	return NewReaderError(r, message).Wrap(err)
+}
+
+type builtinTaggedLiteral uint8
+
+const (
+	builtinTaggedLiteralNone builtinTaggedLiteral = iota
+	builtinTaggedLiteralUUID
+	builtinTaggedLiteralInstant
+)
+
+func classifyBuiltinTaggedLiteral(tag string) builtinTaggedLiteral {
+	switch tag {
+	case "uuid":
+		return builtinTaggedLiteralUUID
+	case "inst":
+		return builtinTaggedLiteralInstant
+	default:
+		return builtinTaggedLiteralNone
+	}
+}
+
+func (r *LispReader) resolveCustomDataReader(tag string) (TaggedDataReader, bool, error) {
+	if reader, ok := r.taggedReaders.lookup(tag); ok {
+		return reader, true, nil
+	}
+	if r.dataReaderResolver != nil {
+		return r.dataReaderResolver(tag)
+	}
+	return nil, false, nil
+}
+
 func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
-	// Read the tag name
 	tag, err := readToken(r, firstCh)
 	if err != nil {
-		return vm.NIL, NewReaderError(r, "reading tagged literal tag")
+		return vm.NIL, NewReaderError(r, "reading tagged literal tag").Wrap(err)
 	}
 	tagStr := tag.String()
-	// Read the value
-	val, err := r.Read()
+	builtin := classifyBuiltinTaggedLiteral(tagStr)
+
+	reader, found, err := r.resolveCustomDataReader(tagStr)
 	if err != nil {
-		return vm.NIL, NewReaderError(r, "reading tagged literal value")
+		return vm.NIL, taggedLiteralError(r, tagStr, err)
 	}
-	switch tagStr {
-	case "uuid":
+	if !found && builtin == builtinTaggedLiteralNone && r.taggedReaders != nil {
+		return vm.NIL, NewReaderError(r, fmt.Sprintf("unknown tagged literal #%s", tagStr))
+	}
+
+	var val vm.Value
+	if found {
+		val, err = r.ReadSkipNoValue()
+	} else {
+		val, err = r.Read()
+	}
+	if err != nil {
+		return vm.NIL, taggedLiteralError(r, tagStr, err)
+	}
+	if found {
+		value, err := reader(val)
+		if err != nil {
+			return vm.NIL, taggedLiteralError(r, tagStr, err)
+		}
+		return value, nil
+	}
+
+	switch builtin {
+	case builtinTaggedLiteralUUID:
 		s, ok := val.(vm.String)
 		if !ok {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("#uuid requires a string, got %s", val.Type().Name()))
@@ -1523,7 +1599,7 @@ func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid UUID string: %s", s))
 		}
 		return u, nil
-	case "inst":
+	case builtinTaggedLiteralInstant:
 		s, ok := val.(vm.String)
 		if !ok {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("#inst requires a string, got %s", val.Type().Name()))
@@ -1534,7 +1610,7 @@ func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
 		}
 		return i, nil
 	default:
-		// Unknown tags: just return the value (best-effort)
+		// Preserve the legacy best-effort behavior when no registry is installed.
 		return val, nil
 	}
 }
