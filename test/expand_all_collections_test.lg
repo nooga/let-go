@@ -31,3 +31,12 @@
     (is (expanded? (pipeline/expand-all (conj #{} '(when true 1))))))
   (testing "seq elements are macroexpanded"
     (is (expanded? (pipeline/expand-all '((when true 1)))))))
+
+(deftest expand-all-preserves-set-element-evaluations
+  (let [expanded (pipeline/expand-all
+                   '#{(-> (swap! calls inc))
+                      (swap! calls inc)})]
+    (testing "equal macroexpansions remain two runtime constructor arguments"
+      (is (= 'hash-set (first expanded)))
+      (is (= 2 (count (rest expanded))))
+      (is (= (nth expanded 1) (nth expanded 2))))))

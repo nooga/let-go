@@ -411,8 +411,12 @@
       ;; they arrived as (hash-set ..) lists and were expanded by the seq arm,
       ;; so this branch never existed and `#{(when true 1)}` silently reached
       ;; build-set unexpanded — bytecode expanded it, native lowering did not.
+      ;;
+      ;; Keep the expanded elements in a constructor form rather than rebuilding
+      ;; a host set here. Distinct source forms can macroexpand identically, but
+      ;; both must still be evaluated before hash-set deduplicates runtime values.
       (set? form)
-      (into #{} (doall (map expand-all (seq form))))
+      (apply list 'hash-set (doall (map expand-all (seq form))))
       :else form)))
 
 ;; --- canonical enumeration of a namespace's lowerable fn-units -------------
