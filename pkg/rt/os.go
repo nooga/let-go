@@ -289,10 +289,11 @@ func installOsNS() {
 
 	// os/rename — (os/rename old-path new-path) → new-path
 	//
-	// Renames old-path to new-path through rename(2), which is atomic within
-	// a filesystem: a concurrent reader sees either the old state or the new
-	// one, never a half-written file. Writing to a temporary name and
-	// renaming into place is the usual way to publish a file safely.
+	// Renames old-path to new-path. On Unix, a rename within one filesystem
+	// is atomic: a concurrent reader sees either the old state or the new one,
+	// never a half-written file. Go does not guarantee that property on
+	// non-Unix hosts. Writing to a temporary name in the destination directory
+	// and renaming into place is the usual Unix way to publish a file safely.
 	//
 	// A rename across filesystems fails rather than falling back to
 	// copy-then-delete. The fallback is what callers reach for this instead
