@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package cli
 
 import (
 	"bytes"
@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	runtimeDebug "runtime/debug"
 	"strings"
 
 	"github.com/nooga/let-go/pkg/bytecode"
@@ -25,6 +26,43 @@ import (
 	wasmassets "github.com/nooga/let-go/pkg/rt/wasm"
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+// letgoModuleVersion reports which version of let-go the generated WASM module
+// should require. That is NOT the same as this binary's version once pkg/cli is
+// importable: for a custom lg, the ldflags-stamped version describes the HOST
+// module, and handing it to gomod.Generate would pin the WASM module to
+// github.com/nooga/let-go@v<host-version> — a version that generally does not
+// exist. Read let-go's own entry out of BuildInfo.Deps instead, and fall back
+// to the stamped version only when let-go IS the main module, which is the
+// stock lg binary.
+//
+// A dep resolved through a replace directive reports no usable version; "dev"
+// sends gomod.Generate down its local-source path, which is what a replace
+// wants anyway.
+func letgoModuleVersion() string {
+	info, ok := runtimeDebug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	return letgoVersionFrom(info, version)
+}
+
+func letgoVersionFrom(info *runtimeDebug.BuildInfo, stamped string) string {
+	if info == nil || info.Main.Path == gomod.ModulePath {
+		return stamped
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != gomod.ModulePath {
+			continue
+		}
+		v := strings.TrimPrefix(dep.Version, "v")
+		if v == "" || v == "(devel)" {
+			return "dev"
+		}
+		return v
+	}
+	return "dev"
+}
 
 // wasmModuleName is the module name of the throwaway Go module the WASM build
 // scaffolds around its generated sources. It used to be baked into the module
@@ -127,7 +165,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	}
 
 	// 4. Write go.mod
-	mod, err := gomod.Generate(tmpDir, wasmModuleName, version)
+	mod, err := gomod.Generate(tmpDir, wasmModuleName, letgoModuleVersion())
 	if err != nil {
 		return err
 	}

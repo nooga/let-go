@@ -338,6 +338,46 @@ func TestLginteropFailsLoudly(t *testing.T) {
 	}
 }
 
+// TestLginteropRegisterStructOnlyForStructs pins which named types get
+// vm.RegisterStruct. ex-struct? used to test the export vector's LENGTH, but
+// every :type shape serializes to 6 elements — the non-struct branch writes
+// `nil []` where the struct branch writes `:struct [fields]` — so it answered
+// true for every named type. That emitted vm.RegisterStruct for named arrays
+// like crc32.Table (`type Table [256]uint32`), which panics at init with
+// "expected struct, got array". The in-tree xxh3 golden never caught it
+// because it is generated with -opaque-structs, which skips RegisterStruct.
+//
+// Both directions matter, so assert both: a real struct still registers.
+func TestLginteropRegisterStructOnlyForStructs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping RegisterStruct check in -short mode (scans with go/types)")
+	}
+	root := repoRoot(t)
+	trackLginteropInputs(t, root)
+
+	gen := func(t *testing.T, pkg, file string) string {
+		t.Helper()
+		dir := t.TempDir()
+		cmd := exec.Command("go", "run", "./cmd/lginterop",
+			"-packages", pkg, "-out-pkg", "interop", "-out", dir)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("lginterop %s failed: %v\n%s", pkg, err, out)
+		}
+		return readFile(t, filepath.Join(dir, file))
+	}
+
+	// hash/crc32's only exported type is `type Table [256]uint32`.
+	if src := gen(t, "hash/crc32", "interop_crc32.go"); strings.Contains(src, "RegisterStruct") {
+		t.Errorf("named array type must not be registered as a struct:\n%s", src)
+	}
+	// image/color is all structs — these must keep registering.
+	src := gen(t, "image/color", "interop_color.go")
+	if !strings.Contains(src, `vm.RegisterStruct[color.RGBA]("color/RGBA")`) {
+		t.Errorf("genuine struct type lost its RegisterStruct:\n%s", src)
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

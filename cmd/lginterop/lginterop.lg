@@ -51,13 +51,20 @@
     nil))
 
 (defn ex-struct? [ex]
+  "Whether a :type export is a STRUCT, as opposed to a named type over some
+   other underlying (crc32.Table is `type Table [256]uint32`). Test the
+   :struct marker at index 3, not the element count: every :type shape is 6
+   elements long — the non-struct branch serializes `nil []` where the struct
+   branch serializes `:struct [fields]` — so counting made this true for every
+   named type and emitted vm.RegisterStruct for arrays, slices and func types.
+   That panics at init with \"expected struct, got array\"."
   (case (ex-kind ex)
-    :type (= (count ex) 6)
+    :type (= :struct (nth ex 3))
     false))
 
 (defn ex-fields [ex]
   (case (ex-kind ex)
-    :type (if (= (count ex) 6) (nth ex 4) [])
+    :type (if (ex-struct? ex) (nth ex 4) [])
     nil))
 
 (defn ex-methods [ex]

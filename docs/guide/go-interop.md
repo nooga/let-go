@@ -289,7 +289,8 @@ already selects the in-tree output, and accepting `rt` would give one name two
 meanings.
 
 Blank-import the generated package from your `main` to get the namespace
-registered.
+registered; see [Building a custom `lg`](custom-lg.md) for the full module
+layout.
 
 #### Module-context caveat
 
