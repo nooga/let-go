@@ -249,12 +249,21 @@
 (defn install-fn-name [go-alias]
   (str "install" (pascal-case go-alias) "NS"))
 
-(defn build-install-fn [go-alias exports smart? opaque-structs?]
+(defn rt-import-alias [go-alias]
+  "Import alias for the let-go runtime in out-of-tree output. Normally the
+   inferred `rt`, but a wrapped package whose own alias is `rt` (any import
+   path ending in /rt) would collide with it in the same import block and the
+   file would not compile. Fall back to a name no Go package path yields."
+  (if (= go-alias "rt") "letgort" "rt"))
+
+(defn build-install-fn [go-alias exports smart? opaque-structs? out-pkg?]
   "Returns a gogen/func-decl AST node for the install function.
    The emitted function takes no arguments: it constructs a fresh
    *vm.Namespace named after the alias, defines every export on it,
    and registers it via rt.RegisterNS — matching the existing built-in
-   namespace install pattern in pkg/rt (async.go, bencode.go, ...)."
+   namespace install pattern in pkg/rt (async.go, bencode.go, ...).
+   In-tree the call is unqualified (the file IS package rt); out-of-tree
+   it is qualified, since rt is an ordinary import there."
   (let [def-stmts (mapcat (fn [ex]
                             (let [stmt (build-install-stmt go-alias ex smart? opaque-structs?)]
                               (if stmt [stmt] [])))
@@ -263,26 +272,42 @@
                   (gogen/ident "ns")
                   (gogen/call (gogen/field-sel (gogen/ident "vm") "NewNamespace")
                     [(gogen/string-lit go-alias)]))
+        register-fn (if out-pkg?
+                      (gogen/field-sel (gogen/ident (rt-import-alias go-alias)) "RegisterNS")
+                      (gogen/ident "RegisterNS"))
         register (gogen/expr-stmt
-                   (gogen/call (gogen/ident "RegisterNS")
-                     [(gogen/ident "ns")]))]
+                   (gogen/call register-fn [(gogen/ident "ns")]))]
     (gogen/func-decl (install-fn-name go-alias)
       []
       []
       (concat [ns-init] def-stmts [register]))))
 
-(defn build-init-fn [go-alias]
-  "func init() { RegisterInstaller(install<Alias>NS) } — defers namespace
-   construction to rt's installer machinery instead of running at import."
+(defn build-init-fn [go-alias out-pkg?]
+  "In-tree: func init() { RegisterInstaller(install<Alias>NS) } — defers
+   namespace construction to rt's installer machinery instead of running
+   at import.
+
+   Out-of-tree: func init() { install<Alias>NS() } — a DIRECT call. rt
+   drains its installer queue during its OWN package init (see
+   pkg/rt/zz_run_installers.go), and Go runs an imported package's init
+   before the importer's, so a RegisterInstaller from here would enqueue
+   after the drain and silently never run. Calling directly is safe: rt
+   is fully initialized by the time this fires, RegisterNS is
+   mutex-guarded, and the ordering relative to LoadCore is the same as
+   an in-tree installer's."
   (gogen/func-decl "init"
     []
     []
     [(gogen/expr-stmt
-       (gogen/call (gogen/ident "RegisterInstaller")
-         [(gogen/ident (install-fn-name go-alias))]))]))
+       (if out-pkg?
+         (gogen/call (gogen/ident (install-fn-name go-alias)) [])
+         (gogen/call (gogen/ident "RegisterInstaller")
+           [(gogen/ident (install-fn-name go-alias))])))]))
 
-(defn build-file [pkg-name go-alias exports smart? opaque-structs?]
-  "Returns a gogen/file AST node for the complete generated file."
+(defn build-file [pkg-name go-alias exports smart? opaque-structs? out-pkg]
+  "Returns a gogen/file AST node for the complete generated file.
+   out-pkg empty => the in-tree `package rt` form, byte-for-byte as before;
+   non-empty => a self-contained package of that name that imports pkg/rt."
   (let [wrapper-fns (if smart?
                       (filter identity
                         (map (fn [ex]
@@ -295,7 +320,8 @@
                                    (ex-variadic? ex))))
                           exports))
                       [])
-        install-fn (build-install-fn go-alias exports smart? opaque-structs?)
+        out-pkg? (and out-pkg (not (empty? out-pkg)))
+        install-fn (build-install-fn go-alias exports smart? opaque-structs? out-pkg?)
         has-smart? (not (empty? wrapper-fns))
         has-structs? (some (fn [ex] (and (= (ex-kind ex) :type) (ex-struct? ex) (not (generic? ex)))) exports)
         has-pkg-refs? (some (fn [ex]
@@ -307,23 +333,30 @@
                             exports)
         imports (filter identity
                   [(when has-smart? (gogen/import-spec "fmt"))
+                   (when out-pkg?
+                     (if (= go-alias "rt")
+                       (gogen/import-spec "github.com/nooga/let-go/pkg/rt" (rt-import-alias go-alias))
+                       (gogen/import-spec "github.com/nooga/let-go/pkg/rt")))
                    (gogen/import-spec "github.com/nooga/let-go/pkg/vm")
                    (when has-pkg-refs? (gogen/import-spec pkg-name go-alias))])]
-    (gogen/file "rt"
+    (gogen/file (if out-pkg? out-pkg "rt")
       imports
-      (concat [(build-init-fn go-alias)] wrapper-fns [install-fn]))))
+      (concat [(build-init-fn go-alias out-pkg?)] wrapper-fns [install-fn]))))
 
 ;; --- public driver -------------------------------------------------------
 
-(defn generate [pkg-name alias exports out-path smart? opaque-structs? build-tags]
+(defn generate [pkg-name alias exports out-path smart? opaque-structs? build-tags out-pkg]
   "Generate a Go interop file for the given package exports.
    opaque-structs? skips vm.RegisterStruct emission so struct types stay
    vm.Boxed and dispatch their methods reflectively instead of being
    flattened to field-only Records.
    build-tags, when non-empty, is emitted as `//go:build <constraint>`
-   before the generated-by header so regeneration is idempotent."
+   before the generated-by header so regeneration is idempotent.
+   out-pkg, when non-empty, emits a self-contained package of that name
+   for use outside the let-go tree instead of `package rt`."
   (let [go-alias (go-alias-from-pkg alias)
         has-tags? (and build-tags (not (empty? build-tags)))
+        out-pkg? (and out-pkg (not (empty? out-pkg)))
         ;; The header records the exact invocation (including flags), so
         ;; regenerating from the header's own command round-trips. Quote
         ;; the constraint so shell history-expansion of `!` is safe.
@@ -333,12 +366,14 @@
         tags-flag (if has-tags?
                     (str " -build-tags '" build-tags "'")
                     "")
+        out-pkg-flag (if out-pkg? (str " -out-pkg " out-pkg) "")
         header (str tag-prefix
                     "// Code generated by `lginterop -packages " pkg-name
                     (if smart? " -smart" "")
                     (if opaque-structs? " -opaque-structs" "")
                     tags-flag
+                    out-pkg-flag
                     "`. DO NOT EDIT.\n")]
     (spit out-path
           (str header
-               (gogen/render (build-file pkg-name go-alias exports smart? opaque-structs?))))))
+               (gogen/render (build-file pkg-name go-alias exports smart? opaque-structs? out-pkg))))))

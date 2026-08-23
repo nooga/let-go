@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"flag"
 	"fmt"
 	"go/build"
@@ -19,8 +20,19 @@ import (
 
 	"github.com/nooga/let-go/internal/primgen"
 	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/rt"
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+// macroLib is the gogen-based codegen library that emits the interop files.
+// It is embedded rather than read from the repo so this command works from
+// any working directory — `go run github.com/nooga/let-go/cmd/lginterop@v...`
+// has no let-go checkout to read it out of. go:embed cannot reach outside
+// the package directory, which is why the script lives here and not in
+// scripts/.
+//
+//go:embed lginterop.lg
+var macroLib string
 
 // init ensures build.Default.GOROOT matches the user's on-PATH `go` binary,
 // so the source importer resolves against the actual Go install.
@@ -39,6 +51,7 @@ func main() {
 	smartFlag := flag.Bool("smart", false, "generate explicit wrappers with type-specific unboxing/boxing")
 	opaqueFlag := flag.Bool("opaque-structs", false, "skip vm.RegisterStruct: struct types stay boxed and dispatch methods reflectively")
 	buildTagsFlag := flag.String("build-tags", "", "emit //go:build <constraint> as the first line of each generated file (e.g. '!tinygo')")
+	outPkgFlag := flag.String("out-pkg", "", "emit a self-contained package with this name for use OUTSIDE the let-go tree (imports pkg/rt, installs from init); empty emits the in-tree `package rt` form")
 	skeletonFlag := flag.Bool("skeleton", false, "generate let-go skeleton files with defn- stubs for hand customization")
 	primitivesDir := flag.String("primitives", "", "directory containing //lg:-annotated Go sources (generates zz_primitives_generated.go)")
 	primitivesOut := flag.String("primitives-out", "pkg/rt/zz_primitives_generated.go", "output file for generated primitives")
@@ -57,11 +70,17 @@ func main() {
 		return
 	}
 
+	if err := validateOutPkg(*outPkgFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "lginterop: %v\n", err)
+		os.Exit(1)
+	}
+
 	var entries []interopEntry
 	if *packagesFlag != "" {
 		for pkg := range strings.SplitSeq(*packagesFlag, ",") {
 			entries = append(entries, interopEntry{
-				pkg: strings.TrimSpace(pkg), smart: *smartFlag, opaque: *opaqueFlag, buildTags: *buildTagsFlag,
+				pkg: strings.TrimSpace(pkg), smart: *smartFlag, opaque: *opaqueFlag,
+				buildTags: *buildTagsFlag, outPkg: *outPkgFlag,
 			})
 		}
 	} else {
@@ -74,6 +93,7 @@ func main() {
 		for i := range entries {
 			entries[i].opaque = *opaqueFlag
 			entries[i].buildTags = *buildTagsFlag
+			entries[i].outPkg = *outPkgFlag
 		}
 	}
 
@@ -84,18 +104,6 @@ func main() {
 
 	if err := os.MkdirAll(*out, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "lginterop: mkdir %s: %v\n", *out, err)
-		os.Exit(1)
-	}
-
-	repoRoot, err := findRepoRoot()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "lginterop: %v\n", err)
-		os.Exit(1)
-	}
-
-	lgBin, err := ensureLgBinary(repoRoot)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "lginterop: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -116,7 +124,7 @@ func main() {
 
 	okCount := 0
 	for _, ent := range entries {
-		if err := generatePackage(repoRoot, lgBin, ent, *out, *skeletonFlag); err != nil {
+		if err := generatePackage(ent, *out, *skeletonFlag); err != nil {
 			fmt.Fprintf(os.Stderr, "lginterop: %s: %v\n", ent.pkg, err)
 			continue
 		}
@@ -124,50 +132,53 @@ func main() {
 	}
 
 	fmt.Printf("lginterop: generated %d/%d package(s) in %s\n", okCount, len(entries), *out)
+	// Per-package failures only log and continue, so without this a run that
+	// generated nothing still exited 0 — a caller driving this from a build
+	// pipeline would see success and a missing file.
+	if okCount < len(entries) {
+		os.Exit(1)
+	}
 }
 
-// --- repo root & lg binary discovery --------------------------------------
-
-func findRepoRoot() (string, error) {
-	dir, _ := os.Getwd()
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return "", fmt.Errorf("cannot find repo root (no go.mod in ancestor directories)")
+// goKeywords are rejected as package names: the emitter would happily write
+// `package package`, and the tool would report success for output that does
+// not parse.
+var goKeywords = map[string]bool{
+	"break": true, "case": true, "chan": true, "const": true, "continue": true,
+	"default": true, "defer": true, "else": true, "fallthrough": true, "for": true,
+	"func": true, "go": true, "goto": true, "if": true, "import": true,
+	"interface": true, "map": true, "package": true, "range": true, "return": true,
+	"select": true, "struct": true, "switch": true, "type": true, "var": true,
 }
 
-func ensureLgBinary(repoRoot string) (string, error) {
-	// Always build (incremental, so cheap when nothing changed): a stat
-	// fast-path silently reuses a STALE ./lg, which regenerates interop
-	// files with old emitter behavior — the drift class the round-trip
-	// golden test exists to catch. Building into a unique temp name and
-	// renaming keeps concurrent invocations safe (parallel test packages
-	// each rename a complete binary; last rename wins) without locking.
-	lgPath := filepath.Join(repoRoot, "lg")
-	tmp, err := os.CreateTemp(repoRoot, "lg-build-*")
-	if err != nil {
-		return "", fmt.Errorf("build lg binary: %w", err)
+// validateOutPkg rejects anything that would not compile as a package clause.
+// An empty value is the in-tree default and always valid.
+func validateOutPkg(name string) error {
+	if name == "" {
+		return nil
 	}
-	tmpPath := tmp.Name()
-	tmp.Close()
-	cmd := exec.Command("go", "build", "-o", tmpPath, ".")
-	cmd.Dir = repoRoot
-	if output, err := cmd.CombinedOutput(); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("build lg binary: %w\n%s", err, output)
+	// rt is the in-tree package, which the empty default already selects.
+	// Accepting it here would give two spellings for two DIFFERENT outputs
+	// (`-out-pkg rt` would import rt into itself), so refuse it outright.
+	if name == "rt" {
+		return fmt.Errorf("-out-pkg rt is ambiguous: omit the flag for the in-tree `package rt` output")
 	}
-	if err := os.Rename(tmpPath, lgPath); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("build lg binary: %w", err)
+	if name == "_" {
+		return fmt.Errorf("-out-pkg %q is not a valid package name", name)
 	}
-	return lgPath, nil
+	if goKeywords[name] {
+		return fmt.Errorf("-out-pkg %q is a Go keyword, not a valid package name", name)
+	}
+	for i, r := range name {
+		ok := r == '_' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(i > 0 && r >= '0' && r <= '9')
+		if !ok {
+			return fmt.Errorf("-out-pkg %q is not a valid Go identifier "+
+				"(letters, digits and _ only; may not start with a digit)", name)
+		}
+	}
+	return nil
 }
 
 // --- deps.edn parsing -----------------------------------------------------
@@ -277,6 +288,7 @@ type interopEntry struct {
 	smart     bool
 	opaque    bool   // skip vm.RegisterStruct: structs stay Boxed, methods dispatch reflectively
 	buildTags string // emitted as //go:build <constraint> when non-empty
+	outPkg    string // non-empty: emit a self-contained package for out-of-tree use
 }
 
 type export struct {
@@ -293,7 +305,7 @@ func defaultAlias(pkg string) string {
 
 // --- package generation ---------------------------------------------------
 
-func generatePackage(repoRoot, lgBin string, ent interopEntry, outDir string, skeleton bool) error {
+func generatePackage(ent interopEntry, outDir string, skeleton bool) error {
 	pkgName := ent.pkg
 	alias := ent.alias
 	if alias == "" {
@@ -304,7 +316,13 @@ func generatePackage(repoRoot, lgBin string, ent interopEntry, outDir string, sk
 	imp := importer.ForCompiler(fset, "source", nil)
 	pkg, err := imp.Import(pkgName)
 	if err != nil {
-		return fmt.Errorf("import: %w", err)
+		// The go/types source importer resolves imports against the module
+		// context of the CURRENT working directory. Scanning a third-party
+		// package therefore only works from inside a module that requires it.
+		return fmt.Errorf("import %s: %w\n"+
+			"hint: the scanned package must be resolvable from the current "+
+			"directory's module — run lginterop inside a module that requires "+
+			"it (`go get %s` first)", pkgName, err, pkgName)
 	}
 
 	var exports []export
@@ -334,22 +352,18 @@ func generatePackage(repoRoot, lgBin string, ent interopEntry, outDir string, sk
 	fileName := "interop_" + goPackageToFileName(alias) + ".go"
 	outPath := filepath.Join(outDir, fileName)
 
-	// Write the Lisp script that drives gogen codegen.
-	scriptPath, err := writeGenScript(repoRoot, pkgName, alias, exports, outPath, ent.smart, ent.opaque, ent.buildTags)
-	if err != nil {
-		return fmt.Errorf("write script: %w", err)
+	// Build the let-go script that drives gogen codegen and evaluate it in
+	// THIS process. Running it in-process (rather than building an lg binary
+	// and shelling out) is what makes the command self-contained: gogen is
+	// registered by pkg/rt, which any binary importing the runtime already
+	// links, so there is no repo root to find and no emitter/binary drift to
+	// guard against.
+	script := buildGenScript(pkgName, alias, exports, outPath, ent.smart, ent.opaque, ent.buildTags, ent.outPkg)
+	if err := keepScript(script); err != nil {
+		return err
 	}
-	if os.Getenv("LGINTEROP_KEEP_SCRIPT") != "" {
-		fmt.Printf("lginterop: keeping temp script %s\n", scriptPath)
-	} else {
-		defer os.Remove(scriptPath)
-	}
-
-	cmd := exec.Command(lgBin, "-source-paths", filepath.Join(repoRoot, "scripts"), scriptPath)
-	cmd.Dir = repoRoot
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("lg failed: %w\noutput:\n%s", err, output)
+	if err := evalGenScript(script); err != nil {
+		return err
 	}
 
 	mode := "direct"
@@ -372,37 +386,56 @@ func generatePackage(repoRoot, lgBin string, ent interopEntry, outDir string, sk
 
 // --- Lisp script generation -----------------------------------------------
 
-func writeGenScript(repoRoot, pkgName, alias string, exports []export, outPath string, smart, opaque bool, buildTags string) (string, error) {
-	macroPath := filepath.Join(repoRoot, "scripts", "lginterop.lg")
-	macroLib, err := os.ReadFile(macroPath)
-	if err != nil {
-		return "", fmt.Errorf("read macro library: %w", err)
-	}
-
+func buildGenScript(pkgName, alias string, exports []export, outPath string, smart, opaque bool, buildTags, outPkg string) string {
 	var b strings.Builder
-	b.Write(macroLib)
+	b.WriteString(macroLib)
 	b.WriteString("\n")
 	b.WriteString("(def exports ")
 	b.WriteString(serializeExports(exports))
 	b.WriteString(")\n")
-	fmt.Fprintf(&b, "(lginterop/generate %s %s exports %s %s %s %s)\n",
+	fmt.Fprintf(&b, "(lginterop/generate %s %s exports %s %s %s %s %s)\n",
 		strconv.Quote(pkgName), strconv.Quote(alias), strconv.Quote(outPath),
-		strconv.FormatBool(smart), strconv.FormatBool(opaque), strconv.Quote(buildTags))
+		strconv.FormatBool(smart), strconv.FormatBool(opaque), strconv.Quote(buildTags),
+		strconv.Quote(outPkg))
+	return b.String()
+}
 
-	tmpFile, err := os.CreateTemp("", "lginterop-*.lg")
+// evalGenScript runs the codegen script through the runtime this binary
+// already links. The script writes its output with `spit`, so nothing comes
+// back through the return value; only the error matters.
+//
+// CompileMultiple, not pkg/api's Run: the script is a sequence of top-level
+// forms (an (ns ...), the defns, the driver call), and Run compiles only the
+// first one. This mirrors lg.go's own runForm.
+func evalGenScript(script string) error {
+	ns := rt.NS("user")
+	if ns == nil {
+		return fmt.Errorf("codegen: namespace \"user\" not found")
+	}
+	ctx := compiler.NewCompiler(vm.NewConsts(), ns)
+	if _, _, err := ctx.CompileMultiple(strings.NewReader(script)); err != nil {
+		return fmt.Errorf("codegen: %w", err)
+	}
+	return nil
+}
+
+// keepScript honors LGINTEROP_KEEP_SCRIPT by dumping the generated script to a
+// temp file for debugging. The script is no longer written to disk as part of
+// normal operation, so this is the only way to inspect it.
+func keepScript(script string) error {
+	if os.Getenv("LGINTEROP_KEEP_SCRIPT") == "" {
+		return nil
+	}
+	f, err := os.CreateTemp("", "lginterop-*.lg")
 	if err != nil {
-		return "", err
+		return fmt.Errorf("keep script: %w", err)
 	}
-	if _, err := tmpFile.WriteString(b.String()); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-		return "", err
+	defer f.Close()
+	if _, err := f.WriteString(script); err != nil {
+		return fmt.Errorf("keep script: %w", err)
 	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpFile.Name())
-		return "", err
-	}
-	return tmpFile.Name(), nil
+	fmt.Printf("lginterop: keeping temp script %s\n", f.Name())
+	return nil
 }
 
 // serializeExports emits a compact positional vector for each export:
