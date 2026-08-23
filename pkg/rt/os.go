@@ -367,6 +367,72 @@ func installOsNS() {
 		return vm.NIL, nil
 	}))
 
+	// os/absolute-path — (os/absolute-path path) → "/abs/path"
+	//
+	// Resolves path against the process working directory and cleans it.
+	// Lexical with respect to the argument: the path itself is never looked
+	// up, so it need not exist and any symlink in it stays a symlink. (The
+	// process cwd is read, which is why this can still fail — os.Getwd
+	// errors when the working directory has been removed.)
+	//
+	// An empty path is refused rather than quietly meaning the cwd, on the
+	// same reasoning as delete-tree: it is what an unset variable looks
+	// like, and returning a plausible answer hides it.
+	ns.Def("absolute-path", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/absolute-path expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/absolute-path expected String path")
+		}
+		if path == "" {
+			return vm.NIL, fmt.Errorf("os/absolute-path expected a non-empty path")
+		}
+		abs, err := filepath.Abs(string(path))
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(abs), nil
+	}))
+
+	// os/canonical-path — (os/canonical-path path) → "/real/path"
+	//
+	// The absolute path with every symlink resolved, so two names for one
+	// file produce one string. That is what makes it the form to compare or
+	// use as a key, and it is why this reads the filesystem where
+	// absolute-path does not: a symlink can only be followed by looking.
+	//
+	// A path that does not exist is an error rather than a cleaned-up
+	// guess. Callers wanting a name for a file they are about to create
+	// want absolute-path.
+	ns.Def("canonical-path", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/canonical-path expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/canonical-path expected String path")
+		}
+		if path == "" {
+			return vm.NIL, fmt.Errorf("os/canonical-path expected a non-empty path")
+		}
+		// Resolve before absolutizing. filepath.Abs cleans lexically, which
+		// collapses ".." against the *link's* parent instead of the
+		// target's — so Abs-then-EvalSymlinks reports ENOENT for a path the
+		// kernel opens fine. EvalSymlinks walks a relative path against the
+		// cwd itself, so doing it first costs nothing.
+		real, err := filepath.EvalSymlinks(string(path))
+		if err != nil {
+			return vm.NIL, err
+		}
+		abs, err := filepath.Abs(real)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(abs), nil
+	}))
+
 	// os/os-name — (os/os-name) → "linux", "darwin", "windows", ...
 	ns.Def("os-name", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.String(runtime.GOOS), nil
