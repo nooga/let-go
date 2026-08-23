@@ -330,6 +330,33 @@ func unboxInto(target reflect.Value, val Value) error {
 				return nil
 			}
 		}
+	case reflect.Interface:
+		// `any` holds every Go value, Go nil included, so converting into it
+		// is TOTAL — it must never reach the error return below. When it did,
+		// the caller (boxArgForReflect) treated the failure as "this sequence
+		// has no Go form", handed the whole slice over as []vm.Value, and the
+		// reflect call died with:
+		//
+		//	reflect: Call using []vm.Value as type []interface {}
+		//
+		// A let-go nil was the common trigger, which made every SQL NULL
+		// parameter fail. Restricted to the empty interface: a non-empty one
+		// (error, io.Reader, …) genuinely may not be satisfiable, and the
+		// paths below still decide that.
+		if target.NumMethod() == 0 {
+			if raw := val.Unbox(); raw != nil {
+				target.Set(reflect.ValueOf(raw))
+			} else {
+				// Zero explicitly rather than leaving the target untouched.
+				// unboxSliceInto allocates a fresh element, but unboxInto is
+				// shared — RecordToStruct writes into an EXISTING struct
+				// field, which may already hold a value. Skipping the write
+				// would report success while leaving stale data behind. More
+				// than NIL lands here: any value whose Unbox yields nil.
+				target.Set(reflect.Zero(target.Type()))
+			}
+			return nil
+		}
 	}
 
 	// Fallback: try Unbox and assignability

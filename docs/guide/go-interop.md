@@ -94,13 +94,25 @@ func (db *DB) Exec(query string, args ...any) (Result, error)
 func (db *DB) Query(query string, args ...any) (*Rows, error)
 ```
 
-So the core of the wrapper is nearly free:
+The shapes line up, but the parameters need one small piece of Go to get
+across. `Exec` is a method, and methods are not first-class values in let-go,
+so `apply` has nothing to spread the parameter vector into. A shim takes the
+parameters as a slice and spreads them on the Go side:
+
+```go
+func Exec(db *sql.DB, query string, args []any) (sql.Result, error) {
+    return db.Exec(query, args...)
+}
+```
 
 ```clojure
 (defn exec! [db formatted]
   (let [[q & params] formatted]
-    (apply sql/Exec db q params)))     ; variadic ...any maps directly
+    (shim/Exec db q (vec params))))
 ```
+
+See [Why `Query` needs a shim too](#why-query-needs-a-shim-too) for the full
+reasoning; it applies to every variadic method.
 
 ### What generation + boxing gives you directly
 
@@ -163,7 +175,9 @@ destinations. The bridge is a shim that allocates the destinations, calls
 
 ```go
 // ScanRow reads the current row into a slice of values, sized from the
-// column count. Returned as []any so it surfaces in let-go as a sequence.
+// column count. []any is the right return type: let-go boxes each element
+// by its dynamic type, so a string column arrives as a let-go string and a
+// NULL arrives as nil.
 func ScanRow(rows *sql.Rows) ([]any, error) {
     cols, err := rows.Columns()
     if err != nil {
@@ -181,11 +195,27 @@ func ScanRow(rows *sql.Rows) ([]any, error) {
 }
 ```
 
-Nobody needs to hand-maintain this: the lginterop emitter is written in
-let-go and emits Go via `gogen`, so the shim is a generation concern — an
-out-param template the emitter applies to `...any`-pointer methods (with
-`ScanRow` as the first instance), keeping the whole wrapper lg-first.
-Everything above it is `.lg`:
+This is hand-written today. The emitter has no out-parameter template, so a
+wrapper needing `Scan` carries a small Go package of its own alongside the
+generated one. That package registers its functions as an ordinary namespace:
+
+```go
+func init() {
+    ns := vm.NewNamespace("shim")
+    ns.Def("ScanRow", vm.MustBox(ScanRow))
+    ns.Def("Query", vm.MustBox(Query))
+    ns.Def("Exec", vm.MustBox(Exec))
+    rt.RegisterNS(ns)
+}
+```
+
+Call `rt.RegisterNS` directly from `init` rather than through
+`rt.RegisterInstaller`, for the same reason out-of-tree generated packages do:
+`pkg/rt` drains its installer queue during its own package init, which Go runs
+before the importing package's, so anything queued from here would arrive
+after the drain and silently never run.
+
+Everything above that seam is `.lg`:
 
 ```clojure
 (ns db)
@@ -193,14 +223,14 @@ Everything above it is `.lg`:
 (defn- row-seq [rows cols]
   (lazy-seq
     (when (.Next rows)
-      (cons (zipmap cols (sql/ScanRow rows))
+      (cons (zipmap cols (shim/ScanRow rows))
             (row-seq rows cols)))))
 
 (defn query
   "Runs HoneySQL-formatted [q & params] against db; returns a fully
    realized seq of column-keyword → value maps."
   [db [q & params]]
-  (let [rows (apply sql/Query db q params)]
+  (let [rows (shim/Query db q (vec params))]
     (try
       (let [cols (map keyword (.Columns rows))]
         (doall (row-seq rows cols)))
@@ -209,12 +239,65 @@ Everything above it is `.lg`:
 (defn exec!
   "Runs HoneySQL-formatted [q & params]; returns {:rows-affected n}."
   [db [q & params]]
-  (let [r (apply sql/Exec db q params)]
+  (let [r (shim/Exec db q (vec params))]
     {:rows-affected (.RowsAffected r)}))
 ```
 
 (Note the `doall` before `finally` closes the cursor — the seq must be
 realized while `rows` is still open.)
+
+#### Why `Query` needs a shim too
+
+An earlier version of this guide wrote `(apply sql/Query db q params)`. That
+cannot work, and the reason is worth knowing before you reach for it:
+`Query` is a *method* on `*sql.DB`, methods are not first-class values in
+let-go, and `apply` needs a function value to spread arguments into. Calling
+`(.Query db q p1 p2)` with literal arguments is fine; a wrapper holding its
+parameters in a vector has no way to spread them.
+
+So `Query` and `Exec` take the parameters as a slice and spread them on the
+Go side:
+
+```go
+func Query(db *sql.DB, query string, args []any) (*sql.Rows, error) {
+    return db.Query(query, args...)
+}
+
+func Exec(db *sql.DB, query string, args []any) (sql.Result, error) {
+    return db.Exec(query, args...)
+}
+```
+
+`[]any` again, and again it is load-bearing: a let-go vector converts into
+`[]any` element by element, and a let-go `nil` becomes a Go `nil`, so a NULL
+parameter passes through like any other value.
+
+### How `[]any` crosses the boundary
+
+`[]any` is the natural Go type for "a row of unknown column types", so it is
+worth stating what happens to it in each direction.
+
+**Go to let-go.** Each element is boxed by its *dynamic* type, not the
+slice's static element type. A `[]any` holding `"Ada"`, `int64(36)` and
+`nil` arrives as a let-go vector of a string, an int and `nil`, so ordinary
+comparisons work:
+
+```clojure
+(= "Ada" (first (shim/ScanRow rows)))   ; => true
+```
+
+Elements the boxing layer has no native form for stay wrapped as opaque
+values, exactly as they would outside a `[]any`. Nesting works: a `[]any`
+inside a `[]any` converts recursively.
+
+**let-go to Go.** A let-go sequence converts into a `[]any` parameter
+element by element, and the conversion always succeeds, because `any` can
+hold every Go value. A let-go `nil` becomes a Go `nil` rather than failing
+the call, which is what makes NULL parameters work.
+
+Element values are whatever `Value.Unbox` yields, so a let-go int arrives as
+a Go `int`. Convert explicitly in the shim if a driver wants something
+narrower.
 
 ### Drivers
 
@@ -242,7 +325,7 @@ A contributed `database/sql` wrapper would be three small pieces:
 | Piece | Where | Size |
 |---|---|---|
 | Generated/boxed raw surface (`sql/Open`, method dispatch on DB/Rows/Result) | `pkg/rt/interop_sql.go` | generated |
-| `ScanRow` out-param shim | same generated file, emitted by the lg-based gogen emitter | ~20 lines, generated |
+| `ScanRow` out-param shim, plus `Query`/`Exec` parameter shims | a small hand-written Go package next to the generated one | ~40 lines |
 | `db` veneer: `query`, `exec!`, `with-db` | `pkg/rt/core/db.lg` (or a userland `.lg` library) | ~1 screen |
 
 ## Reference: `cmd/lginterop`

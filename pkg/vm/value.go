@@ -245,7 +245,35 @@ func BoxValue(v reflect.Value) (Value, error) {
 		in := make([]Value, v.Len())
 		for i := 0; i < v.Len(); i++ {
 			e := v.Index(i)
+			// Box an interface-typed element by its DYNAMIC type. The switch
+			// above reads the slice's STATIC element type, so for a []any that
+			// kind is Interface and every element would otherwise miss the
+			// string/int/float paths and land as an opaque Boxed — printing as
+			// <go.string Ada> and comparing equal to nothing in let-go. []any
+			// is the natural Go return type for a row of unknown column types,
+			// so that made the documented database/sql wrapper shape unusable.
+			//
+			// The IsNil test is load-bearing, not defensive: Elem() on a nil
+			// interface yields the zero reflect.Value, and BoxValue reports an
+			// invalid value as an error rather than NIL. Leaving a nil element
+			// wrapped lets the nil-interface guard at the top of BoxValue
+			// return NIL — which is what a SQL NULL has to become.
+			if e.Kind() == reflect.Interface && !e.IsNil() {
+				if d := e.Elem(); dynamicBoxSafe(d.Type()) {
+					e = d
+				}
+			}
 			mv, err := BoxValue(e)
+			if err != nil && e != v.Index(i) {
+				// The dynamic type turned out to be one BoxValue cannot
+				// handle — a defined scalar like json.Number or MyBool, whose
+				// XType.Box accepts only the exact predeclared type. Boxing
+				// the element wrapped yields the opaque Boxed it produced
+				// before this unwrapping existed, so an element we cannot
+				// improve is preserved rather than failing the whole slice.
+				e = v.Index(i)
+				mv, err = BoxValue(e)
+			}
 			if err != nil {
 				return NIL, NewTypeError(e, "can't be boxed", nil).Wrap(err)
 			}
@@ -281,6 +309,54 @@ func BoxValue(v reflect.Value) (Value, error) {
 		}
 		return NIL, NewTypeError(v, "is not boxable", nil)
 	}
+}
+
+// dynamicBoxSafe reports whether an interface element's dynamic type is one we
+// unwrap and box directly. It is an ALLOWLIST, deliberately: BoxValue reaches
+// several paths that assume an exact predeclared type, and some of them panic
+// rather than erroring, so an error fallback cannot make an opt-out list safe.
+//
+//   - the slice/array case calls IsNil, invalid for an array;
+//   - the []byte/[]int64/[]float64 fast paths type-assert the exact slice
+//     type, so a defined type over the same underlying slice explodes;
+//   - ChanType.Box spawns a goroutine that calls Recv, which for a send-only
+//     channel panics in ANOTHER goroutine and takes the process down —
+//     unrecoverable at this call site;
+//   - and composites reach all of the above recursively, so a top-level-only
+//     check is not enough ([][1]int panics on its element).
+//
+// These all predate dynamic boxing — passing such a value straight to BoxValue
+// has always behaved this way — but unwrapping would newly route []any
+// elements into them. Listing what we positively want keeps everything else
+// boxing exactly as it did before: as an opaque Boxed.
+//
+// []any is included and is what makes nesting work: its elements are
+// themselves interfaces, so they recurse through this same allowlist.
+func dynamicBoxSafe(t reflect.Type) bool {
+	// A defined type (json.Number, MyBool, MyInts) is never unwrapped: the
+	// string and bool branches call XType.Box, which accepts only the exact
+	// predeclared type, and the slice fast paths assert it.
+	if t.PkgPath() != "" {
+		return false
+	}
+	switch t.Kind() {
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	case reflect.Slice:
+		switch t.Elem().Kind() {
+		case reflect.Uint8, reflect.Int64, reflect.Float64:
+			// Exactly []byte / []int64 / []float64, whose fast paths assert
+			// precisely those types.
+			return t.Elem().PkgPath() == ""
+		case reflect.Interface:
+			// []any — elements recurse through this allowlist.
+			return t.Elem().NumMethod() == 0
+		}
+	}
+	return false
 }
 
 func IsTruthy(v Value) bool {
