@@ -7,6 +7,8 @@
 
 # let-go
 
+> 💬 Come talk about let-go in `#let-go` on [The Fixpoint](https://discord.gg/Ky535CQ9pj) Discord.
+
 Greetings loafers! _(λ-gophers haha, get it?)_
 
 let-go is a Clojure dialect with a bytecode compiler and stack VM, written in Go.
