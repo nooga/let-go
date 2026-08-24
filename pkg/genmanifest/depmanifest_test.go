@@ -454,3 +454,39 @@ func TestStaleOutputsDetectsTornLoweredTree(t *testing.T) {
 	}
 	t.Fatalf("torn lowered tree must be stale, got %v", stale)
 }
+
+// generated.manifest has no merge driver and is one sorted record per line, so a
+// clean text merge can land both sides' record for a single edge. The parse must
+// refuse that, and Compute with it — Compute is the path scripts/git-merge-sums.sh
+// calls, so a duplicated edge would otherwise mint a digest over a manifest that
+// records two hashes for one input.
+func TestDepManifestRejectsDuplicateEdge(t *testing.T) {
+	root := isolatedRepoCopy(t)
+	if err := WriteDepManifest(root); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	path := filepath.Join(root, DepManifestRelPath)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			record = line
+			break
+		}
+	}
+	if record == "" {
+		t.Fatal("manifest has no records to duplicate")
+	}
+	if err := os.WriteFile(path, append(data, []byte(record+"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadDepManifest(root); err == nil {
+		t.Fatal("ReadDepManifest accepted a duplicated edge")
+	}
+	if _, err := Compute(root); err == nil {
+		t.Fatal("Compute digested a manifest carrying a duplicated edge")
+	}
+}
