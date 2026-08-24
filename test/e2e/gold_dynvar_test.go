@@ -47,6 +47,8 @@ import (
 //     (defn f ^long [^long n] ...) spelling, plus execution of the hinted fn.
 //   - set_macroexpansion_eval.cljc: distinct set element forms that macroexpand
 //     identically are both evaluated before their runtime values are deduplicated.
+//   - map_macroexpansion_eval.cljc: distinct map key forms that macroexpand
+//     identically retain both key/value evaluation slots until runtime construction.
 //
 // The scripts deliberately stay inside the subset where let-go and Clojure
 // agree. let-go is intentionally MORE PERMISSIVE than Clojure in two spots the
@@ -60,6 +62,7 @@ const (
 	dynvarCallbacksScript   = "test/gold/dynvar_callbacks.cljc"
 	returnHintMetaScript    = "test/gold/return_hint_metadata.cljc"
 	setMacroexpansionScript = "test/gold/set_macroexpansion_eval.cljc"
+	mapMacroexpansionScript = "test/gold/map_macroexpansion_eval.cljc"
 )
 
 // rederiveGoldEnv, when set to "1", makes the gold tests re-derive their .out
@@ -74,6 +77,9 @@ func TestGoldReturnHintMetadataMatchesClojure(t *testing.T) {
 }
 func TestGoldSetMacroexpansionEvaluationMatchesClojure(t *testing.T) {
 	checkGold(t, setMacroexpansionScript)
+}
+func TestGoldMapMacroexpansionEvaluationMatchesClojure(t *testing.T) {
+	checkGold(t, mapMacroexpansionScript)
 }
 
 // goldPath maps a .cljc script to its committed expected-output file:

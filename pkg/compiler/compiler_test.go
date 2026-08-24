@@ -37,13 +37,32 @@ func TestContext_Compile(t *testing.T) {
 		`'foo`:                                  "foo",
 		`(quote foo)`:                           "foo",
 		`{}`:                                    vm.EmptyPersistentMap,
-		`{:a 1}`:                                vm.NewArrayMap([]vm.Value{vm.Keyword("a"), vm.Int(1)}),
+		`{:a 1}`:                                vm.NewMap([]vm.Value{vm.Keyword("a"), vm.Int(1)}),
 	}
 	for k, v := range tests {
 		out, err := Eval(k)
 		assert.NoError(t, err)
 		assert.Equal(t, v, out.Unbox())
 	}
+}
+
+func TestIntrinsicMapLiteralLoadsHashMapConstructor(t *testing.T) {
+	consts := vm.NewConsts()
+	ctx := NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	_, err := ctx.Compile(`{}`)
+	assert.NoError(t, err)
+
+	hashMap := rt.CoreNS.Lookup("hash-map")
+	arrayMap := rt.CoreNS.Lookup("array-map")
+	var foundHashMap, foundArrayMap bool
+	for _, value := range consts.Values() {
+		if candidate, ok := value.(*vm.Var); ok {
+			foundHashMap = foundHashMap || candidate == hashMap
+			foundArrayMap = foundArrayMap || candidate == arrayMap
+		}
+	}
+	assert.True(t, foundHashMap, "intrinsic map literal must invoke hash-map")
+	assert.False(t, foundArrayMap, "intrinsic map literal must not promise array-map ordering")
 }
 
 func TestContext_CompileFn(t *testing.T) {
