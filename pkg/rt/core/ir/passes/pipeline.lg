@@ -22,6 +22,7 @@
    [graph :as g]
    [ir.build]
    [ir.data]
+   [ir.forms :as forms]
    [ir.lattice :as lat]
    [ir.lower :as lower]
    [ir.lower-go :as lower-go]
@@ -405,18 +406,25 @@
               (expand-all expanded)))))
       (vector? form)
       (vec (doall (map expand-all form)))
+      ;; let-go records are not map? values. Gate the compiler-only predicates
+      ;; behind the native record? check, then dispatch before generic maps.
+      (record? form)
+      (cond
+        (forms/set-form? form)
+        (forms/->SetForm (mapv expand-all (forms/set-form-elements form)))
+        (forms/map-form? form)
+        (forms/->MapForm
+          (mapv (fn [[k v]] [(expand-all k) (expand-all v)])
+                (forms/map-form-entries form)))
+        :else form)
+      ;; Host map/set values cannot represent cardinality after non-injective
+      ;; macroexpansion. Move child slots into vector-backed compiler forms
+      ;; before recursively expanding them.
       (map? form)
-      (into {} (doall (map (fn [[k v]] [(expand-all k) (expand-all v)]) form)))
-      ;; Sets reach here as real set values. Before set literals read as data
-      ;; they arrived as (hash-set ..) lists and were expanded by the seq arm,
-      ;; so this branch never existed and `#{(when true 1)}` silently reached
-      ;; build-set unexpanded — bytecode expanded it, native lowering did not.
-      ;;
-      ;; Keep the expanded elements in a constructor form rather than rebuilding
-      ;; a host set here. Distinct source forms can macroexpand identically, but
-      ;; both must still be evaluated before hash-set deduplicates runtime values.
+      (forms/->MapForm
+        (mapv (fn [[k v]] [(expand-all k) (expand-all v)]) form))
       (set? form)
-      (apply list 'hash-set (doall (map expand-all (seq form))))
+      (forms/->SetForm (mapv expand-all (seq form)))
       :else form)))
 
 ;; --- canonical enumeration of a namespace's lowerable fn-units -------------

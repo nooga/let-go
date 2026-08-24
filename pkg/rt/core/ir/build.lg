@@ -22,7 +22,8 @@
   (:require
    [clojure.set :as set]
    [ir.data]
-   [ir.form-heads]))
+   [ir.form-heads]
+   [ir.forms :as forms]))
 
 ;; --- builder context -----------------------------------------------------
 
@@ -312,12 +313,20 @@
     ;; Same reasoning as the map case below: a value captured only inside a set
     ;; literal must be walked, or loop-header threading misses it.
     (into #{} (mapcat #(captures-of % known-locals) form))
+    (record? form)
+    (cond
+      (forms/set-form? form)
+      (into #{} (mapcat #(captures-of % known-locals)
+                        (forms/set-form-elements form)))
+      (forms/map-form? form)
+      (into #{} (mapcat #(captures-of % known-locals)
+                        (mapcat identity (forms/map-form-entries form))))
+      :else #{})
     (map? form)
-    ;; Mirror free-vars: a value captured only inside a map literal must be
-    ;; walked too, else loop-header threading (build-loop) misses it and emits
-    ;; a cross-block direct ref to an out-of-scope InstId (same failure class
-    ;; as the cluster-A bugs, for a non-cheap captured value).
-    (into #{} (mapcat #(captures-of % known-locals) (concat (keys form) (vals form))))
+    ;; A value captured only inside a map literal must be walked, else loop-
+    ;; header threading can emit a cross-block ref to an out-of-scope InstId.
+    (into #{} (mapcat #(captures-of % known-locals)
+                      (concat (keys form) (vals form))))
     :else #{}))
 
 ;; --- form dispatch -------------------------------------------------------
@@ -377,8 +386,16 @@
               (symbol?  form)  (build-symbol form ctx)
               (vector?  form)  (build-vector form ctx)
               (set?     form)  (build-set form ctx)
-              (map?     form)  (build-map form ctx)
               (list?    form)  (build-list form ctx)
+              ;; Compiler collection forms are records, not map? values. Select
+              ;; them before the generic map builder; other records remain
+              ;; unsupported as they were before this compiler-only node layer.
+              (record?  form)  (cond
+                                 (forms/set-form? form) (build-set form ctx)
+                                 (forms/map-form? form) (build-map form ctx)
+                                 :else (throw (str "build-form: unrecognized form "
+                                                   (pr-str form))))
+              (map?     form)  (build-map form ctx)
               ;; pr-str (not str): a BigDecimal's str drops the `M` suffix, so an
               ;; unrecognized 0.0M would mis-report as a float `0.0`. The readable
               ;; form keeps the type legible in the failure bucket.
@@ -474,6 +491,14 @@
     (into #{} (mapcat #(free-vars % bound) form))
     (set? form)
     (into #{} (mapcat #(free-vars % bound) form))
+    (record? form)
+    (cond
+      (forms/set-form? form)
+      (into #{} (mapcat #(free-vars % bound) (forms/set-form-elements form)))
+      (forms/map-form? form)
+      (into #{} (mapcat #(free-vars % bound)
+                        (mapcat identity (forms/map-form-entries form))))
+      :else #{})
     (map? form)
     (into #{} (mapcat #(free-vars % bound) (concat (keys form) (vals form))))
     (seq? form)
@@ -871,40 +896,44 @@
                     :load-var [] (resolve 'vector))]
       (build-call-with-head fn-id (seq form) ctx))))
 
-(defn build-set [form ctx]
-  "#{a b c} → (hash-set a b c). Empty set → Const literal.
+(defn- set-elements [form]
+  (if (forms/set-form? form)
+    (forms/set-form-elements form)
+    (vec (seq form))))
 
-   Set literals reach the IR as set VALUES: the reader builds a set rather than
-   the form (hash-set …), so read-string returns data. Elements flow through
-   build-form for the same reason vector elements do — a set literal may hold
-   sub-expressions, and build-args handles cross-block threading. Iteration
-   order is unspecified, which is sound because hash-set is order-independent."
-  (if (zero? (count form))
-    (add-inst! ctx (ctx-block ctx) :const [] form)
-    (let [fn-id (add-inst! ctx (ctx-block ctx)
-                  :load-var [] (resolve 'hash-set))]
-      (build-call-with-head fn-id (seq form) ctx))))
+(defn build-set [form ctx]
+  "Build every set child slot once, then construct the unordered runtime set.
+   Raw set values remain supported for callers that bypass expand-all."
+  (let [elements (set-elements form)]
+    (if (zero? (count elements))
+      (add-inst! ctx (ctx-block ctx) :const [] #{})
+      (let [fn-id (add-inst! ctx (ctx-block ctx)
+                    :load-var [] (resolve 'clojure.core/hash-set))]
+        (build-call-with-head fn-id elements ctx)))))
 
 (defn is-literal? [v]
   "Check if v is a literal value (not a symbol or expression)."
   (or (nil? v) (integer? v) (float? v) (string? v) (keyword? v) (boolean? v)))
 
+(defn- map-entries [form]
+  (if (forms/map-form? form)
+    (forms/map-form-entries form)
+    (vec (seq form))))
+
 (defn build-map [form ctx]
-  "{:a 1 :b 2} → Const if all keys/values are literals; else (array-map :a 1 :b 2).
-   array-map preserves insertion order. Empty map → Const literal."
-  (if (zero? (count form))
-    (add-inst! ctx (ctx-block ctx) :const [] form)
-    ;; Check if all keys and values are literals (not symbols/expressions).
-    ;; If so, emit as a constant.
-    (let [all-const? (every? (fn [e]
-                               (and (is-literal? (first e)) (is-literal? (second e))))
-                             (seq form))
-          pairs      (vec (mapcat (fn [e] [(first e) (second e)]) (seq form)))]
-      (if all-const?
-        (add-inst! ctx (ctx-block ctx) :const [] form)
-        (let [fn-id   (add-inst! ctx (ctx-block ctx)
-                        :load-var [] (resolve 'array-map))]
-          (build-call-with-head fn-id pairs ctx))))))
+  "Build every map key/value slot once, then construct an unordered runtime map.
+   Raw map values remain supported for callers that bypass expand-all. Literal-
+   only entries may fold safely because they contain no executable forms."
+  (let [entries    (map-entries form)
+        all-const? (every? (fn [[k v]]
+                             (and (is-literal? k) (is-literal? v)))
+                           entries)
+        pairs      (vec (mapcat identity entries))]
+    (if all-const?
+      (add-inst! ctx (ctx-block ctx) :const [] (apply hash-map pairs))
+      (let [fn-id (add-inst! ctx (ctx-block ctx)
+                    :load-var [] (resolve 'clojure.core/hash-map))]
+        (build-call-with-head fn-id pairs ctx)))))
 
 (defn build-try [form ctx]
   "(try body… (catch [Class] e handler…) (finally fin…)) — guarded region.

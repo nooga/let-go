@@ -7,11 +7,18 @@
 ;; path while native/gogen lowering did not, so the two engines disagreed.
 
 (ns test.expand-all-collections-test
-  (:require [test :refer :all]
-            [ir.passes.pipeline :as pipeline]))
+  (:require
+   [ir.forms :as forms]
+   [ir.passes.pipeline :as pipeline]
+   [test :refer :all]))
 
 (defn- flatten-form [form]
   (cond
+    (forms/set-form? form)
+    (mapcat flatten-form (forms/set-form-elements form))
+    (forms/map-form? form)
+    (mapcat (fn [[k v]] (concat (flatten-form k) (flatten-form v)))
+            (forms/map-form-entries form))
     (map? form) (mapcat (fn [e] (concat (flatten-form (nth e 0)) (flatten-form (nth e 1)))) (seq form))
     (set? form) (mapcat flatten-form (seq form))
     (vector? form) (mapcat flatten-form form)
@@ -21,6 +28,12 @@
 (defn- expanded? [form]
   ;; (when true 1) expands to (if true (do 1) nil); unexpanded still has 'when
   (not (some (fn [x] (= x 'when)) (flatten-form form))))
+
+(deftest expansion-check-descends-compiler-forms
+  (testing "unexpanded SetForm children are visible"
+    (is (not (expanded? (forms/set-form ['(when true 1)])))))
+  (testing "unexpanded MapForm children are visible"
+    (is (not (expanded? (forms/map-form [[:k '(when true 1)]]))))))
 
 (deftest expand-all-descends-into-every-collection
   (testing "vector elements are macroexpanded"
@@ -32,11 +45,38 @@
   (testing "seq elements are macroexpanded"
     (is (expanded? (pipeline/expand-all '((when true 1)))))))
 
-(deftest expand-all-preserves-set-element-evaluations
+(deftest expand-all-preserves-set-element-slots
   (let [expanded (pipeline/expand-all
                    '#{(-> (swap! calls inc))
-                      (swap! calls inc)})]
-    (testing "equal macroexpansions remain two runtime constructor arguments"
-      (is (= 'hash-set (first expanded)))
-      (is (= 2 (count (rest expanded))))
-      (is (= (nth expanded 1) (nth expanded 2))))))
+                      (swap! calls inc)})
+        elements (forms/set-form-elements expanded)]
+    (testing "set literals become explicit compiler forms"
+      (is (forms/set-form? expanded)))
+    (testing "equal macroexpansions remain two ordered child slots"
+      (is (= 2 (count elements)))
+      (is (= (nth elements 0) (nth elements 1))))
+    (testing "child forms are recursively expanded"
+      (is (expanded? expanded)))
+    (testing "explicit nodes are safe to expand directly"
+      (is (expanded? (pipeline/expand-all
+                       (forms/set-form ['(when true 1)])))))
+    (testing "expanding an explicit form is idempotent"
+      (is (= expanded (pipeline/expand-all expanded))))))
+
+(deftest expand-all-preserves-map-entry-slots
+  (let [expanded (pipeline/expand-all
+                   '{(-> (swap! calls inc)) (swap! calls inc)
+                     (swap! calls inc)      (swap! calls inc)})
+        entries  (forms/map-form-entries expanded)]
+    (testing "map literals become explicit compiler forms"
+      (is (forms/map-form? expanded)))
+    (testing "equal macroexpanded keys remain two key/value slots"
+      (is (= 2 (count entries)))
+      (is (= (first (nth entries 0)) (first (nth entries 1)))))
+    (testing "keys and values are recursively expanded"
+      (is (expanded? expanded)))
+    (testing "explicit nodes are safe to expand directly"
+      (is (expanded? (pipeline/expand-all
+                       (forms/map-form [[:k '(when true 1)]])))))
+    (testing "expanding an explicit form is idempotent"
+      (is (= expanded (pipeline/expand-all expanded))))))
