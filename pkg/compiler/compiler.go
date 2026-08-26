@@ -514,8 +514,8 @@ func (c *Context) compileForm(o vm.Value) error {
 		tp := c.tailPosition
 		c.tailPosition = false
 
-		arrayMap := c.constant(rt.CoreNS.Lookup("array-map"))
-		c.emitWithArg(vm.OP_LOAD_CONST, arrayMap)
+		hashMap := c.constant(rt.CoreNS.Lookup("hash-map"))
+		c.emitWithArg(vm.OP_LOAD_CONST, hashMap)
 		c.incSP(1)
 
 		// Get entries via Seq for both Map and PersistentMap

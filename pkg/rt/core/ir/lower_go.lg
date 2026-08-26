@@ -206,6 +206,16 @@
       (vm-call "NewArrayVector"
                [(gogen/composite-lit (gogen/type "[]vm.Value") elems)]))))
 
+(defn- boxed-set-expr [xs]
+  "#{…} constant → vm.NewSet([]vm.Value{…}). Set literals reach the IR as set
+   VALUES (the reader builds a set so read-string returns data), so a set can
+   appear as a :const aux and needs an emitter here alongside vectors, lists and
+   maps. Element order is unspecified and irrelevant: NewSet re-hashes."
+  (let [elems (mapv boxed-value-expr (seq xs))]
+    (when (every? identity elems)
+      (vm-call "NewSet"
+               [(gogen/composite-lit (gogen/type "[]vm.Value") elems)]))))
+
 (defn- boxed-list-expr [xs]
   (if (zero? (count xs))
     (vm-sel "EmptyList")
@@ -318,6 +328,7 @@
     (vm-call "MustRegexFromReadable" [(gogen/string-lit (str v))])
     (list? v)       (boxed-list-expr v)
     (vector? v)     (boxed-vector-expr v)
+    (set? v)        (boxed-set-expr v)
     (map? v)        (boxed-map-expr v)
     :else nil))
 

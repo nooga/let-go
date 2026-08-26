@@ -2135,8 +2135,9 @@
 
 ;; binding forms with a clean `[target init ...]` vector (no for/doseq-style
 ;; modifiers). Their inits are rewritten in the outer scope; targets shadow.
-;; NB: a *quoted* set literal '#{..} reads as a (hash-set ..) form in let-go,
-;; not a set value — build the set explicitly.
+;; NB: set literals read as set VALUES (not as (hash-set ..) forms), so this
+;; could be written as a literal; it is built explicitly to stay readable
+;; alongside the other -dt-* tables.
 (def -dt-let-like
   (set '(let let* loop loop* when-let when-let* if-let if-let*
           when-some if-some binding with-open with-local-vars dotimes)))
@@ -2158,11 +2159,25 @@
 (def -dt-kw-emit  (fn [recv f] (list (keyword f) recv)))
 
 (defn- -dt-rewrite [emit recv fields muts bound form]
+  ;; Dispatch on the collection LATTICE, not on concrete types. Enumerating
+  ;; vector?/seq? silently dropped every other collection: a map literal
+  ;; `{:k field}` has never been rewritten (pre-existing), and once set
+  ;; literals began reading as sets rather than as (hash-set ..) lists,
+  ;; `#{field}` stopped being rewritten too. The associative arms must come
+  ;; BEFORE vector?, because a map entry IS a vector — descending into it as a
+  ;; 2-vector would rewrite the key as if it were a value. Other non-sequential
+  ;; values pass through as atoms.
   (cond
     (symbol? form)
     (if (and (contains? fields form) (not (contains? bound form)))
       (emit recv form)
       form)
+    (map? form)
+    (into {} (map (fn [e] [(-dt-rewrite emit recv fields muts bound (nth e 0))
+                           (-dt-rewrite emit recv fields muts bound (nth e 1))])
+                  (seq form)))
+    (set? form)
+    (into #{} (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) (seq form)))
     (vector? form)
     (vec (map (fn [x] (-dt-rewrite emit recv fields muts bound x)) form))
     (not (seq? form)) form

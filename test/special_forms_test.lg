@@ -33,6 +33,23 @@
       (is (= '(1 2 3) `(~x 2 3)))
       (is (= '(1 2 3) `(1 ~@[2 3]))))))  ; unquote-splicing
 
+(deftest syntax-quote-collections-test
+  ;; syntaxQuote handled ArrayVectorType, MapType and ListType but not
+  ;; SetType, so once set literals read as data a syntax-quoted set fell to
+  ;; the default quote branch: `#{~x} produced #{(unquote x)} and unquote,
+  ;; gensym and namespace qualification were all skipped inside it.
+  (testing "unquote is processed inside every collection literal"
+    (let [x 1]
+      (is (= [1]     `[~x]))
+      (is (= {:k 1}  `{:k ~x}))
+      (is (= #{1}    `#{~x}))
+      (is (= '(1)    `(~x)))))
+  (testing "unquote-splicing inside a set literal"
+    (is (= #{1 2 3} `#{~@[1 2 3]})))
+  (testing "nested collections inside a syntax-quoted set"
+    (let [x 1]
+      (is (= #{[1]}  `#{[~x]})))))  ; unquote-splicing
+
 (deftest loop-recur-test
   (testing "loop/recur"
     (is (= 10 (loop [sum 0 n 4]

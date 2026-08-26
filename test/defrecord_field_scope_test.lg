@@ -35,3 +35,39 @@
     (is (= :label-a (pick (->R {:z 1} {}) 'a)))   ; matches the constant `a`
     (is (= :label-b (pick (->R {:z 1} {}) 'b)))   ; matches the constant `b`
     (is (= 1 (pick (->R {:z 1} {}) 'nope)))))     ; default reads field a -> {:z 1}
+
+
+;; --- collection-literal traversal in method bodies ------------------------
+;; -dt-rewrite dispatched on vector?/seq? only, so every other collection fell
+;; through as an atom and its field references were never rewritten:
+;;   * MAP literals have never been rewritten (pre-existing; `{:k a}` failed to
+;;     compile with "Can't resolve a in this context").
+;;   * SET literals were rewritten only by accident, because they used to READ
+;;     as (hash-set ..) lists and were caught by the seq arm. Once set literals
+;;     read as sets, that accident stopped applying.
+;; The dispatch now keys off the collection lattice, with the associative arms
+;; ahead of vector? (a map entry IS a vector) and a loud throw for any
+;; unrecognised collection.
+
+(defprotocol CollP
+  (in-map [g])
+  (in-set [g])
+  (in-nested [g])
+  (in-map-key [g]))
+
+(defrecord CollR [a b]
+  CollP
+  (in-map    [g] {:k a})          ; field inside a map VALUE
+  (in-set    [g] #{a})            ; field inside a set element
+  (in-nested [g] {:k [a #{b}]})   ; vector and set nested inside a map
+  (in-map-key [g] {a :v}))        ; field inside a map KEY
+
+(deftest collection-literals-rewrite-fields
+  (testing "map literal values are rewritten (was a compile error)"
+    (is (= {:k 1} (in-map (->CollR 1 2)))))
+  (testing "set literal elements are rewritten"
+    (is (= #{1} (in-set (->CollR 1 2)))))
+  (testing "collections nested inside a map are rewritten at every depth"
+    (is (= {:k [1 #{2}]} (in-nested (->CollR 1 2)))))
+  (testing "map literal KEYS are rewritten, not just values"
+    (is (= {1 :v} (in-map-key (->CollR 1 2))))))
