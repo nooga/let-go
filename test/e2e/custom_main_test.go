@@ -68,7 +68,7 @@ import (
 	"github.com/nooga/let-go/pkg/cli"
 )
 
-func main() { os.Exit(cli.Main("dev", "none")) }
+func main() { os.Exit(cli.Main("host-v9", "none")) }
 `)
 	copyFile(t, filepath.Join(root, "go.sum"), filepath.Join(tmp, "go.sum"))
 
@@ -98,6 +98,27 @@ func main() { os.Exit(cli.Main("dev", "none")) }
 		}
 		if !strings.Contains(string(out), want) {
 			t.Errorf("got %q, want it to contain %q", out, want)
+		}
+	})
+
+	// The host stamp ("host-v9") is CLI metadata: -v may show it, but the
+	// runtime's let-go.version must describe let-go itself — here resolved
+	// through the directory replace, so "dev". A custom host leaking its own
+	// version into System/getProperty would break runtime feature checks.
+	t.Run("host metadata does not overwrite the runtime identity", func(t *testing.T) {
+		verScript := filepath.Join(tmp, "version.lg")
+		writeFile(t, verScript, `(println (System/getProperty "let-go.version"))`+"\n")
+		cmd := exec.Command(customLG, verScript)
+		cmd.Dir = tmp
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("custom lg failed to run version script: %v\n%s", err, out)
+		}
+		if strings.Contains(string(out), "host-v9") {
+			t.Errorf("let-go.version leaked the host stamp: %q", out)
+		}
+		if !strings.Contains(string(out), "dev") {
+			t.Errorf("let-go.version = %q, want the replace-resolved \"dev\"", out)
 		}
 	})
 

@@ -19,6 +19,7 @@ import (
 	runtimeDebug "runtime/debug"
 	"strings"
 
+	"github.com/nooga/let-go/pkg/buildmeta"
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/gomod"
@@ -36,9 +37,9 @@ import (
 // to the stamped version only when let-go IS the main module, which is the
 // stock lg binary.
 //
-// A dep resolved through a replace directive reports no usable version; "dev"
-// sends gomod.Generate down its local-source path, which is what a replace
-// wants anyway.
+// A dep resolved through a directory replace reports no usable version; "dev"
+// sends gomod.Generate down its local-source path, which is what such a
+// replace wants anyway. A versioned replace pins to the replacement's version.
 func letgoModuleVersion() string {
 	info, ok := runtimeDebug.ReadBuildInfo()
 	if !ok {
@@ -51,17 +52,36 @@ func letgoVersionFrom(info *runtimeDebug.BuildInfo, stamped string) string {
 	if info == nil || info.Main.Path == gomod.ModulePath {
 		return stamped
 	}
+	v, _ := letgoDepMeta(info)
+	return v
+}
+
+// letgoDepMeta reads let-go's own module entry out of a dependent binary's
+// build info: the version and commit of the runtime that is actually linked
+// in. A replace directive substitutes another source for the required version
+// — the require line then commonly holds the v0.0.0 placeholder from the
+// documented local-replace setup, which names a release that does not exist —
+// so the replacement's version is the one that counts. A directory replace
+// reports no version at all and resolves to "dev"/"none", which sends
+// gomod.Generate down its local-source path.
+func letgoDepMeta(info *runtimeDebug.BuildInfo) (version, commit string) {
 	for _, dep := range info.Deps {
 		if dep.Path != gomod.ModulePath {
 			continue
 		}
+		if dep.Replace != nil {
+			dep = dep.Replace
+		}
 		v := strings.TrimPrefix(dep.Version, "v")
 		if v == "" || v == "(devel)" {
-			return "dev"
+			return "dev", "none"
 		}
-		return v
+		if rev := buildmeta.PseudoVersionRevision(dep.Version); rev != "" {
+			return v, rev
+		}
+		return v, "none"
 	}
-	return "dev"
+	return "dev", "none"
 }
 
 // wasmModuleName is the module name of the throwaway Go module the WASM build

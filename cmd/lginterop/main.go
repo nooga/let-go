@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	runtimeDebug "runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,8 +79,17 @@ func main() {
 	var entries []interopEntry
 	if *packagesFlag != "" {
 		for pkg := range strings.SplitSeq(*packagesFlag, ",") {
+			// `path=alias` pins a non-default alias, mirroring deps.edn's
+			// {"path" "alias"} form — and gives the generated-by header a
+			// spelling that reproduces such a file (deps.edn used to be the
+			// only way in, so headers for aliased files did not round-trip).
+			spec := strings.TrimSpace(pkg)
+			alias := ""
+			if eq := strings.IndexByte(spec, '='); eq >= 0 {
+				spec, alias = strings.TrimSpace(spec[:eq]), strings.TrimSpace(spec[eq+1:])
+			}
 			entries = append(entries, interopEntry{
-				pkg: strings.TrimSpace(pkg), smart: *smartFlag, opaque: *opaqueFlag,
+				pkg: spec, alias: alias, smart: *smartFlag, opaque: *opaqueFlag,
 				buildTags: *buildTagsFlag, outPkg: *outPkgFlag,
 			})
 		}
@@ -107,37 +117,75 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Output filenames derive from the alias; two entries sharing one would
-	// silently clobber each other's interop_<alias>.go. Refuse up front.
-	seenAlias := map[string]string{}
+	if err := validateEntries(entries); err != nil {
+		fmt.Fprintf(os.Stderr, "lginterop: %v\n", err)
+		os.Exit(1)
+	}
+
+	okCount, skipCount := 0, 0
+	for _, ent := range entries {
+		generated, err := generatePackage(ent, *out, *skeletonFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "lginterop: %s: %v\n", ent.pkg, err)
+			continue
+		}
+		if generated {
+			okCount++
+		} else {
+			skipCount++
+		}
+	}
+
+	// A skip (a scanned package with no eligible exports) is a legitimate
+	// no-op, but it may not be counted as generated: "generated 1/1" with no
+	// file on disk sent callers hunting for output that was never written.
+	summary := fmt.Sprintf("lginterop: generated %d/%d package(s) in %s", okCount, len(entries), *out)
+	if skipCount > 0 {
+		summary += fmt.Sprintf(" (%d skipped: no eligible exports)", skipCount)
+	}
+	fmt.Println(summary)
+	// Per-package failures only log and continue, so without this a run that
+	// generated nothing still exited 0 — a caller driving this from a build
+	// pipeline would see success and a missing file.
+	if okCount+skipCount < len(entries) {
+		os.Exit(1)
+	}
+}
+
+// validateEntries refuses entry lists that would emit broken or clobbered
+// output, before anything is written:
+//
+//   - An alias that lands on a generator-owned import identifier — `vm`
+//     (always imported by the emitted file), or `fmt` in smart mode — would
+//     produce a file that does not compile ("vm redeclared"). The `rt`
+//     collision is instead solved in the emitter (rt-import-alias), because
+//     rejecting it would refuse every package path ending in /rt.
+//   - Output filenames derive from the NORMALIZED alias ('-' and '.' become
+//     '_'), so distinct aliases like foo-bar and foo_bar still land on the
+//     same interop_<alias>.go and the second would silently overwrite the
+//     first while the run reports every package as generated.
+func validateEntries(entries []interopEntry) error {
+	type owner struct{ pkg, alias string }
+	seenFile := map[string]owner{}
 	for _, ent := range entries {
 		alias := ent.alias
 		if alias == "" {
 			alias = defaultAlias(ent.pkg)
 		}
-		if prev, dup := seenAlias[alias]; dup {
-			fmt.Fprintf(os.Stderr, "lginterop: alias %q used by both %s and %s — outputs would collide; set a distinct alias\n", alias, prev, ent.pkg)
-			os.Exit(1)
+		normalized := goPackageToFileName(alias)
+		if normalized == "vm" {
+			return fmt.Errorf("alias %q for %s collides with the emitted file's own vm import — set a distinct alias", alias, ent.pkg)
 		}
-		seenAlias[alias] = ent.pkg
-	}
-
-	okCount := 0
-	for _, ent := range entries {
-		if err := generatePackage(ent, *out, *skeletonFlag); err != nil {
-			fmt.Fprintf(os.Stderr, "lginterop: %s: %v\n", ent.pkg, err)
-			continue
+		if ent.smart && normalized == "fmt" {
+			return fmt.Errorf("alias %q for %s collides with the fmt import smart mode adds to the emitted file — set a distinct alias", alias, ent.pkg)
 		}
-		okCount++
+		if prev, dup := seenFile[normalized]; dup {
+			return fmt.Errorf("aliases %q (%s) and %q (%s) both normalize to interop_%s.go — outputs would collide; set a distinct alias",
+				prev.alias, prev.pkg, alias, ent.pkg, normalized)
+		}
+		seenFile[normalized] = owner{pkg: ent.pkg, alias: alias}
 	}
-
-	fmt.Printf("lginterop: generated %d/%d package(s) in %s\n", okCount, len(entries), *out)
-	// Per-package failures only log and continue, so without this a run that
-	// generated nothing still exited 0 — a caller driving this from a build
-	// pipeline would see success and a missing file.
-	if okCount < len(entries) {
-		os.Exit(1)
-	}
+	return nil
 }
 
 // goKeywords are rejected as package names: the emitter would happily write
@@ -165,6 +213,11 @@ func validateOutPkg(name string) error {
 	}
 	if name == "_" {
 		return fmt.Errorf("-out-pkg %q is not a valid package name", name)
+	}
+	// The generated package is consumed via a blank import; package main is
+	// not importable, so the output would validate here and then be unusable.
+	if name == "main" {
+		return fmt.Errorf("-out-pkg main cannot be imported: pick an importable package name")
 	}
 	if goKeywords[name] {
 		return fmt.Errorf("-out-pkg %q is a Go keyword, not a valid package name", name)
@@ -305,7 +358,11 @@ func defaultAlias(pkg string) string {
 
 // --- package generation ---------------------------------------------------
 
-func generatePackage(ent interopEntry, outDir string, skeleton bool) error {
+// generatePackage scans ent.pkg and emits its interop file. The bool reports
+// whether a file was written: a package with no eligible exports is skipped
+// (false, nil) so the caller can account for it instead of claiming success
+// for output that does not exist.
+func generatePackage(ent interopEntry, outDir string, skeleton bool) (bool, error) {
 	pkgName := ent.pkg
 	alias := ent.alias
 	if alias == "" {
@@ -319,7 +376,7 @@ func generatePackage(ent interopEntry, outDir string, skeleton bool) error {
 		// The go/types source importer resolves imports against the module
 		// context of the CURRENT working directory. Scanning a third-party
 		// package therefore only works from inside a module that requires it.
-		return fmt.Errorf("import %s: %w\n"+
+		return false, fmt.Errorf("import %s: %w\n"+
 			"hint: the scanned package must be resolvable from the current "+
 			"directory's module — run lginterop inside a module that requires "+
 			"it (`go get %s` first)", pkgName, err, pkgName)
@@ -342,7 +399,7 @@ func generatePackage(ent interopEntry, outDir string, skeleton bool) error {
 
 	if len(exports) == 0 {
 		fmt.Printf("lginterop: %s — no eligible exports, skipping\n", pkgName)
-		return nil
+		return false, nil
 	}
 
 	sort.Slice(exports, func(i, j int) bool {
@@ -358,12 +415,12 @@ func generatePackage(ent interopEntry, outDir string, skeleton bool) error {
 	// registered by pkg/rt, which any binary importing the runtime already
 	// links, so there is no repo root to find and no emitter/binary drift to
 	// guard against.
-	script := buildGenScript(pkgName, alias, exports, outPath, ent.smart, ent.opaque, ent.buildTags, ent.outPkg)
+	script := buildGenScript(pkgName, alias, exports, outPath, ent.smart, ent.opaque, ent.buildTags, ent.outPkg, generatorVersion())
 	if err := keepScript(script); err != nil {
-		return err
+		return false, err
 	}
 	if err := evalGenScript(script); err != nil {
-		return err
+		return false, err
 	}
 
 	mode := "direct"
@@ -376,28 +433,42 @@ func generatePackage(ent interopEntry, outDir string, skeleton bool) error {
 		skelPath := filepath.Join(outDir, alias+"_skeleton.lg")
 		skel := buildSkeleton(alias, exports, ent.smart)
 		if err := os.WriteFile(skelPath, []byte(skel), 0644); err != nil {
-			return fmt.Errorf("write skeleton %s: %w", skelPath, err)
+			return false, fmt.Errorf("write skeleton %s: %w", skelPath, err)
 		}
 		fmt.Printf("lginterop: skeleton → %s\n", skelPath)
 	}
 
-	return nil
+	return true, nil
 }
 
 // --- Lisp script generation -----------------------------------------------
 
-func buildGenScript(pkgName, alias string, exports []export, outPath string, smart, opaque bool, buildTags, outPkg string) string {
+func buildGenScript(pkgName, alias string, exports []export, outPath string, smart, opaque bool, buildTags, outPkg, genVersion string) string {
 	var b strings.Builder
 	b.WriteString(macroLib)
 	b.WriteString("\n")
 	b.WriteString("(def exports ")
 	b.WriteString(serializeExports(exports))
 	b.WriteString(")\n")
-	fmt.Fprintf(&b, "(lginterop/generate %s %s exports %s %s %s %s %s)\n",
+	fmt.Fprintf(&b, "(lginterop/generate %s %s exports %s %s %s %s %s %s)\n",
 		strconv.Quote(pkgName), strconv.Quote(alias), strconv.Quote(outPath),
 		strconv.FormatBool(smart), strconv.FormatBool(opaque), strconv.Quote(buildTags),
-		strconv.Quote(outPkg))
+		strconv.Quote(outPkg), strconv.Quote(genVersion))
 	return b.String()
+}
+
+// generatorVersion is what a versioned `go run .../cmd/lginterop@v...` run
+// records in the generated header, so a consumer can re-run the exact
+// generator that produced a file. In-tree builds report (devel) and are
+// normalized to "dev", which the header emitter omits — the committed golden
+// files stay byte-stable across dev regenerations.
+func generatorVersion() string {
+	if info, ok := runtimeDebug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "dev"
 }
 
 // evalGenScript runs the codegen script through the runtime this binary

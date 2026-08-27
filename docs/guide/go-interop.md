@@ -239,15 +239,24 @@ namespace:
 go run ./cmd/lginterop -packages <import-path>[,<import-path>...] -out pkg/rt
 ```
 
-The generated file starts with a header recording the exact invocation —
-including flags — so regenerating from the header's own command
-round-trips byte-identically. An e2e golden test
-(`test/e2e/lginterop_regen_test.go`) holds `interop_xxh3.go` to that
-round trip.
+The generated file starts with a header recording the invocation — flags, any
+non-default alias (as `-packages path=alias`), and, when the generator was run
+`@<version>`, a `Generated with lginterop <version>` line — so regenerating
+from the header's own command round-trips byte-identically. The one thing the
+header omits is `-out`: the file's own location supplies the destination, and
+baking a path in would make the bytes differ per checkout. E2e golden tests
+(`test/e2e/lginterop_regen_test.go`) hold `interop_xxh3.go` and a
+non-default-alias output to that round trip.
+
+Aliases that would collide with the generated file's own imports (`vm`, or
+`fmt` in smart mode) are rejected up front, as are two aliases that normalize
+to the same `interop_<alias>.go` (`-` and `.` become `_` in filenames). A
+scanned package with no eligible exports is reported as skipped in the final
+summary rather than counted as generated.
 
 | Flag | Meaning |
 |---|---|
-| `-packages` | comma-separated Go import paths to wrap (overrides `deps.edn` `:gointerop`) |
+| `-packages` | comma-separated Go import paths to wrap (overrides `deps.edn` `:gointerop`); `path=alias` pins a non-default namespace alias, like `deps.edn`'s `{"path" "alias"}` form |
 | `-dir` | directory containing a `deps.edn` whose `:gointerop` key lists packages (default `.`) |
 | `-out` | output directory for the generated Go files (default `.lg-interop`; use `pkg/rt` for in-tree namespaces) |
 | `-smart` | generate explicit wrappers with type-specific unboxing/boxing instead of `vm.MustBox` |

@@ -213,6 +213,74 @@ func main() {}
 	}
 }
 
+// TestLginteropAliasRoundTrip pins two things about non-default aliases:
+// the generated-by header records the alias (as `-packages path=alias`, the
+// flag spelling that reproduces the file — deps.edn used to be the only way
+// to set one, so aliased headers did not round-trip), and regeneration with
+// the same inputs is byte-for-byte deterministic.
+func TestLginteropAliasRoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping alias round-trip in -short mode (scans with go/types)")
+	}
+	root := repoRoot(t)
+	trackLginteropInputs(t, root)
+
+	gen := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		cmd := exec.Command("go", "run", "./cmd/lginterop",
+			"-packages", "hash/crc32=mycrc", "-out-pkg", "interop", "-out", dir)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("lginterop failed: %v\n%s", err, out)
+		}
+		return readFile(t, filepath.Join(dir, "interop_mycrc.go"))
+	}
+
+	first := gen(t)
+	if !strings.Contains(first, "-packages hash/crc32=mycrc") {
+		t.Errorf("generated-by header does not record the non-default alias:\n%s",
+			strings.SplitN(first, "\n", 2)[0])
+	}
+	if second := gen(t); first != second {
+		t.Errorf("regeneration with identical inputs is not byte-identical "+
+			"(%d vs %d bytes)", len(first), len(second))
+	}
+}
+
+// TestLginteropSkipAccounting pins the success report for a scanned package
+// with nothing to bind: it must count as skipped — not as generated output
+// that was never written — and must not fail the run.
+func TestLginteropSkipAccounting(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping skip-accounting check in -short mode (scans with go/types)")
+	}
+	root := repoRoot(t)
+	trackLginteropInputs(t, root)
+	dir := t.TempDir()
+
+	cmd := exec.Command("go", "run", "./cmd/lginterop",
+		"-packages", "github.com/nooga/let-go/internal/lginteroptest/empty,hash/crc32",
+		"-out-pkg", "interop", "-out", dir)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("a skipped package must not fail the run: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "generated 1/2") {
+		t.Errorf("expected a 1/2 generation report:\n%s", out)
+	}
+	if !strings.Contains(string(out), "1 skipped: no eligible exports") {
+		t.Errorf("skip not accounted for in the summary:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "interop_crc32.go")); err != nil {
+		t.Errorf("eligible package's output missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "interop_empty.go")); err == nil {
+		t.Errorf("skipped package unexpectedly produced a file")
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
@@ -236,8 +304,9 @@ func copyFile(t *testing.T, src, dst string) {
 // ("rt redeclared"). The emitter must give the runtime a distinct alias.
 //
 // The equivalent collision for `vm` (always imported) and `fmt` (smart mode)
-// predates -out-pkg and affects the in-tree path too; it is deliberately NOT
-// fixed here, to keep this change scoped to out-of-tree behavior.
+// is handled differently: those aliases are rejected up front (validateEntries)
+// rather than aliased away, since no Go package path is forced to end in /vm
+// the way rt-collisions arise. See TestValidateEntries in cmd/lginterop.
 //
 // deps.edn's alias form is the cheap way to force the collision: no stdlib
 // package is named rt, so ask for hash/crc32 under that alias instead.
@@ -300,7 +369,7 @@ func main() {}
 // emit unparseable Go rather than reporting a successful generation.
 func TestLginteropRejectsInvalidOutPkg(t *testing.T) {
 	root := repoRoot(t)
-	for _, bad := range []string{"rt", "package", "my-pkg", "1interop"} {
+	for _, bad := range []string{"rt", "main", "package", "my-pkg", "1interop"} {
 		t.Run(bad, func(t *testing.T) {
 			cmd := exec.Command("go", "run", "./cmd/lginterop",
 				"-packages", "hash/crc32", "-out-pkg", bad, "-out", t.TempDir())

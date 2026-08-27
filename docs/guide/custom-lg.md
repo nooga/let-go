@@ -41,10 +41,19 @@ func main() { os.Exit(cli.Main("dev", "none")) }
 ```
 
 That binary is `lg`: same flags, same REPL, same resolver, same `-c` and `-b`.
-[`cli.Main`](../../pkg/cli/cli.go) returns the exit code instead of calling
-`os.Exit` itself, so your `main` stays in control of shutdown.
+[`cli.Main`](../../pkg/cli/cli.go) returns the exit code for normal runs
+instead of calling `os.Exit` itself. One carve-out: flags live on the
+process-global `flag.CommandLine`, which parses with `ExitOnError` — `-h` and
+a malformed flag terminate the process from inside `Main`, as they do for any
+Go command — so shutdown logic that must run unconditionally has to happen
+before `Main` is called, not after it returns.
 
-`-w` is the one exception — see [Limitation: `-w` and custom
+The two strings you pass to `Main` are *your* binary's version and commit (the
+ldflags contract), and drive `-v` output. They do not become the runtime's
+identity: `(System/getProperty "let-go.version")` still reports the let-go
+version your module actually links, read from Go build info.
+
+`-w` is another exception — see [Limitation: `-w` and custom
 namespaces](#limitation--w-and-custom-namespaces) below.
 
 Both imports are blank on purpose. The generated package registers its
@@ -66,8 +75,10 @@ changes, and for the module-context caveat — the scan resolves imports against
 the current directory's module, so `go get` the package first.
 
 Re-run the generator whenever you bump the wrapped package. The generated file
-records its own invocation in the header, so regenerating from that line
-round-trips.
+records its own invocation in the header — flags, any non-default alias (as
+`-packages path=alias`), and the generator version when it was run
+`@<version>` — so regenerating from that line round-trips. Only `-out` is
+omitted: pass the directory the file lives in.
 
 ### Why `init()` calls the installer directly
 

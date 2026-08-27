@@ -21,6 +21,7 @@ import (
 	"github.com/nooga/let-go/pkg/bundle"
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/compiler"
+	"github.com/nooga/let-go/pkg/gomod"
 	"github.com/nooga/let-go/pkg/nrepl"
 	"github.com/nooga/let-go/pkg/resolver"
 	"github.com/nooga/let-go/pkg/rt"
@@ -43,6 +44,26 @@ func applyBuildInfoMetadata() {
 		return
 	}
 	version, commit = buildmeta.Resolve(version, commit, info)
+}
+
+// runtimeMetadata resolves the version/commit rt exposes as let-go.version /
+// let-go.commit. For the stock lg binary let-go IS the main module and the
+// host stamp describes it; a custom host importing pkg/cli stamps its OWN
+// identity, so the runtime's comes from let-go's dep entry in build info
+// instead.
+func runtimeMetadata(hostVersion, hostCommit string) (string, string) {
+	info, ok := runtimeDebug.ReadBuildInfo()
+	if !ok {
+		return hostVersion, hostCommit
+	}
+	return runtimeMetadataFrom(info, hostVersion, hostCommit)
+}
+
+func runtimeMetadataFrom(info *runtimeDebug.BuildInfo, hostVersion, hostCommit string) (string, string) {
+	if info == nil || info.Main.Path == gomod.ModulePath {
+		return hostVersion, hostCommit
+	}
+	return letgoDepMeta(info)
 }
 
 func motd() {
@@ -404,9 +425,12 @@ func emitRuntimeStats() {
 func runMain() int {
 	applyBuildInfoMetadata()
 
-	// Propagate version metadata to runtime so System/getProperty exposes it.
-	rt.Version = version
-	rt.Commit = commit
+	// version/commit describe the HOST binary — the stock lg, or whatever a
+	// custom main passed to Main — and drive -v output. What the runtime
+	// exposes as let-go.version / let-go.commit must describe let-go itself,
+	// so a custom host's identity cannot masquerade as a runtime version in
+	// System/getProperty feature checks.
+	rt.Version, rt.Commit = runtimeMetadata(version, commit)
 
 	// Check for appended LGB payload before anything else.
 	// If found, we're a standalone binary — run it directly.
