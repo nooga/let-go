@@ -2464,9 +2464,11 @@
               (when-not (contains? #{'toString 'hashCode 'equals} mname)
                 (throw (str "reify: unsupported Object method " mname
                             " (only toString, hashCode, equals are accepted)"))))
-          to-string (some (fn [[_ mname fn-form]]
-                            (when (= 'toString mname) fn-form))
-                          object-entries)
+          ;; Last duplicate wins, matching Clojure: (reify Object
+          ;; (toString [this] "a") (toString [this] "b")) prints b.
+          to-string (last (keep (fn [[_ mname fn-form]]
+                                  (when (= 'toString mname) fn-form))
+                                object-entries))
           by-proto (group-by first proto-entries)
           extends (map (fn [[proto-sym methods]]
                          (let [impl-pairs (mapcat (fn [[_ mname fn-form]]

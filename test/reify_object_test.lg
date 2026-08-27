@@ -4,7 +4,8 @@
 ;; stay identity-based, the JVM default.
 
 (ns test.reify-object-test
-  (:require [test :refer :all]))
+  (:require [test :refer :all]
+            [string]))
 
 (defprotocol ReifyObjGreet
   (greet-obj [this]))
@@ -55,3 +56,27 @@
     (is (satisfies? ReifyObjGreet r))
     (is (= :hi (greet-obj r)))
     (is (= "mixed" (str r)))))
+
+(deftest reify-object-self-stringifying-tostring-terminates
+  (testing "a toString that stringifies its own instance renders instead of
+            recursing into a fatal stack overflow"
+    ;; The result-is-not-a-string check above catches an override that
+    ;; RETURNS the instance; this covers one that CALLS str on it, which is
+    ;; the more natural way to write it wrong. The re-entrant render falls
+    ;; back to the default form, so the override's own output survives.
+    (let [r (reify Object (toString [this] (str "x" this)))
+          s (str r)]
+      (is (string? s))
+      (is (string/starts-with? s "x"))))
+  (testing "the guard is not sticky: the override still applies afterwards"
+    (let [r (reify Object (toString [this] (str "y" this)))]
+      (is (= (str r) (str r)))
+      (is (string/starts-with? (str r) "y"))))
+  (testing "an instance nested in a collection is also safe"
+    (let [r (reify Object (toString [this] (str [this])))]
+      (is (string? (str r))))))
+
+(deftest reify-object-duplicate-tostring-takes-the-last
+  (testing "duplicate toString methods resolve to the last, like Clojure"
+    (let [r (reify Object (toString [_] "a") (toString [_] "b"))]
+      (is (= "b" (str r))))))

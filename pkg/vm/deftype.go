@@ -8,6 +8,7 @@ package vm
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -52,6 +53,16 @@ type DTypeInstance struct {
 	dtype  *DType
 	fields []Value
 	meta   Value // IMeta support (e.g. (with-meta (->Foo) m) / reify)
+	// rendering guards against a toString override that stringifies its own
+	// instance, e.g. (reify Object (toString [this] (str "x" this))). That
+	// recursion is unbounded and lands as a Go fatal stack overflow, which
+	// no catch or recover can intercept, so it takes the process down. The
+	// flag is per instance and set only while this instance's override is
+	// running: a re-entrant String() renders the default form instead, which
+	// terminates and keeps the override's own output. Concurrent String()
+	// calls on the SAME instance may therefore see the default rendering,
+	// which is the deliberate trade for not crashing.
+	rendering atomic.Bool
 }
 
 func NewDTypeInstance(dt *DType, fields []Value) *DTypeInstance {
@@ -90,7 +101,8 @@ func (d *DTypeInstance) WithMeta(m Value) Value {
 func (d *DTypeInstance) Unbox() any { return d }
 
 func (d *DTypeInstance) String() string {
-	if d.dtype.toString != nil {
+	if d.dtype.toString != nil && d.rendering.CompareAndSwap(false, true) {
+		defer d.rendering.Store(false)
 		if r, err := d.dtype.toString.Invoke([]Value{d}); err == nil {
 			// Only a string result is accepted (JVM toString contract).
 			// Rendering arbitrary results would recurse fatally when the
