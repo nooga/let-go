@@ -1,0 +1,45 @@
+;; os/absolute-path and os/canonical-path from lg.
+;;
+;; Argument and error paths are covered in pkg/rt/os_paths_test.go. This
+;; file checks the shape a caller sees, and the one distinction that
+;; matters when picking between them: absolute-path is lexical and works on
+;; a path that does not exist, canonical-path reads the filesystem and does
+;; not.
+(ns test.os-paths-test
+  (:require [test :refer :all]))
+
+(def root "/tmp/let-go-os-paths-test")
+
+(deftest absolute-path-is-lexical
+  (testing "an absolute path comes back unchanged"
+    (is (= "/tmp" (os/absolute-path "/tmp"))))
+
+  (testing "traversal is cleaned away"
+    (is (= "/tmp/c" (os/absolute-path "/tmp/a/../c"))))
+
+  (testing "a path that does not exist still resolves"
+    (is (= "/tmp/definitely-not-here" (os/absolute-path "/tmp/definitely-not-here")))))
+
+(deftest canonical-path-makes-a-relative-path-absolute
+  ;; Symlink resolution is covered in pkg/rt/os_paths_test.go, which can
+  ;; create links. What lg can check without them is the half that needs the
+  ;; process cwd: a genuinely relative input has to come back absolute, and
+  ;; equal to what os/cwd reports.
+  (testing "a relative input resolves against the working directory"
+    (let [here (os/canonical-path ".")]
+      (is (= "/" (subs here 0 1)))
+      (is (= (os/canonical-path (os/cwd)) here)))))
+
+(deftest path-fns-refuse-an-empty-path
+  ;; (str nil) is "" in lg, so this is what an unset variable looks like.
+  ;; filepath.Abs would quietly answer with the cwd.
+  (testing "both refuse rather than resolving to the working directory"
+    (is (= :threw (try (os/absolute-path "") :no-throw (catch _ :threw))))
+    (is (= :threw (try (os/canonical-path "") :no-throw (catch _ :threw))))))
+
+(deftest canonical-path-needs-the-path-to-exist
+  ;; let-go has no thrown? — use try/catch directly.
+  (testing "a missing path throws where absolute-path would not"
+    (is (= :threw (try (os/canonical-path "/tmp/let-go-no-such-path-here")
+                       :no-throw
+                       (catch _ :threw))))))

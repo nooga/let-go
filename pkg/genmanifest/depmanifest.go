@@ -552,6 +552,11 @@ func ReadDepManifest(repoRoot string) ([]HashedEdge, error) {
 	}
 	defer f.Close()
 	var out []HashedEdge
+	// Count occurrences rather than stopping at the first repeat: a manifest that
+	// merged wrong usually carries a run of duplicated edges, and the size and
+	// spread of that run is the signal for how far the merge went astray.
+	seen := make(map[Edge]int)
+	var dupes []Edge
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
@@ -569,9 +574,45 @@ func ReadDepManifest(repoRoot string) ([]HashedEdge, error) {
 				return nil, fmt.Errorf("decode manifest field %q: %w", parts[i], err)
 			}
 		}
-		out = append(out, HashedEdge{Edge{fields[0], fields[1], fields[2]}, parts[3]})
+		edge := Edge{fields[0], fields[1], fields[2]}
+		// This file has no merge driver and is one sorted record per line, so a
+		// clean text merge can land both sides' record for the same edge. Every
+		// downstream lookup is map-keyed and keeps whichever record came last,
+		// so the conflict would resolve silently to one side. Refuse instead: no
+		// digest should be taken over a manifest recording two hashes for one input.
+		seen[edge]++
+		if seen[edge] > 1 {
+			if seen[edge] == 2 {
+				dupes = append(dupes, edge)
+			}
+			continue
+		}
+		out = append(out, HashedEdge{edge, parts[3]})
 	}
-	return out, sc.Err()
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if len(dupes) > 0 {
+		return nil, duplicateEdgeError(dupes, seen)
+	}
+	return out, nil
+}
+
+// duplicateEdgeError names every repeated edge, in manifest order, with its
+// occurrence count.
+func duplicateEdgeError(dupes []Edge, counts map[Edge]int) error {
+	if len(dupes) == 1 {
+		e := dupes[0]
+		return fmt.Errorf("duplicate manifest entry for %s %s %s (%d occurrences)",
+			e.Output, e.Input, e.Kind, counts[e])
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d duplicate manifest entries:", len(dupes))
+	for _, e := range dupes {
+		fmt.Fprintf(&b, "\n  %s %s %s (%d occurrences)",
+			e.Output, e.Input, e.Kind, counts[e])
+	}
+	return errors.New(b.String())
 }
 
 func allDeclaredOutputs() []string {

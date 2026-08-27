@@ -7,6 +7,8 @@
 
 # let-go
 
+> 💬 Come talk about let-go in `#let-go` on [The Fixpoint](https://discord.gg/Ky535CQ9pj) Discord.
+
 Greetings loafers! _(λ-gophers haha, get it?)_
 
 let-go is a Clojure dialect with a bytecode compiler and stack VM, written in Go.
@@ -78,7 +80,7 @@ lens, with no known failures, compile skips, panic skips, or runtime skips.
 Core namespaces cover `clojure.core` (macros, lazy seqs, transducers, protocols,
 records, multimethods, BigInt/BigDecimal) plus `string`, `set`, `walk`, `edn`,
 `pprint`, `test`, and `core.async`, alongside let-go's own `io`, `http`, `json`,
-`transit`, `os`, `System`, `syscall`, and `pods`. See
+`transit`, [`os`](docs/guide/os.md), `System`, `syscall`, and `pods`. See
 [docs/guide/clojure-compatibility.md](docs/guide/clojure-compatibility.md) for
 the full per-namespace status table and the Clojure differences.
 
