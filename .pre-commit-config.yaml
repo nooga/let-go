@@ -149,6 +149,24 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # Generated-artifact provenance gate (#641). ~1.3s: a pure hash
+      # comparison of the manifest's declared inputs against the tree, with no
+      # regeneration and no build. Editing any declared input restages the
+      # outputs, and no server-side operation can refresh the manifest for you
+      # — not a rebase, not a merge driver, not the stack UI — so this has to
+      # run on a developer machine. always_run: a declared input can be a .go
+      # or a .lg file, so it must run on every push rather than on a types
+      # filter.
+      # NOTE: jj does not run git hooks — jj users gate with `make
+      # check-generated-manifest` (the same check) before pushing.
+      - id: check-generated-manifest
+        name: generated-artifact manifest freshness (#641)
+        description: Fail if a declared generator input changed without `make generate`
+        entry: go run ./cmd/check-generated
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
   - repo: https://github.com/checkmake/checkmake.git
     rev: v0.2.2
     hooks:

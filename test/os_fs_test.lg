@@ -1,0 +1,72 @@
+;; os/rename and os/delete-tree from lg.
+;;
+;; The argument and error paths are covered in pkg/rt/os_fs_test.go, which
+;; can reach the natives directly. This file checks the shape a caller sees:
+;; what each returns, and that the effect happened on disk.
+(ns test.os-fs-test
+  (:require [test :refer :all]))
+
+(def root "/tmp/let-go-os-fs-test")
+
+(defn- setup []
+  ;; delete-tree tolerates an absent path, so this doubles as the check
+  ;; that a rerun after a failed run starts clean.
+  (os/delete-tree root)
+  (mkdir root))
+
+(deftest rename-publishes-a-file-atomically
+  (setup)
+  (let [staged (str root "/config.json.tmp")
+        live (str root "/config.json")]
+    (spit staged "{\"v\":2}")
+    (spit live "{\"v\":1}")
+
+    (testing "returns the destination path"
+      (is (= live (os/rename staged live))))
+
+    (testing "the destination holds the new content"
+      (is (= "{\"v\":2}" (slurp live))))
+
+    (testing "the source is gone"
+      (is (not (file-exists? staged)))))
+  (os/delete-tree root))
+
+(deftest rename-moves-a-directory
+  (setup)
+  (let [from (str root "/tree")
+        to (str root "/moved")]
+    (mkdir (str from "/nested"))
+    (spit (str from "/nested/leaf.txt") "leaf")
+
+    (os/rename from to)
+    (testing "contents come along"
+      (is (= "leaf" (slurp (str to "/nested/leaf.txt")))))
+    (testing "the old path is gone"
+      (is (not (file-exists? from)))))
+  (os/delete-tree root))
+
+(deftest delete-tree-removes-a-populated-directory
+  (setup)
+  (mkdir (str root "/a/b"))
+  (spit (str root "/a/b/deep.txt") "deep")
+  (spit (str root "/a/top.txt") "top")
+
+  (testing "returns nil"
+    (is (nil? (os/delete-tree (str root "/a")))))
+
+  (testing "the whole subtree is gone"
+    (is (not (file-exists? (str root "/a"))))
+    (is (not (file-exists? (str root "/a/b/deep.txt")))))
+  (os/delete-tree root))
+
+(deftest delete-tree-tolerates-an-absent-path
+  ;; delete-file throws here; this is the documented divergence.
+  (testing "removing what is not there is not an error"
+    (is (nil? (os/delete-tree (str root "/never-existed"))))))
+
+(deftest delete-tree-refuses-an-empty-path
+  ;; let-go has no thrown? — use try/catch directly.
+  (testing "an empty path throws rather than silently doing nothing"
+    (is (= :threw (try (os/delete-tree "")
+                       :no-throw
+                       (catch _ :threw))))))
