@@ -54,6 +54,14 @@
         klass (second form)
         re (when with-msg? (nth form 2))
         body (if with-msg? (drop 3 form) (drop 2 form))
+        ;; Explicit gensym rather than an `e#` auto-gensym. The catch
+        ;; binding and its uses below sit in SEPARATE syntax-quote forms,
+        ;; and auto-gensym numbering restarts per syntax quote, so two `e#`
+        ;; occurrences agree only by accident: they are both the first
+        ;; auto-gensym in their own form. Add another auto-gensym ahead of
+        ;; either one and the two names silently diverge. An explicit symbol
+        ;; threads through the unquotes and does not depend on that.
+        e (gensym "e__")
         pass `(do
                 (set! *report-counters* (update *report-counters* :pass inc))
                 ~(if msg
@@ -69,14 +77,14 @@
     `(try
        ~@body
        ~fail
-       (catch e#
-         (if (instance? ~klass e#)
+       (catch ~e
+         (if (instance? ~klass ~e)
            ~(if with-msg?
-              `(if (re-find ~re (ex-message e#))
-                 (do ~pass e#)
+              `(if (re-find ~re (ex-message ~e))
+                 (do ~pass ~e)
                  ~fail)
-              `(do ~pass e#))
-           (throw e#))))))
+              `(do ~pass ~e))
+           (throw ~e))))))
 
 (defmacro is
   ([form]
