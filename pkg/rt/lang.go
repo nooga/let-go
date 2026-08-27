@@ -1723,6 +1723,15 @@ func invokeMethodFallback(rec vm.Value, name vm.Symbol, args []vm.Value, origina
 	if v, handled, err := hostCollectionMethod(rec, name, args); handled || err != nil {
 		return v, err
 	}
+	// Every JVM object answers .toString, so give it str semantics for any
+	// value whose own type does not implement it (honeysql's util.str calls
+	// (.toString a) on arbitrary values). Placed after registered host
+	// methods and collection interop so a more specific handler wins, and
+	// deliberately not for nil — Java would NPE there, and answering ""
+	// would hide the bug.
+	if name == "toString" && len(args) == 0 && rec != nil && rec != vm.Value(vm.NIL) {
+		return vm.String(strValue(rec)), nil
+	}
 	if isCompatChecker(rec) && len(args) == 1 {
 		switch name {
 		case "isLong":
@@ -4780,6 +4789,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// Mutable JVM collection shims (see host_hashmap.go / host_arraydeque.go).
 	installHostHashMap(ns)
 	installHostArrayDeque(ns)
+	installHostStringBuilder(ns)
 }
 
 func longCompatValue(v int64) vm.Value {
@@ -5154,6 +5164,9 @@ func CoreUncheckedLong(vs ...vm.Value) (vm.Value, error) {
 		return vm.MakeInt(int(int64(lo.Uint64()))), nil
 	case vm.Float:
 		return vm.MakeInt(int(int64(float64(v)))), nil
+	case vm.Char:
+		// Java widens char to int; Clojure's unchecked-* inherit that.
+		return vm.MakeInt(int(rune(v))), nil
 	default:
 		return vm.NIL, fmt.Errorf("unchecked-long expected integer or float, got %s", vs[0].Type().Name())
 	}
@@ -5175,6 +5188,9 @@ func CoreUncheckedInt(vs ...vm.Value) (vm.Value, error) {
 		return vm.MakeInt(int(int32(lo.Uint64()))), nil
 	case vm.Float:
 		return vm.MakeInt(int(int32(float64(v)))), nil
+	case vm.Char:
+		// Java widens char to int; Clojure's unchecked-* inherit that.
+		return vm.MakeInt(int(int32(rune(v)))), nil
 	default:
 		return vm.NIL, fmt.Errorf("unchecked-int expected integer or float, got %s", vs[0].Type().Name())
 	}
@@ -5196,6 +5212,9 @@ func CoreUncheckedShort(vs ...vm.Value) (vm.Value, error) {
 		return vm.MakeInt(int(int16(lo.Uint64()))), nil
 	case vm.Float:
 		return vm.MakeInt(int(int16(float64(v)))), nil
+	case vm.Char:
+		// Java widens char to int; Clojure's unchecked-* inherit that.
+		return vm.MakeInt(int(int16(rune(v)))), nil
 	default:
 		return vm.NIL, fmt.Errorf("unchecked-short expected integer or float, got %s", vs[0].Type().Name())
 	}
@@ -5217,6 +5236,9 @@ func CoreUncheckedByte(vs ...vm.Value) (vm.Value, error) {
 		return vm.MakeInt(int(int8(lo.Uint64()))), nil
 	case vm.Float:
 		return vm.MakeInt(int(int8(float64(v)))), nil
+	case vm.Char:
+		// Java widens char to int; Clojure's unchecked-* inherit that.
+		return vm.MakeInt(int(int8(rune(v)))), nil
 	default:
 		return vm.NIL, fmt.Errorf("unchecked-byte expected integer or float, got %s", vs[0].Type().Name())
 	}

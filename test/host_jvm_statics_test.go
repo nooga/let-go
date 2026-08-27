@@ -79,3 +79,14 @@ func TestJVMStatics(t *testing.T) {
 		assert.Error(t, oobErr)
 	})
 }
+
+// TestURLEncoderEncode pins java.net.URLEncoder/encode: Go's url.QueryEscape
+// implements the same application/x-www-form-urlencoded rules (space -> '+').
+func TestURLEncoderEncode(t *testing.T) {
+	v, err := evalJVMStatics(`[(URLEncoder/encode "a b") (java.net.URLEncoder/encode "привіт" "UTF-8")]`)
+	assert.NoError(t, err)
+	assert.Equal(t, `["a+b" "%D0%BF%D1%80%D0%B8%D0%B2%D1%96%D1%82"]`, v.String())
+
+	_, err = evalJVMStatics(`(URLEncoder/encode "x" "latin-1")`)
+	assert.Error(t, err, "non-UTF-8 charsets must fail loudly")
+}

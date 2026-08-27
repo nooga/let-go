@@ -1621,9 +1621,18 @@ func readLineComment(r *LispReader, _ rune) (vm.Value, error) {
 	}
 }
 func readFormComment(r *LispReader, _ rune) (vm.Value, error) {
-	_, err := r.Read()
-	if errors.IsCausedBy(err, io.EOF) {
-		return vm.NIL, err
+	// Read() surfaces a line comment (or a nested #_ discard) as VOID; those
+	// are not forms, so `#_ ;; note<newline> (form)` must keep reading until
+	// an actual form has been discarded — otherwise the comment is what gets
+	// dropped and the supposedly-discarded form survives. Matches Clojure,
+	// where #_ skips whitespace and comments before the form it discards.
+	for {
+		v, err := r.Read()
+		if errors.IsCausedBy(err, io.EOF) {
+			return vm.NIL, err
+		}
+		if err != nil || v.Type() != vm.VoidType {
+			return vm.VOID, nil
+		}
 	}
-	return vm.VOID, nil
 }

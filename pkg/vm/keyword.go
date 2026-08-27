@@ -102,3 +102,29 @@ func (l Keyword) Namespace() Value {
 	}
 	return String(ns)
 }
+
+// InvokeMethod implements Receiver so JVM-interop calls on keywords resolve,
+// matching clojure.lang.Keyword's public accessors. Motivated by honeysql,
+// whose :clj branch converts keywords to symbols via (.sym k).
+func (l Keyword) InvokeMethod(name Symbol, args []Value) (Value, error) {
+	if len(args) == 0 {
+		switch string(name) {
+		case "sym":
+			return Symbol(l), nil
+		case "getName":
+			_, kname, _ := l.NamespacedRaw()
+			return String(kname), nil
+		case "getNamespace":
+			ns, _, hasNS := l.NamespacedRaw()
+			if !hasNS {
+				return NIL, nil
+			}
+			return String(ns), nil
+		case "toString":
+			return String(l.String()), nil
+		case "hashCode":
+			return Int(int32(l.Hash())), nil
+		}
+	}
+	return NIL, fmt.Errorf("clojure.lang.Keyword has no method .%s/%d", name, len(args))
+}

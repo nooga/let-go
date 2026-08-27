@@ -29,6 +29,17 @@ func (m *MetaValue[T]) Meta() Value {
 	return m.meta
 }
 
+// InvokeMethod delegates JVM-interop method dispatch to the wrapped value.
+// Metadata must not strip a value's Receiver surface: a ^Tag hint in
+// expression position compiles to a runtime with-meta wrap, so e.g.
+// (.sym ^clojure.lang.Keyword k) reaches the keyword through this decorator.
+func (m *MetaValue[T]) InvokeMethod(name Symbol, args []Value) (Value, error) {
+	if r, ok := Value(m.wrapped).(Receiver); ok {
+		return r.InvokeMethod(name, args)
+	}
+	return NIL, NewTypeError(m.wrapped, "has no method ."+string(name), nil)
+}
+
 // MetaFn adds the Fn surface to the generic metadata decorator. ExecContext
 // unwraps it before dispatch so closures and context-aware natives still
 // receive the caller's dynamic context.
