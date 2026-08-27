@@ -287,6 +287,153 @@ func installOsNS() {
 		return vs[1], nil
 	}))
 
+	// os/rename — (os/rename old-path new-path) → new-path
+	//
+	// Renames old-path to new-path. On Unix, a rename within one filesystem
+	// is atomic: a concurrent reader sees either the old state or the new one,
+	// never a half-written file. Go does not guarantee that property on
+	// non-Unix hosts. Writing to a temporary name in the destination directory
+	// and renaming into place is the usual Unix way to publish a file safely.
+	//
+	// A rename across filesystems fails rather than falling back to
+	// copy-then-delete. The fallback is what callers reach for this instead
+	// of, so silently substituting it would remove the only property that
+	// distinguishes it from spit.
+	ns.Def("rename", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("os/rename expects 2 args")
+		}
+		from, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/rename expected String path")
+		}
+		to, ok := vs[1].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/rename expected String destination")
+		}
+		if err := os.Rename(string(from), string(to)); err != nil {
+			return vm.NIL, err
+		}
+		return vs[1], nil
+	}))
+
+	// os/delete-tree — (os/delete-tree path) → nil
+	//
+	// Removes path and everything beneath it: the recursive form of
+	// delete-file, which removes a single entry and fails on a non-empty
+	// directory.
+	//
+	// syscall/rm-rf is the same RemoveAll call and predates this. It lives
+	// in a namespace built for container setup, beside clone, pivot-root
+	// and seccomp, which is not where a caller doing ordinary filesystem
+	// work looks. This is the os-namespace spelling, and it is the one that
+	// carries the guards below.
+	//
+	// Three behaviours worth knowing, all inherited from RemoveAll:
+	//
+	//   - Removing something already absent succeeds. The post-state the
+	//     caller asked for is the one that holds. delete-file errors here.
+	//   - Symlinks are unlinked, never followed, so a link inside the tree
+	//     pointing outside it does not take the target down with it.
+	//   - By the same rule, a path that is *itself* a symlink to a
+	//     directory loses only the link; the directory it names keeps its
+	//     contents. Callers wanting the target gone should canonicalize
+	//     first.
+	//
+	// An empty path is refused: RemoveAll treats "" as a silent no-op,
+	// which hides the unset variable that produced it. The filesystem root
+	// is refused for the same reason and a worse outcome — (str nil) is ""
+	// in lg, so a caller building "$root/$name" with root unset produces
+	// "/name", one level below the root it never meant to touch. RemoveAll
+	// already rejects "." itself.
+	ns.Def("delete-tree", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/delete-tree expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/delete-tree expected String path")
+		}
+		if path == "" {
+			return vm.NIL, fmt.Errorf("os/delete-tree expected a non-empty path")
+		}
+		// Dir(p) == p exactly at a volume root: "/" on unix, "C:\" and "\"
+		// on Windows. Cheaper and more portable than matching separators.
+		if cleaned := filepath.Clean(string(path)); filepath.Dir(cleaned) == cleaned {
+			return vm.NIL, fmt.Errorf("os/delete-tree refused the filesystem root %q", cleaned)
+		}
+		if err := os.RemoveAll(string(path)); err != nil {
+			return vm.NIL, err
+		}
+		return vm.NIL, nil
+	}))
+
+	// os/absolute-path — (os/absolute-path path) → "/abs/path"
+	//
+	// Resolves path against the process working directory and cleans it.
+	// Lexical with respect to the argument: the path itself is never looked
+	// up, so it need not exist and any symlink in it stays a symlink. (The
+	// process cwd is read, which is why this can still fail — os.Getwd
+	// errors when the working directory has been removed.)
+	//
+	// An empty path is refused rather than quietly meaning the cwd, on the
+	// same reasoning as delete-tree: it is what an unset variable looks
+	// like, and returning a plausible answer hides it.
+	ns.Def("absolute-path", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/absolute-path expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/absolute-path expected String path")
+		}
+		if path == "" {
+			return vm.NIL, fmt.Errorf("os/absolute-path expected a non-empty path")
+		}
+		abs, err := filepath.Abs(string(path))
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(abs), nil
+	}))
+
+	// os/canonical-path — (os/canonical-path path) → "/real/path"
+	//
+	// The absolute path with every symlink resolved, so two names for one
+	// file produce one string. That is what makes it the form to compare or
+	// use as a key, and it is why this reads the filesystem where
+	// absolute-path does not: a symlink can only be followed by looking.
+	//
+	// A path that does not exist is an error rather than a cleaned-up
+	// guess. Callers wanting a name for a file they are about to create
+	// want absolute-path.
+	ns.Def("canonical-path", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("os/canonical-path expects 1 arg")
+		}
+		path, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("os/canonical-path expected String path")
+		}
+		if path == "" {
+			return vm.NIL, fmt.Errorf("os/canonical-path expected a non-empty path")
+		}
+		// Resolve before absolutizing. filepath.Abs cleans lexically, which
+		// collapses ".." against the *link's* parent instead of the
+		// target's — so Abs-then-EvalSymlinks reports ENOENT for a path the
+		// kernel opens fine. EvalSymlinks walks a relative path against the
+		// cwd itself, so doing it first costs nothing.
+		real, err := filepath.EvalSymlinks(string(path))
+		if err != nil {
+			return vm.NIL, err
+		}
+		abs, err := filepath.Abs(real)
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.String(abs), nil
+	}))
+
 	// os/os-name — (os/os-name) → "linux", "darwin", "windows", ...
 	ns.Def("os-name", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		return vm.String(runtime.GOOS), nil

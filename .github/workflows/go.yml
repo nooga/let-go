@@ -203,10 +203,17 @@ jobs:
         run: |
           wget -q https://github.com/tinygo-org/tinygo/releases/download/v0.41.1/tinygo_0.41.1_amd64.deb
           sudo dpkg -i tinygo_0.41.1_amd64.deb
+      # Pinned like TinyGo above. Unpinned, install.sh resolves "latest" by
+      # sed-ing tag_name out of an unauthenticated GitHub API response; when
+      # that call is rate-limited the sed yields a literal `{`, the download
+      # 404s, and the script still exits 0 — so the job died two steps later
+      # at `wasmtime run` with `command not found` (#682).
       - name: Install wasmtime
         run: |
-          curl -sSf https://wasmtime.dev/install.sh | bash
+          curl -sSf https://wasmtime.dev/install.sh | bash -s -- --version v47.0.3
           echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Verify wasmtime is on PATH
+        run: wasmtime --version
       - name: Build runtime-only for TinyGo WASI
         run: tinygo build -target=wasi -o /tmp/lg-ro-tinygo.wasm ./cmd/lg-runtime
       - name: Boot past the reflect shim (must not trap)
