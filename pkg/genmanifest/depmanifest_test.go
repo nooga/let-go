@@ -454,3 +454,94 @@ func TestStaleOutputsDetectsTornLoweredTree(t *testing.T) {
 	}
 	t.Fatalf("torn lowered tree must be stale, got %v", stale)
 }
+
+// generated.manifest has no merge driver and is one sorted record per line, so a
+// clean text merge can land both sides' record for a single edge. The parse must
+// refuse that, and Compute with it — Compute is the path scripts/git-merge-sums.sh
+// calls, so a duplicated edge would otherwise mint a digest over a manifest that
+// records two hashes for one input.
+func TestDepManifestRejectsDuplicateEdge(t *testing.T) {
+	root := isolatedRepoCopy(t)
+	if err := WriteDepManifest(root); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	path := filepath.Join(root, DepManifestRelPath)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			record = line
+			break
+		}
+	}
+	if record == "" {
+		t.Fatal("manifest has no records to duplicate")
+	}
+	if err := os.WriteFile(path, append(data, []byte(record+"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadDepManifest(root); err == nil {
+		t.Fatal("ReadDepManifest accepted a duplicated edge")
+	}
+	if _, err := Compute(root); err == nil {
+		t.Fatal("Compute digested a manifest carrying a duplicated edge")
+	}
+}
+
+// A manifest that merged wrong carries more than one duplicated edge, and the
+// first one found says nothing about how far the damage runs. Every repeat is
+// named so the report itself distinguishes a one-line slip from a bad merge.
+func TestDepManifestReportsEveryDuplicateEdge(t *testing.T) {
+	root := isolatedRepoCopy(t)
+	if err := WriteDepManifest(root); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	path := filepath.Join(root, DepManifestRelPath)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			records = append(records, line)
+			if len(records) == 2 {
+				break
+			}
+		}
+	}
+	if len(records) < 2 {
+		t.Fatalf("manifest has %d records, need 2 to duplicate", len(records))
+	}
+	// The second record is repeated twice, so the count carries past a single repeat.
+	dupes := records[0] + "\n" + records[1] + "\n" + records[1] + "\n"
+	if err := os.WriteFile(path, append(data, []byte(dupes)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ReadDepManifest(root)
+	if err == nil {
+		t.Fatal("ReadDepManifest accepted duplicated edges")
+	}
+	msg := err.Error()
+	for i, record := range records {
+		edge := strings.Fields(record)[:3]
+		for _, field := range edge {
+			decoded, decErr := decodeManifestField(field)
+			if decErr != nil {
+				t.Fatalf("decode %q: %v", field, decErr)
+			}
+			if !strings.Contains(msg, decoded) {
+				t.Fatalf("duplicate report omits record %d field %q: %s", i, decoded, msg)
+			}
+		}
+	}
+	if !strings.Contains(msg, "2 duplicate manifest entries") {
+		t.Fatalf("duplicate report does not count both edges: %s", msg)
+	}
+	if !strings.Contains(msg, "(3 occurrences)") {
+		t.Fatalf("duplicate report does not count the thrice-recorded edge: %s", msg)
+	}
+}

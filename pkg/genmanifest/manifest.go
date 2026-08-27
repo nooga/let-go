@@ -145,7 +145,17 @@ func SourceFiles(repoRoot string) ([]string, error) {
 // Compute returns the content digest of the dependency manifest, which covers
 // every generator input/source plus declared file-output readiness records.
 // The manifest-based digest is written deterministically by WriteDepManifest.
+//
+// The manifest is parsed before it is hashed. Hashing bytes alone would accept
+// a manifest that is not a manifest — the case that matters is a merge or
+// rebase leaving conflict markers in it, because scripts/git-merge-sums.sh
+// resolves generated.sums by calling through here. Without the parse, that
+// driver mints a clean-looking digest over a file git has marked as unresolved,
+// and the digest is the artifact later checks trust.
 func Compute(repoRoot string) (string, error) {
+	if _, err := ReadDepManifest(repoRoot); err != nil {
+		return "", fmt.Errorf("refusing to digest an unparseable dependency manifest: %w", err)
+	}
 	return hashFile(filepath.Join(repoRoot, DepManifestRelPath))
 }
 
