@@ -1,0 +1,36 @@
+;; Regression fixture for #766: capturing closures in conditional branches.
+;;
+;; A closure that captures a local cannot be lifted to a top-level fn, so it
+;; lowers to an rt.BoxNativeFn expression. When such a closure is a branch of a
+;; conditional, that expression belongs INSIDE the branch, assigned to the
+;; join's result temp — not hoisted to the enclosing function's return.
+;;
+;; Three disagreeing joins, all of which previously resolved to the then-branch
+;; closure and emitted an empty `if {} else {}`:
+;;   both-branches — closure vs a DIFFERENT closure
+;;   one-branch    — closure vs nil
+;;   nested-let    — closure over a let-binding that only the then-branch makes
+;;
+;; nested-let is the shape that reached a real program: the else path returned
+;; a closure over an `h` that was never assigned.
+(ns conditionalclosure)
+
+(defn both-branches [flag x y]
+  (if flag (fn [] x) (fn [] y)))
+
+(defn one-branch [flag x]
+  (if flag (fn [] x) nil))
+
+(defn nested-let [entry]
+  (if (:a entry)
+    (let [h (:a entry)] (fn [] (h)))
+    nil))
+
+(defn -main []
+  ;; both-branches is called exactly once: the gate requires a single direct
+  ;; call to the pinned goFn in the entry function. The then-branch is covered
+  ;; through one-branch instead.
+  (println ((both-branches false 1 2)))
+  (println ((one-branch true 1)))
+  (println (one-branch false 1))
+  (println (nested-let {})))
