@@ -1,0 +1,12 @@
+{
+  "note": "Regression fixture for the cycle-tainted-memo defect found reviewing #767. The conditional inside the loop either replaces or retains the loop-carried closure; the retain branch assigns the header parameter itself. Before the fix the branches were empty and the replacement closure was assigned unconditionally, so the retain path returned 2 instead of 1.",
+  "namespace": "loopcarriedclosure",
+  "generatedFile": "loopcarriedclosure/loopcarriedclosure.go",
+  "entryFn": "Main",
+  "lispFn": "choose-loop",
+  "goFn": "ChooseLoop",
+  "lowering": "direct",
+  "functionFragment": "func ChooseLoop(ec *vm.ExecContext, arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) (vm.Value, error) {\n\tvar f vm.Value\n\tvar i int\n\tvar v15 bool\n\tvar v32 vm.Value\n\tvar v34 vm.Value\n\tvar v27 vm.Value\n\tvar callErr error\n\tf = rt.BoxNativeFn(func() vm.Value {\n\t\treturn arg1\n\t})\n\ti = 0\n\tfor {\n\t\tv15 = i < 1\n\t\tif v15 {\n\t\t\tif vm.IsTruthy(arg0) {\n\t\t\t\tv27 = rt.BoxNativeFn(func() vm.Value {\n\t\t\t\t\treturn arg2\n\t\t\t\t})\n\t\t\t} else {\n\t\t\t\tv27 = f\n\t\t\t}\n\t\t\tf = v27\n\t\t\ti = i + 1\n\t\t\tcontinue\n\t\t} else {\n\t\t\tbreak\n\t\t}\n\t}\n\tv32, callErr = rt.InvokeValueEC(ec, f, []vm.Value{})\n\tif callErr != nil {\n\t\treturn nil, callErr\n\t}\n\tv34 = v32\n\treturn v34, nil\n}",
+  "callFragment": "ChooseLoop(ec, vm.Boolean(false), vm.Int(1), vm.Int(2))",
+  "semanticWrap": "rt.AddValue(__EXPR__, vm.Int(100))"
+}

@@ -1,0 +1,12 @@
+{
+  "note": "Regression fixture for #766. A capturing closure in a conditional branch must be emitted inside that branch, assigned to the join's result temp. The committed fragment pins both branches assigning their own rt.BoxNativeFn; the pre-fix lowering emitted an empty `if {} else {}` and hoisted the then-branch closure to the function's return, which built cleanly and silently returned the wrong branch.",
+  "namespace": "conditionalclosure",
+  "generatedFile": "conditionalclosure/conditionalclosure.go",
+  "entryFn": "Main",
+  "lispFn": "both-branches",
+  "goFn": "BothBranches",
+  "lowering": "direct",
+  "functionFragment": "func BothBranches(ec *vm.ExecContext, arg0 vm.Value, arg1 vm.Value, arg2 vm.Value) vm.Value {\n\tvar v12 vm.Value\n\tif vm.IsTruthy(arg0) {\n\t\tv12 = rt.BoxNativeFn(func() vm.Value {\n\t\t\treturn arg1\n\t\t})\n\t} else {\n\t\tv12 = rt.BoxNativeFn(func() vm.Value {\n\t\t\treturn arg2\n\t\t})\n\t}\n\treturn v12\n}",
+  "callFragment": "BothBranches(ec, vm.Boolean(false), vm.Int(1), vm.Int(2))",
+  "semanticWrap": "rt.BoxNativeFn(func() vm.Value { _ = __EXPR__; return vm.Int(999) })"
+}
