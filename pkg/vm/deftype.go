@@ -62,7 +62,10 @@ type DTypeInstance struct {
 	// terminates and keeps the override's own output. Concurrent String()
 	// calls on the SAME instance may therefore see the default rendering,
 	// which is the deliberate trade for not crashing.
-	rendering atomic.Bool
+	//
+	// A bare uint32 driven by sync/atomic rather than an atomic.Bool: the
+	// atomic wrapper types embed noCopy, and WithMeta copies the struct.
+	rendering uint32
 }
 
 func NewDTypeInstance(dt *DType, fields []Value) *DTypeInstance {
@@ -101,8 +104,8 @@ func (d *DTypeInstance) WithMeta(m Value) Value {
 func (d *DTypeInstance) Unbox() any { return d }
 
 func (d *DTypeInstance) String() string {
-	if d.dtype.toString != nil && d.rendering.CompareAndSwap(false, true) {
-		defer d.rendering.Store(false)
+	if d.dtype.toString != nil && atomic.CompareAndSwapUint32(&d.rendering, 0, 1) {
+		defer atomic.StoreUint32(&d.rendering, 0)
 		if r, err := d.dtype.toString.Invoke([]Value{d}); err == nil {
 			// Only a string result is accepted (JVM toString contract).
 			// Rendering arbitrary results would recurse fatally when the
