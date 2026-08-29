@@ -122,6 +122,27 @@ func main() { os.Exit(cli.Main("host-v9", "none")) }
 		}
 	})
 
+	// -w must resolve let-go through the local `replace`, not the proxy. The
+	// replacement path lives in the custom binary's build info; without
+	// carrying it into the generated module, gomod falls back to @latest,
+	// which fails offline and silently builds a different let-go online.
+	// GOPROXY=off is the assertion: any proxy access fails the test.
+	t.Run("-w resolves let-go through the local replace, offline", func(t *testing.T) {
+		if os.Getenv("LETGO_SRC") != "" {
+			t.Skip("LETGO_SRC set: it would supply the source dir independently")
+		}
+		outDir := filepath.Join(tmp, "wasmout")
+		cmd := exec.Command(customLG, "-w", outDir, "-w-shell", "none", scriptPath)
+		cmd.Dir = tmp
+		cmd.Env = append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("custom lg -w failed with GOPROXY=off: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "index.html")); err != nil {
+			t.Errorf("no wasm output produced: %v", err)
+		}
+	})
+
 	// The custom binary is its own bundle base: -b copies the running
 	// executable and appends the bytecode, so the standalone binary inherits
 	// the generated natives. A stock lg as base would produce a binary that

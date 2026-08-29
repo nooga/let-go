@@ -152,8 +152,7 @@ yourself against `pkg/wasmhost` and blank-import your interop package there.
 ## Build metadata
 
 `cli.Main(version, commit)` takes your binary's own version strings; they feed
-`-v` and `System/getProperty`. Wire them to your release tooling the way let-go
-wires goreleaser:
+`-v`. Wire them to your release tooling the way let-go wires goreleaser:
 
 ```go
 var version, commit = "dev", "none"  // -X main.version=... -X main.commit=...
@@ -161,9 +160,11 @@ var version, commit = "dev", "none"  // -X main.version=... -X main.commit=...
 func main() { os.Exit(cli.Main(version, commit)) }
 ```
 
-These describe *your* module. let-go's own version is read separately from build
-info where it matters (`-w` resolves it from your `go.mod`'s let-go
-requirement), so passing your version here is correct and won't mispin anything.
+These describe *your* module, and only your module. The runtime's own
+identity is resolved separately from build info: `(System/getProperty
+"let-go.version")` reports the let-go your binary actually links, and `-w`
+resolves the same way (honoring a local `replace`), so passing your version
+here is correct and cannot mispin either one.
 
 ## A worked, hermetic example
 

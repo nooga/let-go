@@ -135,3 +135,37 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// GenerateFrom must emit a replace pointing at the caller-supplied checkout,
+// which is how a custom host built against a local `replace` reaches its own
+// let-go instead of resolving @latest from the proxy.
+func TestGenerateFromUsesSuppliedSourceDir(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "go.mod"),
+		[]byte("module "+ModulePath+"\n\ngo 1.26\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := GenerateFrom(t.TempDir(), "lg-wasm-app", "dev", src)
+	if err != nil {
+		t.Fatalf("GenerateFrom: %v", err)
+	}
+	if want := "replace " + ModulePath + " => " + src; !strings.Contains(files.Mod, want) {
+		t.Errorf("generated go.mod missing %q:\n%s", want, files.Mod)
+	}
+	if !strings.Contains(files.Mod, "module lg-wasm-app") {
+		t.Errorf("generated go.mod does not name the wasm module:\n%s", files.Mod)
+	}
+}
+
+// A directory that is not let-go's module must not be trusted: fall back to
+// the ordinary resolution rather than emitting a bogus replace.
+func TestGenerateFromIgnoresNonLetGoDir(t *testing.T) {
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, "go.mod"),
+		[]byte("module example.com/other\n\ngo 1.26\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if IsLetGoSourceDir(other) {
+		t.Fatal("IsLetGoSourceDir accepted a foreign module")
+	}
+}

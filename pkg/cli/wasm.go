@@ -64,6 +64,51 @@ func letgoVersionFrom(info *runtimeDebug.BuildInfo, stamped string) string {
 // so the replacement's version is the one that counts. A directory replace
 // reports no version at all and resolves to "dev"/"none", which sends
 // gomod.Generate down its local-source path.
+// letgoSourceDir reports the let-go checkout a local `replace` points at, or
+// "" when there is none. gomod.Generate cannot find it on its own from a
+// custom host (the host's module root is not let-go's), so the path has to be
+// carried across explicitly or the WASM build silently resolves @latest.
+func letgoSourceDir() string {
+	info, ok := runtimeDebug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	return letgoSourceDirFrom(info)
+}
+
+func letgoSourceDirFrom(info *runtimeDebug.BuildInfo) string {
+	if info == nil {
+		return ""
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != gomod.ModulePath {
+			continue
+		}
+		// A directory replace records the replacement PATH and no real
+		// version: Go writes "(devel)" there, or leaves it empty. A module
+		// replace records another module path WITH a version, and that one
+		// resolves through the proxy like any release, so it is not a source
+		// directory.
+		if dep.Replace == nil || dep.Replace.Path == "" {
+			return ""
+		}
+		if v := dep.Replace.Version; v != "" && v != "(devel)" {
+			return ""
+		}
+		p := dep.Replace.Path
+		if !filepath.IsAbs(p) {
+			// go.mod may spell it relative to the main module. Resolving
+			// against the working directory is the best guess available;
+			// GenerateFrom validates the result and falls back if it is wrong.
+			if abs, err := filepath.Abs(p); err == nil {
+				p = abs
+			}
+		}
+		return p
+	}
+	return ""
+}
+
 func letgoDepMeta(info *runtimeDebug.BuildInfo) (version, commit string) {
 	for _, dep := range info.Deps {
 		if dep.Path != gomod.ModulePath {
@@ -185,7 +230,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	}
 
 	// 4. Write go.mod
-	mod, err := gomod.Generate(tmpDir, wasmModuleName, letgoModuleVersion())
+	mod, err := gomod.GenerateFrom(tmpDir, wasmModuleName, letgoModuleVersion(), letgoSourceDir())
 	if err != nil {
 		return err
 	}

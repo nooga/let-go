@@ -40,6 +40,26 @@ type Files struct {
 // generated program builds against the runtime it was emitted by; a dev build
 // prefers the local source tree, and falls back to the module proxy at @latest
 // when there isn't one.
+// GenerateFrom is Generate with an explicit let-go source directory, for a
+// caller that already knows it. A custom host built against a local `replace`
+// has the replacement path in its build info, but FindLetGoSourceDir cannot
+// recover it: the host's own module root is not let-go's, so the lookup fails
+// and Generate falls back to @latest, which breaks offline and silently builds
+// against a different release online. An empty or non-let-go srcDir behaves
+// exactly like Generate.
+func GenerateFrom(dir, moduleName, version, srcDir string) (Files, error) {
+	if srcDir != "" && IsLetGoSourceDir(srcDir) {
+		return localFiles(srcDir, moduleName)
+	}
+	return Generate(dir, moduleName, version)
+}
+
+// IsLetGoSourceDir reports whether dir holds let-go's own module.
+func IsLetGoSourceDir(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	return err == nil && strings.Contains(string(data), "module "+ModulePath)
+}
+
 func Generate(dir, moduleName, version string) (Files, error) {
 	if ref, ok := ReleaseRef(version); ok {
 		// Released binary: pin the require to this exact version. We can't
@@ -131,8 +151,7 @@ func FindLetGoSourceDir() (string, error) {
 
 func findModuleRoot(start string) string {
 	for d := start; d != "/" && d != "."; d = filepath.Dir(d) {
-		data, err := os.ReadFile(filepath.Join(d, "go.mod"))
-		if err == nil && strings.Contains(string(data), "module "+ModulePath) {
+		if IsLetGoSourceDir(d) {
 			return d
 		}
 	}

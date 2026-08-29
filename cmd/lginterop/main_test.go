@@ -58,6 +58,25 @@ func TestValidateEntries(t *testing.T) {
 			entries: []interopEntry{{pkg: "hash/crc32"}, {pkg: "image/color"}},
 		},
 		{
+			name:    "alias that is a Go keyword is rejected",
+			entries: []interopEntry{{pkg: "hash/crc32", alias: "for"}},
+			wantErr: "Go keyword",
+		},
+		{
+			name:    "package path whose default alias is a keyword is rejected",
+			entries: []interopEntry{{pkg: "example.com/some/range"}},
+			wantErr: "Go keyword",
+		},
+		{
+			name:    "blank identifier alias is rejected",
+			entries: []interopEntry{{pkg: "hash/crc32", alias: "_"}},
+			wantErr: "not a valid Go identifier",
+		},
+		{
+			name:    "alias normalizing to a legal identifier is accepted",
+			entries: []interopEntry{{pkg: "hash/crc32", alias: "my-pkg"}},
+		},
+		{
 			name:    "alias vm collides with the emitted vm import",
 			entries: []interopEntry{{pkg: "hash/crc32", alias: "vm"}},
 			wantErr: "vm import",

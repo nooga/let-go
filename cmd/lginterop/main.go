@@ -173,6 +173,16 @@ func validateEntries(entries []interopEntry) error {
 			alias = defaultAlias(ent.pkg)
 		}
 		normalized := goPackageToFileName(alias)
+		// The alias becomes an import name and a qualifier in the emitted
+		// file, so it has to be spellable as a Go identifier. Without this a
+		// package named (or aliased) `for` generates `for "hash/crc32"` plus
+		// `for.Checksum`, and the run still reports success.
+		if goKeywords[normalized] {
+			return fmt.Errorf("alias %q for %s is a Go keyword and cannot name an import — set a distinct alias", alias, ent.pkg)
+		}
+		if !isGoIdent(normalized) {
+			return fmt.Errorf("alias %q for %s is not a valid Go identifier — set a distinct alias", alias, ent.pkg)
+		}
 		if normalized == "vm" {
 			return fmt.Errorf("alias %q for %s collides with the emitted file's own vm import — set a distinct alias", alias, ent.pkg)
 		}
@@ -222,16 +232,29 @@ func validateOutPkg(name string) error {
 	if goKeywords[name] {
 		return fmt.Errorf("-out-pkg %q is a Go keyword, not a valid package name", name)
 	}
+	if !isGoIdent(name) {
+		return fmt.Errorf("-out-pkg %q is not a valid Go identifier "+
+			"(letters, digits and _ only; may not start with a digit)", name)
+	}
+	return nil
+}
+
+// isGoIdent reports whether name is spellable as a Go identifier. The blank
+// identifier is excluded: it parses, but an alias of `_` makes the generated
+// import a blank import and every reference to it a syntax error.
+func isGoIdent(name string) bool {
+	if name == "" || name == "_" {
+		return false
+	}
 	for i, r := range name {
 		ok := r == '_' ||
 			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
 			(i > 0 && r >= '0' && r <= '9')
 		if !ok {
-			return fmt.Errorf("-out-pkg %q is not a valid Go identifier "+
-				"(letters, digits and _ only; may not start with a digit)", name)
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
 // --- deps.edn parsing -----------------------------------------------------

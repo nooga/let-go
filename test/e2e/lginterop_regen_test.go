@@ -455,3 +455,26 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// TestLginteropRejectsInvalidAlias pins the alias half of the same contract:
+// an alias becomes an import name and a qualifier in the emitted file, so a Go
+// keyword or the blank identifier has to be refused before writing. Otherwise
+// the run reports success and emits `for "hash/crc32"` plus `for.Checksum`,
+// which does not parse.
+func TestLginteropRejectsInvalidAlias(t *testing.T) {
+	root := repoRoot(t)
+	for _, bad := range []string{"for", "_", "range"} {
+		t.Run(bad, func(t *testing.T) {
+			cmd := exec.Command("go", "run", "./cmd/lginterop",
+				"-packages", "hash/crc32="+bad, "-out-pkg", "interop", "-out", t.TempDir())
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("alias %q was accepted; output:\n%s", bad, out)
+			}
+			if !strings.Contains(string(out), "lginterop:") {
+				t.Errorf("alias %q failed without a diagnostic:\n%s", bad, out)
+			}
+		})
+	}
+}
