@@ -10,7 +10,10 @@
 // the module name baked in. The AOT native path (nooga/let-go#596) needs the
 // same three behaviors — pin a released binary's require to its own version,
 // prefer a local source tree in dev builds, fall back to the module proxy — so
-// this exists to keep one implementation rather than two.
+// this exists to keep one implementation rather than two. A fourth behavior
+// serves a custom host built on pkg/cli: reproduce the host's own `replace`
+// directive for let-go verbatim (GenerateWithReplace), so its -w builds
+// against the let-go it actually links.
 package gomod
 
 import (
@@ -40,22 +43,58 @@ type Files struct {
 // generated program builds against the runtime it was emitted by; a dev build
 // prefers the local source tree, and falls back to the module proxy at @latest
 // when there isn't one.
-// GenerateFrom is Generate with an explicit let-go source directory, for a
-// caller that already knows it. A custom host built against a local `replace`
-// has the replacement path in its build info, but FindLetGoSourceDir cannot
-// recover it: the host's own module root is not let-go's, so the lookup fails
-// and Generate falls back to @latest, which breaks offline and silently builds
-// against a different release online. An empty or non-let-go srcDir behaves
-// exactly like Generate.
-func GenerateFrom(dir, moduleName, version, srcDir string) (Files, error) {
-	if srcDir != "" && IsLetGoSourceDir(srcDir) {
-		return localFiles(srcDir, moduleName)
-	}
-	return Generate(dir, moduleName, version)
+// Replacement is the right-hand side of a go.mod `replace` directive for
+// let-go, as a dependent binary's build info records it. Version is "" for a
+// directory replacement; a module replacement carries the module path and
+// its version, fork or not.
+type Replacement struct {
+	Path    string
+	Version string
 }
 
-// IsLetGoSourceDir reports whether dir holds let-go's own module.
-func IsLetGoSourceDir(dir string) bool {
+// IsDir reports whether the replacement names a directory rather than a
+// module.
+func (r Replacement) IsDir() bool { return r.Version == "" }
+
+// GenerateWithReplace produces go.mod/go.sum for a module named moduleName in
+// dir, requiring let-go through rep reproduced verbatim. It exists for a
+// custom host whose go.mod replaces let-go: the host's module root is not
+// let-go's, so FindLetGoSourceDir cannot recover a directory replacement, and
+// a module replacement is not a version of github.com/nooga/let-go at all.
+// Collapsing either to a version silently built the WASM module against a
+// different let-go (or @latest); reproducing the directive builds it against
+// the one the host links.
+//
+// A directory replacement must be absolute and must hold let-go's module.
+// Both failures are errors rather than fall-throughs: a binary that recorded
+// `../let-go` has genuinely lost the path (build info carries no module
+// root), and guessing a root would only move the surprise. LETGO_SRC is the
+// override for that case; callers honor it before consulting build info.
+func GenerateWithReplace(dir, moduleName string, rep Replacement) (Files, error) {
+	if !rep.IsDir() {
+		return getAndRead(dir, replacedGoMod(moduleName, rep), ModulePath)
+	}
+	if !filepath.IsAbs(rep.Path) {
+		return Files{}, fmt.Errorf("let-go replace path %q is relative and cannot be resolved from a built binary; set LETGO_SRC to the checkout or build the host with an absolute replace", rep.Path)
+	}
+	if !isLetGoSourceDir(rep.Path) {
+		return Files{}, fmt.Errorf("let-go replace target %q is not a let-go checkout (set LETGO_SRC to one)", rep.Path)
+	}
+	return localFiles(rep.Path, moduleName)
+}
+
+// replacedGoMod is the go.mod a module replacement starts from: the require
+// carries the v0.0.0 placeholder, and the replace directive is the one from
+// the host, verbatim. `go get` on the require then resolves the replacement
+// and fills in the rest.
+func replacedGoMod(moduleName string, rep Replacement) string {
+	return "module " + moduleName + "\n\ngo 1.26\n\n" +
+		"require " + ModulePath + " v0.0.0\n\n" +
+		"replace " + ModulePath + " => " + rep.Path + " " + rep.Version + "\n"
+}
+
+// isLetGoSourceDir reports whether dir holds let-go's own module.
+func isLetGoSourceDir(dir string) bool {
 	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	return err == nil && strings.Contains(string(data), "module "+ModulePath)
 }
@@ -94,7 +133,15 @@ func ReleaseRef(version string) (string, bool) {
 // go.sum. Used for both released binaries (pinned version) and dev builds with
 // no local source tree (@latest).
 func resolveFiles(dir, moduleName, modRef string) (Files, error) {
-	goMod := "module " + moduleName + "\n\ngo 1.26\n"
+	return getAndRead(dir, "module "+moduleName+"\n\ngo 1.26\n", modRef)
+}
+
+// getAndRead writes goMod into dir, runs `go get modRef` there, and reads
+// back the go.mod/go.sum the toolchain produced. With a replace directive
+// already in goMod, `go get` on the replaced path resolves the replacement
+// and writes sums for it and its dependencies — the same mechanics whether
+// the require is pinned, @latest, or replaced.
+func getAndRead(dir, goMod, modRef string) (Files, error) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
 		return Files{}, err
 	}
@@ -151,7 +198,7 @@ func FindLetGoSourceDir() (string, error) {
 
 func findModuleRoot(start string) string {
 	for d := start; d != "/" && d != "."; d = filepath.Dir(d) {
-		if IsLetGoSourceDir(d) {
+		if isLetGoSourceDir(d) {
 			return d
 		}
 	}

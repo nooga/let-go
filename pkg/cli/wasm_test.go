@@ -6,7 +6,6 @@
 package cli
 
 import (
-	"path/filepath"
 	runtimeDebug "runtime/debug"
 	"strings"
 	"testing"
@@ -178,15 +177,13 @@ func TestRuntimeMetadataFrom(t *testing.T) {
 	}
 }
 
-// A custom host built against a local `replace` must carry the replacement
-// PATH into the generated WASM module. Returning only a version collapses the
-// directory replace to "dev", and gomod.Generate cannot recover the path from
-// a host whose own module root is not let-go's, so it falls back to @latest:
-// broken offline, and silently the wrong let-go online.
-func TestLetgoSourceDirFrom(t *testing.T) {
-	// Go records "(devel)" as the replacement version for a directory
-	// replace; an empty string is the other shape seen in practice.
-	dirDepVer := func(replacePath, replaceVer string) *runtimeDebug.BuildInfo {
+// A custom host built against a `replace` must carry the whole directive into
+// the generated WASM module. Reducing it to a version pins the wrong module
+// for a fork; reducing it to a path loses the version. And a relative
+// directory path is unrecoverable from a built binary — build info records
+// it verbatim and carries no module root — so it is an error, not a guess.
+func TestLetgoReplacementFrom(t *testing.T) {
+	withReplace := func(replacePath, replaceVer string) *runtimeDebug.BuildInfo {
 		return &runtimeDebug.BuildInfo{
 			Main: runtimeDebug.Module{Path: "example.com/custom"},
 			Deps: []*runtimeDebug.Module{{
@@ -195,47 +192,106 @@ func TestLetgoSourceDirFrom(t *testing.T) {
 			}},
 		}
 	}
-	dirDep := func(replacePath string) *runtimeDebug.BuildInfo {
-		return dirDepVer(replacePath, "(devel)")
+	tests := []struct {
+		name    string
+		info    *runtimeDebug.BuildInfo
+		want    *gomod.Replacement
+		wantErr string
+	}{
+		{name: "no build info", info: nil, want: nil},
+		{
+			name: "no replace",
+			info: &runtimeDebug.BuildInfo{
+				Main: runtimeDebug.Module{Path: "example.com/custom"},
+				Deps: []*runtimeDebug.Module{{Path: gomod.ModulePath, Version: "v1.2.3"}},
+			},
+			want: nil,
+		},
+		{
+			// Go writes "(devel)" as the version of a directory replacement.
+			name: "absolute directory replace with (devel)",
+			info: withReplace("/src/let-go", "(devel)"),
+			want: &gomod.Replacement{Path: "/src/let-go"},
+		},
+		{
+			name: "absolute directory replace with an empty version",
+			info: withReplace("/src/let-go", ""),
+			want: &gomod.Replacement{Path: "/src/let-go"},
+		},
+		{
+			name:    "relative directory replace is an error",
+			info:    withReplace("../let-go", "(devel)"),
+			wantErr: "relative",
+		},
+		{
+			name: "fork replace keeps its module path and version",
+			info: withReplace("example.com/fork", "v1.2.3"),
+			want: &gomod.Replacement{Path: "example.com/fork", Version: "v1.2.3"},
+		},
+		{
+			name: "same-path pin is carried verbatim too",
+			info: withReplace(gomod.ModulePath, "v1.2.4"),
+			want: &gomod.Replacement{Path: gomod.ModulePath, Version: "v1.2.4"},
+		},
 	}
-	t.Run("absolute directory replace is carried through", func(t *testing.T) {
-		if got := letgoSourceDirFrom(dirDep("/src/let-go")); got != "/src/let-go" {
-			t.Errorf("letgoSourceDirFrom() = %q, want /src/let-go", got)
-		}
-	})
-	t.Run("relative directory replace resolves to an absolute path", func(t *testing.T) {
-		got := letgoSourceDirFrom(dirDep("../let-go"))
-		if !filepath.IsAbs(got) || !strings.HasSuffix(got, "let-go") {
-			t.Errorf("letgoSourceDirFrom() = %q, want an absolute path ending in let-go", got)
-		}
-	})
-	t.Run("empty replacement version is also a directory replace", func(t *testing.T) {
-		if got := letgoSourceDirFrom(dirDepVer("/src/let-go", "")); got != "/src/let-go" {
-			t.Errorf("letgoSourceDirFrom() = %q, want /src/let-go", got)
-		}
-	})
-	t.Run("versioned replace is not a source dir", func(t *testing.T) {
-		info := &runtimeDebug.BuildInfo{
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := letgoReplacementFrom(tt.info)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("letgoReplacementFrom() = %+v, want an error mentioning %q", got, tt.wantErr)
+				}
+				for _, want := range []string{tt.wantErr, "LETGO_SRC"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q should mention %q", err, want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("letgoReplacementFrom() error: %v", err)
+			}
+			if (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
+				t.Errorf("letgoReplacementFrom() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// LETGO_SRC is the explicit override and must win BEFORE build info is
+// consulted: it is the only way out for a host whose replace is relative, so
+// an error from the unrecoverable replacement may not pre-empt it.
+func TestWasmLetgoSource(t *testing.T) {
+	replaced := func(path, ver string) *runtimeDebug.BuildInfo {
+		return &runtimeDebug.BuildInfo{
 			Main: runtimeDebug.Module{Path: "example.com/custom"},
 			Deps: []*runtimeDebug.Module{{
 				Path: gomod.ModulePath, Version: "v0.0.0",
-				Replace: &runtimeDebug.Module{Path: "example.com/fork", Version: "v1.2.3"},
+				Replace: &runtimeDebug.Module{Path: path, Version: ver},
 			}},
 		}
-		if got := letgoSourceDirFrom(info); got != "" {
-			t.Errorf("letgoSourceDirFrom() = %q, want empty for a versioned replace", got)
+	}
+	t.Run("no override, relative replace: the error surfaces", func(t *testing.T) {
+		if _, err := wasmLetgoSource("", replaced("../let-go", "(devel)")); err == nil {
+			t.Error("expected the relative-replace error")
 		}
 	})
-	t.Run("no replace and no build info yield nothing", func(t *testing.T) {
-		plain := &runtimeDebug.BuildInfo{
-			Main: runtimeDebug.Module{Path: "example.com/custom"},
-			Deps: []*runtimeDebug.Module{{Path: gomod.ModulePath, Version: "v1.2.3"}},
+	t.Run("override set, relative replace: override wins, no error", func(t *testing.T) {
+		rep, err := wasmLetgoSource("/src/let-go", replaced("../let-go", "(devel)"))
+		if err != nil || rep != nil {
+			t.Errorf("wasmLetgoSource() = (%+v, %v), want (nil, nil)", rep, err)
 		}
-		if got := letgoSourceDirFrom(plain); got != "" {
-			t.Errorf("letgoSourceDirFrom() = %q, want empty", got)
+	})
+	t.Run("override set, fork replace: override still wins", func(t *testing.T) {
+		rep, err := wasmLetgoSource("/src/let-go", replaced("example.com/fork", "v1.2.3"))
+		if err != nil || rep != nil {
+			t.Errorf("wasmLetgoSource() = (%+v, %v), want (nil, nil)", rep, err)
 		}
-		if got := letgoSourceDirFrom(nil); got != "" {
-			t.Errorf("letgoSourceDirFrom(nil) = %q, want empty", got)
+	})
+	t.Run("no override, absolute replace: the replacement is used", func(t *testing.T) {
+		rep, err := wasmLetgoSource("", replaced("/src/let-go", "(devel)"))
+		if err != nil || rep == nil || rep.Path != "/src/let-go" || rep.Version != "" {
+			t.Errorf("wasmLetgoSource() = (%+v, %v), want the directory replacement", rep, err)
 		}
 	})
 }
