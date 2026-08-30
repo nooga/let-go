@@ -54,6 +54,8 @@ jobs:
     # for a noisier runner, where the memory-bound families (and so the whole
     # suite) run slower. Right-size from observed runtime during the shadow phase.
     timeout-minutes: 90
+    outputs:
+      pr: ${{ steps.refs.outputs.pr }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,8 +88,11 @@ jobs:
           git fetch --no-tags origin "$base_ref" "refs/pull/${PR}/head:pr-head"
           head_sha="$(git rev-parse pr-head)"
           base_sha="$(git merge-base "origin/${base_ref}" pr-head)"
-          echo "base=${base_sha}" >> "$GITHUB_OUTPUT"
-          echo "head=${head_sha}" >> "$GITHUB_OUTPUT"
+          {
+            echo "pr=${PR}"
+            echo "base=${base_sha}"
+            echo "head=${head_sha}"
+          } >> "$GITHUB_OUTPUT"
           echo "Base (merge-base): ${base_sha}"
           echo "Head:              ${head_sha}"
 
@@ -118,13 +123,39 @@ jobs:
             --base ../wt-base --head ../wt-head \
             --n "$N" --budgets "$BUDGETS" --confirm-k 2 \
             --out "${RUNNER_TEMP}/ab-out" | tee "${RUNNER_TEMP}/ab-report.txt" || rc=$?
+          # The report is N ::group:: blocks of per-cycle bench output followed
+          # by the aggregate table. The job summary takes all of it. The PR
+          # comment takes the aggregate only: the per-cycle logs run to ~100
+          # lines, and ::group:: is Actions log-folding syntax that renders as
+          # literal text in a comment body.
+          rpt="${RUNNER_TEMP}/ab-report.txt"
+          last_group="$(grep -n '::endgroup::' "$rpt" | tail -1 | cut -d: -f1 || true)"
+          if [ -n "$last_group" ]; then
+            tail -n +"$((last_group + 1))" "$rpt" > "${RUNNER_TEMP}/ab-summary.txt"
+          else
+            # No groups found — format changed, or the driver died before the
+            # first cycle. Fall back to the whole report rather than post an
+            # empty comment.
+            cp "$rpt" "${RUNNER_TEMP}/ab-summary.txt"
+          fi
           {
             echo '## Repeat A/B (variance-reduced) — informational shadow check'
             echo
             echo '```'
-            cat "${RUNNER_TEMP}/ab-report.txt"
+            cat "$rpt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '## Repeat A/B (variance-reduced) — informational shadow check'
+            echo
+            echo '```'
+            cat "${RUNNER_TEMP}/ab-summary.txt"
+            echo '```'
+            echo
+            echo "Per-cycle logs are in the job summary. Per-snapshot evidence — raw samples, cycle order, provenance — is in the \`perf-pr-repeat\` artifact on [this run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            echo
+            echo '_Informational only. This check never gates the PR — the workflow header says why._'
+          } > "${RUNNER_TEMP}/comment.md"
           exit "$rc"
 
       # Retain the full evidence trail (every base/head snapshot with raw samples,
@@ -138,3 +169,64 @@ jobs:
           name: perf-pr-repeat
           path: ${{ runner.temp }}/ab-out/
           if-no-files-found: warn
+
+      - name: Upload PR comment body
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-pr-repeat-comment
+          path: ${{ runner.temp }}/comment.md
+          if-no-files-found: warn
+
+  # Mirrors perf-pr.yml's comment job. Separate job so the elevated token is
+  # scoped away from the benchmark, which checks out and builds PR code.
+  #
+  # Gated on success deliberately: the bench job exits nonzero when families
+  # are not comparable across cycles, and posting a delta table built from a
+  # measurement we already know is broken would be worse than posting nothing.
+  # The job summary still carries the report in that case.
+  comment:
+    needs: bench
+    if: needs.bench.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download PR comment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: perf-pr-repeat-comment
+          path: ${{ runner.temp }}/perf-pr-repeat-comment
+
+      # Sticky comment, upserted by marker. The marker differs from
+      # perf-pr.yml's on purpose: during the shadow phase both lanes run on the
+      # same PR and the whole point is comparing them, so neither may overwrite
+      # the other. Fork PRs get a read-only token, so this cannot post there —
+      # continue-on-error keeps the workflow green and the summary still has it.
+      - name: Upsert PR comment
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR: ${{ needs.bench.outputs.pr }}
+          COMMENT_PATH: ${{ runner.temp }}/perf-pr-repeat-comment/comment.md
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- perf-pr-repeat-report -->';
+            const body = marker + '\n' + fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            const {owner, repo} = context.repo;
+            // Resolved in the refs step so it works for both pull_request and
+            // workflow_dispatch (where there's no pull_request in the payload).
+            const issue_number = Number(process.env.PR);
+            // paginate: the default page is 30, and a sticky upsert past that
+            // silently duplicates. Same call in perf-pr.yml.
+            const comments = await github.paginate(github.rest.issues.listComments, {owner, repo, issue_number});
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({owner, repo, comment_id: existing.id, body});
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body});
+            }
