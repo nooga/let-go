@@ -105,10 +105,13 @@ jobs:
       # unnoticed. It regenerates interop_xxh3.go and byte-compares, which is what
       # now enforces the //go:build !tinygo constraint since the hand-tag guard
       # (TestInteropXxh3KeepsTinygoBuildTag) was retired.
-      - name: Expensive lowering e2e (determinism, deftype skeleton, lginterop round-trip)
+      # TestCustomMain is -short-gated for the same reason (it builds three
+      # custom lg binaries and runs -w through each); without a place in this
+      # list it would never run in CI at all.
+      - name: Expensive lowering e2e (determinism, deftype skeleton, lginterop round-trip, custom main)
         # No -short here so the testing.Short()-gated heavyweight e2e tests run
         # full; the fast `make test` loop passes -short to skip them.
-        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering|TestLginteropXxh3RoundTrip'
+        run: go test -v -timeout 600s ./test/e2e/ -run 'TestLoweringDeterminism|TestDeftypeSkeletonNativeLowering|TestLginteropXxh3RoundTrip|TestCustomMain'
 
       # Standalone native-entry matrix (#425 / #628): lg-compile --entry-frame,
       # embed program.lgb, go build, run. Also covers --entry-frame opt-in.

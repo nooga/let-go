@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-23
+last-verified: 2026-08-30
 ---
 
 # Building a custom `lg`
@@ -149,6 +149,27 @@ resolve it at runtime.
 namespaces. If you need custom Go bindings in WASM today, build the WASM module
 yourself against `pkg/wasmhost` and blank-import your interop package there.
 
+### How `-w` finds let-go
+
+The WASM build scaffolds a fresh Go module, so it has to decide which let-go
+that module requires. It reads your binary's build info and reproduces your
+`go.mod`'s `replace` directive for `github.com/nooga/let-go` verbatim:
+
+- a directory replace (`=> /src/let-go`) becomes the same directory replace;
+- a module replace (`=> example.com/fork v1.2.3`, or a pin of the stock module
+  at another version) becomes the same module and version, resolved with
+  `go get` — so a fork is built against the fork, never against
+  `github.com/nooga/let-go` at the fork's version number.
+
+With no `replace`, the module requires the let-go version your binary links.
+
+One case cannot be honored: a **relative** directory replace (`=> ../let-go`).
+Go records the path exactly as spelled and no module root to anchor it, so a
+built binary has no way to find that checkout again. `-w` refuses it with an
+error rather than guessing from the working directory. Set `LETGO_SRC` to the
+checkout, or build your host with an absolute path in the replace. `LETGO_SRC`
+always wins when it is set, whatever build info says.
+
 ## Build metadata
 
 `cli.Main(version, commit)` takes your binary's own version strings; they feed
@@ -163,8 +184,8 @@ func main() { os.Exit(cli.Main(version, commit)) }
 These describe *your* module, and only your module. The runtime's own
 identity is resolved separately from build info: `(System/getProperty
 "let-go.version")` reports the let-go your binary actually links, and `-w`
-resolves the same way (honoring a local `replace`), so passing your version
-here is correct and cannot mispin either one.
+reads the same build info (see [How `-w` finds let-go](#how--w-finds-let-go)),
+so passing your version here is correct and cannot mispin either one.
 
 ## A worked, hermetic example
 
