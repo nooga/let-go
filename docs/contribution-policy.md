@@ -86,7 +86,7 @@ the thread — not a silent override.
 | Cold-start regression | > 10 % on any surface | perf corpus, `test/perf/` (in flight) |
 | Artifact-size regression | > 10 % on any surface | perf corpus, `test/perf/` (in flight) |
 | Bootstrap parity divergence | any count/bucket delta | `make parity-full` — local target, CI wiring deferred (see note below) |
-| Stale committed generated artifact | committed bytes differ from regeneration, for any of the six in `GENERATED-TRACKED` | `make check-generated` — CI gate |
+| Stale committed generated artifact | committed bytes differ from regeneration, for any of the six listed in `scripts/check-generated.sh` | `make check-generated` — CI gate |
 | Broken `core_go_lowered/` | freshly regenerated (gitignored) tree fails to compile under `-tags gogen_ir` | `make check-generated` — CI gate |
 | Existing test suite | any regression | `make test` — CI gate (already in place) |
 
@@ -100,17 +100,17 @@ the artifacts `parity-full` depends on.
 The two gates are siblings, but checkpointed differently. The **committed**
 artifacts — the `core_compiled.lgb` bundle loaded by the untagged build, the two
 `lgprimgen` registrars, and the three files generated from the IR specs — are
-listed in the Makefile's `GENERATED-TRACKED`, and the gate compares committed
-bytes against a fresh regeneration for each. `core_go_lowered/` is the generated
-Go linked into `-tags gogen_ir` builds — it is a **gitignored artifact**,
-regenerated from scratch by the gate, which then verifies it compiles under
-`-tags gogen_ir` (no committed-bytes comparison).
+listed in `scripts/check-generated.sh`, and the gate compares committed bytes
+against a fresh regeneration for each. `core_go_lowered/` is the generated Go
+linked into `-tags gogen_ir` builds — it is a **gitignored artifact**, regenerated
+from scratch by the gate, which then verifies it compiles under `-tags gogen_ir`
+(no committed-bytes comparison).
 
 Regeneration runs through the full `make generate` rather than invoking `lgbgen`
 and `lgprimgen` directly. That matters: three of the committed artifacts are
 produced only by `scripts/generate.lg`, so a gate driving the narrower path
-cannot see them drift at all. `GENERATED-TRACKED` and `generate.lg` are the same
-list, and they have to stay that way.
+cannot see them drift at all. The artifact list in `scripts/check-generated.sh`
+and `generate.lg` have to stay in lockstep.
 
 If a committed artifact falls behind the sources, or the lowered tree fails to
 regenerate-and-compile, the two engines quietly run different versions of the IR
