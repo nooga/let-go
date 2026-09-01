@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -309,5 +310,40 @@ func TestUnboxMapNestedSlice(t *testing.T) {
 	}
 	if _, ok := captured[2].(map[string]any); !ok {
 		t.Fatalf("nested map is %T, want map[string]any", captured[2])
+	}
+}
+
+// A Seq is deliberately NOT converted, only an already-materialized []Value.
+// A LazySeq may be infinite, and unboxSliceInto iterates until the sequence is
+// empty, so converting one in an `any` slot would run until memory ran out.
+// Unbox hands the Seq over unrealized instead, which is what it did before.
+func TestUnboxMapDoesNotRealizeAnInfiniteSeq(t *testing.T) {
+	var captured []any
+	fn, err := vm.NativeFnType.Box(func(xs []any) vm.Value {
+		captured = xs
+		return vm.Int(int64(len(xs)))
+	})
+	if err != nil {
+		t.Fatalf("Box: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = fn.(*vm.NativeFn).Invoke([]vm.Value{
+			vm.ArrayVector{vm.NewInfiniteRange(0, 1)},
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("conversion is realizing an infinite sequence")
+	}
+	if len(captured) != 1 {
+		t.Fatalf("captured %#v, want a single element", captured)
+	}
+	if _, ok := captured[0].([]any); ok {
+		t.Fatalf("an infinite sequence was eagerly converted to %T", captured[0])
 	}
 }

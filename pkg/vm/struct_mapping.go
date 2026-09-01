@@ -377,14 +377,22 @@ func unboxInto(target reflect.Value, val Value) error {
 			}
 			raw := val.Unbox()
 			// The sequential case is keyed on what Unbox ALREADY produces, not
-			// on Sequable. Sequable is far too broad: String and NIL both
-			// implement it, a String would become a vector of characters, and
-			// NIL.Seq() returns NIL itself, whose First() is NIL — infinite
-			// recursion. Keying on the Unbox result instead scopes the change
-			// to exactly the values that leak let-go types into Go today, so
-			// anything else behaves precisely as it did before.
-			switch raw.(type) {
-			case []Value, Seq:
+			// on Sequable, and specifically on a []Value.
+			//
+			// Sequable is far too broad: String and NIL both implement it, a
+			// String would become a vector of characters, and NIL.Seq()
+			// returns NIL itself, whose First() is NIL — unbounded recursion.
+			//
+			// A Seq is excluded for a different reason: it may be infinite.
+			// A LazySeq over NewInfiniteRange unboxes to a Seq today without
+			// being realized, and converting it would iterate until memory ran
+			// out. A []Value is finite by construction — it is already
+			// materialized — so eagerly converting one cannot hang.
+			//
+			// Keying on the Unbox result scopes the change to exactly the
+			// values that leak let-go types into Go today; anything else takes
+			// the pre-existing path untouched.
+			if _, ok := raw.([]Value); ok {
 				if sq, ok := val.(Sequable); ok {
 					out := reflect.New(sliceAnyType).Elem()
 					if err := unboxSliceInto(out, sq.Seq()); err == nil {
