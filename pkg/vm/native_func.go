@@ -93,29 +93,46 @@ func (t *theNativeFnType) Box(fn any) (Value, error) {
 // map[string]any). The struct_mapping machinery already does this via
 // unboxSliceInto and unboxMapInto, so we delegate to those. For other targets
 // and for boxed Go values, plain Unbox is correct.
-func boxArgForReflect(v Value, target reflect.Type) reflect.Value {
+//
+// A failed conversion is reported only when the Unbox fallback cannot satisfy
+// the target either. The fallback is legitimate on its own — a *Boxed already
+// holding a Go map takes it and succeeds — so failing eagerly would break
+// working calls. But when neither path produces a usable value, returning the
+// conversion error is what lets the caller say
+//
+//	cannot convert map key 65 (let-go.lang.Integer) to string
+//
+// instead of letting reflect.Call panic with the diagnostic that started this
+// whole issue:
+//
+//	reflect: Call using *vm.PersistentMap as type map[string]interface {}
+func boxArgForReflect(v Value, target reflect.Type) (reflect.Value, error) {
 	if debugBoxArgs {
 		fmt.Fprintf(os.Stderr, "[boxArgForReflect] v=%T target=%s kind=%s\n", v, target.String(), target.Kind())
 	}
+	// Remembered from a slice or map attempt, surfaced only at the end.
+	var convErr error
+
 	if target.Kind() == reflect.Slice || target.Kind() == reflect.Array {
 		if sq, ok := v.(Sequable); ok {
 			out := reflect.New(target).Elem()
-			if err := unboxSliceInto(out, sq.Seq()); err == nil {
-				return out
+			err := unboxSliceInto(out, sq.Seq())
+			if err == nil {
+				return out, nil
 			}
+			convErr = err
 		}
 	}
 	if target.Kind() == reflect.Map {
 		// Without this, a map target fell through to the Unbox fallback below
-		// and reflect.Call died with:
-		//
-		//	reflect: Call using *vm.PersistentMap as type map[string]interface {}
-		//
-		// because (*PersistentMap).Unbox returns the map itself.
+		// and reflect.Call died, because (*PersistentMap).Unbox returns the
+		// map itself.
 		out := reflect.New(target).Elem()
-		if err := unboxMapInto(out, v); err == nil {
-			return out
+		err := unboxMapInto(out, v)
+		if err == nil {
+			return out, nil
 		}
+		convErr = err
 	}
 	// When the Go param is an interface (typically vm.Value itself), pass
 	// the boxed Value directly. Unboxing first would surface a Go-native
@@ -128,13 +145,24 @@ func boxArgForReflect(v Value, target reflect.Type) reflect.Value {
 			fmt.Fprintf(os.Stderr, "[boxArgForReflect]   interface path: rv.Type=%s assignable=%v\n", rv.Type().String(), rv.Type().AssignableTo(target))
 		}
 		if rv.IsValid() && rv.Type().AssignableTo(target) {
-			return rv
+			return rv, nil
 		}
 	}
 	if debugBoxArgs {
 		fmt.Fprintf(os.Stderr, "[boxArgForReflect]   FALLBACK Unbox: v.Unbox()=%T\n", v.Unbox())
 	}
-	return reflect.ValueOf(v.Unbox())
+	out := reflect.ValueOf(v.Unbox())
+	if convErr != nil && !usableAsReflectArg(out, target) {
+		return reflect.Value{}, convErr
+	}
+	return out, nil
+}
+
+// usableAsReflectArg mirrors what boxReflectFunc does with a prepared
+// argument: it is passed through when assignable, and converted when
+// convertible. Anything else makes reflect.Call panic.
+func usableAsReflectArg(v reflect.Value, target reflect.Type) bool {
+	return v.IsValid() && (v.Type().AssignableTo(target) || v.CanConvert(target))
 }
 
 var debugBoxArgs = os.Getenv("LG_BOXARGS_DEBUG") != ""
