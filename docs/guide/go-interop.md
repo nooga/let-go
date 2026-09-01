@@ -272,10 +272,11 @@ func Exec(db *sql.DB, query string, args []any) (sql.Result, error) {
 `[]any` element by element, and a let-go `nil` becomes a Go `nil`, so a NULL
 parameter passes through like any other value.
 
-### How `[]any` crosses the boundary
+### How collections cross the boundary
 
-`[]any` is the natural Go type for "a row of unknown column types", so it is
-worth stating what happens to it in each direction.
+`[]any` is the natural Go type for "a row of unknown column types", and
+`map[string]any` the natural one for a JSON object or an options bag, so it is
+worth stating what happens to them in each direction.
 
 **Go to let-go.** Each element is boxed by its *dynamic* type, not the
 slice's static element type. A `[]any` holding `"Ada"`, `int64(36)` and
@@ -298,6 +299,51 @@ the call, which is what makes NULL parameters work.
 Element values are whatever `Value.Unbox` yields, so a let-go int arrives as
 a Go `int`. Convert explicitly in the shim if a driver wants something
 narrower.
+
+#### Maps
+
+A map crosses the same way, so a shim can declare `map[string]any` — or
+`map[string]string`, or any other Go map — and let-go fills it in.
+
+**Go to let-go.** Keys and values are boxed by their dynamic type, exactly as
+slice elements are, so a `map[string]any` arrives as a let-go map of native
+values. A nil Go map is `nil`; an empty one is an empty map, which is a
+different value.
+
+Go string keys become let-go **strings, not keywords**, so a map is read with
+`get` and a string:
+
+```clojure
+(get (shim/Stats) "runtime")   ; => "let-go"
+(:runtime (shim/Stats))        ; => nil
+```
+
+That is lossy but predictable, and it matches `clojure.data.json` with no
+`:key-fn`. Keywordising automatically would be wrong: Go map keys may contain
+spaces and dots, which do not make valid keywords.
+
+**let-go to Go.** A let-go map converts into a Go map key by key. Keyword keys
+become string keys — a keyword stores its name without the leading colon — so
+`{:name "Ada"}` reaches Go as `map[string]any{"name": "Ada"}`. A numeric key
+into a string-keyed map is rejected rather than converted: Go would turn the
+key `65` into `"A"` by rune conversion, and a wrong key that looks plausible is
+worse than a failure.
+
+Both let-go map types convert, sorted maps included.
+
+#### Nesting
+
+Nesting works in both directions and recursively. A `[]any` inside a `[]any`,
+a map inside a map, a map inside a `[]any` — each converts to its natural
+shape rather than arriving as an opaque let-go value:
+
+```clojure
+{:a {:b 1}}   ; → map[string]any{"a": map[string]any{"b": 1}}
+```
+
+One deliberate exception: a **lazy sequence** nested inside an `any` slot is
+handed over unrealized rather than converted, because it may be infinite.
+Convert it in let-go first (`vec`, `doall`) if the Go side wants a slice.
 
 ### Drivers
 
