@@ -88,10 +88,11 @@ func (t *theNativeFnType) Box(fn any) (Value, error) {
 
 // boxArgForReflect prepares a let-go Value for reflect.Call into a Go fn.
 //
-// When the Go parameter is a slice/array kind, we want per-element
-// conversion (so e.g. []vm.Int can flow into []int). The struct_mapping
-// machinery already does this via unboxSliceInto, so we delegate to it.
-// For non-slice targets and for boxed Go values, plain Unbox is correct.
+// When the Go parameter is a slice/array or map kind, we want per-element
+// conversion (so e.g. []vm.Int can flow into []int, and a let-go map into a
+// map[string]any). The struct_mapping machinery already does this via
+// unboxSliceInto and unboxMapInto, so we delegate to those. For other targets
+// and for boxed Go values, plain Unbox is correct.
 func boxArgForReflect(v Value, target reflect.Type) reflect.Value {
 	if debugBoxArgs {
 		fmt.Fprintf(os.Stderr, "[boxArgForReflect] v=%T target=%s kind=%s\n", v, target.String(), target.Kind())
@@ -102,6 +103,18 @@ func boxArgForReflect(v Value, target reflect.Type) reflect.Value {
 			if err := unboxSliceInto(out, sq.Seq()); err == nil {
 				return out
 			}
+		}
+	}
+	if target.Kind() == reflect.Map {
+		// Without this, a map target fell through to the Unbox fallback below
+		// and reflect.Call died with:
+		//
+		//	reflect: Call using *vm.PersistentMap as type map[string]interface {}
+		//
+		// because (*PersistentMap).Unbox returns the map itself.
+		out := reflect.New(target).Elem()
+		if err := unboxMapInto(out, v); err == nil {
+			return out
 		}
 	}
 	// When the Go param is an interface (typically vm.Value itself), pass
