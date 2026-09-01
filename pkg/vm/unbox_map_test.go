@@ -7,6 +7,7 @@ package vm_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/vm"
@@ -161,5 +162,44 @@ func TestUnboxMapRejectsNumericKeyIntoStringKey(t *testing.T) {
 
 	if captured != nil {
 		t.Fatalf("numeric key was accepted: callee saw %#v, want the conversion rejected", captured)
+	}
+}
+
+// A map[any]any key target accepts any dynamic type, and a let-go vector key
+// unboxes to a []vm.Value — which SetMapIndex cannot hash. That panicked with
+// "hash of unhashable type []vm.Value" instead of failing the conversion.
+// unboxMapInto is also reached from RecordToStruct, which has no recover of its
+// own, so the panic is not guaranteed to be contained.
+func TestUnboxMapRejectsUnhashableKey(t *testing.T) {
+	var captured map[any]any
+	fn, err := vm.NativeFnType.Box(func(m map[any]any) vm.Value {
+		captured = m
+		return vm.Int(int64(len(m)))
+	})
+	if err != nil {
+		t.Fatalf("Box: %v", err)
+	}
+
+	in := vm.NewPersistentMap([]vm.Value{vm.ArrayVector{vm.Int(1)}, vm.String("v")})
+	_, invokeErr := fn.(*vm.NativeFn).Invoke([]vm.Value{in})
+	if invokeErr == nil {
+		t.Fatalf("expected the call to fail, callee saw %#v", captured)
+	}
+	if captured != nil {
+		t.Fatalf("unhashable key was accepted: callee saw %#v", captured)
+	}
+	if strings.Contains(invokeErr.Error(), "hash of unhashable type") {
+		t.Fatalf("conversion panicked instead of failing cleanly: %v", invokeErr)
+	}
+
+	// A comparable dynamic type still works, so the guard is not blanket.
+	captured = nil
+	if _, err := fn.(*vm.NativeFn).Invoke([]vm.Value{
+		vm.NewPersistentMap([]vm.Value{vm.Keyword("a"), vm.Int(1)}),
+	}); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if want := (map[any]any{"a": 1}); !reflect.DeepEqual(captured, want) {
+		t.Fatalf("captured %#v, want %#v", captured, want)
 	}
 }
