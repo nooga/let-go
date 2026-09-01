@@ -341,9 +341,17 @@ shape rather than arriving as an opaque let-go value:
 {:a {:b 1}}   ; → map[string]any{"a": map[string]any{"b": 1}}
 ```
 
-One deliberate exception: a **lazy sequence** nested inside an `any` slot is
-handed over unrealized rather than converted, because it may be infinite.
-Convert it in let-go first (`vec`, `doall`) if the Go side wants a slice.
+Two limits are worth knowing, both on the **Go to let-go** side.
+
+Unwrapping a value out of an `any` slot follows the same allowlist as scalars,
+and for maps that allowlist is exactly `map[string]any`. A nested
+`map[string]string` stays an opaque value, even though the *same* map converts
+fine when it is the whole return value rather than nested inside one. Return
+`map[string]any` from a shim if the map has to survive nesting.
+
+A **lazy sequence** in an `any` slot is handed over unrealized rather than
+converted, because it may be infinite. Convert it in let-go first (`vec`,
+`doall`) if the Go side wants a slice.
 
 ### Drivers
 
