@@ -399,3 +399,67 @@ func TestMedianOf(t *testing.T) {
 		}
 	}
 }
+
+// The M3 preservation carry-over keys on Arch as well as the model string.
+// Without the Arch guard an amd64 CPUModel containing "M3" matches too, and the
+// stale carried-over entry overwrites the fresh seed this very run computed for
+// that tier — a silent revert to whatever the old baseline held.
+func TestSeedBaselinePreservesOnlyOffArchM3(t *testing.T) {
+	const amdM3 = "AMD EPYC M3000" // an amd64 model string that contains "M3"
+
+	var fx []seedFixture
+	for i := 0; i < 5; i++ {
+		fx = append(fx, seedFixture{
+			stamp:    fmt.Sprintf("2026080%dT010000Z", 5-i),
+			sha:      fmt.Sprintf("%012d", i),
+			anchorNs: 1.5,
+			benches:  map[string]float64{"test.BenchmarkA": 100},
+			arch:     "amd64",
+			model:    amdM3,
+		})
+	}
+	timeline, baselinePath := writeSeedFixtures(t, fx)
+
+	// A prior baseline holding both tiers: the local arm64 M3 that seeding
+	// cannot derive, and a stale entry for the very amd64 tier being seeded.
+	local := perfdata.Machine{OS: "darwin", Arch: "arm64", NumCPU: 8, CPUModel: "Apple M3", GoVersion: "go1.26.4"}
+	seeded := perfdata.Machine{OS: "linux", Arch: "amd64", NumCPU: 16, CPUModel: amdM3, GoVersion: "go1.26.4"}
+	localKey, seededKey := perfdata.MachineKey(local), perfdata.MachineKey(seeded)
+	prior := Baseline{
+		Version: schemaVersion,
+		Machines: map[string]MachineBaseline{
+			localKey: {
+				CapturedAt: "20260701T010000Z", CapturedAtSHA: "1111111111ff", Machine: local,
+				Anchor:     AnchorRecord{Name: anchorName, Package: anchorPackage, NSPerOp: 1.5, Iterations: 1000000000},
+				Benchmarks: map[string]BenchmarkEntry{"test.BenchmarkA": {NSPerOp: 42, RatioToAnchor: 28}},
+			},
+			seededKey: {
+				CapturedAt: "20260701T010000Z", CapturedAtSHA: "2222222222ff", Machine: seeded,
+				Anchor:     AnchorRecord{Name: anchorName, Package: anchorPackage, NSPerOp: 1.5, Iterations: 1000000000},
+				Benchmarks: map[string]BenchmarkEntry{"test.BenchmarkA": {NSPerOp: 999, RatioToAnchor: 666}},
+			},
+		},
+	}
+	data, err := json.Marshal(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(baselinePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, out := runSeed(t, timeline, baselinePath, defaultSeedOptions())
+
+	if len(got.Machines) != 2 {
+		t.Fatalf("machines = %d, want 2 (seeded amd64 + preserved arm64)", len(got.Machines))
+	}
+	if e := got.Machines[seededKey].Benchmarks["test.BenchmarkA"]; e.NSPerOp != 100 {
+		t.Errorf("seeded amd64 ns_per_op = %v, want 100 — the stale 999 was carried over on a model-string match", e.NSPerOp)
+	}
+	if e := got.Machines[localKey].Benchmarks["test.BenchmarkA"]; e.NSPerOp != 42 {
+		t.Errorf("preserved arm64 ns_per_op = %v, want 42 (the off-arch M3 profile must survive)", e.NSPerOp)
+	}
+	if strings.Count(out, "preserved:") != 1 {
+		t.Errorf("preserved lines = %d, want exactly 1:\n%s", strings.Count(out, "preserved:"), out)
+	}
+}
