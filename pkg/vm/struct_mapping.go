@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -450,35 +451,40 @@ func unboxMapInto(target reflect.Value, val Value) error {
 		if err := unboxInto(k, entry.Key); err != nil {
 			return err
 		}
-		if !hashableMapKey(k) {
-			return fmt.Errorf("cannot use %s (%s) as a key in %s: %s is not comparable",
-				entry.Key, entry.Key.Type().Name(), mapType, k.Elem().Type())
-		}
 		v := reflect.New(elemType).Elem()
 		if err := unboxInto(v, entry.Value); err != nil {
 			return err
 		}
-		out.SetMapIndex(k, v)
+		if err := setMapKey(out, k, v); err != nil {
+			return fmt.Errorf("cannot use %s (%s) as a key in %s: %w",
+				entry.Key, entry.Key.Type().Name(), mapType, err)
+		}
 		s = s.Next()
 	}
 	target.Set(out)
 	return nil
 }
 
-// hashableMapKey reports whether a converted key can be stored in a Go map.
+// setMapKey stores one converted entry, turning an unhashable key into a
+// conversion error rather than a panic.
+//
 // An interface-kind key (map[any]any) accepts any dynamic type, and unboxInto
 // puts a []vm.Value there for a let-go vector key — SetMapIndex then panics
-// with "hash of unhashable type". Report it as a conversion failure instead:
-// unboxMapInto is reached from RecordToStruct too, which has no recover of its
-// own, so a panic here is not guaranteed to be contained.
+// with "hash of unhashable type". That has to be caught here: unboxMapInto is
+// reached from RecordToStruct too, which has no recover of its own, so a panic
+// is not guaranteed to be contained.
 //
-// Only the interface case can fail. Go rejects a non-comparable map key type at
-// compile time, so any other key kind is hashable by construction.
-func hashableMapKey(k reflect.Value) bool {
-	if k.Kind() != reflect.Interface || k.IsNil() {
-		return true
-	}
-	return k.Elem().Type().Comparable()
+// The check is on the VALUE, not the type, because reflect.Type.Comparable is
+// not enough: a struct{ X any } holding a slice reports Comparable() == true
+// and still panics when hashed. Only an attempted insert settles it.
+func setMapKey(out, k, v reflect.Value) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("the value is not hashable")
+		}
+	}()
+	out.SetMapIndex(k, v)
+	return nil
 }
 
 // unboxesToInteger reports whether a value reaches Go as an integer, and so

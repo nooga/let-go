@@ -203,3 +203,32 @@ func TestUnboxMapRejectsUnhashableKey(t *testing.T) {
 		t.Fatalf("captured %#v, want %#v", captured, want)
 	}
 }
+
+// reflect.Type.Comparable is not enough on its own: a struct holding an `any`
+// field reports Comparable() == true and still panics when hashed. The guard
+// therefore checks the VALUE, by attempting the insert.
+func TestUnboxMapRejectsComparableTypeWithUnhashableValue(t *testing.T) {
+	var captured map[any]any
+	fn, err := vm.NativeFnType.Box(func(m map[any]any) vm.Value {
+		captured = m
+		return vm.Int(int64(len(m)))
+	})
+	if err != nil {
+		t.Fatalf("Box: %v", err)
+	}
+
+	type holder struct{ X any }
+	key := vm.NewBoxed(holder{X: []int{1}})
+	in := vm.NewPersistentMap([]vm.Value{key, vm.String("v")})
+
+	_, invokeErr := fn.(*vm.NativeFn).Invoke([]vm.Value{in})
+	if invokeErr == nil {
+		t.Fatalf("expected the call to fail, callee saw %#v", captured)
+	}
+	if captured != nil {
+		t.Fatalf("unhashable key was accepted: callee saw %#v", captured)
+	}
+	if strings.Contains(invokeErr.Error(), "hash of unhashable type") {
+		t.Fatalf("conversion panicked instead of failing cleanly: %v", invokeErr)
+	}
+}
