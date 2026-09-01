@@ -154,12 +154,14 @@ func seedBaseline(baselinePath, perfDataDir string, opt seedOptions) {
 	}
 
 	// Preserve the local arm64/Apple M3 profile: it gates developer machines
-	// and has no counterpart in CI (#651).
+	// and has no counterpart in CI (#651). The Arch guard matters as much as
+	// the model string: without it an amd64 CPUModel containing "M3" would
+	// overwrite the fresh seed this run just computed for its own tier.
 	if data, err := os.ReadFile(baselinePath); err == nil {
 		var existing Baseline
 		if err := json.Unmarshal(data, &existing); err == nil {
 			for key, mb := range existing.Machines {
-				if strings.Contains(mb.Machine.CPUModel, "M3") {
+				if mb.Machine.Arch != opt.archPrefix && strings.Contains(mb.Machine.CPUModel, "M3") {
 					merged.Machines[key] = mb
 					fmt.Printf("  preserved: %s (local, not CI-derived)\n", key)
 				}
