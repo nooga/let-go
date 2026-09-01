@@ -450,7 +450,6 @@ func unboxSliceInto(target reflect.Value, s Seq) error {
 	return nil
 }
 
-
 // The natural Go shapes a let-go collection takes when it reaches an `any`
 // target: a map becomes map[string]any and a sequence becomes []any. They match
 // what BoxValue's allowlist admits in the other direction, so a value can make
