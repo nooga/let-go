@@ -353,7 +353,47 @@ func unboxInto(target reflect.Value, val Value) error {
 		// (error, io.Reader, …) genuinely may not be satisfiable, and the
 		// paths below still decide that.
 		if target.NumMethod() == 0 {
-			if raw := val.Unbox(); raw != nil {
+			// A collection reaching an `any` target converts into its natural
+			// Go shape rather than being handed over as a let-go value.
+			// Unbox alone is not enough: ArrayVector.Unbox returns []vm.Value
+			// and (*PersistentMap).Unbox returns the map itself, so a nested
+			// collection arrived in Go still wearing let-go types —
+			//
+			//	{:a {:b 1}}  →  map[string]any{"a": *vm.PersistentMap{...}}
+			//
+			// which is the same opaque-value problem one level down, and would
+			// leave a wrapper author writing the recursive converter anyway.
+			//
+			// Maps are tested FIRST: every let-go map is also Sequable, so the
+			// sequential case below would otherwise claim them and turn a map
+			// into a vector of entries.
+			switch val.(type) {
+			case Map, *PersistentMap, *SortedMap:
+				out := reflect.New(mapStringAnyType).Elem()
+				if err := unboxMapInto(out, val); err == nil {
+					target.Set(out)
+					return nil
+				}
+			}
+			raw := val.Unbox()
+			// The sequential case is keyed on what Unbox ALREADY produces, not
+			// on Sequable. Sequable is far too broad: String and NIL both
+			// implement it, a String would become a vector of characters, and
+			// NIL.Seq() returns NIL itself, whose First() is NIL — infinite
+			// recursion. Keying on the Unbox result instead scopes the change
+			// to exactly the values that leak let-go types into Go today, so
+			// anything else behaves precisely as it did before.
+			switch raw.(type) {
+			case []Value, Seq:
+				if sq, ok := val.(Sequable); ok {
+					out := reflect.New(sliceAnyType).Elem()
+					if err := unboxSliceInto(out, sq.Seq()); err == nil {
+						target.Set(out)
+						return nil
+					}
+				}
+			}
+			if raw != nil {
 				target.Set(reflect.ValueOf(raw))
 			} else {
 				// Zero explicitly rather than leaving the target untouched.
@@ -402,6 +442,15 @@ func unboxSliceInto(target reflect.Value, s Seq) error {
 	return nil
 }
 
+
+// The natural Go shapes a let-go collection takes when it reaches an `any`
+// target: a map becomes map[string]any and a sequence becomes []any. They match
+// what BoxValue's allowlist admits in the other direction, so a value can make
+// the round trip.
+var (
+	mapStringAnyType = reflect.TypeOf(map[string]any(nil))
+	sliceAnyType     = reflect.TypeOf([]any(nil))
+)
 
 // unboxMapInto converts a let-go map into a Go map target, key by key and value
 // by value, so map[string]any and map[string]string both work and a map nested

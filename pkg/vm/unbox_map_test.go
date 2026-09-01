@@ -232,3 +232,82 @@ func TestUnboxMapRejectsComparableTypeWithUnhashableValue(t *testing.T) {
 		t.Fatalf("conversion panicked instead of failing cleanly: %v", invokeErr)
 	}
 }
+
+// unboxInto's reflect.Interface case falls back to val.Unbox(), and
+// ArrayVector.Unbox returns []vm.Value while (*PersistentMap).Unbox returns the
+// map itself. So a collection nested inside an `any` target reached Go as a
+// let-go value:
+//
+//	{:a {:b 1}}   →  map[string]any{"a": *vm.PersistentMap{...}}   ← before
+//	{:a {:b 1}}   →  map[string]any{"a": map[string]any{"b": 1}}   ← after
+//
+// That is the same opaque-value problem one level down, and it would leave a
+// wrapper author writing the recursive converter anyway. The assertions pin the
+// CONCRETE Go types, because the failure mode is a value that looks right when
+// printed.
+func TestUnboxMapNestedMap(t *testing.T) {
+	var captured map[string]any
+	fn, err := vm.NativeFnType.Box(func(m map[string]any) vm.Value {
+		captured = m
+		return vm.Int(int64(len(m)))
+	})
+	if err != nil {
+		t.Fatalf("Box: %v", err)
+	}
+
+	in := vm.NewPersistentMap([]vm.Value{
+		vm.Keyword("a"), vm.NewPersistentMap([]vm.Value{vm.Keyword("b"), vm.Int(1)}),
+		vm.Keyword("xs"), vm.ArrayVector{vm.Int(1), vm.String("two")},
+	})
+	if _, err := fn.(*vm.NativeFn).Invoke([]vm.Value{in}); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	// Values are whatever Value.Unbox yields for a scalar — vm.Int unboxes to
+	// int, not int64. Existing behaviour, unchanged here.
+	want := map[string]any{
+		"a":  map[string]any{"b": 1},
+		"xs": []any{1, "two"},
+	}
+	if !reflect.DeepEqual(captured, want) {
+		t.Fatalf("captured %#v, want %#v", captured, want)
+	}
+	if _, ok := captured["a"].(map[string]any); !ok {
+		t.Fatalf("nested map is %T, want map[string]any", captured["a"])
+	}
+	if _, ok := captured["xs"].([]any); !ok {
+		t.Fatalf("nested vector is %T, want []any", captured["xs"])
+	}
+}
+
+// The mirror case: a vector nested inside a vector reaching a []any parameter.
+func TestUnboxMapNestedSlice(t *testing.T) {
+	var captured []any
+	fn, err := vm.NativeFnType.Box(func(xs []any) vm.Value {
+		captured = xs
+		return vm.Int(int64(len(xs)))
+	})
+	if err != nil {
+		t.Fatalf("Box: %v", err)
+	}
+
+	in := vm.ArrayVector{
+		vm.Int(1),
+		vm.ArrayVector{vm.Int(2), vm.Int(3)},
+		vm.NewPersistentMap([]vm.Value{vm.Keyword("k"), vm.String("v")}),
+	}
+	if _, err := fn.(*vm.NativeFn).Invoke([]vm.Value{in}); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	want := []any{1, []any{2, 3}, map[string]any{"k": "v"}}
+	if !reflect.DeepEqual(captured, want) {
+		t.Fatalf("captured %#v, want %#v", captured, want)
+	}
+	if _, ok := captured[1].([]any); !ok {
+		t.Fatalf("nested vector is %T, want []any", captured[1])
+	}
+	if _, ok := captured[2].(map[string]any); !ok {
+		t.Fatalf("nested map is %T, want map[string]any", captured[2])
+	}
+}
