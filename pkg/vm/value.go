@@ -244,38 +244,9 @@ func BoxValue(v reflect.Value) (Value, error) {
 		}
 		in := make([]Value, v.Len())
 		for i := 0; i < v.Len(); i++ {
-			e := v.Index(i)
-			// Box an interface-typed element by its DYNAMIC type. The switch
-			// above reads the slice's STATIC element type, so for a []any that
-			// kind is Interface and every element would otherwise miss the
-			// string/int/float paths and land as an opaque Boxed — printing as
-			// <go.string Ada> and comparing equal to nothing in let-go. []any
-			// is the natural Go return type for a row of unknown column types,
-			// so that made the documented database/sql wrapper shape unusable.
-			//
-			// The IsNil test is load-bearing, not defensive: Elem() on a nil
-			// interface yields the zero reflect.Value, and BoxValue reports an
-			// invalid value as an error rather than NIL. Leaving a nil element
-			// wrapped lets the nil-interface guard at the top of BoxValue
-			// return NIL — which is what a SQL NULL has to become.
-			if e.Kind() == reflect.Interface && !e.IsNil() {
-				if d := e.Elem(); dynamicBoxSafe(d.Type()) {
-					e = d
-				}
-			}
-			mv, err := BoxValue(e)
-			if err != nil && e != v.Index(i) {
-				// The dynamic type turned out to be one BoxValue cannot
-				// handle — a defined scalar like json.Number or MyBool, whose
-				// XType.Box accepts only the exact predeclared type. Boxing
-				// the element wrapped yields the opaque Boxed it produced
-				// before this unwrapping existed, so an element we cannot
-				// improve is preserved rather than failing the whole slice.
-				e = v.Index(i)
-				mv, err = BoxValue(e)
-			}
+			mv, err := boxByDynamicType(v.Index(i))
 			if err != nil {
-				return NIL, NewTypeError(e, "can't be boxed", nil).Wrap(err)
+				return NIL, NewTypeError(v.Index(i), "can't be boxed", nil).Wrap(err)
 			}
 			in[i] = mv
 		}
@@ -287,11 +258,17 @@ func BoxValue(v reflect.Value) (Value, error) {
 		result := EmptyPersistentMap
 		iter := v.MapRange()
 		for iter.Next() {
-			k, err := BoxValue(iter.Key())
+			// Keys and values are boxed by their DYNAMIC type for the same
+			// reason slice elements are: the map's STATIC element type of a
+			// map[string]any is Interface, so every value would otherwise miss
+			// the scalar fast paths and land as an opaque Boxed. map[string]any
+			// is the natural Go shape for a JSON object or an options bag,
+			// which is what a Wails v3 binding hands back.
+			k, err := boxByDynamicType(iter.Key())
 			if err != nil {
 				return NIL, err
 			}
-			val, err := BoxValue(iter.Value())
+			val, err := boxByDynamicType(iter.Value())
 			if err != nil {
 				return NIL, err
 			}
@@ -309,6 +286,40 @@ func BoxValue(v reflect.Value) (Value, error) {
 		}
 		return NIL, NewTypeError(v, "is not boxable", nil)
 	}
+}
+
+// boxByDynamicType boxes a collection element by its DYNAMIC type when
+// dynamicBoxSafe admits it, rather than by the static type the collection
+// declares. For a []any or a map[string]any that static kind is Interface, so
+// every element would otherwise miss the string/int/float paths and land as an
+// opaque Boxed — printing as <go.string Ada> and comparing equal to nothing in
+// let-go. Those are the natural Go types for a row of unknown column types and
+// for a JSON object, so that made the documented database/sql and Wails
+// wrapper shapes unusable.
+//
+// The IsNil test is load-bearing, not defensive: Elem() on a nil interface
+// yields the zero reflect.Value, and BoxValue reports an invalid value as an
+// error rather than NIL. Leaving a nil element wrapped lets the nil-interface
+// guard at the top of BoxValue return NIL — which is what a SQL NULL has to
+// become.
+func boxByDynamicType(v reflect.Value) (Value, error) {
+	e := v
+	if e.Kind() == reflect.Interface && !e.IsNil() {
+		if d := e.Elem(); dynamicBoxSafe(d.Type()) {
+			e = d
+		}
+	}
+	bv, err := BoxValue(e)
+	if err != nil && e != v {
+		// The dynamic type turned out to be one BoxValue cannot handle — a
+		// defined scalar like json.Number or MyBool, whose XType.Box accepts
+		// only the exact predeclared type. Boxing the element wrapped yields
+		// the opaque Boxed it produced before this unwrapping existed, so an
+		// element we cannot improve is preserved rather than failing the whole
+		// collection.
+		return BoxValue(v)
+	}
+	return bv, err
 }
 
 // dynamicBoxSafe reports whether an interface element's dynamic type is one we
@@ -332,6 +343,13 @@ func BoxValue(v reflect.Value) (Value, error) {
 //
 // []any is included and is what makes nesting work: its elements are
 // themselves interfaces, so they recurse through this same allowlist.
+//
+// map[string]any is included on the same terms and for the same reason: it is
+// the natural Go shape for a JSON object or an options bag, its values are
+// interfaces that recurse through this allowlist, and BoxValue's map branch
+// has no exact-type fast path to explode on. Only a string key and the empty
+// interface qualify — any other key type would need its own boxing story, and
+// a non-empty interface element can hold anything.
 func dynamicBoxSafe(t reflect.Type) bool {
 	// A defined type (json.Number, MyBool, MyInts) is never unwrapped: the
 	// string and bool branches call XType.Box, which accepts only the exact
@@ -355,6 +373,12 @@ func dynamicBoxSafe(t reflect.Type) bool {
 			// []any — elements recurse through this allowlist.
 			return t.Elem().NumMethod() == 0
 		}
+	case reflect.Map:
+		// Exactly map[string]any — values recurse through this allowlist. The
+		// key's PkgPath test rejects a defined string type, which the string
+		// branch's StringType.Box would not accept.
+		return t.Key().Kind() == reflect.String && t.Key().PkgPath() == "" &&
+			t.Elem().Kind() == reflect.Interface && t.Elem().NumMethod() == 0
 	}
 	return false
 }
