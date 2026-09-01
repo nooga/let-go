@@ -327,12 +327,19 @@ func TestUnboxMapDoesNotRealizeAnInfiniteSeq(t *testing.T) {
 		t.Fatalf("Box: %v", err)
 	}
 
+	// It has to be a LazySeq specifically: InfiniteRange.Unbox() returns nil,
+	// so a bare range never reaches the branch at all. LazySeq.Unbox() returns
+	// the resolved Seq, which is what the removed `case Seq` would have walked.
+	thunk, err := vm.NativeFnType.Box(func() vm.Value { return vm.NewInfiniteRange(0, 1) })
+	if err != nil {
+		t.Fatalf("Box thunk: %v", err)
+	}
+	lazy := vm.NewLazySeq(thunk.(*vm.NativeFn))
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = fn.(*vm.NativeFn).Invoke([]vm.Value{
-			vm.ArrayVector{vm.NewInfiniteRange(0, 1)},
-		})
+		_, _ = fn.(*vm.NativeFn).Invoke([]vm.Value{vm.ArrayVector{lazy}})
 	}()
 
 	select {
