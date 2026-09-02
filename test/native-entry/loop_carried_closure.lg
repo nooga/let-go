@@ -1,0 +1,31 @@
+;; Regression fixture for the cycle-tainted-memo defect found reviewing #767.
+;;
+;; A loop-carried closure that a conditional either REPLACES or RETAINS. The
+;; inner join's edges are the replacement closure and the loop header's own
+;; parameter, so resolving it reaches a nid already on the walk stack. That back
+;; edge is set aside to resolve the header (#266), but the answer it leaves
+;; behind holds only for that walk — caching it as if it were path-independent
+;; republished the replacement closure as the join's whole value, dropping the
+;; retain branch exactly the way #766 did.
+;;
+;; The retain path is the one that broke: (choose-loop false 1 2) returned 2.
+(ns loopcarriedclosure)
+
+(defn choose-loop [flag x y]
+  (loop [f (fn [] x) i 0]
+    (if (< i 1)
+      (recur (if flag (fn [] y) f) (inc i))
+      (f))))
+
+;; Same shape, exercised the other way. The gate pins exactly one direct call to
+;; the fixture's goFn in the entry function, so the replace path needs its own
+;; callee rather than a second call to choose-loop.
+(defn choose-loop-replacing [flag x y]
+  (loop [f (fn [] x) i 0]
+    (if (< i 1)
+      (recur (if flag (fn [] y) f) (inc i))
+      (f))))
+
+(defn -main []
+  (println (choose-loop false 1 2))
+  (println (choose-loop-replacing true 1 2)))
