@@ -1,0 +1,51 @@
+;; apply* must not mutate the collection its args came from.
+;;
+;; Reported on #620 (point 5, 2026-07-22): rest-arg packing appended into the
+;; caller's storage, so the source vector came back with its second element
+;; overwritten by the rest list — (let [v [1 2 3]] [(apply* f v) v]) gave
+;; [(2 3) [1 (2 3) 3]] instead of [(2 3) [1 2 3]].
+;;
+;; #645 fixed it in resolveBytecodeCall, which now packs into a fresh slice,
+;; and pinned the resolver-level invariant in
+;; pkg/vm/explicit_frame_test.go::TestResolveBytecodeCallVariadicPackingDoesNotMutateBorrowedArgs.
+;; This file adds the end-to-end spelling the original report used, because
+;; that unit test pins the resolver rather than the route into it, and #620
+;; Phase 3 rewrites the route.
+
+(ns test.apply-rest-aliasing-test
+  (:require [test :refer :all]))
+
+;; A *bytecode* fn with a rest param is required. The packing path under test
+;; is reached only for bytecode callees, so a native like + would not exercise
+;; it.
+(defn take-rest [x & xs] xs)
+
+;; --- the regression guard --------------------------------------------------
+;; Verified to fail against the pre-fix `append(prepared[:arity-1], restlist)`:
+;; v comes back as [1 (2 3) 3].
+
+(deftest apply-star-does-not-mutate-the-source-vector
+  (let [v [1 2 3]]
+    (is (= '(2 3) (apply* take-rest v)))
+    (is (= [1 2 3] v) "apply* must not write into the vector it read args from")))
+
+;; --- characterization, not a guard -----------------------------------------
+;; Public `apply` was never exposed to this bug and still passes against the
+;; pre-fix code, so these assertions do not guard the fix. They are here to
+;; record why the two spellings differ: apply* aliases the caller's storage
+;; only when it is handed an ArrayVector (pkg/rt/lang.go), and no `apply` arity
+;; hands it one. The 2-arg arity passes (seq args), a seq view over the vector
+;; (pkg/rt/core/core.lg); the 3+-arg arities pass a list*/spread cons chain.
+;; Both reach apply*'s seq branch, which copies the arguments into a fresh
+;; slice via appendSeqValues. Only the raw apply* hands the vector straight
+;; through.
+;; If a future change makes `apply` alias its argument, these start failing —
+;; which is the point of writing them down rather than assuming the coverage.
+
+(deftest apply-reaches-apply-star-through-a-fresh-seq
+  (let [v [1 2 3]]
+    (is (= '(2 3) (apply take-rest v)))
+    (is (= [1 2 3] v)))
+  (let [v [2 3]]
+    (is (= '(2 3) (apply take-rest 1 v)))
+    (is (= [2 3] v))))

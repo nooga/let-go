@@ -1,0 +1,34 @@
+;; The var special form (#'ns/sym) must resolve private vars in other
+;; namespaces — Clojure enforces privacy only on bare qualified symbol
+;; references, not on (var ...). HoneySQL's tests rely on this
+;; (#'sut/format-on-expr where the var is defn-).
+
+(ns test.private-var-test
+  (:require [test :refer :all]
+            [ir.passes.pipeline]
+            [private-var-fixture :as p]))
+
+(deftest var-quote-resolves-private-vars-cross-ns
+  (testing "#' reaches a private var through an alias and a full ns name"
+    (is (= 42 ((deref #'p/hidden))))
+    (is (= 42 (@#'p/hidden)))
+    (is (= 42 ((deref (var private-var-fixture/hidden)))))))
+
+(deftest public-vars-unaffected
+  (is (= :pub (p/public-fn)))
+  (is (= :pub (@#'p/public-fn))))
+
+(deftest var-quote-resolves-private-vars-under-ir-compile
+  (testing "the IR builder's var path ignores privacy too — strict mode, so a
+            resolution miss throws instead of silently falling back to bytecode"
+    (is (= 42 (binding [*ir-compile* true
+                        *ir-compile-strict* true]
+                (eval '(do (defn ir-private-probe [] ((deref #'p/hidden)))
+                           (ir-private-probe))))))))
+
+(deftest bare-private-symbol-reference-still-fails-to-compile
+  (testing "privacy is still enforced for plain qualified references"
+    (is (= :caught
+           (try
+             (load-string "(private-var-fixture/hidden)")
+             (catch e :caught))))))

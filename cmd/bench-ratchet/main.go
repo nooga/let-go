@@ -186,7 +186,7 @@ func main() {
 		timeout      = flag.String("timeout", defaultTimeout, "go test -timeout per package")
 		outPath      = flag.String("out", "", "capture .jsonl output path (default: docs/perf/.runs/<sha>-<ts>.jsonl)")
 		inPath       = flag.String("in", "", "aggregate .jsonl input path (default: most recent under docs/perf/.runs/)")
-		force        = flag.Bool("force", false, "with update: bypass the ratchet — write current numbers even where they'd loosen the bar. Use sparingly for accepted regressions.")
+		force        = flag.Bool("force", false, "with update: bypass the ratchet — replace current-machine timing and rebase global deterministic metrics. Use sparingly for accepted regressions.")
 		shaOverride  = flag.String("sha", "", "override the SHA recorded for this run (default: git rev-parse HEAD of cwd). Use when aggregating a capture from a worktree that differs from cwd.")
 		tags         = flag.String("tags", defaultTags, "go test -tags. Default 'gogen_ir' so the lowered-to-Go VM is compiled into the test binary alongside the bytecode VM. Has no effect on releases that pre-date the lowered-Go work (the build tag matches no files there).")
 		format       = flag.String("format", "text", "report format: text (default, ANSI terminal), markdown (GitHub/Slack-friendly table), json (the raw baseline)")
@@ -403,10 +403,13 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 			die("unknown -format %q (want text / markdown / json)", format)
 		}
 	case "update":
-		// Ratchet semantics, scoped to THIS machine's profile: metrics only
-		// move toward faster / fewer-allocs / fewer-bytes, and only within the
-		// same {arch, cpu_model} profile so an M1 run never tightens an M3 bar.
-		// -force bypasses the ratchet for this profile.
+		// Ratchet semantics are scoped to THIS machine's timing profile: metrics
+		// only move toward faster / fewer-allocs / fewer-bytes, and an M1 run
+		// never tightens an M3 timing bar. -force replaces this timing profile
+		// for measured benchmarks and rebases their machine-independent
+		// deterministic bar across profiles. The six known-unstable b.N=1 suite
+		// variants remain observational only, matching seed-baseline policy.
+		current = filterUnstableBenchmarks(current)
 		key := perfdata.MachineKey(current.Machine)
 		existing, err := readBaseline(baselinePath)
 		if err != nil {
@@ -420,8 +423,7 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 		switch {
 		case force:
 			fmt.Printf("  -force: writing current %s numbers as the new bar, bypassing ratchet.\n", key)
-			stampAll(&current)
-			existing.Machines[key] = current
+			forceRebaseline(&existing, key, current)
 		case !ok:
 			fmt.Printf("  new machine profile %s — seeding its baseline.\n", key)
 			stampAll(&current)
@@ -463,6 +465,48 @@ func writeOrCheck(baselinePath string, current MachineBaseline, mode string, bud
 			os.Exit(exit)
 		}
 	}
+}
+
+// forceRebaseline replaces every measured metric in the current machine's
+// profile and copies the accepted deterministic metrics into every other
+// profile that already has the same benchmark. Unmeasured entries are retained:
+// a fast-gate rebaseline must not erase the full-profile benchmark history.
+//
+// The schema stores allocs/bytes beside machine-specific timing, while the check
+// gate takes their global minimum across all profiles. Without replication, a
+// forced accepted regression would remain pinned by an older profile and
+// `check` would stay permanently red.
+func forceRebaseline(existing *Baseline, key string, current MachineBaseline) {
+	stampAll(&current)
+	accepted := make(map[string]BenchmarkEntry, len(current.Benchmarks))
+	for name, entry := range current.Benchmarks {
+		accepted[name] = entry
+	}
+	if previous, ok := existing.Machines[key]; ok {
+		for name, entry := range previous.Benchmarks {
+			if _, measured := current.Benchmarks[name]; !measured {
+				current.Benchmarks[name] = entry
+			}
+		}
+	}
+	for profileKey, profile := range existing.Machines {
+		if profileKey == key {
+			continue
+		}
+		for name, accepted := range accepted {
+			entry, ok := profile.Benchmarks[name]
+			if !ok {
+				continue
+			}
+			entry.AllocsPerOp = accepted.AllocsPerOp
+			entry.BytesPerOp = accepted.BytesPerOp
+			entry.BestSinceSHA = current.CapturedAtSHA
+			entry.BestSinceAt = current.CapturedAt
+			profile.Benchmarks[name] = entry
+		}
+		existing.Machines[profileKey] = profile
+	}
+	existing.Machines[key] = current
 }
 
 // RatchetSummary describes what ratchetMerge changed. Each named bench

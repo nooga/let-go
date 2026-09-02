@@ -344,6 +344,8 @@ parity-gate-phase1 strict-audit: engine-parity-gate
 native-entry-gate: $(GO)
 	GOFLAGS="$(filter-out -short -test.short,$(GOFLAGS))" $(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -run 'TestNativeEntryASTGate|TestJankSuiteDirectABIGeneratedGo' -short=false -count=1 -v ./test/e2e/
 
+.PHONY: bench-ratchet
+
 # Default gate (~1 min): the jank suite under BOTH VM variants (bytecode +
 # gogen_ir-lowered) + the calibration anchor. This is what CI runs.
 bench-ratchet: lowered $(GO)
@@ -421,7 +423,7 @@ install-hooks:
 # pkg/rt/generated.sums. This catches the exact drift that a prior go generate
 # or lgbgen invocation would otherwise mask in CI.
 check-generated-manifest: $(GO)
-	@go run ./cmd/check-generated -stale || { \
+	@go run ./cmd/check-generated || { \
 		echo "ERROR: dependency manifest stale or check errored — run 'make generate'."; \
 		exit 1; \
 	}

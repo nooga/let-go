@@ -1,7 +1,7 @@
 ---
 status: active
-last-verified: 2026-07-13
-human-verified:
+last-verified: 2026-08-11
+human-verified: 2026-08-11
 ---
 
 # Clojure compatibility and differences
@@ -30,7 +30,7 @@ with no known failures, compile skips, panic skips, or runtime skips.
 | `http`               | Ring-style server + client, streaming responses                                                                                                                                               |
 | `json`               | `read-json`, `write-json` (float-preserving, record-aware)                                                                                                                                    |
 | `transit`            | transit+json codec with rolling cache                                                                                                                                                         |
-| `os`                 | `sh`, `stat`, `ls`, `cwd`, `getenv`/`setenv`, `exit`, `os-name`, `arch`, `user-name`, `hostname`, separators                                                                                  |
+| `os`                 | process execution, environment/args, filesystem and path operations, host information; see the [`os` guide](os.md)                                                                            |
 | `System`             | JVM-shaped: `getProperty`, `getProperties`, `getenv`, `exit`, `currentTimeMillis`, `nanoTime`. Exposes `let-go.version`, `let-go.commit`, `user.home`, `user.dir`, `os.name`, `os.arch`, etc. |
 | `syscall`            | direct Linux syscalls (mount, unshare, mknod, prctl, capset, seccomp, AppArmor)                                                                                                               |
 | `pods`               | Babashka pods over JSON / EDN / transit                                                                                                                                                       |
