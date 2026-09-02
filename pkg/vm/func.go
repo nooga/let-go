@@ -343,10 +343,27 @@ func (l *MultiArityFn) variantFor(display Fn, arity int) (Fn, error) {
 	if f, ok := l.fns[arity]; ok {
 		return f, nil
 	}
-	if l.rest != nil && arity >= l.rest.Arity() {
+	if l.rest != nil && arity >= restMinArgs(l.rest) {
 		return l.rest, nil
 	}
 	return nil, NewExecutionError(fmt.Sprintf("function %s doesn't have a %d-arity variant", display, arity))
+}
+
+// restMinArgs is the minimum call width the variadic rest arm accepts. A
+// variadic *Func's arity counts its rest SLOT — ([a b & c]) has arity 3 with
+// two fixed args — so exactly-min is arity-1, matching resolveBytecodeCall's
+// `len < arity-1` check. A NativeFn rest arm (NewArityNativeFn) declares its
+// variadic minimum directly, so its Arity() already IS the floor (and
+// NewCtxNativeFn's -1 sentinel accepts any width).
+func restMinArgs(rest Fn) int {
+	f := rest
+	if c, ok := f.(*Closure); ok {
+		f = c.fn
+	}
+	if ff, ok := f.(*Func); ok {
+		return ff.arity - 1
+	}
+	return f.Arity()
 }
 
 // invokeIn runs the multi-arity function with the given ExecContext active,

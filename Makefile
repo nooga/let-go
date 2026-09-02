@@ -344,6 +344,8 @@ parity-gate-phase1 strict-audit: engine-parity-gate
 native-entry-gate: $(GO)
 	GOFLAGS="$(filter-out -short -test.short,$(GOFLAGS))" $(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -run 'TestNativeEntryASTGate|TestJankSuiteDirectABIGeneratedGo' -short=false -count=1 -v ./test/e2e/
 
+.PHONY: bench-ratchet
+
 # Default gate (~1 min): the jank suite under BOTH VM variants (bytecode +
 # gogen_ir-lowered) + the calibration anchor. This is what CI runs.
 bench-ratchet: lowered $(GO)
@@ -447,6 +449,13 @@ check-generated-manifest: $(GO)
 #     parity job, any -tags gogen_ir build) regenerate it first; the untagged
 #     build and the shipped bytecode binary never need it.
 #
+# Default-build dependency gate: an untagged build must not link the optional
+# heavy subsystems. See scripts/check-default-deps.sh for why the patterns are
+# anchored — the stdlib's vendored x/text copies would otherwise trip it.
+.PHONY: check-default-deps
+check-default-deps: $(GO)
+	@scripts/check-default-deps.sh
+
 # This is the gate CI runs. After a merge/rebase touching pkg/rt/core/**, run
 # `make check-generated` (or `make generate` to refresh, then commit).
 check-generated: check-generated-manifest $(GO)

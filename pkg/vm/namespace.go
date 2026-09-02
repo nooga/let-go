@@ -348,6 +348,18 @@ func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 }
 
 func (n *Namespace) Lookup(symbol Symbol) Value {
+	return n.lookup(symbol, false)
+}
+
+// LookupIncludingPrivate resolves like Lookup but ignores the private flag
+// on qualified references. It backs the var special form (#'ns/sym): Clojure
+// enforces privacy only on bare qualified symbol references — (var ns/sym)
+// reaches private vars in any namespace.
+func (n *Namespace) LookupIncludingPrivate(symbol Symbol) Value {
+	return n.lookup(symbol, true)
+}
+
+func (n *Namespace) lookup(symbol Symbol, includePrivate bool) Value {
 	noteLookup(n.name, string(symbol))
 	sns, sym, hasNS := symbol.NamespacedRaw()
 	if !hasNS {
@@ -384,7 +396,7 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 		if v == nil {
 			v = target.lookupViaRefers(sym)
 		}
-		if v == nil || v.isPrivate {
+		if v == nil || (v.isPrivate && !includePrivate) {
 			return NIL
 		}
 		return v
@@ -397,7 +409,7 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 			// within its own namespace — `my.ns/-priv` is legal inside my.ns
 			// (e.g. a macro that expands to a qualified call to a private helper
 			// in the same ns).
-			if v != nil && (!v.isPrivate || target == n) {
+			if v != nil && (!v.isPrivate || target == n || includePrivate) {
 				return v
 			}
 		}
@@ -405,7 +417,7 @@ func (n *Namespace) Lookup(symbol Symbol) Value {
 	// Fallback via refers
 	if refer, ok := n.referFor(sns); ok {
 		v := refer.ns.localVar(sym)
-		if v == nil || v.isPrivate {
+		if v == nil || (v.isPrivate && !includePrivate) {
 			return NIL
 		}
 		if !refer.all {
