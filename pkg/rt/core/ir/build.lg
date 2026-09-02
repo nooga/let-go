@@ -787,12 +787,26 @@
   (let [[_ x] form]
     (add-inst! ctx (ctx-block ctx) :const [] x)))
 
+(defn- resolve-for-var [sym]
+  "Resolution for the var special form, which ignores privacy — #'p/hidden
+   reaches a private var in another ns, matching bytecode varCompiler's
+   LookupIncludingPrivate. resolve enforces privacy, so on a miss expand a
+   current-ns alias and go through find-var, which does not. Bare symbol
+   references (build-symbol) keep using resolve, so privacy stays enforced
+   there."
+  (or (resolve sym)
+      (when-let [nsname (namespace sym)]
+        (let [target (or (get (ns-aliases *ns*) (symbol nsname))
+                         (find-ns (symbol nsname)))]
+          (when target
+            (find-var (symbol (str (ns-name target)) (name sym))))))))
+
 (defn build-var [form ctx]
   "(var sym) and reader macro #'sym resolve sym at build time and emit
    a Const Inst with the *vm.Var as the Aux — same as bytecode's
    varCompiler: LOAD_CONST of the Var object itself (not its value)."
   (let [[_ sym] form
-        v       (resolve sym)]
+        v       (resolve-for-var sym)]
     (if (nil? v)
       (throw (str "ir/build: can't resolve var " sym))
       (add-inst! ctx (ctx-block ctx) :const [] v))))
