@@ -2131,8 +2131,9 @@ func setBangCompiler(c *Context, form vm.Value) error {
 
 func varCompiler(c *Context, form vm.Value) error {
 	sym := form.(*vm.List).Next().First().(vm.Symbol)
-	// Try compile-time resolution only
-	v := c.CurrentNS().Lookup(sym)
+	// Try compile-time resolution only. The var form ignores privacy —
+	// #'other-ns/private resolves; only bare symbol references enforce it.
+	v := c.CurrentNS().LookupIncludingPrivate(sym)
 	if v == vm.NIL {
 		return c.compileError(fmt.Sprintf("Can't resolve %s in this context", sym))
 	}
