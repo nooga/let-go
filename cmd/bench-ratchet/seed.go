@@ -116,20 +116,7 @@ func seedBaseline(baselinePath, perfDataDir string, opt seedOptions) {
 	fmt.Printf("  window %d snapshots per machine key, coherence tolerance ±%.0f%%\n",
 		opt.window, opt.coherenceTolerance*100)
 
-	var skipped []string
-	byKey := map[string][]timelineFile{}
-	for _, p := range paths {
-		m := timelineName.FindStringSubmatch(filepath.Base(p))
-		if m == nil {
-			skipped = append(skipped, filepath.Base(p))
-			continue
-		}
-		f := timelineFile{path: p, timestamp: m[1], sha: m[2], machine: m[3]}
-		if !strings.HasPrefix(f.machine, opt.archPrefix+"-") {
-			continue
-		}
-		byKey[f.machine] = append(byKey[f.machine], f)
-	}
+	byKey, skipped := gatherCandidates(paths, opt)
 	if len(skipped) > 0 {
 		fmt.Printf("  skipped %d file(s) not matching TIMESTAMP-SHA-MACHINE.json: %s\n",
 			len(skipped), strings.Join(truncate(skipped, 3), ", "))
@@ -139,14 +126,14 @@ func seedBaseline(baselinePath, perfDataDir string, opt seedOptions) {
 	}
 
 	merged := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{}}
-	for _, slug := range sortedKeys(byKey) {
-		files := byKey[slug]
+	for _, key := range sortedKeys(byKey) {
+		cands := byKey[key]
 		// Newest first, then keep at most `window`.
-		sort.Slice(files, func(i, j int) bool { return files[i].timestamp > files[j].timestamp })
-		if len(files) > opt.window {
-			files = files[:opt.window]
+		sort.Slice(cands, func(i, j int) bool { return cands[i].file.timestamp > cands[j].file.timestamp })
+		if len(cands) > opt.window {
+			cands = cands[:opt.window]
 		}
-		mb, key, ok := seedOneMachine(slug, files, opt)
+		mb, ok := seedOneMachine(key, cands, opt)
 		if !ok {
 			continue
 		}
@@ -178,12 +165,37 @@ func seedBaseline(baselinePath, perfDataDir string, opt seedOptions) {
 	fmt.Printf("  wrote baseline → %s (%d machine profiles)\n", baselinePath, len(merged.Machines))
 }
 
-// seedOneMachine reduces one machine key's window into a single profile.
-// Returns the profile and the key to store it under, or ok=false if the tier
-// could not be seeded.
-func seedOneMachine(slug string, files []timelineFile, opt seedOptions) (MachineBaseline, string, bool) {
-	var cands []seedCandidate
-	for _, f := range files {
+// gatherCandidates reads every snapshot and groups the profiles inside them by
+// the machine key derived from their CONTENT.
+//
+// Grouping on the content key rather than the filename slug is what keeps a
+// single mis-named file from overwriting a good window. Under filename
+// grouping such a file forms a group of its own, is reduced on its own, and is
+// then stored under the key its content names; whichever group the outer loop
+// reaches last wins, so a one-file reduction can replace the five-run
+// reduction the correctly-named files just produced for that key. Grouped by
+// content, the stray file is simply one more candidate in the window it
+// belongs to.
+//
+// No snapshot in perf-data has this shape as of 2026-09-02 (checked across all
+// 382 files; the branch is append-only, with no deletions or renames in its
+// history). This is a guard on a silent, order-dependent failure, not a repair
+// of live data.
+//
+// The filename is still reported: it is what the log prints and what a human
+// greps for, so a divergence has to be visible even though it no longer decides
+// anything.
+func gatherCandidates(paths []string, opt seedOptions) (map[string][]seedCandidate, []string) {
+	byKey := map[string][]seedCandidate{}
+	var skipped []string
+	for _, p := range paths {
+		m := timelineName.FindStringSubmatch(filepath.Base(p))
+		if m == nil {
+			skipped = append(skipped, filepath.Base(p))
+			continue
+		}
+		f := timelineFile{path: p, timestamp: m[1], sha: m[2], machine: m[3]}
+
 		var b Baseline
 		data, err := os.ReadFile(f.path)
 		if err != nil {
@@ -193,35 +205,41 @@ func seedOneMachine(slug string, files []timelineFile, opt seedOptions) (Machine
 			die("parse timeline snapshot %s: %v", f.path, err)
 		}
 		for _, mb := range b.Machines {
-			// Enforce the architecture filter on the CONTENT, not just the
-			// filename. The two have disagreed before (an Intel-slugged file
-			// carrying an EPYC profile), and the filename is what the log
-			// prints, so a divergence is otherwise invisible.
+			// The architecture filter runs on the content too. A filename that
+			// promised this architecture and a profile that isn't it is the
+			// surprising case, so that one is reported; a file named for
+			// another architecture is skipped quietly, as before.
 			if mb.Machine.Arch != opt.archPrefix {
-				fmt.Printf("  %s: skipping %s profile inside %s\n",
-					slug, mb.Machine.Arch, filepath.Base(f.path))
+				if strings.HasPrefix(f.machine, opt.archPrefix+"-") {
+					fmt.Printf("  skipping %s profile inside %s\n",
+						mb.Machine.Arch, filepath.Base(f.path))
+				}
 				continue
 			}
-			if got := slugify(perfdata.MachineKey(mb.Machine)); got != slug {
-				fmt.Printf("  WARNING: %s is named for %q but carries %q — seeding under the profile it carries\n",
-					filepath.Base(f.path), slug, got)
+			key := perfdata.MachineKey(mb.Machine)
+			if got := slugify(key); got != f.machine {
+				fmt.Printf("  WARNING: %s is named for %q but carries %q — seeding it into the %q window\n",
+					filepath.Base(f.path), f.machine, got, got)
 			}
-			cands = append(cands, seedCandidate{file: f, mb: mb})
+			byKey[key] = append(byKey[key], seedCandidate{file: f, mb: mb})
 		}
 	}
-	if len(cands) == 0 {
-		fmt.Printf("  %s: no usable profile in %d snapshot(s) — skipped\n", slug, len(files))
-		return MachineBaseline{}, "", false
-	}
+	return byKey, skipped
+}
+
+// seedOneMachine reduces one machine key's window into a single profile.
+// Returns ok=false if the tier could not be seeded.
+func seedOneMachine(key string, cands []seedCandidate, opt seedOptions) (MachineBaseline, bool) {
+	window := len(cands)
 
 	cands, dropped := rejectIncoherent(cands, opt.coherenceTolerance)
 	for _, d := range dropped {
 		fmt.Printf("  %s: rejected %s — ratios sit %+.1f%% off the window across %d benchmarks (anchor %+.1f%%)\n",
-			slug, d.sha, d.ratioOffset*100, d.shared, d.anchorDev*100)
+			key, d.sha, d.ratioOffset*100, d.shared, d.anchorDev*100)
 	}
 	if len(cands) == 0 {
-		fmt.Printf("  %s: no snapshot in the window agrees with the others — skipped\n", slug)
-		return MachineBaseline{}, "", false
+		fmt.Printf("  %s: no snapshot in the window agrees with the others — skipped\n", key)
+		return MachineBaseline{}, false
 	}
 
 	// Newest surviving snapshot supplies identity.
@@ -230,8 +248,8 @@ func seedOneMachine(slug string, files []timelineFile, opt seedOptions) (Machine
 
 	anchorNs := medianOf(mapf(cands, func(c seedCandidate) float64 { return c.mb.Anchor.NSPerOp }))
 	if anchorNs <= 0 {
-		fmt.Printf("  %s: window anchor median is %.3f ns/op — skipped\n", slug, anchorNs)
-		return MachineBaseline{}, "", false
+		fmt.Printf("  %s: window anchor median is %.3f ns/op — skipped\n", key, anchorNs)
+		return MachineBaseline{}, false
 	}
 
 	out := MachineBaseline{
@@ -251,11 +269,11 @@ func seedOneMachine(slug string, files []timelineFile, opt seedOptions) (Machine
 	out.Benchmarks = rep.entries
 
 	fmt.Printf("  %s: %d benchmarks from %d/%d snapshots (anchor %.3f ns/op, newest %s)\n",
-		perfdata.MachineKey(out.Machine), len(out.Benchmarks), len(cands), len(files),
+		key, len(out.Benchmarks), len(cands), window,
 		anchorNs, newest.file.sha)
-	rep.report(slug, opt)
+	rep.report(key, opt)
 
-	return out, perfdata.MachineKey(out.Machine), true
+	return out, true
 }
 
 // coherence measures one candidate's agreement with the rest of its window.
