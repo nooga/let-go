@@ -918,8 +918,11 @@
             rest-sym (gensym "rest__")
             map-sym (gensym "map__")
             new-bindings (conj pre '& rest-sym)
-            ;; Build: (let [map-sym (apply hash-map rest-sym) mdestr map-sym] body...)
-            let-binds (vector map-sym (list 'apply 'hash-map rest-sym) mdestr map-sym)
+            ;; Build: (let [map-sym (when rest-sym (apply hash-map rest-sym)) mdestr map-sym] body...)
+            ;; An empty rest is nil, and must stay nil through the map
+            ;; destructure — Clojure binds {:as o} to nil, not {}, when no
+            ;; kwargs were passed.
+            let-binds (vector map-sym (list 'if rest-sym (list 'apply 'hash-map rest-sym) nil) mdestr map-sym)
             let-form (list* 'let let-binds body)]
         (fn-expand new-bindings (list let-form)))
       (if (some (complement symbol?) bindings)

@@ -449,6 +449,13 @@ check-generated-manifest: $(GO)
 #     parity job, any -tags gogen_ir build) regenerate it first; the untagged
 #     build and the shipped bytecode binary never need it.
 #
+# Default-build dependency gate: an untagged build must not link the optional
+# heavy subsystems. See scripts/check-default-deps.sh for why the patterns are
+# anchored — the stdlib's vendored x/text copies would otherwise trip it.
+.PHONY: check-default-deps
+check-default-deps: $(GO)
+	@scripts/check-default-deps.sh
+
 # This is the gate CI runs. After a merge/rebase touching pkg/rt/core/**, run
 # `make check-generated` (or `make generate` to refresh, then commit).
 check-generated: check-generated-manifest $(GO)
