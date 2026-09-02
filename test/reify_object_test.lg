@@ -80,3 +80,17 @@
   (testing "duplicate toString methods resolve to the last, like Clojure"
     (let [r (reify Object (toString [_] "a") (toString [_] "b"))]
       (is (= "b" (str r))))))
+
+(deftest reify-object-with-meta-inside-tostring
+  (testing "a copy taken via with-meta inside the override keeps the override"
+    ;; Regression: WithMeta used to copy the whole struct, including the
+    ;; rendering guard held while this override runs, so the stored copy
+    ;; skipped its own override forever.
+    (let [stored (atom nil)
+          r (reify Object
+              (toString [this]
+                (reset! stored (with-meta this {:tag :copy}))
+                "orig"))]
+      (is (= "orig" (str r)))
+      (is (= "orig" (str @stored)))
+      (is (= {:tag :copy} (meta @stored))))))

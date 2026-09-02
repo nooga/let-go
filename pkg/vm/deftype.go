@@ -95,10 +95,15 @@ func (d *DTypeInstance) Meta() Value {
 
 // WithMeta implements IMeta. Returns a copy carrying m; field storage is
 // shared with the original (metadata does not affect fields).
+//
+// The copy is constructed explicitly, NOT via `cp := *d`: a whole-struct
+// copy would carry the rendering guard, which is 1 while this instance's
+// toString override runs — so a copy taken inside the override, e.g.
+// (with-meta this ...), would skip its own override forever. It would also
+// read the guard non-atomically against a concurrent String(). Every new
+// instance starts with rendering == 0.
 func (d *DTypeInstance) WithMeta(m Value) Value {
-	cp := *d
-	cp.meta = m
-	return &cp
+	return &DTypeInstance{dtype: d.dtype, fields: d.fields, meta: m}
 }
 
 func (d *DTypeInstance) Unbox() any { return d }
