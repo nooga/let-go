@@ -133,14 +133,27 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      # Blocking performance ratchet. Always run before every push: Go/runtime,
+      # generated-bundle, or benchmark-policy changes can regress metrics even
+      # when no benchmark file is part of the pushed diff. `jj push` routes
+      # through pr-claim-gate -> jj-pre-push -> this prek stage.
+      - id: bench-ratchet
+        name: benchmark performance ratchet
+        description: Fail if anchor-normalized speed or deterministic allocation/size metrics regress
+        entry: make bench-ratchet
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
       # Lowering-coverage ratchet (ITER-0021). ~60s, so pre-push not
       # pre-commit, and deliberately NOT in CI. Fails if a form newly falls
       # back to bytecode / vm dispatch (a trampoline, not a direct/native
       # call) vs docs/perf/ir-stress-baseline.edn — or if the corpus :total
       # drifted. always_run: a regression can come from a .lg OR a Go runtime
       # change, so it must run on every push, not only when *.go is staged.
-      # NOTE: jj does not run git hooks — jj users gate with `make
-      # ir-stress-gate` (the same command this hook runs) before pushing.
+      # NOTE: raw `jj git push` does not run Git hooks; use the repository's
+      # `jj push` alias, which routes through jj-pre-push and this prek stage.
       - id: ir-stress-gate
         name: ir-stress lowering-coverage ratchet (ITER-0021)
         description: Fail if native-lowering coverage regressed vs the committed baseline

@@ -60,6 +60,11 @@ Full profile (`-full`): the broad timeline/deep-dive profile. It runs
 the full `pkg/vm` benchmark fleet under `-tags gogen_ir`, plus the
 suite and IR compile benchmark under both bytecode and `gogen_ir`.
 
+The six b.N=1 `BenchmarkClojureTestSuite*` variants remain observational:
+they run and appear in reports, but `update`, forced rebaseline, and
+`seed-baseline` filter them from the active ratchet because repeated samples
+mutate shared runtime state and are too noisy for a blocking timing bar.
+
 > **Reading the `gogen_ir` / `aot_native` numbers.** These exercise the
 > natively-lowered IR passes (the dispatch is guarded by
 > `TestIRBenchDispatchesNativeUnderTag`), but the lowered Go currently
@@ -335,7 +340,7 @@ metric)` is the MIN of (existing baseline, current). So:
 | Bench got faster than baseline | New (faster) value adopted. |
 | Bench got more allocs but the same speed | Speed adopted (it didn't change); allocs **pinned at baseline** — the new (higher) alloc count is rejected. |
 | Bench is brand new (not in baseline) | Adopted as-is. There's no prior bar to ratchet against. |
-| Bench in baseline but missing from current | **Kept in baseline** — a removed/renamed benchmark shouldn't release the bar. Use `-force` to drop it intentionally. |
+| Bench in baseline but missing from current | **Kept in baseline** — a removed/renamed benchmark shouldn't release the bar accidentally. |
 
 `update` prints a summary of what tightened, what would-have-regressed-
 but-was-pinned, what's new, and what's missing-but-kept. A pinned
@@ -347,13 +352,15 @@ run.
 ### `-force`
 
 `go run ./cmd/bench-ratchet -force update` bypasses the ratchet and
-writes current numbers as-is, including any regressions. Use only
-when:
+writes current numbers as-is, including any regressions. It replaces the
+measured entries in the current machine's timing profile and copies their
+accepted allocation/byte metrics across existing profiles, because those
+deterministic metrics are gated against the global minimum. Unmeasured entries
+are retained, so a fast-gate rebaseline cannot erase full-profile history. Use
+only when:
 
 - A regression has been investigated, discussed, and accepted as
   the new floor (rare; should have a paper trail in the commit).
-- A benchmark was renamed or removed and you want to drop the
-  historical entry.
 - Initial seeding — though a missing `baseline.json` triggers a
   one-shot write without `-force`.
 
