@@ -500,3 +500,87 @@ func TestSeedBaselineAmd64OnlyPreservesM3(t *testing.T) {
 		t.Error("M3 profile should be preserved")
 	}
 }
+
+func TestForceRebaselinePropagatesDeterministicBarAcrossProfiles(t *testing.T) {
+	const benchmark = "pkg.BenchmarkAcceptedRegression"
+	const outsideScope = "pkg.BenchmarkOutsideScope"
+	currentMachine := Machine{OS: "darwin", Arch: "arm64", CPUModel: "Apple M3", GoVersion: "go1.26.5"}
+	otherMachine := Machine{OS: "linux", Arch: "amd64", CPUModel: "EPYC", GoVersion: "go1.26.5"}
+	currentKey := perfdata.MachineKey(currentMachine)
+	otherKey := perfdata.MachineKey(otherMachine)
+
+	baseline := Baseline{Version: schemaVersion, Machines: map[string]MachineBaseline{
+		currentKey: {
+			Machine: currentMachine,
+			Benchmarks: map[string]BenchmarkEntry{
+				benchmark:    {NSPerOp: 10, AllocsPerOp: 10, BytesPerOp: 100},
+				outsideScope: {NSPerOp: 11, AllocsPerOp: 4, BytesPerOp: 40},
+			},
+		},
+		otherKey: {
+			Machine: otherMachine,
+			Benchmarks: map[string]BenchmarkEntry{
+				benchmark:    {NSPerOp: 20, RatioToAnchor: 20, AllocsPerOp: 5, BytesPerOp: 50},
+				outsideScope: {NSPerOp: 30, AllocsPerOp: 3, BytesPerOp: 30},
+			},
+		},
+	}}
+	current := MachineBaseline{
+		CapturedAt:    "2026-08-18T21:00:00Z",
+		CapturedAtSHA: "accepted-sha",
+		Machine:       currentMachine,
+		Benchmarks: map[string]BenchmarkEntry{
+			benchmark: {NSPerOp: 15, RatioToAnchor: 15, AllocsPerOp: 12, BytesPerOp: 120},
+		},
+	}
+
+	forceRebaseline(&baseline, currentKey, current)
+
+	gotCurrent := baseline.Machines[currentKey].Benchmarks[benchmark]
+	if gotCurrent.NSPerOp != 15 || gotCurrent.AllocsPerOp != 12 || gotCurrent.BytesPerOp != 120 {
+		t.Fatalf("current profile was not replaced: %+v", gotCurrent)
+	}
+	gotOther := baseline.Machines[otherKey].Benchmarks[benchmark]
+	if gotOther.NSPerOp != 20 || gotOther.RatioToAnchor != 20 {
+		t.Fatalf("other profile timing changed: %+v", gotOther)
+	}
+	if gotOther.AllocsPerOp != 12 || gotOther.BytesPerOp != 120 {
+		t.Fatalf("other deterministic bar = %d allocs/%d bytes, want 12/120", gotOther.AllocsPerOp, gotOther.BytesPerOp)
+	}
+	if gotOther.BestSinceSHA != "accepted-sha" || gotOther.BestSinceAt != current.CapturedAt {
+		t.Fatalf("other deterministic provenance was not updated: %+v", gotOther)
+	}
+	if got := baseline.Machines[currentKey].Benchmarks[outsideScope]; got.NSPerOp != 11 || got.AllocsPerOp != 4 || got.BytesPerOp != 40 {
+		t.Fatalf("current out-of-scope benchmark changed: %+v", got)
+	}
+	if got := baseline.Machines[otherKey].Benchmarks[outsideScope]; got.AllocsPerOp != 3 || got.BytesPerOp != 30 {
+		t.Fatalf("other out-of-scope benchmark changed: %+v", got)
+	}
+	bar := machineIndependentBar(baseline)[benchmark]
+	if bar.AllocsPerOp != 12 || bar.BytesPerOp != 120 {
+		t.Fatalf("global deterministic bar = %d allocs/%d bytes, want 12/120", bar.AllocsPerOp, bar.BytesPerOp)
+	}
+}
+
+func TestFilterUnstableBenchmarksKeepsStableGateRows(t *testing.T) {
+	stable := "github.com/nooga/let-go/pkg/ir.BenchmarkIRCompile [bytecode]"
+	unstable := []string{
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuite [bytecode]",
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuite [ir_bytecode]",
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuite [aot_native]",
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun [total_bytecode]",
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun [total_ir_bytecode]",
+		"github.com/nooga/let-go/test.BenchmarkClojureTestSuiteCompileAndRun [total_aot_native]",
+	}
+	benchmarks := map[string]BenchmarkEntry{stable: {NSPerOp: 1}}
+	for _, name := range unstable {
+		benchmarks[name] = BenchmarkEntry{NSPerOp: 2}
+	}
+	filtered := filterUnstableBenchmarks(MachineBaseline{Benchmarks: benchmarks})
+	if len(filtered.Benchmarks) != 1 {
+		t.Fatalf("filtered benchmark count = %d, want 1", len(filtered.Benchmarks))
+	}
+	if _, ok := filtered.Benchmarks[stable]; !ok {
+		t.Fatal("stable gate benchmark was filtered")
+	}
+}
