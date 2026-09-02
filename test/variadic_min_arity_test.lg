@@ -1,0 +1,32 @@
+;; Multi-arity dispatch must route calls with exactly the variadic
+;; variant's fixed-arg count to that variant, binding the rest arg to nil —
+;; Clojure parity HoneySQL's 3-arity (format m k v) relies on.
+
+(ns test.variadic-min-arity-test
+  (:require [test :refer :all]))
+
+(defn- g
+  ([a] :one)
+  ([a b & c] c))
+
+(defn- fmt3
+  ([m] :m)
+  ([m k v & {:as opts}] [m k v opts]))
+
+(deftest variadic-accepts-exactly-min-args
+  (testing "exactly-min call selects the variadic variant, rest is nil"
+    (is (nil? (g 1 2))))
+  (testing "one past min binds the rest"
+    (is (= '(3) (g 1 2 3))))
+  (testing "fixed arity still wins on exact match"
+    (is (= :one (g 1)))))
+
+(deftest below-every-arity-still-errors
+  (is (= :caught (try (load-string "((fn ([a] a) ([a b & c] c)))")
+                      (catch e :caught)))))
+
+(deftest kwargs-variadic-with-exactly-fixed-args
+  (testing "([a b & {:as o}]) called with 2 args binds o to nil"
+    (is (nil? (last ((fn [a b & {:as o}] [a b o]) 1 2)))))
+  (testing "the HoneySQL shape: 3 fixed + kwargs rest called with exactly 3"
+    (is (= [{:sql 1} :k :v nil] (fmt3 {:sql 1} :k :v)))))
