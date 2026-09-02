@@ -128,8 +128,19 @@ func TestCustomMain(t *testing.T) {
 	// must then actually rescue the build. Run from a foreign directory so a
 	// cwd-relative guess cannot accidentally land on the checkout.
 	t.Run("relative replace is rejected until LETGO_SRC names the checkout", func(t *testing.T) {
-		relDir := filepath.Join(tmp, "relhost")
-		rel, err := filepath.Rel(relDir, root)
+		// On macOS t.TempDir() sits under /var/folders, a symlink to
+		// /private/var that the go tool resolves; a lexical Rel across that
+		// boundary yields a path that misses. Resolve both sides first.
+		tmpReal, err := filepath.EvalSymlinks(tmp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rootReal, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		relDir := filepath.Join(tmpReal, "relhost")
+		rel, err := filepath.Rel(relDir, rootReal)
 		if err != nil {
 			t.Fatal(err)
 		}
