@@ -463,3 +463,55 @@ func TestSeedBaselinePreservesOnlyOffArchM3(t *testing.T) {
 		t.Errorf("preserved lines = %d, want exactly 1:\n%s", strings.Count(out, "preserved:"), out)
 	}
 }
+
+// A mis-named file must join the window its content belongs to, not form a
+// window of its own and then overwrite the real one.
+//
+// Grouping by filename slug puts the five correctly-named EPYC snapshots in one
+// group and the Intel-named/EPYC-content file in another. Both reduce to the
+// same content key, so the one-file reduction lands last and replaces the
+// five-run result — a silent, order-dependent overwrite that the single-file
+// mismatch test cannot see. The stray file here is uniformly slow rather than
+// incoherent (anchor and benchmark scaled together, ratio unchanged), so the
+// coherence check keeps it and the grouping is the only thing under test.
+func TestSeedBaselineGroupsMisnamedFileIntoContentWindow(t *testing.T) {
+	fx := []seedFixture{
+		{stamp: "20260801T010000Z", sha: "a1a1a1a1a1a1", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		{stamp: "20260802T010000Z", sha: "a2a2a2a2a2a2", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		{stamp: "20260803T010000Z", sha: "a3a3a3a3a3a3", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		{stamp: "20260804T010000Z", sha: "a4a4a4a4a4a4", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		{stamp: "20260805T010000Z", sha: "a5a5a5a5a5a5", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		// Newest, so filename grouping reduces it last: a whole-host-slow
+		// capture at twice the wall time, identical in ratio space.
+		{stamp: "20260806T010000Z", sha: "bbbbbbbbbbbb", anchorNs: 3.0, benches: map[string]float64{"test.BenchmarkA": 200}},
+	}
+	timeline, baselinePath := writeSeedFixtures(t, fx)
+	old := filepath.Join(timeline, "20260806T010000Z-bbbbbbbbbbbb-amd64-amd-epyc-7763.json")
+	renamed := filepath.Join(timeline, "20260806T010000Z-bbbbbbbbbbbb-amd64-intel-r-xeon-r-platinum-8573c.json")
+	if err := os.Rename(old, renamed); err != nil {
+		t.Fatal(err)
+	}
+
+	got, out := runSeed(t, timeline, baselinePath, defaultSeedOptions())
+
+	if !strings.Contains(out, "is named for") {
+		t.Errorf("want the filename/content mismatch still reported; output was:\n%s", out)
+	}
+	if len(got.Machines) != 1 {
+		t.Fatalf("machine profiles = %d, want 1; keys %v", len(got.Machines), sortedKeys(got.Machines))
+	}
+	mb, ok := got.Machines["amd64/AMD EPYC 7763"]
+	if !ok {
+		t.Fatalf("want the EPYC profile; got keys %v", sortedKeys(got.Machines))
+	}
+	// Reduced over the whole content window: five of the six snapshots, whose
+	// median anchor is 1.5 and whose ratios all agree. Grouped by filename the
+	// stray file would have been reduced alone and stored 200.
+	entry := mb.Benchmarks["test.BenchmarkA"]
+	if math.Abs(entry.NSPerOp-100) > 0.001 {
+		t.Errorf("seeded ns_per_op = %v, want 100 (the content window's median, not the stray file's 200)", entry.NSPerOp)
+	}
+	if !strings.Contains(out, "from 5/5 snapshots") {
+		t.Errorf("want the stray file counted inside the EPYC window; output was:\n%s", out)
+	}
+}
