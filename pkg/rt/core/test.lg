@@ -37,29 +37,82 @@
      (alter-meta! (var ~name) assoc :ns *ns* :name '~name :test ~name)
      (register-test! (var ~name))))
 
+(defn- thrown-form? [form]
+  (and (seq? form)
+       (or (= 'thrown? (first form))
+           (= 'thrown-with-msg? (first form)))))
+
+(defn- expand-is-thrown
+  "Expansion for (is (thrown? Klass body...)) and
+   (is (thrown-with-msg? Klass re body...)). Passes when the body throws a
+   value satisfying (instance? Klass e) — and, for thrown-with-msg?, whose
+   ex-message matches re. A normal return counts as :fail; a thrown value
+   of the wrong class rethrows into the runner's catch and counts as
+   :error, matching clojure.test. On pass, returns the caught value."
+  [form msg]
+  (let [with-msg? (= 'thrown-with-msg? (first form))
+        klass (second form)
+        re (when with-msg? (nth form 2))
+        body (if with-msg? (drop 3 form) (drop 2 form))
+        ;; Explicit gensym rather than an `e#` auto-gensym. The catch
+        ;; binding and its uses below sit in SEPARATE syntax-quote forms,
+        ;; and auto-gensym numbering restarts per syntax quote, so two `e#`
+        ;; occurrences agree only by accident: they are both the first
+        ;; auto-gensym in their own form. Add another auto-gensym ahead of
+        ;; either one and the two names silently diverge. An explicit symbol
+        ;; threads through the unquotes and does not depend on that.
+        e (gensym "e__")
+        pass `(do
+                (set! *report-counters* (update *report-counters* :pass inc))
+                ~(if msg
+                   `(println "PASS" '~form "-" ~msg)
+                   `(println "PASS" '~form)))
+        fail `(do
+                (set! *report-counters* (update *report-counters* :fail inc))
+                (set! *test-result* false)
+                ~(if msg
+                   `(println "FAIL" '~form "-" ~msg)
+                   `(println "FAIL" '~form))
+                false)]
+    `(try
+       ~@body
+       ~fail
+       (catch ~e
+         (if (instance? ~klass ~e)
+           ~(if with-msg?
+              `(if (re-find ~re (ex-message ~e))
+                 (do ~pass ~e)
+                 ~fail)
+              `(do ~pass ~e))
+           (throw ~e))))))
+
 (defmacro is
   ([form]
-   `(if ~form
-      (do
-        (set! *report-counters* (update *report-counters* :pass inc))
-        (println "PASS" '~form)
-        true)
-      (do
-        (set! *report-counters* (update *report-counters* :fail inc))
-        (set! *test-result* false)
-        (println "FAIL" '~form)
-        false)))
+   (if (thrown-form? form)
+     (expand-is-thrown form nil)
+     `(if ~form
+        (do
+          (set! *report-counters* (update *report-counters* :pass inc))
+          (println "PASS" '~form)
+          true)
+        (do
+          (set! *report-counters* (update *report-counters* :fail inc))
+          (set! *test-result* false)
+          (println "FAIL" '~form)
+          false))))
   ([form msg]
-   `(if ~form
-      (do
-        (set! *report-counters* (update *report-counters* :pass inc))
-        (println "PASS" '~form "-" ~msg)
-        true)
-      (do
-        (set! *report-counters* (update *report-counters* :fail inc))
-        (set! *test-result* false)
-        (println "FAIL" '~form "-" ~msg)
-        false))))
+   (if (thrown-form? form)
+     (expand-is-thrown form msg)
+     `(if ~form
+        (do
+          (set! *report-counters* (update *report-counters* :pass inc))
+          (println "PASS" '~form "-" ~msg)
+          true)
+        (do
+          (set! *report-counters* (update *report-counters* :fail inc))
+          (set! *test-result* false)
+          (println "FAIL" '~form "-" ~msg)
+          false)))))
 
 (defn compose-fixtures
   "Compose two fixture fns into one that wraps f around g around the test fn."

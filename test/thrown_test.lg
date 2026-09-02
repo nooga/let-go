@@ -1,0 +1,62 @@
+;; Behavior tests for (is (thrown? ...)) and (is (thrown-with-msg? ...)) —
+;; the clojure.test special forms that assert a body throws.
+;;
+;; Harness note: like run_test_var_test.lg, probes that must fail or error
+;; are plain (def name (fn [] ...)) vars run through run-test-var, which
+;; binds the counters — a registered deftest that fails would fail the
+;; whole suite.
+
+(ns test.thrown-test
+  (:require [test :refer :all]))
+
+;; --- probes -----------------------------------------------------------
+
+(def no-throw-probe
+  (fn [] (is (thrown? Exception :did-not-throw))))
+
+(def wrong-message-probe
+  (fn [] (is (thrown-with-msg? Exception #"nope" (throw (ex-info "boom" {}))))))
+
+(def non-matching-class-probe
+  ;; A thrown value not matching the class rethrows, so the runner counts
+  ;; it as an :error — matching clojure.test.
+  (fn [] (is (thrown? clojure.lang.ExceptionInfo (throw "plain string")))))
+
+;; --- thrown? ----------------------------------------------------------
+
+(deftest thrown-passes-on-matching-class
+  (is (thrown? Exception (throw (ex-info "b" {}))))
+  (is (thrown? clojure.lang.ExceptionInfo (throw (ex-info "b" {})))))
+
+(deftest thrown-returns-the-exception
+  (let [e (is (thrown? Exception (throw (ex-info "boom" {:k 1}))))]
+    (is (= "boom" (ex-message e)))))
+
+(deftest thrown-fails-when-body-does-not-throw
+  (let [c (run-test-var (var no-throw-probe))]
+    (is (= 1 (:fail c)))
+    (is (= 0 (:pass c)))
+    (is (= 0 (:error c)))))
+
+(deftest thrown-non-matching-class-is-an-error
+  (let [c (run-test-var (var non-matching-class-probe))]
+    (is (= 1 (:error c)))
+    (is (= 0 (:fail c)))))
+
+;; --- thrown-with-msg? -------------------------------------------------
+
+(deftest thrown-with-msg-passes-on-matching-message
+  (is (thrown-with-msg? Exception #"bo+m" (throw (ex-info "boom" {}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"boom" (throw (ex-info "big boom" {})))))
+
+(deftest thrown-with-msg-fails-on-non-matching-regex
+  (let [c (run-test-var (var wrong-message-probe))]
+    (is (= 1 (:fail c)))
+    (is (= 0 (:pass c)))
+    (is (= 0 (:error c)))))
+
+;; --- the [form msg] arity of is ---------------------------------------
+
+(deftest thrown-works-with-message-arity
+  (is (thrown? Exception (throw (ex-info "b" {}))) "should throw")
+  (is (thrown-with-msg? Exception #"b" (throw (ex-info "b" {}))) "should throw with b"))
