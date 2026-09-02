@@ -81,3 +81,34 @@ func assertNoAtomicTemps(t *testing.T, dir string) {
 		t.Fatalf("temporary files left behind: %v", matches)
 	}
 }
+
+// The size lgbgen prints must come from the file it names. Reading it off the
+// temporary file gives the same number today but stops being checkable the
+// moment the two can differ, so pin the destination as the source.
+func TestWriteFileAtomicallyReportsDestinationSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "core_compiled.lgb")
+	content := []byte("bundle bytes, more than the original")
+	if err := os.WriteFile(path, []byte("short"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	size, err := writeFileAtomically(path, func(w io.Writer) error {
+		_, err := w.Write(content)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != int64(len(content)) {
+		t.Errorf("reported size = %d, want %d", size, len(content))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != info.Size() {
+		t.Errorf("reported size = %d, destination on disk = %d", size, info.Size())
+	}
+	assertNoAtomicTemps(t, dir)
+}

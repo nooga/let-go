@@ -611,6 +611,13 @@ func writeBundle(outPath string, consts *vm.Consts, nsChunks map[string]*vm.Code
 // writeFileAtomically writes path through a same-directory temporary file and
 // replaces path only after the contents are synced and closed successfully.
 // Any failure leaves an existing destination untouched.
+//
+// The directory is synced after the rename as well. Syncing the file persists
+// its contents; it does not persist the directory entry that names it, so a
+// crash between the two can leave the rename lost even though the data
+// survived. That is durability rather than atomicity — the destination is
+// never torn either way — but it is cheap here, and this tool writes the
+// artifact the whole build then trusts.
 func writeFileAtomically(path string, write func(io.Writer) error) (int64, error) {
 	mode := fs.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
@@ -637,10 +644,6 @@ func writeFileAtomically(path string, write func(io.Writer) error) (int64, error
 	if err := tmp.Sync(); err != nil {
 		return closeOnError(fmt.Errorf("sync temporary file: %w", err))
 	}
-	info, err := tmp.Stat()
-	if err != nil {
-		return closeOnError(fmt.Errorf("stat temporary file: %w", err))
-	}
 	if err := tmp.Chmod(mode); err != nil {
 		return closeOnError(fmt.Errorf("set temporary file mode: %w", err))
 	}
@@ -650,7 +653,33 @@ func writeFileAtomically(path string, write func(io.Writer) error) (int64, error
 	if err := os.Rename(tmpName, path); err != nil {
 		return 0, fmt.Errorf("replace destination: %w", err)
 	}
+	if err := syncDir(dir); err != nil {
+		return 0, fmt.Errorf("sync destination directory: %w", err)
+	}
+
+	// Report the destination's own size rather than the temporary file's. The
+	// bytes are the same; reading it off the file the caller is told about is
+	// what makes the number checkable.
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("stat destination: %w", err)
+	}
 	return info.Size(), nil
+}
+
+// syncDir flushes a directory entry to disk. lgbgen is a bootstrap-tagged
+// build tool that runs on developer machines and Linux CI, so the POSIX
+// behaviour is the only one in play.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		_ = d.Close()
+		return err
+	}
+	return d.Close()
 }
 
 // refreshManifest records the content digest of all .lg + lgbgen sources
