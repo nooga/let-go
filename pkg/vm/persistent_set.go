@@ -19,14 +19,23 @@ type PersistentSet struct {
 	_hasHash bool
 }
 
+// emptySetImpl is the canonical empty backing map for sets. Unlike
+// EmptyPersistentMap it starts in HAMT mode (non-nil root): Clojure has no
+// array-set contract, so a set must never inherit the map's insertion-ordered
+// array mode — a small #{...} sequencing in source order would leak an order
+// guarantee sets don't make. Every set construction path seeds from this (or
+// forces the transient to HAMT), keeping set iteration order a function of
+// element hashes alone, independent of insertion order.
+var emptySetImpl = &PersistentMap{count: 0, root: &hmapBitmapNode{}}
+
 // EmptyPersistentSet is the canonical empty set.
-var EmptyPersistentSet = &PersistentSet{impl: EmptyPersistentMap}
+var EmptyPersistentSet = &PersistentSet{impl: emptySetImpl}
 
 func NewPersistentSet(vals []Value) *PersistentSet {
 	if len(vals) == 0 {
 		return EmptyPersistentSet
 	}
-	m := EmptyPersistentMap
+	m := emptySetImpl
 	for _, v := range vals {
 		m = m.Assoc(v, v).(*PersistentMap)
 	}
@@ -115,6 +124,12 @@ func (s *PersistentSet) Disj(value Value) *PersistentSet {
 	newImpl := s.impl.Dissoc(value).(*PersistentMap)
 	if newImpl == s.impl {
 		return s // wasn't present
+	}
+	if newImpl.count == 0 {
+		// Dissoc deliberately drains a map to the empty ORDERED mode; a set
+		// re-grown from that would leak insertion order, so land on the
+		// HAMT-mode empty impl instead.
+		newImpl = emptySetImpl
 	}
 	return &PersistentSet{impl: newImpl, meta: s.meta}
 }

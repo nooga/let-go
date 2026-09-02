@@ -1,0 +1,30 @@
+;; Sets are unordered, full stop. Small maps preserve insertion order
+;; (map_order_test.lg), but Clojure has no array-set contract, and sets
+;; must not inherit the map's ordered mode through their map-backed impl:
+;; iteration order is a function of element hashes only, so equal sets
+;; iterate identically no matter how they were built.
+
+(ns test.set-order-test
+  (:require [test :refer :all]))
+
+(deftest set-order-is-insertion-independent
+  (testing "literal, constructor, into, and conj agree for equal sets"
+    (let [lit #{:a :b :c}
+          fwd (set [:a :b :c])
+          rev (set [:c :b :a])
+          via-into (into #{} [:b :c :a])
+          via-conj (conj #{} :c :a :b)]
+      (is (= (vec lit) (vec fwd)))
+      (is (= (vec lit) (vec rev)))
+      (is (= (vec lit) (vec via-into)))
+      (is (= (vec lit) (vec via-conj))))))
+
+(deftest set-order-survives-drain-and-regrow
+  (testing "a set drained by disj and regrown stays insertion-independent"
+    (let [regrown (-> #{:x} (disj :x) (conj :a) (conj :b) (conj :c))]
+      (is (= (vec #{:a :b :c}) (vec regrown))))))
+
+(deftest larger-sets-also-agree
+  (let [xs (range 32)]
+    (is (= (vec (set xs)) (vec (set (reverse xs)))))
+    (is (= (vec (into #{} xs)) (vec (apply conj #{} (shuffle xs)))))))

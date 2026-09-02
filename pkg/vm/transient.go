@@ -461,8 +461,12 @@ func NewTransientSet(s *PersistentSet) *TransientSet {
 	if s.impl != nil {
 		tm = NewTransientMap(s.impl)
 	} else {
-		tm = NewTransientMap(EmptyPersistentMap)
+		tm = NewTransientMap(emptySetImpl)
 	}
+	// Sets are unordered: never run the backing transient in the map's
+	// insertion-ordered array mode, whatever map seeded it (see
+	// emptySetImpl). Idempotent when the seed is already HAMT.
+	tm.forceHAMT()
 	t := &TransientSet{tm: tm}
 	t.edit.Store(true)
 	return t
@@ -505,6 +509,11 @@ func (t *TransientSet) Persistent() (*PersistentSet, error) {
 	impl, err := t.tm.Persistent()
 	if err != nil {
 		return nil, err
+	}
+	if impl.count == 0 {
+		// An empty HAMT transient persists with a nil root, which reads as
+		// the ordered mode; keep the set's impl HAMT-backed (emptySetImpl).
+		impl = emptySetImpl
 	}
 	return &PersistentSet{impl: impl}, nil
 }
