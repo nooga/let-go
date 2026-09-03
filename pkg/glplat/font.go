@@ -31,8 +31,13 @@ var (
 type fontEntry struct {
 	path  string
 	fnt   *sfnt.Font
-	buf   sfnt.Buffer
 	faces map[int]font.Face // keyed by size
+
+	// mu serializes glyph work on this font. The *sfnt.Font holds internal
+	// load buffers and the cached faces mutate shared state, so GlyphIndex,
+	// face creation, and DrawString are not safe to run concurrently on one
+	// font. fontMutex guards only the registry map, not this state.
+	mu sync.Mutex
 }
 
 // FontLoad parses a TTF/OTF/TTC font and returns a handle ID.
@@ -89,8 +94,14 @@ func FontHasGlyph(fontID int, ch string) bool {
 		return false
 	}
 
+	// Serialize glyph work on this font: the *sfnt.Font is not safe for
+	// concurrent lookups. The buffer is a call-local so only entry.mu, not a
+	// shared buffer, is contended.
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	var buf sfnt.Buffer
 	r := []rune(ch)[0]
-	idx, err := entry.fnt.GlyphIndex(&entry.buf, r)
+	idx, err := entry.fnt.GlyphIndex(&buf, r)
 	return err == nil && idx != 0
 }
 
@@ -114,27 +125,39 @@ func FontRasterizeCell(fontID int, ch string, cellW, cellH int) ([]float64, erro
 		return nil, fmt.Errorf("invalid cell dimensions: %dx%d", cellW, cellH)
 	}
 
-	r := []rune(ch)[0]
+	// Serialize glyph work on this font for the rest of the call: the
+	// *sfnt.Font's internal buffers and the cached faces are shared mutable
+	// state, so concurrent GlyphIndex/DrawString on one font corrupts them.
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 
-	// Check if font has the glyph
-	idx, err := entry.fnt.GlyphIndex(&entry.buf, r)
+	var buf sfnt.Buffer
+	r := []rune(ch)[0]
+	idx, err := entry.fnt.GlyphIndex(&buf, r)
 	if err != nil || idx == 0 {
 		// Return blank cell (all zeros)
 		return make([]float64, cellW*cellH), nil
 	}
 
 	// Try to create/reuse a face at cellH size
-	face := getFace(entry, cellH)
+	face, err := getFaceLocked(entry, cellH)
+	if err != nil {
+		return nil, err
+	}
 
 	// Measure the glyph at cellH
 	d := &font.Drawer{Face: face}
 	advance := d.MeasureString(ch)
 	advancePx := int(advance >> 6) // fixed.Int26_6 to pixels
 
-	// If glyph is too wide, scale down
+	// If the glyph is too wide, scale the face down to fit. A degenerate
+	// scale (int(newSize) <= 0) or a face-creation failure is non-fatal:
+	// keep the cellH face rather than dropping the glyph.
 	if advancePx > cellW && advancePx > 0 {
 		newSize := float64(cellH) * float64(cellW) / float64(advancePx)
-		face = getFace(entry, int(newSize))
+		if scaled, serr := getFaceLocked(entry, int(newSize)); serr == nil {
+			face = scaled
+		}
 	}
 
 	// Create cell image
@@ -204,19 +227,27 @@ func SaveGlyphAtlasPNG(path string, w, h int, alphas []float64) error {
 }
 
 // getFace gets or creates a face at the given size.
-func getFace(entry *fontEntry, size int) font.Face {
-	fontMutex.Lock()
-	defer fontMutex.Unlock()
-
-	if f, ok := entry.faces[size]; ok {
-		return f
+// getFaceLocked returns a cached or freshly created face at the given size.
+// The caller must hold entry.mu. It rejects non-positive sizes and propagates
+// face-creation errors rather than caching a nil face, which would panic in
+// DrawString.
+func getFaceLocked(entry *fontEntry, size int) (font.Face, error) {
+	if size <= 0 {
+		return nil, fmt.Errorf("invalid face size: %d", size)
 	}
 
-	f, _ := opentype.NewFace(entry.fnt, &opentype.FaceOptions{
+	if f, ok := entry.faces[size]; ok {
+		return f, nil
+	}
+
+	f, err := opentype.NewFace(entry.fnt, &opentype.FaceOptions{
 		Size: float64(size),
 		DPI:  72,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("create face at size %d: %w", size, err)
+	}
 
 	entry.faces[size] = f
-	return f
+	return f, nil
 }
