@@ -34,8 +34,10 @@
 ;; legmacs' `set -e` build keeps going through one. Only an entry-arity error
 ;; exits non-zero. `:emit-fails` is in the driver's return map for a Go caller
 ;; that wants to decide differently.
-(let [res (lg.compiler/main-from-args (vec (drop 2 (seq os/args))))]
+(let [res  (lg.compiler/main-from-args (vec (drop 2 (seq os/args))))
+      code (lg.compiler/exit-code res)]
   (when (:error res)
-    (println (:error res))
-    (os/exit 1))
+    (println (:error res)))
+  (when (pos? code)
+    (os/exit code))
   (println "done."))
