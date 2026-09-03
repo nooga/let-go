@@ -27,15 +27,15 @@ type nativeEntryCase struct {
 	// Defaults to sorted keys of files when nil.
 	compileArgs []string
 
-	genFail       bool
-	genErrSubstr  string
-	skipRun       bool // generation (+ optional main.go checks) only
-	args          []string
-	wantStdout    string
-	wantExit      int
-	mainContains  []string
+	genFail        bool
+	genErrSubstr   string
+	skipRun        bool // generation (+ optional main.go checks) only
+	args           []string
+	wantStdout     string
+	wantExit       int
+	mainContains   []string
 	mainNotContain []string
-	timeout       time.Duration
+	timeout        time.Duration
 }
 
 func TestNativeEntryMatrix(t *testing.T) {
@@ -97,9 +97,9 @@ func TestNativeEntryMatrix(t *testing.T) {
 			files: map[string]string{
 				"app.lg": "(ns app)\n(defn main [] (println \"WRONG\"))\n(defn -main [] (println \"RIGHT\"))\n",
 			},
-			wantStdout:       "RIGHT",
-			mainContains:     []string{"prog.Main__main("},
-			mainNotContain:   []string{"prog.Main(ec)"},
+			wantStdout:     "RIGHT",
+			mainContains:   []string{"prog.Main__main("},
+			mainNotContain: []string{"prog.Main(ec)"},
 		},
 		{
 			name: "competing -main in two namespaces",
