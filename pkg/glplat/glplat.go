@@ -7,6 +7,8 @@
 package glplat
 
 import (
+	"fmt"
+
 	"github.com/nooga/let-go/pkg/glplat/internal/registry"
 )
 
@@ -89,6 +91,15 @@ func LoadTextureFile(path string) (int, error) {
 // LoadTextureRGBA loads a texture from raw RGBA pixel data.
 // pixels: raw RGBA bytes in row-major order (width * height * 4 bytes)
 func LoadTextureRGBA(pixels []byte, w, h int) (int, error) {
+	// Guard the C-side upload against a short slice before any backend sees
+	// it: the native backend hands gl.Ptr(pixels) to glTexImage2D, which
+	// reads w*h*4 bytes and would over-read a slice shorter than that.
+	if w < 0 || h < 0 {
+		return 0, &invalidArgError{fn: "LoadTextureRGBA", arg: "w,h", reason: fmt.Sprintf("negative dimensions %dx%d", w, h)}
+	}
+	if need := w * h * 4; len(pixels) < need {
+		return 0, &invalidArgError{fn: "LoadTextureRGBA", arg: "pixels", reason: fmt.Sprintf("buffer too short: have %d bytes, need %d for %dx%d RGBA", len(pixels), need, w, h)}
+	}
 	backend := registry.Get()
 	if backend == nil {
 		return 0, errNoBackend("LoadTextureRGBA")
