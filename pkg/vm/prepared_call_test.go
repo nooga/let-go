@@ -161,17 +161,69 @@ func TestPreparedCallRejectsNonBytecodeAndVariadicTargets(t *testing.T) {
 	}
 }
 
-// Arities without a matching CallN method must not prepare: Call1 could not
-// populate their argument slots (arity 0 would panic, arity 2+ would pass Go
-// nil interfaces into bytecode).
+// Arities without a matching CallN method must not prepare: CallN could not
+// populate their argument slots (arity 0 would panic, higher arities would
+// pass Go nil interfaces into bytecode).
 func TestPreparedCallRejectsUnsupportedArities(t *testing.T) {
 	consts := NewConsts()
 	nullary := testConstFn(consts, Int(1))
 	if pc := RootExecContext.PrepareCall(nullary, 0); pc != nil {
 		t.Fatal("PrepareCall accepted arity 0 with no Call0 entry point")
 	}
-	binary := testBytecodeFnReturningArg(consts, 2)
-	if pc := RootExecContext.PrepareCall(binary, 2); pc != nil {
-		t.Fatal("PrepareCall accepted arity 2 with no Call2 entry point")
+	ternary := testBytecodeFnReturningArg(consts, 3)
+	if pc := RootExecContext.PrepareCall(ternary, 3); pc != nil {
+		t.Fatal("PrepareCall accepted arity 3 with no Call3 entry point")
+	}
+}
+
+// A CallN whose N disagrees with the prepared arity must error, not panic or
+// invoke with unpopulated argument slots.
+func TestPreparedCallArityMismatchErrors(t *testing.T) {
+	consts := NewConsts()
+
+	unary := RootExecContext.PrepareCall(testBytecodeFnReturningArg(consts, 1), 1)
+	if unary == nil {
+		t.Fatal("PrepareCall rejected a plain unary Func")
+	}
+	defer unary.Release()
+	if _, err := unary.Call2(Int(1), Int(2)); err == nil {
+		t.Fatal("Call2 on a unary preparation did not error")
+	}
+	if v, err := unary.Call1(Int(7)); err != nil || v != Int(7) {
+		t.Fatalf("unary preparation unusable after mismatch: %v, %v", v, err)
+	}
+
+	binary := RootExecContext.PrepareCall(testBytecodeFnReturningArg(consts, 2), 2)
+	if binary == nil {
+		t.Fatal("PrepareCall rejected a plain binary Func")
+	}
+	defer binary.Release()
+	if _, err := binary.Call1(Int(1)); err == nil {
+		t.Fatal("Call1 on a binary preparation did not error")
+	}
+}
+
+func TestPreparedCallCall2RepeatedInvocation(t *testing.T) {
+	consts := NewConsts()
+	chunk := NewCodeChunk(consts)
+	chunk.Append(OP_LOAD_ARG)
+	chunk.Append32(1)
+	chunk.Append(OP_RETURN)
+	chunk.SetMaxStack(4)
+	second := MakeFunc(2, false, chunk)
+
+	pc := RootExecContext.PrepareCall(second, 2)
+	if pc == nil {
+		t.Fatal("PrepareCall rejected a plain binary Func")
+	}
+	defer pc.Release()
+	for i := 0; i < 3; i++ {
+		v, err := pc.Call2(Int(-1), Int(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != Int(i) {
+			t.Fatalf("call %d returned %v", i, v)
+		}
 	}
 }
