@@ -16,19 +16,20 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// TestAotDriverResolvesFromEmbeddedSource locks in nooga/let-go#596: the AOT
-// compile driver ships inside the binary (pkg/rt/aotdriver_src.go) as an
-// auxiliary embedded source, so it resolves with NO external source path and no
-// let-go checkout on disk. Before this, driving lowering meant executing
-// scripts/lg-compile from a checkout — a released binary had no copy of it.
+// TestLgCompilerResolvesFromEmbeddedSource locks in nooga/let-go#596: the AOT
+// compile driver ships inside the binary as the ordinary core namespace
+// lg.compiler (pkg/rt/core/lg/compiler.lg), so it resolves with NO external
+// source path and no let-go checkout on disk. Before this, driving lowering
+// meant executing scripts/lg-compile from a checkout — a released binary had no
+// copy of it.
 //
 // The empty search-path slice is the point: only embedded resolution can
-// satisfy the require. Sibling of TestGogenResolvesFromEmbeddedSource, and
-// gated the same way — the embed is excluded from the self-hosting bootstrap
-// build, so this shipped-binary behavior is asserted for non-bootstrap only.
-func TestAotDriverResolvesFromEmbeddedSource(t *testing.T) {
-	if _, ok := rt.EmbeddedSource("lg.aotdriver"); !ok {
-		t.Fatal("rt.EmbeddedSource(\"lg.aotdriver\") not found — the driver must be embedded via pkg/rt/aotdriver_src.go (#596)")
+// satisfy the require. Note that lg.compiler is deliberately kept OUT of the
+// bytecode bundle (cmd/lgbgen.isBundleSkippedTool) for startup cost, so this
+// asserts the path that matters — resolution from embedded SOURCE on demand.
+func TestLgCompilerResolvesFromEmbeddedSource(t *testing.T) {
+	if _, ok := rt.EmbeddedSource("lg.compiler"); !ok {
+		t.Fatal("rt.EmbeddedSource(\"lg.compiler\") not found — the driver must ship as core source at pkg/rt/core/lg/compiler.lg (#596)")
 	}
 
 	prev := rt.GetNSLoader()
@@ -45,9 +46,9 @@ func TestAotDriverResolvesFromEmbeddedSource(t *testing.T) {
 	// is the property that makes a checkout-free `lg compile` possible.
 	// basename-stem is chosen because it needs no filesystem or lowering state.
 	_, val, err := ctx.CompileMultiple(strings.NewReader(
-		"(require 'lg.aotdriver) (lg.aotdriver/basename-stem \"a/b/fib.lg\")"))
+		"(require 'lg.compiler) (lg.compiler/basename-stem \"a/b/fib.lg\")"))
 	if err != nil {
-		t.Fatalf("resolving lg.aotdriver from embedded source failed: %v", err)
+		t.Fatalf("resolving lg.compiler from embedded source failed: %v", err)
 	}
 	got, ok := val.(vm.String)
 	if !ok || string(got) != "fib" {

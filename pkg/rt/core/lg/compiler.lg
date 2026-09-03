@@ -1,11 +1,12 @@
-;; lg.aotdriver — the AOT compile driver, as a namespace.
+;; lg.compiler — the AOT compile driver, as a namespace.
 ;;
-;; SPIKE (#596): this is scripts/lg-compile's body moved into a proper ns so a
-;; released binary can drive AOT lowering with no let-go checkout on disk.
-;; Embedded by pkg/rt/aotdriver_src.go as an *auxiliary* source (see
-;; rt.EmbeddedSource), deliberately NOT under pkg/rt/core/ — same reasoning as
-;; gogen: it stays out of EmbeddedNSNames (the core lowering universe) and out
-;; of genmanifest's sourceSpecs, so it never perturbs generated.sums.
+;; #596: this is scripts/lg-compile's body moved into a proper ns so a released
+;; binary can drive AOT lowering with no let-go checkout on disk. It lives under
+;; pkg/rt/core/, so it is an ordinary embedded core namespace: enrolled in
+;; EmbeddedNSNames, precompiled into the bundle by lgbgen, and swept by
+;; genmanifest's sourceSpecs like every other core source. Editing it therefore
+;; churns pkg/rt/generated.sums, which is the intended cost of it being part of
+;; the compiler rather than an auxiliary attached to it.
 ;;
 ;; Why this can be a plain ns when the script could not: as a *script*, the
 ;; body had to live in ONE top-level form, because top-level forms compile and
@@ -17,9 +18,9 @@
 ;;
 ;; External contract (gloat calls scripts/lg-compile by path and scrapes
 ;; stdout): the "EMIT-FAIL <path> pkg=<pkg> returned <type>" line and the
-;; process exit code are load-bearing. Keep them.
+;; process exit code are load-bearing. Keep them. test/e2e pins both.
 
-(ns lg.aotdriver
+(ns lg.compiler
   (:require
    [clojure.string]
    [gogen]

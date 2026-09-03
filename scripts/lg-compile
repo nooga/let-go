@@ -10,8 +10,11 @@
 ;;                    github.com/nooga/let-go, prefix is
 ;;                    github.com/nooga/let-go/examples/aot/cross-package/go
 ;;
-;; The driver itself now lives in the `lg.aotdriver` namespace, embedded in the
-;; binary (pkg/rt/aotdriver_src.go), so it runs with no let-go checkout on disk.
+;; The driver itself now lives in the `lg.compiler` namespace — an ordinary core
+;; namespace (pkg/rt/core/lg/compiler.lg), embedded in every binary — so it runs
+;; with no let-go checkout on disk. It is kept out of the bytecode bundle and
+;; loaded from embedded source on demand, the same way the ir.* pipeline is, so
+;; shipping it costs a plain `lg` script nothing at startup.
 ;; This file stays as the CLI entry point: gloat and other external
 ;; orchestrators invoke it by path (`<let-go-src>/scripts/lg-compile`) and
 ;; scrape "EMIT-FAIL" from stdout, so the path, the positional argv, the
@@ -22,7 +25,7 @@
 ;; callers such as gloat that own their own executable / shared-library frames).
 ;; The orchestrator must place program.lgb beside main.go before `go build`.
 
-(require 'lg.aotdriver)
+(require 'lg.compiler)
 
 ;; EMIT-FAIL is deliberately NOT an exit-code failure: a fn that doesn't lower
 ;; stays on the trampoline and the program still runs, so partial lowering is a
@@ -31,7 +34,7 @@
 ;; legmacs' `set -e` build keeps going through one. Only an entry-arity error
 ;; exits non-zero. `:emit-fails` is in the driver's return map for a Go caller
 ;; that wants to decide differently.
-(let [res (lg.aotdriver/main-from-args (vec (drop 2 (seq os/args))))]
+(let [res (lg.compiler/main-from-args (vec (drop 2 (seq os/args))))]
   (when (:error res)
     (println (:error res))
     (os/exit 1))
