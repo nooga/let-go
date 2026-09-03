@@ -162,6 +162,28 @@ jobs:
   # Keeps the lg_no_http lane from rotting. Nothing in the default build
   # exercises pkg/rt/http_stub.go, so without this a change to http.go's
   # signatures breaks the tagged build silently.
+  # Default-build dependency gate. The optional heavy subsystems (glplat's GL
+  # and Ebitengine backends, and the font stack they use) are meant to be
+  # reachable only behind a build tag. A single untagged file in their import
+  # closure puts the whole closure in every binary we ship, and nothing else
+  # here would notice: the build still succeeds and the tests still pass.
+  # Measured on the glplat branch, an untagged pkg/rt/interop_glplat.go cost
+  # the default binary +718,208 bytes (+3.60%) and hit ./cmd/lg-runtime too,
+  # which is the binary #658 spent effort shrinking. Same lane as #652/#658.
+  default-deps:
+    name: default-deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Assert untagged builds link no tag-gated subsystems
+        run: make check-default-deps
+
   no-http-build:
     name: no-http-build
     runs-on: ubuntu-latest

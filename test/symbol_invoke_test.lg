@@ -1,0 +1,24 @@
+;; Symbols in function position look themselves up in the collection
+;; argument, exactly like keywords — Clojure parity HoneySQL relies on.
+
+(ns test.symbol-invoke-test
+  (:require [test :refer :all]))
+
+(deftest symbol-lookup-in-maps
+  (is (= 1 ('a {'a 1 'b 2})))
+  (is (nil? ('missing {'a 1})))
+  (is (= :default ('missing {'a 1} :default)))
+  (is (= 2 ('b {'a 1 'b 2} :default))))
+
+(deftest symbol-lookup-in-sets
+  (is (= 'a ('a #{'a 'b})))
+  (is (nil? ('c #{'a 'b})))
+  (is (= :none ('c #{'a 'b} :none))))
+
+(deftest symbol-lookup-on-non-collections
+  (testing "non-Lookup argument mirrors keyword behavior"
+    (is (nil? ('a 42)))
+    (is (= :d ('a 42 :d)))))
+
+(deftest symbol-invoke-via-higher-order-fns
+  (is (= [1 2] (map 'x [{'x 1} {'x 2}]))))
