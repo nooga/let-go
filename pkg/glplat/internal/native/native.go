@@ -253,6 +253,11 @@ func (b *Backend) LoadTextureFile(path string) (int, error) {
 }
 
 func (b *Backend) LoadTextureRGBA(pixels []byte, w, h int) (int, error) {
+	// Defense in depth: the public API guards this too, but the backend is
+	// what hands gl.Ptr(pixels) to a C function that reads w*h*4 bytes.
+	if w < 0 || h < 0 || len(pixels) < w*h*4 {
+		return 0, fmt.Errorf("LoadTextureRGBA: pixel buffer too short: have %d bytes, need %d for %dx%d RGBA", len(pixels), w*h*4, w, h)
+	}
 	var texID uint32
 	gl.GenTextures(1, &texID)
 	gl.BindTexture(gl.TEXTURE_2D, texID)
