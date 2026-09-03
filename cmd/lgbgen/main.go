@@ -186,7 +186,11 @@ func discoverEmbeddedNS() ([]embeddedNamespace, error) {
 // touches them, so decoding them on every process start is pure cost.
 //
 //   - the ir.* AOT/lowering pipeline, the `ir` root and any `ir.` descendant
-//   - lg.compiler, the AOT compile driver (#596)
+//   - lg.compiler, the AOT compile driver (#596), and any lg.compiler.*
+//     descendant. The family prefix is not speculative: #786 moves ir.* under
+//     lg.compiler.ir.*, and on that day an exact-name check would match
+//     neither the old name nor the new one, restoring the regression below
+//     with nothing to notice it.
 //
 // lg.compiler is 30 chunks on its own, but it requires gogen, ir.data,
 // ir.passes.pipeline and ir.passes.entry-frame, and a require drags the whole
@@ -196,7 +200,8 @@ func discoverEmbeddedNS() ([]embeddedNamespace, error) {
 // same regression the ir.* skip already exists to prevent. Both load from
 // embedded source on demand instead.
 func isBundleSkippedTool(n string) bool {
-	return n == "ir" || strings.HasPrefix(n, "ir.") || n == "lg.compiler"
+	return n == "ir" || strings.HasPrefix(n, "ir.") ||
+		n == "lg.compiler" || strings.HasPrefix(n, "lg.compiler.")
 }
 
 // hasLgbgenSkipDirective reports whether the source begins with a line
@@ -547,23 +552,24 @@ func main() {
 	// const in the pool (encoder.go) and each func const drags in its chunk —
 	// so filtering only the ns-order would NOT keep ir bytecode out of the
 	// .lgb; ir must never enter the pool before writeBundle.
-	var irNS []embeddedNamespace
+	var toolNS []embeddedNamespace
 	for _, ns := range embeddedNS {
 		if isBundleSkippedTool(ns.name) {
-			irNS = append(irNS, ns)
+			toolNS = append(toolNS, ns)
 			continue
 		}
 		compileNS(ns)
 		bundleOrder = append(bundleOrder, ns.name)
 	}
 
-	// compileIRForLowering compiles the ir.* namespaces into VM state so the
-	// Go-lowering pass can resolve them. Kept in the order derived above, which
-	// carries the synthetic ir.build-after-passes edge (deriveGoLoweringOrder)
-	// — losing it makes lowering emit untyped arithmetic. Always runs AFTER the
-	// bundle is written so ir consts never reach the .lgb pool.
-	compileIRForLowering := func() {
-		for _, ns := range irNS {
+	// compileToolsForLowering compiles the bundle-skipped namespaces into VM
+	// state so the Go-lowering pass can resolve them. Kept in the order derived
+	// above, which carries the synthetic ir.build-after-passes edge
+	// (deriveGoLoweringOrder) — losing it makes lowering emit untyped
+	// arithmetic. Always runs AFTER the bundle is written so their consts never
+	// reach the .lgb pool.
+	compileToolsForLowering := func() {
+		for _, ns := range toolNS {
 			compileNS(ns)
 		}
 	}
@@ -571,7 +577,7 @@ func main() {
 	// Emit artifacts. `both` writes the (ir-free) bundle first, then compiles
 	// ir and lowers the whole program to Go.
 	if targetGo {
-		compileIRForLowering()
+		compileToolsForLowering()
 		runGoTarget(goOutDir, codeDir)
 		// Skip the manifest refresh when lowering into a throwaway codeDir —
 		// the canonical generated.sums must only move under a real regen.
@@ -582,7 +588,7 @@ func main() {
 	}
 	if targetBoth {
 		writeBundle(outPath, consts, nsChunks, bundleOrder)
-		compileIRForLowering()
+		compileToolsForLowering()
 		runGoTarget(goOutDir, codeDir)
 		return
 	}

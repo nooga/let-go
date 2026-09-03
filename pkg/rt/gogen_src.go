@@ -22,9 +22,11 @@ import _ "embed"
 //
 // Built under -tags bootstrap as well, unlike the rest of the AOT surface:
 // lg.compiler is core content and requires gogen, so lgbgen has to be able to
-// resolve gogen while it precompiles the bundle. Being resolvable is not the
-// same as being enrolled — gogen is still auxiliary, still absent from
-// EmbeddedNSNames, and still never precompiled or lowered.
+// resolve gogen when it compiles lg.compiler for Go lowering — which happens
+// after the bundle is written, not during it (lg.compiler is bundle-skipped;
+// see cmd/lgbgen.isBundleSkippedTool). Being resolvable is not the same as
+// being enrolled: gogen is still auxiliary, still absent from EmbeddedNSNames,
+// and still never precompiled into the bundle or lowered itself.
 //
 //go:embed gogen/gogen.lg
 var gogenSrc string

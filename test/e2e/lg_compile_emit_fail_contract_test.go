@@ -29,14 +29,21 @@ var emitFailLine = regexp.MustCompile(`^EMIT-FAIL (\S+) pkg=(\S+) returned (.+)$
 //     outcome the orchestrator judges for itself. Only an entry-arity error
 //     exits non-zero. legmacs' `set -e` build depends on this.
 //
-// The EMIT-FAIL half drives lg.compiler/write-packages! directly with a
-// synthetic non-lowered result rather than a .lg fixture chosen for not
-// lowering. That is deliberate: as of 2026-09-02 no construct probed (try/catch,
+// No .lg fixture drives this: as of 2026-09-02 no construct probed (try/catch,
 // atom, reify, deftype, dynamic set!, lazy-seq, macro-expanded body, multimethod
 // dispatch) fails to lower any more, and a fixture picked for today's gaps would
-// silently stop testing the path the moment lowering covered it. write-packages!
-// is where the line is printed and where the count that does NOT reach the exit
-// code is returned, so pinning it there tests the contract rather than the gap.
+// silently stop testing the path the moment lowering covered it. Both halves
+// therefore inject a synthetic non-lowered result instead — the stdout half into
+// write-packages!, where the line is printed, and the exit-status half into the
+// real shim, by stubbing lg.compiler/main-from-args and evaluating
+// scripts/lg-compile against the stub.
+//
+// The exit-status half MUST run the shim rather than assert on a helper. An
+// earlier version of this test checked write-packages! and then ran the shim on
+// a SUCCESSFUL compile, which never exercised a nonzero :emit-fails through the
+// shim at all: reintroducing "exit 1 when :emit-fails is nonzero" left it
+// passing. This version fails against that regression, which is the only reason
+// to trust it.
 func TestLgCompileEmitFailContract(t *testing.T) {
 	bin := buildLG(t)
 	root := repoRoot(t)
@@ -98,7 +105,53 @@ func TestLgCompileEmitFailContract(t *testing.T) {
 		}
 	})
 
-	t.Run("exit status tracks :error, not :emit-fails", func(t *testing.T) {
+	// The regression guard: the real shim, driven with a result carrying
+	// EMIT-FAILs and nothing else, must still exit 0 and report success.
+	t.Run("EMIT-FAIL through the real shim exits 0", func(t *testing.T) {
+		dir := t.TempDir()
+		probe := filepath.Join(dir, "shim-inject.lg")
+		src := `(require 'lg.compiler)
+(in-ns 'lg.compiler)
+(def main-from-args (fn [argv] {:emit-fails 3 :lowered-funcs 0 :entry nil}))
+(in-ns 'user)
+(eval (read-string (str "(do " (slurp "scripts/lg-compile") "\n)")))
+`
+		if err := os.WriteFile(probe, []byte(src), 0644); err != nil {
+			t.Fatal(err)
+		}
+		out, code := runLG(t, probe)
+		if code != 0 {
+			t.Fatalf("shim exited %d with 3 EMIT-FAILs and no :error; want 0. output:\n%s", code, out)
+		}
+		if !strings.Contains(out, "done.") {
+			t.Errorf("shim should report success through EMIT-FAILs; output:\n%s", out)
+		}
+	})
+
+	// And the fatal case, so "exits 0" above is a real signal rather than a
+	// shim that cannot fail.
+	t.Run("an :error result exits non-zero through the real shim", func(t *testing.T) {
+		dir := t.TempDir()
+		probe := filepath.Join(dir, "shim-error.lg")
+		src := `(require 'lg.compiler)
+(in-ns 'lg.compiler)
+(def main-from-args (fn [argv] {:error "synthetic failure" :emit-fails 0}))
+(in-ns 'user)
+(eval (read-string (str "(do " (slurp "scripts/lg-compile") "\n)")))
+`
+		if err := os.WriteFile(probe, []byte(src), 0644); err != nil {
+			t.Fatal(err)
+		}
+		out, code := runLG(t, probe)
+		if code == 0 {
+			t.Fatalf("shim exited 0 on an :error result; want non-zero. output:\n%s", out)
+		}
+		if !strings.Contains(out, "synthetic failure") {
+			t.Errorf("want the error text on stdout; got:\n%s", out)
+		}
+	})
+
+	t.Run("end to end: a real compile exits 0, a bad entry arity exits 1", func(t *testing.T) {
 		dir := t.TempDir()
 		write := func(name, body string) string {
 			p := filepath.Join(dir, name)
