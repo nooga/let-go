@@ -5,6 +5,8 @@
 
 package vm
 
+import "strconv"
+
 // PreparedCall caches the resolution of a fixed-arity bytecode callable and
 // reuses one frame across many calls from native code. It exists for
 // per-element callback loops (reduce/some/filter and friends): resolution,
@@ -31,8 +33,8 @@ type PreparedCall struct {
 // fall back to ec.Invoke.
 func (ec *ExecContext) PrepareCall(fn Fn, arity int) *PreparedCall {
 	// Only arities a CallN entry point can fully populate are prepared —
-	// Call1 is the only one today. Widen this as CallN methods land.
-	if arity != 1 {
+	// Call1 and Call2 today. Widen this as CallN methods land.
+	if arity < 1 || arity > 2 {
 		return nil
 	}
 	args := make([]Value, arity)
@@ -55,9 +57,24 @@ func (ec *ExecContext) PrepareCall(fn Fn, arity int) *PreparedCall {
 	}
 }
 
-// Call1 invokes the prepared unary callable.
+// Call1 invokes the prepared unary callable. Calling it on a preparation of
+// any other arity is a contract violation and returns an error.
 func (p *PreparedCall) Call1(a Value) (Value, error) {
+	if len(p.args) != 1 {
+		return NIL, NewExecutionError("PreparedCall: Call1 on a preparation of arity " + strconv.Itoa(len(p.args)))
+	}
 	p.args[0] = a
+	return p.call()
+}
+
+// Call2 invokes the prepared binary callable. Calling it on a preparation of
+// any other arity is a contract violation and returns an error.
+func (p *PreparedCall) Call2(a, b Value) (Value, error) {
+	if len(p.args) != 2 {
+		return NIL, NewExecutionError("PreparedCall: Call2 on a preparation of arity " + strconv.Itoa(len(p.args)))
+	}
+	p.args[0] = a
+	p.args[1] = b
 	return p.call()
 }
 

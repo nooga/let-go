@@ -382,6 +382,14 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			}
 		}
 	}
+	// Resolve a bytecode reducer once and reuse one frame for the whole
+	// fold; per-element ec.Invoke pays resolution, frame-pool traffic, and
+	// frame init on every element. Non-bytecode/variadic reducers fall back
+	// to the generic invoke below.
+	pc := ec.PrepareCall(mfn, 2)
+	if pc != nil {
+		defer pc.Release()
+	}
 	// Reused two-arg buffer, shared by every path below: ec.Invoke does not
 	// retain its argument slice, so one buffer per reduce beats one per
 	// element — the single largest allocation site in a reduce loop.
@@ -398,9 +406,15 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			i = 1
 		}
 		for ; i < len(av); i++ {
-			fargs[0] = acc
-			fargs[1] = av[i]
-			res, err := ec.Invoke(mfn, fargs)
+			var res vm.Value
+			var err error
+			if pc != nil {
+				res, err = pc.Call2(acc, av[i])
+			} else {
+				fargs[0] = acc
+				fargs[1] = av[i]
+				res, err = ec.Invoke(mfn, fargs)
+			}
 			if err != nil {
 				return vm.NIL, err
 			}
@@ -425,9 +439,15 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			i += step
 		}
 		for (step > 0 && i < end) || (step < 0 && i > end) {
-			fargs[0] = acc
-			fargs[1] = vm.Int(i)
-			res, err := ec.Invoke(mfn, fargs)
+			var res vm.Value
+			var err error
+			if pc != nil {
+				res, err = pc.Call2(acc, vm.Int(i))
+			} else {
+				fargs[0] = acc
+				fargs[1] = vm.Int(i)
+				res, err = ec.Invoke(mfn, fargs)
+			}
 			if err != nil {
 				return vm.NIL, err
 			}
@@ -472,9 +492,13 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			c := cs.ChunkedFirst()
 			n := c.ChunkCount()
 			for i := 0; i < n; i++ {
-				fargs[0] = acc
-				fargs[1] = c.Nth(i)
-				acc, err = ec.Invoke(mfn, fargs)
+				if pc != nil {
+					acc, err = pc.Call2(acc, c.Nth(i))
+				} else {
+					fargs[0] = acc
+					fargs[1] = c.Nth(i)
+					acc, err = ec.Invoke(mfn, fargs)
+				}
 				if err != nil {
 					return vm.NIL, err
 				}
@@ -485,9 +509,13 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			seq = cs.ChunkedNext()
 			continue
 		}
-		fargs[0] = acc
-		fargs[1] = seq.First()
-		acc, err = ec.Invoke(mfn, fargs)
+		if pc != nil {
+			acc, err = pc.Call2(acc, seq.First())
+		} else {
+			fargs[0] = acc
+			fargs[1] = seq.First()
+			acc, err = ec.Invoke(mfn, fargs)
+		}
 		if err != nil {
 			return vm.NIL, err
 		}
