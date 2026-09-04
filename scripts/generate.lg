@@ -181,6 +181,15 @@
 ;; upstream stages too, so a changed registrar propagates to the core compile.
 (def stale-outputs (query-stale! "-needs-generation"))
 
+;; The corefns registrar (#640) is a second, independent lgprimgen surface. It
+;; was reachable only through the Makefile's core_compiled.lgb prerequisite,
+;; which is an mtime rule: once the committed registrar is newer than its
+;; sources it stops firing, so `make generate` left injected drift in place
+;; while check-generated — which regenerated it directly — reported it stale.
+;; The remediation the failure printed ("run make generate") could not fix the
+;; failure it printed it for. Generating it here makes the two agree.
+(run! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt/corefns" "-go-pkg" "github.com/nooga/let-go/pkg/rt/corefns" "-primitives-out" "pkg/rt/corefns/zz_primitives_generated.go")
+
 ;; One core compile emits BOTH the .lgb bundle and the gogen_ir Go tree.
 ;; Hermetic generation (clearing the stale lowered-tree before regen) is
 ;; handled inside lgbgen's runGoTarget, so every entry point — `make generate`
