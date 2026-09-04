@@ -27,34 +27,65 @@ type PreparedCall struct {
 	stackLen    int
 }
 
-// PrepareCall resolves fn for repeated arity-n invocation. It returns nil for
-// targets that are not plain fixed-arity bytecode callables (variadic, native,
-// protocol, ...), and for arities without a matching CallN method; callers
-// fall back to ec.Invoke.
-func (ec *ExecContext) PrepareCall(fn Fn, arity int) *PreparedCall {
-	// Only arities a CallN entry point can fully populate are prepared —
-	// Call1 and Call2 today. Widen this as CallN methods land.
-	if arity < 1 || arity > 2 {
-		return nil
+// maxPreparedArity is the widest arity a CallN entry point can fully
+// populate — Call1 and Call2 today. Widen this as CallN methods land.
+const maxPreparedArity = 2
+
+// PrepareCallInto resolves fn for repeated arity-n invocation into p, which
+// the caller owns — typically a stack variable in a native loop. It reports
+// false, leaving p unusable, for targets that are not plain fixed-arity
+// bytecode callables (variadic, native, protocol, ...) and for arities
+// without a matching CallN method; callers fall back to ec.Invoke.
+//
+// Nothing here allocates once the frame pool is warm: p is the caller's,
+// the frame comes from the pool, and the argument slots live in the frame's
+// prepArgs, which survives pool reuse. They deliberately do not alias
+// argbuf, which installBytecodeCall overwrites on a same-frame tail call.
+func (ec *ExecContext) PrepareCallInto(p *PreparedCall, fn Fn, arity int) bool {
+	if arity < 1 || arity > maxPreparedArity {
+		return false
 	}
-	args := make([]Value, arity)
-	target, direct, err := resolveBytecodeCall(fn, args)
-	if err != nil || !direct || target.fn.isVariadric {
-		return nil
+	// Inspect the target without resolveBytecodeCall: that path retains the
+	// argument slice it is given (so a stack probe would escape) and packs a
+	// rest list for variadic fns before we could reject them. unwrapBytecodeFn
+	// answers "which *Func, is it fixed-arity n" without allocating.
+	target, closedOvers, _, ok, err := unwrapBytecodeFn(fn, arity)
+	if err != nil || !ok || target.isVariadric || target.arity != arity {
+		return false
 	}
 	ec = ec.orRoot()
-	f := NewFrame(target.fn.chunk, nil)
-	f.closedOvers = target.closedOvers
+	f := NewFrame(target.chunk, nil)
+	f.closedOvers = closedOvers
 	f.ec = ec
-	return &PreparedCall{
-		fn:          target.fn,
-		closedOvers: target.closedOvers,
+	// The argument slots live in the pooled frame and survive pool reuse, so
+	// they cost nothing after the first use of each frame. They deliberately
+	// do not alias argbuf, which installBytecodeCall overwrites on a
+	// same-frame tail call.
+	if cap(f.prepArgs) < arity {
+		f.prepArgs = make([]Value, maxPreparedArity)
+	}
+	args := f.prepArgs[:arity]
+	*p = PreparedCall{
+		fn:          target,
+		closedOvers: closedOvers,
 		ec:          ec,
 		frame:       f,
 		args:        args,
-		constsc:     target.fn.chunk.consts.count(),
-		stackLen:    max(target.fn.chunk.maxStack, 4),
+		constsc:     target.chunk.consts.count(),
+		stackLen:    max(target.chunk.maxStack, 4),
 	}
+	return true
+}
+
+// PrepareCall is the heap-allocating form of PrepareCallInto: it returns a
+// new PreparedCall, or nil when fn cannot be prepared. Hot loops should
+// prefer PrepareCallInto with a stack variable.
+func (ec *ExecContext) PrepareCall(fn Fn, arity int) *PreparedCall {
+	p := new(PreparedCall)
+	if !ec.PrepareCallInto(p, fn, arity) {
+		return nil
+	}
+	return p
 }
 
 // Call1 invokes the prepared unary callable. Calling it on a preparation of
@@ -112,4 +143,5 @@ func (p *PreparedCall) Release() {
 		ReleaseFrame(p.frame)
 		p.frame = nil
 	}
+	p.args = nil // the slots belong to the frame, which the pool may hand elsewhere
 }
