@@ -205,7 +205,7 @@ func loadPrecompiledBundle() error {
 func postCoreInit() {
 	// read-string: parse a single form from a string. Errors loudly on
 	// wrong arity, non-string args, or parse failures.
-	readStringFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	readStringFn := vm.NewArityNativeFn("read-string", 1, false, func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("read-string: wrong number of arguments %d (expected 1)", len(vs))
 		}
@@ -213,7 +213,8 @@ func postCoreInit() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("read-string: expected String, got %T", vs[0])
 		}
-		return ReadString(string(s))
+		reader := newLispReaderWithResolvers(strings.NewReader(string(s)), "<read-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
+		return reader.ReadSkipNoValue()
 	})
 	coreNS := rt.NS(rt.NameCoreNS)
 	rsVar := coreNS.LookupOrAdd(vm.Symbol("read-string"))
@@ -225,7 +226,7 @@ func postCoreInit() {
 	// boundary stops cleanly; EOF mid-form or any other reader
 	// error is propagated so callers see syntax errors instead of
 	// silent truncation.
-	readAllStringFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	readAllStringFn := vm.NewArityNativeFn("read-all-string", 1, false, func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("read-all-string: wrong number of arguments %d (expected 1)", len(vs))
 		}
@@ -233,7 +234,7 @@ func postCoreInit() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("read-all-string: expected String, got %T", vs[0])
 		}
-		reader := NewLispReader(strings.NewReader(string(s)), "<read-all-string>")
+		reader := newLispReaderWithResolvers(strings.NewReader(string(s)), "<read-all-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
 		forms := []vm.Value{}
 		for {
 			// Peek: skip whitespace, then either give up cleanly (EOF
@@ -263,7 +264,7 @@ func postCoreInit() {
 	rasVar.(*vm.Var).SetRoot(readAllStringFn)
 
 	// load-string: compile and evaluate a string of code, returning the last value.
-	loadStringFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	loadStringFn := vm.NewArityNativeFn("load-string", 1, false, func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, nil
 		}
@@ -275,6 +276,9 @@ func postCoreInit() {
 		// introduces (e.g. regex literals) die with its chunks instead of
 		// rooting the process-global pool on every call.
 		c := NewTransientCompiler(consts, rt.NS(rt.NameCoreNS))
+		c.SetTaggedReaders(taggedReadersFromExecContext(ec))
+		c.setDataReaderResolver(execContextDataReaderResolver(ec))
+		c.setExecContext(ec)
 		_, out, err := c.CompileMultiple(strings.NewReader(string(s)))
 		if err != nil {
 			return vm.NIL, err
@@ -285,14 +289,17 @@ func postCoreInit() {
 	lsVar.(*vm.Var).SetRoot(loadStringFn)
 
 	// eval: compile and evaluate a single already-read form in the current namespace.
-	evalFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	evalFn := vm.NewArityNativeFn("eval", 1, false, func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, nil
 		}
-		ns := rt.CurrentNS.Deref().(*vm.Namespace)
+		ns := ec.Deref(rt.CurrentNS).(*vm.Namespace)
 		// Per-call transient compiler (see Eval): a form passed to eval interns
 		// its constants into a pool owned by this one chunk, not the global pool.
 		c := NewTransientCompiler(consts, ns)
+		c.SetTaggedReaders(taggedReadersFromExecContext(ec))
+		c.setDataReaderResolver(execContextDataReaderResolver(ec))
+		c.setExecContext(ec)
 		c.source = "<eval>"
 		c.chunk = vm.NewCodeChunk(c.consts)
 		c.resetSP()
@@ -302,6 +309,7 @@ func postCoreInit() {
 		c.chunk.SetMaxStack(c.spMax)
 		c.emit(vm.OP_RETURN)
 		f := vm.NewFrame(c.chunk, nil)
+		f.SetExecContext(c.evaluationExecContext())
 		out, err := f.RunProtected()
 		vm.ReleaseFrame(f)
 		if err != nil {

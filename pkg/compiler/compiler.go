@@ -33,30 +33,34 @@ type Context struct {
 	// counts in that case, but the stack footprint is bindn (matching
 	// let/loop's OP_POP_N). recurCompiler reads from here to compute its
 	// `ignore` operand correctly.
-	localSlotCounts []int
-	sp              int
-	spMax           int
-	isFunction      bool
-	isClosure       bool
-	closedOversC    int
-	closedOvers     map[vm.Symbol]*closureCell
-	closedOversSeq  []vm.Symbol
-	recurPoints     []*recurPoint
-	tailPosition    bool
-	debug           bool
-	defName         string
-	currentForm     vm.Value // tracks the form being compiled for error source info
-	currentList     vm.Value // tracks the enclosing list form for error source info
+	localSlotCounts    []int
+	sp                 int
+	spMax              int
+	isFunction         bool
+	isClosure          bool
+	closedOversC       int
+	closedOvers        map[vm.Symbol]*closureCell
+	closedOversSeq     []vm.Symbol
+	recurPoints        []*recurPoint
+	tailPosition       bool
+	debug              bool
+	defName            string
+	currentForm        vm.Value // tracks the form being compiled for error source info
+	currentList        vm.Value // tracks the enclosing list form for error source info
+	taggedReaders      *TaggedReaderRegistry
+	dataReaderResolver taggedDataReaderResolver
+	execContext        *vm.ExecContext
 }
 
 func NewCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
 	rt.CurrentNS.SetRoot(ns)
 	return &Context{
-		consts:      consts,
-		source:      "<default>",
-		locals:      []map[vm.Symbol]int{},
-		closedOvers: map[vm.Symbol]*closureCell{},
-		debug:       false,
+		consts:             consts,
+		source:             "<default>",
+		locals:             []map[vm.Symbol]int{},
+		closedOvers:        map[vm.Symbol]*closureCell{},
+		debug:              false,
+		dataReaderResolver: rootDataReaderResolver,
 	}
 }
 
@@ -96,12 +100,40 @@ func (c *Context) ChildForEval() *Context {
 	child := NewTransientCompiler(c.consts, c.CurrentNS())
 	child.debug = c.debug
 	child.source = c.source
+	child.taggedReaders = c.taggedReaders
+	child.dataReaderResolver = c.dataReaderResolver
+	child.execContext = c.execContext
 	return child
 }
 
 func (c *Context) SetSource(source string) *Context {
 	c.source = source
 	return c
+}
+
+// SetTaggedReaders installs explicit Go tagged readers for subsequent Compile
+// and CompileMultiple calls. The registry is shared with child eval contexts.
+func (c *Context) SetTaggedReaders(registry *TaggedReaderRegistry) *Context {
+	c.taggedReaders = registry
+	return c
+}
+
+func (c *Context) setDataReaderResolver(resolver taggedDataReaderResolver) *Context {
+	c.dataReaderResolver = resolver
+	return c
+}
+
+func (c *Context) setExecContext(ec *vm.ExecContext) *Context {
+	c.execContext = ec
+	return c
+}
+
+func (c *Context) evaluationExecContext() *vm.ExecContext {
+	ec := c.execContext
+	if ec == nil {
+		ec = vm.RootExecContext
+	}
+	return execContextWithTaggedReaders(ec, c.taggedReaders)
 }
 
 func (c *Context) Consts() *vm.Consts {
@@ -119,7 +151,7 @@ func (c *Context) SetCurrentNS(ns *vm.Namespace) {
 func (c *Context) Compile(s string) (chunk *vm.CodeChunk, err error) {
 	defer vm.RecoverPanic(&err)
 	vm.SourceRegistry.Register(c.source, s)
-	r := NewLispReader(strings.NewReader(s), c.source)
+	r := newLispReaderWithResolvers(strings.NewReader(s), c.source, c.taggedReaders, c.dataReaderResolver)
 	o, err := r.Read()
 	if err != nil {
 		return nil, err
@@ -145,8 +177,9 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 	}
 	src := string(srcBytes)
 	vm.SourceRegistry.Register(c.source, src)
-	r := NewLispReader(strings.NewReader(src), c.source)
+	r := newLispReaderWithResolvers(strings.NewReader(src), c.source, c.taggedReaders, c.dataReaderResolver)
 	chunk := vm.NewCodeChunk(c.consts)
+	ec := c.evaluationExecContext()
 	result = vm.NIL
 	compiledForms := 0
 	var evalTopForm func(o vm.Value) error
@@ -187,6 +220,7 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 		} else {
 			f = vm.NewFrame(formchunk, nil)
 		}
+		f.SetExecContext(ec)
 		result, err = f.RunProtected()
 		vm.ReleaseFrame(f)
 		if err != nil {

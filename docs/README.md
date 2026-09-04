@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-11
+last-verified: 2026-08-21
 authoritative-for:
   - docs-index
 human-verified: 2026-08-11
@@ -54,6 +54,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Babashka pods (usage) | `guide/pods.md` |
 | Babashka pods (host protocol / design) | `design/pods.md` |
 | Portable `.cljc` / `:lg` reader conditionals | `guide/portability.md` |
+| Custom `*data-readers*` | `guide/custom-data-readers.md` |
 | Version requirements, range matching (`let-go.semver`) | `guide/semver.md` |
 | `io/resource`, `-resource-paths` / `-source-paths` resolution | `guide/resources-and-source-paths.md` |
 | Embedding let-go in a Go program | `guide/embedding-in-go.md` |

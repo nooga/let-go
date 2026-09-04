@@ -524,6 +524,13 @@ func NewDebugFrame(code *CodeChunk, args []Value) *Frame {
 	return f
 }
 
+// SetExecContext installs the dynamic execution state used when the frame
+// invokes bytecode and context-aware native functions. A nil context retains
+// the normal RootExecContext fallback.
+func (f *Frame) SetExecContext(ec *ExecContext) {
+	f.ec = ec
+}
+
 // Fast-path stack operations. The compiler guarantees correct stack depth,
 // so bounds checks are skipped for performance. Debug mode uses safe variants.
 

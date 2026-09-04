@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-11
+last-verified: 2026-08-21
 human-verified: 2026-08-11
 ---
 
@@ -35,12 +35,16 @@ with no known failures, compile skips, panic skips, or runtime skips.
 | `syscall`            | direct Linux syscalls (mount, unshare, mknod, prctl, capset, seccomp, AppArmor)                                                                                                               |
 | `pods`               | Babashka pods over JSON / EDN / transit                                                                                                                                                       |
 
+The reader supports built-in `#uuid` and `#inst` literals plus custom data readers registered as symbol-to-function entries in the dynamic
+`*data-readers*` map. Unregistered tags retain let-go's legacy payload behavior.
+See [Custom data readers](custom-data-readers.md).
+
 ## Not implemented
 
 - **STM coordination**: `ref`/`dosync`/`alter`/`commute` are atom-backed compatibility aliases, not coordinated STM
 - **Asynchronous agents**: `agent`/`send`/`send-off` are synchronous atom-backed compatibility aliases
 - **Chunked sequences**: lazy seqs are unchunked
-- **Custom tagged literal readers**: built-in `#uuid` and `#inst` work; unknown tags read as their payload, and `*data-readers*` / `*default-data-reader-fn*` are not implemented
+- **Default tagged-literal fallback**: `*default-data-reader-fn*` is not implemented
 - **Java-style `deftype` / `reify` method bodies and host interfaces**: protocol implementations work; JVM host methods do not
 - **Spec** (no `clojure.spec`)
 - **`subseq` / `rsubseq`**: sorted collections work (`sorted-map`, `sorted-set`, `rseq`); range queries don't
