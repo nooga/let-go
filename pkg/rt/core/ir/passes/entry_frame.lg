@@ -71,6 +71,32 @@
       (= '& (nth bvec i)) i
       :else (recur (inc i)))))
 
+(defn- arity-list? [form]
+  "True when form is one defn arity — ([params] body…) or (^tag [params] body…)."
+  (and (seq? form)
+       (let [b (first form)]
+         (or (vector? b)
+             (ir.build/return-hinted-arity-vector? b)))))
+
+(defn- unwrap-single-arity-list [body]
+  "Clojure allows (defn name ([params] body…)) — one arity written as a list.
+   When body is exactly that, unwrap so the rest of parse-entry-form sees a
+   normal single-arity binding vector. Without this, (first body) is a list,
+   multi-arity-body? matches, and a valid entry is misreported as multi-arity."
+  (if (and (arity-list? (first body))
+           (nil? (next body)))
+    (first body)
+    body))
+
+(defn- multi-arity-body? [body]
+  "True when a defn body is the multi-arity form — ([] …) ([x] …) — rather
+   than a single binding vector. Each arity is a seq whose head is a binding
+   vector (or a return-hinted one). Requires at least two arities: a lone
+   arity list is unwrapped by unwrap-single-arity-list first."
+  (boolean
+    (and (arity-list? (first body))
+         (next body))))
+
 (defn- arity-shape-of [bvec]
   "Classify a single-arity binding vector for the entry frame.
    :variadic    — [& args] only (& must be the first parameter)
@@ -98,7 +124,9 @@
 
    Reuses ir.build's return-hinted arity unwrap (#598) so spellings like
    `(defn -main ^long [] …)` and `(defn ^long -main [] …)` are recognized
-   the same way the lowering pipeline sees them."
+   the same way the lowering pipeline sees them. Also unwraps the single
+   arity-list spelling `(defn -main ([params] …))` — valid Clojure that
+   would otherwise look like multi-arity to (first body)."
   (when (and (seq? form)
              (symbol? (first form))
              (or (= 'defn (first form)) (= 'defn- (first form))))
@@ -107,27 +135,47 @@
           nm       (unwrap-name raw-name)]
       (when (and (symbol? nm) (entry-name? nm))
         (let [private? (or (= 'defn- head) (name-private? raw-name))
-              body     (skip-defn-preamble (nnext form))
+              body     (unwrap-single-arity-list
+                         (skip-defn-preamble (nnext form)))
               raw-bvec (first body)
               bvec     (when (or (vector? raw-bvec)
                                  (ir.build/return-hinted-arity-vector? raw-bvec))
                          (ir.build/unwrap-arity-vector raw-bvec))
               shape    (arity-shape-of bvec)]
-          (when (and bvec shape)
+          (cond
+            (and bvec shape)
             {:name        (str nm)
              :private?    private?
              :arity-shape shape
              :binding     bvec
-             :form        form}))))))
+             :form        form}
+
+            ;; A multi-arity entry has no single binding vector to classify.
+            ;; Report it as :unsupported rather than returning nil: nil means
+            ;; "no entry in this ns", which silently emits the VM fallback
+            ;; frame and tells the user nothing (nooga, #628 review).
+            (multi-arity-body? body)
+            {:name         (str nm)
+             :private?     private?
+             :arity-shape  :unsupported
+             :multi-arity? true
+             :binding      nil
+             :form         form}
+
+            :else nil))))))
 
 (defn entry-arity-error
   "Nil when entry has a supported arity; otherwise a clear diagnostic string
    suitable for lg-compile stderr. Supported shapes: [], [argv], [& args]."
   [entry]
   (when (and entry (= :unsupported (:arity-shape entry)))
-    (str "native-entry: " (:name entry) " has unsupported arity "
-         (pr-str (:binding entry))
-         "; supported shapes are [], [argv], and [& args] (#425)")))
+    (if (:multi-arity? entry)
+      (str "native-entry: " (:name entry) " is multi-arity; the frame calls one"
+           " Go signature, so give it a single arity — [], [argv], or"
+           " [& args] (#425)")
+      (str "native-entry: " (:name entry) " has unsupported arity "
+           (pr-str (:binding entry))
+           "; supported shapes are [], [argv], and [& args] (#425)"))))
 
 (defn find-program-entry
   "Scan forms (one namespace) for a recognized main/-main entry. Prefers
@@ -423,6 +471,43 @@
       (when use-vm?
         [(gogen/import-spec "github.com/nooga/let-go/pkg/vm")]))))
 
+;; The three stdlib paths frame-imports always emits, quoted as they appear in
+;; the rendered import block. Everything else the frame imports (the entry
+;; package, sibling blank imports, pkg/rt, pkg/vm) is non-stdlib.
+(def ^:private frame-stdlib-specs ["\"embed\"" "\"fmt\"" "\"os\""])
+
+(defn- stdlib-import-line? [line]
+  (boolean (some (fn [p] (clojure.string/includes? line p)) frame-stdlib-specs)))
+
+(defn- group-import-block
+  "Insert one blank line between the stdlib imports and the rest, goimports
+   style. gogen renders through a FileSet whose positions are densed so output
+   is a pure function of the AST (gogen.go renderFset) — that determinism pass
+   also removes any blank line the printer would emit, so an intentional group
+   break cannot be carried on the AST. Restoring it on the rendered text keeps
+   the invariant intact and stays local to this frame."
+  [src]
+  (let [lines (clojure.string/split src #"\n")]
+    (loop [i 0, out [], in-block? false, split? false]
+      (if (>= i (count lines))
+        (clojure.string/join "\n" out)
+        (let [line (nth lines i)]
+          (cond
+            (= (clojure.string/trim line) "import (")
+            (recur (inc i) (conj out line) true split?)
+
+            (and in-block? (= (clojure.string/trim line) ")"))
+            (recur (inc i) (conj out line) false split?)
+
+            ;; First non-stdlib spec inside the block opens the second group.
+            (and in-block? (not split?)
+                 (seq (clojure.string/trim line))
+                 (not (stdlib-import-line? line)))
+            (recur (inc i) (conj (conj out "") line) in-block? true)
+
+            :else
+            (recur (inc i) (conj out line) in-block? split?)))))))
+
 (defn- prepend-generated-header [comment-lines src]
   (str (clojure.string/join "\n" (mapv #(str "// " %) comment-lines))
        "\n\n"
@@ -507,7 +592,7 @@
     (prepend-generated-header
       ["Code generated by lg-compile (#425 native-entry frame). DO NOT EDIT."
        (str "native entry: " entry-label)]
-      (gogen/render file))))
+      (group-import-block (gogen/render file)))))
 
 (defn entry-summary-line
   "Item 3 one-liner: 'N fns lowered; native entry: Main ✓' / 'none'."

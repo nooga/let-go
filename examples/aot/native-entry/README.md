@@ -33,3 +33,8 @@ by lg-compile — and must sit next to `main.go` for the `//go:embed`.
 The frame generator also handles `[argv]`, `[]`, and private `(defn- main …)`
 (the latter gets a same-package `NativeMain` bridge). This demo uses the spike
 shape: public variadic `-main`.
+
+The entry must have a single arity. The frame calls one Go signature, so a
+multi-arity `(defn -main ([] …) ([x] …))` is rejected with a diagnostic rather
+than compiled; `[first & rest]` and multi-fixed `[a b]` are rejected the same
+way. Supported shapes are `[]`, `[argv]`, and `[& args]`.

@@ -187,6 +187,32 @@
     (let [e (ef/find-program-entry '[(defn main [a b] 1)])]
       (is (= :unsupported (:arity-shape e)))
       (is (some? (ef/entry-arity-error e)))))
+  (testing "multi-arity is reported, not silently skipped"
+    ;; Before, no single binding vector meant parse returned nil, which reads
+    ;; as "no entry here" and quietly emits the VM fallback frame.
+    (let [e (ef/find-program-entry '[(defn -main ([] 1) ([x] 2))])]
+      (is (some? e) "must be recognized as an entry, not skipped")
+      (is (= "-main" (:name e)))
+      (is (= :unsupported (:arity-shape e)))
+      (is (str/includes? (ef/entry-arity-error e) "multi-arity"))))
+  (testing "multi-arity private entry is reported the same way"
+    (let [e (ef/find-program-entry '[(defn- main ([] 1) ([a b] 2))])]
+      (is (= :unsupported (:arity-shape e)))
+      (is (true? (:private? e)))
+      (is (str/includes? (ef/entry-arity-error e) "multi-arity"))))
+  (testing "single-arity list form is not multi-arity"
+    ;; (defn -main ([& args] …)) is valid Clojure — one arity as a list.
+    ;; Without unwrapping, (first body) is that list and the multi-arity
+    ;; path fires with the wrong diagnosis (#692 review).
+    (doseq [[forms shape] [['[(defn -main ([& args] 1))] :variadic]
+                           ['[(defn -main ([] 1))] :none]
+                           ['[(defn main ([argv] 1))] :vector]
+                           ['[(defn -main "doc" ([& a] 1))] :variadic]
+                           ['[(defn -main (^long [] 7))] :none]]]
+      (let [e (ef/find-program-entry forms)]
+        (is (some? e) (str "must recognize list-form entry: " forms))
+        (is (= shape (:arity-shape e)) (str "shape for " forms))
+        (is (nil? (ef/entry-arity-error e)) (str "no error for " forms)))))
   (testing "public and private [] / [argv] / [& args] remain valid"
     (doseq [[forms shape] [['[(defn -main [] 1)] :none]
                            ['[(defn main [argv] 1)] :vector]
@@ -195,6 +221,18 @@
       (let [e (ef/find-program-entry forms)]
         (is (= shape (:arity-shape e)))
         (is (nil? (ef/entry-arity-error e)))))))
+
+(deftest frame-imports-are-goimports-grouped
+  ;; gogen's renderer denses positions, so the group break is restored on the
+  ;; rendered text. Guard it here: the shape is easy to lose in a refactor.
+  (let [raw (ef/find-program-entry '[(defn -main [& args] 1)])
+        e   (ef/analyze-entry raw {:fn {:fn-name "-main" :go-name "Main"
+                                        :needs-error? true :arity 1}})
+        src (ef/emit-entry-frame-go {:entry e :entry-import "aotmod/fib"})]
+    (is (str/includes? src "\t\"os\"\n\n\tprog \"aotmod/fib\"")
+        "one blank line must separate the stdlib group from the rest")
+    (is (not (str/includes? src "\n\n\n"))
+        "grouping must not introduce a double blank line")))
 
 (deftest command-line-args-published-before-namespace-load
   ;; Top-level namespace code must observe the real argv. The frame publishes

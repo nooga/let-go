@@ -744,7 +744,11 @@ func enterFrame(f *Frame) {
 	f.profileOn = ProfilingEnabled.Load()
 }
 
-func leaveFrame(_ *Frame) {
+// leaveFrame takes no frame on purpose: attribution keeps its own shadow
+// stack, and a parameter here invites passing a frame that may already be
+// back in the pool (OP_RETURN releases the child before state.current is
+// rebound). No parameter, no use-after-release to reason about.
+func leaveFrame() {
 	if allocAttrEnabled {
 		attrPopFrame()
 	}
@@ -767,7 +771,7 @@ func releaseFailedFrames(state *frameRunState, err error) (*Frame, error) {
 			state.current = parent
 			return parent, err
 		}
-		leaveFrame(parent)
+		leaveFrame()
 		parent.parent = nil
 		if parent != state.root {
 			ReleaseFrame(parent)
@@ -786,7 +790,7 @@ func releasePanickedFrames(state *frameRunState) {
 	}
 	for parent != nil {
 		next := parent.parent
-		leaveFrame(parent)
+		leaveFrame()
 		parent.parent = nil
 		if parent != state.root {
 			ReleaseFrame(parent)
@@ -795,7 +799,7 @@ func releasePanickedFrames(state *frameRunState) {
 	}
 }
 
-// Run executes this frame to completion. runLoop descends into bytecode
+// Run executes this frame to completion. The dispatch loop descends into bytecode
 // callees within one dispatch loop, keeping the Go stack flat. A parent link
 // on each live frame carries the suspended call chain without a retained slice.
 func (f *Frame) Run() (result Value, resultErr error) {
@@ -820,7 +824,7 @@ func (f *Frame) Run() (result Value, resultErr error) {
 func runChainProtected(state *frameRunState) (result Value, resultErr error) {
 	defer func() {
 		if r := recover(); r != nil {
-			// runLoop's attr wrapper already left the current frame. Balance and
+			// runLoopAttr already left the current frame. Balance and
 			// release every suspended child-owned frame before preserving the panic.
 			releasePanickedFrames(state)
 			panic(r)
@@ -830,11 +834,22 @@ func runChainProtected(state *frameRunState) (result Value, resultErr error) {
 }
 
 // runChain drives the dispatch loop and the error-resume protocol for the
-// frame chain rooted at state.root.
+// frame chain rooted at state.root. The attribution gate lives here, hoisted
+// out of the loop: a dispatcher function between runChain and the loop would
+// be too big to inline (runLoopInner far exceeds the inlining budget), so it
+// would cost a real call on every host->VM entry and every error-resume
+// iteration. A defer statement inside the bare loop itself would cost
+// deferreturn scaffolding on every VM entry, so the deferring variant stays
+// a separate function.
 func runChain(state *frameRunState) (result Value, resultErr error) {
 	entering := true
+	attr := allocAttrEnabled
 	for {
-		result, resultErr = state.current.runLoop(state, entering)
+		if attr {
+			result, resultErr = state.current.runLoopAttr(state, entering)
+		} else {
+			result, resultErr = state.current.runLoopInner(state, entering)
+		}
 		entering = false
 		if resultErr == nil {
 			return result, nil
@@ -847,24 +862,70 @@ func runChain(state *frameRunState) (result Value, resultErr error) {
 	}
 }
 
-// runLoop dispatches to the attr-tracking wrapper or the bare loop. leaveFrame
-// is a no-op unless allocation attribution is on, and a defer statement inside
-// the dispatch loop itself would cost deferreturn scaffolding on every VM
-// entry, so the deferring variant is a separate function.
-func (f *Frame) runLoop(state *frameRunState, entering bool) (Value, error) {
-	if allocAttrEnabled {
-		return f.runLoopAttr(state, entering)
-	}
+// runLoopAttr balances attrPopFrame for whichever logical frame is current
+// when the loop unwinds; suspended parents remain active. Attribution keeps
+// its own frame stack, so the wrapper can leave on behalf of the loop without
+// tracking its final frame.
+func (f *Frame) runLoopAttr(state *frameRunState, entering bool) (Value, error) {
+	defer leaveFrame()
 	return f.runLoopInner(state, entering)
 }
 
-// runLoopAttr balances attrPopFrame for whichever logical frame is current
-// when the loop unwinds; suspended parents remain active. leaveFrame ignores
-// its argument (attribution keeps its own frame stack), so the wrapper can
-// leave on behalf of the loop without tracking its final frame.
-func (f *Frame) runLoopAttr(state *frameRunState, entering bool) (Value, error) {
-	defer func() { leaveFrame(state.current) }()
-	return f.runLoopInner(state, entering)
+// Cold-path error constructors, kept out of runLoopInner. Error construction
+// only runs on failure, but when the constructor bodies (fmt varargs setup,
+// struct literals, source-map lookups) are inlined into the ~25KB dispatch
+// function they enlarge it and degrade its register allocation (the #706/#719
+// FrameDispatch fragility). //go:noinline keeps each body a plain call so the
+// hot function stays small.
+
+//go:noinline
+func execErr(msg string) error {
+	return NewExecutionError(msg)
+}
+
+//go:noinline
+func execWrap(msg string, err error) error {
+	return NewExecutionError(msg).Wrap(err)
+}
+
+//go:noinline
+func errNotAFunction(v Value) error {
+	return NewTypeError(v, "is not a function", nil)
+}
+
+// wrapCallErr attributes err to the call at f.ip, naming the callee. Same
+// message shape as wrapCallSite, but for the in-arm sites where the callee fn
+// is already in hand.
+//
+//go:noinline
+func wrapCallErr(f *Frame, fn Fn, err error) error {
+	srcInfo := f.code.LookupSource(f.ip)
+	return NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
+}
+
+//go:noinline
+func errIntOverflow() error {
+	return NewExecutionError("integer overflow")
+}
+
+//go:noinline
+func errDivByZero() error {
+	return NewExecutionError("integer division by zero")
+}
+
+//go:noinline
+func errBitOpType(name string) error {
+	return fmt.Errorf("%s expected Int", name)
+}
+
+// debugTraceInst prints the per-instruction trace when frame tracing is on.
+// Kept out of line so the fmt varargs boxing does not sit at the top of the
+// dispatch loop's hottest block.
+//
+//go:noinline
+func debugTraceInst(f *Frame, inst int32) {
+	f.stackDbg()
+	fmt.Println("#", f.ip, OpcodeToString(inst))
 }
 
 func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error) {
@@ -874,8 +935,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 	for {
 		inst := f.code.code[f.ip]
 		if f.debug {
-			f.stackDbg()
-			fmt.Println("#", f.ip, OpcodeToString(inst))
+			debugTraceInst(f, inst)
 		}
 		if f.profileOn {
 			currOp := uint8(inst & 0xff)
@@ -889,29 +949,29 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 		case OP_LOAD_CONST:
 			idx := f.code.code[f.ip+1]
 			if int(idx) >= f.constsc {
-				return NIL, NewExecutionError("const lookup out of bounds")
+				return NIL, execErr("const lookup out of bounds")
 			}
 			err := f.push(f.consts.get(int(idx)))
 			if err != nil {
-				return NIL, NewExecutionError("const push failed").Wrap(err)
+				return NIL, execWrap("const push failed", err)
 			}
 			f.ip += 2
 
 		case OP_LOAD_ARG:
 			idx := f.code.code[f.ip+1]
 			if int(idx) >= f.argc {
-				return NIL, NewExecutionError("argument lookup out of bounds")
+				return NIL, execErr("argument lookup out of bounds")
 			}
 			err := f.push(f.args[idx])
 			if err != nil {
-				return NIL, NewExecutionError("argument push failed").Wrap(err)
+				return NIL, execWrap("argument push failed", err)
 			}
 			f.ip += 2
 
 		case OP_RETURN:
 			v, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("return failed").Wrap(err)
+				return NIL, execWrap("return failed", err)
 			}
 			if f.parent == nil {
 				return v, nil
@@ -919,7 +979,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			child := f
 			parent := child.parent
 			child.parent = nil
-			leaveFrame(child)
+			leaveFrame()
 			ReleaseFrame(child)
 			f = parent
 			state.current = f
@@ -931,10 +991,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				return NIL, callErr
 			}
 			if e := f.drop(callArity + 1); e != nil {
-				return NIL, NewExecutionError("cleaning stack after call").Wrap(e)
+				return NIL, execWrap("cleaning stack after call", e)
 			}
 			if e := f.push(v); e != nil {
-				return NIL, NewExecutionError("pushing return value failed").Wrap(e)
+				return NIL, execWrap("pushing return value failed", e)
 			}
 			f.ip += 2
 
@@ -944,20 +1004,19 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			if arity > 0 {
 				fraw, err := f.nth(int(arity))
 				if err != nil {
-					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
+					return NIL, execWrap("invoke instruction failed", err)
 				}
 				fn, ok := AsFn(fraw)
 				if !ok {
-					return NIL, NewTypeError(fraw, "is not a function", nil)
+					return NIL, errNotAFunction(fraw)
 				}
 				a, err := f.mult(0, int(arity))
 				if err != nil {
-					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
+					return NIL, execWrap("popping arguments failed", err)
 				}
 				target, direct, cerr := resolveBytecodeCall(fn, a)
 				if cerr != nil {
-					srcInfo := f.code.LookupSource(f.ip)
-					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(cerr)
+					wrapped := wrapCallErr(f, fn, cerr)
 					if f.handleError(wrapped) {
 						continue
 					}
@@ -973,8 +1032,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				out, err = f.ec.Invoke(fn, a)
 				if err != nil {
-					srcInfo := f.code.LookupSource(f.ip)
-					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
+					wrapped := wrapCallErr(f, fn, err)
 					if f.handleError(wrapped) {
 						continue
 					}
@@ -982,23 +1040,22 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				err = f.drop(int(arity) + 1)
 				if err != nil {
-					return NIL, NewExecutionError("cleaning stack after call").Wrap(err)
+					return NIL, execWrap("cleaning stack after call", err)
 				}
 			} else {
 				// Peek rather than pop, so the callee slot remains for the
 				// uniform drop(arity+1) when a descended child returns.
 				fraw, err := f.nth(0)
 				if err != nil {
-					return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
+					return NIL, execWrap("invoke instruction failed", err)
 				}
 				fn, ok := AsFn(fraw)
 				if !ok {
-					return NIL, NewTypeError(fraw, "is not a function", nil)
+					return NIL, errNotAFunction(fraw)
 				}
 				target, direct, cerr := resolveBytecodeCall(fn, nil)
 				if cerr != nil {
-					srcInfo := f.code.LookupSource(f.ip)
-					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(cerr)
+					wrapped := wrapCallErr(f, fn, cerr)
 					if f.handleError(wrapped) {
 						continue
 					}
@@ -1013,12 +1070,11 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 					continue
 				}
 				if _, perr := f.pop(); perr != nil {
-					return NIL, NewExecutionError("invoke instruction failed").Wrap(perr)
+					return NIL, execWrap("invoke instruction failed", perr)
 				}
 				out, err = f.ec.Invoke(fn, nil)
 				if err != nil {
-					srcInfo := f.code.LookupSource(f.ip)
-					wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
+					wrapped := wrapCallErr(f, fn, err)
 					if f.handleError(wrapped) {
 						continue
 					}
@@ -1027,7 +1083,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			}
 			err := f.push(out)
 			if err != nil {
-				return NIL, NewExecutionError("pushing return value failed").Wrap(err)
+				return NIL, execWrap("pushing return value failed", err)
 			}
 			f.ip += 2
 
@@ -1037,24 +1093,23 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			// return path can use one drop(arity+1) protocol for every arity.
 			fraw, err := f.nth(int(arity))
 			if err != nil {
-				return NIL, NewExecutionError("invoke instruction failed").Wrap(err)
+				return NIL, execWrap("invoke instruction failed", err)
 			}
 			fn, ok := AsFn(fraw)
 			if !ok {
-				return NIL, NewTypeError(fraw, "is not a function", nil)
+				return NIL, errNotAFunction(fraw)
 			}
 			var a []Value
 			if arity > 0 {
 				a, err = f.mult(0, int(arity))
 				if err != nil {
-					return NIL, NewExecutionError("popping arguments failed").Wrap(err)
+					return NIL, execWrap("popping arguments failed", err)
 				}
 			}
 
 			target, direct, resolveErr := resolveBytecodeCall(fn, a)
 			if resolveErr != nil {
-				srcInfo := f.code.LookupSource(f.ip)
-				wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(resolveErr)
+				wrapped := wrapCallErr(f, fn, resolveErr)
 				if f.handleError(wrapped) {
 					continue
 				}
@@ -1078,8 +1133,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 
 			out, err := f.ec.Invoke(fn, a)
 			if err != nil {
-				srcInfo := f.code.LookupSource(f.ip)
-				wrapped := NewExecutionError(fmt.Sprintf("calling %s", fnName(fn))).WithSource(srcInfo).Wrap(err)
+				wrapped := wrapCallErr(f, fn, err)
 				if f.handleError(wrapped) {
 					continue
 				}
@@ -1089,10 +1143,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			// on the compiler-emitted RETURN so frame-chain unwind remains
 			// centralized in OP_RETURN.
 			if e := f.drop(int(arity) + 1); e != nil {
-				return NIL, NewExecutionError("cleaning stack after call").Wrap(e)
+				return NIL, execWrap("cleaning stack after call", e)
 			}
 			if e := f.push(out); e != nil {
-				return NIL, NewExecutionError("pushing return value failed").Wrap(e)
+				return NIL, execWrap("pushing return value failed", e)
 			}
 			f.ip += 2
 			continue
@@ -1101,7 +1155,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			offset := f.code.code[f.ip+1]
 			v, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("BRANCH_TRUE pop condition").Wrap(err)
+				return NIL, execWrap("BRANCH_TRUE pop condition", err)
 			}
 			if !IsTruthy(v) {
 				f.ip += 2
@@ -1113,7 +1167,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			offset := f.code.code[f.ip+1]
 			v, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("BRANCH_FALSE pop condition").Wrap(err)
+				return NIL, execWrap("BRANCH_FALSE pop condition", err)
 			}
 			if IsTruthy(v) {
 				f.ip += 2
@@ -1128,23 +1182,23 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 		case OP_POP:
 			_, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("POP failed").Wrap(err)
+				return NIL, execWrap("POP failed", err)
 			}
 			f.ip++
 
 		case OP_POP_N:
 			v, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("POP_N top value").Wrap(err)
+				return NIL, execWrap("POP_N top value", err)
 			}
 			num := f.code.code[f.ip+1]
 			err = f.drop(int(num))
 			if err != nil {
-				return NIL, NewExecutionError("POP_N drop").Wrap(err)
+				return NIL, execWrap("POP_N drop", err)
 			}
 			err = f.push(v)
 			if err != nil {
-				return NIL, NewExecutionError("POP_N push").Wrap(err)
+				return NIL, execWrap("POP_N push", err)
 			}
 			f.ip += 2
 
@@ -1152,26 +1206,26 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			num := f.code.code[f.ip+1]
 			val, err := f.nth(int(num))
 			if err != nil {
-				return NIL, NewExecutionError("DUP_NTH get nth").Wrap(err)
+				return NIL, execWrap("DUP_NTH get nth", err)
 			}
 			err = f.push(val)
 			if err != nil {
-				return NIL, NewExecutionError("DUP_NTH push").Wrap(err)
+				return NIL, execWrap("DUP_NTH push", err)
 			}
 			f.ip += 2
 
 		case OP_SET_VAR:
 			val, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("SET_VAR pop value failed").Wrap(err)
+				return NIL, execWrap("SET_VAR pop value failed", err)
 			}
 			varr, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("SET_VAR pop var failed").Wrap(err)
+				return NIL, execWrap("SET_VAR pop var failed", err)
 			}
 			varrd, ok := varr.(*Var)
 			if !ok {
-				return NIL, NewExecutionError("SET_VAR invalid Var").Wrap(err)
+				return NIL, execWrap("SET_VAR invalid Var", err)
 			}
 			// (set! *v* val) mutates the current execution's top dynamic
 			// binding (thread-local, matching Clojure) when one is active.
@@ -1188,32 +1242,32 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			armTraceIfTruthy(varrd, val)
 			err = f.push(varr)
 			if err != nil {
-				return NIL, NewExecutionError("SET_VAR push var failed").Wrap(err)
+				return NIL, execWrap("SET_VAR push var failed", err)
 			}
 			f.ip++
 
 		case OP_LOAD_VAR:
 			idx := f.code.code[f.ip+1]
 			if int(idx) >= f.constsc {
-				return NIL, NewExecutionError("const lookup out of bounds")
+				return NIL, execErr("const lookup out of bounds")
 			}
 			err := f.push(f.ec.deref(f.consts.get(int(idx)).(*Var)))
 			if err != nil {
-				return NIL, NewExecutionError("const push failed").Wrap(err)
+				return NIL, execWrap("const push failed", err)
 			}
 			f.ip += 2
 
 		case OP_MAKE_CLOSURE:
 			idx := f.sp - 1
 			if idx < 0 {
-				return NIL, NewExecutionError("MAKE_CLOSURE stack underflow")
+				return NIL, execErr("MAKE_CLOSURE stack underflow")
 			}
 			type closureCreator interface {
 				MakeClosure() Fn
 			}
 			fn, ok := f.stack[idx].(closureCreator)
 			if !ok {
-				return NIL, NewExecutionError("MAKE_CLOSURE invalid func on stack")
+				return NIL, execErr("MAKE_CLOSURE invalid func on stack")
 			}
 			f.stack[idx] = fn.MakeClosure()
 			f.ip++
@@ -1221,30 +1275,30 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 		case OP_LOAD_CLOSEDOVER:
 			idx := f.code.code[f.ip+1]
 			if int(idx) >= len(f.closedOvers) {
-				return NIL, NewExecutionError("closed over lookup out of bounds")
+				return NIL, execErr("closed over lookup out of bounds")
 			}
 			err := f.push(f.closedOvers[idx])
 			if err != nil {
-				return NIL, NewExecutionError("closed over push failed").Wrap(err)
+				return NIL, execWrap("closed over push failed", err)
 			}
 			f.ip += 2
 
 		case OP_PUSH_CLOSEDOVER:
 			val, err := f.pop()
 			if err != nil {
-				return NIL, NewExecutionError("popping closed over value failed").Wrap(err)
+				return NIL, execWrap("popping closed over value failed", err)
 			}
 			idx := f.sp - 1
 			if idx < 0 {
-				return NIL, NewExecutionError("PUSH_CLOSEDOVER stack overflow").Wrap(err)
+				return NIL, execWrap("PUSH_CLOSEDOVER stack overflow", err)
 			}
 			cls := f.stack[idx]
 			if cls.Type() != FuncType {
-				return NIL, NewExecutionError("PUSH_CLOSEDOVER expected a Fn")
+				return NIL, execErr("PUSH_CLOSEDOVER expected a Fn")
 			}
 			fun, ok := cls.(*Closure)
 			if !ok {
-				return NIL, NewExecutionError("PUSH_CLOSEDOVER invalid closure on stack")
+				return NIL, execErr("PUSH_CLOSEDOVER invalid closure on stack")
 			}
 			fun.closedOvers = append(fun.closedOvers, val)
 			f.ip++
@@ -1253,7 +1307,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			arity := f.code.code[f.ip+1]
 			a, err := f.mult(0, int(arity))
 			if err != nil {
-				return NIL, NewExecutionError("popping arguments failed").Wrap(err)
+				return NIL, execWrap("popping arguments failed", err)
 			}
 			copy(f.args, a)
 			f.argc = int(arity)
@@ -1266,15 +1320,15 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			ignore := f.code.code[f.ip+3]
 			a, err := f.mult(0, int(argc))
 			if err != nil {
-				return NIL, NewExecutionError("RECUR popping arguments failed").Wrap(err)
+				return NIL, execWrap("RECUR popping arguments failed", err)
 			}
 			err = f.drop(int(argc)*2 + int(ignore))
 			if err != nil {
-				return NIL, NewExecutionError("RECUR popping old locals").Wrap(err)
+				return NIL, execWrap("RECUR popping old locals", err)
 			}
 			err = f.pushMult(a)
 			if err != nil {
-				return NIL, NewExecutionError("RECUR pushing new locals").Wrap(err)
+				return NIL, execWrap("RECUR pushing new locals", err)
 			}
 
 			f.ip -= int(offset)
@@ -1284,18 +1338,18 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			n := int(nfns)
 			fns, err := f.mult(0, n)
 			if err != nil {
-				return NIL, NewExecutionError("MAKE_MULTI_ARITY popping arguments failed").Wrap(err)
+				return NIL, execWrap("MAKE_MULTI_ARITY popping arguments failed", err)
 			}
 			f.sp -= n
 
 			fn, err := MakeMultiArity(fns)
 			if err != nil {
-				return NIL, NewExecutionError("MAKE_MULTI_ARITY failed").Wrap(err)
+				return NIL, execWrap("MAKE_MULTI_ARITY failed", err)
 			}
 
 			err = f.push(fn)
 			if err != nil {
-				return NIL, NewExecutionError("MAKE_MULTI_ARITY push failed").Wrap(err)
+				return NIL, execWrap("MAKE_MULTI_ARITY push failed", err)
 			}
 
 			f.ip += 2
@@ -1365,10 +1419,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				if bi, ok := b.(Int); ok {
 					r, ok := checkedAddInt(ai, bi)
 					if !ok {
-						if f.handleError(NewExecutionError("integer overflow")) {
+						if f.handleError(errIntOverflow()) {
 							continue
 						}
-						return NIL, NewExecutionError("integer overflow")
+						return NIL, errIntOverflow()
 					}
 					f.stack[f.sp-2] = r
 					f.sp--
@@ -1394,10 +1448,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				if bi, ok := b.(Int); ok {
 					r, ok := checkedSubInt(ai, bi)
 					if !ok {
-						if f.handleError(NewExecutionError("integer overflow")) {
+						if f.handleError(errIntOverflow()) {
 							continue
 						}
-						return NIL, NewExecutionError("integer overflow")
+						return NIL, errIntOverflow()
 					}
 					f.stack[f.sp-2] = r
 					f.sp--
@@ -1423,10 +1477,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				if bi, ok := b.(Int); ok {
 					r, ok := checkedMulInt(ai, bi)
 					if !ok {
-						if f.handleError(NewExecutionError("integer overflow")) {
+						if f.handleError(errIntOverflow()) {
 							continue
 						}
-						return NIL, NewExecutionError("integer overflow")
+						return NIL, errIntOverflow()
 					}
 					f.stack[f.sp-2] = r
 					f.sp--
@@ -1450,17 +1504,17 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			a := f.stack[f.sp-2]
 			ai, ok := a.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-and expected Int")) {
+				if f.handleError(errBitOpType("bit-and")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-and expected Int")
+				return NIL, errBitOpType("bit-and")
 			}
 			bi, ok := b.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-and expected Int")) {
+				if f.handleError(errBitOpType("bit-and")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-and expected Int")
+				return NIL, errBitOpType("bit-and")
 			}
 			f.stack[f.sp-2] = MakeInt(int(ai) & int(bi))
 			f.sp--
@@ -1471,17 +1525,17 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			a := f.stack[f.sp-2]
 			ai, ok := a.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-or expected Int")) {
+				if f.handleError(errBitOpType("bit-or")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-or expected Int")
+				return NIL, errBitOpType("bit-or")
 			}
 			bi, ok := b.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-or expected Int")) {
+				if f.handleError(errBitOpType("bit-or")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-or expected Int")
+				return NIL, errBitOpType("bit-or")
 			}
 			f.stack[f.sp-2] = MakeInt(int(ai) | int(bi))
 			f.sp--
@@ -1492,17 +1546,17 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			a := f.stack[f.sp-2]
 			ai, ok := a.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-xor expected Int")) {
+				if f.handleError(errBitOpType("bit-xor")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-xor expected Int")
+				return NIL, errBitOpType("bit-xor")
 			}
 			bi, ok := b.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-xor expected Int")) {
+				if f.handleError(errBitOpType("bit-xor")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-xor expected Int")
+				return NIL, errBitOpType("bit-xor")
 			}
 			f.stack[f.sp-2] = MakeInt(int(ai) ^ int(bi))
 			f.sp--
@@ -1513,17 +1567,17 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			a := f.stack[f.sp-2]
 			ai, ok := a.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-and-not expected Int")) {
+				if f.handleError(errBitOpType("bit-and-not")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-and-not expected Int")
+				return NIL, errBitOpType("bit-and-not")
 			}
 			bi, ok := b.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-and-not expected Int")) {
+				if f.handleError(errBitOpType("bit-and-not")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-and-not expected Int")
+				return NIL, errBitOpType("bit-and-not")
 			}
 			f.stack[f.sp-2] = MakeInt(int(ai) &^ int(bi))
 			f.sp--
@@ -1534,17 +1588,17 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			a := f.stack[f.sp-2]
 			ai, ok := a.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-shift-left expected Int")) {
+				if f.handleError(errBitOpType("bit-shift-left")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-shift-left expected Int")
+				return NIL, errBitOpType("bit-shift-left")
 			}
 			bi, ok := b.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-shift-left expected Int")) {
+				if f.handleError(errBitOpType("bit-shift-left")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-shift-left expected Int")
+				return NIL, errBitOpType("bit-shift-left")
 			}
 			f.stack[f.sp-2] = MakeInt(int(ai) << uint(bi))
 			f.sp--
@@ -1555,17 +1609,17 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			a := f.stack[f.sp-2]
 			ai, ok := a.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-shift-right expected Int")) {
+				if f.handleError(errBitOpType("bit-shift-right")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-shift-right expected Int")
+				return NIL, errBitOpType("bit-shift-right")
 			}
 			bi, ok := b.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-shift-right expected Int")) {
+				if f.handleError(errBitOpType("bit-shift-right")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-shift-right expected Int")
+				return NIL, errBitOpType("bit-shift-right")
 			}
 			f.stack[f.sp-2] = MakeInt(int(ai) >> uint(bi))
 			f.sp--
@@ -1576,17 +1630,17 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			a := f.stack[f.sp-2]
 			ai, ok := a.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("unsigned-bit-shift-right expected Int")) {
+				if f.handleError(errBitOpType("unsigned-bit-shift-right")) {
 					continue
 				}
-				return NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
+				return NIL, errBitOpType("unsigned-bit-shift-right")
 			}
 			bi, ok := b.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("unsigned-bit-shift-right expected Int")) {
+				if f.handleError(errBitOpType("unsigned-bit-shift-right")) {
 					continue
 				}
-				return NIL, fmt.Errorf("unsigned-bit-shift-right expected Int")
+				return NIL, errBitOpType("unsigned-bit-shift-right")
 			}
 			f.stack[f.sp-2] = MakeInt(int(uint(ai) >> uint(bi)))
 			f.sp--
@@ -1598,10 +1652,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			if ai, ok := a.(Int); ok {
 				if bi, ok := b.(Int); ok {
 					if bi == 0 {
-						if f.handleError(NewExecutionError("integer division by zero")) {
+						if f.handleError(errDivByZero()) {
 							continue
 						}
-						return NIL, NewExecutionError("integer division by zero")
+						return NIL, errDivByZero()
 					}
 					// Int quot is truncated toward zero — Go's / on
 					// signed ints matches Clojure's quot semantics.
@@ -1644,10 +1698,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			a := f.stack[f.sp-1]
 			ai, ok := a.(Int)
 			if !ok {
-				if f.handleError(fmt.Errorf("bit-not expected Int")) {
+				if f.handleError(errBitOpType("bit-not")) {
 					continue
 				}
-				return NIL, fmt.Errorf("bit-not expected Int")
+				return NIL, errBitOpType("bit-not")
 			}
 			f.stack[f.sp-1] = MakeInt(^int(ai))
 			f.ip++
@@ -1770,10 +1824,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			if ai, ok := a.(Int); ok {
 				r, ok := checkedAddInt(ai, 1)
 				if !ok {
-					if f.handleError(NewExecutionError("integer overflow")) {
+					if f.handleError(errIntOverflow()) {
 						continue
 					}
-					return NIL, NewExecutionError("integer overflow")
+					return NIL, errIntOverflow()
 				}
 				f.stack[f.sp-1] = r
 				f.ip++
@@ -1794,10 +1848,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			if ai, ok := a.(Int); ok {
 				r, ok := checkedSubInt(ai, 1)
 				if !ok {
-					if f.handleError(NewExecutionError("integer overflow")) {
+					if f.handleError(errIntOverflow()) {
 						continue
 					}
-					return NIL, NewExecutionError("integer overflow")
+					return NIL, errIntOverflow()
 				}
 				f.stack[f.sp-1] = r
 				f.ip++
@@ -1814,7 +1868,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			f.ip++
 
 		default:
-			return NIL, NewExecutionError("unknown instruction")
+			return NIL, execErr("unknown instruction")
 		}
 	}
 }
