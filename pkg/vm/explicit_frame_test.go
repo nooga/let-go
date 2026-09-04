@@ -381,3 +381,85 @@ func TestDescendedErrorReleasesChildFrame(t *testing.T) {
 	}
 	ReleaseFrame(root)
 }
+
+// rawPanicFn panics with a plain Go value when invoked. It deliberately does
+// NOT wrap itself in RecoverPanic the way NativeFn does: ec.Invoke's default
+// arm calls it bare, so the panic unwinds through the live dispatch loop —
+// the path releasePanickedFrames (attribution on) and the documented
+// leak-to-GC trade (attribution off) exist for.
+type rawPanicFn struct{ payload string }
+
+func (p *rawPanicFn) String() string                { return "<raw-panic-fn>" }
+func (p *rawPanicFn) Type() ValueType               { return NativeFnType }
+func (p *rawPanicFn) Unbox() any                    { return p }
+func (p *rawPanicFn) Arity() int                    { return 0 }
+func (p *rawPanicFn) Invoke([]Value) (Value, error) { panic(p.payload) }
+
+// A Go panic escaping a native while the chain is mid-descent must be
+// preserved as-is, and the pool must see the currently-intended behavior in
+// BOTH configurations: with attribution on, runChainProtected releases the
+// suspended chain's pooled frames; with attribution off (the default), Run is
+// deliberately defer-free and the frames leak to GC — pre-#645 parity, per
+// Run's doc comment. A future change that reintroduces a must-release-on-panic
+// invariant on the default path has to update this test consciously.
+func TestPanicUnwindingDescendedFramePinsPoolBehavior(t *testing.T) {
+	framePoolMu.Lock()
+	oldPool := framePoolStack
+	framePoolStack = nil
+	framePoolMu.Unlock()
+	t.Cleanup(func() {
+		framePoolMu.Lock()
+		clear(framePoolStack)
+		framePoolStack = oldPool
+		framePoolMu.Unlock()
+	})
+
+	// child (bytecode, arity 1): invoke its argument — the raw-panicking fn.
+	consts := NewConsts()
+	childChunk := NewCodeChunk(consts)
+	childChunk.Append(OP_LOAD_ARG)
+	childChunk.Append32(0)
+	childChunk.Append(OP_INVOKE)
+	childChunk.Append32(0)
+	childChunk.Append(OP_RETURN)
+	childChunk.SetMaxStack(4)
+	child := MakeFunc(1, false, childChunk)
+
+	// root: descend into child with the panicking fn as the argument, so the
+	// panic fires while root is a suspended parent of a live pooled frame.
+	rootChunk := NewCodeChunk(consts)
+	rootChunk.Append(OP_LOAD_CONST)
+	rootChunk.Append32(consts.Intern(child))
+	rootChunk.Append(OP_LOAD_ARG)
+	rootChunk.Append32(0)
+	rootChunk.Append(OP_INVOKE)
+	rootChunk.Append32(1)
+	rootChunk.Append(OP_RETURN)
+	rootChunk.SetMaxStack(4)
+
+	root := NewFrame(rootChunk, []Value{&rawPanicFn{payload: "raw-panic-719"}})
+	root.ec = RootExecContext
+
+	recovered := func() (r any) {
+		defer func() { r = recover() }()
+		_, _ = root.Run()
+		return nil
+	}()
+	if recovered != "raw-panic-719" {
+		t.Fatalf("panic was not preserved through the dispatch loop: got %v", recovered)
+	}
+
+	framePoolMu.Lock()
+	pooled := append([]*Frame(nil), framePoolStack...)
+	framePoolMu.Unlock()
+	if allocAttrEnabled {
+		if len(pooled) != 1 {
+			t.Fatalf("attribution on: panicked child not released exactly once: pool has %d frames", len(pooled))
+		}
+	} else {
+		if len(pooled) != 0 {
+			t.Fatalf("default config: panic path released %d frame(s); the intended behavior is leak-to-GC (update this test if that changed on purpose)", len(pooled))
+		}
+	}
+	ReleaseFrame(root)
+}
