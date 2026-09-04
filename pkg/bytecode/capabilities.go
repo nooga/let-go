@@ -110,11 +110,15 @@ func UnsupportedCapabilityError(caps uint32) error {
 
 // FormatVersionReport returns the multi-line -v/--version body for tool
 // (e.g. "lg" or "lg-runtime") at the given version string.
+//
+// The lgb line reports both the default write version (plain bundles stay on
+// uncompressedFormatVersion) and FormatVersion (the newest this tree reads and
+// writes when a newer-only flag such as FlagCompressed is set).
 func FormatVersionReport(tool, versionStr string) string {
 	count, hash := vm.OpcodeSetSignature()
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s\n", tool, versionStr)
-	fmt.Fprintf(&b, "lgb: format %d\n", FormatVersion)
+	fmt.Fprintf(&b, "lgb: format %d (default write), %d (max)\n", uncompressedFormatVersion, FormatVersion)
 	fmt.Fprintf(&b, "capabilities: %s\n", DescribeCapabilities(SupportedCapabilities))
 	fmt.Fprintf(&b, "opcodes: %d (signature %016x)\n", count, hash)
 	return b.String()
