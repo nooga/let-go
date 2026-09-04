@@ -1967,8 +1967,13 @@
 ;; is gated so it costs nothing until *lg-trace* is first set truthy.
 (def ^:dynamic *lg-trace* false)
 
-;; --- print/read tuning dynamic vars (stubs; not yet honored by writers) ---
+;; --- print/read tuning dynamic vars ---
 
+;; Extensible tagged-literal handlers. Keys are tag symbols and values are
+;; one-argument functions invoked with the normally read payload form.
+(def ^:dynamic *data-readers* {})
+
+;; Print tuning vars are compatibility stubs; writers do not honor them yet.
 (def ^:dynamic *print-level* nil)
 (def ^:dynamic *print-length* nil)
 (def ^:dynamic *print-meta* false)
