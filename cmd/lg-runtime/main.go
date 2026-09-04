@@ -83,8 +83,8 @@ func storageIDDefault(script string) string {
 	return rt.StorageIDFrom("", script, cwd, exe)
 }
 
-func runUnit(data []byte) int {
-	unit, err := rt.DecodeExecUnit(data)
+func runUnit(data []byte, artifactPath string) int {
+	unit, err := rt.DecodeExecUnitWithDebugFile(data, artifactPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -117,7 +117,12 @@ func runBundle(lgbData, resData []byte, bakedStoreID string) int {
 		}
 		rt.SetResourceProvider(rt.NewEmbeddedResourceProvider(files))
 	}
-	return runUnit(lgbData)
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: finding executable: %v\n", err)
+		return 1
+	}
+	return runUnit(lgbData, exe)
 }
 
 func runMain() int {
@@ -164,7 +169,7 @@ func runMain() int {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
-	return runUnit(data)
+	return runUnit(data, program)
 }
 
 func main() {

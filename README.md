@@ -219,6 +219,19 @@ lg -b myapp app.lg                # bundle into a self-contained binary
 The standalone binary is a copy of `lg` with your bytecode appended. Copy it
 to another machine and it runs.
 
+Release artifacts can split source maps and local-variable tables into a
+digest-bound debug companion:
+
+```bash
+lg -strip -c app.lgb app.lg       # writes app.lgb + app.lgb.debug
+lg -strip -b myapp app.lg         # writes myapp + myapp.debug
+```
+
+Archive the `.debug` file while distributing only the smaller runtime artifact.
+Putting it back beside the artifact restores source-located stack traces
+automatically; `LG_DEBUG_FILE=/path/to/app.debug` selects a companion stored
+elsewhere. A companion for a different build is rejected.
+
 ```bash
 lg -w site app.lg                 # compile to a WASM web app
 open site/index.html
