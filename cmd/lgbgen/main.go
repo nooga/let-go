@@ -15,6 +15,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/signal"
@@ -388,6 +389,13 @@ func main() {
 	fs.StringVar(&cpuProfilePath, "cpuprofile", "", "write Go CPU profile for the lgbgen process")
 	fs.StringVar(&memProfilePath, "memprofile", "", "write Go allocation profile (allocs) for the lgbgen process")
 	fs.StringVar(&codeDir, "code-dir", "", "base dir for generated gogen_ir wireup files (default: repo root)")
+	// --compress DEFLATE-compresses the bundle body. Default OFF for the
+	// committed core: it trims the binary but adds work and allocations to every
+	// process start (the core is decoded on every boot), and that tradeoff is a
+	// policy call for the maintainer, not a silent default. Decode inflates it
+	// transparently either way (see the FlagCompressed path in pkg/bytecode).
+	compress := false
+	fs.BoolVar(&compress, "compress", false, "DEFLATE-compress the .lgb bundle body (smaller binary, slower boot)")
 	fs.Parse(os.Args[1:])
 
 	switch target {
@@ -568,44 +576,110 @@ func main() {
 		return
 	}
 	if targetBoth {
-		writeBundle(outPath, consts, nsChunks, bundleOrder)
+		writeBundle(outPath, consts, nsChunks, bundleOrder, compress)
 		compileIRForLowering()
 		runGoTarget(goOutDir, codeDir)
 		return
 	}
 
 	// Bytecode mode: write .lgb bundle (ir.* excluded).
-	writeBundle(outPath, consts, nsChunks, bundleOrder)
+	writeBundle(outPath, consts, nsChunks, bundleOrder, compress)
 }
 
 // writeBundle encodes the compiled namespace chunks into the .lgb bundle at
-// outPath and closes the file before returning (so callers may proceed to the
-// Go-lowering target against the same in-memory state).
-func writeBundle(outPath string, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string) {
-	f, err := os.Create(outPath)
+// outPath atomically before returning (so callers may proceed to the Go-lowering
+// target against the same in-memory state). Encoding happens in a temporary
+// file in the destination directory; the previous bundle remains intact unless
+// encoding, flushing, and closing all succeed.
+func writeBundle(outPath string, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string, compress bool) {
+	// The core bundle is decoded on every process start, so the decode path
+	// inflates it transparently; compressing here trims the embedded bytes from
+	// every binary (see the FlagCompressed decode path in pkg/bytecode).
+	size, err := writeFileAtomically(outPath, func(w io.Writer) error {
+		return bytecode.EncodeBundleOrderedCompressed(w, consts, nsChunks, nsOrder, compress)
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create %s: %v\n", outPath, err)
+		fmt.Fprintf(os.Stderr, "write %s: %v\n", outPath, err)
 		os.Exit(1)
 	}
 
-	if err := bytecode.EncodeBundleOrdered(f, consts, nsChunks, nsOrder); err != nil {
-		f.Close()
-		fmt.Fprintf(os.Stderr, "encode failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Stat is best-effort: success here is just for the byte-count in the
-	// success line. If it fails, we still wrote the bundle, so report what we
-	// know without dereferencing a nil FileInfo.
-	if fi, err := f.Stat(); err == nil {
-		fmt.Printf("wrote %s (%d bytes, %d consts, %d namespaces)\n",
-			outPath, fi.Size(), len(consts.Values()), len(nsChunks))
-	} else {
-		fmt.Printf("wrote %s (%d consts, %d namespaces; stat failed: %v)\n",
-			outPath, len(consts.Values()), len(nsChunks), err)
-	}
-	f.Close()
+	fmt.Printf("wrote %s (%d bytes, %d consts, %d namespaces)\n",
+		outPath, size, len(consts.Values()), len(nsChunks))
 	refreshManifest()
+}
+
+// writeFileAtomically writes path through a same-directory temporary file and
+// replaces path only after the contents are synced and closed successfully.
+// Any failure leaves an existing destination untouched.
+//
+// The directory is synced after the rename as well. Syncing the file persists
+// its contents; it does not persist the directory entry that names it, so a
+// crash between the two can leave the rename lost even though the data
+// survived. That is durability rather than atomicity — the destination is
+// never torn either way — but it is cheap here, and this tool writes the
+// artifact the whole build then trusts.
+func writeFileAtomically(path string, write func(io.Writer) error) (int64, error) {
+	mode := fs.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return 0, fmt.Errorf("stat destination: %w", err)
+	}
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return 0, fmt.Errorf("create temporary file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	closeOnError := func(err error) (int64, error) {
+		_ = tmp.Close()
+		return 0, err
+	}
+	if err := write(tmp); err != nil {
+		return closeOnError(fmt.Errorf("encode temporary file: %w", err))
+	}
+	if err := tmp.Sync(); err != nil {
+		return closeOnError(fmt.Errorf("sync temporary file: %w", err))
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		return closeOnError(fmt.Errorf("set temporary file mode: %w", err))
+	}
+	if err := tmp.Close(); err != nil {
+		return 0, fmt.Errorf("close temporary file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return 0, fmt.Errorf("replace destination: %w", err)
+	}
+	if err := syncDir(dir); err != nil {
+		return 0, fmt.Errorf("sync destination directory: %w", err)
+	}
+
+	// Report the destination's own size rather than the temporary file's. The
+	// bytes are the same; reading it off the file the caller is told about is
+	// what makes the number checkable.
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("stat destination: %w", err)
+	}
+	return info.Size(), nil
+}
+
+// syncDir flushes a directory entry to disk. lgbgen is a bootstrap-tagged
+// build tool that runs on developer machines and Linux CI, so the POSIX
+// behaviour is the only one in play.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		_ = d.Close()
+		return err
+	}
+	return d.Close()
 }
 
 // refreshManifest records the content digest of all .lg + lgbgen sources

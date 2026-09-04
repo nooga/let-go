@@ -120,7 +120,7 @@ func runLGB(filename string) error {
 	if err != nil {
 		return err
 	}
-	unit, err := rt.DecodeExecUnit(data)
+	unit, err := rt.DecodeExecUnitWithDebugFile(data, filename)
 	if err != nil {
 		return fmt.Errorf("decoding %s: %w", filename, err)
 	}
@@ -175,15 +175,27 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 		maps.Copy(nsChunks, nsRes.LoadedChunks)
 		nsChunks[mainNS] = chunk
 		nsOrder := append(nsRes.LoadOrder, mainNS)
-		if err := bytecode.EncodeBundleOrdered(&lgbBuf, ctx.Consts(), nsChunks, nsOrder); err != nil {
+		if err := bytecode.EncodeBundleOrderedCompressed(&lgbBuf, ctx.Consts(), nsChunks, nsOrder, compressBundle); err != nil {
 			return err
 		}
 	} else {
-		if err := bytecode.EncodeCompilation(&lgbBuf, ctx.Consts(), chunk); err != nil {
+		if err := bytecode.EncodeCompilationCompressed(&lgbBuf, ctx.Consts(), chunk, compressBundle); err != nil {
 			return err
 		}
 	}
 	lgbData := lgbBuf.Bytes()
+	var debugData []byte
+	if stripDebug {
+		stripped, companion, err := bytecode.SplitDebug(lgbData)
+		if err != nil {
+			return fmt.Errorf("splitting debug sections: %w", err)
+		}
+		lgbData = stripped
+		debugData = companion
+		if _, err := debugCompanionPath(dst); err != nil {
+			return err
+		}
+	}
 
 	// Collect resources under the -resource-paths roots *before* creating the
 	// output file, and exclude the output path itself — otherwise a dst that
@@ -219,7 +231,12 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	outClosed := false
+	defer func() {
+		if !outClosed {
+			_ = out.Close()
+		}
+	}()
 
 	// Copy the base binary (strip any existing bundle first)
 	binSize, err := bundle.BaseBinarySize(srcBin)
@@ -236,7 +253,18 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 	// before compilation so the bundle keys its storage by the app rather than
 	// by whatever the binary is renamed to at runtime, or by a directory the
 	// compiled forms chdir'd into. Mirrors the WASM build, which bakes the same id.
-	return bundle.AppendTrailer(out, lgbData, resArc, bundleStoreID)
+	if err := bundle.AppendTrailer(out, lgbData, resArc, bundleStoreID); err != nil {
+		return err
+	}
+	closeErr := out.Close()
+	outClosed = true
+	if closeErr != nil {
+		return closeErr
+	}
+	if debugData != nil {
+		return writeDebugCompanion(dst, debugData)
+	}
+	return nil
 }
 
 func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string) error {
@@ -250,12 +278,7 @@ func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ds
 	if err != nil {
 		return err
 	}
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
+	var buf bytes.Buffer
 	// If namespaces were loaded during compilation, use bundle format
 	if len(nsRes.LoadedChunks) > 0 {
 		// Include the main chunk under its namespace name, last in order
@@ -264,9 +287,56 @@ func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ds
 		maps.Copy(nsChunks, nsRes.LoadedChunks)
 		nsChunks[mainNS] = chunk
 		nsOrder := append(nsRes.LoadOrder, mainNS)
-		return bytecode.EncodeBundleOrdered(out, ctx.Consts(), nsChunks, nsOrder)
+		if err := bytecode.EncodeBundleOrderedCompressed(&buf, ctx.Consts(), nsChunks, nsOrder, compressBundle); err != nil {
+			return err
+		}
+	} else if err := bytecode.EncodeCompilationCompressed(&buf, ctx.Consts(), chunk, compressBundle); err != nil {
+		return err
 	}
-	return bytecode.EncodeCompilation(out, ctx.Consts(), chunk)
+	data := buf.Bytes()
+	var debugData []byte
+	if stripDebug {
+		stripped, companion, err := bytecode.SplitDebug(data)
+		if err != nil {
+			return fmt.Errorf("splitting debug sections: %w", err)
+		}
+		data = stripped
+		debugData = companion
+		if _, err := debugCompanionPath(dst); err != nil {
+			return err
+		}
+	}
+	if err := os.WriteFile(dst, data, 0666); err != nil {
+		return err
+	}
+	if debugData != nil {
+		return writeDebugCompanion(dst, debugData)
+	}
+	return nil
+}
+
+func writeDebugCompanion(artifactPath string, data []byte) error {
+	path, err := debugCompanionPath(artifactPath)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0666); err != nil {
+		return fmt.Errorf("writing debug companion %s: %w", path, err)
+	}
+	return nil
+}
+
+func debugCompanionPath(artifactPath string) (string, error) {
+	path := debugOutput
+	if path == "" {
+		path = artifactPath + bytecode.DebugCompanionSuffix
+	}
+	artifactAbs, artifactErr := filepath.Abs(artifactPath)
+	debugAbs, debugErr := filepath.Abs(path)
+	if artifactErr == nil && debugErr == nil && artifactAbs == debugAbs {
+		return "", fmt.Errorf("debug output must differ from artifact output %s", artifactPath)
+	}
+	return path, nil
 }
 
 var nreplServer *nrepl.NreplServer
@@ -297,12 +367,15 @@ var debug bool
 var showVersion bool
 var compileOutput string
 var bundleOutput string
+var compressBundle bool
 var bundleBase string
 var wasmOutput string
 var wasmShell string
 var wasmPayload string
 var wasmHostEval bool
 var storageID string
+var stripDebug bool
+var debugOutput string
 var sourcePaths string
 var resourcePaths string
 
@@ -328,7 +401,10 @@ func registerFlags() {
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.StringVar(&compileOutput, "c", "", "compile .lg file to .lgb bytecode (specify output path)")
 	flag.StringVar(&bundleOutput, "b", "", "bundle .lg file into a standalone executable (specify output path)")
+	flag.BoolVar(&compressBundle, "z", false, "with -c/-b: DEFLATE-compress the bundle body (smaller .lgb / standalone binary; transparently inflated at load)")
 	flag.StringVar(&bundleBase, "bundle-base", "", "path to target-platform lg binary for cross-OS bundling (defaults to current executable)")
+	flag.BoolVar(&stripDebug, "strip", false, "split source maps and local-variable tables into a digest-bound .debug companion (with -c/-b)")
+	flag.StringVar(&debugOutput, "debug-output", "", "path for the -strip debug companion (defaults to <output>.debug)")
 	flag.StringVar(&wasmOutput, "w", "", "build .lg file into a WASM web app (specify output directory)")
 	flag.StringVar(&wasmShell, "w-shell", "xterm", "shell for -w: 'xterm' (default), 'none' (emit core only; client supplies its own shell via window.LetGoHost), or a path to a custom HTML template containing __LG_HOST_JS_BODY_PLACEHOLDER__")
 	flag.StringVar(&wasmPayload, "w-wasm", "inline", "wasm delivery for -w: 'inline' (default; gzip-base64 baked into index.html) or 'external' (emit a separate main.wasm the loader fetches + streams)")
@@ -463,7 +539,12 @@ func runMain() int {
 			rt.SetResourceProvider(rt.NewEmbeddedResourceProvider(files))
 		}
 
-		unit, err := rt.DecodeExecUnit(lgbData)
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: finding executable: %v\n", err)
+			return 1
+		}
+		unit, err := rt.DecodeExecUnitWithDebugFile(lgbData, exe)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
@@ -476,6 +557,18 @@ func runMain() int {
 	}
 
 	flag.Parse()
+	if compressBundle && compileOutput == "" && bundleOutput == "" {
+		fmt.Fprintln(os.Stderr, "error: -z requires -c or -b")
+		return 2
+	}
+	if stripDebug && compileOutput == "" && bundleOutput == "" {
+		fmt.Fprintln(os.Stderr, "error: -strip requires -c or -b")
+		return 2
+	}
+	if debugOutput != "" && !stripDebug {
+		fmt.Fprintln(os.Stderr, "error: -debug-output requires -strip")
+		return 2
+	}
 
 	if showVersion {
 		fmt.Print(bytecode.FormatVersionReport("lg", versionString()))
