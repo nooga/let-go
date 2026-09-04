@@ -18,7 +18,14 @@ import (
 // uncompressed size and a one-byte codec tag. Otherwise the whole module is
 // written uncompressed, byte-identically to before.
 func Encode(w io.Writer, m *Module) error {
-	enc := newEncoder(w, m)
+	return encode(w, m, nil)
+}
+
+// encode serializes m, optionally using the live CodeChunk pointer index built
+// alongside it. The pointer index is the authoritative Func-to-chunk mapping;
+// raw Modules do not retain those live pointers and use structural fallback.
+func encode(w io.Writer, m *Module, liveIdx map[*vm.CodeChunk]int) error {
+	enc := newEncoder(w, m, liveIdx)
 	version, err := encodeFormatVersion(m)
 	if err != nil {
 		return err
@@ -36,7 +43,13 @@ func Encode(w io.Writer, m *Module) error {
 	// Serialize the body first so its exact uncompressed size can be declared in
 	// the framing before any compressed bytes are written.
 	var rawBody bytes.Buffer
-	body := &encoder{w: NewWriter(&rawBody), strings: enc.strings, strIndex: enc.strIndex, chunks: enc.chunks}
+	body := &encoder{
+		w:        NewWriter(&rawBody),
+		strings:  enc.strings,
+		strIndex: enc.strIndex,
+		chunks:   enc.chunks,
+		liveIdx:  enc.liveIdx,
+	}
 	if err := body.writeBody(m); err != nil {
 		return err
 	}
@@ -98,12 +111,13 @@ func writeAndCloseCompressedBody(w io.WriteCloser, body []byte) error {
 }
 
 // newEncoder builds an encoder over w with the module's string index primed.
-func newEncoder(w io.Writer, m *Module) *encoder {
+func newEncoder(w io.Writer, m *Module, liveIdx map[*vm.CodeChunk]int) *encoder {
 	enc := &encoder{
 		w:        NewWriter(w),
 		strings:  m.Strings,
 		strIndex: make(map[string]int, len(m.Strings)),
 		chunks:   m.Chunks,
+		liveIdx:  liveIdx,
 	}
 	for i, s := range m.Strings {
 		enc.strIndex[s] = i
@@ -167,7 +181,7 @@ func EncodeModule(w io.Writer, consts *vm.Consts, chunks []*vm.CodeChunk) error 
 		b.AddConst(v)
 	}
 	m := b.Build()
-	return Encode(w, m)
+	return encode(w, m, b.chunkIndex)
 }
 
 // EncodeCompilation serializes a compilation result (main chunk + const pool).
@@ -196,7 +210,7 @@ func EncodeCompilationCompressed(w io.Writer, consts *vm.Consts, mainChunk *vm.C
 		m.Flags |= FlagCompressed
 		m.Version = FormatVersion
 	}
-	return Encode(w, m)
+	return encode(w, m, b.chunkIndex)
 }
 
 // EncodeBundle serializes a multi-namespace compilation bundle.
@@ -239,7 +253,7 @@ func EncodeBundleOrderedCompressed(w io.Writer, consts *vm.Consts, nsChunks map[
 		m.Flags |= FlagCompressed
 		m.Version = FormatVersion
 	}
-	return Encode(w, m)
+	return encode(w, m, b.chunkIndex)
 }
 
 // ModuleBuilder collects strings, chunks, and consts for serialization.
@@ -426,7 +440,7 @@ type encoder struct {
 	strings  []string
 	strIndex map[string]int
 	chunks   []*ChunkData
-	// chunkMap maps live CodeChunk pointers to chunk indices (populated by EncodeModule path)
+	liveIdx  map[*vm.CodeChunk]int
 }
 
 func (e *encoder) writeHeader(m *Module, version uint16) error {
@@ -621,7 +635,9 @@ func (e *encoder) writeValue(v vm.Value) error {
 		if err := e.w.WriteByte(TagFunc); err != nil {
 			return err
 		}
-		// Find chunk index - search through e.chunks by matching the code
+		// Find the exact live chunk registered by ModuleBuilder. Raw Modules do
+		// not retain that pointer map, so findChunkIndex also has a structural
+		// fallback for the public Encode API.
 		chunkIdx := e.findChunkIndex(val.Chunk())
 		if err := e.w.WriteVarint(uint64(chunkIdx)); err != nil {
 			return err
@@ -743,9 +759,13 @@ func (e *encoder) writeValue(v vm.Value) error {
 }
 
 func (e *encoder) findChunkIndex(c *vm.CodeChunk) int {
+	if idx, ok := e.liveIdx[c]; ok {
+		return idx
+	}
+
 	code := c.Code()
 	for i, ch := range e.chunks {
-		if len(ch.Code) == len(code) {
+		if ch.MaxStack == c.MaxStack() && len(ch.Code) == len(code) {
 			match := true
 			for j := range code {
 				if ch.Code[j] != code[j] {
