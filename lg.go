@@ -366,7 +366,7 @@ func init() {
 	flag.StringVar(&bundleOutput, "b", "", "bundle .lg file into a standalone executable (specify output path)")
 	flag.BoolVar(&compressBundle, "z", false, "with -c/-b: DEFLATE-compress the bundle body (smaller .lgb / standalone binary; transparently inflated at load)")
 	flag.StringVar(&bundleBase, "bundle-base", "", "path to target-platform lg binary for cross-OS bundling (defaults to current executable)")
-	flag.BoolVar(&stripDebug, "strip", false, "split source maps and local-variable tables into a digest-bound .debug companion (with -c/-b)")
+	flag.BoolVar(&stripDebug, "strip", false, "split source maps and local-variable tables into a digest-bound .debug companion (with -c/-b/-w)")
 	flag.StringVar(&debugOutput, "debug-output", "", "path for the -strip debug companion (defaults to <output>.debug)")
 	flag.StringVar(&wasmOutput, "w", "", "build .lg file into a WASM web app (specify output directory)")
 	flag.StringVar(&wasmShell, "w-shell", "xterm", "shell for -w: 'xterm' (default), 'none' (emit core only; client supplies its own shell via window.LetGoHost), or a path to a custom HTML template containing __LG_HOST_JS_BODY_PLACEHOLDER__")
@@ -520,8 +520,8 @@ func runMain() int {
 		fmt.Fprintln(os.Stderr, "error: -z requires -c or -b")
 		return 2
 	}
-	if stripDebug && compileOutput == "" && bundleOutput == "" {
-		fmt.Fprintln(os.Stderr, "error: -strip requires -c or -b")
+	if stripDebug && compileOutput == "" && bundleOutput == "" && wasmOutput == "" {
+		fmt.Fprintln(os.Stderr, "error: -strip requires -c, -b or -w")
 		return 2
 	}
 	if debugOutput != "" && !stripDebug {

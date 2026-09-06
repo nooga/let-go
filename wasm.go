@@ -96,6 +96,23 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		}
 	}
 
+	// -strip splits source maps and local-variable tables out of the embedded
+	// program before it is baked into the wasm binary. The companion is written
+	// beside the bundle directory rather than inside it: everything in outDir is
+	// served, and a debug sidecar is build output, not something to ship to every
+	// visitor.
+	var debugData []byte
+	var debugPath string
+	if stripDebug {
+		stripped, companion, path, err := wasmassets.SplitProgramDebug(lgbBuf.Bytes(), outDir, debugOutput)
+		if err != nil {
+			return err
+		}
+		lgbBuf.Reset()
+		lgbBuf.Write(stripped)
+		debugData, debugPath = companion, path
+	}
+
 	// 2. Create temp build directory
 	tmpDir, err := os.MkdirTemp("", "lg-wasm-*")
 	if err != nil {
@@ -266,8 +283,19 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		return err
 	}
 
+	// The debug companion lands last, so a failed build leaves no sidecar
+	// claiming to describe a bundle that was never written.
+	if debugData != nil {
+		if err := os.WriteFile(debugPath, debugData, 0644); err != nil {
+			return fmt.Errorf("writing debug companion: %w", err)
+		}
+	}
+
 	fi, _ := os.Stat(outPath)
 	fmt.Printf("output: %s (%.1f MB)\n", outPath, float64(fi.Size())/(1024*1024))
+	if debugData != nil {
+		fmt.Printf("debug companion: %s (%d bytes)\n", debugPath, len(debugData))
+	}
 	return nil
 }
 
