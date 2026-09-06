@@ -191,6 +191,145 @@
 (defn- fresh-header? [ctx b]
   (contains? (:headers ctx) b))
 
+;; --- keyword-dispatch chain recognition --------------------------------
+;; A right-nested `(cond (= g :a) … (= g :b) … default)` over constant keywords
+;; otherwise lowers to an O(n) chain of equality tests. We recognise it HERE,
+;; and fold it to a [:switch] node the lower-go tree-walk turns into a Go switch.
+
+(defn- sz-const-kw [f nid]
+  ;; the keyword literal when nid is a :const keyword inst, else nil
+  (when (= :const (ir/op nid f))
+    (let [a (ir/aux nid f)]
+      (when (keyword? a) a))))
+
+(defn- sz-blockarg-loc [f nid]
+  ;; [block slot] when nid is a :block-arg (slot = its index in block-params)
+  (when (= :block-arg (ir/op nid f))
+    (loop [bs (ir/blocks f)]
+      (when (seq bs)
+        (let [b  (first bs)
+              ps (ir/block-params b f)
+              i  (loop [k 0]
+                   (cond (>= k (count ps)) nil
+                         (= (nth ps k) nid) k
+                         :else (recur (inc k))))]
+          (if i [b i] (recur (rest bs))))))))
+
+(defn- sz-term-targets [f term]
+  (let [op (ir/op term f) aux (ir/aux term f)]
+    (cond
+      (= op :branch)    [aux]
+      (= op :branch-if) [(ir/cond-target-true aux) (ir/cond-target-false aux)]
+      :else             [])))
+
+(defn- sz-param-incoming [f b i]
+  ;; nids feeding param slot i of block b across predecessor edges
+  (let [acc (atom [])]
+    (doseq [bp (ir/block-preds b f)]
+      (let [term (ir/block-term bp f)]
+        (when term
+          (doseq [bt (sz-term-targets f term)]
+            (when (= (ir/branch-target-target bt) b)
+              (let [args (ir/branch-target-args bt)]
+                (when (< i (count args)) (swap! acc conj (nth args i)))))))))
+    @acc))
+
+(defn- sz-canonical-disc [f nid]
+  ;; Follow single-predecessor :block-arg copies back to the root value, so a
+  ;; discriminant threaded through edges (`g = arg0`) unifies with its source.
+  (loop [d nid fuel (count (ir/blocks f))]
+    (if (<= fuel 0)
+      d
+      (let [loc (sz-blockarg-loc f d)]
+        (if loc
+          (let [inc (sz-param-incoming f (nth loc 0) (nth loc 1))]
+            (if (= 1 (count inc)) (recur (nth inc 0) (dec fuel)) d))
+          d)))))
+
+(defn- sz-eq-kw [f bid]
+  ;; [disc kw] when block bid ends in `branch-if (= X Y)` with exactly one of
+  ;; X/Y a const keyword; `disc` is the OTHER operand, canonicalised. Else nil.
+  (let [term (ir/block-term bid f)]
+    (when (and term (= :branch-if (ir/op term f)))
+      (let [tr (ir/refs term f)]
+        (when (= 1 (count tr))
+          (let [c (nth tr 0)]
+            (when (= :eq (ir/op c f))
+              (let [er (ir/refs c f)]
+                (when (= 2 (count er))
+                  (let [a (nth er 0) b (nth er 1)
+                        ak (sz-const-kw f a) bk (sz-const-kw f b)]
+                    (cond
+                      (and bk (not ak)) [(sz-canonical-disc f a) bk]
+                      (and ak (not bk)) [(sz-canonical-disc f b) ak]
+                      :else nil)))))))))))
+
+(defn- test-block-pure-eq-only? [f tb]
+  ;; Check that a test block contains ONLY const and :eq instructions, no side effects.
+  ;; A block is safe for absorption iff:
+  ;; 1. It has zero block params
+  ;; 2. All instructions are :const (loading literals)
+  ;; 3. The only non-const instruction is a single :eq comparison
+  ;; 4. The terminator is :branch-if referencing that :eq
+  ;; If any other instructions exist (function calls, side effects, etc.), reject.
+  (when (empty? (ir/block-params tb f))
+    (let [insts (ir/block-insts tb f)
+          term (ir/block-term tb f)
+          eq-insts (filter (fn [i] (= :eq (ir/op i f))) insts)
+          other-insts (filter (fn [i]
+                                (let [op (ir/op i f)]
+                                  (and (not= :eq op) (not= :const op))))
+                              insts)]
+      ;; Reject if there are non-const/eq instructions (side effects)
+      ;; or if there are zero or multiple :eq instructions
+      (and (empty? other-insts)
+           (= 1 (count eq-insts))
+           (= :branch-if (ir/op term f))))))
+
+(defn- kw-chain-zero-params-shape? [f chain]
+  ;; Maximally conservative gate: chain is absorbable ONLY IF every absorbed
+  ;; test block has ZERO block params and contains ONLY const+eq instructions.
+  ;; No other checks, no uses-analysis — when in doubt, reject (nested :if fallback is always sound).
+  (every? (fn [tb]
+            (test-block-pure-eq-only? f tb))
+          (:test-blocks chain)))
+
+(defn- collect-kw-chain [f b0]
+  ;; Walk the else-spine from test block b0. Returns
+  ;;   {:disc root :arms [[kw tt then-block] …]
+  ;;    :last-et et :default-block e :test-blocks [b1 b2 …]}
+  ;; when >= 3 arms share one canonical discriminant `root` with distinct const
+  ;; keywords; else nil. `:test-blocks` excludes b0 (the switch owner) and the
+  ;; default block — exactly the blocks absorbed (folded away) by the switch.
+  (when-let [t0 (sz-eq-kw f b0)]
+    (let [root (nth t0 0)]
+      (loop [b b0 arms [] seen #{} tests []]
+        (let [tk (sz-eq-kw f b)]
+          (if (and tk (= (nth tk 0) root) (not (contains? seen (nth tk 1))))
+            (let [kw   (nth tk 1)
+                  ct   (ir/aux (ir/block-term b f) f)
+                  tt   (ir/cond-target-true ct)
+                  et   (ir/cond-target-false ct)
+                  e    (ir/branch-target-target et)
+                  arms' (conj arms [kw tt (ir/branch-target-target tt)])
+                  seen' (conj seen kw)
+                  ek   (sz-eq-kw f e)
+                  preds (ir/block-preds e f)]
+              ;; Absorbing e is sound only when the current false edge owns it.
+              ;; A shared predecessor can enter e without executing the switch
+              ;; owner, so folding e away would drop that reachable control path.
+              (if (and ek (= (nth ek 0) root) (not (contains? seen' (nth ek 1)))
+                       (= 1 (count preds)) (= b (first preds)))
+                (recur e arms' seen' (conj tests e))
+                (when (>= (count arms') 3)
+                  {:disc root :arms arms' :last-et et
+                   :default-block e :test-blocks tests})))
+            (when (>= (count arms) 3)
+              (let [ct   (ir/aux (ir/block-term b f) f)
+                    et   (ir/cond-target-false ct)]
+                {:disc root :arms arms :last-et et
+                 :default-block (ir/branch-target-target et) :test-blocks tests}))))))))
+
 ;; --- the structuring walk --------------------------------------------
 
 (defn- edge->node [f ctx edge stop]
@@ -224,7 +363,22 @@
         [:seq b edge (edge->node f ctx edge stop)])
 
       (= op :branch-if)
-      (let [ct (ir/aux term f)
+      (let [chain (collect-kw-chain f b)
+            ;; Reject the fold if any absorbed test block participates in loop
+            ;; structure (header / continue / break) — those must keep their
+            ;; own control node.
+            chain (when (and chain
+                             (not-any? (fn [tb]
+                                         (or (fresh-header? ctx tb)
+                                             (continue-target? ctx tb)
+                                             (break-target? ctx tb)))
+                                       (:test-blocks chain)))
+                    chain)
+            ;; Reject if absorbed blocks have non-zero params or non-const+eq shape.
+            ;; Conservative gate: when in doubt, reject and fall back to nested :if.
+            chain (when (and chain (kw-chain-zero-params-shape? f chain))
+                    chain)
+            ct (ir/aux term f)
             tt (ir/cond-target-true ct)
             et (ir/cond-target-false ct)
             t  (ir/branch-target-target tt)
@@ -235,12 +389,44 @@
                              (not (continue-target? ctx jn))
                              (not (break-target? ctx jn)))
             arm-stop (if valid-join? jn stop)
-            then-node (edge->node f ctx tt arm-stop)
-            else-node (edge->node f ctx et arm-stop)
             cont (if (and valid-join? (not= jn stop))
                    (structure f ctx jn stop)
                    nil)]
-        [:if b tt et then-node else-node cont])
+        (if chain
+          ;; keyword-dispatch chain → one n-way [:switch] node
+          (let [arm-nodes (mapv (fn [arm]
+                                  [(nth arm 0) (nth arm 1)
+                                   (edge->node f ctx (nth arm 1) arm-stop)])
+                                (:arms chain))
+                default-node (edge->node f ctx (:last-et chain) arm-stop)]
+            ;; Collect instructions from root block b (also part of the switch)
+            (when-let [term (ir/block-term b f)]
+              (swap! (:absorbed-insts ctx) conj term)
+              ;; Add the eq instruction (first ref of branch-if at root)
+              (when (= :branch-if (ir/op term f))
+                (let [tr (ir/refs term f)]
+                  (when (= 1 (count tr))
+                    (swap! (:absorbed-insts ctx) conj (nth tr 0))))))
+            ;; Collect instructions from absorbed test blocks
+            (doseq [tb (:test-blocks chain)]
+              (swap! (:absorbed-blocks ctx) conj tb)
+              ;; Only mark const and :eq instructions as absorbed, not arbitrary instructions
+              (doseq [inst (ir/block-insts tb f)]
+                (let [op (ir/op inst f)]
+                  (when (or (= :const op) (= :eq op))
+                    (swap! (:absorbed-insts ctx) conj inst))))
+              (when-let [term (ir/block-term tb f)]
+                (swap! (:absorbed-insts ctx) conj term)
+                ;; Also add the eq instruction (first ref of branch-if)
+                (when (= :branch-if (ir/op term f))
+                  (let [tr (ir/refs term f)]
+                    (when (= 1 (count tr))
+                      (swap! (:absorbed-insts ctx) conj (nth tr 0)))))))
+            [:switch b (:disc chain) arm-nodes (:last-et chain) default-node cont])
+          ;; ordinary two-way branch
+          (let [then-node (edge->node f ctx tt arm-stop)
+                else-node (edge->node f ctx et arm-stop)]
+            [:if b tt et then-node else-node cont])))
 
       :else
       (do (swap! (:fallbacks ctx) inc) [:goto b]))))
@@ -268,12 +454,21 @@
 
 (defn structurize [f]
   "Build the structured control tree for IR function `f`. Returns
-   {:tree <node> :fallbacks <int>} where :fallbacks is the number of
-   regions that could not be structured (emitted as :goto)."
+   {:tree <node> :fallbacks <int> :absorbed-blocks <set>} where :fallbacks is
+   the number of regions that could not be structured (emitted as :goto), and
+   :absorbed-blocks is the set of block IDs absorbed into :switch nodes.
+   Callers should compute liveness with the absorbed-blocks to hide absorbed blocks
+   from reachability analysis."
   (let [fallbacks (atom 0)
+        absorbed-blocks (atom #{})
+        absorbed-insts (atom #{})
         ctx {:ipdom    (post-idoms f)
              :headers  (header->latches f)
              :loops    []
-             :fallbacks fallbacks}
-        tree (structure f ctx (ir/fn-entry f) :none)]
-    {:tree tree :fallbacks (deref fallbacks)}))
+             :fallbacks fallbacks
+             :absorbed-blocks absorbed-blocks
+             :absorbed-insts absorbed-insts}
+        tree (structure f ctx (ir/fn-entry f) :none)
+        absorbed (deref absorbed-blocks)
+        absorbed-insts-set (deref absorbed-insts)]
+    {:tree tree :fallbacks (deref fallbacks) :absorbed-blocks absorbed :absorbed-insts absorbed-insts-set}))

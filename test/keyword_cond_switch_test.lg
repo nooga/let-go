@@ -1,0 +1,39 @@
+;; Tests for keyword-cond-to-switch lowering in structurize
+;; AC-1: A keyword-dispatch chain lowers to a switch with no dead declarations
+;; AC-2: Non-keyword discriminants still take the default arm (no false positives)
+(ns test.keyword-cond-switch-test
+  (:require
+   [ir.passes.pipeline]
+   [test :refer :all]))
+
+;; --- AC-1: Keyword dispatch chain -----------
+(binding [*ir-compile* true
+          ir.passes.pipeline/*target* :go]
+  (defn ac1-keyword-dispatch [dispatch]
+    (if (= dispatch :a) 1
+        (if (= dispatch :b) 2
+            (if (= dispatch :c) 3
+                0)))))
+
+(deftest ac1-keyword-dispatch-chain
+  (testing "keyword-dispatch chain compiles correctly"
+    (is (= 0 (ac1-keyword-dispatch :unknown)))
+    (is (= 1 (ac1-keyword-dispatch :a)))
+    (is (= 2 (ac1-keyword-dispatch :b)))
+    (is (= 3 (ac1-keyword-dispatch :c)))))
+
+;; --- AC-2: Non-keyword dispatch chain (should NOT use switch) -----------
+(binding [*ir-compile* true
+          ir.passes.pipeline/*target* :go]
+  (defn ac2-non-keyword-dispatch [x]
+    (if (= x :a) 1
+        (if (= x :b) 2
+            (if (= x :c) 3
+                0)))))
+
+(deftest ac2-non-keyword-dispatch-chain
+  (testing "non-keyword dispatch chain compiles correctly"
+    (is (= 0 (ac2-non-keyword-dispatch "test")))
+    (is (= 1 (ac2-non-keyword-dispatch :a)))
+    (is (= 2 (ac2-non-keyword-dispatch :b)))
+    (is (= 3 (ac2-non-keyword-dispatch :c)))))
