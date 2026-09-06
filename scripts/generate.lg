@@ -101,7 +101,7 @@
 ;; `make generate` whose tee captured only stdout used to show `command failed
 ;; (exit 1)` with the child's real error nowhere in the log. Merged here so it
 ;; can never hide again, while keeping live (streamed, not buffered) output.
-(defn run! [& cmd]
+(defn run-command! [& cmd]
   (let [line (apply str (interpose " " cmd))]
     (println ">>" line)
     (let [code (binding [*err* *out*] (apply os/exec* cmd))]
@@ -168,13 +168,13 @@
 ;; the runtime-coupled cmd/lginterop here would make this step depend on the
 ;; very artifact it produces.
 (if (stale? "pkg/rt/zz_primitives_generated.go")
-  (run! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt" "-go-pkg" "github.com/nooga/let-go/pkg/rt" "-primitives-out" "pkg/rt/zz_primitives_generated.go")
+  (run-command! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt" "-go-pkg" "github.com/nooga/let-go/pkg/rt" "-primitives-out" "pkg/rt/zz_primitives_generated.go")
   (println "generate.lg: registrars fresh — skipped"))
 
 ;; Separate corefns registrar generation stage. The corefns namespace has its
 ;; own //lg:native-annotated functions that are scanned and generated independently.
 (if (stale? "pkg/rt/corefns/zz_primitives_generated.go")
-  (run! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt/corefns" "-go-pkg" "github.com/nooga/let-go/pkg/rt/corefns" "-primitives-out" "pkg/rt/corefns/zz_primitives_generated.go")
+  (run-command! go-bin "run" "./cmd/lgprimgen" "-primitives" "pkg/rt/corefns" "-go-pkg" "github.com/nooga/let-go/pkg/rt/corefns" "-primitives-out" "pkg/rt/corefns/zz_primitives_generated.go")
   (println "generate.lg: corefns registrar fresh — skipped"))
 
 ;; Registrar outputs are themselves lgbgen build inputs. Requery after those
@@ -187,12 +187,12 @@
 ;; here, plus `make lowered`/`make check-generated` which call lgbgen directly —
 ;; gets the clean.
 (if (stale? "pkg/rt/core_compiled.lgb" "pkg/rt/core_go_lowered/")
-  (run! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both")
+  (run-command! go-bin "run" "-tags" "bootstrap" "./cmd/lgbgen" "--target=both")
   (println "generate.lg: bundle + lowered tree fresh — skipped"))
 
 ;; Refresh the dependency manifest so the recorded input hashes match the
 ;; sources just consumed. generated.sums (the CI roll-up) hashes this file.
-(run! go-bin "run" "./cmd/check-generated" "-go" go-bin "-write-manifest")
+(run-command! go-bin "run" "./cmd/check-generated" "-go" go-bin "-write-manifest")
 
 ;; AC-1 zero-lag gate: The coherence check (assert-form-head-coherence!) is invoked
 ;; at load time within build.lg during lgbgen's bootstrap phase. This happens on EVERY
@@ -203,7 +203,7 @@
 ;; Immediately after writing the manifest, refresh the canonical digest so
 ;; generated.sums records the new manifest hash. This ensures
 ;; TestGeneratedArtifactsAreFresh stays green after any source edit.
-(run! go-bin "run" "./cmd/check-generated" "-go" go-bin "-write")
+(run-command! go-bin "run" "./cmd/check-generated" "-go" go-bin "-write")
 
 (spit PROVENANCE
       (pr-str {:lg-version  cur-version

@@ -219,6 +219,13 @@ test: pkg/**/* pkg/rt/core_compiled.lgb $(GO)
 	@scripts/test-gogen-diff-short.sh
 	$(GO-TEST-ENV) go test $(GO-TEST-FLAGS) -short -count=1 -v ./test/...
 
+# Manual entrypoint for the stderr-sensitive shell harness. The Go wrapper in
+# test/namespace_shadow_warning_harness_test.go runs it under direct `go test`
+# so CI covers it without executing the harness twice from `make test`.
+.PHONY: shadow-warning-test
+shadow-warning-test: $(LG)
+	@LG=$(LG) bash test/namespace_shadow_warning_test/run.sh
+
 clojure-compat-report: $(GO)
 	@$(REPORT-SCRIPT)
 
