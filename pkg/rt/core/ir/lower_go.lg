@@ -28,6 +28,9 @@
    :bit-shift-left "<<"
    :bit-shift-right ">>"
    :unsigned-bit-shift-right ">>"
+   :unchecked-add "+"
+   :unchecked-sub "-"
+   :unchecked-mul "*"
    :quot "/"
    :div  "/"
    :lt   "<"
@@ -969,6 +972,14 @@
             bitwise-rt?  (and bitwise-op?
                               (or (not (= "int" s0))
                                   (not (= "int" s1))))
+            ;; unchecked-* are Int-only: native Go + - * for int/int (Go int
+            ;; arithmetic already wraps, which IS the unchecked contract);
+            ;; anything else goes through rt.Unchecked<Op>Value, which
+            ;; type-checks and wraps exactly like the core fn.
+            unchecked-op? (contains? #{:unchecked-add :unchecked-sub :unchecked-mul} op)
+            unchecked-rt? (and unchecked-op?
+                               (or (not (= "int" s0))
+                                   (not (= "int" s1))))
             ;; Cross-type `=`: two concrete but DIFFERENT numeric types (int vs
             ;; float64) must route to rt.EqValue, not native ==. Clojure `=` is
             ;; category-sensitive across the numeric tower — (= 1 1.0) is false —
@@ -982,8 +993,14 @@
             ;; bytecode VM's OP_<X>: vm.Int fast path then vm.Num<X> fallback for
             ;; ordering; always-delegate to vm.Num<X> for arithmetic (keeps
             ;; overflow / BigInt / Ratio promotion semantics in one place).
-            vm-helper    (when (or any-vm? quot-rt? div-rt? bitwise-rt? eq-cross-type?)
+            vm-helper    (when (or any-vm? quot-rt? div-rt? bitwise-rt? unchecked-rt? eq-cross-type?)
                            (cond
+                             ;; Before the op-str arms: unchecked ops share
+                             ;; "+" "-" "*" with add/sub/mul but must NOT
+                             ;; route to the promoting AddValue/SubValue/MulValue.
+                             (= op :unchecked-add) "UncheckedAddValue"
+                             (= op :unchecked-sub) "UncheckedSubValue"
+                             (= op :unchecked-mul) "UncheckedMulValue"
                              (= op-str "<")  "LtValue"
                              (= op-str "<=") "LeValue"
                              (= op-str ">")  "GtValue"

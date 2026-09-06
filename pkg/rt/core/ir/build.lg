@@ -493,6 +493,9 @@
    'unsigned-bit-shift-right :unsigned-bit-shift-right
    'quot :quot
    '/    :div
+   'unchecked-add      :unchecked-add
+   'unchecked-subtract :unchecked-sub
+   'unchecked-multiply :unchecked-mul
    '<    :lt
    '<=   :lte
    '>    :gt
@@ -504,6 +507,11 @@
 
 ;; Ops whose arity-1 form is the canonical shape (no n-ary folding).
 (def unary-only-ops #{:inc :dec :bit-not})
+
+;; Ops that exist ONLY at arity 2. The core fns behind them reject any other
+;; arity, so a non-binary call falls back to a generic call and gets the
+;; runtime's arity error instead of a synthetic identity or fold.
+(def binary-only-ops #{:unchecked-add :unchecked-sub :unchecked-mul})
 
 (defn- intrinsic-builtin-op [head ctx]
   "Return the builtin op keyword only when HEAD is an unqualified symbol,
@@ -624,6 +632,10 @@
   ;; Unary-only ops (:inc, :dec) take exactly one ref.
   (let [args (build-args (rest form) ctx)]
     (cond
+      (contains? binary-only-ops op-kw)
+      (if (= 2 (count args))
+        (ir/add-inst (ctx-fn ctx) (ctx-block ctx) op-kw [(nth args 0) (nth args 1)] nil)
+        (build-call form ctx))
       (contains? unary-only-ops op-kw)
       (if (= 1 (count args))
         (ir/add-inst (ctx-fn ctx) (ctx-block ctx) op-kw [(nth args 0)] nil)
