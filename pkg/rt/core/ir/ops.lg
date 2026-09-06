@@ -94,6 +94,11 @@
     (every? #(or (= % :int) (= % [:const :int 0])) types) :int
     :else :unknown))
 
+;; unchecked-add/subtract/multiply are Int-only in let-go (the core fns reject
+;; anything else), so they type exactly like the bitwise ops: int/int -> :int,
+;; and no numeric contagion — there is no float or BigInt result to promote to.
+(defn- unchecked-op-type [types] (bitwise-op-type types))
+
 ;; --- per-layer lower-facet implementations ------------------------------
 ;;
 ;; Some lower facets need ir.lower-go internals (gogen emission helpers,
@@ -193,6 +198,11 @@
   (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :bitwise))
   (op-infer [this inst f state] (bitwise-op-type (ref-types inst f state))))
 
+(deftype UncheckedOp []
+  IROp
+  (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :unchecked))
+  (op-infer [this inst f state] (unchecked-op-type (ref-types inst f state))))
+
 (deftype QuotOp []
   IROp
   (op-lower-stmts [this f closed-exprs nid] (no-lower-facet :quot))
@@ -245,6 +255,9 @@
    :bit-shift-right          (->BitwiseOp)
    :unsigned-bit-shift-right (->BitwiseOp)
    :bit-not     (->BitwiseOp)
+   :unchecked-add (->UncheckedOp)
+   :unchecked-sub (->UncheckedOp)
+   :unchecked-mul (->UncheckedOp)
    :quot        (->QuotOp)
    :div         (->DivOp)
    :try         (->TryOp)})
@@ -287,6 +300,9 @@
     (= op :bit-shift-right)          (op-infer (->BitwiseOp) inst f state)
     (= op :unsigned-bit-shift-right) (op-infer (->BitwiseOp) inst f state)
     (= op :bit-not)     (op-infer (->BitwiseOp) inst f state)
+    (= op :unchecked-add) (op-infer (->UncheckedOp) inst f state)
+    (= op :unchecked-sub) (op-infer (->UncheckedOp) inst f state)
+    (= op :unchecked-mul) (op-infer (->UncheckedOp) inst f state)
     (= op :quot)        (op-infer (->QuotOp) inst f state)
     (= op :div)         (op-infer (->DivOp) inst f state)
     :else (throw (str "ir.ops/infer-op: op " op " has the infer? facet in "

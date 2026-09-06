@@ -48,6 +48,9 @@ const (
 	OpUnsignedBitShiftRight // clojure.core/unsigned-bit-shift-right — integer logical right shift
 	OpQuot                  // clojure.core/quot — integer quotient truncated toward zero. int/int lowers to native Go `/` (which truncates identically); any float/ratio/boxed operand lowers via rt.QuotValue (native float `/` does NOT truncate)
 	OpDiv                   // clojure.core// — true division. float/float lowers to native Go `/`; any other operand mix (int/int -> Ratio, mixed -> Float) lowers via rt.DivValue. Distinguished from Quot by op-kw in lower-go (both render Go `/`)
+	OpUncheckedAdd          // clojure.core/unchecked-add — Int+Int wrapping at the platform width; native Go + for int/int, rt.UncheckedAddValue otherwise
+	OpUncheckedSub          // clojure.core/unchecked-subtract — Int-Int wrapping at the platform width; native Go - for int/int, rt.UncheckedSubValue otherwise
+	OpUncheckedMul          // clojure.core/unchecked-multiply — Int*Int wrapping at the platform width; native Go * for int/int, rt.UncheckedMulValue otherwise
 	OpLt
 	OpLte
 	OpGt
@@ -102,6 +105,9 @@ var opTable = [...]opInfo{
 	OpUnsignedBitShiftRight: {"UnsignedBitShiftRight", 2, 1, true, false, true, true, false},
 	OpQuot:                  {"Quot", 2, 1, true, false, true, true, false},
 	OpDiv:                   {"Div", 2, 1, true, false, true, true, false},
+	OpUncheckedAdd:          {"UncheckedAdd", 2, 1, true, false, true, true, false},
+	OpUncheckedSub:          {"UncheckedSub", 2, 1, true, false, true, true, false},
+	OpUncheckedMul:          {"UncheckedMul", 2, 1, true, false, true, true, false},
 	OpLt:                    {"Lt", 2, 1, true, false, true, true, false},
 	OpLte:                   {"Lte", 2, 1, true, false, true, true, false},
 	OpGt:                    {"Gt", 2, 1, true, false, true, true, false},
@@ -227,6 +233,12 @@ func irOpToBytecode(op Op) int32 {
 		return vm.OP_QUOT
 	case OpDiv:
 		return vm.OP_DIV
+	case OpUncheckedAdd:
+		return vm.OP_UNCHECKED_ADD
+	case OpUncheckedSub:
+		return vm.OP_UNCHECKED_SUB
+	case OpUncheckedMul:
+		return vm.OP_UNCHECKED_MUL
 	case OpLt:
 		return vm.OP_LT
 	case OpLte:
@@ -300,6 +312,12 @@ func bytecodeToIROp(op int32) Op {
 		return OpQuot
 	case vm.OP_DIV:
 		return OpDiv
+	case vm.OP_UNCHECKED_ADD:
+		return OpUncheckedAdd
+	case vm.OP_UNCHECKED_SUB:
+		return OpUncheckedSub
+	case vm.OP_UNCHECKED_MUL:
+		return OpUncheckedMul
 	case vm.OP_LT:
 		return OpLt
 	case vm.OP_LTE:
@@ -333,7 +351,7 @@ func bytecodeToIROp(op int32) Op {
 	}
 }
 
-var opKeywordNames = []string{"invalid", "const", "load-arg", "load-var", "load-closed", "block-arg", "set-var", "call", "tail-call", "add", "sub", "mul", "bit-and", "bit-or", "bit-xor", "bit-and-not", "bit-shift-left", "bit-shift-right", "unsigned-bit-shift-right", "quot", "div", "lt", "lte", "gt", "gte", "eq", "inc", "dec", "bit-not", "pop", "return", "branch", "branch-if", "make-closure", "push-closed", "try", "dot", "def", "recur-fn"}
+var opKeywordNames = []string{"invalid", "const", "load-arg", "load-var", "load-closed", "block-arg", "set-var", "call", "tail-call", "add", "sub", "mul", "bit-and", "bit-or", "bit-xor", "bit-and-not", "bit-shift-left", "bit-shift-right", "unsigned-bit-shift-right", "quot", "div", "unchecked-add", "unchecked-sub", "unchecked-mul", "lt", "lte", "gt", "gte", "eq", "inc", "dec", "bit-not", "pop", "return", "branch", "branch-if", "make-closure", "push-closed", "try", "dot", "def", "recur-fn"}
 
 // OpKeywords returns every catalogued op as its kebab-case keyword name, in Op order.
 func OpKeywords() []string { return opKeywordNames }
@@ -382,6 +400,12 @@ func opByKeywordExact(name string) (Op, bool) {
 		return OpQuot, true
 	case "div":
 		return OpDiv, true
+	case "unchecked-add":
+		return OpUncheckedAdd, true
+	case "unchecked-sub":
+		return OpUncheckedSub, true
+	case "unchecked-mul":
+		return OpUncheckedMul, true
 	case "lt":
 		return OpLt, true
 	case "lte":

@@ -66,8 +66,11 @@ const (
 	OP_INC // inc (1 arg)
 	OP_DEC // dec (1 arg)
 	OP_BIT_NOT
-	OP_QUOT // quot — integer quotient, truncated toward zero (2 args)
-	OP_DIV  // / — true division; int/int yields a Ratio (or Int when exact), any float yields Float (2 args)
+	OP_QUOT          // quot — integer quotient, truncated toward zero (2 args)
+	OP_DIV           // / — true division; int/int yields a Ratio (or Int when exact), any float yields Float (2 args)
+	OP_UNCHECKED_ADD // unchecked-add — Int + Int wrapping at the platform width, never promoted (2 args)
+	OP_UNCHECKED_SUB // unchecked-subtract — Int - Int wrapping at the platform width, never promoted (2 args)
+	OP_UNCHECKED_MUL // unchecked-multiply — Int * Int wrapping at the platform width, never promoted (2 args)
 
 	OP_FINALLY_END // end of a finally block (finallyOffset int32, negative): rethrow the pending error after an abnormal entry
 
@@ -122,6 +125,9 @@ var opcodeNames = []string{
 	"BIT_NOT",
 	"QUOT",
 	"DIV",
+	"UNCHECKED_ADD",
+	"UNCHECKED_SUB",
+	"UNCHECKED_MUL",
 	"FINALLY_END",
 }
 
@@ -927,6 +933,24 @@ func errBitOpType(name string) error {
 	return fmt.Errorf("%s expected Int", name)
 }
 
+// errUncheckedOpType matches the wording of the unchecked-* core fns in
+// pkg/rt/lang.go, so a program sees the same error whether the call went
+// through the fast opcode or the var.
+func uncheckedOpName(op int32) string {
+	switch op {
+	case OP_UNCHECKED_ADD:
+		return "unchecked-add"
+	case OP_UNCHECKED_SUB:
+		return "unchecked-subtract"
+	default:
+		return "unchecked-multiply"
+	}
+}
+
+func errUncheckedOpType(name string, v Value) error {
+	return fmt.Errorf("%s expected integer, got %s", name, v.Type().Name())
+}
+
 // debugTraceInst prints the per-instruction trace when frame tracing is on.
 // Kept out of line so the fmt varargs boxing does not sit at the top of the
 // dispatch loop's hottest block.
@@ -1700,6 +1724,41 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				return NIL, err
 			}
 			f.stack[f.sp-2] = r
+			f.sp--
+			f.ip++
+
+		case OP_UNCHECKED_ADD, OP_UNCHECKED_SUB, OP_UNCHECKED_MUL:
+			// Wrapping integer arithmetic (clojure.core/unchecked-*). Same
+			// int64 round-trip as CoreUncheckedAdd/Subtract/Multiply in
+			// pkg/rt/lang.go, so the opcode and the var never diverge.
+			b := f.stack[f.sp-1]
+			a := f.stack[f.sp-2]
+			op := inst & 0xff
+			name := uncheckedOpName(op)
+			ai, ok := a.(Int)
+			if !ok {
+				if f.handleError(errUncheckedOpType(name, a)) {
+					continue
+				}
+				return NIL, errUncheckedOpType(name, a)
+			}
+			bi, ok := b.(Int)
+			if !ok {
+				if f.handleError(errUncheckedOpType(name, b)) {
+					continue
+				}
+				return NIL, errUncheckedOpType(name, b)
+			}
+			var r int64
+			switch op {
+			case OP_UNCHECKED_ADD:
+				r = int64(ai) + int64(bi)
+			case OP_UNCHECKED_SUB:
+				r = int64(ai) - int64(bi)
+			default:
+				r = int64(ai) * int64(bi)
+			}
+			f.stack[f.sp-2] = MakeInt(int(r))
 			f.sp--
 			f.ip++
 

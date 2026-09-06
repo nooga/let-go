@@ -780,6 +780,12 @@ func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
 			return vm.OP_BIT_SHIFT_RIGHT
 		case "unsigned-bit-shift-right":
 			return vm.OP_UNSIGNED_BIT_SHIFT_RIGHT
+		case "unchecked-add":
+			return vm.OP_UNCHECKED_ADD
+		case "unchecked-subtract":
+			return vm.OP_UNCHECKED_SUB
+		case "unchecked-multiply":
+			return vm.OP_UNCHECKED_MUL
 		case "<":
 			return vm.OP_LT
 		case "<=":
