@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package wasm
 
 import (
 	"bytes"
@@ -19,8 +19,8 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// programLGB compiles a small program to an LGB carrying debug sections, so the
-// tests below exercise a real bundle rather than a hand-built fixture.
+// programLGB compiles a small program so the tests run against a real bundle
+// carrying debug sections rather than a hand-built fixture.
 func programLGB(t *testing.T) []byte {
 	t.Helper()
 	ctx := compiler.NewCompiler(vm.NewConsts(), rt.NS("user"))
@@ -40,15 +40,11 @@ func programLGB(t *testing.T) []byte {
 
 // The companion must land beside the bundle directory, never inside it: every
 // file in the output directory is served.
-func TestSplitWasmProgramDebugWritesCompanionOutsideBundle(t *testing.T) {
-	defer func(p string) { debugOutput = p }(debugOutput)
-	debugOutput = ""
-
-	dir := t.TempDir()
-	outDir := filepath.Join(dir, "dist")
+func TestSplitProgramDebugWritesCompanionOutsideBundle(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "dist")
 	lgb := programLGB(t)
 
-	stripped, companion, path, err := splitWasmProgramDebug(lgb, outDir)
+	stripped, companion, path, err := SplitProgramDebug(lgb, outDir, "")
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}
@@ -61,11 +57,9 @@ func TestSplitWasmProgramDebugWritesCompanionOutsideBundle(t *testing.T) {
 	if !bytecode.HasSplitDebug(stripped) {
 		t.Error("stripped bundle is not marked as split-debug")
 	}
-	if got, want := path, outDir+bytecode.DebugCompanionSuffix; got != want {
-		t.Errorf("companion path = %q, want %q", got, want)
+	if want := outDir + bytecode.DebugCompanionSuffix; path != want {
+		t.Errorf("companion path = %q, want %q", path, want)
 	}
-	// The load-bearing property: resolving the path must not put the sidecar
-	// under the directory the server exposes.
 	if rel, err := filepath.Rel(outDir, path); err == nil && !strings.HasPrefix(rel, "..") {
 		t.Errorf("companion %q is inside the served bundle directory %q", path, outDir)
 	}
@@ -73,43 +67,42 @@ func TestSplitWasmProgramDebugWritesCompanionOutsideBundle(t *testing.T) {
 
 // A trailing separator must not degrade the companion into a dotfile inside the
 // bundle — `-w dist/` is an ordinary way to spell the same directory.
-func TestSplitWasmProgramDebugTrailingSeparator(t *testing.T) {
-	defer func(p string) { debugOutput = p }(debugOutput)
-	debugOutput = ""
-
-	dir := t.TempDir()
-	outDir := filepath.Join(dir, "dist")
-	_, _, path, err := splitWasmProgramDebug(programLGB(t), outDir+string(os.PathSeparator))
+func TestSplitProgramDebugTrailingSeparator(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "dist")
+	_, _, path, err := SplitProgramDebug(programLGB(t), outDir+string(os.PathSeparator), "")
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}
-	if got, want := path, outDir+bytecode.DebugCompanionSuffix; got != want {
-		t.Errorf("companion path = %q, want %q", got, want)
+	if want := outDir + bytecode.DebugCompanionSuffix; path != want {
+		t.Errorf("companion path = %q, want %q", path, want)
 	}
 }
 
-// -debug-output picks the destination explicitly.
-func TestSplitWasmProgramDebugHonorsDebugOutput(t *testing.T) {
-	defer func(p string) { debugOutput = p }(debugOutput)
+func TestSplitProgramDebugHonorsOverride(t *testing.T) {
 	dir := t.TempDir()
-	debugOutput = filepath.Join(dir, "symbols", "app.debug")
-
-	_, _, path, err := splitWasmProgramDebug(programLGB(t), filepath.Join(dir, "dist"))
+	override := filepath.Join(dir, "symbols", "app.debug")
+	_, _, path, err := SplitProgramDebug(programLGB(t), filepath.Join(dir, "dist"), override)
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}
-	if path != debugOutput {
-		t.Errorf("companion path = %q, want %q", path, debugOutput)
+	if path != override {
+		t.Errorf("companion path = %q, want %q", path, override)
+	}
+}
+
+// An override equal to the bundle directory would have the build overwrite its
+// own output directory with a companion file.
+func TestSplitProgramDebugRejectsOverrideEqualToBundle(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "dist")
+	if _, _, _, err := SplitProgramDebug(programLGB(t), outDir, outDir); err == nil {
+		t.Error("expected an error when the override equals the bundle directory")
 	}
 }
 
 // The split must round-trip: the companion has to reattach to the artifact it
 // was cut from, or a stripped deployment cannot be symbolicated at all.
-func TestSplitWasmProgramDebugRoundTrips(t *testing.T) {
-	defer func(p string) { debugOutput = p }(debugOutput)
-	debugOutput = ""
-
-	stripped, companion, _, err := splitWasmProgramDebug(programLGB(t), filepath.Join(t.TempDir(), "dist"))
+func TestSplitProgramDebugRoundTrips(t *testing.T) {
+	stripped, companion, _, err := SplitProgramDebug(programLGB(t), filepath.Join(t.TempDir(), "dist"), "")
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}

@@ -104,7 +104,7 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 	var debugData []byte
 	var debugPath string
 	if stripDebug {
-		stripped, companion, path, err := splitWasmProgramDebug(lgbBuf.Bytes(), outDir)
+		stripped, companion, path, err := wasmassets.SplitProgramDebug(lgbBuf.Bytes(), outDir, debugOutput)
 		if err != nil {
 			return err
 		}
@@ -297,29 +297,6 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		fmt.Printf("debug companion: %s (%d bytes)\n", debugPath, len(debugData))
 	}
 	return nil
-}
-
-// splitWasmProgramDebug strips the program bundle's debug sections and returns
-// the companion together with the path to write it to. The path is derived from
-// the bundle directory rather than a file inside it: every file in outDir is
-// served, and a debug sidecar is build output rather than something to hand to
-// each visitor. A trailing separator on outDir would otherwise produce a
-// companion named ".debug" inside the directory, which is exactly the case this
-// guards.
-func splitWasmProgramDebug(lgb []byte, outDir string) (stripped, companion []byte, path string, err error) {
-	stripped, companion, err = bytecode.SplitDebug(lgb)
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("splitting debug sections: %w", err)
-	}
-	base := strings.TrimRight(outDir, string(os.PathSeparator))
-	if base == "" {
-		return nil, nil, "", fmt.Errorf("cannot derive a debug companion path from output directory %q", outDir)
-	}
-	path, err = debugCompanionPath(base)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	return stripped, companion, path, nil
 }
 
 func prepareWasmBuildDirs(tmpDir string) error {
