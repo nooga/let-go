@@ -49,6 +49,15 @@
    :unsigned-bit-shift-right (fn [a b]
                                (when (and (integer? a) (integer? b))
                                  (unsigned-bit-shift-right a b)))
+   :unchecked-add (fn [a b]
+                    (when (and (integer? a) (integer? b))
+                      (unchecked-add a b)))
+   :unchecked-sub (fn [a b]
+                    (when (and (integer? a) (integer? b))
+                      (unchecked-subtract a b)))
+   :unchecked-mul (fn [a b]
+                    (when (and (integer? a) (integer? b))
+                      (unchecked-multiply a b)))
    :quot (fn [a b]
            (when (and (integer? a) (integer? b))
              (quot a b)))
@@ -70,7 +79,7 @@
 
 (def ^:private commutative
   "Ops whose operand order doesn't affect the result — Const canonicalises right."
-  #{:add :mul :eq :bit-and :bit-or :bit-xor})
+  #{:add :mul :eq :bit-and :bit-or :bit-xor :unchecked-add :unchecked-mul})
 
 ;; --- helpers ----------------------------------------------------------
 
