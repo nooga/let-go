@@ -223,6 +223,16 @@
         (vm-call "NewList"
                  [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
 
+(defn- boxed-set-expr [xs]
+  ;; vm.NewSet folds an empty slice to EmptyPersistentSet itself, but the
+  ;; shared value emits smaller and matches boxed-list-expr's empty arm.
+  (if (zero? (count xs))
+    (vm-sel "EmptyPersistentSet")
+    (let [elems (mapv boxed-value-expr (seq xs))]
+      (when (every? identity elems)
+        (vm-call "NewSet"
+                 [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
+
 (defn- boxed-map-expr [m]
   (if (zero? (count m))
     (vm-sel "EmptyPersistentMap")
@@ -239,6 +249,26 @@
       (when elems
         (vm-call "NewPersistentMap"
                  [(gogen/composite-lit (gogen/type "[]vm.Value") elems)])))))
+
+;; A data-read collection constant (vector/map/set) can carry reader metadata
+;; (issue #801) — evaluating it must yield a value carrying that metadata,
+;; the same contract the bytecode compiler's compileForm now honours (a
+;; `with-meta` call wrapping the constructed collection). vm.ArrayVector,
+;; vm.PersistentMap and vm.PersistentSet all implement vm.IMeta (Meta/
+;; WithMeta) unconditionally — a value with no metadata just returns itself —
+;; so the wrap is safe to apply whenever `(meta v)` is non-nil, regardless of
+;; which of the three collection kinds `built` is. The meta value itself must
+;; also be boxable; if it isn't, this — like every other boxed-*-expr — falls
+;; back to nil (whole-function bridge fallback) rather than silently dropping
+;; the metadata.
+(defn- boxed-with-meta [v built]
+  (if (or (nil? built) (nil? (meta v)))
+    built
+    (let [mexpr (boxed-value-expr (meta v))]
+      (when mexpr
+        (gogen/call
+          (gogen/field-sel (gogen/type-assert built (gogen/type "vm.IMeta")) "WithMeta")
+          [mexpr])))))
 
 (declare value-expr)
 
@@ -326,8 +356,11 @@
     (instance? java.util.regex.Pattern v)
     (vm-call "MustRegexFromReadable" [(gogen/string-lit (str v))])
     (list? v)       (boxed-list-expr v)
-    (vector? v)     (boxed-vector-expr v)
-    (map? v)        (boxed-map-expr v)
+    (vector? v)     (boxed-with-meta v (boxed-vector-expr v))
+    (map? v)        (boxed-with-meta v (boxed-map-expr v))
+    ;; Reachable since read-string reads data: `(quote #{1 2})` is a set
+    ;; CONSTANT, where a code-read source only ever produced (hash-set 1 2).
+    (set? v)        (boxed-with-meta v (boxed-set-expr v))
     :else nil))
 
 (declare go-name)

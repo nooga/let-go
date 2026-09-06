@@ -1,0 +1,126 @@
+;; read-string returns data, and data must still compile: Clojure's read/eval
+;; round trip. A vector that carries metadata (the arity `^long [^long n]`)
+;; reads as a persistent vector rather than the plain vector the code reader
+;; produces, and the fn compiler used to reject that container with
+;; "unexpected fn form". The hinted parameter itself reads as the form
+;; (with-meta n {:tag (quote long)}), because a let-go symbol cannot carry
+;; metadata; the compiler already unwraps that.
+(ns test.read-string-eval-test
+  (:require
+   [clojure.string :as str]
+   [test :refer :all]))
+
+(deftest read-string-output-compiles
+  (testing "a hinted single-arity fn read as data evaluates"
+    (let [f (eval (read-string "(fn hinted ^long [^long n] n)"))]
+      (is (= 7 (f 7)))))
+  (testing "a hinted multi-arity fn read as data evaluates"
+    (let [f (eval (read-string "(fn ^long ([^long n] n) ([^long a ^long b] (+ a b)))"))]
+      (is (= 7 (f 7)))
+      (is (= 5 (f 2 3)))))
+  (testing "the arity vector really did read as data carrying metadata"
+    (let [arity (nth (read-string "(fn hinted ^long [^long n] n)") 2)]
+      (is (vector? arity))
+      (is (= 'long (:tag (meta arity)))))))
+
+;; A metadata-bearing vector read by the DATA reader (`^:flag [1 2]`) comes
+;; back as a vm.PersistentVector — a different concrete type than the plain
+;; vm.ArrayVector the code reader produces for `[1 2]`. `(eval ...)` on that
+;; value used to pass it to compileForm's aggregate-literal switch, which
+;; dispatched on Type() and had no arm for PersistentVectorType, so nothing
+;; was emitted and the VM's stack underflowed: "runtime error: index out of
+;; range [-1]". Reproduced pre-fix via `(eval (read-data-string "^:flag [1 2]"))`
+;; on the unchanged compiler, per review of #819.
+(deftest data-read-vector-with-metadata-evaluates
+  (testing "a plain data-read vector still evaluates (no regression)"
+    (is (= [1 2] (eval (read-string "[1 2]")))))
+  (testing "a metadata-bearing vector evaluates to the plain vector value"
+    (is (= [1 2] (eval (read-string "^:flag [1 2]")))))
+  (testing "its elements are compiled, not assumed constant"
+    (is (= [2 2] (eval (read-string "^:flag [(+ 1 1) 2]")))))
+  (testing "a nested metadata-bearing vector"
+    (is (= [[1] [2]] (eval (read-string "^:a [[1] ^:b [2]]")))))
+  (testing "an empty metadata-bearing vector"
+    (is (= [] (eval (read-string "^:flag []")))))
+  (testing "the evaluated result carries the reader metadata (Clojure semantics),
+            matching this runtime's own with-meta-wrapped code-literal path"
+    (is (= {:flag true} (meta (eval (read-string "^:flag [1 2]")))))
+    (is (= (meta ^:flag [1 2]) (meta (eval (read-string "^:flag [1 2]"))))))
+  (testing "the metadata map is evaluated, as it is for a code literal"
+    (is (= {:a 2} (meta (eval (read-string "^{:a (+ 1 1)} [1]")))))
+    (is (= (meta ^{:a (+ 1 1)} [1]) (meta (eval (read-string "^{:a (+ 1 1)} [1]")))))
+    (is (= {:a 2} (meta (eval (read-string "^{:a (+ 1 1)} #{1}")))))
+    (is (= {:a 2} (meta (eval (read-string "^{:a (+ 1 1)} {:k 1}"))))))
+  (testing "a bare type hint stays a symbol, as it does for a code literal"
+    (is (= 'long (:tag (meta (eval (read-string "^long [1]"))))))
+    (is (symbol? (:tag (meta (eval (read-string "^long [1]"))))))
+    (is (= (:tag (meta ^long [1])) (:tag (meta (eval (read-string "^long [1]"))))))
+    (is (= 'no.such.Hint (:tag (meta (eval (read-string "^no.such.Hint [1]"))))))
+    (is (= 'long (:tag (meta (eval (read-string "^long #{1}"))))))
+    (is (= 'long (:tag (meta (eval (read-string "^long {:k 1}"))))))
+    (is (= {:tag 'long :a 2} (meta (eval (read-string "^long ^{:a (+ 1 1)} [1]"))))))
+  (testing "a metadata-bearing map evaluates and carries its metadata the same way"
+    (is (= {:a 2} (eval (read-string "^:flag {:a (+ 1 1)}"))))
+    (is (= {:flag true} (meta (eval (read-string "^:flag {:a (+ 1 1)}"))))))
+  (testing "a metadata-bearing set evaluates and carries its metadata the same way"
+    (is (= #{1 2} (eval (read-string "^:flag #{1 2}"))))
+    (is (= {:flag true} (meta (eval (read-string "^:flag #{1 2}"))))))
+  (testing "*ir-compile* agrees with the bytecode path on all three"
+    (binding [*ir-compile* true]
+      (is (= {:flag true} (meta (eval (read-string "^:flag [1 2]")))))
+      (is (= {:flag true} (meta (eval (read-string "^:flag {:a 1}")))))
+      (is (= {:flag true} (meta (eval (read-string "^:flag #{1 2}"))))))))
+
+;; compileForm's vector-literal arm dispatches on Type() tags, matching how
+;; `vector?`/`sequential?` are themselves defined in core.lg — not on a
+;; hand-picked concrete Go type. Every ordered-vector representation
+;; reachable from let-go code must therefore evaluate correctly via `eval`,
+;; and every non-vector ordered/seq-shaped form must keep compiling through
+;; its own arm (a call for seqs, a map/set literal for those).
+(deftest ordered-collection-forms-reach-the-right-compileform-arm
+  (testing "vec of a range — still an ArrayVector, still a vector arm"
+    (is (= [0 1 2] (eval (vec (range 3))))))
+  (testing "subvec — also an ArrayVector representation"
+    (is (= [1 2] (eval (subvec [0 1 2 3] 1 3)))))
+  (testing "a map entry is vector-shaped (Clojure semantics) and evaluates as one"
+    (is (= [:a 1] (eval (first {:a 1})))))
+  (testing "a quoted list still evaluates as a call, not a vector literal"
+    (is (= 3 (eval '(+ 1 2)))))
+  (testing "a macro-built seq (list) still evaluates as a call"
+    (is (= 3 (eval (list '+ 1 2)))))
+  (testing "a macro-built lazy-seq still evaluates as a call"
+    (is (= 3 (eval (lazy-seq (list '+ 1 2))))))
+  (testing "a string still self-evaluates rather than being treated as ordered/iterable"
+    (is (= "abc" (eval "abc")))))
+
+;; compileForm's `switch o.Type()` had no default arm: a form of a type no
+;; case named compiled to NOTHING and returned nil as if it had succeeded,
+;; leaving the VM stack one slot short of what every caller (an OP_INVOKE
+;; argument, a vector/map/set/list element, ...) assumed had been pushed.
+;; That silent fall-through — not the missing vector arm alone — is the root
+;; cause of the "index out of range [-1]" panic finding 1 started from: any
+;; value of an unlisted type hits it, not just a metadata-bearing vector.
+;; These are reachable today via a value spliced directly into a form (e.g. a
+;; macro emitting `(list 'f an-atom)`, or `eval` on a non-form value produced
+;; by another call) — every one below panicked with an uncatchable-looking
+;; stack-underflow runtime error before this fix; now they fail closed with a
+;; plain, catchable CompileError.
+(deftest unrecognized-form-types-fail-closed
+  (testing "an atom embedded as a form"
+    (is (thrown? Exception (eval (list 'identity (atom 1))))))
+  (testing "a range embedded as a form"
+    (is (thrown? Exception (eval (list 'identity (range 3))))))
+  (testing "a queue embedded as a form"
+    (is (thrown? Exception (eval (list 'identity (into clojure.lang.PersistentQueue/EMPTY [1 2]))))))
+  (testing "a namespace object embedded as a form"
+    (is (thrown? Exception (eval (list 'identity *ns*)))))
+  (testing "a sorted-map value evaluated directly"
+    (is (thrown? Exception (eval (sorted-map :a 1)))))
+  (testing "a sorted-set value evaluated directly"
+    (is (thrown? Exception (eval (sorted-set 1 2)))))
+  (testing "a transient vector embedded as a form"
+    (is (thrown? Exception (eval (list 'identity (transient [1 2]))))))
+  (testing "the error is a clean CompileError naming the type, not a stack-underflow panic"
+    (let [msg (str (try (eval (list 'identity (atom 1))) (catch e e)))]
+      (is (str/includes? msg "cannot compile a value of type"))
+      (is (not (str/includes? msg "index out of range"))))))
