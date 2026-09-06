@@ -45,6 +45,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Real-world Clojure compat findings | `xsofy-portability-gaps.md` |
 | Clojure-test-suite (jank) workflow | `clojure-test-suite.md` |
 | Testing strategy, conformance | `testing-and-conformance.md` |
+| `clojure.test` / `clojure.test.tap` API, stack-trace primitives, Go harness bridge | `specs/clojure-test-conformance.md` |
 | Docs frontmatter convention + maintenance hook | `frontmatter-hook.md` |
 | Docs judgement-layer report (stale/supersession/index) | `docs-status.md` |
 | Regenerating generated artifacts after `.lg` edits | `regenerating-generated-artifacts.md` |
