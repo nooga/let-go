@@ -14,8 +14,8 @@ Current scope:
 - single embedded `"default"` session
 - real REPL compile path
 - bytecode disassembly pane
-- explicit placeholder panes for IR / optimized bytecode / lowered Go until
-  those ops are implemented on the bridge
+- IR, optimized bytecode, and lowered Go panes, each requested per cell
+  through the Analysis toggles ("Inspect Active Cell" enables all four)
 
 ## Build
 
@@ -29,7 +29,10 @@ LG_WASM_BUILD_TAGS=gogen_ir make -C examples/browser-inspector build
 make browser-inspector
 ```
 
-Output: `examples/browser-inspector/dist/index.html`
+Output: `examples/browser-inspector/dist/index.html`, plus the
+`coi-serviceworker.js` that `lg -w` writes beside every page it builds (the
+COOP/COEP shim the page registers). `dist/` is entirely generated and
+gitignored; `make clean` removes it.
 
 ## Serve
 
