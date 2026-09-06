@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -321,6 +322,14 @@ func unboxInto(target reflect.Value, val Value) error {
 		if sq, ok := val.(Sequable); ok {
 			return unboxSliceInto(target, sq.Seq())
 		}
+	case reflect.Map:
+		// Guarded by the same explicit type switch unboxMapInto uses, so a
+		// value that is not a let-go map (a *Boxed already holding a Go map,
+		// say) falls through to the assignability fallback below.
+		switch val.(type) {
+		case Map, *PersistentMap, *SortedMap:
+			return unboxMapInto(target, val)
+		}
 	case reflect.Pointer:
 		// If it's a Boxed value holding a pointer of the right type, unwrap it
 		if b, ok := val.(*Boxed); ok {
@@ -329,6 +338,81 @@ func unboxInto(target reflect.Value, val Value) error {
 				target.Set(bv)
 				return nil
 			}
+		}
+	case reflect.Interface:
+		// `any` holds every Go value, Go nil included, so converting into it
+		// is TOTAL — it must never reach the error return below. When it did,
+		// the caller (boxArgForReflect) treated the failure as "this sequence
+		// has no Go form", handed the whole slice over as []vm.Value, and the
+		// reflect call died with:
+		//
+		//	reflect: Call using []vm.Value as type []interface {}
+		//
+		// A let-go nil was the common trigger, which made every SQL NULL
+		// parameter fail. Restricted to the empty interface: a non-empty one
+		// (error, io.Reader, …) genuinely may not be satisfiable, and the
+		// paths below still decide that.
+		if target.NumMethod() == 0 {
+			// A collection reaching an `any` target converts into its natural
+			// Go shape rather than being handed over as a let-go value.
+			// Unbox alone is not enough: ArrayVector.Unbox returns []vm.Value
+			// and (*PersistentMap).Unbox returns the map itself, so a nested
+			// collection arrived in Go still wearing let-go types —
+			//
+			//	{:a {:b 1}}  →  map[string]any{"a": *vm.PersistentMap{...}}
+			//
+			// which is the same opaque-value problem one level down, and would
+			// leave a wrapper author writing the recursive converter anyway.
+			//
+			// Maps are tested FIRST: every let-go map is also Sequable, so the
+			// sequential case below would otherwise claim them and turn a map
+			// into a vector of entries.
+			switch val.(type) {
+			case Map, *PersistentMap, *SortedMap:
+				out := reflect.New(mapStringAnyType).Elem()
+				if err := unboxMapInto(out, val); err == nil {
+					target.Set(out)
+					return nil
+				}
+			}
+			raw := val.Unbox()
+			// The sequential case is keyed on what Unbox ALREADY produces, not
+			// on Sequable, and specifically on a []Value.
+			//
+			// Sequable is far too broad: String and NIL both implement it, a
+			// String would become a vector of characters, and NIL.Seq()
+			// returns NIL itself, whose First() is NIL — unbounded recursion.
+			//
+			// A Seq is excluded for a different reason: it may be infinite.
+			// A LazySeq over NewInfiniteRange unboxes to a Seq today without
+			// being realized, and converting it would iterate until memory ran
+			// out. A []Value is finite by construction — it is already
+			// materialized — so eagerly converting one cannot hang.
+			//
+			// Keying on the Unbox result scopes the change to exactly the
+			// values that leak let-go types into Go today; anything else takes
+			// the pre-existing path untouched.
+			if _, ok := raw.([]Value); ok {
+				if sq, ok := val.(Sequable); ok {
+					out := reflect.New(sliceAnyType).Elem()
+					if err := unboxSliceInto(out, sq.Seq()); err == nil {
+						target.Set(out)
+						return nil
+					}
+				}
+			}
+			if raw != nil {
+				target.Set(reflect.ValueOf(raw))
+			} else {
+				// Zero explicitly rather than leaving the target untouched.
+				// unboxSliceInto allocates a fresh element, but unboxInto is
+				// shared — RecordToStruct writes into an EXISTING struct
+				// field, which may already hold a value. Skipping the write
+				// would report success while leaving stale data behind. More
+				// than NIL lands here: any value whose Unbox yields nil.
+				target.Set(reflect.Zero(target.Type()))
+			}
+			return nil
 		}
 	}
 
@@ -364,6 +448,114 @@ func unboxSliceInto(target reflect.Value, s Seq) error {
 	}
 	target.Set(slice)
 	return nil
+}
+
+// The natural Go shapes a let-go collection takes when it reaches an `any`
+// target: a map becomes map[string]any and a sequence becomes []any. They match
+// what BoxValue's allowlist admits in the other direction, so a value can make
+// the round trip.
+var (
+	mapStringAnyType = reflect.TypeOf(map[string]any(nil))
+	sliceAnyType     = reflect.TypeOf([]any(nil))
+)
+
+// unboxMapInto converts a let-go map into a Go map target, key by key and value
+// by value, so map[string]any and map[string]string both work and a map nested
+// in a struct field or slice element converts too.
+//
+// The source is identified by an explicit TYPE switch rather than by inspecting
+// the first element for a MapEntry: every let-go map returns EmptyList from
+// Seq() when empty, so an empty map and an empty vector are indistinguishable
+// that way. TransientMap is deliberately absent — it is a builder, not a value
+// handed to Go.
+//
+// Keyword keys become string keys because unboxInto's reflect.String case
+// already accepts a Keyword and a Keyword stores its name without the leading
+// colon. That follows an existing convention rather than inventing one.
+func unboxMapInto(target reflect.Value, val Value) error {
+	var s Seq
+	switch m := val.(type) {
+	case Map:
+		s = m.Seq()
+	case *PersistentMap:
+		s = m.Seq()
+	case *SortedMap:
+		s = m.Seq()
+	default:
+		return fmt.Errorf("cannot convert %s (%s) to %s", val, val.Type().Name(), target.Type())
+	}
+
+	mapType := target.Type()
+	keyType := mapType.Key()
+	elemType := mapType.Elem()
+	out := reflect.MakeMap(mapType)
+	for !SeqIsEmpty(s) {
+		entry, ok := s.First().(MapEntry)
+		if !ok {
+			return fmt.Errorf("cannot convert %s to %s: %s is not a map entry", val.Type().Name(), mapType, s.First())
+		}
+		if keyType.Kind() == reflect.String && unboxesToInteger(entry.Key) {
+			// Go reports int64 as ConvertibleTo string and converts it to a
+			// RUNE, so unboxInto's generic fallback would silently turn the
+			// let-go key 65 into the Go key "A". Reject instead — a wrong key
+			// that looks plausible is worse than a failure — and keep the
+			// rejection local to the map path so no shared conversion
+			// behaviour changes.
+			return fmt.Errorf("cannot convert map key %s (%s) to %s", entry.Key, entry.Key.Type().Name(), keyType)
+		}
+		k := reflect.New(keyType).Elem()
+		if err := unboxInto(k, entry.Key); err != nil {
+			return err
+		}
+		v := reflect.New(elemType).Elem()
+		if err := unboxInto(v, entry.Value); err != nil {
+			return err
+		}
+		if err := setMapKey(out, k, v); err != nil {
+			return fmt.Errorf("cannot use %s (%s) as a key in %s: %w",
+				entry.Key, entry.Key.Type().Name(), mapType, err)
+		}
+		s = s.Next()
+	}
+	target.Set(out)
+	return nil
+}
+
+// setMapKey stores one converted entry, turning an unhashable key into a
+// conversion error rather than a panic.
+//
+// An interface-kind key (map[any]any) accepts any dynamic type, and unboxInto
+// puts a []vm.Value there for a let-go vector key — SetMapIndex then panics
+// with "hash of unhashable type". That has to be caught here: unboxMapInto is
+// reached from RecordToStruct too, which has no recover of its own, so a panic
+// is not guaranteed to be contained.
+//
+// The check is on the VALUE, not the type, because reflect.Type.Comparable is
+// not enough: a struct{ X any } holding a slice reports Comparable() == true
+// and still panics when hashed. Only an attempted insert settles it.
+func setMapKey(out, k, v reflect.Value) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("the value is not hashable")
+		}
+	}()
+	out.SetMapIndex(k, v)
+	return nil
+}
+
+// unboxesToInteger reports whether a value reaches Go as an integer, and so
+// would be rune-converted on the way into a string-kind target.
+func unboxesToInteger(v Value) bool {
+	raw := v.Unbox()
+	if raw == nil {
+		return false
+	}
+	switch reflect.ValueOf(raw).Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	}
+	return false
 }
 
 // camelToKebab converts CamelCase to kebab-case.

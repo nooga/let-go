@@ -7,7 +7,10 @@
 
 package vm
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
 // boxReflectFunc builds a NativeFn that dispatches to a typed Go function via
 // reflection: it reads the signature (variadic-ness, declared arity, per-param
@@ -38,7 +41,14 @@ func boxReflectFunc(t *theNativeFnType, fn any, ty reflect.Type) (Value, error) 
 				in = ty.In(i)
 			}
 			if args[i] != NIL {
-				rawArgs[i] = boxArgForReflect(args[i], in)
+				// A conversion that cannot be salvaged is reported here, so
+				// the caller sees why the argument was rejected rather than
+				// the reflect.Call panic the bare value would have caused.
+				ra, err := boxArgForReflect(args[i], in)
+				if err != nil {
+					return NIL, fmt.Errorf("arg %d: %w", i, err)
+				}
+				rawArgs[i] = ra
 				// Skip the .Convert() step when the prepared value is
 				// already assignable to the param's interface type — Convert
 				// to an interface erases the dynamic type info reflect.Call
