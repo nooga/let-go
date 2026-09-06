@@ -115,6 +115,31 @@ So the core of the wrapper is nearly free:
 `database/sql` is standard library, so the wrapper adds **no new go.mod
 dependency**. Only drivers are external, and they stay host-side (see below).
 
+### How Go return values arrive
+
+A boxed Go function's results map to let-go like this:
+
+| Go signature | let-go result |
+|---|---|
+| `func(…)` | `nil` |
+| `func(…) T` | the boxed `T` |
+| `func(…) error` | the boxed error **as a value** — does not throw |
+| `func(…) (T, error)` | boxed `T`, throwing when the error is non-nil |
+| `func(…) (A, B)` | vector `[a b]` |
+| `func(…) (A, B, …, error)` | vector `[a b …]`, throwing when the error is non-nil |
+
+A trailing `error` becomes a throw only when some other result remains to
+return. `func() error` — `Close`, `Flush`, and friends — hands the error back
+as an ordinary value, so `(if (.Close f) ...)` keeps working.
+
+The type test is on the *declared* result type, so a function returning a
+concrete `*MyError` is returning a value, not signalling failure. An `error` in
+any position but last is likewise an ordinary value.
+
+Known limitation: Go **array** results (`[N]T`, as opposed to slices) are not
+boxable and surface as an error. This is not specific to multi-return —
+`func() [1]int` has always behaved this way.
+
 ### The one seam: `Scan`'s out-parameters
 
 The interop layer already does the pointer work you'd expect: boxed values
