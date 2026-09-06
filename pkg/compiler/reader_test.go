@@ -56,6 +56,147 @@ func TestReaderBasic(t *testing.T) {
 	}
 }
 
+func TestReadStringAttachesMetadataToMap(t *testing.T) {
+	got, err := ReadString(`^{:doc "mapping"} {"a" "b"}`)
+	assert.NoError(t, err)
+
+	m, ok := got.(*vm.PersistentMap)
+	if !ok {
+		t.Fatalf("ReadString returned %T (%v), want metadata-bearing map", got, got)
+	}
+	assert.Equal(t, vm.String("b"), m.ValueAt(vm.String("a")))
+
+	meta, ok := m.Meta().(*vm.PersistentMap)
+	if !ok {
+		t.Fatalf("map metadata is %T (%v), want map", m.Meta(), m.Meta())
+	}
+	assert.Equal(t, vm.String("mapping"), meta.ValueAt(vm.Keyword("doc")))
+}
+
+func TestReadStringAttachesMetadataToCollections(t *testing.T) {
+	tests := []struct {
+		name  string
+		src   string
+		check func(*testing.T, vm.Value)
+	}{
+		{
+			name: "list",
+			src:  `^{:doc "list"} (1 2)`,
+			check: func(t *testing.T, got vm.Value) {
+				if _, ok := got.(*vm.List); !ok {
+					t.Fatalf("got %T (%v), want list", got, got)
+				}
+				assert.Equal(t, "(1 2)", got.String())
+			},
+		},
+		{
+			name: "vector",
+			src:  `^{:doc "vector"} [1 2]`,
+			check: func(t *testing.T, got vm.Value) {
+				if _, ok := got.(vm.PersistentVector); !ok {
+					t.Fatalf("got %T (%v), want metadata-bearing vector", got, got)
+				}
+				assert.Equal(t, "[1 2]", got.String())
+			},
+		},
+		{
+			name: "set",
+			src:  `^{:doc "set"} #{1 2}`,
+			check: func(t *testing.T, got vm.Value) {
+				set, ok := got.(*vm.PersistentSet)
+				if !ok {
+					t.Fatalf("got %T (%v), want metadata-bearing set", got, got)
+				}
+				assert.Equal(t, 2, set.RawCount())
+				assert.Equal(t, vm.TRUE, set.Contains(vm.Int(1)))
+				assert.Equal(t, vm.TRUE, set.Contains(vm.Int(2)))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ReadString(tt.src)
+			assert.NoError(t, err)
+			tt.check(t, got)
+
+			target, ok := got.(vm.IMeta)
+			if !ok {
+				t.Fatalf("got %T (%v), want metadata support", got, got)
+			}
+			meta, ok := target.Meta().(*vm.PersistentMap)
+			if !ok {
+				t.Fatalf("metadata is %T (%v), want map", target.Meta(), target.Meta())
+			}
+			assert.Equal(t, vm.String(tt.name), meta.ValueAt(vm.Keyword("doc")))
+		})
+	}
+}
+
+func TestReadStringPreservesSymbolTypeHintAsData(t *testing.T) {
+	got, err := ReadString(`^String [1]`)
+	assert.NoError(t, err)
+
+	target, ok := got.(vm.IMeta)
+	if !ok {
+		t.Fatalf("got %T (%v), want metadata support", got, got)
+	}
+	meta := target.Meta().(*vm.PersistentMap)
+	assert.Equal(t, vm.Symbol("String"), meta.ValueAt(vm.Keyword("tag")))
+}
+
+func TestReadStringDefersSymbolMetadataToWrapper(t *testing.T) {
+	got, err := ReadString(`^String value`)
+	assert.NoError(t, err)
+	assert.Equal(t, `(with-meta value {:tag (quote String)})`, got.String())
+}
+
+func TestCompilerReaderPreservesMetadataWrapperForms(t *testing.T) {
+	for _, src := range []string{`^:flag [1]`, `^:flag #{1}`} {
+		reader := NewLispReader(strings.NewReader(src), "<reader>")
+		got, err := reader.Read()
+		assert.NoError(t, err)
+
+		form, ok := got.(*vm.List)
+		if !ok {
+			t.Fatalf("%s: compiler reader returned %T (%v), want with-meta form", src, got, got)
+		}
+		assert.Equal(t, vm.Symbol("with-meta"), form.First())
+	}
+}
+
+func TestRuntimeStringReadersAttachCollectionMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "read-string map",
+			src:  `(let [v (read-string "^{:doc \"mapping\"} {\"a\" \"b\"}")] [(map? v) (:doc (meta v))])`,
+			want: `[true "mapping"]`,
+		},
+		{
+			name: "read-string set",
+			src:  `(let [v (read-string "^:flag #{1 2}")] [(set? v) (:flag (meta v))])`,
+			want: `[true true]`,
+		},
+		{
+			name: "read-all-string vector",
+			src:  `(let [v (first (read-all-string "^:flag [1]"))] [(vector? v) (:flag (meta v))])`,
+			want: `[true true]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Eval(tt.src)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got.String())
+		})
+	}
+}
+
 func TestReaderKeywordInternalColons(t *testing.T) {
 	valid := map[string]vm.Keyword{
 		`:/`:        vm.Keyword(`/`),

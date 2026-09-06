@@ -80,7 +80,7 @@ func Eval(src string) (vm.Value, error) {
 // it skips leading no-value forms (comments, #_ discard) so a string that opens
 // with a ';;' comment yields the following form rather than the VOID sentinel.
 func ReadString(s string) (vm.Value, error) {
-	reader := NewLispReader(strings.NewReader(s), "<read-string>")
+	reader := newDataReaderWithResolvers(strings.NewReader(s), "<read-string>", nil, rootDataReaderResolver)
 	return reader.ReadSkipNoValue()
 }
 
@@ -213,7 +213,7 @@ func postCoreInit() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("read-string: expected String, got %T", vs[0])
 		}
-		reader := newLispReaderWithResolvers(strings.NewReader(string(s)), "<read-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
+		reader := newDataReaderWithResolvers(strings.NewReader(string(s)), "<read-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
 		return reader.ReadSkipNoValue()
 	})
 	coreNS := rt.NS(rt.NameCoreNS)
@@ -234,7 +234,7 @@ func postCoreInit() {
 		if !ok {
 			return vm.NIL, fmt.Errorf("read-all-string: expected String, got %T", vs[0])
 		}
-		reader := newLispReaderWithResolvers(strings.NewReader(string(s)), "<read-all-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
+		reader := newDataReaderWithResolvers(strings.NewReader(string(s)), "<read-all-string>", taggedReadersFromExecContext(ec), execContextDataReaderResolver(ec))
 		forms := []vm.Value{}
 		for {
 			// Peek: skip whitespace, then either give up cleanly (EOF

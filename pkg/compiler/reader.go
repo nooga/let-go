@@ -54,6 +54,7 @@ type LispReader struct {
 	r                  *bufio.Reader
 	taggedReaders      *TaggedReaderRegistry
 	dataReaderResolver taggedDataReaderResolver
+	dataMode           bool
 
 	Tokens     []Token
 	tokenizing bool
@@ -79,6 +80,12 @@ func newLispReaderWithResolvers(r io.Reader, inputName string, registry *TaggedR
 	reader := NewLispReader(r, inputName)
 	reader.taggedReaders = registry
 	reader.dataReaderResolver = resolver
+	return reader
+}
+
+func newDataReaderWithResolvers(r io.Reader, inputName string, registry *TaggedReaderRegistry, resolver taggedDataReaderResolver) *LispReader {
+	reader := newLispReaderWithResolvers(r, inputName, registry, resolver)
+	reader.dataMode = true
 	return reader
 }
 
@@ -823,6 +830,17 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 			ret = ret.Conj(form).(*vm.List)
 		}
 	}
+	if r.dataMode {
+		values := make([]vm.Value, 0, ret.RawCount())
+		for s := vm.Seq(ret); s != nil && s != vm.EmptyList; s = s.Next() {
+			values = append(values, s.First())
+		}
+		result := vm.NewSet(values)
+		vm.FormSource.Set(result, vm.SourceInfo{
+			File: r.inputName, Line: startLine, Column: startCol,
+		})
+		return result, nil
+	}
 	result := ret.Cons(vm.Symbol("hash-set"))
 	vm.FormSource.Set(result, vm.SourceInfo{
 		File: r.inputName, Line: startLine, Column: startCol,
@@ -1415,8 +1433,13 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
-	var m vm.Value = vm.EmptyPersistentMap
+	m := vm.EmptyPersistentMap
+	dataM := vm.EmptyPersistentMap
 	tagKey := vm.Keyword("tag")
+	assoc := func(k, v vm.Value) {
+		m = m.Assoc(k, v).(*vm.PersistentMap)
+		dataM = dataM.Assoc(k, v).(*vm.PersistentMap)
+	}
 	for {
 		// Unread the lookahead so r.Read() can dispatch normally.
 		if err := r.unread(); err != nil {
@@ -1433,23 +1456,23 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 				if !ok {
 					continue
 				}
-				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
+				assoc(k, val)
 			}
 		case vm.Map:
 			for k, val := range v {
-				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
+				assoc(k, val)
 			}
 		case vm.Keyword:
-			m = m.(*vm.PersistentMap).Assoc(v, vm.TRUE).(*vm.PersistentMap)
+			assoc(v, vm.TRUE)
 		case vm.Symbol:
-			// A bare-symbol tag (`^Iterable x`) is a type hint. Preserve it as
-			// :tag metadata (the IR's typeinfer/lowering passes can use it), but
-			// quote it so the (often host-class) symbol is a datum, not an
-			// evaluated var reference that won't resolve.
+			// Compiler readers emit a with-meta form, so quote the type-hint
+			// symbol to keep it data when that form is evaluated. Data readers
+			// attach the symbol itself, matching Clojure's metadata value.
 			quotedTag := vm.NewList([]vm.Value{vm.Symbol("quote"), v})
-			m = m.(*vm.PersistentMap).Assoc(tagKey, quotedTag).(*vm.PersistentMap)
+			m = m.Assoc(tagKey, quotedTag).(*vm.PersistentMap)
+			dataM = dataM.Assoc(tagKey, v).(*vm.PersistentMap)
 		case vm.String:
-			m = m.(*vm.PersistentMap).Assoc(tagKey, v).(*vm.PersistentMap)
+			assoc(tagKey, v)
 		default:
 			return vm.NIL, NewReaderError(r, "unsupported meta form")
 		}
@@ -1472,6 +1495,13 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 	form, err := r.Read()
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading meta")
+	}
+	if r.dataMode {
+		if _, ok := form.(vm.Collection); ok {
+			if target, ok := form.(vm.IMeta); ok {
+				return target.WithMeta(dataM), nil
+			}
+		}
 	}
 	return vm.NewList([]vm.Value{vm.Symbol("with-meta"), form, m}), nil
 }

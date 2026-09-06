@@ -199,6 +199,24 @@ func TestCompilerTaggedReadersReachRuntimeStringReaders(t *testing.T) {
 	}
 }
 
+func TestRuntimeStringReaderAttachesMetadataToTaggedCollection(t *testing.T) {
+	registry := NewTaggedReaderRegistry()
+	if err := registry.RegisterData("scoped", func(vm.Value) (vm.Value, error) {
+		return vm.NewPersistentMap([]vm.Value{vm.Keyword("value"), vm.Int(42)}), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := compileWithTaggedReaders(t, registry,
+		`(let [v (read-string "^:flag #scoped 1")] [(map? v) (:value v) (:flag (meta v))])`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.String() != `[true 42 true]` {
+		t.Fatalf("result = %s, want [true 42 true]", got.String())
+	}
+}
+
 func TestCompilerTaggedReadersTakePrecedenceDuringRuntimeReads(t *testing.T) {
 	registry := NewTaggedReaderRegistry()
 	for _, tag := range []string{"scoped", "uuid"} {

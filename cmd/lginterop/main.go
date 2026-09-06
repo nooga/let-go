@@ -172,6 +172,17 @@ func ensureLgBinary(repoRoot string) (string, error) {
 
 // --- deps.edn parsing -----------------------------------------------------
 
+func asVector(v vm.Value) (vm.Indexed, bool) {
+	switch v := v.(type) {
+	case vm.ArrayVector:
+		return v, true
+	case vm.PersistentVector:
+		return v, true
+	default:
+		return nil, false
+	}
+}
+
 func gointeropFromDepsEdn(dir string, globalSmart bool) ([]interopEntry, error) {
 	depsPath := path.Join(dir, "deps.edn")
 	data, err := os.ReadFile(depsPath)
@@ -193,11 +204,12 @@ func gointeropFromDepsEdn(dir string, globalSmart bool) ([]interopEntry, error) 
 	var out []interopEntry
 	if m.Contains(vm.Keyword("gointerop")) {
 		v := m.ValueAt(vm.Keyword("gointerop"))
-		vec, ok := v.(vm.ArrayVector)
+		vec, ok := asVector(v)
 		if !ok {
 			return nil, fmt.Errorf(":gointerop is not a vector")
 		}
-		for _, item := range vec {
+		for i := 0; i < vec.RawCount(); i++ {
+			item := vec.Nth(i)
 			ent := parseInteropItem(item)
 			ent.smart = globalSmart
 			if ent.pkg != "" {
@@ -208,11 +220,12 @@ func gointeropFromDepsEdn(dir string, globalSmart bool) ([]interopEntry, error) 
 
 	if m.Contains(vm.Keyword("gointerop-wrappers")) {
 		v := m.ValueAt(vm.Keyword("gointerop-wrappers"))
-		vec, ok := v.(vm.ArrayVector)
+		vec, ok := asVector(v)
 		if !ok {
 			return nil, fmt.Errorf(":gointerop-wrappers is not a vector")
 		}
-		for _, item := range vec {
+		for i := 0; i < vec.RawCount(); i++ {
+			item := vec.Nth(i)
 			ent := parseInteropItem(item)
 			ent.smart = true
 			if ent.pkg != "" {
