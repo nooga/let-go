@@ -8,6 +8,7 @@ package vm
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -18,7 +19,15 @@ type DType struct {
 	typeName string
 	fields   []Symbol
 	fieldIdx map[Symbol]int
+	// toString, when set, overrides instances' string representation —
+	// (reify Object (toString [this] ...)). Consulted by
+	// DTypeInstance.String(), which str, pr-str, and println all route
+	// through.
+	toString Fn
 }
+
+// SetToString installs a toString override for instances of this type.
+func (t *DType) SetToString(fn Fn) { t.toString = fn }
 
 func NewDType(name string, fields []Symbol) *DType {
 	idx := make(map[Symbol]int, len(fields))
@@ -44,6 +53,19 @@ type DTypeInstance struct {
 	dtype  *DType
 	fields []Value
 	meta   Value // IMeta support (e.g. (with-meta (->Foo) m) / reify)
+	// rendering guards against a toString override that stringifies its own
+	// instance, e.g. (reify Object (toString [this] (str "x" this))). That
+	// recursion is unbounded and lands as a Go fatal stack overflow, which
+	// no catch or recover can intercept, so it takes the process down. The
+	// flag is per instance and set only while this instance's override is
+	// running: a re-entrant String() renders the default form instead, which
+	// terminates and keeps the override's own output. Concurrent String()
+	// calls on the SAME instance may therefore see the default rendering,
+	// which is the deliberate trade for not crashing.
+	//
+	// A bare uint32 driven by sync/atomic rather than an atomic.Bool: the
+	// atomic wrapper types embed noCopy, and WithMeta copies the struct.
+	rendering uint32
 }
 
 func NewDTypeInstance(dt *DType, fields []Value) *DTypeInstance {
@@ -73,15 +95,34 @@ func (d *DTypeInstance) Meta() Value {
 
 // WithMeta implements IMeta. Returns a copy carrying m; field storage is
 // shared with the original (metadata does not affect fields).
+//
+// The copy is constructed explicitly, NOT via `cp := *d`: a whole-struct
+// copy would carry the rendering guard, which is 1 while this instance's
+// toString override runs — so a copy taken inside the override, e.g.
+// (with-meta this ...), would skip its own override forever. It would also
+// read the guard non-atomically against a concurrent String(). Every new
+// instance starts with rendering == 0.
 func (d *DTypeInstance) WithMeta(m Value) Value {
-	cp := *d
-	cp.meta = m
-	return &cp
+	return &DTypeInstance{dtype: d.dtype, fields: d.fields, meta: m}
 }
 
 func (d *DTypeInstance) Unbox() any { return d }
 
 func (d *DTypeInstance) String() string {
+	if d.dtype.toString != nil && atomic.CompareAndSwapUint32(&d.rendering, 0, 1) {
+		defer atomic.StoreUint32(&d.rendering, 0)
+		if r, err := d.dtype.toString.Invoke([]Value{d}); err == nil {
+			// Only a string result is accepted (JVM toString contract).
+			// Rendering arbitrary results would recurse fatally when the
+			// override returns the instance itself (directly or inside a
+			// collection); a throwing or non-string toString cannot
+			// propagate through Stringer, so both fall through to the
+			// default rendering.
+			if s, ok := r.(String); ok {
+				return string(s)
+			}
+		}
+	}
 	b := &strings.Builder{}
 	b.WriteString("#<")
 	b.WriteString(d.dtype.typeName)

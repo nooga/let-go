@@ -7012,6 +7012,24 @@ func CoreMakeDType(vs ...vm.Value) (vm.Value, error) {
 }
 
 //lg:native
+//lg:name -set-deftype-to-string!
+func CoreSetDTypeToString(vs ...vm.Value) (vm.Value, error) {
+	if len(vs) != 2 {
+		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	dt, ok := vs[0].(*vm.DType)
+	if !ok {
+		return vm.NIL, fmt.Errorf("-set-deftype-to-string! expected DType, got %s", vs[0].Type().Name())
+	}
+	fn, ok := vm.AsFn(vs[1])
+	if !ok {
+		return vm.NIL, fmt.Errorf("-set-deftype-to-string! expected a fn, got %s", vs[1].Type().Name())
+	}
+	dt.SetToString(fn)
+	return vs[0], nil
+}
+
+//lg:native
 //lg:name make-deftype-instance
 func CoreMakeDTypeInstance(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) < 1 {

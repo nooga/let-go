@@ -41,7 +41,7 @@ with no known failures, compile skips, panic skips, or runtime skips.
 - **Asynchronous agents**: `agent`/`send`/`send-off` are synchronous atom-backed compatibility aliases
 - **Chunked sequences**: lazy seqs are unchunked
 - **Custom tagged literal readers**: built-in `#uuid` and `#inst` work; unknown tags read as their payload, and `*data-readers*` / `*default-data-reader-fn*` are not implemented
-- **Java-style `deftype` / `reify` method bodies and host interfaces**: protocol implementations work; JVM host methods do not
+- **Java-style `deftype` method bodies and host interfaces**: protocol implementations work; JVM host methods on `deftype` do not. `reify` accepts `Object` method overrides: `toString` is wired into the value's string representation (`str`, `pr-str`, `println`); `hashCode`/`equals` are accepted and ignored (hash/equality stay identity-based)
 - **Spec** (no `clojure.spec`)
 - **`subseq` / `rsubseq`**: sorted collections work (`sorted-map`, `sorted-set`, `rseq`); range queries don't
 
