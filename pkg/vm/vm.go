@@ -376,6 +376,7 @@ type Frame struct {
 	stack       []Value
 	args        []Value
 	argbuf      []Value // frame-owned arguments used by same-frame tail replacement
+	prepArgs    []Value // argument slots owned by a PreparedCall; kept across pool reuse so preparing allocates nothing once warm
 	closedOvers []Value
 	argc        int
 	consts      *Consts
@@ -435,7 +436,14 @@ func releaseFrame(f *Frame) {
 }
 
 func NewFrame(code *CodeChunk, args []Value) *Frame {
-	f := acquireFrame()
+	return initFrame(acquireFrame(), code, args)
+}
+
+// initFrame prepares an acquired frame to run code with args. Split from
+// NewFrame so a caller that must hold a frame before it knows the code (see
+// PrepareCallInto, which resolves the callee using the frame's own argument
+// slots) can acquire first and initialize afterwards.
+func initFrame(f *Frame, code *CodeChunk, args []Value) *Frame {
 	needed := max(code.maxStack, 4)
 	if cap(f.stack) >= needed {
 		f.stack = f.stack[:needed]
@@ -469,6 +477,7 @@ func ReleaseFrame(f *Frame) {
 	f.args = nil
 	clear(f.argbuf)
 	f.argbuf = nil
+	clear(f.prepArgs) // drop the values, keep the capacity for the next PrepareCallInto
 	f.closedOvers = nil
 	f.consts = nil
 	f.code = nil

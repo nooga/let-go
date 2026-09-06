@@ -1,6 +1,8 @@
 //go:build !lg_profile
 
-package main
+package cli
+
+func registerProfileFlags() {}
 
 func startProfiling() {}
 

@@ -59,12 +59,14 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Embedding let-go in a Go program | `guide/embedding-in-go.md` |
 | Dropping `net/http` from a build (`lg_no_http`) | `guide/embedding-in-go.md` (§ Dropping `net/http`) |
 | Wrapping Go packages (lginterop, `database/sql` example) | `guide/go-interop.md` |
+| Building a custom `lg` around your own Go packages (`pkg/cli`) | `guide/custom-lg.md` |
 | Running as a WASI (`GOOS=wasip1`) module | `guide/wasi.md` |
 | let-go under TinyGo (status: not currently supported) | `guide/tinygo.md` |
 | nREPL server + editor setup | `guide/nrepl.md` |
 | TCP client + bencode framing (`net`, `bencode`) | `guide/net.md` |
 | Processes, environment, filesystem and paths (`os`) | `guide/os.md` |
 | Clojure compatibility: namespace table + differences | `guide/clojure-compatibility.md` |
+| Intentional and temporary Clojure divergences | `KNOWN_DIVERGENCES.md` |
 | Running, compiling, WASM, project mgmt (lgx) | `guide/usage.md` |
 | IR pipeline dynamic vars (knobs + per-compile state) | `design/ir-dynamic-vars.md` |
 | IR fixup / link pass | `design/els2023-ir-fixup-audit.md` |

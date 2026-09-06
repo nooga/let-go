@@ -1871,6 +1871,22 @@ func assocMeta(meta vm.Value, key vm.Value, val vm.Value) vm.Value {
 	return vm.NewPersistentMap([]vm.Value{key, val})
 }
 
+func compactDefMeta(meta vm.Value) (vm.DefMetaPairs, bool) {
+	persistent, ok := meta.(*vm.PersistentMap)
+	if !ok {
+		return nil, false
+	}
+	pairs := make(vm.DefMetaPairs, 0, persistent.RawCount()*2)
+	for seq := persistent.Seq(); seq != nil && seq != vm.EmptyList; seq = seq.Next() {
+		key, value, ok := vm.MapEntryKV(seq.First())
+		if !ok {
+			return nil, false
+		}
+		pairs = append(pairs, key, value)
+	}
+	return pairs, true
+}
+
 func defCompiler(c *Context, form vm.Value) error {
 	tc := c.tailPosition
 	c.tailPosition = false
@@ -1941,7 +1957,11 @@ func defCompiler(c *Context, form vm.Value) error {
 		c.incSP(1)
 		c.emitWithArg(vm.OP_LOAD_CONST, c.constant(varr))
 		c.incSP(1)
-		c.emitWithArg(vm.OP_LOAD_CONST, c.constant(meta))
+		metaConstant := meta
+		if compact, ok := compactDefMeta(meta); ok {
+			metaConstant = compact
+		}
+		c.emitWithArg(vm.OP_LOAD_CONST, c.constant(metaConstant))
 		c.incSP(1)
 		c.emitWithArg(vm.OP_INVOKE, 2)
 		c.decSP(2)

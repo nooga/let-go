@@ -386,8 +386,12 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 	// fold; per-element ec.Invoke pays resolution, frame-pool traffic, and
 	// frame init on every element. Non-bytecode/variadic reducers fall back
 	// to the generic invoke below.
-	pc := ec.PrepareCall(mfn, 2)
-	if pc != nil {
+	// The PreparedCall lives on this stack frame and its argument slots in
+	// the pooled VM frame, so a short reduce (the IR compiler does thousands
+	// per compile) pays no heap allocation for the preparation itself.
+	var pc vm.PreparedCall
+	prepared := ec.PrepareCallInto(&pc, mfn, 2)
+	if prepared {
 		defer pc.Release()
 	}
 	// Reused two-arg buffer, shared by every path below: ec.Invoke does not
@@ -408,7 +412,7 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 		for ; i < len(av); i++ {
 			var res vm.Value
 			var err error
-			if pc != nil {
+			if prepared {
 				res, err = pc.Call2(acc, av[i])
 			} else {
 				fargs[0] = acc
@@ -441,7 +445,7 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 		for (step > 0 && i < end) || (step < 0 && i > end) {
 			var res vm.Value
 			var err error
-			if pc != nil {
+			if prepared {
 				res, err = pc.Call2(acc, vm.Int(i))
 			} else {
 				fargs[0] = acc
@@ -492,7 +496,7 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			c := cs.ChunkedFirst()
 			n := c.ChunkCount()
 			for i := 0; i < n; i++ {
-				if pc != nil {
+				if prepared {
 					acc, err = pc.Call2(acc, c.Nth(i))
 				} else {
 					fargs[0] = acc
@@ -509,7 +513,7 @@ func reduceColl(ec *vm.ExecContext, mfn vm.Fn, coll vm.Value, hasInit bool, init
 			seq = cs.ChunkedNext()
 			continue
 		}
-		if pc != nil {
+		if prepared {
 			acc, err = pc.Call2(acc, seq.First())
 		} else {
 			fargs[0] = acc
@@ -619,8 +623,9 @@ func Some(ec *vm.ExecContext, pred vm.Value, coll vm.Value) (vm.Value, error) {
 	// walk: per-element ec.Invoke would pay resolution, frame-pool traffic,
 	// and frame init on every element. Non-bytecode/variadic predicates fall
 	// back to the generic invoke below.
-	pc := ec.PrepareCall(f, 1)
-	if pc != nil {
+	var pc vm.PreparedCall
+	prepared := ec.PrepareCallInto(&pc, f, 1)
+	if prepared {
 		defer pc.Release()
 	}
 	fargs := []vm.Value{nil}
@@ -633,7 +638,7 @@ func Some(ec *vm.ExecContext, pred vm.Value, coll vm.Value) (vm.Value, error) {
 			for i := 0; i < n; i++ {
 				var v vm.Value
 				var err error
-				if pc != nil {
+				if prepared {
 					v, err = pc.Call1(c.Nth(i))
 				} else {
 					fargs[0] = c.Nth(i)
@@ -651,7 +656,7 @@ func Some(ec *vm.ExecContext, pred vm.Value, coll vm.Value) (vm.Value, error) {
 		}
 		var v vm.Value
 		var err error
-		if pc != nil {
+		if prepared {
 			v, err = pc.Call1(seq.First())
 		} else {
 			fargs[0] = seq.First()
