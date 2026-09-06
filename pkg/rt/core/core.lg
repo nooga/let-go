@@ -892,6 +892,27 @@
         attr  (assoc (if (nil? attr) {} attr) :private true :arglists (fn-arglists forms))]
     `(def ~(def-meta-name name doc attr) (fn ~@forms))))
 
+;; Builds a map from a kwargs rest-seq, Clojure 1.11 semantics: pairs are
+;; assoc'd in order, and a call may end with a single trailing map whose
+;; entries are assoc'd in place - so (f :a 1 {:b 2}) binds {:a 1 :b 2}. A
+;; trailing non-map with an odd argument count is the same error it always
+;; was. Defined this early in the bootstrap (fn-expand emits calls to it),
+;; so the body sticks to primitives that already exist here - no into, no
+;; docstring.
+(defn seq-to-map-for-destructuring
+  [s]
+  (if (nil? (seq s))
+    nil
+    (loop [m {} s (seq s)]
+    (if (nil? s)
+      m
+      (if (nil? (next s))
+        (if (map? (first s))
+          (reduce conj m (seq (first s)))
+          (throw (ex-info "kwargs call has an odd number of arguments and no trailing map"
+                          {:trailing (first s)})))
+        (recur (assoc m (first s) (first (next s))) (next (next s))))))))
+
 (defn ^:private fn-expand [bindings body]
   (let [conditions (when (and (next body) (map? (first body))) (first body))
         body (if conditions (next body) body)
@@ -918,11 +939,11 @@
             rest-sym (gensym "rest__")
             map-sym (gensym "map__")
             new-bindings (conj pre '& rest-sym)
-            ;; Build: (let [map-sym (when rest-sym (apply hash-map rest-sym)) mdestr map-sym] body...)
-            ;; An empty rest is nil, and must stay nil through the map
-            ;; destructure — Clojure binds {:as o} to nil, not {}, when no
-            ;; kwargs were passed.
-            let-binds (vector map-sym (list 'if rest-sym (list 'apply 'hash-map rest-sym) nil) mdestr map-sym)
+            ;; Build: (let [map-sym (seq-to-map-for-destructuring rest-sym) mdestr map-sym] body...)
+            ;; seq-to-map-for-destructuring returns nil for an empty/nil rest,
+            ;; so {:as o} binds to nil (not {}) when no kwargs were passed —
+            ;; matching Clojure — while also merging a Clojure 1.11 trailing map.
+            let-binds (vector map-sym (list 'seq-to-map-for-destructuring rest-sym) mdestr map-sym)
             let-form (list* 'let let-binds body)]
         (fn-expand new-bindings (list let-form)))
       (if (some (complement symbol?) bindings)
@@ -2916,3 +2937,20 @@
 ;; with-out-str — capture printed output as a string
 (defmacro with-out-str [& body]
   `(with-out-str* (fn [] ~@body)))
+
+;; The Clojure language level let-go tracks. Libraries gate version-specific
+;; behavior on this (honeysql's suite enables its 1.11+ named-argument tests
+;; from (clojure-version)), so report the tracked level rather than failing
+;; to resolve.
+(def *clojure-version* {:major 1 :minor 11 :incremental 0 :qualifier nil})
+
+(defn clojure-version
+  "Returns the Clojure language version let-go tracks, as a printable string."
+  []
+  (str (:major *clojure-version*)
+       "."
+       (:minor *clojure-version*)
+       "."
+       (:incremental *clojure-version*)
+       (when-let [q (:qualifier *clojure-version*)]
+         (str "-" q))))

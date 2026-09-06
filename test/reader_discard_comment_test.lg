@@ -1,0 +1,21 @@
+(ns test.reader-discard-comment-test
+  (:require [test :refer :all]))
+
+;; #_ skips whitespace AND comments before the form it discards. The reader
+;; used to surface a line comment as the "form", dropping the comment and
+;; letting the supposedly-discarded form survive — honeysql's suite hit this
+;; with a #_ ;; note<newline> (is ...) block that then executed.
+
+(deftest discard-skips-line-comment
+  (is (= [:a :c]
+         [:a #_ ;; this comment sits between #_ and its victim
+          (unresolvable-symbol-that-must-never-compile)
+          :c])))
+
+(deftest discard-chain-still-works
+  (is (= [:a :d] [:a #_ #_ :b :c :d])))
+
+(deftest discard-in-map
+  (is (= {:b 2} {#_ ;; drop this pair's key... and the value below is next
+          :a
+          #_ 1 :b 2})))

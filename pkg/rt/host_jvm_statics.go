@@ -7,7 +7,9 @@ package rt
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -143,6 +145,71 @@ func installJVMStatics(ns *vm.Namespace) {
 	defStaticNS("Integer").Def("parseInt", parseLong)
 	defStaticNS("Float").Def("parseFloat", parseFloat)
 	defStaticNS("Double").Def("parseDouble", parseFloat)
+
+	// --- java.util.Locale constants. Code reaches for these to force
+	// locale-independent casing (honeysql upper-cases SQL keywords with
+	// toUpperCase(Locale/US) to dodge the Turkish-I trap). Go's case mapping
+	// is locale-independent already, so the constants are opaque markers the
+	// string .toUpperCase/.toLowerCase methods accept and ignore.
+	// getDefault/setDefault/forLanguageTag are honest no-ops over the same
+	// markers: a default-locale change genuinely cannot affect let-go's case
+	// mapping, which is what code testing locale independence asserts.
+	localeGetDefault := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		return vm.Symbol("java.util.Locale/US"), nil
+	})
+	localeSetDefault := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("Locale/setDefault expects 1 argument")
+		}
+		return vm.NIL, nil
+	})
+	localeForTag := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("Locale/forLanguageTag expects 1 argument")
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("Locale/forLanguageTag expects a string")
+		}
+		return vm.Symbol("java.util.Locale/" + string(s)), nil
+	})
+	for _, nm := range []string{"Locale", "java.util.Locale"} {
+		lns := defStaticNS(nm)
+		for _, c := range []string{"US", "ROOT", "ENGLISH"} {
+			lns.Def(c, vm.Symbol("java.util.Locale/"+c))
+		}
+		lns.Def("getDefault", localeGetDefault)
+		lns.Def("setDefault", localeSetDefault)
+		lns.Def("forLanguageTag", localeForTag)
+	}
+
+	// --- java.net.URLEncoder/encode. Go's url.QueryEscape implements the
+	// same application/x-www-form-urlencoded rules Java does (space -> '+').
+	// The optional second argument is a charset; let-go strings are UTF-8 by
+	// construction, so only UTF-8 is accepted.
+	urlEncode := mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 && len(vs) != 2 {
+			return vm.NIL, fmt.Errorf("URLEncoder/encode expects 1 or 2 arguments, got %d", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("URLEncoder/encode expects a string")
+		}
+		if len(vs) == 2 {
+			enc, ok := vs[1].(vm.String)
+			if !ok {
+				return vm.NIL, fmt.Errorf("URLEncoder/encode charset must be a string")
+			}
+			e := strings.ToUpper(string(enc))
+			if e != "UTF-8" && e != "UTF8" {
+				return vm.NIL, fmt.Errorf("URLEncoder/encode: only UTF-8 supported, got %q", string(enc))
+			}
+		}
+		return vm.String(url.QueryEscape(string(s))), nil
+	})
+	for _, nm := range []string{"URLEncoder", "java.net.URLEncoder"} {
+		defStaticNS(nm).Def("encode", urlEncode)
+	}
 
 	// bare UUID/fromString (lang.go registers only the fully-qualified
 	// java.util.UUID namespace).
