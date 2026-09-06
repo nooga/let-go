@@ -82,7 +82,9 @@ records, multimethods, BigInt/BigDecimal) plus `string`, `set`, `walk`, `edn`,
 `pprint`, `test`, and `core.async`, alongside let-go's own `io`, `http`, `json`,
 `transit`, [`os`](docs/guide/os.md), `System`, `syscall`, and `pods`. See
 [docs/guide/clojure-compatibility.md](docs/guide/clojure-compatibility.md) for
-the full per-namespace status table and the Clojure differences.
+the full per-namespace status table and
+[docs/KNOWN_DIVERGENCES.md](docs/KNOWN_DIVERGENCES.md) for intentional differences,
+temporary mismatches, and the rationale behind shared-suite `:lg` overrides.
 
 ### Babashka pods
 
@@ -218,6 +220,19 @@ lg -b myapp app.lg                # bundle into a self-contained binary
 
 The standalone binary is a copy of `lg` with your bytecode appended. Copy it
 to another machine and it runs.
+
+Release artifacts can split source maps and local-variable tables into a
+digest-bound debug companion:
+
+```bash
+lg -strip -c app.lgb app.lg       # writes app.lgb + app.lgb.debug
+lg -strip -b myapp app.lg         # writes myapp + myapp.debug
+```
+
+Archive the `.debug` file while distributing only the smaller runtime artifact.
+Putting it back beside the artifact restores source-located stack traces
+automatically; `LG_DEBUG_FILE=/path/to/app.debug` selects a companion stored
+elsewhere. A companion for a different build is rejected.
 
 ```bash
 lg -w site app.lg                 # compile to a WASM web app

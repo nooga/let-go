@@ -1,6 +1,9 @@
 package bytecode
 
 import (
+	"bytes"
+	"compress/flate"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -74,6 +77,7 @@ func (d *decoder) decodeExec(parent *vm.Consts) (*ExecUnit, error) {
 		return nil, err
 	}
 	d.flags = flags
+	d.version = version
 
 	if version == 1 {
 		// v1 predates capabilities, so like a capability-less v2 bundle it
@@ -92,7 +96,7 @@ func (d *decoder) decodeExec(parent *vm.Consts) (*ExecUnit, error) {
 		}
 		return unit, nil
 	}
-	if version == 2 {
+	if version == 2 || version == FormatVersion {
 		return d.decodeToExecUnitV2(parent)
 	}
 	return nil, fmt.Errorf("unsupported LGB version %d", version)
@@ -218,9 +222,104 @@ func (d *decoder) readCapabilities() error {
 	return nil
 }
 
+// beginCompressedBody swaps d.r for a reader over the inflated body when
+// FlagCompressed is set. It is called after the plaintext header + capability
+// section (so a version/opcode mismatch is rejected before any inflate) and
+// before the string table — every body section then reads through the new
+// reader transparently.
+//
+// For a byte-backed reader (NewReaderBytes, the embedded-core path) the whole
+// body is inflated into a resident buffer and re-wrapped with NewReaderBytes, so
+// the decoder's zero-copy deferred source-map slicing keeps working — off the
+// inflated buffer instead of the compressed one. For a streaming reader the
+// remaining input is wrapped in a flate reader directly; source maps fall back
+// to eager decode, which is already the streaming path's behavior.
+func (d *decoder) beginCompressedBody() error {
+	declaredSize, err := d.r.ReadVarint()
+	if err != nil {
+		return fmt.Errorf("reading uncompressed bundle body size: %w", err)
+	}
+	if declaredSize > maxUncompressedBundleBodySize {
+		return fmt.Errorf("declared uncompressed bundle body size %d exceeds limit %d", declaredSize, maxUncompressedBundleBodySize)
+	}
+	codec, err := d.r.ReadByte()
+	if err != nil {
+		return fmt.Errorf("reading compression codec: %w", err)
+	}
+	if codec != compressionFlate {
+		return fmt.Errorf("unsupported bundle compression codec %d", codec)
+	}
+	if d.r.HasBackingData() {
+		// data[pos:] is the not-yet-consumed remainder, regardless of bufio
+		// readahead: pos counts logically-consumed bytes and data is the full
+		// original slice.
+		rest := d.r.data[d.r.pos:]
+		zr := flate.NewReader(bytes.NewReader(rest))
+		inflated, readErr := io.ReadAll(io.LimitReader(zr, int64(declaredSize)+1))
+		closeErr := zr.Close()
+		if readErr != nil {
+			readErr = fmt.Errorf("inflating bundle body: %w", readErr)
+		}
+		if closeErr != nil {
+			closeErr = fmt.Errorf("closing compressed bundle body: %w", closeErr)
+		}
+		if err := errors.Join(readErr, closeErr); err != nil {
+			return err
+		}
+		if uint64(len(inflated)) != declaredSize {
+			return fmt.Errorf("inflated bundle body size %d does not match declared size %d", len(inflated), declaredSize)
+		}
+		d.r = NewReaderBytes(inflated)
+		return nil
+	}
+	zr := flate.NewReader(d.r.r)
+	d.r = NewReader(io.LimitReader(zr, int64(declaredSize)+1))
+	d.compressedBodySize = declaredSize
+	d.compressedBodyCloser = zr
+	return nil
+}
+
+// finishCompressedBody verifies that a streaming decode consumed exactly the
+// declared body size and probes the DEFLATE reader once more so a missing end
+// marker or extra inflated byte is reported. Byte-backed decodes are verified
+// eagerly in beginCompressedBody and have no stored closer.
+func (d *decoder) finishCompressedBody() error {
+	if d.compressedBodyCloser == nil {
+		return nil
+	}
+	var validationErr error
+	if got := uint64(d.r.Offset()); got != d.compressedBodySize {
+		validationErr = fmt.Errorf("decoded bundle body size %d does not match declared size %d", got, d.compressedBodySize)
+	} else if _, err := d.r.ReadByte(); err == nil {
+		validationErr = fmt.Errorf("inflated bundle body exceeds declared size %d", d.compressedBodySize)
+	} else if !errors.Is(err, io.EOF) {
+		validationErr = fmt.Errorf("validating compressed bundle body: %w", err)
+	}
+	closeErr := d.closeCompressedBody()
+	return errors.Join(validationErr, closeErr)
+}
+
+func (d *decoder) closeCompressedBody() error {
+	if d.compressedBodyCloser == nil {
+		return nil
+	}
+	closer := d.compressedBodyCloser
+	d.compressedBodyCloser = nil
+	if err := closer.Close(); err != nil {
+		return fmt.Errorf("closing compressed bundle body: %w", err)
+	}
+	return nil
+}
+
 func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 	if err := d.readCapabilities(); err != nil {
 		return nil, err
+	}
+	if d.flags&FlagCompressed != 0 {
+		if err := d.beginCompressedBody(); err != nil {
+			return nil, err
+		}
+		defer d.closeCompressedBody()
 	}
 
 	strings, err := d.readStringTable()
@@ -295,6 +394,9 @@ func (d *decoder) decodeToExecUnitV2(parent *vm.Consts) (*ExecUnit, error) {
 		}
 	}
 
+	if err := d.finishCompressedBody(); err != nil {
+		return nil, err
+	}
 	return unit, nil
 }
 
@@ -311,6 +413,7 @@ func DecodeWithResolver(r io.Reader, resolve VarResolver) (*Module, error) {
 		return nil, err
 	}
 	d.flags = flags
+	d.version = version
 	if version == 1 {
 		// Same implicit pre-removal signature handling as the exec-unit v1
 		// path above. The raw ChunkData code is re-synced from the remapped
@@ -332,22 +435,25 @@ func DecodeWithResolver(r io.Reader, resolve VarResolver) (*Module, error) {
 		}
 		return m, nil
 	}
-	if version == 2 {
+	if version == 2 || version == FormatVersion {
 		return d.readModuleV2()
 	}
 	return nil, fmt.Errorf("unsupported LGB version %d", version)
 }
 
 type decoder struct {
-	r          *Reader
-	resolve    VarResolver
-	flags      uint16
-	constsBase int
-	strings    []string
-	chunks     []*vm.CodeChunk
-	moduleCaps uint32 // populated when FlagCapabilities is set in v2
-	stats      *DecodeStats
-	remapFunc  func([]*vm.CodeChunk) // migration to apply after chunks are decoded, or nil
+	r                    *Reader
+	resolve              VarResolver
+	version              uint16
+	flags                uint16
+	constsBase           int
+	strings              []string
+	chunks               []*vm.CodeChunk
+	moduleCaps           uint32 // populated when FlagCapabilities is set in v2+
+	stats                *DecodeStats
+	remapFunc            func([]*vm.CodeChunk) // migration to apply after chunks are decoded, or nil
+	compressedBodySize   uint64
+	compressedBodyCloser io.Closer
 }
 
 // readModuleV1 is the frozen v1 decode path. Do not modify.
@@ -410,6 +516,12 @@ func (d *decoder) readModuleV2() (*Module, error) {
 	if err := d.readCapabilities(); err != nil {
 		return nil, err
 	}
+	if d.flags&FlagCompressed != 0 {
+		if err := d.beginCompressedBody(); err != nil {
+			return nil, err
+		}
+		defer d.closeCompressedBody()
+	}
 
 	strings, err := d.readStringTable()
 	if err != nil {
@@ -468,7 +580,7 @@ func (d *decoder) readModuleV2() (*Module, error) {
 	}
 
 	m := &Module{
-		Version:    2,
+		Version:    d.version,
 		Flags:      d.flags,
 		Strings:    strings,
 		Chunks:     chunkDatas,
@@ -478,6 +590,9 @@ func (d *decoder) readModuleV2() (*Module, error) {
 	}
 	if d.flags&FlagCapabilities != 0 {
 		m.Capabilities = d.moduleCaps
+	}
+	if err := d.finishCompressedBody(); err != nil {
+		return nil, err
 	}
 	return m, nil
 }
@@ -497,6 +612,18 @@ func (d *decoder) readHeader() (version, flags uint16, err error) {
 	flags, err = d.r.ReadUint16()
 	if err != nil {
 		return 0, 0, fmt.Errorf("reading flags: %w", err)
+	}
+	var supportedFlags uint16
+	switch version {
+	case 1:
+		supportedFlags = v1Flags
+	case 2:
+		supportedFlags = v2Flags
+	case FormatVersion:
+		supportedFlags = v3Flags
+	}
+	if supportedFlags != 0 && flags&^supportedFlags != 0 {
+		return 0, 0, fmt.Errorf("unsupported LGB flags 0x%04x for version %d (supported: 0x%04x)", flags&^supportedFlags, version, supportedFlags)
 	}
 	return version, flags, nil
 }

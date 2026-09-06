@@ -3,15 +3,61 @@ package bytecode
 // Magic bytes identifying an LGB file.
 var Magic = [4]byte{'L', 'G', 'B', 0x01}
 
-// FormatVersion is the current serialization format version.
-const FormatVersion uint16 = 2
+// FormatVersion is the newest serialization format version. Version 3 adds
+// the compressed-body framing. Plain bundles continue to use version 2 so
+// compression remains opt-in and their encoding stays byte-identical.
+const FormatVersion uint16 = 3
 
-// Module flags.
+const uncompressedFormatVersion uint16 = 2
+
+// Module flags. Bits are positional via iota — never write an explicit shift.
+// Append new flags before flagsEnd; knownFlags is the derived full mask and must
+// not be used as the admitted set for older format versions (see vNFlags below).
 const (
-	FlagConstsBase   uint16 = 1 << 0 // ConstsBase field is present in consts section
-	FlagCapabilities uint16 = 1 << 1 // Capability mask follows the header
-	FlagLocalVars    uint16 = 1 << 2 // per-chunk local-variable debug tables follow the NS table (v2+)
+	FlagConstsBase   uint16 = 1 << iota // ConstsBase field is present in consts section
+	FlagCapabilities                    // Capability mask follows the header
+	FlagLocalVars                       // per-chunk local-variable debug tables follow the NS table (v2+)
+	// FlagCompressed: the module body (everything after the header + capability
+	// section) is a single compressed stream, prefixed by its declared
+	// uncompressed size and a codec byte. The magic, version, flags, and
+	// capability payload — including the opcode-set signature — stay plaintext,
+	// so a version/opcode mismatch is still rejected before any inflate.
+	// Compression is opt-in at compile time
+	// (lg -c -z / lg -b -z); a bundle without this bit decodes byte-identically
+	// to before.
+	FlagCompressed
+	// FlagDebugSplit marks an artifact whose source maps and local-variable
+	// tables live in an external, digest-bound debug companion.
+	FlagDebugSplit
+
+	flagsEnd // first unused bit; keep last
 )
+
+// knownFlags covers every bit assigned in the block above. It is for layout
+// checks only — readHeader admits flags per format version via vNFlags.
+const knownFlags = flagsEnd - 1
+
+// Per-version admitted flag sets. Appending a flag forces an explicit decision
+// about which versions accept it; using knownFlags as the admitted set would
+// silently widen what older versions accept.
+const (
+	v1Flags uint16 = FlagConstsBase | FlagCapabilities
+	v2Flags uint16 = v1Flags | FlagLocalVars
+	v3Flags uint16 = v2Flags | FlagCompressed | FlagDebugSplit
+)
+
+// Compression codecs (the uncompressed byte after the declared body size).
+// Kept as a value, not a second flag bit, so a future codec (e.g. zstd) slots
+// in without spending flag space or breaking the framing.
+const (
+	compressionNone  byte = 0 // reserved; a compressed bundle never writes this
+	compressionFlate byte = 1 // compress/flate (raw DEFLATE) — stdlib, TinyGo/wasip1-safe
+)
+
+// Keep a corrupt or adversarial bundle from making the byte-backed decode path
+// allocate without bound. This is intentionally well above current production
+// bundles while still providing a deterministic failure before an OOM.
+const maxUncompressedBundleBodySize uint64 = 256 << 20
 
 // Capability bits (valid when FlagCapabilities is set).
 const (

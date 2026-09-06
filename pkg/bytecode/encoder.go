@@ -1,6 +1,9 @@
 package bytecode
 
 import (
+	"bytes"
+	"compress/flate"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -9,38 +12,142 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// Encode serializes a Module to binary format.
+// Encode serializes a Module to binary format. When m.Flags has FlagCompressed
+// set, the header (magic, version, flags, capabilities) is written in plaintext
+// and the body is emitted as a single DEFLATE stream after its declared
+// uncompressed size and a one-byte codec tag. Otherwise the whole module is
+// written uncompressed, byte-identically to before.
 func Encode(w io.Writer, m *Module) error {
+	return encode(w, m, nil)
+}
+
+// encode serializes m, optionally using the live CodeChunk pointer index built
+// alongside it. The pointer index is the authoritative Func-to-chunk mapping;
+// raw Modules do not retain those live pointers and use structural fallback.
+func encode(w io.Writer, m *Module, liveIdx map[*vm.CodeChunk]int) error {
+	enc := newEncoder(w, m, liveIdx)
+	version, err := encodeFormatVersion(m)
+	if err != nil {
+		return err
+	}
+	if m.Flags&FlagCompressed == 0 {
+		if err := enc.writeHeader(m, version); err != nil {
+			return err
+		}
+		if err := enc.writeBody(m); err != nil {
+			return err
+		}
+		return enc.w.Flush()
+	}
+
+	// Serialize the body first so its exact uncompressed size can be declared in
+	// the framing before any compressed bytes are written.
+	var rawBody bytes.Buffer
+	body := &encoder{
+		w:        NewWriter(&rawBody),
+		strings:  enc.strings,
+		strIndex: enc.strIndex,
+		chunks:   enc.chunks,
+		liveIdx:  enc.liveIdx,
+	}
+	if err := body.writeBody(m); err != nil {
+		return err
+	}
+	if err := body.w.Flush(); err != nil {
+		return err
+	}
+	if uint64(rawBody.Len()) > maxUncompressedBundleBodySize {
+		return fmt.Errorf("bundle body is %d bytes; compressed bundles are limited to %d uncompressed bytes", rawBody.Len(), maxUncompressedBundleBodySize)
+	}
+
+	// The v3 header and size remain plaintext, so older decoders reject the
+	// version before interpreting any DEFLATE bytes.
+	if err := enc.writeHeader(m, version); err != nil {
+		return err
+	}
+	if err := enc.w.WriteVarint(uint64(rawBody.Len())); err != nil {
+		return err
+	}
+	if err := enc.w.WriteByte(compressionFlate); err != nil {
+		return err
+	}
+	if err := enc.w.Flush(); err != nil {
+		return err
+	}
+	fw, err := flate.NewWriter(w, flate.BestCompression)
+	if err != nil {
+		return err
+	}
+	return writeAndCloseCompressedBody(fw, rawBody.Bytes())
+}
+
+// encodeFormatVersion picks the minimum format version that admits every bit
+// set in m.Flags. Clearing FlagCompressed therefore normalizes back to the
+// uncompressed write version instead of emitting a plaintext v3 bundle that
+// older decoders would reject for no reason.
+func encodeFormatVersion(m *Module) (uint16, error) {
+	if m.Flags&^v3Flags != 0 {
+		return 0, fmt.Errorf("unsupported LGB flags 0x%04x", m.Flags&^v3Flags)
+	}
+	if m.Flags&^v2Flags != 0 {
+		return FormatVersion, nil
+	}
+	return uncompressedFormatVersion, nil
+}
+
+// writeAndCloseCompressedBody always closes the compressor, including after a
+// body write failure. Joining the errors preserves both the primary write
+// failure and any finalization failure for errors.Is/errors.As callers.
+func writeAndCloseCompressedBody(w io.WriteCloser, body []byte) error {
+	_, writeErr := io.Copy(w, bytes.NewReader(body))
+	if writeErr != nil {
+		writeErr = fmt.Errorf("writing compressed bundle body: %w", writeErr)
+	}
+	closeErr := w.Close()
+	if closeErr != nil {
+		closeErr = fmt.Errorf("closing compressed bundle body: %w", closeErr)
+	}
+	return errors.Join(writeErr, closeErr)
+}
+
+// newEncoder builds an encoder over w with the module's string index primed.
+func newEncoder(w io.Writer, m *Module, liveIdx map[*vm.CodeChunk]int) *encoder {
 	enc := &encoder{
 		w:        NewWriter(w),
 		strings:  m.Strings,
 		strIndex: make(map[string]int, len(m.Strings)),
 		chunks:   m.Chunks,
+		liveIdx:  liveIdx,
 	}
 	for i, s := range m.Strings {
 		enc.strIndex[s] = i
 	}
-	if err := enc.writeHeader(m); err != nil {
+	return enc
+}
+
+// writeBody serializes everything after the header + capability section: the
+// string table, chunks, consts, NS table, and (under FlagLocalVars) the
+// per-chunk local-variable tables. Under FlagCompressed this is the byte range
+// that gets deflated; uncompressed it runs inline.
+func (e *encoder) writeBody(m *Module) error {
+	if err := e.writeStringTable(); err != nil {
 		return err
 	}
-	if err := enc.writeStringTable(); err != nil {
+	if err := e.writeChunks(); err != nil {
 		return err
 	}
-	if err := enc.writeChunks(); err != nil {
+	if err := e.writeConsts(m); err != nil {
 		return err
 	}
-	if err := enc.writeConsts(m); err != nil {
-		return err
-	}
-	if err := enc.writeNSTable(m.NSTable); err != nil {
+	if err := e.writeNSTable(m.NSTable); err != nil {
 		return err
 	}
 	if m.Flags&FlagLocalVars != 0 {
-		if err := enc.writeLocalVarTables(); err != nil {
+		if err := e.writeLocalVarTables(); err != nil {
 			return err
 		}
 	}
-	return enc.w.Flush()
+	return nil
 }
 
 // writeLocalVarTables serializes per-chunk local-variable debug tables (under
@@ -74,7 +181,7 @@ func EncodeModule(w io.Writer, consts *vm.Consts, chunks []*vm.CodeChunk) error 
 		b.AddConst(v)
 	}
 	m := b.Build()
-	return Encode(w, m)
+	return encode(w, m, b.chunkIndex)
 }
 
 // EncodeCompilation serializes a compilation result (main chunk + const pool).
@@ -83,6 +190,12 @@ func EncodeModule(w io.Writer, consts *vm.Consts, chunks []*vm.CodeChunk) error 
 // If consts is a child pool, only the child's entries are serialized with the
 // base offset stored so the decoder can reconstruct the layering.
 func EncodeCompilation(w io.Writer, consts *vm.Consts, mainChunk *vm.CodeChunk) error {
+	return EncodeCompilationCompressed(w, consts, mainChunk, false)
+}
+
+// EncodeCompilationCompressed is EncodeCompilation with an opt-in DEFLATE body
+// (see FlagCompressed). compress=false is byte-identical to EncodeCompilation.
+func EncodeCompilationCompressed(w io.Writer, consts *vm.Consts, mainChunk *vm.CodeChunk, compress bool) error {
 	b := NewModuleBuilder()
 	b.constsBase = consts.Base()
 	// Main chunk must be index 0
@@ -93,7 +206,11 @@ func EncodeCompilation(w io.Writer, consts *vm.Consts, mainChunk *vm.CodeChunk) 
 		b.AddConst(v)
 	}
 	m := b.Build()
-	return Encode(w, m)
+	if compress {
+		m.Flags |= FlagCompressed
+		m.Version = FormatVersion
+	}
+	return encode(w, m, b.chunkIndex)
 }
 
 // EncodeBundle serializes a multi-namespace compilation bundle.
@@ -112,6 +229,13 @@ func EncodeBundle(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm.CodeCh
 // EncodeBundleOrdered serializes a multi-namespace bundle with explicit ordering.
 // nsOrder determines the chunk index assignment (lower index = earlier dependency).
 func EncodeBundleOrdered(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string) error {
+	return EncodeBundleOrderedCompressed(w, consts, nsChunks, nsOrder, false)
+}
+
+// EncodeBundleOrderedCompressed is EncodeBundleOrdered with an opt-in DEFLATE
+// body (see FlagCompressed). compress=false is byte-identical to
+// EncodeBundleOrdered.
+func EncodeBundleOrderedCompressed(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm.CodeChunk, nsOrder []string, compress bool) error {
 	b := NewModuleBuilder()
 	// Register namespace chunks in dependency order
 	for _, name := range nsOrder {
@@ -125,7 +249,11 @@ func EncodeBundleOrdered(w io.Writer, consts *vm.Consts, nsChunks map[string]*vm
 		b.AddConst(v)
 	}
 	m := b.Build()
-	return Encode(w, m)
+	if compress {
+		m.Flags |= FlagCompressed
+		m.Version = FormatVersion
+	}
+	return encode(w, m, b.chunkIndex)
 }
 
 // ModuleBuilder collects strings, chunks, and consts for serialization.
@@ -278,7 +406,7 @@ func (b *ModuleBuilder) SetNSEntry(name string, chunk *vm.CodeChunk) {
 // Build creates the Module.
 func (b *ModuleBuilder) Build() *Module {
 	m := &Module{
-		Version: FormatVersion,
+		Version: uncompressedFormatVersion,
 		// Every new bundle records the producer's opcode-set signature so a
 		// mismatched runtime rejects it at decode (see CapOpcodeSet).
 		Flags:        FlagCapabilities,
@@ -312,14 +440,14 @@ type encoder struct {
 	strings  []string
 	strIndex map[string]int
 	chunks   []*ChunkData
-	// chunkMap maps live CodeChunk pointers to chunk indices (populated by EncodeModule path)
+	liveIdx  map[*vm.CodeChunk]int
 }
 
-func (e *encoder) writeHeader(m *Module) error {
+func (e *encoder) writeHeader(m *Module, version uint16) error {
 	if err := e.w.WriteBytes(Magic[:]); err != nil {
 		return err
 	}
-	if err := e.w.WriteUint16(m.Version); err != nil {
+	if err := e.w.WriteUint16(version); err != nil {
 		return err
 	}
 	if err := e.w.WriteUint16(m.Flags); err != nil {
@@ -507,7 +635,9 @@ func (e *encoder) writeValue(v vm.Value) error {
 		if err := e.w.WriteByte(TagFunc); err != nil {
 			return err
 		}
-		// Find chunk index - search through e.chunks by matching the code
+		// Find the exact live chunk registered by ModuleBuilder. Raw Modules do
+		// not retain that pointer map, so findChunkIndex also has a structural
+		// fallback for the public Encode API.
 		chunkIdx := e.findChunkIndex(val.Chunk())
 		if err := e.w.WriteVarint(uint64(chunkIdx)); err != nil {
 			return err
@@ -629,9 +759,13 @@ func (e *encoder) writeValue(v vm.Value) error {
 }
 
 func (e *encoder) findChunkIndex(c *vm.CodeChunk) int {
+	if idx, ok := e.liveIdx[c]; ok {
+		return idx
+	}
+
 	code := c.Code()
 	for i, ch := range e.chunks {
-		if len(ch.Code) == len(code) {
+		if ch.MaxStack == c.MaxStack() && len(ch.Code) == len(code) {
 			match := true
 			for j := range code {
 				if ch.Code[j] != code[j] {
