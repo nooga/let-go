@@ -1,0 +1,184 @@
+;; Set literals reaching the IR builder and the Go emitter.
+;;
+;; `read-string` reads DATA, so `#{1 2}` comes back as a real PersistentSet
+;; value where the code reader would have produced the form `(hash-set 1 2)`.
+;; That makes a set value reachable in two places it never was before:
+;;
+;;   1. `ir/build`'s `build-form` dispatch — a set is neither vector?, map?
+;;      nor list?, so without a `set?` arm it hits the `:else` throw
+;;      ("build-form: unrecognized form").
+;;   2. the Go emitter's constant path — `(quote #{1 2})` is a set CONSTANT,
+;;      and `boxed-value-expr` had no set arm, so the whole function body
+;;      came back "unsupported function body shape". `clojure.test`'s `is`
+;;      captures its form as a quoted datum, which is how a data-read test
+;;      file reaches this.
+;;
+;; Both paths are pinned here; the bytecode compiler already evaluates a
+;; PersistentSet value directly (it is self-evaluating), which the first
+;; test also covers by comparing against the IR result.
+
+(ns test.ir-set-literal-test
+  (:require
+   [clojure.string :as str]
+   [ir.passes.pipeline :as pipeline]
+   [test :refer :all]))
+
+(defn- ir-eval [src]
+  "Read SRC as data (so #{…} is a real set) and eval it IR-compiled, with
+   the silent bytecode fallback turned off so a build failure is loud."
+  (binding [*ir-compile* true *ir-compile-strict* true]
+    (eval (read-string src))))
+
+(deftest read-string-yields-a-set-value
+  (testing "a data-read #{…} really is a set, not a (hash-set …) form"
+    (is (set? (read-string "#{1 2}")))
+    (is (= #{1 2} (read-string "#{1 2}")))))
+
+(deftest ir-builds-set-literals
+  (testing "a set literal in an IR-compiled defn body"
+    (ir-eval "(defn ir-set-probe [] #{1 2 3})")
+    (is (= #{1 2 3} (eval '(ir-set-probe)))))
+
+  (testing "an empty set literal"
+    (ir-eval "(defn ir-empty-set-probe [] #{})")
+    (is (= #{} (eval '(ir-empty-set-probe))))
+    (is (set? (eval '(ir-empty-set-probe)))))
+
+  (testing "set elements are themselves built, not assumed constant"
+    (ir-eval "(defn ir-set-expr-probe [n] #{(inc n) (dec n)})")
+    (is (= #{2 4} (eval '(ir-set-expr-probe 3)))))
+
+  (testing "a nested set literal"
+    (ir-eval "(defn ir-nested-set-probe [] [#{1} {:k #{2}}])")
+    (is (= [#{1} {:k #{2}}] (eval '(ir-nested-set-probe)))))
+
+  (testing "metadata on a data-read set survives the with-meta call form"
+    ;; `(with-meta #{1} {:a 1})` reads as a LIST whose second element is a
+    ;; set VALUE; build must handle that argument before with-meta can run.
+    (ir-eval "(defn ir-set-meta-probe [] (meta (with-meta #{1} {:a 1})))")
+    (is (= {:a 1} (eval '(ir-set-meta-probe))))))
+
+(deftest ir-walks-into-set-literals-for-scope
+  ;; build's two scope walkers, captures-of (block-arg threading) and
+  ;; free-vars (closure capture), each dispatch on vector?/map? and fall
+  ;; through on anything else. A local used ONLY inside a set literal is
+  ;; therefore invisible to them, and the local goes unthreaded/uncaptured —
+  ;; surfacing as "unresolved symbol <local>" at build time, not as a wrong
+  ;; answer. (`pkg/rt/core/ir/build.lg`'s own `captures-of` is the corpus
+  ;; fixture that hits this: it writes `#{(:binding catch-clause)}`.)
+  (testing "a loop-crossing local used only inside a set literal is threaded"
+    ;; A non-cheap let-bound value referenced only from inside a set literal
+    ;; in the loop body: without the walk, build-loop emits a cross-block
+    ;; direct ref and lower reports "value %N not on stack for materialize".
+    (ir-eval "(defn ir-set-loop-probe [n]
+                (let [big (vec (range n))]
+                  (loop [i 0]
+                    (if (< i 2) (recur (inc i)) #{big}))))")
+    (is (= #{[0 1 2]} (eval '(ir-set-loop-probe 3)))))
+
+  (testing "…including a set literal nested inside a loop-carried expression"
+    (ir-eval "(defn ir-set-loop-nested-probe [n]
+                (let [big (vec (range n))]
+                  (loop [i 0 acc []]
+                    (if (< i 2) (recur (inc i) (conj acc #{big})) acc))))")
+    (is (= [#{[0 1]} #{[0 1]}] (eval '(ir-set-loop-nested-probe 2)))))
+
+  (testing "a closure free var used only inside a set literal is captured"
+    (ir-eval "(defn ir-set-closure-probe [x] (fn [] #{x}))")
+    (is (= #{7} (eval '((ir-set-closure-probe 7))))))
+
+  (testing "a set literal as a map value still exposes its free vars"
+    (ir-eval "(defn ir-set-in-map-probe [x] (fn [] {:k #{x}}))")
+    (is (= {:k #{9}} (eval '((ir-set-in-map-probe 9)))))))
+
+(deftest ir-and-bytecode-agree-on-set-literals
+  (testing "the IR path and the bytecode path produce the same set"
+    ;; The bytecode compiler already handles a PersistentSet value from
+    ;; read-string (a set is self-evaluating there); this pins that the IR
+    ;; path agrees rather than diverging.
+    (let [src "(defn ir-bc-parity-probe [] #{1 2 3})"
+          bc-v (binding [*ir-compile* false] (eval (read-string src)) (eval '(ir-bc-parity-probe)))
+          ir-v (do (ir-eval src) (eval '(ir-bc-parity-probe)))]
+      (is (= bc-v ir-v))
+      (is (= #{1 2 3} ir-v)))))
+
+(defn- lower-set-src []
+  (create-ns 'setlit)
+  (binding [pipeline/*target* :go]
+    (pipeline/lower-ns-to-go "setlit" 'setlit
+      (read-string "[(defn quoted-set [] (quote #{1 2}))
+                    (defn quoted-empty-set [] (quote #{}))
+                    (defn set-literal [n] #{n 4})]"))))
+
+(deftest go-emitter-lowers-set-constants
+  (let [src (lower-set-src)]
+    (testing "every defn in the namespace actually reaches the emitted Go"
+      ;; A fn that fails to lower is dropped from the emitted package with a
+      ;; warning, so the presence of each Go func name is the real signal.
+      (is (string? src))
+      (is (str/includes? src "func QuotedSet"))
+      (is (str/includes? src "func QuotedEmptySet"))
+      (is (str/includes? src "func SetLiteral")))
+
+    (testing "a quoted set constant emits a vm set constructor"
+      (is (str/includes? src "vm.NewSet(")))
+
+    (testing "a quoted EMPTY set constant emits the shared empty set"
+      (is (str/includes? src "vm.EmptyPersistentSet")))
+
+    (testing "a set literal with a non-literal element lowers as a hash-set call"
+      ;; Mirrors build-map: all-literal → Const, otherwise a constructor call.
+      (is (str/includes? src "HashSet")))))
+
+;; Finding 2 of the #819 review: a data-read `^:flag #{1 2}` reaches build-set
+;; as a Const, but boxed-set-expr reconstructed it with vm.NewSet(...) and
+;; never applied the source set's metadata — a behavior gap a text-only check
+;; for "does it call NewSet" can't see. Pin the actual behavior contract
+;; instead: (meta ...) of a data-read metadata-bearing collection constant
+;; must survive, identically, on both the bytecode path (self-evaluating
+;; PersistentSet/PersistentVector/PersistentMap) and the IR path (build-quote
+;; emits a Const carrying the same value, meta included; ir/lower carries a
+;; Const generically to bytecode).
+(defn- ir-eval-meta [src]
+  (binding [*ir-compile* true *ir-compile-strict* true]
+    (meta (eval (read-string src)))))
+
+(deftest ir-and-bytecode-agree-on-set-constant-metadata
+  (testing "a data-read metadata-bearing set constant carries its metadata under IR"
+    (is (= {:flag true} (ir-eval-meta "(quote ^:flag #{1 2})"))))
+  (testing "...and agrees with the bytecode path (a PersistentSet is self-evaluating there)"
+    (is (= (meta (eval (read-string "(quote ^:flag #{1 2})")))
+           (ir-eval-meta "(quote ^:flag #{1 2})")))))
+
+;; The Go emitter side of the same fix: boxed-with-meta (ir.lower-go) wraps
+;; the constructed vm.NewSet(...) with a WithMeta call whenever the source
+;; Const carries metadata. This is checked as generated-Go TEXT (running the
+;; emitted Go behaviorally requires scripts/gogen-trampoline.lg's tagged
+;; binary, which reads its fixture twice — once via `require` with the CODE
+;; reader for the bytecode side of its parity check, once via `read-string`
+;; for lowering — so a metadata-bearing `^:flag` fixture necessarily disagrees
+;; between the two regardless of correctness; that mechanism doesn't fit a
+;; metadata behavior check without changing shared test infra, which is out of
+;; scope here). ir-and-bytecode-agree-on-set-constant-metadata above already
+;; pins the real runtime behavior via the IR-to-bytecode path.
+(deftest go-emitter-applies-set-constant-metadata
+  (create-ns 'setlitmeta)
+  (let [src (binding [pipeline/*target* :go]
+              (pipeline/lower-ns-to-go "setlitmeta" 'setlitmeta
+                (read-string "[(defn quoted-set-with-meta [] (meta (quote ^:flag #{1 2})))]")))]
+    (testing "the metadata-bearing set constant lowers through boxed-with-meta"
+      (is (string? src))
+      (is (str/includes? src "func QuotedSetWithMeta"))
+      (is (str/includes? src "vm.NewSet("))
+      (is (str/includes? src ".(vm.IMeta).WithMeta(")))))
+
+;; What remains open (documented, not fixed here — see the PR report): a
+;; metadata-bearing VECTOR or MAP constant loses its metadata somewhere
+;; between ir/build's Const (which does carry it — build-quote emits the
+;; source value verbatim) and ir.lower-go/boxed-value-expr (which observes a
+;; plain, meta-less vm.ArrayVector/vm.PersistentMap by the time it runs) — a
+;; pre-existing gap in the IR optimize pipeline, predating #801, that affects
+;; vectors/maps specifically and not sets (sets are new to this Const path).
+;; boxed-with-meta itself is implemented identically for all three collection
+;; kinds and is proven correct for sets above; when the upstream stripping is
+;; fixed, vectors/maps get the same behavior for free.

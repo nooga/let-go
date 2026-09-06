@@ -314,6 +314,11 @@
     ;; a cross-block direct ref to an out-of-scope InstId (same failure class
     ;; as the cluster-A bugs, for a non-cheap captured value).
     (into #{} (mapcat #(captures-of % known-locals) (concat (keys form) (vals form))))
+    (set? form)
+    ;; Same reason as the map? arm, for the set literals a data-read source
+    ;; produces (the code reader emitted a (hash-set …) call form, which the
+    ;; list arm already walked).
+    (into #{} (mapcat #(captures-of % known-locals) (seq form)))
     :else #{}))
 
 ;; --- form dispatch -------------------------------------------------------
@@ -321,7 +326,7 @@
 (declare form-heads-dispatcher
          build-list build-symbol build-if build-let build-let* build-do build-quote
          build-var build-set! build-def build-loop build-loop* build-recur build-fn*
-         build-vector build-map build-call build-try build-dot)
+         build-vector build-map build-set build-call build-try build-dot)
 
 ;; Sentinel returned by recur / any form whose current-block is already
 ;; terminated. Callers must check for this before emitting more code.
@@ -373,6 +378,10 @@
               (symbol?  form)  (build-symbol form ctx)
               (vector?  form)  (build-vector form ctx)
               (map?     form)  (build-map form ctx)
+              ;; Before list?: a set is neither list? nor map?, and only a
+              ;; data-read source (read-string) ever hands build a set VALUE —
+              ;; the code reader emits the form (hash-set …) instead.
+              (set?     form)  (build-set form ctx)
               (list?    form)  (build-list form ctx)
               ;; pr-str (not str): a BigDecimal's str drops the `M` suffix, so an
               ;; unrecognized 0.0M would mis-report as a float `0.0`. The readable
@@ -469,6 +478,10 @@
     (into #{} (mapcat #(free-vars % bound) form))
     (map? form)
     (into #{} (mapcat #(free-vars % bound) (concat (keys form) (vals form))))
+    ;; Before seq?: a data-read set literal must be walked like a vector/map
+    ;; literal, else a var captured only inside it is missed by closure emit.
+    (set? form)
+    (into #{} (mapcat #(free-vars % bound) (seq form)))
     (seq? form)
     (into #{} (mapcat #(free-vars % bound) form))
     :else #{}))
@@ -910,6 +923,21 @@
         (let [fn-id   (add-inst! ctx (ctx-block ctx)
                         :load-var [] (resolve 'array-map))]
           (build-call-with-head fn-id pairs ctx))))))
+
+(defn build-set [form ctx]
+  "#{a b c} → Const if every element is a literal; else (hash-set a b c).
+   Empty set → Const literal. Mirrors build-map: a Const keeps the value (and
+   its metadata) intact, the constructor call does not.
+
+   A set VALUE only reaches build from data-read source — `read-string` returns
+   a PersistentSet where the code reader emits the form (hash-set …)."
+  (if (zero? (count form))
+    (add-inst! ctx (ctx-block ctx) :const [] form)
+    (if (every? is-literal? (seq form))
+      (add-inst! ctx (ctx-block ctx) :const [] form)
+      (let [fn-id (add-inst! ctx (ctx-block ctx)
+                    :load-var [] (resolve 'hash-set))]
+        (build-call-with-head fn-id (seq form) ctx)))))
 
 (defn build-try [form ctx]
   "(try body… (catch [Class] e handler…) (finally fin…)) — guarded region.

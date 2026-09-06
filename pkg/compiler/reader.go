@@ -95,6 +95,12 @@ func newLispReaderWithResolvers(r io.Reader, inputName string, registry *TaggedR
 	return reader
 }
 
+func newDataReaderWithResolvers(r io.Reader, inputName string, registry *TaggedReaderRegistry, resolver taggedDataReaderResolver) *LispReader {
+	reader := newLispReaderWithResolvers(r, inputName, registry, resolver)
+	reader.data = true
+	return reader
+}
+
 func NewLispReaderTokenizing(r io.Reader, inputName string) *LispReader {
 	return &LispReader{
 		inputName:          inputName,
@@ -1473,8 +1479,13 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
-	var m vm.Value = vm.EmptyPersistentMap
+	m := vm.EmptyPersistentMap
+	dataM := vm.EmptyPersistentMap
 	tagKey := vm.Keyword("tag")
+	assoc := func(k, v vm.Value) {
+		m = m.Assoc(k, v).(*vm.PersistentMap)
+		dataM = dataM.Assoc(k, v).(*vm.PersistentMap)
+	}
 	for {
 		// Unread the lookahead so r.Read() can dispatch normally.
 		if err := r.unread(); err != nil {
@@ -1491,23 +1502,23 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 				if !ok {
 					continue
 				}
-				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
+				assoc(k, val)
 			}
 		case vm.Map:
 			for k, val := range v {
-				m = m.(*vm.PersistentMap).Assoc(k, val).(*vm.PersistentMap)
+				assoc(k, val)
 			}
 		case vm.Keyword:
-			m = m.(*vm.PersistentMap).Assoc(v, vm.TRUE).(*vm.PersistentMap)
+			assoc(v, vm.TRUE)
 		case vm.Symbol:
-			// A bare-symbol tag (`^Iterable x`) is a type hint. Preserve it as
-			// :tag metadata (the IR's typeinfer/lowering passes can use it), but
-			// quote it so the (often host-class) symbol is a datum, not an
-			// evaluated var reference that won't resolve.
+			// Compiler readers emit a with-meta form, so quote the type-hint
+			// symbol to keep it data when that form is evaluated. Data readers
+			// attach the symbol itself, matching Clojure's metadata value.
 			quotedTag := vm.NewList([]vm.Value{vm.Symbol("quote"), v})
-			m = m.(*vm.PersistentMap).Assoc(tagKey, quotedTag).(*vm.PersistentMap)
+			m = m.Assoc(tagKey, quotedTag).(*vm.PersistentMap)
+			dataM = dataM.Assoc(tagKey, v).(*vm.PersistentMap)
 		case vm.String:
-			m = m.(*vm.PersistentMap).Assoc(tagKey, v).(*vm.PersistentMap)
+			assoc(tagKey, v)
 		default:
 			return vm.NIL, NewReaderError(r, "unsupported meta form")
 		}
@@ -1532,13 +1543,18 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
 	if r.data {
-		// Attach to the value where the runtime supports metadata; values
-		// without metadata support (maps, vectors) read as themselves, which
-		// is what with-meta does for them at runtime too.
+		// Attach to the value where the runtime supports metadata. Data
+		// attaches dataM, in which a bare-symbol tag stays a symbol as in
+		// Clojure; code reading emits a (with-meta ...) form, so m quotes the
+		// tag to keep it a datum when that form is evaluated.
+		//
+		// A target that cannot carry metadata (vm.Symbol is a plain string)
+		// deliberately falls through to the wrapper form below rather than
+		// reading as itself: returning the bare form would drop the metadata
+		// silently, while the wrapper keeps it for whoever consumes the data.
 		if im, ok := form.(vm.IMeta); ok {
-			return im.WithMeta(m), nil
+			return im.WithMeta(dataM), nil
 		}
-		return form, nil
 	}
 	return vm.NewList([]vm.Value{vm.Symbol("with-meta"), form, m}), nil
 }
