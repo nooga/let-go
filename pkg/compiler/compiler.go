@@ -106,6 +106,19 @@ func (c *Context) ChildForEval() *Context {
 	return child
 }
 
+// ChildForLoad returns a fresh top-level context for compiling a required
+// namespace. Required namespaces share the parent's long-lived constant pool
+// and reader/execution configuration, but start with independent compiler
+// state and the supplied scratch namespace.
+func (c *Context) ChildForLoad(ns *vm.Namespace) *Context {
+	child := NewCompiler(c.consts, ns)
+	child.debug = c.debug
+	child.taggedReaders = c.taggedReaders
+	child.dataReaderResolver = c.dataReaderResolver
+	child.execContext = c.execContext
+	return child
+}
+
 func (c *Context) SetSource(source string) *Context {
 	c.source = source
 	return c
@@ -134,6 +147,12 @@ func (c *Context) evaluationExecContext() *vm.ExecContext {
 		ec = vm.RootExecContext
 	}
 	return execContextWithTaggedReaders(ec, c.taggedReaders)
+}
+
+// EvaluationExecContext returns the execution context configured for compiled
+// code, including the context-local tagged-reader registry binding.
+func (c *Context) EvaluationExecContext() *vm.ExecContext {
+	return c.evaluationExecContext()
 }
 
 func (c *Context) Consts() *vm.Consts {

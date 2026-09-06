@@ -149,7 +149,7 @@ func (r *NSResolver) loadSource(sourceName string, reader io.Reader, recordChunk
 	if rt.CoreNS != nil {
 		scratch.Refer(rt.CoreNS, "", true)
 	}
-	freshCtx := compiler.NewCompiler(r.ctx.Consts(), scratch)
+	freshCtx := r.ctx.ChildForLoad(scratch)
 	freshCtx.SetSource(sourceName)
 	chunk, _, err := freshCtx.CompileMultiple(reader)
 	nns := freshCtx.CurrentNS()
@@ -279,6 +279,7 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) (*vm.Name
 
 	ons := r.ctx.CurrentNS()
 	f := vm.NewFrame(chunk, nil)
+	f.SetExecContext(r.ctx.EvaluationExecContext())
 	result, err := f.RunProtected()
 	vm.ReleaseFrame(f)
 	if err != nil {
