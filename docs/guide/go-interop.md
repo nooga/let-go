@@ -72,10 +72,10 @@ needs `(require 'hash)` first:
 ```
 
 Mechanically, `cmd/lginterop` is a two-stage pipeline: the Go binary scans the
-target package and extracts its exports, then drives `scripts/lginterop.lg`
-(via the `lg` binary, which the tool builds itself) to render the Go source.
-You don't need to know that to use it, but it explains why the tool wants to
-run from the repo root.
+target package and extracts its exports, then drives the embedded
+`cmd/lginterop/lginterop.lg` emitter to render the Go source. Both stages run
+in the same process — the tool links the let-go runtime, so `gogen` is already
+there — which is why it needs neither a let-go checkout nor an `lg` binary.
 
 Related docs: [Embedding let-go in Go](embedding-in-go.md) covers the host
 side (running let-go inside your own Go program), which is the other way to
@@ -222,12 +222,14 @@ A contributed `database/sql` wrapper would be three small pieces:
 
 ## Reference: `cmd/lginterop`
 
-Run from the repo root. The tool (re)builds a fresh `./lg` itself on every
-run, so no pre-built binary is needed (see [Usage](usage.md) for building and
-running `lg` generally). Aliases must be unique across a run — two packages
+The tool links the let-go runtime and runs its emitter in-process, so it needs
+neither a let-go checkout nor an `lg` binary — `go run
+github.com/nooga/let-go/cmd/lginterop@<version>` works from any module (see
+[Usage](usage.md) for building and running `lg` generally). Aliases must be
+unique across a run — two packages
 resolving to the same alias would write the same `interop_<alias>.go`, so the
-tool refuses up front. Set `LGINTEROP_KEEP_SCRIPT=1` to keep the intermediate
-`.lg` driver script for inspection instead of cleaning it up. The tool has
+tool refuses up front. Set `LGINTEROP_KEEP_SCRIPT=1` to dump the
+intermediate `.lg` driver script to a temp file for inspection. The tool has
 two modes:
 
 **External-package mode** — scan a Go package and generate an interop
@@ -237,21 +239,81 @@ namespace:
 go run ./cmd/lginterop -packages <import-path>[,<import-path>...] -out pkg/rt
 ```
 
-The generated file starts with a header recording the exact invocation —
-including flags — so regenerating from the header's own command
-round-trips byte-identically. An e2e golden test
-(`test/e2e/lginterop_regen_test.go`) holds `interop_xxh3.go` to that
-round trip.
+The generated file starts with a header recording the invocation — flags, any
+non-default alias (as `-packages path=alias`), and, when the generator was run
+`@<version>`, a `Generated with lginterop <version>` line — so regenerating
+from the header's own command round-trips byte-identically. The one thing the
+header omits is `-out`: the file's own location supplies the destination, and
+baking a path in would make the bytes differ per checkout. E2e golden tests
+(`test/e2e/lginterop_regen_test.go`) hold `interop_xxh3.go` and a
+non-default-alias output to that round trip.
+
+Aliases that would collide with the generated file's own imports (`vm`, or
+`fmt` in smart mode) are rejected up front, as are two aliases that normalize
+to the same `interop_<alias>.go` (`-` and `.` become `_` in filenames). A
+scanned package with no eligible exports is reported as skipped in the final
+summary rather than counted as generated.
 
 | Flag | Meaning |
 |---|---|
-| `-packages` | comma-separated Go import paths to wrap (overrides `deps.edn` `:gointerop`) |
+| `-packages` | comma-separated Go import paths to wrap (overrides `deps.edn` `:gointerop`); `path=alias` pins a non-default namespace alias, like `deps.edn`'s `{"path" "alias"}` form |
 | `-dir` | directory containing a `deps.edn` whose `:gointerop` key lists packages (default `.`) |
 | `-out` | output directory for the generated Go files (default `.lg-interop`; use `pkg/rt` for in-tree namespaces) |
 | `-smart` | generate explicit wrappers with type-specific unboxing/boxing instead of `vm.MustBox` |
 | `-skeleton` | also emit a `<alias>_skeleton.lg` of `defn-` stubs to hand-customize into a veneer |
 | `-opaque-structs` | skip `vm.RegisterStruct`: struct types stay `vm.Boxed` and dispatch methods reflectively, instead of flattening to field-only Records — required when the API is used through methods (xxh3's `Hasher` and its `.WriteString`/`.Sum64`) |
 | `-build-tags` | emit `//go:build <constraint>` as the first line of each generated file (recorded in the header so regeneration round-trips). Used for xxh3 as `'!tinygo'`: the reflect-boxed bindings can't run under TinyGo |
+| `-out-pkg` | emit a self-contained package of this name for use **outside** the let-go tree (see below). Omit it for the in-tree `package rt` output |
+
+### Out-of-tree generation
+
+By default the emitter writes `package rt` with unqualified calls, because the
+generated file is compiled *as part of* `pkg/rt`. A third-party module can't
+use that. `-out-pkg <name>` switches to a self-contained form:
+
+```
+go run github.com/nooga/let-go/cmd/lginterop@<version>   -packages github.com/mattn/go-sqlite3 -out-pkg interop -out ./interop
+```
+
+Three things change, and nothing else does:
+
+- `package <name>` instead of `package rt`.
+- `github.com/nooga/let-go/pkg/rt` joins the imports, and registration becomes
+  `rt.RegisterNS(ns)` rather than the unqualified call.
+- `init()` calls `install<Alias>NS()` **directly** instead of handing it to
+  `RegisterInstaller`.
+
+That last one is the load-bearing detail. `pkg/rt` drains its installer queue
+during its own package init (`pkg/rt/zz_run_installers.go`), and Go runs an
+imported package's `init` *before* the importing package's. An out-of-tree file
+calling `RegisterInstaller` would therefore enqueue after the drain and
+silently never run — no error, just a missing namespace. Calling the install
+function directly is safe: `rt` is fully initialized by the time the importing
+package's `init` fires, `RegisterNS` is mutex-guarded, and the ordering
+relative to `LoadCore` is the same as an in-tree installer's.
+
+The flag is recorded in the generated-by header, so regenerating from that
+header's own command round-trips. `-out-pkg rt` is rejected: omitting the flag
+already selects the in-tree output, and accepting `rt` would give one name two
+meanings.
+
+Blank-import the generated package from your `main` to get the namespace
+registered; see [Building a custom `lg`](custom-lg.md) for the full module
+layout.
+
+#### Module-context caveat
+
+Scanning uses the `go/types` **source** importer, which resolves imports
+against the module context of the current working directory. A package is only
+scannable from inside a module that already requires it:
+
+```
+go get github.com/mattn/go-sqlite3   # first
+go run .../cmd/lginterop -packages github.com/mattn/go-sqlite3 -out-pkg interop
+```
+
+Scanning from an unrelated directory fails with an import error naming the
+package and this hint. Standard-library packages are always resolvable.
 
 **Primitives mode** — scan `//lg:`-annotated Go sources and generate the
 internal-primitive registrar:

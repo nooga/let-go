@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package cli
 
 import (
 	"bufio"

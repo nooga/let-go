@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package cli
 
 // rio doesn't interpret ANSI escapes — strip them from the banner.
 // Also adjust the quit hint: plan9's rc has no SIGINT, so Ctrl-C does nothing
