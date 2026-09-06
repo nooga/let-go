@@ -57,3 +57,33 @@ func TestNestedMultiFnTemplateStillExecutesViaBytecodeLowering(t *testing.T) {
 		t.Fatalf("expected captured one-arity branch to produce 3, got %T %v", result, result)
 	}
 }
+
+func TestIRBytecodePreservesCaptureFreeClosureIdentity(t *testing.T) {
+	ensureLoader()
+
+	runLispExpr(t, `(binding [*ir-compile* true]
+		(eval (quote
+			(defn ir-closure-identity-regression [eq]
+				(let* [f (fn* [x] (+ x 1))
+				       f-again f]
+				  (eq f f-again))))))`)
+	runLispExpr(t, `(binding [*ir-compile* true]
+		(eval (quote
+			(defn ir-closure-identity-variadic-regression [eq]
+				(let* [f (fn* [x] (+ x 1))]
+				  (eq f f f))))))`)
+	runLispExpr(t, `(binding [*ir-compile* true]
+		(eval (quote
+			(defn ir-distinct-closure-sites-regression [identical?]
+				(not (identical? (fn* [x] x) (fn* [x] x)))))))`)
+
+	for _, call := range []string{
+		`(ir-closure-identity-regression =)`,
+		`(ir-closure-identity-variadic-regression =)`,
+		`(ir-distinct-closure-sites-regression identical?)`,
+	} {
+		if result := runLispExpr(t, call); result != vm.TRUE {
+			t.Fatalf("%s = %v, want true", call, result)
+		}
+	}
+}
