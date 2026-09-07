@@ -72,9 +72,14 @@ func fromMapValue(v vm.Value) (any, error) {
 			if e != nil {
 				return vm.NIL, vm.NewExecutionError("invalid VM value")
 			}
-			nk := k.String()
-			if k.Type() == vm.KeywordType {
-				nk = nk[1:]
+			var nk string
+			switch k := k.(type) {
+			case vm.String:
+				nk = string(k)
+			case vm.Keyword:
+				nk = string(k)
+			default:
+				nk = k.String()
 			}
 			r[nk] = vv
 		}
