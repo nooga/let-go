@@ -38,9 +38,10 @@ rebase that touches `.lg` sources.
 
 ## Generated artifacts
 
-Editing `pkg/rt/core/**/*.lg` changes nothing until `make generate` runs: the
-runtime loads `pkg/rt/core_compiled.lgb` and the `zz_primitives_generated.go`
-registrars instead of the source, and `pkg/rt/generated.sums` is the content
+Editing `pkg/rt/core/**/*.lg`, the IR tables `pkg/ir/ir_*.lg`, or a
+`//lg:native` marker changes nothing until `make generate` runs: the runtime
+loads `pkg/rt/core_compiled.lgb`, the generated IR op, bridge, and data tables,
+and the `zz_primitives_generated.go` registrars instead of the source, and `pkg/rt/generated.sums` is the content
 digest that decides freshness. Those files are committed. The Go-lowered tree,
 `pkg/rt/core_go_lowered/` (linked under `-tags gogen_ir`), is gitignored:
 `make generate` and `make check-generated` rebuild it locally, and its

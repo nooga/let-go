@@ -8,7 +8,7 @@ Contributor material lives under `docs/`: start at `docs/README.md`, then
 
 ## The rule people trip on
 
-Editing `pkg/rt/core/**/*.lg` changes nothing until `make generate` runs, and the
+Editing `pkg/rt/core/**/*.lg` or `pkg/ir/ir_*.lg` changes nothing until `make generate` runs, and the
 regenerated files commit together with the edit. `make check-generated` proves freshness;
 `make build` does not. Details: `docs/regenerating-generated-artifacts.md`.
 
