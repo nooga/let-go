@@ -151,6 +151,7 @@ The command:
 - Filters to one architecture (`-seed-arch`, default amd64 per #651), on the file's CONTENT as well as its name
 - Groups every profile it reads by the machine key derived from the file's CONTENT, reporting a filename that names a different machine than it carries
 - Takes the newest `-seed-window` snapshots (default 5) per machine key
+- Skips a machine key with fewer than `-seed-min-window` snapshots (default 3): a tier that has only just started reporting has no window to disagree with, so it stays ungated until the runs accrue
 - Rejects a snapshot whose `ratio_to_anchor` values sit more than `-seed-coherence-tolerance` (default 5%) off the rest of its window
 - Medians each benchmark across the survivors **in ratio space**, deriving `ns_per_op` back from the window's anchor
 - Skips a benchmark present in fewer than half the surviving snapshots, rather than seeding it from one observation

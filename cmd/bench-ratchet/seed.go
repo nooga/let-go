@@ -51,6 +51,10 @@ type seedOptions struct {
 	minIterations int64
 	// archPrefix restricts seeding to one architecture (#651: amd64-only).
 	archPrefix string
+	// minWindow skips a machine key with fewer snapshots than this. A tier
+	// seeded from one or two runs has no window to disagree with: the
+	// coherence check cannot run and every floor is a single observation.
+	minWindow int
 }
 
 // Defaults for `seed-baseline`, shared by the flag definitions in main() and
@@ -61,6 +65,8 @@ const (
 	defaultSeedIterationTolerance = 0.10
 	defaultSeedMinIterations      = 20
 	defaultSeedArch               = "amd64"
+	// Three is the smallest window rejectIncoherent can vote on.
+	defaultSeedMinWindow = 3
 )
 
 // defaultSeedOptions is the configuration `seed-baseline` runs with when no
@@ -72,6 +78,7 @@ func defaultSeedOptions() seedOptions {
 		iterationTolerance: defaultSeedIterationTolerance,
 		minIterations:      defaultSeedMinIterations,
 		archPrefix:         defaultSeedArch,
+		minWindow:          defaultSeedMinWindow,
 	}
 }
 
@@ -132,6 +139,14 @@ func seedBaseline(baselinePath, perfDataDir string, opt seedOptions) {
 		sort.Slice(cands, func(i, j int) bool { return cands[i].file.timestamp > cands[j].file.timestamp })
 		if len(cands) > opt.window {
 			cands = cands[:opt.window]
+		}
+		// A machine that has only just started reporting has no window yet.
+		// Leaving it out means check runs ungated on it until the runs
+		// accrue, which is the same call the benchmark-level quorum makes.
+		if len(cands) < opt.minWindow {
+			fmt.Printf("  %s: %d snapshot(s), fewer than -seed-min-window %d — not seeded\n",
+				key, len(cands), opt.minWindow)
+			continue
 		}
 		mb, ok := seedOneMachine(key, cands, opt)
 		if !ok {

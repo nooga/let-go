@@ -190,6 +190,7 @@ func main() {
 		seedIterTol      = flag.Float64("seed-iteration-tolerance", defaultSeedIterationTolerance, "seed-baseline only: report a benchmark whose b.N spread across the window exceeds this fraction. Reported, not excluded.")
 		seedMinIters     = flag.Int64("seed-min-iterations", defaultSeedMinIterations, "seed-baseline only: report a benchmark whose median b.N falls below this. Reported, not excluded.")
 		seedArch         = flag.String("seed-arch", defaultSeedArch, "seed-baseline only: architecture to seed from (#651: amd64-only initial seed).")
+		seedMinWindow    = flag.Int("seed-min-window", defaultSeedMinWindow, "seed-baseline only: skip a machine key with fewer snapshots than this. A tier seeded from one or two runs has no window to disagree with, so every floor is a single observation.")
 	)
 	flag.Parse()
 
@@ -238,12 +239,16 @@ func main() {
 		if *seedWindow < 1 {
 			die("-seed-window must be at least 1")
 		}
+		if *seedMinWindow < 1 || *seedMinWindow > *seedWindow {
+			die("-seed-min-window must be between 1 and -seed-window (%d)", *seedWindow)
+		}
 		seedBaseline(*baselinePath, *perfDataDir, seedOptions{
 			window:             *seedWindow,
 			coherenceTolerance: *seedCoherenceTol,
 			iterationTolerance: *seedIterTol,
 			minIterations:      *seedMinIters,
 			archPrefix:         *seedArch,
+			minWindow:          *seedMinWindow,
 		})
 		return
 	}

@@ -118,6 +118,14 @@ func runSeed(t *testing.T, timeline, baselinePath string, opt seedOptions) (Base
 	return got, out
 }
 
+// singleSnapshotOptions seeds from one snapshot, for tests whose subject is
+// something other than the window.
+func singleSnapshotOptions() seedOptions {
+	opt := defaultSeedOptions()
+	opt.minWindow = 1
+	return opt
+}
+
 func onlyMachine(t *testing.T, b Baseline) MachineBaseline {
 	t.Helper()
 	if len(b.Machines) != 1 {
@@ -276,7 +284,7 @@ func TestSeedBaselineWarnsWhenExclusionMatchesNothing(t *testing.T) {
 			benches: map[string]float64{"test.BenchmarkA": 100}},
 	}
 	timeline, baselinePath := writeSeedFixtures(t, fx)
-	_, out := runSeed(t, timeline, baselinePath, defaultSeedOptions())
+	_, out := runSeed(t, timeline, baselinePath, singleSnapshotOptions())
 
 	if !strings.Contains(out, "matched nothing") {
 		t.Errorf("want a stale-exclusion warning; output was:\n%s", out)
@@ -325,7 +333,7 @@ func TestSeedBaselineSkipsMalformedFilenames(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(timeline, "summary.json"), []byte(`{"version":2}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, out := runSeed(t, timeline, baselinePath, defaultSeedOptions())
+	_, out := runSeed(t, timeline, baselinePath, singleSnapshotOptions())
 
 	if !strings.Contains(out, "summary.json") {
 		t.Errorf("want summary.json reported as skipped; output was:\n%s", out)
@@ -346,7 +354,7 @@ func TestSeedBaselineWarnsOnSlugContentMismatch(t *testing.T) {
 	if err := os.Rename(old, renamed); err != nil {
 		t.Fatal(err)
 	}
-	got, out := runSeed(t, timeline, baselinePath, defaultSeedOptions())
+	got, out := runSeed(t, timeline, baselinePath, singleSnapshotOptions())
 
 	if !strings.Contains(out, "is named for") {
 		t.Errorf("want a slug/content mismatch warning; output was:\n%s", out)
@@ -368,7 +376,7 @@ func TestSeedBaselineMarksEveryMatchingExclusion(t *testing.T) {
 		}},
 	}
 	timeline, baselinePath := writeSeedFixtures(t, fx)
-	got, out := runSeed(t, timeline, baselinePath, defaultSeedOptions())
+	got, out := runSeed(t, timeline, baselinePath, singleSnapshotOptions())
 
 	if strings.Contains(out, "matched nothing") {
 		t.Errorf("both exclusions are present and should be marked matched; output was:\n%s", out)
@@ -513,5 +521,47 @@ func TestSeedBaselineGroupsMisnamedFileIntoContentWindow(t *testing.T) {
 	}
 	if !strings.Contains(out, "from 5/5 snapshots") {
 		t.Errorf("want the stray file counted inside the EPYC window; output was:\n%s", out)
+	}
+}
+
+// A machine key that has only just started reporting has no window to
+// disagree with: the coherence check cannot vote on fewer than three
+// snapshots and the quorum rule passes every benchmark at (1+1)/2 = 1, so
+// each floor would be a single observation. Seen live on 2026-09-06, when a
+// new runner CPU landed its first snapshot on perf-data.
+func TestSeedBaselineSkipsMachineBelowMinWindow(t *testing.T) {
+	newcomer := "AMD EPYC 9V45 96-Core Processor"
+	fx := []seedFixture{
+		{stamp: "20260801T010000Z", sha: "a1a1a1a1a1a1", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		{stamp: "20260802T010000Z", sha: "a2a2a2a2a2a2", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		{stamp: "20260803T010000Z", sha: "a3a3a3a3a3a3", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		{stamp: "20260804T010000Z", sha: "a4a4a4a4a4a4", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		{stamp: "20260805T010000Z", sha: "a5a5a5a5a5a5", anchorNs: 1.5, benches: map[string]float64{"test.BenchmarkA": 100}},
+		{stamp: "20260806T010000Z", sha: "bbbbbbbbbbbb", anchorNs: 1.0, model: newcomer, benches: map[string]float64{"test.BenchmarkA": 70}},
+		{stamp: "20260807T010000Z", sha: "cccccccccccc", anchorNs: 1.0, model: newcomer, benches: map[string]float64{"test.BenchmarkA": 70}},
+	}
+	timeline, baselinePath := writeSeedFixtures(t, fx)
+
+	got, out := runSeed(t, timeline, baselinePath, defaultSeedOptions())
+	if _, ok := got.Machines["amd64/"+newcomer]; ok {
+		t.Errorf("a two-snapshot machine was seeded under the default -seed-min-window %d", defaultSeedMinWindow)
+	}
+	if _, ok := got.Machines["amd64/AMD EPYC 7763"]; !ok {
+		t.Errorf("the five-snapshot machine should still seed; got keys %v", sortedKeys(got.Machines))
+	}
+	if !strings.Contains(out, "fewer than -seed-min-window") {
+		t.Errorf("want the skip reported; output was:\n%s", out)
+	}
+
+	// Lowering the floor is what admits it, so the gate is the thing under test.
+	opt := defaultSeedOptions()
+	opt.minWindow = 1
+	got, _ = runSeed(t, timeline, baselinePath, opt)
+	mb, ok := got.Machines["amd64/"+newcomer]
+	if !ok {
+		t.Fatalf("with -seed-min-window 1 the newcomer should seed; got keys %v", sortedKeys(got.Machines))
+	}
+	if entry := mb.Benchmarks["test.BenchmarkA"]; entry.NSPerOp != 70 {
+		t.Errorf("newcomer ns_per_op = %v, want 70", entry.NSPerOp)
 	}
 }
