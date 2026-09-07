@@ -64,6 +64,24 @@
       (is (includes? s "\"items\""))
       (is (includes? s "2.5")))))
 
+(deftest json-write-string-map-keys
+  (testing "string keys are encoded as JSON object keys, not quoted strings"
+    (is (= "{\"key\":\"value\"}"
+           (write-json {"key" "value"}))))
+
+  (testing "nested string-key maps round-trip"
+    (let [original {"outer" {"inner" 1}}]
+      (is (= original (read-json (write-json original))))))
+
+  (testing "empty, escaped, Unicode, and slash keys round-trip"
+    (doseq [key ["" "a\"b" "snowman-☃" "a/b"]]
+      (let [original {key "value"}]
+        (is (= original (read-json (write-json original)))))))
+
+  (testing "keyword keys retain their existing JSON spelling"
+    (is (= "{\"key\":\"value\"}"
+           (write-json {:key "value"})))))
+
 (deftest json-roundtrip
   (testing "roundtrip preserves floats"
     (let [original {:price 9.99 :qty 3}
