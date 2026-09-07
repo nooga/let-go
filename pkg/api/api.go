@@ -194,6 +194,12 @@ func (l *LetGo) SetLoadPath(path []string) {
 	l.loader.SetPath(path)
 }
 
+// CompilerContext returns the shared compiler context for host integrations
+// such as nREPL servers that must evaluate in the embedded runtime's namespace.
+func (l *LetGo) CompilerContext() *compiler.Context {
+	return l.c
+}
+
 func (l *LetGo) Def(name string, value any) error {
 	val, err := vm.BoxValue(reflect.ValueOf(value))
 	if err != nil {
