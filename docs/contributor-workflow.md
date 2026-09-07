@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-09-06
+last-verified: 2026-09-07
 authoritative-for:
   - contributor-workflow
   - ci-gates-map
@@ -39,10 +39,13 @@ rebase that touches `.lg` sources.
 ## Generated artifacts
 
 Editing `pkg/rt/core/**/*.lg` changes nothing until `make generate` runs: the
-runtime loads `pkg/rt/core_compiled.lgb`, `pkg/rt/core_go_lowered/` (under
-`-tags gogen_ir`), and the `zz_primitives_generated.go` registrars instead of
-the source, and `pkg/rt/generated.sums` is the content digest that decides
-freshness. Never hand-edit a generated file. `make check-generated`, the
+runtime loads `pkg/rt/core_compiled.lgb` and the `zz_primitives_generated.go`
+registrars instead of the source, and `pkg/rt/generated.sums` is the content
+digest that decides freshness. Those files are committed. The Go-lowered tree,
+`pkg/rt/core_go_lowered/` (linked under `-tags gogen_ir`), is gitignored:
+`make generate` and `make check-generated` rebuild it locally, and its
+self-lower is not deterministic, so it is never committed. Never hand-edit a
+generated file. `make check-generated`, the
 `generated-artifacts` CI job, and the `genmanifest` tests all catch a missed
 regeneration. Full detail, including the merge drivers and why `make build`
 cannot be trusted to regenerate: [`regenerating-generated-artifacts.md`](regenerating-generated-artifacts.md).
@@ -93,7 +96,7 @@ cannot be trusted to regenerate: [`regenerating-generated-artifacts.md`](regener
 | `wasip1-build` | `GOOS=wasip1 GOARCH=wasm` builds | same |
 | `tinygo-wasi-build` | runtime-only builds under TinyGo and boots in wasmtime | `tinygo build -target=wasi ./cmd/lg-runtime` |
 | `gold-differential` | goldens re-derived from real Clojure match | cached on the Clojure version; runs on cache miss or dispatch |
-| `gogen-diff` | Go lowering output matches the committed tree | `make gogen-diff` |
+| `gogen-diff` | every `test/gold-aot/*.lg` fixture prints the same output under the bytecode build and the `-tags gogen_ir` build; a new divergence fails, and so does a stale entry in the shrink-only allowlist `test/gogen_aot_xfail.txt` | `make gogen-diff` |
 | `generated-artifacts` | every generated artifact in lockstep with source | `make check-generated` |
 | `docs-frontmatter` | changed docs have well-formed frontmatter (PRs only) | `python3 scripts/docs_frontmatter_hook.py --check docs/...` |
 | `docs-status` | judgement-layer docs report when a PR touches docs (report only) | `python3 scripts/docs_status.py` |
