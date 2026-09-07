@@ -113,11 +113,27 @@
   (testing "checked * still refuses the same overflow"
     (is (thrown? Exception (* Long/MAX_VALUE 2)))))
 
-(deftest unchecked-ops-reject-non-integers-test
-  (testing "the opcode keeps the core fn's Int-only contract"
-    (is (thrown? Exception (unchecked-add 1.5 1)))
-    (is (thrown? Exception (unchecked-subtract 1 "2")))
-    (is (thrown? Exception (unchecked-multiply nil 2)))))
+(deftest unchecked-ops-coerce-like-the-core-fn-test
+  (testing "the opcode and the var agree: non-Int numerics coerce through ToInt (#64)"
+    ;; Direct binary call -> fast opcode; apply -> the core fn. Both must
+    ;; produce the same value, or the result depends on call shape.
+    (is (= 3 (unchecked-add 1.5 2)))
+    (is (= 3 (apply unchecked-add [1.5 2])))
+    (is (= 6 (unchecked-multiply 2.9 3)))
+    (is (= 6 (apply unchecked-multiply [2.9 3])))
+    (is (= 3 (unchecked-add true 2)))
+    (is (= 3 (apply unchecked-add [true 2])))
+    (is (= -1 (unchecked-subtract 1/2 1)))
+    (is (= -1 (apply unchecked-subtract [1/2 1]))))
+  (testing "core.lg's composed variants keep working on floats"
+    (is (= 2 (unchecked-inc 1.5)))
+    (is (= 0 (unchecked-dec 1.5))))
+  (testing "what ToInt rejects is a type error on both paths"
+    (is (thrown? Exception (unchecked-add "1" 2)))
+    (is (thrown? Exception (apply unchecked-add ["1" 2])))
+    (is (thrown? Exception (unchecked-multiply nil 2)))
+    (is (thrown? Exception (unchecked-add (bigint "18446744073709551616") 1)))
+    (is (thrown? Exception (apply unchecked-add [(bigint "18446744073709551616") 1])))))
 
 (deftest unchecked-ops-stay-out-of-the-way-test
   (testing "a local shadowing the name wins over the fast opcode"

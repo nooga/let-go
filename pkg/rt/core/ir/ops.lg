@@ -94,9 +94,10 @@
     (every? #(or (= % :int) (= % [:const :int 0])) types) :int
     :else :unknown))
 
-;; unchecked-add/subtract/multiply are Int-only in let-go (the core fns reject
-;; anything else), so they type exactly like the bitwise ops: int/int -> :int,
-;; and no numeric contagion — there is no float or BigInt result to promote to.
+;; unchecked-add/subtract/multiply always produce an Int: the core fns coerce
+;; any other numeric operand through vm.ToInt first (#64). Only int/int is
+;; PROVEN here, exactly like the bitwise ops; anything else stays :unknown so
+;; the lowerer routes it through the coercing runtime helper.
 (defn- unchecked-op-type [types] (bitwise-op-type types))
 
 ;; --- per-layer lower-facet implementations ------------------------------

@@ -260,11 +260,11 @@ func AddValue(a, b vm.Value) vm.Value {
 }
 
 // UncheckedAddValue / UncheckedSubValue / UncheckedMulValue back the IR's
-// :unchecked-add/-sub/-mul when an operand is not a proven int. They wrap at
-// the platform width through the same int64 round-trip as the
-// CoreUnchecked* fns in lang.go, and panic (like AddValue) on a non-Int.
+// :unchecked-add/-sub/-mul when an operand is not a proven int. They call the
+// same vm.NumUnchecked* implementation as the opcode and the core fn, so they
+// coerce and wrap identically, and panic (like AddValue) on what ToInt rejects.
 func UncheckedAddValue(a, b vm.Value) vm.Value {
-	r, err := CoreUncheckedAdd(a, b)
+	r, err := vm.NumUncheckedAdd(a, b)
 	if err != nil {
 		panic(err)
 	}
@@ -272,7 +272,7 @@ func UncheckedAddValue(a, b vm.Value) vm.Value {
 }
 
 func UncheckedSubValue(a, b vm.Value) vm.Value {
-	r, err := CoreUncheckedSubtract(a, b)
+	r, err := vm.NumUncheckedSubtract(a, b)
 	if err != nil {
 		panic(err)
 	}
@@ -280,7 +280,7 @@ func UncheckedSubValue(a, b vm.Value) vm.Value {
 }
 
 func UncheckedMulValue(a, b vm.Value) vm.Value {
-	r, err := CoreUncheckedMultiply(a, b)
+	r, err := vm.NumUncheckedMultiply(a, b)
 	if err != nil {
 		panic(err)
 	}

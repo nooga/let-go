@@ -933,9 +933,8 @@ func errBitOpType(name string) error {
 	return fmt.Errorf("%s expected Int", name)
 }
 
-// errUncheckedOpType matches the wording of the unchecked-* core fns in
-// pkg/rt/lang.go, so a program sees the same error whether the call went
-// through the fast opcode or the var.
+// errUncheckedOpType is the type error for an operand ToInt rejects; every
+// unchecked-* path reports it through numUnchecked, so the wording is one.
 func uncheckedOpName(op int32) string {
 	switch op {
 	case OP_UNCHECKED_ADD:
@@ -1728,37 +1727,30 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 			f.ip++
 
 		case OP_UNCHECKED_ADD, OP_UNCHECKED_SUB, OP_UNCHECKED_MUL:
-			// Wrapping integer arithmetic (clojure.core/unchecked-*). Same
-			// int64 round-trip as CoreUncheckedAdd/Subtract/Multiply in
-			// pkg/rt/lang.go, so the opcode and the var never diverge.
+			// Wrapping integer arithmetic (clojure.core/unchecked-*). Same shape
+			// as OP_ADD: inline the Int/Int path, and fall back to the generic
+			// implementation the core fn uses (numUnchecked, which coerces
+			// through ToInt) for anything else, so the opcode is never stricter
+			// than the var it replaces.
 			b := f.stack[f.sp-1]
 			a := f.stack[f.sp-2]
 			op := inst & 0xff
-			name := uncheckedOpName(op)
-			ai, ok := a.(Int)
-			if !ok {
-				if f.handleError(errUncheckedOpType(name, a)) {
+			if ai, ok := a.(Int); ok {
+				if bi, ok := b.(Int); ok {
+					f.stack[f.sp-2] = uncheckedIntOp(op, ai, bi)
+					f.sp--
+					f.ip++
 					continue
 				}
-				return NIL, errUncheckedOpType(name, a)
 			}
-			bi, ok := b.(Int)
-			if !ok {
-				if f.handleError(errUncheckedOpType(name, b)) {
+			r, err := numUnchecked(op, a, b)
+			if err != nil {
+				if f.handleError(err) {
 					continue
 				}
-				return NIL, errUncheckedOpType(name, b)
+				return NIL, err
 			}
-			var r int64
-			switch op {
-			case OP_UNCHECKED_ADD:
-				r = int64(ai) + int64(bi)
-			case OP_UNCHECKED_SUB:
-				r = int64(ai) - int64(bi)
-			default:
-				r = int64(ai) * int64(bi)
-			}
-			f.stack[f.sp-2] = MakeInt(int(r))
+			f.stack[f.sp-2] = r
 			f.sp--
 			f.ip++
 
