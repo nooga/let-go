@@ -114,6 +114,19 @@ func boxArgForReflect(v Value, target reflect.Type) (reflect.Value, error) {
 	var convErr error
 
 	if target.Kind() == reflect.Slice || target.Kind() == reflect.Array {
+		// TypedArray is the mutable array boundary: when its native backing
+		// slice already satisfies the Go parameter, pass that slice through so
+		// writes made by APIs such as io.Reader.Read remain visible to let-go.
+		// Incompatible element types and fixed arrays still use the ordinary
+		// per-element conversion below, as do persistent collections.
+		if target.Kind() == reflect.Slice {
+			if arr, ok := v.(*TypedArray); ok && arr != nil {
+				backing := reflect.ValueOf(arr.Unbox())
+				if usableAsReflectArg(backing, target) {
+					return backing, nil
+				}
+			}
+		}
 		if sq, ok := v.(Sequable); ok {
 			out := reflect.New(target).Elem()
 			err := unboxSliceInto(out, sq.Seq())
