@@ -7,7 +7,10 @@
 
 package vm
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
 // boxReflectFunc builds a NativeFn that dispatches to a typed Go function via
 // reflection: it reads the signature (variadic-ness, declared arity, per-param
@@ -38,7 +41,14 @@ func boxReflectFunc(t *theNativeFnType, fn any, ty reflect.Type) (Value, error) 
 				in = ty.In(i)
 			}
 			if args[i] != NIL {
-				rawArgs[i] = boxArgForReflect(args[i], in)
+				// A conversion that cannot be salvaged is reported here, so
+				// the caller sees why the argument was rejected rather than
+				// the reflect.Call panic the bare value would have caused.
+				ra, err := boxArgForReflect(args[i], in)
+				if err != nil {
+					return NIL, fmt.Errorf("arg %d: %w", i, err)
+				}
+				rawArgs[i] = ra
 				// Skip the .Convert() step when the prepared value is
 				// already assignable to the param's interface type — Convert
 				// to an interface erases the dynamic type info reflect.Call
@@ -65,27 +75,49 @@ func boxReflectFunc(t *theNativeFnType, fn any, ty reflect.Type) (Value, error) 
 			}
 		}
 		res := v.Call(rawArgs)
-		lr := len(res)
-		if lr == 0 {
-			return NIL, nil
+
+		// A trailing `error` is Go's failure channel, so surface it as a throw
+		// rather than as a value — but only when a non-error result remains to
+		// return. `func() error` (Close, Write, …) keeps handing the error back
+		// as an ordinary value, which is what existing let-go code expects; the
+		// peel applies from (T, error) upward, exactly as it always has.
+		//
+		// The type test is against the `error` interface rather than the
+		// implemented-by relation: res carries DECLARED result types, so a
+		// function returning a concrete *MyError is returning a value, not
+		// signalling failure.
+		var callErr error
+		if n := len(res); n >= 2 && res[n-1].Type() == reflect.TypeFor[error]() {
+			if e := res[n-1].Interface(); e != nil {
+				callErr = e.(error)
+			}
+			res = res[:n-1]
 		}
-		if lr == 1 {
+
+		switch len(res) {
+		case 0:
+			return NIL, callErr
+		case 1:
 			wv, err := BoxValue(res[0])
 			if err != nil {
 				return NIL, err
 			}
-			return wv, nil
+			return wv, callErr
 		}
-		// assume lr == 2 && res[1] is error
-		wv, err := BoxValue(res[0])
-		if err != nil {
-			return NIL, err
+
+		// Two or more results: box them into a vector. Previously everything
+		// past the second was dropped here, on the Go side and before boxing,
+		// so a .lg veneer could never recover it. (a, b, ok) and (a, b, err)
+		// are ordinary modern Go — strings.Cut returns three.
+		vals := make([]Value, len(res))
+		for i := range res {
+			wv, err := BoxValue(res[i])
+			if err != nil {
+				return NIL, err
+			}
+			vals[i] = wv
 		}
-		errorInterface := reflect.TypeFor[error]()
-		if res[1].Type() == errorInterface && res[1].Interface() != nil {
-			return wv, res[1].Interface().(error)
-		}
-		return wv, nil
+		return ArrayVector(vals), callErr
 	}
 
 	f := &NativeFn{

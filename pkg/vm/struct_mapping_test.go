@@ -264,3 +264,45 @@ func TestUnboxSliceInto_EmptyList(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, target.Len(), "EmptyList must produce empty slice, not 1-element nil-filled slice")
 }
+
+// unboxInto is shared between unboxSliceInto, which allocates a fresh zero
+// element, and RecordToStruct, which writes into an existing struct field that
+// may already hold a value. Converting a value whose Unbox yields nil into an
+// `any` target must therefore CLEAR it, not just decline to write — otherwise
+// the conversion reports success and leaves stale data behind.
+func TestUnboxIntoAnyClearsExistingValue(t *testing.T) {
+	tests := []struct {
+		name string
+		val  Value
+	}{
+		{"NIL", NIL},
+		// Not only NIL reaches this path: any value whose Unbox is nil does.
+		{"an Iterate, whose Unbox is nil", &Iterate{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := reflect.New(reflect.TypeFor[any]()).Elem()
+			target.Set(reflect.ValueOf("stale"))
+
+			if err := unboxInto(target, tt.val); err != nil {
+				t.Fatalf("unboxInto: %v", err)
+			}
+			if got := target.Interface(); got != nil {
+				t.Errorf("target = %#v, want nil (stale value survived)", got)
+			}
+		})
+	}
+}
+
+// The non-nil path still writes through.
+func TestUnboxIntoAnyOverwritesExistingValue(t *testing.T) {
+	target := reflect.New(reflect.TypeFor[any]()).Elem()
+	target.Set(reflect.ValueOf("stale"))
+
+	if err := unboxInto(target, String("fresh")); err != nil {
+		t.Fatalf("unboxInto: %v", err)
+	}
+	if got := target.Interface(); got != "fresh" {
+		t.Errorf("target = %#v, want \"fresh\"", got)
+	}
+}

@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package cli
 
 const (
 	ansiBold     = "\x1b[1m"

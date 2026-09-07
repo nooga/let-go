@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"unicode/utf8"
 )
 
 type theStringType struct {
@@ -95,9 +96,130 @@ func (l String) InvokeMethod(name Symbol, args []Value) (Value, error) {
 			return NewByteArrayFrom([]byte(string(l))), nil
 		}
 		return NIL, fmt.Errorf("string.getBytes expected 0 or 1 argument, got %d", len(args))
+	// The java.lang.String surface Clojure libraries reach on their :clj
+	// branches (honeysql's entity formatting walks .length/.charAt/.indexOf,
+	// its util.str calls .toString/.concat). Indices are RUNE indices — Java's
+	// are UTF-16 units, and runes match them for all BMP text while byte
+	// indices break on the first non-ASCII character. Case mapping is Go's
+	// locale-independent one, which is exactly what code reaching for
+	// toUpperCase(Locale/US) wants; a locale argument is accepted and ignored.
+	case "toString":
+		if len(args) == 0 {
+			return l, nil
+		}
+	case "length":
+		if len(args) == 0 {
+			return Int(utf8.RuneCountInString(string(l))), nil
+		}
+	case "isEmpty":
+		if len(args) == 0 {
+			return Boolean(len(l) == 0), nil
+		}
+	case "charAt":
+		if len(args) == 1 {
+			i, ok := args[0].(Int)
+			if !ok {
+				return NIL, fmt.Errorf("string.charAt index must be an int, got %s", args[0].Type().Name())
+			}
+			rs := []rune(string(l))
+			if i < 0 || int(i) >= len(rs) {
+				return NIL, fmt.Errorf("string.charAt: index %d out of bounds for length %d", int(i), len(rs))
+			}
+			return Char(rs[i]), nil
+		}
+	case "indexOf":
+		if len(args) == 1 || len(args) == 2 {
+			rs := []rune(string(l))
+			from := 0
+			if len(args) == 2 {
+				f, ok := args[1].(Int)
+				if !ok {
+					return NIL, fmt.Errorf("string.indexOf fromIndex must be an int, got %s", args[1].Type().Name())
+				}
+				// Java clamps rather than throwing on out-of-range fromIndex.
+				from = min(max(int(f), 0), len(rs))
+			}
+			var needle string
+			switch a := args[0].(type) {
+			case String:
+				needle = string(a)
+			case Char:
+				needle = string(rune(a))
+			case Int: // Java's indexOf(int ch) codepoint form
+				needle = string(rune(a))
+			default:
+				return NIL, fmt.Errorf("string.indexOf expected a string or character, got %s", args[0].Type().Name())
+			}
+			tail := string(rs[from:])
+			idx := strings.Index(tail, needle)
+			if idx < 0 {
+				return Int(-1), nil
+			}
+			return Int(from + utf8.RuneCountInString(tail[:idx])), nil
+		}
+	case "concat":
+		if len(args) == 1 {
+			s, ok := args[0].(String)
+			if !ok {
+				return NIL, fmt.Errorf("string.concat expected a string, got %s", args[0].Type().Name())
+			}
+			return l + s, nil
+		}
+	case "substring":
+		if len(args) == 1 || len(args) == 2 {
+			rs := []rune(string(l))
+			begin, ok := args[0].(Int)
+			if !ok {
+				return NIL, fmt.Errorf("string.substring beginIndex must be an int, got %s", args[0].Type().Name())
+			}
+			end := Int(len(rs))
+			if len(args) == 2 {
+				if end, ok = args[1].(Int); !ok {
+					return NIL, fmt.Errorf("string.substring endIndex must be an int, got %s", args[1].Type().Name())
+				}
+			}
+			if begin < 0 || begin > end || int(end) > len(rs) {
+				return NIL, fmt.Errorf("string.substring: range [%d, %d) out of bounds for length %d", int(begin), int(end), len(rs))
+			}
+			return String(rs[begin:end]), nil
+		}
+	case "startsWith":
+		if len(args) == 1 {
+			if s, ok := args[0].(String); ok {
+				return Boolean(strings.HasPrefix(string(l), string(s))), nil
+			}
+			return NIL, fmt.Errorf("string.startsWith expected a string, got %s", args[0].Type().Name())
+		}
+	case "endsWith":
+		if len(args) == 1 {
+			if s, ok := args[0].(String); ok {
+				return Boolean(strings.HasSuffix(string(l), string(s))), nil
+			}
+			return NIL, fmt.Errorf("string.endsWith expected a string, got %s", args[0].Type().Name())
+		}
+	case "contains":
+		if len(args) == 1 {
+			if s, ok := args[0].(String); ok {
+				return Boolean(strings.Contains(string(l), string(s))), nil
+			}
+			return NIL, fmt.Errorf("string.contains expected a string, got %s", args[0].Type().Name())
+		}
+	case "toUpperCase":
+		if len(args) <= 1 { // optional locale argument, ignored
+			return String(strings.ToUpper(string(l))), nil
+		}
+	case "toLowerCase":
+		if len(args) <= 1 { // optional locale argument, ignored
+			return String(strings.ToLower(string(l))), nil
+		}
+	case "trim":
+		if len(args) == 0 {
+			return String(strings.TrimSpace(string(l))), nil
+		}
 	default:
 		return NIL, fmt.Errorf("method %s not found on string", name)
 	}
+	return NIL, fmt.Errorf("string.%s: wrong number of arguments %d", name, len(args))
 }
 
 // First implements Seq

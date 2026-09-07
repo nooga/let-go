@@ -225,6 +225,49 @@ func isShadowingCoreRefer(n *Namespace, s Symbol) bool {
 	return false
 }
 
+// warnOnCoreShadow emits the Clojure-parity warning when namespace `n` is about
+// to intern `s` while `s` is currently referred in from clojure.core.
+//
+// Both intern paths call this. `Def` is the Go-side path. `LookupOrAdd` is the
+// path compiled code takes: the `def` special form interns through it
+// (pkg/compiler/compiler.go), so a warning emitted only from `Def` never fires
+// for user code — which is how this check came to be dead for the case it was
+// written for.
+//
+// Clojure JVM only warns on shadow-of-refer, not on raw name overlap:
+//
+//	(ns foo (:refer-clojure :only [defn]))
+//	(defn reset! [x] x)  ;; no warning — reset! was never referred in
+//
+// Stdlib Go-side namespaces that don't auto-refer clojure.core therefore stay
+// silent, while user code using the default (ns ...) form warns. Callers must
+// not hold n.mu: the check reads n's and core's maps through brief accessors.
+// The warning is best-effort, so a benign TOCTOU against a concurrent intern is
+// acceptable.
+func warnOnCoreShadow(n *Namespace, s Symbol) {
+	if coreNamespacePtr == nil || n == coreNamespacePtr || suppressShadowWarn {
+		return
+	}
+	if n.excludedLocked(s) || n.unmappedLocked(s) {
+		return
+	}
+	if !isShadowingCoreRefer(n, s) {
+		return
+	}
+	existing := coreNamespacePtr.localVar(s)
+	if existing == nil || existing.isPrivate {
+		return
+	}
+	// Only warn the first time we shadow in this ns; re-defs of our own var
+	// don't re-warn.
+	if n.localVar(s) != nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"WARNING: %s already refers to: #'clojure.core/%s in namespace: %s, being replaced by: #'%s/%s\n",
+		s, s, n.name, n.name, s)
+}
+
 func (n *Namespace) Def(name string, val Value) *Var {
 	s := Symbol(name)
 	// Warn-on-core-shadow: emit Clojure-parity warning when a non-core
@@ -242,19 +285,7 @@ func (n *Namespace) Def(name string, val Value) *Var {
 	// auto-refered :all, so it does warn on shadow. The check reads core's
 	// and this ns's maps via brief accessors (no lock held across the write
 	// below); the warning itself is best-effort so a benign TOCTOU is fine.
-	if coreNamespacePtr != nil && n != coreNamespacePtr && !n.excludedLocked(s) && !n.unmappedLocked(s) && !suppressShadowWarn {
-		if isShadowingCoreRefer(n, s) {
-			if existing := coreNamespacePtr.localVar(s); existing != nil && !existing.isPrivate {
-				// Only warn the first time we shadow in this ns; subsequent
-				// re-defs of our own var don't re-warn.
-				if n.localVar(s) == nil {
-					fmt.Fprintf(os.Stderr,
-						"WARNING: %s already refers to: #'clojure.core/%s in namespace: %s, being replaced by: #'%s/%s\n",
-						name, name, n.name, n.name, name)
-				}
-			}
-		}
-	}
+	warnOnCoreShadow(n, s)
 	va := NewVar(n, n.name, name)
 	va.SetRoot(val)
 	if val.Type() == NativeFnType {
@@ -331,6 +362,10 @@ func (n *Namespace) LookupOrAdd(symbol Symbol) Value {
 	if v := n.localVar(symbol); v != nil {
 		return v
 	}
+	// The compiler's `def` path lands here, so this is where user code gets
+	// the core-shadow warning. Checked before taking n.mu, and only on the
+	// interning branch, so a repeated def of our own var stays silent.
+	warnOnCoreShadow(n, symbol)
 	// Intern an UNBOUND var (no root) rather than Def(NIL): the compiler
 	// calls this while compiling a `(def x v)` form before it runs, and
 	// `defonce` must be able to tell that interned-but-unrun state from a

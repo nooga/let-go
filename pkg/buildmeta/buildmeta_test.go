@@ -106,8 +106,8 @@ func TestPseudoVersionRevisionRejectsNonPseudoVersions(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		if got := pseudoVersionRevision(tc); got != "" {
-			t.Fatalf("pseudoVersionRevision(%q) = %q, want empty", tc, got)
+		if got := PseudoVersionRevision(tc); got != "" {
+			t.Fatalf("PseudoVersionRevision(%q) = %q, want empty", tc, got)
 		}
 	}
 }

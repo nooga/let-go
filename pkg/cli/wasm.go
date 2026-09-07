@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-package main
+package cli
 
 import (
 	"bytes"
@@ -16,8 +16,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	runtimeDebug "runtime/debug"
 	"strings"
 
+	"github.com/nooga/let-go/pkg/buildmeta"
 	"github.com/nooga/let-go/pkg/bytecode"
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/gomod"
@@ -25,6 +27,106 @@ import (
 	wasmassets "github.com/nooga/let-go/pkg/rt/wasm"
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+// letgoModuleVersion reports which version of let-go the generated WASM module
+// should require when the host has no `replace` for let-go. That is NOT the
+// same as this binary's version once pkg/cli is importable: for a custom lg,
+// the ldflags-stamped version describes the HOST module, and handing it to
+// gomod.Generate would pin the WASM module to github.com/nooga/let-go@v<host-
+// version> — a version that generally does not exist. Read let-go's own entry
+// out of BuildInfo.Deps instead, and fall back to the stamped version only
+// when let-go IS the main module, which is the stock lg binary.
+//
+// A host built through a `replace` does not go through here for -w at all:
+// wasmLetgoSource carries the directive itself into the generated module.
+func letgoModuleVersion() string {
+	info, ok := runtimeDebug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	return letgoVersionFrom(info, version)
+}
+
+func letgoVersionFrom(info *runtimeDebug.BuildInfo, stamped string) string {
+	if info == nil || info.Main.Path == gomod.ModulePath {
+		return stamped
+	}
+	v, _ := letgoDepMeta(info)
+	return v
+}
+
+// wasmLetgoSource decides how the generated WASM module reaches let-go. A
+// non-empty LETGO_SRC (letgoSrcEnv) wins outright and short-circuits BEFORE
+// build info is consulted — it is the explicit override, and the only way
+// out for a host whose replace is unrecoverable, so an error from that
+// replacement may not pre-empt it. A nil result means the ordinary
+// gomod.Generate path applies (which honors LETGO_SRC itself).
+func wasmLetgoSource(letgoSrcEnv string, info *runtimeDebug.BuildInfo) (*gomod.Replacement, error) {
+	if letgoSrcEnv != "" {
+		return nil, nil
+	}
+	return letgoReplacementFrom(info)
+}
+
+// letgoReplacementFrom reads the host's `replace` directive for let-go out of
+// its build info, or nil when there is none. The directive is carried whole
+// — a directory, or a module path with its version — because gomod cannot
+// reconstruct either half on its own: the host's module root is not let-go's,
+// and a fork's version is not a version of github.com/nooga/let-go.
+//
+// Go records a directory replacement with the path exactly as go.mod spells
+// it and "(devel)" (or nothing) for the version. A relative path is therefore
+// unrecoverable once the binary has moved: build info holds no module root to
+// anchor it, and resolving against the working directory would honor
+// whatever checkout the user happens to be standing in. Refuse it and name
+// the override instead.
+func letgoReplacementFrom(info *runtimeDebug.BuildInfo) (*gomod.Replacement, error) {
+	if info == nil {
+		return nil, nil
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != gomod.ModulePath || dep.Replace == nil || dep.Replace.Path == "" {
+			continue
+		}
+		rep := gomod.Replacement{Path: dep.Replace.Path, Version: dep.Replace.Version}
+		if rep.Version == "(devel)" {
+			rep.Version = ""
+		}
+		if rep.IsDir() && !filepath.IsAbs(rep.Path) {
+			return nil, fmt.Errorf("let-go replace path %q is relative and cannot be resolved from a built binary; set LETGO_SRC to the checkout or build the host with an absolute replace", rep.Path)
+		}
+		return &rep, nil
+	}
+	return nil, nil
+}
+
+// letgoDepMeta reads let-go's own module entry out of a dependent binary's
+// build info: the version and commit of the runtime that is actually linked
+// in, which rt exposes as let-go.version / let-go.commit. A replace directive
+// substitutes another source for the required version — the require line
+// then commonly holds the v0.0.0 placeholder from the documented local-replace
+// setup, which names a release that does not exist — so the replacement's
+// version is the one that counts. A directory replace reports no version at
+// all and resolves to "dev"/"none".
+func letgoDepMeta(info *runtimeDebug.BuildInfo) (version, commit string) {
+	for _, dep := range info.Deps {
+		if dep.Path != gomod.ModulePath {
+			continue
+		}
+		if dep.Replace != nil {
+			dep = dep.Replace
+		}
+		v := strings.TrimPrefix(dep.Version, "v")
+		if v == "" || v == "(devel)" {
+			return "dev", "none"
+		}
+		if rev := buildmeta.PseudoVersionRevision(dep.Version); rev != "" {
+			return v, rev
+		}
+		return v, "none"
+	}
+	return "dev", "none"
+}
 
 // wasmModuleName is the module name of the throwaway Go module the WASM build
 // scaffolds around its generated sources. It used to be baked into the module
@@ -126,8 +228,20 @@ func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, ou
 		}
 	}
 
-	// 4. Write go.mod
-	mod, err := gomod.Generate(tmpDir, wasmModuleName, version)
+	// 4. Write go.mod. A host built through a `replace` for let-go has that
+	// directive reproduced verbatim; anything else (including LETGO_SRC set,
+	// which overrides what the binary remembers) takes the ordinary path.
+	info, _ := runtimeDebug.ReadBuildInfo()
+	rep, err := wasmLetgoSource(os.Getenv("LETGO_SRC"), info)
+	if err != nil {
+		return err
+	}
+	var mod gomod.Files
+	if rep == nil {
+		mod, err = gomod.Generate(tmpDir, wasmModuleName, letgoModuleVersion())
+	} else {
+		mod, err = gomod.GenerateWithReplace(tmpDir, wasmModuleName, *rep)
+	}
 	if err != nil {
 		return err
 	}

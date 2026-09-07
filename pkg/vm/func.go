@@ -115,47 +115,60 @@ type bytecodeCallTarget struct {
 // that reuses that same frame must copy them into frame-owned storage before
 // resetting the operand stack. Variadic packing always returns a fresh slice.
 func resolveBytecodeCall(fn Fn, args []Value) (bytecodeCallTarget, bool, error) {
-	display := fn
-	var closedOvers []Value
+	t, closedOvers, display, ok, err := unwrapBytecodeFn(fn, len(args))
+	if err != nil || !ok {
+		return bytecodeCallTarget{}, false, err
+	}
+	prepared := args
+	if t.isVariadric {
+		if len(prepared) < t.arity-1 {
+			return bytecodeCallTarget{}, false, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", display, t.arity-1, len(prepared)))
+		}
+		restlist, boxErr := boxRest(prepared[t.arity-1:])
+		if boxErr != nil {
+			return bytecodeCallTarget{}, false, boxErr
+		}
+		// Never append into prepared: it may be a window into the
+		// caller's operand stack or a host-owned argument slice.
+		packed := make([]Value, t.arity)
+		copy(packed, prepared[:t.arity-1])
+		packed[t.arity-1] = restlist
+		prepared = packed
+	} else if len(prepared) != t.arity {
+		return bytecodeCallTarget{}, false, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", display, t.arity, len(prepared)))
+	}
+	return bytecodeCallTarget{
+		fn:          t,
+		args:        prepared,
+		closedOvers: closedOvers,
+	}, true, nil
+}
+
+// unwrapBytecodeFn walks the MetaFn / MultiArityFn / Closure wrappers around
+// fn to the *Func that an argc-argument call would run, carrying the closure
+// captures along. ok is false for callables that are not bytecode (native,
+// protocol, ...). It allocates nothing, so callers that only need to inspect
+// the target — PrepareCallInto rejecting variadic or wrong-arity fns — can
+// decide before any argument packing happens.
+func unwrapBytecodeFn(fn Fn, argc int) (target *Func, closedOvers []Value, display Fn, ok bool, err error) {
+	display = fn
 	for {
 		switch t := fn.(type) {
 		case *MetaFn:
 			fn = t.Wrapped()
 		case *MultiArityFn:
-			variant, err := t.variantFor(display, len(args))
-			if err != nil {
-				return bytecodeCallTarget{}, false, err
+			variant, verr := t.variantFor(display, argc)
+			if verr != nil {
+				return nil, nil, display, false, verr
 			}
 			fn = variant
 		case *Closure:
 			closedOvers = t.closedOvers
 			fn = t.fn
 		case *Func:
-			prepared := args
-			if t.isVariadric {
-				if len(prepared) < t.arity-1 {
-					return bytecodeCallTarget{}, false, NewExecutionError(fmt.Sprintf("function %s expected at least %d args, got %d", display, t.arity-1, len(prepared)))
-				}
-				restlist, boxErr := boxRest(prepared[t.arity-1:])
-				if boxErr != nil {
-					return bytecodeCallTarget{}, false, boxErr
-				}
-				// Never append into prepared: it may be a window into the
-				// caller's operand stack or a host-owned argument slice.
-				packed := make([]Value, t.arity)
-				copy(packed, prepared[:t.arity-1])
-				packed[t.arity-1] = restlist
-				prepared = packed
-			} else if len(prepared) != t.arity {
-				return bytecodeCallTarget{}, false, NewExecutionError(fmt.Sprintf("function %s expected %d args, got %d", display, t.arity, len(prepared)))
-			}
-			return bytecodeCallTarget{
-				fn:          t,
-				args:        prepared,
-				closedOvers: closedOvers,
-			}, true, nil
+			return t, closedOvers, display, true, nil
 		default:
-			return bytecodeCallTarget{}, false, nil
+			return nil, nil, display, false, nil
 		}
 	}
 }

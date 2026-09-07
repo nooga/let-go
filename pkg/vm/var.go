@@ -310,13 +310,20 @@ func (v *Var) IsPrivate() bool {
 	return v.isPrivate
 }
 
-func (v *Var) Meta() Value {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+func (v *Var) materializeMetaLocked() Value {
+	if pairs, ok := v.meta.(DefMetaPairs); ok {
+		v.meta = NewArrayMap([]Value(pairs))
+	}
 	if v.meta == nil {
 		return NIL
 	}
 	return v.meta
+}
+
+func (v *Var) Meta() Value {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.materializeMetaLocked()
 }
 
 func (v *Var) SetMeta(meta Value) {
@@ -325,12 +332,24 @@ func (v *Var) SetMeta(meta Value) {
 	v.mu.Unlock()
 }
 
+// SetMetaPairs defers construction of a PersistentMap for bundle metadata.
+// The pairs originate in an immutable constant, so retaining its slice is safe.
+func (v *Var) SetMetaPairs(meta Value) {
+	pairs, ok := meta.(DefMetaPairs)
+	if !ok {
+		panic("vm.Var.SetMetaPairs: metadata is not DefMetaPairs")
+	}
+	if len(pairs)%2 != 0 {
+		panic("vm.Var.SetMetaPairs: odd metadata pair count")
+	}
+	v.mu.Lock()
+	v.meta = meta
+	v.mu.Unlock()
+}
+
 func (v *Var) AlterMeta(fn Fn, args []Value) (Value, error) {
 	v.mu.Lock()
-	meta := v.meta
-	if meta == nil {
-		meta = NIL
-	}
+	meta := v.materializeMetaLocked()
 	v.mu.Unlock()
 
 	newMeta, err := fn.Invoke(append([]Value{meta}, args...))

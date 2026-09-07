@@ -1,0 +1,336 @@
+;; IR structural test for keyword-cond-to-switch lowering.
+;;
+;; ACCEPTANCE CRITERION: structurize absorbs pure keyword-dispatch chains
+;; into a single :switch node. This test verifies the pattern structurally.
+;;
+;; PURE FIXTURE: ac1 chain with 3 arms. Uses canonical `case` form (copied from corpus
+;; functions like scalar-type-display in dump.lg). The `case` expands to nested eq/branch-if,
+;; which structurize absorbs into a single :switch node (structurize runs during
+;; Go lowering, not during optimize-fn). Test blocks have zero params (param-less structure),
+;; matching corpus chains that successfully absorb. Param-carrying absorption is tracked
+;; separately in nooga/let-go#674 as future work.
+;;
+;; IMPURE FIXTURE: ac2 chain with an impure test block. Purity gate rejects it.
+;; After optimize-fn, the IR must NOT contain a :switch node (falls back to
+;; nested :if).
+;;
+;; FALSIFICATION: To verify this test documents the actual behavior (not a
+;; false positive), stub structurize.lg::collect-kw-chain to return nil at
+;; line 330, so (merge kw-chains nil) skips all switch generation. Test will
+;; fail because ac1 no longer produces a :switch. Then restore and re-run.
+;;
+;; TEST LAYER: Tests invoke structurize directly (not optimize-fn, which omits
+;; structurize). Assertions check the control TREE returned by structurize,
+;; where :switch nodes are generated.
+
+(ns test.keyword-cond-switch-ir
+  (:require
+   [clojure.string :as str]
+   [gogen :as g]
+   [ir.build :as build]
+   [ir.data :as ir]
+   [ir.lower-go :as lower-go]
+   [ir.passes.pipeline :as pipeline]
+   [ir.structurize :as structurize]
+   [test :refer :all]))
+
+(defn- find-switch-nodes [form visited?]
+  "Recursively find all :switch nodes in control tree (vector form: [:switch ...])."
+  (cond
+    (visited? form)  []
+    (vector? form)
+    (let [visited?' (conj visited? form)
+          [op & args] form
+          this-is-switch (if (= op :switch) [form] [])]
+      ;; Recursively search all args (control tree children)
+      (concat this-is-switch
+              (mapcat (fn [arg] (find-switch-nodes arg visited?')) args)))
+    (map? form)
+    ;; For maps (e.g. branch targets), search values
+    (let [visited?' (conj visited? form)]
+      (mapcat (fn [[_ v]] (find-switch-nodes v visited?'))
+              form))
+    :else []))
+
+(defn- count-switches [fn-ir]
+  "Count :switch nodes in optimized function IR."
+  (count (find-switch-nodes fn-ir #{})))
+
+(defn- extract-case-keywords [switch-node]
+  "Extract the keyword case values from a :switch node (vector form)."
+  (when (and (vector? switch-node) (= (first switch-node) :switch))
+    ;; Vector form: [:switch disc branch-target arms...]
+    ;; arms are like [[:a arm-node] [:b arm-node] [:c arm-node]]
+    (let [[_ _ _ arms] switch-node]
+      (when (vector? arms)
+        (vec (map first arms))))))
+
+;; Runtime definitions for functional correctness tests
+(defn ac1-pure-kw-dispatch [x]
+  "Pure keyword dispatch: param-less canonical chain using case (matches corpus shape)."
+  (case x
+    :a 1
+    :b 2
+    :c 3
+    0))
+
+(defn ac2-impure-kw-dispatch [x]
+  "Impure keyword dispatch: wrapped in do (adds extra instructions)."
+  (do
+    (cond
+      (= x :a) 1
+      (= x :b) 2
+      (= x :c) 3
+      :else 0)))
+
+;; --- AC-1: Pure keyword-dispatch chain (should produce :switch) ---
+
+(deftest ac1-pure-keyword-dispatch-produces-switch
+  (testing "pure keyword-dispatch chain lowers to single :switch node at structurize layer"
+    ;; Use canonical case form: param-less shape matching real corpus chains
+    ;; (case directly dispatches discriminant without explicit conditionals)
+    (let [defn-form '(defn ac1-pure-kw-dispatch [x]
+                       (case x
+                         :a 1
+                         :b 2
+                         :c 3
+                         0))
+          body-raw (drop 3 defn-form)
+          body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
+          expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+          ir-fn (build/build-fn expanded)
+          _ (pipeline/optimize-fn ir-fn)
+          ;; Structurize runs at lower-go time; call it directly to test the mechanism
+          st-result (structurize/structurize ir-fn)
+          tree (:tree st-result)
+          absorbed-blocks (:absorbed-blocks st-result)
+          switch-count (count (find-switch-nodes tree #{}))
+          switches (find-switch-nodes tree #{})]
+      ;; Positive assertion: exactly one :switch in the structurized tree
+      (is (= 1 switch-count)
+          (format "Expected 1 :switch node in structurized tree, found %d" switch-count))
+      ;; Sanity assertion: non-empty absorbed-blocks (confirms absorption happened)
+      (is (not (empty? absorbed-blocks))
+          "Absorbed-blocks should be non-empty for positive case")
+      ;; Verify switch has the expected case arms
+      (when (> switch-count 0)
+        (let [kws (extract-case-keywords (first switches))]
+          (is (contains? (set kws) :a)
+              "Switch must have case arm for :a")
+          (is (contains? (set kws) :b)
+              "Switch must have case arm for :b")
+          (is (contains? (set kws) :c)
+              "Switch must have case arm for :c")))))
+
+  ;; Functional correctness (bytecode path, always works)
+  (testing "pure keyword-dispatch chain computes correctly"
+    (is (= 0 (ac1-pure-kw-dispatch :unknown)))
+    (is (= 1 (ac1-pure-kw-dispatch :a)))
+    (is (= 2 (ac1-pure-kw-dispatch :b)))
+    (is (= 3 (ac1-pure-kw-dispatch :c)))))
+
+;; --- AC-2: Impure test block (should NOT produce :switch) ---
+
+(deftest ac2-impure-keyword-dispatch-rejects-switch
+  (testing "impure keyword-dispatch chain does NOT lower to :switch"
+    ;; Build the IR function from the defn form (with side-effecting form in test position)
+    (let [defn-form '(defn ac2-impure-kw-dispatch [x]
+                       (if (= x :a) 1
+                           (do (println "checking-b-side-effect")
+                               (if (= x :b) 2
+                                   (if (= x :c) 3 0)))))
+          body-raw (drop 3 defn-form)
+          body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
+          expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+          ir-fn (build/build-fn expanded)
+          _ (pipeline/optimize-fn ir-fn)
+          ;; Call structurize directly to test the mechanism
+          st-result (structurize/structurize ir-fn)
+          tree (:tree st-result)
+          switch-count (count (find-switch-nodes tree #{}))]
+      ;; Negative assertion: zero :switch in the structurized tree (purity gate rejects)
+      (is (= 0 switch-count)
+          (format "Impure chain should produce 0 :switch nodes in structurized tree, but found %d"
+                  switch-count))))
+
+  ;; Functional correctness still holds (falls back to nested :if)
+  (testing "impure keyword-dispatch chain still computes correctly"
+    (is (= 0 (ac2-impure-kw-dispatch :unknown)))
+    (is (= 1 (ac2-impure-kw-dispatch :a)))
+    (is (= 2 (ac2-impure-kw-dispatch :b)))
+    (is (= 3 (ac2-impure-kw-dispatch :c)))))
+
+;; --- Nooga's sidefx-chain repro: verifies side effects are not silently dropped ---
+;; This repro ensures the gate properly rejects blocks with side-effecting instructions
+;; in the test position. Without the fix, println would vanish in the Go switch output.
+
+(defn sidefx-chain [x]
+  (if (= x :a) 1
+      (do (println "checking-b-side-effect")
+          (if (= x :b) 2
+              (if (= x :c) 3 0)))))
+
+(deftest ac3-sidefx-chain-preserves-side-effects
+  (testing "keyword-chain with side-effect in test position preserves side effect"
+    ;; Build the IR function from the repro form
+    (let [defn-form '(defn sidefx-chain [x]
+                       (if (= x :a) 1
+                           (do (println "checking-b-side-effect")
+                               (if (= x :b) 2
+                                   (if (= x :c) 3 0)))))
+          body-raw (drop 3 defn-form)
+          body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
+          expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+          ir-fn (build/build-fn expanded)
+          _ (pipeline/optimize-fn ir-fn)
+          ;; Call structurize directly to test the mechanism
+          st-result (structurize/structurize ir-fn)
+          tree (:tree st-result)
+          switch-count (count (find-switch-nodes tree #{}))]
+      ;; Negative assertion: the side effect should cause rejection of absorption
+      ;; (falls back to nested :if instead of :switch)
+      (is (= 0 switch-count)
+          (format "Sidefx-chain should produce 0 :switch nodes, but found %d"
+                  switch-count))))
+
+  ;; Functional correctness: the side effect MUST still happen
+  (testing "sidefx-chain executes side effect and computes correctly"
+    (is (= 1 (sidefx-chain :a)))
+    (is (= 2 (sidefx-chain :b)))
+    (is (= 3 (sidefx-chain :c)))
+    (is (= 0 (sidefx-chain :unknown)))
+    ;; Capture one side-effecting path without capturing `is` reporter output.
+    (let [output (with-out-str (sidefx-chain :b))]
+      (is (= "checking-b-side-effect\n" output)
+          (format "Expected exact side-effect output; output was: %q" output)))))
+
+;; --- AC-4: Namespaced keyword labels must match vm.Keyword strings exactly ---
+
+(deftest ac4-namespaced-keywords-preserve-full-switch-labels
+  (testing "Go switch labels retain keyword namespaces and remain distinct"
+    (let [defn-form '(defn namespaced-kw-dispatch [x]
+                       (case x
+                         :foo/a 1
+                         :bar/a 2
+                         :foo/b 3
+                         0))
+          body-raw (drop 3 defn-form)
+          body-exp (mapv (fn [b] (pipeline/expand-all b)) body-raw)
+          expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+          ir-fn (build/build-fn expanded)
+          _ (pipeline/optimize-fn ir-fn)
+          result (lower-go/lower ir-fn :bridge)
+          src (when (= :lowered (:status result)) (g/render (:decl result)))]
+      (is (= :lowered (:status result))
+          (format "Expected Go lowering, got: %s" result))
+      (is (str/includes? src "case \"foo/a\":") src)
+      (is (str/includes? src "case \"bar/a\":") src)
+      (is (str/includes? src "case \"foo/b\":") src)
+      (is (not (str/includes? src "case \"a\":")) src)
+      (is (not (str/includes? src "case \"b\":")) src))))
+
+
+;; --- AC-5: absorbed blocks must be exclusively owned by the else spine ---
+
+(deftest ac5-shared-predecessor-rejects-switch-absorption
+  (let [defn-form '(defn shared-owner-kw-dispatch [x]
+                     (case x :a 1 :b 2 :c 3 0))
+        body-exp (mapv (fn [b] (pipeline/expand-all b)) (drop 3 defn-form))
+        expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+        ir-fn (build/build-fn expanded)
+        _ (pipeline/optimize-fn ir-fn)
+        before (structurize/structurize ir-fn)
+        absorbed (first (:absorbed-blocks before))
+        old-entry (ir/fn-entry ir-fn)
+        donor (ir/add-block ir-fn)
+        _ (ir/add-terminator! ir-fn donor :branch []
+                              (ir/new-branch-target absorbed []))
+        _ (ir/add-pred! ir-fn absorbed donor)
+        ;; Make the alternate predecessor reachable: a new root chooses either
+        ;; the original chain owner or donor, which enters mid-spine.
+        root (ir/add-block ir-fn)
+        condition (ir/add-inst ir-fn root :load-arg [] 0)
+        _ (ir/add-terminator! ir-fn root :branch-if [condition]
+                              (ir/new-cond-target
+                                (ir/new-branch-target old-entry [])
+                                (ir/new-branch-target donor [])))
+        _ (ir/add-pred! ir-fn old-entry root)
+        _ (ir/add-pred! ir-fn donor root)
+        _ (swap! ir-fn assoc :entry root)
+        after (structurize/structurize ir-fn)]
+    (is (not (nil? absorbed)) "fixture must initially absorb an intermediate test block")
+    (is (= 0 (count (find-switch-nodes (:tree after) #{})))
+        "an intermediate test block with another predecessor is not owned by the chain")))
+
+;; --- AC-6: whole-function fallback must not retain switch-only metadata ---
+
+(deftest ac6-mixed-structurizer-fallback-clears-absorption-metadata
+  (let [defn-form '(defn mixed-fallback-kw-dispatch [x]
+                     (case x :a 1 :b 2 :c 3 0))
+        body-exp (mapv (fn [b] (pipeline/expand-all b)) (drop 3 defn-form))
+        expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+        ir-fn (build/build-fn expanded)
+        _ (pipeline/optimize-fn ir-fn)
+        before (structurize/structurize ir-fn)
+        switch-node (first (find-switch-nodes (:tree before) #{}))
+        default-edge (nth switch-node 4)
+        default-block (ir/branch-target-target default-edge)
+        default-term (ir/block-term default-block ir-fn)
+        live-marker #{-1}
+        _ (ir/replace-op! ir-fn default-term :unsupported-test-terminator)
+        _ (swap! ir-fn assoc :live live-marker)
+        result (lower-go/lower ir-fn :bridge)]
+    (is (= :fallback (:status result)) result)
+    (is (empty? (:absorbed-blocks (deref ir-fn)))
+        "bytecode/goto fallback must restore full CFG block ownership")
+    (is (empty? (:absorbed-insts (deref ir-fn)))
+        "bytecode/goto fallback must restore full CFG instruction ownership")
+    (is (= live-marker (:live (deref ir-fn)))
+        "precomputed Atom metadata must not be overwritten")))
+
+;; --- AC-7: keyword dispatch uses a type guard, never a sentinel ---
+
+(deftest ac7-keyword-switch-has-sentinel-free-type-guard
+  (let [collision (keyword "\u0000not-a-keyword\u0000")
+        case-form (list 'case 'x collision 1 :foo/a 2 :bar/a 3 0)
+        defn-form (list 'defn 'sentinel-free-kw-dispatch '[x] case-form)
+        body-exp (mapv (fn [b] (pipeline/expand-all b)) (drop 3 defn-form))
+        expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+        ir-fn (build/build-fn expanded)
+        _ (pipeline/optimize-fn ir-fn)
+        result (lower-go/lower ir-fn :bridge)
+        src (when (= :lowered (:status result)) (g/render (:decl result)))]
+    (is (= :lowered (:status result)) result)
+    (is (str/includes? src "case vm.Keyword:") src)
+    (is (str/includes? src "switch string(") src)
+    (is (not (str/includes? src "KeywordName")) src)
+    (is (str/includes? src "case \"\\x00not-a-keyword\\x00\":") src)
+    (is (str/includes? src "case \"foo/a\":") src)
+    (is (str/includes? src "case \"bar/a\":") src)))
+
+
+;; --- AC-8: signature rejection must not commit structured metadata ---
+
+(deftest ac8-unsupported-result-clears-structured-candidate-metadata
+  (let [defn-form '(defn unsupported-result-kw-dispatch [x]
+                     (case x :a 1 :b 2 :c 3 0))
+        body-exp (mapv (fn [b] (pipeline/expand-all b)) (drop 3 defn-form))
+        expanded (apply list 'defn (nth defn-form 1) (nth defn-form 2) body-exp)
+        ir-fn (build/build-fn expanded)
+        _ (pipeline/optimize-fn ir-fn)
+        before (structurize/structurize ir-fn)
+        return-ids (vec (mapcat (fn [bid]
+                                  (let [term (ir/block-term bid ir-fn)]
+                                    (if (and term (= :return (ir/op term ir-fn)))
+                                      (ir/refs term ir-fn)
+                                      [])))
+                                (ir/blocks ir-fn)))
+        _ (ir/set-type! ir-fn (first return-ids) :unsupported-test-type)
+        result (lower-go/lower ir-fn :bridge)]
+    (is (not (empty? (:absorbed-blocks before)))
+        "fixture must offer a structured switch candidate")
+    (is (= :fallback (:status result)) result)
+    (is (empty? (:absorbed-blocks (deref ir-fn))))
+    (is (empty? (:absorbed-insts (deref ir-fn))))
+    (is (nil? (:coalesce (deref ir-fn)))
+        "final signature rejection must discard derived lowering caches")))

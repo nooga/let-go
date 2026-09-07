@@ -28,6 +28,78 @@ func BenchmarkDecodeCore(b *testing.B) {
 	}
 }
 
+// BenchmarkDecodeCoreCompressed decodes a DEFLATE-compressed copy of the core
+// bundle, so the delta against BenchmarkDecodeCore is the boot-time cost of
+// shipping the embedded core compressed (it is decoded on every process start).
+func BenchmarkDecodeCoreCompressed(b *testing.B) {
+	b.ReportAllocs()
+	corePath := filepath.Join("..", "rt", "core_compiled.lgb")
+	if _, err := os.Stat(corePath); os.IsNotExist(err) {
+		b.Skip("core_compiled.lgb not found at expected path")
+	}
+	data, err := os.ReadFile(corePath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	// Re-encode the committed (uncompressed) core with FlagCompressed so the
+	// comparison is the same content through the compressed path.
+	m, err := Decode(bytes.NewReader(data))
+	if err != nil {
+		b.Fatal(err)
+	}
+	m.Flags |= FlagCompressed
+	var comp bytes.Buffer
+	if err := Encode(&comp, m); err != nil {
+		b.Fatal(err)
+	}
+	compressed := comp.Bytes()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := Decode(bytes.NewReader(compressed)); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEncodeCore(b *testing.B) {
+	benchmarkEncodeCore(b, false)
+}
+
+func BenchmarkEncodeCoreCompressed(b *testing.B) {
+	benchmarkEncodeCore(b, true)
+}
+
+func benchmarkEncodeCore(b *testing.B, compressed bool) {
+	b.Helper()
+	b.ReportAllocs()
+	corePath := filepath.Join("..", "rt", "core_compiled.lgb")
+	data, err := os.ReadFile(corePath)
+	if os.IsNotExist(err) {
+		b.Skip("core_compiled.lgb not found at expected path")
+	}
+	if err != nil {
+		b.Fatal(err)
+	}
+	m, err := Decode(bytes.NewReader(data))
+	if err != nil {
+		b.Fatal(err)
+	}
+	if compressed {
+		m.Flags |= FlagCompressed
+	}
+
+	b.SetBytes(int64(len(data)))
+	var out bytes.Buffer
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		out.Reset()
+		if err := Encode(&out, m); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(out.Len()), "bytes/output")
+}
+
 func BenchmarkDecodeModuleSmall(b *testing.B) {
 	b.ReportAllocs()
 	mb := NewModuleBuilder()

@@ -203,6 +203,47 @@ func TestPreparedCallArityMismatchErrors(t *testing.T) {
 	}
 }
 
+// PrepareCallInto is the allocation-free entry point for hot native loops
+// (reduce, some, ...): the PreparedCall lives on the caller's stack and the
+// argument slots live in the pooled frame, so preparing and calling a
+// bytecode fn allocates nothing once the frame pool is warm. This is what
+// keeps a compile made of many short reductions from paying two heap
+// allocations per reduce.
+func TestPrepareCallIntoDoesNotAllocate(t *testing.T) {
+	consts := NewConsts()
+	identity := testBytecodeFnReturningArg(consts, 1)
+	second := testBytecodeFnReturningArg(consts, 2)
+	// Warm the frame pool so the measurement sees steady state.
+	{
+		var pc PreparedCall
+		if !RootExecContext.PrepareCallInto(&pc, identity, 1) {
+			t.Fatal("PrepareCallInto rejected a plain unary Func")
+		}
+		pc.Release()
+	}
+	allocs := testing.AllocsPerRun(200, func() {
+		var pc PreparedCall
+		if !RootExecContext.PrepareCallInto(&pc, identity, 1) {
+			t.Fatal("PrepareCallInto rejected a plain unary Func")
+		}
+		if v, err := pc.Call1(Int(3)); err != nil || v != Int(3) {
+			t.Fatalf("Call1 returned %v, %v", v, err)
+		}
+		pc.Release()
+		var pc2 PreparedCall
+		if !RootExecContext.PrepareCallInto(&pc2, second, 2) {
+			t.Fatal("PrepareCallInto rejected a plain binary Func")
+		}
+		if v, err := pc2.Call2(Int(1), Int(2)); err != nil || v != Int(1) { // the helper returns its first arg
+			t.Fatalf("Call2 returned %v, %v", v, err)
+		}
+		pc2.Release()
+	})
+	if allocs != 0 {
+		t.Fatalf("PrepareCallInto + CallN allocated %.0f times per run; want 0", allocs)
+	}
+}
+
 func TestPreparedCallCall2RepeatedInvocation(t *testing.T) {
 	consts := NewConsts()
 	chunk := NewCodeChunk(consts)

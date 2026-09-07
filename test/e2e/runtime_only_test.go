@@ -111,6 +111,24 @@ func TestRuntimeOnly(t *testing.T) {
 		}
 	})
 
+	t.Run("loads split debug companion", func(t *testing.T) {
+		dir := t.TempDir()
+		source := filepath.Join(dir, "runtime-debug.lg")
+		lgb := filepath.Join(dir, "runtime-debug.lgb")
+		src := `(defn explode [] (+ 1 "not-a-number"))
+(when-not *compiling-aot* (explode))`
+		if err := os.WriteFile(source, []byte(src), runtimeOnlyTestFilePerm); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command(full, "-strip", "-c", lgb, source).CombinedOutput(); err != nil {
+			t.Fatalf("compile stripped .lgb: %v\n%s", err, out)
+		}
+		code, out := run(t, lgb)
+		if code == 0 || !strings.Contains(out, "runtime-debug.lg:") {
+			t.Fatalf("want source-located runtime error, got %d:\n%s", code, out)
+		}
+	})
+
 	t.Run("runs bundle with required namespace", func(t *testing.T) {
 		lgb := compileLGB(t, `
 (ns app.main (:require [string]))
