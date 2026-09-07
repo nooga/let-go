@@ -52,9 +52,16 @@ wasmtime on every PR, so the target can't silently regress.
   arithmetic overflows or wraps on the WASM target. Native TinyGo (arm64/amd64)
   is 64-bit and unaffected. Use the standard-Go WASI build when 64-bit fidelity
   matters.
-- **`xxh3` is not bit-compatible.** The `xxh3` dependency is assembly-only on
-  arm64/amd64, so TinyGo links a pure-Go substitute hash. It is deterministic but
-  produces different digests, making a TinyGo build its own determinism domain.
+- **There is no `xxh3` namespace.** The `xxh3` dependency is assembly-only on
+  arm64/amd64 with no purego mode, and its bindings are reflect-boxed, so
+  `interop_xxh3.go` is gated `!tinygo`. Nothing is substituted in its place: a
+  program that calls `xxh3/*` on a TinyGo build gets nil and fails at the call
+  site. Use the `murmur3` namespace instead. It is registered on every build,
+  mirrors the same `Hash` / `HashSeed` / `HashString` / `HashStringSeed`
+  surface, and masks its results to 31 bits so a value is identical on 64-bit
+  native and 32-bit wasm — including across the `int`-width boundary above.
+  Porting a hash-dependent program is a namespace swap, not an acceptance of a
+  separate determinism domain.
 - **No Unix domain sockets or full `os.ProcessState`**, so the nREPL Unix-socket
   transport and some process introspection are unavailable on native builds.
 - **Native macOS does not link** (tinygo-org/tinygo#4794 — Darwin syscalls route
