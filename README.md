@@ -83,7 +83,7 @@ records, multimethods, BigInt/BigDecimal) plus `string`, `set`, `walk`, `edn`,
 `transit`, [`os`](docs/guide/os.md), `System`, `syscall`, and `pods`. See
 [docs/guide/clojure-compatibility.md](docs/guide/clojure-compatibility.md) for
 the full per-namespace status table and
-[docs/KNOWN_DIVERGENCES.md](docs/KNOWN_DIVERGENCES.md) for intentional differences,
+[docs/known-divergences.md](docs/known-divergences.md) for intentional differences,
 temporary mismatches, and the rationale behind shared-suite `:lg` overrides.
 
 ### Babashka pods
