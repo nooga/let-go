@@ -1,29 +1,13 @@
 ;; lg.compiler — the AOT compile driver, as a namespace.
 ;;
-;; #596: this is scripts/lg-compile's body moved into a proper ns so a released
-;; binary can drive AOT lowering with no let-go checkout on disk. It lives under
-;; pkg/rt/core/, so it is an ordinary embedded core namespace: enrolled in
-;; EmbeddedNSNames and swept by genmanifest's sourceSpecs like every other core
-;; source. Editing it therefore churns pkg/rt/generated.sums, which is the
-;; intended cost of it being part of the compiler rather than an auxiliary
-;; attached to it.
+;; An ordinary embedded core namespace: enrolled in EmbeddedNSNames and swept by
+;; genmanifest's sourceSpecs, so edits here churn pkg/rt/generated.sums. It is
+;; kept out of core_compiled.lgb and loads from embedded source on demand — see
+;; cmd/lgbgen.isBundleSkippedTool. Architecture: docs/design/go-aot-backend.md.
 ;;
-;; It is NOT precompiled into core_compiled.lgb. Its requires pull the whole IR
-;; pipeline into the const pool, which costs every `lg` startup, so lgbgen skips
-;; it for the bundle exactly as it skips ir.* and loads it from embedded source
-;; on demand — see cmd/lgbgen.isBundleSkippedTool.
-;;
-;; Why this can be a plain ns when the script could not: as a *script*, the
-;; body had to live in ONE top-level form, because top-level forms compile and
-;; run one at a time and the runtime (ns ..)/eval calls below switch the GLOBAL
-;; current ns — so any later top-level form resolved against the loaded file's
-;; ns instead of the script's. In a namespace, every defn here is compiled when
-;; the ns loads; the user-code eval happens inside a function body invoked
-;; later. There is nothing left to race.
-;;
-;; External contract (gloat calls scripts/lg-compile by path and scrapes
-;; stdout): the "EMIT-FAIL <path> pkg=<pkg> returned <type>" line and the
-;; process exit code are load-bearing. Keep them. test/e2e pins both.
+;; External contract: gloat invokes scripts/lg-compile by path and scrapes
+;; stdout, so the "EMIT-FAIL <path> pkg=<pkg> returned <type>" line and the
+;; process exit code are load-bearing. test/e2e pins both.
 
 (ns lg.compiler
   (:require
@@ -146,11 +130,8 @@
 
 ;; Load every ns first, in dependency order, evaluating ONLY definitional forms,
 ;; so cross-ns refers resolve when lower-all-ns-to-go lowers them — regardless of
-;; input order, and without running top-level user code at compile time.
-;;
-;; THIS is the call that switches the global current ns. In the script it had to
-;; be sequenced against compilation of the forms below it; here it is an ordinary
-;; function body, compiled long before it runs.
+;; input order, and without running top-level user code at compile time. This is
+;; the call that switches the global current ns.
 (defn load-specs! [specs]
   (doseq [s (topo-order-specs specs)]
     (when-not (:ns-sym s) (eval (list 'ns (:nsn s))))
@@ -159,8 +140,7 @@
 
 (defn write-packages!
   "Writes each emitted package to disk. Returns the number of EMIT-FAILs so the
-   caller can decide the exit code. Prints the same lines the script did —
-   gloat scrapes EMIT-FAIL from stdout."
+   caller can decide the exit code. gloat scrapes EMIT-FAIL from stdout."
   [out-dir specs results]
   (let [fails (atom 0)]
     (doseq [pair (map-indexed vector specs)]
@@ -259,21 +239,13 @@
 
    EMIT-FAILs never reach the exit code: a fn that does not lower stays on the
    trampoline and the program still runs, so partial lowering is a normal
-   outcome the orchestrator judges from stdout. Only :error is fatal. This is a
-   function rather than an `if` inside scripts/lg-compile so the policy can be
-   tested directly — an end-to-end test cannot reach it, because no in-tree
-   construct currently fails to lower."
+   outcome the orchestrator judges from stdout. Only :error is fatal."
   [res]
   (if (:error res) 1 0))
 
 (defn main-from-args
   "argv contract of scripts/lg-compile: [--entry-frame] <out-dir> <prefix> <file>...
-   Returns the result map; the shim owns exit codes, via exit-code above.
-
-   TRANSITIONAL (#786): argument parsing and the stdout diagnostics below live
-   here for compatibility with the existing scripts/lg-compile contract. They
-   are not the intended stable API — #786 gives them to lg.commands.compile,
-   leaving this namespace the compilation services alone."
+   Returns the result map; the shim owns exit codes, via exit-code above."
   [argv0]
   (let [entry-frame? (boolean (some (fn [a] (= "--entry-frame" a)) argv0))
         argv         (vec (filter (fn [a] (not= "--entry-frame" a)) argv0))]

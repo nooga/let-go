@@ -184,22 +184,18 @@ func discoverEmbeddedNS() ([]embeddedNamespace, error) {
 // isBundleSkippedTool reports whether namespace n is a build-time tool that
 // should be excluded from the BYTECODE bundle (but not from the Go-lowering
 // output). Two families qualify, for one reason: a plain `lg` script never
-// touches them, so decoding them on every process start is pure cost.
+// touches them, so decoding them on every process start is pure cost. Both
+// load from embedded source on demand instead.
 //
 //   - the ir.* AOT/lowering pipeline, the `ir` root and any `ir.` descendant
-//   - lg.compiler, the AOT compile driver (#596), and any lg.compiler.*
-//     descendant. The family prefix is not speculative: #786 moves ir.* under
-//     lg.compiler.ir.*, and on that day an exact-name check would match
-//     neither the old name nor the new one, restoring the regression below
-//     with nothing to notice it.
+//   - lg.compiler, the AOT compile driver, and any lg.compiler.* descendant.
+//     Match the family, not the exact name: the roadmap moves ir.* under
+//     lg.compiler.ir.*, where an exact-name check would match neither name and
+//     restore the regression silently.
 //
-// lg.compiler is 30 chunks on its own, but it requires gogen, ir.data,
-// ir.passes.pipeline and ir.passes.entry-frame, and a require drags the whole
-// transitive closure into the const pool. Measured 2026-09-02 on one machine,
-// bundling it took core_compiled.lgb from 308,175 to 1,068,039 bytes and the
-// smoke-boot median from 4.060ms to 23.385ms — past the 8ms budget, and the
-// same regression the ir.* skip already exists to prevent. Both load from
-// embedded source on demand instead.
+// lg.compiler is 30 chunks on its own, but its requires drag the whole IR
+// pipeline into the const pool: bundling it cost 308K→1.07M and 4.1ms→23.4ms
+// of boot, past the 8ms budget (measured 2026-09-02).
 func isBundleSkippedTool(n string) bool {
 	return n == "ir" || strings.HasPrefix(n, "ir.") ||
 		n == "lg.compiler" || strings.HasPrefix(n, "lg.compiler.")

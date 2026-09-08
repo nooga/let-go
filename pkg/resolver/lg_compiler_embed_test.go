@@ -16,17 +16,12 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// TestLgCompilerResolvesFromEmbeddedSource locks in nooga/let-go#596: the AOT
-// compile driver ships inside the binary as the ordinary core namespace
-// lg.compiler (pkg/rt/core/lg/compiler.lg), so it resolves with NO external
-// source path and no let-go checkout on disk. Before this, driving lowering
-// meant executing scripts/lg-compile from a checkout — a released binary had no
-// copy of it.
-//
-// The empty search-path slice is the point: only embedded resolution can
-// satisfy the require. Note that lg.compiler is deliberately kept OUT of the
-// bytecode bundle (cmd/lgbgen.isBundleSkippedTool) for startup cost, so this
-// asserts the path that matters — resolution from embedded SOURCE on demand.
+// TestLgCompilerResolvesFromEmbeddedSource locks in the property a released
+// binary depends on: the AOT compile driver resolves with NO external source
+// path and no let-go checkout on disk. The empty search-path slice is the
+// point, since only embedded resolution can satisfy the require. lg.compiler is
+// kept out of the bytecode bundle (cmd/lgbgen.isBundleSkippedTool), so
+// resolution from embedded SOURCE on demand is the path that matters.
 func TestLgCompilerResolvesFromEmbeddedSource(t *testing.T) {
 	if _, ok := rt.EmbeddedSource("lg.compiler"); !ok {
 		t.Fatal("rt.EmbeddedSource(\"lg.compiler\") not found — the driver must ship as core source at pkg/rt/core/lg/compiler.lg (#596)")

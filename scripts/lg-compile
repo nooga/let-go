@@ -10,15 +10,12 @@
 ;;                    github.com/nooga/let-go, prefix is
 ;;                    github.com/nooga/let-go/examples/aot/cross-package/go
 ;;
-;; The driver itself now lives in the `lg.compiler` namespace — an ordinary core
-;; namespace (pkg/rt/core/lg/compiler.lg), embedded in every binary — so it runs
-;; with no let-go checkout on disk. It is kept out of the bytecode bundle and
-;; loaded from embedded source on demand, the same way the ir.* pipeline is, so
-;; shipping it costs a plain `lg` script nothing at startup.
-;; This file stays as the CLI entry point: gloat and other external
-;; orchestrators invoke it by path (`<let-go-src>/scripts/lg-compile`) and
-;; scrape "EMIT-FAIL" from stdout, so the path, the positional argv, the
-;; printed lines, and the exit code are all a compatibility contract.
+;; The driver is the `lg.compiler` namespace (pkg/rt/core/lg/compiler.lg),
+;; embedded in every binary, so this runs with no let-go checkout on disk.
+;; This file is the CLI entry point: gloat and other external orchestrators
+;; invoke it by path (`<let-go-src>/scripts/lg-compile`) and scrape "EMIT-FAIL"
+;; from stdout, so the path, the positional argv, the printed lines, and the
+;; exit code are all a compatibility contract.
 ;;
 ;; --entry-frame (opt-in): also emit <out-dir>/main.go, the #425 native-entry
 ;; frame. Without it, only lowered packages are written (historical behavior for
@@ -27,13 +24,9 @@
 
 (require 'lg.compiler)
 
-;; EMIT-FAIL is deliberately NOT an exit-code failure: a fn that doesn't lower
-;; stays on the trampoline and the program still runs, so partial lowering is a
-;; normal outcome the orchestrator judges for itself. That is why gloat greps
-;; the EMIT-FAIL line out of stdout rather than reading the exit code, and why
-;; legmacs' `set -e` build keeps going through one. Only an entry-arity error
-;; exits non-zero. `:emit-fails` is in the driver's return map for a Go caller
-;; that wants to decide differently.
+;; EMIT-FAIL is deliberately NOT an exit-code failure — see lg.compiler/exit-code
+;; for the policy. gloat greps the EMIT-FAIL line out of stdout rather than
+;; reading the exit code, and legmacs' `set -e` build keeps going through one.
 (let [res  (lg.compiler/main-from-args (vec (drop 2 (seq os/args))))
       code (lg.compiler/exit-code res)]
   (when (:error res)

@@ -20,8 +20,8 @@ import (
 // contract, not a log message.
 var emitFailLine = regexp.MustCompile(`^EMIT-FAIL (\S+) pkg=(\S+) returned (.+)$`)
 
-// TestLgCompileEmitFailContract pins the two halves of the #596 stdout/exit
-// contract that external callers depend on:
+// TestLgCompileEmitFailContract pins the two halves of the stdout/exit contract
+// that external callers depend on:
 //
 //   - the "EMIT-FAIL <path> pkg=<pkg> returned <type>" line, verbatim;
 //   - EMIT-FAIL is NOT an exit failure. A fn that does not lower stays on the
@@ -38,12 +38,10 @@ var emitFailLine = regexp.MustCompile(`^EMIT-FAIL (\S+) pkg=(\S+) returned (.+)$
 // real shim, by stubbing lg.compiler/main-from-args and evaluating
 // scripts/lg-compile against the stub.
 //
-// The exit-status half MUST run the shim rather than assert on a helper. An
-// earlier version of this test checked write-packages! and then ran the shim on
-// a SUCCESSFUL compile, which never exercised a nonzero :emit-fails through the
-// shim at all: reintroducing "exit 1 when :emit-fails is nonzero" left it
-// passing. This version fails against that regression, which is the only reason
-// to trust it.
+// The exit-status half MUST run the shim rather than assert on a helper:
+// asserting on write-packages! and then running the shim on a SUCCESSFUL
+// compile never puts a nonzero :emit-fails through the shim, and passes even
+// with "exit 1 when :emit-fails is nonzero" reintroduced.
 func TestLgCompileEmitFailContract(t *testing.T) {
 	bin := buildLG(t)
 	root := repoRoot(t)
@@ -128,8 +126,7 @@ func TestLgCompileEmitFailContract(t *testing.T) {
 		}
 	})
 
-	// And the fatal case, so "exits 0" above is a real signal rather than a
-	// shim that cannot fail.
+	// And the fatal case, so "exits 0" above is a real signal.
 	t.Run("an :error result exits non-zero through the real shim", func(t *testing.T) {
 		dir := t.TempDir()
 		probe := filepath.Join(dir, "shim-error.lg")
@@ -167,8 +164,7 @@ func TestLgCompileEmitFailContract(t *testing.T) {
 			t.Fatalf("a lowering run must exit 0; got %d:\n%s", code, out)
 		}
 
-		// The one case that does exit non-zero, so "exit 0" above is a real
-		// signal rather than a shim that can never fail.
+		// The one case that does exit non-zero.
 		bad := write("bad.lg", "(ns app)\n(defn -main [a b] (+ a b))\n")
 		out, code = runLG(t, "scripts/lg-compile", "--entry-frame", filepath.Join(dir, "out-bad"), "tmpmod", bad)
 		if code == 0 {

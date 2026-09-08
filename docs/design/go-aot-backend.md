@@ -4,6 +4,7 @@ last-verified: 2026-06-05
 authoritative-for:
   - go-aot-backend-design
   - two-tier-aot-approach
+  - aot-compile-driver
 human-verified:
 ---
 
@@ -67,6 +68,18 @@ This document proposes a second backend that compiles let-go code to Go, preserv
 - Integration modes:
   - Library: emit a Go package that can be `import`ed and `init()` registers vars.
   - Binary: emit `main.go` that installs stdlib (image or compiled) and application ns, then runs `-m your.main/ns -f your-fn`.
+
+### Driving lowering: `lg.compiler` and the `lg-compile` shim
+
+Whole-program lowering is driven by `lg.compiler` (`pkg/rt/core/lg/compiler.lg`): it parses each input into a lowering spec, orders the specs by their requires, evaluates only definitional forms so cross-namespace references resolve, hands the set to `ir.passes.pipeline/lower-all-ns-to-go-result`, and writes the emitted packages. Entry-frame emission is opt-in.
+
+It is an ordinary embedded core namespace, so a released binary drives AOT lowering with no let-go checkout on disk, and edits to it churn `pkg/rt/generated.sums` like any other core source.
+
+**Core-embedded is not the same as bundled.** Build-time tools are embedded as source but excluded from `core_compiled.lgb`, and load on demand when something requires them — `cmd/lgbgen.isBundleSkippedTool` holds the list. Two families qualify today, the `ir.*` pipeline and `lg.compiler.*`, for the same reason: a plain `lg` script never touches them, so decoding them at every process start is pure cost. It is not a small cost. `lg.compiler` is 30 chunks on its own, but its requires pull the whole IR pipeline into the const pool; bundling it took `core_compiled.lgb` from 308,175 to 1,068,039 bytes and the smoke-boot median from 4.1 ms to 23.4 ms, against an 8 ms budget (measured 2026-09-02, one machine). The skip is scoped to the bundle alone — the Go-lowering path must still see these namespaces, so `deriveGoLoweringOrder` does not consult it.
+
+**`scripts/lg-compile` is a compatibility surface, not an implementation.** External orchestrators invoke it by path and read its output, so four things are contract: the path, the positional argv, the printed lines, and the exit code. In particular `EMIT-FAIL <path> pkg=<pkg> returned <type>` is scraped from stdout, and an EMIT-FAIL is deliberately not an exit failure — a function that does not lower stays on the trampoline and the program still runs, so partial lowering is a normal outcome the orchestrator judges for itself. Only a fatal error exits non-zero. `lg.compiler/exit-code` owns that policy and `test/e2e` pins both halves.
+
+The intended destination for this layering, including a thin `lg.commands.compile` CLI adapter and the move of `ir.*` under `lg.compiler.ir.*`, is tracked in #786.
 
 ### MVP scope (Native lowering tier)
 
