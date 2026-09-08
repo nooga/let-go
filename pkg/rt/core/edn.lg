@@ -4,7 +4,14 @@
    [pprint]))
 
 (defn read-string
-  ([s] (core/read-string s)))
+  "Read one form with Clojure data semantics: metadata attaches to values that
+   carry it, #{} reads as a set, #_ inside collections splices nothing, and
+   nothing is evaluated."
+  ([s] (core/read-data-string s)))
+
+(defn read-all-string
+  "Every top-level form of s with data semantics, as a vector."
+  [s] (core/read-all-data-string s))
 
 (defn write-string [form]
   (pr-str form))

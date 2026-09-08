@@ -2699,6 +2699,32 @@ func installLangNS() {
 		return vm.OpenChildEC(ec), nil
 	})
 
+	// scope-cancelled? reports whether a scope's cancellation context is done.
+	// With no argument it inspects the calling execution's current scope. Lisp
+	// code cannot otherwise observe cancellation: blocking natives such as
+	// sleep return early and silently when their scope is cancelled, so a
+	// coordinator loop parked on sleep has no way to tell "woke up" from
+	// "was cancelled" without this predicate.
+	scopeCancelled := vm.NewCtxNativeFn("scope-cancelled?", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
+		var s *vm.Scope
+		switch len(vs) {
+		case 0:
+			s = ec.Scope()
+		case 1:
+			var ok bool
+			s, ok = vs[0].(*vm.Scope)
+			if !ok {
+				return vm.NIL, fmt.Errorf("scope-cancelled? expected a scope")
+			}
+		default:
+			return vm.NIL, fmt.Errorf("scope-cancelled? expects 0 or 1 arguments")
+		}
+		if s.Context().Err() != nil {
+			return vm.TRUE, nil
+		}
+		return vm.FALSE, nil
+	})
+
 	chanput := vm.NewCtxNativeFn(">!", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 2 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
@@ -3333,13 +3359,18 @@ func installLangNS() {
 		if len(snap) == 0 {
 			return fn, nil
 		}
-		wrapped, _ := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
-			// Re-establish the captured bindings in a fresh context on every
-			// call, so invocations (possibly on different goroutines) stay
-			// isolated from one another and from the global stack.
-			return vm.NewExecContextFrom(snap).Invoke(fn, args)
-		})
-		return wrapped, nil
+		// Re-establish the captured bindings in a fresh context on every
+		// call, so invocations (possibly on different goroutines) stay
+		// isolated from one another and from the global stack. Only the
+		// binding stack is conveyed: the call runs under the *invoking*
+		// execution's structured-concurrency scope, so work spawned inside a
+		// bound fn stays owned (and cancellable) by whoever called it rather
+		// than silently escaping to the root scope.
+		return vm.NewCtxNativeFn("bound-fn", func(callEC *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+			c := vm.NewExecContextFrom(snap)
+			c.SetScope(callEC.Scope())
+			return c.Invoke(fn, args)
+		}), nil
 	})
 
 	metaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
@@ -3825,6 +3856,7 @@ func installLangNS() {
 	ns.Def(">!!", chanput)
 	ns.Def("<!!", changet)
 	ns.Def("scope-open", scopeOpen)
+	ns.Def("scope-cancelled?", scopeCancelled)
 
 	ns.Def("int", intf)
 	ns.Def("byte", intf)

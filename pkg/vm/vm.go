@@ -434,6 +434,16 @@ func releaseFrame(f *Frame) {
 	framePoolMu.Unlock()
 }
 
+// NewFrameIn is NewFrame with the given execution context installed, so the
+// frame resolves dynamic bindings and its structured-concurrency scope against
+// the caller rather than the root. Used by eval-style natives that compile a
+// form and must run it where the caller is.
+func NewFrameIn(code *CodeChunk, args []Value, ec *ExecContext) *Frame {
+	f := NewFrame(code, args)
+	f.ec = ec.orRoot()
+	return f
+}
+
 func NewFrame(code *CodeChunk, args []Value) *Frame {
 	f := acquireFrame()
 	needed := max(code.maxStack, 4)
