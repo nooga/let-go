@@ -88,9 +88,8 @@ traverses in hash order:
 The intended behavior matches Clojure: a directly constructed `array-map` stays
 array-backed and insertion ordered regardless of its initial size, while
 `assoc` growth past eight entries still promotes. Resolution is a constructor
-that does not promote on size, with the `assoc` promotion rule unchanged. No
-issue tracks the residual; this entry is the record until one is created or
-the constructor is fixed.
+that does not promote on size, with the `assoc` promotion rule unchanged.
+[Issue #827](https://github.com/nooga/let-go/issues/827) tracks it.
 
 ### Shared-suite overrides
 
