@@ -1,6 +1,6 @@
 ---
 status: active
-last-verified: 2026-08-23
+last-verified: 2026-09-08
 authoritative-for:
   - known-clojure-divergences
 ---
@@ -45,8 +45,11 @@ that appears stable for particular values or a particular release remains an
 implementation detail.
 
 Ordering should come from an explicitly ordered collection type. `sorted-map`
-provides comparator order today; `array-map` is intended to provide insertion
-order after the temporary mismatch below is resolved.
+provides comparator order. Since [PR #764](https://github.com/nooga/let-go/pull/764)
+(2026-09-07), `array-map` provides insertion order for up to eight entries, and
+`assoc` of a new key onto an array map holding eight promotes it to the
+intrinsic unordered map, as Clojure's `PersistentArrayMap` does. Construction
+with more than eight pairs is the temporary mismatch below.
 
 ### Why not Clojure?
 
@@ -61,32 +64,33 @@ There are two independent reasons:
    AOT/IR pipeline in
    [PR #397](https://github.com/nooga/let-go/pull/397).
 
-Portable code must not depend on intrinsic-map traversal. Today, sort the
-entries or use `sorted-map` when order is part of the program's contract. After
-the temporary mismatch is resolved, explicit `array-map` construction will also
-request insertion order.
+Portable code must not depend on intrinsic-map traversal. Sort the entries,
+use `sorted-map`, or use `array-map` with at most eight entries when order is
+part of the program's contract.
 
 ### Temporary `array-map` mismatch
 
-let-go currently routes `array-map` through its unordered persistent-map
-implementation. That is not the intended long-term contract.
+[PR #764](https://github.com/nooga/let-go/pull/764) (2026-09-07) gave
+`PersistentMap` an array-backed mode: up to eight entries stay in insertion
+order, and `assoc` of a ninth distinct key promotes to the hash map, which is
+Clojure's `PersistentArrayMap` growth rule. That resolved
+[Issue #763](https://github.com/nooga/let-go/issues/763). What remains is
+construction size. `(array-map ...)` with more than eight pairs is built
+through the same transient, which promotes on the ninth entry, so the result
+traverses in hash order:
 
-The intended behavior matches Clojure:
+```clojure
+(keys (array-map :i 1 :h 2 :g 3 :f 4 :e 5 :d 6 :c 7 :b 8 :a 9))
+;; let-go a6763e77: (:b :g :e :f :a :c :h :d :i)
+;; Clojure JVM:     (:i :h :g :f :e :d :c :b :a)
+```
 
-- A directly constructed `array-map` stays array-backed and insertion ordered,
-  regardless of its initial size.
-- Adding a ninth distinct entry to a smaller array map promotes it to the
-  intrinsic unordered map.
-
-[Issue #763](https://github.com/nooga/let-go/issues/763) tracks the surrounding
-compatibility problem, but its original acceptance criteria propose ordered
-small literals and limit `array-map` ordering to eight entries. Those criteria
-do not match the contract established above. The issue must be updated or
-replaced by a dedicated implementation tracker before this work is considered
-fully scoped.
-
-Resolution requires preserving the intrinsic-map decision while giving explicit
-`array-map` construction and growth their expected behavior.
+The intended behavior matches Clojure: a directly constructed `array-map` stays
+array-backed and insertion ordered regardless of its initial size, while
+`assoc` growth past eight entries still promotes. Resolution is a constructor
+that does not promote on size, with the `assoc` promotion rule unchanged. No
+issue tracks the residual; this entry is the record until one is created or
+the constructor is fixed.
 
 ### Shared-suite overrides
 
