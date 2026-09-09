@@ -5059,11 +5059,25 @@ func CoreSubP(vs ...vm.Value) (vm.Value, error) {
 	return acc, nil
 }
 
+// isFloatValue reports whether v is a floating-point value. The unchecked-*
+// family wraps only int64 arithmetic; floats pass through to the ordinary
+// numeric tower so their results stay floats, as on the JVM.
+func isFloatValue(v vm.Value) bool {
+	_, ok := v.(vm.Float)
+	return ok
+}
+
 //lg:native
 //lg:name unchecked-add
 func CoreUncheckedAdd(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	// Floats have no int64 overflow to wrap, and Clojure's unchecked-* keep
+	// double arithmetic as doubles. Coercing them through ToInt would silently
+	// truncate: (unchecked-add 1.5 2.5) must be 4.0, not 3.
+	if isFloatValue(vs[0]) || isFloatValue(vs[1]) {
+		return vm.NumAdd(vs[0], vs[1])
 	}
 	a, ok := vm.ToInt(vs[0])
 	if !ok {
@@ -5082,6 +5096,12 @@ func CoreUncheckedSubtract(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
+	// Floats have no int64 overflow to wrap, and Clojure's unchecked-* keep
+	// double arithmetic as doubles. Coercing them through ToInt would silently
+	// truncate: (unchecked-add 1.5 2.5) must be 4.0, not 3.
+	if isFloatValue(vs[0]) || isFloatValue(vs[1]) {
+		return vm.NumSub(vs[0], vs[1])
+	}
 	a, ok := vm.ToInt(vs[0])
 	if !ok {
 		return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[0].Type().Name())
@@ -5099,6 +5119,12 @@ func CoreUncheckedMultiply(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
+	// Floats have no int64 overflow to wrap, and Clojure's unchecked-* keep
+	// double arithmetic as doubles. Coercing them through ToInt would silently
+	// truncate: (unchecked-add 1.5 2.5) must be 4.0, not 3.
+	if isFloatValue(vs[0]) || isFloatValue(vs[1]) {
+		return vm.NumMul(vs[0], vs[1])
+	}
 	a, ok := vm.ToInt(vs[0])
 	if !ok {
 		return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[0].Type().Name())
@@ -5115,6 +5141,9 @@ func CoreUncheckedMultiply(vs ...vm.Value) (vm.Value, error) {
 func CoreUncheckedNegate(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	if f, ok := vs[0].(vm.Float); ok {
+		return vm.Float(-float64(f)), nil
 	}
 	a, ok := vm.ToInt(vs[0])
 	if !ok {

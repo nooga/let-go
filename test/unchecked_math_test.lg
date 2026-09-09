@@ -1,0 +1,25 @@
+(ns test.unchecked-math-test
+  (:require [test :refer :all]))
+
+;; The unchecked-* family wraps int64 arithmetic. Floats have no int64
+;; overflow to wrap, and Clojure keeps double arithmetic as doubles, so they
+;; must pass through rather than being truncated through an int coercion.
+
+(deftest unchecked-wraps-int64
+  (is (= -9223372036854775808 (unchecked-add 9223372036854775807 1)))
+  (is (= 9223372036854775807 (unchecked-subtract -9223372036854775808 1)))
+  (is (= -2 (unchecked-multiply 9223372036854775807 2))))
+
+(deftest unchecked-preserves-floats
+  (is (= 4.0 (unchecked-add 1.5 2.5)))
+  (is (= 1.5 (unchecked-subtract 4.0 2.5)))
+  (is (= 3.0 (unchecked-multiply 1.5 2.0)))
+  (is (= -1.5 (unchecked-negate 1.5))))
+
+(deftest unchecked-mixed-int-and-float
+  (is (= 3.5 (unchecked-add 1 2.5)))
+  (is (= 3.5 (unchecked-add 2.5 1))))
+
+(deftest unchecked-negate-still-wraps-ints
+  (is (= -5 (unchecked-negate 5)))
+  (is (= 5 (unchecked-negate -5))))
