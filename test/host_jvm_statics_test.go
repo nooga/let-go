@@ -103,6 +103,30 @@ func TestJVMNumericStatics(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "[3 -2 2 -3]", v.String())
 	})
+	t.Run("Math/round saturates instead of wrapping", func(t *testing.T) {
+		// JVM returns Long.MAX_VALUE / MIN_VALUE for out-of-range input; an
+		// unchecked int64 conversion would wrap to the wrong sign.
+		v, err := evalJVMStatics(`[(Math/round Double/POSITIVE_INFINITY) (Math/round Double/NEGATIVE_INFINITY) (Math/round Double/NaN)]`)
+		assert.NoError(t, err)
+		assert.Equal(t, "[9223372036854775807 -9223372036854775808 0]", v.String())
+	})
+	t.Run("Math/round does not perturb the input", func(t *testing.T) {
+		// floor(x + 0.5) rounds before floor runs: it would give 1 for the
+		// first and gain one on the second. Java dropped that formula in 7.
+		v, err := evalJVMStatics(`[(Math/round 0.49999999999999994) (Math/round 4503599627370497.0)]`)
+		assert.NoError(t, err)
+		assert.Equal(t, "[0 4503599627370497]", v.String())
+	})
+	t.Run("Math/pow JVM special cases for |base| = 1", func(t *testing.T) {
+		// IEEE 754 (and Go) say pow(1, y) is 1 for every y; Java returns NaN
+		// for a NaN or infinite exponent. A zero exponent is 1.0 regardless.
+		v, err := evalJVMStatics(`[(Double/isNaN (Math/pow 1.0 Double/NaN))
+                                   (Double/isNaN (Math/pow 1.0 Double/POSITIVE_INFINITY))
+                                   (Double/isNaN (Math/pow -1.0 Double/NEGATIVE_INFINITY))
+                                   (Math/pow Double/NaN 0)]`)
+		assert.NoError(t, err)
+		assert.Equal(t, "[true true true 1.0]", v.String())
+	})
 	t.Run("Math/abs preserves long vs double", func(t *testing.T) {
 		v, err := evalJVMStatics(`[(Math/abs -5) (Math/abs 5) (Math/abs -2.5)]`)
 		assert.NoError(t, err)

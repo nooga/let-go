@@ -260,16 +260,29 @@ func installMathStatics() {
 		unary("log", math.Log)
 		unary("exp", math.Exp)
 
+		// Go's math.Pow follows IEEE 754, which differs from java.lang.Math on
+		// three cases involving a base of magnitude 1: IEEE says pow(1, y) is 1
+		// for every y, while Java returns NaN for a NaN or infinite exponent.
 		mathNS.Def("pow", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 			if len(vs) != 2 {
 				return vm.NIL, fmt.Errorf("Math/pow expects 2 args")
 			}
-			b, ok1 := vm.ToFloat(vs[0])
-			e, ok2 := vm.ToFloat(vs[1])
+			bv, ok1 := vm.ToFloat(vs[0])
+			ev, ok2 := vm.ToFloat(vs[1])
 			if !ok1 || !ok2 {
 				return vm.NIL, fmt.Errorf("Math/pow expected numbers")
 			}
-			return vm.Float(math.Pow(float64(b), float64(e))), nil
+			b, e := float64(bv), float64(ev)
+			switch {
+			case e == 0:
+				// Java: a zero exponent is 1.0 even for a NaN base.
+				return vm.Float(1), nil
+			case math.IsNaN(e):
+				return vm.Float(math.NaN()), nil
+			case math.Abs(b) == 1 && math.IsInf(e, 0):
+				return vm.Float(math.NaN()), nil
+			}
+			return vm.Float(math.Pow(b, e)), nil
 		}))
 
 		// long in -> long out, double in -> double out, matching the JVM's
@@ -292,8 +305,15 @@ func installMathStatics() {
 			return vm.Float(math.Abs(float64(f))), nil
 		}))
 
-		// JVM: (long) floor(x + 0.5). Half rounds toward positive infinity,
-		// so -2.5 is -2. math.Round would give -3.
+		// JVM Math.round: half rounds toward POSITIVE infinity, so -2.5 is -2
+		// (math.Round would give -3). NaN is 0, and out-of-range saturates to
+		// Long.MAX_VALUE / Long.MIN_VALUE rather than wrapping.
+		//
+		// Do NOT implement this as floor(x + 0.5): the addition rounds before
+		// floor runs, so 0.49999999999999994 would give 1 instead of 0 and
+		// 4503599627370497.0 would gain one. Java itself abandoned that formula
+		// for this reason (JDK-6430675). Compare the fraction against 0.5
+		// instead, which never perturbs the input.
 		mathNS.Def("round", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 			if len(vs) != 1 {
 				return vm.NIL, fmt.Errorf("Math/round expects 1 arg")
@@ -306,7 +326,19 @@ func installMathStatics() {
 			if math.IsNaN(x) {
 				return vm.MakeInt(0), nil
 			}
-			return longCompatValue(int64(math.Floor(x + 0.5))), nil
+			r := math.Floor(x)
+			if x-r >= 0.5 {
+				r++
+			}
+			// float64(math.MaxInt64) rounds up to 2^63, so compare against that
+			// boundary rather than the constant itself.
+			if r >= 9223372036854775808.0 {
+				return longCompatValue(math.MaxInt64), nil
+			}
+			if r <= -9223372036854775808.0 {
+				return longCompatValue(math.MinInt64), nil
+			}
+			return longCompatValue(int64(r)), nil
 		}))
 
 		mathNS.Def("scalb", mustWrap(func(vs []vm.Value) (vm.Value, error) {
