@@ -127,6 +127,21 @@ func TestJVMNumericStatics(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "[true true true 1.0]", v.String())
 	})
+	t.Run("Math/round and getExponent honour the float overload", func(t *testing.T) {
+		// JVM overloads on argument type: round(float) returns an int and
+		// saturates at Integer.MAX_VALUE, and getExponent(float) uses the
+		// single-precision bias, so zero is -127 rather than -1023.
+		v, err := evalJVMStatics(`[(Math/round (float 1e20)) (Math/round (float -1e20))
+                                   (Math/getExponent (float 0)) (Math/getExponent (float 8))]`)
+		assert.NoError(t, err)
+		assert.Equal(t, "[2147483647 -2147483648 -127 3]", v.String())
+	})
+	t.Run("Character/isDigit accepts a code point", func(t *testing.T) {
+		// JVM overloads isDigit(char) and isDigit(int codePoint).
+		v, err := evalJVMStatics(`[(Character/isDigit (int 53)) (Character/isDigit (int 120))]`)
+		assert.NoError(t, err)
+		assert.Equal(t, "[true false]", v.String())
+	})
 	t.Run("Math/abs preserves long vs double", func(t *testing.T) {
 		v, err := evalJVMStatics(`[(Math/abs -5) (Math/abs 5) (Math/abs -2.5)]`)
 		assert.NoError(t, err)

@@ -330,6 +330,17 @@ func installMathStatics() {
 			if x-r >= 0.5 {
 				r++
 			}
+			// JVM overloads on the argument type: round(float) returns an int
+			// and saturates at Integer.MAX_VALUE, round(double) returns a long.
+			if _, isF32 := vs[0].(vm.Float32); isF32 {
+				if r >= 2147483647.0 {
+					return vm.MakeInt(math.MaxInt32), nil
+				}
+				if r <= -2147483648.0 {
+					return vm.MakeInt(math.MinInt32), nil
+				}
+				return vm.MakeInt(int(r)), nil
+			}
 			// float64(math.MaxInt64) rounds up to 2^63, so compare against that
 			// boundary rather than the constant itself.
 			if r >= 9223372036854775808.0 {
@@ -366,6 +377,18 @@ func installMathStatics() {
 				return vm.NIL, fmt.Errorf("Math/getExponent expected number, got %s", vs[0].Type().Name())
 			}
 			x := float64(f)
+			// JVM overloads here too: the float form uses the single-precision
+			// bias (127), so zero gives -127 and NaN/infinity give 128.
+			if _, isF32 := vs[0].(vm.Float32); isF32 {
+				if math.IsNaN(x) || math.IsInf(x, 0) {
+					return vm.MakeInt(128), nil
+				}
+				biased := int((math.Float32bits(float32(x)) >> 23) & 0xFF)
+				if biased == 0 { // zero or subnormal
+					return vm.MakeInt(-127), nil
+				}
+				return vm.MakeInt(biased - 127), nil
+			}
 			if math.IsNaN(x) || math.IsInf(x, 0) {
 				return vm.MakeInt(1024), nil
 			}

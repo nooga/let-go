@@ -4731,11 +4731,15 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("Character/isDigit expects 1 arg")
 		}
-		c, ok := vs[0].(vm.Char)
-		if !ok {
-			return vm.NIL, fmt.Errorf("Character/isDigit expected character, got %s", vs[0].Type().Name())
+		// JVM overloads isDigit(char) and isDigit(int codePoint); the integer
+		// form is how supplementary-plane digits are classified.
+		if c, ok := vs[0].(vm.Char); ok {
+			return vm.Boolean(unicode.IsDigit(rune(c))), nil
 		}
-		return vm.Boolean(unicode.IsDigit(rune(c))), nil
+		if cp, ok := vm.ToInt(vs[0]); ok {
+			return vm.Boolean(unicode.IsDigit(rune(int64(cp)))), nil
+		}
+		return vm.NIL, fmt.Errorf("Character/isDigit expected character or code point, got %s", vs[0].Type().Name())
 	}))
 
 	installMathStatics()
