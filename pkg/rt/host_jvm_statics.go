@@ -245,11 +245,11 @@ func installMathStatics() {
 		unary := func(name string, fn func(float64) float64) {
 			mathNS.Def(name, mustWrap(func(vs []vm.Value) (vm.Value, error) {
 				if len(vs) != 1 {
-					return vm.NIL, fmt.Errorf("Math/%s expects 1 arg", name)
+					return vm.NIL, fmt.Errorf("%s expects 1 arg", name)
 				}
 				f, ok := vm.ToFloat(vs[0])
 				if !ok {
-					return vm.NIL, fmt.Errorf("Math/%s expected number, got %s", name, vs[0].Type().Name())
+					return vm.NIL, fmt.Errorf("%s expected number, got %s", name, vs[0].Type().Name())
 				}
 				return vm.Float(fn(float64(f))), nil
 			}))
@@ -265,12 +265,12 @@ func installMathStatics() {
 		// for every y, while Java returns NaN for a NaN or infinite exponent.
 		mathNS.Def("pow", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 			if len(vs) != 2 {
-				return vm.NIL, fmt.Errorf("Math/pow expects 2 args")
+				return vm.NIL, fmt.Errorf("pow expects 2 args")
 			}
 			bv, ok1 := vm.ToFloat(vs[0])
 			ev, ok2 := vm.ToFloat(vs[1])
 			if !ok1 || !ok2 {
-				return vm.NIL, fmt.Errorf("Math/pow expected numbers")
+				return vm.NIL, fmt.Errorf("pow expected numbers")
 			}
 			b, e := float64(bv), float64(ev)
 			switch {
@@ -290,7 +290,7 @@ func installMathStatics() {
 		// integer callers.
 		mathNS.Def("abs", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 			if len(vs) != 1 {
-				return vm.NIL, fmt.Errorf("Math/abs expects 1 arg")
+				return vm.NIL, fmt.Errorf("abs expects 1 arg")
 			}
 			if i, ok := vs[0].(vm.Int); ok {
 				if int64(i) < 0 {
@@ -300,7 +300,7 @@ func installMathStatics() {
 			}
 			f, ok := vm.ToFloat(vs[0])
 			if !ok {
-				return vm.NIL, fmt.Errorf("Math/abs expected number, got %s", vs[0].Type().Name())
+				return vm.NIL, fmt.Errorf("abs expected number, got %s", vs[0].Type().Name())
 			}
 			return vm.Float(math.Abs(float64(f))), nil
 		}))
@@ -316,11 +316,11 @@ func installMathStatics() {
 		// instead, which never perturbs the input.
 		mathNS.Def("round", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 			if len(vs) != 1 {
-				return vm.NIL, fmt.Errorf("Math/round expects 1 arg")
+				return vm.NIL, fmt.Errorf("round expects 1 arg")
 			}
 			f, ok := vm.ToFloat(vs[0])
 			if !ok {
-				return vm.NIL, fmt.Errorf("Math/round expected number, got %s", vs[0].Type().Name())
+				return vm.NIL, fmt.Errorf("round expected number, got %s", vs[0].Type().Name())
 			}
 			x := float64(f)
 			if math.IsNaN(x) {
@@ -354,12 +354,12 @@ func installMathStatics() {
 
 		mathNS.Def("scalb", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 			if len(vs) != 2 {
-				return vm.NIL, fmt.Errorf("Math/scalb expects 2 args")
+				return vm.NIL, fmt.Errorf("scalb expects 2 args")
 			}
 			f, ok1 := vm.ToFloat(vs[0])
 			e, ok2 := vm.ToInt(vs[1])
 			if !ok1 || !ok2 {
-				return vm.NIL, fmt.Errorf("Math/scalb expected (double, int)")
+				return vm.NIL, fmt.Errorf("scalb expected (double, int)")
 			}
 			return vm.Float(math.Ldexp(float64(f), int(e))), nil
 		}))
@@ -370,11 +370,11 @@ func installMathStatics() {
 		// exponent bits directly.
 		mathNS.Def("getExponent", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 			if len(vs) != 1 {
-				return vm.NIL, fmt.Errorf("Math/getExponent expects 1 arg")
+				return vm.NIL, fmt.Errorf("getExponent expects 1 arg")
 			}
 			f, ok := vm.ToFloat(vs[0])
 			if !ok {
-				return vm.NIL, fmt.Errorf("Math/getExponent expected number, got %s", vs[0].Type().Name())
+				return vm.NIL, fmt.Errorf("getExponent expected number, got %s", vs[0].Type().Name())
 			}
 			x := float64(f)
 			// JVM overloads here too: the float form uses the single-precision

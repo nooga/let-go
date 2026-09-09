@@ -4682,21 +4682,21 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 
 	longNS.Def("bitCount", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("Long/bitCount expects 1 arg")
+			return vm.NIL, fmt.Errorf("bitCount expects 1 arg")
 		}
 		a, ok := vm.ToInt(vs[0])
 		if !ok {
-			return vm.NIL, fmt.Errorf("Long/bitCount expected integer, got %s", vs[0].Type().Name())
+			return vm.NIL, fmt.Errorf("bitCount expected integer, got %s", vs[0].Type().Name())
 		}
 		return vm.MakeInt(bits.OnesCount64(uint64(int64(a)))), nil
 	}))
 	longNS.Def("reverse", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("Long/reverse expects 1 arg")
+			return vm.NIL, fmt.Errorf("reverse expects 1 arg")
 		}
 		a, ok := vm.ToInt(vs[0])
 		if !ok {
-			return vm.NIL, fmt.Errorf("Long/reverse expected integer, got %s", vs[0].Type().Name())
+			return vm.NIL, fmt.Errorf("reverse expected integer, got %s", vs[0].Type().Name())
 		}
 		return longCompatValue(int64(bits.Reverse64(uint64(int64(a))))), nil
 	}))
@@ -4713,11 +4713,11 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	// test for it; shipping Double/NaN without Double/isNaN would be a trap.
 	doubleNS.Def("isNaN", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("Double/isNaN expects 1 arg")
+			return vm.NIL, fmt.Errorf("isNaN expects 1 arg")
 		}
 		f, ok := vm.ToFloat(vs[0])
 		if !ok {
-			return vm.NIL, fmt.Errorf("Double/isNaN expected number, got %s", vs[0].Type().Name())
+			return vm.NIL, fmt.Errorf("isNaN expected number, got %s", vs[0].Type().Name())
 		}
 		return vm.Boolean(math.IsNaN(float64(f))), nil
 	}))
@@ -4729,7 +4729,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	characterNS := DefNSBare("Character")
 	characterNS.Def("isDigit", mustWrap(func(vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
-			return vm.NIL, fmt.Errorf("Character/isDigit expects 1 arg")
+			return vm.NIL, fmt.Errorf("isDigit expects 1 arg")
 		}
 		// JVM overloads isDigit(char) and isDigit(int codePoint); the integer
 		// form is how supplementary-plane digits are classified.
@@ -4739,7 +4739,7 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 		if cp, ok := vm.ToInt(vs[0]); ok {
 			return vm.Boolean(unicode.IsDigit(rune(int64(cp)))), nil
 		}
-		return vm.NIL, fmt.Errorf("Character/isDigit expected character or code point, got %s", vs[0].Type().Name())
+		return vm.NIL, fmt.Errorf("isDigit expected character or code point, got %s", vs[0].Type().Name())
 	}))
 
 	installMathStatics()
