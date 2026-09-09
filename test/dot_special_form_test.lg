@@ -1,0 +1,33 @@
+(ns test.dot-special-form-test
+  (:require [test :refer :all]))
+
+;; Clojure has three source shapes for host member access. let-go's internal
+;; form is (. obj 'member args...) with a QUOTED member, which is what the
+;; (.member obj ...) rewrite produces. The two canonical raw forms arrive
+;; unquoted, so without normalization the member compiles as an expression and
+;; fails to resolve.
+
+(deftest dot-form-bare-member
+  (is (= "abc" (. "abc" toString))))
+
+(deftest dot-form-member-with-args
+  (is (= 1 (. "abcabc" indexOf "b")))
+  (is (= 4 (. "abcabc" indexOf "b" 2))))
+
+(deftest dot-form-list-member
+  (is (= 1 (. "abcabc" (indexOf "b"))))
+  (is (= "abc" (. "abc" (toString)))))
+
+;; Already supported; pinned so the normalization cannot regress them.
+(deftest dot-member-shorthand-still-works
+  (is (= 1 (.indexOf "abcabc" "b")))
+  (is (= "abc" (.toString "abc"))))
+
+(deftest double-dot-still-works
+  (is (= 1 (.. "abcabc" (indexOf "b"))))
+  (is (= "abc" (.. "abc" toString))))
+
+;; The shape that motivated this: data.priority-map writes a raw (. sc entryKey e)
+;; as an argument inside a (.. sc comparator (compare ...)) chain.
+(deftest raw-dot-nested-inside-double-dot
+  (is (= 1 (.. "abcabc" (indexOf (. "b" toString))))))

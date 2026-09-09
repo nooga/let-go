@@ -645,6 +645,23 @@ func (c *Context) compileForm(o vm.Value) error {
 			}
 
 			if fnsym == "." {
+				// Clojure has two canonical source shapes for the raw dot form,
+				// and both arrive with the member unquoted:
+				//
+				//	(. obj member args...)     bare symbol
+				//	(. obj (member args...))   list
+				//
+				// let-go's internal shape quotes the member -- (. obj 'member
+				// args...) -- which is what the (.member obj ...) rewrite above
+				// produces. Normalize the source shapes into it so an unquoted
+				// member is never compiled as an expression. An already-quoted
+				// member is left alone, since that is what the rewrite hands us.
+				if normalized := normalizeDotForm(lst); normalized != nil {
+					if info := vm.FormSource.Get(o); info != nil {
+						vm.FormSource.Set(normalized, *info)
+					}
+					return c.compileForm(normalized)
+				}
 				args := lst.Next()
 				if args != nil && !hostTargetStaticallyKnown(args.First()) {
 					rt.EmitReflectionWarningForForm(o, "host-interop", "host target type is not statically known; using dynamic member dispatch")
@@ -738,6 +755,71 @@ func (c *Context) compileForm(o vm.Value) error {
 		c.tailPosition = tp
 	}
 	return nil
+}
+
+// quotedSymbol reports whether v is already (quote sym) -- the shape the
+// (.member obj ...) rewrite produces, which normalizeDotForm must not touch.
+func quotedSymbol(v vm.Value) bool {
+	lst, ok := v.(*vm.List)
+	if !ok || lst.Next() == nil {
+		return false
+	}
+	head, ok := lst.First().(vm.Symbol)
+	if !ok || head != "quote" {
+		return false
+	}
+	_, ok = lst.Next().First().(vm.Symbol)
+	return ok
+}
+
+// normalizeDotForm rewrites Clojure's two canonical raw dot shapes into
+// let-go's internal (. obj 'member args...), or returns nil when the form is
+// already in that shape, or is too short or too odd to be one.
+//
+//	(. obj member args...)   -> (. obj 'member args...)
+//	(. obj (member args...)) -> (. obj 'member args...)
+func normalizeDotForm(lst *vm.List) vm.Value {
+	rest := lst.Next()
+	if rest == nil {
+		return nil
+	}
+	instance := rest.First()
+	memberSeq := rest.Next()
+	if memberSeq == nil {
+		return nil
+	}
+	member := memberSeq.First()
+	if quotedSymbol(member) {
+		return nil // already normalized
+	}
+
+	var name vm.Symbol
+	var args []vm.Value
+	switch m := member.(type) {
+	case vm.Symbol:
+		name = m
+		for sq := memberSeq.Next(); sq != nil; sq = sq.Next() {
+			args = append(args, sq.First())
+		}
+	case *vm.List:
+		head, ok := m.First().(vm.Symbol)
+		if !ok {
+			return nil
+		}
+		name = head
+		for sq := m.Next(); sq != nil; sq = sq.Next() {
+			args = append(args, sq.First())
+		}
+	default:
+		return nil
+	}
+
+	quoted := vm.EmptyList.Cons(name).(*vm.List).Cons(vm.Symbol("quote")).(*vm.List)
+	out := vm.EmptyList
+	for i := len(args) - 1; i >= 0; i-- {
+		out = out.Cons(args[i]).(*vm.List)
+	}
+	return out.Cons(quoted).(*vm.List).Cons(instance).(*vm.List).Cons(vm.Symbol("."))
 }
 
 // tryFastOpcode returns a specialized opcode for known core builtins,
