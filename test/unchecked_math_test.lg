@@ -23,3 +23,58 @@
 (deftest unchecked-negate-still-wraps-ints
   (is (= -5 (unchecked-negate 5)))
   (is (= 5 (unchecked-negate -5))))
+
+;; ---------------------------------------------------------------------------
+;; *unchecked-math* is a COMPILE-TIME knob: the value when each form compiles
+;; is what matters. CompileMultiple evaluates each top-level form before
+;; compiling the next, so the set! below is visible to everything after it.
+;; TestRunner runs each file under clean bindings, so nothing leaks out.
+;; ---------------------------------------------------------------------------
+
+(deftest checked-by-default
+  (is (thrown? Exception (+ 9223372036854775807 1)))
+  (is (thrown? Exception (inc 9223372036854775807))))
+
+(set! *unchecked-math* true)
+
+(deftest unchecked-math-binary
+  (is (= -9223372036854775808 (+ 9223372036854775807 1)))
+  (is (= 9223372036854775807 (- -9223372036854775808 1)))
+  (is (= -2 (* 9223372036854775807 2))))
+
+(deftest unchecked-math-unary-inc-dec
+  (is (= -9223372036854775808 (inc 9223372036854775807)))
+  (is (= 9223372036854775807 (dec -9223372036854775808))))
+
+(deftest unchecked-math-higher-arity-left-nests
+  (is (= -9223372036854775808 (+ 9223372036854775807 1 0)))
+  (is (= -9223372036854775807 (+ 9223372036854775807 1 1)))
+  (is (= -4 (* 9223372036854775807 2 2))))
+
+(deftest unchecked-math-identity-arities-untouched
+  (is (= 0 (+)))
+  (is (= 1 (*)))
+  (is (= 5 (+ 5)))
+  (is (= 5 (* 5))))
+
+(deftest unchecked-math-unary-minus-negates
+  (is (= -5 (- 5)))
+  (is (= 5 (- -5))))
+
+(deftest unchecked-math-floats-stay-floats
+  (is (= 4.0 (+ 1.5 2.5)))
+  (is (= 3.0 (* 1.5 2.0)))
+  (is (= -1.5 (- 1.5))))
+
+(deftest unchecked-math-qualified-head
+  (is (= -9223372036854775808 (clojure.core/+ 9223372036854775807 1))))
+
+(deftest unchecked-math-respects-lexical-shadowing
+  (is (= "ab" (let [+ str] (+ "a" "b"))))
+  (is (= :shadowed (let [unchecked-add (fn [_ _] :shadowed)]
+                     (unchecked-add 1 2)))))
+
+(set! *unchecked-math* false)
+
+(deftest checked-again-after-unset
+  (is (thrown? Exception (+ 9223372036854775807 1))))

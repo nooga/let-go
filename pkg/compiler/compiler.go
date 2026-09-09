@@ -651,6 +651,25 @@ func (c *Context) compileForm(o vm.Value) error {
 				}
 			}
 
+			// *unchecked-math*: rewrite checked arithmetic to its wrapping
+			// counterpart before the call is compiled. Sits after macro-shaped
+			// rewrites above and before macro expansion below, so it only ever
+			// sees a plain function call.
+			if uncheckedMathEnabled() {
+				if base := c.resolveCoreArith(fnsym); base != "" {
+					var args []vm.Value
+					for sq := lst.Next(); sq != nil; sq = sq.Next() {
+						args = append(args, sq.First())
+					}
+					if rewritten := c.rewriteUncheckedArith(base, args); rewritten != nil {
+						if info := vm.FormSource.Get(o); info != nil {
+							vm.FormSource.Set(rewritten, *info)
+						}
+						return c.compileForm(rewritten)
+					}
+				}
+			}
+
 			// Locals shadow macros: skip macro expansion if name is bound in the
 			// enclosing lexical scope (local, arg, or captured by a closure).
 			fvar := vm.Value(vm.NIL)
@@ -740,6 +759,106 @@ func (c *Context) compileForm(o vm.Value) error {
 	return nil
 }
 
+// coreArithNames are the checked arithmetic ops that *unchecked-math* redirects
+// to their wrapping counterparts, mirroring Clojure's inliner pairs.
+var coreArithNames = []vm.Symbol{"+", "-", "*", "inc", "dec"}
+
+// uncheckedArithFor maps a checked arithmetic op to the qualified unchecked var
+// it is rewritten to. Qualified so a local named `unchecked-add` cannot capture
+// the rewrite.
+var uncheckedArithFor = map[vm.Symbol]vm.Symbol{
+	"+":   "clojure.core/unchecked-add",
+	"-":   "clojure.core/unchecked-subtract",
+	"*":   "clojure.core/unchecked-multiply",
+	"inc": "clojure.core/unchecked-inc",
+	"dec": "clojure.core/unchecked-dec",
+}
+
+// uncheckedMathEnabled reports whether *unchecked-math* is truthy right now.
+// Read live rather than cached: it is dynamic, and CompileMultiple evaluates
+// each top-level form before compiling the next, so a top-level set! must be
+// visible to every later form.
+func uncheckedMathEnabled() bool {
+	v := rt.NS(rt.NameCoreNS).Lookup(vm.Symbol("*unchecked-math*"))
+	if v == vm.NIL {
+		return false
+	}
+	vr, ok := v.(*vm.Var)
+	if !ok {
+		return false
+	}
+	return vm.IsTruthy(vr.Deref())
+}
+
+// resolveCoreArith returns which core arithmetic op sym resolves to, or "" if
+// none. Both `+` and `clojure.core/+` qualify, because Clojure attaches
+// unchecked behaviour to the var rather than to the spelling. A lexical
+// binding shadows the core var and yields "".
+func (c *Context) resolveCoreArith(sym vm.Symbol) vm.Symbol {
+	if c.resolvesAsLexical(sym) || c.symbolLookup(sym) != nil {
+		return ""
+	}
+	v := c.CurrentNS().Lookup(sym)
+	if v == vm.NIL {
+		return ""
+	}
+	core := rt.NS(rt.NameCoreNS)
+	for _, name := range coreArithNames {
+		if cv := core.Lookup(name); cv != vm.NIL && cv == v {
+			return name
+		}
+	}
+	return ""
+}
+
+// rewriteUncheckedArith rewrites a checked arithmetic call into its wrapping
+// equivalent under *unchecked-math*, or returns nil to leave the form alone.
+//
+// The unchecked-* primitives are strict 2-ary (1-ary for negate/inc/dec) while
+// + and * are variadic with identity elements, so the arities must be handled
+// separately rather than substituted blindly:
+//
+//	(+) (*) (+ x) (* x)  -> left alone; identity, nothing to wrap
+//	(- x)                -> (unchecked-negate x)
+//	(+ a b)              -> (unchecked-add a b)
+//	(+ a b c)            -> (unchecked-add (unchecked-add a b) c)
+func (c *Context) rewriteUncheckedArith(base vm.Symbol, args []vm.Value) vm.Value {
+	call2 := func(fn vm.Symbol, a, b vm.Value) vm.Value {
+		return vm.EmptyList.Cons(b).Cons(a).Cons(fn)
+	}
+	call1 := func(fn vm.Symbol, a vm.Value) vm.Value {
+		return vm.EmptyList.Cons(a).Cons(fn)
+	}
+
+	switch base {
+	case "inc", "dec":
+		if len(args) != 1 {
+			return nil
+		}
+		return call1(uncheckedArithFor[base], args[0])
+	case "-":
+		if len(args) == 0 {
+			return nil
+		}
+		if len(args) == 1 {
+			return call1(vm.Symbol("clojure.core/unchecked-negate"), args[0])
+		}
+	case "+", "*":
+		if len(args) < 2 {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	// Left-nest: ((a op b) op c) op d ...
+	acc := call2(uncheckedArithFor[base], args[0], args[1])
+	for _, a := range args[2:] {
+		acc = call2(uncheckedArithFor[base], acc, a)
+	}
+	return acc
+}
+
 // tryFastOpcode returns a specialized opcode for known core builtins,
 // or 0 if no fast path is available. Only emits for binary (arity 2)
 // and unary (arity 1) cases with known symbols.
@@ -755,6 +874,15 @@ func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
 	v := c.CurrentNS().Lookup(sym)
 	if v == vm.NIL {
 		return 0
+	}
+	// Under *unchecked-math* the arithmetic ops are rewritten to their
+	// wrapping counterparts before this point. Emitting OP_ADD here would
+	// re-introduce the overflow check and silently defeat that rewrite.
+	if uncheckedMathEnabled() {
+		switch sym {
+		case "+", "-", "*", "inc", "dec":
+			return 0
+		}
 	}
 
 	switch argc {

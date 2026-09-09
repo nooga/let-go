@@ -3663,7 +3663,7 @@ func installLangNS() {
 	uncheckedMath.SetDynamic()
 	uncheckedMath.SetMeta(vm.NewPersistentMap([]vm.Value{
 		vm.Keyword("dynamic"), vm.TRUE,
-		vm.Keyword("doc"), vm.String("Compatibility var for Clojure's unchecked arithmetic mode; accepted but has no code-generation effect."),
+		vm.Keyword("doc"), vm.String("When truthy at compile time, + - * inc dec compile to their wrapping unchecked-* counterparts. Identity arities ((+) (*) (+ x) (* x)) are left alone, (- x) becomes unchecked-negate, and higher arities left-nest. Float arguments keep float arithmetic."),
 	}))
 	warnOnReflection := ns.Def("*warn-on-reflection*", vm.FALSE)
 	warnOnReflection.SetDynamic()
