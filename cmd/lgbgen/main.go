@@ -470,11 +470,12 @@ func main() {
 	// rt.init() has already run — native builtins are registered in CoreNS.
 	consts := vm.NewConsts()
 
-	// Phase 0: bootstrap ir.data (same for both modes). ir.data is
-	// marked lgbgen:skip so it doesn't end up in the bundle, but its
-	// consts still need to be interned in the VM so other NSes that
-	// reference IR data can compile.
-	{
+	// Phase 0: bootstrap ir.data. It is marked lgbgen:skip so it has no
+	// namespace chunk in the bundle, but the ir.* namespaces compiled for Go
+	// lowering need its consts interned. It compiles into the shared pool, and
+	// EncodeBundleOrdered emits every const in the pool, so it must run AFTER
+	// writeBundle (like the rest of ir.*) or its chunks leak into the .lgb.
+	bootstrapIRData := func() {
 		src, ok := rt.EmbeddedSource("ir.data")
 		if !ok {
 			fmt.Fprintln(os.Stderr, "ir.data bootstrap: source not found in embed FS")
@@ -558,6 +559,7 @@ func main() {
 	// — losing it makes lowering emit untyped arithmetic. Always runs AFTER the
 	// bundle is written so ir consts never reach the .lgb pool.
 	compileIRForLowering := func() {
+		bootstrapIRData()
 		for _, ns := range irNS {
 			compileNS(ns)
 		}
