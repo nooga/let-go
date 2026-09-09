@@ -16,6 +16,15 @@
   (is (= 3.0 (unchecked-multiply 1.5 2.0)))
   (is (= -1.5 (unchecked-negate 1.5))))
 
+(deftest unchecked-preserves-other-numeric-types
+  ;; Only int64 pairs wrap. Ratio, BigDecimal, Float32 and BigInt keep their
+  ;; own arithmetic; coercing them to int64 would silently truncate.
+  (is (= 1 (unchecked-add 1/2 1/2)))
+  (is (= 2 (unchecked-multiply 1/2 4)))
+  (is (= -1/2 (unchecked-negate 1/2)))
+  (is (= 1.5M (unchecked-add 1M 0.5M)))
+  (is (= 4.0 (unchecked-add (float 1.5) (float 2.5)))))
+
 (deftest unchecked-mixed-int-and-float
   (is (= 3.5 (unchecked-add 1 2.5)))
   (is (= 3.5 (unchecked-add 2.5 1))))
@@ -65,6 +74,15 @@
   (is (= 4.0 (+ 1.5 2.5)))
   (is (= 3.0 (* 1.5 2.0)))
   (is (= -1.5 (- 1.5))))
+
+(deftest unchecked-math-other-numeric-types-untouched
+  ;; The compiler rewrite must not change these either: they route through the
+  ;; numeric tower inside unchecked-*, so results match the checked ops.
+  (is (= 1 (+ 1/2 1/2)))
+  (is (= 2 (* 1/2 4)))
+  (is (= -1/2 (- 1/2)))
+  (is (= 1.5M (+ 1M 0.5M)))
+  (is (= 4.0 (+ (float 1.5) (float 2.5)))))
 
 (deftest unchecked-math-qualified-head
   (is (= -9223372036854775808 (clojure.core/+ 9223372036854775807 1))))

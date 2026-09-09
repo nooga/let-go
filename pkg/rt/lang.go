@@ -5059,11 +5059,13 @@ func CoreSubP(vs ...vm.Value) (vm.Value, error) {
 	return acc, nil
 }
 
-// isFloatValue reports whether v is a floating-point value. The unchecked-*
-// family wraps only int64 arithmetic; floats pass through to the ordinary
-// numeric tower so their results stay floats, as on the JVM.
-func isFloatValue(v vm.Value) bool {
-	_, ok := v.(vm.Float)
+// isInt64Value reports whether v is a fixed-width int64. The unchecked-* family
+// wraps int64 arithmetic only; every other numeric type (Float, Float32, Ratio,
+// BigInt, BigDecimal) has no int64 overflow to wrap and must keep its own
+// arithmetic. Coercing them through ToInt would silently truncate: on the JVM
+// (unchecked-add 1.5 2.5) is 4.0 and (unchecked-add 1/2 1/2) is 1, not 3 and 0.
+func isInt64Value(v vm.Value) bool {
+	_, ok := v.(vm.Int)
 	return ok
 }
 
@@ -5073,10 +5075,9 @@ func CoreUncheckedAdd(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	// Floats have no int64 overflow to wrap, and Clojure's unchecked-* keep
-	// double arithmetic as doubles. Coercing them through ToInt would silently
-	// truncate: (unchecked-add 1.5 2.5) must be 4.0, not 3.
-	if isFloatValue(vs[0]) || isFloatValue(vs[1]) {
+	// Only int64 pairs wrap. Anything else goes through the numeric tower so
+	// floats, ratios, bigints and bigdecimals keep their own arithmetic.
+	if !isInt64Value(vs[0]) || !isInt64Value(vs[1]) {
 		return vm.NumAdd(vs[0], vs[1])
 	}
 	a, ok := vm.ToInt(vs[0])
@@ -5096,10 +5097,9 @@ func CoreUncheckedSubtract(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	// Floats have no int64 overflow to wrap, and Clojure's unchecked-* keep
-	// double arithmetic as doubles. Coercing them through ToInt would silently
-	// truncate: (unchecked-add 1.5 2.5) must be 4.0, not 3.
-	if isFloatValue(vs[0]) || isFloatValue(vs[1]) {
+	// Only int64 pairs wrap. Anything else goes through the numeric tower so
+	// floats, ratios, bigints and bigdecimals keep their own arithmetic.
+	if !isInt64Value(vs[0]) || !isInt64Value(vs[1]) {
 		return vm.NumSub(vs[0], vs[1])
 	}
 	a, ok := vm.ToInt(vs[0])
@@ -5119,10 +5119,9 @@ func CoreUncheckedMultiply(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	// Floats have no int64 overflow to wrap, and Clojure's unchecked-* keep
-	// double arithmetic as doubles. Coercing them through ToInt would silently
-	// truncate: (unchecked-add 1.5 2.5) must be 4.0, not 3.
-	if isFloatValue(vs[0]) || isFloatValue(vs[1]) {
+	// Only int64 pairs wrap. Anything else goes through the numeric tower so
+	// floats, ratios, bigints and bigdecimals keep their own arithmetic.
+	if !isInt64Value(vs[0]) || !isInt64Value(vs[1]) {
 		return vm.NumMul(vs[0], vs[1])
 	}
 	a, ok := vm.ToInt(vs[0])
@@ -5142,8 +5141,8 @@ func CoreUncheckedNegate(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	if f, ok := vs[0].(vm.Float); ok {
-		return vm.Float(-float64(f)), nil
+	if !isInt64Value(vs[0]) {
+		return vm.NumNeg(vs[0])
 	}
 	a, ok := vm.ToInt(vs[0])
 	if !ok {
