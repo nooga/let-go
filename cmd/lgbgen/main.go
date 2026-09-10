@@ -152,7 +152,7 @@ func deriveGoLoweringOrder() ([]embeddedNamespace, error) {
 // from embedded source on demand. This skip is intentionally scoped to
 // the BUNDLE only — the Go-lowering path (deriveGoLoweringOrder) must
 // still see ir.* so `core_go_lowered/ir/**` is generated for the
-// `-tags gogen_ir` build, so it does NOT consult isIRBundleSkipped.
+// `-tags gogen_ir` build, so it does NOT consult isBundleSkippedTool.
 func discoverEmbeddedNS() ([]embeddedNamespace, error) {
 	names := rt.EmbeddedNSNames()
 	allowed := map[string]string{}
@@ -181,11 +181,24 @@ func discoverEmbeddedNS() ([]embeddedNamespace, error) {
 	return out, nil
 }
 
-// isIRBundleSkipped reports whether namespace n belongs to the ir.* AOT
-// pipeline and should be excluded from the BYTECODE bundle (but not the
-// Go-lowering output). Matches the `ir` root and any `ir.` descendant.
-func isIRBundleSkipped(n string) bool {
-	return n == "ir" || strings.HasPrefix(n, "ir.")
+// isBundleSkippedTool reports whether namespace n is a build-time tool that
+// should be excluded from the BYTECODE bundle (but not from the Go-lowering
+// output). Two families qualify, for one reason: a plain `lg` script never
+// touches them, so decoding them on every process start is pure cost. Both
+// load from embedded source on demand instead.
+//
+//   - the ir.* AOT/lowering pipeline, the `ir` root and any `ir.` descendant
+//   - lg.compiler, the AOT compile driver, and any lg.compiler.* descendant.
+//     Match the family, not the exact name: the roadmap moves ir.* under
+//     lg.compiler.ir.*, where an exact-name check would match neither name and
+//     restore the regression silently.
+//
+// lg.compiler is 30 chunks on its own, but its requires drag the whole IR
+// pipeline into the const pool: bundling it cost 308K→1.07M and 4.1ms→23.4ms
+// of boot, past the 8ms budget (measured 2026-09-02).
+func isBundleSkippedTool(n string) bool {
+	return n == "ir" || strings.HasPrefix(n, "ir.") ||
+		n == "lg.compiler" || strings.HasPrefix(n, "lg.compiler.")
 }
 
 // hasLgbgenSkipDirective reports whether the source begins with a line
@@ -535,32 +548,34 @@ func main() {
 		}
 	}
 
-	// Phase 1a: compile every NON-ir namespace into the shared const pool, in
-	// dependency order. The ir.* AOT/lowering pipeline is deliberately kept OUT
-	// of the bytecode bundle (it loads from source on demand at runtime — see
-	// isIRBundleSkipped and core.lg's *ir-compile*). It must be excluded HERE,
+	// Phase 1a: compile every non-build-tool namespace into the shared const
+	// pool, in dependency order. The ir.* pipeline and the lg.compiler driver
+	// are deliberately kept OUT of the bytecode bundle (they load from source on
+	// demand at runtime — see isBundleSkippedTool and core.lg's *ir-compile*).
+	// They must be excluded HERE,
 	// before the bundle is encoded, because EncodeBundleOrdered emits every
 	// const in the pool (encoder.go) and each func const drags in its chunk —
 	// so filtering only the ns-order would NOT keep ir bytecode out of the
 	// .lgb; ir must never enter the pool before writeBundle.
-	var irNS []embeddedNamespace
+	var toolNS []embeddedNamespace
 	for _, ns := range embeddedNS {
-		if isIRBundleSkipped(ns.name) {
-			irNS = append(irNS, ns)
+		if isBundleSkippedTool(ns.name) {
+			toolNS = append(toolNS, ns)
 			continue
 		}
 		compileNS(ns)
 		bundleOrder = append(bundleOrder, ns.name)
 	}
 
-	// compileIRForLowering compiles the ir.* namespaces into VM state so the
-	// Go-lowering pass can resolve them. Kept in the order derived above, which
-	// carries the synthetic ir.build-after-passes edge (deriveGoLoweringOrder)
-	// — losing it makes lowering emit untyped arithmetic. Always runs AFTER the
-	// bundle is written so ir consts never reach the .lgb pool.
-	compileIRForLowering := func() {
+	// compileToolsForLowering compiles the bundle-skipped namespaces into VM
+	// state so the Go-lowering pass can resolve them. Kept in the order derived
+	// above, which carries the synthetic ir.build-after-passes edge
+	// (deriveGoLoweringOrder) — losing it makes lowering emit untyped
+	// arithmetic. Always runs AFTER the bundle is written so their consts never
+	// reach the .lgb pool.
+	compileToolsForLowering := func() {
 		bootstrapIRData()
-		for _, ns := range irNS {
+		for _, ns := range toolNS {
 			compileNS(ns)
 		}
 	}
@@ -568,7 +583,7 @@ func main() {
 	// Emit artifacts. `both` writes the (ir-free) bundle first, then compiles
 	// ir and lowers the whole program to Go.
 	if targetGo {
-		compileIRForLowering()
+		compileToolsForLowering()
 		runGoTarget(goOutDir, codeDir)
 		// Skip the manifest refresh when lowering into a throwaway codeDir —
 		// the canonical generated.sums must only move under a real regen.
@@ -579,7 +594,7 @@ func main() {
 	}
 	if targetBoth {
 		writeBundle(outPath, consts, nsChunks, bundleOrder, compress)
-		compileIRForLowering()
+		compileToolsForLowering()
 		runGoTarget(goOutDir, codeDir)
 		return
 	}
