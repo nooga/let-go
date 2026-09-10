@@ -385,9 +385,14 @@ func TestSeedBaselineAmd64OnlyPreservesM3(t *testing.T) {
 		}
 	}
 
-	// Create amd64 snapshots (should be seeded)
+	// Create amd64 snapshots (should be seeded): a full minimum window, since
+	// a machine with fewer than -seed-min-window snapshots is skipped.
 	createMockSnapshot("20260801T010134Z-b170a08eef47-amd64-amd-epyc-7763.json",
 		"b170a08eef47", "2026-08-01T01:01:34Z", "amd64", "AMD EPYC 7763")
+	createMockSnapshot("20260731T010134Z-a170a08eef47-amd64-amd-epyc-7763.json",
+		"a170a08eef47", "2026-07-31T01:01:34Z", "amd64", "AMD EPYC 7763")
+	createMockSnapshot("20260730T010134Z-9170a08eef47-amd64-amd-epyc-7763.json",
+		"9170a08eef47", "2026-07-30T01:01:34Z", "amd64", "AMD EPYC 7763")
 
 	// Create arm64 snapshots (should be ignored per #651)
 	createMockSnapshot("20260801T010134Z-b170a08eef47-arm64-apple-m1-virtual.json",
@@ -444,7 +449,7 @@ func TestSeedBaselineAmd64OnlyPreservesM3(t *testing.T) {
 	}
 
 	// Run seed-baseline.
-	seedBaseline(baselineFile, timelineDir, "unused-release-sha")
+	seedBaseline(baselineFile, timelineDir, defaultSeedOptions())
 
 	// Verify the output.
 	data, err := os.ReadFile(baselineFile)

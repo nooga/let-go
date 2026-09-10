@@ -19,14 +19,23 @@ type PersistentSet struct {
 	_hasHash bool
 }
 
+// emptySetImpl is the canonical empty backing map for sets. Unlike
+// EmptyPersistentMap it starts in HAMT mode (non-nil root): Clojure has no
+// array-set contract, so a set must never inherit the map's insertion-ordered
+// array mode — a small #{...} sequencing in source order would leak an order
+// guarantee sets don't make. Every set construction path seeds from this (or
+// forces the transient to HAMT), keeping set iteration order a function of
+// element hashes alone, independent of insertion order.
+var emptySetImpl = &PersistentMap{count: 0, root: &hmapBitmapNode{}}
+
 // EmptyPersistentSet is the canonical empty set.
-var EmptyPersistentSet = &PersistentSet{impl: EmptyPersistentMap}
+var EmptyPersistentSet = &PersistentSet{impl: emptySetImpl}
 
 func NewPersistentSet(vals []Value) *PersistentSet {
 	if len(vals) == 0 {
 		return EmptyPersistentSet
 	}
-	m := EmptyPersistentMap
+	m := emptySetImpl
 	for _, v := range vals {
 		m = m.Assoc(v, v).(*PersistentMap)
 	}
@@ -116,14 +125,20 @@ func (s *PersistentSet) Disj(value Value) *PersistentSet {
 	if newImpl == s.impl {
 		return s // wasn't present
 	}
+	if newImpl.count == 0 {
+		// Dissoc deliberately drains a map to the empty ORDERED mode; a set
+		// re-grown from that would leak insertion order, so land on the
+		// HAMT-mode empty impl instead.
+		newImpl = emptySetImpl
+	}
 	return &PersistentSet{impl: newImpl, meta: s.meta}
 }
 
 func (s *PersistentSet) Contains(value Value) Boolean {
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return FALSE
 	}
-	_, found := s.impl.root.find(0, hashValue(value), value)
+	_, found := s.impl.findValue(value)
 	if found {
 		return TRUE
 	}
@@ -133,10 +148,10 @@ func (s *PersistentSet) Contains(value Value) Boolean {
 // --- Lookup (for get) ---
 
 func (s *PersistentSet) ValueAt(key Value) Value {
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return NIL
 	}
-	_, found := s.impl.root.find(0, hashValue(key), key)
+	_, found := s.impl.findValue(key)
 	if found {
 		return key
 	}
@@ -144,10 +159,10 @@ func (s *PersistentSet) ValueAt(key Value) Value {
 }
 
 func (s *PersistentSet) ValueAtOr(key Value, dflt Value) Value {
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return dflt
 	}
-	_, found := s.impl.root.find(0, hashValue(key), key)
+	_, found := s.impl.findValue(key)
 	if found {
 		return key
 	}
@@ -173,10 +188,10 @@ func (s *PersistentSet) keys() []Value {
 }
 
 func (s *PersistentSet) entries() []Value {
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return nil
 	}
-	mes := s.impl.root.nodeSeq()
+	mes := s.impl.mapEntries()
 	result := make([]Value, len(mes))
 	for i, e := range mes {
 		result[i] = e.Key
@@ -222,10 +237,10 @@ func (s *PersistentSet) Invoke(pargs []Value) (Value, error) {
 	if len(pargs) != 1 {
 		return NIL, fmt.Errorf("wrong number of arguments %d", len(pargs))
 	}
-	if s.impl.root == nil {
+	if s.impl.count == 0 {
 		return NIL, nil
 	}
-	_, found := s.impl.root.find(0, hashValue(pargs[0]), pargs[0])
+	_, found := s.impl.findValue(pargs[0])
 	if found {
 		return pargs[0], nil
 	}

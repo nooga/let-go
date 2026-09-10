@@ -1,0 +1,59 @@
+;; Small maps (≤8 entries) preserve insertion order — map literals,
+;; array-map, assoc chains, and the builders on top of them (into, zipmap,
+;; merge, select-keys) — matching Clojure's PersistentArrayMap contract.
+;; Past 8 entries the map promotes to hash order (unspecified), and
+;; equality/hash stay order-insensitive.
+
+(ns test.map-order-test
+  (:require [test :refer :all]))
+
+(deftest literal-maps-preserve-insertion-order
+  (is (= '(:_id :name) (keys {:_id 1 :name "cat"})))
+  (is (= '(1 "cat") (vals {:_id 1 :name "cat"})))
+  (is (= '([:a 1] [:b 2] [:c 3]) (seq {:a 1 :b 2 :c 3}))))
+
+(deftest array-map-preserves-insertion-order
+  (is (= '([:a 1] [:b 2] [:c 3]) (seq (array-map :a 1 :b 2 :c 3))))
+  (is (= '(:z :y :x) (keys (array-map :z 1 :y 2 :x 3)))))
+
+(deftest assoc-chain-preserves-order-up-to-8
+  (let [m (-> {} (assoc :h 1) (assoc :g 2) (assoc :f 3) (assoc :e 4)
+              (assoc :d 5) (assoc :c 6) (assoc :b 7) (assoc :a 8))]
+    (is (= '(:h :g :f :e :d :c :b :a) (keys m))))
+  (testing "assoc of an existing key keeps its position"
+    (is (= '(:a :b :c) (keys (assoc {:a 1 :b 2 :c 3} :b 99))))
+    (is (= 99 (:b (assoc {:a 1 :b 2 :c 3} :b 99))))))
+
+(deftest dissoc-preserves-remaining-order
+  (is (= '(:a :c) (keys (dissoc {:a 1 :b 2 :c 3} :b)))))
+
+(deftest past-8-order-is-unspecified-but-semantics-hold
+  (let [m (into {} (map (fn [i] [i (* 10 i)]) (range 12)))]
+    (is (= 12 (count m)))
+    (is (= 70 (get m 7)))
+    (is (every? (fn [i] (= (* 10 i) (get m i))) (range 12)))))
+
+(deftest equality-and-hash-ignore-order
+  (is (= {:a 1 :b 2} {:b 2 :a 1}))
+  (is (= (hash {:a 1 :b 2}) (hash {:b 2 :a 1}))))
+
+(deftest printing-follows-insertion-order
+  (is (= "{:b 1, :a 2}" (pr-str {:b 1 :a 2})))
+  (is (= "{:b 1, :a 2}" (with-out-str (pr {:b 1 :a 2})))))
+
+(deftest builders-preserve-order
+  (testing "into (the transient path)"
+    (is (= '(:b :a) (keys (into {} [[:b 2] [:a 1]])))))
+  (testing "zipmap"
+    (is (= '(:z :y :x) (keys (zipmap [:z :y :x] [1 2 3])))))
+  (testing "merge"
+    (is (= '(:b :a) (keys (merge {:b 1} {:a 2})))))
+  (testing "select-keys follows the key-seq order"
+    (is (= '(:c :a) (keys (select-keys {:a 1 :b 2 :c 3} [:c :a]))))))
+
+(deftest map-semantics-unchanged
+  (is (= 2 (get {:a 1 :b 2} :b)))
+  (is (contains? {:a 1} :a))
+  (is (= {:a 2} (update {:a 1} :a inc)))
+  (is (= 3 (reduce-kv (fn [acc _ v] (+ acc v)) 0 {:a 1 :b 2})))
+  (is (= #{:a :b} #{:b :a})))
