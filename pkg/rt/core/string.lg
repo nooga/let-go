@@ -90,5 +90,24 @@
     (throw "ends-with? expected String suffix"))
   (core/ends-with? (str s) substr))
 (def includes? core/includes?)
-(def split core/split)
+;; Java Pattern.split semantics (what clojure.string/split delegates to):
+;; limit 0 drops trailing empty fields, except that a string with no match
+;; is returned as its own single field ("" -> [""]); limit > 0 yields at
+;; most limit fields with the last holding the remainder; limit < 0 keeps
+;; every field. core/split is the raw primitive (Go SplitN count).
+(defn split
+  ([s re] (split s re 0))
+  ([s re limit]
+   (if (zero? limit)
+     (let [v (vec (core/split s re -1))]
+       (if (= 1 (count v))
+         v
+         (loop [v v]
+           (if (and (seq v) (= "" (peek v)))
+             (recur (pop v))
+             v))))
+     (vec (core/split s re limit)))))
+
+(defn split-lines [s]
+  (split s #"\r?\n"))
 (def subs core/subs)
