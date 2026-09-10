@@ -3,6 +3,9 @@ set -e
 cd "$(dirname "$0")/../.."
 
 LG="${LG:-build/lg}"
+if [[ "$LG" != */* ]]; then
+  LG="./$LG"
+fi
 DIR="test/namespace_shadow_warning_test"
 fail=0
 
@@ -10,7 +13,7 @@ check() {
   local file="$1"
   local should_have="$2"
   local err
-  err=$($LG "$file" 2>&1 >/dev/null)
+  err=$("$LG" "$file" 2>&1 >/dev/null)
   if [ "$should_have" = "warn" ]; then
     if echo "$err" | grep -q "already refers to: #'clojure.core/"; then
       echo "  PASS: $file emitted warning"

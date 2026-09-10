@@ -35,6 +35,37 @@ func ApplyVarMeta(v *vm.Var, meta vm.Value) {
 	if v == nil || meta == nil || meta == vm.NIL {
 		return
 	}
+	if pairs, ok := meta.(vm.DefMetaPairs); ok {
+		v.SetMetaPairs(meta)
+		seenDynamic, seenPrivate := false, false
+		for i := len(pairs) - 2; i >= 0; i -= 2 {
+			key, ok := pairs[i].(vm.Keyword)
+			if !ok {
+				continue
+			}
+			value := pairs[i+1]
+			switch key {
+			case vm.Keyword("dynamic"):
+				if !seenDynamic {
+					seenDynamic = true
+					if vm.IsTruthy(value) {
+						v.SetDynamic()
+					}
+				}
+			case vm.Keyword("private"):
+				if !seenPrivate {
+					seenPrivate = true
+					if vm.IsTruthy(value) {
+						v.SetPrivate()
+					}
+				}
+			}
+			if seenDynamic && seenPrivate {
+				break
+			}
+		}
+		return
+	}
 	v.SetMeta(meta)
 	m, ok := meta.(interface {
 		ValueAt(vm.Value) vm.Value

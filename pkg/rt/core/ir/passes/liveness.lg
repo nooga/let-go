@@ -172,18 +172,28 @@
 (defn reachable-nids [f]
   "The set of InstIds whose value is read by emitted code — the lowering DCE
    read-set. Backward reachability from output roots through refs and block-arg
-   edges."
-  (let [reached (atom #{})
+   edges. Skips instruction nids in (:absorbed-insts f) when seeding — those
+   instructions are folded into :switch nodes by structurize and should not
+   be marked as reachable. Treats missing :absorbed-insts as empty set."
+  (let [absorbed-insts (or (:absorbed-insts f) #{})
+        reached (atom #{})
         seed    (fn [nid] (swap! reached conj nid))]
+    ;; Seed from value-reading terminators and all call instructions,
+    ;; but skip terminators that are in absorbed-insts
     (doseq [bid (ir/blocks f)]
       (let [term (ir/block-term bid f)]
         (when term
           (let [op (ir/op term f)]
-            (when (or (= op :return) (= op :branch-if) (= op :tail-call) (= op :recur-fn))
+            ;; Skip seeding from branch-if and calls if they're in absorbed-insts
+            (when (and (or (= op :return) (= op :branch-if) (= op :tail-call) (= op :recur-fn))
+                       (not (contains? absorbed-insts term)))
               (doseq [r (ir/refs term f)] (seed r))))))
       (doseq [nid (ir/block-insts bid f)]
-        (when (= :call (ir/op nid f))
+        ;; Seed from calls, but skip those in absorbed-insts
+        (when (and (= :call (ir/op nid f))
+                   (not (contains? absorbed-insts nid)))
           (doseq [r (ir/refs nid f)] (seed r)))))
+    ;; Fixpoint: close over refs and block-arg edges
     (loop []
       (let [before (count @reached)]
         (doseq [bid (ir/blocks f)]

@@ -30,9 +30,17 @@
 
 (declare lower)
 
+(defn- fn-template-aux? [aux]
+  (and (map? aux)
+       (contains? #{:fn-template :multi-fn-template} (:kind aux))))
+
+(defn- fn-template-const? [f nid]
+  (and (= :const (ir/op nid f))
+       (fn-template-aux? (ir/aux nid f))))
+
 (defn- template-value [aux]
   (cond
-    (and (map? aux) (= (:kind aux) :fn-template))
+    (and (fn-template-aux? aux) (= (:kind aux) :fn-template))
     (let [inner (:fn aux)
           arity (:arity aux)
           variadic? (:variadic? aux)
@@ -216,7 +224,9 @@
         (when-not (ir/uses-empty? us)
           (let [def-block (ir/block-of i f)
                 def-op    (ir/op i f)]
-            (when-not (and (ir/op-cheap-load? def-op) (not= def-op :load-var))
+            (when-not (and (ir/op-cheap-load? def-op)
+                           (not= def-op :load-var)
+                           (not (fn-template-const? f i)))
               (ir/uses-for-each us
                 (fn [user-id]
                   (let [user-block (ir/block-of user-id f)]
@@ -422,6 +432,11 @@
   (let [uc (use-count-of l nid)]
     (cond
       (zero? uc) false
+      ;; A function literal is an allocation with observable identity, not a
+      ;; replayable scalar constant. Materialize it once per lowering site and
+      ;; DUP_NTH every local reuse; re-running template-value would manufacture
+      ;; a distinct *vm.Func for each reference.
+      (fn-template-const? (f-of l) nid) true
       (> uc 1) false
       :else
       ;; uc == 1 already → bitset has exactly one user-id. Pull it via

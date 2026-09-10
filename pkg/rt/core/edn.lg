@@ -1,5 +1,11 @@
 ;; edn — EDN reading and writing
+;;
+;; read-string deliberately shadows clojure.core/read-string: this is the EDN
+;; reader, and callers say (edn/read-string s). The :exclude states that the
+;; shadow is intended, matching io/slurp and io/spit, and keeps the
+;; warn-on-core-shadow check quiet during boot.
 (ns edn
+  (:refer-clojure :exclude [read-string])
   (:require
    [pprint]))
 

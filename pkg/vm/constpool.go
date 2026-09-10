@@ -253,7 +253,10 @@ func constHash(v Value) uint32 {
 // Pointer-identity types use pointer equality; value types use same-type
 // structural comparison (never merging across types like Int/Float/BigInt).
 func constEqual(a, b Value) bool {
-	switch a.(type) {
+	switch a := a.(type) {
+	case DefMetaPairs:
+		other, ok := b.(DefMetaPairs)
+		return ok && a.Equals(other)
 	case *Func, *Var, *BigInt, *Ratio, *BigDecimal, *Record, *RecordType, *Regex, *Atom:
 		return a == b
 	default:

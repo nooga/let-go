@@ -27,7 +27,7 @@ func Resolve(stampedVersion, stampedCommit string, info *debug.BuildInfo) (strin
 	if resolvedCommit == "none" {
 		if vcsRevision := vcsRevision(info); vcsRevision != "" {
 			resolvedCommit = vcsRevision
-		} else if pseudoRevision := pseudoVersionRevision(info.Main.Version); pseudoRevision != "" {
+		} else if pseudoRevision := PseudoVersionRevision(info.Main.Version); pseudoRevision != "" {
 			resolvedCommit = pseudoRevision
 		}
 	}
@@ -59,7 +59,11 @@ func modified(info *debug.BuildInfo) bool {
 	return false
 }
 
-func pseudoVersionRevision(moduleVersion string) string {
+// PseudoVersionRevision extracts the VCS revision from a Go pseudo-version
+// (vX.Y.Z-0.yyyymmddhhmmss-abcdefabcdef). Returns "" for anything else.
+// Exported because pkg/cli needs it against a DEP's module version, not only
+// the main module's that Resolve handles.
+func PseudoVersionRevision(moduleVersion string) string {
 	parts := strings.Split(moduleVersion, "-")
 	if len(parts) < 3 {
 		return ""

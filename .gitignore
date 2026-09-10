@@ -178,6 +178,10 @@ AGENTS.md
 # Local goreleaser / cross-build artifacts
 /dist/
 
+# browser-inspector build output: the inlined page (~8 MB) plus a copy of the
+# service worker, both written by `make -C examples/browser-inspector build`.
+/examples/browser-inspector/dist/
+
 # Build outputs. `build/` is where generated binaries land; `bin/` holds the
 # promoted current copy of lg. Both are directory-scoped, so a new binary needs
 # no new ignore entry, and `make clean` removes both.

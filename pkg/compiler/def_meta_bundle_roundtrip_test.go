@@ -34,7 +34,7 @@ func TestDefMetaSurvivesLGBRoundTrip(t *testing.T) {
 
 	consts := vm.NewConsts()
 	c := NewCompiler(consts, rt.NS(rt.NameCoreNS))
-	chunk, err := c.Compile(`(defn ^:private ` + varName + ` "a test doc" ([x] x) ([x y] (+ x y)))`)
+	chunk, err := c.Compile(`(defn ^{:private true :dynamic true} ` + varName + ` "a test doc" ([x] x) ([x y] (+ x y)))`)
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
@@ -81,6 +81,9 @@ func TestDefMetaSurvivesLGBRoundTrip(t *testing.T) {
 	if !decodedVar.IsPrivate() {
 		t.Errorf(":private did not survive the round trip")
 	}
+	if !decodedVar.IsDynamic() {
+		t.Errorf(":dynamic did not survive the round trip")
+	}
 	meta := decodedVar.Meta()
 	m, ok := meta.(interface{ ValueAt(vm.Value) vm.Value })
 	if !ok {
@@ -98,5 +101,50 @@ func TestDefMetaSurvivesLGBRoundTrip(t *testing.T) {
 	}
 	if got, want := arglists.String(), "([x] [x y])"; got != want {
 		t.Errorf(":arglists = %s, want %s", got, want)
+	}
+	for key, want := range map[vm.Keyword]vm.Value{
+		vm.Keyword("file"):   vm.String("<default>"),
+		vm.Keyword("line"):   vm.Int(1),
+		vm.Keyword("column"): vm.Int(1),
+	} {
+		if got := m.ValueAt(key); got != want {
+			t.Errorf("%s = %v, want %v", key, got, want)
+		}
+	}
+}
+
+func TestDefMetaUsesCompactBundleConstant(t *testing.T) {
+	consts := vm.NewConsts()
+	c := NewCompiler(consts, rt.NS(rt.NameCoreNS))
+	if _, err := c.Compile(`(defn ^:private compact-meta-constant "a test doc" [x] x)`); err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	var compact vm.DefMetaPairs
+	for _, value := range consts.Values() {
+		switch value := value.(type) {
+		case *vm.PersistentMap:
+			if value.ValueAt(vm.Keyword("doc")) == vm.String("a test doc") {
+				t.Fatalf("def metadata remained a persistent-map constant: %v", value)
+			}
+		case vm.DefMetaPairs:
+			for i := 0; i+1 < len(value); i += 2 {
+				if value[i] == vm.Keyword("doc") && value[i+1] == vm.String("a test doc") {
+					compact = value
+				}
+			}
+		}
+	}
+	if compact == nil {
+		t.Fatal("no compact def-metadata constant found")
+	}
+}
+
+func TestCompactDefMetaRejectsNonMapSequence(t *testing.T) {
+	entries := vm.ArrayVector{
+		vm.MapEntry{Key: vm.Keyword("doc"), Value: vm.String("not a map")},
+	}
+	if compact, ok := compactDefMeta(entries); ok {
+		t.Fatalf("non-map metadata sequence compacted as %v", compact)
 	}
 }

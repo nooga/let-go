@@ -1,0 +1,19 @@
+(ns test.clojure-version-test
+  (:require [test :refer :all]
+            [string]))
+
+;; Libraries gate version-specific behavior on (clojure-version) — honeysql's
+;; suite enables its 1.11+ named-argument tests from it — so the tracked
+;; language level must resolve and print in Clojure's M.m.i shape.
+
+(deftest clojure-version-shape
+  (testing "*clojure-version* carries the standard keys"
+    (is (int? (:major *clojure-version*)))
+    (is (int? (:minor *clojure-version*)))
+    (is (int? (:incremental *clojure-version*))))
+  (testing "(clojure-version) prints the map"
+    (is (string? (clojure-version)))
+    (is (string/starts-with? (clojure-version)
+                             (str (:major *clojure-version*)
+                                  "."
+                                  (:minor *clojure-version*))))))

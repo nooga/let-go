@@ -1,6 +1,6 @@
 //go:build lg_profile
 
-package main
+package cli
 
 import (
 	"flag"
@@ -21,7 +21,9 @@ var (
 	profileStopOnce sync.Once
 )
 
-func init() {
+// registerProfileFlags is called from registerFlags, not from init: importing
+// pkg/cli must not touch the global flag set (see registerFlags).
+func registerProfileFlags() {
 	flag.StringVar(&cpuProfile, "cpuprofile", "",
 		"write a Go CPU profile of script/REPL execution to this file "+
 			"(build modes -c/-b/-w and the bundled-binary path are not profiled; "+
