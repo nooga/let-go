@@ -1,6 +1,6 @@
 ---
 status: planning
-last-verified: 2026-09-08
+last-verified: 2026-09-10
 authoritative-for:
   - clojure-test-api-design
   - clojure-test-tap
@@ -32,9 +32,10 @@ This document specifies a `clojure.test` implementation for let-go that is faith
 14. [Out of Scope](#14-out-of-scope)
 15. [Design Decision Rationale](#15-design-decision-rationale)
 16. [Definition of Done](#16-definition-of-done)
-17. [Appendix A: Deviations from the Oracle](#appendix-a-deviations-from-the-oracle)
-18. [Appendix B: Oracle Transcripts](#appendix-b-oracle-transcripts)
-19. [Appendix C: Expansion Examples](#appendix-c-expansion-examples)
+17. [Executable Evidence](#17-executable-evidence)
+18. [Appendix A: Deviations from the Oracle](#appendix-a-deviations-from-the-oracle)
+19. [Appendix B: Oracle Transcripts](#appendix-b-oracle-transcripts)
+20. [Appendix C: Expansion Examples](#appendix-c-expansion-examples)
 
 ---
 
@@ -120,7 +121,7 @@ The work lands as three pull requests, each independently valuable and each leav
 
 | Slice | Sections | Delivers on its own |
 |---|---|---|
-| 1. Traces | 3.5, 5, 4.8 | A provenance-bearing VM datum path plus structured traces for every thrown value, `Throwable->map`, `clojure.stacktrace`, and better uncaught-error output for every user. |
+| 1. Traces | 3.5, 4.8, 4.10, 5 | Structured traces from the existing unwind chain for every thrown exception, on both backends, plus `Throwable->map`, `clojure.stacktrace`, and better uncaught-error output for every user. |
 | 2. Test port | 4.1 through 4.7, 6 through 11, 13 | `clojure.test` and `clojure.test.tap` at Clojure fidelity; harness in summary mode (Section 12.2). |
 | 3. Bridge | 12.3 | Per-deftest Go subtests with attributed failures. |
 
@@ -293,77 +294,40 @@ ENUM FrameKind:
 
 A trace is a vector of `Frame`, innermost first.
 
-Trace ownership is attached to a throw occurrence, not keyed by a `Value`:
+**The trace is the unwound error chain.** No capture happens at the throw site and no live frame stack is walked. A `throw` returns `ThrownError{value}` as a Go `error`; every call site the error passes through on the way out wraps it in an `ExecutionError` carrying that site's function name and `SourceInfo`, which is what the bytecode VM does today at `OP_INVOKE`. The chain that arrives at a `catch` therefore already lists every frame between the throw and the catch, innermost first. The design adds three things: the lowered-Go backend wraps the same way (Section 4.10), the catch keeps the chain instead of discarding it, and `ex-trace` renders it.
 
 ```
-RECORD ThrowOccurrence:                 -- immutable, heap-owned
-    id      : unique opaque token
-    value   : Value
-    trace   : Vector<FrozenFrame>
+RECORD ExInfo:                          -- existing pointer struct, two fields added
+    message : String
+    data    : Map
+    cause   : Error | None              -- a Go error: ThrownError, ExecutionError chain, or a host error
+    meta    : Value
+    chain   : Error | None              -- set once at first catch; never overwritten (CAS)
 
-RECORD EvalDatum:                       -- VM-internal; never implements Value
-    value       : Value
-    provenance  : ThrowOccurrence | None
+FUNCTION catch_bind(err : Error) -> Value:
+    -- The single seam both backends use (vm.ErrorToValue today).
+    value = thrown_value(err)                       -- ThrownError.Value, or a boxed exception for a Go error
+    IF value IS *ExInfo AND value.chain IS None:
+        compare_and_swap(value.chain, None, err)    -- first catch wins; a reused exception keeps its first trace
+    RETURN value
+
+FUNCTION box_go_error(err : Error) -> *ExInfo:
+    -- A Go error that reaches let-go is boxed with the Go error retained as cause.
+    RETURN ExInfo(innermost_message(err), {}, cause = err)
+
+FUNCTION ex_trace(v) -> Vector<Frame> | None:
+    IF v IS *ExInfo AND v.chain IS NOT None: RETURN frames_of(v.chain)
+    RETURN None
+
+FUNCTION frames_of(err) -> Vector<Frame>:
+    -- Walk ExecutionError links outward. A "calling <fn>" link with SourceInfo is an LG or NATIVE frame.
+    -- A GoPanicError contributes its captured Go frames as GO frames. Resolution is lazy: the chain is
+    -- stored, frames are built on read.
 ```
 
-`EvalDatum` is the internal carrier across operand stacks, locals, closure captures, arguments, returns, vars/refs/atoms, exception-cause slots, and collection key/value/element storage. User-visible operations project `datum.value`; type/class dispatch, equality, identity, hashing, metadata, protocol dispatch, printing, and Go interop therefore observe exactly the original value. Only occurrence-aware operations such as `throw`, `ex-trace`, and `ex-cause` inspect `provenance`. This is a shadow carrier rather than a wrapper pretending to implement every optional `Value` interface.
+`chain` is a computed field. It participates in neither `=` nor `hash`, so `(= e (ex-info "x" {}))` is unaffected by whether `e` was ever thrown, and `WithMeta` copies it like any other field. Setting it once matches the JVM, where a `Throwable` captures its stack at construction and rethrowing the same object keeps that trace.
 
-The concrete invocation ABI is:
-
-```
-INTERFACE DatumFn:
-    InvokeDatum(ec, args : []EvalDatum) -> (EvalDatum, Error | None)
-
-FUNCTION invoke_legacy_value(ec, f, args : []Value) -> (Value, Error | None):
-    -- The non-recursive, context-preserving value dispatcher. This is the
-    -- behavior of ExecContext.Invoke before datum dispatch is added.
-    f = unwrap_meta_fn(f)
-    CASE f:
-        INTERPRETED_OR_LOWERED_LANGUAGE_FN: RETURN f.InvokeValueContext(ec, args)
-        CONTEXT_AWARE_NATIVE:               RETURN f.InvokeContext(ec, args)
-        PLAIN_FN:                           RETURN f.Invoke(args)
-
-FUNCTION invoke_datum(ec, f, args : []EvalDatum) -> (EvalDatum, Error | None):
-    IF f IMPLEMENTS DatumFn: RETURN f.InvokeDatum(ec, args)
-    value, err = invoke_legacy_value(ec, f, project_values(args))
-    RETURN EvalDatum(value, None), err                  -- legacy calls are constructive
-
-RECORD LoweredDatum<T>:
-    value       : T
-    provenance  : ThrowOccurrence | None
-
-FUNCTION eval_to_lowered<T>(d : EvalDatum) -> LoweredDatum<T>:
-    RETURN LoweredDatum<T>(unbox<T>(d.value), d.provenance)
-
-FUNCTION lowered_to_eval<T>(d : LoweredDatum<T>) -> EvalDatum:
-    RETURN EvalDatum(box<T>(d.value), d.provenance)
-```
-
-The interpreter's frame slots are `EvalDatum`, and its language call dispatcher always uses `invoke_datum`. The fallback uses `invoke_legacy_value`, which mirrors the existing non-recursive `ExecContext.Invoke` type switch and therefore supplies the live context to interpreted functions and context-aware natives; it never calls the new datum dispatcher recursively. Datum-preserving native/core functions—including `identity`, collection lookup/seq, `conj`/`assoc`, var/ref/atom read and write, `ex-info`, `ex-cause`, and `ex-trace`—implement `DatumFn`; collection-construction and closure-capture opcodes likewise store datums rather than projected values. A pass-through operation explicitly returns an input datum, while a newly constructed result has no provenance. Legacy native functions receive only projected values and therefore cannot accidentally infer provenance from equality or Go comparability.
-
-Lowered Go uses `LoweredDatum<T>` for typed parameters, captures, locals, and results, and the non-specialized path uses `EvalDatum`. Every generated generic-to-typed entry adapter calls `eval_to_lowered` on each argument and `lowered_to_eval` on the result; every typed-to-generic call performs the inverse conversions. Boxing and unboxing transform only `value` and copy the identical occurrence pointer. A host `[]Value` adapter supplies nil provenance and projects the returned value. All adapters propagate a returned error unchanged. Typed arithmetic and other constructive operations return nil provenance; transport and pass-through operations copy the sidecar.
-
-Runtime errors use one normalization boundary:
-
-```
-FUNCTION normalize_error(ec, err : Error) -> ThrownError:
-    IF find_throw_occurrence(err) EXISTS:
-        RETURN ThrownError(the same occurrence)
-    value = error_to_exception_value_without_trace(err)  -- existing class/message/data rules
-    trace = capture_live_frames(ec, err)                  -- includes native/Go frames once
-    RETURN ThrownError(ThrowOccurrence(fresh_id(), value, trace))
-
-FUNCTION ErrorToDatum(ec, err : Error) -> EvalDatum:
-    thrown = normalize_error(ec, err)
-    RETURN EvalDatum(thrown.occurrence.value, thrown.occurrence)
-
-FUNCTION ErrorToValue(ec, err : Error) -> Value:          -- host-only projection
-    RETURN ErrorToDatum(ec, err).value
-```
-
-Every interpreter opcode, native-return boundary, and generated lowered call normalizes a non-nil error before its live frames unwind. Errors already carrying a `ThrownError` pass through adapters and `ExecutionError` wrapping with the same occurrence; they are never normalized or captured again. Catch entry uses `ErrorToDatum`, never `ErrorToValue`, in both backends. The defensive `ErrorToDatum` normalization path covers host errors entering an already-established catch boundary, using the complete retained `ExecutionError` chain when no live chain remains.
-
-`ExInfo` stores its cause as an `EvalDatum`. `ex-info` constructs a new outer value but copies the complete cause datum into that slot; `ex-cause` returns the stored datum. Its host `error`/`Unwrap` view may project the cause value, but language traversal retains the cause occurrence. These explicit APIs are the only boundary adaptations; no operation guesses provenance by comparing values.
+Scalars have no trace. A thrown string, keyword, number, boolean, or `nil` is a bare Go value with no field to hold a chain, so `ex-trace` on it returns `nil` and the test reporter falls back to the assertion's own source position (Section 10.1). After the Section 13 migration the only scalar throws in the repository are test fixtures.
 
 ---
 
@@ -411,6 +375,60 @@ No change. `catch-matches?` in `pkg/rt/exceptions.go` (#476) already dispatches 
 
 Go code can push a binding of a let-go var for the duration of a call. `with-out-str*` already does this via `PushBinding` and a deferred `PopBinding` on the caller's `ExecContext`. Expose the pair as `rt.WithBinding(ec, v, value, fn)` so the harness bridge (Section 12.3) avoids reaching into `ExecContext` internals. The helper pops the binding on every exit path, including panics.
 
+### 4.9 `clojure.string/split` Conformance
+
+Clojure's `clojure.string/split` is a thin wrapper over `java.util.regex.Pattern.split`, and `clojure.test.tap` calls `String.split` on the same path. Both are the one-argument form, which the Javadoc defines as the two-argument form with a limit of zero:
+
+> If the limit *n* is zero then the pattern will be applied as many times as possible, the array can have any length, and trailing empty strings will be discarded.
+>
+> — `java.lang.String#split(String, int)`, https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html#split(java.lang.String,int)
+
+The current let-go `split` in `pkg/rt/lang.go` wraps Go's `strings.Split`/`Regexp.Split`, which keep trailing empty strings, returns a list rather than a vector, and has no limit arity. It is brought to Clojure's contract:
+
+```
+FUNCTION string_split(s : String, re : Regex, limit : Integer = 0) -> Vector<String>:
+    IF s == "":            RETURN [""]              -- no match: the input itself
+    IF limit > 0:          RETURN at most `limit` fields; the last holds the rest of the input
+    fields = every field between matches, interior empty fields included
+    IF limit == 0:         drop trailing empty fields from `fields`
+    RETURN vector(fields)                            -- limit < 0 keeps every field
+```
+
+A leading empty field is kept whenever the first match is at index zero and the match is non-empty, exactly as Java does. Only the pattern form is specified; whether a string delimiter continues to be accepted is unchanged by this document.
+
+`clojure.string/split` returns a vector and follows the limit-zero rule. [R-string-split-limit-zero]
+
+<!-- evidence: @R-string-split-limit-zero -->
+| form | value | out |
+|---|---|---|
+| `(str/split "a\n" #"\n")` | `["a"]` | |
+| `(str/split "a\n\n" #"\n")` | `["a"]` | |
+| `(str/split "\n" #"\n")` | `[]` | |
+| `(str/split "" #"\n")` | `[""]` | |
+| `(str/split "a\n\nb" #"\n")` | `["a" "" "b"]` | |
+| `(str/split "\na" #"\n")` | `["" "a"]` | |
+| `(str/split "a:b:c" #":" 2)` | `["a" "b:c"]` | |
+| `(str/split "a::" #":" -1)` | `["a" "" ""]` | |
+| `(vector? (str/split "a" #"\n"))` | `true` | |
+
+### 4.10 Error Boundaries: Lowered Go and Natives
+
+Two existing gaps make the chain incomplete, and both are closed in Slice 1.
+
+**Lowered Go wraps at every call site.** Generated code today propagates errors with a bare `return nil, err`, so a throw inside a lowered function unwinds through it without recording a frame. The IR already attaches the full `SourceInfo` of the originating form to every instruction, calls included, but the IR bridge exposes only `source-info-symbol` to `.lg`. The bridge gains `source-info-file`, `source-info-line`, and `source-info-column`, and the call emitter in `lower_go.lg` wraps on the error path with the same `calling <fn>` shape the VM uses:
+
+```
+-- emitted for every lowered call whose result may be an error
+IF err != nil:
+    RETURN nil, vm.NewExecutionError("calling <fn>").WithSource(<file>, <line>, <column>).Wrap(err)
+```
+
+The happy path is unchanged, so this does not affect the bench ratchet. Positions come from the same `SourceInfo` the VM resolves through `LookupSource`, so the two backends produce the same frames for the same program. A call whose form has no `FormSource` entry records `<unknown>` as the VM does.
+
+**Natives preserve the chain.** A native that re-wraps an error with `fmt.Errorf("...: %v", err)` flattens the chain to a string and loses the `ThrownError` inside it, so a user's `(throw (ex-info ...))` passing through that native arrives at the catch as a generic exception. Every such site becomes `%w`. A test asserts that a value thrown from a callback survives, with its trace, through `map`, `reduce`, `sort`, `apply`, and every native that invokes let-go code.
+
+**Go errors are boxed with their cause.** `box_go_error` (Section 3.5) keeps the Go error as `cause`, so `ex-cause` on a runtime error returns a boxed Go error value whose class is the Go type name and whose message is `Error()`, and `Throwable->map` walks it. Today the box is built with a `nil` cause and the Go error is unrecoverable from let-go.
+
 ---
 
 ## 5. Stack Traces
@@ -421,33 +439,26 @@ The runtime records source positions per instruction (`CodeChunk.LookupSource` o
 
 ### 5.2 Capture Rules
 
-1. Every fresh `throw`, of any value, captures the let-go stack at the throw site and allocates one immutable `ThrowOccurrence`. Currently only runtime errors raised from Go carry a trace; `(throw (ex-info ...))` and `(throw "s")` carry none. Capture walks the live frame chain before unwinding and records an immutable `(chunk, ip, fn-name)` triple per frame; `SourceInfo` is resolved through `LookupSource` only when the trace is first read. `Frame` objects are pooled and reused after unwind, so a capture never retains a `Frame` pointer.
-2. A runtime error raised inside a native primitive contributes a `NATIVE` frame whose `file`, `line`, and `column` are the let-go call site, matching `errorToValue` today.
-3. A recovered Go panic contributes `GO` frames from the captured Go stack (filtered to frames outside the Go runtime and VM dispatch loop), followed by the `NATIVE` frame of the primitive and the `LG` frames above it.
-4. A trace crossing the Go boundary multiple times (Lisp calls native, which invokes Lisp, which throws) forms a single vector with frames in call order, innermost first. Each boundary crossing contributes a `NATIVE` frame.
-5. `ThrownError` owns the complete occurrence while unwinding. Catch entry binds `ErrorToDatum(error)`, which returns `EvalDatum(occurrence.value, occurrence)`, rather than projecting only the raw value. Bytecode and lowered-Go catch paths use the same carrier; `ErrorToValue` remains only as a host projection and is not the language catch handoff.
-6. Transport operations copy both `EvalDatum` fields. Constructive operations clear provenance unless they return an input datum unchanged. A datum can leave a catch, enter a collection or mutable reference, and later retain the same occurrence without a global side table.
-7. `throw(datum)` reuses `datum.provenance` when present; otherwise it allocates a new occurrence and trace. Thus `(throw caught)` is a rethrow, while `(throw "same")` and `(throw (str caught))` are fresh throws even when equal to `caught`.
-8. A runtime or Go error is normalized into exactly one occurrence before its first catch. `ExecutionError` call-site wrapping and repeated Go-boundary crossings extend or retain that occurrence; they never recapture it as a different throw.
-9. A catch that throws a new value gives the new value a new trace. When an `ex-info` is constructed with the caught datum as cause, its cause slot retains that datum and occurrence; `ex-cause` returns it, so cause traversal reaches the old trace.
-10. No trace table is keyed by `Value`: vectors are not Go-comparable, and equal scalar throws have distinct occurrence identity.
+1. A trace is the `ExecutionError` chain that unwinds from the throw to the catch, read at the catch and stored on the caught `ExInfo` (Section 3.5). `(throw (ex-info ...))`, a runtime error raised in a native, and a recovered Go panic all produce a trace the same way. Nothing is captured at the throw site.
+2. Each `OP_INVOKE` in the VM and each lowered call site (Section 4.10) contributes one `LG` frame. A native that raises an error contributes one `NATIVE` frame whose position is the let-go call site, matching `errorToValue` today.
+3. A recovered Go panic contributes `GO` frames from the captured Go stack, filtered to frames outside the Go runtime and the VM dispatch loop, followed by the `NATIVE` frame of the primitive and the `LG` frames above it.
+4. A trace crossing the Go boundary more than once (Lisp calls a native, which invokes Lisp, which throws) is one vector in call order, because the native returns the callback's error unchanged and its own call site wraps it. Each crossing contributes a `NATIVE` frame named for the native (`apply`, `map`, `reduce`, multimethod and protocol dispatch). These are the frames `internal?` filters in Section 10.1.
+5. A tail call (`OP_TAIL_CALL`) reuses the frame, so the tail-called function does not appear between its caller and callee. A self-recursive function in tail position shows one frame, not its recursion depth. This matches `recur` on the JVM.
+6. A catch stores the chain on the `ExInfo` only if it has none. Rethrowing a caught exception, `(throw e)`, starts a new `ThrownError` around the same object; the outer frames wrap it, and `ex-trace` returns the stored chain followed by the new one. Throwing a new `ex-info` from a catch gives it a new trace, and when the caught value is its cause, `ex-cause` reaches the old trace.
+7. A caught exception may be stored in a collection, an atom, or a var and inspected later; the trace is part of the object.
+8. A thrown scalar has no trace (Section 3.5). `ex-trace` returns `nil` and reporters fall back to form position.
 
 ### 5.3 Primitives
 
 ```
-FUNCTION current_stack_trace() -> Vector<Frame>:
-    -- Frames of the caller, innermost first. The frame for
-    -- current_stack_trace itself is excluded.
-
 FUNCTION ex_trace(v : Any) -> Vector<Frame> | None:
-    -- The trace captured when v was thrown. None if v was never thrown.
-    -- Works for ex-info values, runtime errors, and non-exception values.
+    -- The frames unwound when v was thrown. None if v was never thrown or is a scalar.
 
 FUNCTION Throwable_to_map(v : Any) -> Map:
     -- Clojure's Throwable->map key/omission rules, over let-go Frame maps.
     root = root_cause(v)
     via = []
-    FOR EACH x IN cause_chain(v):                -- preserves each cause datum
+    FOR EACH x IN cause_chain(v):
         entry = {type: class_symbol(x)}
         IF ex_message(x) IS NOT None: entry.message = ex_message(x)
         IF ex_data(x) IS NOT None:    entry.data = ex_data(x)
@@ -461,7 +472,11 @@ FUNCTION Throwable_to_map(v : Any) -> Map:
     RETURN result
 ```
 
-`root-cause`, `cause-chain`, and the public `ex-cause` transport complete datums rather than projecting cause values between steps. `current-stack-trace`, `ex-trace`, and `Throwable->map` are interned in `clojure.core`. `ex-data` continues to expose `:trace` for runtime errors as today, now as a vector of `Frame` maps rather than strings; the string form was never documented and has no known consumer.
+`ex-trace` and `Throwable->map` are interned in `clojure.core`. There is no `current-stack-trace`: the runtime has no live frame chain to walk (calls recurse on the Go stack, and `ExecContext` holds bindings and scope only), and nothing in `clojure.test` needs one once positions come from form source (Section 4.2). `file-position` is therefore absent (Appendix A).
+
+`cause_chain` follows `ex-cause`, which returns the stored `cause` whether it is an `ExInfo`, a boxed Go error, or a thrown scalar.
+
+`:trace` under `ex-data` for runtime errors is retained for compatibility but is **derived lazily from the chain** on read, as a vector of `Frame` maps rather than strings. Because it is computed from `chain`, it is excluded from equality exactly as `chain` is, and it cannot drift from `ex-trace` on rethrow. The string form was never documented and has no known consumer.
 
 ### 5.4 `clojure.stacktrace`
 
@@ -559,7 +574,7 @@ FUNCTION assert_expr_dispatch(msg, form) -> DispatchValue:
 | Dispatch value | Expansion |
 |---|---|
 | `:always-fail` | `do_report({type: FAIL, message: msg})` |
-| `:default` | `assert_predicate` when `function?(first(form))`, else `assert_any` |
+| `:default` | `assert_predicate` when `sequential?(form) AND function?(first(form))`, else `assert_any`. The `sequential?` guard is what lets `(is true)`, `(is x)`, and `(is [1 2])` reach `assert_any` without calling `first` on a non-sequence. |
 | `'instance?` | Evaluate class and object; `actual` is `(class object)` |
 | `'thrown?` | Section 6.4 |
 | `'thrown-with-msg?` | Section 6.4 |
@@ -845,10 +860,10 @@ FUNCTION do_report(m):
         ELSE:   report(m)
 
 FUNCTION fail_position() -> {file, line}:
-    -- Step 1: find the innermost frame outside the test machinery
-    frames = drop_while(fn(f): internal?(f), current_stack_trace())
-    IF frames IS NOT empty:
-        RETURN {file: first(frames).file, line: first(frames).line}
+    -- Step 1: the `is` form's own source position (Section 4.2), threaded into
+    -- the expansion by `try-expr` as a literal {file line} map
+    pos = *assertion-position*
+    IF pos IS NOT None: RETURN pos
     -- Step 2: find the var under test
     v = first(*testing-vars*)
     IF v IS NOT None AND meta(v).line IS NOT None:
@@ -857,15 +872,22 @@ FUNCTION fail_position() -> {file, line}:
     RETURN {file: None, line: None}
 
 FUNCTION error_position(thrown) -> {file, line}:
-    frames = ex_trace(thrown)
-    IF frames IS NOT None AND frames IS NOT empty:
+    -- Innermost user frame of the thrown exception; for a scalar or an
+    -- exception with no trace, the assertion's own position.
+    frames = drop_while(fn(f): internal?(f), ex_trace(thrown) OR [])
+    IF frames IS NOT empty:
         RETURN {file: first(frames).file, line: first(frames).line}
     RETURN fail_position()
 
 FUNCTION internal?(f : Frame) -> Boolean:
+    -- Frames the test machinery and dispatch natives add between the user's
+    -- code and the throw (Section 5.2 rule 4).
     RETURN f.fn starts with "test/" OR f.fn starts with "clojure.test/"
-        OR f.fn starts with "core/" OR f.fn starts with "clojure.core/"
+        OR f.fn IN {"apply", "partial", "map", "reduce", "sort", "sort-by"}
+        OR f.fn starts with "core/-dispatch" OR f.fn starts with "clojure.core/-dispatch"
 ```
+
+`*assertion-position*` is bound by `try-expr` around the assertion body to the `is` form's `{:file :line}` from `FormSource`, or `nil` when the form has no entry. It is the only way a `:fail` learns its line; no stack is consulted.
 
 The observable result matches Clojure: `FAIL` and `ERROR` events carry `file` and `line`; `PASS` events do not. The fallback chain terminates in `nil`, which `testing-vars-str` renders as `(:)`.
 
@@ -919,12 +941,9 @@ FUNCTION get_possibly_unbound_var(v) -> Any | None:
     TRY: RETURN var_get(v)
     CATCH Throwable: RETURN None
 
-FUNCTION file_position(n : Integer) -> [String | None, Integer | None]:
-    -- deprecated in Clojure 1.2; kept for source compatibility
-    f = nth(current_stack_trace(), n, None)
-    IF f IS None: RETURN [None, None]
-    RETURN [f.file, f.line]
 ```
+
+`file-position` (deprecated in Clojure 1.2) is not provided: it reads the live JVM stack and let-go has no equivalent (Section 5.3, Appendix A).
 
 ### 10.4 Default Printed Output
 
@@ -981,9 +1000,8 @@ FUNCTION print_tap_plan(n : Integer):
     println("1.." + n)
 
 FUNCTION print_tap_diagnostic(data : String):
-    -- Java String.split("\\n") with limit zero: preserve interior empty fields,
-    -- discard every trailing empty field, except "" produces one empty field.
-    FOR EACH line IN split(data, "\n", java_limit_zero = true):
+    -- Mirrors tap.clj: (.split data "\\n"), i.e. Java limit-zero split (Section 4.9).
+    FOR EACH line IN string_split(data, #"\n"):
         println("# " + line)                        -- printing "" yields "# "
 
 FUNCTION print_tap_pass(msg : String):
@@ -993,7 +1011,35 @@ FUNCTION print_tap_fail(msg : String):
     println("not ok " + msg)
 ```
 
-All four return `nil`. `print-tap-diagnostic` matches Clojure's direct Java call: `""` prints `"# \n"`; `"a\n"` and `"a\n\n"` each print only `"# a\n"`; `"\n"` prints nothing; `"a\n\nb"` preserves the interior empty line; spaces are never stripped or trimmed. The negative-plan check is a let-go addition (Appendix A); Clojure prints `1..-1`.
+All four return `nil`. `print-tap-diagnostic` is implemented with `clojure.string/split` and inherits its Section 4.9 contract rather than stripping lines itself, so it matches Clojure's direct Java call. [R-tap-diagnostic-split] This matters for `:error` diagnostics, whose trace text ends in a newline. The negative-plan check is a let-go addition (Appendix A); Clojure prints `1..-1`.
+
+```clj-repl @R-tap-diagnostic-split
+(require '[clojure.test.tap :refer [print-tap-diagnostic print-tap-plan print-tap-pass print-tap-fail]])
+(print-tap-diagnostic "a\nb")
+;; out: "# a\n# b\n"
+;=> nil
+(print-tap-diagnostic "")
+;; out: "# \n"
+(print-tap-diagnostic "a\n")
+;; out: "# a\n"
+(print-tap-diagnostic "a\n\n")
+;; out: "# a\n"
+(print-tap-diagnostic "\n")
+;; out: ""
+(print-tap-diagnostic "a\n\nb")
+;; out: "# a\n# \n# b\n"
+(print-tap-diagnostic " a ")
+;; out: "#  a \n"
+(print-tap-pass "m")
+;; out: "ok m\n"
+;=> nil
+(print-tap-fail "m")
+;; out: "not ok m\n"
+;=> nil
+(print-tap-plan 0)
+;; out: "1..0\n"
+;=> nil
+```
 
 ### 11.2 `tap-report`
 
@@ -1078,7 +1124,12 @@ FUNCTION run_file_tests(path) -> Boolean:
     -- the harness does not reparse source or infer this from CurrentNS.
     loaded, load_error = load_file_with_result(path)
     IF load_error IS NOT None: FAIL file with copied error text
-    IF NOT loaded.saw_ns_form: FAIL file with "no test namespace"
+    IF NOT loaded.saw_ns_form:
+        -- Load-only file: its assertions ran at load time. A deftest defined
+        -- here would silently never run, so that is the failure, not the
+        -- missing ns form.
+        IF loaded.final_ns HAS any var with :test metadata: FAIL file with "deftest outside a namespace"
+        RETURN true
 
     -- Step 2: run the current namespace through the public API
     ns      = loaded.final_ns
@@ -1093,8 +1144,13 @@ FUNCTION run_file_tests(path) -> Boolean:
 --   - The harness holds no test state. Discovery, counters, and results are the
 --     let-go vars of Section 3.
 --   - The compiler/file loader returns `saw_ns_form` and `final_ns` from its
---     existing top-level form walk. A file with no ns form fails explicitly;
---     changing CurrentNS through another mechanism is not mistaken for a declaration.
+--     existing top-level form walk. Changing CurrentNS through `in-ns` is not
+--     mistaken for a declaration.
+--   - A file with no ns form is load-only. The corpus has 18 today: the 16
+--     `test/gold-aot/*.lg` fixtures (driven by TestGold, not deftests),
+--     `test/top_level_do_test.lg`, and `test/in_ns_auto_refer_test.lg`, which
+--     deliberately uses only `in-ns`. The walk additionally skips `gold-aot`
+--     as it skips `gogen`, since those files are lowering fixtures.
 --   - Per-file dynamic-binding isolation (vm.RunWithBindings around the run) is unchanged.
 --   - Output goes through *test-out*, which is stdout, so `go test -v` shows the same text
 --     a user sees.
@@ -1345,7 +1401,7 @@ Existing `test/*.lg` files use `deftest`, `is`, `testing`, `are`, and `use-fixtu
 | `*test-result*` boolean | `(successful? summary)` | `.lg` or Go readers of `*test-result*` must switch. |
 | `use-fixtures` global | Per namespace | Update files relying on fixtures leaking across namespaces. |
 | `(throw (str ...))` in core library code | `(throw (ex-info ...))` | Convert the 40 core sites. Behavior under `catch Throwable` and bare `catch` is unchanged. |
-| `:trace` under `ex-data` as strings | Vector of `Frame` maps | Readers of the string form must switch. |
+| `:trace` under `ex-data` as strings | Vector of `Frame` maps, derived from the chain on read, excluded from equality | Readers of the string form must switch. |
 
 Add the reference example as `test/tap/tap-example.lg`. Its failure line reads `(math-test) (test/tap/tap-example.lg:9)`. Remove any demonstration scripts that print TAP output without asserting from `test/`, since the harness runs every `.lg` file there.
 
@@ -1369,7 +1425,9 @@ Bundle regeneration follows the repository rule: after editing any `pkg/rt/core/
 
 **Parallel test execution under the bridge.** `t.Parallel()` inside bridged subtests. Excluded because the shared `ExecContext` and dynamic bindings are not goroutine-partitioned. Extension point: one `ExecContext` per subtest, once the runtime supports forking contexts with inherited bindings.
 
-**Trace capture for values never thrown.** `(ex-trace (ex-info "x" {}))` on a value constructed but not thrown returns `nil`. Excluded because capturing at construction would cost every `ex-info` a stack walk. Extension point: an `ex-info` arity that takes an explicit trace.
+**Trace capture for values never thrown.** `(ex-trace (ex-info "x" {}))` on a value constructed but not thrown returns `nil`. The trace is the unwind chain, which exists only once the value is thrown and caught. Extension point: an `ex-info` arity that takes an explicit chain.
+
+**`current-stack-trace`.** A trace of the running code without a throw. The runtime has no live frame chain (Section 5.3); adding one costs a push and pop per call on both backends for a primitive nothing in `clojure.test` needs. Extension point: a linked frame stack on `ExecContext`, which would also enable parallel bridged subtests.
 
 **Specific exception classes for Go runtime errors.** `(/ 1 0)` and `(nth [] 5)` raise `java.lang.Exception`, not `ArithmeticException` or `IndexOutOfBoundsException`, so `(is (thrown? ArithmeticException (/ 1 0)))` reports `ERROR`. Excluded by the scope of #472, which tags wrapped Go errors as `Exception` deliberately, and by the preference not to model more of the JVM inside Go. `(is (thrown? Exception ...))` covers them. Extension point: the single `class:` tag in `errorToValue` (`pkg/vm/errors.go`), which could consult the error kind.
 
@@ -1423,7 +1481,7 @@ Bundle regeneration follows the repository rule: after editing any `pkg/rt/core/
 - [ ] `*test-result*`, `*registered-tests*`, `*each-fixtures*`, `*once-fixtures*`, `register-test!`, `clear-registered-tests!` are gone
 - [ ] `(meta (var some-deftest))` contains `:test`, `:ns`, `:name`, `:file`, `:line`
 - [ ] Every `:fail` and `:error` event carries at least the Section 3.1 keys; a `report` method receiving an extra key ignores it
-- [ ] A frame from `current-stack-trace` is a map with `:fn`, `:kind`, `:file`, `:line`, and `:column` for `:lg` frames
+- [ ] A frame from `ex-trace` is a map with `:fn`, `:kind`, `:file`, `:line`, and `:column` for `:lg` frames
 
 ### 16.3 Runtime Extensions (Section 4)
 
@@ -1436,22 +1494,24 @@ Bundle regeneration follows the repository rule: after editing any `pkg/rt/core/
 - [ ] `test/catch_dispatch_test.lg` still passes
 - [ ] `(ex-message "s")` returns `"s"` when `"s"` was the thrown value
 - [ ] `rt.WithBinding` pushes a binding for the call and pops it on every exit path, including a panic
+- [ ] Evidence `@R-string-split-limit-zero` (Section 4.9) passes
 
 ### 16.4 Stack Traces (Section 5)
 
 - [ ] `(try (throw (ex-info "x" {})) (catch e (ex-trace e)))` is a non-empty vector whose first frame has the throw site's `:file` and `:line`
-- [ ] `(try (throw "s") (catch e (ex-trace e)))` is a non-empty vector
+- [ ] `(try (throw "s") (catch e (ex-trace e)))` is `nil`, and `(is (throw "s"))` reports `ERROR` at the `is` form's file and line
 - [ ] A trace read after the throwing frames have been reused by later calls still reports the original positions
-- [ ] A runtime error inside `nth` yields a first frame of kind `:native` whose position is the let-go call site
+- [ ] A runtime error inside `nth` yields a first frame of kind `:native` whose position is the let-go call site, and `(ex-cause e)` is a boxed Go error whose message is the Go `Error()` text
 - [ ] A recovered Go panic yields at least one `:go` frame with a Go file and line, followed by the `:native` frame
-- [ ] Lisp calling native calling Lisp that throws yields one vector with the frames in call order and one `:native` frame per crossing
-- [ ] A rethrown value keeps its trace; a new `ex-info` thrown from a `catch` has a new trace and `ex-cause` reaches the old value
-- [ ] A caught vector keeps its occurrence through `[caught]`, `first`, `identity`, closure capture, an atom write/read, and rethrow, without a comparability panic
-- [ ] Two nested throws of equal strings and equal integers at distinct lines have distinct traces; rethrowing the outer caught datum restores the outer trace
-- [ ] Wrapping a caught value as `(ex-info "outer" {:clojure.error/phase :execution} caught)` gives the outer throw a new trace while `(ex-cause outer)` retains the caught occurrence and trace
-- [ ] Interpreter and lowered-Go execution produce the same results for every occurrence, transport, native pass-through, cause, and rethrow case above, including specialized scalar paths
-- [ ] A chained `(Throwable->map e)` has outer-to-root `:via`, original-value `:phase`, root `:cause`/`:data`/non-empty `:trace`, and `:at` on every via entry whose occurrence has a trace
-- [ ] An implementation-level exception datum with absent message/data and no trace omits top-level `:cause`/`:data` and per-via `:message`/`:data`/`:at`, while retaining `:via` and an empty `:trace`
+- [ ] Lisp calling native calling Lisp that throws yields one vector with the frames in call order and one `:native` frame per crossing; this holds through `map`, `reduce`, `sort`, and `apply`
+- [ ] A value thrown from a callback survives every native that invokes let-go code with its class, message, data, and trace intact (no native flattens a `ThrownError`)
+- [ ] A rethrown exception keeps its trace and gains the outer frames; a new `ex-info` thrown from a `catch` has a new trace and `ex-cause` reaches the old value and its trace
+- [ ] `(def boom (ex-info "x" {}))` thrown from two sites reports the first site from both catches, and `(ex-trace boom)` after the first catch is non-nil
+- [ ] `(= e (ex-info "x" {}))` and `(hash e)` are unchanged by whether `e` was thrown; `(:trace (ex-data e))` on a runtime error equals `(ex-trace e)`
+- [ ] A self-recursive function throwing at depth 100 in tail position shows one frame for itself; the same function in non-tail position shows 100
+- [ ] Interpreter and lowered-Go execution produce the same frame sequence for every case above, including a throw from inside the lowered standard library
+- [ ] A chained `(Throwable->map e)` has outer-to-root `:via`, original-value `:phase`, root `:cause`/`:data`/non-empty `:trace`, and `:at` on every via entry whose value has a trace
+- [ ] An implementation-level exception with absent message/data and no trace omits top-level `:cause`/`:data` and per-via `:message`/`:data`/`:at`, while retaining `:via` and an empty `:trace`
 - [ ] `(print-stack-trace e 2)` prints ex-data on its own line, then a first frame prefixed ` at ` and one later frame prefixed by four spaces
 - [ ] With an empty trace, `(print-stack-trace e)` prints ` at [empty stack trace]`; with `n <= 0`, a non-empty trace still prints its first frame
 - [ ] `(print-cause-trace e)` prints a `Caused by:` section per cause
@@ -1462,6 +1522,7 @@ Bundle regeneration follows the repository rule: after editing any `pkg/rt/core/
 - [ ] `(is (= 4 (+ 2 2)))` emits one `:pass` event with `:actual (= 4 4)` and returns `true`
 - [ ] `(is (= 10 (+ 5 4)) "m")` emits one `:fail` with `:actual (not (= 10 9))` and `:message "m"`, returns `false`
 - [ ] `(is nil)` emits `:fail` via `:always-fail`
+- [ ] `(is true)`, `(is :ok)`, `(is x)` with `x` bound to `1`, and `(is [1 2])` each go through `assert-any`, emit one `:pass`, and return the value; `(is false)` emits one `:fail` with `:actual false`
 - [ ] `(is (thrown? Exception (throw (ex-info "x" {}))))` emits `:pass` and returns the exception
 - [ ] `(is (thrown? Exception 1))` emits `:fail` with `:actual nil`
 - [ ] `(is (thrown-with-msg? Exception #"oo" (throw (ex-info "boom" {}))))` emits `:pass`
@@ -1513,11 +1574,8 @@ Bundle regeneration follows the repository rule: after editing any `pkg/rt/core/
 
 ### 16.10 clojure.test.tap (Section 11)
 
-- [ ] `(with-out-str (print-tap-diagnostic "a\nb"))` is `"# a\n# b\n"`; `""` gives `"# \n"`
-- [ ] TAP diagnostics use Java limit-zero split semantics: `"a\n"` and `"a\n\n"` each give `"# a\n"`, `"\n"` gives `""`, `"a\n\nb"` preserves the interior blank diagnostic, and spaces are retained
-- [ ] `(with-out-str (print-tap-pass "m"))` is `"ok m\n"`; fail is `"not ok m\n"`
-- [ ] `(with-out-str (print-tap-plan 0))` is `"1..0\n"`; `-1` raises `ex-info`
-- [ ] All four return `nil`
+- [ ] Evidence `@R-tap-diagnostic-split` (Section 11.1) passes: diagnostics, pass, fail, and plan output, split semantics, and `nil` returns
+- [ ] `(print-tap-plan -1)` raises `ex-info` (let-go extension, Appendix A)
 - [ ] `(with-tap-output (run-all-tests #"my\.test.*"))` prints Appendix B.2 modulo namespace print form and file path, then returns the summary
 - [ ] The plan line is the last line for `run-tests`, `run-all-tests`, and `run-test-var`
 - [ ] Plan count equals the number of `ok`/`not ok` lines
@@ -1528,7 +1586,8 @@ Bundle regeneration follows the repository rule: after editing any `pkg/rt/core/
 
 - [ ] `test/language_test.go` compiles no source strings; it uses `rt.LookupVar` and `rt.InvokeValue`
 - [ ] After loading a file, the harness runs exactly the namespace current at the end of that file
-- [ ] A file with no `ns` form fails with "no test namespace"
+- [ ] A file with no `ns` form that defines no `deftest` passes as load-only; one that defines a `deftest` fails with "deftest outside a namespace"
+- [ ] `test/in_ns_auto_refer_test.lg` and `test/top_level_do_test.lg` pass unmodified; `test/gold-aot/` is skipped by the walk
 - [ ] A loader unit test with a counting one-shot reader proves `saw_ns_form` and `final_ns` come from one existing top-level form walk; `(in-ns ...)` alone changes `final_ns` without setting `saw_ns_form`
 - [ ] `LG_TEST_REPORTER=summary` selects the summary-based run; unset selects the bridge once it lands
 - [ ] Summary run: a file with failing assertions fails its Go subtest with the summary in the message
@@ -1551,44 +1610,166 @@ Bundle regeneration follows the repository rule: after editing any `pkg/rt/core/
 
 ### 16.13 Integration Smoke Test
 
+The reference example from Section 1.7, run through both reporters in one process. Output is captured by binding `*test-out*` to `*out*` inside `with-out-str`, which works on both engines. [R-smoke-run-and-tap]
+
+```clj-test @R-smoke-run-and-tap
+(ns my.test.tap-example
+  (:require [clojure.test :refer [deftest is run-tests run-all-tests testing successful?]]
+            [clojure.test.tap :refer [with-tap-output]]
+            [clojure.string :as str]))
+
+(deftest math-test
+  (testing "simple addition"
+    (is (= 4 (+ 2 2)))
+    (is (= 5 (+ 2 3))))
+  (testing "deliberate-failure-test"
+    (is (= 10 (+ 5 4)) "This assertion will fail intentionally")))
+
+(ns my.test.smoke
+  (:require [clojure.test :refer [deftest is run-tests run-all-tests testing
+                                  *test-out* *testing-vars* *testing-contexts*]]
+            [clojure.test.tap :refer [with-tap-output]]
+            [clojure.string :as str]))
+
+(defn- capture
+  "Run f as if at top level: *testing-vars* and *testing-contexts* are reset so
+   the inner run's headers do not include this deftest's own var."
+  [f]
+  (let [result (volatile! nil)
+        out (with-out-str
+              (binding [*test-out* *out* *testing-vars* (list) *testing-contexts* (list)]
+                (vreset! result (f))))]
+    [out @result]))
+
+(deftest plain-reporter
+  (let [[out summary] (capture #(run-all-tests #"my\.test\.tap-example"))]
+    (is (str/includes? out "\nTesting my.test.tap-example\n"))
+    (is (str/includes? out "\nFAIL in (math-test) ("))
+    (is (str/includes? out "deliberate-failure-test\nThis assertion will fail intentionally\n"))
+    (is (str/includes? out "expected: (= 10 (+ 5 4))\n  actual: (not (= 10 9))\n"))
+    (is (str/ends-with? out "\nRan 1 tests containing 3 assertions.\n1 failures, 0 errors.\n"))
+    (is (= {:test 1 :pass 2 :fail 1 :error 0 :type :summary} summary))))
+
+(deftest tap-reporter
+  (let [[out summary] (capture #(with-tap-output (run-all-tests #"my\.test\.tap-example")))
+        lines (str/split-lines out)]
+    (is (= 2 (count (filter #(str/starts-with? % "ok ") lines))))
+    (is (= 1 (count (filter #(str/starts-with? % "not ok ") lines))))
+    (is (= "1..3" (last (remove str/blank? lines))))
+    (is (some #(= % "# {:type :begin-test-var, :var #'my.test.tap-example/math-test}") lines))
+    (is (= {:test 1 :pass 2 :fail 1 :error 0 :type :summary} summary))))
+
+(ns my.test.error-example (:require [clojure.test :refer [deftest is]]))
+(deftest boom (is (= 1 (nth [] 5))))
+
+(ns my.test.smoke)
+(deftest error-through-native
+  (let [[out summary] (capture #(run-tests 'my.test.error-example))]
+    (is (str/includes? out "\nERROR in (boom) ("))
+    (is (str/includes? out "expected: (= 1 (nth [] 5))\n  actual: "))
+    (is (not (str/includes? out "ERROR in test:")))
+    (is (= {:test 1 :pass 0 :fail 0 :error 1 :type :summary} summary))))
 ```
--- Runs in the lg CLI against test/tap/tap-example.lg
-load_file("test/tap/tap-example.lg")
 
-plain = capture_test_out(fn(): run_all_tests(#"my\.test.*"))
-ASSERT plain CONTAINS "\nTesting my.test.tap-example\n"
-ASSERT plain CONTAINS "\nFAIL in (math-test) (test/tap/tap-example.lg:9)\n"
-ASSERT plain CONTAINS "deliberate-failure-test\nThis assertion will fail intentionally\n"
-ASSERT plain CONTAINS "expected: (= 10 (+ 5 4))\n  actual: (not (= 10 9))\n"
-ASSERT plain ENDS WITH "\nRan 1 tests containing 3 assertions.\n1 failures, 0 errors.\n"
-ASSERT return value == {:test 1 :pass 2 :fail 1 :error 0 :type :summary}
+The rendered class and message of the `:error` are engine-specific (the JVM prints `java.lang.IndexOutOfBoundsException`), so they are a separate let-go-only block: [R-smoke-error-text]
 
-tap = capture_test_out(fn(): with_tap_output(run_all_tests(#"my\.test.*")))
-lines = split(tap, "\n")
-ASSERT count(lines matching /^ok /) == 2
-ASSERT count(lines matching /^not ok /) == 1
-ASSERT lines[first ok] == "ok (math-test) (:)"
-ASSERT the not-ok line == "not ok (math-test) (test/tap/tap-example.lg:9)"
-ASSERT last non-empty line == "1..3"
-ASSERT lines CONTAIN "# {:type :begin-test-ns, :ns " + print_form(ns) + "}"
-ASSERT lines CONTAIN "# {:type :begin-test-var, :var #'my.test.tap-example/math-test}"
-
--- Error path: a deftest whose helper throws through a native primitive
-load_file("test/tap/tap-error-example.lg")     -- (deftest boom (is (= 1 (nth [] 5))))
-err = capture_test_out(fn(): run_tests('my.test.tap-error-example))
-ASSERT err CONTAINS "\nERROR in (boom) (test/tap/tap-error-example.lg:"
-ASSERT err CONTAINS "  actual: java.lang.Exception: nth index out of bounds"
-ASSERT err CONTAINS " at nth (test/tap/tap-error-example.lg:"
-ASSERT err DOES NOT CONTAIN "ERROR in test:"
-
--- capture_test_out binds *test-out* to an io/buffer and returns io/buffer-str
-
--- Bridge (Go side)
-result = go test ./test/ -run 'TestRunner/tap-example.lg' -v
-ASSERT result CONTAINS "--- FAIL: TestRunner/tap-example.lg/my.test.tap-example/math-test"
-ASSERT result CONTAINS "(math-test) (test/tap/tap-example.lg:9)"
-ASSERT result CONTAINS "actual: (not (= 10 9))"
+```clj-test @R-smoke-error-text oracle=none
+(ns my.test.smoke-error-text
+  (:require [clojure.test :refer [deftest is run-tests *test-out* *testing-vars* *testing-contexts*]]
+            [clojure.string :as str]))
+(deftest error-text
+  (let [out (with-out-str
+              (binding [*test-out* *out* *testing-vars* (list) *testing-contexts* (list)]
+                (run-tests 'my.test.error-example)))]
+    (is (str/includes? out "  actual: java.lang.Exception: nth index out of bounds"))
+    (is (str/includes? out " at nth ("))))
 ```
+
+Prose-only cases that remain:
+
+- `go test ./test/ -run 'TestRunner/tap-example.lg' -v` reports `--- FAIL: TestRunner/tap-example.lg/my.test.tap-example/math-test` with `(math-test) (test/tap/tap-example.lg:9)` and `actual: (not (= 10 9))` (bridge, Section 12.3)
+- The failure line names `test/tap/tap-example.lg:9` when the example is loaded from that file
+
+---
+
+## 17. Executable Evidence
+
+The Definition of Done in Section 16 is prose. Nothing runs it, so a wrong expectation (the trailing-empty split rule in the first draft) is caught only by a reviewer who happens to check. This section makes the document's own assertions executable, in the document, against any Clojure engine, with the expected output inline so no oracle pass is needed to validate a run.
+
+### 17.1 Shape
+
+The spec is literate. A provable statement carries a marker, `[R-<slug>]`, and its evidence is a fenced block or a table tagged with the same slug, placed beside it:
+
+````
+```clj-repl @R-tap-diagnostic-split
+(print-tap-diagnostic "a\n")
+;; out: "# a\n"
+;=> nil
+```
+````
+
+Pairing is checked both ways: a marker without evidence and evidence without a marker are both lint errors. The fence grammar is the one `rfc-tangle` already reads (` ```<type> @R-<slug> `, tables preceded by `<!-- evidence: @R-<slug> -->`), so the block is extracted verbatim into `<spec>.<slug>.<type>` by a tool that never interprets content.
+
+### 17.2 Vocabularies Are Data, Runners Are Generated
+
+An evidence *type* is a **vocabulary file**: rule lines mapping a statement pattern to a Clojure template, plus a `boot` preamble. No per-type program interprets the block. One generic generator reads the vocabulary, walks the tangled block statement by statement, instantiates the matching template, and writes a runner `.cljc`. The runner is then executed by whichever engine is selected. This is a literate untangle with generated code around the vocabulary's own harness, and it mirrors the shell `rfc-flow` runner with Clojure forms in the templates instead of commands.
+
+```
+# clj-repl.vocab — top-level forms with inline expectations
+boot #?(:clj (import 'clojure.lang.ExceptionInfo))
+boot (require '[clojure.test :refer :all] '[clojure.string :as str])
+boot <spec-evidence preamble: case, expect-value, expect-out, expect-throws, report, exit>
+{form*}                  => (case! {id} (fn [] {form*}))
+;=> {v*}                 => (expect-value! {id} '{v*})
+;; out: {s*}             => (expect-out! {id} {s*})
+;; throws: {c} {m*}      => (expect-throws! {id} {c} {m*})
+```
+
+| Type | Statement shapes | Verdict |
+|---|---|---|
+| `clj-repl` | A top-level form, then any of `;=> <edn>` (value, compared with `=` after reading), `;; out: "<string>"` (captured `*out*` and `*test-out*`, compared byte-exact), `;; throws: <Class> "<message>"` (class by `instance?`, message by `=`). A form with no expectation must evaluate without throwing. | All cases hold. |
+| `clj-table` | Markdown rows `\| form \| value \| out \|`. Each row compiles to the same three statements as `clj-repl`, which is the SLIM shape: a table is an instruction list. Empty cell means no expectation for that column. | All rows hold. |
+| `clj-test` | Ordinary `deftest` forms. The runner wraps them in a namespace and calls `run-tests`. | `successful?` |
+
+Template variables: `{id}` is the 1-based case number within the block, `{form*}` the rest of the line (multi-line forms are joined until the reader has a complete form). Everything in a block is plain Clojure plus `clojure.test` and `clojure.string`. Dialect setup, such as an import a JVM needs, lives in the vocabulary's `boot` lines under reader conditionals, never in evidence.
+
+### 17.3 Engines
+
+The generated runner is portable Clojure. The only engine-specific fact is the launch command, taken from `CLJ_ENGINE` and defaulting to `./lg`:
+
+| Engine | Command | Role |
+|---|---|---|
+| let-go | `./lg <runner.cljc>` | The gate. Runs in `TestSpecEvidence` under `go test ./test/...`, so it rides the pre-push hook and CI. |
+| Clojure 1.12.5 | `clojure -M <runner.cljc>` | Validates the expectations themselves. `make spec-oracle`; needs a JDK, so it is a separate CI job. |
+| Others (babashka, jank) | their launcher | Same file, no changes. |
+
+The runner prints one line per case, `ok <id>` or `FAIL <id> want <edn> got <edn>`, and exits 1 if any case failed. Cases tagged `oracle=none` in the fence info string are let-go extensions with no JVM behavior (Appendix A); they run under every engine but only the let-go verdict counts.
+
+### 17.4 Promotion
+
+A mismatch is not only a red run. `spec-evidence --accept <spec.md>` reruns the runner, parses the `FAIL` lines, and rewrites the `;=>`, `;; out:`, or `;; throws:` line (or the table cell) for each failed case with the engine's actual result, then sets `last-verified` in the masthead to today. The result is a diff on the spec, reviewed in git like any other change. Two engines separate the two kinds of mismatch:
+
+| JVM run | let-go run | Meaning | Action |
+|---|---|---|---|
+| fails | any | The document's expectation is wrong | `--accept` from the JVM run |
+| passes | fails | A conformance gap in let-go | Fix the runtime; promote nothing |
+| passes | passes | Conformant | none |
+
+Promotion from the let-go run alone is permitted only for `oracle=none` cases.
+
+### 17.5 Tooling and Wiring
+
+- `scripts/spec-evidence.lg`: tangle, generate, run, and `--accept`. Written in `.lg`, so the reader that parses evidence forms is the engine under test; the JVM pass is the independent check on that reader.
+- `scripts/spec-vocabs/clj-repl.vocab`, `clj-table.vocab`, `clj-test.vocab`: the three vocabularies, reviewed as evidence machinery.
+- `test/spec_evidence_test.go`: `TestSpecEvidence` runs every `docs/specs/*.md` containing tagged evidence under `./lg`; one Go subtest per block.
+- `make spec-oracle`: the same under `CLJ_ENGINE="clojure -M"`.
+- `make spec-lint`: marker and evidence pairing, fence grammar, and that every `clj-*` block tangles and generates without running.
+
+### 17.6 Coverage Rule
+
+A Definition of Done line that can be stated as a form and an expected result must be a fence, and Section 16 cites the slug instead of restating the case. Lines that remain prose are those with no in-process oracle: the bridge deadlock and cancellation cases, the `go test -run` transcripts, and ratchet results. A prose line is visibly unverified, which is the point.
+
+The first three fences convert cases that were verified by hand during review: the split contract (Section 4.9), the TAP diagnostic rules (Section 11.1), and the integration smoke test (Section 16.13).
 
 ---
 
@@ -1605,7 +1786,10 @@ ASSERT result CONTAINS "actual: (not (= 10 9))"
 | Metadata on a list returned by `read-string` | `nil` | `:line` and `:column` merged from `FormSource` | Reuses the source table needed for precise test diagnostics; no reader or bundle change. |
 | `&form` metadata | reader-attached | merged from `FormSource` on macro invocation | Same keys at the macro boundary. |
 | `do-template` location | `clojure.template` | `test` | No other consumer; add alias later if needed. |
-| `file-position` | reads JVM stack | reads `current-stack-trace` | Same contract over let-go frames. |
+| `file-position` | reads JVM stack | absent | No live frame chain in let-go; deprecated since Clojure 1.2 and unused by `clojure.test`. |
+| Trace of a thrown scalar | not applicable; cannot throw one | `nil`; reporters use the assertion's position | A bare Go string or keyword has no field to hold a chain. |
+| Tail-call frames | `recur` shows one frame | `OP_TAIL_CALL` shows one frame | Same semantics; stated so recursion depth is not expected in a trace. |
+| Frame shape | `[class method file line]` vector | `Frame` map with `:kind` | `clojure.main/ex-triage` destructures frames positionally; a port of it needs a `[fn kind file line]` projection. |
 | Namespace print form in `:default` diagnostics | `#object[clojure.lang.Namespace 0x.. "name"]` | let-go's namespace print form | Pointer identity is meaningless; harnesses read `:type` and name. |
 | Frame shape | `[class method file line]` vector | `Frame` map with `:kind` | let-go frames have no class; the Go boundary requires a kind. |
 | `clojure.stacktrace/e` | prints root cause of `*e` | absent | No `*e` in the let-go REPL. |
