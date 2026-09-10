@@ -5065,15 +5065,7 @@ func CoreUncheckedAdd(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	a, ok := vm.ToInt(vs[0])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[0].Type().Name())
-	}
-	b, ok := vm.ToInt(vs[1])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[1].Type().Name())
-	}
-	return vm.MakeInt(int(int64(a) + int64(b))), nil
+	return vm.NumUncheckedAdd(vs[0], vs[1])
 }
 
 //lg:native
@@ -5082,15 +5074,7 @@ func CoreUncheckedSubtract(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	a, ok := vm.ToInt(vs[0])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[0].Type().Name())
-	}
-	b, ok := vm.ToInt(vs[1])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[1].Type().Name())
-	}
-	return vm.MakeInt(int(int64(a) - int64(b))), nil
+	return vm.NumUncheckedSubtract(vs[0], vs[1])
 }
 
 //lg:native
@@ -5099,15 +5083,7 @@ func CoreUncheckedMultiply(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	a, ok := vm.ToInt(vs[0])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[0].Type().Name())
-	}
-	b, ok := vm.ToInt(vs[1])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[1].Type().Name())
-	}
-	return vm.MakeInt(int(int64(a) * int64(b))), nil
+	return vm.NumUncheckedMultiply(vs[0], vs[1])
 }
 
 //lg:native
