@@ -1,0 +1,23 @@
+;; Behavior tests for test/run-tests. Probe vars are kept out of the normal
+;; registry so nested runner calls can install an isolated test set.
+
+(ns test.run-tests-test
+  (:require [test :refer :all]))
+
+(def observed-ns (atom nil))
+(def explicit-namespace-probe
+  (fn [] (reset! observed-ns (ns-name *ns*))))
+(alter-meta! (var explicit-namespace-probe)
+             assoc
+             :ns *ns*
+             :name 'explicit-namespace-probe
+             :test explicit-namespace-probe)
+
+(deftest explicit-namespaces-restore-the-callers-namespace
+  (reset! observed-ns nil)
+  (let [before (ns-name *ns*)]
+    (binding [test/*registered-tests*
+              {*ns* [(var explicit-namespace-probe)]}]
+      (run-tests 'test.run-tests-test))
+    (is (= 'test.run-tests-test @observed-ns))
+    (is (= before (ns-name *ns*)))))
