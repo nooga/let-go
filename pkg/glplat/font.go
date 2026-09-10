@@ -1,7 +1,16 @@
+//go:build glplat || glplat_ebiten
+
 /*
  * font — font loading and rasterization for atlas baking
  *
  * Provides pure Go functions for font operations; no GL/window dependencies.
+ *
+ * Gated behind the backend tags even though nothing here needs a backend: the
+ * x/image/font and x/text/encoding closure it imports is the heaviest thing
+ * glplat pulls in, and package rt links the generated glplat interop
+ * unconditionally, so leaving this untagged puts that closure in every lg
+ * binary. check-default-deps enforces that. font_stub.go keeps the four
+ * exported entry points present in an untagged build.
  */
 
 package glplat
