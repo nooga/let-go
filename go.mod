@@ -5,14 +5,24 @@ toolchain go1.26.5
 
 require (
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e
+	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276
+	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20260628091122-0bd588dc30cf
 	github.com/stretchr/testify v1.8.4
 	github.com/zeebo/xxh3 v1.1.0
+	golang.org/x/image v0.40.0
 	golang.org/x/perf v0.0.0-20260512194132-3cf34090a3db
 )
 
 require (
 	github.com/aclements/go-moremath v0.0.0-20210112150236-f10218a38794 // indirect
+	github.com/ebitengine/gomobile v0.0.0-20250923094054-ea854a63cce1 // indirect
+	github.com/ebitengine/hideconsole v1.0.0 // indirect
+	github.com/ebitengine/purego v0.9.0 // indirect
+	github.com/hajimehoshi/ebiten/v2 v2.9.9 // indirect
+	github.com/jezek/xgb v1.1.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )
 
 require (
