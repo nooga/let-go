@@ -1,0 +1,74 @@
+;; test/spec_evidence_generate_test.lg
+;; Test cwd is test/, so vocab paths are ../scripts/... (same rule the
+;; parse/cli tests use for fixtures/).
+(ns test.spec-evidence-generate-test
+  (:require [test :refer :all]
+            [clojure.string :as str]
+            [spec-evidence :as se]
+            [spec-evidence.vocab :as v]))
+
+(def repl-vocab (slurp "../scripts/spec-vocabs/clj-repl.vocab"))
+(def table-vocab (slurp "../scripts/spec-vocabs/clj-table.vocab"))
+(def test-vocab (slurp "../scripts/spec-vocabs/clj-test.vocab"))
+
+(deftest repl-generates-one-case-per-form-with-merged-expectations
+  (let [src (v/generate "(+ 1 2)\n;=> 3\n(println \"x\")\n;; out: \"x\\n\"\n;=> nil\n(/ 1 0)\n;; throws: ArithmeticException \"Divide by zero\"\n"
+                        "clj-repl" repl-vocab "add")]
+    (is (str/includes? src "(spec-case! \"add#1\" (fn [] (+ 1 2)) {:value 3})"))
+    (is (str/includes? src "(spec-case! \"add#2\" (fn [] (println \"x\")) {:out \"x\\n\" :value nil})"))
+    (is (str/includes? src "(spec-case! \"add#3\" (fn [] (/ 1 0)) {:throws [ArithmeticException \"Divide by zero\"]})"))
+    (is (str/starts-with? src "#?(:clj (import"))))
+
+(deftest multiline-forms-accumulate-until-complete
+  (let [src (v/generate "(let [a 1\n      b 2]\n  (+ a b))\n;=> 3\n" "clj-repl" repl-vocab "ml")]
+    (is (str/includes? src "(fn [] (let [a 1\n      b 2]\n  (+ a b))) {:value 3}"))))
+
+(deftest rest-of-line-captures-keep-internal-spaces
+  (let [src (v/generate "(str \"a\" \" \" \"b\")\n;=> \"a  b\"\n" "clj-repl" repl-vocab "sp")]
+    (is (str/includes? src "{:value \"a  b\"}"))))
+
+(deftest table-rows-become-repl-cases
+  (let [src (v/generate "(inc 1)\t2\t\n(print \"a\")\tnil\t\"a\"\n" "clj-table" table-vocab "rows")]
+    (is (str/includes? src "(spec-case! \"rows#1\" (fn [] (inc 1)) {:value 2})"))
+    (is (str/includes? src "(spec-case! \"rows#2\" (fn [] (print \"a\")) {:value nil :out \"a\"})"))))
+
+(deftest table-fourth-cell-marks-expected-failure
+  (let [src (v/generate "(inc 1)\t3\t\tfail\n" "clj-table" table-vocab "fr")]
+    (is (str/includes? src "(spec-case! \"fr#1\" (fn [] (inc 1)) {:value 3 :expect :fail})"))))
+
+(deftest expected-failure-marks-cases
+  (let [src (v/generate "(+ 1 1)\n;=> 3\n;; expect: fail\n" "clj-repl" repl-vocab "xf")]
+    (is (str/includes? src "(spec-case! \"xf#1\" (fn [] (+ 1 1)) {:value 3 :expect :fail})")))
+  (let [src (v/generate "(+ 1 1)\n;=> 3\n(+ 2 2)\n;=> 4\n;; expect: pass\n" "clj-repl" repl-vocab "xb" {"expect" "fail"})]
+    (is (str/includes? src "{:value 3 :expect :fail}"))
+    (is (str/includes? src "{:value 4 :expect :pass}"))))
+
+(deftest test-blocks-run-their-namespaces
+  (let [src (v/generate "(ns a.b (:require [clojure.test :refer [deftest is]]))\n(deftest t (is true))\n(ns c.d)\n"
+                        "clj-test" test-vocab "blk")]
+    (is (str/includes? src "(defn spec-evidence-namespaces [] '[a.b c.d])"))
+    (is (str/includes? src "(deftest t (is true))"))
+    (is (str/includes? src "\"blk#1\""))))
+
+(deftest vocab-parses-into-boot-epilogue-rules
+  (let [p (v/parse-vocab repl-vocab)]
+    (is (= 5 (count (:boot p))))
+    (is (= 1 (count (:epilogue p))))
+    (is (= 6 (count (:rules p)))))
+  (let [p (v/parse-vocab table-vocab)]
+    ;; include splices clj-repl's directives in first
+    (is (= 5 (count (:boot p))))
+    (is (= 7 (count (:rules p))))))
+
+(deftest cli-generate-writes-a-runner-per-block
+  (let [dir (str (os/temp-dir) "/spec-evidence-generate-cli-test")]
+    (os/delete-tree dir)
+    (is (= 0 (se/main ["generate" "fixtures/spec-evidence/basic.md" dir])))
+    (let [src (slurp (str dir "/basic.add.cljc"))]
+      (is (str/starts-with? src "#?(:clj (import"))
+      (is (str/includes? src "(spec-case! \"add#1\" (fn [] (+ 1 2)) {:value 3})")))
+    (is (str/includes? (slurp (str dir "/basic.rows.cljc"))
+                       "(spec-case! \"rows#1\" (fn [] (inc 1)) {:value 2})"))
+    ;; the fail-row table's fourth cell marks the case expected-to-fail
+    (is (str/includes? (slurp (str dir "/basic.fail-row.cljc")) ":expect :fail"))
+    (is (str/includes? (slurp (str dir "/basic.block.cljc")) "spec-evidence-namespaces"))))

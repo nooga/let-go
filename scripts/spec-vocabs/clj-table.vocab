@@ -1,0 +1,8 @@
+# scripts/spec-vocabs/clj-table.vocab -- rows are repl statements:
+# form \t value \t out [\t expect]
+# `include` splices another vocabulary's directives in first, so a table
+# case is a repl case: the generator rewrites each row into repl statement
+# lines (`;=> value`, `;; out: out`, `;; expect: fail`) and feeds them
+# through the clj-repl rules below.
+include clj-repl
+row => form

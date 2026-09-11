@@ -3,7 +3,8 @@
    Usage: ./lg scripts/spec-evidence.lg <cmd> <spec.md> [args]
    Requires LG_SOURCE_PATHS=scripts so the helper namespaces resolve."
   (:require [clojure.string :as str]
-            [spec-evidence.parse :as p]))
+            [spec-evidence.parse :as p]
+            [spec-evidence.vocab :as v]))
 
 (def ^:private subcommands #{"lint" "tangle" "generate" "run" "accept"})
 
@@ -33,11 +34,26 @@
           (pr-str (into {} (map (fn [b] [(:slug b) (select-keys b [:type :line :attrs])]) blocks))))
     0))
 
+(defn generate
+  "Tangle, then turn each tangled block into a portable Clojure runner at
+   <outdir>/<base>.<slug>.cljc."
+  [spec outdir]
+  (tangle spec outdir)
+  (let [{:keys [blocks]} (p/scan (slurp spec))
+        base (base-name spec)]
+    (doseq [b blocks]
+      (let [tangled (slurp (str outdir "/" base "." (:slug b) "." (:type b)))
+            path (str outdir "/" base "." (:slug b) ".cljc")]
+        (spit path (v/generate tangled (:type b) (v/read-vocab (:type b)) (:slug b) (:attrs b)))
+        (println path)))
+    0))
+
 (defn main [args]
   (let [[cmd spec & rest] args]
     (case cmd
       "lint"   (lint spec)
       "tangle" (tangle spec (or (first rest) "conformance"))
+      "generate" (generate spec (or (first rest) "conformance"))
       (do (println "usage: spec-evidence <lint|tangle|generate|run|accept> <spec.md> [args]") 2))))
 
 ;; Script entry: os/args is the full Go argv — [binary script-path & user-args]
