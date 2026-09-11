@@ -9,3 +9,11 @@
   (alter-meta! *ns* update :k inc)
   (is (= 2 (:k (meta (find-ns 'test.ns-meta-test)))))
   (is (= {:k 2} (meta *ns*))))
+
+(deftest ns-meta-alter-is-reentrant
+  (let [before (meta *ns*)]
+    (alter-meta! *ns* (fn [m] (assoc m :seen (meta *ns*))))
+    (is (= before (:seen (meta *ns*))))
+    (is (map? (alter-meta! *ns* (fn [m]
+                                  (alter-meta! *ns* assoc :inner 1)
+                                  m))))))

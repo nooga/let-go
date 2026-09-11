@@ -213,12 +213,17 @@ func (n *Namespace) Meta() Value {
 	return n.meta
 }
 
-// AlterMeta replaces the namespace metadata with f(current). f runs under
-// the namespace lock, so it must not touch this or any other namespace.
+// AlterMeta replaces the namespace metadata with f(current). f runs
+// WITHOUT the namespace lock held, so it may safely call back into this
+// namespace (e.g. read or alter its own meta) without deadlocking —
+// matching Var.AlterMeta. As with Var, concurrent AlterMeta calls on the
+// same namespace are last-writer-wins: each reads current meta, computes
+// its own next value, and stores it, so a racing writer's result can be
+// clobbered.
 func (n *Namespace) AlterMeta(f func(Value) (Value, error)) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.mu.RLock()
 	cur := n.meta
+	n.mu.RUnlock()
 	if cur == nil {
 		cur = NIL
 	}
@@ -226,7 +231,9 @@ func (n *Namespace) AlterMeta(f func(Value) (Value, error)) error {
 	if err != nil {
 		return err
 	}
+	n.mu.Lock()
 	n.meta = next
+	n.mu.Unlock()
 	return nil
 }
 
