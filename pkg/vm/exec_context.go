@@ -108,10 +108,12 @@ func (ec *ExecContext) BindingSnapshot() BindingSnapshot {
 }
 
 // NewExecContextFrom returns a fresh context whose binding stack is seeded from
-// snap. It is the per-call isolation primitive: bound-fn* captures a snapshot
-// once and builds a fresh context from it on every invocation, so the wrapped
-// function always re-establishes exactly the captured bindings and never leaks
-// pushes between calls or across goroutines.
+// snap. bound-fn* no longer uses this directly for invocation — it overlays
+// its captured snapshot onto a Child() of the calling context instead, so
+// vars the snapshot didn't capture keep tracking the caller's live bindings
+// rather than falling back to root (see bound-fn* in pkg/rt/lang.go). This
+// constructor remains the general "start a context from exactly these
+// bindings, nothing else" primitive for callers that do want full isolation.
 func NewExecContextFrom(snap BindingSnapshot) *ExecContext {
 	c := NewExecContext()
 	c.bindings.installSnapshot(snap)

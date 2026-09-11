@@ -3386,36 +3386,42 @@ func installLangNS() {
 		wrapped := vm.NewCtxNativeFn("", func(callEc *vm.ExecContext, args []vm.Value) (vm.Value, error) {
 			// Overlay the captured vars on top of whatever's live in the
 			// calling context, rather than replacing the whole dynamic scope
-			// with an isolated fresh one: a var captured at creation freezes
-			// to its creation-time value for this call, but a var that was
-			// NOT captured (because nothing bound it at creation time) keeps
-			// tracking the caller's current binding.
+			// with a context seeded from `snap` alone: a var captured at
+			// creation freezes to its creation-time value for this call, but
+			// a var that was NOT captured (because nothing bound it at
+			// creation time) keeps tracking the caller's current binding.
 			//
 			// This matters because "nothing was bound at creation" is a rare
 			// case in practice — *file* (bound for the whole duration of
 			// loading any file) is essentially always present in `snap`, so
-			// replacing the callEc wholesale with `snap` used to freeze every
-			// OTHER dynamic var (e.g. a test's `(binding [*x* 55] ...)`) to
-			// its root value on every bound-fn call, even though *x* itself
-			// was never part of what bound-fn captured.
+			// building the call's context from `snap` alone used to freeze
+			// every OTHER dynamic var (e.g. a test's `(binding [*x* 55]
+			// ...)`) to its root value on every bound-fn call, even though
+			// *x* itself was never part of what bound-fn captured.
 			//
-			// callEc is safe to mutate here even across goroutines: each
-			// concurrent caller (e.g. future*) already runs on its own
-			// private child ExecContext, so pushing/popping on callEc cannot
-			// race with another invocation's bindings.
+			// callEc.Child() — NOT callEc itself — is what gets the overlay:
+			// callEc may be shared across concurrent callers (pmapv binds one
+			// ec and hands it to every worker goroutine, unlike future*/go*
+			// which each get a private child), so pushing/popping directly on
+			// callEc's binding stack would let one worker's pop remove
+			// another worker's still-live frame (pops are LIFO per var, not
+			// per goroutine). Child() takes an immediate snapshot of
+			// callEc's bindings into a brand-new, private stack, so the push
+			// below can only ever be observed by this one invocation.
+			//
+			// Child() also carries callEc's structured-concurrency scope
+			// forward (it copies src.scope — see ExecContext.Child in
+			// pkg/vm/exec_context.go), so the call runs under the
+			// *invoking* execution's scope rather than escaping to the
+			// root scope: the same property upstream's bound-fn* fix
+			// (scope ownership) needed an explicit SetScope call for.
+			child := callEc.Child()
 			for v, stack := range snap {
 				for _, val := range stack {
-					callEc.PushBinding(v, val)
+					child.PushBinding(v, val)
 				}
 			}
-			defer func() {
-				for v, stack := range snap {
-					for range stack {
-						callEc.PopBinding(v)
-					}
-				}
-			}()
-			return callEc.Invoke(fn, args)
+			return child.Invoke(fn, args)
 		})
 		return wrapped, nil
 	})

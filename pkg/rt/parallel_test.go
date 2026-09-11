@@ -71,6 +71,82 @@ func TestPmapvEmpty(t *testing.T) {
 	}
 }
 
+// boundFn builds a bound-fn* wrapper over fn, capturing whatever v is
+// currently bound to on ec (v must already have an active push via
+// v.PushBinding for anything to be captured).
+func boundFn(t *testing.T, ec *vm.ExecContext, fn vm.Fn) vm.Fn {
+	t.Helper()
+	bfVar := NS(NameCoreNS).Lookup(vm.Symbol("bound-fn*"))
+	if bfVar == nil {
+		t.Fatal("core/bound-fn* not found")
+	}
+	bfStar, ok := bfVar.(*vm.Var).Deref().(vm.Fn)
+	if !ok {
+		t.Fatal("core/bound-fn* is not an Fn")
+	}
+	wrapped, err := ec.Invoke(bfStar, []vm.Value{fn})
+	if err != nil {
+		t.Fatalf("bound-fn*: %v", err)
+	}
+	f, ok := wrapped.(vm.Fn)
+	if !ok {
+		t.Fatal("bound-fn* did not return an Fn")
+	}
+	return f
+}
+
+// TestPmapvBoundFnWorkersDoNotRaceSharedContext pins the pmapv/bound-fn*
+// interaction: pmapv deliberately shares ONE ec across every worker
+// goroutine (ec.Bind, unlike future*/go* which each get a private child
+// context). bound-fn* used to push/pop its captured bindings directly on
+// that shared ec; pops are LIFO per var, not per goroutine, so one
+// worker's pop could remove another worker's still-live frame. Each
+// worker here captures a DISTINCT value for *scale* at bound-fn creation
+// time, so cross-contamination between workers is directly observable
+// (not just "same value happened to survive"). Run under -race: the fix
+// (push/pop on a private ec.Child(), not the shared callEc) must also be
+// data-race free.
+func TestPmapvBoundFnWorkersDoNotRaceSharedContext(t *testing.T) {
+	v := vm.NewVar(nil, "test", "*scale*")
+	v.SetRoot(vm.Int(-1))
+
+	const n = 64
+	fns := make([]vm.Fn, n)
+	for i := 0; i < n; i++ {
+		v.PushBinding(vm.Int(i))
+		// Ctx-aware: v.Deref() (no args) always reads the ROOT binding only
+		// (pkg/vm/var.go) and would never see a child ExecContext's pushed
+		// binding at all, silently passing regardless of the bug under test.
+		// Real .lg code reads a dynamic var via the ec-aware path (the
+		// bytecode VM's LOAD_VAR resolves through ec.Deref); reader must go
+		// through that same path to actually exercise it.
+		reader := vm.NewCtxNativeFn("", func(callEc *vm.ExecContext, _ []vm.Value) (vm.Value, error) {
+			return callEc.Deref(v), nil
+		})
+		fns[i] = boundFn(t, vm.RootExecContext, reader)
+		v.PopBinding()
+	}
+
+	invoker, _ := vm.NativeFnType.Wrap(func(a []vm.Value) (vm.Value, error) {
+		i := int(a[0].(vm.Int))
+		return vm.RootExecContext.Invoke(fns[i], nil)
+	})
+	coll := make([]vm.Value, n)
+	for i := 0; i < n; i++ {
+		coll[i] = vm.Int(i)
+	}
+	r, err := parallelMapV(vm.RootExecContext, []vm.Value{invoker, vm.NewArrayVector(coll)})
+	if err != nil {
+		t.Fatalf("pmapv: %v", err)
+	}
+	got := r.(vm.ArrayVector)
+	for i := 0; i < n; i++ {
+		if int(got[i].(vm.Int)) != i {
+			t.Fatalf("worker %d saw captured *scale*=%v, want %d (shared-context corruption)", i, got[i], i)
+		}
+	}
+}
+
 // TestNextIDConcurrentUnique pins the atomic gensym counter: concurrent
 // callers must each get a distinct id and there must be no data race
 // (run under -race). The old non-atomic gensymID++ both raced and could

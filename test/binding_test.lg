@@ -84,3 +84,25 @@
         (is (= :a @a))
         (is (= :b @b)))
       (is (= 0 *x*)))))
+
+(deftest bound-fn-pmapv-worker-does-not-race-shared-context
+  ;; pmapv deliberately shares ONE ec across every worker goroutine
+  ;; (ec.Bind — see pkg/rt/parallel.go), unlike future*/go* which each get
+  ;; a private child context. A bound-fn invoked from a pmapv worker used
+  ;; to push/pop its captured bindings directly on that shared ec; pops
+  ;; are LIFO per var, not per goroutine, so one worker's pop could remove
+  ;; another worker's still-live frame. 64 elements (> typical NumCPU)
+  ;; keeps enough workers in flight simultaneously to interleave.
+  (testing "every worker sees both the captured *x* and the caller-bound *y*"
+    (binding [*x* :captured]
+      (let [f (bound-fn [] *x*)]
+        (binding [*y* :caller-bound]
+          (let [results (pmapv (fn [_] [(f) *y*]) (range 64))]
+            (is (every? #(= [:captured :caller-bound] %) results)))))))
+  (testing "distinct bound-fns invoked concurrently via pmapv keep their own captured value"
+    ;; Each fns[i] captures a DIFFERENT *x* value at creation. If workers
+    ;; corrupt each other's frames on the shared context, some worker
+    ;; reads another worker's captured value instead of its own.
+    (let [fns (mapv (fn [i] (binding [*x* i] (bound-fn [] *x*))) (range 64))
+          results (pmapv (fn [i] ((nth fns i))) (range 64))]
+      (is (= (vec (range 64)) results)))))
