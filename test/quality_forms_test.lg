@@ -1,0 +1,33 @@
+(ns test.quality-forms-test
+  (:require
+   [quality.forms :as f]
+   [test :refer :all]))
+
+(def src (slurp "fixtures/quality/forms_fixture.lg"))
+
+(deftest lines-drops-one-trailing-empty
+  (is (= ["a" "b"] (f/lines "a\nb\n")))
+  (is (= ["a" "" "b"] (f/lines "a\r\n\r\nb"))))
+
+(deftest segments-have-positions-and-depth
+  (let [segs (f/segments src)]
+    (is (= [2 4 8 15 17] (map :start segs)))
+    (is (= [2 6 13 15 17] (map :end segs)))
+    ;; (defn shallow …) nests (defn (+ …)) = depth 2
+    (is (= 2 (:depth (nth segs 1))))
+    ;; (defn deep …) nests defn > if > let > when > str = depth 5
+    (is (= 5 (:depth (nth segs 2))))))
+
+(deftest read-segment-skips-discards
+  (let [segs (f/segments src)]
+    (is (nil? (f/read-segment (nth segs 3))))
+    (is (= 'ns (first (f/read-segment (first segs)))))))
+
+(deftest definitions-are-named-and-located
+  (let [defs (f/definitions src)]
+    (is (= '[shallow deep answer] (map :name defs)))
+    (is (= [:defn :defn :def] (map :kind defs)))
+    (is (= [4 8 17] (map :line defs)))))
+
+(deftest counts-split-loc-comment-blank
+  (is (= {:loc 11 :comment 2 :blank 4} (f/counts src))))
