@@ -1327,3 +1327,44 @@ func numCmpFallback(a, b Value) (int, error) {
 	}
 	return 0, fmt.Errorf("unsupported types")
 }
+
+// Unchecked (wrapping) integer arithmetic: the one implementation behind
+// clojure.core/unchecked-add, unchecked-subtract and unchecked-multiply. The
+// OP_UNCHECKED_* opcodes, the core fns in pkg/rt/lang.go and the AOT helpers
+// in pkg/rt/golower_runtime.go all call these, so the three paths cannot
+// disagree about what an operand may be.
+//
+// Operands go through ToInt, so Float, Float32, Boolean, Ratio, BigDecimal and
+// an int64-range BigInt coerce to int first (the contract since #64); anything
+// ToInt rejects is a type error naming the op. The arithmetic wraps at the
+// platform width through an int64 round trip.
+
+func NumUncheckedAdd(a, b Value) (Value, error)      { return numUnchecked(OP_UNCHECKED_ADD, a, b) }
+func NumUncheckedSubtract(a, b Value) (Value, error) { return numUnchecked(OP_UNCHECKED_SUB, a, b) }
+func NumUncheckedMultiply(a, b Value) (Value, error) { return numUnchecked(OP_UNCHECKED_MUL, a, b) }
+
+func numUnchecked(op int32, a, b Value) (Value, error) {
+	name := uncheckedOpName(op)
+	ai, ok := ToInt(a)
+	if !ok {
+		return NIL, errUncheckedOpType(name, a)
+	}
+	bi, ok := ToInt(b)
+	if !ok {
+		return NIL, errUncheckedOpType(name, b)
+	}
+	return uncheckedIntOp(op, Int(ai), Int(bi)), nil
+}
+
+// uncheckedIntOp is the Int/Int core shared by numUnchecked and the opcode's
+// inline fast path.
+func uncheckedIntOp(op int32, a, b Int) Value {
+	switch op {
+	case OP_UNCHECKED_ADD:
+		return MakeInt(int(int64(a) + int64(b)))
+	case OP_UNCHECKED_SUB:
+		return MakeInt(int(int64(a) - int64(b)))
+	default:
+		return MakeInt(int(int64(a) * int64(b)))
+	}
+}
