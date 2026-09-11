@@ -3665,7 +3665,7 @@ func installLangNS() {
 	uncheckedMath.SetDynamic()
 	uncheckedMath.SetMeta(vm.NewPersistentMap([]vm.Value{
 		vm.Keyword("dynamic"), vm.TRUE,
-		vm.Keyword("doc"), vm.String("Compatibility var for Clojure's unchecked arithmetic mode; accepted but has no code-generation effect."),
+		vm.Keyword("doc"), vm.String("When truthy at compile time, + - * inc dec compile to their wrapping unchecked-* counterparts. Identity arities ((+) (*) (+ x) (* x)) are left alone, (- x) becomes unchecked-negate, and higher arities left-nest. Float arguments keep float arithmetic."),
 	}))
 	warnOnReflection := ns.Def("*warn-on-reflection*", vm.FALSE)
 	warnOnReflection.SetDynamic()
@@ -5154,6 +5154,11 @@ func CoreUncheckedMultiply(vs ...vm.Value) (vm.Value, error) {
 func CoreUncheckedNegate(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
+	}
+	// Only int64 wraps. Anything else goes through the numeric tower so
+	// floats, ratios, bigints and bigdecimals keep their own arithmetic.
+	if _, isInt := vs[0].(vm.Int); !isInt {
+		return vm.NumNeg(vs[0])
 	}
 	a, ok := vm.ToInt(vs[0])
 	if !ok {
