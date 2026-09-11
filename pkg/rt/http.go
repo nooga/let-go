@@ -222,7 +222,7 @@ func installHttpNS() {
 	}
 
 	// http/get — (http/get url) or (http/get url opts)
-	httpGet, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	httpGet := vm.NewCtxNativeFn("http/get", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 1 || len(vs) > 2 {
 			return vm.NIL, fmt.Errorf("http/get expects 1-2 args")
 		}
@@ -230,7 +230,7 @@ func installHttpNS() {
 		if err != nil {
 			return vm.NIL, err
 		}
-		req, err := http.NewRequest("GET", urlStr, nil)
+		req, err := http.NewRequestWithContext(ec.Context(), "GET", urlStr, nil)
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -266,7 +266,7 @@ func installHttpNS() {
 	})
 
 	// http/post — (http/post url body) or (http/post url body opts)
-	httpPost, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	httpPost := vm.NewCtxNativeFn("http/post", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) < 2 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("http/post expects 2-3 args")
 		}
@@ -280,7 +280,7 @@ func installHttpNS() {
 		} else {
 			bodyStr = vs[1].String()
 		}
-		req, err := http.NewRequest("POST", urlStr, strings.NewReader(bodyStr))
+		req, err := http.NewRequestWithContext(ec.Context(), "POST", urlStr, strings.NewReader(bodyStr))
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -320,7 +320,7 @@ func installHttpNS() {
 	})
 
 	// http/request — (http/request {:method :get :url "..." :headers {...} :body "..."})
-	httpRequest, err := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	httpRequest := vm.NewCtxNativeFn("http/request", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, fmt.Errorf("http/request expects 1 arg (options map)")
 		}
@@ -352,7 +352,7 @@ func installHttpNS() {
 				bodyReader = strings.NewReader(b.String())
 			}
 		}
-		req, err := http.NewRequest(method, reqURL, bodyReader)
+		req, err := http.NewRequestWithContext(ec.Context(), method, reqURL, bodyReader)
 		if err != nil {
 			return vm.NIL, err
 		}
@@ -379,18 +379,15 @@ func installHttpNS() {
 		return buildResponseMap(resp, isStreamOpt(vs[0]))
 	})
 
-	if err != nil {
-		panic("http NS init failed")
-	}
-
 	ns := vm.NewNamespace("http")
 
 	// Intentional shadows of clojure.core names — suppress warn-on-shadow.
 	ns.Exclude("get")
 
 	ns.Def("serve", serve)
-	ns.Def("get", httpGet)
-	ns.Def("post", httpPost)
-	ns.Def("request", httpRequest)
+	clientMeta := vm.EmptyPersistentMap.Assoc(vm.Keyword("scope-cancellation"), vm.TRUE)
+	ns.Def("get", httpGet).SetMeta(clientMeta)
+	ns.Def("post", httpPost).SetMeta(clientMeta)
+	ns.Def("request", httpRequest).SetMeta(clientMeta)
 	RegisterNS(ns)
 }
