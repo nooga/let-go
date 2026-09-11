@@ -1,0 +1,47 @@
+(ns fixture.dup-a)
+
+(defn calc-alpha [n]
+  (let [step1 (+ n 7)
+        step2 (* step1 2)
+        step3 (- step2 3)
+        step4 (if (> step3 10)
+                (+ step3 1)
+                (- step3 1))
+        step5 (loop [i 0 acc step4]
+                (if (>= i 3)
+                  acc
+                  (recur (inc i) (+ acc i))))
+        step6 (cond
+                (> step5 100) :big
+                (> step5 50) :medium
+                :else :small)
+        step7 (case step6
+                :big (* step5 2)
+                :medium (+ step5 10)
+                :small (- step5 5))
+        step8 (when (pos? step7)
+                (* step7 step7))
+        step9 (or step8 0)
+        step10 (and (pos? step9) (< step9 100000))
+        step11 (try
+                 (/ step9 (max 1 step7))
+                 (catch Throwable e 0))
+        result (+ step1 step2 step3 step4 step5 step7 step9 step11)]
+    result))
+
+(def alpha-buffer [1 2 3])
+
+;; padding so the duplicated region above is a minority of this file's
+;; lines, not the whole file -- keeps file-percent in a meaningful range
+;; instead of reporting near-100% duplication for a tiny fixture.
+;; padding
+;; padding
+;; padding
+;; padding
+;; padding
+;; padding
+;; padding
+;; padding
+
+(defn greet-alpha [name]
+  (str "Hello, " name "! Welcome to alpha."))

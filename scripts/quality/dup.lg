@@ -1,0 +1,92 @@
+(ns quality.dup
+  "Winnowing (Schleimer, Wilkerson, Aiken) over normalized tokens: k-gram
+   hashes, window minima, shared-fingerprint regions between files.")
+
+(defn- kgram-hashes [tokens k]
+  (let [ts (mapv :t tokens) n (count ts)]
+    (vec (for [i (range 0 (max 0 (inc (- n k))))]
+           {:hash (hash (subvec ts i (+ i k))) :pos i}))))
+
+(defn fingerprints [tokens k w]
+  (let [hs (kgram-hashes tokens k) n (count hs)]
+    (if (< n w)
+      (vec (distinct hs))
+      (loop [i 0 last nil out []]
+        (if (> (+ i w) n)
+          out
+          (let [win (subvec hs i (+ i w))
+                m (reduce (fn [a b] (if (<= (:hash b) (:hash a)) b a)) win)]
+            (recur (inc i) m (if (= m last) out (conj out m)))))))))
+
+(defn- regions
+  "Group shared positions in a file into maximal runs (gap <= k)."
+  [positions k]
+  (reduce (fn [rs p]
+            (let [r (peek rs)]
+              (if (and r (<= (- p (:to r)) k))
+                (conj (pop rs) (assoc r :to p))
+                (conj rs {:from p :to p}))))
+          [] (sort positions)))
+
+;; `fingerprints` (winnowed) is a cheap, sparse anchor set: two files with
+;; zero fingerprint hashes in common cannot share a duplicated region worth
+;; reporting, so it prunes the O(files^2) comparison before any expensive
+;; work. Once a pair has at least one common anchor, the actual shared
+;; count and line ranges are computed from the full (non-winnowed) k-gram
+;; hashes, via a hash->positions inverted index per file -- this is the
+;; precise measure `floor` gates on, and it stays index-based (no nested
+;; scan over every position pair) so it scales to whole-corpus runs.
+(defn- kgram-index
+  "hash -> sorted vec of k-gram start positions, from the full (non-winnowed)
+   k-gram hash list."
+  [tokens k]
+  (reduce (fn [m {:keys [hash pos]}] (update m hash (fnil conj []) pos))
+          {} (kgram-hashes tokens k)))
+
+(defn- any-overlap? [fps-a fps-b]
+  (let [ha (set (map :hash fps-a))]
+    (boolean (some ha (map :hash fps-b)))))
+
+(defn pairs [files k w floor]
+  (let [prepped (mapv (fn [f]
+                        (let [kix (kgram-index (:tokens f) k)]
+                          (assoc f
+                                 :fps (fingerprints (:tokens f) k w)
+                                 :kix kix
+                                 :nk (reduce + 0 (map count (vals kix))))))
+                  files)
+        n (count prepped)]
+    (->> (for [i (range n) j (range (inc i) n)
+               :let [a (nth prepped i) b (nth prepped j)]
+               :when (any-overlap? (:fps a) (:fps b))
+               :let [shared (vec (mapcat (fn [[h pas]]
+                                           (when-let [pbs (get (:kix b) h)]
+                                             (for [pa pas pb pbs] [h pa pb])))
+                                   (:kix a)))]
+               :when (>= (count shared) floor)
+               :let [ra (regions (map second shared) k)
+                     rb (regions (map #(nth % 2) shared) k)
+                     line (fn [f pos] (:line (nth (:tokens f) (min pos (dec (count (:tokens f)))))))
+                     big (fn [rs] (apply max-key #(- (:to %) (:from %)) rs))
+                     A (big ra) B (big rb)]]
+           {:a {:path (:path a) :start (line a (:from A)) :end (line a (+ k (:to A)))}
+            :b {:path (:path b) :start (line b (:from B)) :end (line b (+ k (:to B)))}
+            :shared (count shared)
+            :similarity (/ (* 2.0 (count shared)) (+ (:nk a) (:nk b)))})
+         (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start]) #(get-in % [:b :path])))
+         vec)))
+
+(defn file-percent
+  "Approximates duplicated share by lines of the reported regions over
+   total token-bearing lines (dup % by lines), not by raw token count."
+  [files pairs]
+  (into {}
+        (for [f files]
+          (let [covered (reduce (fn [s p]
+                                  (+ s (if (= (:path f) (get-in p [:a :path]))
+                                         (- (get-in p [:a :end]) (get-in p [:a :start]) -1) 0)
+                                     (if (= (:path f) (get-in p [:b :path]))
+                                       (- (get-in p [:b :end]) (get-in p [:b :start]) -1) 0)))
+                          0 pairs)
+                total-lines (max 1 (:line (last (:tokens f))))]
+            [(:path f) (* 100.0 (/ (min covered total-lines) (double total-lines)))]))))

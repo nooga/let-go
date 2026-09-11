@@ -1,0 +1,39 @@
+(ns test.quality-dup-test
+  (:require
+   [quality.dup :as dup]
+   [quality.lex :as lex]
+   [test :refer :all]))
+
+(deftest lexer-normalizes-identifiers-and-literals
+  (is (= ["(" "defn" "ID" "[" "ID" "]" "(" "ID" "ID" "NUM" ")" ")"]
+         (map :t (lex/tokens "(defn f [x] (+ x 1))" :lg))))
+  (is (= ["func" "ID" "(" ")" "{" "return" "STR" "}"]
+         (map :t (lex/tokens "func f() { return \"s\" } // c" :go))))
+  ;; NB: the brief's literal here was [1 1 2] (3 elements) but "(a\n b)"
+  ;; tokenizes to 4 tokens ("(" "a" "b" ")") on lines 1 1 2 2 -- corrected
+  ;; after verifying by hand; see task-3-report.md.
+  (is (= [1 1 2 2] (map :line (lex/tokens "(a\n b)" :lg)))))
+
+(defn- files [& paths]
+  (mapv (fn [p] {:path p :tokens (lex/tokens (slurp p) (if (clojure.string/ends-with? p ".go") :go :lg))}) paths))
+
+(deftest finds-renamed-duplicates-in-lg
+  (let [fs (files "fixtures/quality/dup_a.lg" "fixtures/quality/dup_b.lg")
+        ps (dup/pairs fs 25 40 50)]
+    (is (= 1 (count ps)))
+    (is (> (:similarity (first ps)) 0.8))
+    (is (= "fixtures/quality/dup_a.lg" (get-in (first ps) [:a :path])))
+    (is (pos? (get-in (first ps) [:a :start])))))
+
+(deftest finds-renamed-duplicates-in-go
+  (let [fs (files "fixtures/quality/dup_a.go" "fixtures/quality/dup_b.go")]
+    (is (= 1 (count (dup/pairs fs 25 40 50))))))
+
+(deftest distinct-code-has-no-pairs
+  (let [fs (files "fixtures/quality/forms_fixture.lg" "fixtures/quality/metrics_fixture.lg")]
+    (is (empty? (dup/pairs fs 25 40 50)))))
+
+(deftest percent-is-duplicated-tokens-over-total
+  (let [fs (files "fixtures/quality/dup_a.lg" "fixtures/quality/dup_b.lg")
+        pct (dup/file-percent fs (dup/pairs fs 25 40 50))]
+    (is (< 30 (get pct "fixtures/quality/dup_a.lg") 90))))

@@ -1,0 +1,47 @@
+(ns quality.lex
+  "Normalized token streams for near-duplicate detection. Identifiers -> ID,
+   numbers -> NUM, strings -> STR; keywords and punctuation verbatim."
+  (:require
+   [clojure.string :as str]))
+
+(def ^:private lg-keywords
+  #{"defn" "defn-" "defmacro" "def" "let" "if" "when" "cond" "case" "loop" "recur"
+    "fn" "do" "try" "catch" "finally" "throw" "ns" "and" "or" "not"})
+(def ^:private go-keywords
+  #{"func" "return" "if" "else" "for" "range" "switch" "case" "default" "var" "const"
+    "type" "struct" "interface" "map" "chan" "go" "defer" "select" "break" "continue"
+    "package" "import" "nil" "true" "false"})
+
+;; .lg: line comments, string literals, char literals (\x), brackets/quote
+;; marks as single tokens, numbers, and everything else as a run of
+;; non-delimiter characters (covers symbols like `->>`, `+`, `assoc!`).
+(def ^:private lg-re #"(?m);[^\n]*|\"(?:[^\"\\]|\\.)*\"|\\.|[()\[\]{}'`~@^#]|-?\d[\w.]*|[^\s()\[\]{}\"';`~@^#,]+|\n")
+
+;; Go: line/block comments, string/rune/backtick literals, numbers,
+;; identifiers, single-char brackets/punctuation kept separate (so `()`
+;; lexes as two tokens), and a run of operator characters merged into one
+;; token (so `==`, `&&`, `:=`, `++` stay whole).
+(def ^:private go-re #"(?m)//[^\n]*|/\*[\s\S]*?\*/|\"(?:[^\"\\]|\\.)*\"|`[^`]*`|'(?:[^'\\]|\\.)*'|\d[\w.]*|[A-Za-z_]\w*|[(){}\[\];,]|[=<>!+\-*/%&|^:.]+|\n")
+
+(defn tokens [text lang]
+  (let [[re kws] (case lang :lg [lg-re lg-keywords] :go [go-re go-keywords])]
+    (loop [ms (re-seq re text) line 1 out []]
+      (if (empty? ms)
+        out
+        (let [m (first ms)
+              nls (count (filter #(= \newline %) m))]
+          (cond
+            (= m "\n") (recur (rest ms) (inc line) out)
+            (or (str/starts-with? m ";") (str/starts-with? m "//") (str/starts-with? m "/*"))
+            (recur (rest ms) (+ line nls) out)
+            :else
+            (let [t (cond
+                      (str/starts-with? m "\"") "STR"
+                      (and (= lang :go) (or (str/starts-with? m "`") (str/starts-with? m "'"))) "STR"
+                      (and (= lang :lg) (str/starts-with? m "\\")) "STR"
+                      (re-matches #"-?\d.*" m) "NUM"
+                      (kws m) m
+                      (re-matches #"[A-Za-z_].*" m) "ID"
+                      (and (= lang :lg) (re-matches #"[^()\[\]{}].*" m) (not (str/starts-with? m ":"))) "ID"
+                      :else m)]
+              (recur (rest ms) (+ line nls) (conj out {:t t :line line})))))))))
