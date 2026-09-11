@@ -39,18 +39,18 @@ func main() {
 	nsResolver := resolver.NewNSResolver(ctx, []string{"."})
 	rt.SetNSLoader(nsResolver)
 
-	// Route *out*/*err* to the JS host via _lgOutput (HostWriter), instead of
-	// os.Stdout/Stderr + the bundle's fs.writeSync fd interception. SetRoot,
-	// not a per-Run binding, because this generated main drives bytecode
-	// directly rather than through pkg/api. Guarded: if the core I/O vars
-	// aren't installed yet, output falls back to os.Stdout.
+	// Route *out*/*err* (and *test-out*, if loaded) to the JS host via
+	// _lgOutput (HostWriter), instead of os.Stdout/Stderr + the bundle's
+	// fs.writeSync fd interception. InstallHostOutputRoots, not a per-Run
+	// binding, because this generated main drives bytecode directly rather
+	// than through pkg/api; it updates *out*/*err*/*test-out* together so
+	// they never disagree regardless of load order. Guarded internally: if
+	// the core I/O vars aren't installed yet, output falls back to os.Stdout.
 	hostWriter := rt.NewHostWriter()
-	if v := rt.LookupCoreVar("*out*"); v != nil {
-		v.SetRoot(vm.NewBoxed(rt.NewWriterHandle("host-stdout", hostWriter)))
-	}
-	if v := rt.LookupCoreVar("*err*"); v != nil {
-		v.SetRoot(vm.NewBoxed(rt.NewWriterHandle("host-stderr", hostWriter)))
-	}
+	rt.InstallHostOutputRoots(
+		rt.NewWriterHandle("host-stdout", hostWriter),
+		rt.NewWriterHandle("host-stderr", hostWriter),
+	)
 
 	// Route (js/emit ...) to the JS host via _lgEmit (HostEmitter), the dual
 	// of the HostWriter *out* routing above. Same SetRoot rationale.

@@ -337,14 +337,15 @@ func asBytes(v vm.Value) ([]byte, bool) {
 // e.g. "clojure.core" → "core", "clojure.test" → "test", "clojure.string" → "string"
 // Both names resolve to the same *Namespace object.
 var nsAliases = map[string]string{
-	"clojure.core":   "core",
-	"clojure.test":   "test",
-	"clojure.string": "string",
-	"clojure.set":    "set",
-	"clojure.walk":   "walk",
-	"clojure.edn":    "edn",
-	"clojure.zip":    "zip",
-	"clojure.data":   "data",
+	"clojure.core":     "core",
+	"clojure.test":     "test",
+	"clojure.string":   "string",
+	"clojure.set":      "set",
+	"clojure.walk":     "walk",
+	"clojure.edn":      "edn",
+	"clojure.zip":      "zip",
+	"clojure.data":     "data",
+	"clojure.test.tap": "test.tap",
 }
 
 // resolveNSAlias returns the canonical name for a namespace.
