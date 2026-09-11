@@ -2892,21 +2892,33 @@ func installLangNS() {
 		return vm.ListType.Box(temp)
 	})
 
+	// split is the raw primitive under clojure.string/split (string.lg), which
+	// adds Java Pattern.split's limit-zero rule. The optional third argument is
+	// Go's SplitN count: n > 0 yields at most n fields with the last holding the
+	// remainder, n < 0 yields every field. Both match Java for the same sign.
 	split, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
-		if len(vs) < 1 || len(vs) > 2 {
+		if len(vs) < 1 || len(vs) > 3 {
 			return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 		}
 		s, ok := vs[0].(vm.String)
 		if !ok {
 			return vm.NIL, fmt.Errorf("split expected String")
 		}
+		n := -1
+		if len(vs) == 3 {
+			lim, ok := vs[2].(vm.Int)
+			if !ok {
+				return vm.NIL, fmt.Errorf("split expected Int limit")
+			}
+			n = int(lim)
+		}
 		var frags []string
-		if len(vs) == 2 {
+		if len(vs) >= 2 {
 			switch delim := vs[1].(type) {
 			case vm.String:
-				frags = strings.Split(string(s), string(delim))
+				frags = strings.SplitN(string(s), string(delim), n)
 			case *vm.Regex:
-				frags = delim.Split(string(s), -1)
+				frags = delim.Split(string(s), n)
 			default:
 				return vm.NIL, fmt.Errorf("split expected String or Regex")
 			}
