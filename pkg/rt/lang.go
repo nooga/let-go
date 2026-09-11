@@ -3370,13 +3370,18 @@ func installLangNS() {
 		if len(snap) == 0 {
 			return fn, nil
 		}
-		wrapped, _ := vm.NativeFnType.Wrap(func(args []vm.Value) (vm.Value, error) {
-			// Re-establish the captured bindings in a fresh context on every
-			// call, so invocations (possibly on different goroutines) stay
-			// isolated from one another and from the global stack.
-			return vm.NewExecContextFrom(snap).Invoke(fn, args)
-		})
-		return wrapped, nil
+		// Re-establish the captured bindings in a fresh context on every
+		// call, so invocations (possibly on different goroutines) stay
+		// isolated from one another and from the global stack. Only the
+		// binding stack is conveyed: the call runs under the *invoking*
+		// execution's structured-concurrency scope, so work spawned inside a
+		// bound fn stays owned (and cancellable) by whoever called it rather
+		// than silently escaping to the root scope.
+		return vm.NewCtxNativeFn("bound-fn", func(callEC *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+			c := vm.NewExecContextFrom(snap)
+			c.SetScope(callEC.Scope())
+			return c.Invoke(fn, args)
+		}), nil
 	})
 
 	metaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
