@@ -1,0 +1,71 @@
+(ns test.report-events-test
+  (:require
+   [test :refer :all]))
+
+(defn- capture-events [f]
+  (let [events (atom [])]
+    (binding [report (fn [m] (swap! events conj m))]
+      (f))
+    @events))
+
+(defn- capture-out [f]
+  (let [b (io/buffer)]
+    (binding [*test-out* b] (f))
+    (io/buffer-str b)))
+
+(deftest do-report-adds-position-to-fail-and-error-only
+  (let [evs (capture-events
+              (fn []
+                (binding [*assertion-position* {:file "f.lg" :line 7}]
+                  (do-report {:type :pass :expected '(= 1 1) :actual '(= 1 1)})
+                  (do-report {:type :fail :expected '(= 1 2) :actual '(not (= 1 2))})
+                  (do-report {:type :error :expected '(f) :actual (ex-info "x" {})}))))]
+    (is (= 3 (count evs)))
+    (is (nil? (:file (nth evs 0))))
+    (is (= "f.lg" (:file (nth evs 1))))
+    (is (= 7 (:line (nth evs 1))))
+    (is (= "f.lg" (:file (nth evs 2))))))
+
+(deftest fail-position-falls-back-to-testing-var
+  (let [v (var do-report-adds-position-to-fail-and-error-only)
+        evs (capture-events
+              (fn []
+                (binding [*testing-vars* (list v) *assertion-position* nil]
+                  (do-report {:type :fail :expected 'x :actual nil}))))]
+    (is (= (:line (meta v)) (:line (first evs))))))
+
+(deftest default-report-prints-fail-block
+  (let [out (capture-out
+              (fn []
+                (binding [*testing-vars* (list (var default-report-prints-fail-block))
+                          *testing-contexts* (list "B" "A")
+                          *assertion-position* {:file "t.lg" :line 3}]
+                  (do-report {:type :fail :message "m" :expected '(= 1 2) :actual '(not (= 1 2))}))))]
+    (is (= "\nFAIL in (default-report-prints-fail-block) (t.lg:3)\nA B\nm\nexpected: (= 1 2)\n  actual: (not (= 1 2))\n" out))))
+
+(deftest default-report-prints-summary-and-begin-ns
+  (is (= "\nRan 1 tests containing 3 assertions.\n1 failures, 0 errors.\n"
+         (capture-out #(do-report {:type :summary :test 1 :pass 2 :fail 1 :error 0}))))
+  (is (= "\nTesting test.report-events-test\n"
+         (capture-out #(do-report {:type :begin-test-ns :ns (find-ns 'test.report-events-test)}))))
+  (is (= "" (capture-out #(do-report {:type :pass :expected 'x :actual 'x}))))
+  (is (= "" (capture-out #(do-report {:type :end-test-var :var (var successful?)})))))
+
+(deftest counters-and-successful
+  (binding [*report-counters* (ref *initial-report-counters*)]
+    (inc-report-counter :pass)
+    (inc-report-counter :pass)
+    (inc-report-counter :fail)
+    (is (= {:test 0 :pass 2 :fail 1 :error 0} @*report-counters*)))
+  (binding [*report-counters* nil]
+    (is (nil? (inc-report-counter :pass))))
+  (is (successful? {:fail 0 :error 0}))
+  (is (successful? {:type :summary}))
+  (is (not (successful? {:fail 1 :error 0}))))
+
+(deftest testing-strs
+  (binding [*testing-vars* (list (var successful?) (var do-report))
+            *testing-contexts* (list "inner" "outer")]
+    (is (= "(do-report successful?) (x.lg:1)" (testing-vars-str {:file "x.lg" :line 1})))
+    (is (= "(do-report successful?) (:)" (testing-vars-str {})))
+    (is (= "outer inner" (testing-contexts-str)))))

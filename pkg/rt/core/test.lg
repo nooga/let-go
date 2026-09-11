@@ -1,14 +1,147 @@
 (ns test
-  (:require [walk :refer [postwalk-replace]]))
+  (:require
+   [clojure.string :as str]
+   [walk :refer [postwalk-replace]]))
+
+;;; ---- Dynamic vars (spec 3.3) ------------------------------------------
+
+(def ^:dynamic *load-tests* true)
+(def ^:dynamic *stack-trace-depth* nil)
+(def ^:dynamic *report-counters* nil)
+(def ^:dynamic *initial-report-counters* {:test 0 :pass 0 :fail 0 :error 0})
+(def ^:dynamic *testing-vars* (list))
+(def ^:dynamic *testing-contexts* (list))
+
+;; Bound by try-expr to the is form's {:file :line}; the only source of a
+;; :fail event's position (spec 10.1).
+(def ^:dynamic *assertion-position* nil)
+
+;; Captured once from the host stdout (or the *out* root) so reporter output
+;; is not swallowed by with-out-str around a runner (spec 10.2).
+(def ^:dynamic *test-out* nil)
+(register-test-out (var *test-out*))
+
+(defmacro with-test-out [& body]
+  `(binding [*out* *test-out*] ~@body))
+
+;;; ---- Helpers (spec 10.3) -------------------------------------------------
+
+(defn inc-report-counter [name]
+  (when *report-counters*
+    (dosync (commute *report-counters* update-in [name] (fnil inc 0)))))
+
+(defn testing-vars-str [m]
+  (let [{:keys [file line]} m]
+    (str "(" (str/join " " (reverse (map (comp :name meta) *testing-vars*))) ")"
+         " (" file ":" line ")")))
+
+(defn testing-contexts-str []
+  (str/join " " (reverse *testing-contexts*)))
+
+(defn get-possibly-unbound-var [v]
+  (try (var-get v)
+       (catch Throwable _ nil)))
+
+(defn successful? [summary]
+  (and (zero? (:fail summary 0))
+       (zero? (:error summary 0))))
+
+;;; ---- Positions (spec 10.1) ------------------------------------------------
+
+(defn- fail-position []
+  (or *assertion-position*
+      (let [v (first *testing-vars*)]
+        (when (and v (:line (meta v)))
+          {:file (:file (meta v)) :line (:line (meta v))}))
+      {:file nil :line nil}))
+
+(defn- internal-frame? [f]
+  (let [n (str (:fn f))]
+    (or (str/starts-with? n "test/")
+        (str/starts-with? n "clojure.test/")
+        (contains? #{"apply" "partial" "map" "reduce" "sort" "sort-by"} n)
+        (str/starts-with? n "core/-dispatch")
+        (str/starts-with? n "clojure.core/-dispatch"))))
+
+(defn- error-position [thrown]
+  (let [frames (drop-while internal-frame?
+                           (or (when (resolve 'ex-trace) ((resolve 'ex-trace) thrown)) []))]
+    (if (seq frames)
+      {:file (:file (first frames)) :line (:line (first frames))}
+      (fail-position))))
+
+;;; ---- report (spec 3.1, 10.4) ---------------------------------------------
+
+(defn render-actual [v]
+  ;; Slice 1 adds trace rendering; until then every thrown value prints
+  ;; with prn, which is also what Clojure prints for a value with no trace.
+  (prn v))
+
+(defmulti ^:dynamic report :type)
+
+(defmethod report :default [m]
+  (with-test-out (prn m)))
+
+(defmethod report :pass [m]
+  (with-test-out (inc-report-counter :pass)))
+
+(defmethod report :fail [m]
+  (with-test-out
+    (inc-report-counter :fail)
+    (println "\nFAIL in" (testing-vars-str m))
+    (when (seq *testing-contexts*) (println (testing-contexts-str)))
+    (when-let [message (:message m)] (println message))
+    (println "expected:" (pr-str (:expected m)))
+    (println "  actual:" (pr-str (:actual m)))))
+
+(defmethod report :error [m]
+  (with-test-out
+    (inc-report-counter :error)
+    (println "\nERROR in" (testing-vars-str m))
+    (when (seq *testing-contexts*) (println (testing-contexts-str)))
+    (when-let [message (:message m)] (println message))
+    (println "expected:" (pr-str (:expected m)))
+    (print "  actual: ")
+    (render-actual (:actual m))))
+
+(defmethod report :summary [m]
+  (with-test-out
+    (println "\nRan" (:test m) "tests containing"
+             (+ (:pass m) (:fail m) (:error m)) "assertions.")
+    (println (:fail m) "failures," (:error m) "errors.")))
+
+(defmethod report :begin-test-ns [m]
+  (with-test-out
+    (println "\nTesting" (ns-name (:ns m)))))
+
+(defmethod report :end-test-ns [m])
+(defmethod report :begin-test-var [m])
+(defmethod report :end-test-var [m])
+
+(defn do-report [m]
+  (report
+    (case (:type m)
+      :fail (merge (fail-position) m)
+      :error (merge (error-position (:actual m)) m)
+      m)))
+
+;;; ---- Old shim state (Tasks 10-13 replace what uses these) ----------------
 
 (def ^:dynamic *test-result* true)
-(def ^:dynamic *testing-contexts* [])
-(def ^:dynamic *testing-vars* [])
-
-(def ^:dynamic *report-counters* {:test 0 :pass 0 :fail 0 :error 0})
 (def ^:dynamic *registered-tests* {})
 (def ^:dynamic *each-fixtures* [])
 (def ^:dynamic *once-fixtures* [])
+
+;; Renamed from the old *report-counters* to avoid colliding with the new
+;; spec 3.3 var of the same name above: the old is/test-var*/run-tests
+;; machinery bumps this via plain set!+update on an immutable map, while the
+;; new *report-counters* is a ref bumped via commute (spec 10.3). Sharing one
+;; name would make any do-report call inside an old-shim test run crash
+;; ("swap expected Atom") or corrupt the ref's contents. Purely internal
+;; state — no external caller (Go harness, other tasks) references it by
+;; name — so the rename is safe. Tasks 10-13 delete this along with the rest
+;; of the old shim.
+(def ^:dynamic *legacy-report-counters* {:test 0 :pass 0 :fail 0 :error 0})
 
 (defn clear-registered-tests! []
   (set! *registered-tests* {}))
@@ -63,12 +196,12 @@
         ;; threads through the unquotes and does not depend on that.
         e (gensym "e__")
         pass `(do
-                (set! *report-counters* (update *report-counters* :pass inc))
+                (set! *legacy-report-counters* (update *legacy-report-counters* :pass inc))
                 ~(if msg
                    `(println "PASS" '~form "-" ~msg)
                    `(println "PASS" '~form)))
         fail `(do
-                (set! *report-counters* (update *report-counters* :fail inc))
+                (set! *legacy-report-counters* (update *legacy-report-counters* :fail inc))
                 (set! *test-result* false)
                 ~(if msg
                    `(println "FAIL" '~form "-" ~msg)
@@ -92,11 +225,11 @@
      (expand-is-thrown form nil)
      `(if ~form
         (do
-          (set! *report-counters* (update *report-counters* :pass inc))
+          (set! *legacy-report-counters* (update *legacy-report-counters* :pass inc))
           (println "PASS" '~form)
           true)
         (do
-          (set! *report-counters* (update *report-counters* :fail inc))
+          (set! *legacy-report-counters* (update *legacy-report-counters* :fail inc))
           (set! *test-result* false)
           (println "FAIL" '~form)
           false))))
@@ -105,11 +238,11 @@
      (expand-is-thrown form msg)
      `(if ~form
         (do
-          (set! *report-counters* (update *report-counters* :pass inc))
+          (set! *legacy-report-counters* (update *legacy-report-counters* :pass inc))
           (println "PASS" '~form "-" ~msg)
           true)
         (do
-          (set! *report-counters* (update *report-counters* :fail inc))
+          (set! *legacy-report-counters* (update *legacy-report-counters* :fail inc))
           (set! *test-result* false)
           (println "FAIL" '~form "-" ~msg)
           false)))))
@@ -142,12 +275,12 @@
       ((join-fixtures *each-fixtures*) (fn [] (test-fn))))
     (catch e
       (set! *testing-contexts* [])
-      (set! *report-counters* (update *report-counters* :error inc))
+      (set! *legacy-report-counters* (update *legacy-report-counters* :error inc))
       (set! *test-result* false)
       (println "ERROR in test:" e))))
 
 (defn run-tests [& nss]
-  (set! *report-counters* {:test 0 :pass 0 :fail 0 :error 0})
+  (set! *legacy-report-counters* {:test 0 :pass 0 :fail 0 :error 0})
   (set! *test-result* true)
   (println "Running tests...")
   ((join-fixtures *once-fixtures*)
@@ -157,7 +290,7 @@
          (let [old-ns *ns*]
            (in-ns s)
            (doseq [t (get *registered-tests* *ns* [])]
-             (set! *report-counters* (update *report-counters* :test inc))
+             (set! *legacy-report-counters* (update *legacy-report-counters* :test inc))
              (test-var* t))
            (in-ns (symbol (name old-ns)))))
        ;; Run every registered ns's tests IN that ns, so runtime name
@@ -168,10 +301,10 @@
          (let [old-ns *ns*]
            (in-ns (ns-name s))
            (doseq [t bs]
-             (set! *report-counters* (update *report-counters* :test inc))
+             (set! *legacy-report-counters* (update *legacy-report-counters* :test inc))
              (test-var* t))
            (in-ns (ns-name old-ns)))))))
-  (let [c *report-counters*]
+  (let [c *legacy-report-counters*]
     (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
     (set! *test-result* (and (= 0 (:fail c)) (= 0 (:error c))))))
 
@@ -190,7 +323,7 @@
    run's tally or clear its failure flag."
   [v]
   (let [old-ns *ns*]
-    (binding [*report-counters* {:test 1 :pass 0 :fail 0 :error 0}
+    (binding [*legacy-report-counters* {:test 1 :pass 0 :fail 0 :error 0}
               *test-result* true
               *testing-contexts* []]
       (in-ns (ns-name (or (:ns (meta v)) *ns*)))
@@ -198,7 +331,7 @@
         ((join-fixtures *once-fixtures*) (fn [] (test-var* v)))
         (finally
           (in-ns (ns-name old-ns))))
-      (let [c *report-counters*]
+      (let [c *legacy-report-counters*]
         (println "Finished running test. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
         c))))
 
@@ -208,8 +341,7 @@
   [name]
   `(run-test-var (var ~name)))
 
-(defn testing-contexts-str []
-  (str (apply str (interpose " > " *testing-contexts*))))
+;; testing-contexts-str is defined above (spec 10.3); reused here unchanged.
 
 (defmacro testing [description & body]
   `(do
@@ -218,7 +350,6 @@
      (let [ret# (do ~@body)]
        (set! *testing-contexts* (pop *testing-contexts*))
        ret#)))
-
 
 (defn apply-template
   [argv expr values]
