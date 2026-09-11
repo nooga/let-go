@@ -128,8 +128,7 @@ func letgoDepMeta(info *runtimeDebug.BuildInfo) (version, commit string) {
 }
 
 // wasmModuleName is the module name of the throwaway Go module the WASM build
-// scaffolds around its generated sources. It is passed to the module scaffolder
-// rather than baked in, because the AOT native path shares that code.
+// scaffolds around its generated sources.
 const wasmModuleName = "lg-wasm-app"
 
 // tinyGoStackSizeRe matches a tinygo -stack-size value (a byte count or a

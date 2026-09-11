@@ -52,8 +52,7 @@ type CoreLoadOptions struct {
 //     (ns …) form under a frame with no ExecContext, so in-ns falls through to
 //     CurrentNS.SetRoot and mutates the global root; unrestored, a caller that
 //     returns straight to user code (BootCore) would deref a *ns* left pointing
-//     at whichever chunk ran last. loadPrecompiledBundle alone could do without
-//     it, because api.NewContext re-establishes *ns* before user code.
+//     at whichever chunk ran last.
 //   - the eager hybrid loop iterates unit.NSOrder (dependency order), not the
 //     NSChunks map, so replay order is deterministic, and calls
 //     ReapplyGeneratedPrimitives after each chunk — the chunk's bootstrap defs
