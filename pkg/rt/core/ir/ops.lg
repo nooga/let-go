@@ -30,7 +30,7 @@
   ;; typeinfer facet: result type for this inst (mirrors infer-one's arm).
   (op-infer [this inst f state]))
 
-;; --- shared type rules (moved from typeinfer.lg's infer-one arms) ------
+;; --- shared type rules, consumed by the op-infer facets below ----------
 
 (defn- ref-types [inst f state]
   (map (fn [r] (lat/state-type state r)) (ir/refs inst f)))

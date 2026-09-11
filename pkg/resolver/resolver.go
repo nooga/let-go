@@ -286,7 +286,7 @@ func (r *NSResolver) execPrecompiled(name string, chunk *vm.CodeChunk) (*vm.Name
 		// Wrap with vm.ExecutionError, not fmt.Errorf: FormatError walks the
 		// cause chain by concrete type (GetCause), so a %w-wrapped
 		// ExecutionError/ThrownError from RunProtected would render as one
-		// flat line — losing the source snippet and stack this PR restores.
+		// flat line, losing the source snippet and the stack.
 		return nil, vm.NewExecutionError(
 			fmt.Sprintf("failed to load precompiled namespace %s", name)).Wrap(err)
 	}
