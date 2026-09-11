@@ -4,15 +4,29 @@
   (:require
    [clojure.string :as str]))
 
-(defn- split-lines
-  "clojure.string/split-lines isn't in this runtime's string namespace;
-   splitting on \\n is sufficient for our line-oriented scan."
+(defn split-lines
+  "clojure.string/split-lines isn't in this runtime's string namespace, and
+   this runtime's `split` splits on a literal regex match without
+   clojure.string/split-lines's own trailing-empty-drop rule, so both are
+   reimplemented here: split on \\r?\\n (so a CRLF fixture yields bodies
+   with no stray \\r), then drop a single trailing \"\" produced by a
+   final newline — an interior blank line is a real empty element and is
+   kept."
   [s]
-  (str/split s #"\n"))
+  (let [parts (str/split s #"\r?\n")]
+    (if (and (seq parts) (= "" (last parts)))
+      (butlast parts)
+      parts)))
 
 (def marker-re #"\[R-([a-z0-9-]+)\]")
 (def fence-open-re #"^```([a-z-]+) @R-([a-z0-9-]+)((?: [a-z]+=[^ ]+)*)\s*$")
 (def table-comment-re #"^<!-- evidence: @R-([a-z0-9-]+)(?: ([a-z-]+))? -->\s*$")
+;; Loose prefixes for lines that were clearly meant to open an evidence
+;; fence/table but fail the strict grammar above (bad attrs, missing `=`,
+;; a doubled space, ...). Anything matching one of these but not the
+;; strict form is a lint error, not silent prose.
+(def fence-loose-re #"^```[a-z-]* @R-")
+(def table-loose-re #"^<!-- evidence:")
 
 (defn- parse-attrs
   "\"a=b c=d\" -> {\"a\" \"b\" \"c\" \"d\"}. This runtime's `split` has no
@@ -32,9 +46,12 @@
 
 (defn- table-rows
   "Rows of a pipe table starting at index i (the header line). Returns
-   [rows next-index]. Header and separator are skipped. Row vectors carry
-   3 or 4 strings depending on whether the table has the optional `expect`
-   column."
+   [rows next-index]. Header and separator are skipped unvalidated —
+   their cell text and column count are never checked against the data
+   rows, so a header typo doesn't block a scan. Columns are positional:
+   cell 0 is `form`, cell 1 `value`, cell 2 `out`, and an optional cell 3
+   is `expect` (\"fail\" marks the case expected-to-fail). Row vectors
+   carry 3 or 4 strings depending on whether the table has that column."
   [lines i]
   (loop [j (+ i 2) rows []]
     (let [l (get lines j)]
@@ -46,32 +63,43 @@
 (defn scan [text]
   (let [lines (split-lines text)
         n (count lines)]
-    (loop [i 0 markers #{} blocks [] in-fence nil]
+    (loop [i 0 markers #{} blocks [] in-fence nil perrors []]
       (if (>= i n)
-        (let [evidence (set (map :slug blocks))
-              errors (concat
-                       (map #(str "marker R-" % " has no evidence") (sort (remove evidence markers)))
-                       (map #(str "evidence @R-" % " has no marker") (sort (remove markers evidence))))]
-          {:markers markers :blocks blocks :errors (vec errors)})
+        (let [perrors (if in-fence
+                        (conj perrors (str "unterminated fence @R-" (:slug in-fence)
+                                           " opened at line " (:line in-fence)))
+                        perrors)
+              evidence (set (map :slug blocks))
+              pairing-errors (concat
+                               (map #(str "marker R-" % " has no evidence") (sort (remove evidence markers)))
+                               (map #(str "evidence @R-" % " has no marker") (sort (remove markers evidence))))]
+          {:markers markers :blocks blocks :errors (vec (concat perrors pairing-errors))})
         (let [l (nth lines i)]
           (cond
             in-fence
             (if (= "```" (str/trim l))
               (recur (inc i) markers
                      (conj blocks (-> in-fence (assoc :body (:acc in-fence)) (dissoc :acc)))
-                     nil)
-              (recur (inc i) markers blocks (update in-fence :acc str l "\n")))
+                     nil perrors)
+              (recur (inc i) markers blocks (update in-fence :acc str l "\n") perrors))
 
             :else
             (if-let [[_ type slug attrs] (re-matches fence-open-re l)]
               (recur (inc i) markers blocks
-                     {:slug slug :type type :attrs (parse-attrs attrs) :line (inc i) :acc ""})
-              (if-let [[_ slug type] (re-matches table-comment-re l)]
-                (let [[rows next] (table-rows lines (inc i))]
-                  (recur next markers
-                         (conj blocks {:slug slug :type (or type "clj-table") :attrs {}
-                                       :line (inc i) :rows rows})
-                         nil))
-                (recur (inc i)
-                       (into markers (map second (re-seq marker-re l)))
-                       blocks nil)))))))))
+                     {:slug slug :type type :attrs (parse-attrs attrs) :line (inc i) :acc ""}
+                     perrors)
+              (if (re-find fence-loose-re l)
+                (recur (inc i) markers blocks nil
+                       (conj perrors (str "malformed evidence opener at line " (inc i) ": " l)))
+                (if-let [[_ slug type] (re-matches table-comment-re l)]
+                  (let [[rows next] (table-rows lines (inc i))]
+                    (recur next markers
+                           (conj blocks {:slug slug :type (or type "clj-table") :attrs {}
+                                         :line (inc i) :rows rows})
+                           nil perrors))
+                  (if (re-find table-loose-re l)
+                    (recur (inc i) markers blocks nil
+                           (conj perrors (str "malformed evidence opener at line " (inc i) ": " l)))
+                    (recur (inc i)
+                           (into markers (map second (re-seq marker-re l)))
+                           blocks nil perrors)))))))))))

@@ -31,3 +31,27 @@
 (deftest reports-pairing-errors
   (let [r (p/scan "Orphan marker. [R-lonely]\n\n```clj-repl @R-ghost\n1\n;=> 1\n```\n")]
     (is (= ["marker R-lonely has no evidence" "evidence @R-ghost has no marker"] (:errors r)))))
+
+(deftest basic-fixture-has-no-errors
+  (is (empty? (:errors scanned))))
+
+(def malformed (p/scan (slurp "fixtures/spec-evidence/malformed.md")))
+
+(deftest reports-malformed-evidence-openers
+  (is (= ["malformed evidence opener at line 4: ```clj-repl @R-double-space  oracle=none"
+          "malformed evidence opener at line 9: ```clj-repl @R-missing-eq oracle"]
+         (:errors malformed))))
+
+(deftest malformed-openers-not-scanned-as-markers
+  (is (empty? (:markers malformed)))
+  (is (empty? (:blocks malformed))))
+
+(deftest reports-unterminated-fence
+  (let [r (p/scan "```clj-repl @R-x\n1\n;=> 1\n")]
+    (is (= ["unterminated fence @R-x opened at line 1"] (:errors r)))
+    (is (empty? (:blocks r)))))
+
+(deftest split-lines-strips-crlf-and-drops-trailing-newline-only
+  (is (= ["a" "b" "c"] (vec (p/split-lines "a\r\nb\r\nc\r\n"))))
+  (is (= ["a" "b" "c"] (vec (p/split-lines "a\nb\nc\n"))))
+  (is (= ["a" "" "b"] (vec (p/split-lines "a\n\nb\n")))))
