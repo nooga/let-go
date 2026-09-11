@@ -1,0 +1,88 @@
+(ns quality.forms
+  "Top-level form segmentation for .lg text with line positions and nesting
+   depth. Pure. The reader gives no positions on this branch, so we find
+   form boundaries ourselves and read each slice separately."
+  (:require
+   [clojure.string :as str]))
+
+(defn lines [text]
+  (let [ls (vec (str/split text #"\r?\n"))]
+    (if (and (seq ls) (= "" (last ls))) (vec (butlast ls)) ls)))
+
+(def ^:private openers #{\( \[ \{})
+(def ^:private closers #{\) \] \}})
+(def ^:private ws-chars #{\space \tab \return \formfeed})
+
+(defn segments
+  "Walk characters tracking depth, strings, comments, and char literals.
+   A top-level form starts at depth 0 on any non-whitespace char and ends
+   when depth returns to 0."
+  [text]
+  (loop [cs (seq text) line 1 depth 0 mode :code
+         start nil maxd 0 acc [] out []]
+    (if (empty? cs)
+      (if start (conj out {:start start :end line :depth maxd :text (apply str acc)}) out)
+      (let [c (first cs) nl? (= c \newline)]
+        (case mode
+          :comment (recur (rest cs) (if nl? (inc line) line) depth (if nl? :code :comment) start maxd (if start (conj acc c) acc) out)
+          :string  (cond
+                     (= c \\) (recur (nnext cs) line depth :string start maxd (into acc [c (second cs)]) out)
+                     (= c \") (recur (rest cs) line depth :code start maxd (conj acc c) out)
+                     :else    (recur (rest cs) (if nl? (inc line) line) depth :string start maxd (conj acc c) out))
+          :char    (recur (rest cs) line depth :code start maxd (conj acc c) out)
+          :code
+          (cond
+            (= c \;) (recur (rest cs) line depth :comment start maxd (if start (conj acc c) acc) out)
+            (= c \") (recur (rest cs) line depth :string (or start line) maxd (conj acc c) out)
+            (= c \\) (recur (rest cs) line depth :char (or start line) maxd (conj acc c) out)
+            (openers c)
+            (let [d (inc depth)]
+              (recur (rest cs) line d :code (or start line) (max maxd d) (conj acc c) out))
+            (closers c)
+            (let [d (dec depth) acc (conj acc c)]
+              (if (zero? d)
+                (recur (rest cs) line 0 :code nil 0 [] (conj out {:start start :end line :depth maxd :text (apply str acc)}))
+                (recur (rest cs) line d :code start maxd acc out)))
+            nl?
+            (if (and start (zero? depth))
+              (recur (rest cs) (inc line) 0 :code nil 0 [] (conj out {:start start :end line :depth maxd :text (apply str acc)}))
+              (recur (rest cs) (inc line) depth :code start maxd (if start (conj acc c) acc) out))
+            (ws-chars c)
+            (if (and start (zero? depth))
+              (recur (rest cs) line 0 :code nil 0 [] (conj out {:start start :end line :depth maxd :text (apply str acc)}))
+              (recur (rest cs) line depth :code start maxd (if start (conj acc c) acc) out))
+            :else
+            (recur (rest cs) line depth :code (or start line) maxd (conj acc c) out)))))))
+
+(defn- void-form? [v]
+  ;; #_(...) reads as a single VOID sentinel in the forms vector rather
+  ;; than being omitted entirely (read-all-string appends whatever the
+  ;; reader returns, VOID included). Detect it by class name since no
+  ;; void? predicate is exposed to .lg.
+  (= "VOID" (str (class v))))
+
+(defn read-segment [seg]
+  (try (let [forms (read-all-string (:text seg))]
+         (when (= 1 (count forms))
+           (let [form (first forms)]
+             (when-not (void-form? form) form))))
+       (catch Throwable _ nil)))
+
+(def ^:private def-heads #{'defn 'defn- 'defmacro 'defmethod 'deftest 'def})
+
+(defn definitions [text]
+  (vec (keep (fn [seg]
+               (let [form (read-segment seg)]
+                 (when (and (seq? form) (def-heads (first form)) (symbol? (second form)))
+                   {:name (second form) :kind (keyword (name (first form)))
+                    :line (:start seg) :end (:end seg) :depth (:depth seg) :form form})))
+             (segments text))))
+
+(defn counts [text]
+  (reduce (fn [m l]
+            (let [t (str/trim l)]
+              (cond (= "" t) (update m :blank inc)
+                    (str/starts-with? t ";") (update m :comment inc)
+                    :else (update m :loc inc))))
+          {:loc 0 :comment 0 :blank 0}
+          (lines text)))

@@ -1,0 +1,17 @@
+;; leading comment
+(ns fixture.forms)
+
+(defn shallow [x]
+  ;; inner comment
+  (+ x 1))
+
+(defn deep [x]
+  (if (pos? x)
+    (let [y (* x 2)]
+      (when (> y 3)
+        (str "s;not-a-comment" \( y)))
+    x))
+
+#_(defn discarded [] 1)
+
+(def answer 42)
