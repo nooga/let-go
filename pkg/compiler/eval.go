@@ -84,6 +84,40 @@ func ReadString(s string) (vm.Value, error) {
 	return reader.ReadSkipNoValue()
 }
 
+// ReadDataString reads the first form of s with data semantics (see
+// NewLispDataReader). ReadAllDataString reads every top-level form the same
+// way; EOF at a form boundary stops cleanly, EOF mid-form is an error.
+func ReadDataString(s string) (vm.Value, error) {
+	reader := NewLispDataReader(strings.NewReader(s), "<read-string>")
+	return reader.ReadSkipNoValue()
+}
+
+func ReadAllDataString(s string) ([]vm.Value, error) {
+	reader := NewLispDataReader(strings.NewReader(s), "<read-all-string>")
+	forms := []vm.Value{}
+	for {
+		// Same boundary handling as read-all-string: clean EOF at a form
+		// boundary ends the read; EOF mid-form is an error.
+		_, err := reader.eatWhitespace()
+		if err != nil {
+			if errors.IsCausedBy(err, io.EOF) {
+				return forms, nil
+			}
+			return nil, err
+		}
+		if err := reader.unread(); err != nil {
+			return nil, err
+		}
+		form, err := reader.Read()
+		if err != nil {
+			return nil, err
+		}
+		if form.Type() != vm.VoidType {
+			forms = append(forms, form)
+		}
+	}
+}
+
 func evalInit() {
 	tStart := time.Now()
 
@@ -218,6 +252,35 @@ func postCoreInit() {
 	coreNS := rt.NS(rt.NameCoreNS)
 	rsVar := coreNS.LookupOrAdd(vm.Symbol("read-string"))
 	rsVar.(*vm.Var).SetRoot(readStringFn)
+
+	// read-data-string / read-all-data-string: Clojure data-reading semantics
+	// for clojure.edn (metadata attached, real sets, discards splice nothing).
+	readDataStringFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("read-data-string: wrong number of arguments %d (expected 1)", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("read-data-string: expected String, got %T", vs[0])
+		}
+		return ReadDataString(string(s))
+	})
+	coreNS.LookupOrAdd(vm.Symbol("read-data-string")).(*vm.Var).SetRoot(readDataStringFn)
+	readAllDataStringFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("read-all-data-string: wrong number of arguments %d (expected 1)", len(vs))
+		}
+		s, ok := vs[0].(vm.String)
+		if !ok {
+			return vm.NIL, fmt.Errorf("read-all-data-string: expected String, got %T", vs[0])
+		}
+		forms, err := ReadAllDataString(string(s))
+		if err != nil {
+			return vm.NIL, err
+		}
+		return vm.NewPersistentVector(forms), nil
+	})
+	coreNS.LookupOrAdd(vm.Symbol("read-all-data-string")).(*vm.Var).SetRoot(readAllDataStringFn)
 
 	// read-all-string: parse every top-level form from a string,
 	// return as a vector. Useful for scripts that walk source
