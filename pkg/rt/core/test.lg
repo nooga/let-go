@@ -128,36 +128,119 @@
 ;;; ---- Old shim state (Tasks 10-13 replace what uses these) ----------------
 
 (def ^:dynamic *test-result* true)
-(def ^:dynamic *registered-tests* {})
 (def ^:dynamic *each-fixtures* [])
 (def ^:dynamic *once-fixtures* [])
 
-(defn clear-registered-tests! []
-  (set! *registered-tests* {}))
+(defn clear-registered-tests!
+  "No-op. There is no test registry any more (spec 7): a test is any var
+   with a fn under its :test metadata. Kept only so the Go harness
+   (test/language_test.go, test/zz_compat_test.go, test/zz_bench_test.go),
+   which still calls this between runs, keeps compiling; Task 14 migrates
+   the harness off it."
+  [])
 
-(defn register-test! [v]
-  (let [n *ns*
-        xs (get *registered-tests* n [])]
-    ;; Register each var once. Re-evaluating a deftest — sending it to the
-    ;; REPL again after an edit — hands us the same var, and appending it
-    ;; a second time would make run-tests run and count that test twice.
-    (when-not (some (fn [x] (= x v)) xs)
-      (set! *registered-tests* (assoc *registered-tests* n (conj xs v))))))
+;;; ---- Running one var (spec 9.1) ---------------------------------------
 
-(defmacro deftest [name & body]
-  `(do
-     (def ~name (fn []
-                  (set! *testing-vars* (conj *testing-vars* '~name))
-                  (let [ret# (do ~@body)]
-                    (set! *testing-vars* (pop *testing-vars*))
-                    ret#)))
-     ;; The same keys Clojure puts on a test var, attached at evaluation
-     ;; time so :ns is the namespace the test was defined in. run-test-var
-     ;; reads :ns to run a single test inside its own namespace, and :test
-     ;; holds the test fn itself — as in clojure.test, where the runner
-     ;; invokes (:test (meta v)).
-     (alter-meta! (var ~name) assoc :ns *ns* :name '~name :test ~name)
-     (register-test! (var ~name))))
+;; Defined ahead of deftest et al (spec 7 below), which reference test-var
+;; inside their own syntax-quote templates: this dialect's syntax-quote
+;; only namespace-qualifies a symbol it can already resolve at the point
+;; the enclosing form is read, so a forward reference here would splice a
+;; bare, unqualified `test-var` into every macroexpansion — resolvable
+;; only in a caller that happens to `(:require [test :refer :all])`, and a
+;; "Can't resolve test-var in this context" compile error in any caller
+;; that requires test some other way (e.g. `[clojure.test :as t]`).
+
+(defn test-var*
+  "Run one test var, as clojure.test's test-var does: emits :begin-test-var,
+   counts it, runs the fn under its :test metadata (catching any escaping
+   throw as an :error rather than letting it propagate), then emits
+   :end-test-var. A var with no :test metadata is not a test — returns nil
+   without reporting anything."
+  [v]
+  (when-let [t (:test (meta v))]
+    (binding [*testing-vars* (conj *testing-vars* v)]
+      (do-report {:type :begin-test-var :var v})
+      (inc-report-counter :test)
+      (try (t)
+           (catch Throwable e
+             (do-report {:type :error
+                         :message "Uncaught exception, not in assertion."
+                         :expected nil :actual e})))
+      (do-report {:type :end-test-var :var v}))))
+
+(def ^:dynamic test-var test-var*)
+
+;;; ---- Defining tests (spec 7) -----------------------------------------
+
+;; def's metadata-map form (`(def ^{:k v} name val)`) takes its map as a
+;; literal constant — the compiler reads it straight off the form (see
+;; compiler.go's defCompiler) rather than evaluating it, so a :test entry
+;; built there would hold an unevaluated `(fn [] ...)` list, not a callable
+;; fn. So deftest defines the var first, then attaches :test via
+;; alter-meta!, whose argument position is evaluated normally.
+
+;; The last namespace a test-defining form ran in — set by deftest,
+;; deftest-, with-test and set-test as they run, read by run-tests' no-arg
+;; form (spec 9.2) as its default namespace.
+;;
+;; Real Clojure's zero-arg (run-tests) just reads *ns*. It is unreliable
+;; here: the Go test harness (test/language_test.go) compiles a file, then
+;; compiles the separate driver string "(run-tests)" via
+;; compiler.NewCompiler(consts, rt.NS("test")) — whose constructor resets
+;; the *ns* Var's root to the `test` namespace itself before that string
+;; even runs, out from under the file whose tests it means to run (`all-ns`
+;; over every namespace ever loaded in the process was tried and rejected:
+;; with 200+ corpus files sharing one runtime, it re-runs every earlier
+;; file's tests on every later file's (run-tests) call). *default-test-ns*
+;; is not a var registry — it holds only the single most-recently-active
+;; test-defining namespace — so it survives that reset and still points at
+;; the right namespace when run-tests actually executes.
+(def ^:dynamic *default-test-ns* nil)
+
+(defmacro deftest
+  "Defines a test function with no arguments. Test functions may call other
+   tests, so tests may be composed. The var's :test metadata holds the body;
+   calling the var runs it through test-var with reporting."
+  [name & body]
+  (when *load-tests*
+    `(do (def ~name (fn [] (test-var (var ~name))))
+         (alter-meta! (var ~name) assoc :test (fn [] ~@body))
+         (set! *default-test-ns* *ns*))))
+
+(defmacro deftest-
+  "Like deftest but creates a private var."
+  [name & body]
+  (when *load-tests*
+    ;; :private has to ride on the def's own literal meta-map argument
+    ;; (matching defn-'s def-meta-name path) rather than going through
+    ;; alter-meta! afterward: def is the only place that mirrors :private
+    ;; into the var's actual isPrivate flag (see rt.ApplyVarMeta), which is
+    ;; what ns-publics/ns-interns actually check — plain alter-meta! only
+    ;; touches the meta map, which isPrivate does not read back from. Built
+    ;; with `list`, not literal syntax-quote, so the `with-meta` head stays
+    ;; the bare unqualified symbol the def compiler pattern-matches on
+    ;; (syntax-quote would otherwise resolve it to a qualified symbol).
+    `(do (def ~(list 'with-meta name {:private true})
+           (fn [] (test-var (var ~name))))
+         (alter-meta! (var ~name) assoc :test (fn [] ~@body))
+         (set! *default-test-ns* *ns*))))
+
+(defmacro with-test
+  "Takes any definition form (that returns a Var) as the first argument.
+   Remaining body goes in the :test metadata function for that Var."
+  [definition & body]
+  (if *load-tests*
+    `(doto ~definition
+       (alter-meta! assoc :test (fn [] ~@body))
+       ((fn [_#] (set! *default-test-ns* *ns*))))
+    definition))
+
+(defmacro set-test
+  "Sets the :test metadata of the named var to a fn with the given body."
+  [name & body]
+  (when *load-tests*
+    `(do (alter-meta! (var ~name) assoc :test (fn [] ~@body))
+         (set! *default-test-ns* *ns*))))
 
 ;;; ---- Assertions (spec 6) --------------------------------------------------
 
@@ -267,22 +350,26 @@
   [fs]
   (reduce compose-fixtures default-fixture fs))
 
-(defn- test-var*
-  "Run one test var inside *each-fixtures*, counting a thrown body as an
-   :error instead of letting it escape. Shared by run-tests and
-   run-test-var so a single-var run and a whole-suite run cannot drift.
-   Runs the fn in the var's :test metadata, as clojure.test does, and
-   falls back to the var's value for a plain fn var."
-  [tv]
-  (set! *testing-contexts* [])
-  (try
-    (let [test-fn (or (:test (meta tv)) (deref tv))]
-      ((join-fixtures *each-fixtures*) (fn [] (test-fn))))
-    (catch e
-      (set! *testing-contexts* [])
-      (inc-report-counter :error)
-      (set! *test-result* false)
-      (println "ERROR in test:" e))))
+(defn- ns-test-vars
+  "Every var in ns with a fn under :test metadata — a test, per spec 7.
+   Replaces the old *registered-tests* registry: there is nothing to
+   register, membership is just the metadata. Order is unspecified, as in
+   Clojure."
+  [ns]
+  (filter (comp :test meta) (vals (ns-interns ns))))
+
+(defn- run-test-var-body
+  "run-test-var's per-var execution (Task 13 replaces this bridge layer).
+   Unlike test-var, this falls back to the var's own value when it has no
+   :test metadata — preserving the pre-Task-12 test-var*'s support for a
+   plain (def probe (fn [] ...)) that is meant to fail or throw on
+   purpose, run manually through run-test-var without joining the
+   automatic run-tests scan (which only ever sees vars with :test meta
+   anyway). *each-fixtures* wraps here, not inside test-var itself — real
+   clojure.test applies fixtures at the runner layer, so test-var stays
+   exactly spec 9.1."
+  [v]
+  ((join-fixtures *each-fixtures*) (fn [] ((or (:test (meta v)) (deref v))))))
 
 (defn run-tests [& nss]
   (binding [*report-counters* (ref *initial-report-counters*)]
@@ -294,33 +381,31 @@
          (doseq [s nss]
            (let [old-ns *ns*]
              (in-ns s)
-             (doseq [t (get *registered-tests* *ns* [])]
-               (inc-report-counter :test)
-               (test-var* t))
-             (in-ns (symbol (name old-ns)))))
-         ;; Run every registered ns's tests IN that ns, so runtime name
-         ;; resolution inside a test (resolve, *ns*, aliases) matches the ns
-         ;; the test was defined in — not whatever ns run-tests was called from.
-         ;; Keys are namespace objects, so derive the name via ns-name.
-         (doseq [[s bs] *registered-tests*]
-           (let [old-ns *ns*]
-             (in-ns (ns-name s))
-             (doseq [t bs]
-               (inc-report-counter :test)
-               (test-var* t))
-             (in-ns (ns-name old-ns)))))))
+             (doseq [v (ns-test-vars *ns*)]
+               ((join-fixtures *each-fixtures*) (fn [] (test-var v))))
+             (in-ns (ns-name old-ns))))
+         ;; No namespaces given: run the tests in the current namespace — or,
+         ;; if that has drifted out from under us (see *default-test-ns*'s
+         ;; docstring above), the last namespace a test was actually defined
+         ;; in.
+         (let [target (or *default-test-ns* *ns*)
+               old-ns *ns*]
+           (in-ns (ns-name target))
+           (doseq [v (ns-test-vars target)]
+             ((join-fixtures *each-fixtures*) (fn [] (test-var v))))
+           (in-ns (ns-name old-ns))))))
     (let [c @*report-counters*]
       (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
       (set! *test-result* (successful? c)))))
 
 (defn run-test-var
   "Run a single test var and return the report counters
-   ({:test :pass :fail :error}). The var runs through the same
-   *once-fixtures* / *each-fixtures* composition as run-tests, and inside
-   the namespace it was defined in (:ns of its metadata, which deftest
-   attaches), so one test behaves the way the whole suite does. A thrown
-   test body counts as an :error rather than escaping. This is what editors
-   call to run the test under the cursor; see also the run-test macro.
+   ({:test :pass :fail :error}). The var runs through *once-fixtures* and
+   *each-fixtures*, and inside the namespace it was defined in (:ns of its
+   metadata, which def attaches — Task 5), so one test behaves the way the
+   whole suite does. A thrown test body counts as an :error rather than
+   escaping. This is what editors call to run the test under the cursor;
+   see also the run-test macro.
 
    The counters are bound, not set, for the duration of the run — as
    clojure.test does — so running one test from inside another test, or
@@ -328,12 +413,22 @@
    run's tally or clear its failure flag."
   [v]
   (let [old-ns *ns*]
-    (binding [*report-counters* (ref (assoc *initial-report-counters* :test 1))
+    (binding [*report-counters* (ref *initial-report-counters*)
               *test-result* true
               *testing-contexts* []]
       (in-ns (ns-name (or (:ns (meta v)) *ns*)))
       (try
-        ((join-fixtures *once-fixtures*) (fn [] (test-var* v)))
+        (binding [*testing-vars* (conj *testing-vars* v)]
+          ((join-fixtures *once-fixtures*)
+           (fn []
+             (do-report {:type :begin-test-var :var v})
+             (inc-report-counter :test)
+             (try (run-test-var-body v)
+                  (catch Throwable e
+                    (do-report {:type :error
+                                :message "Uncaught exception, not in assertion."
+                                :expected nil :actual e})))
+             (do-report {:type :end-test-var :var v}))))
         (finally
           (in-ns (ns-name old-ns))))
       (let [c @*report-counters*]

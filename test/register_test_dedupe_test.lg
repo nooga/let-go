@@ -1,42 +1,31 @@
 ;; Regression test for duplicate test registration.
 ;;
-;; register-test! is called by every deftest evaluation. Re-evaluating a
-;; deftest — the editor flow, where you tweak a test and send it to the
-;; REPL again — used to append the same var to *registered-tests* a second
-;; time, so a later run-tests ran and counted that one test twice.
+;; There is no test registry any more (Task 12): a test is any var with a
+;; fn under its :test metadata, and deftest just def's the var then
+;; alter-meta!'s :test onto it. Re-evaluating a deftest — the editor flow,
+;; where you tweak a test and send it to the REPL again — replaces the
+;; var's :test fn in place via alter-meta! (a single map entry, not a
+;; list), so the var still carries exactly one :test fn, and the bridged
+;; run-tests still counts it once.
 ;;
-;; Harness note: the registry assertions run inside a binding of
-;; *registered-tests* rather than calling clear-registered-tests!, which
-;; would wipe the registry the enclosing TestRunner is iterating over.
+;; The probe deftest lives in its own scratch namespace so that calling
+;; the bridged run-tests on it, from inside this file's own deftest, does
+;; not also re-run whichever test is currently executing.
 
-(ns test.register-test-dedupe-test
-  (:require [test :refer :all]))
+(in-ns 'test.register-test-dedupe-probe-ns)
+(clojure.core/require '[test :refer :all])
+(deftest probe (is true))
+(deftest probe (is true))
+(deftest probe (is true))
 
-(def probe-one (fn [] :one))
-(def probe-two (fn [] :two))
+(in-ns 'test.register-test-dedupe-test)
+(clojure.core/require '[test :refer :all])
 
-(defn- registered-count [f]
-  (binding [test/*registered-tests* {}]
-    (f)
-    (count (get test/*registered-tests* *ns* []))))
+(deftest re-evaluating-a-deftest-leaves-one-test-fn
+  (is (fn? (:test (meta (resolve 'test.register-test-dedupe-probe-ns/probe))))))
 
-(deftest re-registering-the-same-var-is-a-no-op
-  (let [n (registered-count (fn []
-                              (register-test! (var probe-one))
-                              (register-test! (var probe-one))
-                              (register-test! (var probe-one))))]
-    (is (= 1 n))))
-
-(deftest distinct-vars-still-register-separately
-  (let [n (registered-count (fn []
-                              (register-test! (var probe-one))
-                              (register-test! (var probe-two))))]
-    (is (= 2 n))))
-
-(deftest registration-order-is-preserved
-  (let [vs (binding [test/*registered-tests* {}]
-             (register-test! (var probe-one))
-             (register-test! (var probe-two))
-             (register-test! (var probe-one))
-             (get test/*registered-tests* *ns* []))]
-    (is (= [(var probe-one) (var probe-two)] vs))))
+(deftest run-tests-counts-a-reevaluated-test-once
+  (let [events (atom [])]
+    (binding [report (fn [m] (swap! events conj m))]
+      (run-tests 'test.register-test-dedupe-probe-ns))
+    (is (= 1 (count (filter #(= :begin-test-var (:type %)) @events))))))
