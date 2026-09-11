@@ -1,7 +1,9 @@
 # scripts/spec-vocabs/clj-test.vocab -- deftest blocks run through clojure.test.
-# The block is emitted verbatim; the generator splices the namespaces it
-# declared into (defn spec-evidence-namespaces [] '[...]) ahead of it and the
-# epilogue runs clojure.test over them.
-boot (require '[clojure.test :as spec-t])
+# The runner opens its OWN namespace: the block is emitted verbatim and may
+# leave the reader inside whatever (ns ...) it declared last, so the epilogue
+# has to hop back with in-ns before spec-t/run-tests and
+# spec-evidence-namespaces can resolve.
+boot (ns spec-evidence.runner (:require [clojure.test :as spec-t]))
 block => {form}
+epilogue (in-ns 'spec-evidence.runner)
 epilogue (let [s (apply spec-t/run-tests (spec-evidence-namespaces))] (println (if (spec-t/successful? s) (str "ok " "{id}") (str "FAIL " "{id}" " want successful got " (pr-str s)))) (System/exit (if (spec-t/successful? s) 0 1)))

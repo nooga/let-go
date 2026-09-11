@@ -92,11 +92,24 @@
             (recur (rest toks) (ltrim (subs s (count t))) caps)))))))
 
 (defn- fill
-  "Substitute {name} placeholders. `pairs` is an ordered seq of [name value]
-   so substitution order is deterministic."
-  [template pairs]
-  (reduce (fn [s pair] (str/replace s (str "{" (first pair) "}") (str (second pair))))
-          template pairs))
+  "Substitute {name} placeholders from `caps` in ONE pass: the template is
+   scanned left to right and substituted text is never re-scanned, so a form
+   that itself contains `{expect}` (e.g. `(contains? #{expect} :a)`) survives
+   verbatim. Sequential str/replace calls could not do this."
+  [template caps]
+  (loop [s template out ""]
+    (let [i (core/index-of s "{")]
+      (if (or (nil? i) (neg? i))
+        (str out s)
+        (let [j (core/index-of (subs s i) "}")]
+          (if (or (nil? j) (neg? j))
+            (str out s)
+            (let [nm (subs s (inc i) (+ i j))
+                  head (str out (subs s 0 i))
+                  tail (subs s (+ i j 1))]
+              (if (contains? caps nm)
+                (recur tail (str head (get caps nm)))
+                (recur tail (str head "{" nm "}"))))))))))
 
 ;; ------------------------------------------------- tangled text -> statements
 
@@ -147,9 +160,9 @@
         emit (fn [cases cur]
                (if cur
                  (conj cases (fill (:template form-rule)
-                                   [["id" (str slug "#" (:n cur))]
-                                    ["form" (:form cur)]
-                                    ["expect" (expect-text (:expect cur) attrs)]]))
+                                   {"id" (str slug "#" (:n cur))
+                                    "form" (:form cur)
+                                    "expect" (expect-text (:expect cur) attrs)}))
                  cases))]
     (loop [stmts stmts n 0 cur nil cases []]
       (if (empty? stmts)
@@ -158,7 +171,7 @@
           (if (:form s)
             (recur (rest stmts) (inc n) {:n (inc n) :form (:form s) :expect []} (emit cases cur))
             (let [entry (some (fn [r] (when-let [caps (match-pattern (:pattern r) (:line s))]
-                                        (fill (:template r) (seq caps))))
+                                        (fill (:template r) caps)))
                               exp-rules)]
               (recur (rest stmts) n (if (and cur entry) (update cur :expect conj entry) cur) cases))))))))
 
@@ -201,10 +214,13 @@
          body (cond
                 (= type "clj-repl") (repl-cases (statements tangled) slug (:rules v) attrs)
                 (= type "clj-table") (repl-cases (statements (table->repl-text tangled)) slug (:rules v) attrs)
+                ;; The namespaces fn is emitted in the runner's own ns (right
+                ;; after boot) and the block follows verbatim; the epilogue
+                ;; hops back with in-ns.
                 (= type "clj-test") [(str "(defn spec-evidence-namespaces [] '" (pr-str (test-namespaces tangled)) ")")
                                      tangled]
                 :else (throw (ex-info (str "unknown evidence type " type) {:type type})))
-         epilogue (map #(fill % [["id" (str slug "#1")]]) (:epilogue v))]
+         epilogue (map #(fill % {"id" (str slug "#1")}) (:epilogue v))]
      (str (str/join "\n" (:boot v)) "\n\n"
           (str/join "\n" body) "\n\n"
           (str/join "\n" epilogue) "\n"))))
