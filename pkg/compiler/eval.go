@@ -284,8 +284,12 @@ func postCoreInit() {
 	lsVar := coreNS.LookupOrAdd(vm.Symbol("load-string"))
 	lsVar.(*vm.Var).SetRoot(loadStringFn)
 
-	// eval: compile and evaluate a single already-read form in the current namespace.
-	evalFn, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
+	// eval: compile and evaluate a single already-read form in the current
+	// namespace. The compiled form runs in the CALLER's execution context, so
+	// dynamic bindings active around eval (with-out-str, binding) and the
+	// caller's structured-concurrency scope apply to the evaluated code, as
+	// thread bindings do around Clojure's eval.
+	evalFn := vm.NewCtxNativeFn("eval", func(ec *vm.ExecContext, vs []vm.Value) (vm.Value, error) {
 		if len(vs) != 1 {
 			return vm.NIL, nil
 		}
@@ -301,7 +305,7 @@ func postCoreInit() {
 		}
 		c.chunk.SetMaxStack(c.spMax)
 		c.emit(vm.OP_RETURN)
-		f := vm.NewFrame(c.chunk, nil)
+		f := vm.NewFrameIn(c.chunk, nil, ec)
 		out, err := f.RunProtected()
 		vm.ReleaseFrame(f)
 		if err != nil {
