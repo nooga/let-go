@@ -1,0 +1,10 @@
+(ns test.file-var-test
+  (:require
+   [clojure.string :as str]
+   [test :refer :all]))
+
+(def captured-at-load *file*)
+
+(deftest file-is-bound-during-load
+  (is (string? captured-at-load))
+  (is (str/ends-with? captured-at-load "file_var_test.lg")))

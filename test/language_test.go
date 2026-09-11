@@ -29,19 +29,21 @@ func runFile(filename string) error {
 	}
 	ctx := compiler.NewCompiler(consts, ns)
 	ctx.SetSource(filename)
-	f, err := os.Open(filename)
-	if err != nil {
-		return err
-	}
-	_, _, err = ctx.CompileMultiple(f)
-	errc := f.Close()
-	if err != nil {
-		return err
-	}
-	if errc != nil {
-		return errc
-	}
-	return nil
+	return rt.WithFile(filename, func() error {
+		f, err := os.Open(filename)
+		if err != nil {
+			return err
+		}
+		_, _, err = ctx.CompileMultiple(f)
+		errc := f.Close()
+		if err != nil {
+			return err
+		}
+		if errc != nil {
+			return errc
+		}
+		return nil
+	})
 }
 
 func TestRunner(t *testing.T) {

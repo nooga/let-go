@@ -1101,6 +1101,9 @@
 ;; the duration of one expander invocation. defmacro exposes it as &form.
 (def ^:dynamic *macro-form* nil)
 
+;; Path of the file being loaded, or "NO_SOURCE_PATH" at the REPL (spec 4.3).
+(def ^:dynamic *file* "NO_SOURCE_PATH")
+
 (defmacro defmacro [name & forms]
   (let [doc   (if (string? (first forms)) (first forms) nil)
         forms (if (string? (first forms)) (next forms) forms)

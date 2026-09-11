@@ -100,19 +100,21 @@ func printResult(value vm.Value) error {
 
 func runFile(ctx *compiler.Context, filename string) error {
 	ctx.SetSource(filename)
-	f, err := os.Open(filename)
-	if err != nil {
-		return err
-	}
-	_, _, err = ctx.CompileMultiple(f)
-	errc := f.Close()
-	if err != nil {
-		return err
-	}
-	if errc != nil {
-		return errc
-	}
-	return nil
+	return rt.WithFile(filename, func() error {
+		f, err := os.Open(filename)
+		if err != nil {
+			return err
+		}
+		_, _, err = ctx.CompileMultiple(f)
+		errc := f.Close()
+		if err != nil {
+			return err
+		}
+		if errc != nil {
+			return errc
+		}
+		return nil
+	})
 }
 
 func runLGB(filename string) error {
@@ -269,13 +271,17 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 
 func compileLG(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, dst string) error {
 	ctx.SetSource(src)
-	f, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	chunk, _, err := ctx.CompileMultiple(f)
-	f.Close()
-	if err != nil {
+	var chunk *vm.CodeChunk
+	if err := rt.WithFile(src, func() error {
+		f, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		var cerr error
+		chunk, _, cerr = ctx.CompileMultiple(f)
+		f.Close()
+		return cerr
+	}); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
