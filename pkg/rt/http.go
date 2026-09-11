@@ -92,6 +92,10 @@ func clientForConnectTimeout(d time.Duration) *http.Client {
 	return actual.(*http.Client)
 }
 
+// errRequestScope is the cause recorded on a request context whose request
+// deadline expired, so a transport error can be attributed to that scope.
+var errRequestScope = errors.New("http request scope expired")
+
 // timeoutError names the scope that fired so callers can classify it.
 type timeoutError struct {
 	scope string
@@ -102,9 +106,16 @@ func (e *timeoutError) Error() string {
 	return fmt.Sprintf("http %s timeout after %s", e.scope, e.after)
 }
 
-func describeTimeout(err error, t requestTimeouts, connectOnly bool) error {
+// describeTimeout names the timeout scope behind a transport error.
+// requestFired reports whether the request deadline itself expired. It is
+// checked first: a dial still running when that deadline passes also fails
+// as a dial timeout, but the scope that fired is the request's.
+func describeTimeout(err error, t requestTimeouts, requestFired bool) error {
 	if err == nil {
 		return nil
+	}
+	if requestFired && t.request > 0 {
+		return &timeoutError{"request", t.request}
 	}
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() && t.connect > 0 {
@@ -112,9 +123,6 @@ func describeTimeout(err error, t requestTimeouts, connectOnly bool) error {
 		if errors.As(err, &opErr) && opErr.Op == "dial" {
 			return &timeoutError{"connect", t.connect}
 		}
-	}
-	if errors.Is(err, context.DeadlineExceeded) && t.request > 0 && !connectOnly {
-		return &timeoutError{"request", t.request}
 	}
 	return err
 }
@@ -134,15 +142,20 @@ func (c *cancelOnClose) Close() error {
 // gapReader enforces the stream timeouts on a streamed body. The wait for
 // the first chunk is the request scope (a model may process a long prompt
 // before its first token); every later Read must complete within the
-// stream_read gap. When a scope fires the request context is cancelled and
-// the read fails with the scope's name.
+// stream_read gap. When a deadline expires the request context is cancelled
+// and the read fails with that scope's name and duration.
+//
+// An expiry belongs to the read whose timer fired. A read that still returns
+// data as its deadline passes delivers that data; a clean end of stream is
+// never reported as a timeout; and a later read that fails because of that
+// cancellation reports the timeout that actually fired.
 type gapReader struct {
 	body    io.ReadCloser
 	first   time.Duration // request scope for the first chunk; 0 = none
 	gap     time.Duration // stream_read scope between chunks; 0 = none
 	cancel  context.CancelFunc
-	fired   atomic.Bool
 	started bool
+	expired atomic.Pointer[timeoutError] // the timeout whose timer cancelled the request
 }
 
 func (g *gapReader) Read(p []byte) (int, error) {
@@ -150,19 +163,28 @@ func (g *gapReader) Read(p []byte) (int, error) {
 	if !g.started {
 		scope, limit = "request", g.first
 	}
+	fired := &timeoutError{scope, limit}
 	var timer *time.Timer
 	if limit > 0 {
-		timer = time.AfterFunc(limit, func() { g.fired.Store(true); g.cancel() })
+		timer = time.AfterFunc(limit, func() {
+			g.expired.CompareAndSwap(nil, fired)
+			g.cancel()
+		})
 	}
 	n, err := g.body.Read(p)
-	if timer != nil {
-		timer.Stop()
-	}
+	firedHere := timer != nil && !timer.Stop()
 	if n > 0 {
 		g.started = true
 	}
-	if err != nil && g.fired.Load() {
-		return n, &timeoutError{scope, limit}
+	switch {
+	case err == nil || errors.Is(err, io.EOF):
+		return n, err
+	case firedHere:
+		return n, fired
+	case errors.Is(err, context.Canceled):
+		if expired := g.expired.Load(); expired != nil {
+			return n, expired
+		}
 	}
 	return n, err
 }
@@ -514,7 +536,7 @@ func installHttpNS() {
 		ctx := ec.Context()
 		var cancel context.CancelFunc
 		if timeouts.request > 0 && !asStream {
-			ctx, cancel = context.WithTimeout(ctx, timeouts.request)
+			ctx, cancel = context.WithTimeoutCause(ctx, timeouts.request, errRequestScope)
 		} else {
 			ctx, cancel = context.WithCancel(ctx)
 		}
@@ -555,7 +577,7 @@ func installHttpNS() {
 			if headersTimedOut.Load() {
 				return vm.NIL, &timeoutError{"request", timeouts.request}
 			}
-			return vm.NIL, describeTimeout(err, timeouts, false)
+			return vm.NIL, describeTimeout(err, timeouts, context.Cause(ctx) == errRequestScope)
 		}
 		if asStream {
 			body := io.ReadCloser(resp.Body)
@@ -570,7 +592,7 @@ func installHttpNS() {
 		defer cancel()
 		result, err := buildResponseMap(resp, false)
 		if err != nil {
-			return vm.NIL, describeTimeout(err, timeouts, false)
+			return vm.NIL, describeTimeout(err, timeouts, context.Cause(ctx) == errRequestScope)
 		}
 		return result, nil
 	})
