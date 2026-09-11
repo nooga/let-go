@@ -8,13 +8,170 @@
 package rt
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/nooga/let-go/pkg/vm"
 )
+
+// requestTimeouts are the three client timeout scopes an http/request may
+// carry under :timeout — {:connect s :request s :stream_read s} (seconds,
+// numbers) or a bare number meaning :request — plus the older :timeout_ms
+// (request scope, milliseconds). Zero means "not set".
+type requestTimeouts struct {
+	connect    time.Duration
+	request    time.Duration
+	streamRead time.Duration
+}
+
+func secondsValue(v vm.Value) time.Duration {
+	switch n := v.(type) {
+	case vm.Int:
+		return time.Duration(float64(n) * float64(time.Second))
+	case vm.Float:
+		return time.Duration(float64(n) * float64(time.Second))
+	default:
+		return 0
+	}
+}
+
+func timeoutsFromOpts(opts vm.Lookup) requestTimeouts {
+	var t requestTimeouts
+	if ms := opts.ValueAt(vm.Keyword("timeout_ms")); ms != vm.NIL {
+		if n, ok := ms.(vm.Int); ok && n > 0 {
+			t.request = time.Duration(int64(n)) * time.Millisecond
+		}
+	}
+	tv := opts.ValueAt(vm.Keyword("timeout"))
+	if tv == vm.NIL {
+		return t
+	}
+	if d := secondsValue(tv); d > 0 {
+		t.request = d
+		return t
+	}
+	if l, ok := tv.(vm.Lookup); ok {
+		if d := secondsValue(l.ValueAt(vm.Keyword("connect"))); d > 0 {
+			t.connect = d
+		}
+		if d := secondsValue(l.ValueAt(vm.Keyword("request"))); d > 0 {
+			t.request = d
+		}
+		if d := secondsValue(l.ValueAt(vm.Keyword("stream_read"))); d > 0 {
+			t.streamRead = d
+		}
+	}
+	return t
+}
+
+// transportsByConnectTimeout keeps one pooled transport per connect timeout
+// so requests still reuse connections.
+var transportsByConnectTimeout sync.Map
+
+func clientForConnectTimeout(d time.Duration) *http.Client {
+	if d <= 0 {
+		return http.DefaultClient
+	}
+	if c, ok := transportsByConnectTimeout.Load(d); ok {
+		return c.(*http.Client)
+	}
+	base, _ := http.DefaultTransport.(*http.Transport)
+	tr := base.Clone()
+	dialer := &net.Dialer{Timeout: d, KeepAlive: 30 * time.Second}
+	tr.DialContext = dialer.DialContext
+	c := &http.Client{Transport: tr}
+	actual, _ := transportsByConnectTimeout.LoadOrStore(d, c)
+	return actual.(*http.Client)
+}
+
+// timeoutError names the scope that fired so callers can classify it.
+type timeoutError struct {
+	scope string
+	after time.Duration
+}
+
+func (e *timeoutError) Error() string {
+	return fmt.Sprintf("http %s timeout after %s", e.scope, e.after)
+}
+
+func describeTimeout(err error, t requestTimeouts, connectOnly bool) error {
+	if err == nil {
+		return nil
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() && t.connect > 0 {
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
+			return &timeoutError{"connect", t.connect}
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) && t.request > 0 && !connectOnly {
+		return &timeoutError{"request", t.request}
+	}
+	return err
+}
+
+// cancelOnClose releases the request context when a streamed body closes.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
+}
+
+// gapReader enforces the stream timeouts on a streamed body. The wait for
+// the first chunk is the request scope (a model may process a long prompt
+// before its first token); every later Read must complete within the
+// stream_read gap. When a scope fires the request context is cancelled and
+// the read fails with the scope's name.
+type gapReader struct {
+	body    io.ReadCloser
+	first   time.Duration // request scope for the first chunk; 0 = none
+	gap     time.Duration // stream_read scope between chunks; 0 = none
+	cancel  context.CancelFunc
+	fired   atomic.Bool
+	started bool
+}
+
+func (g *gapReader) Read(p []byte) (int, error) {
+	scope, limit := "stream_read", g.gap
+	if !g.started {
+		scope, limit = "request", g.first
+	}
+	var timer *time.Timer
+	if limit > 0 {
+		timer = time.AfterFunc(limit, func() { g.fired.Store(true); g.cancel() })
+	}
+	n, err := g.body.Read(p)
+	if timer != nil {
+		timer.Stop()
+	}
+	if n > 0 {
+		g.started = true
+	}
+	if err != nil && g.fired.Load() {
+		return n, &timeoutError{scope, limit}
+	}
+	return n, err
+}
+
+func (g *gapReader) Close() error {
+	err := g.body.Close()
+	g.cancel()
+	return err
+}
 
 // rawString extracts a raw Go string from a Value without quoting.
 func rawString(v vm.Value) string {
@@ -352,8 +509,18 @@ func installHttpNS() {
 				bodyReader = strings.NewReader(b.String())
 			}
 		}
-		req, err := http.NewRequestWithContext(ec.Context(), method, reqURL, bodyReader)
+		timeouts := timeoutsFromOpts(opts)
+		asStream := isStreamOpt(vs[0])
+		ctx := ec.Context()
+		var cancel context.CancelFunc
+		if timeouts.request > 0 && !asStream {
+			ctx, cancel = context.WithTimeout(ctx, timeouts.request)
+		} else {
+			ctx, cancel = context.WithCancel(ctx)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 		if err != nil {
+			cancel()
 			return vm.NIL, err
 		}
 		hdrs := opts.ValueAt(vm.Keyword("headers"))
@@ -372,11 +539,40 @@ func installHttpNS() {
 				}
 			}
 		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return vm.NIL, err
+		// A streamed request applies :request to reaching the headers only;
+		// the body is governed by :stream_read gaps and scope cancellation.
+		var headerTimer *time.Timer
+		var headersTimedOut atomic.Bool
+		if asStream && timeouts.request > 0 {
+			headerTimer = time.AfterFunc(timeouts.request, func() { headersTimedOut.Store(true); cancel() })
 		}
-		return buildResponseMap(resp, isStreamOpt(vs[0]))
+		resp, err := clientForConnectTimeout(timeouts.connect).Do(req)
+		if headerTimer != nil {
+			headerTimer.Stop()
+		}
+		if err != nil {
+			cancel()
+			if headersTimedOut.Load() {
+				return vm.NIL, &timeoutError{"request", timeouts.request}
+			}
+			return vm.NIL, describeTimeout(err, timeouts, false)
+		}
+		if asStream {
+			body := io.ReadCloser(resp.Body)
+			if timeouts.streamRead > 0 || timeouts.request > 0 {
+				body = &gapReader{body: resp.Body, first: timeouts.request, gap: timeouts.streamRead, cancel: cancel}
+			} else {
+				body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+			}
+			resp.Body = body
+			return buildResponseMap(resp, true)
+		}
+		defer cancel()
+		result, err := buildResponseMap(resp, false)
+		if err != nil {
+			return vm.NIL, describeTimeout(err, timeouts, false)
+		}
+		return result, nil
 	})
 
 	ns := vm.NewNamespace("http")
