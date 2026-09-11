@@ -1344,6 +1344,24 @@ func NumUncheckedSubtract(a, b Value) (Value, error) { return numUnchecked(OP_UN
 func NumUncheckedMultiply(a, b Value) (Value, error) { return numUnchecked(OP_UNCHECKED_MUL, a, b) }
 
 func numUnchecked(op int32, a, b Value) (Value, error) {
+	// Only an Int/Int pair wraps. Every other numeric type (Float, Float32,
+	// Ratio, BigInt, BigDecimal) has no int64 overflow to wrap and keeps its
+	// own arithmetic, as JVM Numbers.unchecked_* dispatch does: on the JVM
+	// (unchecked-add 1.5 2.5) is 4.0 and (unchecked-add 1/2 1/2) is 1, not 3
+	// and 0. Coercing through ToInt would silently truncate. Non-numbers still
+	// fail, through the numeric tower's own type error.
+	_, aInt := a.(Int)
+	_, bInt := b.(Int)
+	if !aInt || !bInt {
+		switch op {
+		case OP_UNCHECKED_ADD:
+			return NumAdd(a, b)
+		case OP_UNCHECKED_SUB:
+			return NumSub(a, b)
+		case OP_UNCHECKED_MUL:
+			return NumMul(a, b)
+		}
+	}
 	name := uncheckedOpName(op)
 	ai, ok := ToInt(a)
 	if !ok {
