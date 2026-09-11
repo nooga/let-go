@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"math/bits"
 	"math/rand/v2"
 	"os"
 	"reflect"
@@ -23,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 	"unsafe"
 
@@ -4678,8 +4680,69 @@ func installClojureCompatAliases(ns *vm.Namespace) {
 	doubleNS.Def("MIN_VALUE", vm.Float(4.9e-324))
 	doubleNS.Def("TYPE", vm.FloatType)
 
+	longNS.Def("bitCount", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("bitCount expects 1 arg")
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("bitCount expected integer, got %s", vs[0].Type().Name())
+		}
+		return vm.MakeInt(bits.OnesCount64(uint64(int64(a)))), nil
+	}))
+	longNS.Def("reverse", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("reverse expects 1 arg")
+		}
+		a, ok := vm.ToInt(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("reverse expected integer, got %s", vs[0].Type().Name())
+		}
+		return longCompatValue(int64(bits.Reverse64(uint64(int64(a))))), nil
+	}))
+
 	integerNS := DefNSBare("Integer")
 	integerNS.Def("TYPE", vm.IntType)
+	integerNS.Def("MAX_VALUE", vm.MakeInt(2147483647))
+	integerNS.Def("MIN_VALUE", vm.MakeInt(-2147483648))
+
+	doubleNS.Def("POSITIVE_INFINITY", vm.Float(math.Inf(1)))
+	doubleNS.Def("NEGATIVE_INFINITY", vm.Float(math.Inf(-1)))
+	doubleNS.Def("NaN", vm.Float(math.NaN()))
+	// NaN is not equal to itself, so a predicate is the only usable way to
+	// test for it; shipping Double/NaN without Double/isNaN would be a trap.
+	doubleNS.Def("isNaN", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("isNaN expects 1 arg")
+		}
+		f, ok := vm.ToFloat(vs[0])
+		if !ok {
+			return vm.NIL, fmt.Errorf("isNaN expected number, got %s", vs[0].Type().Name())
+		}
+		return vm.Boolean(math.IsNaN(float64(f))), nil
+	}))
+
+	byteNS := DefNSBare("Byte")
+	byteNS.Def("MAX_VALUE", vm.MakeInt(127))
+	byteNS.Def("MIN_VALUE", vm.MakeInt(-128))
+
+	characterNS := DefNSBare("Character")
+	characterNS.Def("isDigit", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+		if len(vs) != 1 {
+			return vm.NIL, fmt.Errorf("isDigit expects 1 arg")
+		}
+		// JVM overloads isDigit(char) and isDigit(int codePoint); the integer
+		// form is how supplementary-plane digits are classified.
+		if c, ok := vs[0].(vm.Char); ok {
+			return vm.Boolean(unicode.IsDigit(rune(c))), nil
+		}
+		if cp, ok := vm.ToInt(vs[0]); ok {
+			return vm.Boolean(unicode.IsDigit(rune(int64(cp)))), nil
+		}
+		return vm.NIL, fmt.Errorf("isDigit expected character or code point, got %s", vs[0].Type().Name())
+	}))
+
+	installMathStatics()
 
 	booleanNS := DefNSBare("Boolean")
 	booleanNS.Def("TYPE", vm.BooleanType)
