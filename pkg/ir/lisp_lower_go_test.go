@@ -2028,8 +2028,8 @@ func TestLowerGoStrictExactDTypeArgStaysConcrete(t *testing.T) {
 // c<nid>_. nid is unique only within one function IR, so two nested closure
 // templates can share a nid; a flat prefix then makes the inner closure's
 // param collide with the captured outer param it shadows — the same
-// "captured name shadowed by block param" miscompile this PR fixes, just one
-// level deeper. (Reported on PR #247.)
+// "captured name shadowed by block param" miscompile, one level deeper.
+// (Reported on PR #247.)
 func TestLowerGoNestedCapturedClosurePrefixesAreLexical(t *testing.T) {
 	ensureLoader()
 

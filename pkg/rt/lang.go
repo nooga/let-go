@@ -411,11 +411,11 @@ func init() {
 	installLangNS()
 	installNativeDirectNS()
 
-	// Generated primitives now self-register via the installer queue (see
+	// Generated primitives self-register via the installer queue (see
 	// zz_primitives_generated.go's init → RegisterInstaller), drained last by
 	// zz_run_installers.go. registerBuiltinsModule() runs there too, AFTER the
-	// drain, so builtin versions still override the generated primitives
-	// (EPIC-012 seam). Shadow-warn suppression moved into the generated
+	// drain, so builtin versions override the generated primitives (EPIC-012
+	// seam). Shadow-warn suppression lives in the generated
 	// RegisterGeneratedPrimitives body.
 	// walk namespace is embedded via coreFS and will be loaded on demand
 }

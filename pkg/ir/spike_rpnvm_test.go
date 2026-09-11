@@ -127,9 +127,8 @@ func decodeOptimizedIR(irValue vm.Value) (*spikeFn, error) {
 
 	// STORY-0059: run the pre-execution cleanup IR pass BEFORE flattening. It drops
 	// dead (DCE-tombstoned) block-params + their in-edge args, strips :pop markers,
-	// and DCE-sweeps insts orphaned by the compaction — promoting what used to be the
-	// Go-side compactDeadParams into the real ir.passes.cleanup pass. cleanup mutates
-	// the IR atom in place, so every field read below sees the cleaned form, and
+	// and DCE-sweeps insts orphaned by the compaction. cleanup mutates the IR atom
+	// in place, so every field read below sees the cleaned form, and
 	// validateLiveInvariants then holds with NO decoder-side compaction.
 	if _, err := evalExpr(fmt.Sprintf("(ir.passes.cleanup/cleanup %s)", varName)); err != nil {
 		return nil, fmt.Errorf("eval cleanup pass: %w", err)

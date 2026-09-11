@@ -12,12 +12,13 @@ import (
 	"testing"
 )
 
-// These benchmarks quantify Var.Deref — the hottest var operation. Before
-// this change every Deref took the global bindingsMu (even a var with NO
-// dynamic binding, just to check the stack was empty), so all var reads
-// across all goroutines serialized on one mutex. The Parallel variants
-// expose that contention; after making root/curr atomic, Deref is a
-// couple of atomic loads and scales.
+// These benchmarks quantify Var.Deref — the hottest var operation. A Deref is
+// at most two atomic loads (rootBind, then root on a miss) and takes no lock,
+// so root-context var reads scale across goroutines. That is what the Parallel
+// variants measure: a Deref that reached for a process-wide lock — even only to
+// check that no dynamic binding was active — would serialize every root-context
+// Deref, and a single-goroutine benchmark would not show it. Reads through a
+// child ExecContext resolve in ExecContext.deref and are not measured here.
 
 // derefSink defeats dead-code elimination: without a package-level sink the
 // compiler may elide the Deref call entirely, producing impossible sub-ns
@@ -111,8 +112,9 @@ func BenchmarkVarDerefBoundParallel(b *testing.B) {
 	})
 }
 
-// Distinct vars per worker, all dereffed concurrently — proves the old
-// contention was the GLOBAL bindingsMu, not per-var.
+// Distinct vars per worker, all dereffed concurrently. Distinct vars share no
+// per-var state, so any contention this shows is process-wide rather than
+// per-var — which is what separates it from the shared-var Parallel benchmark.
 func BenchmarkVarDerefDistinctParallel(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		v := newRootVar()

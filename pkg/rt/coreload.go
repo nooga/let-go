@@ -44,16 +44,15 @@ type CoreLoadOptions struct {
 // configured loader picks them up on (require ...). Returns the decoded unit so
 // a caller can read its const pool or chunk map.
 //
-// It folds together what were three parallel implementations (#506):
-// compiler.loadPrecompiledBundle, rt.LoadCore, and rt.BootCore. Two invariants
-// that used to live in only some of them are now unconditional here:
+// It is the one implementation behind compiler.loadPrecompiledBundle,
+// rt.LoadCore, and rt.BootCore (#506). Two invariants hold here for every
+// caller:
 //
 //   - *ns* is saved before the replay and restored after. Each chunk runs its
 //     (ns …) form under a frame with no ExecContext, so in-ns falls through to
 //     CurrentNS.SetRoot and mutates the global root; unrestored, a caller that
 //     returns straight to user code (BootCore) would deref a *ns* left pointing
-//     at whichever chunk ran last. loadPrecompiledBundle only got away without
-//     this because api.NewContext re-establishes *ns* before user code.
+//     at whichever chunk ran last.
 //   - the eager hybrid loop iterates unit.NSOrder (dependency order), not the
 //     NSChunks map, so replay order is deterministic, and calls
 //     ReapplyGeneratedPrimitives after each chunk — the chunk's bootstrap defs
