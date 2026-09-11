@@ -64,21 +64,54 @@ func ApplyVarMeta(v *vm.Var, meta vm.Value) {
 				break
 			}
 		}
+	} else {
+		v.SetMeta(meta)
+		if m, ok := meta.(interface {
+			ValueAt(vm.Value) vm.Value
+		}); ok {
+			if vm.IsTruthy(m.ValueAt(vm.Keyword("dynamic"))) {
+				v.SetDynamic()
+			}
+			if vm.IsTruthy(m.ValueAt(vm.Keyword("private"))) {
+				v.SetPrivate()
+			}
+		}
+	}
+	attachVarNSMeta(v)
+}
+
+// attachVarNSMeta assocs :ns — the namespace OBJECT, as Clojure's def
+// attaches it (spec 4.4) — onto v's metadata, derived from the Var's own
+// NSRef() rather than from the meta argument. A *vm.Namespace has no bundle
+// constant encoding (pkg/bytecode/encoder.go has no case for it), so baking
+// :ns into the compiled apply-def-meta! constant would break `make generate`
+// for every def in the AOT-compiled core bundle. Deriving it here instead
+// means both the immediate apply (compiler.go, same-process source eval) and
+// the bytecode-replayed apply-def-meta! call (fresh process decoding a
+// .lgb bundle) converge on the same identity value, since ApplyVarMeta is
+// the shared hook for both. Vars built without a namespace (some Go-side
+// unit-test fixtures) are left alone.
+func attachVarNSMeta(v *vm.Var) {
+	ns := v.NSRef()
+	if ns == nil {
 		return
 	}
-	v.SetMeta(meta)
-	m, ok := meta.(interface {
-		ValueAt(vm.Value) vm.Value
-	})
-	if !ok {
-		return
+	v.SetMeta(assocIdentityMeta(v.Meta(), vm.Keyword("ns"), ns))
+}
+
+// assocIdentityMeta mirrors compiler.assocMeta (unexported, different
+// package): assoc key/val onto meta, treating nil/NIL as an empty map.
+func assocIdentityMeta(meta vm.Value, key vm.Value, val vm.Value) vm.Value {
+	if meta == nil || meta == vm.NIL {
+		return vm.NewPersistentMap([]vm.Value{key, val})
 	}
-	if vm.IsTruthy(m.ValueAt(vm.Keyword("dynamic"))) {
-		v.SetDynamic()
+	if m, ok := meta.(*vm.PersistentMap); ok {
+		return m.Assoc(key, val).(vm.Value)
 	}
-	if vm.IsTruthy(m.ValueAt(vm.Keyword("private"))) {
-		v.SetPrivate()
+	if m, ok := meta.(vm.Map); ok {
+		return m.Assoc(key, val).(vm.Value)
 	}
+	return vm.NewPersistentMap([]vm.Value{key, val})
 }
 
 // LookupVar resolves a runtime Var by namespace and symbol name.

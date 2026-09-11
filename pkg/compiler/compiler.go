@@ -2231,6 +2231,15 @@ func defCompiler(c *Context, form vm.Value) error {
 		meta = assocMeta(meta, vm.Keyword("column"), vm.MakeInt(info.Column+1))
 		meta = assocMeta(meta, vm.Keyword("file"), vm.String(info.File))
 	}
+	// :name, as Clojure's def attaches it (spec 4.4). A vm.Symbol constant
+	// serializes fine into an AOT bundle (see pkg/bytecode/encoder.go), so it
+	// is baked here like :file/:line/:column. :ns is NOT added here: it would
+	// need a *vm.Namespace bundle constant, which the encoder has no case
+	// for, so it is attached at runtime instead — see rt.ApplyVarMeta, which
+	// derives it from the Var's own NSRef() and therefore covers both the
+	// immediate apply below and the bytecode-replayed apply-def-meta! call
+	// (fresh process decoding a .lgb bundle).
+	meta = assocMeta(meta, vm.Keyword("name"), sym)
 	c.defName = sym.String()
 	varr := c.CurrentNS().LookupOrAdd(sym.(vm.Symbol))
 	if meta != vm.NIL {
