@@ -4426,6 +4426,12 @@ func installLangNS() {
 		if !ok {
 			return form, nil
 		}
+		if CoreNS != nil {
+			if mf := CoreNS.LookupLocal(vm.Symbol("*macro-form*")); mf != nil {
+				mf.PushBinding(form)
+				defer mf.PopBinding()
+			}
+		}
 		expanded, err := ec.Invoke(macroFn, args)
 		if info := vm.FormSource.Get(form); err == nil && info != nil {
 			vm.FormSource.Set(expanded, *info)

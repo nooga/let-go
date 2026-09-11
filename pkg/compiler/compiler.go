@@ -17,6 +17,31 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+// invokeMacro runs a macro expander with core/*macro-form* bound to the
+// call form, which defmacro exposes as &form. The binding is pushed on the
+// root binding stack (package-level Var API) because the compiler has no
+// ExecContext of its own; expansion is synchronous so push/pop pair here.
+func invokeMacro(macroVar *vm.Var, callForm vm.Value, args []vm.Value) (vm.Value, error) {
+	if mf := macroFormVar(); mf != nil {
+		mf.PushBinding(callForm)
+		defer mf.PopBinding()
+	}
+	return macroVar.Deref().(vm.Fn).Invoke(args)
+}
+
+var macroFormVarCache *vm.Var
+
+func macroFormVar() *vm.Var {
+	if macroFormVarCache == nil {
+		if ns := rt.NS(rt.NameCoreNS); ns != nil {
+			if v := ns.LookupLocal(vm.Symbol("*macro-form*")); v != nil {
+				macroFormVarCache = v
+			}
+		}
+	}
+	return macroFormVarCache
+}
+
 type Context struct {
 	parent     *Context
 	consts     *vm.Consts
@@ -758,7 +783,7 @@ func (c *Context) compileForm(o vm.Value) error {
 						}
 					}
 				}
-				newform, err := fvar.(*vm.Var).Deref().(vm.Fn).Invoke(argvec)
+				newform, err := invokeMacro(fvar.(*vm.Var), o, argvec)
 				if err != nil {
 					return NewCompileError(fmt.Sprintf("Executing macro %s (%s) failed", fvar, fvar.(*vm.Var).Deref())).Wrap(err)
 				}

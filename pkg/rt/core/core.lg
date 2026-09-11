@@ -912,14 +912,14 @@
   (if (nil? (seq s))
     nil
     (loop [m {} s (seq s)]
-    (if (nil? s)
-      m
-      (if (nil? (next s))
-        (if (map? (first s))
-          (reduce conj m (seq (first s)))
-          (throw (ex-info "kwargs call has an odd number of arguments and no trailing map"
-                          {:trailing (first s)})))
-        (recur (assoc m (first s) (first (next s))) (next (next s))))))))
+      (if (nil? s)
+        m
+        (if (nil? (next s))
+          (if (map? (first s))
+            (reduce conj m (seq (first s)))
+            (throw (ex-info "kwargs call has an odd number of arguments and no trailing map"
+                            {:trailing (first s)})))
+          (recur (assoc m (first s) (first (next s))) (next (next s))))))))
 
 (defn ^:private fn-expand [bindings body]
   (let [conditions (when (and (next body) (map? (first body))) (first body))
@@ -1097,6 +1097,10 @@
             `(def ~def-name (fn ~@forms))))
       `(def ~def-name (fn ~@forms)))))
 
+;; Bound by the compiler (and macroexpand) to the whole macro call form for
+;; the duration of one expander invocation. defmacro exposes it as &form.
+(def ^:dynamic *macro-form* nil)
+
 (defmacro defmacro [name & forms]
   (let [doc   (if (string? (first forms)) (first forms) nil)
         forms (if (string? (first forms)) (next forms) forms)
@@ -1111,11 +1115,20 @@
         ;; `(var ..)` ref — `var` only accepts a Symbol.
         bare  (if (and (seq? name) (= 'with-meta (first name)))
                 (first (next name))
-                name)]
+                name)
+        wrap-body (fn [b] (cons 'let (cons [(symbol "&form") '*macro-form* (symbol "&env") nil] b)))
+        ;; `args` is a vector for a single-arity macro (`[a b] body...`), or
+        ;; the first arity-clause list for a multi-arity macro (each clause
+        ;; is `([a b] body...)`). Wrap the body of every arity in the
+        ;; &form/&env let so &form is visible regardless of which arity ran.
+        tail  (if (vector? args)
+                (list args (wrap-body body))
+                (map (fn [clause] (list (first clause) (wrap-body (next clause))))
+                     forms))]
     (list 'do
           (cons 'defn (cons name (concat (if (string? doc) (list doc) nil)
                                          (if (nil? attr) nil (list attr))
-                                         (cons args body))))
+                                         tail)))
           (list 'set-macro! (list 'var bare)))))
 
 (defmacro while [test & body]
