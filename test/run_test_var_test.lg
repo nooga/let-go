@@ -3,33 +3,41 @@
 ;; (clj-pulse resolves clojure.test/run-test-var, which aliases here).
 ;;
 ;; The point of run-test-var over `((deref v))` is that it goes through the
-;; same *once-fixtures* / *each-fixtures* composition and the same
-;; namespace switch as run-tests, so one test behaves the way the whole
-;; suite does — while binding the counters so it never disturbs the run it
-;; was called from.
+;; same once/each fixture composition and the same namespace switch as
+;; run-tests, so one test behaves the way the whole suite does — while
+;; binding the counters so it never disturbs the run it was called from.
 ;;
 ;; Harness note: this file's own tests run under the shared TestRunner,
-;; which asserts *test-result* after (run-tests). The probes that must fail
-;; or throw are therefore plain (def name (fn [] ...)) vars rather than
-;; deftests — a registered one would be run by the harness itself.
+;; which asserts *test-result* after (run-tests). Task 13's test-vars only
+;; runs a var carrying :test metadata (spec 9.2/9.3), so a probe that must
+;; fail or throw on purpose now needs :test metadata too, attached via
+;; set-test rather than deftest so its underlying var value stays a plain
+;; placeholder. That metadata would make test-all-vars pick the probe up
+;; on the file's own (run-tests) scan, so this file defines a test-ns-hook
+;; (spec 9.3) that explicitly runs only the real tests below, bypassing
+;; the automatic scan entirely.
 
 (ns test.run-test-var-test
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 ;; --- probes -----------------------------------------------------------
 
 (deftest sample-passing
   (is (= 1 1)))
 
-(def sample-failing (fn [] (is (= 1 2))))
+(def sample-failing nil)
+(set-test sample-failing (is (= 1 2)))
 
-(def sample-throwing (fn [] (throw (ex-info "boom" {}))))
+(def sample-throwing nil)
+(set-test sample-throwing (throw (ex-info "boom" {})))
 
 ;; Namespace probe: its metadata says it lives in `string`, so run-test-var
 ;; must in-ns there before invoking it and come back afterwards.
 (def observed-ns (atom nil))
 
-(def foreign-probe (fn [] (reset! observed-ns (ns-name *ns*))))
+(def foreign-probe nil)
+(set-test foreign-probe (reset! observed-ns (ns-name *ns*)))
 (alter-meta! (var foreign-probe) assoc :ns (find-ns 'string))
 
 (def fixture-events (atom []))
@@ -41,13 +49,18 @@
     (swap! fixture-events conj after)))
 
 (defn- with-fixtures
-  "Run thunk f with the given :each / :once fixtures installed. Fixtures
-   are global state, so bind them rather than calling use-fixtures —
-   otherwise they leak into every test file that runs after this one."
+  "Run thunk f with the given :each / :once fixtures installed on this
+   namespace via use-fixtures (spec 8), resetting them to empty afterward
+   so they don't leak into any test that runs after this one — fixtures
+   now live on namespace metadata rather than being global dynamic state."
   [each once f]
-  (binding [test/*each-fixtures* each
-            test/*once-fixtures* once]
-    (f)))
+  (try
+    (apply use-fixtures :each each)
+    (apply use-fixtures :once once)
+    (f)
+    (finally
+      (use-fixtures :each)
+      (use-fixtures :once))))
 
 ;; --- counters ---------------------------------------------------------
 
@@ -125,3 +138,18 @@
   (let [via-macro (run-test sample-passing)
         via-fn (run-test-var (var sample-passing))]
     (is (= via-fn via-macro))))
+
+;; --- test-ns-hook: run only the real tests above, never the probes ----
+
+(defn test-ns-hook []
+  (doseq [t [(var sample-passing)
+             (var run-test-var-counts-a-passing-test)
+             (var run-test-var-counts-a-failing-assertion)
+             (var run-test-var-counts-a-throwing-test)
+             (var a-nested-run-leaves-the-enclosing-run-untouched)
+             (var run-test-var-applies-once-and-each-fixtures)
+             (var run-test-var-runs-in-the-vars-namespace)
+             (var run-test-var-restores-the-namespace-after-a-throw)
+             (var deftest-records-clojure-test-var-metadata)
+             (var run-test-macro-matches-run-test-var)]]
+    (test-var t)))

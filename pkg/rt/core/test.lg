@@ -127,9 +127,8 @@
 
 ;;; ---- Old shim state (Tasks 10-13 replace what uses these) ----------------
 
+;; BRIDGE: removed in Task 14
 (def ^:dynamic *test-result* true)
-(def ^:dynamic *each-fixtures* [])
-(def ^:dynamic *once-fixtures* [])
 
 (defn clear-registered-tests!
   "No-op. There is no test registry any more (spec 7): a test is any var
@@ -137,6 +136,7 @@
    (test/language_test.go, test/zz_compat_test.go, test/zz_bench_test.go),
    which still calls this between runs, keeps compiling; Task 14 migrates
    the harness off it."
+  ;; BRIDGE: removed in Task 14
   [])
 
 ;;; ---- Running one var (spec 9.1) ---------------------------------------
@@ -195,6 +195,7 @@
 ;; is not a var registry — it holds only the single most-recently-active
 ;; test-defining namespace — so it survives that reset and still points at
 ;; the right namespace when run-tests actually executes.
+;; BRIDGE: removed in Task 14
 (def ^:dynamic *default-test-ns* nil)
 
 (defmacro deftest
@@ -335,113 +336,6 @@
   ([form] `(is ~form nil))
   ([form msg] `(try-expr ~msg ~form)))
 
-(defn compose-fixtures
-  "Compose two fixture fns into one that wraps f around g around the test fn."
-  [f g]
-  (fn [t] (f (fn [] (g t)))))
-
-(defn default-fixture
-  "Fixture that adds nothing: it just calls the test fn."
-  [t]
-  (t))
-
-(defn join-fixtures
-  "Compose a collection of fixture fns into a single fixture fn."
-  [fs]
-  (reduce compose-fixtures default-fixture fs))
-
-(defn- ns-test-vars
-  "Every var in ns with a fn under :test metadata — a test, per spec 7.
-   Replaces the old *registered-tests* registry: there is nothing to
-   register, membership is just the metadata. Order is unspecified, as in
-   Clojure."
-  [ns]
-  (filter (comp :test meta) (vals (ns-interns ns))))
-
-(defn- run-test-var-body
-  "run-test-var's per-var execution (Task 13 replaces this bridge layer).
-   Unlike test-var, this falls back to the var's own value when it has no
-   :test metadata — preserving the pre-Task-12 test-var*'s support for a
-   plain (def probe (fn [] ...)) that is meant to fail or throw on
-   purpose, run manually through run-test-var without joining the
-   automatic run-tests scan (which only ever sees vars with :test meta
-   anyway). *each-fixtures* wraps here, not inside test-var itself — real
-   clojure.test applies fixtures at the runner layer, so test-var stays
-   exactly spec 9.1."
-  [v]
-  ((join-fixtures *each-fixtures*) (fn [] ((or (:test (meta v)) (deref v))))))
-
-(defn run-tests [& nss]
-  (binding [*report-counters* (ref *initial-report-counters*)]
-    (set! *test-result* true)
-    (println "Running tests...")
-    ((join-fixtures *once-fixtures*)
-     (fn []
-       (if (seq nss)
-         (doseq [s nss]
-           (let [old-ns *ns*]
-             (in-ns s)
-             (doseq [v (ns-test-vars *ns*)]
-               ((join-fixtures *each-fixtures*) (fn [] (test-var v))))
-             (in-ns (ns-name old-ns))))
-         ;; No namespaces given: run the tests in the current namespace — or,
-         ;; if that has drifted out from under us (see *default-test-ns*'s
-         ;; docstring above), the last namespace a test was actually defined
-         ;; in.
-         (let [target (or *default-test-ns* *ns*)
-               old-ns *ns*]
-           (in-ns (ns-name target))
-           (doseq [v (ns-test-vars target)]
-             ((join-fixtures *each-fixtures*) (fn [] (test-var v))))
-           (in-ns (ns-name old-ns))))))
-    (let [c @*report-counters*]
-      (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
-      (set! *test-result* (successful? c)))))
-
-(defn run-test-var
-  "Run a single test var and return the report counters
-   ({:test :pass :fail :error}). The var runs through *once-fixtures* and
-   *each-fixtures*, and inside the namespace it was defined in (:ns of its
-   metadata, which def attaches — Task 5), so one test behaves the way the
-   whole suite does. A thrown test body counts as an :error rather than
-   escaping. This is what editors call to run the test under the cursor;
-   see also the run-test macro.
-
-   The counters are bound, not set, for the duration of the run — as
-   clojure.test does — so running one test from inside another test, or
-   from a REPL in the middle of a suite, cannot overwrite the enclosing
-   run's tally or clear its failure flag."
-  [v]
-  (let [old-ns *ns*]
-    (binding [*report-counters* (ref *initial-report-counters*)
-              *test-result* true
-              *testing-contexts* []]
-      (in-ns (ns-name (or (:ns (meta v)) *ns*)))
-      (try
-        (binding [*testing-vars* (conj *testing-vars* v)]
-          ((join-fixtures *once-fixtures*)
-           (fn []
-             (do-report {:type :begin-test-var :var v})
-             (inc-report-counter :test)
-             (try (run-test-var-body v)
-                  (catch Throwable e
-                    (do-report {:type :error
-                                :message "Uncaught exception, not in assertion."
-                                :expected nil :actual e})))
-             (do-report {:type :end-test-var :var v}))))
-        (finally
-          (in-ns (ns-name old-ns))))
-      (let [c @*report-counters*]
-        (println "Finished running test. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
-        (set! *test-result* (successful? c))
-        c))))
-
-(defmacro run-test
-  "Run the named test and return its report counters:
-   (run-test my-test). Sugar for (run-test-var (var my-test))."
-  [name]
-  `(run-test-var (var ~name)))
-
 ;;; ---- testing / are (spec 6.5, 6.6) ----------------------------------------
 
 (defmacro testing [string & body]
@@ -467,11 +361,135 @@
                     {:type :illegal-argument
                      :class 'java.lang.IllegalArgumentException}))))
 
-; simple fixtures API (global per session)
-(defn use-fixtures [phase & fs]
-  (cond
-    (= phase :each) (set! *each-fixtures* fs)
-    (= phase :once) (set! *once-fixtures* fs)
-    :else nil))
+;;; ---- Fixtures (spec 8) ---------------------------------------------------
+
+(defmulti use-fixtures
+  "Wrap test runs in a fixture function to perform setup and teardown.
+   Fixtures are stored on the namespace's metadata (:test/each-fixtures,
+   :test/once-fixtures); a second call with the same type replaces the first."
+  (fn [fixture-type & args] fixture-type))
+
+(defmethod use-fixtures :each [fixture-type & args]
+  (alter-meta! *ns* assoc ::each-fixtures args))
+
+(defmethod use-fixtures :once [fixture-type & args]
+  (alter-meta! *ns* assoc ::once-fixtures args))
+
+(defn default-fixture [f] (f))
+
+(defn compose-fixtures [f1 f2]
+  (fn [g] (f1 (fn [] (f2 g)))))
+
+(defn join-fixtures [fixtures]
+  (reduce compose-fixtures default-fixture fixtures))
+
+;;; ---- Running many vars (spec 9.2, 9.3) ------------------------------------
+
+(defn test-vars
+  "Groups vars by their namespace and runs test-var on them with
+   appropriate fixtures assuming that the current namespace has been
+   configured for the vars."
+  [vars]
+  (doseq [[ns vars] (group-by (comp :ns meta) vars)]
+    (let [once-fixture-fn (join-fixtures (::once-fixtures (meta ns)))
+          each-fixture-fn (join-fixtures (::each-fixtures (meta ns)))]
+      (once-fixture-fn
+        (fn []
+          (doseq [v vars]
+            (when (:test (meta v))
+              (each-fixture-fn (fn [] (test-var v))))))))))
+
+(defn test-all-vars [ns]
+  (test-vars (vals (ns-interns ns))))
+
+(defn test-ns
+  "If the namespace defines a function named test-ns-hook, calls that.
+   Otherwise, calls test-all-vars on the namespace. Returns a map of
+   counters.
+
+   Switches *ns* to the target namespace for the run and restores it
+   afterward. Real Clojure's test-ns doesn't need this — bodies there are
+   AOT-compiled, so every symbol is already resolved regardless of *ns* at
+   run time. This dialect resolves forms like `*ns*` itself, unqualified
+   macro lookups, and interop/IR-compile seams dynamically against the
+   live *ns*, so without the switch a test body observes whatever
+   namespace last happened to be current rather than its own — verified
+   against a same-corpus baseline at the pre-Task-13 commit, where this
+   switch existed in the old run-tests as an explicit in-ns/in-ns pair."
+  [ns]
+  (binding [*report-counters* (ref *initial-report-counters*)]
+    (let [ns-obj (the-ns ns)
+          old-ns *ns*]
+      (do-report {:type :begin-test-ns :ns ns-obj})
+      (in-ns (ns-name ns-obj))
+      (try
+        (let [test-hook (ns-resolve ns-obj 'test-ns-hook)]
+          (if test-hook
+            ((var-get test-hook))
+            (test-all-vars ns-obj)))
+        (finally (in-ns (ns-name old-ns))))
+      (do-report {:type :end-test-ns :ns ns-obj}))
+    @*report-counters*))
+
+;;; ---- Runners (spec 9.4) --------------------------------------------------
+
+;; BRIDGE: removed in Task 14 — the zero-arg fallback to *default-test-ns*
+;; only when the current namespace has no test vars of its own, so a real
+;; caller in a namespace full of tests is never redirected away from it.
+(defn- current-ns-has-tests? []
+  (boolean (some (comp :test meta) (vals (ns-interns *ns*)))))
+
+(defn run-tests
+  "Runs all tests in the given namespaces; prints results. Defaults to
+   current namespace if none given. Returns a map summarizing test results."
+  ([] (run-tests (if (current-ns-has-tests?) *ns* (or *default-test-ns* *ns*))))
+  ([& namespaces]
+   (let [summary (assoc (apply merge-with + (map test-ns namespaces))
+                        :type :summary)]
+     (do-report summary)
+     ;; BRIDGE: removed in Task 14
+     (set! *test-result* (successful? summary))
+     summary)))
+
+(defn run-all-tests
+  "Runs all tests in all namespaces; prints results. Optional argument is
+   a regular expression; only namespaces with names matching the regular
+   expression (with re-matches) will be tested."
+  ([] (apply run-tests (all-ns)))
+  ([re] (apply run-tests (filter #(re-matches re (name (ns-name %))) (all-ns)))))
+
+(defn run-test-var
+  "Runs a single test var, printing results. Returns a summary. Switches
+   *ns* to the var's own namespace for the run and restores it afterward
+   (see test-ns's docstring for why this dialect needs the switch)."
+  [v]
+  (let [old-ns *ns*
+        summary (binding [*report-counters* (ref *initial-report-counters*)]
+                  (let [ns-obj (-> v meta :ns)]
+                    (do-report {:type :begin-test-ns :ns ns-obj})
+                    (in-ns (ns-name ns-obj))
+                    (try
+                      (test-vars [v])
+                      (finally (in-ns (ns-name old-ns))))
+                    (do-report {:type :end-test-ns :ns ns-obj}))
+                  (assoc @*report-counters* :type :summary))]
+    (do-report summary)
+    summary))
+
+(defmacro run-test
+  "Runs a single test. Symbol should resolve to a var with :test metadata."
+  [test-symbol]
+  (let [test-var (resolve test-symbol)]
+    (cond
+      (nil? test-var)
+      (binding [*out* *err*]
+        (println "Unable to resolve" test-symbol "to a test function."))
+
+      (not (:test (meta test-var)))
+      (binding [*out* *err*]
+        (println test-symbol "is not a test."))
+
+      :else
+      `(run-test-var ~test-var))))
 
 ; basic clojure.test shim for stock tests

@@ -2,25 +2,32 @@
 ;; the clojure.test special forms that assert a body throws.
 ;;
 ;; Harness note: like run_test_var_test.lg, probes that must fail or error
-;; are plain (def name (fn [] ...)) vars run through run-test-var, which
-;; binds the counters — a registered deftest that fails would fail the
-;; whole suite.
+;; are given :test metadata via set-test (not deftest, so their underlying
+;; var stays a plain placeholder) and run through run-test-var, which
+;; binds the counters. Because :test metadata makes a var visible to
+;; test-all-vars's automatic scan (spec 9.2/9.3), this file defines a
+;; test-ns-hook (spec 9.3) that runs only the real tests below — a
+;; registered probe running via the automatic scan would fail the whole
+;; suite on purpose.
 
 (ns test.thrown-test
-  (:require [test :refer :all]))
+  (:require
+   [test :refer :all]))
 
 ;; --- probes -----------------------------------------------------------
 
-(def no-throw-probe
-  (fn [] (is (thrown? Exception :did-not-throw))))
+(def no-throw-probe nil)
+(set-test no-throw-probe (is (thrown? Exception :did-not-throw)))
 
-(def wrong-message-probe
-  (fn [] (is (thrown-with-msg? Exception #"nope" (throw (ex-info "boom" {}))))))
+(def wrong-message-probe nil)
+(set-test wrong-message-probe
+  (is (thrown-with-msg? Exception #"nope" (throw (ex-info "boom" {})))))
 
-(def non-matching-class-probe
-  ;; A thrown value not matching the class rethrows, so the runner counts
-  ;; it as an :error — matching clojure.test.
-  (fn [] (is (thrown? clojure.lang.ExceptionInfo (throw "plain string")))))
+(def non-matching-class-probe nil)
+;; A thrown value not matching the class rethrows, so the runner counts
+;; it as an :error — matching clojure.test.
+(set-test non-matching-class-probe
+  (is (thrown? clojure.lang.ExceptionInfo (throw "plain string"))))
 
 ;; --- thrown? ----------------------------------------------------------
 
@@ -60,3 +67,15 @@
 (deftest thrown-works-with-message-arity
   (is (thrown? Exception (throw (ex-info "b" {}))) "should throw")
   (is (thrown-with-msg? Exception #"b" (throw (ex-info "b" {}))) "should throw with b"))
+
+;; --- test-ns-hook: run only the real tests above, never the probes ----
+
+(defn test-ns-hook []
+  (doseq [t [(var thrown-passes-on-matching-class)
+             (var thrown-returns-the-exception)
+             (var thrown-fails-when-body-does-not-throw)
+             (var thrown-non-matching-class-is-an-error)
+             (var thrown-with-msg-passes-on-matching-message)
+             (var thrown-with-msg-fails-on-non-matching-regex)
+             (var thrown-works-with-message-arity)]]
+    (test-var t)))

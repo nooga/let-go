@@ -1,0 +1,84 @@
+(ns test.runners-test
+  (:require
+   [test :refer :all]))
+
+;; A throwaway namespace with two tests and fixtures, built at load time.
+(ns test.runners-test.subject (:require [test :refer :all]))
+(def log (atom []))
+(use-fixtures :once (fn [f] (swap! log conj :once-in) (f) (swap! log conj :once-out)))
+(use-fixtures :each (fn [f] (swap! log conj :each) (f)))
+(deftest t-pass (is (= 1 1)))
+(deftest t-fail (is (= 1 2)))
+
+(ns test.runners-test)
+
+(defn- quiet [f]
+  (binding [report (fn [m] (when (= :summary (:type m)) nil))] (f)))
+
+(deftest fixtures-are-per-namespace-metadata
+  (let [m (meta (find-ns 'test.runners-test.subject))]
+    (is (= 1 (count (:test/once-fixtures m))))
+    (is (= 1 (count (:test/each-fixtures m))))
+    (is (nil? (:test/each-fixtures (meta *ns*))))))
+
+(deftest run-tests-returns-summary-and-runs-fixtures
+  (reset! test.runners-test.subject/log [])
+  (let [summary (quiet #(run-tests 'test.runners-test.subject))]
+    (is (= {:test 2 :pass 1 :fail 1 :error 0 :type :summary} summary))
+    (is (not (successful? summary)))
+    (is (= [:once-in :each :each :once-out] @test.runners-test.subject/log))))
+
+(deftest run-tests-events-are-ordered
+  (let [events (atom [])]
+    (binding [report (fn [m] (swap! events conj (:type m)))]
+      (run-tests 'test.runners-test.subject))
+    (is (= :begin-test-ns (first @events)))
+    (is (= [:end-test-ns :summary] (take-last 2 @events)))
+    (is (= 2 (count (filter #{:begin-test-var} @events))))))
+
+(deftest run-test-var-runs-one
+  (let [summary (quiet #(run-test-var (var test.runners-test.subject/t-pass)))]
+    (is (= {:test 1 :pass 1 :fail 0 :error 0 :type :summary} summary))))
+
+(deftest run-test-macro
+  (is (= 1 (:test (quiet #(run-test test.runners-test.subject/t-pass))))))
+
+(deftest run-all-tests-filters-with-re-matches
+  (is (= 2 (:test (quiet #(run-all-tests #"test\.runners-test\.subject")))))
+  (is (= {:type :summary} (quiet #(run-all-tests #"no-such-ns-anywhere")))))
+
+;; Hoisted to top level: `ns` inside a deftest body cannot forward-resolve
+;; the namespace-qualified symbols the test then refers to (macroexpansion
+;; happens before the (ns ...) call runs), per Task 13's brief fallback.
+(ns test.runners-test.hooked (:require [test :refer :all]))
+(def hook-log (atom []))
+(use-fixtures :each (fn [f] (swap! hook-log conj :fixture) (f)))
+(deftest hooked-test (swap! hook-log conj :ran))
+(defn test-ns-hook [] (hooked-test))
+
+(ns test.runners-test)
+
+(deftest test-ns-hook-bypasses-fixtures
+  (reset! test.runners-test.hooked/hook-log [])
+  (quiet #(run-tests 'test.runners-test.hooked))
+  (is (= [:ran] @test.runners-test.hooked/hook-log)))
+
+;; The spec's whole-namespace zero-arg run cannot be exercised on
+;; test.runners-test itself: that namespace's own tests are mid-run when
+;; this one executes, so a nested (run-tests) here would discover this very
+;; test var among its interns and recurse into it forever. Per the brief's
+;; documented fallback, exercise the zero-arg default-to-current-ns
+;; behavior on a throwaway namespace switched into with in-ns instead.
+(ns test.runners-test.zeroarg (:require [test :refer :all]))
+(deftest zeroarg-t-pass (is (= 1 1)))
+
+(ns test.runners-test)
+
+(deftest run-tests-no-args-runs-current-ns
+  (let [orig-ns *ns*]
+    (binding [report (fn [_])]
+      (in-ns 'test.runners-test.zeroarg)
+      (try
+        (is (= 'test.runners-test.zeroarg (ns-name *ns*)))
+        (is (map? (run-tests)))
+        (finally (in-ns (ns-name orig-ns)))))))
