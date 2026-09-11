@@ -241,6 +241,9 @@ func installHttpNS() {
 					if sq, ok := hdrs.(vm.Sequable); ok {
 						for s := sq.Seq(); s != nil; s = s.Next() {
 							entry := s.First()
+							if entry == vm.NIL {
+								continue
+							}
 							eSeq, ok := entry.(vm.Sequable)
 							if !ok {
 								continue
@@ -295,6 +298,9 @@ func installHttpNS() {
 					if sq, ok := hdrs.(vm.Sequable); ok {
 						for s := sq.Seq(); s != nil; s = s.Next() {
 							entry := s.First()
+							if entry == vm.NIL {
+								continue
+							}
 							eSeq, ok := entry.(vm.Sequable)
 							if !ok {
 								continue
@@ -361,6 +367,9 @@ func installHttpNS() {
 			if sq, ok := hdrs.(vm.Sequable); ok {
 				for s := sq.Seq(); s != nil; s = s.Next() {
 					entry := s.First()
+					if entry == vm.NIL {
+						continue
+					}
 					eSeq, ok := entry.(vm.Sequable)
 					if !ok {
 						continue
