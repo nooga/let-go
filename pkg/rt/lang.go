@@ -3403,11 +3403,35 @@ func installLangNS() {
 		if vs[0] == vm.NIL {
 			return vm.NIL, nil
 		}
-		m, ok := vs[0].(interface{ Meta() vm.Value })
-		if !ok {
-			return vm.NIL, nil
+		var m vm.Value = vm.NIL
+		if mv, ok := vs[0].(interface{ Meta() vm.Value }); ok {
+			m = mv.Meta()
 		}
-		return m.Meta(), nil
+		// Reader-recorded position for list/cons forms (spec 4.2). Explicit
+		// metadata wins on key collision; position only fills gaps.
+		switch vs[0].(type) {
+		case *vm.List, *vm.Cons:
+			if info := vm.FormSource.Get(vs[0]); info != nil {
+				pos := vm.EmptyPersistentMap.
+					Assoc(vm.Keyword("line"), vm.MakeInt(info.Line+1)).(*vm.PersistentMap).
+					Assoc(vm.Keyword("column"), vm.MakeInt(info.Column+1)).(*vm.PersistentMap)
+				if m == vm.NIL {
+					return pos, nil
+				}
+				if pm, ok := m.(*vm.PersistentMap); ok {
+					merged := pos
+					seq := pm.Seq()
+					for seq != nil && seq != vm.EmptyList {
+						if k, v, ok := vm.MapEntryKV(seq.First()); ok {
+							merged = merged.Assoc(k, v).(*vm.PersistentMap)
+						}
+						seq = seq.Next()
+					}
+					return merged, nil
+				}
+			}
+		}
+		return m, nil
 	})
 
 	// throw
