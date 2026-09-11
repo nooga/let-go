@@ -13,7 +13,11 @@
 
 (def ^:private cond-heads #{'cond 'case 'condp})
 (def ^:private bool-heads #{'and 'or})
-(def ^:private threading-cond-heads #{'cond-> 'cond->> 'some-> 'some->>})
+;; cond->/cond->> steps come in (test expr) pairs after the initial value;
+;; every pair is a step. some->/some->> have no test, so every form after
+;; the initial value is its own step.
+(def ^:private pair-threading-heads #{'cond-> 'cond->>})
+(def ^:private single-threading-heads #{'some-> 'some->>})
 
 (defn- pair-branches
   "Number of decision branches in a sequence of case/condp test/result args:
@@ -41,7 +45,8 @@
                            (simple-branches h) 1
                            (cond-heads h) (clause-count h x)
                            (bool-heads h) (max 0 (- (count (rest x)) 1))
-                           (threading-cond-heads h) (max 0 (dec (count (nnext x))))
+                           (pair-threading-heads h) (quot (count (nnext x)) 2)
+                           (single-threading-heads h) (count (nnext x))
                            (= 'catch h) 1
                            :else 0)]
                 (+ here (reduce + 0 (map walk (rest x)))))
@@ -84,7 +89,7 @@
     {:definitions (mapv #(dissoc % :form) defs)
      :cc-max (reduce max 0 (map :cc defs))
      :cc-total cc-total
-     :mi (max 0 (min 100 mi))
+     :mi mi
      :loc (:loc cnt)
      :comment-ratio cr
      :halstead h}))
