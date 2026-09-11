@@ -5059,36 +5059,13 @@ func CoreSubP(vs ...vm.Value) (vm.Value, error) {
 	return acc, nil
 }
 
-// isInt64Value reports whether v is a fixed-width int64. The unchecked-* family
-// wraps int64 arithmetic only; every other numeric type (Float, Float32, Ratio,
-// BigInt, BigDecimal) has no int64 overflow to wrap and must keep its own
-// arithmetic. Coercing them through ToInt would silently truncate: on the JVM
-// (unchecked-add 1.5 2.5) is 4.0 and (unchecked-add 1/2 1/2) is 1, not 3 and 0.
-func isInt64Value(v vm.Value) bool {
-	_, ok := v.(vm.Int)
-	return ok
-}
-
 //lg:native
 //lg:name unchecked-add
 func CoreUncheckedAdd(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	// Only int64 pairs wrap. Anything else goes through the numeric tower so
-	// floats, ratios, bigints and bigdecimals keep their own arithmetic.
-	if !isInt64Value(vs[0]) || !isInt64Value(vs[1]) {
-		return vm.NumAdd(vs[0], vs[1])
-	}
-	a, ok := vm.ToInt(vs[0])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[0].Type().Name())
-	}
-	b, ok := vm.ToInt(vs[1])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-add expected integer, got %s", vs[1].Type().Name())
-	}
-	return vm.MakeInt(int(int64(a) + int64(b))), nil
+	return vm.NumUncheckedAdd(vs[0], vs[1])
 }
 
 //lg:native
@@ -5097,20 +5074,7 @@ func CoreUncheckedSubtract(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	// Only int64 pairs wrap. Anything else goes through the numeric tower so
-	// floats, ratios, bigints and bigdecimals keep their own arithmetic.
-	if !isInt64Value(vs[0]) || !isInt64Value(vs[1]) {
-		return vm.NumSub(vs[0], vs[1])
-	}
-	a, ok := vm.ToInt(vs[0])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[0].Type().Name())
-	}
-	b, ok := vm.ToInt(vs[1])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-subtract expected integer, got %s", vs[1].Type().Name())
-	}
-	return vm.MakeInt(int(int64(a) - int64(b))), nil
+	return vm.NumUncheckedSubtract(vs[0], vs[1])
 }
 
 //lg:native
@@ -5119,20 +5083,7 @@ func CoreUncheckedMultiply(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 2 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	// Only int64 pairs wrap. Anything else goes through the numeric tower so
-	// floats, ratios, bigints and bigdecimals keep their own arithmetic.
-	if !isInt64Value(vs[0]) || !isInt64Value(vs[1]) {
-		return vm.NumMul(vs[0], vs[1])
-	}
-	a, ok := vm.ToInt(vs[0])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[0].Type().Name())
-	}
-	b, ok := vm.ToInt(vs[1])
-	if !ok {
-		return vm.NIL, fmt.Errorf("unchecked-multiply expected integer, got %s", vs[1].Type().Name())
-	}
-	return vm.MakeInt(int(int64(a) * int64(b))), nil
+	return vm.NumUncheckedMultiply(vs[0], vs[1])
 }
 
 //lg:native
@@ -5141,7 +5092,9 @@ func CoreUncheckedNegate(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments %d", len(vs))
 	}
-	if !isInt64Value(vs[0]) {
+	// Only int64 wraps. Anything else goes through the numeric tower so
+	// floats, ratios, bigints and bigdecimals keep their own arithmetic.
+	if _, isInt := vs[0].(vm.Int); !isInt {
 		return vm.NumNeg(vs[0])
 	}
 	a, ok := vm.ToInt(vs[0])

@@ -81,3 +81,68 @@
   (testing "re-groups distinguishes unmatched and empty capture groups"
     (is (= [["b" nil]] (re-groups (re-pattern "(a)?b") "b")))
     (is (= [["b" ""]] (re-groups (re-pattern "(a*)b") "b")))))
+
+;; --- Unchecked arithmetic (OP_UNCHECKED_ADD / SUB / MUL fast path) ---
+;;
+;; The bytecode compiler emits a dedicated opcode for the binary form, so
+;; these pin the opcode's semantics against the core fn's: wrap at the
+;; platform width, never promote, reject non-integers, and stay out of the
+;; way when the name is shadowed or the arity is wrong.
+
+(deftest unchecked-add-test
+  (testing "unchecked-add wraps instead of overflowing"
+    (is (= 5 (unchecked-add 2 3)))
+    (is (= Long/MIN_VALUE (unchecked-add Long/MAX_VALUE 1)))
+    (is (= -2 (unchecked-add Long/MAX_VALUE Long/MAX_VALUE))))
+  (testing "checked + still refuses the same overflow"
+    (is (thrown? Exception (+ Long/MAX_VALUE 1)))))
+
+(deftest unchecked-subtract-test
+  (testing "unchecked-subtract wraps instead of overflowing"
+    (is (= -1 (unchecked-subtract 2 3)))
+    (is (= Long/MAX_VALUE (unchecked-subtract Long/MIN_VALUE 1))))
+  (testing "checked - still refuses the same overflow"
+    (is (thrown? Exception (- Long/MIN_VALUE 1)))))
+
+(deftest unchecked-multiply-test
+  (testing "unchecked-multiply wraps instead of overflowing"
+    (is (= 6 (unchecked-multiply 2 3)))
+    (is (= 0 (unchecked-multiply Long/MIN_VALUE 2)))
+    ;; xxh3's PRIME32_1 * PRIME32_3: a product that only fits after wrapping.
+    (is (= 5964046043053701959 (unchecked-multiply 0x9E3779B1 0x85EBCA77))))
+  (testing "checked * still refuses the same overflow"
+    (is (thrown? Exception (* Long/MAX_VALUE 2)))))
+
+(deftest unchecked-ops-coerce-like-the-core-fn-test
+  (testing "the opcode and the var agree: only Int/Int wraps, other numerics keep their own arithmetic"
+    ;; Direct binary call -> fast opcode; apply -> the core fn. Both must
+    ;; produce the same value, or the result depends on call shape. The
+    ;; values are the JVM's: Numbers.unchecked_* dispatches on the boxed
+    ;; type, so a double stays a double and a ratio stays a ratio. Only an
+    ;; int64 pair has overflow to wrap.
+    (is (= 3.5 (unchecked-add 1.5 2)))
+    (is (= 3.5 (apply unchecked-add [1.5 2])))
+    (is (= 8.7 (unchecked-multiply 2.9 3)))
+    (is (= 8.7 (apply unchecked-multiply [2.9 3])))
+    (is (= -1/2 (unchecked-subtract 1/2 1)))
+    (is (= -1/2 (apply unchecked-subtract [1/2 1]))))
+  (testing "core.lg's composed variants keep working on floats"
+    (is (= 2.5 (unchecked-inc 1.5)))
+    (is (= 0.5 (unchecked-dec 1.5))))
+  (testing "a BigInt past int64 is BigInt arithmetic, not an error, as on the JVM"
+    (is (= (bigint "18446744073709551617") (unchecked-add (bigint "18446744073709551616") 1)))
+    (is (= (bigint "18446744073709551617") (apply unchecked-add [(bigint "18446744073709551616") 1]))))
+  (testing "non-numbers are a type error on both paths"
+    (is (thrown? Exception (unchecked-add "1" 2)))
+    (is (thrown? Exception (apply unchecked-add ["1" 2])))
+    (is (thrown? Exception (unchecked-add true 2)))
+    (is (thrown? Exception (apply unchecked-add [true 2])))
+    (is (thrown? Exception (unchecked-multiply nil 2)))))
+
+(deftest unchecked-ops-stay-out-of-the-way-test
+  (testing "a local shadowing the name wins over the fast opcode"
+    (let [unchecked-add (fn [a b] :shadowed)]
+      (is (= :shadowed (unchecked-add 1 2)))))
+  (testing "wrong arity reaches the core fn's arity error"
+    (is (thrown? Exception (unchecked-add 1)))
+    (is (thrown? Exception (unchecked-multiply 1 2 3)))))

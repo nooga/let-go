@@ -212,6 +212,10 @@ explicit rules:
 - If the default binary grows to carry deps/generator machinery,
   verify the wasm build does not pay for authoring-only code unless
   the user opted into it.
+- `lg -w` resolves Go support assets such as `wasm_exec.js` from the
+  same selected Go toolchain used for the build (while honoring an
+  explicit `GOROOT`). A cached or relocated `lg` binary must not retain
+  its build-time GOROOT as a permanent runtime dependency.
 
 ## 8. Distribution UX target
 
