@@ -166,10 +166,6 @@
 
             :else nil))))))
 
-;; numeric-type? / numeric-op-type / quot-op-type / div-op-type moved to
-;; ir.ops: the reified op-types' infer facets (NumericOp/QuotOp/DivOp)
-;; consume them there.
-
 (defn- truthy-type? [t]
   (let [t (normalize-type t)]
     (cond

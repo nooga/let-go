@@ -81,8 +81,8 @@ func main() {
 		for pkg := range strings.SplitSeq(*packagesFlag, ",") {
 			// `path=alias` pins a non-default alias, mirroring deps.edn's
 			// {"path" "alias"} form — and gives the generated-by header a
-			// spelling that reproduces such a file (deps.edn used to be the
-			// only way in, so headers for aliased files did not round-trip).
+			// spelling that reproduces an aliased file, which a deps.edn-only
+			// header cannot.
 			spec := strings.TrimSpace(pkg)
 			alias := ""
 			if eq := strings.IndexByte(spec, '='); eq >= 0 {

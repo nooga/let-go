@@ -10,8 +10,9 @@ import (
 )
 
 // asBytes backs the binary file/stream sinks (spit, write!). The byte-array case
-// is the one that used to be impossible: a byte-array handed to spit/write! would
-// stringify to its #byte-array[…] repr, so bytes >127 could never be written.
+// is the one that needs it: without the coercion, a byte-array handed to
+// spit/write! stringifies to its #byte-array[…] repr, so bytes >127 never reach
+// the sink.
 func TestAsBytes(t *testing.T) {
 	// String → its bytes verbatim, including a high byte.
 	if b, ok := asBytes(vm.String("hi\xff")); !ok || string(b) != "hi\xff" {

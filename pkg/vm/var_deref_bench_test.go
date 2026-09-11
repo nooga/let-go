@@ -12,12 +12,11 @@ import (
 	"testing"
 )
 
-// These benchmarks quantify Var.Deref — the hottest var operation. Before
-// this change every Deref took the global bindingsMu (even a var with NO
-// dynamic binding, just to check the stack was empty), so all var reads
-// across all goroutines serialized on one mutex. The Parallel variants
-// expose that contention; after making root/curr atomic, Deref is a
-// couple of atomic loads and scales.
+// These benchmarks quantify Var.Deref — the hottest var operation. root and
+// curr are atomic, so a Deref is a couple of atomic loads and scales across
+// goroutines. Taking the global bindingsMu on every Deref instead (even for a
+// var with NO dynamic binding, just to check the stack was empty) serializes
+// all var reads on one mutex; the Parallel variants are what expose that.
 
 // derefSink defeats dead-code elimination: without a package-level sink the
 // compiler may elide the Deref call entirely, producing impossible sub-ns
