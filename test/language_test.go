@@ -51,7 +51,17 @@ func TestRunner(t *testing.T) {
 	// Search paths for `require`: current dir for in-tree test helpers
 	// (test/test.lg etc.), plus pkg/rt/gogen so tests can exercise the
 	// gogen macro layer.
-	rt.SetNSLoader(resolver.NewNSResolver(loaderCtx, []string{".", "../pkg/rt/gogen"}))
+	nsPath := []string{".", "../pkg/rt/gogen"}
+	// LG_SOURCE_PATHS is the documented way to point `require` at extra
+	// namespace roots (e.g. scripts/spec-evidence/*.lg), but this harness
+	// runs in-process rather than shelling out to ./lg, so the resolver
+	// never otherwise reads the env var. `go test ./test/` runs with cwd
+	// set to this package's directory (test/), one level below the repo
+	// root, so each entry is resolved relative to "..".
+	for _, p := range resolver.ParseSearchPaths(os.Getenv("LG_SOURCE_PATHS")) {
+		nsPath = append(nsPath, filepath.Join("..", p))
+	}
+	rt.SetNSLoader(resolver.NewNSResolver(loaderCtx, nsPath))
 
 	// Per-file isolation baseline: a snapshot of the (clean) dynamic-binding
 	// state taken before any test file runs. Each file is executed within this

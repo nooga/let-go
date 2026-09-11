@@ -1,0 +1,33 @@
+;; test/spec_evidence_parse_test.lg
+(ns test.spec-evidence-parse-test
+  (:require
+   [spec-evidence.parse :as p]
+   [test :refer :all]))
+
+(def scanned (p/scan (slurp "fixtures/spec-evidence/basic.md")))
+
+(deftest finds-markers
+  (is (= #{"add" "print" "rows" "fail-row" "block"} (:markers scanned))))
+
+(deftest finds-fences-with-type-attrs-and-line
+  (let [by-slug (into {} (map (juxt :slug identity) (:blocks scanned)))]
+    (is (= 5 (count (:blocks scanned))))
+    (is (= "clj-repl" (:type (by-slug "add"))))
+    (is (= 6 (:line (by-slug "add"))))
+    (is (= "(+ 1 2)\n;=> 3\n" (:body (by-slug "add"))))
+    (is (= {"oracle" "none"} (:attrs (by-slug "print"))))
+    (is (= "clj-test" (:type (by-slug "block"))))))
+
+(deftest parses-tables-into-rows
+  (let [t (first (filter #(= "rows" (:slug %)) (:blocks scanned)))]
+    (is (= "clj-table" (:type t)))
+    (is (= [["(inc 1)" "2" ""] ["(print \"a\")" "nil" "\"a\""]] (:rows t)))))
+
+(deftest parses-fourth-expect-column
+  (let [t (first (filter #(= "fail-row" (:slug %)) (:blocks scanned)))]
+    (is (= "clj-table" (:type t)))
+    (is (= [["(inc 1)" "3" "" "fail"]] (:rows t)))))
+
+(deftest reports-pairing-errors
+  (let [r (p/scan "Orphan marker. [R-lonely]\n\n```clj-repl @R-ghost\n1\n;=> 1\n```\n")]
+    (is (= ["marker R-lonely has no evidence" "evidence @R-ghost has no marker"] (:errors r)))))

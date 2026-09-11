@@ -1,0 +1,77 @@
+(ns spec-evidence.parse
+  "Scan a markdown spec for requirement markers and evidence blocks.
+   Pure: text in, records out. Grammar per docs/specs/executable-evidence.md."
+  (:require
+   [clojure.string :as str]))
+
+(defn- split-lines
+  "clojure.string/split-lines isn't in this runtime's string namespace;
+   splitting on \\n is sufficient for our line-oriented scan."
+  [s]
+  (str/split s #"\n"))
+
+(def marker-re #"\[R-([a-z0-9-]+)\]")
+(def fence-open-re #"^```([a-z-]+) @R-([a-z0-9-]+)((?: [a-z]+=[^ ]+)*)\s*$")
+(def table-comment-re #"^<!-- evidence: @R-([a-z0-9-]+)(?: ([a-z-]+))? -->\s*$")
+
+(defn- parse-attrs
+  "\"a=b c=d\" -> {\"a\" \"b\" \"c\" \"d\"}. This runtime's `split` has no
+   limit argument, so a `k=v` pair is split into [k v] by hand (the value
+   is everything after the first `=`, which is all attrs ever need)."
+  [s]
+  (into {} (map (fn [pair]
+                  (let [idx (core/index-of pair "=")]
+                    [(subs pair 0 idx) (subs pair (inc idx))]))
+                (remove str/blank? (str/split (str/trim (or s "")) #" ")))))
+
+(defn- table-cell [c]
+  (let [c (str/trim c)]
+    (if (and (str/starts-with? c "`") (str/ends-with? c "`") (> (count c) 1))
+      (subs c 1 (dec (count c)))
+      c)))
+
+(defn- table-rows
+  "Rows of a pipe table starting at index i (the header line). Returns
+   [rows next-index]. Header and separator are skipped. Row vectors carry
+   3 or 4 strings depending on whether the table has the optional `expect`
+   column."
+  [lines i]
+  (loop [j (+ i 2) rows []]
+    (let [l (get lines j)]
+      (if (and l (str/starts-with? (str/trim l) "|"))
+        (let [cells (map table-cell (rest (butlast (str/split (str/trim l) #"\|"))))]
+          (recur (inc j) (conj rows (vec cells))))
+        [rows j]))))
+
+(defn scan [text]
+  (let [lines (split-lines text)
+        n (count lines)]
+    (loop [i 0 markers #{} blocks [] in-fence nil]
+      (if (>= i n)
+        (let [evidence (set (map :slug blocks))
+              errors (concat
+                       (map #(str "marker R-" % " has no evidence") (sort (remove evidence markers)))
+                       (map #(str "evidence @R-" % " has no marker") (sort (remove markers evidence))))]
+          {:markers markers :blocks blocks :errors (vec errors)})
+        (let [l (nth lines i)]
+          (cond
+            in-fence
+            (if (= "```" (str/trim l))
+              (recur (inc i) markers
+                     (conj blocks (-> in-fence (assoc :body (:acc in-fence)) (dissoc :acc)))
+                     nil)
+              (recur (inc i) markers blocks (update in-fence :acc str l "\n")))
+
+            :else
+            (if-let [[_ type slug attrs] (re-matches fence-open-re l)]
+              (recur (inc i) markers blocks
+                     {:slug slug :type type :attrs (parse-attrs attrs) :line (inc i) :acc ""})
+              (if-let [[_ slug type] (re-matches table-comment-re l)]
+                (let [[rows next] (table-rows lines (inc i))]
+                  (recur next markers
+                         (conj blocks {:slug slug :type (or type "clj-table") :attrs {}
+                                       :line (inc i) :rows rows})
+                         nil))
+                (recur (inc i)
+                       (into markers (map second (re-seq marker-re l)))
+                       blocks nil)))))))))
