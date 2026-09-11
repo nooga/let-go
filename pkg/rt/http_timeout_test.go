@@ -98,7 +98,7 @@ func TestHTTPRequestTimeoutScopes(t *testing.T) {
 		}
 	})
 
-	t.Run("request scope on a stream bounds the headers only", func(t *testing.T) {
+	t.Run("request scope on a stream bounds the headers and the first chunk only", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			flusher := w.(http.Flusher)
 			_, _ = w.Write([]byte("a"))
@@ -116,7 +116,43 @@ func TestHTTPRequestTimeoutScopes(t *testing.T) {
 		data, err := io.ReadAll(reader)
 		_ = reader.Close()
 		if err != nil || string(data) != "ab" {
-			t.Fatalf("stream body should not be cut by the request scope: %q %v", data, err)
+			t.Fatalf("later chunks are not bound by the request scope: %q %v", data, err)
+		}
+	})
+
+	t.Run("a slow first chunk is the request scope, later gaps are stream_read", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			flusher := w.(http.Flusher)
+			flusher.Flush() // headers at once, first byte late
+			time.Sleep(300 * time.Millisecond)
+			_, _ = w.Write([]byte("late-first"))
+		}))
+		defer server.Close()
+		timeouts := vm.EmptyPersistentMap.
+			Assoc(vm.Keyword("request"), vm.Float(1)).
+			Assoc(vm.Keyword("stream_read"), vm.Float(0.1))
+		v, err := invokeRequest(t, requestOpts(server.URL, true, timeouts))
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader := v.(vm.Lookup).ValueAt(vm.Keyword("body")).Unbox().(*LGReader)
+		data, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil || string(data) != "late-first" {
+			t.Fatalf("first chunk slower than stream_read but within request must succeed: %q %v", data, err)
+		}
+		short := vm.EmptyPersistentMap.
+			Assoc(vm.Keyword("request"), vm.Float(0.1)).
+			Assoc(vm.Keyword("stream_read"), vm.Float(5))
+		v, err = invokeRequest(t, requestOpts(server.URL, true, short))
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader = v.(vm.Lookup).ValueAt(vm.Keyword("body")).Unbox().(*LGReader)
+		_, err = io.ReadAll(reader)
+		_ = reader.Close()
+		if err == nil || !strings.Contains(err.Error(), "http request timeout after 100ms") {
+			t.Fatalf("first chunk past the request scope must fail as request timeout, got %v", err)
 		}
 	})
 

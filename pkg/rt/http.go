@@ -131,21 +131,38 @@ func (c *cancelOnClose) Close() error {
 	return err
 }
 
-// gapReader enforces a stream_read timeout: each Read must complete within
-// the gap, otherwise the request context is cancelled and the read fails.
+// gapReader enforces the stream timeouts on a streamed body. The wait for
+// the first chunk is the request scope (a model may process a long prompt
+// before its first token); every later Read must complete within the
+// stream_read gap. When a scope fires the request context is cancelled and
+// the read fails with the scope's name.
 type gapReader struct {
-	body   io.ReadCloser
-	gap    time.Duration
-	cancel context.CancelFunc
-	fired  atomic.Bool
+	body    io.ReadCloser
+	first   time.Duration // request scope for the first chunk; 0 = none
+	gap     time.Duration // stream_read scope between chunks; 0 = none
+	cancel  context.CancelFunc
+	fired   atomic.Bool
+	started bool
 }
 
 func (g *gapReader) Read(p []byte) (int, error) {
-	timer := time.AfterFunc(g.gap, func() { g.fired.Store(true); g.cancel() })
+	scope, limit := "stream_read", g.gap
+	if !g.started {
+		scope, limit = "request", g.first
+	}
+	var timer *time.Timer
+	if limit > 0 {
+		timer = time.AfterFunc(limit, func() { g.fired.Store(true); g.cancel() })
+	}
 	n, err := g.body.Read(p)
-	timer.Stop()
+	if timer != nil {
+		timer.Stop()
+	}
+	if n > 0 {
+		g.started = true
+	}
 	if err != nil && g.fired.Load() {
-		return n, &timeoutError{"stream_read", g.gap}
+		return n, &timeoutError{scope, limit}
 	}
 	return n, err
 }
@@ -605,8 +622,8 @@ func installHttpNS() {
 		}
 		if asStream {
 			body := io.ReadCloser(resp.Body)
-			if timeouts.streamRead > 0 {
-				body = &gapReader{body: resp.Body, gap: timeouts.streamRead, cancel: cancel}
+			if timeouts.streamRead > 0 || timeouts.request > 0 {
+				body = &gapReader{body: resp.Body, first: timeouts.request, gap: timeouts.streamRead, cancel: cancel}
 			} else {
 				body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
 			}
