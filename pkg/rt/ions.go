@@ -302,6 +302,11 @@ func makeLineSeq(br *bufio.Reader) *vm.LazySeq {
 		fn, _ := vm.NativeFnType.Wrap(func(_ []vm.Value) (vm.Value, error) {
 			line, err := br.ReadString('\n')
 			if err != nil {
+				if err != io.EOF {
+					// A timeout, reset or cancellation is a failure of the
+					// sequence, never a quiet end of file.
+					return nil, err
+				}
 				if len(line) > 0 {
 					// Last line without trailing newline
 					line = strings.TrimRight(line, "\n\r")
