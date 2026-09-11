@@ -4,13 +4,21 @@
 
 (defn- capture-events [f]
   (let [events (atom [])]
-    (binding [report (fn [m] (swap! events conj m))]
+    ;; Also bind *report-counters* to a throwaway ref: this file's own
+    ;; deliberate :fail/:pass events must not bump the live run's counters
+    ;; (the bridged run-tests binds *report-counters* to a real ref for the
+    ;; duration of the whole suite run), or every intentional :fail event
+    ;; exercised here would count as a real failure of this test file.
+    (binding [report (fn [m] (swap! events conj m))
+              *report-counters* (ref *initial-report-counters*)]
       (f))
     @events))
 
 (defn- capture-out [f]
   (let [b (io/buffer)]
-    (binding [*test-out* b] (f))
+    (binding [*test-out* b
+              *report-counters* (ref *initial-report-counters*)]
+      (f))
     (io/buffer-str b)))
 
 (deftest do-report-adds-position-to-fail-and-error-only

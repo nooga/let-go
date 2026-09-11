@@ -19,3 +19,16 @@
 (deftest non-list-forms-have-no-position
   (is (nil? (meta (read-string "[1 2]"))))
   (is (nil? (meta (read-string "x")))))
+
+(deftest short-fn-body-carries-position
+  ;; readShortFn (#(...)) assembles the fn's single body expression from the
+  ;; individually-read top-level forms inside #( ... ) rather than returning
+  ;; it whole from a nested r.Read() call, so unlike every other list form it
+  ;; used to never get FormSource attached — the identical code spelled
+  ;; (fn [] (foo 1)) always carried its position, #(foo 1) did not. A macro
+  ;; that reads (meta &form) (e.g. clojure.test's try-expr) saw a nil
+  ;; position whenever it was the direct body of a short-fn.
+  (let [body (nth (read-string "#(foo 1)") 2)]
+    (is (= '(foo 1) body))
+    (is (= 1 (:line (meta body))))
+    (is (= 1 (:column (meta body))))))

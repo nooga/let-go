@@ -3383,18 +3383,41 @@ func installLangNS() {
 		if len(snap) == 0 {
 			return fn, nil
 		}
-		// Re-establish the captured bindings in a fresh context on every
-		// call, so invocations (possibly on different goroutines) stay
-		// isolated from one another and from the global stack. Only the
-		// binding stack is conveyed: the call runs under the *invoking*
-		// execution's structured-concurrency scope, so work spawned inside a
-		// bound fn stays owned (and cancellable) by whoever called it rather
-		// than silently escaping to the root scope.
-		return vm.NewCtxNativeFn("bound-fn", func(callEC *vm.ExecContext, args []vm.Value) (vm.Value, error) {
-			c := vm.NewExecContextFrom(snap)
-			c.SetScope(callEC.Scope())
-			return c.Invoke(fn, args)
-		}), nil
+		wrapped := vm.NewCtxNativeFn("", func(callEc *vm.ExecContext, args []vm.Value) (vm.Value, error) {
+			// Overlay the captured vars on top of whatever's live in the
+			// calling context, rather than replacing the whole dynamic scope
+			// with an isolated fresh one: a var captured at creation freezes
+			// to its creation-time value for this call, but a var that was
+			// NOT captured (because nothing bound it at creation time) keeps
+			// tracking the caller's current binding.
+			//
+			// This matters because "nothing was bound at creation" is a rare
+			// case in practice — *file* (bound for the whole duration of
+			// loading any file) is essentially always present in `snap`, so
+			// replacing the callEc wholesale with `snap` used to freeze every
+			// OTHER dynamic var (e.g. a test's `(binding [*x* 55] ...)`) to
+			// its root value on every bound-fn call, even though *x* itself
+			// was never part of what bound-fn captured.
+			//
+			// callEc is safe to mutate here even across goroutines: each
+			// concurrent caller (e.g. future*) already runs on its own
+			// private child ExecContext, so pushing/popping on callEc cannot
+			// race with another invocation's bindings.
+			for v, stack := range snap {
+				for _, val := range stack {
+					callEc.PushBinding(v, val)
+				}
+			}
+			defer func() {
+				for v, stack := range snap {
+					for range stack {
+						callEc.PopBinding(v)
+					}
+				}
+			}()
+			return callEc.Invoke(fn, args)
+		})
+		return wrapped, nil
 	})
 
 	metaf, _ := vm.NativeFnType.Wrap(func(vs []vm.Value) (vm.Value, error) {
