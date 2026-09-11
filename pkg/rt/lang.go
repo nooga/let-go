@@ -5525,6 +5525,12 @@ func CoreSetMacro(vs ...vm.Value) (vm.Value, error) {
 	}
 	m := vs[0].(*vm.Var)
 	m.SetMacro()
+	// Var.IsMacro() (pkg/vm/var.go) stays the authoritative runtime flag the
+	// compiler gates macroexpansion on, but Clojure code expects `:macro` in
+	// the var's *metadata* too (clojure.test's function? checks `(:macro
+	// (meta v))` to reject a macro head, matching real Clojure vars). Keep
+	// both in sync here rather than leave meta silently missing the key.
+	m.SetMeta(assocIdentityMeta(m.Meta(), vm.Keyword("macro"), vm.Boolean(true)))
 	return m, nil
 }
 

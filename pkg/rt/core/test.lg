@@ -200,15 +200,7 @@
   `(do-report {:type :fail :message ~msg}))
 
 (defmethod assert-expr :default [msg form]
-  ;; function? alone cannot rule out a macro head: let-go's Var metadata
-  ;; does not carry :macro (SetMacro flips a private field on the Var, not
-  ;; a meta key — see pkg/vm/var.go), so `(:macro (meta v))` is always nil
-  ;; and function? would call (when true 5) a "function". Guard with
-  ;; macroexpand-1 instead: a macro head expands `form` into something
-  ;; else, a real function call is returned unchanged.
-  (if (and (sequential? form)
-           (function? (first form))
-           (= form (macroexpand-1 form)))
+  (if (and (sequential? form) (function? (first form)))
     (assert-predicate msg form)
     (assert-any msg form)))
 

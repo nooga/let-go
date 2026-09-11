@@ -1129,6 +1129,13 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 	startCol := max(
 		// -2 because '#' and '(' were consumed
 		r.column-2, 0)
+	// The body's own position points at the `(` (matching readList's
+	// convention of pointing at its own opening paren), one column after
+	// the outer fn wrapper's `#`: for `#(foo 1)`, startCol (0-based 0)
+	// attributes the whole #(...) form to '#'; bodyCol (0-based 1)
+	// attributes (foo 1) to '(' — the character that would open it were it
+	// spelled (fn [] (foo 1)) instead.
+	bodyCol := max(r.column-1, 0)
 	var ret []vm.Value
 	previousMaxPercent := r.maxPercent
 	previousInShortFn := r.inShortFn
@@ -1172,7 +1179,7 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 	// any #(...) short-fn body, even though the identical form spelled
 	// (fn [] ...) instead of #(...) carries its position correctly.
 	vm.FormSource.Set(body, vm.SourceInfo{
-		File: r.inputName, Line: startLine, Column: startCol,
+		File: r.inputName, Line: startLine, Column: bodyCol,
 	})
 	fn, err := vm.ListType.Box([]vm.Value{
 		vm.Symbol("fn*"),

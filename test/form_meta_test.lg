@@ -31,4 +31,8 @@
   (let [body (nth (read-string "#(foo 1)") 2)]
     (is (= '(foo 1) body))
     (is (= 1 (:line (meta body))))
-    (is (= 1 (:column (meta body))))))
+    ;; Points at the `(` (column 2: '#'=1 '('=2 'f'=3), matching how the
+    ;; identical form spelled (fn [] (foo 1)) attributes its body to its
+    ;; own opening paren via readList — not at the '#' (column 1), which
+    ;; is what the outer #(...) wrapper itself is attributed to.
+    (is (= 2 (:column (meta body))))))

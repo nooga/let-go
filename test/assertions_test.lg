@@ -44,7 +44,19 @@
 (deftest macro-head-uses-assert-any
   (let [e (one-event #(is (when true 5)))]
     (is (= :pass (:type e)))
-    (is (= 5 (:actual e)))))
+    (is (= 5 (:actual e))))
+  (is (false? (boolean (function? 'when))))
+  (is (function? 'inc)))
+
+(deftest is-pins-position-to-its-own-line-not-the-deftest-line
+  ;; Two `is` forms below sit on different source lines inside the SAME
+  ;; deftest. If the position fell back to *testing-vars* (the deftest's
+  ;; own line) or to whatever line happened to be active first, both
+  ;; events would report the identical line instead of their own.
+  (let [line-a (:line (one-event #(is false)))
+
+        line-b (:line (one-event #(is false)))]
+    (is (= 2 (- line-b line-a)))))
 
 (deftest thrown-forms
   (let [e (one-event #(is (thrown? ExceptionInfo (throw (ex-info "x" {})))))]
