@@ -1,0 +1,53 @@
+(ns spec-evidence
+  "Executable spec evidence: lint | tangle | generate | run | accept.
+   Usage: ./lg scripts/spec-evidence.lg <cmd> <spec.md> [args]
+   Requires LG_SOURCE_PATHS=scripts so the helper namespaces resolve."
+  (:require [clojure.string :as str]
+            [spec-evidence.parse :as p]))
+
+(def ^:private subcommands #{"lint" "tangle" "generate" "run" "accept"})
+
+(defn- base-name [path]
+  (let [f (last (str/split path #"/"))]
+    (str/replace f #"\.md$" "")))
+
+(defn lint [spec]
+  (let [{:keys [errors]} (p/scan (slurp spec))]
+    (doseq [e errors] (println e))
+    (if (empty? errors) 0 1)))
+
+(defn- tangled-text [b]
+  (if (= "clj-table" (:type b))
+    (apply str (map #(str (str/join "\t" %) "\n") (:rows b)))
+    (:body b)))
+
+(defn tangle [spec outdir]
+  (let [{:keys [blocks]} (p/scan (slurp spec))
+        base (base-name spec)]
+    (mkdir outdir)
+    (doseq [b blocks]
+      (let [path (str outdir "/" base "." (:slug b) "." (:type b))]
+        (spit path (tangled-text b))
+        (println path)))
+    (spit (str outdir "/" base ".map.edn")
+          (pr-str (into {} (map (fn [b] [(:slug b) (select-keys b [:type :line :attrs])]) blocks))))
+    0))
+
+(defn main [args]
+  (let [[cmd spec & rest] args]
+    (case cmd
+      "lint"   (lint spec)
+      "tangle" (tangle spec (or (first rest) "conformance"))
+      (do (println "usage: spec-evidence <lint|tangle|generate|run|accept> <spec.md> [args]") 2))))
+
+;; Script entry: os/args is the full Go argv — [binary script-path & user-args]
+;; both when run as a script (./lg scripts/spec-evidence.lg lint spec.md) and
+;; when the file is loaded by the go-test-based .lg harness (there os/args is
+;; the test binary's own argv, e.g. ["/…/test.test" "-test.run=…" …]). So a
+;; `require` of this namespace under the test harness must not trigger main:
+;; drop the first two entries (binary, script/test-binary path) and only fire
+;; when what remains actually looks like `<subcommand> <spec.md>`.
+(let [entry-args (vec (drop 2 os/args))]
+  (when (and (contains? subcommands (first entry-args))
+             (str/ends-with? (or (second entry-args) "") ".md"))
+    (os/exit (main entry-args))))

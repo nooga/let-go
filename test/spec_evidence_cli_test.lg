@@ -1,0 +1,24 @@
+(ns test.spec-evidence-cli-test
+  (:require [test :refer :all]
+            [clojure.string :as str]
+            [spec-evidence :as se]))
+
+(deftest lint-clean-and-broken
+  (is (= 0 (se/main ["lint" "fixtures/spec-evidence/basic.md"])))
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/broken.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "marker R-lonely has no evidence"))
+    (is (str/includes? out "evidence @R-ghost has no marker"))))
+
+(deftest tangle-writes-one-file-per-block-and-a-map
+  (let [dir (str (os/temp-dir) "/spec-evidence-cli-test")]
+    (os/delete-tree dir)
+    (mkdir dir)
+    (is (= 0 (se/main ["tangle" "fixtures/spec-evidence/basic.md" dir])))
+    (is (= "(+ 1 2)\n;=> 3\n" (slurp (str dir "/basic.add.clj-repl"))))
+    (is (= "(inc 1)\t2\t\n(print \"a\")\tnil\t\"a\"\n" (slurp (str dir "/basic.rows.clj-table"))))
+    (is (= "(inc 1)\t3\t\tfail\n" (slurp (str dir "/basic.fail-row.clj-table"))))
+    (let [m (read-string (slurp (str dir "/basic.map.edn")))]
+      (is (= "clj-test" (get-in m ["block" :type])))
+      (is (= {"oracle" "none"} (get-in m ["print" :attrs]))))))
