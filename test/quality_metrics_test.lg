@@ -1,0 +1,37 @@
+(ns test.quality-metrics-test
+  (:require
+   [quality.forms :as f]
+   [quality.metrics :as m]
+   [test :refer :all]))
+
+(def src (slurp "fixtures/quality/metrics_fixture.lg"))
+(def defs (f/definitions src))
+(defn- cc-of [n] (m/complexity (:form (first (filter #(= n (:name %)) defs)))))
+
+(deftest complexity-counts-branch-points
+  (is (= 1 (cc-of 'linear)))
+  (is (= 8 (cc-of 'branchy)))
+  (is (= 4 (cc-of 'loopy))))
+
+(deftest halstead-counts-operators-and-operands
+  (let [h (m/halstead [(read-string "(+ a (+ b c))")])]
+    ;; operators: + + (N=2, distinct 1); operands: a b c (N=3, distinct 3)
+    (is (= 5 (:N h)))
+    (is (= 4 (:eta h)))
+    (is (< 9.99 (:volume h) 10.01))))   ; 5 * log2(4) = 10
+
+(deftest file-metrics-shape-and-mi-range
+  (let [fm (m/file-metrics src)]
+    (is (= 8 (:cc-max fm)))
+    (is (= 13 (:cc-total fm)))
+    (is (= 3 (count (:definitions fm))))
+    (is (<= 0 (:mi fm) 100))
+    ;; Hand computation for this fixture (see task-2-report.md for the full
+    ;; derivation): across the 3 defn forms, N=65 total ops+operands
+    ;; (24 operator occurrences over 19 distinct, 41 operand occurrences over
+    ;; 22 distinct), eta=41, volume = 65*log2(41) = 348.2408.
+    ;; LOC=14, comment=3 (no docstrings), CR=3/14=0.214286, CC-total=13.
+    ;; MI = 171 - 5.2*ln(348.2408) - 0.23*13 - 16.2*ln(14) + 50*sin(sqrt(2.4*0.214286))
+    ;;    = 171 - 30.4350 - 2.99 - 42.7527 + 32.8615 = 127.68 (raw)
+    ;; Clamped to [0,100] => expected MI = 100.00
+    (is (< 99.99 (:mi fm) 100.01))))
