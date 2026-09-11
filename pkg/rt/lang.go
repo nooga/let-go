@@ -7835,10 +7835,15 @@ func CoreExMessage(vs ...vm.Value) (vm.Value, error) {
 	if len(vs) != 1 {
 		return vm.NIL, fmt.Errorf("wrong number of arguments")
 	}
+	if vs[0] == vm.NIL {
+		return vm.NIL, nil
+	}
 	if ei, ok := vs[0].(*vm.ExInfo); ok {
 		return vm.String(ei.Message()), nil
 	}
-	return vm.NIL, nil
+	// let-go permits throwing any value; thrown-with-msg? matches on its
+	// printed form. Documented deviation, spec Appendix A.
+	return vm.String(strValue(vs[0])), nil
 }
 
 //lg:native
