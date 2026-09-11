@@ -18,6 +18,9 @@
     ;; (defn deep …) nests defn > if > let > when > str = depth 5
     (is (= 5 (:depth (nth segs 2))))))
 
+(deftest bare-atom-segments-have-depth-1
+  (is (= [1 1 1 1] (map :depth (f/segments "42\n:kw\nsym\n(def x 1)\n")))))
+
 (deftest read-segment-skips-discards
   (let [segs (f/segments src)]
     (is (nil? (f/read-segment (nth segs 3))))
