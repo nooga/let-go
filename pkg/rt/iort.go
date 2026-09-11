@@ -407,6 +407,8 @@ func resolveIOHandleVar(ec *vm.ExecContext, varName string) *IOHandle {
 		return u
 	case *os.File:
 		return NewIOHandle(u)
+	case *LGBuffer:
+		return &IOHandle{name: "io/buffer", writer: u}
 	}
 	return nil
 }
