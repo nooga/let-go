@@ -20,18 +20,50 @@
     (is (= 4 (:eta h)))
     (is (< 9.99 (:volume h) 10.01))))   ; 5 * log2(4) = 10
 
-(deftest file-metrics-shape-and-mi-range
+(deftest complexity-counts-threading-and-condp
+  ;; cond-> steps are (test expr) pairs; each pair counts. Here 2 pairs
+  ;; => 1 (base) + 2 = 3.
+  (is (= 3 (m/complexity (read-string "(cond-> x (pos? x) inc (even? x) dec)"))))
+  ;; some-> has no test per step; every form after the initial value is its
+  ;; own step. Here 2 steps => 1 (base) + 2 = 3.
+  (is (= 3 (m/complexity (read-string "(some-> x inc inc)"))))
+  ;; condp = x has clauses (1 :a) (2 :b) plus a trailing unpaired default
+  ;; :c => 3 total branches, 2 beyond the first => 1 (base) + 2 = 3.
+  (is (= 3 (m/complexity (read-string "(condp = x 1 :a 2 :b :c)")))))
+
+(deftest file-metrics-shape-and-mi-is-raw-unclamped
   (let [fm (m/file-metrics src)]
     (is (= 8 (:cc-max fm)))
     (is (= 13 (:cc-total fm)))
     (is (= 3 (count (:definitions fm))))
-    (is (<= 0 (:mi fm) 100))
     ;; Hand computation for this fixture (see task-2-report.md for the full
     ;; derivation): across the 3 defn forms, N=65 total ops+operands
     ;; (24 operator occurrences over 19 distinct, 41 operand occurrences over
     ;; 22 distinct), eta=41, volume = 65*log2(41) = 348.2408.
     ;; LOC=14, comment=3 (no docstrings), CR=3/14=0.214286, CC-total=13.
     ;; MI = 171 - 5.2*ln(348.2408) - 0.23*13 - 16.2*ln(14) + 50*sin(sqrt(2.4*0.214286))
-    ;;    = 171 - 30.4350 - 2.99 - 42.7527 + 32.8615 = 127.68 (raw)
-    ;; Clamped to [0,100] => expected MI = 100.00
-    (is (< 99.99 (:mi fm) 100.01))))
+    ;;    = 171 - 30.4350 - 2.99 - 42.7527 + 32.8615 = 127.68 (raw, UNCLAMPED --
+    ;; file-metrics reports the raw SEI value; Task 6's score layer clamps
+    ;; when normalizing).
+    (is (< 127.67 (:mi fm) 127.69))))
+
+(deftest file-metrics-large-file-mi-lands-in-range
+  ;; Second fixture: 30 defns, uniform (defn fN [x] (if (pos? x) (inc x)
+  ;; (dec x))) body, no comments; f1 additionally carries a one-line
+  ;; docstring so :comment-ratio has a nonzero, hand-checkable value. See
+  ;; task-2-report.md for the full derivation.
+  (let [src2 (slurp "fixtures/quality/metrics_fixture_large.lg")
+        fm (m/file-metrics src2)]
+    (is (= 30 (count (:definitions fm))))
+    (is (= 2 (:cc-max fm)))
+    (is (= 60 (:cc-total fm)))
+    (is (= 33 (:loc fm)))
+    ;; comment count = the docstring's 1 line (0 embedded newlines + 1);
+    ;; no `;;` comment lines in this fixture. CR = 1/33.
+    (is (< (- (/ 1.0 33) 0.0001) (:comment-ratio fm) (+ (/ 1.0 33) 0.0001)))
+    ;; MI = 171 - 5.2*ln(1568.045) - 0.23*60 - 16.2*ln(33) + 50*sin(sqrt(2.4*(1/33)))
+    ;;    = 171 - 38.2593 - 13.8 - 56.6434 + 13.3211 = 75.62 (raw)
+    (is (< 75.60 (:mi fm) 75.64))
+    ;; The point of this fixture: unlike metrics_fixture.lg (raw MI > 100),
+    ;; this one lands strictly inside the conventional [0,100] band.
+    (is (< 0 (:mi fm) 100))))
