@@ -1,0 +1,47 @@
+(ns fixture.dup-b)
+
+(defn calc-beta [m]
+  (let [s1 (+ m 9)
+        s2 (* s1 2)
+        s3 (- s2 3)
+        s4 (if (> s3 10)
+             (+ s3 1)
+             (- s3 1))
+        s5 (loop [j 0 total s4]
+             (if (>= j 3)
+               total
+               (recur (inc j) (+ total j))))
+        s6 (cond
+             (> s5 100) :big
+             (> s5 50) :medium
+             :else :small)
+        s7 (case s6
+             :big (* s5 2)
+             :medium (+ s5 10)
+             :small (- s5 5))
+        s8 (when (pos? s7)
+             (* s7 s7))
+        s9 (or s8 0)
+        s10 (and (pos? s9) (< s9 100000))
+        s11 (try
+              (/ s9 (max 1 s7))
+              (catch Throwable e 0))
+        answer (+ s1 s2 s3 s4 s5 s7 s9 s11)]
+    answer))
+
+(defonce beta-buffer {:x 1 :y 2 :z 3})
+
+;; padding so the duplicated region above is a minority of this file's
+;; lines, not the whole file -- keeps file-percent in a meaningful range
+;; instead of reporting near-100% duplication for a tiny fixture.
+;; padding
+;; padding
+;; padding
+;; padding
+;; padding
+;; padding
+;; padding
+;; padding
+
+(defn farewell-beta [name]
+  (str name ", thanks for visiting beta!"))
