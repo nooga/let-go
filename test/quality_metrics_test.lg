@@ -63,7 +63,7 @@
     (is (< (- (/ 1.0 33) 0.0001) (:comment-ratio fm) (+ (/ 1.0 33) 0.0001)))
     ;; MI = 171 - 5.2*ln(1568.045) - 0.23*60 - 16.2*ln(33) + 50*sin(sqrt(2.4*(1/33)))
     ;;    = 171 - 38.2593 - 13.8 - 56.6434 + 13.3211 = 75.62 (raw)
-    (is (< 75.60 (:mi fm) 75.64))
+    (is (< 75.608 (:mi fm) 75.628))
     ;; The point of this fixture: unlike metrics_fixture.lg (raw MI > 100),
     ;; this one lands strictly inside the conventional [0,100] band.
     (is (< 0 (:mi fm) 100))))
