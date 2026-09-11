@@ -1163,6 +1163,17 @@ func readShortFn(r *LispReader, _ rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "unexpected error").Wrap(err)
 	}
+	// `body` is the fn's single expression — e.g. `(is (= 1 2) "m")` for
+	// `#(is (= 1 2) "m")` — assembled here from the individually-read
+	// top-level forms rather than returned whole by a nested r.Read() call,
+	// so unlike every other list form it never passes through readList's
+	// own FormSource.Set. Without this, a macro whose expansion depends on
+	// (meta &form) (e.g. clojure.test's try-expr) sees a nil position for
+	// any #(...) short-fn body, even though the identical form spelled
+	// (fn [] ...) instead of #(...) carries its position correctly.
+	vm.FormSource.Set(body, vm.SourceInfo{
+		File: r.inputName, Line: startLine, Column: startCol,
+	})
 	fn, err := vm.ListType.Box([]vm.Value{
 		vm.Symbol("fn*"),
 		vm.NewArrayVector(percents),

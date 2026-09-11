@@ -132,17 +132,6 @@
 (def ^:dynamic *each-fixtures* [])
 (def ^:dynamic *once-fixtures* [])
 
-;; Renamed from the old *report-counters* to avoid colliding with the new
-;; spec 3.3 var of the same name above: the old is/test-var*/run-tests
-;; machinery bumps this via plain set!+update on an immutable map, while the
-;; new *report-counters* is a ref bumped via commute (spec 10.3). Sharing one
-;; name would make any do-report call inside an old-shim test run crash
-;; ("swap expected Atom") or corrupt the ref's contents. Purely internal
-;; state — no external caller (Go harness, other tasks) references it by
-;; name — so the rename is safe. Tasks 10-13 delete this along with the rest
-;; of the old shim.
-(def ^:dynamic *legacy-report-counters* {:test 0 :pass 0 :fail 0 :error 0})
-
 (defn clear-registered-tests! []
   (set! *registered-tests* {}))
 
@@ -170,82 +159,106 @@
      (alter-meta! (var ~name) assoc :ns *ns* :name '~name :test ~name)
      (register-test! (var ~name))))
 
-(defn- thrown-form? [form]
-  (and (seq? form)
-       (or (= 'thrown? (first form))
-           (= 'thrown-with-msg? (first form)))))
+;;; ---- Assertions (spec 6) --------------------------------------------------
 
-(defn- expand-is-thrown
-  "Expansion for (is (thrown? Klass body...)) and
-   (is (thrown-with-msg? Klass re body...)). Passes when the body throws a
-   value satisfying (instance? Klass e) — and, for thrown-with-msg?, whose
-   ex-message matches re. A normal return counts as :fail; a thrown value
-   of the wrong class rethrows into the runner's catch and counts as
-   :error, matching clojure.test. On pass, returns the caught value."
-  [form msg]
-  (let [with-msg? (= 'thrown-with-msg? (first form))
-        klass (second form)
-        re (when with-msg? (nth form 2))
-        body (if with-msg? (drop 3 form) (drop 2 form))
-        ;; Explicit gensym rather than an `e#` auto-gensym. The catch
-        ;; binding and its uses below sit in SEPARATE syntax-quote forms,
-        ;; and auto-gensym numbering restarts per syntax quote, so two `e#`
-        ;; occurrences agree only by accident: they are both the first
-        ;; auto-gensym in their own form. Add another auto-gensym ahead of
-        ;; either one and the two names silently diverge. An explicit symbol
-        ;; threads through the unquotes and does not depend on that.
-        e (gensym "e__")
-        pass `(do
-                (set! *legacy-report-counters* (update *legacy-report-counters* :pass inc))
-                ~(if msg
-                   `(println "PASS" '~form "-" ~msg)
-                   `(println "PASS" '~form)))
-        fail `(do
-                (set! *legacy-report-counters* (update *legacy-report-counters* :fail inc))
-                (set! *test-result* false)
-                ~(if msg
-                   `(println "FAIL" '~form "-" ~msg)
-                   `(println "FAIL" '~form))
-                false)]
-    `(try
-       ~@body
-       ~fail
-       (catch ~e
-         (if (instance? ~klass ~e)
-           ~(if with-msg?
-              `(if (re-find ~re (ex-message ~e))
-                 (do ~pass ~e)
-                 ~fail)
-              `(do ~pass ~e))
-           (throw ~e))))))
+(defn function?
+  "True if argument is a function or a symbol that resolves to a non-macro fn."
+  [x]
+  (if (symbol? x)
+    (when-let [v (resolve x)]
+      (when-let [value (get-possibly-unbound-var v)]
+        (and (fn? value) (not (:macro (meta v))))))
+    (fn? x)))
+
+(defn assert-predicate [msg form]
+  (let [args (rest form)
+        pred (first form)]
+    `(let [values# (list ~@args)
+           result# (apply ~pred values#)]
+       (if result#
+         (do-report {:type :pass :message ~msg
+                     :expected '~form :actual (cons '~pred values#)})
+         (do-report {:type :fail :message ~msg
+                     :expected '~form :actual (list '~'not (cons '~pred values#))}))
+       result#)))
+
+(defn assert-any [msg form]
+  `(let [value# ~form]
+     (if value#
+       (do-report {:type :pass :message ~msg :expected '~form :actual value#})
+       (do-report {:type :fail :message ~msg :expected '~form :actual value#}))
+     value#))
+
+(defmulti assert-expr
+  (fn [msg form]
+    (cond
+      (nil? form) :always-fail
+      (seq? form) (first form)
+      :else :default)))
+
+(defmethod assert-expr :always-fail [msg form]
+  `(do-report {:type :fail :message ~msg}))
+
+(defmethod assert-expr :default [msg form]
+  ;; function? alone cannot rule out a macro head: let-go's Var metadata
+  ;; does not carry :macro (SetMacro flips a private field on the Var, not
+  ;; a meta key — see pkg/vm/var.go), so `(:macro (meta v))` is always nil
+  ;; and function? would call (when true 5) a "function". Guard with
+  ;; macroexpand-1 instead: a macro head expands `form` into something
+  ;; else, a real function call is returned unchanged.
+  (if (and (sequential? form)
+           (function? (first form))
+           (= form (macroexpand-1 form)))
+    (assert-predicate msg form)
+    (assert-any msg form)))
+
+(defmethod assert-expr 'instance? [msg form]
+  `(let [klass# ~(nth form 1)
+         object# ~(nth form 2)]
+     (let [result# (instance? klass# object#)]
+       (if result#
+         (do-report {:type :pass :message ~msg :expected '~form :actual (class object#)})
+         (do-report {:type :fail :message ~msg :expected '~form :actual (class object#)}))
+       result#)))
+
+(defmethod assert-expr 'thrown? [msg form]
+  (let [klass (second form)
+        body (nthnext form 2)]
+    `(try ~@body
+          (do-report {:type :fail :message ~msg :expected '~form :actual nil})
+          (catch ~klass e#
+            (do-report {:type :pass :message ~msg :expected '~form :actual e#})
+            e#))))
+
+(defmethod assert-expr 'thrown-with-msg? [msg form]
+  (let [klass (nth form 1)
+        re (nth form 2)
+        body (nthnext form 3)]
+    `(try ~@body
+          (do-report {:type :fail :message ~msg :expected '~form :actual nil})
+          (catch ~klass e#
+            (let [m# (ex-message e#)]
+              (if (re-find ~re m#)
+                (do-report {:type :pass :message ~msg :expected '~form :actual e#})
+                (do-report {:type :fail :message ~msg :expected '~form :actual e#})))
+            e#))))
+
+(defmacro try-expr
+  "Used by the is macro; evaluates expr and catches any exception,
+   reporting it as an :error. The is form's source position is bound for
+   fail-position (spec 10.1)."
+  [msg expr]
+  (let [{:keys [line]} (meta &form)
+        file (when line *file*)]
+    `(binding [*assertion-position* ~(when line {:file file :line line})]
+       (try ~(assert-expr msg expr)
+            (catch Throwable t#
+              (do-report {:type :error :message ~msg
+                          :expected '~expr :actual t#}))))))
 
 (defmacro is
-  ([form]
-   (if (thrown-form? form)
-     (expand-is-thrown form nil)
-     `(if ~form
-        (do
-          (set! *legacy-report-counters* (update *legacy-report-counters* :pass inc))
-          (println "PASS" '~form)
-          true)
-        (do
-          (set! *legacy-report-counters* (update *legacy-report-counters* :fail inc))
-          (set! *test-result* false)
-          (println "FAIL" '~form)
-          false))))
-  ([form msg]
-   (if (thrown-form? form)
-     (expand-is-thrown form msg)
-     `(if ~form
-        (do
-          (set! *legacy-report-counters* (update *legacy-report-counters* :pass inc))
-          (println "PASS" '~form "-" ~msg)
-          true)
-        (do
-          (set! *legacy-report-counters* (update *legacy-report-counters* :fail inc))
-          (set! *test-result* false)
-          (println "FAIL" '~form "-" ~msg)
-          false)))))
+  ([form] `(is ~form nil))
+  ([form msg] `(try-expr ~msg ~form)))
 
 (defn compose-fixtures
   "Compose two fixture fns into one that wraps f around g around the test fn."
@@ -275,38 +288,38 @@
       ((join-fixtures *each-fixtures*) (fn [] (test-fn))))
     (catch e
       (set! *testing-contexts* [])
-      (set! *legacy-report-counters* (update *legacy-report-counters* :error inc))
+      (inc-report-counter :error)
       (set! *test-result* false)
       (println "ERROR in test:" e))))
 
 (defn run-tests [& nss]
-  (set! *legacy-report-counters* {:test 0 :pass 0 :fail 0 :error 0})
-  (set! *test-result* true)
-  (println "Running tests...")
-  ((join-fixtures *once-fixtures*)
-   (fn []
-     (if (seq nss)
-       (doseq [s nss]
-         (let [old-ns *ns*]
-           (in-ns s)
-           (doseq [t (get *registered-tests* *ns* [])]
-             (set! *legacy-report-counters* (update *legacy-report-counters* :test inc))
-             (test-var* t))
-           (in-ns (symbol (name old-ns)))))
-       ;; Run every registered ns's tests IN that ns, so runtime name
-       ;; resolution inside a test (resolve, *ns*, aliases) matches the ns
-       ;; the test was defined in — not whatever ns run-tests was called from.
-       ;; Keys are namespace objects, so derive the name via ns-name.
-       (doseq [[s bs] *registered-tests*]
-         (let [old-ns *ns*]
-           (in-ns (ns-name s))
-           (doseq [t bs]
-             (set! *legacy-report-counters* (update *legacy-report-counters* :test inc))
-             (test-var* t))
-           (in-ns (ns-name old-ns)))))))
-  (let [c *legacy-report-counters*]
-    (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
-    (set! *test-result* (and (= 0 (:fail c)) (= 0 (:error c))))))
+  (binding [*report-counters* (ref *initial-report-counters*)]
+    (set! *test-result* true)
+    (println "Running tests...")
+    ((join-fixtures *once-fixtures*)
+     (fn []
+       (if (seq nss)
+         (doseq [s nss]
+           (let [old-ns *ns*]
+             (in-ns s)
+             (doseq [t (get *registered-tests* *ns* [])]
+               (inc-report-counter :test)
+               (test-var* t))
+             (in-ns (symbol (name old-ns)))))
+         ;; Run every registered ns's tests IN that ns, so runtime name
+         ;; resolution inside a test (resolve, *ns*, aliases) matches the ns
+         ;; the test was defined in — not whatever ns run-tests was called from.
+         ;; Keys are namespace objects, so derive the name via ns-name.
+         (doseq [[s bs] *registered-tests*]
+           (let [old-ns *ns*]
+             (in-ns (ns-name s))
+             (doseq [t bs]
+               (inc-report-counter :test)
+               (test-var* t))
+             (in-ns (ns-name old-ns)))))))
+    (let [c @*report-counters*]
+      (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
+      (set! *test-result* (successful? c)))))
 
 (defn run-test-var
   "Run a single test var and return the report counters
@@ -323,7 +336,7 @@
    run's tally or clear its failure flag."
   [v]
   (let [old-ns *ns*]
-    (binding [*legacy-report-counters* {:test 1 :pass 0 :fail 0 :error 0}
+    (binding [*report-counters* (ref (assoc *initial-report-counters* :test 1))
               *test-result* true
               *testing-contexts* []]
       (in-ns (ns-name (or (:ns (meta v)) *ns*)))
@@ -331,8 +344,9 @@
         ((join-fixtures *once-fixtures*) (fn [] (test-var* v)))
         (finally
           (in-ns (ns-name old-ns))))
-      (let [c *legacy-report-counters*]
+      (let [c @*report-counters*]
         (println "Finished running test. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
+        (set! *test-result* (successful? c))
         c))))
 
 (defmacro run-test
