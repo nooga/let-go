@@ -3662,6 +3662,22 @@ func installLangNS() {
 			return ref.AlterMeta(fn, vs[2:])
 		case *vm.Var:
 			return ref.AlterMeta(fn, vs[2:])
+		case *vm.Namespace:
+			rest := vs[2:]
+			var out vm.Value
+			err := ref.AlterMeta(func(cur vm.Value) (vm.Value, error) {
+				allArgs := append([]vm.Value{cur}, rest...)
+				v, err := fn.Invoke(allArgs)
+				if err != nil {
+					return nil, err
+				}
+				out = v
+				return v, nil
+			})
+			if err != nil {
+				return vm.NIL, err
+			}
+			return out, nil
 		default:
 			return vm.NIL, fmt.Errorf("alter-meta! expected Atom or Var")
 		}

@@ -57,6 +57,11 @@ type Namespace struct {
 	aliases  map[Symbol]*Namespace
 	excludes map[Symbol]bool // names excluded from clojure.core auto-refer
 	unmapped map[Symbol]bool // names explicitly ns-unmap'd — hidden from refers too
+
+	// meta is the namespace's metadata map (nil until first alter-meta!).
+	// Guarded by mu like the maps; read through Meta(), written through
+	// AlterMeta() only.
+	meta Value
 }
 
 // coreNamespacePtr is set by the rt package after clojure.core is registered.
@@ -196,6 +201,33 @@ func NewNamespace(name string) *Namespace {
 		excludes: map[Symbol]bool{},
 		unmapped: map[Symbol]bool{},
 	}
+}
+
+// Meta returns the namespace metadata, or NIL when none has been set.
+func (n *Namespace) Meta() Value {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.meta == nil {
+		return NIL
+	}
+	return n.meta
+}
+
+// AlterMeta replaces the namespace metadata with f(current). f runs under
+// the namespace lock, so it must not touch this or any other namespace.
+func (n *Namespace) AlterMeta(f func(Value) (Value, error)) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	cur := n.meta
+	if cur == nil {
+		cur = NIL
+	}
+	next, err := f(cur)
+	if err != nil {
+		return err
+	}
+	n.meta = next
+	return nil
 }
 
 func (n *Namespace) RegistrySize() int {
