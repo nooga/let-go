@@ -142,6 +142,9 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	}
 	body := ress.ValueAt(vm.Keyword("body"))
 	resp.WriteHeader(int(status.(vm.Int)))
+	if streamResponseBody(resp, request, body) {
+		return
+	}
 	respBody, bodyErr := coerceResponseBody(body)
 	if bodyErr != nil {
 		_ = WriteToErr(nil, fmt.Sprintln("HTTP Error coercing body:", bodyErr))
@@ -153,6 +156,57 @@ func (h *Handler) ServeHTTP(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		_ = WriteToErr(nil, fmt.Sprintln("HTTP Error while writing error 500", err))
 	}
+}
+
+// streamResponseBody writes a channel or lazy sequence body incrementally,
+// flushing after every element, so a handler can hold or pace a response
+// mid-body (SSE fixtures, long polls). Strings and readers keep the buffered
+// path. Iteration stops when the client goes away. Reports whether it handled
+// the body.
+func streamResponseBody(resp http.ResponseWriter, request *http.Request, body vm.Value) bool {
+	flusher, _ := resp.(http.Flusher)
+	writeChunk := func(v vm.Value) bool {
+		var chunk string
+		if str, ok := v.(vm.String); ok {
+			chunk = string(str)
+		} else {
+			chunk = v.String()
+		}
+		if _, err := resp.Write([]byte(chunk)); err != nil {
+			return false
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return request.Context().Err() == nil
+	}
+	switch b := body.(type) {
+	case vm.Chan:
+		if flusher != nil {
+			flusher.Flush()
+		}
+		for {
+			select {
+			case v, ok := <-b:
+				if !ok || !writeChunk(v) {
+					return true
+				}
+			case <-request.Context().Done():
+				return true
+			}
+		}
+	case *vm.LazySeq:
+		if flusher != nil {
+			flusher.Flush()
+		}
+		for s := b.Seq(); s != nil; s = s.Next() {
+			if !writeChunk(s.First()) {
+				return true
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func init() { RegisterInstaller(installHttpNS) }
