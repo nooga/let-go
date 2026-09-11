@@ -32,3 +32,33 @@ func TestRegisterTestOutUsesHostStdoutOrOutRoot(t *testing.T) {
 		t.Fatalf("register-test-out after host install should use host stdout: %v", got)
 	}
 }
+
+func TestRegisterTestOutUsesOutRootNotDynamicBinding(t *testing.T) {
+	outVar := NS(NameCoreNS).LookupLocal(vm.Symbol("*out*"))
+	if outVar == nil {
+		t.Fatal("*out* not installed")
+	}
+	// No host installed for this test: registeredHostStdout must be nil so
+	// RegisterTestOut falls back to *out*'s root.
+	saved := registeredHostStdout
+	registeredHostStdout = nil
+	defer func() { registeredHostStdout = saved }()
+
+	wantRoot := outVar.Root()
+
+	h2 := &IOHandle{name: "per-run-dynamic-binding"}
+	outVar.PushBinding(vm.NewBoxed(h2))
+	defer outVar.PopBinding()
+
+	v := vm.NewVar(NS(NameCoreNS), "test", "*test-out*")
+	v.SetDynamic()
+	RegisterTestOut(v)
+
+	got := v.Root()
+	if got != wantRoot {
+		t.Fatalf("register-test-out with a pushed *out* binding: got root %v, want *out*'s ROOT %v", got, wantRoot)
+	}
+	if b, ok := got.(*vm.Boxed); ok && b.Unbox() == h2 {
+		t.Fatalf("register-test-out must not bake the dynamic top binding %v into *test-out*'s root", h2)
+	}
+}

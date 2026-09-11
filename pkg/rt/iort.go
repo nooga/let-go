@@ -415,14 +415,18 @@ var testOutVar *vm.Var
 func InstallHostOutputRoots(stdout, stderr *IOHandle) {
 	registeredHostStdout = stdout
 	core := NS(NameCoreNS)
+	// One shared Boxed for *out* and *test-out* so they stay `identical?`
+	// after install, matching the pre-install path where *test-out*'s root
+	// is seeded directly from *out*'s current Boxed value.
+	stdoutBox := vm.NewBoxed(stdout)
 	if v := core.LookupLocal(vm.Symbol("*out*")); v != nil {
-		v.SetRoot(vm.NewBoxed(stdout))
+		v.SetRoot(stdoutBox)
 	}
 	if v := core.LookupLocal(vm.Symbol("*err*")); v != nil {
 		v.SetRoot(vm.NewBoxed(stderr))
 	}
 	if testOutVar != nil {
-		testOutVar.SetRoot(vm.NewBoxed(stdout))
+		testOutVar.SetRoot(stdoutBox)
 	}
 }
 
@@ -436,7 +440,11 @@ func RegisterTestOut(v *vm.Var) {
 		return
 	}
 	if out := NS(NameCoreNS).LookupLocal(vm.Symbol("*out*")); out != nil {
-		v.SetRoot(out.Deref())
+		// Root(), not Deref(): Deref returns the current dynamic top
+		// binding when one is pushed (e.g. inside an api.WithStdout Run),
+		// which would bake a per-Run writer into *test-out*'s ROOT. The
+		// brief specifies the current ROOT of *out*.
+		v.SetRoot(out.Root())
 	}
 }
 
