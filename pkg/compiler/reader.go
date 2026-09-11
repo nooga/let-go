@@ -56,6 +56,19 @@ type LispReader struct {
 	Tokens     []Token
 	tokenizing bool
 	splicing   bool
+	// data selects Clojure data-reading semantics (clojure.edn/read-string):
+	// metadata attaches to the following value instead of becoming a
+	// (with-meta ...) call, set literals read as sets instead of (hash-set
+	// ...) calls, and a discarded or unmatched form inside a map splices
+	// nothing rather than dropping the preceding key. Code reading keeps the
+	// call forms the compiler consumes.
+	data bool
+}
+
+// NewLispDataReader reads data with Clojure reader semantics; see the data
+// field. Nothing read this way is evaluated.
+func NewLispDataReader(r io.Reader, inputName string) *LispReader {
+	return &LispReader{inputName: inputName, r: bufio.NewReader(r), data: true}
 }
 
 func NewLispReader(r io.Reader, inputName string) *LispReader {
@@ -765,12 +778,25 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 		ret = appendNonVoid(r, ret, form)
 		// If a reader conditional returned VOID and the previous form was a
 		// map key (odd position), drop the orphaned key so the map stays even.
-		if len(ret) == prevLen && len(ret)%2 != 0 {
+		// Data reading follows Clojure: a discard splices nothing, so
+		// {"a" #_x "b"} is {"a" "b"} and an odd result is an error.
+		if !r.data && len(ret) == prevLen && len(ret)%2 != 0 {
 			ret = ret[:len(ret)-1]
 		}
 	}
 	if len(ret)%2 != 0 {
 		return vm.NIL, NewReaderError(r, "map literal must contain even number of forms")
+	}
+	if r.data {
+		// Clojure rejects duplicate keys in a map literal; code reading keeps
+		// last-wins so existing sources are unaffected.
+		for i := 0; i < len(ret); i += 2 {
+			for j := i + 2; j < len(ret); j += 2 {
+				if vm.ValueEquals != nil && vm.ValueEquals(ret[i], ret[j]) {
+					return vm.NIL, NewReaderError(r, "duplicate key in map literal: "+ret[i].String())
+				}
+			}
+		}
 	}
 	result := vm.NewArrayMap(ret)
 	vm.FormSource.Set(result, vm.SourceInfo{
@@ -804,6 +830,20 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 		if form.Type() != vm.VoidType {
 			ret = ret.Conj(form).(*vm.List)
 		}
+	}
+	if r.data {
+		vals := make([]vm.Value, 0)
+		for s := ret.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+			vals = append(vals, s.First())
+		}
+		for i := range vals {
+			for j := i + 1; j < len(vals); j++ {
+				if vm.ValueEquals != nil && vm.ValueEquals(vals[i], vals[j]) {
+					return vm.NIL, NewReaderError(r, "duplicate element in set literal: "+vals[i].String())
+				}
+			}
+		}
+		return vm.NewSet(vals), nil
 	}
 	result := ret.Cons(vm.Symbol("hash-set"))
 	vm.FormSource.Set(result, vm.SourceInfo{
@@ -1454,6 +1494,15 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 	form, err := r.Read()
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading meta")
+	}
+	if r.data {
+		// Attach to the value where the runtime supports metadata; values
+		// without metadata support (maps, vectors) read as themselves, which
+		// is what with-meta does for them at runtime too.
+		if im, ok := form.(vm.IMeta); ok {
+			return im.WithMeta(m), nil
+		}
+		return form, nil
 	}
 	return vm.NewList([]vm.Value{vm.Symbol("with-meta"), form, m}), nil
 }
