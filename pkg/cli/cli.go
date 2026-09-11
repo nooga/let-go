@@ -159,13 +159,17 @@ func bundleBinary(ctx *compiler.Context, nsRes *resolver.NSResolver, src string,
 	dstAbs, _ := filepath.Abs(dst)
 	bundleStoreID := storageIDForScript(src)
 
-	f, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	chunk, _, err := ctx.CompileMultiple(f)
-	f.Close()
-	if err != nil {
+	var chunk *vm.CodeChunk
+	if err := rt.WithFile(src, func() error {
+		f, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		var cerr error
+		chunk, _, cerr = ctx.CompileMultiple(f)
+		f.Close()
+		return cerr
+	}); err != nil {
 		return err
 	}
 
