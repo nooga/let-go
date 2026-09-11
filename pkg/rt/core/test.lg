@@ -347,28 +347,30 @@
   [name]
   `(run-test-var (var ~name)))
 
-;; testing-contexts-str is defined above (spec 10.3); reused here unchanged.
+;;; ---- testing / are (spec 6.5, 6.6) ----------------------------------------
 
-(defmacro testing [description & body]
-  `(do
-     (set! *testing-contexts* (conj *testing-contexts* ~description))
-     (println "Testing:" (testing-contexts-str))
-     (let [ret# (do ~@body)]
-       (set! *testing-contexts* (pop *testing-contexts*))
-       ret#)))
+(defmacro testing [string & body]
+  `(binding [*testing-contexts* (conj *testing-contexts* ~string)]
+     ~@body))
 
-(defn apply-template
-  [argv expr values]
+(defn apply-template [argv expr values]
   (postwalk-replace (zipmap argv values) expr))
 
-(defmacro do-template
-  [argv expr & values]
+(defmacro do-template [argv expr & values]
   (let [c (count argv)]
     `(do ~@(map (fn [a] (apply-template argv expr a))
                 (partition c values)))))
 
 (defmacro are [argv expr & args]
-  `(do-template ~argv (is ~expr) ~@args))
+  (if (or
+        (and (empty? argv) (empty? args))
+        (and (pos? (count argv))
+             (pos? (count args))
+             (zero? (mod (count args) (count argv)))))
+    `(do-template ~argv (is ~expr) ~@args)
+    (throw (ex-info "The number of args doesn't match are's argv."
+                    {:type :illegal-argument
+                     :class 'java.lang.IllegalArgumentException}))))
 
 ; simple fixtures API (global per session)
 (defn use-fixtures [phase & fs]
