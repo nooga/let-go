@@ -21,7 +21,7 @@
   (loop [cs (seq text) line 1 depth 0 mode :code
          start nil maxd 0 acc [] out []]
     (if (empty? cs)
-      (if start (conj out {:start start :end line :depth maxd :text (apply str acc)}) out)
+      (if start (conj out {:start start :end line :depth (max 1 maxd) :text (apply str acc)}) out)
       (let [c (first cs) nl? (= c \newline)]
         (case mode
           :comment (recur (rest cs) (if nl? (inc line) line) depth (if nl? :code :comment) start maxd (if start (conj acc c) acc) out)
@@ -41,15 +41,15 @@
             (closers c)
             (let [d (dec depth) acc (conj acc c)]
               (if (zero? d)
-                (recur (rest cs) line 0 :code nil 0 [] (conj out {:start start :end line :depth maxd :text (apply str acc)}))
+                (recur (rest cs) line 0 :code nil 0 [] (conj out {:start start :end line :depth (max 1 maxd) :text (apply str acc)}))
                 (recur (rest cs) line d :code start maxd acc out)))
             nl?
             (if (and start (zero? depth))
-              (recur (rest cs) (inc line) 0 :code nil 0 [] (conj out {:start start :end line :depth maxd :text (apply str acc)}))
+              (recur (rest cs) (inc line) 0 :code nil 0 [] (conj out {:start start :end line :depth (max 1 maxd) :text (apply str acc)}))
               (recur (rest cs) (inc line) depth :code start maxd (if start (conj acc c) acc) out))
             (ws-chars c)
             (if (and start (zero? depth))
-              (recur (rest cs) line 0 :code nil 0 [] (conj out {:start start :end line :depth maxd :text (apply str acc)}))
+              (recur (rest cs) line 0 :code nil 0 [] (conj out {:start start :end line :depth (max 1 maxd) :text (apply str acc)}))
               (recur (rest cs) line depth :code start maxd (if start (conj acc c) acc) out))
             :else
             (recur (rest cs) line depth :code (or start line) maxd (conj acc c) out)))))))
