@@ -1,17 +1,21 @@
-;; lint — flag breadcrumb and devlog comments in let-go and Go source.
+;; lint — objective comment-abuse rules, plus the original devlog-phrase
+;; heuristic, for let-go and Go source.
 ;;
-;;   lg scripts/lint.lg [paths...]        (default: pkg scripts)
+;;   lg scripts/lint.lg [paths...]                 (default: pkg scripts)
+;;   lg scripts/lint.lg --edn [paths...]           machine-readable findings
+;;   lg scripts/lint.lg --gate K1[,K2...] [paths...]  exit non-zero on findings
 ;;
-;; A devlog comment narrates the change instead of describing the code: the
-;; shape the code had earlier, what a reviewer asked for, what a later change
-;; will do to it. It reads as current, goes stale the moment the change lands,
-;; and what it carries belongs in the PR body, a design doc, or the issue
-;; tracking the follow-up. See nooga/let-go#835.
+;; See docs/superpowers/specs/2026-09-12-comment-abuse-rules-design.md for the
+;; design. Report-only by default: it never edits source, and only exits
+;; non-zero when --gate names a rule that actually found something.
 ;;
-;; Report-only. It never edits source, and it always exits 0; the phrase list
-;; is a starting point, not a settled gate.
+;; Each finding is a map {:file :line :end :kind :measure :evidence}. R1-R4
+;; and R6 are objective: computed from the source or the corpus, with no
+;; hand-curated wording. R5 is the original phrase-list heuristic, reported
+;; separately and never gated.
 
 (require 'clojure.string)
+(require 'clojure.set)
 
 ;; The phrase list is deliberately small and literal. Every entry names a thing
 ;; that can only be true of the change rather than of the code, which is what
@@ -44,6 +48,13 @@
 (defn lg-file? [p] (clojure.string/ends-with? p ".lg"))
 (defn go-file? [p] (clojure.string/ends-with? p ".go"))
 
+(def snippet-max 100)
+
+(defn snippet [text]
+  (if (> (count text) snippet-max)
+    (str (subs text 0 (dec snippet-max)) "…")
+    text))
+
 ;; comment-body returns the text of a whole-line comment, or nil when the line
 ;; is not one. Trailing comments are not scanned: devlog prose is written in
 ;; leading comment blocks, and skipping trailing ones avoids having to track
@@ -61,9 +72,11 @@
     (some (fn [m] (clojure.string/includes? low m)) skip-markers)))
 
 ;; Consecutive comment lines are one block, so a phrase that wraps across two
-;; lines is still found. A block reports at the line it starts on. Blocks keep
-;; the raw lines alongside the stripped bodies: a directive marker such as
-;; "//go:" includes the comment introducer, so skip? has to see it unstripped.
+;; lines is still found. A block reports at the line it starts on, and tracks
+;; :end (the last line it covers) so downstream rules can emit line ranges.
+;; Blocks keep the raw lines alongside the stripped bodies: a directive marker
+;; such as "//go:" includes the comment introducer, so skip? has to see it
+;; unstripped.
 (defn comment-blocks [src go?]
   (let [lines (clojure.string/split src "\n")
         out   (atom [])
@@ -75,9 +88,11 @@
         (if (nil? body)
           (do (when @cur (swap! out conj @cur)) (reset! cur nil))
           (if @cur
-            (reset! cur (assoc (assoc @cur :text (str (:text @cur) " " body))
-                               :raw (str (:raw @cur) " " raw)))
-            (reset! cur {:line n :text body :raw raw})))))
+            (reset! cur (assoc @cur
+                               :text (str (:text @cur) " " body)
+                               :raw (str (:raw @cur) " " raw)
+                               :end n))
+            (reset! cur {:line n :end n :text body :raw raw})))))
     (when @cur (swap! out conj @cur))
     @out))
 
@@ -95,6 +110,66 @@
                    {:file path :line (:line b) :phrase p :text (:text b)}))
                blocks))))
 
+;; --- R1 — commented-out code (.lg only) --------------------------------
+;;
+;; A comment body that reads as a balanced, delimited let-go form is code:
+;; strip the marker, hand the text to the reader (`read-string`), and require
+;; the delimiters actually balance. This is fully structural, no lexicon, no
+;; threshold beyond "has at least one delimiter pair" — which is also the
+;; exclusion for a bare identifier or a bare literal (`;; n`, `;; 42`), since
+;; neither has a delimiter to balance.
+;;
+;; R1 is deliberately NOT implemented for Go here. Doing that from .lg would
+;; mean either shelling a Go parser we don't have exposed at statement
+;; granularity (only `gogen/type`, an expression-only parse via
+;; `go/parser.ParseExpr`, is available to .lg) or hand-rolling a tokenizer
+;; that approximates Go grammar — both wrong shapes for a rule this
+;; structural. Go analysis is planned as its own tool; when it exists, R1 for
+;; Go becomes a consumer of its output rather than new parsing work here. So:
+;; R1 findings only ever come from .lg files. A Go file is never flagged or
+;; silently "checked and clean" for R1 — it is simply not covered yet, and
+;; the report says so.
+(def delim-chars #{\( \) \[ \] \{ \}})
+(def open-chars #{\( \[ \{})
+(def close->open {\) \( \] \[ \} \{})
+
+(defn delim-count [text]
+  (count (filter delim-chars (seq text))))
+
+;; balanced? walks the text as a bracket stack. It does not special-case
+;; string literals inside the comment body (a `"("` inside a quoted string
+;; would be counted); that is a known, accepted imprecision — see the
+;; calibration report for how often it actually bites on the real corpus.
+(defn balanced? [text]
+  (loop [cs (seq text) stack []]
+    (cond
+      (empty? cs) (empty? stack)
+      (contains? open-chars (first cs)) (recur (rest cs) (conj stack (first cs)))
+      (contains? delim-chars (first cs))
+      (let [top (peek stack) c (first cs)]
+        (if (and top (= top (get close->open c)))
+          (recur (rest cs) (pop stack))
+          false))
+      :else (recur (rest cs) stack))))
+
+(defn lg-parses? [text]
+  (try (do (read-string text) true) (catch Exception e false)))
+
+(defn commented-out-code? [text]
+  (and (>= (delim-count text) 1)
+       (balanced? text)
+       (lg-parses? text)))
+
+(defn r1-findings [path blocks]
+  (if (lg-file? path)
+    (vec (keep (fn [b]
+                 (when (commented-out-code? (:text b))
+                   {:file path :line (:line b) :end (:end b)
+                    :kind :commented-out-code :measure 1
+                    :evidence (snippet (:text b))}))
+               blocks))
+    []))
+
 (defn source-file? [p] (or (lg-file? p) (go-file? p)))
 
 ;; Directory walk. os/ls yields bare names, so each level rebuilds the path.
@@ -106,17 +181,20 @@
       (source-file? path) [path]
       :else [])))
 
-(def snippet-max 100)
-
-(defn snippet [text]
-  (if (> (count text) snippet-max)
-    (str (subs text 0 (dec snippet-max)) "…")
-    text))
+(defn file-blocks [path] (comment-blocks (slurp path) (go-file? path)))
 
 (let [argv   (vec (drop 2 (seq os/args)))
       paths  (if (empty? argv) ["pkg" "scripts"] argv)
       files  (vec (mapcat collect paths))
-      hits   (vec (mapcat scan-file files))]
+      hits   (vec (mapcat scan-file files))
+      r1     (vec (mapcat (fn [p] (r1-findings p (file-blocks p))) files))
+      go-files (count (filter go-file? files))]
+  (doseq [f r1]
+    (println (str (:file f) ":" (:line f) "-" (:end f) "  [commented-out-code] "
+                  (:evidence f))))
+  (println (str (count r1) " commented-out-code finding(s) (R1, .lg only — "
+                go-files " Go file(s) not covered yet, see R1's section comment"
+                " in scripts/lint.lg)."))
   (doseq [h hits]
     (println (str (:file h) ":" (:line h) "  [devlog-comment] \"" (:phrase h) "\""))
     (println (str "    " (snippet (:text h)))))

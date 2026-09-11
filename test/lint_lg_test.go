@@ -101,6 +101,77 @@ func TestLintLgSkipMarkersAndPhraseMatching(t *testing.T) {
 	}
 }
 
+// R1 — commented-out code (`.lg` only; Go is explicitly deferred, see
+// scripts/lint.lg's own R1 section comment). A comment whose body reads as a
+// balanced, delimited form is flagged; a bare identifier/literal and ordinary
+// prose (even prose that happens to contain a parenthetical aside without a
+// full balanced code shape) are not.
+const lintFixtureR1 = `;; (inc counter)
+(def a 1)
+
+;; n
+(def b 2)
+
+;; increment the counter for retries
+(def c 3)
+
+;; 42
+(def d 4)
+`
+
+var lintWantR1 = []int{1}
+
+func TestLintR1CommentedOutCode(t *testing.T) {
+	dir := t.TempDir()
+	lgFixture := filepath.Join(dir, "fixture.lg")
+	if err := os.WriteFile(lgFixture, []byte(lintFixtureR1), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg: %v\n%s", err, out)
+	}
+
+	got := []int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "[commented-out-code]") {
+			continue
+		}
+		loc := strings.Fields(line)[0]
+		// loc is "path:line-end"
+		loc = strings.SplitN(loc, ":", 2)[1]
+		loc = strings.SplitN(loc, "-", 2)[0]
+		n, convErr := strconv.Atoi(loc)
+		if convErr != nil {
+			t.Fatalf("unparsable finding location %q in:\n%s", loc, out)
+		}
+		got = append(got, n)
+	}
+
+	if !equalInts(got, lintWantR1) {
+		t.Errorf("commented-out-code findings at lines %v, want %v\n%s", got, lintWantR1, out)
+	}
+
+	// Go source must never be flagged for R1: the rule is deferred there.
+	goFixture := filepath.Join(dir, "other.go")
+	goSrc := "package fixture\n\n// x := computeSomething(a, b)\nfunc F() {}\n"
+	if err := os.WriteFile(goFixture, []byte(goSrc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out2, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg: %v\n%s", err, out2)
+	}
+	for _, line := range strings.Split(string(out2), "\n") {
+		if strings.Contains(line, "[commented-out-code]") && strings.Contains(line, "other.go") {
+			t.Errorf("R1 must not fire on Go source (deferred): %s", line)
+		}
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
