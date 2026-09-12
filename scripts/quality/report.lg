@@ -94,19 +94,19 @@
          (:test-only dead) " reachable only from tests)"
          " -- OURS, not the paper's; an UPPER BOUND")
        (str "  comment-debt " (n3 (:value comment-debt))
-           " (" (:flagged comment-debt) " flagged of "
-           (:total-comment-lines comment-debt) " comment lines)"
-           " -- OURS: comment slop on its own denominator, where the paper's"
-           " LOC divisor hides it")
-      (str "  lint " (if (:flagged-code-lines lint)
-                       (str (:findings lint) " findings, "
-                            (:flagged-code-lines lint) " code lines and "
-                            (:flagged-comment-lines lint) " comment lines flagged"
-                            (if (pos? (:unscored lint))
-                              (str ", " (:unscored lint) " unscored (divider/devlog)") ""))
-                       (str "UNAVAILABLE (" (:error lint) ") -- verbosity counts CLONE LINES ONLY"
-                            " and comment-debt is omitted")))
-      (str "  verbosity " (n3 (:value verbosity))
+         " (" (:flagged comment-debt) " flagged of "
+         (:total-comment-lines comment-debt) " comment lines)"
+         " -- OURS: comment slop on its own denominator, where the paper's"
+         " LOC divisor hides it")
+       (str "  lint " (if (:flagged-code-lines lint)
+                        (str (:findings lint) " findings, "
+                             (:flagged-code-lines lint) " code lines and "
+                             (:flagged-comment-lines lint) " comment lines flagged"
+                             (if (pos? (:unscored lint))
+                               (str ", " (:unscored lint) " unscored (divider/devlog)") ""))
+                        (str "UNAVAILABLE (" (:error lint) ") -- verbosity counts CLONE LINES ONLY"
+                             " and comment-debt is omitted")))
+       (str "  verbosity " (n3 (:value verbosity))
          " (" (:dup-lines verbosity) " duplicated of "
          (:loc verbosity) " lines)"
          " -- LOWER BOUND on the paper's metric")
@@ -154,17 +154,39 @@
       (str (pad (issue-at i) 56) (pad (name (:kind i)) 15)
            (pad (measure-str (:measure i)) 8) (:hint i)))))
 
+(defn- best-target-lines
+  "The section someone will actually read: callables that are both high-mass
+   and duplicated, so one extraction removes complexity and duplication at
+   once."
+  [targets]
+  (if (empty? targets)
+    []
+    (concat
+      ["" (str "best targets " (count targets)
+               " (high mass AND duplicated -- extracting one removes both)")
+       (str (pad "path:line" 52) (pad "name" 24) (lpad "mass" 8) (lpad "share" 8)
+            (lpad "cc" 5) (lpad "sloc" 6) "  id")]
+      (for [t targets]
+        (str (pad (str (:path t) ":" (:line t)) 52) (pad (:name t) 24)
+             (lpad (n1 (:mass t)) 8) (lpad (n3 (:mass-share t)) 8)
+             (lpad (:cc t) 5) (lpad (:sloc t) 6) "  " (:id t))))))
+
 (defn- top-lines
   "The most complex definitions. Unlike the files table these are RAW
    measurements, where higher means worse -- said so in the section header
    so the two tables are never read the same way."
   [top]
   (concat
-    ["" (str "top complexity " (count top) " (raw measurements; higher is worse)")
-     (str (pad "path:line" 56) (pad "name" 28) (lpad "cc" 5) (lpad "depth" 7) (lpad "lines" 7))]
+    ["" (str "top complexity " (count top)
+             " (raw measurements, ranked by MASS = cc * sqrt(sloc); higher is worse)")
+     (str (pad "path:line" 50) (pad "name" 24) (lpad "mass" 8) (lpad "share" 7)
+          (lpad "cc" 5) (lpad "sloc" 6) (lpad "depth" 6) "  id")]
     (for [t top]
-      (str (pad (str (:path t) ":" (:line t)) 56) (pad (:name t) 28)
-           (lpad (:cc t) 5) (lpad (:depth t) 7) (lpad (:lines t) 7)))))
+      (str (pad (str (:path t) ":" (:line t)) 50) (pad (:name t) 24)
+           (lpad (n1 (:mass t)) 8) (lpad (n3 (:mass-share t)) 7)
+           (lpad (:cc t) 5) (lpad (:sloc t) 6)
+           (lpad (or (:depth t) "-") 6) "  " (:id t)
+           (if (:duplicated? t) "  DUP" "")))))
 
 (defn text
   "The full text report: header, debt block, file table (debt descending),
@@ -172,6 +194,8 @@
   [result]
   (str (str/join "\n"
                  (concat (header result)
+                         ;; Best targets lead: the section someone acts on.
+                         (best-target-lines (:best-targets result))
                          [""]
                          (debt-block result)
                          (file-table (:files result))

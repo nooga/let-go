@@ -236,14 +236,55 @@
          (sort-by (juxt (comp - :impact) :path :line (comp name :kind)))
          vec)))
 
+(defn- terms-mass
+  "The paper's mass(f) = CC(f) * sqrt(SLOC(f)). Duplicated from
+   `quality.terms/mass` rather than required, because terms already requires
+   this namespace for `thresholds` and a cycle is worse than one line."
+  [{:keys [cc sloc]}]
+  (* (double (or cc 0)) (math/sqrt (max 1 (or sloc 1)))))
+
+(defn stable-id
+  "A short content-derived identity for a finding, so the PR-delta surface can
+   say WHICH findings appeared and disappeared rather than only that counts
+   moved.
+
+   Derived from what the finding IS, never from where it sits: an unrelated
+   edit above a function must not change its identity."
+  [& parts]
+  (let [h (hash (vec parts))]
+    (subs (str "q" (if (neg? h) (- h) h)) 0 (min 9 (count (str "q" (if (neg? h) (- h) h)))))))
+
 (defn top-complexity
-  "The `n` most complex definitions across `per-file`, as
-   [{:path :line :name :cc :depth :lines}...] sorted by cc descending,
-   then depth descending, then path, then line."
-  [per-file n]
-  (->> (vec (for [f per-file d (:definitions f)]
-              {:path (:path f) :line (:line d) :name (:name d)
-               :cc (:cc d) :depth (:depth d) :lines (defn-lines d)}))
-       (sort-by (juxt (comp - :cc) (comp - :depth) :path :line))
-       (take n)
-       vec))
+  "The `n` costliest callables, ranked by MASS.
+
+   Mass, not cc: erosion weights every callable by `cc * sqrt(sloc)`, so a cc
+   sort recommends fixes that barely move the number. `type-join` at cc 46
+   over 41 lines is mass 294; `lower-ns-to-go-result` at cc 35 over 324 lines
+   is mass 630 -- more than twice as valuable to fix, and second on a cc
+   ranking. cc, depth and lines stay visible because they are what tells you
+   HOW to fix it; mass is what tells you whether to bother.
+
+   `:mass-share` is the entry's share of TOTAL corpus mass, so the reader can
+   see what fixing the top few actually buys. `duplicated?` marks a callable
+   that also sits inside a duplicated region -- the best targets in the
+   codebase, since extracting one removes complexity and duplication at once."
+  [callables n duplicated-region?]
+  (let [total (reduce + 0.0 (map terms-mass callables))]
+    (->> callables
+         (map (fn [c]
+                (let [m (terms-mass c)]
+                  (assoc c :mass m
+                         :mass-share (if (pos? total) (/ m total) 0.0)
+                         :id (stable-id (:path c) (str (:name c)))
+                         :duplicated? (boolean (duplicated-region? c))))))
+         vec
+         (sort-by (juxt (comp - :mass) (comp - :cc) :path :line))
+         (take n)
+         vec)))
+
+(defn best-targets
+  "Callables that are BOTH high-mass and inside a duplicated region.
+   Extracting one of these removes complexity and duplication together, which
+   is why they lead the report."
+  [top]
+  (vec (filter :duplicated? top)))
