@@ -2570,9 +2570,9 @@ func _adapt_Subs_arity2(vs []vm.Value) (vm.Value, error) {
 	}
 	a1, ok := vs[1].(vm.Int)
 	if !ok {
-		return vm.NIL, fmt.Errorf("expected int, got %s", vs[1].Type().Name())
+		return vm.NIL, fmt.Errorf("expected int64, got %s", vs[1].Type().Name())
 	}
-	r, err := Subs(string(a0), int(a1))
+	r, err := Subs(string(a0), int64(a1))
 	if err != nil {
 		return vm.NIL, err
 	}
@@ -2586,13 +2586,13 @@ func _adapt_Subs3_arity3(vs []vm.Value) (vm.Value, error) {
 	}
 	a1, ok := vs[1].(vm.Int)
 	if !ok {
-		return vm.NIL, fmt.Errorf("expected int, got %s", vs[1].Type().Name())
+		return vm.NIL, fmt.Errorf("expected int64, got %s", vs[1].Type().Name())
 	}
 	a2, ok := vs[2].(vm.Int)
 	if !ok {
-		return vm.NIL, fmt.Errorf("expected int, got %s", vs[2].Type().Name())
+		return vm.NIL, fmt.Errorf("expected int64, got %s", vs[2].Type().Name())
 	}
-	r, err := Subs3(string(a0), int(a1), int(a2))
+	r, err := Subs3(string(a0), int64(a1), int64(a2))
 	if err != nil {
 		return vm.NIL, err
 	}
@@ -2613,9 +2613,9 @@ func _adapt_Nth_arity2(vs []vm.Value) (vm.Value, error) {
 	a0 := vs[0]
 	a1, ok := vs[1].(vm.Int)
 	if !ok {
-		return vm.NIL, fmt.Errorf("expected int, got %s", vs[1].Type().Name())
+		return vm.NIL, fmt.Errorf("expected int64, got %s", vs[1].Type().Name())
 	}
-	r, err := Nth(a0, int(a1))
+	r, err := Nth(a0, int64(a1))
 	if err != nil {
 		return vm.NIL, err
 	}
@@ -2626,10 +2626,10 @@ func _adapt_Nth3_arity3(vs []vm.Value) (vm.Value, error) {
 	a0 := vs[0]
 	a1, ok := vs[1].(vm.Int)
 	if !ok {
-		return vm.NIL, fmt.Errorf("expected int, got %s", vs[1].Type().Name())
+		return vm.NIL, fmt.Errorf("expected int64, got %s", vs[1].Type().Name())
 	}
 	a2 := vs[2]
-	r, err := Nth3(a0, int(a1), a2)
+	r, err := Nth3(a0, int64(a1), a2)
 	if err != nil {
 		return vm.NIL, err
 	}
@@ -2659,10 +2659,10 @@ func _adapt_Deref3_arity3(vs []vm.Value) (vm.Value, error) {
 	a0 := vs[0]
 	a1, ok := vs[1].(vm.Int)
 	if !ok {
-		return vm.NIL, fmt.Errorf("expected int, got %s", vs[1].Type().Name())
+		return vm.NIL, fmt.Errorf("expected int64, got %s", vs[1].Type().Name())
 	}
 	a2 := vs[2]
-	r, err := Deref3(a0, int(a1), a2)
+	r, err := Deref3(a0, int64(a1), a2)
 	if err != nil {
 		return vm.NIL, err
 	}
@@ -3052,12 +3052,12 @@ func RegisterGeneratedPrimitives() {
 			"parse-uuid":               {GoIdent: "CoreParseUUID", LgName: "parse-uuid", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
 			"==":                       {GoIdent: "CoreNumericEq", LgName: "==", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "vm.Value", NeedsError: true},
 			"name":                     {GoIdent: "Name", LgName: "name", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "string", NeedsError: true},
-			"subs@2":                   {GoIdent: "Subs", LgName: "subs", Arity: 2, ParamSpecs: []string{"string", "int"}, ResultSpec: "string", NeedsError: true},
-			"subs@3":                   {GoIdent: "Subs3", LgName: "subs", Arity: 3, ParamSpecs: []string{"string", "int", "int"}, ResultSpec: "string", NeedsError: true},
-			"nth@2":                    {GoIdent: "Nth", LgName: "nth", Arity: 2, ParamSpecs: []string{"vm.Value", "int"}, ResultSpec: "vm.Value", NeedsError: true},
-			"nth@3":                    {GoIdent: "Nth3", LgName: "nth", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"subs@2":                   {GoIdent: "Subs", LgName: "subs", Arity: 2, ParamSpecs: []string{"string", "int64"}, ResultSpec: "string", NeedsError: true},
+			"subs@3":                   {GoIdent: "Subs3", LgName: "subs", Arity: 3, ParamSpecs: []string{"string", "int64", "int64"}, ResultSpec: "string", NeedsError: true},
+			"nth@2":                    {GoIdent: "Nth", LgName: "nth", Arity: 2, ParamSpecs: []string{"vm.Value", "int64"}, ResultSpec: "vm.Value", NeedsError: true},
+			"nth@3":                    {GoIdent: "Nth3", LgName: "nth", Arity: 3, ParamSpecs: []string{"vm.Value", "int64", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
 			"deref@1":                  {GoIdent: "Deref", LgName: "deref", Arity: 1, ParamSpecs: []string{"vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
-			"deref@3":                  {GoIdent: "Deref3", LgName: "deref", Arity: 3, ParamSpecs: []string{"vm.Value", "int", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
+			"deref@3":                  {GoIdent: "Deref3", LgName: "deref", Arity: 3, ParamSpecs: []string{"vm.Value", "int64", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
 			"str":                      {GoIdent: "Str", LgName: "str", Arity: -1, Variadic: true, ParamSpecs: []string{}, ResultSpec: "string", NeedsError: true},
 			"get@2":                    {GoIdent: "Get", LgName: "get", Arity: 2, ParamSpecs: []string{"vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},
 			"get@3":                    {GoIdent: "Get3", LgName: "get", Arity: 3, ParamSpecs: []string{"vm.Value", "vm.Value", "vm.Value"}, ResultSpec: "vm.Value", NeedsError: true},

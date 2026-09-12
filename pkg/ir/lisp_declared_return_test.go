@@ -25,8 +25,8 @@ func TestDeclaredReturnTypeUnboxesSelfRecursion(t *testing.T) {
 	rendered := lowerForms(t, "drpkg",
 		`(defn drfib ^long [^long n] (if (< n 2) n (+ (drfib (- n 1)) (drfib (- n 2)))))`)
 
-	if !strings.Contains(rendered, "func Drfib(ec *vm.ExecContext, arg0 int) (int, error)") {
-		t.Fatalf("expected a natively-typed int return; rendered:\n%s", rendered)
+	if !strings.Contains(rendered, "func Drfib(ec *vm.ExecContext, arg0 int64) (int64, error)") {
+		t.Fatalf("expected a natively-typed int64 return; rendered:\n%s", rendered)
 	}
 	// The payoff: generic boxed addition is gone in favour of int + int.
 	if strings.Contains(rendered, "rt.AddValue") {
