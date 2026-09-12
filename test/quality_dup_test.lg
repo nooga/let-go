@@ -165,3 +165,40 @@
     (is (< 83.5 (get pct "fixtures/quality/dup_two_blocks_b.lg") 83.6))
     (is (< 89.8 (get pct2 "fixtures/quality/dup_two_blocks_a.lg") 89.9))
     (is (not= 100.0 (get pct2 "fixtures/quality/dup_two_blocks_a.lg")))))
+
+(deftest duplicated-lines-counts-token-bearing-lines-after-union
+  ;; The two shared blocks cover lines 1-35 and 49-79. `duplicated-lines`
+  ;; reports the code lines inside them -- blanks and comment-only lines in
+  ;; the span are not code -- as a raw count for the caller to divide by the
+  ;; file's own LOC.
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg"
+                  "fixtures/quality/dup_two_blocks_b.lg")
+        ps (dup/pairs fs 25 40 50)
+        covered (dup/duplicated-lines fs ps)
+        n (get covered "fixtures/quality/dup_two_blocks_a.lg")
+        span-lines (+ (- 35 1 -1) (- 79 49 -1))]
+    ;; strictly fewer than the raw span, because the spans contain comment
+    ;; and blank lines, and at most the span
+    (is (< n span-lines))
+    (is (pos? n))
+    ;; every counted line is a real code line, so it cannot exceed the file's
+    ;; token-bearing line count
+    (is (<= n (count (distinct (map :line (:tokens (first fs)))))))))
+
+(deftest duplicated-lines-does-not-double-count-overlap
+  ;; Three overlapping regions over the same file: the count is the union's
+  ;; code lines, not the sum of the three spans.
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg")
+        one (fn [from to] {:a {:path "fixtures/quality/dup_two_blocks_a.lg" :start from :end to}
+                           :b {:path "other.lg" :start 1 :end 2}
+                           :shared 60 :similarity 0.5})
+        n1 (get (dup/duplicated-lines fs [(one 5 20)]) "fixtures/quality/dup_two_blocks_a.lg")
+        n3 (get (dup/duplicated-lines fs [(one 5 20) (one 8 15) (one 10 20)])
+                "fixtures/quality/dup_two_blocks_a.lg")]
+    (is (= n1 n3))))
+
+(deftest merge-spans-merges-overlapping-and-adjacent
+  (is (= [[1 20] [30 35]] (dup/merge-spans [[1 10] [5 20] [30 35]])))
+  ;; adjacent (10 then 11) merges; a one-line gap does not
+  (is (= [[1 20]] (dup/merge-spans [[1 10] [11 20]])))
+  (is (= [[1 10] [12 20]] (dup/merge-spans [[1 10] [12 20]]))))

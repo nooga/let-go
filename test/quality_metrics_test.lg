@@ -67,3 +67,21 @@
     ;; The point of this fixture: unlike metrics_fixture.lg (raw MI > 100),
     ;; this one lands strictly inside the conventional [0,100] band.
     (is (< 0 (:mi fm) 100))))
+
+(deftest sloc-per-definition-excludes-blank-and-comment-lines
+  ;; `spread` spans 8 lines but only 4 carry tokens: two blank lines and two
+  ;; comment lines inside the definition do not count.
+  (let [m (m/file-metrics (slurp "fixtures/quality/sloc_fixture.lg"))
+        by-name (into {} (map (fn [d] [(:name d) d]) (:definitions m)))
+        spread (get by-name 'spread)
+        tight (get by-name 'tight)]
+    (is (= 8 (- (:end spread) (:line spread) -1)))   ; line SPAN
+    (is (= 4 (:sloc spread)))                        ; SLOC
+    (is (= 3 (- (:end tight) (:line tight) -1)))
+    (is (= 3 (:sloc tight)))))
+
+(deftest every-definition-carries-sloc
+  (let [m (m/file-metrics (slurp "fixtures/quality/metrics_fixture.lg"))]
+    (is (every? (fn [d] (and (:sloc d) (pos? (:sloc d)))) (:definitions m)))
+    ;; SLOC can never exceed the definition's line span
+    (is (every? (fn [d] (<= (:sloc d) (- (:end d) (:line d) -1))) (:definitions m)))))

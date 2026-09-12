@@ -2,7 +2,8 @@
   "Cyclomatic complexity per definition and the SEI maintainability index per
    file, over reader forms. Pure."
   (:require
-   [quality.forms :as f]))
+   [quality.forms :as f]
+   [quality.lex :as lex]))
 
 ;; NB: a top-level `'#{...}` quotes the whole `(hash-set ...)` expansion
 ;; produced by the `#{}` reader macro rather than yielding a set value (it
@@ -68,8 +69,19 @@
           log2 (fn [v] (/ (math/log v) (math/log 2)))]
       {:N N :eta eta :volume (if (pos? eta) (* N (log2 eta)) 0)})))
 
+(defn definition-sloc
+  "Source lines of a definition: the lines in `[line, end]` that carry at
+   least one token. Blank lines and comment-only lines inside the definition
+   do not count, so this is SLOC and not the line span `(inc (- end line))`.
+   `token-lines` is the set of token-bearing line numbers for the file."
+  [token-lines {:keys [line end]}]
+  (count (filter token-lines (range line (inc end)))))
+
 (defn file-metrics [text]
-  (let [defs (mapv #(assoc % :cc (complexity (:form %))) (f/definitions text))
+  (let [token-lines (set (map :line (lex/tokens text :lg)))
+        defs (mapv #(assoc % :cc (complexity (:form %))
+                           :sloc (definition-sloc token-lines %))
+                   (f/definitions text))
         base-cnt (f/counts text)
         doc-lines (reduce (fn [n d]
                             (let [form (:form d)]
