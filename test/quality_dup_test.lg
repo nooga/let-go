@@ -45,7 +45,7 @@
   (let [fs (files "fixtures/quality/forms_fixture.lg" "fixtures/quality/metrics_fixture.lg")]
     (is (empty? (dup/pairs fs 25 40 50)))))
 
-(deftest percent-is-duplicated-tokens-over-total
+(deftest percent-is-duplicated-lines-over-total
   (let [fs (files "fixtures/quality/dup_a.lg" "fixtures/quality/dup_b.lg")
         pct (dup/file-percent fs (dup/pairs fs 25 40 50))]
     (is (< 30 (get pct "fixtures/quality/dup_a.lg") 90))))
@@ -83,3 +83,28 @@
     (is (= "fixtures/quality/dup_self.lg" (get-in (first ps) [:b :path])))
     (is (not= (get-in (first ps) [:a :start]) (get-in (first ps) [:b :start])))
     (is (<= (:similarity (first ps)) 1.0))))
+
+(defn- one-line-file
+  "A synthetic file whose last token sits on line `n`, so `file-percent`
+   divides by `n`."
+  [path n]
+  {:path path :tokens [{:t "ID" :line n}]})
+
+(defn- pair-at [path from to]
+  {:a {:path path :start from :end to}
+   :b {:path "other.lg" :start 1 :end (inc (- to from))}
+   :shared 60 :similarity 0.5})
+
+(deftest percent-unions-overlapping-spans
+  ;; Spans 1-10, 5-20 and 30-35 over a 100-line file cover 1-20 (20 lines)
+  ;; plus 30-35 (6 lines) = 26, not 10 + 16 + 6 = 32.
+  (let [fs [(one-line-file "f.lg" 100)]
+        ps [(pair-at "f.lg" 1 10) (pair-at "f.lg" 5 20) (pair-at "f.lg" 30 35)]]
+    (is (< 25.99 (get (dup/file-percent fs ps) "f.lg") 26.01))))
+
+(deftest percent-does-not-saturate-on-many-small-partners
+  ;; 60 partners all matching the same 3 lines: summing spans gives 180 over
+  ;; 100 lines and clamps to 100%; the union is 3 lines, i.e. 3%.
+  (let [fs [(one-line-file "f.lg" 100)]
+        ps (vec (repeat 60 (pair-at "f.lg" 10 12)))]
+    (is (< 2.99 (get (dup/file-percent fs ps) "f.lg") 3.01))))

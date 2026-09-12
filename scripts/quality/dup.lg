@@ -19,16 +19,6 @@
                 m (reduce (fn [a b] (if (<= (:hash b) (:hash a)) b a)) win)]
             (recur (inc i) m (if (= m last) out (conj out m)))))))))
 
-(defn- regions
-  "Group shared positions in a file into maximal runs (gap <= k)."
-  [positions k]
-  (reduce (fn [rs p]
-            (let [r (peek rs)]
-              (if (and r (<= (- p (:to r)) k))
-                (conj (pop rs) (assoc r :to p))
-                (conj rs {:from p :to p}))))
-          [] (sort positions)))
-
 (defn- kgram-index
   "hash -> sorted vec of k-gram start positions, from the full (non-winnowed)
    k-gram hash list."
@@ -36,12 +26,12 @@
   (reduce (fn [m {:keys [hash pos]}] (update m hash (fnil conj []) pos))
           {} (kgram-hashes tokens k)))
 
-(defn- overlaps?
-  "Whether the k-gram-window spans [from, to+k-1] of two regions intersect."
-  [a b k]
-  (and a b
-       (<= (:from a) (+ (:to b) k -1))
-       (<= (:from b) (+ (:to a) k -1))))
+(defn- self-overlap?
+  "Whether a self-match region's two sides overlap once each k-gram's window
+   is taken into account -- i.e. the \"copy\" is really the same text."
+  [r k]
+  (and (<= (:a-from r) (+ (:b-to r) k -1))
+       (<= (:b-from r) (+ (:a-to r) k -1))))
 
 (defn- cross-shared
   "Distinct-hash matches between two different files. A hash with multiple
@@ -69,38 +59,76 @@
                      [h pmin pmax]))))
              kix)))
 
+(defn- aligned-regions
+  "Group [hash pos-a pos-b] matches into ALIGNED regions: walking the matches
+   in pos-a order, a match extends the current region only when BOTH sides
+   advance by no more than `k` positions, so two files that share two
+   separate blocks yield two regions (and a block pair whose order is swapped
+   between the files does too, because side B jumps). Each region carries
+   `:n`, the number of matched k-grams inside it.
+
+   Aligning by the matches themselves -- rather than grouping each side's
+   positions independently and pairing the results by index -- is what makes
+   a region in A name the region in B it actually matches."
+  [matches k]
+  (reduce (fn [rs [_ pa pb]]
+            (let [r (peek rs)
+                  da (when r (- pa (:a-to r)))
+                  db (when r (- pb (:b-to r)))]
+              (if (and r (<= da k) (<= db k) (>= db (- k)))
+                (conj (pop rs) (assoc r :a-to (max (:a-to r) pa)
+                                      :b-to (max (:b-to r) pb)
+                                      :n (inc (:n r))))
+                (conj rs {:a-from pa :a-to pa :b-from pb :b-to pb :n 1}))))
+          [] (sort-by second matches)))
+
+(defn- token-line
+  "The source line of the token at `pos` (clamped to the last token)."
+  [f pos]
+  (:line (nth (:tokens f) (min pos (dec (count (:tokens f)))))))
+
 (defn pairs
-  "Near-duplicate region pairs across `files` ([{:path :tokens}...]).
+  "EVERY near-duplicate region pair across `files` ([{:path :tokens}...]) --
+   one record per matched region, not one per file pair, so a file that
+   shares two separate blocks with another reports both with their own line
+   spans and their own similarity.
 
    `k` = k-gram size in tokens, `w` = winnowing window (k-grams), `floor` =
-   minimum number of DISTINCT matching k-gram hashes required to report a
-   pair. `floor` is a token-run threshold in disguise: winnowing guarantees
-   at least one shared fingerprint for any contiguous run of `w + k - 1` or
-   more identical tokens between two files, so `floor` distinct matching
-   hashes corresponds to roughly `floor + k - 1` contiguous duplicated
-   tokens when the match is one unbroken run (e.g. floor=50, k=25 => a
-   ~74-token run). `fingerprints` (winnowed, sparse) is used only as a
-   cheap pre-filter -- pairs whose fingerprint hash sets don't intersect at
-   all are skipped before the exact comparison runs. Because winnowing only
-   guarantees coverage for runs of >= w+k-1 tokens, a pair whose only shared
-   code is several *short*, scattered matches (each below that length) may
-   be missed by the pre-filter even though the raw k-gram overlap exists;
-   this is winnowing's documented trade-off (sparse index, not exhaustive
-   recall on fragmented matches), not a bug in the exact count that follows.
+   minimum number of matched k-grams a REGION must carry to be reported.
+   `floor` is a token-run threshold in disguise: winnowing guarantees at
+   least one shared fingerprint for any contiguous run of `w + k - 1` or more
+   identical tokens between two files, so `floor` matched k-grams corresponds
+   to roughly `floor + k - 1` contiguous duplicated tokens when the region is
+   one unbroken run (e.g. floor=50, k=25 => a ~74-token run).
+   `fingerprints` (winnowed, sparse) is used only as a cheap pre-filter --
+   pairs whose fingerprint hash sets don't intersect at all are skipped
+   before the exact comparison runs. Because winnowing only guarantees
+   coverage for runs of >= w+k-1 tokens, a pair whose only shared code is
+   several *short*, scattered matches (each below that length) may be missed
+   by the pre-filter even though the raw k-gram overlap exists; this is
+   winnowing's documented trade-off (sparse index, not exhaustive recall on
+   fragmented matches), not a bug in the exact counts that follow.
 
-   Once a candidate pair clears the pre-filter, the reported `:shared` count
-   and the `:a`/`:b` line ranges come from the full (non-winnowed) k-gram
-   hash index (`shared` = distinct matching hashes, per `cross-shared`
-   above) -- an O(tokens) hash-map lookup, not a nested scan over every
-   position pair.
+   Once a candidate pair clears the pre-filter, matches come from the full
+   (non-winnowed) k-gram hash index -- an O(tokens) hash-map lookup, not a
+   nested scan over every position pair. The two paths count differently,
+   deliberately: `cross-shared` (two different files) counts MIN-MULTIPLICITY
+   matches, zipping a hash's occurrences in A against its occurrences in B so
+   a repetitive file cannot cross-multiply; `self-shared` (one file against
+   itself) counts one match per DISTINCT hash, using that hash's earliest and
+   latest occurrence as the copy's two representative positions.
 
-   `similarity` = `2 * shared / (nk-a + nk-b)` where `nk-*` is each file's
-   total k-gram count; this Dice coefficient is always in [0, 1] because
-   `shared` (a sum of `min`s) can never exceed either `nk`.
+   `:shared` is the region's matched-k-gram count and `:similarity` is
+   `shared / min(region-kgrams-a, region-kgrams-b)`, which is always in
+   [0, 1] because a sum of per-hash minimums cannot exceed either side's
+   position count inside the region; two identical files score 1.0.
 
-   Same-file (`i = j`) self-pairs are reported too -- a copy-paste
-   duplicate inside one file is still duplication -- using `self-shared`
-   (see its docstring); a self-pair whose two reported regions would
+   Per-FILE duplication is the union of all these regions' lines -- see
+   `file-percent`, which is the aggregate view of what this function reports
+   region by region.
+
+   Same-file (`i = j`) self-pairs are reported too -- a copy-paste duplicate
+   inside one file is still duplication -- and a self-region whose two sides
    overlap is dropped rather than reported."
   [files k w floor]
   (let [prepped (mapv (fn [f]
@@ -117,35 +145,59 @@
                j (range i n)
                :let [b (nth prepped j)]
                :when (or (= i j) (some ha (map :hash (:fps b))))
-               :let [shared (if (= i j)
-                              (self-shared (:kix a) k)
-                              (cross-shared (:kix a) (:kix b)))]
-               :when (>= (count shared) floor)
-               :let [ra (regions (map second shared) k)
-                     rb (regions (map #(nth % 2) shared) k)
-                     line (fn [f pos] (:line (nth (:tokens f) (min pos (dec (count (:tokens f)))))))
-                     big (fn [rs] (apply max-key #(- (:to %) (:from %)) rs))
-                     A (big ra) B (big rb)]
-               :when (or (not= i j) (not (overlaps? A B k)))]
-           {:a {:path (:path a) :start (line a (:from A)) :end (line a (+ k -1 (:to A)))}
-            :b {:path (:path b) :start (line b (:from B)) :end (line b (+ k -1 (:to B)))}
-            :shared (count shared)
-            :similarity (/ (* 2.0 (count shared)) (+ (:nk a) (:nk b)))})
-         (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start]) #(get-in % [:b :path])))
+               :let [matches (if (= i j)
+                               (self-shared (:kix a) k)
+                               (cross-shared (:kix a) (:kix b)))]
+               :when (seq matches)
+               r (aligned-regions matches k)
+               :when (>= (:n r) floor)
+               :when (or (not= i j) (not (self-overlap? r k)))
+               :let [span-a (- (:a-to r) (:a-from r) -1)
+                     span-b (- (:b-to r) (:b-from r) -1)]]
+           {:a {:path (:path a) :start (token-line a (:a-from r))
+                :end (token-line a (+ k -1 (:a-to r)))}
+            :b {:path (:path b) :start (token-line b (:b-from r))
+                :end (token-line b (+ k -1 (:b-to r)))}
+            :shared (:n r)
+            :similarity (min 1.0 (/ (double (:n r)) (max 1 (min span-a span-b))))})
+         ;; realized before sorting, then ordered for determinism
+         vec
+         (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start])
+                        #(get-in % [:b :path]) #(get-in % [:b :start])))
          vec)))
 
+(defn- union-lines
+  "Total number of distinct lines covered by `spans` ([from to], inclusive).
+   Overlapping and adjacent spans are merged, so a file matched by many
+   partners over the same region is not charged for that region twice."
+  [spans]
+  (loop [ss (vec (sort-by first spans)) from nil to nil total 0]
+    (if (empty? ss)
+      (if from (+ total (- to from -1)) total)
+      (let [[s e] (first ss)]
+        (cond
+          (nil? from) (recur (rest ss) s (max s e) total)
+          (<= s (inc to)) (recur (rest ss) from (max to e) total)
+          :else (recur (rest ss) s (max s e) (+ total (- to from -1))))))))
+
 (defn file-percent
-  "Approximates duplicated share by lines of the reported regions over
-   total token-bearing lines (dup % by lines), not by raw token count."
+  "Approximates each file's duplicated share as the UNION of its reported
+   region lines over its total token-bearing lines (dup % by lines), not by
+   raw token count.
+
+   The union matters: a file that matches many partners over the same lines
+   -- a common shape for a widely-copied helper -- would otherwise have each
+   partner's span added separately and saturate at 100% while no single pair
+   covered more than a sliver."
   [files pairs]
   (into {}
         (for [f files]
-          (let [covered (reduce (fn [s p]
-                                  (+ s (if (= (:path f) (get-in p [:a :path]))
-                                         (- (get-in p [:a :end]) (get-in p [:a :start]) -1) 0)
-                                     (if (= (:path f) (get-in p [:b :path]))
-                                       (- (get-in p [:b :end]) (get-in p [:b :start]) -1) 0)))
-                          0 pairs)
+          (let [spans (vec (concat
+                             (for [p pairs :when (= (:path f) (get-in p [:a :path]))]
+                               [(get-in p [:a :start]) (get-in p [:a :end])])
+                             (for [p pairs :when (= (:path f) (get-in p [:b :path]))]
+                               [(get-in p [:b :start]) (get-in p [:b :end])])))
+                covered (union-lines spans)
                 ;; A file with no tokens (empty, or nothing but comments)
                 ;; has no last token to read a line number from.
                 total-lines (max 1 (or (:line (last (:tokens f))) 0))]

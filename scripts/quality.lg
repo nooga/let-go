@@ -11,11 +11,16 @@
    `test/` (only `*_test.lg`/`*_test.go` inside it stay tests) -- needed to
    point the tool at a fixture corpus.
 
-   Measures `.lg` and `.go` files under `paths` (default: the source tree),
-   scores them with `quality.score`, and prints a deterministic report.
-   Two runs over the same commit, git range, coverprofile and CI value
-   produce byte-identical output: files are sorted by path, issues by
-   score impact, and every external input is pinned in the header.
+   Measures `.lg` and `.go` files under `paths` (default: `default-paths`,
+   per language), scores them with `quality.score`, and prints a
+   deterministic report.
+
+   Only VCS-TRACKED files are measured, so a scratch file in the working
+   copy cannot move the score. Two runs produce byte-identical output for
+   the same commit AND the same working copy, given the same git range,
+   coverprofile and CI value: the corpus is the tracked file set, files are
+   listed by composite ascending (ties by path), issues by score impact, and
+   every external input is pinned in the header.
 
    Design: docs/superpowers/specs/2026-09-11-code-quality-score-design.md"
   (:require
@@ -29,10 +34,20 @@
    [quality.report :as report]
    [quality.score :as score]))
 
-(def default-paths ["pkg/rt/core" "scripts" "test" "pkg" "cmd"])
+(def default-paths
+  "Default roots PER LANGUAGE. `.lg` lives in the core stdlib, the scripts
+   tree and the test suite; Go lives under pkg/ and cmd/. Keeping them apart
+   stops a `pkg` Go root from dragging in `.lg` files outside
+   `pkg/rt/core` (lowered trees, gogen fixtures). Positional paths, when
+   given, apply to both languages."
+  {:lg ["pkg/rt/core" "scripts" "test"]
+   :go ["pkg" "cmd"]})
 
 ;; Paths that would only add noise: the vendored Clojure suite, generated
-;; Go, the lowered-core tree, and sibling jj workspaces.
+;; Go, the lowered-core tree, and SIBLING jj workspaces. The last one is
+;; judged on the repo-relative path, so a run from inside
+;; `.workspaces/<name>` (where the checkout root IS that workspace and paths
+;; read `pkg/...`) measures itself instead of skipping everything.
 (def ^:private skip-substrings
   ["test/clojure-test-suite/" "core_go_lowered/" ".workspaces/"])
 
@@ -40,19 +55,7 @@
   (or (str/ends-with? path "_generated.go")
       (some #(str/includes? path %) skip-substrings)))
 
-(defn- source-file? [path]
-  (or (str/ends-with? path ".lg") (str/ends-with? path ".go")))
-
-(defn walk
-  "Every `.lg`/`.go` file under `root` (a file or a directory), recursively
-   and in sorted order, minus the skipped paths."
-  [root]
-  (let [st (os/stat root)]
-    (cond
-      (nil? st) []
-      (:dir? st) (vec (mapcat #(walk (str root "/" %)) (sort (os/ls root))))
-      (and (source-file? root) (not (skip? root))) [root]
-      :else [])))
+(defn- lang-of [path] (if (str/ends-with? path ".go") :go :lg))
 
 (defn- checkout-root?
   "Whether `dir` is the root of the working copy: it holds a `.jj` or a
@@ -60,27 +63,109 @@
   [dir]
   (boolean (or (os/stat (str dir "/.jj")) (os/stat (str dir "/.git")))))
 
-(defn repo-prefix
-  "The path from the root of THIS working copy to the process cwd, with a
-   trailing slash (\"\" at the root). Every discovered path is prefixed with
-   it so classification and the `fix-counts` lookup -- which is keyed by
-   root-relative git paths -- mean the same thing no matter which directory
-   the tool was started from.
-
-   Found by walking up to the nearest `.jj`/`.git` marker rather than asking
-   `git rev-parse --show-prefix`: inside a jj workspace, git reports the
-   PRIMARY checkout as its toplevel, so `--show-prefix` would return
-   `.workspaces/<name>/...` while the commit history it is matched against
-   still speaks plain `pkg/...` paths."
+(defn checkout-root
+  "Absolute path of the nearest ancestor of the cwd holding a `.jj`/`.git`
+   marker, or the cwd when there is none."
   []
   (let [parts (vec (remove str/blank? (str/split (os/cwd) #"/")))]
     (loop [n (count parts)]
       (let [dir (str "/" (str/join "/" (subvec parts 0 n)))]
         (cond
-          (checkout-root? dir) (let [tail (subvec parts n)]
-                                 (if (empty? tail) "" (str (str/join "/" tail) "/")))
-          (zero? n) ""
+          (checkout-root? dir) dir
+          (zero? n) (os/cwd)
           :else (recur (dec n)))))))
+
+(defn repo-prefix
+  "The path from the root of THIS working copy to the process cwd, with a
+   trailing slash (\"\" at the root). Every discovered path is prefixed with
+   it so classification and the `fix-counts` lookup -- which is keyed by
+   root-relative VCS paths -- mean the same thing no matter which directory
+   the tool was started from.
+
+   Derived from `checkout-root` rather than `git rev-parse --show-prefix`:
+   inside a jj workspace, git reports the PRIMARY checkout as its toplevel,
+   so `--show-prefix` would return `.workspaces/<name>/...` while the commit
+   history it is matched against still speaks plain `pkg/...` paths."
+  []
+  (let [root (checkout-root)
+        cwd (os/cwd)]
+    (cond
+      (= root cwd) ""
+      (str/starts-with? cwd (str root "/")) (str (subs cwd (inc (count root))) "/")
+      :else "")))
+
+(defn repo-path
+  "A discovered path in repo-relative form: an absolute path inside this
+   checkout is relativized, a cwd-relative one gets the cwd prefix, and a
+   path outside the checkout is left as it is."
+  [root prefix p]
+  (cond
+    (str/starts-with? p (str root "/")) (subs p (inc (count root)))
+    (str/starts-with? p "/") p
+    :else (str prefix p)))
+
+(defn walk
+  "Every file under `root` (a file or a directory) whose language is in
+   `langs`, recursively and in sorted order, as CWD-relative paths (what
+   `slurp` needs). `root` and `prefix` are used only to judge the skip list
+   on the repo-relative form of each path."
+  [root langs checkout prefix]
+  (let [st (os/stat root)]
+    (cond
+      (nil? st) []
+      (:dir? st) (vec (mapcat #(walk (str root "/" %) langs checkout prefix)
+                              (sort (os/ls root))))
+      (and (or (str/ends-with? root ".lg") (str/ends-with? root ".go"))
+           (contains? langs (lang-of root))
+           (not (skip? (repo-path checkout prefix root))))
+      [root]
+      :else [])))
+
+(defn tracked-files
+  "{:paths #{cwd-relative path...} :source \"jj\"|\"git\"|\"unfiltered\"}
+   -- the VCS-tracked file set, so untracked scratch files in the working
+   copy cannot move the score.
+
+   `jj file list` is used when the checkout root has a `.jj` marker: inside
+   a jj workspace the git index tracks the PRIMARY checkout, so
+   `git ls-files` there returns nothing at all. Both commands print paths
+   relative to the cwd, which is the same space `walk` yields, so no
+   rewriting is needed. If neither produces a listing the corpus is left
+   unfiltered and the header says so, rather than silently measuring
+   nothing."
+  [checkout]
+  (let [jj? (boolean (os/stat (str checkout "/.jj")))
+        run (fn [& args]
+              (let [r (apply os/sh args)]
+                (when (zero? (:exit r))
+                  (let [ls (remove str/blank? (forms/lines (:out r)))]
+                    (when (seq ls) (set ls))))))]
+    (or (when jj? (when-let [ps (run "jj" "file" "list")] {:paths ps :source "jj"}))
+        (when-let [ps (run "git" "ls-files")] {:paths ps :source "git"})
+        {:paths nil :source "unfiltered"})))
+
+(defn discover
+  "The measured corpus: CWD-relative paths of the tracked `.lg`/`.go` files
+   under `opts`' positional paths, or under `default-paths` per language when
+   none were given. Throws when nothing is found -- an empty corpus would
+   otherwise score a meaningless 100."
+  [opts checkout prefix tracked]
+  (let [given (:paths opts)
+        roots (if (seq given)
+                [[#{:lg :go} given]]
+                [[#{:lg} (:lg default-paths)] [#{:go} (:go default-paths)]])
+        found (vec (sort (distinct (mapcat (fn [[langs rs]]
+                                             (mapcat #(walk % langs checkout prefix) rs))
+                                           roots))))
+        kept (if tracked (vec (filter tracked found)) found)]
+    (when (empty? kept)
+      (throw (ex-info (str "no source files under "
+                           (str/join " " (if (seq given) given
+                                             (concat (:lg default-paths) (:go default-paths))))
+                           (if (and tracked (seq found))
+                             " (found untracked files only)" ""))
+                      {:paths given :found (count found)})))
+    kept))
 
 (defn- named-test? [path]
   (or (str/ends-with? path "_test.lg") (str/ends-with? path "_test.go")))
@@ -100,8 +185,6 @@
      (or (named-test? path)
          (str/starts-with? path "test/")
          (str/includes? path "/test/")))))
-
-(defn- lang-of [path] (if (str/ends-with? path ".go") :go :lg))
 
 (defn go-loc
   "Go LOC = the number of distinct lines carrying at least one token --
@@ -146,7 +229,9 @@
   [args]
   (loop [a (vec args) opts {:top (:top-default score/thresholds) :source-roots []} paths []]
     (if (empty? a)
-      (assoc opts :paths (if (empty? paths) default-paths paths))
+      ;; Positional paths stay as given (possibly none) -- `discover` is what
+      ;; falls back to `default-paths`, which is per language.
+      (assoc opts :paths paths)
       (let [x (first a)
             valued? (contains? #{"--since" "--go-cover" "--ci-run" "--ci-seconds"
                                  "--edn" "--top" "--source-root"} x)
@@ -179,15 +264,17 @@
    and the pinned externals gathered by `quality.inputs`."
   [opts]
   (let [since (or (:since opts) (default-since))
-        grange (inputs/git-range since)
+        grange (inputs/git-range since (inputs/head-commit (checkout-root)))
         defect-counts (inputs/fix-counts grange)
-        ;; `walk` yields cwd-relative paths (what `slurp` needs); `:path` is
-        ;; the repo-root-relative form, which is what classification, the
+        ;; `discover` yields cwd-relative paths (what `slurp` needs); `:path`
+        ;; is the repo-root-relative form, which is what classification, the
         ;; report and the `fix-counts` lookup all speak.
+        checkout (checkout-root)
         prefix (repo-prefix)
         source-roots (mapv (fn [r] (str prefix r)) (:source-roots opts))
-        read-paths (vec (sort (distinct (mapcat walk (:paths opts)))))
-        loaded (mapv (fn [p] {:path (str prefix p) :read-path p
+        tracked (tracked-files checkout)
+        read-paths (discover opts checkout prefix (:paths tracked))
+        loaded (mapv (fn [p] {:path (repo-path checkout prefix p)
                               :lang (lang-of p) :text (slurp p)})
                      read-paths)
         tokenized (mapv (fn [f] (assoc f :tokens (lex/tokens (:text f) (:lang f)))) loaded)
@@ -214,13 +301,17 @@
                       (let [m (when (= :lg (:lang f)) (metrics/file-metrics (:text f)))
                             loc (if m (max 1 (:loc m)) (max 1 (go-loc (:tokens f))))
                             fixes (get defect-counts (:path f) 0)
-                            dpk (/ (* 1000.0 fixes) loc)
+                            ;; Below :defects-min-loc a single fix implies an
+                            ;; absurd per-KLOC rate, so the term is omitted
+                            ;; (nil) and the composite renormalizes.
+                            dpk (when (>= loc (:defects-min-loc score/thresholds))
+                                  (/ (* 1000.0 fixes) loc))
                             pct (get dup-pct (:path f) 0.0)
                             sc (score/file-composite {:cc-max (when m (:cc-max m))
                                                       :mi (when m (:mi m))
                                                       :dup-pct pct
                                                       :defects-per-kloc dpk})]
-                        {:path (:path f) :lang (:lang f) :loc loc
+                        {:path (:path f) :lang (:lang f) :loc loc :fixes fixes
                          :test? (test-file? (:path f) source-roots)
                          :definitions (if m (:definitions m) [])
                          :cc-max (when m (:cc-max m))
@@ -274,39 +365,57 @@
         corpus (score/corpus files-composite combined efficiency (:score testing))]
     (merge corpus
            {:inputs {:commit (:to grange)
+                     :commit-source (:head-source grange)
                      :git-range grange
                      :go-cover (when go-cov (select-keys go-cov [:path :sha256 :percent]))
                      :ci ci
-                     :paths (:paths opts)
-                     :source-roots source-roots}
+                     :paths (if (seq (:paths opts))
+                              (:paths opts)
+                              (concat (:lg default-paths) (:go default-paths)))
+                     :source-roots source-roots
+                     :corpus {:files (count read-paths) :tracked-by (:source tracked)}}
             :coverage {:lg (select-keys lg-cov [:reached :total :percent :untested])
                        :go (when go-cov (select-keys go-cov [:covered :total :percent]))
                        :combined combined
                        :efficiency-pts efficiency}
             :testing testing
+            ;; Worst first is the wrong default for a table people scan
+            ;; top-down for a verdict, so files are listed by composite
+            ;; ASCENDING (worst last), ties broken by path.
             :files (vec (sort-by (juxt :composite :path)
                                  (mapv #(dissoc % :definitions) files)))
             :issues (score/issues files lg-cov dup-pairs)
             :top-complexity (score/top-complexity lg-files (:top opts))})))
 
+(def usage
+  (str "usage: ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]\n"
+       "                               [--ci-run ID | --ci-seconds N]\n"
+       "                               [--edn PATH] [--top N]\n"
+       "                               [--source-root PATH] [paths...]"))
+
 (defn main
-  "Parse `args`, measure, print the text report, and write EDN when asked."
+  "Parse `args`, measure, print the text report, and write EDN when asked.
+   Returns the process exit code: 0 on success, 2 when there is nothing to
+   measure or a flag is malformed."
   [args]
-  (let [opts (parse-args args)
-        result (measure opts)]
-    (print (report/text result))
-    (when (:edn opts) (spit (:edn opts) (report/edn result)))
-    0))
+  (if (some #{"--help" "-h"} args)
+    (do (println usage) 0)
+    (let [[opts err] (try [(parse-args args) nil] (catch Throwable e [nil e]))]
+      (if err
+        (do (println "quality:" (ex-message err)) (println usage) 2)
+        (let [[result err] (try [(measure opts) nil] (catch Throwable e [nil e]))]
+          (if err
+            (do (println "quality:" (ex-message err)) 2)
+            (do (print (report/text result))
+                (when (:edn opts) (spit (:edn opts) (report/edn result)))
+                0)))))))
 
 ;; Entry guard: run only as a script, never when a test `require`s this
 ;; namespace. os/args is [binary script user-arg...]; we run when the
-;; script slot names this file AND the user passed something.
+;; script slot names this file. With no user args the default roots are
+;; measured, which is what `make quality` relies on.
 (let [argv (vec (seq os/args))
       script (if (> (count argv) 1) (nth argv 1) "")
       user (vec (drop 2 argv))]
   (when (str/ends-with? script "scripts/quality.lg")
-    (if (seq user)
-      (os/exit (main user))
-      (println "usage: ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]"
-               "[--ci-run ID | --ci-seconds N] [--edn PATH] [--top N]"
-               "[--source-root PATH] [paths...]"))))
+    (os/exit (main user))))
