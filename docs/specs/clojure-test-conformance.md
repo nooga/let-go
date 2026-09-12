@@ -838,8 +838,11 @@ MACRO run_test(test_symbol) -> Form:
 --   - run_tests with no arguments runs the current namespace only.
 --   - run_all_tests filters with re-matches (a full match, not re-find).
 --     #"my.test.*" matches my.test.tap-example; #"tap-example" does not.
---   - run_all_tests with no matching namespace returns {:type :summary}. The default
---     SUMMARY method prints "Ran nil tests", as Clojure does. successful? treats
+--   - run_all_tests with no matching namespace calls (apply run-tests ()) which
+--     dispatches to the zero-arity and therefore runs the CURRENT namespace, as
+--     Clojure 1.12.5 does (verified: from a namespace with one deftest,
+--     (run-all-tests #"no-such") returns {:test 1 ...}). Callers must not invoke
+--     it from inside a test of the current namespace. successful? treats
 --     missing keys as zero.
 --   - All runners return the summary map. None sets a global success flag.
 ```
