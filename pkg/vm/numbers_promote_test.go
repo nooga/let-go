@@ -146,9 +146,9 @@ func mustInt(t *testing.T, v Value, want int64) {
 	}
 }
 
-// bigIntFromInt converts a platform-width int to a *big.Int (without going
-// through int64 first — needed when math.MaxInt64 + 1 is being represented
-// as a big.Int on 64-bit, since the int64 intermediate would overflow).
+// bigIntFromInt converts an Int-width value to a *big.Int. It took a
+// platform-width int before Int became int64, when the distinction mattered;
+// the two are now the same width on every host.
 func bigIntFromInt(n int64) *big.Int {
 	return new(big.Int).SetInt64(int64(n))
 }
