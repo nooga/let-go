@@ -400,3 +400,65 @@ func f(xs []int) int {
 		t.Errorf("line 8 should contribute exactly one statement extent, got %d", count8)
 	}
 }
+
+func TestLoopNestingAndSelfCall(t *testing.T) {
+	src := `package p
+
+func flat(xs []int) int {
+	n := 0
+	for _, x := range xs {
+		n += x
+	}
+	return n
+}
+
+func nested(xs [][]int) int {
+	n := 0
+	for _, row := range xs {
+		for _, x := range row {
+			for i := 0; i < x; i++ {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func branchyButFlat(x int) int {
+	if x > 0 {
+		return 1
+	} else if x < 0 {
+		return 2
+	}
+	return 3
+}
+
+func recurses(n int) int {
+	if n < 2 {
+		return n
+	}
+	return recurses(n-1) + recurses(n-2)
+}
+`
+	got := callablesByName(t, src)
+	if c := got["flat"]; c.loopDepth != 1 {
+		t.Errorf("flat: loop depth %d, want 1", c.loopDepth)
+	}
+	if c := got["nested"]; c.loopDepth != 3 {
+		t.Errorf("nested: loop depth %d, want 3", c.loopDepth)
+	}
+	// The point of the cost model: branch count and scaling are different
+	// things. This one is CC 3 and O(1).
+	if c := got["branchyButFlat"]; c.loopDepth != 0 {
+		t.Errorf("branchyButFlat: loop depth %d, want 0", c.loopDepth)
+	}
+	if c := got["branchyButFlat"]; c.cc < 3 {
+		t.Errorf("branchyButFlat: cc %d, expected a branchy function", c.cc)
+	}
+	if c := got["recurses"]; !c.selfCall {
+		t.Error("recurses: self-call not detected")
+	}
+	if c := got["flat"]; c.selfCall {
+		t.Error("flat: reported a self-call it does not make")
+	}
+}

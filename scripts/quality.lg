@@ -42,6 +42,7 @@
   (:require
    [clojure.string :as str]
    [quality.dup :as dup]
+   [quality.cost :as cost]
    [quality.forms :as forms]
    [quality.graph :as graph]
    [quality.inputs :as inputs]
@@ -369,6 +370,54 @@
       (if (zero? (:exit r))
         (try (or (:extents (read-string (:out r))) []) (catch Throwable _ []))
         []))))
+
+(defn cost-entries
+  "Algorithmic cost per .lg definition, with callee substitution run to a
+   fixpoint over the call graph.
+
+   Rule (c) of the cost model: a call to a degree-d definition inside a loop
+   of depth k costs k + d, so a degree cannot be computed for one definition
+   in isolation. Iterating to a fixpoint spreads callee costs outward;
+   mutual recursion is left to the recursion rule rather than iterated, and
+   the iteration cap keeps a cycle from spinning.
+
+   Go entries carry their loop depth from the Go tool, which reads `for` and
+   `range` nesting off the AST; Go recursion shrink is not read, so a
+   self-recursive Go function is reported as :unknown rather than guessed."
+  [sources cat go-functions mass-of]
+  (let [defs (vec (for [{:keys [path text]} sources
+                        d (forms/definitions text)]
+                    (assoc d :path path)))
+        fixpoint (loop [known {} n 0]
+                   (if (> n 3)
+                     known
+                     (let [next-known
+                           (reduce (fn [m d]
+                                     (assoc m (:name d)
+                                            (:degree (cost/definition-degree
+                                                      d (fn [s] (get known s)) cat))))
+                                   {} defs)]
+                       (if (= next-known known) known (recur next-known (inc n))))))
+        lg-entries (mapv (fn [d]
+                           (let [r (cost/definition-degree d (fn [s] (get fixpoint s)) cat)]
+                             (assoc r :path (:path d) :line (:line d)
+                                    :mass (mass-of (:path d) (:name d)))))
+                         defs)
+        go-entries (mapv (fn [fn*]
+                           {:name (symbol (:name fn*)) :path (:path fn*) :line (:line fn*)
+                            :degree (cond
+                                      (:self-call? fn*) :unknown
+                                      (:loop-depth fn*) {:poly (:loop-depth fn*)}
+                                      :else {:poly 0})
+                            :evidence (cond
+                                        (:self-call? fn*) "self-recursive; shrink shape not read for Go"
+                                        (and (:loop-depth fn*) (pos? (:loop-depth fn*)))
+                                        (str "loop nesting depth " (:loop-depth fn*))
+                                        :else "no loops or recursion")
+                            :assumed #{}
+                            :mass (mass-of (:path fn*) (symbol (:name fn*)))})
+                         go-functions)]
+    (vec (concat lg-entries go-entries))))
 
 (defn- cwd-path
   "A repo-relative path turned back into one the process can open: the cwd
@@ -720,6 +769,18 @@
                                          (and from to (<= from end) (<= start to)))
                                        (get regions-by-path (:path c) [])))))
         top (score/top-complexity callables (:top opts) duplicated-region?)
+        ;; Keyed on the PRINTED name: .lg definitions carry symbols and the Go
+        ;; tool reports strings, and a silent key mismatch here zeroes every
+        ;; Go mass -- which is exactly what it did.
+        mass-by (into {} (for [c callables]
+                           [[(:path c) (str (:name c))]
+                            (* (double (or (:cc c) 0)) (math/sqrt (max 1 (or (:sloc c) 1))))]))
+        cost-cat (cost/catalog (str checkout "/scripts/quality"))
+        costs (phase "cost"
+                     (fn [] (cost-entries (lg-of (fn [_] true)) cost-cat
+                                          (mapv (fn [f] (assoc f :path (rel-path (:path f))))
+                                                (:functions go-analysis))
+                                          (fn [p n] (get mass-by [p (str n)] 0.0)))))
         classes (dup/clone-classes dup-pairs (:clone-class-max-members score/thresholds))
         corpus-terms {:erosion (terms/erosion callables)
                       :verbosity (terms/verbosity (reduce + 0 (vals dup-lines))
@@ -735,12 +796,11 @@
                                  (terms/squash (/ (* 1000.0 (reduce + 0 (map :fixes files))) src-loc)
                                                (get-in score/thresholds [:defects :bad])))
                       :testing (:debt testing)
-                      :efficiency (when efficiency
-                                    (terms/shortfall-squash
-                                      efficiency
-                                      (get-in score/thresholds [:efficiency :good])
-                                      (- (get-in score/thresholds [:efficiency :good])
-                                         (get-in score/thresholds [:efficiency :bad]))))}
+                      ;; CI wall time is REPORTED (see the header) but no
+                      ;; longer SCORED: a term that moves with machine load
+                      ;; breaks the promise that a delta means the code
+                      ;; changed. `:cost` replaces it, structurally.
+                      :cost (cost/cost-share costs)}
         corpus (score/corpus-score corpus-terms)]
     (merge corpus
            {:inputs {:commit (:to grange)
@@ -793,6 +853,13 @@
             :files (vec (sort-by (juxt (comp - :debt) :path)
                                  (mapv #(dissoc % :definitions) files)))
             :issues (score/issues files lg-cov dup-pairs)
+            :cost {:value (cost/cost-share costs)
+                   :definitions (count costs)
+                   :superlinear (count (filter (fn [c] (cost/superlinear? (:degree c))) costs))
+                   :unknown (count (filter (fn [c] (= :unknown (:degree c))) costs))
+                   :assumed (vec (sort (distinct (mapcat :assumed costs))))
+                   :worst (vec (take 10 (sort-by (fn [c] (- (or (:mass c) 0)))
+                                                 (filter (fn [c] (cost/superlinear? (:degree c))) costs))))}
             :top-complexity top
             :best-targets (score/best-targets top)
             ;; Classes for humans, pairs for machines: one extraction

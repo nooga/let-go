@@ -188,8 +188,11 @@ func main() {
 	fmt.Fprint(w, " :functions [")
 	for _, m := range ms {
 		for _, c := range m.calls {
-			fmt.Fprintf(w, "\n  {:path %s :name %s :kind :%s :line %d :end %d :sloc %d :cc %d}",
-				ednString(m.path), ednString(c.name), c.kind, c.line, c.end, c.sloc, c.cc)
+			fmt.Fprintf(w,
+				"\n  {:path %s :name %s :kind :%s :line %d :end %d :sloc %d :cc %d"+
+					" :loop-depth %d :self-call? %t}",
+				ednString(m.path), ednString(c.name), c.kind, c.line, c.end, c.sloc, c.cc,
+				c.loopDepth, c.selfCall)
 		}
 	}
 	fmt.Fprintln(w, "]}")

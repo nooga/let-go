@@ -30,6 +30,13 @@ type callable struct {
 	end  int
 	sloc int
 	cc   int
+	// loopDepth is the maximum nesting of `for`/`range` inside the
+	// declaration, and selfCall reports whether it calls itself. Both feed
+	// the .lg cost model, which estimates algorithmic complexity rather than
+	// branch count. The recursion SHRINK shape is not read for Go, so a
+	// self-recursive Go function is reported as unknown rather than guessed.
+	loopDepth int
+	selfCall  bool
 }
 
 // codeLines marks, for each 1-based line of src, whether the line carries
@@ -132,6 +139,56 @@ func decisionPoints(n ast.Node, skip map[ast.Node]bool) int {
 type namedLit struct {
 	name  string
 	ident ast.Node // the binding occurrence, which is not a "use"
+}
+
+// loopNesting is the maximum depth of nested `for`/`range` statements in n.
+func loopNesting(n ast.Node) int {
+	max := 0
+	var walk func(ast.Node, int)
+	walk = func(x ast.Node, depth int) {
+		if x == nil {
+			return
+		}
+		ast.Inspect(x, func(c ast.Node) bool {
+			if c == nil || c == x {
+				return c == x
+			}
+			switch c.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				if depth+1 > max {
+					max = depth + 1
+				}
+				walk(c, depth+1)
+				return false
+			}
+			return true
+		})
+	}
+	walk(n, 0)
+	return max
+}
+
+// callsItself reports whether the declaration calls `name` directly.
+func callsItself(decl *ast.FuncDecl, name string) bool {
+	found := false
+	ast.Inspect(decl, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch f := call.Fun.(type) {
+		case *ast.Ident:
+			if f.Name == name {
+				found = true
+			}
+		case *ast.SelectorExpr:
+			if f.Sel.Name == name {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // namedLiterals finds the function literals BOUND TO AN IDENTIFIER inside
@@ -275,6 +332,9 @@ func goAnalyze(src string) ([]callable, fileCounts, error) {
 			line: start, end: end,
 			sloc: sloc,
 			cc:   1 + decisionPoints(decl, dead),
+
+			loopDepth: loopNesting(decl),
+			selfCall:  callsItself(decl, decl.Name.Name),
 		})
 	}
 	return out, counts, nil

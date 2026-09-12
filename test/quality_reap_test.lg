@@ -1,0 +1,54 @@
+(ns test.quality-reap-test
+  (:require
+   [clojure.string :as str]
+   [test :refer :all]))
+
+;; EXPECTED FAIL, STRICT.
+;;
+;; `quality.lg` spawns children: the Go analysis tool, the linter, git/jj, and
+;; a second full scoring pass in PR-delta mode. None of them is tied to the
+;; lifetime of the process that spawned it, because `os/sh` is
+;; `exec.Command` plus `cmd.Run()` with no `SysProcAttr.Setpgid`, no
+;; `CommandContext` and no `WaitDelay`. Kill the parent and the child is
+;; re-parented to init and keeps running.
+;;
+;; This is not hypothetical: 46 orphaned Go test binaries, spawned by a
+;; recursion bug in this tool, outlived the fix by 85 minutes and saturated
+;; the machine, invalidating every timing taken in that window.
+;;
+;; The assertion below therefore encodes the BROKEN behaviour on purpose: it
+;; asserts the child SURVIVES. The day `os/sh` learns to put children in a
+;; process group and signal it, or to accept a cancellation context, this test
+;; FAILS -- which is the point. When it fails, invert it: the child must not
+;; survive, and this comment can go.
+
+(def ^:private marker "sleep 37.5")
+
+(defn- alive? []
+  (pos? (count (str/trim (str (:out (os/sh "pgrep" "-f" marker)))))))
+
+(deftest expected-fail-os-sh-does-not-reap-its-children
+  (let [lg "../bin/lg"
+        script (str (os/temp-dir) "quality-reap-probe.lg")]
+    (if-not (os/stat lg)
+      ;; Nothing to probe without a built binary; the gap is unproven here
+      ;; rather than falsely reported as fixed.
+      (is true "no ../bin/lg to probe with")
+      (do
+        (spit script (str "(os/sh \"sleep\" \"37.5\")\n"))
+        (os/sh "bash" "-c" (str lg " " script " >/dev/null 2>&1 & echo $! > "
+                                (os/temp-dir) "quality-reap.pid"))
+        (os/sh "sleep" "1")
+        (let [pid (str/trim (slurp (str (os/temp-dir) "quality-reap.pid")))
+              started (alive?)]
+          (os/sh "kill" "-9" pid)
+          (os/sh "sleep" "1")
+          (let [survived (alive?)]
+            ;; clean up whatever is left, whichever way the assertions go
+            (os/sh "pkill" "-f" marker)
+            (is started "the probe child should have started")
+            ;; THE EXPECTED FAIL: this passes while os/sh leaks children.
+            (is survived
+                (str "EXPECTED FAIL: a child outlived its killed parent. "
+                     "If this assertion now FAILS, os/sh has learned to reap "
+                     "its children -- invert this test and delete the gap note."))))))))
