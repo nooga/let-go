@@ -632,3 +632,43 @@ func multivariate(xs []int, ys []int) int {
 			c.loopDepth)
 	}
 }
+
+func TestDerivationDoesNotCrossAClosureBoundary(t *testing.T) {
+	// A closure is a value of CONSTANT size whatever its body references.
+	// Binding `add := func(syms []T){...}` must not make `add` carry the size
+	// of anything the body mentions.
+	src := `package p
+
+type T struct{ xs []int }
+
+func closureBound(xs []int) int {
+	f := func() int { return len(xs) }
+	n := 0
+	// f is a function value: looping a fixed number of times is not
+	// iterating xs, whatever f closes over.
+	for i := 0; i < 3; i++ {
+		n += f()
+	}
+	return n
+}
+
+func genuinelyNested(xs [][]int) int {
+	n := 0
+	for _, row := range xs {
+		for _, x := range row {
+			n += x
+		}
+	}
+	return n
+}
+`
+	got := callablesByName(t, src)
+	if c := got["closureBound"]; c.loopDepth != 0 {
+		t.Errorf("closureBound: depth %d, want 0 -- a closure carries no size", c.loopDepth)
+	}
+	// The contrast: real nesting over structure reachable from a parameter
+	// attributes to that parameter and does count.
+	if c := got["genuinelyNested"]; c.loopDepth != 2 {
+		t.Errorf("genuinelyNested: depth %d, want 2", c.loopDepth)
+	}
+}

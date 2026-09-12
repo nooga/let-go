@@ -182,3 +182,24 @@
   ;; literal, it is constant in OURS -- the same rule, applied to calls.
   (is (= "1" (shows "(defn f [x] (sort [3 1 2]))")))
   (is (= "n log n" (shows "(defn f [xs] (sort xs))"))))
+
+(deftest a-loop-over-a-called-closure-is-unknown-never-the-parameter
+  ;; The closure CALLED to produce a collection: attributing the loop to `xs`
+  ;; would be silently wrong, and treating it as constant would hide it. It
+  ;; may attribute only when the callee's degree is known.
+  (is (= "unknown" (shows "(defn f [xs] (let [g (fn [] (filter pos? xs))] (map inc (g))))")))
+  ;; a call whose degree IS known attributes normally: one loop around a
+  ;; linear callee is quadratic
+  (is (= "n^2" (cost/degree-str
+                 (:degree (degree-of-src "(defn f [xs] (map inc (helper xs)))"
+                                         (fn [s] (when (= s 'helper) {:poly 1}))))))))
+
+(deftest derivation-does-not-cross-a-closure-boundary
+  ;; A closure is a value of CONSTANT size whatever its body references:
+  ;; (let [f (fn [] (count xs))] ...) binds f to something O(1) in xs, not to
+  ;; something of xs's size. A loop over f is not a loop over xs.
+  (is (= "1" (shows "(defn f [xs] (let [g (fn [] (count xs))] (map inc g)))")))
+  ;; the contrast: a local genuinely derived from the parameter still traces
+  (is (= "n" (shows "(defn f [xs] (let [ys (rest xs)] (map inc ys)))")))
+  ;; and the parameter itself, obviously
+  (is (= "n" (shows "(defn f [xs] (map inc xs))"))))
