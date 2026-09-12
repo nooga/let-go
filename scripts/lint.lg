@@ -301,6 +301,104 @@
                      []))
                  groups))))
 
+;; --- R4 — comment density outlier ---------------------------------------
+;;
+;; Per definition, comment-lines / total-lines, flagged when it beats the
+;; 95th percentile of that ratio computed over the whole corpus. No magic
+;; constant: the corpus sets its own bar. A minimum definition size guards
+;; against a tiny function with a two-line docstring dominating the tail.
+(def r4-min-def-lines 5)
+(def r4-percentile 0.95)
+
+(defn def-start? [line go?]
+  (if go?
+    (clojure.string/starts-with? line "func ")
+    (or (clojure.string/starts-with? line "(defn ")
+        (clojure.string/starts-with? line "(defn-")
+        (clojure.string/starts-with? line "(def ")
+        (clojure.string/starts-with? line "(defmacro ")
+        (clojure.string/starts-with? line "(deftype ")
+        (clojure.string/starts-with? line "(defrecord ")
+        (clojure.string/starts-with? line "(defprotocol ")
+        (clojure.string/starts-with? line "(deftest "))))
+
+;; form-end-offset scans `text` (starting at a definition's first line) char
+;; by char, tracking net delimiter depth across all three bracket kinds
+;; without validating that types match (a documented simplification, as in
+;; R1). Returns the 0-based line offset (from that first line) of the line
+;; on which depth returns to zero after having gone positive — i.e. the
+;; line the definition's closing delimiter is on.
+(defn form-end-offset [text]
+  (loop [cs (seq text) depth 0 seen-open false line-offset 0]
+    (cond
+      (empty? cs) line-offset
+      (= (first cs) \newline) (recur (rest cs) depth seen-open (inc line-offset))
+      (contains? open-chars (first cs)) (recur (rest cs) (inc depth) true line-offset)
+      (contains? delim-chars (first cs))
+      (let [d (dec depth)]
+        (if (and seen-open (<= d 0))
+          line-offset
+          (recur (rest cs) d seen-open line-offset)))
+      :else (recur (rest cs) depth seen-open line-offset))))
+
+;; leading-comment-start walks backward from a definition's start index
+;; (0-based) while the immediately preceding line is a whole-line comment,
+;; with no blank-line break, and returns the first such line's index.
+(defn leading-comment-start [lines start go?]
+  (loop [i start]
+    (if (and (> i 0) (some? (comment-body (nth lines (dec i)) go?)))
+      (recur (dec i))
+      i)))
+
+;; file-definitions returns, for one file, a vector of
+;; {:start :end :total :comments} (0-based line indices, inclusive; :total
+;; and :comments in lines) for every top-level definition big enough to
+;; clear r4-min-def-lines.
+(defn file-definitions [path]
+  (let [go?   (go-file? path)
+        lines (vec (clojure.string/split (slurp path) "\n"))
+        n     (count lines)]
+    (vec (keep
+           (fn [i]
+             (when (def-start? (nth lines i) go?)
+               (let [rest-src (clojure.string/join "\n" (subvec lines i n))
+                     end      (+ i (form-end-offset rest-src))
+                     start    (leading-comment-start lines i go?)
+                     total    (inc (- end start))]
+                 (when (>= total r4-min-def-lines)
+                   (let [span     (subvec lines start (inc end))
+                         comments (count (filter (fn [l] (some? (comment-body l go?))) span))]
+                     {:path path :start start :end end :total total :comments comments
+                      :ratio (/ (double comments) total)})))))
+           (range n)))))
+
+;; percentile computes the nearest-rank percentile (p in [0,1]) over a
+;; non-empty numeric collection: rank = ceil(p * n), 1-indexed into the
+;; ascending sort.
+(defn percentile [xs p]
+  (let [sorted (vec (sort xs))
+        n      (count sorted)
+        rank   (int (Math/ceil (* p n)))
+        idx    (max 0 (min (dec n) (dec rank)))]
+    (nth sorted idx)))
+
+;; r4-findings needs the WHOLE corpus's definitions to compute the
+;; percentile threshold, so — like R3 — it takes the pre-collected defs
+;; rather than one file at a time. Fewer than 20 definitions isn't enough
+;; data for a percentile to mean anything, so it reports nothing.
+(defn r4-findings [defs]
+  (if (< (count defs) 20)
+    []
+    (let [threshold (percentile (map :ratio defs) r4-percentile)]
+      {:threshold threshold
+       :findings (vec (keep (fn [d]
+                              (when (> (:ratio d) threshold)
+                                {:file (:path d) :line (inc (:start d)) :end (inc (:end d))
+                                 :kind :comment-density-outlier
+                                 :measure (:ratio d)
+                                 :evidence (str "ratio=" (:ratio d) " (p95=" threshold ")")}))
+                        defs))})))
+
 (defn source-file? [p] (or (lg-file? p) (go-file? p)))
 
 ;; Directory walk. os/ls yields bare names, so each level rebuilds the path.
@@ -323,6 +421,9 @@
       r2     (vec (mapcat (fn [p] (r2-findings p (blocks-by-file p))) files))
       all-pairs (vec (mapcat (fn [p] (map (fn [b] {:path p :block b}) (blocks-by-file p))) files))
       r3     (r3-findings all-pairs)
+      all-defs (vec (mapcat file-definitions files))
+      r4-result (r4-findings all-defs)
+      r4     (:findings r4-result)
       go-files (count (filter go-file? files))]
   (doseq [f r1]
     (println (str (:file f) ":" (:line f) "-" (:end f) "  [commented-out-code] "
@@ -336,6 +437,13 @@
   (doseq [f r3]
     (println (str (:file f) ":" (:line f) "-" (:end f) "  [duplicated-comment] " (:evidence f))))
   (println (str (count r3) " duplicated-comment finding(s) (R3)."))
+  (doseq [f r4]
+    (println (str (:file f) ":" (:line f) "-" (:end f) "  [comment-density-outlier] " (:evidence f))))
+  (if (< (count all-defs) 20)
+    (println (str "comment-density-outlier (R4): skipped — only " (count all-defs)
+                  " definition(s) found, need >=20 to compute a percentile."))
+    (println (str (count r4) " comment-density-outlier finding(s) (R4, p95="
+                  (:threshold r4-result) " over " (count all-defs) " definition(s)).")))
   (doseq [h hits]
     (println (str (:file h) ":" (:line h) "  [devlog-comment] \"" (:phrase h) "\""))
     (println (str "    " (snippet (:text h)))))
