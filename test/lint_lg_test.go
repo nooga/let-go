@@ -122,6 +122,15 @@ const lintFixtureR1 = `;; (inc counter)
 
 var lintWantR1 = []int{1}
 
+// A self-referential usage example — a comment that shows the calling
+// convention of the very declaration it precedes (its parsed head symbol
+// equals a token on the next source line) — must NOT flag: it is
+// documentation, not dead code, even though it parses as a balanced form.
+const lintFixtureR1ExampleDoc = `;; (frob widget & opts)
+(defn frob [widget & opts]
+  widget)
+`
+
 func TestLintR1CommentedOutCode(t *testing.T) {
 	dir := t.TempDir()
 	lgFixture := filepath.Join(dir, "fixture.lg")
@@ -156,6 +165,19 @@ func TestLintR1CommentedOutCode(t *testing.T) {
 		t.Errorf("commented-out-code findings at lines %v, want %v\n%s", got, lintWantR1, out)
 	}
 
+	// A self-referential usage-example doc comment must not flag.
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, "fixture.lg"), []byte(lintFixtureR1ExampleDoc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out3, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir2).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg: %v\n%s", err, out3)
+	}
+	if strings.Contains(string(out3), "[commented-out-code]") {
+		t.Errorf("a self-referential usage example must not flag as commented-out code:\n%s", out3)
+	}
+
 	// Go source must never be flagged for R1: the rule is deferred there.
 	goFixture := filepath.Join(dir, "other.go")
 	goSrc := "package fixture\n\n// x := computeSomething(a, b)\nfunc F() {}\n"
@@ -183,12 +205,22 @@ const lintFixtureR2 = `;; set counter
 
 ;; set counter because writer holds the exclusive lock
 (set counter val)
+
+// --- Func roundtrip ---
+func TestFuncRoundtrip(t *testing.T) {}
 `
 
+// R2 also classifies a restatement-shaped comment separately when its text is
+// a section-divider (bracketed by runs of punctuation like dashes/equals,
+// with no sentence structure): that's conventional house style, not slop, so
+// it must NOT be reported as [restatement] — but it must still show up under
+// its own [comment-divider] kind so it stays visible.
 func TestLintR2Restatement(t *testing.T) {
 	dir := t.TempDir()
-	lgFixture := filepath.Join(dir, "fixture.lg")
-	if err := os.WriteFile(lgFixture, []byte(lintFixtureR2), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "fixture.lg"), []byte(lintFixtureR2), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte("package fixture\n\n"+lintFixtureR2[strings.Index(lintFixtureR2, "// ---"):]), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -198,9 +230,10 @@ func TestLintR2Restatement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.lg: %v\n%s", err, out)
 	}
+	outStr := string(out)
 
 	got := []int{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(outStr, "\n") {
 		if !strings.Contains(line, "[restatement]") {
 			continue
 		}
@@ -209,14 +242,23 @@ func TestLintR2Restatement(t *testing.T) {
 		loc = strings.SplitN(loc, "-", 2)[0]
 		n, convErr := strconv.Atoi(loc)
 		if convErr != nil {
-			t.Fatalf("unparsable finding location %q in:\n%s", loc, out)
+			t.Fatalf("unparsable finding location %q in:\n%s", loc, outStr)
 		}
 		got = append(got, n)
 	}
 
 	want := []int{1}
 	if !equalInts(got, want) {
-		t.Errorf("restatement findings at lines %v, want %v\n%s", got, want, out)
+		t.Errorf("restatement findings at lines %v, want %v\n%s", got, want, outStr)
+	}
+
+	if !strings.Contains(outStr, "[comment-divider]") {
+		t.Errorf("section-divider comment should be reported under its own kind:\n%s", outStr)
+	}
+	for _, line := range strings.Split(outStr, "\n") {
+		if strings.Contains(line, "[restatement]") && strings.Contains(line, "Func roundtrip") {
+			t.Errorf("section-divider must not be reported as [restatement]: %s", line)
+		}
 	}
 }
 
@@ -268,39 +310,80 @@ func TestLintR3DuplicatedComment(t *testing.T) {
 	}
 }
 
-// R4 — comment density outlier: per definition, comment-lines/total-lines,
-// flagged when it exceeds the 95th percentile computed over the corpus
-// itself. This fixture builds 20 definitions with a strictly increasing,
-// hand-computable ratio (Ci comment lines over a fixed 2-line body, Ci from
-// 3 to 22 so every definition, including the smallest, clears the R4
-// min-definition-lines guard), so the percentile is known: with
-// nearest-rank on 20 values, rank = ceil(0.95*20) = 19, i.e. the 19th
-// smallest (Ci=21, ratio 21/23=0.9130). Only the strict maximum (Ci=22,
-// ratio 22/24=0.9167) beats that threshold, so exactly one definition must
-// be flagged: the last one.
+// R3 must not flag idiomatic Go interface-implementation boilerplate: a
+// one-line doc comment that names the method it precedes (the standard
+// "MethodName implements Interface." convention), repeated once per type
+// implementing that method. A genuinely duplicated, non-boilerplate comment
+// in the same corpus must still flag.
+func TestLintR3ExcludesInterfaceBoilerplate(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(typeName string) string {
+		return fmt.Sprintf("package fixture\n\n// Meta implements IMeta.\nfunc (t *%s) Meta() {}\n\n// retry on transient failure before giving up\nfunc (t *%s) Other() {}\n",
+			typeName, typeName)
+	}
+	for _, name := range []string{"A", "B", "C"} {
+		if err := os.WriteFile(filepath.Join(dir, name+".go"), []byte(mk(name)), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg: %v\n%s", err, out)
+	}
+	outStr := string(out)
+
+	if strings.Contains(outStr, "Meta implements IMeta") {
+		t.Errorf("interface-implementation boilerplate must be excluded from duplicated-comment:\n%s", outStr)
+	}
+	if !strings.Contains(outStr, "retry on transient failure") {
+		t.Errorf("a genuine non-boilerplate duplicate must still be flagged:\n%s", outStr)
+	}
+}
+
+// R4 — comment density outlier: per definition, INTERIOR comment-lines /
+// interior-total-lines (the leading doc-comment block is excluded from both
+// the numerator and the denominator — a doc comment on an exported
+// declaration is documentation, not density abuse; see scripts/lint.lg's R4
+// section comment for why "exclude leading docs" was chosen over
+// "unexported only"). Flagged when it exceeds the 95th percentile computed
+// over the corpus itself.
+//
+// This fixture builds 20 definitions with a strictly increasing,
+// hand-computable ratio: each definition has a fixed 3-line leading doc
+// comment (must NOT affect the ratio) plus Ci INTERIOR comment lines before
+// a 1-line body, Ci from 3 to 22, so every definition clears the
+// min-definition-lines guard on its interior span alone. With nearest-rank
+// on 20 values, rank = ceil(0.95*20) = 19, i.e. the 19th smallest (Ci=21,
+// ratio 21/23=0.9130). Only the strict maximum (Ci=22, ratio 22/24=0.9167)
+// beats that threshold, so exactly one definition must be flagged.
 func buildLintFixtureR4() (string, int) {
 	var b strings.Builder
-	lastCommentStart := 0
+	lastDeclLine := 0
 	line := 1
 	for ci := 3; ci <= 22; ci++ {
 		if ci > 3 {
 			b.WriteString("\n")
 			line++
 		}
-		lastCommentStart = line
+		b.WriteString(";; doc line 1\n;; doc line 2\n;; doc line 3\n")
+		line += 3
+		lastDeclLine = line
+		fmt.Fprintf(&b, "(defn f%d [x]\n", ci)
+		line++
 		for c := 1; c <= ci; c++ {
-			fmt.Fprintf(&b, ";; c%d-%d\n", ci, c)
+			fmt.Fprintf(&b, "  ;; c%d-%d\n", ci, c)
 			line++
 		}
-		fmt.Fprintf(&b, "(defn f%d [x]\n  x)\n", ci)
-		line += 2
+		b.WriteString("  x)\n")
+		line++
 	}
-	return b.String(), lastCommentStart
+	return b.String(), lastDeclLine
 }
 
 func TestLintR4DensityOutlier(t *testing.T) {
 	dir := t.TempDir()
-	src, lastCommentStart := buildLintFixtureR4()
+	src, lastDeclLine := buildLintFixtureR4()
 	lgFixture := filepath.Join(dir, "fixture.lg")
 	if err := os.WriteFile(lgFixture, []byte(src), 0644); err != nil {
 		t.Fatal(err)
@@ -326,9 +409,17 @@ func TestLintR4DensityOutlier(t *testing.T) {
 		got = append(got, n)
 	}
 
-	want := []int{lastCommentStart}
+	want := []int{lastDeclLine}
 	if !equalInts(got, want) {
-		t.Errorf("comment-density-outlier findings at lines %v, want %v (the Ci=21 definition)\n%s", got, want, out)
+		t.Errorf("comment-density-outlier findings at lines %v, want %v (the Ci=22 definition's decl line, doc excluded)\n%s", got, want, out)
+	}
+
+	// The leading doc comment itself must never be part of the flagged
+	// range: the reported :line must be the declaration line, not the doc's.
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.Contains(l, "[comment-density-outlier]") && strings.Contains(l, "doc line") {
+			t.Errorf("leading doc comment text leaked into a density-outlier finding: %s", l)
+		}
 	}
 }
 
@@ -471,6 +562,173 @@ func TestLintR6CommentChurn(t *testing.T) {
 	}
 	if strings.Contains(string(noChurnOut), "[comment-churn]") {
 		t.Errorf("R6 must not fire without --churn:\n%s", noChurnOut)
+	}
+}
+
+// Code-verbosity: a generic pattern/replace matcher over parsed .lg forms,
+// catalog-driven from scripts/lint-code-rules.edn (see that file, and the
+// "Code-verbosity" section comment in scripts/lint.lg, for the matcher
+// semantics: a "?name" metavariable, a "?&name" rest-metavariable, and
+// atoms-eliminable = atom-count(matched) - atom-count(replacement)).
+//
+// One fixture exercises the whole shipped catalog at once, each rule paired
+// with a near-miss that must NOT fire (the near-miss is what proves the
+// matcher is precise, not just present).
+// redundant-if-true-false ("(if ?c true false)" -> "?c") and
+// let-empty-bindings ("(let [] ?e)" -> "?e") are NOT included below: both
+// were built, tested, found to fire zero times on the real corpus, and
+// dropped from the shipped catalog per the calibration duty (see the
+// report and scripts/lint-code-rules.edn's own comments) — so this fixture,
+// which is checked against the shipped catalog, only exercises what ships.
+const lintFixtureCodeVerbosity = `(defn b1 [c] (if c false true))
+(defn b2 [c] (if c false false))
+
+(defn c1 [x] (= true x))
+(defn c2 [x] (= false x))
+
+(defn d1 [a b] (not (= a b)))
+(defn d2 [a b] (not (and a b)))
+
+(defn e1 [x] (not (empty? x)))
+(defn e2 [x] (not (nil? x)))
+
+(def f1 (fn [a b] (helper a b)))
+(def f2 (fn [a b] (helper b a)))
+
+(defn g1 [] (let [x 5] x))
+(defn g2 [] (let [x 5] (inc x)))
+
+(defn i1 [] (do (single-thing)))
+(defn i2 [] (do (one) (two)))
+
+(defn j1 [x] (first (first x)))
+(defn j2 [x] (first (rest x)))
+
+(defn k1 [sep coll] (apply str (interpose sep coll)))
+(defn k2 [sep coll] (apply str coll))
+
+(defn l1 [c1 c2 c3] (if c1 :a (if c2 :b (if c3 :c :d))))
+(defn l2 [c1 c2] (if c1 :a (if c2 :b :c)))
+`
+
+// wantCodeVerbosity maps each fixture line to the :kind that must (line
+// suffix "1") or must not (line suffix "2") fire there.
+var codeVerbosityPositive = map[int]string{
+	1:  "redundant-if-false-true",
+	4:  "redundant-eq-true",
+	7:  "redundant-not-eq",
+	10: "redundant-not-empty",
+	13: "eta-expansion",
+	16: "let-identity",
+	19: "do-single-form",
+	22: "composable-accessor",
+	25: "apply-str-interpose",
+	28: "nested-if-chain",
+}
+
+func TestLintCodeVerbosityCatalog(t *testing.T) {
+	dir := t.TempDir()
+	fixture := filepath.Join(dir, "fixture.lg")
+	if err := os.WriteFile(fixture, []byte(lintFixtureCodeVerbosity), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), "--edn", dir)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg --edn: %v\n%s", err, out)
+	}
+
+	// One finding per positive line, none on the near-miss (line+1) lines.
+	gotLines := map[int]string{}
+	for line, kind := range findKindsPerLine(t, string(out)) {
+		gotLines[line] = kind
+	}
+	for line, wantKind := range codeVerbosityPositive {
+		if got, ok := gotLines[line]; !ok {
+			t.Errorf("line %d: expected [%s] to fire, nothing did\n%s", line, wantKind, out)
+		} else if got != wantKind {
+			t.Errorf("line %d: got kind %q, want %q", line, got, wantKind)
+		}
+		if nearMiss, ok := gotLines[line+1]; ok {
+			t.Errorf("near-miss at line %d must not fire, but got kind %q", line+1, nearMiss)
+		}
+	}
+}
+
+// findKindsPerLine extracts {startLine: kind} from --edn output by scanning
+// for `:line N, ... :kind :K` pairs — a small hand parser since we don't
+// want a real EDN reader in the test just to check shape.
+func findKindsPerLine(t *testing.T, ednOut string) map[int]string {
+	t.Helper()
+	out := map[int]string{}
+	entries := strings.Split(ednOut, "{:file")
+	for _, e := range entries[1:] {
+		lineIdx := strings.Index(e, ":line ")
+		kindIdx := strings.Index(e, ":kind :")
+		if lineIdx < 0 || kindIdx < 0 {
+			continue
+		}
+		lineStr := strings.Fields(e[lineIdx+len(":line "):])[0]
+		lineStr = strings.TrimSuffix(lineStr, ",")
+		n, err := strconv.Atoi(lineStr)
+		if err != nil {
+			continue
+		}
+		kindStr := strings.Fields(e[kindIdx+len(":kind :"):])[0]
+		kindStr = strings.TrimSuffix(kindStr, ",")
+		if _, exists := out[n]; !exists {
+			out[n] = kindStr
+		}
+	}
+	return out
+}
+
+// A rule added purely as catalog DATA — no change to lint.lg — must be
+// found and applied. This is the property the data-driven design exists to
+// provide. The catalog is resolved next to lint.lg's OWN invoked path, so
+// this test invokes a copy of lint.lg placed alongside a fabricated
+// catalog, proving the substitution needs zero changes to lint.lg's code —
+// only a different scripts/lint-code-rules.edn.
+func TestLintCodeVerbosityCatalogIsData(t *testing.T) {
+	dir := t.TempDir()
+	scriptsDir := filepath.Join(dir, "scripts")
+	if err := os.MkdirAll(scriptsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	realLint, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "lint.lg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scriptsDir, "lint.lg"), realLint, 0644); err != nil {
+		t.Fatal(err)
+	}
+	customCatalog := `{:name :fabricated-test-rule
+ :kind :fabricated-test-rule
+ :pattern (triple ?x)
+ :replace (* 3 ?x)
+ :why "test-only pattern proving the catalog is pure data"}
+`
+	if err := os.WriteFile(filepath.Join(scriptsDir, "lint-code-rules.edn"), []byte(customCatalog), 0644); err != nil {
+		t.Fatal(err)
+	}
+	fixtureDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(fixtureDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixtureDir, "f.lg"), []byte("(defn f [n] (triple n))\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(lgBin, filepath.Join(scriptsDir, "lint.lg"), fixtureDir)
+	cmd.Dir = repoRoot
+	out, cmdErr := cmd.CombinedOutput()
+	if cmdErr != nil {
+		t.Fatalf("lint.lg: %v\n%s", cmdErr, out)
+	}
+	if !strings.Contains(string(out), "[fabricated-test-rule]") {
+		t.Errorf("a catalog-only rule addition (no lint.lg code change) was not found:\n%s", out)
 	}
 }
 

@@ -186,14 +186,73 @@
        (balanced? text)
        (lg-parses? text)))
 
+;; next-code-line finds the first non-blank line strictly after `after`
+;; (1-based line number) in `lines` (0-based vector). Defined here (rather
+;; than only under R2, which also uses it) because R1's example-doc
+;; exclusion below needs it too.
+(defn next-code-line [lines after]
+  (let [n (count lines)]
+    (loop [i after]
+      (cond
+        (>= i n) nil
+        (clojure.string/blank? (nth lines i)) (recur (inc i))
+        :else (nth lines i)))))
+
+;; simple-tokens splits on whitespace, parens/brackets/braces, and quoting
+;; characters, lower-cased — unlike `tokenize` (R2's English-word-boundary
+;; splitter), it does NOT split on "-" or "_", so a compound Lisp identifier
+;; like "type-decl" or "extend-type" survives as one token.
+(defn simple-tokens [line]
+  (vec (remove clojure.string/blank?
+               (clojure.string/split (clojure.string/lower-case line) #"[\s()\[\]{}'\"`,;]+"))))
+
+;; prev-code-line finds the first non-blank line strictly before `before`
+;; (0-based line index) in `lines`.
+(defn prev-code-line [lines before]
+  (loop [i (dec before)]
+    (cond
+      (< i 0) nil
+      (clojure.string/blank? (nth lines i)) (recur (dec i))
+      :else (nth lines i))))
+
+;; example-doc? excludes a comment whose parsed head symbol (the operator of
+;; the top-level form, e.g. "extend-type" in "(extend-type Type ...)")
+;; textually names something on an ADJACENT source line (the next line, for
+;; the common "example directly above its own declaration" case, e.g.
+;;   ;; (defmethod name dispatch-val [args] body)
+;;   (defmacro defmethod [name dispatch-val & fn-tail] ...)
+;; and also the immediately preceding line, for the "example directly below
+;; a cond/case label naming the same thing" shape, e.g.
+;;   "type-decl"
+;;   ;; (type-decl Name type-form)
+;;   (let [...] ...)
+;; Calibration on the real corpus (see the report) found every one of R1's
+;; original false positives fit one of these two shapes; two suggested
+;; alternatives — "exclude comments inside doc blocks" and "require no
+;; prose precedes the parsed content in the same block" — were checked
+;; against the actual false positives and neither would have excluded any
+;; of them (they have no preceding prose in the same block, and aren't
+;; distinguishably "inside a doc block" from a plain leading comment), so
+;; this rule targets the mechanism the data actually showed instead.
+(defn example-doc? [text next-line prev-line]
+  (let [head (first (simple-tokens text))]
+    (boolean
+      (and head
+           (or (and next-line (contains? (set (simple-tokens next-line)) head))
+               (and prev-line (contains? (set (simple-tokens prev-line)) head)))))))
+
 (defn r1-findings [path blocks]
   (if (lg-file? path)
-    (vec (keep (fn [b]
-                 (when (commented-out-code? (:text b))
-                   {:file path :line (:line b) :end (:end b)
-                    :kind :commented-out-code :measure 1
-                    :evidence (snippet (:text b))}))
-               blocks))
+    (let [lines (clojure.string/split (slurp path) "\n")]
+      (vec (keep (fn [b]
+                   (when (commented-out-code? (:text b))
+                     (let [next (next-code-line lines (:end b))
+                           prev (prev-code-line lines (dec (:line b)))]
+                       (when-not (example-doc? (:text b) next prev)
+                         {:file path :line (:line b) :end (:end b)
+                          :kind :commented-out-code :measure 1
+                          :evidence (snippet (:text b))}))))
+                 blocks)))
     []))
 
 ;; --- R2 — restatement --------------------------------------------------
@@ -254,15 +313,19 @@
       (when (and (>= overlap 0.8) (<= (count diff) 1))
         {:overlap overlap :diff (count diff)}))))
 
-;; next-code-line finds the first non-blank line strictly after `after`
-;; (1-based line number) in `lines` (0-based vector).
-(defn next-code-line [lines after]
-  (let [n (count lines)]
-    (loop [i after]
-      (cond
-        (>= i n) nil
-        (clojure.string/blank? (nth lines i)) (recur (inc i))
-        :else (nth lines i)))))
+;; divider-shaped? recognizes a section-divider comment structurally: its
+;; trimmed text is bracketed by a run of >=2 punctuation characters (dashes,
+;; equals, asterisks, tildes, hashes) at the start and/or the end, and it
+;; contains no sentence-ending punctuation. This is house style
+;; ("--- Func roundtrip ---" above a same-named test), not narrative slop —
+;; calibration on the real corpus (see the report) showed it dominates R2's
+;; raw findings. It is reported as its own kind, [comment-divider], so it
+;; stays visible but is excluded from the objective restatement score.
+(defn divider-shaped? [text]
+  (let [t (clojure.string/trim text)]
+    (and (seq t)
+         (or (re-find #"^[-=*~#]{2,}" t) (re-find #"[-=*~#]{2,}$" t))
+         (not (re-find #"[.!?;]" t)))))
 
 (defn r2-findings [path blocks]
   (let [lines (clojure.string/split (slurp path) "\n")]
@@ -273,13 +336,19 @@
                      (let [fw  (content-words next)
                            hit (restatement? cw fw)]
                        (when hit
-                         {:file path :line (:line b) :end (:end b)
-                          :kind :restatement
-                          :measure (:overlap hit)
-                          :evidence (str "overlap=" (:overlap hit)
-                                         " diff=" (:diff hit)
-                                         " next=\"" (snippet (clojure.string/trim next)) "\"")})))))
-               blocks))))
+                         (if (divider-shaped? (:text b))
+                           {:file path :line (:line b) :end (:end b)
+                            :kind :comment-divider
+                            :measure (:overlap hit)
+                            :evidence (str "section-divider, overlap=" (:overlap hit)
+                                           " text=\"" (snippet (clojure.string/trim (:text b))) "\"")}
+                           {:file path :line (:line b) :end (:end b)
+                            :kind :restatement
+                            :measure (:overlap hit)
+                            :evidence (str "overlap=" (:overlap hit)
+                                           " diff=" (:diff hit)
+                                           " next=\"" (snippet (clojure.string/trim next)) "\"")}))))))
+           blocks))))
 
 ;; --- R3 — duplicated comment --------------------------------------------
 ;;
@@ -291,12 +360,41 @@
 (defn dup-key [text]
   (clojure.string/trim (clojure.string/replace (clojure.string/lower-case text) #"\s+" " ")))
 
-;; r3-findings takes {:path :block} pairs across the WHOLE corpus (not one
-;; file), so it must be called once after every file's blocks are collected.
+;; Go interface-implementation boilerplate: godoc convention says a method's
+;; comment starts with the method name (or, for the specific "X implements
+;; Y" shape, the method name followed by "implements"). That produces
+;; identical one-line comments across every type implementing the same
+;; interface method — required-by-convention documentation, not pasted
+;; slop. go-decl-names extracts the receiver type and method/function name
+;; from a Go declaration line; boilerplate-doc? excludes a comment whose
+;; first word is the following declaration's own name (for a method) or
+;; that names the method and says "implements" (for any function).
+(def go-func-decl-re #"^func\s*(?:\(\s*\w+\s+\*?(\w+)\s*\))?\s*(\w+)\s*\(")
+
+(defn go-decl-names [line]
+  (let [m (re-find go-func-decl-re line)]
+    (when m {:recv (nth m 1) :name (nth m 2)})))
+
+(defn boilerplate-doc? [comment-text next-line]
+  (when next-line
+    (when-let [decl (go-decl-names next-line)]
+      (let [toks       (tokenize comment-text)
+            first-word (first toks)
+            name-lower (clojure.string/lower-case (:name decl))
+            recv-lower (when (:recv decl) (clojure.string/lower-case (:recv decl)))]
+        (boolean
+          (or (and (= first-word name-lower) (some #{"implements"} toks))
+              (and recv-lower (or (= first-word name-lower) (= first-word recv-lower)))))))))
+
+;; r3-findings takes {:path :block :next :go?} pairs across the WHOLE corpus
+;; (not one file), so it must be called once after every file's blocks are
+;; collected. :next (the immediately following source line) and :go? let it
+;; exclude Go interface-implementation boilerplate without needing a lexicon.
 (defn r3-findings [file-blocks-pairs]
   (let [eligible (filter (fn [pb] (let [b (:block pb)]
                                     (and (not (skip? (:raw b)))
-                                         (>= (count (dup-key (:text b))) r3-min-length))))
+                                         (>= (count (dup-key (:text b))) r3-min-length)
+                                         (not (and (:go? pb) (boilerplate-doc? (:text b) (:next pb)))))))
                          file-blocks-pairs)
         groups   (group-by (fn [pb] (dup-key (:text (:block pb)))) eligible)]
     (vec (mapcat (fn [[k pbs]]
@@ -313,10 +411,28 @@
 
 ;; --- R4 — comment density outlier ---------------------------------------
 ;;
-;; Per definition, comment-lines / total-lines, flagged when it beats the
-;; 95th percentile of that ratio computed over the whole corpus. No magic
-;; constant: the corpus sets its own bar. A minimum definition size guards
-;; against a tiny function with a two-line docstring dominating the tail.
+;; Per definition, INTERIOR comment-lines / interior-total-lines, flagged
+;; when it beats the 95th percentile of that ratio computed over the whole
+;; corpus. No magic constant: the corpus sets its own bar.
+;;
+;; The leading doc-comment block (if any) is excluded from BOTH the
+;; numerator and the denominator, and from the reported line range. A doc
+;; comment attached to a declaration is documentation, not density abuse —
+;; calibration on the real corpus (see the report) showed the un-excluded
+;; version's tail was dominated by small, well-documented public functions
+;; with thorough godoc, which is exactly the behaviour this project wants,
+;; not padding.
+;;
+;; Chosen over the alternative (restrict the rule to unexported
+;; declarations): excluding leading docs keeps EVERY declaration, exported
+;; or not, eligible, and still catches the actual failure mode this rule is
+;; for — a definition padded with comments in its BODY, interleaved with
+;; code, which an unexported-only restriction wouldn't touch either (an
+;; unexported function can be just as padded as an exported one) and would
+;; halve the corpus available for a meaningful percentile.
+;;
+;; A minimum interior size guards against a tiny function dominating the
+;; tail.
 (def r4-min-def-lines 5)
 (def r4-percentile 0.95)
 
@@ -351,19 +467,13 @@
           (recur (rest cs) d seen-open line-offset)))
       :else (recur (rest cs) depth seen-open line-offset))))
 
-;; leading-comment-start walks backward from a definition's start index
-;; (0-based) while the immediately preceding line is a whole-line comment,
-;; with no blank-line break, and returns the first such line's index.
-(defn leading-comment-start [lines start go?]
-  (loop [i start]
-    (if (and (> i 0) (some? (comment-body (nth lines (dec i)) go?)))
-      (recur (dec i))
-      i)))
-
 ;; file-definitions returns, for one file, a vector of
 ;; {:start :end :total :comments} (0-based line indices, inclusive; :total
 ;; and :comments in lines) for every top-level definition big enough to
-;; clear r4-min-def-lines.
+;; clear r4-min-def-lines. :start is the DECLARATION line (leading doc
+;; comments, if any, are deliberately excluded — see the R4 section
+;; comment above); :leading-comment-start is kept separately only for
+;; reference, unused in the ratio.
 (defn file-definitions [path]
   (let [go?   (go-file? path)
         lines (vec (clojure.string/split (slurp path) "\n"))
@@ -373,12 +483,11 @@
              (when (def-start? (nth lines i) go?)
                (let [rest-src (clojure.string/join "\n" (subvec lines i n))
                      end      (+ i (form-end-offset rest-src))
-                     start    (leading-comment-start lines i go?)
-                     total    (inc (- end start))]
+                     total    (inc (- end i))]
                  (when (>= total r4-min-def-lines)
-                   (let [span     (subvec lines start (inc end))
+                   (let [span     (subvec lines i (inc end))
                          comments (count (filter (fn [l] (some? (comment-body l go?))) span))]
-                     {:path path :start start :end end :total total :comments comments
+                     {:path path :start i :end end :total total :comments comments
                       :ratio (/ (double comments) total)})))))
            (range n)))))
 
@@ -408,6 +517,280 @@
                                  :measure (:ratio d)
                                  :evidence (str "ratio=" (:ratio d) " (p95=" threshold ")")}))
                         defs))})))
+
+;; --- Code-verbosity: generic pattern/replace matcher over .lg forms ------
+;;
+;; The comment rules above measure the user's first complaint (verbose
+;; comments); this measures the second (verbose CODE) — SlopCodeBench's own
+;; verbosity numerator is code-construct rules, not comment rules; the
+;; comment rules were always the adjacent half.
+;;
+;; The catalog (scripts/lint-code-rules.edn) is DATA, not hand-coded
+;; predicates: each entry is {:name :kind :pattern :replace :why}, where
+;; :pattern/:replace are ordinary .lg forms containing metavariables. A
+;; symbol beginning with "?" matches any single sub-form, binding it by
+;; name; if the same metavariable name appears again in the pattern, the
+;; second occurrence must be STRUCTURALLY EQUAL to the first (this is what
+;; lets `(let [?x ?e] ?x)` require the let's body to be the very symbol it
+;; bound, and `(fn [?&params] (?f ?&params))` require the call's arguments
+;; to be exactly the parameter list, in order, for any arity). A symbol
+;; beginning with "?&", used as the LAST element of a pattern list/vector,
+;; binds ALL remaining sibling elements as one sequence (a rest-pattern) —
+;; this is what makes the eta-expansion rule arity-generic instead of one
+;; catalog entry per parameter count. Adding a new pattern needs no code
+;; change here, only a new catalog entry.
+;;
+;; Matching runs against a form's OWN boundaries, not the line heuristics
+;; R1-R4 use for comments: corpus source is parsed by a small
+;; position-tracking reader (below) into a tree of {:k :list/:vec/:atom :v
+;; ... :line :end} nodes, and every node in the tree — not just top-level
+;; forms — is tried against every catalog rule. A finding's :line/:end are
+;; the MATCHED FORM's own span, derived from its own delimiters, which is
+;; why this parser exists at all: `read-string` gives back a value with no
+;; position metadata, so it can tell you THAT something matched but not
+;; WHERE. This is a deliberate deviation from the SlopCodeBench paper's
+;; line-delimited flagged regions — ours are form-delimited, which is
+;; strictly more precise (and the per-form line count is still exactly
+;; recoverable from :line/:end for the line-ratio metric) but is a real
+;; difference worth naming.
+;;
+;; The tokenizer treats every bracket character as its own token and glues
+;; everything else (symbols, keywords, numbers, reader-macro prefixes like
+;; ' ` ~ ~@ #) into maximal non-bracket, non-string runs; it does not
+;; interpret their meaning, only their extent. This is sufficient for
+;; balance tracking and for textual comparison against catalog literals,
+;; but is a known simplification (the same shape as R1/R4's delimiter-only
+;; balancing): a reader macro's semantics (quote, deref, set literal) are
+;; not understood, only its bracket structure. None of the catalog's
+;; patterns need that depth for their heads to match correctly.
+;;
+;; atoms-eliminable: every finding's :measure is the atom count of the
+;; matched form minus the atom count of its replacement, both computed by
+;; the SAME node-atom-count function — so the saving is derived from the
+;; rule pair itself, not hand-annotated, and cannot drift from the rule. An
+;; atom is a symbol, keyword, or literal (string/number/bool/nil — a string
+;; counts as ONE atom regardless of its contents, since a long docstring is
+;; payload, not structure) or a collection delimiter pair (each list/vector
+;; contributes 2, for its open and close). This mirrors the token-stream
+;; definition `quality.metrics/halstead` uses for program length; it is
+;; re-implemented locally here (not called) because this file may not
+;; import anything under scripts/quality/.
+;;
+;; Go is NOT covered: there are no s-expressions to match against, and the
+;; architecture keeps Go analysis in a separate Go tool (a sibling agent
+;; owns `cmd/go-callables`, which will grow comment blocks and, eventually,
+;; function/AST records). Code-verbosity findings only ever come from .lg
+;; files, and the tool's own output says so, the same way R1 discloses its
+;; .lg-only scope. When that Go tool exists, Go code-verbosity rules become
+;; a consumer of its AST node output — node boundaries, not line
+;; boundaries, for the same reason forms are used here — not new text
+;; matching against Go source.
+
+;; The catalog lives next to lint.lg itself (resolved from THIS script's own
+;; invocation path, not the process's working directory) so it is found
+;; correctly regardless of what cwd a caller needs for other reasons — e.g.
+;; R6's --churn, which needs cwd at the git repo being analyzed, which is
+;; not necessarily this one.
+(defn script-dir []
+  (let [args   (vec (seq os/args))
+        script (if (> (count args) 1) (nth args 1) "scripts/lint.lg")
+        idx    (clojure.string/last-index-of script "/")]
+    (if idx (subs script 0 idx) ".")))
+
+(def code-rules-path (str (script-dir) "/lint-code-rules.edn"))
+
+;; strip-line-comment removes a ";"-introduced comment from a line, honoring
+;; string literals (a ";" inside a string is not a comment marker) — shared
+;; with nothing else because R1-R4 work at whole-line-comment granularity
+;; already and don't need mid-line stripping; this parser does, since a
+;; trailing comment on a code line would otherwise inject stray characters
+;; (or unbalanced-looking brackets, if the comment itself mentions one)
+;; into the token stream.
+(defn strip-line-comment [line]
+  (loop [i 0 in-str false esc false]
+    (if (>= i (count line))
+      line
+      (let [c (nth line i)]
+        (cond
+          esc (recur (inc i) in-str false)
+          (and in-str (= c \\)) (recur (inc i) in-str true)
+          (= c \") (recur (inc i) (not in-str) false)
+          (and (not in-str) (= c \;)) (subs line 0 i)
+          :else (recur (inc i) in-str false))))))
+
+(def open->kind {\( :list \[ :vec \{ :map})
+
+(defn ws-char? [c] (contains? #{\space \tab \newline \return \,} c))
+(defn close-char? [c] (and (contains? delim-chars c) (not (contains? open-chars c))))
+
+(defn skip-ws [text i line n]
+  (loop [i i line line]
+    (if (and (< i n) (ws-char? (nth text i)))
+      (recur (inc i) (if (= (nth text i) \newline) (inc line) line))
+      [i line])))
+
+(defn scan-string [text i n]
+  (loop [j (inc i) esc false]
+    (cond
+      (>= j n) j
+      esc (recur (inc j) false)
+      (= (nth text j) \\) (recur (inc j) true)
+      (= (nth text j) \") (inc j)
+      :else (recur (inc j) false))))
+
+(defn scan-atom [text i n]
+  (loop [j i]
+    (if (and (< j n)
+             (not (ws-char? (nth text j)))
+             (not (contains? delim-chars (nth text j)))
+             (not (= (nth text j) \")))
+      (recur (inc j))
+      j)))
+
+;; tokenize-forms turns comment-stripped source text into a flat vector of
+;; {:text :line} tokens.
+(defn tokenize-forms [text]
+  (let [n (count text)]
+    (loop [i 0 line 1 out []]
+      (let [ws (skip-ws text i line n)
+            i2 (first ws) line2 (second ws)]
+        (if (>= i2 n)
+          out
+          (let [c (nth text i2)]
+            (cond
+              (contains? delim-chars c)
+              (recur (inc i2) line2 (conj out {:text (str c) :line line2}))
+              (= c \")
+              (let [end (scan-string text i2 n)]
+                (recur end line2 (conj out {:text (subs text i2 end) :line line2})))
+              :else
+              (let [end (scan-atom text i2 n)]
+                (recur end line2 (conj out {:text (subs text i2 end) :line line2}))))))))))
+
+;; parse-tokens reads ONE form from the front of `tokens`, returning
+;; {:node ... :rest remaining-tokens}, or nil if `tokens` is empty.
+(defn parse-tokens [tokens]
+  (when (seq tokens)
+    (let [t (first tokens) txt (:text t) ln (:line t) c (first txt)]
+      (if (contains? open-chars c)
+        (let [k (get open->kind c)]
+          (loop [ts (rest tokens) children [] end-line ln]
+            (cond
+              (empty? ts) {:node {:k k :v children :line ln :end end-line} :rest ts}
+              (close-char? (first (:text (first ts))))
+              {:node {:k k :v children :line ln :end (:line (first ts))} :rest (rest ts)}
+              (contains? open-chars (first (:text (first ts))))
+              (let [r (parse-tokens ts)]
+                (recur (:rest r) (conj children (:node r)) (:end (:node r))))
+              :else
+              (recur (rest ts)
+                     (conj children {:k :atom :v (:text (first ts))
+                                     :line (:line (first ts)) :end (:line (first ts))})
+                     (:line (first ts))))))
+        {:node {:k :atom :v txt :line ln :end ln} :rest (rest tokens)}))))
+
+(defn parse-all-forms [tokens]
+  (loop [ts tokens forms []]
+    (if (empty? ts)
+      forms
+      (let [r (parse-tokens ts)]
+        (recur (:rest r) (conj forms (:node r)))))))
+
+(defn parse-file-forms [path]
+  (let [raw-lines (clojure.string/split (slurp path) "\n")
+        stripped  (clojure.string/join "\n" (map strip-line-comment raw-lines))]
+    (parse-all-forms (tokenize-forms stripped))))
+
+(defn corpus-list-node? [n] (contains? #{:list :vec :map} (:k n)))
+
+(defn walk-nodes [node]
+  (cons node (when (corpus-list-node? node) (mapcat walk-nodes (:v node)))))
+
+(defn all-nodes [forms] (vec (mapcat walk-nodes forms)))
+
+(defn node-atom-count [node]
+  (if (corpus-list-node? node)
+    (+ 2 (reduce + 0 (map node-atom-count (:v node))))
+    1))
+
+(defn metavar-sym? [v] (and (symbol? v) (clojure.string/starts-with? (str v) "?")))
+(defn rest-metavar-sym? [v] (and (symbol? v) (clojure.string/starts-with? (str v) "?&")))
+
+;; nodes-equal? is the structural-equality check behind repeated-metavariable
+;; consistency (both for single-node bindings and for rest-pattern
+;; sequences, represented as {:k :seq :v [...]}).
+(defn nodes-equal? [a b]
+  (cond
+    (not= (:k a) (:k b)) false
+    (= (:k a) :atom) (= (:v a) (:v b))
+    :else (and (= (count (:v a)) (count (:v b)))
+               (every? true? (map nodes-equal? (:v a) (:v b))))))
+
+(defn bind [bindings k v]
+  (let [existing (get bindings k)]
+    (if existing
+      (when (nodes-equal? existing v) bindings)
+      (assoc bindings k v))))
+
+(declare unify)
+
+;; unify-seq matches a pattern list/vector's elements against a corpus
+;; node's children, left to right, supporting a trailing "?&name" rest
+;; metavariable (which must be the LAST pattern element) that collects
+;; every remaining child as one {:k :seq :v [...]} pseudo-node.
+(defn unify-seq [pats nodes bindings]
+  (cond
+    (nil? bindings) nil
+    (and (seq pats) (rest-metavar-sym? (first pats)) (= (count pats) 1))
+    (bind bindings (first pats) {:k :seq :v (vec nodes)})
+    (and (empty? pats) (empty? nodes)) bindings
+    (or (empty? pats) (empty? nodes)) nil
+    :else (unify-seq (rest pats) (rest nodes) (unify (first pats) (first nodes) bindings))))
+
+;; unify matches one pattern-value (from read-string on a catalog entry)
+;; against one corpus node, threading `bindings` (nil on failure).
+(defn unify [pat node bindings]
+  (cond
+    (nil? bindings) nil
+    (metavar-sym? pat) (bind bindings pat node)
+    (and (list? pat) (= (:k node) :list)) (unify-seq (seq pat) (:v node) bindings)
+    (and (vector? pat) (= (:k node) :vec)) (unify-seq (seq pat) (:v node) bindings)
+    (= (:k node) :atom) (if (= (pr-str pat) (:v node)) bindings nil)
+    :else nil))
+
+;; instantiate builds a synthetic node from a :replace template and a
+;; bindings map, so its atom count can be compared against the matched
+;; node's. None of the catalog's replace templates re-splice a rest
+;; binding, so a bound {:k :seq ...} is never itself instantiated here.
+(defn instantiate [tmpl bindings]
+  (cond
+    (metavar-sym? tmpl) (get bindings tmpl)
+    (list? tmpl) {:k :list :v (vec (map (fn [x] (instantiate x bindings)) tmpl))}
+    (vector? tmpl) {:k :vec :v (vec (map (fn [x] (instantiate x bindings)) tmpl))}
+    :else {:k :atom :v (pr-str tmpl)}))
+
+(defn apply-rule [rule node]
+  (let [b (unify (:pattern rule) node {})]
+    (when b
+      (let [orig (node-atom-count node)
+            rep  (node-atom-count (instantiate (:replace rule) b))]
+        {:file nil :line (:line node) :end (:end node)
+         :kind (:kind rule) :measure (- orig rep)
+         :evidence (str (name (:kind rule)) ": " (:why rule)
+                        " (atoms-eliminable=" (- orig rep) ")")}))))
+
+(defn load-code-rules []
+  (let [raw (read-string (str "[" (slurp code-rules-path) "]"))]
+    raw))
+
+(defn code-verbosity-findings [path rules]
+  (if (lg-file? path)
+    (let [nodes (all-nodes (parse-file-forms path))]
+      (vec (keep (fn [n]
+                   (when-let [f (some (fn [r] (apply-rule r n)) rules)]
+                     (assoc f :file path)))
+                 nodes)))
+    []))
 
 ;; --- R6 — comment churn, for a revision range ---------------------------
 ;;
@@ -533,15 +916,21 @@
       blocks-by-file (zipmap files (map file-blocks files))
       r1     (vec (mapcat (fn [p] (r1-findings p (blocks-by-file p))) files))
       r2     (vec (mapcat (fn [p] (r2-findings p (blocks-by-file p))) files))
-      all-pairs (vec (mapcat (fn [p] (map (fn [b] {:path p :block b}) (blocks-by-file p))) files))
+      lines-by-file (zipmap files (map (fn [p] (clojure.string/split (slurp p) "\n")) files))
+      all-pairs (vec (mapcat (fn [p] (map (fn [b] {:path p :block b :go? (go-file? p)
+                                                   :next (next-code-line (lines-by-file p) (:end b))})
+                                       (blocks-by-file p)))
+                       files))
       r3     (r3-findings all-pairs)
       all-defs (vec (mapcat file-definitions files))
       r4-result (r4-findings all-defs)
       r4     (:findings r4-result)
       r5     (vec (mapcat (fn [p] (r5-findings p (blocks-by-file p))) files))
       r6     (or (r6-findings (:churn opts) files) [])
+      code-rules (load-code-rules)
+      r7     (vec (mapcat (fn [p] (code-verbosity-findings p code-rules)) files))
       go-files (count (filter go-file? files))
-      all-findings (vec (concat r1 r2 r3 r4 r5 r6))
+      all-findings (vec (concat r1 r2 r3 r4 r5 r6 r7))
       gate-kinds (clojure.set/intersection (:gate-req opts) gateable-kinds)
       ignored-gate (clojure.set/difference (:gate-req opts) gateable-kinds)
       gated? (some (fn [f] (contains? gate-kinds (:kind f))) all-findings)]
@@ -555,8 +944,11 @@
                     go-files " Go file(s) not covered yet, see R1's section comment"
                     " in scripts/lint.lg)."))
       (doseq [f r2]
-        (println (str (:file f) ":" (:line f) "-" (:end f) "  [restatement] " (:evidence f))))
-      (println (str (count r2) " restatement finding(s) (R2)."))
+        (println (str (:file f) ":" (:line f) "-" (:end f)
+                      "  [" (name (:kind f)) "] " (:evidence f))))
+      (println (str (count (filter #(= (:kind %) :restatement) r2)) " restatement finding(s), "
+                    (count (filter #(= (:kind %) :comment-divider) r2))
+                    " section-divider finding(s) excluded from the objective score (R2)."))
       (doseq [f r3]
         (println (str (:file f) ":" (:line f) "-" (:end f) "  [duplicated-comment] " (:evidence f))))
       (println (str (count r3) " duplicated-comment finding(s) (R3)."))
@@ -579,6 +971,14 @@
         (when (empty? r6)
           (println (str "comment-churn (R6): no findable added lines for range " (:churn opts) ".")))
         (println "comment-churn (R6): skipped — pass --churn <git-range> to compute."))
+      (doseq [f r7]
+        (println (str (:file f) ":" (:line f) "-" (:end f)
+                      "  [" (name (:kind f)) "] " (:evidence f))))
+      (println (str (count r7) " code-verbosity finding(s), "
+                    (reduce + 0 (map :measure r7)) " atom(s) eliminable"
+                    " (.lg only — Go code-verbosity rules are deferred to a"
+                    " separate Go-AST tool; see the code-verbosity section"
+                    " comment in scripts/lint.lg)."))
       (when (seq ignored-gate)
         (println (str "note: --gate ignored " (vec (map name ignored-gate))
                       " — not gate-eligible (R5 is a heuristic, or an unknown kind name).")))))
