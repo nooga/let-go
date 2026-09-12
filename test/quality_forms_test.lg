@@ -34,3 +34,29 @@
 
 (deftest counts-split-loc-comment-blank
   (is (= {:loc 11 :comment 2 :blank 4} (f/counts src))))
+
+(deftest extents-cover-every-form-at-every-depth
+  (let [t "(ns x)\n\n(defn a [y]\n  (let [z (inc y)]\n    (+ z 1)))\n"
+        ex (f/extents t)]
+    ;; the top-level defn, the let, and the inner forms all appear
+    (is (some #(= [3 5] %) ex))
+    (is (some #(= [4 5] %) ex))
+    (is (some #(= [1 1] %) ex))
+    ;; a delimiter inside a string is not structure: the form closes at its
+    ;; real paren, not at the one inside the string literal
+    (is (= [[1 1]] (f/extents "(comment \")\")\n")))
+    (is (= [[1 2]] (f/extents "(a \")\"\n  b)\n")))))
+
+(deftest snap-narrows-a-region-onto-whole-forms
+  (let [t "(ns x)\n\n(defn a [y]\n  (let [z (inc y)]\n    (+ z 1)))\n\n(defn b [] 1)\n"
+        ex (f/extents t)]
+    ;; a span with slack on both sides narrows onto the form it contains
+    (is (= [3 5] (f/snap ex 2 6)))
+    ;; a span starting mid-form keeps only the complete forms inside it
+    (is (= [4 5] (f/snap ex 4 6)))
+    ;; NARROWS, never widens: a 10-line match must not swallow a 300-line
+    ;; function, which is what snapping to the enclosing form would do
+    (is (= [3 5] (f/snap ex 3 5)))
+    ;; a fragment containing no complete form is returned unchanged, because
+    ;; there is no structure to snap to
+    (is (= [2 2] (f/snap ex 2 2)))))

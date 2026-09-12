@@ -85,7 +85,7 @@
     (is (str/includes? out "caveat: efficiency couples coverage to CI time"))
     (is (str/includes? out "corpus "))
     ;; the two derivation caveats item 6 asks for, stated in the header
-    (is (str/includes? out "dup-share by lines: regions are matched on TOKENS"))
+    (is (str/includes? out "reported on FORM boundaries"))
     (is (str/includes? out "defects: renames credited to target via -M"))
     ;; duplicate issues carry the A-side span and the matched span
     (is (re-find #"duplicate\s+[0-9.]+\s+~ \S+:\d+-\d+ \(lines \d+\)" out))

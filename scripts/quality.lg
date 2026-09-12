@@ -334,6 +334,26 @@
             {:findings nil :source "unavailable"
              :error (str/trim (str (:err r)))}))))))
 
+(defn go-extents-of
+  "Statement and declaration line ranges for `paths`, from the Go tool.
+
+   Asked for ON DEMAND, for the files that actually carry a duplicate region:
+   the whole corpus would be a large payload to cross the boundary for
+   nothing. An empty result simply means Go regions keep their token-derived
+   spans."
+  [checkout paths]
+  (if (empty? paths)
+    []
+    (let [bin (os/getenv "QUALITY_GO_CALLABLES")
+          cmd (if (str/blank? bin)
+                (concat ["go" "run" "github.com/nooga/let-go/cmd/go-callables"])
+                [bin])
+          r (try (apply os/sh (concat cmd ["--extents"] paths))
+                 (catch Throwable e {:exit 1 :err (str e)}))]
+      (if (zero? (:exit r))
+        (try (or (:extents (read-string (:out r))) []) (catch Throwable _ []))
+        []))))
+
 (defn- cwd-path
   "A repo-relative path turned back into one the process can open: the cwd
    prefix is stripped, since discovery walked from the cwd."
@@ -462,6 +482,31 @@
                                                                    k w floor
                                                                    (:dup-posting-cap score/thresholds)))
                                                 [:lg :go]))))))
+        ;; Snap each reported region to form boundaries. Matching stays on
+        ;; TOKENS -- similarity is untouched -- but what is REPORTED becomes a
+        ;; set of whole forms, so a finding is directly extractable and the
+        ;; token-to-line approximation stops needing a caveat.
+        ;; .lg structure comes from the reader; Go structure comes from the
+        ;; Go tool, which already has the AST. Both languages snap to real
+        ;; boundaries -- there is no asymmetry to explain.
+        go-dup-paths (vec (sort (distinct (keep (fn [p]
+                                                  (let [pa (get-in p [:a :path])]
+                                                    (when (str/ends-with? pa ".go") pa)))
+                                                dup-pairs))))
+        go-extents (go-extents-of checkout (mapv #(disk-path %) go-dup-paths))
+        extents-by-path (merge
+                          (into {} (for [f tokenized :when (= :lg (:lang f))]
+                                     [(:path f) (forms/extents (:text f))]))
+                          (reduce (fn [m e]
+                                    (update m (rel-path (:path e)) (fnil conj [])
+                                            [(:from e) (:to e)]))
+                                  {} go-extents))
+        snap-side (fn [side]
+                    (if-let [ex (get extents-by-path (:path side))]
+                      (let [[from to] (forms/snap ex (:start side) (:end side))]
+                        (assoc side :start from :end to))
+                      side))
+        dup-pairs (mapv (fn [p] (-> p (update :a snap-side) (update :b snap-side))) dup-pairs)
         dup-pct (apply merge (map (fn [lang]
                                     (dup/file-percent (mapv #(select-keys % [:path :tokens])
                                                             (get by-lang lang []))

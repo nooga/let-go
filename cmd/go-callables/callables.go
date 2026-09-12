@@ -279,3 +279,43 @@ func goAnalyze(src string) ([]callable, fileCounts, error) {
 	}
 	return out, counts, nil
 }
+
+// extent is one structural node's line range: a STATEMENT or a DECLARATION,
+// which is the granularity someone can actually extract. Expression nodes are
+// deliberately excluded -- a duplicate region snapped to the smallest
+// enclosing expression is noise, not a finding.
+type extent struct {
+	from int
+	to   int
+}
+
+// goExtents returns the line range of every statement and declaration in the
+// file, so a token-derived duplicate region can be snapped to real structure.
+// Go has no s-expressions, but it has an AST, and the parse has already
+// happened.
+func goExtents(src string) ([]extent, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "src.go", src, parser.ParseComments)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[extent]bool{}
+	var out []extent
+	ast.Inspect(file, func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		switch n.(type) {
+		case ast.Stmt, ast.Decl:
+		default:
+			return true
+		}
+		e := extent{fset.Position(n.Pos()).Line, fset.Position(n.End()).Line}
+		if !seen[e] {
+			seen[e] = true
+			out = append(out, e)
+		}
+		return true
+	})
+	return out, nil
+}
