@@ -22,6 +22,22 @@
    listed by debt descending (ties by path), issues by debt impact, and
    every external input is pinned in the header.
 
+   SUBPROCESSES AND A RUNTIME GAP. This tool spawns children -- the Go
+   analysis tool (twice), the linter, and git/jj -- and PR-delta mode runs a
+   second full scoring pass. Every call is synchronous, so nothing leaks while
+   the process lives. But `os/sh` is `exec.Command` plus `cmd.Run()` with no
+   `SysProcAttr.Setpgid`, no `CommandContext` and no `WaitDelay`, so a child's
+   lifetime is NOT tied to its parent's: kill the parent and the child is
+   re-parented to init and keeps running. Verified directly -- SIGKILL the
+   parent, and the child shows ppid 1.
+
+   That is how 46 orphaned test binaries outlived the bug that spawned them
+   and saturated the machine for 85 minutes. It cannot be closed from .lg; it
+   needs `os/sh` to place children in a process group and signal that group,
+   or to accept a cancellation context. What IS closed here is the cause: the
+   interpreter is resolved to a real `lg` binary rather than argv[0], so the
+   tool can no longer recursively spawn its own harness.
+
    Design: docs/superpowers/specs/2026-09-11-code-quality-score-design.md"
   (:require
    [clojure.string :as str]
@@ -413,6 +429,7 @@
           "--top" (recur (subvec a 2) (assoc opts :top (read-string n)) paths)
           "--source-root" (recur (subvec a 2) (update opts :source-roots conj n) paths)
           "--timings" (recur (subvec a 1) (assoc opts :timings true) paths)
+          "--ci-lookup" (recur (subvec a 1) (assoc opts :ci-lookup true) paths)
           "--base" (recur (subvec a 2) (assoc opts :base n) paths)
           "--head" (recur (subvec a 2) (assoc opts :head n) paths)
           (if (str/starts-with? x "--")
@@ -645,7 +662,11 @@
                    (/ (+ (* lg-src-loc (:percent lg-cov)) (* go-src-loc (:percent go-cov)))
                       (double (+ lg-src-loc go-src-loc)))
                    (:percent lg-cov))
-        ci (inputs/ci-seconds {:run (:ci-run opts) :seconds (:ci-seconds opts)})
+        ;; Pinned to a RECORDED duration for this commit; never the local
+        ;; wall clock, which would make the term non-deterministic for the
+        ;; same tree and break the PR-delta contract.
+        ci (inputs/ci-seconds {:run (:ci-run opts) :seconds (:ci-seconds opts)
+                               :commit (when (:ci-lookup opts) (:to grange))})
         efficiency (when (and ci combined (pos? (:seconds ci)))
                      (/ combined (/ (:seconds ci) 60.0)))
         assertions (reduce + 0 (map (fn [f]

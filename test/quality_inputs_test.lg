@@ -64,3 +64,14 @@
   (let [r (in/git-range "2026-01-01")]
     (is (re-matches #"[0-9a-f]{40}" (:to r)))
     (is (re-matches #"[0-9a-f]{40}" (:from r)))))
+
+(deftest ci-seconds-never-invents-a-duration
+  ;; Efficiency must be pinned to a RECORDED duration. With nothing recorded
+  ;; the term is omitted and renormalized -- it is never estimated from the
+  ;; local wall clock, which would make the composite non-deterministic for
+  ;; the same tree and break the PR-delta contract.
+  (is (nil? (in/ci-seconds {})))
+  (is (nil? (in/ci-seconds {:commit ""})))
+  (is (= {:seconds 300 :source "supplied"} (in/ci-seconds {:seconds 300})))
+  ;; a supplied duration wins over a lookup, since it is already recorded
+  (is (= "supplied" (:source (in/ci-seconds {:seconds 300 :commit "deadbeef"})))))
