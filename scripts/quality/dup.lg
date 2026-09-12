@@ -3,13 +3,19 @@
    hashes, window minima, shared-fingerprint regions between and within
    files.")
 
-(defn- kgram-hashes [tokens k]
+(defn- kgram-hashes
+  "Every k-gram of `tokens` as {:hash :pos}. Computed ONCE per file and passed
+   to both `fingerprints*` and `kgram-index*`: it is the dominant per-file
+   cost, and computing it twice was pure duplicated work."
+  [tokens k]
   (let [ts (mapv :t tokens) n (count ts)]
     (vec (for [i (range 0 (max 0 (inc (- n k))))]
            {:hash (hash (subvec ts i (+ i k))) :pos i}))))
 
-(defn fingerprints [tokens k w]
-  (let [hs (kgram-hashes tokens k) n (count hs)]
+(defn fingerprints*
+  "`fingerprints` over an already-computed k-gram hash list."
+  [hs w]
+  (let [n (count hs)]
     (if (< n w)
       (vec (distinct hs))
       (loop [i 0 last nil out []]
@@ -19,12 +25,17 @@
                 m (reduce (fn [a b] (if (<= (:hash b) (:hash a)) b a)) win)]
             (recur (inc i) m (if (= m last) out (conj out m)))))))))
 
-(defn- kgram-index
-  "hash -> sorted vec of k-gram start positions, from the full (non-winnowed)
-   k-gram hash list."
-  [tokens k]
+(defn fingerprints
+  "Winnowed fingerprints of `tokens`: the window minima of its k-gram hashes."
+  [tokens k w]
+  (fingerprints* (kgram-hashes tokens k) w))
+
+(defn- kgram-index*
+  "hash -> sorted vec of k-gram start positions, from an already-computed
+   (non-winnowed) k-gram hash list."
+  [hs]
   (reduce (fn [m {:keys [hash pos]}] (update m hash (fnil conj []) pos))
-          {} (kgram-hashes tokens k)))
+          {} hs))
 
 (defn- self-overlap?
   "Whether a self-match region's two sides overlap once each k-gram's window
@@ -87,6 +98,69 @@
   [f pos]
   (:line (nth (:tokens f) (min pos (dec (count (:tokens f)))))))
 
+(defn pairs*
+  "`pairs`, plus the index statistics the report shows: how many fingerprint
+   hashes were skipped for exceeding `cap`, and how many candidate file pairs
+   the index produced. Returns {:pairs [...] :skipped-hashes n
+   :candidate-pairs n}."
+  [files k w floor cap]
+  (let [prepped (mapv (fn [f]
+                        ;; ONE k-gram pass per file, feeding both the winnowed
+                        ;; fingerprints and the exact index.
+                        (let [hs (kgram-hashes (:tokens f) k)
+                              kix (kgram-index* hs)]
+                          (assoc f
+                                 ;; the fingerprint hash SET is built once per
+                                 ;; file, not once per pair the file is in
+                                 :fph (set (map :hash (fingerprints* hs w)))
+                                 :kix kix
+                                 :nk (reduce + 0 (map count (vals kix))))))
+                  files)
+        n (count prepped)
+        ;; Inverted index: fingerprint hash -> the files carrying it. Candidate
+        ;; pairs are derived from the postings, so two files that share no
+        ;; fingerprint are never paired at all -- where the old double loop
+        ;; generated every pair and rejected almost all of them.
+        postings (reduce (fn [m i]
+                           (reduce (fn [m h] (update m h (fnil conj []) i))
+                                   m (:fph (nth prepped i))))
+                         {} (range n))
+        skipped (atom 0)
+        candidates (reduce (fn [acc [_ is]]
+                             (if (and cap (> (count is) cap))
+                               (do (swap! skipped inc) acc)
+                               (reduce (fn [acc i]
+                                         (reduce (fn [acc j] (conj acc [i j]))
+                                                 acc (filter #(> % i) is)))
+                                       acc is)))
+                           #{} postings)
+        pairs-to-check (vec (sort (into candidates (map (fn [i] [i i]) (range n)))))]
+    (let [ps
+          (->> (for [[i j] pairs-to-check
+               :let [a (nth prepped i)
+                     b (nth prepped j)
+                     matches (if (= i j)
+                                 (self-shared (:kix a) k)
+                                 (cross-shared (:kix a) (:kix b)))]
+               :when (seq matches)
+               r (aligned-regions matches k)
+               :when (>= (:n r) floor)
+               :when (or (not= i j) (not (self-overlap? r k)))
+               :let [span-a (- (:a-to r) (:a-from r) -1)
+                     span-b (- (:b-to r) (:b-from r) -1)]]
+           {:a {:path (:path a) :start (token-line a (:a-from r))
+                :end (token-line a (+ k -1 (:a-to r)))}
+            :b {:path (:path b) :start (token-line b (:b-from r))
+                :end (token-line b (+ k -1 (:b-to r)))}
+            :shared (:n r)
+            :similarity (min 1.0 (/ (double (:n r)) (max 1 (min span-a span-b))))})
+         ;; realized before sorting, then ordered for determinism
+         vec
+               (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start])
+                              #(get-in % [:b :path]) #(get-in % [:b :start])))
+               vec)]
+      {:pairs ps :skipped-hashes @skipped :candidate-pairs (count pairs-to-check)})))
+
 (defn pairs
   "EVERY near-duplicate region pair across `files` ([{:path :tokens}...]) --
    one record per matched region, not one per file pair, so a file that
@@ -130,41 +204,9 @@
    Same-file (`i = j`) self-pairs are reported too -- a copy-paste duplicate
    inside one file is still duplication -- and a self-region whose two sides
    overlap is dropped rather than reported."
-  [files k w floor]
-  (let [prepped (mapv (fn [f]
-                        (let [kix (kgram-index (:tokens f) k)]
-                          (assoc f
-                                 :fps (fingerprints (:tokens f) k w)
-                                 :kix kix
-                                 :nk (reduce + 0 (map count (vals kix))))))
-                  files)
-        n (count prepped)]
-    (->> (for [i (range n)
-               :let [a (nth prepped i)
-                     ha (set (map :hash (:fps a)))]
-               j (range i n)
-               :let [b (nth prepped j)]
-               :when (or (= i j) (some ha (map :hash (:fps b))))
-               :let [matches (if (= i j)
-                               (self-shared (:kix a) k)
-                               (cross-shared (:kix a) (:kix b)))]
-               :when (seq matches)
-               r (aligned-regions matches k)
-               :when (>= (:n r) floor)
-               :when (or (not= i j) (not (self-overlap? r k)))
-               :let [span-a (- (:a-to r) (:a-from r) -1)
-                     span-b (- (:b-to r) (:b-from r) -1)]]
-           {:a {:path (:path a) :start (token-line a (:a-from r))
-                :end (token-line a (+ k -1 (:a-to r)))}
-            :b {:path (:path b) :start (token-line b (:b-from r))
-                :end (token-line b (+ k -1 (:b-to r)))}
-            :shared (:n r)
-            :similarity (min 1.0 (/ (double (:n r)) (max 1 (min span-a span-b))))})
-         ;; realized before sorting, then ordered for determinism
-         vec
-         (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start])
-                        #(get-in % [:b :path]) #(get-in % [:b :start])))
-         vec)))
+  ([files k w floor] (:pairs (pairs* files k w floor nil)))
+  ([files k w floor cap] (:pairs (pairs* files k w floor cap))))
+
 
 (defn merge-spans
   "`spans` ([from to], inclusive) merged into disjoint, ascending spans.

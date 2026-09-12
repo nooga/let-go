@@ -57,6 +57,12 @@
    ;; see, so their public definitions are production roots.
    :lib-roots ["pkg/rt/core/"]
    :dup-k 25 :dup-w 40 :dup-floor 50
+   ;; A fingerprint carried by more than this many files is boilerplate: its
+   ;; posting list expands quadratically and it is not evidence of a clone
+   ;; worth reporting. Skipping it trades a little recall on ubiquitous
+   ;; fragments for bounded work, and the report says how many were skipped
+   ;; so the trade is visible rather than silent.
+   :dup-posting-cap 40
    ;; Below this many LOC a single fix commit implies an absurd per-KLOC
    ;; rate (one fix in a 9-line stub reads as 111/KLOC), so the defects term
    ;; is omitted for the file rather than scored off a meaningless rate.
