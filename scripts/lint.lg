@@ -155,8 +155,24 @@
 (defn lg-parses? [text]
   (try (do (read-string text) true) (catch Exception e false)))
 
+;; whole-form? requires the trimmed comment text itself to be exactly one
+;; delimited group — starts with an opener, ends with its matching closer —
+;; rather than merely containing a balanced parenthetical somewhere inside
+;; (e.g. "the override lets us match (e.g. ir/op vs op)." is prose with an
+;; aside, not code). Calibration against the real corpus (see the report)
+;; showed that without this, nearly every hit was a doc comment quoting a
+;; syntax example or a parenthetical remark, not leftover code — balance
+;; alone is not a strong enough signal.
+(defn whole-form? [text]
+  (let [t (clojure.string/trim text)]
+    (and (> (count t) 0)
+         (contains? open-chars (first t))
+         (contains? delim-chars (last t))
+         (= (get close->open (last t)) (first t)))))
+
 (defn commented-out-code? [text]
   (and (>= (delim-count text) 1)
+       (whole-form? text)
        (balanced? text)
        (lg-parses? text)))
 
@@ -169,6 +185,91 @@
                     :evidence (snippet (:text b))}))
                blocks))
     []))
+
+;; --- R2 — restatement --------------------------------------------------
+;;
+;; Flags a comment whose content words are (almost) a subset of the
+;; identifiers in the form immediately following it: it says nothing the code
+;; doesn't already say. The stopword list is fixed and committed here so the
+;; rule is reproducible.
+(def r2-stopwords
+  #{"the" "a" "an" "and" "or" "of" "to" "in" "on" "for" "is" "are" "this"
+    "that" "it" "with" "as" "by" "at" "be" "was" "were" "we" "you" "i" "not"
+    "if" "then" "than" "so" "but" "its" "into" "from" "up" "down" "out"
+    "will" "can" "do" "does" "which" "these" "those"})
+
+;; alpha? distinguishes letters from digits/punctuation: lower-casing and
+;; upper-casing a non-letter yields the same string, a letter's two cases
+;; differ.
+(defn alpha? [c]
+  (not= (clojure.string/lower-case (str c)) (clojure.string/upper-case (str c))))
+
+(defn upper-char? [c]
+  (and (alpha? c) (= (str c) (clojure.string/upper-case (str c)))))
+
+;; camel-space inserts a space before an upper-case letter that immediately
+;; follows a lower-case letter or digit, so "readString" tokenizes the same
+;; as "read-string" or "read_string" once whitespace-split.
+(defn camel-space [s]
+  (let [cs (vec (seq s))]
+    (apply str
+      (map-indexed
+        (fn [i c]
+          (if (and (> i 0) (upper-char? c) (not (upper-char? (nth cs (dec i)))))
+            (str " " c)
+            (str c)))
+        cs))))
+
+(defn tokenize [text]
+  (let [spaced (camel-space (clojure.string/replace text #"[-_]" " "))
+        low    (clojure.string/lower-case spaced)
+        raw    (clojure.string/split low #"[^a-z0-9]+")]
+    (vec (remove clojure.string/blank? raw))))
+
+(defn content-words [text]
+  (vec (remove r2-stopwords (tokenize text))))
+
+;; restatement? compares the comment's content words against the words of the
+;; single source line immediately following the block. Only that one line is
+;; examined, not the full extent of a multi-line form — a documented
+;; simplification; most defs of interest here are one-liners or the
+;; identifiers of interest appear on the first line regardless.
+(defn restatement? [comment-words form-words]
+  (when (seq comment-words)
+    (let [cw      (set comment-words)
+          fw      (set form-words)
+          inter   (clojure.set/intersection cw fw)
+          overlap (/ (double (count inter)) (count cw))
+          diff    (clojure.set/difference cw fw)]
+      (when (and (>= overlap 0.8) (<= (count diff) 1))
+        {:overlap overlap :diff (count diff)}))))
+
+;; next-code-line finds the first non-blank line strictly after `after`
+;; (1-based line number) in `lines` (0-based vector).
+(defn next-code-line [lines after]
+  (let [n (count lines)]
+    (loop [i after]
+      (cond
+        (>= i n) nil
+        (clojure.string/blank? (nth lines i)) (recur (inc i))
+        :else (nth lines i)))))
+
+(defn r2-findings [path blocks]
+  (let [lines (clojure.string/split (slurp path) "\n")]
+    (vec (keep (fn [b]
+                 (let [cw   (content-words (:text b))
+                       next (next-code-line lines (:end b))]
+                   (when next
+                     (let [fw  (content-words next)
+                           hit (restatement? cw fw)]
+                       (when hit
+                         {:file path :line (:line b) :end (:end b)
+                          :kind :restatement
+                          :measure (:overlap hit)
+                          :evidence (str "overlap=" (:overlap hit)
+                                         " diff=" (:diff hit)
+                                         " next=\"" (snippet (clojure.string/trim next)) "\"")})))))
+               blocks))))
 
 (defn source-file? [p] (or (lg-file? p) (go-file? p)))
 
@@ -188,6 +289,7 @@
       files  (vec (mapcat collect paths))
       hits   (vec (mapcat scan-file files))
       r1     (vec (mapcat (fn [p] (r1-findings p (file-blocks p))) files))
+      r2     (vec (mapcat (fn [p] (r2-findings p (file-blocks p))) files))
       go-files (count (filter go-file? files))]
   (doseq [f r1]
     (println (str (:file f) ":" (:line f) "-" (:end f) "  [commented-out-code] "
@@ -195,6 +297,9 @@
   (println (str (count r1) " commented-out-code finding(s) (R1, .lg only — "
                 go-files " Go file(s) not covered yet, see R1's section comment"
                 " in scripts/lint.lg)."))
+  (doseq [f r2]
+    (println (str (:file f) ":" (:line f) "-" (:end f) "  [restatement] " (:evidence f))))
+  (println (str (count r2) " restatement finding(s) (R2)."))
   (doseq [h hits]
     (println (str (:file h) ":" (:line h) "  [devlog-comment] \"" (:phrase h) "\""))
     (println (str "    " (snippet (:text h)))))

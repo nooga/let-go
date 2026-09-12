@@ -172,6 +172,53 @@ func TestLintR1CommentedOutCode(t *testing.T) {
 	}
 }
 
+// R2 — restatement: the comment's content words overlap heavily with the
+// identifiers of the form immediately following it, and it adds nothing that
+// isn't already spelled out by that form. A comment giving a reason, even one
+// naming the same identifiers, is not flagged because it also carries extra
+// content words.
+const lintFixtureR2 = `;; set counter
+(set counter val)
+
+;; set counter because writer holds the exclusive lock
+(set counter val)
+`
+
+func TestLintR2Restatement(t *testing.T) {
+	dir := t.TempDir()
+	lgFixture := filepath.Join(dir, "fixture.lg")
+	if err := os.WriteFile(lgFixture, []byte(lintFixtureR2), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg: %v\n%s", err, out)
+	}
+
+	got := []int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "[restatement]") {
+			continue
+		}
+		loc := strings.Fields(line)[0]
+		loc = strings.SplitN(loc, ":", 2)[1]
+		loc = strings.SplitN(loc, "-", 2)[0]
+		n, convErr := strconv.Atoi(loc)
+		if convErr != nil {
+			t.Fatalf("unparsable finding location %q in:\n%s", loc, out)
+		}
+		got = append(got, n)
+	}
+
+	want := []int{1}
+	if !equalInts(got, want) {
+		t.Errorf("restatement findings at lines %v, want %v\n%s", got, want, out)
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
