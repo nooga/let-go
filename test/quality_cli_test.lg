@@ -82,7 +82,7 @@
 (deftest report-header-carries-the-spec-caveats
   (let [out (with-out-str (q/main ["--since" "2000-01-01" "--source-root" fixtures fixtures]))]
     (is (str/includes? out "caveat: static coverage is an upper bound"))
-    (is (str/includes? out "caveat: efficiency couples coverage to CI time"))
+    (is (str/includes? out "caveat: cost is the structural complexity of the ALGORITHM"))
     (is (str/includes? out "corpus "))
     ;; the two derivation caveats item 6 asks for, stated in the header
     (is (str/includes? out "reported on FORM boundaries"))

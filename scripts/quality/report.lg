@@ -63,7 +63,14 @@
           "moves the number")
      (str "caveat: static coverage is an upper bound "
           "(dynamic dispatch followed only through literal symbols)")
-     "caveat: efficiency couples coverage to CI time; deleting slow tests lowers it"]))
+     (str "caveat: cost is the structural complexity of the ALGORITHM AS "
+          "WRITTEN, never the hardness of the PROBLEM -- an exponential finding "
+          "means the code branches exponentially, not that it must, and the tool "
+          "cannot tell brute force over a hard problem from a naive fib; nothing "
+          "here is a lower bound")
+     (str "ci wall time is REPORTED above, never SCORED: a term that moves with "
+          "machine load would make the composite non-deterministic for the same "
+          "tree")]))
 
 (defn- debt-block [{total :debt :keys [terms coverage testing erosion verbosity dead
                                        comment-debt lint cost]}]
