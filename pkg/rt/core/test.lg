@@ -444,6 +444,11 @@
    current namespace if none given. Returns a map summarizing test results."
   ([] (run-tests (if (current-ns-has-tests?) *ns* (or *default-test-ns* *ns*))))
   ([& namespaces]
+   ;; BRIDGE: removed in Task 14 — reset optimistic before running, as the
+   ;; old bridged runner did, so a nested failing run started from inside
+   ;; another test cannot leave a stale `false` sitting on the flag for
+   ;; the enclosing run to observe before its own set! at the end.
+   (set! *test-result* true)
    (let [summary (assoc (apply merge-with + (map test-ns namespaces))
                         :type :summary)]
      (do-report summary)
@@ -465,7 +470,7 @@
   [v]
   (let [old-ns *ns*
         summary (binding [*report-counters* (ref *initial-report-counters*)]
-                  (let [ns-obj (-> v meta :ns)]
+                  (let [ns-obj (or (-> v meta :ns) *ns*)]
                     (do-report {:type :begin-test-ns :ns ns-obj})
                     (in-ns (ns-name ns-obj))
                     (try

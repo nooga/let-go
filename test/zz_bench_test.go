@@ -359,16 +359,15 @@ func runCompatTestBench(c *vm.Consts, filename string, counters *benchCounters) 
 
 		compileStart := time.Now()
 		testNS := rt.NS("test")
-		// Reset per-file test state. Crucially this clears *once-fixtures* /
-		// *each-fixtures* too: clear-registered-tests! only resets the test
-		// registry, but run-tests wraps ALL execution in the once-fixtures, and
-		// those leak across files (a fixture registered by file N would wrap
-		// file N+1's tests). That leak is harmless when every fixture runs
-		// correctly (bytecode), but under *ir-compile* a single misbehaving
-		// fixture escapes run-tests and silently zeros every later file. Each
-		// .cljc is an independent namespace, so its fixtures must not persist.
+		// Reset per-file test state. Fixtures now live on each namespace's own
+		// metadata (Task 13: use-fixtures/::each-fixtures/::once-fixtures)
+		// rather than the old global *once-fixtures*/*each-fixtures* vars, so
+		// a fixture registered by file N can no longer leak into file N+1's
+		// run — each .cljc compiles into its own independent namespace, and
+		// this namespace's metadata never touches another's. Only the test
+		// registry itself needs resetting here.
 		_, _, err := compiler.NewCompiler(c, testNS).CompileMultiple(
-			strings.NewReader("(clear-registered-tests!) (set! *once-fixtures* []) (set! *each-fixtures* [])"),
+			strings.NewReader("(clear-registered-tests!)"),
 		)
 		if err != nil {
 			ch <- result{err: err}
