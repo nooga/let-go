@@ -166,19 +166,53 @@
                         #(get-in % [:b :path]) #(get-in % [:b :start])))
          vec)))
 
-(defn- union-lines
-  "Total number of distinct lines covered by `spans` ([from to], inclusive).
-   Overlapping and adjacent spans are merged, so a file matched by many
-   partners over the same region is not charged for that region twice."
+(defn merge-spans
+  "`spans` ([from to], inclusive) merged into disjoint, ascending spans.
+   Overlapping and adjacent spans become one, so a file matched by many
+   partners over the same region is never charged for that region twice."
   [spans]
-  (loop [ss (vec (sort-by first spans)) from nil to nil total 0]
+  (loop [ss (vec (sort-by first spans)) from nil to nil out []]
     (if (empty? ss)
-      (if from (+ total (- to from -1)) total)
+      (if from (conj out [from to]) out)
       (let [[s e] (first ss)]
         (cond
-          (nil? from) (recur (rest ss) s (max s e) total)
-          (<= s (inc to)) (recur (rest ss) from (max to e) total)
-          :else (recur (rest ss) s (max s e) (+ total (- to from -1))))))))
+          (nil? from) (recur (rest ss) s (max s e) out)
+          (<= s (inc to)) (recur (rest ss) from (max to e) out)
+          :else (recur (rest ss) s (max s e) (conj out [from to])))))))
+
+(defn- union-lines
+  "Total number of distinct lines covered by `spans`."
+  [spans]
+  (reduce + 0 (map (fn [[f t]] (inc (- t f))) (merge-spans spans))))
+
+(defn- file-spans
+  "Every reported region span belonging to `path`, from both sides of every
+   pair (a self-pair contributes both of its sides)."
+  [path pairs]
+  (vec (concat
+         (for [p pairs :when (= path (get-in p [:a :path]))]
+           [(get-in p [:a :start]) (get-in p [:a :end])])
+         (for [p pairs :when (= path (get-in p [:b :path]))]
+           [(get-in p [:b :start]) (get-in p [:b :end])]))))
+
+(defn duplicated-lines
+  "{path n...} -- for each file, the number of its TOKEN-BEARING lines that
+   fall inside at least one reported duplicate region, after the union.
+
+   Token-bearing, because a region's span includes whatever blank and
+   comment lines sit inside it and those are not code. Raw count, not a
+   percentage: the caller divides by the file's own LOC (the same LOC the
+   rest of the report uses) rather than by the last token's line number,
+   which is what `file-percent` approximates with."
+  [files pairs]
+  (into {}
+        (for [f files]
+          (let [token-lines (set (map :line (:tokens f)))
+                spans (merge-spans (file-spans (:path f) pairs))]
+            [(:path f)
+             (reduce + 0 (map (fn [[from to]]
+                                (count (filter token-lines (range from (inc to)))))
+                              spans))]))))
 
 (defn file-percent
   "Approximates each file's duplicated share as the UNION of its reported
@@ -192,12 +226,7 @@
   [files pairs]
   (into {}
         (for [f files]
-          (let [spans (vec (concat
-                             (for [p pairs :when (= (:path f) (get-in p [:a :path]))]
-                               [(get-in p [:a :start]) (get-in p [:a :end])])
-                             (for [p pairs :when (= (:path f) (get-in p [:b :path]))]
-                               [(get-in p [:b :start]) (get-in p [:b :end])])))
-                covered (union-lines spans)
+          (let [covered (union-lines (file-spans (:path f) pairs))
                 ;; A file with no tokens (empty, or nothing but comments)
                 ;; has no last token to read a line number from.
                 total-lines (max 1 (or (:line (last (:tokens f))) 0))]
