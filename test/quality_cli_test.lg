@@ -28,7 +28,9 @@
     (let [r (read-string (slurp edn-path))
           untested (set (map :name (get-in r [:coverage :lg :untested])))]
       ;; Debt is unbounded above; it is only ever non-negative.
-      (is (>= (:debt r) 0))
+      ;; bounded: every scored number is a share in [0, 1]
+      (is (<= 0.0 (:debt r) 1.0))
+      (is (every? (fn [[_ v]] (or (nil? v) (<= 0.0 v 1.0))) (:terms r)))
       (is (nil? (:score r)))
       (is (= "supplied" (get-in r [:inputs :ci :source])))
       (is (vector? (:issues r)))
@@ -112,15 +114,16 @@
                    (filter (fn [f] (and (= :lg (:lang f)) (:cc-max f))))
                    (sort-by (fn [f] (- (:cc-max f))))
                    first)]
-    (is (str/includes? out "files (all columns are debt: 0 is perfect, lower is better, unbounded above)"))
-    (is (str/includes? out "debt: 0 is perfect"))
+    (is (str/includes? out "files (all columns are shares in [0, 1]: 0 is perfect, lower is better)"))
+    (is (str/includes? out "0 is perfect, 1 is worst"))
     (is (str/includes? out "top complexity"))
     (is (str/includes? out "(raw measurements; higher is worse)"))
     (is (str/includes? out "(count; lower is better, same direction as debt"))
-    ;; The worst file by raw complexity must print a HIGH cc column, which is
-    ;; only true if the column is the debt and not the measurement.
+    ;; The worst file by raw complexity must print a HIGH erosion share,
+    ;; which is only true if the column is the term and not the measurement.
     (is (> (:cc-max worst) 10))
-    (is (> (:cc worst) 50.0))
+    (is (> (:erosion worst) 0.0))
+    (is (<= (:erosion worst) 1.0))
     (is (str/includes? out (str (:path worst) " ")))
     ;; The EDN keeps every raw field unchanged -- it is the trend surface.
     (let [f (get by-path (:path worst))]

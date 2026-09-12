@@ -34,7 +34,10 @@
    :mi {:good 100 :bad 0}
    :coverage {:good 100 :bad 0}
    :dup {:per-point 2.0}
-   :defects {:per-point 20.0}
+   ;; `:bad` doubles as the squash constant k for rate-shaped terms: at the
+   ;; bad threshold the term is exactly 0.5, which keeps the meaning already
+   ;; encoded here while removing the cliff.
+   :defects {:per-point 20.0 :bad 5.0}
    :efficiency {:good 20.0 :bad 2.0}
    :density {:good 40.0 :bad 4.0}
    :ratio {:good 1.0 :bad 0.1}
@@ -63,8 +66,17 @@
    :dup-issue-min-similarity 0.3
    :top-default 20
    :since-days 180
-   :file-weights {:cc 0.35 :mi 0.30 :dup 0.20 :defects 0.15}
-   :corpus-weights {:files 0.60 :coverage 0.10 :efficiency 0.15 :testing 0.15}})
+   ;; Composite weights. Missing terms renormalize the rest. The per-file
+   ;; composite uses these same weights restricted to the terms a single file
+   ;; has, so a file and the corpus are weighted by one set of numbers.
+   ;;
+   ;; The maintainability index is deliberately NOT here: the SEI formula is
+   ;; built from complexity, Halstead volume and lines, and erosion already
+   ;; carries complexity weighted by size, so scoring both double-counts the
+   ;; same structure. MI stays a per-file diagnostic.
+   :weights {:erosion 0.25 :verbosity 0.20 :uncovered 0.20
+             :dead 0.10 :defects 0.10 :testing 0.10 :efficiency 0.05}
+   :file-terms [:erosion :verbosity :defects :dead]})
 
 (defn penalty
   "Debt points for `v` against a good/bad pair: 0 at `good`-or-better,
@@ -95,68 +107,52 @@
     (when (pos? wsum)
       (/ (reduce + 0.0 (map (fn [[k w]] (* w (double (vals k)))) present)) wsum))))
 
-(defn file-debt
-  "{:cc-max :mi :dup-pct :defects-per-kloc} -> the four metric debts plus
-   their weighted `:debt`. Every value is 0-at-perfect, lower-is-better and
-   unbounded above.
-
-   `:mi` arrives RAW from `quality.metrics/file-metrics` (the SEI formula is
-   unbounded in both directions) and is charged against the `:mi` good/bad
-   pair, so a file at MI -229 carries far more debt than one at MI 0 rather
-   than sharing a floor with it. `:dup`/`:defects` are already debt-shaped:
-   per-point times the measurement, so 0% duplication is 0 debt.
-
-   A nil input omits its metric and renormalizes the remaining weights --
-   Go files are measured for duplication and defects only (complexity and
-   maintainability are out of scope for Go, per the design), so they pass
-   `:cc-max nil :mi nil` and get an honest two-term debt rather than a
-   fabricated perfect one."
-  [{:keys [cc-max mi dup-pct defects-per-kloc]}]
-  (let [{:keys [cc dup defects file-weights]} thresholds
-        mi-th (:mi thresholds)
-        sc {:cc (when cc-max (penalty cc-max (:good cc) (:bad cc)))
-            :mi (when mi (penalty mi (:good mi-th) (:bad mi-th)))
-            :dup (when dup-pct (floor0 (* (:per-point dup) dup-pct)))
-            :defects (when defects-per-kloc
-                       (floor0 (* (:per-point defects) defects-per-kloc)))}]
-    (assoc sc :debt (or (weighted-mean sc file-weights) 0.0))))
+(defn file-score
+  "A file's composite: the weighted mean of the terms it has, each already a
+   share in [0, 1] where 0 is perfect. Weights come from `:weights`,
+   restricted to `:file-terms` and renormalized, so one set of numbers
+   weights both a file and the corpus. nil when nothing was measured."
+  [terms]
+  (weighted-mean terms (select-keys (:weights thresholds) (:file-terms thresholds))))
 
 (defn testing-term
-  "Mean of the assertion-density and test-to-code-ratio debts."
+  "Mean of the assertion-density and test-to-code-ratio shortfalls. Both are
+   higher-is-better, so each is squashed on how far it falls short of its
+   `good` threshold, with k = good - bad so that sitting exactly at `bad`
+   gives exactly 0.5."
   [{:keys [density ratio]}]
-  (/ (+ (penalty density (get-in thresholds [:density :good]) (get-in thresholds [:density :bad]))
-        (penalty ratio (get-in thresholds [:ratio :good]) (get-in thresholds [:ratio :bad])))
-     2.0))
+  (let [d (:density thresholds)
+        r (:ratio thresholds)
+        sq (fn [v {:keys [good bad]}]
+             (let [k (- good bad)]
+               (if (and v (pos? k)) (/ (max 0.0 (- good (double v)))
+                                       (+ (max 0.0 (- good (double v))) k))
+                   nil)))
+        dv (sq density d)
+        rv (sq ratio r)]
+    (cond (and dv rv) (/ (+ dv rv) 2.0)
+          dv dv
+          :else rv)))
 
-(defn corpus
-  "The four corpus terms and the final `:debt`.
+(defn corpus-score
+  "The composite: the weighted mean of the present corpus terms, each a share
+   in [0, 1] where 0 is perfect and 1 is worst, weights renormalized over
+   what is present.
 
-   `files-debt` is the LOC-weighted mean of file debts, `coverage-pct` the
-   combined coverage percentage and `efficiency-pts` the raw
-   coverage-points-per-CI-minute (both charged against their good/bad pairs
-   here), `testing-debt` an already-charged `testing-term`. Any of them may
-   be nil when its input is missing; the remaining weights renormalize and
-   the omitted term names come back in `:omitted` so the report can say
-   which inputs were absent.
+   Bounded AND unsaturating. The defect the shape fixes was never
+   boundedness, it was CLAMPING: a clamped linear made complexity 30 and 200
+   score alike, so improving the worst code registered as nothing. Every term
+   here is a share or a rational squash, both strictly monotone with no dead
+   zone anywhere.
 
-   Calibration: 0 means every term sits at or better than its `good`
-   threshold; 100 means every term sits exactly at its `bad` threshold;
-   above 100 is worse than `bad` across the board, which is allowed and
-   expected."
-  [files-debt coverage-pct efficiency-pts testing-debt]
-  (let [terms {:files files-debt
-               :coverage (when coverage-pct
-                           (penalty coverage-pct
-                                    (get-in thresholds [:coverage :good])
-                                    (get-in thresholds [:coverage :bad])))
-               :efficiency (when efficiency-pts
-                             (penalty efficiency-pts
-                                      (get-in thresholds [:efficiency :good])
-                                      (get-in thresholds [:efficiency :bad])))
-               :testing testing-debt}
+   Returns {:terms {...} :omitted [kw...] :debt s}. It is called DEBT, not
+   score, because a number where lower is better should not be called a
+   score -- the naming ruling that came with the direction change."
+  [terms]
+  (let [present (into {} (filter (fn [[_ v]] (some? v)) terms))
         omitted (vec (sort (map first (filter (fn [[_ v]] (nil? v)) terms))))]
     {:terms terms :omitted omitted
-     :debt (or (weighted-mean terms (:corpus-weights thresholds)) 0.0)}))
+     :debt (or (weighted-mean terms (:weights thresholds)) 0.0)}))
 
 (defn- percentile
   "The `p`-quantile of `xs` by nearest-rank over the sorted values."
@@ -177,14 +173,16 @@
    `quality.graph/coverage`; `dup-pairs` is `quality.dup/pairs`."
   [per-file coverage dup-pairs]
   (let [th (:issues thresholds)
-        fw (:file-weights thresholds)
+        ;; Impact is estimated in COMPOSITE weight: a complexity issue moves
+        ;; erosion, a duplicate moves verbosity, a hotspot moves defects.
+        w (:weights thresholds)
         im (:impact thresholds)
         hotspot (percentile (keep :defects-per-kloc per-file) (:hotspot-percentile th))]
     (->> (concat
            (for [f per-file d (:definitions f) :when (> (:cc d) (:cc th))]
              {:path (:path f) :line (:line d) :kind :complexity :measure (:cc d)
               :hint (str "split " (:name d) "; cc " (:cc d) " > " (:cc th))
-              :impact (* (:cc fw) (/ (- (:cc d) (:cc th)) (:cc-span im)))})
+              :impact (* (:erosion w) (/ (- (:cc d) (:cc th)) (:cc-span im)))})
            (for [f per-file d (:definitions f) :when (> (:depth d) (:nesting th))]
              {:path (:path f) :line (:line d) :kind :nesting :measure (:depth d)
               :hint (str "flatten " (:name d) "; depth " (:depth d))
@@ -198,12 +196,12 @@
                                        (> (:loc f) (:low-comment-min-loc th))
                                        (< (:comment-ratio f) (:low-comment th)))]
              {:path (:path f) :line 1 :kind :low-comment :measure (:comment-ratio f)
-              :hint "add docstrings" :impact (* (:mi fw) (:low-comment im))})
+              :hint "add docstrings" :impact (* (:verbosity w) (:low-comment im))})
            (for [f per-file :when (and (pos? hotspot)
                                        (> (or (:defects-per-kloc f) 0) hotspot))]
              {:path (:path f) :line 1 :kind :defect-hotspot :measure (:defects-per-kloc f)
               :hint "recent fixes concentrate here"
-              :impact (* (:defects fw) (:hotspot im))})
+              :impact (* (:defects w) (:hotspot im))})
            (for [p dup-pairs
                  :when (>= (:similarity p) (:dup-issue-min-similarity thresholds))]
              ;; One issue per matched REGION (see `quality.dup/pairs`), so the
@@ -213,7 +211,7 @@
               :hint (str "~ " (get-in p [:b :path]) ":" (get-in p [:b :start])
                          "-" (get-in p [:b :end])
                          " (lines " (- (get-in p [:a :end]) (get-in p [:a :start]) -1) ")")
-              :impact (* (:dup fw) (:similarity p))})
+              :impact (* (:verbosity w) (:similarity p))})
            (for [u (:untested coverage)]
              {:path (:path u) :line (:line u) :kind :untested :measure 0
               :hint (str "no test reaches " (:name u)) :impact (:untested im)}))
