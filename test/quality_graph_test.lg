@@ -1,0 +1,29 @@
+(ns test.quality-graph-test
+  (:require
+   [quality.graph :as g]
+   [test :refer :all]))
+
+(def src [{:path "fixtures/quality/graph_src.lg" :text (slurp "fixtures/quality/graph_src.lg")}])
+(def tst [{:path "fixtures/quality/graph_test_fixture.lg" :text (slurp "fixtures/quality/graph_test_fixture.lg")}])
+
+(deftest references-strip-namespace-aliases
+  (is (contains? (g/references (read-string "(g/public-a (str/join x))")) 'public-a))
+  (is (contains? (g/references (read-string "(g/public-a (str/join x))")) 'join)))
+
+(deftest graph-edges-follow-calls
+  (let [gr (g/build src)]
+    (is (= #{'fixture.graph/helper} (get-in gr [:edges 'fixture.graph/public-a])))
+    (is (= 4 (count (:defs gr))))))
+
+(deftest roots-come-from-deftests-and-top-level-assertions
+  (let [roots (g/test-roots tst)]
+    (is (contains? roots 'public-a))
+    (is (contains? roots 'public-b))))
+
+(deftest coverage-reaches-transitively-and-lists-untested
+  (let [c (g/coverage src tst)]
+    (is (= 3 (:reached c)))     ; public-a, helper (via a), public-b
+    (is (= 4 (:total c)))
+    (is (= 75.0 (:percent c)))
+    (is (= ['orphan] (map :name (:untested c))))
+    (is (= 5 (:line (first (:untested c)))))))
