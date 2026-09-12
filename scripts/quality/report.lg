@@ -51,9 +51,10 @@
           "then unioned per file")
      "defects: renames credited to target via -M"
      (str "coverage lg=static go=" (if go-cover "dynamic" "none"))
-     (str "debt: 0 is perfect (every metric at or better than its good "
-          "threshold), 100 is every metric exactly at its bad threshold, "
-          "lower is better, unbounded above")
+     (str "debt: every number scored is a share in [0, 1] -- 0 is perfect, "
+          "1 is worst, lower is better. Shares and rational squashes only: "
+          "bounded, but nothing saturates, so improving the worst code always "
+          "moves the number")
      (str "caveat: static coverage is an upper bound "
           "(dynamic dispatch followed only through literal symbols)")
      "caveat: efficiency couples coverage to CI time; deleting slow tests lowers it"]))
@@ -61,14 +62,15 @@
 (defn- debt-block [{total :debt :keys [terms coverage testing erosion verbosity dead]}]
   ;; Display order only (names, not numbers); any future term in
   ;; `thresholds` that isn't listed here still prints, after these.
-  (let [preferred [:files :coverage :efficiency :testing]
-        known (set (map first (:corpus-weights score/thresholds)))
+  (let [preferred [:erosion :verbosity :uncovered :dead :defects :testing :efficiency]
+        known (set (map first (:weights score/thresholds)))
         order (concat (filter known preferred)
                       (sort (remove (set preferred) known)))]
     (concat
-      [(str "debt " (n1 total))]
+      [(str "debt " (n3 total) "   (0 is perfect, 1 is worst)")]
       (for [k order]
-        (str "  " (pad (name k) 12) (lpad (n1 (terms k)) 6)))
+        (str "  " (pad (name k) 12) (lpad (n3 (terms k)) 7)
+             "  weight " (n2 (get (:weights score/thresholds) k))))
       [(str "  coverage lg=" (n1 (get-in coverage [:lg :percent])) "% static"
             " go=" (if (:go coverage) (str (n1 (get-in coverage [:go :percent])) "% dynamic") "none"))
        (str "  erosion " (n3 (:value erosion))
@@ -98,23 +100,24 @@
   "The per-file table, in the order the producer fixed: debt DESCENDING
    (worst first), ties broken by path.
 
-   EVERY column is DEBT (`quality.score/file-debt`'s `:cc :mi :dup
-   :defects` and their weighted `:debt`), not the measurement behind it, so
-   all of them run the same direction -- 0 at perfect, lower is better, no
-   upper bound -- and a row, or the same row across two runs, reads without
-   the reader having to remember which metrics invert. The raw measurements live where they are pointers
+   Every scored column is a SHARE in [0, 1] -- 0 perfect, 1 worst -- so all
+   of them run the same direction and a row, or the same row across two runs,
+   reads without the reader having to remember which metrics invert. `mi(raw)`
+   is the exception and is labelled: it is the raw, unclamped maintainability
+   index, kept as a diagnostic after leaving the composite, where higher is
+   better. The raw measurements live where they are pointers
    rather than scores: the issues list and the top-complexity table (and,
    unchanged, the EDN). `cc`/`mi` read `-` for Go, whose complexity and
    maintainability are out of scope."
   [files]
   (concat
-    ["" "files (all columns are debt: 0 is perfect, lower is better, unbounded above)"
-     (str (pad "path" 56) (lpad "debt" 10) (lpad "cc" 8) (lpad "mi" 8)
-          (lpad "dup" 8) (lpad "defects" 9))]
+    ["" "files (all columns are shares in [0, 1]: 0 is perfect, lower is better)"
+     (str (pad "path" 56) (lpad "debt" 8) (lpad "erosion" 9) (lpad "verbos" 8)
+          (lpad "defects" 9) (lpad "dead" 7) (lpad "mi(raw)" 9))]
     (for [f files]
-      (str (pad (:path f) 56) (lpad (n1 (:debt f)) 10) (lpad (n1 (:cc f)) 8)
-           (lpad (n1 (:mi f)) 8) (lpad (n1 (:dup f)) 8)
-           (lpad (n1 (:defects f)) 9)))))
+      (str (pad (:path f) 56) (lpad (n3 (:debt f)) 8) (lpad (n3 (:erosion f)) 9)
+           (lpad (n3 (:verbosity f)) 8) (lpad (n3 (:defects f)) 9)
+           (lpad (n3 (:dead f)) 7) (lpad (n1 (:mi-raw f)) 9)))))
 
 (defn- issue-at
   "`path:line`, or `path:start-end` for an issue that spans lines (a
