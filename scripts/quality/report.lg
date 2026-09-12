@@ -51,9 +51,10 @@
                  (if (> (:generated corpus) 3) ", ..." "") ")")
             ""))
      (str "omitted " (pr-str omitted))
-     (str "dup-share by lines: regions are matched on TOKENS and reported on the "
-          "lines their first and last token fall on (a boundary approximation), "
-          "then unioned per file")
+     (str "dup-share by lines: regions are matched on TOKENS and reported on "
+          "FORM boundaries -- s-expressions for .lg, statements and declarations "
+          "for Go -- so a reported region is a thing you can lift out; then "
+          "unioned per file")
      "defects: renames credited to target via -M"
      (str "coverage lg=static go=" (if go-cover "dynamic" "none"))
      (str "debt: every number scored is a share in [0, 1] -- 0 is perfect, "

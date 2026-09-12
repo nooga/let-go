@@ -348,3 +348,55 @@ func f() int {
 		t.Errorf("comment lines = %d, want 1", comment)
 	}
 }
+
+func TestGoExtentsAreStatementsAndDeclarations(t *testing.T) {
+	src := `package p
+
+import "fmt"
+
+func f(xs []int) int {
+	total := 0
+	for _, x := range xs {
+		total += x + 1
+	}
+	return total
+}
+`
+	es, err := goExtents(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(from, to int) bool {
+		for _, e := range es {
+			if e.from == from && e.to == to {
+				return true
+			}
+		}
+		return false
+	}
+	// the declaration itself
+	if !has(5, 11) {
+		t.Errorf("missing the func declaration extent, got %v", es)
+	}
+	// a multi-line statement someone could lift out
+	if !has(7, 9) {
+		t.Errorf("missing the for-statement extent, got %v", es)
+	}
+	// the import declaration
+	if !has(3, 3) {
+		t.Errorf("missing the import declaration extent, got %v", es)
+	}
+	// EXPRESSIONS are deliberately absent: snapping to the smallest enclosing
+	// expression would be noise. `x + 1` sits inside line 8, which is a
+	// statement extent, but must not appear as its own zero-width entry more
+	// than the statement already provides.
+	count8 := 0
+	for _, e := range es {
+		if e.from == 8 && e.to == 8 {
+			count8++
+		}
+	}
+	if count8 != 1 {
+		t.Errorf("line 8 should contribute exactly one statement extent, got %d", count8)
+	}
+}
