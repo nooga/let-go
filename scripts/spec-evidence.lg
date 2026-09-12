@@ -1,0 +1,525 @@
+(ns spec-evidence
+  "Executable spec evidence: lint | tangle | generate | run | accept.
+   Usage: ./lg scripts/spec-evidence.lg <cmd> <spec.md> [args]
+   Requires LG_SOURCE_PATHS=scripts so the helper namespaces resolve."
+  (:require
+   [clojure.string :as str]
+   [spec-evidence.parse :as p]
+   [spec-evidence.vocab :as v]))
+
+(def ^:private subcommands #{"lint" "tangle" "generate" "run" "accept" "specs"})
+
+;; Bound true while `generate` is called as a step inside `run`, so its
+;; per-file path lines don't interleave with run's own ok/FAIL relay.
+(def ^:dynamic *quiet* false)
+
+(defn- base-name [path]
+  (let [f (last (str/split path #"/"))]
+    (str/replace f #"\.md$" "")))
+
+(defn- fresh-temp-dir
+  "A new, empty directory under (os/temp-dir). `gensym` alone is NOT unique:
+   its counter restarts at 0 in every `lg` process, so two concurrent runs
+   would both pick `spec-evidence-1` and clobber each other's runners. The
+   name mixes in a per-process-seeded rand-int, and the loop retries until it
+   lands on a path that does not exist yet."
+  [prefix]
+  (loop [tries 0]
+    (let [dir (str (os/temp-dir) "/" (name (gensym prefix)) "-" (rand-int 1000000000))]
+      (cond
+        (not (file-exists? dir)) (do (mkdir dir) dir)
+        (> tries 100) (throw (ex-info "cannot create a fresh temp dir" {:prefix prefix}))
+        :else (recur (inc tries))))))
+
+(defn- tangled-text [b]
+  (if (= "clj-table" (:type b))
+    (apply str (map #(str (str/join "\t" %) "\n") (:rows b)))
+    (:body b)))
+
+(defn- expectation-line? [l]
+  (let [t (str/trim l)]
+    (or (str/starts-with? t ";;") (str/starts-with? t ";=>"))))
+
+(defn- multiple-forms-on-line?
+  "True when a single physical line, read on its own, already contains more
+   than one complete top-level form (e.g. `(+ 1 2) (+ 3 4)`). A line that's
+   part of a multi-line form, or that fails to read at all on its own, is
+   not flagged -- `read-all-string` erroring just means \"not standalone\"."
+  [l]
+  (let [t (str/trim l)]
+    (if (or (str/blank? t) (str/starts-with? t ";"))
+      false
+      (try (> (count (read-all-string t)) 1) (catch Throwable _ false)))))
+
+(defn- repl-exp-rules []
+  (remove #(= ["form"] (:pattern %)) (:rules (v/parse-vocab (v/read-vocab "clj-repl")))))
+
+(defn- repl-body-errors
+  "Lines of a `clj-repl` block's body that either cram two forms onto one
+   line, or look like an expectation (`;;`/`;=>` prefixed) but match none
+   of the clj-repl vocab's expectation rules -- both are almost always
+   typos that would otherwise silently do nothing at generate time."
+  [b]
+  (when (= "clj-repl" (:type b))
+    (let [lines (p/split-lines (or (:body b) ""))
+          base-line (:line b)
+          exp-rules (repl-exp-rules)]
+      (apply concat
+             (map-indexed
+               (fn [j l]
+                 (let [n (+ base-line 1 j)]
+                   (cond
+                     (multiple-forms-on-line? l) [(str "multiple forms on line " n)]
+                     (and (expectation-line? l) (not (v/matches-any-rule? exp-rules l)))
+                     [(str "unrecognized expectation at line " n ": " (str/trim l))]
+                     :else [])))
+               lines)))))
+
+(defn- test-block-errors
+  "`expect=fail` is a clj-repl/clj-table concept (it flips a case's expected
+   outcome); clj-test blocks run through clojure.test and have no such
+   knob, so the attribute is flagged rather than silently ignored."
+  [b]
+  (when (and (= "clj-test" (:type b)) (= "fail" (get (:attrs b) "expect")))
+    [(str "expect=fail unsupported on clj-test @R-" (:slug b))]))
+
+(defn- generation-errors
+  "Tangle and generate every block into a discard directory. A block naming a
+   vocabulary that does not exist, or whose body the generator cannot turn
+   into runner source, otherwise survives lint and explodes at `run` time as
+   a bare stack trace with no slug attached. Doing the work here turns that
+   into an ordinary lint error. The generated source is thrown away -- only
+   whether generation succeeds is interesting."
+  [blocks]
+  (let [dir (fresh-temp-dir "spec-evidence-lint-")]
+    (keep (fn [b]
+            (try
+              (let [t (tangled-text b)]
+                (spit (str dir "/" (:slug b) "." (:type b)) t)
+                (spit (str dir "/" (:slug b) ".cljc")
+                      (v/generate t (:type b) (v/read-vocab (:type b)) (:slug b) (:attrs b))))
+              nil
+              (catch Throwable e
+                (str "cannot generate @R-" (:slug b) ": " (or (ex-message e) (str e))))))
+          blocks)))
+
+(defn lint [spec]
+  (let [{:keys [errors blocks]} (p/scan (slurp spec))
+        extra (mapcat (fn [b] (concat (repl-body-errors b) (test-block-errors b))) blocks)
+        errors (concat errors extra (generation-errors blocks))]
+    (doseq [e errors] (println e))
+    (if (empty? errors) 0 1)))
+
+(defn tangle [spec outdir]
+  (let [{:keys [blocks]} (p/scan (slurp spec))
+        base (base-name spec)]
+    (mkdir outdir)
+    (doseq [b blocks]
+      (let [path (str outdir "/" base "." (:slug b) "." (:type b))]
+        (spit path (tangled-text b))
+        (when-not *quiet* (println path))))
+    (spit (str outdir "/" base ".map.edn")
+          (pr-str (into {} (map (fn [b] [(:slug b) (select-keys b [:type :line :attrs])]) blocks))))
+    0))
+
+(defn generate
+  "Tangle, then turn each tangled block into a portable Clojure runner at
+   <outdir>/<base>.<slug>.cljc."
+  [spec outdir]
+  (tangle spec outdir)
+  (let [{:keys [blocks]} (p/scan (slurp spec))
+        base (base-name spec)]
+    (doseq [b blocks]
+      (let [tangled (slurp (str outdir "/" base "." (:slug b) "." (:type b)))
+            path (str outdir "/" base "." (:slug b) ".cljc")]
+        (spit path (v/generate tangled (:type b) (v/read-vocab (:type b)) (:slug b) (:attrs b)))
+        (when-not *quiet* (println path))))
+    0))
+
+(defn- parse-flags [rest]
+  (loop [r rest m {}]
+    (cond
+      (empty? r) m
+      (= "--engine" (first r)) (recur (nnext r) (assoc m :engine (second r)))
+      (= "--oracle" (first r)) (recur (next r) (assoc m :oracle true))
+      :else (recur (next r) m))))
+
+(defn- engine-cmd [flags]
+  ;; clojure.string/split returns a PersistentList here, not a vector, so
+  ;; `conj`-ing the runner path onto it would PREPEND (list conj is
+  ;; push-to-front) instead of appending after the engine args. Force a
+  ;; vector so the later `(conj engine runner)` in run-spec appends.
+  ;; os/getenv returns "" (not nil) for an unset var, so `or` alone would
+  ;; treat an absent CLJ_ENGINE as a truthy empty command; blank? filters
+  ;; that out explicitly before falling back to the "./lg" default.
+  (let [env (os/getenv "CLJ_ENGINE")
+        cmd (or (:engine flags) (when-not (str/blank? env) env) "./lg")]
+    (vec (str/split cmd #" +"))))
+
+(defn- line-id
+  "The case id out of a runner line: `ok <id>`, `ok <id> # XFAIL` and
+   `FAIL <id> want ...` all put it in second position."
+  [l]
+  (second (str/split (str/trim l) #" +")))
+
+;; `re-pattern` rather than a literal: Go's regexp has no \u escape and this
+;; runtime's reader rejects \x, so the ESC byte is spliced in at runtime.
+(def ^:private ansi-re (re-pattern (str (char 27) "\\[[0-9;]*m")))
+
+(defn- engine-diagnosis
+  "`lg` prints compile and reader errors to STDOUT, not stderr, so an engine
+   that died before reporting a single case leaves its only diagnosis in
+   `:out`. Keep the FIRST 5 non-empty lines -- lg puts the actual error
+   message and source location at the top and a stack trace underneath, so
+   the tail is the least informative part -- strip the ANSI colouring it
+   emits, append whatever `:err` carried, and join with ` | ` so the
+   synthetic FAIL stays one grep-able record rather than a multi-line spill."
+  [r]
+  (let [clean (fn [t] (str/trim (str/replace (or t "") ansi-re "")))
+        head (map clean (take 5 (remove str/blank? (p/split-lines (:out r)))))
+        text (str/join " | " (remove str/blank? (concat head [(clean (:err r))])))]
+    (if (> (count text) 400) (str (subs text 0 400) " ...") text)))
+
+(defn run-spec
+  "-> {:ok n :total n :lines [..]}"
+  [spec flags]
+  (let [dir (fresh-temp-dir "spec-evidence-")
+        _ (binding [*quiet* true] (generate spec dir))
+        {:keys [blocks]} (p/scan (slurp spec))
+        base (base-name spec)
+        engine (engine-cmd flags)
+        blocks (if (:oracle flags) (remove #(= "none" (get (:attrs %) "oracle")) blocks) blocks)]
+    (reduce
+      (fn [acc b]
+        (let [runner (str dir "/" base "." (:slug b) ".cljc")
+              r (apply os/sh (conj engine runner))
+              lines (filter #(or (str/starts-with? % "ok ") (str/starts-with? % "FAIL ")) (p/split-lines (:out r)))
+              lines (if (and (not= 0 (:exit r)) (empty? (filter #(str/starts-with? % "FAIL ") lines)))
+                      (conj (vec lines) (str "FAIL " (:slug b) "#? engine exit " (:exit r) " "
+                                             (engine-diagnosis r)))
+                      lines)
+              ;; Counts are per CASE, not per line: one case can emit two
+              ;; FAIL lines (a value AND an out mismatch) and that is still
+              ;; one failed case.
+              ids (distinct (map line-id lines))
+              failed (set (map line-id (filter #(str/starts-with? % "FAIL ") lines)))]
+          (doseq [l lines] (println l))
+          (-> acc
+              (update :total + (count ids))
+              (update :ok + (count (remove failed ids)))
+              (update :lines into lines))))
+      {:ok 0 :total 0 :lines []}
+      blocks)))
+
+(defn- structural-errors!
+  "Print `scan`'s structural errors, if any, and report whether there were
+   any. A malformed opener makes its whole block VANISH from the scan, so a
+   quietly broken spec would otherwise report `0/0 cases ok` and exit 0 -- a
+   green gate over evidence that never ran. `run` and `accept` refuse to
+   proceed instead."
+  [spec]
+  (let [errors (:errors (p/scan (slurp spec)))]
+    (doseq [e errors] (println e))
+    (when (seq errors)
+      (println (str "spec-evidence: " spec " not run: " (count errors) " structural error(s)")))
+    (boolean (seq errors))))
+
+(defn run [spec rest]
+  (if (structural-errors! spec)
+    1
+    (let [{:keys [ok total]} (run-spec spec (parse-flags rest))]
+      (println (str "spec-evidence: " spec " " ok "/" total " cases ok"))
+      (if (= ok total) 0 1))))
+
+;; ------------------------------------------------------------------ accept
+
+;; THREE MIRRORS OF THE VOCAB GRAMMAR. `accept` has to write markdown that
+;; the vocabularies can read back, so three things in this codebase encode the
+;; same grammar and must be changed together:
+;;
+;;   1. `fail-re` below          -- parses the FAIL lines clj-repl.vocab's
+;;                                  `spec-fail!`/`spec-xpass!` emit.
+;;   2. `exp-prefix` below       -- maps a `<what>` back to the expectation
+;;                                  prefix clj-repl.vocab's rules match
+;;                                  (`;=>`, `;; out:`, `;; throws:`).
+;;   3. `table->repl-text`       -- in spec-evidence/vocab.lg; rewrites a
+;;      (vocab.lg)                  table row into those same lines.
+;;
+;; Adding or renaming a clj-repl expectation rule means touching all three.
+;;
+;; AMBIGUITY: `fail-re` splits `want ... got ...` on the literal ` got `. A
+;; `want` or `got` value whose own pr-str contains ` got ` (e.g. the string
+;; "a got b") makes the split ambiguous, and the regex's greedy `(.*)` picks
+;; the LAST occurrence -- so `want` absorbs the extra text. `run` still
+;; reports such a case correctly; only `accept`'s promotion of it is
+;; unreliable. Promote those by hand.
+;;
+;; The FAIL line preamble emits (clj-repl.vocab's boot section) is
+;; `FAIL <slug>#<n> want <edn> got <edn> [<what>]`; xpass has its own fixed
+;; shape (`FAIL <id> want failure got pass [xpass]`) but fits the same
+;; grammar. `want`/`got` are `pr-str`ed already -- see spec-fail!/spec-xpass!
+;; in clj-repl.vocab.
+(def ^:private fail-re #"^FAIL ([a-z0-9-]+)#(\d+) want (.*) got (.*) \[(value|out|throws|threw|xpass)\]$")
+
+(defn- parse-fail [line]
+  (when-let [m (re-matches fail-re line)]
+    (let [[_ slug n _want got what] m]
+      {:slug slug :n (read-string n) :got got :what what})))
+
+(def ^:private exp-prefix {"value" ";=>" "out" ";; out:" "throws" ";; throws:" "threw" ";; throws:"})
+
+(defn- statements-with-offsets
+  "v/statements over `body`, augmented with :from/:to -- the 0-based line
+   offsets (within `body`'s own lines) that entry occupies. Reuses
+   v/statements for the actual reader-driven grouping and only re-derives
+   offsets by replaying the same blank-line-skipping rule (blanks are only
+   ever dropped BETWEEN statements, never inside a multi-line form), so a
+   form's line count is just its embedded newline count + 1."
+  [body]
+  (let [body-lines (p/split-lines body)
+        stmts (v/statements body)
+        blank-at? (fn [c] (and (< c (count body-lines)) (str/blank? (nth body-lines c))))]
+    (loop [i 0 cursor 0 out []]
+      (if (>= i (count stmts))
+        out
+        (let [s (nth stmts i)
+              cursor (loop [c cursor] (if (blank-at? c) (recur (inc c)) c))]
+          (if (:form s)
+            (let [n (inc (count (re-seq #"\n" (:form s))))]
+              (recur (inc i) (+ cursor n) (conj out (assoc s :from cursor :to (dec (+ cursor n))))))
+            (recur (inc i) (inc cursor) (conj out (assoc s :from cursor :to cursor)))))))))
+
+(defn- nth-case-entries
+  "-> {:form-to o :exp [entries]} for the n-th (1-based) form in `entries`
+   (from statements-with-offsets): the form's own last-line offset, and the
+   expectation-line entries that immediately follow it (up to the next
+   form, or the end)."
+  [entries n]
+  (let [form-idxs (keep-indexed (fn [i e] (when (:form e) i)) entries)]
+    (when-let [idx (nth form-idxs (dec n) nil)]
+      {:form-to (:to (nth entries idx))
+       :exp (vec (take-while #(not (:form %)) (drop (inc idx) entries)))})))
+
+(defn- find-exp-line [exp prefix]
+  (first (filter #(str/starts-with? (str/trim (:line %)) prefix) exp)))
+
+(defn- find-expect-fail-line [exp]
+  (first (filter #(= ";; expect: fail" (str/trim (:line %))) exp)))
+
+(defn- throws-got-text
+  "`got` for `throws`/`threw` is `pr-str`ed as a 2-element vector,
+   `[<class> \"<msg>\"]` (see clj-repl.vocab's spec-case! preamble) -- but
+   the `;; throws: {c} {m*}` grammar wants `<class> \"<msg>\"` with no
+   brackets. Strip them; anything not already bracketed (a future got
+   shape) is left verbatim."
+  [got]
+  (let [t (str/trim got)]
+    (if (and (str/starts-with? t "[") (str/ends-with? t "]"))
+      (str/trim (subs t 1 (dec (count t))))
+      t)))
+
+(defn- repl-promotion
+  "-> {:edit edit-or-nil :message str-or-nil :blocked bool} for one FAIL `f`
+   against clj-repl block `b`. `edit` is one of
+   {:idx line0 :op :replace :text s} | {:idx line0 :op :delete}
+   | {:idx line0 :op :insert :text s}, where `line0` is a 0-based index into
+   the ORIGINAL file's lines (block :line + the body offset -- block :line
+   is the fence-opener's 1-based line, so body offset o lands at file line0
+   = (:line b) + o, i.e. file line (1-based) = (:line b) + 1 + o)."
+  [b f]
+  (let [entries (statements-with-offsets (:body b))
+        case- (nth-case-entries entries (:n f))
+        base (:line b)
+        id (str (:slug f) "#" (:n f))]
+    (if (= "xpass" (:what f))
+      (if-let [e (find-expect-fail-line (:exp case-))]
+        {:edit {:idx (+ base (:from e)) :op :delete}
+         :message (str "accepted " id " xpass") :blocked false}
+        (if (= "fail" (get (:attrs b) "expect"))
+          {:edit nil
+           :message (str "cannot promote " id ": block-level expect=fail, edit the attribute")
+           :blocked true}
+          {:edit nil :message nil :blocked false}))
+      (let [prefix (get exp-prefix (:what f))
+            existing (find-exp-line (:exp case-) prefix)
+            got-text (if (contains? #{"throws" "threw"} (:what f))
+                       (throws-got-text (:got f))
+                       (:got f))
+            text (str prefix " " got-text)]
+        (if existing
+          {:edit {:idx (+ base (:from existing)) :op :replace :text text}
+           :message (str "accepted " id " " (:what f)) :blocked false}
+          {:edit {:idx (+ base (:form-to case-)) :op :insert :text text}
+           :message (str "accepted " id " " (:what f)) :blocked false})))))
+
+(defn- rewrite-table-row-line
+  "Rewrite column `col` (0-based, positional: form/value/out[/expect]) of a
+   pipe-table row line to `new-text`, preserving the row's other cells and
+   its backtick-wrapping convention for the touched cell. If the row has
+   fewer than `col` columns, pads every missing column with an empty cell
+   up to `col` rather than just appending one at the end."
+  [line col new-text]
+  (let [cells (vec (rest (butlast (str/split (str/trim line) #"\|"))))
+        orig (str/trim (get cells col ""))
+        wrapped (if (and (not (str/blank? new-text))
+                         (str/starts-with? orig "`") (str/ends-with? orig "`") (> (count orig) 1))
+                  (str "`" new-text "`")
+                  new-text)
+        cells (if (< col (count cells))
+                (assoc cells col (str " " wrapped " "))
+                (conj (into cells (repeat (- col (count cells)) " ")) (str " " wrapped " ")))]
+    (str "|" (str/join "|" cells) "|")))
+
+(defn- table-promotion
+  "-> {:edit edit-or-nil :message str-or-nil :blocked bool} for one FAIL `f`
+   against clj-table block `b`. Table blocks never carry a block-level
+   expect=fail attribute (`<!-- evidence: ... -->` has no attrs), so xpass
+   here is never blocked."
+  [b f]
+  (let [id (str (:slug f) "#" (:n f))
+        row-idx (dec (:n f))
+        ;; block :line is the `<!-- evidence: ... -->` comment's 1-based
+        ;; line (0-based = (:line b) - 1); header follows it (0-based
+        ;; (:line b)), then the separator (0-based (:line b) + 1), then
+        ;; data rows starting at 0-based (:line b) + 2.
+        idx0 (+ (:line b) 2 row-idx)]
+    (if (= "xpass" (:what f))
+      {:edit {:idx idx0 :op :table-col :col 3 :text ""}
+       :message (str "accepted " id " xpass") :blocked false}
+      (let [col (case (:what f) "value" 1 "out" 2 nil)]
+        (if col
+          {:edit {:idx idx0 :op :table-col :col col :text (:got f)}
+           :message (str "accepted " id " " (:what f)) :blocked false}
+          {:edit nil :message nil :blocked false})))))
+
+(defn- apply-edits!
+  "Bottom-up: sorted descending by :idx so an earlier edit's line numbers
+   (all computed against the pre-edit file) stay valid as later ones apply."
+  [spec edits]
+  (when (seq edits)
+    (let [lines (vec (p/split-lines (slurp spec)))
+          sorted (sort-by :idx > edits)
+          lines' (reduce
+                   (fn [ls e]
+                     (case (:op e)
+                       :replace (assoc ls (:idx e) (:text e))
+                       :delete (into (subvec ls 0 (:idx e)) (subvec ls (inc (:idx e))))
+                       :insert (into (conj (subvec ls 0 (inc (:idx e))) (:text e))
+                                     (subvec ls (inc (:idx e))))
+                       :table-col (assoc ls (:idx e)
+                                         (rewrite-table-row-line (get ls (:idx e)) (:col e) (:text e)))
+                       ls))
+                   lines sorted)]
+      (spit spec (str (str/join "\n" lines') "\n")))))
+
+(defn- bump-last-verified!
+  "Best-effort: leaves the masthead untouched if there's no `last-verified:`
+   line, or if `date` isn't on PATH."
+  [spec]
+  (let [lines (vec (p/split-lines (slurp spec)))
+        idx (first (keep-indexed (fn [i l] (when (str/starts-with? (str/trim l) "last-verified:") i)) lines))]
+    (when idx
+      (let [r (os/sh "date" "+%Y-%m-%d")]
+        (when (= 0 (:exit r))
+          (spit spec (str (str/join "\n" (assoc lines idx (str "last-verified: " (str/trim (:out r))))) "\n")))))))
+
+(defn- accept-run [spec rest]
+  (let [flags (parse-flags rest)
+        {:keys [lines]} (run-spec spec flags)
+        {:keys [blocks]} (p/scan (slurp spec))
+        by-slug (into {} (map (fn [b] [(:slug b) b]) blocks))
+        fails (keep parse-fail lines)
+        results (keep (fn [f]
+                        (when-let [b (get by-slug (:slug f))]
+                          (if (= "clj-table" (:type b))
+                            (table-promotion b f)
+                            (repl-promotion b f))))
+                      fails)]
+    (apply-edits! spec (keep :edit results))
+    (bump-last-verified! spec)
+    (doseq [r results] (when (:message r) (println (:message r))))
+    (if (some :blocked results) 1 0)))
+
+(defn accept
+  "Run, then rewrite each FAIL's expectation in the markdown to match what
+   the engine actually produced (17.4 promotion). oracle=none blocks are
+   already excluded from running -- and so from producing FAILs -- whenever
+   --oracle is set, via run-spec's own block filter."
+  [spec rest]
+  (if (structural-errors! spec)
+    1
+    (accept-run spec rest)))
+
+;; ------------------------------------------------------------------- specs
+
+(defn- masthead-lines
+  "The frontmatter lines of a doc: everything between a leading `---` and the
+   next `---`. Empty when the file has no masthead."
+  [text]
+  (let [lines (p/split-lines text)]
+    (if (and (seq lines) (= "---" (str/trim (first lines))))
+      (vec (take-while #(not= "---" (str/trim %)) (rest lines)))
+      [])))
+
+(defn evidence-skip?
+  "True when a spec's MASTHEAD carries the `evidence: skip` opt-out. Scoped
+   to the masthead on purpose: a spec that documents the escape hatch inside
+   a fenced example must not thereby skip its own gate."
+  [text]
+  (boolean (some #(= "evidence: skip" (str/trim %)) (masthead-lines text))))
+
+(defn eligible-spec?
+  "A spec is gated when it carries at least one `@R-` evidence tag and has
+   not opted out in its masthead."
+  [path]
+  (let [text (slurp path)]
+    (and (str/includes? text "@R-") (not (evidence-skip? text)))))
+
+(defn specs
+  "Print the gated specs under `dir`, one path per line. This is the single
+   rule for \"which specs does the gate run\" -- the Makefile targets and the
+   Go gate (test/spec_evidence_test.go) both shell out to it rather than
+   re-deriving it, so eligibility cannot drift between them."
+  [dir]
+  (doseq [path (sort (map #(str dir "/" %)
+                          (filter #(str/ends-with? % ".md") (os/ls dir))))]
+    (when (eligible-spec? path) (println path)))
+  0)
+
+;; --------------------------------------------------------------------- main
+
+(def ^:private usage
+  "usage: spec-evidence <lint|tangle|generate|run|accept> <spec.md> [args]
+       spec-evidence specs [dir]")
+
+(defn main [args]
+  (let [[cmd spec & rest] args]
+    (cond
+      (= "specs" cmd) (specs (or spec "docs/specs"))
+      ;; Misinvocation -- an unknown subcommand, or a known one with no spec
+      ;; path -- is a usage error (exit 2), distinct from a spec that failed
+      ;; its evidence (exit 1).
+      (not (contains? subcommands cmd)) (do (println usage) 2)
+      (str/blank? (or spec "")) (do (println usage) 2)
+      :else (case cmd
+              "lint"   (lint spec)
+              "tangle" (tangle spec (or (first rest) "conformance"))
+              "generate" (generate spec (or (first rest) "conformance"))
+              "run"    (run spec rest)
+              "accept" (accept spec rest)))))
+
+;; Script entry. os/args is the full Go argv. Run as a script it is
+;; [binary "scripts/spec-evidence.lg" & user-args]; when the .lg test harness
+;; `require`s this namespace instead, os/args is the TEST BINARY's own argv
+;; (e.g. ["/…/test.test" "-test.run=…" …]) and must not trigger main.
+;;
+;; argv[1] -- the script path -- is what separates the two, so the guard keys
+;; off that rather than off the shape of the user args. Keying off the args
+;; (as an earlier version did: "first arg is a known subcommand AND second
+;; ends in .md") silently swallowed MISINVOCATIONS: `spec-evidence` with no
+;; subcommand, or an unknown one, failed the guard, never reached main, and
+;; exited 0 with no output. Now they reach main and get the usage line and
+;; exit 2.
+(let [argv (vec os/args)]
+  (when (str/ends-with? (or (get argv 1) "") "spec-evidence.lg")
+    (os/exit (main (vec (drop 2 argv))))))

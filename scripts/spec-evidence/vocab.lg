@@ -1,0 +1,235 @@
+(ns spec-evidence.vocab
+  "Vocabularies are data. A vocab maps statement shapes to Clojure templates
+   and supplies a preamble; generate turns a tangled block into runner source.
+
+   There is no per-type program: clj-repl, clj-table and clj-test differ only
+   in their .vocab file plus the two structural adapters below (a table row is
+   rewritten into repl statement lines; a test block is emitted verbatim with
+   its namespaces spliced in)."
+  (:require
+   [clojure.string :as str]
+   [spec-evidence.parse :as p]))
+
+;; ---------------------------------------------------------------- utilities
+
+(defn- ltrim [s] (str/replace s #"^[ \t]+" ""))
+
+(defn- vocab-path
+  "Vocab files live at scripts/spec-vocabs/. The CLI runs from the repo root
+   but the .lg test harness runs with cwd=test/, so both are tried."
+  [name]
+  (let [candidates [(str "scripts/spec-vocabs/" name ".vocab")
+                    (str "../scripts/spec-vocabs/" name ".vocab")]]
+    (or (first (filter file-exists? candidates)) (first candidates))))
+
+;; ------------------------------------------------------------ vocab parsing
+
+(defn read-vocab
+  "Slurp the vocabulary named by an evidence type (\"clj-repl\", ...)."
+  [type]
+  (slurp (vocab-path type)))
+
+(defn parse-vocab
+  "-> {:boot [form-text...] :epilogue [form-text...]
+       :rules [{:pattern [tok...] :template str}...]}
+   Handles `include <name>` by splicing that vocab's directives in first."
+  [text]
+  (reduce
+    (fn [v line]
+      (let [line (str/trim line)]
+        (cond
+          (or (str/blank? line) (str/starts-with? line "#")) v
+          (str/starts-with? line "include ")
+          (merge-with into v (parse-vocab (slurp (vocab-path (str/trim (subs line 8))))))
+          (str/starts-with? line "boot ") (update v :boot conj (subs line 5))
+          (str/starts-with? line "epilogue ") (update v :epilogue conj (subs line 9))
+          :else
+          (if-let [[pat tpl] (p/split-once line " => ")]
+            (update v :rules conj {:pattern (str/split (str/trim pat) #" +") :template tpl})
+            v))))
+    {:boot [] :epilogue [] :rules []}
+    (p/split-lines text)))
+
+;; --------------------------------------------------------------- templating
+
+(defn- match-pattern
+  "Match pattern tokens against a statement line. `{x}` captures one word,
+   `{x*}` the RAW remainder of the line (internal spacing preserved verbatim,
+   so `;; out: \"a  b\"` keeps both spaces). Returns a map of captures or nil.
+   Matching walks the string rather than a word vector precisely so that
+   `{x*}` never loses whitespace to a re-join. `{x*}` is rest-of-line by
+   definition, so it only matches as the final pattern token; a vocab that
+   puts anything after it gets no match rather than a partial one."
+  [pattern line]
+  (loop [toks pattern s (str/trim line) caps {}]
+    (if (empty? toks)
+      (when (str/blank? s) caps)
+      (let [t (first toks)]
+        (cond
+          ;; The capture name keeps its `*` so a template writes {v*}, the
+          ;; same token the pattern used.
+          (and (str/starts-with? t "{") (str/ends-with? t "*}"))
+          (when (empty? (rest toks))
+            (assoc caps (subs t 1 (dec (count t))) s))
+
+          (str/starts-with? t "{")
+          (let [i (core/index-of s " ")
+                [w rst] (if (and i (>= i 0)) [(subs s 0 i) (ltrim (subs s i))] [s ""])]
+            (when-not (str/blank? w)
+              (recur (rest toks) rst (assoc caps (subs t 1 (dec (count t))) w))))
+
+          :else
+          (when (and (str/starts-with? s t)
+                     (or (= (count s) (count t))
+                         (= " " (subs s (count t) (inc (count t))))))
+            (recur (rest toks) (ltrim (subs s (count t))) caps)))))))
+
+(defn- fill
+  "Substitute {name} placeholders from `caps` in ONE pass: the template is
+   scanned left to right and substituted text is never re-scanned, so a form
+   that itself contains `{expect}` (e.g. `(contains? #{expect} :a)`) survives
+   verbatim. Sequential str/replace calls could not do this."
+  [template caps]
+  (loop [s template out ""]
+    (let [i (core/index-of s "{")]
+      (if (or (nil? i) (neg? i))
+        (str out s)
+        (let [j (core/index-of (subs s i) "}")]
+          (if (or (nil? j) (neg? j))
+            (str out s)
+            (let [nm (subs s (inc i) (+ i j))
+                  head (str out (subs s 0 i))
+                  tail (subs s (+ i j 1))]
+              (if (contains? caps nm)
+                (recur tail (str head (get caps nm)))
+                (recur tail (str head "{" nm "}"))))))))))
+
+;; ----------------------------------------------------------- lint helpers
+
+(defn matches-any-rule?
+  "True when `line` matches at least one of `rules`' patterns. Used by lint
+   to tell an expectation line that's just spelled wrong (e.g. `;; nonsense:
+   3`, no rule covers it) from one that's merely blank or not an
+   expectation at all."
+  [rules line]
+  (boolean (some #(match-pattern (:pattern %) line) rules)))
+
+;; ------------------------------------------------- tangled text -> statements
+
+(defn- complete-form?
+  "True when `text` reads as at least one complete form. `read-string` would
+   happily stop after the first of two forms, so read-all-string is used and
+   the result must be non-empty (a bare `#_x` discard yields no forms, which
+   is treated as incomplete so it attaches to the form that follows it)."
+  [text]
+  (try (seq (read-all-string text)) (catch Throwable _ false)))
+
+(defn statements
+  "Split tangled text into [{:form text} | {:line text}] in order: expectation
+   lines start with ';', form text accumulates lines until the reader accepts
+   it. Public so callers (e.g. `accept`) can re-derive a block's case/line
+   structure without re-implementing the reader-driven accumulation."
+  [text]
+  (loop [lines (p/split-lines text) acc nil out []]
+    (if (empty? lines)
+      (if acc (conj out {:form acc}) out)
+      (let [l (first lines)]
+        (cond
+          (and (nil? acc) (str/starts-with? (str/trim l) ";")) (recur (rest lines) nil (conj out {:line l}))
+          (and (nil? acc) (str/blank? l)) (recur (rest lines) nil out)
+          :else
+          (let [acc' (if acc (str acc "\n" l) l)]
+            (if (complete-form? acc')
+              (recur (rest lines) nil (conj out {:form acc'}))
+              (recur (rest lines) acc' out))))))))
+
+;; ------------------------------------------------------------- repl cases
+
+(defn- expect-text
+  "Render the ordered expectation entries as a map literal, appending the
+   block-level `expect=fail` default for cases that carry no :expect of
+   their own."
+  [entries attrs]
+  (let [entries (if (and (= "fail" (get attrs "expect"))
+                         (not (some #(str/starts-with? % ":expect ") entries)))
+                  (conj (vec entries) ":expect :fail")
+                  (vec entries))]
+    (str "{" (str/join " " entries) "}")))
+
+(defn- repl-cases
+  "Group each form with the expectation lines that follow it, in order."
+  [stmts slug rules attrs]
+  (let [form-rule (first (filter #(= ["form"] (:pattern %)) rules))
+        exp-rules (remove #(= ["form"] (:pattern %)) rules)
+        emit (fn [cases cur]
+               (if cur
+                 (conj cases (fill (:template form-rule)
+                                   {"id" (str slug "#" (:n cur))
+                                    "form" (:form cur)
+                                    "expect" (expect-text (:expect cur) attrs)}))
+                 cases))]
+    (loop [stmts stmts n 0 cur nil cases []]
+      (if (empty? stmts)
+        (emit cases cur)
+        (let [s (first stmts)]
+          (if (:form s)
+            (recur (rest stmts) (inc n) {:n (inc n) :form (:form s) :expect []} (emit cases cur))
+            (let [entry (some (fn [r] (when-let [caps (match-pattern (:pattern r) (:line s))]
+                                        (fill (:template r) caps)))
+                              exp-rules)]
+              (recur (rest stmts) n (if (and cur entry) (update cur :expect conj entry) cur) cases))))))))
+
+;; ------------------------------------------------------ structural adapters
+
+(defn- table->repl-text
+  "A row is `form \\t value \\t out [\\t expect]`; rewrite it as the repl
+   statement lines that say the same thing.
+
+   One of the three mirrors of the clj-repl expectation grammar (the other
+   two are `fail-re` and `exp-prefix` in spec-evidence.lg) -- adding or
+   renaming a clj-repl rule means touching all three. See the comment block
+   above `fail-re`."
+  [text]
+  (apply str
+         (for [row (p/split-lines text)
+               :when (not (str/blank? row))
+               :let [cells (str/split row #"\t")
+                     value (str/trim (or (get cells 1) ""))
+                     out (str/trim (or (get cells 2) ""))
+                     expect (str/trim (or (get cells 3) ""))]]
+           (str (get cells 0) "\n"
+                (if (str/blank? value) "" (str ";=> " value "\n"))
+                (if (str/blank? out) "" (str ";; out: " out "\n"))
+                (if (= "fail" expect) ";; expect: fail\n" "")))))
+
+(defn- test-namespaces
+  "The `(ns X ...)` heads the block declares, in order."
+  [text]
+  (vec (keep (fn [s]
+               (when (:form s)
+                 (let [f (first (read-all-string (:form s)))]
+                   (when (and (seq? f) (= 'ns (first f))) (second f)))))
+             (statements text))))
+
+;; ------------------------------------------------------------------ generate
+
+(defn generate
+  "Turn one tangled block into portable Clojure runner source.
+   `attrs` is the block's attribute map; {\"expect\" \"fail\"} marks every
+   case in the block expected-to-fail."
+  ([tangled type vocab-text slug] (generate tangled type vocab-text slug {}))
+  ([tangled type vocab-text slug attrs]
+   (let [v (parse-vocab vocab-text)
+         body (cond
+                (= type "clj-repl") (repl-cases (statements tangled) slug (:rules v) attrs)
+                (= type "clj-table") (repl-cases (statements (table->repl-text tangled)) slug (:rules v) attrs)
+                ;; The namespaces fn is emitted in the runner's own ns (right
+                ;; after boot) and the block follows verbatim; the epilogue
+                ;; hops back with in-ns.
+                (= type "clj-test") [(str "(defn spec-evidence-namespaces [] '" (pr-str (test-namespaces tangled)) ")")
+                                     tangled]
+                :else (throw (ex-info (str "unknown evidence type " type) {:type type})))
+         epilogue (map #(fill % {"id" (str slug "#1")}) (:epilogue v))]
+     (str (str/join "\n" (:boot v)) "\n\n"
+          (str/join "\n" body) "\n\n"
+          (str/join "\n" epilogue) "\n"))))

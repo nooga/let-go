@@ -566,3 +566,30 @@ ratchets-update: build lowered $(GO)
 .PHONY: browser-inspector
 browser-inspector:
 	$(MAKE) -C examples/browser-inspector build
+
+# Executable spec evidence (see docs/specs/executable-evidence.md).
+# spec-lint  : requirement markers and evidence blocks pair both ways, and
+#              every block can be generated into runner source.
+# spec-evidence: run every gated spec's evidence under the promoted lg.
+# spec-oracle: re-run the same evidence under JVM Clojure as an oracle,
+#              skipping blocks marked oracle=none.
+#
+# WHICH specs are gated is decided in one place only -- the `specs`
+# subcommand (carries @R- evidence, no `evidence: skip` in the masthead).
+# test/spec_evidence_test.go calls the same subcommand, so the make targets
+# and the Go gate cannot disagree about coverage. It is invoked inside the
+# recipes rather than in a `:=` variable so that `make clean` (and every
+# other target) does not have to build lg just to expand it.
+SPEC-EVIDENCE := LG_SOURCE_PATHS=scripts $(LG-PROMOTED) scripts/spec-evidence.lg
+SPEC-LIST = $$($(SPEC-EVIDENCE) specs docs/specs)
+
+.PHONY: spec-lint spec-evidence spec-oracle
+
+spec-lint: build
+	@for s in $(SPEC-LIST); do $(SPEC-EVIDENCE) lint $$s || exit 1; done
+
+spec-evidence: build
+	@for s in $(SPEC-LIST); do $(SPEC-EVIDENCE) run $$s || exit 1; done
+
+spec-oracle: build
+	@for s in $(SPEC-LIST); do CLJ_ENGINE="clojure -M" $(SPEC-EVIDENCE) run $$s --oracle || exit 1; done

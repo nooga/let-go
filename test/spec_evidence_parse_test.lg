@@ -1,0 +1,89 @@
+;; test/spec_evidence_parse_test.lg
+(ns test.spec-evidence-parse-test
+  (:require
+   [clojure.string :as str]
+   [spec-evidence.parse :as p]
+   [test :refer :all]))
+
+(def scanned (p/scan (slurp "fixtures/spec-evidence/basic.md")))
+
+(deftest finds-markers
+  (is (= #{"add" "print" "rows" "fail-row" "block"} (:markers scanned))))
+
+(deftest finds-fences-with-type-attrs-and-line
+  (let [by-slug (into {} (map (juxt :slug identity) (:blocks scanned)))]
+    (is (= 5 (count (:blocks scanned))))
+    (is (= "clj-repl" (:type (by-slug "add"))))
+    (is (= 6 (:line (by-slug "add"))))
+    (is (= "(+ 1 2)\n;=> 3\n" (:body (by-slug "add"))))
+    (is (= {"oracle" "none"} (:attrs (by-slug "print"))))
+    (is (= "clj-test" (:type (by-slug "block"))))))
+
+(deftest parses-tables-into-rows
+  (let [t (first (filter #(= "rows" (:slug %)) (:blocks scanned)))]
+    (is (= "clj-table" (:type t)))
+    (is (= [["(inc 1)" "2" ""] ["(print \"a\")" "nil" "\"a\""]] (:rows t)))))
+
+(deftest parses-fourth-expect-column
+  (let [t (first (filter #(= "fail-row" (:slug %)) (:blocks scanned)))]
+    (is (= "clj-table" (:type t)))
+    (is (= [["(inc 1)" "3" "" "fail"]] (:rows t)))))
+
+(deftest reports-pairing-errors
+  (let [r (p/scan "Orphan marker. [R-lonely]\n\n```clj-repl @R-ghost\n1\n;=> 1\n```\n")]
+    (is (= ["marker R-lonely has no evidence" "evidence @R-ghost has no marker"] (:errors r)))))
+
+(deftest basic-fixture-has-no-errors
+  (is (empty? (:errors scanned))))
+
+(def malformed (p/scan (slurp "fixtures/spec-evidence/malformed.md")))
+
+(deftest reports-malformed-evidence-openers
+  (is (= ["malformed evidence opener at line 4: ```clj-repl @R-double-space  oracle=none"
+          "malformed evidence opener at line 9: ```clj-repl @R-missing-eq oracle"]
+         (:errors malformed))))
+
+(deftest malformed-openers-not-scanned-as-markers
+  (is (empty? (:markers malformed)))
+  (is (empty? (:blocks malformed))))
+
+(deftest reports-unterminated-fence
+  (let [r (p/scan "```clj-repl @R-x\n1\n;=> 1\n")]
+    (is (= ["unterminated fence @R-x opened at line 1"] (:errors r)))
+    (is (empty? (:blocks r)))))
+
+(deftest split-lines-strips-crlf-and-drops-trailing-newline-only
+  (is (= ["a" "b" "c"] (vec (p/split-lines "a\r\nb\r\nc\r\n"))))
+  (is (= ["a" "b" "c"] (vec (p/split-lines "a\nb\nc\n"))))
+  (is (= ["a" "" "b"] (vec (p/split-lines "a\n\nb\n")))))
+
+;; Final review wave, I3: scan tracks ordinary fences too, so a marker inside
+;; a ```text / ```yaml block is not collected as a requirement.
+(def fenced (p/scan (slurp "fixtures/spec-evidence/fenced-marker.md")))
+
+(deftest markers-inside-plain-fences-are-ignored
+  (is (= #{"real"} (:markers fenced)))
+  (is (= ["real"] (map :slug (:blocks fenced))))
+  (is (empty? (:errors fenced))))
+
+;; Controller ruling: an ordinary fence left open at EOF swallows every later
+;; block AND its marker, so pairing alone stays green while the evidence
+;; silently stops running. It is now a scan error.
+(def unterminated (p/scan (slurp "fixtures/spec-evidence/unterminated-fence.md")))
+
+(deftest unterminated-plain-fence-is-an-error
+  (is (some #(= "unterminated code fence opened at line 10" %) (:errors unterminated)))
+  (is (empty? (:blocks unterminated))))
+
+;; A malformed evidence opener is ALSO an unterminated fence when the file
+;; ends inside it; reporting both for the same block would be noise, so the
+;; opener error suppresses the fence error.
+(deftest a-malformed-opener-is-not-also-reported-as-an-unterminated-fence
+  (is (= 2 (count (:errors malformed))))
+  (is (not-any? #(str/includes? % "unterminated") (:errors malformed))))
+
+;; A four-backtick fence is closed only by four backticks, so a three-backtick
+;; fence nested inside it does not end it early and its markers stay invisible.
+(deftest a-longer-fence-is-not-closed-by-a-shorter-one
+  (is (not (contains? (:markers fenced) "phantom-nested")))
+  (is (empty? (:errors fenced))))

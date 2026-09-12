@@ -1,0 +1,87 @@
+(ns test.spec-evidence-run-test
+  (:require
+   [clojure.string :as str]
+   [spec-evidence :as se]
+   [test :refer :all]))
+
+;; go test ./test/ runs with cwd = test/ (one level below the repo root, see
+;; language_test.go), so the freshly built binary at the repo root is
+;; "../lg" from here -- not "./lg".
+
+(deftest run-reports-per-case-and-exits-one-on-mismatch
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["run" "fixtures/spec-evidence/core-only.md" "--engine" "../lg"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "ok arith#1"))
+    (is (str/includes? out "ok arith#2"))
+    (is (str/includes? out "ok out#1"))
+    (is (str/includes? out "FAIL wrong#1 want 3 got 2"))
+    (is (str/includes? out "ok xfail#1 # XFAIL"))
+    (is (str/includes? out "ok xfail#2"))
+    (is (str/includes? out "5/6 cases ok"))))
+
+(deftest unexpected-pass-is-a-failure
+  (let [dir (str (os/temp-dir) "/" (name (gensym "spec-xpass-")))
+        spec (str dir "/y.md")]
+    (mkdir dir)
+    (spit spec "P. [R-p]\n\n```clj-repl @R-p\n(+ 1 1)\n;=> 2\n;; expect: fail\n```\n")
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main ["run" spec "--engine" "../lg"])))]
+      (is (= 1 @code))
+      (is (str/includes? out "FAIL p#1 want failure got pass [xpass]")))))
+
+(deftest oracle-mode-skips-oracle-none-blocks
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["run" "fixtures/spec-evidence/core-only.md" "--engine" "../lg" "--oracle"])))]
+    (is (= 0 @code))
+    (is (not (str/includes? out "wrong#1")))))
+
+(deftest engine-exit-without-fail-lines-yields-one-fail
+  (let [dir (str (os/temp-dir) "/" (name (gensym "spec-engine-exit-")))
+        spec (str dir "/broken-form.md")]
+    (mkdir dir)
+    ;; The extra trailing `)` closes the generated runner's `(fn [] ...)`
+    ;; wrapper one paren early, so the emitted `(spec-case! id thunk expect)`
+    ;; call reads with only 2 args -- the runner fails to load with a
+    ;; nonzero exit and prints no "ok "/"FAIL " line of its own.
+    (spit spec "Broken. [R-broke]\n\n```clj-repl @R-broke\n(+ 1 1))\n```\n")
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main ["run" spec "--engine" "../lg"])))
+          fail-lines (filter #(str/starts-with? % "FAIL ") (str/split out #"\n"))]
+      (is (= 1 @code))
+      (is (= 1 (count fail-lines)))
+      (is (str/starts-with? (first fail-lines) "FAIL broke#? engine exit "))
+      (is (str/includes? out "0/1 cases ok"))
+      ;; Final review wave, I1: the engine's own diagnosis must ride along on
+      ;; that line. lg prints compile errors to STDOUT, so dropping :out threw
+      ;; away the only explanation of WHY the runner died.
+      (is (str/includes? (first fail-lines) "expected 3 args"))
+      (is (str/includes? (first fail-lines) ".cljc")))))
+
+;; Final review wave, C1: a malformed opener makes its whole block VANISH
+;; from the scan. `run` used to report `0/0 cases ok` and exit 0 -- a green
+;; gate over evidence that never executed. It must now refuse outright.
+(deftest run-refuses-a-spec-with-structural-errors
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["run" "fixtures/spec-evidence/malformed.md" "--engine" "../lg"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "malformed evidence opener at line 4"))
+    (is (str/includes? out "malformed evidence opener at line 9"))
+    (is (str/includes? out "not run: 2 structural error(s)"))
+    ;; Emphatically NOT a summary line -- nothing ran.
+    (is (not (str/includes? out "cases ok")))))
+
+;; Final review wave, minor: :ok/:total count CASES, not runner lines. One
+;; case can emit two FAIL lines (a value AND an out mismatch); that is one
+;; failed case, so the summary must read 0/1 rather than 0/2.
+(deftest counts-are-per-case-not-per-line
+  (let [dir (str (os/temp-dir) "/" (name (gensym "spec-count-")))
+        spec (str dir "/n.md")]
+    (mkdir dir)
+    (spit spec "N. [R-n]\n\n```clj-repl @R-n oracle=none\n(do (print \"x\") 1)\n;=> 2\n;; out: \"y\"\n```\n")
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main ["run" spec "--engine" "../lg"])))]
+      (is (= 1 @code))
+      (is (str/includes? out "FAIL n#1 want 2 got 1 [value]"))
+      (is (str/includes? out "FAIL n#1 want \"y\" got \"x\" [out]"))
+      (is (str/includes? out "0/1 cases ok")))))

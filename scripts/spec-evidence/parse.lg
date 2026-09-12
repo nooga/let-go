@@ -1,0 +1,168 @@
+(ns spec-evidence.parse
+  "Scan a markdown spec for requirement markers and evidence blocks.
+   Pure: text in, records out. Grammar per docs/specs/executable-evidence.md."
+  (:require
+   [clojure.string :as str]))
+
+(defn split-lines
+  "clojure.string/split-lines isn't in this runtime's string namespace, and
+   this runtime's `split` splits on a literal regex match without
+   clojure.string/split-lines's own trailing-empty-drop rule, so both are
+   reimplemented here: split on \\r?\\n (so a CRLF fixture yields bodies
+   with no stray \\r), then drop a single trailing \"\" produced by a
+   final newline — an interior blank line is a real empty element and is
+   kept."
+  [s]
+  (let [parts (str/split s #"\r?\n")]
+    (if (and (seq parts) (= "" (last parts)))
+      (butlast parts)
+      parts)))
+
+(def marker-re #"\[R-([a-z0-9-]+)\]")
+(def fence-open-re #"^```([a-z-]+) @R-([a-z0-9-]+)((?: [a-z]+=[^ ]+)*)\s*$")
+(def table-comment-re #"^<!-- evidence: @R-([a-z0-9-]+)(?: ([a-z-]+))? -->\s*$")
+;; Loose prefixes for lines that were clearly meant to open an evidence
+;; fence/table but fail the strict grammar above (bad attrs, missing `=`,
+;; a doubled space, ...). Anything matching one of these but not the
+;; strict form is a lint error, not silent prose.
+(def fence-loose-re #"^```[a-z-]* @R-")
+(def table-loose-re #"^<!-- evidence:")
+;; Any fenced code block, evidence or not. A marker written inside an
+;; ordinary ```text / ```yaml fence is documentation, not a requirement, so
+;; scan has to know where plain fences begin and end too -- otherwise a spec
+;; that SHOWS the grammar reports a phantom "marker R-x has no evidence".
+(def code-fence-re #"^```")
+
+(defn- backtick-run
+  "Length of the leading run of backticks in `s`; 0 when it starts with
+   anything else."
+  [s]
+  (let [n (count s)]
+    (loop [i 0]
+      (if (and (< i n) (= "`" (subs s i (inc i)))) (recur (inc i)) i))))
+
+(defn- closes-fence?
+  "True when `l` is a bare run of exactly `len` backticks. The LENGTH has to
+   match the opener: a ```` fence is closed only by ````, so a three-backtick
+   fence nested inside it does not end it. (CommonMark actually allows a
+   LONGER closing fence; requiring equality is stricter, and a closing fence
+   longer than its opener does not occur in practice.)"
+  [l len]
+  (let [t (str/trim l)]
+    (and (pos? len) (= len (count t)) (= len (backtick-run t)))))
+
+(defn split-once
+  "Split `s` on the FIRST occurrence of `sep` -> [before after], or nil when
+   `sep` does not occur. This runtime's `split` has no limit argument, so
+   every first-occurrence split in the tooling goes through here."
+  [s sep]
+  (let [i (core/index-of s sep)]
+    (when (and i (>= i 0))
+      [(subs s 0 i) (subs s (+ i (count sep)))])))
+
+(defn- parse-attrs
+  "\"a=b c=d\" -> {\"a\" \"b\" \"c\" \"d\"}. The value is everything after the
+   first `=`, which is all attrs ever need; the strict opener regex has
+   already guaranteed every pair contains one."
+  [s]
+  (into {} (map #(split-once % "=")
+                (remove str/blank? (str/split (str/trim (or s "")) #" ")))))
+
+(defn- table-cell [c]
+  (let [c (str/trim c)]
+    (if (and (str/starts-with? c "`") (str/ends-with? c "`") (> (count c) 1))
+      (subs c 1 (dec (count c)))
+      c)))
+
+(defn- table-rows
+  "Rows of a pipe table starting at index i (the header line). Returns
+   [rows next-index]. Header and separator are skipped unvalidated —
+   their cell text and column count are never checked against the data
+   rows, so a header typo doesn't block a scan. Columns are positional:
+   cell 0 is `form`, cell 1 `value`, cell 2 `out`, and an optional cell 3
+   is `expect` (\"fail\" marks the case expected-to-fail). Row vectors
+   carry 3 or 4 strings depending on whether the table has that column."
+  [lines i]
+  (loop [j (+ i 2) rows []]
+    (let [l (get lines j)]
+      (if (and l (str/starts-with? (str/trim l) "|"))
+        (let [cells (map table-cell (rest (butlast (str/split (str/trim l) #"\|"))))]
+          (recur (inc j) (conj rows (vec cells))))
+        [rows j]))))
+
+(defn scan
+  "-> {:markers #{name} :blocks [block] :errors [str]}.
+
+   Three line-level states: inside an evidence fence (accumulating a body),
+   inside an ordinary fenced code block (ignoring everything until the
+   closing fence), or in prose (where markers are collected and openers
+   recognised). A malformed evidence opener enters the ordinary-fence state
+   too: the block is still a fence, so its body must not leak back into
+   prose and its closing ``` must not be mistaken for an opener. An ordinary
+   fence left open at EOF is an error, because everything after it -- later
+   evidence blocks included -- is silently swallowed."
+  [text]
+  (let [lines (split-lines text)
+        n (count lines)]
+    (loop [i 0 markers #{} blocks [] in-fence nil in-code nil perrors []]
+      (if (>= i n)
+        (let [perrors (if in-fence
+                        (conj perrors (str "unterminated fence @R-" (:slug in-fence)
+                                           " opened at line " (:line in-fence)))
+                        perrors)
+              ;; An ordinary fence left open at EOF swallows every later
+              ;; block AND its markers -- symmetrically, so pairing stays
+              ;; green while the evidence silently stops running. It is an
+              ;; error for the same reason an unterminated evidence fence is.
+              perrors (if (and in-code (not (:flagged in-code)))
+                        (conj perrors (str "unterminated code fence opened at line "
+                                           (:line in-code)))
+                        perrors)
+              evidence (set (map :slug blocks))
+              pairing-errors (concat
+                               (map #(str "marker R-" % " has no evidence") (sort (remove evidence markers)))
+                               (map #(str "evidence @R-" % " has no marker") (sort (remove markers evidence))))]
+          {:markers markers :blocks blocks :errors (vec (concat perrors pairing-errors))})
+        (let [l (nth lines i)]
+          (cond
+            in-fence
+            (if (= "```" (str/trim l))
+              (recur (inc i) markers
+                     (conj blocks (-> in-fence (assoc :body (:acc in-fence)) (dissoc :acc)))
+                     nil nil perrors)
+              (recur (inc i) markers blocks (update in-fence :acc str l "\n") nil perrors))
+
+            in-code
+            (recur (inc i) markers blocks nil
+                   (when-not (closes-fence? l (:len in-code)) in-code)
+                   perrors)
+
+            :else
+            (if-let [[_ type slug attrs] (re-matches fence-open-re l)]
+              (recur (inc i) markers blocks
+                     {:slug slug :type type :attrs (parse-attrs attrs) :line (inc i) :acc ""}
+                     nil perrors)
+              (if (re-find fence-loose-re l)
+                ;; Already reported; entering the fence state anyway keeps the
+                ;; body out of prose and its closing ``` from being read as an
+                ;; opener. :flagged suppresses a second, redundant
+                ;; "unterminated code fence" error for the same block.
+                (recur (inc i) markers blocks nil
+                       {:line (inc i) :len (backtick-run l) :flagged true}
+                       (conj perrors (str "malformed evidence opener at line " (inc i) ": " l)))
+                (if-let [[_ slug type] (re-matches table-comment-re l)]
+                  (let [[rows next] (table-rows lines (inc i))]
+                    (recur next markers
+                           (conj blocks {:slug slug :type (or type "clj-table") :attrs {}
+                                         :line (inc i) :rows rows})
+                           nil nil perrors))
+                  (if (re-find table-loose-re l)
+                    (recur (inc i) markers blocks nil nil
+                           (conj perrors (str "malformed evidence opener at line " (inc i) ": " l)))
+                    (if (re-find code-fence-re l)
+                      (recur (inc i) markers blocks nil
+                             {:line (inc i) :len (backtick-run l) :flagged false}
+                             perrors)
+                      (recur (inc i)
+                             (into markers (map second (re-seq marker-re l)))
+                             blocks nil nil perrors))))))))))))

@@ -1,0 +1,106 @@
+(ns test.spec-evidence-cli-test
+  (:require
+   [clojure.string :as str]
+   [spec-evidence :as se]
+   [test :refer :all]))
+
+(deftest lint-clean-and-broken
+  (is (= 0 (se/main ["lint" "fixtures/spec-evidence/basic.md"])))
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/broken.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "marker R-lonely has no evidence"))
+    (is (str/includes? out "evidence @R-ghost has no marker"))))
+
+(deftest tangle-writes-one-file-per-block-and-a-map
+  (let [dir (str (os/temp-dir) "/spec-evidence-cli-test")]
+    (os/delete-tree dir)
+    (mkdir dir)
+    (is (= 0 (se/main ["tangle" "fixtures/spec-evidence/basic.md" dir])))
+    (is (= "(+ 1 2)\n;=> 3\n" (slurp (str dir "/basic.add.clj-repl"))))
+    (is (= "(inc 1)\t2\t\n(print \"a\")\tnil\t\"a\"\n" (slurp (str dir "/basic.rows.clj-table"))))
+    (is (= "(inc 1)\t3\t\tfail\n" (slurp (str dir "/basic.fail-row.clj-table"))))
+    (let [m (read-string (slurp (str dir "/basic.map.edn")))]
+      (is (= "clj-test" (get-in m ["block" :type])))
+      (is (= {"oracle" "none"} (get-in m ["print" :attrs]))))))
+
+(deftest lint-flags-unrecognized-expectation-line
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/lint-extra.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "unrecognized expectation at line 6: ;; nonsense: 3"))))
+
+(deftest lint-flags-multiple-forms-on-one-line
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/lint-extra.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "multiple forms on line 12"))))
+
+(deftest lint-flags-expect-fail-on-clj-test
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/lint-extra.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "expect=fail unsupported on clj-test @R-testfail"))))
+
+;; Final review wave, I5: a block naming a vocabulary that does not exist
+;; used to survive lint and blow up at run time as a bare stack trace with no
+;; slug attached. lint now generates every block into a discard dir.
+(deftest lint-flags-a-block-it-cannot-generate
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/bogus-vocab.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "cannot generate @R-bogus: "))
+    (is (str/includes? out "clj-bogus.vocab"))))
+
+;; Final review wave, I3: a marker written inside an ORDINARY fence (```text,
+;; ```yaml) is documentation. A spec that shows the grammar must not thereby
+;; report a phantom unpaired marker.
+(deftest markers-inside-plain-fences-are-not-requirements
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/fenced-marker.md"])))]
+    (is (= 0 @code))
+    (is (= "" out))))
+
+;; Final review wave, I4: ONE rule for "which specs does the gate run" --
+;; the Makefile targets and test/spec_evidence_test.go both call this.
+(deftest specs-lists-only-gated-specs
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["specs" "fixtures/spec-evidence/specs-dir"])))
+        listed (set (remove str/blank? (str/split out #"\n")))]
+    (is (= 0 @code))
+    ;; Carries @R- evidence and no masthead opt-out.
+    (is (contains? listed "fixtures/spec-evidence/specs-dir/gated.md"))
+    ;; `evidence: skip` inside a fenced yaml EXAMPLE is not an opt-out.
+    (is (contains? listed "fixtures/spec-evidence/specs-dir/documents-the-hatch.md"))
+    ;; Masthead opt-out.
+    (is (not (contains? listed "fixtures/spec-evidence/specs-dir/opted-out.md")))
+    ;; No evidence tags at all.
+    (is (not (contains? listed "fixtures/spec-evidence/specs-dir/no-evidence.md")))))
+
+(deftest evidence-skip-is-scoped-to-the-masthead
+  (is (true? (se/evidence-skip? "---\nstatus: draft\nevidence: skip\n---\n\n# S\n")))
+  (is (false? (se/evidence-skip? "---\nstatus: draft\n---\n\n```yaml\nevidence: skip\n```\n")))
+  (is (false? (se/evidence-skip? "# S\n\nevidence: skip\n"))))
+
+;; Final review wave, minor: a usage error (no subcommand, unknown
+;; subcommand, or a known one with no spec path) exits 2 -- distinct from a
+;; spec that failed its evidence (1).
+(deftest misinvocation-prints-usage-and-exits-two
+  (doseq [args [[] ["bogus" "x.md"] ["lint"] ["run"]]]
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main args)))]
+      (is (= 2 @code))
+      (is (str/includes? out "usage: spec-evidence")))))
+
+;; Controller ruling: lint, run and accept all refuse an unterminated plain
+;; fence rather than silently running only the blocks above it.
+(deftest lint-and-run-refuse-an-unterminated-plain-fence
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/unterminated-fence.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "unterminated code fence opened at line 10")))
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["run" "fixtures/spec-evidence/unterminated-fence.md" "--engine" "../lg"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "unterminated code fence opened at line 10"))
+    (is (not (str/includes? out "cases ok")))))
