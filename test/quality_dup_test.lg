@@ -1,5 +1,6 @@
 (ns test.quality-dup-test
   (:require
+   [clojure.string :as str]
    [quality.dup :as dup]
    [quality.lex :as lex]
    [quality.score :as score]
@@ -202,3 +203,52 @@
   ;; adjacent (10 then 11) merges; a one-line gap does not
   (is (= [[1 20]] (dup/merge-spans [[1 10] [11 20]])))
   (is (= [[1 10] [12 20]] (dup/merge-spans [[1 10] [12 20]]))))
+
+(defn- region-pair [pa sa ea pb sb eb sim]
+  {:a {:path pa :start sa :end ea} :b {:path pb :start sb :end eb}
+   :shared 60 :similarity sim})
+
+(deftest clone-classes-group-pairs-into-one-opportunity
+  ;; One block in three files is THREE pairs but ONE extraction opportunity.
+  ;; The pair view prints three lines and overstates the work.
+  (let [ps [(region-pair "a.lg" 1 30 "b.lg" 1 30 1.0)
+            (region-pair "a.lg" 1 30 "c.lg" 5 34 1.0)
+            (region-pair "b.lg" 1 30 "c.lg" 5 34 1.0)]
+        cs (dup/clone-classes ps 12)]
+    (is (= 1 (count cs)))
+    (is (= 3 (:member-count (first cs))))
+    (is (= #{"a.lg" "b.lg" "c.lg"} (set (map :path (:members (first cs))))))
+    ;; 30 lines in each of three members
+    (is (= 90 (:total-lines (first cs))))
+    (is (= 30 (:representative-lines (first cs))))))
+
+(deftest clone-classes-rank-by-total-duplicated-lines
+  ;; A five-member class of small blocks is a bigger prize than a two-member
+  ;; class of larger ones: 5x20 = 100 lines beats 2x40 = 80.
+  (let [small (for [i (range 4)]
+                (region-pair "s.lg" 1 20 (str "s" i ".lg") 1 20 1.0))
+        big [(region-pair "b1.lg" 1 40 "b2.lg" 1 40 1.0)]
+        cs (dup/clone-classes (vec (concat small big)) 12)]
+    (is (= 2 (count cs)))
+    (is (= 5 (:member-count (first cs))))
+    (is (= 100 (:total-lines (first cs))))
+    (is (= 80 (:total-lines (second cs))))))
+
+(deftest clone-classes-flag-over-merging-rather-than-hiding-it
+  ;; Transitive closure can chain unrelated regions through a shared
+  ;; intermediate. The class is still reported, but marked.
+  (let [ps (vec (for [i (range 6)]
+                  (region-pair "hub.lg" 1 10 (str "f" i ".lg") 1 10 0.4)))
+        small (dup/clone-classes ps 3)
+        roomy (dup/clone-classes ps 12)]
+    (is (:over-merged? (first small)))
+    (is (not (:over-merged? (first roomy))))
+    ;; reported either way -- flagged, never dropped
+    (is (= (:member-count (first small)) (:member-count (first roomy))))))
+
+(deftest clone-classes-are-stable-and-identified
+  (let [ps [(region-pair "a.lg" 1 30 "b.lg" 1 30 1.0)]
+        once (dup/clone-classes ps 12)
+        twice (dup/clone-classes ps 12)]
+    (is (= (:id (first once)) (:id (first twice))))
+    (is (str/starts-with? (:id (first once)) "c"))))
