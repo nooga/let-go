@@ -1,0 +1,16 @@
+# scripts/spec-vocabs/clj-table.vocab -- rows are repl statements, or slim
+# assertion rows:
+# form \t value \t out [\t expect]
+# `include` splices another vocabulary's directives in first, so a table
+# case is a repl case: the generator rewrites each row into repl statement
+# lines (`;=> value`, `;; out: out`, `;; expect: fail`) and feeds them
+# through the clj-repl rules below.
+#
+# A `|!` slim row (FitNesse SLIM decision-table style) is NOT rewritten to
+# repl lines: it stays a row of cells and is emitted as a slim-check! call
+# against those cells. The runner annotates the row inline (pass/fail per
+# cell with actuals), FitNesse-style, so a re-rendered wiki shows the diff
+# where the claim lives.
+include clj-repl
+row => form
+slim-row => (slim-check! "{id}" {table} {row})
