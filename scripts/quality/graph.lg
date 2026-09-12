@@ -261,9 +261,11 @@
 
 (defn coverage
   "sources vs tests -> {:reached n :total n :percent p
-                         :untested [{:name :path :line}...]}
+                         :untested [{:name :qname :path :line}...]}
    `deftest` definitions are excluded from the denominator. `:untested`
-   is sorted by path then line; `:name` is the bare (unqualified) name."
+   is sorted by path then line; `:name` is the bare (unqualified) name and
+   `:qname` the qualified `ns/name` -- a bare name alone is ambiguous when
+   several namespaces define it, so human surfaces should print `:qname`."
   [sources tests]
   (let [graph (build sources)
         bidx (bare-index (map (fn [[qname info]] (assoc info :qname qname)) (:defs graph)))
@@ -274,7 +276,8 @@
         hit (count (filter (fn [[n _]] (reached n)) candidates))
         untested (->> candidates
                       (remove (fn [[n _]] (reached n)))
-                      (map (fn [[n d]] {:name (symbol (name n)) :path (:path d) :line (:line d)}))
+                      (map (fn [[n d]] {:name (symbol (name n)) :qname n
+                                        :path (:path d) :line (:line d)}))
                       (sort-by (juxt :path :line))
                       vec)]
     {:reached hit :total total

@@ -26,6 +26,7 @@
     (is (= 4 (:total c)))
     (is (= 75.0 (:percent c)))
     (is (= ['orphan] (map :name (:untested c))))
+    (is (= ['fixture.graph/orphan] (map :qname (:untested c))))
     (is (= 5 (:line (first (:untested c)))))))
 
 ;; Two files both define `helper`. `fixture.alias-a/public-a` calls the

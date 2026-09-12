@@ -240,7 +240,7 @@
               :impact (* (:verbosity w) (:similarity p))})
            (for [u (:untested coverage)]
              {:path (:path u) :line (:line u) :kind :untested :measure 0
-              :hint (str "no test reaches " (:name u)) :impact (:untested im)}))
+              :hint (str "no test reaches " (or (:qname u) (:name u))) :impact (:untested im)}))
          ;; `vec` before `sort-by`: the comprehensions above are lazy and
          ;; the sort must see a fully realized sequence.
          vec
