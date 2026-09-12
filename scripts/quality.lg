@@ -52,6 +52,32 @@
 (def ^:private skip-substrings
   ["test/clojure-test-suite/" "core_go_lowered/" ".workspaces/"])
 
+(def ^:private generated-marker
+  ;; The Go convention (golang.org/s/generatedcode), which this repo also uses
+  ;; for generated .lg. Matched against the file's HEAD only: a generator's
+  ;; own source contains the marker inside its emit template and is
+  ;; hand-written code that must still be measured.
+  #"(?i)code generated .*do not edit")
+
+(defn generated?
+  "Whether `text` declares itself machine-generated in its first few lines.
+
+   Generated code is excluded from the corpus because measuring it says
+   nothing about the code anyone writes: its complexity is its generator's,
+   and it inflates defect density every time the generator is re-run. It is
+   also pure cost to tokenize."
+  [text]
+  (boolean (some (fn [l]
+                   (let [t (str/trim l)]
+                     ;; The marker only counts inside a leading COMMENT. A
+                     ;; generator's own source carries the same string inside
+                     ;; its emit template, on a line of real code, and that
+                     ;; file is hand-written and must still be measured.
+                     (and (or (str/starts-with? t "//") (str/starts-with? t ";")
+                              (str/starts-with? t "*") (str/starts-with? t "/*"))
+                          (re-find generated-marker t))))
+                 (take 5 (forms/lines text)))))
+
 (defn- skip? [path]
   (or (str/ends-with? path "_generated.go")
       (some #(str/includes? path %) skip-substrings)))
@@ -339,9 +365,11 @@
         ;; repo-relative path of a discovered file, and the path on disk
         rel-path (fn [p] (if root (subs p (inc (count root))) (repo-path checkout prefix p)))
         disk-path (fn [p] (if root (str root "/" p) (cwd-path prefix p)))
-        loaded (phase "read" (fn [] (mapv (fn [p] {:path (rel-path p)
-                                                   :lang (lang-of p) :text (slurp p)})
-                                          read-paths)))
+        read-all (phase "read" (fn [] (mapv (fn [p] {:path (rel-path p)
+                                                     :lang (lang-of p) :text (slurp p)})
+                                            read-paths)))
+        generated (vec (sort (map :path (filter #(generated? (:text %)) read-all))))
+        loaded (vec (remove #(generated? (:text %)) read-all))
         tokenized (phase "tokenize"
                          (fn [] (mapv (fn [f] (assoc f :tokens (lex/tokens (:text f) (:lang f))))
                                       loaded)))
@@ -542,7 +570,9 @@
                               (:paths opts)
                               (concat (:lg default-paths) (:go default-paths)))
                      :source-roots source-roots
-                     :corpus {:files (count read-paths) :tracked-by (:source tracked)}}
+                     :corpus {:files (count loaded) :tracked-by (:source tracked)
+                              :generated (count generated)
+                              :generated-paths generated}}
             :coverage {:lg (select-keys lg-cov [:reached :total :percent :untested])
                        :go (when go-cov (select-keys go-cov [:covered :total :percent]))
                        :combined combined
