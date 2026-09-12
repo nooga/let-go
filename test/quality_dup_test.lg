@@ -2,6 +2,7 @@
   (:require
    [quality.dup :as dup]
    [quality.lex :as lex]
+   [quality.score :as score]
    [test :refer :all]))
 
 (deftest lexer-normalizes-identifiers-and-literals
@@ -108,3 +109,59 @@
   (let [fs [(one-line-file "f.lg" 100)]
         ps (vec (repeat 60 (pair-at "f.lg" 10 12)))]
     (is (< 2.99 (get (dup/file-percent fs ps) "f.lg") 3.01))))
+
+(deftest reports-every-shared-region-not-only-the-largest
+  ;; dup_two_blocks_{a,b}.lg share TWO separate ~33-line blocks (an identical
+  ;; `let` cascade at the top, an identical `cond` chain at the bottom) with
+  ;; differently-shaped filler between them. Reporting only the largest region
+  ;; would hide the second block entirely.
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg"
+                  "fixtures/quality/dup_two_blocks_b.lg")
+        ps (dup/pairs fs 25 40 50)
+        [p1 p2] ps]
+    (is (= 2 (count ps)))
+    ;; Each region names its own span on BOTH sides -- aligned by the matches
+    ;; themselves, so region 1 of A points at region 1 of B, not at the file.
+    (is (= [1 35] [(get-in p1 [:a :start]) (get-in p1 [:a :end])]))
+    (is (= [1 35] [(get-in p1 [:b :start]) (get-in p1 [:b :end])]))
+    (is (= [49 79] [(get-in p2 [:a :start]) (get-in p2 [:a :end])]))
+    (is (= [49 79] [(get-in p2 [:b :start]) (get-in p2 [:b :end])]))
+    ;; ...and the two regions are disjoint on both sides.
+    (is (< (get-in p1 [:a :end]) (get-in p2 [:a :start])))
+    (is (< (get-in p1 [:b :end]) (get-in p2 [:b :start])))
+    (is (= [1.0 1.0] [(:similarity p1) (:similarity p2)]))
+    (is (every? (fn [p] (>= (:shared p) 50)) ps))))
+
+(deftest every-region-becomes-its-own-duplicate-issue
+  ;; One `duplicate` issue per region, each rendering as
+  ;; `path:start-end ... ~ other:start-end` (the report builds the left side
+  ;; from :path/:line/:end and prints :hint verbatim).
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg"
+                  "fixtures/quality/dup_two_blocks_b.lg")
+        iss (score/issues [] {:untested []} (dup/pairs fs 25 40 50))
+        at (fn [i] (str (:path i) ":" (:line i) "-" (:end i)))]
+    (is (= 2 (count iss)))
+    (is (every? (fn [i] (= :duplicate (:kind i))) iss))
+    (is (= "fixtures/quality/dup_two_blocks_a.lg:1-35" (at (first iss))))
+    (is (= "~ fixtures/quality/dup_two_blocks_b.lg:1-35 (lines 35)" (:hint (first iss))))
+    (is (= "fixtures/quality/dup_two_blocks_a.lg:49-79" (at (second iss))))
+    (is (= "~ fixtures/quality/dup_two_blocks_b.lg:49-79 (lines 31)" (:hint (second iss))))))
+
+(deftest file-percent-unions-the-reported-regions
+  ;; The fixture's two regions cover lines 1-35 and 49-79 = 66 of its 79
+  ;; token-bearing lines = 83.54%.
+  (let [fs (files "fixtures/quality/dup_two_blocks_a.lg"
+                  "fixtures/quality/dup_two_blocks_b.lg")
+        ps (dup/pairs fs 25 40 50)
+        pct (dup/file-percent fs ps)
+        ;; A third region overlapping the first (lines 10-40) adds only lines
+        ;; 36-40: the union becomes 1-40 + 49-79 = 71 of 79 = 89.87%. Summing
+        ;; spans instead would give 35 + 31 + 31 = 97 lines and clamp to 100%.
+        overlapping (conj ps {:a {:path "fixtures/quality/dup_two_blocks_a.lg" :start 10 :end 40}
+                              :b {:path "fixtures/quality/dup_two_blocks_b.lg" :start 10 :end 40}
+                              :shared 60 :similarity 0.5})
+        pct2 (dup/file-percent fs overlapping)]
+    (is (< 83.5 (get pct "fixtures/quality/dup_two_blocks_a.lg") 83.6))
+    (is (< 83.5 (get pct "fixtures/quality/dup_two_blocks_b.lg") 83.6))
+    (is (< 89.8 (get pct2 "fixtures/quality/dup_two_blocks_a.lg") 89.9))
+    (is (not= 100.0 (get pct2 "fixtures/quality/dup_two_blocks_a.lg")))))
