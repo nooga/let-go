@@ -53,16 +53,15 @@ wasmtime on every PR, so the target can't silently regress.
   behave the same on the WASM target as on native. The cost on a 32-bit host is
   that an `Int` outside the small-int cache is heap-boxed, as a `Float` already
   is; arithmetic-heavy code allocates more there than on native.
-- **There is no `xxh3` namespace.** The `xxh3` dependency is assembly-only on
-  arm64/amd64 with no purego mode, and its bindings are reflect-boxed, so
-  `interop_xxh3.go` is gated `!tinygo`. Nothing is substituted in its place: a
-  program that calls `xxh3/*` on a TinyGo build gets nil and fails at the call
-  site. Use the `murmur3` namespace instead. It is registered on every build,
-  mirrors the same `Hash` / `HashSeed` / `HashString` / `HashStringSeed`
-  surface, and masks its results to 31 bits so a value is identical on 64-bit
-  native and 32-bit wasm — including across the `int`-width boundary above.
-  Porting a hash-dependent program is a namespace swap, not an acceptance of a
-  separate determinism domain.
+- **The `xxh3` namespace is the one-shot surface only, and only on wasm.** The
+  generated bindings in `interop_xxh3.go` are reflect-boxed, so they are gated
+  `!tinygo`; TinyGo wasm and wasi builds register `Hash`, `HashSeed`,
+  `HashString` and `HashStringSeed` from non-reflect adapters instead, with the
+  same values as stock Go. The stateful `Hasher` and the 128-bit functions are
+  not available. Native TinyGo (arm64/amd64) has no `xxh3` at all, because the
+  library's large-input path is assembly that TinyGo cannot link; `murmur3` is
+  registered on every build, mirrors the same four-function surface, and masks
+  its results to 31 bits.
 - **No Unix domain sockets or full `os.ProcessState`**, so the nREPL Unix-socket
   transport and some process introspection are unavailable on native builds.
 - **Native macOS does not link** (tinygo-org/tinygo#4794 — Darwin syscalls route
