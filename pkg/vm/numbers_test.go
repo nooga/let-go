@@ -12,11 +12,11 @@ func TestToIntFloatSpecialValues(t *testing.T) {
 		want int
 	}{
 		{name: "float nan", in: Float(math.NaN()), want: 0},
-		{name: "float positive infinity", in: Float(math.Inf(1)), want: int(maxIntValue)},
-		{name: "float negative infinity", in: Float(math.Inf(-1)), want: int(minIntValue)},
+		{name: "float positive infinity", in: Float(math.Inf(1)), want: math.MaxInt},
+		{name: "float negative infinity", in: Float(math.Inf(-1)), want: math.MinInt},
 		{name: "float32 nan", in: Float32(float32(math.NaN())), want: 0},
-		{name: "float32 positive infinity", in: Float32(float32(math.Inf(1))), want: int(maxIntValue)},
-		{name: "float32 negative infinity", in: Float32(float32(math.Inf(-1))), want: int(minIntValue)},
+		{name: "float32 positive infinity", in: Float32(float32(math.Inf(1))), want: math.MaxInt},
+		{name: "float32 negative infinity", in: Float32(float32(math.Inf(-1))), want: math.MinInt},
 	}
 
 	for _, tt := range tests {

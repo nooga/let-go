@@ -86,7 +86,7 @@ func MaybeSimplifyRatio(r *big.Rat) Value {
 	if r.IsInt() {
 		num := r.Num()
 		if num.IsInt64() {
-			return MakeInt(int(num.Int64()))
+			return MakeInt64(num.Int64())
 		}
 		return NewBigInt(new(big.Int).Set(num))
 	}
