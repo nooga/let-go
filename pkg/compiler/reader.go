@@ -660,7 +660,7 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 				i = -i
 			}
 			r.closeToken(TokenNumber)
-			return vm.MakeInt(int(i)), nil
+			return vm.MakeInt64(i), nil
 		}
 	}
 	// Radix literal: 2r1010, 16rFF
@@ -671,7 +671,7 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 					i = -i
 				}
 				r.closeToken(TokenNumber)
-				return vm.MakeInt(int(i)), nil
+				return vm.MakeInt64(i), nil
 			}
 		}
 	}
@@ -688,10 +688,10 @@ func readNumber(r *LispReader, ru rune) (vm.Value, error) {
 		}
 	}
 	// Try int first
-	i, err := strconv.Atoi(sn)
+	i, err := strconv.ParseInt(sn, 10, 64)
 	if err == nil {
 		r.closeToken(TokenNumber)
-		return vm.MakeInt(i), nil
+		return vm.MakeInt64(i), nil
 	}
 	// If Atoi failed due to range, try BigInt
 	if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {

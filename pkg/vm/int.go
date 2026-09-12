@@ -49,8 +49,10 @@ func (t *theIntType) Box(bare any) (Value, error) {
 // IntType is the type of IntValues
 var IntType *theIntType = &theIntType{zero: 0}
 
-// Int is boxed int
-type Int int
+// Int is the boxed integer. It is 64 bits wide on every host, like Clojure's
+// long: a value never depends on the platform's int width, so a 32-bit-int
+// target (linux/386, TinyGo wasm) computes exactly what a 64-bit one does.
+type Int int64
 
 // Hash implements Hashable.
 func (l Int) Hash() uint32 { return hashUint64(uint64(l)) }
@@ -58,11 +60,13 @@ func (l Int) Hash() uint32 { return hashUint64(uint64(l)) }
 // Type implements Value
 func (l Int) Type() ValueType { return IntType }
 
-// Unbox implements Unbox
+// Unbox implements Unbox. It returns the platform int because it feeds Go
+// interop (reflect proxies, struct mapping) whose declared types are int; on a
+// 32-bit host a wide value narrows here. ToInt64 returns the full value.
 func (l Int) Unbox() any {
 	return int(l)
 }
 
 func (l Int) String() string {
-	return strconv.Itoa(int(l))
+	return strconv.FormatInt(int64(l), 10)
 }

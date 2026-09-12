@@ -1473,7 +1473,10 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 						}
 						return NIL, errIntOverflow()
 					}
-					f.stack[f.sp-2] = r
+					// Through the cache rather than a bare store: on a 32-bit host an
+					// 8-byte Int does not fit the interface word, so every bare store
+					// would allocate. Same for the other Int fast paths below.
+					f.stack[f.sp-2] = MakeInt64(int64(r))
 					f.sp--
 					f.ip++
 					continue
@@ -1502,7 +1505,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 						}
 						return NIL, errIntOverflow()
 					}
-					f.stack[f.sp-2] = r
+					f.stack[f.sp-2] = MakeInt64(int64(r))
 					f.sp--
 					f.ip++
 					continue
@@ -1531,7 +1534,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 						}
 						return NIL, errIntOverflow()
 					}
-					f.stack[f.sp-2] = r
+					f.stack[f.sp-2] = MakeInt64(int64(r))
 					f.sp--
 					f.ip++
 					continue
@@ -1565,7 +1568,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-and")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) & int(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) & int64(bi))
 			f.sp--
 			f.ip++
 
@@ -1586,7 +1589,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-or")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) | int(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) | int64(bi))
 			f.sp--
 			f.ip++
 
@@ -1607,7 +1610,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-xor")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) ^ int(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) ^ int64(bi))
 			f.sp--
 			f.ip++
 
@@ -1628,7 +1631,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-and-not")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) &^ int(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) &^ int64(bi))
 			f.sp--
 			f.ip++
 
@@ -1649,7 +1652,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-shift-left")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) << uint(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) << uint(bi))
 			f.sp--
 			f.ip++
 
@@ -1670,7 +1673,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-shift-right")
 			}
-			f.stack[f.sp-2] = MakeInt(int(ai) >> uint(bi))
+			f.stack[f.sp-2] = MakeInt64(int64(ai) >> uint(bi))
 			f.sp--
 			f.ip++
 
@@ -1691,7 +1694,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("unsigned-bit-shift-right")
 			}
-			f.stack[f.sp-2] = MakeInt(int(uint(ai) >> uint(bi)))
+			f.stack[f.sp-2] = MakeInt64(int64(uint64(ai) >> uint(bi)))
 			f.sp--
 			f.ip++
 
@@ -1708,7 +1711,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 					}
 					// Int quot is truncated toward zero — Go's / on
 					// signed ints matches Clojure's quot semantics.
-					f.stack[f.sp-2] = Int(int64(ai) / int64(bi))
+					f.stack[f.sp-2] = MakeInt64(int64(ai) / int64(bi))
 					f.sp--
 					f.ip++
 					continue
@@ -1780,7 +1783,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 				}
 				return NIL, errBitOpType("bit-not")
 			}
-			f.stack[f.sp-1] = MakeInt(^int(ai))
+			f.stack[f.sp-1] = MakeInt64(^int64(ai))
 			f.ip++
 
 		case OP_LT:
@@ -1906,7 +1909,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 					}
 					return NIL, errIntOverflow()
 				}
-				f.stack[f.sp-1] = r
+				f.stack[f.sp-1] = MakeInt64(int64(r))
 				f.ip++
 				continue
 			}
@@ -1930,7 +1933,7 @@ func (f *Frame) runLoopInner(state *frameRunState, entering bool) (Value, error)
 					}
 					return NIL, errIntOverflow()
 				}
-				f.stack[f.sp-1] = r
+				f.stack[f.sp-1] = MakeInt64(int64(r))
 				f.ip++
 				continue
 			}

@@ -140,7 +140,7 @@ func (a *TypedArray) Get(i int) Value {
 	case ArrayByte:
 		return MakeInt(int(a.data.([]byte)[i]))
 	case ArrayInt:
-		return MakeInt(int(a.data.([]int64)[i]))
+		return MakeInt64(a.data.([]int64)[i])
 	case ArrayFloat:
 		return Float(a.data.([]float64)[i])
 	case ArrayObject:

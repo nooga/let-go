@@ -6,14 +6,14 @@ import (
 	"math/big"
 )
 
-const maxIntValue = Int(int(^uint(0) >> 1))
+const maxIntValue = Int(math.MaxInt64)
 const minIntValue = -maxIntValue - 1
 
 // mulGuard bounds checkedMulInt's divide-free fast path: when both operands
-// fit in half the platform int width, their product cannot overflow, so the
-// division-based checks are skipped. Half-width (not a fixed int32 range)
-// keeps the bound correct on 32-bit-int builds as well as 64-bit.
-const intBits = 32 << (^uint(0) >> 63)
+// fit in half the Int width, their product cannot overflow, so the
+// division-based checks are skipped. Int is 64 bits on every host, so the
+// guard is a fixed int32 range.
+const intBits = 64
 const mulGuardMax = Int(1)<<(intBits/2-1) - 1
 const mulGuardMin = -mulGuardMax - 1
 
@@ -86,7 +86,7 @@ func NumAdd(a, b Value) (Value, error) {
 			if !ok {
 				return NIL, fmt.Errorf("integer overflow")
 			}
-			return MakeInt(int(r)), nil
+			return MakeInt64(int64(r)), nil
 		case Float:
 			return Float(float64(av) + float64(bv)), nil
 		case *BigInt:
@@ -134,7 +134,7 @@ func NumSub(a, b Value) (Value, error) {
 			if !ok {
 				return NIL, fmt.Errorf("integer overflow")
 			}
-			return MakeInt(int(r)), nil
+			return MakeInt64(int64(r)), nil
 		case Float:
 			return Float(float64(av) - float64(bv)), nil
 		case *BigInt:
@@ -182,7 +182,7 @@ func NumMul(a, b Value) (Value, error) {
 			if !ok {
 				return NIL, fmt.Errorf("integer overflow")
 			}
-			return MakeInt(int(r)), nil
+			return MakeInt64(int64(r)), nil
 		case Float:
 			return Float(float64(av) * float64(bv)), nil
 		case *BigInt:
@@ -250,7 +250,7 @@ func NumDiv(a, b Value) (Value, error) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			r := new(big.Rat).SetFrac64(int64(av), int64(bv))
@@ -280,7 +280,7 @@ func NumDiv(a, b Value) (Value, error) {
 	case *BigInt:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			r := new(big.Rat).SetFrac(av.val, big.NewInt(int64(bv)))
@@ -314,10 +314,10 @@ func NumQuot(a, b Value) (Value, error) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
-			return MakeInt(int(av) / int(bv)), nil
+			return MakeInt64(int64(av) / int64(bv)), nil
 		case Float:
 			if float64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
@@ -337,7 +337,7 @@ func NumQuot(a, b Value) (Value, error) {
 	case Float:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			q, err := numQuotFloat(float64(av), float64(bv))
@@ -358,7 +358,7 @@ func NumQuot(a, b Value) (Value, error) {
 	case *BigInt:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			r := new(big.Int).Quo(av.val, big.NewInt(int64(bv)))
@@ -480,10 +480,10 @@ func NumRem(a, b Value) (Value, error) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
-			return MakeInt(int(av) % int(bv)), nil
+			return MakeInt64(int64(av) % int64(bv)), nil
 		case Float:
 			if float64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
@@ -503,7 +503,7 @@ func NumRem(a, b Value) (Value, error) {
 	case Float:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			r, err := numRemFloat(float64(av), float64(bv))
@@ -524,7 +524,7 @@ func NumRem(a, b Value) (Value, error) {
 	case *BigInt:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			r := new(big.Int).Rem(av.val, big.NewInt(int64(bv)))
@@ -656,14 +656,14 @@ func NumMod(a, b Value) (Value, error) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
-			r := int(av) % int(bv)
-			if r != 0 && (r > 0) != (int(bv) > 0) {
-				r += int(bv)
+			r := int64(av) % int64(bv)
+			if r != 0 && (r > 0) != (int64(bv) > 0) {
+				r += int64(bv)
 			}
-			return MakeInt(r), nil
+			return MakeInt64(r), nil
 		case Float:
 			if float64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
@@ -687,7 +687,7 @@ func NumMod(a, b Value) (Value, error) {
 	case Float:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			r, err := numModFloat(float64(av), float64(bv))
@@ -708,7 +708,7 @@ func NumMod(a, b Value) (Value, error) {
 	case *BigInt:
 		switch bv := b.(type) {
 		case Int:
-			if int(bv) == 0 {
+			if int64(bv) == 0 {
 				return NIL, fmt.Errorf("divide by zero")
 			}
 			bi := big.NewInt(int64(bv))
@@ -841,7 +841,7 @@ func NumNeg(a Value) (Value, error) {
 	a = normalizeFloat32(a)
 	switch av := a.(type) {
 	case Int:
-		return MakeInt(-int(av)), nil
+		return MakeInt64(-int64(av)), nil
 	case Float:
 		return Float(-float64(av)), nil
 	case *BigInt:
@@ -859,11 +859,11 @@ func NumAbs(a Value) (Value, error) {
 	a = normalizeFloat32(a)
 	switch av := a.(type) {
 	case Int:
-		v := int(av)
+		v := int64(av)
 		if v < 0 {
 			v = -v
 		}
-		return MakeInt(v), nil
+		return MakeInt64(v), nil
 	case Float:
 		v := float64(av)
 		if v < 0 {
@@ -890,7 +890,7 @@ func NumGt(a, b Value) (bool, error) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			return int(av) > int(bv), nil
+			return int64(av) > int64(bv), nil
 		case Float:
 			return float64(av) > float64(bv), nil
 		case *BigInt:
@@ -899,7 +899,7 @@ func NumGt(a, b Value) (bool, error) {
 	case Float:
 		switch bv := b.(type) {
 		case Int:
-			return float64(av) > float64(int(bv)), nil
+			return float64(av) > float64(int64(bv)), nil
 		case Float:
 			return float64(av) > float64(bv), nil
 		case *BigInt:
@@ -931,7 +931,7 @@ func NumLt(a, b Value) (bool, error) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			return int(av) < int(bv), nil
+			return int64(av) < int64(bv), nil
 		case Float:
 			return float64(av) < float64(bv), nil
 		case *BigInt:
@@ -940,7 +940,7 @@ func NumLt(a, b Value) (bool, error) {
 	case Float:
 		switch bv := b.(type) {
 		case Int:
-			return float64(av) < float64(int(bv)), nil
+			return float64(av) < float64(int64(bv)), nil
 		case Float:
 			return float64(av) < float64(bv), nil
 		case *BigInt:
@@ -971,7 +971,7 @@ func NumGe(a, b Value) (bool, error) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			return int(av) >= int(bv), nil
+			return int64(av) >= int64(bv), nil
 		case Float:
 			return float64(av) >= float64(bv), nil
 		case *BigInt:
@@ -980,7 +980,7 @@ func NumGe(a, b Value) (bool, error) {
 	case Float:
 		switch bv := b.(type) {
 		case Int:
-			return float64(av) >= float64(int(bv)), nil
+			return float64(av) >= float64(int64(bv)), nil
 		case Float:
 			return float64(av) >= float64(bv), nil
 		case *BigInt:
@@ -1011,7 +1011,7 @@ func NumLe(a, b Value) (bool, error) {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			return int(av) <= int(bv), nil
+			return int64(av) <= int64(bv), nil
 		case Float:
 			return float64(av) <= float64(bv), nil
 		case *BigInt:
@@ -1020,7 +1020,7 @@ func NumLe(a, b Value) (bool, error) {
 	case Float:
 		switch bv := b.(type) {
 		case Int:
-			return float64(av) <= float64(int(bv)), nil
+			return float64(av) <= float64(int64(bv)), nil
 		case Float:
 			return float64(av) <= float64(bv), nil
 		case *BigInt:
@@ -1052,7 +1052,7 @@ func NumEq(a, b Value) bool {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			return int(av) == int(bv)
+			return int64(av) == int64(bv)
 		case *BigInt:
 			return big.NewInt(int64(av)).Cmp(bv.val) == 0
 		}
@@ -1097,7 +1097,7 @@ func NumEquivalent(a, b Value) bool {
 	case Int:
 		switch bv := b.(type) {
 		case Int:
-			return int(av) == int(bv)
+			return int64(av) == int64(bv)
 		case Float:
 			return float64(av) == float64(bv)
 		case *BigInt:
@@ -1106,7 +1106,7 @@ func NumEquivalent(a, b Value) bool {
 	case Float:
 		switch bv := b.(type) {
 		case Int:
-			return float64(av) == float64(int(bv))
+			return float64(av) == float64(int64(bv))
 		case Float:
 			return float64(av) == float64(bv)
 		}
@@ -1159,10 +1159,10 @@ func intFromFloat64(f float64) int {
 	switch {
 	case math.IsNaN(f):
 		return 0
-	case math.IsInf(f, 1) || f > float64(maxIntValue):
-		return int(maxIntValue)
-	case math.IsInf(f, -1) || f < float64(minIntValue):
-		return int(minIntValue)
+	case math.IsInf(f, 1) || f > float64(math.MaxInt):
+		return math.MaxInt
+	case math.IsInf(f, -1) || f < float64(math.MinInt):
+		return math.MinInt
 	default:
 		return int(f)
 	}
@@ -1363,11 +1363,11 @@ func numUnchecked(op int32, a, b Value) (Value, error) {
 		}
 	}
 	name := uncheckedOpName(op)
-	ai, ok := ToInt(a)
+	ai, ok := ToInt64(a)
 	if !ok {
 		return NIL, errUncheckedOpType(name, a)
 	}
-	bi, ok := ToInt(b)
+	bi, ok := ToInt64(b)
 	if !ok {
 		return NIL, errUncheckedOpType(name, b)
 	}
@@ -1379,10 +1379,53 @@ func numUnchecked(op int32, a, b Value) (Value, error) {
 func uncheckedIntOp(op int32, a, b Int) Value {
 	switch op {
 	case OP_UNCHECKED_ADD:
-		return MakeInt(int(int64(a) + int64(b)))
+		return MakeInt64(int64(int64(a) + int64(b)))
 	case OP_UNCHECKED_SUB:
-		return MakeInt(int(int64(a) - int64(b)))
+		return MakeInt64(int64(int64(a) - int64(b)))
 	default:
-		return MakeInt(int(int64(a) * int64(b)))
+		return MakeInt64(int64(int64(a) * int64(b)))
+	}
+}
+
+// ToInt64 is ToInt at full width: nothing narrows to the platform int on the
+// way out. Arithmetic paths use this; index and length paths use ToInt.
+func ToInt64(v Value) (int64, bool) {
+	switch n := v.(type) {
+	case Int:
+		return int64(n), true
+	case Float:
+		return int64FromFloat64(float64(n)), true
+	case Float32:
+		return int64FromFloat64(float64(n)), true
+	case *BigInt:
+		if n.val.IsInt64() {
+			return n.val.Int64(), true
+		}
+		return 0, false
+	case Boolean:
+		if bool(n) {
+			return 1, true
+		}
+		return 0, true
+	case *BigDecimal:
+		f, _ := n.Val().Float64()
+		return int64FromFloat64(f), true
+	case *Ratio:
+		f, _ := n.Val().Float64()
+		return int64FromFloat64(f), true
+	}
+	return 0, false
+}
+
+func int64FromFloat64(f float64) int64 {
+	switch {
+	case math.IsNaN(f):
+		return 0
+	case math.IsInf(f, 1) || f >= float64(math.MaxInt64):
+		return math.MaxInt64
+	case math.IsInf(f, -1) || f < float64(math.MinInt64):
+		return math.MinInt64
+	default:
+		return int64(f)
 	}
 }
