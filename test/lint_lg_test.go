@@ -1,6 +1,7 @@
 package test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -264,6 +265,70 @@ func TestLintR3DuplicatedComment(t *testing.T) {
 	}
 	if twiceHit {
 		t.Errorf("a comment seen only twice must not flag:\n%s", out)
+	}
+}
+
+// R4 — comment density outlier: per definition, comment-lines/total-lines,
+// flagged when it exceeds the 95th percentile computed over the corpus
+// itself. This fixture builds 20 definitions with a strictly increasing,
+// hand-computable ratio (Ci comment lines over a fixed 2-line body, Ci from
+// 3 to 22 so every definition, including the smallest, clears the R4
+// min-definition-lines guard), so the percentile is known: with
+// nearest-rank on 20 values, rank = ceil(0.95*20) = 19, i.e. the 19th
+// smallest (Ci=21, ratio 21/23=0.9130). Only the strict maximum (Ci=22,
+// ratio 22/24=0.9167) beats that threshold, so exactly one definition must
+// be flagged: the last one.
+func buildLintFixtureR4() (string, int) {
+	var b strings.Builder
+	lastCommentStart := 0
+	line := 1
+	for ci := 3; ci <= 22; ci++ {
+		if ci > 3 {
+			b.WriteString("\n")
+			line++
+		}
+		lastCommentStart = line
+		for c := 1; c <= ci; c++ {
+			fmt.Fprintf(&b, ";; c%d-%d\n", ci, c)
+			line++
+		}
+		fmt.Fprintf(&b, "(defn f%d [x]\n  x)\n", ci)
+		line += 2
+	}
+	return b.String(), lastCommentStart
+}
+
+func TestLintR4DensityOutlier(t *testing.T) {
+	dir := t.TempDir()
+	src, lastCommentStart := buildLintFixtureR4()
+	lgFixture := filepath.Join(dir, "fixture.lg")
+	if err := os.WriteFile(lgFixture, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg: %v\n%s", err, out)
+	}
+
+	got := []int{}
+	for _, l := range strings.Split(string(out), "\n") {
+		if !strings.Contains(l, "[comment-density-outlier]") {
+			continue
+		}
+		loc := strings.Fields(l)[0]
+		loc = strings.SplitN(loc, ":", 2)[1]
+		loc = strings.SplitN(loc, "-", 2)[0]
+		n, convErr := strconv.Atoi(loc)
+		if convErr != nil {
+			t.Fatalf("unparsable finding location %q in:\n%s", loc, out)
+		}
+		got = append(got, n)
+	}
+
+	want := []int{lastCommentStart}
+	if !equalInts(got, want) {
+		t.Errorf("comment-density-outlier findings at lines %v, want %v (the Ci=21 definition)\n%s", got, want, out)
 	}
 }
 
