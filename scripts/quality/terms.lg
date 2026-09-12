@@ -1,0 +1,76 @@
+(ns quality.terms
+  "The bounded metric terms: erosion and verbosity, both shares in [0, 1]
+   where 0 is perfect.
+
+   A SHARE is bounded by construction and strictly monotone in every input.
+   That is the property the score needs and the reason the SlopCodeBench
+   metrics are shaped this way: unlike a clamped linear, a share has no dead
+   zone, so reducing the complexity of the worst function in the corpus
+   always moves the number.
+
+   Paper: arXiv 2603.24755 section 2.3. Where we depart from it -- the
+   callable enumeration, verbosity being clone-only -- is recorded in
+   docs/superpowers/specs/2026-09-12-quality-bounded-score-design.md under
+   \"Extensions and deviations from SlopCodeBench\"."
+  (:require
+   [quality.score :as score]))
+
+(defn mass
+  "The paper's mass(f) = CC(f) * sqrt(SLOC(f)): complexity weighted by size,
+   so a complex 200-line function outweighs an equally complex 3-line one."
+  [{:keys [cc sloc]}]
+  (* (double cc) (math/sqrt (max 1 (or sloc 1)))))
+
+(defn erosion
+  "Erosion = the share of total mass carried by callables above the
+   complexity threshold.
+
+       sum over f of 1[CC(f) > 10] * mass(f)   /   sum over f of mass(f)
+
+   The inequality is STRICT: a callable at exactly CC 10 is not
+   high-complexity. Returns nil when there is no mass to divide by -- an
+   empty corpus is omitted, never reported as a perfect 0.
+
+   `callables` are maps carrying `:cc` and `:sloc`. The enumeration is
+   top-level declarations, with live nested functions folded into them; see
+   the design's deviations section."
+  [callables]
+  (let [th (get-in score/thresholds [:erosion :cc])
+        total (reduce + 0.0 (map mass callables))]
+    (when (pos? total)
+      (/ (reduce + 0.0 (map mass (filter (fn [c] (> (:cc c) th)) callables)))
+         total))))
+
+(defn verbosity
+  "Verbosity (CLONE-ONLY) = duplicated code lines / LOC.
+
+   The paper's numerator is the union of ast-grep-flagged lines and clone
+   lines, from 137 hand-authored rules we have no equivalent of, so one of
+   the two sets is empty for us. This number is therefore a LOWER BOUND on
+   the paper's metric and must never be printed against its baselines
+   without that caveat.
+
+   Both sides are LOC: the numerator is `quality.dup/duplicated-lines`
+   (token-bearing lines inside the union of duplicate regions) and the
+   denominator is the same `:loc` the rest of the report uses. Returns nil
+   when there is no code to divide by."
+  [dup-lines loc]
+  (when (and loc (pos? loc))
+    (min 1.0 (/ (double (or dup-lines 0)) loc))))
+
+(defn squash
+  "A rate turned into a bounded term: `v / (v + k)`.
+
+   In [0, 1), zero at zero, strictly monotone, and its derivative is never
+   zero -- diminishing returns rather than a cliff. `k` is calibrated so the
+   metric's existing `bad` threshold lands on exactly 0.5, which preserves
+   the meaning already encoded in `thresholds`."
+  [v k]
+  (let [v (max 0.0 (double v))]
+    (if (pos? (+ v k)) (/ v (+ v k)) 0.0)))
+
+(defn shortfall-squash
+  "`squash` for a metric where HIGHER is better: the squash applies to how
+   far `v` falls short of `good`, so meeting or beating `good` is exactly 0."
+  [v good k]
+  (squash (max 0.0 (- (double good) v)) k))
