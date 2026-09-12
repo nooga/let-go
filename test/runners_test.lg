@@ -1,0 +1,142 @@
+(ns test.runners-test
+  (:require
+   [quiet-helper :refer [quiet]]
+   [test :refer :all]))
+
+;; All helper namespaces are defined up front, before test.runners-test's
+;; own deftests, so the namespace current when the file finishes loading is
+;; test.runners-test itself — the harness (spec 12.2) runs exactly that
+;; namespace, so a throwaway helper ns left current at the end would run
+;; its fixtures instead of this file's real tests.
+
+;; A throwaway namespace with two tests and fixtures, built at load time.
+(ns test.runners-test.subject (:require [test :refer :all]))
+(def log (atom []))
+(use-fixtures :once (fn [f] (swap! log conj :once-in) (f) (swap! log conj :once-out)))
+(use-fixtures :each (fn [f] (swap! log conj :each) (f)))
+(deftest t-pass (is (= 1 1)))
+(deftest t-fail (is (= 1 2)))
+
+;; Hoisted to top level: `ns` inside a deftest body cannot forward-resolve
+;; the namespace-qualified symbols the test then refers to (macroexpansion
+;; happens before the (ns ...) call runs), per Task 13's brief fallback.
+(ns test.runners-test.hooked (:require [test :refer :all]))
+(def hook-log (atom []))
+(use-fixtures :each (fn [f] (swap! hook-log conj :fixture) (f)))
+(deftest hooked-test (swap! hook-log conj :ran))
+(defn test-ns-hook [] (hooked-test))
+
+;; The spec's whole-namespace zero-arg run cannot be exercised on
+;; test.runners-test itself: that namespace's own tests are mid-run when
+;; this one executes, so a nested (run-tests) here would discover this very
+;; test var among its interns and recurse into it forever. Per the brief's
+;; documented fallback, exercise the zero-arg default-to-current-ns
+;; behavior — and run-all-tests's no-match arity, which per Clojure 1.12.5
+;; falls back to the 0-arity (current ns), not {:type :summary} — on a
+;; throwaway namespace switched into with in-ns instead.
+(ns test.runners-test.zeroarg (:require [test :refer :all]))
+(deftest zeroarg-t-pass (is (= 1 1)))
+
+;; I3 regression fixture: test-ns must resolve test-ns-hook via find-var
+;; (interned in the namespace itself), not ns-resolve (which also sees
+;; referred vars). hook-owner defines a real test-ns-hook; hook-referrer
+;; refers hook-owner with :refer :all and defines none of its own — so
+;; hook-referrer's own referred test-ns-hook symbol resolves via ns-resolve
+;; but is NOT interned in hook-referrer itself, and find-var must not see it.
+(ns test.runners-test.hook-owner (:require [test :refer :all]))
+(def owner-hook-log (atom []))
+(defn test-ns-hook [] (swap! owner-hook-log conj :owner-hook-ran))
+
+(ns test.runners-test.hook-referrer
+  (:require [test :refer :all]
+            [test.runners-test.hook-owner :refer :all]))
+(def referrer-log (atom []))
+(deftest referrer-test (swap! referrer-log conj :ran))
+
+(ns test.runners-test)
+
+(deftest fixtures-are-per-namespace-metadata
+  (let [m (meta (find-ns 'test.runners-test.subject))]
+    (is (= 1 (count (:test/once-fixtures m))))
+    (is (= 1 (count (:test/each-fixtures m))))
+    (is (nil? (:test/each-fixtures (meta *ns*))))))
+
+(deftest run-tests-returns-summary-and-runs-fixtures
+  (reset! test.runners-test.subject/log [])
+  (let [summary (quiet #(run-tests 'test.runners-test.subject))]
+    (is (= {:test 2 :pass 1 :fail 1 :error 0 :type :summary} summary))
+    (is (not (successful? summary)))
+    (is (= [:once-in :each :each :once-out] @test.runners-test.subject/log))))
+
+(deftest run-tests-events-are-ordered
+  (let [events (atom [])]
+    (binding [report (fn [m] (swap! events conj (:type m)))]
+      (run-tests 'test.runners-test.subject))
+    (is (= :begin-test-ns (first @events)))
+    (is (= [:end-test-ns :summary] (take-last 2 @events)))
+    (is (= 2 (count (filter #{:begin-test-var} @events))))))
+
+(deftest run-test-var-runs-one
+  (let [summary (quiet #(run-test-var (var test.runners-test.subject/t-pass)))]
+    (is (= {:test 1 :pass 1 :fail 0 :error 0 :type :summary} summary))))
+
+(deftest run-test-macro
+  (is (= 1 (:test (quiet #(run-test test.runners-test.subject/t-pass))))))
+
+(deftest run-all-tests-filters-with-re-matches
+  (is (= 2 (:test (quiet #(run-all-tests #"test\.runners-test\.subject")))))
+  ;; Clojure 1.12.5: a non-matching regex leaves run-tests with zero
+  ;; namespace args, so it falls back to the 0-arity (current ns) — it does
+  ;; NOT return a bare {:type :summary}. Exercise that from the throwaway
+  ;; zeroarg ns, which has exactly one passing deftest, so the fallback is
+  ;; observable without recursing into this file's own in-flight run.
+  ;; nil is a deliberate leading no-op: a compiler quirk mistakes a literal
+  ;; (in-ns ...) as the very first form of a nested body for a top-level
+  ;; namespace switch, shifting compile-time *ns* for the REST OF THIS
+  ;; FILE rather than just this closure's own runtime *ns* — confirmed by
+  ;; isolated repro. Any leading form defeats the misdetection.
+  (let [orig-ns *ns*]
+    nil
+    (in-ns 'test.runners-test.zeroarg)
+    (try
+      (is (= {:test 1 :pass 1 :fail 0 :error 0 :type :summary}
+             (quiet #(run-all-tests #"no-such-ns-anywhere"))))
+      (finally (in-ns (ns-name orig-ns))))))
+
+(deftest test-ns-hook-bypasses-fixtures
+  (reset! test.runners-test.hooked/hook-log [])
+  (quiet #(run-tests 'test.runners-test.hooked))
+  (is (= [:ran] @test.runners-test.hooked/hook-log)))
+
+(deftest test-ns-hook-does-not-leak-across-refer-all
+  ;; A namespace that (:refer :all)s another namespace defining test-ns-hook
+  ;; must NOT run that other namespace's hook — test-ns has to look up
+  ;; test-ns-hook the way Clojure's find-var does (interned locally), not
+  ;; the way ns-resolve does (also sees referred vars). Before the fix, this
+  ;; test failed: running hook-referrer invoked hook-owner's hook instead of
+  ;; falling back to test-all-vars on hook-referrer's own referrer-test.
+  (reset! test.runners-test.hook-owner/owner-hook-log [])
+  (reset! test.runners-test.hook-referrer/referrer-log [])
+  (quiet #(run-tests 'test.runners-test.hook-referrer))
+  (is (= [] @test.runners-test.hook-owner/owner-hook-log)
+      "hook-referrer's run must not invoke hook-owner's test-ns-hook")
+  (is (= [:ran] @test.runners-test.hook-referrer/referrer-log)
+      "hook-referrer's own test must run via the test-all-vars fallback"))
+
+(deftest run-tests-no-args-runs-current-ns
+  ;; The spec's whole-namespace zero-arg run cannot be exercised on
+  ;; test.runners-test itself: that namespace's own tests are mid-run when
+  ;; this test executes, so a nested (run-tests) here would discover this
+  ;; very test var among its interns and recurse into it forever. Exercise
+  ;; the zero-arg default-to-current-ns behavior on the throwaway zeroarg
+  ;; namespace instead, switched into with in-ns.
+  ;; See the leading nil in run-all-tests-filters-with-re-matches above for
+  ;; why the (in-ns ...) below can't be the first form of the let body.
+  (let [orig-ns *ns*]
+    nil
+    (in-ns 'test.runners-test.zeroarg)
+    (try
+      (is (= 'test.runners-test.zeroarg (ns-name *ns*)))
+      (is (= {:test 1 :pass 1 :fail 0 :error 0 :type :summary}
+             (quiet #(run-tests))))
+      (finally (in-ns (ns-name orig-ns))))))

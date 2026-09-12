@@ -17,6 +17,31 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
+// invokeMacro runs a macro expander with core/*macro-form* bound to the
+// call form, which defmacro exposes as &form. The binding is pushed on the
+// root binding stack (package-level Var API) because the compiler has no
+// ExecContext of its own; expansion is synchronous so push/pop pair here.
+func invokeMacro(macroVar *vm.Var, callForm vm.Value, args []vm.Value) (vm.Value, error) {
+	if mf := macroFormVar(); mf != nil {
+		mf.PushBinding(callForm)
+		defer mf.PopBinding()
+	}
+	return macroVar.Deref().(vm.Fn).Invoke(args)
+}
+
+var macroFormVarCache *vm.Var
+
+func macroFormVar() *vm.Var {
+	if macroFormVarCache == nil {
+		if ns := rt.NS(rt.NameCoreNS); ns != nil {
+			if v := ns.LookupLocal(vm.Symbol("*macro-form*")); v != nil {
+				macroFormVarCache = v
+			}
+		}
+	}
+	return macroFormVarCache
+}
+
 type Context struct {
 	parent     *Context
 	consts     *vm.Consts
@@ -758,7 +783,7 @@ func (c *Context) compileForm(o vm.Value) error {
 						}
 					}
 				}
-				newform, err := fvar.(*vm.Var).Deref().(vm.Fn).Invoke(argvec)
+				newform, err := invokeMacro(fvar.(*vm.Var), o, argvec)
 				if err != nil {
 					return NewCompileError(fmt.Sprintf("Executing macro %s (%s) failed", fvar, fvar.(*vm.Var).Deref())).Wrap(err)
 				}
@@ -2206,6 +2231,15 @@ func defCompiler(c *Context, form vm.Value) error {
 		meta = assocMeta(meta, vm.Keyword("column"), vm.MakeInt(info.Column+1))
 		meta = assocMeta(meta, vm.Keyword("file"), vm.String(info.File))
 	}
+	// :name, as Clojure's def attaches it (spec 4.4). A vm.Symbol constant
+	// serializes fine into an AOT bundle (see pkg/bytecode/encoder.go), so it
+	// is baked here like :file/:line/:column. :ns is NOT added here: it would
+	// need a *vm.Namespace bundle constant, which the encoder has no case
+	// for, so it is attached at runtime instead — see rt.ApplyVarMeta, which
+	// derives it from the Var's own NSRef() and therefore covers both the
+	// immediate apply below and the bytecode-replayed apply-def-meta! call
+	// (fresh process decoding a .lgb bundle).
+	meta = assocMeta(meta, vm.Keyword("name"), sym)
 	c.defName = sym.String()
 	varr := c.CurrentNS().LookupOrAdd(sym.(vm.Symbol))
 	if meta != vm.NIL {

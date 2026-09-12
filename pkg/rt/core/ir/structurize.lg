@@ -355,8 +355,9 @@
       ;; :else fallback below and degrade to an unstructured :goto, which
       ;; is a silent miscompile risk rather than a visible regression.
       (= op :tail-call)
-      (throw (str "ir/structurize: unexpected :tail-call terminator in block "
-                  b " — build.lg emits :recur-fn for function-level recur"))
+      (throw (ex-info (str "ir/structurize: unexpected :tail-call terminator in block "
+                           b " — build.lg emits :recur-fn for function-level recur")
+                      {:fn :structurize :type (type b) :value b}))
 
       (= op :branch)
       (let [edge (ir/aux term f)]

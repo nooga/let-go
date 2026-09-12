@@ -1,0 +1,25 @@
+(ns test.testing-are-test
+  (:require
+   [test :refer :all]))
+
+(deftest testing-binds-contexts-and-prints-nothing
+  (binding [report (fn [_])]
+    (is (= "A B" (testing "A" (testing "B" (testing-contexts-str)))))
+    (is (= "" (with-out-str (testing "loud" nil))))
+    (is (empty? *testing-contexts*))))
+
+(deftest testing-context-reaches-the-event
+  (let [events (atom [])]
+    (binding [report (fn [m] (swap! events conj m))]
+      (testing "ctx" (is (= 1 2))))
+    (is (= 1 (count @events)))))
+
+(deftest are-expands-to-is-per-row
+  (let [events (atom [])]
+    (binding [report (fn [m] (swap! events conj m))]
+      (are [x y] (= x y) 1 1 2 2 3 4))
+    (is (= [:pass :pass :fail] (map :type @events)))))
+
+(deftest are-rejects-mismatched-args
+  (is (thrown-with-msg? Throwable #"The number of args doesn't match are's argv\."
+        (macroexpand '(are [x y] (= x y) 1 2 3)))))

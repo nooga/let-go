@@ -23,6 +23,7 @@ import (
 	"github.com/nooga/let-go/pkg/compiler"
 	"github.com/nooga/let-go/pkg/gomod"
 	"github.com/nooga/let-go/pkg/resolver"
+	"github.com/nooga/let-go/pkg/rt"
 	wasmassets "github.com/nooga/let-go/pkg/rt/wasm"
 	"github.com/nooga/let-go/pkg/vm"
 )
@@ -171,13 +172,17 @@ addEventListener('fetch', e => {
 func buildWasm(ctx *compiler.Context, nsRes *resolver.NSResolver, src string, outDir string, shell bool, externalWasm bool, hostEval bool, storeID string, customShellTemplate string) error {
 	// 1. Compile .lg → .lgb in memory
 	ctx.SetSource(src)
-	f, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	chunk, _, err := ctx.CompileMultiple(f)
-	f.Close()
-	if err != nil {
+	var chunk *vm.CodeChunk
+	if err := rt.WithFile(src, func() error {
+		f, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		var cerr error
+		chunk, _, cerr = ctx.CompileMultiple(f)
+		f.Close()
+		return cerr
+	}); err != nil {
 		return err
 	}
 

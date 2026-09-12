@@ -116,9 +116,10 @@
 (defn- delegated-lower [op-kw f closed-exprs nid]
   (let [impl (get (deref lower-impls) op-kw)]
     (when (nil? impl)
-      (throw (str "ir.ops: op " op-kw " has the lower? facet but no "
-                  "registered impl — ir.lower-go must load (and call "
-                  "register-lower-impl!) before lowering")))
+      (throw (ex-info (str "ir.ops: op " op-kw " has the lower? facet but no "
+                           "registered impl — ir.lower-go must load (and call "
+                           "register-lower-impl!) before lowering")
+                      {:fn :delegated-lower :type (type op-kw) :value op-kw})))
     (impl f closed-exprs nid)))
 
 ;; --- op-types -----------------------------------------------------------
@@ -128,9 +129,10 @@
 ;; reaching that throw means the catalog and this file drifted.
 
 (defn- no-lower-facet [op-kw]
-  (throw (str "ir.ops: op " op-kw " has no reified lower facet — "
-              "lower-inst-stmts must not dispatch here (check the lower? "
-              "column in pkg/ir/ir_ops.lg)")))
+  (throw (ex-info (str "ir.ops: op " op-kw " has no reified lower facet — "
+                       "lower-inst-stmts must not dispatch here (check the lower? "
+                       "column in pkg/ir/ir_ops.lg)")
+                  {:fn :no-lower-facet :type (type op-kw) :value op-kw})))
 
 (deftype ConstOp []
   IROp
@@ -306,17 +308,19 @@
     (= op :unchecked-mul) (op-infer (->UncheckedOp) inst f state)
     (= op :quot)        (op-infer (->QuotOp) inst f state)
     (= op :div)         (op-infer (->DivOp) inst f state)
-    :else (throw (str "ir.ops/infer-op: op " op " has the infer? facet in "
-                      "pkg/ir/ir_ops.lg but no devirtualized arm here — add "
-                      "the arm and the op-registry entry"))))
+    :else (throw (ex-info (str "ir.ops/infer-op: op " op " has the infer? facet in "
+                               "pkg/ir/ir_ops.lg but no devirtualized arm here — add "
+                               "the arm and the op-registry entry")
+                          {:fn :infer-op :type (type op) :value op}))))
 
 (defn lower-op [op f closed-exprs nid]
   (cond
     (= op :const) (op-lower-stmts (->ConstOp) f closed-exprs nid)
     (= op :try)   (op-lower-stmts (->TryOp) f closed-exprs nid)
-    :else (throw (str "ir.ops/lower-op: op " op " has the lower? facet in "
-                      "pkg/ir/ir_ops.lg but no devirtualized arm here — add "
-                      "the arm and the op-registry entry"))))
+    :else (throw (ex-info (str "ir.ops/lower-op: op " op " has the lower? facet in "
+                               "pkg/ir/ir_ops.lg but no devirtualized arm here — add "
+                               "the arm and the op-registry entry")
+                          {:fn :lower-op :type (type op) :value op}))))
 
 ;; --- catalog coherence (exhaustiveness) --------------------------------
 ;;
@@ -333,10 +337,11 @@
       true
       (let [missing (vec (filter (fn [k] (not (contains? registered k))) facet-kws))
             extra   (vec (filter (fn [k] (not (contains? facet-kws k))) registered))]
-        (throw (str "ir.ops: catalog/registry drift —"
-                    (if (seq missing)
-                      (str " facet'd ops in pkg/ir/ir_ops.lg missing from op-registry: " missing)
-                      "")
-                    (if (seq extra)
-                      (str " op-registry entries without a facet column in pkg/ir/ir_ops.lg: " extra)
-                      "")))))))
+        (throw (ex-info (str "ir.ops: catalog/registry drift —"
+                             (if (seq missing)
+                               (str " facet'd ops in pkg/ir/ir_ops.lg missing from op-registry: " missing)
+                               "")
+                             (if (seq extra)
+                               (str " op-registry entries without a facet column in pkg/ir/ir_ops.lg: " extra)
+                               ""))
+                        {:fn :catalog-coherent? :type (type missing) :value missing}))))))

@@ -1,0 +1,10 @@
+(ns test.ex-message-test
+  (:require
+   [test :refer :all]))
+
+(deftest ex-message-on-non-exceptions
+  (is (= "s" (try (throw "s") (catch Throwable e (ex-message e)))))
+  (is (= ":kw" (try (throw :kw) (catch Throwable e (ex-message e)))))
+  (is (= "[1 2]" (try (throw [1 2]) (catch Throwable e (ex-message e)))))
+  (is (= "boom" (ex-message (ex-info "boom" {}))))
+  (is (nil? (ex-message nil))))

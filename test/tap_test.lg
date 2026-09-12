@@ -1,0 +1,74 @@
+(ns test.tap-test
+  (:require
+   [clojure.string :as str]
+   [clojure.test.tap :refer [print-tap-diagnostic print-tap-fail print-tap-pass print-tap-plan with-tap-output]]
+   [test :refer :all]))
+
+(defn- out-of [f] (with-out-str (f)))
+
+(deftest diagnostic-split-semantics
+  (is (= "# a\n# b\n" (out-of #(print-tap-diagnostic "a\nb"))))
+  (is (= "# \n" (out-of #(print-tap-diagnostic ""))))
+  (is (= "# a\n" (out-of #(print-tap-diagnostic "a\n"))))
+  (is (= "# a\n" (out-of #(print-tap-diagnostic "a\n\n"))))
+  (is (= "" (out-of #(print-tap-diagnostic "\n"))))
+  (is (= "# a\n# \n# b\n" (out-of #(print-tap-diagnostic "a\n\nb"))))
+  (is (= "#  a \n" (out-of #(print-tap-diagnostic " a ")))))
+
+(defn- quietly
+  "Run f, discarding whatever it prints to *out* but keeping its return
+   value — same discard-output-keep-effect mechanism as run_test_var_test.lg
+   and thrown_test.lg's `quiet` and report_events_test.lg's `capture-out`,
+   applied here to a plain *out*-printing fn instead of one that goes
+   through *test-out*/report."
+  [f]
+  (let [result (atom nil)]
+    (with-out-str (reset! result (f)))
+    @result))
+
+(deftest pass-fail-plan
+  (is (= "ok m\n" (out-of #(print-tap-pass "m"))))
+  (is (= "not ok m\n" (out-of #(print-tap-fail "m"))))
+  (is (= "1..0\n" (out-of #(print-tap-plan 0))))
+  (is (nil? (quietly #(print-tap-pass "x"))))
+  (is (thrown? ExceptionInfo (print-tap-plan -1))))
+
+(ns test.tap-test.example (:require [test :refer :all]))
+(deftest math-test
+  (testing "simple addition"
+    (is (= 4 (+ 2 2)))
+    (is (= 5 (+ 2 3))))
+  (testing "deliberate-failure-test"
+    (is (= 10 (+ 5 4)) "This assertion will fail intentionally")))
+(ns test.tap-test)
+
+(deftest with-tap-output-run
+  (let [b (io/buffer)
+        summary (binding [*test-out* b]
+                  (with-tap-output (run-tests 'test.tap-test.example)))
+        lines (str/split-lines (io/buffer-str b))]
+    (is (= {:test 1 :pass 2 :fail 1 :error 0 :type :summary} summary))
+    (is (= 2 (count (filter #(str/starts-with? % "ok ") lines))))
+    (is (= 1 (count (filter #(str/starts-with? % "not ok ") lines))))
+    (is (= "1..3" (last (remove str/blank? lines))))
+    (is (some #(= % "# {:type :begin-test-var, :var #'test.tap-test.example/math-test}") lines))
+    (is (some #(= % "# simple addition") lines))
+    (is (some #(= % "# expected:(= 4 (+ 2 2))") lines))
+    (is (some #(= % "#   actual:(= 4 4)") lines))
+    (is (some #(= % "# This assertion will fail intentionally") lines))
+    (is (some #(= % "#   actual:(not (= 10 9))") lines))))
+
+(deftest report-reverts-after-with-tap-output
+  ;; *testing-vars* rebound to () here: this .lg file's own tests run
+  ;; through the harness's run-tests -> test-var* -> *testing-vars*
+  ;; machinery too, so without this the nested run-tests call below would
+  ;; inherit "report-reverts-after-with-tap-output" onto the stack and
+  ;; testing-vars-str would print "(report-reverts-after-with-tap-output
+  ;; math-test)" instead of the JVM oracle's "(math-test)", which assumes
+  ;; run-tests is invoked from a bare top level, not nested inside another
+  ;; test var.
+  (let [b (io/buffer)]
+    (binding [*test-out* b *testing-vars* (list)]
+      (with-tap-output nil)
+      (run-tests 'test.tap-test.example))
+    (is (str/includes? (io/buffer-str b) "\nFAIL in (math-test)"))))

@@ -155,8 +155,9 @@
           (when (pos? junk)
             (swap! l update :block-junk assoc bid junk)))
       (when (not= cur junk)
-        (throw (str "ir/lower: junk-below mismatch for block " bid
-                    " (" cur " vs " junk "); unsupported shape"))))))
+        (throw (ex-info (str "ir/lower: junk-below mismatch for block " bid
+                             " (" cur " vs " junk "); unsupported shape")
+                        {:fn :lower :type (type bid) :value bid}))))))
 
 (defn- bump-max-stack! [l]
   "If current runtime SP (= lower-sp + current block's junk-below)
@@ -232,11 +233,12 @@
                   (let [user-block (ir/block-of user-id f)]
                     (when (and (not= user-block def-block)
                                (not (is-terminator-branch-arg-use? user-id i f)))
-                      (throw (str "ir/lower: cross-block use of value %"
-                                  i " via direct Refs (defined in block "
-                                  def-block ", used in block " user-block
-                                  ") — only branch-target args may cross blocks; "
-                                  "see follow-up issue D"))))))))))
+                      (throw (ex-info (str "ir/lower: cross-block use of value %"
+                                        i " via direct Refs (defined in block "
+                                        def-block ", used in block " user-block
+                                        ") — only branch-target args may cross blocks; "
+                                        "see follow-up issue D")
+                               {:fn :lower :type (type i) :value i}))))))))))
       (recur (inc i)))))
 
 ;; --- heuristics ------------------------------------------------------
@@ -493,8 +495,9 @@
           (do (emit-with-arg! l nid :load-closed (int aux))
               (bump-stack-sp! l 1)
               (bump-max-stack! l))
-          (throw (str "ir/lower: value %" nid
-                      " not on stack for materialize (op=" op ")")))))))
+          (throw (ex-info (str "ir/lower: value %" nid
+                               " not on stack for materialize (op=" op ")")
+                          {:fn :lower :type (type nid) :value nid})))))))
 
 ;; --- per-op emission -------------------------------------------------
 
@@ -677,7 +680,7 @@
       (do (emit! l nid :push-closed)
           (bump-stack-sp! l -1))  ; 2 in, 1 out
 
-      (throw (str "ir/lower: unsupported op for lowering: " op)))))
+      (throw (ex-info (str "ir/lower: unsupported op for lowering: " op) {:fn :lower :type (type op) :value op})))))
 
 ;; --- block-level emission --------------------------------------------
 
@@ -996,7 +999,7 @@
    success; throws on cross-block direct-Refs uses (only branch-arg
    uses may cross blocks)."
   (when (nil? f)
-    (throw "ir/lower: nil function"))
+    (throw (ex-info "ir/lower: nil function" {:fn :lower :type (type f) :value f})))
   (let [l (new-lowerer f)]
     (check-cross-block! f (:uses @l))
     (let [order   (rpo-block-order f)

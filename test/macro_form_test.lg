@@ -1,0 +1,20 @@
+;; test/macro_form_test.lg
+(ns test.macro-form-test
+  (:require
+   [test :refer :all]))
+
+(defmacro capture-form [& _] `(quote ~&form))
+(defmacro capture-line [& _] (:line (meta &form)))
+(defmacro capture-env [& _] `(quote ~&env))
+
+(deftest form-is-the-call-form
+  (is (= '(capture-form 1 2) (capture-form 1 2))))
+
+(deftest form-has-line-metadata
+  (is (= 14 (capture-line))))
+
+(deftest env-is-nil
+  (is (nil? (capture-env))))
+
+(deftest nested-macros-see-their-own-form
+  (is (= '(capture-form (capture-form x)) (capture-form (capture-form x)))))

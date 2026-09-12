@@ -108,8 +108,19 @@
                              (swap! calls inc)
                              (apply original args))]
         (is (= false (rt/native-prims-intact?)))
-        (is (= {:a [:a :a] :b [:b]} (group-by identity [:a :b :a])))
-        (is (= 1 @calls)))
+        ;; Capture the count into locals IMMEDIATELY before and after
+        ;; group-by, before any OTHER assertion runs — clojure.test's own
+        ;; machinery (is, assert-predicate, do-report) calls reduce
+        ;; internally (e.g. via str/join), so any `is` between group-by and
+        ;; the read would pollute the instrumented count with its own
+        ;; reduce calls. Asserting the delta rather than the raw total keeps
+        ;; this immune to however many reduce calls clojure.test's own
+        ;; machinery happens to make before group-by runs.
+        (let [before @calls
+              result (group-by identity [:a :b :a])
+              after @calls]
+          (is (= {:a [:a :a] :b [:b]} result))
+          (is (= 1 (- after before)))))
       ;; with-redefs unwound: canonical root restored, fast path resumes
       (is (= true (rt/native-prims-intact?)))
       (is (= 6 (reduce + [1 2 3])))))

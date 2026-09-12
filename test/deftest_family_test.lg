@@ -1,0 +1,43 @@
+(ns test.deftest-family-test
+  (:require
+   [test :refer :all]))
+
+(deftest sample (is (= 1 1)))
+(deftest- private-sample (is (= 1 1)))
+(with-test (defn adder [a b] (+ a b)) (is (= 3 (adder 1 2))))
+(defn plain [] 1)
+(set-test plain (is (= 1 (plain))))
+
+(deftest test-metadata-is-the-marker
+  (is (fn? (:test (meta (var sample)))))
+  (is (fn? (:test (meta (var adder)))))
+  (is (fn? (:test (meta (var plain)))))
+  (is (:private (meta (var private-sample))))
+  (is (not (contains? (ns-publics 'test.deftest-family-test) 'private-sample))))
+
+(deftest calling-the-var-runs-through-test-var
+  (let [events (atom [])]
+    (binding [report (fn [m] (swap! events conj m))
+              *report-counters* (ref *initial-report-counters*)]
+      (sample)
+      (is (= [:begin-test-var :pass :end-test-var] (map :type @events)))
+      (is (= (var sample) (:var (first @events))))
+      (is (= {:test 1 :pass 1 :fail 0 :error 0} @*report-counters*)))))
+
+(deftest uncaught-throw-is-an-error-event
+  (deftest boom (throw (ex-info "kaboom" {})))
+  (let [events (atom [])]
+    (binding [report (fn [m] (swap! events conj m))]
+      (test-var (var boom)))
+    (is (= [:begin-test-var :error :end-test-var] (map :type @events)))
+    (is (= "Uncaught exception, not in assertion." (:message (second @events))))
+    (is (nil? (:expected (second @events))))))
+
+(defn plain-non-test [] 1)
+
+(deftest test-var-on-non-test-is-nil
+  (is (nil? (test-var (var plain-non-test))))
+  (is (nil? (:test (meta (var plain-non-test))))))
+
+(deftest load-tests-false-elides
+  (is (nil? (binding [*load-tests* false] (macroexpand '(deftest gone (is true)))))))

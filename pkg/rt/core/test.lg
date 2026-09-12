@@ -1,243 +1,455 @@
 (ns test
-  (:require [walk :refer [postwalk-replace]]))
+  (:require
+   [clojure.string :as str]
+   [walk :refer [postwalk-replace]]))
 
-(def ^:dynamic *test-result* true)
-(def ^:dynamic *testing-contexts* [])
-(def ^:dynamic *testing-vars* [])
+;;; ---- Dynamic vars (spec 3.3) ------------------------------------------
 
-(def ^:dynamic *report-counters* {:test 0 :pass 0 :fail 0 :error 0})
-(def ^:dynamic *registered-tests* {})
-(def ^:dynamic *each-fixtures* [])
-(def ^:dynamic *once-fixtures* [])
+(def ^:dynamic *load-tests* true)
+(def ^:dynamic *stack-trace-depth* nil)
+(def ^:dynamic *report-counters* nil)
+(def ^:dynamic *initial-report-counters* {:test 0 :pass 0 :fail 0 :error 0})
+(def ^:dynamic *testing-vars* (list))
+(def ^:dynamic *testing-contexts* (list))
 
-(defn clear-registered-tests! []
-  (set! *registered-tests* {}))
+;; Bound by try-expr to the is form's {:file :line}; the only source of a
+;; :fail event's position (spec 10.1).
+(def ^:dynamic *assertion-position* nil)
 
-(defn register-test! [v]
-  (let [n *ns*
-        xs (get *registered-tests* n [])]
-    ;; Register each var once. Re-evaluating a deftest — sending it to the
-    ;; REPL again after an edit — hands us the same var, and appending it
-    ;; a second time would make run-tests run and count that test twice.
-    (when-not (some (fn [x] (= x v)) xs)
-      (set! *registered-tests* (assoc *registered-tests* n (conj xs v))))))
+;; Captured once from the host stdout (or the *out* root) so reporter output
+;; is not swallowed by with-out-str around a runner (spec 10.2).
+(def ^:dynamic *test-out* nil)
+(register-test-out (var *test-out*))
 
-(defmacro deftest [name & body]
-  `(do
-     (def ~name (fn []
-                  (set! *testing-vars* (conj *testing-vars* '~name))
-                  (let [ret# (do ~@body)]
-                    (set! *testing-vars* (pop *testing-vars*))
-                    ret#)))
-     ;; The same keys Clojure puts on a test var, attached at evaluation
-     ;; time so :ns is the namespace the test was defined in. run-test-var
-     ;; reads :ns to run a single test inside its own namespace, and :test
-     ;; holds the test fn itself — as in clojure.test, where the runner
-     ;; invokes (:test (meta v)).
-     (alter-meta! (var ~name) assoc :ns *ns* :name '~name :test ~name)
-     (register-test! (var ~name))))
+(defmacro with-test-out [& body]
+  `(binding [*out* *test-out*] ~@body))
 
-(defn- thrown-form? [form]
-  (and (seq? form)
-       (or (= 'thrown? (first form))
-           (= 'thrown-with-msg? (first form)))))
+;;; ---- Helpers (spec 10.3) -------------------------------------------------
 
-(defn- expand-is-thrown
-  "Expansion for (is (thrown? Klass body...)) and
-   (is (thrown-with-msg? Klass re body...)). Passes when the body throws a
-   value satisfying (instance? Klass e) — and, for thrown-with-msg?, whose
-   ex-message matches re. A normal return counts as :fail; a thrown value
-   of the wrong class rethrows into the runner's catch and counts as
-   :error, matching clojure.test. On pass, returns the caught value."
-  [form msg]
-  (let [with-msg? (= 'thrown-with-msg? (first form))
-        klass (second form)
-        re (when with-msg? (nth form 2))
-        body (if with-msg? (drop 3 form) (drop 2 form))
-        ;; Explicit gensym rather than an `e#` auto-gensym. The catch
-        ;; binding and its uses below sit in SEPARATE syntax-quote forms,
-        ;; and auto-gensym numbering restarts per syntax quote, so two `e#`
-        ;; occurrences agree only by accident: they are both the first
-        ;; auto-gensym in their own form. Add another auto-gensym ahead of
-        ;; either one and the two names silently diverge. An explicit symbol
-        ;; threads through the unquotes and does not depend on that.
-        e (gensym "e__")
-        pass `(do
-                (set! *report-counters* (update *report-counters* :pass inc))
-                ~(if msg
-                   `(println "PASS" '~form "-" ~msg)
-                   `(println "PASS" '~form)))
-        fail `(do
-                (set! *report-counters* (update *report-counters* :fail inc))
-                (set! *test-result* false)
-                ~(if msg
-                   `(println "FAIL" '~form "-" ~msg)
-                   `(println "FAIL" '~form))
-                false)]
-    `(try
-       ~@body
-       ~fail
-       (catch ~e
-         (if (instance? ~klass ~e)
-           ~(if with-msg?
-              `(if (re-find ~re (ex-message ~e))
-                 (do ~pass ~e)
-                 ~fail)
-              `(do ~pass ~e))
-           (throw ~e))))))
+(defn inc-report-counter [name]
+  (when *report-counters*
+    (dosync (commute *report-counters* update-in [name] (fnil inc 0)))))
 
-(defmacro is
-  ([form]
-   (if (thrown-form? form)
-     (expand-is-thrown form nil)
-     `(if ~form
-        (do
-          (set! *report-counters* (update *report-counters* :pass inc))
-          (println "PASS" '~form)
-          true)
-        (do
-          (set! *report-counters* (update *report-counters* :fail inc))
-          (set! *test-result* false)
-          (println "FAIL" '~form)
-          false))))
-  ([form msg]
-   (if (thrown-form? form)
-     (expand-is-thrown form msg)
-     `(if ~form
-        (do
-          (set! *report-counters* (update *report-counters* :pass inc))
-          (println "PASS" '~form "-" ~msg)
-          true)
-        (do
-          (set! *report-counters* (update *report-counters* :fail inc))
-          (set! *test-result* false)
-          (println "FAIL" '~form "-" ~msg)
-          false)))))
-
-(defn compose-fixtures
-  "Compose two fixture fns into one that wraps f around g around the test fn."
-  [f g]
-  (fn [t] (f (fn [] (g t)))))
-
-(defn default-fixture
-  "Fixture that adds nothing: it just calls the test fn."
-  [t]
-  (t))
-
-(defn join-fixtures
-  "Compose a collection of fixture fns into a single fixture fn."
-  [fs]
-  (reduce compose-fixtures default-fixture fs))
-
-(defn- test-var*
-  "Run one test var inside *each-fixtures*, counting a thrown body as an
-   :error instead of letting it escape. Shared by run-tests and
-   run-test-var so a single-var run and a whole-suite run cannot drift.
-   Runs the fn in the var's :test metadata, as clojure.test does, and
-   falls back to the var's value for a plain fn var."
-  [tv]
-  (set! *testing-contexts* [])
-  (try
-    (let [test-fn (or (:test (meta tv)) (deref tv))]
-      ((join-fixtures *each-fixtures*) (fn [] (test-fn))))
-    (catch e
-      (set! *testing-contexts* [])
-      (set! *report-counters* (update *report-counters* :error inc))
-      (set! *test-result* false)
-      (println "ERROR in test:" e))))
-
-(defn run-tests [& nss]
-  (set! *report-counters* {:test 0 :pass 0 :fail 0 :error 0})
-  (set! *test-result* true)
-  (println "Running tests...")
-  ((join-fixtures *once-fixtures*)
-   (fn []
-     (if (seq nss)
-       (doseq [s nss]
-         (let [old-ns *ns*]
-           (in-ns s)
-           (doseq [t (get *registered-tests* *ns* [])]
-             (set! *report-counters* (update *report-counters* :test inc))
-             (test-var* t))
-           (in-ns (symbol (name old-ns)))))
-       ;; Run every registered ns's tests IN that ns, so runtime name
-       ;; resolution inside a test (resolve, *ns*, aliases) matches the ns
-       ;; the test was defined in — not whatever ns run-tests was called from.
-       ;; Keys are namespace objects, so derive the name via ns-name.
-       (doseq [[s bs] *registered-tests*]
-         (let [old-ns *ns*]
-           (in-ns (ns-name s))
-           (doseq [t bs]
-             (set! *report-counters* (update *report-counters* :test inc))
-             (test-var* t))
-           (in-ns (ns-name old-ns)))))))
-  (let [c *report-counters*]
-    (println "Finished running tests. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
-    (set! *test-result* (and (= 0 (:fail c)) (= 0 (:error c))))))
-
-(defn run-test-var
-  "Run a single test var and return the report counters
-   ({:test :pass :fail :error}). The var runs through the same
-   *once-fixtures* / *each-fixtures* composition as run-tests, and inside
-   the namespace it was defined in (:ns of its metadata, which deftest
-   attaches), so one test behaves the way the whole suite does. A thrown
-   test body counts as an :error rather than escaping. This is what editors
-   call to run the test under the cursor; see also the run-test macro.
-
-   The counters are bound, not set, for the duration of the run — as
-   clojure.test does — so running one test from inside another test, or
-   from a REPL in the middle of a suite, cannot overwrite the enclosing
-   run's tally or clear its failure flag."
-  [v]
-  (let [old-ns *ns*]
-    (binding [*report-counters* {:test 1 :pass 0 :fail 0 :error 0}
-              *test-result* true
-              *testing-contexts* []]
-      (in-ns (ns-name (or (:ns (meta v)) *ns*)))
-      (try
-        ((join-fixtures *once-fixtures*) (fn [] (test-var* v)))
-        (finally
-          (in-ns (ns-name old-ns))))
-      (let [c *report-counters*]
-        (println "Finished running test. Tests:" (:test c) "Pass:" (:pass c) "Fail:" (:fail c) "Error:" (:error c))
-        c))))
-
-(defmacro run-test
-  "Run the named test and return its report counters:
-   (run-test my-test). Sugar for (run-test-var (var my-test))."
-  [name]
-  `(run-test-var (var ~name)))
+(defn testing-vars-str [m]
+  (let [{:keys [file line]} m]
+    (str "(" (str/join " " (reverse (map (comp :name meta) *testing-vars*))) ")"
+         " (" file ":" line ")")))
 
 (defn testing-contexts-str []
-  (str (apply str (interpose " > " *testing-contexts*))))
+  (str/join " " (reverse *testing-contexts*)))
 
-(defmacro testing [description & body]
-  `(do
-     (set! *testing-contexts* (conj *testing-contexts* ~description))
-     (println "Testing:" (testing-contexts-str))
-     (let [ret# (do ~@body)]
-       (set! *testing-contexts* (pop *testing-contexts*))
-       ret#)))
+(defn get-possibly-unbound-var [v]
+  (try (var-get v)
+       (catch Throwable _ nil)))
 
+(defn successful? [summary]
+  (and (zero? (:fail summary 0))
+       (zero? (:error summary 0))))
 
-(defn apply-template
-  [argv expr values]
+;;; ---- Positions (spec 10.1) ------------------------------------------------
+
+(defn- fail-position []
+  (or *assertion-position*
+      (let [v (first *testing-vars*)]
+        (when (and v (:line (meta v)))
+          {:file (:file (meta v)) :line (:line (meta v))}))
+      {:file nil :line nil}))
+
+(defn- internal-frame? [f]
+  (let [n (str (:fn f))]
+    (or (str/starts-with? n "test/")
+        (str/starts-with? n "clojure.test/")
+        (contains? #{"apply" "partial" "map" "reduce" "sort" "sort-by"} n)
+        (str/starts-with? n "core/-dispatch")
+        (str/starts-with? n "clojure.core/-dispatch"))))
+
+(defn- error-position [thrown]
+  (let [frames (drop-while internal-frame?
+                           (or (when (resolve 'ex-trace) ((resolve 'ex-trace) thrown)) []))]
+    (if (seq frames)
+      {:file (:file (first frames)) :line (:line (first frames))}
+      (fail-position))))
+
+;;; ---- report (spec 3.1, 10.4) ---------------------------------------------
+
+(defn render-actual [v]
+  ;; Slice 1 adds trace rendering; until then every thrown value prints
+  ;; with prn, which is also what Clojure prints for a value with no trace.
+  (prn v))
+
+(defmulti ^:dynamic report :type)
+
+(defmethod report :default [m]
+  (with-test-out (prn m)))
+
+(defmethod report :pass [m]
+  (with-test-out (inc-report-counter :pass)))
+
+(defmethod report :fail [m]
+  (with-test-out
+    (inc-report-counter :fail)
+    (println "\nFAIL in" (testing-vars-str m))
+    (when (seq *testing-contexts*) (println (testing-contexts-str)))
+    (when-let [message (:message m)] (println message))
+    (println "expected:" (pr-str (:expected m)))
+    (println "  actual:" (pr-str (:actual m)))))
+
+(defmethod report :error [m]
+  (with-test-out
+    (inc-report-counter :error)
+    (println "\nERROR in" (testing-vars-str m))
+    (when (seq *testing-contexts*) (println (testing-contexts-str)))
+    (when-let [message (:message m)] (println message))
+    (println "expected:" (pr-str (:expected m)))
+    (print "  actual: ")
+    (render-actual (:actual m))))
+
+(defmethod report :summary [m]
+  (with-test-out
+    (println "\nRan" (:test m) "tests containing"
+             (+ (:pass m) (:fail m) (:error m)) "assertions.")
+    (println (:fail m) "failures," (:error m) "errors.")))
+
+(defmethod report :begin-test-ns [m]
+  (with-test-out
+    (println "\nTesting" (ns-name (:ns m)))))
+
+(defmethod report :end-test-ns [m])
+(defmethod report :begin-test-var [m])
+(defmethod report :end-test-var [m])
+
+(defn do-report [m]
+  (report
+    (case (:type m)
+      :fail (merge (fail-position) m)
+      :error (merge (error-position (:actual m)) m)
+      m)))
+
+;;; ---- Running one var (spec 9.1) ---------------------------------------
+
+;; Defined ahead of deftest et al (spec 7 below), which reference test-var
+;; inside their own syntax-quote templates: this dialect's syntax-quote
+;; only namespace-qualifies a symbol it can already resolve at the point
+;; the enclosing form is read, so a forward reference here would splice a
+;; bare, unqualified `test-var` into every macroexpansion — resolvable
+;; only in a caller that happens to `(:require [test :refer :all])`, and a
+;; "Can't resolve test-var in this context" compile error in any caller
+;; that requires test some other way (e.g. `[clojure.test :as t]`).
+
+(defn test-var*
+  "Run one test var, as clojure.test's test-var does: emits :begin-test-var,
+   counts it, runs the fn under its :test metadata (catching any escaping
+   throw as an :error rather than letting it propagate), then emits
+   :end-test-var. A var with no :test metadata is not a test — returns nil
+   without reporting anything."
+  [v]
+  (when-let [t (:test (meta v))]
+    (binding [*testing-vars* (conj *testing-vars* v)]
+      (do-report {:type :begin-test-var :var v})
+      (inc-report-counter :test)
+      (try (t)
+           (catch Throwable e
+             (do-report {:type :error
+                         :message "Uncaught exception, not in assertion."
+                         :expected nil :actual e})))
+      (do-report {:type :end-test-var :var v}))))
+
+(def ^:dynamic test-var test-var*)
+
+;;; ---- Defining tests (spec 7) -----------------------------------------
+
+;; def's metadata-map form (`(def ^{:k v} name val)`) takes its map as a
+;; literal constant — the compiler reads it straight off the form (see
+;; compiler.go's defCompiler) rather than evaluating it, so a :test entry
+;; built there would hold an unevaluated `(fn [] ...)` list, not a callable
+;; fn. So deftest defines the var first, then attaches :test via
+;; alter-meta!, whose argument position is evaluated normally.
+
+(defmacro deftest
+  "Defines a test function with no arguments. Test functions may call other
+   tests, so tests may be composed. The var's :test metadata holds the body;
+   calling the var runs it through test-var with reporting."
+  [name & body]
+  (when *load-tests*
+    `(do (def ~name (fn [] (test-var (var ~name))))
+         (alter-meta! (var ~name) assoc :test (fn [] ~@body)))))
+
+(defmacro deftest-
+  "Like deftest but creates a private var."
+  [name & body]
+  (when *load-tests*
+    ;; :private has to ride on the def's own literal meta-map argument
+    ;; (matching defn-'s def-meta-name path) rather than going through
+    ;; alter-meta! afterward: def is the only place that mirrors :private
+    ;; into the var's actual isPrivate flag (see rt.ApplyVarMeta), which is
+    ;; what ns-publics/ns-interns actually check — plain alter-meta! only
+    ;; touches the meta map, which isPrivate does not read back from. Built
+    ;; with `list`, not literal syntax-quote, so the `with-meta` head stays
+    ;; the bare unqualified symbol the def compiler pattern-matches on
+    ;; (syntax-quote would otherwise resolve it to a qualified symbol).
+    `(do (def ~(list 'with-meta name {:private true})
+           (fn [] (test-var (var ~name))))
+         (alter-meta! (var ~name) assoc :test (fn [] ~@body)))))
+
+(defmacro with-test
+  "Takes any definition form (that returns a Var) as the first argument.
+   Remaining body goes in the :test metadata function for that Var."
+  [definition & body]
+  (if *load-tests*
+    `(doto ~definition
+       (alter-meta! assoc :test (fn [] ~@body)))
+    definition))
+
+(defmacro set-test
+  "Sets the :test metadata of the named var to a fn with the given body."
+  [name & body]
+  (when *load-tests*
+    `(alter-meta! (var ~name) assoc :test (fn [] ~@body))))
+
+;;; ---- Assertions (spec 6) --------------------------------------------------
+
+(defn function?
+  "True if argument is a function or a symbol that resolves to a non-macro fn."
+  [x]
+  (if (symbol? x)
+    (when-let [v (resolve x)]
+      (when-let [value (get-possibly-unbound-var v)]
+        (and (fn? value) (not (:macro (meta v))))))
+    (fn? x)))
+
+(defn assert-predicate [msg form]
+  (let [args (rest form)
+        pred (first form)]
+    `(let [values# (list ~@args)
+           result# (apply ~pred values#)]
+       (if result#
+         (do-report {:type :pass :message ~msg
+                     :expected '~form :actual (cons '~pred values#)})
+         (do-report {:type :fail :message ~msg
+                     :expected '~form :actual (list '~'not (cons '~pred values#))}))
+       result#)))
+
+(defn assert-any [msg form]
+  `(let [value# ~form]
+     (if value#
+       (do-report {:type :pass :message ~msg :expected '~form :actual value#})
+       (do-report {:type :fail :message ~msg :expected '~form :actual value#}))
+     value#))
+
+(defmulti assert-expr
+  (fn [msg form]
+    (cond
+      (nil? form) :always-fail
+      (seq? form) (first form)
+      :else :default)))
+
+(defmethod assert-expr :always-fail [msg form]
+  `(do-report {:type :fail :message ~msg}))
+
+(defmethod assert-expr :default [msg form]
+  (if (and (sequential? form) (function? (first form)))
+    (assert-predicate msg form)
+    (assert-any msg form)))
+
+(defmethod assert-expr 'instance? [msg form]
+  `(let [klass# ~(nth form 1)
+         object# ~(nth form 2)]
+     (let [result# (instance? klass# object#)]
+       (if result#
+         (do-report {:type :pass :message ~msg :expected '~form :actual (class object#)})
+         (do-report {:type :fail :message ~msg :expected '~form :actual (class object#)}))
+       result#)))
+
+(defmethod assert-expr 'thrown? [msg form]
+  (let [klass (second form)
+        body (nthnext form 2)]
+    `(try ~@body
+          (do-report {:type :fail :message ~msg :expected '~form :actual nil})
+          (catch ~klass e#
+            (do-report {:type :pass :message ~msg :expected '~form :actual e#})
+            e#))))
+
+(defmethod assert-expr 'thrown-with-msg? [msg form]
+  (let [klass (nth form 1)
+        re (nth form 2)
+        body (nthnext form 3)]
+    `(try ~@body
+          (do-report {:type :fail :message ~msg :expected '~form :actual nil})
+          (catch ~klass e#
+            (let [m# (ex-message e#)]
+              (if (re-find ~re m#)
+                (do-report {:type :pass :message ~msg :expected '~form :actual e#})
+                (do-report {:type :fail :message ~msg :expected '~form :actual e#})))
+            e#))))
+
+(defmacro try-expr
+  "Used by the is macro; evaluates expr and catches any exception,
+   reporting it as an :error. The is form's source position is bound for
+   fail-position (spec 10.1)."
+  [msg expr]
+  (let [{:keys [line]} (meta &form)
+        file (when line *file*)]
+    `(binding [*assertion-position* ~(when line {:file file :line line})]
+       (try ~(assert-expr msg expr)
+            (catch Throwable t#
+              (do-report {:type :error :message ~msg
+                          :expected '~expr :actual t#}))))))
+
+(defmacro is
+  ([form] `(is ~form nil))
+  ([form msg] `(try-expr ~msg ~form)))
+
+;;; ---- testing / are (spec 6.5, 6.6) ----------------------------------------
+
+(defmacro testing [string & body]
+  `(binding [*testing-contexts* (conj *testing-contexts* ~string)]
+     ~@body))
+
+(defn apply-template [argv expr values]
   (postwalk-replace (zipmap argv values) expr))
 
-(defmacro do-template
-  [argv expr & values]
+(defmacro do-template [argv expr & values]
   (let [c (count argv)]
     `(do ~@(map (fn [a] (apply-template argv expr a))
                 (partition c values)))))
 
 (defmacro are [argv expr & args]
-  `(do-template ~argv (is ~expr) ~@args))
+  (if (or
+        (and (empty? argv) (empty? args))
+        (and (pos? (count argv))
+             (pos? (count args))
+             (zero? (mod (count args) (count argv)))))
+    `(do-template ~argv (is ~expr) ~@args)
+    (throw (ex-info "The number of args doesn't match are's argv."
+                    {:fn :are :type (type args) :value args}))))
 
-; simple fixtures API (global per session)
-(defn use-fixtures [phase & fs]
-  (cond
-    (= phase :each) (set! *each-fixtures* fs)
-    (= phase :once) (set! *once-fixtures* fs)
-    :else nil))
+;;; ---- Fixtures (spec 8) ---------------------------------------------------
+
+(defmulti use-fixtures
+  "Wrap test runs in a fixture function to perform setup and teardown.
+   Fixtures are stored on the namespace's metadata (:test/each-fixtures,
+   :test/once-fixtures); a second call with the same type replaces the first."
+  (fn [fixture-type & args] fixture-type))
+
+(defmethod use-fixtures :each [fixture-type & args]
+  (alter-meta! *ns* assoc ::each-fixtures args))
+
+(defmethod use-fixtures :once [fixture-type & args]
+  (alter-meta! *ns* assoc ::once-fixtures args))
+
+(defn default-fixture [f] (f))
+
+(defn compose-fixtures [f1 f2]
+  (fn [g] (f1 (fn [] (f2 g)))))
+
+(defn join-fixtures [fixtures]
+  (reduce compose-fixtures default-fixture fixtures))
+
+;;; ---- Running many vars (spec 9.2, 9.3) ------------------------------------
+
+(defn test-vars
+  "Groups vars by their namespace and runs test-var on them with
+   appropriate fixtures assuming that the current namespace has been
+   configured for the vars."
+  [vars]
+  (doseq [[ns vars] (group-by (comp :ns meta) vars)]
+    (let [once-fixture-fn (join-fixtures (::once-fixtures (meta ns)))
+          each-fixture-fn (join-fixtures (::each-fixtures (meta ns)))]
+      (once-fixture-fn
+        (fn []
+          (doseq [v vars]
+            (when (:test (meta v))
+              (each-fixture-fn (fn [] (test-var v))))))))))
+
+(defn test-all-vars [ns]
+  (test-vars (vals (ns-interns ns))))
+
+(defn test-ns
+  "If the namespace defines a function named test-ns-hook, calls that.
+   Otherwise, calls test-all-vars on the namespace. Returns a map of
+   counters.
+
+   Switches *ns* to the target namespace for the run and restores it
+   afterward. Real Clojure's test-ns doesn't need this — bodies there are
+   AOT-compiled, so every symbol is already resolved regardless of *ns* at
+   run time. This dialect resolves forms like `*ns*` itself, unqualified
+   macro lookups, and interop/IR-compile seams dynamically against the
+   live *ns*, so without the switch a test body observes whatever
+   namespace last happened to be current rather than its own — verified
+   against a same-corpus baseline at the pre-Task-13 commit, where this
+   switch existed in the old run-tests as an explicit in-ns/in-ns pair."
+  [ns]
+  (binding [*report-counters* (ref *initial-report-counters*)]
+    (let [ns-obj (the-ns ns)
+          old-ns *ns*]
+      (do-report {:type :begin-test-ns :ns ns-obj})
+      (in-ns (ns-name ns-obj))
+      (try
+        ;; find-var, not ns-resolve: ns-resolve sees referred vars too, so a
+        ;; namespace that (:refer :all)s another namespace defining
+        ;; test-ns-hook would silently run that namespace's hook instead of
+        ;; its own (or instead of test-all-vars). find-var only sees vars
+        ;; actually interned in ns-obj itself (LookupLocal) — matching
+        ;; Clojure's test-ns, which resolves test-ns-hook the same way.
+        (let [test-hook (find-var (symbol (str (ns-name ns-obj)) "test-ns-hook"))]
+          (if test-hook
+            ((var-get test-hook))
+            (test-all-vars ns-obj)))
+        (finally (in-ns (ns-name old-ns))))
+      (do-report {:type :end-test-ns :ns ns-obj}))
+    @*report-counters*))
+
+;;; ---- Runners (spec 9.4) --------------------------------------------------
+
+(defn run-tests
+  "Runs all tests in the given namespaces; prints results. Defaults to
+   current namespace if none given. Returns a map summarizing test results."
+  ([] (run-tests *ns*))
+  ([& namespaces]
+   (let [summary (assoc (apply merge-with + (map test-ns namespaces))
+                        :type :summary)]
+     (do-report summary)
+     summary)))
+
+(defn run-all-tests
+  "Runs all tests in all namespaces; prints results. Optional argument is
+   a regular expression; only namespaces with names matching the regular
+   expression (with re-matches) will be tested."
+  ([] (apply run-tests (all-ns)))
+  ([re] (apply run-tests (filter #(re-matches re (name (ns-name %))) (all-ns)))))
+
+(defn run-test-var
+  "Runs a single test var, printing results. Returns a summary. Switches
+   *ns* to the var's own namespace for the run and restores it afterward
+   (see test-ns's docstring for why this dialect needs the switch)."
+  [v]
+  (let [old-ns *ns*
+        summary (binding [*report-counters* (ref *initial-report-counters*)]
+                  (let [ns-obj (or (-> v meta :ns) *ns*)]
+                    (do-report {:type :begin-test-ns :ns ns-obj})
+                    (in-ns (ns-name ns-obj))
+                    (try
+                      (test-vars [v])
+                      (finally (in-ns (ns-name old-ns))))
+                    (do-report {:type :end-test-ns :ns ns-obj}))
+                  (assoc @*report-counters* :type :summary))]
+    (do-report summary)
+    summary))
+
+(defmacro run-test
+  "Runs a single test. Symbol should resolve to a var with :test metadata."
+  [test-symbol]
+  (let [test-var (resolve test-symbol)]
+    (cond
+      (nil? test-var)
+      (binding [*out* *err*]
+        (println "Unable to resolve" test-symbol "to a test function."))
+
+      (not (:test (meta test-var)))
+      (binding [*out* *err*]
+        (println test-symbol "is not a test."))
+
+      :else
+      `(run-test-var ~test-var))))
 
 ; basic clojure.test shim for stock tests

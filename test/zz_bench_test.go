@@ -323,8 +323,8 @@ func runSuiteOnce(b *testing.B, files []string, counters *benchCounters) {
 //   - takes a *vm.Consts directly, no testing.T
 //   - all failures (compile error, panic, timeout, mem-limit) are
 //     recorded as atomic counters; the bench keeps going
-//   - per-assertion counts are also recorded via the Lisp framework's
-//     *report-counters* on success
+//   - per-assertion counts are also recorded, read off the summary map
+//     run-tests returns on success
 //
 // Behavior otherwise matches runCompatTest: 5s per-file timeout, 512MB
 // per-file memory ceiling, panic recovery in a goroutine.
@@ -358,24 +358,15 @@ func runCompatTestBench(c *vm.Consts, filename string, counters *benchCounters) 
 		}()
 
 		compileStart := time.Now()
-		testNS := rt.NS("test")
-		// Reset per-file test state. Crucially this clears *once-fixtures* /
-		// *each-fixtures* too: clear-registered-tests! only resets the test
-		// registry, but run-tests wraps ALL execution in the once-fixtures, and
-		// those leak across files (a fixture registered by file N would wrap
-		// file N+1's tests). That leak is harmless when every fixture runs
-		// correctly (bytecode), but under *ir-compile* a single misbehaving
-		// fixture escapes run-tests and silently zeros every later file. Each
-		// .cljc is an independent namespace, so its fixtures must not persist.
-		_, _, err := compiler.NewCompiler(c, testNS).CompileMultiple(
-			strings.NewReader("(clear-registered-tests!) (set! *once-fixtures* []) (set! *each-fixtures* [])"),
-		)
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-
-		rt.DefNSBare(nsNameFromCompatPath(filename))
+		// No per-file test state to reset: there is no test registry (a test
+		// is any var with :test metadata, spec 7) and fixtures live on each
+		// namespace's own metadata (Task 13:
+		// use-fixtures/::each-fixtures/::once-fixtures) rather than global
+		// dynamic vars, so a fixture registered by file N cannot leak into
+		// file N+1's run — each .cljc compiles into its own independent
+		// namespace, and one namespace's metadata never touches another's.
+		nsName := nsNameFromCompatPath(filename)
+		rt.DefNSBare(nsName)
 
 		coreNS := rt.NS(rt.NameCoreNS)
 		ctx := compiler.NewCompiler(c, coreNS)
@@ -393,14 +384,15 @@ func runCompatTestBench(c *vm.Consts, filename string, counters *benchCounters) 
 		}
 		counters.compileNanos.Add(time.Since(compileStart).Nanoseconds())
 
-		// (run-tests) executes the already-compiled deftest fns. This is the
-		// execution phase — the only thing the headline ns/op reflects.
+		// run-tests executes the already-compiled deftest fns and returns the
+		// summary map. This is the execution phase — the only thing the
+		// headline ns/op reflects.
 		runStart := time.Now()
-		countersVar := testNS.Lookup("*report-counters*").(*vm.Var)
-		_, _, _ = compiler.NewCompiler(c, testNS).CompileMultiple(
-			strings.NewReader("(run-tests)"),
-		)
-		pc, fc, ec, tc := getCountersFull(countersVar.Deref())
+		var summary vm.Value = vm.NIL
+		if fileNS := rt.NS(nsName); fileNS != nil {
+			summary, _ = rt.InvokeValue(rt.LookupVar("test", "run-tests").Deref(), []vm.Value{fileNS})
+		}
+		pc, fc, ec, tc := getCountersFull(summary)
 		counters.runNanos.Add(time.Since(runStart).Nanoseconds())
 		ch <- result{passCount: pc, failCount: fc, errCount: ec, testCount: tc}
 	}()

@@ -366,6 +366,12 @@ func (v *Var) NS() string { return v.ns }
 // VarName returns the var name.
 func (v *Var) VarName() string { return v.name }
 
+// NSRef returns the namespace OBJECT this var was interned into (nil for
+// vars constructed without one, e.g. some Go-side unit-test fixtures). Used
+// to attach def's :ns metadata (spec 4.4) at runtime rather than baking a
+// *Namespace into a compiled constant — see rt.ApplyVarMeta.
+func (v *Var) NSRef() *Namespace { return v.nsref }
+
 func (v *Var) SetMacro() {
 	v.isMacro = true
 }
