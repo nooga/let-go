@@ -11,6 +11,7 @@
 
 (defn- n1 [v] (if (nil? v) "-" (format "%.1f" (double v))))
 (defn- n2 [v] (if (nil? v) "-" (format "%.2f" (double v))))
+(defn- n3 [v] (if (nil? v) "-" (format "%.3f" (double v))))
 
 (defn- pad [s w]
   (let [s (str s)]
@@ -57,7 +58,7 @@
           "(dynamic dispatch followed only through literal symbols)")
      "caveat: efficiency couples coverage to CI time; deleting slow tests lowers it"]))
 
-(defn- debt-block [{total :debt :keys [terms coverage testing]}]
+(defn- debt-block [{total :debt :keys [terms coverage testing erosion verbosity]}]
   ;; Display order only (names, not numbers); any future term in
   ;; `thresholds` that isn't listed here still prints, after these.
   (let [preferred [:files :coverage :efficiency :testing]
@@ -70,9 +71,22 @@
         (str "  " (pad (name k) 12) (lpad (n1 (terms k)) 6)))
       [(str "  coverage lg=" (n1 (get-in coverage [:lg :percent])) "% static"
             " go=" (if (:go coverage) (str (n1 (get-in coverage [:go :percent])) "% dynamic") "none"))
+       (str "  erosion " (n3 (:value erosion))
+         " (" (:high erosion) " of " (:callables erosion)
+         " callables over cc " (get-in score/thresholds [:erosion :cc]) ")"
+         "  lg=" (n3 (:lg erosion))
+         " go=" (if (= "unavailable" (:go-source erosion))
+                  "UNAVAILABLE"
+                  (n3 (:go erosion))))
+       (str "  verbosity (clone-only) " (n3 (:value verbosity))
+            " (" (:dup-lines verbosity) " duplicated of "
+            (:loc verbosity) " lines)"
+            " -- LOWER BOUND on the paper's metric")
+       (str "  paper baselines: human corpus erosion 0.34 verbosity 0.19;"
+            " agent-generated erosion 0.68 verbosity 0.44")
        (str "  testing density=" (n1 (:density testing)) "/KLOC"
-            " ratio=" (n2 (:ratio testing))
-            " assertions=" (:assertions testing))])))
+         " ratio=" (n2 (:ratio testing))
+         " assertions=" (:assertions testing))])))
 
 (defn- file-table
   "The per-file table, in the order the producer fixed: debt DESCENDING
