@@ -84,9 +84,12 @@
    ;; of what the paper's metric unions, so weighting a known lower bound
    ;; heavily would overstate confidence in it. Its 0.10 went to erosion and
    ;; uncovered, the two terms with real mass and real headroom here.
-   :weights {:erosion 0.30 :uncovered 0.25 :verbosity 0.10
+   ;; comment-debt carries the same weight as duplication because the user
+   ;; named comment slop as a top problem with model-generated code, and
+   ;; because the paper's LOC denominator renders it a rounding error.
+   :weights {:erosion 0.25 :uncovered 0.20 :verbosity 0.10 :comment-debt 0.10
              :dead 0.10 :defects 0.10 :testing 0.10 :efficiency 0.05}
-   :file-terms [:erosion :verbosity :defects :dead]})
+   :file-terms [:erosion :verbosity :defects :dead :comment-debt]})
 
 (defn penalty
   "Debt points for `v` against a good/bad pair: 0 at `good`-or-better,
