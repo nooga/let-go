@@ -44,7 +44,12 @@
      (str "ci " (if ci (str (:source ci) " " (:seconds ci) "s") "none"))
      (str "paths " (str/join " " paths))
      (str "source-roots " (if (seq source-roots) (str/join " " source-roots) "none"))
-     (str "corpus " (:files corpus) " files tracked-by " (:tracked-by corpus))
+     (str "corpus " (:files corpus) " files tracked-by " (:tracked-by corpus)
+          ", " (:generated corpus) " generated files excluded"
+          (if (pos? (:generated corpus))
+            (str " (" (str/join ", " (take 3 (:generated-paths corpus)))
+                 (if (> (:generated corpus) 3) ", ..." "") ")")
+            ""))
      (str "omitted " (pr-str omitted))
      (str "dup-share by lines: regions are matched on TOKENS and reported on the "
           "lines their first and last token fall on (a boundary approximation), "
