@@ -73,17 +73,25 @@
 
 (defn- file-table
   "The per-file table, in the order the producer fixed: composite ASCENDING
-   (worst last), ties broken by path. `cc`/`mi` read `-` for Go, whose
-   complexity and maintainability are out of scope."
+   (worst last), ties broken by path.
+
+   EVERY column is a normalized SCORE (`quality.score/file-composite`'s
+   `:cc :mi :dup :defects`), not the measurement behind it, so all of them
+   run the same direction -- 0-100, higher is better -- and a row, or the
+   same row across two runs, reads without the reader having to remember
+   which metrics invert. The raw measurements live where they are pointers
+   rather than scores: the issues list and the top-complexity table (and,
+   unchanged, the EDN). `cc`/`mi` read `-` for Go, whose complexity and
+   maintainability are out of scope."
   [files]
   (concat
-    ["" "files"
-     (str (pad "path" 56) (lpad "composite" 10) (lpad "cc" 5) (lpad "mi" 7)
-          (lpad "dup%" 7) (lpad "def/kloc" 10))]
+    ["" "files (all columns are scores, 0-100, higher is better)"
+     (str (pad "path" 56) (lpad "composite" 10) (lpad "cc" 7) (lpad "mi" 7)
+          (lpad "dup" 7) (lpad "defects" 9))]
     (for [f files]
-      (str (pad (:path f) 56) (lpad (n1 (:composite f)) 10) (lpad (or (:cc-max f) "-") 5)
-           (lpad (n1 (:mi-raw f)) 7) (lpad (n1 (:dup-pct f)) 7)
-           (lpad (n2 (:defects-per-kloc f)) 10)))))
+      (str (pad (:path f) 56) (lpad (n1 (:composite f)) 10) (lpad (n1 (:cc f)) 7)
+           (lpad (n1 (:mi f)) 7) (lpad (n1 (:dup f)) 7)
+           (lpad (n1 (:defects f)) 9)))))
 
 (defn- issue-at
   "`path:line`, or `path:start-end` for an issue that spans lines (a
@@ -94,14 +102,18 @@
 
 (defn- issue-lines [issues]
   (concat
-    ["" (str "issues " (count issues))]
+    ["" (str "issues " (count issues) " (count; lower is better, ranked by score impact)")]
     (for [i issues]
       (str (pad (issue-at i) 56) (pad (name (:kind i)) 15)
            (pad (measure-str (:measure i)) 8) (:hint i)))))
 
-(defn- top-lines [top]
+(defn- top-lines
+  "The most complex definitions. Unlike the files table these are RAW
+   measurements, where higher means worse -- said so in the section header
+   so the two tables are never read the same way."
+  [top]
   (concat
-    ["" (str "top complexity " (count top))
+    ["" (str "top complexity " (count top) " (raw measurements; higher is worse)")
      (str (pad "path:line" 56) (pad "name" 28) (lpad "cc" 5) (lpad "depth" 7) (lpad "lines" 7))]
     (for [t top]
       (str (pad (str (:path t) ":" (:line t)) 56) (pad (:name t) 28)
