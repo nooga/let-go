@@ -273,6 +273,11 @@
   (letfn [(walk [y]
             (cond
               (symbol? y) (or (contains? params y) (contains? locals y))
+              ;; Derivation does NOT cross a function-literal boundary: a
+              ;; closure is a value of CONSTANT size whatever its body
+              ;; references. (let [f (fn [] (count xs))] ...) binds f to
+              ;; something O(1) in xs, not to something of xs's size.
+              (and (seq? y) (contains? #{'fn 'fn*} (first y))) false
               (coll? y) (boolean (some walk (seq y)))
               :else false))]
     (walk x)))
@@ -337,6 +342,7 @@
   [form degree-of cat params]
   (let [assumed (atom #{})
         untraced (atom #{})
+        opaque (atom false)
         evidence (atom nil)
         note! (fn [d why]
                 (when (and (pos? (degree-rank d)) (nil? @evidence)) (reset! evidence why))
@@ -349,9 +355,20 @@
                       ;; A loop counts ONLY if what it iterates traces back to
                       ;; a parameter. Otherwise it is constant in the input.
                       traced? (and src (derived-from-params? src params locals))
+                      ;; A loop over the RESULT OF A CALL whose degree nobody
+                      ;; knows is not constant -- it is unknown. Silently
+                      ;; treating it as constant is the same error as
+                      ;; assuming an unreadable recursion terminates quickly,
+                      ;; and it is how a called closure would slip through.
+                      opaque-source? (and src (seq? src) (symbol? (first src))
+                                          (not traced?)
+                                          (nil? (degree-of (first src)))
+                                          (nil? (get cat (first src))))
                       iterates? (and (loop-heads h) (not (literal-bound? x)) traced?)
                       _ (when (and (loop-heads h) (not (literal-bound? x)) (not traced?))
                           (swap! untraced conj h))
+                      _ (when (and (loop-heads h) (not (literal-bound? x)) opaque-source?)
+                          (reset! opaque true))
                       ;; An element bound by a loop over a parameter-derived
                       ;; collection is itself parameter-derived: the `x` in
                       ;; (map (fn [x] ...) xs) carries xs's size into the body.
@@ -404,7 +421,11 @@
                            'set! 'new '. 'and 'or 'not 'defmacro 'defmethod 'deftest}
                          h))]
       (let [d (walk form constant-degree #{})]
-        {:degree d :evidence @evidence :assumed @assumed
+        {:degree (if @opaque :unknown d)
+         :evidence (if @opaque
+                     "iterates the result of a call whose cost is unknown"
+                     @evidence)
+         :assumed @assumed
          :untraced-loops @untraced}))))
 
 (defn memoized?
