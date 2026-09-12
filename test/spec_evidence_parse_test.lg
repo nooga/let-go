@@ -1,6 +1,7 @@
 ;; test/spec_evidence_parse_test.lg
 (ns test.spec-evidence-parse-test
   (:require
+   [clojure.string :as str]
    [spec-evidence.parse :as p]
    [test :refer :all]))
 
@@ -63,4 +64,26 @@
 (deftest markers-inside-plain-fences-are-ignored
   (is (= #{"real"} (:markers fenced)))
   (is (= ["real"] (map :slug (:blocks fenced))))
+  (is (empty? (:errors fenced))))
+
+;; Controller ruling: an ordinary fence left open at EOF swallows every later
+;; block AND its marker, so pairing alone stays green while the evidence
+;; silently stops running. It is now a scan error.
+(def unterminated (p/scan (slurp "fixtures/spec-evidence/unterminated-fence.md")))
+
+(deftest unterminated-plain-fence-is-an-error
+  (is (some #(= "unterminated code fence opened at line 10" %) (:errors unterminated)))
+  (is (empty? (:blocks unterminated))))
+
+;; A malformed evidence opener is ALSO an unterminated fence when the file
+;; ends inside it; reporting both for the same block would be noise, so the
+;; opener error suppresses the fence error.
+(deftest a-malformed-opener-is-not-also-reported-as-an-unterminated-fence
+  (is (= 2 (count (:errors malformed))))
+  (is (not-any? #(str/includes? % "unterminated") (:errors malformed))))
+
+;; A four-backtick fence is closed only by four backticks, so a three-backtick
+;; fence nested inside it does not end it early and its markers stay invisible.
+(deftest a-longer-fence-is-not-closed-by-a-shorter-one
+  (is (not (contains? (:markers fenced) "phantom-nested")))
   (is (empty? (:errors fenced))))

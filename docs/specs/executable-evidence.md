@@ -316,12 +316,14 @@ Two further limits worth naming: a `clj-test` block reports one line for the
 whole block rather than one per assertion, and `accept` cannot promote
 anything in a `clj-test` block — there is no expectation line to rewrite.
 
-Finally, the scan trusts the document's fence hygiene. An ordinary fence that
-is opened and never closed swallows everything after it, including evidence
-blocks and their markers — symmetrically, so `lint` still reports no pairing
-error. What catches it is the case count: the summary drops, and the Go gate
-fails a spec that ends up running nothing at all. If a block seems to have
-stopped executing, check for an unbalanced fence above it.
+Fence hygiene, on the other hand, is checked. An ordinary fence left open at
+the end of the document swallows everything after it — evidence blocks and
+their markers alike, symmetrically, so pairing alone would stay green while
+the evidence quietly stopped running. `unterminated code fence opened at line
+<n>` is therefore a structural error, and `lint`, `run` and `accept` all
+refuse. A fence is closed only by a bare run of the same number of backticks
+that opened it, so a three-backtick fence nested inside a four-backtick one
+does not end it early.
 
 ## Tooling and wiring
 

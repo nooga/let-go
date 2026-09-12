@@ -32,7 +32,24 @@
 ;; scan has to know where plain fences begin and end too -- otherwise a spec
 ;; that SHOWS the grammar reports a phantom "marker R-x has no evidence".
 (def code-fence-re #"^```")
-(def code-fence-close-re #"^```\s*$")
+
+(defn- backtick-run
+  "Length of the leading run of backticks in `s`; 0 when it starts with
+   anything else."
+  [s]
+  (let [n (count s)]
+    (loop [i 0]
+      (if (and (< i n) (= "`" (subs s i (inc i)))) (recur (inc i)) i))))
+
+(defn- closes-fence?
+  "True when `l` is a bare run of exactly `len` backticks. The LENGTH has to
+   match the opener: a ```` fence is closed only by ````, so a three-backtick
+   fence nested inside it does not end it. (CommonMark actually allows a
+   LONGER closing fence; requiring equality is stricter, and a closing fence
+   longer than its opener does not occur in practice.)"
+  [l len]
+  (let [t (str/trim l)]
+    (and (pos? len) (= len (count t)) (= len (backtick-run t)))))
 
 (defn split-once
   "Split `s` on the FIRST occurrence of `sep` -> [before after], or nil when
@@ -81,10 +98,9 @@
    closing fence), or in prose (where markers are collected and openers
    recognised). A malformed evidence opener enters the ordinary-fence state
    too: the block is still a fence, so its body must not leak back into
-   prose and its closing ``` must not be mistaken for an opener. An
-   unterminated ordinary fence is deliberately NOT an error -- markdown
-   fence hygiene is not this tool's business, and the evidence fences it
-   does own are checked."
+   prose and its closing ``` must not be mistaken for an opener. An ordinary
+   fence left open at EOF is an error, because everything after it -- later
+   evidence blocks included -- is silently swallowed."
   [text]
   (let [lines (split-lines text)
         n (count lines)]
@@ -93,6 +109,14 @@
         (let [perrors (if in-fence
                         (conj perrors (str "unterminated fence @R-" (:slug in-fence)
                                            " opened at line " (:line in-fence)))
+                        perrors)
+              ;; An ordinary fence left open at EOF swallows every later
+              ;; block AND its markers -- symmetrically, so pairing stays
+              ;; green while the evidence silently stops running. It is an
+              ;; error for the same reason an unterminated evidence fence is.
+              perrors (if (and in-code (not (:flagged in-code)))
+                        (conj perrors (str "unterminated code fence opened at line "
+                                           (:line in-code)))
                         perrors)
               evidence (set (map :slug blocks))
               pairing-errors (concat
@@ -110,7 +134,7 @@
 
             in-code
             (recur (inc i) markers blocks nil
-                   (when-not (re-find code-fence-close-re l) in-code)
+                   (when-not (closes-fence? l (:len in-code)) in-code)
                    perrors)
 
             :else
@@ -119,7 +143,12 @@
                      {:slug slug :type type :attrs (parse-attrs attrs) :line (inc i) :acc ""}
                      nil perrors)
               (if (re-find fence-loose-re l)
-                (recur (inc i) markers blocks nil (inc i)
+                ;; Already reported; entering the fence state anyway keeps the
+                ;; body out of prose and its closing ``` from being read as an
+                ;; opener. :flagged suppresses a second, redundant
+                ;; "unterminated code fence" error for the same block.
+                (recur (inc i) markers blocks nil
+                       {:line (inc i) :len (backtick-run l) :flagged true}
                        (conj perrors (str "malformed evidence opener at line " (inc i) ": " l)))
                 (if-let [[_ slug type] (re-matches table-comment-re l)]
                   (let [[rows next] (table-rows lines (inc i))]
@@ -131,7 +160,9 @@
                     (recur (inc i) markers blocks nil nil
                            (conj perrors (str "malformed evidence opener at line " (inc i) ": " l)))
                     (if (re-find code-fence-re l)
-                      (recur (inc i) markers blocks nil (inc i) perrors)
+                      (recur (inc i) markers blocks nil
+                             {:line (inc i) :len (backtick-run l) :flagged false}
+                             perrors)
                       (recur (inc i)
                              (into markers (map second (re-seq marker-re l)))
                              blocks nil nil perrors))))))))))))

@@ -23,3 +23,12 @@ A yaml fence showing the opt-out must not opt this spec out either:
 evidence: skip
 ---
 ```
+
+A four-backtick fence is closed only by four backticks, so the three-backtick
+fence nested inside this one does not end it early:
+
+````markdown
+```clj-repl @R-phantom-nested
+[R-phantom-nested]
+```
+````

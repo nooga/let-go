@@ -1,7 +1,8 @@
 (ns test.spec-evidence-cli-test
-  (:require [test :refer :all]
-            [clojure.string :as str]
-            [spec-evidence :as se]))
+  (:require
+   [clojure.string :as str]
+   [spec-evidence :as se]
+   [test :refer :all]))
 
 (deftest lint-clean-and-broken
   (is (= 0 (se/main ["lint" "fixtures/spec-evidence/basic.md"])))
@@ -90,3 +91,16 @@
           out (with-out-str (reset! code (se/main args)))]
       (is (= 2 @code))
       (is (str/includes? out "usage: spec-evidence")))))
+
+;; Controller ruling: lint, run and accept all refuse an unterminated plain
+;; fence rather than silently running only the blocks above it.
+(deftest lint-and-run-refuse-an-unterminated-plain-fence
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/unterminated-fence.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "unterminated code fence opened at line 10")))
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["run" "fixtures/spec-evidence/unterminated-fence.md" "--engine" "../lg"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "unterminated code fence opened at line 10"))
+    (is (not (str/includes? out "cases ok")))))
