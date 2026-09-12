@@ -390,6 +390,90 @@ func TestLintEdnAndGate(t *testing.T) {
 	}
 }
 
+// R6 — comment churn for a revision range: comment-lines-added / code-lines-
+// added within the range, compared against the corpus's own current
+// comment/code ratio (the "baseline" — a snapshot proxy for typical density,
+// not a full historical per-commit walk; see scripts/lint.lg's R6 section
+// comment and the calibration report for why).
+func gitRun(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.com",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.com")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestLintR6CommentChurn(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q")
+	gitRun(t, dir, "config", "commit.gpgsign", "false")
+
+	// C1: baseline — 1 comment line, 9 code lines (package decl + 8 funcs).
+	c1 := "package fixture\n\n// base comment\nfunc A() {}\nfunc B() {}\nfunc C() {}\nfunc D() {}\nfunc E() {}\nfunc F() {}\nfunc G() {}\nfunc H() {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(c1), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "a.go")
+	gitRun(t, dir, "commit", "-q", "-m", "c1")
+	c1sha := gitRun(t, dir, "rev-parse", "HEAD")
+
+	// C2: adds 4 comment lines and 1 code line — a much higher ratio (4.0)
+	// than what the FINAL corpus (C1+C2 combined: 5 comment / 10 code =
+	// 0.5) will show as its own baseline. Expected multiple = 4.0/0.5 = 8.
+	c2 := c1 + "\n// new c1\n// new c2\n// new c3\n// new c4\nfunc I() {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(c2), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "a.go")
+	gitRun(t, dir, "commit", "-q", "-m", "c2")
+	c2sha := gitRun(t, dir, "rev-parse", "HEAD")
+
+	cmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
+		"--churn", c1sha+".."+c2sha, ".")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg --churn: %v\n%s", err, out)
+	}
+
+	found := false
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "[comment-churn]") {
+			continue
+		}
+		found = true
+		if !strings.Contains(line, "range-ratio=4") {
+			t.Errorf("expected range-ratio=4, got: %s", line)
+		}
+		if !strings.Contains(line, "baseline=0.5") {
+			t.Errorf("expected baseline=0.5, got: %s", line)
+		}
+		if !strings.Contains(line, "multiple=8") {
+			t.Errorf("expected multiple=8, got: %s", line)
+		}
+	}
+	if !found {
+		t.Fatalf("no [comment-churn] finding in output:\n%s", out)
+	}
+
+	// Without --churn, R6 must not run at all (no default range makes sense).
+	noChurnCmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), ".")
+	noChurnCmd.Dir = dir
+	noChurnOut, err := noChurnCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg (no --churn): %v\n%s", err, noChurnOut)
+	}
+	if strings.Contains(string(noChurnOut), "[comment-churn]") {
+		t.Errorf("R6 must not fire without --churn:\n%s", noChurnOut)
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
