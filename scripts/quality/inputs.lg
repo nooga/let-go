@@ -153,15 +153,44 @@
                      (read-string s))))]
     (- (parse updated) (parse started))))
 
+(defn run-for-commit
+  "The most recent completed CI run RECORDED for `sha`, as
+   {:seconds n :source \"commit <sha7>\"} | nil.
+
+   This is the only automatic source of a CI duration, and it is deliberately
+   a RECORDED one. Timing the local run would make the efficiency term a
+   measurement of whatever the machine was doing -- every other term is a
+   structural ratio reproducible from the source at a given commit, and a
+   term that changes because the box was busy would break the PR-delta
+   promise that a delta means the CODE changed. No recorded duration means
+   the term is omitted, never estimated."
+  [sha]
+  (when-not (str/blank? sha)
+    (when-let [out (sh "gh" "api"
+                       (str "repos/nooga/let-go/actions/runs?head_sha=" sha
+                            "&status=completed&per_page=1")
+                       "--jq" ".workflow_runs[0].run_started_at,.workflow_runs[0].updated_at")]
+      (let [[started updated] (f/lines (str/trim out))]
+        (when (and started updated
+                   (re-matches #"^\d{4}-\d{2}-\d{2}T.*Z$" (str/trim started))
+                   (re-matches #"^\d{4}-\d{2}-\d{2}T.*Z$" (str/trim updated)))
+          {:seconds (parse-run-times (str/trim started) (str/trim updated))
+           :source (str "commit " (subs sha 0 (min 7 (count sha))))})))))
+
 (defn ci-seconds
-  "{:seconds n :source \"supplied\"|\"run <id>\"} | nil. A supplied
-   :seconds wins outright; otherwise, given a :run id, shells to `gh` for
-   the run's start/update timestamps and computes the difference."
-  [{:keys [run seconds]}]
+  "{:seconds n :source \"supplied\"|\"run <id>\"|\"commit <sha7>\"} | nil.
+
+   Every source is a RECORDED duration for a commit or run -- supplied by the
+   caller, looked up by run id, or looked up by commit sha. The local wall
+   clock is never one of them: see `run-for-commit`. When nothing is recorded
+   the caller omits the efficiency term and renormalizes, exactly as with any
+   other missing input."
+  [{:keys [run seconds commit]}]
   (cond
     seconds {:seconds seconds :source "supplied"}
     run (when-let [out (sh "gh" "api" (str "repos/nooga/let-go/actions/runs/" run)
                             "--jq" ".run_started_at,.updated_at")]
           (let [[started updated] (f/lines out)]
             {:seconds (parse-run-times started updated) :source (str "run " run)}))
+    commit (run-for-commit commit)
     :else nil))
