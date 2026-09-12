@@ -566,3 +566,21 @@ ratchets-update: build lowered $(GO)
 .PHONY: browser-inspector
 browser-inspector:
 	$(MAKE) -C examples/browser-inspector build
+
+# Executable spec evidence (see docs/specs/executable-evidence.md).
+# spec-lint  : requirement markers and evidence blocks pair both ways.
+# spec-evidence: run every tagged spec's evidence under the promoted lg.
+# spec-oracle: re-run the same evidence under JVM Clojure as an oracle,
+#              skipping blocks marked oracle=none.
+SPECS-WITH-EVIDENCE := $(shell grep -l '@R-' docs/specs/*.md 2>/dev/null)
+
+.PHONY: spec-lint spec-evidence spec-oracle
+
+spec-lint: build
+	@for s in $(SPECS-WITH-EVIDENCE); do LG_SOURCE_PATHS=scripts $(LG-PROMOTED) scripts/spec-evidence.lg lint $$s || exit 1; done
+
+spec-evidence: build
+	@for s in $(SPECS-WITH-EVIDENCE); do LG_SOURCE_PATHS=scripts $(LG-PROMOTED) scripts/spec-evidence.lg run $$s || exit 1; done
+
+spec-oracle: build
+	@for s in $(SPECS-WITH-EVIDENCE); do CLJ_ENGINE="clojure -M" LG_SOURCE_PATHS=scripts $(LG-PROMOTED) scripts/spec-evidence.lg run $$s --oracle || exit 1; done

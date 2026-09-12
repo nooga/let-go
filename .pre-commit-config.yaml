@@ -115,6 +115,20 @@ repos:
         files: ^docs/.*\.md$
         stages: [pre-commit]
 
+      # Executable spec evidence: requirement markers `[R-x]` in docs/specs
+      # and their `@R-x` evidence blocks must pair both ways, and the
+      # evidence must be well-formed. Cheap (lint only, no execution);
+      # running the evidence itself is TestSpecEvidence / make spec-evidence.
+      # See docs/specs/executable-evidence.md.
+      - id: spec-lint
+        name: spec evidence lint
+        description: Requirement markers and evidence fences pair both ways
+        entry: make spec-lint
+        language: system
+        files: ^docs/specs/.*\.md$
+        pass_filenames: false
+        stages: [pre-commit]
+
       - id: go-test
         name: go test ./... -skip TestClojureTestSuite
         description: Run Go test suite excluding the slow Clojure compat suite (mirrors CI test step)

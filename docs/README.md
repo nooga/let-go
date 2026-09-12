@@ -17,6 +17,7 @@ Docs are bucketed by audience, then by cluster:
 - **[`guide/`](guide/)** — user-facing reference for writing and shipping let-go programs: language features, usage, Clojure compatibility.
 - **[`design/`](design/)** — contributor-facing architecture: how a subsystem works or was designed (VM, value representation, IR lowering, runtime image, Go AOT, I/O host decoupling).
 - **[`perf/`](perf/)** — performance baselines, the regression ratchet, and historical data.
+- **[`specs/`](specs/)** — executable specifications: prose whose requirement markers are paired with runnable evidence blocks and checked by `make spec-evidence`.
 - **`docs/` root** — cross-cutting contributor material that isn't subsystem-scoped: the master plan, roadmaps, contribution policy, and dev workflow (regeneration, frontmatter, testing).
 
 A subdir is earned when a cluster of related docs justifies one; one-off cross-cutting docs stay at root.
@@ -45,6 +46,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Real-world Clojure compat findings | `xsofy-portability-gaps.md` |
 | Clojure-test-suite (jank) workflow | `clojure-test-suite.md` |
 | Testing strategy, conformance | `testing-and-conformance.md` |
+| Executable spec evidence (markers, fences, vocabularies) | `specs/executable-evidence.md` |
 | Docs frontmatter convention + maintenance hook | `frontmatter-hook.md` |
 | Docs judgement-layer report (stale/supersession/index) | `docs-status.md` |
 | Regenerating generated artifacts after `.lg` edits | `regenerating-generated-artifacts.md` |
