@@ -3,43 +3,106 @@
    [quality.score :as s]
    [test :refer :all]))
 
-(deftest linear-maps-both-directions
-  (is (= 100.0 (s/linear 5 10 30)))
-  (is (= 0.0 (s/linear 40 10 30)))
-  (is (= 50.0 (s/linear 20 10 30)))
-  (is (= 100.0 (s/linear 25 20 2)))
-  (is (= 50.0 (s/linear 11 20 2))))
+;; Debt: 0 at (or better than) `good`, exactly 100 at `bad`, growing without
+;; an upper bound past it. Lower is better; beating a threshold earns no
+;; credit, so there is no negative debt.
 
-(deftest file-composite-is-weighted
-  (let [c (s/file-composite {:cc-max 10 :mi 80 :dup-pct 10 :defects-per-kloc 1})]
-    (is (= 100.0 (:cc c)))
-    (is (= 80.0 (:mi c)))
-    (is (= 80.0 (:dup c)))
-    (is (= 80.0 (:defects c)))
-    ;; 0.35*100 + 0.30*80 + 0.20*80 + 0.15*80 = 87
-    (is (< 86.99 (:composite c) 87.01))))
+(deftest penalty-is-zero-at-good-and-better
+  ;; higher-is-worse (complexity) and higher-is-better (assertion density)
+  (is (= 0.0 (s/penalty 10 10 30)))
+  (is (= 0.0 (s/penalty 5 10 30)))
+  (is (= 0.0 (s/penalty 40 40 4)))
+  (is (= 0.0 (s/penalty 100 40 4))))
 
-(deftest file-composite-clamps-raw-mi
-  ;; quality.metrics reports RAW (unclamped) MI; the clamp to 0..100 lives here.
-  (is (= 100.0 (:mi (s/file-composite {:cc-max 0 :mi 143.2 :dup-pct 0 :defects-per-kloc 0}))))
-  (is (= 0.0 (:mi (s/file-composite {:cc-max 0 :mi -12.5 :dup-pct 0 :defects-per-kloc 0})))))
+(deftest penalty-is-exactly-100-at-bad
+  (is (= 100.0 (s/penalty 30 10 30)))
+  (is (= 100.0 (s/penalty 4 40 4)))
+  (is (= 100.0 (s/penalty 0 100 0))))
+
+(deftest penalty-is-linear-between-good-and-bad
+  (is (= 50.0 (s/penalty 20 10 30)))
+  (is (= 50.0 (s/penalty 22 40 4))))
+
+(deftest penalty-has-no-upper-clamp
+  ;; THE point of the model: past `bad` the gradient must survive.
+  (is (= 200.0 (s/penalty 50 10 30)))
+  (is (= 950.0 (s/penalty 200 10 30)))
+  (is (< 111.0 (s/penalty 0 40 4) 111.2)))
+
+(deftest complexity-30-and-200-are-not-the-same-debt
+  ;; The old clamp scored both 0, so fixing the worst file in the repo
+  ;; registered as no change at all.
+  (let [at30 (s/file-debt {:cc-max 30 :mi 100 :dup-pct 0 :defects-per-kloc 0})
+        at200 (s/file-debt {:cc-max 200 :mi 100 :dup-pct 0 :defects-per-kloc 0})]
+    (is (not= (:cc at30) (:cc at200)))
+    (is (> (:cc at200) (:cc at30)))
+    (is (> (:debt at200) (:debt at30)))))
+
+(deftest file-debt-is-a-weighted-mean-of-its-metric-debts
+  (let [d (s/file-debt {:cc-max 20 :mi 50 :dup-pct 10 :defects-per-kloc 1})]
+    (is (= 50.0 (:cc d)))       ; 10 -> 30, half way
+    (is (= 50.0 (:mi d)))       ; 100 -> 0, half way
+    (is (= 20.0 (:dup d)))      ; 2.0 per point of dup%
+    (is (= 20.0 (:defects d)))  ; 20.0 per fix/KLOC
+    ;; 0.35*50 + 0.30*50 + 0.20*20 + 0.15*20 = 39.5
+    (is (< 39.49 (:debt d) 39.51))))
+
+(deftest a-perfect-file-has-zero-debt
+  (let [d (s/file-debt {:cc-max 10 :mi 100 :dup-pct 0 :defects-per-kloc 0})]
+    (is (= [0.0 0.0 0.0 0.0] [(:cc d) (:mi d) (:dup d) (:defects d)]))
+    (is (= 0.0 (:debt d)))))
+
+(deftest a-file-at-every-bad-threshold-has-debt-100
+  ;; Calibration anchor: 100 == every metric exactly at `bad`.
+  ;; dup% 50 -> 100 debt at 2.0/point; 5 fixes/KLOC -> 100 at 20.0/point.
+  (let [d (s/file-debt {:cc-max 30 :mi 0 :dup-pct 50 :defects-per-kloc 5})]
+    (is (= [100.0 100.0 100.0 100.0] [(:cc d) (:mi d) (:dup d) (:defects d)]))
+    (is (< 99.99 (:debt d) 100.01))))
+
+(deftest raw-negative-mi-is-not-flattened
+  ;; This repo has files at MI -229; they must carry more debt than MI 0.
+  (let [at0 (s/file-debt {:cc-max nil :mi 0 :dup-pct nil :defects-per-kloc nil})
+        neg (s/file-debt {:cc-max nil :mi -229.6 :dup-pct nil :defects-per-kloc nil})]
+    (is (= 100.0 (:mi at0)))
+    (is (< 329.5 (:mi neg) 329.7))
+    (is (> (:debt neg) (:debt at0)))))
+
+(deftest file-debt-renormalizes-unmeasured-terms
+  ;; Go files carry no complexity or maintainability measurement; the debt
+  ;; must come from dup and defects alone (0.20 + 0.15 = 0.35).
+  (let [d (s/file-debt {:cc-max nil :mi nil :dup-pct 10 :defects-per-kloc 1})]
+    (is (nil? (:cc d)))
+    (is (nil? (:mi d)))
+    ;; (0.20*20 + 0.15*20) / 0.35 = 20
+    (is (< 19.99 (:debt d) 20.01))))
 
 (deftest corpus-renormalizes-omitted-terms
-  (let [full (s/corpus 80 50 11 60)
-        no-ci (s/corpus 80 50 nil 60)]
-    ;; full: 0.6*80 + 0.1*50 + 0.15*50 + 0.15*60 = 69.5 (efficiency 11 -> 50)
-    (is (< 69.49 (:score full) 69.51))
+  (let [full (s/corpus 40 50 11 40)
+        no-ci (s/corpus 40 50 nil 40)]
+    ;; coverage 50% -> 50 debt; efficiency 11 pts/min -> 50 debt
+    ;; 0.6*40 + 0.1*50 + 0.15*50 + 0.15*40 = 42.5
+    (is (< 42.49 (:debt full) 42.51))
     (is (= [] (:omitted full)))
     (is (= [:efficiency] (:omitted no-ci)))
-    ;; no-ci: (0.6*80 + 0.1*50 + 0.15*60) / 0.85 = 62 / 0.85 = 72.94...
-    (is (< 72.9 (:score no-ci) 73.0))))
+    ;; (0.6*40 + 0.1*50 + 0.15*40) / 0.85 = 35 / 0.85 = 41.17...
+    (is (< 41.1 (:debt no-ci) 41.2))))
 
-(deftest testing-term-is-mean-of-density-and-ratio
-  ;; density 40 -> 100, ratio 1.0 -> 100
-  (is (= 100.0 (s/testing-term {:density 40 :ratio 1.0})))
-  ;; density 4 -> 0, ratio 0.1 -> 0
-  (is (= 0.0 (s/testing-term {:density 4 :ratio 0.1})))
-  (is (< 49.9 (s/testing-term {:density 40 :ratio 0.1}) 50.1)))
+(deftest corpus-debt-is-unbounded
+  ;; One terrible term drags the corpus past 100; that must not be clamped.
+  (is (> (:debt (s/corpus 400 0 0 200)) 100.0)))
+
+(deftest corpus-debt-is-a-mean-not-a-sum
+  ;; A debt DENSITY: a corpus of uniformly-30-debt terms is 30, not 120, so
+  ;; adding more (equally good) code cannot inflate the number.
+  ;; files 30, coverage 70% -> 30, efficiency 14.6 pts/min -> 30, testing 30
+  (is (< 29.99 (:debt (s/corpus 30 70 14.6 30)) 30.01)))
+
+(deftest testing-term-is-the-mean-of-two-debts
+  ;; density 40 -> 0, ratio 1.0 -> 0
+  (is (= 0.0 (s/testing-term {:density 40 :ratio 1.0})))
+  ;; density 4 -> 100, ratio 0.1 -> 100
+  (is (= 100.0 (s/testing-term {:density 4 :ratio 0.1})))
+  (is (< 49.9 (s/testing-term {:density 4 :ratio 1.0}) 50.1)))
 
 (deftest issues-rank-by-impact
   (let [per-file [{:path "a.lg" :loc 200 :comment-ratio 0.01 :dup-pct 0 :defects-per-kloc 0
@@ -68,13 +131,3 @@
     ;; cc tie -> deeper first
     (is (= 'a1 (:name (second top))))
     (is (= 14 (:lines (second top))))))
-
-(deftest file-composite-renormalizes-unmeasured-terms
-  ;; Go files carry no complexity or maintainability measurement; the
-  ;; composite must come from dup and defects alone (0.20 + 0.15 = 0.35),
-  ;; not from a fabricated perfect cc/mi.
-  (let [c (s/file-composite {:cc-max nil :mi nil :dup-pct 10 :defects-per-kloc 1})]
-    (is (nil? (:cc c)))
-    (is (nil? (:mi c)))
-    ;; (0.20*80 + 0.15*80) / 0.35 = 80
-    (is (< 79.99 (:composite c) 80.01))))
