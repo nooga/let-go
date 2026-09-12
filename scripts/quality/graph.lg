@@ -14,6 +14,13 @@
    (more than one definition shares it) resolves to no edge at all, rather
    than guessing.
 
+   Before resolution, an `alias/name` reference is rewritten to
+   `full.ns/name` using the aliases the referencing FILE establishes via
+   its `(ns ... (:require [full.ns :as alias] ...))` clause or any
+   top-level `(require '[full.ns :as alias])` form — so an aliased
+   reference is tried against its real namespace at priority 1 before
+   falling back to the bare-name rules.
+
    This is STATIC analysis: it follows only symbols that appear literally
    in a form. Dynamic dispatch (multimethods invoked by a computed value,
    `resolve`, `eval`, reflection-ish interop) is invisible to it. Coverage
@@ -50,6 +57,70 @@
 (defn- qualify [ns-sym name-sym]
   (symbol (str ns-sym "/" name-sym)))
 
+(defn- unquote-entry
+  "Strip a (quote x) wrapper from a require arg, e.g. from
+   (require '[full.ns :as alias])."
+  [x]
+  (if (and (seq? x) (= 'quote (first x))) (second x) x))
+
+(defn- entry-alias
+  "A [full.ns :as alias] (or bare-symbol, or :refer-only) require entry ->
+   [alias full-ns] pair, or nil when the entry declares no :as alias."
+  [entry]
+  (let [entry (unquote-entry entry)]
+    (when (vector? entry)
+      (let [full (first entry)
+            n (count entry)]
+        (loop [i 1]
+          (cond
+            (>= (inc i) n) nil
+            (= :as (nth entry i)) [(nth entry (inc i)) full]
+            :else (recur (inc i))))))))
+
+(defn- require-entries
+  "The require entries a single top-level form declares: the ns form's
+   (:require ...) clause, or a top-level (require ...) call's args."
+  [form]
+  (cond
+    (and (seq? form) (= 'ns (first form)))
+    (mapcat (fn [clause] (when (and (seq? clause) (= :require (first clause))) (rest clause)))
+            (filter seq? (drop 2 form)))
+    (and (seq? form) (= 'require (first form)))
+    (rest form)
+    :else nil))
+
+(defn- file-aliases
+  "{alias full-ns...} for every :as alias this file's (ns ...) :require
+   clause or top-level (require ...) forms establish."
+  [text]
+  (reduce (fn [m seg]
+            (let [form (f/read-segment seg)]
+              (reduce (fn [m2 entry]
+                        (let [pair (entry-alias entry)]
+                          (if pair (assoc m2 (first pair) (second pair)) m2)))
+                      m (require-entries form))))
+          {} (f/segments text)))
+
+(defn- rewrite-aliased
+  "sym rewritten from alias/name to full.ns/name per `aliases`, or sym
+   unchanged when it has no namespace part or the namespace isn't a
+   known alias."
+  [sym aliases]
+  (let [nsp (namespace sym)]
+    (if (and nsp (contains? aliases (symbol nsp)))
+      (symbol (str (get aliases (symbol nsp)) "/" (name sym)))
+      sym)))
+
+(defn- references-aliased
+  "references, plus each aliased symbol rewritten to its full namespace
+   per `aliases` (both the alias form and the rewritten form are kept, so
+   priority-1 exact matching can try either)."
+  [form aliases]
+  (let [refs (references form)]
+    (if (empty? aliases)
+      refs
+      (into refs (map #(rewrite-aliased % aliases) refs)))))
+
 (defn- bare-index
   "bare-name symbol -> #{qname...} across every def, for corpus-wide
    unique-bare-name resolution."
@@ -77,16 +148,17 @@
                                      :edges {qname #{qname...}}}"
   [sources]
   (let [parsed (for [{:keys [path text]} sources]
-                 {:path path :ns (or (ns-of text) (symbol path)) :defs (f/definitions text)})
-        all-defs (vec (for [{:keys [path ns defs]} parsed
+                 {:path path :ns (or (ns-of text) (symbol path))
+                  :aliases (file-aliases text) :defs (f/definitions text)})
+        all-defs (vec (for [{:keys [path ns aliases defs]} parsed
                             d defs]
-                        (assoc d :path path :ns ns :qname (qualify ns (:name d)))))
+                        (assoc d :path path :ns ns :aliases aliases :qname (qualify ns (:name d)))))
         defs-map (into {} (map (fn [d] [(:qname d) (select-keys d [:path :line :kind])]) all-defs))
         bidx (bare-index all-defs)]
     {:defs defs-map
      :edges (into {}
                   (map (fn [d]
-                         (let [refs (references (:form d))
+                         (let [refs (references-aliased (:form d) (:aliases d))
                                resolved (set (keep #(resolve-ref % (:ns d) defs-map bidx) refs))]
                            [(:qname d) (disj resolved (:qname d))]))
                        all-defs))}))
@@ -96,12 +168,13 @@
    and top-level is/are forms, as raw (unresolved) symbols."
   [tests]
   (reduce (fn [acc {:keys [text]}]
-            (reduce (fn [a seg]
-                      (let [form (f/read-segment seg)]
-                        (if (and (seq? form) (#{'deftest 'is 'are} (first form)))
-                          (into a (references form))
-                          a)))
-                    acc (f/segments text)))
+            (let [aliases (file-aliases text)]
+              (reduce (fn [a seg]
+                        (let [form (f/read-segment seg)]
+                          (if (and (seq? form) (#{'deftest 'is 'are} (first form)))
+                            (into a (references-aliased form aliases))
+                            a)))
+                      acc (f/segments text))))
           #{} tests))
 
 (defn reachable

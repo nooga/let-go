@@ -27,3 +27,37 @@
     (is (= 75.0 (:percent c)))
     (is (= ['orphan] (map :name (:untested c))))
     (is (= 5 (:line (first (:untested c)))))))
+
+;; Two files both define `helper`. `fixture.alias-a/public-a` calls the
+;; bare name `helper` -> priority 2 (same-namespace bare match) resolves
+;; it to its own file's helper, not the corpus-wide-ambiguous fallback.
+;; `fixture.alias-c/caller` also calls bare `helper` but has no helper of
+;; its own, so it falls through to priority 3 (corpus-wide unique bare
+;; match) -- which is ambiguous here (two `helper`s exist) -> no edge.
+(def alias-a-text (slurp "fixtures/quality/graph_alias_a.lg"))
+(def alias-b-text (slurp "fixtures/quality/graph_alias_b.lg"))
+(def alias-c-text (slurp "fixtures/quality/graph_alias_c.lg"))
+(def alias-abc-sources [{:path "a" :text alias-a-text}
+                        {:path "b" :text alias-b-text}
+                        {:path "c" :text alias-c-text}])
+
+(deftest priority-2-same-namespace-bare-match-wins-over-ambiguous-corpus-match
+  (let [gr (g/build alias-abc-sources)]
+    (is (= #{'fixture.alias-a/helper} (get-in gr [:edges 'fixture.alias-a/public-a])))
+    (is (= #{} (get-in gr [:edges 'fixture.alias-c/caller])))))
+
+;; A test file requires fixture.alias-a under the alias `x` and calls
+;; `(x/helper 1)`. Bare `helper` alone is ambiguous across a+b (priority
+;; 3 fails), but alias resolution rewrites `x/helper` to
+;; `fixture.alias-a/helper` before priority-1 matching, so it resolves
+;; unambiguously to that specific definition.
+(deftest alias-qualified-ref-resolves-via-require-as
+  (let [alias-test-text (slurp "fixtures/quality/graph_alias_test_fixture.lg")
+        sources [{:path "a" :text alias-a-text} {:path "b" :text alias-b-text}]
+        tests [{:path "t" :text alias-test-text}]
+        roots (g/test-roots tests)
+        c (g/coverage sources tests)]
+    (is (contains? roots 'x/helper))
+    (is (= 1 (:reached c)))
+    (is (= 3 (:total c)))
+    (is (= #{'public-a 'helper} (set (map :name (:untested c)))))))
