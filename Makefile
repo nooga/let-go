@@ -577,7 +577,8 @@ browser-inspector:
 #   QUALITY_TOP=n              size of the "top complexity" section
 .PHONY: quality
 quality: build $(GO-CALLABLES)
-	QUALITY_GO_CALLABLES=$(GO-CALLABLES) LG_SOURCE_PATHS=scripts $(LG) scripts/quality.lg \
+	QUALITY_GO_CALLABLES=$(GO-CALLABLES) QUALITY_LG=$(LG) \
+	LG_SOURCE_PATHS=scripts $(LG) scripts/quality.lg \
 	  --since $${QUALITY_SINCE:-$$(date -v-180d +%Y-%m-%d 2>/dev/null || date -d '180 days ago' +%Y-%m-%d)} \
 	  $${QUALITY_GO_COVER:+--go-cover $$QUALITY_GO_COVER} $${QUALITY_CI_SECONDS:+--ci-seconds $$QUALITY_CI_SECONDS} \
 	  $${QUALITY_EDN:+--edn $$QUALITY_EDN} $${QUALITY_TOP:+--top $$QUALITY_TOP}

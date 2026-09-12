@@ -262,6 +262,78 @@
     (swap! timings conj [label (/ (- (System/nanoTime) t0) 1e9)])
     v))
 
+(def comment-kinds
+  "Lint kinds that flag COMMENT lines. Everything else the linter reports is
+   a code-verbosity kind: the code-rule catalog is data that grows, so the
+   fixed set is the comment side and code is the complement.
+
+   `:comment-divider` and `:devlog-comment` are excluded from BOTH metrics --
+   the first is cosmetic and the second is an admitted phrase heuristic, and
+   the linter itself refuses to gate on it. They stay visible in the lint
+   report; they just do not score."
+  {:scored #{:commented-out-code :restatement :duplicated-comment
+             :comment-density-outlier :comment-churn}
+   :unscored #{:comment-divider :devlog-comment}})
+
+(defn- flagged-lines
+  "{path #{line...}} from lint findings, counting each flagged line ONCE
+   however many rules hit it. `pred` selects the kinds to count."
+  [findings pred]
+  (reduce (fn [m f]
+            (if (pred (:kind f))
+              (update m (:file f) (fnil into #{})
+                      (range (:line f) (inc (or (:end f) (:line f)))))
+              m))
+          {} findings))
+
+(defn lint-findings
+  "Lint findings for `paths`, as {:findings [...] :source s}, or
+   {:source \"unavailable\" :error e :findings nil} when the linter cannot run.
+
+   A SOFT dependency, deliberately. If lint is missing or fails, the flagged
+   half of verbosity is OMITTED and the report says so -- because silently
+   scoring a smaller numerator would look exactly like the codebase getting
+   better, which is the worst way for a measurement tool to be wrong.
+
+   `QUALITY_LINT` overrides the script path; otherwise `scripts/lint.lg`
+   under the checkout is used, run by this same `lg` binary."
+  [checkout paths]
+  (if (empty? paths)
+    {:findings [] :source "none"}
+    (let [script (let [e (os/getenv "QUALITY_LINT")]
+                   (if (str/blank? e) (str checkout "/scripts/lint.lg") e))
+          ;; The interpreter must be a REAL lg binary. `(first os/args)` is
+          ;; not it under the Go test runner, where argv[0] is the test binary
+          ;; -- spawning that re-runs the whole suite, which is how this was
+          ;; found. Named binaries only, and no lint rather than a wrong one.
+          lg (let [e (os/getenv "QUALITY_LG")
+                   candidates (if (str/blank? e)
+                                [(str checkout "/bin/lg") (str checkout "/lg")]
+                                [e])]
+               (first (filter os/stat candidates)))]
+      (cond
+        (nil? lg)
+        {:findings nil :source "unavailable"
+         :error "no lg binary found (build one, or set QUALITY_LG)"}
+        (not (os/stat script))
+        {:findings nil :source "unavailable" :error (str "no " script)}
+        :else
+        (let [r (try (apply os/sh (concat [lg script "--edn"] paths))
+                     (catch Throwable e {:exit 1 :err (str e)}))]
+          (if (zero? (:exit r))
+            ;; The output must be a VECTOR OF FINDING MAPS. An older lint
+            ;; without --edn exits 0 and prints a human report, which
+            ;; read-string will happily parse into something else entirely --
+            ;; so the shape is checked, not just the exit code.
+            (let [parsed (try (read-string (:out r)) (catch Throwable e ::unreadable))]
+              (if (and (vector? parsed) (every? map? parsed))
+                {:findings parsed :source script}
+                {:findings nil :source "unavailable"
+                 :error (str "unrecognized lint output from " script
+                             " (expected --edn findings)")}))
+            {:findings nil :source "unavailable"
+             :error (str/trim (str (:err r)))}))))))
+
 (defn- cwd-path
   "A repo-relative path turned back into one the process can open: the cwd
    prefix is stripped, since discovery walked from the cwd."
@@ -402,6 +474,16 @@
         mets (phase "metrics"
                     (fn [] (into {} (for [f tokenized :when (= :lg (:lang f))]
                                       [(:path f) (metrics/file-metrics (:text f))]))))
+        lint (phase "lint" (fn [] (lint-findings checkout (mapv #(disk-path (:path %)) loaded))))
+        ;; Lint reports paths as given (disk-relative); bring them back into
+        ;; repo-relative space so they join the rest of the report.
+        lint-findings* (mapv (fn [f] (assoc f :file (rel-path (:file f))))
+                             (or (:findings lint) []))
+        scored-comment? (:scored comment-kinds)
+        unscored? (:unscored comment-kinds)
+        code-flagged (flagged-lines lint-findings*
+                                    (fn [k] (not (or (scored-comment? k) (unscored? k)))))
+        comment-flagged (flagged-lines lint-findings* scored-comment?)
         files0 (mapv (fn [f]
                        (let [m (get mets (:path f))
                              loc (if m (max 1 (:loc m)) (max 1 (go-loc (:tokens f))))
@@ -412,7 +494,10 @@
                              dpk (when (>= loc (:defects-min-loc score/thresholds))
                                    (/ (* 1000.0 fixes) loc))
                              pct (get dup-pct (:path f) 0.0)
-                             fverb (terms/verbosity (get dup-lines (:path f) 0) loc)
+                             fverb (terms/verbosity (get dup-lines (:path f) 0)
+                                                    (when (:findings lint)
+                                                      (count (get code-flagged (:path f) #{})))
+                                                    loc)
                              ferosion (terms/erosion
                                         (for [d (if m (:definitions m) [])]
                                           {:cc (:cc d) :sloc (:sloc d)}))
@@ -543,9 +628,18 @@
                                        {:erosion (:erosion f) :verbosity (:verbosity f)
                                         :defects (:defects f) :dead d}))))
                     files0)
+        total-comment-lines (+ (reduce + 0 (map (fn [[_ m]] (:comment m)) mets))
+                               (reduce + 0 (map (fn [f] (max 0 (- (:lines f) (:sloc f) (:blank f))))
+                                                (:files go-analysis))))
+        flagged-code-total (reduce + 0 (map count (vals code-flagged)))
+        flagged-comment-total (reduce + 0 (map count (vals comment-flagged)))
         corpus-terms {:erosion (terms/erosion callables)
                       :verbosity (terms/verbosity (reduce + 0 (vals dup-lines))
+                                                  (when (:findings lint) flagged-code-total)
                                                   (reduce + 0 (map :loc files)))
+                      :comment-debt (when (:findings lint)
+                                      (terms/comment-debt flagged-comment-total
+                                                          total-comment-lines))
                       ;; coverage is already a share; 1 - it is the shortfall
                       :uncovered (when combined (- 1.0 (/ combined 100.0)))
                       :dead (terms/dead-share dead-defs all-defs)
@@ -593,11 +687,19 @@
                    :test-only (count test-only-defs)
                    :test-only-worst (vec (take 5 test-only-defs))
                    :worst (vec (take 10 dead-defs))}
-            :verbosity {:value (terms/verbosity (reduce + 0 (vals dup-lines))
-                                                (reduce + 0 (map :loc files)))
+            :lint {:source (:source lint)
+                   :error (:error lint)
+                   :findings (count lint-findings*)
+                   :flagged-code-lines (when (:findings lint) flagged-code-total)
+                   :flagged-comment-lines (when (:findings lint) flagged-comment-total)
+                   :unscored (count (filter (fn [f] (unscored? (:kind f))) lint-findings*))}
+            :comment-debt {:value (:comment-debt corpus-terms)
+                           :flagged flagged-comment-total
+                           :total-comment-lines total-comment-lines}
+            :verbosity {:value (:verbosity corpus-terms)
                         :dup-lines (reduce + 0 (vals dup-lines))
                         :loc (reduce + 0 (map :loc files))
-                        :clone-only? true}
+                        :flagged-code-lines (when (:findings lint) flagged-code-total)}
             ;; Worst first: debt DESCENDING, ties broken by path -- the same
             ;; visual order as the old ascending-score table.
             :files (vec (sort-by (juxt (comp - :debt) :path)

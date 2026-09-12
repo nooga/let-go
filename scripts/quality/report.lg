@@ -64,10 +64,12 @@
           "(dynamic dispatch followed only through literal symbols)")
      "caveat: efficiency couples coverage to CI time; deleting slow tests lowers it"]))
 
-(defn- debt-block [{total :debt :keys [terms coverage testing erosion verbosity dead]}]
+(defn- debt-block [{total :debt :keys [terms coverage testing erosion verbosity dead
+                                       comment-debt lint]}]
   ;; Display order only (names, not numbers); any future term in
   ;; `thresholds` that isn't listed here still prints, after these.
-  (let [preferred [:erosion :verbosity :uncovered :dead :defects :testing :efficiency]
+  (let [preferred [:erosion :uncovered :verbosity :comment-debt :dead :defects
+                   :testing :efficiency]
         known (set (map first (:weights score/thresholds)))
         order (concat (filter known preferred)
                       (sort (remove (set preferred) known)))]
@@ -91,7 +93,20 @@
          (:dead-sloc dead) " sloc; "
          (:test-only dead) " reachable only from tests)"
          " -- OURS, not the paper's; an UPPER BOUND")
-       (str "  verbosity (clone-only) " (n3 (:value verbosity))
+       (str "  comment-debt " (n3 (:value comment-debt))
+           " (" (:flagged comment-debt) " flagged of "
+           (:total-comment-lines comment-debt) " comment lines)"
+           " -- OURS: comment slop on its own denominator, where the paper's"
+           " LOC divisor hides it")
+      (str "  lint " (if (:flagged-code-lines lint)
+                       (str (:findings lint) " findings, "
+                            (:flagged-code-lines lint) " code lines and "
+                            (:flagged-comment-lines lint) " comment lines flagged"
+                            (if (pos? (:unscored lint))
+                              (str ", " (:unscored lint) " unscored (divider/devlog)") ""))
+                       (str "UNAVAILABLE (" (:error lint) ") -- verbosity counts CLONE LINES ONLY"
+                            " and comment-debt is omitted")))
+      (str "  verbosity " (n3 (:value verbosity))
          " (" (:dup-lines verbosity) " duplicated of "
          (:loc verbosity) " lines)"
          " -- LOWER BOUND on the paper's metric")

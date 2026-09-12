@@ -162,7 +162,7 @@
                                    "--source-root" fixtures fixtures]))
         r (read-string (slurp edn-path))]
     (is (str/includes? out "erosion "))
-    (is (str/includes? out "verbosity (clone-only)"))
+    (is (str/includes? out "verbosity "))
     (is (str/includes? out "LOWER BOUND on the paper's metric"))
     (is (str/includes? out "paper baselines: human corpus erosion 0.34"))
     ;; both are shares in [0,1]
@@ -203,3 +203,35 @@
   (is (not (q/generated? "(ns ordinary)\n(defn f [x] x)\n")))
   (let [out (with-out-str (q/main ["--since" "2000-01-01" "--source-root" fixtures fixtures]))]
     (is (str/includes? out "generated files excluded"))))
+
+(deftest lint-is-a-soft-dependency-and-its-absence-is-loud
+  ;; If lint cannot run, the flagged half is OMITTED and the term
+  ;; renormalizes. Silently scoring a smaller numerator would look exactly
+  ;; like the codebase improving, which is the worst way to be wrong.
+  (let [edn-path (str (os/temp-dir) "quality-nolint.edn")]
+    (os/setenv "QUALITY_LINT" "/nonexistent/lint.lg")
+    (let [out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                     "--source-root" fixtures fixtures]))
+          r (read-string (slurp edn-path))]
+      (os/setenv "QUALITY_LINT" "")
+      (is (str/includes? out "lint UNAVAILABLE"))
+      (is (str/includes? out "verbosity counts CLONE LINES ONLY"))
+      (is (str/includes? out "comment-debt is omitted"))
+      ;; omitted, not zero: a missing input must renormalize, never score 0
+      (is (nil? (get-in r [:terms :comment-debt])))
+      (is (contains? (set (:omitted r)) :comment-debt))
+      ;; and verbosity still reports, from clone lines alone
+      (is (some? (get-in r [:terms :verbosity]))))))
+
+(deftest comment-kinds-excludes-the-cosmetic-and-heuristic-rules
+  ;; :comment-divider is cosmetic and :devlog-comment is an admitted phrase
+  ;; heuristic the linter itself refuses to gate on. Neither scores; both stay
+  ;; visible in the lint report.
+  (is (contains? (:scored q/comment-kinds) :restatement))
+  (is (contains? (:scored q/comment-kinds) :commented-out-code))
+  (is (contains? (:unscored q/comment-kinds) :comment-divider))
+  (is (contains? (:unscored q/comment-kinds) :devlog-comment))
+  ;; a code-rule kind is neither: code kinds are the complement, because the
+  ;; rule catalog is data that grows
+  (is (not (contains? (:scored q/comment-kinds) :let-identity)))
+  (is (not (contains? (:unscored q/comment-kinds) :let-identity))))
