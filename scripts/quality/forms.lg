@@ -70,14 +70,33 @@
 
 (def ^:private def-heads #{'defn 'defn- 'defmacro 'defmethod 'deftest 'def})
 
+(defn- named
+  "The name a definition form binds, and its metadata.
+
+   The reader expands `^{...} name` into `(with-meta name {...})`, so an
+   annotated definition's second element is a LIST, not a symbol. Requiring a
+   bare symbol silently dropped every `^:private` and `^{:complexity ...}`
+   definition from the corpus -- they were invisible to metrics, the call
+   graph, coverage, dead code and cost alike."
+  [form]
+  (let [x (second form)]
+    (cond
+      (symbol? x) {:name x :meta nil}
+      (and (seq? x) (= 'with-meta (first x)) (symbol? (second x)))
+      {:name (second x) :meta (nth x 2 nil)}
+      :else nil)))
+
 (defn definitions [text]
   (vec (keep (fn [seg]
-               (let [form (read-segment seg)]
-                 (when (and (seq? form) (def-heads (first form)) (symbol? (second form)))
-                   {:name (second form) :kind (keyword (name (first form)))
-                    ;; ^:private is metadata the reader drops from the form we
-                    ;; get back, so it is detected in the segment's TEXT.
-                    :private? (boolean (re-find #"\^:private" (:text seg)))
+               (let [form (read-segment seg)
+                     n (when (seq? form) (named form))]
+                 (when (and n (def-heads (first form)))
+                   {:name (:name n) :kind (keyword (name (first form)))
+                    ;; Metadata the reader lifted into (with-meta ...), plus
+                    ;; the ^:private shorthand, which reads the same way.
+                    :meta (:meta n)
+                    :private? (boolean (or (:private (:meta n))
+                                           (re-find #"\^:private" (:text seg))))
                     :line (:start seg) :end (:end seg) :depth (:depth seg) :form form})))
              (segments text))))
 
