@@ -332,6 +332,64 @@ func TestLintR4DensityOutlier(t *testing.T) {
 	}
 }
 
+// --edn / --gate: machine-readable output and opt-in exit codes.
+func TestLintEdnAndGate(t *testing.T) {
+	dir := t.TempDir()
+	// One R1 (commented-out code) finding and nothing else interesting.
+	src := ";; (inc counter)\n(def a 1)\n"
+	if err := os.WriteFile(filepath.Join(dir, "fixture.lg"), []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// --edn: stdout must be exactly one EDN vector of finding maps.
+	ednOut, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), "--edn", dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg --edn: %v\n%s", err, ednOut)
+	}
+	trimmed := strings.TrimSpace(string(ednOut))
+	if !strings.HasPrefix(trimmed, "[") || !strings.HasSuffix(trimmed, "]") {
+		t.Fatalf("--edn output is not a single EDN vector:\n%s", trimmed)
+	}
+	if !strings.Contains(trimmed, ":commented-out-code") {
+		t.Errorf("--edn output missing the R1 finding:\n%s", trimmed)
+	}
+	if !strings.Contains(trimmed, ":line") || !strings.Contains(trimmed, ":end") {
+		t.Errorf("--edn findings must carry :line and :end:\n%s", trimmed)
+	}
+
+	// --gate on a kind with findings exits non-zero.
+	gateCmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
+		"--gate", "commented-out-code", dir)
+	gateOut, gateErr := gateCmd.CombinedOutput()
+	if gateErr == nil {
+		t.Fatalf("--gate commented-out-code should exit non-zero when R1 has findings:\n%s", gateOut)
+	}
+
+	// --gate on a kind with no findings exits zero.
+	cleanCmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
+		"--gate", "duplicated-comment", dir)
+	cleanOut, cleanErr := cleanCmd.CombinedOutput()
+	if cleanErr != nil {
+		t.Fatalf("--gate duplicated-comment should exit zero (no such findings): %v\n%s", cleanErr, cleanOut)
+	}
+
+	// Default mode (no --gate) still exits zero even though R1 has findings.
+	defaultCmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir)
+	defaultOut, defaultErr := defaultCmd.CombinedOutput()
+	if defaultErr != nil {
+		t.Fatalf("default mode must exit zero regardless of findings: %v\n%s", defaultErr, defaultOut)
+	}
+
+	// Gating on the R5 heuristic kind must never fail the run, even though
+	// it is not a real gate target.
+	r5GateCmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
+		"--gate", "devlog-comment", dir)
+	r5Out, r5Err := r5GateCmd.CombinedOutput()
+	if r5Err != nil {
+		t.Fatalf("--gate devlog-comment must not gate (R5 is heuristic-only): %v\n%s", r5Err, r5Out)
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
