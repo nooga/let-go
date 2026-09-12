@@ -80,12 +80,12 @@
 
 (deftest vocab-parses-into-boot-epilogue-rules
   (let [p (v/parse-vocab repl-vocab)]
-    (is (= 7 (count (:boot p))))
+    (is (= 8 (count (:boot p))))
     (is (= 1 (count (:epilogue p))))
     (is (= 6 (count (:rules p)))))
   (let [p (v/parse-vocab table-vocab)]
     ;; include splices clj-repl's directives in first
-    (is (= 7 (count (:boot p))))
+    (is (= 8 (count (:boot p))))
     (is (= 7 (count (:rules p))))))
 
 (deftest cli-generate-writes-a-runner-per-block

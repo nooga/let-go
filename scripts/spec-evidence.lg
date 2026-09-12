@@ -211,6 +211,18 @@
 (defn- find-expect-fail-line [exp]
   (first (filter #(= ";; expect: fail" (str/trim (:line %))) exp)))
 
+(defn- throws-got-text
+  "`got` for `throws`/`threw` is `pr-str`ed as a 2-element vector,
+   `[<class> \"<msg>\"]` (see clj-repl.vocab's spec-case! preamble) -- but
+   the `;; throws: {c} {m*}` grammar wants `<class> \"<msg>\"` with no
+   brackets. Strip them; anything not already bracketed (a future got
+   shape) is left verbatim."
+  [got]
+  (let [t (str/trim got)]
+    (if (and (str/starts-with? t "[") (str/ends-with? t "]"))
+      (str/trim (subs t 1 (dec (count t))))
+      t)))
+
 (defn- repl-promotion
   "-> {:edit edit-or-nil :message str-or-nil :blocked bool} for one FAIL `f`
    against clj-repl block `b`. `edit` is one of
@@ -235,7 +247,10 @@
           {:edit nil :message nil :blocked false}))
       (let [prefix (get exp-prefix (:what f))
             existing (find-exp-line (:exp case-) prefix)
-            text (str prefix " " (:got f))]
+            got-text (if (contains? #{"throws" "threw"} (:what f))
+                       (throws-got-text (:got f))
+                       (:got f))
+            text (str prefix " " got-text)]
         (if existing
           {:edit {:idx (+ base (:from existing)) :op :replace :text text}
            :message (str "accepted " id " " (:what f)) :blocked false}
@@ -245,7 +260,9 @@
 (defn- rewrite-table-row-line
   "Rewrite column `col` (0-based, positional: form/value/out[/expect]) of a
    pipe-table row line to `new-text`, preserving the row's other cells and
-   its backtick-wrapping convention for the touched cell."
+   its backtick-wrapping convention for the touched cell. If the row has
+   fewer than `col` columns, pads every missing column with an empty cell
+   up to `col` rather than just appending one at the end."
   [line col new-text]
   (let [cells (vec (rest (butlast (str/split (str/trim line) #"\|"))))
         orig (str/trim (get cells col ""))
@@ -255,7 +272,7 @@
                   new-text)
         cells (if (< col (count cells))
                 (assoc cells col (str " " wrapped " "))
-                (conj cells (str " " wrapped " ")))]
+                (conj (into cells (repeat (- col (count cells)) " ")) (str " " wrapped " ")))]
     (str "|" (str/join "|" cells) "|")))
 
 (defn- table-promotion
@@ -267,8 +284,10 @@
   (let [id (str (:slug f) "#" (:n f))
         row-idx (dec (:n f))
         ;; block :line is the `<!-- evidence: ... -->` comment's 1-based
-        ;; line; header follows it, then the separator, then data rows.
-        idx0 (+ (:line b) 1 row-idx)]
+        ;; line (0-based = (:line b) - 1); header follows it (0-based
+        ;; (:line b)), then the separator (0-based (:line b) + 1), then
+        ;; data rows starting at 0-based (:line b) + 2.
+        idx0 (+ (:line b) 2 row-idx)]
     (if (= "xpass" (:what f))
       {:edit {:idx idx0 :op :table-col :col 3 :text ""}
        :message (str "accepted " id " xpass") :blocked false}

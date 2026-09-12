@@ -33,3 +33,47 @@
       (is (str/includes? out "accepted p#1 xpass"))
       (is (not (str/includes? (slurp spec) ";; expect: fail")))
       (is (= 0 (se/main ["run" spec "--engine" "../lg"]))))))
+
+;; Fix round 1, finding 1: table-promotion's row->file-line arithmetic was
+;; off by one (rewrote the `|---|` separator instead of the data row).
+;; Row 1 carries a wrong `out`, row 2 a wrong `value`; both must land on
+;; their own data row, backtick-wrapped, with header/separator untouched.
+(deftest accept-rewrites-the-right-table-cells-in-place
+  (let [dir (str (os/temp-dir) "/" (name (gensym "spec-accept-table-")))
+        spec (str dir "/t.md")
+        header "| form | value | out |"
+        sep "|---|---|---|"]
+    (mkdir dir)
+    (spit spec (str "T. [R-t]\n\n<!-- evidence: @R-t -->\n"
+                    header "\n" sep "\n"
+                    "| `(+ 1 1)` | `2` | `\"zzz\"` |\n"
+                    "| `(str \"a\")` | `\"b\"` | `\"\"` |\n"))
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+      (is (= 0 @code))
+      (is (str/includes? out "accepted t#1 out"))
+      (is (str/includes? out "accepted t#2 value"))
+      (let [t (slurp spec)]
+        (is (str/includes? t header))
+        (is (str/includes? t sep))
+        (is (str/includes? t "| `(+ 1 1)` | `2` | `\"\"` |"))
+        (is (str/includes? t "| `(str \"a\")` | `\"a\"` | `\"\"` |"))))
+    ;; A second run is clean.
+    (is (= 0 (se/main ["run" spec "--engine" "../lg"])))))
+
+;; Fix round 1, finding 2: an unexpected throw's FAIL line must carry the
+;; exception's class so `accept` can write a `;; throws: {c} {m*}`-shaped
+;; line the vocab can re-parse (not just the bare message).
+(deftest accept-inserts-a-throws-line-for-an-unexpected-throw
+  (let [dir (str (os/temp-dir) "/" (name (gensym "spec-accept-threw-")))
+        spec (str dir "/th.md")]
+    (mkdir dir)
+    (spit spec "Th. [R-th]\n\n```clj-repl @R-th oracle=none\n(throw (ex-info \"boom\" {}))\n```\n")
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+      (is (= 0 @code))
+      (is (str/includes? out "accepted th#1 threw"))
+      (is (str/includes? (slurp spec)
+                          "(throw (ex-info \"boom\" {}))\n;; throws: ExceptionInfo \"boom\"\n")))
+    ;; A second run is clean.
+    (is (= 0 (se/main ["run" spec "--engine" "../lg"])))))
