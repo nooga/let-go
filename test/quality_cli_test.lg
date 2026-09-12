@@ -172,3 +172,17 @@
     ;; per-file verbosity too
     (is (every? (fn [f] (or (nil? (:verbosity f)) (<= 0.0 (:verbosity f) 1.0)))
                 (:files r)))))
+
+(deftest dead-code-is-reported-with-its-upper-bound-caveat
+  (let [edn-path (str (os/temp-dir) "quality-dead-test.edn")
+        out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                   "--source-root" fixtures fixtures]))
+        r (read-string (slurp edn-path))]
+    (is (str/includes? out "dead "))
+    (is (str/includes? out "OURS, not the paper's; an UPPER BOUND"))
+    (is (str/includes? out "reachable only from tests"))
+    (is (<= 0.0 (get-in r [:dead :value]) 1.0))
+    ;; SLOC-weighted, so the worst entries are the biggest ones
+    (let [worst (get-in r [:dead :worst])]
+      (is (vector? worst))
+      (is (= (map :sloc worst) (reverse (sort (map :sloc worst))))))))
