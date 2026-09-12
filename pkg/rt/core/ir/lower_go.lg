@@ -85,7 +85,7 @@
     {:status :fallback
      :decl nil
      :reason msg}
-    (throw (ex-info (str "ir.lower-go: " msg) {:fn :lower-go :value mode}))))
+    (throw (ex-info (str "ir.lower-go: " msg) {:fn :lower-go :type (type mode) :value mode}))))
 
 (defn- dtype-go-type-spec [t]
   (when (and (vector? t) (= :dtype (first t)) (= 2 (count t)))
@@ -3422,7 +3422,7 @@
                                                     (ir/fn-name f)
                                                     " (structurize fallbacks="
                                                     (:fallbacks st-result) ")")
-                                               {:fn :lower-go :value (ir/fn-name f)})))
+                                               {:fn :lower-go :type (type (ir/fn-name f)) :value (ir/fn-name f)})))
            body-stmts       (if structured-body
                               structured-body
                               (loop [blocks (ir/blocks f) out []]
@@ -4099,7 +4099,7 @@
 
 (defn lower [f mode]
   (if (nil? f)
-    (throw (ex-info "ir.lower-go: nil function" {:fn :lower-go :value f}))
+    (throw (ex-info "ir.lower-go: nil function" {:fn :lower-go :type (type f) :value f}))
     (try
       (lower-fn* f mode)
       (catch e

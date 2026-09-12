@@ -357,7 +357,7 @@
       (= op :tail-call)
       (throw (ex-info (str "ir/structurize: unexpected :tail-call terminator in block "
                            b " — build.lg emits :recur-fn for function-level recur")
-                      {:fn :structurize :value b}))
+                      {:fn :structurize :type (type b) :value b}))
 
       (= op :branch)
       (let [edge (ir/aux term f)]

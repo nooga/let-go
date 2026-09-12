@@ -796,7 +796,7 @@
             defn-form (apply list 'defn (symbol def-name) args-vec (rest tail))
             chunk     (compile-form defn-form the-ns)]
         (chunk->fn arity variadic? chunk))
-      (throw (ex-info "compile-def-fn-value: multi-arity fn form unsupported" {:fn :compile-def-fn-value :value args-vec})))))
+      (throw (ex-info "compile-def-fn-value: multi-arity fn form unsupported" {:fn :compile-def-fn-value :type (type args-vec) :value args-vec})))))
 
   ;; --- Go bootstrap generation -------------------------------------------
 

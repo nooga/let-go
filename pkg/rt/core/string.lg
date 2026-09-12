@@ -21,12 +21,12 @@
 ;;; to use the native UpperCase implementation.
 (defn upper-case [s]
   (when (nil? s)
-    (throw (ex-info "upper-case expected non-nil" {:fn :string/upper-case :value s})))
+    (throw (ex-info "upper-case expected non-nil" {:fn :string/upper-case :type (type s) :value s})))
   (core/upper-case (str s)))
 
 (defn lower-case [s]
   (when (nil? s)
-    (throw (ex-info "lower-case expected non-nil" {:fn :string/lower-case :value s})))
+    (throw (ex-info "lower-case expected non-nil" {:fn :string/lower-case :type (type s) :value s})))
   (core/lower-case (str s)))
 
 (defn- whitespace-char? [c]
@@ -39,17 +39,17 @@
 (defn blank? [s]
   (cond
     (nil? s) true
-    (not (string? s)) (throw (ex-info "blank? expected String" {:fn :string/blank? :value s}))
+    (not (string? s)) (throw (ex-info "blank? expected String" {:fn :string/blank? :type (type s) :value s}))
     :else (every? whitespace-char? (seq s))))
 
 (defn reverse [s]
   (when (nil? s)
-    (throw (ex-info "reverse expected non-nil" {:fn :string/reverse :value s})))
+    (throw (ex-info "reverse expected non-nil" {:fn :string/reverse :type (type s) :value s})))
   (apply str (core/reverse (vec s))))
 
 (defn capitalize [s]
   (when (nil? s)
-    (throw (ex-info "capitalize expected non-nil" {:fn :string/capitalize :value s})))
+    (throw (ex-info "capitalize expected non-nil" {:fn :string/capitalize :type (type s) :value s})))
   (let [s (str s)]
     (if (= "" s)
       s
@@ -65,7 +65,7 @@
 
 (defn escape [s cmap]
   (when (not (string? s))
-    (throw (ex-info "escape expected String" {:fn :string/escape :value s})))
+    (throw (ex-info "escape expected String" {:fn :string/escape :type (type s) :value s})))
   (apply str (map (fn [c] (or (get cmap c) c)) s)))
 
 (defn re-quote-replacement [replacement]
@@ -78,16 +78,16 @@
 
 (defn starts-with? [s substr]
   (when (nil? s)
-    (throw (ex-info "starts-with? expected non-nil string" {:fn :string/starts-with? :value s})))
+    (throw (ex-info "starts-with? expected non-nil string" {:fn :string/starts-with? :type (type s) :value s})))
   (when (not (string? substr))
-    (throw (ex-info "starts-with? expected String prefix" {:fn :string/starts-with? :value substr})))
+    (throw (ex-info "starts-with? expected String prefix" {:fn :string/starts-with? :type (type substr) :value substr})))
   (core/starts-with? (str s) substr))
 
 (defn ends-with? [s substr]
   (when (nil? s)
-    (throw (ex-info "ends-with? expected non-nil string" {:fn :string/ends-with? :value s})))
+    (throw (ex-info "ends-with? expected non-nil string" {:fn :string/ends-with? :type (type s) :value s})))
   (when (not (string? substr))
-    (throw (ex-info "ends-with? expected String suffix" {:fn :string/ends-with? :value substr})))
+    (throw (ex-info "ends-with? expected String suffix" {:fn :string/ends-with? :type (type substr) :value substr})))
   (core/ends-with? (str s) substr))
 (def includes? core/includes?)
 ;; Java Pattern.split semantics (what clojure.string/split delegates to):

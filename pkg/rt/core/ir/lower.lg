@@ -157,7 +157,7 @@
       (when (not= cur junk)
         (throw (ex-info (str "ir/lower: junk-below mismatch for block " bid
                              " (" cur " vs " junk "); unsupported shape")
-                        {:fn :lower :value bid}))))))
+                        {:fn :lower :type (type bid) :value bid}))))))
 
 (defn- bump-max-stack! [l]
   "If current runtime SP (= lower-sp + current block's junk-below)
@@ -238,7 +238,7 @@
                                         def-block ", used in block " user-block
                                         ") — only branch-target args may cross blocks; "
                                         "see follow-up issue D")
-                               {:fn :lower :value i}))))))))))
+                               {:fn :lower :type (type i) :value i}))))))))))
       (recur (inc i)))))
 
 ;; --- heuristics ------------------------------------------------------
@@ -497,7 +497,7 @@
               (bump-max-stack! l))
           (throw (ex-info (str "ir/lower: value %" nid
                                " not on stack for materialize (op=" op ")")
-                          {:fn :lower :value nid})))))))
+                          {:fn :lower :type (type nid) :value nid})))))))
 
 ;; --- per-op emission -------------------------------------------------
 
@@ -680,7 +680,7 @@
       (do (emit! l nid :push-closed)
           (bump-stack-sp! l -1))  ; 2 in, 1 out
 
-      (throw (ex-info (str "ir/lower: unsupported op for lowering: " op) {:fn :lower :value op})))))
+      (throw (ex-info (str "ir/lower: unsupported op for lowering: " op) {:fn :lower :type (type op) :value op})))))
 
 ;; --- block-level emission --------------------------------------------
 
@@ -999,7 +999,7 @@
    success; throws on cross-block direct-Refs uses (only branch-arg
    uses may cross blocks)."
   (when (nil? f)
-    (throw (ex-info "ir/lower: nil function" {:fn :lower :value f})))
+    (throw (ex-info "ir/lower: nil function" {:fn :lower :type (type f) :value f})))
   (let [l (new-lowerer f)]
     (check-cross-block! f (:uses @l))
     (let [order   (rpo-block-order f)

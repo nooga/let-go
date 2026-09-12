@@ -31,7 +31,7 @@
         (when-not (and (vector? ins) (= 6 (count ins)))
           (throw (ex-info (str "validate after " label
                                ": Inst #" i " has bad shape: " ins)
-                          {:fn :check-inst-shapes! :value label}))))
+                          {:fn :check-inst-shapes! :type (type label) :value label}))))
       (recur (inc i)))))
 
 (defn- check-refs-in-range! [insts label]
@@ -49,7 +49,7 @@
                                      ": Inst #" i " (op=" op ")"
                                      " has out-of-range ref " r
                                      " (insts count=" n ")")
-                                {:fn :check-refs-in-range! :value label}))))))
+                                {:fn :check-refs-in-range! :type (type label) :value label}))))))
         (recur (inc i))))))
 
 (defn- check-blocks-terminated! [f label]
@@ -66,19 +66,19 @@
             (when (nil? term-id)
               (throw (ex-info (str "validate after " label
                                    ": block #" i " has no :term field")
-                              {:fn :check-blocks-terminated! :value label})))
+                              {:fn :check-blocks-terminated! :type (type label) :value label})))
             (when (or (< term-id 0) (>= term-id (count insts)))
               (throw (ex-info (str "validate after " label
                                    ": block #" i " :term=" term-id
                                    " out of insts range [0," (count insts) ")")
-                              {:fn :check-blocks-terminated! :value label})))
+                              {:fn :check-blocks-terminated! :type (type label) :value label})))
             (let [term-inst (nth insts term-id)
                   term-op   (nth term-inst 0)]
               (when-not (ir/op-terminator? term-op)
                 (throw (ex-info (str "validate after " label
                                      ": block #" i " :term Inst #" term-id
                                      " has non-terminator op " term-op)
-                                {:fn :check-blocks-terminated! :value label}))))))
+                                {:fn :check-blocks-terminated! :type (type label) :value label}))))))
         (recur (inc i))))))
 
 (defn- check-no-cross-block-refs! [f label]
@@ -113,7 +113,7 @@
                            ": Inst #" i " (op=" op ", block=" use-block ")"
                            " has cross-block ref " r
                            " (defined in block " def-block ")")
-                      {:fn :check-no-cross-block-refs! :value label})))))
+                      {:fn :check-no-cross-block-refs! :type (type label) :value label})))))
 
 (defn- check-branch-arg-arity-for-target! [label src-block target-bt blocks]
   "Verify src-block's BranchTarget.args count matches the target block's params count."
@@ -126,7 +126,7 @@
                            ": block #" src-block " branch to b" target
                            " passes " (count args) " args but b" target
                            " has " (count params) " params")
-                      {:fn :check-branch-arg-arity-for-target! :value label})))))
+                      {:fn :check-branch-arg-arity-for-target! :type (type label) :value label})))))
 
 (defn- check-branch-arg-arities! [f label]
   "For every terminator (:branch / :branch-if), verify the BranchTarget.args
@@ -174,7 +174,7 @@
                                          " branch-target args (true=" t-args
                                          ", false=" f-args ") — lower-block! requires"
                                          " true.args == false.args")
-                                    {:fn :check-branch-if-symmetric-args! :value label}))))))))
+                                    {:fn :check-branch-if-symmetric-args! :type (type label) :value label}))))))))
         (recur (inc i))))))
 
 (defn validate-fn! [f label]

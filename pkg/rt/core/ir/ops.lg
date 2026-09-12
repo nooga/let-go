@@ -119,7 +119,7 @@
       (throw (ex-info (str "ir.ops: op " op-kw " has the lower? facet but no "
                            "registered impl — ir.lower-go must load (and call "
                            "register-lower-impl!) before lowering")
-                      {:fn :delegated-lower :value op-kw})))
+                      {:fn :delegated-lower :type (type op-kw) :value op-kw})))
     (impl f closed-exprs nid)))
 
 ;; --- op-types -----------------------------------------------------------
@@ -132,7 +132,7 @@
   (throw (ex-info (str "ir.ops: op " op-kw " has no reified lower facet — "
                        "lower-inst-stmts must not dispatch here (check the lower? "
                        "column in pkg/ir/ir_ops.lg)")
-                  {:fn :no-lower-facet :value op-kw})))
+                  {:fn :no-lower-facet :type (type op-kw) :value op-kw})))
 
 (deftype ConstOp []
   IROp
@@ -311,7 +311,7 @@
     :else (throw (ex-info (str "ir.ops/infer-op: op " op " has the infer? facet in "
                                "pkg/ir/ir_ops.lg but no devirtualized arm here — add "
                                "the arm and the op-registry entry")
-                          {:fn :infer-op :value op}))))
+                          {:fn :infer-op :type (type op) :value op}))))
 
 (defn lower-op [op f closed-exprs nid]
   (cond
@@ -320,7 +320,7 @@
     :else (throw (ex-info (str "ir.ops/lower-op: op " op " has the lower? facet in "
                                "pkg/ir/ir_ops.lg but no devirtualized arm here — add "
                                "the arm and the op-registry entry")
-                          {:fn :lower-op :value op}))))
+                          {:fn :lower-op :type (type op) :value op}))))
 
 ;; --- catalog coherence (exhaustiveness) --------------------------------
 ;;
@@ -344,4 +344,4 @@
                              (if (seq extra)
                                (str " op-registry entries without a facet column in pkg/ir/ir_ops.lg: " extra)
                                ""))
-                        {:fn :catalog-coherent? :value missing}))))))
+                        {:fn :catalog-coherent? :type (type missing) :value missing}))))))

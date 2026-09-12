@@ -156,7 +156,7 @@
         f
         (do
           (when (> guard 1000)
-            (throw (ex-info "legalize-fn!: did not converge (non-dominating cross-block ref?)" {:fn :legalize-fn! :value f})))
+            (throw (ex-info "legalize-fn!: did not converge (non-dominating cross-block ref?)" {:fn :legalize-fn! :type (type f) :value f})))
           ;; Thread once per (value, use-block); reuse the block-arg for every
           ;; inst in that block that references the value.
           (doseq [[[v use-block] entries]
