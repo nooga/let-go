@@ -61,3 +61,29 @@
     (is (= 1 (:reached c)))
     (is (= 3 (:total c)))
     (is (= #{'public-a 'helper} (set (map :name (:untested c)))))))
+
+(deftest bare-names-resolve-in-files-without-an-ns-form
+  ;; Most scripts have no (ns ...) form, so the graph falls back to the path.
+  ;; A symbol built straight from a path splits at its FIRST slash, which made
+  ;; (name 'scripts/foo.lg/helper) read as "foo.lg/helper" and every bare-name
+  ;; resolution against it fail silently -- so every such definition looked
+  ;; unreachable. Slashes are mapped to dots to keep the name a real name.
+  (let [src {:path "scripts/deep/tool.lg"
+             :text "(defn- helper [x] (inc x))\n(defn run [x] (helper x))\n(run 1)\n"}
+        g (g/build [src])
+        roots (g/resolve-symbols g (g/top-level-refs [src]))]
+    (is (= 1 (count roots)))
+    ;; the entry call resolves, and the helper is reachable from it
+    (is (= 2 (count (g/reachable g roots))))))
+
+(deftest top-level-refs-see-registry-and-entry-forms
+  ;; A registration in a top-level non-definition form is a real reference the
+  ;; edge builder does not see, because it only walks definitions.
+  (let [src {:path "lib.lg"
+             :text "(ns lib)\n(defn- impl [x] x)\n(register! :thing impl)\n"}
+        refs (g/top-level-refs [src])]
+    (is (contains? refs 'impl))
+    (is (contains? refs 'register!))
+    ;; definitions themselves are not top-level refs
+    (is (not (contains? (g/top-level-refs [{:path "d.lg" :text "(defn only [x] x)\n"}])
+                        'only)))))

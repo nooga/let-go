@@ -262,7 +262,8 @@
   "The CLI's flags and positional paths. Unknown `--flags` are rejected
    loudly rather than silently treated as paths."
   [args]
-  (loop [a (vec args) opts {:top (:top-default score/thresholds) :source-roots []} paths []]
+  (loop [a (vec args) opts {:top (:top-default score/thresholds) :source-roots []
+                            :lib-roots (:lib-roots score/thresholds)} paths []]
     (if (empty? a)
       ;; Positional paths stay as given (possibly none) -- `discover` is what
       ;; falls back to `default-paths`, which is per language.
@@ -385,6 +386,51 @@
                                                     (pred (test-file? (:path f) source-roots))))
                                        loaded)))
         lg-cov (graph/coverage (lg-of not) (lg-of identity))
+        ;; Dead code: the same closure `graph/reachable` computes for tests,
+        ;; started from PRODUCTION roots instead.
+        ;;   - every public definition of a library namespace, because the
+        ;;     standard library's surface is called by users the graph cannot
+        ;;     see, so library dead code reduces to unreached privates;
+        ;;   - every symbol a script or command references from a top-level
+        ;;     non-definition form, which is its entry point (and, in a
+        ;;     library, its registry registrations and dispatch tables);
+        ;;   - anything marked ^:api, the opt-out for dynamic entry points.
+        lg-sources (lg-of not)
+        prod-graph (graph/build lg-sources)
+        lib? (fn [p] (some (fn [r] (str/starts-with? p r)) (:lib-roots opts)))
+        prod-roots (into (set (keep (fn [[qname d]]
+                                      (when (and (lib? (:path d)) (graph/public? d)) qname))
+                                    (:defs prod-graph)))
+                         (graph/entry-roots prod-graph lg-sources))
+        reached-prod (graph/reachable prod-graph prod-roots)
+        ;; Reachable only from tests: a helper nothing in production calls is
+        ;; dead production code even though the suite exercises it. Reported
+        ;; as its own category rather than folded into either bucket.
+        reached-with-tests (graph/reachable
+                             prod-graph
+                             (into prod-roots (graph/resolve-symbols
+                                                prod-graph
+                                                (graph/test-roots (lg-of identity)))))
+        sloc-of (into {} (for [f lg-files d (:definitions f)]
+                           [[(:path f) (:line d)] (:sloc d)]))
+        all-defs (vec (for [[qname d] (:defs prod-graph) :when (not= :deftest (:kind d))]
+                        {:name (symbol (name qname)) :path (:path d) :line (:line d)
+                         :sloc (get sloc-of [(:path d) (:line d)] 1)}))
+        def->record (fn [[qname d]]
+                      {:name (symbol (name qname)) :path (:path d) :line (:line d)
+                       :sloc (get sloc-of [(:path d) (:line d)] 1)})
+        test-only-defs (vec (sort-by (juxt (comp - :sloc) :path :line)
+                                     (vec (for [[qname d] (:defs prod-graph)
+                                                :when (and (not= :deftest (:kind d))
+                                                           (not (reached-prod qname))
+                                                           (reached-with-tests qname))]
+                                            (def->record [qname d])))))
+        dead-defs (vec (sort-by (juxt (comp - :sloc) :path :line)
+                                (vec (for [[qname d] (:defs prod-graph)
+                                           :when (and (not= :deftest (:kind d))
+                                                      (not (reached-prod qname)))]
+                                       {:name (symbol (name qname)) :path (:path d) :line (:line d)
+                                        :sloc (get sloc-of [(:path d) (:line d)] 1)}))))
         go-cov (when-let [p (:go-cover opts)]
                  (assoc (inputs/parse-coverprofile (slurp p)) :path p :sha256 (sha256 p)))
         combined (if (and go-cov (pos? (+ lg-src-loc go-src-loc)))
@@ -438,6 +484,14 @@
                       :lg (terms/erosion (filter (fn [c] (str/ends-with? (:path c) ".lg")) callables))
                       :go (terms/erosion (filter (fn [c] (str/ends-with? (:path c) ".go")) callables))
                       :go-source (:source go-analysis)}
+            ;; OURS, not the paper's, and an UPPER BOUND: see quality.terms.
+            :dead {:value (terms/dead-share dead-defs all-defs)
+                   :definitions (count all-defs)
+                   :dead-definitions (count dead-defs)
+                   :dead-sloc (reduce + 0 (map :sloc dead-defs))
+                   :test-only (count test-only-defs)
+                   :test-only-worst (vec (take 5 test-only-defs))
+                   :worst (vec (take 10 dead-defs))}
             :verbosity {:value (terms/verbosity (reduce + 0 (vals dup-lines))
                                                 (reduce + 0 (map :loc files)))
                         :dup-lines (reduce + 0 (vals dup-lines))
