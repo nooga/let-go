@@ -529,11 +529,13 @@
         go-by-path (group-by :path (:functions go-analysis))
         callables (vec (concat
                          (for [f lg-files d (:definitions f)]
-                           {:path (:path f) :name (:name d) :cc (:cc d) :sloc (:sloc d)})
+                           {:path (:path f) :name (:name d) :cc (:cc d) :sloc (:sloc d)
+                            :line (:line d) :end (:end d) :depth (:depth d) :lang :lg})
                          (for [fn* (:functions go-analysis)
                                :when (not= :dead-closure (:kind fn*))]
-                           {:path (str prefix (:path fn*)) :name (:name fn*)
-                            :cc (:cc fn*) :sloc (:sloc fn*)})))
+                           {:path (rel-path (:path fn*)) :name (:name fn*)
+                            :cc (:cc fn*) :sloc (:sloc fn*)
+                            :line (:line fn*) :end (:end fn*) :lang :go})))
         src-files (remove :test? files0)
         test-files (filter :test? files0)
         src-loc (reduce + 0 (map :loc src-files))
@@ -633,6 +635,25 @@
                                                 (:files go-analysis))))
         flagged-code-total (reduce + 0 (map count (vals code-flagged)))
         flagged-comment-total (reduce + 0 (map count (vals comment-flagged)))
+        ;; A callable is "duplicated" when its line span overlaps a reported
+        ;; duplicate region in the same file.
+        regions-by-path (reduce (fn [m p]
+                                  (-> m
+                                      (update (get-in p [:a :path]) (fnil conj [])
+                                              [(get-in p [:a :start]) (get-in p [:a :end])])
+                                      (update (get-in p [:b :path]) (fnil conj [])
+                                              [(get-in p [:b :start]) (get-in p [:b :end])])))
+                                {} dup-pairs)
+        duplicated-region? (fn [c]
+                             ;; A callable with no line information (nothing
+                             ;; produces one today, but the shape allows it)
+                             ;; cannot overlap anything.
+                             (when-let [start (:line c)]
+                               (let [end (or (:end c) start)]
+                                 (some (fn [[from to]]
+                                         (and from to (<= from end) (<= start to)))
+                                       (get regions-by-path (:path c) [])))))
+        top (score/top-complexity callables (:top opts) duplicated-region?)
         corpus-terms {:erosion (terms/erosion callables)
                       :verbosity (terms/verbosity (reduce + 0 (vals dup-lines))
                                                   (when (:findings lint) flagged-code-total)
@@ -705,7 +726,8 @@
             :files (vec (sort-by (juxt (comp - :debt) :path)
                                  (mapv #(dissoc % :definitions) files)))
             :issues (score/issues files lg-cov dup-pairs)
-            :top-complexity (score/top-complexity lg-files (:top opts))})))
+            :top-complexity top
+            :best-targets (score/best-targets top)})))
 
 (def usage
   (str "usage: ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]\n"
