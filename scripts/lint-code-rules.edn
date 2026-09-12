@@ -1,0 +1,102 @@
+;; Code-verbosity rule catalog for scripts/lint.lg (.lg source only; see the
+;; "Code-verbosity" section comment in lint.lg for the matcher semantics).
+;;
+;; Each entry: {:name :kind :pattern :replace :why}. :pattern/:replace are
+;; ordinary .lg forms. A symbol starting with "?" is a metavariable (binds a
+;; single sub-form; repeated occurrences must be structurally identical). A
+;; symbol starting with "?&", as the LAST element of a list/vector pattern,
+;; binds ALL remaining siblings as a sequence (for variadic shapes).
+;;
+;; Adding a pattern here needs no change to lint.lg.
+
+;; redundant-if-true-false ("(if ?c true false)" -> "?c") was tested,
+;; confirmed working (see scripts/lint.lg's test suite), and DROPPED from
+;; this catalog: it found zero real instances across pkg/scripts/test. A
+;; rule that fires zero times earns nothing by staying for completeness.
+
+{:name :redundant-if-false-true
+ :kind :redundant-if-false-true
+ :pattern (if ?c false true)
+ :replace (not ?c)
+ :why "the negated condition is already the value"}
+
+{:name :redundant-eq-true-lhs
+ :kind :redundant-eq-true
+ :pattern (= true ?x)
+ :replace ?x
+ :why "comparing to true is the expression itself"}
+
+{:name :redundant-eq-true-rhs
+ :kind :redundant-eq-true
+ :pattern (= ?x true)
+ :replace ?x
+ :why "comparing to true is the expression itself"}
+
+{:name :redundant-not-eq
+ :kind :redundant-not-eq
+ :pattern (not (= ?a ?b))
+ :replace (not= ?a ?b)
+ :why "not= says the same thing directly"}
+
+{:name :redundant-not-empty
+ :kind :redundant-not-empty
+ :pattern (not (empty? ?x))
+ :replace (seq ?x)
+ :why "seq says the same thing directly, without the double negative"}
+
+{:name :eta-expansion
+ :kind :eta-expansion
+ :pattern (fn [?&params] (?f ?&params))
+ :replace ?f
+ :why "a function that only forwards its arguments to another function is that function"}
+
+{:name :let-identity
+ :kind :let-identity
+ :pattern (let [?x ?e] ?x)
+ :replace ?e
+ :why "a binding used only as its own return value adds nothing"}
+
+;; let-empty-bindings ("(let [] ?e)" -> "?e") was likewise tested, confirmed
+;; working, and DROPPED: zero real instances in this corpus.
+
+{:name :do-single-form
+ :kind :do-single-form
+ :pattern (do ?e)
+ :replace ?e
+ :why "a do wrapping one form does nothing"}
+
+{:name :first-first
+ :kind :composable-accessor
+ :pattern (first (first ?x))
+ :replace (ffirst ?x)
+ :why "ffirst says the same thing directly"}
+
+{:name :first-next
+ :kind :composable-accessor
+ :pattern (first (next ?x))
+ :replace (fnext ?x)
+ :why "fnext says the same thing directly"}
+
+{:name :next-first
+ :kind :composable-accessor
+ :pattern (next (first ?x))
+ :replace (nfirst ?x)
+ :why "nfirst says the same thing directly"}
+
+{:name :next-next
+ :kind :composable-accessor
+ :pattern (next (next ?x))
+ :replace (nnext ?x)
+ :why "nnext says the same thing directly"}
+
+{:name :apply-str-interpose
+ :kind :apply-str-interpose
+ :pattern (apply str (interpose ?sep ?coll))
+ :replace (clojure.string/join ?sep ?coll)
+ :why "clojure.string/join says the same thing directly"}
+
+{:name :nested-if-chain
+ :kind :nested-if-chain
+ :pattern (if ?c1 ?a1 (if ?c2 ?a2 (if ?c3 ?a3 ?else)))
+ :replace (cond ?c1 ?a1 ?c2 ?a2 :else ?else)
+ :why "three or more nested if/else branches are a cond"}
