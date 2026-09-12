@@ -45,7 +45,7 @@
 (deftest mergesort-is-n-log-n
   ;; T(n) = 2T(n/2) + n^1, with a merge step the catalog knows is linear
   (let [r (degree-of-src
-           "(defn msort [v] (if (< (count v) 2) v (concat (msort (subvec v 0 1)) (msort (subvec v 1)))))")]
+            "(defn msort [v] (if (< (count v) 2) v (concat (msort (subvec v 0 1)) (msort (subvec v 1)))))")]
     (is (= "n log n" (cost/degree-str (:degree r))))
     ;; divide-and-conquer is the GOOD outcome and must not count against the code
     (is (not (cost/superlinear? (:degree r))))))
@@ -69,7 +69,7 @@
 (deftest a-linear-scan-per-recursive-step-is-quadratic
   ;; T(n) = 1T(n/1) + n^1
   (let [r (degree-of-src
-           "(defn f [xs] (if (empty? xs) [] (cons (reduce + 0 xs) (f (rest xs)))))")]
+            "(defn f [xs] (if (empty? xs) [] (cons (reduce + 0 xs) (f (rest xs)))))")]
     (is (= "n^2" (cost/degree-str (:degree r))))
     (is (cost/superlinear? (:degree r)))))
 
@@ -80,20 +80,20 @@
   ;; answer, and quicksort's worst case really is quadratic, so it is not a
   ;; false alarm.
   (let [r (degree-of-src
-           "(defn qs [v] (if (empty? v) v (let [p (first v)] (concat (qs (filter (fn [x] (< x p)) v)) (qs (filter (fn [x] (> x p)) v))))))")]
+            "(defn qs [v] (if (empty? v) v (let [p (first v)] (concat (qs (filter (fn [x] (< x p)) v)) (qs (filter (fn [x] (> x p)) v))))))")]
     (is (= :unknown (:degree r)))
     ;; unknown is its OWN bucket: never counted as constant, never as guilty
     (is (not (cost/superlinear? (:degree r))))))
 
 (deftest an-unreadable-shrink-is-unknown-never-constant
   (is (= :unknown (:degree (degree-of-src
-                            "(defn f [x] (if (pos? x) 0 (f (frobnicate x))))")))))
+                             "(defn f [x] (if (pos? x) 0 (f (frobnicate x))))")))))
 
 (deftest memoization-is-marked-not-scored
   ;; A memoized fib is linear but reads structurally as exponential. The
   ;; structural bound does not apply, so it is marked rather than scored.
   (let [r (degree-of-src
-           "(def mfib (memoize (fn fib [n] (if (< n 2) n (+ (fib (dec n)) (fib (dec (dec n))))))))")]
+            "(def mfib (memoize (fn fib [n] (if (< n 2) n (+ (fib (dec n)) (fib (dec (dec n))))))))")]
     (is (= :memoized (:degree r)))
     (is (not (cost/superlinear? (:degree r))))))
 
@@ -101,8 +101,8 @@
 
 (deftest a-degree-one-callee-inside-one-loop-is-quadratic
   (is (= "n^2" (cost/degree-str
-                (:degree (degree-of-src "(defn f [xs] (map (fn [x] (helper x)) xs))"
-                                        (fn [s] (when (= s 'helper) {:poly 1}))))))))
+                 (:degree (degree-of-src "(defn f [xs] (map (fn [x] (helper x)) xs))"
+                                         (fn [s] (when (= s 'helper) {:poly 1}))))))))
 
 (deftest an-uncatalogued-core-call-is-assumed-constant-and-flagged
   ;; Honest about the gap: assumed, and reported, so the catalog grows from
@@ -135,7 +135,7 @@
 (deftest the-exponential-base-is-the-number-of-call-sites
   ;; 3^n is a different animal from 2^n, and the base is read directly.
   (is (= {:exp 3} (:degree (degree-of-src
-                            "(defn t3 [n] (if (< n 2) n (+ (t3 (dec n)) (t3 (dec n)) (t3 (dec n)))))"))))
+                             "(defn t3 [n] (if (< n 2) n (+ (t3 (dec n)) (t3 (dec n)) (t3 (dec n)))))"))))
   (is (= "3^n" (shows "(defn t3 [n] (if (< n 2) n (+ (t3 (dec n)) (t3 (dec n)) (t3 (dec n)))))"))))
 
 (deftest karatsuba-does-not-count-against-the-code-but-strassen-does
@@ -150,10 +150,35 @@
   ;; beyond every exponential. Nothing tries to compute how far beyond; the
   ;; shape is detected and reported, which keeps `c^n` meaning what it says.
   (let [r (degree-of-src
-           "(defn ack [m n] (cond (zero? m) (inc n) (zero? n) (ack (dec m) 1) :else (ack (dec m) (ack m (dec n)))))")]
+            "(defn ack [m n] (cond (zero? m) (inc n) (zero? n) (ack (dec m) 1) :else (ack (dec m) (ack m (dec n)))))")]
     (is (= :beyond-exp (:degree r)))
     (is (= "beyond exponential" (cost/degree-str (:degree r))))
     (is (cost/superlinear? (:degree r))))
   ;; plain tree recursion is NOT this: the calls are siblings, not nested
   (is (= {:exp 2} (:degree (degree-of-src
-                            "(defn fib [n] (if (< n 2) n (+ (fib (dec n)) (fib (dec (dec n))))))")))))
+                             "(defn fib [n] (if (< n 2) n (+ (fib (dec n)) (fib (dec (dec n))))))")))))
+
+(deftest a-degree-is-a-function-of-the-INPUT-not-the-code-shape
+  ;; The defect this rule fixes: loop NESTING DEPTH is not a degree. A degree
+  ;; is a function of input size, and a definition's inputs are its
+  ;; parameters. installLangNS -- four nested loops over fixed tables and a
+  ;; call's own argument count -- read as n^4 while being constant in what it
+  ;; is given.
+  (is (= "n" (shows "(defn f [xs] (map inc xs))")))
+  (is (= "1" (shows "(defn f [x] (map inc [1 2 3]))")))
+  (is (= "1" (shows "(defn f [x] (map inc some-global-registry))")))
+  ;; nesting counts only where BOTH loops trace to a parameter
+  (is (= "n^2" (shows "(defn f [xs] (map (fn [a] (filter pos? xs)) xs))")))
+  (is (= "n" (shows "(defn f [xs] (map (fn [a] (filter pos? [1 2 3])) xs))")))
+  ;; a chain through a local still traces
+  (is (= "n" (shows "(defn f [xs] (let [ys (rest xs)] (map inc ys)))")))
+  ;; an element bound by a loop over a parameter carries its size
+  (is (= "n^2" (cost/degree-str
+                 (:degree (degree-of-src "(defn f [xs] (map (fn [x] (helper x)) xs))"
+                                         (fn [s] (when (= s 'helper) {:poly 1}))))))))
+
+(deftest a-core-call-on-non-parameter-data-is-constant-in-the-input
+  ;; The catalog says `map` is linear in ITS argument. If the argument is a
+  ;; literal, it is constant in OURS -- the same rule, applied to calls.
+  (is (= "1" (shows "(defn f [x] (sort [3 1 2]))")))
+  (is (= "n log n" (shows "(defn f [xs] (sort xs))"))))
