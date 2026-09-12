@@ -112,12 +112,12 @@
   ;; the zero-arg default-to-current-ns behavior on the throwaway zeroarg
   ;; namespace instead, switched into with in-ns.
   ;; See the leading nil in run-all-tests-filters-with-re-matches above for
-  ;; why the (in-ns ...) below can't be the first form of the binding body.
+  ;; why the (in-ns ...) below can't be the first form of the let body.
   (let [orig-ns *ns*]
-    (binding [report (fn [_])]
-      nil
-      (in-ns 'test.runners-test.zeroarg)
-      (try
-        (is (= 'test.runners-test.zeroarg (ns-name *ns*)))
-        (is (map? (run-tests)))
-        (finally (in-ns (ns-name orig-ns)))))))
+    nil
+    (in-ns 'test.runners-test.zeroarg)
+    (try
+      (is (= 'test.runners-test.zeroarg (ns-name *ns*)))
+      (is (= {:test 1 :pass 1 :fail 0 :error 0 :type :summary}
+             (quiet #(run-tests))))
+      (finally (in-ns (ns-name orig-ns))))))
