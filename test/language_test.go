@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nooga/let-go/pkg/compiler"
@@ -25,6 +26,10 @@ var (
 	coreNS        *vm.Namespace
 	cleanBindings vm.BindingSnapshot
 	harnessOnce   sync.Once
+
+	// scratchSeq names the throwaway baseline namespaces the harness tests
+	// load polluting fixtures into, one fresh name per use.
+	scratchSeq atomic.Int64
 )
 
 // ensureHarness builds the one shared runtime the corpus harness runs every
@@ -69,16 +74,26 @@ func ensureHarness() {
 // The namespace to run is taken from the loader's own *ns* after the file
 // finishes: the compiler exposes no "saw an ns form" flag, so the documented
 // approximation is that a file which switched namespaces left *ns* pointing
-// at something other than the clojure.core baseline (and other than `test`
-// itself). A file that never switched is load-only — nothing in it can be
-// reached by run-tests, so a deftest there is the bug the harness reports.
+// at something other than the baseline it was loaded into (and other than
+// `test` itself). A file that never switched is load-only — nothing in it can
+// be reached by run-tests, so a deftest there is the bug the harness reports.
 func runFileTests(path string) (bool, string) {
 	ensureHarness()
-	rt.CurrentNS.SetRoot(coreNS)
+	return runFileTestsIn(path, coreNS)
+}
+
+// runFileTestsIn is runFileTests with the baseline namespace made explicit.
+// The corpus walk passes coreNS, the shared clojure.core every .lg file starts
+// in. A test that deliberately loads a polluting fixture — one that refers
+// vars or interns names into whatever namespace it lands in — passes a
+// throwaway namespace instead, so the pollution dies with the fixture rather
+// than leaking into the runtime the rest of the package shares.
+func runFileTestsIn(path string, baseline *vm.Namespace) (bool, string) {
+	rt.CurrentNS.SetRoot(baseline)
 	var ok bool
 	var msg string
 	_, _ = vm.RunWithBindings(cleanBindings, func() (vm.Value, error) {
-		if loadErr := runFile(path); loadErr != nil {
+		if loadErr := runFile(path, baseline); loadErr != nil {
 			msg = "load: " + loadErr.Error()
 			return vm.NIL, nil
 		}
@@ -87,7 +102,7 @@ func runFileTests(path string) (bool, string) {
 			msg = "no current namespace after loading " + path
 			return vm.NIL, nil
 		}
-		if finalNS == coreNS || finalNS.Name() == "test" {
+		if finalNS == baseline || finalNS.Name() == "test" {
 			// Load-only file. A deftest here would never run, so that is
 			// the failure, not the missing ns form.
 			if hasTestVars(finalNS) {
@@ -120,6 +135,9 @@ func runFileTests(path string) (bool, string) {
 // i.e. whether the namespace holds anything run-tests would run.
 func hasTestVars(ns *vm.Namespace) bool {
 	for _, v := range ns.AllVars() {
+		// A Meta() that does not implement ValueAt — including the nil
+		// interface a var with no metadata returns — is deliberately read as
+		// "no metadata", and so as "not a test".
 		m, ok := v.Meta().(interface{ ValueAt(vm.Value) vm.Value })
 		if ok && m.ValueAt(vm.Keyword("test")) != vm.NIL {
 			return true
@@ -128,8 +146,8 @@ func hasTestVars(ns *vm.Namespace) bool {
 	return false
 }
 
-func runFile(filename string) error {
-	ns := rt.NS(rt.NameCoreNS)
+// runFile compiles one .lg file with ns as the namespace it starts in.
+func runFile(filename string, ns *vm.Namespace) error {
 	if ns == nil {
 		fmt.Println("namespace not found")
 		return nil
@@ -202,19 +220,50 @@ func TestRunner(t *testing.T) {
 // so a deftest in one would silently never execute. That is the failure the
 // harness reports — not the missing ns form.
 func TestHarnessRejectsDeftestOutsideNamespace(t *testing.T) {
+	ensureHarness()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "stray.lg")
 	// :refer :all is not cosmetic here: deftest's own template splices a
 	// bare, unqualified `is` (see test.lg's note on this dialect's
 	// syntax-quote), so (test/deftest ... (test/is ...)) does not compile.
-	// A load-only file defines into clojure.core itself, so the stray var is
-	// unmapped afterwards to keep the shared runtime clean.
 	if err := os.WriteFile(path, []byte("(require '[test :refer :all])\n(deftest stray (is true))\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { rt.NS(rt.NameCoreNS).Unmap(vm.Symbol("stray")) })
-	ok, msg := runFileTests(path)
+
+	// A load-only file interns and refers into whatever namespace it is
+	// loaded in, and this one refers every public of `test` — deftest, is,
+	// testing, are, use-fixtures. Loading it into the shared clojure.core
+	// would make those resolvable unqualified in every corpus file that runs
+	// afterwards, silently masking a file that used them without requiring
+	// them. Give it a throwaway baseline instead, so the whole blast radius
+	// is a namespace nothing else ever looks at. The name is unique per run
+	// so -count=N cannot reuse a dirtied one.
+	scratch := rt.DefNSBare(fmt.Sprintf("test.harness-load-only-scratch-%d", scratchSeq.Add(1)))
+
+	// Guard against a future reordering or refactor quietly reintroducing the
+	// dependency on this test running after TestRunner. It is a before/after
+	// diff, not an absolute check: corpus files of the same shape already
+	// refer test's publics into clojure.core when TestRunner has run first,
+	// so what must hold is that THIS fixture changes none of these mappings —
+	// which is true in any order only while it loads somewhere else.
+	core := rt.NS(rt.NameCoreNS)
+	watched := []vm.Symbol{"stray", "deftest", "is", "testing", "use-fixtures"}
+	before := make(map[vm.Symbol]vm.Value, len(watched))
+	for _, sym := range watched {
+		before[sym] = core.Lookup(sym)
+	}
+
+	ok, msg := runFileTestsIn(path, scratch)
 	if ok || !strings.Contains(msg, "deftest outside a namespace") {
 		t.Fatalf("expected load-only failure, got ok=%v msg=%q", ok, msg)
+	}
+
+	for _, sym := range watched {
+		if got := core.Lookup(sym); got != before[sym] {
+			t.Errorf("fixture leaked %q into the shared clojure.core baseline "+
+				"(was %v, now %v); it must load into a throwaway namespace",
+				sym, before[sym], got)
+		}
 	}
 }
