@@ -14,6 +14,18 @@
   ;; after verifying by hand; see task-3-report.md.
   (is (= [1 1 2 2] (map :line (lex/tokens "(a\n b)" :lg)))))
 
+(deftest lexer-keeps-reader-macro-punctuation-verbatim
+  ;; `#{` must not lex like a call on an identifier: `#`, `'`, and the rest
+  ;; of the reader-macro marks are punctuation, kept verbatim. `%` (the
+  ;; anonymous-fn arg placeholder) is not special-cased -- it lexes as any
+  ;; other bare symbol would, i.e. "ID".
+  (is (= ["#" "{" ":a" "}" "#" "(" "ID" "ID" ")" "'" "ID"]
+         (map :t (lex/tokens "#{:a} #(inc %) 'x" :lg)))))
+
+(deftest lexer-collapses-named-char-literals-to-one-token
+  (is (= ["(" "ID" "ID" "STR" "STR" "STR" ")"]
+         (map :t (lex/tokens "(nth s \\space \\tab \\a)" :lg)))))
+
 (defn- files [& paths]
   (mapv (fn [p] {:path p :tokens (lex/tokens (slurp p) (if (clojure.string/ends-with? p ".go") :go :lg))}) paths))
 
@@ -37,3 +49,37 @@
   (let [fs (files "fixtures/quality/dup_a.lg" "fixtures/quality/dup_b.lg")
         pct (dup/file-percent fs (dup/pairs fs 25 40 50))]
     (is (< 30 (get pct "fixtures/quality/dup_a.lg") 90))))
+
+(deftest similarity-is-bounded-by-one
+  (let [src (slurp "fixtures/quality/dup_a.lg")
+        toks (lex/tokens src :lg)
+        ;; Two files with identical token streams share every k-gram
+        ;; exactly once each, so distinct-hash `shared` must equal each
+        ;; file's total k-gram count and similarity must be exactly 1.0 --
+        ;; not the cross-product blow-up a naive "shared" definition gives.
+        fs [{:path "id-a" :tokens toks} {:path "id-b" :tokens toks}]
+        cross (first (filter #(not= (get-in % [:a :path]) (get-in % [:b :path])) (dup/pairs fs 25 40 50)))]
+    (is (some? cross))
+    (is (= 1.0 (:similarity cross)))))
+
+(deftest similarity-stays-bounded-on-repetitive-input
+  ;; A highly repetitive file (many identical short forms) is the case that
+  ;; previously blew similarity past 1.0 via the cross-product bug: every
+  ;; k-gram hash has dozens of positions in both copies, so a cross product
+  ;; of positions would massively over-count `shared` relative to `nk`.
+  (let [src (apply str (repeat 60 "(def x 1)\n"))
+        toks (lex/tokens src :lg)
+        fs [{:path "rep-a" :tokens toks} {:path "rep-b" :tokens toks}]
+        cross (first (filter #(not= (get-in % [:a :path]) (get-in % [:b :path])) (dup/pairs fs 25 40 50)))]
+    (is (some? cross))
+    (is (= 1.0 (:similarity cross)))
+    (is (<= (:similarity cross) 1.0))))
+
+(deftest finds-copy-paste-duplicate-within-one-file
+  (let [fs (files "fixtures/quality/dup_self.lg")
+        ps (dup/pairs fs 25 40 50)]
+    (is (= 1 (count ps)))
+    (is (= "fixtures/quality/dup_self.lg" (get-in (first ps) [:a :path])))
+    (is (= "fixtures/quality/dup_self.lg" (get-in (first ps) [:b :path])))
+    (is (not= (get-in (first ps) [:a :start]) (get-in (first ps) [:b :start])))
+    (is (<= (:similarity (first ps)) 1.0))))
