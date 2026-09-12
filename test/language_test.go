@@ -49,15 +49,21 @@ func TestRunner(t *testing.T) {
 	// Set up a loader so rt.NS can autoload namespaces from files during tests.
 	loaderCtx := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
 	// Search paths for `require`: current dir for in-tree test helpers
-	// (test/test.lg etc.), plus pkg/rt/gogen so tests can exercise the
-	// gogen macro layer.
-	nsPath := []string{".", "../pkg/rt/gogen"}
-	// LG_SOURCE_PATHS is the documented way to point `require` at extra
-	// namespace roots (e.g. scripts/spec-evidence/*.lg), but this harness
-	// runs in-process rather than shelling out to ./lg, so the resolver
-	// never otherwise reads the env var. `go test ./test/` runs with cwd
-	// set to this package's directory (test/), one level below the repo
-	// root, so each entry is resolved relative to "..".
+	// (test/test.lg etc.), pkg/rt/gogen so tests can exercise the gogen
+	// macro layer, and the repo's scripts/ root so test files can require
+	// the tooling namespaces that live there (spec-evidence.lg and
+	// spec-evidence/*.lg). scripts/ is UNCONDITIONAL: those tests are part
+	// of the default suite, and requiring an env var to make them compile
+	// meant a plain `go test ./test/` — which is what CI and the pre-push
+	// hook run — failed with "unable to load namespace spec-evidence".
+	// `go test ./test/` runs with cwd set to this package's directory
+	// (test/), one level below the repo root, so each entry is resolved
+	// relative to "..".
+	nsPath := []string{".", "../pkg/rt/gogen", "../scripts"}
+	// LG_SOURCE_PATHS still adds FURTHER namespace roots on top, for
+	// one-off runs against an out-of-tree corpus. This harness runs
+	// in-process rather than shelling out to ./lg, so the resolver never
+	// otherwise reads the env var.
 	for _, p := range resolver.ParseSearchPaths(os.Getenv("LG_SOURCE_PATHS")) {
 		nsPath = append(nsPath, filepath.Join("..", p))
 	}

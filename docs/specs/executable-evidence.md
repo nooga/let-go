@@ -336,11 +336,17 @@ does not end it early.
 | `test/spec_evidence_*_test.lg` | Unit tests for the tooling itself. |
 | `test/spec_evidence_test.go` | `TestSpecEvidence`: the Go gate. |
 
-The CLI needs `LG_SOURCE_PATHS=scripts` so its helper namespaces resolve:
+A direct CLI invocation needs `LG_SOURCE_PATHS=scripts` so the helper
+namespaces resolve:
 
 ```
 LG_SOURCE_PATHS=scripts ./lg scripts/spec-evidence.lg run docs/specs/executable-evidence.md
 ```
+
+The Go test harness does not: `test/language_test.go` puts the repo's
+`scripts/` on the resolver search path unconditionally, so the tooling's own
+`.lg` tests compile under a plain `go test ./test/` — which is what CI and
+the pre-push hook run.
 
 `tangle` writes each block to `<outdir>/<base>.<name>.<type>` plus a
 `<base>.map.edn` index; `generate` additionally writes the `.cljc` runner
