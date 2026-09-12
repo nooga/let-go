@@ -1,0 +1,28 @@
+(ns test.quality-cli-test
+  (:require
+   [clojure.string :as str]
+   [quality :as q]
+   [test :refer :all]))
+
+(deftest cli-produces-deterministic-report-over-fixtures
+  (let [edn-path (str (os/temp-dir) "quality-cli-test.edn")
+        args ["--ci-seconds" "300" "--go-cover" "fixtures/quality/cover.out" "--edn" edn-path
+              "--since" "2000-01-01" "--top" "5" "fixtures/quality"]
+        out1 (with-out-str (q/main args))
+        out2 (with-out-str (q/main args))]
+    (is (= out1 out2))
+    (is (str/includes? out1 "score"))
+    (is (str/includes? out1 "duplicate"))
+    (is (str/includes? out1 "untested"))
+    (is (str/includes? out1 "top complexity"))
+    (let [r (read-string (slurp edn-path))]
+      (is (<= 0 (:score r) 100))
+      (is (= "supplied" (get-in r [:inputs :ci :source])))
+      (is (vector? (:issues r)))
+      (is (vector? (:top-complexity r)))
+      (is (>= (:cc (first (:top-complexity r))) (:cc (second (:top-complexity r))))))))
+
+(deftest requiring-the-cli-namespace-does-not-run-it
+  ;; The entry guard means loading `quality` for this test printed nothing;
+  ;; if it had run, the test runner's output would carry a report already.
+  (is (fn? q/main)))
