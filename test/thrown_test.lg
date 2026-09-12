@@ -12,6 +12,7 @@
 
 (ns test.thrown-test
   (:require
+   [quiet-helper :refer [quiet]]
    [test :refer :all]))
 
 ;; --- probes -----------------------------------------------------------
@@ -28,18 +29,6 @@
 ;; it as an :error — matching clojure.test.
 (set-test non-matching-class-probe
   (is (thrown? clojure.lang.ExceptionInfo (throw "plain string"))))
-
-(defn- quiet
-  "Run f, discarding whatever it prints via report, but keep report's real
-   dispatch (and so its counter-incrementing side effects) intact — unlike
-   rebinding report itself to a no-op, which would also swallow :pass/
-   :fail/:error counting and break every summary this file asserts on.
-   with-test-out always prints through *test-out*, not *out*, so route
-   *test-out* into with-out-str*'s capture buffer for the duration."
-  [f]
-  (let [result (atom nil)]
-    (with-out-str* (fn [] (binding [*test-out* *out*] (reset! result (f)))))
-    @result))
 
 ;; --- thrown? ----------------------------------------------------------
 
