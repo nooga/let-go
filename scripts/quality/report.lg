@@ -66,7 +66,7 @@
      "caveat: efficiency couples coverage to CI time; deleting slow tests lowers it"]))
 
 (defn- debt-block [{total :debt :keys [terms coverage testing erosion verbosity dead
-                                       comment-debt lint]}]
+                                       comment-debt lint cost]}]
   ;; Display order only (names, not numbers); any future term in
   ;; `thresholds` that isn't listed here still prints, after these.
   (let [preferred [:erosion :uncovered :verbosity :comment-debt :dead :defects
@@ -107,7 +107,14 @@
                                (str ", " (:unscored lint) " unscored (divider/devlog)") ""))
                         (str "UNAVAILABLE (" (:error lint) ") -- verbosity counts CLONE LINES ONLY"
                              " and comment-debt is omitted")))
-       (str "  verbosity " (n3 (:value verbosity))
+       (str "  cost " (n3 (:value cost))
+           " (" (:superlinear cost) " of " (:definitions cost)
+           " definitions quadratic or worse by mass; " (:unknown cost) " unknown)"
+           " -- STATIC UPPER BOUND: structure, not semantics"
+           (if (seq (:assumed cost))
+             (str "; " (count (:assumed cost)) " uncatalogued calls assumed constant")
+             ""))
+      (str "  verbosity " (n3 (:value verbosity))
          " (" (:dup-lines verbosity) " duplicated of "
          (:loc verbosity) " lines)"
          " -- LOWER BOUND on the paper's metric")

@@ -1,0 +1,146 @@
+(ns test.quality-cost-test
+  (:require
+   [quality.cost :as cost]
+   [quality.forms :as forms]
+   [test :refer :all]))
+
+;; Cost is a STRUCTURAL estimate of algorithmic complexity. It exists because
+;; cyclomatic complexity counts branches, not scaling: fifty flat ifs are
+;; CC 50 and O(1), a triple-nested loop is CC 4 and O(n^3), naive fib is
+;; CC 2 and exponential.
+
+(def ^:private cat (cost/catalog "../scripts/quality"))
+
+(defn- degree-of-src
+  ([src] (degree-of-src src (fn [_] nil)))
+  ([src callee-degrees]
+   (cost/definition-degree (first (forms/definitions src)) callee-degrees cat)))
+
+(defn- shows [src] (cost/degree-str (:degree (degree-of-src src))))
+
+(deftest cc-and-cost-are-different-things
+  ;; The whole reason this term exists: a function can be branchy and cheap.
+  (let [branchy "(defn f [x] (if (pos? x) 1 (if (neg? x) 2 (if (zero? x) 3 4))))"]
+    (is (= "1" (cost/degree-str (:degree (degree-of-src branchy)))))))
+
+(deftest loop-nesting-gives-the-degree
+  (is (= "n" (shows "(defn f [xs] (map inc xs))")))
+  (is (= "n^2" (shows "(defn f [xs] (map (fn [x] (filter pos? xs)) xs))")))
+  (is (= "n^3" (shows "(defn f [xs] (map (fn [a] (map (fn [b] (filter pos? xs)) xs)) xs))"))))
+
+(deftest a-literal-bound-loop-adds-nothing
+  ;; dotimes over a constant runs a fixed number of times; it does not scale.
+  (is (= "1" (shows "(defn f [x] (dotimes [i 10] (println i)))"))))
+
+(deftest a-halving-loop-is-logarithmic-not-linear
+  ;; The induction variable is read the same way a recursive argument is.
+  (is (= "log n" (shows "(defn f [n] (loop [n n acc 0] (if (zero? n) acc (recur (quot n 2) (inc acc)))))"))))
+
+;; --- the recurrence table, one test per named case -------------------------
+
+(deftest binary-search-is-logarithmic
+  ;; T(n) = 1T(n/2) + n^0
+  (is (= "log n" (shows "(defn bs [v x lo hi] (if (>= lo hi) nil (let [m (quot (+ lo hi) 2)] (bs v x (quot m 2) hi))))"))))
+
+(deftest mergesort-is-n-log-n
+  ;; T(n) = 2T(n/2) + n^1, with a merge step the catalog knows is linear
+  (let [r (degree-of-src
+           "(defn msort [v] (if (< (count v) 2) v (concat (msort (subvec v 0 1)) (msort (subvec v 1)))))")]
+    (is (= "n log n" (cost/degree-str (:degree r))))
+    ;; divide-and-conquer is the GOOD outcome and must not count against the code
+    (is (not (cost/superlinear? (:degree r))))))
+
+(deftest balanced-tree-traversal-is-linear
+  ;; T(n) = 2T(n/2) + n^0
+  (is (= "n" (shows "(defn tsum [n] (if (nil? n) 0 (+ (tsum (subvec n 0 1)) (tsum (subvec n 1 2)))))"))))
+
+(deftest naive-fib-is-exponential
+  ;; T(n) = 2T(n/1) + n^0 -- two calls on a constant-shrunk argument
+  (let [r (degree-of-src "(defn fib [n] (if (< n 2) n (+ (fib (dec n)) (fib (dec (dec n))))))")]
+    ;; the BASE is the number of call sites: two calls is 2^n
+    (is (= {:exp 2} (:degree r)))
+    (is (= "2^n" (cost/degree-str (:degree r))))
+    (is (cost/superlinear? (:degree r)))))
+
+(deftest linear-recursion-is-linear
+  ;; T(n) = 1T(n/1) + n^0
+  (is (= "n" (shows "(defn f [xs] (if (empty? xs) 0 (+ 1 (f (rest xs)))))"))))
+
+(deftest a-linear-scan-per-recursive-step-is-quadratic
+  ;; T(n) = 1T(n/1) + n^1
+  (let [r (degree-of-src
+           "(defn f [xs] (if (empty? xs) [] (cons (reduce + 0 xs) (f (rest xs)))))")]
+    (is (= "n^2" (cost/degree-str (:degree r))))
+    (is (cost/superlinear? (:degree r)))))
+
+;; --- what it cannot see, reported honestly ---------------------------------
+
+(deftest quicksort-is-unknown-not-constant
+  ;; A data-dependent split is not a fixed fraction. Unknown is the honest
+  ;; answer, and quicksort's worst case really is quadratic, so it is not a
+  ;; false alarm.
+  (let [r (degree-of-src
+           "(defn qs [v] (if (empty? v) v (let [p (first v)] (concat (qs (filter (fn [x] (< x p)) v)) (qs (filter (fn [x] (> x p)) v))))))")]
+    (is (= :unknown (:degree r)))
+    ;; unknown is its OWN bucket: never counted as constant, never as guilty
+    (is (not (cost/superlinear? (:degree r))))))
+
+(deftest an-unreadable-shrink-is-unknown-never-constant
+  (is (= :unknown (:degree (degree-of-src
+                            "(defn f [x] (if (pos? x) 0 (f (frobnicate x))))")))))
+
+(deftest memoization-is-marked-not-scored
+  ;; A memoized fib is linear but reads structurally as exponential. The
+  ;; structural bound does not apply, so it is marked rather than scored.
+  (let [r (degree-of-src
+           "(def mfib (memoize (fn fib [n] (if (< n 2) n (+ (fib (dec n)) (fib (dec (dec n))))))))")]
+    (is (= :memoized (:degree r)))
+    (is (not (cost/superlinear? (:degree r))))))
+
+;; --- composition -----------------------------------------------------------
+
+(deftest a-degree-one-callee-inside-one-loop-is-quadratic
+  (is (= "n^2" (cost/degree-str
+                (:degree (degree-of-src "(defn f [xs] (map (fn [x] (helper x)) xs))"
+                                        (fn [s] (when (= s 'helper) {:poly 1}))))))))
+
+(deftest an-uncatalogued-core-call-is-assumed-constant-and-flagged
+  ;; Honest about the gap: assumed, and reported, so the catalog grows from
+  ;; real gaps rather than from guesses about completeness.
+  (let [r (degree-of-src "(defn f [x] (mystery-fn x))")]
+    (is (= "1" (cost/degree-str (:degree r))))
+    (is (contains? (:assumed r) 'mystery-fn))))
+
+(deftest the-term-is-a-mass-weighted-share
+  ;; Weighted by the same cc*sqrt(sloc) mass erosion uses, so the two terms
+  ;; agree about which functions are heavy.
+  (let [entries [{:degree {:poly 2} :mass 100.0} {:degree {:poly 0} :mass 300.0}]]
+    (is (= 0.25 (cost/cost-share entries))))
+  (is (nil? (cost/cost-share [])))
+  ;; nlogn, unknown and memoized do not count against the code
+  (is (= 0.0 (cost/cost-share [{:degree {:poly-log 1} :mass 10.0}
+                               {:degree :unknown :mass 10.0}
+                               {:degree :memoized :mass 10.0}]))))
+
+(deftest divide-and-conquer-gets-its-real-exponent
+  ;; The master theorem as a FORMULA, not a table of cases: n^log_b(a) for any
+  ;; a and b, so the classic algorithms land where they belong.
+  ;; Karatsuba: 3 calls on halves, linear combine -> n^log2(3) = 1.585
+  (is (= "n^1.58" (shows "(defn ka [v] (if (< (count v) 2) v (concat (ka (subvec v 0 1)) (ka (subvec v 1 2)) (ka (subvec v 2)))))")))
+  ;; Strassen: 7 calls on halves -> n^log2(7) = 2.807
+  (is (= "n^2.81" (shows "(defn st [v] (if (< (count v) 2) v (concat (st (subvec v 0 1)) (st (subvec v 1 2)) (st (subvec v 2 3)) (st (subvec v 3 4)) (st (subvec v 4 5)) (st (subvec v 5 6)) (st (subvec v 6)))))")))
+  ;; 4 calls on halves with constant work -> n^2 exactly
+  (is (= "n^2" (shows "(defn q4 [v] (if (empty? v) 0 (+ (q4 (subvec v 0 1)) (q4 (subvec v 1 2)) (q4 (subvec v 2 3)) (q4 (subvec v 3)))))"))))
+
+(deftest the-exponential-base-is-the-number-of-call-sites
+  ;; 3^n is a different animal from 2^n, and the base is read directly.
+  (is (= {:exp 3} (:degree (degree-of-src
+                            "(defn t3 [n] (if (< n 2) n (+ (t3 (dec n)) (t3 (dec n)) (t3 (dec n)))))"))))
+  (is (= "3^n" (shows "(defn t3 [n] (if (< n 2) n (+ (t3 (dec n)) (t3 (dec n)) (t3 (dec n)))))"))))
+
+(deftest karatsuba-does-not-count-against-the-code-but-strassen-does
+  ;; The threshold is polynomial degree 2: n^1.585 is fine, n^2.807 is not.
+  (is (not (cost/superlinear? {:poly 1.585})))
+  (is (cost/superlinear? {:poly 2.807}))
+  (is (cost/superlinear? {:exp 2}))
+  (is (not (cost/superlinear? {:poly-log 1}))))

@@ -17,7 +17,7 @@
 
 (deftest corpus-score-is-a-weighted-mean-of-shares
   (let [r (s/corpus-score {:erosion 0.4 :verbosity 0.2 :uncovered 0.5 :comment-debt 0.2
-                           :dead 0.1 :defects 0.3 :testing 0.6 :efficiency 0.8})]
+                           :dead 0.1 :defects 0.3 :testing 0.6 :cost 0.8})]
     ;; .25*.4 + .10*.2 + .20*.5 + .10*.2 + .10*.1 + .10*.3 + .10*.6 + .05*.8 = 0.38
     (is (< 0.379 (:debt r) 0.381))
     (is (= [] (:omitted r)))
@@ -26,17 +26,17 @@
 (deftest a-perfect-corpus-is-zero-and-the-worst-is-one
   (is (= 0.0 (:debt (s/corpus-score {:erosion 0.0 :verbosity 0.0 :uncovered 0.0
                                      :comment-debt 0.0 :dead 0.0 :defects 0.0
-                                     :testing 0.0 :efficiency 0.0}))))
+                                     :testing 0.0 :cost 0.0}))))
   (is (= 1.0 (:debt (s/corpus-score {:erosion 1.0 :verbosity 1.0 :uncovered 1.0
                                      :comment-debt 1.0 :dead 1.0 :defects 1.0
-                                     :testing 1.0 :efficiency 1.0})))))
+                                     :testing 1.0 :cost 1.0})))))
 
 (deftest missing-terms-renormalize-and-are-named
   (let [r (s/corpus-score {:erosion 0.4 :verbosity 0.4 :uncovered 0.4 :comment-debt 0.4
-                           :dead 0.4 :defects 0.4 :testing 0.4 :efficiency nil})]
+                           :dead 0.4 :defects 0.4 :testing 0.4 :cost nil})]
     ;; every present term is 0.4, so the mean is 0.4 whatever the weights
     (is (< 0.399 (:debt r) 0.401))
-    (is (= [:efficiency] (:omitted r)))))
+    (is (= [:cost] (:omitted r)))))
 
 (deftest file-score-uses-the-same-weights-restricted-to-a-file
   (let [f (s/file-score {:erosion 0.4 :verbosity 0.2 :defects 0.3 :dead 0.1})]
