@@ -1,0 +1,250 @@
+(ns quality
+  "Code-quality report CLI.
+
+   Usage:
+     ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]
+                             [--ci-run ID | --ci-seconds N]
+                             [--edn PATH] [--top N] [paths...]
+
+   Measures `.lg` and `.go` files under `paths` (default: the source tree),
+   scores them with `quality.score`, and prints a deterministic report.
+   Two runs over the same commit, git range, coverprofile and CI value
+   produce byte-identical output: files are sorted by path, issues by
+   score impact, and every external input is pinned in the header.
+
+   Design: docs/superpowers/specs/2026-09-11-code-quality-score-design.md"
+  (:require
+   [clojure.string :as str]
+   [quality.dup :as dup]
+   [quality.forms :as forms]
+   [quality.graph :as graph]
+   [quality.inputs :as inputs]
+   [quality.lex :as lex]
+   [quality.metrics :as metrics]
+   [quality.report :as report]
+   [quality.score :as score]))
+
+(def default-paths ["pkg/rt/core" "scripts" "test" "pkg" "cmd"])
+
+;; Paths that would only add noise: the vendored Clojure suite, generated
+;; Go, the lowered-core tree, and sibling jj workspaces.
+(def ^:private skip-substrings
+  ["test/clojure-test-suite/" "core_go_lowered/" ".workspaces/"])
+
+(defn- skip? [path]
+  (or (str/ends-with? path "_generated.go")
+      (some #(str/includes? path %) skip-substrings)))
+
+(defn- source-file? [path]
+  (or (str/ends-with? path ".lg") (str/ends-with? path ".go")))
+
+(defn walk
+  "Every `.lg`/`.go` file under `root` (a file or a directory), recursively
+   and in sorted order, minus the skipped paths."
+  [root]
+  (let [st (os/stat root)]
+    (cond
+      (nil? st) []
+      (:dir? st) (vec (mapcat #(walk (str root "/" %)) (sort (os/ls root))))
+      (and (source-file? root) (not (skip? root))) [root]
+      :else [])))
+
+(defn test-file?
+  "Test files are anything under a `test/` directory plus `*_test.lg` and
+   `*_test.go` anywhere. Their LOC is the numerator of the test-to-code
+   ratio and is excluded from source LOC."
+  [path]
+  (or (str/starts-with? path "test/")
+      (str/includes? path "/test/")
+      (str/ends-with? path "_test.lg")
+      (str/ends-with? path "_test.go")))
+
+(defn- lang-of [path] (if (str/ends-with? path ".go") :go :lg))
+
+(defn go-loc
+  "Go LOC = the number of distinct lines carrying at least one token --
+   i.e. non-blank, non-comment lines, since `quality.lex` drops comments."
+  [tokens]
+  (count (distinct (map :line tokens))))
+
+(defn lg-assertions
+  "`is` forms plus `are` rows under `deftest` in one `.lg` text. An `are`
+   row is `(count args) / (count argv)` per the `(are [argv] expr args...)`
+   shape; a malformed `are` with an empty binding vector counts as one."
+  [text]
+  (letfn [(walk-form [x]
+            (cond
+              (and (seq? x) (= 'is (first x))) 1
+              (and (seq? x) (= 'are (first x)) (vector? (second x)))
+              (let [argv (second x)
+                    args (count (nnext x))]
+                (if (pos? (count argv)) (quot args (count argv)) 1))
+              (coll? x) (reduce + 0 (map walk-form (seq x)))
+              :else 0))]
+    (reduce + 0 (map (fn [seg]
+                       (let [form (forms/read-segment seg)]
+                         (if (and (seq? form) (= 'deftest (first form)))
+                           (walk-form form)
+                           0)))
+                     (forms/segments text)))))
+
+(def ^:private go-assertion-re #"t\.(Error|Fatal|Errorf|Fatalf)\(|assert\.|require\.")
+
+(defn go-assertions [text] (count (re-seq go-assertion-re text)))
+
+(defn- sha256
+  "The content hash of a file, or \"unknown\" when `shasum` is unavailable."
+  [path]
+  (let [r (os/sh "shasum" "-a" "256" path)]
+    (if (zero? (:exit r)) (first (str/split (str/trim (:out r)) #"\s+")) "unknown")))
+
+(defn parse-args
+  "The CLI's flags and positional paths. Unknown `--flags` are rejected
+   loudly rather than silently treated as paths."
+  [args]
+  (loop [a (vec args) opts {:top (:top-default score/thresholds)} paths []]
+    (if (empty? a)
+      (assoc opts :paths (if (empty? paths) default-paths paths))
+      (let [x (first a) n (second a)]
+        (case x
+          "--since" (recur (subvec a 2) (assoc opts :since n) paths)
+          "--go-cover" (recur (subvec a 2) (assoc opts :go-cover n) paths)
+          "--ci-run" (recur (subvec a 2) (assoc opts :ci-run n) paths)
+          "--ci-seconds" (recur (subvec a 2) (assoc opts :ci-seconds (read-string n)) paths)
+          "--edn" (recur (subvec a 2) (assoc opts :edn n) paths)
+          "--top" (recur (subvec a 2) (assoc opts :top (read-string n)) paths)
+          (if (str/starts-with? x "--")
+            (throw (ex-info (str "unknown flag " x) {:flag x}))
+            (recur (subvec a 1) opts (conj paths x))))))))
+
+(defn- default-since
+  "180 days back, so a default run has a bounded, explicit git range."
+  []
+  (let [days (:since-days score/thresholds)
+        r (os/sh "date" "-v" (str "-" days "d") "+%Y-%m-%d")]
+    (if (zero? (:exit r))
+      (str/trim (:out r))
+      (str/trim (:out (os/sh "date" "-d" (str days " days ago") "+%Y-%m-%d"))))))
+
+(defn measure
+  "Everything the report needs, as data. Pure except for the file reads
+   and the pinned externals gathered by `quality.inputs`."
+  [opts]
+  (let [since (or (:since opts) (default-since))
+        grange (inputs/git-range since)
+        defect-counts (inputs/fix-counts grange)
+        paths (vec (sort (distinct (mapcat walk (:paths opts)))))
+        loaded (mapv (fn [p] {:path p :lang (lang-of p) :text (slurp p)}) paths)
+        tokenized (mapv (fn [f] (assoc f :tokens (lex/tokens (:text f) (:lang f)))) loaded)
+        ;; Duplication is compared within a language, as the spec requires:
+        ;; the two token vocabularies are disjoint enough that a cross
+        ;; match would be meaningless.
+        k (:dup-k score/thresholds) w (:dup-w score/thresholds) floor (:dup-floor score/thresholds)
+        by-lang (group-by :lang tokenized)
+        dup-pairs (vec (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start])
+                                      #(get-in % [:b :path]) #(get-in % [:b :start]))
+                                ;; realized (vec) before sorting: see the note
+                                ;; on `quality.score/issues`
+                                (vec (mapcat (fn [lang]
+                                               (dup/pairs (mapv #(select-keys % [:path :tokens])
+                                                                (get by-lang lang []))
+                                                          k w floor))
+                                       [:lg :go]))))
+        dup-pct (apply merge (map (fn [lang]
+                                    (dup/file-percent (mapv #(select-keys % [:path :tokens])
+                                                            (get by-lang lang []))
+                                                      dup-pairs))
+                                  [:lg :go]))
+        files (mapv (fn [f]
+                      (let [m (when (= :lg (:lang f)) (metrics/file-metrics (:text f)))
+                            loc (if m (max 1 (:loc m)) (max 1 (go-loc (:tokens f))))
+                            fixes (get defect-counts (:path f) 0)
+                            dpk (/ (* 1000.0 fixes) loc)
+                            pct (get dup-pct (:path f) 0.0)
+                            sc (score/file-composite {:cc-max (when m (:cc-max m))
+                                                      :mi (when m (:mi m))
+                                                      :dup-pct pct
+                                                      :defects-per-kloc dpk})]
+                        {:path (:path f) :lang (:lang f) :loc loc
+                         :test? (test-file? (:path f))
+                         :definitions (if m (:definitions m) [])
+                         :cc-max (when m (:cc-max m))
+                         :mi-raw (when m (:mi m))
+                         :comment-ratio (when m (:comment-ratio m))
+                         :dup-pct pct :defects-per-kloc dpk
+                         :cc (:cc sc) :mi (:mi sc) :dup (:dup sc) :defects (:defects sc)
+                         :composite (:composite sc)}))
+                    tokenized)
+        lg-files (filter #(= :lg (:lang %)) files)
+        src-files (remove :test? files)
+        test-files (filter :test? files)
+        src-loc (reduce + 0 (map :loc src-files))
+        test-loc (reduce + 0 (map :loc test-files))
+        lg-src-loc (reduce + 0 (map :loc (filter #(= :lg (:lang %)) src-files)))
+        go-src-loc (reduce + 0 (map :loc (filter #(= :go (:lang %)) src-files)))
+        ;; Static .lg reachability: sources are non-test .lg files, roots
+        ;; come from the .lg test files.
+        lg-of (fn [pred] (mapv #(select-keys % [:path :text])
+                               (filter (fn [f] (and (= :lg (:lang f)) (pred (test-file? (:path f)))))
+                                       loaded)))
+        lg-cov (graph/coverage (lg-of not) (lg-of identity))
+        go-cov (when-let [p (:go-cover opts)]
+                 (assoc (inputs/parse-coverprofile (slurp p)) :path p :sha256 (sha256 p)))
+        combined (if (and go-cov (pos? (+ lg-src-loc go-src-loc)))
+                   (/ (+ (* lg-src-loc (:percent lg-cov)) (* go-src-loc (:percent go-cov)))
+                      (double (+ lg-src-loc go-src-loc)))
+                   (:percent lg-cov))
+        ci (inputs/ci-seconds {:run (:ci-run opts) :seconds (:ci-seconds opts)})
+        efficiency (when (and ci combined (pos? (:seconds ci)))
+                     (/ combined (/ (:seconds ci) 60.0)))
+        assertions (reduce + 0 (map (fn [f]
+                                      (if (= :lg (:lang f))
+                                        (lg-assertions (:text f))
+                                        (go-assertions (:text f))))
+                                    (filter #(test-file? (:path %)) loaded)))
+        density (if (pos? src-loc) (/ (* 1000.0 assertions) src-loc) 0.0)
+        ratio (if (pos? src-loc) (/ test-loc (double src-loc)) 0.0)
+        testing {:assertions assertions :density density :ratio ratio
+                 :source-loc src-loc :test-loc test-loc
+                 :score (score/testing-term {:density density :ratio ratio})}
+        files-composite (if (pos? (reduce + 0 (map :loc files)))
+                          (/ (reduce + 0.0 (map (fn [f] (* (:loc f) (:composite f))) files))
+                             (double (reduce + 0 (map :loc files))))
+                          100.0)
+        corpus (score/corpus files-composite combined efficiency (:score testing))]
+    (merge corpus
+           {:inputs {:commit (:to grange)
+                     :git-range grange
+                     :go-cover (when go-cov (select-keys go-cov [:path :sha256 :percent]))
+                     :ci ci
+                     :paths (:paths opts)}
+            :coverage {:lg (select-keys lg-cov [:reached :total :percent])
+                       :go (when go-cov (select-keys go-cov [:covered :total :percent]))
+                       :combined combined
+                       :efficiency-pts efficiency}
+            :testing testing
+            :files (vec (sort-by (juxt :composite :path)
+                                 (mapv #(dissoc % :definitions) files)))
+            :issues (score/issues files lg-cov dup-pairs)
+            :top-complexity (score/top-complexity lg-files (:top opts))})))
+
+(defn main
+  "Parse `args`, measure, print the text report, and write EDN when asked."
+  [args]
+  (let [opts (parse-args args)
+        result (measure opts)]
+    (print (report/text result))
+    (when (:edn opts) (spit (:edn opts) (report/edn result)))
+    0))
+
+;; Entry guard: run only as a script, never when a test `require`s this
+;; namespace. os/args is [binary script user-arg...]; we run when the
+;; script slot names this file AND the user passed something.
+(let [argv (vec (seq os/args))
+      script (if (> (count argv) 1) (nth argv 1) "")
+      user (vec (drop 2 argv))]
+  (when (str/ends-with? script "scripts/quality.lg")
+    (if (seq user)
+      (os/exit (main user))
+      (println "usage: ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]"
+               "[--ci-run ID | --ci-seconds N] [--edn PATH] [--top N] [paths...]"))))
