@@ -12,14 +12,14 @@
    point the tool at a fixture corpus.
 
    Measures `.lg` and `.go` files under `paths` (default: `default-paths`,
-   per language), scores them with `quality.score`, and prints a
-   deterministic report.
+   per language), charges them with `quality.score` (DEBT: 0 is perfect,
+   lower is better, unbounded above), and prints a deterministic report.
 
    Only VCS-TRACKED files are measured, so a scratch file in the working
    copy cannot move the score. Two runs produce byte-identical output for
    the same commit AND the same working copy, given the same git range,
    coverprofile and CI value: the corpus is the tracked file set, files are
-   listed by composite ascending (ties by path), issues by score impact, and
+   listed by debt descending (ties by path), issues by debt impact, and
    every external input is pinned in the header.
 
    Design: docs/superpowers/specs/2026-09-11-code-quality-score-design.md"
@@ -303,14 +303,14 @@
                             fixes (get defect-counts (:path f) 0)
                             ;; Below :defects-min-loc a single fix implies an
                             ;; absurd per-KLOC rate, so the term is omitted
-                            ;; (nil) and the composite renormalizes.
+                            ;; (nil) and the file debt renormalizes.
                             dpk (when (>= loc (:defects-min-loc score/thresholds))
                                   (/ (* 1000.0 fixes) loc))
                             pct (get dup-pct (:path f) 0.0)
-                            sc (score/file-composite {:cc-max (when m (:cc-max m))
-                                                      :mi (when m (:mi m))
-                                                      :dup-pct pct
-                                                      :defects-per-kloc dpk})]
+                            sc (score/file-debt {:cc-max (when m (:cc-max m))
+                                                 :mi (when m (:mi m))
+                                                 :dup-pct pct
+                                                 :defects-per-kloc dpk})]
                         {:path (:path f) :lang (:lang f) :loc loc :fixes fixes
                          :test? (test-file? (:path f) source-roots)
                          :definitions (if m (:definitions m) [])
@@ -319,7 +319,7 @@
                          :comment-ratio (when m (:comment-ratio m))
                          :dup-pct pct :defects-per-kloc dpk
                          :cc (:cc sc) :mi (:mi sc) :dup (:dup sc) :defects (:defects sc)
-                         :composite (:composite sc)}))
+                         :debt (:debt sc)}))
                     tokenized)
         lg-files (filter #(= :lg (:lang %)) files)
         src-files (remove :test? files)
@@ -356,13 +356,15 @@
         ratio (when (pos? src-loc) (/ test-loc (double src-loc)))
         testing {:assertions assertions :density density :ratio ratio
                  :source-loc src-loc :test-loc test-loc
-                 :score (when (pos? src-loc)
-                          (score/testing-term {:density density :ratio ratio}))}
-        files-composite (if (pos? (reduce + 0 (map :loc files)))
-                          (/ (reduce + 0.0 (map (fn [f] (* (:loc f) (:composite f))) files))
-                             (double (reduce + 0 (map :loc files))))
-                          100.0)
-        corpus (score/corpus files-composite combined efficiency (:score testing))]
+                 :debt (when (pos? src-loc)
+                         (score/testing-term {:density density :ratio ratio}))}
+        ;; LOC-weighted MEAN of file debts: a debt DENSITY, so adding good
+        ;; code cannot raise it and deleting bad code lowers it.
+        files-debt (if (pos? (reduce + 0 (map :loc files)))
+                     (/ (reduce + 0.0 (map (fn [f] (* (:loc f) (:debt f))) files))
+                        (double (reduce + 0 (map :loc files))))
+                     0.0)
+        corpus (score/corpus files-debt combined efficiency (:debt testing))]
     (merge corpus
            {:inputs {:commit (:to grange)
                      :commit-source (:head-source grange)
@@ -379,10 +381,9 @@
                        :combined combined
                        :efficiency-pts efficiency}
             :testing testing
-            ;; Worst first is the wrong default for a table people scan
-            ;; top-down for a verdict, so files are listed by composite
-            ;; ASCENDING (worst last), ties broken by path.
-            :files (vec (sort-by (juxt :composite :path)
+            ;; Worst first: debt DESCENDING, ties broken by path -- the same
+            ;; visual order as the old ascending-score table.
+            :files (vec (sort-by (juxt (comp - :debt) :path)
                                  (mapv #(dissoc % :definitions) files)))
             :issues (score/issues files lg-cov dup-pairs)
             :top-complexity (score/top-complexity lg-files (:top opts))})))

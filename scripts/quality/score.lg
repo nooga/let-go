@@ -1,6 +1,14 @@
 (ns quality.score
   "Thresholds, weights, and the pure arithmetic that turns measured numbers
-   into scores.
+   into DEBT.
+
+   Debt is 0 when a metric sits at (or better than) its `good` threshold,
+   100 when it sits exactly at its `bad` threshold, and it keeps growing
+   past that -- there is no upper clamp. That is the whole point: a clamp
+   at the bad end makes complexity 30 and complexity 200 score identically,
+   so fixing the worst file in the repo registers as no change. Lower is
+   better, 0 is perfect, and there is no credit (no negative debt) for
+   beating a threshold.
 
    Every constant the report depends on lives in `thresholds` -- nothing
    else in the tool hardcodes a number. All other functions here are pure
@@ -10,12 +18,21 @@
 (def thresholds
   "The single source of every threshold and weight.
 
-   `:cc`/`:efficiency`/`:density`/`:ratio` are `linear` good/bad pairs;
-   `:dup`/`:defects` are per-point penalties subtracted from 100;
+   `:cc`/`:mi`/`:coverage`/`:efficiency`/`:density`/`:ratio` are `penalty`
+   good/bad pairs, read as \"good = zero debt, bad = 100 debt points\" (the
+   pair is signed, so it states the metric's direction too: `:cc` 10 -> 30
+   is higher-is-worse, `:density` 40 -> 4 is higher-is-better);
+   `:dup`/`:defects` are already debt-shaped -- per-point times the measured
+   value, 0 at 0, unbounded above;
    `:issues` are issue triggers; `:dup-k`/`:dup-w`/`:dup-floor` are the
    winnowing parameters handed to `quality.dup/pairs`; the two weight maps
    combine per-file scores and corpus terms."
   {:cc {:good 10 :bad 30}
+   ;; Raw SEI MI is unbounded below (this repo has files at -229), so the
+   ;; pair gives those files real debt instead of flattening them onto the
+   ;; same floor as a file at MI 0.
+   :mi {:good 100 :bad 0}
+   :coverage {:good 100 :bad 0}
    :dup {:per-point 2.0}
    :defects {:per-point 20.0}
    :efficiency {:good 20.0 :bad 2.0}
@@ -23,7 +40,7 @@
    :ratio {:good 1.0 :bad 0.1}
    :issues {:cc 10 :nesting 6 :long-defn 60 :low-comment 0.05
             :low-comment-min-loc 100 :hotspot-percentile 0.9}
-   ;; How much each issue is estimated to move the score. `:cc-span` is the
+   ;; How much each issue is estimated to move the debt. `:cc-span` is the
    ;; complexity distance (past the trigger) worth a full term weight;
    ;; `:low-comment`/`:hotspot` are fractions of their term weight; the rest
    ;; are flat, because `nesting`/`long-defn` feed issues only and
@@ -43,80 +60,97 @@
    :file-weights {:cc 0.35 :mi 0.30 :dup 0.20 :defects 0.15}
    :corpus-weights {:files 0.60 :coverage 0.10 :efficiency 0.15 :testing 0.15}})
 
-(defn linear
-  "0..100 from `v`, 100 at `good`-or-better and 0 at `bad`-or-worse,
-   linear in between. Works in both directions: `good` may be below `bad`
-   (lower is better, e.g. complexity) or above it (higher is better, e.g.
-   assertion density)."
+(defn penalty
+  "Debt points for `v` against a good/bad pair: 0 at `good`-or-better,
+   100 at `bad`, and linearly onward past `bad` with NO upper clamp.
+
+       100 * max(0, (v - good) / (bad - good))
+
+   `(bad - good)` is signed, so one formula serves both directions:
+   `(penalty 50 10 30)` is 200 (complexity, higher is worse) and
+   `(penalty 0 40 4)` is 111 (assertion density, higher is better). The
+   clamp is on the good side only -- beating a threshold earns no credit,
+   because there is no such thing as negative debt."
   [v good bad]
-  (let [t (/ (- (double v) good) (- bad good))]
-    (* 100.0 (max 0.0 (min 1.0 (- 1.0 t))))))
+  (* 100.0 (max 0.0 (/ (- (double v) good) (- bad good)))))
 
 (defn- floor0 [v] (max 0.0 (double v)))
 
-(defn- clamp100 [v] (max 0.0 (min 100.0 (double v))))
+(defn- weighted-mean
+  "Weighted mean of the present (non-nil) values in `vals` under `weights`,
+   with the remaining weights renormalized, or nil when nothing is present.
 
-(defn file-composite
-  "{:cc-max :mi :dup-pct :defects-per-kloc} -> the four normalized 0..100
-   sub-scores plus their weighted `:composite`.
+   A MEAN, never a sum: debt has to stay a DENSITY so that adding good code
+   does not increase it and deleting bad code lowers it. It is still
+   unbounded, because a single terrible member is unbounded."
+  [vals weights]
+  (let [present (filter (fn [[k _]] (some? (vals k))) weights)
+        wsum (reduce + 0.0 (map second present))]
+    (when (pos? wsum)
+      (/ (reduce + 0.0 (map (fn [[k w]] (* w (double (vals k)))) present)) wsum))))
 
-   `:mi` arrives RAW from `quality.metrics/file-metrics` (the SEI formula
-   is unbounded in both directions); the clamp to 0..100 happens here, so
-   the report can show the raw value and the score still stays in range.
+(defn file-debt
+  "{:cc-max :mi :dup-pct :defects-per-kloc} -> the four metric debts plus
+   their weighted `:debt`. Every value is 0-at-perfect, lower-is-better and
+   unbounded above.
 
-   A nil input omits its sub-score and renormalizes the remaining weights
-   -- Go files are measured for duplication and defects only (complexity
-   and maintainability are out of scope for Go, per the design), so they
-   pass `:cc-max nil :mi nil` and get an honest two-term composite rather
-   than a fabricated perfect one."
+   `:mi` arrives RAW from `quality.metrics/file-metrics` (the SEI formula is
+   unbounded in both directions) and is charged against the `:mi` good/bad
+   pair, so a file at MI -229 carries far more debt than one at MI 0 rather
+   than sharing a floor with it. `:dup`/`:defects` are already debt-shaped:
+   per-point times the measurement, so 0% duplication is 0 debt.
+
+   A nil input omits its metric and renormalizes the remaining weights --
+   Go files are measured for duplication and defects only (complexity and
+   maintainability are out of scope for Go, per the design), so they pass
+   `:cc-max nil :mi nil` and get an honest two-term debt rather than a
+   fabricated perfect one."
   [{:keys [cc-max mi dup-pct defects-per-kloc]}]
   (let [{:keys [cc dup defects file-weights]} thresholds
-        sc {:cc (when cc-max (linear cc-max (:good cc) (:bad cc)))
-            :mi (when mi (clamp100 mi))
-            :dup (when dup-pct (floor0 (- 100 (* (:per-point dup) dup-pct))))
+        mi-th (:mi thresholds)
+        sc {:cc (when cc-max (penalty cc-max (:good cc) (:bad cc)))
+            :mi (when mi (penalty mi (:good mi-th) (:bad mi-th)))
+            :dup (when dup-pct (floor0 (* (:per-point dup) dup-pct)))
             :defects (when defects-per-kloc
-                       (floor0 (- 100 (* (:per-point defects) defects-per-kloc))))}
-        present (filter (fn [[k _]] (some? (sc k))) file-weights)
-        wsum (reduce + 0.0 (map second present))]
-    (assoc sc :composite
-           (if (pos? wsum)
-             (/ (reduce + 0.0 (map (fn [[k w]] (* w (sc k))) present)) wsum)
-             100.0))))
+                       (floor0 (* (:per-point defects) defects-per-kloc)))}]
+    (assoc sc :debt (or (weighted-mean sc file-weights) 0.0))))
 
 (defn testing-term
-  "Mean of normalized assertion density (per source KLOC) and
-   test-to-code LOC ratio."
+  "Mean of the assertion-density and test-to-code-ratio debts."
   [{:keys [density ratio]}]
-  (/ (+ (linear density (get-in thresholds [:density :good]) (get-in thresholds [:density :bad]))
-        (linear ratio (get-in thresholds [:ratio :good]) (get-in thresholds [:ratio :bad])))
+  (/ (+ (penalty density (get-in thresholds [:density :good]) (get-in thresholds [:density :bad]))
+        (penalty ratio (get-in thresholds [:ratio :good]) (get-in thresholds [:ratio :bad])))
      2.0))
 
 (defn corpus
-  "The four corpus terms and the final score.
+  "The four corpus terms and the final `:debt`.
 
-   `files-composite` is the LOC-weighted mean of file composites,
-   `coverage-pct` the combined coverage percentage, `efficiency-pts` the
-   raw coverage-points-per-CI-minute (normalized here), `testing-score` an
-   already-normalized `testing-term`. Any of them may be nil when its
-   input is missing; the remaining weights renormalize and the omitted
-   term names come back in `:omitted` so the report can say which inputs
-   were absent."
-  [files-composite coverage-pct efficiency-pts testing-score]
-  (let [w (:corpus-weights thresholds)
-        terms {:files files-composite
-               :coverage coverage-pct
+   `files-debt` is the LOC-weighted mean of file debts, `coverage-pct` the
+   combined coverage percentage and `efficiency-pts` the raw
+   coverage-points-per-CI-minute (both charged against their good/bad pairs
+   here), `testing-debt` an already-charged `testing-term`. Any of them may
+   be nil when its input is missing; the remaining weights renormalize and
+   the omitted term names come back in `:omitted` so the report can say
+   which inputs were absent.
+
+   Calibration: 0 means every term sits at or better than its `good`
+   threshold; 100 means every term sits exactly at its `bad` threshold;
+   above 100 is worse than `bad` across the board, which is allowed and
+   expected."
+  [files-debt coverage-pct efficiency-pts testing-debt]
+  (let [terms {:files files-debt
+               :coverage (when coverage-pct
+                           (penalty coverage-pct
+                                    (get-in thresholds [:coverage :good])
+                                    (get-in thresholds [:coverage :bad])))
                :efficiency (when efficiency-pts
-                             (linear efficiency-pts
-                                     (get-in thresholds [:efficiency :good])
-                                     (get-in thresholds [:efficiency :bad])))
-               :testing testing-score}
-        present (into {} (filter (fn [[_ v]] (some? v)) terms))
-        omitted (vec (sort (map first (filter (fn [[_ v]] (nil? v)) terms))))
-        wsum (reduce + 0.0 (map w (keys present)))
-        score (if (pos? wsum)
-                (/ (reduce + 0.0 (map (fn [[k v]] (* (w k) (double v))) present)) wsum)
-                0.0)]
-    {:terms terms :omitted omitted :score score}))
+                             (penalty efficiency-pts
+                                      (get-in thresholds [:efficiency :good])
+                                      (get-in thresholds [:efficiency :bad])))
+               :testing testing-debt}
+        omitted (vec (sort (map first (filter (fn [[_ v]] (nil? v)) terms))))]
+    {:terms terms :omitted omitted
+     :debt (or (weighted-mean terms (:corpus-weights thresholds)) 0.0)}))
 
 (defn- percentile
   "The `p`-quantile of `xs` by nearest-rank over the sorted values."
