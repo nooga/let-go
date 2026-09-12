@@ -224,6 +224,18 @@
   (let [r (os/sh "shasum" "-a" "256" path)]
     (if (zero? (:exit r)) (first (str/split (str/trim (:out r)) #"\s+")) "unknown")))
 
+(def ^:private timings (atom []))
+
+(defn- phase
+  "Run `f`, recording how long it took under `label`. Timing is measurement,
+   not output: it is printed only under --timings, so the report itself stays
+   byte-identical whether or not the run was being profiled."
+  [label f]
+  (let [t0 (System/nanoTime)
+        v (f)]
+    (swap! timings conj [label (/ (- (System/nanoTime) t0) 1e9)])
+    v))
+
 (defn- cwd-path
   "A repo-relative path turned back into one the process can open: the cwd
    prefix is stripped, since discovery walked from the cwd."
@@ -282,6 +294,7 @@
           "--edn" (recur (subvec a 2) (assoc opts :edn n) paths)
           "--top" (recur (subvec a 2) (assoc opts :top (read-string n)) paths)
           "--source-root" (recur (subvec a 2) (update opts :source-roots conj n) paths)
+          "--timings" (recur (subvec a 1) (assoc opts :timings true) paths)
           (if (str/starts-with? x "--")
             (throw (ex-info (str "unknown flag " x) {:flag x}))
             (recur (subvec a 1) opts (conj paths x))))))))
@@ -301,7 +314,7 @@
   [opts]
   (let [since (or (:since opts) (default-since))
         grange (inputs/git-range since (inputs/head-commit (checkout-root)))
-        defect-counts (inputs/fix-counts grange)
+        defect-counts (phase "git-fix-log" (fn [] (inputs/fix-counts grange)))
         ;; `discover` yields cwd-relative paths (what `slurp` needs); `:path`
         ;; is the repo-root-relative form, which is what classification, the
         ;; report and the `fix-counts` lookup all speak.
@@ -310,24 +323,28 @@
         source-roots (mapv (fn [r] (str prefix r)) (:source-roots opts))
         tracked (tracked-files checkout)
         read-paths (discover opts checkout prefix (:paths tracked))
-        loaded (mapv (fn [p] {:path (repo-path checkout prefix p)
-                              :lang (lang-of p) :text (slurp p)})
-                     read-paths)
-        tokenized (mapv (fn [f] (assoc f :tokens (lex/tokens (:text f) (:lang f)))) loaded)
+        loaded (phase "read" (fn [] (mapv (fn [p] {:path (repo-path checkout prefix p)
+                                                   :lang (lang-of p) :text (slurp p)})
+                                          read-paths)))
+        tokenized (phase "tokenize"
+                         (fn [] (mapv (fn [f] (assoc f :tokens (lex/tokens (:text f) (:lang f))))
+                                      loaded)))
         ;; Duplication is compared within a language, as the spec requires:
         ;; the two token vocabularies are disjoint enough that a cross
         ;; match would be meaningless.
         k (:dup-k score/thresholds) w (:dup-w score/thresholds) floor (:dup-floor score/thresholds)
         by-lang (group-by :lang tokenized)
-        dup-pairs (vec (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start])
-                                      #(get-in % [:b :path]) #(get-in % [:b :start]))
-                                ;; realized (vec) before sorting: see the note
-                                ;; on `quality.score/issues`
-                                (vec (mapcat (fn [lang]
-                                               (dup/pairs (mapv #(select-keys % [:path :tokens])
-                                                                (get by-lang lang []))
-                                                          k w floor))
-                                       [:lg :go]))))
+        dup-pairs (phase "dup-pairs"
+                         (fn []
+                           (vec (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start])
+                                               #(get-in % [:b :path]) #(get-in % [:b :start]))
+                                         ;; realized (vec) before sorting: see the
+                                         ;; note on `quality.score/issues`
+                                         (vec (mapcat (fn [lang]
+                                                        (dup/pairs (mapv #(select-keys % [:path :tokens])
+                                                                         (get by-lang lang []))
+                                                                   k w floor))
+                                                [:lg :go]))))))
         dup-pct (apply merge (map (fn [lang]
                                     (dup/file-percent (mapv #(select-keys % [:path :tokens])
                                                             (get by-lang lang []))
@@ -337,8 +354,9 @@
                                         dup-pairs)
         ;; Metrics are computed once per .lg file and shared: the dead-code
         ;; pass needs per-definition SLOC before the per-file records exist.
-        mets (into {} (for [f tokenized :when (= :lg (:lang f))]
-                        [(:path f) (metrics/file-metrics (:text f))]))
+        mets (phase "metrics"
+                    (fn [] (into {} (for [f tokenized :when (= :lg (:lang f))]
+                                      [(:path f) (metrics/file-metrics (:text f))]))))
         files0 (mapv (fn [f]
                        (let [m (get mets (:path f))
                              loc (if m (max 1 (:loc m)) (max 1 (go-loc (:tokens f))))
@@ -375,8 +393,9 @@
         lg-files (filter #(= :lg (:lang %)) files0)
         ;; Go measurements come from the Go tool; .lg measurements from
         ;; quality.metrics. Both feed the SAME arithmetic in quality.terms.
-        go-analysis (go-analysis (mapv (fn [f] (cwd-path prefix (:path f)))
-                                       (filter #(= :go (:lang %)) tokenized)))
+        go-analysis (phase "go-analysis"
+                           (fn [] (go-analysis (mapv (fn [f] (cwd-path prefix (:path f)))
+                                                     (filter #(= :go (:lang %)) tokenized)))))
         go-by-path (group-by :path (:functions go-analysis))
         callables (vec (concat
                          (for [f lg-files d (:definitions f)]
@@ -397,7 +416,7 @@
                                (filter (fn [f] (and (= :lg (:lang f))
                                                     (pred (test-file? (:path f) source-roots))))
                                        loaded)))
-        lg-cov (graph/coverage (lg-of not) (lg-of identity))
+        lg-cov (phase "coverage-graph" (fn [] (graph/coverage (lg-of not) (lg-of identity))))
         ;; Dead code: the same closure `graph/reachable` computes for tests,
         ;; started from PRODUCTION roots instead.
         ;;   - every public definition of a library namespace, because the
@@ -408,7 +427,7 @@
         ;;     library, its registry registrations and dispatch tables);
         ;;   - anything marked ^:api, the opt-out for dynamic entry points.
         lg-sources (lg-of not)
-        prod-graph (graph/build lg-sources)
+        prod-graph (phase "dead-graph" (fn [] (graph/build lg-sources)))
         lib? (fn [p] (some (fn [r] (str/starts-with? p r)) (:lib-roots opts)))
         prod-roots (into (set (keep (fn [[qname d]]
                                       (when (and (lib? (:path d)) (graph/public? d)) qname))
@@ -559,6 +578,13 @@
           (if err
             (do (println "quality:" (ex-message err)) 2)
             (do (print (report/text result))
+                (when (:timings opts)
+                  (println)
+                  (println "phase timings (seconds)")
+                  (doseq [[label secs] @timings]
+                    (println (format "  %-16s %7.2f" label (double secs))))
+                  (println (format "  %-16s %7.2f" "TOTAL measured"
+                                   (double (reduce + 0.0 (map second @timings))))))
                 (when (:edn opts) (spit (:edn opts) (report/edn result)))
                 0)))))))
 
