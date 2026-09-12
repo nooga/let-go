@@ -4,18 +4,43 @@
    [test :refer :all]))
 
 (deftest parses-fix-commits-per-path
-  (let [log "fix(vm): a\n\npkg/vm/a.go\npkg/vm/b.go\n\nfeat: b\n\npkg/vm/a.go\n\nfix: c\n\npkg/vm/a.go\n"]
+  ;; `git log --format=%x1e%s -M --name-status` shape: an \u001e-prefixed subject,
+  ;; a blank line, then `<status>TAB<path>` lines -- and NO blank line ending
+  ;; the block, which is why the subject marker is required.
+  (let [log (str "\u001efix(vm): a\n\nM\tpkg/vm/a.go\nM\tpkg/vm/b.go\n"
+                 "\u001efeat: b\n\nM\tpkg/vm/a.go\n"
+                 "\u001efix: c\n\nM\tpkg/vm/a.go\n")]
     (is (= {"pkg/vm/a.go" 2 "pkg/vm/b.go" 1} (in/parse-fix-log log)))))
 
+(deftest counts-every-commit-block-not-just-the-first
+  ;; Regression: `--name-only`/`--name-status` does not terminate a commit
+  ;; block, so a shape-based parser stayed inside the first block forever and
+  ;; returned {} over a range full of fixes. Two adjacent fix commits must
+  ;; both be counted.
+  (let [log (str "\u001efix: one\n\nM\tpkg/a.go\n"
+                 "\u001efix: two\n\nM\tpkg/a.go\nM\tpkg/b.go\n")]
+    (is (= {"pkg/a.go" 2 "pkg/b.go" 1} (in/parse-fix-log log)))))
+
 (deftest fix-subject-with-slash-is-not-a-path
-  ;; The subject itself contains "/" (fix(rt/core): x) — it must be
+  ;; The subject itself contains "/" (fix(rt/core): x) -- it must be
   ;; recognized as a subject line, not misclassified as a path.
-  (let [log "fix(rt/core): x\n\npkg/rt/core.go\n"]
+  (let [log "\u001efix(rt/core): x\n\nM\tpkg/rt/core.go\n"]
     (is (= {"pkg/rt/core.go" 1} (in/parse-fix-log log)))))
 
 (deftest capitalized-fix-subject-counts
-  (let [log "Fix: c\n\npkg/vm/a.go\n"]
+  (let [log "\u001eFix: c\n\nM\tpkg/vm/a.go\n"]
     (is (= {"pkg/vm/a.go" 1} (in/parse-fix-log log)))))
+
+(deftest rename-credits-the-target-path
+  ;; -M reports `R100<TAB>old<TAB>new`; the fix belongs to the new path, so a
+  ;; file renamed inside the window keeps the fixes made under its old name.
+  (let [log "\u001efix: moved\n\nR100\tpkg/old.go\tpkg/new.go\n"]
+    (is (= {"pkg/new.go" 1} (in/parse-fix-log log)))))
+
+(deftest log-range-degrades-to-a-single-rev-without-a-from
+  ;; An empty :from would make "..<to>" == "HEAD..<to>" == nothing.
+  (is (= "abc..def" (in/log-range {:from "abc" :to "def"})))
+  (is (= "def" (in/log-range {:from "" :to "def"}))))
 
 (deftest parses-go-coverprofile
   (let [c (in/parse-coverprofile (slurp "fixtures/quality/cover.out"))]

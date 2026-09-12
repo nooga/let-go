@@ -4,10 +4,17 @@
    [quality :as q]
    [test :refer :all]))
 
+;; The test runner's cwd is `test/`, so the fixture corpus is at
+;; `fixtures/quality` here and at `test/fixtures/quality` from the repo
+;; root. `--source-root` measures it as source (only `*_test.lg` inside it
+;; stays a test), and every reported path is repo-root-relative either way.
+(def fixtures "fixtures/quality")
+
 (deftest cli-produces-deterministic-report-over-fixtures
   (let [edn-path (str (os/temp-dir) "quality-cli-test.edn")
-        args ["--ci-seconds" "300" "--go-cover" "fixtures/quality/cover.out" "--edn" edn-path
-              "--since" "2000-01-01" "--top" "5" "fixtures/quality"]
+        args ["--ci-seconds" "300" "--go-cover" (str fixtures "/cover.out")
+              "--edn" edn-path "--since" "2000-01-01" "--top" "5"
+              "--source-root" fixtures fixtures]
         out1 (with-out-str (q/main args))
         out2 (with-out-str (q/main args))]
     (is (= out1 out2))
@@ -15,12 +22,32 @@
     (is (str/includes? out1 "duplicate"))
     (is (str/includes? out1 "untested"))
     (is (str/includes? out1 "top complexity"))
-    (let [r (read-string (slurp edn-path))]
+    ;; Paths are repo-root-relative regardless of the process cwd.
+    (is (str/includes? out1 "\ntest/fixtures/quality/cli_src.lg"))
+    (is (str/includes? out1 "defects: renames credited to target via -M"))
+    (let [r (read-string (slurp edn-path))
+          untested (set (map :name (get-in r [:coverage :lg :untested])))]
       (is (<= 0 (:score r) 100))
       (is (= "supplied" (get-in r [:inputs :ci :source])))
       (is (vector? (:issues r)))
       (is (vector? (:top-complexity r)))
-      (is (>= (:cc (first (:top-complexity r))) (:cc (second (:top-complexity r))))))))
+      (is (>= (:cc (first (:top-complexity r))) (:cc (second (:top-complexity r)))))
+      ;; A real tested/untested split, not an artifact of misclassification.
+      (is (contains? untested 'untested-fn))
+      (is (not (contains? untested 'tested-fn)))
+      ;; The one `*_test.lg` under the source root still counts as a test.
+      (is (pos? (get-in r [:testing :assertions]))))))
+
+(deftest test-classification-is-cwd-independent
+  ;; Repo-relative paths, so the rules mean the same thing from any cwd.
+  (is (q/test-file? "test/fixtures/quality/cli_src.lg"))
+  (is (not (q/test-file? "test/fixtures/quality/cli_src.lg" ["test/fixtures/quality"])))
+  (is (q/test-file? "test/fixtures/quality/cli_src_test.lg" ["test/fixtures/quality"]))
+  (is (q/test-file? "pkg/rt/lang_test.go"))
+  (is (not (q/test-file? "pkg/rt/lang.go"))))
+
+(deftest trailing-valueless-flag-is-rejected
+  (is (thrown? Throwable (q/parse-args ["--top"]))))
 
 (deftest requiring-the-cli-namespace-does-not-run-it
   ;; The entry guard means loading `quality` for this test printed nothing;
