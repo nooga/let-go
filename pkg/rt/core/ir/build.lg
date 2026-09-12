@@ -377,7 +377,7 @@
               ;; pr-str (not str): a BigDecimal's str drops the `M` suffix, so an
               ;; unrecognized 0.0M would mis-report as a float `0.0`. The readable
               ;; form keeps the type legible in the failure bucket.
-              :else (throw (str "build-form: unrecognized form " (pr-str form))))]
+              :else (throw (ex-info (str "build-form: unrecognized form " (pr-str form)) {:fn :build-form :value form})))]
     (when si
       (swap! ctx assoc :source-info old-si))
     nid))
@@ -395,7 +395,7 @@
             ;; (e.g., Go interop calls like xxh3/HashSeed). Emit as :load-var
             ;; with the symbol itself as the constant, allowing runtime resolution.
             (add-inst! ctx (ctx-block ctx) :load-var [] sym)
-            (throw (str "ir/build: unresolved symbol " sym)))
+            (throw (ex-info (str "ir/build: unresolved symbol " sym) {:fn :build-symbol :value sym})))
           (add-inst! ctx (ctx-block ctx) :load-var [] v))))))
 
 (defn- free-vars [form bound]
@@ -790,7 +790,7 @@
    field name is a literal symbol; only obj is an evaluated sub-expression."
   (let [[_ obj field] form]
     (when-not (symbol? field)
-      (throw (str "ir/build: . field must be a symbol, got " field)))
+      (throw (ex-info (str "ir/build: . field must be a symbol, got " field) {:fn :build-dot :value field})))
     (let [obj-id (build-form obj ctx)]
       (add-inst! ctx (ctx-block ctx) :dot [obj-id] field))))
 
@@ -820,7 +820,7 @@
   (let [[_ sym] form
         v       (resolve-for-var sym)]
     (if (nil? v)
-      (throw (str "ir/build: can't resolve var " sym))
+      (throw (ex-info (str "ir/build: can't resolve var " sym) {:fn :build-var :value sym}))
       (add-inst! ctx (ctx-block ctx) :const [] v))))
 
 (defn build-set! [form ctx]
@@ -831,7 +831,7 @@
   (let [[_ sym val] form
         v           (resolve sym)]
     (when (nil? v)
-      (throw (str "ir/build: set! can't resolve " sym)))
+      (throw (ex-info (str "ir/build: set! can't resolve " sym) {:fn :build-set! :value sym})))
     (let [var-nid (add-inst! ctx (ctx-block ctx) :const [] v)
           val-nid (build-form val ctx)]
       (add-inst! ctx (ctx-block ctx) :set-var [var-nid val-nid] nil))))
@@ -854,11 +854,11 @@
   (let [args (rest form)
         n    (count args)]
     (when (or (< n 1) (> n 3))
-      (throw (str "ir/build: def wrong number of forms (" n "), need 1-3")))
+      (throw (ex-info (str "ir/build: def wrong number of forms (" n "), need 1-3") {:fn :build-def :value n})))
     (let [doc      (when (= n 3)
                      (let [d (nth args 1)]
                        (when-not (string? d)
-                         (throw "ir/build: def 3-arg form requires a docstring (String) as second argument"))
+                         (throw (ex-info "ir/build: def 3-arg form requires a docstring (String) as second argument" {:fn :build-def :value d})))
                        d))
           raw-sym  (nth args 0)
           ;; (def sym doc val): value is the 3rd arg; (def sym val): 2nd.
@@ -868,7 +868,7 @@
           meta0    (when with-m? (nth raw-sym 2))
           meta     (if doc (assoc (or meta0 {}) :doc doc) meta0)
           _        (when-not (symbol? sym)
-                     (throw (str "ir/build: def name must be a symbol, got " (pr-str sym))))
+                     (throw (ex-info (str "ir/build: def name must be a symbol, got " (pr-str sym)) {:fn :build-def :value sym})))
           ;; resolve-or-intern: existing var, else intern a fresh one in *ns*.
           var-obj  (or (resolve sym) (intern *ns* sym))
           ;; Apply meta to the build-time var now (the bytecode-lowered path has
@@ -1255,9 +1255,10 @@
             ;; must agree. Checked before building the args so a rejected form
             ;; leaves no half-built blocks behind.
             (when (not= (count recur-args) (count arg-syms))
-              (throw (str "ir/build: recur argument count must match function "
-                          "argument count (got " (count recur-args)
-                          ", need " (count arg-syms) ")")))
+              (throw (ex-info (str "ir/build: recur argument count must match function "
+                                   "argument count (got " (count recur-args)
+                                   ", need " (count arg-syms) ")")
+                              {:fn :build-recur :value recur-args})))
             (let [arg-ids (mapv (fn [a] (build-form a ctx)) recur-args)
                   cur     (ctx-block ctx)]
               ;; :recur-fn refs are just the new arg values (self-recursive,
@@ -1268,7 +1269,7 @@
               ;; and it read an argument instead (nooga/let-go#638).
               (ir/add-terminator! f cur :recur-fn arg-ids (count arg-ids))
               TERMINATED))
-          (throw "recur outside of loop or function"))))))
+          (throw (ex-info "recur outside of loop or function" {:fn :build-recur :value form})))))))
 
 ;; --- destructuring helpers ------------------------------------------------
 ;; Port of core.lg's destructure* / destructure-vector / destructure-map.
@@ -1306,7 +1307,7 @@
                 out*   (conj out gs (list 'nth sym i nil))]
             (recur (inc i) (rest remaining) (into out* nested)))
           :else
-          (throw (str "unsupported destructuring pattern: " (pr-str x))))))))
+          (throw (ex-info (str "unsupported destructuring pattern: " (pr-str x)) {:fn :expand-vector-pattern :value x})))))))
 
 (defn- expand-map-pattern [sym pat]
   (let [defaults (:or pat)
@@ -1411,7 +1412,7 @@
                                  binds (cond
                                          (vector? x) (expand-vector-pattern gs x)
                                          (map? x)    (expand-map-pattern gs x)
-                                         :else (throw (str "unsupported arg pattern: " (pr-str x))))]
+                                         :else (throw (ex-info (str "unsupported arg pattern: " (pr-str x)) {:fn :build-fn-args :value x})))]
                              (recur (rest remaining)
                                     (conj flat-args gs)
                                     (into let-binds binds)

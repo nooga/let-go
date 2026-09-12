@@ -85,7 +85,7 @@
     {:status :fallback
      :decl nil
      :reason msg}
-    (throw (str "ir.lower-go: " msg))))
+    (throw (ex-info (str "ir.lower-go: " msg) {:fn :lower-go :value mode}))))
 
 (defn- dtype-go-type-spec [t]
   (when (and (vector? t) (= :dtype (first t)) (= 2 (count t)))
@@ -3170,7 +3170,7 @@
   ;; control flow and condition tests are embedded in the switch node.
   (let [absorbed-insts (or (:absorbed-insts (deref f)) #{})
         insts (filter (fn [nid] (and (not (inlined-arg? f nid))
-                                      (not (contains? absorbed-insts nid))))
+                                  (not (contains? absorbed-insts nid))))
                       (ir/block-insts bid f))]
     (loop [remaining insts out []]
       (if (empty? remaining)
@@ -3324,7 +3324,7 @@
                                        [keyword-switch])
                       nonkeyword-clause (gogen/case-clause nil default-stmts)
                       sw-stmt [(gogen/type-switch-stmt kw-tag-name g-expr
-                                [keyword-clause nonkeyword-clause])]
+                                 [keyword-clause nonkeyword-clause])]
                       cont-stmts (lower-tree f closed-exprs cont-node)]
                   (if cont-stmts
                     (vec (concat inst-stmts sw-stmt cont-stmts))
@@ -3418,10 +3418,11 @@
            ;; already been restored above, so the caller's bytecode fallback does
            ;; not observe switch-only ownership state.
            _                 (when (and *strict-structured?* (not structured-body))
-                               (throw (str "strict-structured: refusing goto-CFG lowering of "
-                                           (ir/fn-name f)
-                                           " (structurize fallbacks="
-                                           (:fallbacks st-result) ")")))
+                               (throw (ex-info (str "strict-structured: refusing goto-CFG lowering of "
+                                                    (ir/fn-name f)
+                                                    " (structurize fallbacks="
+                                                    (:fallbacks st-result) ")")
+                                               {:fn :lower-go :value (ir/fn-name f)})))
            body-stmts       (if structured-body
                               structured-body
                               (loop [blocks (ir/blocks f) out []]
@@ -4098,7 +4099,7 @@
 
 (defn lower [f mode]
   (if (nil? f)
-    (throw "ir.lower-go: nil function")
+    (throw (ex-info "ir.lower-go: nil function" {:fn :lower-go :value f}))
     (try
       (lower-fn* f mode)
       (catch e

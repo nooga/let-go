@@ -23,7 +23,8 @@
 
 (ns ir.passes.legalize
   ;; ir.data supplies the ir/* accessors used throughout this pass.
-  (:require [ir.data]))
+  (:require
+   [ir.data]))
 
 ;; --- detection: non-throwing enumeration of illegal cross-block refs ----
 ;; Mirrors ir.validate/check-no-cross-block-refs! EXACTLY (same exemptions)
@@ -155,7 +156,7 @@
         f
         (do
           (when (> guard 1000)
-            (throw "legalize-fn!: did not converge (non-dominating cross-block ref?)"))
+            (throw (ex-info "legalize-fn!: did not converge (non-dominating cross-block ref?)" {:fn :legalize-fn! :value f})))
           ;; Thread once per (value, use-block); reuse the block-arg for every
           ;; inst in that block that references the value.
           (doseq [[[v use-block] entries]
