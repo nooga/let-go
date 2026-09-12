@@ -32,7 +32,8 @@
    [quality.lex :as lex]
    [quality.metrics :as metrics]
    [quality.report :as report]
-   [quality.score :as score]))
+   [quality.score :as score]
+   [quality.terms :as terms]))
 
 (def default-paths
   "Default roots PER LANGUAGE. `.lg` lives in the core stdlib, the scripts
@@ -223,6 +224,40 @@
   (let [r (os/sh "shasum" "-a" "256" path)]
     (if (zero? (:exit r)) (first (str/split (str/trim (:out r)) #"\s+")) "unknown")))
 
+(defn- cwd-path
+  "A repo-relative path turned back into one the process can open: the cwd
+   prefix is stripped, since discovery walked from the cwd."
+  [prefix p]
+  (if (and (seq prefix) (str/starts-with? p prefix)) (subs p (count prefix)) p))
+
+(defn go-analysis
+  "Go measurements for `paths`, from the `go-callables` command, as
+   `{:functions [...] :files [...] :source \"...\"}` -- or
+   `{:source \"unavailable\" :error \"...\"}` when the command cannot run.
+
+   Go analysis lives in its own Go tool because `go/ast` is exact where a
+   generic tokenizer is only close; see cmd/go-callables. A missing tool must
+   be VISIBLE in the report rather than silently scoring Go as perfect, so
+   the failure is carried through as data.
+
+   `QUALITY_GO_CALLABLES` names a prebuilt binary (what `make quality` uses);
+   otherwise the command is run from source, which costs one compile."
+  [paths]
+  (if (empty? paths)
+    {:functions [] :files [] :source "none"}
+    (let [bin (os/getenv "QUALITY_GO_CALLABLES")
+          args (if (str/blank? bin)
+                 (concat ["go" "run" "github.com/nooga/let-go/cmd/go-callables"] paths)
+                 (concat [bin] paths))
+          r (try (apply os/sh args) (catch Throwable e {:exit 1 :err (str e)}))]
+      (if (zero? (:exit r))
+        (try (assoc (read-string (:out r))
+                    :source (if (str/blank? bin) "go run" bin))
+             (catch Throwable e {:source "unavailable" :error (str e)
+                                 :functions [] :files []}))
+        {:source "unavailable" :functions [] :files []
+         :error (str/trim (str (:err r)))}))))
+
 (defn parse-args
   "The CLI's flags and positional paths. Unknown `--flags` are rejected
    loudly rather than silently treated as paths."
@@ -297,6 +332,8 @@
                                                             (get by-lang lang []))
                                                       dup-pairs))
                                   [:lg :go]))
+        dup-lines (dup/duplicated-lines (mapv #(select-keys % [:path :tokens]) tokenized)
+                                        dup-pairs)
         files (mapv (fn [f]
                       (let [m (when (= :lg (:lang f)) (metrics/file-metrics (:text f)))
                             loc (if m (max 1 (:loc m)) (max 1 (go-loc (:tokens f))))
@@ -312,6 +349,7 @@
                                                  :dup-pct pct
                                                  :defects-per-kloc dpk})]
                         {:path (:path f) :lang (:lang f) :loc loc :fixes fixes
+                         :verbosity (terms/verbosity (get dup-lines (:path f) 0) loc)
                          :test? (test-file? (:path f) source-roots)
                          :definitions (if m (:definitions m) [])
                          :cc-max (when m (:cc-max m))
@@ -322,6 +360,18 @@
                          :debt (:debt sc)}))
                     tokenized)
         lg-files (filter #(= :lg (:lang %)) files)
+        ;; Go measurements come from the Go tool; .lg measurements from
+        ;; quality.metrics. Both feed the SAME arithmetic in quality.terms.
+        go-analysis (go-analysis (mapv (fn [f] (cwd-path prefix (:path f)))
+                                       (filter #(= :go (:lang %)) tokenized)))
+        go-by-path (group-by :path (:functions go-analysis))
+        callables (vec (concat
+                         (for [f lg-files d (:definitions f)]
+                           {:path (:path f) :name (:name d) :cc (:cc d) :sloc (:sloc d)})
+                         (for [fn* (:functions go-analysis)
+                               :when (not= :dead-closure (:kind fn*))]
+                           {:path (str prefix (:path fn*)) :name (:name fn*)
+                            :cc (:cc fn*) :sloc (:sloc fn*)})))
         src-files (remove :test? files)
         test-files (filter :test? files)
         src-loc (reduce + 0 (map :loc src-files))
@@ -381,6 +431,18 @@
                        :combined combined
                        :efficiency-pts efficiency}
             :testing testing
+            ;; Paper-aligned terms, REPORTED but not yet in the composite.
+            :erosion {:value (terms/erosion callables)
+                      :callables (count callables)
+                      :high (count (filter (fn [c] (> (:cc c) (get-in score/thresholds [:erosion :cc]))) callables))
+                      :lg (terms/erosion (filter (fn [c] (str/ends-with? (:path c) ".lg")) callables))
+                      :go (terms/erosion (filter (fn [c] (str/ends-with? (:path c) ".go")) callables))
+                      :go-source (:source go-analysis)}
+            :verbosity {:value (terms/verbosity (reduce + 0 (vals dup-lines))
+                                                (reduce + 0 (map :loc files)))
+                        :dup-lines (reduce + 0 (vals dup-lines))
+                        :loc (reduce + 0 (map :loc files))
+                        :clone-only? true}
             ;; Worst first: debt DESCENDING, ties broken by path -- the same
             ;; visual order as the old ascending-score table.
             :files (vec (sort-by (juxt (comp - :debt) :path)

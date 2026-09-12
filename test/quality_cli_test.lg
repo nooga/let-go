@@ -150,3 +150,25 @@
       (is (contains? lg :defects-per-kloc))
       (is (contains? lg :debt))
       (is (number? (get-in r [:testing :density]))))))
+
+(deftest erosion-and-verbosity-are-reported-with-their-caveats
+  ;; Reported, not yet scored: both must appear with the paper's baselines
+  ;; and with verbosity marked as the lower bound it is.
+  (let [edn-path (str (os/temp-dir) "quality-terms-test.edn")
+        out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                   "--source-root" fixtures fixtures]))
+        r (read-string (slurp edn-path))]
+    (is (str/includes? out "erosion "))
+    (is (str/includes? out "verbosity (clone-only)"))
+    (is (str/includes? out "LOWER BOUND on the paper's metric"))
+    (is (str/includes? out "paper baselines: human corpus erosion 0.34"))
+    ;; both are shares in [0,1]
+    (is (<= 0.0 (get-in r [:erosion :value]) 1.0))
+    (is (<= 0.0 (get-in r [:verbosity :value]) 1.0))
+    ;; Go measurements come from the Go tool, and their absence must be
+    ;; visible rather than scored as perfect
+    (is (contains? #{"go run" "none"} (get-in r [:erosion :go-source])))
+    (is (pos? (get-in r [:erosion :callables])))
+    ;; per-file verbosity too
+    (is (every? (fn [f] (or (nil? (:verbosity f)) (<= 0.0 (:verbosity f) 1.0)))
+                (:files r)))))

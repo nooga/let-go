@@ -576,8 +576,13 @@ browser-inspector:
 #   QUALITY_EDN=path           also write the machine-readable report there
 #   QUALITY_TOP=n              size of the "top complexity" section
 .PHONY: quality
-quality: build
-	LG_SOURCE_PATHS=scripts $(LG) scripts/quality.lg \
+quality: build $(GO-CALLABLES)
+	QUALITY_GO_CALLABLES=$(GO-CALLABLES) LG_SOURCE_PATHS=scripts $(LG) scripts/quality.lg \
 	  --since $${QUALITY_SINCE:-$$(date -v-180d +%Y-%m-%d 2>/dev/null || date -d '180 days ago' +%Y-%m-%d)} \
 	  $${QUALITY_GO_COVER:+--go-cover $$QUALITY_GO_COVER} $${QUALITY_CI_SECONDS:+--ci-seconds $$QUALITY_CI_SECONDS} \
 	  $${QUALITY_EDN:+--edn $$QUALITY_EDN} $${QUALITY_TOP:+--top $$QUALITY_TOP}
+
+# The Go half of the quality corpus is measured by its own Go tool.
+GO-CALLABLES = $(BUILD-DIR)/go-callables
+$(GO-CALLABLES): $(shell find cmd/go-callables -name '*.go')
+	go build -o $@ ./cmd/go-callables
