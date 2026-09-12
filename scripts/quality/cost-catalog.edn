@@ -15,8 +15,43 @@
 ;; know the receiver, and a cost estimate that under-reports is worse than one
 ;; that over-reports: this whole term is an upper-bound approximation.
 
-{;; constant
+{;; Constants. The top of the measured "assumed" list was operators and test
+ ;; macros; every one of these is O(1), and cataloguing them is how the
+ ;; assumed list shrinks from real gaps rather than from guesses.
+ = {:degree {:poly 0}}
+ not= {:degree {:poly 0}}
+ < {:degree {:poly 0}}
+ > {:degree {:poly 0}}
+ <= {:degree {:poly 0}}
+ >= {:degree {:poly 0}}
+ + {:degree {:poly 0}}
+ - {:degree {:poly 0}}
+ * {:degree {:poly 0}}
+ nil? {:degree {:poly 0}}
+ pos? {:degree {:poly 0}}
+ neg? {:degree {:poly 0}}
+ zero? {:degree {:poly 0}}
+ deref {:degree {:poly 0}}
+ atom {:degree {:poly 0}}
+ swap! {:degree {:poly 0} :note "amortized; the update fn is costed at its own call site"}
+ reset! {:degree {:poly 0}}
+ with-meta {:degree {:poly 0}}
+ seq? {:degree {:poly 0}}
+ vector? {:degree {:poly 0}}
+ map? {:degree {:poly 0}}
+ symbol? {:degree {:poly 0}}
+ keyword? {:degree {:poly 0}}
+ string? {:degree {:poly 0}}
+ number? {:degree {:poly 0}}
  count {:degree {:poly 0}}
+ ;; test macros and binding forms: wrappers that add nothing of their own --
+ ;; whatever is inside them is costed by the walk regardless
+ is {:degree {:poly 0}}
+ testing {:degree {:poly 0}}
+ binding {:degree {:poly 0}}
+ list {:degree {:poly 0}}
+ vector {:degree {:poly 0}}
+ range {:degree {:poly 0} :note "lazy; the consumer's traversal is what costs"}
  first {:degree {:poly 0}}
  second {:degree {:poly 0}}
  rest {:degree {:poly 0}}
@@ -37,6 +72,11 @@
  contains? {:degree {:poly 1} :note "constant on a set/map, linear on a vector"}
  nth {:degree {:poly 1} :note "constant on a vector, linear on a seq"}
  last {:degree {:poly 1}}
+
+ ;; linear in the total size of what they are given
+ str {:degree {:poly 1} :note "linear in total argument length"}
+ hash-set {:degree {:poly 1}}
+ pr-str {:degree {:poly 1}}
 
  ;; linear traversals
  map {:degree {:poly 1}}

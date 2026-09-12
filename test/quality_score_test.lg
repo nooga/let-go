@@ -18,8 +18,10 @@
 (deftest corpus-score-is-a-weighted-mean-of-shares
   (let [r (s/corpus-score {:erosion 0.4 :verbosity 0.2 :uncovered 0.5 :comment-debt 0.2
                            :dead 0.1 :defects 0.3 :testing 0.6 :cost 0.8})]
-    ;; .25*.4 + .10*.2 + .20*.5 + .10*.2 + .10*.1 + .10*.3 + .10*.6 + .05*.8 = 0.38
-    (is (< 0.379 (:debt r) 0.381))
+    ;; cost is weighted 0 while its loop rule is being fixed, so it
+    ;; contributes to neither the numerator nor the weight sum:
+    ;; .30*.4 + .20*.5 + .10*.2 + .10*.2 + .10*.1 + .10*.3 + .10*.6 = 0.36
+    (is (< 0.359 (:debt r) 0.361))
     (is (= [] (:omitted r)))
     (is (<= 0.0 (:debt r) 1.0))))
 
@@ -40,8 +42,8 @@
 
 (deftest file-score-uses-the-same-weights-restricted-to-a-file
   (let [f (s/file-score {:erosion 0.4 :verbosity 0.2 :defects 0.3 :dead 0.1})]
-    ;; (.25*.4 + .10*.2 + .10*.3 + .10*.1) / .55 = 0.16/0.55 = 0.2909...
-    (is (< 0.290 f 0.292)))
+    ;; (.30*.4 + .10*.2 + .10*.3 + .10*.1) / .60 = 0.18/0.60 = 0.30
+    (is (< 0.299 f 0.301)))
   ;; a Go file has no dead measurement; the rest renormalize
   (is (some? (s/file-score {:erosion 0.5 :verbosity 0.5 :defects nil :dead nil})))
   (is (nil? (s/file-score {:erosion nil :verbosity nil :defects nil :dead nil}))))

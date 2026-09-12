@@ -190,9 +190,9 @@ func main() {
 		for _, c := range m.calls {
 			fmt.Fprintf(w,
 				"\n  {:path %s :name %s :kind :%s :line %d :end %d :sloc %d :cc %d"+
-					" :loop-depth %d :self-call? %t}",
+					" :loop-depth %d :untraced-loops %d :self-call? %t}",
 				ednString(m.path), ednString(c.name), c.kind, c.line, c.end, c.sloc, c.cc,
-				c.loopDepth, c.selfCall)
+				c.loopDepth, c.untracedLoops, c.selfCall)
 		}
 	}
 	fmt.Fprintln(w, "]}")
