@@ -8,9 +8,9 @@
 ;; binding the counters so it never disturbs the run it was called from.
 ;;
 ;; Harness note: this file's own tests run under the shared TestRunner,
-;; which asserts *test-result* after (run-tests). Task 13's test-vars only
-;; runs a var carrying :test metadata (spec 9.2/9.3), so a probe that must
-;; fail or throw on purpose now needs :test metadata too, attached via
+;; which asserts (successful? (run-tests ns)) on the file's namespace.
+;; test-vars only runs a var carrying :test metadata (spec 9.2/9.3), so a
+;; probe that must fail or throw on purpose needs :test metadata too, attached via
 ;; set-test rather than deftest so its underlying var value stays a plain
 ;; placeholder. That metadata would make test-all-vars pick the probe up
 ;; on the file's own (run-tests) scan, so this file defines a test-ns-hook
@@ -90,14 +90,16 @@
 
 (deftest a-nested-run-leaves-the-enclosing-run-untouched
   ;; This test is itself running under run-tests. Running a failing and a
-  ;; throwing test inside it must not touch the suite's tally and must not
-  ;; clear *test-result* — otherwise a nested run could erase an earlier
-  ;; failure and let a broken suite report success.
-  (let [before test/*report-counters*]
-    (run-test-var (var sample-failing))
-    (run-test-var (var sample-throwing))
+  ;; throwing test inside it must not touch the suite's tally: run-test-var
+  ;; binds its own counters, so a nested failure is visible only in the
+  ;; summary it returns and can never be mistaken for — or erase — the
+  ;; enclosing run's verdict.
+  (let [before test/*report-counters*
+        failed (run-test-var (var sample-failing))
+        errored (run-test-var (var sample-throwing))]
     (is (= before test/*report-counters*))
-    (is (= true test/*test-result*))))
+    (is (not (successful? failed)))
+    (is (not (successful? errored)))))
 
 ;; --- fixtures ---------------------------------------------------------
 

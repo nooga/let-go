@@ -243,20 +243,11 @@ func runCompatTest(t *testing.T, filename string, totals *suiteCounters) {
 			}
 		}()
 
-		// Reset test registry
-		testNS := rt.NS("test")
-		_, _, err := compiler.NewCompiler(c, testNS).CompileMultiple(
-			strings.NewReader("(clear-registered-tests!)"),
-		)
-		if err != nil {
-			ch <- compatTestResult{err: fmt.Errorf("reset: %w", err)}
-			return
-		}
-
 		// Pre-register the file's namespace so the internal (ns ...) form
 		// doesn't cause the NSResolver to re-compile the same file. Without
 		// this, every (is ...) runs twice and assertion counts double.
-		rt.DefNSBare(nsNameFromCompatPath(filename))
+		nsName := nsNameFromCompatPath(filename)
+		rt.DefNSBare(nsName)
 
 		// Compile the .cljc file
 		coreNS := rt.NS(rt.NameCoreNS)
@@ -274,21 +265,29 @@ func runCompatTest(t *testing.T, filename string, totals *suiteCounters) {
 			return
 		}
 
-		// Run registered tests
-		outcomeVar := testNS.Lookup("*test-result*").(*vm.Var)
-		countersVar := testNS.Lookup("*report-counters*").(*vm.Var)
-
-		_, _, err = compiler.NewCompiler(c, testNS).CompileMultiple(
-			strings.NewReader("(run-tests)"),
-		)
+		// Run the file's tests through the public clojure.test API (spec
+		// 12.2): run-tests on the file's own namespace returns the summary,
+		// successful? reads the verdict off it. No source strings are
+		// compiled and no framework state is poked at.
+		fileNS := rt.NS(nsName)
+		if fileNS == nil {
+			ch <- compatTestResult{err: fmt.Errorf("namespace %s not found after compiling", nsName)}
+			return
+		}
+		summary, err := rt.InvokeValue(rt.LookupVar("test", "run-tests").Deref(), []vm.Value{fileNS})
 		if err != nil {
 			ch <- compatTestResult{err: fmt.Errorf("run-tests: %w", err)}
 			return
 		}
+		succ, err := rt.InvokeValue(rt.LookupVar("test", "successful?").Deref(), []vm.Value{summary})
+		if err != nil {
+			ch <- compatTestResult{err: fmt.Errorf("successful?: %w", err)}
+			return
+		}
 
 		ch <- compatTestResult{
-			outcome:  bool(outcomeVar.Deref().(vm.Boolean)),
-			counters: countersVar.Deref(),
+			outcome:  succ == vm.TRUE,
+			counters: summary,
 		}
 	}()
 

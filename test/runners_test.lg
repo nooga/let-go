@@ -3,11 +3,10 @@
    [test :refer :all]))
 
 ;; All helper namespaces are defined up front, before test.runners-test's
-;; own deftests, so that *default-test-ns* (set by every deftest/set-test
-;; as it runs) points at test.runners-test itself once this file finishes
-;; loading — otherwise the harness's own (run-tests) driver call would run
-;; whichever throwaway namespace's deftest happened to load last instead
-;; of this file's real tests.
+;; own deftests, so the namespace current when the file finishes loading is
+;; test.runners-test itself — the harness (spec 12.2) runs exactly that
+;; namespace, so a throwaway helper ns left current at the end would run
+;; its fixtures instead of this file's real tests.
 
 ;; A throwaway namespace with two tests and fixtures, built at load time.
 (ns test.runners-test.subject (:require [test :refer :all]))

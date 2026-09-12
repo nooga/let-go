@@ -125,20 +125,6 @@
       :error (merge (error-position (:actual m)) m)
       m)))
 
-;;; ---- Old shim state (Tasks 10-13 replace what uses these) ----------------
-
-;; BRIDGE: removed in Task 14
-(def ^:dynamic *test-result* true)
-
-(defn clear-registered-tests!
-  "No-op. There is no test registry any more (spec 7): a test is any var
-   with a fn under its :test metadata. Kept only so the Go harness
-   (test/language_test.go, test/zz_compat_test.go, test/zz_bench_test.go),
-   which still calls this between runs, keeps compiling; Task 14 migrates
-   the harness off it."
-  ;; BRIDGE: removed in Task 14
-  [])
-
 ;;; ---- Running one var (spec 9.1) ---------------------------------------
 
 ;; Defined ahead of deftest et al (spec 7 below), which reference test-var
@@ -179,25 +165,6 @@
 ;; fn. So deftest defines the var first, then attaches :test via
 ;; alter-meta!, whose argument position is evaluated normally.
 
-;; The last namespace a test-defining form ran in — set by deftest,
-;; deftest-, with-test and set-test as they run, read by run-tests' no-arg
-;; form (spec 9.2) as its default namespace.
-;;
-;; Real Clojure's zero-arg (run-tests) just reads *ns*. It is unreliable
-;; here: the Go test harness (test/language_test.go) compiles a file, then
-;; compiles the separate driver string "(run-tests)" via
-;; compiler.NewCompiler(consts, rt.NS("test")) — whose constructor resets
-;; the *ns* Var's root to the `test` namespace itself before that string
-;; even runs, out from under the file whose tests it means to run (`all-ns`
-;; over every namespace ever loaded in the process was tried and rejected:
-;; with 200+ corpus files sharing one runtime, it re-runs every earlier
-;; file's tests on every later file's (run-tests) call). *default-test-ns*
-;; is not a var registry — it holds only the single most-recently-active
-;; test-defining namespace — so it survives that reset and still points at
-;; the right namespace when run-tests actually executes.
-;; BRIDGE: removed in Task 14
-(def ^:dynamic *default-test-ns* nil)
-
 (defmacro deftest
   "Defines a test function with no arguments. Test functions may call other
    tests, so tests may be composed. The var's :test metadata holds the body;
@@ -205,8 +172,7 @@
   [name & body]
   (when *load-tests*
     `(do (def ~name (fn [] (test-var (var ~name))))
-         (alter-meta! (var ~name) assoc :test (fn [] ~@body))
-         (set! *default-test-ns* *ns*))))
+         (alter-meta! (var ~name) assoc :test (fn [] ~@body)))))
 
 (defmacro deftest-
   "Like deftest but creates a private var."
@@ -223,8 +189,7 @@
     ;; (syntax-quote would otherwise resolve it to a qualified symbol).
     `(do (def ~(list 'with-meta name {:private true})
            (fn [] (test-var (var ~name))))
-         (alter-meta! (var ~name) assoc :test (fn [] ~@body))
-         (set! *default-test-ns* *ns*))))
+         (alter-meta! (var ~name) assoc :test (fn [] ~@body)))))
 
 (defmacro with-test
   "Takes any definition form (that returns a Var) as the first argument.
@@ -232,16 +197,14 @@
   [definition & body]
   (if *load-tests*
     `(doto ~definition
-       (alter-meta! assoc :test (fn [] ~@body))
-       ((fn [_#] (set! *default-test-ns* *ns*))))
+       (alter-meta! assoc :test (fn [] ~@body)))
     definition))
 
 (defmacro set-test
   "Sets the :test metadata of the named var to a fn with the given body."
   [name & body]
   (when *load-tests*
-    `(do (alter-meta! (var ~name) assoc :test (fn [] ~@body))
-         (set! *default-test-ns* *ns*))))
+    `(alter-meta! (var ~name) assoc :test (fn [] ~@body))))
 
 ;;; ---- Assertions (spec 6) --------------------------------------------------
 
@@ -433,27 +396,14 @@
 
 ;;; ---- Runners (spec 9.4) --------------------------------------------------
 
-;; BRIDGE: removed in Task 14 — the zero-arg fallback to *default-test-ns*
-;; only when the current namespace has no test vars of its own, so a real
-;; caller in a namespace full of tests is never redirected away from it.
-(defn- current-ns-has-tests? []
-  (boolean (some (comp :test meta) (vals (ns-interns *ns*)))))
-
 (defn run-tests
   "Runs all tests in the given namespaces; prints results. Defaults to
    current namespace if none given. Returns a map summarizing test results."
-  ([] (run-tests (if (current-ns-has-tests?) *ns* (or *default-test-ns* *ns*))))
+  ([] (run-tests *ns*))
   ([& namespaces]
-   ;; BRIDGE: removed in Task 14 — reset optimistic before running, as the
-   ;; old bridged runner did, so a nested failing run started from inside
-   ;; another test cannot leave a stale `false` sitting on the flag for
-   ;; the enclosing run to observe before its own set! at the end.
-   (set! *test-result* true)
    (let [summary (assoc (apply merge-with + (map test-ns namespaces))
                         :type :summary)]
      (do-report summary)
-     ;; BRIDGE: removed in Task 14
-     (set! *test-result* (successful? summary))
      summary)))
 
 (defn run-all-tests

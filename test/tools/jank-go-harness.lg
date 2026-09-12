@@ -75,19 +75,18 @@
 ;; `(set! *testing-vars* (conj ...))` and assertion counter updates).  Seed one
 ;; testing-var entry so the exact prologue/epilogue remains balanced, and use
 ;; :test=1 solely as the structured marker for this direct runner invocation.
-;; Assertion failures remain authoritative through fail/error, *test-result*,
-;; and the compiled test fn's structured return value.
+;; Assertion failures remain authoritative through the fail/error counters and
+;; the compiled test fn's structured return value.
 (def runner
   (read-string
     (str "(defn run-selected-test [] "
          "(set! clojure.test/*report-counters* {:test 1 :pass 0 :fail 0 :error 0}) "
-         "(set! clojure.test/*test-result* true) "
          "(set! clojure.test/*testing-vars* [:adapter-test]) "
          "(set! clojure.test/*testing-contexts* []) "
          "(let [result (" test-name-str ") "
          "c clojure.test/*report-counters*] "
          "(and (> (:test c) 0) (= (:fail c) 0) (= (:error c) 0) "
-         "clojure.test/*test-result* result)))")))
+         "result)))")))
 
 (def ns-name
   (second (first (filter (fn [form] (and (seq? form) (= 'ns (first form)))) forms))))
