@@ -139,6 +139,25 @@
            (lpad (n3 (:verbosity f)) 8) (lpad (n3 (:defects f)) 9)
            (lpad (n3 (:dead f)) 7) (lpad (n1 (:mi-raw f)) 9)))))
 
+(defn- clone-class-lines
+  "Clone CLASSES, not pairs: one block in five files is a single extraction
+   opportunity, and the pair view prints ten lines for it. Ranked by total
+   duplicated lines, which is the size of the prize."
+  [classes]
+  (if (empty? classes)
+    []
+    (concat
+      ["" (str "clone classes " (count classes)
+               " (one entry per extraction opportunity, worst first)")
+       (str (pad "id" 12) (lpad "members" 8) (lpad "lines" 7) (lpad "sim" 6) "  regions")]
+      (mapcat (fn [c]
+                (cons (str (pad (:id c) 12) (lpad (:member-count c) 8)
+                           (lpad (:total-lines c) 7) (lpad (n2 (:min-similarity c)) 6)
+                           (if (:over-merged? c) "  POSSIBLY OVER-MERGED" ""))
+                      (map (fn [m] (str "              " (:path m) ":" (:start m) "-" (:end m)))
+                           (:members c))))
+              classes))))
+
 (defn- issue-at
   "`path:line`, or `path:start-end` for an issue that spans lines (a
    duplicated region), so the reader sees how much code it covers."
@@ -199,6 +218,7 @@
                          [""]
                          (debt-block result)
                          (file-table (:files result))
+                         (clone-class-lines (:clone-classes result))
                          (issue-lines (:issues result))
                          (top-lines (:top-complexity result))))
        "\n"))
