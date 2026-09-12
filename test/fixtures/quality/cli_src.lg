@@ -1,0 +1,13 @@
+;; Source fixture for the quality CLI test: one definition a test reaches
+;; and one nothing reaches, so static coverage has both a hit and a miss.
+(ns fixture.cli-src)
+
+(defn tested-fn
+  "Reached from cli_src_test.lg."
+  [x]
+  (inc x))
+
+(defn untested-fn
+  "Reached from nowhere."
+  [x]
+  (dec x))

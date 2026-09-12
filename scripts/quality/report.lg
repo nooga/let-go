@@ -31,7 +31,7 @@
    coverprofile's content hash, the CI duration's source -- and the two
    caveat lines say how duplication share and coverage are derived."
   [{:keys [inputs omitted]}]
-  (let [{:keys [commit git-range go-cover ci paths]} inputs]
+  (let [{:keys [commit git-range go-cover ci paths source-roots]} inputs]
     [(str "commit " (if (str/blank? commit) "unknown" commit))
      (str "git-range " (:since git-range) " "
           (if (str/blank? (:from git-range)) "(root)" (:from git-range))
@@ -41,8 +41,10 @@
                         "none"))
      (str "ci " (if ci (str (:source ci) " " (:seconds ci) "s") "none"))
      (str "paths " (str/join " " paths))
+     (str "source-roots " (if (seq source-roots) (str/join " " source-roots) "none"))
      (str "omitted " (pr-str omitted))
      "dup-share by lines"
+     "defects: renames credited to target via -M"
      (str "coverage lg=static go=" (if go-cover "dynamic" "none"))]))
 
 (defn- score-block [{total :score :keys [terms coverage testing]}]

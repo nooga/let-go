@@ -23,6 +23,13 @@
    :ratio {:good 1.0 :bad 0.1}
    :issues {:cc 10 :nesting 6 :long-defn 60 :low-comment 0.05
             :low-comment-min-loc 100 :hotspot-percentile 0.9}
+   ;; How much each issue is estimated to move the score. `:cc-span` is the
+   ;; complexity distance (past the trigger) worth a full term weight;
+   ;; `:low-comment`/`:hotspot` are fractions of their term weight; the rest
+   ;; are flat, because `nesting`/`long-defn` feed issues only and
+   ;; `untested` is already counted by the coverage term.
+   :impact {:cc-span 20.0 :nesting 0.05 :long-defn 0.05
+            :low-comment 0.1 :hotspot 0.2 :untested 0.02}
    :dup-k 25 :dup-w 40 :dup-floor 50
    :top-default 20
    :since-days 180
@@ -124,29 +131,32 @@
   [per-file coverage dup-pairs]
   (let [th (:issues thresholds)
         fw (:file-weights thresholds)
+        im (:impact thresholds)
         hotspot (percentile (keep :defects-per-kloc per-file) (:hotspot-percentile th))]
     (->> (concat
            (for [f per-file d (:definitions f) :when (> (:cc d) (:cc th))]
              {:path (:path f) :line (:line d) :kind :complexity :measure (:cc d)
               :hint (str "split " (:name d) "; cc " (:cc d) " > " (:cc th))
-              :impact (* (:cc fw) (/ (- (:cc d) (:cc th)) 20.0))})
+              :impact (* (:cc fw) (/ (- (:cc d) (:cc th)) (:cc-span im)))})
            (for [f per-file d (:definitions f) :when (> (:depth d) (:nesting th))]
              {:path (:path f) :line (:line d) :kind :nesting :measure (:depth d)
-              :hint (str "flatten " (:name d) "; depth " (:depth d)) :impact 0.05})
+              :hint (str "flatten " (:name d) "; depth " (:depth d))
+              :impact (:nesting im)})
            (for [f per-file d (:definitions f) :when (> (defn-lines d) (:long-defn th))]
              {:path (:path f) :line (:line d) :kind :long-defn :measure (defn-lines d)
-              :hint (str "extract from " (:name d)) :impact 0.05})
+              :hint (str "extract from " (:name d)) :impact (:long-defn im)})
            ;; Comment ratio is measured for .lg only; a nil ratio (Go) is
            ;; not evidence of a missing docstring, so it never fires.
            (for [f per-file :when (and (:comment-ratio f)
                                        (> (:loc f) (:low-comment-min-loc th))
                                        (< (:comment-ratio f) (:low-comment th)))]
              {:path (:path f) :line 1 :kind :low-comment :measure (:comment-ratio f)
-              :hint "add docstrings" :impact (* (:mi fw) 0.1)})
+              :hint "add docstrings" :impact (* (:mi fw) (:low-comment im))})
            (for [f per-file :when (and (pos? hotspot)
                                        (> (or (:defects-per-kloc f) 0) hotspot))]
              {:path (:path f) :line 1 :kind :defect-hotspot :measure (:defects-per-kloc f)
-              :hint "recent fixes concentrate here" :impact (* (:defects fw) 0.2)})
+              :hint "recent fixes concentrate here"
+              :impact (* (:defects fw) (:hotspot im))})
            (for [p dup-pairs]
              {:path (get-in p [:a :path]) :line (get-in p [:a :start]) :kind :duplicate
               :measure (:similarity p)
@@ -154,11 +164,13 @@
               :impact (* (:dup fw) (:similarity p))})
            (for [u (:untested coverage)]
              {:path (:path u) :line (:line u) :kind :untested :measure 0
-              :hint (str "no test reaches " (:name u)) :impact 0.02}))
+              :hint (str "no test reaches " (:name u)) :impact (:untested im)}))
          ;; `vec` before `sort-by`: the comprehensions above are lazy and
          ;; the sort must see a fully realized sequence.
          vec
-         (sort-by (juxt (comp - :impact) :path :line))
+         ;; `:kind` (by name) breaks a path/line tie so two issues on the
+         ;; same definition always print in the same order.
+         (sort-by (juxt (comp - :impact) :path :line (comp name :kind)))
          vec)))
 
 (defn top-complexity
