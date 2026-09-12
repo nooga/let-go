@@ -151,19 +151,22 @@ type namedLit struct {
 // CONSTANT in the input however deeply it nests. installLangNS -- four nested
 // loops over fixed registration tables -- read as n^4 for exactly this
 // reason.
-func paramDerived(decl *ast.FuncDecl) map[string]bool {
-	derived := map[string]bool{}
+func paramDerived(decl *ast.FuncDecl) map[string]string {
+	// name -> the ORIGIN parameter it derives from. Attributing to the origin
+	// is what makes nesting compose: `for row := range xs { for x := range row }`
+	// is xs^2, because row is part of xs -- not xs^1 * row^1.
+	derived := map[string]string{}
 	if decl.Type.Params != nil {
 		for _, f := range decl.Type.Params.List {
 			for _, n := range f.Names {
-				derived[n.Name] = true
+				derived[n.Name] = n.Name
 			}
 		}
 	}
 	if decl.Recv != nil {
 		for _, f := range decl.Recv.List {
 			for _, n := range f.Names {
-				derived[n.Name] = true
+				derived[n.Name] = n.Name
 			}
 		}
 	}
@@ -174,19 +177,22 @@ func paramDerived(decl *ast.FuncDecl) map[string]bool {
 		case *ast.AssignStmt:
 			if len(t.Lhs) == len(t.Rhs) {
 				for i, r := range t.Rhs {
-					if id, ok := t.Lhs[i].(*ast.Ident); ok && exprDerived(r, derived) {
-						derived[id.Name] = true
+					if id, ok := t.Lhs[i].(*ast.Ident); ok {
+						if root := derivedRoot(r, derived); root != "" {
+							derived[id.Name] = root
+						}
 					}
 				}
 			}
 		case *ast.RangeStmt:
-			// An element of a derived collection carries its size.
-			if exprDerived(t.X, derived) {
+			// An element of a derived collection carries its size, and its
+			// ORIGIN: iterating the elements of an element of xs is xs again.
+			if root := derivedRoot(t.X, derived); root != "" {
 				if k, ok := t.Key.(*ast.Ident); ok {
-					derived[k.Name] = true
+					derived[k.Name] = root
 				}
 				if v, ok := t.Value.(*ast.Ident); ok {
-					derived[v.Name] = true
+					derived[v.Name] = root
 				}
 			}
 		}
@@ -195,16 +201,24 @@ func paramDerived(decl *ast.FuncDecl) map[string]bool {
 	return derived
 }
 
-// exprDerived reports whether any identifier in e is parameter-derived.
-func exprDerived(e ast.Expr, derived map[string]bool) bool {
-	found := false
+// derivedRoot is the parameter-derived identifier an expression traces to,
+// or "" when none does. It is what a loop's degree is a degree IN.
+func derivedRoot(e ast.Expr, derived map[string]string) string {
+	root := ""
 	ast.Inspect(e, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok && derived[id.Name] {
-			found = true
+		if id, ok := n.(*ast.Ident); ok && root == "" {
+			if r, ok := derived[id.Name]; ok {
+				root = r
+			}
 		}
-		return !found
+		return root == ""
 	})
-	return found
+	return root
+}
+
+// exprDerived reports whether any identifier in e is parameter-derived.
+func exprDerived(e ast.Expr, derived map[string]string) bool {
+	return derivedRoot(e, derived) != ""
 }
 
 // loopSource is what a loop iterates over, or nil when it cannot be read:
@@ -228,14 +242,84 @@ func loopSource(n ast.Node) ast.Expr {
 	return nil
 }
 
+// inductionVars are the variables a loop advances: the ones its init binds
+// and its post updates, or a range statement's key and value.
+func inductionVars(n ast.Node) map[string]bool {
+	out := map[string]bool{}
+	switch t := n.(type) {
+	case *ast.RangeStmt:
+		if id, ok := t.Key.(*ast.Ident); ok {
+			out[id.Name] = true
+		}
+		if id, ok := t.Value.(*ast.Ident); ok {
+			out[id.Name] = true
+		}
+	case *ast.ForStmt:
+		if as, ok := t.Init.(*ast.AssignStmt); ok {
+			for _, l := range as.Lhs {
+				if id, ok := l.(*ast.Ident); ok {
+					out[id.Name] = true
+				}
+			}
+		}
+		if t.Post != nil {
+			ast.Inspect(t.Post, func(c ast.Node) bool {
+				switch p := c.(type) {
+				case *ast.IncDecStmt:
+					if id, ok := p.X.(*ast.Ident); ok {
+						out[id.Name] = true
+					}
+				case *ast.AssignStmt:
+					for _, l := range p.Lhs {
+						if id, ok := l.(*ast.Ident); ok {
+							out[id.Name] = true
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	return out
+}
+
+// advancesAny reports whether `n` ASSIGNS to any of `vars` -- the test for an
+// inner loop that moves the enclosing loop's cursor.
+func advancesAny(n ast.Node, vars map[string]bool) bool {
+	found := false
+	ast.Inspect(n, func(c ast.Node) bool {
+		switch p := c.(type) {
+		case *ast.IncDecStmt:
+			if id, ok := p.X.(*ast.Ident); ok && vars[id.Name] {
+				found = true
+			}
+		case *ast.AssignStmt:
+			for _, l := range p.Lhs {
+				if id, ok := l.(*ast.Ident); ok && vars[id.Name] {
+					found = true
+				}
+			}
+		}
+		return !found
+	})
+	return found
+}
+
 // tracedLoopNesting is the maximum nesting of loops WHOSE ITERATION SOURCE
 // TRACES TO A PARAMETER, plus the number of loops whose source could not be
 // traced -- reported rather than silently counted or silently dropped.
 func tracedLoopNesting(decl *ast.FuncDecl) (int, int) {
 	derived := paramDerived(decl)
-	max, untraced := 0, 0
-	var walk func(ast.Node, int)
-	walk = func(x ast.Node, depth int) {
+	untraced := 0
+	// Exponents PER PARAMETER. Nesting a loop over `xs` inside a loop over
+	// `ys` is n*m, which is neither n nor n^2; collapsing it to n^2 is the
+	// same error as counting nesting depth. The reported degree is the
+	// maximum single-parameter exponent, and a definition with more than one
+	// is multivariate -- the single number is a projection.
+	perRoot := map[string]int{}
+	max := 0
+	var walk func(ast.Node, map[string]int, map[string]bool)
+	walk = func(x ast.Node, depth map[string]int, enclosing map[string]bool) {
 		if x == nil {
 			return
 		}
@@ -245,27 +329,58 @@ func tracedLoopNesting(decl *ast.FuncDecl) (int, int) {
 			}
 			switch c.(type) {
 			case *ast.ForStmt, *ast.RangeStmt:
+				vars := inductionVars(c)
+				// SHARED INDUCTION: an inner loop that advances the enclosing
+				// loop's cursor is one pass over the collection, not a
+				// product. Two-pointer and cursor-scanning shapes are this:
+				// `for i := 0; i < len(s); { ... for i < len(s) && p(s[i]) { i++ } }`
+				// visits each element once, so it is n, not n^2.
+				shared := len(enclosing) > 0 && advancesAny(c, enclosing)
 				src := loopSource(c)
-				if src == nil {
+				next := map[string]int{}
+				for k, v := range depth {
+					next[k] = v
+				}
+				switch {
+				case shared:
+					// contributes nothing: the same pass as the enclosing loop
+				case src == nil:
 					untraced++
-					walk(c, depth)
-					return false
+				default:
+					if root := derivedRoot(src, derived); root != "" {
+						next[root] = next[root] + 1
+						if next[root] > perRoot[root] {
+							perRoot[root] = next[root]
+						}
+						if next[root] > max {
+							max = next[root]
+						}
+						// This loop's own counter now carries the collection's
+						// size, so an inner `for j := 0; j < i; j++` is a
+						// second pass over the SAME parameter rather than an
+						// untraceable loop over an integer.
+						for v := range vars {
+							if _, seen := derived[v]; !seen {
+								derived[v] = root
+							}
+						}
+					}
+					// no derived root: constant in the input
 				}
-				if !exprDerived(src, derived) {
-					// Constant in the input: iterating a fixed table.
-					walk(c, depth)
-					return false
+				merged := map[string]bool{}
+				for k := range enclosing {
+					merged[k] = true
 				}
-				if depth+1 > max {
-					max = depth + 1
+				for k := range vars {
+					merged[k] = true
 				}
-				walk(c, depth+1)
+				walk(c, next, merged)
 				return false
 			}
 			return true
 		})
 	}
-	walk(decl, 0)
+	walk(decl, map[string]int{}, map[string]bool{})
 	return max, untraced
 }
 

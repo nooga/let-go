@@ -562,3 +562,73 @@ func plain(n int) int {
 		t.Error("plain is directly self-recursive")
 	}
 }
+
+func TestSharedInductionAndMultivariateLoops(t *testing.T) {
+	src := `package p
+
+// A genuine double loop over the same parameter: n^2.
+func doubleScan(xs []int) int {
+	n := 0
+	for i := 0; i < len(xs); i++ {
+		for j := 0; j < len(xs); j++ {
+			n += xs[i] * xs[j]
+		}
+	}
+	return n
+}
+
+// A two-pointer scan: the inner loop ADVANCES the outer cursor, so every
+// element is visited once. n, not n^2.
+func twoPointer(xs []int) int {
+	n := 0
+	for i := 0; i < len(xs); {
+		for i < len(xs) && xs[i] == 0 {
+			i++
+		}
+		n++
+		i++
+	}
+	return n
+}
+
+// An inner loop that READS the outer index without advancing it is a real
+// nested pass: n^2.
+func readsOuterIndex(xs []int) int {
+	n := 0
+	for i := 0; i < len(xs); i++ {
+		for j := 0; j < i; j++ {
+			n += xs[j]
+		}
+	}
+	return n
+}
+
+// Loops over two DIFFERENT parameters are n*m, which is neither n nor n^2.
+// The reported degree is the maximum single-parameter exponent.
+func multivariate(xs []int, ys []int) int {
+	n := 0
+	for _, x := range xs {
+		for _, y := range ys {
+			n += x * y
+		}
+	}
+	return n
+}
+`
+	got := callablesByName(t, src)
+	if c := got["doubleScan"]; c.loopDepth != 2 {
+		t.Errorf("doubleScan: depth %d, want 2", c.loopDepth)
+	}
+	if c := got["twoPointer"]; c.loopDepth != 1 {
+		t.Errorf("twoPointer: depth %d, want 1 -- the inner loop advances the outer cursor, so it is ONE pass",
+			c.loopDepth)
+	}
+	if c := got["readsOuterIndex"]; c.loopDepth != 2 {
+		t.Errorf("readsOuterIndex: depth %d, want 2 -- reading the outer index is not advancing it",
+			c.loopDepth)
+	}
+	if c := got["multivariate"]; c.loopDepth != 1 {
+		t.Errorf("multivariate: depth %d, want 1 -- n*m is not n^2; the degree is the max single-parameter exponent",
+			c.loopDepth)
+	}
+}
