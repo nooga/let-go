@@ -56,6 +56,7 @@
 
 (defn lg-file? [p] (clojure.string/ends-with? p ".lg"))
 (defn go-file? [p] (clojure.string/ends-with? p ".go"))
+(defn source-file? [p] (or (lg-file? p) (go-file? p)))
 
 (def snippet-max 100)
 
@@ -408,7 +409,80 @@
                                  :evidence (str "ratio=" (:ratio d) " (p95=" threshold ")")}))
                         defs))})))
 
-(defn source-file? [p] (or (lg-file? p) (go-file? p)))
+;; --- R6 — comment churn, for a revision range ---------------------------
+;;
+;; Abuse is a property of a CHANGE, not a snapshot: a change that adds four
+;; comment lines per code line stands out against a baseline regardless of
+;; wording. --churn <git-range> (e.g. "HEAD~5..HEAD") diffs that range and
+;; compares comment-lines-added/code-lines-added against the corpus's own
+;; current comment/code ratio.
+;;
+;; That baseline is a documented simplification: it is the ratio over the
+;; CURRENT scanned corpus (a snapshot), not a true per-commit historical
+;; walk. Computing the latter would mean running a diff per commit across
+;; the repository's full history — expensive, and out of scope for a lint
+;; tool that runs on every invocation. See the calibration report for how
+;; this reads in practice.
+(defn parse-diff-file [line]
+  ;; "+++ b/path/to/file.go" -> "path/to/file.go"; "+++ /dev/null" -> nil.
+  (when (clojure.string/starts-with? line "+++ ")
+    (let [p (subs line 4)]
+      (when-not (clojure.string/starts-with? p "/dev/null")
+        (if (clojure.string/starts-with? p "b/") (subs p 2) p)))))
+
+(defn range-diff-counts [range]
+  ;; --no-ext-diff/--no-color: a configured external diff tool (e.g.
+  ;; difftastic via diff.external) would otherwise replace the plain
+  ;; unified-diff format this parser expects.
+  (let [r (os/sh "git" "--no-pager" "diff" "--no-ext-diff" "--no-color" "--unified=0" range)]
+    (when (not= 0 (:exit r))
+      (throw (Exception. (str "git diff " range " failed: " (:err r)))))
+    (let [lines (clojure.string/split (:out r) "\n")]
+      (loop [ls lines cur-file nil comment-n 0 code-n 0]
+        (if (empty? ls)
+          {:comment comment-n :code code-n}
+          (let [l (first ls)
+                f (parse-diff-file l)]
+            (cond
+              f (recur (rest ls) f comment-n code-n)
+              (clojure.string/starts-with? l "+++") (recur (rest ls) nil comment-n code-n)
+              (and (clojure.string/starts-with? l "+")
+                   (not (clojure.string/starts-with? l "+++"))
+                   cur-file (source-file? cur-file))
+              (let [added (subs l 1)]
+                (cond
+                  (clojure.string/blank? added) (recur (rest ls) cur-file comment-n code-n)
+                  (some? (comment-body added (go-file? cur-file)))
+                  (recur (rest ls) cur-file (inc comment-n) code-n)
+                  :else (recur (rest ls) cur-file comment-n (inc code-n))))
+              :else (recur (rest ls) cur-file comment-n code-n))))))))
+
+(defn corpus-baseline-ratio [files]
+  (let [totals (reduce (fn [acc path]
+                         (let [go?   (go-file? path)
+                               lines (clojure.string/split (slurp path) "\n")
+                               comments (count (filter (fn [l] (some? (comment-body l go?))) lines))
+                               code     (count (filter (fn [l] (and (not (clojure.string/blank? l))
+                                                                 (nil? (comment-body l go?))))
+                                                 lines))]
+                           (-> acc (update :comment + comments) (update :code + code))))
+                 {:comment 0 :code 0}
+                 files)]
+    (when (pos? (:code totals))
+      (/ (double (:comment totals)) (:code totals)))))
+
+(defn r6-findings [range files]
+  (when range
+    (let [diff     (range-diff-counts range)
+          baseline (corpus-baseline-ratio files)]
+      (when (and baseline (pos? (:code diff)))
+        (let [range-ratio (/ (double (:comment diff)) (:code diff))
+              multiple    (/ range-ratio baseline)]
+          [{:file (str "range:" range) :line 0 :end 0
+            :kind :comment-churn :measure multiple
+            :evidence (str "range-ratio=" range-ratio " baseline=" baseline
+                           " multiple=" multiple "x (comment lines added per code"
+                           " line added, range vs current corpus)")}])))))
 
 ;; Directory walk. os/ls yields bare names, so each level rebuilds the path.
 (defn collect [path]
@@ -434,7 +508,7 @@
     :comment-churn})
 
 (defn parse-args [argv]
-  (loop [args argv opts {:paths [] :edn? false :gate-req #{}}]
+  (loop [args argv opts {:paths [] :edn? false :gate-req #{} :churn nil}]
     (if (empty? args)
       opts
       (let [a (first args)]
@@ -446,6 +520,10 @@
             (recur (rest (rest args))
                    (update opts :gate-req into
                            (map keyword (clojure.string/split (second args) #",")))))
+          (= a "--churn")
+          (if (empty? (rest args))
+            (throw (Exception. "--churn requires a git range, e.g. --churn HEAD~5..HEAD"))
+            (recur (rest (rest args)) (assoc opts :churn (second args))))
           :else (recur (rest args) (update opts :paths conj a)))))))
 
 (let [argv   (vec (drop 2 (seq os/args)))
@@ -461,8 +539,9 @@
       r4-result (r4-findings all-defs)
       r4     (:findings r4-result)
       r5     (vec (mapcat (fn [p] (r5-findings p (blocks-by-file p))) files))
+      r6     (or (r6-findings (:churn opts) files) [])
       go-files (count (filter go-file? files))
-      all-findings (vec (concat r1 r2 r3 r4 r5))
+      all-findings (vec (concat r1 r2 r3 r4 r5 r6))
       gate-kinds (clojure.set/intersection (:gate-req opts) gateable-kinds)
       ignored-gate (clojure.set/difference (:gate-req opts) gateable-kinds)
       gated? (some (fn [f] (contains? gate-kinds (:kind f))) all-findings)]
@@ -494,6 +573,12 @@
         (println (str "    " (:evidence f))))
       (println (str (count r5) " finding(s) across " (count files)
                     " file(s). Report only — no source was changed."))
+      (doseq [f r6]
+        (println (str (:file f) "  [comment-churn] " (:evidence f))))
+      (if (:churn opts)
+        (when (empty? r6)
+          (println (str "comment-churn (R6): no findable added lines for range " (:churn opts) ".")))
+        (println "comment-churn (R6): skipped — pass --churn <git-range> to compute."))
       (when (seq ignored-gate)
         (println (str "note: --gate ignored " (vec (map name ignored-gate))
                       " — not gate-eligible (R5 is a heuristic, or an unknown kind name).")))))
