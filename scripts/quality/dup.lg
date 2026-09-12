@@ -146,5 +146,7 @@
                                      (if (= (:path f) (get-in p [:b :path]))
                                        (- (get-in p [:b :end]) (get-in p [:b :start]) -1) 0)))
                           0 pairs)
-                total-lines (max 1 (:line (last (:tokens f))))]
+                ;; A file with no tokens (empty, or nothing but comments)
+                ;; has no last token to read a line number from.
+                total-lines (max 1 (or (:line (last (:tokens f))) 0))]
             [(:path f) (* 100.0 (/ (min covered total-lines) (double total-lines)))]))))

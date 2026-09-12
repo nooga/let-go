@@ -17,41 +17,67 @@
    :from (str/trim (or (sh "git" "rev-list" "-1" (str "--before=" since) "HEAD") ""))
    :to (str/trim (or (sh "git" "rev-parse" "HEAD") ""))})
 
+(def ^:private record-sep
+  "ASCII RS, emitted by `--format=%x1e%s` ahead of every commit subject. A
+   subject line is therefore unambiguous even though `git log --name-only`
+   does NOT end a commit block with a blank line (it only separates the
+   subject from its paths), which is why shape-based block detection
+   desynchronizes after the first commit."
+  "\u001e")
+
+(defn- status-path
+  "The path a `--name-status` line credits: the LAST tab-separated field, so
+   a rename (`R100<TAB>old<TAB>new`) credits the new path and a plain
+   `M<TAB>path` credits that path. A line with no tab (plain `--name-only`
+   output) is returned unchanged."
+  [line]
+  (last (str/split line #"\t")))
+
 (defn parse-fix-log
-  "Parses `git log --format=%s --name-only <range>` output into
-   {path count…}. Each commit block is SUBJECT, BLANK, PATH*, BLANK
-   (`git log --name-only` always separates the subject from its paths
-   with a blank line, so a subject containing \"/\" — e.g.
-   `fix(rt/core): x` — is never mistaken for a path). An explicit state
-   machine tracks position within a block rather than inferring it from
-   line shape:
-     :subject       — the next non-blank line is a commit SUBJECT
-     :after-subject — the next line is the blank separator before paths
-     :paths         — non-blank lines are PATHS; a blank line ends the
-                      block and returns to :subject
-   A block counts its paths when its subject matches ^[Ff]ix."
+  "Parses `git log --format=%x1e%s -M --name-status <range>` output into
+   {path count...}.
+
+   Each commit begins with a record-separator-prefixed SUBJECT line; every
+   other non-blank line is a changed-path line belonging to the most recent
+   subject, and blank lines are ignored. A commit whose subject matches
+   `^[Ff]ix` credits one defect to each path it touches.
+
+   The record separator is load-bearing: `git log --name-only` separates a
+   subject from its paths with a blank line but does NOT end a commit block,
+   so a parser that infers block boundaries from line shape desynchronizes
+   after the first commit and silently counts nothing.
+
+   Renames are credited to the rename TARGET (see `status-path`) -- instead
+   of a per-file `git log --follow`, rename detection comes from `-M`, so a
+   file renamed inside the window keeps the fixes made under its old name."
   [text]
-  (loop [ls (f/lines text) state :subject subject nil counts {}]
+  (loop [ls (f/lines text) subject nil counts {}]
     (if (empty? ls)
       counts
-      (let [l (first ls) blank? (str/blank? l)]
-        (case state
-          :subject (if blank?
-                     (recur (rest ls) :subject subject counts)
-                     (recur (rest ls) :after-subject l counts))
-          :after-subject (recur (rest ls) :paths subject counts)
-          :paths (if blank?
-                   (recur (rest ls) :subject subject counts)
-                   (recur (rest ls) :paths subject
-                          (if (and subject (re-find #"^[Ff]ix" subject))
-                            (update counts l (fnil inc 0))
-                            counts))))))))
+      (let [l (first ls)]
+        (cond
+          (str/starts-with? l record-sep) (recur (rest ls) (subs l 1) counts)
+          (str/blank? l) (recur (rest ls) subject counts)
+          :else (recur (rest ls) subject
+                       (if (and subject (re-find #"^[Ff]ix" subject))
+                         (update counts (status-path l) (fnil inc 0))
+                         counts)))))))
+
+(defn log-range
+  "The `git log` revision argument for a {:from :to} range. An empty `:from`
+   means \"no commit before --since\", i.e. from the root: `<from>..<to>`
+   would then be `..<to>`, which git reads as `HEAD..<to>` and yields
+   nothing, so the range degrades to `<to>` alone."
+  [{:keys [from to]}]
+  (if (str/blank? from) to (str from ".." to)))
 
 (defn fix-counts
-  "{path count…} of fix-commit touches to each path over the given
-   {:from :to} git sha range (shells out)."
-  [{:keys [from to]}]
-  (parse-fix-log (or (sh "git" "log" "--format=%s" "--name-only" (str from ".." to)) "")))
+  "{path count...} of fix-commit touches to each path over the given
+   {:from :to} git sha range (shells out). Renames are followed via `-M`."
+  [range]
+  (parse-fix-log (or (sh "git" "log" "--format=%x1e%s" "-M" "--name-status"
+                         (log-range range))
+                     "")))
 
 (defn parse-coverprofile
   "Parses a Go `mode: set` coverprofile into

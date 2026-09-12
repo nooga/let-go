@@ -4,7 +4,12 @@
    Usage:
      ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]
                              [--ci-run ID | --ci-seconds N]
-                             [--edn PATH] [--top N] [paths...]
+                             [--edn PATH] [--top N] [--source-root PATH]
+                             [paths...]
+
+   `--source-root PATH` measures a tree as SOURCE even when it sits under
+   `test/` (only `*_test.lg`/`*_test.go` inside it stay tests) -- needed to
+   point the tool at a fixture corpus.
 
    Measures `.lg` and `.go` files under `paths` (default: the source tree),
    scores them with `quality.score`, and prints a deterministic report.
@@ -49,15 +54,52 @@
       (and (source-file? root) (not (skip? root))) [root]
       :else [])))
 
+(defn- checkout-root?
+  "Whether `dir` is the root of the working copy: it holds a `.jj` or a
+   `.git` entry."
+  [dir]
+  (boolean (or (os/stat (str dir "/.jj")) (os/stat (str dir "/.git")))))
+
+(defn repo-prefix
+  "The path from the root of THIS working copy to the process cwd, with a
+   trailing slash (\"\" at the root). Every discovered path is prefixed with
+   it so classification and the `fix-counts` lookup -- which is keyed by
+   root-relative git paths -- mean the same thing no matter which directory
+   the tool was started from.
+
+   Found by walking up to the nearest `.jj`/`.git` marker rather than asking
+   `git rev-parse --show-prefix`: inside a jj workspace, git reports the
+   PRIMARY checkout as its toplevel, so `--show-prefix` would return
+   `.workspaces/<name>/...` while the commit history it is matched against
+   still speaks plain `pkg/...` paths."
+  []
+  (let [parts (vec (remove str/blank? (str/split (os/cwd) #"/")))]
+    (loop [n (count parts)]
+      (let [dir (str "/" (str/join "/" (subvec parts 0 n)))]
+        (cond
+          (checkout-root? dir) (let [tail (subvec parts n)]
+                                 (if (empty? tail) "" (str (str/join "/" tail) "/")))
+          (zero? n) ""
+          :else (recur (dec n)))))))
+
+(defn- named-test? [path]
+  (or (str/ends-with? path "_test.lg") (str/ends-with? path "_test.go")))
+
 (defn test-file?
-  "Test files are anything under a `test/` directory plus `*_test.lg` and
-   `*_test.go` anywhere. Their LOC is the numerator of the test-to-code
-   ratio and is excluded from source LOC."
-  [path]
-  (or (str/starts-with? path "test/")
-      (str/includes? path "/test/")
-      (str/ends-with? path "_test.lg")
-      (str/ends-with? path "_test.go")))
+  "Whether a repo-root-relative path is a test file: anything under a
+   `test/` directory plus `*_test.lg` and `*_test.go` anywhere. Test LOC is
+   the numerator of the test-to-code ratio and is excluded from source LOC.
+
+   Under a `--source-root` (`source-roots`, repo-relative prefixes) only the
+   name patterns apply, so a tree that happens to live under `test/` -- the
+   tool's own fixture corpus, say -- can still be measured as source."
+  ([path] (test-file? path []))
+  ([path source-roots]
+   (if (some (fn [r] (str/starts-with? path r)) source-roots)
+     (named-test? path)
+     (or (named-test? path)
+         (str/starts-with? path "test/")
+         (str/includes? path "/test/")))))
 
 (defn- lang-of [path] (if (str/ends-with? path ".go") :go :lg))
 
@@ -102,10 +144,15 @@
   "The CLI's flags and positional paths. Unknown `--flags` are rejected
    loudly rather than silently treated as paths."
   [args]
-  (loop [a (vec args) opts {:top (:top-default score/thresholds)} paths []]
+  (loop [a (vec args) opts {:top (:top-default score/thresholds) :source-roots []} paths []]
     (if (empty? a)
       (assoc opts :paths (if (empty? paths) default-paths paths))
-      (let [x (first a) n (second a)]
+      (let [x (first a)
+            valued? (contains? #{"--since" "--go-cover" "--ci-run" "--ci-seconds"
+                                 "--edn" "--top" "--source-root"} x)
+            _ (when (and valued? (< (count a) 2))
+                (throw (ex-info (str "flag " x " needs a value") {:flag x})))
+            n (second a)]
         (case x
           "--since" (recur (subvec a 2) (assoc opts :since n) paths)
           "--go-cover" (recur (subvec a 2) (assoc opts :go-cover n) paths)
@@ -113,6 +160,7 @@
           "--ci-seconds" (recur (subvec a 2) (assoc opts :ci-seconds (read-string n)) paths)
           "--edn" (recur (subvec a 2) (assoc opts :edn n) paths)
           "--top" (recur (subvec a 2) (assoc opts :top (read-string n)) paths)
+          "--source-root" (recur (subvec a 2) (update opts :source-roots conj n) paths)
           (if (str/starts-with? x "--")
             (throw (ex-info (str "unknown flag " x) {:flag x}))
             (recur (subvec a 1) opts (conj paths x))))))))
@@ -133,8 +181,15 @@
   (let [since (or (:since opts) (default-since))
         grange (inputs/git-range since)
         defect-counts (inputs/fix-counts grange)
-        paths (vec (sort (distinct (mapcat walk (:paths opts)))))
-        loaded (mapv (fn [p] {:path p :lang (lang-of p) :text (slurp p)}) paths)
+        ;; `walk` yields cwd-relative paths (what `slurp` needs); `:path` is
+        ;; the repo-root-relative form, which is what classification, the
+        ;; report and the `fix-counts` lookup all speak.
+        prefix (repo-prefix)
+        source-roots (mapv (fn [r] (str prefix r)) (:source-roots opts))
+        read-paths (vec (sort (distinct (mapcat walk (:paths opts)))))
+        loaded (mapv (fn [p] {:path (str prefix p) :read-path p
+                              :lang (lang-of p) :text (slurp p)})
+                     read-paths)
         tokenized (mapv (fn [f] (assoc f :tokens (lex/tokens (:text f) (:lang f)))) loaded)
         ;; Duplication is compared within a language, as the spec requires:
         ;; the two token vocabularies are disjoint enough that a cross
@@ -166,7 +221,7 @@
                                                       :dup-pct pct
                                                       :defects-per-kloc dpk})]
                         {:path (:path f) :lang (:lang f) :loc loc
-                         :test? (test-file? (:path f))
+                         :test? (test-file? (:path f) source-roots)
                          :definitions (if m (:definitions m) [])
                          :cc-max (when m (:cc-max m))
                          :mi-raw (when m (:mi m))
@@ -185,7 +240,8 @@
         ;; Static .lg reachability: sources are non-test .lg files, roots
         ;; come from the .lg test files.
         lg-of (fn [pred] (mapv #(select-keys % [:path :text])
-                               (filter (fn [f] (and (= :lg (:lang f)) (pred (test-file? (:path f)))))
+                               (filter (fn [f] (and (= :lg (:lang f))
+                                                    (pred (test-file? (:path f) source-roots))))
                                        loaded)))
         lg-cov (graph/coverage (lg-of not) (lg-of identity))
         go-cov (when-let [p (:go-cover opts)]
@@ -201,12 +257,16 @@
                                       (if (= :lg (:lang f))
                                         (lg-assertions (:text f))
                                         (go-assertions (:text f))))
-                                    (filter #(test-file? (:path %)) loaded)))
-        density (if (pos? src-loc) (/ (* 1000.0 assertions) src-loc) 0.0)
-        ratio (if (pos? src-loc) (/ test-loc (double src-loc)) 0.0)
+                                    (filter #(test-file? (:path %) source-roots) loaded)))
+        ;; With no source LOC there is nothing to be dense relative to, so
+        ;; the term is omitted (nil) rather than scored as a perfect or
+        ;; catastrophic zero.
+        density (when (pos? src-loc) (/ (* 1000.0 assertions) src-loc))
+        ratio (when (pos? src-loc) (/ test-loc (double src-loc)))
         testing {:assertions assertions :density density :ratio ratio
                  :source-loc src-loc :test-loc test-loc
-                 :score (score/testing-term {:density density :ratio ratio})}
+                 :score (when (pos? src-loc)
+                          (score/testing-term {:density density :ratio ratio}))}
         files-composite (if (pos? (reduce + 0 (map :loc files)))
                           (/ (reduce + 0.0 (map (fn [f] (* (:loc f) (:composite f))) files))
                              (double (reduce + 0 (map :loc files))))
@@ -217,8 +277,9 @@
                      :git-range grange
                      :go-cover (when go-cov (select-keys go-cov [:path :sha256 :percent]))
                      :ci ci
-                     :paths (:paths opts)}
-            :coverage {:lg (select-keys lg-cov [:reached :total :percent])
+                     :paths (:paths opts)
+                     :source-roots source-roots}
+            :coverage {:lg (select-keys lg-cov [:reached :total :percent :untested])
                        :go (when go-cov (select-keys go-cov [:covered :total :percent]))
                        :combined combined
                        :efficiency-pts efficiency}
@@ -247,4 +308,5 @@
     (if (seq user)
       (os/exit (main user))
       (println "usage: ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]"
-               "[--ci-run ID | --ci-seconds N] [--edn PATH] [--top N] [paths...]"))))
+               "[--ci-run ID | --ci-seconds N] [--edn PATH] [--top N]"
+               "[--source-root PATH] [paths...]"))))
