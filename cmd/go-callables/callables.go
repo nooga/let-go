@@ -206,6 +206,15 @@ func paramDerived(decl *ast.FuncDecl) map[string]string {
 func derivedRoot(e ast.Expr, derived map[string]string) string {
 	root := ""
 	ast.Inspect(e, func(n ast.Node) bool {
+		// Derivation does NOT cross a function-literal boundary. A closure is
+		// a value of CONSTANT size whatever its body references: binding
+		// `add := func(syms []Symbol) {...}` does not make `add` carry the
+		// size of anything the body mentions. The only way a closure's RESULT
+		// carries parameter size is by being called, which callee
+		// substitution handles.
+		if _, isFunc := n.(*ast.FuncLit); isFunc {
+			return false
+		}
 		if id, ok := n.(*ast.Ident); ok && root == "" {
 			if r, ok := derived[id.Name]; ok {
 				root = r
