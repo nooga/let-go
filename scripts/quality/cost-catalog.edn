@@ -1,0 +1,67 @@
+;; Cost catalog for quality.cost: the asymptotic degree of core functions in
+;; the size of their collection argument. DATA, not hardcoded predicates --
+;; the same principle as scripts/lint-code-rules.edn, so a gap is closed by
+;; editing this file.
+;;
+;; :degree is a STRUCTURED degree, the same representation the classifier
+;; uses: {:poly 0} constant, {:poly 1} linear, {:poly-log 1} n log n,
+;; {:exp 2} exponential. A function ABSENT
+;; from this catalog is treated as degree 0 and FLAGGED as assumed, so the
+;; assumption is visible in the report and the catalog grows from real gaps
+;; rather than from guesses about completeness.
+;;
+;; Where cost depends on the receiver -- nth is constant on a vector and
+;; linear on a seq -- the WORSE case is recorded. A static reader does not
+;; know the receiver, and a cost estimate that under-reports is worse than one
+;; that over-reports: this whole term is an upper-bound approximation.
+
+{;; constant
+ count {:degree {:poly 0}}
+ first {:degree {:poly 0}}
+ second {:degree {:poly 0}}
+ rest {:degree {:poly 0}}
+ next {:degree {:poly 0}}
+ conj {:degree {:poly 0}}
+ cons {:degree {:poly 0}}
+ peek {:degree {:poly 0}}
+ pop {:degree {:poly 0}}
+ get {:degree {:poly 0}}
+ assoc {:degree {:poly 0}}
+ dissoc {:degree {:poly 0}}
+ inc {:degree {:poly 0}}
+ dec {:degree {:poly 0}}
+ empty? {:degree {:poly 0}}
+ seq {:degree {:poly 0}}
+
+ ;; constant on a set or map, linear on a vector: worse case recorded
+ contains? {:degree {:poly 1} :note "constant on a set/map, linear on a vector"}
+ nth {:degree {:poly 1} :note "constant on a vector, linear on a seq"}
+ last {:degree {:poly 1}}
+
+ ;; linear traversals
+ map {:degree {:poly 1}}
+ mapv {:degree {:poly 1}}
+ filter {:degree {:poly 1}}
+ filterv {:degree {:poly 1}}
+ remove {:degree {:poly 1}}
+ keep {:degree {:poly 1}}
+ mapcat {:degree {:poly 1}}
+ reduce {:degree {:poly 1}}
+ into {:degree {:poly 1}}
+ concat {:degree {:poly 1}}
+ distinct {:degree {:poly 1}}
+ frequencies {:degree {:poly 1}}
+ group-by {:degree {:poly 1}}
+ every? {:degree {:poly 1}}
+ some {:degree {:poly 1}}
+ reverse {:degree {:poly 1}}
+ vec {:degree {:poly 1}}
+ set {:degree {:poly 1}}
+ apply {:degree {:poly 1}}
+ str/join {:degree {:poly 1}}
+ str/split {:degree {:poly 1}}
+ str/replace {:degree {:poly 1}}
+
+ ;; linearithmic
+ sort {:degree {:poly-log 1}}
+ sort-by {:degree {:poly-log 1}}}
