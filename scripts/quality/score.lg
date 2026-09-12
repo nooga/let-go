@@ -47,6 +47,9 @@
    ;; `untested` is already counted by the coverage term.
    :impact {:cc-span 20.0 :nesting 0.05 :long-defn 0.05
             :low-comment 0.1 :hotspot 0.2 :untested 0.02}
+   ;; Erosion's high-complexity threshold, from the paper: a callable counts
+   ;; as high-complexity when CC is STRICTLY above it.
+   :erosion {:cc 10}
    :dup-k 25 :dup-w 40 :dup-floor 50
    ;; Below this many LOC a single fix commit implies an absurd per-KLOC
    ;; rate (one fix in a 9-line stub reads as 111/KLOC), so the defects term

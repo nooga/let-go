@@ -57,6 +57,34 @@ func codeLines(fset *token.FileSet, file *ast.File, src string) []bool {
 	return code
 }
 
+// fileCounts is the per-file line census: total lines, code lines (neither
+// blank nor comment-only), and blank lines. The remainder -- comment-only
+// lines -- is total minus code minus blank.
+type fileCounts struct {
+	lines int
+	code  int
+	blank int
+}
+
+func countFile(code []bool, src string) fileCounts {
+	lines := strings.Split(src, "\n")
+	// A trailing newline leaves a final empty element that is not a line.
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	out := fileCounts{lines: len(lines)}
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			out.blank++
+			continue
+		}
+		if i+1 < len(code) && code[i+1] {
+			out.code++
+		}
+	}
+	return out
+}
+
 func countCodeLines(code []bool, from, to int) int {
 	n := 0
 	for l := from; l <= to && l < len(code); l++ {
@@ -175,12 +203,21 @@ func receiverName(fset *token.FileSet, recv *ast.Field) string {
 // top-level function and method declaration, plus every NAMED function
 // literal inside them.
 func goCallables(src string) ([]callable, error) {
+	cs, _, err := goAnalyze(src)
+	return cs, err
+}
+
+// goAnalyze parses Go source once and returns everything measured from it:
+// the callables and the file's line census. Keep new per-file measurements
+// coming out of here rather than re-parsing.
+func goAnalyze(src string) ([]callable, fileCounts, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "src.go", src, parser.ParseComments)
 	if err != nil {
-		return nil, err
+		return nil, fileCounts{}, err
 	}
 	code := codeLines(fset, file, src)
+	counts := countFile(code, src)
 	var out []callable
 
 	for _, d := range file.Decls {
@@ -240,5 +277,5 @@ func goCallables(src string) ([]callable, error) {
 			cc:   1 + decisionPoints(decl, dead),
 		})
 	}
-	return out, nil
+	return out, counts, nil
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -314,5 +316,35 @@ func TestGoFilesSkipsGeneratedAndLoweredTrees(t *testing.T) {
 			t.Errorf("got %v, want %v", names, want)
 			break
 		}
+	}
+}
+
+func TestCountFileCensus(t *testing.T) {
+	src := `package p
+
+// a comment line
+func f() int {
+	return 1
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "src.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := countFile(codeLines(fset, file, src), src)
+	// 6 lines: package, blank, comment, func, return, }
+	if got.lines != 6 {
+		t.Errorf("lines = %d, want 6", got.lines)
+	}
+	if got.blank != 1 {
+		t.Errorf("blank = %d, want 1", got.blank)
+	}
+	// code = package, func, return, } = 4 (the comment line is not code)
+	if got.code != 4 {
+		t.Errorf("sloc = %d, want 4", got.code)
+	}
+	if comment := got.lines - got.code - got.blank; comment != 1 {
+		t.Errorf("comment lines = %d, want 1", comment)
 	}
 }

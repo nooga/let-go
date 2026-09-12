@@ -2,11 +2,22 @@
 //
 //	go-callables <path>...    # files, or directories walked recursively
 //
-// It writes EDN to stdout: one record per top-level function or method
-// declaration, plus one per dead nested binding.
+// It writes one EDN map to stdout, keyed by concern so that adding a concern
+// later is additive and breaks no consumer:
 //
-//	[{:path "pkg/vm/map.go" :name "(*Map).Get" :kind :method
-//	  :line 12 :end 40 :sloc 21 :cc 7} ...]
+//	{:version 1
+//	 :files     [{:path "pkg/vm/map.go" :lines 120 :sloc 98 :blank 14}]
+//	 :functions [{:path "pkg/vm/map.go" :name "(*Map).Get" :kind :method
+//	              :line 12 :end 40 :sloc 21 :cc 7}]}
+//
+// This is THE GO ANALYSIS TOOL, not "the erosion input provider". The
+// boundary between it and the .lg side is the language being analysed, not
+// the metric: anything that needs to understand Go should come from here,
+// where go/ast and go/scanner are exact, rather than from a generic
+// tokenizer that is close enough. Two keys are deliberately absent and
+// expected: `:tokens`, a normalized per-file token stream from go/scanner so
+// duplication can winnow real Go tokens, and `:comments`, comment blocks
+// with their line ranges for scripts/lint.lg.
 //
 // It MEASURES and judges nothing. Mass, the complexity-above-ten split, the
 // erosion ratio, weights, thresholds and reporting all live in .lg; see
@@ -111,9 +122,14 @@ func main() {
 
 	w := bufio.NewWriter(os.Stdout)
 	defer w.Flush()
-	fmt.Fprint(w, "[")
 
-	measured, failed := 0, 0
+	type measurement struct {
+		path   string
+		counts fileCounts
+		calls  []callable
+	}
+	var ms []measurement
+	failed := 0
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -121,19 +137,32 @@ func main() {
 			failed++
 			continue
 		}
-		cs, err := goCallables(string(src))
+		cs, counts, err := goAnalyze(string(src))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "go-callables: %s: %v\n", f, err)
 			failed++
 			continue
 		}
-		measured++
-		for _, c := range cs {
-			fmt.Fprintf(w, "\n {:path %s :name %s :kind :%s :line %d :end %d :sloc %d :cc %d}",
-				ednString(f), ednString(c.name), c.kind, c.line, c.end, c.sloc, c.cc)
-		}
+		ms = append(ms, measurement{path: f, counts: counts, calls: cs})
+	}
+
+	fmt.Fprintln(w, "{:version 1")
+	fmt.Fprint(w, " :files [")
+	for _, m := range ms {
+		fmt.Fprintf(w, "\n  {:path %s :lines %d :sloc %d :blank %d}",
+			ednString(m.path), m.counts.lines, m.counts.code, m.counts.blank)
 	}
 	fmt.Fprintln(w, "]")
+	fmt.Fprint(w, " :functions [")
+	for _, m := range ms {
+		for _, c := range m.calls {
+			fmt.Fprintf(w, "\n  {:path %s :name %s :kind :%s :line %d :end %d :sloc %d :cc %d}",
+				ednString(m.path), ednString(c.name), c.kind, c.line, c.end, c.sloc, c.cc)
+		}
+	}
+	fmt.Fprintln(w, "]}")
+
+	measured := len(ms)
 
 	if measured == 0 && failed > 0 {
 		fmt.Fprintln(os.Stderr, "go-callables: nothing could be measured")
