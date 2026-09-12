@@ -31,8 +31,9 @@
    coverprofile's content hash, the CI duration's source -- and the two
    caveat lines say how duplication share and coverage are derived."
   [{:keys [inputs omitted]}]
-  (let [{:keys [commit git-range go-cover ci paths source-roots]} inputs]
-    [(str "commit " (if (str/blank? commit) "unknown" commit))
+  (let [{:keys [commit commit-source git-range go-cover ci paths source-roots corpus]} inputs]
+    [(str "commit " (if (str/blank? commit) "unknown" commit)
+          (if commit-source (str " (" commit-source ")") ""))
      (str "git-range " (:since git-range) " "
           (if (str/blank? (:from git-range)) "(root)" (:from git-range))
           ".." (:to git-range))
@@ -42,10 +43,16 @@
      (str "ci " (if ci (str (:source ci) " " (:seconds ci) "s") "none"))
      (str "paths " (str/join " " paths))
      (str "source-roots " (if (seq source-roots) (str/join " " source-roots) "none"))
+     (str "corpus " (:files corpus) " files tracked-by " (:tracked-by corpus))
      (str "omitted " (pr-str omitted))
-     "dup-share by lines"
+     (str "dup-share by lines: regions are matched on TOKENS and reported on the "
+          "lines their first and last token fall on (a boundary approximation), "
+          "then unioned per file")
      "defects: renames credited to target via -M"
-     (str "coverage lg=static go=" (if go-cover "dynamic" "none"))]))
+     (str "coverage lg=static go=" (if go-cover "dynamic" "none"))
+     (str "caveat: static coverage is an upper bound "
+          "(dynamic dispatch followed only through literal symbols)")
+     "caveat: efficiency couples coverage to CI time; deleting slow tests lowers it"]))
 
 (defn- score-block [{total :score :keys [terms coverage testing]}]
   ;; Display order only (names, not numbers); any future term in
@@ -64,7 +71,11 @@
             " ratio=" (n2 (:ratio testing))
             " assertions=" (:assertions testing))])))
 
-(defn- file-table [files]
+(defn- file-table
+  "The per-file table, in the order the producer fixed: composite ASCENDING
+   (worst last), ties broken by path. `cc`/`mi` read `-` for Go, whose
+   complexity and maintainability are out of scope."
+  [files]
   (concat
     ["" "files"
      (str (pad "path" 56) (lpad "composite" 10) (lpad "cc" 5) (lpad "mi" 7)
@@ -74,11 +85,18 @@
            (lpad (n1 (:mi-raw f)) 7) (lpad (n1 (:dup-pct f)) 7)
            (lpad (n2 (:defects-per-kloc f)) 10)))))
 
+(defn- issue-at
+  "`path:line`, or `path:start-end` for an issue that spans lines (a
+   duplicated region), so the reader sees how much code it covers."
+  [i]
+  (str (:path i) ":" (:line i)
+       (if (and (:end i) (not= (:end i) (:line i))) (str "-" (:end i)) "")))
+
 (defn- issue-lines [issues]
   (concat
     ["" (str "issues " (count issues))]
     (for [i issues]
-      (str (pad (str (:path i) ":" (:line i)) 56) (pad (name (:kind i)) 15)
+      (str (pad (issue-at i) 56) (pad (name (:kind i)) 15)
            (pad (measure-str (:measure i)) 8) (:hint i)))))
 
 (defn- top-lines [top]

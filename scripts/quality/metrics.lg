@@ -84,6 +84,10 @@
         cr (/ (:comment cnt) (double loc))
         cc-total (reduce + 0 (map :cc defs))
         ln (fn [v] (if (pos? v) (math/log v) 0))
+        ;; The SEI maintainability-index coefficients (171, -5.2, -0.23,
+        ;; -16.2, 50, 2.4) are constants OF THE FORMULA, not tunable
+        ;; thresholds -- changing one would no longer be an MI. Project
+        ;; thresholds all live in `quality.score/thresholds`.
         mi (+ 171 (* -5.2 (ln (:volume h))) (* -0.23 cc-total) (* -16.2 (ln loc))
               (* 50 (math/sin (math/sqrt (* 2.4 cr)))))]
     {:definitions (mapv #(dissoc % :form) defs)

@@ -9,13 +9,38 @@
   (let [r (apply os/sh args)]
     (when (zero? (:exit r)) (:out r))))
 
+(defn- marker? [root name] (boolean (os/stat (str root "/" name))))
+
+(defn head-commit
+  "{:sha s :source \"jj\"|\"git\"} -- the commit this report is measured
+   against.
+
+   In a jj workspace `git rev-parse HEAD` answers for the PRIMARY checkout,
+   not for this working copy, so the pin would name a commit whose tree is
+   not what was measured. When a `.jj` marker is present the working-copy
+   PARENT (`@-`) is used instead; its `commit_id` is the git sha (the repo is
+   colocated), so the same value still works as a `git log` endpoint.
+   `root` is the working copy root; falls back to git, then to \"\"."
+  [root]
+  (or (when (marker? root ".jj")
+        (when-let [out (sh "jj" "log" "-r" "@-" "--no-graph" "-T" "commit_id")]
+          (let [sha (str/trim (first (f/lines out)))]
+            (when (re-matches #"[0-9a-f]{40}" sha) {:sha sha :source "jj"}))))
+      (when-let [out (sh "git" "rev-parse" "HEAD")]
+        {:sha (str/trim out) :source "git"})
+      {:sha "" :source "none"}))
+
 (defn git-range
-  "{:from sha :to sha :since since}. :from may be \"\" when the repo has no
-   commit before `since` — callers should treat that as \"from the root\"."
-  [since]
-  {:since since
-   :from (str/trim (or (sh "git" "rev-list" "-1" (str "--before=" since) "HEAD") ""))
-   :to (str/trim (or (sh "git" "rev-parse" "HEAD") ""))})
+  "{:from sha :to sha :since since :head-source s}. `:to` is the commit the
+   report is pinned to (see `head-commit`); `:from` may be \"\" when there is
+   no commit before `since` — callers should treat that as \"from the root\"."
+  ([since] (git-range since {:sha (str/trim (or (sh "git" "rev-parse" "HEAD") ""))
+                             :source "git"}))
+  ([since head]
+   {:since since
+    :from (str/trim (or (sh "git" "rev-list" "-1" (str "--before=" since) (:sha head)) ""))
+    :to (:sha head)
+    :head-source (:source head)}))
 
 (def ^:private record-sep
   "ASCII RS, emitted by `--format=%x1e%s` ahead of every commit subject. A
