@@ -163,3 +163,44 @@
   "The same data for machines: the whole result map as one readable form."
   [result]
   (str (pr-str result) "\n"))
+
+(defn- signed
+  "A delta with an explicit sign, so the direction is never ambiguous.
+   POSITIVE MEANS WORSE: every term is lower-is-better."
+  [v]
+  (cond (nil? v) "-"
+        (> v 0) (str "+" (format "%.3f" (double v)))
+        :else (format "%.3f" (double v))))
+
+(defn delta-text
+  "The PR surface: every term and the composite at base, at head, and the
+   signed delta; then the files that moved most; then the definitions that
+   crossed the complexity threshold, which are what actually move erosion.
+
+   A positive delta means the change made things WORSE."
+  [d]
+  (str
+    (str/join
+      "\n"
+      (concat
+        [(str "base " (get-in d [:base :rev]))
+         (str "head " (get-in d [:head :rev]))
+         "positive delta means WORSE (every term is lower-is-better)"
+         ""
+         (str (pad "term" 14) (lpad "base" 8) (lpad "head" 8) (lpad "delta" 9))
+         (str (pad "DEBT" 14) (lpad (n3 (get-in d [:base :debt])) 8)
+              (lpad (n3 (get-in d [:head :debt])) 8)
+              (lpad (signed (:debt-delta d)) 9))]
+        (for [t (:terms d)]
+          (str (pad (name (:term t)) 14) (lpad (n3 (:base t)) 8)
+               (lpad (n3 (:head t)) 8) (lpad (signed (:delta t)) 9)))
+        ["" (str "files moved " (count (:files d)) " (worst first)")]
+        (for [f (take 20 (:files d))]
+          (str (pad (:path f) 56) (lpad (n3 (:base f)) 8) (lpad (n3 (:head f)) 8)
+               (lpad (signed (:delta f)) 9) "  " (name (:status f))))
+        ["" (str "complexity threshold crossings " (count (:crossings d)))]
+        (for [c (:crossings d)]
+          (str (pad (str (:path c) " " (:name c)) 70)
+               (if (= :rose (:direction c)) "rose to " "fell to ")
+               (:cc c) (if (:was c) (str " from " (:was c)) "")))))
+    "\n"))

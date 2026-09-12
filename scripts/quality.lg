@@ -282,7 +282,7 @@
       (assoc opts :paths paths)
       (let [x (first a)
             valued? (contains? #{"--since" "--go-cover" "--ci-run" "--ci-seconds"
-                                 "--edn" "--top" "--source-root"} x)
+                                 "--edn" "--top" "--source-root" "--base" "--head"} x)
             _ (when (and valued? (< (count a) 2))
                 (throw (ex-info (str "flag " x " needs a value") {:flag x})))
             n (second a)]
@@ -295,6 +295,8 @@
           "--top" (recur (subvec a 2) (assoc opts :top (read-string n)) paths)
           "--source-root" (recur (subvec a 2) (update opts :source-roots conj n) paths)
           "--timings" (recur (subvec a 1) (assoc opts :timings true) paths)
+          "--base" (recur (subvec a 2) (assoc opts :base n) paths)
+          "--head" (recur (subvec a 2) (assoc opts :head n) paths)
           (if (str/starts-with? x "--")
             (throw (ex-info (str "unknown flag " x) {:flag x}))
             (recur (subvec a 1) opts (conj paths x))))))))
@@ -320,10 +322,24 @@
         ;; report and the `fix-counts` lookup all speak.
         checkout (checkout-root)
         prefix (repo-prefix)
+        ;; `:root` measures an EXTRACTED revision instead of the working copy
+        ;; (see `extract-rev`). Everything under it is tracked by
+        ;; construction, so the VCS file list does not apply there.
+        root (:root opts)
         source-roots (mapv (fn [r] (str prefix r)) (:source-roots opts))
-        tracked (tracked-files checkout)
-        read-paths (discover opts checkout prefix (:paths tracked))
-        loaded (phase "read" (fn [] (mapv (fn [p] {:path (repo-path checkout prefix p)
+        tracked (if root {:paths nil :source "revision"} (tracked-files checkout))
+        read-paths (if root
+                     (discover (update opts :paths
+                                       (fn [ps] (mapv (fn [p] (str root "/" p))
+                                                      (if (seq ps) ps
+                                                          (concat (:lg default-paths)
+                                                                  (:go default-paths))))))
+                               root "" nil)
+                     (discover opts checkout prefix (:paths tracked)))
+        ;; repo-relative path of a discovered file, and the path on disk
+        rel-path (fn [p] (if root (subs p (inc (count root))) (repo-path checkout prefix p)))
+        disk-path (fn [p] (if root (str root "/" p) (cwd-path prefix p)))
+        loaded (phase "read" (fn [] (mapv (fn [p] {:path (rel-path p)
                                                    :lang (lang-of p) :text (slurp p)})
                                           read-paths)))
         tokenized (phase "tokenize"
@@ -394,7 +410,7 @@
         ;; Go measurements come from the Go tool; .lg measurements from
         ;; quality.metrics. Both feed the SAME arithmetic in quality.terms.
         go-analysis (phase "go-analysis"
-                           (fn [] (go-analysis (mapv (fn [f] (cwd-path prefix (:path f)))
+                           (fn [] (go-analysis (mapv (fn [f] (disk-path (:path f)))
                                                      (filter #(= :go (:lang %)) tokenized)))))
         go-by-path (group-by :path (:functions go-analysis))
         callables (vec (concat
@@ -562,7 +578,145 @@
   (str "usage: ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]\n"
        "                               [--ci-run ID | --ci-seconds N]\n"
        "                               [--edn PATH] [--top N]\n"
-       "                               [--source-root PATH] [paths...]"))
+       "                               [--source-root PATH] [--timings]\n"
+       "                               [--base REV [--head REV]] [paths...]"))
+
+(defn resolve-rev
+  "A revision name resolved to a git sha. jj revsets (`@-`, `@--`, a change
+   id) mean nothing to `git archive`, so jj resolves them when it is present
+   and the name is passed through to git otherwise."
+  [rev]
+  (let [r (os/sh "jj" "log" "-r" rev "--no-graph" "-T" "commit_id")]
+    (if (zero? (:exit r))
+      (let [sha (str/trim (first (forms/lines (:out r))))]
+        (if (re-matches #"[0-9a-f]{40}" sha) sha rev))
+      rev)))
+
+(defn extract-rev
+  "A revision's tree, materialized in a directory, and the directory
+   returned. Scoring a revision means READING its files, and the working copy
+   holds one revision at a time, so the other side of a delta has to exist
+   somewhere on disk.
+
+   jj first, `git archive` as the fallback. jj is not a preference here, it is
+   a requirement: jj's git backend does not write git trees for commits no ref
+   points at, so `git archive` on a local jj commit succeeds and produces an
+   EMPTY archive. A silent empty corpus is exactly the failure mode worth
+   avoiding, so a jj repository uses `jj workspace add`, which is the
+   supported way to have two revisions checked out at once.
+
+   Workspaces are created under the repo's own `.workspaces/`, per the
+   project's rule that no checkout may live in a temp directory, and
+   `release-rev` removes them."
+  [checkout rev]
+  (let [sha (resolve-rev rev)
+        name (str "quality-rev-" (subs sha 0 (min 12 (count sha))))
+        dir (str checkout "/.workspaces/" name)]
+    (if (os/stat (str checkout "/.jj"))
+      (do
+        (when (os/stat dir) (os/sh "jj" "workspace" "forget" name) (os/delete-tree dir))
+        ;; jj requires the parent directory to exist.
+        (os/sh "mkdir" "-p" (str checkout "/.workspaces"))
+        (let [r (os/sh "jj" "workspace" "add" "--revision" sha dir)]
+          (when-not (zero? (:exit r))
+            (throw (ex-info (str "cannot check out revision " rev ": "
+                                 (str/trim (str (:err r))))
+                            {:rev rev}))))
+        {:dir dir :name name :vcs :jj})
+      (let [tarball (str (os/temp-dir) name ".tar")]
+        (os/delete-tree dir)
+        (let [a (os/sh "git" "archive" "--format=tar" "-o" tarball sha)]
+          (when-not (zero? (:exit a))
+            (throw (ex-info (str "cannot read revision " rev ": "
+                                 (str/trim (str (:err a))))
+                            {:rev rev}))))
+        (os/sh "mkdir" "-p" dir)
+        (os/sh "tar" "-xf" tarball "-C" dir)
+        {:dir dir :name name :vcs :git}))))
+
+(defn release-rev
+  "Remove what `extract-rev` created. A checkout that outlives its run is the
+   failure the project's worktree rule exists to stop."
+  [checkout {:keys [dir name vcs]}]
+  (when (= :jj vcs) (os/sh "jj" "workspace" "forget" name))
+  (os/delete-tree dir))
+
+(defn- abs-d [v] (if (neg? v) (- v) v))
+
+(defn- term-deltas
+  "Every term at base and head with its signed delta. POSITIVE MEANS WORSE,
+   because every term is lower-is-better."
+  [base head]
+  (vec (for [k (sort (map first (:weights score/thresholds)))]
+         (let [b (get-in base [:terms k])
+               h (get-in head [:terms k])]
+           {:term k :base b :head h
+            :delta (when (and b h) (- h b))}))))
+
+(defn- file-deltas
+  "Per-file debt at base and head, worst movement first. A file only at head
+   is new, a file only at base was deleted; both are reported with a nil on
+   the missing side rather than a fabricated zero."
+  [base head]
+  (let [bf (into {} (map (fn [f] [(:path f) f]) (:files base)))
+        hf (into {} (map (fn [f] [(:path f) f]) (:files head)))
+        paths (vec (sort (distinct (concat (keys bf) (keys hf)))))]
+    (->> (for [p paths
+               :let [b (get-in bf [p :debt]) h (get-in hf [p :debt])]
+               :when (or (nil? b) (nil? h) (> (abs-d (- h b)) 0.0005))]
+           {:path p :base b :head h :delta (when (and b h) (- h b))
+            :status (cond (nil? b) :added (nil? h) :removed :else :changed)})
+         vec
+         (sort-by (juxt (fn [r] (- (or (:delta r) 1.0))) :path))
+         vec)))
+
+(defn- crossings
+  "Definitions that crossed the erosion complexity threshold in either
+   direction. These are what actually move erosion, so they are the actionable
+   half of a delta."
+  [base head]
+  (let [th (get-in score/thresholds [:erosion :cc])
+        index (fn [r] (into {} (for [f (:files r) d (:definitions f)]
+                                 [[(:path f) (:name d)] (:cc d)])))
+        b (index base) h (index head)]
+    (vec (sort-by (juxt (comp - :cc) :path)
+                  (vec (concat
+                         (for [[k cc] h :when (and (> cc th) (<= (get b k 0) th))]
+                           {:path (first k) :name (second k) :cc cc
+                            :was (get b k) :direction :rose})
+                         (for [[k cc] b :when (and (> cc th) (<= (get h k 0) th) (contains? h k))]
+                           {:path (first k) :name (second k) :cc (get h k)
+                            :was cc :direction :fell})))))))
+
+(defn compare-results
+  "Two measured results in, the delta surface out. Pure: this is the half of
+   PR mode that has no I/O, and the half worth testing directly.
+
+   A delta is signed and POSITIVE MEANS WORSE, because every term is
+   lower-is-better."
+  [base-res head-res base-rev head-rev]
+  {:base {:rev base-rev :debt (:debt base-res) :terms (:terms base-res)}
+   :head {:rev head-rev :debt (:debt head-res) :terms (:terms head-res)}
+   :debt-delta (- (:debt head-res) (:debt base-res))
+   :terms (term-deltas base-res head-res)
+   :files (file-deltas base-res head-res)
+   :crossings (crossings base-res head-res)})
+
+(defn delta
+  "Measure `base` and `head` and report what moved. Both sides are scored in
+   full: correctness first, and an incremental score would have to prove it
+   agrees with a full one anyway."
+  [opts]
+  (let [checkout (checkout-root)
+        base-co (extract-rev checkout (:base opts))
+        head-co (when (:head opts) (extract-rev checkout (:head opts)))
+        head-res (if head-co
+                   (measure (assoc opts :root (:dir head-co)))
+                   (measure (dissoc opts :root)))
+        base-res (measure (assoc opts :root (:dir base-co)))
+        _ (release-rev checkout base-co)
+        _ (when head-co (release-rev checkout head-co))]
+    (compare-results base-res head-res (:base opts) (or (:head opts) "working copy"))))
 
 (defn main
   "Parse `args`, measure, print the text report, and write EDN when asked.
@@ -574,19 +728,27 @@
     (let [[opts err] (try [(parse-args args) nil] (catch Throwable e [nil e]))]
       (if err
         (do (println "quality:" (ex-message err)) (println usage) 2)
-        (let [[result err] (try [(measure opts) nil] (catch Throwable e [nil e]))]
-          (if err
-            (do (println "quality:" (ex-message err)) 2)
-            (do (print (report/text result))
-                (when (:timings opts)
-                  (println)
-                  (println "phase timings (seconds)")
-                  (doseq [[label secs] @timings]
-                    (println (format "  %-16s %7.2f" label (double secs))))
-                  (println (format "  %-16s %7.2f" "TOTAL measured"
-                                   (double (reduce + 0.0 (map second @timings))))))
-                (when (:edn opts) (spit (:edn opts) (report/edn result)))
-                0)))))))
+        (if (:base opts)
+          ;; PR mode: score both revisions and report what moved.
+          (let [[d err] (try [(delta opts) nil] (catch Throwable e [nil e]))]
+            (if err
+              (do (println "quality:" (ex-message err)) 2)
+              (do (print (report/delta-text d))
+                  (when (:edn opts) (spit (:edn opts) (report/edn d)))
+                  0)))
+          (let [[result err] (try [(measure opts) nil] (catch Throwable e [nil e]))]
+            (if err
+              (do (println "quality:" (ex-message err)) 2)
+              (do (print (report/text result))
+                  (when (:timings opts)
+                    (println)
+                    (println "phase timings (seconds)")
+                    (doseq [[label secs] @timings]
+                      (println (format "  %-16s %7.2f" label (double secs))))
+                    (println (format "  %-16s %7.2f" "TOTAL measured"
+                                     (double (reduce + 0.0 (map second @timings))))))
+                  (when (:edn opts) (spit (:edn opts) (report/edn result)))
+                  0))))))))
 
 ;; Entry guard: run only as a script, never when a test `require`s this
 ;; namespace. os/args is [binary script user-arg...]; we run when the

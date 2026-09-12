@@ -1,0 +1,76 @@
+(ns test.quality-delta-test
+  (:require
+   [clojure.string :as str]
+   [quality :as q]
+   [quality.report :as report]
+   [test :refer :all]))
+
+;; PR mode's pure half: two measured results in, the delta surface out.
+;; A delta is signed and POSITIVE MEANS WORSE, since every term is
+;; lower-is-better.
+
+(defn- result [debt terms files]
+  {:debt debt :terms terms :files files})
+
+(def ^:private base
+  (result 0.300 {:erosion 0.40 :uncovered 0.50 :verbosity 0.10 :dead 0.0
+                 :defects 0.20 :testing 0.10 :efficiency 0.30}
+          [{:path "a.lg" :debt 0.20 :definitions [{:name 'big :cc 9}]}
+           {:path "b.lg" :debt 0.40 :definitions [{:name 'calm :cc 3}]}]))
+
+(def ^:private head-worse
+  (result 0.340 {:erosion 0.55 :uncovered 0.50 :verbosity 0.10 :dead 0.0
+                 :defects 0.20 :testing 0.10 :efficiency 0.30}
+          [{:path "a.lg" :debt 0.45 :definitions [{:name 'big :cc 14}]}
+           {:path "b.lg" :debt 0.39 :definitions [{:name 'calm :cc 3}]}]))
+
+(deftest a-regression-reports-a-positive-composite-delta
+  (let [d (q/compare-results base head-worse "BASE" "HEAD")]
+    (is (> (:debt-delta d) 0))
+    (is (< 0.039 (:debt-delta d) 0.041))
+    ;; the term that moved is named, and only it
+    (let [moved (filter (fn [t] (and (:delta t) (> (abs (:delta t)) 0.0001))) (:terms d))]
+      (is (= [:erosion] (map :term moved)))
+      (is (< 0.149 (:delta (first moved)) 0.151)))))
+
+(deftest the-responsible-file-is-first
+  (let [d (q/compare-results base head-worse "BASE" "HEAD")]
+    (is (= "a.lg" (:path (first (:files d)))))
+    (is (> (:delta (first (:files d))) 0))
+    ;; the file that improved is last, with a negative delta
+    (is (= "b.lg" (:path (last (:files d)))))
+    (is (< (:delta (last (:files d))) 0))))
+
+(deftest added-and-removed-files-are-not-fabricated-zeroes
+  (let [d (q/compare-results
+           (result 0.3 {} [{:path "gone.lg" :debt 0.5 :definitions []}])
+           (result 0.3 {} [{:path "new.lg" :debt 0.1 :definitions []}])
+           "BASE" "HEAD")
+        by-path (into {} (map (fn [f] [(:path f) f]) (:files d)))]
+    (is (= :removed (:status (get by-path "gone.lg"))))
+    (is (nil? (:head (get by-path "gone.lg"))))
+    (is (= :added (:status (get by-path "new.lg"))))
+    (is (nil? (:base (get by-path "new.lg"))))
+    ;; a missing side has no delta rather than a made-up one
+    (is (nil? (:delta (get by-path "new.lg"))))))
+
+(deftest definitions-crossing-the-complexity-threshold-are-reported
+  ;; Crossings are what actually move erosion, so they are the actionable
+  ;; half of a delta: `big` went from 9 to 14, i.e. across 10.
+  (let [d (q/compare-results base head-worse "BASE" "HEAD")
+        c (first (:crossings d))]
+    (is (= 1 (count (:crossings d))))
+    (is (= 'big (:name c)))
+    (is (= :rose (:direction c)))
+    (is (= 14 (:cc c)))
+    (is (= 9 (:was c)))))
+
+(deftest delta-text-states-its-direction-and-signs-every-number
+  (let [out (report/delta-text (q/compare-results base head-worse "BASE" "HEAD"))]
+    (is (str/includes? out "positive delta means WORSE"))
+    (is (str/includes? out "base BASE"))
+    (is (str/includes? out "head HEAD"))
+    ;; signed, so the direction is never ambiguous
+    (is (str/includes? out "+0.040"))
+    (is (str/includes? out "+0.150"))
+    (is (str/includes? out "rose to 14 from 9"))))
