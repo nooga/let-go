@@ -38,14 +38,14 @@
   (is (nil? (t/erosion [(c 0 0)])))
   (is (<= 0.0 (t/erosion [(c 50 50) (c 1 1)]) 1.0)))
 
-(deftest verbosity-is-duplicated-lines-over-loc
-  (is (= 0.0 (t/verbosity 0 100)))
-  (is (= 0.25 (t/verbosity 25 100)))
-  (is (= 1.0 (t/verbosity 100 100)))
+(deftest verbosity-is-flagged-and-duplicated-lines-over-loc
+  (is (= 0.0 (t/verbosity 0 0 100)))
+  (is (= 0.25 (t/verbosity 25 0 100)))
+  (is (= 1.0 (t/verbosity 100 0 100)))
   ;; never exceeds 1 even if the numerator is overcounted
-  (is (= 1.0 (t/verbosity 150 100)))
-  (is (nil? (t/verbosity 10 0)))
-  (is (nil? (t/verbosity 10 nil))))
+  (is (= 1.0 (t/verbosity 150 0 100)))
+  (is (nil? (t/verbosity 10 0 0)))
+  (is (nil? (t/verbosity 10 0 nil))))
 
 (deftest squash-is-bounded-monotone-and-never-saturates
   (is (= 0.0 (t/squash 0 30)))
@@ -72,3 +72,26 @@
     (is (= 0.0 (t/dead-share [] all)))
     (is (= 1.0 (t/dead-share all all)))
     (is (nil? (t/dead-share [] [])))))
+
+(deftest verbosity-unions-clone-and-flagged-lines
+  ;; The paper's numerator is a UNION: a line that is both cloned and flagged
+  ;; is one bad line, not two. (The caller de-duplicates by counting distinct
+  ;; lines per set; these are the already-counted totals.)
+  (is (= 0.25 (t/verbosity 20 5 100)))
+  ;; flagged nil means the linter could not run: clone lines only, and the
+  ;; report must say the flagged half was omitted
+  (is (= 0.20 (t/verbosity 20 nil 100)))
+  (is (= 0.0 (t/verbosity 0 0 100)))
+  (is (= 1.0 (t/verbosity 90 90 100)))
+  (is (nil? (t/verbosity 10 10 0))))
+
+(deftest comment-debt-divides-by-comment-lines-not-loc
+  ;; The whole point: 2794 flagged of 23778 comment lines is 0.118, where the
+  ;; same numerator over 322983 LOC would be 0.0087 and invisible.
+  (is (< 0.117 (t/comment-debt 2794 23778) 0.118))
+  (is (= 0.0 (t/comment-debt 0 1000)))
+  (is (= 1.0 (t/comment-debt 1000 1000)))
+  ;; bounded even if the numerator is over-counted
+  (is (= 1.0 (t/comment-debt 1500 1000)))
+  ;; a corpus with no comments has no comment debt to report
+  (is (nil? (t/comment-debt 0 0))))
