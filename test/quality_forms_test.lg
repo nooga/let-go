@@ -1,0 +1,80 @@
+(ns test.quality-forms-test
+  (:require
+   [quality.forms :as f]
+   [test :refer :all]))
+
+(def src (slurp "fixtures/quality/forms_fixture.lg"))
+
+(deftest lines-drops-one-trailing-empty
+  (is (= ["a" "b"] (f/lines "a\nb\n")))
+  (is (= ["a" "" "b"] (f/lines "a\r\n\r\nb"))))
+
+(deftest segments-have-positions-and-depth
+  (let [segs (f/segments src)]
+    (is (= [2 4 8 15 17] (map :start segs)))
+    (is (= [2 6 13 15 17] (map :end segs)))
+    ;; (defn shallow …) nests (defn (+ …)) = depth 2
+    (is (= 2 (:depth (nth segs 1))))
+    ;; (defn deep …) nests defn > if > let > when > str = depth 5
+    (is (= 5 (:depth (nth segs 2))))))
+
+(deftest bare-atom-segments-have-depth-1
+  (is (= [1 1 1 1] (map :depth (f/segments "42\n:kw\nsym\n(def x 1)\n")))))
+
+(deftest read-segment-skips-discards
+  (let [segs (f/segments src)]
+    (is (nil? (f/read-segment (nth segs 3))))
+    (is (= 'ns (first (f/read-segment (first segs)))))))
+
+(deftest definitions-are-named-and-located
+  (let [defs (f/definitions src)]
+    (is (= '[shallow deep answer] (map :name defs)))
+    (is (= [:defn :defn :def] (map :kind defs)))
+    (is (= [4 8 17] (map :line defs)))))
+
+(deftest counts-split-loc-comment-blank
+  (is (= {:loc 11 :comment 2 :blank 4} (f/counts src))))
+
+(deftest extents-cover-every-form-at-every-depth
+  (let [t "(ns x)\n\n(defn a [y]\n  (let [z (inc y)]\n    (+ z 1)))\n"
+        ex (f/extents t)]
+    ;; the top-level defn, the let, and the inner forms all appear
+    (is (some #(= [3 5] %) ex))
+    (is (some #(= [4 5] %) ex))
+    (is (some #(= [1 1] %) ex))
+    ;; a delimiter inside a string is not structure: the form closes at its
+    ;; real paren, not at the one inside the string literal
+    (is (= [[1 1]] (f/extents "(comment \")\")\n")))
+    (is (= [[1 2]] (f/extents "(a \")\"\n  b)\n")))))
+
+(deftest snap-narrows-a-region-onto-whole-forms
+  (let [t "(ns x)\n\n(defn a [y]\n  (let [z (inc y)]\n    (+ z 1)))\n\n(defn b [] 1)\n"
+        ex (f/extents t)]
+    ;; a span with slack on both sides narrows onto the form it contains
+    (is (= [3 5] (f/snap ex 2 6)))
+    ;; a span starting mid-form keeps only the complete forms inside it
+    (is (= [4 5] (f/snap ex 4 6)))
+    ;; NARROWS, never widens: a 10-line match must not swallow a 300-line
+    ;; function, which is what snapping to the enclosing form would do
+    (is (= [3 5] (f/snap ex 3 5)))
+    ;; a fragment containing no complete form is returned unchanged, because
+    ;; there is no structure to snap to
+    (is (= [2 2] (f/snap ex 2 2)))))
+
+(deftest definitions-with-name-metadata-are-not-dropped
+  ;; The reader expands `^{...} name` into `(with-meta name {...})`, so an
+  ;; annotated definition's second element is a LIST, not a symbol. Requiring
+  ;; a bare symbol made every ^:private and ^{...} definition INVISIBLE to the
+  ;; whole tool -- absent from metrics, the call graph, coverage, dead code
+  ;; and cost alike. 176 definitions in this repo, 4.5% of the .lg corpus.
+  (let [priv (first (f/definitions "(defn ^:private helper [x] (inc x))"))
+        ann (first (f/definitions "(defn ^{:complexity {:poly-log 1}} ms [xs] xs)"))
+        plain (first (f/definitions "(defn ordinary [x] x)"))]
+    (is (= 'helper (:name priv)))
+    (is (:private? priv))
+    (is (= 'ms (:name ann)))
+    (is (= {:poly-log 1} (:complexity (:meta ann))))
+    ;; and the ordinary case still reads the same
+    (is (= 'ordinary (:name plain)))
+    (is (nil? (:meta plain)))
+    (is (not (:private? plain)))))

@@ -1,0 +1,90 @@
+(ns test.quality-graph-test
+  (:require
+   [quality.graph :as g]
+   [test :refer :all]))
+
+(def src [{:path "fixtures/quality/graph_src.lg" :text (slurp "fixtures/quality/graph_src.lg")}])
+(def tst [{:path "fixtures/quality/graph_test_fixture.lg" :text (slurp "fixtures/quality/graph_test_fixture.lg")}])
+
+(deftest references-strip-namespace-aliases
+  (is (contains? (g/references (read-string "(g/public-a (str/join x))")) 'public-a))
+  (is (contains? (g/references (read-string "(g/public-a (str/join x))")) 'join)))
+
+(deftest graph-edges-follow-calls
+  (let [gr (g/build src)]
+    (is (= #{'fixture.graph/helper} (get-in gr [:edges 'fixture.graph/public-a])))
+    (is (= 4 (count (:defs gr))))))
+
+(deftest roots-come-from-deftests-and-top-level-assertions
+  (let [roots (g/test-roots tst)]
+    (is (contains? roots 'public-a))
+    (is (contains? roots 'public-b))))
+
+(deftest coverage-reaches-transitively-and-lists-untested
+  (let [c (g/coverage src tst)]
+    (is (= 3 (:reached c)))     ; public-a, helper (via a), public-b
+    (is (= 4 (:total c)))
+    (is (= 75.0 (:percent c)))
+    (is (= ['orphan] (map :name (:untested c))))
+    (is (= ['fixture.graph/orphan] (map :qname (:untested c))))
+    (is (= 5 (:line (first (:untested c)))))))
+
+;; Two files both define `helper`. `fixture.alias-a/public-a` calls the
+;; bare name `helper` -> priority 2 (same-namespace bare match) resolves
+;; it to its own file's helper, not the corpus-wide-ambiguous fallback.
+;; `fixture.alias-c/caller` also calls bare `helper` but has no helper of
+;; its own, so it falls through to priority 3 (corpus-wide unique bare
+;; match) -- which is ambiguous here (two `helper`s exist) -> no edge.
+(def alias-a-text (slurp "fixtures/quality/graph_alias_a.lg"))
+(def alias-b-text (slurp "fixtures/quality/graph_alias_b.lg"))
+(def alias-c-text (slurp "fixtures/quality/graph_alias_c.lg"))
+(def alias-abc-sources [{:path "a" :text alias-a-text}
+                        {:path "b" :text alias-b-text}
+                        {:path "c" :text alias-c-text}])
+
+(deftest priority-2-same-namespace-bare-match-wins-over-ambiguous-corpus-match
+  (let [gr (g/build alias-abc-sources)]
+    (is (= #{'fixture.alias-a/helper} (get-in gr [:edges 'fixture.alias-a/public-a])))
+    (is (= #{} (get-in gr [:edges 'fixture.alias-c/caller])))))
+
+;; A test file requires fixture.alias-a under the alias `x` and calls
+;; `(x/helper 1)`. Bare `helper` alone is ambiguous across a+b (priority
+;; 3 fails), but alias resolution rewrites `x/helper` to
+;; `fixture.alias-a/helper` before priority-1 matching, so it resolves
+;; unambiguously to that specific definition.
+(deftest alias-qualified-ref-resolves-via-require-as
+  (let [alias-test-text (slurp "fixtures/quality/graph_alias_test_fixture.lg")
+        sources [{:path "a" :text alias-a-text} {:path "b" :text alias-b-text}]
+        tests [{:path "t" :text alias-test-text}]
+        roots (g/test-roots tests)
+        c (g/coverage sources tests)]
+    (is (contains? roots 'x/helper))
+    (is (= 1 (:reached c)))
+    (is (= 3 (:total c)))
+    (is (= #{'public-a 'helper} (set (map :name (:untested c)))))))
+
+(deftest bare-names-resolve-in-files-without-an-ns-form
+  ;; Most scripts have no (ns ...) form, so the graph falls back to the path.
+  ;; A symbol built straight from a path splits at its FIRST slash, which made
+  ;; (name 'scripts/foo.lg/helper) read as "foo.lg/helper" and every bare-name
+  ;; resolution against it fail silently -- so every such definition looked
+  ;; unreachable. Slashes are mapped to dots to keep the name a real name.
+  (let [src {:path "scripts/deep/tool.lg"
+             :text "(defn- helper [x] (inc x))\n(defn run [x] (helper x))\n(run 1)\n"}
+        g (g/build [src])
+        roots (g/resolve-symbols g (g/top-level-refs [src]))]
+    (is (= 1 (count roots)))
+    ;; the entry call resolves, and the helper is reachable from it
+    (is (= 2 (count (g/reachable g roots))))))
+
+(deftest top-level-refs-see-registry-and-entry-forms
+  ;; A registration in a top-level non-definition form is a real reference the
+  ;; edge builder does not see, because it only walks definitions.
+  (let [src {:path "lib.lg"
+             :text "(ns lib)\n(defn- impl [x] x)\n(register! :thing impl)\n"}
+        refs (g/top-level-refs [src])]
+    (is (contains? refs 'impl))
+    (is (contains? refs 'register!))
+    ;; definitions themselves are not top-level refs
+    (is (not (contains? (g/top-level-refs [{:path "d.lg" :text "(defn only [x] x)\n"}])
+                        'only)))))

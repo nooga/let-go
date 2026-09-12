@@ -1,0 +1,288 @@
+(ns quality.graph
+  "Definition reference graph and static test reachability.
+
+   Definitions are keyed by a qualified `ns/name` symbol derived from each
+   source file's `(ns ...)` form (falling back to the file's path when no
+   `ns` form is found), so same-named definitions in different namespaces
+   (e.g. `join` in two files) never collide or merge.
+
+   A raw symbol reference (bare, alias-qualified, or fully namespace
+   qualified) is resolved to a definition in this priority order: (1) an
+   exact match against a qualified definition key, (2) the bare name
+   qualified by the referencing definition's own namespace, (3) a bare-name
+   match that is unique across the whole corpus. An ambiguous bare name
+   (more than one definition shares it) resolves to no edge at all, rather
+   than guessing.
+
+   Before resolution, an `alias/name` reference is rewritten to
+   `full.ns/name` using the aliases the referencing FILE establishes via
+   its `(ns ... (:require [full.ns :as alias] ...))` clause or any
+   top-level `(require '[full.ns :as alias])` form — so an aliased
+   reference is tried against its real namespace at priority 1 before
+   falling back to the bare-name rules.
+
+   This is STATIC analysis: it follows only symbols that appear literally
+   in a form. Dynamic dispatch (multimethods invoked by a computed value,
+   `resolve`, `eval`, reflection-ish interop) is invisible to it. Coverage
+   numbers from this namespace are therefore an UPPER BOUND on what's
+   actually exercised, not a measurement of it — a definition can be
+   \"reached\" here yet never actually run by the test suite if the only
+   caller path is itself dead code, and true dynamic coverage would only
+   ever be lower."
+  (:require
+   [clojure.string :as str]
+   [quality.forms :as f]))
+
+(defn references
+  "Every symbol occurring anywhere in `form`, as a set. For a qualified
+   symbol such as `str/join`, both `str/join` and the bare `join` are
+   included, so downstream resolution can try either form."
+  [form]
+  (letfn [(walk [x acc]
+            (cond
+              (symbol? x) (conj acc x (symbol (name x)))
+              (coll? x) (reduce (fn [a y] (walk y a)) acc (seq x))
+              :else acc))]
+    (walk form #{})))
+
+(defn- ns-of
+  "The symbol named by this text's top-level (ns ...) form, or nil."
+  [text]
+  (some (fn [seg]
+          (let [form (f/read-segment seg)]
+            (when (and (seq? form) (= 'ns (first form)) (symbol? (second form)))
+              (second form))))
+        (f/segments text)))
+
+(defn- path-ns
+  "The namespace symbol to use for a file with no `(ns ...)` form -- most
+   scripts. Slashes become dots: a symbol built straight from the path would
+   split at its FIRST slash, so `(name 'scripts/sort-defns.lg/sort-file)`
+   would be `sort-defns.lg/sort-file` rather than `sort-file`, and every
+   bare-name resolution against that definition would silently fail."
+  [path]
+  (symbol (str/replace path #"/" ".")))
+
+(defn- qualify [ns-sym name-sym]
+  (symbol (str ns-sym "/" name-sym)))
+
+(defn- unquote-entry
+  "Strip a (quote x) wrapper from a require arg, e.g. from
+   (require '[full.ns :as alias])."
+  [x]
+  (if (and (seq? x) (= 'quote (first x))) (second x) x))
+
+(defn- entry-alias
+  "A [full.ns :as alias] (or bare-symbol, or :refer-only) require entry ->
+   [alias full-ns] pair, or nil when the entry declares no :as alias."
+  [entry]
+  (let [entry (unquote-entry entry)]
+    (when (vector? entry)
+      (let [full (first entry)
+            n (count entry)]
+        (loop [i 1]
+          (cond
+            (>= (inc i) n) nil
+            (= :as (nth entry i)) [(nth entry (inc i)) full]
+            :else (recur (inc i))))))))
+
+(defn- require-entries
+  "The require entries a single top-level form declares: the ns form's
+   (:require ...) clause, or a top-level (require ...) call's args."
+  [form]
+  (cond
+    (and (seq? form) (= 'ns (first form)))
+    (mapcat (fn [clause] (when (and (seq? clause) (= :require (first clause))) (rest clause)))
+            (filter seq? (drop 2 form)))
+    (and (seq? form) (= 'require (first form)))
+    (rest form)
+    :else nil))
+
+(defn- file-aliases
+  "{alias full-ns...} for every :as alias this file's (ns ...) :require
+   clause or top-level (require ...) forms establish."
+  [text]
+  (reduce (fn [m seg]
+            (let [form (f/read-segment seg)]
+              (reduce (fn [m2 entry]
+                        (let [pair (entry-alias entry)]
+                          (if pair (assoc m2 (first pair) (second pair)) m2)))
+                      m (require-entries form))))
+          {} (f/segments text)))
+
+(defn- rewrite-aliased
+  "sym rewritten from alias/name to full.ns/name per `aliases`, or sym
+   unchanged when it has no namespace part or the namespace isn't a
+   known alias."
+  [sym aliases]
+  (let [nsp (namespace sym)]
+    (if (and nsp (contains? aliases (symbol nsp)))
+      (symbol (str (get aliases (symbol nsp)) "/" (name sym)))
+      sym)))
+
+(defn- references-aliased
+  "references, plus each aliased symbol rewritten to its full namespace
+   per `aliases` (both the alias form and the rewritten form are kept, so
+   priority-1 exact matching can try either)."
+  [form aliases]
+  (let [refs (references form)]
+    (if (empty? aliases)
+      refs
+      (into refs (map #(rewrite-aliased % aliases) refs)))))
+
+(defn- bare-index
+  "bare-name symbol -> #{qname...} across every def, for corpus-wide
+   unique-bare-name resolution."
+  [all-defs]
+  (reduce (fn [m d] (update m (symbol (name (:qname d))) (fnil conj #{}) (:qname d)))
+          {} all-defs))
+
+(defn- resolve-ref
+  "Resolve a raw reference symbol to a def qname, per the priority order
+   documented on the namespace, or nil if it doesn't resolve."
+  [sym current-ns defs bidx]
+  (cond
+    (contains? defs sym) sym
+    :else
+    (let [bare (symbol (name sym))
+          same-ns (when current-ns (qualify current-ns bare))]
+      (cond
+        (and same-ns (contains? defs same-ns)) same-ns
+        :else
+        (let [matches (get bidx bare)]
+          (when (= 1 (count matches)) (first matches)))))))
+
+(defn build
+  "sources = [{:path :text}...] -> {:defs {qname {:path :line :kind}}
+                                     :edges {qname #{qname...}}}"
+  [sources]
+  (let [parsed (for [{:keys [path text]} sources]
+                 {:path path :ns (or (ns-of text) (path-ns path))
+                  :aliases (file-aliases text) :defs (f/definitions text)})
+        all-defs (vec (for [{:keys [path ns aliases defs]} parsed
+                            d defs]
+                        (assoc d :path path :ns ns :aliases aliases :qname (qualify ns (:name d)))))
+        defs-map (into {} (map (fn [d] [(:qname d) (select-keys d [:path :line :kind])]) all-defs))
+        bidx (bare-index all-defs)]
+    {:defs defs-map
+     :edges (into {}
+                  (map (fn [d]
+                         (let [refs (references-aliased (:form d) (:aliases d))
+                               resolved (set (keep #(resolve-ref % (:ns d) defs-map bidx) refs))]
+                           [(:qname d) (disj resolved (:qname d))]))
+                       all-defs))}))
+
+(defn test-roots
+  "tests = [{:path :text}...] -> #{sym...} referenced from deftest bodies
+   and top-level is/are forms, as raw (unresolved) symbols."
+  [tests]
+  (reduce (fn [acc {:keys [text]}]
+            (let [aliases (file-aliases text)]
+              (reduce (fn [a seg]
+                        (let [form (f/read-segment seg)]
+                          (if (and (seq? form) (#{'deftest 'is 'are} (first form)))
+                            (into a (references-aliased form aliases))
+                            a)))
+                      acc (f/segments text))))
+          #{} tests))
+
+(defn reachable
+  "Transitive closure of `roots` over `(:edges graph)`, restricted to
+   defs actually present in the graph."
+  [graph roots]
+  (loop [todo (vec (filter (:defs graph) roots)) seen #{}]
+    (if (empty? todo)
+      seen
+      (let [n (peek todo) todo (pop todo)]
+        (if (seen n)
+          (recur todo seen)
+          (recur (into todo (remove seen (get-in graph [:edges n]))) (conj seen n)))))))
+
+(defn resolve-symbols
+  "Raw symbols resolved to definition keys of `graph`, dropping what does not
+   resolve. Public so callers can build their own root sets -- `reachable` is
+   generic over roots, and production reachability is the same closure from a
+   different starting point than test reachability."
+  [graph syms]
+  (let [defs (:defs graph)
+        bidx (bare-index (map (fn [[qname info]] (assoc info :qname qname)) defs))]
+    (set (keep #(resolve-ref % nil defs bidx) syms))))
+
+(def ^:private def-heads-set #{'defn 'defn- 'defmacro 'defmethod 'deftest 'def})
+
+(defn top-level-refs
+  "Symbols referenced by the top-level NON-definition forms of `sources` --
+   a script's entry point, a registry registration, a dispatch table built at
+   load time. These are references the edge builder does not see, because it
+   only walks definitions, and they are exactly what makes a script's or a
+   registry's callees reachable."
+  [sources]
+  (reduce (fn [acc {:keys [text]}]
+            (let [aliases (file-aliases text)]
+              (reduce (fn [a seg]
+                        (let [form (f/read-segment seg)]
+                          (if (and (seq? form) (def-heads-set (first form)))
+                            a
+                            (into a (references-aliased form aliases)))))
+                      acc (f/segments text))))
+          #{} sources))
+
+(defn entry-roots
+  "Production roots contributed by each source's own top-level
+   NON-definition forms -- a script's entry call, a registry registration, a
+   dispatch table built at load time.
+
+   Each file's references are resolved with that FILE's namespace preferred,
+   which matters more than it sounds: two scripts both defining `do-check`
+   make the bare name ambiguous corpus-wide, and the ambiguity rule then
+   resolves it to nothing, so each script's own entry point would look
+   unreachable."
+  [graph sources]
+  (let [defs (:defs graph)
+        bidx (bare-index (map (fn [[qname info]] (assoc info :qname qname)) defs))]
+    (set (mapcat (fn [{:keys [path text]}]
+                   (let [ns (or (ns-of text) (path-ns path))
+                         aliases (file-aliases text)]
+                     (keep #(resolve-ref % ns defs bidx)
+                           (reduce (fn [a seg]
+                                     (let [form (f/read-segment seg)]
+                                       (if (and (seq? form) (def-heads-set (first form)))
+                                         a
+                                         (into a (references-aliased form aliases)))))
+                                   #{} (f/segments text)))))
+                 sources))))
+
+(defn public?
+  "Whether a definition is part of its namespace's public surface.
+   `defn-` is private, and so is anything carrying ^:private metadata --
+   which `quality.forms` records as the definition's `:private?`."
+  [d]
+  (not (or (= :defn- (:kind d)) (:private? d))))
+
+(defn coverage
+  "sources vs tests -> {:reached n :total n :percent p
+                         :untested [{:name :qname :path :line}...]}
+   `deftest` definitions are excluded from the denominator. `:untested`
+   is sorted by path then line; `:name` is the bare (unqualified) name and
+   `:qname` the qualified `ns/name` -- a bare name alone is ambiguous when
+   several namespaces define it, so human surfaces should print `:qname`."
+  [sources tests]
+  (let [graph (build sources)
+        bidx (bare-index (map (fn [[qname info]] (assoc info :qname qname)) (:defs graph)))
+        roots (set (keep #(resolve-ref % nil (:defs graph) bidx) (test-roots tests)))
+        reached (reachable graph roots)
+        candidates (remove (fn [[_ d]] (= :deftest (:kind d))) (:defs graph))
+        total (count candidates)
+        hit (count (filter (fn [[n _]] (reached n)) candidates))
+        untested (->> candidates
+                      (remove (fn [[n _]] (reached n)))
+                      (map (fn [[n d]] {:name (symbol (name n)) :qname n
+                                        :path (:path d) :line (:line d)}))
+                      (sort-by (juxt :path :line))
+                      vec)]
+    {:reached hit :total total
+     ;; No definitions at all means nothing to be covered: the percentage is
+     ;; undefined (nil), so the corpus term is omitted rather than reported
+     ;; as a vacuous 100%.
+     :percent (when (pos? total) (* 100.0 (/ hit (double total))))
+     :untested untested}))

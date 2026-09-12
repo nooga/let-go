@@ -1,0 +1,172 @@
+(ns quality.forms
+  "Top-level form segmentation for .lg text with line positions and nesting
+   depth. Pure. The reader gives no positions on this branch, so we find
+   form boundaries ourselves and read each slice separately."
+  (:require
+   [clojure.string :as str]))
+
+(defn lines [text]
+  (let [ls (vec (str/split text #"\r?\n"))]
+    (if (and (seq ls) (= "" (last ls))) (vec (butlast ls)) ls)))
+
+(def ^:private openers #{\( \[ \{})
+(def ^:private closers #{\) \] \}})
+(def ^:private ws-chars #{\space \tab \return \formfeed})
+
+(defn segments
+  "Walk characters tracking depth, strings, comments, and char literals.
+   A top-level form starts at depth 0 on any non-whitespace char and ends
+   when depth returns to 0."
+  [text]
+  (loop [cs (seq text) line 1 depth 0 mode :code
+         start nil maxd 0 acc [] out []]
+    (if (empty? cs)
+      (if start (conj out {:start start :end line :depth (max 1 maxd) :text (apply str acc)}) out)
+      (let [c (first cs) nl? (= c \newline)]
+        (case mode
+          :comment (recur (rest cs) (if nl? (inc line) line) depth (if nl? :code :comment) start maxd (if start (conj acc c) acc) out)
+          :string  (cond
+                     (= c \\) (recur (nnext cs) line depth :string start maxd (into acc [c (second cs)]) out)
+                     (= c \") (recur (rest cs) line depth :code start maxd (conj acc c) out)
+                     :else    (recur (rest cs) (if nl? (inc line) line) depth :string start maxd (conj acc c) out))
+          :char    (recur (rest cs) line depth :code start maxd (conj acc c) out)
+          :code
+          (cond
+            (= c \;) (recur (rest cs) line depth :comment start maxd (if start (conj acc c) acc) out)
+            (= c \") (recur (rest cs) line depth :string (or start line) maxd (conj acc c) out)
+            (= c \\) (recur (rest cs) line depth :char (or start line) maxd (conj acc c) out)
+            (openers c)
+            (let [d (inc depth)]
+              (recur (rest cs) line d :code (or start line) (max maxd d) (conj acc c) out))
+            (closers c)
+            (let [d (dec depth) acc (conj acc c)]
+              (if (zero? d)
+                (recur (rest cs) line 0 :code nil 0 [] (conj out {:start start :end line :depth (max 1 maxd) :text (apply str acc)}))
+                (recur (rest cs) line d :code start maxd acc out)))
+            nl?
+            (if (and start (zero? depth))
+              (recur (rest cs) (inc line) 0 :code nil 0 [] (conj out {:start start :end line :depth (max 1 maxd) :text (apply str acc)}))
+              (recur (rest cs) (inc line) depth :code start maxd (if start (conj acc c) acc) out))
+            (ws-chars c)
+            (if (and start (zero? depth))
+              (recur (rest cs) line 0 :code nil 0 [] (conj out {:start start :end line :depth (max 1 maxd) :text (apply str acc)}))
+              (recur (rest cs) line depth :code start maxd (if start (conj acc c) acc) out))
+            :else
+            (recur (rest cs) line depth :code (or start line) maxd (conj acc c) out)))))))
+
+(defn- void-form? [v]
+  ;; #_(...) reads as a single VOID sentinel in the forms vector rather
+  ;; than being omitted entirely (read-all-string appends whatever the
+  ;; reader returns, VOID included). Detect it by class name since no
+  ;; void? predicate is exposed to .lg.
+  (= "VOID" (str (class v))))
+
+(defn read-segment [seg]
+  (try (let [forms (read-all-string (:text seg))]
+         (when (= 1 (count forms))
+           (let [form (first forms)]
+             (when-not (void-form? form) form))))
+       (catch Throwable _ nil)))
+
+(def ^:private def-heads #{'defn 'defn- 'defmacro 'defmethod 'deftest 'def})
+
+(defn- named
+  "The name a definition form binds, and its metadata.
+
+   The reader expands `^{...} name` into `(with-meta name {...})`, so an
+   annotated definition's second element is a LIST, not a symbol. Requiring a
+   bare symbol silently dropped every `^:private` and `^{:complexity ...}`
+   definition from the corpus -- they were invisible to metrics, the call
+   graph, coverage, dead code and cost alike."
+  [form]
+  (let [x (second form)]
+    (cond
+      (symbol? x) {:name x :meta nil}
+      (and (seq? x) (= 'with-meta (first x)) (symbol? (second x)))
+      {:name (second x) :meta (nth x 2 nil)}
+      :else nil)))
+
+(defn definitions [text]
+  (vec (keep (fn [seg]
+               (let [form (read-segment seg)
+                     n (when (seq? form) (named form))]
+                 (when (and n (def-heads (first form)))
+                   {:name (:name n) :kind (keyword (name (first form)))
+                    ;; Metadata the reader lifted into (with-meta ...), plus
+                    ;; the ^:private shorthand, which reads the same way.
+                    :meta (:meta n)
+                    :private? (boolean (or (:private (:meta n))
+                                           (re-find #"\^:private" (:text seg))))
+                    :line (:start seg) :end (:end seg) :depth (:depth seg) :form form})))
+             (segments text))))
+
+(defn counts [text]
+  (reduce (fn [m l]
+            (let [t (str/trim l)]
+              (cond (= "" t) (update m :blank inc)
+                    (str/starts-with? t ";") (update m :comment inc)
+                    :else (update m :loc inc))))
+          {:loc 0 :comment 0 :blank 0}
+          (lines text)))
+
+(defn extents
+  "Every parenthesized/bracketed form in `text` as `[start-line end-line]`,
+   at EVERY depth, in the order the forms close.
+
+   Duplicate regions are matched on tokens but reported on lines, and a line
+   is an artifact of formatting -- a region that starts mid-form is something
+   the reader has to interpret before they can act on it. These extents let a
+   region snap to real structure instead, so what is reported is a thing you
+   could lift out.
+
+   Strings, comments and character literals are skipped exactly as in
+   `segments`: a delimiter inside a string is not structure."
+  [text]
+  (loop [cs (seq text) line 1 mode :code stack [] out []]
+    (if (empty? cs)
+      out
+      (let [c (first cs) nl? (= c \newline)]
+        (case mode
+          :comment (recur (rest cs) (if nl? (inc line) line) (if nl? :code :comment) stack out)
+          :string (cond
+                    (= c \\) (recur (nnext cs) line :string stack out)
+                    (= c \") (recur (rest cs) line :code stack out)
+                    :else (recur (rest cs) (if nl? (inc line) line) :string stack out))
+          :char (recur (rest cs) line :code stack out)
+          :code
+          (cond
+            (= c \;) (recur (rest cs) line :comment stack out)
+            (= c \") (recur (rest cs) line :string stack out)
+            (= c \\) (recur (rest cs) line :char stack out)
+            (openers c) (recur (rest cs) line :code (conj stack line) out)
+            (closers c) (if (empty? stack)
+                          (recur (rest cs) line :code stack out)
+                          (recur (rest cs) line :code (pop stack)
+                                 (conj out [(peek stack) line])))
+            nl? (recur (rest cs) (inc line) :code stack out)
+            :else (recur (rest cs) line :code stack out)))))))
+
+(defn snap
+  "A token-derived line span `[from to]` narrowed to the largest COMPLETE
+   forms it contains, given that file's `extents`.
+
+   NARROWED, not widened, and the choice matters: widening to the smallest
+   enclosing form would swallow a whole 300-line function for a 10-line
+   match, inflating every duplicated-line count. Narrowing can only shrink a
+   region, and what it leaves is a set of whole forms -- something a reader
+   can lift out as written.
+
+   A region containing no complete form (a fragment smaller than any form) is
+   returned unchanged: there is no structure to snap to, and reporting
+   nothing would be worse than reporting the approximation."
+  [extents from to]
+  (let [inside (filter (fn [[s e]] (and (>= s from) (<= e to))) extents)
+        maximal (remove (fn [[s e]]
+                          (some (fn [[s2 e2]]
+                                  (and (or (not= s s2) (not= e e2))
+                                       (<= s2 s) (>= e2 e)))
+                                inside))
+                        inside)]
+    (if (empty? maximal)
+      [from to]
+      [(reduce min (map first maximal)) (reduce max (map second maximal))])))

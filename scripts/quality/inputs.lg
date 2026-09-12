@@ -1,0 +1,196 @@
+(ns quality.inputs
+  "External inputs, each pinned so a report is reproducible: git range by
+   sha, Go coverprofile by content, CI seconds by run id or supplied value."
+  (:require
+   [clojure.string :as str]
+   [quality.forms :as f]))
+
+(defn- sh [& args]
+  (let [r (apply os/sh args)]
+    (when (zero? (:exit r)) (:out r))))
+
+(defn- marker? [root name] (boolean (os/stat (str root "/" name))))
+
+(defn head-commit
+  "{:sha s :source \"jj\"|\"git\"} -- the commit this report is measured
+   against.
+
+   In a jj workspace `git rev-parse HEAD` answers for the PRIMARY checkout,
+   not for this working copy, so the pin would name a commit whose tree is
+   not what was measured. When a `.jj` marker is present the working-copy
+   PARENT (`@-`) is used instead; its `commit_id` is the git sha (the repo is
+   colocated), so the same value still works as a `git log` endpoint.
+   `root` is the working copy root; falls back to git, then to \"\"."
+  [root]
+  (or (when (marker? root ".jj")
+        (when-let [out (sh "jj" "log" "-r" "@-" "--no-graph" "-T" "commit_id")]
+          (let [sha (str/trim (first (f/lines out)))]
+            (when (re-matches #"[0-9a-f]{40}" sha) {:sha sha :source "jj"}))))
+      (when-let [out (sh "git" "rev-parse" "HEAD")]
+        {:sha (str/trim out) :source "git"})
+      {:sha "" :source "none"}))
+
+(defn git-range
+  "{:from sha :to sha :since since :head-source s}. `:to` is the commit the
+   report is pinned to (see `head-commit`); `:from` may be \"\" when there is
+   no commit before `since` — callers should treat that as \"from the root\"."
+  ([since] (git-range since {:sha (str/trim (or (sh "git" "rev-parse" "HEAD") ""))
+                             :source "git"}))
+  ([since head]
+   {:since since
+    :from (str/trim (or (sh "git" "rev-list" "-1" (str "--before=" since) (:sha head)) ""))
+    :to (:sha head)
+    :head-source (:source head)}))
+
+(def ^:private record-sep
+  "ASCII RS, emitted by `--format=%x1e%s` ahead of every commit subject. A
+   subject line is therefore unambiguous even though `git log --name-only`
+   does NOT end a commit block with a blank line (it only separates the
+   subject from its paths), which is why shape-based block detection
+   desynchronizes after the first commit."
+  "\u001e")
+
+(defn- status-path
+  "The path a `--name-status` line credits: the LAST tab-separated field, so
+   a rename (`R100<TAB>old<TAB>new`) credits the new path and a plain
+   `M<TAB>path` credits that path. A line with no tab (plain `--name-only`
+   output) is returned unchanged."
+  [line]
+  (last (str/split line #"\t")))
+
+(defn parse-fix-log
+  "Parses `git log --format=%x1e%s -M --name-status <range>` output into
+   {path count...}.
+
+   Each commit begins with a record-separator-prefixed SUBJECT line; every
+   other non-blank line is a changed-path line belonging to the most recent
+   subject, and blank lines are ignored. A commit whose subject matches
+   `^[Ff]ix` credits one defect to each path it touches.
+
+   The record separator is load-bearing: `git log --name-only` separates a
+   subject from its paths with a blank line but does NOT end a commit block,
+   so a parser that infers block boundaries from line shape desynchronizes
+   after the first commit and silently counts nothing.
+
+   Renames are credited to the rename TARGET (see `status-path`) -- instead
+   of a per-file `git log --follow`, rename detection comes from `-M`, so a
+   file renamed inside the window keeps the fixes made under its old name."
+  [text]
+  (loop [ls (f/lines text) subject nil counts {}]
+    (if (empty? ls)
+      counts
+      (let [l (first ls)]
+        (cond
+          (str/starts-with? l record-sep) (recur (rest ls) (subs l 1) counts)
+          (str/blank? l) (recur (rest ls) subject counts)
+          :else (recur (rest ls) subject
+                       (if (and subject (re-find #"^[Ff]ix" subject))
+                         (update counts (status-path l) (fnil inc 0))
+                         counts)))))))
+
+(defn log-range
+  "The `git log` revision argument for a {:from :to} range. An empty `:from`
+   means \"no commit before --since\", i.e. from the root: `<from>..<to>`
+   would then be `..<to>`, which git reads as `HEAD..<to>` and yields
+   nothing, so the range degrades to `<to>` alone."
+  [{:keys [from to]}]
+  (if (str/blank? from) to (str from ".." to)))
+
+(defn fix-counts
+  "{path count...} of fix-commit touches to each path over the given
+   {:from :to} git sha range (shells out). Renames are followed via `-M`."
+  [range]
+  (parse-fix-log (or (sh "git" "log" "--format=%x1e%s" "-M" "--name-status"
+                         (log-range range))
+                     "")))
+
+(defn parse-coverprofile
+  "Parses a Go `mode: set` coverprofile into
+   {:by-file {file {:covered n :total n}} :covered n :total n :percent p}."
+  [text]
+  (let [rows (keep (fn [l]
+                     (when-let [[_ file stmts cnt] (re-matches #"^(.*?):\d+\.\d+,\d+\.\d+ (\d+) (\d+)$" l)]
+                       {:file (str/replace file #"^github\.com/nooga/let-go/" "")
+                        :stmts (read-string stmts)
+                        :hit (pos? (read-string cnt))}))
+               (rest (f/lines text)))
+        by-file (reduce (fn [m r]
+                          (-> m
+                              (update-in [(:file r) :total] (fnil + 0) (:stmts r))
+                              (update-in [(:file r) :covered] (fnil + 0) (if (:hit r) (:stmts r) 0))))
+                  {} rows)
+        total (reduce + 0 (map :total (vals by-file)))
+        covered (reduce + 0 (map :covered (vals by-file)))]
+    {:by-file by-file
+     :total total
+     :covered covered
+     :percent (if (pos? total) (* 100.0 (/ covered (double total))) 0.0)}))
+
+(defn- days-from-civil
+  "Howard Hinnant's days-from-civil: days since the epoch (1970-01-01) for
+   a given proleptic-Gregorian y/m/d. Platform-independent (no libc date
+   math), so it works the same on every OS."
+  [y m d]
+  (let [y (if (<= m 2) (dec y) y)
+        era (long (/ (if (>= y 0) y (- y 399)) 400))
+        yoe (- y (* era 400))
+        doy (+ (long (/ (+ (* 153 (+ m (if (> m 2) -3 9))) 2) 5)) d -1)
+        doe (+ (* yoe 365) (long (/ yoe 4)) (- (long (/ yoe 100))) doy)]
+    (+ (* era 146097) doe -719468)))
+
+(defn parse-run-times
+  "Seconds between two `YYYY-MM-DDTHH:MM:SSZ` UTC timestamps, computed
+   with pure integer arithmetic (no `date -j`), so it is identical on
+   every platform."
+  [started updated]
+  (let [parse (fn [t]
+                (let [[_ y mo d h mi s]
+                      (re-matches #"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$" t)
+                      days (days-from-civil (read-string y) (read-string mo) (read-string d))]
+                  (+ (* days 86400)
+                     (* (read-string h) 3600)
+                     (* (read-string mi) 60)
+                     (read-string s))))]
+    (- (parse updated) (parse started))))
+
+(defn run-for-commit
+  "The most recent completed CI run RECORDED for `sha`, as
+   {:seconds n :source \"commit <sha7>\"} | nil.
+
+   This is the only automatic source of a CI duration, and it is deliberately
+   a RECORDED one. Timing the local run would make the efficiency term a
+   measurement of whatever the machine was doing -- every other term is a
+   structural ratio reproducible from the source at a given commit, and a
+   term that changes because the box was busy would break the PR-delta
+   promise that a delta means the CODE changed. No recorded duration means
+   the term is omitted, never estimated."
+  [sha]
+  (when-not (str/blank? sha)
+    (when-let [out (sh "gh" "api"
+                       (str "repos/nooga/let-go/actions/runs?head_sha=" sha
+                            "&status=completed&per_page=1")
+                       "--jq" ".workflow_runs[0].run_started_at,.workflow_runs[0].updated_at")]
+      (let [[started updated] (f/lines (str/trim out))]
+        (when (and started updated
+                   (re-matches #"^\d{4}-\d{2}-\d{2}T.*Z$" (str/trim started))
+                   (re-matches #"^\d{4}-\d{2}-\d{2}T.*Z$" (str/trim updated)))
+          {:seconds (parse-run-times (str/trim started) (str/trim updated))
+           :source (str "commit " (subs sha 0 (min 7 (count sha))))})))))
+
+(defn ci-seconds
+  "{:seconds n :source \"supplied\"|\"run <id>\"|\"commit <sha7>\"} | nil.
+
+   Every source is a RECORDED duration for a commit or run -- supplied by the
+   caller, looked up by run id, or looked up by commit sha. The local wall
+   clock is never one of them: see `run-for-commit`. When nothing is recorded
+   the caller omits the efficiency term and renormalizes, exactly as with any
+   other missing input."
+  [{:keys [run seconds commit]}]
+  (cond
+    seconds {:seconds seconds :source "supplied"}
+    run (when-let [out (sh "gh" "api" (str "repos/nooga/let-go/actions/runs/" run)
+                            "--jq" ".run_started_at,.updated_at")]
+          (let [[started updated] (f/lines out)]
+            {:seconds (parse-run-times started updated) :source (str "run " run)}))
+    commit (run-for-commit commit)
+    :else nil))

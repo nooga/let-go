@@ -47,6 +47,7 @@ A subdir is earned when a cluster of related docs justifies one; one-off cross-c
 | Testing strategy, conformance | `testing-and-conformance.md` |
 | Docs frontmatter convention + maintenance hook | `frontmatter-hook.md` |
 | Docs judgement-layer report (stale/supersession/index) | `docs-status.md` |
+| Code-quality score report (`make quality`) | `scripts/quality.lg` (complexity, duplication, coverage, defect density; run `make quality`) |
 | Regenerating generated artifacts after `.lg` edits | `regenerating-generated-artifacts.md` |
 | Perf ratchet, regression checkpoints, historical baselines | `perf/ratchet.md` |
 | Running the perf A/B on a PR (the `perf` label) | `perf/ratchet.md` (§ Running the check on a PR) |

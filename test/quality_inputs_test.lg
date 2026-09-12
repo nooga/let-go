@@ -1,0 +1,77 @@
+(ns test.quality-inputs-test
+  (:require
+   [quality.inputs :as in]
+   [test :refer :all]))
+
+(deftest parses-fix-commits-per-path
+  ;; `git log --format=%x1e%s -M --name-status` shape: an \u001e-prefixed subject,
+  ;; a blank line, then `<status>TAB<path>` lines -- and NO blank line ending
+  ;; the block, which is why the subject marker is required.
+  (let [log (str "\u001efix(vm): a\n\nM\tpkg/vm/a.go\nM\tpkg/vm/b.go\n"
+                 "\u001efeat: b\n\nM\tpkg/vm/a.go\n"
+                 "\u001efix: c\n\nM\tpkg/vm/a.go\n")]
+    (is (= {"pkg/vm/a.go" 2 "pkg/vm/b.go" 1} (in/parse-fix-log log)))))
+
+(deftest counts-every-commit-block-not-just-the-first
+  ;; Regression: `--name-only`/`--name-status` does not terminate a commit
+  ;; block, so a shape-based parser stayed inside the first block forever and
+  ;; returned {} over a range full of fixes. Two adjacent fix commits must
+  ;; both be counted.
+  (let [log (str "\u001efix: one\n\nM\tpkg/a.go\n"
+                 "\u001efix: two\n\nM\tpkg/a.go\nM\tpkg/b.go\n")]
+    (is (= {"pkg/a.go" 2 "pkg/b.go" 1} (in/parse-fix-log log)))))
+
+(deftest fix-subject-with-slash-is-not-a-path
+  ;; The subject itself contains "/" (fix(rt/core): x) -- it must be
+  ;; recognized as a subject line, not misclassified as a path.
+  (let [log "\u001efix(rt/core): x\n\nM\tpkg/rt/core.go\n"]
+    (is (= {"pkg/rt/core.go" 1} (in/parse-fix-log log)))))
+
+(deftest capitalized-fix-subject-counts
+  (let [log "\u001eFix: c\n\nM\tpkg/vm/a.go\n"]
+    (is (= {"pkg/vm/a.go" 1} (in/parse-fix-log log)))))
+
+(deftest rename-credits-the-target-path
+  ;; -M reports `R100<TAB>old<TAB>new`; the fix belongs to the new path, so a
+  ;; file renamed inside the window keeps the fixes made under its old name.
+  (let [log "\u001efix: moved\n\nR100\tpkg/old.go\tpkg/new.go\n"]
+    (is (= {"pkg/new.go" 1} (in/parse-fix-log log)))))
+
+(deftest log-range-degrades-to-a-single-rev-without-a-from
+  ;; An empty :from would make "..<to>" == "HEAD..<to>" == nothing.
+  (is (= "abc..def" (in/log-range {:from "abc" :to "def"})))
+  (is (= "def" (in/log-range {:from "" :to "def"}))))
+
+(deftest parses-go-coverprofile
+  (let [c (in/parse-coverprofile (slurp "fixtures/quality/cover.out"))]
+    (is (= 6 (:total c)))
+    (is (= 3 (:covered c)))
+    (is (= 50.0 (:percent c)))
+    (is (= {:covered 2 :total 5} (get-in c [:by-file "pkg/vm/a.go"])))))
+
+(deftest ci-seconds-supplied-or-absent
+  (is (= {:seconds 300 :source "supplied"} (in/ci-seconds {:seconds 300})))
+  (is (nil? (in/ci-seconds {}))))
+
+(deftest parse-run-times-computes-seconds-between-iso-timestamps
+  (is (= 300 (in/parse-run-times "2026-01-01T00:00:00Z" "2026-01-01T00:05:00Z")))
+  ;; crosses a day boundary
+  (is (= 3600 (in/parse-run-times "2026-01-01T23:30:00Z" "2026-01-02T00:30:00Z")))
+  ;; crosses a month/year boundary
+  (is (= 86400 (in/parse-run-times "2025-12-31T00:00:00Z" "2026-01-01T00:00:00Z"))))
+
+(deftest git-range-is-two-shas
+  (let [r (in/git-range "2026-01-01")]
+    (is (re-matches #"[0-9a-f]{40}" (:to r)))
+    (is (re-matches #"[0-9a-f]{40}" (:from r)))))
+
+(deftest ci-seconds-never-invents-a-duration
+  ;; Efficiency must be pinned to a RECORDED duration. With nothing recorded
+  ;; the term is omitted and renormalized -- it is never estimated from the
+  ;; local wall clock, which would make the composite non-deterministic for
+  ;; the same tree and break the PR-delta contract.
+  (is (nil? (in/ci-seconds {})))
+  (is (nil? (in/ci-seconds {:commit ""})))
+  (is (= {:seconds 300 :source "supplied"} (in/ci-seconds {:seconds 300})))
+  ;; a supplied duration wins over a lookup, since it is already recorded
+  (is (= "supplied" (:source (in/ci-seconds {:seconds 300 :commit "deadbeef"})))))

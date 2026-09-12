@@ -1,0 +1,253 @@
+(ns test.quality-cli-test
+  (:require
+   [clojure.string :as str]
+   [quality :as q]
+   [test :refer :all]))
+
+;; The test runner's cwd is `test/`, so the fixture corpus is at
+;; `fixtures/quality` here and at `test/fixtures/quality` from the repo
+;; root. `--source-root` measures it as source (only `*_test.lg` inside it
+;; stays a test), and every reported path is repo-root-relative either way.
+(def fixtures "fixtures/quality")
+
+(deftest cli-produces-deterministic-report-over-fixtures
+  (let [edn-path (str (os/temp-dir) "quality-cli-test.edn")
+        args ["--ci-seconds" "300" "--go-cover" (str fixtures "/cover.out")
+              "--edn" edn-path "--since" "2000-01-01" "--top" "5"
+              "--source-root" fixtures fixtures]
+        out1 (with-out-str (q/main args))
+        out2 (with-out-str (q/main args))]
+    (is (= out1 out2))
+    (is (str/includes? out1 "debt"))
+    (is (str/includes? out1 "duplicate"))
+    (is (str/includes? out1 "untested"))
+    (is (str/includes? out1 "top complexity"))
+    ;; Paths are repo-root-relative regardless of the process cwd.
+    (is (str/includes? out1 "\ntest/fixtures/quality/cli_src.lg"))
+    (is (str/includes? out1 "defects: renames credited to target via -M"))
+    (let [r (read-string (slurp edn-path))
+          untested (set (map :name (get-in r [:coverage :lg :untested])))]
+      ;; Debt is unbounded above; it is only ever non-negative.
+      ;; bounded: every scored number is a share in [0, 1]
+      (is (<= 0.0 (:debt r) 1.0))
+      (is (every? (fn [[_ v]] (or (nil? v) (<= 0.0 v 1.0))) (:terms r)))
+      (is (nil? (:score r)))
+      (is (= "supplied" (get-in r [:inputs :ci :source])))
+      (is (vector? (:issues r)))
+      (is (vector? (:top-complexity r)))
+      (is (>= (:cc (first (:top-complexity r))) (:cc (second (:top-complexity r)))))
+      ;; A real tested/untested split, not an artifact of misclassification.
+      (is (contains? untested 'untested-fn))
+      (is (not (contains? untested 'tested-fn)))
+      ;; The one `*_test.lg` under the source root still counts as a test.
+      (is (pos? (get-in r [:testing :assertions]))))))
+
+(deftest test-classification-is-cwd-independent
+  ;; Repo-relative paths, so the rules mean the same thing from any cwd.
+  (is (q/test-file? "test/fixtures/quality/cli_src.lg"))
+  (is (not (q/test-file? "test/fixtures/quality/cli_src.lg" ["test/fixtures/quality"])))
+  (is (q/test-file? "test/fixtures/quality/cli_src_test.lg" ["test/fixtures/quality"]))
+  (is (q/test-file? "pkg/rt/lang_test.go"))
+  (is (not (q/test-file? "pkg/rt/lang.go"))))
+
+(deftest trailing-valueless-flag-is-rejected
+  (is (thrown? Throwable (q/parse-args ["--top"]))))
+
+(deftest requiring-the-cli-namespace-does-not-run-it
+  ;; The entry guard means loading `quality` for this test printed nothing;
+  ;; if it had run, the test runner's output would carry a report already.
+  (is (fn? q/main)))
+
+(deftest untracked-files-are-not-measured
+  ;; The corpus is the VCS file list, so a scratch file in the working copy
+  ;; cannot move the score. `scratch_*.lg` is gitignored in the fixture dir
+  ;; (jj snapshots on every command, so merely-new would already be tracked).
+  (let [scratch (str fixtures "/scratch_untracked.lg")]
+    (spit scratch "(ns fixture.scratch)\n(defn scratch-only [x] (inc x))\n")
+    (let [out (with-out-str (q/main ["--since" "2000-01-01" "--source-root" fixtures fixtures]))]
+      (os/delete-tree scratch)
+      (is (not (str/includes? out "scratch_untracked")))
+      (is (not (str/includes? out "scratch-only")))
+      (is (str/includes? out "tracked-by jj")))))
+
+(deftest an-empty-corpus-is-an-error-not-a-perfect-score
+  ;; A path that matches nothing (or only skipped files) used to report a
+  ;; vacuous perfect result off zero files.
+  (let [out (with-out-str (is (= 2 (q/main ["--since" "2000-01-01" "fixtures/quality/nope"]))))]
+    (is (str/includes? out "no source files under"))))
+
+(deftest help-prints-usage
+  (is (str/includes? (with-out-str (q/main ["--help"])) "usage: ./lg scripts/quality.lg")))
+
+(deftest report-header-carries-the-spec-caveats
+  (let [out (with-out-str (q/main ["--since" "2000-01-01" "--source-root" fixtures fixtures]))]
+    (is (str/includes? out "caveat: static coverage is an upper bound"))
+    (is (str/includes? out "caveat: cost is the structural complexity of the ALGORITHM"))
+    (is (str/includes? out "corpus "))
+    ;; the two derivation caveats item 6 asks for, stated in the header
+    (is (str/includes? out "reported on FORM boundaries"))
+    (is (str/includes? out "defects: renames credited to target via -M"))
+    ;; duplicate issues carry the A-side span and the matched span
+    (is (re-find #"duplicate\s+[0-9.]+\s+~ \S+:\d+-\d+ \(lines \d+\)" out))
+    (is (re-find #"test/fixtures/quality/\S+:\d+-\d+\s+duplicate" out))))
+
+(deftest no-paths-means-the-default-roots
+  ;; `make quality` relies on this: no positional path measures
+  ;; `default-paths`, per language.
+  (let [opts (q/parse-args [])]
+    (is (= [] (:paths opts)))
+    (is (= ["pkg/rt/core" "scripts" "test"] (:lg q/default-paths)))
+    (is (= ["pkg" "cmd"] (:go q/default-paths)))))
+
+(deftest every-reported-number-runs-the-same-direction
+  ;; A reader must be able to scan a row -- or the same row across two runs --
+  ;; without remembering which metrics invert. The files table therefore
+  ;; prints DEBT (0 perfect, lower better, unbounded), not the measurements
+  ;; behind them.
+  (let [edn-path (str (os/temp-dir) "quality-direction-test.edn")
+        out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                   "--source-root" fixtures fixtures]))
+        r (read-string (slurp edn-path))
+        by-path (into {} (map (fn [f] [(:path f) f]) (:files r)))
+        ;; files are listed worst-first now, i.e. debt descending
+        worst (->> (:files r)
+                   (filter (fn [f] (and (= :lg (:lang f)) (:cc-max f))))
+                   (sort-by (fn [f] (- (:cc-max f))))
+                   first)]
+    (is (str/includes? out "files (all columns are shares in [0, 1]: 0 is perfect, lower is better)"))
+    (is (str/includes? out "0 is perfect, 1 is worst"))
+    (is (str/includes? out "top complexity"))
+    (is (str/includes? out "(raw measurements, ranked by MASS"))
+    (is (str/includes? out "(count; lower is better, same direction as debt"))
+    ;; The worst file by raw complexity must print a HIGH erosion share,
+    ;; which is only true if the column is the term and not the measurement.
+    (is (> (:cc-max worst) 10))
+    (is (> (:erosion worst) 0.0))
+    (is (<= (:erosion worst) 1.0))
+    (is (str/includes? out (str (:path worst) " ")))
+    ;; The EDN keeps every raw field unchanged -- it is the trend surface.
+    (let [f (get by-path (:path worst))]
+      (is (number? (:cc-max f)))
+      (is (number? (:mi-raw f)))
+      (is (number? (:dup-pct f)))
+      (is (contains? f :defects-per-kloc)))))
+
+(deftest files-are-listed-worst-first
+  (let [edn-path (str (os/temp-dir) "quality-order-test.edn")]
+    (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                           "--source-root" fixtures fixtures]))
+    (let [debts (map :debt (:files (read-string (slurp edn-path))))]
+      (is (= (vec debts) (vec (reverse (sort debts))))))))
+
+(deftest the-edn-keeps-every-raw-measurement
+  ;; The EDN is the trend-tracking surface: raw fields must not change shape
+  ;; when the presented value does.
+  (let [edn-path (str (os/temp-dir) "quality-raw-test.edn")]
+    (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                           "--source-root" fixtures fixtures]))
+    (let [r (read-string (slurp edn-path))
+          lg (first (filter (fn [f] (and (= :lg (:lang f)) (:cc-max f))) (:files r)))]
+      (is (number? (:cc-max lg)))
+      (is (number? (:mi-raw lg)))
+      (is (number? (:dup-pct lg)))
+      (is (contains? lg :defects-per-kloc))
+      (is (contains? lg :debt))
+      (is (number? (get-in r [:testing :density]))))))
+
+(deftest erosion-and-verbosity-are-reported-with-their-caveats
+  ;; Reported, not yet scored: both must appear with the paper's baselines
+  ;; and with verbosity marked as the lower bound it is.
+  (let [edn-path (str (os/temp-dir) "quality-terms-test.edn")
+        out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                   "--source-root" fixtures fixtures]))
+        r (read-string (slurp edn-path))]
+    (is (str/includes? out "erosion "))
+    (is (str/includes? out "verbosity "))
+    (is (str/includes? out "LOWER BOUND on the paper's metric"))
+    (is (str/includes? out "paper baselines: human corpus erosion 0.34"))
+    ;; both are shares in [0,1]
+    (is (<= 0.0 (get-in r [:erosion :value]) 1.0))
+    (is (<= 0.0 (get-in r [:verbosity :value]) 1.0))
+    ;; Go measurements come from the Go tool, and their absence must be
+    ;; visible rather than scored as perfect
+    (is (contains? #{"go run" "none"} (get-in r [:erosion :go-source])))
+    (is (pos? (get-in r [:erosion :callables])))
+    ;; per-file verbosity too
+    (is (every? (fn [f] (or (nil? (:verbosity f)) (<= 0.0 (:verbosity f) 1.0)))
+                (:files r)))))
+
+(deftest dead-code-is-reported-with-its-upper-bound-caveat
+  (let [edn-path (str (os/temp-dir) "quality-dead-test.edn")
+        out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                   "--source-root" fixtures fixtures]))
+        r (read-string (slurp edn-path))]
+    (is (str/includes? out "dead "))
+    (is (str/includes? out "OURS, not the paper's; an UPPER BOUND"))
+    (is (str/includes? out "reachable only from tests"))
+    (is (<= 0.0 (get-in r [:dead :value]) 1.0))
+    ;; SLOC-weighted, so the worst entries are the biggest ones
+    (let [worst (get-in r [:dead :worst])]
+      (is (vector? worst))
+      (is (= (map :sloc worst) (reverse (sort (map :sloc worst))))))))
+
+(deftest generated-files-are-excluded-and-the-exclusion-is-visible
+  ;; Generated code says nothing about the code anyone writes: its complexity
+  ;; belongs to its generator and it inflates defect density every time the
+  ;; generator re-runs. The marker is matched against the file HEAD only, so a
+  ;; generator's own source -- which carries the marker inside its emit
+  ;; template -- is still measured.
+  (is (q/generated? ";; Code generated by pkg/ir/ir_data.lg. DO NOT EDIT.\n(ns x)\n"))
+  (is (q/generated? "// Code generated by lginterop; DO NOT EDIT.\npackage p\n"))
+  (is (not (q/generated? (str "package emit\n\nfunc header() string {\n"
+                              "  return \"// Code generated by me. DO NOT EDIT.\"\n}\n"))))
+  (is (not (q/generated? "(ns ordinary)\n(defn f [x] x)\n")))
+  (let [out (with-out-str (q/main ["--since" "2000-01-01" "--source-root" fixtures fixtures]))]
+    (is (str/includes? out "generated files excluded"))))
+
+(deftest lint-is-a-soft-dependency-and-its-absence-is-loud
+  ;; If lint cannot run, the flagged half is OMITTED and the term
+  ;; renormalizes. Silently scoring a smaller numerator would look exactly
+  ;; like the codebase improving, which is the worst way to be wrong.
+  (let [edn-path (str (os/temp-dir) "quality-nolint.edn")]
+    (os/setenv "QUALITY_LINT" "/nonexistent/lint.lg")
+    (let [out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                     "--source-root" fixtures fixtures]))
+          r (read-string (slurp edn-path))]
+      (os/setenv "QUALITY_LINT" "")
+      (is (str/includes? out "lint UNAVAILABLE"))
+      (is (str/includes? out "verbosity counts CLONE LINES ONLY"))
+      (is (str/includes? out "comment-debt is omitted"))
+      ;; omitted, not zero: a missing input must renormalize, never score 0
+      (is (nil? (get-in r [:terms :comment-debt])))
+      (is (contains? (set (:omitted r)) :comment-debt))
+      ;; and verbosity still reports, from clone lines alone
+      (is (some? (get-in r [:terms :verbosity]))))))
+
+(deftest comment-kinds-excludes-the-cosmetic-and-heuristic-rules
+  ;; :comment-divider is cosmetic and :devlog-comment is an admitted phrase
+  ;; heuristic the linter itself refuses to gate on. Neither scores; both stay
+  ;; visible in the lint report.
+  (is (contains? (:scored q/comment-kinds) :restatement))
+  (is (contains? (:scored q/comment-kinds) :commented-out-code))
+  (is (contains? (:unscored q/comment-kinds) :comment-divider))
+  (is (contains? (:unscored q/comment-kinds) :devlog-comment))
+  ;; a code-rule kind is neither: code kinds are the complement, because the
+  ;; rule catalog is data that grows
+  (is (not (contains? (:scored q/comment-kinds) :let-identity)))
+  (is (not (contains? (:unscored q/comment-kinds) :let-identity))))
+
+(deftest clone-classes-lead-the-duplicate-story-in-the-report
+  (let [edn-path (str (os/temp-dir) "quality-classes.edn")
+        out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                   "--source-root" fixtures fixtures]))
+        r (read-string (slurp edn-path))]
+    (is (str/includes? out "clone classes"))
+    (is (str/includes? out "one entry per extraction opportunity"))
+    ;; classes for humans, pairs for machines: both in the EDN
+    (is (vector? (:clone-classes r)))
+    (is (vector? (:dup-pairs r)))
+    ;; a class never has more entries than the pairs it came from
+    (is (<= (count (:clone-classes r)) (count (:dup-pairs r))))
+    ;; ranked by the size of the prize
+    (let [totals (map :total-lines (:clone-classes r))]
+      (is (= (vec totals) (vec (reverse (sort totals))))))))

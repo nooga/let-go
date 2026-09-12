@@ -1,0 +1,5 @@
+(ns fixture.alias-c)
+;; `helper` is quoted so this file compiles standalone (the harness loads
+;; every fixture as a test file); the reference graph walks the raw read
+;; form, so the literal 'helper symbol is still visible for analysis.
+(defn caller [x] ('helper x))

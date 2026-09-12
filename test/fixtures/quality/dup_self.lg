@@ -1,0 +1,70 @@
+(ns fixture.dup-self)
+
+(defn calc-alpha [n]
+  (let [step1 (+ n 7)
+        step2 (* step1 2)
+        step3 (- step2 3)
+        step4 (if (> step3 10)
+                (+ step3 1)
+                (- step3 1))
+        step5 (loop [i 0 acc step4]
+                (if (>= i 3)
+                  acc
+                  (recur (inc i) (+ acc i))))
+        step6 (cond
+                (> step5 100) :big
+                (> step5 50) :medium
+                :else :small)
+        step7 (case step6
+                :big (* step5 2)
+                :medium (+ step5 10)
+                :small (- step5 5))
+        step8 (when (pos? step7)
+                (* step7 step7))
+        step9 (or step8 0)
+        step10 (and (pos? step9) (< step9 100000))
+        step11 (try
+                 (/ step9 (max 1 step7))
+                 (catch Throwable e 0))
+        result (+ step1 step2 step3 step4 step5 step7 step9 step11)]
+    result))
+
+(def middle-buffer [1 2 3])
+
+(defn greet-middle [name]
+  (str "Hello, " name "! Welcome to the middle."))
+
+;; The function below is calc-alpha pasted a second time: identifiers
+;; renamed and one numeric constant changed, exactly as if someone
+;; copy-pasted the block instead of calling calc-alpha again.
+(defn calc-alpha-copy [m]
+  (let [s1 (+ m 9)
+        s2 (* s1 2)
+        s3 (- s2 3)
+        s4 (if (> s3 10)
+             (+ s3 1)
+             (- s3 1))
+        s5 (loop [j 0 total s4]
+             (if (>= j 3)
+               total
+               (recur (inc j) (+ total j))))
+        s6 (cond
+             (> s5 100) :big
+             (> s5 50) :medium
+             :else :small)
+        s7 (case s6
+             :big (* s5 2)
+             :medium (+ s5 10)
+             :small (- s5 5))
+        s8 (when (pos? s7)
+             (* s7 s7))
+        s9 (or s8 0)
+        s10 (and (pos? s9) (< s9 100000))
+        s11 (try
+              (/ s9 (max 1 s7))
+              (catch Throwable e 0))
+        answer (+ s1 s2 s3 s4 s5 s7 s9 s11)]
+    answer))
+
+(defn farewell-middle [name]
+  (str name ", thanks for visiting the middle!"))

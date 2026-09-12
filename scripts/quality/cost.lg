@@ -1,0 +1,519 @@
+(ns quality.cost
+  "A static, deterministic estimate of ALGORITHMIC COST per definition.
+
+   Cyclomatic complexity counts branches, not scaling, and the two come
+   apart badly: fifty flat `if`s are CC 50 and O(1), a triple-nested loop is
+   CC 4 and O(n^3), and naive recursive `fib` is CC 2 and exponential. So
+   this is built from structure rather than from CC.
+
+   Each definition gets a DEGREE -- 0, 1, 2, ..., `:exp`, or `:unknown` --
+   from four sources, composed by the rule that NESTING ADDS and SEQUENCING
+   TAKES THE MAXIMUM:
+
+     a. loop nesting, including iteration through `map`/`filter`/`reduce`
+        and friends, but not a `dotimes` with a literal bound;
+     b. recursion, classified by how the argument shrinks at the call site:
+        one constant-shrunk call is linear, two or more are exponential, a
+        halved argument is logarithmic, and an unreadable shrink is
+        `:unknown`;
+     c. callee substitution -- a call to a degree-d definition inside a
+        loop of depth k costs k + d, to a fixpoint over the call graph;
+     d. core function costs, from the `cost-catalog.edn` DATA file.
+
+   UPPER-BOUND APPROXIMATION, in the same sense as static reachability. It
+   reads structure, not semantics: a loop that always runs twice still
+   counts, a function that returns early still pays, and anything it cannot
+   read is `:unknown` rather than 0. `:unknown` is its own bucket and is
+   never silently counted as constant.
+
+   An uncatalogued core call is assumed constant and REPORTED as assumed, so
+   the catalog grows from real gaps instead of from guesses."
+  (:require
+   [clojure.string :as str]
+   [quality.forms :as f]))
+
+(defn catalog
+  "The cost catalog, read from `cost-catalog.edn` next to this file. Data,
+   not predicates: a missing entry is fixed by editing that file."
+  [dir]
+  (try (read-string (slurp (str dir "/cost-catalog.edn")))
+       (catch Throwable _ {})))
+
+;; Forms that iterate over a collection: each adds one to the nesting depth.
+(def ^:private loop-heads
+  #{'loop 'doseq 'for 'while
+    'map 'mapv 'filter 'filterv 'remove 'keep 'mapcat 'reduce 'reductions
+    'into 'concat 'distinct 'frequencies 'group-by 'every? 'some 'sort 'sort-by
+    'run! 'doall 'dorun 'iterate 'take-while 'drop-while 'partition-by})
+
+;; Shrink shapes, read structurally at the recursive call site.
+(def ^:private constant-shrink #{'rest 'next 'pop 'dec 'butlast 'drop 'nnext})
+(def ^:private half-shrink #{'quot 'split-at 'subvec 'bit-shift-right})
+
+(defn- literal-bound?
+  "A `dotimes`-style binding whose bound is a literal number: the loop runs a
+   fixed number of times and does not raise the degree."
+  [form]
+  (and (seq? form) (= 'dotimes (first form))
+       (vector? (second form)) (number? (last (second form)))))
+
+(defn- calls-in
+  "Every head symbol called anywhere in `form`."
+  [form]
+  (letfn [(walk [x acc]
+            (cond
+              (and (seq? x) (symbol? (first x)))
+              (reduce (fn [a y] (walk y a)) (conj acc (first x)) (rest x))
+              (coll? x) (reduce (fn [a y] (walk y a)) acc (seq x))
+              :else acc))]
+    (walk form #{})))
+
+(defn- shrink-of
+  "How a set of argument lists shrinks, as `b` in T(n) = a*T(n/b) + f(n):
+   2 when an argument is halved, 1 when it shrinks by a constant, `:unknown`
+   when the shape cannot be read.
+
+   Never `constant` by default: assuming an unreadable recursion terminates
+   quickly is exactly the error that would hide an exponential function."
+  [arg-lists]
+  (let [shape (fn [args]
+                (cond
+                  (some (fn [a] (and (seq? a) (half-shrink (first a)))) args) 2
+                  (some (fn [a] (and (seq? a) (constant-shrink (first a)))) args) 1
+                  :else :unknown))]
+    (if (empty? arg-lists)
+      :none
+      (reduce (fn [acc a]
+                (let [s (shape a)]
+                  (cond (= acc :unknown) :unknown
+                        (= s :unknown) :unknown
+                        ;; a mixed pair is the slower of the two
+                        (= s 1) 1
+                        (= acc 1) 1
+                        :else 2)))
+              (shape (first arg-lists)) (rest arg-lists)))))
+
+(defn nested-self-call?
+  "Whether a recursive call appears in ARGUMENT POSITION of another recursive
+   call -- the Ackermann shape `(f (dec m) (f m (dec n)))`.
+
+   That shape grows beyond every exponential, and nothing here tries to
+   compute how far beyond. It is detected structurally and reported as its
+   own bucket, which keeps the `c^n` label meaning what it says instead of
+   quietly absorbing a function that is not exponential at all."
+  [name form]
+  (let [found (atom false)]
+    (letfn [(contains-self? [x]
+              (cond
+                (and (seq? x) (= name (first x))) true
+                (coll? x) (boolean (some contains-self? (seq x)))
+                :else false))
+            (walk [x]
+              (when (coll? x)
+                (when (and (seq? x) (= name (first x))
+                           (some contains-self? (rest x)))
+                  (reset! found true))
+                (doseq [y (seq x)] (walk y))))]
+      (walk form))
+    @found))
+
+(defn- call-args
+  "Every argument list `name` is called with inside `form`."
+  [name form]
+  (let [calls (atom [])]
+    (letfn [(walk [x]
+              (when (coll? x)
+                (when (and (seq? x) (= name (first x)))
+                  (swap! calls conj (vec (rest x))))
+                (doseq [y (seq x)] (walk y))))]
+      (walk form))
+    @calls))
+
+(defn- recur-args
+  "Every `recur` argument list inside `form`, for reading a loop's induction
+   variable the same way a recursive call's argument is read."
+  [form]
+  (let [args (atom [])]
+    (letfn [(walk [x]
+              (when (coll? x)
+                (when (and (seq? x) (= 'recur (first x)))
+                  (swap! args conj (vec (rest x))))
+                (doseq [y (seq x)] (walk y))))]
+      (walk form))
+    @args))
+
+(defn degree-rank
+  "Ranking order over structured degrees: log < poly by k < poly-log by k <
+   exp by base. `:unknown` and `:memoized` are NOT on this scale -- they are
+   their own buckets and are never silently treated as constant."
+  [d]
+  (cond
+    (= :unknown d) -1.0
+    (= :memoized d) -1.0
+    (= :beyond-exp d) 2000.0
+    (:log d) 0.5
+    (:exp d) (+ 1000.0 (double (:exp d)))
+    (:poly-log d) (+ (double (:poly-log d)) 0.5)
+    (:poly d) (double (:poly d))
+    :else 0.0))
+
+(defn degree-str
+  "A degree printed the way someone reads complexity: n^1.58, n log n,
+   log n, 3^n."
+  [d]
+  (cond
+    (= :unknown d) "unknown"
+    (= :memoized d) "memoized"
+    (= :beyond-exp d) "beyond exponential"
+    (:log d) "log n"
+    (:exp d) (str (:exp d) "^n")
+    (:poly-log d) (let [k (double (:poly-log d))]
+                    (if (== 1.0 k) "n log n" (str "n^" (format "%.2f" k) " log n")))
+    (:poly d) (let [k (double (:poly d))]
+                (cond (== 0.0 k) "1"
+                      (== 1.0 k) "n"
+                      ;; an integral exponent prints as an integer; 1.585 does not
+                      (== k (double (int k))) (str "n^" (int k))
+                      :else (str "n^" (format "%.2f" k))))
+    :else "?"))
+
+(def ^:private constant-degree {:poly 0})
+
+(defn- normalize
+  "`{:poly-log 0}` is n^0 log n, i.e. log n: kept in one shape so ranking and
+   printing do not have to know about both."
+  [d]
+  (if (and (map? d) (:poly-log d) (zero? (:poly-log d))) {:log 1} d))
+
+(defn solve-recurrence
+  "The degree of T(n) = a*T(n/b) + THETA(n^k), by the MASTER THEOREM as a
+   formula rather than a table of cases.
+
+   For b > 1, with e = log_b(a):
+     k < e  ->  n^e        (the recursion dominates: Karatsuba is a=3, b=2,
+                            e = 1.585; Strassen is a=7, b=2, e = 2.807)
+     k = e  ->  n^k log n  (the balanced case: mergesort is a=2, b=2, k=1)
+     k > e  ->  n^k        (the non-recursive work dominates)
+
+   For b = 1 the master theorem does not apply -- the argument shrinks by a
+   constant, so the recursion depth is n rather than log n:
+     a = 1  ->  n^(k+1)    (linear recursion; with a linear scan per step,
+                            n^2)
+     a >= 2 ->  a^n        (tree recursion; the BASE is the number of call
+                            sites, so three calls is 3^n, not the same thing
+                            as two)"
+  [a b k]
+  (cond
+    (= :unknown b) :unknown
+    (= :unknown k) :unknown
+    (> b 1) (let [e (/ (math/log (double a)) (math/log (double b)))
+                  k (double k)]
+              (normalize
+                (cond
+                  (< k (- e 0.000001)) {:poly e}
+                  (<= (math/abs (- k e)) 0.000001) {:poly-log k}
+                  :else {:poly k})))
+    (>= a 2) {:exp a}
+    :else {:poly (+ (double k) 1.0)}))
+
+(defn- max-degree
+  "Sequencing takes the MAXIMUM: two statements one after the other cost the
+   worse of the two."
+  [a b]
+  (cond (= :unknown a) :unknown
+        (= :unknown b) :unknown
+        (= :memoized a) b
+        (= :memoized b) a
+        (= :beyond-exp a) a
+        (= :beyond-exp b) b
+        (>= (degree-rank a) (degree-rank b)) a
+        :else b))
+
+(defn- add-degree
+  "Nesting ADDS exponents: a linear loop around a linear call is n^2, and a
+   halving loop around a linear call is n log n.
+
+   Two logs compose to log^2 n, which is not in the vocabulary; it rounds UP
+   to n, because this is an upper-bound estimate and over-reporting is the
+   safe direction."
+  [a b]
+  (cond
+    (= :unknown a) :unknown
+    (= :unknown b) :unknown
+    (= :memoized a) b
+    (= :memoized b) a
+    (:exp a) a
+    (:exp b) b
+    (and (:log a) (:log b)) {:poly 1}
+    (:log a) (if (:poly b) (normalize {:poly-log (:poly b)}) b)
+    (:log b) (if (:poly a) (normalize {:poly-log (:poly a)}) a)
+    (and (:poly-log a) (:poly-log b)) {:poly-log (+ (:poly-log a) (:poly-log b))}
+    (:poly-log a) {:poly-log (+ (:poly-log a) (or (:poly b) 0))}
+    (:poly-log b) {:poly-log (+ (:poly-log b) (or (:poly a) 0))}
+    :else {:poly (+ (or (:poly a) 0) (or (:poly b) 0))}))
+
+(defn params-of
+  "The parameter names a definition binds, including destructured ones. These
+   are the only things a degree can be a function of."
+  [form]
+  (let [argv (first (filter vector? (drop 2 form)))]
+    (set (filter symbol? (tree-seq coll? seq argv)))))
+
+(defn- derived-from-params?
+  "Whether `x` traces back to a parameter through a chain this can follow:
+   the parameter itself, a call whose arguments include one (`rest`, `keys`,
+   `map` over it, a destructured element), or a local bound to such a value.
+
+   THE POINT OF THE WHOLE RULE. A degree is a function of INPUT SIZE, and a
+   definition's inputs are its parameters. A loop over a literal, a global, or
+   a call's own argument count is CONSTANT in the input however deeply it
+   nests -- which is why `installLangNS`, four nested loops over fixed tables,
+   read as n^4 while being constant in what it is given."
+  [x params locals]
+  (letfn [(walk [y]
+            (cond
+              (symbol? y) (or (contains? params y) (contains? locals y))
+              ;; Derivation does NOT cross a function-literal boundary: a
+              ;; closure is a value of CONSTANT size whatever its body
+              ;; references. (let [f (fn [] (count xs))] ...) binds f to
+              ;; something O(1) in xs, not to something of xs's size.
+              (and (seq? y) (contains? #{'fn 'fn*} (first y))) false
+              (coll? y) (boolean (some walk (seq y)))
+              :else false))]
+    (walk x)))
+
+(defn- loop-source
+  "What `form` iterates over: the collection expression, or nil when the form
+   is not one of the iterating shapes."
+  [form]
+  (let [h (first form)]
+    (cond
+      (contains? #{'map 'mapv 'filter 'filterv 'remove 'keep 'mapcat 'every? 'some
+                   'sort-by 'group-by 'run!}
+                 h)
+      (last form)
+      (contains? #{'reduce} h) (last form)
+      (contains? #{'into 'concat 'distinct 'frequencies 'sort 'reverse 'vec 'set
+                   'doall 'dorun 'take-while 'drop-while 'partition-by}
+                 h)
+      (last form)
+      (contains? #{'doseq 'for} h)
+      (when (vector? (second form)) (second (second form)))
+      (= 'loop h) (when (vector? (second form)) (second (second form)))
+      (= 'while h) (second form)
+      :else nil)))
+
+(defn- iteration-bindings
+  "Symbols an iterating form binds to ELEMENTS of what it iterates -- the
+   parameters of its function-literal arguments, and the binding symbols of
+   `doseq`/`for`/`loop`. Each element inherits the collection's derivation."
+  [form]
+  (let [from-fns (mapcat (fn [a]
+                           (when (and (seq? a) (contains? #{'fn 'fn*} (first a)))
+                             (filter symbol? (tree-seq coll? seq
+                                                       (first (filter vector? (rest a)))))))
+                         (rest form))
+        from-binding (when (and (contains? #{'doseq 'for 'loop} (first form))
+                                (vector? (second form)))
+                       (filter symbol? (tree-seq coll? seq (first (second form)))))]
+    (set (concat from-fns from-binding))))
+
+(defn- binds-locals
+  "Locals a form introduces that are derived from parameter-derived values, so
+   a chain like `(let [ys (rest xs)] (map f ys))` still traces to `xs`."
+  [form params locals]
+  (let [h (first form)]
+    (if (and (contains? #{'let 'let* 'loop 'doseq 'for 'when-let 'if-let} h)
+             (vector? (second form)))
+      (let [pairs (partition 2 (second form))]
+        (reduce (fn [acc [b v]]
+                  (if (derived-from-params? v params acc)
+                    (into acc (filter symbol? (tree-seq coll? seq b)))
+                    acc))
+                locals pairs))
+      locals)))
+
+(defn form-degree
+  "The degree of `form` from loops and calls alone, ignoring recursion.
+
+   `degree-of` answers for a called user definition (nil when unknown to the
+   caller); `cat` is the core catalog. Returns
+   {:degree d :evidence s :assumed #{sym...} :log? bool}."
+  [form degree-of cat params]
+  (let [assumed (atom #{})
+        untraced (atom #{})
+        opaque (atom false)
+        evidence (atom nil)
+        note! (fn [d why]
+                (when (and (pos? (degree-rank d)) (nil? @evidence)) (reset! evidence why))
+                d)]
+    (letfn [(walk [x depth locals]
+              (cond
+                (and (seq? x) (symbol? (first x)))
+                (let [h (first x)
+                      src (loop-source x)
+                      ;; A loop counts ONLY if what it iterates traces back to
+                      ;; a parameter. Otherwise it is constant in the input.
+                      traced? (and src (derived-from-params? src params locals))
+                      ;; A loop over the RESULT OF A CALL whose degree nobody
+                      ;; knows is not constant -- it is unknown. Silently
+                      ;; treating it as constant is the same error as
+                      ;; assuming an unreadable recursion terminates quickly,
+                      ;; and it is how a called closure would slip through.
+                      opaque-source? (and src (seq? src) (symbol? (first src))
+                                          (not traced?)
+                                          (nil? (degree-of (first src)))
+                                          (nil? (get cat (first src))))
+                      iterates? (and (loop-heads h) (not (literal-bound? x)) traced?)
+                      _ (when (and (loop-heads h) (not (literal-bound? x)) (not traced?))
+                          (swap! untraced conj h))
+                      _ (when (and (loop-heads h) (not (literal-bound? x)) opaque-source?)
+                          (reset! opaque true))
+                      ;; An element bound by a loop over a parameter-derived
+                      ;; collection is itself parameter-derived: the `x` in
+                      ;; (map (fn [x] ...) xs) carries xs's size into the body.
+                      locals (let [l (binds-locals x params locals)]
+                               (if iterates? (into l (iteration-bindings x)) l))
+                      ;; A loop whose induction variable HALVES is
+                      ;; logarithmic, not linear: (loop [n n] ... (recur
+                      ;; (quot n 2))) runs log n times. Same recognizers as
+                      ;; the recursion rule, because it is the same reading.
+                      halving? (and iterates? (contains? #{'loop 'while} h)
+                                    (= 2 (shrink-of (recur-args x))))
+                      step (if halving? {:log 1} {:poly 1})
+                      here (cond
+                             iterates? (note! (add-degree depth step)
+                                              (str "iterates via " h
+                                                   (if halving? " (halving: logarithmic)" "")))
+                             :else depth)
+                      ;; a called user definition costs its own degree at this depth
+                      ;; A call's cost is in the size of ITS argument. If we
+                      ;; hand it a literal or a global, it is constant in OUR
+                      ;; input -- the same rule as loops, applied to calls.
+                      args-traced? (boolean (some (fn [a] (derived-from-params? a params locals))
+                                                  (rest x)))
+                      callee (when-let [d (degree-of h)]
+                               (when args-traced?
+                                 (note! (add-degree depth d)
+                                        (str "calls " h " (cost " (degree-str d) ")"))))
+                      core (when-let [e (get cat h)]
+                             (when args-traced?
+                               (note! (add-degree depth (:degree e))
+                                      (str "calls " h " (core cost "
+                                           (degree-str (:degree e)) ")"))))
+                      _ (when (and (symbol? h) (nil? (degree-of h)) (nil? (get cat h))
+                                   (not (loop-heads h)) (not (special? h)))
+                          (swap! assumed conj h))
+                      children (reduce (fn [acc y]
+                                         (max-degree acc (walk y (if iterates?
+                                                                   (add-degree depth step)
+                                                                   depth)
+                                                           locals)))
+                                       constant-degree (rest x))]
+                  (reduce max-degree constant-degree
+                          (keep identity [here callee core children])))
+                (coll? x) (reduce (fn [acc y] (max-degree acc (walk y depth locals)))
+                                  constant-degree (seq x))
+                :else constant-degree))
+            (special? [h]
+              (contains? #{'if 'let 'do 'fn 'fn* 'quote 'def 'defn 'defn- 'recur 'when
+                           'when-not 'cond 'case 'try 'catch 'finally 'throw 'ns 'var
+                           'set! 'new '. 'and 'or 'not 'defmacro 'defmethod 'deftest}
+                         h))]
+      (let [d (walk form constant-degree #{})]
+        {:degree (if @opaque :unknown d)
+         :evidence (if @opaque
+                     "iterates the result of a call whose cost is unknown"
+                     @evidence)
+         :assumed @assumed
+         :untraced-loops @untraced}))))
+
+(defn memoized?
+  "Whether the definition is wrapped in `memoize`. A memoized `fib` is linear
+   but reads structurally as two calls on constant-shrunk arguments, i.e. as
+   exponential. The structural bound simply does not apply, so it is marked
+   rather than scored."
+  [form]
+  (boolean (some (fn [x] (and (seq? x) (= 'memoize (first x))))
+                 (tree-seq coll? seq form))))
+
+(defn definition-degree
+  "The degree of one definition: its loop/call cost, and -- when it recurses
+   -- the master-theorem solution for the recurrence its own shape describes.
+
+   Returns {:name :degree :evidence :assumed :recursive? :a :b}, where
+   `:degree` is a structured value ({:poly k}, {:poly-log k}, {:log 1},
+   {:exp c}, :unknown or :memoized), never a stringified keyword."
+  [{:keys [name form]} degree-of cat]
+  (let [params (params-of form)
+        base (form-degree form degree-of cat params)
+        args (call-args name form)
+        a (count args)
+        recursive? (pos? a)
+        b (shrink-of args)
+        f (:degree base)
+        k (cond (:poly f) (:poly f)
+                (:poly-log f) (:poly-log f)
+                (:log f) 0
+                (:exp f) :unknown
+                :else :unknown)
+        rec-degree (when recursive? (solve-recurrence a b k))
+        memo? (memoized? form)
+        ackermann? (and recursive? (nested-self-call? name form))
+        total (cond
+                memo? :memoized
+                ackermann? :beyond-exp
+                recursive? (max-degree f rec-degree)
+                :else f)]
+    {:name name
+     :degree total
+     :recursive? recursive?
+     :a (when recursive? a)
+     :b (when recursive? b)
+     :assumed (:assumed base)
+     :untraced-loops (:untraced-loops base)
+     :params params
+     :evidence
+     (cond
+       memo? "memoized: the structural bound does not apply"
+       ackermann?
+       (str "a recursive call appears in argument position of another "
+            "(the Ackermann shape): beyond every exponential, and not modelled further")
+       (and recursive? (= :unknown b))
+       (str a " recursive call(s) on an argument whose shrink could not be read"
+            " -- unknown, not constant")
+       recursive?
+       (str a " recursive call(s), argument "
+            (if (= b 2) "halved" "shrunk by a constant")
+            ", non-recursive work " (degree-str f)
+            " -> T(n) = " a "T(n/" b ") + n^" k " = " (degree-str rec-degree))
+       (:evidence base) (:evidence base)
+       :else "no loops, recursion or superlinear calls")}))
+
+(defn superlinear?
+  "Whether a degree counts AGAINST the code: polynomial of degree 2 or more,
+   or any exponential.
+
+   n^1.585 (Karatsuba) does NOT count; n^2.807 (Strassen) does. Neither does
+   n log n -- divide-and-conquer is the good outcome, and a metric that
+   penalized mergesort would be telling people the wrong thing. `:unknown`
+   and `:memoized` are their own reported buckets, never assumed guilty and
+   never assumed innocent."
+  [d]
+  (boolean (or (= :beyond-exp d)
+               (:exp d)
+               (and (:poly d) (>= (:poly d) 2))
+               (and (:poly-log d) (>= (:poly-log d) 2)))))
+
+(defn cost-share
+  "Mass-weighted share of definitions that are superlinear.
+
+   Weighted by the same `cc * sqrt(sloc)` mass erosion uses, so the two terms
+   agree about which functions are heavy: a quadratic one-liner is not the
+   same finding as a quadratic 300-line function. A share, so it is bounded,
+   monotone and deterministic from the source at a commit."
+  [entries]
+  (let [total (reduce + 0.0 (map :mass entries))]
+    (when (pos? total)
+      (/ (reduce + 0.0 (map :mass (filter (fn [e] (superlinear? (:degree e))) entries)))
+         total))))

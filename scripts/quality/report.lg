@@ -1,0 +1,285 @@
+(ns quality.report
+  "Rendering only: a measured result map in, deterministic text or EDN out.
+
+   `text` and `edn` are pure functions of the map `quality/measure` builds;
+   they compute nothing and read nothing. Ordering is fixed by the
+   producer (files by path, issues by impact, top-complexity by cc), so
+   two runs over the same inputs render byte-identical output."
+  (:require
+   [clojure.string :as str]
+   [quality.score :as score]))
+
+(defn- n1 [v] (if (nil? v) "-" (format "%.1f" (double v))))
+(defn- n2 [v] (if (nil? v) "-" (format "%.2f" (double v))))
+(defn- n3 [v] (if (nil? v) "-" (format "%.3f" (double v))))
+
+(defn- pad [s w]
+  (let [s (str s)]
+    (if (>= (count s) w) s (str s (apply str (repeat (- w (count s)) " "))))))
+
+(defn- lpad [s w]
+  (let [s (str s)]
+    (if (>= (count s) w) s (str (apply str (repeat (- w (count s)) " ")) s))))
+
+(defn- measure-str
+  "An issue's measure: integers verbatim, fractions to two decimals."
+  [v]
+  (if (integer? v) (str v) (n2 v)))
+
+(defn header
+  "The provenance block: what this report was measured against. Every
+   external input is pinned -- the commit, the resolved git range, the
+   coverprofile's content hash, the CI duration's source -- and the two
+   caveat lines say how duplication share and coverage are derived."
+  [{:keys [inputs omitted]}]
+  (let [{:keys [commit commit-source git-range go-cover ci paths source-roots corpus]} inputs]
+    [(str "commit " (if (str/blank? commit) "unknown" commit)
+          (if commit-source (str " (" commit-source ")") ""))
+     (str "git-range " (:since git-range) " "
+          (if (str/blank? (:from git-range)) "(root)" (:from git-range))
+          ".." (:to git-range))
+     (str "go-cover " (if go-cover
+                        (str (:path go-cover) " sha256=" (:sha256 go-cover))
+                        "none"))
+     (str "ci " (if ci (str (:source ci) " " (:seconds ci) "s") "none"))
+     (str "paths " (str/join " " paths))
+     (str "source-roots " (if (seq source-roots) (str/join " " source-roots) "none"))
+     (str "corpus " (:files corpus) " files tracked-by " (:tracked-by corpus)
+          ", " (:generated corpus) " generated files excluded"
+          (if (pos? (:generated corpus))
+            (str " (" (str/join ", " (take 3 (:generated-paths corpus)))
+                 (if (> (:generated corpus) 3) ", ..." "") ")")
+            ""))
+     (str "omitted " (pr-str omitted))
+     (str "dup-share by lines: regions are matched on TOKENS and reported on "
+          "FORM boundaries -- s-expressions for .lg, statements and declarations "
+          "for Go -- so a reported region is a thing you can lift out; then "
+          "unioned per file")
+     "defects: renames credited to target via -M"
+     (str "coverage lg=static go=" (if go-cover "dynamic" "none"))
+     (str "debt: every number scored is a share in [0, 1] -- 0 is perfect, "
+          "1 is worst, lower is better. Shares and rational squashes only: "
+          "bounded, but nothing saturates, so improving the worst code always "
+          "moves the number")
+     (str "caveat: static coverage is an upper bound "
+          "(dynamic dispatch followed only through literal symbols)")
+     (str "caveat: cost is the structural complexity of the ALGORITHM AS "
+          "WRITTEN, never the hardness of the PROBLEM -- an exponential finding "
+          "means the code branches exponentially, not that it must, and the tool "
+          "cannot tell brute force over a hard problem from a naive fib; nothing "
+          "here is a lower bound")
+     (str "ci wall time is REPORTED above, never SCORED: a term that moves with "
+          "machine load would make the composite non-deterministic for the same "
+          "tree")]))
+
+(defn- debt-block [{total :debt :keys [terms coverage testing erosion verbosity dead
+                                       comment-debt lint cost]}]
+  ;; Display order only (names, not numbers); any future term in
+  ;; `thresholds` that isn't listed here still prints, after these.
+  (let [preferred [:erosion :uncovered :verbosity :comment-debt :dead :defects
+                   :testing :efficiency]
+        known (set (map first (:weights score/thresholds)))
+        order (concat (filter known preferred)
+                      (sort (remove (set preferred) known)))]
+    (concat
+      [(str "debt " (n3 total) "   (0 is perfect, 1 is worst)")]
+      (for [k order]
+        (str "  " (pad (name k) 12) (lpad (n3 (terms k)) 7)
+             "  weight " (n2 (get (:weights score/thresholds) k))))
+      [(str "  coverage lg=" (n1 (get-in coverage [:lg :percent])) "% static"
+            " go=" (if (:go coverage) (str (n1 (get-in coverage [:go :percent])) "% dynamic") "none"))
+       (str "  erosion " (n3 (:value erosion))
+         " (" (:high erosion) " of " (:callables erosion)
+         " callables over cc " (get-in score/thresholds [:erosion :cc]) ")"
+         "  lg=" (n3 (:lg erosion))
+         " go=" (if (= "unavailable" (:go-source erosion))
+                  "UNAVAILABLE"
+                  (n3 (:go erosion))))
+       (str "  dead " (n3 (:value dead))
+         " (" (:dead-definitions dead) " of "
+         (:definitions dead) " definitions, "
+         (:dead-sloc dead) " sloc; "
+         (:test-only dead) " reachable only from tests)"
+         " -- OURS, not the paper's; an UPPER BOUND")
+       (str "  comment-debt " (n3 (:value comment-debt))
+         " (" (:flagged comment-debt) " flagged of "
+         (:total-comment-lines comment-debt) " comment lines)"
+         " -- OURS: comment slop on its own denominator, where the paper's"
+         " LOC divisor hides it")
+       (str "  lint " (if (:flagged-code-lines lint)
+                        (str (:findings lint) " findings, "
+                             (:flagged-code-lines lint) " code lines and "
+                             (:flagged-comment-lines lint) " comment lines flagged"
+                             (if (pos? (:unscored lint))
+                               (str ", " (:unscored lint) " unscored (divider/devlog)") ""))
+                        (str "UNAVAILABLE (" (:error lint) ") -- verbosity counts CLONE LINES ONLY"
+                             " and comment-debt is omitted")))
+       (str "  cost " (n3 (:value cost))
+           " (" (:superlinear cost) " of " (:definitions cost)
+           " definitions quadratic or worse by mass; " (:unknown cost) " unknown)"
+           " -- STATIC UPPER BOUND: structure, not semantics"
+           (if (seq (:assumed cost))
+             (str "; " (count (:assumed cost)) " uncatalogued calls assumed constant")
+             ""))
+      (str "  verbosity " (n3 (:value verbosity))
+         " (" (:dup-lines verbosity) " duplicated of "
+         (:loc verbosity) " lines)"
+         " -- LOWER BOUND on the paper's metric")
+       (str "  paper baselines: human corpus erosion 0.34 verbosity 0.19;"
+            " agent-generated erosion 0.68 verbosity 0.44")
+       (str "  testing density=" (n1 (:density testing)) "/KLOC"
+         " ratio=" (n2 (:ratio testing))
+         " assertions=" (:assertions testing))])))
+
+(defn- file-table
+  "The per-file table, in the order the producer fixed: debt DESCENDING
+   (worst first), ties broken by path.
+
+   Every scored column is a SHARE in [0, 1] -- 0 perfect, 1 worst -- so all
+   of them run the same direction and a row, or the same row across two runs,
+   reads without the reader having to remember which metrics invert. `mi(raw)`
+   is the exception and is labelled: it is the raw, unclamped maintainability
+   index, kept as a diagnostic after leaving the composite, where higher is
+   better. The raw measurements live where they are pointers
+   rather than scores: the issues list and the top-complexity table (and,
+   unchanged, the EDN). `cc`/`mi` read `-` for Go, whose complexity and
+   maintainability are out of scope."
+  [files]
+  (concat
+    ["" "files (all columns are shares in [0, 1]: 0 is perfect, lower is better)"
+     (str (pad "path" 56) (lpad "debt" 8) (lpad "erosion" 9) (lpad "verbos" 8)
+          (lpad "defects" 9) (lpad "dead" 7) (lpad "mi(raw)" 9))]
+    (for [f files]
+      (str (pad (:path f) 56) (lpad (n3 (:debt f)) 8) (lpad (n3 (:erosion f)) 9)
+           (lpad (n3 (:verbosity f)) 8) (lpad (n3 (:defects f)) 9)
+           (lpad (n3 (:dead f)) 7) (lpad (n1 (:mi-raw f)) 9)))))
+
+(defn- clone-class-lines
+  "Clone CLASSES, not pairs: one block in five files is a single extraction
+   opportunity, and the pair view prints ten lines for it. Ranked by total
+   duplicated lines, which is the size of the prize."
+  [classes]
+  (if (empty? classes)
+    []
+    (concat
+      ["" (str "clone classes " (count classes)
+               " (one entry per extraction opportunity, worst first)")
+       (str (pad "id" 12) (lpad "members" 8) (lpad "lines" 7) (lpad "sim" 6) "  regions")]
+      (mapcat (fn [c]
+                (cons (str (pad (:id c) 12) (lpad (:member-count c) 8)
+                           (lpad (:total-lines c) 7) (lpad (n2 (:min-similarity c)) 6)
+                           (if (:over-merged? c) "  POSSIBLY OVER-MERGED" ""))
+                      (map (fn [m] (str "              " (:path m) ":" (:start m) "-" (:end m)))
+                           (:members c))))
+              classes))))
+
+(defn- issue-at
+  "`path:line`, or `path:start-end` for an issue that spans lines (a
+   duplicated region), so the reader sees how much code it covers."
+  [i]
+  (str (:path i) ":" (:line i)
+       (if (and (:end i) (not= (:end i) (:line i))) (str "-" (:end i)) "")))
+
+(defn- issue-lines [issues]
+  (concat
+    ["" (str "issues " (count issues) " (count; lower is better, same direction as debt, "
+             "ranked by debt impact)")]
+    (for [i issues]
+      (str (pad (issue-at i) 56) (pad (name (:kind i)) 15)
+           (pad (measure-str (:measure i)) 8) (:hint i)))))
+
+(defn- best-target-lines
+  "The section someone will actually read: callables that are both high-mass
+   and duplicated, so one extraction removes complexity and duplication at
+   once."
+  [targets]
+  (if (empty? targets)
+    []
+    (concat
+      ["" (str "best targets " (count targets)
+               " (high mass AND duplicated -- extracting one removes both)")
+       (str (pad "path:line" 52) (pad "name" 24) (lpad "mass" 8) (lpad "share" 8)
+            (lpad "cc" 5) (lpad "sloc" 6) "  id")]
+      (for [t targets]
+        (str (pad (str (:path t) ":" (:line t)) 52) (pad (:name t) 24)
+             (lpad (n1 (:mass t)) 8) (lpad (n3 (:mass-share t)) 8)
+             (lpad (:cc t) 5) (lpad (:sloc t) 6) "  " (:id t))))))
+
+(defn- top-lines
+  "The most complex definitions. Unlike the files table these are RAW
+   measurements, where higher means worse -- said so in the section header
+   so the two tables are never read the same way."
+  [top]
+  (concat
+    ["" (str "top complexity " (count top)
+             " (raw measurements, ranked by MASS = cc * sqrt(sloc); higher is worse)")
+     (str (pad "path:line" 50) (pad "name" 24) (lpad "mass" 8) (lpad "share" 7)
+          (lpad "cc" 5) (lpad "sloc" 6) (lpad "depth" 6) "  id")]
+    (for [t top]
+      (str (pad (str (:path t) ":" (:line t)) 50) (pad (:name t) 24)
+           (lpad (n1 (:mass t)) 8) (lpad (n3 (:mass-share t)) 7)
+           (lpad (:cc t) 5) (lpad (:sloc t) 6)
+           (lpad (or (:depth t) "-") 6) "  " (:id t)
+           (if (:duplicated? t) "  DUP" "")))))
+
+(defn text
+  "The full text report: header, debt block, file table (debt descending),
+   ranked issues, then the most complex definitions."
+  [result]
+  (str (str/join "\n"
+                 (concat (header result)
+                         ;; Best targets lead: the section someone acts on.
+                         (best-target-lines (:best-targets result))
+                         [""]
+                         (debt-block result)
+                         (file-table (:files result))
+                         (clone-class-lines (:clone-classes result))
+                         (issue-lines (:issues result))
+                         (top-lines (:top-complexity result))))
+       "\n"))
+
+(defn edn
+  "The same data for machines: the whole result map as one readable form."
+  [result]
+  (str (pr-str result) "\n"))
+
+(defn- signed
+  "A delta with an explicit sign, so the direction is never ambiguous.
+   POSITIVE MEANS WORSE: every term is lower-is-better."
+  [v]
+  (cond (nil? v) "-"
+        (> v 0) (str "+" (format "%.3f" (double v)))
+        :else (format "%.3f" (double v))))
+
+(defn delta-text
+  "The PR surface: every term and the composite at base, at head, and the
+   signed delta; then the files that moved most; then the definitions that
+   crossed the complexity threshold, which are what actually move erosion.
+
+   A positive delta means the change made things WORSE."
+  [d]
+  (str
+    (str/join
+      "\n"
+      (concat
+        [(str "base " (get-in d [:base :rev]))
+         (str "head " (get-in d [:head :rev]))
+         "positive delta means WORSE (every term is lower-is-better)"
+         ""
+         (str (pad "term" 14) (lpad "base" 8) (lpad "head" 8) (lpad "delta" 9))
+         (str (pad "DEBT" 14) (lpad (n3 (get-in d [:base :debt])) 8)
+              (lpad (n3 (get-in d [:head :debt])) 8)
+              (lpad (signed (:debt-delta d)) 9))]
+        (for [t (:terms d)]
+          (str (pad (name (:term t)) 14) (lpad (n3 (:base t)) 8)
+               (lpad (n3 (:head t)) 8) (lpad (signed (:delta t)) 9)))
+        ["" (str "files moved " (count (:files d)) " (worst first)")]
+        (for [f (take 20 (:files d))]
+          (str (pad (:path f) 56) (lpad (n3 (:base f)) 8) (lpad (n3 (:head f)) 8)
+               (lpad (signed (:delta f)) 9) "  " (name (:status f))))
+        ["" (str "complexity threshold crossings " (count (:crossings d)))]
+        (for [c (:crossings d)]
+          (str (pad (str (:path c) " " (:name c)) 70)
+               (if (= :rose (:direction c)) "rose to " "fell to ")
+               (:cc c) (if (:was c) (str " from " (:was c)) "")))))
+    "\n"))

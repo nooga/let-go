@@ -1,0 +1,97 @@
+(ns test.quality-terms-test
+  (:require
+   [quality.terms :as t]
+   [test :refer :all]))
+
+(defn- c [cc sloc] {:cc cc :sloc sloc})
+
+(deftest mass-is-cc-times-root-sloc
+  (is (= 20.0 (t/mass (c 5 16))))
+  (is (= 3.0 (t/mass (c 3 1))))
+  ;; size matters, but sub-linearly: 4x the lines is 2x the mass
+  (is (= 2.0 (/ (t/mass (c 5 64)) (t/mass (c 5 16))))))
+
+(deftest erosion-splits-strictly-above-ten
+  ;; Exactly 10 is NOT high-complexity; 11 is.
+  (is (= 0.0 (t/erosion [(c 10 100)])))
+  (is (= 1.0 (t/erosion [(c 11 100)])))
+  ;; masses are cc*10 here, so 11+11+12 = 34 of 44 is eroded
+  (is (< 0.772 (t/erosion [(c 11 100) (c 11 100) (c 10 100) (c 12 100)]) 0.773)))
+
+(deftest erosion-is-a-share-of-mass-not-a-count
+  ;; One big complex function against many small simple ones: the share is
+  ;; mass-weighted, so 30*sqrt(400) = 600 against 10 * (5*sqrt(4)) = 100.
+  (let [e (t/erosion (cons (c 30 400) (repeat 10 (c 5 4))))]
+    (is (< 0.856 e 0.858))))
+
+(deftest erosion-is-strictly-monotone-where-the-old-model-was-flat
+  ;; The whole point of the shape change: under the clamped linear, CC 74 and
+  ;; CC 40 both saturated and improving the worst function registered as
+  ;; nothing. As a share they must differ, with 74 higher.
+  (let [with-74 (t/erosion [(c 74 100) (c 3 100) (c 3 100)])
+        with-40 (t/erosion [(c 40 100) (c 3 100) (c 3 100)])]
+    (is (> with-74 with-40))
+    (is (< with-74 1.0))))
+
+(deftest erosion-is-bounded-and-omitted-when-empty
+  (is (nil? (t/erosion [])))
+  (is (nil? (t/erosion [(c 0 0)])))
+  (is (<= 0.0 (t/erosion [(c 50 50) (c 1 1)]) 1.0)))
+
+(deftest verbosity-is-flagged-and-duplicated-lines-over-loc
+  (is (= 0.0 (t/verbosity 0 0 100)))
+  (is (= 0.25 (t/verbosity 25 0 100)))
+  (is (= 1.0 (t/verbosity 100 0 100)))
+  ;; never exceeds 1 even if the numerator is overcounted
+  (is (= 1.0 (t/verbosity 150 0 100)))
+  (is (nil? (t/verbosity 10 0 0)))
+  (is (nil? (t/verbosity 10 0 nil))))
+
+(deftest squash-is-bounded-monotone-and-never-saturates
+  (is (= 0.0 (t/squash 0 30)))
+  ;; calibrated so the `bad` threshold lands exactly on 0.5
+  (is (= 0.5 (t/squash 30 30)))
+  (is (< 0.5 (t/squash 60 30) 1.0))
+  ;; strictly monotone far past `bad`, where a clamp would have flattened
+  (is (< (t/squash 100 30) (t/squash 1000 30)))
+  (is (< (t/squash 1000 30) 1.0)))
+
+(deftest shortfall-squash-is-zero-at-or-above-good
+  ;; assertion density: good 40, so 40 and 100 are both debt-free
+  (is (= 0.0 (t/shortfall-squash 40 40 36)))
+  (is (= 0.0 (t/shortfall-squash 100 40 36)))
+  ;; at `bad` (4), the shortfall is 36, which is k, so exactly 0.5
+  (is (= 0.5 (t/shortfall-squash 4 40 36)))
+  (is (< 0.5 (t/shortfall-squash 0 40 36) 1.0)))
+
+(deftest dead-share-is-sloc-weighted-not-count-weighted
+  (let [all [{:sloc 200} {:sloc 2} {:sloc 98}]]
+    ;; one dead 200-line definition dwarfs one dead 2-line definition
+    (is (= 0.67 (/ (math/round (* 100 (t/dead-share [{:sloc 200}] all))) 100.0)))
+    (is (= 0.01 (/ (math/round (* 100 (t/dead-share [{:sloc 2}] all))) 100.0)))
+    (is (= 0.0 (t/dead-share [] all)))
+    (is (= 1.0 (t/dead-share all all)))
+    (is (nil? (t/dead-share [] [])))))
+
+(deftest verbosity-unions-clone-and-flagged-lines
+  ;; The paper's numerator is a UNION: a line that is both cloned and flagged
+  ;; is one bad line, not two. (The caller de-duplicates by counting distinct
+  ;; lines per set; these are the already-counted totals.)
+  (is (= 0.25 (t/verbosity 20 5 100)))
+  ;; flagged nil means the linter could not run: clone lines only, and the
+  ;; report must say the flagged half was omitted
+  (is (= 0.20 (t/verbosity 20 nil 100)))
+  (is (= 0.0 (t/verbosity 0 0 100)))
+  (is (= 1.0 (t/verbosity 90 90 100)))
+  (is (nil? (t/verbosity 10 10 0))))
+
+(deftest comment-debt-divides-by-comment-lines-not-loc
+  ;; The whole point: 2794 flagged of 23778 comment lines is 0.118, where the
+  ;; same numerator over 322983 LOC would be 0.0087 and invisible.
+  (is (< 0.117 (t/comment-debt 2794 23778) 0.118))
+  (is (= 0.0 (t/comment-debt 0 1000)))
+  (is (= 1.0 (t/comment-debt 1000 1000)))
+  ;; bounded even if the numerator is over-counted
+  (is (= 1.0 (t/comment-debt 1500 1000)))
+  ;; a corpus with no comments has no comment debt to report
+  (is (nil? (t/comment-debt 0 0))))

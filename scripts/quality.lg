@@ -1,0 +1,1055 @@
+(ns quality
+  "Code-quality report CLI.
+
+   Usage:
+     ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]
+                             [--ci-run ID | --ci-seconds N]
+                             [--edn PATH] [--top N] [--source-root PATH]
+                             [paths...]
+
+   `--source-root PATH` measures a tree as SOURCE even when it sits under
+   `test/` (only `*_test.lg`/`*_test.go` inside it stay tests) -- needed to
+   point the tool at a fixture corpus.
+
+   Measures `.lg` and `.go` files under `paths` (default: `default-paths`,
+   per language), charges them with `quality.score` (DEBT: 0 is perfect,
+   lower is better, unbounded above), and prints a deterministic report.
+
+   Only VCS-TRACKED files are measured, so a scratch file in the working
+   copy cannot move the score. Two runs produce byte-identical output for
+   the same commit AND the same working copy, given the same git range,
+   coverprofile and CI value: the corpus is the tracked file set, files are
+   listed by debt descending (ties by path), issues by debt impact, and
+   every external input is pinned in the header.
+
+   SUBPROCESSES AND A RUNTIME GAP. This tool spawns children -- the Go
+   analysis tool (twice), the linter, and git/jj -- and PR-delta mode runs a
+   second full scoring pass. Every call is synchronous, so nothing leaks while
+   the process lives. But `os/sh` is `exec.Command` plus `cmd.Run()` with no
+   `SysProcAttr.Setpgid`, no `CommandContext` and no `WaitDelay`, so a child's
+   lifetime is NOT tied to its parent's: kill the parent and the child is
+   re-parented to init and keeps running. Verified directly -- SIGKILL the
+   parent, and the child shows ppid 1.
+
+   That is how 46 orphaned test binaries outlived the bug that spawned them
+   and saturated the machine for 85 minutes. It cannot be closed from .lg; it
+   needs `os/sh` to place children in a process group and signal that group,
+   or to accept a cancellation context. What IS closed here is the cause: the
+   interpreter is resolved to a real `lg` binary rather than argv[0], so the
+   tool can no longer recursively spawn its own harness.
+
+   Design: docs/superpowers/specs/2026-09-11-code-quality-score-design.md"
+  (:require
+   [clojure.string :as str]
+   [quality.dup :as dup]
+   [quality.cost :as cost]
+   [quality.forms :as forms]
+   [quality.graph :as graph]
+   [quality.inputs :as inputs]
+   [quality.lex :as lex]
+   [quality.metrics :as metrics]
+   [quality.report :as report]
+   [quality.score :as score]
+   [quality.terms :as terms]))
+
+(def default-paths
+  "Default roots PER LANGUAGE. `.lg` lives in the core stdlib, the scripts
+   tree and the test suite; Go lives under pkg/ and cmd/. Keeping them apart
+   stops a `pkg` Go root from dragging in `.lg` files outside
+   `pkg/rt/core` (lowered trees, gogen fixtures). Positional paths, when
+   given, apply to both languages."
+  {:lg ["pkg/rt/core" "scripts" "test"]
+   :go ["pkg" "cmd"]})
+
+;; Paths that would only add noise: the vendored Clojure suite, generated
+;; Go, the lowered-core tree, and SIBLING jj workspaces. The last one is
+;; judged on the repo-relative path, so a run from inside
+;; `.workspaces/<name>` (where the checkout root IS that workspace and paths
+;; read `pkg/...`) measures itself instead of skipping everything.
+(def ^:private skip-substrings
+  ["test/clojure-test-suite/" "core_go_lowered/" ".workspaces/"])
+
+(def ^:private generated-marker
+  ;; The Go convention (golang.org/s/generatedcode), which this repo also uses
+  ;; for generated .lg. Matched against the file's HEAD only: a generator's
+  ;; own source contains the marker inside its emit template and is
+  ;; hand-written code that must still be measured.
+  #"(?i)code generated .*do not edit")
+
+(defn generated?
+  "Whether `text` declares itself machine-generated in its first few lines.
+
+   Generated code is excluded from the corpus because measuring it says
+   nothing about the code anyone writes: its complexity is its generator's,
+   and it inflates defect density every time the generator is re-run. It is
+   also pure cost to tokenize."
+  [text]
+  (boolean (some (fn [l]
+                   (let [t (str/trim l)]
+                     ;; The marker only counts inside a leading COMMENT. A
+                     ;; generator's own source carries the same string inside
+                     ;; its emit template, on a line of real code, and that
+                     ;; file is hand-written and must still be measured.
+                     (and (or (str/starts-with? t "//") (str/starts-with? t ";")
+                              (str/starts-with? t "*") (str/starts-with? t "/*"))
+                          (re-find generated-marker t))))
+                 (take 5 (forms/lines text)))))
+
+(defn- skip? [path]
+  (or (str/ends-with? path "_generated.go")
+      (some #(str/includes? path %) skip-substrings)))
+
+(defn- lang-of [path] (if (str/ends-with? path ".go") :go :lg))
+
+(defn- checkout-root?
+  "Whether `dir` is the root of the working copy: it holds a `.jj` or a
+   `.git` entry."
+  [dir]
+  (boolean (or (os/stat (str dir "/.jj")) (os/stat (str dir "/.git")))))
+
+(defn checkout-root
+  "Absolute path of the nearest ancestor of the cwd holding a `.jj`/`.git`
+   marker, or the cwd when there is none."
+  []
+  (let [parts (vec (remove str/blank? (str/split (os/cwd) #"/")))]
+    (loop [n (count parts)]
+      (let [dir (str "/" (str/join "/" (subvec parts 0 n)))]
+        (cond
+          (checkout-root? dir) dir
+          (zero? n) (os/cwd)
+          :else (recur (dec n)))))))
+
+(defn repo-prefix
+  "The path from the root of THIS working copy to the process cwd, with a
+   trailing slash (\"\" at the root). Every discovered path is prefixed with
+   it so classification and the `fix-counts` lookup -- which is keyed by
+   root-relative VCS paths -- mean the same thing no matter which directory
+   the tool was started from.
+
+   Derived from `checkout-root` rather than `git rev-parse --show-prefix`:
+   inside a jj workspace, git reports the PRIMARY checkout as its toplevel,
+   so `--show-prefix` would return `.workspaces/<name>/...` while the commit
+   history it is matched against still speaks plain `pkg/...` paths."
+  []
+  (let [root (checkout-root)
+        cwd (os/cwd)]
+    (cond
+      (= root cwd) ""
+      (str/starts-with? cwd (str root "/")) (str (subs cwd (inc (count root))) "/")
+      :else "")))
+
+(defn repo-path
+  "A discovered path in repo-relative form: an absolute path inside this
+   checkout is relativized, a cwd-relative one gets the cwd prefix, and a
+   path outside the checkout is left as it is."
+  [root prefix p]
+  (cond
+    (str/starts-with? p (str root "/")) (subs p (inc (count root)))
+    (str/starts-with? p "/") p
+    :else (str prefix p)))
+
+(defn walk
+  "Every file under `root` (a file or a directory) whose language is in
+   `langs`, recursively and in sorted order, as CWD-relative paths (what
+   `slurp` needs). `root` and `prefix` are used only to judge the skip list
+   on the repo-relative form of each path."
+  [root langs checkout prefix]
+  (let [st (os/stat root)]
+    (cond
+      (nil? st) []
+      (:dir? st) (vec (mapcat #(walk (str root "/" %) langs checkout prefix)
+                              (sort (os/ls root))))
+      (and (or (str/ends-with? root ".lg") (str/ends-with? root ".go"))
+           (contains? langs (lang-of root))
+           (not (skip? (repo-path checkout prefix root))))
+      [root]
+      :else [])))
+
+(defn tracked-files
+  "{:paths #{cwd-relative path...} :source \"jj\"|\"git\"|\"unfiltered\"}
+   -- the VCS-tracked file set, so untracked scratch files in the working
+   copy cannot move the score.
+
+   `jj file list` is used when the checkout root has a `.jj` marker: inside
+   a jj workspace the git index tracks the PRIMARY checkout, so
+   `git ls-files` there returns nothing at all. Both commands print paths
+   relative to the cwd, which is the same space `walk` yields, so no
+   rewriting is needed. If neither produces a listing the corpus is left
+   unfiltered and the header says so, rather than silently measuring
+   nothing."
+  [checkout]
+  (let [jj? (boolean (os/stat (str checkout "/.jj")))
+        run (fn [& args]
+              (let [r (apply os/sh args)]
+                (when (zero? (:exit r))
+                  (let [ls (remove str/blank? (forms/lines (:out r)))]
+                    (when (seq ls) (set ls))))))]
+    (or (when jj? (when-let [ps (run "jj" "file" "list")] {:paths ps :source "jj"}))
+        (when-let [ps (run "git" "ls-files")] {:paths ps :source "git"})
+        {:paths nil :source "unfiltered"})))
+
+(defn discover
+  "The measured corpus: CWD-relative paths of the tracked `.lg`/`.go` files
+   under `opts`' positional paths, or under `default-paths` per language when
+   none were given. Throws when nothing is found -- an empty corpus would
+   otherwise score a meaningless 100."
+  [opts checkout prefix tracked]
+  (let [given (:paths opts)
+        roots (if (seq given)
+                [[#{:lg :go} given]]
+                [[#{:lg} (:lg default-paths)] [#{:go} (:go default-paths)]])
+        found (vec (sort (distinct (mapcat (fn [[langs rs]]
+                                             (mapcat #(walk % langs checkout prefix) rs))
+                                           roots))))
+        kept (if tracked (vec (filter tracked found)) found)]
+    (when (empty? kept)
+      (throw (ex-info (str "no source files under "
+                           (str/join " " (if (seq given) given
+                                             (concat (:lg default-paths) (:go default-paths))))
+                           (if (and tracked (seq found))
+                             " (found untracked files only)" ""))
+                      {:paths given :found (count found)})))
+    kept))
+
+(defn- named-test? [path]
+  (or (str/ends-with? path "_test.lg") (str/ends-with? path "_test.go")))
+
+(defn test-file?
+  "Whether a repo-root-relative path is a test file: anything under a
+   `test/` directory plus `*_test.lg` and `*_test.go` anywhere. Test LOC is
+   the numerator of the test-to-code ratio and is excluded from source LOC.
+
+   Under a `--source-root` (`source-roots`, repo-relative prefixes) only the
+   name patterns apply, so a tree that happens to live under `test/` -- the
+   tool's own fixture corpus, say -- can still be measured as source."
+  ([path] (test-file? path []))
+  ([path source-roots]
+   (if (some (fn [r] (str/starts-with? path r)) source-roots)
+     (named-test? path)
+     (or (named-test? path)
+         (str/starts-with? path "test/")
+         (str/includes? path "/test/")))))
+
+(defn go-loc
+  "Go LOC = the number of distinct lines carrying at least one token --
+   i.e. non-blank, non-comment lines, since `quality.lex` drops comments."
+  [tokens]
+  (count (distinct (map :line tokens))))
+
+(defn lg-assertions
+  "`is` forms plus `are` rows under `deftest` in one `.lg` text. An `are`
+   row is `(count args) / (count argv)` per the `(are [argv] expr args...)`
+   shape; a malformed `are` with an empty binding vector counts as one."
+  [text]
+  (letfn [(walk-form [x]
+            (cond
+              (and (seq? x) (= 'is (first x))) 1
+              (and (seq? x) (= 'are (first x)) (vector? (second x)))
+              (let [argv (second x)
+                    args (count (nnext x))]
+                (if (pos? (count argv)) (quot args (count argv)) 1))
+              (coll? x) (reduce + 0 (map walk-form (seq x)))
+              :else 0))]
+    (reduce + 0 (map (fn [seg]
+                       (let [form (forms/read-segment seg)]
+                         (if (and (seq? form) (= 'deftest (first form)))
+                           (walk-form form)
+                           0)))
+                     (forms/segments text)))))
+
+(def ^:private go-assertion-re #"t\.(Error|Fatal|Errorf|Fatalf)\(|assert\.|require\.")
+
+(defn go-assertions [text] (count (re-seq go-assertion-re text)))
+
+(defn- sha256
+  "The content hash of a file, or \"unknown\" when `shasum` is unavailable."
+  [path]
+  (let [r (os/sh "shasum" "-a" "256" path)]
+    (if (zero? (:exit r)) (first (str/split (str/trim (:out r)) #"\s+")) "unknown")))
+
+(def ^:private timings (atom []))
+
+(defn- phase
+  "Run `f`, recording how long it took under `label`. Timing is measurement,
+   not output: it is printed only under --timings, so the report itself stays
+   byte-identical whether or not the run was being profiled."
+  [label f]
+  (let [t0 (System/nanoTime)
+        v (f)]
+    (swap! timings conj [label (/ (- (System/nanoTime) t0) 1e9)])
+    v))
+
+(def comment-kinds
+  "Lint kinds that flag COMMENT lines. Everything else the linter reports is
+   a code-verbosity kind: the code-rule catalog is data that grows, so the
+   fixed set is the comment side and code is the complement.
+
+   `:comment-divider` and `:devlog-comment` are excluded from BOTH metrics --
+   the first is cosmetic and the second is an admitted phrase heuristic, and
+   the linter itself refuses to gate on it. They stay visible in the lint
+   report; they just do not score."
+  {:scored #{:commented-out-code :restatement :duplicated-comment
+             :comment-density-outlier :comment-churn}
+   :unscored #{:comment-divider :devlog-comment}})
+
+(defn- flagged-lines
+  "{path #{line...}} from lint findings, counting each flagged line ONCE
+   however many rules hit it. `pred` selects the kinds to count."
+  [findings pred]
+  (reduce (fn [m f]
+            (if (pred (:kind f))
+              (update m (:file f) (fnil into #{})
+                      (range (:line f) (inc (or (:end f) (:line f)))))
+              m))
+          {} findings))
+
+(defn lint-findings
+  "Lint findings for `paths`, as {:findings [...] :source s}, or
+   {:source \"unavailable\" :error e :findings nil} when the linter cannot run.
+
+   A SOFT dependency, deliberately. If lint is missing or fails, the flagged
+   half of verbosity is OMITTED and the report says so -- because silently
+   scoring a smaller numerator would look exactly like the codebase getting
+   better, which is the worst way for a measurement tool to be wrong.
+
+   `QUALITY_LINT` overrides the script path; otherwise `scripts/lint.lg`
+   under the checkout is used, run by this same `lg` binary."
+  [checkout paths]
+  (if (empty? paths)
+    {:findings [] :source "none"}
+    (let [script (let [e (os/getenv "QUALITY_LINT")]
+                   (if (str/blank? e) (str checkout "/scripts/lint.lg") e))
+          ;; The interpreter must be a REAL lg binary. `(first os/args)` is
+          ;; not it under the Go test runner, where argv[0] is the test binary
+          ;; -- spawning that re-runs the whole suite, which is how this was
+          ;; found. Named binaries only, and no lint rather than a wrong one.
+          lg (let [e (os/getenv "QUALITY_LG")
+                   candidates (if (str/blank? e)
+                                [(str checkout "/bin/lg") (str checkout "/lg")]
+                                [e])]
+               (first (filter os/stat candidates)))]
+      (cond
+        (nil? lg)
+        {:findings nil :source "unavailable"
+         :error "no lg binary found (build one, or set QUALITY_LG)"}
+        (not (os/stat script))
+        {:findings nil :source "unavailable" :error (str "no " script)}
+        :else
+        (let [r (try (apply os/sh (concat [lg script "--edn"] paths))
+                     (catch Throwable e {:exit 1 :err (str e)}))]
+          (if (zero? (:exit r))
+            ;; The output must be a VECTOR OF FINDING MAPS. An older lint
+            ;; without --edn exits 0 and prints a human report, which
+            ;; read-string will happily parse into something else entirely --
+            ;; so the shape is checked, not just the exit code.
+            (let [parsed (try (read-string (:out r)) (catch Throwable e ::unreadable))]
+              (if (and (vector? parsed) (every? map? parsed))
+                {:findings parsed :source script}
+                {:findings nil :source "unavailable"
+                 :error (str "unrecognized lint output from " script
+                             " (expected --edn findings)")}))
+            {:findings nil :source "unavailable"
+             :error (str/trim (str (:err r)))}))))))
+
+(defn go-extents-of
+  "Statement and declaration line ranges for `paths`, from the Go tool.
+
+   Asked for ON DEMAND, for the files that actually carry a duplicate region:
+   the whole corpus would be a large payload to cross the boundary for
+   nothing. An empty result simply means Go regions keep their token-derived
+   spans."
+  [checkout paths]
+  (if (empty? paths)
+    []
+    (let [bin (os/getenv "QUALITY_GO_CALLABLES")
+          cmd (if (str/blank? bin)
+                (concat ["go" "run" "github.com/nooga/let-go/cmd/go-callables"])
+                [bin])
+          r (try (apply os/sh (concat cmd ["--extents"] paths))
+                 (catch Throwable e {:exit 1 :err (str e)}))]
+      (if (zero? (:exit r))
+        (try (or (:extents (read-string (:out r))) []) (catch Throwable _ []))
+        []))))
+
+(defn cost-entries
+  "Algorithmic cost per .lg definition, with callee substitution run to a
+   fixpoint over the call graph.
+
+   Rule (c) of the cost model: a call to a degree-d definition inside a loop
+   of depth k costs k + d, so a degree cannot be computed for one definition
+   in isolation. Iterating to a fixpoint spreads callee costs outward;
+   mutual recursion is left to the recursion rule rather than iterated, and
+   the iteration cap keeps a cycle from spinning.
+
+   Go entries carry their loop depth from the Go tool, which reads `for` and
+   `range` nesting off the AST; Go recursion shrink is not read, so a
+   self-recursive Go function is reported as :unknown rather than guessed."
+  [sources cat go-functions mass-of]
+  (let [defs (vec (for [{:keys [path text]} sources
+                        d (forms/definitions text)]
+                    (assoc d :path path)))
+        fixpoint (loop [known {} n 0]
+                   (if (> n 3)
+                     known
+                     (let [next-known
+                           (reduce (fn [m d]
+                                     (assoc m (:name d)
+                                            (:degree (cost/definition-degree
+                                                      d (fn [s] (get known s)) cat))))
+                                   {} defs)]
+                       (if (= next-known known) known (recur next-known (inc n))))))
+        lg-entries (mapv (fn [d]
+                           (let [r (cost/definition-degree d (fn [s] (get fixpoint s)) cat)]
+                             (assoc r :path (:path d) :line (:line d)
+                                    :mass (mass-of (:path d) (:name d)))))
+                         defs)
+        go-entries (mapv (fn [fn*]
+                           {:name (symbol (:name fn*)) :path (:path fn*) :line (:line fn*)
+                            :degree (cond
+                                      (:self-call? fn*) :unknown
+                                      (:loop-depth fn*) {:poly (:loop-depth fn*)}
+                                      :else {:poly 0})
+                            :evidence (cond
+                                        (:self-call? fn*) "self-recursive; shrink shape not read for Go"
+                                        (and (:loop-depth fn*) (pos? (:loop-depth fn*)))
+                                        (str "loop nesting depth " (:loop-depth fn*))
+                                        :else "no loops or recursion")
+                            :assumed #{}
+                            :mass (mass-of (:path fn*) (symbol (:name fn*)))})
+                         go-functions)]
+    (vec (concat lg-entries go-entries))))
+
+(defn- cwd-path
+  "A repo-relative path turned back into one the process can open: the cwd
+   prefix is stripped, since discovery walked from the cwd."
+  [prefix p]
+  (if (and (seq prefix) (str/starts-with? p prefix)) (subs p (count prefix)) p))
+
+(defn go-analysis
+  "Go measurements for `paths`, from the `go-callables` command, as
+   `{:functions [...] :files [...] :source \"...\"}` -- or
+   `{:source \"unavailable\" :error \"...\"}` when the command cannot run.
+
+   Go analysis lives in its own Go tool because `go/ast` is exact where a
+   generic tokenizer is only close; see cmd/go-callables. A missing tool must
+   be VISIBLE in the report rather than silently scoring Go as perfect, so
+   the failure is carried through as data.
+
+   `QUALITY_GO_CALLABLES` names a prebuilt binary (what `make quality` uses);
+   otherwise the command is run from source, which costs one compile."
+  [paths]
+  (if (empty? paths)
+    {:functions [] :files [] :source "none"}
+    (let [bin (os/getenv "QUALITY_GO_CALLABLES")
+          args (if (str/blank? bin)
+                 (concat ["go" "run" "github.com/nooga/let-go/cmd/go-callables"] paths)
+                 (concat [bin] paths))
+          r (try (apply os/sh args) (catch Throwable e {:exit 1 :err (str e)}))]
+      (if (zero? (:exit r))
+        (try (assoc (read-string (:out r))
+                    :source (if (str/blank? bin) "go run" bin))
+             (catch Throwable e {:source "unavailable" :error (str e)
+                                 :functions [] :files []}))
+        {:source "unavailable" :functions [] :files []
+         :error (str/trim (str (:err r)))}))))
+
+(defn parse-args
+  "The CLI's flags and positional paths. Unknown `--flags` are rejected
+   loudly rather than silently treated as paths."
+  [args]
+  (loop [a (vec args) opts {:top (:top-default score/thresholds) :source-roots []
+                            :lib-roots (:lib-roots score/thresholds)} paths []]
+    (if (empty? a)
+      ;; Positional paths stay as given (possibly none) -- `discover` is what
+      ;; falls back to `default-paths`, which is per language.
+      (assoc opts :paths paths)
+      (let [x (first a)
+            valued? (contains? #{"--since" "--go-cover" "--ci-run" "--ci-seconds"
+                                 "--edn" "--top" "--source-root" "--base" "--head"} x)
+            _ (when (and valued? (< (count a) 2))
+                (throw (ex-info (str "flag " x " needs a value") {:flag x})))
+            n (second a)]
+        (case x
+          "--since" (recur (subvec a 2) (assoc opts :since n) paths)
+          "--go-cover" (recur (subvec a 2) (assoc opts :go-cover n) paths)
+          "--ci-run" (recur (subvec a 2) (assoc opts :ci-run n) paths)
+          "--ci-seconds" (recur (subvec a 2) (assoc opts :ci-seconds (read-string n)) paths)
+          "--edn" (recur (subvec a 2) (assoc opts :edn n) paths)
+          "--top" (recur (subvec a 2) (assoc opts :top (read-string n)) paths)
+          "--source-root" (recur (subvec a 2) (update opts :source-roots conj n) paths)
+          "--timings" (recur (subvec a 1) (assoc opts :timings true) paths)
+          "--ci-lookup" (recur (subvec a 1) (assoc opts :ci-lookup true) paths)
+          "--base" (recur (subvec a 2) (assoc opts :base n) paths)
+          "--head" (recur (subvec a 2) (assoc opts :head n) paths)
+          (if (str/starts-with? x "--")
+            (throw (ex-info (str "unknown flag " x) {:flag x}))
+            (recur (subvec a 1) opts (conj paths x))))))))
+
+(defn- default-since
+  "180 days back, so a default run has a bounded, explicit git range."
+  []
+  (let [days (:since-days score/thresholds)
+        r (os/sh "date" "-v" (str "-" days "d") "+%Y-%m-%d")]
+    (if (zero? (:exit r))
+      (str/trim (:out r))
+      (str/trim (:out (os/sh "date" "-d" (str days " days ago") "+%Y-%m-%d"))))))
+
+(defn measure
+  "Everything the report needs, as data. Pure except for the file reads
+   and the pinned externals gathered by `quality.inputs`."
+  [opts]
+  (let [since (or (:since opts) (default-since))
+        grange (inputs/git-range since (inputs/head-commit (checkout-root)))
+        defect-counts (phase "git-fix-log" (fn [] (inputs/fix-counts grange)))
+        ;; `discover` yields cwd-relative paths (what `slurp` needs); `:path`
+        ;; is the repo-root-relative form, which is what classification, the
+        ;; report and the `fix-counts` lookup all speak.
+        checkout (checkout-root)
+        prefix (repo-prefix)
+        ;; `:root` measures an EXTRACTED revision instead of the working copy
+        ;; (see `extract-rev`). Everything under it is tracked by
+        ;; construction, so the VCS file list does not apply there.
+        root (:root opts)
+        source-roots (mapv (fn [r] (str prefix r)) (:source-roots opts))
+        tracked (if root {:paths nil :source "revision"} (tracked-files checkout))
+        read-paths (if root
+                     (discover (update opts :paths
+                                       (fn [ps] (mapv (fn [p] (str root "/" p))
+                                                      (if (seq ps) ps
+                                                          (concat (:lg default-paths)
+                                                                  (:go default-paths))))))
+                               root "" nil)
+                     (discover opts checkout prefix (:paths tracked)))
+        ;; repo-relative path of a discovered file, and the path on disk
+        rel-path (fn [p] (if root (subs p (inc (count root))) (repo-path checkout prefix p)))
+        disk-path (fn [p] (if root (str root "/" p) (cwd-path prefix p)))
+        read-all (phase "read" (fn [] (mapv (fn [p] {:path (rel-path p)
+                                                     :lang (lang-of p) :text (slurp p)})
+                                            read-paths)))
+        generated (vec (sort (map :path (filter #(generated? (:text %)) read-all))))
+        loaded (vec (remove #(generated? (:text %)) read-all))
+        tokenized (phase "tokenize"
+                         (fn [] (mapv (fn [f] (assoc f :tokens (lex/tokens (:text f) (:lang f))))
+                                      loaded)))
+        ;; Duplication is compared within a language, as the spec requires:
+        ;; the two token vocabularies are disjoint enough that a cross
+        ;; match would be meaningless.
+        k (:dup-k score/thresholds) w (:dup-w score/thresholds) floor (:dup-floor score/thresholds)
+        by-lang (group-by :lang tokenized)
+        dup-pairs (phase "dup-pairs"
+                         (fn []
+                           (vec (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start])
+                                               #(get-in % [:b :path]) #(get-in % [:b :start]))
+                                         ;; realized (vec) before sorting: see the
+                                         ;; note on `quality.score/issues`
+                                         (vec (mapcat (fn [lang]
+                                                        (dup/pairs (mapv #(select-keys % [:path :tokens])
+                                                                         (get by-lang lang []))
+                                                                   k w floor
+                                                                   (:dup-posting-cap score/thresholds)))
+                                                [:lg :go]))))))
+        ;; Snap each reported region to form boundaries. Matching stays on
+        ;; TOKENS -- similarity is untouched -- but what is REPORTED becomes a
+        ;; set of whole forms, so a finding is directly extractable and the
+        ;; token-to-line approximation stops needing a caveat.
+        ;; .lg structure comes from the reader; Go structure comes from the
+        ;; Go tool, which already has the AST. Both languages snap to real
+        ;; boundaries -- there is no asymmetry to explain.
+        go-dup-paths (vec (sort (distinct (keep (fn [p]
+                                                  (let [pa (get-in p [:a :path])]
+                                                    (when (str/ends-with? pa ".go") pa)))
+                                                dup-pairs))))
+        go-extents (go-extents-of checkout (mapv #(disk-path %) go-dup-paths))
+        extents-by-path (merge
+                          (into {} (for [f tokenized :when (= :lg (:lang f))]
+                                     [(:path f) (forms/extents (:text f))]))
+                          (reduce (fn [m e]
+                                    (update m (rel-path (:path e)) (fnil conj [])
+                                            [(:from e) (:to e)]))
+                                  {} go-extents))
+        snap-side (fn [side]
+                    (if-let [ex (get extents-by-path (:path side))]
+                      (let [[from to] (forms/snap ex (:start side) (:end side))]
+                        (assoc side :start from :end to))
+                      side))
+        dup-pairs (mapv (fn [p] (-> p (update :a snap-side) (update :b snap-side))) dup-pairs)
+        dup-pct (apply merge (map (fn [lang]
+                                    (dup/file-percent (mapv #(select-keys % [:path :tokens])
+                                                            (get by-lang lang []))
+                                                      dup-pairs))
+                                  [:lg :go]))
+        dup-lines (dup/duplicated-lines (mapv #(select-keys % [:path :tokens]) tokenized)
+                                        dup-pairs)
+        ;; Metrics are computed once per .lg file and shared: the dead-code
+        ;; pass needs per-definition SLOC before the per-file records exist.
+        mets (phase "metrics"
+                    (fn [] (into {} (for [f tokenized :when (= :lg (:lang f))]
+                                      [(:path f) (metrics/file-metrics (:text f))]))))
+        lint (phase "lint" (fn [] (lint-findings checkout (mapv #(disk-path (:path %)) loaded))))
+        ;; Lint reports paths as given (disk-relative); bring them back into
+        ;; repo-relative space so they join the rest of the report.
+        lint-findings* (mapv (fn [f] (assoc f :file (rel-path (:file f))))
+                             (or (:findings lint) []))
+        scored-comment? (:scored comment-kinds)
+        unscored? (:unscored comment-kinds)
+        code-flagged (flagged-lines lint-findings*
+                                    (fn [k] (not (or (scored-comment? k) (unscored? k)))))
+        comment-flagged (flagged-lines lint-findings* scored-comment?)
+        files0 (mapv (fn [f]
+                       (let [m (get mets (:path f))
+                             loc (if m (max 1 (:loc m)) (max 1 (go-loc (:tokens f))))
+                             fixes (get defect-counts (:path f) 0)
+                             ;; Below :defects-min-loc a single fix implies an
+                             ;; absurd per-KLOC rate, so the term is omitted
+                             ;; (nil) and the file debt renormalizes.
+                             dpk (when (>= loc (:defects-min-loc score/thresholds))
+                                   (/ (* 1000.0 fixes) loc))
+                             pct (get dup-pct (:path f) 0.0)
+                             fverb (terms/verbosity (get dup-lines (:path f) 0)
+                                                    (when (:findings lint)
+                                                      (count (get code-flagged (:path f) #{})))
+                                                    loc)
+                             ferosion (terms/erosion
+                                        (for [d (if m (:definitions m) [])]
+                                          {:cc (:cc d) :sloc (:sloc d)}))
+                             fdefects (when dpk
+                                        (terms/squash dpk (get-in score/thresholds [:defects :bad])))
+                             ;; :dead needs the whole-corpus graph, so the score is
+
+                             ;; completed in a second pass once that exists.
+
+                             sc (score/file-score
+
+                                  {:erosion ferosion :verbosity fverb :defects fdefects})]
+                         {:path (:path f) :lang (:lang f) :loc loc :fixes fixes
+                          :test? (test-file? (:path f) source-roots)
+                          :definitions (if m (:definitions m) [])
+                          :cc-max (when m (:cc-max m))
+                          :mi-raw (when m (:mi m))
+                          :comment-ratio (when m (:comment-ratio m))
+                          :dup-pct pct :defects-per-kloc dpk
+                          :erosion ferosion :verbosity fverb :defects fdefects
+                          :debt sc}))
+                 tokenized)
+        lg-files (filter #(= :lg (:lang %)) files0)
+        ;; Go measurements come from the Go tool; .lg measurements from
+        ;; quality.metrics. Both feed the SAME arithmetic in quality.terms.
+        go-analysis (phase "go-analysis"
+                           (fn [] (go-analysis (mapv (fn [f] (disk-path (:path f)))
+                                                     (filter #(= :go (:lang %)) tokenized)))))
+        go-by-path (group-by :path (:functions go-analysis))
+        callables (vec (concat
+                         (for [f lg-files d (:definitions f)]
+                           {:path (:path f) :name (:name d) :cc (:cc d) :sloc (:sloc d)
+                            :line (:line d) :end (:end d) :depth (:depth d) :lang :lg})
+                         (for [fn* (:functions go-analysis)
+                               :when (not= :dead-closure (:kind fn*))]
+                           {:path (rel-path (:path fn*)) :name (:name fn*)
+                            :cc (:cc fn*) :sloc (:sloc fn*)
+                            :line (:line fn*) :end (:end fn*) :lang :go})))
+        src-files (remove :test? files0)
+        test-files (filter :test? files0)
+        src-loc (reduce + 0 (map :loc src-files))
+        test-loc (reduce + 0 (map :loc test-files))
+        lg-src-loc (reduce + 0 (map :loc (filter #(= :lg (:lang %)) src-files)))
+        go-src-loc (reduce + 0 (map :loc (filter #(= :go (:lang %)) src-files)))
+        ;; Static .lg reachability: sources are non-test .lg files, roots
+        ;; come from the .lg test files.
+        lg-of (fn [pred] (mapv #(select-keys % [:path :text])
+                               (filter (fn [f] (and (= :lg (:lang f))
+                                                    (pred (test-file? (:path f) source-roots))))
+                                       loaded)))
+        lg-cov (phase "coverage-graph" (fn [] (graph/coverage (lg-of not) (lg-of identity))))
+        ;; Dead code: the same closure `graph/reachable` computes for tests,
+        ;; started from PRODUCTION roots instead.
+        ;;   - every public definition of a library namespace, because the
+        ;;     standard library's surface is called by users the graph cannot
+        ;;     see, so library dead code reduces to unreached privates;
+        ;;   - every symbol a script or command references from a top-level
+        ;;     non-definition form, which is its entry point (and, in a
+        ;;     library, its registry registrations and dispatch tables);
+        ;;   - anything marked ^:api, the opt-out for dynamic entry points.
+        lg-sources (lg-of not)
+        prod-graph (phase "dead-graph" (fn [] (graph/build lg-sources)))
+        lib? (fn [p] (some (fn [r] (str/starts-with? p r)) (:lib-roots opts)))
+        prod-roots (into (set (keep (fn [[qname d]]
+                                      (when (and (lib? (:path d)) (graph/public? d)) qname))
+                                    (:defs prod-graph)))
+                         (graph/entry-roots prod-graph lg-sources))
+        reached-prod (graph/reachable prod-graph prod-roots)
+        ;; Reachable only from tests: a helper nothing in production calls is
+        ;; dead production code even though the suite exercises it. Reported
+        ;; as its own category rather than folded into either bucket.
+        reached-with-tests (graph/reachable
+                             prod-graph
+                             (into prod-roots (graph/resolve-symbols
+                                                prod-graph
+                                                (graph/test-roots (lg-of identity)))))
+        sloc-of (into {} (for [[path m] mets d (:definitions m)]
+                           [[path (:line d)] (:sloc d)]))
+        all-defs (vec (for [[qname d] (:defs prod-graph) :when (not= :deftest (:kind d))]
+                        {:name (symbol (name qname)) :path (:path d) :line (:line d)
+                         :sloc (get sloc-of [(:path d) (:line d)] 1)}))
+        def->record (fn [[qname d]]
+                      {:name (symbol (name qname)) :path (:path d) :line (:line d)
+                       :sloc (get sloc-of [(:path d) (:line d)] 1)})
+        test-only-defs (vec (sort-by (juxt (comp - :sloc) :path :line)
+                                     (vec (for [[qname d] (:defs prod-graph)
+                                                :when (and (not= :deftest (:kind d))
+                                                           (not (reached-prod qname))
+                                                           (reached-with-tests qname))]
+                                            (def->record [qname d])))))
+        dead-defs (vec (sort-by (juxt (comp - :sloc) :path :line)
+                                (vec (for [[qname d] (:defs prod-graph)
+                                           :when (and (not= :deftest (:kind d))
+                                                      (not (reached-prod qname)))]
+                                       {:name (symbol (name qname)) :path (:path d) :line (:line d)
+                                        :sloc (get sloc-of [(:path d) (:line d)] 1)}))))
+        go-cov (when-let [p (:go-cover opts)]
+                 (assoc (inputs/parse-coverprofile (slurp p)) :path p :sha256 (sha256 p)))
+        combined (if (and go-cov (pos? (+ lg-src-loc go-src-loc)))
+                   (/ (+ (* lg-src-loc (:percent lg-cov)) (* go-src-loc (:percent go-cov)))
+                      (double (+ lg-src-loc go-src-loc)))
+                   (:percent lg-cov))
+        ;; Pinned to a RECORDED duration for this commit; never the local
+        ;; wall clock, which would make the term non-deterministic for the
+        ;; same tree and break the PR-delta contract.
+        ci (inputs/ci-seconds {:run (:ci-run opts) :seconds (:ci-seconds opts)
+                               :commit (when (:ci-lookup opts) (:to grange))})
+        efficiency (when (and ci combined (pos? (:seconds ci)))
+                     (/ combined (/ (:seconds ci) 60.0)))
+        assertions (reduce + 0 (map (fn [f]
+                                      (if (= :lg (:lang f))
+                                        (lg-assertions (:text f))
+                                        (go-assertions (:text f))))
+                                    (filter #(test-file? (:path %) source-roots) loaded)))
+        ;; With no source LOC there is nothing to be dense relative to, so
+        ;; the term is omitted (nil) rather than scored as a perfect or
+        ;; catastrophic zero.
+        density (when (pos? src-loc) (/ (* 1000.0 assertions) src-loc))
+        ratio (when (pos? src-loc) (/ test-loc (double src-loc)))
+        testing {:assertions assertions :density density :ratio ratio
+                 :source-loc src-loc :test-loc test-loc
+                 :debt (when (pos? src-loc)
+                         (score/testing-term {:density density :ratio ratio}))}
+        ;; Second pass: a file's dead share needs the whole-corpus graph, so
+        ;; it is attached once that is known and the file score is completed.
+        dead-sloc-by-path (reduce (fn [m d] (update m (:path d) (fnil + 0) (:sloc d))) {} dead-defs)
+        all-sloc-by-path (reduce (fn [m d] (update m (:path d) (fnil + 0) (:sloc d))) {} all-defs)
+        files (mapv (fn [f]
+                      (let [tot (get all-sloc-by-path (:path f))
+                            d (when (and tot (pos? tot))
+                                (/ (double (get dead-sloc-by-path (:path f) 0)) tot))]
+                        (assoc f :dead d
+                               :debt (score/file-score
+                                       {:erosion (:erosion f) :verbosity (:verbosity f)
+                                        :defects (:defects f) :dead d}))))
+                    files0)
+        total-comment-lines (+ (reduce + 0 (map (fn [[_ m]] (:comment m)) mets))
+                               (reduce + 0 (map (fn [f] (max 0 (- (:lines f) (:sloc f) (:blank f))))
+                                                (:files go-analysis))))
+        flagged-code-total (reduce + 0 (map count (vals code-flagged)))
+        flagged-comment-total (reduce + 0 (map count (vals comment-flagged)))
+        ;; A callable is "duplicated" when its line span overlaps a reported
+        ;; duplicate region in the same file.
+        regions-by-path (reduce (fn [m p]
+                                  (-> m
+                                      (update (get-in p [:a :path]) (fnil conj [])
+                                              [(get-in p [:a :start]) (get-in p [:a :end])])
+                                      (update (get-in p [:b :path]) (fnil conj [])
+                                              [(get-in p [:b :start]) (get-in p [:b :end])])))
+                                {} dup-pairs)
+        duplicated-region? (fn [c]
+                             ;; A callable with no line information (nothing
+                             ;; produces one today, but the shape allows it)
+                             ;; cannot overlap anything.
+                             (when-let [start (:line c)]
+                               (let [end (or (:end c) start)]
+                                 (some (fn [[from to]]
+                                         (and from to (<= from end) (<= start to)))
+                                       (get regions-by-path (:path c) [])))))
+        top (score/top-complexity callables (:top opts) duplicated-region?)
+        ;; Keyed on the PRINTED name: .lg definitions carry symbols and the Go
+        ;; tool reports strings, and a silent key mismatch here zeroes every
+        ;; Go mass -- which is exactly what it did.
+        mass-by (into {} (for [c callables]
+                           [[(:path c) (str (:name c))]
+                            (* (double (or (:cc c) 0)) (math/sqrt (max 1 (or (:sloc c) 1))))]))
+        cost-cat (cost/catalog (str checkout "/scripts/quality"))
+        costs (phase "cost"
+                     (fn [] (cost-entries (lg-of (fn [_] true)) cost-cat
+                                          (mapv (fn [f] (assoc f :path (rel-path (:path f))))
+                                                (:functions go-analysis))
+                                          (fn [p n] (get mass-by [p (str n)] 0.0)))))
+        classes (dup/clone-classes dup-pairs (:clone-class-max-members score/thresholds))
+        corpus-terms {:erosion (terms/erosion callables)
+                      :verbosity (terms/verbosity (reduce + 0 (vals dup-lines))
+                                                  (when (:findings lint) flagged-code-total)
+                                                  (reduce + 0 (map :loc files)))
+                      :comment-debt (when (:findings lint)
+                                      (terms/comment-debt flagged-comment-total
+                                                          total-comment-lines))
+                      ;; coverage is already a share; 1 - it is the shortfall
+                      :uncovered (when combined (- 1.0 (/ combined 100.0)))
+                      :dead (terms/dead-share dead-defs all-defs)
+                      :defects (when (pos? src-loc)
+                                 (terms/squash (/ (* 1000.0 (reduce + 0 (map :fixes files))) src-loc)
+                                               (get-in score/thresholds [:defects :bad])))
+                      :testing (:debt testing)
+                      ;; CI wall time is REPORTED (see the header) but no
+                      ;; longer SCORED: a term that moves with machine load
+                      ;; breaks the promise that a delta means the code
+                      ;; changed. `:cost` replaces it, structurally.
+                      :cost (cost/cost-share costs)}
+        corpus (score/corpus-score corpus-terms)]
+    (merge corpus
+           {:inputs {:commit (:to grange)
+                     :commit-source (:head-source grange)
+                     :git-range grange
+                     :go-cover (when go-cov (select-keys go-cov [:path :sha256 :percent]))
+                     :ci ci
+                     :paths (if (seq (:paths opts))
+                              (:paths opts)
+                              (concat (:lg default-paths) (:go default-paths)))
+                     :source-roots source-roots
+                     :corpus {:files (count loaded) :tracked-by (:source tracked)
+                              :generated (count generated)
+                              :generated-paths generated}}
+            :coverage {:lg (select-keys lg-cov [:reached :total :percent :untested])
+                       :go (when go-cov (select-keys go-cov [:covered :total :percent]))
+                       :combined combined
+                       :efficiency-pts efficiency}
+            :testing testing
+            ;; Paper-aligned terms, REPORTED but not yet in the composite.
+            :erosion {:value (terms/erosion callables)
+                      :callables (count callables)
+                      :high (count (filter (fn [c] (> (:cc c) (get-in score/thresholds [:erosion :cc]))) callables))
+                      :lg (terms/erosion (filter (fn [c] (str/ends-with? (:path c) ".lg")) callables))
+                      :go (terms/erosion (filter (fn [c] (str/ends-with? (:path c) ".go")) callables))
+                      :go-source (:source go-analysis)}
+            ;; OURS, not the paper's, and an UPPER BOUND: see quality.terms.
+            :dead {:value (terms/dead-share dead-defs all-defs)
+                   :definitions (count all-defs)
+                   :dead-definitions (count dead-defs)
+                   :dead-sloc (reduce + 0 (map :sloc dead-defs))
+                   :test-only (count test-only-defs)
+                   :test-only-worst (vec (take 5 test-only-defs))
+                   :worst (vec (take 10 dead-defs))}
+            :lint {:source (:source lint)
+                   :error (:error lint)
+                   :findings (count lint-findings*)
+                   :flagged-code-lines (when (:findings lint) flagged-code-total)
+                   :flagged-comment-lines (when (:findings lint) flagged-comment-total)
+                   :unscored (count (filter (fn [f] (unscored? (:kind f))) lint-findings*))}
+            :comment-debt {:value (:comment-debt corpus-terms)
+                           :flagged flagged-comment-total
+                           :total-comment-lines total-comment-lines}
+            :verbosity {:value (:verbosity corpus-terms)
+                        :dup-lines (reduce + 0 (vals dup-lines))
+                        :loc (reduce + 0 (map :loc files))
+                        :flagged-code-lines (when (:findings lint) flagged-code-total)}
+            ;; Worst first: debt DESCENDING, ties broken by path -- the same
+            ;; visual order as the old ascending-score table.
+            :files (vec (sort-by (juxt (comp - :debt) :path)
+                                 (mapv #(dissoc % :definitions) files)))
+            :issues (score/issues files lg-cov dup-pairs)
+            :cost {:value (cost/cost-share costs)
+                   :definitions (count costs)
+                   :superlinear (count (filter (fn [c] (cost/superlinear? (:degree c))) costs))
+                   :unknown (count (filter (fn [c] (= :unknown (:degree c))) costs))
+                   :assumed (vec (sort (distinct (mapcat :assumed costs))))
+                   :worst (vec (take 10 (sort-by (fn [c] (- (or (:mass c) 0)))
+                                                 (filter (fn [c] (cost/superlinear? (:degree c))) costs))))}
+            :top-complexity top
+            :best-targets (score/best-targets top)
+            ;; Classes for humans, pairs for machines: one extraction
+            ;; opportunity is one entry, but the per-pair detail stays in the
+            ;; EDN for anything that needs the exact matched regions.
+            :clone-classes classes
+            :dup-pairs dup-pairs})))
+
+(def usage
+  (str "usage: ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]\n"
+       "                               [--ci-run ID | --ci-seconds N]\n"
+       "                               [--edn PATH] [--top N]\n"
+       "                               [--source-root PATH] [--timings]\n"
+       "                               [--base REV [--head REV]] [paths...]"))
+
+(defn resolve-rev
+  "A revision name resolved to a git sha. jj revsets (`@-`, `@--`, a change
+   id) mean nothing to `git archive`, so jj resolves them when it is present
+   and the name is passed through to git otherwise."
+  [rev]
+  (let [r (os/sh "jj" "log" "-r" rev "--no-graph" "-T" "commit_id")]
+    (if (zero? (:exit r))
+      (let [sha (str/trim (first (forms/lines (:out r))))]
+        (if (re-matches #"[0-9a-f]{40}" sha) sha rev))
+      rev)))
+
+(defn extract-rev
+  "A revision's tree, materialized in a directory, and the directory
+   returned. Scoring a revision means READING its files, and the working copy
+   holds one revision at a time, so the other side of a delta has to exist
+   somewhere on disk.
+
+   jj first, `git archive` as the fallback. jj is not a preference here, it is
+   a requirement: jj's git backend does not write git trees for commits no ref
+   points at, so `git archive` on a local jj commit succeeds and produces an
+   EMPTY archive. A silent empty corpus is exactly the failure mode worth
+   avoiding, so a jj repository uses `jj workspace add`, which is the
+   supported way to have two revisions checked out at once.
+
+   Workspaces are created under the repo's own `.workspaces/`, per the
+   project's rule that no checkout may live in a temp directory, and
+   `release-rev` removes them."
+  [checkout rev]
+  (let [sha (resolve-rev rev)
+        name (str "quality-rev-" (subs sha 0 (min 12 (count sha))))
+        dir (str checkout "/.workspaces/" name)]
+    (if (os/stat (str checkout "/.jj"))
+      (do
+        (when (os/stat dir) (os/sh "jj" "workspace" "forget" name) (os/delete-tree dir))
+        ;; jj requires the parent directory to exist.
+        (os/sh "mkdir" "-p" (str checkout "/.workspaces"))
+        (let [r (os/sh "jj" "workspace" "add" "--revision" sha dir)]
+          (when-not (zero? (:exit r))
+            (throw (ex-info (str "cannot check out revision " rev ": "
+                                 (str/trim (str (:err r))))
+                            {:rev rev}))))
+        {:dir dir :name name :vcs :jj})
+      (let [tarball (str (os/temp-dir) name ".tar")]
+        (os/delete-tree dir)
+        (let [a (os/sh "git" "archive" "--format=tar" "-o" tarball sha)]
+          (when-not (zero? (:exit a))
+            (throw (ex-info (str "cannot read revision " rev ": "
+                                 (str/trim (str (:err a))))
+                            {:rev rev}))))
+        (os/sh "mkdir" "-p" dir)
+        (os/sh "tar" "-xf" tarball "-C" dir)
+        {:dir dir :name name :vcs :git}))))
+
+(defn release-rev
+  "Remove what `extract-rev` created. A checkout that outlives its run is the
+   failure the project's worktree rule exists to stop."
+  [checkout {:keys [dir name vcs]}]
+  (when (= :jj vcs) (os/sh "jj" "workspace" "forget" name))
+  (os/delete-tree dir))
+
+(defn- abs-d [v] (if (neg? v) (- v) v))
+
+(defn- term-deltas
+  "Every term at base and head with its signed delta. POSITIVE MEANS WORSE,
+   because every term is lower-is-better."
+  [base head]
+  (vec (for [k (sort (map first (:weights score/thresholds)))]
+         (let [b (get-in base [:terms k])
+               h (get-in head [:terms k])]
+           {:term k :base b :head h
+            :delta (when (and b h) (- h b))}))))
+
+(defn- file-deltas
+  "Per-file debt at base and head, worst movement first. A file only at head
+   is new, a file only at base was deleted; both are reported with a nil on
+   the missing side rather than a fabricated zero."
+  [base head]
+  (let [bf (into {} (map (fn [f] [(:path f) f]) (:files base)))
+        hf (into {} (map (fn [f] [(:path f) f]) (:files head)))
+        paths (vec (sort (distinct (concat (keys bf) (keys hf)))))]
+    (->> (for [p paths
+               :let [b (get-in bf [p :debt]) h (get-in hf [p :debt])]
+               :when (or (nil? b) (nil? h) (> (abs-d (- h b)) 0.0005))]
+           {:path p :base b :head h :delta (when (and b h) (- h b))
+            :status (cond (nil? b) :added (nil? h) :removed :else :changed)})
+         vec
+         (sort-by (juxt (fn [r] (- (or (:delta r) 1.0))) :path))
+         vec)))
+
+(defn- crossings
+  "Definitions that crossed the erosion complexity threshold in either
+   direction. These are what actually move erosion, so they are the actionable
+   half of a delta."
+  [base head]
+  (let [th (get-in score/thresholds [:erosion :cc])
+        index (fn [r] (into {} (for [f (:files r) d (:definitions f)]
+                                 [[(:path f) (:name d)] (:cc d)])))
+        b (index base) h (index head)]
+    (vec (sort-by (juxt (comp - :cc) :path)
+                  (vec (concat
+                         (for [[k cc] h :when (and (> cc th) (<= (get b k 0) th))]
+                           {:path (first k) :name (second k) :cc cc
+                            :was (get b k) :direction :rose})
+                         (for [[k cc] b :when (and (> cc th) (<= (get h k 0) th) (contains? h k))]
+                           {:path (first k) :name (second k) :cc (get h k)
+                            :was cc :direction :fell})))))))
+
+(defn compare-results
+  "Two measured results in, the delta surface out. Pure: this is the half of
+   PR mode that has no I/O, and the half worth testing directly.
+
+   A delta is signed and POSITIVE MEANS WORSE, because every term is
+   lower-is-better."
+  [base-res head-res base-rev head-rev]
+  {:base {:rev base-rev :debt (:debt base-res) :terms (:terms base-res)}
+   :head {:rev head-rev :debt (:debt head-res) :terms (:terms head-res)}
+   :debt-delta (- (:debt head-res) (:debt base-res))
+   :terms (term-deltas base-res head-res)
+   :files (file-deltas base-res head-res)
+   :crossings (crossings base-res head-res)})
+
+(defn delta
+  "Measure `base` and `head` and report what moved. Both sides are scored in
+   full: correctness first, and an incremental score would have to prove it
+   agrees with a full one anyway."
+  [opts]
+  (let [checkout (checkout-root)
+        base-co (extract-rev checkout (:base opts))
+        head-co (when (:head opts) (extract-rev checkout (:head opts)))
+        head-res (if head-co
+                   (measure (assoc opts :root (:dir head-co)))
+                   (measure (dissoc opts :root)))
+        base-res (measure (assoc opts :root (:dir base-co)))
+        _ (release-rev checkout base-co)
+        _ (when head-co (release-rev checkout head-co))]
+    (compare-results base-res head-res (:base opts) (or (:head opts) "working copy"))))
+
+(defn main
+  "Parse `args`, measure, print the text report, and write EDN when asked.
+   Returns the process exit code: 0 on success, 2 when there is nothing to
+   measure or a flag is malformed."
+  [args]
+  (if (some #{"--help" "-h"} args)
+    (do (println usage) 0)
+    (let [[opts err] (try [(parse-args args) nil] (catch Throwable e [nil e]))]
+      (if err
+        (do (println "quality:" (ex-message err)) (println usage) 2)
+        (if (:base opts)
+          ;; PR mode: score both revisions and report what moved.
+          (let [[d err] (try [(delta opts) nil] (catch Throwable e [nil e]))]
+            (if err
+              (do (println "quality:" (ex-message err)) 2)
+              (do (print (report/delta-text d))
+                  (when (:edn opts) (spit (:edn opts) (report/edn d)))
+                  0)))
+          (let [[result err] (try [(measure opts) nil] (catch Throwable e [nil e]))]
+            (if err
+              (do (println "quality:" (ex-message err)) 2)
+              (do (print (report/text result))
+                  (when (:timings opts)
+                    (println)
+                    (println "phase timings (seconds)")
+                    (doseq [[label secs] @timings]
+                      (println (format "  %-16s %7.2f" label (double secs))))
+                    (println (format "  %-16s %7.2f" "TOTAL measured"
+                                     (double (reduce + 0.0 (map second @timings))))))
+                  (when (:edn opts) (spit (:edn opts) (report/edn result)))
+                  0))))))))
+
+;; Entry guard: run only as a script, never when a test `require`s this
+;; namespace. os/args is [binary script user-arg...]; we run when the
+;; script slot names this file. With no user args the default roots are
+;; measured, which is what `make quality` relies on.
+(let [argv (vec (seq os/args))
+      script (if (> (count argv) 1) (nth argv 1) "")
+      user (vec (drop 2 argv))]
+  (when (str/ends-with? script "scripts/quality.lg")
+    (os/exit (main user))))
