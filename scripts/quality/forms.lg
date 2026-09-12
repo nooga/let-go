@@ -75,6 +75,9 @@
                (let [form (read-segment seg)]
                  (when (and (seq? form) (def-heads (first form)) (symbol? (second form)))
                    {:name (second form) :kind (keyword (name (first form)))
+                    ;; ^:private is metadata the reader drops from the form we
+                    ;; get back, so it is detected in the segment's TEXT.
+                    :private? (boolean (re-find #"\^:private" (:text seg)))
                     :line (:start seg) :end (:end seg) :depth (:depth seg) :form form})))
              (segments text))))
 

@@ -54,6 +54,15 @@
               (second form))))
         (f/segments text)))
 
+(defn- path-ns
+  "The namespace symbol to use for a file with no `(ns ...)` form -- most
+   scripts. Slashes become dots: a symbol built straight from the path would
+   split at its FIRST slash, so `(name 'scripts/sort-defns.lg/sort-file)`
+   would be `sort-defns.lg/sort-file` rather than `sort-file`, and every
+   bare-name resolution against that definition would silently fail."
+  [path]
+  (symbol (str/replace path #"/" ".")))
+
 (defn- qualify [ns-sym name-sym]
   (symbol (str ns-sym "/" name-sym)))
 
@@ -148,7 +157,7 @@
                                      :edges {qname #{qname...}}}"
   [sources]
   (let [parsed (for [{:keys [path text]} sources]
-                 {:path path :ns (or (ns-of text) (symbol path))
+                 {:path path :ns (or (ns-of text) (path-ns path))
                   :aliases (file-aliases text) :defs (f/definitions text)})
         all-defs (vec (for [{:keys [path ns aliases defs]} parsed
                             d defs]
@@ -188,6 +197,67 @@
         (if (seen n)
           (recur todo seen)
           (recur (into todo (remove seen (get-in graph [:edges n]))) (conj seen n)))))))
+
+(defn resolve-symbols
+  "Raw symbols resolved to definition keys of `graph`, dropping what does not
+   resolve. Public so callers can build their own root sets -- `reachable` is
+   generic over roots, and production reachability is the same closure from a
+   different starting point than test reachability."
+  [graph syms]
+  (let [defs (:defs graph)
+        bidx (bare-index (map (fn [[qname info]] (assoc info :qname qname)) defs))]
+    (set (keep #(resolve-ref % nil defs bidx) syms))))
+
+(def ^:private def-heads-set #{'defn 'defn- 'defmacro 'defmethod 'deftest 'def})
+
+(defn top-level-refs
+  "Symbols referenced by the top-level NON-definition forms of `sources` --
+   a script's entry point, a registry registration, a dispatch table built at
+   load time. These are references the edge builder does not see, because it
+   only walks definitions, and they are exactly what makes a script's or a
+   registry's callees reachable."
+  [sources]
+  (reduce (fn [acc {:keys [text]}]
+            (let [aliases (file-aliases text)]
+              (reduce (fn [a seg]
+                        (let [form (f/read-segment seg)]
+                          (if (and (seq? form) (def-heads-set (first form)))
+                            a
+                            (into a (references-aliased form aliases)))))
+                      acc (f/segments text))))
+          #{} sources))
+
+(defn entry-roots
+  "Production roots contributed by each source's own top-level
+   NON-definition forms -- a script's entry call, a registry registration, a
+   dispatch table built at load time.
+
+   Each file's references are resolved with that FILE's namespace preferred,
+   which matters more than it sounds: two scripts both defining `do-check`
+   make the bare name ambiguous corpus-wide, and the ambiguity rule then
+   resolves it to nothing, so each script's own entry point would look
+   unreachable."
+  [graph sources]
+  (let [defs (:defs graph)
+        bidx (bare-index (map (fn [[qname info]] (assoc info :qname qname)) defs))]
+    (set (mapcat (fn [{:keys [path text]}]
+                   (let [ns (or (ns-of text) (path-ns path))
+                         aliases (file-aliases text)]
+                     (keep #(resolve-ref % ns defs bidx)
+                           (reduce (fn [a seg]
+                                     (let [form (f/read-segment seg)]
+                                       (if (and (seq? form) (def-heads-set (first form)))
+                                         a
+                                         (into a (references-aliased form aliases)))))
+                                   #{} (f/segments text)))))
+                 sources))))
+
+(defn public?
+  "Whether a definition is part of its namespace's public surface.
+   `defn-` is private, and so is anything carrying ^:private metadata --
+   which `quality.forms` records as the definition's `:private?`."
+  [d]
+  (not (or (= :defn- (:kind d)) (:private? d))))
 
 (defn coverage
   "sources vs tests -> {:reached n :total n :percent p

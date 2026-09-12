@@ -74,3 +74,21 @@
    far `v` falls short of `good`, so meeting or beating `good` is exactly 0."
   [v good k]
   (squash (max 0.0 (- (double good) v)) k))
+
+(defn dead-share
+  "Dead = SLOC of unreachable definitions / SLOC of all definitions.
+
+   SLOC-weighted, not count-weighted: 200 lines of dead code must read far
+   worse than one dead two-liner. Returns nil when there is nothing to
+   divide by.
+
+   OURS, NOT THE PAPER'S -- SlopCodeBench never mentions dead code.
+
+   UPPER BOUND. Reachability follows only literally-occurring symbols, so it
+   under-approximates reachability and therefore over-approximates dead code:
+   anything reached by computed dispatch, a registry, `resolve` or `eval`
+   looks dead and is not."
+  [dead all]
+  (let [total (reduce + 0 (map (fn [d] (or (:sloc d) 1)) all))]
+    (when (pos? total)
+      (min 1.0 (/ (double (reduce + 0 (map (fn [d] (or (:sloc d) 1)) dead))) total)))))

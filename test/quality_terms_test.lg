@@ -63,3 +63,12 @@
   ;; at `bad` (4), the shortfall is 36, which is k, so exactly 0.5
   (is (= 0.5 (t/shortfall-squash 4 40 36)))
   (is (< 0.5 (t/shortfall-squash 0 40 36) 1.0)))
+
+(deftest dead-share-is-sloc-weighted-not-count-weighted
+  (let [all [{:sloc 200} {:sloc 2} {:sloc 98}]]
+    ;; one dead 200-line definition dwarfs one dead 2-line definition
+    (is (= 0.67 (/ (math/round (* 100 (t/dead-share [{:sloc 200}] all))) 100.0)))
+    (is (= 0.01 (/ (math/round (* 100 (t/dead-share [{:sloc 2}] all))) 100.0)))
+    (is (= 0.0 (t/dead-share [] all)))
+    (is (= 1.0 (t/dead-share all all)))
+    (is (nil? (t/dead-share [] [])))))

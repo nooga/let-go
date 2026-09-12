@@ -50,6 +50,9 @@
    ;; Erosion's high-complexity threshold, from the paper: a callable counts
    ;; as high-complexity when CC is STRICTLY above it.
    :erosion {:cc 10}
+   ;; Namespaces whose PUBLIC surface is called by users the graph cannot
+   ;; see, so their public definitions are production roots.
+   :lib-roots ["pkg/rt/core/"]
    :dup-k 25 :dup-w 40 :dup-floor 50
    ;; Below this many LOC a single fix commit implies an absurd per-KLOC
    ;; rate (one fix in a 9-line stub reads as 111/KLOC), so the defects term

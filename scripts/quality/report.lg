@@ -58,7 +58,7 @@
           "(dynamic dispatch followed only through literal symbols)")
      "caveat: efficiency couples coverage to CI time; deleting slow tests lowers it"]))
 
-(defn- debt-block [{total :debt :keys [terms coverage testing erosion verbosity]}]
+(defn- debt-block [{total :debt :keys [terms coverage testing erosion verbosity dead]}]
   ;; Display order only (names, not numbers); any future term in
   ;; `thresholds` that isn't listed here still prints, after these.
   (let [preferred [:files :coverage :efficiency :testing]
@@ -78,10 +78,16 @@
          " go=" (if (= "unavailable" (:go-source erosion))
                   "UNAVAILABLE"
                   (n3 (:go erosion))))
+       (str "  dead " (n3 (:value dead))
+         " (" (:dead-definitions dead) " of "
+         (:definitions dead) " definitions, "
+         (:dead-sloc dead) " sloc; "
+         (:test-only dead) " reachable only from tests)"
+         " -- OURS, not the paper's; an UPPER BOUND")
        (str "  verbosity (clone-only) " (n3 (:value verbosity))
-            " (" (:dup-lines verbosity) " duplicated of "
-            (:loc verbosity) " lines)"
-            " -- LOWER BOUND on the paper's metric")
+         " (" (:dup-lines verbosity) " duplicated of "
+         (:loc verbosity) " lines)"
+         " -- LOWER BOUND on the paper's metric")
        (str "  paper baselines: human corpus erosion 0.34 verbosity 0.19;"
             " agent-generated erosion 0.68 verbosity 0.44")
        (str "  testing density=" (n1 (:density testing)) "/KLOC"
