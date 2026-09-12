@@ -7,15 +7,24 @@
 (def ^:private lg-keywords
   #{"defn" "defn-" "defmacro" "def" "let" "if" "when" "cond" "case" "loop" "recur"
     "fn" "do" "try" "catch" "finally" "throw" "ns" "and" "or" "not"})
+;; Reader-macro punctuation that must stay verbatim (never fold into "ID"):
+;; `#` (set/anon-fn/dispatch), `'` (quote), `` ` `` (syntax-quote), `~`
+;; (unquote), `@` (deref), `^` (metadata). Each lexes as its own single-char
+;; token via `lg-re`'s bracket-class alternative below (e.g. `#{` is "#"
+;; then "{", `#(...)` is "#" then "(" ...).
+(def ^:private lg-reader-macro-chars #{"#" "'" "`" "~" "@" "^"})
 (def ^:private go-keywords
   #{"func" "return" "if" "else" "for" "range" "switch" "case" "default" "var" "const"
     "type" "struct" "interface" "map" "chan" "go" "defer" "select" "break" "continue"
     "package" "import" "nil" "true" "false"})
 
-;; .lg: line comments, string literals, char literals (\x), brackets/quote
-;; marks as single tokens, numbers, and everything else as a run of
-;; non-delimiter characters (covers symbols like `->>`, `+`, `assoc!`).
-(def ^:private lg-re #"(?m);[^\n]*|\"(?:[^\"\\]|\\.)*\"|\\.|[()\[\]{}'`~@^#]|-?\d[\w.]*|[^\s()\[\]{}\"';`~@^#,]+|\n")
+;; .lg: line comments, string literals, char literals -- named (`\newline`,
+;; `\space`, `\tab`, ...; letters/digits after the backslash, tried first so
+;; the whole name is consumed) or single-char (`\x`, tried second) --
+;; brackets/reader-macro marks as single tokens, numbers, and everything
+;; else as a run of non-delimiter characters (covers symbols like `->>`,
+;; `+`, `assoc!`).
+(def ^:private lg-re #"(?m);[^\n]*|\"(?:[^\"\\]|\\.)*\"|\\[A-Za-z0-9]+|\\.|[()\[\]{}'`~@^#]|-?\d[\w.]*|[^\s()\[\]{}\"';`~@^#,]+|\n")
 
 ;; Go: line/block comments, string/rune/backtick literals, numbers,
 ;; identifiers, single-char brackets/punctuation kept separate (so `()`
@@ -40,8 +49,13 @@
                       (and (= lang :go) (or (str/starts-with? m "`") (str/starts-with? m "'"))) "STR"
                       (and (= lang :lg) (str/starts-with? m "\\")) "STR"
                       (re-matches #"-?\d.*" m) "NUM"
+                      ;; keywords (both .lg and Go) are kept verbatim -- the
+                      ;; token *is* its own type, e.g. "defn", "if", "func".
                       (kws m) m
                       (re-matches #"[A-Za-z_].*" m) "ID"
+                      ;; `#{` must not lex like a call on an identifier: the
+                      ;; reader-macro marks are punctuation, not symbols.
+                      (and (= lang :lg) (lg-reader-macro-chars m)) m
                       (and (= lang :lg) (re-matches #"[^()\[\]{}].*" m) (not (str/starts-with? m ":"))) "ID"
                       :else m)]
               (recur (rest ms) (+ line nls) (conj out {:t t :line line})))))))))
