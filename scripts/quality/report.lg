@@ -50,11 +50,14 @@
           "then unioned per file")
      "defects: renames credited to target via -M"
      (str "coverage lg=static go=" (if go-cover "dynamic" "none"))
+     (str "debt: 0 is perfect (every metric at or better than its good "
+          "threshold), 100 is every metric exactly at its bad threshold, "
+          "lower is better, unbounded above")
      (str "caveat: static coverage is an upper bound "
           "(dynamic dispatch followed only through literal symbols)")
      "caveat: efficiency couples coverage to CI time; deleting slow tests lowers it"]))
 
-(defn- score-block [{total :score :keys [terms coverage testing]}]
+(defn- debt-block [{total :debt :keys [terms coverage testing]}]
   ;; Display order only (names, not numbers); any future term in
   ;; `thresholds` that isn't listed here still prints, after these.
   (let [preferred [:files :coverage :efficiency :testing]
@@ -62,7 +65,7 @@
         order (concat (filter known preferred)
                       (sort (remove (set preferred) known)))]
     (concat
-      [(str "score " (n1 total))]
+      [(str "debt " (n1 total))]
       (for [k order]
         (str "  " (pad (name k) 12) (lpad (n1 (terms k)) 6)))
       [(str "  coverage lg=" (n1 (get-in coverage [:lg :percent])) "% static"
@@ -72,25 +75,25 @@
             " assertions=" (:assertions testing))])))
 
 (defn- file-table
-  "The per-file table, in the order the producer fixed: composite ASCENDING
-   (worst last), ties broken by path.
+  "The per-file table, in the order the producer fixed: debt DESCENDING
+   (worst first), ties broken by path.
 
-   EVERY column is a normalized SCORE (`quality.score/file-composite`'s
-   `:cc :mi :dup :defects`), not the measurement behind it, so all of them
-   run the same direction -- 0-100, higher is better -- and a row, or the
-   same row across two runs, reads without the reader having to remember
-   which metrics invert. The raw measurements live where they are pointers
+   EVERY column is DEBT (`quality.score/file-debt`'s `:cc :mi :dup
+   :defects` and their weighted `:debt`), not the measurement behind it, so
+   all of them run the same direction -- 0 at perfect, lower is better, no
+   upper bound -- and a row, or the same row across two runs, reads without
+   the reader having to remember which metrics invert. The raw measurements live where they are pointers
    rather than scores: the issues list and the top-complexity table (and,
    unchanged, the EDN). `cc`/`mi` read `-` for Go, whose complexity and
    maintainability are out of scope."
   [files]
   (concat
-    ["" "files (all columns are scores, 0-100, higher is better)"
-     (str (pad "path" 56) (lpad "composite" 10) (lpad "cc" 7) (lpad "mi" 7)
-          (lpad "dup" 7) (lpad "defects" 9))]
+    ["" "files (all columns are debt: 0 is perfect, lower is better, unbounded above)"
+     (str (pad "path" 56) (lpad "debt" 10) (lpad "cc" 8) (lpad "mi" 8)
+          (lpad "dup" 8) (lpad "defects" 9))]
     (for [f files]
-      (str (pad (:path f) 56) (lpad (n1 (:composite f)) 10) (lpad (n1 (:cc f)) 7)
-           (lpad (n1 (:mi f)) 7) (lpad (n1 (:dup f)) 7)
+      (str (pad (:path f) 56) (lpad (n1 (:debt f)) 10) (lpad (n1 (:cc f)) 8)
+           (lpad (n1 (:mi f)) 8) (lpad (n1 (:dup f)) 8)
            (lpad (n1 (:defects f)) 9)))))
 
 (defn- issue-at
@@ -102,7 +105,8 @@
 
 (defn- issue-lines [issues]
   (concat
-    ["" (str "issues " (count issues) " (count; lower is better, ranked by score impact)")]
+    ["" (str "issues " (count issues) " (count; lower is better, same direction as debt, "
+             "ranked by debt impact)")]
     (for [i issues]
       (str (pad (issue-at i) 56) (pad (name (:kind i)) 15)
            (pad (measure-str (:measure i)) 8) (:hint i)))))
@@ -120,13 +124,13 @@
            (lpad (:cc t) 5) (lpad (:depth t) 7) (lpad (:lines t) 7)))))
 
 (defn text
-  "The full text report: header, score block, file table (composite
-   ascending), ranked issues, then the most complex definitions."
+  "The full text report: header, debt block, file table (debt descending),
+   ranked issues, then the most complex definitions."
   [result]
   (str (str/join "\n"
                  (concat (header result)
                          [""]
-                         (score-block result)
+                         (debt-block result)
                          (file-table (:files result))
                          (issue-lines (:issues result))
                          (top-lines (:top-complexity result))))
