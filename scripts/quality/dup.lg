@@ -1,6 +1,7 @@
 (ns quality.dup
   "Winnowing (Schleimer, Wilkerson, Aiken) over normalized tokens: k-gram
-   hashes, window minima, shared-fingerprint regions between files.")
+   hashes, window minima, shared-fingerprint regions between and within
+   files.")
 
 (defn- kgram-hashes [tokens k]
   (let [ts (mapv :t tokens) n (count ts)]
@@ -28,14 +29,6 @@
                 (conj rs {:from p :to p}))))
           [] (sort positions)))
 
-;; `fingerprints` (winnowed) is a cheap, sparse anchor set: two files with
-;; zero fingerprint hashes in common cannot share a duplicated region worth
-;; reporting, so it prunes the O(files^2) comparison before any expensive
-;; work. Once a pair has at least one common anchor, the actual shared
-;; count and line ranges are computed from the full (non-winnowed) k-gram
-;; hashes, via a hash->positions inverted index per file -- this is the
-;; precise measure `floor` gates on, and it stays index-based (no nested
-;; scan over every position pair) so it scales to whole-corpus runs.
 (defn- kgram-index
   "hash -> sorted vec of k-gram start positions, from the full (non-winnowed)
    k-gram hash list."
@@ -43,11 +36,73 @@
   (reduce (fn [m {:keys [hash pos]}] (update m hash (fnil conj []) pos))
           {} (kgram-hashes tokens k)))
 
-(defn- any-overlap? [fps-a fps-b]
-  (let [ha (set (map :hash fps-a))]
-    (boolean (some ha (map :hash fps-b)))))
+(defn- overlaps?
+  "Whether the k-gram-window spans [from, to+k-1] of two regions intersect."
+  [a b k]
+  (and a b
+       (<= (:from a) (+ (:to b) k -1))
+       (<= (:from b) (+ (:to a) k -1))))
 
-(defn pairs [files k w floor]
+(defn- cross-shared
+  "Distinct-hash matches between two different files. A hash with multiple
+   occurrences in one or both files contributes `min(count-in-a,
+   count-in-b)` pairs (positions zipped in index order), never a cross
+   product -- so `shared` never exceeds either file's total k-gram count,
+   and `similarity` stays bounded by 1.0."
+  [kix-a kix-b]
+  (vec (mapcat (fn [[h pas]]
+                 (when-let [pbs (get kix-b h)]
+                   (map vector (repeat h) pas (take (count pas) pbs))))
+               kix-a)))
+
+(defn- self-shared
+  "Distinct-hash matches within one file: a copy-paste duplicate. Only
+   hashes with at least two occurrences separated by >= k positions count
+   (closer repeats are just the same occurrence's overlapping k-gram
+   windows, not a second copy); the earliest and latest occurrence are
+   used as the pair's representative positions, one pair per hash."
+  [kix k]
+  (vec (keep (fn [[h ps]]
+               (when (> (count ps) 1)
+                 (let [pmin (apply min ps) pmax (apply max ps)]
+                   (when (>= (- pmax pmin) k)
+                     [h pmin pmax]))))
+             kix)))
+
+(defn pairs
+  "Near-duplicate region pairs across `files` ([{:path :tokens}...]).
+
+   `k` = k-gram size in tokens, `w` = winnowing window (k-grams), `floor` =
+   minimum number of DISTINCT matching k-gram hashes required to report a
+   pair. `floor` is a token-run threshold in disguise: winnowing guarantees
+   at least one shared fingerprint for any contiguous run of `w + k - 1` or
+   more identical tokens between two files, so `floor` distinct matching
+   hashes corresponds to roughly `floor + k - 1` contiguous duplicated
+   tokens when the match is one unbroken run (e.g. floor=50, k=25 => a
+   ~74-token run). `fingerprints` (winnowed, sparse) is used only as a
+   cheap pre-filter -- pairs whose fingerprint hash sets don't intersect at
+   all are skipped before the exact comparison runs. Because winnowing only
+   guarantees coverage for runs of >= w+k-1 tokens, a pair whose only shared
+   code is several *short*, scattered matches (each below that length) may
+   be missed by the pre-filter even though the raw k-gram overlap exists;
+   this is winnowing's documented trade-off (sparse index, not exhaustive
+   recall on fragmented matches), not a bug in the exact count that follows.
+
+   Once a candidate pair clears the pre-filter, the reported `:shared` count
+   and the `:a`/`:b` line ranges come from the full (non-winnowed) k-gram
+   hash index (`shared` = distinct matching hashes, per `cross-shared`
+   above) -- an O(tokens) hash-map lookup, not a nested scan over every
+   position pair.
+
+   `similarity` = `2 * shared / (nk-a + nk-b)` where `nk-*` is each file's
+   total k-gram count; this Dice coefficient is always in [0, 1] because
+   `shared` (a sum of `min`s) can never exceed either `nk`.
+
+   Same-file (`i = j`) self-pairs are reported too -- a copy-paste
+   duplicate inside one file is still duplication -- using `self-shared`
+   (see its docstring); a self-pair whose two reported regions would
+   overlap is dropped rather than reported."
+  [files k w floor]
   (let [prepped (mapv (fn [f]
                         (let [kix (kgram-index (:tokens f) k)]
                           (assoc f
@@ -56,21 +111,24 @@
                                  :nk (reduce + 0 (map count (vals kix))))))
                   files)
         n (count prepped)]
-    (->> (for [i (range n) j (range (inc i) n)
-               :let [a (nth prepped i) b (nth prepped j)]
-               :when (any-overlap? (:fps a) (:fps b))
-               :let [shared (vec (mapcat (fn [[h pas]]
-                                           (when-let [pbs (get (:kix b) h)]
-                                             (for [pa pas pb pbs] [h pa pb])))
-                                   (:kix a)))]
+    (->> (for [i (range n)
+               :let [a (nth prepped i)
+                     ha (set (map :hash (:fps a)))]
+               j (range i n)
+               :let [b (nth prepped j)]
+               :when (or (= i j) (some ha (map :hash (:fps b))))
+               :let [shared (if (= i j)
+                              (self-shared (:kix a) k)
+                              (cross-shared (:kix a) (:kix b)))]
                :when (>= (count shared) floor)
                :let [ra (regions (map second shared) k)
                      rb (regions (map #(nth % 2) shared) k)
                      line (fn [f pos] (:line (nth (:tokens f) (min pos (dec (count (:tokens f)))))))
                      big (fn [rs] (apply max-key #(- (:to %) (:from %)) rs))
-                     A (big ra) B (big rb)]]
-           {:a {:path (:path a) :start (line a (:from A)) :end (line a (+ k (:to A)))}
-            :b {:path (:path b) :start (line b (:from B)) :end (line b (+ k (:to B)))}
+                     A (big ra) B (big rb)]
+               :when (or (not= i j) (not (overlaps? A B k)))]
+           {:a {:path (:path a) :start (line a (:from A)) :end (line a (+ k -1 (:to A)))}
+            :b {:path (:path b) :start (line b (:from B)) :end (line b (+ k -1 (:to B)))}
             :shared (count shared)
             :similarity (/ (* 2.0 (count shared)) (+ (:nk a) (:nk b)))})
          (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start]) #(get-in % [:b :path])))
