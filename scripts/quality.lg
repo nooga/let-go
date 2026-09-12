@@ -335,32 +335,44 @@
                                   [:lg :go]))
         dup-lines (dup/duplicated-lines (mapv #(select-keys % [:path :tokens]) tokenized)
                                         dup-pairs)
-        files (mapv (fn [f]
-                      (let [m (when (= :lg (:lang f)) (metrics/file-metrics (:text f)))
-                            loc (if m (max 1 (:loc m)) (max 1 (go-loc (:tokens f))))
-                            fixes (get defect-counts (:path f) 0)
-                            ;; Below :defects-min-loc a single fix implies an
-                            ;; absurd per-KLOC rate, so the term is omitted
-                            ;; (nil) and the file debt renormalizes.
-                            dpk (when (>= loc (:defects-min-loc score/thresholds))
-                                  (/ (* 1000.0 fixes) loc))
-                            pct (get dup-pct (:path f) 0.0)
-                            sc (score/file-debt {:cc-max (when m (:cc-max m))
-                                                 :mi (when m (:mi m))
-                                                 :dup-pct pct
-                                                 :defects-per-kloc dpk})]
-                        {:path (:path f) :lang (:lang f) :loc loc :fixes fixes
-                         :verbosity (terms/verbosity (get dup-lines (:path f) 0) loc)
-                         :test? (test-file? (:path f) source-roots)
-                         :definitions (if m (:definitions m) [])
-                         :cc-max (when m (:cc-max m))
-                         :mi-raw (when m (:mi m))
-                         :comment-ratio (when m (:comment-ratio m))
-                         :dup-pct pct :defects-per-kloc dpk
-                         :cc (:cc sc) :mi (:mi sc) :dup (:dup sc) :defects (:defects sc)
-                         :debt (:debt sc)}))
-                    tokenized)
-        lg-files (filter #(= :lg (:lang %)) files)
+        ;; Metrics are computed once per .lg file and shared: the dead-code
+        ;; pass needs per-definition SLOC before the per-file records exist.
+        mets (into {} (for [f tokenized :when (= :lg (:lang f))]
+                        [(:path f) (metrics/file-metrics (:text f))]))
+        files0 (mapv (fn [f]
+                       (let [m (get mets (:path f))
+                             loc (if m (max 1 (:loc m)) (max 1 (go-loc (:tokens f))))
+                             fixes (get defect-counts (:path f) 0)
+                             ;; Below :defects-min-loc a single fix implies an
+                             ;; absurd per-KLOC rate, so the term is omitted
+                             ;; (nil) and the file debt renormalizes.
+                             dpk (when (>= loc (:defects-min-loc score/thresholds))
+                                   (/ (* 1000.0 fixes) loc))
+                             pct (get dup-pct (:path f) 0.0)
+                             fverb (terms/verbosity (get dup-lines (:path f) 0) loc)
+                             ferosion (terms/erosion
+                                        (for [d (if m (:definitions m) [])]
+                                          {:cc (:cc d) :sloc (:sloc d)}))
+                             fdefects (when dpk
+                                        (terms/squash dpk (get-in score/thresholds [:defects :bad])))
+                             ;; :dead needs the whole-corpus graph, so the score is
+
+                             ;; completed in a second pass once that exists.
+
+                             sc (score/file-score
+
+                                  {:erosion ferosion :verbosity fverb :defects fdefects})]
+                         {:path (:path f) :lang (:lang f) :loc loc :fixes fixes
+                          :test? (test-file? (:path f) source-roots)
+                          :definitions (if m (:definitions m) [])
+                          :cc-max (when m (:cc-max m))
+                          :mi-raw (when m (:mi m))
+                          :comment-ratio (when m (:comment-ratio m))
+                          :dup-pct pct :defects-per-kloc dpk
+                          :erosion ferosion :verbosity fverb :defects fdefects
+                          :debt sc}))
+                 tokenized)
+        lg-files (filter #(= :lg (:lang %)) files0)
         ;; Go measurements come from the Go tool; .lg measurements from
         ;; quality.metrics. Both feed the SAME arithmetic in quality.terms.
         go-analysis (go-analysis (mapv (fn [f] (cwd-path prefix (:path f)))
@@ -373,8 +385,8 @@
                                :when (not= :dead-closure (:kind fn*))]
                            {:path (str prefix (:path fn*)) :name (:name fn*)
                             :cc (:cc fn*) :sloc (:sloc fn*)})))
-        src-files (remove :test? files)
-        test-files (filter :test? files)
+        src-files (remove :test? files0)
+        test-files (filter :test? files0)
         src-loc (reduce + 0 (map :loc src-files))
         test-loc (reduce + 0 (map :loc test-files))
         lg-src-loc (reduce + 0 (map :loc (filter #(= :lg (:lang %)) src-files)))
@@ -411,8 +423,8 @@
                              (into prod-roots (graph/resolve-symbols
                                                 prod-graph
                                                 (graph/test-roots (lg-of identity)))))
-        sloc-of (into {} (for [f lg-files d (:definitions f)]
-                           [[(:path f) (:line d)] (:sloc d)]))
+        sloc-of (into {} (for [[path m] mets d (:definitions m)]
+                           [[path (:line d)] (:sloc d)]))
         all-defs (vec (for [[qname d] (:defs prod-graph) :when (not= :deftest (:kind d))]
                         {:name (symbol (name qname)) :path (:path d) :line (:line d)
                          :sloc (get sloc-of [(:path d) (:line d)] 1)}))
@@ -454,13 +466,36 @@
                  :source-loc src-loc :test-loc test-loc
                  :debt (when (pos? src-loc)
                          (score/testing-term {:density density :ratio ratio}))}
-        ;; LOC-weighted MEAN of file debts: a debt DENSITY, so adding good
-        ;; code cannot raise it and deleting bad code lowers it.
-        files-debt (if (pos? (reduce + 0 (map :loc files)))
-                     (/ (reduce + 0.0 (map (fn [f] (* (:loc f) (:debt f))) files))
-                        (double (reduce + 0 (map :loc files))))
-                     0.0)
-        corpus (score/corpus files-debt combined efficiency (:debt testing))]
+        ;; Second pass: a file's dead share needs the whole-corpus graph, so
+        ;; it is attached once that is known and the file score is completed.
+        dead-sloc-by-path (reduce (fn [m d] (update m (:path d) (fnil + 0) (:sloc d))) {} dead-defs)
+        all-sloc-by-path (reduce (fn [m d] (update m (:path d) (fnil + 0) (:sloc d))) {} all-defs)
+        files (mapv (fn [f]
+                      (let [tot (get all-sloc-by-path (:path f))
+                            d (when (and tot (pos? tot))
+                                (/ (double (get dead-sloc-by-path (:path f) 0)) tot))]
+                        (assoc f :dead d
+                               :debt (score/file-score
+                                       {:erosion (:erosion f) :verbosity (:verbosity f)
+                                        :defects (:defects f) :dead d}))))
+                    files0)
+        corpus-terms {:erosion (terms/erosion callables)
+                      :verbosity (terms/verbosity (reduce + 0 (vals dup-lines))
+                                                  (reduce + 0 (map :loc files)))
+                      ;; coverage is already a share; 1 - it is the shortfall
+                      :uncovered (when combined (- 1.0 (/ combined 100.0)))
+                      :dead (terms/dead-share dead-defs all-defs)
+                      :defects (when (pos? src-loc)
+                                 (terms/squash (/ (* 1000.0 (reduce + 0 (map :fixes files))) src-loc)
+                                               (get-in score/thresholds [:defects :bad])))
+                      :testing (:debt testing)
+                      :efficiency (when efficiency
+                                    (terms/shortfall-squash
+                                      efficiency
+                                      (get-in score/thresholds [:efficiency :good])
+                                      (- (get-in score/thresholds [:efficiency :good])
+                                         (get-in score/thresholds [:efficiency :bad]))))}
+        corpus (score/corpus-score corpus-terms)]
     (merge corpus
            {:inputs {:commit (:to grange)
                      :commit-source (:head-source grange)
