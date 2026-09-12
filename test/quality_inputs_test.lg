@@ -1,0 +1,41 @@
+(ns test.quality-inputs-test
+  (:require
+   [quality.inputs :as in]
+   [test :refer :all]))
+
+(deftest parses-fix-commits-per-path
+  (let [log "fix(vm): a\n\npkg/vm/a.go\npkg/vm/b.go\n\nfeat: b\n\npkg/vm/a.go\n\nfix: c\n\npkg/vm/a.go\n"]
+    (is (= {"pkg/vm/a.go" 2 "pkg/vm/b.go" 1} (in/parse-fix-log log)))))
+
+(deftest fix-subject-with-slash-is-not-a-path
+  ;; The subject itself contains "/" (fix(rt/core): x) — it must be
+  ;; recognized as a subject line, not misclassified as a path.
+  (let [log "fix(rt/core): x\n\npkg/rt/core.go\n"]
+    (is (= {"pkg/rt/core.go" 1} (in/parse-fix-log log)))))
+
+(deftest capitalized-fix-subject-counts
+  (let [log "Fix: c\n\npkg/vm/a.go\n"]
+    (is (= {"pkg/vm/a.go" 1} (in/parse-fix-log log)))))
+
+(deftest parses-go-coverprofile
+  (let [c (in/parse-coverprofile (slurp "fixtures/quality/cover.out"))]
+    (is (= 6 (:total c)))
+    (is (= 3 (:covered c)))
+    (is (= 50.0 (:percent c)))
+    (is (= {:covered 2 :total 5} (get-in c [:by-file "pkg/vm/a.go"])))))
+
+(deftest ci-seconds-supplied-or-absent
+  (is (= {:seconds 300 :source "supplied"} (in/ci-seconds {:seconds 300})))
+  (is (nil? (in/ci-seconds {}))))
+
+(deftest parse-run-times-computes-seconds-between-iso-timestamps
+  (is (= 300 (in/parse-run-times "2026-01-01T00:00:00Z" "2026-01-01T00:05:00Z")))
+  ;; crosses a day boundary
+  (is (= 3600 (in/parse-run-times "2026-01-01T23:30:00Z" "2026-01-02T00:30:00Z")))
+  ;; crosses a month/year boundary
+  (is (= 86400 (in/parse-run-times "2025-12-31T00:00:00Z" "2026-01-01T00:00:00Z"))))
+
+(deftest git-range-is-two-shas
+  (let [r (in/git-range "2026-01-01")]
+    (is (re-matches #"[0-9a-f]{40}" (:to r)))
+    (is (re-matches #"[0-9a-f]{40}" (:from r)))))
