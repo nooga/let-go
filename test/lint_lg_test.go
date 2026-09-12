@@ -219,6 +219,54 @@ func TestLintR2Restatement(t *testing.T) {
 	}
 }
 
+// R3 — duplicated comment: the same normalized comment text appears in three
+// or more places across the corpus. Twice is not enough; a licence header
+// (already a skip-marker) is never counted even if repeated many times.
+func TestLintR3DuplicatedComment(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"a.lg": ";; Copyright 2026 Example — do not remove\n\n;; retries three times before giving up\n(def a 1)\n",
+		"b.lg": ";; Copyright 2026 Example — do not remove\n\n;; retries three times before giving up\n(def b 2)\n",
+		"c.lg": ";; Copyright 2026 Example — do not remove\n\n;; retries three times before giving up\n(def c 3)\n",
+		"d.lg": ";; Copyright 2026 Example — do not remove\n\n;; seen only twice, should not flag\n(def d 4)\n",
+		"e.lg": ";; Copyright 2026 Example — do not remove\n\n;; seen only twice, should not flag\n(def e 5)\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg: %v\n%s", err, out)
+	}
+
+	dupCount, copyrightHit, twiceHit := 0, false, false
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "[duplicated-comment]") {
+			continue
+		}
+		dupCount++
+		if strings.Contains(line, "copyright") || strings.Contains(strings.ToLower(line), "do not remove") {
+			copyrightHit = true
+		}
+		if strings.Contains(line, "seen only twice") {
+			twiceHit = true
+		}
+	}
+
+	if dupCount != 3 {
+		t.Errorf("duplicated-comment findings = %d, want 3 (one per occurrence of the 3x comment)\n%s", dupCount, out)
+	}
+	if copyrightHit {
+		t.Errorf("licence header must never be flagged as duplicated:\n%s", out)
+	}
+	if twiceHit {
+		t.Errorf("a comment seen only twice must not flag:\n%s", out)
+	}
+}
+
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false

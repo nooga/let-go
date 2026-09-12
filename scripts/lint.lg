@@ -271,6 +271,36 @@
                                          " next=\"" (snippet (clojure.string/trim next)) "\"")})))))
                blocks))))
 
+;; --- R3 — duplicated comment --------------------------------------------
+;;
+;; The same normalized comment text appears >=3 times across the corpus.
+;; Excludes skip-markers (licence headers etc, via the existing skip?) and a
+;; minimum-length guard so trivial one-word repeats ("TODO") don't dominate.
+(def r3-min-length 12)
+
+(defn dup-key [text]
+  (clojure.string/trim (clojure.string/replace (clojure.string/lower-case text) #"\s+" " ")))
+
+;; r3-findings takes {:path :block} pairs across the WHOLE corpus (not one
+;; file), so it must be called once after every file's blocks are collected.
+(defn r3-findings [file-blocks-pairs]
+  (let [eligible (filter (fn [pb] (let [b (:block pb)]
+                                    (and (not (skip? (:raw b)))
+                                         (>= (count (dup-key (:text b))) r3-min-length))))
+                         file-blocks-pairs)
+        groups   (group-by (fn [pb] (dup-key (:text (:block pb)))) eligible)]
+    (vec (mapcat (fn [[k pbs]]
+                   (if (>= (count pbs) 3)
+                     (map (fn [pb] (let [b (:block pb)]
+                                     {:file (:path pb) :line (:line b) :end (:end b)
+                                      :kind :duplicated-comment
+                                      :measure (count pbs)
+                                      :evidence (str "seen " (count pbs) "x: \""
+                                                     (snippet (:text b)) "\"")}))
+                          pbs)
+                     []))
+                 groups))))
+
 (defn source-file? [p] (or (lg-file? p) (go-file? p)))
 
 ;; Directory walk. os/ls yields bare names, so each level rebuilds the path.
@@ -288,8 +318,11 @@
       paths  (if (empty? argv) ["pkg" "scripts"] argv)
       files  (vec (mapcat collect paths))
       hits   (vec (mapcat scan-file files))
-      r1     (vec (mapcat (fn [p] (r1-findings p (file-blocks p))) files))
-      r2     (vec (mapcat (fn [p] (r2-findings p (file-blocks p))) files))
+      blocks-by-file (zipmap files (map file-blocks files))
+      r1     (vec (mapcat (fn [p] (r1-findings p (blocks-by-file p))) files))
+      r2     (vec (mapcat (fn [p] (r2-findings p (blocks-by-file p))) files))
+      all-pairs (vec (mapcat (fn [p] (map (fn [b] {:path p :block b}) (blocks-by-file p))) files))
+      r3     (r3-findings all-pairs)
       go-files (count (filter go-file? files))]
   (doseq [f r1]
     (println (str (:file f) ":" (:line f) "-" (:end f) "  [commented-out-code] "
@@ -300,6 +333,9 @@
   (doseq [f r2]
     (println (str (:file f) ":" (:line f) "-" (:end f) "  [restatement] " (:evidence f))))
   (println (str (count r2) " restatement finding(s) (R2)."))
+  (doseq [f r3]
+    (println (str (:file f) ":" (:line f) "-" (:end f) "  [duplicated-comment] " (:evidence f))))
+  (println (str (count r3) " duplicated-comment finding(s) (R3)."))
   (doseq [h hits]
     (println (str (:file h) ":" (:line h) "  [devlog-comment] \"" (:phrase h) "\""))
     (println (str "    " (snippet (:text h)))))
