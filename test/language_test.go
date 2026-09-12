@@ -49,9 +49,11 @@ func TestRunner(t *testing.T) {
 	// Set up a loader so rt.NS can autoload namespaces from files during tests.
 	loaderCtx := compiler.NewCompiler(consts, rt.NS(rt.NameCoreNS))
 	// Search paths for `require`: current dir for in-tree test helpers
-	// (test/test.lg etc.), plus pkg/rt/gogen so tests can exercise the
-	// gogen macro layer.
-	searchPaths := []string{".", "../pkg/rt/gogen"}
+	// (test/test.lg etc.), pkg/rt/gogen so tests can exercise the gogen
+	// macro layer, and scripts/ so the repo's .lg tooling namespaces
+	// (quality.*, ...) resolve with a plain `go test ./test/` — no env var
+	// required for the suite to be green.
+	searchPaths := []string{".", "../pkg/rt/gogen", "../scripts"}
 	// LG_SOURCE_PATHS lets a test run point the resolver at extra
 	// namespace roots (e.g. scripts/ for quality.forms) without the
 	// harness hardcoding every consumer's path. Entries are relative to
@@ -96,7 +98,10 @@ func TestRunner(t *testing.T) {
 			// native-entry/ holds AOT gate fixtures (programs with -main, not
 			// deftests) driven by TestNativeEntryASTGate; tools/ holds
 			// test-scoped generators invoked with arguments by e2e tests.
-			if info.Name() == "compat" || info.Name() == "clojure-test-suite" || info.Name() == "benches" || info.Name() == "gogen" || info.Name() == "native-entry" || info.Name() == "tools" {
+			// fixtures/ holds inputs read by tests via slurp (and, for the
+			// quality corpus, files whose compilation order would matter);
+			// they are data, not deftests.
+			if info.Name() == "compat" || info.Name() == "clojure-test-suite" || info.Name() == "benches" || info.Name() == "gogen" || info.Name() == "native-entry" || info.Name() == "tools" || info.Name() == "fixtures" {
 				return filepath.SkipDir
 			}
 			return nil
