@@ -137,28 +137,28 @@
         pairs-to-check (vec (sort (into candidates (map (fn [i] [i i]) (range n)))))]
     (let [ps
           (->> (for [[i j] pairs-to-check
-               :let [a (nth prepped i)
-                     b (nth prepped j)
-                     matches (if (= i j)
-                                 (self-shared (:kix a) k)
-                                 (cross-shared (:kix a) (:kix b)))]
-               :when (seq matches)
-               r (aligned-regions matches k)
-               :when (>= (:n r) floor)
-               :when (or (not= i j) (not (self-overlap? r k)))
-               :let [span-a (- (:a-to r) (:a-from r) -1)
-                     span-b (- (:b-to r) (:b-from r) -1)]]
-           {:a {:path (:path a) :start (token-line a (:a-from r))
-                :end (token-line a (+ k -1 (:a-to r)))}
-            :b {:path (:path b) :start (token-line b (:b-from r))
-                :end (token-line b (+ k -1 (:b-to r)))}
-            :shared (:n r)
-            :similarity (min 1.0 (/ (double (:n r)) (max 1 (min span-a span-b))))})
-         ;; realized before sorting, then ordered for determinism
-         vec
-               (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start])
-                              #(get-in % [:b :path]) #(get-in % [:b :start])))
-               vec)]
+                     :let [a (nth prepped i)
+                           b (nth prepped j)
+                           matches (if (= i j)
+                                       (self-shared (:kix a) k)
+                                       (cross-shared (:kix a) (:kix b)))]
+                     :when (seq matches)
+                     r (aligned-regions matches k)
+                     :when (>= (:n r) floor)
+                     :when (or (not= i j) (not (self-overlap? r k)))
+                     :let [span-a (- (:a-to r) (:a-from r) -1)
+                           span-b (- (:b-to r) (:b-from r) -1)]]
+                 {:a {:path (:path a) :start (token-line a (:a-from r))
+                      :end (token-line a (+ k -1 (:a-to r)))}
+                  :b {:path (:path b) :start (token-line b (:b-from r))
+                      :end (token-line b (+ k -1 (:b-to r)))}
+                  :shared (:n r)
+                  :similarity (min 1.0 (/ (double (:n r)) (max 1 (min span-a span-b))))})
+            ;; realized before sorting, then ordered for determinism
+            vec
+            (sort-by (juxt #(get-in % [:a :path]) #(get-in % [:a :start])
+                           #(get-in % [:b :path]) #(get-in % [:b :start])))
+            vec)]
       {:pairs ps :skipped-hashes @skipped :candidate-pairs (count pairs-to-check)})))
 
 (defn pairs
@@ -206,7 +206,6 @@
    overlap is dropped rather than reported."
   ([files k w floor] (:pairs (pairs* files k w floor nil)))
   ([files k w floor cap] (:pairs (pairs* files k w floor cap))))
-
 
 (defn merge-spans
   "`spans` ([from to], inclusive) merged into disjoint, ascending spans.
@@ -273,3 +272,77 @@
                 ;; has no last token to read a line number from.
                 total-lines (max 1 (or (:line (last (:tokens f))) 0))]
             [(:path f) (* 100.0 (/ (min covered total-lines) (double total-lines)))]))))
+
+(defn clone-classes
+  "Region pairs grouped into CLONE CLASSES: the connected components of the
+   graph whose nodes are duplicated regions and whose edges are the matched
+   pairs.
+
+   Pairs badly overstate the work. One block appearing in five files is ten
+   pair lines for a SINGLE extraction opportunity, and the reader has to
+   rebuild the group by eye. Real clone detectors report classes for exactly
+   this reason.
+
+   Ranked by TOTAL DUPLICATED LINES, because that is the size of the prize: a
+   five-member class of 30-line blocks is 150 lines you could delete and
+   outranks a two-member class of 40.
+
+   Transitive closure can chain unrelated regions through a shared
+   intermediate into one low-similarity blob, so a class larger than
+   `max-members` is still reported but carries `:over-merged? true` -- flagged
+   rather than hidden, and rather than silently swallowing the list.
+
+   Each class: {:id :members [{:path :start :end}...] :member-count
+   :total-lines :representative-lines :min-similarity :over-merged?}."
+  [pairs max-members]
+  (let [node (fn [side] [(:path side) (:start side) (:end side)])
+        ;; adjacency over region nodes
+        adj (reduce (fn [m p]
+                      (let [a (node (:a p)) b (node (:b p))]
+                        (-> m
+                            (update a (fnil conj #{}) b)
+                            (update b (fnil conj #{}) a))))
+                    {} pairs)
+        sims (reduce (fn [m p]
+                       (let [a (node (:a p)) b (node (:b p))]
+                         (-> m
+                             (update a (fnil conj []) (:similarity p))
+                             (update b (fnil conj []) (:similarity p)))))
+                     {} pairs)
+        component (fn [seen start]
+                    (loop [todo [start] seen seen members #{}]
+                      (if (empty? todo)
+                        [seen members]
+                        (let [n (peek todo) todo (pop todo)]
+                          (if (contains? seen n)
+                            (recur todo seen members)
+                            (recur (into todo (get adj n #{}))
+                                   (conj seen n)
+                                   (conj members n)))))))
+        classes (loop [nodes (vec (sort (keys adj))) seen #{} out []]
+                  (if (empty? nodes)
+                    out
+                    (let [n (first nodes)]
+                      (if (contains? seen n)
+                        (recur (rest nodes) seen out)
+                        (let [[seen members] (component seen n)]
+                          (recur (rest nodes) seen (conj out members)))))))]
+    (->> classes
+         (map (fn [members]
+                (let [ms (vec (map (fn [[path start end]]
+                                     {:path path :start start :end end})
+                                   (sort members)))
+                      lines (map (fn [m] (inc (- (:end m) (:start m)))) ms)]
+                  {:id (str "c" (let [h (hash (vec (sort (map (fn [m] (str (:path m) ":" (:start m)))
+                                                              ms))))]
+                                  (if (neg? h) (- h) h)))
+                   :members ms
+                   :member-count (count ms)
+                   :total-lines (reduce + 0 lines)
+                   :representative-lines (if (seq lines) (apply max lines) 0)
+                   :min-similarity (reduce min 1.0 (mapcat (fn [m] (get sims [(:path m) (:start m) (:end m)] [1.0])) ms))
+                   :over-merged? (> (count ms) max-members)})))
+         vec
+         (sort-by (juxt (comp - :total-lines) (comp - :member-count)
+                        (fn [c] (:path (first (:members c))))))
+         vec)))

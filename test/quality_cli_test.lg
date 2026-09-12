@@ -235,3 +235,19 @@
   ;; rule catalog is data that grows
   (is (not (contains? (:scored q/comment-kinds) :let-identity)))
   (is (not (contains? (:unscored q/comment-kinds) :let-identity))))
+
+(deftest clone-classes-lead-the-duplicate-story-in-the-report
+  (let [edn-path (str (os/temp-dir) "quality-classes.edn")
+        out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                   "--source-root" fixtures fixtures]))
+        r (read-string (slurp edn-path))]
+    (is (str/includes? out "clone classes"))
+    (is (str/includes? out "one entry per extraction opportunity"))
+    ;; classes for humans, pairs for machines: both in the EDN
+    (is (vector? (:clone-classes r)))
+    (is (vector? (:dup-pairs r)))
+    ;; a class never has more entries than the pairs it came from
+    (is (<= (count (:clone-classes r)) (count (:dup-pairs r))))
+    ;; ranked by the size of the prize
+    (let [totals (map :total-lines (:clone-classes r))]
+      (is (= (vec totals) (vec (reverse (sort totals))))))))

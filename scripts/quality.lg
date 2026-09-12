@@ -654,6 +654,7 @@
                                          (and from to (<= from end) (<= start to)))
                                        (get regions-by-path (:path c) [])))))
         top (score/top-complexity callables (:top opts) duplicated-region?)
+        classes (dup/clone-classes dup-pairs (:clone-class-max-members score/thresholds))
         corpus-terms {:erosion (terms/erosion callables)
                       :verbosity (terms/verbosity (reduce + 0 (vals dup-lines))
                                                   (when (:findings lint) flagged-code-total)
@@ -727,7 +728,12 @@
                                  (mapv #(dissoc % :definitions) files)))
             :issues (score/issues files lg-cov dup-pairs)
             :top-complexity top
-            :best-targets (score/best-targets top)})))
+            :best-targets (score/best-targets top)
+            ;; Classes for humans, pairs for machines: one extraction
+            ;; opportunity is one entry, but the per-pair detail stays in the
+            ;; EDN for anything that needs the exact matched regions.
+            :clone-classes classes
+            :dup-pairs dup-pairs})))
 
 (def usage
   (str "usage: ./lg scripts/quality.lg [--since DATE] [--go-cover FILE]\n"

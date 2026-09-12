@@ -63,6 +63,10 @@
    ;; fragments for bounded work, and the report says how many were skipped
    ;; so the trade is visible rather than silent.
    :dup-posting-cap 40
+   ;; Transitive closure can chain unrelated regions through a shared
+   ;; intermediate; a class bigger than this is reported but flagged as
+   ;; possibly over-merged rather than allowed to swallow the list.
+   :clone-class-max-members 12
    ;; Below this many LOC a single fix commit implies an absurd per-KLOC
    ;; rate (one fix in a 9-line stub reads as 111/KLOC), so the defects term
    ;; is omitted for the file rather than scored off a meaningless rate.
