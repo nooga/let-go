@@ -74,7 +74,11 @@
    ;; built from complexity, Halstead volume and lines, and erosion already
    ;; carries complexity weighted by size, so scoring both double-counts the
    ;; same structure. MI stays a per-file diagnostic.
-   :weights {:erosion 0.25 :verbosity 0.20 :uncovered 0.20
+   ;; verbosity is deliberately LIGHT: our implementation is clone-only, half
+   ;; of what the paper's metric unions, so weighting a known lower bound
+   ;; heavily would overstate confidence in it. Its 0.10 went to erosion and
+   ;; uncovered, the two terms with real mass and real headroom here.
+   :weights {:erosion 0.30 :uncovered 0.25 :verbosity 0.10
              :dead 0.10 :defects 0.10 :testing 0.10 :efficiency 0.05}
    :file-terms [:erosion :verbosity :defects :dead]})
 
