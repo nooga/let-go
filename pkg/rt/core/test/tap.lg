@@ -10,7 +10,7 @@
   "Prints a TAP plan line like '1..n'. n is the number of tests."
   [n]
   (when (neg? n)
-    (throw (ex-info "TAP plan count cannot be negative" {:n n})))
+    (throw (ex-info "TAP plan count cannot be negative" {:fn :print-tap-plan :type (type n) :value n})))
   (println (str "1.." n)))
 
 (defn print-tap-diagnostic

@@ -15,11 +15,22 @@
   (is (= "# a\n# \n# b\n" (out-of #(print-tap-diagnostic "a\n\nb"))))
   (is (= "#  a \n" (out-of #(print-tap-diagnostic " a ")))))
 
+(defn- quietly
+  "Run f, discarding whatever it prints to *out* but keeping its return
+   value — same discard-output-keep-effect mechanism as run_test_var_test.lg
+   and thrown_test.lg's `quiet` and report_events_test.lg's `capture-out`,
+   applied here to a plain *out*-printing fn instead of one that goes
+   through *test-out*/report."
+  [f]
+  (let [result (atom nil)]
+    (with-out-str (reset! result (f)))
+    @result))
+
 (deftest pass-fail-plan
   (is (= "ok m\n" (out-of #(print-tap-pass "m"))))
   (is (= "not ok m\n" (out-of #(print-tap-fail "m"))))
   (is (= "1..0\n" (out-of #(print-tap-plan 0))))
-  (is (nil? (print-tap-pass "x")))
+  (is (nil? (quietly #(print-tap-pass "x"))))
   (is (thrown? ExceptionInfo (print-tap-plan -1))))
 
 (ns test.tap-test.example (:require [test :refer :all]))

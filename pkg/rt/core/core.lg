@@ -1141,6 +1141,14 @@
         bare  (if (and (seq? name) (= 'with-meta (first name)))
                 (first (next name))
                 name)
+        ;; &env is NOT implemented: it is hard-coded nil here, unlike &form
+        ;; (which is real, bound from *macro-form*). Clojure's compiler binds
+        ;; &env to a map of the lexical environment visible at the macro call
+        ;; site; this runtime tracks no such map, so there is nothing real to
+        ;; bind. A reader should not assume &env has parity with &form just
+        ;; because both are exposed — this is deliberate and pinned by a test
+        ;; (not a placeholder to fill in casually); implementing real &env is
+        ;; separate future work, not something to do here.
         wrap-body (fn [b] (cons 'let (cons [(symbol "&form") '*macro-form* (symbol "&env") nil] b)))
         ;; `args` is a vector for a single-arity macro (`[a b] body...`), or
         ;; the first arity-clause list for a multi-arity macro (each clause
@@ -2048,12 +2056,16 @@
 (def ^:dynamic *print-dup* false)
 (def ^:dynamic *flush-on-newline* true)
 
-;; --- macro implicit context (stubs) ---
+;; --- macro implicit context ---
 ;; Clojure's compiler binds &env (lexical-env map) and &form (the current
-;; form being expanded) inside macro bodies. let-go's macro invoker doesn't
-;; thread these in yet, so we bind them globally to nil so macros that
-;; reference them at least resolve. Behavior for code that branches on
-;; their value will differ from Clojure — but the file loads.
+;; form being expanded) inside macro bodies. &form IS real here — defmacro's
+;; wrap-body (above, in defmacro's own definition) shadows it per-expansion
+;; with *macro-form*. &env is NOT implemented: let-go's macro invoker threads
+;; no lexical-environment map, so defmacro's wrap-body always shadows it with
+;; a hard-coded nil. These top-level defs are just the fallback root binding
+;; for code that references &env/&form outside any macro body (so it at
+;; least resolves instead of erroring). Do not assume &env has parity with
+;; &form — code that branches on &env's value will differ from Clojure.
 (def &env nil)
 (def &form nil)
 

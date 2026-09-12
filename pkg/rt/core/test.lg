@@ -321,8 +321,7 @@
              (zero? (mod (count args) (count argv)))))
     `(do-template ~argv (is ~expr) ~@args)
     (throw (ex-info "The number of args doesn't match are's argv."
-                    {:type :illegal-argument
-                     :class 'java.lang.IllegalArgumentException}))))
+                    {:fn :are :type (type args) :value args}))))
 
 ;;; ---- Fixtures (spec 8) ---------------------------------------------------
 
@@ -386,7 +385,13 @@
       (do-report {:type :begin-test-ns :ns ns-obj})
       (in-ns (ns-name ns-obj))
       (try
-        (let [test-hook (ns-resolve ns-obj 'test-ns-hook)]
+        ;; find-var, not ns-resolve: ns-resolve sees referred vars too, so a
+        ;; namespace that (:refer :all)s another namespace defining
+        ;; test-ns-hook would silently run that namespace's hook instead of
+        ;; its own (or instead of test-all-vars). find-var only sees vars
+        ;; actually interned in ns-obj itself (LookupLocal) — matching
+        ;; Clojure's test-ns, which resolves test-ns-hook the same way.
+        (let [test-hook (find-var (symbol (str (ns-name ns-obj)) "test-ns-hook"))]
           (if test-hook
             ((var-get test-hook))
             (test-all-vars ns-obj)))

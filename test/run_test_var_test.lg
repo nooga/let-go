@@ -62,6 +62,18 @@
       (use-fixtures :each)
       (use-fixtures :once))))
 
+(defn- quiet
+  "Run f, discarding whatever it prints via report, but keep report's real
+   dispatch (and so its counter-incrementing side effects) intact — unlike
+   rebinding report itself to a no-op, which would also swallow :pass/
+   :fail/:error counting and break every summary this file asserts on.
+   with-test-out always prints through *test-out*, not *out*, so route
+   *test-out* into with-out-str*'s capture buffer for the duration."
+  [f]
+  (let [result (atom nil)]
+    (with-out-str* (fn [] (binding [*test-out* *out*] (reset! result (f)))))
+    @result))
+
 ;; --- counters ---------------------------------------------------------
 
 (deftest run-test-var-counts-a-passing-test
@@ -72,16 +84,17 @@
     (is (= 0 (:error c)))))
 
 (deftest run-test-var-counts-a-failing-assertion
-  ;; The inner run prints "FAIL (= 1 2)" — that is the probe failing on
-  ;; purpose, not this file failing.
-  (let [c (run-test-var (var sample-failing))]
+  ;; The inner run reports "FAIL (= 1 2)" — that is the probe failing on
+  ;; purpose, not this file failing. quiet discards the printed noise while
+  ;; keeping report's real dispatch (and counting) intact.
+  (let [c (quiet #(run-test-var (var sample-failing)))]
     (is (= 1 (:test c)))
     (is (= 1 (:fail c)))
     (is (= 0 (:error c)))))
 
 (deftest run-test-var-counts-a-throwing-test
   ;; A thrown body is an :error, and must not propagate to the caller.
-  (let [c (run-test-var (var sample-throwing))]
+  (let [c (quiet #(run-test-var (var sample-throwing)))]
     (is (= 1 (:test c)))
     (is (= 1 (:error c)))
     (is (= 0 (:pass c)))))
@@ -95,8 +108,8 @@
   ;; summary it returns and can never be mistaken for — or erase — the
   ;; enclosing run's verdict.
   (let [before test/*report-counters*
-        failed (run-test-var (var sample-failing))
-        errored (run-test-var (var sample-throwing))]
+        failed (quiet #(run-test-var (var sample-failing)))
+        errored (quiet #(run-test-var (var sample-throwing)))]
     (is (= before test/*report-counters*))
     (is (not (successful? failed)))
     (is (not (successful? errored)))))
@@ -122,7 +135,7 @@
 
 (deftest run-test-var-restores-the-namespace-after-a-throw
   (let [before (ns-name *ns*)]
-    (run-test-var (var sample-throwing))
+    (quiet #(run-test-var (var sample-throwing)))
     (is (= before (ns-name *ns*)))))
 
 ;; --- deftest metadata -------------------------------------------------

@@ -36,6 +36,22 @@
 (ns test.runners-test.zeroarg (:require [test :refer :all]))
 (deftest zeroarg-t-pass (is (= 1 1)))
 
+;; I3 regression fixture: test-ns must resolve test-ns-hook via find-var
+;; (interned in the namespace itself), not ns-resolve (which also sees
+;; referred vars). hook-owner defines a real test-ns-hook; hook-referrer
+;; refers hook-owner with :refer :all and defines none of its own — so
+;; hook-referrer's own referred test-ns-hook symbol resolves via ns-resolve
+;; but is NOT interned in hook-referrer itself, and find-var must not see it.
+(ns test.runners-test.hook-owner (:require [test :refer :all]))
+(def owner-hook-log (atom []))
+(defn test-ns-hook [] (swap! owner-hook-log conj :owner-hook-ran))
+
+(ns test.runners-test.hook-referrer
+  (:require [test :refer :all]
+            [test.runners-test.hook-owner :refer :all]))
+(def referrer-log (atom []))
+(deftest referrer-test (swap! referrer-log conj :ran))
+
 (ns test.runners-test)
 
 (defn- quiet
@@ -102,6 +118,21 @@
   (reset! test.runners-test.hooked/hook-log [])
   (quiet #(run-tests 'test.runners-test.hooked))
   (is (= [:ran] @test.runners-test.hooked/hook-log)))
+
+(deftest test-ns-hook-does-not-leak-across-refer-all
+  ;; A namespace that (:refer :all)s another namespace defining test-ns-hook
+  ;; must NOT run that other namespace's hook — test-ns has to look up
+  ;; test-ns-hook the way Clojure's find-var does (interned locally), not
+  ;; the way ns-resolve does (also sees referred vars). Before the fix, this
+  ;; test failed: running hook-referrer invoked hook-owner's hook instead of
+  ;; falling back to test-all-vars on hook-referrer's own referrer-test.
+  (reset! test.runners-test.hook-owner/owner-hook-log [])
+  (reset! test.runners-test.hook-referrer/referrer-log [])
+  (quiet #(run-tests 'test.runners-test.hook-referrer))
+  (is (= [] @test.runners-test.hook-owner/owner-hook-log)
+      "hook-referrer's run must not invoke hook-owner's test-ns-hook")
+  (is (= [:ran] @test.runners-test.hook-referrer/referrer-log)
+      "hook-referrer's own test must run via the test-all-vars fallback"))
 
 (deftest run-tests-no-args-runs-current-ns
   ;; The spec's whole-namespace zero-arg run cannot be exercised on
