@@ -31,7 +31,7 @@ func TestSpecEvidence(t *testing.T) {
 		if !bytes.Contains(text, []byte("@R-")) {
 			continue
 		}
-		if bytes.Contains(text, []byte("\nevidence: skip\n")) {
+		if hasEvidenceSkip(text) {
 			continue
 		}
 		rel, err := filepath.Rel("..", spec)
@@ -54,5 +54,58 @@ func TestSpecEvidence(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatal("no spec carried @R- evidence; the gate would pass vacuously")
+	}
+}
+
+// hasEvidenceSkip reports whether a spec's frontmatter masthead carries the
+// `evidence: skip` opt-out. Deliberately scoped to the masthead — the lines
+// between the leading `---` and the next `---` — so a spec that *documents*
+// the escape hatch inside a fenced example does not silently skip its own
+// gate. A file with no masthead never opts out.
+func hasEvidenceSkip(text []byte) bool {
+	lines := strings.Split(string(text), "\n")
+	if len(lines) == 0 || strings.TrimRight(lines[0], "\r") != "---" {
+		return false
+	}
+	for _, line := range lines[1:] {
+		line = strings.TrimRight(line, "\r")
+		if line == "---" {
+			return false
+		}
+		if line == "evidence: skip" {
+			return true
+		}
+	}
+	return false
+}
+
+func TestHasEvidenceSkip(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "masthead opt-out",
+			text: "---\nstatus: draft\nevidence: skip\n---\n\n# S\n\n[R-x]\n",
+			want: true,
+		},
+		{
+			name: "only inside a fenced example after the masthead",
+			text: "---\nstatus: draft\n---\n\n# S\n\nOpt out like this:\n\n```yaml\n---\nevidence: skip\n---\n```\n",
+			want: false,
+		},
+		{
+			name: "no masthead",
+			text: "# S\n\nevidence: skip\n",
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasEvidenceSkip([]byte(tc.text)); got != tc.want {
+				t.Fatalf("hasEvidenceSkip = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
