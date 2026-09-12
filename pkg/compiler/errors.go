@@ -8,6 +8,7 @@ package compiler
 import (
 	"fmt"
 	"io"
+	"reflect"
 
 	"github.com/nooga/let-go/pkg/errors"
 	"github.com/nooga/let-go/pkg/vm"
@@ -33,13 +34,7 @@ func NewReaderError(r *LispReader, message string) *ReaderError {
 }
 
 func (r *ReaderError) IsEOF() bool {
-	if r.cause != nil {
-		c, ok := r.cause.(*ReaderError)
-		if ok {
-			return c.IsEOF()
-		}
-	}
-	return r.cause == io.EOF
+	return errorIsEOF(r.cause)
 }
 
 func (r *ReaderError) Error() string {
@@ -124,18 +119,45 @@ func (r *CompileError) GetCause() error {
 }
 
 func isErrorEOF(err error) bool {
-	if err == io.EOF {
-		return true
-	}
-	rerr, ok := err.(*ReaderError)
-	if ok {
-		return rerr.IsEOF()
+	return errorIsEOF(err)
+}
+
+func errorIsEOF(err error) bool {
+	pending := []error{err}
+	seen := make(map[error]struct{})
+	for len(pending) > 0 {
+		err = pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if err == nil {
+			continue
+		}
+		if err == io.EOF {
+			return true
+		}
+		// Most errors are pointers or comparable values. Avoid revisiting them so
+		// a malformed cyclic Unwrap graph cannot loop forever; guard the map use
+		// because an error implementation is allowed to have a non-comparable
+		// concrete value.
+		if reflect.TypeOf(err).Comparable() {
+			if _, ok := seen[err]; ok {
+				continue
+			}
+			seen[err] = struct{}{}
+		}
+		if caused, ok := err.(errors.Error); ok {
+			pending = append(pending, caused.GetCause())
+		}
+		if wrapped, ok := err.(interface{ Unwrap() []error }); ok {
+			pending = append(pending, wrapped.Unwrap()...)
+		} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+			pending = append(pending, wrapped.Unwrap())
+		}
 	}
 	return false
 }
 
-// IsErrorEOF reports whether err represents end-of-input: a plain io.EOF, or a
-// ReaderError whose (possibly nested) cause is io.EOF. Use this instead of
-// errors.Is(err, io.EOF) for reader output — ReaderError wraps io.EOF in a
-// `cause` field and does not implement Unwrap, so errors.Is never matches it.
+// IsErrorEOF reports whether err represents end-of-input: a plain or
+// standard-wrapped io.EOF, or a compiler error whose nested cause is io.EOF.
+// Use this instead of errors.Is(err, io.EOF) for reader output — ReaderError
+// keeps its cause in GetCause rather than implementing Unwrap.
 func IsErrorEOF(err error) bool { return isErrorEOF(err) }

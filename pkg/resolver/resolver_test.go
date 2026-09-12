@@ -61,6 +61,81 @@ func TestLoadReturnsCompileErrorWithoutPrinting(t *testing.T) {
 	}
 }
 
+func TestRequirePropagatesTaggedReaderRegistry(t *testing.T) {
+	const nsName = "pr770-registry-dep"
+	dir := t.TempDir()
+	file := filepath.Join(dir, "pr770_registry_dep.lg")
+	if err := os.WriteFile(file, []byte("(ns "+nsName+")\n(def value #review/probe 1)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := compiler.NewTaggedReaderRegistry()
+	if err := registry.RegisterData("review/probe", func(vm.Value) (vm.Value, error) {
+		return vm.Int(42), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	parentNS := rt.NS("pr770-registry-parent")
+	ctx := compiler.NewCompiler(vm.NewConsts(), parentNS).SetTaggedReaders(registry)
+	ctx.SetSource("<require-registry-test>")
+	loader := NewNSResolver(ctx, []string{dir})
+	previousLoader := rt.GetNSLoader()
+	rt.SetNSLoader(loader)
+	t.Cleanup(func() {
+		rt.SetNSLoader(previousLoader)
+		rt.RemoveNS(nsName)
+		rt.RemoveNS("pr770-registry-parent")
+	})
+
+	_, got, err := ctx.CompileMultiple(strings.NewReader("(do (require '" + nsName + ") " + nsName + "/value)"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != vm.Int(42) {
+		t.Fatalf("required namespace value = %v, want 42 from the parent tagged-reader registry", got)
+	}
+}
+
+func TestExecPrecompiledPropagatesTaggedReaderRegistry(t *testing.T) {
+	const (
+		nsName     = "pr770-precompiled-registry-dep"
+		parentName = "pr770-precompiled-registry-parent"
+	)
+	registry := compiler.NewTaggedReaderRegistry()
+	if err := registry.RegisterData("review/probe", func(vm.Value) (vm.Value, error) {
+		return vm.Int(42), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	parentNS := rt.NS(parentName)
+	ctx := compiler.NewCompiler(vm.NewConsts(), parentNS).SetTaggedReaders(registry)
+	ctx.SetSource("<precompiled-registry-test>")
+	chunk, _, err := ctx.CompileMultiple(strings.NewReader(
+		"(ns " + nsName + ")\n(def value (read-string \"#review/probe 1\"))\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		rt.RemoveNS(nsName)
+		rt.RemoveNS(parentName)
+	})
+
+	ctx.SetCurrentNS(parentNS)
+	loaded, err := NewNSResolver(ctx, nil).execPrecompiled(nsName, chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := loaded.LookupLocal(vm.Symbol("value"))
+	if value == nil {
+		t.Fatal("precompiled namespace has no value var")
+	}
+	if got := value.Deref(); got != vm.Int(42) {
+		t.Fatalf("precompiled namespace value = %v, want 42 from the parent tagged-reader registry", got)
+	}
+}
+
 func TestPathsFromInputs_UsesFallbackWhenNotExplicit(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	got := PathsFromInputs("ignored", "x"+sep+"y", false)
