@@ -144,3 +144,16 @@
   (is (cost/superlinear? {:poly 2.807}))
   (is (cost/superlinear? {:exp 2}))
   (is (not (cost/superlinear? {:poly-log 1}))))
+
+(deftest the-ackermann-shape-is-its-own-bucket
+  ;; A recursive call in ARGUMENT POSITION of another recursive call grows
+  ;; beyond every exponential. Nothing tries to compute how far beyond; the
+  ;; shape is detected and reported, which keeps `c^n` meaning what it says.
+  (let [r (degree-of-src
+           "(defn ack [m n] (cond (zero? m) (inc n) (zero? n) (ack (dec m) 1) :else (ack (dec m) (ack m (dec n)))))")]
+    (is (= :beyond-exp (:degree r)))
+    (is (= "beyond exponential" (cost/degree-str (:degree r))))
+    (is (cost/superlinear? (:degree r))))
+  ;; plain tree recursion is NOT this: the calls are siblings, not nested
+  (is (= {:exp 2} (:degree (degree-of-src
+                            "(defn fib [n] (if (< n 2) n (+ (fib (dec n)) (fib (dec (dec n))))))")))))

@@ -93,6 +93,30 @@
                         :else 2)))
               (shape (first arg-lists)) (rest arg-lists)))))
 
+(defn nested-self-call?
+  "Whether a recursive call appears in ARGUMENT POSITION of another recursive
+   call -- the Ackermann shape `(f (dec m) (f m (dec n)))`.
+
+   That shape grows beyond every exponential, and nothing here tries to
+   compute how far beyond. It is detected structurally and reported as its
+   own bucket, which keeps the `c^n` label meaning what it says instead of
+   quietly absorbing a function that is not exponential at all."
+  [name form]
+  (let [found (atom false)]
+    (letfn [(contains-self? [x]
+              (cond
+                (and (seq? x) (= name (first x))) true
+                (coll? x) (boolean (some contains-self? (seq x)))
+                :else false))
+            (walk [x]
+              (when (coll? x)
+                (when (and (seq? x) (= name (first x))
+                           (some contains-self? (rest x)))
+                  (reset! found true))
+                (doseq [y (seq x)] (walk y))))]
+      (walk form))
+    @found))
+
 (defn- call-args
   "Every argument list `name` is called with inside `form`."
   [name form]
@@ -126,6 +150,7 @@
   (cond
     (= :unknown d) -1.0
     (= :memoized d) -1.0
+    (= :beyond-exp d) 2000.0
     (:log d) 0.5
     (:exp d) (+ 1000.0 (double (:exp d)))
     (:poly-log d) (+ (double (:poly-log d)) 0.5)
@@ -139,6 +164,7 @@
   (cond
     (= :unknown d) "unknown"
     (= :memoized d) "memoized"
+    (= :beyond-exp d) "beyond exponential"
     (:log d) "log n"
     (:exp d) (str (:exp d) "^n")
     (:poly-log d) (let [k (double (:poly-log d))]
@@ -198,6 +224,8 @@
         (= :unknown b) :unknown
         (= :memoized a) b
         (= :memoized b) a
+        (= :beyond-exp a) a
+        (= :beyond-exp b) b
         (>= (degree-rank a) (degree-rank b)) a
         :else b))
 
@@ -312,8 +340,10 @@
                 :else :unknown)
         rec-degree (when recursive? (solve-recurrence a b k))
         memo? (memoized? form)
+        ackermann? (and recursive? (nested-self-call? name form))
         total (cond
                 memo? :memoized
+                ackermann? :beyond-exp
                 recursive? (max-degree f rec-degree)
                 :else f)]
     {:name name
@@ -325,6 +355,9 @@
      :evidence
      (cond
        memo? "memoized: the structural bound does not apply"
+       ackermann?
+       (str "a recursive call appears in argument position of another "
+            "(the Ackermann shape): beyond every exponential, and not modelled further")
        (and recursive? (= :unknown b))
        (str a " recursive call(s) on an argument whose shrink could not be read"
             " -- unknown, not constant")
@@ -346,7 +379,8 @@
    and `:memoized` are their own reported buckets, never assumed guilty and
    never assumed innocent."
   [d]
-  (boolean (or (:exp d)
+  (boolean (or (= :beyond-exp d)
+               (:exp d)
                (and (:poly d) (>= (:poly d) 2))
                (and (:poly-log d) (>= (:poly-log d) 2)))))
 
