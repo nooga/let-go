@@ -56,6 +56,12 @@ nest an evidence block inside its own prose:
     |---|---|---|
     | `(print "a")` | `nil` | `"a"` |
 
+A marker written inside an ordinary fenced code block — a `text` or `yaml`
+fence, say — is documentation, not a requirement: the scan tracks plain
+fences as well as evidence fences and collects no markers inside them. That is
+what lets a spec show the grammar without tagging phantom requirements — this
+document does exactly that above.
+
 `<type>` selects the vocabulary (`clj-repl`, `clj-table`, `clj-test`). A
 table comment may name its type as a second word; it defaults to
 `clj-table`. Attributes are space-separated `key=value` pairs on the fence
@@ -184,9 +190,27 @@ is what `accept` consumes.
 
 `run` relays those lines verbatim, then prints a summary line
 `spec-evidence: <spec> <ok>/<total> cases ok` and exits 0 only when every
-case is ok. A runner that dies before reporting is turned into a synthetic
-`FAIL <name>#? engine exit <code>` line, so a crashed engine can never be
-mistaken for an empty pass.
+case is ok. The counts are per **case**, not per line: a case that mismatches
+both its value and its output emits two FAIL lines and is one failed case.
+
+A runner that dies before reporting is turned into a synthetic
+`FAIL <name>#? engine exit <code> <diagnosis>` line, so a crashed engine can
+never be mistaken for an empty pass. The diagnosis is the head of the
+runner's own output with ANSI colouring stripped — `lg` prints compile and
+reader errors to stdout rather than stderr, so that is where the explanation
+lives.
+
+`run` refuses to execute a spec with structural errors at all: it prints them
+and exits 1 without running a case. A malformed opener makes its whole block
+*vanish* from the scan, so a quietly broken spec would otherwise report a
+green `0/0 cases ok`. `accept` refuses the same way, so promotion never
+rewrites a document the tool could not fully read.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Every case ok (or, for `lint`, no errors). |
+| 1 | A case failed, or the spec has structural errors. |
+| 2 | Usage error: no subcommand, an unknown one, or a missing spec path. |
 
 ## Engines and oracle mode
 
@@ -272,11 +296,38 @@ case into an xpass, the gate goes red, and `accept` drops the
 `;; expect: fail` line; the `oracle=none` attribute can be removed in the
 same edit.
 
+## Limitations
+
+`;; out:` captures `*out*` only. A form whose output is routed somewhere else
+produces an empty `out`, and the most common case of that is
+`clojure.test`'s reporter, which writes to `*test-out*` rather than `*out*`.
+So a `clj-repl` case that calls `run-tests` will see the assertion results go
+nowhere the expectation can reach.
+
+`*test-out*` does not exist in this runtime on `main`, so the runner does not
+(and cannot) bind it. Once it lands, the capture has to happen *inside* the
+form rather than in the vocabulary — the form would read
+`(with-out-str (binding [*test-out* *out*] (run-tests 'some.ns)))`, with the
+`;=>` or `;; out:` expectation written against that. Until then, evidence
+about reporter output belongs in a `clj-test` block, which reports through
+`clojure.test` itself rather than through captured output.
+
+Two further limits worth naming: a `clj-test` block reports one line for the
+whole block rather than one per assertion, and `accept` cannot promote
+anything in a `clj-test` block — there is no expectation line to rewrite.
+
+Finally, the scan trusts the document's fence hygiene. An ordinary fence that
+is opened and never closed swallows everything after it, including evidence
+blocks and their markers — symmetrically, so `lint` still reports no pairing
+error. What catches it is the case count: the summary drops, and the Go gate
+fails a spec that ends up running nothing at all. If a block seems to have
+stopped executing, check for an unbalanced fence above it.
+
 ## Tooling and wiring
 
 | Path | Role |
 |---|---|
-| `scripts/spec-evidence.lg` | CLI: `lint`, `tangle`, `generate`, `run`, `accept`. |
+| `scripts/spec-evidence.lg` | CLI: `lint`, `tangle`, `generate`, `run`, `accept`, `specs`. |
 | `scripts/spec-evidence/parse.lg` | Markdown scan: markers, blocks, pairing errors. |
 | `scripts/spec-evidence/vocab.lg` | Vocabulary parsing, templating, runner generation. |
 | `scripts/spec-vocabs/*.vocab` | The shipped vocabularies. |
@@ -291,18 +342,26 @@ LG_SOURCE_PATHS=scripts ./lg scripts/spec-evidence.lg run docs/specs/executable-
 
 `tangle` writes each block to `<outdir>/<base>.<name>.<type>` plus a
 `<base>.map.edn` index; `generate` additionally writes the `.cljc` runner
-for each block. `run` does both into a temporary directory and executes.
+for each block. `run` does both into a fresh temporary directory and executes.
+
+`specs [dir]` prints the **gated** specs under `dir` (default `docs/specs`),
+one path per line: those that carry at least one `@R-` tag and do not opt out
+with `evidence: skip` in their masthead. The opt-out is read from the
+masthead only, so a spec that documents the escape hatch inside a fenced
+example does not thereby skip its own gate. This subcommand is the single
+rule for what the gate covers — both the make targets and the Go gate call
+it rather than re-deriving eligibility, so the two cannot drift apart.
 
 Three make targets wrap the CLI over every spec that carries evidence:
 `make spec-lint`, `make spec-evidence`, and `make spec-oracle` (the last
 under `CLJ_ENGINE="clojure -M" ... --oracle`). `spec-lint` also runs as a
 pre-commit hook on `docs/specs/*.md`.
 
-`TestSpecEvidence` runs one Go subtest per `docs/specs/*.md` whose text
-contains `@R-`, against a freshly built `lg`, and fails on a non-zero exit
-with the runner output attached. A spec opts out with `evidence: skip` in
-its masthead — the escape hatch for a spec whose engine dependencies have
-not landed yet.
+`TestSpecEvidence` asks `specs` which documents are gated, then runs one Go
+subtest per spec against a freshly built `lg`, failing on a non-zero exit
+with the runner output attached, on a missing summary line, or on a summary
+of `0/0`. `evidence: skip` is the escape hatch for a spec whose engine
+dependencies have not landed yet.
 
 ## Coverage rule
 
@@ -313,7 +372,10 @@ alone. Lint additionally rejects a malformed evidence opener, two forms on
 one line of a `clj-repl` block, a `;;` or `;=>` line that matches no rule in
 the block's vocabulary, and `expect=fail` on a `clj-test` block — each of
 which would otherwise assert nothing while looking like it asserted
-something.
+something. It also generates every block into a discard directory and
+reports a failure as `cannot generate @R-<name>: <reason>`, so a block naming
+a vocabulary that does not exist is a lint error with a slug attached rather
+than a stack trace at run time.
 
 A spec is not required to tag every sentence. It is required that every
 sentence it *does* tag is answered, and that every answer is claimed.
