@@ -1,0 +1,80 @@
+(ns test.quality-score-test
+  (:require
+   [quality.score :as s]
+   [test :refer :all]))
+
+(deftest linear-maps-both-directions
+  (is (= 100.0 (s/linear 5 10 30)))
+  (is (= 0.0 (s/linear 40 10 30)))
+  (is (= 50.0 (s/linear 20 10 30)))
+  (is (= 100.0 (s/linear 25 20 2)))
+  (is (= 50.0 (s/linear 11 20 2))))
+
+(deftest file-composite-is-weighted
+  (let [c (s/file-composite {:cc-max 10 :mi 80 :dup-pct 10 :defects-per-kloc 1})]
+    (is (= 100.0 (:cc c)))
+    (is (= 80.0 (:mi c)))
+    (is (= 80.0 (:dup c)))
+    (is (= 80.0 (:defects c)))
+    ;; 0.35*100 + 0.30*80 + 0.20*80 + 0.15*80 = 87
+    (is (< 86.99 (:composite c) 87.01))))
+
+(deftest file-composite-clamps-raw-mi
+  ;; quality.metrics reports RAW (unclamped) MI; the clamp to 0..100 lives here.
+  (is (= 100.0 (:mi (s/file-composite {:cc-max 0 :mi 143.2 :dup-pct 0 :defects-per-kloc 0}))))
+  (is (= 0.0 (:mi (s/file-composite {:cc-max 0 :mi -12.5 :dup-pct 0 :defects-per-kloc 0})))))
+
+(deftest corpus-renormalizes-omitted-terms
+  (let [full (s/corpus 80 50 11 60)
+        no-ci (s/corpus 80 50 nil 60)]
+    ;; full: 0.6*80 + 0.1*50 + 0.15*50 + 0.15*60 = 69.5 (efficiency 11 -> 50)
+    (is (< 69.49 (:score full) 69.51))
+    (is (= [] (:omitted full)))
+    (is (= [:efficiency] (:omitted no-ci)))
+    ;; no-ci: (0.6*80 + 0.1*50 + 0.15*60) / 0.85 = 62 / 0.85 = 72.94...
+    (is (< 72.9 (:score no-ci) 73.0))))
+
+(deftest testing-term-is-mean-of-density-and-ratio
+  ;; density 40 -> 100, ratio 1.0 -> 100
+  (is (= 100.0 (s/testing-term {:density 40 :ratio 1.0})))
+  ;; density 4 -> 0, ratio 0.1 -> 0
+  (is (= 0.0 (s/testing-term {:density 4 :ratio 0.1})))
+  (is (< 49.9 (s/testing-term {:density 40 :ratio 0.1}) 50.1)))
+
+(deftest issues-rank-by-impact
+  (let [per-file [{:path "a.lg" :loc 200 :comment-ratio 0.01 :dup-pct 0 :defects-per-kloc 0
+                   :definitions [{:name 'big :line 3 :end 90 :depth 8 :cc 25}]}]
+        iss (s/issues per-file {:untested []} [])]
+    (is (= [:complexity :long-defn :low-comment :nesting] (sort (map :kind iss))))
+    (is (= :complexity (:kind (first iss))))
+    (is (= 3 (:line (first iss))))))
+
+(deftest issues-cover-duplicate-and-untested-kinds
+  (let [iss (s/issues [] {:untested [{:name 'gone :path "b.lg" :line 12}]}
+                      [{:a {:path "a.lg" :start 1 :end 30}
+                        :b {:path "b.lg" :start 40 :end 70}
+                        :shared 60 :similarity 0.5}])]
+    (is (= [:duplicate :untested] (sort (map :kind iss))))
+    (is (= :duplicate (:kind (first iss))))))
+
+(deftest top-complexity-sorts-by-cc-then-depth
+  (let [per-file [{:path "b.lg" :definitions [{:name 'b1 :line 1 :end 5 :depth 2 :cc 9}]}
+                  {:path "a.lg" :definitions [{:name 'a1 :line 7 :end 20 :depth 4 :cc 9}
+                                              {:name 'a2 :line 1 :end 3 :depth 1 :cc 30}]}]
+        top (s/top-complexity per-file 2)]
+    (is (= 2 (count top)))
+    (is (= 'a2 (:name (first top))))
+    (is (= 30 (:cc (first top))))
+    ;; cc tie -> deeper first
+    (is (= 'a1 (:name (second top))))
+    (is (= 14 (:lines (second top))))))
+
+(deftest file-composite-renormalizes-unmeasured-terms
+  ;; Go files carry no complexity or maintainability measurement; the
+  ;; composite must come from dup and defects alone (0.20 + 0.15 = 0.35),
+  ;; not from a fabricated perfect cc/mi.
+  (let [c (s/file-composite {:cc-max nil :mi nil :dup-pct 10 :defects-per-kloc 1})]
+    (is (nil? (:cc c)))
+    (is (nil? (:mi c)))
+    ;; (0.20*80 + 0.15*80) / 0.35 = 80
+    (is (< 79.99 (:composite c) 80.01))))
