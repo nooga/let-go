@@ -1,0 +1,5 @@
+(ns fixture.alias-test
+  (:require
+   [fixture.alias-a :as x]
+   [test :refer :all]))
+(deftest alias-helper-resolves (is (= 2 (x/helper 1))))
