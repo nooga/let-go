@@ -359,7 +359,8 @@
                                          (vec (mapcat (fn [lang]
                                                         (dup/pairs (mapv #(select-keys % [:path :tokens])
                                                                          (get by-lang lang []))
-                                                                   k w floor))
+                                                                   k w floor
+                                                                   (:dup-posting-cap score/thresholds)))
                                                 [:lg :go]))))))
         dup-pct (apply merge (map (fn [lang]
                                     (dup/file-percent (mapv #(select-keys % [:path :tokens])
