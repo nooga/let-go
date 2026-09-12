@@ -55,3 +55,12 @@
   (is (= ["a" "b" "c"] (vec (p/split-lines "a\r\nb\r\nc\r\n"))))
   (is (= ["a" "b" "c"] (vec (p/split-lines "a\nb\nc\n"))))
   (is (= ["a" "" "b"] (vec (p/split-lines "a\n\nb\n")))))
+
+;; Final review wave, I3: scan tracks ordinary fences too, so a marker inside
+;; a ```text / ```yaml block is not collected as a requirement.
+(def fenced (p/scan (slurp "fixtures/spec-evidence/fenced-marker.md")))
+
+(deftest markers-inside-plain-fences-are-ignored
+  (is (= #{"real"} (:markers fenced)))
+  (is (= ["real"] (map :slug (:blocks fenced))))
+  (is (empty? (:errors fenced))))

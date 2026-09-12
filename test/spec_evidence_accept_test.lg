@@ -77,3 +77,24 @@
                           "(throw (ex-info \"boom\" {}))\n;; throws: ExceptionInfo \"boom\"\n")))
     ;; A second run is clean.
     (is (= 0 (se/main ["run" spec "--engine" "../lg"])))))
+
+;; Final review wave, C2: on a throws MISMATCH the vocab used to report the
+;; raw `(type e)`, so `accept` wrote `;; throws: let-go.lang.ExceptionInfo
+;; "boom"` -- a class name that does not resolve, leaving the spec red
+;; forever. The mismatch branch now uses spec-class-name, exactly like the
+;; unexpected-throw branch.
+(deftest accept-rewrites-a-wrong-throws-expectation-to-a-resolvable-class
+  (let [dir (str (os/temp-dir) "/" (name (gensym "spec-accept-throws-")))
+        spec (str dir "/tm.md")]
+    (mkdir dir)
+    (spit spec (str "Th. [R-tm]\n\n```clj-repl @R-tm oracle=none\n"
+                    "(throw (ex-info \"boom\" {}))\n;; throws: ExceptionInfo \"wrong\"\n```\n"))
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+      (is (= 0 @code))
+      (is (str/includes? out "accepted tm#1 throws"))
+      (let [t (slurp spec)]
+        (is (str/includes? t ";; throws: ExceptionInfo \"boom\""))
+        (is (not (str/includes? t "let-go.lang.ExceptionInfo")))))
+    ;; The promoted class name resolves, so a second run is clean.
+    (is (= 0 (se/main ["run" spec "--engine" "../lg"])))))

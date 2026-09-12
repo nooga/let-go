@@ -7,7 +7,7 @@
    [spec-evidence.parse :as p]
    [spec-evidence.vocab :as v]))
 
-(def ^:private subcommands #{"lint" "tangle" "generate" "run" "accept"})
+(def ^:private subcommands #{"lint" "tangle" "generate" "run" "accept" "specs"})
 
 ;; Bound true while `generate` is called as a step inside `run`, so its
 ;; per-file path lines don't interleave with run's own ok/FAIL relay.
@@ -16,6 +16,25 @@
 (defn- base-name [path]
   (let [f (last (str/split path #"/"))]
     (str/replace f #"\.md$" "")))
+
+(defn- fresh-temp-dir
+  "A new, empty directory under (os/temp-dir). `gensym` alone is NOT unique:
+   its counter restarts at 0 in every `lg` process, so two concurrent runs
+   would both pick `spec-evidence-1` and clobber each other's runners. The
+   name mixes in a per-process-seeded rand-int, and the loop retries until it
+   lands on a path that does not exist yet."
+  [prefix]
+  (loop [tries 0]
+    (let [dir (str (os/temp-dir) "/" (name (gensym prefix)) "-" (rand-int 1000000000))]
+      (cond
+        (not (file-exists? dir)) (do (mkdir dir) dir)
+        (> tries 100) (throw (ex-info "cannot create a fresh temp dir" {:prefix prefix}))
+        :else (recur (inc tries))))))
+
+(defn- tangled-text [b]
+  (if (= "clj-table" (:type b))
+    (apply str (map #(str (str/join "\t" %) "\n") (:rows b)))
+    (:body b)))
 
 (defn- expectation-line? [l]
   (let [t (str/trim l)]
@@ -64,17 +83,32 @@
   (when (and (= "clj-test" (:type b)) (= "fail" (get (:attrs b) "expect")))
     [(str "expect=fail unsupported on clj-test @R-" (:slug b))]))
 
+(defn- generation-errors
+  "Tangle and generate every block into a discard directory. A block naming a
+   vocabulary that does not exist, or whose body the generator cannot turn
+   into runner source, otherwise survives lint and explodes at `run` time as
+   a bare stack trace with no slug attached. Doing the work here turns that
+   into an ordinary lint error. The generated source is thrown away -- only
+   whether generation succeeds is interesting."
+  [blocks]
+  (let [dir (fresh-temp-dir "spec-evidence-lint-")]
+    (keep (fn [b]
+            (try
+              (let [t (tangled-text b)]
+                (spit (str dir "/" (:slug b) "." (:type b)) t)
+                (spit (str dir "/" (:slug b) ".cljc")
+                      (v/generate t (:type b) (v/read-vocab (:type b)) (:slug b) (:attrs b))))
+              nil
+              (catch Throwable e
+                (str "cannot generate @R-" (:slug b) ": " (or (ex-message e) (str e))))))
+          blocks)))
+
 (defn lint [spec]
   (let [{:keys [errors blocks]} (p/scan (slurp spec))
         extra (mapcat (fn [b] (concat (repl-body-errors b) (test-block-errors b))) blocks)
-        errors (concat errors extra)]
+        errors (concat errors extra (generation-errors blocks))]
     (doseq [e errors] (println e))
     (if (empty? errors) 0 1)))
-
-(defn- tangled-text [b]
-  (if (= "clj-table" (:type b))
-    (apply str (map #(str (str/join "\t" %) "\n") (:rows b)))
-    (:body b)))
 
 (defn tangle [spec outdir]
   (let [{:keys [blocks]} (p/scan (slurp spec))
@@ -122,10 +156,29 @@
         cmd (or (:engine flags) (when-not (str/blank? env) env) "./lg")]
     (vec (str/split cmd #" +"))))
 
-(defn- fresh-temp-dir [prefix]
-  (let [dir (str (os/temp-dir) "/" (name (gensym prefix)))]
-    (mkdir dir)
-    dir))
+(defn- line-id
+  "The case id out of a runner line: `ok <id>`, `ok <id> # XFAIL` and
+   `FAIL <id> want ...` all put it in second position."
+  [l]
+  (second (str/split (str/trim l) #" +")))
+
+;; `re-pattern` rather than a literal: Go's regexp has no \u escape and this
+;; runtime's reader rejects \x, so the ESC byte is spliced in at runtime.
+(def ^:private ansi-re (re-pattern (str (char 27) "\\[[0-9;]*m")))
+
+(defn- engine-diagnosis
+  "`lg` prints compile and reader errors to STDOUT, not stderr, so an engine
+   that died before reporting a single case leaves its only diagnosis in
+   `:out`. Keep the FIRST 5 non-empty lines -- lg puts the actual error
+   message and source location at the top and a stack trace underneath, so
+   the tail is the least informative part -- strip the ANSI colouring it
+   emits, append whatever `:err` carried, and join with ` | ` so the
+   synthetic FAIL stays one grep-able record rather than a multi-line spill."
+  [r]
+  (let [clean (fn [t] (str/trim (str/replace (or t "") ansi-re "")))
+        head (map clean (take 5 (remove str/blank? (p/split-lines (:out r)))))
+        text (str/join " | " (remove str/blank? (concat head [(clean (:err r))])))]
+    (if (> (count text) 400) (str (subs text 0 400) " ...") text)))
 
 (defn run-spec
   "-> {:ok n :total n :lines [..]}"
@@ -142,23 +195,65 @@
               r (apply os/sh (conj engine runner))
               lines (filter #(or (str/starts-with? % "ok ") (str/starts-with? % "FAIL ")) (p/split-lines (:out r)))
               lines (if (and (not= 0 (:exit r)) (empty? (filter #(str/starts-with? % "FAIL ") lines)))
-                      (conj (vec lines) (str "FAIL " (:slug b) "#? engine exit " (:exit r) " " (str/trim (:err r))))
-                      lines)]
+                      (conj (vec lines) (str "FAIL " (:slug b) "#? engine exit " (:exit r) " "
+                                             (engine-diagnosis r)))
+                      lines)
+              ;; Counts are per CASE, not per line: one case can emit two
+              ;; FAIL lines (a value AND an out mismatch) and that is still
+              ;; one failed case.
+              ids (distinct (map line-id lines))
+              failed (set (map line-id (filter #(str/starts-with? % "FAIL ") lines)))]
           (doseq [l lines] (println l))
           (-> acc
-              (update :total + (count lines))
-              (update :ok + (count (filter #(str/starts-with? % "ok ") lines)))
+              (update :total + (count ids))
+              (update :ok + (count (remove failed ids)))
               (update :lines into lines))))
       {:ok 0 :total 0 :lines []}
       blocks)))
 
+(defn- structural-errors!
+  "Print `scan`'s structural errors, if any, and report whether there were
+   any. A malformed opener makes its whole block VANISH from the scan, so a
+   quietly broken spec would otherwise report `0/0 cases ok` and exit 0 -- a
+   green gate over evidence that never ran. `run` and `accept` refuse to
+   proceed instead."
+  [spec]
+  (let [errors (:errors (p/scan (slurp spec)))]
+    (doseq [e errors] (println e))
+    (when (seq errors)
+      (println (str "spec-evidence: " spec " not run: " (count errors) " structural error(s)")))
+    (boolean (seq errors))))
+
 (defn run [spec rest]
-  (let [{:keys [ok total]} (run-spec spec (parse-flags rest))]
-    (println (str "spec-evidence: " spec " " ok "/" total " cases ok"))
-    (if (= ok total) 0 1)))
+  (if (structural-errors! spec)
+    1
+    (let [{:keys [ok total]} (run-spec spec (parse-flags rest))]
+      (println (str "spec-evidence: " spec " " ok "/" total " cases ok"))
+      (if (= ok total) 0 1))))
 
 ;; ------------------------------------------------------------------ accept
 
+;; THREE MIRRORS OF THE VOCAB GRAMMAR. `accept` has to write markdown that
+;; the vocabularies can read back, so three things in this codebase encode the
+;; same grammar and must be changed together:
+;;
+;;   1. `fail-re` below          -- parses the FAIL lines clj-repl.vocab's
+;;                                  `spec-fail!`/`spec-xpass!` emit.
+;;   2. `exp-prefix` below       -- maps a `<what>` back to the expectation
+;;                                  prefix clj-repl.vocab's rules match
+;;                                  (`;=>`, `;; out:`, `;; throws:`).
+;;   3. `table->repl-text`       -- in spec-evidence/vocab.lg; rewrites a
+;;      (vocab.lg)                  table row into those same lines.
+;;
+;; Adding or renaming a clj-repl expectation rule means touching all three.
+;;
+;; AMBIGUITY: `fail-re` splits `want ... got ...` on the literal ` got `. A
+;; `want` or `got` value whose own pr-str contains ` got ` (e.g. the string
+;; "a got b") makes the split ambiguous, and the regex's greedy `(.*)` picks
+;; the LAST occurrence -- so `want` absorbs the extra text. `run` still
+;; reports such a case correctly; only `accept`'s promotion of it is
+;; unreliable. Promote those by hand.
+;;
 ;; The FAIL line preamble emits (clj-repl.vocab's boot section) is
 ;; `FAIL <slug>#<n> want <edn> got <edn> [<what>]`; xpass has its own fixed
 ;; shape (`FAIL <id> want failure got pass [xpass]`) but fits the same
@@ -328,12 +423,7 @@
         (when (= 0 (:exit r))
           (spit spec (str (str/join "\n" (assoc lines idx (str "last-verified: " (str/trim (:out r))))) "\n")))))))
 
-(defn accept
-  "Run, then rewrite each FAIL's expectation in the markdown to match what
-   the engine actually produced (17.4 promotion). oracle=none blocks are
-   already excluded from running -- and so from producing FAILs -- whenever
-   --oracle is set, via run-spec's own block filter."
-  [spec rest]
+(defn- accept-run [spec rest]
   (let [flags (parse-flags rest)
         {:keys [lines]} (run-spec spec flags)
         {:keys [blocks]} (p/scan (slurp spec))
@@ -350,24 +440,86 @@
     (doseq [r results] (when (:message r) (println (:message r))))
     (if (some :blocked results) 1 0)))
 
+(defn accept
+  "Run, then rewrite each FAIL's expectation in the markdown to match what
+   the engine actually produced (17.4 promotion). oracle=none blocks are
+   already excluded from running -- and so from producing FAILs -- whenever
+   --oracle is set, via run-spec's own block filter."
+  [spec rest]
+  (if (structural-errors! spec)
+    1
+    (accept-run spec rest)))
+
+;; ------------------------------------------------------------------- specs
+
+(defn- masthead-lines
+  "The frontmatter lines of a doc: everything between a leading `---` and the
+   next `---`. Empty when the file has no masthead."
+  [text]
+  (let [lines (p/split-lines text)]
+    (if (and (seq lines) (= "---" (str/trim (first lines))))
+      (vec (take-while #(not= "---" (str/trim %)) (rest lines)))
+      [])))
+
+(defn evidence-skip?
+  "True when a spec's MASTHEAD carries the `evidence: skip` opt-out. Scoped
+   to the masthead on purpose: a spec that documents the escape hatch inside
+   a fenced example must not thereby skip its own gate."
+  [text]
+  (boolean (some #(= "evidence: skip" (str/trim %)) (masthead-lines text))))
+
+(defn eligible-spec?
+  "A spec is gated when it carries at least one `@R-` evidence tag and has
+   not opted out in its masthead."
+  [path]
+  (let [text (slurp path)]
+    (and (str/includes? text "@R-") (not (evidence-skip? text)))))
+
+(defn specs
+  "Print the gated specs under `dir`, one path per line. This is the single
+   rule for \"which specs does the gate run\" -- the Makefile targets and the
+   Go gate (test/spec_evidence_test.go) both shell out to it rather than
+   re-deriving it, so eligibility cannot drift between them."
+  [dir]
+  (doseq [path (sort (map #(str dir "/" %)
+                          (filter #(str/ends-with? % ".md") (os/ls dir))))]
+    (when (eligible-spec? path) (println path)))
+  0)
+
+;; --------------------------------------------------------------------- main
+
+(def ^:private usage
+  "usage: spec-evidence <lint|tangle|generate|run|accept> <spec.md> [args]
+       spec-evidence specs [dir]")
+
 (defn main [args]
   (let [[cmd spec & rest] args]
-    (case cmd
-      "lint"   (lint spec)
-      "tangle" (tangle spec (or (first rest) "conformance"))
-      "generate" (generate spec (or (first rest) "conformance"))
-      "run"    (run spec rest)
-      "accept" (accept spec rest)
-      (do (println "usage: spec-evidence <lint|tangle|generate|run|accept> <spec.md> [args]") 2))))
+    (cond
+      (= "specs" cmd) (specs (or spec "docs/specs"))
+      ;; Misinvocation -- an unknown subcommand, or a known one with no spec
+      ;; path -- is a usage error (exit 2), distinct from a spec that failed
+      ;; its evidence (exit 1).
+      (not (contains? subcommands cmd)) (do (println usage) 2)
+      (str/blank? (or spec "")) (do (println usage) 2)
+      :else (case cmd
+              "lint"   (lint spec)
+              "tangle" (tangle spec (or (first rest) "conformance"))
+              "generate" (generate spec (or (first rest) "conformance"))
+              "run"    (run spec rest)
+              "accept" (accept spec rest)))))
 
-;; Script entry: os/args is the full Go argv — [binary script-path & user-args]
-;; both when run as a script (./lg scripts/spec-evidence.lg lint spec.md) and
-;; when the file is loaded by the go-test-based .lg harness (there os/args is
-;; the test binary's own argv, e.g. ["/…/test.test" "-test.run=…" …]). So a
-;; `require` of this namespace under the test harness must not trigger main:
-;; drop the first two entries (binary, script/test-binary path) and only fire
-;; when what remains actually looks like `<subcommand> <spec.md>`.
-(let [entry-args (vec (drop 2 os/args))]
-  (when (and (contains? subcommands (first entry-args))
-             (str/ends-with? (or (second entry-args) "") ".md"))
-    (os/exit (main entry-args))))
+;; Script entry. os/args is the full Go argv. Run as a script it is
+;; [binary "scripts/spec-evidence.lg" & user-args]; when the .lg test harness
+;; `require`s this namespace instead, os/args is the TEST BINARY's own argv
+;; (e.g. ["/…/test.test" "-test.run=…" …]) and must not trigger main.
+;;
+;; argv[1] -- the script path -- is what separates the two, so the guard keys
+;; off that rather than off the shape of the user args. Keying off the args
+;; (as an earlier version did: "first arg is a known subcommand AND second
+;; ends in .md") silently swallowed MISINVOCATIONS: `spec-evidence` with no
+;; subcommand, or an unknown one, failed the guard, never reached main, and
+;; exited 0 with no output. Now they reach main and get the usage line and
+;; exit 2.
+(let [argv (vec os/args)]
+  (when (str/ends-with? (or (get argv 1) "") "spec-evidence.lg")
+    (os/exit (main (vec (drop 2 argv))))))

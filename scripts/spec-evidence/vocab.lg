@@ -12,14 +12,6 @@
 
 ;; ---------------------------------------------------------------- utilities
 
-(defn- split-once
-  "This runtime's `split` has no limit argument, so splitting on the FIRST
-   occurrence of a separator is done by hand. Returns [before after] or nil."
-  [s sep]
-  (let [i (core/index-of s sep)]
-    (when (and i (>= i 0))
-      [(subs s 0 i) (subs s (+ i (count sep)))])))
-
 (defn- ltrim [s] (str/replace s #"^[ \t]+" ""))
 
 (defn- vocab-path
@@ -52,7 +44,7 @@
           (str/starts-with? line "boot ") (update v :boot conj (subs line 5))
           (str/starts-with? line "epilogue ") (update v :epilogue conj (subs line 9))
           :else
-          (if-let [[pat tpl] (split-once line " => ")]
+          (if-let [[pat tpl] (p/split-once line " => ")]
             (update v :rules conj {:pattern (str/split (str/trim pat) #" +") :template tpl})
             v))))
     {:boot [] :epilogue [] :rules []}
@@ -191,7 +183,12 @@
 
 (defn- table->repl-text
   "A row is `form \\t value \\t out [\\t expect]`; rewrite it as the repl
-   statement lines that say the same thing."
+   statement lines that say the same thing.
+
+   One of the three mirrors of the clj-repl expectation grammar (the other
+   two are `fail-re` and `exp-prefix` in spec-evidence.lg) -- adding or
+   renaming a clj-repl rule means touching all three. See the comment block
+   above `fail-re`."
   [text]
   (apply str
          (for [row (p/split-lines text)
