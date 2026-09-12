@@ -1,0 +1,25 @@
+(ns test.ir-coverage-classify-test
+  (:require
+   [ir.coverage :as cov]
+   [test :refer :all]))
+
+;; classify-error buckets a lowering failure by its MESSAGE. Core library
+;; validation failures are ExceptionInfo, so classifying `(str e)` would see
+;; `#error {:message "...", :data ...}` instead -- which both shifts the
+;; 100-char truncation point and lets the unresolved-symbol capture run into
+;; the message's closing quote, renaming a stable bucket.
+
+(deftest unresolved-symbol-bucket-from-an-exception
+  (testing "an ExceptionInfo classifies by its message, with no stray quote"
+    (is (= :unresolved/foo
+           (cov/classify-error (ex-info "ir/build: unresolved symbol foo" {})))))
+  (testing "a bare string classifies identically"
+    (is (= :unresolved/foo
+           (cov/classify-error "ir/build: unresolved symbol foo")))))
+
+(deftest classify-error-stays-idempotent
+  (testing "an already-classified keyword passes through unchanged"
+    (is (= :unresolved/foo (cov/classify-error :unresolved/foo))))
+  (testing "a string already starting with : passes through unchanged"
+    (is (= ":validate/cross-block-ref"
+           (cov/classify-error ":validate/cross-block-ref")))))
