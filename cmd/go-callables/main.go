@@ -1,6 +1,7 @@
 // Command go-callables measures Go callables for the code-quality report.
 //
-//	go-callables <path>...    # files, or directories walked recursively
+//	go-callables <path>...              # files, or directories walked recursively
+//	go-callables --extents <path>...    # statement/declaration line ranges
 //
 // It writes one EDN map to stdout, keyed by concern so that adding a concern
 // later is additive and breaks no consumer:
@@ -110,8 +111,13 @@ func goFiles(args []string) ([]string, error) {
 
 func main() {
 	args := os.Args[1:]
+	extentsOnly := false
+	if len(args) > 0 && args[0] == "--extents" {
+		extentsOnly = true
+		args = args[1:]
+	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: go-callables <path>...")
+		fmt.Fprintln(os.Stderr, "usage: go-callables [--extents] <path>...")
 		os.Exit(2)
 	}
 	files, err := goFiles(args)
@@ -122,6 +128,32 @@ func main() {
 
 	w := bufio.NewWriter(os.Stdout)
 	defer w.Flush()
+
+	if extentsOnly {
+		// Structural boundaries for the named files only. Emitted on demand
+		// rather than with every run: only files carrying a duplicate region
+		// need them, and the whole corpus would be a large payload for
+		// nothing.
+		fmt.Fprintln(w, "{:version 1")
+		fmt.Fprint(w, " :extents [")
+		for _, f := range files {
+			src, err := os.ReadFile(f)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "go-callables: %s: %v\n", f, err)
+				continue
+			}
+			es, err := goExtents(string(src))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "go-callables: %s: %v\n", f, err)
+				continue
+			}
+			for _, e := range es {
+				fmt.Fprintf(w, "\n  {:path %s :from %d :to %d}", ednString(f), e.from, e.to)
+			}
+		}
+		fmt.Fprintln(w, "]}")
+		return
+	}
 
 	type measurement struct {
 		path   string
