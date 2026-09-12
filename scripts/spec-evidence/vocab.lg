@@ -111,6 +111,16 @@
                 (recur tail (str head (get caps nm)))
                 (recur tail (str head "{" nm "}"))))))))))
 
+;; ----------------------------------------------------------- lint helpers
+
+(defn matches-any-rule?
+  "True when `line` matches at least one of `rules`' patterns. Used by lint
+   to tell an expectation line that's just spelled wrong (e.g. `;; nonsense:
+   3`, no rule covers it) from one that's merely blank or not an
+   expectation at all."
+  [rules line]
+  (boolean (some #(match-pattern (:pattern %) line) rules)))
+
 ;; ------------------------------------------------- tangled text -> statements
 
 (defn- complete-form?

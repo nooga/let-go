@@ -22,3 +22,21 @@
     (let [m (read-string (slurp (str dir "/basic.map.edn")))]
       (is (= "clj-test" (get-in m ["block" :type])))
       (is (= {"oracle" "none"} (get-in m ["print" :attrs]))))))
+
+(deftest lint-flags-unrecognized-expectation-line
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/lint-extra.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "unrecognized expectation at line 6: ;; nonsense: 3"))))
+
+(deftest lint-flags-multiple-forms-on-one-line
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/lint-extra.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "multiple forms on line 12"))))
+
+(deftest lint-flags-expect-fail-on-clj-test
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["lint" "fixtures/spec-evidence/lint-extra.md"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "expect=fail unsupported on clj-test @R-testfail"))))

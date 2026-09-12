@@ -8,12 +8,65 @@
 
 (def ^:private subcommands #{"lint" "tangle" "generate" "run" "accept"})
 
+;; Bound true while `generate` is called as a step inside `run`, so its
+;; per-file path lines don't interleave with run's own ok/FAIL relay.
+(def ^:dynamic *quiet* false)
+
 (defn- base-name [path]
   (let [f (last (str/split path #"/"))]
     (str/replace f #"\.md$" "")))
 
+(defn- expectation-line? [l]
+  (let [t (str/trim l)]
+    (or (str/starts-with? t ";;") (str/starts-with? t ";=>"))))
+
+(defn- multiple-forms-on-line?
+  "True when a single physical line, read on its own, already contains more
+   than one complete top-level form (e.g. `(+ 1 2) (+ 3 4)`). A line that's
+   part of a multi-line form, or that fails to read at all on its own, is
+   not flagged -- `read-all-string` erroring just means \"not standalone\"."
+  [l]
+  (let [t (str/trim l)]
+    (if (or (str/blank? t) (str/starts-with? t ";"))
+      false
+      (try (> (count (read-all-string t)) 1) (catch Throwable _ false)))))
+
+(defn- repl-exp-rules []
+  (remove #(= ["form"] (:pattern %)) (:rules (v/parse-vocab (v/read-vocab "clj-repl")))))
+
+(defn- repl-body-errors
+  "Lines of a `clj-repl` block's body that either cram two forms onto one
+   line, or look like an expectation (`;;`/`;=>` prefixed) but match none
+   of the clj-repl vocab's expectation rules -- both are almost always
+   typos that would otherwise silently do nothing at generate time."
+  [b]
+  (when (= "clj-repl" (:type b))
+    (let [lines (p/split-lines (or (:body b) ""))
+          base-line (:line b)
+          exp-rules (repl-exp-rules)]
+      (apply concat
+             (map-indexed
+              (fn [j l]
+                (let [n (+ base-line 1 j)]
+                  (cond
+                    (multiple-forms-on-line? l) [(str "multiple forms on line " n)]
+                    (and (expectation-line? l) (not (v/matches-any-rule? exp-rules l)))
+                    [(str "unrecognized expectation at line " n ": " (str/trim l))]
+                    :else [])))
+              lines)))))
+
+(defn- test-block-errors
+  "`expect=fail` is a clj-repl/clj-table concept (it flips a case's expected
+   outcome); clj-test blocks run through clojure.test and have no such
+   knob, so the attribute is flagged rather than silently ignored."
+  [b]
+  (when (and (= "clj-test" (:type b)) (= "fail" (get (:attrs b) "expect")))
+    [(str "expect=fail unsupported on clj-test @R-" (:slug b))]))
+
 (defn lint [spec]
-  (let [{:keys [errors]} (p/scan (slurp spec))]
+  (let [{:keys [errors blocks]} (p/scan (slurp spec))
+        extra (mapcat (fn [b] (concat (repl-body-errors b) (test-block-errors b))) blocks)
+        errors (concat errors extra)]
     (doseq [e errors] (println e))
     (if (empty? errors) 0 1)))
 
@@ -29,7 +82,7 @@
     (doseq [b blocks]
       (let [path (str outdir "/" base "." (:slug b) "." (:type b))]
         (spit path (tangled-text b))
-        (println path)))
+        (when-not *quiet* (println path))))
     (spit (str outdir "/" base ".map.edn")
           (pr-str (into {} (map (fn [b] [(:slug b) (select-keys b [:type :line :attrs])]) blocks))))
     0))
@@ -45,8 +98,63 @@
       (let [tangled (slurp (str outdir "/" base "." (:slug b) "." (:type b)))
             path (str outdir "/" base "." (:slug b) ".cljc")]
         (spit path (v/generate tangled (:type b) (v/read-vocab (:type b)) (:slug b) (:attrs b)))
-        (println path)))
+        (when-not *quiet* (println path))))
     0))
+
+(defn- parse-flags [rest]
+  (loop [r rest m {}]
+    (cond
+      (empty? r) m
+      (= "--engine" (first r)) (recur (nnext r) (assoc m :engine (second r)))
+      (= "--oracle" (first r)) (recur (next r) (assoc m :oracle true))
+      :else (recur (next r) m))))
+
+(defn- engine-cmd [flags]
+  ;; clojure.string/split returns a PersistentList here, not a vector, so
+  ;; `conj`-ing the runner path onto it would PREPEND (list conj is
+  ;; push-to-front) instead of appending after the engine args. Force a
+  ;; vector so the later `(conj engine runner)` in run-spec appends.
+  ;; os/getenv returns "" (not nil) for an unset var, so `or` alone would
+  ;; treat an absent CLJ_ENGINE as a truthy empty command; blank? filters
+  ;; that out explicitly before falling back to the "./lg" default.
+  (let [env (os/getenv "CLJ_ENGINE")
+        cmd (or (:engine flags) (when-not (str/blank? env) env) "./lg")]
+    (vec (str/split cmd #" +"))))
+
+(defn- fresh-temp-dir [prefix]
+  (let [dir (str (os/temp-dir) "/" (name (gensym prefix)))]
+    (mkdir dir)
+    dir))
+
+(defn run-spec
+  "-> {:ok n :total n :lines [..]}"
+  [spec flags]
+  (let [dir (fresh-temp-dir "spec-evidence-")
+        _ (binding [*quiet* true] (generate spec dir))
+        {:keys [blocks]} (p/scan (slurp spec))
+        base (base-name spec)
+        engine (engine-cmd flags)
+        blocks (if (:oracle flags) (remove #(= "none" (get (:attrs %) "oracle")) blocks) blocks)]
+    (reduce
+     (fn [acc b]
+       (let [runner (str dir "/" base "." (:slug b) ".cljc")
+             r (apply os/sh (conj engine runner))
+             lines (filter #(or (str/starts-with? % "ok ") (str/starts-with? % "FAIL ")) (p/split-lines (:out r)))
+             lines (if (and (not= 0 (:exit r)) (empty? (filter #(str/starts-with? % "FAIL ") lines)))
+                     (conj (vec lines) (str "FAIL " (:slug b) "#? engine exit " (:exit r) " " (str/trim (:err r))))
+                     lines)]
+         (doseq [l lines] (println l))
+         (-> acc
+             (update :total + (count lines))
+             (update :ok + (count (filter #(str/starts-with? % "ok ") lines)))
+             (update :lines into lines))))
+     {:ok 0 :total 0 :lines []}
+     blocks)))
+
+(defn run [spec rest]
+  (let [{:keys [ok total]} (run-spec spec (parse-flags rest))]
+    (println (str "spec-evidence: " spec " " ok "/" total " cases ok"))
+    (if (= ok total) 0 1)))
 
 (defn main [args]
   (let [[cmd spec & rest] args]
@@ -54,6 +162,7 @@
       "lint"   (lint spec)
       "tangle" (tangle spec (or (first rest) "conformance"))
       "generate" (generate spec (or (first rest) "conformance"))
+      "run"    (run spec rest)
       (do (println "usage: spec-evidence <lint|tangle|generate|run|accept> <spec.md> [args]") 2))))
 
 ;; Script entry: os/args is the full Go argv — [binary script-path & user-args]

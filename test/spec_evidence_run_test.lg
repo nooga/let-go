@@ -1,0 +1,36 @@
+(ns test.spec-evidence-run-test
+  (:require [test :refer :all]
+            [clojure.string :as str]
+            [spec-evidence :as se]))
+
+;; go test ./test/ runs with cwd = test/ (one level below the repo root, see
+;; language_test.go), so the freshly built binary at the repo root is
+;; "../lg" from here -- not "./lg".
+
+(deftest run-reports-per-case-and-exits-one-on-mismatch
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["run" "fixtures/spec-evidence/core-only.md" "--engine" "../lg"])))]
+    (is (= 1 @code))
+    (is (str/includes? out "ok arith#1"))
+    (is (str/includes? out "ok arith#2"))
+    (is (str/includes? out "ok out#1"))
+    (is (str/includes? out "FAIL wrong#1 want 3 got 2"))
+    (is (str/includes? out "ok xfail#1 # XFAIL"))
+    (is (str/includes? out "ok xfail#2"))
+    (is (str/includes? out "5/6 cases ok"))))
+
+(deftest unexpected-pass-is-a-failure
+  (let [dir (str (os/temp-dir) "/" (name (gensym "spec-xpass-")))
+        spec (str dir "/y.md")]
+    (mkdir dir)
+    (spit spec "P. [R-p]\n\n```clj-repl @R-p\n(+ 1 1)\n;=> 2\n;; expect: fail\n```\n")
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main ["run" spec "--engine" "../lg"])))]
+      (is (= 1 @code))
+      (is (str/includes? out "FAIL p#1 want failure got pass [xpass]")))))
+
+(deftest oracle-mode-skips-oracle-none-blocks
+  (let [code (atom nil)
+        out (with-out-str (reset! code (se/main ["run" "fixtures/spec-evidence/core-only.md" "--engine" "../lg" "--oracle"])))]
+    (is (= 0 @code))
+    (is (not (str/includes? out "wrong#1")))))
