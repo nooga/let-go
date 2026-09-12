@@ -76,13 +76,36 @@
     (is (= [:duplicate :untested] (sort (map :kind iss))))
     (is (= :duplicate (:kind (first iss))))))
 
-(deftest top-complexity-sorts-by-cc-then-depth
-  (let [per-file [{:path "b.lg" :definitions [{:name 'b1 :line 1 :end 5 :depth 2 :cc 9}]}
-                  {:path "a.lg" :definitions [{:name 'a1 :line 7 :end 20 :depth 4 :cc 9}
-                                              {:name 'a2 :line 1 :end 3 :depth 1 :cc 30}]}]
-        top (s/top-complexity per-file 2)]
-    (is (= 2 (count top)))
-    (is (= 'a2 (:name (first top))))
-    (is (= 30 (:cc (first top))))
-    (is (= 'a1 (:name (second top))))
-    (is (= 14 (:lines (second top))))))
+(deftest top-complexity-ranks-by-mass-not-cc
+  ;; The list must recommend the fix that moves the number. Real values from
+  ;; this corpus: type-join is cc 46 over 41 lines (mass 294);
+  ;; lower-ns-to-go-result is cc 35 over 324 lines (mass 630). A cc ranking
+  ;; puts type-join first; erosion says the other is worth twice as much.
+  (let [cs [{:path "lattice.lg" :name 'type-join :cc 46 :sloc 41 :line 319}
+            {:path "pipeline.lg" :name 'lower-ns-to-go-result :cc 35 :sloc 324 :line 1321}]
+        top (s/top-complexity cs 2 (fn [_] false))]
+    (is (= 'lower-ns-to-go-result (:name (first top))))
+    (is (= 'type-join (:name (second top))))
+    (is (> (:mass (first top)) (:mass (second top))))
+    ;; cc stays visible, because it is what tells you how to fix it
+    (is (= 35 (:cc (first top))))
+    ;; shares sum to 1 over the whole corpus
+    (is (< 0.999 (reduce + 0.0 (map :mass-share top)) 1.001))))
+
+(deftest findings-carry-stable-content-derived-ids
+  ;; An unrelated edit above a function must not change its identity, so the
+  ;; id comes from what the finding IS, not where it sits.
+  (let [at-319 (s/top-complexity [{:path "a.lg" :name 'f :cc 20 :sloc 10 :line 319}] 1 (fn [_] false))
+        at-42 (s/top-complexity [{:path "a.lg" :name 'f :cc 20 :sloc 10 :line 42}] 1 (fn [_] false))
+        other (s/top-complexity [{:path "b.lg" :name 'f :cc 20 :sloc 10 :line 319}] 1 (fn [_] false))]
+    (is (= (:id (first at-319)) (:id (first at-42))))
+    (is (not= (:id (first at-319)) (:id (first other))))))
+
+(deftest best-targets-are-the-high-mass-duplicated-ones
+  (let [cs [{:path "a.lg" :name 'dup-heavy :cc 30 :sloc 100 :line 1}
+            {:path "b.lg" :name 'clean :cc 30 :sloc 100 :line 1}]
+        top (s/top-complexity cs 2 (fn [c] (= "a.lg" (:path c))))
+        targets (s/best-targets top)]
+    (is (= 1 (count targets)))
+    (is (= 'dup-heavy (:name (first targets))))
+    (is (:duplicated? (first targets)))))
