@@ -217,12 +217,20 @@
 (defn unchecked-add-int [x y] (unchecked-add x y))
 (defn unchecked-multiply-int [x y] (unchecked-multiply x y))
 
-;; *unchecked-math*: a JVM compiler knob toggling unchecked arithmetic for
-;; the +/-/* family. let-go has no such compile mode, so this is an honest
-;; no-op dynamic var (default false), present so code that `set!`s it loads.
+;; *unchecked-math*: a compile-time knob toggling unchecked arithmetic for
+;; the +/-/* family, as on the JVM. The compiler reads it when compiling each
+;; form and rewrites the checked op to its wrapping unchecked-* counterpart.
+;; CompileMultiple evaluates each top-level form before compiling the next, so
+;; a top-level `set!` applies to everything after it in the file.
 (def ^:dynamic *unchecked-math*
-  "Compatibility var for Clojure's unchecked arithmetic mode. let-go accepts
-   and dynamically binds the value, but it has no code-generation effect."
+  "When truthy at compile time, + - * inc dec compile to their wrapping
+   unchecked-* counterparts instead of raising on int64 overflow.
+
+   Arity follows Clojure: the identity arities ((+) (*) (+ x) (* x)) are left
+   alone, (- x) becomes unchecked-negate, two arguments map directly, and
+   higher arities left-nest -- (+ a b c) is (unchecked-add (unchecked-add a b) c).
+   Float arguments keep float arithmetic, since they have no int64 overflow
+   to wrap. A lexically shadowed + is never rewritten."
   false)
 
 ;; Unlike Clojure's JVM reflection warning, this reports let-go call sites
@@ -1988,8 +1996,13 @@
 ;; is gated so it costs nothing until *lg-trace* is first set truthy.
 (def ^:dynamic *lg-trace* false)
 
-;; --- print/read tuning dynamic vars (stubs; not yet honored by writers) ---
+;; --- print/read tuning dynamic vars ---
 
+;; Extensible tagged-literal handlers. Keys are tag symbols and values are
+;; one-argument functions invoked with the normally read payload form.
+(def ^:dynamic *data-readers* {})
+
+;; Print tuning vars are compatibility stubs; writers do not honor them yet.
 (def ^:dynamic *print-level* nil)
 (def ^:dynamic *print-length* nil)
 (def ^:dynamic *print-meta* false)

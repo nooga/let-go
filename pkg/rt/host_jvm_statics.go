@@ -7,6 +7,7 @@ package rt
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -224,4 +225,178 @@ func installJVMStatics(ns *vm.Namespace) {
 		}
 		return u, nil
 	}))
+}
+
+// installMathStatics registers java.lang.Math. Go's math package is close but
+// not a drop-in: Math/round returns a long and rounds half toward POSITIVE
+// infinity (JVM: floor(x + 0.5)), where Go's math.Round returns a float64 and
+// rounds half away from zero, so -2.5 differs (-2 on the JVM, -3 in Go).
+// Math/abs preserves long-in/long-out, and Math/getExponent has no Go
+// equivalent at all. Non-finite inputs propagate rather than raising, as on
+// the JVM.
+func installMathStatics() {
+	ns := defStaticNS("Math")
+	for _, nm := range []string{"Math", "java.lang.Math"} {
+		if nm != "Math" {
+			ns = defStaticNS(nm)
+		}
+		mathNS := ns
+
+		unary := func(name string, fn func(float64) float64) {
+			mathNS.Def(name, mustWrap(func(vs []vm.Value) (vm.Value, error) {
+				if len(vs) != 1 {
+					return vm.NIL, fmt.Errorf("%s expects 1 arg", name)
+				}
+				f, ok := vm.ToFloat(vs[0])
+				if !ok {
+					return vm.NIL, fmt.Errorf("%s expected number, got %s", name, vs[0].Type().Name())
+				}
+				return vm.Float(fn(float64(f))), nil
+			}))
+		}
+		unary("floor", math.Floor)
+		unary("ceil", math.Ceil)
+		unary("sqrt", math.Sqrt)
+		unary("log", math.Log)
+		unary("exp", math.Exp)
+
+		// Go's math.Pow follows IEEE 754, which differs from java.lang.Math on
+		// three cases involving a base of magnitude 1: IEEE says pow(1, y) is 1
+		// for every y, while Java returns NaN for a NaN or infinite exponent.
+		mathNS.Def("pow", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+			if len(vs) != 2 {
+				return vm.NIL, fmt.Errorf("pow expects 2 args")
+			}
+			bv, ok1 := vm.ToFloat(vs[0])
+			ev, ok2 := vm.ToFloat(vs[1])
+			if !ok1 || !ok2 {
+				return vm.NIL, fmt.Errorf("pow expected numbers")
+			}
+			b, e := float64(bv), float64(ev)
+			switch {
+			case e == 0:
+				// Java: a zero exponent is 1.0 even for a NaN base.
+				return vm.Float(1), nil
+			case math.IsNaN(e):
+				return vm.Float(math.NaN()), nil
+			case math.Abs(b) == 1 && math.IsInf(e, 0):
+				return vm.Float(math.NaN()), nil
+			}
+			return vm.Float(math.Pow(b, e)), nil
+		}))
+
+		// long in -> long out, double in -> double out, matching the JVM's
+		// overloads. Returning a float for an integer argument would break
+		// integer callers.
+		mathNS.Def("abs", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+			if len(vs) != 1 {
+				return vm.NIL, fmt.Errorf("abs expects 1 arg")
+			}
+			if i, ok := vs[0].(vm.Int); ok {
+				if int64(i) < 0 {
+					return vm.MakeInt(int(-int64(i))), nil
+				}
+				return i, nil
+			}
+			f, ok := vm.ToFloat(vs[0])
+			if !ok {
+				return vm.NIL, fmt.Errorf("abs expected number, got %s", vs[0].Type().Name())
+			}
+			return vm.Float(math.Abs(float64(f))), nil
+		}))
+
+		// JVM Math.round: half rounds toward POSITIVE infinity, so -2.5 is -2
+		// (math.Round would give -3). NaN is 0, and out-of-range saturates to
+		// Long.MAX_VALUE / Long.MIN_VALUE rather than wrapping.
+		//
+		// Do NOT implement this as floor(x + 0.5): the addition rounds before
+		// floor runs, so 0.49999999999999994 would give 1 instead of 0 and
+		// 4503599627370497.0 would gain one. Java itself abandoned that formula
+		// for this reason (JDK-6430675). Compare the fraction against 0.5
+		// instead, which never perturbs the input.
+		mathNS.Def("round", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+			if len(vs) != 1 {
+				return vm.NIL, fmt.Errorf("round expects 1 arg")
+			}
+			f, ok := vm.ToFloat(vs[0])
+			if !ok {
+				return vm.NIL, fmt.Errorf("round expected number, got %s", vs[0].Type().Name())
+			}
+			x := float64(f)
+			if math.IsNaN(x) {
+				return vm.MakeInt(0), nil
+			}
+			r := math.Floor(x)
+			if x-r >= 0.5 {
+				r++
+			}
+			// JVM overloads on the argument type: round(float) returns an int
+			// and saturates at Integer.MAX_VALUE, round(double) returns a long.
+			if _, isF32 := vs[0].(vm.Float32); isF32 {
+				if r >= 2147483647.0 {
+					return vm.MakeInt(math.MaxInt32), nil
+				}
+				if r <= -2147483648.0 {
+					return vm.MakeInt(math.MinInt32), nil
+				}
+				return vm.MakeInt(int(r)), nil
+			}
+			// float64(math.MaxInt64) rounds up to 2^63, so compare against that
+			// boundary rather than the constant itself.
+			if r >= 9223372036854775808.0 {
+				return longCompatValue(math.MaxInt64), nil
+			}
+			if r <= -9223372036854775808.0 {
+				return longCompatValue(math.MinInt64), nil
+			}
+			return longCompatValue(int64(r)), nil
+		}))
+
+		mathNS.Def("scalb", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+			if len(vs) != 2 {
+				return vm.NIL, fmt.Errorf("scalb expects 2 args")
+			}
+			f, ok1 := vm.ToFloat(vs[0])
+			e, ok2 := vm.ToInt(vs[1])
+			if !ok1 || !ok2 {
+				return vm.NIL, fmt.Errorf("scalb expected (double, int)")
+			}
+			return vm.Float(math.Ldexp(float64(f), int(e))), nil
+		}))
+
+		// JVM Math.getExponent: unbiased exponent as an int. Zero and
+		// subnormals give MIN_EXPONENT-1 (-1023); NaN and the infinities give
+		// MAX_EXPONENT+1 (1024). Go has no equivalent, so read the biased
+		// exponent bits directly.
+		mathNS.Def("getExponent", mustWrap(func(vs []vm.Value) (vm.Value, error) {
+			if len(vs) != 1 {
+				return vm.NIL, fmt.Errorf("getExponent expects 1 arg")
+			}
+			f, ok := vm.ToFloat(vs[0])
+			if !ok {
+				return vm.NIL, fmt.Errorf("getExponent expected number, got %s", vs[0].Type().Name())
+			}
+			x := float64(f)
+			// JVM overloads here too: the float form uses the single-precision
+			// bias (127), so zero gives -127 and NaN/infinity give 128.
+			if _, isF32 := vs[0].(vm.Float32); isF32 {
+				if math.IsNaN(x) || math.IsInf(x, 0) {
+					return vm.MakeInt(128), nil
+				}
+				biased := int((math.Float32bits(float32(x)) >> 23) & 0xFF)
+				if biased == 0 { // zero or subnormal
+					return vm.MakeInt(-127), nil
+				}
+				return vm.MakeInt(biased - 127), nil
+			}
+			if math.IsNaN(x) || math.IsInf(x, 0) {
+				return vm.MakeInt(1024), nil
+			}
+			biased := int((math.Float64bits(x) >> 52) & 0x7FF)
+			if biased == 0 { // zero or subnormal
+				return vm.MakeInt(-1023), nil
+			}
+			return vm.MakeInt(biased - 1023), nil
+		}))
+	}
 }

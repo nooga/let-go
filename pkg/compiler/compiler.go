@@ -33,30 +33,34 @@ type Context struct {
 	// counts in that case, but the stack footprint is bindn (matching
 	// let/loop's OP_POP_N). recurCompiler reads from here to compute its
 	// `ignore` operand correctly.
-	localSlotCounts []int
-	sp              int
-	spMax           int
-	isFunction      bool
-	isClosure       bool
-	closedOversC    int
-	closedOvers     map[vm.Symbol]*closureCell
-	closedOversSeq  []vm.Symbol
-	recurPoints     []*recurPoint
-	tailPosition    bool
-	debug           bool
-	defName         string
-	currentForm     vm.Value // tracks the form being compiled for error source info
-	currentList     vm.Value // tracks the enclosing list form for error source info
+	localSlotCounts    []int
+	sp                 int
+	spMax              int
+	isFunction         bool
+	isClosure          bool
+	closedOversC       int
+	closedOvers        map[vm.Symbol]*closureCell
+	closedOversSeq     []vm.Symbol
+	recurPoints        []*recurPoint
+	tailPosition       bool
+	debug              bool
+	defName            string
+	currentForm        vm.Value // tracks the form being compiled for error source info
+	currentList        vm.Value // tracks the enclosing list form for error source info
+	taggedReaders      *TaggedReaderRegistry
+	dataReaderResolver taggedDataReaderResolver
+	execContext        *vm.ExecContext
 }
 
 func NewCompiler(consts *vm.Consts, ns *vm.Namespace) *Context {
 	rt.CurrentNS.SetRoot(ns)
 	return &Context{
-		consts:      consts,
-		source:      "<default>",
-		locals:      []map[vm.Symbol]int{},
-		closedOvers: map[vm.Symbol]*closureCell{},
-		debug:       false,
+		consts:             consts,
+		source:             "<default>",
+		locals:             []map[vm.Symbol]int{},
+		closedOvers:        map[vm.Symbol]*closureCell{},
+		debug:              false,
+		dataReaderResolver: rootDataReaderResolver,
 	}
 }
 
@@ -96,12 +100,59 @@ func (c *Context) ChildForEval() *Context {
 	child := NewTransientCompiler(c.consts, c.CurrentNS())
 	child.debug = c.debug
 	child.source = c.source
+	child.taggedReaders = c.taggedReaders
+	child.dataReaderResolver = c.dataReaderResolver
+	child.execContext = c.execContext
+	return child
+}
+
+// ChildForLoad returns a fresh top-level context for compiling a required
+// namespace. Required namespaces share the parent's long-lived constant pool
+// and reader/execution configuration, but start with independent compiler
+// state and the supplied scratch namespace.
+func (c *Context) ChildForLoad(ns *vm.Namespace) *Context {
+	child := NewCompiler(c.consts, ns)
+	child.debug = c.debug
+	child.taggedReaders = c.taggedReaders
+	child.dataReaderResolver = c.dataReaderResolver
+	child.execContext = c.execContext
 	return child
 }
 
 func (c *Context) SetSource(source string) *Context {
 	c.source = source
 	return c
+}
+
+// SetTaggedReaders installs explicit Go tagged readers for subsequent Compile
+// and CompileMultiple calls. The registry is shared with child eval contexts.
+func (c *Context) SetTaggedReaders(registry *TaggedReaderRegistry) *Context {
+	c.taggedReaders = registry
+	return c
+}
+
+func (c *Context) setDataReaderResolver(resolver taggedDataReaderResolver) *Context {
+	c.dataReaderResolver = resolver
+	return c
+}
+
+func (c *Context) setExecContext(ec *vm.ExecContext) *Context {
+	c.execContext = ec
+	return c
+}
+
+func (c *Context) evaluationExecContext() *vm.ExecContext {
+	ec := c.execContext
+	if ec == nil {
+		ec = vm.RootExecContext
+	}
+	return execContextWithTaggedReaders(ec, c.taggedReaders)
+}
+
+// EvaluationExecContext returns the execution context configured for compiled
+// code, including the context-local tagged-reader registry binding.
+func (c *Context) EvaluationExecContext() *vm.ExecContext {
+	return c.evaluationExecContext()
 }
 
 func (c *Context) Consts() *vm.Consts {
@@ -119,7 +170,7 @@ func (c *Context) SetCurrentNS(ns *vm.Namespace) {
 func (c *Context) Compile(s string) (chunk *vm.CodeChunk, err error) {
 	defer vm.RecoverPanic(&err)
 	vm.SourceRegistry.Register(c.source, s)
-	r := NewLispReader(strings.NewReader(s), c.source)
+	r := newLispReaderWithResolvers(strings.NewReader(s), c.source, c.taggedReaders, c.dataReaderResolver)
 	o, err := r.Read()
 	if err != nil {
 		return nil, err
@@ -145,8 +196,9 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 	}
 	src := string(srcBytes)
 	vm.SourceRegistry.Register(c.source, src)
-	r := NewLispReader(strings.NewReader(src), c.source)
+	r := newLispReaderWithResolvers(strings.NewReader(src), c.source, c.taggedReaders, c.dataReaderResolver)
 	chunk := vm.NewCodeChunk(c.consts)
+	ec := c.evaluationExecContext()
 	result = vm.NIL
 	compiledForms := 0
 	var evalTopForm func(o vm.Value) error
@@ -187,6 +239,7 @@ func (c *Context) CompileMultiple(reader io.Reader) (compiled *vm.CodeChunk, res
 		} else {
 			f = vm.NewFrame(formchunk, nil)
 		}
+		f.SetExecContext(ec)
 		result, err = f.RunProtected()
 		vm.ReleaseFrame(f)
 		if err != nil {
@@ -645,9 +698,45 @@ func (c *Context) compileForm(o vm.Value) error {
 			}
 
 			if fnsym == "." {
+				// Clojure has two canonical source shapes for the raw dot form,
+				// and both arrive with the member unquoted:
+				//
+				//	(. obj member args...)     bare symbol
+				//	(. obj (member args...))   list
+				//
+				// let-go's internal shape quotes the member -- (. obj 'member
+				// args...) -- which is what the (.member obj ...) rewrite above
+				// produces. Normalize the source shapes into it so an unquoted
+				// member is never compiled as an expression. An already-quoted
+				// member is left alone, since that is what the rewrite hands us.
+				if normalized := normalizeDotForm(lst); normalized != nil {
+					if info := vm.FormSource.Get(o); info != nil {
+						vm.FormSource.Set(normalized, *info)
+					}
+					return c.compileForm(normalized)
+				}
 				args := lst.Next()
 				if args != nil && !hostTargetStaticallyKnown(args.First()) {
 					rt.EmitReflectionWarningForForm(o, "host-interop", "host target type is not statically known; using dynamic member dispatch")
+				}
+			}
+
+			// *unchecked-math*: rewrite checked arithmetic to its wrapping
+			// counterpart before the call is compiled. Sits after macro-shaped
+			// rewrites above and before macro expansion below, so it only ever
+			// sees a plain function call.
+			if uncheckedMathEnabled() {
+				if base := c.resolveCoreArith(fnsym); base != "" {
+					var args []vm.Value
+					for sq := lst.Next(); sq != nil; sq = sq.Next() {
+						args = append(args, sq.First())
+					}
+					if rewritten := c.rewriteUncheckedArith(base, args); rewritten != nil {
+						if info := vm.FormSource.Get(o); info != nil {
+							vm.FormSource.Set(rewritten, *info)
+						}
+						return c.compileForm(rewritten)
+					}
 				}
 			}
 
@@ -740,6 +829,171 @@ func (c *Context) compileForm(o vm.Value) error {
 	return nil
 }
 
+// coreArithNames are the checked arithmetic ops that *unchecked-math* redirects
+// to their wrapping counterparts, mirroring Clojure's inliner pairs.
+var coreArithNames = []vm.Symbol{"+", "-", "*", "inc", "dec"}
+
+// uncheckedArithFor maps a checked arithmetic op to the qualified unchecked var
+// it is rewritten to. Qualified so a local named `unchecked-add` cannot capture
+// the rewrite.
+var uncheckedArithFor = map[vm.Symbol]vm.Symbol{
+	"+":   "clojure.core/unchecked-add",
+	"-":   "clojure.core/unchecked-subtract",
+	"*":   "clojure.core/unchecked-multiply",
+	"inc": "clojure.core/unchecked-inc",
+	"dec": "clojure.core/unchecked-dec",
+}
+
+// uncheckedMathEnabled reports whether *unchecked-math* is truthy right now.
+// Read live rather than cached: it is dynamic, and CompileMultiple evaluates
+// each top-level form before compiling the next, so a top-level set! must be
+// visible to every later form.
+func uncheckedMathEnabled() bool {
+	v := rt.NS(rt.NameCoreNS).Lookup(vm.Symbol("*unchecked-math*"))
+	if v == vm.NIL {
+		return false
+	}
+	vr, ok := v.(*vm.Var)
+	if !ok {
+		return false
+	}
+	return vm.IsTruthy(vr.Deref())
+}
+
+// resolveCoreArith returns which core arithmetic op sym resolves to, or "" if
+// none. Both `+` and `clojure.core/+` qualify, because Clojure attaches
+// unchecked behaviour to the var rather than to the spelling. A lexical
+// binding shadows the core var and yields "".
+func (c *Context) resolveCoreArith(sym vm.Symbol) vm.Symbol {
+	if c.resolvesAsLexical(sym) || c.symbolLookup(sym) != nil {
+		return ""
+	}
+	v := c.CurrentNS().Lookup(sym)
+	if v == vm.NIL {
+		return ""
+	}
+	core := rt.NS(rt.NameCoreNS)
+	for _, name := range coreArithNames {
+		if cv := core.Lookup(name); cv != vm.NIL && cv == v {
+			return name
+		}
+	}
+	return ""
+}
+
+// rewriteUncheckedArith rewrites a checked arithmetic call into its wrapping
+// equivalent under *unchecked-math*, or returns nil to leave the form alone.
+//
+// The unchecked-* primitives are strict 2-ary (1-ary for negate/inc/dec) while
+// + and * are variadic with identity elements, so the arities must be handled
+// separately rather than substituted blindly:
+//
+//	(+) (*) (+ x) (* x)  -> left alone; identity, nothing to wrap
+//	(- x)                -> (unchecked-negate x)
+//	(+ a b)              -> (unchecked-add a b)
+//	(+ a b c)            -> (unchecked-add (unchecked-add a b) c)
+func (c *Context) rewriteUncheckedArith(base vm.Symbol, args []vm.Value) vm.Value {
+	call2 := func(fn vm.Symbol, a, b vm.Value) vm.Value {
+		return vm.EmptyList.Cons(b).Cons(a).Cons(fn)
+	}
+	call1 := func(fn vm.Symbol, a vm.Value) vm.Value {
+		return vm.EmptyList.Cons(a).Cons(fn)
+	}
+
+	switch base {
+	case "inc", "dec":
+		if len(args) != 1 {
+			return nil
+		}
+		return call1(uncheckedArithFor[base], args[0])
+	case "-":
+		if len(args) == 0 {
+			return nil
+		}
+		if len(args) == 1 {
+			return call1(vm.Symbol("clojure.core/unchecked-negate"), args[0])
+		}
+	case "+", "*":
+		if len(args) < 2 {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	// Left-nest: ((a op b) op c) op d ...
+	acc := call2(uncheckedArithFor[base], args[0], args[1])
+	for _, a := range args[2:] {
+		acc = call2(uncheckedArithFor[base], acc, a)
+	}
+	return acc
+}
+
+// quotedSymbol reports whether v is already (quote sym) -- the shape the
+// (.member obj ...) rewrite produces, which normalizeDotForm must not touch.
+func quotedSymbol(v vm.Value) bool {
+	lst, ok := v.(*vm.List)
+	if !ok || lst.Next() == nil {
+		return false
+	}
+	head, ok := lst.First().(vm.Symbol)
+	if !ok || head != "quote" {
+		return false
+	}
+	_, ok = lst.Next().First().(vm.Symbol)
+	return ok
+}
+
+// normalizeDotForm rewrites Clojure's two canonical raw dot shapes into
+// let-go's internal (. obj 'member args...), or returns nil when the form is
+// already in that shape, or is too short or too odd to be one.
+//
+//	(. obj member args...)   -> (. obj 'member args...)
+//	(. obj (member args...)) -> (. obj 'member args...)
+func normalizeDotForm(lst *vm.List) vm.Value {
+	rest := lst.Next()
+	if rest == nil {
+		return nil
+	}
+	instance := rest.First()
+	memberSeq := rest.Next()
+	if memberSeq == nil {
+		return nil
+	}
+	member := memberSeq.First()
+	if quotedSymbol(member) {
+		return nil // already normalized
+	}
+
+	var name vm.Symbol
+	var args []vm.Value
+	switch m := member.(type) {
+	case vm.Symbol:
+		name = m
+		for sq := memberSeq.Next(); sq != nil; sq = sq.Next() {
+			args = append(args, sq.First())
+		}
+	case *vm.List:
+		head, ok := m.First().(vm.Symbol)
+		if !ok {
+			return nil
+		}
+		name = head
+		for sq := m.Next(); sq != nil; sq = sq.Next() {
+			args = append(args, sq.First())
+		}
+	default:
+		return nil
+	}
+
+	quoted := vm.EmptyList.Cons(name).(*vm.List).Cons(vm.Symbol("quote")).(*vm.List)
+	out := vm.EmptyList
+	for i := len(args) - 1; i >= 0; i-- {
+		out = out.Cons(args[i]).(*vm.List)
+	}
+	return out.Cons(quoted).(*vm.List).Cons(instance).(*vm.List).Cons(vm.Symbol("."))
+}
+
 // tryFastOpcode returns a specialized opcode for known core builtins,
 // or 0 if no fast path is available. Only emits for binary (arity 2)
 // and unary (arity 1) cases with known symbols.
@@ -755,6 +1009,15 @@ func (c *Context) tryFastOpcode(sym vm.Symbol, argc int) int32 {
 	v := c.CurrentNS().Lookup(sym)
 	if v == vm.NIL {
 		return 0
+	}
+	// Under *unchecked-math* the arithmetic ops are rewritten to their
+	// wrapping counterparts before this point. Emitting OP_ADD here would
+	// re-introduce the overflow check and silently defeat that rewrite.
+	if uncheckedMathEnabled() {
+		switch sym {
+		case "+", "-", "*", "inc", "dec":
+			return 0
+		}
 	}
 
 	switch argc {

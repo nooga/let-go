@@ -88,6 +88,115 @@ func TestBoxReflectFuncMultiReturn(t *testing.T) {
 	}
 }
 
+func TestBoxReflectFuncTypedArrayPreservesBackingSlice(t *testing.T) {
+	invoke := func(t *testing.T, fn any, arg Value) {
+		t.Helper()
+		boxed, err := NativeFnType.Box(fn)
+		if err != nil {
+			t.Fatalf("Box: %v", err)
+		}
+		if _, err := boxed.(*NativeFn).proxy([]Value{arg}); err != nil {
+			t.Fatalf("proxy: %v", err)
+		}
+	}
+
+	t.Run("byte array", func(t *testing.T) {
+		backing := []byte{1, 2}
+		arr := NewByteArrayFrom(backing)
+		sameBacking := false
+		invoke(t, func(xs []byte) {
+			sameBacking = &xs[0] == &backing[0]
+			xs[0] = 9
+		}, arr)
+		if !sameBacking || backing[0] != 9 || arr.Get(0) != Int(9) {
+			t.Fatalf("byte-array backing was copied: same=%v backing=%v value=%v", sameBacking, backing, arr.Get(0))
+		}
+	})
+
+	t.Run("int array", func(t *testing.T) {
+		backing := []int64{1, 2}
+		arr := NewIntArrayFrom(backing)
+		sameBacking := false
+		invoke(t, func(xs []int64) {
+			sameBacking = &xs[0] == &backing[0]
+			xs[0] = 9
+		}, arr)
+		if !sameBacking || backing[0] != 9 || arr.Get(0) != Int(9) {
+			t.Fatalf("int-array backing was copied: same=%v backing=%v value=%v", sameBacking, backing, arr.Get(0))
+		}
+	})
+
+	t.Run("double array", func(t *testing.T) {
+		backing := []float64{1, 2}
+		arr := NewFloatArrayFrom(backing)
+		sameBacking := false
+		invoke(t, func(xs []float64) {
+			sameBacking = &xs[0] == &backing[0]
+			xs[0] = 9.5
+		}, arr)
+		if !sameBacking || backing[0] != 9.5 || arr.Get(0) != Float(9.5) {
+			t.Fatalf("double-array backing was copied: same=%v backing=%v value=%v", sameBacking, backing, arr.Get(0))
+		}
+	})
+
+	t.Run("object array", func(t *testing.T) {
+		backing := []Value{Int(1), Int(2)}
+		arr := NewObjectArrayFrom(backing)
+		sameBacking := false
+		invoke(t, func(xs []Value) {
+			sameBacking = &xs[0] == &backing[0]
+			xs[0] = String("changed")
+		}, arr)
+		if !sameBacking || backing[0] != String("changed") || arr.Get(0) != String("changed") {
+			t.Fatalf("object-array backing was copied: same=%v backing=%v value=%v", sameBacking, backing, arr.Get(0))
+		}
+	})
+
+	t.Run("compatible named slice", func(t *testing.T) {
+		type namedBytes []byte
+		backing := []byte{1, 2}
+		arr := NewByteArrayFrom(backing)
+		sameBacking := false
+		invoke(t, func(xs namedBytes) {
+			sameBacking = &xs[0] == &backing[0]
+			xs[0] = 9
+		}, arr)
+		if !sameBacking || arr.Get(0) != Int(9) {
+			t.Fatalf("named slice lost typed-array backing: same=%v value=%v", sameBacking, arr.Get(0))
+		}
+	})
+}
+
+func TestBoxReflectFuncPersistentCollectionsStillConvertToSlices(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		arg  Value
+	}{
+		{name: "vector", arg: NewArrayVector([]Value{Int(1), Int(2)})},
+		{name: "list", arg: NewList([]Value{Int(1), Int(2)})},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			boxed, err := NativeFnType.Box(func(xs []int) int {
+				xs[0] = 9
+				return xs[0] + xs[1]
+			})
+			if err != nil {
+				t.Fatalf("Box: %v", err)
+			}
+			got, err := boxed.(*NativeFn).proxy([]Value{tt.arg})
+			if err != nil {
+				t.Fatalf("proxy: %v", err)
+			}
+			if got != Int(11) {
+				t.Fatalf("converted slice result = %v, want 11", got)
+			}
+			if first := tt.arg.(Sequable).Seq().First(); first != Int(1) {
+				t.Fatalf("persistent source was mutated through copied []int: %v", first)
+			}
+		})
+	}
+}
+
 // func() error must keep returning the error as a VALUE rather than throwing.
 // Every reflect-boxed Close/Write/Flush has this shape, so peeling here would
 // silently change how a large amount of existing interop behaves. The peel

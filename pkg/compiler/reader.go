@@ -43,34 +43,65 @@ type Token struct {
 }
 
 type LispReader struct {
-	inputName  string
-	pos        int
-	line       int
-	column     int
-	lastCol    int
-	lastRune   rune
-	maxPercent int
-	inShortFn  bool
-	r          *bufio.Reader
+	inputName          string
+	pos                int
+	line               int
+	column             int
+	lastCol            int
+	lastRune           rune
+	maxPercent         int
+	inShortFn          bool
+	r                  *bufio.Reader
+	taggedReaders      *TaggedReaderRegistry
+	dataReaderResolver taggedDataReaderResolver
 
 	Tokens     []Token
 	tokenizing bool
 	splicing   bool
+	// data selects Clojure data-reading semantics (clojure.edn/read-string):
+	// metadata attaches to the following value instead of becoming a
+	// (with-meta ...) call, set literals read as sets instead of (hash-set
+	// ...) calls, and a discarded or unmatched form inside a map splices
+	// nothing rather than dropping the preceding key. Code reading keeps the
+	// call forms the compiler consumes.
+	data bool
+}
+
+// NewLispDataReader reads data with Clojure reader semantics; see the data
+// field. Nothing read this way is evaluated.
+func NewLispDataReader(r io.Reader, inputName string) *LispReader {
+	return &LispReader{inputName: inputName, r: bufio.NewReader(r), data: true}
 }
 
 func NewLispReader(r io.Reader, inputName string) *LispReader {
 	return &LispReader{
-		inputName: inputName,
-		r:         bufio.NewReader(r),
+		inputName:          inputName,
+		r:                  bufio.NewReader(r),
+		dataReaderResolver: rootDataReaderResolver,
 	}
+}
+
+// NewLispReaderWithTaggedReaders returns a reader that dispatches custom tagged
+// literals through registry. Built-in #uuid and #inst literals remain available
+// when they are not overridden.
+func NewLispReaderWithTaggedReaders(r io.Reader, inputName string, registry *TaggedReaderRegistry) *LispReader {
+	return newLispReaderWithResolvers(r, inputName, registry, rootDataReaderResolver)
+}
+
+func newLispReaderWithResolvers(r io.Reader, inputName string, registry *TaggedReaderRegistry, resolver taggedDataReaderResolver) *LispReader {
+	reader := NewLispReader(r, inputName)
+	reader.taggedReaders = registry
+	reader.dataReaderResolver = resolver
+	return reader
 }
 
 func NewLispReaderTokenizing(r io.Reader, inputName string) *LispReader {
 	return &LispReader{
-		inputName:  inputName,
-		r:          bufio.NewReader(r),
-		Tokens:     []Token{},
-		tokenizing: true,
+		inputName:          inputName,
+		r:                  bufio.NewReader(r),
+		dataReaderResolver: rootDataReaderResolver,
+		Tokens:             []Token{},
+		tokenizing:         true,
 	}
 }
 
@@ -765,12 +796,25 @@ func readMap(r *LispReader, _ rune) (vm.Value, error) {
 		ret = appendNonVoid(r, ret, form)
 		// If a reader conditional returned VOID and the previous form was a
 		// map key (odd position), drop the orphaned key so the map stays even.
-		if len(ret) == prevLen && len(ret)%2 != 0 {
+		// Data reading follows Clojure: a discard splices nothing, so
+		// {"a" #_x "b"} is {"a" "b"} and an odd result is an error.
+		if !r.data && len(ret) == prevLen && len(ret)%2 != 0 {
 			ret = ret[:len(ret)-1]
 		}
 	}
 	if len(ret)%2 != 0 {
 		return vm.NIL, NewReaderError(r, "map literal must contain even number of forms")
+	}
+	if r.data {
+		// Clojure rejects duplicate keys in a map literal; code reading keeps
+		// last-wins so existing sources are unaffected.
+		for i := 0; i < len(ret); i += 2 {
+			for j := i + 2; j < len(ret); j += 2 {
+				if vm.ValueEquals != nil && vm.ValueEquals(ret[i], ret[j]) {
+					return vm.NIL, NewReaderError(r, "duplicate key in map literal: "+ret[i].String())
+				}
+			}
+		}
 	}
 	result := vm.NewArrayMap(ret)
 	vm.FormSource.Set(result, vm.SourceInfo{
@@ -804,6 +848,20 @@ func readSet(r *LispReader, _ rune) (vm.Value, error) {
 		if form.Type() != vm.VoidType {
 			ret = ret.Conj(form).(*vm.List)
 		}
+	}
+	if r.data {
+		vals := make([]vm.Value, 0)
+		for s := ret.Seq(); s != nil && s != vm.EmptyList; s = s.Next() {
+			vals = append(vals, s.First())
+		}
+		for i := range vals {
+			for j := i + 1; j < len(vals); j++ {
+				if vm.ValueEquals != nil && vm.ValueEquals(vals[i], vals[j]) {
+					return vm.NIL, NewReaderError(r, "duplicate element in set literal: "+vals[i].String())
+				}
+			}
+		}
+		return vm.NewSet(vals), nil
 	}
 	result := ret.Cons(vm.Symbol("hash-set"))
 	vm.FormSource.Set(result, vm.SourceInfo{
@@ -1455,6 +1513,15 @@ func readMeta(r *LispReader, _ rune) (vm.Value, error) {
 	if err != nil {
 		return vm.NIL, NewReaderError(r, "reading meta")
 	}
+	if r.data {
+		// Attach to the value where the runtime supports metadata; values
+		// without metadata support (maps, vectors) read as themselves, which
+		// is what with-meta does for them at runtime too.
+		if im, ok := form.(vm.IMeta); ok {
+			return im.WithMeta(m), nil
+		}
+		return form, nil
+	}
 	return vm.NewList([]vm.Value{vm.Symbol("with-meta"), form, m}), nil
 }
 
@@ -1500,20 +1567,78 @@ func isLetter(ch rune) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
 
+func taggedLiteralError(r *LispReader, tag string, err error) error {
+	message := fmt.Sprintf("reading tagged literal #%s", tag)
+	if isErrorEOF(err) {
+		return NewReaderError(r, message+": unexpected EOF").Wrap(err)
+	}
+	return NewReaderError(r, message).Wrap(err)
+}
+
+type builtinTaggedLiteral uint8
+
+const (
+	builtinTaggedLiteralNone builtinTaggedLiteral = iota
+	builtinTaggedLiteralUUID
+	builtinTaggedLiteralInstant
+)
+
+func classifyBuiltinTaggedLiteral(tag string) builtinTaggedLiteral {
+	switch tag {
+	case "uuid":
+		return builtinTaggedLiteralUUID
+	case "inst":
+		return builtinTaggedLiteralInstant
+	default:
+		return builtinTaggedLiteralNone
+	}
+}
+
+func (r *LispReader) resolveCustomDataReader(tag string) (TaggedDataReader, bool, error) {
+	if reader, ok := r.taggedReaders.lookup(tag); ok {
+		return reader, true, nil
+	}
+	if r.dataReaderResolver != nil {
+		return r.dataReaderResolver(tag)
+	}
+	return nil, false, nil
+}
+
 func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
-	// Read the tag name
 	tag, err := readToken(r, firstCh)
 	if err != nil {
-		return vm.NIL, NewReaderError(r, "reading tagged literal tag")
+		return vm.NIL, NewReaderError(r, "reading tagged literal tag").Wrap(err)
 	}
 	tagStr := tag.String()
-	// Read the value
-	val, err := r.Read()
+	builtin := classifyBuiltinTaggedLiteral(tagStr)
+
+	reader, found, err := r.resolveCustomDataReader(tagStr)
 	if err != nil {
-		return vm.NIL, NewReaderError(r, "reading tagged literal value")
+		return vm.NIL, taggedLiteralError(r, tagStr, err)
 	}
-	switch tagStr {
-	case "uuid":
+	if !found && builtin == builtinTaggedLiteralNone && r.taggedReaders != nil {
+		return vm.NIL, NewReaderError(r, fmt.Sprintf("unknown tagged literal #%s", tagStr))
+	}
+
+	var val vm.Value
+	if found {
+		val, err = r.ReadSkipNoValue()
+	} else {
+		val, err = r.Read()
+	}
+	if err != nil {
+		return vm.NIL, taggedLiteralError(r, tagStr, err)
+	}
+	if found {
+		value, err := reader(val)
+		if err != nil {
+			return vm.NIL, taggedLiteralError(r, tagStr, err)
+		}
+		return value, nil
+	}
+
+	switch builtin {
+	case builtinTaggedLiteralUUID:
 		s, ok := val.(vm.String)
 		if !ok {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("#uuid requires a string, got %s", val.Type().Name()))
@@ -1523,7 +1648,7 @@ func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("invalid UUID string: %s", s))
 		}
 		return u, nil
-	case "inst":
+	case builtinTaggedLiteralInstant:
 		s, ok := val.(vm.String)
 		if !ok {
 			return vm.NIL, NewReaderError(r, fmt.Sprintf("#inst requires a string, got %s", val.Type().Name()))
@@ -1534,7 +1659,7 @@ func readTaggedLiteral(r *LispReader, firstCh rune) (vm.Value, error) {
 		}
 		return i, nil
 	default:
-		// Unknown tags: just return the value (best-effort)
+		// Preserve the legacy best-effort behavior when no registry is installed.
 		return val, nil
 	}
 }

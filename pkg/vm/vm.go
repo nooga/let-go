@@ -441,6 +441,16 @@ func releaseFrame(f *Frame) {
 	framePoolMu.Unlock()
 }
 
+// NewFrameIn is NewFrame with the given execution context installed, so the
+// frame resolves dynamic bindings and its structured-concurrency scope against
+// the caller rather than the root. Used by eval-style natives that compile a
+// form and must run it where the caller is.
+func NewFrameIn(code *CodeChunk, args []Value, ec *ExecContext) *Frame {
+	f := NewFrame(code, args)
+	f.ec = ec.orRoot()
+	return f
+}
+
 func NewFrame(code *CodeChunk, args []Value) *Frame {
 	return initFrame(acquireFrame(), code, args)
 }
@@ -537,6 +547,13 @@ func NewDebugFrame(code *CodeChunk, args []Value) *Frame {
 	f := NewFrame(code, args)
 	f.debug = true
 	return f
+}
+
+// SetExecContext installs the dynamic execution state used when the frame
+// invokes bytecode and context-aware native functions. A nil context retains
+// the normal RootExecContext fallback.
+func (f *Frame) SetExecContext(ec *ExecContext) {
+	f.ec = ec
 }
 
 // Fast-path stack operations. The compiler guarantees correct stack depth,
