@@ -94,3 +94,32 @@
     (is (= [] (:paths opts)))
     (is (= ["pkg/rt/core" "scripts" "test"] (:lg q/default-paths)))
     (is (= ["pkg" "cmd"] (:go q/default-paths)))))
+
+(deftest every-reported-score-runs-the-same-direction
+  ;; A reader must be able to scan a row -- or the same row across two runs --
+  ;; without remembering which metrics invert. The files table therefore
+  ;; prints SCORES (0-100, higher better), not the measurements behind them.
+  (let [edn-path (str (os/temp-dir) "quality-direction-test.edn")
+        out (with-out-str (q/main ["--since" "2000-01-01" "--edn" edn-path
+                                   "--source-root" fixtures fixtures]))
+        r (read-string (slurp edn-path))
+        by-path (into {} (map (fn [f] [(:path f) f]) (:files r)))
+        worst (->> (:files r)
+                   (filter (fn [f] (and (= :lg (:lang f)) (:cc-max f))))
+                   (sort-by (fn [f] (- (:cc-max f))))
+                   first)]
+    (is (str/includes? out "files (all columns are scores, 0-100, higher is better)"))
+    (is (str/includes? out "top complexity"))
+    (is (str/includes? out "(raw measurements; higher is worse)"))
+    (is (str/includes? out "(count; lower is better, ranked by score impact)"))
+    ;; The worst file by raw complexity must print a LOW cc column, which is
+    ;; only true if the column is the score and not the measurement.
+    (is (> (:cc-max worst) 10))
+    (is (< (:cc worst) 50.0))
+    (is (str/includes? out (str (:path worst) " ")))
+    ;; The EDN keeps every raw field unchanged -- it is the trend surface.
+    (let [f (get by-path (:path worst))]
+      (is (number? (:cc-max f)))
+      (is (number? (:mi-raw f)))
+      (is (number? (:dup-pct f)))
+      (is (contains? f :defects-per-kloc)))))
