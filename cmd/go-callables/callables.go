@@ -35,8 +35,9 @@ type callable struct {
 	// the .lg cost model, which estimates algorithmic complexity rather than
 	// branch count. The recursion SHRINK shape is not read for Go, so a
 	// self-recursive Go function is reported as unknown rather than guessed.
-	loopDepth int
-	selfCall  bool
+	loopDepth     int
+	untracedLoops int
+	selfCall      bool
 }
 
 // codeLines marks, for each 1-based line of src, whether the line carries
@@ -141,9 +142,98 @@ type namedLit struct {
 	ident ast.Node // the binding occurrence, which is not a "use"
 }
 
-// loopNesting is the maximum depth of nested `for`/`range` statements in n.
-func loopNesting(n ast.Node) int {
-	max := 0
+// paramDerived collects the identifiers of `decl` that carry input size: its
+// parameters, and locals assigned from something parameter-derived.
+//
+// THE POINT OF THE RULE. A degree is a function of INPUT SIZE, and a
+// function's inputs are its parameters. A loop over a package-level table, a
+// literal, or `len(vs)` where vs is a variadic call's own arguments is
+// CONSTANT in the input however deeply it nests. installLangNS -- four nested
+// loops over fixed registration tables -- read as n^4 for exactly this
+// reason.
+func paramDerived(decl *ast.FuncDecl) map[string]bool {
+	derived := map[string]bool{}
+	if decl.Type.Params != nil {
+		for _, f := range decl.Type.Params.List {
+			for _, n := range f.Names {
+				derived[n.Name] = true
+			}
+		}
+	}
+	if decl.Recv != nil {
+		for _, f := range decl.Recv.List {
+			for _, n := range f.Names {
+				derived[n.Name] = true
+			}
+		}
+	}
+	// One forward pass: a local assigned from a derived expression becomes
+	// derived itself, which follows chains like `ys := xs[1:]`.
+	ast.Inspect(decl, func(n ast.Node) bool {
+		switch t := n.(type) {
+		case *ast.AssignStmt:
+			if len(t.Lhs) == len(t.Rhs) {
+				for i, r := range t.Rhs {
+					if id, ok := t.Lhs[i].(*ast.Ident); ok && exprDerived(r, derived) {
+						derived[id.Name] = true
+					}
+				}
+			}
+		case *ast.RangeStmt:
+			// An element of a derived collection carries its size.
+			if exprDerived(t.X, derived) {
+				if k, ok := t.Key.(*ast.Ident); ok {
+					derived[k.Name] = true
+				}
+				if v, ok := t.Value.(*ast.Ident); ok {
+					derived[v.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return derived
+}
+
+// exprDerived reports whether any identifier in e is parameter-derived.
+func exprDerived(e ast.Expr, derived map[string]bool) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && derived[id.Name] {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// loopSource is what a loop iterates over, or nil when it cannot be read:
+// `range X` gives X, and `for i := 0; i < len(X); i++` gives X.
+func loopSource(n ast.Node) ast.Expr {
+	switch t := n.(type) {
+	case *ast.RangeStmt:
+		return t.X
+	case *ast.ForStmt:
+		if bin, ok := t.Cond.(*ast.BinaryExpr); ok {
+			for _, side := range []ast.Expr{bin.X, bin.Y} {
+				if call, ok := side.(*ast.CallExpr); ok {
+					if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "len" && len(call.Args) == 1 {
+						return call.Args[0]
+					}
+				}
+			}
+			return bin.Y
+		}
+	}
+	return nil
+}
+
+// tracedLoopNesting is the maximum nesting of loops WHOSE ITERATION SOURCE
+// TRACES TO A PARAMETER, plus the number of loops whose source could not be
+// traced -- reported rather than silently counted or silently dropped.
+func tracedLoopNesting(decl *ast.FuncDecl) (int, int) {
+	derived := paramDerived(decl)
+	max, untraced := 0, 0
 	var walk func(ast.Node, int)
 	walk = func(x ast.Node, depth int) {
 		if x == nil {
@@ -155,6 +245,17 @@ func loopNesting(n ast.Node) int {
 			}
 			switch c.(type) {
 			case *ast.ForStmt, *ast.RangeStmt:
+				src := loopSource(c)
+				if src == nil {
+					untraced++
+					walk(c, depth)
+					return false
+				}
+				if !exprDerived(src, derived) {
+					// Constant in the input: iterating a fixed table.
+					walk(c, depth)
+					return false
+				}
 				if depth+1 > max {
 					max = depth + 1
 				}
@@ -164,12 +265,34 @@ func loopNesting(n ast.Node) int {
 			return true
 		})
 	}
-	walk(n, 0)
-	return max
+	walk(decl, 0)
+	return max, untraced
 }
 
-// callsItself reports whether the declaration calls `name` directly.
+// callsItself reports// exprMentions reports whether `name` appears anywhere in `e`.
+func exprMentions(e ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// callsItself reports whether the declaration calls ITSELF: a plain call to
+// its own name, or -- for a method -- a call on its own receiver.
+//
+// Matching any `x.emit()` inside `func (t *T) emit()` would be wrong: a call
+// to a DIFFERENT value's method of the same name is not recursion. That
+// over-match reported most Go methods as self-recursive, and since Go
+// recursion shrink is not read, every one of them became `unknown`.
 func callsItself(decl *ast.FuncDecl, name string) bool {
+	recv := ""
+	if decl.Recv != nil && len(decl.Recv.List) > 0 && len(decl.Recv.List[0].Names) > 0 {
+		recv = decl.Recv.List[0].Names[0].Name
+	}
 	found := false
 	ast.Inspect(decl, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -182,7 +305,10 @@ func callsItself(decl *ast.FuncDecl, name string) bool {
 				found = true
 			}
 		case *ast.SelectorExpr:
-			if f.Sel.Name == name {
+			// `t.next.walk()` IS self-recursion -- the same method on another
+			// node of the same structure -- so the receiver EXPRESSION need
+			// only involve the receiver. `o.emit()` on a parameter does not.
+			if f.Sel.Name == name && recv != "" && exprMentions(f.X, recv) {
 				found = true
 			}
 		}
@@ -327,14 +453,16 @@ func goAnalyze(src string) ([]callable, fileCounts, error) {
 		if sloc < 1 {
 			sloc = 1
 		}
+		loopDepth, untraced := tracedLoopNesting(decl)
 		out = append(out, callable{
 			name: name, kind: kind,
 			line: start, end: end,
 			sloc: sloc,
 			cc:   1 + decisionPoints(decl, dead),
 
-			loopDepth: loopNesting(decl),
-			selfCall:  callsItself(decl, decl.Name.Name),
+			loopDepth:     loopDepth,
+			untracedLoops: untraced,
+			selfCall:      callsItself(decl, decl.Name.Name),
 		})
 	}
 	return out, counts, nil

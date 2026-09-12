@@ -462,3 +462,103 @@ func recurses(n int) int {
 		t.Error("flat: reported a self-call it does not make")
 	}
 }
+
+func TestLoopDepthCountsOnlyParameterDerivedLoops(t *testing.T) {
+	// A degree is a function of INPUT SIZE. A loop over a fixed table is
+	// constant in the input however deeply it nests -- the defect that made
+	// installLangNS, four nested loops over registration tables, read as n^4.
+	src := `package p
+
+var registry = []string{"a", "b"}
+
+func overParam(xs []int) int {
+	n := 0
+	for _, x := range xs {
+		n += x
+	}
+	return n
+}
+
+func overFixedTable() int {
+	n := 0
+	for range registry {
+		for i := 0; i < 10; i++ {
+			n++
+		}
+	}
+	return n
+}
+
+func mixed(xs []int) int {
+	n := 0
+	for _, x := range xs {
+		for range registry {
+			n += x
+		}
+	}
+	return n
+}
+
+func chained(xs []int) int {
+	ys := xs[1:]
+	n := 0
+	for _, y := range ys {
+		n += y
+	}
+	return n
+}
+`
+	got := callablesByName(t, src)
+	if c := got["overParam"]; c.loopDepth != 1 {
+		t.Errorf("overParam: depth %d, want 1", c.loopDepth)
+	}
+	// Both loops are constant in the input: nothing is derived from a parameter.
+	if c := got["overFixedTable"]; c.loopDepth != 0 {
+		t.Errorf("overFixedTable: depth %d, want 0 -- it takes no input to be n in",
+			c.loopDepth)
+	}
+	// Only the parameter-derived loop counts; the fixed inner one does not.
+	if c := got["mixed"]; c.loopDepth != 1 {
+		t.Errorf("mixed: depth %d, want 1 (not 2)", c.loopDepth)
+	}
+	// A local assigned from a parameter carries its size.
+	if c := got["chained"]; c.loopDepth != 1 {
+		t.Errorf("chained: depth %d, want 1", c.loopDepth)
+	}
+}
+
+func TestSelfCallDoesNotMatchAnotherValuesMethod(t *testing.T) {
+	src := `package p
+
+type T struct{ next *T }
+
+func (t *T) walk() int {
+	if t.next != nil {
+		return t.next.walk()
+	}
+	return 0
+}
+
+func (t *T) emit(o *T) int {
+	// a call to a DIFFERENT value's method of the same name is not recursion
+	return o.emit(nil)
+}
+
+func plain(n int) int {
+	if n > 0 {
+		return plain(n - 1)
+	}
+	return 0
+}
+`
+	got := callablesByName(t, src)
+	if c := got["(*T).walk"]; !c.selfCall {
+		t.Error("walk calls itself on its own receiver and should be self-recursive")
+	}
+	if c := got["(*T).emit"]; c.selfCall {
+		t.Error("emit calls another value's method of the same name -- not recursion")
+	}
+	if c := got["plain"]; !c.selfCall {
+		t.Error("plain is directly self-recursive")
+	}
+}

@@ -209,10 +209,10 @@
     (> b 1) (let [e (/ (math/log (double a)) (math/log (double b)))
                   k (double k)]
               (normalize
-               (cond
-                 (< k (- e 0.000001)) {:poly e}
-                 (<= (math/abs (- k e)) 0.000001) {:poly-log k}
-                 :else {:poly k})))
+                (cond
+                  (< k (- e 0.000001)) {:poly e}
+                  (<= (math/abs (- k e)) 0.000001) {:poly-log k}
+                  :else {:poly k})))
     (>= a 2) {:exp a}
     :else {:poly (+ (double k) 1.0)}))
 
@@ -252,23 +252,111 @@
     (:poly-log b) {:poly-log (+ (:poly-log b) (or (:poly a) 0))}
     :else {:poly (+ (or (:poly a) 0) (or (:poly b) 0))}))
 
+(defn params-of
+  "The parameter names a definition binds, including destructured ones. These
+   are the only things a degree can be a function of."
+  [form]
+  (let [argv (first (filter vector? (drop 2 form)))]
+    (set (filter symbol? (tree-seq coll? seq argv)))))
+
+(defn- derived-from-params?
+  "Whether `x` traces back to a parameter through a chain this can follow:
+   the parameter itself, a call whose arguments include one (`rest`, `keys`,
+   `map` over it, a destructured element), or a local bound to such a value.
+
+   THE POINT OF THE WHOLE RULE. A degree is a function of INPUT SIZE, and a
+   definition's inputs are its parameters. A loop over a literal, a global, or
+   a call's own argument count is CONSTANT in the input however deeply it
+   nests -- which is why `installLangNS`, four nested loops over fixed tables,
+   read as n^4 while being constant in what it is given."
+  [x params locals]
+  (letfn [(walk [y]
+            (cond
+              (symbol? y) (or (contains? params y) (contains? locals y))
+              (coll? y) (boolean (some walk (seq y)))
+              :else false))]
+    (walk x)))
+
+(defn- loop-source
+  "What `form` iterates over: the collection expression, or nil when the form
+   is not one of the iterating shapes."
+  [form]
+  (let [h (first form)]
+    (cond
+      (contains? #{'map 'mapv 'filter 'filterv 'remove 'keep 'mapcat 'every? 'some
+                   'sort-by 'group-by 'run!}
+                 h)
+      (last form)
+      (contains? #{'reduce} h) (last form)
+      (contains? #{'into 'concat 'distinct 'frequencies 'sort 'reverse 'vec 'set
+                   'doall 'dorun 'take-while 'drop-while 'partition-by}
+                 h)
+      (last form)
+      (contains? #{'doseq 'for} h)
+      (when (vector? (second form)) (second (second form)))
+      (= 'loop h) (when (vector? (second form)) (second (second form)))
+      (= 'while h) (second form)
+      :else nil)))
+
+(defn- iteration-bindings
+  "Symbols an iterating form binds to ELEMENTS of what it iterates -- the
+   parameters of its function-literal arguments, and the binding symbols of
+   `doseq`/`for`/`loop`. Each element inherits the collection's derivation."
+  [form]
+  (let [from-fns (mapcat (fn [a]
+                           (when (and (seq? a) (contains? #{'fn 'fn*} (first a)))
+                             (filter symbol? (tree-seq coll? seq
+                                                       (first (filter vector? (rest a)))))))
+                         (rest form))
+        from-binding (when (and (contains? #{'doseq 'for 'loop} (first form))
+                                (vector? (second form)))
+                       (filter symbol? (tree-seq coll? seq (first (second form)))))]
+    (set (concat from-fns from-binding))))
+
+(defn- binds-locals
+  "Locals a form introduces that are derived from parameter-derived values, so
+   a chain like `(let [ys (rest xs)] (map f ys))` still traces to `xs`."
+  [form params locals]
+  (let [h (first form)]
+    (if (and (contains? #{'let 'let* 'loop 'doseq 'for 'when-let 'if-let} h)
+             (vector? (second form)))
+      (let [pairs (partition 2 (second form))]
+        (reduce (fn [acc [b v]]
+                  (if (derived-from-params? v params acc)
+                    (into acc (filter symbol? (tree-seq coll? seq b)))
+                    acc))
+                locals pairs))
+      locals)))
+
 (defn form-degree
   "The degree of `form` from loops and calls alone, ignoring recursion.
 
    `degree-of` answers for a called user definition (nil when unknown to the
    caller); `cat` is the core catalog. Returns
    {:degree d :evidence s :assumed #{sym...} :log? bool}."
-  [form degree-of cat]
+  [form degree-of cat params]
   (let [assumed (atom #{})
+        untraced (atom #{})
         evidence (atom nil)
         note! (fn [d why]
                 (when (and (pos? (degree-rank d)) (nil? @evidence)) (reset! evidence why))
                 d)]
-    (letfn [(walk [x depth]
+    (letfn [(walk [x depth locals]
               (cond
                 (and (seq? x) (symbol? (first x)))
                 (let [h (first x)
-                      iterates? (and (loop-heads h) (not (literal-bound? x)))
+                      src (loop-source x)
+                      ;; A loop counts ONLY if what it iterates traces back to
+                      ;; a parameter. Otherwise it is constant in the input.
+                      traced? (and src (derived-from-params? src params locals))
+                      iterates? (and (loop-heads h) (not (literal-bound? x)) traced?)
+                      _ (when (and (loop-heads h) (not (literal-bound? x)) (not traced?))
+                          (swap! untraced conj h))
+                      ;; An element bound by a loop over a parameter-derived
+                      ;; collection is itself parameter-derived: the `x` in
+                      ;; (map (fn [x] ...) xs) carries xs's size into the body.
+                      locals (let [l (binds-locals x params locals)]
+                               (if iterates? (into l (iteration-bindings x)) l))
                       ;; A loop whose induction variable HALVES is
                       ;; logarithmic, not linear: (loop [n n] ... (recur
                       ;; (quot n 2))) runs log n times. Same recognizers as
@@ -282,24 +370,32 @@
                                                    (if halving? " (halving: logarithmic)" "")))
                              :else depth)
                       ;; a called user definition costs its own degree at this depth
+                      ;; A call's cost is in the size of ITS argument. If we
+                      ;; hand it a literal or a global, it is constant in OUR
+                      ;; input -- the same rule as loops, applied to calls.
+                      args-traced? (boolean (some (fn [a] (derived-from-params? a params locals))
+                                                  (rest x)))
                       callee (when-let [d (degree-of h)]
-                               (note! (add-degree depth d)
-                                      (str "calls " h " (cost " (degree-str d) ")")))
+                               (when args-traced?
+                                 (note! (add-degree depth d)
+                                        (str "calls " h " (cost " (degree-str d) ")"))))
                       core (when-let [e (get cat h)]
-                             (note! (add-degree depth (:degree e))
-                                    (str "calls " h " (core cost "
-                                         (degree-str (:degree e)) ")")))
+                             (when args-traced?
+                               (note! (add-degree depth (:degree e))
+                                      (str "calls " h " (core cost "
+                                           (degree-str (:degree e)) ")"))))
                       _ (when (and (symbol? h) (nil? (degree-of h)) (nil? (get cat h))
                                    (not (loop-heads h)) (not (special? h)))
                           (swap! assumed conj h))
                       children (reduce (fn [acc y]
                                          (max-degree acc (walk y (if iterates?
                                                                    (add-degree depth step)
-                                                                   depth))))
+                                                                   depth)
+                                                           locals)))
                                        constant-degree (rest x))]
                   (reduce max-degree constant-degree
                           (keep identity [here callee core children])))
-                (coll? x) (reduce (fn [acc y] (max-degree acc (walk y depth)))
+                (coll? x) (reduce (fn [acc y] (max-degree acc (walk y depth locals)))
                                   constant-degree (seq x))
                 :else constant-degree))
             (special? [h]
@@ -307,8 +403,9 @@
                            'when-not 'cond 'case 'try 'catch 'finally 'throw 'ns 'var
                            'set! 'new '. 'and 'or 'not 'defmacro 'defmethod 'deftest}
                          h))]
-      (let [d (walk form constant-degree)]
-        {:degree d :evidence @evidence :assumed @assumed}))))
+      (let [d (walk form constant-degree #{})]
+        {:degree d :evidence @evidence :assumed @assumed
+         :untraced-loops @untraced}))))
 
 (defn memoized?
   "Whether the definition is wrapped in `memoize`. A memoized `fib` is linear
@@ -327,7 +424,8 @@
    `:degree` is a structured value ({:poly k}, {:poly-log k}, {:log 1},
    {:exp c}, :unknown or :memoized), never a stringified keyword."
   [{:keys [name form]} degree-of cat]
-  (let [base (form-degree form degree-of cat)
+  (let [params (params-of form)
+        base (form-degree form degree-of cat params)
         args (call-args name form)
         a (count args)
         recursive? (pos? a)
@@ -352,6 +450,8 @@
      :a (when recursive? a)
      :b (when recursive? b)
      :assumed (:assumed base)
+     :untraced-loops (:untraced-loops base)
+     :params params
      :evidence
      (cond
        memo? "memoized: the structural bound does not apply"

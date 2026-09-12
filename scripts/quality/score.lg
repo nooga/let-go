@@ -95,8 +95,13 @@
    ;; made the composite change because the machine was busy rather than
    ;; because the code did. `cost` replaces it with a STRUCTURAL estimate of
    ;; algorithmic complexity, deterministic from the source at a commit.
-   :weights {:erosion 0.25 :uncovered 0.20 :verbosity 0.10 :comment-debt 0.10
-             :dead 0.10 :defects 0.10 :testing 0.10 :cost 0.05}
+   ;; `cost` is REPORTED at weight 0 until its loop rule traces iteration
+   ;; sources back to parameters. Loop NESTING DEPTH is not a degree: the
+   ;; degree has no variable unless the loop ranges over an input, and
+   ;; `installLangNS` -- four nested loops over fixed tables and a call's own
+   ;; argument count -- read as n^4 while being constant in its input.
+   :weights {:erosion 0.30 :uncovered 0.20 :verbosity 0.10 :comment-debt 0.10
+             :dead 0.10 :defects 0.10 :testing 0.10 :cost 0.0}
    :file-terms [:erosion :verbosity :defects :dead :comment-debt :cost]})
 
 (defn penalty
