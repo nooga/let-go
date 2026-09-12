@@ -6,8 +6,9 @@
    in their .vocab file plus the two structural adapters below (a table row is
    rewritten into repl statement lines; a test block is emitted verbatim with
    its namespaces spliced in)."
-  (:require [clojure.string :as str]
-            [spec-evidence.parse :as p]))
+  (:require
+   [clojure.string :as str]
+   [spec-evidence.parse :as p]))
 
 ;; ---------------------------------------------------------------- utilities
 
@@ -42,20 +43,20 @@
    Handles `include <name>` by splicing that vocab's directives in first."
   [text]
   (reduce
-   (fn [v line]
-     (let [line (str/trim line)]
-       (cond
-         (or (str/blank? line) (str/starts-with? line "#")) v
-         (str/starts-with? line "include ")
-         (merge-with into v (parse-vocab (slurp (vocab-path (str/trim (subs line 8))))))
-         (str/starts-with? line "boot ") (update v :boot conj (subs line 5))
-         (str/starts-with? line "epilogue ") (update v :epilogue conj (subs line 9))
-         :else
-         (if-let [[pat tpl] (split-once line " => ")]
-           (update v :rules conj {:pattern (str/split (str/trim pat) #" +") :template tpl})
-           v))))
-   {:boot [] :epilogue [] :rules []}
-   (p/split-lines text)))
+    (fn [v line]
+      (let [line (str/trim line)]
+        (cond
+          (or (str/blank? line) (str/starts-with? line "#")) v
+          (str/starts-with? line "include ")
+          (merge-with into v (parse-vocab (slurp (vocab-path (str/trim (subs line 8))))))
+          (str/starts-with? line "boot ") (update v :boot conj (subs line 5))
+          (str/starts-with? line "epilogue ") (update v :epilogue conj (subs line 9))
+          :else
+          (if-let [[pat tpl] (split-once line " => ")]
+            (update v :rules conj {:pattern (str/split (str/trim pat) #" +") :template tpl})
+            v))))
+    {:boot [] :epilogue [] :rules []}
+    (p/split-lines text)))
 
 ;; --------------------------------------------------------------- templating
 
@@ -131,10 +132,11 @@
   [text]
   (try (seq (read-all-string text)) (catch Throwable _ false)))
 
-(defn- statements
+(defn statements
   "Split tangled text into [{:form text} | {:line text}] in order: expectation
    lines start with ';', form text accumulates lines until the reader accepts
-   it."
+   it. Public so callers (e.g. `accept`) can re-derive a block's case/line
+   structure without re-implementing the reader-driven accumulation."
   [text]
   (loop [lines (p/split-lines text) acc nil out []]
     (if (empty? lines)

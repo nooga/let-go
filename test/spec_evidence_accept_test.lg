@@ -1,0 +1,35 @@
+;; test/spec_evidence_accept_test.lg
+(ns test.spec-evidence-accept-test
+  (:require
+   [clojure.string :as str]
+   [spec-evidence :as se]
+   [test :refer :all]))
+
+(deftest accept-rewrites-the-failing-expectation-in-place
+  (let [dir (str (os/temp-dir) "/" (name (gensym "spec-accept-")))
+        spec (str dir "/x.md")]
+    (mkdir dir)
+    (spit spec (str "---\nstatus: draft\nlast-verified: 2000-01-01\n---\n\nTwo. [R-two]\n\n```clj-repl @R-two oracle=none\n(+ 1 1)\n;=> 3\n(str \"a\")\n;; out: \"zzz\"\n;=> \"a\"\n```\n"))
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+      (is (= 0 @code))
+      (is (str/includes? out "accepted two#1 value"))
+      (is (str/includes? out "accepted two#2 out"))
+      (let [t (slurp spec)]
+        (is (str/includes? t "(+ 1 1)\n;=> 2\n"))
+        (is (str/includes? t "(str \"a\")\n;; out: \"\"\n;=> \"a\"\n"))
+        (is (not (str/includes? t "last-verified: 2000-01-01")))))
+    ;; A second run is clean.
+    (is (= 0 (se/main ["run" spec "--engine" "../lg"])))))
+
+(deftest accept-promotes-an-unexpected-pass-by-dropping-the-mark
+  (let [dir (str (os/temp-dir) "/" (name (gensym "spec-xpass-accept-")))
+        spec (str dir "/z.md")]
+    (mkdir dir)
+    (spit spec "P. [R-p]\n\n```clj-repl @R-p oracle=none\n(+ 1 1)\n;=> 2\n;; expect: fail\n```\n")
+    (let [code (atom nil)
+          out (with-out-str (reset! code (se/main ["accept" spec "--engine" "../lg"])))]
+      (is (= 0 @code))
+      (is (str/includes? out "accepted p#1 xpass"))
+      (is (not (str/includes? (slurp spec) ";; expect: fail")))
+      (is (= 0 (se/main ["run" spec "--engine" "../lg"]))))))
