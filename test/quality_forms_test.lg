@@ -60,3 +60,21 @@
     ;; a fragment containing no complete form is returned unchanged, because
     ;; there is no structure to snap to
     (is (= [2 2] (f/snap ex 2 2)))))
+
+(deftest definitions-with-name-metadata-are-not-dropped
+  ;; The reader expands `^{...} name` into `(with-meta name {...})`, so an
+  ;; annotated definition's second element is a LIST, not a symbol. Requiring
+  ;; a bare symbol made every ^:private and ^{...} definition INVISIBLE to the
+  ;; whole tool -- absent from metrics, the call graph, coverage, dead code
+  ;; and cost alike. 176 definitions in this repo, 4.5% of the .lg corpus.
+  (let [priv (first (f/definitions "(defn ^:private helper [x] (inc x))"))
+        ann (first (f/definitions "(defn ^{:complexity {:poly-log 1}} ms [xs] xs)"))
+        plain (first (f/definitions "(defn ordinary [x] x)"))]
+    (is (= 'helper (:name priv)))
+    (is (:private? priv))
+    (is (= 'ms (:name ann)))
+    (is (= {:poly-log 1} (:complexity (:meta ann))))
+    ;; and the ordinary case still reads the same
+    (is (= 'ordinary (:name plain)))
+    (is (nil? (:meta plain)))
+    (is (not (:private? plain)))))
