@@ -31,6 +31,13 @@
    :impact {:cc-span 20.0 :nesting 0.05 :long-defn 0.05
             :low-comment 0.1 :hotspot 0.2 :untested 0.02}
    :dup-k 25 :dup-w 40 :dup-floor 50
+   ;; Below this many LOC a single fix commit implies an absurd per-KLOC
+   ;; rate (one fix in a 9-line stub reads as 111/KLOC), so the defects term
+   ;; is omitted for the file rather than scored off a meaningless rate.
+   :defects-min-loc 20
+   ;; A faint pair still counts toward dup%, but only a substantial one is
+   ;; worth a `duplicate` issue line telling someone to go look.
+   :dup-issue-min-similarity 0.3
    :top-default 20
    :since-days 180
    :file-weights {:cc 0.35 :mi 0.30 :dup 0.20 :defects 0.15}
@@ -157,10 +164,15 @@
              {:path (:path f) :line 1 :kind :defect-hotspot :measure (:defects-per-kloc f)
               :hint "recent fixes concentrate here"
               :impact (* (:defects fw) (:hotspot im))})
-           (for [p dup-pairs]
-             {:path (get-in p [:a :path]) :line (get-in p [:a :start]) :kind :duplicate
-              :measure (:similarity p)
-              :hint (str "~ " (get-in p [:b :path]) ":" (get-in p [:b :start]) "-" (get-in p [:b :end]))
+           (for [p dup-pairs
+                 :when (>= (:similarity p) (:dup-issue-min-similarity thresholds))]
+             ;; One issue per matched REGION (see `quality.dup/pairs`), so the
+             ;; line carries this region's own span and the span it matches.
+             {:path (get-in p [:a :path]) :line (get-in p [:a :start])
+              :end (get-in p [:a :end]) :kind :duplicate :measure (:similarity p)
+              :hint (str "~ " (get-in p [:b :path]) ":" (get-in p [:b :start])
+                         "-" (get-in p [:b :end])
+                         " (lines " (- (get-in p [:a :end]) (get-in p [:a :start]) -1) ")")
               :impact (* (:dup fw) (:similarity p))})
            (for [u (:untested coverage)]
              {:path (:path u) :line (:line u) :kind :untested :measure 0

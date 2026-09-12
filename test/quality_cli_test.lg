@@ -53,3 +53,44 @@
   ;; The entry guard means loading `quality` for this test printed nothing;
   ;; if it had run, the test runner's output would carry a report already.
   (is (fn? q/main)))
+
+(deftest untracked-files-are-not-measured
+  ;; The corpus is the VCS file list, so a scratch file in the working copy
+  ;; cannot move the score. `scratch_*.lg` is gitignored in the fixture dir
+  ;; (jj snapshots on every command, so merely-new would already be tracked).
+  (let [scratch (str fixtures "/scratch_untracked.lg")]
+    (spit scratch "(ns fixture.scratch)\n(defn scratch-only [x] (inc x))\n")
+    (let [out (with-out-str (q/main ["--since" "2000-01-01" "--source-root" fixtures fixtures]))]
+      (os/delete-tree scratch)
+      (is (not (str/includes? out "scratch_untracked")))
+      (is (not (str/includes? out "scratch-only")))
+      (is (str/includes? out "tracked-by jj")))))
+
+(deftest an-empty-corpus-is-an-error-not-a-perfect-score
+  ;; A path that matches nothing (or only skipped files) used to score 100.0
+  ;; off zero files.
+  (let [out (with-out-str (is (= 2 (q/main ["--since" "2000-01-01" "fixtures/quality/nope"]))))]
+    (is (str/includes? out "no source files under"))))
+
+(deftest help-prints-usage
+  (is (str/includes? (with-out-str (q/main ["--help"])) "usage: ./lg scripts/quality.lg")))
+
+(deftest report-header-carries-the-spec-caveats
+  (let [out (with-out-str (q/main ["--since" "2000-01-01" "--source-root" fixtures fixtures]))]
+    (is (str/includes? out "caveat: static coverage is an upper bound"))
+    (is (str/includes? out "caveat: efficiency couples coverage to CI time"))
+    (is (str/includes? out "corpus "))
+    ;; the two derivation caveats item 6 asks for, stated in the header
+    (is (str/includes? out "dup-share by lines: regions are matched on TOKENS"))
+    (is (str/includes? out "defects: renames credited to target via -M"))
+    ;; duplicate issues carry the A-side span and the matched span
+    (is (re-find #"duplicate\s+[0-9.]+\s+~ \S+:\d+-\d+ \(lines \d+\)" out))
+    (is (re-find #"test/fixtures/quality/\S+:\d+-\d+\s+duplicate" out))))
+
+(deftest no-paths-means-the-default-roots
+  ;; `make quality` relies on this: no positional path measures
+  ;; `default-paths`, per language.
+  (let [opts (q/parse-args [])]
+    (is (= [] (:paths opts)))
+    (is (= ["pkg/rt/core" "scripts" "test"] (:lg q/default-paths)))
+    (is (= ["pkg" "cmd"] (:go q/default-paths)))))

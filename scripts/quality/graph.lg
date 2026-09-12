@@ -208,5 +208,8 @@
                       (sort-by (juxt :path :line))
                       vec)]
     {:reached hit :total total
-     :percent (if (pos? total) (* 100.0 (/ hit (double total))) 100.0)
+     ;; No definitions at all means nothing to be covered: the percentage is
+     ;; undefined (nil), so the corpus term is omitted rather than reported
+     ;; as a vacuous 100%.
+     :percent (when (pos? total) (* 100.0 (/ hit (double total))))
      :untested untested}))
