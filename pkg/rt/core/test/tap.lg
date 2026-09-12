@@ -1,0 +1,82 @@
+;; clojure.test.tap — TAP (Test Anything Protocol) reporter for clojure.test.
+;; Transliterated from Clojure 1.12.5 clojure/test/tap.clj. Canonical name
+;; test.tap; aliased as clojure.test.tap (nsAliases).
+(ns test.tap
+  (:require
+   [clojure.string :as str]
+   [test :as t]))
+
+(defn print-tap-plan
+  "Prints a TAP plan line like '1..n'. n is the number of tests."
+  [n]
+  (when (neg? n)
+    (throw (ex-info "TAP plan count cannot be negative" {:n n})))
+  (println (str "1.." n)))
+
+(defn print-tap-diagnostic
+  "Prints a TAP diagnostic line. data is a (possibly multi-line) string."
+  [data]
+  (doseq [line (str/split data #"\n")]
+    (println "#" line)))
+
+(defn print-tap-pass
+  "Prints a TAP 'ok' line. msg is a string, with no line breaks."
+  [msg]
+  (println "ok" msg))
+
+(defn print-tap-fail
+  "Prints a TAP 'not ok' line. msg is a string, with no line breaks."
+  [msg]
+  (println "not ok" msg))
+
+(defn- print-diagnostics [data]
+  (when (seq t/*testing-contexts*)
+    (print-tap-diagnostic (t/testing-contexts-str)))
+  (when (:message data)
+    (print-tap-diagnostic (:message data)))
+  (print-tap-diagnostic (str "expected:" (pr-str (:expected data))))
+  (if (= :pass (:type data))
+    (print-tap-diagnostic (str "  actual:" (pr-str (:actual data))))
+    (print-tap-diagnostic (str "  actual:" (with-out-str (t/render-actual (:actual data)))))))
+
+(defmulti ^:dynamic tap-report (fn [data] (:type data)))
+
+(defmethod tap-report :default [data]
+  (t/with-test-out
+    (print-tap-diagnostic (pr-str data))))
+
+(defmethod tap-report :pass [data]
+  (t/with-test-out
+    (t/inc-report-counter :pass)
+    (print-tap-pass (t/testing-vars-str data))
+    (print-diagnostics data)))
+
+(defmethod tap-report :error [data]
+  (t/with-test-out
+    (t/inc-report-counter :error)
+    (print-tap-fail (t/testing-vars-str data))
+    (print-diagnostics data)))
+
+(defmethod tap-report :fail [data]
+  (t/with-test-out
+    (t/inc-report-counter :fail)
+    (print-tap-fail (t/testing-vars-str data))
+    (print-diagnostics data)))
+
+(defmethod tap-report :summary [data]
+  (t/with-test-out
+    (print-tap-plan (+ (:pass data) (:fail data) (:error data)))))
+
+(defmacro with-tap-output
+  "Execute body with modified test reporting functions that produce TAP output"
+  [& body]
+  ;; test/report, not the t/report alias: this macro's syntax-quote expands
+  ;; in the CALLER's namespace, which may not have `test` aliased as `t` (or
+  ;; aliased at all). The dialect's syntax-quote does not re-resolve an
+  ;; already-slashed symbol against the defining ns's alias table (only bare
+  ;; symbols get auto-qualified — see test.lg's own note on deftest above),
+  ;; so `t/report` here would compile to a literal, unresolvable `t/report`
+  ;; in a caller that doesn't happen to alias `test` as `t`. The canonical
+  ;; ns name is portable regardless of the caller's own aliases.
+  `(binding [test/report tap-report]
+     ~@body))
