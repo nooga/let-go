@@ -17,6 +17,15 @@
 (require 'clojure.string)
 (require 'clojure.set)
 
+;; --- R5 — devlog phrase (heuristic, kept, segregated) -------------------
+;;
+;; The original rule, unchanged in behaviour: a hand-curated list of phrases
+;; that indicate a comment narrating the change rather than describing the
+;; code. This is a lexicon, not a measurement — it only ever finds wordings
+;; someone thought of in advance — so unlike R1-R4/R6 it is reported under
+;; its own heading, is never part of the objective score, and --gate refuses
+;; to gate on it (see the driver below).
+;;
 ;; The phrase list is deliberately small and literal. Every entry names a thing
 ;; that can only be true of the change rather than of the code, which is what
 ;; keeps the false-positive rate low enough to read the output. Phrases that
@@ -102,13 +111,13 @@
       (some (fn [p] (when (clojure.string/includes? norm (str " " p " ")) p))
             devlog-phrases))))
 
-(defn scan-file [path]
-  (let [go?    (go-file? path)
-        blocks (comment-blocks (slurp path) go?)]
-    (vec (keep (fn [b]
-                 (when-let [p (block-hit b)]
-                   {:file path :line (:line b) :phrase p :text (:text b)}))
-               blocks))))
+(defn r5-findings [path blocks]
+  (vec (keep (fn [b]
+               (when-let [p (block-hit b)]
+                 {:file path :line (:line b) :end (:end b)
+                  :kind :devlog-comment :measure 1
+                  :phrase p :evidence (snippet (:text b))}))
+             blocks)))
 
 ;; --- R1 — commented-out code (.lg only) --------------------------------
 ;;
@@ -412,10 +421,37 @@
 
 (defn file-blocks [path] (comment-blocks (slurp path) (go-file? path)))
 
+;; --- CLI -----------------------------------------------------------------
+;;
+;; --edn: print all findings as one EDN vector, nothing else.
+;; --gate K1[,K2...]: exit non-zero iff a finding's :kind is named. R5's
+;;   :devlog-comment is never gate-eligible — it is a heuristic, not part of
+;;   the objective score, per the design doc — so it is filtered out of the
+;;   requested set with a note if someone asks for it anyway.
+
+(def gateable-kinds
+  #{:commented-out-code :restatement :duplicated-comment :comment-density-outlier
+    :comment-churn})
+
+(defn parse-args [argv]
+  (loop [args argv opts {:paths [] :edn? false :gate-req #{}}]
+    (if (empty? args)
+      opts
+      (let [a (first args)]
+        (cond
+          (= a "--edn") (recur (rest args) (assoc opts :edn? true))
+          (= a "--gate")
+          (if (empty? (rest args))
+            (throw (Exception. "--gate requires an argument, e.g. --gate commented-out-code"))
+            (recur (rest (rest args))
+                   (update opts :gate-req into
+                           (map keyword (clojure.string/split (second args) #",")))))
+          :else (recur (rest args) (update opts :paths conj a)))))))
+
 (let [argv   (vec (drop 2 (seq os/args)))
-      paths  (if (empty? argv) ["pkg" "scripts"] argv)
+      opts   (parse-args argv)
+      paths  (if (empty? (:paths opts)) ["pkg" "scripts"] (:paths opts))
       files  (vec (mapcat collect paths))
-      hits   (vec (mapcat scan-file files))
       blocks-by-file (zipmap files (map file-blocks files))
       r1     (vec (mapcat (fn [p] (r1-findings p (blocks-by-file p))) files))
       r2     (vec (mapcat (fn [p] (r2-findings p (blocks-by-file p))) files))
@@ -424,28 +460,42 @@
       all-defs (vec (mapcat file-definitions files))
       r4-result (r4-findings all-defs)
       r4     (:findings r4-result)
-      go-files (count (filter go-file? files))]
-  (doseq [f r1]
-    (println (str (:file f) ":" (:line f) "-" (:end f) "  [commented-out-code] "
-                  (:evidence f))))
-  (println (str (count r1) " commented-out-code finding(s) (R1, .lg only — "
-                go-files " Go file(s) not covered yet, see R1's section comment"
-                " in scripts/lint.lg)."))
-  (doseq [f r2]
-    (println (str (:file f) ":" (:line f) "-" (:end f) "  [restatement] " (:evidence f))))
-  (println (str (count r2) " restatement finding(s) (R2)."))
-  (doseq [f r3]
-    (println (str (:file f) ":" (:line f) "-" (:end f) "  [duplicated-comment] " (:evidence f))))
-  (println (str (count r3) " duplicated-comment finding(s) (R3)."))
-  (doseq [f r4]
-    (println (str (:file f) ":" (:line f) "-" (:end f) "  [comment-density-outlier] " (:evidence f))))
-  (if (< (count all-defs) 20)
-    (println (str "comment-density-outlier (R4): skipped — only " (count all-defs)
-                  " definition(s) found, need >=20 to compute a percentile."))
-    (println (str (count r4) " comment-density-outlier finding(s) (R4, p95="
-                  (:threshold r4-result) " over " (count all-defs) " definition(s)).")))
-  (doseq [h hits]
-    (println (str (:file h) ":" (:line h) "  [devlog-comment] \"" (:phrase h) "\""))
-    (println (str "    " (snippet (:text h)))))
-  (println (str (count hits) " finding(s) across " (count files)
-                " file(s). Report only — no source was changed.")))
+      r5     (vec (mapcat (fn [p] (r5-findings p (blocks-by-file p))) files))
+      go-files (count (filter go-file? files))
+      all-findings (vec (concat r1 r2 r3 r4 r5))
+      gate-kinds (clojure.set/intersection (:gate-req opts) gateable-kinds)
+      ignored-gate (clojure.set/difference (:gate-req opts) gateable-kinds)
+      gated? (some (fn [f] (contains? gate-kinds (:kind f))) all-findings)]
+  (if (:edn? opts)
+    (println (pr-str all-findings))
+    (do
+      (doseq [f r1]
+        (println (str (:file f) ":" (:line f) "-" (:end f) "  [commented-out-code] "
+                      (:evidence f))))
+      (println (str (count r1) " commented-out-code finding(s) (R1, .lg only — "
+                    go-files " Go file(s) not covered yet, see R1's section comment"
+                    " in scripts/lint.lg)."))
+      (doseq [f r2]
+        (println (str (:file f) ":" (:line f) "-" (:end f) "  [restatement] " (:evidence f))))
+      (println (str (count r2) " restatement finding(s) (R2)."))
+      (doseq [f r3]
+        (println (str (:file f) ":" (:line f) "-" (:end f) "  [duplicated-comment] " (:evidence f))))
+      (println (str (count r3) " duplicated-comment finding(s) (R3)."))
+      (doseq [f r4]
+        (println (str (:file f) ":" (:line f) "-" (:end f) "  [comment-density-outlier] " (:evidence f))))
+      (if (< (count all-defs) 20)
+        (println (str "comment-density-outlier (R4): skipped — only " (count all-defs)
+                      " definition(s) found, need >=20 to compute a percentile."))
+        (println (str (count r4) " comment-density-outlier finding(s) (R4, p95="
+                      (:threshold r4-result) " over " (count all-defs) " definition(s)).")))
+      (println "-- R5 devlog-phrase (heuristic — advisory only, never gated) --")
+      (doseq [f r5]
+        (println (str (:file f) ":" (:line f) "  [devlog-comment] \"" (:phrase f) "\""))
+        (println (str "    " (:evidence f))))
+      (println (str (count r5) " finding(s) across " (count files)
+                    " file(s). Report only — no source was changed."))
+      (when (seq ignored-gate)
+        (println (str "note: --gate ignored " (vec (map name ignored-gate))
+                      " — not gate-eligible (R5 is a heuristic, or an unknown kind name).")))))
+  (when gated?
+    (os/exit 1)))
