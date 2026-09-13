@@ -423,6 +423,58 @@ func TestLintR4DensityOutlier(t *testing.T) {
 	}
 }
 
+func TestLintR4GoFunctionBodies(t *testing.T) {
+	dir := t.TempDir()
+	var src strings.Builder
+	src.WriteString("package fixture\n\n")
+	for i := 0; i < 19; i++ {
+		fmt.Fprintf(&src, "func F%d() {\n\t// ordinary interior comment\n\tx := 1\n\t_ = x\n}\n\n", i)
+	}
+	lastDeclLine := strings.Count(src.String(), "\n") + 1
+	src.WriteString("func F19(\n\tx int,\n) int {\n")
+	for i := 0; i < 4; i++ {
+		fmt.Fprintf(&src, "\t// dense interior comment %d\n", i)
+	}
+	src.WriteString("\t_ = x\n\treturn x\n}\n")
+	path := filepath.Join(dir, "fixture.go")
+	if err := os.WriteFile(path, []byte(src.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint.lg: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "only 0 definition(s) found") {
+		t.Fatalf("R4 did not measure Go functions:\n%s", out)
+	}
+	want := fmt.Sprintf("%s:%d-", path, lastDeclLine)
+	var findings []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "[comment-density-outlier]") {
+			findings = append(findings, line)
+		}
+	}
+	if len(findings) != 1 || !strings.HasPrefix(findings[0], want) {
+		t.Errorf("R4 findings = %v, want only dense Go function at %s:\n%s", findings, want, out)
+	}
+}
+
+func TestLintR4MalformedGoFailsLoudly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broken.go")
+	if err := os.WriteFile(path, []byte("package p\nfunc Broken( {\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), "--edn", path).CombinedOutput()
+	if err == nil {
+		t.Fatalf("malformed Go must fail lint explicitly:\n%s", out)
+	}
+	if !strings.Contains(string(out), "cannot parse Go file") {
+		t.Errorf("missing parse error in lint output:\n%s", out)
+	}
+}
+
 // --edn / --gate: machine-readable output and opt-in exit codes.
 func TestLintEdnAndGate(t *testing.T) {
 	dir := t.TempDir()

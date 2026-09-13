@@ -491,6 +491,34 @@
                       :ratio (/ (double comments) total)})))))
            (range n)))))
 
+(defn go-file-definitions [go-files lines-by-file]
+  (if (empty? go-files)
+    []
+    (let [script (os/absolute-path (nth os/args 1))
+          helper (clojure.string/replace script #"lint\.lg$" "lint_go_spans.go")
+          r      (apply os/sh (concat ["go" "run" helper "--"] go-files))]
+      (when (not= 0 (:exit r))
+        (throw (Exception. (str "Go span helper failed: " (:err r)))))
+      (vec (keep (fn [line]
+                   (when-not (clojure.string/blank? line)
+                     (let [parts (clojure.string/split line #"\t")]
+                       (when-not (= 3 (count parts))
+                         (throw (Exception. (str "malformed Go span: " line))))
+                       (let [path  (nth parts 0)
+                             start (dec (read-string (nth parts 1)))
+                             end   (dec (read-string (nth parts 2)))
+                             lines (get lines-by-file path)
+                             total (inc (- end start))]
+                         (when (or (nil? lines) (neg? start) (>= end (count lines))
+                                   (<= total 0))
+                           (throw (Exception. (str "invalid Go span: " line))))
+                         (when (>= total r4-min-def-lines)
+                           (let [comments (count (filter (fn [l] (some? (comment-body l true)))
+                                                         (subvec (vec lines) start (inc end))))]
+                             {:path path :start start :end end :total total :comments comments
+                              :ratio (/ (double comments) total)}))))))
+                 (clojure.string/split (:out r) #"\n"))))))
+
 ;; percentile computes the nearest-rank percentile (p in [0,1]) over a
 ;; non-empty numeric collection: rank = ceil(p * n), 1-indexed into the
 ;; ascending sort.
@@ -922,7 +950,8 @@
                                        (blocks-by-file p)))
                        files))
       r3     (r3-findings all-pairs)
-      all-defs (vec (mapcat file-definitions files))
+      all-defs (vec (concat (mapcat file-definitions (remove go-file? files))
+                            (go-file-definitions (filter go-file? files) lines-by-file)))
       r4-result (r4-findings all-defs)
       r4     (:findings r4-result)
       r5     (vec (mapcat (fn [p] (r5-findings p (blocks-by-file p))) files))
