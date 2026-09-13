@@ -107,6 +107,14 @@
     (is (every? #(= :unpaired (:pairing %)) rows))
     (is (every? #(not (contains? % :delta)) rows))))
 
+(deftest atomic-top-level-form-does-not-break-later-definition-pairing
+  (let [old "(ns demo)\n42\n(defn x [] 1)\n"
+        new "(ns demo)\n42\n(defn x [] 2)\n"
+        rows (t/build [(change old new [(span 3 1)] [(span 3 1)])])]
+    (is (= 1 (count rows)))
+    (is (= 'demo/x (:identity (first rows))))
+    (is (= :paired (:pairing (first rows))))))
+
 (deftest dynamic-namespace-transition-does-not-reuse-stale-identity
   (let [old "(ns demo)\n(in-ns (symbol \"a\"))\n(defn x [] 1)\n"
         new "(ns demo)\n(in-ns (symbol \"b\"))\n(defn x [] 2)\n"

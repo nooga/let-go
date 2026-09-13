@@ -20,7 +20,7 @@
 
 (defn- next-namespace [namespace form]
   (let [head (when (seq? form) (first form))
-        target (second form)]
+        target (when (seq? form) (second form))]
     (cond
       (= 'ns head) (when (symbol? target) target)
       (= 'in-ns head) (when (and (seq? target)
