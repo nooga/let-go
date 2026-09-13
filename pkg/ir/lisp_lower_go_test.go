@@ -2147,3 +2147,84 @@ func TestGoExportNameGuardsDegenerateNames(t *testing.T) {
 		}
 	}
 }
+
+// unchecked-add / unchecked-subtract / unchecked-multiply are first-class IR
+// ops (:unchecked-add/-sub/-mul). For int/int they lower to native Go
+// arithmetic — Go int ops already wrap at the platform width, which IS the
+// unchecked contract — and must not fall into the promoting
+// rt.AddValue/SubValue/MulValue helpers that share their op-str.
+func TestLowerGoStrictUncheckedIntLowersNative(t *testing.T) {
+	ensureLoader()
+
+	cases := []struct {
+		name   string
+		src    string
+		argtys string
+		want   string
+		reject string
+	}{
+		{name: "unchecked-add", src: `(defn uadd [x y] (unchecked-add x y))`, argtys: "[:int :int]", want: "+", reject: "AddValue"},
+		{name: "unchecked-subtract", src: `(defn usub [x y] (unchecked-subtract x y))`, argtys: "[:int :int]", want: "-", reject: "SubValue"},
+		{name: "unchecked-multiply", src: `(defn umul [x y] (unchecked-multiply x y))`, argtys: "[:int :int]", want: "*", reject: "MulValue"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := buildLispIR(t, tc.src)
+			seedArgTypes(t, fn, tc.argtys)
+			optimizeLispIR(t, fn)
+			result := lowerGo(t, fn, ":strict")
+
+			if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+				t.Fatalf("expected :lowered status, got %v (reason=%v)",
+					got, result.ValueAt(vm.Keyword("reason")))
+			}
+			rendered := bindAndRenderGoDecl(t, result)
+			if !strings.Contains(rendered, tc.want) {
+				t.Fatalf("expected %s to lower to native Go op %q, got:\n%s", tc.name, tc.want, rendered)
+			}
+			if strings.Contains(rendered, tc.reject) {
+				t.Fatalf("expected %s on int/int to stay native, but it routed through a runtime helper (%s):\n%s", tc.name, tc.reject, rendered)
+			}
+		})
+	}
+}
+
+// An operand that is not a proven int must go through the wrapping
+// rt.Unchecked<Op>Value helper — never the promoting rt.<Op>Value one, which
+// would turn (unchecked-add Long/MAX_VALUE 1) into an overflow error.
+func TestLowerGoUncheckedBoxedOperandRoutesToUncheckedHelper(t *testing.T) {
+	ensureLoader()
+
+	cases := []struct {
+		name   string
+		src    string
+		want   string
+		reject string
+	}{
+		{name: "unchecked-add", src: `(defn uadd [x y] (unchecked-add x y))`, want: "rt.UncheckedAddValue(", reject: "rt.AddValue("},
+		{name: "unchecked-subtract", src: `(defn usub [x y] (unchecked-subtract x y))`, want: "rt.UncheckedSubValue(", reject: "rt.SubValue("},
+		{name: "unchecked-multiply", src: `(defn umul [x y] (unchecked-multiply x y))`, want: "rt.UncheckedMulValue(", reject: "rt.MulValue("},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := buildLispIR(t, tc.src)
+			seedArgTypes(t, fn, "[:any :any]")
+			optimizeLispIR(t, fn)
+			result := lowerGo(t, fn, ":strict")
+
+			if got := result.ValueAt(vm.Keyword("status")); got != vm.Keyword("lowered") {
+				t.Fatalf("expected :lowered status, got %v (reason=%v)",
+					got, result.ValueAt(vm.Keyword("reason")))
+			}
+			rendered := bindAndRenderGoDecl(t, result)
+			if !strings.Contains(rendered, tc.want) {
+				t.Fatalf("expected %s with boxed operands to call %s, got:\n%s", tc.name, tc.want, rendered)
+			}
+			if strings.Contains(rendered, tc.reject) {
+				t.Fatalf("expected %s to avoid the promoting helper %s, got:\n%s", tc.name, tc.reject, rendered)
+			}
+		})
+	}
+}

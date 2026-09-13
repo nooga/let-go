@@ -15,7 +15,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	runtimeDebug "runtime/debug"
 	"strings"
 
@@ -484,17 +483,31 @@ func readWasmExecJS() ([]byte, error) {
 		}
 		return patchTinyGoStdout(data), nil
 	}
-	goroot := os.Getenv("GOROOT")
-	if goroot == "" {
-		goroot = runtime.GOROOT()
+	goroot, err := resolveGoRoot(os.Getenv("GOROOT"), func() ([]byte, error) {
+		return exec.Command(gomod.GoToolPath(), "env", "GOROOT").Output()
+	})
+	if err != nil {
+		return nil, err
 	}
-	if goroot == "" {
-		out, err := exec.Command(gomod.GoToolPath(), "env", "GOROOT").Output()
-		if err != nil {
-			return nil, fmt.Errorf("cannot find GOROOT: %w", err)
-		}
-		goroot = strings.TrimSpace(string(out))
+	return readGoWasmExecJS(goroot)
+}
+
+// resolveGoRoot asks the same Go executable selected for the WASM build where
+// its tree lives. GoToolPath still prefers the toolchain that built let-go when
+// it exists, but can fall back to PATH after a cached binary outlives that
+// toolchain; runtime.GOROOT would remain stuck on the vanished build-time path.
+func resolveGoRoot(configured string, query func() ([]byte, error)) (string, error) {
+	if configured != "" {
+		return configured, nil
 	}
+	out, err := query()
+	if err != nil {
+		return "", fmt.Errorf("cannot find GOROOT: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func readGoWasmExecJS(goroot string) ([]byte, error) {
 	candidates := []string{
 		filepath.Join(goroot, "lib", "wasm", "wasm_exec.js"),
 		filepath.Join(goroot, "misc", "wasm", "wasm_exec.js"),

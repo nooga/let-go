@@ -1,0 +1,35 @@
+;; clojure.string/split conformance: Java Pattern.split semantics.
+;; Spec: docs/specs/clojure-test-conformance.md §4.9 (@R-string-split-limit-zero).
+;; Oracle: Clojure 1.12.5; every expected value below was produced by it.
+(ns test.string-split-test
+  (:require
+   [clojure.string :as str]
+   [test :refer :all]))
+
+(deftest split-limit-zero-drops-trailing-empties
+  (is (= ["a"] (str/split "a\n" #"\n")))
+  (is (= ["a"] (str/split "a\n\n" #"\n")))
+  (is (= [] (str/split "\n" #"\n")))
+  (is (= [""] (str/split "" #"\n")))
+  (is (= ["a" "" "b"] (str/split "a\n\nb" #"\n")))
+  (is (= ["" "a"] (str/split "\na" #"\n")))
+  (is (= ["a"] (str/split "a" #"\n"))))
+
+(deftest split-returns-a-vector
+  (is (vector? (str/split "a" #"\n")))
+  (is (vector? (str/split "a,b" #",")))
+  (is (vector? (str/split "" #","))))
+
+(deftest split-limit-arity
+  (is (= ["a" "b:c"] (str/split "a:b:c" #":" 2)))
+  (is (= ["a" "" ""] (str/split "a::" #":" -1)))
+  (is (= ["a" "b" "c"] (str/split "a:b:c" #":" 5)))
+  (is (= ["a:b:c"] (str/split "a:b:c" #":" 1)))
+  (is (= ["a" ""] (str/split "a:" #":" 2))))
+
+(deftest split-lines-conformance
+  (is (= ["a" "b"] (str/split-lines "a\nb")))
+  (is (= ["a" "b"] (str/split-lines "a\r\nb\n")))
+  (is (= ["a" "" "b"] (str/split-lines "a\n\nb")))
+  (is (= [] (str/split-lines "\n")))
+  (is (= [""] (str/split-lines ""))))
