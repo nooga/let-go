@@ -68,6 +68,26 @@
              (when-not (void-form? form) form))))
        (catch Throwable _ nil)))
 
+(defn validated-segments
+  "Return top-level segments only when the reader accepts the entire file and
+   each segment maps to exactly one reader result. Throw on invalid source or
+   a disagreement between the structural scanner and the language reader."
+  [text]
+  (let [whole (read-all-string text)
+        parts (segments text)
+        parsed (mapv (fn [part]
+                       (let [forms (read-all-string (:text part))]
+                         (when (not= 1 (count forms))
+                           (throw (ex-info "segment differs from reader"
+                                           {:start (:start part) :end (:end part)})))
+                         (first forms)))
+                     parts)]
+    (when (not= (vec (remove void-form? whole))
+                (vec (remove void-form? parsed)))
+      (throw (ex-info "top-level segmentation differs from reader"
+                      {:reader-count (count whole) :segment-count (count parts)})))
+    parts))
+
 (def ^:private def-heads #{'defn 'defn- 'defmacro 'defmethod 'deftest 'def})
 
 (defn- named

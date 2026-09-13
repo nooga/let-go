@@ -1,0 +1,135 @@
+;; Copyright (c) 2026 Norman Nunley, Jr <nnunley@gmail.com>
+(ns test.quality-touched-test
+  (:require [quality.touched :as t]
+            [test :refer :all]))
+
+(defn change [old-text new-text old-spans new-spans]
+  {:status :modified :old-path "sample.lg" :new-path "sample.lg"
+   :old-text old-text :new-text new-text
+   :old-spans old-spans :new-spans new-spans})
+
+(defn span [start count] {:start start :count count})
+
+(deftest a-line-inside-a-long-definition-expands-to-the-whole-form
+  (let [old "(ns demo)\n(defn calc [x]\n  (let [a (inc x)]\n    (if a\n      (+ a 1)\n      x)))\n"
+        new "(ns demo)\n(defn calc [x]\n  (let [a (inc x)]\n    (if a\n      (+ a 2)\n      x)))\n"
+        rows (t/build [(change old new [(span 5 1)] [(span 5 1)])])]
+    (is (= 1 (count rows)))
+    (is (= {:start 2 :end 6} (:old-span (first rows))))
+    (is (= {:start 2 :end 6} (:new-span (first rows))))
+    (is (= :paired (:pairing (first rows))))
+    (is (= 'demo/calc (:identity (first rows))))
+    (is (= {:cc 0 :sloc 0} (:delta (first rows))))))
+
+(deftest multiple-hunks-in-one-form-deduplicate
+  (let [old "(ns demo)\n(defn calc [x]\n  (inc x)\n  (+ x 1))\n"
+        new "(ns demo)\n(defn calc [x]\n  (dec x)\n  (+ x 2))\n"
+        rows (t/build [(change old new [(span 3 1) (span 4 1)]
+                               [(span 3 1) (span 4 1)])])]
+    (is (= 1 (count rows)))
+    (is (= {:start 2 :end 4} (:new-span (first rows))))))
+
+(deftest a-hunk-crossing-two-definitions-selects-both
+  (let [old "(ns demo)\n(defn a [] 1)\n(defn b [] 2)\n"
+        new "(ns demo)\n(defn a [] 3)\n(defn b [] 4)\n"
+        rows (t/build [(change old new [(span 2 2)] [(span 2 2)])])]
+    (is (= '[demo/a demo/b] (map :identity rows)))
+    (is (= [:paired :paired] (map :pairing rows)))))
+
+(deftest first-and-last-line-edits-find-a-unique-counterpart
+  (let [old "(ns demo)\n(defn a []\n  1)\n(defn b [] 2)\n"
+        new "(ns demo)\n(defn a [x]\n  1)\n(defn b [] 2)\n"
+        first-edit (first (t/build [(change old new [(span 1 0)] [(span 2 1)])]))
+        last-edit (first (t/build [(change old new [(span 3 1)] [(span 4 0)])]))]
+    (is (= :paired (:pairing first-edit)))
+    (is (= {:start 2 :end 3} (:old-span first-edit)))
+    (is (= :paired (:pairing last-edit)))
+    (is (= {:start 2 :end 3} (:new-span last-edit)))))
+
+(deftest zero-length-anchor-only-selects-strict-interior
+  (let [text "(ns demo)\n(defn a []\n  1)\n(defn b [] 2)\n"
+        interior (t/build [(change text text [(span 2 0)] [])])
+        boundary (t/build [(change text text [(span 3 0)] [])])]
+    (is (= :paired (:pairing (first interior))))
+    (is (= 'demo/a (:identity (first interior))))
+    (is (= :outside-form (:reason (first boundary))))))
+
+(deftest comment-only-change-is-explicitly-outside-forms
+  (let [old "(ns demo)\n; old comment\n(defn a [] 1)\n"
+        new "(ns demo)\n; new comment\n(defn a [] 1)\n"
+        row (first (t/build [(change old new [(span 2 1)] [(span 2 1)])]))]
+    (is (= :outside-form (:reason row)))
+    (is (nil? (:delta row)))
+    (is (= {:start 2 :end 2} (:old-span row)))))
+
+(deftest added-and-deleted-definitions-have-no-invented-zero-baseline
+  (let [old "(ns demo)\n(defn old [] 1)\n"
+        new "(ns demo)\n(defn fresh [] 2)\n"
+        rows (t/build [(change old new [(span 2 1)] [(span 2 1)])])]
+    (is (= 2 (count rows)))
+    (is (= #{'demo/old 'demo/fresh} (set (map :identity rows))))
+    (is (every? #(= :unpaired (:pairing %)) rows))
+    (is (every? #(nil? (:delta %)) rows))))
+
+(deftest duplicate-or-missing-identity-never-pairs
+  (let [old "(ns demo)\n(defn same [] 1)\n(defn same [] 2)\n(println 1)\n"
+        new "(ns demo)\n(defn same [] 3)\n(defn same [] 4)\n(println 2)\n"
+        rows (t/build [(change old new [(span 2 3)] [(span 2 3)])])]
+    (is (= 6 (count rows)))
+    (is (every? #(= :unpaired (:pairing %)) rows))
+    (is (every? #(nil? (:delta %)) rows))))
+
+(deftest defmethod-dispatch-identifies-distinct-methods
+  (let [old "(ns demo)\n(defmethod paint :red [x] (inc x))\n(defmethod paint :blue [x] (dec x))\n"
+        new "(ns demo)\n(defmethod paint :red [x] (+ x 2))\n(defmethod paint :blue [x] (- x 2))\n"
+        rows (t/build [(change old new [(span 2 2)] [(span 2 2)])])]
+    (is (= 2 (count rows)))
+    (is (= [:paired :paired] (map :pairing rows)))
+    (is (= #{":red" ":blue"} (set (map :dispatch rows))))))
+
+(deftest non-callable-form-has-no-invented-metrics-or-delta
+  (let [old "(ns demo)\n(def answer 1)\n"
+        new "(ns demo)\n(def answer 2)\n"
+        row (first (t/build [(change old new [(span 2 1)] [(span 2 1)])]))]
+    (is (= :paired (:pairing row)))
+    (is (nil? (:old-metrics row)))
+    (is (nil? (:new-metrics row)))
+    (is (not (contains? row :delta)))))
+
+(deftest added-and-deleted-files-retain-a-missing-side
+  (let [text "(ns demo)\n(defn thing [] 1)\n"
+        added (first (t/build [{:status :added :old-path nil :new-path "new.lg"
+                                :new-text text :old-spans [(span 0 0)]
+                                :new-spans [(span 1 2)]}]))
+        deleted (first (t/build [{:status :deleted :old-path "old.lg" :new-path nil
+                                  :old-text text :old-spans [(span 1 2)]
+                                  :new-spans [(span 0 0)]}]))]
+    (is (= :unpaired (:pairing added)))
+    (is (nil? (:old-span added)))
+    (is (nil? (:delta added)))
+    (is (= :unpaired (:pairing deleted)))
+    (is (nil? (:new-span deleted)))
+    (is (nil? (:delta deleted)))))
+
+(deftest empty-added-source-and-rename-only-change-stay-path-entries
+  (let [empty-file (t/build [{:status :added :old-path nil :new-path "empty.lg"
+                              :new-text "" :old-spans [] :new-spans []}])
+        rename (t/build [{:status :renamed :old-path "old.lg"
+                          :new-path "new.lg" :old-spans [] :new-spans []}])]
+    (is (= :path-only (:entry-type (first empty-file))))
+    (is (= :path-only (:entry-type (first rename))))))
+
+(deftest hunk-covering-a-form-and-an-outside-comment-reports-both
+  (let [old "(ns demo)\n(defn a [] 1)\n; old\n"
+        new "(ns demo)\n(defn a [] 2)\n; new\n"
+        rows (t/build [(change old new [(span 2 2)] [(span 2 2)])])]
+    (is (= [:form :outside-form] (map :entry-type rows)))
+    (is (= {:start 3 :end 3} (:new-span (second rows))))))
+
+(deftest invalid-file-falls-back-with-a-reason
+  (let [row (first (t/build [(change "(ns demo)\n(defn a [] 1)\n"
+                                   "(ns demo)\n(defn a [] 1\n"
+                                   [(span 2 1)] [(span 2 1)])]))]
+    (is (= :invalid-source (:reason row)))
+    (is (string? (:message row)))
+    (is (nil? (:delta row)))))
