@@ -811,6 +811,21 @@
   (let [raw (read-string (str "[" (slurp code-rules-path) "]"))]
     raw))
 
+;; Text labels are for readers; :kind remains the stable EDN and --gate ID.
+(def built-in-display-names
+  {:commented-out-code "code left in a comment"
+   :restatement "comment repeats code"
+   :comment-divider "decorative section divider"
+   :duplicated-comment "repeated comment block"
+   :comment-density-outlier "unusually comment-heavy definition"
+   :devlog-comment "development-note phrase"
+   :comment-churn "comment additions relative to code"})
+
+(defn display-name [kind rules]
+  (or (get built-in-display-names kind)
+      (some (fn [rule] (when (= kind (:kind rule)) (:label rule))) rules)
+      (clojure.string/replace (name kind) "-" " ")))
+
 (defn code-verbosity-findings [path rules]
   (if (lg-file? path)
     (let [nodes (all-nodes (parse-file-forms path))]

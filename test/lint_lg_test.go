@@ -5,10 +5,100 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestLintDisplayNamesCoverBuiltInKinds(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "lint.lg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "lint-code-rules.edn"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	scriptsDir := filepath.Join(dir, "scripts")
+	if err := os.Mkdir(scriptsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scriptsDir, "lint-code-rules.edn"), catalog, 0644); err != nil {
+		t.Fatal(err)
+	}
+	// The probe runs after the normal driver, so it exercises the actual display
+	// function and catalog loader without adding a test-only production flag.
+	probe := `
+(doseq [kind (concat [:commented-out-code :restatement :comment-divider
+                      :duplicated-comment :comment-density-outlier
+                      :devlog-comment :comment-churn]
+                     (map :kind (load-code-rules)))]
+  (println (str "DISPLAY\t" (name kind) "\t"
+                (display-name kind (load-code-rules)))))
+`
+	if err := os.WriteFile(filepath.Join(scriptsDir, "lint.lg"), append(script, []byte(probe)...), 0644); err != nil {
+		t.Fatal(err)
+	}
+	sourceDir := filepath.Join(dir, "empty-source")
+	if err := os.Mkdir(sourceDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(lgBin, filepath.Join(scriptsDir, "lint.lg"), sourceDir)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint label probe: %v\n%s", err, out)
+	}
+	labels := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "DISPLAY\t") {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			t.Fatalf("malformed label probe line %q", line)
+		}
+		labels[parts[1]] = parts[2]
+	}
+	wantKinds := map[string]bool{
+		"commented-out-code": true, "restatement": true, "comment-divider": true,
+		"duplicated-comment": true, "comment-density-outlier": true,
+		"devlog-comment": true, "comment-churn": true,
+	}
+	for _, match := range regexp.MustCompile(`(?m)^\s*:kind\s+:([a-z][a-z-]*)`).FindAllStringSubmatch(string(catalog), -1) {
+		wantKinds[match[1]] = true
+	}
+	if len(labels) != len(wantKinds) {
+		t.Errorf("got %d distinct labels, want %d; labels=%v", len(labels), len(wantKinds), labels)
+	}
+	wantExact := map[string]string{
+		"restatement":             "comment repeats code",
+		"comment-divider":         "decorative section divider",
+		"comment-density-outlier": "unusually comment-heavy definition",
+		"devlog-comment":          "development-note phrase",
+		"eta-expansion":           "argument-forwarding wrapper",
+		"composable-accessor":     "nested sequence accessor",
+	}
+	seen := map[string]string{}
+	for kind := range wantKinds {
+		label := labels[kind]
+		if strings.TrimSpace(label) == "" {
+			t.Errorf("%s has no display label", kind)
+		}
+		if regexp.MustCompile(`\bR[1-6]\b`).MatchString(label) || strings.Contains(label, kind) || strings.Contains(label, "eta expansion") {
+			t.Errorf("%s has a low-context failure: %q", kind, label)
+		}
+		if want, ok := wantExact[kind]; ok && label != want {
+			t.Errorf("%s label = %q, want %q", kind, label, want)
+		}
+		if other, exists := seen[label]; exists && other != kind {
+			t.Errorf("%s and %s share display label %q", kind, other, label)
+		}
+		seen[label] = kind
+	}
+}
 
 // scripts/lint.lg flags comments that narrate the change rather than describe
 // the code. Its skip markers are the part most likely to rot silently: a marker
@@ -849,7 +939,10 @@ func TestLintCodeVerbosityCatalogIsData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(scriptsDir, "lint.lg"), realLint, 0644); err != nil {
+	probe := `
+(println (str "DISPLAY\t" (display-name :fabricated-test-rule (load-code-rules))))
+`
+	if err := os.WriteFile(filepath.Join(scriptsDir, "lint.lg"), append(realLint, []byte(probe)...), 0644); err != nil {
 		t.Fatal(err)
 	}
 	customCatalog := `{:name :fabricated-test-rule
@@ -877,6 +970,9 @@ func TestLintCodeVerbosityCatalogIsData(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "[fabricated-test-rule]") {
 		t.Errorf("a catalog-only rule addition (no lint.lg code change) was not found:\n%s", out)
+	}
+	if !strings.Contains(string(out), "DISPLAY\tfabricated test rule") {
+		t.Errorf("unlabeled catalog kind did not get a readable fallback:\n%s", out)
 	}
 }
 
