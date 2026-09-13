@@ -834,6 +834,8 @@
 ;; the repository's full history — expensive, and out of scope for a lint
 ;; tool that runs on every invocation. See the calibration report for how
 ;; this reads in practice.
+;; The multiple is a measurement, not a gate: no abuse threshold has been
+;; calibrated, and a corpus with no comments has no finite multiple.
 (defn parse-diff-file [line]
   ;; "+++ b/path/to/file.go" -> "path/to/file.go"; "+++ /dev/null" -> nil.
   (when (clojure.string/starts-with? line "+++ ")
@@ -888,11 +890,12 @@
           baseline (corpus-baseline-ratio files)]
       (when (and baseline (pos? (:code diff)))
         (let [range-ratio (/ (double (:comment diff)) (:code diff))
-              multiple    (/ range-ratio baseline)]
+              multiple    (when-not (zero? baseline) (/ range-ratio baseline))]
           [{:file (str "range:" range) :line 0 :end 0
             :kind :comment-churn :measure multiple
             :evidence (str "range-ratio=" range-ratio " baseline=" baseline
-                           " multiple=" multiple "x (comment lines added per code"
+                           " multiple=" (if (nil? multiple) "undefined" (str multiple "x"))
+                           " (comment lines added per code"
                            " line added, range vs current corpus)")}])))))
 
 ;; Directory walk. os/ls yields bare names, so each level rebuilds the path.
@@ -909,14 +912,12 @@
 ;; --- CLI -----------------------------------------------------------------
 ;;
 ;; --edn: print all findings as one EDN vector, nothing else.
-;; --gate K1[,K2...]: exit non-zero iff a finding's :kind is named. R5's
-;;   :devlog-comment is never gate-eligible — it is a heuristic, not part of
-;;   the objective score, per the design doc — so it is filtered out of the
-;;   requested set with a note if someone asks for it anyway.
+;; --gate K1[,K2...]: exit non-zero iff a gate-eligible finding's :kind is
+;;   named. R5's :devlog-comment is heuristic-only, and R6's :comment-churn
+;;   has no calibrated threshold; both are reported but not gate-eligible.
 
 (def gateable-kinds
-  #{:commented-out-code :restatement :duplicated-comment :comment-density-outlier
-    :comment-churn})
+  #{:commented-out-code :restatement :duplicated-comment :comment-density-outlier})
 
 (defn parse-args [argv]
   (loop [args argv opts {:paths [] :edn? false :gate-req #{} :churn nil}]
@@ -998,8 +999,8 @@
         (println (str (:file f) "  [comment-churn] " (:evidence f))))
       (if (:churn opts)
         (when (empty? r6)
-          (println (str "comment-churn (R6): no findable added lines for range " (:churn opts) ".")))
-        (println "comment-churn (R6): skipped — pass --churn <git-range> to compute."))
+          (println (str "comment churn: no findable added lines for range " (:churn opts) ".")))
+        (println "comment churn: skipped — pass --churn <git-range> to compute."))
       (doseq [f r7]
         (println (str (:file f) ":" (:line f) "-" (:end f)
                       "  [" (name (:kind f)) "] " (:evidence f))))
@@ -1010,6 +1011,9 @@
                     " comment in scripts/lint.lg)."))
       (when (seq ignored-gate)
         (println (str "note: --gate ignored " (vec (map name ignored-gate))
-                      " — not gate-eligible (R5 is a heuristic, or an unknown kind name).")))))
+                      " — not gate-eligible"
+                      (when (contains? ignored-gate :comment-churn) " (comment churn is report-only)")
+                      (when (contains? ignored-gate :devlog-comment) " (R5 is a heuristic)")
+                      ".")))))
   (when gated?
     (os/exit 1)))

@@ -617,6 +617,102 @@ func TestLintR6CommentChurn(t *testing.T) {
 	}
 }
 
+func TestLintR6ZeroCommentRangeIsDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q")
+	gitRun(t, dir, "config", "commit.gpgsign", "false")
+	path := filepath.Join(dir, "a.go")
+	base := "package p\n// baseline\nfunc A() {}\n"
+	if err := os.WriteFile(path, []byte(base), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "a.go")
+	gitRun(t, dir, "commit", "-q", "-m", "c1")
+	c1 := gitRun(t, dir, "rev-parse", "HEAD")
+	if err := os.WriteFile(path, []byte(base+"func B() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "a.go")
+	gitRun(t, dir, "commit", "-q", "-m", "c2")
+	c2 := gitRun(t, dir, "rev-parse", "HEAD")
+	rangeArg := c1 + ".." + c2
+
+	cmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), "--churn", rangeArg, ".")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("zero-comment range: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "[comment-churn]") || !strings.Contains(string(out), "multiple=0") {
+		t.Errorf("zero-comment range must report a 0x multiple:\n%s", out)
+	}
+
+	gate := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
+		"--gate", "comment-churn", "--churn", rangeArg, ".")
+	gate.Dir = dir
+	gateOut, err := gate.CombinedOutput()
+	if err != nil {
+		t.Fatalf("R6 is a measurement, not a gate: %v\n%s", err, gateOut)
+	}
+	if !strings.Contains(string(gateOut), "comment churn is report-only") {
+		t.Errorf("ignored R6 gate must explain why:\n%s", gateOut)
+	}
+
+	noChurn := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
+		"--gate", "comment-churn", ".")
+	noChurn.Dir = dir
+	noChurnOut, err := noChurn.CombinedOutput()
+	if err != nil {
+		t.Fatalf("R6 without --churn must not gate: %v\n%s", err, noChurnOut)
+	}
+	if !strings.Contains(string(noChurnOut), "comment churn is report-only") ||
+		!strings.Contains(string(noChurnOut), "comment churn: skipped") {
+		t.Errorf("missing R6 ignored/skipped notes:\n%s", noChurnOut)
+	}
+}
+
+func TestLintR6ZeroBaselineIsUndefined(t *testing.T) {
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q")
+	gitRun(t, dir, "config", "commit.gpgsign", "false")
+	path := filepath.Join(dir, "a.go")
+	base := "package p\nfunc A() {}\n"
+	if err := os.WriteFile(path, []byte(base), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "a.go")
+	gitRun(t, dir, "commit", "-q", "-m", "c1")
+	c1 := gitRun(t, dir, "rev-parse", "HEAD")
+	if err := os.WriteFile(path, []byte(base+"func B() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "a.go")
+	gitRun(t, dir, "commit", "-q", "-m", "c2")
+	c2 := gitRun(t, dir, "rev-parse", "HEAD")
+	rangeArg := c1 + ".." + c2
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"text", []string{"--churn", rangeArg, "."}, "multiple=undefined"},
+		{"edn", []string{"--edn", "--churn", rangeArg, "."}, ":measure nil"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(lgBin, append([]string{filepath.Join(repoRoot, "scripts", "lint.lg")}, tc.args...)...)
+			cmd.Dir = dir
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("zero baseline: %v\n%s", err, out)
+			}
+			if !strings.Contains(string(out), tc.want) {
+				t.Errorf("missing %q for zero baseline:\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
 // Code-verbosity: a generic pattern/replace matcher over parsed .lg forms,
 // catalog-driven from scripts/lint-code-rules.edn (see that file, and the
 // "Code-verbosity" section comment in scripts/lint.lg, for the matcher
