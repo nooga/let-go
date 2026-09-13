@@ -1,0 +1,100 @@
+(ns test.quality-diff-test
+  (:require
+   [quality.diff :as d]
+   [test :refer :all]))
+
+(deftest name-status-preserves-nul-delimited-paths
+  (let [odd "dir/space tab\tunicøde\nline.lg"]
+    (doseq [[input expected]
+            [[(str "M\u0000" odd "\u0000") {:status :modified :old-path odd :new-path odd}]
+             [(str "A\u0000" odd "\u0000") {:status :added :old-path nil :new-path odd}]
+             [(str "D\u0000" odd "\u0000") {:status :deleted :old-path odd :new-path nil}]
+             [(str "T\u0000" odd "\u0000") {:status :type-changed :old-path odd :new-path odd}]
+             [(str "R100\u0000" odd "\u0000next\tname.lg\u0000")
+              {:status :renamed :old-path odd :new-path "next\tname.lg"}]]]
+      (is (= [expected] (d/parse-name-status-z input))))))
+
+(deftest name-status-rejects-incomplete-or-unknown-records
+  (is (thrown? Throwable (d/parse-name-status-z "R100\u0000old.lg\u0000")))
+  (is (thrown? Throwable (d/parse-name-status-z "Q\u0000file.lg\u0000")))
+  (is (thrown? Throwable (d/parse-name-status-z "M\u0000file.lg"))))
+
+(deftest patch-hunks-preserve-counts-and-zero-anchors
+  (let [paths (d/parse-name-status-z "M\u0000a.lg\u0000A\u0000new.lg\u0000")
+        patch (str "diff --git a/a.lg b/a.lg\n"
+                   "index 123..456 100644\n--- a/a.lg\n+++ b/a.lg\n"
+                   "@@ -3,2 +3,4 @@\n-a\n-b\n+x\n+y\n+z\n+w\n"
+                   "@@ -9 +11,0 @@\n-old\n"
+                   "diff --git a/new.lg b/new.lg\n"
+                   "new file mode 100644\n--- /dev/null\n+++ b/new.lg\n"
+                   "@@ -0,0 +1 @@\n+new\n")
+        got (d/parse-patch-hunks patch paths)]
+    (is (= [{:start 3 :count 2} {:start 9 :count 1}] (:old-spans (first got))))
+    (is (= [{:start 3 :count 4} {:start 11 :count 0}] (:new-spans (first got))))
+    (is (= [{:start 0 :count 0}] (:old-spans (second got))))
+    (is (= [{:start 1 :count 1}] (:new-spans (second got))))))
+
+(deftest patch-retains-rename-and-binary-without-hunks
+  (let [paths (d/parse-name-status-z "R100\u0000old.lg\u0000new.lg\u0000M\u0000blob.bin\u0000")
+        patch (str "diff --git a/old.lg b/new.lg\n"
+                   "similarity index 100%\nrename from old.lg\nrename to new.lg\n"
+                   "diff --git a/blob.bin b/blob.bin\n"
+                   "index 111..222 100644\nBinary files a/blob.bin and b/blob.bin differ\n")
+        got (d/parse-patch-hunks patch paths)]
+    (is (= [:renamed :modified] (map :status got)))
+    (is (= [] (:old-spans (first got))))
+    (is (= [] (:new-spans (second got))))))
+
+(deftest patch-header-quoted-paths-match-exact-nul-records
+  (let [path "odd\tline\nname.lg"
+        paths (d/parse-name-status-z (str "M\u0000" path "\u0000"))
+        patch "diff --git \"a/odd\\tline\\nname.lg\" \"b/odd\\tline\\nname.lg\"\n@@ -1 +1 @@\n-a\n+b\n"]
+    (is (= [{:start 1 :count 1}] (:old-spans (first (d/parse-patch-hunks patch paths)))))))
+
+(deftest patch-header-octal-utf8-bytes-match-nul-path
+  (let [path "café.lg"
+        paths (d/parse-name-status-z (str "M\u0000" path "\u0000"))
+        patch "diff --git \"a/caf\\303\\251.lg\" \"b/caf\\303\\251.lg\"\n@@ -2 +2 @@\n-a\n+b\n"]
+    (is (= [{:start 2 :count 1}]
+           (:new-spans (first (d/parse-patch-hunks patch paths)))))))
+
+(deftest patch-rejects-section-count-and-order-mismatches
+  (let [paths (d/parse-name-status-z "M\u0000a.lg\u0000M\u0000b.lg\u0000")
+        one "diff --git a/a.lg b/a.lg\n@@ -1 +1 @@\n-a\n+b\n"
+        reversed (str "diff --git a/b.lg b/b.lg\n@@ -1 +1 @@\n-a\n+b\n"
+                      "diff --git a/a.lg b/a.lg\n@@ -1 +1 @@\n-a\n+b\n")]
+    (is (thrown? Throwable (d/parse-patch-hunks one paths)))
+    (is (thrown? Throwable (d/parse-patch-hunks reversed paths)))))
+
+(deftest git-changes-uses-resolved-commit-revisions-and-working-tree-head
+  (let [dir (str (os/temp-dir) "/quality-diff-test-" (System/nanoTime))
+        git (fn [& args]
+              (let [r (apply os/sh "git" "-C" dir args)]
+                (when-not (zero? (:exit r))
+                  (throw (ex-info "fixture git failed" {:args args :stderr (:err r)})))
+                (clojure.string/trim (:out r))))]
+    (try
+      (let [mk (os/sh "mkdir" "-p" dir)]
+        (is (zero? (:exit mk))))
+      (git "init" "-q")
+      (spit (str dir "/file.lg") "old\n")
+      (git "add" "file.lg")
+      (git "-c" "user.name=Quality Test" "-c" "user.email=quality@example.invalid"
+           "commit" "-qm" "base")
+      (spit (str dir "/file.lg") "new\n")
+      (git "add" "file.lg")
+      (git "-c" "user.name=Quality Test" "-c" "user.email=quality@example.invalid"
+           "commit" "-qm" "head")
+      (let [head (git "rev-parse" "HEAD")
+            base (git "rev-parse" "HEAD~1")
+            rows (d/git-changes base head dir)]
+        (is (= 40 (count base)))
+        (is (= 40 (count head)))
+        (is (= [{:status :modified :old-path "file.lg" :new-path "file.lg"
+                 :old-spans [{:start 1 :count 1}]
+                 :new-spans [{:start 1 :count 1}]}] rows))
+        (is (thrown? Throwable (d/git-changes "--version" head dir)))
+        (spit (str dir "/file.lg") "working\n")
+        (is (= [{:start 1 :count 1}]
+               (:new-spans (first (d/git-changes head nil dir))))))
+      (finally (os/delete-tree dir)))))
