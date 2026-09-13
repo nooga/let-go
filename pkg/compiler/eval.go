@@ -197,7 +197,7 @@ func loadPrecompiledBundle() error {
 	// on-demand loader) must be bound before then. The spine also owns the *ns*
 	// save/restore and the NSOrder-deterministic hybrid order.
 	//
-	// Decode diagnostics (LG_DECODE_TAG_STATS, #356) still work: the var-ref
+	// Decode diagnostics (LG_DECODE_TAG_STATS) still work: the var-ref
 	// hit/miss counting lives in rt.LGBVarResolver (self-gating), so the
 	// enable/reset/print wrapper here drives it across the shared decode, and
 	// the OnPhase hook restores the decode-bundle / run-core-chunk bootMarks.
