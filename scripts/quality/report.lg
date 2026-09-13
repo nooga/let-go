@@ -259,16 +259,21 @@
     (str old-path " -> " new-path)
     (or new-path old-path)))
 
+(defn- touched-side [label span metrics]
+  (str label "=" (if span (str (:start span) "-" (:end span)) "-")
+       (when (number? (:cc metrics)) (str " cc=" (:cc metrics)))
+       (when (number? (:sloc metrics)) (str " sloc=" (:sloc metrics)))))
+
 (defn- touched-line [entry]
-  (let [place (str (touched-path entry)
-                   (when-let [span (or (:new-span entry) (:old-span entry))]
-                     (str ":" (:start span) "-" (:end span))))
-        kind (:entry-type entry)]
-    (str "  " place "  " (name kind)
+  (let [kind (:entry-type entry)]
+    (str "  " (touched-path entry) "  " (name kind)
          (when (:status entry) (str " " (name (:status entry))))
          (when (= kind :form)
            (str " " (or (:identity entry) (:name entry) "unnamed")
                 " " (name (:pairing entry))))
+         (when (or (= kind :form) (:old-span entry) (:new-span entry))
+           (str "  " (touched-side "old" (:old-span entry) (:old-metrics entry))
+                "  " (touched-side "new" (:new-span entry) (:new-metrics entry))))
          (when-let [delta (:delta entry)]
            (str "  cc " (signed-int (:cc delta))
                 "  sloc " (signed-int (:sloc delta))))
@@ -306,8 +311,8 @@
           (str (pad (str (:path c) " " (:name c)) 70)
                (if (= :rose (:direction c)) "rose to " "fell to ")
                (:cc c) (if (:was c) (str " from " (:was c)) "")))
-        ["" (str "touched forms " (count (:touched d))
-                 " (Git diff expanded to full forms; local cc/sloc only, not scored)")]
+        ["" (str "touched entries " (count (:touched d))
+                 " (Git diff expanded to touched forms; local cc/sloc only, not scored)")]
         (when (:working-tree? d)
           ["working tree head: untracked files omitted"])
         (for [entry (:touched d)] (touched-line entry))))

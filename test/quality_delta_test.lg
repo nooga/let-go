@@ -2,7 +2,9 @@
   (:require
    [clojure.string :as str]
    [quality :as q]
+   [quality.diff :as diff]
    [quality.report :as report]
+   [quality.touched :as touched]
    [test :refer :all]))
 
 ;; PR mode's pure half: two measured results in, the delta surface out.
@@ -99,6 +101,62 @@
     (is (str/includes? out "README.old"))
     (is (str/includes? out "untracked files omitted"))
     (is (= 1 (count (re-seq #"cc \+1" out))))))
+
+(deftest plain-git-form-replacement-reports-unpaired-side-metrics
+  (let [dir (str (os/temp-dir) "/quality-unpaired-report-" (System/nanoTime))
+        git (fn [& args]
+              (let [r (apply os/sh "git" "-C" dir args)]
+                (when-not (zero? (:exit r))
+                  (throw (ex-info "fixture git failed" {:args args :stderr (:err r)})))
+                (str/trim (:out r))))
+        commit (fn [message]
+                 (git "-c" "user.name=Quality Test"
+                      "-c" "user.email=quality@example.invalid"
+                      "commit" "-qm" message))]
+    (try
+      (is (zero? (:exit (os/sh "mkdir" "-p" dir))))
+      (git "init" "-q")
+      (spit (str dir "/forms.lg")
+            "(ns fixture.forms)\n(defn old-form [x]\n  (if x 1 2))\n")
+      (git "add" "forms.lg")
+      (commit "base")
+      (let [base-sha (git "rev-parse" "HEAD")]
+        (spit (str dir "/forms.lg")
+              "(ns fixture.forms)\n(defn new-form [x]\n  (if x 3 4))\n")
+        (git "add" "forms.lg")
+        (commit "head")
+        (let [head-sha (git "rev-parse" "HEAD")
+              entries (touched/build (diff/git-changes base-sha head-sha dir))
+              out (report/delta-text
+                    (assoc (q/compare-results base head-worse base-sha head-sha)
+                           :touched entries))
+              lines (str/split out #"\n")
+              old-entry (first (filter #(= 'fixture.forms/old-form (:identity %)) entries))
+              new-entry (first (filter #(= 'fixture.forms/new-form (:identity %)) entries))
+              old-line (first (filter #(str/includes? % "fixture.forms/old-form") lines))
+              new-line (first (filter #(str/includes? % "fixture.forms/new-form") lines))]
+          (is (= [:form :form] (map :entry-type entries)))
+          (is (= [:unpaired :unpaired] (map :pairing entries)))
+          (is (str/includes? out "touched entries 2"))
+          (is (str/includes? old-line "old="))
+          (is (str/includes? old-line
+                             (str "cc=" (get-in old-entry [:old-metrics :cc]))))
+          (is (str/includes? old-line
+                             (str "sloc=" (get-in old-entry [:old-metrics :sloc]))))
+          (is (str/includes? old-line "new=-"))
+          (is (str/includes? new-line "old=-"))
+          (is (str/includes? new-line "new="))
+          (is (str/includes? new-line
+                             (str "cc=" (get-in new-entry [:new-metrics :cc]))))
+          (is (str/includes? new-line
+                             (str "sloc=" (get-in new-entry [:new-metrics :sloc]))))
+          (is (not (contains? old-entry :delta)))
+          (is (not (contains? new-entry :delta)))
+          (is (not (str/includes? old-line "cc +")))
+          (is (not (str/includes? new-line "cc +")))
+          (is (not (str/includes? old-line " cc ")))
+          (is (not (str/includes? new-line " cc ")))))
+      (finally (os/delete-tree dir)))))
 
 (deftest explicit-and-working-tree-deltas-share-corpus-and-diff-endpoints
   (let [sha (str/trim (:out (os/sh "git" "rev-parse" "HEAD")))
