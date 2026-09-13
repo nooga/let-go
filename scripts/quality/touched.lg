@@ -149,41 +149,103 @@
    :status (:status change) :old-path (:old-path change)
    :new-path (:new-path change)})
 
+(defn- indexed-change [change old-index new-index]
+  (let [old-selected (selected old-index (:old-spans change))
+        new-selected (selected new-index (:new-spans change))
+        pairs (vec (keep (fn [old]
+                           (when-let [new (unique-match old new-index)]
+                             (when (uniquely-paired? old new old-index new-index)
+                               [old new]))) old-selected))
+        new-pairs (keep (fn [new]
+                          (when-let [old (unique-match new old-index)]
+                            (when (uniquely-paired? old new old-index new-index)
+                              [old new]))) new-selected)
+        all-pairs (vec (distinct (concat pairs new-pairs)))
+        paired-old (set (map (comp :index first) all-pairs))
+        paired-new (set (map (comp :index second) all-pairs))]
+    (vec (concat
+          (map (fn [[old new]] (form-entry change old new true)) all-pairs)
+          (map #(form-entry change % nil false)
+               (remove (fn [u] (contains? paired-old (:index u))) old-selected))
+          (map #(form-entry change nil % false)
+               (remove (fn [u] (contains? paired-new (:index u))) new-selected))
+          (outside-entries change old-index new-index)))))
+
 (defn- source-change [change]
   (try
     (let [old-index (if (contains? change :old-text)
                       (source-index (:old-text change)) [])
           new-index (if (contains? change :new-text)
-                      (source-index (:new-text change)) [])
-          old-selected (selected old-index (:old-spans change))
-          new-selected (selected new-index (:new-spans change))
-          pairs (vec (keep (fn [old]
-                             (when-let [new (unique-match old new-index)]
-                               (when (uniquely-paired? old new old-index new-index)
-                                 [old new]))) old-selected))
-          new-pairs (keep (fn [new]
-                            (when-let [old (unique-match new old-index)]
-                              (when (uniquely-paired? old new old-index new-index)
-                                [old new]))) new-selected)
-          all-pairs (vec (distinct (concat pairs new-pairs)))
-          paired-old (set (map (comp :index first) all-pairs))
-          paired-new (set (map (comp :index second) all-pairs))]
-      (vec (concat
-            (map (fn [[old new]] (form-entry change old new true)) all-pairs)
-            (map #(form-entry change % nil false)
-                 (remove (fn [u] (contains? paired-old (:index u))) old-selected))
-            (map #(form-entry change nil % false)
-                 (remove (fn [u] (contains? paired-new (:index u))) new-selected))
-            (outside-entries change old-index new-index))))
+                      (source-index (:new-text change)) [])]
+      (indexed-change change old-index new-index))
     (catch Throwable e
       (if (= :invalid-source (:reason (ex-data e)))
         [(file-entry change :file-fallback :invalid-source (str e))]
         (throw e)))))
 
 (defn- source-change? [change]
-  (and (or (str/ends-with? (or (:new-path change) "") ".lg")
-           (str/ends-with? (or (:old-path change) "") ".lg"))
+  (and (every? #(str/ends-with? % ".lg")
+               (remove nil? [(:old-path change) (:new-path change)]))
        (or (contains? change :old-text) (contains? change :new-text))))
+
+(defn- go-source-change? [change]
+  (and (every? #(str/ends-with? % ".go")
+               (remove nil? [(:old-path change) (:new-path change)]))
+       (or (contains? change :old-text) (contains? change :new-text))))
+
+(defn- go-unit [i d]
+  {:index i :span {:start (:start d) :end (:end d)}
+   :name (:name d) :kind (:kind d)
+   :identity (str (:package d) "/" (:name d))
+   :key [(:package d) (:name d) (:kind d)]
+   :metrics (when (and (number? (:cc d)) (number? (:sloc d)))
+              {:cc (:cc d) :sloc (:sloc d)})})
+
+(defn- analyze-go-side [changes side]
+  (let [text-key (if (= side :old) :old-text :new-text)
+        selected (vec (keep-indexed (fn [i change]
+                                     (when (and (go-source-change? change)
+                                                (contains? change text-key))
+                                       [i (get change text-key)])) changes))]
+    (if (empty? selected)
+      {}
+      (let [created (os/sh "mktemp" "-d")
+            dir (str/trim (:out created))]
+        (when (or (not (zero? (:exit created))) (str/blank? dir))
+          (throw (ex-info "cannot create Go analysis directory" {:stderr (:err created)})))
+        (try
+          (let [paths (vec (map (fn [[i text]]
+                                 (let [path (str dir "/" i ".go")]
+                                   (spit path text)
+                                   path)) selected))
+                indices (into {} (map (fn [[i path]] [path i])
+                                      (map vector (map first selected) paths)))
+                bin (os/getenv "QUALITY_GO_CALLABLES")
+                command (if (str/blank? bin)
+                          ["go" "run" "github.com/nooga/let-go/cmd/go-callables"]
+                          [bin])
+                result (try (apply os/sh (concat command paths))
+                            (catch Throwable e {:exit 1 :out "" :err (str e)}))
+                report (try (read-string (:out result)) (catch Throwable _ nil))]
+            (if (and (map? report) (vector? (:declarations report))
+                     (vector? (:errors report)))
+              (let [grouped (group-by (fn [d] (get indices (:path d))) (:declarations report))
+                    errors (group-by (fn [e] (get indices (:path e))) (:errors report))]
+                (into {} (map (fn [[i _]]
+                                [i {:units (vec (map-indexed go-unit (get grouped i [])))
+                                    :error (when-let [e (first (get errors i))] (:message e))}])
+                              selected)))
+              (into {} (map (fn [[i _]]
+                              [i {:units [] :error (str "Go analysis failed: "
+                                                       (str/trim (str (:err result))))}])
+                            selected))))
+          (finally (os/delete-tree dir)))))))
+
+(defn- go-change [change old new]
+  (let [error (or (:error old) (:error new))]
+    (if error
+      [(file-entry change :file-fallback :invalid-source error)]
+      (indexed-change change (or (:units old) []) (or (:units new) [])))))
 
 (defn- sort-key [entry]
   [(:new-path entry) (:old-path entry)
@@ -196,12 +258,17 @@
    without parsed source text stays path-only; malformed source is an explicit
    file fallback rather than an empty set of definitions."
   [changes]
-  (vec (sort-by sort-key
-                (mapcat (fn [change]
-                          (if (source-change? change)
-                            (let [entries (source-change change)]
+  (let [changes (vec changes)
+        old-go (analyze-go-side changes :old)
+        new-go (analyze-go-side changes :new)]
+    (vec (sort-by sort-key
+                  (mapcat (fn [i change]
+                            (let [entries (cond
+                                            (source-change? change) (source-change change)
+                                            (go-source-change? change)
+                                            (go-change change (get old-go i) (get new-go i))
+                                            :else nil)]
                               (if (seq entries)
                                 entries
-                                [(file-entry change :path-only :path-only nil)]))
-                            [(file-entry change :path-only :path-only nil)]))
-                        changes))))
+                                [(file-entry change :path-only :path-only nil)])))
+                          (range (count changes)) changes)))))

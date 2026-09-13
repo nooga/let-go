@@ -188,3 +188,54 @@
     (is (= :invalid-source (:reason row)))
     (is (string? (:message row)))
     (is (nil? (:delta row)))))
+
+(defn go-change [path old-text new-text old-spans new-spans]
+  {:status :modified :old-path path :new-path path
+   :old-text old-text :new-text new-text
+   :old-spans old-spans :new-spans new-spans})
+
+(deftest go-line-inside-multiline-function-expands-with-callable-metrics
+  (let [old "package p\nfunc a(x int) int {\n  if x > 0 {\n    return 1\n  }\n  return 0\n}\nfunc b() {}\n"
+        new "package p\nfunc a(x int) int {\n  if x > 0 {\n    return 2\n  }\n  return 0\n}\nfunc b() {}\n"
+        rows (t/build [(go-change "a.go" old new [(span 4 1)] [(span 4 1)])])]
+    (is (= 1 (count rows)))
+    (is (= "a" (:name (first rows))))
+    (is (= {:start 2 :end 7} (:new-span (first rows))))
+    (is (= :paired (:pairing (first rows))))
+    (is (= {:cc 0 :sloc 0} (:delta (first rows))))))
+
+(deftest go-adjacent-declarations-and-receiver-types-have-distinct-identities
+  (let [old "package p\ntype A struct{}\ntype B struct{}\nfunc (a *A) emit() {\n  println(1)\n}\nfunc (b *B) emit() {\n  println(1)\n}\n"
+        new "package p\ntype A struct{}\ntype B struct{}\nfunc (a *A) emit() {\n  println(2)\n}\nfunc (b *B) emit() {\n  println(2)\n}\n"
+        rows (t/build [(go-change "a.go" old new [(span 5 1) (span 8 1)] [(span 5 1) (span 8 1)])])]
+    (is (= 2 (count rows)))
+    (is (= #{"(*A).emit" "(*B).emit"} (set (map :name rows))))
+    (is (every? #(= :paired (:pairing %)) rows))))
+
+(deftest go-noncallable-top-level-declaration-has-no-metrics
+  (let [old "package p\nvar answer = 1\nfunc f() {}\n"
+        new "package p\nvar answer = 2\nfunc f() {}\n"
+        row (first (t/build [(go-change "a.go" old new [(span 2 1)] [(span 2 1)])]))]
+    (is (= :var (:kind row)))
+    (is (= :paired (:pairing row)))
+    (is (nil? (:old-metrics row)))
+    (is (not (contains? row :delta)))))
+
+(deftest malformed-go-file-falls-back-while-valid-file-is-expanded
+  (let [valid-old "package p\nfunc f() { println(1) }\n"
+        valid-new "package p\nfunc f() { println(2) }\n"
+        bad (go-change "bad.go" "package p\nfunc (" "package p\nfunc (" [(span 2 1)] [(span 2 1)])
+        good (go-change "good.go" valid-old valid-new [(span 2 1)] [(span 2 1)])
+        rows (t/build [bad good])]
+    (is (= :file-fallback (:entry-type (first rows))))
+    (is (= :invalid-source (:reason (first rows))))
+    (is (string? (:message (first rows))))
+    (is (= :paired (:pairing (second rows))))))
+
+(deftest cross-language-rename-stays-path-only
+  (let [rows (t/build [{:status :renamed :old-path "before.lg" :new-path "after.go"
+                        :old-text "(ns p)\n(defn f [] 1)\n"
+                        :new-text "package p\nfunc f() {}\n"
+                        :old-spans [(span 2 1)] :new-spans [(span 2 1)]}])]
+    (is (= 1 (count rows)))
+    (is (= :path-only (:entry-type (first rows))))))

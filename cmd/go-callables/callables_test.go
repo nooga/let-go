@@ -297,6 +297,9 @@ func TestGoFilesSkipsGeneratedAndLoweredTrees(t *testing.T) {
 	mustWrite("sub/also_keep.go")
 	mustWrite("skip_generated.go")
 	mustWrite("core_go_lowered/lowered.go")
+	mustWrite(".workspaces/ordinary.go")
+	mustWrite("nested_checkout/.git")
+	mustWrite("nested_checkout/hidden.go")
 	mustWrite("notes.txt")
 
 	got, err := goFiles([]string{dir})
@@ -307,7 +310,7 @@ func TestGoFilesSkipsGeneratedAndLoweredTrees(t *testing.T) {
 	for _, g := range got {
 		names = append(names, strings.TrimPrefix(g, dir+"/"))
 	}
-	want := []string{"keep.go", "sub/also_keep.go"}
+	want := []string{".workspaces/ordinary.go", "keep.go", "sub/also_keep.go"}
 	if len(names) != len(want) {
 		t.Fatalf("got %v, want %v", names, want)
 	}
@@ -670,5 +673,63 @@ func genuinelyNested(xs [][]int) int {
 	// attributes to that parameter and does count.
 	if c := got["genuinelyNested"]; c.loopDepth != 2 {
 		t.Errorf("genuinelyNested: depth %d, want 2", c.loopDepth)
+	}
+}
+
+func TestGoDeclarationsCoverWholeTopLevelSpans(t *testing.T) {
+	src := `package p
+type T struct{}
+func (t *T) emit(x int) int {
+	if x > 0 {
+		return x
+	}
+	return 0
+}
+func (t T) emit(x int) int { return x }
+var answer = 42
+`
+	got, err := goDeclarations(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []declaration{
+		{packageName: "p", name: "T", kind: "type", start: 2, end: 2},
+		{packageName: "p", name: "(*T).emit", kind: "method", start: 3, end: 8, cc: 2, sloc: 6},
+		{packageName: "p", name: "(T).emit", kind: "method", start: 9, end: 9, cc: 1, sloc: 1},
+		{packageName: "p", name: "answer", kind: "var", start: 10, end: 10},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("declarations = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("declaration %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestAnalyzeFilesRetainsEveryParseErrorBesideValidFiles(t *testing.T) {
+	dir := t.TempDir()
+	valid := filepath.Join(dir, "valid.go")
+	bad1 := filepath.Join(dir, "bad1.go")
+	bad2 := filepath.Join(dir, "bad2.go")
+	for path, src := range map[string]string{
+		valid: "package p\nfunc ok() {}\n", bad1: "package p\nfunc (", bad2: "package p\nvar x =",
+	} {
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report := analyzeFiles([]string{valid, bad1, bad2})
+	if len(report.files) != 1 || len(report.declarations) != 1 || len(report.errors) != 2 {
+		t.Fatalf("report = %+v", report)
+	}
+	if report.errors[0].path != bad1 || report.errors[1].path != bad2 {
+		t.Fatalf("errors = %+v", report.errors)
+	}
+	for _, e := range report.errors {
+		if e.message == "" {
+			t.Errorf("missing error detail: %+v", e)
+		}
 	}
 }

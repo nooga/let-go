@@ -33,9 +33,8 @@
 // cmd/lgprimgen). quality.lg already shells out for git and the coverage
 // profile, so one more subprocess is not a new dependency direction.
 //
-// Files that fail to parse are reported on stderr and skipped; the exit
-// status is non-zero only if NOTHING could be measured, so a single
-// unparseable file cannot silently empty the corpus.
+// Files that fail to parse are recorded in :errors and reported on stderr;
+// the exit status is non-zero only if NOTHING could be measured.
 package main
 
 import (
@@ -91,8 +90,15 @@ func goFiles(args []string) ([]string, error) {
 			}
 			if fi.IsDir() {
 				if name := fi.Name(); name == ".git" || name == ".jj" ||
-					name == ".workspaces" || name == "core_go_lowered" {
+					name == "core_go_lowered" {
 					return filepath.SkipDir
+				}
+				if p != a {
+					for _, marker := range []string{".git", ".jj"} {
+						if _, markerErr := os.Lstat(filepath.Join(p, marker)); markerErr == nil {
+							return filepath.SkipDir
+						}
+					}
 				}
 				return nil
 			}
@@ -155,38 +161,20 @@ func main() {
 		return
 	}
 
-	type measurement struct {
-		path   string
-		counts fileCounts
-		calls  []callable
-	}
-	var ms []measurement
-	failed := 0
-	for _, f := range files {
-		src, err := os.ReadFile(f)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "go-callables: %s: %v\n", f, err)
-			failed++
-			continue
-		}
-		cs, counts, err := goAnalyze(string(src))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "go-callables: %s: %v\n", f, err)
-			failed++
-			continue
-		}
-		ms = append(ms, measurement{path: f, counts: counts, calls: cs})
+	report := analyzeFiles(files)
+	for _, e := range report.errors {
+		fmt.Fprintf(os.Stderr, "go-callables: %s: %s\n", e.path, e.message)
 	}
 
 	fmt.Fprintln(w, "{:version 1")
 	fmt.Fprint(w, " :files [")
-	for _, m := range ms {
+	for _, m := range report.files {
 		fmt.Fprintf(w, "\n  {:path %s :lines %d :sloc %d :blank %d}",
 			ednString(m.path), m.counts.lines, m.counts.code, m.counts.blank)
 	}
 	fmt.Fprintln(w, "]")
 	fmt.Fprint(w, " :functions [")
-	for _, m := range ms {
+	for _, m := range report.files {
 		for _, c := range m.calls {
 			fmt.Fprintf(w,
 				"\n  {:path %s :name %s :kind :%s :line %d :end %d :sloc %d :cc %d"+
@@ -195,13 +183,72 @@ func main() {
 				c.loopDepth, c.untracedLoops, c.selfCall)
 		}
 	}
+	fmt.Fprintln(w, "]")
+	fmt.Fprint(w, " :declarations [")
+	for _, d := range report.declarations {
+		fmt.Fprintf(w, "\n  {:path %s :package %s :name %s :kind :%s :start %d :end %d :cc ",
+			ednString(d.path), ednString(d.packageName), ednString(d.name), d.kind, d.start, d.end)
+		if (d.kind == "func" || d.kind == "method") && d.cc > 0 {
+			fmt.Fprintf(w, "%d :sloc %d}", d.cc, d.sloc)
+		} else {
+			fmt.Fprint(w, "nil :sloc nil}")
+		}
+	}
+	fmt.Fprintln(w, "]")
+	fmt.Fprint(w, " :errors [")
+	for _, e := range report.errors {
+		fmt.Fprintf(w, "\n  {:path %s :message %s}", ednString(e.path), ednString(e.message))
+	}
 	fmt.Fprintln(w, "]}")
 
-	measured := len(ms)
+	measured := len(report.files)
 
-	if measured == 0 && failed > 0 {
+	if measured == 0 && len(report.errors) > 0 {
 		fmt.Fprintln(os.Stderr, "go-callables: nothing could be measured")
 		w.Flush()
 		os.Exit(1)
 	}
+}
+
+type measurement struct {
+	path   string
+	counts fileCounts
+	calls  []callable
+}
+
+type declarationRecord struct {
+	path string
+	declaration
+}
+
+type fileError struct {
+	path    string
+	message string
+}
+
+type analysisReport struct {
+	files        []measurement
+	declarations []declarationRecord
+	errors       []fileError
+}
+
+func analyzeFiles(files []string) analysisReport {
+	var report analysisReport
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			report.errors = append(report.errors, fileError{f, err.Error()})
+			continue
+		}
+		cs, ds, counts, err := analyzeSource(string(src))
+		if err != nil {
+			report.errors = append(report.errors, fileError{f, err.Error()})
+			continue
+		}
+		report.files = append(report.files, measurement{f, counts, cs})
+		for _, d := range ds {
+			report.declarations = append(report.declarations, declarationRecord{f, d})
+		}
+	}
+	return report
 }

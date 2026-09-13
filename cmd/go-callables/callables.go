@@ -40,6 +40,18 @@ type callable struct {
 	selfCall      bool
 }
 
+// declaration is a top-level AST unit. Only functions and methods carry
+// callable metrics; other declarations remain visible for touched-line views.
+type declaration struct {
+	packageName string
+	name        string
+	kind        string
+	start       int
+	end         int
+	cc          int
+	sloc        int
+}
+
 // codeLines marks, for each 1-based line of src, whether the line carries
 // code: not blank, and not occupied solely by a comment.
 func codeLines(fset *token.FileSet, file *ast.File, src string) []bool {
@@ -223,11 +235,6 @@ func derivedRoot(e ast.Expr, derived map[string]string) string {
 		return root == ""
 	})
 	return root
-}
-
-// exprDerived reports whether any identifier in e is parameter-derived.
-func exprDerived(e ast.Expr, derived map[string]string) bool {
-	return derivedRoot(e, derived) != ""
 }
 
 // loopSource is what a loop iterates over, or nil when it cannot be read:
@@ -518,20 +525,63 @@ func goCallables(src string) ([]callable, error) {
 // the callables and the file's line census. Keep new per-file measurements
 // coming out of here rather than re-parsing.
 func goAnalyze(src string) ([]callable, fileCounts, error) {
+	cs, _, counts, err := analyzeSource(src)
+	return cs, counts, err
+}
+
+func goDeclarations(src string) ([]declaration, error) {
+	_, ds, _, err := analyzeSource(src)
+	return ds, err
+}
+
+func analyzeSource(src string) ([]callable, []declaration, fileCounts, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "src.go", src, parser.ParseComments)
 	if err != nil {
-		return nil, fileCounts{}, err
+		return nil, nil, fileCounts{}, err
 	}
 	code := codeLines(fset, file, src)
 	counts := countFile(code, src)
 	var out []callable
+	var declarations []declaration
+	addDecl := func(name, kind string, node ast.Node, c *callable) {
+		d := declaration{packageName: file.Name.Name, name: name, kind: kind,
+			start: fset.Position(node.Pos()).Line, end: fset.Position(node.End()).Line}
+		if c != nil {
+			d.cc, d.sloc = c.cc, c.sloc
+		}
+		declarations = append(declarations, d)
+	}
 
 	for _, d := range file.Decls {
 		decl, ok := d.(*ast.FuncDecl)
-		if !ok || decl.Body == nil {
+		if !ok {
+			if g, ok := d.(*ast.GenDecl); ok {
+				for _, spec := range g.Specs {
+					switch s := spec.(type) {
+					case *ast.TypeSpec:
+						addDecl(s.Name.Name, "type", s, nil)
+					case *ast.ValueSpec:
+						for _, name := range s.Names {
+							addDecl(name.Name, strings.ToLower(g.Tok.String()), s, nil)
+						}
+					case *ast.ImportSpec:
+						addDecl(s.Path.Value, "import", s, nil)
+					}
+				}
+			}
+			continue
+		}
+		if decl.Body == nil {
 			// A declaration with no body (assembly or external stub) has no
 			// complexity to measure.
+			name := decl.Name.Name
+			kind := "func"
+			if decl.Recv != nil && len(decl.Recv.List) > 0 {
+				name = "(" + receiverName(fset, decl.Recv.List[0]) + ")." + name
+				kind = "method"
+			}
+			addDecl(name, kind, decl, nil)
 			continue
 		}
 		name := decl.Name.Name
@@ -578,7 +628,7 @@ func goAnalyze(src string) ([]callable, fileCounts, error) {
 			sloc = 1
 		}
 		loopDepth, untraced := tracedLoopNesting(decl)
-		out = append(out, callable{
+		c := callable{
 			name: name, kind: kind,
 			line: start, end: end,
 			sloc: sloc,
@@ -587,9 +637,11 @@ func goAnalyze(src string) ([]callable, fileCounts, error) {
 			loopDepth:     loopDepth,
 			untracedLoops: untraced,
 			selfCall:      callsItself(decl, decl.Name.Name),
-		})
+		}
+		out = append(out, c)
+		addDecl(name, kind, decl, &c)
 	}
-	return out, counts, nil
+	return out, declarations, counts, nil
 }
 
 // extent is one structural node's line range: a STATEMENT or a DECLARATION,
