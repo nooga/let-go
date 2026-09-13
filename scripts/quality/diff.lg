@@ -141,6 +141,14 @@
                          (and current (or (str/starts-with? line "Binary files ")
                                           (= line "GIT binary patch")))
                          (recur (rest lines) (assoc current :binary? true) out)
+                         (and current
+                              (or (re-matches #"^(?:new file mode|deleted file mode|old mode|new mode) 120000$" line)
+                                  (re-matches #"^index [0-9a-fA-F]+\.\.[0-9a-fA-F]+ 120000$" line)))
+                         (recur (rest lines)
+                                (cond-> (assoc current :symlink? true)
+                                  (str/starts-with? line "deleted file mode ") (assoc :deleted-file? true)
+                                  (str/starts-with? line "new file mode ") (assoc :new-file? true))
+                                out)
                          (and current (str/starts-with? line "deleted file mode "))
                          (recur (rest lines) (assoc current :deleted-file? true) out)
                          (and current (str/starts-with? line "new file mode "))
@@ -171,7 +179,9 @@
                                           (vec (map first (:hunks section))))
                            :new-spans (if (= :type-changed (:status path)) []
                                           (vec (map second (:hunks section)))))
-                row (if (:binary? section) (assoc row :binary? true) row)]
+                row (cond-> row
+                      (:binary? section) (assoc :binary? true)
+                      (:symlink? section) (assoc :symlink? true))]
             (recur (drop (if type-pair? 2 1) remaining)
                    (rest statuses)
                    (conj out row))))))))
@@ -205,6 +215,7 @@
   (let [status (:status row)
         text? (and (not= :type-changed status)
                    (not (:binary? row))
+                   (not (:symlink? row))
                    (or (= :added status)
                        (= :deleted status)
                        (seq (:old-spans row))

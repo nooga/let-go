@@ -239,3 +239,41 @@
             (is (= "unstaged edit\n" (:new-text (get working-by-path "add.lg"))))
             (is (= "new edit\n" (:old-text (get working-by-path "edit.lg")))))))
       (finally (os/delete-tree dir)))))
+
+(deftest git-changes-keeps-working-tree-symlinks-path-only
+  (let [dir (str (os/temp-dir) "/quality-diff-links-" (System/nanoTime))
+        git (fn [& args]
+              (let [r (apply os/sh "git" "-C" dir args)]
+                (when-not (zero? (:exit r))
+                  (throw (ex-info "fixture git failed" {:args args :stderr (:err r)})))
+                (clojure.string/trim (:out r))))
+        link (fn [target path]
+               (let [r (os/sh "ln" "-s" target (str dir "/" path))]
+                 (when-not (zero? (:exit r))
+                   (throw (ex-info "fixture link failed" {:path path :stderr (:err r)})))))
+        path-only? (fn [row]
+                     (and (not (contains? row :old-text))
+                          (not (contains? row :new-text))))]
+    (try
+      (is (zero? (:exit (os/sh "mkdir" "-p" dir))))
+      (git "init" "-q")
+      (link "old-dangling-target" "modified.lg")
+      (git "add" "modified.lg")
+      (git "-c" "user.name=Quality Test" "-c" "user.email=quality@example.invalid"
+           "commit" "-qm" "base")
+      (let [base (git "rev-parse" "HEAD")]
+        (is (zero? (:exit (os/sh "unlink" (str dir "/modified.lg")))))
+        (link "new-dangling-target" "modified.lg")
+        (let [rows (d/git-changes base nil dir)]
+          (is (= [{:status :modified :old-path "modified.lg" :new-path "modified.lg"}]
+                 (map #(select-keys % [:status :old-path :new-path]) rows)))
+          (is (path-only? (first rows))))
+        (link "new-added-dangling-target" "added.lg")
+        (git "add" "added.lg")
+        (let [rows (d/git-changes base nil dir)
+              by-new (into {} (map (fn [row] [(:new-path row) row]) rows))]
+          (is (= #{"modified.lg" "added.lg"} (set (keys by-new))))
+          (is (= :added (:status (get by-new "added.lg"))))
+          (is (path-only? (get by-new "added.lg")))
+          (is (path-only? (get by-new "modified.lg")))))
+      (finally (os/delete-tree dir)))))
