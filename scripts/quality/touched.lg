@@ -10,7 +10,7 @@
 
 (def ^:private definition-heads
   #{'defn 'defn- 'defmacro 'defmethod 'deftest 'def})
-(def ^:private callable-heads #{'defn 'defn- 'defmacro 'defmethod})
+(def ^:private callable-heads #{'defn 'defn- 'defmacro 'defmethod 'deftest})
 
 (defn- named-symbol [x]
   (cond
@@ -18,12 +18,16 @@
     (and (seq? x) (= 'with-meta (first x)) (symbol? (second x))) (second x)
     :else nil))
 
-(defn- file-namespace [segments]
-  (some (fn [seg]
-          (let [form (forms/read-segment seg)]
-            (when (and (seq? form) (= 'ns (first form)) (symbol? (second form)))
-              (second form))))
-        segments))
+(defn- next-namespace [namespace form]
+  (let [head (when (seq? form) (first form))
+        target (second form)]
+    (cond
+      (= 'ns head) (when (symbol? target) target)
+      (= 'in-ns head) (when (and (seq? target)
+                                 (= 'quote (first target))
+                                 (symbol? (second target)))
+                        (second target))
+      :else namespace)))
 
 (defn- definition-key [namespace form]
   (when (and namespace (seq? form) (definition-heads (first form)))
@@ -33,24 +37,30 @@
 
 (defn- source-index [text]
   (let [segments (forms/validated-segments text)
-        namespace (file-namespace segments)
         token-lines (set (map :line (lex/tokens text :lg)))]
-    (vec (map-indexed
-          (fn [i seg]
-            (let [form (forms/read-segment seg)
-                  head (when (seq? form) (first form))
-                  id (definition-key namespace form)
-                  name (when id (symbol (str (nth id 0) "/" (nth id 1))))
-                  callable? (and id (callable-heads head))]
-              {:index i :span {:start (:start seg) :end (:end seg)}
-               :name name :kind (when id (keyword (str head)))
-               :dispatch (when (= head 'defmethod) (pr-str (nth form 2 nil)))
-               :key id :identity name
-               :metrics (when callable?
-                          {:cc (metrics/complexity form)
-                           :sloc (metrics/definition-sloc
-                                  token-lines {:line (:start seg) :end (:end seg)})})}))
-          segments))))
+    (loop [remaining segments namespace nil i 0 out []]
+      (if (empty? remaining)
+        out
+        (let [seg (first remaining)
+              form (forms/read-segment seg)
+              head (when (seq? form) (first form))
+              namespace (next-namespace namespace form)
+              bare-name (when (and (definition-heads head) (seq? form))
+                          (named-symbol (second form)))
+              id (definition-key namespace form)
+              qualified-name (when id (symbol (str (nth id 0) "/" (nth id 1))))
+              callable? (and bare-name (callable-heads head))]
+          (recur (rest remaining) namespace (inc i)
+                 (conj out
+                       {:index i :span {:start (:start seg) :end (:end seg)}
+                        :name (or qualified-name bare-name)
+                        :kind (when bare-name (keyword (str head)))
+                        :dispatch (when (= head 'defmethod) (pr-str (nth form 2 nil)))
+                        :key id :identity qualified-name
+                        :metrics (when callable?
+                                   {:cc (metrics/complexity form)
+                                    :sloc (metrics/definition-sloc
+                                           token-lines {:line (:start seg) :end (:end seg)})})})))))))
 
 (defn- intersects? [unit {:keys [start count]}]
   (when (and unit start count)
@@ -166,7 +176,9 @@
                  (remove (fn [u] (contains? paired-new (:index u))) new-selected))
             (outside-entries change old-index new-index))))
     (catch Throwable e
-      [(file-entry change :file-fallback :invalid-source (str e))])))
+      (if (= :invalid-source (:reason (ex-data e)))
+        [(file-entry change :file-fallback :invalid-source (str e))]
+        (throw e)))))
 
 (defn- source-change? [change]
   (and (or (str/ends-with? (or (:new-path change) "") ".lg")

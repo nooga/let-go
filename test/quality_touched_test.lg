@@ -1,6 +1,7 @@
 ;; Copyright (c) 2026 Norman Nunley, Jr <nnunley@gmail.com>
 (ns test.quality-touched-test
   (:require [quality.touched :as t]
+            [quality.metrics :as metrics]
             [test :refer :all]))
 
 (defn change [old-text new-text old-spans new-spans]
@@ -38,13 +39,22 @@
 
 (deftest first-and-last-line-edits-find-a-unique-counterpart
   (let [old "(ns demo)\n(defn a []\n  1)\n(defn b [] 2)\n"
-        new "(ns demo)\n(defn a [x]\n  1)\n(defn b [] 2)\n"
-        first-edit (first (t/build [(change old new [(span 1 0)] [(span 2 1)])]))
-        last-edit (first (t/build [(change old new [(span 3 1)] [(span 4 0)])]))]
+        first-new "(ns demo)\n(defn a [x]\n  1)\n(defn b [] 2)\n"
+        last-new "(ns demo)\n(defn a []\n  2)\n(defn b [] 2)\n"
+        first-edit (first (t/build [(change old first-new [(span 2 1)] [(span 2 1)])]))
+        last-edit (first (t/build [(change old last-new [(span 3 1)] [(span 3 1)])]))]
     (is (= :paired (:pairing first-edit)))
     (is (= {:start 2 :end 3} (:old-span first-edit)))
     (is (= :paired (:pairing last-edit)))
     (is (= {:start 2 :end 3} (:new-span last-edit)))))
+
+(deftest a-zero-length-counterpart-anchor-still-finds-the-full-index
+  (let [old "(ns demo)\n(defn a []\n  1)\n"
+        new "(ns demo)\n(defn a []\n  ; inserted\n  1)\n"
+        row (first (t/build [(change old new [(span 2 0)] [(span 3 1)])]))]
+    (is (= :paired (:pairing row)))
+    (is (= {:start 2 :end 3} (:old-span row)))
+    (is (= {:start 2 :end 4} (:new-span row)))))
 
 (deftest zero-length-anchor-only-selects-strict-interior
   (let [text "(ns demo)\n(defn a []\n  1)\n(defn b [] 2)\n"
@@ -86,6 +96,43 @@
     (is (= 2 (count rows)))
     (is (= [:paired :paired] (map :pairing rows)))
     (is (= #{":red" ":blue"} (set (map :dispatch rows))))))
+
+(deftest namespace-transitions-change-definition-identity
+  (let [old "(ns demo)\n(in-ns 'a)\n(defn x [] 1)\n"
+        new "(ns demo)\n(in-ns 'b)\n(defn x [] 2)\n"
+        rows (filter :identity
+                     (t/build [(change old new [(span 2 2)] [(span 2 2)])]))]
+    (is (= #{'a/x 'b/x} (set (map :identity rows))))
+    (is (= 2 (count rows)))
+    (is (every? #(= :unpaired (:pairing %)) rows))
+    (is (every? #(not (contains? % :delta)) rows))))
+
+(deftest dynamic-namespace-transition-does-not-reuse-stale-identity
+  (let [old "(ns demo)\n(in-ns (symbol \"a\"))\n(defn x [] 1)\n"
+        new "(ns demo)\n(in-ns (symbol \"b\"))\n(defn x [] 2)\n"
+        rows (filter #(= :defn (:kind %))
+                     (t/build [(change old new [(span 2 2)] [(span 2 2)])]))]
+    (is (= 2 (count rows)))
+    (is (every? #(nil? (:identity %)) rows))
+    (is (every? #(= :unpaired (:pairing %)) rows))))
+
+(deftest deftest-retains-callable-complexity-and-sloc
+  (let [old "(ns demo)\n(deftest check-it (is (= 1 1)))\n"
+        new "(ns demo)\n(deftest check-it (is (= 1 2)))\n"
+        row (first (t/build [(change old new [(span 2 1)] [(span 2 1)])]))]
+    (is (= :paired (:pairing row)))
+    (is (= {:cc 1 :sloc 1} (:old-metrics row)))
+    (is (= {:cc 1 :sloc 1} (:new-metrics row)))
+    (is (= {:cc 0 :sloc 0} (:delta row)))))
+
+(deftest internal-metric-errors-are-not-called-invalid-source
+  (let [old "(ns demo)\n(defn x [] 1)\n"
+        new "(ns demo)\n(defn x [] 2)\n"
+        row (change old new [(span 2 1)] [(span 2 1)])]
+    (is (thrown? Throwable
+                 (with-redefs [metrics/complexity
+                               (fn [_] (throw (ex-info "injected metric failure" {:probe true})))]
+                   (t/build [row]))))))
 
 (deftest non-callable-form-has-no-invented-metrics-or-delta
   (let [old "(ns demo)\n(def answer 1)\n"
