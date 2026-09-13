@@ -75,6 +75,49 @@
     (is (str/includes? out "+0.150"))
     (is (str/includes? out "rose to 14 from 9"))))
 
+(deftest touched-forms-are-a-separate-unscored-report-view
+  (let [corpus (q/compare-results base head-worse "BASE" "HEAD")
+        touched [{:entry-type :form :status :modified
+                  :old-path "a.lg" :new-path "a.lg"
+                  :identity 'sample/changed :kind :defn :pairing :paired
+                  :old-span {:start 2 :end 4} :new-span {:start 2 :end 5}
+                  :old-metrics {:cc 2 :sloc 3} :new-metrics {:cc 3 :sloc 4}
+                  :delta {:cc 1 :sloc 1}}
+                 {:entry-type :form :status :added
+                  :new-path "b.lg" :identity 'sample/new :pairing :unpaired
+                  :new-metrics {:cc 2 :sloc 3}}
+                 {:entry-type :path-only :status :renamed
+                  :old-path "README.old" :new-path "README.md"}]
+        out (report/delta-text (assoc corpus :touched touched :working-tree? true))]
+    (is (< 0.039 (:debt-delta corpus) 0.041))
+    (is (not (contains? corpus :touched)))
+    (is (str/includes? out "whole corpus"))
+    (is (str/includes? out "touched forms"))
+    (is (str/includes? out "cc +1"))
+    (is (str/includes? out "sloc +1"))
+    (is (str/includes? out "unpaired"))
+    (is (str/includes? out "README.old"))
+    (is (str/includes? out "untracked files omitted"))
+    (is (= 1 (count (re-seq #"cc \+1" out))))))
+
+(deftest explicit-and-working-tree-deltas-share-corpus-and-diff-endpoints
+  (let [sha (str/trim (:out (os/sh "git" "rev-parse" "HEAD")))
+        opts {:base "HEAD" :top 5 :paths ["fixtures/quality"]
+              :source-roots ["fixtures/quality"]}
+        explicit (q/delta (assoc opts :head "HEAD"))
+        working (q/delta opts)]
+    (is (= sha (get-in explicit [:base :rev])))
+    (is (= sha (get-in explicit [:head :rev])))
+    (is (= sha (get-in explicit [:touched-range :base])))
+    (is (= sha (get-in explicit [:touched-range :head])))
+    (is (vector? (:touched explicit)))
+    (is (number? (:debt-delta explicit)))
+    (is (= sha (get-in working [:base :rev])))
+    (is (= sha (get-in working [:touched-range :base])))
+    (is (nil? (get-in working [:touched-range :head])))
+    (is (= "working tree" (get-in working [:head :rev])))
+    (is (str/includes? (report/delta-text working) "head working tree"))))
+
 (deftest invalid-head-releases-the-acquired-base-checkout
   (let [checkout (q/checkout-root)
         base-rev (if (os/stat (str checkout "/.jj")) "@-" "HEAD")

@@ -43,6 +43,7 @@
    [clojure.string :as str]
    [quality.dup :as dup]
    [quality.cost :as cost]
+   [quality.diff :as diff]
    [quality.forms :as forms]
    [quality.graph :as graph]
    [quality.inputs :as inputs]
@@ -50,7 +51,8 @@
    [quality.metrics :as metrics]
    [quality.report :as report]
    [quality.score :as score]
-   [quality.terms :as terms]))
+   [quality.terms :as terms]
+   [quality.touched :as touched]))
 
 (def default-paths
   "Default roots PER LANGUAGE. `.lg` lives in the core stdlib, the scripts
@@ -877,15 +879,26 @@
        "                               [--base REV [--head REV]] [paths...]"))
 
 (defn resolve-rev
-  "A revision name resolved to a git sha. jj revsets (`@-`, `@--`, a change
-   id) mean nothing to `git archive`, so jj resolves them when it is present
-   and the name is passed through to git otherwise."
+  "Resolve a supplied revision to a full Git commit ID. Git is the default;
+   jj is consulted only for jj revsets in a checkout with a `.jj` marker."
   [rev]
-  (let [r (os/sh "jj" "log" "-r" rev "--no-graph" "-T" "commit_id")]
-    (if (zero? (:exit r))
-      (let [sha (str/trim (first (forms/lines (:out r))))]
-        (if (re-matches #"[0-9a-f]{40}" sha) sha rev))
-      rev)))
+  (when (or (not (string? rev)) (str/blank? rev) (str/starts-with? rev "-"))
+    (throw (ex-info "invalid revision" {:rev rev})))
+  (let [checkout (checkout-root)
+        git (os/sh "git" "rev-parse" "--verify" "--end-of-options"
+                   (str rev "^{commit}"))
+        jj-revset? (or (str/starts-with? rev "@")
+                       (boolean (re-matches #"[k-z]{8,}" rev)))
+        result (if (and (not (zero? (:exit git)))
+                        jj-revset? (os/stat (str checkout "/.jj")))
+                 (os/sh "jj" "log" "-r" rev "--no-graph" "-T" "commit_id")
+                 git)
+        sha (str/trim (:out result))]
+    (when (or (not (zero? (:exit result)))
+              (not (re-matches #"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})" sha)))
+      (throw (ex-info (str "cannot resolve revision " rev)
+                      {:rev rev :stderr (:err result)})))
+    sha))
 
 (defn revision-dir
   "Directory for a temporary revision checkout. The optional
@@ -915,7 +928,7 @@
 
    The revision directory is configurable and `release-rev` removes it."
   [checkout rev]
-  (let [sha (resolve-rev rev)
+  (let [sha rev
         name (str "quality-rev-" (subs sha 0 (min 12 (count sha))))
         dir (revision-dir checkout sha)]
     (if (os/stat (str checkout "/.jj"))
@@ -1024,15 +1037,23 @@
    agrees with a full one anyway."
   [opts]
   (let [checkout (checkout-root)
-        base-co (extract-rev checkout (:base opts))]
+        base-sha (resolve-rev (:base opts))
+        head-sha (when (:head opts) (resolve-rev (:head opts)))
+        base-co (extract-rev checkout base-sha)]
     (try
-      (let [head-co (when (:head opts) (extract-rev checkout (:head opts)))]
+      (let [head-co (when head-sha (extract-rev checkout head-sha))]
         (try
           (let [head-res (if head-co
                            (measure (assoc opts :root (:dir head-co)))
                            (measure (dissoc opts :root)))
-                base-res (measure (assoc opts :root (:dir base-co)))]
-            (compare-results base-res head-res (:base opts) (or (:head opts) "working copy")))
+                base-res (measure (assoc opts :root (:dir base-co)))
+                changes (diff/git-changes base-sha head-sha checkout)
+                touched (touched/build changes)]
+            (assoc (compare-results base-res head-res base-sha
+                                    (or head-sha "working tree"))
+                   :touched touched
+                   :touched-range {:base base-sha :head head-sha}
+                   :working-tree? (nil? head-sha)))
           (finally
             (when head-co (release-rev checkout head-co)))))
       (finally

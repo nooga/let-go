@@ -81,6 +81,22 @@
 (deftest help-prints-usage
   (is (str/includes? (with-out-str (q/main ["--help"])) "usage: ./lg scripts/quality.lg")))
 
+(deftest pr-cli-keeps-touched-forms-out-of-the-whole-corpus-score
+  (let [edn-path (str (os/temp-dir) "quality-pr-delta-test.edn")
+        out (with-out-str
+              (q/main ["--base" "HEAD" "--head" "HEAD" "--top" "5"
+                       "--edn" edn-path "--source-root" fixtures fixtures]))
+        d (read-string (slurp edn-path))
+        sha (str/trim (:out (os/sh "git" "rev-parse" "HEAD")))]
+    (is (str/includes? out "whole corpus"))
+    (is (str/includes? out "touched forms"))
+    (is (= sha (get-in d [:base :rev])))
+    (is (= sha (get-in d [:head :rev])))
+    (is (= {:base sha :head sha} (:touched-range d)))
+    (is (vector? (:touched d)))
+    (is (number? (:debt-delta d)))
+    (is (not (contains? (:base d) :touched)))))
+
 (deftest report-header-carries-the-spec-caveats
   (let [out (with-out-str (q/main ["--since" "2000-01-01" "--source-root" fixtures fixtures]))]
     (is (str/includes? out "caveat: static coverage is an upper bound"))

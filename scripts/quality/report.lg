@@ -251,6 +251,29 @@
         (> v 0) (str "+" (format "%.3f" (double v)))
         :else (format "%.3f" (double v))))
 
+(defn- signed-int [v]
+  (if (pos? v) (str "+" v) (str v)))
+
+(defn- touched-path [{:keys [old-path new-path]}]
+  (if (and old-path new-path (not= old-path new-path))
+    (str old-path " -> " new-path)
+    (or new-path old-path)))
+
+(defn- touched-line [entry]
+  (let [place (str (touched-path entry)
+                   (when-let [span (or (:new-span entry) (:old-span entry))]
+                     (str ":" (:start span) "-" (:end span))))
+        kind (:entry-type entry)]
+    (str "  " place "  " (name kind)
+         (when (:status entry) (str " " (name (:status entry))))
+         (when (= kind :form)
+           (str " " (or (:identity entry) (:name entry) "unnamed")
+                " " (name (:pairing entry))))
+         (when-let [delta (:delta entry)]
+           (str "  cc " (signed-int (:cc delta))
+                "  sloc " (signed-int (:sloc delta))))
+         (when (:reason entry) (str "  " (name (:reason entry)))))))
+
 (defn delta-text
   "The PR surface: every term and the composite at base, at head, and the
    signed delta; then the files that moved most; then the definitions that
@@ -264,6 +287,7 @@
       (concat
         [(str "base " (get-in d [:base :rev]))
          (str "head " (get-in d [:head :rev]))
+         "whole corpus (scored debt; touched-form measurements never enter this score)"
          "positive delta means WORSE (every term is lower-is-better)"
          ""
          (str (pad "term" 14) (lpad "base" 8) (lpad "head" 8) (lpad "delta" 9))
@@ -281,5 +305,10 @@
         (for [c (:crossings d)]
           (str (pad (str (:path c) " " (:name c)) 70)
                (if (= :rose (:direction c)) "rose to " "fell to ")
-               (:cc c) (if (:was c) (str " from " (:was c)) "")))))
+               (:cc c) (if (:was c) (str " from " (:was c)) "")))
+        ["" (str "touched forms " (count (:touched d))
+                 " (Git diff expanded to full forms; local cc/sloc only, not scored)")]
+        (when (:working-tree? d)
+          ["working tree head: untracked files omitted"])
+        (for [entry (:touched d)] (touched-line entry))))
     "\n"))
