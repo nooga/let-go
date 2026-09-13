@@ -1,4 +1,4 @@
-//go:build glplat || glplat_ebiten
+//go:build glplat_fonts
 
 package glplat
 

@@ -1,4 +1,4 @@
-//go:build !glplat && !glplat_ebiten
+//go:build !glplat_fonts
 
 /*
  * font_stub — untagged stand-ins for the font primitives in font.go
@@ -46,5 +46,5 @@ type fontNotBuiltError struct {
 
 func (e *fontNotBuiltError) Error() string {
 	return "glplat: font primitives not built for " + e.op +
-		"; build with -tags glplat or -tags glplat_ebiten"
+		"; build with -tags glplat_fonts"
 }
