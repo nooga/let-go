@@ -171,13 +171,16 @@
   "Get ordered path/hunk records for base vs explicit commit head, or base vs
    the working tree when head is nil. An optional root supports plain-Git
    fixtures; no jj command or fixed workspace layout is involved. Both diff
-   invocations use identical pinned endpoints and no textconv/ext diff."
+   invocations use identical pinned endpoints, a/b prefixes, C-quoted paths,
+   and no textconv/ext diff, independent of repository Git configuration."
   ([base head] (git-changes base head nil))
   ([base head root]
    (let [base-sha (resolve-commit root base)
          head-sha (when head (resolve-commit root head))
-         common ["diff" "--no-ext-diff" "--no-textconv" "--no-color"
-                 "--find-renames" "--unified=0"]
+         common ["-c" "core.quotePath=true" "diff"
+                 "--no-ext-diff" "--no-textconv" "--no-color"
+                 "--find-renames" "--unified=0"
+                 "--src-prefix=a/" "--dst-prefix=b/"]
          ends (if head-sha [base-sha head-sha "--"] [base-sha "--"])
          status (git-output root (concat common ["--name-status" "-z"] ends))
          patch (git-output root (concat common ends))]

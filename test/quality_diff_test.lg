@@ -117,5 +117,21 @@
              "commit" "-qm" "space path")
         (let [space-head (git "rev-parse" "HEAD")]
           (is (= ["my file.lg"]
-                 (map :new-path (d/git-changes head space-head dir))))))
+                 (map :new-path (d/git-changes head space-head dir))))
+          (git "config" "diff.noprefix" "true")
+          (is (= ["my file.lg"]
+                 (map :new-path (d/git-changes head space-head dir))))
+          (git "config" "diff.noprefix" "false")
+          (git "config" "core.quotePath" "false")
+          (spit (str dir "/café.lg") "unicode\n")
+          (git "add" "café.lg")
+          (git "-c" "user.name=Quality Test" "-c" "user.email=quality@example.invalid"
+               "commit" "-qm" "unicode path")
+          (let [unicode-head (git "rev-parse" "HEAD")
+                raw-patch (git "diff" "--no-ext-diff" "--no-textconv" "--no-color"
+                               space-head unicode-head "--")]
+            (is (= "diff --git a/café.lg b/café.lg"
+                   (first (clojure.string/split raw-patch #"\n"))))
+            (is (= ["café.lg"]
+                   (map :new-path (d/git-changes space-head unicode-head dir)))))))
       (finally (os/delete-tree dir)))))
