@@ -74,3 +74,25 @@
     (is (str/includes? out "+0.040"))
     (is (str/includes? out "+0.150"))
     (is (str/includes? out "rose to 14 from 9"))))
+
+(deftest invalid-head-releases-the-acquired-base-checkout
+  (let [checkout (q/checkout-root)
+        base-rev (if (os/stat (str checkout "/.jj")) "@-" "HEAD")
+        sha (q/resolve-rev base-rev)
+        dir (q/revision-dir checkout sha)]
+    (is (thrown? Throwable
+                 (q/delta {:base base-rev :head "definitely-not-a-revision"})))
+    (is (not (os/stat dir)))
+    (when-not (os/stat (str checkout "/.jj"))
+      (is (not (os/stat (str dir ".tar")))))))
+
+(deftest measurement-error-releases-the-acquired-base-checkout
+  (let [checkout (q/checkout-root)
+        base-rev (if (os/stat (str checkout "/.jj")) "@-" "HEAD")
+        sha (q/resolve-rev base-rev)
+        dir (q/revision-dir checkout sha)]
+    (is (thrown? Throwable
+                 (q/delta {:base base-rev :paths ["no-such-source-file.lg"]})))
+    (is (not (os/stat dir)))
+    (when-not (os/stat (str checkout "/.jj"))
+      (is (not (os/stat (str dir ".tar")))))))

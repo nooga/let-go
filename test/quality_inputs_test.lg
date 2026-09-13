@@ -60,10 +60,14 @@
   ;; crosses a month/year boundary
   (is (= 86400 (in/parse-run-times "2025-12-31T00:00:00Z" "2026-01-01T00:00:00Z"))))
 
-(deftest git-range-is-two-shas
+(deftest git-range-has-a-head-sha-and-an-optional-history-boundary
   (let [r (in/git-range "2026-01-01")]
     (is (re-matches #"[0-9a-f]{40}" (:to r)))
-    (is (re-matches #"[0-9a-f]{40}" (:from r)))))
+    ;; A shallow Git checkout may not contain a commit before the date.
+    ;; In that case log-range intentionally uses the head alone.
+    (is (or (= "" (:from r)) (re-matches #"[0-9a-f]{40}" (:from r))))
+    (when (= "" (:from r))
+      (is (= (:to r) (in/log-range r))))))
 
 (deftest ci-seconds-never-invents-a-duration
   ;; Efficiency must be pinned to a RECORDED duration. With nothing recorded

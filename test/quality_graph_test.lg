@@ -6,9 +6,18 @@
 (def src [{:path "fixtures/quality/graph_src.lg" :text (slurp "fixtures/quality/graph_src.lg")}])
 (def tst [{:path "fixtures/quality/graph_test_fixture.lg" :text (slurp "fixtures/quality/graph_test_fixture.lg")}])
 
-(deftest references-strip-namespace-aliases
-  (is (contains? (g/references (read-string "(g/public-a (str/join x))")) 'public-a))
-  (is (contains? (g/references (read-string "(g/public-a (str/join x))")) 'join)))
+(deftest references-preserve-qualified-symbols
+  (let [refs (g/references (read-string "(g/public-a (str/join x))"))]
+    (is (contains? refs 'g/public-a))
+    (is (contains? refs 'str/join))
+    (is (not (contains? refs 'public-a)))
+    (is (not (contains? refs 'join)))))
+
+(deftest qualified-call-does-not-create-a-local-name-collision-edge
+  (let [sources [{:path "a.lg" :text "(ns a)\n(defn foo [] 1)\n"}
+                 {:path "b.lg" :text "(ns b)\n(defn foo [] 2)\n(defn caller [] (a/foo))\n"}]
+        graph (g/build sources)]
+    (is (= #{'a/foo} (get-in graph [:edges 'b/caller])))))
 
 (deftest graph-edges-follow-calls
   (let [gr (g/build src)]
@@ -17,8 +26,8 @@
 
 (deftest roots-come-from-deftests-and-top-level-assertions
   (let [roots (g/test-roots tst)]
-    (is (contains? roots 'public-a))
-    (is (contains? roots 'public-b))))
+    (is (contains? roots 'fixture.graph/public-a))
+    (is (contains? roots 'fixture.graph/public-b))))
 
 (deftest coverage-reaches-transitively-and-lists-untested
   (let [c (g/coverage src tst)]
@@ -58,7 +67,7 @@
         tests [{:path "t" :text alias-test-text}]
         roots (g/test-roots tests)
         c (g/coverage sources tests)]
-    (is (contains? roots 'x/helper))
+    (is (contains? roots 'fixture.alias-a/helper))
     (is (= 1 (:reached c)))
     (is (= 3 (:total c)))
     (is (= #{'public-a 'helper} (set (map :name (:untested c)))))))

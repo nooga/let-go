@@ -6,20 +6,16 @@
    `ns` form is found), so same-named definitions in different namespaces
    (e.g. `join` in two files) never collide or merge.
 
-   A raw symbol reference (bare, alias-qualified, or fully namespace
-   qualified) is resolved to a definition in this priority order: (1) an
-   exact match against a qualified definition key, (2) the bare name
-   qualified by the referencing definition's own namespace, (3) a bare-name
-   match that is unique across the whole corpus. An ambiguous bare name
-   (more than one definition shares it) resolves to no edge at all, rather
-   than guessing.
+   A qualified reference resolves only to its exact definition key. A bare
+   reference resolves first in the referencing definition's namespace, then
+   by a unique bare-name match across the corpus. An ambiguous bare name
+   resolves to no edge rather than guessing.
 
    Before resolution, an `alias/name` reference is rewritten to
    `full.ns/name` using the aliases the referencing FILE establishes via
    its `(ns ... (:require [full.ns :as alias] ...))` clause or any
    top-level `(require '[full.ns :as alias])` form — so an aliased
-   reference is tried against its real namespace at priority 1 before
-   falling back to the bare-name rules.
+   reference is tried against its real namespace without a bare-name fallback.
 
    This is STATIC analysis: it follows only symbols that appear literally
    in a form. Dynamic dispatch (multimethods invoked by a computed value,
@@ -34,13 +30,12 @@
    [quality.forms :as f]))
 
 (defn references
-  "Every symbol occurring anywhere in `form`, as a set. For a qualified
-   symbol such as `str/join`, both `str/join` and the bare `join` are
-   included, so downstream resolution can try either form."
+  "Every symbol occurring anywhere in `form`, as a set. Qualified symbols
+   retain their namespace: `str/join` must not also imply a local `join`."
   [form]
   (letfn [(walk [x acc]
             (cond
-              (symbol? x) (conj acc x (symbol (name x)))
+              (symbol? x) (conj acc x)
               (coll? x) (reduce (fn [a y] (walk y a)) acc (seq x))
               :else acc))]
     (walk form #{})))
@@ -121,14 +116,12 @@
       sym)))
 
 (defn- references-aliased
-  "references, plus each aliased symbol rewritten to its full namespace
-   per `aliases` (both the alias form and the rewritten form are kept, so
-   priority-1 exact matching can try either)."
+  "references, with each known alias rewritten to its full namespace."
   [form aliases]
   (let [refs (references form)]
     (if (empty? aliases)
       refs
-      (into refs (map #(rewrite-aliased % aliases) refs)))))
+      (set (map #(rewrite-aliased % aliases) refs)))))
 
 (defn- bare-index
   "bare-name symbol -> #{qname...} across every def, for corpus-wide
@@ -143,6 +136,7 @@
   [sym current-ns defs bidx]
   (cond
     (contains? defs sym) sym
+    (namespace sym) nil
     :else
     (let [bare (symbol (name sym))
           same-ns (when current-ns (qualify current-ns bare))]

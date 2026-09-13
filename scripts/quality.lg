@@ -62,12 +62,10 @@
    :go ["pkg" "cmd"]})
 
 ;; Paths that would only add noise: the vendored Clojure suite, generated
-;; Go, the lowered-core tree, and SIBLING jj workspaces. The last one is
-;; judged on the repo-relative path, so a run from inside
-;; `.workspaces/<name>` (where the checkout root IS that workspace and paths
-;; read `pkg/...`) measures itself instead of skipping everything.
+;; Go and the lowered-core tree. Nested checkouts are excluded by marker in
+;; `walk`, independent of where a contributor keeps them.
 (def ^:private skip-substrings
-  ["test/clojure-test-suite/" "core_go_lowered/" ".workspaces/"])
+  ["test/clojure-test-suite/" "core_go_lowered/"])
 
 (def ^:private generated-marker
   ;; The Go convention (golang.org/s/generatedcode), which this repo also uses
@@ -128,7 +126,7 @@
 
    Derived from `checkout-root` rather than `git rev-parse --show-prefix`:
    inside a jj workspace, git reports the PRIMARY checkout as its toplevel,
-   so `--show-prefix` would return `.workspaces/<name>/...` while the commit
+   so `--show-prefix` would include the workspace's location while the commit
    history it is matched against still speaks plain `pkg/...` paths."
   []
   (let [root (checkout-root)
@@ -157,8 +155,11 @@
   (let [st (os/stat root)]
     (cond
       (nil? st) []
-      (:dir? st) (vec (mapcat #(walk (str root "/" %) langs checkout prefix)
-                              (sort (os/ls root))))
+      (:dir? st) (if (and (not= (os/absolute-path root) checkout)
+                           (checkout-root? root))
+                    []
+                    (vec (mapcat #(walk (str root "/" %) langs checkout prefix)
+                                 (sort (os/ls root)))))
       (and (or (str/ends-with? root ".lg") (str/ends-with? root ".go"))
            (contains? langs (lang-of root))
            (not (skip? (repo-path checkout prefix root))))
@@ -886,6 +887,19 @@
         (if (re-matches #"[0-9a-f]{40}" sha) sha rev))
       rev)))
 
+(defn revision-dir
+  "Directory for a temporary revision checkout. The optional
+   `LG_QUALITY_REVISION_ROOT` chooses its parent. Git archive extraction uses
+   the host temporary directory by default; jj workspace placement must be
+   configured explicitly. No repository-specific layout is assumed."
+  [checkout sha]
+  (let [configured (os/getenv "LG_QUALITY_REVISION_ROOT")
+        _ (when (and (str/blank? configured) (os/stat (str checkout "/.jj")))
+            (throw (ex-info "set LG_QUALITY_REVISION_ROOT for jj revision checkouts"
+                            {:checkout checkout})))
+        root (os/absolute-path (if (str/blank? configured) (os/temp-dir) configured))]
+    (str root "/quality-rev-" (subs sha 0 (min 12 (count sha))))))
+
 (defn extract-rev
   "A revision's tree, materialized in a directory, and the directory
    returned. Scoring a revision means READING its files, and the working copy
@@ -899,18 +913,16 @@
    avoiding, so a jj repository uses `jj workspace add`, which is the
    supported way to have two revisions checked out at once.
 
-   Workspaces are created under the repo's own `.workspaces/`, per the
-   project's rule that no checkout may live in a temp directory, and
-   `release-rev` removes them."
+   The revision directory is configurable and `release-rev` removes it."
   [checkout rev]
   (let [sha (resolve-rev rev)
         name (str "quality-rev-" (subs sha 0 (min 12 (count sha))))
-        dir (str checkout "/.workspaces/" name)]
+        dir (revision-dir checkout sha)]
     (if (os/stat (str checkout "/.jj"))
       (do
         (when (os/stat dir) (os/sh "jj" "workspace" "forget" name) (os/delete-tree dir))
         ;; jj requires the parent directory to exist.
-        (os/sh "mkdir" "-p" (str checkout "/.workspaces"))
+        (os/sh "mkdir" "-p" (subs dir 0 (- (count dir) (count name) 1)))
         (let [r (os/sh "jj" "workspace" "add" "--revision" sha dir)]
           (when-not (zero? (:exit r))
             (throw (ex-info (str "cannot check out revision " rev ": "
@@ -919,14 +931,24 @@
         {:dir dir :name name :vcs :jj})
       (let [tarball (str (os/temp-dir) name ".tar")]
         (os/delete-tree dir)
-        (let [a (os/sh "git" "archive" "--format=tar" "-o" tarball sha)]
-          (when-not (zero? (:exit a))
-            (throw (ex-info (str "cannot read revision " rev ": "
-                                 (str/trim (str (:err a))))
-                            {:rev rev}))))
-        (os/sh "mkdir" "-p" dir)
-        (os/sh "tar" "-xf" tarball "-C" dir)
-        {:dir dir :name name :vcs :git}))))
+        (try
+          (let [a (os/sh "git" "archive" "--format=tar" "-o" tarball sha)]
+            (when-not (zero? (:exit a))
+              (throw (ex-info (str "cannot read revision " rev ": "
+                                   (str/trim (str (:err a))))
+                              {:rev rev}))))
+          (os/sh "mkdir" "-p" dir)
+          (let [r (os/sh "tar" "-xf" tarball "-C" dir)]
+            (when-not (zero? (:exit r))
+              (throw (ex-info (str "cannot extract revision " rev ": "
+                                   (str/trim (str (:err r))))
+                              {:rev rev}))))
+          {:dir dir :name name :vcs :git}
+          (catch Throwable e
+            (os/delete-tree dir)
+            (throw e))
+          (finally
+            (os/delete-tree tarball)))))))
 
 (defn release-rev
   "Remove what `extract-rev` created. A checkout that outlives its run is the
@@ -1002,15 +1024,19 @@
    agrees with a full one anyway."
   [opts]
   (let [checkout (checkout-root)
-        base-co (extract-rev checkout (:base opts))
-        head-co (when (:head opts) (extract-rev checkout (:head opts)))
-        head-res (if head-co
-                   (measure (assoc opts :root (:dir head-co)))
-                   (measure (dissoc opts :root)))
-        base-res (measure (assoc opts :root (:dir base-co)))
-        _ (release-rev checkout base-co)
-        _ (when head-co (release-rev checkout head-co))]
-    (compare-results base-res head-res (:base opts) (or (:head opts) "working copy"))))
+        base-co (extract-rev checkout (:base opts))]
+    (try
+      (let [head-co (when (:head opts) (extract-rev checkout (:head opts)))]
+        (try
+          (let [head-res (if head-co
+                           (measure (assoc opts :root (:dir head-co)))
+                           (measure (dissoc opts :root)))
+                base-res (measure (assoc opts :root (:dir base-co)))]
+            (compare-results base-res head-res (:base opts) (or (:head opts) "working copy")))
+          (finally
+            (when head-co (release-rev checkout head-co)))))
+      (finally
+        (release-rev checkout base-co)))))
 
 (defn main
   "Parse `args`, measure, print the text report, and write EDN when asked.

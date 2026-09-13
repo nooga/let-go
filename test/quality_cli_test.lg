@@ -68,7 +68,9 @@
       (os/delete-tree scratch)
       (is (not (str/includes? out "scratch_untracked")))
       (is (not (str/includes? out "scratch-only")))
-      (is (str/includes? out "tracked-by jj")))))
+      (let [backend (:source (q/tracked-files (q/checkout-root)))]
+        (is (contains? #{"jj" "git"} backend))
+        (is (str/includes? out (str "tracked-by " backend)))))))
 
 (deftest an-empty-corpus-is-an-error-not-a-perfect-score
   ;; A path that matches nothing (or only skipped files) used to report a
