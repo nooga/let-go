@@ -733,3 +733,24 @@ func TestAnalyzeFilesRetainsEveryParseErrorBesideValidFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupedDeclarationSpecsIncludeHeaderAndClosingLine(t *testing.T) {
+	src := `package p
+var (
+	first = 1
+	second = 2
+)
+`
+	got, err := goDeclarations(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("declarations = %+v", got)
+	}
+	for i, name := range []string{"first", "second"} {
+		if got[i].name != name || got[i].kind != "var" || got[i].start != 2 || got[i].end != 5 {
+			t.Errorf("declaration %d = %+v, want %s var at lines 2..5", i, got[i], name)
+		}
+	}
+}

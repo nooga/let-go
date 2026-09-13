@@ -558,15 +558,20 @@ func analyzeSource(src string) ([]callable, []declaration, fileCounts, error) {
 		if !ok {
 			if g, ok := d.(*ast.GenDecl); ok {
 				for _, spec := range g.Specs {
+					span := ast.Node(spec)
+					if g.Lparen.IsValid() {
+						// The group header and closing delimiter belong to every spec.
+						span = g
+					}
 					switch s := spec.(type) {
 					case *ast.TypeSpec:
-						addDecl(s.Name.Name, "type", s, nil)
+						addDecl(s.Name.Name, "type", span, nil)
 					case *ast.ValueSpec:
 						for _, name := range s.Names {
-							addDecl(name.Name, strings.ToLower(g.Tok.String()), s, nil)
+							addDecl(name.Name, strings.ToLower(g.Tok.String()), span, nil)
 						}
 					case *ast.ImportSpec:
-						addDecl(s.Path.Value, "import", s, nil)
+						addDecl(s.Path.Value, "import", span, nil)
 					}
 				}
 			}

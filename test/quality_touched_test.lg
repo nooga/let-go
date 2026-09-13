@@ -239,3 +239,19 @@
                         :old-spans [(span 2 1)] :new-spans [(span 2 1)]}])]
     (is (= 1 (count rows)))
     (is (= :path-only (:entry-type (first rows))))))
+
+(deftest grouped-go-declaration-header-and-closing-line-select-every-spec
+  (let [old "package p\nvar (\n  first = 1\n  second = 2\n)\n"
+        header-new "package p\nconst (\n  first = 1\n  second = 2\n)\n"
+        close-new "package p\nvar (\n  first = 1\n  second = 2\n) // note\n"
+        header (t/build [(go-change "header.go" old header-new
+                                    [(span 2 1)] [(span 2 1)])])
+        closing (t/build [(go-change "closing.go" old close-new
+                                     [(span 5 1)] [(span 5 1)])])]
+    (is (= 4 (count header)))
+    (is (every? #(= :form (:entry-type %)) header))
+    (is (= #{"first" "second"} (set (map :name header))))
+    (is (every? #(= :unpaired (:pairing %)) header))
+    (is (= 2 (count closing)))
+    (is (every? #(= :paired (:pairing %)) closing))
+    (is (= #{"first" "second"} (set (map :name closing))))))
