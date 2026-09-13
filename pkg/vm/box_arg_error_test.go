@@ -7,14 +7,13 @@ import (
 	"github.com/nooga/let-go/pkg/vm"
 )
 
-// boxArgForReflect must surface the conversion error unboxMapInto returns.
-// Discarding it and falling through to the Unbox fallback hands reflect.Call a
-// *vm.PersistentMap, so the caller sees
+// boxArgForReflect must surface the error unboxMapInto returns. Without that,
+// the Unbox fallback hands reflect.Call a *vm.PersistentMap and the caller gets
 //
 //	reflect: Call using *vm.PersistentMap as type map[string]interface {}
 //
-// rather than the reason, and unboxMapInto's diagnostics stay invisible at the
-// one call site a wrapper author actually hits.
+// instead of the conversion diagnostic, at the one call site a wrapper author
+// actually hits.
 func TestBoxArgSurfacesMapConversionError(t *testing.T) {
 	fn, err := vm.NativeFnType.Box(func(m map[string]any) vm.Value {
 		return vm.Int(int64(len(m)))
