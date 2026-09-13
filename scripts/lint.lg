@@ -340,7 +340,7 @@
                            {:file path :line (:line b) :end (:end b)
                             :kind :comment-divider
                             :measure (:overlap hit)
-                            :evidence (str "section-divider, overlap=" (:overlap hit)
+                            :evidence (str "overlap=" (:overlap hit)
                                            " text=\"" (snippet (clojure.string/trim (:text b))) "\"")}
                            {:file path :line (:line b) :end (:end b)
                             :kind :restatement
@@ -804,8 +804,8 @@
             rep  (node-atom-count (instantiate (:replace rule) b))]
         {:file nil :line (:line node) :end (:end node)
          :kind (:kind rule) :measure (- orig rep)
-         :evidence (str (name (:kind rule)) ": " (:why rule)
-                        " (atoms-eliminable=" (- orig rep) ")")}))))
+         :evidence (str (:why rule)
+                        " (" (- orig rep) " syntax atom(s) removable)")}))))
 
 (defn load-code-rules []
   (let [raw (read-string (str "[" (slurp code-rules-path) "]"))]
@@ -983,52 +983,61 @@
     (println (pr-str all-findings))
     (do
       (doseq [f r1]
-        (println (str (:file f) ":" (:line f) "-" (:end f) "  [commented-out-code] "
+        (println (str (:file f) ":" (:line f) "-" (:end f) "  [" (display-name (:kind f) code-rules) "] "
                       (:evidence f))))
-      (println (str (count r1) " commented-out-code finding(s) (R1, .lg only — "
-                    go-files " Go file(s) not covered yet, see R1's section comment"
-                    " in scripts/lint.lg)."))
+      (println (str (count r1) " " (display-name :commented-out-code code-rules)
+                    " finding(s) (.lg only; " go-files " Go file(s) not checked for this pattern)."))
       (doseq [f r2]
         (println (str (:file f) ":" (:line f) "-" (:end f)
-                      "  [" (name (:kind f)) "] " (:evidence f))))
-      (println (str (count (filter #(= (:kind %) :restatement) r2)) " restatement finding(s), "
+                      "  [" (display-name (:kind f) code-rules) "] " (:evidence f))))
+      (println (str (count (filter #(= (:kind %) :restatement) r2)) " "
+                    (display-name :restatement code-rules) " finding(s), "
                     (count (filter #(= (:kind %) :comment-divider) r2))
-                    " section-divider finding(s) excluded from the objective score (R2)."))
+                    " " (display-name :comment-divider code-rules)
+                    " finding(s) excluded from the comment/code overlap score."))
       (doseq [f r3]
-        (println (str (:file f) ":" (:line f) "-" (:end f) "  [duplicated-comment] " (:evidence f))))
-      (println (str (count r3) " duplicated-comment finding(s) (R3)."))
+        (println (str (:file f) ":" (:line f) "-" (:end f) "  [" (display-name (:kind f) code-rules) "] " (:evidence f))))
+      (println (str (count r3) " " (display-name :duplicated-comment code-rules) " finding(s)."))
       (doseq [f r4]
-        (println (str (:file f) ":" (:line f) "-" (:end f) "  [comment-density-outlier] " (:evidence f))))
+        (println (str (:file f) ":" (:line f) "-" (:end f) "  [" (display-name (:kind f) code-rules) "] " (:evidence f))))
       (if (< (count all-defs) 20)
-        (println (str "comment-density-outlier (R4): skipped — only " (count all-defs)
-                      " definition(s) found, need >=20 to compute a percentile."))
-        (println (str (count r4) " comment-density-outlier finding(s) (R4, p95="
-                      (:threshold r4-result) " over " (count all-defs) " definition(s)).")))
-      (println "-- R5 devlog-phrase (heuristic — advisory only, never gated) --")
+        (println (str (display-name :comment-density-outlier code-rules)
+                      ": skipped — only " (count all-defs)
+                      " definition(s) found; need at least 20 to compute the 95th-percentile threshold."))
+        (println (str (count r4) " " (display-name :comment-density-outlier code-rules)
+                      " finding(s) (95th-percentile threshold=" (:threshold r4-result)
+                      " across " (count all-defs) " definition(s)).")))
+      (println (str "-- " (display-name :devlog-comment code-rules)
+                    " (phrase heuristic; advisory only, never a gate) --"))
       (doseq [f r5]
-        (println (str (:file f) ":" (:line f) "  [devlog-comment] \"" (:phrase f) "\""))
+        (println (str (:file f) ":" (:line f) "  [" (display-name (:kind f) code-rules) "] \"" (:phrase f) "\""))
         (println (str "    " (:evidence f))))
-      (println (str (count r5) " finding(s) across " (count files)
+      (println (str (count r5) " " (display-name :devlog-comment code-rules)
+                    " finding(s) across " (count files)
                     " file(s). Report only — no source was changed."))
       (doseq [f r6]
-        (println (str (:file f) "  [comment-churn] " (:evidence f))))
+        (println (str (:file f) "  [" (display-name (:kind f) code-rules) "] " (:evidence f)))
+        (when (nil? (:measure f))
+          (println "    relative multiple undefined because the corpus has no comment lines")))
       (if (:churn opts)
         (when (empty? r6)
-          (println (str "comment churn: no findable added lines for range " (:churn opts) ".")))
-        (println "comment churn: skipped — pass --churn <git-range> to compute."))
+          (println (str (display-name :comment-churn code-rules)
+                        ": no comparable measurement for range " (:churn opts)
+                        " (needs added code lines and corpus code).")))
+        (println (str (display-name :comment-churn code-rules)
+                      ": skipped — pass --churn <git-range> to measure added comments against added code.")))
       (doseq [f r7]
         (println (str (:file f) ":" (:line f) "-" (:end f)
-                      "  [" (name (:kind f)) "] " (:evidence f))))
-      (println (str (count r7) " code-verbosity finding(s), "
-                    (reduce + 0 (map :measure r7)) " atom(s) eliminable"
-                    " (.lg only — Go code-verbosity rules are deferred to a"
-                    " separate Go-AST tool; see the code-verbosity section"
-                    " comment in scripts/lint.lg)."))
+                      "  [" (display-name (:kind f) code-rules) "] " (:evidence f))))
+      (println (str (count r7) " code pattern(s) that can be simplified; "
+                    (reduce + 0 (map :measure r7)) " syntax atom(s) removable"
+                    " (.lg only; Go code is not checked for these patterns)."))
       (when (seq ignored-gate)
-        (println (str "note: --gate ignored " (vec (map name ignored-gate))
-                      " — not gate-eligible"
-                      (when (contains? ignored-gate :comment-churn) " (comment churn is report-only)")
-                      (when (contains? ignored-gate :devlog-comment) " (R5 is a heuristic)")
+        (println (str "note: --gate ignored "
+                      (clojure.string/join ", " (map #(display-name % code-rules) ignored-gate))
+                      " — these findings cannot fail the run"
+                      (when (contains? ignored-gate :comment-churn) "; comment additions relative to code is report-only")
+                      (when (contains? ignored-gate :devlog-comment) "; development-note phrases use a heuristic")
                       ".")))))
   (when gated?
     (os/exit 1)))

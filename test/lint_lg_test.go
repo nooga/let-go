@@ -70,6 +70,14 @@ func TestLintDisplayNamesCoverBuiltInKinds(t *testing.T) {
 	for _, match := range regexp.MustCompile(`(?m)^\s*:kind\s+:([a-z][a-z-]*)`).FindAllStringSubmatch(string(catalog), -1) {
 		wantKinds[match[1]] = true
 	}
+	for _, entry := range strings.Split(string(catalog), "\n\n") {
+		if !regexp.MustCompile(`(?m)^\s*:kind\s+:`).MatchString(entry) {
+			continue
+		}
+		if !regexp.MustCompile(`(?m)^\s*:label\s+"[^"\s][^"]*"`).MatchString(entry) {
+			t.Errorf("catalog entry has no nonblank :label: %s", entry)
+		}
+	}
 	if len(labels) != len(wantKinds) {
 		t.Errorf("got %d distinct labels, want %d; labels=%v", len(labels), len(wantKinds), labels)
 	}
@@ -97,6 +105,40 @@ func TestLintDisplayNamesCoverBuiltInKinds(t *testing.T) {
 			t.Errorf("%s and %s share display label %q", kind, other, label)
 		}
 		seen[label] = kind
+	}
+}
+
+func assertLintReaderText(t *testing.T, output string) {
+	t.Helper()
+	for _, forbidden := range []string{"see R1's section comment", "see the code-verbosity section comment"} {
+		if strings.Contains(output, forbidden) {
+			t.Errorf("report refers reader to source: %q\n%s", forbidden, output)
+		}
+	}
+	if regexp.MustCompile(`\bR[1-6]\b`).MatchString(output) {
+		t.Errorf("report exposes internal rule numbers:\n%s", output)
+	}
+	if regexp.MustCompile(`\[(?:commented-out-code|restatement|comment-divider|duplicated-comment|comment-density-outlier|devlog-comment|comment-churn)\]`).MatchString(output) {
+		t.Errorf("report exposes an internal finding kind:\n%s", output)
+	}
+}
+
+func TestLintReportLabelsOnEmptySource(t *testing.T) {
+	dir := t.TempDir()
+	out, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lint empty source: %v\n%s", err, out)
+	}
+	text := string(out)
+	assertLintReaderText(t, text)
+	for _, want := range []string{
+		"code left in a comment", "comment repeats code", "decorative section divider",
+		"repeated comment block", "unusually comment-heavy definition: skipped",
+		"development-note phrase", "comment additions relative to code: skipped",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("report missing reader label %q:\n%s", want, text)
+		}
 	}
 }
 
@@ -170,10 +212,11 @@ func TestLintLgSkipMarkersAndPhraseMatching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.lg: %v\n%s", err, out)
 	}
+	assertLintReaderText(t, string(out))
 
 	got := map[string][]int{}
 	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.Contains(line, "[devlog-comment]") {
+		if !strings.Contains(line, "[development-note phrase]") {
 			continue
 		}
 		loc := strings.Fields(line)[0]
@@ -234,10 +277,11 @@ func TestLintR1CommentedOutCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.lg: %v\n%s", err, out)
 	}
+	assertLintReaderText(t, string(out))
 
 	got := []int{}
 	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.Contains(line, "[commented-out-code]") {
+		if !strings.Contains(line, "[code left in a comment]") {
 			continue
 		}
 		loc := strings.Fields(line)[0]
@@ -264,7 +308,7 @@ func TestLintR1CommentedOutCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.lg: %v\n%s", err, out3)
 	}
-	if strings.Contains(string(out3), "[commented-out-code]") {
+	if strings.Contains(string(out3), "[code left in a comment]") {
 		t.Errorf("a self-referential usage example must not flag as commented-out code:\n%s", out3)
 	}
 
@@ -279,7 +323,7 @@ func TestLintR1CommentedOutCode(t *testing.T) {
 		t.Fatalf("lint.lg: %v\n%s", err, out2)
 	}
 	for _, line := range strings.Split(string(out2), "\n") {
-		if strings.Contains(line, "[commented-out-code]") && strings.Contains(line, "other.go") {
+		if strings.Contains(line, "[code left in a comment]") && strings.Contains(line, "other.go") {
 			t.Errorf("R1 must not fire on Go source (deferred): %s", line)
 		}
 	}
@@ -303,8 +347,8 @@ func TestFuncRoundtrip(t *testing.T) {}
 // R2 also classifies a restatement-shaped comment separately when its text is
 // a section-divider (bracketed by runs of punctuation like dashes/equals,
 // with no sentence structure): that's conventional house style, not slop, so
-// it must NOT be reported as [restatement] — but it must still show up under
-// its own [comment-divider] kind so it stays visible.
+// it must NOT be reported as [comment repeats code] — but it must still show up under
+// its own [decorative section divider] kind so it stays visible.
 func TestLintR2Restatement(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "fixture.lg"), []byte(lintFixtureR2), 0644); err != nil {
@@ -320,11 +364,12 @@ func TestLintR2Restatement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.lg: %v\n%s", err, out)
 	}
+	assertLintReaderText(t, string(out))
 	outStr := string(out)
 
 	got := []int{}
 	for _, line := range strings.Split(outStr, "\n") {
-		if !strings.Contains(line, "[restatement]") {
+		if !strings.Contains(line, "[comment repeats code]") {
 			continue
 		}
 		loc := strings.Fields(line)[0]
@@ -342,12 +387,15 @@ func TestLintR2Restatement(t *testing.T) {
 		t.Errorf("restatement findings at lines %v, want %v\n%s", got, want, outStr)
 	}
 
-	if !strings.Contains(outStr, "[comment-divider]") {
+	if !strings.Contains(outStr, "[decorative section divider]") {
 		t.Errorf("section-divider comment should be reported under its own kind:\n%s", outStr)
 	}
+	if strings.Contains(outStr, "section-divider,") {
+		t.Errorf("divider evidence repeats the internal kind name:\n%s", outStr)
+	}
 	for _, line := range strings.Split(outStr, "\n") {
-		if strings.Contains(line, "[restatement]") && strings.Contains(line, "Func roundtrip") {
-			t.Errorf("section-divider must not be reported as [restatement]: %s", line)
+		if strings.Contains(line, "[comment repeats code]") && strings.Contains(line, "Func roundtrip") {
+			t.Errorf("section-divider must not be reported as [comment repeats code]: %s", line)
 		}
 	}
 }
@@ -374,10 +422,11 @@ func TestLintR3DuplicatedComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.lg: %v\n%s", err, out)
 	}
+	assertLintReaderText(t, string(out))
 
 	dupCount, copyrightHit, twiceHit := 0, false, false
 	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.Contains(line, "[duplicated-comment]") {
+		if !strings.Contains(line, "[repeated comment block]") {
 			continue
 		}
 		dupCount++
@@ -421,6 +470,7 @@ func TestLintR3ExcludesInterfaceBoilerplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.lg: %v\n%s", err, out)
 	}
+	assertLintReaderText(t, string(out))
 	outStr := string(out)
 
 	if strings.Contains(outStr, "Meta implements IMeta") {
@@ -483,10 +533,14 @@ func TestLintR4DensityOutlier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.lg: %v\n%s", err, out)
 	}
+	assertLintReaderText(t, string(out))
+	if !strings.Contains(string(out), "unusually comment-heavy definition finding(s) (95th-percentile threshold=") {
+		t.Errorf("calibrated density summary lacks reader label or threshold:\n%s", out)
+	}
 
 	got := []int{}
 	for _, l := range strings.Split(string(out), "\n") {
-		if !strings.Contains(l, "[comment-density-outlier]") {
+		if !strings.Contains(l, "[unusually comment-heavy definition]") {
 			continue
 		}
 		loc := strings.Fields(l)[0]
@@ -507,7 +561,7 @@ func TestLintR4DensityOutlier(t *testing.T) {
 	// The leading doc comment itself must never be part of the flagged
 	// range: the reported :line must be the declaration line, not the doc's.
 	for _, l := range strings.Split(string(out), "\n") {
-		if strings.Contains(l, "[comment-density-outlier]") && strings.Contains(l, "doc line") {
+		if strings.Contains(l, "[unusually comment-heavy definition]") && strings.Contains(l, "doc line") {
 			t.Errorf("leading doc comment text leaked into a density-outlier finding: %s", l)
 		}
 	}
@@ -541,7 +595,7 @@ func TestLintR4GoFunctionBodies(t *testing.T) {
 	want := fmt.Sprintf("%s:%d-", path, lastDeclLine)
 	var findings []string
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, "[comment-density-outlier]") {
+		if strings.Contains(line, "[unusually comment-heavy definition]") {
 			findings = append(findings, line)
 		}
 	}
@@ -621,6 +675,11 @@ func TestLintEdnAndGate(t *testing.T) {
 	if r5Err != nil {
 		t.Fatalf("--gate devlog-comment must not gate (R5 is heuristic-only): %v\n%s", r5Err, r5Out)
 	}
+	assertLintReaderText(t, string(r5Out))
+	if !strings.Contains(string(r5Out), "--gate ignored development-note phrase") ||
+		!strings.Contains(string(r5Out), "development-note phrases use a heuristic") {
+		t.Errorf("ignored phrase gate lacks a readable explanation:\n%s", r5Out)
+	}
 }
 
 // R6 — comment churn for a revision range: comment-lines-added / code-lines-
@@ -677,7 +736,7 @@ func TestLintR6CommentChurn(t *testing.T) {
 
 	found := false
 	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.Contains(line, "[comment-churn]") {
+		if !strings.Contains(line, "[comment additions relative to code]") {
 			continue
 		}
 		found = true
@@ -692,7 +751,27 @@ func TestLintR6CommentChurn(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("no [comment-churn] finding in output:\n%s", out)
+		t.Fatalf("no [comment additions relative to code] finding in output:\n%s", out)
+	}
+	assertLintReaderText(t, string(out))
+
+	// A range adding comments but no code cannot yield a comparable ratio.
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(c2+"// comment only\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "a.go")
+	gitRun(t, dir, "commit", "-q", "-m", "c3")
+	c3sha := gitRun(t, dir, "rev-parse", "HEAD")
+	emptyCmd := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), "--churn", c2sha+".."+c3sha, ".")
+	emptyCmd.Dir = dir
+	emptyOut, err := emptyCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("comment-only range: %v\n%s", err, emptyOut)
+	}
+	assertLintReaderText(t, string(emptyOut))
+	if !strings.Contains(string(emptyOut), "comment additions relative to code: no comparable measurement") ||
+		strings.Contains(string(emptyOut), "[comment additions relative to code]") {
+		t.Errorf("comment-only range should explain why it has no finding:\n%s", emptyOut)
 	}
 
 	// Without --churn, R6 must not run at all (no default range makes sense).
@@ -702,7 +781,7 @@ func TestLintR6CommentChurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lint.lg (no --churn): %v\n%s", err, noChurnOut)
 	}
-	if strings.Contains(string(noChurnOut), "[comment-churn]") {
+	if strings.Contains(string(noChurnOut), "[comment additions relative to code]") {
 		t.Errorf("R6 must not fire without --churn:\n%s", noChurnOut)
 	}
 }
@@ -733,7 +812,7 @@ func TestLintR6ZeroCommentRangeIsDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zero-comment range: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), "[comment-churn]") || !strings.Contains(string(out), "multiple=0") {
+	if !strings.Contains(string(out), "[comment additions relative to code]") || !strings.Contains(string(out), "multiple=0") {
 		t.Errorf("zero-comment range must report a 0x multiple:\n%s", out)
 	}
 
@@ -744,9 +823,10 @@ func TestLintR6ZeroCommentRangeIsDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("R6 is a measurement, not a gate: %v\n%s", err, gateOut)
 	}
-	if !strings.Contains(string(gateOut), "comment churn is report-only") {
+	if !strings.Contains(string(gateOut), "comment additions relative to code is report-only") {
 		t.Errorf("ignored R6 gate must explain why:\n%s", gateOut)
 	}
+	assertLintReaderText(t, string(gateOut))
 
 	noChurn := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"),
 		"--gate", "comment-churn", ".")
@@ -755,8 +835,8 @@ func TestLintR6ZeroCommentRangeIsDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("R6 without --churn must not gate: %v\n%s", err, noChurnOut)
 	}
-	if !strings.Contains(string(noChurnOut), "comment churn is report-only") ||
-		!strings.Contains(string(noChurnOut), "comment churn: skipped") {
+	if !strings.Contains(string(noChurnOut), "comment additions relative to code is report-only") ||
+		!strings.Contains(string(noChurnOut), "comment additions relative to code: skipped") {
 		t.Errorf("missing R6 ignored/skipped notes:\n%s", noChurnOut)
 	}
 }
@@ -798,6 +878,9 @@ func TestLintR6ZeroBaselineIsUndefined(t *testing.T) {
 			}
 			if !strings.Contains(string(out), tc.want) {
 				t.Errorf("missing %q for zero baseline:\n%s", tc.want, out)
+			}
+			if tc.name == "text" && !strings.Contains(string(out), "relative multiple undefined because the corpus has no comment lines") {
+				t.Errorf("undefined multiple lacks its cause:\n%s", out)
 			}
 		})
 	}
@@ -895,6 +978,24 @@ func TestLintCodeVerbosityCatalog(t *testing.T) {
 	}
 }
 
+func TestLintCodeVerbosityReportText(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "fixture.lg"), []byte("(defn f [x] (first (first x)))\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(lgBin, filepath.Join(repoRoot, "scripts", "lint.lg"), dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("code pattern report: %v\n%s", err, out)
+	}
+	assertLintReaderText(t, string(out))
+	if !strings.Contains(string(out), "[nested sequence accessor]") ||
+		!strings.Contains(string(out), "ffirst says the same thing directly") ||
+		strings.Contains(string(out), "composable-accessor:") ||
+		!strings.Contains(string(out), "code pattern(s) that can be simplified") {
+		t.Errorf("code pattern report lacks readable label or evidence:\n%s", out)
+	}
+}
+
 // findKindsPerLine extracts {startLine: kind} from --edn output by scanning
 // for `:line N, ... :kind :K` pairs — a small hand parser since we don't
 // want a real EDN reader in the test just to check shape.
@@ -968,7 +1069,7 @@ func TestLintCodeVerbosityCatalogIsData(t *testing.T) {
 	if cmdErr != nil {
 		t.Fatalf("lint.lg: %v\n%s", cmdErr, out)
 	}
-	if !strings.Contains(string(out), "[fabricated-test-rule]") {
+	if !strings.Contains(string(out), "[fabricated test rule]") {
 		t.Errorf("a catalog-only rule addition (no lint.lg code change) was not found:\n%s", out)
 	}
 	if !strings.Contains(string(out), "DISPLAY\tfabricated test rule") {
