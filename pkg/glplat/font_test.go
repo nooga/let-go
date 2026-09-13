@@ -1,3 +1,5 @@
+//go:build glplat || glplat_ebiten
+
 package glplat
 
 import (
