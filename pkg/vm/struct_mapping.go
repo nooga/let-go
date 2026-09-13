@@ -93,9 +93,9 @@ func RegisterStructType(goType reflect.Type, name string) *StructMapping {
 func makeFieldConverter(t reflect.Type) fieldConverter {
 	switch t.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return func(v reflect.Value) Value { return MakeInt(int(v.Int())) }
+		return func(v reflect.Value) Value { return MakeInt64(v.Int()) }
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return func(v reflect.Value) Value { return MakeInt(int(v.Uint())) }
+		return func(v reflect.Value) Value { return MakeInt64(int64(v.Uint())) }
 	case reflect.Float32, reflect.Float64:
 		return func(v reflect.Value) Value { return Float(v.Float()) }
 	case reflect.Bool:
