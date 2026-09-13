@@ -308,20 +308,17 @@ deleting the case's `;; expect: fail` line (or clearing the table's
 automatically and is reported as blocked, because dropping the attribute
 would change every case in the block. [R-expected-failure-marked]
 
-```clj-repl @R-expected-failure-marked oracle=none
+```clj-repl @R-expected-failure-marked
 (clojure.string/split "a\n" #"\n")
 ;=> ["a"]
-;; expect: fail
 ```
 
-That is a real gap, not a contrived one: on `main`, let-go's
-`clojure.string/split` keeps the trailing empty field and returns a list,
-so the form yields `("a" "")`. JVM Clojure returns `["a"]`, which is why
-the block is `oracle=none` — under `--oracle` the case would pass and be
-reported as an xpass. When the fix (#843) lands, the `./lg` run turns the
-case into an xpass, the gate goes red, and `accept` drops the
-`;; expect: fail` line; the `oracle=none` attribute can be removed in the
-same edit.
+That was a real gap, not a contrived one: let-go's `clojure.string/split`
+used to keep the trailing empty field and return a list, so the form yielded
+`("a" "")` while JVM Clojure returns `["a"]`. The case carried
+`;; expect: fail` with an `oracle=none` attribute for that reason; fix #843
+closed the gap, the promotion dropped both, and the survivor above pins the
+fixed semantics.
 
 ## Limitations
 

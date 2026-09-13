@@ -283,7 +283,7 @@
    cell. The table-name cell (first) and passing cells are left untouched.
    Outcome order matches the generated `slim-check!`'s cell order."
   [line outcomes]
-  (let [parts (vec (str/split (str/trim line) #"\|"))
+  (let [parts (vec (str/split (str/trim line) #"\|" -1))
         parts (if (= "" (last parts)) (pop parts) parts)
         cells (subvec parts 1)]
     (str "|"
@@ -464,7 +464,7 @@
    fewer than `col` columns, pads every missing column with an empty cell
    up to `col` rather than just appending one at the end."
   [line col new-text]
-  (let [cells (vec (rest (butlast (str/split (str/trim line) #"\|"))))
+  (let [cells (vec (rest (butlast (str/split (str/trim line) #"\|" -1))))
         orig (str/trim (get cells col ""))
         wrapped (if (and (not (str/blank? new-text))
                          (str/starts-with? orig "`") (str/ends-with? orig "`") (> (count orig) 1))

@@ -96,7 +96,7 @@
               ;; Markdown allows `| !` as well as `|!`; both spell the same
               ;; slim lead. The bang must be the first non-space char of the
               ;; first cell -- `| a | ! |` is an ordinary row, not slim.
-              cells (map table-cell (rest (butlast (str/split trimmed #"\|"))))
+              cells (map table-cell (rest (butlast (str/split trimmed #"\|" -1))))
               slim? (and (seq cells) (str/starts-with? (str/trim (first cells)) "!"))]
           (if slim?
             (recur (inc j)

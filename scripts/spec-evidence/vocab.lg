@@ -184,7 +184,7 @@
                       (conj cases (-> (:template slim-rule)
                                       (fill {"id" (str slug "#" n)})
                                       (str/replace "{table}" (pr-str table))
-                                      (str/replace "{row}" (pr-str (mapv str/trim (str/split row #"\|"))))))
+                                      (str/replace "{row}" (pr-str (mapv str/trim (str/split row #"\|" -1))))))
                       cases))
         slim-line (fn [s]
                     (let [t (str/trim (:line s))]
@@ -250,7 +250,7 @@
                ;; strips the `;` before matching the SLIM- prefix.
                (str ";SLIM-TABLE:" (first parts) "\n"
                     ";SLIM-ROW:" (str/join "|" (rest parts)) "\n"))
-             (let [cells (str/split row #"\t")
+              (let [cells (str/split row #"\t" -1)
                    value (str/trim (or (get cells 1) ""))
                    out (str/trim (or (get cells 2) ""))
                    expect (str/trim (or (get cells 3) ""))]
