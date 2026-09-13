@@ -146,12 +146,12 @@ func installSystemNS() {
 
 	// System/currentTimeMillis
 	ns.Def("currentTimeMillis", mustWrap(func(vs []vm.Value) (vm.Value, error) {
-		return vm.MakeInt(int(time.Now().UnixMilli())), nil
+		return vm.MakeInt64(time.Now().UnixMilli()), nil
 	}))
 
 	// System/nanoTime
 	ns.Def("nanoTime", mustWrap(func(vs []vm.Value) (vm.Value, error) {
-		return vm.MakeInt(int(time.Now().UnixNano())), nil
+		return vm.MakeInt64(time.Now().UnixNano()), nil
 	}))
 
 	RegisterNS(ns)

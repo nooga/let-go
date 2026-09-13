@@ -933,7 +933,7 @@
    :override-boxable-return?, so that case shouldn't arise)."
   (cond
     (= spec "bool")    (gogen/call (gogen/field-sel (gogen/ident "vm") "Boolean") [expr])
-    (= spec "int")     (gogen/call (gogen/field-sel (gogen/ident "vm") "Int") [expr])
+    (= spec "int64")   (gogen/call (gogen/field-sel (gogen/ident "vm") "Int") [expr])
     (= spec "float64") (gogen/call (gogen/field-sel (gogen/ident "vm") "Float") [expr])
     (= spec "string")  (gogen/call (gogen/field-sel (gogen/ident "vm") "String") [expr])
     ;; vm.Char already implements vm.Value — usable as-is.

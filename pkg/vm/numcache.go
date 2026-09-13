@@ -27,3 +27,12 @@ func MakeInt(v int) Value {
 func MakeFloat(v float64) Value {
 	return Float(v)
 }
+
+// MakeInt64 is MakeInt for arithmetic results: takes the full 64-bit value so
+// a 32-bit-int host (TinyGo wasm) does not truncate it on the way in.
+func MakeInt64(v int64) Value {
+	if v >= int64(intCacheMin) && v <= int64(intCacheMax) {
+		return intCache[v-int64(intCacheMin)]
+	}
+	return Int(v)
+}

@@ -48,10 +48,11 @@ wasmtime on every PR, so the target can't silently regress.
   method or an invoked stub reports TinyGo's limitation rather than returning nil
   or trapping the module at boot. Programs that stay within core plus shimmed
   interop run faithfully.
-- **WASM `int` is 32-bit** (stock Go's wasm `int` is 64-bit), so 64-bit integer
-  arithmetic overflows or wraps on the WASM target. Native TinyGo (arm64/amd64)
-  is 64-bit and unaffected. Use the standard-Go WASI build when 64-bit fidelity
-  matters.
+- **WASM `int` is 32-bit** (stock Go's wasm `int` is 64-bit), but let-go's `Int`
+  is `int64` on every target, so integer arithmetic, literals and interop values
+  behave the same on the WASM target as on native. The cost on a 32-bit host is
+  that an `Int` outside the small-int cache is heap-boxed, as a `Float` already
+  is; arithmetic-heavy code allocates more there than on native.
 - **There is no `xxh3` namespace.** The `xxh3` dependency is assembly-only on
   arm64/amd64 with no purego mode, and its bindings are reflect-boxed, so
   `interop_xxh3.go` is gated `!tinygo`. Nothing is substituted in its place: a

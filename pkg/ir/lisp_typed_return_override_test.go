@@ -72,8 +72,8 @@ func TestTypedParamStillSkipsOverride(t *testing.T) {
 	src := string(s)
 
 	// Precondition: a typed PARAM really was emitted.
-	if !regexp.MustCompile(`func Twice\(ec \*vm\.ExecContext, arg0 int\)`).MatchString(src) {
-		t.Fatalf("expected a typed param `func Twice(ec *vm.ExecContext, arg0 int)`:\n%s", src)
+	if !regexp.MustCompile(`func Twice\(ec \*vm\.ExecContext, arg0 int64\)`).MatchString(src) {
+		t.Fatalf("expected a typed param `func Twice(ec *vm.ExecContext, arg0 int64)`:\n%s", src)
 	}
 	if regexp.MustCompile(`"twice":\s*__gogen_wrap`).MatchString(src) {
 		t.Fatalf("typed-PARAM fn registered an override; the wrapper cannot soundly unbox args[i]:\n%s", src)

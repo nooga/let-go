@@ -330,7 +330,7 @@
           callee (caller-body src "Gfib")]
       (is caller "caller body extractable")
       (is (str/includes? caller ".(vm.Int)") "comma-ok assert on the opaque arg")
-      (is (str/includes? caller "Gfib(ec, int(") "guarded static call with int conversion")
+      (is (str/includes? caller "Gfib(ec, int64(") "guarded static call with int64 conversion")
       (is (str/includes? caller "rt.CachedVarFn(") "trampoline fallback in else branch")
       (is callee "callee body extractable")
       (is (not (str/includes? callee ".(vm.Int)"))
@@ -348,5 +348,5 @@
         (is (str/includes? a0 "Mmain_1(ec, vm.Int(21))")
             "cross-arity self-call is static"))
       (let [a1 (caller-body src "Mmain_1")]
-        (is (str/includes? a1 "Mfib(ec, int(")
+        (is (str/includes? a1 "Mfib(ec, int64(")
             "guarded static call into the typed sibling")))))
