@@ -58,6 +58,20 @@
     (is (= [{:start 2 :count 1}]
            (:new-spans (first (d/parse-patch-hunks patch paths)))))))
 
+(deftest patch-header-unquoted-spaces-use-exact-nul-path
+  (let [path "my file.lg"
+        paths (d/parse-name-status-z (str "M\u0000" path "\u0000"))
+        patch "diff --git a/my file.lg b/my file.lg\n@@ -1 +1 @@\n-a\n+b\n"]
+    (is (= [{:start 1 :count 1}]
+           (:new-spans (first (d/parse-patch-hunks patch paths)))))))
+
+(deftest patch-header-bel-escape-matches-nul-path
+  (let [path "bell\u0007.lg"
+        paths (d/parse-name-status-z (str "M\u0000" path "\u0000"))
+        patch "diff --git \"a/bell\\a.lg\" \"b/bell\\a.lg\"\n@@ -1 +1 @@\n-a\n+b\n"]
+    (is (= [{:start 1 :count 1}]
+           (:new-spans (first (d/parse-patch-hunks patch paths)))))))
+
 (deftest patch-rejects-section-count-and-order-mismatches
   (let [paths (d/parse-name-status-z "M\u0000a.lg\u0000M\u0000b.lg\u0000")
         one "diff --git a/a.lg b/a.lg\n@@ -1 +1 @@\n-a\n+b\n"
@@ -96,5 +110,12 @@
         (is (thrown? Throwable (d/git-changes "--version" head dir)))
         (spit (str dir "/file.lg") "working\n")
         (is (= [{:start 1 :count 1}]
-               (:new-spans (first (d/git-changes head nil dir))))))
+               (:new-spans (first (d/git-changes head nil dir)))))
+        (spit (str dir "/my file.lg") "space\n")
+        (git "add" "my file.lg")
+        (git "-c" "user.name=Quality Test" "-c" "user.email=quality@example.invalid"
+             "commit" "-qm" "space path")
+        (let [space-head (git "rev-parse" "HEAD")]
+          (is (= ["my file.lg"]
+                 (map :new-path (d/git-changes head space-head dir))))))
       (finally (os/delete-tree dir)))))

@@ -67,7 +67,7 @@
           (not quoted?) (throw (ex-info "unexpected escape in Git diff header" {:header s}))
           :else
           (let [escaped (nth s (inc i) nil)
-                special {\\ 92 \" 34 \t 9 \n 10 \r 13 \b 8 \f 12 \v 11}]
+                special {\\ 92 \" 34 \a 7 \t 9 \n 10 \r 13 \b 8 \f 12 \v 11}]
             (cond
               (nil? escaped) (throw (ex-info "truncated Git diff header escape" {:header s}))
               (contains? special escaped)
@@ -81,16 +81,36 @@
                 (recur (+ i 4) (conj bytes value)))
               :else (throw (ex-info "unsupported Git diff header escape" {:header s :offset i}))))))))))
 
-(defn- header-paths [header]
+(defn- header-paths [header path]
   (let [prefix "diff --git "
         s (subs header (count prefix))
-        [old i] (git-header-token s 0)]
-    (when (or (>= i (count s)) (not= \space (nth s i)))
+        old (str "a/" (or (:old-path path) (:new-path path)))
+        new (str "b/" (or (:new-path path) (:old-path path)))
+        old-end (if (= \" (nth s 0 nil))
+                  (let [[bytes end] (git-header-token s 0)]
+                    (when (not= bytes (utf8-bytes old))
+                      (throw (ex-info "Git patch section order/path differs from name-status"
+                                      {:status path :header header})))
+                    end)
+                  (do
+                    ;; Git may leave a pathname containing spaces UNQUOTED.
+                    ;; Its exact NUL-status path, not the first space, fixes
+                    ;; the boundary between the a/ and b/ header paths.
+                    (when-not (str/starts-with? s (str old " "))
+                      (throw (ex-info "Git patch section order/path differs from name-status"
+                                      {:status path :header header})))
+                    (count old)))]
+    (when (not= \space (nth s old-end nil))
       (throw (ex-info "malformed Git diff header" {:header header})))
-    (let [[new j] (git-header-token s (inc i))]
-      (when (not= j (count s))
-        (throw (ex-info "extra Git diff header fields" {:header header})))
-      [old new])))
+    (let [new-start (inc old-end)]
+      (if (= \" (nth s new-start nil))
+        (let [[bytes end] (git-header-token s new-start)]
+          (when (or (not= end (count s)) (not= bytes (utf8-bytes new)))
+            (throw (ex-info "Git patch section order/path differs from name-status"
+                            {:status path :header header}))))
+        (when (not= new (subs s new-start))
+          (throw (ex-info "Git patch section order/path differs from name-status"
+                          {:status path :header header})))))))
 
 (defn- hunk-coordinates [line]
   (when (str/starts-with? line "@@ ")
@@ -123,17 +143,10 @@
       (throw (ex-info "Git patch section count differs from name-status"
                       {:sections (count sections) :statuses (count paths)})))
     (vec (map (fn [section path]
-                (let [[old new] (header-paths (:header section))
-                      expected-old (utf8-bytes (str "a/" (or (:old-path path) (:new-path path))))
-                      expected-new (utf8-bytes (str "b/" (or (:new-path path) (:old-path path))))]
-                  (when (or (not= old expected-old) (not= new expected-new))
-                    (throw (ex-info "Git patch section order/path differs from name-status"
-                                    {:status path :header (:header section)
-                                     :header-bytes [old new]
-                                     :status-bytes [expected-old expected-new]})))
-                  (assoc path
-                         :old-spans (vec (map first (:hunks section)))
-                         :new-spans (vec (map second (:hunks section))))))
+                (header-paths (:header section) path)
+                (assoc path
+                       :old-spans (vec (map first (:hunks section)))
+                       :new-spans (vec (map second (:hunks section)))))
               sections paths))))
 
 (defn- git-output [root args]
