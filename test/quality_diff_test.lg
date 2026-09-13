@@ -80,6 +80,24 @@
     (is (thrown? Throwable (d/parse-patch-hunks one paths)))
     (is (thrown? Throwable (d/parse-patch-hunks reversed paths)))))
 
+(deftest patch-coalesces-only-matched-type-change-sections
+  (let [paths (d/parse-name-status-z "T\u0000type.lg\u0000M\u0000other.lg\u0000")
+        type-section (str "diff --git a/type.lg b/type.lg\n"
+                          "deleted file mode 100644\n@@ -1 +0,0 @@\n-old\n"
+                          "diff --git a/type.lg b/type.lg\n"
+                          "new file mode 120000\n@@ -0,0 +1 @@\n+target\n")
+        other-section "diff --git a/other.lg b/other.lg\n@@ -1 +1 @@\n-a\n+b\n"
+        got (d/parse-patch-hunks (str type-section other-section) paths)]
+    (is (= [:type-changed :modified] (map :status got)))
+    (is (= [] (:old-spans (first got))))
+    (is (= [] (:new-spans (first got))))
+    (is (= [{:start 1 :count 1}] (:new-spans (second got))))
+    (is (thrown? Throwable
+                 (d/parse-patch-hunks
+                  (str "diff --git a/type.lg b/type.lg\n"
+                       "diff --git a/wrong.lg b/wrong.lg\n" other-section)
+                  paths)))))
+
 (deftest git-changes-uses-resolved-commit-revisions-and-working-tree-head
   (let [dir (str (os/temp-dir) "/quality-diff-test-" (System/nanoTime))
         git (fn [& args]
@@ -106,7 +124,8 @@
         (is (= 40 (count head)))
         (is (= [{:status :modified :old-path "file.lg" :new-path "file.lg"
                  :old-spans [{:start 1 :count 1}]
-                 :new-spans [{:start 1 :count 1}]}] rows))
+                 :new-spans [{:start 1 :count 1}]}]
+               (map #(select-keys % [:status :old-path :new-path :old-spans :new-spans]) rows)))
         (is (thrown? Throwable (d/git-changes "--version" head dir)))
         (spit (str dir "/file.lg") "working\n")
         (is (= [{:start 1 :count 1}]
@@ -134,4 +153,89 @@
                    (first (clojure.string/split raw-patch #"\n"))))
             (is (= ["café.lg"]
                    (map :new-path (d/git-changes space-head unicode-head dir)))))))
+      (finally (os/delete-tree dir)))))
+
+(deftest git-changes-loads-only-text-on-existing-sides
+  (let [dir (str (os/temp-dir) "/quality-diff-content-" (System/nanoTime))
+        git (fn [& args]
+              (let [r (apply os/sh "git" "-C" dir args)]
+                (when-not (zero? (:exit r))
+                  (throw (ex-info "fixture git failed" {:args args :stderr (:err r)})))
+                (clojure.string/trim (:out r))))
+        commit (fn [message]
+                 (git "-c" "user.name=Quality Test"
+                      "-c" "user.email=quality@example.invalid"
+                      "commit" "-qm" message))]
+    (try
+      (is (zero? (:exit (os/sh "mkdir" "-p" dir))))
+      (git "init" "-q")
+      (spit (str dir "/edit.lg") "old edit\n")
+      (spit (str dir "/delete.lg") "old deletion\n")
+      (spit (str dir "/move-old.lg") "unique rename content\n")
+      (spit (str dir "/type.lg") "regular file\n")
+      (spit (str dir "/blob.bin") "before\u0000raw")
+      (git "add" ".")
+      (commit "base")
+      (let [base (git "rev-parse" "HEAD")]
+        (spit (str dir "/edit.lg") "new edit\n")
+        (spit (str dir "/add.lg") "new addition\n")
+        (spit (str dir "/empty.lg") "")
+        (git "rm" "-q" "delete.lg")
+        (git "mv" "move-old.lg" "move-new.lg")
+        (git "rm" "-q" "type.lg")
+        (is (zero? (:exit (os/sh "ln" "-s" "target" (str dir "/type.lg")))))
+        (spit (str dir "/blob.bin") "after\u0000raw")
+        (git "add" ".")
+        (commit "head")
+        (let [head (git "rev-parse" "HEAD")
+              rows (d/git-changes base head dir)
+              by-new (into {} (map (fn [row] [(:new-path row) row]) rows))
+              deleted (first (filter #(= "delete.lg" (:old-path %)) rows))]
+          (is (= 7 (count rows)))
+          (is (= {:status :modified :old-path "edit.lg" :new-path "edit.lg"}
+                 (select-keys (get by-new "edit.lg") [:status :old-path :new-path])))
+          (is (= "old edit\n" (:old-text (get by-new "edit.lg"))))
+          (is (= "new edit\n" (:new-text (get by-new "edit.lg"))))
+          (is (= :added (:status (get by-new "add.lg"))))
+          (is (not (contains? (get by-new "add.lg") :old-text)))
+          (is (= "new addition\n" (:new-text (get by-new "add.lg"))))
+          (is (= "" (:new-text (get by-new "empty.lg"))))
+          (is (= :deleted (:status deleted)))
+          (is (= "old deletion\n" (:old-text deleted)))
+          (is (not (contains? deleted :new-text)))
+          (is (= {:status :renamed :old-path "move-old.lg" :new-path "move-new.lg"}
+                 (select-keys (get by-new "move-new.lg") [:status :old-path :new-path])))
+          (is (not (contains? (get by-new "move-new.lg") :old-text)))
+          (is (not (contains? (get by-new "move-new.lg") :new-text)))
+          (is (= :type-changed (:status (get by-new "type.lg"))))
+          (is (not (contains? (get by-new "type.lg") :old-text)))
+          (is (not (contains? (get by-new "type.lg") :new-text)))
+          (is (= :modified (:status (get by-new "blob.bin"))))
+          (is (not (contains? (get by-new "blob.bin") :old-text)))
+          (is (not (contains? (get by-new "blob.bin") :new-text)))
+          (is (= :invalid-Git-revision (:reason (ex-data
+                                                (try (d/git-changes "--version" head dir)
+                                                     (catch Throwable e e))))))
+          (git "rm" "-q" "type.lg")
+          (spit (str dir "/type.lg") "regular again\n")
+          (git "add" "type.lg")
+          (commit "reverse type change")
+          (let [reverse-rows (d/git-changes head (git "rev-parse" "HEAD") dir)
+                reversed (first reverse-rows)]
+            (is (= 1 (count reverse-rows)))
+            (is (= :type-changed (:status reversed)))
+            (is (= "type.lg" (:old-path reversed)))
+            (is (= "type.lg" (:new-path reversed)))
+            (is (not (contains? reversed :old-text)))
+            (is (not (contains? reversed :new-text))))
+          (spit (str dir "/edit.lg") "staged edit\n")
+          (git "add" "edit.lg")
+          (spit (str dir "/add.lg") "unstaged edit\n")
+          (spit (str dir "/untracked.lg") "ignored by diff\n")
+          (let [working (d/git-changes (git "rev-parse" "HEAD") nil dir)
+                working-by-path (into {} (map (fn [row] [(:new-path row) row]) working))]
+            (is (= #{"edit.lg" "add.lg"} (set (keys working-by-path))))
+            (is (= "staged edit\n" (:new-text (get working-by-path "edit.lg"))))
+            (is (= "unstaged edit\n" (:new-text (get working-by-path "add.lg"))))
+            (is (= "new edit\n" (:old-text (get working-by-path "edit.lg")))))))
       (finally (os/delete-tree dir)))))
