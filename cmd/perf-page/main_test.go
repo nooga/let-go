@@ -298,6 +298,34 @@ func TestBuildViewerDataListsEveryPlottedTier(t *testing.T) {
 	}
 }
 
+func TestBuildViewerDataCarriesTheToolchainOnEveryPoint(t *testing.T) {
+	// A point missing its Go version is invisible once the toolchain filter is
+	// narrowed, which empties that chart while the others keep drawing. The
+	// geomean had exactly this bug: its point literal simply omitted the field.
+	snaps := []Snapshot{
+		viewerTestSnapshot("2026-06-04T22:25:22Z", "AMD EPYC 7763", 2),
+		viewerTestSnapshot("2026-06-05T10:00:00Z", "AMD EPYC 7763", 3),
+	}
+	for i := range snaps {
+		snaps[i].Baseline.Machine.GoVersion = "go1.26.5"
+		snaps[i].Baseline.Benchmarks["github.com/nooga/let-go/pkg/vm.BenchmarkOther"] =
+			BenchmarkEntry{RatioToAnchor: 4, AllocsPerOp: 1, BytesPerOp: 8}
+	}
+	data := buildViewerData(snaps)
+	for _, ch := range data.Charts {
+		for _, ser := range ch.Series {
+			for _, pt := range ser.Points {
+				if pt.Go == "" {
+					t.Errorf("chart %q series %q has a point with no Go version", ch.Title, ser.Label)
+				}
+			}
+		}
+	}
+	if len(data.Gos) != 1 || data.Gos[0] != "go1.26.5" {
+		t.Errorf("Gos = %v, want [go1.26.5]", data.Gos)
+	}
+}
+
 func TestRelLinkNamesTheFileNotTheDirectory(t *testing.T) {
 	for _, tc := range []struct{ from, to, want string }{
 		{"out/perf/index.html", "out/perf/explore/index.html", "explore/index.html"},

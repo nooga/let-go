@@ -1573,8 +1573,13 @@ type viewerSeries struct {
 }
 
 type viewerPoint struct {
-	Date  string  `json:"d"`
-	CPU   string  `json:"cpu"`
+	Date string `json:"d"`
+	CPU  string `json:"cpu"`
+	// Go toolchain that produced the measurement. A bump moves every timing
+	// number — the 1.26.4 to 1.26.5 patch bump alone shifted the geomean 3-4%
+	// per tier — so pooling two toolchains mixes two populations the same way
+	// pooling two CPU tiers does.
+	Go    string  `json:"go"`
 	Value float64 `json:"v"`
 	Low   float64 `json:"lo"`
 	High  float64 `json:"hi"`
@@ -1590,6 +1595,7 @@ type viewerChart struct {
 
 type viewerData struct {
 	CPUs   []string      `json:"cpus"`
+	Gos    []string      `json:"gos"`
 	Charts []viewerChart `json:"charts"`
 }
 
@@ -1704,6 +1710,7 @@ func buildViewerData(timeline []Snapshot) viewerData {
 					// JavaScriptCore rejects it outright, so a display string
 					// here renders an empty page in Safari.
 					Date: snap.Baseline.CapturedAt, CPU: cpu,
+					Go:    snap.Baseline.Machine.GoVersion,
 					Value: value, Low: lo, High: hi,
 				})
 			}
@@ -1722,13 +1729,21 @@ func buildViewerData(timeline []Snapshot) viewerData {
 	// Deriving it from the named specs alone hides a tier that appears only in
 	// the aggregate: it cannot be selected or excluded, and "All (n)" then
 	// plots more tiers than it counts.
+	gos := map[string]struct{}{}
 	for _, ch := range out.Charts {
 		for _, ser := range ch.Series {
 			for _, pt := range ser.Points {
 				cpus[pt.CPU] = struct{}{}
+				if pt.Go != "" {
+					gos[pt.Go] = struct{}{}
+				}
 			}
 		}
 	}
+	for g := range gos {
+		out.Gos = append(out.Gos, g)
+	}
+	sort.Strings(out.Gos)
 	for c := range cpus {
 		out.CPUs = append(out.CPUs, c)
 	}
@@ -1783,6 +1798,7 @@ func viewerGeomean(timeline []Snapshot) (viewerChart, bool) {
 			// RFC3339 verbatim, as above: Date.parse only guarantees that.
 			Date:  snap.Baseline.CapturedAt,
 			CPU:   shortCPUModel(snap.Baseline.Machine.CPUModel),
+			Go:    snap.Baseline.Machine.GoVersion,
 			Value: g, Low: g, High: g,
 		})
 	}
@@ -2390,6 +2406,7 @@ const viewerTemplate = `<!doctype html>
         so a chart pooling tiers shows runner assignment as much as code: select tiers below to read a real trend.</p>
       <div class="controls">
         <span>CPU <span id="cpu" class="chips"></span></span>
+        <span id="gowrap">Go <span id="go" class="chips"></span></span>
         <label title="Keep the y-axis fixed to all series, so toggling one does not move the scale."><input type="checkbox" id="lock"> Lock scale</label>
         <span class="count" id="count"></span>
       </div>
@@ -2412,18 +2429,24 @@ const viewerTemplate = `<!doctype html>
 <script>
 const VIEWER_URL = {{.ViewerDataURL}};
 const W=520,H=210,L=46,R=502,T=22,B=176;
-let DATA=null, lockScale=false, urlCPUs=[];
+let DATA=null, lockScale=false, urlCPUs=[], urlGos=[];
 // Selected tiers. Every tier selected is the default and writes no ?cpu=, so a
 // tier added to the data later shows up rather than being excluded by an old link.
 const sel=new Set();
+// Selected Go toolchains, same contract as sel: all selected is the default and
+// writes no ?go=.
+const selGo=new Set();
 // Hidden series, keyed "<chart title>::<series label>" — series labels repeat
 // across charts, so a global key would toggle two unrelated lines at once.
 const hidden=new Set();
 const allSelected=()=>DATA&&sel.size===DATA.cpus.length;
+const allGoSelected=()=>DATA&&(!DATA.gos.length||selGo.size===DATA.gos.length);
+const visible=p=>(allSelected()||sel.has(p.cpu))&&(allGoSelected()||selGo.has(p.go));
 
 function readURL(){
   const q=new URLSearchParams(location.search);
   urlCPUs=(q.get("cpu")||"").split(",").map(x=>x.trim()).filter(Boolean);
+  urlGos=(q.get("go")||"").split(",").map(x=>x.trim()).filter(Boolean);
   lockScale=q.get("lock")==="1";
   (q.get("hide")||"").split(",").filter(Boolean).forEach(k=>hidden.add(k));
 }
@@ -2432,6 +2455,7 @@ function readURL(){
 function syncURL(){
   const u=new URL(location.href), q=u.searchParams;
   allSelected()?q.delete("cpu"):q.set("cpu",[...sel].join(","));
+  allGoSelected()?q.delete("go"):q.set("go",[...selGo].join(","));
   lockScale?q.set("lock","1"):q.delete("lock");
   hidden.size?q.set("hide",[...hidden].join(",")):q.delete("hide");
   history.replaceState(null,"",u);
@@ -2447,7 +2471,9 @@ function initControls(){
   // leaves nothing, fall back to every tier rather than an empty page.
   const known=urlCPUs.filter(c=>DATA.cpus.includes(c));
   (known.length?known:DATA.cpus).forEach(c=>sel.add(c));
-  renderCPU();
+  const knownGo=urlGos.filter(g=>DATA.gos.includes(g));
+  (knownGo.length?knownGo:DATA.gos).forEach(g=>selGo.add(g));
+  renderCPU(); renderGo();
   const lock=document.getElementById("lock");
   lock.checked=lockScale;
   lock.onchange=e=>{lockScale=e.target.checked;syncURL();draw();};
@@ -2470,6 +2496,30 @@ function renderCPU(){
       if(e.altKey){ sel.clear(); sel.add(c); }
       else { sel.has(c)?sel.delete(c):sel.add(c); }
       renderCPU(); syncURL(); draw();
+    };
+    host.append(b);
+  });
+}
+
+function renderGo(){
+  const wrap=document.getElementById("gowrap"), host=document.getElementById("go");
+  // One toolchain is nothing to choose between; the row would be noise.
+  if(!DATA.gos||DATA.gos.length<2){ wrap.hidden=true; return; }
+  wrap.hidden=false; host.innerHTML="";
+  const all=document.createElement("button");
+  all.type="button"; all.className="all"; all.textContent="All ("+DATA.gos.length+")";
+  all.setAttribute("aria-pressed",String(allGoSelected()));
+  all.onclick=()=>{DATA.gos.forEach(g=>selGo.add(g));renderGo();syncURL();draw();};
+  host.append(all);
+  DATA.gos.forEach(g=>{
+    const b=document.createElement("button");
+    b.type="button"; b.textContent=g.replace(/^go/,"");
+    b.setAttribute("aria-pressed",String(selGo.has(g)));
+    b.title="Click to toggle "+g+". Alt-click to show only it. A toolchain bump moves every timing number, so pooling two mixes two populations.";
+    b.onclick=e=>{
+      if(e.altKey){ selGo.clear(); selGo.add(g); }
+      else { selGo.has(g)?selGo.delete(g):selGo.add(g); }
+      renderGo(); syncURL(); draw();
     };
     host.append(b);
   });
@@ -2500,7 +2550,7 @@ function draw(){
       const off=hidden.has(ch.title+"::"+s.label);
       // A payload written by an older build can carry pts:null.
       const src=s.pts||[];
-      const pts=allSelected()?src:src.filter(p=>sel.has(p.cpu));
+      const pts=(allSelected()&&allGoSelected())?src:src.filter(visible);
       if(!off){ total+=src.length; shown+=pts.length; }
       return {...s, off, pts:project(pts,ch.relative)};
     });
@@ -2509,9 +2559,11 @@ function draw(){
   const n=sel.size;
   const label = n===0 ? "no tiers selected" : allSelected() ? "all "+n+" tiers"
               : n===1 ? [...sel][0] : n+" tiers";
+  const goLabel = allGoSelected() ? "" : " · go"+[...selGo].map(g=>g.replace(/^go/,"")).join("/");
   document.getElementById("count").textContent =
-    allSelected() ? total.toLocaleString()+" points across "+label
-                  : shown.toLocaleString()+" of "+total.toLocaleString()+" points — "+label;
+    (allSelected()&&allGoSelected())
+      ? total.toLocaleString()+" points across "+label
+      : shown.toLocaleString()+" of "+total.toLocaleString()+" points — "+label+goLabel;
 }
 
 const day=t=>String(t).slice(0,10);
@@ -2565,7 +2617,7 @@ function chartEl(ch,series){
          s.pts.map(p=>x(p.d).toFixed(2)+","+y(p.r).toFixed(2)).join("L")+'"></path>';
     s.pts.forEach(p=>{
       svg+='<circle class="point" fill="'+s.color+'" cx="'+x(p.d).toFixed(2)+'" cy="'+y(p.r).toFixed(2)+
-           '" r="2.4"><title>'+esc(day(p.d)+" · "+p.cpu+"\n"+s.label+": "+fmtVal(p.r,ch.relative))+'</title></circle>';
+           '" r="2.4"><title>'+esc(day(p.d)+" · "+p.cpu+(p.go?" · "+p.go:"")+"\n"+s.label+": "+fmtVal(p.r,ch.relative))+'</title></circle>';
     });
   });
   svg+='</svg>';
