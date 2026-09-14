@@ -2038,6 +2038,10 @@ const pageTemplate = `<!doctype html>
       th, td { padding: 9px; }
     }
     .explorer-controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+    .cpu-filter { align-items: center; }
+    .cpu-filter label { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; }
+    .cpu-filter select { font: inherit; font-size: 0.8rem; padding: 0.2rem 0.4rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); }
+    .cpu-filter .scope { font-size: 0.75rem; opacity: 0.7; }
     .explorer-controls label { font-size: 0.8rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
     .explorer-controls select { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); max-width: 420px; }
     .explorer-controls input[type="search"] { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.45rem; border: 1px solid rgba(0,0,0,0.15); border-radius: 6px; background: var(--paper); color: var(--ink); min-width: 180px; }
@@ -2114,6 +2118,12 @@ const pageTemplate = `<!doctype html>
         <span class="chip">{{.Current.Machine.CPUModel}}</span>
         <span class="chip">{{.Current.Machine.GoVersion}}</span>
       </div>
+      <!-- Mounted by the first timeline view that loads; stays hidden when the
+           timeline has fewer than two CPU tiers, since a one-option filter is
+           just clutter. The chips above describe the committed baseline, which
+           is a single profile chosen at build time and is NOT what this
+           filters -- see the note in the Timeline section. -->
+      <div class="meta cpu-filter" id="perf-cpu-filter" hidden></div>
     </div>
   </header>
 
@@ -2144,7 +2154,7 @@ const pageTemplate = `<!doctype html>
     <section>
       <div class="section-head">
         <h2>Timeline</h2>
-        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in.</p>
+        <p>{{len .Timeline}} snapshot(s). CI snapshots graph real runs; seed points use committed historical/current JSON until the timeline fills in. These charts and the baseline sections below are rendered at build time from one committed machine profile, so the page-wide CPU filter does not reach them; use <code>-cpu</code> to cut them.</p>
       </div>
       {{if .Charts}}
       <div class="chart-grid">
@@ -2200,7 +2210,7 @@ const pageTemplate = `<!doctype html>
     <section>
       <div class="section-head">
         <h2>Explore metrics over time</h2>
-        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them.</p>
+        <p>Pick any benchmark and metric; each line is a CPU model, the shaded band is the per-run min/max spread (not a 95% CI — typically ~3 samples) and every individual gathered sample is plotted as a dot. Hover for values. The anchor-relative ratio only normalizes within a CPU, so compare trends per CPU rather than absolute levels across them — use the CPU filter at the top of the page to cut this chart and the sparklines below to one tier.</p>
       </div>
       <div id="perf-explorer" style="width:100%;min-height:420px"></div>
     </section>
@@ -2361,6 +2371,85 @@ const pageTemplate = `<!doctype html>
           if (a >= 10) return v.toFixed(1);
           return v.toPrecision(3);
         },
+        // Page-wide CPU selection, shared by every timeline-driven view.
+        //
+        // ratio_to_anchor only normalizes WITHIN a CPU model, so a mixed
+        // timeline overplots tiers that cannot be compared to each other. The
+        // -cpu build flag already solves that, but globally and only by
+        // rebuilding; this is the same cut made in the page, so one page can
+        // be re-sliced per tier while reading it.
+        //
+        // Views register independently (they fetch the same payload but do not
+        // know about each other), so the control mounts on first registration
+        // and later registrations only add CPUs they contribute.
+        cpu: (function () {
+          const subs = [];
+          let cpus = [];
+          let mounted = false;
+          // A shared selection belongs in the URL: it makes "the regression is
+          // only on EPYC 9V74" a link rather than a description.
+          const params = new URLSearchParams(location.search);
+          let current = params.get("cpu") || "";
+
+          function notify() { subs.forEach(function (fn) { fn(); }); }
+
+          function sync() {
+            const u = new URL(location.href);
+            if (current) { u.searchParams.set("cpu", current); } else { u.searchParams.delete("cpu"); }
+            history.replaceState(null, "", u);
+          }
+
+          function mount() {
+            const host = document.getElementById("perf-cpu-filter");
+            if (!host) return;
+            // One tier means nothing to choose between.
+            if (cpus.length < 2) { host.hidden = true; return; }
+            host.hidden = false;
+            host.innerHTML = "";
+            const lab = document.createElement("label");
+            lab.append("CPU ");
+            const sel = document.createElement("select");
+            const all = document.createElement("option");
+            all.value = ""; all.textContent = "All CPUs (" + cpus.length + ")";
+            sel.append(all);
+            cpus.forEach(function (c) {
+              const o = document.createElement("option");
+              o.value = c; o.textContent = c;
+              sel.append(o);
+            });
+            // A ?cpu= naming a tier absent from this build falls back to All
+            // rather than rendering an empty page.
+            if (current && cpus.indexOf(current) < 0) { current = ""; sync(); }
+            sel.value = current;
+            sel.addEventListener("change", function () {
+              current = this.value; sync(); notify();
+            });
+            lab.append(sel);
+            host.append(lab);
+            const scope = document.createElement("span");
+            scope.className = "scope";
+            scope.textContent = "applies to Explore + Trend sparklines";
+            host.append(scope);
+          }
+
+          return {
+            // Called by each view once it knows which CPUs its rows carry.
+            register: function (list) {
+              list.forEach(function (c) { if (c && cpus.indexOf(c) < 0) cpus.push(c); });
+              cpus.sort();
+              if (!mounted) { mounted = true; }
+              mount();
+            },
+            onChange: function (fn) { subs.push(fn); },
+            value: function () { return current; },
+            // Rows carry the full CPU model; the control shows the short tag,
+            // so compare on the short form both sides.
+            apply: function (rows, shortOf) {
+              if (!current) return rows;
+              return rows.filter(function (r) { return shortOf(r.cpu) === current; });
+            }
+          };
+        })(),
         // Build the bench + metric <select> controls; calls onChange() on input.
         controls: function (host, opts) {
           const bar = d3.select(host).append("div").attr("class", "explorer-controls");
@@ -2399,6 +2488,8 @@ const pageTemplate = `<!doctype html>
           return;
         }
         rows.forEach(function (r) { r._t = new Date(r.date); });
+        PERF.cpu.register(Array.from(new Set(rows.map(function (r) { return PERF.shortCPU(r.cpu); }))));
+        PERF.cpu.onChange(function () { draw(); });
         const benches = Array.from(new Set(rows.map(function (r) { return r.bench; }))).sort();
         const metrics = Array.from(new Set(rows.map(function (r) { return r.metric; }))).sort();
         let curBench = benches.find(function (b) { return b.indexOf("ClojureTestSuite [aot_native]") >= 0; }) || benches[0];
@@ -2416,7 +2507,8 @@ const pageTemplate = `<!doctype html>
 
         function draw() {
           const mi = meta[curMetric] || { unit: curMetric, lower_is_better: true };
-          const sub = rows.filter(function (r) { return r.bench === curBench && r.metric === curMetric; })
+          const sub = PERF.cpu.apply(rows, PERF.shortCPU)
+            .filter(function (r) { return r.bench === curBench && r.metric === curMetric; })
             .map(function (r) { return { _t: r._t, cpu: PERF.shortCPU(r.cpu), value: r.value, lo: r.lo, hi: r.hi, samples: r.samples }; });
           chart.selectAll("*").remove();
           if (!sub.length) { chart.append("div").attr("class", "empty").text("No data for this selection."); return; }
@@ -2472,6 +2564,8 @@ const pageTemplate = `<!doctype html>
           return;
         }
         rows.forEach(function (r) { r._t = +new Date(r.date); });
+        PERF.cpu.register(Array.from(new Set(rows.map(function (r) { return PERF.shortCPU(r.cpu); }))));
+        PERF.cpu.onChange(function () { draw(); });
         const metrics = Array.from(new Set(rows.map(function (r) { return r.metric; }))).sort();
         let curMetric = metrics.indexOf("ratio_to_anchor") >= 0 ? "ratio_to_anchor" : metrics[0];
         let sortDesc = true;   // by |Δ| descending
@@ -2593,7 +2687,8 @@ const pageTemplate = `<!doctype html>
 
         function draw() {
           const mi = meta[curMetric] || { unit: curMetric, lower_is_better: true };
-          const sub = rows.filter(function (r) { return r.metric === curMetric; });
+          const sub = PERF.cpu.apply(rows, PERF.shortCPU)
+            .filter(function (r) { return r.metric === curMetric; });
           // Group by (base benchmark, CPU); scaling-factor variants collapse into
           // one row carrying a SET of per-scale series.
           const byKey = d3.group(sub, function (d) {
